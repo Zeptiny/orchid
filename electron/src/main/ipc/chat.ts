@@ -141,6 +141,8 @@ type ActiveAgent = {
   generation: number;
   /** Per-turn sequence used to order live events against snapshots. */
   eventSequence: number;
+  /** Last steady-state metadata sent to renderers; content travels via chunks. */
+  lastChatState: ChatStatePayload | null;
   /** Current tool cards, kept outside the renderer so a session can rehydrate. */
   toolCalls: Map<string, ChatToolCallSnapshot>;
   /** Chronological live timeline (text, thinking, and tools) for rehydration. */
@@ -150,6 +152,13 @@ type ActiveAgent = {
   interruptResetTimer: ReturnType<typeof setTimeout> | null;
   /** Releases turn-scoped resources exactly once when the actor is disposed. */
   releaseResources: () => void;
+};
+
+type ChatStatePayload = {
+  state: string;
+  error: string | null;
+  interruptState: 'idle' | 'confirmAgent' | 'confirmSubagents';
+  cwd: string | null;
 };
 
 const activeAgents = new Map<string, ActiveAgent>();
@@ -248,6 +257,31 @@ function sendTurnEvent(
       recipient.send(channel, { ...identity, ...payload });
     }
   }
+}
+
+/**
+ * Send state only when renderer-visible metadata changes. Streaming content is
+ * intentionally excluded: it is delivered as CHAT_CHUNK and retained in the
+ * explicit ChatSnapshot hydration path.
+ */
+function sendChatState(
+  webContents: WebContents,
+  active: ActiveAgent,
+  payload: ChatStatePayload,
+): void {
+  const previous = active.lastChatState;
+  if (
+    previous &&
+    previous.state === payload.state &&
+    previous.error === payload.error &&
+    previous.interruptState === payload.interruptState &&
+    previous.cwd === payload.cwd
+  ) {
+    return;
+  }
+
+  active.lastChatState = payload;
+  sendTurnEvent(webContents, active, IPC_CHANNELS.CHAT_STATE, payload);
 }
 
 function appendTextSegment(
@@ -552,9 +586,8 @@ export function forceAbortMainTurn(
         console.debug('Failed to emit CHAT_DONE on main-turn abort (non-fatal):', err);
       }
       try {
-        sendTurnEvent(ownerWebContents, existing, IPC_CHANNELS.CHAT_STATE, {
+        sendChatState(ownerWebContents, existing, {
           state: 'idle',
-          response,
           error: null,
           interruptState: 'idle',
           cwd: existing.cwd,
@@ -625,9 +658,8 @@ export function forceStopSession(sessionId: string): boolean {
       interrupted: true,
       usage: context.usage ?? null,
     });
-    sendTurnEvent(ownerWebContents, existing, IPC_CHANNELS.CHAT_STATE, {
+    sendChatState(ownerWebContents, existing, {
       state: 'idle',
-      response: context.response ?? '',
       error: null,
       interruptState: 'idle',
       cwd: existing.cwd,
@@ -1349,6 +1381,7 @@ export function registerChatIPC(): void {
       finalized: false,
       generation,
       eventSequence: 0,
+      lastChatState: null,
       toolCalls: new Map(),
       streamSegments: [],
       unsubscribe: () => subscription?.unsubscribe(),
@@ -1524,12 +1557,11 @@ export function registerChatIPC(): void {
 
       // Re-send CHAT_STATE with updated interrupt state
       const context = actor.getSnapshot().context as AgentContext;
-      sendTurnEvent(webContents, activeAgent, IPC_CHANNELS.CHAT_STATE, {
-          state: actor.getSnapshot().value,
-          response: context.response,
-          error: context.error,
-          interruptState,
-          cwd: turnCtx.cwd,
+      sendChatState(webContents, activeAgent, {
+        state: String(actor.getSnapshot().value),
+        error: context.error,
+        interruptState,
+        cwd: turnCtx.cwd,
       });
     });
 
@@ -1588,12 +1620,11 @@ export function registerChatIPC(): void {
         | 'idle'
         | 'confirmAgent'
         | 'confirmSubagents';
-      sendTurnEvent(webContents, activeAgent, IPC_CHANNELS.CHAT_STATE, {
-          state: snapshot.value,
-          response: context.response,
-          error: context.error,
-          interruptState,
-          cwd: turnCtx.cwd,
+      sendChatState(webContents, activeAgent, {
+        state: String(snapshot.value),
+        error: context.error,
+        interruptState,
+        cwd: turnCtx.cwd,
       });
 
       // Forward usage data to renderer when it changes
@@ -1787,9 +1818,8 @@ export function registerChatIPC(): void {
       interruptActor.start();
 
       // Immediate state so the renderer gets cwd/model chrome before first chunk
-      sendTurnEvent(webContents, activeAgent, IPC_CHANNELS.CHAT_STATE, {
+      sendChatState(webContents, activeAgent, {
         state: 'streaming',
-        response: '',
         error: null,
         interruptState: 'idle',
         cwd: turnCtx.cwd,
@@ -1957,9 +1987,8 @@ export function registerChatIPC(): void {
           interrupted: true,
           usage,
         });
-        sendTurnEvent(streamWebContents, existing, IPC_CHANNELS.CHAT_STATE, {
+        sendChatState(streamWebContents, existing, {
           state: 'idle',
-          response: partial,
           error: null,
           interruptState: 'confirmSubagents',
           cwd: existing.cwd,
@@ -1981,9 +2010,8 @@ export function registerChatIPC(): void {
       getBackgroundStore().terminateSession(sessionId);
       getSubagentManager().cancelRunning(sessionId);
       disposeActiveAgent(sessionId, existing);
-      sendTurnEvent(streamWebContents, existing, IPC_CHANNELS.CHAT_STATE, {
+      sendChatState(streamWebContents, existing, {
           state: 'idle',
-          response: '',
           error: null,
           interruptState: 'idle',
           cwd: existing.cwd,

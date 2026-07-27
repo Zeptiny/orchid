@@ -43,7 +43,6 @@ export const chatThinkingEventSchema = chatEventIdentitySchema.extend({
 
 export const chatStateEventSchema = chatEventIdentitySchema.extend({
   state: z.string(),
-  response: z.string(),
   error: z.string().nullable(),
   interruptState: z.enum(['idle', 'confirmAgent', 'confirmSubagents']),
   cwd: z.string().nullable().optional(),

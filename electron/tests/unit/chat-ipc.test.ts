@@ -831,7 +831,6 @@ describe('chat IPC driver streaming', () => {
     });
     expect(channelEvents(send, IPC_CHANNELS.CHAT_STATE).at(-1)?.[1]).toMatchObject({
       state: 'idle',
-      response: 'Waiting for your choice',
       interruptState: 'idle',
     });
     expect(mocks.sessionManager.persistTurn.mock.calls.at(-1)?.[0]).toMatchObject({
@@ -840,6 +839,53 @@ describe('chat IPC driver streaming', () => {
     expect(mocks.subagentManager.cancelRunning).not.toHaveBeenCalled();
     expect(mocks.backgroundStore.terminateSession).not.toHaveBeenCalled();
     releaseStream?.();
+  });
+
+  it('keeps chunk-only updates out of CHAT_STATE payloads', async () => {
+    const selection = {
+      connectionId: '11111111-1111-4111-8111-111111111111',
+      modelId: 'vendor/path/model',
+    };
+    mocks.sessionManager._setActive({
+      ...makeSession('abababab-abab-4aba-8aba-abababababab'),
+      model: selection.modelId,
+      selection,
+      modelLabel: selection.modelId,
+    });
+    let releaseSecondChunk: (() => void) | undefined;
+    let releaseFinish: (() => void) | undefined;
+    const secondChunkGate = new Promise<void>((resolve) => {
+      releaseSecondChunk = resolve;
+    });
+    const finishGate = new Promise<void>((resolve) => {
+      releaseFinish = resolve;
+    });
+    mocks.streamChat.mockImplementationOnce(async function* () {
+      yield { type: 'content', text: 'a' };
+      await secondChunkGate;
+      yield { type: 'content', text: 'b' };
+      yield { type: 'content', text: 'c' };
+      await finishGate;
+      yield { type: 'finish', finishReason: 'stop' };
+    });
+
+    const send = vi.fn();
+    const chatSend = mocks.handlers.get(IPC_CHANNELS.CHAT_SEND)!;
+    await chatSend({ sender: { id: 604, send } }, { message: 'Stream chunks' });
+    await waitForChannelCount(send, IPC_CHANNELS.CHAT_CHUNK, 1);
+    const stateEventsBeforeMoreChunks = channelEvents(send, IPC_CHANNELS.CHAT_STATE);
+
+    releaseSecondChunk!();
+    await waitForChannelCount(send, IPC_CHANNELS.CHAT_CHUNK, 3);
+
+    const stateEventsAfterMoreChunks = channelEvents(send, IPC_CHANNELS.CHAT_STATE);
+    expect(stateEventsAfterMoreChunks).toHaveLength(stateEventsBeforeMoreChunks.length);
+    expect(stateEventsAfterMoreChunks.map(([, event]) => event)).not.toContainEqual(
+      expect.objectContaining({ response: expect.any(String) }),
+    );
+
+    releaseFinish!();
+    await waitForDoneCount(send, 1);
   });
 
   it('persists cancelled tool results as visible but excluded from model context', async () => {

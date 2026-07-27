@@ -231,7 +231,6 @@ export interface ChatThinkingEvent extends ChatEventIdentity {
 
 export interface ChatStateEvent extends ChatEventIdentity {
   state: string;
-  response: string;
   error: string | null;
   /** Current interrupt confirmation phase. */
   interruptState: 'idle' | 'confirmAgent' | 'confirmSubagents';
