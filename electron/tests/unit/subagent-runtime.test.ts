@@ -11,6 +11,7 @@ import type { Agent } from '../../src/shared/types/agent';
 import type { StreamEvent } from '../../src/main/llm/orchestrator';
 import { sumSubagentUsage } from '../../src/shared/usage';
 import { createCanonicalToolResult } from '../../src/shared/types/tool-result';
+import type { SubagentDeltaEvent, SubagentLiveProjection } from '../../src/shared/types/subagent';
 
 function successfulToolResult(
   toolCallId: string,
@@ -535,5 +536,157 @@ describe('SubagentManager runtime', () => {
     expect(manager.toDomainRecords('session-b')).toHaveLength(1);
     expect(manager.toDomainRecords('session-b')[0].id).toBe(b.id);
     expect(manager.toDomainRecords('session-a')[0].status).toBe('interrupted');
+  });
+});
+
+describe('SubagentManager delta emission (U2)', () => {
+  let manager: SubagentManager;
+
+  beforeEach(() => {
+    manager = new SubagentManager();
+  });
+
+  /** Assert a delta list is strictly monotonic (unique + ascending) on a field. */
+  function expectStrictlyMonotonic(values: number[]): void {
+    expect(values).toEqual([...values].sort((a, b) => a - b));
+    expect(new Set(values).size).toBe(values.length);
+  }
+
+  it('emits one text_delta per content event plus a single spawned and terminal', async () => {
+    manager.setRunner(async function* (): AsyncGenerator<StreamEvent> {
+      yield { type: 'content', text: 'Hello ' };
+      yield { type: 'content', text: 'delta ' };
+      yield { type: 'content', text: 'world' };
+      yield { type: 'finish', finishReason: 'stop' };
+    });
+    const deltas: SubagentDeltaEvent[] = [];
+    manager.setOnDelta((event) => deltas.push(event));
+
+    const record = manager.spawn('delta-text', 'watch', testAgent, { sessionId: 's-delta-text' });
+    await record._runPromise;
+
+    const textDeltas = deltas.filter(
+      (d): d is Extract<SubagentDeltaEvent, { type: 'text_delta' }> => d.type === 'text_delta',
+    );
+    expect(deltas.filter((d) => d.type === 'spawned')).toHaveLength(1);
+    expect(deltas.filter((d) => d.type === 'terminal')).toHaveLength(1);
+    expect(textDeltas).toHaveLength(3);
+
+    // All appends target one segment and concatenate to the final content (no re-sends).
+    expect(new Set(textDeltas.map((d) => d.segmentId)).size).toBe(1);
+    expect(textDeltas.map((d) => d.append).join('')).toBe('Hello delta world');
+  });
+
+  it('keeps sequence and sessionRevision strictly monotonic on the success path', async () => {
+    manager.setRunner(async function* (): AsyncGenerator<StreamEvent> {
+      yield { type: 'content', text: 'a' };
+      yield { type: 'content', text: 'b' };
+      yield { type: 'finish', finishReason: 'stop' };
+    });
+    const deltas: SubagentDeltaEvent[] = [];
+    manager.setOnDelta((event) => deltas.push(event));
+    const record = manager.spawn('mono-ok', 'x', testAgent, { sessionId: 's-mono-ok' });
+    await record._runPromise;
+
+    expect(deltas.length).toBeGreaterThanOrEqual(4);
+    expectStrictlyMonotonic(deltas.map((d) => d.sequence));
+    expectStrictlyMonotonic(deltas.map((d) => d.sessionRevision));
+  });
+
+  it('keeps sequence and sessionRevision strictly monotonic on the interrupt path', async () => {
+    manager.setRunner(async function* ({ abortSignal }): AsyncGenerator<StreamEvent> {
+      yield { type: 'content', text: 'partial' };
+      await new Promise<void>((resolve) => {
+        const timer = setInterval(() => {
+          if (abortSignal.aborted) { clearInterval(timer); resolve(); }
+        }, 5);
+      });
+    });
+    const deltas: SubagentDeltaEvent[] = [];
+    manager.setOnDelta((event) => deltas.push(event));
+    const record = manager.spawn('mono-int', 'x', testAgent, { sessionId: 's-mono-int' });
+    await new Promise((resolve) => setTimeout(resolve, 15));
+    expect(manager.cancelOne(record.id)).toBe(true);
+    await record._runPromise;
+
+    expect(deltas.filter((d) => d.type === 'terminal')).toHaveLength(1);
+    expect(deltas.at(-1)?.type).toBe('terminal');
+    expectStrictlyMonotonic(deltas.map((d) => d.sequence));
+    expectStrictlyMonotonic(deltas.map((d) => d.sessionRevision));
+  });
+
+  it('serves a live snapshot deep-equal to the legacy projection at the same point', async () => {
+    let release!: () => void;
+    const paused = new Promise<void>((resolve) => { release = resolve; });
+    manager.setRunner(async function* (): AsyncGenerator<StreamEvent> {
+      yield { type: 'content', text: 'snap' };
+      yield { type: 'thinking', text: 'thought' };
+      yield { type: 'tool_call_start', toolCallId: 'tc-snap', toolName: 'grep' };
+      await paused;
+      yield { type: 'finish', finishReason: 'stop' };
+    });
+    let lastLegacy: SubagentLiveProjection | null = null;
+    manager.setOnLiveChange((change) => {
+      lastLegacy = structuredClone(change.projection);
+    });
+    const record = manager.spawn('parity', 'x', testAgent, { sessionId: 's-parity' });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    expect(lastLegacy).not.toBeNull();
+    expect(manager.getLiveProjection(record.id)).toEqual(lastLegacy);
+
+    release();
+    await record._runPromise;
+  });
+
+  it('carries the authoritative durable record on the terminal delta', async () => {
+    manager.setRunner(async function* (): AsyncGenerator<StreamEvent> {
+      yield { type: 'content', text: 'done' };
+      yield { type: 'usage', usage: { prompt_tokens: 3, completion_tokens: 2, total_tokens: 5, cached_tokens: 0 } };
+      yield { type: 'finish', finishReason: 'stop' };
+    });
+    let terminal: Extract<SubagentDeltaEvent, { type: 'terminal' }> | null = null;
+    manager.setOnDelta((event) => {
+      if (event.type === 'terminal') terminal = event;
+    });
+    const record = manager.spawn('terminal-record', 'x', testAgent, { sessionId: 's-terminal' });
+    await record._runPromise;
+
+    expect(terminal).not.toBeNull();
+    expect(terminal!.record).toEqual(runtimeToDomain(record, { includeLiveTail: true }));
+    expect(terminal!.state).toBe('completed');
+    expect(terminal!.usage).toEqual(record.usage);
+  });
+
+  it('throttles usage deltas within one interval and carries final usage on terminal', async () => {
+    manager.setRunner(async function* (): AsyncGenerator<StreamEvent> {
+      for (let i = 0; i < 5; i += 1) {
+        yield { type: 'usage', usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2, cached_tokens: 0 } };
+      }
+      yield { type: 'finish', finishReason: 'stop' };
+    });
+    const usageDeltas: Array<Extract<SubagentDeltaEvent, { type: 'usage' }>> = [];
+    let terminal: Extract<SubagentDeltaEvent, { type: 'terminal' }> | null = null;
+    manager.setOnDelta((event) => {
+      if (event.type === 'usage') usageDeltas.push(event);
+      if (event.type === 'terminal') terminal = event;
+    });
+    const record = manager.spawn('usage-throttle', 'x', testAgent, { sessionId: 's-usage' });
+    await record._runPromise;
+
+    // Five usage events in one interval collapse to a throttled emission (first only).
+    expect(usageDeltas.length).toBeGreaterThanOrEqual(1);
+    expect(usageDeltas.length).toBeLessThanOrEqual(2);
+    expect(record.usage?.total_tokens).toBe(10);
+    expect(terminal!.usage).toEqual(record.usage);
+  });
+
+  it('deep-copies live projections so sequential reads never alias run state', () => {
+    const record = manager.spawn('copy', 'x', testAgent, { sessionId: 's-copy' });
+    const first = manager.getLiveProjection(record.id);
+    const second = manager.getLiveProjection(record.id);
+    expect(first).not.toBe(second);
+    expect(first?.segments).not.toBe(second?.segments);
+    expect(first).toEqual(second);
   });
 });

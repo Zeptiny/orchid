@@ -27,9 +27,14 @@ import type { ProjectRuntime } from '../project/runtime';
 import { addStepUsage } from '../../shared/usage';
 import type { SubagentRecord as DomainSubagentRecord } from '../../shared/types/subagent';
 import {
+  SubagentDeltaEventType,
   SubagentStatus,
+  type SubagentDeltaEvent,
+  type SubagentDeltaEventBase,
   type SubagentLiveChange,
   type SubagentLiveProjection,
+  type SubagentLiveSegment,
+  type SubagentTerminalState,
   type SubagentToolSnapshot,
 } from '../../shared/types/subagent';
 import {
@@ -63,6 +68,9 @@ const TERMINAL_STATES = new Set<SubagentState>([
   SubagentState.FAILED,
   SubagentState.INTERRUPTED,
 ]);
+
+// TODO(U3): moves to the `subagents.*` config group (`subagents.usage_event_interval_ms`).
+const USAGE_DELTA_INTERVAL_MS = 1000;
 
 // ── Stream runner ───────────────────────────────────────────────────────────
 
@@ -183,6 +191,10 @@ export interface SubagentRecord {
   live: SubagentLiveProjection;
   _liveCommittedSegmentCount: number;
   _liveTerminalEmitted: boolean;
+  /** Durable-mutation counter; the persistence scheduler upserts dirty records (U6). */
+  persistRevision: number;
+  /** Epoch ms of the last emitted `usage` delta (0 = none yet); throttles usage deltas. */
+  _lastUsageDeltaAt: number;
   /** Pending question routed to the main agent (null when no question is outstanding). */
   pendingQuestion: {
     toolCallId: string;
@@ -206,6 +218,29 @@ export interface SubagentResult {
   elapsed: number | null;
 }
 
+// ── Mutable live state ──────────────────────────────────────────────────────
+
+/** Mutable view of a tool snapshot for in-place run-loop accumulation. */
+type MutableToolSnapshot = { -readonly [K in keyof SubagentToolSnapshot]: SubagentToolSnapshot[K] };
+
+/**
+ * Mutable view of the live projection. The manager mutates the stored
+ * projection in place during a run so accumulation is structurally cheap;
+ * snapshot accessors deep-copy on read via `cloneLiveProjection`.
+ */
+type MutableLiveProjection = {
+  -readonly [K in keyof SubagentLiveProjection]: K extends 'segments'
+    ? SubagentLiveSegment[]
+    : K extends 'toolCalls'
+      ? MutableToolSnapshot[]
+      : SubagentLiveProjection[K];
+};
+
+type DistributiveOmit<T, K extends PropertyKey> = T extends unknown ? Omit<T, K> : never;
+
+/** Variant-specific fields of a delta event, without the shared identity base. */
+type SubagentDeltaPayload = DistributiveOmit<SubagentDeltaEvent, keyof SubagentDeltaEventBase>;
+
 // ── SubagentManager ─────────────────────────────────────────────────────────
 
 /**
@@ -219,6 +254,9 @@ export class SubagentManager {
   private _runner: SubagentStreamRunner | null = null;
   private _onChange: SubagentChangeListener | null = null;
   private _onLiveChange: SubagentLiveChangeListener | null = null;
+  private _onDelta: ((event: SubagentDeltaEvent) => void) | null = null;
+  /** Per-session monotonic revision counter ordering events and snapshots. */
+  private _sessionRevisions: Map<string, number> = new Map();
 
   /**
    * Configure the stream runner. When set, spawn() starts a background run.
@@ -236,6 +274,11 @@ export class SubagentManager {
   /** Subscribe to ordered, low-latency changes for active subagent runs. */
   setOnLiveChange(listener: SubagentLiveChangeListener | null): void {
     this._onLiveChange = listener;
+  }
+
+  /** Subscribe to typed incremental live deltas for active subagent runs. */
+  setOnDelta(listener: ((event: SubagentDeltaEvent) => void) | null): void {
+    this._onDelta = listener;
   }
 
   /**
@@ -292,11 +335,18 @@ export class SubagentManager {
       live: makeLiveProjection(id, options.sessionId ?? null, 'pending'),
       _liveCommittedSegmentCount: 0,
       _liveTerminalEmitted: false,
+      persistRevision: 0,
+      _lastUsageDeltaAt: 0,
       pendingQuestion: null,
     };
 
     this._subagents.set(id, record);
     this._notify();
+    this._emitDelta(record, {
+      type: SubagentDeltaEventType.SPAWNED,
+      record: runtimeToDomain(record, { includeLiveTail: false }),
+      usage: record.usage,
+    });
 
     if (this._runner) {
       record._runPromise = this._startRun(record, options.cwd);
@@ -313,6 +363,7 @@ export class SubagentManager {
     if (record && record.state === SubagentState.PENDING) {
       record.state = SubagentState.RUNNING;
       this._updateLive(record, { state: SubagentState.RUNNING });
+      this._markRecordDirty(record);
       this._notify();
     }
   }
@@ -329,6 +380,7 @@ export class SubagentManager {
     record.result = result;
     record.endTime = Date.now();
     this._finalizeChain(record, ChainStatus.COMPLETED);
+    this._markRecordDirty(record);
     this._finishLive(record, SubagentState.COMPLETED);
     this._resolveWaiters(record);
     this._notify();
@@ -346,6 +398,7 @@ export class SubagentManager {
     record.error = error;
     record.endTime = Date.now();
     this._finalizeChain(record, ChainStatus.FAILED);
+    this._markRecordDirty(record);
     this._finishLive(record, SubagentState.FAILED);
     this._resolveWaiters(record);
     this._notify();
@@ -506,6 +559,7 @@ export class SubagentManager {
       record.pendingQuestion.resolve({ type: 'declined' });
       record.pendingQuestion = null;
     }
+    this._markRecordDirty(record);
     // The runner owns the async interruption boundary. It must materialize its
     // partial live tail before the terminal projection is emitted; otherwise
     // the terminal event can make the renderer flush an incomplete record.
@@ -685,14 +739,22 @@ export class SubagentManager {
     return results;
   }
 
+  /** Snapshot a single live projection; deep-copied so callers never alias run state. */
   getLiveProjection(subagentId: string): SubagentLiveProjection | undefined {
-    return this._subagents.get(subagentId)?.live;
+    const record = this._subagents.get(subagentId);
+    return record ? cloneLiveProjection(record.live) : undefined;
   }
 
+  /** Snapshot live projections for a session; each is deep-copied at call time. */
   getLiveProjections(sessionId?: string | null): SubagentLiveProjection[] {
     return this.allRecords()
       .filter((record) => sessionId === undefined || record.sessionId === sessionId)
-      .map((record) => record.live);
+      .map((record) => cloneLiveProjection(record.live));
+  }
+
+  /** Current per-session revision; 0 for sessions with no recorded activity. */
+  getSessionRevision(sessionId: string): number {
+    return this._sessionRevisions.get(sessionId) ?? 0;
   }
 
   allRecords(): SubagentRecord[] {
@@ -776,6 +838,13 @@ export class SubagentManager {
             accumulatedUsage = addStepUsage(accumulatedUsage, event.usage);
             record.usage = accumulatedUsage;
             this._updateLive(record, { usage: accumulatedUsage });
+            if (accumulatedUsage) {
+              const now = Date.now();
+              if (record._lastUsageDeltaAt === 0 || now - record._lastUsageDeltaAt >= USAGE_DELTA_INTERVAL_MS) {
+                record._lastUsageDeltaAt = now;
+                this._emitDelta(record, { type: SubagentDeltaEventType.USAGE, usage: accumulatedUsage });
+              }
+            }
             break;
           }
           case 'thinking': {
@@ -810,6 +879,20 @@ export class SubagentManager {
               this._markLiveCommitted(record);
               this._setChainMessages(record, messages);
               this._notify();
+              if (toolSegment) {
+                const startedAt = record.live.toolCalls.find(
+                  (tool) => tool.toolCallId === toolCallId,
+                )?.startedAt ?? new Date().toISOString();
+                this._emitDelta(record, {
+                  type: SubagentDeltaEventType.TOOL_START,
+                  segmentId: toolSegment.id,
+                  toolCallId,
+                  toolName,
+                  status: 'running',
+                  args,
+                  startedAt,
+                });
+              }
             }
             break;
           }
@@ -820,6 +903,11 @@ export class SubagentManager {
             this._ensureLiveTool(record, event.toolCallId, current?.toolName ?? 'unknown');
             this._updateLiveTool(record, event.toolCallId, {
               partialArgs: `${current?.partialArgs ?? ''}${event.argsDelta}`,
+            });
+            this._emitDelta(record, {
+              type: SubagentDeltaEventType.TOOL_ARGS_DELTA,
+              toolCallId: event.toolCallId,
+              append: event.argsDelta,
             });
             break;
           }
@@ -847,15 +935,24 @@ export class SubagentManager {
                 `${event.toolCallId}:result`,
               ),
             );
+            const finishedAt = new Date().toISOString();
             this._updateLiveTool(record, event.toolCallId, {
               status: event.execution.canonical.status,
               content: event.content,
               toolResult: event.execution.canonical,
-              finishedAt: new Date().toISOString(),
+              finishedAt,
             });
             this._markLiveCommitted(record);
             this._setChainMessages(record, messages);
             this._notify();
+            this._emitDelta(record, {
+              type: SubagentDeltaEventType.TOOL_RESULT,
+              toolCallId: event.toolCallId,
+              status: event.execution.canonical.status,
+              content: event.content,
+              toolResult: event.execution.canonical,
+              finishedAt,
+            });
             break;
           }
           case 'error': {
@@ -989,6 +1086,7 @@ export class SubagentManager {
       messages: [...messages],
       status: keepTerminal ? prev : ChainStatus.ACTIVE,
     };
+    this._markRecordDirty(record);
   }
 
   private _finalizeChain(record: SubagentRecord, status: ChainStatus): void {
@@ -1029,48 +1127,78 @@ export class SubagentManager {
   }
 
   private _appendLiveText(record: SubagentRecord, kind: 'text' | 'thinking', content: string): void {
-    const segments = [...record.live.segments];
-    const last = segments.at(-1);
-    if (last?.kind === kind) segments[segments.length - 1] = { ...last, content: last.content + content };
-    else segments.push({ kind, id: randomUUID(), content });
-    this._updateLive(record, { segments });
+    const live = this._live(record);
+    const last = live.segments.at(-1);
+    let segmentId: string;
+    if (last && last.kind === kind) {
+      last.content += content;
+      segmentId = last.id;
+    } else {
+      segmentId = randomUUID();
+      live.segments.push({ kind, id: segmentId, content });
+    }
+    this._updateLive(record, {});
+    this._emitDelta(record, kind === 'text'
+      ? { type: SubagentDeltaEventType.TEXT_DELTA, segmentId, append: content }
+      : { type: SubagentDeltaEventType.THINKING_DELTA, segmentId, append: content });
   }
 
   private _ensureLiveTool(record: SubagentRecord, toolCallId: string, toolName: string): void {
-    if (record.live.toolCalls.some((tool) => tool.toolCallId === toolCallId)) return;
-    const tool: SubagentToolSnapshot = {
+    const live = this._live(record);
+    if (live.toolCalls.some((tool) => tool.toolCallId === toolCallId)) return;
+    const startedAt = new Date().toISOString();
+    live.toolCalls.push({
       toolCallId, toolName, status: 'generating', partialArgs: '', args: '',
-      content: null, toolResult: null, startedAt: new Date().toISOString(), finishedAt: null,
-    };
-    this._updateLive(record, {
-      toolCalls: [...record.live.toolCalls, tool],
-      segments: [...record.live.segments, { kind: 'tool', id: randomUUID(), toolCallId }],
+      content: null, toolResult: null, startedAt, finishedAt: null,
+    });
+    const segmentId = randomUUID();
+    live.segments.push({ kind: 'tool', id: segmentId, toolCallId });
+    this._updateLive(record, {});
+    this._emitDelta(record, {
+      type: SubagentDeltaEventType.TOOL_START, segmentId, toolCallId, toolName,
+      status: 'generating', args: '', startedAt,
     });
   }
 
   private _updateLiveTool(record: SubagentRecord, toolCallId: string, patch: Partial<SubagentToolSnapshot>): void {
-    this._updateLive(record, {
-      toolCalls: record.live.toolCalls.map((tool) => tool.toolCallId === toolCallId ? { ...tool, ...patch } : tool),
-    });
+    const tool = this._live(record).toolCalls.find((entry) => entry.toolCallId === toolCallId);
+    if (!tool) return;
+    Object.assign(tool, patch);
+    this._updateLive(record, {});
   }
 
   private _markLiveCommitted(record: SubagentRecord): void {
     record._liveCommittedSegmentCount = record.live.segments.length;
   }
 
+  /** Mutable view of a record's live projection for in-place run-loop accumulation. */
+  private _live(record: SubagentRecord): MutableLiveProjection {
+    return record.live as MutableLiveProjection;
+  }
+
   private _updateLive(
     record: SubagentRecord,
     patch: Partial<Omit<SubagentLiveProjection, 'sequence' | 'subagentId' | 'runId'>>,
   ): void {
-    const next: SubagentLiveProjection = {
-      ...record.live, ...patch, sequence: record.live.sequence + 1,
-      segments: patch.segments ? [...patch.segments] : [...record.live.segments],
-      toolCalls: patch.toolCalls ? [...patch.toolCalls] : [...record.live.toolCalls],
-    };
-    record.live = next;
+    const live = this._live(record);
+    if (patch.sessionId !== undefined) live.sessionId = patch.sessionId;
+    if (patch.state !== undefined) live.state = patch.state;
+    if (patch.usage !== undefined) live.usage = patch.usage;
+    if (patch.result !== undefined) live.result = patch.result;
+    if (patch.error !== undefined) live.error = patch.error;
+    if (patch.segments !== undefined) {
+      live.segments.length = 0;
+      live.segments.push(...patch.segments);
+    }
+    if (patch.toolCalls !== undefined) {
+      live.toolCalls.length = 0;
+      live.toolCalls.push(...patch.toolCalls);
+    }
+    live.sequence += 1;
+    this._bumpSessionRevision(record);
     const change: SubagentLiveChange = {
-      sessionId: next.sessionId, subagentId: next.subagentId, runId: next.runId,
-      sequence: next.sequence, projection: next,
+      sessionId: live.sessionId, subagentId: live.subagentId, runId: live.runId,
+      sequence: live.sequence, projection: record.live,
     };
     try { this._onLiveChange?.(change); } catch (err) {
       console.debug('Subagent live listener failed (non-fatal):', err);
@@ -1085,6 +1213,47 @@ export class SubagentManager {
       segments: [], toolCalls: [],
     });
     record._liveCommittedSegmentCount = 0;
+    this._emitDelta(record, {
+      type: SubagentDeltaEventType.TERMINAL,
+      record: runtimeToDomain(record, { includeLiveTail: true }),
+      state: state as SubagentTerminalState,
+      usage: record.usage,
+    });
+  }
+
+  /** Emit a typed live delta stamped with the current run sequence and session revision. */
+  private _emitDelta(record: SubagentRecord, delta: SubagentDeltaPayload): void {
+    const listener = this._onDelta;
+    if (!listener) return;
+    const sessionId = record.sessionId ?? '';
+    const event = {
+      sessionId,
+      subagentId: record.id,
+      runId: record.live.runId,
+      sequence: record.live.sequence,
+      sessionRevision: this.getSessionRevision(sessionId),
+      ...delta,
+    } as SubagentDeltaEvent;
+    try {
+      listener(event);
+    } catch (err) {
+      console.debug('Subagent delta listener failed (non-fatal):', err);
+    }
+  }
+
+  /** Advance the per-session revision counter used to order events and snapshots. */
+  private _bumpSessionRevision(record: SubagentRecord): void {
+    if (!record.sessionId) return;
+    this._sessionRevisions.set(
+      record.sessionId,
+      (this._sessionRevisions.get(record.sessionId) ?? 0) + 1,
+    );
+  }
+
+  /** Mark a durable record mutation: bump the persist revision and the session revision. */
+  private _markRecordDirty(record: SubagentRecord): void {
+    record.persistRevision += 1;
+    this._bumpSessionRevision(record);
   }
 
   private _notify(): void {
@@ -1169,6 +1338,15 @@ function makeLiveProjection(
   return {
     sessionId, subagentId, runId: randomUUID(), sequence: 0, state,
     segments: [], toolCalls: [], usage: null, result: null, error: null,
+  };
+}
+
+/** Deep-copy a live projection so snapshot reads never alias mutable run state. */
+function cloneLiveProjection(projection: SubagentLiveProjection): SubagentLiveProjection {
+  return {
+    ...projection,
+    segments: projection.segments.map((segment) => ({ ...segment })),
+    toolCalls: projection.toolCalls.map((tool) => ({ ...tool })),
   };
 }
 

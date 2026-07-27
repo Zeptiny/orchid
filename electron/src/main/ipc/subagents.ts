@@ -23,8 +23,7 @@ export function createSubagentSnapshot(sessionId: string): SubagentSnapshot {
   const records = mergeSubagentRecords(session?.subagentChains ?? [], runtime);
   return {
     sessionId,
-    // TODO(U2): per-session manager revision counter; snapshots stamp 0 until then.
-    sessionRevision: 0,
+    sessionRevision: manager.getSessionRevision(sessionId),
     records,
     live: manager.getLiveProjections(sessionId),
   };
