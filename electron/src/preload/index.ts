@@ -118,7 +118,7 @@ import {
   sessionReasoningConfigResultSchema,
   chatSessionSnapshotSchema,
   subagentSnapshotSchema,
-  subagentEventSchema,
+  subagentEventWireSchema,
 } from '../shared/types/ipc-schemas';
 
 // ── Security helpers ─────────────────────────────────────────────────────────
@@ -404,7 +404,9 @@ const orchidAPI: OrchidAPI = {
     snapshot: (request: SubagentSnapshotRequest) =>
       invoke<SubagentSnapshot>(IPC_CHANNELS.SUBAGENTS_SNAPSHOT, request),
     onEvent: (callback: (event: SubagentEvent) => void) =>
-      onParsed(IPC_CHANNELS.SUBAGENTS_EVENT, subagentEventSchema, callback),
+      // TODO(U3/U4): wire schema tolerates legacy projection events until
+      // main-process emission migrates to delta batches.
+      onParsed(IPC_CHANNELS.SUBAGENTS_EVENT, subagentEventWireSchema, callback),
   },
 
   tool: {

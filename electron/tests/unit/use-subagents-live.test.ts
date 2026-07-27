@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import type { SubagentEvent, SubagentSnapshot } from '../../src/shared/types/ipc';
-import type { SubagentRecord, SubagentLiveProjection } from '../../src/shared/types/subagent';
+import type { SubagentSnapshot } from '../../src/shared/types/ipc';
+import type { LegacySubagentEvent, SubagentRecord, SubagentLiveProjection } from '../../src/shared/types/subagent';
 import {
   acceptSubagentEvent,
   beginSubagentSnapshotRefresh,
@@ -31,12 +31,12 @@ function projection(id: string, runId: string, sequence: number, state: Subagent
   };
 }
 
-function event(sessionId: string, id: string, runId: string, sequence: number, state: SubagentLiveProjection['state'] = 'running'): SubagentEvent {
+function event(sessionId: string, id: string, runId: string, sequence: number, state: SubagentLiveProjection['state'] = 'running'): LegacySubagentEvent {
   return { sessionId, subagentId: id, runId, sequence, type: 'projection', projection: { ...projection(id, runId, sequence, state), sessionId } };
 }
 
 function snapshot(sessionId: string, records: SubagentRecord[], live: SubagentLiveProjection[] = []): SubagentSnapshot {
-  return { sessionId, records, live: live.map((item) => ({ ...item, sessionId })) };
+  return { sessionId, sessionRevision: 0, records, live: live.map((item) => ({ ...item, sessionId })) };
 }
 
 describe('subagent live snapshot/event reducer', () => {

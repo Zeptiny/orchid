@@ -71,6 +71,153 @@ export interface SubagentLiveChange {
   readonly projection: SubagentLiveProjection;
 }
 
+// ── Live delta events ───────────────────────────────────────────────────────
+
+/**
+ * Delta-event taxonomy for subagent live updates. Replaces per-change full
+ * `SubagentLiveProjection` broadcasts with incremental typed deltas, batched
+ * into one `SubagentEvent` envelope per IPC flush (see `shared/types/ipc.ts`).
+ */
+export const SubagentDeltaEventType = {
+  SPAWNED: 'spawned',
+  TEXT_DELTA: 'text_delta',
+  THINKING_DELTA: 'thinking_delta',
+  TOOL_START: 'tool_start',
+  TOOL_ARGS_DELTA: 'tool_args_delta',
+  TOOL_RESULT: 'tool_result',
+  USAGE: 'usage',
+  TERMINAL: 'terminal',
+} as const;
+
+export type SubagentDeltaEventType = (typeof SubagentDeltaEventType)[keyof typeof SubagentDeltaEventType];
+
+/** Terminal states a subagent run can settle into (subset of SubagentStatus). */
+export type SubagentTerminalState =
+  | typeof SubagentStatus.COMPLETED
+  | typeof SubagentStatus.FAILED
+  | typeof SubagentStatus.INTERRUPTED;
+
+/**
+ * Identity and ordering fields carried by every live delta event.
+ *
+ * `sequence` is monotonic per run (the renderer drops regressions);
+ * `sessionRevision` comes from the manager's per-session counter and is the
+ * single freshness primitive for events, snapshots, and reseed floors.
+ */
+export interface SubagentDeltaEventBase {
+  readonly sessionId: string;
+  readonly subagentId: string;
+  readonly runId: string;
+  readonly sequence: number;
+  readonly sessionRevision: number;
+}
+
+/**
+ * Durable record seed emitted once at spawn. One of only two record carriers
+ * (the other is `terminal`), so projection-only deltas never rebuild records.
+ */
+export interface SubagentSpawnedEvent extends SubagentDeltaEventBase {
+  readonly type: typeof SubagentDeltaEventType.SPAWNED;
+  readonly record: SubagentRecord;
+  readonly usage: Usage | null;
+}
+
+/** Append to a text live segment (`SubagentLiveSegment` kind `text`). */
+export interface SubagentTextDeltaEvent extends SubagentDeltaEventBase {
+  readonly type: typeof SubagentDeltaEventType.TEXT_DELTA;
+  readonly segmentId: string;
+  readonly append: string;
+}
+
+/** Append to a thinking live segment (`SubagentLiveSegment` kind `thinking`). */
+export interface SubagentThinkingDeltaEvent extends SubagentDeltaEventBase {
+  readonly type: typeof SubagentDeltaEventType.THINKING_DELTA;
+  readonly segmentId: string;
+  readonly append: string;
+}
+
+/**
+ * Tool snapshot upsert; field names mirror `SubagentToolSnapshot`. The first
+ * emission for a `toolCallId` creates the tool entry and its `tool` live
+ * segment; a later `running` emission delivers the finalized args.
+ */
+export interface SubagentToolStartEvent extends SubagentDeltaEventBase {
+  readonly type: typeof SubagentDeltaEventType.TOOL_START;
+  /** Identity of the tool's `SubagentLiveSegment` (kind `tool`). */
+  readonly segmentId: string;
+  readonly toolCallId: string;
+  readonly toolName: string;
+  readonly status: 'generating' | 'running';
+  /** Finalized args JSON once `status` is `running`; empty while generating. */
+  readonly args: string;
+  readonly startedAt: string;
+}
+
+/** Append streamed tool-call input to `SubagentToolSnapshot.partialArgs`. */
+export interface SubagentToolArgsDeltaEvent extends SubagentDeltaEventBase {
+  readonly type: typeof SubagentDeltaEventType.TOOL_ARGS_DELTA;
+  readonly toolCallId: string;
+  readonly append: string;
+}
+
+/**
+ * Terminal tool update; field names mirror the terminal `SubagentToolSnapshot`
+ * patch. `content` is the agent projection bounded by the tool-output offload
+ * layer; `toolResult` is the canonical terminal authority.
+ */
+export interface SubagentToolResultEvent extends SubagentDeltaEventBase {
+  readonly type: typeof SubagentDeltaEventType.TOOL_RESULT;
+  readonly toolCallId: string;
+  readonly status: TerminalToolResultStatus;
+  readonly content: string;
+  readonly toolResult: CanonicalToolResult;
+  readonly finishedAt: string;
+}
+
+/** Cumulative usage, emitted at the usage cadence — not per provider event. */
+export interface SubagentUsageEvent extends SubagentDeltaEventBase {
+  readonly type: typeof SubagentDeltaEventType.USAGE;
+  readonly usage: Usage;
+}
+
+/**
+ * Authoritative durable handoff emitted once when the run settles. Carries
+ * the final durable record so no post-terminal snapshot is required.
+ */
+export interface SubagentTerminalEvent extends SubagentDeltaEventBase {
+  readonly type: typeof SubagentDeltaEventType.TERMINAL;
+  readonly record: SubagentRecord;
+  readonly state: SubagentTerminalState;
+  readonly usage: Usage | null;
+}
+
+/** Typed incremental subagent live update; the unit of the live protocol. */
+export type SubagentDeltaEvent =
+  | SubagentSpawnedEvent
+  | SubagentTextDeltaEvent
+  | SubagentThinkingDeltaEvent
+  | SubagentToolStartEvent
+  | SubagentToolArgsDeltaEvent
+  | SubagentToolResultEvent
+  | SubagentUsageEvent
+  | SubagentTerminalEvent;
+
+/**
+ * @deprecated Pre-delta cumulative-projection event retained until U4 migrates
+ * the main/renderer consumers to `SubagentDeltaEvent` batches, then removed.
+ * Do not use in new code.
+ */
+export interface LegacySubagentEvent {
+  sessionId: string;
+  subagentId: string;
+  runId: string;
+  sequence: number;
+  type: 'projection';
+  projection: SubagentLiveProjection;
+  /** Canonical seed for empty hydrated views and terminal handoff. */
+  record?: SubagentRecord;
+}
+
 // ── SubagentRecord ──────────────────────────────────────────────────────────
 
 export interface SubagentRecord {

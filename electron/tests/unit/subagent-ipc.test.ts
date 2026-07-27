@@ -1,6 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ALLOWED_EVENT_CHANNELS, ALLOWED_INVOKE_CHANNELS, IPC_CHANNELS } from '../../src/shared/types/ipc';
-import { subagentSnapshotSchema, subagentEventSchema } from '../../src/shared/types/ipc-schemas';
+import {
+  legacySubagentEventSchema,
+  subagentDeltaEventSchema,
+  subagentEventSchema,
+  subagentEventWireSchema,
+  subagentSnapshotSchema,
+} from '../../src/shared/types/ipc-schemas';
+import { SubagentDeltaEventType, type SubagentDeltaEvent } from '../../src/shared/types/subagent';
 import { subagentSnapshotSchema as requestSchema } from '../../src/main/ipc/payload-schemas';
 import { createSubagentPersistenceScheduler } from '../../src/main/agents/persist-subagent-chains';
 import { createSubagentEventCoalescer, deliverSubagentChange, mergeSubagentRecords } from '../../src/main/ipc/subagents';
@@ -69,13 +76,13 @@ describe('subagent IPC boundary', () => {
       ...canonicalChange,
       type: 'projection',
     };
-    expect(subagentEventSchema.safeParse(event).success).toBe(true);
+    expect(legacySubagentEventSchema.safeParse(event).success).toBe(true);
 
     const stringOnly = structuredClone(event) as Record<string, unknown>;
     const projection = stringOnly.projection as { toolCalls: Array<Record<string, unknown>> };
     delete projection.toolCalls[0].toolResult;
     projection.toolCalls[0].result = 'cancelled by parent';
-    expect(subagentEventSchema.safeParse(stringOnly).success).toBe(false);
+    expect(legacySubagentEventSchema.safeParse(stringOnly).success).toBe(false);
   });
 
   it('merges stored and runtime records with runtime precedence', () => {
@@ -298,11 +305,108 @@ describe('subagent IPC boundary', () => {
 
   it('validates discriminated projection events and rejects malformed data', () => {
     const event = { ...change(1), type: 'projection' };
-    expect(subagentEventSchema.safeParse(event).success).toBe(true);
-    expect(subagentEventSchema.safeParse({ ...event, type: 'unknown' }).success).toBe(false);
+    expect(legacySubagentEventSchema.safeParse(event).success).toBe(true);
+    expect(legacySubagentEventSchema.safeParse({ ...event, type: 'unknown' }).success).toBe(false);
   });
 
   it('requires a validated snapshot result shape', () => {
-    expect(subagentSnapshotSchema.safeParse({ sessionId: 'bad', records: [], live: [] }).success).toBe(false);
+    expect(subagentSnapshotSchema.safeParse({ sessionId: 'bad', sessionRevision: 0, records: [], live: [] }).success).toBe(false);
+  });
+});
+
+describe('subagent delta event protocol (U1)', () => {
+  const usage = { prompt_tokens: 1, completion_tokens: 2, total_tokens: 3, cached_tokens: 0 };
+  const base = { sessionId: session, subagentId: 'subagent-1', runId: uuid, sequence: 1, sessionRevision: 0 };
+
+  /** Exhaustive switch over the delta union; the `never` guard fails typecheck when a variant lacks a case. */
+  function summarizeDelta(event: SubagentDeltaEvent): string {
+    switch (event.type) {
+      case SubagentDeltaEventType.SPAWNED: return `spawned:${event.record.id}`;
+      case SubagentDeltaEventType.TEXT_DELTA: return `text:${event.segmentId}+${event.append}`;
+      case SubagentDeltaEventType.THINKING_DELTA: return `thinking:${event.segmentId}+${event.append}`;
+      case SubagentDeltaEventType.TOOL_START: return `tool_start:${event.toolCallId}:${event.status}`;
+      case SubagentDeltaEventType.TOOL_ARGS_DELTA: return `tool_args:${event.toolCallId}+${event.append}`;
+      case SubagentDeltaEventType.TOOL_RESULT: return `tool_result:${event.toolCallId}:${event.status}`;
+      case SubagentDeltaEventType.USAGE: return `usage:${event.usage.total_tokens}`;
+      case SubagentDeltaEventType.TERMINAL: return `terminal:${event.state}`;
+      default: {
+        const exhaustive: never = event;
+        throw new Error(`unhandled delta ${JSON.stringify(exhaustive)}`);
+      }
+    }
+  }
+
+  const canonical = createCanonicalToolResult('generic', { status: 'complete', data: { value: 'done' } });
+  const deltas: SubagentDeltaEvent[] = [
+    { ...base, type: 'spawned', record: record('subagent-1', 'running'), usage: null },
+    { ...base, type: 'text_delta', segmentId: 'seg-text', append: 'hel', sequence: 2 },
+    { ...base, type: 'thinking_delta', segmentId: 'seg-think', append: 'hmm', sequence: 3 },
+    {
+      ...base, type: 'tool_start', segmentId: 'seg-tool', toolCallId: 'call-1', toolName: 'read',
+      status: 'generating', args: '', startedAt: new Date(0).toISOString(), sequence: 4,
+    },
+    { ...base, type: 'tool_args_delta', toolCallId: 'call-1', append: '{"path":', sequence: 5 },
+    {
+      ...base, type: 'tool_result', toolCallId: 'call-1', status: 'complete', content: 'done',
+      toolResult: canonical, finishedAt: new Date(1).toISOString(), sequence: 6,
+    },
+    { ...base, type: 'usage', usage, sequence: 7 },
+    { ...base, type: 'terminal', record: record('subagent-1', 'completed'), state: 'completed', usage, sequence: 8 },
+  ];
+
+  it('covers every delta variant in an exhaustive switch and validates each against the wire schema', () => {
+    expect(deltas.map(summarizeDelta)).toEqual([
+      'spawned:subagent-1',
+      'text:seg-text+hel',
+      'thinking:seg-think+hmm',
+      'tool_start:call-1:generating',
+      'tool_args:call-1+{"path":',
+      'tool_result:call-1:complete',
+      'usage:3',
+      'terminal:completed',
+    ]);
+    for (const delta of deltas) {
+      expect(subagentDeltaEventSchema.safeParse(delta).success).toBe(true);
+    }
+  });
+
+  it('validates a batched envelope of deltas and rejects malformed members', () => {
+    expect(subagentEventSchema.safeParse({ sessionId: session, events: deltas }).success).toBe(true);
+    expect(subagentEventSchema.safeParse({ sessionId: session, events: [] }).success).toBe(true);
+    const malformed = structuredClone(deltas[1]) as Record<string, unknown>;
+    delete malformed.segmentId;
+    expect(subagentEventSchema.safeParse({ sessionId: session, events: [malformed] }).success).toBe(false);
+  });
+
+  it('rejects deltas missing any shared base field', () => {
+    for (const field of ['sessionId', 'subagentId', 'runId', 'sequence', 'sessionRevision'] as const) {
+      const broken = structuredClone(deltas[1]) as Record<string, unknown>;
+      delete broken[field];
+      expect(subagentDeltaEventSchema.safeParse(broken).success).toBe(false);
+    }
+  });
+
+  it('rejects negative or fractional sequence and sessionRevision', () => {
+    expect(subagentDeltaEventSchema.safeParse({ ...deltas[1], sessionRevision: -1 }).success).toBe(false);
+    expect(subagentDeltaEventSchema.safeParse({ ...deltas[1], sessionRevision: 1.5 }).success).toBe(false);
+    expect(subagentDeltaEventSchema.safeParse({ ...deltas[1], sequence: -2 }).success).toBe(false);
+  });
+
+  it('rejects an unknown delta type discriminant', () => {
+    expect(subagentDeltaEventSchema.safeParse({ ...base, type: 'exploded' }).success).toBe(false);
+  });
+
+  it('accepts a snapshot carrying sessionRevision and rejects missing or negative revisions', () => {
+    const valid = { sessionId: session, sessionRevision: 0, records: [], live: [] };
+    expect(subagentSnapshotSchema.safeParse(valid).success).toBe(true);
+    expect(subagentSnapshotSchema.safeParse({ sessionId: session, records: [], live: [] }).success).toBe(false);
+    expect(subagentSnapshotSchema.safeParse({ ...valid, sessionRevision: -1 }).success).toBe(false);
+  });
+
+  it('keeps the legacy projection event valid on the transitional wire schema', () => {
+    const legacy = { ...change(1), type: 'projection' };
+    expect(subagentEventWireSchema.safeParse(legacy).success).toBe(true);
+    expect(subagentEventWireSchema.safeParse({ sessionId: session, events: deltas }).success).toBe(true);
+    expect(subagentEventWireSchema.safeParse({ sessionId: session, events: [{ type: 'nope' }] }).success).toBe(false);
   });
 });

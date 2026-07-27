@@ -1,8 +1,7 @@
 /** Session-affine subagent snapshot/live state for the inspector and view. */
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import type { Usage } from '../../shared/types/message';
-import type { SubagentEvent } from '../../shared/types/ipc';
-import type { SubagentLiveProjection, SubagentRecord } from '../../shared/types/subagent';
+import type { LegacySubagentEvent, SubagentLiveProjection, SubagentRecord } from '../../shared/types/subagent';
 import { sumSubagentUsage, sumSubagentsUsage, subUsageByParentChain } from '../../shared/usage';
 import {
   acceptSubagentEvent,
@@ -159,8 +158,10 @@ export function useSubagents(activeSessionId: string | null): UseSubagentsReturn
   }, [activeSessionId, hydrate]);
 
   useEffect(() => {
-    const unsubscribe = window.orchid?.subagents?.onEvent?.((event: SubagentEvent) => {
-      const next = acceptSubagentEvent(streamRef.current, event);
+    const unsubscribe = window.orchid?.subagents?.onEvent?.((event) => {
+      // TODO(U4): main still emits legacy projection events until U2/U3 land;
+      // reinterpret the transitional payload for the legacy reducer.
+      const next = acceptSubagentEvent(streamRef.current, event as unknown as LegacySubagentEvent);
       if (next !== streamRef.current) commit(next);
     });
     return unsubscribe;

@@ -10,6 +10,12 @@ Shared domain vocabulary for the orchid project. This file defines terms used ac
 - **Model Tier** — Intelligence/speed tradeoff level: `seed` (fastest/cheapest), `sprout`, `bloom`, `crown` (slowest/most capable).
 - **Personality** — A tone/style overlay applied to the agent's communication (default, zen, stupid, pirate).
 
+## Subagent Live Protocol
+
+- **Live Delta Event** — A typed incremental update from a subagent run (`SubagentDeltaEvent`: `spawned`, `text_delta`, `thinking_delta`, `tool_start`, `tool_args_delta`, `tool_result`, `usage`, `terminal`), replacing full-projection broadcasts. Every delta carries `sessionId`, `subagentId`, `runId`, `sequence`, and `sessionRevision`; deltas are batched into one `SubagentEvent` envelope per IPC flush.
+- **Session Revision** — A per-session monotonic counter stamped on every subagent live event and snapshot. The renderer uses it to reject stale snapshots and as the floor when reseeding after hydration-buffer overflow.
+- **Durable Handoff** — The transfer of subagent output from ephemeral live state to the persisted `SubagentRecord`. The renderer receives the durable record exactly twice — as a seed at spawn and authoritatively at terminal settlement — never per delta.
+
 ## Skill System
 
 - **Skill** — A reusable workflow template that guides the agent through complex multi-step tasks. Defined in `SKILL.md` files.

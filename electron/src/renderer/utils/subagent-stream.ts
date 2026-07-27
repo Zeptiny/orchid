@@ -1,5 +1,6 @@
-import type { SubagentEvent, SubagentSnapshot } from '../../shared/types/ipc';
+import type { SubagentSnapshot } from '../../shared/types/ipc';
 import type {
+  LegacySubagentEvent,
   SubagentLiveProjection,
   SubagentRecord,
   SubagentStatus,
@@ -14,7 +15,7 @@ export interface SubagentStreamState {
   readonly live: ReadonlyMap<string, SubagentLiveProjection>;
   readonly highWater: ReadonlyMap<string, number>;
   readonly runs: ReadonlyMap<string, string>;
-  readonly buffered: readonly SubagentEvent[];
+  readonly buffered: readonly LegacySubagentEvent[];
   readonly error: string | null;
   readonly generation: number;
 }
@@ -133,7 +134,7 @@ function recordWithProjection(record: SubagentRecord, projection: SubagentLivePr
   };
 }
 
-function applyEvent(state: SubagentStreamState, event: SubagentEvent): SubagentStreamState {
+function applyEvent(state: SubagentStreamState, event: LegacySubagentEvent): SubagentStreamState {
   if (state.sessionId !== event.sessionId || event.projection.sessionId && event.projection.sessionId !== event.sessionId) {
     return state;
   }
@@ -163,7 +164,7 @@ function applyEvent(state: SubagentStreamState, event: SubagentEvent): SubagentS
 /** Accept one event, or retain it for replay after snapshot seeding. */
 export function acceptSubagentEvent(
   state: SubagentStreamState,
-  event: SubagentEvent,
+  event: LegacySubagentEvent,
 ): SubagentStreamState {
   if (state.sessionId !== event.sessionId) return state;
   if (state.hydration === 'loading') {

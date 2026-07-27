@@ -312,12 +312,78 @@ export const subagentRecordSchema = z.object({
   chain: z.unknown(),
 });
 export const subagentSnapshotSchema = z.object({
-  sessionId: z.string().uuid(), records: z.array(subagentRecordSchema),
+  sessionId: z.string().uuid(),
+  sessionRevision: z.number().int().nonnegative(),
+  records: z.array(subagentRecordSchema),
   live: z.array(subagentLiveProjectionSchema),
 });
-export const subagentEventSchema = z.object({
+/**
+ * @deprecated Pre-delta wire event retained until U3 migrates main-process
+ * emission to delta batches and U4 removes it. Do not use in new code.
+ */
+export const legacySubagentEventSchema = z.object({
   sessionId: z.string().uuid(), subagentId: z.string(), runId: z.string(),
   sequence: z.number().int().positive(), type: z.literal('projection'),
   projection: subagentLiveProjectionSchema,
   record: subagentRecordSchema.optional(),
 });
+
+// ── Subagent live delta events ───────────────────────────────────────────────
+
+const subagentDeltaBaseSchema = z.object({
+  sessionId: z.string().uuid(),
+  subagentId: z.string(),
+  runId: z.string(),
+  sequence: z.number().int().nonnegative(),
+  sessionRevision: z.number().int().nonnegative(),
+});
+export const subagentSpawnedEventSchema = subagentDeltaBaseSchema.extend({
+  type: z.literal('spawned'), record: subagentRecordSchema, usage: usageSchema.nullable(),
+});
+export const subagentTextDeltaEventSchema = subagentDeltaBaseSchema.extend({
+  type: z.literal('text_delta'), segmentId: z.string(), append: z.string(),
+});
+export const subagentThinkingDeltaEventSchema = subagentDeltaBaseSchema.extend({
+  type: z.literal('thinking_delta'), segmentId: z.string(), append: z.string(),
+});
+export const subagentToolStartEventSchema = subagentDeltaBaseSchema.extend({
+  type: z.literal('tool_start'), segmentId: z.string(), toolCallId: z.string(),
+  toolName: z.string(), status: z.enum(['generating', 'running']),
+  args: z.string(), startedAt: z.string(),
+});
+export const subagentToolArgsDeltaEventSchema = subagentDeltaBaseSchema.extend({
+  type: z.literal('tool_args_delta'), toolCallId: z.string(), append: z.string(),
+});
+export const subagentToolResultEventSchema = subagentDeltaBaseSchema.extend({
+  type: z.literal('tool_result'), toolCallId: z.string(),
+  status: terminalToolResultStatusSchema, content: z.string(),
+  toolResult: canonicalToolResultSchema, finishedAt: z.string(),
+});
+export const subagentUsageEventSchema = subagentDeltaBaseSchema.extend({
+  type: z.literal('usage'), usage: usageSchema,
+});
+export const subagentTerminalEventSchema = subagentDeltaBaseSchema.extend({
+  type: z.literal('terminal'), record: subagentRecordSchema,
+  state: z.enum(['completed', 'failed', 'interrupted']), usage: usageSchema.nullable(),
+});
+export const subagentDeltaEventSchema = z.discriminatedUnion('type', [
+  subagentSpawnedEventSchema,
+  subagentTextDeltaEventSchema,
+  subagentThinkingDeltaEventSchema,
+  subagentToolStartEventSchema,
+  subagentToolArgsDeltaEventSchema,
+  subagentToolResultEventSchema,
+  subagentUsageEventSchema,
+  subagentTerminalEventSchema,
+]);
+/** Batched SUBAGENTS_EVENT payload — the unit of IPC delivery. */
+export const subagentEventSchema = z.object({
+  sessionId: z.string().uuid(),
+  events: z.array(subagentDeltaEventSchema),
+});
+/**
+ * Transitional U1–U3 wire schema: accepts the new delta batch envelope and
+ * the legacy projection event until main-process emission migrates in U3.
+ * U4 narrows preload validation back to `subagentEventSchema`.
+ */
+export const subagentEventWireSchema = z.union([subagentEventSchema, legacySubagentEventSchema]);

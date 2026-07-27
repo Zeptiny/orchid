@@ -1,8 +1,8 @@
 /** Session-affine subagent snapshot and live projection IPC. */
 import { BrowserWindow, ipcMain, type WebContents } from 'electron';
 import { IPC_CHANNELS } from '../../shared/types/ipc';
-import type { SubagentEvent, SubagentSnapshot } from '../../shared/types/ipc';
-import type { SubagentRecord as DomainSubagentRecord, SubagentLiveChange } from '../../shared/types/subagent';
+import type { SubagentSnapshot } from '../../shared/types/ipc';
+import type { SubagentRecord as DomainSubagentRecord, SubagentLiveChange, LegacySubagentEvent } from '../../shared/types/subagent';
 import { getSubagentManager } from '../tools';
 import { getSessionManager } from './session';
 import { subagentSnapshotSchema } from './payload-schemas';
@@ -23,6 +23,8 @@ export function createSubagentSnapshot(sessionId: string): SubagentSnapshot {
   const records = mergeSubagentRecords(session?.subagentChains ?? [], runtime);
   return {
     sessionId,
+    // TODO(U2): per-session manager revision counter; snapshots stamp 0 until then.
+    sessionRevision: 0,
     records,
     live: manager.getLiveProjections(sessionId),
   };
@@ -38,7 +40,7 @@ export function deliverSubagentChange(
   windows: readonly BrowserWindow[] = BrowserWindow.getAllWindows(),
 ): void {
   if (!change.sessionId) return;
-  const event: SubagentEvent = {
+  const event: LegacySubagentEvent = {
     sessionId: change.sessionId,
     subagentId: change.subagentId,
     runId: change.runId,
