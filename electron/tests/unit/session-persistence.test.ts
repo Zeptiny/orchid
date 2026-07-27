@@ -21,7 +21,7 @@ import {
   _clearDbCache,
 } from '../../src/main/session/storage';
 import { openSqliteDb } from '../../src/main/utils/sqlite';
-import { SessionManager } from '../../src/main/session/manager';
+import { onSessionDeleted, SessionManager } from '../../src/main/session/manager';
 import { createCanonicalToolResult } from '../../src/shared/types/tool-result';
 
 let tmpDir: string;
@@ -919,6 +919,20 @@ describe('SessionManager', () => {
     manager.delete(session1.id);
 
     expect(manager.getActive()!.id).toBe(session2.id);
+  });
+
+  it('notifies session-scoped cleanup when a session is deleted', () => {
+    const manager = new SessionManager({ storage: storageOpts });
+    const session = manager.create(DEFAULT_SELECTION);
+    const deleted: string[] = [];
+    const unsubscribe = onSessionDeleted((sessionId) => deleted.push(sessionId));
+
+    try {
+      expect(manager.delete(session.id)).toBe(true);
+      expect(deleted).toEqual([session.id]);
+    } finally {
+      unsubscribe();
+    }
   });
 
   it('rename() updates active session name', () => {

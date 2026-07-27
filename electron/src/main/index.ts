@@ -29,7 +29,11 @@ import { initUpdater, destroyUpdater, checkForUpdates } from './updater';
 import { initFileLogging, closeFileLogging } from './logging';
 import { registerBuiltinTools } from './tools';
 import { getBackgroundStore } from './tools/process/background-store';
-import { wireSubagentRuntime, flushSubagentPersistence } from './agents/wire-subagents';
+import {
+  wireSubagentRuntime,
+  flushSubagentPersistence,
+  disposeSubagentPersistence,
+} from './agents/wire-subagents';
 import { initToolWorkerPool, disposeToolWorkerPool } from './llm/tool-pool';
 import { getConfig } from './config/loader';
 import { ProviderCatalogStore } from './providers/catalog/store';
@@ -384,6 +388,7 @@ app.on('before-quit', async (event) => {
     // 7. Now actually quit
     // Final safety flush after teardown, immediately before process exit.
     flushSubagentPersistence();
+    disposeSubagentPersistence();
     closeSessionDb();
     clearTimeout(forceExitTimer);
     app.exit(0);

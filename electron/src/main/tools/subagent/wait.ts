@@ -20,7 +20,6 @@ import {
   type SubagentRecord,
 } from '../../agents/manager';
 import type { SubagentToolResult } from './delegate';
-import { persistSubagentChains } from '../../agents/persist-subagent-chains';
 
 function formatElapsed(ms: number): string {
   const seconds = Math.floor(Math.max(0, ms) / 1000);
@@ -205,9 +204,22 @@ export function buildWaitTool(
       throw err;
     }
 
-    // Persist latest subagent chains onto each owning session (not blindly active)
+    // A caller that explicitly waits for a subagent is asking for its durable
+    // terminal result too. Route that through the scheduler's recovery entry
+    // point so an earlier degraded checkpoint gets one deliberate retry.
     try {
-      persistSubagentChains(manager);
+      const { recoverSubagentPersistence, persistSubagentChains } = await import('../../agents/wire-subagents');
+      const sessionIds = new Set(
+        [...records.values()]
+          .map((record) => record.sessionId)
+          .filter((sessionId): sessionId is string => sessionId !== null),
+      );
+      if (sessionIds.size === 0) {
+        // Preserve the legacy fallback for records created without an owner.
+        persistSubagentChains(manager);
+      } else {
+        for (const sessionId of sessionIds) recoverSubagentPersistence(sessionId);
+      }
     } catch {
       // Non-fatal — UI can still read in-memory state on next refresh
     }

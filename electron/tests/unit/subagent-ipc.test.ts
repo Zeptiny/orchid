@@ -190,6 +190,99 @@ describe('subagent IPC boundary', () => {
     expect(scheduler.hasPending(session)).toBe(false);
   });
 
+  it('opens a per-session breaker after the retry budget is exhausted', () => {
+    const writes: string[] = [];
+    const scheduler = createSubagentPersistenceScheduler((id) => {
+      writes.push(id);
+      throw new Error('persistent storage failure');
+    }, undefined, { maxRetries: 2 });
+
+    scheduler.flush(session);
+    vi.advanceTimersByTime(100);
+    vi.advanceTimersByTime(200);
+
+    expect(writes).toEqual([session, session, session]);
+    expect(scheduler.isDegraded(session)).toBe(true);
+    expect(scheduler.hasPending(session)).toBe(true);
+    vi.runOnlyPendingTimers();
+    expect(writes).toEqual([session, session, session]);
+  });
+
+  it('does not reset an active retry budget for interleaved live updates', () => {
+    const writes: string[] = [];
+    const scheduler = createSubagentPersistenceScheduler((id) => {
+      writes.push(id);
+      throw new Error('persistent storage failure');
+    }, undefined, { maxRetries: 1 });
+
+    scheduler.flush(session);
+    scheduler.markDirty(session);
+    vi.advanceTimersByTime(100);
+
+    expect(writes).toEqual([session, session]);
+    expect(scheduler.isDegraded(session)).toBe(true);
+    vi.advanceTimersByTime(5000);
+    expect(writes).toEqual([session, session]);
+  });
+
+  it('does not block checkpoints for other sessions when one is degraded', () => {
+    const otherSession = '00000000-0000-4000-8000-000000000003';
+    const writes: string[] = [];
+    const scheduler = createSubagentPersistenceScheduler((id) => {
+      writes.push(id);
+      if (id === session) throw new Error('persistent storage failure');
+    }, undefined, { maxRetries: 0 });
+
+    scheduler.flush(session);
+    scheduler.flush(otherSession);
+
+    expect(scheduler.isDegraded(session)).toBe(true);
+    expect(scheduler.isDegraded(otherSession)).toBe(false);
+    expect(writes).toEqual([session, otherSession]);
+  });
+
+  it('reopens a degraded session for new durable activity and explicit recovery', () => {
+    const writes: string[] = [];
+    let fail = true;
+    const scheduler = createSubagentPersistenceScheduler((id) => {
+      writes.push(id);
+      if (fail) throw new Error('persistent storage failure');
+    }, undefined, { maxRetries: 0 });
+
+    scheduler.flush(session);
+    expect(scheduler.isDegraded(session)).toBe(true);
+
+    fail = false;
+    scheduler.markDirty(session);
+    vi.advanceTimersByTime(2000);
+    expect(scheduler.isDegraded(session)).toBe(false);
+
+    fail = true;
+    scheduler.flush(session);
+    expect(scheduler.isDegraded(session)).toBe(true);
+    fail = false;
+    scheduler.recover(session);
+    expect(scheduler.isDegraded(session)).toBe(false);
+    expect(writes).toHaveLength(4);
+  });
+
+  it('clears per-session retry state and timers when disposed or deleted', () => {
+    const writes: string[] = [];
+    const scheduler = createSubagentPersistenceScheduler((id) => writes.push(id));
+
+    scheduler.markDirty(session);
+    scheduler.clear(session);
+    vi.advanceTimersByTime(2000);
+    expect(writes).toEqual([]);
+    expect(scheduler.hasPending(session)).toBe(false);
+
+    scheduler.markDirty(session);
+    scheduler.dispose();
+    vi.advanceTimersByTime(2000);
+    expect(writes).toEqual([]);
+    expect(scheduler.hasPending(session)).toBe(false);
+  });
+
   it('flushes pending event and persistence work for orderly shutdown', () => {
     const delivered: unknown[] = [];
     const writes: string[] = [];

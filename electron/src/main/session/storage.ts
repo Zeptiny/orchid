@@ -97,6 +97,28 @@ export function isValidSessionId(id: string): boolean {
 // ---------------------------------------------------------------------------
 
 const dbCache = new Map<string, SessionDb>();
+const storageRecoveryListeners = new Set<() => void>();
+
+/**
+ * Subscribe to a successful SQLite connection recovery.
+ *
+ * Consumers with previously failed best-effort writes can use this as a safe
+ * signal to retry once; the storage layer itself still owns recovery.
+ */
+export function onSessionStorageRecovered(listener: () => void): () => void {
+  storageRecoveryListeners.add(listener);
+  return () => storageRecoveryListeners.delete(listener);
+}
+
+function notifySessionStorageRecovered(): void {
+  for (const listener of storageRecoveryListeners) {
+    try {
+      listener();
+    } catch (error) {
+      console.warn('Session storage recovery observer failed:', error);
+    }
+  }
+}
 
 function getDb(dbPath: string): SqliteDatabase {
   let cached = dbCache.get(dbPath);
@@ -124,7 +146,9 @@ function withCorruptionRecovery<T>(dbPath: string, op: (db: SqliteDatabase) => T
       cached.dispose();
       dbCache.delete(dbPath);
     }
-    return op(getDb(dbPath));
+    const result = op(getDb(dbPath));
+    notifySessionStorageRecovered();
+    return result;
   }
 }
 

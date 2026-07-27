@@ -74,6 +74,26 @@ export interface CreateSessionOptions {
  */
 export type GenerateTitleCallback = (session: Session) => Promise<string | null>;
 
+/** Lifecycle hooks for state held outside SessionManager but keyed by session. */
+const sessionDeletionListeners = new Set<(sessionId: string) => void>();
+
+/** Register cleanup for state that must not outlive a deleted session. */
+export function onSessionDeleted(listener: (sessionId: string) => void): () => void {
+  sessionDeletionListeners.add(listener);
+  return () => sessionDeletionListeners.delete(listener);
+}
+
+function notifySessionDeleted(sessionId: string): void {
+  for (const listener of sessionDeletionListeners) {
+    try {
+      listener(sessionId);
+    } catch (error) {
+      // Cleanup observers must never make a session impossible to delete.
+      console.warn(`Session deletion cleanup failed for ${sessionId}:`, error);
+    }
+  }
+}
+
 // ---------------------------------------------------------------------------
 // SessionManager options
 // ---------------------------------------------------------------------------
@@ -376,6 +396,7 @@ export class SessionManager {
     for (const [owner, selectedId] of this._selectedByOwner) {
       if (selectedId === id) this._selectedByOwner.delete(owner);
     }
+    notifySessionDeleted(id);
     return result;
   }
 

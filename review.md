@@ -16,7 +16,7 @@ The highest-leverage corrections are:
 3. Stop subagent-only updates from invalidating the main transcript.
 4. Fix worker cancellation/health behavior and offload the remaining unbounded synchronous operations.
 
-No P0 data-loss or security-critical performance defect was identified. This report contains **5 P1 findings** and **6 P2 findings**.
+No P0 data-loss or security-critical performance defect was identified. This report contains **5 P1 findings** and **5 P2 findings**.
 
 ## Existing safeguards to preserve
 
@@ -395,33 +395,6 @@ Use fetch fixtures that return headers and then never yield a body. Assert bound
 
 ---
 
-### F-20 — Permanent subagent persistence failures retry forever
-
-**Severity:** P2
-**Confidence:** High; retries have no terminal state.
-**Primary files:**
-
-- `electron/src/main/agents/persist-subagent-chains.ts:40`
-- `electron/src/main/agents/persist-subagent-chains.ts:47`
-- `electron/src/main/agents/persist-subagent-chains.ts:55`
-- `electron/tests/unit/subagent-ipc.test.ts:170`
-
-**Evidence and impact**
-
-A failed checkpoint marks the session dirty again and reschedules indefinitely. Backoff reaches a two-second ceiling but attempts are unlimited. Permanent disk or database failures therefore retain timers and produce continuous write/log churn for every affected session.
-
-**Recommended fix**
-
-1. Add a bounded retry budget and circuit-breaker state per session.
-2. After exhaustion, stop automatic retries and surface a degraded-persistence status.
-3. Retry only on explicit user action, new durable activity, or a storage-recovery signal.
-4. Clear retry state when a session is deleted or the app shuts down.
-5. Preserve immediate recovery behavior for temporary failures.
-
-**Verification**
-
-Test temporary recovery and permanent failure separately. The permanent case must stop scheduling after the configured budget and release timers/maps cleanly.
-
 ## Additional watchlist items
 
 These items were not promoted to primary findings because impact or provider behavior needs confirmation, but they should be covered by profiling and targeted tests:
@@ -460,8 +433,7 @@ This is the most substantial architectural batch and should be designed as one c
 ### Batch 5 — Cancellation and long-lived failure cleanup
 
 1. F-18: end-to-end RAG download/body/worker deadlines.
-2. F-20: bounded persistence recovery.
-3. Address watchlist shutdown and MCP cleanup risks.
+2. Address watchlist shutdown and MCP cleanup risks.
 
 ## Performance verification plan
 
