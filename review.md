@@ -16,7 +16,7 @@ The highest-leverage corrections are:
 3. Stop subagent-only updates from invalidating the main transcript.
 4. Fix worker cancellation/health behavior and offload the remaining unbounded synchronous operations.
 
-No P0 data-loss or security-critical performance defect was identified. This report contains **6 P1 findings** and **8 P2 findings**.
+No P0 data-loss or security-critical performance defect was identified. This report contains **6 P1 findings** and **7 P2 findings**.
 
 ## Existing safeguards to preserve
 
@@ -398,36 +398,6 @@ Serve deterministic 1/5/10 MiB fixtures, including deeply nested and table-heavy
 
 ---
 
-### F-14 — Every streaming frame still remaps the visible transcript
-
-**Severity:** P2
-**Confidence:** Medium-high; scaling needs React profiling.
-**Primary files:**
-
-- `electron/src/renderer/components/ChatStream.tsx:53`
-- `electron/src/renderer/components/ChatStream.tsx:382`
-- `electron/src/renderer/components/ChatStream.tsx:394`
-- `electron/src/renderer/components/ChatStream.tsx:550`
-
-**Evidence and impact**
-
-History construction is memoized separately, which is good, but every live frame still spreads history and live items into a new array, creates React elements for every visible row, and reconciles the entire keyed sequence. The newest 20 chains remain fully mounted, and legacy mega-chains have no item-level windowing.
-
-`MessageWidget` memoization avoids some deep work but cannot remove the O(visible item count) parent traversal.
-
-**Recommended fix**
-
-1. Isolate stable history behind a memoized history component or memoized node sequence.
-2. Keep the live tail and active footer in a small independently updating subtree while preserving live-to-committed key continuity.
-3. After measurement, add `content-visibility` or windowing for old chain bodies if commit duration still exceeds budget.
-4. Prefer a small local boundary before introducing a virtualization dependency.
-
-**Verification**
-
-Profile 100, 1,000, 2,000, and 5,000 visible items during a fixed 60-frame stream. Chart commit duration and verify stable-history components do not rerender for live-only deltas.
-
----
-
 ### F-18 — RAG download/body stalls can hold indexing indefinitely
 
 **Severity:** P2
@@ -529,12 +499,11 @@ These items were not promoted to primary findings because impact or provider beh
 
 ## Recommended implementation order
 
-### Batch 2 — Renderer streaming and hydration
+### Batch 2 — Renderer streaming
 
 1. F-02: add a lightweight/deferred streaming Markdown path.
-2. F-14: isolate stable history from the live tail.
 
-Profile after each change; virtualization should be introduced only if stable-history isolation and lazy mounting do not meet the frame budget.
+Profile before introducing virtualization or windowing for old chain bodies.
 
 ### Batch 3 — Subagent live/durable separation
 

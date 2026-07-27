@@ -55,6 +55,8 @@ export const CHAIN_COLLAPSE_THRESHOLD = 20;
 
 /** Live tool arguments belong to the cheap tail, not the committed-history memo. */
 const NO_TOOL_BLOCKS: ToolBlock[] = [];
+const NO_SUBAGENTS: readonly SubagentRecord[] = [];
+const NO_SESSION_CHAINS: readonly Chain[] = [];
 
 interface ChatStreamProps {
   /** Whether the chat surface is currently available for presentation work. */
@@ -202,8 +204,8 @@ export function ChatStream({
   onRetry,
   usage,
   currentTurnUsage = null,
-  subagents = [],
-  sessionChains = [],
+  subagents = NO_SUBAGENTS,
+  sessionChains = NO_SESSION_CHAINS,
   sessionId = null,
   streamStartTime = null,
   interrupted,
@@ -256,11 +258,10 @@ export function ChatStream({
     setExpandedChainIndexes(new Set());
   }, [sessionId]);
 
-  // Committed history is independent of per-token stream text and wall-clock
-  // elapsed ticks. Keep it stable so long sessions do not rebuild O(n) lists.
-  // Live footer usage: current-turn snapshot while streaming; full usage when idle.
-  const footerLiveUsage =
-    status === 'streaming' ? currentTurnUsage : usage;
+  // Committed history is independent of per-token stream text, live usage,
+  // and wall-clock elapsed ticks. Keep it stable so long sessions do not
+  // rebuild O(n) lists. The active footer receives live usage below.
+  const historyUsage = status === 'streaming' ? null : usage;
   // Current-turn tool generation is rendered by the live tail. Excluding it
   // here keeps argument-only frame updates from rebuilding committed history.
   const historyToolBlocks = status === 'streaming' ? NO_TOOL_BLOCKS : toolBlocks;
@@ -270,7 +271,7 @@ export function ChatStream({
         messages,
         toolBlocks: historyToolBlocks,
         status,
-        liveUsage: footerLiveUsage,
+        liveUsage: historyUsage,
         subagents,
         sessionChains,
         interrupted: Boolean(interrupted),
@@ -280,7 +281,7 @@ export function ChatStream({
       messages,
       historyToolBlocks,
       status,
-      footerLiveUsage,
+      historyUsage,
       subagents,
       sessionChains,
       interrupted,
@@ -314,6 +315,55 @@ export function ChatStream({
   const liveGroupedItems = useMemo(
     () => foldStreamActivityGroups(liveItems),
     [liveItems],
+  );
+  // Keep stable history nodes by identity across live-only frames. They still
+  // participate in the same flat keyed sequence as the tail so a segment that
+  // commits before CHAT_DONE retains its DOM node at the live→history boundary.
+  const historyNodes = useMemo(
+    () => historyItems.map((item) =>
+      renderStreamItem(item, alwaysExpandToolGroups, expandChain, subagents),
+    ),
+    [historyItems, alwaysExpandToolGroups, expandChain, subagents],
+  );
+  const liveTailNodes = useMemo(
+    () => liveGroupedItems.map((item) =>
+      renderStreamItem(item, alwaysExpandToolGroups, expandChain, subagents),
+    ),
+    [liveGroupedItems, alwaysExpandToolGroups, expandChain, subagents],
+  );
+  const activeFooterNode = useMemo(() => {
+    if (!history.activeFooter) return null;
+    return renderStreamItem(
+      {
+        ...history.activeFooter,
+        usage:
+          status === 'streaming'
+            ? currentTurnUsage ?? history.activeFooter.usage
+            : history.activeFooter.usage,
+        elapsedSeconds:
+          status === 'streaming' && streamStartTime != null
+            ? liveElapsedSeconds
+            : undefined,
+      },
+      alwaysExpandToolGroups,
+      expandChain,
+      subagents,
+    );
+  }, [
+    history.activeFooter,
+    status,
+    currentTurnUsage,
+    streamStartTime,
+    liveElapsedSeconds,
+    alwaysExpandToolGroups,
+    expandChain,
+    subagents,
+  ]);
+  const streamNodes = useMemo(
+    () => activeFooterNode
+      ? [...historyNodes, ...liveTailNodes, activeFooterNode]
+      : [...historyNodes, ...liveTailNodes],
+    [historyNodes, liveTailNodes, activeFooterNode],
   );
 
   if (
@@ -379,27 +429,11 @@ export function ChatStream({
         )}
 
         {/* History + live tail + active footer render as ONE keyed sequence.
-            Separate JSX child expressions would each reconcile as their own
-            slot, so at turn end the committed bubble/footer (in history) would
-            unmount the live one (in the tail) and remount — replaying the
-            orchid-rise entrance animation as a visible flicker. One flat array
-            lets React match the shared keys (seg id / footer-chain id) and
-            reuse the DOM nodes across the live→committed swap. */}
-        {[
-          ...historyItems,
-          ...liveGroupedItems,
-          ...(history.activeFooter
-            ? [{
-                ...history.activeFooter,
-                elapsedSeconds:
-                  status === 'streaming' && streamStartTime != null
-                    ? liveElapsedSeconds
-                    : undefined,
-              }]
-            : []),
-        ].map((item) =>
-          renderStreamItem(item, alwaysExpandToolGroups, expandChain, subagents),
-        )}
+            History nodes remain referentially stable across live-only frames,
+            while the small tail/footer path updates independently. Keeping the
+            final nodes flat lets React retain shared segment/footer keys across
+            the live→committed swap instead of replaying entrance animation. */}
+        {streamNodes}
       </div>
       {isUserScrolledUp ? (
         <Button
