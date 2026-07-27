@@ -1,9 +1,21 @@
 import { Worker } from 'node:worker_threads';
 
+const DEFAULT_READINESS_TIMEOUT_MS = 5_000;
+const DEFAULT_MAX_RESPAWN_ATTEMPTS = 3;
+const DEFAULT_RESPAWN_BASE_DELAY_MS = 100;
+
 export class PoolDisposedError extends Error {
   constructor() {
     super('Worker pool has been disposed');
     this.name = 'PoolDisposedError';
+  }
+}
+
+/** Raised when a task is submitted to a pool whose replacement circuit is open. */
+export class WorkerPoolUnavailableError extends Error {
+  constructor() {
+    super('Worker pool is unavailable');
+    this.name = 'WorkerPoolUnavailableError';
   }
 }
 
@@ -15,8 +27,38 @@ export class WorkerTaskCancelledError extends Error {
   }
 }
 
+export interface WorkerPoolHealth {
+  status: 'starting' | 'healthy' | 'degraded' | 'unavailable' | 'disposed';
+  healthyWorkers: number;
+  startingWorkers: number;
+  failedWorkers: number;
+  consecutiveRespawnFailures: number;
+}
+
+interface WorkerLike {
+  on(event: 'message', listener: (message: WorkerMessage) => void): unknown;
+  on(event: 'error', listener: (error: Error) => void): unknown;
+  on(event: 'exit', listener: (code: number) => void): unknown;
+  postMessage(value: unknown): void;
+  terminate(): Promise<number>;
+}
+
+export interface WorkerPoolOptions {
+  /** Maximum time a new worker may take to post its ready message. */
+  readinessTimeoutMs?: number;
+  /** Number of failed replacement starts allowed before opening the circuit. */
+  maxRespawnAttempts?: number;
+  /** Produces a retry delay. Tests may provide a deterministic implementation. */
+  respawnDelayMs?: (attempt: number) => number;
+  /** Injectable scheduler for deterministic retry tests. */
+  sleep?: (delayMs: number) => Promise<void>;
+  /** Injectable worker constructor for lifecycle tests. */
+  workerFactory?: (workerScript: string, workerData: unknown) => WorkerLike;
+}
+
 interface WorkerEntry {
-  worker: Worker;
+  worker: WorkerLike;
+  state: 'starting' | 'healthy';
   busy: boolean;
   taskId: number | null;
 }
@@ -39,25 +81,54 @@ type WorkerMessage =
   | { type: 'result'; taskId: number; result: unknown }
   | { type: 'error'; taskId: number; error: string };
 
+/**
+ * Bounded pool for main-process work. A failed replacement eventually opens a
+ * circuit instead of leaving queued tool calls pending forever.
+ */
 export class WorkerPool {
   private readonly workerScript: string;
   private readonly size: number;
   private readonly workerData: unknown;
+  private readonly readinessTimeoutMs: number;
+  private readonly maxRespawnAttempts: number;
+  private readonly respawnDelayMs: (attempt: number) => number;
+  private readonly sleep: (delayMs: number) => Promise<void>;
+  private readonly workerFactory: (workerScript: string, workerData: unknown) => WorkerLike;
   private readonly workers = new Map<number, WorkerEntry>();
   private readonly tasks = new Map<number, TaskEntry>();
   private queue: QueueEntry[] = [];
   private nextTaskId = 0;
   private nextWorkerId = 0;
   private disposed = false;
+  private unavailable = false;
+  private consecutiveRespawnFailures = 0;
+  private lifecycleGeneration = 0;
 
-  constructor(workerScript: string, size: number, workerData?: unknown) {
+  constructor(
+    workerScript: string,
+    size: number,
+    workerData?: unknown,
+    options: WorkerPoolOptions = {},
+  ) {
     this.workerScript = workerScript;
     this.size = size;
     this.workerData = workerData;
+    this.readinessTimeoutMs = options.readinessTimeoutMs ?? DEFAULT_READINESS_TIMEOUT_MS;
+    this.maxRespawnAttempts = options.maxRespawnAttempts ?? DEFAULT_MAX_RESPAWN_ATTEMPTS;
+    this.respawnDelayMs = options.respawnDelayMs ?? ((attempt) => {
+      const baseDelay = DEFAULT_RESPAWN_BASE_DELAY_MS * 2 ** (attempt - 1);
+      return baseDelay + Math.floor(Math.random() * baseDelay);
+    });
+    this.sleep = options.sleep ?? ((delayMs) => new Promise((resolve) => setTimeout(resolve, delayMs)));
+    this.workerFactory = options.workerFactory ?? ((script, data) => new Worker(script, {
+      workerData: data,
+      env: process.env,
+    }));
   }
 
   async init(): Promise<void> {
     if (this.disposed) throw new PoolDisposedError();
+    if (this.unavailable) throw new WorkerPoolUnavailableError();
     const readyPromises: Promise<void>[] = [];
     for (let i = 0; i < this.size; i++) {
       readyPromises.push(this.spawnWorker());
@@ -65,16 +136,32 @@ export class WorkerPool {
     try {
       await Promise.all(readyPromises);
     } catch (err) {
-      for (const [, entry] of this.workers) {
-        void entry.worker.terminate();
-      }
-      this.workers.clear();
+      await this.terminateWorkers();
+      throw err;
+    }
+  }
+
+  /** Rebuilds an explicitly unavailable pool after its caller has handled the outage. */
+  async recover(): Promise<void> {
+    if (this.disposed) throw new PoolDisposedError();
+    if (!this.unavailable) return;
+
+    this.lifecycleGeneration++;
+    this.rejectAllTasks(new WorkerPoolUnavailableError());
+    await this.terminateWorkers();
+    this.unavailable = false;
+    this.consecutiveRespawnFailures = 0;
+    try {
+      await this.init();
+    } catch (err) {
+      this.openCircuit();
       throw err;
     }
   }
 
   run<T>(payload: Record<string, unknown>, signal?: AbortSignal): Promise<T> {
     if (this.disposed) throw new PoolDisposedError();
+    if (this.unavailable) return Promise.reject(new WorkerPoolUnavailableError());
     if (signal?.aborted) return Promise.reject(new WorkerTaskCancelledError());
 
     const taskId = this.nextTaskId++;
@@ -110,38 +197,23 @@ export class WorkerPool {
     }
     const entry = this.workers.get(task.workerId);
     if (!entry) return;
-    void entry.worker.terminate();
     this.workers.delete(task.workerId);
-    if (!this.disposed) {
-      void this.spawnWorker()
-        .then(() => this.processQueue())
-        .catch((err) => {
-          console.error('[worker-pool] Failed to respawn worker', {
-            error: err instanceof Error ? err.message : String(err),
-          });
-        });
-    }
+    void entry.worker.terminate();
+    this.startReplacement();
   }
 
   async dispose(): Promise<void> {
     if (this.disposed) return;
     this.disposed = true;
-    for (const taskId of [...this.tasks.keys()]) {
-      this.takeTask(taskId)?.reject(new PoolDisposedError());
-    }
-    this.queue = [];
-    const terminatePromises: Promise<number>[] = [];
-    for (const [, entry] of this.workers) {
-      terminatePromises.push(entry.worker.terminate());
-    }
-    this.workers.clear();
-    await Promise.all(terminatePromises);
+    this.lifecycleGeneration++;
+    this.rejectAllTasks(new PoolDisposedError());
+    await this.terminateWorkers();
   }
 
   get activeCount(): number {
     let count = 0;
     for (const [, entry] of this.workers) {
-      if (entry.busy) count++;
+      if (entry.state === 'healthy' && entry.busy) count++;
     }
     return count;
   }
@@ -150,43 +222,94 @@ export class WorkerPool {
     return this.queue.length;
   }
 
+  get health(): WorkerPoolHealth {
+    let healthyWorkers = 0;
+    let startingWorkers = 0;
+    for (const [, entry] of this.workers) {
+      if (entry.state === 'healthy') healthyWorkers++;
+      else startingWorkers++;
+    }
+    const failedWorkers = Math.max(0, this.size - healthyWorkers - startingWorkers);
+    const status = this.disposed
+      ? 'disposed'
+      : this.unavailable
+        ? 'unavailable'
+        : healthyWorkers === this.size
+          ? 'healthy'
+          : healthyWorkers === 0 && startingWorkers > 0
+            ? 'starting'
+            : 'degraded';
+    return {
+      status,
+      healthyWorkers,
+      startingWorkers,
+      failedWorkers,
+      consecutiveRespawnFailures: this.consecutiveRespawnFailures,
+    };
+  }
+
+  private async terminateWorkers(): Promise<void> {
+    const entries = [...this.workers.values()];
+    this.workers.clear();
+    await Promise.all(entries.map((entry) => entry.worker.terminate()));
+  }
+
   private spawnWorker(): Promise<void> {
     const workerId = this.nextWorkerId++;
-    const worker = new Worker(this.workerScript, {
-      workerData: this.workerData,
-      env: process.env,
-    });
-    const entry: WorkerEntry = { worker, busy: false, taskId: null };
+    let worker: WorkerLike;
+    try {
+      worker = this.workerFactory(this.workerScript, this.workerData);
+    } catch (error) {
+      return Promise.reject(error);
+    }
+    const entry: WorkerEntry = { worker, state: 'starting', busy: false, taskId: null };
     this.workers.set(workerId, entry);
     return new Promise<void>((resolve, reject) => {
-      let ready = false;
-      worker.on('message', (msg: WorkerMessage) => {
-        if (!ready) {
-          if (msg && typeof msg === 'object' && msg.type === 'ready') {
-            ready = true;
-            resolve();
+      let settled = false;
+      const settle = (error?: Error): void => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(readinessTimer);
+        if (error) {
+          this.workers.delete(workerId);
+          void worker.terminate();
+          reject(error);
+        } else {
+          const current = this.workers.get(workerId);
+          if (!current || this.disposed || this.unavailable) {
+            void worker.terminate();
+            reject(new WorkerPoolUnavailableError());
+            return;
           }
+          current.state = 'healthy';
+          resolve();
+        }
+      };
+
+      const readinessTimer = setTimeout(() => {
+        settle(new Error(`Worker did not become ready within ${this.readinessTimeoutMs}ms`));
+      }, this.readinessTimeoutMs);
+
+      worker.on('message', (msg: WorkerMessage) => {
+        if (!settled) {
+          if (msg && typeof msg === 'object' && msg.type === 'ready') settle();
           return;
         }
         this.handleMessage(workerId, msg);
       });
-      worker.on('error', (err) => {
-        if (!ready) {
-          this.workers.delete(workerId);
-          reject(err);
+      worker.on('error', (err: Error) => {
+        if (!settled) {
+          settle(err);
           return;
         }
         this.handleWorkerFailure(workerId);
       });
-      worker.on('exit', (code) => {
-        if (!ready) {
-          this.workers.delete(workerId);
-          reject(new Error(`Worker exited with code ${code} before ready`));
+      worker.on('exit', (code: number) => {
+        if (!settled) {
+          settle(new Error(`Worker exited with code ${code} before ready`));
           return;
         }
-        if (code !== 0) {
-          this.handleWorkerFailure(workerId);
-        }
+        this.handleWorkerFailure(workerId);
       });
     });
   }
@@ -194,7 +317,7 @@ export class WorkerPool {
   private handleMessage(workerId: number, msg: WorkerMessage): void {
     if (!msg || typeof msg !== 'object' || !('type' in msg)) return;
     const entry = this.workers.get(workerId);
-    if (!entry) return;
+    if (!entry || entry.state !== 'healthy') return;
     if (msg.type === 'result') {
       entry.busy = false;
       entry.taskId = null;
@@ -215,19 +338,60 @@ export class WorkerPool {
     if (entry.taskId !== null) {
       this.takeTask(entry.taskId)?.reject(new Error('Worker crashed'));
     }
-    if (this.disposed) return;
-    void this.spawnWorker()
-      .then(() => this.processQueue())
-      .catch((err) => {
+    this.startReplacement();
+  }
+
+  private startReplacement(): void {
+    if (this.disposed || this.unavailable) return;
+    const generation = this.lifecycleGeneration;
+    void this.replaceWorker(generation);
+  }
+
+  private async replaceWorker(generation: number): Promise<void> {
+    for (let attempt = 1; attempt <= this.maxRespawnAttempts; attempt++) {
+      if (this.disposed || this.unavailable || generation !== this.lifecycleGeneration) return;
+      if (attempt > 1) {
+        await this.sleep(Math.max(0, this.respawnDelayMs(attempt - 1)));
+        if (this.disposed || this.unavailable || generation !== this.lifecycleGeneration) return;
+      }
+      try {
+        await this.spawnWorker();
+        this.consecutiveRespawnFailures = 0;
+        this.processQueue();
+        return;
+      } catch (err) {
+        if (this.disposed || this.unavailable || generation !== this.lifecycleGeneration) return;
+        this.consecutiveRespawnFailures++;
         console.error('[worker-pool] Failed to respawn worker', {
+          attempt,
           error: err instanceof Error ? err.message : String(err),
         });
-      });
+      }
+    }
+    this.openCircuit();
+  }
+
+  private openCircuit(): void {
+    if (this.disposed || this.unavailable) return;
+    this.unavailable = true;
+    this.lifecycleGeneration++;
+    const queuedTaskIds = this.queue.map((entry) => entry.taskId);
+    this.queue = [];
+    for (const taskId of queuedTaskIds) {
+      this.takeTask(taskId)?.reject(new WorkerPoolUnavailableError());
+    }
+  }
+
+  private rejectAllTasks(error: Error): void {
+    for (const taskId of [...this.tasks.keys()]) {
+      this.takeTask(taskId)?.reject(error);
+    }
+    this.queue = [];
   }
 
   private findIdleWorker(): number | null {
     for (const [workerId, entry] of this.workers) {
-      if (!entry.busy) return workerId;
+      if (entry.state === 'healthy' && !entry.busy) return workerId;
     }
     return null;
   }
@@ -245,21 +409,25 @@ export class WorkerPool {
 
   private dispatch(workerId: number, taskId: number, message: Record<string, unknown>): void {
     const entry = this.workers.get(workerId);
-    if (!entry) return;
+    const task = this.tasks.get(taskId);
+    if (!entry || !task || entry.state !== 'healthy') return;
     entry.busy = true;
     entry.taskId = taskId;
-    const task = this.tasks.get(taskId);
-    if (task) {
-      task.workerId = workerId;
+    task.workerId = workerId;
+    try {
+      entry.worker.postMessage(message);
+    } catch {
+      this.handleWorkerFailure(workerId);
     }
-    entry.worker.postMessage(message);
   }
 
   private processQueue(): void {
+    if (this.unavailable || this.disposed) return;
     while (this.queue.length > 0) {
       const idleWorkerId = this.findIdleWorker();
       if (idleWorkerId === null) break;
       const queued = this.queue.shift()!;
+      if (!this.tasks.has(queued.taskId)) continue;
       this.dispatch(idleWorkerId, queued.taskId, queued.message);
     }
   }

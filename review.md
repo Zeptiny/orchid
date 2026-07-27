@@ -16,7 +16,7 @@ The highest-leverage corrections are:
 3. Stop subagent-only updates from invalidating the main transcript.
 4. Fix worker cancellation/health behavior and offload the remaining unbounded synchronous operations.
 
-No P0 data-loss or security-critical performance defect was identified. This report contains **6 P1 findings** and **7 P2 findings**.
+No P0 data-loss or security-critical performance defect was identified. This report contains **5 P1 findings** and **7 P2 findings**.
 
 ## Existing safeguards to preserve
 
@@ -274,39 +274,6 @@ Create sessions containing 25, 50, and 100 synthetic 1 MiB tool results. Measure
 
 ---
 
-### F-10 — Failed worker replacement can permanently strand queued tools
-
-**Severity:** P1
-**Confidence:** High; replacement failure only logs.
-**Primary files:**
-
-- `electron/src/main/utils/worker-pool.ts:82`
-- `electron/src/main/utils/worker-pool.ts:214`
-- `electron/src/main/utils/worker-pool.ts:226`
-- `electron/src/main/utils/worker-pool.ts:228`
-- `electron/src/main/tools/ast/get-file-skeleton.ts:43`
-
-**Evidence and impact**
-
-If a worker crashes and its replacement fails to become available, capacity is permanently reduced. The failure is logged, but queued tasks are neither rejected nor moved to a healthy fallback. If all workers are lost, no-timeout tools can remain pending until application restart.
-
-Worker initialization also has no readiness deadline; a worker that starts but never posts `ready` can hang application startup.
-
-**Recommended fix**
-
-1. Track healthy, starting, and failed pool capacity explicitly.
-2. Apply a worker-readiness timeout.
-3. Use bounded replacement retries with jitter.
-4. Open a circuit after repeated failures and mark the pool unavailable. Atomically drain every queued task: remove it from the task map and queue, detach its abort listener, release all queue bookkeeping, and reject its promise with a typed `WorkerPoolUnavailableError`. Reject future submissions immediately with the same error while the pool remains unavailable.
-5. Consider inline fallback only for demonstrably bounded tools; never silently run known freeze-prone operations inline.
-6. Expose degraded pool health to logging and the UI.
-
-**Verification**
-
-Test worker crash, failed replacement, zero remaining capacity, already-aborted tasks, readiness timeout, queue rejection, recovery, and clean disposal without orphan workers. Verify that every queued promise rejects with `WorkerPoolUnavailableError`, every abort listener and task/queue entry is released, and no queued or future submission remains pending after the pool is marked unavailable.
-
----
-
 ### F-11 — `get_function` can block Electron indefinitely on large source files
 
 **Severity:** P1
@@ -519,8 +486,7 @@ This is the most substantial architectural batch and should be designed as one c
 ### Batch 4 — Large results and main-thread isolation
 
 1. F-08: introduce durable large-result references and lazy IPC retrieval.
-2. F-10: add worker readiness/health/circuit-breaker behavior.
-3. F-11, F-12, F-13: bound or offload remaining synchronous AST and HTML work.
+2. F-11, F-12, F-13: bound or offload remaining synchronous AST and HTML work.
 
 ### Batch 5 — Cancellation and long-lived failure cleanup
 
@@ -534,7 +500,7 @@ This is the most substantial architectural batch and should be designed as one c
 ### CI-safe behavioral tests
 
 - Stream 2,000 committed messages plus 1,000 content/thinking/tool deltas under a fake `requestAnimationFrame`. Assert one publication per frame, exact final state, and no committed-history rebuild for live-only text.
-- Saturate a size-two worker pool with eight jobs. Assert `activeCount <= 2`, bounded queue behavior, cancellation recovery, failed-respawn rejection, and complete cleanup.
+- Saturate a size-two worker pool with eight jobs. Assert `activeCount <= 2`, bounded queue behavior, cancellation recovery, and complete cleanup.
 - Exercise compiled RAG/AST worker boundaries and their missing-worker fallback explicitly.
 - Verify subagent persistence work grows with dirty bytes/records rather than total historical transcript bytes.
 - Verify closed tool disclosures do not mount result-row DOM until first expansion.
