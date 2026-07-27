@@ -294,8 +294,9 @@ describe('chat rendering contract (U5)', () => {
       const src = read('components/ChatStream.tsx');
       // Active/last-chain footers prefer live usage over persisted chain sums
       // so CHAT_USAGE events paint the agent: line before the turn commits.
-      expect(src).toMatch(/footerLiveUsage/);
+      expect(src).toMatch(/const historyUsage = status === 'streaming' \? null : usage/);
       expect(src).toMatch(/currentTurnUsage/);
+      expect(src).toMatch(/usage:\s*status === 'streaming'\s*\?\s*currentTurnUsage/);
       expect(src).toMatch(/isLastChain \? liveUsage \?\? chainUsage/);
       expect(src).toMatch(/isLastTurn\s*\?\s*liveUsage \?\? turnLastAssistantUsage/);
       // Must not gate live usage on idle/error only (regression: mid-stream stuck).

@@ -49,10 +49,15 @@ export function ToolActivityGroup({
   );
 
   const [expanded, setExpanded] = useState(alwaysExpand);
+  const [hasExpanded, setHasExpanded] = useState(alwaysExpand);
 
   useEffect(() => {
     if (alwaysExpand) setExpanded(true);
   }, [alwaysExpand]);
+
+  useEffect(() => {
+    if (expanded) setHasExpanded(true);
+  }, [expanded]);
 
   const summary = useMemo(
     () =>
@@ -122,10 +127,10 @@ export function ToolActivityGroup({
         </span>
       </button>
 
-      <CollapsibleRegion open={expanded} id={panelId}>
+      <CollapsibleRegion open={expanded} id={panelId} lazyMount>
         <div className="orchid-tool-activity-body">
           <div className="tool-activity-group-children orchid-tool-activity-children">
-            {items.map((child, i) => {
+            {(expanded || hasExpanded) && items.map((child, i) => {
               if (child.kind === 'tool') {
                 return (
                   <ToolCallBlock
