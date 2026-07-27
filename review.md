@@ -121,11 +121,12 @@ The cost scales with active subagents, accumulated transcript bytes, and frame r
 4. Apply a global event/byte budget per frame, not only one event per subagent.
 5. Keep durable records referentially stable for projection-only events.
 6. Pass `ChatStream` a separately memoized, low-frequency subagent usage summary instead of the full record array.
-7. Byte-bound hydration buffering; if the bound is exceeded, discard intermediate cumulative events and request a fresh snapshot.
+7. Carry a monotonic session revision through both live events and snapshots so recovery can compare their freshness across overlapping requests.
+8. Byte-bound hydration buffering; if the bound is exceeded, record the newest relevant revision, discard intermediate cumulative events, and request a fresh snapshot. Apply that snapshot atomically only when its revision meets or exceeds the recovery floor, then replay or preserve any newer in-flight events; reject stale or out-of-order snapshots without replacing newer state.
 
 **Verification**
 
-Run 1, 4, 8, and 16 synthetic subagents producing 100,000 small deltas each. Measure main-process allocation, IPC bytes/sec, preload validation time, React commits, and main-chat history recomputations.
+Run 1, 4, 8, and 16 synthetic subagents producing 100,000 small deltas each. Measure main-process allocation, IPC bytes/sec, preload validation time, React commits, and main-chat history recomputations. Before enabling overflow recovery, test overlapping event and snapshot requests, including stale snapshots that arrive after newer events, and verify that recovery never rolls state back or loses post-snapshot events.
 
 ---
 
@@ -264,12 +265,12 @@ Session open can return history both inside `session.chains` and as a flattened 
 2. Persist/cache the complete canonical payload once.
 3. Carry only the typed reference and bounded display summary through session rows and ordinary IPC.
 4. Retrieve full data lazily for expansion, copy, or detail actions.
-5. Avoid returning the same history in both `Session.chains` and a second flattened message list.
+5. Preserve the existing `{ session, messages, live, workspace }` `session:open` response until the shared IPC contract, preload bridge, renderer consumers, and contract tests are updated atomically to derive history from `Session.chains`. If atomic rollout is not possible, negotiate an explicit response version and retain `messages` as a deprecated compatibility field until every consumer supports the chains-based representation.
 6. Move cache writes and integrity verification off the main event loop or use asynchronous durable APIs.
 
 **Verification**
 
-Create sessions containing 25, 50, and 100 synthetic 1 MiB tool results. Measure tool-finalization latency, database size, cold-open latency, serialized IPC bytes, peak heap/RSS, and event-loop delay.
+Create sessions containing 25, 50, and 100 synthetic 1 MiB tool results. Measure tool-finalization latency, database size, cold-open latency, serialized IPC bytes, peak heap/RSS, and event-loop delay. Add IPC contract tests for the current response and the chains-based successor, including mixed-version compatibility when version negotiation is used; remove `messages` only after every consumer passes against the new shape.
 
 ---
 
@@ -296,13 +297,13 @@ Worker initialization also has no readiness deadline; a worker that starts but n
 1. Track healthy, starting, and failed pool capacity explicitly.
 2. Apply a worker-readiness timeout.
 3. Use bounded replacement retries with jitter.
-4. Open a circuit after repeated failures and reject queued/future tasks with a typed `WorkerPoolUnavailableError`.
+4. Open a circuit after repeated failures and mark the pool unavailable. Atomically drain every queued task: remove it from the task map and queue, detach its abort listener, release all queue bookkeeping, and reject its promise with a typed `WorkerPoolUnavailableError`. Reject future submissions immediately with the same error while the pool remains unavailable.
 5. Consider inline fallback only for demonstrably bounded tools; never silently run known freeze-prone operations inline.
 6. Expose degraded pool health to logging and the UI.
 
 **Verification**
 
-Test worker crash, failed replacement, zero remaining capacity, already-aborted tasks, readiness timeout, queue rejection, recovery, and clean disposal without orphan workers.
+Test worker crash, failed replacement, zero remaining capacity, already-aborted tasks, readiness timeout, queue rejection, recovery, and clean disposal without orphan workers. Verify that every queued promise rejects with `WorkerPoolUnavailableError`, every abort listener and task/queue entry is released, and no queued or future submission remains pending after the pool is marked unavailable.
 
 ---
 
@@ -326,13 +327,13 @@ A large minified or pathological supported-language file can block every window,
 **Recommended fix**
 
 1. Enforce `ast_max_file_size` before reading the file.
-2. Move parsing and extraction into the tool worker pool.
+2. Before moving parsing and extraction off the main thread, implement the admission controls described in F-06: either reserve dedicated AST capacity or add a bounded, fair scheduler with foreground/main-agent capacity that cannot be consumed by background work. Do not route `get_function` into the current unbounded FIFO queue, where background tasks could starve interactive work.
 3. Ensure combined parent/timeout cancellation can terminate the worker.
 4. Bound the process-global `sentHashes` cache and clear it when sessions/workspaces are released.
 
 **Verification**
 
-Run against 1 MB, 10 MB, and pathological minified files while a 16 ms main-thread heartbeat is active. Verify bounded rejection for oversized files and responsive worker execution for accepted files.
+Run against 1 MB, 10 MB, and pathological minified files while a 16 ms main-thread heartbeat is active. Verify bounded rejection for oversized files and responsive worker execution for accepted files. Saturate background worker demand and confirm `get_function` retains reserved foreground capacity, bounded queue wait, and fair progress as required by F-06.
 
 ---
 
@@ -387,14 +388,15 @@ Large or structurally complex HTML can freeze the UI immediately after the downl
 
 **Recommended fix**
 
-1. Transfer the downloaded buffer to a worker for decoding, Turndown conversion, and cache creation.
-2. Use asynchronous durable file APIs if caching remains in the main process.
-3. Add independent conversion and cache-write timeouts/cancellation.
-4. Retain the existing body-size cap and bounded inline result.
+1. Enforce the existing body-size cap while consuming the response incrementally. Stop reading and cancel the response body as soon as the byte limit is exceeded; do not call `arrayBuffer()` unconditionally and retain an oversized body before checking it.
+2. Prefer transferring bounded body chunks to a worker for consumption, decoding, Turndown conversion, and cache creation. If buffers must cross the main process, transfer ownership and release main-process references promptly.
+3. Use asynchronous durable file APIs if caching remains in the main process.
+4. Add independent timeouts and cancellation for body consumption, conversion, and cache writes.
+5. Retain the bounded inline result.
 
 **Verification**
 
-Serve deterministic 1/5/10 MiB fixtures, including deeply nested and table-heavy HTML. Measure conversion CPU, cache-write duration, event-loop p99/max, memory, and cancellation latency.
+Serve deterministic 1/5/10 MiB fixtures, including deeply nested and table-heavy HTML, plus chunked responses that cross the cap without a trustworthy `Content-Length`. Measure conversion CPU, cache-write duration, event-loop p99/max, peak memory, and cancellation latency. Verify cancellation during body consumption, conversion, and cache work, and confirm over-limit responses stop without retaining the complete body.
 
 ---
 
