@@ -53,12 +53,17 @@ export class AgentsMdContextStore {
   }
 
   /**
-   * Whether a seen entry is still current: seen AND the recorded mtime equals
-   * the entry's mtime (R16). A seen-but-changed file is not fresh.
+   * Whether a seen entry is still current: seen AND the recorded mtime and
+   * size both equal the entry's values (R16). A seen-but-changed file is not
+   * fresh.
    */
   isFresh(entry: AgentsMdEntry): boolean {
     const record = this._seen.get(entry.path);
-    return record !== undefined && record.mtimeMs === entry.mtimeMs;
+    return (
+      record !== undefined &&
+      record.mtimeMs === entry.mtimeMs &&
+      record.sizeBytes === entry.sizeBytes
+    );
   }
 
   /**

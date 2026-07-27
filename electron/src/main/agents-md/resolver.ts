@@ -109,7 +109,7 @@ function canonicalizeExistingPathCached(candidate: string): string | null {
 // Per-directory instruction-file lookup
 // ---------------------------------------------------------------------------
 
-interface InstructionHit {
+export interface InstructionHit {
   canonical: string;
   stat: fs.Stats;
 }
@@ -179,6 +179,7 @@ export function resolveAgentsMdChain(
   targetPath: string,
   cwd: string,
   config: Config,
+  dirCache?: Map<string, InstructionHit | null>,
 ): AgentsMdEntry[] {
   const canonicalCwd = canonicalizeExistingPathCached(cwd);
   if (canonicalCwd === null) return [];
@@ -196,7 +197,14 @@ export function resolveAgentsMdChain(
 
   let dir = path.dirname(canonicalTarget);
   for (let walked = 0; isPathContainedIn(dir, canonicalCwd) && walked < maxDepth; walked++) {
-    const hit = findInstructionFile(dir, filenames);
+    let hit: InstructionHit | null;
+    if (dirCache) {
+      hit = dirCache.has(dir)
+        ? dirCache.get(dir)!
+        : (hit = findInstructionFile(dir, filenames), dirCache.set(dir, hit), hit);
+    } else {
+      hit = findInstructionFile(dir, filenames);
+    }
     if (hit !== null && isPathContainedIn(hit.canonical, canonicalCwd)) {
       entries.push({
         path: hit.canonical,
@@ -262,8 +270,9 @@ export function readAgentsMdContent(
 ): AgentsMdContent {
   const fd = fs.openSync(entry.path, 'r');
   try {
-    const buffer = Buffer.alloc(maxBytes);
-    const bytesRead = fs.readSync(fd, buffer, 0, maxBytes, 0);
+    const readSize = Math.min(entry.sizeBytes, maxBytes);
+    const buffer = Buffer.alloc(readSize);
+    const bytesRead = fs.readSync(fd, buffer, 0, readSize, 0);
     return {
       content: buffer.toString('utf8', 0, bytesRead),
       truncated: entry.sizeBytes > maxBytes,

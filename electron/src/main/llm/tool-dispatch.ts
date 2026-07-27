@@ -789,7 +789,6 @@ function maybeEnforceAgentsMdOnWrite(
         xml = buildAgentsMdWarningBlock(enforcement.unseen);
       } else if (enforcement.policy === 'inject') {
         xml = buildAgentsMdInjectBlock(enforcement.unseen, config);
-        enforcement.unseen.forEach((entry) => store.markSeen(entry));
       }
     }
     if (xml === '') return execution;
@@ -799,6 +798,9 @@ function maybeEnforceAgentsMdOnWrite(
       xml,
       request.name,
     );
+    if (enforcement.policy === 'inject') {
+      enforcement.unseen.forEach((entry) => store.markSeen(entry));
+    }
     return {
       canonical: execution.canonical,
       agentProjection: { ...execution.agentProjection, content },

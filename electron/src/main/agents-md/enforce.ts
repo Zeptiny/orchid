@@ -21,7 +21,7 @@ import { escapeXmlText } from '../tools/result';
 import { resolveToolPath } from '../tools/types';
 import { effectiveAgentsMdFilenames } from './config';
 import { renderAgentsMdBlock } from './inject';
-import { resolveAgentsMdChain, type AgentsMdEntry } from './resolver';
+import { resolveAgentsMdChain, type AgentsMdEntry, type InstructionHit } from './resolver';
 
 /**
  * The five file mutators subject to write enforcement (R6). `execute_command`,
@@ -112,9 +112,10 @@ export function evaluateAgentsMdEnforcement(
   // and is never enforced by this mechanism (R4).
   const governing = new Map<string, AgentsMdEntry>();
   const edited = new Map<string, AgentsMdEntry>();
+  const dirCache = new Map<string, InstructionHit | null>();
   for (const rawPath of rawPaths) {
     const canonicalTarget = canonicalizeTarget(rawPath, cwd);
-    for (const entry of resolveAgentsMdChain(rawPath, cwd, config)) {
+    for (const entry of resolveAgentsMdChain(rawPath, cwd, config, dirCache)) {
       if (canonicalTarget !== null && entry.path === canonicalTarget) {
         edited.set(entry.path, entry);
       } else if (entry.tier !== 'root' && !governing.has(entry.path)) {
