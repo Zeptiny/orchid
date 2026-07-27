@@ -106,7 +106,7 @@ describe('executeToolCall offloaded cancellation', () => {
     const result = await executeToolCall(
       { ...request, id: 'timed-offload-call', name: 'timed_offload' },
       registry,
-      { cwd: '/tmp/orchid-tool-test-cwd', timeoutSeconds: 0.01 },
+      { cwd: '/tmp/orchid-tool-test-cwd', timeoutSeconds: 0.05 },
     );
 
     expect(result.canonical.status).toBe('error');
