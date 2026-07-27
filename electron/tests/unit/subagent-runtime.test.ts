@@ -1,7 +1,7 @@
 /**
  * Subagent runtime — spawn with mock runner accumulates usage on the chain.
  */
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import {
   SubagentManager,
   SubagentState,
@@ -12,6 +12,26 @@ import type { StreamEvent } from '../../src/main/llm/orchestrator';
 import { sumSubagentUsage } from '../../src/shared/usage';
 import { createCanonicalToolResult } from '../../src/shared/types/tool-result';
 import type { SubagentDeltaEvent, SubagentLiveProjection } from '../../src/shared/types/subagent';
+import { defaults } from '../../src/main/config/schema';
+import type { Config } from '../../src/shared/types/ipc-boundary';
+
+/**
+ * The manager reads `subagents.usage_event_interval_ms` from the live config
+ * at emission time through a top-level `getConfig` import (a lazy `require`
+ * of the TS loader does not resolve under Vitest, which would pin tests to
+ * the fallback). Overriding `getConfig` here lets a test pin that interval;
+ * when no override is set the real loader is used so every other test keeps
+ * its existing behavior.
+ */
+const configOverride = vi.hoisted(() => ({ current: null as Config | null }));
+
+vi.mock('../../src/main/config/loader', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../src/main/config/loader')>();
+  return {
+    ...actual,
+    getConfig: () => configOverride.current ?? actual.getConfig(),
+  };
+});
 
 function successfulToolResult(
   toolCallId: string,
@@ -48,6 +68,11 @@ describe('SubagentManager runtime', () => {
 
   beforeEach(() => {
     manager = new SubagentManager();
+    configOverride.current = null;
+  });
+
+  afterEach(() => {
+    configOverride.current = null;
   });
 
   it('preserves frozen owner-window affinity into a background runner', async () => {
@@ -679,6 +704,52 @@ describe('SubagentManager delta emission (U2)', () => {
     expect(usageDeltas.length).toBeLessThanOrEqual(2);
     expect(record.usage?.total_tokens).toBe(10);
     expect(terminal!.usage).toEqual(record.usage);
+  });
+
+  it('suppresses intermediate usage deltas when subagents.usage_event_interval_ms is large', async () => {
+    configOverride.current = {
+      ...defaults(),
+      subagents: { ...defaults().subagents, usage_event_interval_ms: 3_600_000 },
+    };
+    manager.setRunner(async function* (): AsyncGenerator<StreamEvent> {
+      for (let i = 0; i < 5; i += 1) {
+        yield { type: 'usage', usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2, cached_tokens: 0 } };
+      }
+      yield { type: 'finish', finishReason: 'stop' };
+    });
+    const usageDeltas: Array<Extract<SubagentDeltaEvent, { type: 'usage' }>> = [];
+    manager.setOnDelta((event) => {
+      if (event.type === 'usage') usageDeltas.push(event);
+    });
+    const record = manager.spawn('usage-large-interval', 'x', testAgent, { sessionId: 's-usage-large' });
+    await record._runPromise;
+
+    // A huge interval read live from config keeps only the first (seed) emission.
+    expect(usageDeltas).toHaveLength(1);
+    expect(record.usage?.total_tokens).toBe(10);
+  });
+
+  it('emits every usage delta when subagents.usage_event_interval_ms is 0', async () => {
+    configOverride.current = {
+      ...defaults(),
+      subagents: { ...defaults().subagents, usage_event_interval_ms: 0 },
+    };
+    manager.setRunner(async function* (): AsyncGenerator<StreamEvent> {
+      for (let i = 0; i < 5; i += 1) {
+        yield { type: 'usage', usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2, cached_tokens: 0 } };
+      }
+      yield { type: 'finish', finishReason: 'stop' };
+    });
+    const usageDeltas: Array<Extract<SubagentDeltaEvent, { type: 'usage' }>> = [];
+    manager.setOnDelta((event) => {
+      if (event.type === 'usage') usageDeltas.push(event);
+    });
+    const record = manager.spawn('usage-zero-interval', 'x', testAgent, { sessionId: 's-usage-zero' });
+    await record._runPromise;
+
+    // A zero interval disables throttling: one delta per provider usage event.
+    expect(usageDeltas).toHaveLength(5);
+    expect(record.usage?.total_tokens).toBe(10);
   });
 
   it('deep-copies live projections so sequential reads never alias run state', () => {

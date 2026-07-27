@@ -375,6 +375,17 @@ Defined in `src/main/config/schema.ts` — single source of truth:
 | `agents_md.enforce_on_write` | `warn` | Mutation policy for unseen governing files: `block` \| `inject` \| `warn` \| `off` |
 | `agents_md.inject_on_read` | `true` | Inject unseen governing files into single-path read-tool results |
 | `agents_md.include_local` | `false` | Also consider `AGENTS.local.md` (appended as the lowest-precedence alias) |
+| `subagents.event_max_per_flush` | 200 | Max delta events delivered in one batched flush across all subagents |
+| `subagents.event_byte_budget_kb` | 64 | Soft byte budget (KB) per batched flush; overflow non-terminal deltas defer to the next flush |
+| `subagents.usage_event_interval_ms` | 1000 | Min interval between per-subagent `usage` deltas; 0 emits every usage event |
+| `subagents.hydration_buffer_kb` | 256 | Renderer hydration event buffer cap (KB) before revision-floor reseed |
+| `subagents.terminal_wave_ms` | 250 | Window batching near-simultaneous terminal persistence flushes |
+| `subagents.max_active_global` | 8 | Max concurrently running subagents across all sessions |
+| `subagents.max_active_per_session` | 4 | Max concurrently running subagents within one session |
+| `subagents.max_queued` | 32 | Max queued (admitted-but-not-started) subagents before rejection |
+| `subagents.terminal_retention` | 25 | Recent terminal summaries retained after runtime eviction |
+| `subagents.prompt_recent_terminal` | 5 | Recent terminal summaries included in the dynamic system prompt |
+| `subagents.prompt_task_max_chars` | 200 | Task-text cap (chars) for terminal summaries rendered into the prompt |
 | `ast_max_file_size` | 1MB | Max file for AST indexing |
 | `mcp_startup_timeout` | 60s | MCP server startup timeout |
 | `mcp_per_server_timeout` | 10s | Per-MCP-server timeout |

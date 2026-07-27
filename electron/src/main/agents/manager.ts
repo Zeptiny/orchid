@@ -44,6 +44,7 @@ import {
   makeToolResultMessage,
   makeUserMessage,
 } from '../llm/message-factories';
+import { getConfig } from '../config/loader';
 
 // ── Enums ───────────────────────────────────────────────────────────────────
 
@@ -68,9 +69,6 @@ const TERMINAL_STATES = new Set<SubagentState>([
   SubagentState.FAILED,
   SubagentState.INTERRUPTED,
 ]);
-
-// TODO(U3): moves to the `subagents.*` config group (`subagents.usage_event_interval_ms`).
-const USAGE_DELTA_INTERVAL_MS = 1000;
 
 // ── Stream runner ───────────────────────────────────────────────────────────
 
@@ -116,6 +114,26 @@ export function getDefaultWaitTimeoutMs(): number {
     return getConfig().subagent_wait_timeout * 1000;
   } catch {
     return 300_000;
+  }
+}
+
+/**
+ * Resolve the per-subagent `usage` delta throttle interval in milliseconds.
+ *
+ * Source: `subagents.usage_event_interval_ms` from the live process-wide
+ * config (`getConfig()`), read at emission time so a runtime settings change
+ * takes effect immediately rather than snapshotting at spawn. Falls back to
+ * 1000 ms when the config is not loaded.
+ *
+ * Uses the top-level `getConfig` import (like `subagent-runner`) rather than a
+ * lazy `require`: a `require` of the TS loader cannot be resolved under Vitest
+ * (verified empirically), which would pin this to the fallback in every test.
+ */
+function getUsageDeltaIntervalMs(): number {
+  try {
+    return getConfig().subagents.usage_event_interval_ms;
+  } catch {
+    return 1000;
   }
 }
 
@@ -840,7 +858,7 @@ export class SubagentManager {
             this._updateLive(record, { usage: accumulatedUsage });
             if (accumulatedUsage) {
               const now = Date.now();
-              if (record._lastUsageDeltaAt === 0 || now - record._lastUsageDeltaAt >= USAGE_DELTA_INTERVAL_MS) {
+              if (record._lastUsageDeltaAt === 0 || now - record._lastUsageDeltaAt >= getUsageDeltaIntervalMs()) {
                 record._lastUsageDeltaAt = now;
                 this._emitDelta(record, { type: SubagentDeltaEventType.USAGE, usage: accumulatedUsage });
               }

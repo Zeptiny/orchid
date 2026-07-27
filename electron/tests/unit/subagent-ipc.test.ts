@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { ALLOWED_EVENT_CHANNELS, ALLOWED_INVOKE_CHANNELS, IPC_CHANNELS } from '../../src/shared/types/ipc';
+import { ALLOWED_EVENT_CHANNELS, ALLOWED_INVOKE_CHANNELS, IPC_CHANNELS, type SubagentEvent } from '../../src/shared/types/ipc';
 import {
   legacySubagentEventSchema,
   subagentDeltaEventSchema,
@@ -10,7 +10,13 @@ import {
 import { SubagentDeltaEventType, type SubagentDeltaEvent } from '../../src/shared/types/subagent';
 import { subagentSnapshotSchema as requestSchema } from '../../src/main/ipc/payload-schemas';
 import { createSubagentPersistenceScheduler } from '../../src/main/agents/persist-subagent-chains';
-import { createSubagentEventCoalescer, deliverSubagentChange, mergeSubagentRecords } from '../../src/main/ipc/subagents';
+import {
+  createSubagentDeltaBatcher,
+  createSubagentEventCoalescer,
+  deliverSubagentChange,
+  deliverSubagentDeltaEvent,
+  mergeSubagentRecords,
+} from '../../src/main/ipc/subagents';
 import { broadcastSubagentsChanged } from '../../src/main/agents/wire-subagents';
 import { createCanonicalToolResult } from '../../src/shared/types/tool-result';
 
@@ -106,6 +112,26 @@ describe('subagent IPC boundary', () => {
     deliverSubagentChange(change(1) as never, [makeWindow('1'), makeWindow('2'), makeWindow('3', true)]);
     expect(sent).toHaveLength(1);
     expect(sent[0]).toEqual([IPC_CHANNELS.SUBAGENTS_EVENT, expect.objectContaining({ sessionId: session, sequence: 1 })]);
+  });
+
+  it('targets batched delta envelopes only at non-destroyed windows owning the session', () => {
+    const sent: unknown[] = [];
+    const makeWindow = (id: string, destroyed = false) => ({
+      isDestroyed: () => destroyed,
+      webContents: { id, isDestroyed: () => destroyed, send: (...args: unknown[]) => sent.push(args) },
+    }) as never;
+    activeByWebContents.set('1', { id: session });
+    activeByWebContents.set('2', { id: 'other-session' });
+    const envelope: SubagentEvent = {
+      sessionId: session,
+      events: [{
+        sessionId: session, subagentId: 'subagent-1', runId: uuid, sequence: 1, sessionRevision: 0,
+        type: 'text_delta', segmentId: 'seg-1', append: 'hi',
+      }],
+    };
+    deliverSubagentDeltaEvent(envelope, [makeWindow('1'), makeWindow('2'), makeWindow('3', true)]);
+    expect(sent).toHaveLength(1);
+    expect(sent[0]).toEqual([IPC_CHANNELS.SUBAGENTS_EVENT, envelope]);
   });
 
   it('targets durable broadcasts only at windows owning the flushed session', () => {
@@ -408,5 +434,164 @@ describe('subagent delta event protocol (U1)', () => {
     expect(subagentEventWireSchema.safeParse(legacy).success).toBe(true);
     expect(subagentEventWireSchema.safeParse({ sessionId: session, events: deltas }).success).toBe(true);
     expect(subagentEventWireSchema.safeParse({ sessionId: session, events: [{ type: 'nope' }] }).success).toBe(false);
+  });
+});
+
+describe('subagent delta batcher (U3)', () => {
+  const baseFields = { sessionId: session, subagentId: 'subagent-1', runId: uuid, sessionRevision: 0 };
+
+  const textDelta = (
+    sequence: number,
+    append: string,
+    segmentId = 'seg-1',
+    subagentId = 'subagent-1',
+  ): SubagentDeltaEvent => ({
+    ...baseFields, subagentId, sequence, type: 'text_delta', segmentId, append,
+  });
+
+  const usageDelta = (sequence: number, subagentId = 'subagent-1'): SubagentDeltaEvent => ({
+    ...baseFields,
+    subagentId,
+    sequence,
+    type: 'usage',
+    usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2, cached_tokens: 0 },
+  });
+
+  const sequences = (delivered: readonly SubagentEvent[]) =>
+    delivered.map((envelope) => envelope.events.map((event) => event.sequence));
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => vi.useRealTimers());
+
+  it('merges same-segment text appends within one window, keeping the last sequence and revision', () => {
+    const delivered: SubagentEvent[] = [];
+    const batcher = createSubagentDeltaBatcher((envelope) => { delivered.push(envelope); });
+    batcher.queue(textDelta(1, 'hel'));
+    batcher.queue(textDelta(2, 'lo'));
+    batcher.queue(usageDelta(3));
+    batcher.queue({ ...textDelta(4, '!'), sessionRevision: 9 });
+    batcher.queue({ ...baseFields, sequence: 5, type: 'thinking_delta', segmentId: 'seg-1', append: 'hmm' });
+    batcher.queue(textDelta(6, '?', 'seg-2'));
+    batcher.queue(textDelta(7, 'other', 'seg-1', 'subagent-2'));
+
+    expect(delivered).toHaveLength(0);
+    vi.advanceTimersByTime(16);
+
+    expect(delivered).toHaveLength(1);
+    const envelope = delivered[0];
+    expect(envelope.sessionId).toBe(session);
+    // The merged append lands at its last occurrence, keeping batch order monotonic.
+    expect(envelope.events.map((event) => event.type)).toEqual([
+      'usage', 'text_delta', 'thinking_delta', 'text_delta', 'text_delta',
+    ]);
+    expect(envelope.events[1]).toMatchObject({
+      type: 'text_delta', segmentId: 'seg-1', append: 'hello!', sequence: 4, sessionRevision: 9,
+    });
+    // Different types, segments, and subagents never merge.
+    expect(envelope.events[2]).toMatchObject({ type: 'thinking_delta', segmentId: 'seg-1', append: 'hmm', sequence: 5 });
+    expect(envelope.events[3]).toMatchObject({ type: 'text_delta', segmentId: 'seg-2', append: '?', sequence: 6 });
+    expect(envelope.events[4]).toMatchObject({ type: 'text_delta', subagentId: 'subagent-2', append: 'other', sequence: 7 });
+  });
+
+  it('caps each flush at the event budget and defers overflow in order to later flushes', () => {
+    const delivered: SubagentEvent[] = [];
+    const batcher = createSubagentDeltaBatcher((envelope) => { delivered.push(envelope); }, {
+      budgets: () => ({ maxPerFlush: 3, byteBudgetKb: 64 }),
+    });
+    for (let sequence = 1; sequence <= 7; sequence += 1) {
+      batcher.queue(usageDelta(sequence));
+    }
+
+    vi.advanceTimersByTime(16);
+    expect(sequences(delivered)).toEqual([[1, 2, 3]]);
+
+    vi.advanceTimersByTime(16);
+    expect(sequences(delivered)).toEqual([[1, 2, 3], [4, 5, 6]]);
+
+    vi.advanceTimersByTime(16);
+    expect(sequences(delivered)).toEqual([[1, 2, 3], [4, 5, 6], [7]]);
+
+    vi.advanceTimersByTime(100);
+    expect(delivered).toHaveLength(3);
+  });
+
+  it('defers deltas past the byte budget to the next flush in order', () => {
+    const delivered: SubagentEvent[] = [];
+    const batcher = createSubagentDeltaBatcher((envelope) => { delivered.push(envelope); }, {
+      budgets: () => ({ maxPerFlush: 200, byteBudgetKb: 1 }),
+    });
+    batcher.queue(textDelta(1, 'x'.repeat(600), 'seg-a'));
+    batcher.queue(textDelta(2, 'y'.repeat(600), 'seg-b'));
+    batcher.queue(textDelta(3, 'z'.repeat(600), 'seg-c'));
+
+    vi.advanceTimersByTime(16);
+    expect(sequences(delivered)).toEqual([[1]]);
+
+    vi.advanceTimersByTime(16);
+    expect(sequences(delivered)).toEqual([[1], [2]]);
+
+    vi.advanceTimersByTime(16);
+    expect(sequences(delivered)).toEqual([[1], [2], [3]]);
+
+    vi.advanceTimersByTime(100);
+    expect(delivered).toHaveLength(3);
+  });
+
+  it('flushes a single delta larger than the whole byte budget instead of deferring it forever', () => {
+    const delivered: SubagentEvent[] = [];
+    const batcher = createSubagentDeltaBatcher((envelope) => { delivered.push(envelope); }, {
+      budgets: () => ({ maxPerFlush: 200, byteBudgetKb: 1 }),
+    });
+    batcher.queue(textDelta(1, 'x'.repeat(5000), 'seg-big'));
+    batcher.queue(usageDelta(2));
+
+    vi.advanceTimersByTime(16);
+    expect(sequences(delivered)).toEqual([[1]]);
+
+    vi.advanceTimersByTime(16);
+    expect(sequences(delivered)).toEqual([[1], [2]]);
+  });
+
+  it('never defers spawned or terminal deltas behind a full budget', () => {
+    const delivered: SubagentEvent[] = [];
+    const batcher = createSubagentDeltaBatcher((envelope) => { delivered.push(envelope); }, {
+      budgets: () => ({ maxPerFlush: 2, byteBudgetKb: 1 }),
+    });
+    for (let sequence = 1; sequence <= 4; sequence += 1) {
+      batcher.queue(usageDelta(sequence));
+    }
+    batcher.queue({ ...baseFields, sequence: 5, type: 'spawned', record: record('subagent-1', 'running'), usage: null });
+    batcher.queue({
+      ...baseFields, sequence: 6, type: 'terminal', record: record('subagent-1', 'completed'), state: 'completed', usage: null,
+    });
+
+    vi.advanceTimersByTime(16);
+    expect(sequences(delivered)).toEqual([[1, 2, 5, 6]]);
+
+    vi.advanceTimersByTime(16);
+    expect(sequences(delivered)).toEqual([[1, 2, 5, 6], [3, 4]]);
+
+    vi.advanceTimersByTime(100);
+    expect(delivered).toHaveLength(2);
+  });
+
+  it('skips sessions with no eligible recipient without delivering or deferring their deltas', () => {
+    const delivered: SubagentEvent[] = [];
+    const batcher = createSubagentDeltaBatcher((envelope) => { delivered.push(envelope); }, {
+      isEligible: (sessionId) => sessionId === session,
+    });
+    batcher.queue(usageDelta(1));
+    batcher.queue({ ...usageDelta(2), sessionId: 'ineligible-session' });
+
+    vi.advanceTimersByTime(16);
+    expect(delivered).toHaveLength(1);
+    expect(delivered[0].sessionId).toBe(session);
+    expect(sequences(delivered)).toEqual([[1]]);
+
+    vi.advanceTimersByTime(100);
+    expect(delivered).toHaveLength(1);
   });
 });

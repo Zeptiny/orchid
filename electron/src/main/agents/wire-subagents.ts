@@ -8,7 +8,13 @@ import { IPC_CHANNELS } from '../../shared/types/ipc';
 import { getSubagentManager } from '../tools';
 import { createSubagentStreamRunner } from './subagent-runner';
 import { createSubagentPersistenceScheduler, persistSubagentChains } from './persist-subagent-chains';
-import { flushSubagentEvents, isEligibleSubagentRecipient, queueSubagentEvent } from '../ipc/subagents';
+import {
+  flushSubagentDeltas,
+  flushSubagentEvents,
+  isEligibleSubagentRecipient,
+  queueSubagentDelta,
+  queueSubagentEvent,
+} from '../ipc/subagents';
 import { SubagentState } from './manager';
 import { clearToolCallHistoryForAgentScope } from '../permissions/history';
 import { onSessionDeleted } from '../session/manager';
@@ -58,6 +64,8 @@ export function wireSubagentRuntime(): void {
     }
   });
 
+  manager.setOnDelta((event) => queueSubagentDelta(event));
+
   manager.setOnChange((records) => {
     for (const sessionId of new Set(records
       .filter((record) => record.state !== SubagentState.COMPLETED &&
@@ -71,6 +79,7 @@ export function wireSubagentRuntime(): void {
 /** Explicit orderly-shutdown hook; terminal writes are synchronous by design. */
 export function flushSubagentPersistence(): void {
   flushSubagentEvents();
+  flushSubagentDeltas();
   const manager = getSubagentManager();
   if (persistenceScheduler) persistenceScheduler.flushAll();
   else persistSubagentChains(manager);

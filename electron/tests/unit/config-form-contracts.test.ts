@@ -24,6 +24,7 @@ const KNOWN_CONFIG_KEYS = [
   'theme',
   'personality',
   'rag',
+  'subagents',
   'ast_max_file_size',
   'mcp_startup_timeout',
   'mcp_per_server_timeout',
@@ -158,6 +159,11 @@ describe('applyConfigDraft', () => {
       directory_tree_depth: 3,
       theme: 'bluey',
       personality: 'terse',
+      subagents: {
+        event_max_per_flush: 50,
+        usage_event_interval_ms: 0,
+        max_active_global: 2,
+      },
       rag: {
         chunk_size: 100,
         chunk_overlap: 0,
@@ -222,6 +228,10 @@ describe('applyConfigDraft', () => {
     expect(next.directory_tree_depth).toBe(3);
     expect(next.theme).toBe('bluey');
     expect(next.personality).toBe('terse');
+    expect(next.subagents.event_max_per_flush).toBe(50);
+    expect(next.subagents.usage_event_interval_ms).toBe(0);
+    expect(next.subagents.max_active_global).toBe(2);
+    expect(next.subagents.event_byte_budget_kb).toBe(base.subagents.event_byte_budget_kb);
     expect(next.rag).toEqual(draft.rag);
     expect(next.ast_max_file_size).toBe(4);
     expect(next.mcp_startup_timeout).toBe(5);
