@@ -374,13 +374,15 @@ function renderWebFetchPayload(record: Record<string, JsonValue>): string {
 
 function renderDelegateToSubagentPayload(record: Record<string, JsonValue>): string {
   if (typeof record.error === 'string') return '';
+  // The task is intentionally omitted: it already lives in the delegate
+  // tool-call args (message history) and is re-injected every turn via the
+  // dynamic system prompt's <subagents> section. Re-sending it here would
+  // duplicate it on every delegation.
   return '<subagent id="' + escapeXmlAttribute(record.id) +
     '" name="' + escapeXmlAttribute(record.name) +
     '" type="' + escapeXmlAttribute(record.type) +
     '" status="' + escapeXmlAttribute(record.status) +
-    '" tier="' + escapeXmlAttribute(record.tier) + '">' +
-    xmlTextElement('task', typeof record.task === 'string' ? record.task : '') +
-    '</subagent>';
+    '" tier="' + escapeXmlAttribute(record.tier) + '" />';
 }
 
 function renderReplaceSymbolPayload(record: Record<string, JsonValue>): string {

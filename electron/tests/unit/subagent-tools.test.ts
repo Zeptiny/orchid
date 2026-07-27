@@ -155,6 +155,20 @@ describe('delegate_to_subagent', () => {
     expect(records[0].state).toBe(SubagentState.PENDING);
   });
 
+  it('omits the task from the projection (already in args + system prompt)', async () => {
+    const { handler } = buildDelegateTool(agents, manager);
+
+    const result = (await handler({
+      name: 'review auth',
+      task: 'Review the authentication module for security issues',
+      type: 'code-reviewer',
+    }, toolContext)) as ToolExecutionResult;
+
+    expect(result.agentProjection.content).not.toContain('Review the authentication module');
+    expect(result.agentProjection.content).not.toContain('<task>');
+    expect(result.agentProjection.content).toContain('review auth');
+  });
+
   it('should use agent default tier when tier not specified', async () => {
     const { handler } = buildDelegateTool(agents, manager);
 
