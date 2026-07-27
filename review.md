@@ -16,7 +16,7 @@ The highest-leverage corrections are:
 3. Stop subagent-only updates from invalidating the main transcript.
 4. Fix worker cancellation/health behavior and offload the remaining unbounded synchronous operations.
 
-No P0 data-loss or security-critical performance defect was identified. This report contains **7 P1 findings** and **8 P2 findings**.
+No P0 data-loss or security-critical performance defect was identified. This report contains **6 P1 findings** and **8 P2 findings**.
 
 ## Existing safeguards to preserve
 
@@ -428,38 +428,6 @@ Profile 100, 1,000, 2,000, and 5,000 visible items during a fixed 60-frame strea
 
 ---
 
-### F-15 — Collapsed tool results eagerly create their full hidden DOM
-
-**Severity:** P1
-**Confidence:** High; children always mount.
-**Primary files:**
-
-- `electron/src/renderer/components/ui/CollapsibleRegion.tsx:34`
-- `electron/src/renderer/components/ToolResults/ToolResultShell.tsx:96`
-- `electron/src/renderer/components/ToolResults/ToolResultShell.tsx:145`
-- `electron/src/renderer/components/ToolResults/FileContentToolResult.tsx:54`
-- `electron/src/renderer/components/ToolResults/diff-view.tsx:42`
-
-**Evidence and impact**
-
-Closed disclosures remain mounted for animation/state preservation. `ToolResultShell` also builds the result body before passing it into the closed region. Tool-heavy histories therefore create every hidden file line, search result, directory row, and diff line during hydration.
-
-The UI looks compact while retaining a large invisible DOM and parsing/render cost.
-
-**Recommended fix**
-
-1. Add a `lazyMount` or equivalent mode to `CollapsibleRegion`/`ToolResultShell`.
-2. Do not instantiate the result body until first expansion.
-3. After first expansion, keep it mounted if state preservation and collapse animation require it.
-4. Apply the same behavior to collapsed tool-activity groups.
-5. Bound the module-global expansion-state map or clear it on session disposal.
-
-**Verification**
-
-Load 20 chains containing 50 large read/diff results each. Compare session-switch scripting time, node count, heap, and first-expansion latency before and after lazy mounting.
-
----
-
 ### F-18 — RAG download/body stalls can hold indexing indefinitely
 
 **Severity:** P2
@@ -564,8 +532,7 @@ These items were not promoted to primary findings because impact or provider beh
 ### Batch 2 — Renderer streaming and hydration
 
 1. F-02: add a lightweight/deferred streaming Markdown path.
-2. F-15: lazy-mount collapsed tool-result bodies.
-3. F-14: isolate stable history from the live tail.
+2. F-14: isolate stable history from the live tail.
 
 Profile after each change; virtualization should be introduced only if stable-history isolation and lazy mounting do not meet the frame budget.
 

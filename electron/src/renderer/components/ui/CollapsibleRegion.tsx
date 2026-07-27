@@ -1,13 +1,16 @@
-import type { HTMLAttributes, ReactNode } from 'react';
+import { useEffect, useState, type HTMLAttributes, type ReactNode } from 'react';
 
 export interface CollapsibleRegionProps extends HTMLAttributes<HTMLDivElement> {
   open: boolean;
   children: ReactNode;
   contentClassName?: string;
+  /** Defer the initial child mount until this region is first opened. */
+  lazyMount?: boolean;
 }
 
 /**
  * Keeps disclosure content mounted while animating its visible height.
+ * Lazy regions defer their children until first opened, then retain them.
  * Presentational only — the owning control supplies aria-expanded/controls.
  */
 export function CollapsibleRegion({
@@ -15,8 +18,15 @@ export function CollapsibleRegion({
   children,
   className = '',
   contentClassName = '',
+  lazyMount = false,
   ...props
 }: CollapsibleRegionProps) {
+  const [hasOpened, setHasOpened] = useState(open);
+
+  useEffect(() => {
+    if (open) setHasOpened(true);
+  }, [open]);
+
   const regionClasses = `orchid-collapsible-region ${open ? 'is-open' : ''} ${className}`
     .trim()
     .replace(/\s+/g, ' ');
@@ -31,7 +41,7 @@ export function CollapsibleRegion({
       inert={open ? undefined : true}
       {...props}
     >
-      <div className={contentClasses}>{children}</div>
+      <div className={contentClasses}>{(!lazyMount || open || hasOpened) ? children : null}</div>
     </div>
   );
 }
