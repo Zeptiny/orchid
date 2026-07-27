@@ -287,6 +287,17 @@ describe('ToolRegistry', () => {
       const result = registry.filter(['write_*']);
       expect(result).toHaveLength(0);
     });
+
+    it('should support question-mark and character-class patterns', () => {
+      registry.register(makeReadTool(), dummyHandler);
+      registry.register(makeGrepTool(), dummyHandler);
+      registry.register(makeEditTool(), dummyHandler);
+
+      const result = registry.filter(['r?ad', '[gr]rep']);
+      const names = result.map((tool) => tool.definition.name);
+
+      expect(names).toEqual(['read', 'grep']);
+    });
   });
 
   // -- toJsonSchema() --------------------------------------------------------

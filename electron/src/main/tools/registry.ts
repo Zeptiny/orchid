@@ -4,7 +4,7 @@
  * Provides registration, lookup, glob-based filtering, and JSON Schema
  * generation for LLM function-calling and MCP exposure.
  */
-import { minimatch } from 'minimatch';
+import { matchesGlob } from 'node:path';
 import { zodToJsonSchema } from 'zod-to-json-schema';
 import { type ZodError } from 'zod';
 import type { ToolDefinition, ToolHandler, RegisteredTool } from './types';
@@ -120,8 +120,7 @@ export class ToolRegistry {
         if (!pattern.includes('*') && !pattern.includes('?') && !pattern.includes('[')) {
           return definition.name === pattern;
         }
-        // Glob match via minimatch
-        return minimatch(definition.name, pattern);
+        return matchesGlob(definition.name, pattern);
       }),
     );
   }
