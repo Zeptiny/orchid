@@ -149,4 +149,13 @@ describe('SubagentView', () => {
     expect(chat).toMatch(/setAttribute\('inert'/);
     expect(chat).toMatch(/aria-hidden/);
   });
+
+  it('freezes the CSS-hidden chat presentation while subagents are shown and restores it in chat mode', () => {
+    const chat = readFileSync(new URL('../../src/renderer/components/ChatView.tsx', import.meta.url), 'utf8');
+
+    expect(chat).toMatch(/const\s+chatSurfaceVisible\s*=\s*isVisible\s*&&\s*contentMode\s*===\s*'chat'/);
+    expect(chat).toMatch(
+      /<DeferredSurface\s+isVisible=\{chatSurfaceVisible\}>\s*<ChatStream\s+isVisible=\{chatSurfaceVisible\}/,
+    );
+  });
 });

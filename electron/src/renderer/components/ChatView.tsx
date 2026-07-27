@@ -999,6 +999,7 @@ export function ChatView({ isVisible = true, bootstrapConfig = null }: ChatViewP
     ['--orchid-shell-left' as string]: leftTrack,
     ['--orchid-shell-right' as string]: rightTrack,
   };
+  const chatSurfaceVisible = isVisible && contentMode === 'chat';
 
   return (
     <div
@@ -1143,9 +1144,9 @@ export function ChatView({ isVisible = true, bootstrapConfig = null }: ChatViewP
           className={contentMode === 'subagents' ? 'orchid-chat-content-preserved orchid-chat-content-hidden' : 'orchid-chat-content-preserved orchid-view-enter'}
           aria-hidden={contentMode === 'subagents' ? true : undefined}
         >
-        <DeferredSurface isVisible={isVisible}>
+        <DeferredSurface isVisible={chatSurfaceVisible}>
           <ChatStream
-            isVisible={isVisible}
+            isVisible={chatSurfaceVisible}
             messages={chat.messages}
             streamingContent={chat.streamingContent}
             toolBlocks={chat.toolBlocks}

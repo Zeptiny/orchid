@@ -13,10 +13,10 @@ The highest-leverage corrections are:
 
 1. Avoid full Markdown parsing and syntax highlighting on every streaming frame.
 2. Replace full subagent projections/checkpoints with delta-oriented live events and incremental persistence.
-3. Stop subagent-only updates from invalidating the main transcript and hidden chat surface.
+3. Stop subagent-only updates from invalidating the main transcript.
 4. Fix worker cancellation/health behavior and offload the remaining unbounded synchronous operations.
 
-No P0 data-loss or security-critical performance defect was identified. This report contains **7 P1 findings** and **10 P2 findings**.
+No P0 data-loss or security-critical performance defect was identified. This report contains **7 P1 findings** and **9 P2 findings**.
 
 ## Existing safeguards to preserve
 
@@ -460,33 +460,6 @@ Load 20 chains containing 50 large read/diff results each. Compare session-switc
 
 ---
 
-### F-16 — Hidden chat continues rendering behind the Subagent View
-
-**Severity:** P2  
-**Confidence:** High; visibility props ignore `contentMode`.  
-**Primary files:**
-
-- `electron/src/renderer/components/ChatView.tsx:1143`
-- `electron/src/renderer/components/ChatView.tsx:1146`
-- `electron/src/renderer/components/ChatView.tsx:1148`
-- `electron/src/renderer/components/deferred-surface.tsx:12`
-
-**Evidence and impact**
-
-Switching to Subagent View hides the chat with CSS and accessibility attributes, but both `DeferredSurface` and `ChatStream` continue receiving the outer `isVisible` value. Live subagent updates can therefore render the visible transcript and the hidden main chat simultaneously.
-
-This amplifies stutter specifically when users inspect delegated work.
-
-**Recommended fix**
-
-Derive `chatSurfaceVisible = isVisible && contentMode === 'chat'` and pass it to `DeferredSurface` and `ChatStream`. Keep the chat hook subscribed so state stays current, but freeze presentation work until chat is shown again.
-
-**Verification**
-
-Use React Profiler while a subagent streams in Subagent View. `ChatStream` should record no commits until the user returns to chat, while state reconciliation remains correct on reveal.
-
----
-
 ### F-17 — Historical or missing background commands can poll forever
 
 **Severity:** P2  
@@ -621,8 +594,7 @@ These items were not promoted to primary findings because impact or provider beh
 
 ### Batch 1 — Low-risk, immediate amplification fixes
 
-1. F-16: freeze hidden chat while Subagent View is active.
-2. F-17: stop polling missing background commands.
+1. F-17: stop polling missing background commands.
 
 These changes are comparatively localized and should reduce unnecessary work without changing stored data formats.
 
@@ -707,7 +679,7 @@ At minimum, profiling builds should add counters/timers at the main streaming, s
 The performance work should be considered complete only when:
 
 1. Main and subagent streaming cost scales with newly produced bytes, not accumulated transcript size times event count.
-2. Hidden or unrelated surfaces do not rerender for live events they do not display.
+2. Unrelated surfaces do not rerender for live events they do not display.
 3. Large collapsed tool results do not create hidden DOM before first expansion.
 4. Subagent and worker demand is bounded, fair, cancellable, and observable.
 5. Session/subagent persistence updates dirty records rather than rewriting complete accumulated histories.
