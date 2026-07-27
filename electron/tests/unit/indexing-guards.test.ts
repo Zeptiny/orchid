@@ -150,6 +150,7 @@ vi.mock('../../src/main/ast/parser', () => ({
 // ---------------------------------------------------------------------------
 
 import {
+  cancelIndex as cancelRagIndex,
   indexProject as ragIndexProject,
   isIndexing as ragIsIndexing,
 } from '../../src/main/rag/indexer';
@@ -269,6 +270,51 @@ describe('RAG indexing concurrency guard', () => {
     expect(ragIsIndexing()).toBe(false);
     await ragIndexProject(tmpDir);
     expect(ragIsIndexing()).toBe(false);
+  });
+
+  it('terminates a stalled worker watchdog and releases the project lock', async () => {
+    const stalledWorker = path.join(__dirname, '../fixtures/rag-stalled-worker.cjs');
+    const pending = ragIndexProject(
+      tmpDir,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      {
+        workerPath: stalledWorker,
+        config: {
+          background_command_idle_timeout: 0.01,
+          rag: { embedding_model: 'test-model' },
+        } as unknown as import('../../src/main/config/schema').Config,
+      },
+    );
+
+    await expect(pending).rejects.toThrow(/made no progress/i);
+    expect(ragIsIndexing(tmpDir)).toBe(false);
+
+    const retry = await ragIndexProject(
+      tmpDir,
+      undefined,
+      undefined,
+      new MockEmbedder() as unknown as import('../../src/main/rag/embedder').IEmbedder,
+    );
+    expect(retry).toBeDefined();
+  });
+
+  it('explicit cancellation terminates a worker and releases the project lock', async () => {
+    const stalledWorker = path.join(__dirname, '../fixtures/rag-stalled-worker.cjs');
+    const pending = ragIndexProject(
+      tmpDir,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      { workerPath: stalledWorker },
+    );
+
+    await expect(cancelRagIndex(tmpDir)).resolves.toBe(true);
+    await expect(pending).rejects.toThrow(/cancelled/i);
+    expect(ragIsIndexing(tmpDir)).toBe(false);
   });
 });
 

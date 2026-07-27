@@ -13,10 +13,25 @@ export interface WithTimeoutOptions {
 
 // ── Sleep ────────────────────────────────────────────────────────────────────
 
-/** Resolve after `ms` milliseconds. */
-export function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => {
-    setTimeout(resolve, ms);
+/** Resolve after `ms` milliseconds, or reject when the optional signal aborts. */
+export function sleep(ms: number, abortSignal?: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (abortSignal?.aborted) {
+      reject(abortSignal.reason ?? new Error('Operation aborted'));
+      return;
+    }
+
+    const onAbort = (): void => {
+      clearTimeout(timer);
+      abortSignal?.removeEventListener('abort', onAbort);
+      reject(abortSignal?.reason ?? new Error('Operation aborted'));
+    };
+
+    const timer = setTimeout(() => {
+      abortSignal?.removeEventListener('abort', onAbort);
+      resolve();
+    }, ms);
+    abortSignal?.addEventListener('abort', onAbort, { once: true });
   });
 }
 

@@ -82,6 +82,27 @@ function isContentChunk(chunk: LanguageModelV4StreamPart): boolean {
   return true;
 }
 
+function abortReason(signal: AbortSignal | undefined): unknown {
+  return signal?.reason ?? new Error('Operation aborted');
+}
+
+function throwIfAborted(signal: AbortSignal | undefined): void {
+  if (signal?.aborted) {
+    throw abortReason(signal);
+  }
+}
+
+async function cancelStream(
+  stream: ReadableStream<LanguageModelV4StreamPart>,
+  reason: unknown,
+): Promise<void> {
+  try {
+    await stream.cancel(reason);
+  } catch {
+    // The provider stream may already be errored or locked.
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Retry middleware
 // ---------------------------------------------------------------------------
@@ -111,20 +132,29 @@ export function createRetryMiddleware(
   return {
     wrapStream: async ({
       doStream,
+      params,
     }: {
       doGenerate: () => ReturnType<LanguageModelV4['doGenerate']>;
       doStream: () => ReturnType<LanguageModelV4['doStream']>;
       params: LanguageModelV4CallOptions;
       model: LanguageModelV4;
     }): Promise<LanguageModelV4StreamResult> => {
+      const abortSignal = params.abortSignal;
       let attempt = 0;
       let contentDelivered = false;
 
       const tryDoStream = async (): Promise<LanguageModelV4StreamResult> => {
         while (true) {
+          throwIfAborted(abortSignal);
           try {
-            return await doStream();
+            const result = await doStream();
+            if (abortSignal?.aborted) {
+              await cancelStream(result.stream, abortReason(abortSignal));
+              throwIfAborted(abortSignal);
+            }
+            return result;
           } catch (error) {
+            throwIfAborted(abortSignal);
             if (contentDelivered) {
               throw error;
             }
@@ -135,7 +165,8 @@ export function createRetryMiddleware(
                   error instanceof Error ? error.message : error
                 }. Retrying in ${(delayMs / 1000).toFixed(1)}s...`,
               );
-              await sleep(delayMs);
+              await sleep(delayMs, abortSignal);
+              throwIfAborted(abortSignal);
               attempt++;
               continue;
             }
@@ -147,6 +178,14 @@ export function createRetryMiddleware(
       // Obtain first successful setup so we can return stream metadata.
       const first = await tryDoStream();
       const { stream: initialStream, ...rest } = first;
+      let activeReader: ReadableStreamDefaultReader<LanguageModelV4StreamPart> | null = null;
+      const cancelActiveReader = (reason: unknown): void => {
+        if (activeReader) {
+          void activeReader.cancel(reason).catch(() => {
+            // The provider reader may already have failed or been released.
+          });
+        }
+      };
 
       // Outer stream owns mid-stream pre-content retries: if the inner
       // stream errors before any text-delta, call doStream again (up to
@@ -154,56 +193,82 @@ export function createRetryMiddleware(
       const trackedStream = new ReadableStream<LanguageModelV4StreamPart>({
         async start(controller) {
           let currentStream: ReadableStream<LanguageModelV4StreamPart> = initialStream;
+          const onAbort = (): void => {
+            cancelActiveReader(abortReason(abortSignal));
+          };
+          abortSignal?.addEventListener('abort', onAbort, { once: true });
 
-          while (true) {
-            const reader = currentStream.getReader();
-            try {
-              while (true) {
-                const { done, value } = await reader.read();
-                if (done) {
-                  controller.close();
+          try {
+            while (true) {
+              throwIfAborted(abortSignal);
+              const reader = currentStream.getReader();
+              activeReader = reader;
+              try {
+                while (true) {
+                  throwIfAborted(abortSignal);
+                  const { done, value } = await reader.read();
+                  throwIfAborted(abortSignal);
+                  if (done) {
+                    controller.close();
+                    return;
+                  }
+                  if (isContentChunk(value)) {
+                    contentDelivered = true;
+                  }
+                  controller.enqueue(value);
+                }
+              } catch (error) {
+                if (abortSignal?.aborted) {
+                  controller.error(abortReason(abortSignal));
                   return;
                 }
-                if (isContentChunk(value)) {
-                  contentDelivered = true;
+                if (contentDelivered) {
+                  controller.error(error);
+                  return;
                 }
-                controller.enqueue(value);
-              }
-            } catch (error) {
-              if (contentDelivered) {
+
+                if (attempt < maxRetries && isTransientError(error)) {
+                  const delayMs = backoffDelayMs(attempt);
+                  console.warn(
+                    `[retry] Transient mid-stream error before content (attempt ${attempt + 1}/${maxRetries}): ${
+                      error instanceof Error ? error.message : error
+                    }. Retrying in ${(delayMs / 1000).toFixed(1)}s...`,
+                  );
+                  await sleep(delayMs, abortSignal);
+                  throwIfAborted(abortSignal);
+                  attempt++;
+                  try {
+                    const next = await tryDoStream();
+                    throwIfAborted(abortSignal);
+                    currentStream = next.stream;
+                    continue;
+                  } catch (setupError) {
+                    controller.error(setupError);
+                    return;
+                  }
+                }
+
                 controller.error(error);
                 return;
-              }
-
-              if (attempt < maxRetries && isTransientError(error)) {
-                const delayMs = backoffDelayMs(attempt);
-                console.warn(
-                  `[retry] Transient mid-stream error before content (attempt ${attempt + 1}/${maxRetries}): ${
-                    error instanceof Error ? error.message : error
-                  }. Retrying in ${(delayMs / 1000).toFixed(1)}s...`,
-                );
-                await sleep(delayMs);
-                attempt++;
+              } finally {
+                if (activeReader === reader) {
+                  activeReader = null;
+                }
                 try {
-                  const next = await tryDoStream();
-                  currentStream = next.stream;
-                  continue;
-                } catch (setupError) {
-                  controller.error(setupError);
-                  return;
+                  reader.releaseLock();
+                } catch {
+                  // Reader may already be released if the stream errored.
                 }
               }
-
-              controller.error(error);
-              return;
-            } finally {
-              try {
-                reader.releaseLock();
-              } catch {
-                // Reader may already be released if the stream errored.
-              }
             }
+          } catch (error) {
+            controller.error(error);
+          } finally {
+            abortSignal?.removeEventListener('abort', onAbort);
           }
+        },
+        cancel(reason) {
+          cancelActiveReader(reason);
         },
       });
 

@@ -17,7 +17,11 @@ import {
   withDisposableAsync,
 } from '../utils/with-disposable';
 import { chunkFile } from './chunker';
-import { createEmbedderFromConfig, type IEmbedder } from './embedder';
+import {
+  createEmbedderFromConfig,
+  removeModelDownloadTemps,
+  type IEmbedder,
+} from './embedder';
 import { RAGStore } from './store';
 import type { RAGStoreStatus } from '../../shared/types/ipc-boundary';
 import type { RAGIndexResult, RAGIndexProgress } from '../../shared/types/ipc-boundary';
@@ -69,6 +73,7 @@ const DEFAULT_IGNORED_DIRS = new Set([
 
 /** In-flight runs keyed by project. Independent projects may index concurrently. */
 const activeIndexes = new Map<string, RAGIndexProgress>();
+const activeIndexCancels = new Map<string, (reason: Error) => Promise<void>>();
 
 function projectKey(projectPath: string): string {
   return path.resolve(projectPath);
@@ -102,6 +107,15 @@ function noteProgress(projectPath: string, progress: RAGIndexProgress): void {
   activeIndexes.set(projectKey(projectPath), progress);
 }
 
+/** Cancel a worker-backed index so a replacement run can start immediately. */
+export async function cancelIndex(projectPath?: string): Promise<boolean> {
+  if (!projectPath) return false;
+  const cancel = activeIndexCancels.get(projectKey(projectPath));
+  if (!cancel) return false;
+  await cancel(new Error('RAG indexing cancelled'));
+  return true;
+}
+
 // ---------------------------------------------------------------------------
 // Index project
 // ---------------------------------------------------------------------------
@@ -114,6 +128,8 @@ export interface IndexProjectOptions {
   inline?: boolean;
   /** Frozen project configuration for this indexing turn. */
   config?: Config;
+  /** @internal Test-only worker entry override for deterministic watchdog tests. */
+  workerPath?: string;
 }
 
 /**
@@ -177,9 +193,12 @@ export async function indexProject(
       force,
       trackProgress,
       options?.config,
+      options?.workerPath,
+      (cancel) => activeIndexCancels.set(key, cancel),
     );
   } finally {
     activeIndexes.delete(key);
+    activeIndexCancels.delete(key);
   }
 }
 
@@ -434,8 +453,10 @@ async function runIndexInWorker(
   force: boolean | undefined,
   progressCallback?: RAGIndexProgressCallback,
   config?: Config,
+  workerPathOverride?: string,
+  registerCancel?: (cancel: (reason: Error) => Promise<void>) => void,
 ): Promise<IndexResult> {
-  const workerPath = path.join(__dirname, 'index-worker.js');
+  const workerPath = workerPathOverride ?? path.join(__dirname, 'index-worker.js');
   if (!fs.existsSync(workerPath)) {
     // Dev fallback if worker bundle is missing — still produce a usable index.
     console.warn(
@@ -460,20 +481,71 @@ async function runIndexInWorker(
 
   return new Promise<IndexResult>((resolve, reject) => {
     let settled = false;
+    let watchdog: ReturnType<typeof setTimeout> | undefined;
     const worker = new Worker(workerPath, {
       workerData: startData,
       // Inherit env so native module resolution matches the main process
       env: process.env,
     });
 
-    const finish = (fn: () => void) => {
-      if (settled) return;
-      settled = true;
-      fn();
+    const workerIdleTimeoutMs = Math.max(
+      1,
+      ((config as Partial<Config> | undefined)?.background_command_idle_timeout ?? 900) * 1000,
+    );
+    let completion: Promise<void> | undefined;
+    const cleanupInterruptedDownload = async () => {
+      let modelName = (config as Partial<Config> | undefined)?.rag?.embedding_model;
+      if (!modelName) {
+        try {
+          modelName = getConfig().rag.embedding_model;
+        } catch {
+          // A worker can start during early boot before global config exists.
+        }
+      }
+      if (!modelName) return;
+      try {
+        await removeModelDownloadTemps(modelName);
+      } catch {
+        // Cleanup is best-effort; the index error remains the primary signal.
+      }
     };
+    const finish = (
+      result: IndexResult | undefined,
+      error: Error | undefined,
+      cleanupTempFiles: boolean,
+    ): Promise<void> => {
+      if (completion) return completion;
+      settled = true;
+      if (watchdog) clearTimeout(watchdog);
+      completion = (async () => {
+        try {
+          await worker.terminate();
+        } catch {
+          // The worker may have already exited after posting its result.
+        }
+        if (cleanupTempFiles) await cleanupInterruptedDownload();
+        if (error) reject(error);
+        else resolve(result!);
+      })();
+      return completion;
+    };
+    const armWatchdog = () => {
+      if (settled) return;
+      if (watchdog) clearTimeout(watchdog);
+      watchdog = setTimeout(() => {
+        void finish(
+          undefined,
+          new Error(`RAG index worker made no progress for ${workerIdleTimeoutMs}ms`),
+          true,
+        );
+      }, workerIdleTimeoutMs);
+    };
+    registerCancel?.((reason) => finish(undefined, reason, true));
+    armWatchdog();
 
     worker.on('message', (msg: RagWorkerOutbound) => {
       if (!msg || typeof msg !== 'object' || !('type' in msg)) return;
+      armWatchdog();
       if (msg.type === 'progress') {
         try {
           progressCallback?.(msg.progress);
@@ -483,29 +555,25 @@ async function runIndexInWorker(
         return;
       }
       if (msg.type === 'result') {
-        finish(() => {
-          void worker.terminate();
-          resolve(msg.result);
-        });
+        void finish(msg.result, undefined, false);
         return;
       }
       if (msg.type === 'error') {
-        finish(() => {
-          void worker.terminate();
-          reject(new Error(msg.error));
-        });
+        void finish(undefined, new Error(msg.error), true);
       }
     });
 
     worker.on('error', (err) => {
-      finish(() => reject(err));
+      void finish(undefined, err instanceof Error ? err : new Error(String(err)), true);
     });
 
     worker.on('exit', (code) => {
       if (settled) return;
-      finish(() => {
-        reject(new Error(`RAG index worker exited unexpectedly with code ${code}`));
-      });
+      void finish(
+        undefined,
+        new Error(`RAG index worker exited unexpectedly with code ${code}`),
+        true,
+      );
     });
   });
 }

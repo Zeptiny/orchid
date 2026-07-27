@@ -16,7 +16,7 @@ The highest-leverage corrections are:
 3. Stop subagent-only updates from invalidating the main transcript.
 4. Fix worker cancellation/health behavior and offload the remaining unbounded synchronous operations.
 
-No P0 data-loss or security-critical performance defect was identified. This report contains **6 P1 findings** and **7 P2 findings**.
+No P0 data-loss or security-critical performance defect was identified. This report contains **4 P1 findings** and **4 P2 findings**.
 
 ## Existing safeguards to preserve
 
@@ -274,69 +274,6 @@ Create sessions containing 25, 50, and 100 synthetic 1 MiB tool results. Measure
 
 ---
 
-### F-10 — Failed worker replacement can permanently strand queued tools
-
-**Severity:** P1
-**Confidence:** High; replacement failure only logs.
-**Primary files:**
-
-- `electron/src/main/utils/worker-pool.ts:82`
-- `electron/src/main/utils/worker-pool.ts:214`
-- `electron/src/main/utils/worker-pool.ts:226`
-- `electron/src/main/utils/worker-pool.ts:228`
-- `electron/src/main/tools/ast/get-file-skeleton.ts:43`
-
-**Evidence and impact**
-
-If a worker crashes and its replacement fails to become available, capacity is permanently reduced. The failure is logged, but queued tasks are neither rejected nor moved to a healthy fallback. If all workers are lost, no-timeout tools can remain pending until application restart.
-
-Worker initialization also has no readiness deadline; a worker that starts but never posts `ready` can hang application startup.
-
-**Recommended fix**
-
-1. Track healthy, starting, and failed pool capacity explicitly.
-2. Apply a worker-readiness timeout.
-3. Use bounded replacement retries with jitter.
-4. Open a circuit after repeated failures and mark the pool unavailable. Atomically drain every queued task: remove it from the task map and queue, detach its abort listener, release all queue bookkeeping, and reject its promise with a typed `WorkerPoolUnavailableError`. Reject future submissions immediately with the same error while the pool remains unavailable.
-5. Consider inline fallback only for demonstrably bounded tools; never silently run known freeze-prone operations inline.
-6. Expose degraded pool health to logging and the UI.
-
-**Verification**
-
-Test worker crash, failed replacement, zero remaining capacity, already-aborted tasks, readiness timeout, queue rejection, recovery, and clean disposal without orphan workers. Verify that every queued promise rejects with `WorkerPoolUnavailableError`, every abort listener and task/queue entry is released, and no queued or future submission remains pending after the pool is marked unavailable.
-
----
-
-### F-11 — `get_function` can block Electron indefinitely on large source files
-
-**Severity:** P1
-**Confidence:** Medium-high; the operation is synchronous and unbounded.
-**Primary files:**
-
-- `electron/src/main/tools/ast/get-function.ts:45`
-- `electron/src/main/tools/ast/get-function.ts:95`
-- `electron/src/main/ast/parser.ts:297`
-- `electron/src/main/config/schema.ts:150`
-
-**Evidence and impact**
-
-`get_function` synchronously reads and parses the selected file on Electron's main thread. It disables the outer timeout, does not opt into worker execution, and does not enforce `ast_max_file_size` before reading/parsing.
-
-A large minified or pathological supported-language file can block every window, IPC callback, cancellation request, and watchdog timer until parsing completes.
-
-**Recommended fix**
-
-1. Enforce `ast_max_file_size` before reading the file.
-2. Before moving parsing and extraction off the main thread, implement the admission controls described in F-06: either reserve dedicated AST capacity or add a bounded, fair scheduler with foreground/main-agent capacity that cannot be consumed by background work. Do not route `get_function` into the current unbounded FIFO queue, where background tasks could starve interactive work.
-3. Ensure combined parent/timeout cancellation can terminate the worker.
-4. Bound the process-global `sentHashes` cache and clear it when sessions/workspaces are released.
-
-**Verification**
-
-Run against 1 MB, 10 MB, and pathological minified files while a 16 ms main-thread heartbeat is active. Verify bounded rejection for oversized files and responsive worker execution for accepted files. Saturate background worker demand and confirm `get_function` retains reserved foreground capacity, bounded queue wait, and fair progress as required by F-06.
-
----
-
 ### F-12 — `rename_symbol` performs project-wide synchronous reads and durable writes
 
 **Severity:** P2
@@ -400,92 +337,6 @@ Serve deterministic 1/5/10 MiB fixtures, including deeply nested and table-heavy
 
 ---
 
-### F-18 — RAG download/body stalls can hold indexing indefinitely
-
-**Severity:** P2
-**Confidence:** High for missing deadlines.
-**Primary files:**
-
-- `electron/src/main/rag/embedder.ts:272`
-- `electron/src/main/rag/embedder.ts:589`
-- `electron/src/main/rag/indexer.ts:181`
-- `electron/src/main/rag/indexer.ts:461`
-
-**Evidence and impact**
-
-First-use model downloads do not have an end-to-end request/body timeout. API embedding clears its timeout after headers, before fully consuming the body. The indexing worker itself has no watchdog. A server can accept a connection and then stall the body indefinitely, leaving the project registered as actively indexing and blocking subsequent attempts until restart.
-
-**Recommended fix**
-
-1. Keep an abort deadline active through complete body consumption.
-2. Add download inactivity and total-duration limits.
-3. Add a worker watchdog and explicit cancellation path.
-4. On timeout/cancel, terminate the worker, remove temporary files, reject the request, and release `activeIndexes` in every path.
-
-**Verification**
-
-Use fetch fixtures that return headers and then never yield a body. Assert bounded rejection, worker termination, temporary-file cleanup, and immediate ability to start another index.
-
----
-
-### F-19 — Retry backoff can issue new provider attempts after cancellation
-
-**Severity:** P2
-**Confidence:** Medium-high; backoff sleep is not abortable.
-**Primary files:**
-
-- `electron/src/main/llm/middleware/retry.ts:112`
-- `electron/src/main/llm/middleware/retry.ts:131`
-- `electron/src/main/llm/middleware/retry.ts:178`
-- `electron/src/main/utils/async.ts:17`
-
-**Evidence and impact**
-
-Retry middleware uses a plain `setTimeout` sleep and does not check the call's abort signal before the next setup or mid-stream retry. Cancelling during backoff can therefore leave the retry task alive and cause another provider request for a turn the user considers stopped.
-
-With many subagents, transient provider failures can amplify into detached requests and synchronized retry pressure.
-
-**Recommended fix**
-
-1. Preserve the request `AbortSignal` in retry middleware.
-2. Check it before every attempt and after every failure.
-3. Replace plain sleep with an abortable delay.
-4. Cancel the current stream reader on abort.
-5. Coordinate connection-level retry timing and add jitter when many streams share a provider.
-
-**Verification**
-
-Force a transient failure, abort during backoff, advance fake timers, and assert that no additional `doStream` call occurs. Repeat for setup and mid-stream retry paths.
-
----
-
-### F-20 — Permanent subagent persistence failures retry forever
-
-**Severity:** P2
-**Confidence:** High; retries have no terminal state.
-**Primary files:**
-
-- `electron/src/main/agents/persist-subagent-chains.ts:40`
-- `electron/src/main/agents/persist-subagent-chains.ts:47`
-- `electron/src/main/agents/persist-subagent-chains.ts:55`
-- `electron/tests/unit/subagent-ipc.test.ts:170`
-
-**Evidence and impact**
-
-A failed checkpoint marks the session dirty again and reschedules indefinitely. Backoff reaches a two-second ceiling but attempts are unlimited. Permanent disk or database failures therefore retain timers and produce continuous write/log churn for every affected session.
-
-**Recommended fix**
-
-1. Add a bounded retry budget and circuit-breaker state per session.
-2. After exhaustion, stop automatic retries and surface a degraded-persistence status.
-3. Retry only on explicit user action, new durable activity, or a storage-recovery signal.
-4. Clear retry state when a session is deleted or the app shuts down.
-5. Preserve immediate recovery behavior for temporary failures.
-
-**Verification**
-
-Test temporary recovery and permanent failure separately. The permanent case must stop scheduling after the configured budget and release timers/maps cleanly.
-
 ## Additional watchlist items
 
 These items were not promoted to primary findings because impact or provider behavior needs confirmation, but they should be covered by profiling and targeted tests:
@@ -519,22 +370,18 @@ This is the most substantial architectural batch and should be designed as one c
 ### Batch 4 — Large results and main-thread isolation
 
 1. F-08: introduce durable large-result references and lazy IPC retrieval.
-2. F-10: add worker readiness/health/circuit-breaker behavior.
-3. F-11, F-12, F-13: bound or offload remaining synchronous AST and HTML work.
+2. F-12, F-13: bound or offload remaining synchronous AST and HTML work.
 
 ### Batch 5 — Cancellation and long-lived failure cleanup
 
-1. F-18: end-to-end RAG download/body/worker deadlines.
-2. F-19: abort-aware retry backoff.
-3. F-20: bounded persistence recovery.
-4. Address watchlist shutdown and MCP cleanup risks.
+1. Address watchlist shutdown and MCP cleanup risks.
 
 ## Performance verification plan
 
 ### CI-safe behavioral tests
 
 - Stream 2,000 committed messages plus 1,000 content/thinking/tool deltas under a fake `requestAnimationFrame`. Assert one publication per frame, exact final state, and no committed-history rebuild for live-only text.
-- Saturate a size-two worker pool with eight jobs. Assert `activeCount <= 2`, bounded queue behavior, cancellation recovery, failed-respawn rejection, and complete cleanup.
+- Saturate a size-two worker pool with eight jobs. Assert `activeCount <= 2`, bounded queue behavior, cancellation recovery, and complete cleanup.
 - Exercise compiled RAG/AST worker boundaries and their missing-worker fallback explicitly.
 - Verify subagent persistence work grows with dirty bytes/records rather than total historical transcript bytes.
 - Verify closed tool disclosures do not mount result-row DOM until first expansion.
@@ -545,7 +392,7 @@ This is the most substantial architectural batch and should be designed as one c
 - Load a 2,000-message tool-heavy transcript, stream 50 deltas/second for 60 seconds, switch sessions, type, scroll, and open Subagent View.
 - Run 1/4/8/16 concurrent subagents with 1 KB/100 KB/1 MiB transcripts and completion waves.
 - Hydrate sessions containing 25/50/100 one-MiB canonical tool results.
-- Run AST/RAG indexing, `get_function`, `rename_symbol`, and 1/5/10 MiB `web_fetch` fixtures while sampling a 10–16 ms heartbeat.
+- Run AST/RAG indexing, `rename_symbol`, and 1/5/10 MiB `web_fetch` fixtures while sampling a 10–16 ms heartbeat.
 - Run a 30-minute soak covering chats, session switches, subagents, background commands, RAG searches, index cancellation, and session deletion.
 
 ### Provisional responsiveness budgets

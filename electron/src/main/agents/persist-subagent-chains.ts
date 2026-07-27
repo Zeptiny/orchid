@@ -14,20 +14,44 @@ export interface PersistenceTimerApi {
   clearTimeout: (timer: ReturnType<typeof setTimeout>) => void;
 }
 
+export interface SubagentPersistenceSchedulerOptions {
+  /** Retries after the initial failed checkpoint before the breaker opens. */
+  maxRetries?: number;
+}
+
+const CHECKPOINT_DELAY_MS = 2000;
+const RETRY_BASE_DELAY_MS = 100;
+const RETRY_MAX_DELAY_MS = 2000;
+const DEFAULT_MAX_RETRIES = 3;
+
 /** One bounded checkpoint scheduler per session, including re-entrant writes. */
 export function createSubagentPersistenceScheduler(
   write: (sessionId: string) => void,
   timers: PersistenceTimerApi = { setTimeout, clearTimeout },
+  options: SubagentPersistenceSchedulerOptions = {},
 ) {
+  const requestedMaxRetries = options.maxRetries;
+  const maxRetries = typeof requestedMaxRetries === 'number' &&
+      Number.isInteger(requestedMaxRetries) && requestedMaxRetries >= 0
+    ? requestedMaxRetries
+    : DEFAULT_MAX_RETRIES;
   const scheduled = new Map<string, ReturnType<typeof setTimeout>>();
   const dirty = new Set<string>();
   const writing = new Set<string>();
   const failures = new Map<string, number>();
+  const degraded = new Set<string>();
 
-  const flush = (sessionId: string): void => {
+  const clearScheduled = (sessionId: string): void => {
     const timer = scheduled.get(sessionId);
     if (timer) timers.clearTimeout(timer);
     scheduled.delete(sessionId);
+  };
+
+  const flush = (sessionId: string): void => {
+    clearScheduled(sessionId);
+    // A persistent failure is kept dirty for a later recovery trigger, but it
+    // must not keep scheduling work by itself once its retry budget is spent.
+    if (degraded.has(sessionId)) return;
     if (writing.has(sessionId)) {
       dirty.add(sessionId);
       return;
@@ -41,30 +65,84 @@ export function createSubagentPersistenceScheduler(
       dirty.add(sessionId);
       const attempt = (failures.get(sessionId) ?? 0) + 1;
       failures.set(sessionId, attempt);
-      console.debug('Subagent persistence retry scheduled:', error);
+      if (attempt > maxRetries) {
+        degraded.add(sessionId);
+        console.warn(
+          `Subagent persistence degraded for session ${sessionId}; automatic retries paused:`,
+          error,
+        );
+      } else {
+        console.debug('Subagent persistence retry scheduled:', error);
+      }
     } finally {
       writing.delete(sessionId);
-      if (dirty.has(sessionId)) {
+      if (dirty.has(sessionId) && !degraded.has(sessionId)) {
         const attempt = failures.get(sessionId) ?? 0;
-        const delay = attempt > 0 ? Math.min(2000, 100 * 2 ** (attempt - 1)) : 0;
+        const delay = attempt > 0
+          ? Math.min(RETRY_MAX_DELAY_MS, RETRY_BASE_DELAY_MS * 2 ** (attempt - 1))
+          : 0;
         schedule(sessionId, delay);
       }
     }
   };
 
   function schedule(sessionId: string, delay: number): void {
-    if (scheduled.has(sessionId)) return;
+    if (scheduled.has(sessionId) || degraded.has(sessionId)) return;
     scheduled.set(sessionId, timers.setTimeout(() => flush(sessionId), delay));
   }
 
+  const reopen = (sessionId: string, immediate: boolean): void => {
+    degraded.delete(sessionId);
+    failures.delete(sessionId);
+    dirty.add(sessionId);
+    if (writing.has(sessionId)) return;
+    if (immediate) flush(sessionId);
+    else schedule(sessionId, CHECKPOINT_DELAY_MS);
+  };
+
+  const clear = (sessionId: string): void => {
+    clearScheduled(sessionId);
+    dirty.delete(sessionId);
+    writing.delete(sessionId);
+    failures.delete(sessionId);
+    degraded.delete(sessionId);
+  };
+
   return {
     markDirty(sessionId: string): void {
+      // New durable state can reopen a *tripped* breaker, but must not reset
+      // an active retry window: a continuously streaming subagent would then
+      // prevent a persistent failure from ever reaching its retry budget.
+      if (degraded.has(sessionId)) {
+        reopen(sessionId, false);
+        return;
+      }
       dirty.add(sessionId);
-      if (!writing.has(sessionId)) schedule(sessionId, 2000);
+      if (!writing.has(sessionId)) schedule(sessionId, CHECKPOINT_DELAY_MS);
     },
     flush,
+    /** Explicit user retry or a storage-recovery notification. */
+    recover(sessionId: string): void {
+      reopen(sessionId, true);
+    },
+    recoverAll(): void {
+      for (const sessionId of [...degraded]) reopen(sessionId, true);
+    },
     flushAll(): void {
       for (const sessionId of new Set([...dirty, ...scheduled.keys()])) flush(sessionId);
+    },
+    /** Remove all state for a deleted session so no late timer can recreate it. */
+    clear,
+    /** Stop timers and release every per-session retry/degraded entry. */
+    dispose(): void {
+      for (const sessionId of new Set([
+        ...scheduled.keys(), ...dirty, ...writing, ...failures.keys(), ...degraded,
+      ])) {
+        clear(sessionId);
+      }
+    },
+    isDegraded(sessionId: string): boolean {
+      return degraded.has(sessionId);
     },
     hasPending(sessionId: string): boolean {
       return dirty.has(sessionId) || scheduled.has(sessionId) || writing.has(sessionId);

@@ -37,6 +37,8 @@ export interface RAGConfig {
   embedding_batch_size: number;
   embedding_api_timeout: number;
   embedding_api_retries: number;
+  model_download_inactivity_timeout: number;
+  model_download_total_timeout: number;
   embedding_api_model: ModelSelection | null;
 }
 

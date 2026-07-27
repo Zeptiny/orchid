@@ -11,9 +11,13 @@ import { createSubagentPersistenceScheduler, persistSubagentChains } from './per
 import { flushSubagentEvents, isEligibleSubagentRecipient, queueSubagentEvent } from '../ipc/subagents';
 import { SubagentState } from './manager';
 import { clearToolCallHistoryForAgentScope } from '../permissions/history';
+import { onSessionDeleted } from '../session/manager';
+import { onSessionStorageRecovered } from '../session/storage';
 
 let wired = false;
 let persistenceScheduler: ReturnType<typeof createSubagentPersistenceScheduler> | null = null;
+let removeSessionDeletionCleanup: (() => void) | null = null;
+let removeStorageRecoveryListener: (() => void) | null = null;
 
 // Re-export for callers that previously imported from this module.
 export { persistSubagentChains } from './persist-subagent-chains';
@@ -31,6 +35,12 @@ export function wireSubagentRuntime(): void {
   persistenceScheduler = createSubagentPersistenceScheduler((sessionId) => {
     persistSubagentChains(manager, sessionId);
     broadcastSubagentsChanged(sessionId);
+  });
+  removeSessionDeletionCleanup = onSessionDeleted((sessionId) => {
+    persistenceScheduler?.clear(sessionId);
+  });
+  removeStorageRecoveryListener = onSessionStorageRecovered(() => {
+    persistenceScheduler?.recoverAll();
   });
 
   manager.setOnLiveChange((change) => {
@@ -64,6 +74,26 @@ export function flushSubagentPersistence(): void {
   const manager = getSubagentManager();
   if (persistenceScheduler) persistenceScheduler.flushAll();
   else persistSubagentChains(manager);
+}
+
+/** Explicit recovery for a user retry or an external storage recovery signal. */
+export function recoverSubagentPersistence(sessionId?: string): void {
+  if (persistenceScheduler) {
+    if (sessionId) persistenceScheduler.recover(sessionId);
+    else persistenceScheduler.recoverAll();
+    return;
+  }
+  persistSubagentChains(getSubagentManager(), sessionId);
+}
+
+/** Release retry timers and lifecycle hooks after the final shutdown flush. */
+export function disposeSubagentPersistence(): void {
+  persistenceScheduler?.dispose();
+  persistenceScheduler = null;
+  removeSessionDeletionCleanup?.();
+  removeSessionDeletionCleanup = null;
+  removeStorageRecoveryListener?.();
+  removeStorageRecoveryListener = null;
 }
 
 export function broadcastSubagentsChanged(
