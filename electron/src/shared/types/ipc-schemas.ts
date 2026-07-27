@@ -228,10 +228,16 @@ export const chatSendResultSchema = z.discriminatedUnion('status', [
 
 export const toolExecuteResultSchema = toolExecutionResultSchema;
 
-export const bgCommandSnapshotResultSchema = z.object({
-  tail: z.string(),
-  exitCode: z.number().nullable(),
-});
+export const bgCommandSnapshotResultSchema = z.discriminatedUnion('found', [
+  z.object({
+    found: z.literal(true),
+    tail: z.string(),
+    exitCode: z.number().nullable(),
+  }),
+  z.object({
+    found: z.literal(false),
+  }),
+]);
 
 export const configSaveResultSchema = z.object({
   status: z.string(),

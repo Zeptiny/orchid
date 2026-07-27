@@ -1,8 +1,8 @@
 # Orchid Performance and UI Responsiveness Review
 
-**Date:** 2026-07-26  
-**Baseline:** `main` at `14a4df1`  
-**Scope:** Electron main process, renderer, streaming IPC, subagent execution, persistence, worker scheduling, cancellation, and long-lived resource retention.  
+**Date:** 2026-07-26
+**Baseline:** `main` at `14a4df1`
+**Scope:** Electron main process, renderer, streaming IPC, subagent execution, persistence, worker scheduling, cancellation, and long-lived resource retention.
 **Method:** Read-only static review with independent renderer-race, main-process performance, subagent architecture, reliability, and measurement passes. No runtime benchmark was executed, so findings distinguish directly provable work amplification from load-dependent risks that still require profiling.
 
 ## Verdict
@@ -16,7 +16,7 @@ The highest-leverage corrections are:
 3. Stop subagent-only updates from invalidating the main transcript.
 4. Fix worker cancellation/health behavior and offload the remaining unbounded synchronous operations.
 
-No P0 data-loss or security-critical performance defect was identified. This report contains **7 P1 findings** and **9 P2 findings**.
+No P0 data-loss or security-critical performance defect was identified. This report contains **7 P1 findings** and **8 P2 findings**.
 
 ## Existing safeguards to preserve
 
@@ -62,8 +62,8 @@ provider delta
 
 ### F-02 — Streaming Markdown reparses and highlights the complete prefix every frame
 
-**Severity:** P1  
-**Confidence:** High; the full parser dependency is the growing content string.  
+**Severity:** P1
+**Confidence:** High; the full parser dependency is the growing content string.
 **Primary files:**
 
 - `electron/src/renderer/components/MarkdownContent.tsx:91`
@@ -93,8 +93,8 @@ Stream 64 KB, 128 KB, and 256 KB responses containing fenced TypeScript and GFM 
 
 ### F-04 — Subagent live events rebuild and transmit complete cumulative state
 
-**Severity:** P1  
-**Confidence:** High; confirmed independently across main, IPC, and renderer.  
+**Severity:** P1
+**Confidence:** High; confirmed independently across main, IPC, and renderer.
 **Primary files:**
 
 - `electron/src/main/agents/manager.ts:768`
@@ -131,8 +131,8 @@ Run 1, 4, 8, and 16 synthetic subagents producing 100,000 small deltas each. Mea
 
 ### F-05 — Subagent checkpoints synchronously rewrite complete history
 
-**Severity:** P1  
-**Confidence:** High for write amplification; runtime pause duration requires measurement.  
+**Severity:** P1
+**Confidence:** High for write amplification; runtime pause duration requires measurement.
 **Primary files:**
 
 - `electron/src/main/agents/wire-subagents.ts:31`
@@ -169,8 +169,8 @@ Benchmark 1/4/8/16 subagents with 1 KB, 100 KB, and 1 MiB transcripts. Measure e
 
 ### F-06 — Subagent and shared-resource concurrency has no aggregate admission or fairness
 
-**Severity:** P2  
-**Confidence:** High for missing bounds; user impact is load-dependent.  
+**Severity:** P2
+**Confidence:** High for missing bounds; user impact is load-dependent.
 **Primary files:**
 
 - `electron/src/main/agents/manager.ts:247`
@@ -206,8 +206,8 @@ Saturate a size-two worker pool from multiple sessions and verify bounded queue 
 
 ### F-07 — Completed subagents and prompt context accumulate indefinitely
 
-**Severity:** P2  
-**Confidence:** Medium-high; retention is directly visible, long-term impact is load-dependent.  
+**Severity:** P2
+**Confidence:** Medium-high; retention is directly visible, long-term impact is load-dependent.
 **Primary files:**
 
 - `electron/src/main/agents/manager.ts:138`
@@ -240,8 +240,8 @@ Complete thousands of subagents, delete their sessions, and assert bounded `allR
 
 ### F-08 — Large canonical tool results remain duplicated across persistence and IPC
 
-**Severity:** P1  
-**Confidence:** High; the complete payload remains on every path.  
+**Severity:** P1
+**Confidence:** High; the complete payload remains on every path.
 **Primary files:**
 
 - `electron/src/main/llm/tool-dispatch.ts:403`
@@ -275,8 +275,8 @@ Create sessions containing 25, 50, and 100 synthetic 1 MiB tool results. Measure
 
 ### F-10 — Failed worker replacement can permanently strand queued tools
 
-**Severity:** P1  
-**Confidence:** High; replacement failure only logs.  
+**Severity:** P1
+**Confidence:** High; replacement failure only logs.
 **Primary files:**
 
 - `electron/src/main/utils/worker-pool.ts:82`
@@ -308,8 +308,8 @@ Test worker crash, failed replacement, zero remaining capacity, already-aborted 
 
 ### F-11 — `get_function` can block Electron indefinitely on large source files
 
-**Severity:** P1  
-**Confidence:** Medium-high; the operation is synchronous and unbounded.  
+**Severity:** P1
+**Confidence:** Medium-high; the operation is synchronous and unbounded.
 **Primary files:**
 
 - `electron/src/main/tools/ast/get-function.ts:45`
@@ -338,8 +338,8 @@ Run against 1 MB, 10 MB, and pathological minified files while a 16 ms main-thre
 
 ### F-12 — `rename_symbol` performs project-wide synchronous reads and durable writes
 
-**Severity:** P2  
-**Confidence:** High for blocking behavior; typical workload size is unknown.  
+**Severity:** P2
+**Confidence:** High for blocking behavior; typical workload size is unknown.
 **Primary files:**
 
 - `electron/src/main/tools/ast/rename-symbol.ts:37`
@@ -369,8 +369,8 @@ Generate indexed projects with 100, 1,000, and 10,000 referencing files. Measure
 
 ### F-13 — `web_fetch` converts and caches large HTML synchronously on the main process
 
-**Severity:** P2  
-**Confidence:** High for blocking work; impact depends on response size/shape.  
+**Severity:** P2
+**Confidence:** High for blocking work; impact depends on response size/shape.
 **Primary files:**
 
 - `electron/src/main/tools/web/fetch.ts:118`
@@ -400,8 +400,8 @@ Serve deterministic 1/5/10 MiB fixtures, including deeply nested and table-heavy
 
 ### F-14 — Every streaming frame still remaps the visible transcript
 
-**Severity:** P2  
-**Confidence:** Medium-high; scaling needs React profiling.  
+**Severity:** P2
+**Confidence:** Medium-high; scaling needs React profiling.
 **Primary files:**
 
 - `electron/src/renderer/components/ChatStream.tsx:53`
@@ -430,8 +430,8 @@ Profile 100, 1,000, 2,000, and 5,000 visible items during a fixed 60-frame strea
 
 ### F-15 — Collapsed tool results eagerly create their full hidden DOM
 
-**Severity:** P1  
-**Confidence:** High; children always mount.  
+**Severity:** P1
+**Confidence:** High; children always mount.
 **Primary files:**
 
 - `electron/src/renderer/components/ui/CollapsibleRegion.tsx:34`
@@ -460,41 +460,10 @@ Load 20 chains containing 50 large read/diff results each. Compare session-switc
 
 ---
 
-### F-17 — Historical or missing background commands can poll forever
-
-**Severity:** P2  
-**Confidence:** High; “not found” is represented as “still running.”  
-**Primary files:**
-
-- `electron/src/main/ipc/chat.ts:2008`
-- `electron/src/main/ipc/chat.ts:2015`
-- `electron/src/renderer/hooks/useLiveCommandOutput.ts:84`
-- `electron/src/renderer/hooks/useLiveCommandOutput.ts:96`
-- `electron/src/renderer/hooks/useLiveCommandOutput.ts:142`
-
-**Evidence and impact**
-
-When a command is absent after restart, eviction, or session mismatch, snapshot IPC returns `{ tail: '', exitCode: null }`. The renderer interprets `exitCode: null` as still running and polls every 200 ms indefinitely.
-
-Each stale widget adds five IPC round trips per second. Large histories can steadily degrade both processes without any visible progress.
-
-**Recommended fix**
-
-1. Make the snapshot response discriminated: `{ found: false }` or `{ found: true, tail, exitCode }`.
-2. Stop polling immediately on `found: false` and render a historical/unavailable state.
-3. Poll only visible or expanded command widgets.
-4. Consider centralizing polling so multiple widgets share one bounded scheduler.
-
-**Verification**
-
-Persist a background-command widget, restart with an empty store, mount the history, and assert that polling stops after the first not-found response.
-
----
-
 ### F-18 — RAG download/body stalls can hold indexing indefinitely
 
-**Severity:** P2  
-**Confidence:** High for missing deadlines.  
+**Severity:** P2
+**Confidence:** High for missing deadlines.
 **Primary files:**
 
 - `electron/src/main/rag/embedder.ts:272`
@@ -521,8 +490,8 @@ Use fetch fixtures that return headers and then never yield a body. Assert bound
 
 ### F-19 — Retry backoff can issue new provider attempts after cancellation
 
-**Severity:** P2  
-**Confidence:** Medium-high; backoff sleep is not abortable.  
+**Severity:** P2
+**Confidence:** Medium-high; backoff sleep is not abortable.
 **Primary files:**
 
 - `electron/src/main/llm/middleware/retry.ts:112`
@@ -552,8 +521,8 @@ Force a transient failure, abort during backoff, advance fake timers, and assert
 
 ### F-20 — Permanent subagent persistence failures retry forever
 
-**Severity:** P2  
-**Confidence:** High; retries have no terminal state.  
+**Severity:** P2
+**Confidence:** High; retries have no terminal state.
 **Primary files:**
 
 - `electron/src/main/agents/persist-subagent-chains.ts:40`
@@ -591,12 +560,6 @@ These items were not promoted to primary findings because impact or provider beh
 - Missing RAG/AST/tool-worker bundles fall back to inline execution. The degraded state is logged but not surfaced to the user.
 
 ## Recommended implementation order
-
-### Batch 1 — Low-risk, immediate amplification fixes
-
-1. F-17: stop polling missing background commands.
-
-These changes are comparatively localized and should reduce unnecessary work without changing stored data formats.
 
 ### Batch 2 — Renderer streaming and hydration
 

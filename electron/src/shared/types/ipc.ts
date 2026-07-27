@@ -301,12 +301,19 @@ export interface BgCommandSnapshotRequest {
   sessionId?: string;
 }
 
-export interface BgCommandSnapshotResult {
-  /** Tail output text. */
-  tail: string;
-  /** Exit code (null if still running). */
-  exitCode: number | null;
-}
+export type BgCommandSnapshotResult =
+  | {
+    /** The command exists and is visible to the requesting session. */
+    found: true;
+    /** Tail output text. */
+    tail: string;
+    /** Exit code (null if still running). */
+    exitCode: number | null;
+  }
+  | {
+    /** The command is unavailable after restart, eviction, or session mismatch. */
+    found: false;
+  };
 
 // ── Config API ───────────────────────────────────────────────────────────────
 

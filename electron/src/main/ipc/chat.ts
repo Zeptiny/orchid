@@ -2034,17 +2034,17 @@ export function registerChatIPC(): void {
     const sessionId =
       requestedSessionId ?? getSessionManager().getActive(windowId)?.id ?? null;
     if (!sessionId) {
-      return { tail: '', exitCode: null };
+      return { found: false };
     }
 
     const store = getBackgroundStore();
     // Session ownership only — include main and subagent-scoped bgcmds.
     const snap = store.snapshotForSession(commandId, lastN ?? 50, sessionId);
     if (!snap) {
-      return { tail: '', exitCode: null };
+      return { found: false };
     }
 
-    return snap;
+    return { found: true, ...snap };
   });
 }
 

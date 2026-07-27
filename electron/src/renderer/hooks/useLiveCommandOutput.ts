@@ -15,6 +15,8 @@ export interface LiveCommandState {
   exitCode: number | null;
   /** Whether the command is still running. */
   isRunning: boolean;
+  /** Whether the command is still available in the current process and session. */
+  isAvailable: boolean;
 }
 
 // ── Constants ────────────────────────────────────────────────────────────────
@@ -38,6 +40,7 @@ export function useLiveCommandOutput(
   const [output, setOutput] = useState('');
   const [exitCode, setExitCode] = useState<number | null>(null);
   const [isRunning, setIsRunning] = useState(true);
+  const [isAvailable, setIsAvailable] = useState(true);
 
   // Track accumulated output for delta computation (matches Python pattern)
   const accumulatedRef = useRef('');
@@ -72,6 +75,7 @@ export function useLiveCommandOutput(
     setOutput('');
     setExitCode(null);
     setIsRunning(true);
+    setIsAvailable(true);
   }, [commandId]);
 
   const poll = useCallback(async () => {
@@ -86,11 +90,21 @@ export function useLiveCommandOutput(
         lastN: MAX_LINES,
       });
 
-      if (!snap) return;
-
       // P2 #8: Bail if component unmounted or commandId changed during await
       if (!mountedRef.current) return;
       if (activeCommandIdRef.current !== commandId) return;
+
+      if (!snap.found) {
+        if (intervalRef.current) {
+          clearInterval(intervalRef.current);
+          intervalRef.current = null;
+        }
+        setIsAvailable(false);
+        setIsRunning(false);
+        return;
+      }
+
+      setIsAvailable(true);
 
       // Update exit code and running state
       if (snap.exitCode !== null) {
@@ -157,5 +171,5 @@ export function useLiveCommandOutput(
     }
   }, [isRunning]);
 
-  return { output, exitCode, isRunning };
+  return { output, exitCode, isRunning, isAvailable };
 }

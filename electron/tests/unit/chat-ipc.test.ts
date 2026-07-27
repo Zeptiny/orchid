@@ -1546,7 +1546,7 @@ describe('chat IPC teardown and bgcmd bounds', () => {
       { sender: { id: 912, send: vi.fn() } },
       { commandId: 999_999, lastN: 1000 },
     );
-    expect(result).toEqual({ tail: '', exitCode: null });
+    expect(result).toEqual({ found: false });
   });
 
   it('bgcmd:snapshot denies cross-session command tails (M-P1-001)', async () => {
@@ -1572,13 +1572,13 @@ describe('chat IPC teardown and bgcmd bounds', () => {
       { sender: { id: 913, send: vi.fn() } },
       { commandId: 42, lastN: 50 },
     );
-    expect(denied).toEqual({ tail: '', exitCode: null });
+    expect(denied).toEqual({ found: false });
 
     const allowed = await snap(
       { sender: { id: 913, send: vi.fn() } },
       { commandId: 42, lastN: 50, sessionId: ownerSession },
     );
-    expect(allowed).toEqual({ tail: 'secret-output\n', exitCode: 0 });
+    expect(allowed).toEqual({ found: true, tail: 'secret-output\n', exitCode: 0 });
   });
 
   it('bgcmd:snapshot allows subagent-scoped tails within the same session', async () => {
@@ -1602,7 +1602,7 @@ describe('chat IPC teardown and bgcmd bounds', () => {
       { sender: { id: 914, send: vi.fn() } },
       { commandId: 43, lastN: 50 },
     );
-    expect(result).toEqual({ tail: 'subagent-output\n', exitCode: null });
+    expect(result).toEqual({ found: true, tail: 'subagent-output\n', exitCode: null });
   });
 });
 

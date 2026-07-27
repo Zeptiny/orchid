@@ -44,9 +44,9 @@ export function LiveCommandInline({
   }, []);
 
   // Poll for live output
-  const { output, exitCode, isRunning } = useLiveCommandOutput(
+  const { output, exitCode, isRunning, isAvailable } = useLiveCommandOutput(
     commandId,
-    true, // always enabled when component mounts
+    expanded,
   );
 
   // Build title: matches Python's _build_title()
@@ -56,13 +56,16 @@ export function LiveCommandInline({
         ? `$ ${commandText}`
         : description || `Command #${commandId}`;
 
+    if (!isAvailable) {
+      return `${cmdDisplay} (unavailable)`;
+    }
     if (!isRunning) {
       const status =
         exitCode !== null ? `exit ${exitCode}` : 'exited';
       return `${cmdDisplay} (${status})`;
     }
     return `${cmdDisplay} (running)`;
-  }, [commandId, commandText, description, isRunning, exitCode]);
+  }, [commandId, commandText, description, isRunning, isAvailable, exitCode]);
 
   // Compute visible output (last N lines)
   const displayOutput = useMemo(() => {
@@ -84,7 +87,7 @@ export function LiveCommandInline({
         <span className="font-mono text-xs min-w-0 truncate">{title}</span>
         <span className="inline-flex shrink-0 items-center gap-1.5">
           <span key={isRunning ? 'running' : `exit-${exitCode ?? 'unknown'}`} className="orchid-tool-lifecycle-icon">
-            {isRunning && <Spinner size="xs" variant="dots" />}
+            {isRunning && isAvailable && <Spinner size="xs" variant="dots" />}
             {!isRunning && exitCode === 0 && <StatusBadge tone="success" size="xs">ok</StatusBadge>}
             {!isRunning && exitCode !== null && exitCode !== 0 && <StatusBadge tone="error" size="xs">fail</StatusBadge>}
           </span>
@@ -93,7 +96,9 @@ export function LiveCommandInline({
       <CollapsibleRegion open={expanded} id={panelId}>
         <div className="orchid-live-command-body">
           <pre className="orchid-live-command-pre">
-            {displayOutput || (isRunning ? '(waiting for output...)' : '(no output)')}
+            {displayOutput || (!isAvailable
+              ? '(background command is no longer available)'
+              : isRunning ? '(waiting for output...)' : '(no output)')}
           </pre>
           {!isRunning && exitCode !== null && (
             <div className="orchid-live-command-exit">
