@@ -43,9 +43,11 @@ export function LiveCommandInline({
     setExpanded((prev) => !prev);
   }, []);
 
-  // Poll for live output
+  // Keep lifecycle status current while collapsed, but refresh the output tail
+  // only while the command body is visible.
   const { output, exitCode, isRunning, isAvailable } = useLiveCommandOutput(
     commandId,
+    true,
     expanded,
   );
 

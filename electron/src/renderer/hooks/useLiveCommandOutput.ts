@@ -30,12 +30,14 @@ const MAX_LINES = 50;
  * Polls a background command's output.
  *
  * @param commandId The background command ID (from the tool result content).
- * @param enabled Whether polling should be active.
+ * @param enabled Whether status polling should be active.
+ * @param refreshOutput Whether tail output should refresh while polling.
  * @returns Current output state.
  */
 export function useLiveCommandOutput(
   commandId: number | null,
   enabled: boolean,
+  refreshOutput = enabled,
 ): LiveCommandState {
   const [output, setOutput] = useState('');
   const [exitCode, setExitCode] = useState<number | null>(null);
@@ -44,6 +46,10 @@ export function useLiveCommandOutput(
 
   // Track accumulated output for delta computation (matches Python pattern)
   const accumulatedRef = useRef('');
+  // Status polling stays active while collapsed, but only publish tail changes
+  // when the consumer currently wants them rendered.
+  const refreshOutputRef = useRef(refreshOutput);
+  refreshOutputRef.current = refreshOutput;
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   // Prevent overlapping async polls (IPC > POLL_INTERVAL_MS) from reordering deltas
   const isPollingRef = useRef(false);
@@ -108,9 +114,15 @@ export function useLiveCommandOutput(
 
       // Update exit code and running state
       if (snap.exitCode !== null) {
+        if (intervalRef.current) {
+          clearInterval(intervalRef.current);
+          intervalRef.current = null;
+        }
         setExitCode(snap.exitCode);
         setIsRunning(false);
       }
+
+      if (!refreshOutputRef.current) return;
 
       // Compute delta from accumulated content (Python pattern)
       const tailText = snap.tail;
@@ -162,6 +174,12 @@ export function useLiveCommandOutput(
       }
     };
   }, [enabled, commandId, poll]);
+
+  // A command may finish while collapsed (and stop the status interval), so
+  // reopening explicitly refreshes its final output tail once.
+  useEffect(() => {
+    if (enabled && refreshOutput) void poll();
+  }, [enabled, refreshOutput, poll]);
 
   // Stop polling when command finishes
   useEffect(() => {
