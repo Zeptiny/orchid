@@ -730,6 +730,13 @@ export class SubagentManager {
     const messages: Message[] = [...(record.chain?.messages ?? [])];
     let responseText = '';
     let resultText = '';
+    // Per-step text tracking so the returned result is the subagent's last
+    // message rather than the concatenation of every step's narration.
+    // `stepText` accumulates the current step; `lastStepResult` remembers the
+    // most recent step that produced text (so a trailing tool-only step does
+    // not blank out the answer).
+    let stepText = '';
+    let lastStepResult = '';
     let accumulatedUsage: Usage | null = null;
     // Track open tool calls for result pairing in the chain
     const toolNames = new Map<string, string>();
@@ -761,6 +768,7 @@ export class SubagentManager {
           case 'content': {
             responseText += event.text;
             resultText += event.text;
+            stepText += event.text;
             this._appendLiveText(record, 'text', event.text);
             break;
           }
@@ -853,8 +861,12 @@ export class SubagentManager {
           case 'error': {
             throw new Error(event.detail || event.title || 'Subagent stream error');
           }
+          case 'step_finish': {
+            if (stepText.trim()) lastStepResult = stepText;
+            stepText = '';
+            break;
+          }
           case 'finish':
-          case 'step_finish':
           default:
             break;
         }
@@ -875,7 +887,11 @@ export class SubagentManager {
       // IDs become message IDs so a durable handoff cannot duplicate bubbles.
       this._commitLiveSegments(record, messages, record.live.segments.length, accumulatedUsage);
 
-      record.result = resultText || record.result;
+      // Prefer the last step's text (the subagent's final message). Fall back
+      // to the full accumulation when no step boundary was observed (e.g. the
+      // textStream fallback path, which does not emit step_finish).
+      const finalStepText = stepText.trim() ? stepText : lastStepResult;
+      record.result = finalStepText || resultText || record.result;
       record.usage = accumulatedUsage;
       this._setChainMessages(record, messages);
       this._markLiveCommitted(record);

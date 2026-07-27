@@ -12,7 +12,6 @@ import { RiskClass } from '../../../shared/types/permission';
 import { resolveToolPath } from '../types';
 import {
   renderXmlToolResult,
-  xmlTextElement,
   escapeXmlText,
   escapeXmlAttribute,
   projectionWithCanonicalCompleteness,
@@ -83,33 +82,7 @@ const applyPatchAgentProjector: AgentProjector = (canonical, toolName = 'apply_p
       return `<file${attrString}>\n<error code="${escapeXmlAttribute(file.error.code)}">${escapeXmlText(file.error.message)}</error>\n</file>`;
     }
 
-    if (!file.fileChange) {
-      return `<file${attrString}>\n</file>`;
-    }
-
-    const oldParts: string[] = [];
-    const newParts: string[] = [];
-    for (const hunk of file.fileChange.hunks) {
-      for (const line of hunk.lines) {
-        if (line.kind === 'context') {
-          oldParts.push(line.content);
-          newParts.push(line.content);
-        } else if (line.kind === 'remove') {
-          oldParts.push(line.content);
-        } else {
-          newParts.push(line.content);
-        }
-      }
-    }
-
-    const bodyParts: string[] = [];
-    if (oldParts.length > 0) bodyParts.push(xmlTextElement('old_string', oldParts.join('\n')));
-    if (newParts.length > 0) bodyParts.push(xmlTextElement('new_string', newParts.join('\n')));
-
-    if (bodyParts.length === 0) {
-      return `<file${attrString}>\n</file>`;
-    }
-    return `<file${attrString}>\n${bodyParts.join('\n')}\n</file>`;
+    return `<file${attrString} />`;
   });
 
   const body = [summary, ...fileSections].join('\n');

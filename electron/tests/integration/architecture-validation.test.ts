@@ -340,6 +340,57 @@ describe('Architecture Properties (real modules)', () => {
       expect(manager.getRecord(a.id)?.state).toBe(SubagentState.COMPLETED);
       expect(manager.getRecord(b.id)?.state).toBe(SubagentState.COMPLETED);
     });
+
+    it('returns only the last step text as the result, not full narration', async () => {
+      const manager = new SubagentManager();
+      manager.setRunner(async function* (): AsyncGenerator<StreamEvent> {
+        yield { type: 'content', text: 'Let me search the codebase.' };
+        yield { type: 'step_finish', stepIndex: 0, finishReason: 'tool-calls' };
+        yield { type: 'content', text: 'Reading the file now.' };
+        yield { type: 'step_finish', stepIndex: 1, finishReason: 'tool-calls' };
+        yield { type: 'content', text: 'Here is the final answer.' };
+        yield { type: 'step_finish', stepIndex: 2, finishReason: 'stop' };
+        yield { type: 'finish', finishReason: 'stop' };
+      });
+
+      const record = manager.spawn('s', 'multi-step task', testAgent);
+      await manager.wait([record.id]);
+
+      const result = manager.getRecord(record.id)?.result;
+      expect(result).toBe('Here is the final answer.');
+      expect(result).not.toContain('Let me search');
+      expect(result).not.toContain('Reading the file');
+    });
+
+    it('keeps the last text-bearing step when the final step is tool-only', async () => {
+      const manager = new SubagentManager();
+      manager.setRunner(async function* (): AsyncGenerator<StreamEvent> {
+        yield { type: 'content', text: 'The answer is 42.' };
+        yield { type: 'step_finish', stepIndex: 0, finishReason: 'tool-calls' };
+        // Trailing step performs a tool call and emits no text.
+        yield { type: 'step_finish', stepIndex: 1, finishReason: 'stop' };
+        yield { type: 'finish', finishReason: 'stop' };
+      });
+
+      const record = manager.spawn('s', 'trailing tool task', testAgent);
+      await manager.wait([record.id]);
+
+      expect(manager.getRecord(record.id)?.result).toBe('The answer is 42.');
+    });
+
+    it('falls back to full accumulation when no step boundaries are emitted', async () => {
+      const manager = new SubagentManager();
+      manager.setRunner(async function* (): AsyncGenerator<StreamEvent> {
+        yield { type: 'content', text: 'hello ' };
+        yield { type: 'content', text: 'world' };
+        yield { type: 'finish', finishReason: 'stop' };
+      });
+
+      const record = manager.spawn('s', 'no-step task', testAgent);
+      await manager.wait([record.id]);
+
+      expect(manager.getRecord(record.id)?.result).toBe('hello world');
+    });
   });
 
   describe('3. Responsive control during stream', () => {

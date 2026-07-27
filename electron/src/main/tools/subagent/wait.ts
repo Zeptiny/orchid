@@ -81,23 +81,23 @@ function formatRecordXml(sid: string, record: SubagentRecord): string {
     '" status="' + escapeXmlAttribute(status) + '"' +
     (elapsed !== null ? ' elapsed="' + escapeXmlAttribute(formatElapsed(elapsed)) + '"' : '');
 
-  const taskBlock = record.task
-    ? '<task>' + escapeXmlText(record.task) + '</task>'
-    : '';
-
+  // The task is intentionally omitted: it already lives in the delegate
+  // tool-call args (message history) and is re-injected every turn via the
+  // dynamic system prompt's <subagents> section. Re-sending it here would
+  // duplicate it on every wait call.
   if (record.pendingQuestion) {
-    return '<subagent ' + attrs + '>' + taskBlock +
+    return '<subagent ' + attrs + '>' +
       formatPendingQuestion(record.pendingQuestion) + '</subagent>';
   }
   if (record.result) {
-    return '<subagent ' + attrs + '>' + taskBlock +
+    return '<subagent ' + attrs + '>' +
       '<result>' + escapeXmlText(record.result) + '</result></subagent>';
   }
   if (record.error) {
-    return '<subagent ' + attrs + '>' + taskBlock +
+    return '<subagent ' + attrs + '>' +
       '<error>' + escapeXmlText(record.error) + '</error></subagent>';
   }
-  return '<subagent ' + attrs + '>' + taskBlock + '</subagent>';
+  return '<subagent ' + attrs + '></subagent>';
 }
 
 function formatSubagentRecords(
