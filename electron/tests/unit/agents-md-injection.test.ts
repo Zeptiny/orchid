@@ -226,6 +226,41 @@ describe('buildAgentsMdInjection', () => {
     expect(refreshed!.xml).toContain('version two');
   });
 
+  it('excludes the root tier from re-injection even when it changes, but re-injects a changed nested file (F5/R4/R16)', () => {
+    const rootFile = write('AGENTS.md', 'root instructions');
+    const nestedFile = write('pkg/AGENTS.md', 'nested one');
+    write('pkg/x.ts', 'code');
+    const config = agentsConfig();
+    const args = { file_path: 'pkg/x.ts' };
+
+    // Seed the root (U3) and mark the nested file seen, so only changes surface.
+    const chain = resolveAgentsMdChain('pkg/x.ts', workspace, config);
+    const rootEntry = chain.find((entry) => entry.tier === 'root');
+    const nestedEntry = chain.find((entry) => entry.tier === 'nested');
+    expect(rootEntry).toBeDefined();
+    expect(nestedEntry).toBeDefined();
+    store.seedRoot(rootEntry!);
+    store.markSeen(nestedEntry!);
+
+    // Bump BOTH files' mtimes on disk mid-turn.
+    const future = new Date(Date.now() + 60_000);
+    fs.writeFileSync(rootFile, 'root instructions (changed)', 'utf-8');
+    fs.utimesSync(rootFile, future, future);
+    fs.writeFileSync(nestedFile, 'nested two', 'utf-8');
+    fs.utimesSync(nestedFile, future, future);
+
+    const injection = buildAgentsMdInjection('read', args, workspace, config, store);
+
+    // The changed nested file re-injects (R16)...
+    expect(injection).not.toBeNull();
+    expect(injection!.xml).toContain('nested two');
+    expect(injection!.injected).toHaveLength(1);
+    expect(injection!.injected[0]?.tier).toBe('nested');
+    // ...but the changed root is never re-injected by the nested mechanism (R4/F5).
+    expect(injection!.xml).not.toContain('tier="root"');
+    expect(injection!.xml).not.toContain('root instructions (changed)');
+  });
+
   it('escapes XML metacharacters in rendered content', () => {
     write('pkg/AGENTS.md', '<script> & "quotes" >');
     write('pkg/x.ts', 'code');

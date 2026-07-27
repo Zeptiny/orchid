@@ -105,7 +105,10 @@ export function buildAgentsMdInjection(
     : resolvedPath;
 
   const chain = resolveAgentsMdChain(resolvedTarget, cwd, config);
-  const fresh = store.unseen(chain);
+  // The root tier lives in the static system prompt and is never re-injected by
+  // the nested mechanism (R4), even if it changes on disk mid-turn; only nested
+  // files re-inject on change (R16).
+  const fresh = store.unseen(chain.filter((entry) => entry.tier !== 'root'));
   if (fresh.length === 0) return null;
 
   const maxBytes = config.agents_md.max_file_bytes;

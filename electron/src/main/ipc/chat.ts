@@ -1275,10 +1275,20 @@ export function registerChatIPC(): void {
         skills: new Map(runtime.skills),
         mcpManager,
       });
+      // Root AGENTS.md injection is non-fatal: an fs/config failure falls back
+      // to the un-augmented prompt rather than failing the whole turn (the
+      // adjacent tracker seeding is already non-fatal).
+      const personalityPrompt = appendProjectPersonality(baseSystemPrompt, runtime);
+      let fullSystemPrompt = personalityPrompt;
+      try {
+        fullSystemPrompt = appendRootAgentsMd(personalityPrompt, runtime);
+      } catch (err) {
+        console.debug('root AGENTS.md injection failed (non-fatal):', err);
+      }
       actor = createActor(agentMachine, {
         input: {
           agent,
-          systemPrompt: appendRootAgentsMd(appendProjectPersonality(baseSystemPrompt, runtime), runtime),
+          systemPrompt: fullSystemPrompt,
           streamFn: createProviderStreamFn({
             messages,
             runtime,

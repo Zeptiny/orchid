@@ -48,6 +48,7 @@ import {
   evaluateAgentsMdEnforcement,
   type AgentsMdEnforcement,
 } from '../agents-md/enforce';
+import { statAgentsMdEntry } from '../agents-md/resolver';
 import type { AgentsMdContextStore } from '../session/agents-md-context';
 import { withTimeout as sharedWithTimeout } from '../utils/async';
 import { checkPermission } from '../permissions/gate';
@@ -263,24 +264,38 @@ export async function executeToolCall(
   // AGENTS.md write enforcement — Phase A (pre-handler). Evaluates the governing
   // chain for the five file mutators and, under the `block` policy, short-circuits
   // with a terminal denial before the handler runs. Other policies carry the
-  // verdict forward to Phase B (post-handler) via `agentsMdWrite`.
-  const agentsMdWrite = evaluateAgentsMdWriteEnforcement(
-    request,
-    options,
-    args as Record<string, unknown>,
-  );
-  if (
-    agentsMdWrite !== null &&
-    agentsMdWrite.enforcement.policy === 'block' &&
-    agentsMdWrite.enforcement.unseen.length > 0
-  ) {
-    return genericTerminalExecution(
-      toolCallId,
-      name,
-      'error',
-      buildAgentsMdBlockMessage(agentsMdWrite.enforcement.unseen),
-      'agents_md_not_in_context',
+  // verdict forward to Phase B (post-handler) via `agentsMdWrite`. Wrapped so an
+  // enforcement failure (e.g. a partial config) degrades to no enforcement and
+  // never breaks the tool call.
+  let agentsMdWrite: AgentsMdWriteVerdict | null = null;
+  try {
+    agentsMdWrite = evaluateAgentsMdWriteEnforcement(
+      request,
+      options,
+      args as Record<string, unknown>,
     );
+    if (
+      agentsMdWrite !== null &&
+      agentsMdWrite.enforcement.policy === 'block' &&
+      agentsMdWrite.enforcement.unseen.length > 0
+    ) {
+      return genericTerminalExecution(
+        toolCallId,
+        name,
+        'error',
+        buildAgentsMdBlockMessage(agentsMdWrite.enforcement.unseen),
+        'agents_md_not_in_context',
+      );
+    }
+  } catch (error) {
+    // Degrade to no enforcement. `agentsMdWrite` keeps its null initializer:
+    // the only realistic throw is inside the evaluation, before assignment.
+    console.warn('[tool-dispatch] AGENTS.md write enforcement failed', {
+      toolCallId,
+      toolName: name,
+      stage: 'phase-a',
+      exceptionClass: error instanceof Error ? error.constructor.name : 'Unknown',
+    });
   }
 
   // Timeout AbortController — aborted by runWithToolTimeout so foreground
@@ -728,13 +743,16 @@ function evaluateAgentsMdWriteEnforcement(
 
 /**
  * AGENTS.md write enforcement — Phase B (post-handler). Runs after the agent
- * projection is finalized, next to the read-path injection. Refreshes tracker
- * entries for any instruction file the mutation edited (R10), then augments the
- * projection per policy: `warn` appends a warning naming the unseen files
- * (without marking them seen); `inject` appends their byte-capped content and
- * marks them seen. `block` only reaches here when nothing was unseen (the
- * non-empty case short-circuited in Phase A). Any failure degrades to the
- * unmodified result and never breaks the tool result.
+ * projection is finalized, next to the read-path injection. Skips failed or
+ * cancelled mutations (nothing was written, so neither warn nor refresh — F8).
+ * Refreshes tracker entries for any instruction file the mutation edited or
+ * created by re-statting each target POST-write so the recorded mtime matches
+ * what landed on disk (R10/F6), then augments the projection per policy: `warn`
+ * appends a warning naming the unseen files (without marking them seen);
+ * `inject` appends their byte-capped content and marks them seen. `block` only
+ * reaches here when nothing was unseen (the non-empty case short-circuited in
+ * Phase A). Any failure degrades to the unmodified result and never breaks the
+ * tool result.
  */
 function maybeEnforceAgentsMdOnWrite(
   execution: ToolExecutionResult,
@@ -743,18 +761,33 @@ function maybeEnforceAgentsMdOnWrite(
   verdict: AgentsMdWriteVerdict | null,
 ): ToolExecutionResult {
   if (verdict === null) return execution;
+  // A failed/cancelled mutation wrote nothing: the "you modified files…" warning
+  // would be factually wrong and there is no new on-disk state to record (F8).
+  if (
+    execution.canonical.status === 'error' ||
+    execution.canonical.status === 'cancelled'
+  ) {
+    return execution;
+  }
   try {
     const { enforcement, store } = verdict;
+    const config = options.projectRuntime?.config ?? FALLBACK_CONFIG;
 
-    // R10 refresh: editing an instruction file puts its new content in context.
-    enforcement.editedInstructionFiles.forEach((entry) => store.markSeen(entry));
+    // R10 refresh: re-stat each instruction-file target POST-write and record the
+    // fresh entry. Edited files now carry their bumped mtime; newly created files
+    // now exist. Phase A's pre-write entries are stale and deliberately unused.
+    if (options.cwd) {
+      for (const rawPath of enforcement.instructionFileTargets) {
+        const freshEntry = statAgentsMdEntry(rawPath, options.cwd, config);
+        if (freshEntry !== null) store.markSeen(freshEntry);
+      }
+    }
 
     let xml = '';
     if (enforcement.unseen.length > 0) {
       if (enforcement.policy === 'warn') {
         xml = buildAgentsMdWarningBlock(enforcement.unseen);
       } else if (enforcement.policy === 'inject') {
-        const config = options.projectRuntime?.config ?? FALLBACK_CONFIG;
         xml = buildAgentsMdInjectBlock(enforcement.unseen, config);
         enforcement.unseen.forEach((entry) => store.markSeen(entry));
       }

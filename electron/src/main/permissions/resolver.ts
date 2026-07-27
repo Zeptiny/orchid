@@ -16,8 +16,14 @@ import type { Config, PermissionRule } from '../../shared/types/ipc-boundary';
 // working without duplicating the definitions here.
 export { RISK_CLASS_DEFAULTS, FILE_TOOLS, FILE_TOOL_DEFAULTS };
 
-const PATCH_FILE_PATTERN = /^\*\*\* (?:Add|Update|Delete) File: (.+)$/gm;
-const PATCH_MOVE_TO_PATTERN = /^\*\*\* Move to: (.+)$/gm;
+// The real apply-patch parser trims lines before matching the header markers,
+// so an indented `   *** Add File: pkg/x.ts` is a valid header. Allow optional
+// leading spaces/tabs here too, otherwise such a header evades path extraction
+// (and thus write enforcement + permission scope detection). This errs toward
+// stricter: a header-looking context line only yields a false-positive path
+// (stricter scope/enforcement), never a new bypass.
+const PATCH_FILE_PATTERN = /^[ \t]*\*\*\* (?:Add|Update|Delete) File: (.+)$/gm;
+const PATCH_MOVE_TO_PATTERN = /^[ \t]*\*\*\* Move to: (.+)$/gm;
 
 export function extractPathsFromArgs(
   toolName: string,

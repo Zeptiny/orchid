@@ -184,10 +184,20 @@ export function createSubagentStreamRunner(): SubagentStreamRunner {
         .map((tool) => tool.definition.name)
         .filter((name) => !SUBAGENT_FORBIDDEN_TOOLS.has(name));
       const agentForRun: Agent = { ...params.agent, allowed_tools: allowedTools };
+      // Root AGENTS.md injection is non-fatal: an fs/config failure falls back
+      // to the un-augmented prompt rather than failing the delegation (the
+      // adjacent tracker seeding is already non-fatal).
+      const basePrompt = params.agent.system_prompt || 'You are a helpful assistant.';
+      let fullPrompt = basePrompt;
+      try {
+        fullPrompt = appendRootAgentsMd(basePrompt, runtime);
+      } catch (err) {
+        console.debug('root AGENTS.md injection failed (non-fatal):', err);
+      }
       yield* streamChat({
         messages: [makeUserMessage(params.task)],
         agent: agentForRun,
-        systemPrompt: appendRootAgentsMd(params.agent.system_prompt || 'You are a helpful assistant.', runtime),
+        systemPrompt: fullPrompt,
         context,
         config,
         registry,

@@ -10,6 +10,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import type { Config } from '../config/schema';
+import { resolveToolPath } from '../tools/types';
 import { effectiveAgentsMdFilenames } from './config';
 
 /** A single governing instruction file discovered during the upward walk. */
@@ -87,6 +88,23 @@ function canonicalizeExistingPath(candidate: string): string | null {
   }
 }
 
+// The cwd is frozen per turn, so canonicalizing it on every file-tool call
+// repeats a blocking fs.realpathSync.native on the main-process event loop
+// (amplified N× across an apply_patch's files). Memoize the result in a small
+// bounded cache keyed by the resolved cwd, mirroring permissions/resolver.ts.
+// Per-target symlink resolution (canonicalizeEffectivePath) stays live.
+const canonicalPathCache = new Map<string, string | null>();
+const CANONICAL_CACHE_MAX = 256;
+
+function canonicalizeExistingPathCached(candidate: string): string | null {
+  const key = path.resolve(candidate);
+  if (canonicalPathCache.has(key)) return canonicalPathCache.get(key) ?? null;
+  const result = canonicalizeExistingPath(key);
+  if (canonicalPathCache.size >= CANONICAL_CACHE_MAX) canonicalPathCache.clear();
+  canonicalPathCache.set(key, result);
+  return result;
+}
+
 // ---------------------------------------------------------------------------
 // Per-directory instruction-file lookup
 // ---------------------------------------------------------------------------
@@ -115,7 +133,11 @@ function findInstructionFile(
 
   for (const filename of filenames) {
     const lower = filename.toLowerCase();
-    const onDisk = dirEntries.find((entry) => entry.toLowerCase() === lower);
+    // Prefer an exact-case match for determinism when both `AGENTS.md` and
+    // `agents.md` coexist on a case-sensitive FS; fall back to case-insensitive.
+    const onDisk =
+      dirEntries.find((entry) => entry === filename) ??
+      dirEntries.find((entry) => entry.toLowerCase() === lower);
     if (onDisk === undefined) continue;
 
     let canonical: string;
@@ -158,7 +180,7 @@ export function resolveAgentsMdChain(
   cwd: string,
   config: Config,
 ): AgentsMdEntry[] {
-  const canonicalCwd = canonicalizeExistingPath(cwd);
+  const canonicalCwd = canonicalizeExistingPathCached(cwd);
   if (canonicalCwd === null) return [];
 
   const canonicalTarget = canonicalizeEffectivePath(path.resolve(cwd, targetPath));
@@ -190,6 +212,43 @@ export function resolveAgentsMdChain(
   }
 
   return entries;
+}
+
+/**
+ * Stat an existing instruction file and build a fresh `AgentsMdEntry` for it
+ * (current mtime/size, tier from whether its containing directory is the
+ * workspace root, displayPath relative to cwd). Returns null when the path does
+ * not exist, is not a file, or escapes cwd. The dispatcher uses this to refresh
+ * the tracker with the POST-write state of an edited/created instruction file
+ * (R10), so the recorded mtime matches what the handler just wrote to disk.
+ */
+export function statAgentsMdEntry(
+  rawPath: string,
+  cwd: string,
+  config: Config,
+): AgentsMdEntry | null {
+  void config;
+  const canonicalCwd = canonicalizeExistingPathCached(cwd);
+  if (canonicalCwd === null) return null;
+
+  let canonical: string;
+  let stat: fs.Stats;
+  try {
+    canonical = fs.realpathSync.native(resolveToolPath(cwd, rawPath));
+    stat = fs.statSync(canonical);
+  } catch {
+    return null;
+  }
+  if (!stat.isFile()) return null;
+  if (!isPathContainedIn(canonical, canonicalCwd)) return null;
+
+  return {
+    path: canonical,
+    displayPath: path.relative(canonicalCwd, canonical),
+    tier: path.dirname(canonical) === canonicalCwd ? 'root' : 'nested',
+    sizeBytes: stat.size,
+    mtimeMs: stat.mtimeMs,
+  };
 }
 
 /**

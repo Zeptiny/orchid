@@ -42,8 +42,15 @@ export interface AgentsMdEnforcement {
   policy: AgentsMdEnforcePolicy;
   /** Governing files not yet in context (R10-exempt, de-duped, order preserved). */
   unseen: AgentsMdEntry[];
-  /** Target files that are themselves instruction files (R10 tracker refresh). */
+  /** Target files that are themselves instruction files (R10 exemption set). */
   editedInstructionFiles: AgentsMdEntry[];
+  /**
+   * Raw arg paths that are themselves instruction files (basename matches a
+   * configured alias). Computed from the ARGS, not the disk, so it includes
+   * not-yet-created files. Phase B re-stats each post-write to refresh the
+   * tracker with the fresh mtime/size (R10).
+   */
+  instructionFileTargets: string[];
 }
 
 /**
@@ -84,25 +91,33 @@ export function evaluateAgentsMdEnforcement(
 
   const rawPaths = extractPathsFromArgs(toolName, args);
 
-  // Canonical paths of targets that are themselves instruction files (R10).
+  // Case-insensitive instruction-file basenames for R10 detection.
   const instructionFilenames = new Set(
     effectiveAgentsMdFilenames(config).map((name) => name.toLowerCase()),
   );
-  const editedTargetPaths = new Set<string>();
-  for (const rawPath of rawPaths) {
-    if (!instructionFilenames.has(path.basename(rawPath).toLowerCase())) continue;
-    const canonical = canonicalizeTarget(rawPath, cwd);
-    if (canonical !== null) editedTargetPaths.add(canonical);
-  }
+
+  // Raw arg paths that are themselves instruction files (R10). Computed from the
+  // ARGS (not the disk) so not-yet-created files are included; Phase B re-stats
+  // each post-write to refresh the tracker with the fresh mtime/size.
+  const instructionFileTargets = rawPaths.filter((rawPath) =>
+    instructionFilenames.has(path.basename(rawPath).toLowerCase()),
+  );
 
   // Aggregate governing chains across all targets, de-duped by canonical path.
+  // The R10 exemption is scoped PER TARGET: an entry is exempt (routed to
+  // `edited`) only when it IS the target currently being processed. The same
+  // file governing a co-edited sibling stays in `governing` and is enforced, so
+  // bundling a trivial instruction-file edit cannot suppress enforcement of the
+  // sibling's governing file. The root tier lives in the static system prompt
+  // and is never enforced by this mechanism (R4).
   const governing = new Map<string, AgentsMdEntry>();
   const edited = new Map<string, AgentsMdEntry>();
   for (const rawPath of rawPaths) {
+    const canonicalTarget = canonicalizeTarget(rawPath, cwd);
     for (const entry of resolveAgentsMdChain(rawPath, cwd, config)) {
-      if (editedTargetPaths.has(entry.path)) {
+      if (canonicalTarget !== null && entry.path === canonicalTarget) {
         edited.set(entry.path, entry);
-      } else if (!governing.has(entry.path)) {
+      } else if (entry.tier !== 'root' && !governing.has(entry.path)) {
         governing.set(entry.path, entry);
       }
     }
@@ -112,6 +127,7 @@ export function evaluateAgentsMdEnforcement(
     policy,
     unseen: store.unseen([...governing.values()]),
     editedInstructionFiles: [...edited.values()],
+    instructionFileTargets,
   };
 }
 

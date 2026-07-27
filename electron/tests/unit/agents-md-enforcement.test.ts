@@ -26,6 +26,7 @@ import {
 } from '../../src/main/agents-md/enforce';
 import { resolveAgentsMdChain } from '../../src/main/agents-md/resolver';
 import { AgentsMdContextStore } from '../../src/main/session/agents-md-context';
+import type { ToolHandler } from '../../src/main/tools/types';
 
 /** Build a full Config with `agents_md` overrides applied over the defaults. */
 function agentsConfig(overrides: Partial<AgentsMdConfig> = {}): Config {
@@ -230,6 +231,49 @@ describe('evaluateAgentsMdEnforcement', () => {
     );
   });
 
+  it('still enforces a co-edited sibling when an instruction-file edit is bundled (F4)', () => {
+    write('pkg/AGENTS.md', 'pkg instructions');
+    write('pkg/secret.ts', 'code');
+    const config = agentsConfig({ enforce_on_write: 'block' });
+    // Bundle a trivial edit to the instruction file with a real edit to a sibling
+    // it governs. The bundled self-edit must NOT exempt the file as a governing
+    // file for the sibling target (the old global exemption defeated `block`).
+    const patch = [
+      '*** Begin Patch',
+      '*** Update File: pkg/AGENTS.md',
+      '@@ -1 +1 @@',
+      '-pkg instructions',
+      '+pkg instructions (touched)',
+      '*** Update File: pkg/secret.ts',
+      '@@ -1 +1 @@',
+      '-code',
+      '+code (touched)',
+      '*** End Patch',
+    ].join('\n');
+
+    const enforcement = evaluateAgentsMdEnforcement(
+      'apply_patch',
+      { patch },
+      workspace,
+      config,
+      store,
+    );
+
+    expect(enforcement).not.toBeNull();
+    expect(enforcement!.policy).toBe('block');
+    // pkg/AGENTS.md governs secret.ts and was never read, so it is still unseen
+    // and the block stands despite the bundled self-edit.
+    expect(enforcement!.unseen.map((e) => e.displayPath)).toContain(
+      path.join('pkg', 'AGENTS.md'),
+    );
+    // The instruction file being edited is still surfaced for the R10 refresh...
+    expect(enforcement!.editedInstructionFiles.map((e) => e.displayPath)).toContain(
+      path.join('pkg', 'AGENTS.md'),
+    );
+    // ...and named in the arg-derived targets for the post-write re-stat (F6).
+    expect(enforcement!.instructionFileTargets).toContain('pkg/AGENTS.md');
+  });
+
   it('treats a seen-but-changed governing file as unseen again (R16)', () => {
     const agentsFile = write('pkg/AGENTS.md', 'version one');
     write('pkg/x.ts', 'code');
@@ -292,7 +336,7 @@ describe('dispatch-level write enforcement', () => {
   });
 
   /** Register a generic-family tool named `write` (enforcement keys off the name). */
-  async function registerWriteTool() {
+  async function registerWriteTool(impl: ToolHandler = handler) {
     const { ToolRegistry } = await import('../../src/main/tools/registry');
     const { genericToolResultDataSchema } = await import('../../src/shared/types/tool-result');
     const registry = new ToolRegistry();
@@ -306,7 +350,7 @@ describe('dispatch-level write enforcement', () => {
         category: 'filesystem',
         riskClass: 'write',
       },
-      handler,
+      impl,
     );
     return registry;
   }
@@ -461,6 +505,211 @@ describe('dispatch-level write enforcement', () => {
 
       expect(result.canonical.status).toBe('complete');
       expect(handler).toHaveBeenCalledOnce();
+    } finally {
+      _setAgentsMdStoreResolverForTests(null);
+      sessionPermissionOverrides.delete(sessionId);
+    }
+  });
+
+  /** A handler that really writes `file_path` to disk and bumps its mtime. */
+  function diskWritingHandler() {
+    return vi.fn(async (rawInput: unknown) => {
+      const input = rawInput as { file_path: string; content?: string };
+      const abs = path.join(workspace, input.file_path);
+      fs.mkdirSync(path.dirname(abs), { recursive: true });
+      fs.writeFileSync(abs, input.content ?? '', 'utf-8');
+      const future = new Date(Date.now() + 60_000);
+      fs.utimesSync(abs, future, future);
+      return { status: 'complete' as const, data: { value: 'wrote' } };
+    });
+  }
+
+  it('F6: re-stats an edited instruction file post-write so the next mutation is not blocked', async () => {
+    const { executeToolCall, _setAgentsMdStoreResolverForTests } = await import(
+      '../../src/main/llm/tool-dispatch'
+    );
+    const { sessionPermissionOverrides } = await import('../../src/main/ipc/permission');
+    const config = agentsConfig({ enforce_on_write: 'block' });
+    const diskWrite = diskWritingHandler();
+    const registry = await registerWriteTool(diskWrite);
+    sessionPermissionOverrides.set(sessionId, 'allow');
+    _setAgentsMdStoreResolverForTests(() => store);
+
+    try {
+      // First: edit the instruction file itself (exempt under R10). The handler
+      // writes it to disk and bumps its mtime; Phase B must record the POST-write
+      // mtime, not the stale pre-write one resolved in Phase A.
+      const first = await executeToolCall(
+        { id: 'write-agents-f6', name: 'write', args: { file_path: 'pkg/AGENTS.md', content: 'updated rules' } },
+        registry,
+        { cwd: workspace, sessionId, projectRuntime: { config } as never },
+      );
+      expect(first.canonical.status).toBe('complete');
+      expect(diskWrite).toHaveBeenCalledOnce();
+
+      // The tracker holds the fresh (post-write) mtime: assert via isFresh/unseen,
+      // not just isSeen.
+      const entry = resolveAgentsMdChain('pkg/AGENTS.md', workspace, config)[0];
+      expect(entry).toBeDefined();
+      expect(store.isFresh(entry!)).toBe(true);
+      expect(store.unseen([entry!])).toHaveLength(0);
+
+      // Second: mutate a sibling governed by that instruction file. Not blocked,
+      // because the refresh matched the bumped mtime. (A stale pre-write mtime
+      // would have left it unseen and triggered a spurious block.)
+      const second = await executeToolCall(
+        { id: 'write-sibling-f6', name: 'write', args: { file_path: 'pkg/x.ts', content: 'new code' } },
+        registry,
+        { cwd: workspace, sessionId, projectRuntime: { config } as never },
+      );
+      expect(second.canonical.status).toBe('complete');
+      expect(second.canonical.error?.code).not.toBe('agents_md_not_in_context');
+    } finally {
+      _setAgentsMdStoreResolverForTests(null);
+      sessionPermissionOverrides.delete(sessionId);
+    }
+  });
+
+  it('F6: marks a newly created instruction file seen so a sibling edit is not blocked', async () => {
+    const { executeToolCall, _setAgentsMdStoreResolverForTests } = await import(
+      '../../src/main/llm/tool-dispatch'
+    );
+    const { sessionPermissionOverrides } = await import('../../src/main/ipc/permission');
+    const config = agentsConfig({ enforce_on_write: 'block' });
+    // The parent pkg/AGENTS.md already governs pkg/new; mark it seen so this test
+    // isolates the creation-gap behavior of the brand-new pkg/new/AGENTS.md.
+    resolveAgentsMdChain('pkg/x.ts', workspace, config).forEach((e) => store.markSeen(e));
+
+    const diskWrite = diskWritingHandler();
+    const registry = await registerWriteTool(diskWrite);
+    sessionPermissionOverrides.set(sessionId, 'allow');
+    _setAgentsMdStoreResolverForTests(() => store);
+
+    try {
+      // First: create a NEW instruction file. It does not exist at Phase A, so it
+      // is never in the governing chain; Phase B stats it post-write and marks it
+      // seen (closing the creation gap).
+      const first = await executeToolCall(
+        { id: 'write-new-agents', name: 'write', args: { file_path: 'pkg/new/AGENTS.md', content: 'new rules' } },
+        registry,
+        { cwd: workspace, sessionId, projectRuntime: { config } as never },
+      );
+      expect(first.canonical.status).toBe('complete');
+
+      // The created file is now tracked as fresh.
+      const created = resolveAgentsMdChain('pkg/new/foo.ts', workspace, config).find(
+        (e) => e.displayPath === path.join('pkg', 'new', 'AGENTS.md'),
+      );
+      expect(created).toBeDefined();
+      expect(store.isFresh(created!)).toBe(true);
+
+      // Second: edit a sibling governed by the just-created file. Not blocked
+      // (without the post-write refresh it would be unseen → blocked).
+      const second = await executeToolCall(
+        { id: 'write-new-sibling', name: 'write', args: { file_path: 'pkg/new/foo.ts', content: 'code' } },
+        registry,
+        { cwd: workspace, sessionId, projectRuntime: { config } as never },
+      );
+      expect(second.canonical.status).toBe('complete');
+      expect(second.canonical.error?.code).not.toBe('agents_md_not_in_context');
+    } finally {
+      _setAgentsMdStoreResolverForTests(null);
+      sessionPermissionOverrides.delete(sessionId);
+    }
+  });
+
+  it('F7: Phase A degrades gracefully (no rejection) on a partial agents_md config', async () => {
+    const { executeToolCall, _setAgentsMdStoreResolverForTests } = await import(
+      '../../src/main/llm/tool-dispatch'
+    );
+    const { sessionPermissionOverrides } = await import('../../src/main/ipc/permission');
+    const registry = await registerWriteTool();
+    sessionPermissionOverrides.set(sessionId, 'allow');
+    _setAgentsMdStoreResolverForTests(() => store);
+
+    try {
+      // A partial config with `enabled` truthy but no `filenames` would throw
+      // inside effectiveAgentsMdFilenames; Phase A must catch it and proceed with
+      // no enforcement rather than rejecting the tool call.
+      const partialConfig = { agents_md: { enabled: true } } as never;
+      const result = await executeToolCall(
+        { id: 'write-partial', name: 'write', args: { file_path: 'pkg/x.ts', content: 'new' } },
+        registry,
+        { cwd: workspace, sessionId, projectRuntime: { config: partialConfig } as never },
+      );
+
+      expect(result.canonical.status).toBe('complete');
+      expect(handler).toHaveBeenCalledOnce();
+      expect(result.agentProjection.content).not.toContain('<agents_md_warning>');
+    } finally {
+      _setAgentsMdStoreResolverForTests(null);
+      sessionPermissionOverrides.delete(sessionId);
+    }
+  });
+
+  it('F8: a failed mutation gets no <agents_md_warning> appended (warn policy)', async () => {
+    const { executeToolCall, _setAgentsMdStoreResolverForTests } = await import(
+      '../../src/main/llm/tool-dispatch'
+    );
+    const { sessionPermissionOverrides } = await import('../../src/main/ipc/permission');
+    const failingHandler = vi.fn(async () => ({
+      status: 'error' as const,
+      data: { value: 'old_string not found' },
+      error: { code: 'edit_not_found', message: 'old_string not found' },
+    }));
+    const registry = await registerWriteTool(failingHandler);
+    sessionPermissionOverrides.set(sessionId, 'allow');
+    _setAgentsMdStoreResolverForTests(() => store);
+
+    try {
+      // No projectRuntime: the default policy is `warn`.
+      const result = await executeToolCall(
+        { id: 'write-fail-warn', name: 'write', args: { file_path: 'pkg/x.ts', content: 'new' } },
+        registry,
+        { cwd: workspace, sessionId },
+      );
+
+      expect(result.canonical.status).toBe('error');
+      expect(failingHandler).toHaveBeenCalledOnce();
+      // Nothing was modified, so the "you modified files…" warning is NOT appended.
+      expect(result.agentProjection.content).not.toContain('<agents_md_warning>');
+      expect(store.size).toBe(0);
+    } finally {
+      _setAgentsMdStoreResolverForTests(null);
+      sessionPermissionOverrides.delete(sessionId);
+    }
+  });
+
+  it('F8: a failed mutation under inject does not mark unseen files seen', async () => {
+    const { executeToolCall, _setAgentsMdStoreResolverForTests } = await import(
+      '../../src/main/llm/tool-dispatch'
+    );
+    const { sessionPermissionOverrides } = await import('../../src/main/ipc/permission');
+    const failingHandler = vi.fn(async () => ({
+      status: 'error' as const,
+      data: { value: 'old_string not found' },
+      error: { code: 'edit_not_found', message: 'old_string not found' },
+    }));
+    const registry = await registerWriteTool(failingHandler);
+    sessionPermissionOverrides.set(sessionId, 'allow');
+    _setAgentsMdStoreResolverForTests(() => store);
+
+    try {
+      const result = await executeToolCall(
+        { id: 'write-fail-inject', name: 'write', args: { file_path: 'pkg/x.ts', content: 'new' } },
+        registry,
+        {
+          cwd: workspace,
+          sessionId,
+          projectRuntime: { config: agentsConfig({ enforce_on_write: 'inject' }) } as never,
+        },
+      );
+
+      expect(result.canonical.status).toBe('error');
+      expect(failingHandler).toHaveBeenCalledOnce();
+      // Nothing was modified: no content injected and unseen files NOT marked seen.
+      expect(result.agentProjection.content).not.toContain('<agents_md');
+      expect(store.size).toBe(0);
     } finally {
       _setAgentsMdStoreResolverForTests(null);
       sessionPermissionOverrides.delete(sessionId);

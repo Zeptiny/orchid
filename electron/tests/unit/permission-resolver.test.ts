@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { defaults } from '../../src/main/config/schema';
 import {
+  extractPathsFromArgs,
   resolvePermission,
   resolveToolScope,
 } from '../../src/main/permissions/resolver';
@@ -92,6 +93,25 @@ describe('permission resolver', () => {
     ].join('\n');
 
     expect(resolveToolScope('apply_patch', { patch }, workspace)).toBe('outside');
+  });
+
+  it('extracts apply_patch paths from indented (space/tab) headers like the parser (F3)', () => {
+    // The real parser trims lines before matching header markers, so indented
+    // headers are valid; extraction must see them too (or enforcement + scope
+    // detection are bypassed).
+    const patch = [
+      '*** Begin Patch',
+      '   *** Add File: pkg/x.ts',
+      '+content',
+      '\t*** Delete File: pkg/old.ts',
+      '   *** Move to: pkg/moved.ts',
+      '*** End Patch',
+    ].join('\n');
+
+    const paths = extractPathsFromArgs('apply_patch', { patch });
+    expect(paths).toContain('pkg/x.ts');
+    expect(paths).toContain('pkg/old.ts');
+    expect(paths).toContain('pkg/moved.ts');
   });
 
   it('classifies grep by its directory_path scope', () => {

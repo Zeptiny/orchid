@@ -72,9 +72,11 @@ export const AGENTS_MD_ENFORCE_POLICIES = ['block', 'inject', 'warn', 'off'] as 
  */
 export const agentsMdConfigSchema = z.object({
   enabled: z.boolean().default(true),
-  filenames: z.array(z.string()).default(['AGENTS.md', 'CLAUDE.md']),
-  max_file_bytes: z.number().int().positive().default(32768),
-  max_chain_depth: z.number().int().positive().default(8),
+  filenames: z.array(z.string()).max(16).default(['AGENTS.md', 'CLAUDE.md']),
+  // Bounded so a hostile project `.orchid.json` cannot OOM the main process
+  // (`readAgentsMdContent` does `Buffer.alloc(max_file_bytes)`) or walk forever.
+  max_file_bytes: z.number().int().positive().max(2_097_152).default(32768),
+  max_chain_depth: z.number().int().positive().max(32).default(8),
   enforce_on_write: z.enum(AGENTS_MD_ENFORCE_POLICIES).default('warn'),
   inject_on_read: z.boolean().default(true),
   include_local: z.boolean().default(false),

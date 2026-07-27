@@ -9,7 +9,7 @@
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   configSchema,
@@ -143,6 +143,19 @@ describe('resolveAgentsMdChain', () => {
     expect(chain[0]?.tier).toBe('root');
   });
 
+  it('prefers the exact-case file when both cases coexist, deterministically (F2)', () => {
+    // A case-sensitive FS can hold both `AGENTS.md` and `agents.md`; the
+    // configured (exact-case) name must win regardless of readdir order.
+    const exactFile = write('both/AGENTS.md', 'exact case');
+    write('both/agents.md', 'lower case');
+    write('both/code.ts', 'code');
+
+    const chain = resolveAgentsMdChain('both/code.ts', workspace, agentsConfig());
+    expect(chain).toHaveLength(1);
+    expect(chain[0]?.path).toBe(exactFile);
+    expect(chain[0]?.displayPath).toBe(path.join('both', 'AGENTS.md'));
+  });
+
   it('returns an empty chain for a target outside cwd', () => {
     write('AGENTS.md', 'root');
     const outsideTarget = path.join(outside, 'file.ts');
@@ -195,6 +208,28 @@ describe('resolveAgentsMdChain', () => {
   it('returns an empty chain when the workspace itself cannot be canonicalized', () => {
     const missing = path.join(root, 'missing-workspace');
     expect(resolveAgentsMdChain('file.ts', missing, agentsConfig())).toEqual([]);
+  });
+
+  it('canonicalizes the cwd once and serves repeats from a bounded cache (F1)', () => {
+    write('AGENTS.md', 'root');
+    write('pkg/x.ts', 'code');
+    const config = agentsConfig();
+    const cwdKey = path.resolve(workspace);
+
+    const realpathSpy = vi.spyOn(fs.realpathSync, 'native');
+    try {
+      const first = resolveAgentsMdChain('pkg/x.ts', workspace, config);
+      expect(first.length).toBeGreaterThan(0);
+      for (let i = 0; i < 25; i++) {
+        expect(resolveAgentsMdChain('pkg/x.ts', workspace, config)).toEqual(first);
+      }
+      // Only the cwd canonicalization is cached; count just those calls. Without
+      // the cache this would be 26 (one per resolve); with it, exactly one.
+      const cwdCalls = realpathSpy.mock.calls.filter((call) => call[0] === cwdKey).length;
+      expect(cwdCalls).toBe(1);
+    } finally {
+      realpathSpy.mockRestore();
+    }
   });
 });
 
@@ -289,6 +324,28 @@ describe('agents_md config schema', () => {
     ).toBe(false);
     expect(configSchema.safeParse({ agents_md: { max_file_bytes: 0 } }).success).toBe(false);
     expect(configSchema.safeParse({ agents_md: { max_chain_depth: -1 } }).success).toBe(false);
+  });
+
+  it('bounds max_file_bytes, max_chain_depth, and filenames length (F10)', () => {
+    // At the upper bounds still parses.
+    expect(
+      configSchema.safeParse({ agents_md: { max_file_bytes: 2_097_152, max_chain_depth: 32 } })
+        .success,
+    ).toBe(true);
+    expect(
+      configSchema.safeParse({
+        agents_md: { filenames: Array.from({ length: 16 }, (_, i) => `f${i}.md`) },
+      }).success,
+    ).toBe(true);
+
+    // Above the bounds is rejected (DoS guard: readAgentsMdContent allocs max_file_bytes).
+    expect(configSchema.safeParse({ agents_md: { max_file_bytes: 2_097_153 } }).success).toBe(false);
+    expect(configSchema.safeParse({ agents_md: { max_chain_depth: 33 } }).success).toBe(false);
+    expect(
+      configSchema.safeParse({
+        agents_md: { filenames: Array.from({ length: 17 }, (_, i) => `f${i}.md`) },
+      }).success,
+    ).toBe(false);
   });
 
   it('deep-merges a partial project override without wiping sibling fields', () => {
