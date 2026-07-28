@@ -505,25 +505,20 @@ export class WorkerPool {
     const scope: WorkerTaskScope = options.scope ?? 'main';
     const message: Record<string, unknown> = { type: 'execute', taskId, ...payload };
 
-    const task: TaskEntry = {
-      resolve: () => undefined,
-      reject: () => undefined,
-      startResolve: () => undefined,
-      startReject: () => undefined,
-      workerId: -1,
-      scope,
-      enqueuedAt: this.now(),
-      startedAt: null,
-      handle: undefined as unknown as WorkerTaskHandle<unknown>,
-    };
-
+    // Capture each promise's resolvers up front so the task entry and the
+    // handle are both built from fully initialized values — no field is ever
+    // bootstrapped with a placeholder (promise executors run synchronously).
+    let startResolve!: (value: WorkerTaskStart) => void;
+    let startReject!: (reason: unknown) => void;
     const started = new Promise<WorkerTaskStart>((resolve, reject) => {
-      task.startResolve = resolve;
-      task.startReject = reject;
+      startResolve = resolve;
+      startReject = reject;
     });
+    let resolveTask!: (value: unknown) => void;
+    let rejectTask!: (reason: unknown) => void;
     const result = new Promise<T>((resolve, reject) => {
-      task.resolve = resolve as (value: unknown) => void;
-      task.reject = reject;
+      resolveTask = resolve as (value: unknown) => void;
+      rejectTask = reject;
     });
     // A caller typically awaits only one of the two promises; observe both so
     // a rejection surfaced through the other never becomes an unhandled reject.
@@ -531,7 +526,17 @@ export class WorkerPool {
     result.catch(() => undefined);
 
     const handle: WorkerTaskHandle<T> = { taskId, started, result, timings: null };
-    task.handle = handle as WorkerTaskHandle<unknown>;
+    const task: TaskEntry = {
+      resolve: resolveTask,
+      reject: rejectTask,
+      startResolve,
+      startReject,
+      workerId: -1,
+      scope,
+      enqueuedAt: this.now(),
+      startedAt: null,
+      handle: handle as WorkerTaskHandle<unknown>,
+    };
 
     if (options.signal) {
       task.signal = options.signal;

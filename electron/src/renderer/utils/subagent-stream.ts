@@ -43,9 +43,11 @@ export interface SubagentDeltaBatchOptions {
 const isRunning = (status: SubagentStatus): boolean =>
   status === 'pending' || status === 'running';
 
+// Timestamp-descending only: sort is stable, so equal timestamps keep input
+// order (spawn/insertion order) — the ordering callers like the Sidebar
+// partition expect when delegating their bucketing to groupSubagents.
 function compareNewest(a: SubagentRecord, b: SubagentRecord): number {
-  const time = Date.parse(b.start_time) - Date.parse(a.start_time);
-  return time || b.id.localeCompare(a.id);
+  return Date.parse(b.start_time) - Date.parse(a.start_time);
 }
 
 export function createSubagentStreamState(): SubagentStreamState {

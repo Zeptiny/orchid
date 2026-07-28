@@ -44,6 +44,7 @@ import {
   makeUserMessage,
 } from '../llm/message-factories';
 import { getConfig } from '../config/loader';
+import { subagentsConfigSchema } from '../config/schema';
 
 // ── Enums ───────────────────────────────────────────────────────────────────
 
@@ -70,6 +71,24 @@ const TERMINAL_STATES = new Set<SubagentState>([
   SubagentState.FAILED,
   SubagentState.INTERRUPTED,
 ]);
+
+/** Terminal-state check shared by persistence, tools, and IPC wiring. */
+export function isTerminalSubagentState(state: SubagentState): boolean {
+  return TERMINAL_STATES.has(state);
+}
+
+/**
+ * Lazily parsed `subagents.*` schema defaults, cached in a module-level
+ * singleton. Every "config not loaded" fallback in this module reads these so
+ * the values cannot silently drift from the schema (they ARE the schema
+ * defaults, not hand-duplicated literals).
+ */
+let subagentConfigDefaults: ReturnType<typeof subagentsConfigSchema.parse> | null = null;
+
+function getSubagentConfigDefaults(): ReturnType<typeof subagentsConfigSchema.parse> {
+  subagentConfigDefaults ??= subagentsConfigSchema.parse({});
+  return subagentConfigDefaults;
+}
 
 // ── Stream runner ───────────────────────────────────────────────────────────
 
@@ -124,12 +143,6 @@ export interface SubagentAdmissionLimits {
   readonly maxQueued: number;
 }
 
-const DEFAULT_ADMISSION_LIMITS: SubagentAdmissionLimits = {
-  maxActiveGlobal: 8,
-  maxActivePerSession: 4,
-  maxQueued: 32,
-};
-
 /**
  * Resolve admission limits from the live process-wide config (`getConfig()`),
  * read at spawn/admission time so a runtime settings change takes effect
@@ -144,7 +157,12 @@ function getAdmissionLimits(): SubagentAdmissionLimits {
       maxQueued: max_queued,
     };
   } catch {
-    return DEFAULT_ADMISSION_LIMITS;
+    const defaults = getSubagentConfigDefaults();
+    return {
+      maxActiveGlobal: defaults.max_active_global,
+      maxActivePerSession: defaults.max_active_per_session,
+      maxQueued: defaults.max_queued,
+    };
   }
 }
 
@@ -154,7 +172,7 @@ function getAdmissionLimits(): SubagentAdmissionLimits {
  * Source: `subagents.usage_event_interval_ms` from the live process-wide
  * config (`getConfig()`), read at emission time so a runtime settings change
  * takes effect immediately rather than snapshotting at spawn. Falls back to
- * 1000 ms when the config is not loaded.
+ * the schema default when the config is not loaded.
  *
  * Uses the top-level `getConfig` import (like `subagent-runner`) rather than a
  * lazy `require`: a `require` of the TS loader cannot be resolved under Vitest
@@ -164,19 +182,20 @@ function getUsageDeltaIntervalMs(): number {
   try {
     return getConfig().subagents.usage_event_interval_ms;
   } catch {
-    return 1000;
+    return getSubagentConfigDefaults().usage_event_interval_ms;
   }
 }
 
 /**
  * Resolve the bounded terminal summary retention count per session.
- * Source: `subagents.terminal_retention` (default 25).
+ * Source: `subagents.terminal_retention`; falls back to the schema default
+ * when the config is not loaded.
  */
 function getTerminalRetention(): number {
   try {
     return getConfig().subagents.terminal_retention;
   } catch {
-    return 25;
+    return getSubagentConfigDefaults().terminal_retention;
   }
 }
 
@@ -709,6 +728,16 @@ export class SubagentManager {
       this._finishLive(record, SubagentState.INTERRUPTED);
     }
     this._resolveWaiters(record);
+    if (wasQueued) {
+      // A record cancelled while QUEUED was never admitted, so it never gets a
+      // durable row (persistence eligibility begins at admission) — but it must
+      // not linger as a full record either. Evict it to a lean terminal summary
+      // under the same retention FIFO as persisted records; the terminal delta
+      // above already carried the full record to the renderer. Eviction runs
+      // after _resolveWaiters because _evictToSummary drops _resolveWait.
+      this._evictToSummary(record);
+      this._trackSummary(record.sessionId ?? '', record.id, getTerminalRetention());
+    }
     this._notify();
     if (!wasQueued) this._admitFromQueue();
     return true;
@@ -918,6 +947,9 @@ export class SubagentManager {
       const record = this._subagents.get(id);
       if (!record || record.sessionId !== sessionId) continue;
       if (!TERMINAL_STATES.has(record.state)) continue;
+      // Already a summary (e.g. a queued cancel, or double confirmation):
+      // re-evicting would be an idempotent no-op, so skip it explicitly.
+      if (record._evicted) continue;
       this._evictToSummary(record);
       this._trackSummary(sessionId, id, retention);
     }
@@ -940,6 +972,7 @@ export class SubagentManager {
       (id) => this._subagents.get(id)?.sessionId !== sessionId,
     );
     this._terminalSummaries.delete(sessionId);
+    this._sessionRevisions.delete(sessionId);
     this._notify();
   }
 
@@ -1537,7 +1570,7 @@ export class SubagentManager {
     this._bumpSessionRevision(record);
   }
 
-  private _finishLive(record: SubagentRecord, state: SubagentState): void {
+  private _finishLive(record: SubagentRecord, state: SubagentTerminalState): void {
     if (record._liveTerminalEmitted) return;
     record._liveTerminalEmitted = true;
     this._updateLive(record, {
@@ -1548,7 +1581,7 @@ export class SubagentManager {
     this._emitDelta(record, {
       type: SubagentDeltaEventType.TERMINAL,
       record: runtimeToDomain(record, { includeLiveTail: true }),
-      state: state as SubagentTerminalState,
+      state,
       usage: record.usage,
     });
   }

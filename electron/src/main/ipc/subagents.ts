@@ -9,6 +9,8 @@ import type {
   SubagentThinkingDeltaEvent,
 } from '../../shared/types/subagent';
 import { estimateDeltaBytes } from '../../shared/types/subagent';
+import { getConfig } from '../config/loader';
+import { subagentsConfigSchema } from '../config/schema';
 import { getSubagentManager } from '../tools';
 import { getSessionManager } from './session';
 import { subagentSnapshotSchema } from './payload-schemas';
@@ -104,12 +106,14 @@ export interface SubagentDeltaBudgets {
  */
 export function resolveSubagentDeltaBudgets(): SubagentDeltaBudgets {
   try {
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const { getConfig } = require('../config/loader') as typeof import('../config/loader');
     const { event_max_per_flush, event_byte_budget_kb } = getConfig().subagents;
     return { maxPerFlush: event_max_per_flush, byteBudgetKb: event_byte_budget_kb };
   } catch {
-    return { maxPerFlush: 200, byteBudgetKb: 64 };
+    const defaults = subagentsConfigSchema.parse({});
+    return {
+      maxPerFlush: defaults.event_max_per_flush,
+      byteBudgetKb: defaults.event_byte_budget_kb,
+    };
   }
 }
 
@@ -171,8 +175,16 @@ export function createSubagentDeltaBatcher(
     queue = deferred;
 
     const envelopes = new Map<string, SubagentDeltaEvent[]>();
+    // Eligibility enumerates windows and reads the active session, so gate
+    // once per distinct session per flush rather than once per event.
+    const eligibility = new Map<string, boolean>();
     for (const event of batch) {
-      if (!isEligible(event.sessionId)) continue;
+      let eligible = eligibility.get(event.sessionId);
+      if (eligible === undefined) {
+        eligible = isEligible(event.sessionId);
+        eligibility.set(event.sessionId, eligible);
+      }
+      if (!eligible) continue;
       let events = envelopes.get(event.sessionId);
       if (!events) {
         events = [];
@@ -221,7 +233,7 @@ const deltaBatcher = createSubagentDeltaBatcher(
   { isEligible: hasEligibleSubagentRecipient },
 );
 export function queueSubagentDelta(event: SubagentDeltaEvent): void { deltaBatcher.queue(event); }
-export function flushSubagentEvents(): void { deltaBatcher.flush(); }
+export function flushSubagentDeltas(): void { deltaBatcher.flush(); }
 
 let wired = false;
 

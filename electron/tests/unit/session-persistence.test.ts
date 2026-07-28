@@ -1657,6 +1657,30 @@ describe('subagent_chains row storage (U6)', () => {
     expect(summary.updatedAt).toBe(Date.parse('2026-02-01T00:00:00.000Z'));
   });
 
+  it('reports bytes as UTF-8 byte length, not UTF-16 code units', () => {
+    saveSession(makeSession({ id: SID, subagentChains: [] }), storageOpts);
+
+    const record = makeSubagentRecord(SID, {
+      id: 'sub-multibyte',
+      task: 'コードベースを調べる 🔍',
+      result: '見つかりました 🎉',
+    });
+    const outcome = upsertSubagentRecords(
+      SID,
+      [record],
+      new Date().toISOString(),
+      storageOpts,
+    );
+    expect(outcome).not.toBe(false);
+
+    const row = readSubagentRows(storageOpts.dbPath!, SID)
+      .find((r) => r.subagent_id === 'sub-multibyte')!;
+    const utf8Bytes = Buffer.byteLength(row.record_json, 'utf8');
+    // The fixture embeds CJK + emoji so the two metrics genuinely diverge.
+    expect(utf8Bytes).toBeGreaterThan(row.record_json.length);
+    expect(outcome!.bytes).toBe(utf8Bytes);
+  });
+
   it('returns false when the session row is missing (caller falls back to full save)', () => {
     const ghost = makeSubagentRecord(SID, { id: 'ghost' });
     expect(

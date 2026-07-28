@@ -767,7 +767,7 @@ export function updateChain(
 
 /** Outcome of a successful targeted subagent-record upsert. */
 export interface SubagentUpsertResult {
-  /** Total serialized `record_json` bytes written (checkpoint diagnostics, R9). */
+  /** Total serialized `record_json` UTF-8 bytes written (checkpoint diagnostics, R9). */
   readonly bytes: number;
 }
 
@@ -801,7 +801,9 @@ export function upsertSubagentRecords(
       let bytes = 0;
       for (const record of records) {
         const json = serializeSubagentRecord(record);
-        bytes += json.length;
+        // UTF-8 bytes, not UTF-16 code units (json.length) — the R9 checkpoint
+        // diagnostic is a byte count and must not undercount multibyte content.
+        bytes += Buffer.byteLength(json, 'utf8');
         upsert.run(sessionId, record.id, json);
       }
       return { bytes };

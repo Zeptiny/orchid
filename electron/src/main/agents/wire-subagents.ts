@@ -17,11 +17,11 @@ import {
   type SubagentPersistenceFlushInfo,
 } from './persist-subagent-chains';
 import {
-  flushSubagentEvents,
+  flushSubagentDeltas,
   isEligibleSubagentRecipient,
   queueSubagentDelta,
 } from '../ipc/subagents';
-import { SubagentState } from './manager';
+import { isTerminalSubagentState } from './manager';
 import { clearToolCallHistoryForAgentScope } from '../permissions/history';
 import { onSessionDeleted } from '../session/manager';
 import { onSessionStorageRecovered } from '../session/storage';
@@ -110,13 +110,12 @@ export function wireSubagentRuntime(): void {
       persistenceScheduler?.scheduleWave(sessionId, getConfig().subagents.terminal_wave_ms),
     clearToolCallHistory: clearToolCallHistoryForAgentScope,
     queueDelta: queueSubagentDelta,
-    flushDeltas: flushSubagentEvents,
+    flushDeltas: flushSubagentDeltas,
   }));
 
   manager.setOnChange((records) => {
     for (const sessionId of new Set(records
-      .filter((record) => record.state !== SubagentState.COMPLETED &&
-        record.state !== SubagentState.FAILED && record.state !== SubagentState.INTERRUPTED)
+      .filter((record) => !isTerminalSubagentState(record.state))
       .map((record) => record.sessionId).filter(Boolean) as string[])) {
       persistenceScheduler?.markDirty(sessionId);
     }
@@ -125,7 +124,7 @@ export function wireSubagentRuntime(): void {
 
 /** Explicit orderly-shutdown hook; terminal writes are synchronous by design. */
 export function flushSubagentPersistence(): void {
-  flushSubagentEvents();
+  flushSubagentDeltas();
   const manager = getSubagentManager();
   if (persistenceScheduler) persistenceScheduler.flushAll();
   else persistSubagentChains(manager);

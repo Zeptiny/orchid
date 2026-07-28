@@ -774,6 +774,24 @@ describe('subagent delta batcher (U3)', () => {
     vi.advanceTimersByTime(100);
     expect(delivered).toHaveLength(1);
   });
+
+  it('checks window eligibility once per distinct session per flush, not per event', () => {
+    const delivered: SubagentEvent[] = [];
+    const isEligible = vi.fn(() => true);
+    const batcher = createSubagentDeltaBatcher((envelope) => { delivered.push(envelope); }, { isEligible });
+    const secondSession = '00000000-0000-4000-8000-000000000004';
+    for (let sequence = 1; sequence <= 4; sequence += 1) {
+      batcher.queue(usageDelta(sequence));
+      batcher.queue({ ...usageDelta(sequence + 4), sessionId: secondSession });
+    }
+
+    vi.advanceTimersByTime(16);
+
+    // 8 events across 2 sessions → 2 eligibility checks, not 8.
+    expect(isEligible).toHaveBeenCalledTimes(2);
+    expect(delivered).toHaveLength(2);
+    expect(sequences(delivered)).toEqual([[1, 2, 3, 4], [5, 6, 7, 8]]);
+  });
 });
 
 // ===========================================================================

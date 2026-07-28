@@ -95,10 +95,14 @@ export function buildSubagentDetail(
 ): SubagentDetail {
   const start = Date.parse(record.start_time);
   const end = record.end_time ? Date.parse(record.end_time) : now;
-  const running = record.status === 'running' || record.status === 'pending';
+  // Records only change on spawned/terminal, so on the delta path a record
+  // freezes at pending/queued while the live projection tracks the admitted
+  // run. Prefer the projection so badges match the snapshot path.
+  const state = live?.state ?? record.status;
+  const running = state === 'running' || state === 'pending';
   return {
     id: record.id, name: record.agent_name || 'Subagent', type: displayAgentType(record),
-    tier: record.agent_tier || 'bloom', state: record.status, task: record.task || '',
+    tier: record.agent_tier || 'bloom', state, task: record.task || '',
     elapsed: formatElapsed(Math.max(0, end - start)), isRunning: running,
     result: record.result, error: record.error,
     usage: live?.usage ?? sumSubagentUsage(record),

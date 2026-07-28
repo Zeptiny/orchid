@@ -13,7 +13,7 @@ import type { Session } from '../../shared/types/session';
 import type { SubagentRecord as DomainSubagentRecord } from '../../shared/types/subagent';
 import { getSessionManager } from '../ipc/session';
 import type { SubagentManager, SubagentRecord } from './manager';
-import { runtimeToDomain, SubagentState } from './manager';
+import { isTerminalSubagentState, runtimeToDomain } from './manager';
 
 export interface PersistenceTimerApi {
   setTimeout: (callback: () => void, delay: number) => ReturnType<typeof setTimeout>;
@@ -292,10 +292,7 @@ export function persistSubagentChains(
     for (const record of dirtyRecords) next.set(record.id, record.persistRevision);
     lastPersistedRevision.set(sessionId, next);
     const terminalIds = dirtyRecords
-      .filter((r) =>
-        r.state === SubagentState.COMPLETED ||
-        r.state === SubagentState.FAILED ||
-        r.state === SubagentState.INTERRUPTED)
+      .filter((r) => isTerminalSubagentState(r.state))
       .map((r) => r.id);
     if (terminalIds.length > 0) {
       manager.confirmRecordsPersisted(sessionId, terminalIds);

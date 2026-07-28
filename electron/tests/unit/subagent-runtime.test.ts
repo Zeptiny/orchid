@@ -1209,6 +1209,52 @@ describe('SubagentManager terminal eviction and session purge (U9)', () => {
     expect(terminalEvents.length).toBeGreaterThanOrEqual(3);
   });
 
+  it('purgeSession resets the per-session revision counter (no slow leak, review #11)', () => {
+    const sid = 'sess-purge-revisions';
+    const record = manager.spawn('r1', 'x', testAgent, { sessionId: sid });
+    manager.markRunning(record.id);
+    expect(manager.getSessionRevision(sid)).toBeGreaterThan(0);
+
+    manager.purgeSession(sid);
+
+    expect(manager.getSessionRevision(sid)).toBe(0);
+    // A same-id session recreated later starts the revision sequence fresh.
+    const replacement = manager.spawn('r2', 'x', testAgent, { sessionId: sid });
+    expect(manager.getSessionRevision(sid)).toBe(0);
+    manager.markRunning(replacement.id);
+    expect(manager.getSessionRevision(sid)).toBeGreaterThan(0);
+  });
+
+  it('cancelling a queued record evicts it to a retention-capped summary (review #15)', () => {
+    setConfig({ terminal_retention: 2, max_active_per_session: 1 });
+    const sid = 'sess-queued-evict';
+    // One admitted record holds the only run slot; later spawns park in queue.
+    const active = manager.spawn('active', 'x', testAgent, { sessionId: sid });
+    expect(active.state).toBe(SubagentState.PENDING);
+
+    const queuedIds: string[] = [];
+    for (let i = 0; i < 3; i += 1) {
+      const record = manager.spawn(`q-${i}`, 'x', testAgent, { sessionId: sid });
+      expect(record.state).toBe(SubagentState.QUEUED);
+      expect(manager.cancelOne(record.id)).toBe(true);
+      queuedIds.push(record.id);
+      // Cancelled while queued → evicted to a lean summary, not a full record.
+      expect(record._evicted).toBe(true);
+      expect(record.state).toBe(SubagentState.INTERRUPTED);
+      expect(record.chain?.messages).toEqual([]);
+    }
+
+    // The retention FIFO caps them: oldest removed entirely, newest two kept.
+    expect(manager.getRecord(queuedIds[0])).toBeUndefined();
+    expect(manager.allRecords().filter((r) => r.sessionId === sid)
+      .map((r) => r.id)).toEqual([active.id, queuedIds[1], queuedIds[2]]);
+
+    // Re-confirming already-evicted summaries is a harmless no-op.
+    manager.confirmRecordsPersisted(sid, queuedIds);
+    expect(manager.getRecord(queuedIds[1])?._evicted).toBe(true);
+    expect(manager.allRecords().filter((r) => r.sessionId === sid)).toHaveLength(3);
+  });
+
   it('wait_for_subagent on an evicted terminal record resolves with correct status', async () => {
     setConfig({ terminal_retention: 5 });
     const sid = 'sess-wait-evicted';

@@ -12,15 +12,8 @@ import { RiskClass } from '../../../shared/types/permission';
 import { genericToolResultMetadata } from '../types';
 import { genericBuiltInToolOutcome } from '../result';
 import type { SubagentManager } from '../../agents/manager';
-import { SubagentState } from '../../agents/manager';
+import { isTerminalSubagentState } from '../../agents/manager';
 import type { SubagentToolResult } from './delegate';
-
-/** Terminal states — subagents in these states cannot be cancelled. */
-const TERMINAL_STATES = new Set<SubagentState>([
-  SubagentState.COMPLETED,
-  SubagentState.FAILED,
-  SubagentState.INTERRUPTED,
-]);
 
 /**
  * Build the interrupt_subagents tool.
@@ -81,7 +74,7 @@ export function buildInterruptTool(
       const record = manager.getRecord(sid);
       if (!record || (record.sessionId ?? null) !== (ctx?.sessionId ?? null)) {
         notFound.push(sid);
-      } else if (TERMINAL_STATES.has(record.state)) {
+      } else if (isTerminalSubagentState(record.state)) {
         alreadyDone.push(sid);
       } else {
         // cancelOne resolves waiters for this record only.

@@ -25,6 +25,7 @@ import {
   shouldOpenCollapseFromToken,
 } from '../utils/navigate-shell';
 import { formatUsageSummary } from '../utils/format-usage';
+import { groupSubagents } from '../utils/subagent-stream';
 import { Icon } from './Icon';
 import { Button } from './ui/Button';
 import { CollapsibleRegion } from './ui/CollapsibleRegion';
@@ -322,21 +323,8 @@ export interface SubagentStatusGroups {
 export function partitionSubagentsByStatus(
   agents: readonly SubagentRecord[],
 ): SubagentStatusGroups {
-  const running: SubagentRecord[] = [];
-  const queued: SubagentRecord[] = [];
-  const other: SubagentRecord[] = [];
-
-  for (const agent of agents) {
-    if (agent.status === 'running' || agent.status === 'pending') {
-      running.push(agent);
-    } else if (agent.status === 'queued') {
-      queued.push(agent);
-    } else {
-      other.push(agent);
-    }
-  }
-
-  return { running, queued, other };
+  const { running, queued, ended } = groupSubagents(agents);
+  return { running, queued, other: ended };
 }
 
 export function countRunningSubagents(agents: readonly SubagentRecord[]): number {
@@ -394,17 +382,7 @@ export function SubagentsSection({
 
   return (
     <div className="inspector-stack">
-      {running.map((agent) => (
-        <SubagentRow
-          key={agent.id}
-          agent={agent}
-          selectedId={selectedId}
-          onSelect={onSelect}
-          getDetail={getDetail}
-          onOpenView={onOpenView}
-        />
-      ))}
-      {queued.map((agent) => (
+      {[...running, ...queued].map((agent) => (
         <SubagentRow
           key={agent.id}
           agent={agent}

@@ -345,3 +345,49 @@ describe('subagent snapshot after terminal eviction (P1 #3)', () => {
       .toBe(true);
   });
 });
+
+describe('records cancelled while queued never persist (P3 #15)', () => {
+  it('cancel-queued → FIFO-capped evicted summary; no durable row is written, even on recovery', () => {
+    const sid = makeSession();
+    configOverride.current = {
+      ...defaults(),
+      subagents: {
+        ...defaults().subagents,
+        terminal_retention: 2,
+        max_active_per_session: 1,
+      },
+    };
+    manager.setRunner(null);
+
+    // Occupy the session's only run slot; later spawns park in the queue.
+    const active = manager.spawn('active', 'anchor the slot', testAgent, { sessionId: sid });
+    expect(active.state).toBe(SubagentState.PENDING);
+
+    const queuedIds: string[] = [];
+    for (let i = 0; i < 3; i += 1) {
+      const record = manager.spawn(`queued-${i}`, 'x', testAgent, { sessionId: sid });
+      expect(record.state).toBe(SubagentState.QUEUED);
+      expect(manager.cancelOne(record.id)).toBe(true);
+      queuedIds.push(record.id);
+      // Cancelled while queued → evicted to a lean summary (chain emptied).
+      expect(record._evicted).toBe(true);
+      expect(record.chain?.messages).toEqual([]);
+    }
+
+    // The retention FIFO capped the summaries: the oldest left allRecords.
+    expect(manager.getRecord(queuedIds[0])).toBeUndefined();
+    expect(manager.allRecords().filter((r) => r.sessionId === sid)).toHaveLength(3);
+
+    // Never-admitted records want no durable row — not from an ordinary
+    // checkpoint and not from a recovery flush (which treats every record as
+    // dirty but must still skip evicted summaries).
+    persistSubagentChains(manager, sid);
+    for (const id of queuedIds) {
+      expect(readRawRecordJson(sid, id)).toBeUndefined();
+    }
+    persistSubagentChains(manager, sid, { recovery: true });
+    for (const id of queuedIds) {
+      expect(readRawRecordJson(sid, id)).toBeUndefined();
+    }
+  });
+});
