@@ -5,15 +5,14 @@
  */
 import { BrowserWindow } from 'electron';
 import { IPC_CHANNELS } from '../../shared/types/ipc';
+import type { SubagentDeltaEvent } from '../../shared/types/subagent';
 import { getSubagentManager } from '../tools';
 import { createSubagentStreamRunner } from './subagent-runner';
 import { createSubagentPersistenceScheduler, persistSubagentChains } from './persist-subagent-chains';
 import {
-  flushSubagentDeltas,
   flushSubagentEvents,
   isEligibleSubagentRecipient,
   queueSubagentDelta,
-  queueSubagentEvent,
 } from '../ipc/subagents';
 import { SubagentState } from './manager';
 import { clearToolCallHistoryForAgentScope } from '../permissions/history';
@@ -27,6 +26,34 @@ let removeStorageRecoveryListener: (() => void) | null = null;
 
 // Re-export for callers that previously imported from this module.
 export { persistSubagentChains } from './persist-subagent-chains';
+
+export interface SubagentDeltaHandlerDeps {
+  markDirty: (sessionId: string) => void;
+  flushPersistence: (sessionId: string) => void;
+  clearToolCallHistory: (sessionId: string, agentScopeId: string) => void;
+  queueDelta: (event: SubagentDeltaEvent) => void;
+  flushDeltas: () => void;
+}
+
+/**
+ * Route the manager's delta stream: every delta dirties its session for the
+ * next persistence checkpoint and rides the batcher; a terminal delta
+ * additionally drops the run's permission history and flushes delivery and
+ * persistence immediately so the durable handoff lands without a debounce.
+ */
+export function createSubagentDeltaHandler(
+  deps: SubagentDeltaHandlerDeps,
+): (event: SubagentDeltaEvent) => void {
+  return (event) => {
+    if (event.sessionId) deps.markDirty(event.sessionId);
+    deps.queueDelta(event);
+    if (event.type === 'terminal' && event.sessionId) {
+      deps.clearToolCallHistory(event.sessionId, event.subagentId);
+      deps.flushDeltas();
+      deps.flushPersistence(event.sessionId);
+    }
+  };
+}
 
 /**
  * Attach the stream runner and onChange persistence to the shared SubagentManager.
@@ -49,22 +76,13 @@ export function wireSubagentRuntime(): void {
     persistenceScheduler?.recoverAll();
   });
 
-  manager.setOnLiveChange((change) => {
-    if (change.sessionId) persistenceScheduler?.markDirty(change.sessionId);
-    queueSubagentEvent(change);
-    if (change.sessionId &&
-        (change.projection.state === SubagentState.COMPLETED ||
-         change.projection.state === SubagentState.FAILED ||
-         change.projection.state === SubagentState.INTERRUPTED)) {
-      clearToolCallHistoryForAgentScope(change.sessionId, change.subagentId);
-      flushSubagentEvents();
-      persistenceScheduler?.flush(change.sessionId);
-    } else {
-      // Coalesced delivery handles ordinary live changes.
-    }
-  });
-
-  manager.setOnDelta((event) => queueSubagentDelta(event));
+  manager.setOnDelta(createSubagentDeltaHandler({
+    markDirty: (sessionId) => persistenceScheduler?.markDirty(sessionId),
+    flushPersistence: (sessionId) => persistenceScheduler?.flush(sessionId),
+    clearToolCallHistory: clearToolCallHistoryForAgentScope,
+    queueDelta: queueSubagentDelta,
+    flushDeltas: flushSubagentEvents,
+  }));
 
   manager.setOnChange((records) => {
     for (const sessionId of new Set(records
@@ -79,7 +97,6 @@ export function wireSubagentRuntime(): void {
 /** Explicit orderly-shutdown hook; terminal writes are synchronous by design. */
 export function flushSubagentPersistence(): void {
   flushSubagentEvents();
-  flushSubagentDeltas();
   const manager = getSubagentManager();
   if (persistenceScheduler) persistenceScheduler.flushAll();
   else persistSubagentChains(manager);

@@ -1,10 +1,16 @@
-import type { SubagentSnapshot } from '../../shared/types/ipc';
+import type { SubagentEvent, SubagentSnapshot } from '../../shared/types/ipc';
+import type { Usage } from '../../shared/types/message';
 import type {
-  LegacySubagentEvent,
+  SubagentDeltaEvent,
   SubagentLiveProjection,
+  SubagentLiveSegment,
   SubagentRecord,
+  SubagentSpawnedEvent,
   SubagentStatus,
+  SubagentTerminalEvent,
+  SubagentToolSnapshot,
 } from '../../shared/types/subagent';
+import { estimateDeltaBytes } from '../../shared/types/subagent';
 
 export type SubagentHydrationState = 'loading' | 'ready' | 'empty' | 'error';
 
@@ -15,9 +21,23 @@ export interface SubagentStreamState {
   readonly live: ReadonlyMap<string, SubagentLiveProjection>;
   readonly highWater: ReadonlyMap<string, number>;
   readonly runs: ReadonlyMap<string, string>;
-  readonly buffered: readonly LegacySubagentEvent[];
+  readonly buffered: readonly SubagentDeltaEvent[];
+  readonly bufferedBytes: number;
+  /**
+   * Lowest snapshot revision that may reseed after a hydration-buffer
+   * overflow. Set (and only ever raised) on overflow; cleared on seed.
+   */
+  readonly reseedFloor: number | null;
   readonly error: string | null;
   readonly generation: number;
+}
+
+/** Fallback bound for the hydration buffer (config `subagents.hydration_buffer_kb`, 256 KB). */
+export const DEFAULT_HYDRATION_BUFFER_BYTES = 256 * 1024;
+
+export interface SubagentDeltaBatchOptions {
+  /** Byte bound for buffered events while hydration is loading. */
+  readonly hydrationBufferBytes?: number;
 }
 
 const isRunning = (status: SubagentStatus): boolean =>
@@ -37,6 +57,8 @@ export function createSubagentStreamState(): SubagentStreamState {
     highWater: new Map(),
     runs: new Map(),
     buffered: [],
+    bufferedBytes: 0,
+    reseedFloor: null,
     error: null,
     generation: 0,
   };
@@ -56,6 +78,8 @@ export function bindSubagentSession(
     highWater: new Map(),
     runs: new Map(),
     buffered: [],
+    bufferedBytes: 0,
+    reseedFloor: null,
     error: null,
     generation: state.generation + 1,
   };
@@ -74,7 +98,6 @@ export function beginSubagentSnapshotRefresh(
   return {
     ...state,
     hydration: 'loading',
-    buffered: [...state.buffered],
     error: null,
     generation: state.generation + 1,
   };
@@ -123,56 +146,264 @@ export function resolveSubagentSelection(
   return null;
 }
 
-function recordWithProjection(record: SubagentRecord, projection: SubagentLiveProjection): SubagentRecord {
-  const status = projection.state;
+// ── Delta application ───────────────────────────────────────────────────────
+
+type ToolDraft = { -readonly [K in keyof SubagentToolSnapshot]: SubagentToolSnapshot[K] };
+
+/** Mutable per-subagent projection draft; one rebuild per subagent per batch. */
+interface LiveDraft {
+  sessionId: string | null;
+  subagentId: string;
+  runId: string;
+  sequence: number;
+  state: SubagentStatus;
+  segments: SubagentLiveSegment[];
+  toolCalls: ToolDraft[];
+  usage: Usage | null;
+  result: string | null;
+  error: string | null;
+}
+
+function draftFromProjection(projection: SubagentLiveProjection): LiveDraft {
   return {
-    ...record,
-    status,
-    result: projection.result ?? record.result,
-    error: projection.error ?? record.error,
-    end_time: isRunning(status) ? record.end_time : (record.end_time ?? new Date().toISOString()),
+    sessionId: projection.sessionId,
+    subagentId: projection.subagentId,
+    runId: projection.runId,
+    sequence: projection.sequence,
+    state: projection.state,
+    segments: projection.segments.map((segment) => ({ ...segment })),
+    toolCalls: projection.toolCalls.map((tool) => ({ ...tool })),
+    usage: projection.usage,
+    result: projection.result,
+    error: projection.error,
   };
 }
 
-function applyEvent(state: SubagentStreamState, event: LegacySubagentEvent): SubagentStreamState {
-  if (state.sessionId !== event.sessionId || event.projection.sessionId && event.projection.sessionId !== event.sessionId) {
-    return state;
-  }
-  const knownRun = state.runs.get(event.subagentId);
-  const lastSequence = state.highWater.get(event.subagentId);
-  if ((!knownRun || lastSequence === undefined) && !event.record) return state;
-  if (knownRun && (knownRun !== event.runId || event.sequence <= (lastSequence ?? -1))) return state;
-  if (!knownRun && event.record?.id !== event.subagentId) return state;
-
-  const seededRuns = new Map(state.runs);
-  seededRuns.set(event.subagentId, event.runId);
-  const seededRecords = knownRun || !event.record
-    ? state.records
-    : [...state.records, event.record];
-  const highWater = new Map(state.highWater).set(event.subagentId, event.sequence);
-  const live = new Map(state.live);
-  const records = seededRecords.map((record) =>
-    record.id === event.subagentId
-      ? recordWithProjection(event.record ?? record, event.projection)
-      : record,
-  );
-  if (isRunning(event.projection.state)) live.set(event.subagentId, event.projection);
-  else live.delete(event.subagentId);
-  return { ...state, records, live, highWater, runs: seededRuns };
+function draftFromSpawn(event: SubagentSpawnedEvent): LiveDraft {
+  return {
+    sessionId: event.sessionId,
+    subagentId: event.subagentId,
+    runId: event.runId,
+    sequence: event.sequence,
+    // The wire carries no pending→running transition: the manager marks a run
+    // running before its first stream event, so a spawned seed is live at once.
+    state: 'running',
+    segments: [],
+    toolCalls: [],
+    usage: event.usage,
+    result: null,
+    error: null,
+  };
 }
 
-/** Accept one event, or retain it for replay after snapshot seeding. */
-export function acceptSubagentEvent(
-  state: SubagentStreamState,
-  event: LegacySubagentEvent,
-): SubagentStreamState {
-  if (state.sessionId !== event.sessionId) return state;
-  if (state.hydration === 'loading') {
-    return state.buffered.some((item) => item.subagentId === event.subagentId && item.runId === event.runId && item.sequence === event.sequence)
-      ? state
-      : { ...state, buffered: [...state.buffered, event] };
+type ContentDelta = Exclude<SubagentDeltaEvent, SubagentSpawnedEvent | SubagentTerminalEvent>;
+
+function applyDeltaToDraft(draft: LiveDraft, event: ContentDelta): void {
+  switch (event.type) {
+    case 'text_delta':
+    case 'thinking_delta': {
+      const kind = event.type === 'text_delta' ? 'text' : 'thinking';
+      const segment = draft.segments.find((item) => item.id === event.segmentId);
+      if (!segment) {
+        draft.segments.push({ kind, id: event.segmentId, content: event.append });
+      } else if (segment.kind !== 'tool') {
+        segment.content += event.append;
+      }
+      break;
+    }
+    case 'tool_start': {
+      let tool = draft.toolCalls.find((item) => item.toolCallId === event.toolCallId);
+      if (tool) {
+        tool.status = event.status;
+        tool.args = event.args;
+        tool.startedAt = event.startedAt;
+        // The manager overwrites partialArgs with the finalized args at running.
+        if (event.status === 'running') tool.partialArgs = event.args;
+      } else {
+        tool = {
+          toolCallId: event.toolCallId,
+          toolName: event.toolName,
+          status: event.status,
+          partialArgs: event.status === 'running' ? event.args : '',
+          args: event.args,
+          content: null,
+          toolResult: null,
+          startedAt: event.startedAt,
+          finishedAt: null,
+        };
+        draft.toolCalls.push(tool);
+      }
+      if (!draft.segments.some((item) => item.kind === 'tool' && item.toolCallId === event.toolCallId)) {
+        draft.segments.push({ kind: 'tool', id: event.segmentId, toolCallId: event.toolCallId });
+      }
+      break;
+    }
+    case 'tool_args_delta': {
+      const tool = draft.toolCalls.find((item) => item.toolCallId === event.toolCallId);
+      if (tool) tool.partialArgs += event.append;
+      break;
+    }
+    case 'tool_result': {
+      const tool = draft.toolCalls.find((item) => item.toolCallId === event.toolCallId);
+      if (tool) {
+        tool.status = event.status;
+        tool.content = event.content;
+        tool.toolResult = event.toolResult;
+        tool.finishedAt = event.finishedAt;
+      }
+      break;
+    }
+    case 'usage':
+      draft.usage = event.usage;
+      break;
   }
-  return applyEvent(state, event);
+}
+
+/**
+ * Apply one flush of deltas in order. `records` identity changes only on
+ * `spawned` (append) and `terminal` (replace); projection-only deltas rebuild
+ * one live projection per touched subagent and leave records untouched.
+ */
+function applyDeltaEvents(
+  state: SubagentStreamState,
+  events: readonly SubagentDeltaEvent[],
+): SubagentStreamState {
+  if (events.length === 0) return state;
+  const bySubagent = new Map<string, SubagentDeltaEvent[]>();
+  for (const event of events) {
+    const list = bySubagent.get(event.subagentId);
+    if (list) list.push(event);
+    else bySubagent.set(event.subagentId, [event]);
+  }
+
+  let records = state.records;
+  let live: Map<string, SubagentLiveProjection> | null = null;
+  let highWater: Map<string, number> | null = null;
+  let runs: Map<string, string> | null = null;
+
+  for (const [subagentId, deltas] of bySubagent) {
+    const knownRun = (runs ?? state.runs).get(subagentId);
+    let high = (highWater ?? state.highWater).get(subagentId);
+
+    const applicable: SubagentDeltaEvent[] = [];
+    let runId = knownRun;
+    for (const event of deltas) {
+      if ((event.type === 'spawned' || event.type === 'terminal') && event.record.id !== subagentId) {
+        continue;
+      }
+      if (runId !== undefined) {
+        if (event.runId !== runId || event.sequence <= (high ?? -1)) continue;
+      } else if (event.type !== 'spawned') {
+        // Only a spawned seed can open an unknown run.
+        continue;
+      }
+      applicable.push(event);
+      runId = event.runId;
+      high = event.sequence;
+    }
+    if (applicable.length === 0) continue;
+
+    if (runId !== undefined && runId !== knownRun) {
+      runs ??= new Map(state.runs);
+      runs.set(subagentId, runId);
+    }
+    highWater ??= new Map(state.highWater);
+    highWater.set(subagentId, high as number);
+
+    const existing = state.live.get(subagentId);
+    let draft: LiveDraft | null =
+      existing && existing.runId === runId ? draftFromProjection(existing) : null;
+    let settled = false;
+    for (const event of applicable) {
+      if (event.type === 'spawned') {
+        if (!records.some((item) => item.id === event.record.id)) {
+          records = [...records, event.record];
+        }
+        draft = draftFromSpawn(event);
+      } else if (event.type === 'terminal') {
+        records = records.some((item) => item.id === event.record.id)
+          ? records.map((item) => (item.id === event.record.id ? event.record : item))
+          : [...records, event.record];
+        draft = null;
+        settled = true;
+      } else if (draft) {
+        draft.sequence = event.sequence;
+        applyDeltaToDraft(draft, event);
+      }
+    }
+
+    if (settled) {
+      live ??= new Map(state.live);
+      live.delete(subagentId);
+    } else if (draft) {
+      live ??= new Map(state.live);
+      live.set(subagentId, draft);
+    }
+  }
+
+  if (records === state.records && live === null && highWater === null && runs === null) {
+    return state;
+  }
+  return {
+    ...state,
+    records,
+    live: live ?? state.live,
+    highWater: highWater ?? state.highWater,
+    runs: runs ?? state.runs,
+  };
+}
+
+function deltaKey(event: SubagentDeltaEvent): string {
+  return `${event.subagentId}:${event.runId}:${event.sequence}`;
+}
+
+/** Retain deltas while hydration is loading; overflow discards intermediates and raises the reseed floor. */
+function bufferDeltaEvents(
+  state: SubagentStreamState,
+  events: readonly SubagentDeltaEvent[],
+  boundBytes: number,
+): SubagentStreamState {
+  const seen = new Set(state.buffered.map(deltaKey));
+  const fresh: SubagentDeltaEvent[] = [];
+  for (const event of events) {
+    const key = deltaKey(event);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    fresh.push(event);
+  }
+  if (fresh.length === 0) return state;
+  let addedBytes = 0;
+  for (const event of fresh) addedBytes += estimateDeltaBytes(event);
+  if (state.bufferedBytes + addedBytes > boundBytes) {
+    // Discarded intermediates are unrecoverable; only a snapshot at or above
+    // the newest seen revision may reseed without rolling state back.
+    let floor = state.reseedFloor ?? 0;
+    for (const event of state.buffered) floor = Math.max(floor, event.sessionRevision);
+    for (const event of fresh) floor = Math.max(floor, event.sessionRevision);
+    return { ...state, buffered: [], bufferedBytes: 0, reseedFloor: floor };
+  }
+  return {
+    ...state,
+    buffered: [...state.buffered, ...fresh],
+    bufferedBytes: state.bufferedBytes + addedBytes,
+  };
+}
+
+/** Accept one batched flush, or retain it for replay after snapshot seeding. */
+export function applyDeltaBatch(
+  state: SubagentStreamState,
+  batch: SubagentEvent,
+  options: SubagentDeltaBatchOptions = {},
+): SubagentStreamState {
+  if (state.sessionId !== batch.sessionId) return state;
+  if (state.hydration === 'loading') {
+    return bufferDeltaEvents(
+      state,
+      batch.events,
+      options.hydrationBufferBytes ?? DEFAULT_HYDRATION_BUFFER_BYTES,
+    );
+  }
+  return applyDeltaEvents(state, batch.events);
 }
 
 function seedSnapshotNow(state: SubagentStreamState, snapshot: SubagentSnapshot): SubagentStreamState {
@@ -193,24 +424,29 @@ function seedSnapshotNow(state: SubagentStreamState, snapshot: SubagentSnapshot)
     highWater,
     runs,
     buffered: [],
+    bufferedBytes: 0,
+    reseedFloor: null,
     error: null,
   };
 }
 
-/** Seed high-water marks, then replay only newer buffered events for this session. */
+/**
+ * Seed high-water marks, then replay only newer buffered events for this
+ * session. A snapshot below the recorded reseed floor is stale and rejected
+ * without state change; a successful seed clears the floor.
+ */
 export function seedSubagentSnapshot(
   state: SubagentStreamState,
   snapshot: SubagentSnapshot,
 ): SubagentStreamState {
   if (state.sessionId !== snapshot.sessionId || state.hydration !== 'loading') return state;
-  let next = seedSnapshotNow(state, snapshot);
+  if (state.reseedFloor !== null && snapshot.sessionRevision < state.reseedFloor) return state;
   const buffered = [...state.buffered].sort((a, b) => a.sequence - b.sequence);
-  for (const event of buffered) next = applyEvent(next, event);
-  return next;
+  return applyDeltaEvents(seedSnapshotNow(state, snapshot), buffered);
 }
 
 export function failSubagentSnapshot(state: SubagentStreamState, error: string): SubagentStreamState {
-  return { ...state, hydration: 'error', error, buffered: [] };
+  return { ...state, hydration: 'error', error, buffered: [], bufferedBytes: 0 };
 }
 
 /** Apply session-loaded durable records without disturbing a live projection. */

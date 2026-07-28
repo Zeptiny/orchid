@@ -62,15 +62,6 @@ export interface SubagentLiveProjection {
   readonly error: string | null;
 }
 
-/** Ordered notification emitted whenever a live projection changes. */
-export interface SubagentLiveChange {
-  readonly sessionId: string | null;
-  readonly subagentId: string;
-  readonly runId: string;
-  readonly sequence: number;
-  readonly projection: SubagentLiveProjection;
-}
-
 // ── Live delta events ───────────────────────────────────────────────────────
 
 /**
@@ -202,22 +193,6 @@ export type SubagentDeltaEvent =
   | SubagentUsageEvent
   | SubagentTerminalEvent;
 
-/**
- * @deprecated Pre-delta cumulative-projection event retained until U4 migrates
- * the main/renderer consumers to `SubagentDeltaEvent` batches, then removed.
- * Do not use in new code.
- */
-export interface LegacySubagentEvent {
-  sessionId: string;
-  subagentId: string;
-  runId: string;
-  sequence: number;
-  type: 'projection';
-  projection: SubagentLiveProjection;
-  /** Canonical seed for empty hydrated views and terminal handoff. */
-  record?: SubagentRecord;
-}
-
 // ── SubagentRecord ──────────────────────────────────────────────────────────
 
 export interface SubagentRecord {
@@ -245,6 +220,46 @@ export interface SubagentRecord {
   readonly reasoning_effort?: string | number;
   /** The full chain associated with this subagent (persisted). */
   readonly chain: Chain;
+}
+
+// ── Wire size estimation ────────────────────────────────────────────────────
+
+function estimateRecordBytes(record: SubagentRecord): number {
+  return record.id.length + record.agent_name.length + record.agent_type.length
+    + record.agent_tier.length + record.task.length
+    + (record.result?.length ?? 0) + (record.error?.length ?? 0);
+}
+
+/**
+ * Cheap serialized-length estimate for a delta payload: the sum of its
+ * string-field lengths, never a per-event JSON.stringify. Used by the main
+ * batcher's per-flush budget and the renderer's hydration buffer bound.
+ */
+export function estimateDeltaBytes(event: SubagentDeltaEvent): number {
+  let bytes = event.sessionId.length + event.subagentId.length + event.runId.length + event.type.length;
+  switch (event.type) {
+    case 'text_delta':
+    case 'thinking_delta':
+      bytes += event.segmentId.length + event.append.length;
+      break;
+    case 'tool_start':
+      bytes += event.segmentId.length + event.toolCallId.length + event.toolName.length
+        + event.args.length + event.startedAt.length;
+      break;
+    case 'tool_args_delta':
+      bytes += event.toolCallId.length + event.append.length;
+      break;
+    case 'tool_result':
+      bytes += event.toolCallId.length + event.content.length + event.finishedAt.length;
+      break;
+    case 'spawned':
+    case 'terminal':
+      bytes += estimateRecordBytes(event.record);
+      break;
+    case 'usage':
+      break;
+  }
+  return bytes;
 }
 
 // ── Zod schemas ─────────────────────────────────────────────────────────────

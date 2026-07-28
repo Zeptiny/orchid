@@ -31,7 +31,6 @@ import {
   SubagentStatus,
   type SubagentDeltaEvent,
   type SubagentDeltaEventBase,
-  type SubagentLiveChange,
   type SubagentLiveProjection,
   type SubagentLiveSegment,
   type SubagentTerminalState,
@@ -95,7 +94,6 @@ export type SubagentStreamRunner = (params: {
 }) => AsyncGenerator<StreamEvent>;
 
 export type SubagentChangeListener = (records: readonly SubagentRecord[]) => void;
-export type SubagentLiveChangeListener = (change: SubagentLiveChange) => void;
 type SubagentWaiterReason = 'state-change' | 'flush';
 
 /**
@@ -271,7 +269,6 @@ export class SubagentManager {
   private _subagents: Map<string, SubagentRecord> = new Map();
   private _runner: SubagentStreamRunner | null = null;
   private _onChange: SubagentChangeListener | null = null;
-  private _onLiveChange: SubagentLiveChangeListener | null = null;
   private _onDelta: ((event: SubagentDeltaEvent) => void) | null = null;
   /** Per-session monotonic revision counter ordering events and snapshots. */
   private _sessionRevisions: Map<string, number> = new Map();
@@ -287,11 +284,6 @@ export class SubagentManager {
   /** Register a listener invoked after any state/message change. */
   setOnChange(listener: SubagentChangeListener | null): void {
     this._onChange = listener;
-  }
-
-  /** Subscribe to ordered, low-latency changes for active subagent runs. */
-  setOnLiveChange(listener: SubagentLiveChangeListener | null): void {
-    this._onLiveChange = listener;
   }
 
   /** Subscribe to typed incremental live deltas for active subagent runs. */
@@ -1214,13 +1206,6 @@ export class SubagentManager {
     }
     live.sequence += 1;
     this._bumpSessionRevision(record);
-    const change: SubagentLiveChange = {
-      sessionId: live.sessionId, subagentId: live.subagentId, runId: live.runId,
-      sequence: live.sequence, projection: record.live,
-    };
-    try { this._onLiveChange?.(change); } catch (err) {
-      console.debug('Subagent live listener failed (non-fatal):', err);
-    }
   }
 
   private _finishLive(record: SubagentRecord, state: SubagentState): void {

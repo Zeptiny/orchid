@@ -1,10 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ALLOWED_EVENT_CHANNELS, ALLOWED_INVOKE_CHANNELS, IPC_CHANNELS, type SubagentEvent } from '../../src/shared/types/ipc';
 import {
-  legacySubagentEventSchema,
   subagentDeltaEventSchema,
   subagentEventSchema,
-  subagentEventWireSchema,
   subagentSnapshotSchema,
 } from '../../src/shared/types/ipc-schemas';
 import { SubagentDeltaEventType, type SubagentDeltaEvent } from '../../src/shared/types/subagent';
@@ -12,12 +10,10 @@ import { subagentSnapshotSchema as requestSchema } from '../../src/main/ipc/payl
 import { createSubagentPersistenceScheduler } from '../../src/main/agents/persist-subagent-chains';
 import {
   createSubagentDeltaBatcher,
-  createSubagentEventCoalescer,
-  deliverSubagentChange,
   deliverSubagentDeltaEvent,
   mergeSubagentRecords,
 } from '../../src/main/ipc/subagents';
-import { broadcastSubagentsChanged } from '../../src/main/agents/wire-subagents';
+import { broadcastSubagentsChanged, createSubagentDeltaHandler } from '../../src/main/agents/wire-subagents';
 import { createCanonicalToolResult } from '../../src/shared/types/tool-result';
 
 const uuid = '00000000-0000-4000-8000-000000000001';
@@ -28,19 +24,22 @@ vi.mock('../../src/main/ipc/session', () => ({
   getSessionManager: () => ({ getActive: (owner: string) => activeByWebContents.get(owner) ?? null }),
 }));
 
-const change = (sequence: number, state: 'running' | 'completed' = 'running') => ({
-  sessionId: session, subagentId: 'subagent-1', runId: uuid, sequence,
-  projection: {
-    sessionId: session, subagentId: 'subagent-1', runId: uuid, sequence,
-    state, segments: [], toolCalls: [], usage: null, result: null, error: null,
-  },
-});
-
 const record = (id: string, status: string) => ({
   id, agent_name: 'agent', agent_type: 'subagent', agent_tier: 'bloom', task: id,
   status, chain_id: id, start_time: new Date(0).toISOString(), end_time: null,
   result: null, error: null, parentChainIndex: null, chain: {} as never,
 }) as never;
+
+const deltaBase = { sessionId: session, subagentId: 'subagent-1', runId: uuid, sessionRevision: 0 };
+
+const textDelta = (sequence: number, append: string, segmentId = 'seg-1'): SubagentDeltaEvent => ({
+  ...deltaBase, sequence, type: 'text_delta', segmentId, append,
+});
+
+const terminalDelta = (sequence: number): SubagentDeltaEvent => ({
+  ...deltaBase, sequence, type: 'terminal',
+  record: record('subagent-1', 'completed'), state: 'completed', usage: null,
+});
 
 describe('subagent IPC boundary', () => {
   beforeEach(() => {
@@ -66,29 +65,28 @@ describe('subagent IPC boundary', () => {
       status: 'cancelled',
       data: { value: 'cancelled by parent' },
     });
-    const canonicalChange = change(3);
-    canonicalChange.projection.toolCalls = [{
-      toolCallId: 'tool-cancelled',
-      toolName: 'read',
-      status: 'cancelled',
-      partialArgs: '{}',
-      args: '{}',
-      content: 'cancelled by parent',
-      toolResult: canonical,
-      startedAt: new Date(0).toISOString(),
-      finishedAt: new Date(1).toISOString(),
-    }];
-    const event = {
-      ...canonicalChange,
-      type: 'projection',
+    const projection = {
+      sessionId: session, subagentId: 'subagent-1', runId: uuid, sequence: 3,
+      state: 'running', segments: [], usage: null, result: null, error: null,
+      toolCalls: [{
+        toolCallId: 'tool-cancelled',
+        toolName: 'read',
+        status: 'cancelled',
+        partialArgs: '{}',
+        args: '{}',
+        content: 'cancelled by parent',
+        toolResult: canonical,
+        startedAt: new Date(0).toISOString(),
+        finishedAt: new Date(1).toISOString(),
+      }],
     };
-    expect(legacySubagentEventSchema.safeParse(event).success).toBe(true);
+    const snapshot = { sessionId: session, sessionRevision: 3, records: [], live: [projection] };
+    expect(subagentSnapshotSchema.safeParse(snapshot).success).toBe(true);
 
-    const stringOnly = structuredClone(event) as Record<string, unknown>;
-    const projection = stringOnly.projection as { toolCalls: Array<Record<string, unknown>> };
-    delete projection.toolCalls[0].toolResult;
-    projection.toolCalls[0].result = 'cancelled by parent';
-    expect(legacySubagentEventSchema.safeParse(stringOnly).success).toBe(false);
+    const stringOnly = structuredClone(snapshot) as { live: Array<{ toolCalls: Array<Record<string, unknown>> }> };
+    delete stringOnly.live[0].toolCalls[0].toolResult;
+    stringOnly.live[0].toolCalls[0].result = 'cancelled by parent';
+    expect(subagentSnapshotSchema.safeParse(stringOnly).success).toBe(false);
   });
 
   it('merges stored and runtime records with runtime precedence', () => {
@@ -99,19 +97,6 @@ describe('subagent IPC boundary', () => {
     expect(merged).toHaveLength(2);
     expect(merged.find((item) => item.id === 'same')?.status).toBe('running');
     expect(merged.find((item) => item.id === 'ended')?.status).toBe('failed');
-  });
-
-  it('targets only non-destroyed windows owning the event session', () => {
-    const sent: unknown[] = [];
-    const makeWindow = (id: string, destroyed = false) => ({
-      isDestroyed: () => destroyed,
-      webContents: { id, isDestroyed: () => destroyed, send: (...args: unknown[]) => sent.push(args) },
-    }) as never;
-    activeByWebContents.set('1', { id: session });
-    activeByWebContents.set('2', { id: 'other-session' });
-    deliverSubagentChange(change(1) as never, [makeWindow('1'), makeWindow('2'), makeWindow('3', true)]);
-    expect(sent).toHaveLength(1);
-    expect(sent[0]).toEqual([IPC_CHANNELS.SUBAGENTS_EVENT, expect.objectContaining({ sessionId: session, sequence: 1 })]);
   });
 
   it('targets batched delta envelopes only at non-destroyed windows owning the session', () => {
@@ -148,17 +133,6 @@ describe('subagent IPC boundary', () => {
     expect(sent).toEqual([['1', IPC_CHANNELS.SESSION_SUBAGENTS_CHANGED]]);
   });
 
-  it('coalesces continuous live chunks within 50ms', () => {
-    const delivered: unknown[] = [];
-    const coalescer = createSubagentEventCoalescer((item) => delivered.push(item));
-    coalescer.queue(change(1));
-    coalescer.queue(change(2));
-    expect(delivered).toHaveLength(0);
-    vi.advanceTimersByTime(16);
-    expect(delivered).toHaveLength(1);
-    expect((delivered[0] as { sequence: number }).sequence).toBe(2);
-  });
-
   it('checkpoints live chunks by two seconds without one write per chunk', () => {
     const writes: string[] = [];
     const scheduler = createSubagentPersistenceScheduler((id) => writes.push(id));
@@ -171,19 +145,56 @@ describe('subagent IPC boundary', () => {
     expect(writes).toEqual([session]);
   });
 
-  it('terminal flush cancels the pending checkpoint and sends immediately', () => {
+  it('routes deltas to persistence: dirty on any delta, immediate flush on terminal', () => {
     const writes: string[] = [];
-    const delivered: unknown[] = [];
+    const delivered: SubagentEvent[] = [];
+    const cleared: Array<[string, string]> = [];
     const scheduler = createSubagentPersistenceScheduler((id) => writes.push(id));
-    const coalescer = createSubagentEventCoalescer((item) => delivered.push(item));
-    scheduler.markDirty(session);
-    coalescer.queue(change(1));
-    coalescer.queue(change(2, 'completed'));
-    coalescer.flush();
-    scheduler.flush(session);
+    const batcher = createSubagentDeltaBatcher((envelope) => { delivered.push(envelope); });
+    const handler = createSubagentDeltaHandler({
+      markDirty: (sessionId) => scheduler.markDirty(sessionId),
+      flushPersistence: (sessionId) => scheduler.flush(sessionId),
+      clearToolCallHistory: (sessionId, agentScopeId) => cleared.push([sessionId, agentScopeId]),
+      queueDelta: (event) => batcher.queue(event),
+      flushDeltas: () => batcher.flush(),
+    });
+
+    handler(textDelta(1, 'partial'));
+    handler(textDelta(2, ' more'));
+    vi.advanceTimersByTime(16);
+    expect(delivered.map((envelope) => envelope.events.map((event) => event.sequence))).toEqual([[2]]);
+    // The two appends dirtied the session once; the 2s checkpoint has not fired yet.
+    expect(writes).toEqual([]);
+
+    handler(terminalDelta(3));
+    // Terminal flushes the batcher and persistence synchronously, without the debounce.
+    expect(delivered).toHaveLength(2);
+    expect(delivered[1].events.map((event) => event.type)).toEqual(['terminal']);
+    expect(cleared).toEqual([[session, 'subagent-1']]);
+    expect(writes).toEqual([session]);
+
+    // The terminal flush cancelled the pending checkpoint; nothing more fires.
     vi.advanceTimersByTime(2000);
-    expect(delivered).toHaveLength(1);
-    expect((delivered[0] as { sequence: number }).sequence).toBe(2);
+    expect(writes).toEqual([session]);
+  });
+
+  it('marks a session dirty on any delta and checkpoints once per debounce window', () => {
+    const writes: string[] = [];
+    const scheduler = createSubagentPersistenceScheduler((id) => writes.push(id));
+    const handler = createSubagentDeltaHandler({
+      markDirty: (sessionId) => scheduler.markDirty(sessionId),
+      flushPersistence: (sessionId) => scheduler.flush(sessionId),
+      clearToolCallHistory: () => {},
+      queueDelta: () => {},
+      flushDeltas: () => {},
+    });
+
+    handler(textDelta(1, 'a'));
+    handler(textDelta(2, 'b'));
+    handler(textDelta(3, 'c'));
+    vi.advanceTimersByTime(1999);
+    expect(writes).toEqual([]);
+    vi.advanceTimersByTime(1);
     expect(writes).toEqual([session]);
   });
 
@@ -317,22 +328,17 @@ describe('subagent IPC boundary', () => {
   });
 
   it('flushes pending event and persistence work for orderly shutdown', () => {
-    const delivered: unknown[] = [];
+    const delivered: SubagentEvent[] = [];
     const writes: string[] = [];
-    const coalescer = createSubagentEventCoalescer((item) => delivered.push(item));
+    const batcher = createSubagentDeltaBatcher((envelope) => { delivered.push(envelope); });
     const scheduler = createSubagentPersistenceScheduler((id) => writes.push(id));
-    coalescer.queue(change(1));
+    batcher.queue(textDelta(1, 'pending'));
     scheduler.markDirty(session);
-    coalescer.flush();
+    batcher.flush();
     scheduler.flushAll();
     expect(delivered).toHaveLength(1);
+    expect(delivered[0].events.map((event) => event.sequence)).toEqual([1]);
     expect(writes).toEqual([session]);
-  });
-
-  it('validates discriminated projection events and rejects malformed data', () => {
-    const event = { ...change(1), type: 'projection' };
-    expect(legacySubagentEventSchema.safeParse(event).success).toBe(true);
-    expect(legacySubagentEventSchema.safeParse({ ...event, type: 'unknown' }).success).toBe(false);
   });
 
   it('requires a validated snapshot result shape', () => {
@@ -429,11 +435,17 @@ describe('subagent delta event protocol (U1)', () => {
     expect(subagentSnapshotSchema.safeParse({ ...valid, sessionRevision: -1 }).success).toBe(false);
   });
 
-  it('keeps the legacy projection event valid on the transitional wire schema', () => {
-    const legacy = { ...change(1), type: 'projection' };
-    expect(subagentEventWireSchema.safeParse(legacy).success).toBe(true);
-    expect(subagentEventWireSchema.safeParse({ sessionId: session, events: deltas }).success).toBe(true);
-    expect(subagentEventWireSchema.safeParse({ sessionId: session, events: [{ type: 'nope' }] }).success).toBe(false);
+  it('rejects a legacy projection event on the narrowed wire schema', () => {
+    const legacy = {
+      sessionId: session, subagentId: 'subagent-1', runId: uuid, sequence: 1,
+      type: 'projection',
+      projection: {
+        sessionId: session, subagentId: 'subagent-1', runId: uuid, sequence: 1,
+        state: 'running', segments: [], toolCalls: [], usage: null, result: null, error: null,
+      },
+    };
+    expect(subagentEventSchema.safeParse(legacy).success).toBe(false);
+    expect(subagentEventSchema.safeParse({ sessionId: session, events: deltas }).success).toBe(true);
   });
 });
 

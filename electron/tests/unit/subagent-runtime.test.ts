@@ -106,9 +106,9 @@ describe('SubagentManager runtime', () => {
       await paused;
       yield { type: 'finish', finishReason: 'stop' };
     });
-    const changes: number[] = [];
-    manager.setOnLiveChange((change) => {
-      changes.push(change.sequence);
+    const sequences: number[] = [];
+    manager.setOnDelta((event) => {
+      sequences.push(event.sequence);
     });
 
     const record = manager.spawn('live', 'watch', testAgent, { sessionId: 's-live' });
@@ -117,8 +117,8 @@ describe('SubagentManager runtime', () => {
     expect(record.state).toBe(SubagentState.RUNNING);
     expect(record.live.segments).toEqual([{ kind: 'text', id: expect.any(String), content: 'Hello live' }]);
     expect(record.chain?.messages).toHaveLength(1);
-    expect(changes).toEqual([...changes].sort((a, b) => a - b));
-    expect(new Set(changes).size).toBe(changes.length);
+    expect(sequences).toEqual([...sequences].sort((a, b) => a - b));
+    expect(new Set(sequences).size).toBe(sequences.length);
 
     release();
     await record._runPromise;
@@ -138,12 +138,13 @@ describe('SubagentManager runtime', () => {
       yield { type: 'finish', finishReason: 'stop' };
     });
 
-    let lastLiveIds: string[] = [];
-    manager.setOnLiveChange((change) => {
-      if (change.projection.state === SubagentState.RUNNING) {
-        lastLiveIds = change.projection.segments
-          .filter((segment) => segment.kind !== 'tool')
-          .map((segment) => segment.id);
+    const liveSegmentIds: string[] = [];
+    manager.setOnDelta((event) => {
+      if (
+        (event.type === 'text_delta' || event.type === 'thinking_delta') &&
+        !liveSegmentIds.includes(event.segmentId)
+      ) {
+        liveSegmentIds.push(event.segmentId);
       }
     });
     const record = manager.spawn('ordered', 'inspect', testAgent);
@@ -154,7 +155,7 @@ describe('SubagentManager runtime', () => {
     const transcript = record.chain?.messages.slice(1) ?? [];
     expect(transcript.map((message) => message.content)).toEqual(['before', 'reason', '', 'match', 'after']);
     expect(transcript.filter((message) => message.type === 'text' || message.type === 'thinking')
-      .map((message) => message.id)).toEqual(lastLiveIds);
+      .map((message) => message.id)).toEqual(liveSegmentIds);
     expect(record.chain?.messages.at(-1)?.content).toBe('after');
     expect(record.live.toolCalls).toEqual([]);
     expect(record.live.segments).toEqual([]);
@@ -244,8 +245,12 @@ describe('SubagentManager runtime', () => {
       yield { type: 'content', text: sessionId };
       await new Promise<void>((resolve) => gates.set(sessionId!, resolve));
     });
-    const changes: Array<{ sessionId: string | null; sequence: number }> = [];
-    manager.setOnLiveChange(({ sessionId, sequence }) => changes.push({ sessionId, sequence }));
+    const deltas: Array<{ sessionId: string; subagentId: string; sequence: number }> = [];
+    manager.setOnDelta((event) => deltas.push({
+      sessionId: event.sessionId,
+      subagentId: event.subagentId,
+      sequence: event.sequence,
+    }));
     const a = manager.spawn('a', 'a', testAgent, { sessionId: 'session-a' });
     const b = manager.spawn('b', 'b', testAgent, { sessionId: 'session-b' });
     await new Promise((resolve) => setTimeout(resolve, 10));
@@ -254,10 +259,12 @@ describe('SubagentManager runtime', () => {
     expect(b.live.sessionId).toBe('session-b');
     expect(a.live.sequence).toBeGreaterThan(0);
     expect(b.live.sequence).toBeGreaterThan(0);
-    expect(changes.filter((change) => change.sessionId === 'session-a').map((change) => change.sequence))
-      .toEqual(expect.arrayContaining([a.live.sequence]));
-    expect(changes.filter((change) => change.sessionId === 'session-b').map((change) => change.sequence))
-      .toEqual(expect.arrayContaining([b.live.sequence]));
+    const aDeltas = deltas.filter((event) => event.subagentId === a.id);
+    const bDeltas = deltas.filter((event) => event.subagentId === b.id);
+    expect(aDeltas.every((event) => event.sessionId === 'session-a')).toBe(true);
+    expect(bDeltas.every((event) => event.sessionId === 'session-b')).toBe(true);
+    expect(Math.max(...aDeltas.map((event) => event.sequence))).toBe(a.live.sequence);
+    expect(Math.max(...bDeltas.map((event) => event.sequence))).toBe(b.live.sequence);
     manager.cancelOne(a.id);
     manager.cancelOne(b.id);
     gates.get('session-a')?.();
@@ -433,11 +440,12 @@ describe('SubagentManager runtime', () => {
         }, 5);
       });
     });
-    const changes: Array<{ state: string; messages: string[] }> = [];
-    manager.setOnLiveChange(({ projection }) => {
-      const current = manager.getRecord(projection.subagentId);
-      changes.push({
-        state: projection.state,
+    const terminalChanges: Array<{ state: string; messages: string[] }> = [];
+    manager.setOnDelta((event) => {
+      if (event.type !== 'terminal') return;
+      const current = manager.getRecord(event.subagentId);
+      terminalChanges.push({
+        state: event.state,
         messages: (current?.chain?.messages ?? []).map((message) => message.content),
       });
     });
@@ -446,9 +454,9 @@ describe('SubagentManager runtime', () => {
     expect(manager.cancelOne(record.id)).toBe(true);
     await record._runPromise;
 
-    expect(changes.at(-1)).toEqual({ state: SubagentState.INTERRUPTED, messages: ['partial', 'reason', 'partial'] });
+    expect(terminalChanges).toHaveLength(1);
+    expect(terminalChanges[0]).toEqual({ state: SubagentState.INTERRUPTED, messages: ['partial', 'reason', 'partial'] });
     expect(record.chain?.messages.map((message) => message.content)).toEqual(['partial', 'reason', 'partial']);
-    expect(changes.filter((change) => change.state === SubagentState.INTERRUPTED)).toHaveLength(1);
   });
 
   it('interrupt flushes in-flight partial assistant text into chain/result', async () => {
@@ -640,7 +648,7 @@ describe('SubagentManager delta emission (U2)', () => {
     expectStrictlyMonotonic(deltas.map((d) => d.sessionRevision));
   });
 
-  it('serves a live snapshot deep-equal to the legacy projection at the same point', async () => {
+  it('serves a live snapshot deep-equal to the projection at the last emitted delta', async () => {
     let release!: () => void;
     const paused = new Promise<void>((resolve) => { release = resolve; });
     manager.setRunner(async function* (): AsyncGenerator<StreamEvent> {
@@ -650,15 +658,16 @@ describe('SubagentManager delta emission (U2)', () => {
       await paused;
       yield { type: 'finish', finishReason: 'stop' };
     });
-    let lastLegacy: SubagentLiveProjection | null = null;
-    manager.setOnLiveChange((change) => {
-      lastLegacy = structuredClone(change.projection);
+    let lastProjection: SubagentLiveProjection | null = null;
+    manager.setOnDelta((event) => {
+      const current = manager.getRecord(event.subagentId);
+      if (current) lastProjection = structuredClone(current.live);
     });
     const record = manager.spawn('parity', 'x', testAgent, { sessionId: 's-parity' });
     await new Promise((resolve) => setTimeout(resolve, 10));
 
-    expect(lastLegacy).not.toBeNull();
-    expect(manager.getLiveProjection(record.id)).toEqual(lastLegacy);
+    expect(lastProjection).not.toBeNull();
+    expect(manager.getLiveProjection(record.id)).toEqual(lastProjection);
 
     release();
     await record._runPromise;

@@ -317,16 +317,6 @@ export const subagentSnapshotSchema = z.object({
   records: z.array(subagentRecordSchema),
   live: z.array(subagentLiveProjectionSchema),
 });
-/**
- * @deprecated Pre-delta wire event retained until U3 migrates main-process
- * emission to delta batches and U4 removes it. Do not use in new code.
- */
-export const legacySubagentEventSchema = z.object({
-  sessionId: z.string().uuid(), subagentId: z.string(), runId: z.string(),
-  sequence: z.number().int().positive(), type: z.literal('projection'),
-  projection: subagentLiveProjectionSchema,
-  record: subagentRecordSchema.optional(),
-});
 
 // ── Subagent live delta events ───────────────────────────────────────────────
 
@@ -381,9 +371,3 @@ export const subagentEventSchema = z.object({
   sessionId: z.string().uuid(),
   events: z.array(subagentDeltaEventSchema),
 });
-/**
- * Transitional U1–U3 wire schema: accepts the new delta batch envelope and
- * the legacy projection event until main-process emission migrates in U3.
- * U4 narrows preload validation back to `subagentEventSchema`.
- */
-export const subagentEventWireSchema = z.union([subagentEventSchema, legacySubagentEventSchema]);
