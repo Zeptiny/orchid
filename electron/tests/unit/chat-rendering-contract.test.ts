@@ -120,6 +120,23 @@ describe('chat rendering contract (U5)', () => {
       // SESSION_UPDATED can land before CHAT_DONE — suppress live text already in history
       expect(src).toMatch(/suppressLiveMessagesAlreadyInHistory/);
     });
+
+    it('feeds history attribution from the low-frequency usage summary, not records', () => {
+      const src = read('components/ChatStream.tsx');
+      const historyStart = src.indexOf('const history = useMemo');
+      expect(historyStart).toBeGreaterThanOrEqual(0);
+      const historyMemo = src.slice(historyStart, src.indexOf(');', historyStart));
+      // History memo depends on the usage summary, never the records array
+      expect(historyMemo).toContain('subagentUsage');
+      expect(historyMemo).not.toMatch(/\bsubagents\b/);
+      // History builders consume the summary; record-derived usage computation
+      // moved into the hook's memoized summary
+      expect(src).toMatch(/subagentUsage: SubagentUsageSummary;/);
+      expect(src).not.toMatch(/subUsageByParentChain\(/);
+      expect(src).not.toMatch(/sumSubagentsUsage\(/);
+      // Render path keeps title-only records for wait/interrupt chips
+      expect(src).toMatch(/subagents\?: readonly SubagentTitleRecord\[\]/);
+    });
   });
 
   describe('auto-scroll threshold', () => {

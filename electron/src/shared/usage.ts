@@ -136,3 +136,58 @@ export function subUsageByParentChain(
   }
   return map;
 }
+
+/**
+ * Low-frequency subagent usage summary — the only subagent-derived input to
+ * chat history memoization (footer `sub:` attribution).
+ */
+export interface SubagentUsageSummary {
+  readonly byParentChain: ReadonlyMap<number, Usage>;
+  readonly total: Usage | null;
+}
+
+export const EMPTY_SUBAGENT_USAGE_SUMMARY: SubagentUsageSummary = {
+  byParentChain: new Map(),
+  total: null,
+};
+
+function usageCountersEqual(a: Usage | null | undefined, b: Usage | null | undefined): boolean {
+  if (a === b) return true;
+  if (!a || !b) return false;
+  return (
+    a.prompt_tokens === b.prompt_tokens &&
+    a.completion_tokens === b.completion_tokens &&
+    a.total_tokens === b.total_tokens &&
+    a.cached_tokens === b.cached_tokens
+  );
+}
+
+export function subagentUsageSummaryEquals(
+  a: SubagentUsageSummary,
+  b: SubagentUsageSummary,
+): boolean {
+  if (a === b) return true;
+  if (!usageCountersEqual(a.total, b.total)) return false;
+  if (a.byParentChain.size !== b.byParentChain.size) return false;
+  for (const [chainIndex, usage] of a.byParentChain) {
+    if (!usageCountersEqual(usage, b.byParentChain.get(chainIndex))) return false;
+  }
+  return true;
+}
+
+/**
+ * Derive the usage summary from subagent records, returning `previous` when
+ * the computed numbers are equal. Record churn (spawn/terminal/snapshot) that
+ * does not change usage must not change the summary's identity, or every
+ * history memo downstream would invalidate.
+ */
+export function deriveSubagentUsageSummary(
+  subagents: readonly SubagentUsageSource[],
+  previous: SubagentUsageSummary = EMPTY_SUBAGENT_USAGE_SUMMARY,
+): SubagentUsageSummary {
+  const next: SubagentUsageSummary = {
+    byParentChain: subUsageByParentChain(subagents),
+    total: sumSubagentsUsage(subagents),
+  };
+  return subagentUsageSummaryEquals(previous, next) ? previous : next;
+}

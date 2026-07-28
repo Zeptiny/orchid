@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const renderCounts = vi.hoisted(() => new Map<string, number>());
 const footerUsages = vi.hoisted(() => new Map<string, number | null>());
+const footerSubUsages = vi.hoisted(() => new Map<string, number | null>());
 
 vi.mock('../../src/renderer/components/MessageWidget', () => ({
   MessageWidget: ({ message }: { message: { id: string } }) => {
@@ -14,14 +15,22 @@ vi.mock('../../src/renderer/components/MessageWidget', () => ({
 }));
 
 vi.mock('../../src/renderer/components/ChainFooter', () => ({
-  ChainFooter: ({ usage }: { usage: { total_tokens: number } | null }) => {
+  ChainFooter: ({
+    usage,
+    subUsage,
+  }: {
+    usage: { total_tokens: number } | null;
+    subUsage?: { total_tokens: number } | null;
+  }) => {
     footerUsages.set('active', usage?.total_tokens ?? null);
+    footerSubUsages.set('active', subUsage?.total_tokens ?? null);
     return <div data-testid="active-footer">{usage?.total_tokens ?? 'none'}</div>;
   },
 }));
 
 import { ChatStream } from '../../src/renderer/components/ChatStream';
 import { MessageRole, MessageType, type Message, type Usage } from '../../src/shared/types/message';
+import type { SubagentUsageSummary } from '../../src/shared/usage';
 
 beforeEach(() => {
   Object.defineProperty(HTMLElement.prototype, 'scrollTo', {
@@ -35,6 +44,7 @@ afterEach(() => {
   cleanup();
   renderCounts.clear();
   footerUsages.clear();
+  footerSubUsages.clear();
 });
 
 function message(id: string, role: MessageRole, content: string): Message {
@@ -99,6 +109,53 @@ describe('ChatStream stable history boundary', () => {
 
     expect(renderCounts.get('history-user')).toBe(historyRendersBeforeLiveUpdate.user);
     expect(renderCounts.get('history-assistant')).toBe(historyRendersBeforeLiveUpdate.assistant);
+    expect(footerUsages.get('active')).toBe(20);
+  });
+
+  it('renders committed rows once across 100 live frames while the usage summary is stable', () => {
+    const summary: SubagentUsageSummary = { byParentChain: new Map(), total: null };
+    const view = render(
+      <ChatStream {...props('token 0', 1, usage(10))} subagentUsage={summary} />,
+    );
+    const before = {
+      user: renderCounts.get('history-user') ?? 0,
+      assistant: renderCounts.get('history-assistant') ?? 0,
+    };
+    expect(before.user).toBeGreaterThan(0);
+    expect(before.assistant).toBeGreaterThan(0);
+
+    for (let revision = 2; revision <= 101; revision += 1) {
+      view.rerender(
+        <ChatStream
+          {...props(`token ${revision}`, revision, usage(revision * 10))}
+          subagentUsage={summary}
+        />,
+      );
+    }
+
+    expect(renderCounts.get('history-user')).toBe(before.user);
+    expect(renderCounts.get('history-assistant')).toBe(before.assistant);
+    expect(footerUsages.get('active')).toBe(1010);
+  });
+
+  it('recomputes footer sub attribution when the usage summary identity changes', () => {
+    const first: SubagentUsageSummary = {
+      byParentChain: new Map([[-1, usage(30)]]),
+      total: usage(30),
+    };
+    const view = render(
+      <ChatStream {...props('t', 1, usage(10))} subagentUsage={first} />,
+    );
+    expect(footerSubUsages.get('active')).toBe(30);
+
+    const second: SubagentUsageSummary = {
+      byParentChain: new Map([[-1, usage(45)]]),
+      total: usage(45),
+    };
+    view.rerender(
+      <ChatStream {...props('t', 2, usage(20))} subagentUsage={second} />,
+    );
+    expect(footerSubUsages.get('active')).toBe(45);
     expect(footerUsages.get('active')).toBe(20);
   });
 

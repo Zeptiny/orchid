@@ -1156,6 +1156,7 @@ export function ChatView({ isVisible = true, bootstrapConfig = null }: ChatViewP
             error={chat.error}
             usage={chat.usage}
             currentTurnUsage={chat.currentTurnUsage}
+            subagentUsage={subagents.usageSummary}
             subagents={subagents.subagents}
             sessionChains={session.activeSession?.chains ?? []}
             sessionId={session.activeSession?.id ?? null}

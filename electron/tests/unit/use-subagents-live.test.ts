@@ -10,6 +10,12 @@ import type {
 } from '../../src/shared/types/subagent';
 import { estimateDeltaBytes } from '../../src/shared/types/subagent';
 import { createCanonicalToolResult } from '../../src/shared/types/tool-result';
+import {
+  deriveSubagentUsageSummary,
+  EMPTY_SUBAGENT_USAGE_SUMMARY,
+  subagentUsageSummaryEquals,
+  type SubagentUsageSource,
+} from '../../src/shared/usage';
 import { buildSubagentDetail } from '../../src/renderer/hooks/useSubagents';
 import {
   applyDeltaBatch,
@@ -567,5 +573,93 @@ describe('snapshot hydration guards', () => {
     expect(isSubagentSnapshotAffine(state, snapshot(sessionA, 1, [record('old', 'completed')]), oldGeneration)).toBe(false);
     state = bindSubagentSession(state, sessionB);
     expect(isSubagentSnapshotAffine(state, snapshot(sessionA, 1, [record('late', 'completed')]), state.generation)).toBe(false);
+  });
+});
+
+describe('subagent usage summary identity (U5 history input)', () => {
+  const tokenUsage = (prompt: number, completion: number): Usage => ({
+    prompt_tokens: prompt,
+    completion_tokens: completion,
+    total_tokens: prompt + completion,
+    cached_tokens: 0,
+  });
+
+  const sourceWithUsage = (parentChainIndex: number | null, usage: Usage): SubagentUsageSource => ({
+    parentChainIndex,
+    chain: { messages: [{ usage }] } as SubagentUsageSource['chain'],
+  });
+
+  it('keeps summary identity across 100 text deltas and usage-free record churn', () => {
+    expect(deriveSubagentUsageSummary([])).toBe(EMPTY_SUBAGENT_USAGE_SUMMARY);
+
+    let state = seeded(sessionA, 0);
+    let summary = deriveSubagentUsageSummary(state.records);
+    state = applyDeltaBatch(state, batch([spawned('one', 'run-1', record('one', 'pending'))]));
+    summary = deriveSubagentUsageSummary(state.records, summary);
+    expect(summary).toBe(EMPTY_SUBAGENT_USAGE_SUMMARY);
+
+    for (let sequence = 1; sequence <= 100; sequence += 1) {
+      state = applyDeltaBatch(state, batch([textDelta(sequence, `chunk-${sequence} `)]));
+      expect(deriveSubagentUsageSummary(state.records, summary)).toBe(summary);
+    }
+
+    // A terminal without durable usage still leaves the history input untouched.
+    state = applyDeltaBatch(state, batch([terminal('one', 'run-1', record('one', 'completed'), 101)]));
+    expect(deriveSubagentUsageSummary(state.records, summary)).toBe(summary);
+  });
+
+  it('moves identity exactly once when durable usage lands, then holds', () => {
+    const runUsage = tokenUsage(7, 3);
+    let state = seeded(sessionA, 1, [record('one', 'running')], [projection({ subagentId: 'one', sequence: 1 })]);
+    const summary = deriveSubagentUsageSummary(state.records);
+
+    // Live usage deltas update projections only — the history input must not move.
+    state = applyDeltaBatch(state, batch([
+      { ...deltaBase(), sequence: 2, type: 'usage', usage: runUsage },
+    ]));
+    expect(state.live.get('one')?.usage).toEqual(runUsage);
+    expect(deriveSubagentUsageSummary(state.records, summary)).toBe(summary);
+
+    const done: SubagentRecord = {
+      ...record('one', 'completed'),
+      end_time: '2026-01-01T00:00:05.000Z',
+      chain: { messages: [{ usage: runUsage }] } as SubagentRecord['chain'],
+    };
+    state = applyDeltaBatch(state, batch([terminal('one', 'run-1', done, 3, runUsage)]));
+    const updated = deriveSubagentUsageSummary(state.records, summary);
+    expect(updated).not.toBe(summary);
+    expect(updated.byParentChain.get(-1)).toEqual(runUsage);
+    expect(updated.total).toEqual(runUsage);
+
+    // A snapshot reseed with equal numbers keeps the new identity.
+    const reseeded = seedSubagentSnapshot(state, snapshot(sessionA, 4, [done]));
+    expect(deriveSubagentUsageSummary(reseeded.records, updated)).toBe(updated);
+  });
+
+  it('attributes usage by parentChainIndex and treats equal numbers as identical', () => {
+    const summary = deriveSubagentUsageSummary([sourceWithUsage(2, tokenUsage(10, 5))]);
+    expect(summary.byParentChain.get(2)).toEqual(tokenUsage(10, 5));
+    expect(summary.total).toEqual(tokenUsage(10, 5));
+
+    // Same numbers from freshly computed records → identity preserved.
+    expect(deriveSubagentUsageSummary([sourceWithUsage(2, { ...tokenUsage(10, 5) })], summary)).toBe(summary);
+
+    const grown = deriveSubagentUsageSummary([
+      sourceWithUsage(2, tokenUsage(10, 5)),
+      sourceWithUsage(2, tokenUsage(1, 1)),
+    ], summary);
+    expect(grown).not.toBe(summary);
+    expect(grown.byParentChain.get(2)).toEqual(tokenUsage(11, 6));
+    expect(grown.total).toEqual(tokenUsage(11, 6));
+  });
+
+  it('compares summaries by numbers and keys, not by object identity', () => {
+    const a = deriveSubagentUsageSummary([sourceWithUsage(1, tokenUsage(2, 2))]);
+    const b = deriveSubagentUsageSummary([sourceWithUsage(1, tokenUsage(2, 2))]);
+    expect(a).not.toBe(b);
+    expect(subagentUsageSummaryEquals(a, b)).toBe(true);
+
+    const otherKey = deriveSubagentUsageSummary([sourceWithUsage(9, tokenUsage(2, 2))]);
+    expect(subagentUsageSummaryEquals(a, otherKey)).toBe(false);
   });
 });

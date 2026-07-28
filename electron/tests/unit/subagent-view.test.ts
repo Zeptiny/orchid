@@ -3,6 +3,7 @@ import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import type { SubagentRecord } from '../../src/shared/types/subagent';
+import { EMPTY_SUBAGENT_USAGE_SUMMARY } from '../../src/shared/usage';
 import {
   formatSubagentUsage,
   keepSubagentRowSelected,
@@ -43,7 +44,7 @@ describe('SubagentView', () => {
     const html = renderToStaticMarkup(createElement(SubagentView, {
       subagents: {
         state, subagents: state.subagents, groups: { running: state.subagents, ended: [] },
-        totalUsage: null, usageByParentChain: new Map(), refresh: async () => {}, retry: async () => {},
+        totalUsage: null, usageByParentChain: new Map(), usageSummary: EMPTY_SUBAGENT_USAGE_SUMMARY, refresh: async () => {}, retry: async () => {},
         isRetrying: false, applyFromSession: () => {}, selectedId: 'running', select: () => {},
         getDetail: () => ({
           id: 'running', name: 'running', type: 'Explorer', tier: 'bloom', state: 'running',
@@ -83,7 +84,7 @@ describe('SubagentView', () => {
       subagents: {
         state: { status: 'ready', subagents: records }, subagents: records,
         groups: { running: [], ended: records }, totalUsage: null,
-        usageByParentChain: new Map(), refresh: async () => {}, retry: async () => {},
+        usageByParentChain: new Map(), usageSummary: EMPTY_SUBAGENT_USAGE_SUMMARY, refresh: async () => {}, retry: async () => {},
         isRetrying: false, applyFromSession: () => {}, selectedId: records[0].id, select: () => {},
         getDetail: () => null, live: new Map(), getLive: () => null,
       },
@@ -100,7 +101,7 @@ describe('SubagentView', () => {
       subagents: {
         state: { status: 'ready', subagents: [] }, subagents: [],
         groups: { running: [], ended: [] }, totalUsage: null,
-        usageByParentChain: new Map(), refresh: async () => {}, retry: async () => {},
+        usageByParentChain: new Map(), usageSummary: EMPTY_SUBAGENT_USAGE_SUMMARY, refresh: async () => {}, retry: async () => {},
         isRetrying: false, applyFromSession: () => {}, selectedId: null, select: () => {},
         getDetail: () => null, live: new Map(), getLive: () => null,
       },

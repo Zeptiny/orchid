@@ -2,7 +2,12 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import type { Usage } from '../../shared/types/message';
 import type { SubagentLiveProjection, SubagentRecord } from '../../shared/types/subagent';
-import { sumSubagentUsage, sumSubagentsUsage, subUsageByParentChain } from '../../shared/usage';
+import {
+  deriveSubagentUsageSummary,
+  EMPTY_SUBAGENT_USAGE_SUMMARY,
+  sumSubagentUsage,
+  type SubagentUsageSummary,
+} from '../../shared/usage';
 import {
   applyDeltaBatch,
   DEFAULT_HYDRATION_BUFFER_BYTES,
@@ -36,6 +41,12 @@ export interface UseSubagentsReturn {
   groups: { running: readonly SubagentRecord[]; ended: readonly SubagentRecord[] };
   totalUsage: Usage | null;
   usageByParentChain: ReadonlyMap<number, Usage>;
+  /**
+   * Low-frequency usage summary for chat history attribution. Identity
+   * changes only when the underlying usage numbers change — never on live
+   * deltas or record churn that leaves usage untouched.
+   */
+  usageSummary: SubagentUsageSummary;
   refresh: () => Promise<void>;
   retry: () => Promise<void>;
   isRetrying: boolean;
@@ -234,8 +245,14 @@ export function useSubagents(activeSessionId: string | null): UseSubagentsReturn
   const subagents = current.records;
   const state = listState(current);
   const groups = useMemo(() => groupSubagents(subagents), [subagents]);
-  const totalUsage = useMemo(() => sumSubagentsUsage(subagents), [subagents]);
-  const usageByParentChain = useMemo(() => subUsageByParentChain(subagents), [subagents]);
+  const usageSummaryRef = useRef(EMPTY_SUBAGENT_USAGE_SUMMARY);
+  const usageSummary = useMemo(() => {
+    const next = deriveSubagentUsageSummary(subagents, usageSummaryRef.current);
+    usageSummaryRef.current = next;
+    return next;
+  }, [subagents]);
+  const totalUsage = usageSummary.total;
+  const usageByParentChain = usageSummary.byParentChain;
   const getDetail = useCallback((id: string) => {
     void tick;
     const record = subagents.find((item) => item.id === id);
@@ -245,7 +262,7 @@ export function useSubagents(activeSessionId: string | null): UseSubagentsReturn
   }, [current.live, subagents, tick]);
   const getLive = useCallback((id: string) => current.live.get(id) ?? null, [current.live]);
   return {
-    state, subagents, groups, totalUsage, usageByParentChain, refresh, retry, isRetrying,
+    state, subagents, groups, totalUsage, usageByParentChain, usageSummary, refresh, retry, isRetrying,
     applyFromSession, selectedId, select, getDetail, live: current.live, getLive,
   };
 }
