@@ -997,3 +997,218 @@ describe('SubagentManager admission control (U7)', () => {
     expect(first.state).toBe(SubagentState.COMPLETED);
   });
 });
+
+describe('SubagentManager terminal eviction and session purge (U9)', () => {
+  let manager: SubagentManager;
+
+  beforeEach(() => {
+    manager = new SubagentManager();
+    configOverride.current = null;
+  });
+
+  afterEach(() => {
+    configOverride.current = null;
+    vi.useRealTimers();
+  });
+
+  function setConfig(overrides: Partial<Config['subagents']>): void {
+    configOverride.current = {
+      ...defaults(),
+      subagents: { ...defaults().subagents, ...overrides },
+    };
+  }
+
+  it('K > retention terminal completions: manager holds at most retention summaries plus active records', () => {
+    setConfig({ terminal_retention: 3 });
+    const sid = 'sess-evict';
+    const ids: string[] = [];
+    for (let i = 0; i < 5; i += 1) {
+      const record = manager.spawn(`task-${i}`, `do ${i}`, testAgent, { sessionId: sid });
+      manager.markCompleted(record.id, `result-${i}`);
+      ids.push(record.id);
+    }
+    // All 5 are terminal; confirm persistence for all.
+    manager.confirmRecordsPersisted(sid, ids);
+
+    const remaining = manager.allRecords().filter((r) => r.sessionId === sid);
+    expect(remaining).toHaveLength(3);
+    // Oldest two evicted entirely.
+    expect(remaining.map((r) => r.id)).toEqual(ids.slice(2));
+    // Surviving summaries retain terminal state.
+    for (const record of remaining) {
+      expect(record.state).toBe(SubagentState.COMPLETED);
+      expect(record.chain?.messages).toEqual([]);
+    }
+  });
+
+  it('active records are never evicted even when over retention', () => {
+    setConfig({ terminal_retention: 2 });
+    const sid = 'sess-active-safe';
+    const terminalIds: string[] = [];
+    for (let i = 0; i < 4; i += 1) {
+      const record = manager.spawn(`t-${i}`, 'x', testAgent, { sessionId: sid });
+      manager.markCompleted(record.id, 'done');
+      terminalIds.push(record.id);
+    }
+    const active = manager.spawn('active', 'x', testAgent, { sessionId: sid });
+    manager.confirmRecordsPersisted(sid, terminalIds);
+
+    const remaining = manager.allRecords().filter((r) => r.sessionId === sid);
+    // 2 summaries + 1 active
+    expect(remaining).toHaveLength(3);
+    expect(remaining.some((r) => r.id === active.id)).toBe(true);
+    expect(active.state).toBe(SubagentState.PENDING);
+  });
+
+  it('queued records are never evicted', () => {
+    setConfig({ terminal_retention: 1, max_active_per_session: 1 });
+    const sid = 'sess-queued-safe';
+    manager.setRunner(async function* (): AsyncGenerator<StreamEvent> {
+      yield { type: 'finish', finishReason: 'stop' };
+    });
+    const running = manager.spawn('running', 'x', testAgent, { sessionId: sid });
+    const queued = manager.spawn('queued', 'x', testAgent, { sessionId: sid });
+    expect(queued.state).toBe(SubagentState.QUEUED);
+
+    manager.markCompleted(running.id, 'done');
+    manager.confirmRecordsPersisted(sid, [running.id, queued.id]);
+
+    // Queued record is not terminal, so confirmRecordsPersisted ignores it.
+    expect(manager.getRecord(queued.id)).toBeDefined();
+  });
+
+  it('_runPromise is null after settlement on success, failure, and interrupt paths', async () => {
+    const gates: Array<() => void> = [];
+    manager.setRunner(async function* (params): AsyncGenerator<StreamEvent> {
+      await new Promise<void>((resolve) => { gates.push(resolve); });
+      if (params.task === 'fail') throw new Error('boom');
+      yield { type: 'content', text: 'ok' };
+      yield { type: 'finish', finishReason: 'stop' };
+    });
+
+    const success = manager.spawn('s', 'succeed', testAgent, { sessionId: 's-rp' });
+    const failure = manager.spawn('f', 'fail', testAgent, { sessionId: 's-rp' });
+    const interrupted = manager.spawn('i', 'interrupt-me', testAgent, { sessionId: 's-rp' });
+
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    manager.cancelOne(interrupted.id);
+
+    gates[0]();
+    gates[1]();
+    gates[2]();
+    await Promise.all([success._runPromise, failure._runPromise, interrupted._runPromise].filter(Boolean));
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    expect(success.state).toBe(SubagentState.COMPLETED);
+    expect(success._runPromise).toBeNull();
+    expect(failure.state).toBe(SubagentState.FAILED);
+    expect(failure._runPromise).toBeNull();
+    expect(interrupted.state).toBe(SubagentState.INTERRUPTED);
+    expect(interrupted._runPromise).toBeNull();
+  });
+
+  it('evicted summary retains id/state/result/error/usage/timings; chain messages empty; getStates renders', () => {
+    setConfig({ terminal_retention: 5 });
+    const sid = 'sess-summary';
+    const record = manager.spawn('summarized', 'important task', testAgent, { sessionId: sid });
+    manager.markRunning(record.id);
+    record.usage = { prompt_tokens: 10, completion_tokens: 20, total_tokens: 30 };
+    manager.markCompleted(record.id, 'the result');
+
+    manager.confirmRecordsPersisted(sid, [record.id]);
+
+    const summary = manager.getRecord(record.id)!;
+    expect(summary).toBeDefined();
+    expect(summary.id).toBe(record.id);
+    expect(summary.state).toBe(SubagentState.COMPLETED);
+    expect(summary.result).toBe('the result');
+    expect(summary.error).toBeNull();
+    expect(summary.usage).toEqual({ prompt_tokens: 10, completion_tokens: 20, total_tokens: 30 });
+    expect(summary.startTime).toBeTypeOf('number');
+    expect(summary.endTime).toBeTypeOf('number');
+    expect(summary.chain?.messages).toEqual([]);
+    expect(summary.projectRuntime).toBeUndefined();
+    expect(summary._runPromise).toBeNull();
+    expect(summary.abortController).toBeNull();
+    expect(summary.live.segments).toEqual([]);
+    expect(summary.live.toolCalls).toEqual([]);
+
+    const states = manager.getStates(sid);
+    const entry = states.find((s) => s.id === record.id);
+    expect(entry).toBeDefined();
+    expect(entry!.name).toBe('explorer');
+    expect(entry!.state).toBe(SubagentState.COMPLETED);
+    expect(entry!.task).toBe('important task');
+  });
+
+  it('eviction does NOT happen if the flush fails (record stays heavy)', () => {
+    setConfig({ terminal_retention: 1 });
+    const sid = 'sess-noflush';
+    const record = manager.spawn('heavy', 'x', testAgent, { sessionId: sid });
+    manager.markCompleted(record.id, 'done');
+
+    // Without calling confirmRecordsPersisted, the record stays heavy.
+    expect(record.chain?.messages.length).toBeGreaterThan(0);
+    expect(manager.allRecords().filter((r) => r.sessionId === sid)).toHaveLength(1);
+    expect(record.chain?.messages.length).toBeGreaterThan(0);
+  });
+
+  it('session purge: 2 running + 1 queued + 1 terminal → all removed, running cancelled with terminal deltas', async () => {
+    setConfig({ max_active_per_session: 2 });
+    const sid = 'sess-purge';
+    const events: SubagentDeltaEvent[] = [];
+    manager.setOnDelta((event) => events.push(event));
+    manager.setRunner(async function* (params): AsyncGenerator<StreamEvent> {
+      await new Promise<void>((resolve) => {
+        if (params.abortSignal.aborted) return resolve();
+        params.abortSignal.addEventListener('abort', () => resolve(), { once: true });
+      });
+      yield { type: 'finish', finishReason: 'stop' };
+    });
+
+    const run1 = manager.spawn('r1', 'x', testAgent, { sessionId: sid });
+    const run2 = manager.spawn('r2', 'x', testAgent, { sessionId: sid });
+    const queued = manager.spawn('q1', 'x', testAgent, { sessionId: sid });
+    const otherSession = manager.spawn('t1', 'x', testAgent, { sessionId: 'other-session' });
+    manager.markCompleted(otherSession.id, 'done');
+
+    const termInSession = manager.spawn('t2', 'x', testAgent, { sessionId: sid });
+    manager.markCompleted(termInSession.id, 'done');
+
+    expect(queued.state).toBe(SubagentState.QUEUED);
+    const beforeCount = manager.allRecords().filter((r) => r.sessionId === sid).length;
+    expect(beforeCount).toBe(4);
+
+    manager.purgeSession(sid);
+    // Allow abort-aware runners to settle their async paths.
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    const afterRecords = manager.allRecords().filter((r) => r.sessionId === sid);
+    expect(afterRecords).toHaveLength(0);
+    expect(manager.getRecord(otherSession.id)).toBeDefined();
+
+    // Terminal deltas emitted for the cancelled running and queued records.
+    const terminalEvents = events.filter(
+      (e) => e.type === 'terminal' && e.sessionId === sid,
+    );
+    expect(terminalEvents.length).toBeGreaterThanOrEqual(3);
+  });
+
+  it('wait_for_subagent on an evicted terminal record resolves with correct status', async () => {
+    setConfig({ terminal_retention: 5 });
+    const sid = 'sess-wait-evicted';
+    const record = manager.spawn('waited', 'x', testAgent, { sessionId: sid });
+    manager.markCompleted(record.id, 'wait-result');
+    manager.confirmRecordsPersisted(sid, [record.id]);
+
+    // Record is now a summary but still in the manager.
+    const summary = manager.getRecord(record.id)!;
+    expect(summary.state).toBe(SubagentState.COMPLETED);
+
+    const results = await manager.wait([record.id]);
+    const waited = results.get(record.id);
+    expect(waited).toBeDefined();
+    expect(waited!.state).toBe(SubagentState.COMPLETED);
+    expect(waited!.result).toBe('wait-result');
+  });
+});

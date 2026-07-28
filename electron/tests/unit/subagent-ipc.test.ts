@@ -114,6 +114,16 @@ describe('subagent IPC boundary', () => {
     expect(merged.find((item) => item.id === 'ended')?.status).toBe('failed');
   });
 
+  it('snapshot continuity: evicted records still appear from stored rows when absent from runtime', () => {
+    const evicted = record('evicted-1', 'completed');
+    const active = record('active-1', 'running');
+    // Runtime only has the active record; the evicted one was removed from the manager.
+    const merged = mergeSubagentRecords([evicted, active], [active]);
+    expect(merged).toHaveLength(2);
+    expect(merged.find((item) => item.id === 'evicted-1')?.status).toBe('completed');
+    expect(merged.find((item) => item.id === 'active-1')?.status).toBe('running');
+  });
+
   it('targets batched delta envelopes only at non-destroyed windows owning the session', () => {
     const sent: unknown[] = [];
     const makeWindow = (id: string, destroyed = false) => ({
@@ -784,13 +794,18 @@ describe('persistSubagentChains dirty tracking (U6)', () => {
     ...overrides,
   }) as never;
 
-  const managerOf = (...records: unknown[]) => ({ allRecords: () => records }) as never;
+  const confirmSpy = vi.fn();
+  const managerOf = (...records: unknown[]) => ({
+    allRecords: () => records,
+    confirmRecordsPersisted: confirmSpy,
+  }) as never;
 
   beforeEach(() => {
     sessionManagerStub.syncSubagentRecords.mockReset();
     sessionManagerStub.syncSubagentRecords.mockImplementation(
       (sessionId: string) => ({ session: { id: sessionId }, bytes: 42 }),
     );
+    confirmSpy.mockReset();
     stubActiveSession.current = null;
     clearSubagentPersistenceTracking(sid);
   });
@@ -913,5 +928,27 @@ describe('persistSubagentChains dirty tracking (U6)', () => {
 
     expect(sessionManagerStub.syncSubagentRecords).toHaveBeenCalledTimes(1);
     expect(sessionManagerStub.syncSubagentRecords.mock.calls[0][0]).toBe(sid);
+  });
+
+  it('confirms terminal records persisted after successful flush (persist-first eviction)', () => {
+    const terminal = runtimeRecord('sub-terminal', sid, { state: 'completed' });
+    const running = runtimeRecord('sub-running', sid, { state: 'running' });
+    const manager = managerOf(terminal, running);
+
+    persistSubagentChains(manager, sid);
+
+    expect(confirmSpy).toHaveBeenCalledTimes(1);
+    expect(confirmSpy).toHaveBeenCalledWith(sid, ['sub-terminal']);
+  });
+
+  it('does NOT confirm records when the flush fails (no eviction on failure)', () => {
+    sessionManagerStub.syncSubagentRecords.mockImplementation(() => {
+      throw new Error('disk full');
+    });
+    const terminal = runtimeRecord('sub-terminal', sid, { state: 'completed' });
+    const manager = managerOf(terminal);
+
+    expect(() => persistSubagentChains(manager, sid)).toThrow('disk full');
+    expect(confirmSpy).not.toHaveBeenCalled();
   });
 });

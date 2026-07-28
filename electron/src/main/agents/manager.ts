@@ -169,6 +169,18 @@ function getUsageDeltaIntervalMs(): number {
 }
 
 /**
+ * Resolve the bounded terminal summary retention count per session.
+ * Source: `subagents.terminal_retention` (default 25).
+ */
+function getTerminalRetention(): number {
+  try {
+    return getConfig().subagents.terminal_retention;
+  } catch {
+    return 25;
+  }
+}
+
+/**
  * Thrown by `SubagentManager.wait` when the wait budget elapses while any
  * target is still non-terminal. Subagents are not cancelled.
  */
@@ -260,7 +272,7 @@ export interface SubagentRecord {
   readonly windowId: string | null;
   /** Frozen parent-turn workspace cwd; reused when a queued run is admitted. */
   readonly cwd: string | null;
-  readonly projectRuntime?: ProjectRuntime;
+  projectRuntime?: ProjectRuntime;
   /** Abort controller for the in-flight run. */
   abortController: AbortController | null;
   /** Pending completion promise resolvers. */
@@ -340,6 +352,13 @@ export class SubagentManager {
   private _queue: string[] = [];
   /** Session key ('' = unscoped) admitted last; round-robin fairness cursor. */
   private _lastAdmittedSession: string | null = null;
+  /**
+   * Per-session FIFO of evicted terminal summary ids, capped at
+   * `subagents.terminal_retention`. Oldest entries are removed from
+   * `_subagents` entirely once the cap is exceeded; their durable row
+   * remains the record of truth.
+   */
+  private _terminalSummaries: Map<string, string[]> = new Map();
 
   /**
    * Configure the stream runner. When set, spawn() starts a background run.
@@ -866,8 +885,52 @@ export class SubagentManager {
     return this._sessionRevisions.get(sessionId) ?? 0;
   }
 
+  /**
+   * All runtime records, including lean terminal summaries.
+   *
+   * Invariant: evicted terminal records remain in this array as bounded
+   * summaries (heavy fields emptied) until their per-session FIFO cap is
+   * exceeded, at which point they are removed entirely. Consumers that need
+   * full history beyond the cap read from durable storage.
+   */
   allRecords(): SubagentRecord[] {
     return Array.from(this._subagents.values());
+  }
+
+  /**
+   * Confirm that terminal records were durably persisted. Only after this
+   * confirmation does the manager evict heavy runtime data (persist-first
+   * ordering guarantee). Non-terminal ids are ignored.
+   */
+  confirmRecordsPersisted(sessionId: string, subagentIds: string[]): void {
+    const retention = getTerminalRetention();
+    for (const id of subagentIds) {
+      const record = this._subagents.get(id);
+      if (!record || record.sessionId !== sessionId) continue;
+      if (!TERMINAL_STATES.has(record.state)) continue;
+      this._evictToSummary(record);
+      this._trackSummary(sessionId, id, retention);
+    }
+  }
+
+  /**
+   * Purge every manager record owned by a session: cancel active/queued
+   * records first (emitting terminal deltas so renderers settle), then remove
+   * all records including summaries.
+   */
+  purgeSession(sessionId: string): void {
+    for (const [id, record] of this._subagents) {
+      if (record.sessionId !== sessionId) continue;
+      if (!TERMINAL_STATES.has(record.state)) this.cancelOne(id);
+    }
+    for (const [id, record] of this._subagents) {
+      if (record.sessionId === sessionId) this._subagents.delete(id);
+    }
+    this._queue = this._queue.filter(
+      (id) => this._subagents.get(id)?.sessionId !== sessionId,
+    );
+    this._terminalSummaries.delete(sessionId);
+    this._notify();
   }
 
   /**
@@ -994,6 +1057,46 @@ export class SubagentManager {
       return Math.max(0, (record.endTime ?? now) - record.startedAt);
     }
     return record.startTime ? (record.endTime ?? now) - record.startTime : null;
+  }
+
+  // ── Private: terminal eviction ────────────────────────────────────────────
+
+  /**
+   * Replace heavy runtime fields with a bounded summary. The record keeps its
+   * SubagentRecord shape so downstream type contracts (getStates, wait,
+   * prompt-context) don't break; chain messages, live state, projectRuntime,
+   * and abort artifacts are dropped.
+   */
+  private _evictToSummary(record: SubagentRecord): void {
+    record._runPromise = null;
+    record.abortController = null;
+    record._resolveWait = null;
+    record.pendingQuestion = null;
+    record.projectRuntime = undefined;
+    if (record.chain) {
+      record.chain = { ...record.chain, messages: [] };
+    }
+    record.live = {
+      ...record.live,
+      segments: [],
+      toolCalls: [],
+    };
+    record._liveCommittedSegmentCount = 0;
+  }
+
+  /** Track an evicted summary in the per-session FIFO; remove oldest over cap. */
+  private _trackSummary(sessionId: string, id: string, retention: number): void {
+    let fifo = this._terminalSummaries.get(sessionId);
+    if (!fifo) {
+      fifo = [];
+      this._terminalSummaries.set(sessionId, fifo);
+    }
+    if (fifo.includes(id)) return;
+    fifo.push(id);
+    while (fifo.length > retention) {
+      const evicted = fifo.shift()!;
+      this._subagents.delete(evicted);
+    }
   }
 
   // ── Private: run loop ─────────────────────────────────────────────────────
@@ -1239,6 +1342,7 @@ export class SubagentManager {
         this._finishLive(record, SubagentState.INTERRUPTED);
       }
       record.abortController = null;
+      record._runPromise = null;
     }
   }
 

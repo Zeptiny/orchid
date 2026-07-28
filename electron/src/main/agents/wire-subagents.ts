@@ -96,6 +96,7 @@ export function wireSubagentRuntime(): void {
     ),
   );
   removeSessionDeletionCleanup = onSessionDeleted((sessionId) => {
+    manager.purgeSession(sessionId);
     persistenceScheduler?.clear(sessionId);
     clearSubagentPersistenceTracking(sessionId);
   });
