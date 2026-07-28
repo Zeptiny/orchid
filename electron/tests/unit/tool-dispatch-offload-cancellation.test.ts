@@ -10,7 +10,7 @@ import { WorkerTaskCancelledError } from '../../src/main/utils/worker-pool';
 
 const workerPoolMock = vi.hoisted(() => ({
   pool: null as {
-    run: ReturnType<typeof vi.fn>;
+    runTask: ReturnType<typeof vi.fn>;
   } | null,
 }));
 
@@ -53,12 +53,24 @@ describe('executeToolCall offloaded cancellation', () => {
     let receivedSignal: AbortSignal | undefined;
     let resolveWorker!: (value: unknown) => void;
     workerPoolMock.pool = {
-      run: vi.fn((_payload: Record<string, unknown>, signal?: AbortSignal) => {
-        receivedSignal = signal;
-        return new Promise((resolve) => {
-          resolveWorker = resolve;
-        });
-      }),
+      runTask: vi.fn(
+        (
+          _payload: Record<string, unknown>,
+          options?: { signal?: AbortSignal },
+        ) => {
+          receivedSignal = options?.signal;
+          const result = new Promise((resolve) => {
+            resolveWorker = resolve;
+          });
+          result.catch(() => undefined);
+          return {
+            taskId: 0,
+            started: Promise.resolve({ queueWaitMs: 0 }),
+            result,
+            timings: null,
+          };
+        },
+      ),
     };
     const parentAbort = new AbortController();
 
@@ -66,7 +78,7 @@ describe('executeToolCall offloaded cancellation', () => {
       cwd: '/tmp/orchid-tool-test-cwd',
       abortSignal: parentAbort.signal,
     });
-    await vi.waitFor(() => expect(workerPoolMock.pool?.run).toHaveBeenCalledOnce());
+    await vi.waitFor(() => expect(workerPoolMock.pool?.runTask).toHaveBeenCalledOnce());
 
     parentAbort.abort();
 
@@ -92,14 +104,26 @@ describe('executeToolCall offloaded cancellation', () => {
       async () => ({ status: 'complete', data: { value: 'inline fallback' } }),
     );
     workerPoolMock.pool = {
-      run: vi.fn((_payload: Record<string, unknown>, signal?: AbortSignal) =>
-        new Promise((_, reject) => {
-          signal?.addEventListener(
-            'abort',
-            () => reject(new WorkerTaskCancelledError()),
-            { once: true },
-          );
-        }),
+      runTask: vi.fn(
+        (
+          _payload: Record<string, unknown>,
+          options?: { signal?: AbortSignal },
+        ) => {
+          const result = new Promise((_, reject) => {
+            options?.signal?.addEventListener(
+              'abort',
+              () => reject(new WorkerTaskCancelledError()),
+              { once: true },
+            );
+          });
+          result.catch(() => undefined);
+          return {
+            taskId: 0,
+            started: Promise.resolve({ queueWaitMs: 0 }),
+            result,
+            timings: null,
+          };
+        },
       ),
     };
 

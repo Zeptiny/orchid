@@ -160,6 +160,11 @@ export interface Config {
   grep_max_results: number;
   directory_tree_depth: number;
   tool_worker_pool_size: number;
+  /**
+   * Worker slots reserved for main-agent tool work so background subagents
+   * cannot starve the visible agent (review F-06). Clamped to the pool size.
+   */
+  tool_worker_pool_main_agent_reserved: number;
   theme: string;
   personality: string;
   rag: RAGConfig;

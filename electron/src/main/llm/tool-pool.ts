@@ -11,7 +11,9 @@ export async function initToolWorkerPool(config: Config, poolSize?: number): Pro
     console.warn('[tool-pool] Worker script not found, falling back to inline execution', { scriptPath });
     return;
   }
-  const candidate = new WorkerPool(scriptPath, poolSize ?? 2, { config });
+  const candidate = new WorkerPool(scriptPath, poolSize ?? 2, { config }, {
+    mainAgentReserved: config.tool_worker_pool_main_agent_reserved,
+  });
   try {
     await candidate.init();
   } catch (err) {

@@ -349,6 +349,7 @@ describe('Config Parity', () => {
       expect(cfg).toHaveProperty('llm_retry_backoff_base');
       expect(cfg).toHaveProperty('llm_retry_max_delay');
       expect(cfg).toHaveProperty('tool_worker_pool_size');
+      expect(cfg).toHaveProperty('tool_worker_pool_main_agent_reserved');
 
       // RAG nested fields (7)
       expect(cfg.rag).toHaveProperty('chunk_size');
@@ -382,11 +383,11 @@ describe('Config Parity', () => {
       expect(cfg.subagents).toHaveProperty('prompt_task_max_chars');
     });
 
-    it('top-level field count matches expected (46 top-level + 12 rag + 7 agents_md + 11 subagents nested fields)', () => {
+    it('top-level field count matches expected (47 top-level + 12 rag + 7 agents_md + 11 subagents nested fields)', () => {
       const cfg = defaults();
       // Top-level keys count
       const topLevelKeys = Object.keys(cfg);
-      expect(topLevelKeys).toHaveLength(46); // 46 top-level fields (rag, agents_md, subagents are nested)
+      expect(topLevelKeys).toHaveLength(47); // 47 top-level fields (rag, agents_md, subagents are nested)
 
       // RAG nested keys count
       const ragKeys = Object.keys(cfg.rag);

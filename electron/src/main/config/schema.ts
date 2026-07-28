@@ -170,6 +170,13 @@ export const configSchema = z
     grep_max_results: z.number().int().positive().default(100),
     directory_tree_depth: z.number().int().positive().default(2),
     tool_worker_pool_size: z.number().int().min(0).max(8).default(2),
+    /**
+     * Worker slots reserved for main-agent tool work. Main-agent tasks dispatch
+     * ahead of subagent tasks and keep this many workers guaranteed; the rest
+     * are guaranteed to subagent work, so neither lane can starve the other
+     * (review F-06). Clamped to `[0, tool_worker_pool_size - 1]` by the pool.
+     */
+    tool_worker_pool_main_agent_reserved: z.number().int().min(0).max(8).default(1),
     theme: z.string().min(1).default('default'),
     personality: z.string().min(1).default('default'),
     rag: ragConfigSchema.default({}),

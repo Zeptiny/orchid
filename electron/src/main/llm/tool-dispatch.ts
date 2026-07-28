@@ -30,7 +30,8 @@ import {
 import type { ToolExecutionContext } from '../tools/types';
 import { toWorkerContext } from '../tools/types';
 import { getToolWorkerPool } from './tool-pool';
-import { WorkerTaskCancelledError } from '../utils/worker-pool';
+import { WorkerTaskCancelledError, type WorkerTaskScope } from '../utils/worker-pool';
+import { isMainAgentScope } from '../../shared/types/agent-scope';
 import type { ProjectRuntime } from '../project/runtime';
 import { getDefaultWaitTimeoutMs } from '../agents/manager';
 import {
@@ -341,23 +342,39 @@ export async function executeToolCall(
   // Timeout exemption is definition.noTimeout only (no parallel name set).
   // Prefer Zod-parsed data so defaults/coercions reach the handler.
   const handlerArgs = validation.data;
+  const noTimeout = Boolean(registered.definition.noTimeout);
   let result: unknown;
   try {
     const offloadPool = registered.definition.offload ? getToolWorkerPool() : null;
-    const execute = offloadPool
-      ? () => {
-          const workerCtx = toWorkerContext(toolCtx);
-          return offloadPool.run(
-            { toolName: name, args: handlerArgs, context: workerCtx },
-            combinedAbort,
-          );
-        }
-      : () => registered.handler(handlerArgs, toolCtx);
-    result = await runWithToolTimeout(execute, name, {
-      timeoutSeconds: effectiveTimeoutSeconds,
-      noTimeout: Boolean(registered.definition.noTimeout),
-      abortController: timeoutAbort,
-    });
+    if (offloadPool) {
+      const workerCtx = toWorkerContext(toolCtx);
+      const scope: WorkerTaskScope = isMainAgentScope(options.agentScopeId)
+        ? 'main'
+        : 'subagent';
+      const handle = offloadPool.runTask(
+        { toolName: name, args: handlerArgs, context: workerCtx },
+        { signal: combinedAbort, scope },
+      );
+      // Queue wait is measured separately and is NOT counted against the tool
+      // timeout (review F-06 rec 5): the execution timer starts only once a
+      // worker picks the task up. `handle.started` rejects on cancel-before-start.
+      await handle.started;
+      result = await runWithToolTimeout(() => handle.result, name, {
+        timeoutSeconds: effectiveTimeoutSeconds,
+        noTimeout,
+        abortController: timeoutAbort,
+      });
+    } else {
+      result = await runWithToolTimeout(
+        () => registered.handler(handlerArgs, toolCtx),
+        name,
+        {
+          timeoutSeconds: effectiveTimeoutSeconds,
+          noTimeout,
+          abortController: timeoutAbort,
+        },
+      );
+    }
   } catch (err) {
     if (err instanceof ToolTimeoutError || timeoutAbort.signal.aborted) {
       return genericTerminalExecution(
