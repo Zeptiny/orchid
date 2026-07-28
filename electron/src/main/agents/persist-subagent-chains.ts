@@ -259,6 +259,10 @@ export function persistSubagentChains(
     const tracker = lastPersistedRevision.get(sessionId);
     const dirtyRecords: SubagentRecord[] = [];
     for (const record of records) {
+      // `queued` is a runtime-only state: records parked in the queue — or
+      // cancelled before admission — never get a durable row. Durable
+      // eligibility begins at admission (`startedAt`).
+      if (record.queuedAt !== null && record.startedAt === null) continue;
       if (!recovery && record.persistRevision <= (tracker?.get(record.id) ?? -1)) continue;
       dirtyRecords.push(record);
     }

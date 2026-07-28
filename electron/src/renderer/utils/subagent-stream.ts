@@ -122,13 +122,15 @@ export interface SubagentSelectionOptions {
 }
 
 export function groupSubagents(records: readonly SubagentRecord[]): {
+  queued: readonly SubagentRecord[];
   running: readonly SubagentRecord[];
   ended: readonly SubagentRecord[];
 } {
   const sorted = [...records].sort(compareNewest);
   return {
+    queued: sorted.filter((record) => record.status === 'queued'),
     running: sorted.filter((record) => isRunning(record.status)),
-    ended: sorted.filter((record) => !isRunning(record.status)),
+    ended: sorted.filter((record) => !isRunning(record.status) && record.status !== 'queued'),
   };
 }
 
@@ -187,7 +189,8 @@ function draftFromSpawn(event: SubagentSpawnedEvent): LiveDraft {
     sequence: event.sequence,
     // The wire carries no pending→running transition: the manager marks a run
     // running before its first stream event, so a spawned seed is live at once.
-    state: 'running',
+    // A queued seed keeps its queued state until its first content delta.
+    state: event.record.status === 'queued' ? 'queued' : 'running',
     segments: [],
     toolCalls: [],
     usage: event.usage,
@@ -199,6 +202,9 @@ function draftFromSpawn(event: SubagentSpawnedEvent): LiveDraft {
 type ContentDelta = Exclude<SubagentDeltaEvent, SubagentSpawnedEvent | SubagentTerminalEvent>;
 
 function applyDeltaToDraft(draft: LiveDraft, event: ContentDelta): void {
+  // Any content delta proves the queued run was admitted and started: the
+  // wire carries no explicit queued→running transition.
+  if (draft.state === 'queued') draft.state = 'running';
   switch (event.type) {
     case 'text_delta':
     case 'thinking_delta': {
@@ -414,7 +420,10 @@ function seedSnapshotNow(state: SubagentStreamState, snapshot: SubagentSnapshot)
     if (projection.sessionId && projection.sessionId !== snapshot.sessionId) continue;
     runs.set(projection.subagentId, projection.runId);
     highWater.set(projection.subagentId, projection.sequence);
-    if (isRunning(projection.state)) live.set(projection.subagentId, projection);
+    // Queued projections seed the live map too so post-admission deltas apply.
+    if (isRunning(projection.state) || projection.state === 'queued') {
+      live.set(projection.subagentId, projection);
+    }
   }
   return {
     ...state,

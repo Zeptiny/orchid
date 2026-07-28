@@ -470,6 +470,22 @@ describe('Domain Models: SubagentRecord restore migration', () => {
     expect(restored.end_time).toBe(endTime);
   });
 
+  it('QUEUED → INTERRUPTED (queued is runtime-only and never persisted)', () => {
+    const restored = subagentRecordFromStorageDict({
+      id: 'sub-queued',
+      agent_name: 'Explorer',
+      agent_type: 'subagent',
+      status: 'queued',
+      task: 't',
+      start_time: new Date().toISOString(),
+      end_time: null,
+      chain: { messages: [], status: 'active' },
+    });
+
+    expect(restored.status).toBe(SubagentStatus.INTERRUPTED);
+    expect(restored.end_time).not.toBeNull();
+  });
+
   it('COMPLETED status is preserved', () => {
     const now = new Date().toISOString();
     const record: SubagentRecord = {

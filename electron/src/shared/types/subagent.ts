@@ -20,6 +20,8 @@ import type {
 // ── Enums as const objects ──────────────────────────────────────────────────
 
 export const SubagentStatus = {
+  /** Parked in the admission queue; runtime-only, never persisted. */
+  QUEUED: 'queued',
   PENDING: 'pending',
   RUNNING: 'running',
   COMPLETED: 'completed',
@@ -265,6 +267,7 @@ export function estimateDeltaBytes(event: SubagentDeltaEvent): number {
 // ── Zod schemas ─────────────────────────────────────────────────────────────
 
 export const subagentStatusSchema = z.enum([
+  SubagentStatus.QUEUED,
   SubagentStatus.PENDING,
   SubagentStatus.RUNNING,
   SubagentStatus.COMPLETED,
@@ -343,16 +346,20 @@ export function subagentRecordFromStorageDict(data: unknown): SubagentRecord {
   const rawStatus = (raw.state ?? raw.status) as string | undefined;
   if (
     typeof rawStatus === 'string' &&
-    (rawStatus === 'pending' || rawStatus === 'running' ||
+    (rawStatus === 'queued' || rawStatus === 'pending' || rawStatus === 'running' ||
       rawStatus === 'completed' || rawStatus === 'failed' ||
       rawStatus === 'interrupted')
   ) {
     status = rawStatus;
   }
 
-  // Migrate PENDING/RUNNING → INTERRUPTED on restore (matching Python)
+  // Migrate non-terminal states → INTERRUPTED on restore (matching Python).
+  // `queued` is a runtime-only state that must never be persisted; a stored
+  // row carrying it is treated like a crashed pending/running record.
   const migratedToInterrupted =
-    status === SubagentStatus.PENDING || status === SubagentStatus.RUNNING;
+    status === SubagentStatus.QUEUED ||
+    status === SubagentStatus.PENDING ||
+    status === SubagentStatus.RUNNING;
   if (migratedToInterrupted) {
     status = SubagentStatus.INTERRUPTED;
   }

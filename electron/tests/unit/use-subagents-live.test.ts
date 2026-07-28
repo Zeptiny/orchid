@@ -115,8 +115,21 @@ describe('subagent list grouping and selection', () => {
       record('new-ended', 'failed', '2026-01-01T00:00:04Z'),
       record('old-running', 'pending', '2026-01-01T00:00:02Z'),
     ]);
+    expect(result.queued).toEqual([]);
     expect(result.running.map((item) => item.id)).toEqual(['new-running', 'old-running']);
     expect(result.ended.map((item) => item.id)).toEqual(['new-ended', 'old-ended']);
+  });
+
+  it('groups queued records distinctly from running and ended', () => {
+    const result = groupSubagents([
+      record('queued-old', 'queued', '2026-01-01T00:00:01Z'),
+      record('running-one', 'running', '2026-01-01T00:00:02Z'),
+      record('queued-new', 'queued', '2026-01-01T00:00:03Z'),
+      record('ended-one', 'interrupted', '2026-01-01T00:00:04Z'),
+    ]);
+    expect(result.queued.map((item) => item.id)).toEqual(['queued-new', 'queued-old']);
+    expect(result.running.map((item) => item.id)).toEqual(['running-one']);
+    expect(result.ended.map((item) => item.id)).toEqual(['ended-one']);
   });
 
   it('resolves requested or existing selection without selecting a row by default', () => {
@@ -152,6 +165,32 @@ describe('subagent delta application', () => {
     expect(live?.segments).toEqual([{ kind: 'text', id: 'seg-text', content: 'Hello world' }]);
     expect(state.highWater.get('one')).toBe(2);
     expect(state.runs.get('one')).toBe('run-1');
+  });
+
+  it('seeds queued spawns as queued and promotes the draft on the first content delta', () => {
+    let state = seeded(sessionA, 0);
+    state = applyDeltaBatch(state, batch([spawned('one', 'run-1', record('one', 'queued'))]));
+    expect(state.records.map((item) => item.status)).toEqual(['queued']);
+    expect(state.live.get('one')).toMatchObject({ runId: 'run-1', state: 'queued' });
+
+    // Admission carries no delta; the first content delta proves the run started.
+    state = applyDeltaBatch(state, batch([textDelta(1, 'working')]));
+    expect(state.live.get('one')).toMatchObject({ sequence: 1, state: 'running' });
+    expect(state.live.get('one')?.segments).toEqual([{ kind: 'text', id: 'seg-text', content: 'working' }]);
+  });
+
+  it('seeds queued live projections from snapshots so post-admission deltas apply', () => {
+    const state = seeded(
+      sessionA,
+      1,
+      [record('one', 'queued')],
+      [projection({ subagentId: 'one', state: 'queued' })],
+    );
+    expect(state.live.get('one')?.state).toBe('queued');
+
+    const next = applyDeltaBatch(state, batch([textDelta(1, 'admitted')]));
+    expect(next.live.get('one')?.state).toBe('running');
+    expect(next.live.get('one')?.segments).toEqual([{ kind: 'text', id: 'seg-text', content: 'admitted' }]);
   });
 
   it('ignores record-carrying deltas whose record id does not match the subagent', () => {

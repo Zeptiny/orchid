@@ -15,6 +15,7 @@ Shared domain vocabulary for the orchid project. This file defines terms used ac
 - **Live Delta Event** — A typed incremental update from a subagent run (`SubagentDeltaEvent`: `spawned`, `text_delta`, `thinking_delta`, `tool_start`, `tool_args_delta`, `tool_result`, `usage`, `terminal`), replacing full-projection broadcasts. Every delta carries `sessionId`, `subagentId`, `runId`, `sequence`, and `sessionRevision`; deltas are batched into one `SubagentEvent` envelope per IPC flush.
 - **Session Revision** — A per-session monotonic counter stamped on every subagent live event and snapshot. The renderer uses it to reject stale snapshots and as the floor when reseeding after hydration-buffer overflow.
 - **Durable Handoff** — The transfer of subagent output from ephemeral live state to the persisted `SubagentRecord`. The renderer receives the durable record exactly twice — as a seed at spawn and authoritatively at terminal settlement — never per delta.
+- **Queued State** — A first-class runtime state (`queued`) for a subagent spawn that exceeds the admission limits (`subagents.max_active_global`, `subagents.max_active_per_session`). Queued records park in a bounded FIFO queue (`subagents.max_queued`) and are admitted on terminal transitions with per-session round-robin fairness. The state is ephemeral like `pending`: visible end-to-end (runtime, IPC, delegate result, UI) but never persisted — a durable row is written only at admission, and a crash loses queued work.
 
 ## Skill System
 

@@ -38,7 +38,11 @@ export interface SubagentDetail {
 export interface UseSubagentsReturn {
   state: SubagentListState;
   subagents: readonly SubagentRecord[];
-  groups: { running: readonly SubagentRecord[]; ended: readonly SubagentRecord[] };
+  groups: {
+    queued: readonly SubagentRecord[];
+    running: readonly SubagentRecord[];
+    ended: readonly SubagentRecord[];
+  };
   totalUsage: Usage | null;
   usageByParentChain: ReadonlyMap<number, Usage>;
   /**
@@ -214,7 +218,7 @@ export function useSubagents(activeSessionId: string | null): UseSubagentsReturn
   }, [hydrate]);
 
   useEffect(() => {
-    if (!current.records.some((record) => record.status === 'running' || record.status === 'pending')) return undefined;
+    if (!current.records.some((record) => record.status === 'running' || record.status === 'pending' || record.status === 'queued')) return undefined;
     const timer = setInterval(() => setTick((value) => value + 1), 1000);
     return () => clearInterval(timer);
   }, [current.records]);

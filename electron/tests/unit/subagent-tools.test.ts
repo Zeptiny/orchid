@@ -10,7 +10,7 @@
  *
  * Test scenarios from plan U11.
  */
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { z } from 'zod';
 import { AgentType, AgentTier, type Agent } from '../../src/shared/types/agent';
 import {
@@ -31,6 +31,24 @@ import {
   type ToolExecutionResult,
   type ToolHandlerOutcome,
 } from '../../src/shared/types/tool-result';
+import { defaults } from '../../src/main/config/schema';
+import type { Config } from '../../src/shared/types/ipc-boundary';
+
+/**
+ * Admission limits are read from the live config inside `SubagentManager`
+ * (top-level `getConfig` import). Overriding `getConfig` here pins the
+ * `subagents.*` limits for the queue tests; with no override the real loader
+ * is used so every other test keeps its existing behavior.
+ */
+const configOverride = vi.hoisted(() => ({ current: null as Config | null }));
+
+vi.mock('../../src/main/config/loader', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../src/main/config/loader')>();
+  return {
+    ...actual,
+    getConfig: () => configOverride.current ?? actual.getConfig(),
+  };
+});
 
 const tierSelections = {
   seed: { connectionId: '11111111-1111-4111-8111-111111111111', modelId: 'model-for-seed' },
@@ -901,5 +919,68 @@ describe('answer_subagent', () => {
     expect(manager.getRecord(id)?.pendingQuestion?.toolCallId).toBe('tc-1');
     manager.answerSubagentQuestion(id, 'tc-1', { type: 'declined' });
     await questionPromise;
+  });
+});
+
+// ── delegate_to_subagent admission control (U7) ─────────────────────────────
+
+describe('delegate_to_subagent admission control', () => {
+  let manager: SubagentManager;
+  let agents: Map<string, Agent>;
+
+  beforeEach(() => {
+    manager = new SubagentManager();
+    agents = makeAgentMap();
+    configOverride.current = {
+      ...defaults(),
+      subagents: { ...defaults().subagents, max_active_per_session: 1, max_queued: 2 },
+    };
+    vi.clearAllMocks();
+  });
+
+  afterEach(() => {
+    configOverride.current = null;
+  });
+
+  it('surfaces queued status and queue position when over capacity', async () => {
+    const { handler } = buildDelegateTool(agents, manager);
+
+    const first = (await handler({
+      name: 'first', task: 'task one', type: 'code-reviewer',
+    }, toolContext)) as ToolExecutionResult;
+    expect(first.canonical.status).toBe('complete');
+    expect(first.agentProjection.content).toContain('status="pending"');
+    expect(first.agentProjection.content).not.toContain('queue_position');
+
+    const second = (await handler({
+      name: 'second', task: 'task two', type: 'code-reviewer',
+    }, toolContext)) as ToolExecutionResult;
+    expect(second.canonical.status).toBe('complete');
+    expect(second.agentProjection.content).toContain('status="queued"');
+    expect(second.agentProjection.content).toContain('queue_position="1"');
+
+    const data = second.canonical.data as GenericToolResultData;
+    const value = data.value as { status: string; queue_position: number };
+    expect(value.status).toBe(SubagentState.QUEUED);
+    expect(value.queue_position).toBe(1);
+  });
+
+  it('returns a structured error naming the limit when the queue is full', async () => {
+    const { handler } = buildDelegateTool(agents, manager);
+    const spawnOne = (name: string) => handler({
+      name, task: 'task', type: 'code-reviewer',
+    }, toolContext);
+
+    await spawnOne('active');
+    await spawnOne('queued-1');
+    await spawnOne('queued-2');
+    const refused = (await spawnOne('refused')) as ToolExecutionResult;
+
+    expect(refused.canonical.status).toBe('error');
+    expect(refused.agentProjection.content).toContain('max_queued=2');
+    expect(refused.agentProjection.content).toContain('max_active_per_session=1');
+    // No record leaks into the manager for the refused spawn.
+    expect(manager.allRecords()).toHaveLength(3);
+    expect(manager.allRecords().some((record) => record.label === 'refused')).toBe(false);
   });
 });

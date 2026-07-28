@@ -4,6 +4,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import {
   SubagentManager,
+  SubagentQueueFullError,
   SubagentState,
   runtimeToDomain,
 } from '../../src/main/agents/manager';
@@ -768,5 +769,231 @@ describe('SubagentManager delta emission (U2)', () => {
     expect(first).not.toBe(second);
     expect(first?.segments).not.toBe(second?.segments);
     expect(first).toEqual(second);
+  });
+});
+
+describe('SubagentManager admission control (U7)', () => {
+  let manager: SubagentManager;
+
+  beforeEach(() => {
+    manager = new SubagentManager();
+    configOverride.current = null;
+  });
+
+  afterEach(() => {
+    configOverride.current = null;
+    vi.useRealTimers();
+  });
+
+  function setLimits(overrides: Partial<Config['subagents']>): void {
+    configOverride.current = {
+      ...defaults(),
+      subagents: { ...defaults().subagents, ...overrides },
+    };
+  }
+
+  it('parks a third spawn as queued under max_active_per_session 2 and admits it exactly once on the first terminal', async () => {
+    setLimits({ max_active_per_session: 2 });
+    const gates: Array<() => void> = [];
+    manager.setRunner(async function* (): AsyncGenerator<StreamEvent> {
+      await new Promise<void>((resolve) => { gates.push(resolve); });
+      yield { type: 'content', text: 'done' };
+      yield { type: 'finish', finishReason: 'stop' };
+    });
+    const events: SubagentDeltaEvent[] = [];
+    manager.setOnDelta((event) => events.push(event));
+
+    const first = manager.spawn('first', 'x', testAgent, { sessionId: 'sess-admit' });
+    const second = manager.spawn('second', 'x', testAgent, { sessionId: 'sess-admit' });
+    const third = manager.spawn('third', 'x', testAgent, { sessionId: 'sess-admit' });
+
+    expect(first.state).toBe(SubagentState.RUNNING);
+    expect(second.state).toBe(SubagentState.RUNNING);
+    expect(third.state).toBe(SubagentState.QUEUED);
+    expect(third._runPromise).toBeNull();
+    expect(third.queuedAt).not.toBeNull();
+    expect(third.startedAt).toBeNull();
+    // Queued records stay out of durable tracking until admission.
+    expect(third.persistRevision).toBe(0);
+    expect(manager.getQueuePosition(third.id)).toBe(1);
+    expect(gates).toHaveLength(2);
+
+    // The spawned seed carries the queued status for the third record.
+    const spawnedStates = events
+      .filter((event): event is Extract<SubagentDeltaEvent, { type: 'spawned' }> => event.type === 'spawned')
+      .map((event) => event.record.status);
+    expect(spawnedStates).toEqual(['pending', 'pending', 'queued']);
+
+    // First terminal admits the queued record exactly once: pending→running.
+    gates[0]();
+    await first._runPromise;
+    expect(third.state).toBe(SubagentState.RUNNING);
+    expect(third._runPromise).not.toBeNull();
+    expect(third.startedAt).not.toBeNull();
+    expect(third.persistRevision).toBeGreaterThan(0);
+    expect(manager.getQueuePosition(third.id)).toBeNull();
+    expect(gates).toHaveLength(3);
+
+    gates[1]();
+    gates[2]();
+    await Promise.all([second._runPromise, third._runPromise]);
+
+    const terminalOrder = events
+      .filter((event) => event.type === 'terminal')
+      .map((event) => event.subagentId);
+    expect(terminalOrder[0]).toBe(first.id);
+    expect(new Set(terminalOrder)).toEqual(new Set([first.id, second.id, third.id]));
+  });
+
+  it('admits queued sessions round-robin when max_active_global is 1', async () => {
+    setLimits({ max_active_global: 1 });
+    const gates = new Map<string, () => void>();
+    manager.setRunner(async function* (params): AsyncGenerator<StreamEvent> {
+      await new Promise<void>((resolve) => { gates.set(params.agentScopeId, resolve); });
+      yield { type: 'finish', finishReason: 'stop' };
+    });
+
+    const a1 = manager.spawn('a1', 'x', testAgent, { sessionId: 'session-a' });
+    const b1 = manager.spawn('b1', 'x', testAgent, { sessionId: 'session-b' });
+    const a2 = manager.spawn('a2', 'x', testAgent, { sessionId: 'session-a' });
+    const b2 = manager.spawn('b2', 'x', testAgent, { sessionId: 'session-b' });
+
+    expect(a1.state).toBe(SubagentState.RUNNING);
+    expect(b1.state).toBe(SubagentState.QUEUED);
+    expect(a2.state).toBe(SubagentState.QUEUED);
+    expect(b2.state).toBe(SubagentState.QUEUED);
+
+    gates.get(a1.id)!();
+    await a1._runPromise;
+    expect(b1.state).toBe(SubagentState.RUNNING);
+    expect(a2.state).toBe(SubagentState.QUEUED);
+
+    gates.get(b1.id)!();
+    await b1._runPromise;
+    expect(a2.state).toBe(SubagentState.RUNNING);
+    expect(b2.state).toBe(SubagentState.QUEUED);
+
+    gates.get(a2.id)!();
+    await a2._runPromise;
+    expect(b2.state).toBe(SubagentState.RUNNING);
+
+    gates.get(b2.id)!();
+    await b2._runPromise;
+    expect(manager.allRecords().every((record) => record.state === SubagentState.COMPLETED)).toBe(true);
+  });
+
+  it('rejects spawns with SubagentQueueFullError when the queue is full, leaking no record', () => {
+    setLimits({ max_active_global: 1, max_active_per_session: 1, max_queued: 2 });
+
+    manager.spawn('active', 'x', testAgent, { sessionId: 'sess-full' });
+    const q1 = manager.spawn('q1', 'x', testAgent, { sessionId: 'sess-full' });
+    const q2 = manager.spawn('q2', 'x', testAgent, { sessionId: 'sess-full' });
+    expect(q1.state).toBe(SubagentState.QUEUED);
+    expect(q2.state).toBe(SubagentState.QUEUED);
+    expect(manager.getQueuePosition(q2.id)).toBe(2);
+
+    let thrown: unknown;
+    try {
+      manager.spawn('q3', 'x', testAgent, { sessionId: 'sess-full' });
+    } catch (err) {
+      thrown = err;
+    }
+    expect(thrown).toBeInstanceOf(SubagentQueueFullError);
+    const queueFull = thrown as SubagentQueueFullError;
+    expect(queueFull.maxQueued).toBe(2);
+    expect(queueFull.message).toContain('max_queued=2');
+    expect(queueFull.message).toContain('max_active_global=1');
+    expect(manager.allRecords()).toHaveLength(3);
+    expect(manager.allRecords().some((record) => record.label === 'q3')).toBe(false);
+  });
+
+  it('cancelling a queued record emits terminal interrupted without consuming a run slot', async () => {
+    setLimits({ max_active_per_session: 1 });
+    const gates: Array<() => void> = [];
+    manager.setRunner(async function* (): AsyncGenerator<StreamEvent> {
+      await new Promise<void>((resolve) => { gates.push(resolve); });
+      yield { type: 'finish', finishReason: 'stop' };
+    });
+
+    const running = manager.spawn('running', 'x', testAgent, { sessionId: 'sess-cancel' });
+    const queued = manager.spawn('queued', 'x', testAgent, { sessionId: 'sess-cancel' });
+    const queued2 = manager.spawn('queued2', 'x', testAgent, { sessionId: 'sess-cancel' });
+    expect(queued.state).toBe(SubagentState.QUEUED);
+
+    const events: SubagentDeltaEvent[] = [];
+    manager.setOnDelta((event) => events.push(event));
+    const waitPromise = manager.wait([queued.id]);
+
+    expect(manager.cancelOne(queued.id)).toBe(true);
+    expect(queued.state).toBe(SubagentState.INTERRUPTED);
+    expect(queued.endTime).not.toBeNull();
+    expect(queued._runPromise).toBeNull();
+    expect(queued.startedAt).toBeNull();
+    expect(manager.getQueuePosition(queued.id)).toBeNull();
+
+    const terminal = events.find(
+      (event): event is Extract<SubagentDeltaEvent, { type: 'terminal' }> =>
+        event.type === 'terminal' && event.subagentId === queued.id,
+    );
+    expect(terminal).toBeDefined();
+    expect(terminal!.state).toBe('interrupted');
+    expect(terminal!.record.status).toBe('interrupted');
+
+    const waited = await waitPromise;
+    expect(waited.get(queued.id)?.state).toBe(SubagentState.INTERRUPTED);
+
+    // No slot was freed: the running record and the second queued record are untouched.
+    expect(running.state).toBe(SubagentState.RUNNING);
+    expect(queued2.state).toBe(SubagentState.QUEUED);
+    expect(gates).toHaveLength(1);
+
+    gates[0]();
+    await running._runPromise;
+    // The running terminal admits queued2, never the cancelled record.
+    expect(queued2.state).toBe(SubagentState.RUNNING);
+  });
+
+  it('reports queue wait and execution time separately in record timing', async () => {
+    vi.useFakeTimers();
+    setLimits({ max_active_per_session: 1 });
+    const gates: Array<() => void> = [];
+    manager.setRunner(async function* (): AsyncGenerator<StreamEvent> {
+      await new Promise<void>((resolve) => { gates.push(resolve); });
+      yield { type: 'finish', finishReason: 'stop' };
+    });
+
+    const first = manager.spawn('first', 'x', testAgent, { sessionId: 'sess-timing' });
+    vi.advanceTimersByTime(100);
+    const second = manager.spawn('second', 'x', testAgent, { sessionId: 'sess-timing' });
+    expect(second.state).toBe(SubagentState.QUEUED);
+    expect(second.queuedAt).toBe(Date.now());
+    expect(second.startedAt).toBeNull();
+
+    const stateOf = (id: string) => manager.getStates('sess-timing').find((entry) => entry.id === id)!;
+    expect(stateOf(second.id).state).toBe(SubagentState.QUEUED);
+    expect(stateOf(second.id).elapsed).toBe(0);
+    vi.advanceTimersByTime(500);
+    // A queued entry's prompt-context elapsed is its queue wait.
+    expect(stateOf(second.id).elapsed).toBe(500);
+
+    gates[0]();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(second.state).toBe(SubagentState.RUNNING);
+    expect(second.startedAt).toBe(second.queuedAt! + 500);
+    // Post-admission elapsed excludes the queue wait.
+    expect(stateOf(second.id).elapsed).toBe(0);
+
+    await vi.advanceTimersByTimeAsync(10);
+    gates[1]();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(second.state).toBe(SubagentState.COMPLETED);
+
+    const queueWait = second.startedAt! - second.queuedAt!;
+    const execution = second.endTime! - second.startedAt!;
+    expect(queueWait).toBe(500);
+    expect(execution).toBe(10);
+    expect(second.endTime! - second.queuedAt!).toBe(queueWait + execution);
+    expect(stateOf(second.id).elapsed).toBe(execution);
+    expect(first.state).toBe(SubagentState.COMPLETED);
   });
 });

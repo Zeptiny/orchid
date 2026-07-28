@@ -314,6 +314,7 @@ function CollapseBlock({
 
 export interface SubagentStatusGroups {
   running: readonly SubagentRecord[];
+  queued: readonly SubagentRecord[];
   other: readonly SubagentRecord[];
 }
 
@@ -322,17 +323,20 @@ export function partitionSubagentsByStatus(
   agents: readonly SubagentRecord[],
 ): SubagentStatusGroups {
   const running: SubagentRecord[] = [];
+  const queued: SubagentRecord[] = [];
   const other: SubagentRecord[] = [];
 
   for (const agent of agents) {
     if (agent.status === 'running' || agent.status === 'pending') {
       running.push(agent);
+    } else if (agent.status === 'queued') {
+      queued.push(agent);
     } else {
       other.push(agent);
     }
   }
 
-  return { running, other };
+  return { running, queued, other };
 }
 
 export function countRunningSubagents(agents: readonly SubagentRecord[]): number {
@@ -386,11 +390,21 @@ export function SubagentsSection({
   }
 
   const agents = state.status === 'ready' ? state.subagents : [];
-  const { running, other } = partitionSubagentsByStatus(agents);
+  const { running, queued, other } = partitionSubagentsByStatus(agents);
 
   return (
     <div className="inspector-stack">
       {running.map((agent) => (
+        <SubagentRow
+          key={agent.id}
+          agent={agent}
+          selectedId={selectedId}
+          onSelect={onSelect}
+          getDetail={getDetail}
+          onOpenView={onOpenView}
+        />
+      ))}
+      {queued.map((agent) => (
         <SubagentRow
           key={agent.id}
           agent={agent}
@@ -505,6 +519,7 @@ function SubagentRow({
 
 function SubagentStateBadge({ state }: { state: string }) {
   const config: Record<string, { tone: 'neutral' | 'warning' | 'success' | 'error' | 'info'; label: string }> = {
+    queued: { tone: 'neutral', label: 'queued' },
     pending: { tone: 'neutral', label: 'pending' },
     running: { tone: 'warning', label: 'running' },
     completed: { tone: 'success', label: 'done' },

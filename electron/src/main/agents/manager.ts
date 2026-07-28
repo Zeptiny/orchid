@@ -48,6 +48,8 @@ import { getConfig } from '../config/loader';
 // ── Enums ───────────────────────────────────────────────────────────────────
 
 export const SubagentState = {
+  /** Parked in the admission queue awaiting a run slot; never persisted. */
+  QUEUED: 'queued',
   PENDING: 'pending',
   RUNNING: 'running',
   COMPLETED: 'completed',
@@ -115,6 +117,37 @@ export function getDefaultWaitTimeoutMs(): number {
   }
 }
 
+/** Admission limits resolved from `subagents.*` config. */
+export interface SubagentAdmissionLimits {
+  readonly maxActiveGlobal: number;
+  readonly maxActivePerSession: number;
+  readonly maxQueued: number;
+}
+
+const DEFAULT_ADMISSION_LIMITS: SubagentAdmissionLimits = {
+  maxActiveGlobal: 8,
+  maxActivePerSession: 4,
+  maxQueued: 32,
+};
+
+/**
+ * Resolve admission limits from the live process-wide config (`getConfig()`),
+ * read at spawn/admission time so a runtime settings change takes effect
+ * immediately. Falls back to the schema defaults when config is not loaded.
+ */
+function getAdmissionLimits(): SubagentAdmissionLimits {
+  try {
+    const { max_active_global, max_active_per_session, max_queued } = getConfig().subagents;
+    return {
+      maxActiveGlobal: max_active_global,
+      maxActivePerSession: max_active_per_session,
+      maxQueued: max_queued,
+    };
+  } catch {
+    return DEFAULT_ADMISSION_LIMITS;
+  }
+}
+
 /**
  * Resolve the per-subagent `usage` delta throttle interval in milliseconds.
  *
@@ -157,6 +190,31 @@ export class SubagentWaitTimeoutError extends Error {
   }
 }
 
+/**
+ * Thrown by `SubagentManager.spawn` when the admission queue is full: every
+ * active slot is taken (PENDING/RUNNING) and `max_queued` records already
+ * wait. No record is created. The delegate tool converts this into a
+ * structured tool error naming the limit.
+ */
+export class SubagentQueueFullError extends Error {
+  readonly maxQueued: number;
+  readonly maxActiveGlobal: number;
+  readonly maxActivePerSession: number;
+
+  constructor(limits: SubagentAdmissionLimits) {
+    super(
+      `Subagent queue is full (subagents.max_queued=${limits.maxQueued}): all active slots are taken ` +
+        `(subagents.max_active_global=${limits.maxActiveGlobal}, ` +
+        `subagents.max_active_per_session=${limits.maxActivePerSession}). ` +
+        `Wait for running subagents to finish or interrupt them before delegating more.`,
+    );
+    this.name = 'SubagentQueueFullError';
+    this.maxQueued = limits.maxQueued;
+    this.maxActiveGlobal = limits.maxActiveGlobal;
+    this.maxActivePerSession = limits.maxActivePerSession;
+  }
+}
+
 // ── SubagentRecord ──────────────────────────────────────────────────────────
 
 export interface SubagentRecord {
@@ -174,8 +232,12 @@ export interface SubagentRecord {
   result: string | null;
   /** Error message (populated on failure). */
   error: string | null;
-  /** Start time (epoch ms). */
+  /** Spawn time (epoch ms). */
   readonly startTime: number;
+  /** When the record entered the admission queue (epoch ms; null = admitted at spawn). */
+  queuedAt: number | null;
+  /** When execution started after admission (epoch ms; null = not started). */
+  startedAt: number | null;
   /** End time (epoch ms, null if still running). */
   endTime: number | null;
   /** The chain associated with this subagent (for persistence). */
@@ -196,6 +258,8 @@ export interface SubagentRecord {
   readonly sessionId: string | null;
   /** Runtime-only owner window used for approval delivery. */
   readonly windowId: string | null;
+  /** Frozen parent-turn workspace cwd; reused when a queued run is admitted. */
+  readonly cwd: string | null;
   readonly projectRuntime?: ProjectRuntime;
   /** Abort controller for the in-flight run. */
   abortController: AbortController | null;
@@ -272,6 +336,10 @@ export class SubagentManager {
   private _onDelta: ((event: SubagentDeltaEvent) => void) | null = null;
   /** Per-session monotonic revision counter ordering events and snapshots. */
   private _sessionRevisions: Map<string, number> = new Map();
+  /** FIFO admission queue of QUEUED record ids awaiting a run slot. */
+  private _queue: string[] = [];
+  /** Session key ('' = unscoped) admitted last; round-robin fairness cursor. */
+  private _lastAdmittedSession: string | null = null;
 
   /**
    * Configure the stream runner. When set, spawn() starts a background run.
@@ -294,8 +362,11 @@ export class SubagentManager {
   /**
    * Spawn a new subagent.
    *
-   * Returns the record immediately. If a runner is configured, starts the
-   * isolated LLM stream in the background (matching Python asyncio.create_task).
+   * Always returns a record. Under the configured active limits the run
+   * starts immediately (PENDING → runner); over capacity the record parks in
+   * the bounded FIFO admission queue as QUEUED and starts when a terminal
+   * transition frees a slot. Throws `SubagentQueueFullError` (creating no
+   * record) when the queue is full.
    */
   spawn(
     name: string,
@@ -314,20 +385,29 @@ export class SubagentManager {
     } = {},
   ): SubagentRecord {
     const id = `subagent-${randomUUID()}`;
+    const sessionId = options.sessionId ?? null;
+    const limits = getAdmissionLimits();
+    const admitted = this._canAdmit(sessionId, limits);
+    if (!admitted && this._queue.length >= limits.maxQueued) {
+      throw new SubagentQueueFullError(limits);
+    }
 
     const userMessage = makeUserMessage(task);
     const selection = options.selection ?? null;
     const chain = makeEmptyChain(options.sessionId ?? '', selection, agent);
+    const now = Date.now();
 
     const record: SubagentRecord = {
       id,
       agent,
-      state: SubagentState.PENDING,
+      state: admitted ? SubagentState.PENDING : SubagentState.QUEUED,
       label: name,
       task,
       result: null,
       error: null,
-      startTime: Date.now(),
+      startTime: now,
+      queuedAt: admitted ? null : now,
+      startedAt: null,
       endTime: null,
       chain: {
         ...chain,
@@ -336,13 +416,14 @@ export class SubagentManager {
       usage: null,
       selection,
       parentChainIndex: options.parentChainIndex ?? null,
-      sessionId: options.sessionId ?? null,
+      sessionId,
       windowId: options.windowId ?? null,
+      cwd: options.cwd ?? null,
       projectRuntime: options.projectRuntime,
       abortController: null,
       _resolveWait: [],
       _runPromise: null,
-      live: makeLiveProjection(id, options.sessionId ?? null, 'pending'),
+      live: makeLiveProjection(id, sessionId, admitted ? 'pending' : 'queued'),
       _liveCommittedSegmentCount: 0,
       _liveTerminalEmitted: false,
       persistRevision: 0,
@@ -351,6 +432,8 @@ export class SubagentManager {
     };
 
     this._subagents.set(id, record);
+    if (!admitted) this._queue.push(id);
+    else this._lastAdmittedSession = sessionId ?? '';
     this._notify();
     this._emitDelta(record, {
       type: SubagentDeltaEventType.SPAWNED,
@@ -358,11 +441,20 @@ export class SubagentManager {
       usage: record.usage,
     });
 
-    if (this._runner) {
+    if (admitted && this._runner) {
       record._runPromise = this._startRun(record, options.cwd);
     }
 
     return record;
+  }
+
+  /**
+   * 1-based FIFO position of a queued record, or null when not queued.
+   * Surfaced by the delegate tool so the main agent sees backpressure.
+   */
+  getQueuePosition(subagentId: string): number | null {
+    const index = this._queue.indexOf(subagentId);
+    return index >= 0 ? index + 1 : null;
   }
 
   /**
@@ -372,6 +464,7 @@ export class SubagentManager {
     const record = this._subagents.get(subagentId);
     if (record && record.state === SubagentState.PENDING) {
       record.state = SubagentState.RUNNING;
+      record.startedAt ??= Date.now();
       this._updateLive(record, { state: SubagentState.RUNNING });
       this._markRecordDirty(record);
       this._notify();
@@ -386,6 +479,7 @@ export class SubagentManager {
     const record = this._subagents.get(subagentId);
     if (!record || TERMINAL_STATES.has(record.state)) return;
 
+    this._removeFromQueue(subagentId);
     record.state = SubagentState.COMPLETED;
     record.result = result;
     record.endTime = Date.now();
@@ -394,6 +488,7 @@ export class SubagentManager {
     this._finishLive(record, SubagentState.COMPLETED);
     this._resolveWaiters(record);
     this._notify();
+    this._admitFromQueue();
   }
 
   /**
@@ -404,6 +499,7 @@ export class SubagentManager {
     const record = this._subagents.get(subagentId);
     if (!record || TERMINAL_STATES.has(record.state)) return;
 
+    this._removeFromQueue(subagentId);
     record.state = SubagentState.FAILED;
     record.error = error;
     record.endTime = Date.now();
@@ -412,6 +508,7 @@ export class SubagentManager {
     this._finishLive(record, SubagentState.FAILED);
     this._resolveWaiters(record);
     this._notify();
+    this._admitFromQueue();
   }
 
   /**
@@ -561,6 +658,11 @@ export class SubagentManager {
       return false;
     }
 
+    // A queued record is cancelled in place: removed from the queue, marked
+    // INTERRUPTED, terminal delta emitted — no run slot was ever consumed, so
+    // no admission follows.
+    const wasQueued = record.state === SubagentState.QUEUED;
+    this._removeFromQueue(subagentId);
     record.state = SubagentState.INTERRUPTED;
     record.error = record.error ?? 'Interrupted by user';
     record.endTime = record.endTime ?? Date.now();
@@ -579,6 +681,7 @@ export class SubagentManager {
     }
     this._resolveWaiters(record);
     this._notify();
+    if (!wasQueued) this._admitFromQueue();
     return true;
   }
 
@@ -652,11 +755,7 @@ export class SubagentManager {
         type: record.agent.type,
         task: record.task,
         state: record.state,
-        elapsed: record.endTime
-          ? record.endTime - record.startTime
-          : record.startTime
-            ? Date.now() - record.startTime
-            : null,
+        elapsed: this._elapsedMs(record),
       });
     }
 
@@ -782,6 +881,119 @@ export class SubagentManager {
         ? this.allRecords()
         : this.allRecords().filter((r) => r.sessionId === sessionId);
     return records.map((record) => runtimeToDomain(record));
+  }
+
+  // ── Private: admission control ────────────────────────────────────────────
+
+  /** "Active" = PENDING + RUNNING; QUEUED consumes no run slot. */
+  private _isActive(record: SubagentRecord): boolean {
+    return record.state === SubagentState.PENDING || record.state === SubagentState.RUNNING;
+  }
+
+  private _activeCount(): number {
+    let count = 0;
+    for (const record of this._subagents.values()) {
+      if (this._isActive(record)) count += 1;
+    }
+    return count;
+  }
+
+  private _sessionActiveCount(sessionId: string | null): number {
+    let count = 0;
+    for (const record of this._subagents.values()) {
+      if (record.sessionId === sessionId && this._isActive(record)) count += 1;
+    }
+    return count;
+  }
+
+  private _canAdmit(sessionId: string | null, limits: SubagentAdmissionLimits): boolean {
+    return (
+      this._activeCount() < limits.maxActiveGlobal &&
+      this._sessionActiveCount(sessionId) < limits.maxActivePerSession
+    );
+  }
+
+  private _removeFromQueue(subagentId: string): void {
+    const index = this._queue.indexOf(subagentId);
+    if (index >= 0) this._queue.splice(index, 1);
+  }
+
+  /**
+   * Admit queued records after a terminal transition frees capacity. FIFO
+   * within a session, round-robin across sessions: when the global limit is
+   * the binding constraint, sessions with queued work take turns; a session
+   * blocked by its per-session limit is skipped until its own slot frees.
+   */
+  private _admitFromQueue(): void {
+    const limits = getAdmissionLimits();
+    for (;;) {
+      if (this._queue.length === 0) return;
+      if (this._activeCount() >= limits.maxActiveGlobal) return;
+      const sessionKey = this._nextAdmissibleSessionKey(limits);
+      if (sessionKey === null) return;
+      const index = this._queue.findIndex(
+        (id) => (this._subagents.get(id)?.sessionId ?? '') === sessionKey,
+      );
+      if (index < 0) return;
+      const [id] = this._queue.splice(index, 1);
+      const record = this._subagents.get(id);
+      if (!record || record.state !== SubagentState.QUEUED) continue;
+      this._admit(record);
+    }
+  }
+
+  /**
+   * Session key ('' = unscoped) of the next queued session with per-session
+   * capacity, rotating past the last admitted session; null when no queued
+   * session can admit.
+   */
+  private _nextAdmissibleSessionKey(limits: SubagentAdmissionLimits): string | null {
+    const sessionKeys: string[] = [];
+    for (const id of this._queue) {
+      const key = this._subagents.get(id)?.sessionId ?? '';
+      if (!sessionKeys.includes(key)) sessionKeys.push(key);
+    }
+    if (sessionKeys.length === 0) return null;
+    const cursor = this._lastAdmittedSession === null
+      ? -1
+      : sessionKeys.indexOf(this._lastAdmittedSession);
+    for (let offset = 0; offset < sessionKeys.length; offset += 1) {
+      const key = sessionKeys[(cursor + 1 + offset) % sessionKeys.length];
+      if (this._sessionActiveCount(key === '' ? null : key) < limits.maxActivePerSession) {
+        return key;
+      }
+    }
+    return null;
+  }
+
+  /** Move a queued record into a run slot: PENDING, then start the runner. */
+  private _admit(record: SubagentRecord): void {
+    record.state = SubagentState.PENDING;
+    this._lastAdmittedSession = record.sessionId ?? '';
+    // Durable row eligibility begins at admission; queued records stay out of
+    // storage (persistRevision stays 0 until here).
+    this._markRecordDirty(record);
+    this._updateLive(record, { state: SubagentState.PENDING });
+    this._notify();
+    if (this._runner) {
+      record._runPromise = this._startRun(record, record.cwd ?? undefined);
+    }
+  }
+
+  /**
+   * Elapsed with queue wait excluded from execution: queued records report
+   * their wait so far; records admitted from the queue report execution time
+   * from `startedAt`; everything else keeps spawn-based elapsed. Queue wait
+   * and execution remain separable via `queuedAt`/`startedAt` on the record.
+   */
+  private _elapsedMs(record: SubagentRecord, now: number = Date.now()): number | null {
+    if (record.state === SubagentState.QUEUED) {
+      return now - (record.queuedAt ?? record.startTime);
+    }
+    if (record.queuedAt !== null && record.startedAt !== null) {
+      return Math.max(0, (record.endTime ?? now) - record.startedAt);
+    }
+    return record.startTime ? (record.endTime ?? now) - record.startTime : null;
   }
 
   // ── Private: run loop ─────────────────────────────────────────────────────
@@ -1281,6 +1493,7 @@ export function runtimeToDomain(
   options: RuntimeToDomainOptions = {},
 ): DomainSubagentRecord {
   const statusMap: Record<SubagentState, DomainSubagentRecord['status']> = {
+    [SubagentState.QUEUED]: SubagentStatus.QUEUED,
     [SubagentState.PENDING]: SubagentStatus.PENDING,
     [SubagentState.RUNNING]: SubagentStatus.RUNNING,
     [SubagentState.COMPLETED]: SubagentStatus.COMPLETED,

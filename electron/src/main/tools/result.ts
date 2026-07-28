@@ -382,7 +382,11 @@ function renderDelegateToSubagentPayload(record: Record<string, JsonValue>): str
     '" name="' + escapeXmlAttribute(record.name) +
     '" type="' + escapeXmlAttribute(record.type) +
     '" status="' + escapeXmlAttribute(record.status) +
-    '" tier="' + escapeXmlAttribute(record.tier) + '" />';
+    '" tier="' + escapeXmlAttribute(record.tier) + '"' +
+    (typeof record.queue_position === 'number'
+      ? ' queue_position="' + escapeXmlAttribute(String(record.queue_position)) + '"'
+      : '') +
+    ' />';
 }
 
 function renderReplaceSymbolPayload(record: Record<string, JsonValue>): string {

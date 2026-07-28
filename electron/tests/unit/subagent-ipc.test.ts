@@ -821,6 +821,28 @@ describe('persistSubagentChains dirty tracking (U6)', () => {
       .toEqual(['sub-b']);
   });
 
+  it('never upserts queued or pre-admission records (queued is runtime-only)', () => {
+    const admitted = runtimeRecord('sub-admitted', sid, { queuedAt: 5, startedAt: 9 });
+    const queued = runtimeRecord('sub-queued', sid, {
+      state: 'queued', queuedAt: 5, startedAt: null, persistRevision: 0,
+    });
+    const cancelledWhileQueued = runtimeRecord('sub-cancelled', sid, {
+      state: 'interrupted', queuedAt: 5, startedAt: null,
+    });
+    const manager = managerOf(admitted, queued, cancelledWhileQueued);
+
+    persistSubagentChains(manager, sid);
+    expect(sessionManagerStub.syncSubagentRecords).toHaveBeenCalledTimes(1);
+    expect(sessionManagerStub.syncSubagentRecords.mock.calls[0][1].map((r: { id: string }) => r.id))
+      .toEqual(['sub-admitted']);
+
+    // Even a recovery flush must not write records that never reached admission.
+    persistSubagentChains(manager, sid, { recovery: true });
+    expect(sessionManagerStub.syncSubagentRecords).toHaveBeenCalledTimes(2);
+    expect(sessionManagerStub.syncSubagentRecords.mock.calls[1][1].map((r: { id: string }) => r.id))
+      .toEqual(['sub-admitted']);
+  });
+
   it('treats recovery flushes as all records dirty', () => {
     const a = runtimeRecord('sub-a', sid);
     const manager = managerOf(a);
