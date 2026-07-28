@@ -66,7 +66,6 @@ export interface SessionFieldsUpdate {
   modelLabel?: string | null;
   cwd?: string | null;
   activeChainId?: string | null;
-  subagentChains?: readonly SubagentRecord[];
   todoStore?: TodoStoreData;
   reasoningEffortOverride?: string | number | null;
   permissionMode?: PermissionMode | null;
@@ -213,6 +212,11 @@ interface ChainRow {
   end_time: string | null;
 }
 
+interface SubagentChainRow {
+  subagent_id: string;
+  record_json: string;
+}
+
 function serializeSelection(selection: ModelSelection | null): string | null {
   if (!selection) return null;
   return JSON.stringify(copyModelSelection(selection));
@@ -241,29 +245,6 @@ function deserializeMessages(json: string): Message[] {
   }
   if (!Array.isArray(raw)) return [];
   return reconcileOrphanToolResults(raw.map((m) => messageFromStorageDict(m)));
-}
-
-function serializeSubagentChains(records: readonly SubagentRecord[]): string {
-  return JSON.stringify(records.map(subagentRecordToStorageDict));
-}
-
-function deserializeSubagentChains(json: string): SubagentRecord[] {
-  let raw: unknown;
-  try {
-    raw = JSON.parse(json);
-  } catch {
-    return [];
-  }
-  if (!Array.isArray(raw)) return [];
-  const result: SubagentRecord[] = [];
-  for (const item of raw) {
-    try {
-      result.push(subagentRecordFromStorageDict(item));
-    } catch (err) {
-      console.error('[session] skipping corrupt subagent record on load', err);
-    }
-  }
-  return result;
 }
 
 function serializeTodoStore(data: TodoStoreData): string {
@@ -332,7 +313,7 @@ function deserializePermissionMode(value: string | null): PermissionMode | null 
     : null;
 }
 
-function sessionFromRow(row: SessionRow, chains: Chain[]): Session {
+function sessionFromRow(row: SessionRow, chains: Chain[], subagentChains: SubagentRecord[]): Session {
   return {
     id: row.id,
     name: row.name,
@@ -343,7 +324,7 @@ function sessionFromRow(row: SessionRow, chains: Chain[]): Session {
     activeChainId: row.active_chain_id,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
-    subagentChains: deserializeSubagentChains(row.subagent_chains_json),
+    subagentChains,
     todoStore: deserializeTodoStore(row.todo_store_json),
     reasoningEffortOverride: deserializeReasoningEffortOverride(row.reasoning_effort_override),
     permissionMode: deserializePermissionMode(row.permission_mode),
@@ -354,6 +335,15 @@ const INSERT_CHAIN_SQL = `
   INSERT INTO chains (id, session_id, ordinal, status, selection_json, model_label, agent_name, agent_type, agent_tier, subagent_record_json, messages_json, start_time, end_time)
   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 `;
+
+const INSERT_SUBAGENT_CHAIN_SQL = `
+  INSERT INTO subagent_chains (session_id, subagent_id, record_json)
+  VALUES (?, ?, ?)
+`;
+
+function serializeSubagentRecord(record: SubagentRecord): string {
+  return JSON.stringify(subagentRecordToStorageDict(record));
+}
 
 function insertChainRow(
   insertChain: import('better-sqlite3').Statement,
@@ -418,16 +408,17 @@ export function saveSession(session: Session, opts?: StorageOptions): void {
   }
   const { dbPath } = resolveOptions(opts);
   withCorruptionRecovery(dbPath, (db) => {
+    // The legacy `subagent_chains_json` column stays in the schema untouched
+    // but is never written; subagent records live in `subagent_chains` rows.
     const upsertSession = db.prepare(`
-      INSERT INTO sessions (id, name, selection_json, model_label, cwd, active_chain_id, subagent_chains_json, todo_store_json, reasoning_effort_override, permission_mode, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO sessions (id, name, selection_json, model_label, cwd, active_chain_id, todo_store_json, reasoning_effort_override, permission_mode, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(id) DO UPDATE SET
         name = excluded.name,
         selection_json = excluded.selection_json,
         model_label = excluded.model_label,
         cwd = excluded.cwd,
         active_chain_id = excluded.active_chain_id,
-        subagent_chains_json = excluded.subagent_chains_json,
         todo_store_json = excluded.todo_store_json,
         reasoning_effort_override = excluded.reasoning_effort_override,
         permission_mode = excluded.permission_mode,
@@ -436,6 +427,8 @@ export function saveSession(session: Session, opts?: StorageOptions): void {
 
     const deleteChains = db.prepare('DELETE FROM chains WHERE session_id = ?');
     const insertChain = db.prepare(INSERT_CHAIN_SQL);
+    const deleteSubagentChains = db.prepare('DELETE FROM subagent_chains WHERE session_id = ?');
+    const insertSubagentChain = db.prepare(INSERT_SUBAGENT_CHAIN_SQL);
 
     const txn = db.transaction(() => {
       upsertSession.run(
@@ -445,7 +438,6 @@ export function saveSession(session: Session, opts?: StorageOptions): void {
         session.modelLabel,
         session.cwd,
         session.activeChainId,
-        serializeSubagentChains(session.subagentChains),
         serializeTodoStore(session.todoStore),
         serializeReasoningEffortOverride(session.reasoningEffortOverride),
         serializePermissionMode(session.permissionMode),
@@ -458,6 +450,11 @@ export function saveSession(session: Session, opts?: StorageOptions): void {
       for (let i = 0; i < session.chains.length; i++) {
         const chain = session.chains[i]!;
         insertChainRow(insertChain, chain, i);
+      }
+
+      deleteSubagentChains.run(session.id);
+      for (const record of session.subagentChains) {
+        insertSubagentChain.run(session.id, record.id, serializeSubagentRecord(record));
       }
     });
 
@@ -498,9 +495,6 @@ export function updateSessionFields(
   if (Object.hasOwn(update, 'cwd')) add('cwd', update.cwd ?? null);
   if (Object.hasOwn(update, 'activeChainId')) {
     add('active_chain_id', update.activeChainId ?? null);
-  }
-  if (Object.hasOwn(update, 'subagentChains')) {
-    add('subagent_chains_json', serializeSubagentChains(update.subagentChains ?? []));
   }
   if (Object.hasOwn(update, 'todoStore')) {
     add('todo_store_json', serializeTodoStore(update.todoStore ?? { tasks: [] }));
@@ -684,7 +678,24 @@ export function loadSession(sessionId: string, opts?: StorageOptions): Session |
         }
       }
 
-      return sessionFromRow(row, chains);
+      const subagentRows = db
+        .prepare(
+          'SELECT subagent_id, record_json FROM subagent_chains WHERE session_id = ? ORDER BY rowid',
+        )
+        .all(sessionId) as SubagentChainRow[];
+      const subagentChains: SubagentRecord[] = [];
+      for (const sr of subagentRows) {
+        try {
+          subagentChains.push(subagentRecordFromStorageDict(JSON.parse(sr.record_json)));
+        } catch (err) {
+          console.error(
+            `[session] skipping corrupt subagent record ${sr.subagent_id} on load (session ${sessionId})`,
+            err,
+          );
+        }
+      }
+
+      return sessionFromRow(row, chains, subagentChains);
     });
     return load();
   });
@@ -751,10 +762,59 @@ export function updateChain(
 }
 
 // ---------------------------------------------------------------------------
+// upsertSubagentRecords — targeted dirty-record write
+// ---------------------------------------------------------------------------
+
+/** Outcome of a successful targeted subagent-record upsert. */
+export interface SubagentUpsertResult {
+  /** Total serialized `record_json` bytes written (checkpoint diagnostics, R9). */
+  readonly bytes: number;
+}
+
+/**
+ * Upsert one row per supplied subagent record and bump the owning session's
+ * recency in one transaction, without touching sibling rows or session-level
+ * JSON columns. Returns false when the session row is missing so callers can
+ * fall back to a full save.
+ */
+export function upsertSubagentRecords(
+  sessionId: string,
+  records: readonly SubagentRecord[],
+  updatedAt: string,
+  opts?: StorageOptions,
+): SubagentUpsertResult | false {
+  if (!isValidSessionId(sessionId)) return false;
+  if (records.length === 0) return { bytes: 0 };
+  const { dbPath } = resolveOptions(opts);
+  return withCorruptionRecovery(dbPath, (db) => {
+    const txn = db.transaction(() => {
+      const sessionResult = db
+        .prepare('UPDATE sessions SET updated_at = ? WHERE id = ?')
+        .run(updatedAt, sessionId);
+      if (sessionResult.changes === 0) return false;
+
+      const upsert = db.prepare(`
+        INSERT INTO subagent_chains (session_id, subagent_id, record_json)
+        VALUES (?, ?, ?)
+        ON CONFLICT(session_id, subagent_id) DO UPDATE SET record_json = excluded.record_json
+      `);
+      let bytes = 0;
+      for (const record of records) {
+        const json = serializeSubagentRecord(record);
+        bytes += json.length;
+        upsert.run(sessionId, record.id, json);
+      }
+      return { bytes };
+    });
+    return txn();
+  });
+}
+
+// ---------------------------------------------------------------------------
 // deleteSession
 // ---------------------------------------------------------------------------
 
-/** Delete a session (chains cascade) plus its file caches; true if it existed. */
+/** Delete a session (chains and subagent rows cascade) plus its file caches; true if it existed. */
 export function deleteSession(sessionId: string, opts?: StorageOptions): boolean {
   if (!isValidSessionId(sessionId)) {
     return false;

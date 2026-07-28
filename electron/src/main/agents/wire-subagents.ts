@@ -6,9 +6,16 @@
 import { BrowserWindow } from 'electron';
 import { IPC_CHANNELS } from '../../shared/types/ipc';
 import type { SubagentDeltaEvent } from '../../shared/types/subagent';
+import { getConfig } from '../config/loader';
 import { getSubagentManager } from '../tools';
 import { createSubagentStreamRunner } from './subagent-runner';
-import { createSubagentPersistenceScheduler, persistSubagentChains } from './persist-subagent-chains';
+import {
+  clearSubagentPersistenceTracking,
+  createSubagentPersistenceScheduler,
+  persistSubagentChains,
+  trackedSubagentPersistenceSessions,
+  type SubagentPersistenceFlushInfo,
+} from './persist-subagent-chains';
 import {
   flushSubagentEvents,
   isEligibleSubagentRecipient,
@@ -29,7 +36,7 @@ export { persistSubagentChains } from './persist-subagent-chains';
 
 export interface SubagentDeltaHandlerDeps {
   markDirty: (sessionId: string) => void;
-  flushPersistence: (sessionId: string) => void;
+  scheduleTerminalWave: (sessionId: string) => void;
   clearToolCallHistory: (sessionId: string, agentScopeId: string) => void;
   queueDelta: (event: SubagentDeltaEvent) => void;
   flushDeltas: () => void;
@@ -38,8 +45,9 @@ export interface SubagentDeltaHandlerDeps {
 /**
  * Route the manager's delta stream: every delta dirties its session for the
  * next persistence checkpoint and rides the batcher; a terminal delta
- * additionally drops the run's permission history and flushes delivery and
- * persistence immediately so the durable handoff lands without a debounce.
+ * additionally drops the run's permission history, flushes delivery
+ * immediately, and schedules a short terminal wave so near-simultaneous
+ * completions batch into one persistence flush (R8).
  */
 export function createSubagentDeltaHandler(
   deps: SubagentDeltaHandlerDeps,
@@ -50,8 +58,23 @@ export function createSubagentDeltaHandler(
     if (event.type === 'terminal' && event.sessionId) {
       deps.clearToolCallHistory(event.sessionId, event.subagentId);
       deps.flushDeltas();
-      deps.flushPersistence(event.sessionId);
+      deps.scheduleTerminalWave(event.sessionId);
     }
+  };
+}
+
+/**
+ * Persistence write callback: the terminal delta already carries the
+ * authoritative durable record, so ordinary checkpoints and terminal waves
+ * never broadcast; only recovery flushes invalidate renderer snapshots (R8).
+ */
+export function createSubagentPersistenceWriteCallback(
+  persist: (sessionId: string, info: SubagentPersistenceFlushInfo) => void,
+  broadcast: (sessionId: string) => void,
+): (sessionId: string, info: SubagentPersistenceFlushInfo) => void {
+  return (sessionId, info) => {
+    persist(sessionId, info);
+    if (info.recovery) broadcast(sessionId);
   };
 }
 
@@ -65,20 +88,25 @@ export function wireSubagentRuntime(): void {
 
   const manager = getSubagentManager();
   manager.setRunner(createSubagentStreamRunner());
-  persistenceScheduler = createSubagentPersistenceScheduler((sessionId) => {
-    persistSubagentChains(manager, sessionId);
-    broadcastSubagentsChanged(sessionId);
-  });
+  persistenceScheduler = createSubagentPersistenceScheduler(
+    createSubagentPersistenceWriteCallback(
+      (sessionId, info) =>
+        persistSubagentChains(manager, sessionId, { recovery: info.recovery }),
+      broadcastSubagentsChanged,
+    ),
+  );
   removeSessionDeletionCleanup = onSessionDeleted((sessionId) => {
     persistenceScheduler?.clear(sessionId);
+    clearSubagentPersistenceTracking(sessionId);
   });
   removeStorageRecoveryListener = onSessionStorageRecovered(() => {
-    persistenceScheduler?.recoverAll();
+    persistenceScheduler?.recoverAll(trackedSubagentPersistenceSessions());
   });
 
   manager.setOnDelta(createSubagentDeltaHandler({
     markDirty: (sessionId) => persistenceScheduler?.markDirty(sessionId),
-    flushPersistence: (sessionId) => persistenceScheduler?.flush(sessionId),
+    scheduleTerminalWave: (sessionId) =>
+      persistenceScheduler?.scheduleWave(sessionId, getConfig().subagents.terminal_wave_ms),
     clearToolCallHistory: clearToolCallHistoryForAgentScope,
     queueDelta: queueSubagentDelta,
     flushDeltas: flushSubagentEvents,
@@ -106,10 +134,10 @@ export function flushSubagentPersistence(): void {
 export function recoverSubagentPersistence(sessionId?: string): void {
   if (persistenceScheduler) {
     if (sessionId) persistenceScheduler.recover(sessionId);
-    else persistenceScheduler.recoverAll();
+    else persistenceScheduler.recoverAll(trackedSubagentPersistenceSessions());
     return;
   }
-  persistSubagentChains(getSubagentManager(), sessionId);
+  persistSubagentChains(getSubagentManager(), sessionId, { recovery: true });
 }
 
 /** Release retry timers and lifecycle hooks after the final shutdown flush. */

@@ -25,6 +25,7 @@ import type { Session } from '../../shared/types/session';
 import type { ModelSelection } from '../../shared/types/provider';
 import type { Message } from '../../shared/types/message';
 import { ChainStatus, type Chain } from '../../shared/types/chain';
+import type { SubagentRecord } from '../../shared/types/subagent';
 import type { PermissionMode } from '../../shared/types/permission';
 import { normalizeAgentScopeId } from '../../shared/types/agent-scope';
 import {
@@ -42,6 +43,7 @@ import {
   listSavedSessions as storageListSavedSessions,
   updateChain as storageUpdateChain,
   updateSessionFields as storageUpdateSessionFields,
+  upsertSubagentRecords as storageUpsertSubagentRecords,
   type SessionFieldsUpdate,
   type StorageOptions,
   type SessionSummary,
@@ -801,64 +803,73 @@ export class SessionManager {
   }
 
   /**
-   * Replace subagent_chains on a session and persist.
+   * Upsert dirty subagent records onto their owning session (persist-first).
    *
-   * Used when subagents complete so chain-footer token usage and the
-   * right-rail subagent list can reload real data from disk.
+   * Checkpoints send only records dirtied since the last flush; rows are
+   * upserted by id and merged into the in-memory snapshot only after the
+   * storage write succeeds. A debounced flush after a session switch still
+   * writes to the correct owner: uncached sessions are patched on disk
+   * without entering the runtime cache.
    *
-   * @param subagentChains - Full replacement list for that session
-   * @param sessionId - Owning session id. When omitted, uses the active
-   *   session (legacy callers). When provided and not active, loads that
-   *   session from disk, patches, and saves — so a debounced flush after a
-   *   session switch still writes to the correct owner.
+   * @returns The patched session (null when the session is unknown) plus the
+   *   serialized bytes written, for checkpoint diagnostics (R9).
    */
-  syncSubagentChains(
-    subagentChains: Session['subagentChains'],
-    sessionId?: string,
-  ): Session | null {
-    const targetId = sessionId ?? this.selectedSessionId();
-    if (!targetId) {
-      return null;
+  syncSubagentRecords(
+    sessionId: string,
+    dirtyRecords: readonly SubagentRecord[],
+  ): { session: Session | null; bytes: number } {
+    if (dirtyRecords.length === 0) {
+      const existing = this._sessions.get(sessionId) ??
+        storageLoadSession(sessionId, this._storageOpts);
+      return { session: existing ?? null, bytes: 0 };
     }
-
     const now = new Date().toISOString();
-    const chains = [...subagentChains];
+    const merge = (existing: readonly SubagentRecord[]): SubagentRecord[] => {
+      const byId = new Map(existing.map((record) => [record.id, record]));
+      for (const record of dirtyRecords) byId.set(record.id, record);
+      return [...byId.values()];
+    };
 
-    const cached = this._sessions.get(targetId);
+    const cached = this._sessions.get(sessionId);
     if (cached) {
+      const outcome = storageUpsertSubagentRecords(
+        sessionId,
+        dirtyRecords,
+        now,
+        this._storageOpts,
+      );
       const updated = {
         ...cached,
-        subagentChains: chains,
-        todoStore: this.getTodoStore(targetId).toData(),
+        subagentChains: merge(cached.subagentChains),
+        // Keep the snapshot's todo data fresh like the old wholesale sync did;
+        // the targeted upsert itself never writes the todo column.
+        todoStore: this.getTodoStore(sessionId).toData(),
         updatedAt: now,
       };
-      this.persistSessionFields(updated, {
-        subagentChains: updated.subagentChains,
-        todoStore: updated.todoStore,
-      });
-      return updated;
+      if (outcome === false) storageSaveSession(updated, this._storageOpts);
+      this.replaceSession(updated);
+      return { session: updated, bytes: outcome ? outcome.bytes : 0 };
     }
 
     // Non-active owner: patch on disk so a late flush cannot clobber the
     // newly active session with the previous session's subagent chains.
-    const loaded = storageLoadSession(targetId, this._storageOpts);
+    const loaded = storageLoadSession(sessionId, this._storageOpts);
     if (!loaded) {
-      return null;
+      return { session: null, bytes: 0 };
     }
-    const updated: Session = {
-      ...loaded,
-      subagentChains: chains,
-      updatedAt: now,
-    };
-    const persisted = storageUpdateSessionFields(
-      updated.id,
-      { subagentChains: updated.subagentChains, updatedAt: updated.updatedAt },
+    const outcome = storageUpsertSubagentRecords(
+      sessionId,
+      dirtyRecords,
+      now,
       this._storageOpts,
     );
-    if (!persisted) {
-      storageSaveSession(updated, this._storageOpts);
-    }
-    return updated;
+    const updated: Session = {
+      ...loaded,
+      subagentChains: merge(loaded.subagentChains),
+      updatedAt: now,
+    };
+    if (outcome === false) storageSaveSession(updated, this._storageOpts);
+    return { session: updated, bytes: outcome ? outcome.bytes : 0 };
   }
 
   /**

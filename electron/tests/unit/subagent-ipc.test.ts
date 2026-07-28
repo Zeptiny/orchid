@@ -7,21 +7,36 @@ import {
 } from '../../src/shared/types/ipc-schemas';
 import { SubagentDeltaEventType, type SubagentDeltaEvent } from '../../src/shared/types/subagent';
 import { subagentSnapshotSchema as requestSchema } from '../../src/main/ipc/payload-schemas';
-import { createSubagentPersistenceScheduler } from '../../src/main/agents/persist-subagent-chains';
+import {
+  clearSubagentPersistenceTracking,
+  createSubagentPersistenceScheduler,
+  persistSubagentChains,
+  trackedSubagentPersistenceSessions,
+} from '../../src/main/agents/persist-subagent-chains';
 import {
   createSubagentDeltaBatcher,
   deliverSubagentDeltaEvent,
   mergeSubagentRecords,
 } from '../../src/main/ipc/subagents';
-import { broadcastSubagentsChanged, createSubagentDeltaHandler } from '../../src/main/agents/wire-subagents';
+import {
+  broadcastSubagentsChanged,
+  createSubagentDeltaHandler,
+  createSubagentPersistenceWriteCallback,
+} from '../../src/main/agents/wire-subagents';
 import { createCanonicalToolResult } from '../../src/shared/types/tool-result';
 
 const uuid = '00000000-0000-4000-8000-000000000001';
 const session = '00000000-0000-4000-8000-000000000002';
 const activeByWebContents = vi.hoisted(() => new Map<string, { id: string }>());
+const stubActiveSession = vi.hoisted(() => ({ current: null as { id: string } | null }));
+const sessionManagerStub = vi.hoisted(() => ({ syncSubagentRecords: vi.fn() }));
 
 vi.mock('../../src/main/ipc/session', () => ({
-  getSessionManager: () => ({ getActive: (owner: string) => activeByWebContents.get(owner) ?? null }),
+  getSessionManager: () => ({
+    getActive: (owner?: string) =>
+      (owner !== undefined ? activeByWebContents.get(owner) : stubActiveSession.current) ?? null,
+    syncSubagentRecords: sessionManagerStub.syncSubagentRecords,
+  }),
 }));
 
 const record = (id: string, status: string) => ({
@@ -145,15 +160,17 @@ describe('subagent IPC boundary', () => {
     expect(writes).toEqual([session]);
   });
 
-  it('routes deltas to persistence: dirty on any delta, immediate flush on terminal', () => {
-    const writes: string[] = [];
+  it('routes deltas to persistence: dirty on any delta, terminal rides a wave flush', () => {
+    const writes: Array<[string, boolean]> = [];
     const delivered: SubagentEvent[] = [];
     const cleared: Array<[string, string]> = [];
-    const scheduler = createSubagentPersistenceScheduler((id) => writes.push(id));
+    const scheduler = createSubagentPersistenceScheduler(
+      (id, info) => writes.push([id, info.recovery]),
+    );
     const batcher = createSubagentDeltaBatcher((envelope) => { delivered.push(envelope); });
     const handler = createSubagentDeltaHandler({
       markDirty: (sessionId) => scheduler.markDirty(sessionId),
-      flushPersistence: (sessionId) => scheduler.flush(sessionId),
+      scheduleTerminalWave: (sessionId) => scheduler.scheduleWave(sessionId, 250),
       clearToolCallHistory: (sessionId, agentScopeId) => cleared.push([sessionId, agentScopeId]),
       queueDelta: (event) => batcher.queue(event),
       flushDeltas: () => batcher.flush(),
@@ -167,15 +184,135 @@ describe('subagent IPC boundary', () => {
     expect(writes).toEqual([]);
 
     handler(terminalDelta(3));
-    // Terminal flushes the batcher and persistence synchronously, without the debounce.
+    // Terminal flushes delivery synchronously; persistence waits for the wave window.
     expect(delivered).toHaveLength(2);
     expect(delivered[1].events.map((event) => event.type)).toEqual(['terminal']);
     expect(cleared).toEqual([[session, 'subagent-1']]);
-    expect(writes).toEqual([session]);
+    expect(writes).toEqual([]);
 
-    // The terminal flush cancelled the pending checkpoint; nothing more fires.
+    vi.advanceTimersByTime(249);
+    expect(writes).toEqual([]);
+    vi.advanceTimersByTime(1);
+    expect(writes).toEqual([[session, false]]);
+
+    // The wave flush cancelled the pending checkpoint; nothing more fires.
     vi.advanceTimersByTime(2000);
+    expect(writes).toEqual([[session, false]]);
+  });
+
+  it('batches near-simultaneous terminal completions into exactly one wave flush', () => {
+    const writes: Array<[string, boolean]> = [];
+    const scheduler = createSubagentPersistenceScheduler(
+      (id, info) => writes.push([id, info.recovery]),
+    );
+    const handler = createSubagentDeltaHandler({
+      markDirty: (sessionId) => scheduler.markDirty(sessionId),
+      scheduleTerminalWave: (sessionId) => scheduler.scheduleWave(sessionId, 250),
+      clearToolCallHistory: () => {},
+      queueDelta: () => {},
+      flushDeltas: () => {},
+    });
+
+    handler(terminalDelta(1));
+    handler({ ...terminalDelta(2), subagentId: 'subagent-2' });
+    handler({ ...terminalDelta(3), subagentId: 'subagent-3' });
+
+    vi.advanceTimersByTime(250);
+    expect(writes).toEqual([[session, false]]);
+    vi.advanceTimersByTime(2000);
+    expect(writes).toEqual([[session, false]]);
+  });
+
+  it('reports recovery only on explicit recovery flushes', () => {
+    const writes: Array<[string, boolean]> = [];
+    const scheduler = createSubagentPersistenceScheduler(
+      (id, info) => writes.push([id, info.recovery]),
+    );
+
+    scheduler.markDirty(session);
+    vi.advanceTimersByTime(2000);
+    expect(writes).toEqual([[session, false]]);
+
+    scheduler.scheduleWave(session, 250);
+    vi.advanceTimersByTime(250);
+    expect(writes).toEqual([[session, false], [session, false]]);
+
+    scheduler.recover(session);
+    expect(writes).toEqual([[session, false], [session, false], [session, true]]);
+
+    // The recovery flag clears after a successful flush.
+    scheduler.markDirty(session);
+    vi.advanceTimersByTime(2000);
+    expect(writes.at(-1)).toEqual([session, false]);
+  });
+
+  it('broadcasts SESSION_SUBAGENTS_CHANGED only on recovery flushes (R8)', () => {
+    const writes: string[] = [];
+    const broadcasts: string[] = [];
+    const scheduler = createSubagentPersistenceScheduler(
+      createSubagentPersistenceWriteCallback(
+        (id) => writes.push(id),
+        (id) => broadcasts.push(id),
+      ),
+    );
+
+    scheduler.markDirty(session);
+    vi.advanceTimersByTime(2000);
+    scheduler.scheduleWave(session, 250);
+    vi.advanceTimersByTime(250);
+    expect(writes).toEqual([session, session]);
+    expect(broadcasts).toEqual([]);
+
+    scheduler.recover(session);
+    expect(writes).toEqual([session, session, session]);
+    expect(broadcasts).toEqual([session]);
+  });
+
+  it('does not schedule a terminal wave while degraded', () => {
+    const writes: string[] = [];
+    const scheduler = createSubagentPersistenceScheduler((id) => {
+      writes.push(id);
+      throw new Error('persistent storage failure');
+    }, undefined, { maxRetries: 0 });
+
+    scheduler.flush(session);
+    expect(scheduler.isDegraded(session)).toBe(true);
+
+    scheduler.scheduleWave(session, 250);
+    vi.advanceTimersByTime(250);
     expect(writes).toEqual([session]);
+    expect(scheduler.hasPending(session)).toBe(true);
+  });
+
+  it('clears a pending wave when the session is deleted', () => {
+    const writes: string[] = [];
+    const scheduler = createSubagentPersistenceScheduler((id) => writes.push(id));
+    scheduler.scheduleWave(session, 250);
+    scheduler.clear(session);
+    vi.advanceTimersByTime(250);
+    expect(writes).toEqual([]);
+    expect(scheduler.hasPending(session)).toBe(false);
+  });
+
+  it('flushes wave-pending sessions on orderly shutdown', () => {
+    const writes: string[] = [];
+    const scheduler = createSubagentPersistenceScheduler((id) => writes.push(id));
+    scheduler.scheduleWave(session, 250);
+    scheduler.flushAll();
+    expect(writes).toEqual([session]);
+    vi.advanceTimersByTime(250);
+    expect(writes).toEqual([session]);
+  });
+
+  it('recoverAll reopens caller-supplied tracked sessions as recovery flushes', () => {
+    const writes: Array<[string, boolean]> = [];
+    const scheduler = createSubagentPersistenceScheduler(
+      (id, info) => writes.push([id, info.recovery]),
+    );
+    const tracked = '00000000-0000-4000-8000-000000000009';
+
+    scheduler.recoverAll([tracked]);
+    expect(writes).toEqual([[tracked, true]]);
   });
 
   it('marks a session dirty on any delta and checkpoints once per debounce window', () => {
@@ -183,7 +320,7 @@ describe('subagent IPC boundary', () => {
     const scheduler = createSubagentPersistenceScheduler((id) => writes.push(id));
     const handler = createSubagentDeltaHandler({
       markDirty: (sessionId) => scheduler.markDirty(sessionId),
-      flushPersistence: (sessionId) => scheduler.flush(sessionId),
+      scheduleTerminalWave: (sessionId) => scheduler.scheduleWave(sessionId, 250),
       clearToolCallHistory: () => {},
       queueDelta: () => {},
       flushDeltas: () => {},
@@ -605,5 +742,154 @@ describe('subagent delta batcher (U3)', () => {
 
     vi.advanceTimersByTime(100);
     expect(delivered).toHaveLength(1);
+  });
+});
+
+// ===========================================================================
+// Dirty-record checkpoint tracking (U6, R7/R9)
+// ===========================================================================
+
+describe('persistSubagentChains dirty tracking (U6)', () => {
+  const sid = '00000000-0000-4000-8000-000000000010';
+
+  /** Minimal runtime SubagentRecord shaped for `runtimeToDomain`. */
+  const runtimeRecord = (id: string, sessionId: string | null, overrides: Record<string, unknown> = {}) => ({
+    id,
+    agent: { name: 'explorer', type: 'subagent', tier: 'bloom' },
+    state: 'completed',
+    label: id,
+    task: `task ${id}`,
+    result: 'done',
+    error: null,
+    startTime: 0,
+    endTime: 1,
+    chain: { id: `chain-${id}`, sessionId, messages: [], status: 'completed' },
+    usage: null,
+    selection: null,
+    parentChainIndex: null,
+    sessionId,
+    windowId: null,
+    abortController: null,
+    _resolveWait: null,
+    _runPromise: null,
+    live: {
+      sessionId, subagentId: id, runId: 'run', sequence: 0, state: 'completed',
+      segments: [], toolCalls: [], usage: null, result: null, error: null,
+    },
+    _liveCommittedSegmentCount: 0,
+    _liveTerminalEmitted: true,
+    persistRevision: 1,
+    _lastUsageDeltaAt: 0,
+    pendingQuestion: null,
+    ...overrides,
+  }) as never;
+
+  const managerOf = (...records: unknown[]) => ({ allRecords: () => records }) as never;
+
+  beforeEach(() => {
+    sessionManagerStub.syncSubagentRecords.mockReset();
+    sessionManagerStub.syncSubagentRecords.mockImplementation(
+      (sessionId: string) => ({ session: { id: sessionId }, bytes: 42 }),
+    );
+    stubActiveSession.current = null;
+    clearSubagentPersistenceTracking(sid);
+  });
+
+  afterEach(() => {
+    clearSubagentPersistenceTracking(sid);
+  });
+
+  it('upserts only records dirtied since the last checkpoint', () => {
+    const a = runtimeRecord('sub-a', sid);
+    const b = runtimeRecord('sub-b', sid);
+    const manager = managerOf(a, b);
+
+    persistSubagentChains(manager, sid);
+    expect(sessionManagerStub.syncSubagentRecords).toHaveBeenCalledTimes(1);
+    expect(sessionManagerStub.syncSubagentRecords.mock.calls[0][1].map((r: { id: string }) => r.id))
+      .toEqual(['sub-a', 'sub-b']);
+
+    // No new durable mutations → the second checkpoint writes nothing.
+    persistSubagentChains(manager, sid);
+    expect(sessionManagerStub.syncSubagentRecords).toHaveBeenCalledTimes(1);
+
+    // One record dirties → only that record is upserted.
+    (b as { persistRevision: number }).persistRevision += 1;
+    persistSubagentChains(manager, sid);
+    expect(sessionManagerStub.syncSubagentRecords).toHaveBeenCalledTimes(2);
+    expect(sessionManagerStub.syncSubagentRecords.mock.calls[1][1].map((r: { id: string }) => r.id))
+      .toEqual(['sub-b']);
+  });
+
+  it('treats recovery flushes as all records dirty', () => {
+    const a = runtimeRecord('sub-a', sid);
+    const manager = managerOf(a);
+
+    persistSubagentChains(manager, sid);
+    persistSubagentChains(manager, sid);
+    expect(sessionManagerStub.syncSubagentRecords).toHaveBeenCalledTimes(1);
+
+    persistSubagentChains(manager, sid, { recovery: true });
+    expect(sessionManagerStub.syncSubagentRecords).toHaveBeenCalledTimes(2);
+    expect(trackedSubagentPersistenceSessions()).toContain(sid);
+  });
+
+  it('keeps records dirty when the storage write fails (persist-first)', () => {
+    const a = runtimeRecord('sub-a', sid);
+    const manager = managerOf(a);
+    sessionManagerStub.syncSubagentRecords.mockImplementationOnce(() => {
+      throw new Error('storage rejected');
+    });
+
+    expect(() => persistSubagentChains(manager, sid)).toThrow(/storage rejected/);
+
+    persistSubagentChains(manager, sid);
+    expect(sessionManagerStub.syncSubagentRecords).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not mark records persisted when the session is unknown', () => {
+    sessionManagerStub.syncSubagentRecords.mockReturnValue({ session: null, bytes: 0 });
+    const a = runtimeRecord('sub-a', sid);
+    const manager = managerOf(a);
+
+    persistSubagentChains(manager, sid);
+    persistSubagentChains(manager, sid);
+    expect(sessionManagerStub.syncSubagentRecords).toHaveBeenCalledTimes(2);
+  });
+
+  it('clears tracking for a deleted session so every record is dirty again', () => {
+    const a = runtimeRecord('sub-a', sid);
+    const manager = managerOf(a);
+
+    persistSubagentChains(manager, sid);
+    expect(trackedSubagentPersistenceSessions()).toContain(sid);
+
+    clearSubagentPersistenceTracking(sid);
+    expect(trackedSubagentPersistenceSessions()).not.toContain(sid);
+
+    persistSubagentChains(manager, sid);
+    expect(sessionManagerStub.syncSubagentRecords).toHaveBeenCalledTimes(2);
+  });
+
+  it('logs checkpoint bytes and duration (R9)', () => {
+    const debug = vi.spyOn(console, 'debug').mockImplementation(() => {});
+    try {
+      persistSubagentChains(managerOf(runtimeRecord('sub-a', sid)), sid);
+      expect(debug).toHaveBeenCalledWith(
+        expect.stringMatching(/\[subagents\] checkpoint session=.* records=1 bytes=42 durationMs=/),
+      );
+    } finally {
+      debug.mockRestore();
+    }
+  });
+
+  it('falls back to the active session for unscoped records', () => {
+    stubActiveSession.current = { id: sid };
+    const unscoped = runtimeRecord('sub-unscoped', null);
+
+    persistSubagentChains(managerOf(unscoped));
+
+    expect(sessionManagerStub.syncSubagentRecords).toHaveBeenCalledTimes(1);
+    expect(sessionManagerStub.syncSubagentRecords.mock.calls[0][0]).toBe(sid);
   });
 });
