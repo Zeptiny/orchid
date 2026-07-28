@@ -582,6 +582,27 @@ describe('subagent delta event protocol (U1)', () => {
     expect(subagentSnapshotSchema.safeParse({ ...valid, sessionRevision: -1 }).success).toBe(false);
   });
 
+  it('accepts a spawned-delta envelope carrying a queued record (U7 admission queue)', () => {
+    const queued = { ...base, type: 'spawned', record: record('subagent-queued', 'queued'), usage: null };
+    expect(subagentEventSchema.safeParse({ sessionId: session, events: [queued] }).success).toBe(true);
+  });
+
+  it('accepts a snapshot with a queued record and a queued live projection (U7 admission queue)', () => {
+    // Mirrors createSubagentSnapshot() for a QUEUED runtime record:
+    // runtimeToDomain maps state QUEUED → record.status 'queued', and the
+    // live projection is seeded with makeLiveProjection(..., 'queued').
+    const snapshot = {
+      sessionId: session,
+      sessionRevision: 1,
+      records: [record('subagent-queued', 'queued')],
+      live: [{
+        sessionId: session, subagentId: 'subagent-queued', runId: uuid, sequence: 0,
+        state: 'queued', segments: [], toolCalls: [], usage: null, result: null, error: null,
+      }],
+    };
+    expect(subagentSnapshotSchema.safeParse(snapshot).success).toBe(true);
+  });
+
   it('rejects a legacy projection event on the narrowed wire schema', () => {
     const legacy = {
       sessionId: session, subagentId: 'subagent-1', runId: uuid, sequence: 1,

@@ -5,6 +5,7 @@
  */
 import { z } from 'zod';
 import { contextSnapshotSchema } from './message';
+import { subagentStatusSchema } from './subagent';
 import {
   canonicalToolResultSchema,
   terminalToolResultStatusSchema,
@@ -299,13 +300,13 @@ const subagentToolSchema = z.object({
 export const subagentLiveProjectionSchema = z.object({
   sessionId: z.string().nullable(), subagentId: z.string(), runId: z.string(),
   sequence: z.number().int().nonnegative(),
-  state: z.enum(['pending', 'running', 'completed', 'failed', 'interrupted']),
+  state: subagentStatusSchema,
   segments: z.array(subagentLiveSegmentSchema), toolCalls: z.array(subagentToolSchema),
   usage: usageSchema.nullable(), result: z.string().nullable(), error: z.string().nullable(),
 });
 export const subagentRecordSchema = z.object({
   id: z.string(), agent_name: z.string(), agent_type: z.string(), agent_tier: z.string(),
-  task: z.string(), status: z.enum(['pending', 'running', 'completed', 'failed', 'interrupted']),
+  task: z.string(), status: subagentStatusSchema,
   chain_id: z.string(), start_time: z.string(), end_time: z.string().nullable(),
   result: z.string().nullable(), error: z.string().nullable(), parentChainIndex: z.number().int().nullable(),
   reasoning_effort: z.union([z.string(), z.number()]).optional(),
