@@ -1114,11 +1114,13 @@ describe('SubagentManager terminal eviction and session purge (U9)', () => {
     manager.markRunning(record.id);
     record.usage = { prompt_tokens: 10, completion_tokens: 20, total_tokens: 30 };
     manager.markCompleted(record.id, 'the result');
+    expect(record._evicted).toBe(false);
 
     manager.confirmRecordsPersisted(sid, [record.id]);
 
     const summary = manager.getRecord(record.id)!;
     expect(summary).toBeDefined();
+    expect(summary._evicted).toBe(true);
     expect(summary.id).toBe(record.id);
     expect(summary.state).toBe(SubagentState.COMPLETED);
     expect(summary.result).toBe('the result');
@@ -1139,6 +1141,19 @@ describe('SubagentManager terminal eviction and session purge (U9)', () => {
     expect(entry!.name).toBe('explorer');
     expect(entry!.state).toBe(SubagentState.COMPLETED);
     expect(entry!.task).toBe('important task');
+  });
+
+  it('the _evicted flag never leaks into the domain (storage/IPC) record shape', () => {
+    const sid = 'sess-flag-leak';
+    const heavy = manager.spawn('heavy', 'task', testAgent, { sessionId: sid });
+    manager.markCompleted(heavy.id, 'done');
+    manager.confirmRecordsPersisted(sid, [heavy.id]);
+    expect(heavy._evicted).toBe(true);
+
+    // The storage dict is built from runtimeToDomain's output; a leak here
+    // would surface runtime-only state in session rows and IPC snapshots.
+    expect('_evicted' in runtimeToDomain(heavy)).toBe(false);
+    expect(JSON.stringify(runtimeToDomain(heavy))).not.toContain('"_evicted"');
   });
 
   it('eviction does NOT happen if the flush fails (record stays heavy)', () => {

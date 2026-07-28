@@ -283,6 +283,15 @@ export interface SubagentRecord {
   live: SubagentLiveProjection;
   _liveCommittedSegmentCount: number;
   _liveTerminalEmitted: boolean;
+  /**
+   * Runtime-only: the record was evicted to a lean terminal summary after its
+   * durable row was confirmed persisted. Persistence flushes and snapshot
+   * merges must skip flagged records — their confirmed durable row stays
+   * authoritative, and re-serializing the summary would clobber it with an
+   * empty chain. Cannot leak into storage/domain output: `runtimeToDomain`
+   * and the storage dicts build fresh explicit-field objects.
+   */
+  _evicted: boolean;
   /** Durable-mutation counter; the persistence scheduler upserts dirty records (U6). */
   persistRevision: number;
   /** Epoch ms of the last emitted `usage` delta (0 = none yet); throttles usage deltas. */
@@ -445,6 +454,7 @@ export class SubagentManager {
       live: makeLiveProjection(id, sessionId, admitted ? 'pending' : 'queued'),
       _liveCommittedSegmentCount: 0,
       _liveTerminalEmitted: false,
+      _evicted: false,
       persistRevision: 0,
       _lastUsageDeltaAt: 0,
       pendingQuestion: null,
@@ -1065,10 +1075,13 @@ export class SubagentManager {
    * Replace heavy runtime fields with a bounded summary. The record keeps its
    * SubagentRecord shape so downstream type contracts (getStates, wait,
    * prompt-context) don't break; chain messages, live state, projectRuntime,
-   * and abort artifacts are dropped.
+   * and abort artifacts are dropped. The `_evicted` flag marks the summary so
+   * persistence flushes and snapshot merges never let it overwrite the
+   * confirmed durable row.
    */
   private _evictToSummary(record: SubagentRecord): void {
     record._runPromise = null;
+    record._evicted = true;
     record.abortController = null;
     record._resolveWait = null;
     record.pendingQuestion = null;

@@ -259,6 +259,12 @@ export function persistSubagentChains(
     const tracker = lastPersistedRevision.get(sessionId);
     const dirtyRecords: SubagentRecord[] = [];
     for (const record of records) {
+      // Evicted terminal summaries were confirmed persisted at eviction time
+      // (that is the eviction precondition) and no longer hold their chain, so
+      // re-serializing one would clobber the full durable row with an empty
+      // chain. Skip them even under a recovery flush, which otherwise treats
+      // every record as dirty.
+      if (record._evicted) continue;
       // `queued` is a runtime-only state: records parked in the queue — or
       // cancelled before admission — never get a durable row. Durable
       // eligibility begins at admission (`startedAt`).

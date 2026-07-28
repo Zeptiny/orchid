@@ -24,7 +24,11 @@ export function createSubagentSnapshot(sessionId: string): SubagentSnapshot {
   const manager = getSubagentManager();
   const session = getSessionManager().getSession(sessionId);
   const runtime = manager.allRecords()
-    .filter((record) => record.sessionId === sessionId)
+    // Evicted terminal summaries are lean shadows of rows already confirmed
+    // persisted. Merge order gives runtime precedence over stored rows, so
+    // exclude summaries here and let the full stored row (chain messages and
+    // derived usage) win.
+    .filter((record) => record.sessionId === sessionId && !record._evicted)
     .map((record) => runtimeToDomain(record, { includeLiveTail: false }));
   const records = mergeSubagentRecords(session?.subagentChains ?? [], runtime);
   return {
