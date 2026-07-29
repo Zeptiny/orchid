@@ -78,6 +78,18 @@ export function isTerminalSubagentState(state: SubagentState): boolean {
 }
 
 /**
+ * Terminal domain statuses map 1:1 onto runtime states for hydration. Stored
+ * `subagentChains` only ever carry terminal statuses (the restore migration
+ * maps queued/pending/running → interrupted); a non-terminal lookup yields
+ * `undefined` and the spec is skipped defensively.
+ */
+const HYDRATABLE_STATUS_TO_STATE: Partial<Record<SubagentStatus, SubagentState>> = {
+  [SubagentStatus.COMPLETED]: SubagentState.COMPLETED,
+  [SubagentStatus.FAILED]: SubagentState.FAILED,
+  [SubagentStatus.INTERRUPTED]: SubagentState.INTERRUPTED,
+};
+
+/**
  * Lazily parsed `subagents.*` schema defaults, cached in a module-level
  * singleton. Every "config not loaded" fallback in this module reads these so
  * the values cannot silently drift from the schema (they ARE the schema
@@ -342,6 +354,27 @@ export interface SubagentResult {
   result: string | null;
   error: string | null;
   elapsed: number | null;
+}
+
+// ── HydrateSpec ─────────────────────────────────────────────────────────────
+
+/**
+ * One durable record to materialize back into the runtime manager.
+ *
+ * `domain` is the stored record from `session.subagentChains` — the
+ * authoritative complete copy for evicted summaries and pre-launch records.
+ * `agent` is re-resolved from the project runtime registry by the stored
+ * `agent_type` (registry name); a missing definition is a tool-side error, so
+ * it never reaches `SubagentManager.hydrate`.
+ */
+export interface HydrateSpec {
+  readonly id: string;
+  readonly agent: Agent;
+  readonly domain: DomainSubagentRecord;
+  readonly sessionId: string | null;
+  readonly windowId: string | null;
+  readonly cwd: string | null;
+  readonly projectRuntime?: ProjectRuntime;
 }
 
 // ── Mutable live state ──────────────────────────────────────────────────────
@@ -999,6 +1032,88 @@ export class SubagentManager {
     return records.map((record) => runtimeToDomain(record));
   }
 
+  /**
+   * Materialize durable records back into the runtime map on demand (R9).
+   *
+   * Targets records whose full form lives only in `session.subagentChains`:
+   * evicted lean summaries (`_evicted`, chain emptied) and everything persisted
+   * before the current app launch. A live full record always wins (no-op); an
+   * `_evicted` summary shell is REPLACED, because its chain is empty and the
+   * stored domain record is the only replay source.
+   *
+   * Hydration is deliberately silent: no deltas, no `_notify`, no dirty mark —
+   * the mutating tool that follows owns notification and persistence. Each
+   * rebuilt record restarts at `persistRevision: 0`, so the caller must also
+   * drop the id's `lastPersistedRevision` entry (see
+   * `forgetSubagentPersistedRevision`); otherwise the revision-gated checkpoint
+   * would skip the re-materialized record forever (R12).
+   */
+  hydrate(specs: HydrateSpec[]): void {
+    for (const spec of specs) {
+      const existing = this._subagents.get(spec.id);
+      // A live full record wins; only absent ids and chain-less evicted
+      // summaries are (re)materialized from durable storage.
+      if (existing && !existing._evicted) continue;
+
+      // Defensive: stored rows only ever carry terminal statuses (the restore
+      // migration maps queued/pending/running → interrupted). Skip anything else.
+      const state = HYDRATABLE_STATUS_TO_STATE[spec.domain.status];
+      if (!state) continue;
+
+      const { domain } = spec;
+      const startTime = Date.parse(domain.start_time);
+      const endTime = domain.end_time ? Date.parse(domain.end_time) : null;
+
+      const record: SubagentRecord = {
+        id: spec.id,
+        agent: spec.agent,
+        state,
+        label: domain.agent_name,
+        task: domain.task,
+        result: domain.result,
+        error: domain.error,
+        startTime,
+        queuedAt: null,
+        // Durable eligibility is keyed on `startedAt`; a restored terminal
+        // record was admitted, so it replays from its original start time.
+        startedAt: startTime,
+        endTime,
+        chain: domain.chain,
+        // Usage lives on the chain messages; hydration does not reconstruct the
+        // aggregate (summaries keep it, storage does not carry it).
+        usage: null,
+        selection: domain.chain.selection,
+        parentChainIndex: domain.parentChainIndex,
+        sessionId: spec.sessionId,
+        windowId: spec.windowId,
+        cwd: spec.cwd,
+        projectRuntime: spec.projectRuntime,
+        abortController: null,
+        _resolveWait: [],
+        _runPromise: null,
+        closed: domain.closed,
+        live: makeLiveProjection(spec.id, spec.sessionId, domain.status),
+        _liveCommittedSegmentCount: 0,
+        _liveTerminalEmitted: true,
+        _evicted: false,
+        persistRevision: 0,
+        _lastUsageDeltaAt: 0,
+        pendingQuestion: null,
+      };
+      if (domain.reasoning_effort !== undefined) {
+        record.reasoningEffort = domain.reasoning_effort;
+      }
+
+      this._subagents.set(spec.id, record);
+      // A re-materialized full record sharing an id with a FIFO-tracked summary
+      // would be deleted from the map when the retention FIFO rolls. Untrack it
+      // so subsequent retention rolls leave it alone (R12).
+      if (existing?._evicted) {
+        this._untrackSummary(spec.sessionId ?? '', spec.id);
+      }
+    }
+  }
+
   // ── Private: admission control ────────────────────────────────────────────
 
   /** "Active" = PENDING + RUNNING; QUEUED consumes no run slot. */
@@ -1153,6 +1268,14 @@ export class SubagentManager {
       const evicted = fifo.shift()!;
       this._subagents.delete(evicted);
     }
+  }
+
+  /** Remove an id from the per-session terminal-summary FIFO (no-op if absent). */
+  private _untrackSummary(sessionId: string, id: string): void {
+    const fifo = this._terminalSummaries.get(sessionId);
+    if (!fifo) return;
+    const index = fifo.indexOf(id);
+    if (index >= 0) fifo.splice(index, 1);
   }
 
   // ── Private: run loop ─────────────────────────────────────────────────────

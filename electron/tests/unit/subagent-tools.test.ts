@@ -17,8 +17,18 @@ import {
   SubagentManager,
   SubagentState,
   getDefaultWaitTimeoutMs,
+  runtimeToDomain,
   type SubagentRecord,
 } from '../../src/main/agents/manager';
+import {
+  subagentRecordFromStorageDict,
+  subagentRecordToStorageDict,
+} from '../../src/shared/types/subagent';
+import {
+  forgetSubagentPersistedRevision,
+  persistSubagentChains,
+} from '../../src/main/agents/persist-subagent-chains';
+import { hydrateSubagentRecords } from '../../src/main/tools/subagent/hydrate';
 import { buildDelegateTool as buildDelegateToolRaw } from '../../src/main/tools/subagent/delegate';
 import { buildWaitTool as buildWaitToolRaw } from '../../src/main/tools/subagent/wait';
 import { buildInterruptTool as buildInterruptToolRaw } from '../../src/main/tools/subagent/interrupt';
@@ -49,6 +59,33 @@ vi.mock('../../src/main/config/loader', async (importOriginal) => {
     getConfig: () => configOverride.current ?? actual.getConfig(),
   };
 });
+
+/**
+ * The hydrate helper resolves stored records through the session manager via a
+ * lazy `await import('../../ipc/session')` (mockable, unlike createRequire). A
+ * per-test holder drives it; when unset, a null-returning stub keeps the other
+ * tool handlers (delegate reads `getSession`) on their no-session path.
+ */
+interface FakeSessionManager {
+  getSession: (id: string) => unknown;
+  getActive: () => unknown;
+  syncSubagentRecords?: (
+    sessionId: string,
+    records: unknown[],
+  ) => { session: unknown; bytes: number };
+}
+const sessionManagerHolder = vi.hoisted(() => ({ current: null as FakeSessionManager | null }));
+
+vi.mock('../../src/main/ipc/session', () => ({
+  getSessionManager: () =>
+    sessionManagerHolder.current ?? {
+      getSession: () => null,
+      getActive: () => null,
+      // Benign no-op so the wait tool's legacy persistence fallback (which reads
+      // the session manager directly) does not throw against the bare stub.
+      syncSubagentRecords: () => ({ session: null, bytes: 0 }),
+    },
+}));
 
 const tierSelections = {
   seed: { connectionId: '11111111-1111-4111-8111-111111111111', modelId: 'model-for-seed' },
@@ -982,5 +1019,186 @@ describe('delegate_to_subagent admission control', () => {
     // No record leaks into the manager for the refused spawn.
     expect(manager.allRecords()).toHaveLength(3);
     expect(manager.allRecords().some((record) => record.label === 'refused')).toBe(false);
+  });
+});
+
+// ── hydrateSubagentRecords helper (U3) ──────────────────────────────────────
+
+describe('hydrateSubagentRecords helper', () => {
+  let manager: SubagentManager;
+  const sid = 'sess-hydrate-helper';
+
+  beforeEach(() => {
+    manager = new SubagentManager();
+    sessionManagerHolder.current = null;
+  });
+
+  afterEach(() => {
+    sessionManagerHolder.current = null;
+  });
+
+  function makeCtx(agents: Map<string, Agent>, overrides: Partial<ToolExecutionContext> = {}) {
+    return {
+      cwd: '/tmp/turn',
+      sessionId: sid,
+      projectRuntime: {
+        projectDir: '/tmp',
+        config: defaults(),
+        agents,
+        skills: new Map(),
+        personalities: new Map(),
+      },
+      ...overrides,
+    } as unknown as ToolExecutionContext;
+  }
+
+  /** Round-trip a runtime record through the storage dict to mimic a loaded row. */
+  function storedDomain(record: SubagentRecord) {
+    return subagentRecordFromStorageDict(subagentRecordToStorageDict(runtimeToDomain(record)));
+  }
+
+  /** Build a durable domain record (in a side manager) for the helper to load. */
+  function storedRecord(label: string, agent: Agent) {
+    const source = new SubagentManager();
+    const original = source.spawn(label, 'task text', agent, { sessionId: sid });
+    source.markCompleted(original.id, 'stored result');
+    return { id: original.id, domain: storedDomain(original) };
+  }
+
+  function setSession(
+    subagentChains: unknown[],
+    opts: { cwd?: string | null; sync?: FakeSessionManager['syncSubagentRecords'] } = {},
+  ) {
+    const session = { id: sid, cwd: opts.cwd ?? '/tmp/session', subagentChains };
+    sessionManagerHolder.current = {
+      getSession: (id: string) => (id === sid ? session : null),
+      getActive: () => null,
+      ...(opts.sync ? { syncSubagentRecords: opts.sync } : {}),
+    };
+    return session;
+  }
+
+  it('skips live full records and leaves storage-missing ids unreported', async () => {
+    const agents = makeAgentMap();
+    const live = manager.spawn('live', 'x', codeReviewerAgent, { sessionId: sid });
+    manager.markCompleted(live.id, 'live');
+    setSession([]); // durable storage has nothing
+
+    const result = await hydrateSubagentRecords(manager, sid, [live.id, 'ghost-id'], makeCtx(agents));
+
+    // Live full record is skipped; ghost-id is absent from storage, so it is
+    // neither hydrated nor agentMissing — the caller reports it as not found.
+    expect(result).toEqual({ hydrated: [], agentMissing: [] });
+    expect(manager.getRecord(live.id)?.result).toBe('live');
+  });
+
+  it('hydrates a persisted-only id from session.subagentChains', async () => {
+    const agents = makeAgentMap();
+    const { id, domain } = storedRecord('persisted', codeReviewerAgent);
+    setSession([domain]);
+    expect(manager.getRecord(id)).toBeUndefined();
+
+    const result = await hydrateSubagentRecords(
+      manager,
+      sid,
+      [id],
+      makeCtx(agents, { windowId: 'win-9', cwd: '/tmp/turn' }),
+    );
+
+    expect(result).toEqual({ hydrated: [id], agentMissing: [] });
+    const record = manager.getRecord(id)!;
+    expect(record._evicted).toBe(false);
+    expect(record.state).toBe(SubagentState.COMPLETED);
+    expect(record.label).toBe('persisted');
+    expect(record.result).toBe('stored result');
+    expect(record.chain?.messages.length).toBeGreaterThan(0);
+    // session.cwd wins over the turn cwd; windowId comes from the turn context.
+    expect(record.cwd).toBe('/tmp/session');
+    expect(record.windowId).toBe('win-9');
+  });
+
+  it('hydrates an evicted in-session summary back into a full record', async () => {
+    const agents = makeAgentMap();
+    const record = manager.spawn('evicted', 'x', codeReviewerAgent, { sessionId: sid });
+    manager.markCompleted(record.id, 'first');
+    const domain = storedDomain(record);
+    const messageCount = domain.chain.messages.length;
+    manager.confirmRecordsPersisted(sid, [record.id]);
+    expect(manager.getRecord(record.id)?._evicted).toBe(true);
+    setSession([domain]);
+
+    const result = await hydrateSubagentRecords(manager, sid, [record.id], makeCtx(agents));
+
+    expect(result.hydrated).toEqual([record.id]);
+    const restored = manager.getRecord(record.id)!;
+    expect(restored._evicted).toBe(false);
+    expect(restored.chain?.messages.length).toBe(messageCount);
+  });
+
+  it('reports agentMissing when the stored agent_type is not in the registry', async () => {
+    // Registry WITHOUT code-reviewer, which the stored record references.
+    const agents = new Map<string, Agent>();
+    agents.set(fileExplorerAgent.name, fileExplorerAgent);
+    const { id, domain } = storedRecord('orphan', codeReviewerAgent);
+    setSession([domain]);
+
+    const result = await hydrateSubagentRecords(manager, sid, [id], makeCtx(agents));
+
+    expect(result).toEqual({ hydrated: [], agentMissing: [id] });
+    expect(manager.getRecord(id)).toBeUndefined();
+  });
+
+  it('returns empty when the session is not found', async () => {
+    sessionManagerHolder.current = {
+      getSession: () => null,
+      getActive: () => null,
+    };
+    const result = await hydrateSubagentRecords(
+      manager,
+      sid,
+      ['any-id'],
+      makeCtx(makeAgentMap()),
+    );
+    expect(result).toEqual({ hydrated: [], agentMissing: [] });
+  });
+
+  it('resets the revision tracker so a post-hydrate mutation persists again', async () => {
+    const agents = makeAgentMap();
+    // A live record persisted once (establishes a lastPersistedRevision entry),
+    // then evicted — mirroring a record whose durable row already exists.
+    const record = manager.spawn('tracked', 'x', codeReviewerAgent, { sessionId: sid });
+    manager.markCompleted(record.id, 'first');
+    const domain = storedDomain(record);
+
+    const synced: Array<{ id: string }> = [];
+    setSession([domain], {
+      sync: (_sessionId, records) => {
+        synced.push(...(records as Array<{ id: string }>));
+        return { session: { id: sid }, bytes: 1 };
+      },
+    });
+
+    // First checkpoint writes the full terminal record, then evicts it.
+    persistSubagentChains(manager, sid);
+    const writesBefore = synced.filter((r) => r.id === record.id).length;
+    expect(writesBefore).toBe(1);
+    expect(manager.getRecord(record.id)?._evicted).toBe(true);
+
+    // Hydrate via the helper: materializes the record AND forgets the tracker entry.
+    const result = await hydrateSubagentRecords(manager, sid, [record.id], makeCtx(agents));
+    expect(result.hydrated).toEqual([record.id]);
+    expect(manager.getRecord(record.id)?._evicted).toBe(false);
+
+    // A dirtying mutation restarts the counter at 1; without the tracker reset
+    // the revision gate (1 <= 1) would skip this record forever.
+    manager.getRecord(record.id)!.persistRevision += 1;
+    persistSubagentChains(manager, sid);
+
+    const writesAfter = synced.filter((r) => r.id === record.id).length;
+    expect(writesAfter).toBe(writesBefore + 1);
+  });
+
+  it('forgetSubagentPersistedRevision is a safe no-op for untracked sessions/ids', () => {
+    expect(() => forgetSubagentPersistedRevision('no-such-session', 'no-such-id')).not.toThrow();
   });
 });

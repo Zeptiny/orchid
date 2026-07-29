@@ -7,6 +7,7 @@ import {
   SubagentQueueFullError,
   SubagentState,
   runtimeToDomain,
+  type SubagentRecord,
 } from '../../src/main/agents/manager';
 import type { Agent } from '../../src/shared/types/agent';
 import type { StreamEvent } from '../../src/main/llm/orchestrator';
@@ -1351,5 +1352,221 @@ describe('closed flag (U1)', () => {
     expect(summary._evicted).toBe(true);
     expect(summary.closed).toBe(true);
     expect(manager.getStates(sid)).toEqual([]);
+  });
+});
+
+describe('SubagentManager hydration (U3)', () => {
+  let manager: SubagentManager;
+
+  const SELECTION = {
+    connectionId: '11111111-1111-4111-8111-111111111111',
+    modelId: 'model-x',
+  };
+
+  beforeEach(() => {
+    manager = new SubagentManager();
+    configOverride.current = null;
+  });
+
+  afterEach(() => {
+    configOverride.current = null;
+  });
+
+  function setConfig(overrides: Partial<Config['subagents']>): void {
+    configOverride.current = {
+      ...defaults(),
+      subagents: { ...defaults().subagents, ...overrides },
+    };
+  }
+
+  /** Round-trip a runtime record through the storage dict to mimic a loaded row. */
+  function storedDomain(record: SubagentRecord) {
+    return subagentRecordFromStorageDict(subagentRecordToStorageDict(runtimeToDomain(record)));
+  }
+
+  it('hydrates a persisted-only record into a getRecord-visible full record', () => {
+    // A separate manager stands in for durable storage: the current manager
+    // (simulating a fresh app launch) has no record for this id.
+    const source = new SubagentManager();
+    const original = source.spawn('review auth', 'Review the auth module', testAgent, {
+      sessionId: 'sess-hydrate',
+      selection: SELECTION,
+      parentChainIndex: 3,
+    });
+    source.markCompleted(original.id, 'the result');
+    const dict = subagentRecordToStorageDict(runtimeToDomain(original));
+    dict.closed = true;
+    const domain = subagentRecordFromStorageDict(dict);
+
+    expect(manager.getRecord(original.id)).toBeUndefined();
+
+    manager.hydrate([{
+      id: original.id,
+      agent: testAgent,
+      domain,
+      sessionId: 'sess-hydrate',
+      windowId: 'win-1',
+      cwd: '/tmp/project',
+    }]);
+
+    const record = manager.getRecord(original.id);
+    expect(record).toBeDefined();
+    expect(record!._evicted).toBe(false);
+    expect(record!.state).toBe(SubagentState.COMPLETED);
+    expect(record!.label).toBe('review auth');
+    expect(record!.task).toBe('Review the auth module');
+    expect(record!.result).toBe('the result');
+    expect(record!.closed).toBe(true);
+    expect(record!.selection).toEqual(SELECTION);
+    expect(record!.parentChainIndex).toBe(3);
+    expect(record!.chain?.messages.length).toBeGreaterThan(0);
+    expect(record!.sessionId).toBe('sess-hydrate');
+    expect(record!.windowId).toBe('win-1');
+    expect(record!.cwd).toBe('/tmp/project');
+    // Hydration restarts the persistence counter and emits nothing.
+    expect(record!.persistRevision).toBe(0);
+    expect(record!.startTime).toBeTypeOf('number');
+    expect(record!.endTime).toBeTypeOf('number');
+    // A hydrated terminal record shows in the prompt unless closed.
+    expect(manager.getStates('sess-hydrate')).toEqual([]);
+    record!.closed = false;
+    expect(manager.getStates('sess-hydrate').map((s) => s.id)).toEqual([original.id]);
+  });
+
+  it('hydrating a live full record is a no-op (runtime record wins)', () => {
+    const record = manager.spawn('live', 'task', testAgent, { sessionId: 'sess-live' });
+    manager.markCompleted(record.id, 'live result');
+    const before = manager.getRecord(record.id);
+
+    // A stale stored copy (different result + closed) must NOT replace the live record.
+    const dict = subagentRecordToStorageDict(runtimeToDomain(record));
+    dict.closed = true;
+    const domain = subagentRecordFromStorageDict(dict);
+    manager.hydrate([{
+      id: record.id,
+      agent: testAgent,
+      domain,
+      sessionId: 'sess-live',
+      windowId: null,
+      cwd: null,
+    }]);
+
+    const after = manager.getRecord(record.id);
+    expect(after).toBe(before); // same object identity — not replaced
+    expect(after!.result).toBe('live result');
+    expect(after!.closed).toBe(false);
+  });
+
+  it('hydrating an _evicted summary restores chain messages and clears _evicted', () => {
+    const sid = 'sess-rehydrate';
+    const record = manager.spawn('summarized', 'important', testAgent, { sessionId: sid });
+    manager.markCompleted(record.id, 'the result');
+    // Capture the full durable record BEFORE eviction empties the chain.
+    const domain = storedDomain(record);
+    const messageCount = domain.chain.messages.length;
+    expect(messageCount).toBeGreaterThan(0);
+
+    manager.confirmRecordsPersisted(sid, [record.id]);
+    const summary = manager.getRecord(record.id)!;
+    expect(summary._evicted).toBe(true);
+    expect(summary.chain?.messages).toEqual([]);
+
+    manager.hydrate([{
+      id: record.id,
+      agent: testAgent,
+      domain,
+      sessionId: sid,
+      windowId: null,
+      cwd: null,
+    }]);
+
+    const restored = manager.getRecord(record.id)!;
+    expect(restored._evicted).toBe(false);
+    expect(restored.chain?.messages.length).toBe(messageCount);
+    expect(restored.result).toBe('the result');
+    expect(restored.state).toBe(SubagentState.COMPLETED);
+  });
+
+  it('skips a spec whose stored status is non-terminal (defensive guard)', () => {
+    const source = new SubagentManager();
+    const original = source.spawn('running', 'x', testAgent, { sessionId: 'sess-guard' });
+    const domain = storedDomain(original);
+    // Forge a non-terminal status; the restore migration normally prevents this.
+    const nonTerminal = { ...domain, status: 'running' as const };
+
+    manager.hydrate([{
+      id: original.id,
+      agent: testAgent,
+      domain: nonTerminal,
+      sessionId: 'sess-guard',
+      windowId: null,
+      cwd: null,
+    }]);
+
+    expect(manager.getRecord(original.id)).toBeUndefined();
+  });
+
+  it('hydrate untracks the retention FIFO so rolls never delete the re-materialized record', () => {
+    setConfig({ terminal_retention: 2 });
+    const sid = 'sess-fifo';
+    const ids: string[] = [];
+    for (let i = 0; i < 3; i += 1) {
+      const record = manager.spawn(`t-${i}`, `do ${i}`, testAgent, { sessionId: sid });
+      manager.markCompleted(record.id, `result-${i}`);
+      ids.push(record.id);
+    }
+    // Capture t-1's full durable record before eviction empties its chain.
+    const target = ids[1];
+    const domain = storedDomain(manager.getRecord(target)!);
+
+    // Confirm all three: t-0 rolls off (cap 2); t-1 and t-2 remain as summaries.
+    manager.confirmRecordsPersisted(sid, ids);
+    expect(manager.getRecord(ids[0])).toBeUndefined();
+    expect(manager.getRecord(target)?._evicted).toBe(true);
+    expect(manager.getRecord(ids[2])?._evicted).toBe(true);
+
+    // Hydrate t-1: it becomes a full record and leaves the retention FIFO.
+    manager.hydrate([{ id: target, agent: testAgent, domain, sessionId: sid, windowId: null, cwd: null }]);
+    expect(manager.getRecord(target)?._evicted).toBe(false);
+
+    // Two more terminal records roll the FIFO past the cap.
+    for (let i = 3; i < 5; i += 1) {
+      const record = manager.spawn(`t-${i}`, `do ${i}`, testAgent, { sessionId: sid });
+      manager.markCompleted(record.id, `result-${i}`);
+      manager.confirmRecordsPersisted(sid, [record.id]);
+    }
+
+    // The normally evicted summary (t-2) rolled off at the cap...
+    expect(manager.getRecord(ids[2])).toBeUndefined();
+    // ...but the re-materialized t-1 survived every roll and kept its chain.
+    const survived = manager.getRecord(target)!;
+    expect(survived).toBeDefined();
+    expect(survived._evicted).toBe(false);
+    expect(survived.chain?.messages.length).toBeGreaterThan(0);
+  });
+
+  it('hydrate emits no deltas and does not notify on its own', () => {
+    const source = new SubagentManager();
+    const original = source.spawn('quiet', 'x', testAgent, { sessionId: 'sess-quiet' });
+    source.markCompleted(original.id, 'done');
+    const domain = storedDomain(original);
+
+    const deltas: unknown[] = [];
+    let notifyCount = 0;
+    manager.setOnDelta((event) => deltas.push(event));
+    manager.setOnChange(() => { notifyCount += 1; });
+
+    manager.hydrate([{
+      id: original.id,
+      agent: testAgent,
+      domain,
+      sessionId: 'sess-quiet',
+      windowId: null,
+      cwd: null,
+    }]);
+
+    expect(deltas).toEqual([]);
+    expect(notifyCount).toBe(0);
+    expect(manager.getRecord(original.id)).toBeDefined();
   });
 });

@@ -219,6 +219,20 @@ export function trackedSubagentPersistenceSessions(): string[] {
   return [...lastPersistedRevision.keys()];
 }
 
+/**
+ * Drop the last-persisted revision for a single subagent id (R12).
+ *
+ * Hydration restarts a record's `persistRevision` at 0, which is ≤ any stored
+ * tracker entry, so every later revision-gated checkpoint
+ * (`persistRevision <= tracker`) would skip the re-materialized record forever.
+ * The tool-side hydrate helper calls this after a successful `manager.hydrate`
+ * so the next dirty checkpoint writes the record. No-op when the session or id
+ * is not tracked.
+ */
+export function forgetSubagentPersistedRevision(sessionId: string, subagentId: string): void {
+  lastPersistedRevision.get(sessionId)?.delete(subagentId);
+}
+
 export interface PersistSubagentChainsOptions {
   /** Recovery flush: treat every record as dirty (missing-row contract). */
   recovery?: boolean;

@@ -153,6 +153,7 @@ function makeSubagentRecord(
     result: overrides.result ?? 'done',
     error: overrides.error ?? null,
     parentChainIndex: overrides.parentChainIndex ?? 0,
+    closed: overrides.closed ?? false,
     chain,
   };
 }
