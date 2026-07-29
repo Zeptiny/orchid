@@ -269,8 +269,9 @@ function applyDeltaToDraft(draft: LiveDraft, event: ContentDelta): void {
 
 /**
  * Apply one flush of deltas in order. `records` identity changes only on
- * `spawned` (append) and `terminal` (replace); projection-only deltas rebuild
- * one live projection per touched subagent and leave records untouched.
+ * `spawned` (append, or replace on run rotation) and `terminal` (replace);
+ * projection-only deltas rebuild one live projection per touched subagent
+ * and leave records untouched.
  */
 function applyDeltaEvents(
   state: SubagentStreamState,
@@ -300,7 +301,14 @@ function applyDeltaEvents(
         continue;
       }
       if (runId !== undefined) {
-        if (event.runId !== runId || event.sequence <= (high ?? -1)) continue;
+        // Run rotation: a resumed subagent re-emits spawned under a fresh
+        // runId. Let the seed through without the stale-run sequence filter;
+        // the high-water mark resets to this seed's sequence below, so the new
+        // run's low sequence numbers are not dropped on later events.
+        const isRotation = event.type === 'spawned' && event.runId !== runId;
+        if (!isRotation && (event.runId !== runId || event.sequence <= (high ?? -1))) {
+          continue;
+        }
       } else if (event.type !== 'spawned') {
         // Only a spawned seed can open an unknown run.
         continue;
@@ -324,9 +332,12 @@ function applyDeltaEvents(
     let settled = false;
     for (const event of applicable) {
       if (event.type === 'spawned') {
-        if (!records.some((item) => item.id === event.record.id)) {
-          records = [...records, event.record];
-        }
+        // Upsert: append on first spawn, replace on run rotation (the
+        // resumed record carries reopened state — status back to
+        // running/queued, result/error cleared).
+        records = records.some((item) => item.id === event.record.id)
+          ? records.map((item) => (item.id === event.record.id ? event.record : item))
+          : [...records, event.record];
         draft = draftFromSpawn(event);
       } else if (event.type === 'terminal') {
         records = records.some((item) => item.id === event.record.id)
