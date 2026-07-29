@@ -17,12 +17,27 @@ import {
   SubagentManager,
   SubagentState,
   getDefaultWaitTimeoutMs,
+  runtimeToDomain,
   type SubagentRecord,
 } from '../../src/main/agents/manager';
+import {
+  subagentRecordFromStorageDict,
+  subagentRecordToStorageDict,
+} from '../../src/shared/types/subagent';
+import {
+  forgetSubagentPersistedRevision,
+  persistSubagentChains,
+} from '../../src/main/agents/persist-subagent-chains';
+import { hydrateSubagentRecords } from '../../src/main/tools/subagent/hydrate';
+import { recoverSubagentPersistence } from '../../src/main/agents/wire-subagents';
+import type { StreamEvent } from '../../src/main/llm/orchestrator';
 import { buildDelegateTool as buildDelegateToolRaw } from '../../src/main/tools/subagent/delegate';
 import { buildWaitTool as buildWaitToolRaw } from '../../src/main/tools/subagent/wait';
 import { buildInterruptTool as buildInterruptToolRaw } from '../../src/main/tools/subagent/interrupt';
+import { buildCloseTool as buildCloseToolRaw } from '../../src/main/tools/subagent/close';
 import { buildAnswerSubagentTool as buildAnswerSubagentToolRaw } from '../../src/main/tools/subagent/answer';
+import { buildFollowUpTool as buildFollowUpToolRaw } from '../../src/main/tools/subagent/follow-up';
+import { RiskClass } from '../../src/shared/types/permission';
 import type { ToolDefinition, ToolExecutionContext, ToolHandler } from '../../src/main/tools/types';
 import { finalizeToolExecutionResult } from '../../src/main/tools/result';
 import {
@@ -49,6 +64,49 @@ vi.mock('../../src/main/config/loader', async (importOriginal) => {
     getConfig: () => configOverride.current ?? actual.getConfig(),
   };
 });
+
+/**
+ * The hydrate helper resolves stored records through the session manager via a
+ * lazy `await import('../../ipc/session')` (mockable, unlike createRequire). A
+ * per-test holder drives it; when unset, a null-returning stub keeps the other
+ * tool handlers (delegate reads `getSession`) on their no-session path.
+ */
+interface FakeSessionManager {
+  getSession: (id: string) => unknown;
+  getActive: () => unknown;
+  syncSubagentRecords?: (
+    sessionId: string,
+    records: unknown[],
+  ) => { session: unknown; bytes: number };
+}
+const sessionManagerHolder = vi.hoisted(() => ({ current: null as FakeSessionManager | null }));
+
+vi.mock('../../src/main/ipc/session', () => ({
+  getSessionManager: () =>
+    sessionManagerHolder.current ?? {
+      getSession: () => null,
+      getActive: () => null,
+      // Benign no-op so the wait tool's legacy persistence fallback (which reads
+      // the session manager directly) does not throw against the bare stub.
+      syncSubagentRecords: () => ({ session: null, bytes: 0 }),
+    },
+}));
+
+/**
+ * The close tool flushes the closed flag through `recoverSubagentPersistence`
+ * via a lazy `await import('../../agents/wire-subagents')` (same pattern as
+ * wait.ts). Spy on that entry point so the persistence-trigger test can assert
+ * it fires. A plain factory (no `importOriginal`) is required: loading the real
+ * module here pre-populates the module cache and the dependency's dynamic import
+ * would bypass the mock. `persistSubagentChains` is the wait tool's legacy
+ * fallback export — stub it too so the wait tests stay isolated from disk/IPC.
+ */
+vi.mock('../../src/main/agents/wire-subagents', () => ({
+  recoverSubagentPersistence: vi.fn(),
+  persistSubagentChains: vi.fn(),
+}));
+
+const recoverSpy = vi.mocked(recoverSubagentPersistence);
 
 const tierSelections = {
   seed: { connectionId: '11111111-1111-4111-8111-111111111111', modelId: 'model-for-seed' },
@@ -134,6 +192,8 @@ const buildWaitTool = (...args: Parameters<typeof buildWaitToolRaw>) =>
   canonicalizeTool(buildWaitToolRaw(...args));
 const buildInterruptTool = (...args: Parameters<typeof buildInterruptToolRaw>) =>
   canonicalizeTool(buildInterruptToolRaw(...args));
+const buildCloseTool = (...args: Parameters<typeof buildCloseToolRaw>) =>
+  canonicalizeTool(buildCloseToolRaw(...args));
 const buildAnswerSubagentTool = (...args: Parameters<typeof buildAnswerSubagentToolRaw>) =>
   canonicalizeTool(buildAnswerSubagentToolRaw(...args));
 
@@ -758,6 +818,245 @@ describe('interrupt_subagents', () => {
   });
 });
 
+// ── close_subagents (U2) ─────────────────────────────────────────────────────
+
+describe('close_subagents', () => {
+  let manager: SubagentManager;
+  const sid = 'sess-close';
+
+  beforeEach(() => {
+    manager = new SubagentManager();
+    sessionManagerHolder.current = null;
+    recoverSpy.mockClear();
+  });
+
+  afterEach(() => {
+    sessionManagerHolder.current = null;
+  });
+
+  function makeCtx(agents: Map<string, Agent>, overrides: Partial<ToolExecutionContext> = {}) {
+    return {
+      cwd: '/tmp/turn',
+      sessionId: sid,
+      projectRuntime: {
+        projectDir: '/tmp',
+        config: defaults(),
+        agents,
+        skills: new Map(),
+        personalities: new Map(),
+      },
+      ...overrides,
+    } as unknown as ToolExecutionContext;
+  }
+
+  /** Round-trip a runtime record through the storage dict to mimic a loaded row. */
+  function storedDomain(record: SubagentRecord) {
+    return subagentRecordFromStorageDict(subagentRecordToStorageDict(runtimeToDomain(record)));
+  }
+
+  function setSession(subagentChains: unknown[], cwd: string | null = '/tmp/session') {
+    const session = { id: sid, cwd, subagentChains };
+    sessionManagerHolder.current = {
+      getSession: (id: string) => (id === sid ? session : null),
+      getActive: () => null,
+    };
+    return session;
+  }
+
+  /** Extract the structured outcome value (no dedicated renderer for this tool). */
+  function outcomeValue(result: ToolExecutionResult) {
+    return (result.canonical.data as { value: Record<string, string[]> }).value;
+  }
+
+  it('closes a terminal record, hides it from getStates, and reports it closed', async () => {
+    const { handler } = buildCloseTool(manager);
+    const record = manager.spawn('test', 'task', codeReviewerAgent, { sessionId: sid });
+    manager.markCompleted(record.id, 'done');
+    expect(manager.getStates(sid).some((s) => s.id === record.id)).toBe(true);
+
+    const result = (await handler(
+      { subagent_ids: [record.id] },
+      makeCtx(makeAgentMap()),
+    )) as ToolExecutionResult;
+
+    expect(result.canonical.status).toBe('complete');
+    expect(outcomeValue(result).closed).toContain(record.id);
+    expect(manager.getRecord(record.id)?.closed).toBe(true);
+    // R1: the closed record disappears from the prompt-facing state list.
+    expect(manager.getStates(sid).some((s) => s.id === record.id)).toBe(false);
+    // R2: the durable record and its terminal state stay intact.
+    expect(manager.getRecord(record.id)?.state).toBe(SubagentState.COMPLETED);
+    expect(manager.getRecord(record.id)?.result).toBe('done');
+    expect(result.agentProjection.content).toContain(record.id);
+  });
+
+  it('rejects a running record as not_terminal with interrupt guidance', async () => {
+    const { handler } = buildCloseTool(manager);
+    const record = manager.spawn('running', 'task', codeReviewerAgent, { sessionId: sid });
+    manager.markRunning(record.id);
+
+    const result = (await handler(
+      { subagent_ids: [record.id] },
+      makeCtx(makeAgentMap()),
+    )) as ToolExecutionResult;
+
+    expect(result.canonical.status).toBe('empty');
+    expect(outcomeValue(result).not_terminal).toContain(record.id);
+    expect(manager.getRecord(record.id)?.closed).toBe(false);
+  });
+
+  it('reports an unknown id as not_found', async () => {
+    const { handler } = buildCloseTool(manager);
+
+    const result = (await handler(
+      { subagent_ids: ['nonexistent-id'] },
+      makeCtx(makeAgentMap()),
+    )) as ToolExecutionResult;
+
+    expect(result.canonical.status).toBe('empty');
+    expect(outcomeValue(result).not_found).toContain('nonexistent-id');
+  });
+
+  it('reports a subagent owned by another session as not_found and leaves it open', async () => {
+    const { handler } = buildCloseTool(manager);
+    const peer = manager.spawn('peer', 'task', codeReviewerAgent, { sessionId: 'sess-other' });
+    manager.markCompleted(peer.id, 'done');
+
+    const result = (await handler(
+      { subagent_ids: [peer.id] },
+      makeCtx(makeAgentMap()),
+    )) as ToolExecutionResult;
+
+    expect(outcomeValue(result).not_found).toContain(peer.id);
+    expect(manager.getRecord(peer.id)?.closed).toBe(false);
+  });
+
+  it('reports an already-closed record as already_closed (idempotent re-close)', async () => {
+    const { handler } = buildCloseTool(manager);
+    const record = manager.spawn('test', 'task', codeReviewerAgent, { sessionId: sid });
+    manager.markCompleted(record.id, 'done');
+
+    const first = (await handler(
+      { subagent_ids: [record.id] },
+      makeCtx(makeAgentMap()),
+    )) as ToolExecutionResult;
+    expect(first.canonical.status).toBe('complete');
+    expect(outcomeValue(first).closed).toContain(record.id);
+
+    const second = (await handler(
+      { subagent_ids: [record.id] },
+      makeCtx(makeAgentMap()),
+    )) as ToolExecutionResult;
+    expect(second.canonical.status).toBe('empty');
+    expect(outcomeValue(second).already_closed).toContain(record.id);
+    expect(outcomeValue(second).closed).toEqual([]);
+    expect(manager.getRecord(record.id)?.closed).toBe(true);
+  });
+
+  it('triggers a recovery persistence flush after a successful close', async () => {
+    const { handler } = buildCloseTool(manager);
+    const record = manager.spawn('test', 'task', codeReviewerAgent, { sessionId: sid });
+    manager.markCompleted(record.id, 'done');
+
+    await handler({ subagent_ids: [record.id] }, makeCtx(makeAgentMap()));
+
+    expect(recoverSpy).toHaveBeenCalledWith(sid);
+  });
+
+  it('does not trigger a persistence flush when nothing was closed', async () => {
+    const { handler } = buildCloseTool(manager);
+
+    await handler({ subagent_ids: ['nonexistent-id'] }, makeCtx(makeAgentMap()));
+
+    expect(recoverSpy).not.toHaveBeenCalled();
+  });
+
+  it('hydrates an evicted record first, then flags and reports it closed', async () => {
+    const { handler } = buildCloseTool(manager);
+    const record = manager.spawn('evicted', 'task', codeReviewerAgent, { sessionId: sid });
+    manager.markCompleted(record.id, 'first');
+    const domain = storedDomain(record);
+    // Confirming persistence evicts the runtime record to a lean summary.
+    manager.confirmRecordsPersisted(sid, [record.id]);
+    expect(manager.getRecord(record.id)?._evicted).toBe(true);
+    setSession([domain]);
+
+    const result = (await handler(
+      { subagent_ids: [record.id] },
+      makeCtx(makeAgentMap()),
+    )) as ToolExecutionResult;
+
+    expect(result.canonical.status).toBe('complete');
+    expect(outcomeValue(result).closed).toContain(record.id);
+    const restored = manager.getRecord(record.id)!;
+    expect(restored._evicted).toBe(false);
+    expect(restored.closed).toBe(true);
+    expect(restored.state).toBe(SubagentState.COMPLETED);
+  });
+
+  it('surfaces a stored record whose agent definition is gone as agent_missing', async () => {
+    const { handler } = buildCloseTool(manager);
+    const source = new SubagentManager();
+    const original = source.spawn('orphan', 'task', codeReviewerAgent, { sessionId: sid });
+    source.markCompleted(original.id, 'stored');
+    setSession([storedDomain(original)]);
+    // Registry WITHOUT code-reviewer, which the stored record references.
+    const agents = new Map<string, Agent>();
+    agents.set(fileExplorerAgent.name, fileExplorerAgent);
+
+    const result = (await handler(
+      { subagent_ids: [original.id] },
+      makeCtx(agents),
+    )) as ToolExecutionResult;
+
+    const value = outcomeValue(result);
+    expect(value.agent_missing).toContain(original.id);
+    expect(value.not_found).not.toContain(original.id);
+    expect(value.closed).toEqual([]);
+  });
+
+  it('returns an error outcome for an empty id list', async () => {
+    const { handler } = buildCloseTool(manager);
+
+    const result = (await handler(
+      { subagent_ids: [] },
+      makeCtx(makeAgentMap()),
+    )) as ToolExecutionResult;
+
+    expect(result.canonical.status).toBe('error');
+    expect(result.agentProjection.content).toContain('non-empty');
+  });
+
+  it('reports a summary-eviction race loudly instead of a silent unpersistable close', async () => {
+    const { handler } = buildCloseTool(manager);
+    const record = manager.spawn('race', 'task', codeReviewerAgent, { sessionId: sid });
+    manager.markCompleted(record.id, 'done');
+    // A concurrent checkpoint evicts the record to a summary; durable storage
+    // lost its row (e.g. corruption rebuild), so hydration cannot restore it.
+    manager.confirmRecordsPersisted(sid, [record.id]);
+    expect(manager.getRecord(record.id)?._evicted).toBe(true);
+    setSession([]);
+
+    const result = (await handler(
+      { subagent_ids: [record.id] },
+      makeCtx(makeAgentMap()),
+    )) as ToolExecutionResult;
+
+    // Not reported as closed: the flag on a summary would never persist.
+    expect(outcomeValue(result).closed).toEqual([]);
+    expect(outcomeValue(result).not_found).toContain(record.id);
+    expect(manager.getRecord(record.id)?.closed).toBe(false);
+    expect(recoverSpy).not.toHaveBeenCalled();
+  });
+
+  it('should have correct tool definition', () => {
+    const { definition } = buildCloseTool(manager);
+    expect(definition.name).toBe('close_subagents');
+    expect(definition.category).toBe('subagent');
+    expect(definition.riskClass).toBe('delegation');
+  });
+});
+
 // ── answer_subagent ──────────────────────────────────────────────────────────
 
 describe('answer_subagent', () => {
@@ -982,5 +1281,508 @@ describe('delegate_to_subagent admission control', () => {
     // No record leaks into the manager for the refused spawn.
     expect(manager.allRecords()).toHaveLength(3);
     expect(manager.allRecords().some((record) => record.label === 'refused')).toBe(false);
+  });
+});
+
+// ── hydrateSubagentRecords helper (U3) ──────────────────────────────────────
+
+describe('hydrateSubagentRecords helper', () => {
+  let manager: SubagentManager;
+  const sid = 'sess-hydrate-helper';
+
+  beforeEach(() => {
+    manager = new SubagentManager();
+    sessionManagerHolder.current = null;
+  });
+
+  afterEach(() => {
+    sessionManagerHolder.current = null;
+  });
+
+  function makeCtx(agents: Map<string, Agent>, overrides: Partial<ToolExecutionContext> = {}) {
+    return {
+      cwd: '/tmp/turn',
+      sessionId: sid,
+      projectRuntime: {
+        projectDir: '/tmp',
+        config: defaults(),
+        agents,
+        skills: new Map(),
+        personalities: new Map(),
+      },
+      ...overrides,
+    } as unknown as ToolExecutionContext;
+  }
+
+  /** Round-trip a runtime record through the storage dict to mimic a loaded row. */
+  function storedDomain(record: SubagentRecord) {
+    return subagentRecordFromStorageDict(subagentRecordToStorageDict(runtimeToDomain(record)));
+  }
+
+  /** Build a durable domain record (in a side manager) for the helper to load. */
+  function storedRecord(label: string, agent: Agent) {
+    const source = new SubagentManager();
+    const original = source.spawn(label, 'task text', agent, { sessionId: sid });
+    source.markCompleted(original.id, 'stored result');
+    return { id: original.id, domain: storedDomain(original) };
+  }
+
+  function setSession(
+    subagentChains: unknown[],
+    opts: { cwd?: string | null; sync?: FakeSessionManager['syncSubagentRecords'] } = {},
+  ) {
+    const session = { id: sid, cwd: opts.cwd ?? '/tmp/session', subagentChains };
+    sessionManagerHolder.current = {
+      getSession: (id: string) => (id === sid ? session : null),
+      getActive: () => null,
+      ...(opts.sync ? { syncSubagentRecords: opts.sync } : {}),
+    };
+    return session;
+  }
+
+  it('skips live full records and leaves storage-missing ids unreported', async () => {
+    const agents = makeAgentMap();
+    const live = manager.spawn('live', 'x', codeReviewerAgent, { sessionId: sid });
+    manager.markCompleted(live.id, 'live');
+    setSession([]); // durable storage has nothing
+
+    const result = await hydrateSubagentRecords(manager, sid, [live.id, 'ghost-id'], makeCtx(agents));
+
+    // Live full record is skipped; ghost-id is absent from storage, so it is
+    // neither hydrated nor agentMissing — the caller reports it as not found.
+    expect(result).toEqual({ hydrated: [], agentMissing: [] });
+    expect(manager.getRecord(live.id)?.result).toBe('live');
+  });
+
+  it('hydrates a persisted-only id from session.subagentChains', async () => {
+    const agents = makeAgentMap();
+    const { id, domain } = storedRecord('persisted', codeReviewerAgent);
+    setSession([domain]);
+    expect(manager.getRecord(id)).toBeUndefined();
+
+    const result = await hydrateSubagentRecords(
+      manager,
+      sid,
+      [id],
+      makeCtx(agents, { windowId: 'win-9', cwd: '/tmp/turn' }),
+    );
+
+    expect(result).toEqual({ hydrated: [id], agentMissing: [] });
+    const record = manager.getRecord(id)!;
+    expect(record._evicted).toBe(false);
+    expect(record.state).toBe(SubagentState.COMPLETED);
+    expect(record.label).toBe('persisted');
+    expect(record.result).toBe('stored result');
+    expect(record.chain?.messages.length).toBeGreaterThan(0);
+    // session.cwd wins over the turn cwd; windowId comes from the turn context.
+    expect(record.cwd).toBe('/tmp/session');
+    expect(record.windowId).toBe('win-9');
+  });
+
+  it('hydrates an evicted in-session summary back into a full record', async () => {
+    const agents = makeAgentMap();
+    const record = manager.spawn('evicted', 'x', codeReviewerAgent, { sessionId: sid });
+    manager.markCompleted(record.id, 'first');
+    const domain = storedDomain(record);
+    const messageCount = domain.chain.messages.length;
+    manager.confirmRecordsPersisted(sid, [record.id]);
+    expect(manager.getRecord(record.id)?._evicted).toBe(true);
+    setSession([domain]);
+
+    const result = await hydrateSubagentRecords(manager, sid, [record.id], makeCtx(agents));
+
+    expect(result.hydrated).toEqual([record.id]);
+    const restored = manager.getRecord(record.id)!;
+    expect(restored._evicted).toBe(false);
+    expect(restored.chain?.messages.length).toBe(messageCount);
+  });
+
+  it('reports agentMissing when the stored agent_type is not in the registry', async () => {
+    // Registry WITHOUT code-reviewer, which the stored record references.
+    const agents = new Map<string, Agent>();
+    agents.set(fileExplorerAgent.name, fileExplorerAgent);
+    const { id, domain } = storedRecord('orphan', codeReviewerAgent);
+    setSession([domain]);
+
+    const result = await hydrateSubagentRecords(manager, sid, [id], makeCtx(agents));
+
+    expect(result).toEqual({ hydrated: [], agentMissing: [id] });
+    expect(manager.getRecord(id)).toBeUndefined();
+  });
+
+  it('returns empty when the session is not found', async () => {
+    sessionManagerHolder.current = {
+      getSession: () => null,
+      getActive: () => null,
+    };
+    const result = await hydrateSubagentRecords(
+      manager,
+      sid,
+      ['any-id'],
+      makeCtx(makeAgentMap()),
+    );
+    expect(result).toEqual({ hydrated: [], agentMissing: [] });
+  });
+
+  it('resets the revision tracker so a post-hydrate mutation persists again', async () => {
+    const agents = makeAgentMap();
+    // A live record persisted once (establishes a lastPersistedRevision entry),
+    // then evicted — mirroring a record whose durable row already exists.
+    const record = manager.spawn('tracked', 'x', codeReviewerAgent, { sessionId: sid });
+    manager.markCompleted(record.id, 'first');
+    const domain = storedDomain(record);
+
+    const synced: Array<{ id: string }> = [];
+    setSession([domain], {
+      sync: (_sessionId, records) => {
+        synced.push(...(records as Array<{ id: string }>));
+        return { session: { id: sid }, bytes: 1 };
+      },
+    });
+
+    // First checkpoint writes the full terminal record, then evicts it.
+    persistSubagentChains(manager, sid);
+    const writesBefore = synced.filter((r) => r.id === record.id).length;
+    expect(writesBefore).toBe(1);
+    expect(manager.getRecord(record.id)?._evicted).toBe(true);
+
+    // Hydrate via the helper: materializes the record AND forgets the tracker entry.
+    const result = await hydrateSubagentRecords(manager, sid, [record.id], makeCtx(agents));
+    expect(result.hydrated).toEqual([record.id]);
+    expect(manager.getRecord(record.id)?._evicted).toBe(false);
+
+    // A dirtying mutation restarts the counter at 1; without the tracker reset
+    // the revision gate (1 <= 1) would skip this record forever.
+    manager.getRecord(record.id)!.persistRevision += 1;
+    persistSubagentChains(manager, sid);
+
+    const writesAfter = synced.filter((r) => r.id === record.id).length;
+    expect(writesAfter).toBe(writesBefore + 1);
+  });
+
+  it('forgetSubagentPersistedRevision is a safe no-op for untracked sessions/ids', () => {
+    expect(() => forgetSubagentPersistedRevision('no-such-session', 'no-such-id')).not.toThrow();
+  });
+});
+
+// ── follow_up_subagent (U6) ──────────────────────────────────────────────────
+
+const buildFollowUpTool = (...args: Parameters<typeof buildFollowUpToolRaw>) =>
+  canonicalizeTool(buildFollowUpToolRaw(...args));
+
+describe('follow_up_subagent', () => {
+  let manager: SubagentManager;
+  let agents: Map<string, Agent>;
+  const sid = 'sess-follow-up';
+
+  beforeEach(() => {
+    manager = new SubagentManager();
+    agents = makeAgentMap();
+    sessionManagerHolder.current = null;
+  });
+
+  afterEach(() => {
+    sessionManagerHolder.current = null;
+    configOverride.current = null;
+  });
+
+  function makeCtx(ctxAgents: Map<string, Agent>) {
+    return {
+      cwd: '/tmp/turn',
+      sessionId: sid,
+      projectRuntime: {
+        projectDir: '/tmp',
+        config: defaults(),
+        agents: ctxAgents,
+        skills: new Map(),
+        personalities: new Map(),
+      },
+    } as unknown as ToolExecutionContext;
+  }
+
+  /** Round-trip a runtime record through the storage dict to mimic a loaded row. */
+  function storedDomain(record: SubagentRecord) {
+    return subagentRecordFromStorageDict(subagentRecordToStorageDict(runtimeToDomain(record)));
+  }
+
+  function setSession(subagentChains: unknown[]) {
+    const session = { id: sid, cwd: '/tmp/session', subagentChains };
+    sessionManagerHolder.current = {
+      getSession: (id: string) => (id === sid ? session : null),
+      getActive: () => null,
+    };
+    return session;
+  }
+
+  it('should have correct tool definition', () => {
+    const { definition } = buildFollowUpTool(manager);
+    expect(definition.name).toBe('follow_up_subagent');
+    expect(definition.category).toBe('subagent');
+    expect(definition.riskClass).toBe(RiskClass.DELEGATION);
+    expect(definition.description).toContain('wait_for_subagent');
+    expect(definition.inputSchema.safeParse({ subagent_id: 'x' }).success).toBe(false);
+    expect(definition.inputSchema.safeParse({ subagent_id: 'x', input: 'y' }).success).toBe(true);
+  });
+
+  it('resumes a terminal record and mirrors the delegate result envelope', async () => {
+    const { handler } = buildFollowUpTool(manager);
+    const record = manager.spawn('review auth', 'original task', codeReviewerAgent, { sessionId: sid });
+    manager.markCompleted(record.id, 'first result');
+
+    const result = (await handler(
+      { subagent_id: record.id, input: 'please also fix issue 2' },
+      makeCtx(agents),
+    )) as ToolExecutionResult;
+
+    expect(result.canonical.status).toBe('complete');
+    const data = result.canonical.data as GenericToolResultData;
+    const value = data.value as { id: string; name: string; status: string; queue_position?: number };
+    expect(value.id).toBe(record.id);
+    expect(value.name).toBe('review auth');
+    // No runner is configured, so an admitted resume stays PENDING.
+    expect(value.status).toBe(SubagentState.PENDING);
+    expect(value.queue_position).toBeUndefined();
+    expect(result.agentProjection.content).toContain(record.id);
+
+    // R5: the chain is reopened with the follow-up message appended.
+    const resumed = manager.getRecord(record.id)!;
+    expect(resumed.state).toBe(SubagentState.PENDING);
+    expect(resumed.runCount).toBe(2);
+    const messages = resumed.chain?.messages ?? [];
+    expect(messages.length).toBeGreaterThan(0);
+    expect(messages[messages.length - 1].role).toBe('user');
+    expect(messages[messages.length - 1].content).toBe('please also fix issue 2');
+  });
+
+  it('hydrates a persisted-only record (app restart) then resumes it', async () => {
+    const { handler } = buildFollowUpTool(manager);
+    // Build a durable record in a side manager, mimicking a pre-restart row.
+    const source = new SubagentManager();
+    const original = source.spawn('persisted', 'task text', codeReviewerAgent, { sessionId: sid });
+    source.markCompleted(original.id, 'stored result');
+    setSession([storedDomain(original)]);
+    expect(manager.getRecord(original.id)).toBeUndefined();
+
+    const result = (await handler(
+      { subagent_id: original.id, input: 'continue where you left off' },
+      makeCtx(agents),
+    )) as ToolExecutionResult;
+
+    expect(result.canonical.status).toBe('complete');
+    const resumed = manager.getRecord(original.id)!;
+    expect(resumed._evicted).toBe(false);
+    expect(resumed.state).toBe(SubagentState.PENDING);
+    expect(resumed.runCount).toBe(2);
+    const messages = resumed.chain?.messages ?? [];
+    expect(messages[messages.length - 1].content).toBe('continue where you left off');
+  });
+
+  it('hydrates an evicted in-session summary then resumes it', async () => {
+    const { handler } = buildFollowUpTool(manager);
+    const record = manager.spawn('evicted', 'task', codeReviewerAgent, { sessionId: sid });
+    manager.markCompleted(record.id, 'first');
+    const domain = storedDomain(record);
+    manager.confirmRecordsPersisted(sid, [record.id]);
+    expect(manager.getRecord(record.id)?._evicted).toBe(true);
+    setSession([domain]);
+
+    const result = (await handler(
+      { subagent_id: record.id, input: 'try again' },
+      makeCtx(agents),
+    )) as ToolExecutionResult;
+
+    expect(result.canonical.status).toBe('complete');
+    const restored = manager.getRecord(record.id)!;
+    expect(restored._evicted).toBe(false);
+    expect(restored.state).toBe(SubagentState.PENDING);
+    expect(restored.runCount).toBe(2);
+  });
+
+  it('parks the resumed run in the FIFO queue when admission is full', async () => {
+    configOverride.current = {
+      ...defaults(),
+      subagents: { ...defaults().subagents, max_active_per_session: 1, max_queued: 2 },
+    };
+    const { handler } = buildFollowUpTool(manager);
+    // Terminal target first (while the slot is free), then occupy the slot.
+    const target = manager.spawn('target', 'task', codeReviewerAgent, { sessionId: sid });
+    manager.markCompleted(target.id, 'done');
+    const blocker = manager.spawn('blocker', 'task', codeReviewerAgent, { sessionId: sid });
+    manager.markRunning(blocker.id);
+
+    const result = (await handler(
+      { subagent_id: target.id, input: 'one more thing' },
+      makeCtx(agents),
+    )) as ToolExecutionResult;
+
+    expect(result.canonical.status).toBe('complete');
+    const data = result.canonical.data as GenericToolResultData;
+    const value = data.value as { status: string; queue_position: number };
+    expect(value.status).toBe(SubagentState.QUEUED);
+    expect(value.queue_position).toBe(1);
+    expect(result.agentProjection.content).toContain('queued');
+    expect(manager.getRecord(target.id)?.state).toBe(SubagentState.QUEUED);
+  });
+
+  it('rejects a closed subagent with a named error', async () => {
+    const { handler } = buildFollowUpTool(manager);
+    const record = manager.spawn('closed one', 'task', codeReviewerAgent, { sessionId: sid });
+    manager.markCompleted(record.id, 'done');
+    manager.getRecord(record.id)!.closed = true;
+
+    const result = (await handler(
+      { subagent_id: record.id, input: 'more' },
+      makeCtx(agents),
+    )) as ToolExecutionResult;
+
+    expect(result.canonical.status).toBe('error');
+    expect(result.agentProjection.content).toContain('cannot follow up on a closed subagent');
+    // The terminal record is left unmutated.
+    expect(manager.getRecord(record.id)?.runCount).toBe(1);
+  });
+
+  it('rejects a running subagent with wait/interrupt guidance', async () => {
+    const { handler } = buildFollowUpTool(manager);
+    const record = manager.spawn('running one', 'task', codeReviewerAgent, { sessionId: sid });
+    manager.markRunning(record.id);
+
+    const result = (await handler(
+      { subagent_id: record.id, input: 'more' },
+      makeCtx(agents),
+    )) as ToolExecutionResult;
+
+    expect(result.canonical.status).toBe('error');
+    expect(result.agentProjection.content).toContain('not terminal');
+    expect(result.agentProjection.content).toContain('wait_for_subagent');
+    expect(result.agentProjection.content).toContain('interrupt_subagents');
+  });
+
+  it('reports an unknown id as not found', async () => {
+    const { handler } = buildFollowUpTool(manager);
+    setSession([]); // durable storage has nothing
+
+    const result = (await handler(
+      { subagent_id: 'ghost-id', input: 'more' },
+      makeCtx(agents),
+    )) as ToolExecutionResult;
+
+    expect(result.canonical.status).toBe('error');
+    expect(result.agentProjection.content).toContain('ghost-id');
+    expect(result.agentProjection.content).toContain('not found');
+  });
+
+  it('reports a subagent owned by another session as not found and leaves it untouched', async () => {
+    const { handler } = buildFollowUpTool(manager);
+    const peer = manager.spawn('peer', 'private task', codeReviewerAgent, { sessionId: 'sess-other' });
+    manager.markCompleted(peer.id, 'private result');
+
+    const result = (await handler(
+      { subagent_id: peer.id, input: 'more' },
+      makeCtx(agents), // sessionId: sid ≠ sess-other
+    )) as ToolExecutionResult;
+
+    expect(result.canonical.status).toBe('error');
+    expect(result.agentProjection.content).toContain('not found');
+    expect(manager.getRecord(peer.id)?.state).toBe(SubagentState.COMPLETED);
+    expect(manager.getRecord(peer.id)?.runCount).toBe(1);
+  });
+
+  it('reports a named error when the stored agent definition is missing', async () => {
+    const { handler } = buildFollowUpTool(manager);
+    // Durable record references code-reviewer; the turn registry lacks it.
+    const source = new SubagentManager();
+    const original = source.spawn('orphan', 'task text', codeReviewerAgent, { sessionId: sid });
+    source.markCompleted(original.id, 'stored result');
+    setSession([storedDomain(original)]);
+    const registryAgents = new Map<string, Agent>();
+    registryAgents.set(fileExplorerAgent.name, fileExplorerAgent);
+
+    const result = (await handler(
+      { subagent_id: original.id, input: 'more' },
+      makeCtx(registryAgents),
+    )) as ToolExecutionResult;
+
+    expect(result.canonical.status).toBe('error');
+    expect(result.agentProjection.content).toContain('no longer available');
+    expect(result.agentProjection.content).toContain('cannot resume');
+    expect(manager.getRecord(original.id)).toBeUndefined();
+  });
+
+  it('returns early without a session context', async () => {
+    const { handler } = buildFollowUpTool(manager);
+
+    const result = (await handler(
+      { subagent_id: 'any-id', input: 'more' },
+      { cwd: '/tmp' },
+    )) as ToolExecutionResult;
+
+    expect(result.canonical.status).toBe('error');
+    expect(result.agentProjection.content).toContain('No session context');
+  });
+
+  it('reports a full queue as a named error and leaves the record unmutated', async () => {
+    configOverride.current = {
+      ...defaults(),
+      subagents: { ...defaults().subagents, max_active_per_session: 1, max_queued: 1 },
+    };
+    const { handler } = buildFollowUpTool(manager);
+    // Terminal target (slot was free), then occupy the run slot and the one
+    // queue slot so the resume is rejected at capacity.
+    const target = manager.spawn('target', 'task', codeReviewerAgent, { sessionId: sid });
+    manager.markCompleted(target.id, 'done');
+    const blocker = manager.spawn('blocker', 'task', codeReviewerAgent, { sessionId: sid });
+    manager.markRunning(blocker.id);
+    const queued = manager.spawn('queued', 'task', codeReviewerAgent, { sessionId: sid });
+    expect(queued.state).toBe(SubagentState.QUEUED);
+
+    const result = (await handler(
+      { subagent_id: target.id, input: 'one more thing' },
+      makeCtx(agents),
+    )) as ToolExecutionResult;
+
+    expect(result.canonical.status).toBe('error');
+    expect(result.agentProjection.content).toContain('max_queued');
+    // A rejected resume leaves the terminal record completely unmutated.
+    const untouched = manager.getRecord(target.id)!;
+    expect(untouched.state).toBe(SubagentState.COMPLETED);
+    expect(untouched.runCount).toBe(1);
+    expect(untouched.chain?.status).toBe('completed');
+  });
+
+  it('reports a still-settling record (cancelled run not yet unwound) with retry guidance', async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    manager.setRunner(async function* (): AsyncGenerator<StreamEvent> {
+      await gate;
+      yield { type: 'finish', finishReason: 'stop' };
+    });
+    const { handler } = buildFollowUpTool(manager);
+    const record = manager.spawn('settling', 'task', codeReviewerAgent, { sessionId: sid });
+    // Poll (bounded) until the run loop flips the record to RUNNING rather than
+    // relying on a fixed sleep, so the transition wait is deterministic.
+    await vi.waitFor(() => {
+      expect(record.state).toBe(SubagentState.RUNNING);
+    });
+
+    // Terminal on paper, but the run loop still owns the interruption boundary.
+    expect(manager.cancelOne(record.id)).toBe(true);
+    expect(record.state).toBe(SubagentState.INTERRUPTED);
+    expect(record._runPromise).not.toBeNull();
+
+    const result = (await handler(
+      { subagent_id: record.id, input: 'again' },
+      makeCtx(agents),
+    )) as ToolExecutionResult;
+
+    expect(result.canonical.status).toBe('error');
+    expect(result.agentProjection.content).toContain('still settling');
+    expect(result.agentProjection.content).toContain('retry');
+    // Unmutated: no chain reopen, no run bump.
+    const untouched = manager.getRecord(record.id)!;
+    expect(untouched.runCount).toBe(1);
+    expect(untouched.chain?.messages.some((message) => message.content === 'again')).toBe(false);
+
+    release();
+    await record._runPromise;
   });
 });

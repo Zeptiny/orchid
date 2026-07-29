@@ -78,6 +78,18 @@ export function isTerminalSubagentState(state: SubagentState): boolean {
 }
 
 /**
+ * Terminal domain statuses map 1:1 onto runtime states for hydration. Stored
+ * `subagentChains` only ever carry terminal statuses (the restore migration
+ * maps queued/pending/running → interrupted); a non-terminal lookup yields
+ * `undefined` and the spec is skipped defensively.
+ */
+const HYDRATABLE_STATUS_TO_STATE: Partial<Record<SubagentStatus, SubagentState>> = {
+  [SubagentStatus.COMPLETED]: SubagentState.COMPLETED,
+  [SubagentStatus.FAILED]: SubagentState.FAILED,
+  [SubagentStatus.INTERRUPTED]: SubagentState.INTERRUPTED,
+};
+
+/**
  * Lazily parsed `subagents.*` schema defaults, cached in a module-level
  * singleton. Every "config not loaded" fallback in this module reads these so
  * the values cannot silently drift from the schema (they ARE the schema
@@ -95,6 +107,8 @@ function getSubagentConfigDefaults(): ReturnType<typeof subagentsConfigSchema.pa
 /** Production stream driver (wired from subagent-runner.ts). */
 export type SubagentStreamRunner = (params: {
   task: string;
+  /** Full chain to replay for a resumed run; absent = spawn path. */
+  history?: Message[];
   agent: Agent;
   selection: ModelSelection | null;
   abortSignal: AbortSignal;
@@ -246,6 +260,85 @@ export class SubagentQueueFullError extends Error {
   }
 }
 
+/**
+ * Thrown by `SubagentManager.followUp` when the target record is not in a
+ * terminal state. Only completed/failed/interrupted subagents can be resumed;
+ * the follow-up tool maps this to wait/interrupt guidance.
+ */
+export class SubagentNotTerminalError extends Error {
+  readonly state: SubagentState;
+
+  constructor(subagentId: string, state: SubagentState) {
+    super(
+      `Subagent '${subagentId}' is ${state}, not terminal. ` +
+        `Only completed, failed, or interrupted subagents can be followed up. ` +
+        `Call wait_for_subagent or interrupt_subagents first.`,
+    );
+    this.name = 'SubagentNotTerminalError';
+    this.state = state;
+  }
+}
+
+/**
+ * Thrown by `SubagentManager.followUp` when the target record is closed.
+ * Closed subagents are hidden from the prompt and cannot be resumed; the
+ * follow-up tool maps this to a named "closed" error.
+ */
+export class SubagentClosedError extends Error {
+  constructor(subagentId: string) {
+    super(`Subagent '${subagentId}' is closed and cannot be followed up.`);
+    this.name = 'SubagentClosedError';
+  }
+}
+
+/**
+ * Thrown by `SubagentManager.followUp` when the target record is an evicted
+ * lean summary. Defensive only: the follow-up tool hydrates evicted records
+ * first, so this should never fire in production — a summary holds no chain to
+ * replay, so resuming it directly would stream an empty history.
+ */
+export class SubagentEvictedError extends Error {
+  constructor(subagentId: string) {
+    super(
+      `Subagent '${subagentId}' is an evicted summary; hydrate it before following up.`,
+    );
+    this.name = 'SubagentEvictedError';
+  }
+}
+
+/**
+ * Thrown by `SubagentManager.close` when the target record is an evicted lean
+ * summary. A flag set on a summary never persists (every checkpoint skips
+ * `_evicted` records), so the mutation must be loud instead of silent — the
+ * close tool hydrates evicted records first and maps this to a retryable
+ * failure for that id.
+ */
+export class SubagentSummaryClosedError extends Error {
+  constructor(subagentId: string) {
+    super(
+      `Subagent '${subagentId}' is an evicted summary; hydrate it before closing.`,
+    );
+    this.name = 'SubagentSummaryClosedError';
+  }
+}
+
+/**
+ * Thrown by `SubagentManager.followUp` when the previous run has not finished
+ * unwinding. `cancelOne` on a RUNNING record leaves `_runPromise` set (the
+ * runner owns the async interruption boundary and materializes the partial
+ * tail), while the record is already terminal — resuming in that window would
+ * let the zombie run loop clobber the resumed chain and orphan the new run's
+ * abort controller.
+ */
+export class SubagentStillSettlingError extends Error {
+  constructor(subagentId: string) {
+    super(
+      `Subagent '${subagentId}' is still settling its previous run; retry the follow-up shortly.`,
+    );
+    this.name = 'SubagentStillSettlingError';
+  }
+}
+
 // ── SubagentRecord ──────────────────────────────────────────────────────────
 
 export interface SubagentRecord {
@@ -263,8 +356,8 @@ export interface SubagentRecord {
   result: string | null;
   /** Error message (populated on failure). */
   error: string | null;
-  /** Spawn time (epoch ms). */
-  readonly startTime: number;
+  /** Spawn time (epoch ms); reset to the resumed run's start on a follow-up. */
+  startTime: number;
   /** When the record entered the admission queue (epoch ms; null = admitted at spawn). */
   queuedAt: number | null;
   /** When execution started after admission (epoch ms; null = not started). */
@@ -298,6 +391,12 @@ export interface SubagentRecord {
   _resolveWait: Array<(reason: SubagentWaiterReason) => void> | null;
   /** In-flight run promise (for debugging / optional await). */
   _runPromise: Promise<void> | null;
+  /**
+   * Hidden from the dynamic system prompt while the durable record, chain,
+   * and terminal state stay intact (close_subagents tool). Only meaningful on
+   * terminal records; persisted with the durable row.
+   */
+  closed: boolean;
   /** Runtime-only live projection; durable history remains in `chain`. */
   live: SubagentLiveProjection;
   _liveCommittedSegmentCount: number;
@@ -311,8 +410,19 @@ export interface SubagentRecord {
    * and the storage dicts build fresh explicit-field objects.
    */
   _evicted: boolean;
+  /**
+   * Runtime-only single-use marker: the record was re-queued by a follow-up
+   * resume rather than a fresh spawn. Persistence keeps a durable row for
+   * resume-queued records (the reopened chain + follow-up message survive a
+   * crash while queued); spawn-queued and cancelled-before-admission records
+   * still get no row. Cleared on admission. Cannot leak into storage/domain
+   * output: `runtimeToDomain` builds fresh explicit-field objects.
+   */
+  _resumeQueued: boolean;
   /** Durable-mutation counter; the persistence scheduler upserts dirty records (U6). */
   persistRevision: number;
+  /** Per-record run counter for per-run turnId attribution. */
+  runCount: number;
   /** Epoch ms of the last emitted `usage` delta (0 = none yet); throttles usage deltas. */
   _lastUsageDeltaAt: number;
   /** Pending question routed to the main agent (null when no question is outstanding). */
@@ -336,6 +446,27 @@ export interface SubagentResult {
   result: string | null;
   error: string | null;
   elapsed: number | null;
+}
+
+// ── HydrateSpec ─────────────────────────────────────────────────────────────
+
+/**
+ * One durable record to materialize back into the runtime manager.
+ *
+ * `domain` is the stored record from `session.subagentChains` — the
+ * authoritative complete copy for evicted summaries and pre-launch records.
+ * `agent` is re-resolved from the project runtime registry by the stored
+ * `agent_type` (registry name); a missing definition is a tool-side error, so
+ * it never reaches `SubagentManager.hydrate`.
+ */
+export interface HydrateSpec {
+  readonly id: string;
+  readonly agent: Agent;
+  readonly domain: DomainSubagentRecord;
+  readonly sessionId: string | null;
+  readonly windowId: string | null;
+  readonly cwd: string | null;
+  readonly projectRuntime?: ProjectRuntime;
 }
 
 // ── Mutable live state ──────────────────────────────────────────────────────
@@ -470,11 +601,14 @@ export class SubagentManager {
       abortController: null,
       _resolveWait: [],
       _runPromise: null,
+      closed: false,
       live: makeLiveProjection(id, sessionId, admitted ? 'pending' : 'queued'),
       _liveCommittedSegmentCount: 0,
       _liveTerminalEmitted: false,
       _evicted: false,
+      _resumeQueued: false,
       persistRevision: 0,
+      runCount: 1,
       _lastUsageDeltaAt: 0,
       pendingQuestion: null,
     };
@@ -503,6 +637,120 @@ export class SubagentManager {
   getQueuePosition(subagentId: string): number | null {
     const index = this._queue.indexOf(subagentId);
     return index >= 0 ? index + 1 : null;
+  }
+
+  /**
+   * Resume a terminal, non-closed subagent with new user input (R5, R7, R8).
+   *
+   * Appends the input as a user message, reopens the chain, resets the per-run
+   * fields (fresh live projection / runId, `runCount += 1`), and runs the
+   * resumed record through the same admission control as `spawn`: admitted
+   * resumes start immediately (PENDING → runner); over-capacity resumes park in
+   * the bounded FIFO queue as QUEUED and start when a terminal transition frees
+   * a slot. Throws `SubagentQueueFullError` — leaving the terminal record
+   * completely unmutated — when the queue is full.
+   *
+   * Guards: the record must exist, must not be an `_evicted` summary (the
+   * follow-up tool hydrates those first; a summary has no chain to replay),
+   * must be terminal, and must not be closed.
+   */
+  followUp(subagentId: string, input: string): SubagentRecord {
+    const record = this._subagents.get(subagentId);
+    if (!record) throw new Error(`Subagent '${subagentId}' not found`);
+    if (record._evicted) throw new SubagentEvictedError(subagentId);
+    if (!TERMINAL_STATES.has(record.state)) {
+      throw new SubagentNotTerminalError(subagentId, record.state);
+    }
+    if (record.closed) throw new SubagentClosedError(subagentId);
+    // A cancelled RUNNING record is already terminal while its run loop still
+    // owns the interruption boundary (`_runPromise` set). Resuming now would
+    // hand the record to a second run while the zombie loop's partial flush
+    // and finally block still write to it.
+    if (record._runPromise !== null) {
+      throw new SubagentStillSettlingError(subagentId);
+    }
+
+    const limits = getAdmissionLimits();
+    const admitted = this._canAdmit(record.sessionId, limits);
+    // Unlike spawn (which creates the record AFTER the capacity check), followUp
+    // mutates an existing durable record. Validate queue capacity FIRST so a
+    // rejected resume leaves the terminal record completely unmutated.
+    if (!admitted && this._queue.length >= limits.maxQueued) {
+      throw new SubagentQueueFullError(limits);
+    }
+
+    const now = Date.now();
+    // Append the follow-up user message and REOPEN the chain. The reopen is
+    // built directly (same object-spread style as `_finalizeChain`) BEFORE any
+    // `_setChainMessages` call: that helper's `keepTerminal` logic preserves a
+    // terminal chain status, so the chain must already be ACTIVE by the time
+    // the run loop writes its first message.
+    const userMessage = makeUserMessage(input);
+    record.chain = record.chain
+      ? {
+          ...record.chain,
+          messages: [...record.chain.messages, userMessage],
+          status: ChainStatus.ACTIVE,
+          endTime: null,
+        }
+      : {
+          ...makeEmptyChain(record.sessionId ?? '', record.selection, record.agent),
+          messages: [userMessage],
+        };
+
+    // Per-run reset: clear the prior run's outcome and timing, bump the run
+    // counter, and build a fresh live projection (new runId) so the renderer
+    // treats the resume as a new run.
+    record.result = null;
+    record.error = null;
+    record.endTime = null;
+    record.startedAt = null;
+    record.startTime = now;
+    // Clear the prior run's aggregate so the resumed run's SPAWNED delta does
+    // not leak stale usage; the run loop re-accumulates fresh per run.
+    record.usage = null;
+    record.live = makeLiveProjection(
+      record.id,
+      record.sessionId,
+      admitted ? SubagentStatus.PENDING : SubagentStatus.QUEUED,
+    );
+    record._liveCommittedSegmentCount = 0;
+    record._liveTerminalEmitted = false;
+    record._lastUsageDeltaAt = 0;
+    record.pendingQuestion = null;
+    record.abortController = null;
+    record.runCount += 1;
+    // Reopened chain + follow-up message must persist via the next checkpoint
+    // (spawn sets a fresh row; followUp reopens a terminal durable row).
+    this._markRecordDirty(record);
+
+    if (admitted) {
+      record.state = SubagentState.PENDING;
+      record.queuedAt = null;
+      this._lastAdmittedSession = record.sessionId ?? '';
+      this._notify();
+      this._emitDelta(record, {
+        type: SubagentDeltaEventType.SPAWNED,
+        record: runtimeToDomain(record, { includeLiveTail: false }),
+        usage: record.usage,
+      });
+      if (this._runner) {
+        record._runPromise = this._startRun(record, record.cwd ?? undefined);
+      }
+    } else {
+      record.state = SubagentState.QUEUED;
+      record.queuedAt = now;
+      record._resumeQueued = true;
+      this._queue.push(record.id);
+      this._notify();
+      this._emitDelta(record, {
+        type: SubagentDeltaEventType.SPAWNED,
+        record: runtimeToDomain(record, { includeLiveTail: false }),
+        usage: record.usage,
+      });
+    }
+
+    return record;
   }
 
   /**
@@ -557,6 +805,24 @@ export class SubagentManager {
     this._resolveWaiters(record);
     this._notify();
     this._admitFromQueue();
+  }
+
+  /**
+   * Mark a terminal subagent closed — hidden from the dynamic system prompt
+   * while the durable record, chain, and terminal state stay intact (R2). The
+   * flag persists with the durable row (R4) so it survives restarts. Idempotent:
+   * re-closing an already-closed record is a no-op. The close_subagents tool
+   * owns the terminal-state and session-ownership guards; this only mutates.
+   */
+  close(subagentId: string): void {
+    const record = this._subagents.get(subagentId);
+    if (!record || record.closed) return;
+    // A flag set on an `_evicted` summary never persists (every checkpoint
+    // skips evicted records) — refuse loudly; the tool hydrates these first.
+    if (record._evicted) throw new SubagentSummaryClosedError(subagentId);
+    record.closed = true;
+    this._markRecordDirty(record);
+    this._notify();
   }
 
   /**
@@ -728,7 +994,7 @@ export class SubagentManager {
       this._finishLive(record, SubagentState.INTERRUPTED);
     }
     this._resolveWaiters(record);
-    if (wasQueued) {
+    if (wasQueued && !record._resumeQueued) {
       // A record cancelled while QUEUED was never admitted, so it never gets a
       // durable row (persistence eligibility begins at admission) — but it must
       // not linger as a full record either. Evict it to a lean terminal summary
@@ -738,6 +1004,12 @@ export class SubagentManager {
       this._evictToSummary(record);
       this._trackSummary(record.sessionId ?? '', record.id, getTerminalRetention());
     }
+    // A resume-queued record owns a durable row (persist-subagent-chains
+    // eligibility carve-out), so evicting it here would strand the row with a
+    // stale pre-interrupt status and drop the follow-up message — every later
+    // checkpoint skips `_evicted` records. Leave it as a full dirty INTERRUPTED
+    // record: the terminal wave persists it, then confirmRecordsPersisted
+    // evicts it through the normal row-confirmed path.
     this._notify();
     if (!wasQueued) this._admitFromQueue();
     return true;
@@ -805,6 +1077,9 @@ export class SubagentManager {
 
     for (const record of this._subagents.values()) {
       if (sessionId !== undefined && record.sessionId !== sessionId) {
+        continue;
+      }
+      if (record.closed) {
         continue;
       }
       states.push({
@@ -992,6 +1267,93 @@ export class SubagentManager {
     return records.map((record) => runtimeToDomain(record));
   }
 
+  /**
+   * Materialize durable records back into the runtime map on demand (R9).
+   *
+   * Targets records whose full form lives only in `session.subagentChains`:
+   * evicted lean summaries (`_evicted`, chain emptied) and everything persisted
+   * before the current app launch. A live full record always wins (no-op); an
+   * `_evicted` summary shell is REPLACED, because its chain is empty and the
+   * stored domain record is the only replay source.
+   *
+   * Hydration is deliberately silent: no deltas, no `_notify`, no dirty mark —
+   * the mutating tool that follows owns notification and persistence. Each
+   * rebuilt record restarts at `persistRevision: 0`, so the caller must also
+   * drop the id's `lastPersistedRevision` entry (see
+   * `forgetSubagentPersistedRevision`); otherwise the revision-gated checkpoint
+   * would skip the re-materialized record forever (R12).
+   */
+  hydrate(specs: HydrateSpec[]): void {
+    for (const spec of specs) {
+      const existing = this._subagents.get(spec.id);
+      // A live full record wins; only absent ids and chain-less evicted
+      // summaries are (re)materialized from durable storage.
+      if (existing && !existing._evicted) continue;
+
+      // Defensive: stored rows only ever carry terminal statuses (the restore
+      // migration maps queued/pending/running → interrupted). Skip anything else.
+      const state = HYDRATABLE_STATUS_TO_STATE[spec.domain.status];
+      if (!state) continue;
+
+      const { domain } = spec;
+      // Guard against NaN from an unparseable stored timestamp (the `|| 0`
+      // fallback mirrors session storage hydration) so hydration stays total
+      // and runtimeToDomain never receives an invalid Date.
+      const startTime = Date.parse(domain.start_time) || 0;
+      const endTime = domain.end_time ? (Date.parse(domain.end_time) || 0) : null;
+
+      const record: SubagentRecord = {
+        id: spec.id,
+        agent: spec.agent,
+        state,
+        label: domain.agent_name,
+        task: domain.task,
+        result: domain.result,
+        error: domain.error,
+        startTime,
+        queuedAt: null,
+        // Durable eligibility is keyed on `startedAt`; a restored terminal
+        // record was admitted, so it replays from its original start time.
+        startedAt: startTime,
+        endTime,
+        chain: domain.chain,
+        // Usage lives on the chain messages; hydration does not reconstruct the
+        // aggregate (summaries keep it, storage does not carry it).
+        usage: null,
+        selection: domain.chain.selection,
+        parentChainIndex: domain.parentChainIndex,
+        sessionId: spec.sessionId,
+        windowId: spec.windowId,
+        cwd: spec.cwd,
+        projectRuntime: spec.projectRuntime,
+        abortController: null,
+        _resolveWait: [],
+        _runPromise: null,
+        closed: domain.closed,
+        live: makeLiveProjection(spec.id, spec.sessionId, domain.status),
+        _liveCommittedSegmentCount: 0,
+        _liveTerminalEmitted: true,
+        _evicted: false,
+        _resumeQueued: false,
+        persistRevision: 0,
+        runCount: 1,
+        _lastUsageDeltaAt: 0,
+        pendingQuestion: null,
+      };
+      if (domain.reasoning_effort !== undefined) {
+        record.reasoningEffort = domain.reasoning_effort;
+      }
+
+      this._subagents.set(spec.id, record);
+      // A re-materialized full record sharing an id with a FIFO-tracked summary
+      // would be deleted from the map when the retention FIFO rolls. Untrack it
+      // so subsequent retention rolls leave it alone (R12).
+      if (existing?._evicted) {
+        this._untrackSummary(spec.sessionId ?? '', spec.id);
+      }
+    }
+  }
+
   // ── Private: admission control ────────────────────────────────────────────
 
   /** "Active" = PENDING + RUNNING; QUEUED consumes no run slot. */
@@ -1078,6 +1440,9 @@ export class SubagentManager {
   /** Move a queued record into a run slot: PENDING, then start the runner. */
   private _admit(record: SubagentRecord): void {
     record.state = SubagentState.PENDING;
+    // Single-use resume marker: cleared once the record leaves the queue so a
+    // later terminal transition does not keep its durable row alive as queued.
+    record._resumeQueued = false;
     this._lastAdmittedSession = record.sessionId ?? '';
     // Durable row eligibility begins at admission; queued records stay out of
     // storage (persistRevision stays 0 until here).
@@ -1148,6 +1513,14 @@ export class SubagentManager {
     }
   }
 
+  /** Remove an id from the per-session terminal-summary FIFO (no-op if absent). */
+  private _untrackSummary(sessionId: string, id: string): void {
+    const fifo = this._terminalSummaries.get(sessionId);
+    if (!fifo) return;
+    const index = fifo.indexOf(id);
+    if (index >= 0) fifo.splice(index, 1);
+  }
+
   // ── Private: run loop ─────────────────────────────────────────────────────
 
   private async _startRun(
@@ -1180,6 +1553,9 @@ export class SubagentManager {
     try {
       const stream = runner({
         task: record.task,
+        // Replay the full chain on a resume; a mutable snapshot keeps the
+        // runner's history independent of the run-loop message accumulator.
+        history: [...(record.chain?.messages ?? [])],
         agent: record.agent,
         selection: record.selection,
         abortSignal: abort.signal,
@@ -1188,7 +1564,9 @@ export class SubagentManager {
         cwd,
         agentScopeId: record.id,
         chainId: record.chain?.id,
-        turnId: record.id,
+        // Per-run turn id keeps provider accounting attribution unique across
+        // resumes (spawn path runCount=1 reproduces a stable unique id).
+        turnId: `${record.id}#${record.runCount}`,
         projectRuntime: record.projectRuntime,
         onReasoningEffort: (effort) => {
           record.reasoningEffort = effort;
@@ -1679,6 +2057,7 @@ export function runtimeToDomain(
     ...(record.reasoningEffort !== undefined
       ? { reasoning_effort: record.reasoningEffort }
       : {}),
+    closed: record.closed,
     chain: checkpointChain,
   };
 }

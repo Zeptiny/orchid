@@ -310,6 +310,7 @@ export const subagentRecordSchema = z.object({
   chain_id: z.string(), start_time: z.string(), end_time: z.string().nullable(),
   result: z.string().nullable(), error: z.string().nullable(), parentChainIndex: z.number().int().nullable(),
   reasoning_effort: z.union([z.string(), z.number()]).optional(),
+  closed: z.boolean().default(false),
   chain: z.unknown(),
 });
 export const subagentSnapshotSchema = z.object({

@@ -710,3 +710,134 @@ describe('subagent usage summary identity (U5 history input)', () => {
     expect(subagentUsageSummaryEquals(a, otherKey)).toBe(false);
   });
 });
+
+describe('run rotation for resumed subagents', () => {
+  it('treats a second run of the same subagent as a new run and builds its stream', () => {
+    let state = seeded(sessionA, 0);
+
+    // Run A: spawn, stream, terminal.
+    state = applyDeltaBatch(state, batch([
+      spawned('one', 'run-A', record('one', 'pending'), 0, 1),
+      textDelta(1, 'run A work', { runId: 'run-A', sessionRevision: 2 }),
+    ]));
+    expect(state.live.get('one')?.segments).toEqual([{ kind: 'text', id: 'seg-text', content: 'run A work' }]);
+
+    const doneA = { ...record('one', 'completed'), end_time: '2026-01-01T00:00:05.000Z', result: 'A done' };
+    state = applyDeltaBatch(state, batch([terminal('one', 'run-A', doneA, 2, null, 3)]));
+    expect(state.live.has('one')).toBe(false);
+    expect(state.records[0].status).toBe('completed');
+
+    // Run B (rotation): same subagentId, fresh runId, low sequences restart at 0.
+    const resumedRec = { ...record('one', 'running'), start_time: '2026-01-01T00:01:00.000Z' };
+    state = applyDeltaBatch(state, batch([
+      spawned('one', 'run-B', resumedRec, 0, 4),
+      textDelta(1, 'run B work', { runId: 'run-B', sessionRevision: 5 }),
+    ]));
+
+    // The live stream is built from run B's deltas only — no run-A content.
+    const live = state.live.get('one');
+    expect(live).toMatchObject({ runId: 'run-B', sequence: 1, state: 'running' });
+    expect(live?.segments).toEqual([{ kind: 'text', id: 'seg-text', content: 'run B work' }]);
+    expect(state.runs.get('one')).toBe('run-B');
+    expect(state.highWater.get('one')).toBe(1);
+
+    // Run B terminal replaces the record with run B's authoritative record.
+    const doneB = { ...record('one', 'completed'), end_time: '2026-01-01T00:02:00.000Z', result: 'B done' };
+    state = applyDeltaBatch(state, batch([terminal('one', 'run-B', doneB, 2, null, 6)]));
+    expect(state.live.has('one')).toBe(false);
+    expect(state.records).toHaveLength(1);
+    expect(state.records[0]).toBe(doneB);
+    expect(state.records[0].result).toBe('B done');
+  });
+
+  it('drops late deltas from the old run after rotation', () => {
+    let state = seeded(sessionA, 0);
+    state = applyDeltaBatch(state, batch([
+      spawned('one', 'run-A', record('one', 'pending'), 0, 1),
+      textDelta(1, 'A', { runId: 'run-A', sessionRevision: 2 }),
+    ]));
+    state = applyDeltaBatch(state, batch([
+      terminal('one', 'run-A', { ...record('one', 'completed'), result: 'A' }, 2, null, 3),
+    ]));
+
+    // Rotate to run B.
+    state = applyDeltaBatch(state, batch([
+      spawned('one', 'run-B', record('one', 'running'), 0, 4),
+      textDelta(1, 'B', { runId: 'run-B', sessionRevision: 5 }),
+    ]));
+
+    // A late text_delta carrying run A's runId is dropped without state change.
+    const before = state;
+    state = applyDeltaBatch(state, batch([
+      textDelta(3, 'stale A', { runId: 'run-A', sessionRevision: 6 }),
+    ]));
+    expect(state).toBe(before);
+    expect(state.live.get('one')?.segments).toEqual([{ kind: 'text', id: 'seg-text', content: 'B' }]);
+  });
+
+  it('replaces the record on rotation-spawn so status flips back from terminal', () => {
+    let state = seeded(sessionA, 0);
+    state = applyDeltaBatch(state, batch([
+      spawned('one', 'run-A', record('one', 'pending'), 0, 1),
+    ]));
+    state = applyDeltaBatch(state, batch([
+      terminal('one', 'run-A', { ...record('one', 'completed'), result: 'done' }, 1, null, 2),
+    ]));
+    expect(state.records[0].status).toBe('completed');
+
+    // The rotation spawned event replaces the stale terminal record at once,
+    // rather than leaving it until run B's terminal event lands.
+    const resumed = { ...record('one', 'running'), start_time: '2026-01-01T00:01:00.000Z' };
+    state = applyDeltaBatch(state, batch([spawned('one', 'run-B', resumed, 0, 3)]));
+    expect(state.records).toHaveLength(1);
+    expect(state.records[0]).toBe(resumed);
+    expect(state.records[0].status).toBe('running');
+    expect(state.records[0].result).toBeNull();
+  });
+
+  it('leaves the stream and record untouched for a duplicate spawned of the same run', () => {
+    let state = seeded(sessionA, 0);
+    state = applyDeltaBatch(state, batch([
+      spawned('one', 'run-1', record('one', 'pending'), 0, 1),
+      textDelta(1, 'work', { sessionRevision: 2 }),
+      textDelta(2, ' more', { sessionRevision: 3 }),
+    ]));
+    expect(state.live.get('one')?.segments).toEqual([{ kind: 'text', id: 'seg-text', content: 'work more' }]);
+    const recordsAfterFirst = state.records;
+
+    // A re-delivered spawned for the SAME runId is dropped by the sequence
+    // filter (its sequence 0 is not above the high-water mark), so the first
+    // run's accumulated stream and record identity survive unchanged.
+    const afterDup = applyDeltaBatch(state, batch([spawned('one', 'run-1', record('one', 'pending'), 0, 4)]));
+    expect(afterDup).toBe(state);
+    expect(afterDup.live.get('one')?.segments).toEqual([{ kind: 'text', id: 'seg-text', content: 'work more' }]);
+    expect(afterDup.records).toBe(recordsAfterFirst);
+  });
+
+  it('re-buckets a rotated record from ended back to running or queued in groupSubagents', () => {
+    let state = seeded(sessionA, 0);
+    state = applyDeltaBatch(state, batch([
+      spawned('one', 'run-A', record('one', 'pending'), 0, 1),
+    ]));
+    state = applyDeltaBatch(state, batch([
+      terminal('one', 'run-A', { ...record('one', 'completed'), result: 'done' }, 1, null, 2),
+    ]));
+    expect(groupSubagents(state.records).ended.map((item) => item.id)).toEqual(['one']);
+
+    // Rotation-spawn with a running record moves it back to the running bucket.
+    state = applyDeltaBatch(state, batch([spawned('one', 'run-B', record('one', 'running'), 0, 3)]));
+    let groups = groupSubagents(state.records);
+    expect(groups.running.map((item) => item.id)).toEqual(['one']);
+    expect(groups.ended).toHaveLength(0);
+
+    // Terminal again, then a resume parked in the queue lands in the queued bucket.
+    state = applyDeltaBatch(state, batch([
+      terminal('one', 'run-B', { ...record('one', 'completed'), result: 'done again' }, 1, null, 4),
+    ]));
+    expect(groupSubagents(state.records).ended.map((item) => item.id)).toEqual(['one']);
+    state = applyDeltaBatch(state, batch([spawned('one', 'run-C', record('one', 'queued'), 0, 5)]));
+    groups = groupSubagents(state.records);
+    expect(groups.queued.map((item) => item.id)).toEqual(['one']);
+    expect(groups.ended).toHaveLength(0);
+  });
+});

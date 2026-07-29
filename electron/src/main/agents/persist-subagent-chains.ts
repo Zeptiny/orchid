@@ -219,6 +219,20 @@ export function trackedSubagentPersistenceSessions(): string[] {
   return [...lastPersistedRevision.keys()];
 }
 
+/**
+ * Drop the last-persisted revision for a single subagent id (R12).
+ *
+ * Hydration restarts a record's `persistRevision` at 0, which is ≤ any stored
+ * tracker entry, so every later revision-gated checkpoint
+ * (`persistRevision <= tracker`) would skip the re-materialized record forever.
+ * The tool-side hydrate helper calls this after a successful `manager.hydrate`
+ * so the next dirty checkpoint writes the record. No-op when the session or id
+ * is not tracked.
+ */
+export function forgetSubagentPersistedRevision(sessionId: string, subagentId: string): void {
+  lastPersistedRevision.get(sessionId)?.delete(subagentId);
+}
+
 export interface PersistSubagentChainsOptions {
   /** Recovery flush: treat every record as dirty (missing-row contract). */
   recovery?: boolean;
@@ -267,8 +281,10 @@ export function persistSubagentChains(
       if (record._evicted) continue;
       // `queued` is a runtime-only state: records parked in the queue — or
       // cancelled before admission — never get a durable row. Durable
-      // eligibility begins at admission (`startedAt`).
-      if (record.queuedAt !== null && record.startedAt === null) continue;
+      // eligibility begins at admission (`startedAt`). A resume-queued record
+      // (`_resumeQueued`) keeps its durable row so the reopened chain +
+      // follow-up message survive a crash while queued.
+      if (record.queuedAt !== null && record.startedAt === null && !record._resumeQueued) continue;
       if (!recovery && record.persistRevision <= (tracker?.get(record.id) ?? -1)) continue;
       dirtyRecords.push(record);
     }
