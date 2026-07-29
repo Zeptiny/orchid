@@ -175,6 +175,8 @@ describe('applyConfigDraft', () => {
         embedding_api_timeout: 15,
         embedding_api_retries: 2,
         embedding_api_model: selection,
+        model_download_inactivity_timeout: 45,
+        model_download_total_timeout: 1200,
       },
       ast_max_file_size: 4,
       mcp_startup_timeout: 5,

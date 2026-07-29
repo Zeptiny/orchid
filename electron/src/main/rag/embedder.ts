@@ -601,7 +601,6 @@ async function downloadFile(
   const tmpPath = `${destPath}.tmp.${Date.now()}`;
   const controller = new AbortController();
   let inactivityTimer: ReturnType<typeof setTimeout> | undefined;
-  let totalTimer: ReturnType<typeof setTimeout> | undefined;
   let abortReason: Error | undefined;
 
   const abort = (reason: Error) => {
@@ -629,7 +628,7 @@ async function downloadFile(
   };
   if (options?.signal?.aborted) onExternalAbort();
   else options?.signal?.addEventListener('abort', onExternalAbort, { once: true });
-  totalTimer = setTimeout(() => {
+  const totalTimer = setTimeout(() => {
     abort(new Error(`Model download exceeded its ${totalTimeoutMs}ms duration limit`));
   }, totalTimeoutMs);
   resetInactivityTimer();
