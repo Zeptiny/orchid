@@ -412,6 +412,41 @@ function attachUsageToLatestAssistant(messages: Message[], usage: Usage): boolea
   return false;
 }
 
+/** Append the current uncommitted live tail to a turn-local message snapshot. */
+function appendLiveTailMessages(
+  messages: Message[],
+  agent: ActiveAgent,
+  context: Pick<AgentContext, 'response' | 'thinking' | 'usage'> | undefined,
+): void {
+  const partialResponse = context?.response ?? '';
+  const thinking = context?.thinking ?? '';
+  const usage = context?.usage ?? null;
+
+  if (thinking.length > agent.thinkingCommittedLength) {
+    const segment = thinking.slice(agent.thinkingCommittedLength);
+    if (segment.trim()) {
+      messages.push(makeThinkingMessage(
+        segment,
+        textSegmentIdAtOffset(agent, 'thinking', agent.thinkingCommittedLength),
+      ));
+    }
+  }
+
+  const remaining = partialResponse.slice(agent.responseCommittedLength);
+  if (remaining) {
+    messages.push(makeAssistantMessage(
+      remaining,
+      usage,
+      textSegmentIdAtOffset(agent, 'text', agent.responseCommittedLength),
+    ));
+  } else if (usage && !attachUsageToLatestAssistant(messages, usage)) {
+    messages.push({
+      ...makeAssistantMessage('', usage),
+      hidden: true,
+    });
+  }
+}
+
 /**
  * Flush partial stream content into turnMessages (thinking + uncommitted
  * assistant text). Shared by forceAbort, replace-on-send, and error paths.
@@ -419,34 +454,12 @@ function attachUsageToLatestAssistant(messages: Message[], usage: Usage): boolea
 function flushPartialTurnContent(agent: ActiveAgent, context: AgentContext | undefined): void {
   const partialResponse = context?.response ?? '';
   const thinking = context?.thinking ?? '';
-  const usage = (context?.usage as Usage | null) ?? null;
-
-  if (thinking && thinking.length > agent.thinkingCommittedLength) {
-    const seg = thinking.slice(agent.thinkingCommittedLength);
-    if (seg.trim()) {
-      agent.turnMessages.push(makeThinkingMessage(
-        seg,
-        textSegmentIdAtOffset(agent, 'thinking', agent.thinkingCommittedLength),
-      ));
-    }
+  appendLiveTailMessages(agent.turnMessages, agent, context);
+  if (thinking.length > agent.thinkingCommittedLength) {
     agent.thinkingCommittedLength = thinking.length;
   }
-
-  const remaining = partialResponse.slice(agent.responseCommittedLength);
-  if (remaining) {
-    agent.turnMessages.push(makeAssistantMessage(
-      remaining,
-      usage,
-      textSegmentIdAtOffset(agent, 'text', agent.responseCommittedLength),
-    ));
+  if (partialResponse.length > agent.responseCommittedLength) {
     agent.responseCommittedLength = partialResponse.length;
-  } else if (usage) {
-    if (!attachUsageToLatestAssistant(agent.turnMessages, usage)) {
-      agent.turnMessages.push({
-        ...makeAssistantMessage('', usage),
-        hidden: true,
-      });
-    }
   }
 }
 
@@ -912,6 +925,25 @@ function classifyErrorKind(title: string | null | undefined, detail: string): Ch
 function turnMessagesFromAgent(agent: ActiveAgent): Message[] {
   const turnBase = agent.messages.slice(agent.priorMessageCount);
   return [...turnBase, ...agent.turnMessages];
+}
+
+/** Materialize the current live tail without mutating committed turn state. */
+function checkpointMessagesFromAgent(agent: ActiveAgent, context: AgentContext): Message[] {
+  const checkpoint = turnMessagesFromAgent(agent);
+  appendLiveTailMessages(checkpoint, agent, context);
+  return checkpoint;
+}
+
+/** Persist one bounded main-turn checkpoint after a provider step completes. */
+function checkpointActiveTurn(agent: ActiveAgent, context: AgentContext): void {
+  try {
+    getSessionManager().updateActiveChainMessages(
+      checkpointMessagesFromAgent(agent, context),
+      agent.sessionId,
+    );
+  } catch (err) {
+    console.debug('Failed to checkpoint active chat chain (non-fatal):', err);
+  }
 }
 
 /**
@@ -1634,6 +1666,7 @@ export function registerChatIPC(): void {
             type: 'usage',
             usage: context.usage,
         });
+        checkpointActiveTurn(activeAgent, context);
       }
 
       // Forward tool call streaming events to renderer
@@ -1854,10 +1887,17 @@ export function registerChatIPC(): void {
       if (!sessionId) return null;
       const session = getSessionManager().getSession(sessionId);
       if (!session) return null;
+      const liveAgent = activeAgents.get(sessionId);
+      const live = liveAgent && !liveAgent.finalized
+        ? snapshotForAgent(liveAgent)
+        : null;
       return {
         sessionId,
-        messages: flattenSessionMessages(session),
-        live: getLiveChatSnapshot(sessionId),
+        // The active chain may contain a durable step checkpoint. Keep the
+        // renderer's history base at turn start while `live` supplies the same
+        // tool/text tail, avoiding duplicate bubbles and cumulative usage.
+        messages: liveAgent && live ? [...liveAgent.messages] : flattenSessionMessages(session),
+        live,
       };
     },
   );
