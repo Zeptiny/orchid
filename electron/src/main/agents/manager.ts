@@ -107,6 +107,8 @@ function getSubagentConfigDefaults(): ReturnType<typeof subagentsConfigSchema.pa
 /** Production stream driver (wired from subagent-runner.ts). */
 export type SubagentStreamRunner = (params: {
   task: string;
+  /** Full chain to replay for a resumed run; absent = spawn path. */
+  history?: Message[];
   agent: Agent;
   selection: ModelSelection | null;
   abortSignal: AbortSignal;
@@ -258,6 +260,52 @@ export class SubagentQueueFullError extends Error {
   }
 }
 
+/**
+ * Thrown by `SubagentManager.followUp` when the target record is not in a
+ * terminal state. Only completed/failed/interrupted subagents can be resumed;
+ * the follow-up tool maps this to wait/interrupt guidance.
+ */
+export class SubagentNotTerminalError extends Error {
+  readonly state: SubagentState;
+
+  constructor(subagentId: string, state: SubagentState) {
+    super(
+      `Subagent '${subagentId}' is ${state}, not terminal. ` +
+        `Only completed, failed, or interrupted subagents can be followed up. ` +
+        `Call wait_for_subagent or interrupt_subagents first.`,
+    );
+    this.name = 'SubagentNotTerminalError';
+    this.state = state;
+  }
+}
+
+/**
+ * Thrown by `SubagentManager.followUp` when the target record is closed.
+ * Closed subagents are hidden from the prompt and cannot be resumed; the
+ * follow-up tool maps this to a named "closed" error.
+ */
+export class SubagentClosedError extends Error {
+  constructor(subagentId: string) {
+    super(`Subagent '${subagentId}' is closed and cannot be followed up.`);
+    this.name = 'SubagentClosedError';
+  }
+}
+
+/**
+ * Thrown by `SubagentManager.followUp` when the target record is an evicted
+ * lean summary. Defensive only: the follow-up tool hydrates evicted records
+ * first, so this should never fire in production — a summary holds no chain to
+ * replay, so resuming it directly would stream an empty history.
+ */
+export class SubagentEvictedError extends Error {
+  constructor(subagentId: string) {
+    super(
+      `Subagent '${subagentId}' is an evicted summary; hydrate it before following up.`,
+    );
+    this.name = 'SubagentEvictedError';
+  }
+}
+
 // ── SubagentRecord ──────────────────────────────────────────────────────────
 
 export interface SubagentRecord {
@@ -275,8 +323,8 @@ export interface SubagentRecord {
   result: string | null;
   /** Error message (populated on failure). */
   error: string | null;
-  /** Spawn time (epoch ms). */
-  readonly startTime: number;
+  /** Spawn time (epoch ms); reset to the resumed run's start on a follow-up. */
+  startTime: number;
   /** When the record entered the admission queue (epoch ms; null = admitted at spawn). */
   queuedAt: number | null;
   /** When execution started after admission (epoch ms; null = not started). */
@@ -329,8 +377,19 @@ export interface SubagentRecord {
    * and the storage dicts build fresh explicit-field objects.
    */
   _evicted: boolean;
+  /**
+   * Runtime-only single-use marker: the record was re-queued by a follow-up
+   * resume rather than a fresh spawn. Persistence keeps a durable row for
+   * resume-queued records (the reopened chain + follow-up message survive a
+   * crash while queued); spawn-queued and cancelled-before-admission records
+   * still get no row. Cleared on admission. Cannot leak into storage/domain
+   * output: `runtimeToDomain` builds fresh explicit-field objects.
+   */
+  _resumeQueued: boolean;
   /** Durable-mutation counter; the persistence scheduler upserts dirty records (U6). */
   persistRevision: number;
+  /** Per-record run counter for per-run turnId attribution. */
+  runCount: number;
   /** Epoch ms of the last emitted `usage` delta (0 = none yet); throttles usage deltas. */
   _lastUsageDeltaAt: number;
   /** Pending question routed to the main agent (null when no question is outstanding). */
@@ -514,7 +573,9 @@ export class SubagentManager {
       _liveCommittedSegmentCount: 0,
       _liveTerminalEmitted: false,
       _evicted: false,
+      _resumeQueued: false,
       persistRevision: 0,
+      runCount: 1,
       _lastUsageDeltaAt: 0,
       pendingQuestion: null,
     };
@@ -543,6 +604,110 @@ export class SubagentManager {
   getQueuePosition(subagentId: string): number | null {
     const index = this._queue.indexOf(subagentId);
     return index >= 0 ? index + 1 : null;
+  }
+
+  /**
+   * Resume a terminal, non-closed subagent with new user input (R5, R7, R8).
+   *
+   * Appends the input as a user message, reopens the chain, resets the per-run
+   * fields (fresh live projection / runId, `runCount += 1`), and runs the
+   * resumed record through the same admission control as `spawn`: admitted
+   * resumes start immediately (PENDING → runner); over-capacity resumes park in
+   * the bounded FIFO queue as QUEUED and start when a terminal transition frees
+   * a slot. Throws `SubagentQueueFullError` — leaving the terminal record
+   * completely unmutated — when the queue is full.
+   *
+   * Guards: the record must exist, must not be an `_evicted` summary (the
+   * follow-up tool hydrates those first; a summary has no chain to replay),
+   * must be terminal, and must not be closed.
+   */
+  followUp(subagentId: string, input: string): SubagentRecord {
+    const record = this._subagents.get(subagentId);
+    if (!record) throw new Error(`Subagent '${subagentId}' not found`);
+    if (record._evicted) throw new SubagentEvictedError(subagentId);
+    if (!TERMINAL_STATES.has(record.state)) {
+      throw new SubagentNotTerminalError(subagentId, record.state);
+    }
+    if (record.closed) throw new SubagentClosedError(subagentId);
+
+    const limits = getAdmissionLimits();
+    const admitted = this._canAdmit(record.sessionId, limits);
+    // Unlike spawn (which creates the record AFTER the capacity check), followUp
+    // mutates an existing durable record. Validate queue capacity FIRST so a
+    // rejected resume leaves the terminal record completely unmutated.
+    if (!admitted && this._queue.length >= limits.maxQueued) {
+      throw new SubagentQueueFullError(limits);
+    }
+
+    const now = Date.now();
+    // Append the follow-up user message and REOPEN the chain. The reopen is
+    // built directly (same object-spread style as `_finalizeChain`) BEFORE any
+    // `_setChainMessages` call: that helper's `keepTerminal` logic preserves a
+    // terminal chain status, so the chain must already be ACTIVE by the time
+    // the run loop writes its first message.
+    const userMessage = makeUserMessage(input);
+    record.chain = record.chain
+      ? {
+          ...record.chain,
+          messages: [...record.chain.messages, userMessage],
+          status: ChainStatus.ACTIVE,
+          endTime: null,
+        }
+      : {
+          ...makeEmptyChain(record.sessionId ?? '', record.selection, record.agent),
+          messages: [userMessage],
+        };
+
+    // Per-run reset: clear the prior run's outcome and timing, bump the run
+    // counter, and build a fresh live projection (new runId) so the renderer
+    // treats the resume as a new run.
+    record.result = null;
+    record.error = null;
+    record.endTime = null;
+    record.startedAt = null;
+    record.startTime = now;
+    record.live = makeLiveProjection(
+      record.id,
+      record.sessionId,
+      admitted ? SubagentStatus.PENDING : SubagentStatus.QUEUED,
+    );
+    record._liveCommittedSegmentCount = 0;
+    record._liveTerminalEmitted = false;
+    record._lastUsageDeltaAt = 0;
+    record.pendingQuestion = null;
+    record.abortController = null;
+    record.runCount += 1;
+    // Reopened chain + follow-up message must persist via the next checkpoint
+    // (spawn sets a fresh row; followUp reopens a terminal durable row).
+    this._markRecordDirty(record);
+
+    if (admitted) {
+      record.state = SubagentState.PENDING;
+      record.queuedAt = null;
+      this._lastAdmittedSession = record.sessionId ?? '';
+      this._notify();
+      this._emitDelta(record, {
+        type: SubagentDeltaEventType.SPAWNED,
+        record: runtimeToDomain(record, { includeLiveTail: false }),
+        usage: record.usage,
+      });
+      if (this._runner) {
+        record._runPromise = this._startRun(record, record.cwd ?? undefined);
+      }
+    } else {
+      record.state = SubagentState.QUEUED;
+      record.queuedAt = now;
+      record._resumeQueued = true;
+      this._queue.push(record.id);
+      this._notify();
+      this._emitDelta(record, {
+        type: SubagentDeltaEventType.SPAWNED,
+        record: runtimeToDomain(record, { includeLiveTail: false }),
+        usage: record.usage,
+      });
+    }
+
+    return record;
   }
 
   /**
@@ -1096,7 +1261,9 @@ export class SubagentManager {
         _liveCommittedSegmentCount: 0,
         _liveTerminalEmitted: true,
         _evicted: false,
+        _resumeQueued: false,
         persistRevision: 0,
+        runCount: 1,
         _lastUsageDeltaAt: 0,
         pendingQuestion: null,
       };
@@ -1200,6 +1367,9 @@ export class SubagentManager {
   /** Move a queued record into a run slot: PENDING, then start the runner. */
   private _admit(record: SubagentRecord): void {
     record.state = SubagentState.PENDING;
+    // Single-use resume marker: cleared once the record leaves the queue so a
+    // later terminal transition does not keep its durable row alive as queued.
+    record._resumeQueued = false;
     this._lastAdmittedSession = record.sessionId ?? '';
     // Durable row eligibility begins at admission; queued records stay out of
     // storage (persistRevision stays 0 until here).
@@ -1310,6 +1480,9 @@ export class SubagentManager {
     try {
       const stream = runner({
         task: record.task,
+        // Replay the full chain on a resume; a mutable snapshot keeps the
+        // runner's history independent of the run-loop message accumulator.
+        history: [...(record.chain?.messages ?? [])],
         agent: record.agent,
         selection: record.selection,
         abortSignal: abort.signal,
@@ -1318,7 +1491,9 @@ export class SubagentManager {
         cwd,
         agentScopeId: record.id,
         chainId: record.chain?.id,
-        turnId: record.id,
+        // Per-run turn id keeps provider accounting attribution unique across
+        // resumes (spawn path runCount=1 reproduces a stable unique id).
+        turnId: `${record.id}#${record.runCount}`,
         projectRuntime: record.projectRuntime,
         onReasoningEffort: (effort) => {
           record.reasoningEffort = effort;

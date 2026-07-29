@@ -4,12 +4,16 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import {
   SubagentManager,
+  SubagentClosedError,
+  SubagentEvictedError,
+  SubagentNotTerminalError,
   SubagentQueueFullError,
   SubagentState,
   runtimeToDomain,
   type SubagentRecord,
 } from '../../src/main/agents/manager';
 import type { Agent } from '../../src/shared/types/agent';
+import type { Message } from '../../src/shared/types/message';
 import type { StreamEvent } from '../../src/main/llm/orchestrator';
 import { sumSubagentUsage } from '../../src/shared/usage';
 import { createCanonicalToolResult } from '../../src/shared/types/tool-result';
@@ -1568,5 +1572,394 @@ describe('SubagentManager hydration (U3)', () => {
     expect(deltas).toEqual([]);
     expect(notifyCount).toBe(0);
     expect(manager.getRecord(original.id)).toBeDefined();
+  });
+});
+
+describe('SubagentManager follow-up resume (U4)', () => {
+  let manager: SubagentManager;
+
+  beforeEach(() => {
+    manager = new SubagentManager();
+    configOverride.current = null;
+  });
+
+  afterEach(() => {
+    configOverride.current = null;
+    vi.useRealTimers();
+  });
+
+  function setLimits(overrides: Partial<Config['subagents']>): void {
+    configOverride.current = {
+      ...defaults(),
+      subagents: { ...defaults().subagents, ...overrides },
+    };
+  }
+
+  /** A gate-controlled runner: each started run parks until its gate fires. */
+  function gateRunner(gates: Array<() => void>): SubagentManager['_runner'] {
+    return async function* (): AsyncGenerator<StreamEvent> {
+      await new Promise<void>((resolve) => { gates.push(resolve); });
+      yield { type: 'content', text: 'run output' };
+      yield { type: 'finish', finishReason: 'stop' };
+    };
+  }
+
+  const tick = () => new Promise((resolve) => setTimeout(resolve, 10));
+
+  it('resume admitted: terminal → RUNNING, appends user message, reopens chain, fresh runId, runCount++, runner started', async () => {
+    const gates: Array<() => void> = [];
+    manager.setRunner(gateRunner(gates));
+    const record = manager.spawn('orig', 'first task', testAgent, { sessionId: 'sess-resume' });
+    await tick();
+    expect(record.state).toBe(SubagentState.RUNNING);
+    expect(record.runCount).toBe(1);
+    const firstRunId = record.live.runId;
+
+    // Complete the first run.
+    gates[0]();
+    await record._runPromise;
+    expect(record.state).toBe(SubagentState.COMPLETED);
+    expect(record.chain?.status).toBe('completed');
+    const messagesBefore = record.chain?.messages.length ?? 0;
+
+    // Follow up: admitted (slot free) → PENDING, then RUNNING once started.
+    const resumed = manager.followUp(record.id, 'keep going');
+    expect(resumed).toBe(record);
+    await tick();
+    expect(resumed.state).toBe(SubagentState.RUNNING);
+    expect(resumed._runPromise).not.toBeNull();
+
+    // The follow-up input is the last chain message.
+    const last = resumed.chain?.messages.at(-1);
+    expect(last?.role).toBe('user');
+    expect(last?.content).toBe('keep going');
+    expect(resumed.chain?.messages.length).toBe(messagesBefore + 1);
+
+    // Chain reopened; per-run fields reset; fresh runId; runCount bumped.
+    expect(resumed.chain?.status).toBe('active');
+    expect(resumed.chain?.endTime).toBeNull();
+    expect(resumed.live.runId).not.toBe(firstRunId);
+    expect(resumed.runCount).toBe(2);
+    expect(resumed.result).toBeNull();
+    expect(resumed.error).toBeNull();
+
+    gates[1]();
+    await resumed._runPromise;
+    expect(resumed.state).toBe(SubagentState.COMPLETED);
+  });
+
+  it('resume queued: over-capacity resume parks as QUEUED with a queue position; a terminal transition admits it', async () => {
+    setLimits({ max_active_per_session: 1 });
+    const gates: Array<() => void> = [];
+    manager.setRunner(gateRunner(gates));
+
+    // Target completes first while the slot is free.
+    const target = manager.spawn('target', 'first', testAgent, { sessionId: 'sess-rq' });
+    await tick();
+    gates[0]();
+    await target._runPromise;
+    expect(target.state).toBe(SubagentState.COMPLETED);
+
+    // Blocker occupies the only per-session slot.
+    const blocker = manager.spawn('blocker', 'x', testAgent, { sessionId: 'sess-rq' });
+    await tick();
+    expect(blocker.state).toBe(SubagentState.RUNNING);
+
+    const events: SubagentDeltaEvent[] = [];
+    manager.setOnDelta((event) => events.push(event));
+    manager.followUp(target.id, 'again');
+    expect(target.state).toBe(SubagentState.QUEUED);
+    expect(target.queuedAt).not.toBeNull();
+    expect(target._resumeQueued).toBe(true);
+    expect(manager.getQueuePosition(target.id)).toBe(1);
+    // A SPAWNED delta is re-emitted carrying the queued record.
+    const spawned = events.filter((event) => event.type === 'spawned');
+    expect(spawned.at(-1)?.record.status).toBe('queued');
+
+    // Completing the blocker admits the resumed record (leaves QUEUED).
+    gates[1]();
+    await blocker._runPromise;
+    await tick();
+    expect(target.state).toBe(SubagentState.RUNNING);
+    expect(target._resumeQueued).toBe(false);
+    expect(manager.getQueuePosition(target.id)).toBeNull();
+
+    gates[2]();
+    await target._runPromise;
+    expect(target.state).toBe(SubagentState.COMPLETED);
+  });
+
+  it('queue full: followUp throws SubagentQueueFullError and leaves the terminal record unmutated', () => {
+    setLimits({ max_active_global: 1, max_active_per_session: 1, max_queued: 1 });
+
+    // Terminal target created while the slot is free (no runner → manual).
+    const target = manager.spawn('target', 'first', testAgent, { sessionId: 'sess-qf' });
+    manager.markCompleted(target.id, 'done');
+    expect(target.state).toBe(SubagentState.COMPLETED);
+    const messagesBefore = target.chain?.messages.length;
+    const statusBefore = target.chain?.status;
+    const runCountBefore = target.runCount;
+    const liveRunIdBefore = target.live.runId;
+
+    // Fill the single active slot and the single queue slot.
+    const active = manager.spawn('active', 'x', testAgent, { sessionId: 'sess-qf' });
+    expect(active.state).toBe(SubagentState.PENDING);
+    const queued = manager.spawn('queued', 'x', testAgent, { sessionId: 'sess-qf' });
+    expect(queued.state).toBe(SubagentState.QUEUED);
+
+    let thrown: unknown;
+    try {
+      manager.followUp(target.id, 'again');
+    } catch (err) {
+      thrown = err;
+    }
+    expect(thrown).toBeInstanceOf(SubagentQueueFullError);
+
+    // The terminal record is completely unmutated.
+    expect(target.state).toBe(SubagentState.COMPLETED);
+    expect(target.closed).toBe(false);
+    expect(target.result).toBe('done');
+    expect(target.chain?.messages.length).toBe(messagesBefore);
+    expect(target.chain?.status).toBe(statusBefore);
+    expect(target.runCount).toBe(runCountBefore);
+    expect(target.live.runId).toBe(liveRunIdBefore);
+    expect(target._resumeQueued).toBe(false);
+    expect(manager.getQueuePosition(target.id)).toBeNull();
+  });
+
+  it('persistence eligibility: a resume-queued record keeps its durable row; a spawn-queued record is still skipped', async () => {
+    setLimits({ max_active_per_session: 1 });
+    // Mirrors the durable-eligibility skip in persist-subagent-chains.ts:
+    // a record is skipped when queued && !started && !_resumeQueued.
+    const isDurableEligible = (record: SubagentRecord): boolean =>
+      !(record.queuedAt !== null && record.startedAt === null && !record._resumeQueued);
+
+    const gates: Array<() => void> = [];
+    manager.setRunner(gateRunner(gates));
+
+    const target = manager.spawn('target', 'first', testAgent, { sessionId: 'sess-elig' });
+    await tick();
+    gates[0]();
+    await target._runPromise;
+    expect(target.state).toBe(SubagentState.COMPLETED);
+
+    // Blocker occupies the slot; subsequent spawn and resume both queue.
+    manager.spawn('blocker', 'x', testAgent, { sessionId: 'sess-elig' });
+    await tick();
+
+    const spawnQueued = manager.spawn('spawn-queued', 'x', testAgent, { sessionId: 'sess-elig' });
+    expect(spawnQueued.state).toBe(SubagentState.QUEUED);
+    expect(spawnQueued._resumeQueued).toBe(false);
+    expect(isDurableEligible(spawnQueued)).toBe(false);
+
+    manager.followUp(target.id, 'again');
+    expect(target.state).toBe(SubagentState.QUEUED);
+    expect(target._resumeQueued).toBe(true);
+    expect(target.queuedAt).not.toBeNull();
+    expect(target.startedAt).toBeNull();
+    expect(isDurableEligible(target)).toBe(true);
+  });
+
+  it('cancelOne mid-resumed-run interrupts through the runner-owned boundary', async () => {
+    const record = manager.spawn('orig', 'first', testAgent, { sessionId: 'sess-int-resume' });
+    manager.markCompleted(record.id, 'first result');
+    expect(record.state).toBe(SubagentState.COMPLETED);
+
+    manager.setRunner(async function* (params): AsyncGenerator<StreamEvent> {
+      yield { type: 'content', text: 'resuming' };
+      await new Promise<void>((resolve) => {
+        const onAbort = () => {
+          params.abortSignal.removeEventListener('abort', onAbort);
+          resolve();
+        };
+        if (params.abortSignal.aborted) {
+          resolve();
+          return;
+        }
+        params.abortSignal.addEventListener('abort', onAbort);
+      });
+    });
+
+    manager.followUp(record.id, 'continue');
+    await tick();
+    expect(record.state).toBe(SubagentState.RUNNING);
+    // The runner owns the async boundary: a run promise is in flight.
+    expect(record._runPromise).not.toBeNull();
+
+    expect(manager.cancelOne(record.id)).toBe(true);
+    expect(record.state).toBe(SubagentState.INTERRUPTED);
+    await record._runPromise;
+    expect(record._runPromise).toBeNull();
+    expect(record.state).toBe(SubagentState.INTERRUPTED);
+    // The follow-up message survives the interruption.
+    expect(record.chain?.messages.some((message) => message.content === 'continue')).toBe(true);
+  });
+
+  it('cancelOne while resume-queued takes the in-place queued path (no admission follows)', async () => {
+    setLimits({ max_active_per_session: 1 });
+    const gates: Array<() => void> = [];
+    manager.setRunner(gateRunner(gates));
+
+    const target = manager.spawn('target', 'first', testAgent, { sessionId: 'sess-int-queued' });
+    await tick();
+    gates[0]();
+    await target._runPromise;
+    expect(target.state).toBe(SubagentState.COMPLETED);
+
+    const blocker = manager.spawn('blocker', 'x', testAgent, { sessionId: 'sess-int-queued' });
+    await tick();
+    expect(blocker.state).toBe(SubagentState.RUNNING);
+
+    manager.followUp(target.id, 'again');
+    expect(target.state).toBe(SubagentState.QUEUED);
+    expect(target._resumeQueued).toBe(true);
+
+    expect(manager.cancelOne(target.id)).toBe(true);
+    expect(target.state).toBe(SubagentState.INTERRUPTED);
+    expect(target._runPromise).toBeNull();
+    expect(manager.getQueuePosition(target.id)).toBeNull();
+
+    // No admission followed: the blocker is untouched and no extra run started.
+    expect(blocker.state).toBe(SubagentState.RUNNING);
+    expect(gates).toHaveLength(2);
+  });
+
+  it('followUp guards: unknown, non-terminal, closed, and evicted records throw', () => {
+    const sid = 'sess-guards';
+
+    expect(() => manager.followUp('nope', 'x')).toThrow(/not found/);
+
+    const nonTerminal = manager.spawn('running', 'x', testAgent, { sessionId: sid });
+    expect(nonTerminal.state).toBe(SubagentState.PENDING);
+    expect(() => manager.followUp(nonTerminal.id, 'x')).toThrow(SubagentNotTerminalError);
+
+    const closedRecord = manager.spawn('closed', 'x', testAgent, { sessionId: sid });
+    manager.markCompleted(closedRecord.id, 'done');
+    closedRecord.closed = true;
+    expect(() => manager.followUp(closedRecord.id, 'x')).toThrow(SubagentClosedError);
+
+    const evicted = manager.spawn('evicted', 'x', testAgent, { sessionId: sid });
+    manager.markCompleted(evicted.id, 'done');
+    manager.confirmRecordsPersisted(sid, [evicted.id]);
+    expect(evicted._evicted).toBe(true);
+    expect(() => manager.followUp(evicted.id, 'x')).toThrow(SubagentEvictedError);
+  });
+
+  it('chain reopen: after followUp the chain is ACTIVE even though it was terminal (keepTerminal ordering)', () => {
+    const record = manager.spawn('reopen', 'first', testAgent, { sessionId: 'sess-reopen' });
+    manager.markCompleted(record.id, 'done');
+    expect(record.chain?.status).toBe('completed');
+    expect(record.chain?.endTime).not.toBeNull();
+
+    manager.followUp(record.id, 'again');
+    expect(record.chain?.status).toBe('active');
+    expect(record.chain?.endTime).toBeNull();
+  });
+
+  it('runCount: spawn=1, after first followUp=2, hydrate initializes 1', () => {
+    const record = manager.spawn('rc', 'first', testAgent, { sessionId: 'sess-rc' });
+    expect(record.runCount).toBe(1);
+    manager.markCompleted(record.id, 'done');
+    manager.followUp(record.id, 'again');
+    expect(record.runCount).toBe(2);
+
+    const source = new SubagentManager();
+    const original = source.spawn('hyd', 'x', testAgent, { sessionId: 'sess-rc-hyd' });
+    source.markCompleted(original.id, 'done');
+    const domain = subagentRecordFromStorageDict(
+      subagentRecordToStorageDict(runtimeToDomain(original)),
+    );
+    manager.hydrate([{
+      id: original.id,
+      agent: testAgent,
+      domain,
+      sessionId: 'sess-rc-hyd',
+      windowId: null,
+      cwd: null,
+    }]);
+    expect(manager.getRecord(original.id)?.runCount).toBe(1);
+  });
+
+  it('_resumeQueued is true only between resume-queue and admission; false after _admit', async () => {
+    setLimits({ max_active_per_session: 1 });
+    const gates: Array<() => void> = [];
+    manager.setRunner(gateRunner(gates));
+
+    const target = manager.spawn('target', 'first', testAgent, { sessionId: 'sess-flag' });
+    await tick();
+    gates[0]();
+    await target._runPromise;
+    expect(target._resumeQueued).toBe(false);
+
+    const blocker = manager.spawn('blocker', 'x', testAgent, { sessionId: 'sess-flag' });
+    await tick();
+
+    manager.followUp(target.id, 'again');
+    expect(target.state).toBe(SubagentState.QUEUED);
+    expect(target._resumeQueued).toBe(true);
+
+    gates[1]();
+    await blocker._runPromise;
+    await tick();
+    expect(target.state).toBe(SubagentState.RUNNING);
+    expect(target._resumeQueued).toBe(false);
+
+    gates[2]();
+    await target._runPromise;
+  });
+
+  it('turn attribution: turnId differs between the first run and a resumed run', async () => {
+    const gates: Array<() => void> = [];
+    const turnIds: Array<string | undefined> = [];
+    manager.setRunner(async function* (params): AsyncGenerator<StreamEvent> {
+      turnIds.push(params.turnId);
+      await new Promise<void>((resolve) => { gates.push(resolve); });
+      yield { type: 'finish', finishReason: 'stop' };
+    });
+
+    const record = manager.spawn('attr', 'first', testAgent, { sessionId: 'sess-attr' });
+    await tick();
+    gates[0]();
+    await record._runPromise;
+    expect(record.runCount).toBe(1);
+
+    manager.followUp(record.id, 'again');
+    await tick();
+    gates[1]();
+    await record._runPromise;
+    expect(record.runCount).toBe(2);
+
+    expect(turnIds).toHaveLength(2);
+    expect(turnIds[0]).toBe(`${record.id}#1`);
+    expect(turnIds[1]).toBe(`${record.id}#2`);
+    expect(turnIds[0]).not.toBe(turnIds[1]);
+  });
+
+  it('passes the full chain as history to the runner on a resume', async () => {
+    const gates: Array<() => void> = [];
+    const histories: Array<Message[] | undefined> = [];
+    manager.setRunner(async function* (params): AsyncGenerator<StreamEvent> {
+      histories.push(params.history);
+      await new Promise<void>((resolve) => { gates.push(resolve); });
+      yield { type: 'finish', finishReason: 'stop' };
+    });
+
+    const record = manager.spawn('hist', 'first task', testAgent, { sessionId: 'sess-hist' });
+    await tick();
+    gates[0]();
+    await record._runPromise;
+
+    manager.followUp(record.id, 'follow up');
+    await tick();
+    gates[1]();
+    await record._runPromise;
+
+    // Spawn path history is the single task message.
+    expect(histories[0]?.map((message) => message.content)).toEqual(['first task']);
+    // Resumed path replays the full chain ending in the follow-up user message.
+    const resumed = histories[1] ?? [];
+    expect(resumed.length).toBeGreaterThan(1);
+    expect(resumed.at(-1)?.role).toBe('user');
+    expect(resumed.at(-1)?.content).toBe('follow up');
   });
 });

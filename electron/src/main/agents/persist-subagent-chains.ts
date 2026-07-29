@@ -281,8 +281,10 @@ export function persistSubagentChains(
       if (record._evicted) continue;
       // `queued` is a runtime-only state: records parked in the queue — or
       // cancelled before admission — never get a durable row. Durable
-      // eligibility begins at admission (`startedAt`).
-      if (record.queuedAt !== null && record.startedAt === null) continue;
+      // eligibility begins at admission (`startedAt`). A resume-queued record
+      // (`_resumeQueued`) keeps its durable row so the reopened chain +
+      // follow-up message survive a crash while queued.
+      if (record.queuedAt !== null && record.startedAt === null && !record._resumeQueued) continue;
       if (!recovery && record.persistRevision <= (tracker?.get(record.id) ?? -1)) continue;
       dirtyRecords.push(record);
     }
