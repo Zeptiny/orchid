@@ -21,6 +21,7 @@ import {
   SubagentNotTerminalError,
   SubagentQueueFullError,
   SubagentState,
+  SubagentStillSettlingError,
 } from '../../agents/manager';
 import { hydrateSubagentRecords } from './hydrate';
 import type { SubagentToolResult } from './delegate';
@@ -63,7 +64,7 @@ export function buildFollowUpTool(
       return genericBuiltInToolOutcome(
         'follow_up_subagent',
         'No session context available; cannot follow up on a subagent without a session id.',
-        'empty',
+        'error',
       );
     }
 
@@ -109,6 +110,13 @@ export function buildFollowUpTool(
         return genericBuiltInToolOutcome(
           'follow_up_subagent',
           `Error: subagent history is not available in memory and hydration failed ('${subagent_id}').`,
+          'error',
+        );
+      }
+      if (err instanceof SubagentStillSettlingError) {
+        return genericBuiltInToolOutcome(
+          'follow_up_subagent',
+          `Error: ${err.message}`,
           'error',
         );
       }

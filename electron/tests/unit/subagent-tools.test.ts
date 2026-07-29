@@ -30,6 +30,7 @@ import {
 } from '../../src/main/agents/persist-subagent-chains';
 import { hydrateSubagentRecords } from '../../src/main/tools/subagent/hydrate';
 import { recoverSubagentPersistence } from '../../src/main/agents/wire-subagents';
+import type { StreamEvent } from '../../src/main/llm/orchestrator';
 import { buildDelegateTool as buildDelegateToolRaw } from '../../src/main/tools/subagent/delegate';
 import { buildWaitTool as buildWaitToolRaw } from '../../src/main/tools/subagent/wait';
 import { buildInterruptTool as buildInterruptToolRaw } from '../../src/main/tools/subagent/interrupt';
@@ -1026,6 +1027,28 @@ describe('close_subagents', () => {
     expect(result.agentProjection.content).toContain('non-empty');
   });
 
+  it('reports a summary-eviction race loudly instead of a silent unpersistable close', async () => {
+    const { handler } = buildCloseTool(manager);
+    const record = manager.spawn('race', 'task', codeReviewerAgent, { sessionId: sid });
+    manager.markCompleted(record.id, 'done');
+    // A concurrent checkpoint evicts the record to a summary; durable storage
+    // lost its row (e.g. corruption rebuild), so hydration cannot restore it.
+    manager.confirmRecordsPersisted(sid, [record.id]);
+    expect(manager.getRecord(record.id)?._evicted).toBe(true);
+    setSession([]);
+
+    const result = (await handler(
+      { subagent_ids: [record.id] },
+      makeCtx(makeAgentMap()),
+    )) as ToolExecutionResult;
+
+    // Not reported as closed: the flag on a summary would never persist.
+    expect(outcomeValue(result).closed).toEqual([]);
+    expect(outcomeValue(result).not_found).toContain(record.id);
+    expect(manager.getRecord(record.id)?.closed).toBe(false);
+    expect(recoverSpy).not.toHaveBeenCalled();
+  });
+
   it('should have correct tool definition', () => {
     const { definition } = buildCloseTool(manager);
     expect(definition.name).toBe('close_subagents');
@@ -1693,7 +1716,70 @@ describe('follow_up_subagent', () => {
       { cwd: '/tmp' },
     )) as ToolExecutionResult;
 
-    expect(result.canonical.status).toBe('empty');
+    expect(result.canonical.status).toBe('error');
     expect(result.agentProjection.content).toContain('No session context');
+  });
+
+  it('reports a full queue as a named error and leaves the record unmutated', async () => {
+    configOverride.current = {
+      ...defaults(),
+      subagents: { ...defaults().subagents, max_active_per_session: 1, max_queued: 1 },
+    };
+    const { handler } = buildFollowUpTool(manager);
+    // Terminal target (slot was free), then occupy the run slot and the one
+    // queue slot so the resume is rejected at capacity.
+    const target = manager.spawn('target', 'task', codeReviewerAgent, { sessionId: sid });
+    manager.markCompleted(target.id, 'done');
+    const blocker = manager.spawn('blocker', 'task', codeReviewerAgent, { sessionId: sid });
+    manager.markRunning(blocker.id);
+    const queued = manager.spawn('queued', 'task', codeReviewerAgent, { sessionId: sid });
+    expect(queued.state).toBe(SubagentState.QUEUED);
+
+    const result = (await handler(
+      { subagent_id: target.id, input: 'one more thing' },
+      makeCtx(agents),
+    )) as ToolExecutionResult;
+
+    expect(result.canonical.status).toBe('error');
+    expect(result.agentProjection.content).toContain('max_queued');
+    // A rejected resume leaves the terminal record completely unmutated.
+    const untouched = manager.getRecord(target.id)!;
+    expect(untouched.state).toBe(SubagentState.COMPLETED);
+    expect(untouched.runCount).toBe(1);
+    expect(untouched.chain?.status).toBe('completed');
+  });
+
+  it('reports a still-settling record (cancelled run not yet unwound) with retry guidance', async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    manager.setRunner(async function* (): AsyncGenerator<StreamEvent> {
+      await gate;
+      yield { type: 'finish', finishReason: 'stop' };
+    });
+    const { handler } = buildFollowUpTool(manager);
+    const record = manager.spawn('settling', 'task', codeReviewerAgent, { sessionId: sid });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(record.state).toBe(SubagentState.RUNNING);
+
+    // Terminal on paper, but the run loop still owns the interruption boundary.
+    expect(manager.cancelOne(record.id)).toBe(true);
+    expect(record.state).toBe(SubagentState.INTERRUPTED);
+    expect(record._runPromise).not.toBeNull();
+
+    const result = (await handler(
+      { subagent_id: record.id, input: 'again' },
+      makeCtx(agents),
+    )) as ToolExecutionResult;
+
+    expect(result.canonical.status).toBe('error');
+    expect(result.agentProjection.content).toContain('still settling');
+    expect(result.agentProjection.content).toContain('retry');
+    // Unmutated: no chain reopen, no run bump.
+    const untouched = manager.getRecord(record.id)!;
+    expect(untouched.runCount).toBe(1);
+    expect(untouched.chain?.messages.some((message) => message.content === 'again')).toBe(false);
+
+    release();
+    await record._runPromise;
   });
 });

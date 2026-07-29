@@ -16,7 +16,7 @@ import { RiskClass } from '../../../shared/types/permission';
 import { genericToolResultMetadata } from '../types';
 import { genericBuiltInToolOutcome } from '../result';
 import type { SubagentManager } from '../../agents/manager';
-import { isTerminalSubagentState } from '../../agents/manager';
+import { isTerminalSubagentState, SubagentSummaryClosedError } from '../../agents/manager';
 import { hydrateSubagentRecords } from './hydrate';
 import type { SubagentToolResult } from './delegate';
 
@@ -89,8 +89,19 @@ export function buildCloseTool(
       } else if (record.closed) {
         alreadyClosed.push(sid);
       } else {
-        manager.close(sid);
-        closed.push(sid);
+        try {
+          manager.close(sid);
+          closed.push(sid);
+        } catch (err) {
+          // A record evicted by a concurrent checkpoint since hydration: the
+          // flag on a summary would never persist. Report loudly for retry
+          // instead of a silent 'closed'.
+          if (err instanceof SubagentSummaryClosedError) {
+            notFound.push(sid);
+            continue;
+          }
+          throw err;
+        }
       }
     }
 

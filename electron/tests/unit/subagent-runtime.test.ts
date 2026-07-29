@@ -9,6 +9,8 @@ import {
   SubagentNotTerminalError,
   SubagentQueueFullError,
   SubagentState,
+  SubagentStillSettlingError,
+  SubagentSummaryClosedError,
   runtimeToDomain,
   type SubagentRecord,
 } from '../../src/main/agents/manager';
@@ -1822,6 +1824,81 @@ describe('SubagentManager follow-up resume (U4)', () => {
     // No admission followed: the blocker is untouched and no extra run started.
     expect(blocker.state).toBe(SubagentState.RUNNING);
     expect(gates).toHaveLength(2);
+  });
+
+  it('followUp rejects a record whose cancelled run is still unwinding (still-settling)', async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    manager.setRunner(async function* (): AsyncGenerator<StreamEvent> {
+      await gate;
+      yield { type: 'finish', finishReason: 'stop' };
+    });
+
+    const record = manager.spawn('settling', 'x', testAgent, { sessionId: 'sess-settle' });
+    await tick();
+    expect(record.state).toBe(SubagentState.RUNNING);
+
+    // cancelOne marks the record terminal but leaves the run loop unwinding:
+    // the runner owns the async interruption boundary while _runPromise is set.
+    expect(manager.cancelOne(record.id)).toBe(true);
+    expect(record.state).toBe(SubagentState.INTERRUPTED);
+    expect(record._runPromise).not.toBeNull();
+
+    expect(() => manager.followUp(record.id, 'again')).toThrow(SubagentStillSettlingError);
+    // A rejected resume leaves the record unmutated: no message appended, no
+    // run bump (the chain stays ACTIVE until the runner unwinds it).
+    expect(record.chain?.messages.some((message) => message.content === 'again')).toBe(false);
+    expect(record.runCount).toBe(1);
+
+    release();
+    await record._runPromise;
+    expect(record._runPromise).toBeNull();
+    expect(record.chain?.status).toBe('interrupted');
+    // Once the zombie run unwound, the resume is allowed.
+    expect(() => manager.followUp(record.id, 'again')).not.toThrow();
+  });
+
+  it('cancelling a resume-queued record keeps it a full dirty record (no eviction) so the INTERRUPTED state persists', async () => {
+    setLimits({ max_active_per_session: 1 });
+    const gates: Array<() => void> = [];
+    manager.setRunner(gateRunner(gates));
+
+    const target = manager.spawn('target', 'first', testAgent, { sessionId: 'sess-rq-cancel' });
+    await tick();
+    gates[0]();
+    await target._runPromise;
+    expect(target.state).toBe(SubagentState.COMPLETED);
+
+    const blocker = manager.spawn('blocker', 'x', testAgent, { sessionId: 'sess-rq-cancel' });
+    await tick();
+    expect(blocker.state).toBe(SubagentState.RUNNING);
+
+    manager.followUp(target.id, 'again');
+    expect(target.state).toBe(SubagentState.QUEUED);
+    expect(target._resumeQueued).toBe(true);
+
+    expect(manager.cancelOne(target.id)).toBe(true);
+    expect(target.state).toBe(SubagentState.INTERRUPTED);
+    // Not evicted: the record owns a durable row, so eviction would strand the
+    // row with a stale pre-interrupt status and skip every later checkpoint.
+    expect(target._evicted).toBe(false);
+    // The follow-up message and the reopened chain survive for the terminal wave.
+    expect(target.chain?.messages.some((message) => message.content === 'again')).toBe(true);
+    // A later persistence confirmation evicts it through the normal path.
+    manager.confirmRecordsPersisted('sess-rq-cancel', [target.id]);
+    expect(manager.getRecord(target.id)?._evicted).toBe(true);
+    expect(manager.getRecord(target.id)?.state).toBe(SubagentState.INTERRUPTED);
+  });
+
+  it('close on an evicted summary throws instead of silently flagging an unpersistable record', () => {
+    const sid = 'sess-close-evicted';
+    const record = manager.spawn('close-evict', 'x', testAgent, { sessionId: sid });
+    manager.markCompleted(record.id, 'done');
+    manager.confirmRecordsPersisted(sid, [record.id]);
+    expect(record._evicted).toBe(true);
+
+    expect(() => manager.close(record.id)).toThrow(SubagentSummaryClosedError);
+    expect(record.closed).toBe(false);
   });
 
   it('followUp guards: unknown, non-terminal, closed, and evicted records throw', () => {

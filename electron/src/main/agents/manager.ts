@@ -306,6 +306,39 @@ export class SubagentEvictedError extends Error {
   }
 }
 
+/**
+ * Thrown by `SubagentManager.close` when the target record is an evicted lean
+ * summary. A flag set on a summary never persists (every checkpoint skips
+ * `_evicted` records), so the mutation must be loud instead of silent — the
+ * close tool hydrates evicted records first and maps this to a retryable
+ * failure for that id.
+ */
+export class SubagentSummaryClosedError extends Error {
+  constructor(subagentId: string) {
+    super(
+      `Subagent '${subagentId}' is an evicted summary; hydrate it before closing.`,
+    );
+    this.name = 'SubagentSummaryClosedError';
+  }
+}
+
+/**
+ * Thrown by `SubagentManager.followUp` when the previous run has not finished
+ * unwinding. `cancelOne` on a RUNNING record leaves `_runPromise` set (the
+ * runner owns the async interruption boundary and materializes the partial
+ * tail), while the record is already terminal — resuming in that window would
+ * let the zombie run loop clobber the resumed chain and orphan the new run's
+ * abort controller.
+ */
+export class SubagentStillSettlingError extends Error {
+  constructor(subagentId: string) {
+    super(
+      `Subagent '${subagentId}' is still settling its previous run; retry the follow-up shortly.`,
+    );
+    this.name = 'SubagentStillSettlingError';
+  }
+}
+
 // ── SubagentRecord ──────────────────────────────────────────────────────────
 
 export interface SubagentRecord {
@@ -629,6 +662,13 @@ export class SubagentManager {
       throw new SubagentNotTerminalError(subagentId, record.state);
     }
     if (record.closed) throw new SubagentClosedError(subagentId);
+    // A cancelled RUNNING record is already terminal while its run loop still
+    // owns the interruption boundary (`_runPromise` set). Resuming now would
+    // hand the record to a second run while the zombie loop's partial flush
+    // and finally block still write to it.
+    if (record._runPromise !== null) {
+      throw new SubagentStillSettlingError(subagentId);
+    }
 
     const limits = getAdmissionLimits();
     const admitted = this._canAdmit(record.sessionId, limits);
@@ -774,6 +814,9 @@ export class SubagentManager {
   close(subagentId: string): void {
     const record = this._subagents.get(subagentId);
     if (!record || record.closed) return;
+    // A flag set on an `_evicted` summary never persists (every checkpoint
+    // skips evicted records) — refuse loudly; the tool hydrates these first.
+    if (record._evicted) throw new SubagentSummaryClosedError(subagentId);
     record.closed = true;
     this._markRecordDirty(record);
     this._notify();
@@ -948,7 +991,7 @@ export class SubagentManager {
       this._finishLive(record, SubagentState.INTERRUPTED);
     }
     this._resolveWaiters(record);
-    if (wasQueued) {
+    if (wasQueued && !record._resumeQueued) {
       // A record cancelled while QUEUED was never admitted, so it never gets a
       // durable row (persistence eligibility begins at admission) — but it must
       // not linger as a full record either. Evict it to a lean terminal summary
@@ -958,6 +1001,12 @@ export class SubagentManager {
       this._evictToSummary(record);
       this._trackSummary(record.sessionId ?? '', record.id, getTerminalRetention());
     }
+    // A resume-queued record owns a durable row (persist-subagent-chains
+    // eligibility carve-out), so evicting it here would strand the row with a
+    // stale pre-interrupt status and drop the follow-up message — every later
+    // checkpoint skips `_evicted` records. Leave it as a full dirty INTERRUPTED
+    // record: the terminal wave persists it, then confirmRecordsPersisted
+    // evicts it through the normal row-confirmed path.
     this._notify();
     if (!wasQueued) this._admitFromQueue();
     return true;
