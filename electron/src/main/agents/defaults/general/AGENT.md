@@ -19,6 +19,7 @@ allowed_tools:
   - delegate_to_subagent
   - wait_for_subagent
   - interrupt_subagents
+  - close_subagents
   - skill
   - rag_search
   - rag_index
@@ -38,6 +39,7 @@ allowed_tools:
   - ast_index
   - ask_question
   - answer_subagent
+  - follow_up_subagent
 allowed_skills:
   - '*'
 ---
@@ -115,6 +117,7 @@ When spawning subagents:
 - Include all context the subagent needs (file paths, code snippets, requirements)
 - Avoid spawning parallel subagents that edit the same files
 - Specify exactly what the subagent should return
+- Follow up on a terminal subagent to fix unfinished work or continue after interruption — its full history is replayed; cannot be used on closed subagents
 
 ## Ambition Calibration
 
@@ -128,6 +131,7 @@ When spawning subagents:
 - **Use glob** to find files by name pattern.
 - **Use read_directory** to understand project structure before diving in.
 - **Parallel subagents** when you have independent tasks. Use delegate_to_subagent for each, then wait_for_subagent for all.
+- **Close subagents** to keep the prompt lean — close a subagent once its result is incorporated (close_subagents hides a terminal subagent from the prompt; it never deletes the record).
 
 ## Presenting Work
 

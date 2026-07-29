@@ -34,7 +34,9 @@ const SUBAGENT_FORBIDDEN_TOOLS = new Set([
   'delegate_to_subagent',
   'wait_for_subagent',
   'interrupt_subagents',
+  'close_subagents',
   'answer_subagent',
+  'follow_up_subagent',
 ]);
 
 /**

@@ -65,11 +65,13 @@ import { buildListMcpResourcesTool } from '../../src/main/tools/mcp/list-resourc
 import { buildDelegateTool } from '../../src/main/tools/subagent/delegate';
 import { buildWaitTool } from '../../src/main/tools/subagent/wait';
 import { buildInterruptTool } from '../../src/main/tools/subagent/interrupt';
+import { buildCloseTool } from '../../src/main/tools/subagent/close';
 import { buildAnswerSubagentTool } from '../../src/main/tools/subagent/answer';
+import { buildFollowUpTool } from '../../src/main/tools/subagent/follow-up';
 import { buildAskQuestionTool } from '../../src/main/tools/ask-question';
 import { registerBuiltinTools, toolRegistry } from '../../src/main/tools';
 
-// ── Expected tool names (32 total) ─────────────────────────────────────────
+// ── Expected tool names (34 total) ─────────────────────────────────────────
 
 const EXPECTED_TOOL_NAMES = [
   // Filesystem (6)
@@ -96,11 +98,13 @@ const EXPECTED_TOOL_NAMES = [
   'terminate_command',
   // Web (1)
   'web_fetch',
-  // Subagent (4)
+  // Subagent (6)
   'delegate_to_subagent',
   'wait_for_subagent',
   'interrupt_subagents',
+  'close_subagents',
   'answer_subagent',
+  'follow_up_subagent',
   // Ask question (1)
   'ask_question',
   // Skill (1)
@@ -338,7 +342,7 @@ describe('Dynamic Tool Builders', () => {
     });
   });
 
-  describe('subagent tools (3)', () => {
+  describe('subagent tools (4)', () => {
     it('delegate_to_subagent builder produces valid definition and handler', () => {
       const { definition, handler } = buildDelegateTool(new Map(), {} as any);
       expectValidDefinition(definition, 'delegate_to_subagent');
@@ -359,6 +363,14 @@ describe('Dynamic Tool Builders', () => {
       const { definition, handler } = buildInterruptTool({} as any);
       expectValidDefinition(definition, 'interrupt_subagents');
       expectValidJsonSchema(definition.inputSchema, 'interrupt_subagents');
+      expectValidHandler(handler);
+      expect(definition.category).toBe('subagent');
+    });
+
+    it('close_subagents builder produces valid definition and handler', () => {
+      const { definition, handler } = buildCloseTool({} as any);
+      expectValidDefinition(definition, 'close_subagents');
+      expectValidJsonSchema(definition.inputSchema, 'close_subagents');
       expectValidHandler(handler);
       expect(definition.category).toBe('subagent');
     });
@@ -396,10 +408,10 @@ describe('Dynamic Tool Builders', () => {
 // ── Completeness Check ─────────────────────────────────────────────────────
 
 describe('Tool Completeness', () => {
-  it('all 32 expected tool names are defined in this test file', () => {
+  it('all 34 expected tool names are defined in this test file', () => {
     // This test ensures we haven't accidentally removed a tool from our list.
     // If a new tool is added to the codebase, this list must be updated.
-    expect(EXPECTED_TOOL_NAMES).toHaveLength(32);
+    expect(EXPECTED_TOOL_NAMES).toHaveLength(34);
   });
 
   it('static tool count matches expected', () => {
@@ -464,11 +476,13 @@ describe('Tool Completeness', () => {
       buildDelegateTool(new Map(), {} as any).definition.name,
       buildWaitTool({} as any).definition.name,
       buildInterruptTool({} as any).definition.name,
+      buildCloseTool({} as any).definition.name,
       buildAnswerSubagentTool({} as any).definition.name,
+      buildFollowUpTool({} as any).definition.name,
       buildAskQuestionTool({} as any).definition.name,
     ];
-    expect(allNames).toHaveLength(32);
-    expect(new Set(allNames).size).toBe(32);
+    expect(allNames).toHaveLength(34);
+    expect(new Set(allNames).size).toBe(34);
   });
 
   it('registerBuiltinTools populates the singleton registry with all tools', () => {

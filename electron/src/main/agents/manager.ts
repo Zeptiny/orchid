@@ -765,6 +765,21 @@ export class SubagentManager {
   }
 
   /**
+   * Mark a terminal subagent closed — hidden from the dynamic system prompt
+   * while the durable record, chain, and terminal state stay intact (R2). The
+   * flag persists with the durable row (R4) so it survives restarts. Idempotent:
+   * re-closing an already-closed record is a no-op. The close_subagents tool
+   * owns the terminal-state and session-ownership guards; this only mutates.
+   */
+  close(subagentId: string): void {
+    const record = this._subagents.get(subagentId);
+    if (!record || record.closed) return;
+    record.closed = true;
+    this._markRecordDirty(record);
+    this._notify();
+  }
+
+  /**
    * Wait until all specified subagents are terminal or any target asks a
    * question that requires the main agent's response.
    *
