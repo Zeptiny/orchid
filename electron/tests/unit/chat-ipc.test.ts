@@ -974,10 +974,15 @@ describe('chat IPC driver streaming', () => {
     const liveSnapshot = await chatSnapshot(
       { sender: { id: 605, send } },
       { sessionId },
-    ) as { messages: Array<Record<string, unknown>> };
+    ) as { messages: Array<Record<string, unknown>>; live: { response: string; toolCalls: Array<{ toolCallId: string }> } | null };
     expect(liveSnapshot.messages).toEqual([
       expect.objectContaining({ role: MessageRole.USER, content: 'Keep this turn durable' }),
     ]);
+    expect(liveSnapshot.live).not.toBeNull();
+    expect(liveSnapshot.live!.toolCalls).toEqual([
+      expect.objectContaining({ toolCallId: 'tc-checkpoint-1' }),
+    ]);
+    expect(liveSnapshot.live!.response).toBe('Checking files');
 
     releaseStream?.();
     await waitForDoneCount(send, 1);

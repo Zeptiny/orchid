@@ -163,6 +163,7 @@ type ChatStatePayload = {
 
 const activeAgents = new Map<string, ActiveAgent>();
 const sessionsStarting = new Set<string>();
+const pendingCheckpoints = new Map<string, { timer: ReturnType<typeof setTimeout>; messages: Message[] }>();
 /**
  * Single-flight draft session create per window. Concurrent first sends from
  * draft mode share one in-flight ensure promise so only one session is created.
@@ -191,6 +192,7 @@ function nextAgentGeneration(sessionId: string): number {
 }
 
 function disposeActiveAgent(sessionId: string, active: ActiveAgent): void {
+  cancelPendingCheckpoint(sessionId);
   // Only clear the map slot if we still own it (a newer agent may have replaced us).
   if (activeAgents.get(sessionId) === active) {
     activeAgents.delete(sessionId);
@@ -417,6 +419,7 @@ function appendLiveTailMessages(
   messages: Message[],
   agent: ActiveAgent,
   context: Pick<AgentContext, 'response' | 'thinking' | 'usage'> | undefined,
+  opts?: { placeholderWhenEmpty?: boolean },
 ): void {
   const partialResponse = context?.response ?? '';
   const thinking = context?.thinking ?? '';
@@ -436,6 +439,12 @@ function appendLiveTailMessages(
   if (remaining) {
     messages.push(makeAssistantMessage(
       remaining,
+      usage,
+      textSegmentIdAtOffset(agent, 'text', agent.responseCommittedLength),
+    ));
+  } else if (opts?.placeholderWhenEmpty && messages.length === 0) {
+    messages.push(makeAssistantMessage(
+      partialResponse,
       usage,
       textSegmentIdAtOffset(agent, 'text', agent.responseCommittedLength),
     ));
@@ -934,15 +943,36 @@ function checkpointMessagesFromAgent(agent: ActiveAgent, context: AgentContext):
   return checkpoint;
 }
 
-/** Persist one bounded main-turn checkpoint after a provider step completes. */
+const CHECKPOINT_DEBOUNCE_MS = 300;
+
+/** Persist one bounded main-turn checkpoint, debounced per session. */
 function checkpointActiveTurn(agent: ActiveAgent, context: AgentContext): void {
-  try {
-    getSessionManager().updateActiveChainMessages(
-      checkpointMessagesFromAgent(agent, context),
-      agent.sessionId,
-    );
-  } catch (err) {
-    console.debug('Failed to checkpoint active chat chain (non-fatal):', err);
+  const sessionId = agent.sessionId;
+  const messages = checkpointMessagesFromAgent(agent, context);
+  const existing = pendingCheckpoints.get(sessionId);
+  if (existing) {
+    existing.messages = messages;
+    return;
+  }
+  const timer = setTimeout(() => {
+    pendingCheckpoints.delete(sessionId);
+    const active = activeAgents.get(sessionId);
+    if (!active || active.finalized) return;
+    try {
+      getSessionManager().updateActiveChainMessages(messages, sessionId);
+    } catch (err) {
+      console.debug('Failed to checkpoint active chat chain (non-fatal):', err);
+    }
+  }, CHECKPOINT_DEBOUNCE_MS);
+  pendingCheckpoints.set(sessionId, { timer, messages });
+}
+
+/** Cancel any pending debounced checkpoint for a session. */
+function cancelPendingCheckpoint(sessionId: string): void {
+  const pending = pendingCheckpoints.get(sessionId);
+  if (pending) {
+    clearTimeout(pending.timer);
+    pendingCheckpoints.delete(sessionId);
   }
 }
 
@@ -1974,36 +2004,12 @@ export function registerChatIPC(): void {
         const partial = context.response ?? '';
         const thinking = context.thinking ?? '';
         const usage = context.usage ?? null;
-        // Flush reasoning before final text
+        appendLiveTailMessages(existing.turnMessages, existing, context, { placeholderWhenEmpty: true });
         if (thinking.length > existing.thinkingCommittedLength) {
-          const thinkingOffset = existing.thinkingCommittedLength;
-          const thinkSeg = thinking.slice(thinkingOffset);
           existing.thinkingCommittedLength = thinking.length;
-          if (thinkSeg.trim()) {
-            existing.turnMessages.push(makeThinkingMessage(
-              thinkSeg,
-              textSegmentIdAtOffset(existing, 'thinking', thinkingOffset),
-            ));
-          }
         }
-        const remaining = partial.slice(existing.responseCommittedLength);
-        if (remaining || existing.turnMessages.length === 0) {
-          existing.turnMessages.push(
-            makeAssistantMessage(
-              remaining || partial,
-              usage,
-              textSegmentIdAtOffset(existing, 'text', existing.responseCommittedLength),
-            ),
-          );
+        if (partial.length > existing.responseCommittedLength) {
           existing.responseCommittedLength = partial.length;
-        } else if (usage) {
-          const last = existing.turnMessages[existing.turnMessages.length - 1];
-          if (last && last.role === MessageRole.ASSISTANT && last.type === MessageType.TEXT) {
-            existing.turnMessages[existing.turnMessages.length - 1] = {
-              ...last,
-              usage,
-            };
-          }
         }
         // existing.messages already includes the user message for this turn
         const fullHistory = [...existing.messages, ...existing.turnMessages];

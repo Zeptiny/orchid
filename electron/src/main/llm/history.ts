@@ -45,6 +45,7 @@ function coalesceConsecutiveToolCallMessages(messages: Message[]): Message[] {
         ...previous,
         content: [previous.content, message.content].filter(Boolean).join('\n'),
         tool_calls: [...(previous.tool_calls ?? []), ...(message.tool_calls ?? [])],
+        tool_call_id: null,
       };
       continue;
     }
