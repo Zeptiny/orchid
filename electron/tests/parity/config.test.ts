@@ -116,6 +116,8 @@ const EXPECTED_FIELDS: ConfigFieldExpectation[] = [
   // Desktop UI preference outside the migrated core configuration contract.
   { field: 'always_expand_tool_groups', type: 'boolean', defaultValue: false },
   { field: 'has_completed_onboarding', type: 'boolean', defaultValue: false },
+  // Electron-only: worker-pool main-agent reservation (no env override).
+  { field: 'tool_worker_pool_main_agent_reserved', type: 'number', defaultValue: 1 },
   {
     field: 'command_max_output_bytes',
     type: 'number',

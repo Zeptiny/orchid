@@ -187,7 +187,10 @@ export class WorkerPool {
     }));
     // Reserve at most size - 1 workers for main so the subagent lane always
     // keeps at least one guaranteed worker (no subagent starvation by design).
-    const requestedReserved = Math.floor(options.mainAgentReserved ?? 1);
+    // Non-finite input falls back to the default reservation rather than
+    // propagating NaN/Infinity into the lane-capacity arithmetic.
+    const rawReserved = options.mainAgentReserved ?? 1;
+    const requestedReserved = Number.isFinite(rawReserved) ? Math.floor(rawReserved) : 1;
     this.mainAgentReserved = Math.min(Math.max(0, requestedReserved), Math.max(0, size - 1));
     this.subagentCapacity = size - this.mainAgentReserved;
     this.now = options.now ?? (() => Date.now());
@@ -280,6 +283,11 @@ export class WorkerPool {
       if (entry.state === 'healthy' && entry.busy) count++;
     }
     return count;
+  }
+
+  /** Resolved main-agent reservation after validation and clamping. */
+  get reservedMainAgents(): number {
+    return this.mainAgentReserved;
   }
 
   get queueLength(): number {
@@ -597,23 +605,39 @@ export class WorkerPool {
    * is waiting; subagents symmetrically fill their guaranteed capacity and
    * only spill into the reserved-main workers when no main work is waiting.
    * This keeps both lanes work-conserving while guaranteeing each lane its
-   * reserved workers, so neither can starve the other.
+   * reserved workers, so neither can starve the other. When the selected
+   * lane drains (its remaining entries were cancelled), fall through to the
+   * alternate lane; null means both lanes have no dispatchable task.
    */
   private pickQueuedTask(): QueueEntry | null {
     const mainHas = this.mainQueue.length > 0;
     const subHas = this.subagentQueue.length > 0;
-    if (mainHas && (this.busyMain < this.mainAgentReserved || !subHas)) {
-      return this.takeQueued(this.mainQueue);
+    const preferMain = mainHas && (this.busyMain < this.mainAgentReserved || !subHas);
+    const preferSub = !preferMain && subHas && (this.busySub < this.subagentCapacity || !mainHas);
+    if (preferMain) {
+      return this.takeQueued(this.mainQueue)
+        ?? this.takeQueued(this.subagentQueue, { strictLimit: true });
     }
-    if (subHas && (this.busySub < this.subagentCapacity || !mainHas)) {
-      return this.takeQueued(this.subagentQueue);
+    if (preferSub) {
+      return this.takeQueued(this.subagentQueue)
+        ?? this.takeQueued(this.mainQueue, { strictLimit: true });
     }
     return null;
   }
 
-  private takeQueued(queue: QueueEntry[]): QueueEntry | null {
+  private takeQueued(
+    queue: QueueEntry[],
+    options: { strictLimit?: boolean } = {},
+  ): QueueEntry | null {
     while (queue.length > 0) {
       const entry = queue.shift()!;
+      if (options.strictLimit && this.activeCount >= this.size) {
+        // Dispatch selection over-promised a slot (the lane-eligibility check
+        // does not re-verify global capacity); keep the task queued rather
+        // than oversubscribing the pool.
+        queue.unshift(entry);
+        return null;
+      }
       if (this.tasks.has(entry.taskId)) return entry;
     }
     return null;

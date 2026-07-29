@@ -125,7 +125,22 @@ describe('chat rendering contract (U5)', () => {
       const src = read('components/ChatStream.tsx');
       const historyStart = src.indexOf('const history = useMemo');
       expect(historyStart).toBeGreaterThanOrEqual(0);
-      const historyMemo = src.slice(historyStart, src.indexOf(');', historyStart));
+      // Balanced-parenthesis extraction: the first generic `');'` could cut an
+      // inline call short, so scan from the opening paren of `useMemo(` to its
+      // matching close (the dependency-array terminator).
+      const openParen = src.indexOf('(', historyStart);
+      let depth = 0;
+      let end = -1;
+      for (let i = openParen; i < src.length; i += 1) {
+        const ch = src[i];
+        if (ch === '(') depth += 1;
+        else if (ch === ')') {
+          depth -= 1;
+          if (depth === 0) { end = i + 1; break; }
+        }
+      }
+      expect(end).toBeGreaterThan(openParen);
+      const historyMemo = src.slice(historyStart, end);
       // History memo depends on the usage summary, never the records array
       expect(historyMemo).toContain('subagentUsage');
       expect(historyMemo).not.toMatch(/\bsubagents\b/);

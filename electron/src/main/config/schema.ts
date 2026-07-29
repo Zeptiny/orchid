@@ -174,7 +174,9 @@ export const configSchema = z
      * Worker slots reserved for main-agent tool work. Main-agent tasks dispatch
      * ahead of subagent tasks and keep this many workers guaranteed; the rest
      * are guaranteed to subagent work, so neither lane can starve the other
-     * (review F-06). Clamped to `[0, tool_worker_pool_size - 1]` by the pool.
+     * (review F-06). Clamped to `[0, tool_worker_pool_size - 1]` by the pool;
+     * a configured 0 floors to 1 so a queued subagent wave cannot starve the
+     * visible main agent.
      */
     tool_worker_pool_main_agent_reserved: z.number().int().min(0).max(8).default(1),
     theme: z.string().min(1).default('default'),

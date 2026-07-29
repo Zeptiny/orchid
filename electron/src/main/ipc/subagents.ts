@@ -64,18 +64,22 @@ function isAppendDelta(
 }
 
 /**
- * Collapse every text/thinking append sharing `(type, subagentId, segmentId)`
- * within one flush window into a single delta. The merged delta is emitted at
- * the position of the LAST occurrence and keeps that event's
+ * Collapse every text/thinking append sharing `(sessionId, type, subagentId,
+ * segmentId)` within one flush window into a single delta. The merged delta is
+ * emitted at the position of the LAST occurrence and keeps that event's
  * sequence/sessionRevision, so batch order stays strictly monotonic while all
- * same-segment appends concatenate in their original order.
+ * same-segment appends concatenate in their original order. The session key is
+ * part of the merge key so same-named segments from different sessions never
+ * combine.
  */
 export function mergeAppendDeltas(events: readonly SubagentDeltaEvent[]): SubagentDeltaEvent[] {
+  const mergeKey = (event: SubagentTextDeltaEvent | SubagentThinkingDeltaEvent): string =>
+    `${event.sessionId}:${event.type}:${event.subagentId}:${event.segmentId}`;
   const lastIndexByKey = new Map<string, number>();
   for (let i = 0; i < events.length; i += 1) {
     const event = events[i];
     if (isAppendDelta(event)) {
-      lastIndexByKey.set(`${event.type}:${event.subagentId}:${event.segmentId}`, i);
+      lastIndexByKey.set(mergeKey(event), i);
     }
   }
   const appendedByKey = new Map<string, string>();
@@ -86,7 +90,7 @@ export function mergeAppendDeltas(events: readonly SubagentDeltaEvent[]): Subage
       merged.push(event);
       continue;
     }
-    const key = `${event.type}:${event.subagentId}:${event.segmentId}`;
+    const key = mergeKey(event);
     const append = (appendedByKey.get(key) ?? '') + event.append;
     appendedByKey.set(key, append);
     if (lastIndexByKey.get(key) === i) merged.push({ ...event, append });

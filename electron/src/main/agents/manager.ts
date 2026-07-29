@@ -971,6 +971,9 @@ export class SubagentManager {
     this._queue = this._queue.filter(
       (id) => this._subagents.get(id)?.sessionId !== sessionId,
     );
+    // Drop queue entries whose records no longer exist (removed above), so
+    // the admission loop never looks them up after the purge.
+    this._queue = this._queue.filter((id) => this._subagents.has(id));
     this._terminalSummaries.delete(sessionId);
     this._sessionRevisions.delete(sessionId);
     this._notify();

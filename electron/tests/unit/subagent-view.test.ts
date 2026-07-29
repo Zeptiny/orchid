@@ -72,6 +72,28 @@ describe('SubagentView', () => {
     expect(html).not.toContain('Retry');
   });
 
+  it('renders a queued subagent row with its neutral-tone badge', () => {
+    const queued = record('queued-1', 'queued', '2026-01-01T00:02:00.000Z');
+    const state = {
+      status: 'ready' as const,
+      subagents: [queued],
+    };
+    const html = renderToStaticMarkup(createElement(SubagentView, {
+      subagents: {
+        state, subagents: state.subagents, groups: { queued: state.subagents, running: [], ended: [] },
+        totalUsage: null, usageByParentChain: new Map(), usageSummary: EMPTY_SUBAGENT_USAGE_SUMMARY, refresh: async () => {}, retry: async () => {},
+        isRetrying: false, applyFromSession: () => {}, selectedId: null, select: () => {},
+        getDetail: () => null, live: new Map(), getLive: () => null,
+      },
+      onBackToChat: () => {},
+      openRequest: { generation: 1, id: null },
+    }));
+    expect(html).toContain('Queued');
+    expect(html).not.toContain('No queued subagents.');
+    // Neutral tone maps to no tone class: a bare `badge badge-xs` (no badge-info/etc).
+    expect(html).toMatch(/<span class="badge badge-xs">queued<\/span>/);
+  });
+
   it('keeps general opens on the list and row opens on the requested detail', () => {
     expect(resolveSubagentOpenRequest({ generation: 1, id: null })).toEqual({ selectedId: null, narrowDetail: false });
     expect(resolveSubagentOpenRequest({ generation: 2, id: 'ended' })).toEqual({ selectedId: 'ended', narrowDetail: true });

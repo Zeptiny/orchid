@@ -136,4 +136,43 @@ describe('executeToolCall offloaded cancellation', () => {
     expect(result.canonical.status).toBe('error');
     expect(result.canonical.error?.code).toBe('timeout');
   });
+
+  it('classifies a cancel-before-start (started rejects) as cancelled, not handler error', async () => {
+    registry.register(
+      {
+        name: 'queued_offload',
+        riskClass: 'read-only',
+        description: 'Offloaded tool cancelled while queued',
+        inputSchema: z.object({}),
+        resultFamily: 'generic',
+        outputDataSchema: genericToolResultDataSchema,
+        category: 'test',
+        offload: true,
+      },
+      async () => ({ status: 'complete', data: { value: 'inline fallback' } }),
+    );
+    // The worker pool rejects `started` when a queued task is cancelled before
+    // a worker picks it up; `result` must also reject so the dispatch await
+    // settles with WorkerTaskCancelledError.
+    workerPoolMock.pool = {
+      runTask: vi.fn(() => {
+        const cancelled = Promise.reject(new WorkerTaskCancelledError());
+        cancelled.catch(() => undefined);
+        return {
+          taskId: 0,
+          started: Promise.reject(new WorkerTaskCancelledError()),
+          result: cancelled,
+          timings: null,
+        };
+      }),
+    };
+
+    const result = await executeToolCall(
+      { ...request, id: 'queued-offload-call', name: 'queued_offload' },
+      registry,
+      { cwd: '/tmp/orchid-tool-test-cwd' },
+    );
+
+    expect(result.canonical.status).toBe('cancelled');
+  });
 });

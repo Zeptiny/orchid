@@ -226,6 +226,13 @@ export interface SubagentRecord {
 
 // ── Wire size estimation ────────────────────────────────────────────────────
 
+/**
+ * Coarse per-result constant so a canonical `toolResult` payload contributes
+ * to the byte budget without a per-event JSON.stringify. Covers the envelope
+ * fields and bounded structured data the offload layer leaves inline.
+ */
+const TOOL_RESULT_PAYLOAD_PROXY_BYTES = 256;
+
 function estimateRecordBytes(record: SubagentRecord): number {
   return record.id.length + record.agent_name.length + record.agent_type.length
     + record.agent_tier.length + record.task.length
@@ -253,6 +260,12 @@ export function estimateDeltaBytes(event: SubagentDeltaEvent): number {
       break;
     case 'tool_result':
       bytes += event.toolCallId.length + event.content.length + event.finishedAt.length;
+      // Cheap proxy for the canonical payload (no JSON.stringify): status +
+      // the error message when present, plus a coarse constant for the
+      // bounded structured data the offload layer leaves inline.
+      bytes += event.toolResult.status.length
+        + (event.toolResult.status === 'error' ? event.toolResult.error.message.length : 0)
+        + TOOL_RESULT_PAYLOAD_PROXY_BYTES;
       break;
     case 'spawned':
     case 'terminal':

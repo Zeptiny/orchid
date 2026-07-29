@@ -282,7 +282,7 @@ export function persistSubagentChains(
       result = sessionManager.syncSubagentRecords(sessionId, domainRecords);
     } catch (err) {
       console.debug(
-        `Failed to persist subagent chains for session ${sessionId} (non-fatal):`,
+        `Failed to persist subagent chains for session ${sessionId}; will retry on next flush:`,
         err,
       );
       throw err;

@@ -247,19 +247,19 @@ describe('subagent delta application', () => {
       {
         ...deltaBase(), sequence: 1, type: 'tool_start', segmentId: 'seg-tool', toolCallId: 'call-1',
         toolName: 'read', status: 'generating', args: '', startedAt: '2026-01-01T00:00:01.000Z',
-      } as SubagentDeltaEvent,
-      { ...deltaBase(), sequence: 2, type: 'tool_args_delta', toolCallId: 'call-1', append: '{"pa' } as SubagentDeltaEvent,
+      },
+      { ...deltaBase(), sequence: 2, type: 'tool_args_delta', toolCallId: 'call-1', append: '{"pa' },
     ]));
     state = applyDeltaBatch(state, batch([
-      { ...deltaBase(), sequence: 3, type: 'tool_args_delta', toolCallId: 'call-1', append: 'th"}' } as SubagentDeltaEvent,
+      { ...deltaBase(), sequence: 3, type: 'tool_args_delta', toolCallId: 'call-1', append: 'th"}' },
       {
         ...deltaBase(), sequence: 4, type: 'tool_start', segmentId: 'seg-tool', toolCallId: 'call-1',
         toolName: 'read', status: 'running', args: '{"path":1}', startedAt: '2026-01-01T00:00:01.000Z',
-      } as SubagentDeltaEvent,
+      },
       {
         ...deltaBase(), sequence: 5, type: 'tool_result', toolCallId: 'call-1', status: 'complete',
         content: 'done', toolResult: canonical, finishedAt: '2026-01-01T00:00:02.000Z',
-      } as SubagentDeltaEvent,
+      },
     ]));
 
     const live = state.live.get('one');
@@ -552,6 +552,14 @@ describe('hydration buffering and reseed floor', () => {
     expect(state.reseedFloor).toBe(9);
     expect(seedSubagentSnapshot(state, snapshot(sessionA, 8, []))).toBe(state);
     expect(seedSubagentSnapshot(state, snapshot(sessionA, 9, [])).reseedFloor).toBeNull();
+  });
+
+  it('returns the unchanged state for a delta batch from a different session', () => {
+    const state = seeded(sessionA, 7, [record('one', 'running')], [projection({ subagentId: 'one', sequence: 3 })]);
+    expect(state.hydration).toBe('ready');
+    const foreign = batch([textDelta(9, 'other', { sessionId: sessionB })], sessionB);
+    expect(foreign.sessionId).not.toBe(state.sessionId);
+    expect(applyDeltaBatch(state, foreign)).toBe(state);
   });
 });
 

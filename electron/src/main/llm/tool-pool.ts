@@ -5,6 +5,16 @@ import type { Config } from '../config/schema';
 
 let pool: WorkerPool | null = null;
 
+/**
+ * Resolve the main-agent reservation from config. A configured 0 floors to 1:
+ * the visible main agent always keeps a dispatch lane so queued subagent work
+ * cannot starve it (review F-06). Positive reservations pass through (the
+ * WorkerPool clamps them to `[0, size - 1]`).
+ */
+export function resolveMainAgentReserved(configured: number): number {
+  return Math.max(1, configured);
+}
+
 export async function initToolWorkerPool(config: Config, poolSize?: number): Promise<void> {
   const scriptPath = path.join(__dirname, '..', 'tools', 'tool-worker.js');
   if (!fs.existsSync(scriptPath)) {
@@ -12,7 +22,7 @@ export async function initToolWorkerPool(config: Config, poolSize?: number): Pro
     return;
   }
   const candidate = new WorkerPool(scriptPath, poolSize ?? 2, { config }, {
-    mainAgentReserved: config.tool_worker_pool_main_agent_reserved,
+    mainAgentReserved: resolveMainAgentReserved(config.tool_worker_pool_main_agent_reserved),
   });
   try {
     await candidate.init();

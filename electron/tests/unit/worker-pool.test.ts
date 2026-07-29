@@ -10,6 +10,7 @@ import {
   type WorkerTaskHandle,
 } from '../../src/main/utils/worker-pool';
 import { withTimeoutPromise } from '../../src/main/utils/async';
+import { resolveMainAgentReserved } from '../../src/main/llm/tool-pool';
 
 const workerScript = path.resolve(
   __dirname,
@@ -393,6 +394,71 @@ describe('WorkerPool main-agent priority (review F-06)', () => {
       }
       expect(subSettled).toBe(true);
     }
+  });
+
+  it('floors a configured 0 reservation to 1 so queued subagents cannot starve the main lane', async () => {
+    // The config path (tool-pool) floors 0 → 1; the pool then behaves exactly
+    // like mainAgentReserved: 1, so a queued subagent wave cannot starve a
+    // later main-agent task.
+    expect(resolveMainAgentReserved(0)).toBe(1);
+    expect(resolveMainAgentReserved(3)).toBe(3);
+
+    const { pool, workers } = createManualPool({ size: 2, mainAgentReserved: resolveMainAgentReserved(0) });
+    await pool.init();
+    expect(pool.reservedMainAgents).toBe(1);
+
+    pool.runTask({ tag: 'subA' }, { scope: 'subagent' });
+    pool.runTask({ tag: 'subB' }, { scope: 'subagent' });
+    const subC = pool.runTask({ tag: 'subC' }, { scope: 'subagent' });
+    await flush();
+    expect(pool.activeCount).toBe(2);
+
+    const mainM = pool.runTask({ tag: 'mainM' }, { scope: 'main' });
+    let subCStarted = false;
+    void subC.started.then(() => { subCStarted = true; }, () => undefined);
+    await flush();
+
+    const busyWorker = workers.find((w) => w.executed.length > 0)!;
+    busyWorker.complete(busyWorker.executed[0].taskId, 'first-done');
+    await flush();
+
+    await expect(mainM.started).resolves.toBeDefined();
+    expect(subCStarted).toBe(false);
+  });
+
+  it('falls through to the alternate lane when the selected lane only held cancelled entries', async () => {
+    const { pool, workers } = createManualPool({ size: 2, mainAgentReserved: 1 });
+    await pool.init();
+
+    pool.runTask({ tag: 'subA' }, { scope: 'subagent' });
+    pool.runTask({ tag: 'subB' }, { scope: 'subagent' });
+    await flush();
+    expect(pool.activeCount).toBe(2);
+
+    // Queue a main task (reserved lane) and a subagent task, then cancel the
+    // main task before any worker frees: the freed worker must fall through
+    // to subC instead of idling on the drained main lane.
+    const abort = new AbortController();
+    pool.runTask({ tag: 'mainM' }, { scope: 'main', signal: abort.signal });
+    const subC = pool.runTask({ tag: 'subC' }, { scope: 'subagent' });
+    let subCStarted = false;
+    void subC.started.then(() => { subCStarted = true; }, () => undefined);
+    abort.abort();
+    await flush();
+
+    const busyWorker = workers.find((w) => w.executed.length > 0)!;
+    busyWorker.complete(busyWorker.executed[0].taskId, 'first-done');
+    await flush();
+
+    expect(subCStarted).toBe(true);
+    expect(dispatchedTags(workers)).toContain('subC');
+  });
+
+  it('falls back to the default reservation for non-finite configured values', () => {
+    const nanPool = createManualPool({ size: 2, mainAgentReserved: Number.NaN });
+    expect(nanPool.pool.reservedMainAgents).toBe(1);
+    const infPool = createManualPool({ size: 4, mainAgentReserved: Number.POSITIVE_INFINITY });
+    expect(infPool.pool.reservedMainAgents).toBe(1);
   });
 
   it('reports queue-wait and execution timings separately, summing to total latency', async () => {
