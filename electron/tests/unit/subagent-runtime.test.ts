@@ -13,6 +13,10 @@ import type { StreamEvent } from '../../src/main/llm/orchestrator';
 import { sumSubagentUsage } from '../../src/shared/usage';
 import { createCanonicalToolResult } from '../../src/shared/types/tool-result';
 import type { SubagentDeltaEvent, SubagentLiveProjection } from '../../src/shared/types/subagent';
+import {
+  subagentRecordFromStorageDict,
+  subagentRecordToStorageDict,
+} from '../../src/shared/types/subagent';
 import { defaults } from '../../src/main/config/schema';
 import type { Config } from '../../src/shared/types/ipc-boundary';
 
@@ -1271,5 +1275,81 @@ describe('SubagentManager terminal eviction and session purge (U9)', () => {
     expect(waited).toBeDefined();
     expect(waited!.state).toBe(SubagentState.COMPLETED);
     expect(waited!.result).toBe('wait-result');
+  });
+});
+
+describe('closed flag (U1)', () => {
+  let manager: SubagentManager;
+
+  beforeEach(() => {
+    manager = new SubagentManager();
+    configOverride.current = null;
+  });
+
+  afterEach(() => {
+    configOverride.current = null;
+  });
+
+  it('closed survives the storage-dict round trip and defaults to false for old rows', () => {
+    const open = manager.spawn('open', 'x', testAgent, { sessionId: 'sess-closed-rt' });
+    manager.markCompleted(open.id, 'done');
+    const domain = runtimeToDomain(open);
+    expect(domain.closed).toBe(false);
+
+    const restoredOpen = subagentRecordFromStorageDict(subagentRecordToStorageDict(domain));
+    expect(restoredOpen.closed).toBe(false);
+
+    const closedDomain = { ...domain, closed: true };
+    const restoredClosed = subagentRecordFromStorageDict(
+      subagentRecordToStorageDict(closedDomain),
+    );
+    expect(restoredClosed.closed).toBe(true);
+
+    // Legacy rows written before the flag existed restore as open.
+    const legacyDict = subagentRecordToStorageDict(closedDomain) as Record<string, unknown>;
+    delete legacyDict.closed;
+    expect(subagentRecordFromStorageDict(legacyDict).closed).toBe(false);
+  });
+
+  it('runtimeToDomain carries the closed flag from the runtime record', () => {
+    const record = manager.spawn('flagged', 'x', testAgent, { sessionId: 'sess-closed-map' });
+    manager.markCompleted(record.id, 'done');
+    expect(runtimeToDomain(record).closed).toBe(false);
+    record.closed = true;
+    expect(runtimeToDomain(record).closed).toBe(true);
+  });
+
+  it('getStates omits closed records and stays session-scoped', () => {
+    const sid = 'sess-closed-filter';
+    const keep = manager.spawn('keep', 'x', testAgent, { sessionId: sid });
+    const hide = manager.spawn('hide', 'x', testAgent, { sessionId: sid });
+    const otherSession = manager.spawn('other', 'x', testAgent, { sessionId: 'sess-closed-other' });
+    manager.markCompleted(keep.id, 'done');
+    manager.markCompleted(hide.id, 'done');
+    manager.markCompleted(otherSession.id, 'done');
+
+    hide.closed = true;
+    otherSession.closed = true;
+
+    const states = manager.getStates(sid);
+    expect(states.map((s) => s.id)).toEqual([keep.id]);
+    // Closing does not delete the record from the manager or the other session.
+    expect(manager.getRecord(hide.id)).toBeDefined();
+    expect(manager.getStates('sess-closed-other')).toEqual([]);
+    expect(manager.getStates().map((s) => s.id)).toEqual([keep.id]);
+  });
+
+  it('closed flag survives eviction to a summary', () => {
+    const sid = 'sess-closed-evict';
+    const record = manager.spawn('close-me', 'x', testAgent, { sessionId: sid });
+    manager.markCompleted(record.id, 'done');
+    record.closed = true;
+
+    manager.confirmRecordsPersisted(sid, [record.id]);
+
+    const summary = manager.getRecord(record.id)!;
+    expect(summary._evicted).toBe(true);
+    expect(summary.closed).toBe(true);
+    expect(manager.getStates(sid)).toEqual([]);
   });
 });

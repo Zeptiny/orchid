@@ -298,6 +298,12 @@ export interface SubagentRecord {
   _resolveWait: Array<(reason: SubagentWaiterReason) => void> | null;
   /** In-flight run promise (for debugging / optional await). */
   _runPromise: Promise<void> | null;
+  /**
+   * Hidden from the dynamic system prompt while the durable record, chain,
+   * and terminal state stay intact (close_subagents tool). Only meaningful on
+   * terminal records; persisted with the durable row.
+   */
+  closed: boolean;
   /** Runtime-only live projection; durable history remains in `chain`. */
   live: SubagentLiveProjection;
   _liveCommittedSegmentCount: number;
@@ -470,6 +476,7 @@ export class SubagentManager {
       abortController: null,
       _resolveWait: [],
       _runPromise: null,
+      closed: false,
       live: makeLiveProjection(id, sessionId, admitted ? 'pending' : 'queued'),
       _liveCommittedSegmentCount: 0,
       _liveTerminalEmitted: false,
@@ -805,6 +812,9 @@ export class SubagentManager {
 
     for (const record of this._subagents.values()) {
       if (sessionId !== undefined && record.sessionId !== sessionId) {
+        continue;
+      }
+      if (record.closed) {
         continue;
       }
       states.push({
@@ -1676,6 +1686,7 @@ export function runtimeToDomain(
     ...(record.reasoningEffort !== undefined
       ? { reasoning_effort: record.reasoningEffort }
       : {}),
+    closed: record.closed,
     chain: checkpointChain,
   };
 }
