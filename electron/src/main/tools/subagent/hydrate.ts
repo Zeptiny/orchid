@@ -42,9 +42,11 @@ export async function hydrateSubagentRecords(
   const hydrated: string[] = [];
   const agentMissing: string[] = [];
 
+  // Deduplicate so specs/hydrated/agentMissing carry no repeated entries.
+  const uniqueIds = [...new Set(ids)];
   // Only ids that are absent or evicted need materialization; a live full
   // record is the authoritative copy and is never replaced.
-  const needsHydration = ids.filter((id) => {
+  const needsHydration = uniqueIds.filter((id) => {
     const record = manager.getRecord(id);
     return !record || record._evicted;
   });

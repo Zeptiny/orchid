@@ -706,6 +706,9 @@ export class SubagentManager {
     record.endTime = null;
     record.startedAt = null;
     record.startTime = now;
+    // Clear the prior run's aggregate so the resumed run's SPAWNED delta does
+    // not leak stale usage; the run loop re-accumulates fresh per run.
+    record.usage = null;
     record.live = makeLiveProjection(
       record.id,
       record.sessionId,
@@ -1290,8 +1293,11 @@ export class SubagentManager {
       if (!state) continue;
 
       const { domain } = spec;
-      const startTime = Date.parse(domain.start_time);
-      const endTime = domain.end_time ? Date.parse(domain.end_time) : null;
+      // Guard against NaN from an unparseable stored timestamp (the `|| 0`
+      // fallback mirrors session storage hydration) so hydration stays total
+      // and runtimeToDomain never receives an invalid Date.
+      const startTime = Date.parse(domain.start_time) || 0;
+      const endTime = domain.end_time ? (Date.parse(domain.end_time) || 0) : null;
 
       const record: SubagentRecord = {
         id: spec.id,

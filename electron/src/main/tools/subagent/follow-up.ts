@@ -48,6 +48,7 @@ export function buildFollowUpTool(
       subagent_id: z.string().describe('The subagent ID to resume'),
       input: z
         .string()
+        .min(1)
         .describe('The follow-up user message appended to the subagent chain'),
     }),
     category: 'subagent',

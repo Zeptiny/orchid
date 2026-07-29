@@ -73,7 +73,9 @@ export function buildCloseTool(
     const notTerminal: string[] = [];
     const notFound: string[] = [];
 
-    for (const sid of subagent_ids) {
+    // Deduplicate model-supplied ids so each contributes to exactly one result
+    // list (a repeat would otherwise close, then report as already_closed).
+    for (const sid of new Set(subagent_ids)) {
       // agent_missing ids exist in durable storage but cannot be materialized;
       // report them in their own list rather than as not_found.
       if (agentMissingSet.has(sid)) continue;

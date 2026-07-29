@@ -1758,8 +1758,11 @@ describe('follow_up_subagent', () => {
     });
     const { handler } = buildFollowUpTool(manager);
     const record = manager.spawn('settling', 'task', codeReviewerAgent, { sessionId: sid });
-    await new Promise((resolve) => setTimeout(resolve, 10));
-    expect(record.state).toBe(SubagentState.RUNNING);
+    // Poll (bounded) until the run loop flips the record to RUNNING rather than
+    // relying on a fixed sleep, so the transition wait is deterministic.
+    await vi.waitFor(() => {
+      expect(record.state).toBe(SubagentState.RUNNING);
+    });
 
     // Terminal on paper, but the run loop still owns the interruption boundary.
     expect(manager.cancelOne(record.id)).toBe(true);
