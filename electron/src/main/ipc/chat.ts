@@ -955,11 +955,12 @@ function checkpointActiveTurn(agent: ActiveAgent, context: AgentContext): void {
     return;
   }
   const timer = setTimeout(() => {
+    const entry = pendingCheckpoints.get(sessionId);
     pendingCheckpoints.delete(sessionId);
     const active = activeAgents.get(sessionId);
     if (!active || active.finalized) return;
     try {
-      getSessionManager().updateActiveChainMessages(messages, sessionId);
+      getSessionManager().updateActiveChainMessages(entry?.messages ?? messages, sessionId);
     } catch (err) {
       console.debug('Failed to checkpoint active chat chain (non-fatal):', err);
     }

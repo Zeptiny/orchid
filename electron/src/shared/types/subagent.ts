@@ -238,10 +238,13 @@ export interface SubagentRecord {
  */
 const TOOL_RESULT_PAYLOAD_PROXY_BYTES = 256;
 
+const CHAIN_MESSAGE_PROXY_BYTES = 128;
+
 function estimateRecordBytes(record: SubagentRecord): number {
   return record.id.length + record.agent_name.length + record.agent_type.length
     + record.agent_tier.length + record.task.length
-    + (record.result?.length ?? 0) + (record.error?.length ?? 0);
+    + (record.result?.length ?? 0) + (record.error?.length ?? 0)
+    + (record.chain?.messages?.length ?? 0) * CHAIN_MESSAGE_PROXY_BYTES;
 }
 
 /**

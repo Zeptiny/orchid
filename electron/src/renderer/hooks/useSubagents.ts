@@ -143,7 +143,8 @@ export function useSubagents(activeSessionId: string | null): UseSubagentsReturn
     setStream(next);
   }, []);
 
-  const hydrate = useCallback(async (sessionId: string, retry = false): Promise<void> => {
+  const hydrate = useCallback(async (sessionId: string, retry = false, reseedAttempts = 0): Promise<void> => {
+    const RESEED_RETRY_LIMIT = 3;
     const request = ++requestRef.current;
     const refreshed = beginSubagentSnapshotRefresh(streamRef.current, sessionId);
     commit(refreshed);
@@ -158,8 +159,11 @@ export function useSubagents(activeSessionId: string | null): UseSubagentsReturn
       if (request !== requestRef.current || activeRef.current !== sessionId || !isSubagentSnapshotAffine(streamRef.current, snapshot, generation)) return;
       const next = seedSubagentSnapshot(streamRef.current, snapshot);
       if (next === streamRef.current && next.reseedFloor !== null) {
-        // Snapshot landed below the reseed floor; a fresh one must meet it.
-        void hydrate(sessionId);
+        if (reseedAttempts < RESEED_RETRY_LIMIT) {
+          void hydrate(sessionId, false, reseedAttempts + 1);
+        } else {
+          commit(failSubagentSnapshot(streamRef.current, 'Snapshot repeatedly landed below the reseed floor'));
+        }
         return;
       }
       commit(next);

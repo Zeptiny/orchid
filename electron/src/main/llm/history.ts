@@ -26,30 +26,53 @@ function isReplayableToolCallMessage(message: Message): boolean {
     Boolean(message.tool_calls?.length);
 }
 
+function isOmittedFromReplay(message: Message): boolean {
+  if (message.type === MessageType.ERROR) return true;
+  if (message.hidden || message.excludeFromModel) return true;
+  if (message.type === MessageType.TOOL_CALL && (!message.tool_calls || message.tool_calls.length === 0)) return true;
+  if (message.type === MessageType.THINKING && !message.content) return true;
+  if (!message.content && (!message.tool_calls || message.tool_calls.length === 0)) return true;
+  return false;
+}
+
 /**
  * Runtime lifecycle events persist one assistant message per parallel tool
  * call. Providers require those adjacent calls to be replayed as one assistant
  * tool-call group followed by all of the group's results.
+ *
+ * Records that the later replay filtering omits entirely (ERROR, hidden,
+ * excluded, empty) are transparent for adjacency: two replayable tool-call
+ * messages separated only by omitted records merge into one group.
  */
 function coalesceConsecutiveToolCallMessages(messages: Message[]): Message[] {
   const normalized: Message[] = [];
+  let lastReplayableIndex = -1;
 
   for (const message of messages) {
-    const previous = normalized.at(-1);
-    if (
-      previous &&
-      isReplayableToolCallMessage(previous) &&
-      isReplayableToolCallMessage(message)
-    ) {
-      normalized[normalized.length - 1] = {
-        ...previous,
-        content: [previous.content, message.content].filter(Boolean).join('\n'),
-        tool_calls: [...(previous.tool_calls ?? []), ...(message.tool_calls ?? [])],
-        tool_call_id: null,
-      };
+    if (isReplayableToolCallMessage(message)) {
+      if (lastReplayableIndex !== -1) {
+        const allSkippable = normalized
+          .slice(lastReplayableIndex + 1)
+          .every(isOmittedFromReplay);
+        if (allSkippable) {
+          const previous = normalized[lastReplayableIndex];
+          normalized[lastReplayableIndex] = {
+            ...previous,
+            content: [previous.content, message.content].filter(Boolean).join('\n'),
+            tool_calls: [...(previous.tool_calls ?? []), ...(message.tool_calls ?? [])],
+            tool_call_id: null,
+          };
+          continue;
+        }
+      }
+      lastReplayableIndex = normalized.length;
+      normalized.push(message);
       continue;
     }
 
+    if (!isOmittedFromReplay(message)) {
+      lastReplayableIndex = -1;
+    }
     normalized.push(message);
   }
 

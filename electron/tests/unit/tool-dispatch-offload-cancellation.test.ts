@@ -158,9 +158,11 @@ describe('executeToolCall offloaded cancellation', () => {
       runTask: vi.fn(() => {
         const cancelled = Promise.reject(new WorkerTaskCancelledError());
         cancelled.catch(() => undefined);
+        const started = Promise.reject(new WorkerTaskCancelledError());
+        started.catch(() => undefined);
         return {
           taskId: 0,
-          started: Promise.reject(new WorkerTaskCancelledError()),
+          started,
           result: cancelled,
           timings: null,
         };

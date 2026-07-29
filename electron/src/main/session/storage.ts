@@ -134,6 +134,8 @@ function getDb(dbPath: string): SqliteDatabase {
  * open-time recovery (move-aside + rebuild), so mid-life corruption heals
  * instead of permanently poisoning the cached handle.
  */
+const activeRecoveryPaths = new Set<string>();
+
 function withCorruptionRecovery<T>(dbPath: string, op: (db: SqliteDatabase) => T): T {
   try {
     return op(getDb(dbPath));
@@ -146,7 +148,14 @@ function withCorruptionRecovery<T>(dbPath: string, op: (db: SqliteDatabase) => T
       dbCache.delete(dbPath);
     }
     const result = op(getDb(dbPath));
-    notifySessionStorageRecovered();
+    if (!activeRecoveryPaths.has(dbPath)) {
+      activeRecoveryPaths.add(dbPath);
+      try {
+        notifySessionStorageRecovered();
+      } finally {
+        activeRecoveryPaths.delete(dbPath);
+      }
+    }
     return result;
   }
 }

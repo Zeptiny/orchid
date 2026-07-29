@@ -90,8 +90,8 @@ describe('SubagentView', () => {
     }));
     expect(html).toContain('Queued');
     expect(html).not.toContain('No queued subagents.');
-    // Neutral tone maps to no tone class: a bare `badge badge-xs` (no badge-info/etc).
-    expect(html).toMatch(/<span class="badge badge-xs">queued<\/span>/);
+    expect(html).toMatch(/<span class="[^"]*badge[^"]*">queued<\/span>/);
+    expect(html).not.toMatch(/badge-(info|success|warning|error|primary|ghost)/);
   });
 
   it('keeps general opens on the list and row opens on the requested detail', () => {

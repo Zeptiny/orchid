@@ -497,6 +497,28 @@ describe('hydration buffering and reseed floor', () => {
     expect(state.hydration).toBe('loading');
   });
 
+  it('enforces the byte bound for record-carrying deltas (spawned with populated chain)', () => {
+    let state = bindSubagentSession(createSubagentStreamState(), sessionA);
+    const chainMessages = Array.from({ length: 20 }, (_, i) => ({
+      id: `msg-${i}`, role: 'assistant', content: 'x'.repeat(100), type: 'text',
+      tool_calls: null, tool_call_id: null, name: null, thinking: null,
+      timestamp: '2026-01-01T00:00:00.000Z', usage: null, hidden: false, tool_result: null,
+    }));
+    const heavyRecord: SubagentRecord = {
+      ...record('heavy', 'running'),
+      chain: { messages: chainMessages } as SubagentRecord['chain'],
+    };
+    const spawnEvent = spawned('heavy', 'run-heavy', heavyRecord, 1, 5);
+    const eventBytes = estimateDeltaBytes(spawnEvent);
+    expect(eventBytes).toBeGreaterThan(2048);
+
+    state = applyDeltaBatch(state, batch([spawnEvent]), { hydrationBufferBytes: 2048 });
+    expect(state.buffered).toHaveLength(0);
+    expect(state.bufferedBytes).toBe(0);
+    expect(state.reseedFloor).toBe(5);
+    expect(state.hydration).toBe('loading');
+  });
+
   it('rejects a below-floor snapshot without state change', () => {
     let state = bindSubagentSession(createSubagentStreamState(), sessionA);
     state = applyDeltaBatch(

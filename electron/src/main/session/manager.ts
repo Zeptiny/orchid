@@ -819,9 +819,7 @@ export class SessionManager {
     dirtyRecords: readonly SubagentRecord[],
   ): { session: Session | null; bytes: number } {
     if (dirtyRecords.length === 0) {
-      const existing = this._sessions.get(sessionId) ??
-        storageLoadSession(sessionId, this._storageOpts);
-      return { session: existing ?? null, bytes: 0 };
+      return { session: this._sessions.get(sessionId) ?? null, bytes: 0 };
     }
     const now = new Date().toISOString();
     const merge = (existing: readonly SubagentRecord[]): SubagentRecord[] => {

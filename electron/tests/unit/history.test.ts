@@ -123,6 +123,60 @@ describe('toApiMessages match-set', () => {
     ]);
   });
 
+  it('coalesces parallel tool calls across a skipped (hidden) record between them', () => {
+    const firstCall = makeToolCall('tc-skip-1', 'read');
+    const secondCall = makeToolCall('tc-skip-2', 'grep');
+    const messages: Message[] = [
+      makeMessage({
+        role: MessageRole.USER,
+        content: 'Parallel with noise between',
+        type: MessageType.TEXT,
+      }),
+      makeMessage({
+        role: MessageRole.ASSISTANT,
+        type: MessageType.TOOL_CALL,
+        tool_calls: [firstCall],
+        tool_call_id: firstCall.id,
+      }),
+      makeMessage({
+        role: MessageRole.ASSISTANT,
+        type: MessageType.ERROR,
+        content: 'transient error',
+        hidden: true,
+      }),
+      makeMessage({
+        role: MessageRole.ASSISTANT,
+        type: MessageType.TOOL_CALL,
+        tool_calls: [secondCall],
+        tool_call_id: secondCall.id,
+      }),
+      makeMessage({
+        role: MessageRole.TOOL,
+        content: 'file contents',
+        type: MessageType.TOOL_RESULT,
+        tool_call_id: firstCall.id,
+      }),
+      makeMessage({
+        role: MessageRole.TOOL,
+        content: 'grep results',
+        type: MessageType.TOOL_RESULT,
+        tool_call_id: secondCall.id,
+      }),
+    ];
+
+    const result = toApiMessages(messages);
+
+    expect(result).toHaveLength(4);
+    expect(result[1].tool_calls?.map((call) => call.id)).toEqual([
+      firstCall.id,
+      secondCall.id,
+    ]);
+    expect(result.slice(2).map((message) => message.tool_call_id)).toEqual([
+      firstCall.id,
+      secondCall.id,
+    ]);
+  });
+
   it('rebuilds match-set from surviving tool_calls only (partial filter)', () => {
     const tc1 = makeToolCall('tc-1', 'read');
     const tc2 = makeToolCall('tc-2', 'grep');

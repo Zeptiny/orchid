@@ -342,7 +342,7 @@ describe('Dynamic Tool Builders', () => {
     });
   });
 
-  describe('subagent tools (4)', () => {
+  describe('subagent tools (5)', () => {
     it('delegate_to_subagent builder produces valid definition and handler', () => {
       const { definition, handler } = buildDelegateTool(new Map(), {} as any);
       expectValidDefinition(definition, 'delegate_to_subagent');
@@ -371,6 +371,14 @@ describe('Dynamic Tool Builders', () => {
       const { definition, handler } = buildCloseTool({} as any);
       expectValidDefinition(definition, 'close_subagents');
       expectValidJsonSchema(definition.inputSchema, 'close_subagents');
+      expectValidHandler(handler);
+      expect(definition.category).toBe('subagent');
+    });
+
+    it('follow_up_subagent builder produces valid definition and handler', () => {
+      const { definition, handler } = buildFollowUpTool({} as any);
+      expectValidDefinition(definition, 'follow_up_subagent');
+      expectValidJsonSchema(definition.inputSchema, 'follow_up_subagent');
       expectValidHandler(handler);
       expect(definition.category).toBe('subagent');
     });
