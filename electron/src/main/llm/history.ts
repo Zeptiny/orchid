@@ -75,8 +75,9 @@ export function toApiMessages(messages: Message[]): ApiMessage[] {
   // an orphan result that appears in a later turn after the sequence was
   // already broken, emitting a dangling tool_calls block with no paired
   // result in message order.
-  const survivingToolCallIds = new Set<string>();
+  const survivingToolCallsByMessage = new Map<Message, Set<string>>();
   const pendingToolCallIds = new Set<string>();
+  let pendingToolCallMessage: Message | null = null;
 
   for (const msg of replayMessages) {
     // Skip error messages
@@ -101,8 +102,20 @@ export function toApiMessages(messages: Message[]): ApiMessage[] {
 
     // TOOL_RESULT: check if it matches a pending tool_call_id
     if (msg.role === MessageRole.TOOL) {
-      if (msg.tool_call_id && pendingToolCallIds.has(msg.tool_call_id)) {
-        survivingToolCallIds.add(msg.tool_call_id);
+      if (
+        pendingToolCallMessage &&
+        msg.tool_call_id &&
+        pendingToolCallIds.has(msg.tool_call_id)
+      ) {
+        const survivingIds = survivingToolCallsByMessage.get(pendingToolCallMessage);
+        if (survivingIds) {
+          survivingIds.add(msg.tool_call_id);
+        } else {
+          survivingToolCallsByMessage.set(
+            pendingToolCallMessage,
+            new Set([msg.tool_call_id]),
+          );
+        }
       }
       continue;
     }
@@ -116,7 +129,9 @@ export function toApiMessages(messages: Message[]): ApiMessage[] {
     // later turn can no longer legitimately pair with earlier tool_calls.
     // A new assistant tool_calls block resets pending to its own ids.
     pendingToolCallIds.clear();
+    pendingToolCallMessage = null;
     if (msg.tool_calls) {
+      pendingToolCallMessage = msg;
       for (const tc of msg.tool_calls) {
         if (tc.id) {
           pendingToolCallIds.add(tc.id);
@@ -188,8 +203,9 @@ export function toApiMessages(messages: Message[]): ApiMessage[] {
     const d = messageToApiFormat(msg);
 
     if (msg.tool_calls && msg.tool_calls.length > 0) {
+      const survivingIds = survivingToolCallsByMessage.get(msg);
       const surviving = msg.tool_calls.filter(
-        (tc) => survivingToolCallIds.has(tc.id),
+        (tc) => survivingIds?.has(tc.id),
       );
       if (surviving.length > 0) {
         d.tool_calls = surviving.map((tc) => ({

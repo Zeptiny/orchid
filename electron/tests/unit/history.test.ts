@@ -33,6 +33,48 @@ function makeToolCall(id: string, name: string, args: string = '{}'): ToolCall {
 }
 
 describe('toApiMessages match-set', () => {
+  it('does not revive an earlier dangling call when a later turn reuses its id', () => {
+    const reusedId = 'wait_for_subagent_36';
+    const messages: Message[] = [
+      makeMessage({
+        role: MessageRole.USER,
+        content: 'Wait for the subagent',
+        type: MessageType.TEXT,
+      }),
+      makeMessage({
+        role: MessageRole.ASSISTANT,
+        type: MessageType.TOOL_CALL,
+        tool_calls: [makeToolCall(reusedId, 'wait_for_subagent')],
+        tool_call_id: reusedId,
+      }),
+      makeMessage({
+        role: MessageRole.USER,
+        content: 'Try waiting again',
+        type: MessageType.TEXT,
+      }),
+      makeMessage({
+        role: MessageRole.ASSISTANT,
+        type: MessageType.TOOL_CALL,
+        tool_calls: [makeToolCall(reusedId, 'wait_for_subagent')],
+        tool_call_id: reusedId,
+      }),
+      makeMessage({
+        role: MessageRole.TOOL,
+        content: 'Subagent completed',
+        type: MessageType.TOOL_RESULT,
+        tool_call_id: reusedId,
+      }),
+    ];
+
+    const result = toApiMessages(messages);
+
+    expect(result).toHaveLength(4);
+    expect(result[0].content).toBe('Wait for the subagent');
+    expect(result[1].content).toBe('Try waiting again');
+    expect(result[2].tool_calls?.map((call) => call.id)).toEqual([reusedId]);
+    expect(result[3].tool_call_id).toBe(reusedId);
+  });
+
   it('replays consecutive parallel tool calls as one assistant call group', () => {
     const firstCall = makeToolCall('tc-parallel-1', 'read');
     const secondCall = makeToolCall('tc-parallel-2', 'grep');
