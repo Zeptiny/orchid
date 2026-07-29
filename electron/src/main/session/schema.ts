@@ -1,7 +1,7 @@
 /** SQLite schema for session storage. */
 
 /** Current session schema version. */
-export const SESSION_SCHEMA_VERSION = 1;
+export const SESSION_SCHEMA_VERSION = 2;
 
 /** Idempotent DDL for the session database. */
 export const SESSION_SCHEMA_SQL = `
@@ -39,6 +39,13 @@ CREATE TABLE IF NOT EXISTS chains (
   messages_json TEXT NOT NULL DEFAULT '[]',
   start_time TEXT,
   end_time TEXT
+);
+
+CREATE TABLE IF NOT EXISTS subagent_chains (
+  session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+  subagent_id TEXT NOT NULL,
+  record_json TEXT NOT NULL,
+  PRIMARY KEY (session_id, subagent_id)
 );
 
 CREATE INDEX IF NOT EXISTS idx_chains_session ON chains(session_id, ordinal);

@@ -14,7 +14,7 @@ import type {
   TerminalToolResultStatus,
   ToolExecutionResult,
 } from './tool-result';
-import type { SubagentLiveProjection, SubagentRecord } from './subagent';
+import type { SubagentDeltaEvent, SubagentLiveProjection, SubagentRecord } from './subagent';
 import type { RiskClass, ToolScope } from './permission';
 import type {
   CustomConnectionModel,
@@ -49,6 +49,7 @@ import type {
   IndexRunState,
   RAGConfig,
   AgentsMdConfig,
+  SubagentsConfig,
   PermissionModeValue,
   PermissionRule,
 } from './ipc-boundary';
@@ -81,6 +82,7 @@ export type {
   IndexRunState,
   RAGConfig,
   AgentsMdConfig,
+  SubagentsConfig,
   PermissionModeValue,
   PermissionRule,
   UpdaterState,
@@ -191,18 +193,22 @@ export interface SessionOpenResult {
 export interface SubagentSnapshotRequest { sessionId: string; }
 export interface SubagentSnapshot {
   sessionId: string;
+  /**
+   * Per-session monotonic revision from the manager's session counter. The
+   * renderer rejects snapshots below its recorded revision floor.
+   */
+  sessionRevision: number;
   records: SubagentRecord[];
   live: SubagentLiveProjection[];
 }
+/**
+ * Unit of SUBAGENTS_EVENT delivery: one budgeted flush of typed live deltas
+ * for a single session. Records ride only `spawned`/`terminal` deltas, so
+ * projection-only batches keep renderer record identity stable.
+ */
 export interface SubagentEvent {
   sessionId: string;
-  subagentId: string;
-  runId: string;
-  sequence: number;
-  type: 'projection';
-  projection: SubagentLiveProjection;
-  /** Canonical seed for empty hydrated views and terminal handoff. */
-  record?: SubagentRecord;
+  events: SubagentDeltaEvent[];
 }
 
 interface ChatEventIdentity {
@@ -341,12 +347,14 @@ export type ConfigPatch = {
   grep_max_results?: number;
   directory_tree_depth?: number;
   tool_worker_pool_size?: number;
+  tool_worker_pool_main_agent_reserved?: number;
   theme?: string;
   personality?: string;
   rag?: Partial<RAGConfig> & {
     embedding_api_model?: ModelSelection | null;
   };
   agents_md?: Partial<AgentsMdConfig>;
+  subagents?: Partial<SubagentsConfig>;
   ast_max_file_size?: number;
   mcp_startup_timeout?: number;
   mcp_per_server_timeout?: number;
@@ -993,6 +1001,7 @@ export interface OrchidAPI {
 
   subagents: {
     snapshot: (request: SubagentSnapshotRequest) => Promise<SubagentSnapshot>;
+    /** Batched subagent live deltas for the window's active session. */
     onEvent: (callback: (event: SubagentEvent) => void) => () => void;
   };
 

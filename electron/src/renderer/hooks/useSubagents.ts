@@ -1,11 +1,16 @@
 /** Session-affine subagent snapshot/live state for the inspector and view. */
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import type { Usage } from '../../shared/types/message';
-import type { SubagentEvent } from '../../shared/types/ipc';
 import type { SubagentLiveProjection, SubagentRecord } from '../../shared/types/subagent';
-import { sumSubagentUsage, sumSubagentsUsage, subUsageByParentChain } from '../../shared/usage';
 import {
-  acceptSubagentEvent,
+  deriveSubagentUsageSummary,
+  EMPTY_SUBAGENT_USAGE_SUMMARY,
+  sumSubagentUsage,
+  type SubagentUsageSummary,
+} from '../../shared/usage';
+import {
+  applyDeltaBatch,
+  DEFAULT_HYDRATION_BUFFER_BYTES,
   beginSubagentSnapshotRefresh,
   bindSubagentSession,
   createSubagentStreamState,
@@ -33,9 +38,19 @@ export interface SubagentDetail {
 export interface UseSubagentsReturn {
   state: SubagentListState;
   subagents: readonly SubagentRecord[];
-  groups: { running: readonly SubagentRecord[]; ended: readonly SubagentRecord[] };
+  groups: {
+    queued: readonly SubagentRecord[];
+    running: readonly SubagentRecord[];
+    ended: readonly SubagentRecord[];
+  };
   totalUsage: Usage | null;
   usageByParentChain: ReadonlyMap<number, Usage>;
+  /**
+   * Low-frequency usage summary for chat history attribution. Identity
+   * changes only when the underlying usage numbers change — never on live
+   * deltas or record churn that leaves usage untouched.
+   */
+  usageSummary: SubagentUsageSummary;
   refresh: () => Promise<void>;
   retry: () => Promise<void>;
   isRetrying: boolean;
@@ -80,10 +95,14 @@ export function buildSubagentDetail(
 ): SubagentDetail {
   const start = Date.parse(record.start_time);
   const end = record.end_time ? Date.parse(record.end_time) : now;
-  const running = record.status === 'running' || record.status === 'pending';
+  // Records only change on spawned/terminal, so on the delta path a record
+  // freezes at pending/queued while the live projection tracks the admitted
+  // run. Prefer the projection so badges match the snapshot path.
+  const state = live?.state ?? record.status;
+  const running = state === 'running' || state === 'pending';
   return {
     id: record.id, name: record.agent_name || 'Subagent', type: displayAgentType(record),
-    tier: record.agent_tier || 'bloom', state: record.status, task: record.task || '',
+    tier: record.agent_tier || 'bloom', state, task: record.task || '',
     elapsed: formatElapsed(Math.max(0, end - start)), isRunning: running,
     result: record.result, error: record.error,
     usage: live?.usage ?? sumSubagentUsage(record),
@@ -107,6 +126,7 @@ export function useSubagents(activeSessionId: string | null): UseSubagentsReturn
   const requestRef = useRef(0);
   const requestedRef = useRef<string | null>(null);
   const selectedSessionRef = useRef<string | null>(null);
+  const hydrationBufferBytesRef = useRef(DEFAULT_HYDRATION_BUFFER_BYTES);
   const activeRef = useRef(activeSessionId);
   activeRef.current = activeSessionId;
   requestedRef.current = requestedId;
@@ -137,6 +157,11 @@ export function useSubagents(activeSessionId: string | null): UseSubagentsReturn
       const snapshot = await window.orchid.subagents.snapshot({ sessionId });
       if (request !== requestRef.current || activeRef.current !== sessionId || !isSubagentSnapshotAffine(streamRef.current, snapshot, generation)) return;
       const next = seedSubagentSnapshot(streamRef.current, snapshot);
+      if (next === streamRef.current && next.reseedFloor !== null) {
+        // Snapshot landed below the reseed floor; a fresh one must meet it.
+        void hydrate(sessionId);
+        return;
+      }
       commit(next);
       setSelectedId((previous) => resolveSubagentSelection(next.records, {
         sessionId, requestedId: requestedRef.current ?? previous, existingId: previous, existingSessionId: selectedSessionRef.current,
@@ -152,6 +177,21 @@ export function useSubagents(activeSessionId: string | null): UseSubagentsReturn
   }, [commit]);
 
   useEffect(() => {
+    let disposed = false;
+    const pending = window.orchid?.config?.get ? window.orchid.config.get() : null;
+    if (pending) {
+      void pending.then((config) => {
+        if (disposed) return;
+        const kb = config?.subagents?.hydration_buffer_kb;
+        if (typeof kb === 'number' && Number.isFinite(kb) && kb > 0) {
+          hydrationBufferBytesRef.current = Math.floor(kb * 1024);
+        }
+      }).catch(() => { /* keep the schema default */ });
+    }
+    return () => { disposed = true; };
+  }, []);
+
+  useEffect(() => {
     setSelectedId(null);
     setSelectedSessionId(activeSessionId);
     setRequestedId(null);
@@ -159,12 +199,20 @@ export function useSubagents(activeSessionId: string | null): UseSubagentsReturn
   }, [activeSessionId, hydrate]);
 
   useEffect(() => {
-    const unsubscribe = window.orchid?.subagents?.onEvent?.((event: SubagentEvent) => {
-      const next = acceptSubagentEvent(streamRef.current, event);
-      if (next !== streamRef.current) commit(next);
+    const unsubscribe = window.orchid?.subagents?.onEvent?.((event) => {
+      const before = streamRef.current;
+      const next = applyDeltaBatch(before, event, {
+        hydrationBufferBytes: hydrationBufferBytesRef.current,
+      });
+      if (next !== before) commit(next);
+      // A newly raised floor means buffered intermediates were discarded:
+      // reseed from a snapshot whose revision meets the floor.
+      if (next.reseedFloor !== null && next.reseedFloor !== before.reseedFloor && activeRef.current) {
+        void hydrate(activeRef.current);
+      }
     });
     return unsubscribe;
-  }, [commit]);
+  }, [commit, hydrate]);
 
   useEffect(() => {
     const unsubscribe = window.orchid?.session?.onSubagentsChanged?.(() => {
@@ -174,7 +222,7 @@ export function useSubagents(activeSessionId: string | null): UseSubagentsReturn
   }, [hydrate]);
 
   useEffect(() => {
-    if (!current.records.some((record) => record.status === 'running' || record.status === 'pending')) return undefined;
+    if (!current.records.some((record) => record.status === 'running' || record.status === 'pending' || record.status === 'queued')) return undefined;
     const timer = setInterval(() => setTick((value) => value + 1), 1000);
     return () => clearInterval(timer);
   }, [current.records]);
@@ -205,8 +253,14 @@ export function useSubagents(activeSessionId: string | null): UseSubagentsReturn
   const subagents = current.records;
   const state = listState(current);
   const groups = useMemo(() => groupSubagents(subagents), [subagents]);
-  const totalUsage = useMemo(() => sumSubagentsUsage(subagents), [subagents]);
-  const usageByParentChain = useMemo(() => subUsageByParentChain(subagents), [subagents]);
+  const usageSummaryRef = useRef(EMPTY_SUBAGENT_USAGE_SUMMARY);
+  const usageSummary = useMemo(() => {
+    const next = deriveSubagentUsageSummary(subagents, usageSummaryRef.current);
+    usageSummaryRef.current = next;
+    return next;
+  }, [subagents]);
+  const totalUsage = usageSummary.total;
+  const usageByParentChain = usageSummary.byParentChain;
   const getDetail = useCallback((id: string) => {
     void tick;
     const record = subagents.find((item) => item.id === id);
@@ -216,7 +270,7 @@ export function useSubagents(activeSessionId: string | null): UseSubagentsReturn
   }, [current.live, subagents, tick]);
   const getLive = useCallback((id: string) => current.live.get(id) ?? null, [current.live]);
   return {
-    state, subagents, groups, totalUsage, usageByParentChain, refresh, retry, isRetrying,
+    state, subagents, groups, totalUsage, usageByParentChain, usageSummary, refresh, retry, isRetrying,
     applyFromSession, selectedId, select, getDetail, live: current.live, getLive,
   };
 }

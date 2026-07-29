@@ -15,6 +15,7 @@ export type {
   RAGConfig,
   AgentsMdConfig,
   AgentsMdEnforcePolicy,
+  SubagentsConfig,
 } from '../../shared/types/ipc-boundary';
 export { modelSelectionSchema, type ModelSelection } from '../../shared/types/provider';
 
@@ -86,6 +87,28 @@ export const agentsMdConfigSchema = z.object({
   include_local: z.boolean().default(false),
 });
 
+/**
+ * Subagent live-event batching, admission, retention, and prompt-context
+ * settings. Mirrors the `rag`/`agents_md` nested objects: per-field defaults,
+ * referenced as `subagents` with an explicit `.default({})` so partial project
+ * overrides deep-merge cleanly. All knobs for the live/durable separation
+ * (batcher, persistence wave, admission, eviction, prompt bounding) are
+ * collected here in one unit to avoid repeated schema churn.
+ */
+export const subagentsConfigSchema = z.object({
+  event_max_per_flush: z.number().int().min(1).max(100_000).default(200),
+  event_byte_budget_kb: z.number().int().min(1).max(65_536).default(64),
+  usage_event_interval_ms: z.number().int().min(0).max(3_600_000).default(1000),
+  hydration_buffer_kb: z.number().int().min(1).max(65_536).default(256),
+  terminal_wave_ms: z.number().int().min(0).max(60_000).default(250),
+  max_active_global: z.number().int().min(1).max(256).default(8),
+  max_active_per_session: z.number().int().min(1).max(256).default(4),
+  max_queued: z.number().int().min(0).max(1024).default(32),
+  terminal_retention: z.number().int().min(0).max(1000).default(25),
+  prompt_recent_terminal: z.number().int().min(0).max(100).default(5),
+  prompt_task_max_chars: z.number().int().min(0).max(100_000).default(200),
+});
+
 // ---------------------------------------------------------------------------
 // Main config schema
 // ---------------------------------------------------------------------------
@@ -147,10 +170,20 @@ export const configSchema = z
     grep_max_results: z.number().int().positive().default(100),
     directory_tree_depth: z.number().int().positive().default(2),
     tool_worker_pool_size: z.number().int().min(0).max(8).default(2),
+    /**
+     * Worker slots reserved for main-agent tool work. Main-agent tasks dispatch
+     * ahead of subagent tasks and keep this many workers guaranteed; the rest
+     * are guaranteed to subagent work, so neither lane can starve the other
+     * (review F-06). Clamped to `[0, tool_worker_pool_size - 1]` by the pool;
+     * a configured 0 floors to 1 so a queued subagent wave cannot starve the
+     * visible main agent.
+     */
+    tool_worker_pool_main_agent_reserved: z.number().int().min(0).max(8).default(1),
     theme: z.string().min(1).default('default'),
     personality: z.string().min(1).default('default'),
     rag: ragConfigSchema.default({}),
     agents_md: agentsMdConfigSchema.default({}),
+    subagents: subagentsConfigSchema.default({}),
     ast_max_file_size: z.number().int().positive().default(1_048_576),
     mcp_startup_timeout: z.number().positive().default(60.0),
     mcp_per_server_timeout: z.number().positive().default(10.0),

@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Agent } from '../../src/shared/types/agent';
+import type { Message } from '../../src/shared/types/message';
 import type { StreamEvent } from '../../src/main/llm/orchestrator';
 import type { ProjectRuntime } from '../../src/main/project/runtime';
 
@@ -297,6 +298,47 @@ describe('createSubagentStreamRunner', () => {
     expect(mocks.toolRegistry.filter).toHaveBeenCalledWith(['*']);
     expect(mocks.streamChat).toHaveBeenCalledWith(expect.objectContaining({
       agent: expect.objectContaining({ allowed_tools: ['read_file'] }),
+    }));
+  });
+
+  it('replays the provided history to streamChat on a resumed run (U5)', async () => {
+    const history = [
+      { role: 'user', content: 'first task' },
+      { role: 'assistant', content: 'first answer' },
+      { role: 'user', content: 'follow up' },
+    ] as unknown as Message[];
+
+    await collect(createSubagentStreamRunner()({
+      task: 'follow up',
+      history,
+      agent,
+      selection,
+      abortSignal: new AbortController().signal,
+      agentScopeId: 'scope-history',
+      sessionId: 'session-history',
+      cwd: '/tmp/project',
+      projectRuntime: runtime(),
+    }));
+
+    expect(mocks.streamChat).toHaveBeenCalledWith(expect.objectContaining({
+      messages: history,
+    }));
+  });
+
+  it('sends only [user(task)] to streamChat on the spawn path (no history)', async () => {
+    await collect(createSubagentStreamRunner()({
+      task: 'Inspect the project',
+      agent,
+      selection,
+      abortSignal: new AbortController().signal,
+      agentScopeId: 'scope-spawn-history',
+      sessionId: 'session-spawn-history',
+      cwd: '/tmp/project',
+      projectRuntime: runtime(),
+    }));
+
+    expect(mocks.streamChat).toHaveBeenCalledWith(expect.objectContaining({
+      messages: [{ role: 'user', content: 'Inspect the project' }],
     }));
   });
 });

@@ -39,7 +39,7 @@ export const formatSubagentUsage = formatUsageSummary;
 
 function statusTone(status: SubagentRecord['status']): 'neutral' | 'warning' | 'success' | 'error' | 'info' {
   if (status === 'running') return 'warning';
-  if (status === 'pending') return 'neutral';
+  if (status === 'pending' || status === 'queued') return 'neutral';
   if (status === 'completed') return 'success';
   if (status === 'failed') return 'error';
   return 'info';
@@ -88,7 +88,7 @@ export function SubagentView({ subagents, onBackToChat, openRequest }: SubagentV
   const effectiveSelectedId = hasPendingOpenRequest ? openRequest.id : subagents.selectedId;
   const selected = records.find((record) => record.id === effectiveSelectedId) ?? null;
   const missingSelected = effectiveSelectedId !== null && selected === null;
-  const { running, ended } = subagents.groups;
+  const { queued, running, ended } = subagents.groups;
 
   useEffect(() => {
     if (!subagents.selectedId) setNarrowDetail(false);
@@ -141,7 +141,7 @@ export function SubagentView({ subagents, onBackToChat, openRequest }: SubagentV
       ) : subagents.state.status === 'empty' ? (
         <StateMessage kind="empty" title="No subagents in this session" />
       ) : (
-        <div className="orchid-subagent-view-groups">{renderGroup('Running', running)}{renderGroup('Ended', ended)}</div>
+        <div className="orchid-subagent-view-groups">{renderGroup('Running', running)}{renderGroup('Queued', queued)}{renderGroup('Ended', ended)}</div>
       )}
     </Panel>
   );

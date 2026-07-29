@@ -53,6 +53,41 @@ describe('subagent sidebar grouping', () => {
     expect(groups.other.map((agent) => agent.id)).toEqual(['interrupted-agent']);
   });
 
+  it('keeps queued agents as their own bucket beside running agents', () => {
+    const groups = partitionSubagentsByStatus([
+      subagent('queued-agent', 'queued'),
+      subagent('running-agent', 'running'),
+      subagent('completed-agent', 'completed'),
+    ]);
+
+    expect(groups.running.map((agent) => agent.id)).toEqual(['running-agent']);
+    expect(groups.queued.map((agent) => agent.id)).toEqual(['queued-agent']);
+    expect(groups.other.map((agent) => agent.id)).toEqual(['completed-agent']);
+  });
+
+  it('renders queued rows inline with a queued badge', () => {
+    const html = renderToStaticMarkup(
+      createElement(SubagentsSection, {
+        state: {
+          status: 'ready',
+          subagents: [
+            subagent('queued-agent', 'queued'),
+            subagent('completed-agent', 'completed'),
+          ],
+        },
+        onRefresh: () => {},
+        selectedId: null,
+        onSelect: () => {},
+        getDetail: () => null,
+      }),
+    );
+
+    expect(html.indexOf('queued-agent')).toBeGreaterThanOrEqual(0);
+    expect(html).toContain('>queued<');
+    expect(html.indexOf('queued-agent')).toBeLessThan(html.indexOf('Other agents'));
+    expect(html).not.toContain('completed-agent');
+  });
+
   it('counts only pending and running agents for the section badge', () => {
     expect(countRunningSubagents([
       subagent('completed-agent', 'completed'),

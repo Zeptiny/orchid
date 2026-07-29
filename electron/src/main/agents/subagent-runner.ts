@@ -5,6 +5,7 @@
  * Tests leave the runner unset so spawn/markCompleted stay manual.
  */
 import type { Agent } from '../../shared/types/agent';
+import type { Message } from '../../shared/types/message';
 import type { ReasoningProviderOptions } from '../providers/drivers/types';
 import type { ModelSelection } from '../../shared/types/provider';
 import { streamChat, type StreamEvent } from '../llm/orchestrator';
@@ -33,7 +34,9 @@ const SUBAGENT_FORBIDDEN_TOOLS = new Set([
   'delegate_to_subagent',
   'wait_for_subagent',
   'interrupt_subagents',
+  'close_subagents',
   'answer_subagent',
+  'follow_up_subagent',
 ]);
 
 /**
@@ -67,6 +70,8 @@ function resolveParentSessionCwdFallback(sessionId?: string): string | null {
 export function createSubagentStreamRunner(): SubagentStreamRunner {
   return async function* subagentStream(params: {
     task: string;
+    /** Full chain to replay for a resumed run; absent = spawn path. */
+    history?: Message[];
     agent: Agent;
     selection: ModelSelection | null;
     abortSignal: AbortSignal;
@@ -195,7 +200,8 @@ export function createSubagentStreamRunner(): SubagentStreamRunner {
         console.debug('root AGENTS.md injection failed (non-fatal):', err);
       }
       yield* streamChat({
-        messages: [makeUserMessage(params.task)],
+        // A resumed run replays its full chain; a spawn sends just the task.
+        messages: params.history ?? [makeUserMessage(params.task)],
         agent: agentForRun,
         systemPrompt: fullPrompt,
         context,

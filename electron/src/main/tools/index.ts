@@ -45,7 +45,9 @@ import { buildAskQuestionTool } from './ask-question';
 import { buildDelegateTool } from './subagent/delegate';
 import { buildWaitTool } from './subagent/wait';
 import { buildInterruptTool } from './subagent/interrupt';
+import { buildCloseTool } from './subagent/close';
 import { buildAnswerSubagentTool } from './subagent/answer';
+import { buildFollowUpTool } from './subagent/follow-up';
 import { SubagentManager } from '../agents/manager';
 import { getTierModelSelection } from '../config/loader';
 import { getProviderRuntime } from '../providers';
@@ -267,8 +269,12 @@ function registerBuiltinToolsInto(
   registry.register(wait.definition, wait.handler);
   const interrupt = buildInterruptTool(context.subagentManager);
   registry.register(interrupt.definition, interrupt.handler);
+  const close = buildCloseTool(context.subagentManager);
+  registry.register(close.definition, close.handler);
   const answerSubagent = buildAnswerSubagentTool(context.subagentManager);
   registry.register(answerSubagent.definition, answerSubagent.handler);
+  const followUp = buildFollowUpTool(context.subagentManager);
+  registry.register(followUp.definition, followUp.handler);
 
   const skill = buildSkillTool(context.skills);
   registry.register(skill.definition, skill.handler);

@@ -10,7 +10,7 @@ import { WorkerTaskCancelledError } from '../../src/main/utils/worker-pool';
 
 const workerPoolMock = vi.hoisted(() => ({
   pool: null as {
-    run: ReturnType<typeof vi.fn>;
+    runTask: ReturnType<typeof vi.fn>;
   } | null,
 }));
 
@@ -53,12 +53,24 @@ describe('executeToolCall offloaded cancellation', () => {
     let receivedSignal: AbortSignal | undefined;
     let resolveWorker!: (value: unknown) => void;
     workerPoolMock.pool = {
-      run: vi.fn((_payload: Record<string, unknown>, signal?: AbortSignal) => {
-        receivedSignal = signal;
-        return new Promise((resolve) => {
-          resolveWorker = resolve;
-        });
-      }),
+      runTask: vi.fn(
+        (
+          _payload: Record<string, unknown>,
+          options?: { signal?: AbortSignal },
+        ) => {
+          receivedSignal = options?.signal;
+          const result = new Promise((resolve) => {
+            resolveWorker = resolve;
+          });
+          result.catch(() => undefined);
+          return {
+            taskId: 0,
+            started: Promise.resolve({ queueWaitMs: 0 }),
+            result,
+            timings: null,
+          };
+        },
+      ),
     };
     const parentAbort = new AbortController();
 
@@ -66,7 +78,7 @@ describe('executeToolCall offloaded cancellation', () => {
       cwd: '/tmp/orchid-tool-test-cwd',
       abortSignal: parentAbort.signal,
     });
-    await vi.waitFor(() => expect(workerPoolMock.pool?.run).toHaveBeenCalledOnce());
+    await vi.waitFor(() => expect(workerPoolMock.pool?.runTask).toHaveBeenCalledOnce());
 
     parentAbort.abort();
 
@@ -92,14 +104,26 @@ describe('executeToolCall offloaded cancellation', () => {
       async () => ({ status: 'complete', data: { value: 'inline fallback' } }),
     );
     workerPoolMock.pool = {
-      run: vi.fn((_payload: Record<string, unknown>, signal?: AbortSignal) =>
-        new Promise((_, reject) => {
-          signal?.addEventListener(
-            'abort',
-            () => reject(new WorkerTaskCancelledError()),
-            { once: true },
-          );
-        }),
+      runTask: vi.fn(
+        (
+          _payload: Record<string, unknown>,
+          options?: { signal?: AbortSignal },
+        ) => {
+          const result = new Promise((_, reject) => {
+            options?.signal?.addEventListener(
+              'abort',
+              () => reject(new WorkerTaskCancelledError()),
+              { once: true },
+            );
+          });
+          result.catch(() => undefined);
+          return {
+            taskId: 0,
+            started: Promise.resolve({ queueWaitMs: 0 }),
+            result,
+            timings: null,
+          };
+        },
       ),
     };
 
@@ -111,5 +135,44 @@ describe('executeToolCall offloaded cancellation', () => {
 
     expect(result.canonical.status).toBe('error');
     expect(result.canonical.error?.code).toBe('timeout');
+  });
+
+  it('classifies a cancel-before-start (started rejects) as cancelled, not handler error', async () => {
+    registry.register(
+      {
+        name: 'queued_offload',
+        riskClass: 'read-only',
+        description: 'Offloaded tool cancelled while queued',
+        inputSchema: z.object({}),
+        resultFamily: 'generic',
+        outputDataSchema: genericToolResultDataSchema,
+        category: 'test',
+        offload: true,
+      },
+      async () => ({ status: 'complete', data: { value: 'inline fallback' } }),
+    );
+    // The worker pool rejects `started` when a queued task is cancelled before
+    // a worker picks it up; `result` must also reject so the dispatch await
+    // settles with WorkerTaskCancelledError.
+    workerPoolMock.pool = {
+      runTask: vi.fn(() => {
+        const cancelled = Promise.reject(new WorkerTaskCancelledError());
+        cancelled.catch(() => undefined);
+        return {
+          taskId: 0,
+          started: Promise.reject(new WorkerTaskCancelledError()),
+          result: cancelled,
+          timings: null,
+        };
+      }),
+    };
+
+    const result = await executeToolCall(
+      { ...request, id: 'queued-offload-call', name: 'queued_offload' },
+      registry,
+      { cwd: '/tmp/orchid-tool-test-cwd' },
+    );
+
+    expect(result.canonical.status).toBe('cancelled');
   });
 });

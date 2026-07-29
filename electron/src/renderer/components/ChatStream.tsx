@@ -20,8 +20,7 @@ import {
 } from '../../shared/types/chain';
 import type { Message, Usage } from '../../shared/types/message';
 import { MessageRole, MessageType } from '../../shared/types/message';
-import type { SubagentRecord } from '../../shared/types/subagent';
-import { sumSubagentsUsage, subUsageByParentChain } from '../../shared/usage';
+import { EMPTY_SUBAGENT_USAGE_SUMMARY, type SubagentUsageSummary } from '../../shared/usage';
 import {
   useElapsedSeconds,
   type ChatStatus,
@@ -33,6 +32,7 @@ import {
   isActiveToolStatus,
   isGroupableTool,
 } from '../utils/tool-grouping';
+import type { SubagentTitleRecord } from '../utils/tool-title';
 import { MessageWidget } from './MessageWidget';
 import { ChainFooter } from './ChainFooter';
 import { CollapsedChainStub } from './CollapsedChainStub';
@@ -55,7 +55,7 @@ export const CHAIN_COLLAPSE_THRESHOLD = 20;
 
 /** Live tool arguments belong to the cheap tail, not the committed-history memo. */
 const NO_TOOL_BLOCKS: ToolBlock[] = [];
-const NO_SUBAGENTS: readonly SubagentRecord[] = [];
+const NO_SUBAGENTS: readonly SubagentTitleRecord[] = [];
 const NO_SESSION_CHAINS: readonly Chain[] = [];
 
 interface ChatStreamProps {
@@ -78,10 +78,18 @@ interface ChatStreamProps {
    */
   currentTurnUsage?: Usage | null;
   /**
-   * Subagents for the active session — their chain message usage feeds the
-   * footer `sub:` line (attributed via parentChainIndex when possible).
+   * Low-frequency subagent usage summary — feeds the footer `sub:` line
+   * (attributed via parentChainIndex when possible). This is the only
+   * subagent-derived input to the history memo; its identity changes only
+   * when the underlying usage numbers change.
    */
-  subagents?: readonly SubagentRecord[];
+  subagentUsage?: SubagentUsageSummary;
+  /**
+   * Active-session subagent title records (id/name/type) for tool titles —
+   * wait/interrupt chips resolve subagent names here. Never read by the
+   * history build.
+   */
+  subagents?: readonly SubagentTitleRecord[];
   /** Session chains (same order as storage) for parent_chain_index attribution. */
   sessionChains?: readonly Chain[];
   /** Active session id — used to reset collapse expansion only on session switch. */
@@ -204,6 +212,7 @@ export function ChatStream({
   onRetry,
   usage,
   currentTurnUsage = null,
+  subagentUsage = EMPTY_SUBAGENT_USAGE_SUMMARY,
   subagents = NO_SUBAGENTS,
   sessionChains = NO_SESSION_CHAINS,
   sessionId = null,
@@ -272,7 +281,7 @@ export function ChatStream({
         toolBlocks: historyToolBlocks,
         status,
         liveUsage: historyUsage,
-        subagents,
+        subagentUsage,
         sessionChains,
         interrupted: Boolean(interrupted),
         expandedChainIndexes,
@@ -282,7 +291,7 @@ export function ChatStream({
       historyToolBlocks,
       status,
       historyUsage,
-      subagents,
+      subagentUsage,
       sessionChains,
       interrupted,
       expandedChainIndexes,
@@ -454,7 +463,7 @@ function renderStreamItem(
   item: StreamItem,
   alwaysExpandToolGroups: boolean,
   onExpandChain: (chainIndex: number) => void,
-  subagents: readonly SubagentRecord[],
+  subagents: readonly SubagentTitleRecord[],
 ): ReactNode {
   if (item.kind === 'tool') {
     return <ToolCallBlock key={item.key} block={item.block} subagents={subagents} />;
@@ -575,7 +584,7 @@ function buildHistoryStreamItems(opts: {
   toolBlocks: ToolBlock[];
   status: ChatStatus;
   liveUsage: Usage | null;
-  subagents: readonly SubagentRecord[];
+  subagentUsage: SubagentUsageSummary;
   sessionChains: readonly Chain[];
   interrupted: boolean;
   expandedChainIndexes: ReadonlySet<number>;
@@ -600,7 +609,7 @@ function buildMultiChainHistoryStreamItems(opts: {
   toolBlocks: ToolBlock[];
   status: ChatStatus;
   liveUsage: Usage | null;
-  subagents: readonly SubagentRecord[];
+  subagentUsage: SubagentUsageSummary;
   sessionChains: readonly Chain[];
   interrupted: boolean;
   expandedChainIndexes: ReadonlySet<number>;
@@ -609,14 +618,14 @@ function buildMultiChainHistoryStreamItems(opts: {
     toolBlocks,
     status,
     liveUsage,
-    subagents,
+    subagentUsage,
     sessionChains,
     interrupted,
     expandedChainIndexes,
   } = opts;
 
-  const subByParent = subUsageByParentChain(subagents);
-  const subTotal = sumSubagentsUsage(subagents);
+  const subByParent = subagentUsage.byParentChain;
+  const subTotal = subagentUsage.total;
   const liveStreaming = status === 'streaming';
   const collapseCount = Math.max(
     0,
@@ -850,7 +859,7 @@ function buildLegacyPerUserTurnHistory(opts: {
   toolBlocks: ToolBlock[];
   status: ChatStatus;
   liveUsage: Usage | null;
-  subagents: readonly SubagentRecord[];
+  subagentUsage: SubagentUsageSummary;
   sessionChains: readonly Chain[];
   interrupted: boolean;
   expandedChainIndexes?: ReadonlySet<number>;
@@ -860,14 +869,13 @@ function buildLegacyPerUserTurnHistory(opts: {
     toolBlocks,
     status,
     liveUsage,
-    subagents,
+    subagentUsage,
     sessionChains,
     interrupted,
   } = opts;
 
-  // Precompute subagent usage attribution (parent_chain_index → Usage).
-  const subByParent = subUsageByParentChain(subagents);
-  const subTotal = sumSubagentsUsage(subagents);
+  const subByParent = subagentUsage.byParentChain;
+  const subTotal = subagentUsage.total;
   // Ordered user-turn fingerprints → session chain index (ids often missing on restore).
   const userTurnChainQueue = buildUserTurnChainQueue(sessionChains);
   let userTurnMatchCursor = 0;

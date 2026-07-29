@@ -120,6 +120,38 @@ describe('chat rendering contract (U5)', () => {
       // SESSION_UPDATED can land before CHAT_DONE — suppress live text already in history
       expect(src).toMatch(/suppressLiveMessagesAlreadyInHistory/);
     });
+
+    it('feeds history attribution from the low-frequency usage summary, not records', () => {
+      const src = read('components/ChatStream.tsx');
+      const historyStart = src.indexOf('const history = useMemo');
+      expect(historyStart).toBeGreaterThanOrEqual(0);
+      // Balanced-parenthesis extraction: the first generic `');'` could cut an
+      // inline call short, so scan from the opening paren of `useMemo(` to its
+      // matching close (the dependency-array terminator).
+      const openParen = src.indexOf('(', historyStart);
+      let depth = 0;
+      let end = -1;
+      for (let i = openParen; i < src.length; i += 1) {
+        const ch = src[i];
+        if (ch === '(') depth += 1;
+        else if (ch === ')') {
+          depth -= 1;
+          if (depth === 0) { end = i + 1; break; }
+        }
+      }
+      expect(end).toBeGreaterThan(openParen);
+      const historyMemo = src.slice(historyStart, end);
+      // History memo depends on the usage summary, never the records array
+      expect(historyMemo).toContain('subagentUsage');
+      expect(historyMemo).not.toMatch(/\bsubagents\b/);
+      // History builders consume the summary; record-derived usage computation
+      // moved into the hook's memoized summary
+      expect(src).toMatch(/subagentUsage: SubagentUsageSummary;/);
+      expect(src).not.toMatch(/subUsageByParentChain\(/);
+      expect(src).not.toMatch(/sumSubagentsUsage\(/);
+      // Render path keeps title-only records for wait/interrupt chips
+      expect(src).toMatch(/subagents\?: readonly SubagentTitleRecord\[\]/);
+    });
   });
 
   describe('auto-scroll threshold', () => {

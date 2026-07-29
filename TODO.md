@@ -10,6 +10,7 @@ Internal backlog for Orchid. User-facing summary lives in the [README known limi
 - Interface may prevent some changes while streaming (Such as model and reasoning level) but the command pallete still allows to execute
 - Interrupted subagents are being marked as complete - possibly after starting a new chain it is not preserved? - but only on some places (subagent view is correct, main agent context and main chat/session UI appears to not be)
 - Failed command (red) widgets title have blue left border when expanded and waiting (yellow) have blue left border
+- Is everything being correctly saved and resent bewettn chains? Context usage is decreasing between one chain to another when the user sends a message (Ex: 180K to 100K on session Session 2026-07-29 15:39:49)
 
 ## Agent quality
 

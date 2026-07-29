@@ -163,6 +163,7 @@ type ChatStatePayload = {
 
 const activeAgents = new Map<string, ActiveAgent>();
 const sessionsStarting = new Set<string>();
+const pendingCheckpoints = new Map<string, { timer: ReturnType<typeof setTimeout>; messages: Message[] }>();
 /**
  * Single-flight draft session create per window. Concurrent first sends from
  * draft mode share one in-flight ensure promise so only one session is created.
@@ -191,6 +192,7 @@ function nextAgentGeneration(sessionId: string): number {
 }
 
 function disposeActiveAgent(sessionId: string, active: ActiveAgent): void {
+  cancelPendingCheckpoint(sessionId);
   // Only clear the map slot if we still own it (a newer agent may have replaced us).
   if (activeAgents.get(sessionId) === active) {
     activeAgents.delete(sessionId);
@@ -412,6 +414,48 @@ function attachUsageToLatestAssistant(messages: Message[], usage: Usage): boolea
   return false;
 }
 
+/** Append the current uncommitted live tail to a turn-local message snapshot. */
+function appendLiveTailMessages(
+  messages: Message[],
+  agent: ActiveAgent,
+  context: Pick<AgentContext, 'response' | 'thinking' | 'usage'> | undefined,
+  opts?: { placeholderWhenEmpty?: boolean },
+): void {
+  const partialResponse = context?.response ?? '';
+  const thinking = context?.thinking ?? '';
+  const usage = context?.usage ?? null;
+
+  if (thinking.length > agent.thinkingCommittedLength) {
+    const segment = thinking.slice(agent.thinkingCommittedLength);
+    if (segment.trim()) {
+      messages.push(makeThinkingMessage(
+        segment,
+        textSegmentIdAtOffset(agent, 'thinking', agent.thinkingCommittedLength),
+      ));
+    }
+  }
+
+  const remaining = partialResponse.slice(agent.responseCommittedLength);
+  if (remaining) {
+    messages.push(makeAssistantMessage(
+      remaining,
+      usage,
+      textSegmentIdAtOffset(agent, 'text', agent.responseCommittedLength),
+    ));
+  } else if (opts?.placeholderWhenEmpty && messages.length === 0) {
+    messages.push(makeAssistantMessage(
+      partialResponse,
+      usage,
+      textSegmentIdAtOffset(agent, 'text', agent.responseCommittedLength),
+    ));
+  } else if (usage && !attachUsageToLatestAssistant(messages, usage)) {
+    messages.push({
+      ...makeAssistantMessage('', usage),
+      hidden: true,
+    });
+  }
+}
+
 /**
  * Flush partial stream content into turnMessages (thinking + uncommitted
  * assistant text). Shared by forceAbort, replace-on-send, and error paths.
@@ -419,34 +463,12 @@ function attachUsageToLatestAssistant(messages: Message[], usage: Usage): boolea
 function flushPartialTurnContent(agent: ActiveAgent, context: AgentContext | undefined): void {
   const partialResponse = context?.response ?? '';
   const thinking = context?.thinking ?? '';
-  const usage = (context?.usage as Usage | null) ?? null;
-
-  if (thinking && thinking.length > agent.thinkingCommittedLength) {
-    const seg = thinking.slice(agent.thinkingCommittedLength);
-    if (seg.trim()) {
-      agent.turnMessages.push(makeThinkingMessage(
-        seg,
-        textSegmentIdAtOffset(agent, 'thinking', agent.thinkingCommittedLength),
-      ));
-    }
+  appendLiveTailMessages(agent.turnMessages, agent, context);
+  if (thinking.length > agent.thinkingCommittedLength) {
     agent.thinkingCommittedLength = thinking.length;
   }
-
-  const remaining = partialResponse.slice(agent.responseCommittedLength);
-  if (remaining) {
-    agent.turnMessages.push(makeAssistantMessage(
-      remaining,
-      usage,
-      textSegmentIdAtOffset(agent, 'text', agent.responseCommittedLength),
-    ));
+  if (partialResponse.length > agent.responseCommittedLength) {
     agent.responseCommittedLength = partialResponse.length;
-  } else if (usage) {
-    if (!attachUsageToLatestAssistant(agent.turnMessages, usage)) {
-      agent.turnMessages.push({
-        ...makeAssistantMessage('', usage),
-        hidden: true,
-      });
-    }
   }
 }
 
@@ -912,6 +934,46 @@ function classifyErrorKind(title: string | null | undefined, detail: string): Ch
 function turnMessagesFromAgent(agent: ActiveAgent): Message[] {
   const turnBase = agent.messages.slice(agent.priorMessageCount);
   return [...turnBase, ...agent.turnMessages];
+}
+
+/** Materialize the current live tail without mutating committed turn state. */
+function checkpointMessagesFromAgent(agent: ActiveAgent, context: AgentContext): Message[] {
+  const checkpoint = turnMessagesFromAgent(agent);
+  appendLiveTailMessages(checkpoint, agent, context);
+  return checkpoint;
+}
+
+const CHECKPOINT_DEBOUNCE_MS = 300;
+
+/** Persist one bounded main-turn checkpoint, debounced per session. */
+function checkpointActiveTurn(agent: ActiveAgent, context: AgentContext): void {
+  const sessionId = agent.sessionId;
+  const messages = checkpointMessagesFromAgent(agent, context);
+  const existing = pendingCheckpoints.get(sessionId);
+  if (existing) {
+    existing.messages = messages;
+    return;
+  }
+  const timer = setTimeout(() => {
+    pendingCheckpoints.delete(sessionId);
+    const active = activeAgents.get(sessionId);
+    if (!active || active.finalized) return;
+    try {
+      getSessionManager().updateActiveChainMessages(messages, sessionId);
+    } catch (err) {
+      console.debug('Failed to checkpoint active chat chain (non-fatal):', err);
+    }
+  }, CHECKPOINT_DEBOUNCE_MS);
+  pendingCheckpoints.set(sessionId, { timer, messages });
+}
+
+/** Cancel any pending debounced checkpoint for a session. */
+function cancelPendingCheckpoint(sessionId: string): void {
+  const pending = pendingCheckpoints.get(sessionId);
+  if (pending) {
+    clearTimeout(pending.timer);
+    pendingCheckpoints.delete(sessionId);
+  }
 }
 
 /**
@@ -1634,6 +1696,7 @@ export function registerChatIPC(): void {
             type: 'usage',
             usage: context.usage,
         });
+        checkpointActiveTurn(activeAgent, context);
       }
 
       // Forward tool call streaming events to renderer
@@ -1854,10 +1917,17 @@ export function registerChatIPC(): void {
       if (!sessionId) return null;
       const session = getSessionManager().getSession(sessionId);
       if (!session) return null;
+      const liveAgent = activeAgents.get(sessionId);
+      const live = liveAgent && !liveAgent.finalized
+        ? snapshotForAgent(liveAgent)
+        : null;
       return {
         sessionId,
-        messages: flattenSessionMessages(session),
-        live: getLiveChatSnapshot(sessionId),
+        // The active chain may contain a durable step checkpoint. Keep the
+        // renderer's history base at turn start while `live` supplies the same
+        // tool/text tail, avoiding duplicate bubbles and cumulative usage.
+        messages: liveAgent && live ? [...liveAgent.messages] : flattenSessionMessages(session),
+        live,
       };
     },
   );
@@ -1934,36 +2004,12 @@ export function registerChatIPC(): void {
         const partial = context.response ?? '';
         const thinking = context.thinking ?? '';
         const usage = context.usage ?? null;
-        // Flush reasoning before final text
+        appendLiveTailMessages(existing.turnMessages, existing, context, { placeholderWhenEmpty: true });
         if (thinking.length > existing.thinkingCommittedLength) {
-          const thinkingOffset = existing.thinkingCommittedLength;
-          const thinkSeg = thinking.slice(thinkingOffset);
           existing.thinkingCommittedLength = thinking.length;
-          if (thinkSeg.trim()) {
-            existing.turnMessages.push(makeThinkingMessage(
-              thinkSeg,
-              textSegmentIdAtOffset(existing, 'thinking', thinkingOffset),
-            ));
-          }
         }
-        const remaining = partial.slice(existing.responseCommittedLength);
-        if (remaining || existing.turnMessages.length === 0) {
-          existing.turnMessages.push(
-            makeAssistantMessage(
-              remaining || partial,
-              usage,
-              textSegmentIdAtOffset(existing, 'text', existing.responseCommittedLength),
-            ),
-          );
+        if (partial.length > existing.responseCommittedLength) {
           existing.responseCommittedLength = partial.length;
-        } else if (usage) {
-          const last = existing.turnMessages[existing.turnMessages.length - 1];
-          if (last && last.role === MessageRole.ASSISTANT && last.type === MessageType.TEXT) {
-            existing.turnMessages[existing.turnMessages.length - 1] = {
-              ...last,
-              usage,
-            };
-          }
         }
         // existing.messages already includes the user message for this turn
         const fullHistory = [...existing.messages, ...existing.turnMessages];

@@ -101,6 +101,37 @@ export interface AgentsMdConfig {
   include_local: boolean;
 }
 
+/**
+ * Subagent live-event batching, admission, retention, and prompt-context
+ * settings. See the `subagents` block in the config schema for field defaults.
+ * All knobs are collected here so later units (persistence, admission,
+ * eviction, prompt bounding) do not churn the schema.
+ */
+export interface SubagentsConfig {
+  /** Max delta events delivered in one batched flush across all subagents. */
+  event_max_per_flush: number;
+  /** Soft byte budget (KB) for one batched flush; overflow is deferred. */
+  event_byte_budget_kb: number;
+  /** Min interval (ms) between per-subagent `usage` deltas; 0 emits every one. */
+  usage_event_interval_ms: number;
+  /** Renderer hydration event buffer cap (KB) before revision-floor reseed. */
+  hydration_buffer_kb: number;
+  /** Window (ms) batching near-simultaneous terminal persistence flushes. */
+  terminal_wave_ms: number;
+  /** Max concurrently running subagents across all sessions. */
+  max_active_global: number;
+  /** Max concurrently running subagents within one session. */
+  max_active_per_session: number;
+  /** Max queued (admitted-but-not-started) subagents before rejection. */
+  max_queued: number;
+  /** Bounded count of recent terminal summaries retained after eviction. */
+  terminal_retention: number;
+  /** Recent terminal summaries included in the dynamic system prompt. */
+  prompt_recent_terminal: number;
+  /** Task-text cap (chars) for terminal summaries rendered into the prompt. */
+  prompt_task_max_chars: number;
+}
+
 /** Non-secret notice about provider compatibility state discarded on load. */
 export interface ConfigDiagnostic {
   readonly code: 'legacy-provider-config-reset';
@@ -129,10 +160,16 @@ export interface Config {
   grep_max_results: number;
   directory_tree_depth: number;
   tool_worker_pool_size: number;
+  /**
+   * Worker slots reserved for main-agent tool work so background subagents
+   * cannot starve the visible agent (review F-06). Clamped to the pool size.
+   */
+  tool_worker_pool_main_agent_reserved: number;
   theme: string;
   personality: string;
   rag: RAGConfig;
   agents_md: AgentsMdConfig;
+  subagents: SubagentsConfig;
   ast_max_file_size: number;
   mcp_startup_timeout: number;
   mcp_per_server_timeout: number;

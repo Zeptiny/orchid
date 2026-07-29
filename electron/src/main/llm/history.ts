@@ -18,6 +18,44 @@
 import type { Message, ApiMessage } from '../../shared/types/message';
 import { MessageType, MessageRole, messageToApiFormat } from '../../shared/types/message';
 
+function isReplayableToolCallMessage(message: Message): boolean {
+  return message.role === MessageRole.ASSISTANT &&
+    message.type === MessageType.TOOL_CALL &&
+    !message.hidden &&
+    !message.excludeFromModel &&
+    Boolean(message.tool_calls?.length);
+}
+
+/**
+ * Runtime lifecycle events persist one assistant message per parallel tool
+ * call. Providers require those adjacent calls to be replayed as one assistant
+ * tool-call group followed by all of the group's results.
+ */
+function coalesceConsecutiveToolCallMessages(messages: Message[]): Message[] {
+  const normalized: Message[] = [];
+
+  for (const message of messages) {
+    const previous = normalized.at(-1);
+    if (
+      previous &&
+      isReplayableToolCallMessage(previous) &&
+      isReplayableToolCallMessage(message)
+    ) {
+      normalized[normalized.length - 1] = {
+        ...previous,
+        content: [previous.content, message.content].filter(Boolean).join('\n'),
+        tool_calls: [...(previous.tool_calls ?? []), ...(message.tool_calls ?? [])],
+        tool_call_id: null,
+      };
+      continue;
+    }
+
+    normalized.push(message);
+  }
+
+  return normalized;
+}
+
 /**
  * Convert persisted display history to API history.
  *
@@ -25,6 +63,8 @@ import { MessageType, MessageRole, messageToApiFormat } from '../../shared/types
  * @returns API-shaped messages with pairing invariant enforced
  */
 export function toApiMessages(messages: Message[]): ApiMessage[] {
+  const replayMessages = coalesceConsecutiveToolCallMessages(messages);
+
   // ── Pre-pass: collect tool_call_ids that have a properly-sequenced
   // matching TOOL_RESULT ──
   //
@@ -39,7 +79,7 @@ export function toApiMessages(messages: Message[]): ApiMessage[] {
   const pendingToolCallIds = new Set<string>();
   let pendingToolCallMessage: Message | null = null;
 
-  for (const msg of messages) {
+  for (const msg of replayMessages) {
     // Skip error messages
     if (msg.type === MessageType.ERROR) {
       continue;
@@ -104,7 +144,7 @@ export function toApiMessages(messages: Message[]): ApiMessage[] {
   const apiMessages: ApiMessage[] = [];
   let lastAssistantToolCallIds = new Set<string>();
 
-  for (const msg of messages) {
+  for (const msg of replayMessages) {
     // Skip error messages
     if (msg.type === MessageType.ERROR) {
       continue;
