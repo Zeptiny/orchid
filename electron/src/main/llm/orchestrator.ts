@@ -580,8 +580,23 @@ export async function* streamChat(params: StreamChatParams): AsyncGenerator<Stre
         // Incomplete/invalid JSON — the SDK's `tool-call` path will handle it.
         return;
       }
-      const promise = eagerExecutor.getOrStart(toolCallId, pending.toolName, input);
-      if (!promise) return; // no launcher (provider-executed/unknown) — SDK handles it
+      // Pass the per-attempt combined (user + idle) abort signal so an idle
+      // timeout or turn death aborts the eagerly-running tool, matching the
+      // SDK `execute` path (which derives its per-call signal from the same
+      // combined signal).
+      const promise = eagerExecutor.getOrStart(
+        toolCallId,
+        pending.toolName,
+        input,
+        combinedAbort,
+      );
+      if (!promise) return; // no launcher / invalid input — the SDK path handles it
+      // The eager tool is now running: pause the idle watchdog for its duration
+      // so a quiet model tail can't spuriously abort a legitimately-running tool
+      // (the SDK only pauses idle at model-call-end, which the delta path beats).
+      // The matching resume fires when the run settles, independent of the
+      // seenToolResultIds UI dedup below.
+      pauseIdleForTool();
       eagerStarts.push({
         toolCallId,
         toolName: pending.toolName,
@@ -593,7 +608,12 @@ export async function* streamChat(params: StreamChatParams): AsyncGenerator<Stre
         })
         .catch(() => {
           // executeToolCall resolves to terminal executions rather than rejecting.
-        });
+        })
+        .finally(() => resumeIdleAfterTool());
+    };
+    /** Finalize the currently-streaming tool when an input boundary is reached. */
+    const flushActiveToolInput = (): void => {
+      if (activeToolInputId) finalizeToolInput(activeToolInputId);
     };
     const drainEagerStarts = function* (): Generator<StreamEvent> {
       while (eagerStarts.length > 0) {
@@ -752,7 +772,7 @@ export async function* streamChat(params: StreamChatParams): AsyncGenerator<Stre
 
             case 'finish-step': {
               // Backstop: finalize any tool still pending at step end.
-              if (activeToolInputId) finalizeToolInput(activeToolInputId);
+              flushActiveToolInput();
               yield {
                 type: 'usage',
                 usage: buildStepUsage(
@@ -776,7 +796,7 @@ export async function* streamChat(params: StreamChatParams): AsyncGenerator<Stre
             case 'text-delta': {
               armIdleTimer();
               // Model resumed text after tool inputs → finalize any pending tool.
-              if (activeToolInputId) finalizeToolInput(activeToolInputId);
+              flushActiveToolInput();
               const text =
                 typeof part.text === 'string'
                   ? part.text
@@ -855,9 +875,17 @@ export async function* streamChat(params: StreamChatParams): AsyncGenerator<Stre
                 seenToolCallIds.add(toolCallId);
                 deliveredAny = true;
                 // Start executing now, while the model keeps generating other
-                // tool calls. Provider-executed tools run remotely — skip them.
-                if (part.providerExecuted !== true) {
-                  eagerExecutor.start(toolCallId, toolName, part.input ?? part.args);
+                // tool calls. Skip provider-executed tools (the provider owns
+                // them) and SDK-invalid calls (the SDK will emit tool-input-error;
+                // running them eagerly would commit a handler the model is told
+                // failed).
+                if (part.providerExecuted !== true && part.invalid !== true) {
+                  eagerExecutor.start(
+                    toolCallId,
+                    toolName,
+                    part.input ?? part.args,
+                    combinedAbort,
+                  );
                 }
                 yield { type: 'tool_call', toolCallId, toolName, args };
               }
@@ -868,6 +896,10 @@ export async function* streamChat(params: StreamChatParams): AsyncGenerator<Stre
             case 'tool-result': {
               resumeIdleAfterTool();
               const toolCallId = streamToolCallId(part);
+              // The SDK has the result, so the execute shim has run and will not
+              // run again for this id — release the in-flight memo (bounds the
+              // map to genuinely in-flight tools).
+              if (toolCallId) eagerExecutor.forget(toolCallId);
               const raw = part.output ?? part.result ?? '';
               const toolName = toInternalToolName(
                 typeof part.toolName === 'string' ? part.toolName : 'unknown',
@@ -890,6 +922,7 @@ export async function* streamChat(params: StreamChatParams): AsyncGenerator<Stre
             case 'tool-error': {
               resumeIdleAfterTool();
               const toolCallId = streamToolCallId(part);
+              if (toolCallId) eagerExecutor.forget(toolCallId);
               const execution = sdkPreExecutionError(part, mcpManager);
               if (toolCallId && !seenToolResultIds.has(toolCallId)) {
                 seenToolResultIds.add(toolCallId);
@@ -907,6 +940,9 @@ export async function* streamChat(params: StreamChatParams): AsyncGenerator<Stre
               // Args never became valid — no execute, keep/reset idle
               armIdleTimer();
               const toolCallId = streamToolCallId(part);
+              // Release any eager memo (the delta path may have started this tool
+              // before the SDK's validation verdict); the SDK owns the error path.
+              if (toolCallId) eagerExecutor.forget(toolCallId);
               const execution = sdkPreExecutionError(part, mcpManager);
               if (toolCallId) {
                 const toolName = toInternalToolName(
@@ -938,7 +974,7 @@ export async function* streamChat(params: StreamChatParams): AsyncGenerator<Stre
             case 'reasoning-delta':
             case 'reasoning': {
               armIdleTimer();
-              if (activeToolInputId) finalizeToolInput(activeToolInputId);
+              flushActiveToolInput();
               const text =
                 typeof part.text === 'string'
                   ? part.text
@@ -1100,6 +1136,81 @@ export interface BuildToolMapSkillOptions {
   allowedSkills?: readonly string[];
 }
 
+/** Everything needed to wire one tool (registry, skill, or MCP) for eager execution. */
+interface EagerToolWiring {
+  eager?: EagerToolExecutor;
+  /** Internal tool name (MCP names are pre-normalized); keys the launcher/validator. */
+  internalName: string;
+  /** Registry that owns this tool's handler. */
+  registry: ToolRegistry;
+  dispatchOptions: ToolDispatchOptions;
+  /** Zod input schema, used to gate eager execution on valid input. */
+  inputSchema: unknown;
+}
+
+/**
+ * Register a tool's eager launcher and input validator (no-op without `eager`).
+ * The launcher routes through the unchanged `executeToolCall`, overriding only the
+ * abort signal with the per-attempt signal supplied at start time.
+ */
+function registerEagerTool(wiring: EagerToolWiring): void {
+  const { eager, internalName, registry, dispatchOptions, inputSchema } = wiring;
+  if (!eager) return;
+  eager.registerLauncher(internalName, (toolCallId, input, abortSignal) =>
+    executeToolCall(
+      { id: toolCallId, name: internalName, args: input },
+      registry,
+      abortSignal ? { ...dispatchOptions, abortSignal } : dispatchOptions,
+    ),
+  );
+  const schema = inputSchema as { safeParse?: (input: unknown) => { success: boolean } } | undefined;
+  if (typeof schema?.safeParse === 'function') {
+    eager.registerValidator(internalName, (input) => schema.safeParse!(input).success);
+  }
+}
+
+/**
+ * Build the SDK-facing `execute` shim: await the eager run if one was started
+ * (or start it if the shim wins the race), otherwise fall back to a direct
+ * dispatch. Exactly one execution happens either way.
+ */
+function makeEagerExecute(
+  wiring: EagerToolWiring,
+): (
+  args: unknown,
+  executionOptions: { toolCallId: string; abortSignal?: AbortSignal },
+) => Promise<ToolExecutionResult> {
+  const { eager, internalName, registry, dispatchOptions } = wiring;
+  return async (args, executionOptions) => {
+    const opts = withSdkAbortSignal(dispatchOptions, executionOptions.abortSignal);
+    const inflight = eager?.getOrStart(
+      executionOptions.toolCallId,
+      internalName,
+      args,
+      opts.abortSignal,
+    );
+    if (inflight) return inflight;
+    return executeToolCall(
+      { id: executionOptions.toolCallId, name: internalName, args },
+      registry,
+      opts,
+    );
+  };
+}
+
+/** Build the `toModelOutput` mapper from an execution result schema. */
+function makeToModelOutput(outputSchema: {
+  parse: (output: unknown) => unknown;
+}): ({ output }: { output: unknown }) => { type: string; value: string } {
+  return ({ output }: { output: unknown }) => {
+    const execution = outputSchema.parse(output) as ToolExecutionResult;
+    return {
+      type: execution.canonical.status === 'error' ? 'error-text' : 'text',
+      value: execution.agentProjection.content,
+    };
+  };
+}
+
 /**
  * Build a tool map for AI SDK from the registry, filtered by agent's allowed tools.
  *
@@ -1139,40 +1250,20 @@ export function buildToolMap(
     if (!outputSchema) {
       throw new TypeError(`No execution schema registered for tool '${definition.name}'`);
     }
-    eager?.registerLauncher(definition.name, (toolCallId, input) =>
-      executeToolCall(
-        { id: toolCallId, name: definition.name, args: input },
-        registry,
-        dispatchOptions,
-      ),
-    );
+    const wiring: EagerToolWiring = {
+      eager,
+      internalName: definition.name,
+      registry,
+      dispatchOptions,
+      inputSchema: definition.inputSchema,
+    };
+    registerEagerTool(wiring);
     toolMap[definition.name] = {
       description: definition.description,
       inputSchema: definition.inputSchema,
       outputSchema,
-      execute: async (
-        args: unknown,
-        executionOptions: { toolCallId: string; abortSignal?: AbortSignal },
-      ) => {
-        const inflight = eager?.getOrStart(executionOptions.toolCallId, definition.name, args);
-        if (inflight) return inflight;
-        return executeToolCall(
-          {
-            id: executionOptions.toolCallId,
-            name: definition.name,
-            args,
-          },
-          registry,
-          withSdkAbortSignal(dispatchOptions, executionOptions.abortSignal),
-        );
-      },
-      toModelOutput: ({ output }: { output: unknown }) => {
-        const execution = outputSchema.parse(output) as ToolExecutionResult;
-        return {
-          type: execution.canonical.status === 'error' ? 'error-text' : 'text',
-          value: execution.agentProjection.content,
-        };
-      },
+      execute: makeEagerExecute(wiring),
+      toModelOutput: makeToModelOutput(outputSchema),
     };
   }
 
@@ -1190,40 +1281,20 @@ export function buildToolMap(
     if (!outputSchema) {
       throw new TypeError(`No execution schema registered for tool '${definition.name}'`);
     }
-    eager?.registerLauncher(definition.name, (toolCallId, input) =>
-      executeToolCall(
-        { id: toolCallId, name: definition.name, args: input },
-        skillRegistry,
-        dispatchOptions,
-      ),
-    );
+    const skillWiring: EagerToolWiring = {
+      eager,
+      internalName: definition.name,
+      registry: skillRegistry,
+      dispatchOptions,
+      inputSchema: definition.inputSchema,
+    };
+    registerEagerTool(skillWiring);
     toolMap.skill = {
       description: definition.description,
       inputSchema: definition.inputSchema,
       outputSchema,
-      execute: async (
-        args: unknown,
-        executionOptions: { toolCallId: string; abortSignal?: AbortSignal },
-      ) => {
-        const inflight = eager?.getOrStart(executionOptions.toolCallId, definition.name, args);
-        if (inflight) return inflight;
-        return executeToolCall(
-          {
-            id: executionOptions.toolCallId,
-            name: definition.name,
-            args,
-          },
-          skillRegistry,
-          withSdkAbortSignal(dispatchOptions, executionOptions.abortSignal),
-        );
-      },
-      toModelOutput: ({ output }: { output: unknown }) => {
-        const execution = outputSchema.parse(output) as ToolExecutionResult;
-        return {
-          type: execution.canonical.status === 'error' ? 'error-text' : 'text',
-          value: execution.agentProjection.content,
-        };
-      },
+      execute: makeEagerExecute(skillWiring),
+      toModelOutput: makeToModelOutput(outputSchema),
     };
   }
 
@@ -1256,44 +1327,28 @@ export function buildToolMap(
         throw new TypeError(`No execution schema registered for MCP tool '${internalName}'`);
       }
 
-      eager?.registerLauncher(internalName, (toolCallId, input) =>
-        executeToolCall(
-          { id: toolCallId, name: internalName, args: input },
-          dynamicRegistry,
-          dispatchOptions,
-        ),
-      );
+      const mcpWiring: EagerToolWiring = {
+        eager,
+        internalName,
+        registry: dynamicRegistry,
+        dispatchOptions,
+        inputSchema: definition.inputSchema,
+      };
+      registerEagerTool(mcpWiring);
+      const mcpExecute = makeEagerExecute(mcpWiring);
       toolMap[providerName] = {
         description: definition.description,
         inputSchema: definition.rawInputJsonSchema
           ? jsonSchema(definition.rawInputJsonSchema as Parameters<typeof jsonSchema>[0])
           : definition.inputSchema,
         outputSchema,
-        execute: async (
+        execute: (
           args: unknown,
           executionOptions: { toolCallId: string; abortSignal?: AbortSignal } = {
             toolCallId: crypto.randomUUID(),
           },
-        ) => {
-          const inflight = eager?.getOrStart(executionOptions.toolCallId, internalName, args);
-          if (inflight) return inflight;
-          return executeToolCall(
-            {
-              id: executionOptions.toolCallId,
-              name: internalName,
-              args,
-            },
-            dynamicRegistry,
-            withSdkAbortSignal(dispatchOptions, executionOptions.abortSignal),
-          );
-        },
-        toModelOutput: ({ output }: { output: unknown }) => {
-          const execution = outputSchema.parse(output) as ToolExecutionResult;
-          return {
-            type: execution.canonical.status === 'error' ? 'error-text' : 'text',
-            value: execution.agentProjection.content,
-          };
-        },
+        ) => mcpExecute(args, executionOptions),
+        toModelOutput: makeToModelOutput(outputSchema),
       };
     }
   }

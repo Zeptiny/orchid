@@ -19,6 +19,9 @@ import { EagerToolExecutor } from '../../src/main/llm/eager-tool-executor';
 import { ToolRegistry } from '../../src/main/tools/registry';
 import { genericToolResultDataSchema } from '../../src/shared/types/tool-result';
 import type { ToolHandler } from '../../src/main/tools/types';
+import type { MCPManager } from '../../src/main/mcp/manager';
+import type { Skill } from '../../src/shared/types/skill';
+import { sessionPermissionOverrides } from '../../src/main/ipc/permission';
 
 type ExecFn = (
   args: unknown,
@@ -175,5 +178,102 @@ describe('eager tool execution via buildToolMap', () => {
     expect(result.canonical.status).toBe('complete');
     // Exactly one execution — the memoized promise is shared, no double-run.
     expect(handler).toHaveBeenCalledOnce();
+  });
+
+  it('MCP tools: launcher keyed by internal name, execute under the mangled provider name awaits the eager run (KTD-3)', async () => {
+    // mcp::* tools are always-ask; allow via session override so no dialog is needed.
+    const sessionId = `eager-mcp-${Date.now()}`;
+    sessionPermissionOverrides.set(sessionId, 'allow');
+    try {
+      const eager = new EagerToolExecutor();
+      const mcpHandler = vi.fn(async () => ({ status: 'complete' as const, data: { value: 'mcp-ok' } }));
+      const internalName = 'mcp::srv::do_thing';
+      const mcpDefinition = {
+        name: internalName,
+        description: 'mcp test tool',
+        inputSchema: z.object({ x: z.number().optional() }),
+        resultFamily: 'generic',
+        outputDataSchema: genericToolResultDataSchema,
+        category: 'search',
+        riskClass: 'read',
+      };
+      const mcpManager = {
+        getTools: () => [{ definition: mcpDefinition, handler: mcpHandler }],
+      } as unknown as MCPManager;
+
+      const registry = new ToolRegistry();
+      registerTool(registry, 'slow', vi.fn(async () => ({ status: 'complete' as const, data: {} })));
+      const tools = buildToolMap(
+        [internalName],
+        registry,
+        mcpManager,
+        { cwd, timeoutSeconds: 30, sessionId },
+        undefined,
+        eager,
+      );
+
+      // The MCP tool is exposed under a mangled provider name, not the internal name.
+      const providerName = Object.keys(tools).find((k) => k !== 'slow')!;
+      expect(providerName).toBeDefined();
+      expect(providerName).not.toBe(internalName);
+
+      // Eager start uses the INTERNAL name; the execute shim lives under the provider name.
+      eager.start('call-mcp', internalName, { x: 1 });
+      await vi.waitFor(() => expect(mcpHandler).toHaveBeenCalledOnce());
+
+      const result = (await (tools[providerName].execute as unknown as ExecFn)(
+        { x: 1 },
+        { toolCallId: 'call-mcp' },
+      )) as { canonical: { status: string } };
+      expect(result.canonical.status).toBe('complete');
+      // Exactly one execution — the shim awaited the eager run keyed by toolCallId.
+      expect(mcpHandler).toHaveBeenCalledOnce();
+
+      // Fallback: a fresh toolCallId runs the tool normally.
+      const fallback = (await (tools[providerName].execute as unknown as ExecFn)(
+        { x: 2 },
+        { toolCallId: 'mcp-fresh' },
+      )) as { canonical: { status: string } };
+      expect(fallback.canonical.status).toBe('complete');
+      expect(mcpHandler).toHaveBeenCalledTimes(2);
+    } finally {
+      sessionPermissionOverrides.delete(sessionId);
+    }
+  });
+
+  it('skill tool: eager launcher is registered and the execute shim awaits the eager run', async () => {
+    const eager = new EagerToolExecutor();
+    const skill: Skill = {
+      name: 'test-skill',
+      description: 'a test skill',
+      requires: [],
+      resources: [],
+      content: 'test-skill body',
+    };
+    // A dummy 'skill' registry entry so buildToolMap enters the skill-rebuild branch.
+    const registry = new ToolRegistry();
+    registerTool(registry, 'skill', vi.fn(async () => ({ status: 'complete' as const, data: {} })));
+    const tools = buildToolMap(
+      ['skill'],
+      registry,
+      null,
+      { cwd, timeoutSeconds: 30 },
+      { skills: new Map([['test-skill', skill]]) },
+      eager,
+    );
+    expect(tools.skill).toBeDefined();
+
+    // Eagerly start the real skill handler.
+    eager.start('call-skill', 'skill', { name: 'test-skill' });
+    const eagerPromise = eager.getOrStart('call-skill', 'skill', { name: 'test-skill' });
+    expect(eagerPromise).toBeInstanceOf(Promise); // launcher registered for 'skill'
+
+    // The shim must await the eager run: its result is the same resolved object as
+    // the eager promise (a fresh fallback execution would produce a different one).
+    const shimResult = await (tools.skill.execute as unknown as ExecFn)(
+      { name: 'test-skill' },
+      { toolCallId: 'call-skill' },
+    );
+    expect(shimResult).toBe(await eagerPromise);
   });
 });

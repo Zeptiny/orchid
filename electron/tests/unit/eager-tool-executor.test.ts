@@ -35,7 +35,7 @@ describe('EagerToolExecutor', () => {
     const second = executor.getOrStart('call-1', 'read', { file_path: 'a.ts' });
 
     expect(launcher).toHaveBeenCalledOnce();
-    expect(launcher).toHaveBeenCalledWith('call-1', { file_path: 'a.ts' });
+    expect(launcher).toHaveBeenCalledWith('call-1', { file_path: 'a.ts' }, undefined);
     expect(first).toBeInstanceOf(Promise);
     expect(second).toBe(first);
   });
@@ -130,5 +130,60 @@ describe('EagerToolExecutor', () => {
 
     expect(first).not.toHaveBeenCalled();
     expect(second).toHaveBeenCalledOnce();
+  });
+
+  it('validator gate blocks invalid input without invoking the launcher', () => {
+    const executor = new EagerToolExecutor();
+    const launcher = vi.fn().mockResolvedValue(sentinel);
+    executor.registerLauncher('tool', launcher);
+    executor.registerValidator('tool', (input) => (input as { ok?: boolean })?.ok === true);
+
+    expect(executor.getOrStart('call-bad', 'tool', { ok: false })).toBeUndefined();
+    expect(launcher).not.toHaveBeenCalled();
+
+    const good = executor.getOrStart('call-good', 'tool', { ok: true });
+    expect(good).toBeInstanceOf(Promise);
+    expect(launcher).toHaveBeenCalledOnce();
+  });
+
+  it('launches for any input when no validator is registered', () => {
+    const executor = new EagerToolExecutor();
+    const launcher = vi.fn().mockResolvedValue(sentinel);
+    executor.registerLauncher('tool', launcher);
+
+    const result = executor.getOrStart('call-1', 'tool', { anything: 1 });
+
+    expect(result).toBeInstanceOf(Promise);
+    expect(launcher).toHaveBeenCalledOnce();
+  });
+
+  it('forget() releases the memo so the next getOrStart re-executes', () => {
+    const executor = new EagerToolExecutor();
+    const launcher = vi.fn().mockResolvedValue(sentinel);
+    executor.registerLauncher('read', launcher);
+
+    const p1 = executor.getOrStart('call-1', 'read', {});
+    expect(launcher).toHaveBeenCalledOnce();
+
+    executor.forget('call-1');
+
+    const p2 = executor.getOrStart('call-1', 'read', {});
+    expect(launcher).toHaveBeenCalledTimes(2);
+    expect(p2).not.toBe(p1);
+
+    expect(() => executor.forget('never-seen')).not.toThrow();
+  });
+
+  it('threads the abortSignal through to the launcher', () => {
+    const executor = new EagerToolExecutor();
+    const signal = new AbortController().signal;
+    const launcher = vi.fn().mockResolvedValue(sentinel);
+    executor.registerLauncher('tool', launcher);
+
+    executor.getOrStart('call-1', 'tool', { x: 1 }, signal);
+    expect(launcher).toHaveBeenCalledWith('call-1', { x: 1 }, signal);
+
+    executor.start('call-2', 'tool', { x: 2 }, signal);
+    expect(launcher).toHaveBeenCalledWith('call-2', { x: 2 }, signal);
   });
 });

@@ -33,11 +33,17 @@ import type { ToolExecutionResult } from '../../shared/types/tool-result';
 export type EagerToolLauncher = (
   toolCallId: string,
   input: unknown,
+  abortSignal?: AbortSignal,
 ) => Promise<ToolExecutionResult>;
+
+/** Validates a tool's parsed input before eager execution begins. */
+export type EagerToolValidator = (input: unknown) => boolean;
 
 export class EagerToolExecutor {
   /** Launchers keyed by internal tool name (MCP names are pre-normalized). */
   private readonly launchers = new Map<string, EagerToolLauncher>();
+  /** Input validators keyed by internal tool name (optional). */
+  private readonly validators = new Map<string, EagerToolValidator>();
   /** In-flight executions keyed by toolCallId. */
   private readonly inflight = new Map<string, Promise<ToolExecutionResult>>();
 
@@ -46,12 +52,22 @@ export class EagerToolExecutor {
     this.launchers.set(internalToolName, launcher);
   }
 
+  /** Register an input validator for one internal tool name (last wins). */
+  registerValidator(internalToolName: string, validator: EagerToolValidator): void {
+    this.validators.set(internalToolName, validator);
+  }
+
   /**
    * Begin executing a tool call from the stream loop (fire-and-forget). Delegates
    * to `getOrStart`, so a later `execute` shim call awaits the same run.
    */
-  start(toolCallId: string, internalToolName: string, input: unknown): void {
-    this.getOrStart(toolCallId, internalToolName, input);
+  start(
+    toolCallId: string,
+    internalToolName: string,
+    input: unknown,
+    abortSignal?: AbortSignal,
+  ): void {
+    this.getOrStart(toolCallId, internalToolName, input, abortSignal);
   }
 
   /**
@@ -60,27 +76,46 @@ export class EagerToolExecutor {
    * `execute` shim call this, so whichever runs first owns the execution and the
    * other awaits it — guaranteeing exactly one run regardless of their ordering.
    *
-   * Returns `undefined` when no launcher is registered (unknown or
-   * provider-executed tool), signalling the caller to fall back to a direct
-   * `executeToolCall`. Synchronous launcher failures are captured as a rejected
-   * promise so they surface through the SDK's normal error path.
+   * Returns `undefined` (caller falls back to a direct `executeToolCall`) when:
+   * - no launcher is registered (unknown or provider-executed tool), or
+   * - a registered validator rejects the input. The delta path reconstructs input
+   *   before the SDK's validation verdict, so this gate prevents eagerly running a
+   *   handler the SDK will reject with `tool-input-error`.
+   *
+   * Synchronous launcher failures are captured as a rejected promise so they
+   * surface through the SDK's normal error path.
    */
   getOrStart(
     toolCallId: string,
     internalToolName: string,
     input: unknown,
+    abortSignal?: AbortSignal,
   ): Promise<ToolExecutionResult> | undefined {
     const existing = this.inflight.get(toolCallId);
     if (existing) return existing;
     const launcher = this.launchers.get(internalToolName);
     if (!launcher) return undefined;
+    const validator = this.validators.get(internalToolName);
+    if (validator && !validator(input)) return undefined;
     let promise: Promise<ToolExecutionResult>;
     try {
-      promise = launcher(toolCallId, input);
+      promise = launcher(toolCallId, input, abortSignal);
     } catch (error) {
       promise = Promise.reject(error);
     }
     this.inflight.set(toolCallId, promise);
     return promise;
+  }
+
+  /**
+   * Drop the in-flight entry once it is no longer needed. Called after the SDK
+   * emits the tool's output (the `execute` shim has run and will not run again for
+   * this id), bounding the map to genuinely in-flight tools. Deleting earlier
+   * (e.g. on read) would be unsafe: the stream loop and the shim both call
+   * `getOrStart` for the same id, so a deleted entry would be re-created and the
+   * tool would execute twice.
+   */
+  forget(toolCallId: string): void {
+    this.inflight.delete(toolCallId);
   }
 }

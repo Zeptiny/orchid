@@ -265,4 +265,238 @@ describe('eager tool execution through streamChat', () => {
     expect(slowHandler).not.toHaveBeenCalled();
     expect(fastHandler).toHaveBeenCalledOnce();
   });
+
+  function installGatedFakeAiSdk(
+    beforeGate: Array<Record<string, unknown>>,
+    afterGate: Array<Record<string, unknown>>,
+    gate: Promise<void>,
+  ): void {
+    async function* fakeFullStream(): AsyncGenerator<Record<string, unknown>> {
+      for (const part of beforeGate) yield part;
+      await gate;
+      for (const part of afterGate) yield part;
+      yield { type: 'finish-step', usage: {}, finishReason: 'tool-calls' };
+    }
+    const fakeAi = {
+      streamText: vi.fn(() => ({
+        fullStream: fakeFullStream(),
+        finishReason: Promise.resolve('tool-calls'),
+      })),
+      wrapLanguageModel: ({ model }: { model: unknown }) => model,
+      isStepCount: () => () => false,
+    };
+    vi.mocked(importESM).mockResolvedValue(fakeAi as never);
+  }
+
+  it('emits exactly one tool_call and one tool_result when the delta path and the SDK batched signal both fire for the same id', async () => {
+    let releaseGate!: () => void;
+    const gate = new Promise<void>((res) => {
+      releaseGate = res;
+    });
+    installGatedFakeAiSdk(
+      [
+        { type: 'tool-input-start', toolCallId: 'call-A', toolName: 'slow' },
+        { type: 'tool-input-delta', toolCallId: 'call-A', inputTextDelta: '{"x":1}' },
+        // Delta path eager-starts A here.
+        { type: 'tool-input-end', toolCallId: 'call-A' },
+      ],
+      [
+        // The SDK's batched validated signal + result for the SAME id arrive later.
+        { type: 'tool-input-available', toolCallId: 'call-A', toolName: 'slow', input: { x: 1 } },
+        { type: 'tool-output-available', toolCallId: 'call-A', toolName: 'slow', output: {} },
+      ],
+      gate,
+    );
+
+    const registry = new ToolRegistry();
+    registerTool(registry, 'slow', slowHandler);
+
+    const controller = new AbortController();
+    const gen = streamChat({
+      messages: [],
+      agent,
+      systemPrompt: '',
+      context: { cwd },
+      config: defaults(),
+      registry,
+      mcpManager: null,
+      abortSignal: controller.signal,
+      modelInstance: {} as never,
+    });
+
+    const events: StreamEvent[] = [];
+    // Drive until the delta path announces A (tool_call from the eager drain),
+    // then let the SDK batched signal + result through.
+    let sawCallA = false;
+    while (!sawCallA) {
+      const { value, done } = await gen.next();
+      if (done) break;
+      events.push(value);
+      if (value.type === 'tool_call' && id(value) === 'call-A') sawCallA = true;
+    }
+    expect(sawCallA).toBe(true);
+    await vi.waitFor(() => expect(slowHandler).toHaveBeenCalledOnce());
+
+    releaseGate();
+    while (true) {
+      const { value, done } = await gen.next();
+      if (done) break;
+      events.push(value);
+    }
+
+    // Exactly one running + one completed event for A, deduped across both paths.
+    const toolCalls = events.filter((e) => e.type === 'tool_call' && id(e) === 'call-A');
+    const toolResults = events.filter((e) => e.type === 'tool_result' && id(e) === 'call-A');
+    expect(toolCalls).toHaveLength(1);
+    expect(toolResults).toHaveLength(1);
+    // The eager (complete) result won, not the SDK output's generic fallback.
+    const result = toolResults[0] as { execution: { canonical: { status: string } } };
+    expect(result.execution.canonical.status).toBe('complete');
+    // And the handler ran exactly once across both triggers.
+    expect(slowHandler).toHaveBeenCalledOnce();
+  });
+
+  it('cancelling the turn aborts an eagerly-started tool (settles to cancelled)', async () => {
+    let releaseHandler!: () => void;
+    const handlerGate = new Promise<void>((res) => {
+      releaseHandler = res;
+    });
+    let capturedSignal: AbortSignal | undefined;
+    const gatingHandler = vi.fn(async (_args: unknown, ctx: { abortSignal?: AbortSignal }) => {
+      capturedSignal = ctx.abortSignal;
+      await handlerGate;
+      return { status: 'complete' as const, data: { value: 'should-be-cancelled' } };
+    });
+    let releaseModel!: () => void;
+    const modelGate = new Promise<void>((res) => {
+      releaseModel = res;
+    });
+    installGatedFakeAiSdk(
+      [
+        { type: 'tool-input-start', toolCallId: 'call-A', toolName: 'slow' },
+        { type: 'tool-input-delta', toolCallId: 'call-A', inputTextDelta: '{"x":1}' },
+        { type: 'tool-input-end', toolCallId: 'call-A' },
+      ],
+      [],
+      modelGate,
+    );
+
+    const registry = new ToolRegistry();
+    registerTool(registry, 'slow', gatingHandler);
+
+    const controller = new AbortController();
+    const gen = streamChat({
+      messages: [],
+      agent,
+      systemPrompt: '',
+      context: { cwd },
+      config: defaults(),
+      registry,
+      mcpManager: null,
+      abortSignal: controller.signal,
+      modelInstance: {} as never,
+    });
+
+    const events: StreamEvent[] = [];
+    let sawCallA = false;
+    while (!sawCallA) {
+      const { value, done } = await gen.next();
+      if (done) break;
+      events.push(value);
+      if (value.type === 'tool_call' && id(value) === 'call-A') sawCallA = true;
+    }
+    await vi.waitFor(() => expect(gatingHandler).toHaveBeenCalledOnce());
+
+    // The eager execution received an abort signal derived from the turn signal.
+    expect(capturedSignal).toBeDefined();
+    controller.abort();
+    expect(capturedSignal!.aborted).toBe(true);
+
+    // Let the handler unwind; executeToolCall sees the aborted parent → cancelled.
+    releaseHandler();
+    releaseModel();
+    while (true) {
+      const { value, done } = await gen.next();
+      if (done) break;
+      events.push(value);
+    }
+
+    const resultA = events.find(
+      (e) => e.type === 'tool_result' && id(e) === 'call-A',
+    ) as { execution: { canonical: { status: string } } } | undefined;
+    expect(resultA).toBeDefined();
+    expect(resultA!.execution.canonical.status).toBe('cancelled');
+  });
+
+  it('idle watchdog does not abort a legitimately-running delta-path eager tool', async () => {
+    let releaseHandler!: () => void;
+    const handlerGate = new Promise<void>((res) => {
+      releaseHandler = res;
+    });
+    const gatingHandler = vi.fn(async () => {
+      await handlerGate;
+      return { status: 'complete' as const, data: { value: 'ok' } };
+    });
+
+    // Quiet period (300ms) longer than the idle timeout (100ms); a real stream
+    // aborts here if the idle watchdog fires, so this is abort-aware.
+    async function* fakeFullStream(signal?: AbortSignal): AsyncGenerator<Record<string, unknown>> {
+      yield { type: 'tool-input-start', toolCallId: 'call-A', toolName: 'slow' };
+      yield { type: 'tool-input-delta', toolCallId: 'call-A', inputTextDelta: '{"x":1}' };
+      yield { type: 'tool-input-end', toolCallId: 'call-A' };
+      await new Promise<void>((resolve, reject) => {
+        const t = setTimeout(resolve, 300);
+        signal?.addEventListener(
+          'abort',
+          () => {
+            clearTimeout(t);
+            reject(new Error('aborted'));
+          },
+          { once: true },
+        );
+      });
+      yield { type: 'finish-step', usage: {}, finishReason: 'tool-calls' };
+    }
+    const fakeAi = {
+      streamText: vi.fn((opts: { abortSignal?: AbortSignal }) => ({
+        fullStream: fakeFullStream(opts.abortSignal),
+        finishReason: Promise.resolve('tool-calls'),
+      })),
+      wrapLanguageModel: ({ model }: { model: unknown }) => model,
+      isStepCount: () => () => false,
+    };
+    vi.mocked(importESM).mockResolvedValue(fakeAi as never);
+
+    const registry = new ToolRegistry();
+    registerTool(registry, 'slow', gatingHandler);
+
+    const controller = new AbortController();
+    const gen = streamChat({
+      messages: [],
+      agent,
+      systemPrompt: '',
+      context: { cwd },
+      // 0.1s idle timeout; the tool runs (gated) through a 300ms quiet model tail.
+      config: { ...defaults(), llm_stream_idle_timeout: 0.1 },
+      registry,
+      mcpManager: null,
+      abortSignal: controller.signal,
+      modelInstance: {} as never,
+    });
+
+    const events: StreamEvent[] = [];
+    while (true) {
+      const { value, done } = await gen.next();
+      if (done) break;
+      events.push(value);
+    }
+    releaseHandler();
+
+    expect(gatingHandler).toHaveBeenCalledOnce();
+    // The stream completed normally — the idle watchdog did NOT abort the in-flight tool.
+    expect(events.some((e) => e.type === 'finish')).toBe(true);
+    expect(
+      events.some((e) => e.type === 'error' && (e as { title: string }).title === 'Stream idle timeout'),
+    ).toBe(false);
+  });
 });
