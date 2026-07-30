@@ -146,10 +146,6 @@ export function registerConfigIPC(): void {
     return loadConfig({ projectDir: HOME_CONFIG_DIR });
   });
 
-  ipcMain.handle(IPC_CHANNELS.CONFIG_DIAGNOSTICS, async () => {
-    return [];
-  });
-
   // config:list_personalities — home personalities only (~/.orchid/personalities).
   // Project personalities are applied at chat time via ProjectRuntime, not this list.
   ipcMain.handle(IPC_CHANNELS.CONFIG_LIST_PERSONALITIES, async () => {
@@ -258,7 +254,6 @@ export function registerConfigIPC(): void {
 export function unregisterConfigIPC(): void {
   ipcMain.removeHandler(IPC_CHANNELS.CONFIG_GET);
   ipcMain.removeHandler(IPC_CHANNELS.CONFIG_GET_HOME);
-  ipcMain.removeHandler(IPC_CHANNELS.CONFIG_DIAGNOSTICS);
   ipcMain.removeHandler(IPC_CHANNELS.CONFIG_SAVE);
   ipcMain.removeHandler(IPC_CHANNELS.CONFIG_LIST_PERSONALITIES);
   ipcMain.removeHandler(IPC_CHANNELS.CONFIG_READ_PROJECT);

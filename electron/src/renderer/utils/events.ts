@@ -1,9 +1,10 @@
 import type { ModelSelection } from '../../shared/types/provider';
+import type { Config } from '../../shared/types/ipc-boundary';
 
 export interface OrchidEventMap {
   'orchid:open-settings': { tab?: string } | undefined;
   'orchid:set-theme': { theme: string; persist?: boolean };
-  'orchid:config-updated': Record<string, unknown>;
+  'orchid:config-updated': Partial<Config>;
   'orchid:select-session': { id: string };
   'orchid:navigate': { section?: string };
   'orchid:providers-updated': undefined;

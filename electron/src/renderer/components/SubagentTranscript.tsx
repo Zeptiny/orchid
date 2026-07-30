@@ -11,7 +11,8 @@ import type { ToolBlock } from '../hooks/useChat';
 import { useSmartAutoScroll } from '../hooks/useSmartAutoScroll';
 import { foldActivityRuns, isActiveToolStatus, isGroupableTool } from '../utils/tool-grouping';
 import { MessageWidget } from './MessageWidget';
-import { ToolActivityGroup, type ActivityChild } from './ToolActivityGroup';
+import type { ActivityChild } from '../utils/stream-building';
+import { ToolActivityGroup } from './ToolActivityGroup';
 import { ToolCallBlock } from './ToolCallBlock';
 import { Button } from './ui/Button';
 

@@ -7,6 +7,7 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ConfigPatch, ProviderModelOption } from '../../../shared/types/ipc';
+import type { Config } from '../../../shared/types/ipc-boundary';
 import type { ModelSelection } from '../../../shared/types/provider';
 import {
   RECOMMENDED_MCP_SERVERS,
@@ -247,7 +248,7 @@ export function OnboardingScreen({ isOpen, onComplete, onSkip }: OnboardingScree
       }
 
       await window.orchid.config.save({ updates });
-      emitOrchidEvent('orchid:config-updated', updates);
+      emitOrchidEvent('orchid:config-updated', updates as Partial<Config>);
       emitOrchidEvent('orchid:set-theme', { theme, persist: false });
       if (defaultModel) {
         emitOrchidEvent('orchid:provider-selection-created', { selection: defaultModel });

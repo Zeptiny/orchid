@@ -9,20 +9,15 @@
  * Level 2 → expand a tool row for details (existing ToolCallBlock)
  */
 import { useEffect, useId, useMemo, useState } from 'react';
-import type { Message } from '../../shared/types/message';
-import type { ToolBlock } from '../hooks/useChat';
 import { summarizeToolGroup } from '../utils/tool-grouping';
 import type { SubagentTitleRecord } from '../utils/tool-title';
+import type { ActivityChild } from '../utils/stream-building';
 import { Icon } from './Icon';
 import { MessageWidget } from './MessageWidget';
 import { ToolCallBlock } from './ToolCallBlock';
 import { CollapsibleRegion } from './ui/CollapsibleRegion';
 import { Spinner } from './ui/Spinner';
 import { StatusBadge } from './ui/StatusBadge';
-
-export type ActivityChild =
-  | { kind: 'tool'; block: ToolBlock }
-  | { kind: 'thought'; message: Message; isStreaming?: boolean };
 
 export interface ToolActivityGroupProps {
   /** Ordered entries (thoughts + tools) as they appeared in the stream. */

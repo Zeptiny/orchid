@@ -470,7 +470,7 @@ export function ConfigView({ onClose, initialTab = 'general' }: ConfigViewProps)
             window.orchid.config.permissionScopes?.() ?? Promise.resolve(permissionScopes),
           ]);
           setOriginalConfig({ ...fresh, permissions: fresh.permissions });
-          emitOrchidEvent('orchid:config-updated', fresh as unknown as Record<string, unknown>);
+          emitOrchidEvent('orchid:config-updated', fresh);
           if (permissionScopeRequests.current.isCurrent(refreshGeneration) && scopes) {
             setPermissionScopes(scopes);
           }

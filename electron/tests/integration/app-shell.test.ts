@@ -430,6 +430,26 @@ describe('Theme CSS Custom Properties', () => {
     expect(indexCss.toLowerCase()).not.toContain('daisyui');
   });
 
+  it('CSS surface splits exist on disk and are imported by index.css', () => {
+    const stylesDir = path.resolve(__dirname, '../../src/renderer/styles');
+    expect(fs.existsSync(path.join(stylesDir, 'components-chat.css'))).toBe(true);
+    expect(fs.existsSync(path.join(stylesDir, 'components-session.css'))).toBe(true);
+    expect(fs.existsSync(path.join(stylesDir, 'components-config.css'))).toBe(true);
+
+    const indexCss = fs.readFileSync(path.join(stylesDir, 'index.css'), 'utf-8');
+    expect(indexCss).toMatch(/@import\s+["']\.\/components-chat\.css["']/);
+    expect(indexCss).toMatch(/@import\s+["']\.\/components-session\.css["']/);
+    expect(indexCss).toMatch(/@import\s+["']\.\/components-config\.css["']/);
+  });
+
+  it('chat.css is deleted and not imported', () => {
+    const stylesDir = path.resolve(__dirname, '../../src/renderer/styles');
+    expect(fs.existsSync(path.join(stylesDir, 'chat.css'))).toBe(false);
+
+    const indexCss = fs.readFileSync(path.join(stylesDir, 'index.css'), 'utf-8');
+    expect(indexCss).not.toMatch(/@import\s+["']\.\/chat\.css["']/);
+  });
+
   it('preserves existing shell topology entry points', () => {
     const chatView = fs.readFileSync(
       path.resolve(__dirname, '../../src/renderer/components/ChatView.tsx'),

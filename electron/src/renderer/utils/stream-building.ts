@@ -18,7 +18,10 @@ import {
   isActiveToolStatus,
   isGroupableTool,
 } from './tool-grouping';
-import type { ActivityChild } from '../components/ToolActivityGroup';
+
+export type ActivityChild =
+  | { kind: 'tool'; block: ToolBlock }
+  | { kind: 'thought'; message: Message; isStreaming?: boolean };
 
 /** Maximum fully-mounted chains; older ones collapse to stubs. */
 export const CHAIN_COLLAPSE_THRESHOLD = 20;
@@ -170,25 +173,12 @@ export interface HistoryBuildResult {
 /**
  * Build stream items for committed messages (+ idle leftover tools + footers).
  * Independent of streamingContent / streamSegments so it stays stable per token.
- */
-export function buildHistoryStreamItems(opts: {
-  messages: Message[];
-  toolBlocks: ToolBlock[];
-  status: ChatStatus;
-  liveUsage: Usage | null;
-  subagentUsage: SubagentUsageSummary;
-  sessionChains: readonly Chain[];
-  interrupted: boolean;
-  expandedChainIndexes: ReadonlySet<number>;
-}): HistoryBuildResult {
-  return buildMultiChainHistoryStreamItems(opts);
-}
-
-/**
+ *
  * Multi-chain layout: walk each session chain, collapse old ones, and render
  * one footer per chain with model + cumulative usage + sub attribution.
  */
-function buildMultiChainHistoryStreamItems(opts: {
+export function buildHistoryStreamItems(opts: {
+  messages: Message[];
   toolBlocks: ToolBlock[];
   status: ChatStatus;
   liveUsage: Usage | null;
