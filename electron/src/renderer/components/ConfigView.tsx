@@ -90,6 +90,9 @@ const TierModelsTab = lazyWithPreload(() => import('./Preferences/TierModelsTab'
 const SubagentsTab = lazyWithPreload(() => import('./Preferences/SubagentsTab').then((module) => ({
   default: module.SubagentsTab,
 })));
+const AgentsMdTab = lazyWithPreload(() => import('./Preferences/AgentsMdTab').then((module) => ({
+  default: module.AgentsMdTab,
+})));
 
 type TabId =
   | 'general'
@@ -98,6 +101,7 @@ type TabId =
   | 'mcp'
   | 'tier-models'
   | 'rag'
+  | 'agents-md'
   | 'subagents'
   | 'skills'
   | 'agents'
@@ -110,6 +114,7 @@ const TAB_COMPONENTS = {
   mcp: MCPServersTab,
   'tier-models': TierModelsTab,
   rag: RAGTab,
+  'agents-md': AgentsMdTab,
   subagents: SubagentsTab,
   skills: SkillsTab,
   agents: AgentsTab,
@@ -128,6 +133,7 @@ const TABS: TabDef[] = [
   { id: 'mcp', label: 'MCP' },
   { id: 'tier-models', label: 'Tier Models' },
   { id: 'rag', label: 'RAG' },
+  { id: 'agents-md', label: 'AGENTS.md' },
   { id: 'subagents', label: 'Subagents' },
   { id: 'skills', label: 'Skills' },
   { id: 'agents', label: 'Agents' },
@@ -866,6 +872,8 @@ function renderTab(
           bgOutputTailBytes={config.bg_output_tail_bytes}
           readOutputLongPollMax={config.read_output_long_poll_max}
           mcpResultMaxBytes={config.mcp_result_max_bytes}
+          toolWorkerPoolSize={config.tool_worker_pool_size}
+          toolWorkerPoolMainAgentReserved={config.tool_worker_pool_main_agent_reserved}
           onChange={updateDraft}
         />
       );
@@ -910,6 +918,13 @@ function renderTab(
         <RAGTab
           rag={config.rag}
           onChange={(rag) => updateDraft({ rag })}
+        />
+      );
+    case 'agents-md':
+      return (
+        <AgentsMdTab
+          agentsMd={config.agents_md}
+          onChange={(agents_md) => updateDraft({ agents_md })}
         />
       );
     case 'subagents':
