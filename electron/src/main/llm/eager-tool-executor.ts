@@ -2,21 +2,28 @@
  * Eager tool execution coordinator.
  *
  * The AI SDK defers every tool call's `execute` until the model finishes the
- * whole step (`model-call-end`), then runs them via `Promise.all`. This
- * coordinator lets a tool start executing the moment its own input is fully
- * streamed (`tool-input-available`), overlapping execution with the generation
- * of subsequent tool calls in the same step.
+ * whole step (`model-call-end`), then runs them via `Promise.all` — even though
+ * each tool's input is streamed incrementally. This coordinator lets a tool
+ * start executing as soon as its own input is available, overlapping execution
+ * with the generation of subsequent tool calls in the same step.
+ *
+ * Two trigger paths feed the same idempotent memoization:
+ * - Delta reconstruction (primary): the stream loop accumulates
+ *   `tool-input-delta` text and calls `start()` once the input is complete
+ *   (`tool-input-end`, or the next tool / text / step boundary as a backstop).
+ * - `tool-input-available`: the stream loop also calls `start()` on the SDK's
+ *   validated input part. Whichever signal arrives first wins.
  *
  * Mechanism (pre-execution memoization):
  * - `buildToolMap` registers a launcher per internal tool name, bound to the
  *   correct registry and frozen dispatch options.
- * - The stream loop calls `start()` on `tool-input-available`, which invokes the
- *   launcher and stores the in-flight promise keyed by `toolCallId`.
+ * - `start()` is a fire-and-forget wrapper over `getOrStart()`, which invokes
+ *   the launcher and stores the in-flight promise keyed by `toolCallId`.
  * - The tool's SDK `execute` shim calls `getOrStart()` when the SDK reaches
- *   `model-call-end`: it awaits the already-running promise if `start()` won the
- *   race, or starts the execution itself if it runs first. Either way exactly one
- *   execution happens. With no launcher registered it returns `undefined` and the
- *   shim falls back to a normal `executeToolCall`.
+ *   `model-call-end`: it awaits the already-running promise if an earlier
+ *   trigger won the race, or starts the execution itself if it runs first.
+ *   Either way exactly one execution happens. With no launcher registered it
+ *   returns `undefined` and the shim falls back to a normal `executeToolCall`.
  *
  * The coordinator owns no execution logic — `executeToolCall` is unchanged.
  */

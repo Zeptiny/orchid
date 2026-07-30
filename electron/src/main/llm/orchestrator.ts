@@ -551,12 +551,16 @@ export async function* streamChat(params: StreamChatParams): AsyncGenerator<Stre
     const pendingToolResults: PendingToolResult[] = [];
     const seenToolCallIds = new Set<string>();
     const seenToolResultIds = new Set<string>();
-    // Eager execution from streamed tool-input deltas. The AI SDK withholds the
-    // validated `tool-call` part until the step finishes (batched), so we
-    // reconstruct "input complete" ourselves: accumulate `tool-input-delta` text
-    // per tool and launch the tool when `tool-input-end` fires (or when the next
-    // tool / text begins, as a backstop). `eagerExecutor.start` is idempotent, so
-    // the SDK's later batched `tool-call` is a no-op for already-started tools.
+    // Eager execution. The AI SDK emits each tool's input parts
+    // (tool-input-start/delta/end, then the validated tool-input-available)
+    // incrementally as the model streams, but defers actually RUNNING the tool
+    // until model-call-end (Promise.all). To overlap execution with the
+    // generation of subsequent tool calls, we reconstruct "input complete"
+    // ourselves: accumulate tool-input-delta text per tool and launch it when
+    // tool-input-end fires (or when the next tool / text begins, as a backstop).
+    // The tool-input-available case below also eager-starts via the same
+    // idempotent getOrStart, so whichever signal arrives first wins and the
+    // SDK's deferred execute becomes a no-op await for already-started tools.
     const pendingToolInputs = new Map<string, { toolName: string; text: string }>();
     let activeToolInputId: string | null = null;
     // Early UI events for eagerly-started tools, drained into the stream so the

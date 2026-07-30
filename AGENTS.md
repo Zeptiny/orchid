@@ -62,6 +62,7 @@ src/
 │   │   ├── message-factories.ts    # Build AI SDK message objects
 │   │   ├── response-unwrap.ts      # Unwrap provider response shapes
 │   │   ├── tool-dispatch.ts # executeToolCall() — timeout + output offloading
+│   │   ├── eager-tool-executor.ts # EagerToolExecutor — start tools as their input streams
 │   │   ├── model-metadata.ts # Per-model token limits and capabilities
 │   │   └── middleware/      # AI SDK middleware stack
 │   │       ├── index.ts     # createMiddlewareStack() — retry + quirks + throttle
@@ -293,6 +294,7 @@ idle → [USER_INPUT] → streaming → [TOOL_CALL] → toolExecuting → [TOOL_
 - Each main-agent and subagent turn builds a registry from its frozen project runtime; the process singleton remains only for non-turn compatibility surfaces
 - Built-in tools: filesystem, search, process, AST, RAG, todo, web, skill, MCP, subagent
 - MCP tools are merged from the leased project-owned `MCPManager` at stream time; leases keep superseded managers alive until their turns finish
+- **Eager execution** (`llm/eager-tool-executor.ts`, wired in `orchestrator.ts`): a tool starts executing as soon as its input is streamed — reconstructed from `tool-input-start/delta/end` parts because the AI SDK defers `execute` to `model-call-end`. Every launch routes through the unchanged `executeToolCall`, so permission gating, AGENTS.md enforcement, timeouts, and output offloading apply identically; the SDK's deferred `execute` awaits the same memoized promise (exactly-once).
 - Tool results pass through two layers before reaching the LLM:
   1. **Agent projection** (`result.ts`): each tool family has an `AgentProjector` that transforms canonical result data into the LLM-visible XML. Projectors must not truncate — they send full content and rely on the offloading layer for size control.
   2. **Output offloading** (`tool-dispatch.ts`): if the projected content exceeds `tool_output_inline_threshold` (config, default 20 KB) and the tool is not in `TOOLS_WITHOUT_OUTPUT_OFFLOAD` (`provider-quirks.ts`), the content is written to a per-session cache file and replaced with a compact pointer. When no session is active (e.g., subagent context), content is hard-truncated to the threshold with a warning instead.
