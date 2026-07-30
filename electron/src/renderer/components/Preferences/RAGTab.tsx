@@ -14,6 +14,7 @@ import {
   parseConfigNumber,
   type NumericRAGConfigKey,
 } from '../../utils/config-draft';
+import { onOrchidEvent } from '../../utils/events';
 import { isEmbeddingModel } from '../../utils/models';
 import {
   providerModelOptionDisplayName,
@@ -75,11 +76,9 @@ export function RAGTab({ rag, onChange }: RAGTabProps) {
   }, [providers.modelOptions]);
 
   useEffect(() => {
-    const refreshProviders = () => {
+    return onOrchidEvent('orchid:providers-updated', () => {
       void providers.refresh().then(() => providers.ensureModelList());
-    };
-    window.addEventListener('orchid:providers-updated', refreshProviders);
-    return () => window.removeEventListener('orchid:providers-updated', refreshProviders);
+    });
   }, [providers.refresh, providers.ensureModelList]);
 
   const updateField = useCallback(

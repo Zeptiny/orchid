@@ -11,6 +11,7 @@ import {
 import { ChatView } from './components/ChatView';
 import { StateMessage } from './components/ui/StateMessage';
 import { applyTheme, type ThemeName, THEME_NAMES } from './themes';
+import { onOrchidEvent } from './utils/events';
 import type { Config } from '../shared/types/ipc-boundary';
 
 type SettingsTab = 'general' | 'providers' | 'mcp' | 'tier-models' | 'rag' | 'skills' | 'agents' | 'personalities';
@@ -63,15 +64,12 @@ function App() {
     void loadBootstrapConfig();
   }, []);
 
-  // Listen for `orchid:open-settings` event (from /settings and provider gates).
   useEffect(() => {
-    const handleOpenSettings = (event: Event) => {
-      const tab = (event as CustomEvent<{ tab?: SettingsTab }>).detail?.tab;
+    return onOrchidEvent('orchid:open-settings', (detail) => {
+      const tab = detail?.tab as SettingsTab | undefined;
       if (tab) setSettingsTab(tab);
       setConfigOpen(true);
-    };
-    window.addEventListener('orchid:open-settings', handleOpenSettings);
-    return () => window.removeEventListener('orchid:open-settings', handleOpenSettings);
+    });
   }, []);
 
   const setTheme = useCallback(async (name: ThemeName) => {
@@ -87,18 +85,14 @@ function App() {
     }
   }, []);
 
-  // Live theme apply from /theme command (palette or slash menu)
   useEffect(() => {
-    const handleSetTheme = (event: Event) => {
-      const detail = (event as CustomEvent<{ theme?: string; persist?: boolean }>).detail;
-      const name = detail?.theme as ThemeName | undefined;
+    return onOrchidEvent('orchid:set-theme', (detail) => {
+      const name = detail.theme as ThemeName | undefined;
       if (name && THEME_NAMES.includes(name)) {
         if (detail.persist === false) setThemeState(name);
         else void setTheme(name);
       }
-    };
-    window.addEventListener('orchid:set-theme', handleSetTheme);
-    return () => window.removeEventListener('orchid:set-theme', handleSetTheme);
+    });
   }, [setTheme]);
 
   // Let hidden ChatView (InputArea Esc cancel) know settings owns Escape.

@@ -1,8 +1,8 @@
 /** Connection-centered provider settings; all data comes from redacted IPC. */
 import { useState } from 'react';
-import type { ModelSelection } from '../../../shared/types/provider';
 import type { ProviderConnectionView } from '../../../shared/types/ipc';
 import { useProviders } from '../../hooks/useProviders';
+import { emitOrchidEvent } from '../../utils/events';
 import {
   ConnectionWizard,
   type ProviderConnectionCompletion,
@@ -19,10 +19,7 @@ export function ProvidersTab() {
 
   const completeConnection = async (result: ProviderConnectionCompletion) => {
     if (result.selection) {
-      window.dispatchEvent(new CustomEvent<{ selection: ModelSelection }>(
-        'orchid:provider-selection-created',
-        { detail: { selection: result.selection } },
-      ));
+      emitOrchidEvent('orchid:provider-selection-created', { selection: result.selection });
     }
     await providers.refresh();
     setConnectionToEdit(null);

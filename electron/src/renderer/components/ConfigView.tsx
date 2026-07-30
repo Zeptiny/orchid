@@ -33,6 +33,7 @@ import {
   type ConfigSaveStage,
 } from '../utils/config-save';
 import { withMapDeletionTombstones } from '../utils/config-tombstones';
+import { emitOrchidEvent } from '../utils/events';
 import { Keycaps } from './Keycaps';
 import { Alert } from './ui/Alert';
 import { Button } from './ui/Button';
@@ -319,7 +320,7 @@ export function ConfigView({ onClose, initialTab = 'general' }: ConfigViewProps)
   // Refresh when workspace binding changes; drop in-progress definition edits.
   useEffect(() => {
     const unsub = window.orchid?.session?.onWorkspaceChanged?.(() => {
-      window.dispatchEvent(new CustomEvent('orchid:definitions-workspace-changed'));
+      emitOrchidEvent('orchid:definitions-workspace-changed');
       void loadDefinitions({ silent: true });
       void refreshPermissionScopes();
     });
@@ -412,9 +413,7 @@ export function ConfigView({ onClose, initialTab = 'general' }: ConfigViewProps)
               : current);
             setDraft((current) => reconcileConfigDraft(current, ordinaryDraftSnapshot));
             if (typeof ordinaryUpdates.theme === 'string') {
-              window.dispatchEvent(new CustomEvent('orchid:set-theme', {
-                detail: { theme: ordinaryUpdates.theme, persist: false },
-              }));
+              emitOrchidEvent('orchid:set-theme', { theme: ordinaryUpdates.theme, persist: false });
             }
           } else if (stage === 'global permissions' && globalPermissionUpdates) {
             setOriginalConfig((current) => current
@@ -471,9 +470,7 @@ export function ConfigView({ onClose, initialTab = 'general' }: ConfigViewProps)
             window.orchid.config.permissionScopes?.() ?? Promise.resolve(permissionScopes),
           ]);
           setOriginalConfig({ ...fresh, permissions: fresh.permissions });
-          window.dispatchEvent(
-            new CustomEvent('orchid:config-updated', { detail: fresh }),
-          );
+          emitOrchidEvent('orchid:config-updated', fresh as unknown as Record<string, unknown>);
           if (permissionScopeRequests.current.isCurrent(refreshGeneration) && scopes) {
             setPermissionScopes(scopes);
           }
@@ -529,10 +526,7 @@ export function ConfigView({ onClose, initialTab = 'general' }: ConfigViewProps)
 
   const handleSessionSelect = useCallback(
     (id: string) => {
-      // ChatView owns hydrate/affinity; rebind store alone leaves messages stale.
-      window.dispatchEvent(
-        new CustomEvent('orchid:select-session', { detail: { id } }),
-      );
+      emitOrchidEvent('orchid:select-session', { id });
       onClose();
     },
     [onClose],

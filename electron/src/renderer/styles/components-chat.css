@@ -1,0 +1,732 @@
+@layer orchid {
+  .orchid-chat-content-preserved {
+    display: flex;
+    min-height: 0;
+    flex: 1 1 auto;
+    flex-direction: column;
+  }
+
+  .orchid-chat-content-hidden {
+    display: none;
+  }
+
+  .orchid-chat-footer-main {
+    @apply flex min-w-0 flex-1 items-center gap-1.5 overflow-hidden;
+  }
+
+  /* Flat chat stream surfaces (U5) — orchid-* only (legacy dual aliases removed). */
+
+  .orchid-chat-scroll {
+    @apply flex min-h-0 flex-1 flex-col gap-3 overflow-auto;
+    /* Padding enforced in exceptions.css (unlayered) + JSX utilities. */
+  }
+
+  .orchid-chat-scroll > * {
+    flex-shrink: 0;
+  }
+
+  .orchid-chat-empty {
+    @apply flex flex-1 flex-col items-center justify-center text-center;
+    padding: 40px 24px;
+  }
+
+  .orchid-chat-empty-icon {
+    @apply mb-4 flex items-center justify-center leading-none;
+  }
+
+  .orchid-chat-empty-icon img {
+    @apply block opacity-90;
+    width: 96px;
+    height: 96px;
+    object-fit: contain;
+  }
+
+  .orchid-chat-empty-title {
+    @apply mb-2 font-bold text-base-content;
+    font-family: var(--font-display, inherit);
+    font-size: 22px;
+    letter-spacing: -0.015em;
+  }
+
+  .orchid-chat-empty-desc {
+    @apply text-sm leading-normal text-base-content/70;
+    max-width: 360px;
+  }
+
+  /* Tool activity group */
+  .orchid-tool-activity {
+    @apply self-start mb-0.5 w-full max-w-full overflow-hidden;
+    border-radius: 5px;
+    animation: orchid-rise 220ms ease-out;
+  }
+
+  .orchid-tool-activity-title {
+    @apply flex w-full items-center justify-between gap-1.5 border-none bg-transparent text-left text-base-content/70;
+    min-height: 28px;
+    padding: 7px 14px;
+    font-size: 12px;
+    cursor: pointer;
+    border-left: 2px solid color-mix(in srgb, var(--color-secondary) 55%, transparent);
+    border-radius: 0 4px 4px 0;
+    font-family: inherit;
+    line-height: 1.35;
+  }
+
+  .orchid-tool-activity-title:hover {
+    color: var(--color-secondary);
+    background: color-mix(in srgb, var(--color-secondary) 5%, transparent);
+  }
+
+  .orchid-tool-activity-title-left {
+    @apply inline-flex min-w-0 flex-1 items-center gap-1;
+  }
+
+  .orchid-tool-activity-title-text {
+    @apply min-w-0 truncate font-medium;
+  }
+
+  .orchid-tool-activity-title-right {
+    @apply inline-flex shrink-0 items-center gap-1 opacity-75;
+  }
+
+  .orchid-tool-activity.running > .orchid-tool-activity-title {
+    color: var(--color-warning);
+    border-left-color: var(--color-warning);
+  }
+
+  .orchid-tool-activity.failed > .orchid-tool-activity-title {
+    color: var(--color-error);
+    border-left-color: var(--color-error);
+  }
+
+  .orchid-tool-activity-body {
+    padding: 2px 10px 4px 12px;
+  }
+
+  .orchid-tool-activity-children {
+    @apply flex flex-col gap-0.5;
+  }
+
+  .orchid-tool-activity-children .orchid-tool-block,
+  .orchid-tool-activity-children .orchid-thought {
+    margin-bottom: 0;
+  }
+
+  /* Stream error / inline message error */
+  .orchid-error-slot {
+    @apply self-center mb-1 w-full;
+    max-width: min(90%, 600px);
+  }
+
+  .orchid-error-banner {
+    @apply flex items-start gap-2.5 self-center text-xs;
+    max-width: min(90%, 600px);
+    padding: 10px 14px;
+  }
+
+  .orchid-error-title {
+    @apply mb-0.5 font-bold;
+  }
+
+  .orchid-error-message {
+    @apply break-words text-xs leading-snug opacity-90;
+  }
+
+  .orchid-error-body {
+    @apply min-w-0 flex-1;
+  }
+
+  .orchid-error-actions {
+    @apply mt-2 flex flex-wrap items-center gap-1.5;
+  }
+
+  /* Chain footer + collapsed stub */
+  .orchid-chain-footer {
+    @apply flex w-full flex-wrap items-center gap-3 self-start text-base-content/60;
+    padding: 4px 0 2px;
+    margin-top: 4px;
+    font-size: 10px;
+    border-top: 1px solid color-mix(in srgb, var(--color-base-content) 6%, transparent);
+  }
+.orchid-chain-footer-model {
+    @apply font-medium text-base-content/75;
+  }
+
+  .orchid-collapsed-chain {
+    @apply flex w-full cursor-pointer items-center gap-1.5 text-left text-xs text-base-content/70;
+    margin: 6px 0;
+    padding: 6px 10px;
+    border: 1px dashed color-mix(in srgb, var(--color-base-content) 14%, transparent);
+    border-radius: 6px;
+    background: color-mix(in srgb, var(--color-base-content) 3%, transparent);
+  }
+
+  .orchid-collapsed-chain:hover {
+    @apply text-base-content;
+    background: color-mix(in srgb, var(--color-base-content) 6%, transparent);
+  }
+
+  /* ── Composer / footer / discovery (U6) ─────────────────────────────────── */
+
+  .orchid-composer-area {
+    @apply relative flex flex-col shrink-0 bg-base-100;
+    border-top: none;
+    padding-inline: 16px;
+    padding-top: 8px;
+  }
+
+  .orchid-composer-gate {
+    @apply mb-1.5 flex items-center justify-between gap-2 rounded-md px-2.5 py-1.5 text-xs;
+  }
+
+  .orchid-composer {
+    @apply flex min-w-0 flex-col py-1;
+    padding-inline: 0;
+  }
+
+  /* Single field shell: textarea + send button share one border/background.
+     Subtle glassmorphism with refined focus state. */
+  .orchid-composer-shell {
+    @apply flex min-w-0 items-center gap-1.5;
+    border: 1px solid color-mix(in srgb, var(--border-default, var(--color-base-300)) 90%, transparent);
+    border-radius: 0.75rem;
+    background: color-mix(in srgb, var(--input-bg, var(--color-base-200)) 85%, transparent);
+    backdrop-filter: blur(12px) saturate(140%);
+    padding: 4px;
+    min-height: 44px;
+    box-shadow:
+      0 1px 2px color-mix(in srgb, var(--overlay-color) 20%, transparent),
+      inset 0 1px 0 color-mix(in srgb, var(--color-base-content) 3%, transparent);
+    transition:
+      border-color var(--transition-fast, 120ms cubic-bezier(0.4, 0, 0.2, 1)),
+      box-shadow var(--transition-fast, 120ms cubic-bezier(0.4, 0, 0.2, 1)),
+      background-color var(--transition-fast, 120ms cubic-bezier(0.4, 0, 0.2, 1));
+  }
+
+  .orchid-composer-shell:focus-within {
+    border-color: color-mix(in srgb, var(--color-primary) 45%, var(--color-base-300));
+    background: color-mix(in srgb, var(--input-bg, var(--color-base-200)) 92%, transparent);
+    box-shadow:
+      0 0 0 3px color-mix(in srgb, var(--color-primary) 10%, transparent),
+      0 4px 12px color-mix(in srgb, var(--overlay-color) 15%, transparent),
+      inset 0 1px 0 color-mix(in srgb, var(--color-base-content) 4%, transparent);
+  }
+
+  .orchid-composer.streaming .orchid-composer-shell {
+    border-color: color-mix(in srgb, var(--color-base-content) 12%, var(--color-base-300));
+  }
+
+  .orchid-composer .orchid-composer-textarea {
+    @apply min-w-0 flex-1 border-0 bg-transparent shadow-none outline-none;
+    resize: none;
+    align-self: center;
+  }
+
+  .orchid-composer-controls {
+    @apply flex shrink-0 items-center self-center;
+  }
+
+  .orchid-composer-action {
+    @apply shrink-0 rounded-md;
+    min-height: 32px !important;
+    min-width: 32px !important;
+    width: 32px;
+    height: 32px;
+    padding: 0 !important;
+    border-radius: 0.5rem !important;
+  }
+
+  .orchid-composer-model-picker {
+    flex: 0 1 auto;
+    width: auto;
+    max-width: 200px;
+    min-width: 0;
+  }
+
+  .orchid-composer-model-picker .orchid-model-picker-trigger {
+    @apply h-8 min-h-8 w-auto max-w-full border-transparent bg-transparent text-base-content/70;
+    border-radius: 0.5rem;
+    padding: 5px 10px;
+  }
+
+  .orchid-composer-model-picker .orchid-model-picker-trigger:hover:not(:disabled),
+  .orchid-composer-model-picker .orchid-model-picker-trigger:focus-visible {
+    @apply text-base-content;
+    border-color: color-mix(in srgb, var(--color-primary) 20%, var(--color-base-300));
+    background: color-mix(in srgb, var(--color-primary) 10%, transparent);
+  }
+
+  .orchid-slash-menu {
+    @apply z-40 flex max-h-64 flex-col overflow-hidden rounded-lg border border-base-300 bg-base-200 shadow-xl;
+    margin-inline: 0;
+  }
+
+  .orchid-slash-menu-header {
+    @apply flex shrink-0 items-center gap-1.5 border-b border-base-content/10 px-2.5 py-1.5 text-xs uppercase tracking-wide text-base-content/60;
+  }
+
+  /* ── Ask-question stepper (composer overlay) ────────────────────────────── */
+
+  .orchid-ask {
+    @apply flex flex-col overflow-hidden rounded-lg border border-base-300 bg-base-200 text-sm shadow-lg;
+    margin: 2px 0 6px;
+    animation: orchid-rise 240ms cubic-bezier(0.16, 1, 0.3, 1);
+  }
+
+  .orchid-ask-header {
+    @apply flex items-center gap-2 border-b border-base-content/10 px-3 py-2;
+  }
+
+  .orchid-ask-eyebrow {
+    @apply inline-flex min-w-0 items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-primary;
+  }
+
+  .orchid-ask-count {
+    @apply ml-auto shrink-0 text-xs tabular-nums text-base-content/60;
+  }
+
+  .orchid-ask-cancel {
+    @apply shrink-0;
+  }
+
+  .orchid-ask-progress {
+    @apply flex gap-1 px-3 pt-2.5;
+  }
+
+  .orchid-ask-progress-segment {
+    @apply h-1 flex-1 rounded-full bg-base-content/15;
+    transition: background-color 180ms ease;
+  }
+
+  .orchid-ask-progress-done {
+    @apply bg-primary/60;
+  }
+
+  .orchid-ask-progress-current {
+    @apply bg-primary;
+  }
+
+  .orchid-ask-body {
+    @apply flex flex-col gap-2.5 overflow-y-auto px-3 py-3;
+    max-height: 48vh;
+    animation: orchid-rise 200ms ease-out;
+  }
+
+  .orchid-ask-heading {
+    @apply flex items-start justify-between gap-2;
+  }
+
+  .orchid-ask-title {
+    @apply m-0 text-base font-semibold text-base-content;
+    font-family: var(--font-display, inherit);
+  }
+
+  .orchid-ask-description {
+    @apply -mt-1 m-0 text-xs text-base-content/65;
+  }
+
+  .orchid-ask-options {
+    @apply flex flex-col gap-1.5;
+  }
+
+  .orchid-ask-option {
+    @apply flex w-full cursor-pointer items-start gap-2.5 rounded-md border border-base-300 bg-base-100 px-2.5 py-2 text-left;
+    transition:
+      border-color var(--transition-fast, 120ms cubic-bezier(0.4, 0, 0.2, 1)),
+      background-color var(--transition-fast, 120ms cubic-bezier(0.4, 0, 0.2, 1)),
+      transform var(--transition-fast, 120ms cubic-bezier(0.4, 0, 0.2, 1));
+  }
+
+  .orchid-ask-option:hover {
+    border-color: color-mix(in srgb, var(--color-primary) 35%, var(--color-base-300));
+    background: color-mix(in srgb, var(--color-primary) 6%, var(--color-base-100));
+  }
+
+  .orchid-ask-option:focus-visible {
+    outline: 2px solid color-mix(in srgb, var(--color-primary) 55%, transparent);
+    outline-offset: 1px;
+  }
+
+  .orchid-ask-option:active {
+    transform: scale(0.995);
+  }
+
+  .orchid-ask-option-selected {
+    border-color: color-mix(in srgb, var(--color-primary) 55%, var(--color-base-300));
+    background: color-mix(in srgb, var(--color-primary) 10%, var(--color-base-100));
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--color-primary) 35%, transparent);
+  }
+
+  .orchid-ask-option-indicator {
+    @apply mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center border border-base-content/35 bg-base-100 text-primary-content;
+    transition:
+      border-color var(--transition-fast, 120ms cubic-bezier(0.4, 0, 0.2, 1)),
+      background-color var(--transition-fast, 120ms cubic-bezier(0.4, 0, 0.2, 1));
+  }
+
+  .orchid-ask-option-indicator-single {
+    border-radius: 9999px;
+  }
+
+  .orchid-ask-option-indicator-multi {
+    border-radius: 4px;
+  }
+
+  .orchid-ask-option-selected .orchid-ask-option-indicator {
+    border-color: var(--color-primary);
+  }
+
+  .orchid-ask-option-selected .orchid-ask-option-indicator-single::after {
+    content: '';
+    width: 8px;
+    height: 8px;
+    border-radius: 9999px;
+    background: var(--color-primary);
+    animation: orchid-pop 160ms ease-out;
+  }
+
+  .orchid-ask-option-selected .orchid-ask-option-indicator-multi {
+    background: var(--color-primary);
+  }
+
+  .orchid-ask-option-text {
+    @apply flex min-w-0 flex-col;
+  }
+
+  .orchid-ask-option-label {
+    @apply text-sm font-medium text-base-content;
+  }
+
+  .orchid-ask-option-hint {
+    @apply text-xs text-base-content/60;
+  }
+
+  .orchid-ask-note {
+    @apply flex flex-col gap-1;
+  }
+
+  .orchid-ask-note-label {
+    @apply text-xs font-medium text-base-content/70;
+  }
+
+  .orchid-ask-note-input {
+    @apply w-full resize-none rounded-md border border-base-300 bg-base-100 px-2.5 py-2 text-sm text-base-content outline-none;
+    transition:
+      border-color var(--transition-fast, 120ms cubic-bezier(0.4, 0, 0.2, 1)),
+      box-shadow var(--transition-fast, 120ms cubic-bezier(0.4, 0, 0.2, 1));
+  }
+
+  .orchid-ask-note-input:focus {
+    border-color: color-mix(in srgb, var(--color-primary) 45%, var(--color-base-300));
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-primary) 10%, transparent);
+  }
+
+  .orchid-ask-nav {
+    @apply flex items-center justify-between gap-2 border-t border-base-content/10 px-3 py-2;
+  }
+
+  .orchid-ask-nav-start {
+    @apply flex items-center gap-1;
+  }
+
+  /* ── Ask-question terminal summary (chat history) ───────────────────────── */
+
+  .orchid-ask-result {
+    @apply flex min-w-0 flex-col gap-2 text-sm;
+  }
+
+  .orchid-ask-result-cancelled {
+    @apply flex items-center gap-2 text-xs text-base-content/70;
+  }
+
+  .orchid-ask-result-item {
+    @apply flex min-w-0 flex-col gap-1.5 rounded-md border border-base-300/70 bg-base-200/60 px-2.5 py-2;
+  }
+
+  .orchid-ask-result-item-header {
+    @apply flex items-center gap-2;
+  }
+
+  .orchid-ask-result-item-title {
+    @apply text-xs font-semibold uppercase tracking-wide text-base-content/70;
+  }
+
+  .orchid-ask-result-chips {
+    @apply flex flex-wrap gap-1.5;
+  }
+
+  .orchid-ask-result-chip {
+    @apply inline-flex items-center rounded-md px-2 py-0.5 text-xs font-medium;
+    background: color-mix(in srgb, var(--color-primary) 14%, transparent);
+    color: color-mix(in srgb, var(--color-primary) 80%, var(--color-base-content));
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--color-primary) 30%, transparent);
+  }
+
+  .orchid-ask-result-text {
+    @apply m-0 border-l-2 border-base-content/20 pl-2 text-xs text-base-content/80;
+    white-space: pre-wrap;
+  }
+
+  .orchid-ask-result-empty {
+    @apply text-xs text-base-content/50;
+  }
+
+  .orchid-chat-footer {
+    @apply flex shrink-0 items-center justify-between gap-2.5 bg-base-100 text-xs text-base-content/70;
+    min-height: 34px;
+    /* No top border — continuous surface under the unified composer. */
+    border-top: none;
+    margin-inline: 0;
+    padding: 4px 16px 10px;
+  }
+
+  .orchid-footer-context-btn {
+    @apply inline-flex h-7 w-7 shrink-0 items-center justify-center;
+    border: 1px solid transparent;
+    color: color-mix(in srgb, var(--color-base-content) 55%, transparent);
+  }
+
+  .orchid-footer-context-btn:hover,
+  .orchid-footer-context-btn:focus-visible {
+    border-color: color-mix(in srgb, var(--color-base-content) 12%, transparent);
+    background: color-mix(in srgb, var(--color-base-content) 5%, transparent);
+    color: var(--color-base-content);
+  }
+
+  .footer-context-value {
+    @apply tabular-nums tracking-tight;
+    font-size: 7px;
+  }
+
+  .orchid-footer-context-radial {
+    @apply font-semibold leading-none;
+    font-size: 7px !important;
+  }
+
+  /* Soften the radial track slightly inside the dense footer chrome. */
+  .orchid-footer-context-radial.radial-progress {
+    opacity: 0.92;
+  }
+
+  .orchid-footer-context-panel {
+    @apply flex flex-col overflow-hidden rounded-lg border border-base-300 bg-base-200 text-base-content shadow-xl;
+    width: min(300px, 80vw);
+    padding: 0;
+  }
+
+  .footer-context-panel-header {
+    @apply flex shrink-0 flex-col gap-1.5 border-b border-base-content/10;
+    padding: 12px 14px 10px;
+  }
+
+  .footer-context-panel-title {
+    @apply flex items-center gap-1.5 text-xs font-bold uppercase tracking-wide text-base-content/60;
+  }
+
+  .footer-context-panel-meta {
+    @apply flex items-center justify-between gap-2 text-xs;
+  }
+
+  .footer-context-panel-window {
+    @apply text-xs text-base-content/60 opacity-90;
+  }
+
+  .footer-context-panel-body {
+    padding: 10px 12px 12px;
+  }
+
+  .orchid-footer-model-picker {
+    max-width: 180px;
+    min-width: 0;
+  }
+
+  .orchid-footer-model-picker .orchid-model-picker-trigger {
+    @apply h-7 min-h-7 border-transparent bg-transparent text-base-content/70;
+    border-radius: 0.375rem;
+    padding: 4px 8px;
+    font-size: 11px;
+  }
+
+  .orchid-footer-model-picker .orchid-model-picker-trigger:hover:not(:disabled),
+  .orchid-footer-model-picker .orchid-model-picker-trigger:focus-visible {
+    @apply text-base-content;
+    border-color: color-mix(in srgb, var(--color-primary) 25%, var(--color-base-300));
+    background: color-mix(in srgb, var(--color-primary) 12%, transparent);
+  }
+
+  /* ── Permission approval panel (inline composer card) ─────────────────────── */
+
+  .orchid-permission {
+    @apply flex flex-col overflow-hidden rounded-lg border border-base-300 bg-base-200 text-sm shadow-lg;
+    margin: 2px 0 6px;
+    animation: orchid-rise 240ms cubic-bezier(0.16, 1, 0.3, 1);
+  }
+
+  .orchid-permission-header {
+    @apply flex items-start justify-between gap-3 border-b border-base-300 px-4 py-3;
+    background: color-mix(in srgb, var(--color-warning) 9%, var(--color-base-200));
+  }
+
+  .orchid-permission-icon {
+    @apply flex h-9 w-9 shrink-0 items-center justify-center rounded-lg;
+    border: 1px solid color-mix(in srgb, var(--color-warning) 35%, var(--color-base-300));
+    background: color-mix(in srgb, var(--color-warning) 15%, var(--color-base-100));
+    color: var(--color-warning);
+  }
+
+  .orchid-permission-eyebrow {
+    @apply text-xs font-semibold uppercase tracking-wide text-base-content/60;
+  }
+
+  .orchid-permission-title {
+    @apply m-0 truncate font-mono text-base font-semibold leading-tight text-base-content;
+  }
+
+  .orchid-permission-cwd {
+    @apply truncate font-mono text-xs text-base-content/60;
+  }
+
+  .orchid-permission-body {
+    @apply flex flex-col gap-2.5 overflow-y-auto px-4 py-3;
+    max-height: 40vh;
+  }
+
+  .orchid-permission-section-label {
+    @apply text-xs font-medium text-base-content/60;
+  }
+
+  .orchid-permission-args {
+    @apply m-0 overflow-auto rounded-md border border-base-300 bg-base-100 p-3 font-mono text-xs leading-relaxed text-base-content;
+    max-height: 300px;
+  }
+
+  .orchid-permission-reason {
+    @apply w-full resize-none rounded-md border border-base-300 bg-base-100 px-2.5 py-2 text-sm text-base-content outline-none;
+    transition:
+      border-color var(--transition-fast, 120ms cubic-bezier(0.4, 0, 0.2, 1)),
+      box-shadow var(--transition-fast, 120ms cubic-bezier(0.4, 0, 0.2, 1));
+  }
+
+  .orchid-permission-reason:focus {
+    border-color: color-mix(in srgb, var(--color-error) 45%, var(--color-base-300));
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-error) 10%, transparent);
+  }
+
+  .orchid-permission-footer {
+    @apply flex items-center justify-end gap-2 border-t border-base-300 px-4 py-3;
+  }
+
+  /* ── Iteration 012 mock-aligned components ─────────────────────────────── */
+  /* Colors mirror screens/012-tool-states-interrupt-flow-feather-icons.html  */
+
+  .tool-activity-group-count {
+    opacity: 0.7;
+    font-weight: 500;
+  }
+
+  /* Command toast (slash / palette feedback) */
+  .command-toast {
+    position: absolute;
+    top: 10px;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 60;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    max-width: min(520px, calc(100% - 24px));
+    padding: 8px 12px;
+    border-radius: 8px;
+    border: 1px solid var(--border-default);
+    background: var(--bg-secondary);
+    box-shadow: 0 8px 24px color-mix(in srgb, var(--overlay-color) 40%, transparent);
+    font-size: 12px;
+    color: var(--text-primary);
+    pointer-events: auto;
+  }
+  .command-toast-info {
+    border-color: color-mix(in srgb, var(--accent-info) 45%, var(--border-default));
+  }
+  .command-toast-warning {
+    border-color: color-mix(in srgb, var(--accent-warning) 45%, var(--border-default));
+  }
+  .command-toast-error {
+    border-color: color-mix(in srgb, var(--accent-error) 45%, var(--border-default));
+  }
+  .command-toast-message {
+    min-width: 0;
+    flex: 1;
+    line-height: 1.35;
+  }
+
+  .slash-menu-hint {
+    margin-left: auto;
+    text-transform: none;
+    letter-spacing: 0;
+    font-size: 9px;
+    opacity: 0.75;
+  }
+  .slash-menu-item-icon {
+    flex-shrink: 0;
+    color: var(--text-secondary);
+    opacity: 0.8;
+  }
+  .slash-menu-item-body {
+    min-width: 0;
+    flex: 1;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .slash-menu-item-label {
+    flex-shrink: 0;
+    font-weight: 600;
+    line-height: 1.3;
+  }
+  .slash-menu-item-desc {
+    flex: 1;
+    min-width: 0;
+    font-size: 11px;
+    color: var(--text-secondary);
+    line-height: 1.3;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    text-align: right;
+  }
+
+  .orchid-composer.streaming .orchid-composer-textarea {
+    color: var(--text-secondary);
+  }
+
+  /* ── Chat footer residual overrides ────────────────────────────────────── */
+
+  .orchid-chat-footer-main {
+    gap: 6px;
+  }
+  .chat-footer-hint-label {
+    color: color-mix(in srgb, var(--text-secondary) 92%, transparent);
+    letter-spacing: 0.01em;
+  }
+  .chat-footer-hint-sep {
+    opacity: 0.45;
+    font-size: 9px;
+  }
+  .chat-footer-divider {
+    opacity: 0.28;
+    margin: 0 2px;
+    flex-shrink: 0;
+    user-select: none;
+  }
+  /* Legacy kbd inside footer (streaming status may still use raw kbd) */
+  .orchid-chat-footer .kbd:not(.orchid-keycap) {
+    min-width: 16px;
+    padding: 1px 3px;
+    border: 1px solid var(--border-default);
+    border-bottom-width: 2px;
+    border-radius: 3px;
+    color: var(--text-secondary);
+    font: 9px/1.2 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    background: transparent;
+  }
+}

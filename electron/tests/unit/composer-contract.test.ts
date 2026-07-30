@@ -78,7 +78,7 @@ describe('composer contract (U6)', () => {
       const sidebar = read('components/Sidebar.tsx');
       expect(palette).toMatch(/orchid:navigate/);
       expect(palette).toMatch(/action === 'navigation'/);
-      expect(chatView).toMatch(/addEventListener\('orchid:navigate'/);
+      expect(chatView).toMatch(/onOrchidEvent\('orchid:navigate'/);
       expect(chatView).toMatch(/resolveOrchidNavigate/);
       expect(sidebar).toMatch(/resolveInspectorSectionId|nextForceOpenEpoch/);
       expect(sidebar).toMatch(/forceOpenToken/);
