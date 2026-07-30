@@ -16,6 +16,7 @@ import type {
 } from '../../../shared/types/definitions';
 import type { ModelSelection } from '../../../shared/types/provider';
 import { useProviders } from '../../hooks/useProviders';
+import { onOrchidEvent } from '../../utils/events';
 import { reasoningConfigForSelection } from '../../utils/provider-selection';
 import { Alert } from '../ui/Alert';
 import { Button } from '../ui/Button';
@@ -118,15 +119,12 @@ export function AgentsTab({ data, tierModels, onReload, lockedScope }: AgentsTab
     void providers.ensureModelList();
   }, [providers.ensureModelList]);
 
-  // Cancel open forms when workspace rebinds (project path would otherwise drift).
   useEffect(() => {
-    const clear = () => {
+    return onOrchidEvent('orchid:definitions-workspace-changed', () => {
       setEditingKey(null);
       setIsAdding(false);
       setForm(null);
-    };
-    window.addEventListener('orchid:definitions-workspace-changed', clear);
-    return () => window.removeEventListener('orchid:definitions-workspace-changed', clear);
+    });
   }, []);
 
   const agents = data.agents;

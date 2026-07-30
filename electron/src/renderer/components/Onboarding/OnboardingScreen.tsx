@@ -7,6 +7,7 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ConfigPatch, ProviderModelOption } from '../../../shared/types/ipc';
+import type { Config } from '../../../shared/types/ipc-boundary';
 import type { ModelSelection } from '../../../shared/types/provider';
 import {
   RECOMMENDED_MCP_SERVERS,
@@ -14,6 +15,7 @@ import {
 } from '../../../shared/mcp/recommended-servers';
 import { useProviders } from '../../hooks/useProviders';
 import { useFocusTrap } from '../../keyboard';
+import { emitOrchidEvent } from '../../utils/events';
 import { isEmbeddingModel, isTextGenerationModel } from '../../utils/models';
 import {
   providerModelOptionDisplayName,
@@ -204,9 +206,7 @@ export function OnboardingScreen({ isOpen, onComplete, onSkip }: OnboardingScree
   }, [isOpen, providers.modelOptions, connectionSignature]);
 
   const restoreConfigTheme = useCallback(() => {
-    window.dispatchEvent(new CustomEvent('orchid:set-theme', {
-      detail: { theme: configTheme, persist: false },
-    }));
+    emitOrchidEvent('orchid:set-theme', { theme: configTheme, persist: false });
   }, [configTheme]);
 
   const markCompleteAndClose = useCallback(async (mode: 'skip' | 'finish') => {
@@ -226,9 +226,7 @@ export function OnboardingScreen({ isOpen, onComplete, onSkip }: OnboardingScree
       if (mode === 'skip') {
         restoreConfigTheme();
         await window.orchid.config.save({ updates: { has_completed_onboarding: true } });
-        window.dispatchEvent(new CustomEvent('orchid:config-updated', {
-          detail: { has_completed_onboarding: true },
-        }));
+        emitOrchidEvent('orchid:config-updated', { has_completed_onboarding: true });
         onSkip();
         return;
       }
@@ -250,15 +248,10 @@ export function OnboardingScreen({ isOpen, onComplete, onSkip }: OnboardingScree
       }
 
       await window.orchid.config.save({ updates });
-      window.dispatchEvent(new CustomEvent('orchid:config-updated', { detail: updates }));
-      window.dispatchEvent(new CustomEvent('orchid:set-theme', {
-        detail: { theme, persist: false },
-      }));
+      emitOrchidEvent('orchid:config-updated', updates as Partial<Config>);
+      emitOrchidEvent('orchid:set-theme', { theme, persist: false });
       if (defaultModel) {
-        window.dispatchEvent(new CustomEvent<{ selection: ModelSelection }>(
-          'orchid:provider-selection-created',
-          { detail: { selection: defaultModel } },
-        ));
+        emitOrchidEvent('orchid:provider-selection-created', { selection: defaultModel });
       }
       onComplete();
     } catch (error) {
@@ -299,9 +292,7 @@ export function OnboardingScreen({ isOpen, onComplete, onSkip }: OnboardingScree
 
   const handleThemeChange = useCallback((name: ThemeName) => {
     setTheme(name);
-    window.dispatchEvent(new CustomEvent('orchid:set-theme', {
-      detail: { theme: name, persist: false },
-    }));
+    emitOrchidEvent('orchid:set-theme', { theme: name, persist: false });
   }, []);
 
   const handlePickProject = useCallback(async () => {

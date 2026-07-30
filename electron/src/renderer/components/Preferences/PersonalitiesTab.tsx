@@ -9,6 +9,7 @@ import type {
   DefinitionsListResult,
   ManagedPersonality,
 } from '../../../shared/types/definitions';
+import { onOrchidEvent } from '../../utils/events';
 import { Alert } from '../ui/Alert';
 import { Button } from '../ui/Button';
 import { ConfigCard } from '../ui/ConfigCard';
@@ -59,13 +60,11 @@ export function PersonalitiesTab({ data, onReload, lockedScope }: PersonalitiesT
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
-    const clear = () => {
+    return onOrchidEvent('orchid:definitions-workspace-changed', () => {
       setEditingKey(null);
       setIsAdding(false);
       setForm(null);
-    };
-    window.addEventListener('orchid:definitions-workspace-changed', clear);
-    return () => window.removeEventListener('orchid:definitions-workspace-changed', clear);
+    });
   }, []);
 
   const items = data.personalities;
