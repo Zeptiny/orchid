@@ -11,7 +11,7 @@
  * - Event payloads and critical invoke results are Zod-validated at this boundary
  */
 import { contextBridge, ipcRenderer } from 'electron';
-import type { z } from 'zod';
+import { z } from 'zod';
 import {
   ALLOWED_INVOKE_CHANNELS,
   ALLOWED_EVENT_CHANNELS,
@@ -119,6 +119,7 @@ import {
   chatSessionSnapshotSchema,
   subagentSnapshotSchema,
   subagentEventSchema,
+  subagentDeltaEventSchema,
 } from '../shared/types/ipc-schemas';
 
 // ── Security helpers ─────────────────────────────────────────────────────────
@@ -203,6 +204,60 @@ function onParsed<T>(
   });
 }
 
+/**
+ * SUBAGENTS_EVENT shell: the batch envelope without member payloads, derived
+ * from `subagentEventSchema` so envelope fields can never drift apart. Members
+ * are validated individually by `onSubagentEvent`.
+ */
+const subagentEventShellSchema = subagentEventSchema.extend({
+  events: z.array(z.unknown()),
+});
+
+/** Identify a dropped delta for the warning log without trusting its shape. */
+function describeSubagentDelta(member: unknown, index: number): string {
+  if (typeof member !== 'object' || member === null) return `index ${index}`;
+  const { type, subagentId } = member as { type?: unknown; subagentId?: unknown };
+  const label = typeof type === 'string' ? type : `index ${index}`;
+  return typeof subagentId === 'string' ? `${label} (subagent ${subagentId})` : label;
+}
+
+/**
+ * SUBAGENTS_EVENT subscription with member-level validation. Deltas have no
+ * retry path: one malformed member must not drop co-batched handoffs for other
+ * subagents (a lost terminal leaves the renderer stuck running), so the valid
+ * subset is still delivered and each drop is logged with its type/id. A
+ * malformed shell (e.g. missing sessionId) drops the whole batch as before.
+ */
+function onSubagentEvent(callback: (event: SubagentEvent) => void): () => void {
+  return on(IPC_CHANNELS.SUBAGENTS_EVENT, (...args) => {
+    const shell = subagentEventShellSchema.safeParse(args[0]);
+    if (!shell.success) {
+      console.warn(
+        `[orchid preload] dropped invalid event on '${IPC_CHANNELS.SUBAGENTS_EVENT}':`,
+        shell.error.message,
+      );
+      return;
+    }
+    const events: SubagentEvent['events'] = [];
+    const dropped: string[] = [];
+    shell.data.events.forEach((member, index) => {
+      const parsed = subagentDeltaEventSchema.safeParse(member);
+      if (parsed.success) {
+        events.push(parsed.data as SubagentEvent['events'][number]);
+      } else {
+        dropped.push(describeSubagentDelta(member, index));
+      }
+    });
+    if (dropped.length > 0) {
+      console.warn(
+        `[orchid preload] dropped ${dropped.length} malformed subagent event(s) ` +
+        `on '${IPC_CHANNELS.SUBAGENTS_EVENT}': ${dropped.join(', ')}`,
+      );
+    }
+    callback({ sessionId: shell.data.sessionId, events });
+  });
+}
+
 // ── Build the API surface ────────────────────────────────────────────────────
 
 const orchidAPI: OrchidAPI = {
@@ -253,9 +308,6 @@ const orchidAPI: OrchidAPI = {
   config: {
     get: () =>
       invoke(IPC_CHANNELS.CONFIG_GET),
-
-    diagnostics: () =>
-      invoke(IPC_CHANNELS.CONFIG_DIAGNOSTICS),
 
     save: (updates: ConfigSaveMessage) =>
       invoke(IPC_CHANNELS.CONFIG_SAVE, updates),
@@ -404,7 +456,7 @@ const orchidAPI: OrchidAPI = {
     snapshot: (request: SubagentSnapshotRequest) =>
       invoke<SubagentSnapshot>(IPC_CHANNELS.SUBAGENTS_SNAPSHOT, request),
     onEvent: (callback: (event: SubagentEvent) => void) =>
-      onParsed(IPC_CHANNELS.SUBAGENTS_EVENT, subagentEventSchema, callback),
+      onSubagentEvent(callback),
   },
 
   tool: {

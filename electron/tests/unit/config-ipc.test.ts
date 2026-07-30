@@ -54,7 +54,6 @@ vi.mock('../../src/main/config/loader', () => ({
     mocks.getConfigCalls++;
     return configState;
   }),
-  getConfigDiagnostics: vi.fn(() => []),
     ConfigManager: {
     reset: vi.fn(() => {
       // Simulate cache invalidation: next getConfig() should read from
@@ -74,7 +73,6 @@ vi.mock('../../src/main/config/loader', () => ({
       }
         return configState;
       }),
-      diagnostics: vi.fn(() => []),
   },
   atomicWriteJson: vi.fn((_path: string, data: unknown) => {
     mocks.writtenConfigs.push(JSON.parse(JSON.stringify(data)));
@@ -146,12 +144,6 @@ function getSaveHandler() {
 function getConfigHandler() {
   const handler = mocks.handlers.get(IPC_CHANNELS.CONFIG_GET);
   if (!handler) throw new Error('config:get handler not registered');
-  return handler;
-}
-
-function getDiagnosticsHandler() {
-  const handler = mocks.handlers.get(IPC_CHANNELS.CONFIG_DIAGNOSTICS);
-  if (!handler) throw new Error('config:diagnostics handler not registered');
   return handler;
 }
 
@@ -284,17 +276,6 @@ describe('config:save workspace layer reset', () => {
 });
 
 describe('provider configuration boundary (U1)', () => {
-  it('rejects a nonempty legacy providers update before it writes', async () => {
-    await expect(callSave({
-      providers: {
-        legacy: { base_url: 'https://legacy.example.invalid/v1', models: {} },
-      },
-    })).rejects.toThrow(/legacy provider aliases are no longer accepted/i);
-
-    expect(mocks.writtenConfigs).toHaveLength(0);
-    expect(mocks.getConfigCalls).toBe(0);
-  });
-
   it('rejects the retired providerRenames payload before it writes', async () => {
     await expect(callRawSave({
       updates: { theme: 'should-not-write' },
@@ -305,40 +286,6 @@ describe('provider configuration boundary (U1)', () => {
     expect(mocks.getConfigCalls).toBe(0);
   });
 
-  it('returns no providers or API-key-shaped provider state from config:get', async () => {
-    configState.providers = {
-      legacy: {
-        base_url: 'https://legacy.example.invalid/v1',
-        api_key: 'test-only-not-a-secret',
-      },
-    };
-
-    const result = await getConfigHandler()(null) as Record<string, unknown>;
-
-    expect(result['providers']).toEqual({});
-    expect(result).not.toHaveProperty('api_key');
-    expect(JSON.stringify(result)).not.toContain('test-only-not-a-secret');
-  });
-
-  it('exposes only a non-secret legacy reset diagnostic to the renderer', async () => {
-    const loader = await import('../../src/main/config/loader');
-    vi.mocked(loader.getConfigDiagnostics).mockReturnValueOnce([
-      {
-        code: 'legacy-provider-config-reset',
-        message: 'Legacy provider configuration was ignored.',
-      },
-    ]);
-
-    await expect(getDiagnosticsHandler()(null)).resolves.toEqual([
-      {
-        code: 'legacy-provider-config-reset',
-        message: 'Legacy provider configuration was ignored.',
-      },
-    ]);
-    expect(loader.getConfigDiagnostics).toHaveBeenCalledWith({
-      projectDir: '/tmp/orchid-test-home',
-    });
-  });
 });
 
 describe('config:read_project', () => {

@@ -20,7 +20,8 @@ import {
   type AgentContext,
 } from '../../src/main/agents/xstate/agent-machine';
 import { interruptMachine } from '../../src/main/agents/xstate/interrupt-machine';
-import { SubagentManager, SubagentState } from '../../src/main/agents/manager';
+import { SubagentManager } from '../../src/main/agents/manager';
+import { SubagentState } from '../../src/main/agents/types';
 import type { StreamEvent } from '../../src/main/llm/orchestrator';
 import type { Agent } from '../../src/shared/types/agent';
 import { AgentType, AgentTier } from '../../src/shared/types/agent';

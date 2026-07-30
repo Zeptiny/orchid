@@ -5,6 +5,7 @@
  */
 import { z } from 'zod';
 import { contextSnapshotSchema } from './message';
+import { subagentStatusSchema } from './subagent';
 import {
   canonicalToolResultSchema,
   terminalToolResultStatusSchema,
@@ -43,7 +44,6 @@ export const chatThinkingEventSchema = chatEventIdentitySchema.extend({
 
 export const chatStateEventSchema = chatEventIdentitySchema.extend({
   state: z.string(),
-  response: z.string(),
   error: z.string().nullable(),
   interruptState: z.enum(['idle', 'confirmAgent', 'confirmSubagents']),
   cwd: z.string().nullable().optional(),
@@ -229,10 +229,16 @@ export const chatSendResultSchema = z.discriminatedUnion('status', [
 
 export const toolExecuteResultSchema = toolExecutionResultSchema;
 
-export const bgCommandSnapshotResultSchema = z.object({
-  tail: z.string(),
-  exitCode: z.number().nullable(),
-});
+export const bgCommandSnapshotResultSchema = z.discriminatedUnion('found', [
+  z.object({
+    found: z.literal(true),
+    tail: z.string(),
+    exitCode: z.number().nullable(),
+  }),
+  z.object({
+    found: z.literal(false),
+  }),
+]);
 
 export const configSaveResultSchema = z.object({
   status: z.string(),
@@ -294,25 +300,76 @@ const subagentToolSchema = z.object({
 export const subagentLiveProjectionSchema = z.object({
   sessionId: z.string().nullable(), subagentId: z.string(), runId: z.string(),
   sequence: z.number().int().nonnegative(),
-  state: z.enum(['pending', 'running', 'completed', 'failed', 'interrupted']),
+  state: subagentStatusSchema,
   segments: z.array(subagentLiveSegmentSchema), toolCalls: z.array(subagentToolSchema),
   usage: usageSchema.nullable(), result: z.string().nullable(), error: z.string().nullable(),
 });
-export const subagentRecordSchema = z.object({
+export const ipcSubagentRecordSchema = z.object({
   id: z.string(), agent_name: z.string(), agent_type: z.string(), agent_tier: z.string(),
-  task: z.string(), status: z.enum(['pending', 'running', 'completed', 'failed', 'interrupted']),
+  task: z.string(), status: subagentStatusSchema,
   chain_id: z.string(), start_time: z.string(), end_time: z.string().nullable(),
   result: z.string().nullable(), error: z.string().nullable(), parentChainIndex: z.number().int().nullable(),
   reasoning_effort: z.union([z.string(), z.number()]).optional(),
+  closed: z.boolean().default(false),
   chain: z.unknown(),
 });
 export const subagentSnapshotSchema = z.object({
-  sessionId: z.string().uuid(), records: z.array(subagentRecordSchema),
+  sessionId: z.string().uuid(),
+  sessionRevision: z.number().int().nonnegative(),
+  records: z.array(ipcSubagentRecordSchema),
   live: z.array(subagentLiveProjectionSchema),
 });
+
+// ── Subagent live delta events ───────────────────────────────────────────────
+
+const subagentDeltaBaseSchema = z.object({
+  sessionId: z.string().uuid(),
+  subagentId: z.string(),
+  runId: z.string(),
+  sequence: z.number().int().nonnegative(),
+  sessionRevision: z.number().int().nonnegative(),
+});
+export const subagentSpawnedEventSchema = subagentDeltaBaseSchema.extend({
+  type: z.literal('spawned'), record: ipcSubagentRecordSchema, usage: usageSchema.nullable(),
+});
+export const subagentTextDeltaEventSchema = subagentDeltaBaseSchema.extend({
+  type: z.literal('text_delta'), segmentId: z.string(), append: z.string(),
+});
+export const subagentThinkingDeltaEventSchema = subagentDeltaBaseSchema.extend({
+  type: z.literal('thinking_delta'), segmentId: z.string(), append: z.string(),
+});
+export const subagentToolStartEventSchema = subagentDeltaBaseSchema.extend({
+  type: z.literal('tool_start'), segmentId: z.string(), toolCallId: z.string(),
+  toolName: z.string(), status: z.enum(['generating', 'running']),
+  args: z.string(), startedAt: z.string(),
+});
+export const subagentToolArgsDeltaEventSchema = subagentDeltaBaseSchema.extend({
+  type: z.literal('tool_args_delta'), toolCallId: z.string(), append: z.string(),
+});
+export const subagentToolResultEventSchema = subagentDeltaBaseSchema.extend({
+  type: z.literal('tool_result'), toolCallId: z.string(),
+  status: terminalToolResultStatusSchema, content: z.string(),
+  toolResult: canonicalToolResultSchema, finishedAt: z.string(),
+});
+export const subagentUsageEventSchema = subagentDeltaBaseSchema.extend({
+  type: z.literal('usage'), usage: usageSchema,
+});
+export const subagentTerminalEventSchema = subagentDeltaBaseSchema.extend({
+  type: z.literal('terminal'), record: ipcSubagentRecordSchema,
+  state: z.enum(['completed', 'failed', 'interrupted']), usage: usageSchema.nullable(),
+});
+export const subagentDeltaEventSchema = z.discriminatedUnion('type', [
+  subagentSpawnedEventSchema,
+  subagentTextDeltaEventSchema,
+  subagentThinkingDeltaEventSchema,
+  subagentToolStartEventSchema,
+  subagentToolArgsDeltaEventSchema,
+  subagentToolResultEventSchema,
+  subagentUsageEventSchema,
+  subagentTerminalEventSchema,
+]);
+/** Batched SUBAGENTS_EVENT payload — the unit of IPC delivery. */
 export const subagentEventSchema = z.object({
-  sessionId: z.string().uuid(), subagentId: z.string(), runId: z.string(),
-  sequence: z.number().int().positive(), type: z.literal('projection'),
-  projection: subagentLiveProjectionSchema,
-  record: subagentRecordSchema.optional(),
+  sessionId: z.string().uuid(),
+  events: z.array(subagentDeltaEventSchema),
 });

@@ -1,6 +1,5 @@
 /**
- * Config validation — comprehensive validation rules ported from Python
- * `src/orchid/config.py` lines 203–324.
+ * Config validation — cross-field and structural validations.
  *
  * Zod handles type checking and basic constraints (positive int, non-empty
  * string, etc.).  This module handles cross-field and structural validations
@@ -8,7 +7,6 @@
  *
  * - nullable connection-scoped `default_model` / tier selections
  * - tier_models structure (non-empty string keys, typed nullable values)
- * - deprecated provider compatibility map stays empty
  * - mcp_server name format (`[a-z0-9-]+`)
  * - mcp_server entry structure (command, args, env)
  * - rag.chunk_overlap < rag.chunk_size
@@ -74,14 +72,6 @@ export function validateConfig(cfg: Config): string[] {
     rag.chunk_overlap >= rag.chunk_size
   ) {
     errors.push("'rag.chunk_overlap' must be less than 'rag.chunk_size'");
-  }
-
-  // --- Deprecated providers compatibility map ---
-  const providers = cfg.providers as unknown as Record<string, unknown>;
-  if (typeof providers !== 'object' || providers === null) {
-    errors.push("'providers' must be a dict");
-  } else if (Object.keys(providers).length > 0) {
-    errors.push("'providers' is deprecated and must be empty");
   }
 
   // --- mcp_servers ---

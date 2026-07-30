@@ -14,7 +14,7 @@ import {
   type AgentsMdEntry,
 } from '../agents-md/resolver';
 import type { Config } from '../config/schema';
-import { getSessionManager } from '../ipc/session';
+import { getSessionManager } from '../session/singleton';
 import type { ProjectRuntime } from './runtime';
 import type { SessionManager } from '../session/manager';
 

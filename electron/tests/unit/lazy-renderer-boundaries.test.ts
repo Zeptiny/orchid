@@ -41,6 +41,7 @@ describe('lazy renderer boundaries', () => {
       'ProvidersTab',
       'RAGTab',
       'SkillsTab',
+      'SubagentsTab',
       'TierModelsTab',
     ];
 

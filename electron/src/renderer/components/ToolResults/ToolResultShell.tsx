@@ -18,6 +18,16 @@ export interface ToolResultShellProps {
 }
 
 const expansionChoices = new Map<string, boolean>();
+const MAX_EXPANSION_CHOICES = 100;
+
+function rememberExpansionChoice(choiceKey: string, expanded: boolean): void {
+  expansionChoices.delete(choiceKey);
+  if (expansionChoices.size >= MAX_EXPANSION_CHOICES) {
+    const oldestKey = expansionChoices.keys().next().value;
+    if (oldestKey) expansionChoices.delete(oldestKey);
+  }
+  expansionChoices.set(choiceKey, expanded);
+}
 
 export function terminalStatusForBlock(block: ToolBlock): TerminalToolResultStatus | null {
   if (block.status === 'generating' || block.status === 'running') return null;
@@ -85,6 +95,7 @@ export function ToolResultShell({
   // explicit choice is retained through live-to-terminal replacement and
   // hydration; lifecycle updates never change it implicitly.
   const [expanded, setExpanded] = useState(() => expansionChoices.get(choiceKey) ?? false);
+  const [hasExpanded, setHasExpanded] = useState(expanded);
   const [announcement, setAnnouncement] = useState('');
   const active = block.status === 'generating' || block.status === 'running';
 
@@ -92,8 +103,13 @@ export function ToolResultShell({
     setAnnouncement(`${status} tool result`);
   }, [status]);
 
+  useEffect(() => {
+    if (expanded) setHasExpanded(true);
+  }, [expanded]);
+
   const displayTitle = title ?? block.toolName;
   const body = useMemo(() => {
+    if (!expanded && !hasExpanded) return null;
     if (block.status === 'generating') return <div className="orchid-tool-args-stream">streaming args: {block.partialArgs || '{'}</div>;
     if (block.status === 'running') {
       const value = canonical?.data && typeof canonical.data === 'object' && !Array.isArray(canonical.data)
@@ -106,15 +122,15 @@ export function ToolResultShell({
         : <div className="orchid-tool-running-hint">Running…</div>;
     }
     return canonical ? <ResultBody block={block} canonical={canonical} /> : null;
-  }, [block, canonical]);
+  }, [block, canonical, expanded, hasExpanded]);
 
   const toggle = () => {
     const next = !expanded;
-    expansionChoices.set(choiceKey, next);
+    rememberExpansionChoice(choiceKey, next);
     setExpanded(next);
   };
   const collapse = () => {
-    expansionChoices.set(choiceKey, false);
+    rememberExpansionChoice(choiceKey, false);
     setExpanded(false);
   };
 
@@ -142,7 +158,7 @@ export function ToolResultShell({
           />
         </span>
       </button>
-      <CollapsibleRegion open={expanded} id={panelId}>
+      <CollapsibleRegion open={expanded} id={panelId} lazyMount>
         <div
           className="orchid-tool-block-content min-w-0"
           aria-describedby={announcementId}

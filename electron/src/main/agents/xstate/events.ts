@@ -3,8 +3,6 @@
  *
  * Covers all events that flow between session, agent, subagent, and
  * interrupt machines.
- *
- * Ported from Python `src/orchid/agents/manager.py` and `src/orchid/app.py`.
  */
 
 import type { StreamEvent } from '../../llm/orchestrator';

@@ -12,7 +12,6 @@ import {
   type Chain,
   chainToStorageDict,
   chainFromStorageDict,
-  isLegacyMegaChain,
   sumChainUsage,
   chainElapsedSeconds,
 } from '../../src/shared/types/chain';
@@ -470,6 +469,22 @@ describe('Domain Models: SubagentRecord restore migration', () => {
     expect(restored.end_time).toBe(endTime);
   });
 
+  it('QUEUED → INTERRUPTED (queued is runtime-only and never persisted)', () => {
+    const restored = subagentRecordFromStorageDict({
+      id: 'sub-queued',
+      agent_name: 'Explorer',
+      agent_type: 'subagent',
+      status: 'queued',
+      task: 't',
+      start_time: new Date().toISOString(),
+      end_time: null,
+      chain: { messages: [], status: 'active' },
+    });
+
+    expect(restored.status).toBe(SubagentStatus.INTERRUPTED);
+    expect(restored.end_time).not.toBeNull();
+  });
+
   it('COMPLETED status is preserved', () => {
     const now = new Date().toISOString();
     const record: SubagentRecord = {
@@ -494,23 +509,9 @@ describe('Domain Models: SubagentRecord restore migration', () => {
     expect(restored.status).toBe(SubagentStatus.COMPLETED);
     expect(restored.result).toBe('Found 10 files');
     expect(restored.parentChainIndex).toBe(4);
-    expect(dict.parent_chain_index).toBe(4);
+    expect(dict.parentChainIndex).toBe(4);
   });
 
-  it('restores parent_chain_index from Python-shaped storage', () => {
-    const restored = subagentRecordFromStorageDict({
-      id: 'sub-py',
-      agent_name: 'Explorer',
-      agent_type: 'subagent',
-      state: 'completed',
-      task: 't',
-      start_time: new Date().toISOString(),
-      end_time: new Date().toISOString(),
-      parent_chain_index: 2,
-      chain: { messages: [], status: 'completed' },
-    });
-    expect(restored.parentChainIndex).toBe(2);
-  });
 });
 
 // ── Test 4: Todo state machine ──────────────────────────────────────────────
@@ -797,18 +798,7 @@ describe('Domain Models: Tool storage dict', () => {
 // ── Multi-chain helpers ─────────────────────────────────────────────────────
 
 describe('Domain Models: multi-chain helpers', () => {
-  it('migrates Python running/active → INTERRUPTED on restore and serializes FAILED', () => {
-    const restored = chainFromStorageDict({
-      id: 'c1',
-      status: 'running',
-      messages: [],
-      selection: DEFAULT_SELECTION,
-      modelLabel: DEFAULT_SELECTION.modelId,
-    });
-    // ACTIVE cannot survive restore — process is gone (mirrors subagent migration)
-    expect(restored.status).toBe(ChainStatus.INTERRUPTED);
-    expect(restored.endTime).toBeTruthy();
-
+  it('migrates active → INTERRUPTED on restore and serializes FAILED', () => {
     const activeRestored = chainFromStorageDict({
       id: 'c2',
       status: 'active',
@@ -867,26 +857,4 @@ describe('Domain Models: multi-chain helpers', () => {
     });
   });
 
-  it('isLegacyMegaChain detects single chain with multiple user turns', () => {
-    const mega = [
-      makeChain({
-        messages: [
-          makeMessage({ role: MessageRole.USER, content: 'a' }),
-          makeMessage({ role: MessageRole.ASSISTANT, content: 'b' }),
-          makeMessage({ role: MessageRole.USER, content: 'c' }),
-        ],
-      }),
-    ];
-    expect(isLegacyMegaChain(mega)).toBe(true);
-
-    const multi = [
-      makeChain({
-        messages: [makeMessage({ role: MessageRole.USER, content: 'a' })],
-      }),
-      makeChain({
-        messages: [makeMessage({ role: MessageRole.USER, content: 'b' })],
-      }),
-    ];
-    expect(isLegacyMegaChain(multi)).toBe(false);
-  });
 });

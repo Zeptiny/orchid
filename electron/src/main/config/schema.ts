@@ -1,8 +1,5 @@
 /**
  * Config schema — single source of truth for types, defaults, and validation.
- *
- * Fields ported from Python `src/orchid/config.py`, plus Electron-only
- * `default_project_dir` and UI prefs such as `always_expand_tool_groups`.
  */
 import * as path from 'node:path';
 import { z } from 'zod';
@@ -15,6 +12,7 @@ export type {
   RAGConfig,
   AgentsMdConfig,
   AgentsMdEnforcePolicy,
+  SubagentsConfig,
 } from '../../shared/types/ipc-boundary';
 export { modelSelectionSchema, type ModelSelection } from '../../shared/types/provider';
 
@@ -37,20 +35,13 @@ export const ragConfigSchema = z.object({
   embedding_batch_size: z.number().int().min(1).max(256).default(16),
   embedding_api_timeout: z.number().positive().default(30),
   embedding_api_retries: z.number().int().min(0).max(10).default(3),
+  /** Abort a model download that stops making progress. */
+  model_download_inactivity_timeout: z.number().positive().default(30),
+  /** Hard cap for one model-file download, even if bytes continue flowing. */
+  model_download_total_timeout: z.number().positive().default(900),
   /** Optional API embedder, bound to the same connection/model identity as chat. */
   embedding_api_model: modelSelectionSchema.nullable().default(null),
 });
-
-/**
- * Kept solely so existing config IPC consumers can keep reading the field
- * while connections move to their own store. It must never carry a legacy
- * configured provider, endpoint, or credential.
- */
-const deprecatedProvidersSchema = z
-  .record(z.string(), z.record(z.string(), z.unknown()))
-  .refine((providers) => Object.keys(providers).length === 0, {
-    message: 'providers is deprecated and must be empty',
-  });
 
 export const permissionRuleSchema = z.union([
   z.enum(PERMISSION_MODE_VALUES),
@@ -80,6 +71,28 @@ export const agentsMdConfigSchema = z.object({
   enforce_on_write: z.enum(AGENTS_MD_ENFORCE_POLICIES).default('warn'),
   inject_on_read: z.boolean().default(true),
   include_local: z.boolean().default(false),
+});
+
+/**
+ * Subagent live-event batching, admission, retention, and prompt-context
+ * settings. Mirrors the `rag`/`agents_md` nested objects: per-field defaults,
+ * referenced as `subagents` with an explicit `.default({})` so partial project
+ * overrides deep-merge cleanly. All knobs for the live/durable separation
+ * (batcher, persistence wave, admission, eviction, prompt bounding) are
+ * collected here in one unit to avoid repeated schema churn.
+ */
+export const subagentsConfigSchema = z.object({
+  event_max_per_flush: z.number().int().min(1).max(100_000).default(200),
+  event_byte_budget_kb: z.number().int().min(1).max(65_536).default(64),
+  usage_event_interval_ms: z.number().int().min(0).max(3_600_000).default(1000),
+  hydration_buffer_kb: z.number().int().min(1).max(65_536).default(256),
+  terminal_wave_ms: z.number().int().min(0).max(60_000).default(250),
+  max_active_global: z.number().int().min(1).max(256).default(8),
+  max_active_per_session: z.number().int().min(1).max(256).default(4),
+  max_queued: z.number().int().min(0).max(1024).default(32),
+  terminal_retention: z.number().int().min(0).max(1000).default(25),
+  prompt_recent_terminal: z.number().int().min(0).max(100).default(5),
+  prompt_task_max_chars: z.number().int().min(0).max(100_000).default(200),
 });
 
 // ---------------------------------------------------------------------------
@@ -143,23 +156,31 @@ export const configSchema = z
     grep_max_results: z.number().int().positive().default(100),
     directory_tree_depth: z.number().int().positive().default(2),
     tool_worker_pool_size: z.number().int().min(0).max(8).default(2),
+    /**
+     * Worker slots reserved for main-agent tool work. Main-agent tasks dispatch
+     * ahead of subagent tasks and keep this many workers guaranteed; the rest
+     * are guaranteed to subagent work, so neither lane can starve the other
+     * (review F-06). Clamped to `[0, tool_worker_pool_size - 1]` by the pool;
+     * a configured 0 floors to 1 so a queued subagent wave cannot starve the
+     * visible main agent.
+     */
+    tool_worker_pool_main_agent_reserved: z.number().int().min(0).max(8).default(1),
     theme: z.string().min(1).default('default'),
     personality: z.string().min(1).default('default'),
     rag: ragConfigSchema.default({}),
     agents_md: agentsMdConfigSchema.default({}),
+    subagents: subagentsConfigSchema.default({}),
     ast_max_file_size: z.number().int().positive().default(1_048_576),
     mcp_startup_timeout: z.number().positive().default(60.0),
     mcp_per_server_timeout: z.number().positive().default(10.0),
     mcp_servers: z
       .record(z.string(), z.record(z.string(), z.unknown()))
       .default({}),
-    providers: deprecatedProvidersSchema.default({}),
     llm_stream_idle_timeout: z.number().positive().default(300.0),
     llm_stream_retries: z.number().int().nonnegative().default(3),
     background_command_idle_timeout: z.number().positive().default(900.0),
     /**
      * Max multi-step tool-loop iterations per stream (AI SDK stopWhen).
-     * Python's tool loop is unbounded; 100 is a high practical default.
      */
     max_tool_steps: z.number().int().positive().default(100),
     permission_history_size: z.number().int().min(0).max(50).default(10),

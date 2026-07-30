@@ -61,6 +61,8 @@ export interface GeneralTabProps {
   bgOutputTailBytes: number;
   readOutputLongPollMax: number;
   mcpResultMaxBytes: number;
+  toolWorkerPoolSize: number;
+  toolWorkerPoolMainAgentReserved: number;
   onChange: (updates: ConfigPatch) => void;
 }
 
@@ -101,6 +103,8 @@ export function GeneralTab({
   bgOutputTailBytes,
   readOutputLongPollMax,
   mcpResultMaxBytes,
+  toolWorkerPoolSize,
+  toolWorkerPoolMainAgentReserved,
   onChange,
 }: GeneralTabProps) {
   const personalityOptions =
@@ -292,6 +296,40 @@ export function GeneralTab({
               bordered
               className="w-full"
               min={1}
+            />
+          </FormField>
+          <FormField
+            label="Tool Worker Pool Size"
+            htmlFor="general-worker-pool-size"
+            hint="Concurrent tool execution slots shared by main agent and subagents."
+            className="config-field"
+          >
+            <TextInput
+              id="general-worker-pool-size"
+              type="number"
+              value={toolWorkerPoolSize}
+              onChange={(e) => handleIntChange('tool_worker_pool_size', e.target.value, 0)}
+              bordered
+              className="w-full"
+              min={0}
+              max={8}
+            />
+          </FormField>
+          <FormField
+            label="Main Agent Reserved Slots"
+            htmlFor="general-worker-pool-reserved"
+            hint="Worker slots guaranteed to the main agent so subagents cannot starve it."
+            className="config-field"
+          >
+            <TextInput
+              id="general-worker-pool-reserved"
+              type="number"
+              value={toolWorkerPoolMainAgentReserved}
+              onChange={(e) => handleIntChange('tool_worker_pool_main_agent_reserved', e.target.value, 0)}
+              bordered
+              className="w-full"
+              min={0}
+              max={8}
             />
           </FormField>
         </div>

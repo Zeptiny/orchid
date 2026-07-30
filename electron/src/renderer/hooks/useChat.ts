@@ -483,6 +483,8 @@ export function useChat(activeSessionId: string | null = null): UseChatReturn {
   const pendingContentChunksRef = useRef<string[]>([]);
   const pendingThinkingChunksRef = useRef<string[]>([]);
   const pendingStreamDeltasRef = useRef<StreamSegmentDelta[]>([]);
+  /** Tool argument fragments, keyed so interleaved calls retain wire order. */
+  const pendingToolArgsRef = useRef<Map<string, string>>(new Map());
   const streamFrameIdRef = useRef<number | null>(null);
   /** Sync guard against double-send before status re-render (P1-35). */
   const isSendingRef = useRef(false);
@@ -548,11 +550,32 @@ export function useChat(activeSessionId: string | null = null): UseChatReturn {
     apply();
   }, [acceptsEvent]);
 
-  const flushPendingStreamData = useCallback((): boolean => {
+  const flushPendingToolArgs = useCallback((): boolean => {
+    if (pendingToolArgsRef.current.size === 0) return false;
+
+    const pending = pendingToolArgsRef.current;
+    pendingToolArgsRef.current = new Map();
+    toolBlocksRef.current = toolBlocksRef.current.map((block) => {
+      const argsDelta = pending.get(block.id);
+      if (!argsDelta) return block;
+      return {
+        ...block,
+        partialArgs: block.partialArgs + argsDelta,
+        status: block.status !== 'generating' && block.status !== 'running'
+          ? block.status
+          : 'generating',
+      };
+    });
+    return true;
+  }, []);
+
+  const flushPendingStreamData = useCallback(() => {
+    const toolArgsChanged = pendingToolArgsRef.current.size > 0;
     const hadPendingData =
       pendingContentChunksRef.current.length > 0 ||
       pendingThinkingChunksRef.current.length > 0 ||
-      pendingStreamDeltasRef.current.length > 0;
+      pendingStreamDeltasRef.current.length > 0 ||
+      toolArgsChanged;
     if (pendingContentChunksRef.current.length > 0) {
       accumulatedContentRef.current += pendingContentChunksRef.current.join('');
       pendingContentChunksRef.current = [];
@@ -568,8 +591,9 @@ export function useChat(activeSessionId: string | null = null): UseChatReturn {
       );
       pendingStreamDeltasRef.current = [];
     }
-    return hadPendingData;
-  }, []);
+    if (toolArgsChanged) flushPendingToolArgs();
+    return { hadPendingData, toolArgsChanged };
+  }, [flushPendingToolArgs]);
 
   const cancelStreamFrame = useCallback(() => {
     if (streamFrameIdRef.current == null) return;
@@ -577,7 +601,10 @@ export function useChat(activeSessionId: string | null = null): UseChatReturn {
     streamFrameIdRef.current = null;
   }, []);
 
-  const publishStreamState = useCallback(() => {
+  const publishStreamState = useCallback((publishToolBlocks = false) => {
+    if (publishToolBlocks) {
+      setToolBlocks(toolBlocksRef.current);
+    }
     setStreamingContent(accumulatedContentRef.current);
     setStreamingThinking(accumulatedThinkingRef.current);
     setStreamSegments(streamSegmentsRef.current);
@@ -586,8 +613,10 @@ export function useChat(activeSessionId: string | null = null): UseChatReturn {
 
   const publishBufferedStream = useCallback(() => {
     streamFrameIdRef.current = null;
-    flushPendingStreamData();
-    publishStreamState();
+    const flushed = flushPendingStreamData();
+    if (flushed.hadPendingData) {
+      publishStreamState(flushed.toolArgsChanged);
+    }
   }, [flushPendingStreamData, publishStreamState]);
 
   const scheduleStreamFrame = useCallback(() => {
@@ -597,9 +626,11 @@ export function useChat(activeSessionId: string | null = null): UseChatReturn {
 
   const flushStreamFrame = useCallback((publish: boolean) => {
     cancelStreamFrame();
-    const hadPendingData = flushPendingStreamData();
-    if (!publish || !hadPendingData) return;
-    publishStreamState();
+    const flushed = flushPendingStreamData();
+    if (publish && flushed.hadPendingData) {
+      publishStreamState(flushed.toolArgsChanged);
+    }
+    return flushed;
   }, [cancelStreamFrame, flushPendingStreamData, publishStreamState]);
 
   const discardStreamFrame = useCallback(() => {
@@ -607,6 +638,7 @@ export function useChat(activeSessionId: string | null = null): UseChatReturn {
     pendingContentChunksRef.current = [];
     pendingThinkingChunksRef.current = [];
     pendingStreamDeltasRef.current = [];
+    pendingToolArgsRef.current.clear();
   }, [cancelStreamFrame]);
 
   /**
@@ -616,13 +648,16 @@ export function useChat(activeSessionId: string | null = null): UseChatReturn {
    */
   const applyToolBlocks = useCallback(
     (updater: ToolBlock[] | ((prev: ToolBlock[]) => ToolBlock[])) => {
+      // A lifecycle event may arrive before the scheduled frame. Fold its
+      // buffered args into the synchronous source of truth before committing.
+      flushPendingToolArgs();
       const prev = toolBlocksRef.current;
       const next = typeof updater === 'function' ? updater(prev) : updater;
       toolBlocksRef.current = next;
       setToolBlocks(next);
       setStreamRevision((revision) => revision + 1);
     },
-    [],
+    [flushPendingToolArgs],
   );
 
   /**
@@ -699,7 +734,10 @@ export function useChat(activeSessionId: string | null = null): UseChatReturn {
 
     const unsubDone = window.orchid.chat.onDone((event: ChatDoneEvent) => {
       deliverEvent(event, () => {
-      flushStreamFrame(false);
+      const flushed = flushStreamFrame(false);
+      if (flushed.toolArgsChanged) {
+        setToolBlocks(toolBlocksRef.current);
+      }
       if (event.usage) {
         setUsage(event.usage);
         usageRef.current = event.usage;
@@ -780,7 +818,10 @@ export function useChat(activeSessionId: string | null = null): UseChatReturn {
 
     const unsubError = window.orchid.chat.onError((event: ChatErrorEvent) => {
       deliverEvent(event, () => {
-      flushStreamFrame(false);
+      const flushed = flushStreamFrame(false);
+      if (flushed.toolArgsChanged) {
+        setToolBlocks(toolBlocksRef.current);
+      }
       // Prefer title + detail for banner classification when available
       const display =
         event.title && event.error && !event.error.startsWith(event.title)
@@ -863,16 +904,9 @@ export function useChat(activeSessionId: string | null = null): UseChatReturn {
 
     const unsubToolDelta = window.orchid.chat.onToolCallDelta?.((event: ChatToolCallDeltaEvent) => {
       deliverEvent(event, () => {
-      applyToolBlocks((prev) => prev.map((block) => {
-        if (block.id !== event.toolCallId) return block;
-        return {
-          ...block,
-          partialArgs: block.partialArgs + event.argsDelta,
-          status: block.status !== 'generating' && block.status !== 'running'
-            ? block.status
-            : 'generating',
-        };
-      }));
+      const previous = pendingToolArgsRef.current.get(event.toolCallId) ?? '';
+      pendingToolArgsRef.current.set(event.toolCallId, previous + event.argsDelta);
+      scheduleStreamFrame();
       });
     }) ?? (() => {});
 

@@ -1,8 +1,6 @@
 /**
  * History conversion — persisted messages to API messages.
  *
- * Replicates Python `_history_to_api_messages` (client.py:310-399).
- *
  * Enforces the OpenAI-shaped invariant both ways:
  * - Every `tool` message is preceded by an assistant message whose
  *   `tool_calls` contains the same `tool_call_id` (orphaned tool results
@@ -18,6 +16,67 @@
 import type { Message, ApiMessage } from '../../shared/types/message';
 import { MessageType, MessageRole, messageToApiFormat } from '../../shared/types/message';
 
+function isReplayableToolCallMessage(message: Message): boolean {
+  return message.role === MessageRole.ASSISTANT &&
+    message.type === MessageType.TOOL_CALL &&
+    !message.hidden &&
+    !message.excludeFromModel &&
+    Boolean(message.tool_calls?.length);
+}
+
+function isOmittedFromReplay(message: Message): boolean {
+  if (message.type === MessageType.ERROR) return true;
+  if (message.hidden || message.excludeFromModel) return true;
+  if (message.type === MessageType.TOOL_CALL && (!message.tool_calls || message.tool_calls.length === 0)) return true;
+  if (message.type === MessageType.THINKING && !message.content) return true;
+  if (!message.content && (!message.tool_calls || message.tool_calls.length === 0)) return true;
+  return false;
+}
+
+/**
+ * Runtime lifecycle events persist one assistant message per parallel tool
+ * call. Providers require those adjacent calls to be replayed as one assistant
+ * tool-call group followed by all of the group's results.
+ *
+ * Records that the later replay filtering omits entirely (ERROR, hidden,
+ * excluded, empty) are transparent for adjacency: two replayable tool-call
+ * messages separated only by omitted records merge into one group.
+ */
+function coalesceConsecutiveToolCallMessages(messages: Message[]): Message[] {
+  const normalized: Message[] = [];
+  let lastReplayableIndex = -1;
+
+  for (const message of messages) {
+    if (isReplayableToolCallMessage(message)) {
+      if (lastReplayableIndex !== -1) {
+        const allSkippable = normalized
+          .slice(lastReplayableIndex + 1)
+          .every(isOmittedFromReplay);
+        if (allSkippable) {
+          const previous = normalized[lastReplayableIndex];
+          normalized[lastReplayableIndex] = {
+            ...previous,
+            content: [previous.content, message.content].filter(Boolean).join('\n'),
+            tool_calls: [...(previous.tool_calls ?? []), ...(message.tool_calls ?? [])],
+            tool_call_id: null,
+          };
+          continue;
+        }
+      }
+      lastReplayableIndex = normalized.length;
+      normalized.push(message);
+      continue;
+    }
+
+    if (!isOmittedFromReplay(message)) {
+      lastReplayableIndex = -1;
+    }
+    normalized.push(message);
+  }
+
+  return normalized;
+}
+
 /**
  * Convert persisted display history to API history.
  *
@@ -25,6 +84,8 @@ import { MessageType, MessageRole, messageToApiFormat } from '../../shared/types
  * @returns API-shaped messages with pairing invariant enforced
  */
 export function toApiMessages(messages: Message[]): ApiMessage[] {
+  const replayMessages = coalesceConsecutiveToolCallMessages(messages);
+
   // ── Pre-pass: collect tool_call_ids that have a properly-sequenced
   // matching TOOL_RESULT ──
   //
@@ -35,10 +96,11 @@ export function toApiMessages(messages: Message[]): ApiMessage[] {
   // an orphan result that appears in a later turn after the sequence was
   // already broken, emitting a dangling tool_calls block with no paired
   // result in message order.
-  const survivingToolCallIds = new Set<string>();
+  const survivingToolCallsByMessage = new Map<Message, Set<string>>();
   const pendingToolCallIds = new Set<string>();
+  let pendingToolCallMessage: Message | null = null;
 
-  for (const msg of messages) {
+  for (const msg of replayMessages) {
     // Skip error messages
     if (msg.type === MessageType.ERROR) {
       continue;
@@ -61,8 +123,20 @@ export function toApiMessages(messages: Message[]): ApiMessage[] {
 
     // TOOL_RESULT: check if it matches a pending tool_call_id
     if (msg.role === MessageRole.TOOL) {
-      if (msg.tool_call_id && pendingToolCallIds.has(msg.tool_call_id)) {
-        survivingToolCallIds.add(msg.tool_call_id);
+      if (
+        pendingToolCallMessage &&
+        msg.tool_call_id &&
+        pendingToolCallIds.has(msg.tool_call_id)
+      ) {
+        const survivingIds = survivingToolCallsByMessage.get(pendingToolCallMessage);
+        if (survivingIds) {
+          survivingIds.add(msg.tool_call_id);
+        } else {
+          survivingToolCallsByMessage.set(
+            pendingToolCallMessage,
+            new Set([msg.tool_call_id]),
+          );
+        }
       }
       continue;
     }
@@ -76,7 +150,9 @@ export function toApiMessages(messages: Message[]): ApiMessage[] {
     // later turn can no longer legitimately pair with earlier tool_calls.
     // A new assistant tool_calls block resets pending to its own ids.
     pendingToolCallIds.clear();
+    pendingToolCallMessage = null;
     if (msg.tool_calls) {
+      pendingToolCallMessage = msg;
       for (const tc of msg.tool_calls) {
         if (tc.id) {
           pendingToolCallIds.add(tc.id);
@@ -89,7 +165,7 @@ export function toApiMessages(messages: Message[]): ApiMessage[] {
   const apiMessages: ApiMessage[] = [];
   let lastAssistantToolCallIds = new Set<string>();
 
-  for (const msg of messages) {
+  for (const msg of replayMessages) {
     // Skip error messages
     if (msg.type === MessageType.ERROR) {
       continue;
@@ -148,8 +224,9 @@ export function toApiMessages(messages: Message[]): ApiMessage[] {
     const d = messageToApiFormat(msg);
 
     if (msg.tool_calls && msg.tool_calls.length > 0) {
+      const survivingIds = survivingToolCallsByMessage.get(msg);
       const surviving = msg.tool_calls.filter(
-        (tc) => survivingToolCallIds.has(tc.id),
+        (tc) => survivingIds?.has(tc.id),
       );
       if (surviving.length > 0) {
         d.tool_calls = surviving.map((tc) => ({

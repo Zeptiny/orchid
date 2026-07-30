@@ -17,9 +17,11 @@ import {
   genericBuiltInToolOutcome,
   type GenericBuiltInToolOutcome,
 } from '../result';
-import type { SubagentManager } from '../../agents/manager';
+import type { SubagentManager, SubagentRecord } from '../../agents/manager';
+import { SubagentQueueFullError } from '../../agents/manager';
+import { SubagentState } from '../../agents/types';
 import { getTierModelSelection } from '../../config/loader';
-import { getSessionManager } from '../../ipc/session';
+import { getSessionManager } from '../../session/singleton';
 
 /**
  * Result returned by all subagent tool handlers.
@@ -123,17 +125,30 @@ export function buildDelegateTool(
         idx >= 0 ? idx : Math.max(0, session.chains.length - 1);
     }
 
-    // Spawn + start background run (when runner is configured).
+    // Spawn + start background run (when runner is configured), or park in
+    // the admission queue when the active limits are reached.
     // Freeze parent-turn cwd so mid-turn workspace changes do not rebind the subagent.
-    const record = manager.spawn(name, task, agent, {
-      selection,
-      parentChainIndex,
-      // Prefer frozen turn context sessionId over live getActive() (mid-turn switch).
-      sessionId: ctx.sessionId,
-      windowId: ctx.windowId,
-      cwd: ctx.cwd,
-      projectRuntime: ctx.projectRuntime,
-    });
+    let record: SubagentRecord;
+    try {
+      record = manager.spawn(name, task, agent, {
+        selection,
+        parentChainIndex,
+        // Prefer frozen turn context sessionId over live getActive() (mid-turn switch).
+        sessionId: ctx.sessionId,
+        windowId: ctx.windowId,
+        cwd: ctx.cwd,
+        projectRuntime: ctx.projectRuntime,
+      });
+    } catch (err) {
+      if (err instanceof SubagentQueueFullError) {
+        return genericBuiltInToolOutcome('delegate_to_subagent', `Error: ${err.message}`, 'error');
+      }
+      throw err;
+    }
+
+    const queuePosition = record.state === SubagentState.QUEUED
+      ? manager.getQueuePosition(record.id)
+      : null;
 
     return genericBuiltInToolOutcome(
       'delegate_to_subagent',
@@ -144,6 +159,7 @@ export function buildDelegateTool(
         status: record.state,
         tier: resolvedTier,
         task,
+        ...(queuePosition !== null ? { queue_position: queuePosition } : {}),
       },
       'complete',
     );

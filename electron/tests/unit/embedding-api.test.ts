@@ -5,7 +5,7 @@
  * - Config schema accepts embedding_api_model field
  * - ApiEmbedder retry logic (permanent errors don't retry, transient do)
  */
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { afterEach, describe, it, expect, vi, beforeEach } from 'vitest';
 import { configSchema, defaults } from '../../src/main/config/schema';
 
 // ── Config schema tests ────────────────────────────────────────────────────
@@ -51,17 +51,6 @@ describe('Config schema with embedding_api_model', () => {
     });
   });
 
-  it('rejects deprecated provider model metadata in general config', () => {
-    const cfg = defaults();
-    const providers = {
-      p: {
-        base_url: 'https://example.com',
-        litellm_provider: 'openai',
-        legacy_model_metadata: true,
-      },
-    };
-    expect(() => configSchema.parse({ ...cfg, providers })).toThrow(/providers is deprecated/i);
-  });
 });
 
 // ── ApiEmbedder retry tests ────────────────────────────────────────────────
@@ -69,6 +58,10 @@ describe('Config schema with embedding_api_model', () => {
 describe('ApiEmbedder retry logic', () => {
   beforeEach(() => {
     vi.restoreAllMocks();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
   it('retries on 429 rate limit', async () => {
@@ -160,5 +153,27 @@ describe('ApiEmbedder retry logic', () => {
     expect(arr1[0]).toBeCloseTo(0.4, 5);
     expect(arr1[1]).toBeCloseTo(0.5, 5);
     expect(arr1[2]).toBeCloseTo(0.6, 5);
+  });
+
+  it('keeps the request deadline active while a successful response body stalls', async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal('fetch', vi.fn((_url: string, init?: RequestInit) => {
+      return Promise.resolve(new Response(new ReadableStream({
+        start(controller) {
+          init?.signal?.addEventListener('abort', () => {
+            controller.error(init.signal?.reason ?? new Error('aborted'));
+          }, { once: true });
+        },
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } }));
+    }));
+
+    const { ApiEmbedder } = await import('../../src/main/rag/embedder');
+    const embedder = new ApiEmbedder('https://api.example.com/v1', 'key', 'model', 10, 10, 0);
+    const pending = embedder.embed(['hello']);
+    const rejected = expect(pending).rejects.toThrow(/embedding.*request failed|aborted/i);
+
+    await vi.advanceTimersByTimeAsync(11);
+
+    await rejected;
   });
 });

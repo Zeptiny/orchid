@@ -17,11 +17,13 @@ import {
   deleteSession,
   updateChain,
   updateSessionFields,
+  upsertSubagentRecords,
   isValidSessionId,
   _clearDbCache,
 } from '../../src/main/session/storage';
 import { openSqliteDb } from '../../src/main/utils/sqlite';
-import { SessionManager } from '../../src/main/session/manager';
+import { onSessionDeleted, SessionManager } from '../../src/main/session/manager';
+import { sessionPermissionOverrides } from '../../src/main/permissions/session-overrides';
 import { createCanonicalToolResult } from '../../src/shared/types/tool-result';
 
 let tmpDir: string;
@@ -152,6 +154,7 @@ function makeSubagentRecord(
     result: overrides.result ?? 'done',
     error: overrides.error ?? null,
     parentChainIndex: overrides.parentChainIndex ?? 0,
+    closed: overrides.closed ?? false,
     chain,
   };
 }
@@ -921,6 +924,20 @@ describe('SessionManager', () => {
     expect(manager.getActive()!.id).toBe(session2.id);
   });
 
+  it('notifies session-scoped cleanup when a session is deleted', () => {
+    const manager = new SessionManager({ storage: storageOpts });
+    const session = manager.create(DEFAULT_SELECTION);
+    const deleted: string[] = [];
+    const unsubscribe = onSessionDeleted((sessionId) => deleted.push(sessionId));
+
+    try {
+      expect(manager.delete(session.id)).toBe(true);
+      expect(deleted).toEqual([session.id]);
+    } finally {
+      unsubscribe();
+    }
+  });
+
   it('rename() updates active session name', () => {
     const manager = new SessionManager({ storage: storageOpts });
     const session = manager.create(DEFAULT_SELECTION);
@@ -1522,33 +1539,268 @@ describe('SessionManager multi-chain lifecycle', () => {
 });
 
 // ===========================================================================
-// syncSubagentChains — replace subagent_chains + persist
+// subagent_chains row storage — one row per record (U6)
 // ===========================================================================
 
-describe('SessionManager.syncSubagentChains', () => {
-  it('returns null when no active session', () => {
-    const manager = new SessionManager({ storage: storageOpts });
-    const result = manager.syncSubagentChains([]);
-    expect(result).toBeNull();
+function readSubagentRows(
+  dbPath: string,
+  sessionId: string,
+): Array<{ rowid: number; subagent_id: string; record_json: string }> {
+  const db = openSqliteDb(dbPath);
+  try {
+    return db
+      .prepare(
+        'SELECT rowid, subagent_id, record_json FROM subagent_chains WHERE session_id = ? ORDER BY rowid',
+      )
+      .all(sessionId) as Array<{ rowid: number; subagent_id: string; record_json: string }>;
+  } finally {
+    db.close();
+  }
+}
+
+describe('subagent_chains row storage (U6)', () => {
+  const SID = 'aeaeaeae-aeae-4aea-8aea-aeaeaeaeaeae';
+
+  it('round-trips N terminal records through saveSession/loadSession', () => {
+    const records = [
+      makeSubagentRecord(SID, {
+        id: 'sub-completed',
+        status: SubagentStatus.COMPLETED,
+        result: 'done',
+      }),
+      makeSubagentRecord(SID, {
+        id: 'sub-failed',
+        status: SubagentStatus.FAILED,
+        result: null,
+        error: 'boom',
+      }),
+      makeSubagentRecord(SID, {
+        id: 'sub-interrupted',
+        status: SubagentStatus.INTERRUPTED,
+      }),
+    ];
+    saveSession(makeSession({ id: SID, subagentChains: records }), storageOpts);
+
+    expect(readSubagentRows(storageOpts.dbPath!, SID).map((row) => row.subagent_id)).toEqual([
+      'sub-completed',
+      'sub-failed',
+      'sub-interrupted',
+    ]);
+
+    const loaded = loadSession(SID, storageOpts)!;
+    expect(loaded.subagentChains).toEqual(records);
   });
 
-  it('sets empty subagentChains and persists', () => {
+  it('saveSession wholesale-replaces prior subagent rows (creation/recovery primitive)', () => {
+    saveSession(
+      makeSession({
+        id: SID,
+        subagentChains: [
+          makeSubagentRecord(SID, { id: 'sub-1' }),
+          makeSubagentRecord(SID, { id: 'sub-2' }),
+        ],
+      }),
+      storageOpts,
+    );
+    expect(readSubagentRows(storageOpts.dbPath!, SID)).toHaveLength(2);
+
+    saveSession(
+      makeSession({ id: SID, subagentChains: [makeSubagentRecord(SID, { id: 'sub-3' })] }),
+      storageOpts,
+    );
+    expect(readSubagentRows(storageOpts.dbPath!, SID).map((row) => row.subagent_id)).toEqual([
+      'sub-3',
+    ]);
+  });
+
+  it('upserts only the dirty record; untouched sibling rows keep rowid and bytes', () => {
+    const recA = makeSubagentRecord(SID, { id: 'sub-a', result: 'A v1' });
+    const recB = makeSubagentRecord(SID, { id: 'sub-b', result: 'B v1' });
+    saveSession(
+      makeSession({
+        id: SID,
+        subagentChains: [recA, recB],
+        updatedAt: '2026-01-01T00:00:00.000Z',
+      }),
+      storageOpts,
+    );
+
+    const dbPath = storageOpts.dbPath!;
+    const before = readSubagentRows(dbPath, SID);
+
+    // A targeted upsert must never delete subagent rows.
+    const db = openSqliteDb(dbPath);
+    db.exec(`
+      CREATE TRIGGER reject_subagent_row_delete
+      BEFORE DELETE ON subagent_chains
+      BEGIN
+        SELECT RAISE(ABORT, 'subagent row deletion is forbidden');
+      END
+    `);
+    db.close();
+
+    const outcome = upsertSubagentRecords(
+      SID,
+      [{ ...recA, result: 'A v2' }],
+      '2026-02-01T00:00:00.000Z',
+      storageOpts,
+    );
+    expect(outcome).not.toBe(false);
+    expect(outcome!.bytes).toBeGreaterThan(0);
+
+    const after = readSubagentRows(dbPath, SID);
+    expect(after.map((row) => row.rowid)).toEqual(before.map((row) => row.rowid));
+    const bBefore = before.find((row) => row.subagent_id === 'sub-b')!;
+    expect(after.find((row) => row.subagent_id === 'sub-b')!.record_json).toBe(bBefore.record_json);
+    expect(after.find((row) => row.subagent_id === 'sub-a')!.record_json)
+      .not.toBe(before.find((row) => row.subagent_id === 'sub-a')!.record_json);
+
+    const summary = listSavedSessions(storageOpts).find((s) => s.id === SID)!;
+    expect(summary.updatedAt).toBe(Date.parse('2026-02-01T00:00:00.000Z'));
+  });
+
+  it('reports bytes as UTF-8 byte length, not UTF-16 code units', () => {
+    saveSession(makeSession({ id: SID, subagentChains: [] }), storageOpts);
+
+    const record = makeSubagentRecord(SID, {
+      id: 'sub-multibyte',
+      task: 'コードベースを調べる 🔍',
+      result: '見つかりました 🎉',
+    });
+    const outcome = upsertSubagentRecords(
+      SID,
+      [record],
+      new Date().toISOString(),
+      storageOpts,
+    );
+    expect(outcome).not.toBe(false);
+
+    const row = readSubagentRows(storageOpts.dbPath!, SID)
+      .find((r) => r.subagent_id === 'sub-multibyte')!;
+    const utf8Bytes = Buffer.byteLength(row.record_json, 'utf8');
+    // The fixture embeds CJK + emoji so the two metrics genuinely diverge.
+    expect(utf8Bytes).toBeGreaterThan(row.record_json.length);
+    expect(outcome!.bytes).toBe(utf8Bytes);
+  });
+
+  it('returns false when the session row is missing (caller falls back to full save)', () => {
+    const ghost = makeSubagentRecord(SID, { id: 'ghost' });
+    expect(
+      upsertSubagentRecords(SID, [ghost], new Date().toISOString(), storageOpts),
+    ).toBe(false);
+  });
+
+  it('re-upserts a row deleted externally (missing-row recovery)', () => {
+    const rec = makeSubagentRecord(SID, { id: 'sub-a', result: 'authoritative' });
+    saveSession(makeSession({ id: SID, subagentChains: [rec] }), storageOpts);
+
+    const db = openSqliteDb(storageOpts.dbPath!);
+    db.prepare('DELETE FROM subagent_chains WHERE session_id = ? AND subagent_id = ?')
+      .run(SID, 'sub-a');
+    db.close();
+    expect(readSubagentRows(storageOpts.dbPath!, SID)).toHaveLength(0);
+
+    expect(
+      upsertSubagentRecords(SID, [rec], new Date().toISOString(), storageOpts),
+    ).not.toBe(false);
+
+    const rows = readSubagentRows(storageOpts.dbPath!, SID);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].subagent_id).toBe('sub-a');
+  });
+
+  it('skips corrupt subagent rows on load instead of failing the session', () => {
+    saveSession(
+      makeSession({ id: SID, subagentChains: [makeSubagentRecord(SID, { id: 'good' })] }),
+      storageOpts,
+    );
+
+    const db = openSqliteDb(storageOpts.dbPath!);
+    db.prepare(
+      'INSERT INTO subagent_chains (session_id, subagent_id, record_json) VALUES (?, ?, ?)',
+    ).run(SID, 'bad', '{not json');
+    db.close();
+    _clearDbCache();
+
+    const loaded = loadSession(SID, storageOpts)!;
+    expect(loaded.subagentChains.map((r) => r.id)).toEqual(['good']);
+  });
+
+  it('session deletion removes all its subagent rows', () => {
+    saveSession(
+      makeSession({
+        id: SID,
+        subagentChains: [
+          makeSubagentRecord(SID, { id: 'sub-1' }),
+          makeSubagentRecord(SID, { id: 'sub-2' }),
+        ],
+      }),
+      storageOpts,
+    );
+    expect(readSubagentRows(storageOpts.dbPath!, SID)).toHaveLength(2);
+
+    expect(deleteSession(SID, storageOpts)).toBe(true);
+    expect(readSubagentRows(storageOpts.dbPath!, SID)).toHaveLength(0);
+  });
+
+  it('turn boundaries leave subagent rows untouched', () => {
     const manager = new SessionManager({ storage: storageOpts });
     const session = manager.create(DEFAULT_SELECTION);
+    manager.syncSubagentRecords(session.id, [
+      makeSubagentRecord(session.id, { id: 'sub-1', result: 'stable' }),
+    ]);
 
-    const record = makeSubagentRecord(session.id);
-    manager.syncSubagentChains([record]);
-    expect(manager.getActive()!.subagentChains).toHaveLength(1);
+    const dbPath = storageOpts.dbPath!;
+    const before = readSubagentRows(dbPath, session.id);
+    const db = openSqliteDb(dbPath);
+    db.exec(`
+      CREATE TRIGGER reject_subagent_row_update
+      BEFORE UPDATE ON subagent_chains
+      BEGIN
+        SELECT RAISE(ABORT, 'subagent row update is forbidden');
+      END
+    `);
+    db.exec(`
+      CREATE TRIGGER reject_subagent_row_delete
+      BEFORE DELETE ON subagent_chains
+      BEGIN
+        SELECT RAISE(ABORT, 'subagent row deletion is forbidden');
+      END
+    `);
+    db.close();
 
-    const cleared = manager.syncSubagentChains([]);
-    expect(cleared).not.toBeNull();
-    expect(cleared!.subagentChains).toEqual([]);
+    expect(() => {
+      manager.startChain({
+        messages: [makeMessage({ id: 'u1', content: 'Question 1' })],
+      }, session.id);
+      manager.persistTurn({
+        messages: [
+          makeMessage({ id: 'u1', content: 'Question 1' }),
+          makeMessage({ id: 'a1', role: 'assistant', content: 'Answer 1' }),
+        ],
+      }, session.id);
+      manager.rename(session.id, 'Turn boundary session');
+    }).not.toThrow();
 
-    const loaded = loadSession(session.id, storageOpts);
-    expect(loaded!.subagentChains).toEqual([]);
+    expect(readSubagentRows(dbPath, session.id)).toEqual(before);
+  });
+});
+
+// ===========================================================================
+// syncSubagentRecords — targeted dirty-record upsert + persist (U6)
+// ===========================================================================
+
+describe('SessionManager.syncSubagentRecords', () => {
+  it('returns a null session for an unknown session id', () => {
+    const manager = new SessionManager({ storage: storageOpts });
+    const result = manager.syncSubagentRecords(randomUUID(), [
+      makeSubagentRecord('irrelevant'),
+    ]);
+    expect(result.session).toBeNull();
+    expect(result.bytes).toBe(0);
   });
 
-  it('sets populated subagentChains and persists', () => {
+  it('upserts records as rows, reports bytes, and merges into the in-memory session', () => {
     const manager = new SessionManager({ storage: storageOpts });
     const session = manager.create(DEFAULT_SELECTION);
 
@@ -1570,14 +1822,11 @@ describe('SessionManager.syncSubagentChains', () => {
       }),
     ];
 
-    const result = manager.syncSubagentChains(records);
-    expect(result).not.toBeNull();
-    expect(result!.subagentChains).toHaveLength(2);
-    expect(result!.subagentChains[0].id).toBe('sub-1');
-    expect(result!.subagentChains[0].agent_name).toBe('explorer');
-    expect(result!.subagentChains[0].result).toBe('found 3');
-    expect(result!.subagentChains[1].id).toBe('sub-2');
-    expect(result!.subagentChains[1].status).toBe(SubagentStatus.RUNNING);
+    const result = manager.syncSubagentRecords(session.id, records);
+    expect(result.session).not.toBeNull();
+    expect(result.bytes).toBeGreaterThan(0);
+    expect(result.session!.subagentChains.map((r) => r.id)).toEqual(['sub-1', 'sub-2']);
+    expect(result.session!.subagentChains[1].status).toBe(SubagentStatus.RUNNING);
 
     const loaded = loadSession(session.id, storageOpts);
     expect(loaded).not.toBeNull();
@@ -1585,43 +1834,47 @@ describe('SessionManager.syncSubagentChains', () => {
     expect(loaded!.subagentChains[0].id).toBe('sub-1');
     expect(loaded!.subagentChains[0].task).toBe('find files');
     expect(loaded!.subagentChains[0].status).toBe(SubagentStatus.COMPLETED);
-    expect(loaded!.subagentChains[1].id).toBe('sub-2');
+    // Restore migrates RUNNING → INTERRUPTED; memory keeps the live status.
     expect(loaded!.subagentChains[1].status).toBe(SubagentStatus.INTERRUPTED);
-
-    const live = manager.load(session.id);
-    expect(live!.subagentChains[1].status).toBe(SubagentStatus.RUNNING);
+    expect(manager.getSession(session.id)!.subagentChains[1].status).toBe(SubagentStatus.RUNNING);
   });
 
-  it('replaces prior subagentChains entirely (not merge)', () => {
+  it('merges dirty records by id without dropping clean siblings', () => {
     const manager = new SessionManager({ storage: storageOpts });
     const session = manager.create(DEFAULT_SELECTION);
 
-    manager.syncSubagentChains([
-      makeSubagentRecord(session.id, { id: 'old-1' }),
-      makeSubagentRecord(session.id, { id: 'old-2' }),
+    manager.syncSubagentRecords(session.id, [
+      makeSubagentRecord(session.id, { id: 'sub-1', result: 'first' }),
+      makeSubagentRecord(session.id, { id: 'sub-2', result: 'second' }),
     ]);
 
-    const replaced = manager.syncSubagentChains([
-      makeSubagentRecord(session.id, { id: 'new-only' }),
+    const result = manager.syncSubagentRecords(session.id, [
+      makeSubagentRecord(session.id, { id: 'sub-2', result: 'updated' }),
+      makeSubagentRecord(session.id, { id: 'sub-3', result: 'third' }),
     ]);
 
-    expect(replaced!.subagentChains).toHaveLength(1);
-    expect(replaced!.subagentChains[0].id).toBe('new-only');
+    expect(result.session!.subagentChains.map((r) => r.id)).toEqual(['sub-1', 'sub-2', 'sub-3']);
+    expect(result.session!.subagentChains.map((r) => r.result)).toEqual([
+      'first',
+      'updated',
+      'third',
+    ]);
 
-    const loaded = loadSession(session.id, storageOpts);
-    expect(loaded!.subagentChains.map((r) => r.id)).toEqual(['new-only']);
+    const loaded = loadSession(session.id, storageOpts)!;
+    expect(loaded.subagentChains.map((r) => r.id)).toEqual(['sub-1', 'sub-2', 'sub-3']);
+    expect(loaded.subagentChains.find((r) => r.id === 'sub-2')!.result).toBe('updated');
   });
 
-  it('copies the subagentChains array (does not retain caller reference)', () => {
+  it('copies the dirtyRecords array (does not retain caller reference)', () => {
     const manager = new SessionManager({ storage: storageOpts });
     const session = manager.create(DEFAULT_SELECTION);
     const records: SubagentRecord[] = [makeSubagentRecord(session.id, { id: 'copy-1' })];
 
-    const result = manager.syncSubagentChains(records);
+    const result = manager.syncSubagentRecords(session.id, records);
     records.push(makeSubagentRecord(session.id, { id: 'copy-2' }));
 
-    expect(result!.subagentChains).toHaveLength(1);
-    expect(result!.subagentChains[0].id).toBe('copy-1');
+    expect(result.session!.subagentChains).toHaveLength(1);
+    expect(result.session!.subagentChains[0].id).toBe('copy-1');
   });
 
   it('updates updatedAt on the session', () => {
@@ -1634,8 +1887,75 @@ describe('SessionManager.syncSubagentChains', () => {
       // busy wait
     }
 
-    const result = manager.syncSubagentChains([]);
-    expect(result!.updatedAt >= before).toBe(true);
+    const result = manager.syncSubagentRecords(session.id, [
+      makeSubagentRecord(session.id, { id: 'recency' }),
+    ]);
+    expect(result.session!.updatedAt >= before).toBe(true);
+  });
+
+  it('patches an uncached session on disk without caching it', () => {
+    const manager = new SessionManager({ storage: storageOpts });
+    const session = manager.create(DEFAULT_SELECTION);
+    manager.syncSubagentRecords(session.id, [
+      makeSubagentRecord(session.id, { id: 'sub-1' }),
+    ]);
+
+    // A fresh manager has no cached runtime for the session.
+    const fresh = new SessionManager({ storage: storageOpts });
+    const result = fresh.syncSubagentRecords(session.id, [
+      makeSubagentRecord(session.id, { id: 'sub-2' }),
+    ]);
+    expect(result.session!.subagentChains.map((r) => r.id)).toEqual(['sub-1', 'sub-2']);
+
+    const loaded = loadSession(session.id, storageOpts)!;
+    expect(loaded.subagentChains.map((r) => r.id)).toEqual(['sub-1', 'sub-2']);
+  });
+
+  it('propagates a storage failure without mutating in-memory state', () => {
+    const manager = new SessionManager({ storage: storageOpts });
+    const session = manager.create(DEFAULT_SELECTION);
+    manager.syncSubagentRecords(session.id, [
+      makeSubagentRecord(session.id, { id: 'sub-1', result: 'before' }),
+    ]);
+    const before = manager.getSession(session.id)!.subagentChains;
+
+    const db = openSqliteDb(storageOpts.dbPath!);
+    db.exec(`
+      CREATE TRIGGER reject_subagent_record_update
+      BEFORE UPDATE ON subagent_chains
+      BEGIN
+        SELECT RAISE(ABORT, 'subagent record update rejected');
+      END
+    `);
+    db.close();
+
+    expect(() =>
+      manager.syncSubagentRecords(session.id, [
+        makeSubagentRecord(session.id, { id: 'sub-1', result: 'after' }),
+      ]),
+    ).toThrow(/subagent record update rejected/);
+
+    expect(manager.getSession(session.id)!.subagentChains).toBe(before);
+    const loaded = loadSession(session.id, storageOpts)!;
+    expect(loaded.subagentChains[0].result).toBe('before');
+  });
+
+  it('falls back to a full save when the session row is missing', () => {
+    const manager = new SessionManager({ storage: storageOpts });
+    const session = manager.create(DEFAULT_SELECTION);
+
+    const db = openSqliteDb(storageOpts.dbPath!);
+    db.prepare('DELETE FROM sessions WHERE id = ?').run(session.id);
+    db.close();
+    _clearDbCache();
+
+    const result = manager.syncSubagentRecords(session.id, [
+      makeSubagentRecord(session.id, { id: 'sub-1' }),
+    ]);
+    expect(result.session).not.toBeNull();
+
+    const loaded = loadSession(session.id, storageOpts)!;
+    expect(loaded.subagentChains.map((r) => r.id)).toEqual(['sub-1']);
   });
 });
 
@@ -1822,7 +2142,9 @@ describe('incremental session persistence', () => {
       manager.persistTodos(session.id);
       manager.setReasoningEffortOverride(session.id, 'high');
       manager.setPermissionMode(session.id, 'allow');
-      manager.syncSubagentChains([], session.id);
+      manager.syncSubagentRecords(session.id, [
+        makeSubagentRecord(session.id, { id: 'incremental-sub' }),
+      ]);
     }).not.toThrow();
 
     const verifyDb = openSqliteDb(storageOpts.dbPath!);
@@ -1906,7 +2228,7 @@ describe('loadSession resilience to corrupt columns', () => {
 
     const db = openSqliteDb(storageOpts.dbPath!);
     db.prepare(
-      "UPDATE sessions SET todo_store_json = '{not json', subagent_chains_json = '[[[', selection_json = 'oops' WHERE id = ?",
+      "UPDATE sessions SET todo_store_json = '{not json', selection_json = 'oops' WHERE id = ?",
     ).run(SID);
     db.prepare("UPDATE chains SET messages_json = 'garbage' WHERE id = ?").run('c1');
     db.close();
@@ -2127,5 +2449,23 @@ describe('permissionMode SQLite round-trip', () => {
 
     const loaded = loadSession(created.id, storageOpts)!;
     expect(loaded.permissionMode).toBeNull();
+  });
+
+  it('syncs the in-memory gate map so the selector takes effect this run', () => {
+    const manager = new SessionManager({ storage: storageOpts });
+    const created = manager.create(null, { cwd: null });
+
+    try {
+      manager.setPermissionMode(created.id, 'allow');
+      expect(sessionPermissionOverrides.get(created.id)).toBe('allow');
+
+      manager.setPermissionMode(created.id, 'ask');
+      expect(sessionPermissionOverrides.get(created.id)).toBe('ask');
+
+      manager.setPermissionMode(created.id, null);
+      expect(sessionPermissionOverrides.has(created.id)).toBe(false);
+    } finally {
+      sessionPermissionOverrides.delete(created.id);
+    }
   });
 });

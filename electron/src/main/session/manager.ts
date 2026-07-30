@@ -25,6 +25,7 @@ import type { Session } from '../../shared/types/session';
 import type { ModelSelection } from '../../shared/types/provider';
 import type { Message } from '../../shared/types/message';
 import { ChainStatus, type Chain } from '../../shared/types/chain';
+import type { SubagentRecord } from '../../shared/types/subagent';
 import type { PermissionMode } from '../../shared/types/permission';
 import { normalizeAgentScopeId } from '../../shared/types/agent-scope';
 import {
@@ -33,6 +34,7 @@ import {
 } from '../project/path';
 import { TodoStore } from '../tools/todo/store';
 import { AgentsMdContextStore } from './agents-md-context';
+import { hydrateSessionPermissionOverride } from '../permissions/session-overrides';
 import {
   appendActiveChain as storageAppendActiveChain,
   finishChain as storageFinishChain,
@@ -42,6 +44,7 @@ import {
   listSavedSessions as storageListSavedSessions,
   updateChain as storageUpdateChain,
   updateSessionFields as storageUpdateSessionFields,
+  upsertSubagentRecords as storageUpsertSubagentRecords,
   type SessionFieldsUpdate,
   type StorageOptions,
   type SessionSummary,
@@ -73,6 +76,26 @@ export interface CreateSessionOptions {
  * Returns the generated title, or null if generation failed.
  */
 export type GenerateTitleCallback = (session: Session) => Promise<string | null>;
+
+/** Lifecycle hooks for state held outside SessionManager but keyed by session. */
+const sessionDeletionListeners = new Set<(sessionId: string) => void>();
+
+/** Register cleanup for state that must not outlive a deleted session. */
+export function onSessionDeleted(listener: (sessionId: string) => void): () => void {
+  sessionDeletionListeners.add(listener);
+  return () => sessionDeletionListeners.delete(listener);
+}
+
+function notifySessionDeleted(sessionId: string): void {
+  for (const listener of sessionDeletionListeners) {
+    try {
+      listener(sessionId);
+    } catch (error) {
+      // Cleanup observers must never make a session impossible to delete.
+      console.warn(`Session deletion cleanup failed for ${sessionId}:`, error);
+    }
+  }
+}
 
 // ---------------------------------------------------------------------------
 // SessionManager options
@@ -376,6 +399,7 @@ export class SessionManager {
     for (const [owner, selectedId] of this._selectedByOwner) {
       if (selectedId === id) this._selectedByOwner.delete(owner);
     }
+    notifySessionDeleted(id);
     return result;
   }
 
@@ -479,7 +503,8 @@ export class SessionManager {
 
   /**
    * Set or clear the per-session permission-mode override.
-   * Persists to disk immediately so the choice survives restarts.
+   * Persists to disk immediately so the choice survives restarts, and syncs
+   * the in-memory gate read-model so the selector takes effect this run.
    */
   setPermissionMode(id: string, mode: PermissionMode | null): void {
     if (!this.isSelectedByAnyOwner(id)) return;
@@ -494,6 +519,10 @@ export class SessionManager {
       permissionMode: updated.permissionMode,
       todoStore: updated.todoStore,
     });
+    // The gate reads sessionPermissionOverrides, not the session record, so the
+    // persisted field and the map must move together. Centralizing the sync here
+    // keeps every caller (draft promotion, explicit selector) from diverging.
+    hydrateSessionPermissionOverride(id, mode);
   }
 
   /**
@@ -780,64 +809,71 @@ export class SessionManager {
   }
 
   /**
-   * Replace subagent_chains on a session and persist.
+   * Upsert dirty subagent records onto their owning session (persist-first).
    *
-   * Used when subagents complete so chain-footer token usage and the
-   * right-rail subagent list can reload real data from disk.
+   * Checkpoints send only records dirtied since the last flush; rows are
+   * upserted by id and merged into the in-memory snapshot only after the
+   * storage write succeeds. A debounced flush after a session switch still
+   * writes to the correct owner: uncached sessions are patched on disk
+   * without entering the runtime cache.
    *
-   * @param subagentChains - Full replacement list for that session
-   * @param sessionId - Owning session id. When omitted, uses the active
-   *   session (legacy callers). When provided and not active, loads that
-   *   session from disk, patches, and saves — so a debounced flush after a
-   *   session switch still writes to the correct owner.
+   * @returns The patched session (null when the session is unknown) plus the
+   *   serialized bytes written, for checkpoint diagnostics (R9).
    */
-  syncSubagentChains(
-    subagentChains: Session['subagentChains'],
-    sessionId?: string,
-  ): Session | null {
-    const targetId = sessionId ?? this.selectedSessionId();
-    if (!targetId) {
-      return null;
+  syncSubagentRecords(
+    sessionId: string,
+    dirtyRecords: readonly SubagentRecord[],
+  ): { session: Session | null; bytes: number } {
+    if (dirtyRecords.length === 0) {
+      return { session: this._sessions.get(sessionId) ?? null, bytes: 0 };
     }
-
     const now = new Date().toISOString();
-    const chains = [...subagentChains];
+    const merge = (existing: readonly SubagentRecord[]): SubagentRecord[] => {
+      const byId = new Map(existing.map((record) => [record.id, record]));
+      for (const record of dirtyRecords) byId.set(record.id, record);
+      return [...byId.values()];
+    };
 
-    const cached = this._sessions.get(targetId);
+    const cached = this._sessions.get(sessionId);
     if (cached) {
+      const outcome = storageUpsertSubagentRecords(
+        sessionId,
+        dirtyRecords,
+        now,
+        this._storageOpts,
+      );
       const updated = {
         ...cached,
-        subagentChains: chains,
-        todoStore: this.getTodoStore(targetId).toData(),
+        subagentChains: merge(cached.subagentChains),
+        // Keep the snapshot's todo data fresh like the old wholesale sync did;
+        // the targeted upsert itself never writes the todo column.
+        todoStore: this.getTodoStore(sessionId).toData(),
         updatedAt: now,
       };
-      this.persistSessionFields(updated, {
-        subagentChains: updated.subagentChains,
-        todoStore: updated.todoStore,
-      });
-      return updated;
+      if (outcome === false) storageSaveSession(updated, this._storageOpts);
+      this.replaceSession(updated);
+      return { session: updated, bytes: outcome ? outcome.bytes : 0 };
     }
 
     // Non-active owner: patch on disk so a late flush cannot clobber the
     // newly active session with the previous session's subagent chains.
-    const loaded = storageLoadSession(targetId, this._storageOpts);
+    const loaded = storageLoadSession(sessionId, this._storageOpts);
     if (!loaded) {
-      return null;
+      return { session: null, bytes: 0 };
     }
-    const updated: Session = {
-      ...loaded,
-      subagentChains: chains,
-      updatedAt: now,
-    };
-    const persisted = storageUpdateSessionFields(
-      updated.id,
-      { subagentChains: updated.subagentChains, updatedAt: updated.updatedAt },
+    const outcome = storageUpsertSubagentRecords(
+      sessionId,
+      dirtyRecords,
+      now,
       this._storageOpts,
     );
-    if (!persisted) {
-      storageSaveSession(updated, this._storageOpts);
-    }
-    return updated;
+    const updated: Session = {
+      ...loaded,
+      subagentChains: merge(loaded.subagentChains),
+      updatedAt: now,
+    };
+    if (outcome === false) storageSaveSession(updated, this._storageOpts);
+    return { session: updated, bytes: outcome ? outcome.bytes : 0 };
   }
 
   /**

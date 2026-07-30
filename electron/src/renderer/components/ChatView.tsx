@@ -29,6 +29,7 @@ import {
   selectionMatchesOption,
 } from '../utils/provider-selection';
 import { isTextGenerationModel } from '../utils/models';
+import { emitOrchidEvent, onOrchidEvent } from '../utils/events';
 import { resolveOrchidNavigate } from '../utils/navigate-shell';
 import { useFocusTrap, useGlobalShortcuts } from '../keyboard';
 import type { ModelSelection } from '../../shared/types/provider';
@@ -163,16 +164,14 @@ export function ChatView({ isVisible = true, bootstrapConfig = null }: ChatViewP
   }, [connectionStateSignature, providers.ensureModelList]);
 
   useEffect(() => {
-    const refreshProviders = () => {
+    return onOrchidEvent('orchid:providers-updated', () => {
       void providers.refresh().then(() => providers.ensureModelList());
-    };
-    window.addEventListener('orchid:providers-updated', refreshProviders);
-    return () => window.removeEventListener('orchid:providers-updated', refreshProviders);
+    });
   }, [providers.refresh, providers.ensureModelList]);
 
   useEffect(() => {
-    const applyCreatedSelection = (event: Event) => {
-      const selection = (event as CustomEvent<{ selection?: ModelSelection }>).detail?.selection;
+    return onOrchidEvent('orchid:provider-selection-created', (detail) => {
+      const selection = detail.selection;
       if (!selection) return;
       setCurrentSelection({
         connectionId: selection.connectionId,
@@ -182,9 +181,7 @@ export function ChatView({ isVisible = true, bootstrapConfig = null }: ChatViewP
         void session.changeModel(session.activeSession.id, selection, selection.modelId);
       }
       void providers.refresh();
-    };
-    window.addEventListener('orchid:provider-selection-created', applyCreatedSelection);
-    return () => window.removeEventListener('orchid:provider-selection-created', applyCreatedSelection);
+    });
   }, [providers.refresh, session.activeSession?.id, session.changeModel]);
 
   useEffect(() => {
@@ -200,11 +197,9 @@ export function ChatView({ isVisible = true, bootstrapConfig = null }: ChatViewP
     return () => window.removeEventListener('focus', markSeen);
   }, [session.activeSession?.id, activity.markSeen]);
 
-  // Wire dead command-palette `orchid:navigate` events to shell panels.
   useEffect(() => {
-    const onNavigate = (event: Event) => {
-      const detail = (event as CustomEvent<{ section?: string }>).detail;
-      const action = resolveOrchidNavigate(detail?.section);
+    return onOrchidEvent('orchid:navigate', (detail) => {
+      const action = resolveOrchidNavigate(detail.section);
       if (action.kind === 'noop') return;
       if (action.kind === 'sessions') {
         openLeftSidebar();
@@ -212,9 +207,7 @@ export function ChatView({ isVisible = true, bootstrapConfig = null }: ChatViewP
       }
       openSidebar();
       setInspectorFocusSection(action.section);
-    };
-    window.addEventListener('orchid:navigate', onNavigate);
-    return () => window.removeEventListener('orchid:navigate', onNavigate);
+    });
   }, [openLeftSidebar, openSidebar]);
 
   const togglePalette = useCallback(() => {
@@ -228,7 +221,7 @@ export function ChatView({ isVisible = true, bootstrapConfig = null }: ChatViewP
   }, []);
 
   const openSettings = useCallback(() => {
-    window.dispatchEvent(new CustomEvent('orchid:open-settings'));
+    emitOrchidEvent('orchid:open-settings');
   }, []);
 
   useEffect(() => {
@@ -246,19 +239,15 @@ export function ChatView({ isVisible = true, bootstrapConfig = null }: ChatViewP
       .catch(() => { /* Non-fatal */ });
   }, []);
 
-  // Prefer live config updates after Settings save (tool-group expand pref).
   useEffect(() => {
-    const onConfigUpdated = (event: Event) => {
-      const detail = (event as CustomEvent<Record<string, unknown>>).detail;
+    return onOrchidEvent('orchid:config-updated', (detail) => {
       if (detail && typeof detail.always_expand_tool_groups === 'boolean') {
         setAlwaysExpandToolGroups(detail.always_expand_tool_groups);
       }
       if (detail && 'default_model' in detail) {
         setDefaultSelection(detail.default_model as ModelSelection | null);
       }
-    };
-    window.addEventListener('orchid:config-updated', onConfigUpdated);
-    return () => window.removeEventListener('orchid:config-updated', onConfigUpdated);
+    });
   }, []);
 
   // Keep composer model in sync with the active session. In draft mode (no
@@ -351,15 +340,11 @@ export function ChatView({ isVisible = true, bootstrapConfig = null }: ChatViewP
     [session, chat.beginSessionSwitch, chat.hydrateSnapshot, subagents.applyFromSession, todos.applyFromSession, draftTabVisible, messageQueue.clearQueue],
   );
 
-  // ConfigView left-rail pick: same hydrate path as sidebar (not store-only load).
   useEffect(() => {
-    const onSelectSession = (event: Event) => {
-      const id = (event as CustomEvent<{ id?: string }>).detail?.id;
-      if (!id) return;
-      void handleSessionSelect(id);
-    };
-    window.addEventListener('orchid:select-session', onSelectSession);
-    return () => window.removeEventListener('orchid:select-session', onSelectSession);
+    return onOrchidEvent('orchid:select-session', (detail) => {
+      if (!detail.id) return;
+      void handleSessionSelect(detail.id);
+    });
   }, [handleSessionSelect]);
 
   const enterDraftMode = useCallback(async (opts?: { clearComposer?: boolean }) => {
@@ -650,7 +635,7 @@ export function ChatView({ isVisible = true, bootstrapConfig = null }: ChatViewP
       }
       if (!providerAvailable) {
         notify('Connect a provider in Settings before sending a message.', 'warning');
-        window.dispatchEvent(new CustomEvent('orchid:open-settings', { detail: { tab: 'providers' } }));
+        emitOrchidEvent('orchid:open-settings', { tab: 'providers' });
         return;
       }
       if (!preferredSelection || !modelSelected) {
@@ -753,7 +738,7 @@ export function ChatView({ isVisible = true, bootstrapConfig = null }: ChatViewP
     void leaveDraftToOpenTab();
   }, [leaveDraftToOpenTab]);
   const handleOpenProviders = useCallback(() => {
-    window.dispatchEvent(new CustomEvent('orchid:open-settings', { detail: { tab: 'providers' } }));
+    emitOrchidEvent('orchid:open-settings', { tab: 'providers' });
   }, []);
   const handleFocusSectionConsumed = useCallback(() => {
     setInspectorFocusSection(null);
@@ -929,10 +914,7 @@ export function ChatView({ isVisible = true, bootstrapConfig = null }: ChatViewP
     getActiveSessionName: () => session.activeSession?.name ?? null,
     onSetTheme: async (name: string) => {
       setCurrentTheme(name);
-      // Live apply in App (applyTheme + persist). Avoid importing App here (circular).
-      window.dispatchEvent(
-        new CustomEvent('orchid:set-theme', { detail: { theme: name } }),
-      );
+      emitOrchidEvent('orchid:set-theme', { theme: name });
     },
     onSetPersonality: async (name: string) => {
       setCurrentPersonality(name);
@@ -999,6 +981,7 @@ export function ChatView({ isVisible = true, bootstrapConfig = null }: ChatViewP
     ['--orchid-shell-left' as string]: leftTrack,
     ['--orchid-shell-right' as string]: rightTrack,
   };
+  const chatSurfaceVisible = isVisible && contentMode === 'chat';
 
   return (
     <div
@@ -1143,9 +1126,9 @@ export function ChatView({ isVisible = true, bootstrapConfig = null }: ChatViewP
           className={contentMode === 'subagents' ? 'orchid-chat-content-preserved orchid-chat-content-hidden' : 'orchid-chat-content-preserved orchid-view-enter'}
           aria-hidden={contentMode === 'subagents' ? true : undefined}
         >
-        <DeferredSurface isVisible={isVisible}>
+        <DeferredSurface isVisible={chatSurfaceVisible}>
           <ChatStream
-            isVisible={isVisible}
+            isVisible={chatSurfaceVisible}
             messages={chat.messages}
             streamingContent={chat.streamingContent}
             toolBlocks={chat.toolBlocks}
@@ -1155,6 +1138,7 @@ export function ChatView({ isVisible = true, bootstrapConfig = null }: ChatViewP
             error={chat.error}
             usage={chat.usage}
             currentTurnUsage={chat.currentTurnUsage}
+            subagentUsage={subagents.usageSummary}
             subagents={subagents.subagents}
             sessionChains={session.activeSession?.chains ?? []}
             sessionId={session.activeSession?.id ?? null}

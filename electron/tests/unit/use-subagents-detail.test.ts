@@ -37,13 +37,16 @@ function record(status: SubagentRecord['status']): SubagentRecord {
   };
 }
 
-function projection(usage: Usage | null): SubagentLiveProjection {
+function projection(
+  usage: Usage | null,
+  state: SubagentLiveProjection['state'] = 'running',
+): SubagentLiveProjection {
   return {
     sessionId: 'session-1',
     subagentId: 'subagent-1',
     runId: 'run-1',
     sequence: 2,
-    state: 'running',
+    state,
     segments: [],
     toolCalls: [],
     usage,
@@ -71,5 +74,43 @@ describe('subagent detail usage', () => {
     );
 
     expect(detail.usage).toEqual(durableUsage);
+  });
+});
+
+describe('subagent detail display state', () => {
+  it('reads state from the live projection while the frozen record still says pending', () => {
+    // Delta path: the record only changes on spawned/terminal, so a running
+    // subagent can sit on a pending record. The badge must follow the live
+    // projection, matching the snapshot path.
+    const detail = buildSubagentDetail(
+      record('pending'),
+      Date.parse('2026-01-01T00:00:04.000Z'),
+      projection(liveUsage, 'running'),
+    );
+
+    expect(detail.state).toBe('running');
+    expect(detail.isRunning).toBe(true);
+  });
+
+  it('falls back to the durable record status when no live projection is present', () => {
+    const detail = buildSubagentDetail(
+      record('pending'),
+      Date.parse('2026-01-01T00:00:04.000Z'),
+      null,
+    );
+
+    expect(detail.state).toBe('pending');
+    expect(detail.isRunning).toBe(true);
+  });
+
+  it('treats a queued live projection as not running', () => {
+    const detail = buildSubagentDetail(
+      record('queued'),
+      Date.parse('2026-01-01T00:00:04.000Z'),
+      projection(null, 'queued'),
+    );
+
+    expect(detail.state).toBe('queued');
+    expect(detail.isRunning).toBe(false);
   });
 });

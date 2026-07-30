@@ -1,18 +1,15 @@
 /**
  * Chain types for the Orchid domain.
  *
- * Ported from src/orchid/domain/chain.py.
- *
- * Multi-chain model (matching Python):
+ * Multi-chain model:
  * - One Chain per user turn (append-only session.chains)
  * - LLM history is flatten(session.chains); storage keeps turns separate
  * - status ACTIVE while streaming; COMPLETED / INTERRUPTED / FAILED when frozen
  *
- * Key restore behavior (matching Python):
+ * Key restore behavior:
  * - fromStorageDict() runs orphan tool result reconciliation:
  *   TOOL_RESULT with no preceding assistant tool_calls → dropped
- * - ACTIVE / Python `running` → INTERRUPTED on restore (process died;
- *   chain cannot still be live — mirrors subagent PENDING/RUNNING migration)
+ * - ACTIVE → INTERRUPTED on restore (process died; chain cannot still be live)
  */
 
 import {
@@ -21,7 +18,7 @@ import {
   type ModelSelection,
 } from './provider';
 import type { Message, Usage } from './message';
-import { messageFromStorageDict, messageToStorageDict, MessageRole, MessageType } from './message';
+import { messageFromStorageDict, messageToStorageDict, MessageRole } from './message';
 import { sumMessageUsages } from '../usage';
 import type { SubagentRecord } from './subagent';
 import { subagentRecordFromStorageDict, subagentRecordToStorageDict } from './subagent';
@@ -30,9 +27,8 @@ import { subagentRecordFromStorageDict, subagentRecordToStorageDict } from './su
 
 /**
  * Chain lifecycle status.
- * `active` corresponds to Python's RUNNING; `failed` matches Python FAILED.
- * On restore, Python's `running` / `active` are accepted then migrated to
- * INTERRUPTED (a restored process cannot resume an in-flight chain).
+ * On restore, `active` is migrated to INTERRUPTED (a restored process
+ * cannot resume an in-flight chain).
  */
 export const ChainStatus = {
   ACTIVE: 'active',
@@ -85,26 +81,16 @@ export interface Chain {
 export interface ChainStorageDict {
   id?: string;
   sessionId?: string;
-  session_id?: string;
   messages?: unknown[];
   status?: string;
   selection?: ModelSelection | null;
   modelLabel?: string | null;
-  /** Version 1 only: preserved as a historical label on restore. */
-  model?: string;
   agentName?: string;
-  agent_name?: string;
   agentType?: string;
-  agent_type?: string;
   agentTier?: string;
-  agent_tier?: string;
   subagentRecord?: unknown;
-  subagent_record?: unknown;
   startTime?: string;
-  start_time?: string | number;
   endTime?: string | null;
-  end_time?: string | number | null;
-  // Forward-compat: extra keys tolerated on restore
   [key: string]: unknown;
 }
 
@@ -120,33 +106,16 @@ export function chainElapsedSeconds(chain: Chain, nowMs: number = Date.now()): n
   return Math.max(0, (end - start) / 1000);
 }
 
-/** Sum message.usage across a chain (matches Python ChainFooterWidget). */
+/** Sum message.usage across a chain. */
 export function sumChainUsage(chain: Pick<Chain, 'messages'>): Usage | null {
   return sumMessageUsages(chain.messages);
-}
-
-/**
- * True when a session looks like a pre-multi-chain mega-chain:
- * a single chain holding multiple user turns.
- */
-export function isLegacyMegaChain(chains: readonly Chain[]): boolean {
-  if (chains.length !== 1) return false;
-  let userTurns = 0;
-  for (const m of chains[0].messages) {
-    if (m.role === MessageRole.USER && m.type === MessageType.TEXT) {
-      userTurns += 1;
-      if (userTurns > 1) return true;
-    }
-  }
-  return false;
 }
 
 // ── Orphan tool result reconciliation ───────────────────────────────────────
 
 /**
  * Prune TOOL_RESULT messages whose tool_call_id has no preceding assistant
- * tool_calls partner in this list. Matches Python's
- * `_reconcile_orphan_tool_results`.
+ * tool_calls partner in this list.
  *
  * Also drops duplicate TOOL_RESULT messages for the same tool_call_id.
  */
@@ -209,18 +178,15 @@ export function chainToStorageDict(chain: Chain): ChainStorageDict {
 
 export function parseChainStatus(raw: unknown): ChainStatus {
   if (typeof raw !== 'string') return ChainStatus.COMPLETED;
-  // Python RUNNING → ACTIVE
-  if (raw === 'running' || raw === 'active') return ChainStatus.ACTIVE;
+  if (raw === 'active') return ChainStatus.ACTIVE;
   if (raw === 'completed') return ChainStatus.COMPLETED;
   if (raw === 'interrupted') return ChainStatus.INTERRUPTED;
   if (raw === 'failed') return ChainStatus.FAILED;
   return ChainStatus.COMPLETED;
 }
 
-/** Normalize start timestamps from ISO strings or Python monotonic floats. */
 function parseTimeField(raw: unknown): string | null {
   if (typeof raw === 'string' && raw.length > 0) return raw;
-  // Monotonic floats from Python cannot be converted to wall clock — drop.
   return null;
 }
 
@@ -232,43 +198,26 @@ function parseEndTime(raw: unknown): string | null {
 
 export function chainFromStorageDict(data: unknown): Chain {
   const raw = data as Record<string, unknown>;
-  const hasV2SelectionFields =
-    Object.prototype.hasOwnProperty.call(raw, 'selection') ||
-    Object.prototype.hasOwnProperty.call(raw, 'modelLabel');
   const parsedSelection = modelSelectionSchema.safeParse(raw.selection);
-  // A legacy `model` string has no connection identity and is therefore only a
-  // display label. Once a chain has v2 fields, never fall back to that alias.
   const selection: ModelSelection | null = parsedSelection.success ? parsedSelection.data : null;
   const modelLabel: string | null =
-    typeof raw.modelLabel === 'string'
-      ? raw.modelLabel
-      : hasV2SelectionFields
-        ? null
-        : typeof raw.model === 'string'
-          ? raw.model
-          : null;
+    typeof raw.modelLabel === 'string' ? raw.modelLabel : null;
 
-  // Parse messages and run orphan tool result reconciliation
   const rawMessages = Array.isArray(raw.messages) ? raw.messages : [];
   let messages = rawMessages.map((m) => messageFromStorageDict(m));
   messages = reconcileOrphanToolResults(messages);
 
   let status = parseChainStatus(raw.status);
 
-  // Parse subagentRecord if present
   let subagentRecord: SubagentRecord | null = null;
-  const srData = raw.subagentRecord ?? raw.subagent_record;
+  const srData = raw.subagentRecord;
   if (srData && typeof srData === 'object') {
     subagentRecord = subagentRecordFromStorageDict(srData);
   }
 
-  const startTime = parseTimeField(raw.startTime ?? raw.start_time);
-  let endTime = parseEndTime(raw.endTime ?? raw.end_time);
+  const startTime = parseTimeField(raw.startTime);
+  let endTime = parseEndTime(raw.endTime);
 
-  // Migrate ACTIVE/running → INTERRUPTED on restore (matching subagent
-  // PENDING/RUNNING → INTERRUPTED). A reloaded session cannot still have a
-  // live write target; leave the chain terminal so UI/manager don't treat it
-  // as the active turn.
   if (status === ChainStatus.ACTIVE) {
     status = ChainStatus.INTERRUPTED;
     if (!endTime) {
@@ -278,34 +227,14 @@ export function chainFromStorageDict(data: unknown): Chain {
 
   return {
     id: typeof raw.id === 'string' ? raw.id : '',
-    sessionId:
-      typeof raw.sessionId === 'string'
-        ? raw.sessionId
-        : typeof raw.session_id === 'string'
-          ? raw.session_id
-          : '',
+    sessionId: typeof raw.sessionId === 'string' ? raw.sessionId : '',
     messages,
     status,
     selection,
     modelLabel,
-    agentName:
-      typeof raw.agentName === 'string'
-        ? raw.agentName
-        : typeof raw.agent_name === 'string'
-          ? raw.agent_name
-          : '',
-    agentType:
-      typeof raw.agentType === 'string'
-        ? raw.agentType
-        : typeof raw.agent_type === 'string'
-          ? raw.agent_type
-          : '',
-    agentTier:
-      typeof raw.agentTier === 'string'
-        ? raw.agentTier
-        : typeof raw.agent_tier === 'string'
-          ? raw.agent_tier
-          : '',
+    agentName: typeof raw.agentName === 'string' ? raw.agentName : '',
+    agentType: typeof raw.agentType === 'string' ? raw.agentType : '',
+    agentTier: typeof raw.agentTier === 'string' ? raw.agentTier : '',
     subagentRecord,
     startTime,
     endTime,

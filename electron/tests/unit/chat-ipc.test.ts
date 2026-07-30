@@ -278,6 +278,21 @@ const mocks = vi.hoisted(() => {
       if (activeSession?.id === updated.id) activeSession = updated;
       return chain;
     }),
+    updateActiveChainMessages: vi.fn((messages: unknown[], sessionId?: string) => {
+      const target = sessionId
+        ? sessionsById.get(sessionId) ?? null
+        : activeSession;
+      if (!target?.activeChainId) return null;
+      const updated = {
+        ...target,
+        chains: target.chains.map((chain: { id: string }) =>
+          chain.id === target.activeChainId ? { ...chain, messages } : chain
+        ),
+      };
+      sessionsById.set(updated.id, updated);
+      if (activeSession?.id === updated.id) activeSession = updated;
+      return updated;
+    }),
     persistTurn: vi.fn((params: { messages: unknown[]; status?: string }, sessionId?: string) => {
       const target = sessionId
         ? sessionsById.get(sessionId) ?? null
@@ -353,6 +368,7 @@ const mocks = vi.hoisted(() => {
       sessionManager.switchTo.mockClear();
       sessionManager.clearActive.mockClear();
       sessionManager.startChain.mockClear();
+      sessionManager.updateActiveChainMessages.mockClear();
       sessionManager.persistTurn.mockClear();
       sessionManager.setReasoningEffortOverride.mockClear();
       sessionManager.setPermissionMode.mockClear();
@@ -831,7 +847,6 @@ describe('chat IPC driver streaming', () => {
     });
     expect(channelEvents(send, IPC_CHANNELS.CHAT_STATE).at(-1)?.[1]).toMatchObject({
       state: 'idle',
-      response: 'Waiting for your choice',
       interruptState: 'idle',
     });
     expect(mocks.sessionManager.persistTurn.mock.calls.at(-1)?.[0]).toMatchObject({
@@ -840,6 +855,137 @@ describe('chat IPC driver streaming', () => {
     expect(mocks.subagentManager.cancelRunning).not.toHaveBeenCalled();
     expect(mocks.backgroundStore.terminateSession).not.toHaveBeenCalled();
     releaseStream?.();
+  });
+
+  it('keeps chunk-only updates out of CHAT_STATE payloads', async () => {
+    const selection = {
+      connectionId: '11111111-1111-4111-8111-111111111111',
+      modelId: 'vendor/path/model',
+    };
+    mocks.sessionManager._setActive({
+      ...makeSession('abababab-abab-4aba-8aba-abababababab'),
+      model: selection.modelId,
+      selection,
+      modelLabel: selection.modelId,
+    });
+    let releaseSecondChunk: (() => void) | undefined;
+    let releaseFinish: (() => void) | undefined;
+    const secondChunkGate = new Promise<void>((resolve) => {
+      releaseSecondChunk = resolve;
+    });
+    const finishGate = new Promise<void>((resolve) => {
+      releaseFinish = resolve;
+    });
+    mocks.streamChat.mockImplementationOnce(async function* () {
+      yield { type: 'content', text: 'a' };
+      await secondChunkGate;
+      yield { type: 'content', text: 'b' };
+      yield { type: 'content', text: 'c' };
+      await finishGate;
+      yield { type: 'finish', finishReason: 'stop' };
+    });
+
+    const send = vi.fn();
+    const chatSend = mocks.handlers.get(IPC_CHANNELS.CHAT_SEND)!;
+    await chatSend({ sender: { id: 604, send } }, { message: 'Stream chunks' });
+    await waitForChannelCount(send, IPC_CHANNELS.CHAT_CHUNK, 1);
+    const stateEventsBeforeMoreChunks = channelEvents(send, IPC_CHANNELS.CHAT_STATE);
+
+    releaseSecondChunk!();
+    await waitForChannelCount(send, IPC_CHANNELS.CHAT_CHUNK, 3);
+
+    const stateEventsAfterMoreChunks = channelEvents(send, IPC_CHANNELS.CHAT_STATE);
+    expect(stateEventsAfterMoreChunks).toHaveLength(stateEventsBeforeMoreChunks.length);
+    expect(stateEventsAfterMoreChunks.map(([, event]) => event)).not.toContainEqual(
+      expect.objectContaining({ response: expect.any(String) }),
+    );
+    expect(mocks.sessionManager.updateActiveChainMessages).not.toHaveBeenCalled();
+
+    releaseFinish!();
+    await waitForDoneCount(send, 1);
+  });
+
+  it('checkpoints active turn messages at provider step boundaries', async () => {
+    const sessionId = 'bcbcbcbc-bcbc-4bcb-8bcb-bcbcbcbcbcbc';
+    const selection = {
+      connectionId: '11111111-1111-4111-8111-111111111111',
+      modelId: 'vendor/path/model',
+    };
+    mocks.sessionManager._setActive({
+      ...makeSession(sessionId),
+      model: selection.modelId,
+      selection,
+      modelLabel: selection.modelId,
+    });
+    let releaseStream: (() => void) | undefined;
+    const streamGate = new Promise<void>((resolve) => {
+      releaseStream = resolve;
+    });
+    mocks.streamChat.mockImplementationOnce(async function* () {
+      yield { type: 'thinking', text: 'Inspecting the workspace' };
+      yield {
+        type: 'tool_call',
+        toolCallId: 'tc-checkpoint-1',
+        toolName: 'read',
+        args: '{"path":"README.md"}',
+      };
+      yield successfulToolResult('tc-checkpoint-1', 'Orchid');
+      yield { type: 'content', text: 'Checking files' };
+      yield {
+        type: 'usage',
+        usage: {
+          prompt_tokens: 100,
+          completion_tokens: 20,
+          total_tokens: 120,
+          cached_tokens: 10,
+        },
+      };
+      await streamGate;
+      yield { type: 'finish', finishReason: 'stop' };
+    });
+
+    const send = vi.fn();
+    const chatSend = mocks.handlers.get(IPC_CHANNELS.CHAT_SEND)!;
+    await chatSend({ sender: { id: 605, send } }, { message: 'Keep this turn durable' });
+    await vi.waitFor(() => {
+      expect(mocks.sessionManager.updateActiveChainMessages).toHaveBeenCalledTimes(1);
+    });
+
+    const [checkpoint, checkpointSessionId] =
+      mocks.sessionManager.updateActiveChainMessages.mock.calls[0] as [
+        Array<Record<string, unknown>>,
+        string,
+      ];
+    expect(checkpointSessionId).toBe(sessionId);
+    expect(checkpoint).toEqual([
+      expect.objectContaining({ role: MessageRole.USER, content: 'Keep this turn durable' }),
+      expect.objectContaining({ type: MessageType.THINKING, content: 'Inspecting the workspace' }),
+      expect.objectContaining({ type: MessageType.TOOL_CALL, tool_call_id: 'tc-checkpoint-1' }),
+      expect.objectContaining({ type: MessageType.TOOL_RESULT, tool_call_id: 'tc-checkpoint-1' }),
+      expect.objectContaining({
+        role: MessageRole.ASSISTANT,
+        content: 'Checking files',
+        usage: expect.objectContaining({ prompt_tokens: 100 }),
+      }),
+    ]);
+    expect(mocks.sessionManager.persistTurn).not.toHaveBeenCalled();
+    expect(mocks.sessionManager.getSession(sessionId)?.activeChainId).toBe('chain-1');
+    const chatSnapshot = mocks.handlers.get(IPC_CHANNELS.CHAT_SNAPSHOT)!;
+    const liveSnapshot = await chatSnapshot(
+      { sender: { id: 605, send } },
+      { sessionId },
+    ) as { messages: Array<Record<string, unknown>>; live: { response: string; toolCalls: Array<{ toolCallId: string }> } | null };
+    expect(liveSnapshot.messages).toEqual([
+      expect.objectContaining({ role: MessageRole.USER, content: 'Keep this turn durable' }),
+    ]);
+    expect(liveSnapshot.live).not.toBeNull();
+    expect(liveSnapshot.live!.toolCalls).toEqual([
+      expect.objectContaining({ toolCallId: 'tc-checkpoint-1' }),
+    ]);
+    expect(liveSnapshot.live!.response).toBe('Checking files');
+
+    releaseStream?.();
+    await waitForDoneCount(send, 1);
   });
 
   it('persists cancelled tool results as visible but excluded from model context', async () => {
@@ -1500,7 +1646,7 @@ describe('chat IPC teardown and bgcmd bounds', () => {
       { sender: { id: 912, send: vi.fn() } },
       { commandId: 999_999, lastN: 1000 },
     );
-    expect(result).toEqual({ tail: '', exitCode: null });
+    expect(result).toEqual({ found: false });
   });
 
   it('bgcmd:snapshot denies cross-session command tails (M-P1-001)', async () => {
@@ -1526,13 +1672,13 @@ describe('chat IPC teardown and bgcmd bounds', () => {
       { sender: { id: 913, send: vi.fn() } },
       { commandId: 42, lastN: 50 },
     );
-    expect(denied).toEqual({ tail: '', exitCode: null });
+    expect(denied).toEqual({ found: false });
 
     const allowed = await snap(
       { sender: { id: 913, send: vi.fn() } },
       { commandId: 42, lastN: 50, sessionId: ownerSession },
     );
-    expect(allowed).toEqual({ tail: 'secret-output\n', exitCode: 0 });
+    expect(allowed).toEqual({ found: true, tail: 'secret-output\n', exitCode: 0 });
   });
 
   it('bgcmd:snapshot allows subagent-scoped tails within the same session', async () => {
@@ -1556,7 +1702,7 @@ describe('chat IPC teardown and bgcmd bounds', () => {
       { sender: { id: 914, send: vi.fn() } },
       { commandId: 43, lastN: 50 },
     );
-    expect(result).toEqual({ tail: 'subagent-output\n', exitCode: null });
+    expect(result).toEqual({ found: true, tail: 'subagent-output\n', exitCode: null });
   });
 });
 

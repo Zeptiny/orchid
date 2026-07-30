@@ -34,7 +34,7 @@ Do **not** use a chat-bubble component for message bodies (flat chat presentatio
 | --- | --- | --- |
 | Recognizable control/state | Typed React primitive under `components/ui/` | Yes — internally only |
 | One-off static geometry | Tailwind utilities in JSX | No |
-| Repeated product geometry/state | `orchid-*` composite in `components.css`; shell/session geometry in `shell.css` | `@apply` only (not in JSX) |
+| Repeated product geometry/state | `orchid-*` composite in `components.css` (or the matching `components-<surface>.css` split); shell/session geometry in `shell.css` | `@apply` only (not in JSX) |
 | Repeated interaction semantics | Typed React primitive under `components/ui/` | Yes — internally only |
 | Runtime-only value | Inline style or CSS variable at the narrowest boundary | No |
 
@@ -67,9 +67,8 @@ These component roots still appear in feature JSX and are tracked by the drift s
 - Prefer standard spacing, text, and radius scales over arbitrary values (`text-[10px]`, `z-[1000]`, `rounded-[5px]`).
 - **Do not introduce raw non-token colors** (`oklch(...)`, `#hex`, `rgb(...)`, `hsl(...)`) in `styles/*.css` or feature `className` strings. Only `index.css` (the `@theme` fallback block) and `themes/*.css` may use raw color values. `primitives.css` is theme-driven end to end: every color is a `var(...)` / `color-mix(...)` / `currentColor` expression.
 - Keep dynamic values (grid tracks, textarea height, swatches, progress) as data via CSS variables or inline styles — not static utility classes.
-- Namespace new composites with `orchid-`. Define them in `components.css` `@layer orchid` using `@apply` + semantic tokens.
-- Keep `@layer orchid` after Tailwind's layers and the primitive engine (`@layer components`). Product geometry historically lived in unlayered `chat.css`; the dedicated final layer preserves that precedence over utilities and component defaults without returning to an unlayered compatibility sheet.
-- **`chat.css` is frozen**: do not add new rules or grow its line count. Product CSS has been migrated to `components.css`, `shell.css`, and `markdown.css`; `chat.css` is now header-only. Any new selector belongs in the appropriate `@layer orchid` surface file.
+- Namespace new composites with `orchid-`. Define them under `@layer orchid` using `@apply` + semantic tokens — in `components.css` for shared/cross-cutting composites, or in the matching surface split (`components-chat.css`, `components-session.css`, `components-config.css`).
+- Keep `@layer orchid` after Tailwind's layers and the primitive engine (`@layer components`). The dedicated final layer preserves product geometry precedence over utilities and component defaults.
 - Do not redefine reserved component roots outside `primitives.css` (see below).
 - Do not add CSS Modules or a second styling library.
 - **Do not reintroduce DaisyUI** — no `@plugin "daisyui"`, no `daisyui` dependency, no DaisyUI-internal variables (`--fallback-*`, `--depth`, `--noise`, `--size-field`, `--size-selector`). The removal is gated by the contract test.
@@ -97,7 +96,6 @@ Product-specific names that only *start* like a reserved root but are not the ro
 | Runtime textarea height | `InputArea.tsx` + `.orchid-composer-textarea` in exceptions | Keep resize behavior; do not encode generated pixel heights as static utilities |
 | Runtime swatches / progress | `ContextGrid.tsx`, `Footer.tsx`, `CommandPalette.tsx` | Dynamic colors/fractions as data; classes for surrounding geometry |
 | Focus / modal browser quirks | focused exception selectors | Only after smoke proves utilities/engine insufficient |
-| Residual product CSS | `styles/chat.css` (header-only) | Shell/session selectors live in `shell.css`; onboarding/config/picker composites live in `components.css`; `chat.css` is empty and frozen |
 
 Every exception needs a short comment or a row in this table explaining why a predefined class cannot replace it.
 
@@ -140,12 +138,14 @@ Fonts: `Instrument Sans` (UI body), `Bricolage Grotesque` (display headings), an
 | --- | --- |
 | `index.css` | **Canonical entry** (imported from `main.tsx`): Tailwind, `@theme` fallback tokens, document/root rules, layer imports |
 | `primitives.css` | Component-class engine (`@layer components`): `btn`, `input`, `badge`, `modal`, `tabs`, `loading`, … all theme-token driven |
-| `components.css` | Shared `@layer orchid` product composites with `@apply` + semantic/theme tokens (single-name; no legacy dual aliases) |
+| `components.css` | Shared/cross-cutting `@layer orchid` product composites with `@apply` + semantic/theme tokens (single-name; no legacy dual aliases); base of the surface split |
+| `components-chat.css` | Chat-surface `@layer orchid` composites: stream, empty state, tool-activity groups, error/chain stubs, composer, slash menu, ask-question and permission cards, chat footer chrome, command toast |
+| `components-session.css` | Sidebar/inspector `@layer orchid` composites: context stacked bar, inspector collapses (`mock-collapse`), context legend panel rows, dense-chrome badge overrides |
+| `components-config.css` | Config/preferences `@layer orchid` composites: config footer chrome, Preferences fieldsets/fields/grids, model and tier picker menus, definition cards |
 | `shell.css` | Final-layer three-panel shell, session navigation, and inspector geometry preserved from the reference interface |
 | `motion.css` | Shared state-transition vocabulary: mounted disclosures, semantic state swaps, entrances, overlays, and status transitions |
 | `markdown.css` | Markdown / GFM / highlight tokens |
 | `exceptions.css` | Scrollbars, keyframes, streaming cursor, shell grid tracks, composer height hooks |
-| `chat.css` | Header-only (no CSS rules); frozen — residual bridge comment only |
 | `README.md` | This contract |
 
 ### Import graph
@@ -155,15 +155,21 @@ main.tsx
   └── styles/index.css
         ├── tailwindcss (@theme tokens)
         ├── primitives.css      ← component engine (@layer components)
-        ├── components.css
+        ├── components.css      ← shared composite base
+        ├── components-chat.css
+        ├── components-session.css
+        ├── components-config.css
         ├── shell.css
         ├── motion.css          ← shared state-transition vocabulary
         ├── markdown.css
-        ├── exceptions.css
-        └── chat.css            ← residual bridge only
+        └── exceptions.css
 ```
 
 Runtime themes are **not** part of this graph: `applyTheme()` swaps a single `#orchid-theme` stylesheet link (`themes/*.css`) and sets `document.documentElement.dataset.theme`.
+
+### Components surface split
+
+`components.css` is split by surface area (`components-chat.css`, `components-session.css`, `components-config.css`) with the base file imported first. All four files share the same `@layer orchid`, so the import order in `index.css` is the cascade order for equal-specificity rules — keep new rules in the file matching their surface and do not reorder the imports. A few surface rules deliberately remain in `components.css` because contract tests pin them there (message/thought/tool-block/live-command font contracts, the onboarding shell, the provider wizard modal box, the config view shell, the command palette hooks, and the subagent view). When extending one of those pinned families, leave the pinned selector in `components.css`.
 
 ## Motion contract
 
@@ -177,11 +183,6 @@ Motion communicates continuity or a meaningful state change; it must not decorat
 - Do not animate streaming prose/reasoning, elapsed or token counters, terminal output, cursor movement, or other high-frequency text. Primitive progress geometry may transition.
 - Shell width and grid-column transitions are the only approved broad layout motion. New layout animation requires an explicit contract update.
 - Reduced-motion behavior is mandatory and centrally enforced; no component may override it with longer animation declarations.
-
-### Residual bridge (`chat.css`)
-
-- All previous rules were migrated; `chat.css` is header-only (comment block only, no CSS rules) and frozen.
-- **Do not add new rules** to `chat.css`. Shared composites → `components.css`; shell/session geometry → `shell.css`; markdown → `markdown.css`; browser exceptions → `exceptions.css`; component roots → `primitives.css`.
 
 ### Known reserved redefinitions outside primitives.css
 
@@ -216,7 +217,7 @@ Engine classes live inside the primitive. Feature JSX never names `btn` directly
 
 ### Example 3 — `orchid-*` composite (repeated product surface)
 
-In `components.css`:
+In the matching surface file (shared composites go in `components.css`; this one lives in `components-chat.css`):
 
 ```css
 @layer orchid {

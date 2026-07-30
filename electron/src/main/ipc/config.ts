@@ -2,8 +2,6 @@
  * Config IPC handlers — config:get, config:save.
  *
  * Wraps ConfigManager with zod-validated payloads.
- * Provider connections live in their own store and IPC surface; this boundary
- * fails closed for legacy provider aliases and secrets in the config document.
  */
 import * as fs from 'node:fs';
 import * as path from 'node:path';
@@ -11,7 +9,6 @@ import { ipcMain } from 'electron';
 import { IPC_CHANNELS } from '../../shared/types/ipc';
 import {
   getConfig,
-  getConfigDiagnostics,
   loadConfig,
   ConfigManager,
   atomicWriteJson,
@@ -141,22 +138,12 @@ function loadJsonSafe(filePath: string): unknown {
 }
 
 export function registerConfigIPC(): void {
-  // config:get — provider connection metadata and credentials never travel in
-  // this general configuration response.
   ipcMain.handle(IPC_CHANNELS.CONFIG_GET, async () => {
-    return { ...getConfig(), providers: {} };
+    return getConfig();
   });
 
   ipcMain.handle(IPC_CHANNELS.CONFIG_GET_HOME, async () => {
-    const result = loadConfig({ projectDir: HOME_CONFIG_DIR });
-    return { ...result, providers: {} };
-  });
-
-  // Expose only non-secret compatibility notices. This lets the renderer
-  // explain why a legacy provider/default was reset instead of silently
-  // presenting a disconnected workspace.
-  ipcMain.handle(IPC_CHANNELS.CONFIG_DIAGNOSTICS, async () => {
-    return getConfigDiagnostics({ projectDir: HOME_CONFIG_DIR });
+    return loadConfig({ projectDir: HOME_CONFIG_DIR });
   });
 
   // config:list_personalities — home personalities only (~/.orchid/personalities).
@@ -248,7 +235,6 @@ export function registerConfigIPC(): void {
       const filtered = Object.fromEntries(
         Object.entries(merged).filter(([k]) => PROJECT_CONFIG_ALLOWED_KEYS.has(k) || k === 'rag'),
       );
-      delete filtered['providers'];
       const validated = configSchema.safeParse(filtered);
       if (!validated.success) {
         throw new Error(`Invalid project config: ${validated.error.message}`);
@@ -268,7 +254,6 @@ export function registerConfigIPC(): void {
 export function unregisterConfigIPC(): void {
   ipcMain.removeHandler(IPC_CHANNELS.CONFIG_GET);
   ipcMain.removeHandler(IPC_CHANNELS.CONFIG_GET_HOME);
-  ipcMain.removeHandler(IPC_CHANNELS.CONFIG_DIAGNOSTICS);
   ipcMain.removeHandler(IPC_CHANNELS.CONFIG_SAVE);
   ipcMain.removeHandler(IPC_CHANNELS.CONFIG_LIST_PERSONALITIES);
   ipcMain.removeHandler(IPC_CHANNELS.CONFIG_READ_PROJECT);

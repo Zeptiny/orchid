@@ -9,20 +9,15 @@
  * Level 2 → expand a tool row for details (existing ToolCallBlock)
  */
 import { useEffect, useId, useMemo, useState } from 'react';
-import type { Message } from '../../shared/types/message';
-import type { ToolBlock } from '../hooks/useChat';
 import { summarizeToolGroup } from '../utils/tool-grouping';
 import type { SubagentTitleRecord } from '../utils/tool-title';
+import type { ActivityChild } from '../utils/stream-building';
 import { Icon } from './Icon';
 import { MessageWidget } from './MessageWidget';
 import { ToolCallBlock } from './ToolCallBlock';
 import { CollapsibleRegion } from './ui/CollapsibleRegion';
 import { Spinner } from './ui/Spinner';
 import { StatusBadge } from './ui/StatusBadge';
-
-export type ActivityChild =
-  | { kind: 'tool'; block: ToolBlock }
-  | { kind: 'thought'; message: Message; isStreaming?: boolean };
 
 export interface ToolActivityGroupProps {
   /** Ordered entries (thoughts + tools) as they appeared in the stream. */
@@ -49,10 +44,15 @@ export function ToolActivityGroup({
   );
 
   const [expanded, setExpanded] = useState(alwaysExpand);
+  const [hasExpanded, setHasExpanded] = useState(alwaysExpand);
 
   useEffect(() => {
     if (alwaysExpand) setExpanded(true);
   }, [alwaysExpand]);
+
+  useEffect(() => {
+    if (expanded) setHasExpanded(true);
+  }, [expanded]);
 
   const summary = useMemo(
     () =>
@@ -122,10 +122,10 @@ export function ToolActivityGroup({
         </span>
       </button>
 
-      <CollapsibleRegion open={expanded} id={panelId}>
+      <CollapsibleRegion open={expanded} id={panelId} lazyMount>
         <div className="orchid-tool-activity-body">
           <div className="tool-activity-group-children orchid-tool-activity-children">
-            {items.map((child, i) => {
+            {(expanded || hasExpanded) && items.map((child, i) => {
               if (child.kind === 'tool') {
                 return (
                   <ToolCallBlock

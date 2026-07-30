@@ -25,6 +25,7 @@ import {
   shouldOpenCollapseFromToken,
 } from '../utils/navigate-shell';
 import { formatUsageSummary } from '../utils/format-usage';
+import { groupSubagents } from '../utils/subagent-stream';
 import { Icon } from './Icon';
 import { Button } from './ui/Button';
 import { CollapsibleRegion } from './ui/CollapsibleRegion';
@@ -314,6 +315,7 @@ function CollapseBlock({
 
 export interface SubagentStatusGroups {
   running: readonly SubagentRecord[];
+  queued: readonly SubagentRecord[];
   other: readonly SubagentRecord[];
 }
 
@@ -321,18 +323,8 @@ export interface SubagentStatusGroups {
 export function partitionSubagentsByStatus(
   agents: readonly SubagentRecord[],
 ): SubagentStatusGroups {
-  const running: SubagentRecord[] = [];
-  const other: SubagentRecord[] = [];
-
-  for (const agent of agents) {
-    if (agent.status === 'running' || agent.status === 'pending') {
-      running.push(agent);
-    } else {
-      other.push(agent);
-    }
-  }
-
-  return { running, other };
+  const { running, queued, ended } = groupSubagents(agents);
+  return { running, queued, other: ended };
 }
 
 export function countRunningSubagents(agents: readonly SubagentRecord[]): number {
@@ -386,11 +378,11 @@ export function SubagentsSection({
   }
 
   const agents = state.status === 'ready' ? state.subagents : [];
-  const { running, other } = partitionSubagentsByStatus(agents);
+  const { running, queued, other } = partitionSubagentsByStatus(agents);
 
   return (
     <div className="inspector-stack">
-      {running.map((agent) => (
+      {[...running, ...queued].map((agent) => (
         <SubagentRow
           key={agent.id}
           agent={agent}
@@ -505,6 +497,7 @@ function SubagentRow({
 
 function SubagentStateBadge({ state }: { state: string }) {
   const config: Record<string, { tone: 'neutral' | 'warning' | 'success' | 'error' | 'info'; label: string }> = {
+    queued: { tone: 'neutral', label: 'queued' },
     pending: { tone: 'neutral', label: 'pending' },
     running: { tone: 'warning', label: 'running' },
     completed: { tone: 'success', label: 'done' },

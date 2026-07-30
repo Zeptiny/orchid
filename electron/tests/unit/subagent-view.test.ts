@@ -3,6 +3,7 @@ import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import type { SubagentRecord } from '../../src/shared/types/subagent';
+import { EMPTY_SUBAGENT_USAGE_SUMMARY } from '../../src/shared/usage';
 import {
   formatSubagentUsage,
   keepSubagentRowSelected,
@@ -42,8 +43,8 @@ describe('SubagentView', () => {
     };
     const html = renderToStaticMarkup(createElement(SubagentView, {
       subagents: {
-        state, subagents: state.subagents, groups: { running: state.subagents, ended: [] },
-        totalUsage: null, usageByParentChain: new Map(), refresh: async () => {}, retry: async () => {},
+        state, subagents: state.subagents, groups: { queued: [], running: state.subagents, ended: [] },
+        totalUsage: null, usageByParentChain: new Map(), usageSummary: EMPTY_SUBAGENT_USAGE_SUMMARY, refresh: async () => {}, retry: async () => {},
         isRetrying: false, applyFromSession: () => {}, selectedId: 'running', select: () => {},
         getDetail: () => ({
           id: 'running', name: 'running', type: 'Explorer', tier: 'bloom', state: 'running',
@@ -71,6 +72,28 @@ describe('SubagentView', () => {
     expect(html).not.toContain('Retry');
   });
 
+  it('renders a queued subagent row with its neutral-tone badge', () => {
+    const queued = record('queued-1', 'queued', '2026-01-01T00:02:00.000Z');
+    const state = {
+      status: 'ready' as const,
+      subagents: [queued],
+    };
+    const html = renderToStaticMarkup(createElement(SubagentView, {
+      subagents: {
+        state, subagents: state.subagents, groups: { queued: state.subagents, running: [], ended: [] },
+        totalUsage: null, usageByParentChain: new Map(), usageSummary: EMPTY_SUBAGENT_USAGE_SUMMARY, refresh: async () => {}, retry: async () => {},
+        isRetrying: false, applyFromSession: () => {}, selectedId: null, select: () => {},
+        getDetail: () => null, live: new Map(), getLive: () => null,
+      },
+      onBackToChat: () => {},
+      openRequest: { generation: 1, id: null },
+    }));
+    expect(html).toContain('Queued');
+    expect(html).not.toContain('No queued subagents.');
+    expect(html).toMatch(/<span class="[^"]*badge[^"]*">queued<\/span>/);
+    expect(html).not.toMatch(/badge-(info|success|warning|error|primary|ghost)/);
+  });
+
   it('keeps general opens on the list and row opens on the requested detail', () => {
     expect(resolveSubagentOpenRequest({ generation: 1, id: null })).toEqual({ selectedId: null, narrowDetail: false });
     expect(resolveSubagentOpenRequest({ generation: 2, id: 'ended' })).toEqual({ selectedId: 'ended', narrowDetail: true });
@@ -82,8 +105,8 @@ describe('SubagentView', () => {
     const html = renderToStaticMarkup(createElement(SubagentView, {
       subagents: {
         state: { status: 'ready', subagents: records }, subagents: records,
-        groups: { running: [], ended: records }, totalUsage: null,
-        usageByParentChain: new Map(), refresh: async () => {}, retry: async () => {},
+        groups: { queued: [], running: [], ended: records }, totalUsage: null,
+        usageByParentChain: new Map(), usageSummary: EMPTY_SUBAGENT_USAGE_SUMMARY, refresh: async () => {}, retry: async () => {},
         isRetrying: false, applyFromSession: () => {}, selectedId: records[0].id, select: () => {},
         getDetail: () => null, live: new Map(), getLive: () => null,
       },
@@ -99,8 +122,8 @@ describe('SubagentView', () => {
     const html = renderToStaticMarkup(createElement(SubagentView, {
       subagents: {
         state: { status: 'ready', subagents: [] }, subagents: [],
-        groups: { running: [], ended: [] }, totalUsage: null,
-        usageByParentChain: new Map(), refresh: async () => {}, retry: async () => {},
+        groups: { queued: [], running: [], ended: [] }, totalUsage: null,
+        usageByParentChain: new Map(), usageSummary: EMPTY_SUBAGENT_USAGE_SUMMARY, refresh: async () => {}, retry: async () => {},
         isRetrying: false, applyFromSession: () => {}, selectedId: null, select: () => {},
         getDetail: () => null, live: new Map(), getLive: () => null,
       },
@@ -148,5 +171,14 @@ describe('SubagentView', () => {
     expect(chat).toMatch(/orchid-chat-content-preserved/);
     expect(chat).toMatch(/setAttribute\('inert'/);
     expect(chat).toMatch(/aria-hidden/);
+  });
+
+  it('freezes the CSS-hidden chat presentation while subagents are shown and restores it in chat mode', () => {
+    const chat = readFileSync(new URL('../../src/renderer/components/ChatView.tsx', import.meta.url), 'utf8');
+
+    expect(chat).toMatch(/const\s+chatSurfaceVisible\s*=\s*isVisible\s*&&\s*contentMode\s*===\s*'chat'/);
+    expect(chat).toMatch(
+      /<DeferredSurface\s+isVisible=\{chatSurfaceVisible\}>\s*<ChatStream\s+isVisible=\{chatSurfaceVisible\}/,
+    );
   });
 });

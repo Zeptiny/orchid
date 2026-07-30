@@ -13,7 +13,6 @@
  */
 import * as path from 'node:path';
 import * as fs from 'node:fs';
-import { minimatch } from 'minimatch';
 import { z } from 'zod';
 import type { Skill } from '../../../shared/types/skill';
 import type { ToolDefinition, ToolHandler } from '../types';
@@ -37,7 +36,7 @@ export function filterSkills(
 
   const result = new Map<string, Skill>();
   for (const [name, skill] of registry) {
-    if (allowed.some((pattern) => minimatch(name, pattern))) {
+    if (allowed.some((pattern) => path.matchesGlob(name, pattern))) {
       result.set(name, skill);
     }
   }
@@ -89,7 +88,7 @@ export function resolveSkillDependencies(
         `Skill '${name}' requires '${depName}' which does not exist`,
       );
     }
-    if (!allowed.some((p) => minimatch(depName, p))) {
+    if (!allowed.some((p) => path.matchesGlob(depName, p))) {
       throw new Error(
         `Skill '${name}' requires '${depName}' which is not available for this agent`,
       );

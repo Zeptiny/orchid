@@ -107,11 +107,12 @@ function mockDoGenerate() {
 }
 
 /** Create minimal params mock. */
-function mockParams() {
+function mockParams(abortSignal?: AbortSignal) {
   return {
     mode: { type: 'regular' as const },
     prompt: [],
     maxTokens: 1000,
+    ...(abortSignal ? { abortSignal } : {}),
   };
 }
 
@@ -206,6 +207,31 @@ describe('Retry middleware', () => {
     await expect(resultPromise).rejects.toThrow('Server error');
     expect(doStreamCalls).toBe(3); // initial + 2 retries
   }, 10000);
+
+  it('cancels a setup retry backoff without starting another provider attempt', async () => {
+    const middleware = createRetryMiddleware({ maxRetries: 3 });
+    const abortController = new AbortController();
+    const cancellation = new Error('cancel setup retry');
+    const doStream = vi.fn(async () => {
+      throw createHttpError('Rate limit exceeded', 429);
+    });
+
+    const resultPromise = middleware.wrapStream!({
+      doStream,
+      doGenerate: mockDoGenerate,
+      params: mockParams(abortController.signal),
+      model: mockModel(),
+    });
+
+    await vi.advanceTimersByTimeAsync(0);
+    expect(doStream).toHaveBeenCalledTimes(1);
+
+    abortController.abort(cancellation);
+
+    await expect(resultPromise).rejects.toThrow('cancel setup retry');
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(doStream).toHaveBeenCalledTimes(1);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -362,6 +388,81 @@ describe('Retry guard: no retry after content delivered', () => {
     expect(collected[0]).toEqual({ type: 'text-delta', id: 'txt-0', delta: 'Recovered' });
     expect(doStreamCalls).toBe(2);
   }, 10000);
+
+  it('cancels a mid-stream retry backoff without starting another provider attempt', async () => {
+    vi.useFakeTimers();
+    const middleware = createRetryMiddleware({ maxRetries: 3 });
+    const abortController = new AbortController();
+    const cancellation = new Error('cancel stream retry');
+    const doStream = vi.fn(async () => ({
+      stream: new ReadableStream<LanguageModelV4StreamPart>({
+        start(controller) {
+          controller.error(createHttpError('Connection reset before tokens', 502));
+        },
+      }),
+      rawCall: { rawPrompt: '', rawSettings: {} },
+      rawResponse: {},
+      request: { body: '{}' },
+      response: {},
+    }));
+
+    const result = await middleware.wrapStream!({
+      doStream,
+      doGenerate: mockDoGenerate,
+      params: mockParams(abortController.signal),
+      model: mockModel(),
+    });
+    const reader = result.stream.getReader();
+    const readPromise = reader.read();
+
+    await vi.advanceTimersByTimeAsync(0);
+    expect(doStream).toHaveBeenCalledTimes(1);
+
+    abortController.abort(cancellation);
+
+    await expect(readPromise).rejects.toThrow('cancel stream retry');
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(doStream).toHaveBeenCalledTimes(1);
+  });
+
+  it('cancels the active provider reader when the request aborts', async () => {
+    const middleware = createRetryMiddleware({ maxRetries: 3 });
+    const abortController = new AbortController();
+    const cancellation = new Error('cancel active stream');
+    const cancelProviderStream = vi.fn();
+    let beganPulling: (() => void) | undefined;
+    const pulling = new Promise<void>((resolve) => {
+      beganPulling = resolve;
+    });
+    const doStream = vi.fn(async () => ({
+      stream: new ReadableStream<LanguageModelV4StreamPart>({
+        pull() {
+          beganPulling?.();
+          return new Promise<void>(() => {});
+        },
+        cancel: cancelProviderStream,
+      }),
+      rawCall: { rawPrompt: '', rawSettings: {} },
+      rawResponse: {},
+      request: { body: '{}' },
+      response: {},
+    }));
+
+    const result = await middleware.wrapStream!({
+      doStream,
+      doGenerate: mockDoGenerate,
+      params: mockParams(abortController.signal),
+      model: mockModel(),
+    });
+    const reader = result.stream.getReader();
+    const readPromise = reader.read();
+    await pulling;
+
+    abortController.abort(cancellation);
+
+    expect(cancelProviderStream).toHaveBeenCalledWith(cancellation);
+    await expect(readPromise).rejects.toThrow('cancel active stream');
+  });
 });
 
 // ---------------------------------------------------------------------------

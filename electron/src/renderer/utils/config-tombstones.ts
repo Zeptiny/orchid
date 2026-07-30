@@ -8,7 +8,7 @@ function isUnsafeKey(key: string): boolean {
 }
 
 /**
- * When the draft replaces a whole record map (providers / mcp_servers),
+ * When the draft replaces a whole record map (mcp_servers),
  * mark aliases present in the original but missing from the draft with
  * `null` so config:save deep-merge treats them as deletions.
  *
@@ -24,7 +24,7 @@ export function withMapDeletionTombstones(
   if (!original) return draft;
   const updates: ConfigPatch = { ...draft };
 
-  for (const key of ['providers', 'mcp_servers'] as const) {
+  for (const key of ['mcp_servers'] as const) {
     if (!(key in draft)) continue;
     const next = draft[key];
     if (!next || typeof next !== 'object' || Array.isArray(next)) continue;

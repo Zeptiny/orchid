@@ -7,8 +7,6 @@
  * - cancelOne / cancelAll / cancelRunning
  * - getStates / allRecords / getRecord
  *
- * Ported from Python `src/orchid/agents/manager.py` (SubagentManager).
- *
  * When a stream runner is configured (production), spawn fire-and-forgets an
  * isolated LLM stream, accumulates messages + token usage on the subagent
  * chain, and notifies listeners so the session can persist `subagent_chains`.
@@ -27,9 +25,13 @@ import type { ProjectRuntime } from '../project/runtime';
 import { addStepUsage } from '../../shared/usage';
 import type { SubagentRecord as DomainSubagentRecord } from '../../shared/types/subagent';
 import {
+  SubagentDeltaEventType,
   SubagentStatus,
-  type SubagentLiveChange,
+  type SubagentDeltaEvent,
+  type SubagentDeltaEventBase,
   type SubagentLiveProjection,
+  type SubagentLiveSegment,
+  type SubagentTerminalState,
   type SubagentToolSnapshot,
 } from '../../shared/types/subagent';
 import {
@@ -39,18 +41,32 @@ import {
   makeToolResultMessage,
   makeUserMessage,
 } from '../llm/message-factories';
+import { getConfig } from '../config/loader';
+import { subagentsConfigSchema } from '../config/schema';
+import { AdmissionController, type AdmissionCounters, type SubagentAdmissionLimits } from './admission';
+import {
+  SubagentWaitTimeoutError,
+  SubagentQueueFullError,
+  SubagentNotTerminalError,
+  SubagentClosedError,
+  SubagentEvictedError,
+  SubagentSummaryClosedError,
+  SubagentStillSettlingError,
+} from './errors';
 
-// ── Enums ───────────────────────────────────────────────────────────────────
+export type { SubagentAdmissionLimits } from './admission';
+export {
+  SubagentWaitTimeoutError,
+  SubagentQueueFullError,
+  SubagentNotTerminalError,
+  SubagentClosedError,
+  SubagentEvictedError,
+  SubagentSummaryClosedError,
+  SubagentStillSettlingError,
+} from './errors';
 
-export const SubagentState = {
-  PENDING: 'pending',
-  RUNNING: 'running',
-  COMPLETED: 'completed',
-  FAILED: 'failed',
-  INTERRUPTED: 'interrupted',
-} as const;
-
-export type SubagentState = (typeof SubagentState)[keyof typeof SubagentState];
+export { SubagentState } from './types';
+import { SubagentState } from './types';
 
 /** Result of answering (or declining) a subagent's pending question. */
 export type SubagentQuestionResult =
@@ -64,11 +80,43 @@ const TERMINAL_STATES = new Set<SubagentState>([
   SubagentState.INTERRUPTED,
 ]);
 
+/** Terminal-state check shared by persistence, tools, and IPC wiring. */
+export function isTerminalSubagentState(state: SubagentState): boolean {
+  return TERMINAL_STATES.has(state);
+}
+
+/**
+ * Terminal domain statuses map 1:1 onto runtime states for hydration. Stored
+ * `subagentChains` only ever carry terminal statuses (the restore migration
+ * maps queued/pending/running → interrupted); a non-terminal lookup yields
+ * `undefined` and the spec is skipped defensively.
+ */
+const HYDRATABLE_STATUS_TO_STATE: Partial<Record<SubagentStatus, SubagentState>> = {
+  [SubagentStatus.COMPLETED]: SubagentState.COMPLETED,
+  [SubagentStatus.FAILED]: SubagentState.FAILED,
+  [SubagentStatus.INTERRUPTED]: SubagentState.INTERRUPTED,
+};
+
+/**
+ * Lazily parsed `subagents.*` schema defaults, cached in a module-level
+ * singleton. Every "config not loaded" fallback in this module reads these so
+ * the values cannot silently drift from the schema (they ARE the schema
+ * defaults, not hand-duplicated literals).
+ */
+let subagentConfigDefaults: ReturnType<typeof subagentsConfigSchema.parse> | null = null;
+
+function getSubagentConfigDefaults(): ReturnType<typeof subagentsConfigSchema.parse> {
+  subagentConfigDefaults ??= subagentsConfigSchema.parse({});
+  return subagentConfigDefaults;
+}
+
 // ── Stream runner ───────────────────────────────────────────────────────────
 
 /** Production stream driver (wired from subagent-runner.ts). */
 export type SubagentStreamRunner = (params: {
   task: string;
+  /** Full chain to replay for a resumed run; absent = spawn path. */
+  history?: Message[];
   agent: Agent;
   selection: ModelSelection | null;
   abortSignal: AbortSignal;
@@ -89,7 +137,6 @@ export type SubagentStreamRunner = (params: {
 }) => AsyncGenerator<StreamEvent>;
 
 export type SubagentChangeListener = (records: readonly SubagentRecord[]) => void;
-export type SubagentLiveChangeListener = (change: SubagentLiveChange) => void;
 type SubagentWaiterReason = 'state-change' | 'flush';
 
 /**
@@ -112,24 +159,58 @@ export function getDefaultWaitTimeoutMs(): number {
 }
 
 /**
- * Thrown by `SubagentManager.wait` when the wait budget elapses while any
- * target is still non-terminal. Subagents are not cancelled.
+ * Resolve admission limits from the live process-wide config (`getConfig()`),
+ * read at spawn/admission time so a runtime settings change takes effect
+ * immediately. Falls back to the schema defaults when config is not loaded.
  */
-export class SubagentWaitTimeoutError extends Error {
-  readonly timeoutMs: number;
-  readonly statusSnapshot: string[];
+function getAdmissionLimits(): SubagentAdmissionLimits {
+  try {
+    const { max_active_global, max_active_per_session, max_queued } = getConfig().subagents;
+    return {
+      maxActiveGlobal: max_active_global,
+      maxActivePerSession: max_active_per_session,
+      maxQueued: max_queued,
+    };
+  } catch {
+    const defaults = getSubagentConfigDefaults();
+    return {
+      maxActiveGlobal: defaults.max_active_global,
+      maxActivePerSession: defaults.max_active_per_session,
+      maxQueued: defaults.max_queued,
+    };
+  }
+}
 
-  constructor(timeoutMs: number, statusSnapshot: string[]) {
-    const seconds = Math.round(timeoutMs / 1000);
-    super(
-      `Wait timed out after ${seconds}s with no completion. ` +
-        `Subagents are still running (${statusSnapshot.join('; ')}). ` +
-        `Only the wait tool stopped waiting; they were not cancelled or interrupted. ` +
-        `Call wait_for_subagent again or interrupt_subagents to stop them.`,
-    );
-    this.name = 'SubagentWaitTimeoutError';
-    this.timeoutMs = timeoutMs;
-    this.statusSnapshot = statusSnapshot;
+/**
+ * Resolve the per-subagent `usage` delta throttle interval in milliseconds.
+ *
+ * Source: `subagents.usage_event_interval_ms` from the live process-wide
+ * config (`getConfig()`), read at emission time so a runtime settings change
+ * takes effect immediately rather than snapshotting at spawn. Falls back to
+ * the schema default when the config is not loaded.
+ *
+ * Uses the top-level `getConfig` import (like `subagent-runner`) rather than a
+ * lazy `require`: a `require` of the TS loader cannot be resolved under Vitest
+ * (verified empirically), which would pin this to the fallback in every test.
+ */
+function getUsageDeltaIntervalMs(): number {
+  try {
+    return getConfig().subagents.usage_event_interval_ms;
+  } catch {
+    return getSubagentConfigDefaults().usage_event_interval_ms;
+  }
+}
+
+/**
+ * Resolve the bounded terminal summary retention count per session.
+ * Source: `subagents.terminal_retention`; falls back to the schema default
+ * when the config is not loaded.
+ */
+function getTerminalRetention(): number {
+  try {
+    return getConfig().subagents.terminal_retention;
+  } catch {
+    return getSubagentConfigDefaults().terminal_retention;
   }
 }
 
@@ -150,8 +231,12 @@ export interface SubagentRecord {
   result: string | null;
   /** Error message (populated on failure). */
   error: string | null;
-  /** Start time (epoch ms). */
-  readonly startTime: number;
+  /** Spawn time (epoch ms); reset to the resumed run's start on a follow-up. */
+  startTime: number;
+  /** When the record entered the admission queue (epoch ms; null = admitted at spawn). */
+  queuedAt: number | null;
+  /** When execution started after admission (epoch ms; null = not started). */
+  startedAt: number | null;
   /** End time (epoch ms, null if still running). */
   endTime: number | null;
   /** The chain associated with this subagent (for persistence). */
@@ -172,17 +257,49 @@ export interface SubagentRecord {
   readonly sessionId: string | null;
   /** Runtime-only owner window used for approval delivery. */
   readonly windowId: string | null;
-  readonly projectRuntime?: ProjectRuntime;
+  /** Frozen parent-turn workspace cwd; reused when a queued run is admitted. */
+  readonly cwd: string | null;
+  projectRuntime?: ProjectRuntime;
   /** Abort controller for the in-flight run. */
   abortController: AbortController | null;
   /** Pending completion promise resolvers. */
   _resolveWait: Array<(reason: SubagentWaiterReason) => void> | null;
   /** In-flight run promise (for debugging / optional await). */
   _runPromise: Promise<void> | null;
+  /**
+   * Hidden from the dynamic system prompt while the durable record, chain,
+   * and terminal state stay intact (close_subagents tool). Only meaningful on
+   * terminal records; persisted with the durable row.
+   */
+  closed: boolean;
   /** Runtime-only live projection; durable history remains in `chain`. */
   live: SubagentLiveProjection;
   _liveCommittedSegmentCount: number;
   _liveTerminalEmitted: boolean;
+  /**
+   * Runtime-only: the record was evicted to a lean terminal summary after its
+   * durable row was confirmed persisted. Persistence flushes and snapshot
+   * merges must skip flagged records — their confirmed durable row stays
+   * authoritative, and re-serializing the summary would clobber it with an
+   * empty chain. Cannot leak into storage/domain output: `runtimeToDomain`
+   * and the storage dicts build fresh explicit-field objects.
+   */
+  _evicted: boolean;
+  /**
+   * Runtime-only single-use marker: the record was re-queued by a follow-up
+   * resume rather than a fresh spawn. Persistence keeps a durable row for
+   * resume-queued records (the reopened chain + follow-up message survive a
+   * crash while queued); spawn-queued and cancelled-before-admission records
+   * still get no row. Cleared on admission. Cannot leak into storage/domain
+   * output: `runtimeToDomain` builds fresh explicit-field objects.
+   */
+  _resumeQueued: boolean;
+  /** Durable-mutation counter; the persistence scheduler upserts dirty records (U6). */
+  persistRevision: number;
+  /** Per-record run counter for per-run turnId attribution. */
+  runCount: number;
+  /** Epoch ms of the last emitted `usage` delta (0 = none yet); throttles usage deltas. */
+  _lastUsageDeltaAt: number;
   /** Pending question routed to the main agent (null when no question is outstanding). */
   pendingQuestion: {
     toolCallId: string;
@@ -206,19 +323,73 @@ export interface SubagentResult {
   elapsed: number | null;
 }
 
+// ── HydrateSpec ─────────────────────────────────────────────────────────────
+
+/**
+ * One durable record to materialize back into the runtime manager.
+ *
+ * `domain` is the stored record from `session.subagentChains` — the
+ * authoritative complete copy for evicted summaries and pre-launch records.
+ * `agent` is re-resolved from the project runtime registry by the stored
+ * `agent_type` (registry name); a missing definition is a tool-side error, so
+ * it never reaches `SubagentManager.hydrate`.
+ */
+export interface HydrateSpec {
+  readonly id: string;
+  readonly agent: Agent;
+  readonly domain: DomainSubagentRecord;
+  readonly sessionId: string | null;
+  readonly windowId: string | null;
+  readonly cwd: string | null;
+  readonly projectRuntime?: ProjectRuntime;
+}
+
+// ── Mutable live state ──────────────────────────────────────────────────────
+
+/** Mutable view of a tool snapshot for in-place run-loop accumulation. */
+type MutableToolSnapshot = { -readonly [K in keyof SubagentToolSnapshot]: SubagentToolSnapshot[K] };
+
+/**
+ * Mutable view of the live projection. The manager mutates the stored
+ * projection in place during a run so accumulation is structurally cheap;
+ * snapshot accessors deep-copy on read via `cloneLiveProjection`.
+ */
+type MutableLiveProjection = {
+  -readonly [K in keyof SubagentLiveProjection]: K extends 'segments'
+    ? SubagentLiveSegment[]
+    : K extends 'toolCalls'
+      ? MutableToolSnapshot[]
+      : SubagentLiveProjection[K];
+};
+
+type DistributiveOmit<T, K extends PropertyKey> = T extends unknown ? Omit<T, K> : never;
+
+/** Variant-specific fields of a delta event, without the shared identity base. */
+type SubagentDeltaPayload = DistributiveOmit<SubagentDeltaEvent, keyof SubagentDeltaEventBase>;
+
 // ── SubagentManager ─────────────────────────────────────────────────────────
 
 /**
  * SubagentManager — manages the lifecycle of subagent runs.
  *
  * Spawn subagents, wait for their completion, cancel them, and query
- * their states. Mirrors Python's SubagentManager API.
+ * their states.
  */
 export class SubagentManager {
   private _subagents: Map<string, SubagentRecord> = new Map();
   private _runner: SubagentStreamRunner | null = null;
   private _onChange: SubagentChangeListener | null = null;
-  private _onLiveChange: SubagentLiveChangeListener | null = null;
+  private _onDelta: ((event: SubagentDeltaEvent) => void) | null = null;
+  /** Per-session monotonic revision counter ordering events and snapshots. */
+  private _sessionRevisions: Map<string, number> = new Map();
+  private _admission = new AdmissionController();
+  /**
+   * Per-session FIFO of evicted terminal summary ids, capped at
+   * `subagents.terminal_retention`. Oldest entries are removed from
+   * `_subagents` entirely once the cap is exceeded; their durable row
+   * remains the record of truth.
+   */
+  private _terminalSummaries: Map<string, string[]> = new Map();
 
   /**
    * Configure the stream runner. When set, spawn() starts a background run.
@@ -233,16 +404,19 @@ export class SubagentManager {
     this._onChange = listener;
   }
 
-  /** Subscribe to ordered, low-latency changes for active subagent runs. */
-  setOnLiveChange(listener: SubagentLiveChangeListener | null): void {
-    this._onLiveChange = listener;
+  /** Subscribe to typed incremental live deltas for active subagent runs. */
+  setOnDelta(listener: ((event: SubagentDeltaEvent) => void) | null): void {
+    this._onDelta = listener;
   }
 
   /**
    * Spawn a new subagent.
    *
-   * Returns the record immediately. If a runner is configured, starts the
-   * isolated LLM stream in the background (matching Python asyncio.create_task).
+   * Always returns a record. Under the configured active limits the run
+   * starts immediately (PENDING → runner); over capacity the record parks in
+   * the bounded FIFO admission queue as QUEUED and starts when a terminal
+   * transition frees a slot. Throws `SubagentQueueFullError` (creating no
+   * record) when the queue is full.
    */
   spawn(
     name: string,
@@ -261,20 +435,29 @@ export class SubagentManager {
     } = {},
   ): SubagentRecord {
     const id = `subagent-${randomUUID()}`;
+    const sessionId = options.sessionId ?? null;
+    const limits = getAdmissionLimits();
+    const admitted = this._admission.canAdmit(sessionId, limits, this._admissionCounters());
+    if (!admitted && this._admission.queueLength >= limits.maxQueued) {
+      throw new SubagentQueueFullError(limits);
+    }
 
     const userMessage = makeUserMessage(task);
     const selection = options.selection ?? null;
     const chain = makeEmptyChain(options.sessionId ?? '', selection, agent);
+    const now = Date.now();
 
     const record: SubagentRecord = {
       id,
       agent,
-      state: SubagentState.PENDING,
+      state: admitted ? SubagentState.PENDING : SubagentState.QUEUED,
       label: name,
       task,
       result: null,
       error: null,
-      startTime: Date.now(),
+      startTime: now,
+      queuedAt: admitted ? null : now,
+      startedAt: null,
       endTime: null,
       chain: {
         ...chain,
@@ -283,23 +466,156 @@ export class SubagentManager {
       usage: null,
       selection,
       parentChainIndex: options.parentChainIndex ?? null,
-      sessionId: options.sessionId ?? null,
+      sessionId,
       windowId: options.windowId ?? null,
+      cwd: options.cwd ?? null,
       projectRuntime: options.projectRuntime,
       abortController: null,
       _resolveWait: [],
       _runPromise: null,
-      live: makeLiveProjection(id, options.sessionId ?? null, 'pending'),
+      closed: false,
+      live: makeLiveProjection(id, sessionId, admitted ? 'pending' : 'queued'),
       _liveCommittedSegmentCount: 0,
       _liveTerminalEmitted: false,
+      _evicted: false,
+      _resumeQueued: false,
+      persistRevision: 0,
+      runCount: 1,
+      _lastUsageDeltaAt: 0,
       pendingQuestion: null,
     };
 
     this._subagents.set(id, record);
+    if (!admitted) this._admission.enqueue(id);
+    else this._admission.markAdmitted(sessionId);
     this._notify();
+    this._emitDelta(record, {
+      type: SubagentDeltaEventType.SPAWNED,
+      record: runtimeToDomain(record, { includeLiveTail: false }),
+      usage: record.usage,
+    });
 
-    if (this._runner) {
+    if (admitted && this._runner) {
       record._runPromise = this._startRun(record, options.cwd);
+    }
+
+    return record;
+  }
+
+  /**
+   * 1-based FIFO position of a queued record, or null when not queued.
+   * Surfaced by the delegate tool so the main agent sees backpressure.
+   */
+  getQueuePosition(subagentId: string): number | null {
+    return this._admission.getQueuePosition(subagentId);
+  }
+
+  /**
+   * Resume a terminal, non-closed subagent with new user input (R5, R7, R8).
+   *
+   * Appends the input as a user message, reopens the chain, resets the per-run
+   * fields (fresh live projection / runId, `runCount += 1`), and runs the
+   * resumed record through the same admission control as `spawn`: admitted
+   * resumes start immediately (PENDING → runner); over-capacity resumes park in
+   * the bounded FIFO queue as QUEUED and start when a terminal transition frees
+   * a slot. Throws `SubagentQueueFullError` — leaving the terminal record
+   * completely unmutated — when the queue is full.
+   *
+   * Guards: the record must exist, must not be an `_evicted` summary (the
+   * follow-up tool hydrates those first; a summary has no chain to replay),
+   * must be terminal, and must not be closed.
+   */
+  followUp(subagentId: string, input: string): SubagentRecord {
+    const record = this._subagents.get(subagentId);
+    if (!record) throw new Error(`Subagent '${subagentId}' not found`);
+    if (record._evicted) throw new SubagentEvictedError(subagentId);
+    if (!TERMINAL_STATES.has(record.state)) {
+      throw new SubagentNotTerminalError(subagentId, record.state);
+    }
+    if (record.closed) throw new SubagentClosedError(subagentId);
+    // A cancelled RUNNING record is already terminal while its run loop still
+    // owns the interruption boundary (`_runPromise` set). Resuming now would
+    // hand the record to a second run while the zombie loop's partial flush
+    // and finally block still write to it.
+    if (record._runPromise !== null) {
+      throw new SubagentStillSettlingError(subagentId);
+    }
+
+    const limits = getAdmissionLimits();
+    const admitted = this._admission.canAdmit(record.sessionId, limits, this._admissionCounters());
+    if (!admitted && this._admission.queueLength >= limits.maxQueued) {
+      throw new SubagentQueueFullError(limits);
+    }
+
+    const now = Date.now();
+    // Append the follow-up user message and REOPEN the chain. The reopen is
+    // built directly (same object-spread style as `_finalizeChain`) BEFORE any
+    // `_setChainMessages` call: that helper's `keepTerminal` logic preserves a
+    // terminal chain status, so the chain must already be ACTIVE by the time
+    // the run loop writes its first message.
+    const userMessage = makeUserMessage(input);
+    record.chain = record.chain
+      ? {
+          ...record.chain,
+          messages: [...record.chain.messages, userMessage],
+          status: ChainStatus.ACTIVE,
+          endTime: null,
+        }
+      : {
+          ...makeEmptyChain(record.sessionId ?? '', record.selection, record.agent),
+          messages: [userMessage],
+        };
+
+    // Per-run reset: clear the prior run's outcome and timing, bump the run
+    // counter, and build a fresh live projection (new runId) so the renderer
+    // treats the resume as a new run.
+    record.result = null;
+    record.error = null;
+    record.endTime = null;
+    record.startedAt = null;
+    record.startTime = now;
+    // Clear the prior run's aggregate so the resumed run's SPAWNED delta does
+    // not leak stale usage; the run loop re-accumulates fresh per run.
+    record.usage = null;
+    record.live = makeLiveProjection(
+      record.id,
+      record.sessionId,
+      admitted ? SubagentStatus.PENDING : SubagentStatus.QUEUED,
+    );
+    record._liveCommittedSegmentCount = 0;
+    record._liveTerminalEmitted = false;
+    record._lastUsageDeltaAt = 0;
+    record.pendingQuestion = null;
+    record.abortController = null;
+    record.runCount += 1;
+    // Reopened chain + follow-up message must persist via the next checkpoint
+    // (spawn sets a fresh row; followUp reopens a terminal durable row).
+    this._markRecordDirty(record);
+
+    if (admitted) {
+      record.state = SubagentState.PENDING;
+      record.queuedAt = null;
+      this._admission.markAdmitted(record.sessionId);
+      this._notify();
+      this._emitDelta(record, {
+        type: SubagentDeltaEventType.SPAWNED,
+        record: runtimeToDomain(record, { includeLiveTail: false }),
+        usage: record.usage,
+      });
+      if (this._runner) {
+        record._runPromise = this._startRun(record, record.cwd ?? undefined);
+      }
+    } else {
+      record.state = SubagentState.QUEUED;
+      record.queuedAt = now;
+      record._resumeQueued = true;
+      this._admission.enqueue(record.id);
+      this._notify();
+      this._emitDelta(record, {
+        type: SubagentDeltaEventType.SPAWNED,
+        record: runtimeToDomain(record, { includeLiveTail: false }),
+        usage: record.usage,
+      });
     }
 
     return record;
@@ -312,7 +628,13 @@ export class SubagentManager {
     const record = this._subagents.get(subagentId);
     if (record && record.state === SubagentState.PENDING) {
       record.state = SubagentState.RUNNING;
+      record.startedAt ??= Date.now();
       this._updateLive(record, { state: SubagentState.RUNNING });
+      this._markRecordDirty(record);
+      this._emitDelta(record, {
+        type: SubagentDeltaEventType.STATUS_CHANGED,
+        status: SubagentStatus.RUNNING,
+      });
       this._notify();
     }
   }
@@ -325,13 +647,16 @@ export class SubagentManager {
     const record = this._subagents.get(subagentId);
     if (!record || TERMINAL_STATES.has(record.state)) return;
 
+    this._admission.removeFromQueue(subagentId);
     record.state = SubagentState.COMPLETED;
     record.result = result;
     record.endTime = Date.now();
     this._finalizeChain(record, ChainStatus.COMPLETED);
+    this._markRecordDirty(record);
     this._finishLive(record, SubagentState.COMPLETED);
     this._resolveWaiters(record);
     this._notify();
+    this._admitFromQueue();
   }
 
   /**
@@ -342,12 +667,33 @@ export class SubagentManager {
     const record = this._subagents.get(subagentId);
     if (!record || TERMINAL_STATES.has(record.state)) return;
 
+    this._admission.removeFromQueue(subagentId);
     record.state = SubagentState.FAILED;
     record.error = error;
     record.endTime = Date.now();
     this._finalizeChain(record, ChainStatus.FAILED);
+    this._markRecordDirty(record);
     this._finishLive(record, SubagentState.FAILED);
     this._resolveWaiters(record);
+    this._notify();
+    this._admitFromQueue();
+  }
+
+  /**
+   * Mark a terminal subagent closed — hidden from the dynamic system prompt
+   * while the durable record, chain, and terminal state stay intact (R2). The
+   * flag persists with the durable row (R4) so it survives restarts. Idempotent:
+   * re-closing an already-closed record is a no-op. The close_subagents tool
+   * owns the terminal-state and session-ownership guards; this only mutates.
+   */
+  close(subagentId: string): void {
+    const record = this._subagents.get(subagentId);
+    if (!record || record.closed) return;
+    // A flag set on an `_evicted` summary never persists (every checkpoint
+    // skips evicted records) — refuse loudly; the tool hydrates these first.
+    if (record._evicted) throw new SubagentSummaryClosedError(subagentId);
+    record.closed = true;
+    this._markRecordDirty(record);
     this._notify();
   }
 
@@ -498,6 +844,11 @@ export class SubagentManager {
       return false;
     }
 
+    // A queued record is cancelled in place: removed from the queue, marked
+    // INTERRUPTED, terminal delta emitted — no run slot was ever consumed, so
+    // no admission follows.
+    const wasQueued = record.state === SubagentState.QUEUED;
+    this._admission.removeFromQueue(subagentId);
     record.state = SubagentState.INTERRUPTED;
     record.error = record.error ?? 'Interrupted by user';
     record.endTime = record.endTime ?? Date.now();
@@ -506,6 +857,7 @@ export class SubagentManager {
       record.pendingQuestion.resolve({ type: 'declined' });
       record.pendingQuestion = null;
     }
+    this._markRecordDirty(record);
     // The runner owns the async interruption boundary. It must materialize its
     // partial live tail before the terminal projection is emitted; otherwise
     // the terminal event can make the renderer flush an incomplete record.
@@ -514,7 +866,24 @@ export class SubagentManager {
       this._finishLive(record, SubagentState.INTERRUPTED);
     }
     this._resolveWaiters(record);
+    if (wasQueued && !record._resumeQueued) {
+      // A record cancelled while QUEUED was never admitted, so it never gets a
+      // durable row (persistence eligibility begins at admission) — but it must
+      // not linger as a full record either. Evict it to a lean terminal summary
+      // under the same retention FIFO as persisted records; the terminal delta
+      // above already carried the full record to the renderer. Eviction runs
+      // after _resolveWaiters because _evictToSummary drops _resolveWait.
+      this._evictToSummary(record);
+      this._trackSummary(record.sessionId ?? '', record.id, getTerminalRetention());
+    }
+    // A resume-queued record owns a durable row (persist-subagent-chains
+    // eligibility carve-out), so evicting it here would strand the row with a
+    // stale pre-interrupt status and drop the follow-up message — every later
+    // checkpoint skips `_evicted` records. Leave it as a full dirty INTERRUPTED
+    // record: the terminal wave persists it, then confirmRecordsPersisted
+    // evicts it through the normal row-confirmed path.
     this._notify();
+    if (!wasQueued) this._admitFromQueue();
     return true;
   }
 
@@ -582,17 +951,16 @@ export class SubagentManager {
       if (sessionId !== undefined && record.sessionId !== sessionId) {
         continue;
       }
+      if (record.closed) {
+        continue;
+      }
       states.push({
         id: record.id,
         name: record.agent.name,
         type: record.agent.type,
         task: record.task,
         state: record.state,
-        elapsed: record.endTime
-          ? record.endTime - record.startTime
-          : record.startTime
-            ? Date.now() - record.startTime
-            : null,
+        elapsed: this._elapsedMs(record),
       });
     }
 
@@ -685,18 +1053,75 @@ export class SubagentManager {
     return results;
   }
 
+  /** Snapshot a single live projection; deep-copied so callers never alias run state. */
   getLiveProjection(subagentId: string): SubagentLiveProjection | undefined {
-    return this._subagents.get(subagentId)?.live;
+    const record = this._subagents.get(subagentId);
+    return record ? cloneLiveProjection(record.live) : undefined;
   }
 
+  /** Snapshot live projections for a session; each is deep-copied at call time. */
   getLiveProjections(sessionId?: string | null): SubagentLiveProjection[] {
     return this.allRecords()
       .filter((record) => sessionId === undefined || record.sessionId === sessionId)
-      .map((record) => record.live);
+      .map((record) => cloneLiveProjection(record.live));
   }
 
+  /** Current per-session revision; 0 for sessions with no recorded activity. */
+  getSessionRevision(sessionId: string): number {
+    return this._sessionRevisions.get(sessionId) ?? 0;
+  }
+
+  /**
+   * All runtime records, including lean terminal summaries.
+   *
+   * Invariant: evicted terminal records remain in this array as bounded
+   * summaries (heavy fields emptied) until their per-session FIFO cap is
+   * exceeded, at which point they are removed entirely. Consumers that need
+   * full history beyond the cap read from durable storage.
+   */
   allRecords(): SubagentRecord[] {
     return Array.from(this._subagents.values());
+  }
+
+  /**
+   * Confirm that terminal records were durably persisted. Only after this
+   * confirmation does the manager evict heavy runtime data (persist-first
+   * ordering guarantee). Non-terminal ids are ignored.
+   */
+  confirmRecordsPersisted(sessionId: string, subagentIds: string[]): void {
+    const retention = getTerminalRetention();
+    for (const id of subagentIds) {
+      const record = this._subagents.get(id);
+      if (!record || record.sessionId !== sessionId) continue;
+      if (!TERMINAL_STATES.has(record.state)) continue;
+      // Already a summary (e.g. a queued cancel, or double confirmation):
+      // re-evicting would be an idempotent no-op, so skip it explicitly.
+      if (record._evicted) continue;
+      this._evictToSummary(record);
+      this._trackSummary(sessionId, id, retention);
+    }
+  }
+
+  /**
+   * Purge every manager record owned by a session: cancel active/queued
+   * records first (emitting terminal deltas so renderers settle), then remove
+   * all records including summaries.
+   */
+  purgeSession(sessionId: string): void {
+    for (const [id, record] of this._subagents) {
+      if (record.sessionId !== sessionId) continue;
+      if (!TERMINAL_STATES.has(record.state)) this.cancelOne(id);
+    }
+    for (const [id, record] of this._subagents) {
+      if (record.sessionId === sessionId) this._subagents.delete(id);
+    }
+    this._admission.filterQueue(
+      (id) => this._subagents.get(id)?.sessionId !== sessionId,
+    );
+    this._admission.filterQueue((id) => this._subagents.has(id));
+    this._terminalSummaries.delete(sessionId);
+    this._sessionRevisions.delete(sessionId);
+    this._notify();
   }
 
   /**
@@ -710,6 +1135,220 @@ export class SubagentManager {
         ? this.allRecords()
         : this.allRecords().filter((r) => r.sessionId === sessionId);
     return records.map((record) => runtimeToDomain(record));
+  }
+
+  /**
+   * Materialize durable records back into the runtime map on demand (R9).
+   *
+   * Targets records whose full form lives only in `session.subagentChains`:
+   * evicted lean summaries (`_evicted`, chain emptied) and everything persisted
+   * before the current app launch. A live full record always wins (no-op); an
+   * `_evicted` summary shell is REPLACED, because its chain is empty and the
+   * stored domain record is the only replay source.
+   *
+   * Hydration is deliberately silent: no deltas, no `_notify`, no dirty mark —
+   * the mutating tool that follows owns notification and persistence. Each
+   * rebuilt record restarts at `persistRevision: 0`, so the caller must also
+   * drop the id's `lastPersistedRevision` entry (see
+   * `forgetSubagentPersistedRevision`); otherwise the revision-gated checkpoint
+   * would skip the re-materialized record forever (R12).
+   */
+  hydrate(specs: HydrateSpec[]): void {
+    for (const spec of specs) {
+      const existing = this._subagents.get(spec.id);
+      // A live full record wins; only absent ids and chain-less evicted
+      // summaries are (re)materialized from durable storage.
+      if (existing && !existing._evicted) continue;
+
+      // Defensive: stored rows only ever carry terminal statuses (the restore
+      // migration maps queued/pending/running → interrupted). Skip anything else.
+      const state = HYDRATABLE_STATUS_TO_STATE[spec.domain.status];
+      if (!state) continue;
+
+      const { domain } = spec;
+      // Guard against NaN from an unparseable stored timestamp (the `|| 0`
+      // fallback mirrors session storage hydration) so hydration stays total
+      // and runtimeToDomain never receives an invalid Date.
+      const startTime = Date.parse(domain.start_time) || 0;
+      const endTime = domain.end_time ? (Date.parse(domain.end_time) || 0) : null;
+
+      const record: SubagentRecord = {
+        id: spec.id,
+        agent: spec.agent,
+        state,
+        label: domain.agent_name,
+        task: domain.task,
+        result: domain.result,
+        error: domain.error,
+        startTime,
+        queuedAt: null,
+        // Durable eligibility is keyed on `startedAt`; a restored terminal
+        // record was admitted, so it replays from its original start time.
+        startedAt: startTime,
+        endTime,
+        chain: domain.chain,
+        // Usage lives on the chain messages; hydration does not reconstruct the
+        // aggregate (summaries keep it, storage does not carry it).
+        usage: null,
+        selection: domain.chain.selection,
+        parentChainIndex: domain.parentChainIndex,
+        sessionId: spec.sessionId,
+        windowId: spec.windowId,
+        cwd: spec.cwd,
+        projectRuntime: spec.projectRuntime,
+        abortController: null,
+        _resolveWait: [],
+        _runPromise: null,
+        closed: domain.closed,
+        live: makeLiveProjection(spec.id, spec.sessionId, domain.status),
+        _liveCommittedSegmentCount: 0,
+        _liveTerminalEmitted: true,
+        _evicted: false,
+        _resumeQueued: false,
+        persistRevision: 0,
+        runCount: 1,
+        _lastUsageDeltaAt: 0,
+        pendingQuestion: null,
+      };
+      if (domain.reasoning_effort !== undefined) {
+        record.reasoningEffort = domain.reasoning_effort;
+      }
+
+      this._subagents.set(spec.id, record);
+      // A re-materialized full record sharing an id with a FIFO-tracked summary
+      // would be deleted from the map when the retention FIFO rolls. Untrack it
+      // so subsequent retention rolls leave it alone (R12).
+      if (existing?._evicted) {
+        this._untrackSummary(spec.sessionId ?? '', spec.id);
+      }
+    }
+  }
+
+  // ── Private: admission control ────────────────────────────────────────────
+
+  /** "Active" = PENDING + RUNNING; QUEUED consumes no run slot. */
+  private _isActive(record: SubagentRecord): boolean {
+    return record.state === SubagentState.PENDING || record.state === SubagentState.RUNNING;
+  }
+
+  private _activeCount(): number {
+    let count = 0;
+    for (const record of this._subagents.values()) {
+      if (this._isActive(record)) count += 1;
+    }
+    return count;
+  }
+
+  private _sessionActiveCount(sessionId: string | null): number {
+    let count = 0;
+    for (const record of this._subagents.values()) {
+      if (record.sessionId === sessionId && this._isActive(record)) count += 1;
+    }
+    return count;
+  }
+
+  private _admissionCounters(): AdmissionCounters {
+    return {
+      activeCountGlobal: () => this._activeCount(),
+      sessionActiveCount: (sid) => this._sessionActiveCount(sid),
+      recordSessionKey: (id) => this._subagents.get(id)?.sessionId ?? '',
+      isRecordQueued: (id) => this._subagents.get(id)?.state === SubagentState.QUEUED,
+    };
+  }
+
+  private _admitFromQueue(): void {
+    const limits = getAdmissionLimits();
+    const counters = this._admissionCounters();
+    for (;;) {
+      const id = this._admission.nextAdmissible(limits, counters);
+      if (id === null) return;
+      const record = this._subagents.get(id);
+      if (!record) continue;
+      this._admit(record);
+    }
+  }
+
+  private _admit(record: SubagentRecord): void {
+    record.state = SubagentState.PENDING;
+    record._resumeQueued = false;
+    this._admission.markAdmitted(record.sessionId);
+    this._markRecordDirty(record);
+    this._updateLive(record, { state: SubagentState.PENDING });
+    this._emitDelta(record, {
+      type: SubagentDeltaEventType.STATUS_CHANGED,
+      status: SubagentStatus.PENDING,
+    });
+    this._notify();
+    if (this._runner) {
+      record._runPromise = this._startRun(record, record.cwd ?? undefined);
+    }
+  }
+
+  /**
+   * Elapsed with queue wait excluded from execution: queued records report
+   * their wait so far; records admitted from the queue report execution time
+   * from `startedAt`; everything else keeps spawn-based elapsed. Queue wait
+   * and execution remain separable via `queuedAt`/`startedAt` on the record.
+   */
+  private _elapsedMs(record: SubagentRecord, now: number = Date.now()): number | null {
+    if (record.state === SubagentState.QUEUED) {
+      return now - (record.queuedAt ?? record.startTime);
+    }
+    if (record.queuedAt !== null && record.startedAt !== null) {
+      return Math.max(0, (record.endTime ?? now) - record.startedAt);
+    }
+    return record.startTime ? (record.endTime ?? now) - record.startTime : null;
+  }
+
+  // ── Private: terminal eviction ────────────────────────────────────────────
+
+  /**
+   * Replace heavy runtime fields with a bounded summary. The record keeps its
+   * SubagentRecord shape so downstream type contracts (getStates, wait,
+   * prompt-context) don't break; chain messages, live state, projectRuntime,
+   * and abort artifacts are dropped. The `_evicted` flag marks the summary so
+   * persistence flushes and snapshot merges never let it overwrite the
+   * confirmed durable row.
+   */
+  private _evictToSummary(record: SubagentRecord): void {
+    record._runPromise = null;
+    record._evicted = true;
+    record.abortController = null;
+    record._resolveWait = null;
+    record.pendingQuestion = null;
+    record.projectRuntime = undefined;
+    if (record.chain) {
+      record.chain = { ...record.chain, messages: [] };
+    }
+    record.live = {
+      ...record.live,
+      segments: [],
+      toolCalls: [],
+    };
+    record._liveCommittedSegmentCount = 0;
+  }
+
+  /** Track an evicted summary in the per-session FIFO; remove oldest over cap. */
+  private _trackSummary(sessionId: string, id: string, retention: number): void {
+    let fifo = this._terminalSummaries.get(sessionId);
+    if (!fifo) {
+      fifo = [];
+      this._terminalSummaries.set(sessionId, fifo);
+    }
+    if (fifo.includes(id)) return;
+    fifo.push(id);
+    while (fifo.length > retention) {
+      const evicted = fifo.shift()!;
+      this._subagents.delete(evicted);
+    }
+  }
+
+  /** Remove an id from the per-session terminal-summary FIFO (no-op if absent). */
+  private _untrackSummary(sessionId: string, id: string): void {
+    const fifo = this._terminalSummaries.get(sessionId);
+    if (!fifo) return;
+    const index = fifo.indexOf(id);
+    if (index >= 0) fifo.splice(index, 1);
   }
 
   // ── Private: run loop ─────────────────────────────────────────────────────
@@ -744,6 +1383,9 @@ export class SubagentManager {
     try {
       const stream = runner({
         task: record.task,
+        // Replay the full chain on a resume; a mutable snapshot keeps the
+        // runner's history independent of the run-loop message accumulator.
+        history: [...(record.chain?.messages ?? [])],
         agent: record.agent,
         selection: record.selection,
         abortSignal: abort.signal,
@@ -752,7 +1394,9 @@ export class SubagentManager {
         cwd,
         agentScopeId: record.id,
         chainId: record.chain?.id,
-        turnId: record.id,
+        // Per-run turn id keeps provider accounting attribution unique across
+        // resumes (spawn path runCount=1 reproduces a stable unique id).
+        turnId: `${record.id}#${record.runCount}`,
         projectRuntime: record.projectRuntime,
         onReasoningEffort: (effort) => {
           record.reasoningEffort = effort;
@@ -776,6 +1420,13 @@ export class SubagentManager {
             accumulatedUsage = addStepUsage(accumulatedUsage, event.usage);
             record.usage = accumulatedUsage;
             this._updateLive(record, { usage: accumulatedUsage });
+            if (accumulatedUsage) {
+              const now = Date.now();
+              if (record._lastUsageDeltaAt === 0 || now - record._lastUsageDeltaAt >= getUsageDeltaIntervalMs()) {
+                record._lastUsageDeltaAt = now;
+                this._emitDelta(record, { type: SubagentDeltaEventType.USAGE, usage: accumulatedUsage });
+              }
+            }
             break;
           }
           case 'thinking': {
@@ -810,6 +1461,20 @@ export class SubagentManager {
               this._markLiveCommitted(record);
               this._setChainMessages(record, messages);
               this._notify();
+              if (toolSegment) {
+                const startedAt = record.live.toolCalls.find(
+                  (tool) => tool.toolCallId === toolCallId,
+                )?.startedAt ?? new Date().toISOString();
+                this._emitDelta(record, {
+                  type: SubagentDeltaEventType.TOOL_START,
+                  segmentId: toolSegment.id,
+                  toolCallId,
+                  toolName,
+                  status: 'running',
+                  args,
+                  startedAt,
+                });
+              }
             }
             break;
           }
@@ -820,6 +1485,11 @@ export class SubagentManager {
             this._ensureLiveTool(record, event.toolCallId, current?.toolName ?? 'unknown');
             this._updateLiveTool(record, event.toolCallId, {
               partialArgs: `${current?.partialArgs ?? ''}${event.argsDelta}`,
+            });
+            this._emitDelta(record, {
+              type: SubagentDeltaEventType.TOOL_ARGS_DELTA,
+              toolCallId: event.toolCallId,
+              append: event.argsDelta,
             });
             break;
           }
@@ -847,15 +1517,24 @@ export class SubagentManager {
                 `${event.toolCallId}:result`,
               ),
             );
+            const finishedAt = new Date().toISOString();
             this._updateLiveTool(record, event.toolCallId, {
               status: event.execution.canonical.status,
               content: event.content,
               toolResult: event.execution.canonical,
-              finishedAt: new Date().toISOString(),
+              finishedAt,
             });
             this._markLiveCommitted(record);
             this._setChainMessages(record, messages);
             this._notify();
+            this._emitDelta(record, {
+              type: SubagentDeltaEventType.TOOL_RESULT,
+              toolCallId: event.toolCallId,
+              status: event.execution.canonical.status,
+              content: event.content,
+              toolResult: event.execution.canonical,
+              finishedAt,
+            });
             break;
           }
           case 'error': {
@@ -920,6 +1599,7 @@ export class SubagentManager {
         this._finishLive(record, SubagentState.INTERRUPTED);
       }
       record.abortController = null;
+      record._runPromise = null;
     }
   }
 
@@ -989,6 +1669,7 @@ export class SubagentManager {
       messages: [...messages],
       status: keepTerminal ? prev : ChainStatus.ACTIVE,
     };
+    this._markRecordDirty(record);
   }
 
   private _finalizeChain(record: SubagentRecord, status: ChainStatus): void {
@@ -1029,55 +1710,78 @@ export class SubagentManager {
   }
 
   private _appendLiveText(record: SubagentRecord, kind: 'text' | 'thinking', content: string): void {
-    const segments = [...record.live.segments];
-    const last = segments.at(-1);
-    if (last?.kind === kind) segments[segments.length - 1] = { ...last, content: last.content + content };
-    else segments.push({ kind, id: randomUUID(), content });
-    this._updateLive(record, { segments });
+    const live = this._live(record);
+    const last = live.segments.at(-1);
+    let segmentId: string;
+    if (last && last.kind === kind) {
+      last.content += content;
+      segmentId = last.id;
+    } else {
+      segmentId = randomUUID();
+      live.segments.push({ kind, id: segmentId, content });
+    }
+    this._updateLive(record, {});
+    this._emitDelta(record, kind === 'text'
+      ? { type: SubagentDeltaEventType.TEXT_DELTA, segmentId, append: content }
+      : { type: SubagentDeltaEventType.THINKING_DELTA, segmentId, append: content });
   }
 
   private _ensureLiveTool(record: SubagentRecord, toolCallId: string, toolName: string): void {
-    if (record.live.toolCalls.some((tool) => tool.toolCallId === toolCallId)) return;
-    const tool: SubagentToolSnapshot = {
+    const live = this._live(record);
+    if (live.toolCalls.some((tool) => tool.toolCallId === toolCallId)) return;
+    const startedAt = new Date().toISOString();
+    live.toolCalls.push({
       toolCallId, toolName, status: 'generating', partialArgs: '', args: '',
-      content: null, toolResult: null, startedAt: new Date().toISOString(), finishedAt: null,
-    };
-    this._updateLive(record, {
-      toolCalls: [...record.live.toolCalls, tool],
-      segments: [...record.live.segments, { kind: 'tool', id: randomUUID(), toolCallId }],
+      content: null, toolResult: null, startedAt, finishedAt: null,
+    });
+    const segmentId = randomUUID();
+    live.segments.push({ kind: 'tool', id: segmentId, toolCallId });
+    this._updateLive(record, {});
+    this._emitDelta(record, {
+      type: SubagentDeltaEventType.TOOL_START, segmentId, toolCallId, toolName,
+      status: 'generating', args: '', startedAt,
     });
   }
 
   private _updateLiveTool(record: SubagentRecord, toolCallId: string, patch: Partial<SubagentToolSnapshot>): void {
-    this._updateLive(record, {
-      toolCalls: record.live.toolCalls.map((tool) => tool.toolCallId === toolCallId ? { ...tool, ...patch } : tool),
-    });
+    const tool = this._live(record).toolCalls.find((entry) => entry.toolCallId === toolCallId);
+    if (!tool) return;
+    Object.assign(tool, patch);
+    this._updateLive(record, {});
   }
 
   private _markLiveCommitted(record: SubagentRecord): void {
     record._liveCommittedSegmentCount = record.live.segments.length;
   }
 
+  /** Mutable view of a record's live projection for in-place run-loop accumulation. */
+  private _live(record: SubagentRecord): MutableLiveProjection {
+    return record.live as MutableLiveProjection;
+  }
+
   private _updateLive(
     record: SubagentRecord,
     patch: Partial<Omit<SubagentLiveProjection, 'sequence' | 'subagentId' | 'runId'>>,
   ): void {
-    const next: SubagentLiveProjection = {
-      ...record.live, ...patch, sequence: record.live.sequence + 1,
-      segments: patch.segments ? [...patch.segments] : [...record.live.segments],
-      toolCalls: patch.toolCalls ? [...patch.toolCalls] : [...record.live.toolCalls],
-    };
-    record.live = next;
-    const change: SubagentLiveChange = {
-      sessionId: next.sessionId, subagentId: next.subagentId, runId: next.runId,
-      sequence: next.sequence, projection: next,
-    };
-    try { this._onLiveChange?.(change); } catch (err) {
-      console.debug('Subagent live listener failed (non-fatal):', err);
+    const live = this._live(record);
+    if (patch.sessionId !== undefined) live.sessionId = patch.sessionId;
+    if (patch.state !== undefined) live.state = patch.state;
+    if (patch.usage !== undefined) live.usage = patch.usage;
+    if (patch.result !== undefined) live.result = patch.result;
+    if (patch.error !== undefined) live.error = patch.error;
+    if (patch.segments !== undefined) {
+      live.segments.length = 0;
+      live.segments.push(...patch.segments);
     }
+    if (patch.toolCalls !== undefined) {
+      live.toolCalls.length = 0;
+      live.toolCalls.push(...patch.toolCalls);
+    }
+    live.sequence += 1;
+    this._bumpSessionRevision(record);
   }
 
-  private _finishLive(record: SubagentRecord, state: SubagentState): void {
+  private _finishLive(record: SubagentRecord, state: SubagentTerminalState): void {
     if (record._liveTerminalEmitted) return;
     record._liveTerminalEmitted = true;
     this._updateLive(record, {
@@ -1085,6 +1789,47 @@ export class SubagentManager {
       segments: [], toolCalls: [],
     });
     record._liveCommittedSegmentCount = 0;
+    this._emitDelta(record, {
+      type: SubagentDeltaEventType.TERMINAL,
+      record: runtimeToDomain(record, { includeLiveTail: true }),
+      state,
+      usage: record.usage,
+    });
+  }
+
+  /** Emit a typed live delta stamped with the current run sequence and session revision. */
+  private _emitDelta(record: SubagentRecord, delta: SubagentDeltaPayload): void {
+    const listener = this._onDelta;
+    if (!listener) return;
+    const sessionId = record.sessionId ?? '';
+    const event = {
+      sessionId,
+      subagentId: record.id,
+      runId: record.live.runId,
+      sequence: record.live.sequence,
+      sessionRevision: this.getSessionRevision(sessionId),
+      ...delta,
+    } as SubagentDeltaEvent;
+    try {
+      listener(event);
+    } catch (err) {
+      console.debug('Subagent delta listener failed (non-fatal):', err);
+    }
+  }
+
+  /** Advance the per-session revision counter used to order events and snapshots. */
+  private _bumpSessionRevision(record: SubagentRecord): void {
+    if (!record.sessionId) return;
+    this._sessionRevisions.set(
+      record.sessionId,
+      (this._sessionRevisions.get(record.sessionId) ?? 0) + 1,
+    );
+  }
+
+  /** Mark a durable record mutation: bump the persist revision and the session revision. */
+  private _markRecordDirty(record: SubagentRecord): void {
+    record.persistRevision += 1;
+    this._bumpSessionRevision(record);
   }
 
   private _notify(): void {
@@ -1109,6 +1854,7 @@ export function runtimeToDomain(
   options: RuntimeToDomainOptions = {},
 ): DomainSubagentRecord {
   const statusMap: Record<SubagentState, DomainSubagentRecord['status']> = {
+    [SubagentState.QUEUED]: SubagentStatus.QUEUED,
     [SubagentState.PENDING]: SubagentStatus.PENDING,
     [SubagentState.RUNNING]: SubagentStatus.RUNNING,
     [SubagentState.COMPLETED]: SubagentStatus.COMPLETED,
@@ -1141,6 +1887,7 @@ export function runtimeToDomain(
     ...(record.reasoningEffort !== undefined
       ? { reasoning_effort: record.reasoningEffort }
       : {}),
+    closed: record.closed,
     chain: checkpointChain,
   };
 }
@@ -1169,6 +1916,15 @@ function makeLiveProjection(
   return {
     sessionId, subagentId, runId: randomUUID(), sequence: 0, state,
     segments: [], toolCalls: [], usage: null, result: null, error: null,
+  };
+}
+
+/** Deep-copy a live projection so snapshot reads never alias mutable run state. */
+function cloneLiveProjection(projection: SubagentLiveProjection): SubagentLiveProjection {
+  return {
+    ...projection,
+    segments: projection.segments.map((segment) => ({ ...segment })),
+    toolCalls: projection.toolCalls.map((tool) => ({ ...tool })),
   };
 }
 

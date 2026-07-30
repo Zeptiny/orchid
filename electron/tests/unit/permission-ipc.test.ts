@@ -3,6 +3,8 @@ import * as path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { IPC_CHANNELS } from '../../src/shared/types/ipc';
+import type { PermissionMode } from '../../src/shared/types/permission';
+import { hydrateSessionPermissionOverride } from '../../src/main/permissions/session-overrides';
 
 const mocks = vi.hoisted(() => {
   const handlers = new Map<string, (...args: unknown[]) => unknown>();
@@ -42,6 +44,9 @@ const mocks = vi.hoisted(() => {
       setPermissionMode: vi.fn((id: string, mode: string | null) => {
         if (mode == null) sessionPermissionModeById.delete(id);
         else sessionPermissionModeById.set(id, mode);
+        // Mirror the real SessionManager: persisting the mode also syncs the
+        // in-memory gate map the permission gate actually reads.
+        hydrateSessionPermissionOverride(id, mode as PermissionMode | null);
       }),
     },
     sessionPermissionModeById,

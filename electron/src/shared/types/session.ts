@@ -1,18 +1,5 @@
 /**
  * Session types for the Orchid domain.
- *
- * Ported from src/orchid/domain/session.py.
- *
- * Differences from Python:
- * - Timestamps are ISO strings (createdAt/updatedAt) instead of
- *   monotonic floats (Python's start_time/end_time).
- * - No SubagentManager or TodoStore runtime objects on the Session
- *   interface — those are runtime-only. The session stores
- *   subagentChains (SubagentRecord[]) and todoStore (TodoStoreData)
- *   for persistence.
- * - Version 2 JSON stores a connection-scoped model selection plus a
- *   display-only model label. Version 1 string model aliases remain readable
- *   as historical labels, never as executable selections.
  */
 
 import {
@@ -66,32 +53,22 @@ export interface SessionStorageDict {
   name: string;
   selection?: ModelSelection | null;
   modelLabel?: string | null;
-  /** Version 1 only: preserved as a historical label on restore. */
-  model?: string;
   /** Absolute working directory; missing/null on legacy sessions. */
   cwd?: string | null;
   chains?: unknown[];
   activeChainId?: string | null;
-  active_chain_id?: string | null;
   createdAt?: string;
-  created_at?: string;
   updatedAt?: string;
-  updated_at?: string;
-  subagent_chains?: unknown[];
   subagentChains?: unknown[];
-  todo_store?: unknown;
   todoStore?: unknown;
   reasoningEffortOverride?: string | number | null;
   permissionMode?: string | null;
-  // Forward-compat: extra keys tolerated on restore
   [key: string]: unknown;
 }
 
 // ── Serialization ───────────────────────────────────────────────────────────
 
 export function sessionToStorageDict(session: Session): SessionStorageDict {
-  // Serialize selection/label/cwd near the top so partial list reads
-  // can extract it without a full JSON parse.
   return {
     version: 2,
     id: session.id,
@@ -103,8 +80,8 @@ export function sessionToStorageDict(session: Session): SessionStorageDict {
     activeChainId: session.activeChainId,
     createdAt: session.createdAt,
     updatedAt: session.updatedAt,
-    subagent_chains: session.subagentChains.map(subagentRecordToStorageDict),
-    todo_store: todoStoreToStorageDict(session.todoStore),
+    subagentChains: session.subagentChains.map(subagentRecordToStorageDict),
+    todoStore: todoStoreToStorageDict(session.todoStore),
     reasoningEffortOverride: session.reasoningEffortOverride,
     permissionMode: session.permissionMode,
   };
@@ -112,38 +89,26 @@ export function sessionToStorageDict(session: Session): SessionStorageDict {
 
 export function sessionFromStorageDict(data: unknown): Session {
   const raw = data as Record<string, unknown>;
-  const isLegacyV1 = typeof raw.version !== 'number' || raw.version < 2;
   const parsedSelection = modelSelectionSchema.safeParse(raw.selection);
-  // A v1 `model` string is a historical display snapshot only. Do not turn it
-  // back into an executable selection: it lacks the required connection ID.
   const selection: ModelSelection | null =
-    !isLegacyV1 && parsedSelection.success ? parsedSelection.data : null;
-  const modelLabel: string | null = isLegacyV1
-    ? typeof raw.model === 'string'
-      ? raw.model
-      : null
-    : typeof raw.modelLabel === 'string'
-      ? raw.modelLabel
-      : null;
+    parsedSelection.success ? parsedSelection.data : null;
+  const modelLabel: string | null =
+    typeof raw.modelLabel === 'string' ? raw.modelLabel : null;
 
-  // Parse chains with per-chain error isolation (matching Python)
   const rawChains = Array.isArray(raw.chains) ? raw.chains : [];
   const chains: Chain[] = [];
   for (let i = 0; i < rawChains.length; i++) {
     try {
       chains.push(chainFromStorageDict(rawChains[i]));
     } catch {
-      // Per-chain error isolation: other chains survive
       console.warn(`Failed to restore chain at index ${i}, skipping`);
     }
   }
 
-  // Parse todo store
-  const todoStoreData = raw.todo_store ?? raw.todoStore ?? {};
+  const todoStoreData = raw.todoStore ?? {};
   const todoStore = todoStoreFromStorageDict(todoStoreData);
 
-  // Parse subagent chains
-  const rawSubagentChains = raw.subagent_chains ?? raw.subagentChains;
+  const rawSubagentChains = raw.subagentChains;
   const subagentChains: SubagentRecord[] = [];
   if (Array.isArray(rawSubagentChains)) {
     for (const sd of rawSubagentChains) {
@@ -162,27 +127,14 @@ export function sessionFromStorageDict(data: unknown): Session {
     name: typeof raw.name === 'string' ? raw.name : 'Unnamed',
     selection,
     modelLabel,
-    // Legacy sessions without cwd → null (R9); never invent process.cwd().
     cwd: typeof raw.cwd === 'string' ? raw.cwd : null,
     chains,
     activeChainId:
-      typeof raw.activeChainId === 'string'
-        ? raw.activeChainId
-        : typeof raw.active_chain_id === 'string'
-          ? raw.active_chain_id
-          : null,
+      typeof raw.activeChainId === 'string' ? raw.activeChainId : null,
     createdAt:
-      typeof raw.createdAt === 'string'
-        ? raw.createdAt
-        : typeof raw.created_at === 'string'
-          ? raw.created_at
-          : now,
+      typeof raw.createdAt === 'string' ? raw.createdAt : now,
     updatedAt:
-      typeof raw.updatedAt === 'string'
-        ? raw.updatedAt
-        : typeof raw.updated_at === 'string'
-          ? raw.updated_at
-          : now,
+      typeof raw.updatedAt === 'string' ? raw.updatedAt : now,
     subagentChains,
     todoStore,
     reasoningEffortOverride:

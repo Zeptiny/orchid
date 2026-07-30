@@ -67,6 +67,7 @@ const EXPECTED_FIELDS: ConfigFieldExpectation[] = [
   },
   { field: 'rag', type: 'object', defaultValue: undefined }, // nested, checked separately
   { field: 'agents_md', type: 'object', defaultValue: undefined }, // nested, checked separately
+  { field: 'subagents', type: 'object', defaultValue: undefined }, // nested, checked separately
   {
     field: 'ast_max_file_size',
     type: 'number',
@@ -86,7 +87,6 @@ const EXPECTED_FIELDS: ConfigFieldExpectation[] = [
     envOverride: 'ORCHID_MCP_PER_SERVER_TIMEOUT',
   },
   { field: 'mcp_servers', type: 'record', defaultValue: undefined }, // complex default
-  { field: 'providers', type: 'record', defaultValue: undefined }, // complex default
   {
     field: 'llm_stream_idle_timeout',
     type: 'number',
@@ -115,6 +115,8 @@ const EXPECTED_FIELDS: ConfigFieldExpectation[] = [
   // Desktop UI preference outside the migrated core configuration contract.
   { field: 'always_expand_tool_groups', type: 'boolean', defaultValue: false },
   { field: 'has_completed_onboarding', type: 'boolean', defaultValue: false },
+  // Electron-only: worker-pool main-agent reservation (no env override).
+  { field: 'tool_worker_pool_main_agent_reserved', type: 'number', defaultValue: 1 },
   {
     field: 'command_max_output_bytes',
     type: 'number',
@@ -235,6 +237,20 @@ const EXPECTED_AGENTS_MD_FIELDS = [
   { field: 'include_local', type: 'boolean', defaultValue: false },
 ];
 
+const EXPECTED_SUBAGENTS_FIELDS = [
+  { field: 'event_max_per_flush', type: 'number', defaultValue: 200 },
+  { field: 'event_byte_budget_kb', type: 'number', defaultValue: 64 },
+  { field: 'usage_event_interval_ms', type: 'number', defaultValue: 1000 },
+  { field: 'hydration_buffer_kb', type: 'number', defaultValue: 256 },
+  { field: 'terminal_wave_ms', type: 'number', defaultValue: 250 },
+  { field: 'max_active_global', type: 'number', defaultValue: 8 },
+  { field: 'max_active_per_session', type: 'number', defaultValue: 4 },
+  { field: 'max_queued', type: 'number', defaultValue: 32 },
+  { field: 'terminal_retention', type: 'number', defaultValue: 25 },
+  { field: 'prompt_recent_terminal', type: 'number', defaultValue: 5 },
+  { field: 'prompt_task_max_chars', type: 'number', defaultValue: 200 },
+];
+
 const EXPECTED_RAG_FIELDS = [
   { field: 'chunk_size', type: 'number', defaultValue: 2000, envOverride: 'ORCHID_RAG_CHUNK_SIZE' },
   {
@@ -302,11 +318,11 @@ describe('Config Parity', () => {
       expect(cfg).toHaveProperty('personality');
       expect(cfg).toHaveProperty('rag');
       expect(cfg).toHaveProperty('agents_md');
+      expect(cfg).toHaveProperty('subagents');
       expect(cfg).toHaveProperty('ast_max_file_size');
       expect(cfg).toHaveProperty('mcp_startup_timeout');
       expect(cfg).toHaveProperty('mcp_per_server_timeout');
       expect(cfg).toHaveProperty('mcp_servers');
-      expect(cfg).toHaveProperty('providers');
       expect(cfg).toHaveProperty('llm_stream_idle_timeout');
       expect(cfg).toHaveProperty('llm_stream_retries');
       expect(cfg).toHaveProperty('background_command_idle_timeout');
@@ -333,6 +349,7 @@ describe('Config Parity', () => {
       expect(cfg).toHaveProperty('llm_retry_backoff_base');
       expect(cfg).toHaveProperty('llm_retry_max_delay');
       expect(cfg).toHaveProperty('tool_worker_pool_size');
+      expect(cfg).toHaveProperty('tool_worker_pool_main_agent_reserved');
 
       // RAG nested fields (7)
       expect(cfg.rag).toHaveProperty('chunk_size');
@@ -351,21 +368,38 @@ describe('Config Parity', () => {
       expect(cfg.agents_md).toHaveProperty('enforce_on_write');
       expect(cfg.agents_md).toHaveProperty('inject_on_read');
       expect(cfg.agents_md).toHaveProperty('include_local');
+
+      // Subagents nested fields (11)
+      expect(cfg.subagents).toHaveProperty('event_max_per_flush');
+      expect(cfg.subagents).toHaveProperty('event_byte_budget_kb');
+      expect(cfg.subagents).toHaveProperty('usage_event_interval_ms');
+      expect(cfg.subagents).toHaveProperty('hydration_buffer_kb');
+      expect(cfg.subagents).toHaveProperty('terminal_wave_ms');
+      expect(cfg.subagents).toHaveProperty('max_active_global');
+      expect(cfg.subagents).toHaveProperty('max_active_per_session');
+      expect(cfg.subagents).toHaveProperty('max_queued');
+      expect(cfg.subagents).toHaveProperty('terminal_retention');
+      expect(cfg.subagents).toHaveProperty('prompt_recent_terminal');
+      expect(cfg.subagents).toHaveProperty('prompt_task_max_chars');
     });
 
-    it('top-level field count matches expected (45 top-level + 10 rag nested + 7 agents_md nested fields)', () => {
+    it('top-level field count matches expected (46 top-level + 12 rag + 7 agents_md + 11 subagents nested fields)', () => {
       const cfg = defaults();
       // Top-level keys count
       const topLevelKeys = Object.keys(cfg);
-      expect(topLevelKeys).toHaveLength(45); // 45 top-level fields (rag, agents_md are nested)
+      expect(topLevelKeys).toHaveLength(46); // 46 top-level fields (rag, agents_md, subagents are nested)
 
       // RAG nested keys count
       const ragKeys = Object.keys(cfg.rag);
-      expect(ragKeys).toHaveLength(10);
+      expect(ragKeys).toHaveLength(12);
 
       // AGENTS.md nested keys count
       const agentsMdKeys = Object.keys(cfg.agents_md);
       expect(agentsMdKeys).toHaveLength(7);
+
+      // Subagents nested keys count
+      const subagentsKeys = Object.keys(cfg.subagents);
+      expect(subagentsKeys).toHaveLength(11);
     });
   });
 
@@ -405,6 +439,17 @@ describe('Config Parity', () => {
       }
     });
 
+    it('subagents nested fields have correct defaults', () => {
+      const cfg = defaults();
+
+      for (const expected of EXPECTED_SUBAGENTS_FIELDS) {
+        expect(
+          cfg.subagents[expected.field as keyof typeof cfg.subagents],
+          `Subagents field '${expected.field}' default`,
+        ).toBe(expected.defaultValue);
+      }
+    });
+
     it('ignored_dirs has 20+ default entries', () => {
       const cfg = defaults();
       expect(cfg.ignored_dirs.length).toBeGreaterThanOrEqual(20);
@@ -416,11 +461,6 @@ describe('Config Parity', () => {
     it('mcp_servers defaults to empty (recommended servers are opt-in)', () => {
       const cfg = defaults();
       expect(cfg.mcp_servers).toEqual({});
-    });
-
-    it('providers remains an empty deprecated compatibility map', () => {
-      const cfg = defaults();
-      expect(cfg.providers).toEqual({});
     });
   });
 
@@ -464,7 +504,6 @@ describe('Config Parity', () => {
       const cfg = defaults();
       expect(typeof cfg.tier_models).toBe('object');
       expect(typeof cfg.mcp_servers).toBe('object');
-      expect(typeof cfg.providers).toBe('object');
     });
   });
 

@@ -11,6 +11,7 @@ import {
   indexProject,
   getStatus,
   clearIndex,
+  cancelIndex,
   isIndexing,
   getIndexState,
 } from '../rag/indexer';
@@ -99,6 +100,7 @@ export function registerRAGIPC(): void {
   ipcMain.handle(IPC_CHANNELS.RAG_CLEAR, async (event) => {
     const projectPath = resolveBoundProjectPath(String(event.sender.id));
     if (projectPath) {
+      await cancelIndex(projectPath);
       clearIndex(projectPath);
     }
     return { status: 'cleared' };

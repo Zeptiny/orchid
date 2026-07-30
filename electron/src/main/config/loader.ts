@@ -4,21 +4,19 @@
  * Merge order:  defaults → ~/.orchid/config.json → .orchid.json → env overrides
  *
  * Atomic writes:  temp file + fsync + rename + chmod 600 + fsync parent dir.
- * Matches Python `config.py` ConfigManager exactly.
  */
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { randomBytes } from 'node:crypto';
 import type { ModelSelection } from '../../shared/types/provider';
-import type { ConfigDiagnostic } from '../../shared/types/ipc-boundary';
 import { configSchema, defaults, type Config } from './schema';
 import { mergeLayers, applyEnvOverrides, isPlainObject } from './merge';
 import { validateConfig } from './validation';
 import { safeFsync } from '../utils/safe-fsync';
 
 // ---------------------------------------------------------------------------
-// Paths — matches Python config.py:15-27
+// Paths
 // ---------------------------------------------------------------------------
 
 export const HOME_CONFIG_DIR = path.join(os.homedir(), '.orchid');
@@ -39,11 +37,6 @@ export interface LoadConfigOptions {
   homeConfigPath?: string;
 }
 
-const LEGACY_PROVIDER_CONFIG_RESET_DIAGNOSTIC: ConfigDiagnostic = {
-  code: 'legacy-provider-config-reset',
-  message: 'Legacy provider configuration was ignored. Choose a provider connection and model to enable LLM features.',
-};
-
 // ---------------------------------------------------------------------------
 // File I/O helpers
 // ---------------------------------------------------------------------------
@@ -59,77 +52,7 @@ function loadJson(filePath: string): Record<string, unknown> {
 }
 
 /**
- * Remove development-era provider state before it can reach the executable
- * config. String alias/model values are not transformed into a connection:
- * they are discarded, while unrelated preferences remain intact.
- */
-function sanitizeConfigLayer(data: Record<string, unknown>): {
-  config: Record<string, unknown>;
-  resetLegacyProviderState: boolean;
-} {
-  const result: Record<string, unknown> = {};
-  let resetLegacyProviderState = false;
-
-  for (const [k, v] of Object.entries(data)) {
-    if (k === 'providers') {
-      // An empty map is the new IPC compatibility shape, not legacy state.
-      if (v !== null && (!isPlainObject(v) || Object.keys(v).length > 0)) {
-        resetLegacyProviderState = true;
-      }
-      continue;
-    }
-
-    if (k === 'default_model' && typeof v === 'string') {
-      resetLegacyProviderState = true;
-      continue;
-    }
-
-    if (k === 'tier_models') {
-      if (typeof v === 'string') {
-        resetLegacyProviderState = true;
-        continue;
-      }
-      if (isPlainObject(v)) {
-        const tiers: Record<string, unknown> = {};
-        for (const [tier, selection] of Object.entries(v)) {
-          if (typeof selection === 'string') {
-            resetLegacyProviderState = true;
-            continue;
-          }
-          tiers[tier] = selection;
-        }
-        result[k] = tiers;
-        continue;
-      }
-    }
-
-    if (k === 'rag' && isPlainObject(v)) {
-      const rag = { ...v };
-      // Legacy API embedding aliases relied on the retired provider alias
-      // resolver. Typed connection-scoped selections are retained for U4;
-      // string aliases are reset to local ONNX rather than inferred.
-      if (typeof rag.embedding_api_model === 'string') {
-        delete rag.embedding_api_model;
-        resetLegacyProviderState = true;
-      }
-      result[k] = rag;
-      continue;
-    }
-
-    // Preserve an explicit nullable default selection; retain the prior
-    // behavior for nulls in unrelated config fields.
-    if (v === null && k !== 'default_model') {
-      continue;
-    }
-    result[k] = v;
-  }
-
-  return { config: result, resetLegacyProviderState };
-}
-
-/**
  * Atomic write with fsync + rename + chmod 600 + fsync parent dir.
- * Matches Python `config.py:475-497`.
  */
 export function atomicWriteJson(
   filePath: string,
@@ -218,10 +141,7 @@ export function atomicWriteJson(
  * @param options.projectDir  Directory to search for `.orchid.json`. Defaults to cwd.
  * @param options.homeConfigPath  Override path to home config file (for testing).
  */
-function loadConfigWithDiagnostics(options?: LoadConfigOptions | string): {
-  config: Config;
-  diagnostics: ConfigDiagnostic[];
-} {
+export function loadConfig(options?: LoadConfigOptions | string): Config {
   const opts: LoadConfigOptions = typeof options === 'string'
     ? { projectDir: options }
     : options ?? {};
@@ -232,44 +152,16 @@ function loadConfigWithDiagnostics(options?: LoadConfigOptions | string): {
   const defaultCfg = defaults();
   const mergedDict = defaultCfg as unknown as Record<string, unknown>;
 
-  // Layer 1: home config
-  const homeExists = fs.existsSync(homePath);
-  const homeRaw = loadJson(homePath);
-  const home = sanitizeConfigLayer(homeRaw);
-  // Upgrade: existing installs without the flag are treated as completed so
-  // multi-step onboarding does not re-open after schema introduction.
-  if (homeExists && !Object.prototype.hasOwnProperty.call(homeRaw, 'has_completed_onboarding')) {
-    home.config.has_completed_onboarding = true;
-  }
+  const home = loadJson(homePath);
 
-  // Layer 2: project config
   const projectPath = path.join(projectDir, PROJECT_CONFIG_NAME);
-  const project = sanitizeConfigLayer(loadJson(projectPath));
+  const project = loadJson(projectPath);
 
-  // Merge all layers
-  const merged = mergeLayers(mergedDict, home.config, project.config);
+  const merged = mergeLayers(mergedDict, home, project);
 
-  // Layer 3: env overrides
   applyEnvOverrides(merged);
 
-  // Validate with zod (type checking + basic constraints)
-  return {
-    config: configSchema.parse(merged),
-    diagnostics: home.resetLegacyProviderState || project.resetLegacyProviderState
-      ? [{ ...LEGACY_PROVIDER_CONFIG_RESET_DIAGNOSTIC }]
-      : [],
-  };
-}
-
-export function loadConfig(options?: LoadConfigOptions | string): Config {
-  return loadConfigWithDiagnostics(options).config;
-}
-
-/** Read non-secret legacy-reset notices for a specific config layer set. */
-export function getConfigDiagnostics(
-  options?: LoadConfigOptions | string,
-): ConfigDiagnostic[] {
-  return loadConfigWithDiagnostics(options).diagnostics;
+  return configSchema.parse(merged);
 }
 
 /**
@@ -280,8 +172,6 @@ export function getConfigDiagnostics(
  * - `~/.orchid/agents/` (if missing)
  * - `~/.orchid/skills/` (if missing)
  * - `~/.orchid/personalities/` (if missing)
- *
- * Matches Python `config.py:449-467`.
  */
 export function ensureHomeConfig(): void {
   fs.mkdirSync(HOME_CONFIG_DIR, { recursive: true });
@@ -303,7 +193,7 @@ export function ensureHomeConfig(): void {
 // ---------------------------------------------------------------------------
 
 /**
- * Singleton config manager — mirrors Python `ConfigManager`.
+ * Singleton config manager.
  *
  * Usage:
  * ```ts
@@ -314,16 +204,10 @@ export function ensureHomeConfig(): void {
 export class ConfigManager {
   private static _instance: Config | null = null;
   private static _errors: string[] = [];
-  private static _diagnostics: ConfigDiagnostic[] = [];
 
   /** Return validation errors from the last load. */
   static errors(): string[] {
     return [...ConfigManager._errors];
-  }
-
-  /** Return non-secret load/reset notices from the current config lifecycle. */
-  static diagnostics(): ConfigDiagnostic[] {
-    return ConfigManager._diagnostics.map((diagnostic) => ({ ...diagnostic }));
   }
 
   /** Load config (cached after first call). Use `reset()` to reload. */
@@ -332,24 +216,22 @@ export class ConfigManager {
       return ConfigManager._instance;
     }
 
-    const loaded = loadConfigWithDiagnostics(options);
-    ConfigManager._errors = validateConfig(loaded.config);
-    ConfigManager._diagnostics = loaded.diagnostics;
-    ConfigManager._instance = loaded.config;
-    return loaded.config;
+    const loaded = loadConfig(options);
+    ConfigManager._errors = validateConfig(loaded);
+    ConfigManager._instance = loaded;
+    return loaded;
   }
 
   /** Clear cached config so the next `load()` re-reads from disk. */
   static reset(): void {
     ConfigManager._instance = null;
     ConfigManager._errors = [];
-    ConfigManager._diagnostics = [];
   }
 
 }
 
 // ---------------------------------------------------------------------------
-// Convenience helpers (match Python module-level functions)
+// Convenience helpers
 // ---------------------------------------------------------------------------
 
 /** Get the current config (loads if needed). */

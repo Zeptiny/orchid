@@ -14,7 +14,7 @@ import type {
   TerminalToolResultStatus,
   ToolExecutionResult,
 } from './tool-result';
-import type { SubagentLiveProjection, SubagentRecord } from './subagent';
+import type { SubagentDeltaEvent, SubagentLiveProjection, SubagentRecord } from './subagent';
 import type { RiskClass, ToolScope } from './permission';
 import type {
   CustomConnectionModel,
@@ -38,7 +38,6 @@ import type {
   SessionSummary,
   SessionActivity,
   Config,
-  ConfigDiagnostic,
   MCPServerStatus,
   RAGStoreStatus,
   ASTStoreStatus,
@@ -49,6 +48,7 @@ import type {
   IndexRunState,
   RAGConfig,
   AgentsMdConfig,
+  SubagentsConfig,
   PermissionModeValue,
   PermissionRule,
 } from './ipc-boundary';
@@ -70,7 +70,6 @@ export type {
   SessionSummary,
   SessionActivity,
   Config,
-  ConfigDiagnostic,
   MCPServerStatus,
   RAGStoreStatus,
   ASTStoreStatus,
@@ -81,6 +80,7 @@ export type {
   IndexRunState,
   RAGConfig,
   AgentsMdConfig,
+  SubagentsConfig,
   PermissionModeValue,
   PermissionRule,
   UpdaterState,
@@ -191,18 +191,22 @@ export interface SessionOpenResult {
 export interface SubagentSnapshotRequest { sessionId: string; }
 export interface SubagentSnapshot {
   sessionId: string;
+  /**
+   * Per-session monotonic revision from the manager's session counter. The
+   * renderer rejects snapshots below its recorded revision floor.
+   */
+  sessionRevision: number;
   records: SubagentRecord[];
   live: SubagentLiveProjection[];
 }
+/**
+ * Unit of SUBAGENTS_EVENT delivery: one budgeted flush of typed live deltas
+ * for a single session. Records ride only `spawned`/`terminal` deltas, so
+ * projection-only batches keep renderer record identity stable.
+ */
 export interface SubagentEvent {
   sessionId: string;
-  subagentId: string;
-  runId: string;
-  sequence: number;
-  type: 'projection';
-  projection: SubagentLiveProjection;
-  /** Canonical seed for empty hydrated views and terminal handoff. */
-  record?: SubagentRecord;
+  events: SubagentDeltaEvent[];
 }
 
 interface ChatEventIdentity {
@@ -231,7 +235,6 @@ export interface ChatThinkingEvent extends ChatEventIdentity {
 
 export interface ChatStateEvent extends ChatEventIdentity {
   state: string;
-  response: string;
   error: string | null;
   /** Current interrupt confirmation phase. */
   interruptState: 'idle' | 'confirmAgent' | 'confirmSubagents';
@@ -302,12 +305,19 @@ export interface BgCommandSnapshotRequest {
   sessionId?: string;
 }
 
-export interface BgCommandSnapshotResult {
-  /** Tail output text. */
-  tail: string;
-  /** Exit code (null if still running). */
-  exitCode: number | null;
-}
+export type BgCommandSnapshotResult =
+  | {
+    /** The command exists and is visible to the requesting session. */
+    found: true;
+    /** Tail output text. */
+    tail: string;
+    /** Exit code (null if still running). */
+    exitCode: number | null;
+  }
+  | {
+    /** The command is unavailable after restart, eviction, or session mismatch. */
+    found: false;
+  };
 
 // ── Config API ───────────────────────────────────────────────────────────────
 
@@ -335,18 +345,18 @@ export type ConfigPatch = {
   grep_max_results?: number;
   directory_tree_depth?: number;
   tool_worker_pool_size?: number;
+  tool_worker_pool_main_agent_reserved?: number;
   theme?: string;
   personality?: string;
   rag?: Partial<RAGConfig> & {
     embedding_api_model?: ModelSelection | null;
   };
   agents_md?: Partial<AgentsMdConfig>;
+  subagents?: Partial<SubagentsConfig>;
   ast_max_file_size?: number;
   mcp_startup_timeout?: number;
   mcp_per_server_timeout?: number;
   mcp_servers?: ConfigPatchMap<Record<string, unknown>>;
-  /** Rejected at the main boundary; kept for draft tombstone helpers only. */
-  providers?: ConfigPatchMap<Record<string, unknown>>;
   llm_stream_idle_timeout?: number;
   llm_stream_retries?: number;
   background_command_idle_timeout?: number;
@@ -889,7 +899,6 @@ export interface OrchidAPI {
 
   config: {
     get: () => Promise<Config>;
-    diagnostics: () => Promise<ConfigDiagnostic[]>;
     save: (updates: ConfigSaveMessage) => Promise<{ status: string }>;
     permissionScopes: () => Promise<PermissionConfigScopes>;
     savePermissionScope: (message: PermissionConfigScopeSaveMessage) => Promise<{ status: string }>;
@@ -987,6 +996,7 @@ export interface OrchidAPI {
 
   subagents: {
     snapshot: (request: SubagentSnapshotRequest) => Promise<SubagentSnapshot>;
+    /** Batched subagent live deltas for the window's active session. */
     onEvent: (callback: (event: SubagentEvent) => void) => () => void;
   };
 
@@ -1089,7 +1099,6 @@ export const IPC_CHANNELS = {
 
   // Config
   CONFIG_GET: 'config:get',
-  CONFIG_DIAGNOSTICS: 'config:diagnostics',
   CONFIG_SAVE: 'config:save',
   CONFIG_PERMISSION_SCOPES: 'config:permission_scopes',
   CONFIG_SAVE_PERMISSION_SCOPE: 'config:save_permission_scope',
@@ -1222,7 +1231,6 @@ export const ALLOWED_INVOKE_CHANNELS = [
   IPC_CHANNELS.CHAT_SNAPSHOT,
   IPC_CHANNELS.SUBAGENTS_SNAPSHOT,
   IPC_CHANNELS.CONFIG_GET,
-  IPC_CHANNELS.CONFIG_DIAGNOSTICS,
   IPC_CHANNELS.CONFIG_SAVE,
   IPC_CHANNELS.CONFIG_PERMISSION_SCOPES,
   IPC_CHANNELS.CONFIG_SAVE_PERMISSION_SCOPE,

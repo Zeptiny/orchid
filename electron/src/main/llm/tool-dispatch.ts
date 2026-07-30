@@ -30,8 +30,11 @@ import {
 import type { ToolExecutionContext } from '../tools/types';
 import { toWorkerContext } from '../tools/types';
 import { getToolWorkerPool } from './tool-pool';
+import { WorkerTaskCancelledError, type WorkerTaskScope } from '../utils/worker-pool';
+import { isMainAgentScope } from '../../shared/types/agent-scope';
 import type { ProjectRuntime } from '../project/runtime';
 import { getDefaultWaitTimeoutMs } from '../agents/manager';
+import { getSessionManager } from '../session/singleton';
 import {
   createCanonicalToolResult,
   type JsonValue,
@@ -340,34 +343,52 @@ export async function executeToolCall(
   // Timeout exemption is definition.noTimeout only (no parallel name set).
   // Prefer Zod-parsed data so defaults/coercions reach the handler.
   const handlerArgs = validation.data;
+  const noTimeout = Boolean(registered.definition.noTimeout);
   let result: unknown;
   try {
     const offloadPool = registered.definition.offload ? getToolWorkerPool() : null;
-    const execute = offloadPool
-      ? () => {
-          const workerCtx = toWorkerContext(toolCtx);
-          return offloadPool.run(
-            { toolName: name, args: handlerArgs, context: workerCtx },
-            timeoutAbort?.signal,
-          );
-        }
-      : () => registered.handler(handlerArgs, toolCtx);
-    result = await runWithToolTimeout(execute, name, {
-      timeoutSeconds: effectiveTimeoutSeconds,
-      noTimeout: Boolean(registered.definition.noTimeout),
-      abortController: timeoutAbort,
-    });
+    if (offloadPool) {
+      const workerCtx = toWorkerContext(toolCtx);
+      const scope: WorkerTaskScope = isMainAgentScope(options.agentScopeId)
+        ? 'main'
+        : 'subagent';
+      const handle = offloadPool.runTask(
+        { toolName: name, args: handlerArgs, context: workerCtx },
+        { signal: combinedAbort, scope },
+      );
+      // Queue wait is measured separately and is NOT counted against the tool
+      // timeout (review F-06 rec 5): the execution timer starts only once a
+      // worker picks the task up. `handle.started` rejects on cancel-before-start.
+      await handle.started;
+      result = await runWithToolTimeout(() => handle.result, name, {
+        timeoutSeconds: effectiveTimeoutSeconds,
+        noTimeout,
+        abortController: timeoutAbort,
+      });
+    } else {
+      result = await runWithToolTimeout(
+        () => registered.handler(handlerArgs, toolCtx),
+        name,
+        {
+          timeoutSeconds: effectiveTimeoutSeconds,
+          noTimeout,
+          abortController: timeoutAbort,
+        },
+      );
+    }
   } catch (err) {
-    if (err instanceof ToolTimeoutError) {
+    if (err instanceof ToolTimeoutError || timeoutAbort.signal.aborted) {
       return genericTerminalExecution(
         toolCallId,
         name,
         'error',
-        err.message,
+        err instanceof ToolTimeoutError
+          ? err.message
+          : `Tool '${name}' timed out after ${effectiveTimeoutSeconds}s.`,
         'timeout',
       );
     }
-    if (parentAbort?.aborted) {
+    if (parentAbort?.aborted || err instanceof WorkerTaskCancelledError) {
       return genericTerminalExecution(
         toolCallId,
         name,
@@ -622,9 +643,8 @@ export function _setAgentsMdStoreResolverForTests(
  *
  * Deviation from the plan's "thread the tracker through ToolExecutionContext":
  * resolving here (instead of editing orchestrator.ts's call sites, chat.ts, and
- * tools/types.ts) keeps U4 to two source files. The lazy `createRequire` mirrors
- * build-prompt-context.ts and avoids a circular init with session/tools. Returns
- * null when there is no session or resolution fails (no-session degradation, R17).
+ * tools/types.ts) keeps U4 to two source files. Returns null when there is no
+ * session or resolution fails (no-session degradation, R17).
  */
 function resolveAgentsMdStore(
   sessionId: string | undefined,
@@ -635,11 +655,7 @@ function resolveAgentsMdStore(
     return agentsMdStoreResolverOverride(sessionId, agentScopeId);
   }
   try {
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const { createRequire } = require('node:module') as typeof import('node:module');
-    const req = createRequire(__filename);
-    const session = req('../ipc/session') as typeof import('../ipc/session');
-    return session.getSessionManager().getAgentsMdContextStore(sessionId, agentScopeId);
+    return getSessionManager().getAgentsMdContextStore(sessionId, agentScopeId);
   } catch {
     return null;
   }

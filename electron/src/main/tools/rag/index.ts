@@ -8,7 +8,7 @@ import type { ToolDefinition, ToolHandler } from '../types';
 import { RiskClass } from '../../../shared/types/permission';
 import { genericToolResultMetadata } from '../types';
 import { genericBuiltInToolOutcome, type GenericBuiltInToolOutcome } from '../result';
-import { indexProject, getStatus, clearIndex } from '../../rag/indexer';
+import { cancelIndex, indexProject, getStatus, clearIndex } from '../../rag/indexer';
 
 // ---------------------------------------------------------------------------
 // Schema
@@ -16,8 +16,8 @@ import { indexProject, getStatus, clearIndex } from '../../rag/indexer';
 
 const ragIndexSchema = z.object({
   action: z
-    .enum(['status', 'index', 'clear'])
-    .describe('Action: "status" returns index stats, "index" triggers full re-index, "clear" drops the index'),
+    .enum(['status', 'index', 'cancel', 'clear'])
+    .describe('Action: "status" returns index stats, "index" triggers full re-index, "cancel" stops an active index, "clear" drops the index'),
 });
 
 // ---------------------------------------------------------------------------
@@ -29,7 +29,7 @@ export const ragIndexDefinition: ToolDefinition = {
   name: 'rag_index',
   description:
     'Manage the RAG (Retrieval Augmented Generation) index. ' +
-    'Use "status" to check index stats, "index" to build/rebuild the index, "clear" to drop it.',
+    'Use "status" to check index stats, "index" to build/rebuild the index, "cancel" to stop an active index, or "clear" to drop it.',
   inputSchema: ragIndexSchema,
   category: 'rag',
   riskClass: RiskClass.MUTATION,
@@ -43,7 +43,7 @@ export const ragIndexHandler: ToolHandler = async (
   input: unknown,
   ctx,
 ): Promise<GenericBuiltInToolOutcome> => {
-  const { action } = input as { action: 'status' | 'index' | 'clear' };
+  const { action } = input as { action: 'status' | 'index' | 'cancel' | 'clear' };
   const projectPath = ctx.cwd;
 
   switch (action) {
@@ -82,7 +82,13 @@ export const ragIndexHandler: ToolHandler = async (
       });
     }
 
+    case 'cancel': {
+      const cancelled = await cancelIndex(projectPath);
+      return genericBuiltInToolOutcome('rag_index', { action: 'cancel', cancelled });
+    }
+
     case 'clear': {
+      await cancelIndex(projectPath);
       clearIndex(projectPath);
       return genericBuiltInToolOutcome('rag_index', { action: 'clear' });
     }
@@ -90,7 +96,7 @@ export const ragIndexHandler: ToolHandler = async (
     default:
       return genericBuiltInToolOutcome(
         'rag_index',
-        `Unknown action: ${action}. Use "status", "index", or "clear".`,
+        `Unknown action: ${action}. Use "status", "index", "cancel", or "clear".`,
         'error',
       );
   }

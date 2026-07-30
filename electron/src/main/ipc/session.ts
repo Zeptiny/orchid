@@ -8,7 +8,11 @@ import { BrowserWindow, dialog, ipcMain } from 'electron';
 import { IPC_CHANNELS } from '../../shared/types/ipc';
 import { flattenSessionMessages } from '../../shared/types/session';
 import type { ModelSelection } from '../../shared/types/provider';
-import { SessionManager } from '../session/manager';
+import {
+  getSessionManager,
+  resolveBoundProjectPath,
+  resolveWindowWorkspace,
+} from '../session/singleton';
 import { getConfig } from '../config/loader';
 import { clearChatHistory, seedChatHistory } from './chat-history';
 import {
@@ -16,7 +20,6 @@ import {
   getDraftCwd,
   isWorkspaceBound,
   requireValidProjectDirectory,
-  resolveWorkspace,
   setDraftCwd,
   updateStickyDefaultProjectDir,
   type WorkspaceInfo,
@@ -44,50 +47,13 @@ import {
   sessionSetReasoningEffortSchema,
 } from './payload-schemas';
 
-// ── Singleton session manager ────────────────────────────────────────────────
-
-let sessionManager: SessionManager | null = null;
-
-/**
- * Get the singleton SessionManager instance.
- *
- * Creates one lazily on first call. Exported so that other IPC modules
- * (e.g. chat.ts for auto-naming) can share the same instance.
- */
-export function getSessionManager(): SessionManager {
-  if (!sessionManager) {
-    sessionManager = new SessionManager();
-  }
-  return sessionManager;
-}
+export {
+  getSessionManager,
+  resolveBoundProjectPath,
+  resolveWindowWorkspace,
+};
 
 export { flattenSessionMessages };
-
-/**
- * Resolve workspace for a window using draft + active session + sticky default.
- */
-export function resolveWindowWorkspace(windowId: string): WorkspaceInfo {
-  const active = getSessionManager().getActive(windowId);
-  return resolveWorkspace(windowId, {
-    sessionCwd: active?.cwd ?? null,
-    stickyDefault: getConfig().default_project_dir,
-  });
-}
-
-/**
- * Bound project path for IPC tools/indexers: draft → session → sticky, only when bound.
- */
-export function resolveBoundProjectPath(windowId?: string): string | null {
-  try {
-    const info = resolveWindowWorkspace(windowId ?? '');
-    if (isWorkspaceBound(info) && info.cwd != null) {
-      return info.cwd;
-    }
-  } catch {
-    // ignore
-  }
-  return null;
-}
 
 // ── Draft reasoning overrides (window-scoped, pre-session) ──────────────────
 
@@ -139,6 +105,7 @@ export async function bindProjectDirectory(
   dir: string,
 ): Promise<WorkspaceInfo> {
   const canonical = requireValidProjectDirectory(dir);
+  const priorWorkspace = resolveWindowWorkspace(windowId);
 
   await updateStickyDefaultProjectDir(canonical);
 
@@ -157,6 +124,17 @@ export async function bindProjectDirectory(
     }
   } else {
     setDraftCwd(windowId, canonical);
+  }
+
+  if (priorWorkspace.cwd && priorWorkspace.cwd !== canonical) {
+    const {
+      clearFunctionHashesForSession,
+      clearFunctionHashesForWorkspace,
+    } = await import('../tools/ast/get-function');
+    clearFunctionHashesForWorkspace(priorWorkspace.cwd);
+    if (active && active.chains.length === 0) {
+      clearFunctionHashesForSession(active.id);
+    }
   }
 
   return resolveWindowWorkspace(windowId);
@@ -199,6 +177,7 @@ export function registerSessionIPC(): void {
       return manager.load(id);
     }
 
+    const releasedDraftCwd = getDraftCwd(windowId);
     // Selecting a session is view navigation. Work in the previously selected
     // session continues and remains addressed by its own session id.
     const session = manager.switchTo(id, windowId);
@@ -216,6 +195,10 @@ export function registerSessionIPC(): void {
     // Session owns workspace now — clear draft so it doesn't shadow session.cwd.
     // Sticky default is intentionally NOT updated on load (R4).
     clearDraftCwd(windowId);
+    if (releasedDraftCwd) {
+      const { clearFunctionHashesForWorkspace } = await import('../tools/ast/get-function');
+      clearFunctionHashesForWorkspace(releasedDraftCwd);
+    }
 
     // Seed history with ALL chains (matches renderer flatten) so the next
     // chat:send continues the full conversation, not only the active chain.
@@ -352,14 +335,17 @@ export function registerSessionIPC(): void {
       { forceStopSession },
       { clearPermissionSessionState },
       { clearToolCallHistoryForSession },
+      { clearFunctionHashesForSession },
     ] = await Promise.all([
       import('./chat'),
       import('./permission'),
       import('../permissions/history'),
+      import('../tools/ast/get-function'),
     ]);
     forceStopSession(parsed.data.id);
     clearPermissionSessionState(parsed.data.id);
     clearToolCallHistoryForSession(parsed.data.id);
+    clearFunctionHashesForSession(parsed.data.id);
     clearNextRequestStop(parsed.data.id);
     const deleted = manager.delete(parsed.data.id);
     if (deleted) {

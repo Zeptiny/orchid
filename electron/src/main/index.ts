@@ -29,7 +29,11 @@ import { initUpdater, destroyUpdater, checkForUpdates } from './updater';
 import { initFileLogging, closeFileLogging } from './logging';
 import { registerBuiltinTools } from './tools';
 import { getBackgroundStore } from './tools/process/background-store';
-import { wireSubagentRuntime, flushSubagentPersistence } from './agents/wire-subagents';
+import {
+  wireSubagentRuntime,
+  flushSubagentPersistence,
+  disposeSubagentPersistence,
+} from './agents/wire-subagents';
 import { initToolWorkerPool, disposeToolWorkerPool } from './llm/tool-pool';
 import { getConfig } from './config/loader';
 import { ProviderCatalogStore } from './providers/catalog/store';
@@ -242,7 +246,7 @@ app.whenReady().then(async () => {
     seedPersonalitiesDir(HOME_PERSONALITIES_DIR);
     loadPersonalities();
 
-    // 3. Initialize legacy global state from home only. A project runtime is
+    // 3. Initialize global config from home only. A project runtime is
     // captured at turn start, so startup must not choose one project's layers
     // as the process-wide default for every concurrent session.
     ConfigManager.reset();
@@ -250,7 +254,7 @@ app.whenReady().then(async () => {
     const agents = loadAgents();
     const skills = loadSkills();
 
-    // 4. Register the legacy tool surface. Each turn creates its own project
+    // 4. Register built-in tools. Each turn creates its own project
     // MCP manager from its frozen ProjectRuntime, rather than sharing this
     // startup workspace's connections with every other project.
     registerBuiltinTools({ agents, skills, mcpManager: null });
@@ -384,6 +388,7 @@ app.on('before-quit', async (event) => {
     // 7. Now actually quit
     // Final safety flush after teardown, immediately before process exit.
     flushSubagentPersistence();
+    disposeSubagentPersistence();
     closeSessionDb();
     clearTimeout(forceExitTimer);
     app.exit(0);

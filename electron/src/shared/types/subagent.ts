@@ -1,9 +1,7 @@
 /**
  * SubagentRecord types for the Orchid domain.
  *
- * Ported from src/orchid/agents/manager.py (SubagentRecord).
- *
- * Key restore behavior (matching Python):
+ * Key restore behavior:
  * - fromStorageDict() migrates PENDING/RUNNING → INTERRUPTED
  * - INTERRUPTED records without end_time get end_time set to now
  */
@@ -20,6 +18,8 @@ import type {
 // ── Enums as const objects ──────────────────────────────────────────────────
 
 export const SubagentStatus = {
+  /** Parked in the admission queue; runtime-only, never persisted. */
+  QUEUED: 'queued',
   PENDING: 'pending',
   RUNNING: 'running',
   COMPLETED: 'completed',
@@ -62,14 +62,147 @@ export interface SubagentLiveProjection {
   readonly error: string | null;
 }
 
-/** Ordered notification emitted whenever a live projection changes. */
-export interface SubagentLiveChange {
-  readonly sessionId: string | null;
+// ── Live delta events ───────────────────────────────────────────────────────
+
+/**
+ * Delta-event taxonomy for subagent live updates. Replaces per-change full
+ * `SubagentLiveProjection` broadcasts with incremental typed deltas, batched
+ * into one `SubagentEvent` envelope per IPC flush (see `shared/types/ipc.ts`).
+ */
+export const SubagentDeltaEventType = {
+  SPAWNED: 'spawned',
+  STATUS_CHANGED: 'status_changed',
+  TEXT_DELTA: 'text_delta',
+  THINKING_DELTA: 'thinking_delta',
+  TOOL_START: 'tool_start',
+  TOOL_ARGS_DELTA: 'tool_args_delta',
+  TOOL_RESULT: 'tool_result',
+  USAGE: 'usage',
+  TERMINAL: 'terminal',
+} as const;
+
+export type SubagentDeltaEventType = (typeof SubagentDeltaEventType)[keyof typeof SubagentDeltaEventType];
+
+/** Terminal states a subagent run can settle into (subset of SubagentStatus). */
+export type SubagentTerminalState =
+  | typeof SubagentStatus.COMPLETED
+  | typeof SubagentStatus.FAILED
+  | typeof SubagentStatus.INTERRUPTED;
+
+/**
+ * Identity and ordering fields carried by every live delta event.
+ *
+ * `sequence` is monotonic per run (the renderer drops regressions);
+ * `sessionRevision` comes from the manager's per-session counter and is the
+ * single freshness primitive for events, snapshots, and reseed floors.
+ */
+export interface SubagentDeltaEventBase {
+  readonly sessionId: string;
   readonly subagentId: string;
   readonly runId: string;
   readonly sequence: number;
-  readonly projection: SubagentLiveProjection;
+  readonly sessionRevision: number;
 }
+
+/**
+ * Durable record seed emitted once at spawn. One of only two record carriers
+ * (the other is `terminal`), so projection-only deltas never rebuild records.
+ */
+export interface SubagentSpawnedEvent extends SubagentDeltaEventBase {
+  readonly type: typeof SubagentDeltaEventType.SPAWNED;
+  readonly record: SubagentRecord;
+  readonly usage: Usage | null;
+}
+
+/**
+ * Non-terminal status transition (queued→pending→running). Carries only the
+ * new status so the renderer can update its durable record without a snapshot.
+ */
+export interface SubagentStatusChangedEvent extends SubagentDeltaEventBase {
+  readonly type: typeof SubagentDeltaEventType.STATUS_CHANGED;
+  readonly status: SubagentStatus;
+}
+
+/** Append to a text live segment (`SubagentLiveSegment` kind `text`). */
+export interface SubagentTextDeltaEvent extends SubagentDeltaEventBase {
+  readonly type: typeof SubagentDeltaEventType.TEXT_DELTA;
+  readonly segmentId: string;
+  readonly append: string;
+}
+
+/** Append to a thinking live segment (`SubagentLiveSegment` kind `thinking`). */
+export interface SubagentThinkingDeltaEvent extends SubagentDeltaEventBase {
+  readonly type: typeof SubagentDeltaEventType.THINKING_DELTA;
+  readonly segmentId: string;
+  readonly append: string;
+}
+
+/**
+ * Tool snapshot upsert; field names mirror `SubagentToolSnapshot`. The first
+ * emission for a `toolCallId` creates the tool entry and its `tool` live
+ * segment; a later `running` emission delivers the finalized args.
+ */
+export interface SubagentToolStartEvent extends SubagentDeltaEventBase {
+  readonly type: typeof SubagentDeltaEventType.TOOL_START;
+  /** Identity of the tool's `SubagentLiveSegment` (kind `tool`). */
+  readonly segmentId: string;
+  readonly toolCallId: string;
+  readonly toolName: string;
+  readonly status: 'generating' | 'running';
+  /** Finalized args JSON once `status` is `running`; empty while generating. */
+  readonly args: string;
+  readonly startedAt: string;
+}
+
+/** Append streamed tool-call input to `SubagentToolSnapshot.partialArgs`. */
+export interface SubagentToolArgsDeltaEvent extends SubagentDeltaEventBase {
+  readonly type: typeof SubagentDeltaEventType.TOOL_ARGS_DELTA;
+  readonly toolCallId: string;
+  readonly append: string;
+}
+
+/**
+ * Terminal tool update; field names mirror the terminal `SubagentToolSnapshot`
+ * patch. `content` is the agent projection bounded by the tool-output offload
+ * layer; `toolResult` is the canonical terminal authority.
+ */
+export interface SubagentToolResultEvent extends SubagentDeltaEventBase {
+  readonly type: typeof SubagentDeltaEventType.TOOL_RESULT;
+  readonly toolCallId: string;
+  readonly status: TerminalToolResultStatus;
+  readonly content: string;
+  readonly toolResult: CanonicalToolResult;
+  readonly finishedAt: string;
+}
+
+/** Cumulative usage, emitted at the usage cadence — not per provider event. */
+export interface SubagentUsageEvent extends SubagentDeltaEventBase {
+  readonly type: typeof SubagentDeltaEventType.USAGE;
+  readonly usage: Usage;
+}
+
+/**
+ * Authoritative durable handoff emitted once when the run settles. Carries
+ * the final durable record so no post-terminal snapshot is required.
+ */
+export interface SubagentTerminalEvent extends SubagentDeltaEventBase {
+  readonly type: typeof SubagentDeltaEventType.TERMINAL;
+  readonly record: SubagentRecord;
+  readonly state: SubagentTerminalState;
+  readonly usage: Usage | null;
+}
+
+/** Typed incremental subagent live update; the unit of the live protocol. */
+export type SubagentDeltaEvent =
+  | SubagentSpawnedEvent
+  | SubagentStatusChangedEvent
+  | SubagentTextDeltaEvent
+  | SubagentThinkingDeltaEvent
+  | SubagentToolStartEvent
+  | SubagentToolArgsDeltaEvent
+  | SubagentToolResultEvent
+  | SubagentUsageEvent
+  | SubagentTerminalEvent;
 
 // ── SubagentRecord ──────────────────────────────────────────────────────────
 
@@ -86,9 +219,8 @@ export interface SubagentRecord {
   readonly result: string | null;
   readonly error: string | null;
   /**
-   * Index of the parent session chain this subagent was spawned from
-   * (Python `parent_chain_index`). Used to attribute sub token usage
-   * to the correct chain footer.
+   * Index of the parent session chain this subagent was spawned from.
+   * Used to attribute sub token usage to the correct chain footer.
    */
   readonly parentChainIndex: number | null;
   /**
@@ -96,13 +228,78 @@ export interface SubagentRecord {
    * config → connection default). Undefined when the model lacks reasoning.
    */
   readonly reasoning_effort?: string | number;
+  /**
+   * Hidden from the dynamic system prompt while the durable record, chain,
+   * and terminal state stay intact. Missing on old rows (treated as false).
+   */
+  readonly closed: boolean;
   /** The full chain associated with this subagent (persisted). */
   readonly chain: Chain;
+}
+
+// ── Wire size estimation ────────────────────────────────────────────────────
+
+/**
+ * Coarse per-result constant so a canonical `toolResult` payload contributes
+ * to the byte budget without a per-event JSON.stringify. Covers the envelope
+ * fields and bounded structured data the offload layer leaves inline.
+ */
+const TOOL_RESULT_PAYLOAD_PROXY_BYTES = 256;
+
+const CHAIN_MESSAGE_PROXY_BYTES = 128;
+
+function estimateRecordBytes(record: SubagentRecord): number {
+  return record.id.length + record.agent_name.length + record.agent_type.length
+    + record.agent_tier.length + record.task.length
+    + (record.result?.length ?? 0) + (record.error?.length ?? 0)
+    + (record.chain?.messages?.length ?? 0) * CHAIN_MESSAGE_PROXY_BYTES;
+}
+
+/**
+ * Cheap serialized-length estimate for a delta payload: the sum of its
+ * string-field lengths, never a per-event JSON.stringify. Used by the main
+ * batcher's per-flush budget and the renderer's hydration buffer bound.
+ */
+export function estimateDeltaBytes(event: SubagentDeltaEvent): number {
+  let bytes = event.sessionId.length + event.subagentId.length + event.runId.length + event.type.length;
+  switch (event.type) {
+    case 'text_delta':
+    case 'thinking_delta':
+      bytes += event.segmentId.length + event.append.length;
+      break;
+    case 'tool_start':
+      bytes += event.segmentId.length + event.toolCallId.length + event.toolName.length
+        + event.args.length + event.startedAt.length;
+      break;
+    case 'tool_args_delta':
+      bytes += event.toolCallId.length + event.append.length;
+      break;
+    case 'tool_result':
+      bytes += event.toolCallId.length + event.content.length + event.finishedAt.length;
+      // Cheap proxy for the canonical payload (no JSON.stringify): status +
+      // the error message when present, plus a coarse constant for the
+      // bounded structured data the offload layer leaves inline.
+      bytes += event.toolResult.status.length
+        + (event.toolResult.status === 'error' ? event.toolResult.error.message.length : 0)
+        + TOOL_RESULT_PAYLOAD_PROXY_BYTES;
+      break;
+    case 'spawned':
+    case 'terminal':
+      bytes += estimateRecordBytes(event.record);
+      break;
+    case 'status_changed':
+      bytes += event.status.length;
+      break;
+    case 'usage':
+      break;
+  }
+  return bytes;
 }
 
 // ── Zod schemas ─────────────────────────────────────────────────────────────
 
 export const subagentStatusSchema = z.enum([
+  SubagentStatus.QUEUED,
   SubagentStatus.PENDING,
   SubagentStatus.RUNNING,
   SubagentStatus.COMPLETED,
@@ -123,6 +320,7 @@ export const subagentRecordSchema = z.object({
   result: z.string().nullable().default(null),
   error: z.string().nullable().default(null),
   reasoning_effort: z.union([z.string(), z.number()]).optional(),
+  closed: z.boolean().default(false),
 });
 
 // ── Storage dict ────────────────────────────────────────────────────────────
@@ -133,18 +331,16 @@ export interface SubagentRecordStorageDict {
   agent_type?: string;
   agent_tier?: string;
   task?: string;
-  state?: string;
   status?: string;
   chain_id?: string;
   start_time?: string;
   end_time?: string | null;
   result?: string | null;
   error?: string | null;
-  parent_chain_index?: number | null;
   parentChainIndex?: number | null;
   reasoning_effort?: string | number;
+  closed?: boolean;
   chain?: unknown;
-  // Forward-compat: extra keys tolerated on restore
   [key: string]: unknown;
 }
 
@@ -163,11 +359,12 @@ export function subagentRecordToStorageDict(record: SubagentRecord): SubagentRec
     end_time: record.end_time,
     result: record.result,
     error: record.error,
-    parent_chain_index: record.parentChainIndex,
+    parentChainIndex: record.parentChainIndex,
     ...(record.reasoning_effort !== undefined &&
       (typeof record.reasoning_effort !== 'number' || Number.isFinite(record.reasoning_effort))
       ? { reasoning_effort: record.reasoning_effort }
       : {}),
+    closed: record.closed,
     chain: chainToStorageDict(record.chain),
   };
 }
@@ -176,49 +373,44 @@ export function subagentRecordFromStorageDict(data: unknown): SubagentRecord {
   const raw = data as Record<string, unknown>;
   const now = new Date().toISOString();
 
-  // Parse status — Python uses 'state' key
   let status: SubagentStatus = SubagentStatus.COMPLETED;
-  const rawStatus = (raw.state ?? raw.status) as string | undefined;
+  const rawStatus = raw.status as string | undefined;
   if (
     typeof rawStatus === 'string' &&
-    (rawStatus === 'pending' || rawStatus === 'running' ||
+    (rawStatus === 'queued' || rawStatus === 'pending' || rawStatus === 'running' ||
       rawStatus === 'completed' || rawStatus === 'failed' ||
       rawStatus === 'interrupted')
   ) {
     status = rawStatus;
   }
 
-  // Migrate PENDING/RUNNING → INTERRUPTED on restore (matching Python)
   const migratedToInterrupted =
-    status === SubagentStatus.PENDING || status === SubagentStatus.RUNNING;
+    status === SubagentStatus.QUEUED ||
+    status === SubagentStatus.PENDING ||
+    status === SubagentStatus.RUNNING;
   if (migratedToInterrupted) {
     status = SubagentStatus.INTERRUPTED;
   }
 
-  // Parse times
   const startTime = typeof raw.start_time === 'string' ? raw.start_time : now;
   let endTime = typeof raw.end_time === 'string' ? raw.end_time : null;
 
-  // INTERRUPTED records without end_time get end_time set to now (matching Python)
   if (status === SubagentStatus.INTERRUPTED && !endTime) {
     endTime = now;
   }
 
-  // Restore the chain
   let chain: Chain;
   const chainData = raw.chain;
   if (chainData && typeof chainData === 'object') {
     chain = chainFromStorageDict(chainData);
   } else {
-    // Legacy fallback: flat messages list
-    chain = chainFromStorageDict({ messages: raw.messages ?? [] });
+    chain = chainFromStorageDict({ messages: [] });
   }
 
   const chainId = typeof raw.chain_id === 'string' ? raw.chain_id : '';
 
-  // parent_chain_index (Python) / parentChainIndex (TS)
   let parentChainIndex: number | null = null;
-  const rawParent = raw.parent_chain_index ?? raw.parentChainIndex;
+  const rawParent = raw.parentChainIndex;
   if (typeof rawParent === 'number' && Number.isFinite(rawParent)) {
     parentChainIndex = rawParent;
   }
@@ -246,6 +438,7 @@ export function subagentRecordFromStorageDict(data: unknown): SubagentRecord {
     error: typeof raw.error === 'string' ? raw.error : null,
     parentChainIndex,
     ...(reasoningEffort !== undefined ? { reasoning_effort: reasoningEffort } : {}),
+    closed: raw.closed === true,
     chain,
   };
 }

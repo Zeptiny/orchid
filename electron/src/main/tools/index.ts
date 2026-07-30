@@ -45,8 +45,11 @@ import { buildAskQuestionTool } from './ask-question';
 import { buildDelegateTool } from './subagent/delegate';
 import { buildWaitTool } from './subagent/wait';
 import { buildInterruptTool } from './subagent/interrupt';
+import { buildCloseTool } from './subagent/close';
 import { buildAnswerSubagentTool } from './subagent/answer';
+import { buildFollowUpTool } from './subagent/follow-up';
 import { SubagentManager } from '../agents/manager';
+import { getSessionManager } from '../session/singleton';
 import { getTierModelSelection } from '../config/loader';
 import { getProviderRuntime } from '../providers';
 import { createMiddlewareStack } from '../llm/middleware';
@@ -102,12 +105,7 @@ function createSessionTodoStoreResolver(
 ): (ctx: ToolExecutionContext) => TodoStore {
   return (ctx: ToolExecutionContext) => {
     try {
-      // Lazy require avoids circular init: tools ↔ session IPC.
-      // eslint-disable-next-line @typescript-eslint/no-require-imports
-      const { createRequire } = require('node:module') as typeof import('node:module');
-      const req = createRequire(__filename);
-      const session = req('../ipc/session') as typeof import('../ipc/session');
-      const manager = session.getSessionManager();
+      const manager = getSessionManager();
       if (ctx.sessionId) {
         return manager.getTodoStore(ctx.sessionId);
       }
@@ -127,16 +125,15 @@ function createSessionTodoStoreResolver(
 
 function notifyTodosChanged(ctx: ToolExecutionContext): void {
   try {
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const { createRequire } = require('node:module') as typeof import('node:module');
-    const req = createRequire(__filename);
-    const session = req('../ipc/session') as typeof import('../ipc/session');
-    const manager = session.getSessionManager();
+    const manager = getSessionManager();
     const sessionId = ctx.sessionId ?? manager.getActive()?.id ?? null;
     if (sessionId) {
       manager.persistTodos(sessionId);
     }
     // Dynamic require so unit tests that import tools without Electron still load.
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { createRequire } = require('node:module') as typeof import('node:module');
+    const req = createRequire(__filename);
     const { BrowserWindow } = req('electron') as typeof import('electron');
     for (const win of BrowserWindow.getAllWindows()) {
       if (!win.isDestroyed()) {
@@ -267,8 +264,12 @@ function registerBuiltinToolsInto(
   registry.register(wait.definition, wait.handler);
   const interrupt = buildInterruptTool(context.subagentManager);
   registry.register(interrupt.definition, interrupt.handler);
+  const close = buildCloseTool(context.subagentManager);
+  registry.register(close.definition, close.handler);
   const answerSubagent = buildAnswerSubagentTool(context.subagentManager);
   registry.register(answerSubagent.definition, answerSubagent.handler);
+  const followUp = buildFollowUpTool(context.subagentManager);
+  registry.register(followUp.definition, followUp.handler);
 
   const skill = buildSkillTool(context.skills);
   registry.register(skill.definition, skill.handler);

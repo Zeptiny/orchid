@@ -1,8 +1,6 @@
 /**
  * Vector Store — SQLite + Float32Array vectors with cosine similarity search.
  *
- * Ported from Python `src/orchid/rag/store.py`.
- *
  * - better-sqlite3 with WAL mode
  * - Tables: chunks, files, meta
  * - Vectors stored as .npy files (Float32Array)
@@ -17,10 +15,6 @@ import { getConfig } from '../config/loader';
 import { openSqliteDb, isSqliteCorruptionError, deleteSqliteDb, type SqliteDatabase } from '../utils/sqlite';
 import type { Chunk } from './chunker';
 import type { RAGStoreStatus } from '../../shared/types/ipc-boundary';
-
-export type { RAGStoreStatus } from '../../shared/types/ipc-boundary';
-/** @deprecated Use RAGStoreStatus from shared/types/ipc-boundary */
-export type StoreStatus = RAGStoreStatus;
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -834,7 +828,7 @@ export class RAGStore {
   // Status / metadata
   // -------------------------------------------------------------------------
 
-  status(): StoreStatus {
+  status(): RAGStoreStatus {
     if (!fs.existsSync(this.dbPath)) {
       return { totalChunks: 0, totalFiles: 0, lastIndexed: null, lastIndexDuration: null };
     }

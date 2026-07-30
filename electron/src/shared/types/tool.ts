@@ -1,7 +1,6 @@
 /**
  * Tool types for the Orchid domain.
  *
- * Mirrors the OpenAI function-calling shape used by the Python TUI:
  * - ToolCall: assistant message's tool_calls entries
  */
 

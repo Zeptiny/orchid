@@ -33,6 +33,150 @@ function makeToolCall(id: string, name: string, args: string = '{}'): ToolCall {
 }
 
 describe('toApiMessages match-set', () => {
+  it('does not revive an earlier dangling call when a later turn reuses its id', () => {
+    const reusedId = 'wait_for_subagent_36';
+    const messages: Message[] = [
+      makeMessage({
+        role: MessageRole.USER,
+        content: 'Wait for the subagent',
+        type: MessageType.TEXT,
+      }),
+      makeMessage({
+        role: MessageRole.ASSISTANT,
+        type: MessageType.TOOL_CALL,
+        tool_calls: [makeToolCall(reusedId, 'wait_for_subagent')],
+        tool_call_id: reusedId,
+      }),
+      makeMessage({
+        role: MessageRole.USER,
+        content: 'Try waiting again',
+        type: MessageType.TEXT,
+      }),
+      makeMessage({
+        role: MessageRole.ASSISTANT,
+        type: MessageType.TOOL_CALL,
+        tool_calls: [makeToolCall(reusedId, 'wait_for_subagent')],
+        tool_call_id: reusedId,
+      }),
+      makeMessage({
+        role: MessageRole.TOOL,
+        content: 'Subagent completed',
+        type: MessageType.TOOL_RESULT,
+        tool_call_id: reusedId,
+      }),
+    ];
+
+    const result = toApiMessages(messages);
+
+    expect(result).toHaveLength(4);
+    expect(result[0].content).toBe('Wait for the subagent');
+    expect(result[1].content).toBe('Try waiting again');
+    expect(result[2].tool_calls?.map((call) => call.id)).toEqual([reusedId]);
+    expect(result[3].tool_call_id).toBe(reusedId);
+  });
+
+  it('replays consecutive parallel tool calls as one assistant call group', () => {
+    const firstCall = makeToolCall('tc-parallel-1', 'read');
+    const secondCall = makeToolCall('tc-parallel-2', 'grep');
+    const messages: Message[] = [
+      makeMessage({
+        role: MessageRole.USER,
+        content: 'Read and grep in parallel',
+        type: MessageType.TEXT,
+      }),
+      makeMessage({
+        role: MessageRole.ASSISTANT,
+        type: MessageType.TOOL_CALL,
+        tool_calls: [firstCall],
+        tool_call_id: firstCall.id,
+      }),
+      makeMessage({
+        role: MessageRole.ASSISTANT,
+        type: MessageType.TOOL_CALL,
+        tool_calls: [secondCall],
+        tool_call_id: secondCall.id,
+      }),
+      makeMessage({
+        role: MessageRole.TOOL,
+        content: 'file contents',
+        type: MessageType.TOOL_RESULT,
+        tool_call_id: firstCall.id,
+      }),
+      makeMessage({
+        role: MessageRole.TOOL,
+        content: 'grep results',
+        type: MessageType.TOOL_RESULT,
+        tool_call_id: secondCall.id,
+      }),
+    ];
+
+    const result = toApiMessages(messages);
+
+    expect(result).toHaveLength(4);
+    expect(result[1].tool_calls?.map((call) => call.id)).toEqual([
+      firstCall.id,
+      secondCall.id,
+    ]);
+    expect(result.slice(2).map((message) => message.tool_call_id)).toEqual([
+      firstCall.id,
+      secondCall.id,
+    ]);
+  });
+
+  it('coalesces parallel tool calls across a skipped (hidden) record between them', () => {
+    const firstCall = makeToolCall('tc-skip-1', 'read');
+    const secondCall = makeToolCall('tc-skip-2', 'grep');
+    const messages: Message[] = [
+      makeMessage({
+        role: MessageRole.USER,
+        content: 'Parallel with noise between',
+        type: MessageType.TEXT,
+      }),
+      makeMessage({
+        role: MessageRole.ASSISTANT,
+        type: MessageType.TOOL_CALL,
+        tool_calls: [firstCall],
+        tool_call_id: firstCall.id,
+      }),
+      makeMessage({
+        role: MessageRole.ASSISTANT,
+        type: MessageType.ERROR,
+        content: 'transient error',
+        hidden: true,
+      }),
+      makeMessage({
+        role: MessageRole.ASSISTANT,
+        type: MessageType.TOOL_CALL,
+        tool_calls: [secondCall],
+        tool_call_id: secondCall.id,
+      }),
+      makeMessage({
+        role: MessageRole.TOOL,
+        content: 'file contents',
+        type: MessageType.TOOL_RESULT,
+        tool_call_id: firstCall.id,
+      }),
+      makeMessage({
+        role: MessageRole.TOOL,
+        content: 'grep results',
+        type: MessageType.TOOL_RESULT,
+        tool_call_id: secondCall.id,
+      }),
+    ];
+
+    const result = toApiMessages(messages);
+
+    expect(result).toHaveLength(4);
+    expect(result[1].tool_calls?.map((call) => call.id)).toEqual([
+      firstCall.id,
+      secondCall.id,
+    ]);
+    expect(result.slice(2).map((message) => message.tool_call_id)).toEqual([
+      firstCall.id,
+      secondCall.id,
+    ]);
+  });
+
   it('rebuilds match-set from surviving tool_calls only (partial filter)', () => {
     const tc1 = makeToolCall('tc-1', 'read');
     const tc2 = makeToolCall('tc-2', 'grep');

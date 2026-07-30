@@ -275,7 +275,7 @@ describe('useSession shared cache', () => {
     expect(appSrc).toMatch(/Keep ChatView mounted under Config/);
     expect(appSrc).toMatch(/chatVisible \? 'contents' : 'hidden'/);
     expect(appSrc).toMatch(/<ChatView isVisible=\{chatVisible\}/);
-    expect(chatView).toMatch(/<DeferredSurface isVisible=\{isVisible\}>[\s\S]*?<ChatStream/);
+    expect(chatView).toMatch(/<DeferredSurface isVisible=\{chatSurfaceVisible\}>[\s\S]*?<ChatStream/);
     expect(chatView).toMatch(/<DeferredSurface isVisible=\{isVisible\}>[\s\S]*?<Sidebar/);
   });
 
@@ -296,7 +296,7 @@ describe('useSession shared cache', () => {
     expect(chatView).toMatch(/handleSessionSelect/);
     expect(chatView).toMatch(/beginSessionSwitch/);
     expect(chatView).toMatch(/hydrateSnapshot/);
-    expect(chatView).toMatch(/addEventListener\('orchid:select-session'/);
+    expect(chatView).toMatch(/onOrchidEvent\('orchid:select-session'/);
   });
 
   it('Config orchid:select-session event carries session id for Chat hydrate', () => {

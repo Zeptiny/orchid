@@ -39,7 +39,7 @@ export const formatSubagentUsage = formatUsageSummary;
 
 function statusTone(status: SubagentRecord['status']): 'neutral' | 'warning' | 'success' | 'error' | 'info' {
   if (status === 'running') return 'warning';
-  if (status === 'pending') return 'neutral';
+  if (status === 'pending' || status === 'queued') return 'neutral';
   if (status === 'completed') return 'success';
   if (status === 'failed') return 'error';
   return 'info';
@@ -60,11 +60,12 @@ function SubagentRow({
   detail: ReturnType<UseSubagentsReturn['getDetail']>;
   onSelect: () => void;
 }) {
+  const displayState = detail?.state ?? record.status;
   return (
     <button
       type="button"
       className={`orchid-subagent-view-row ${selected ? 'orchid-subagent-view-row-selected' : ''}`}
-      aria-label={`Open ${record.agent_name || 'Subagent'} (${statusLabel(record.status)})`}
+      aria-label={`Open ${record.agent_name || 'Subagent'} (${statusLabel(displayState)})`}
       aria-current={selected ? 'true' : undefined}
       onClick={onSelect}
     >
@@ -74,7 +75,7 @@ function SubagentRow({
           Elapsed {detail?.elapsed ?? '—'} · {formatSubagentUsage(detail?.usage ?? null)}{detail?.type ? ` · ${detail.type}` : ''}
         </span>
       </span>
-      <StatusBadge tone={statusTone(record.status)} size="xs">{statusLabel(record.status)}</StatusBadge>
+      <StatusBadge tone={statusTone(displayState)} size="xs">{statusLabel(displayState)}</StatusBadge>
     </button>
   );
 }
@@ -88,7 +89,7 @@ export function SubagentView({ subagents, onBackToChat, openRequest }: SubagentV
   const effectiveSelectedId = hasPendingOpenRequest ? openRequest.id : subagents.selectedId;
   const selected = records.find((record) => record.id === effectiveSelectedId) ?? null;
   const missingSelected = effectiveSelectedId !== null && selected === null;
-  const { running, ended } = subagents.groups;
+  const { queued, running, ended } = subagents.groups;
 
   useEffect(() => {
     if (!subagents.selectedId) setNarrowDetail(false);
@@ -141,7 +142,7 @@ export function SubagentView({ subagents, onBackToChat, openRequest }: SubagentV
       ) : subagents.state.status === 'empty' ? (
         <StateMessage kind="empty" title="No subagents in this session" />
       ) : (
-        <div className="orchid-subagent-view-groups">{renderGroup('Running', running)}{renderGroup('Ended', ended)}</div>
+        <div className="orchid-subagent-view-groups">{renderGroup('Running', running)}{renderGroup('Queued', queued)}{renderGroup('Ended', ended)}</div>
       )}
     </Panel>
   );
@@ -154,7 +155,7 @@ export function SubagentView({ subagents, onBackToChat, openRequest }: SubagentV
         {selected ? (
           <SectionHeader
             title={selected.agent_name || 'Subagent'}
-            actions={<StatusBadge tone={statusTone(selected.status)}>{statusLabel(selected.status)}</StatusBadge>}
+            actions={<StatusBadge tone={statusTone(detail?.state ?? selected.status)}>{statusLabel(detail?.state ?? selected.status)}</StatusBadge>}
           />
         ) : null}
       </div>

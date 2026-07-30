@@ -7,8 +7,6 @@
  *   CONFIRM_SUBAGENTS → IDLE (third Esc: cancel subagents, resets)
  *
  * Auto-resets after 5 seconds of inactivity.
- *
- * Ported from Python `src/orchid/app.py` (InterruptState, action_interrupt).
  */
 
 import { setup, assign } from 'xstate';

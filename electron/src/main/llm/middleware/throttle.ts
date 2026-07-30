@@ -1,7 +1,6 @@
 /**
  * Throttle middleware — rate-limits thinking-content yields.
  *
- * Replicates Python `_YIELD_THROTTLE = 0.1` (client.py:43).
  * Ensures a minimum interval between consecutive thinking-content yields
  * to prevent flooding the UI with rapid updates.
  *
@@ -16,7 +15,7 @@ import type {
 } from '@ai-sdk/provider';
 
 // ---------------------------------------------------------------------------
-// Constants — match Python client.py:43
+// Constants
 // ---------------------------------------------------------------------------
 
 /** Minimum interval between thinking-content yields in milliseconds. */
@@ -34,7 +33,6 @@ export interface ThrottleMiddlewareOptions {
 /**
  * Create throttle middleware for thinking-content yields.
  *
- * Replicates the Python `_YIELD_THROTTLE` behavior:
  * - Thinking deltas are buffered and only yielded at the throttle interval
  * - Content (non-thinking) deltas pass through immediately
  * - On flush, the accumulated thinking content is yielded as a single chunk
