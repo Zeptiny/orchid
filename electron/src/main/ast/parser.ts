@@ -5,10 +5,8 @@
  * on first use per language. Supports: .py, .js, .jsx, .ts, .tsx.
  *
  * Memory management: callers MUST call tree.delete() after use.
- * Query objects are cached at module level (same as Python) and cleaned
+ * Query objects are cached at module level and cleaned
  * up via dispose().
- *
- * Ported from Python `src/orchid/ast/parser.py`.
  */
 import * as fs from 'node:fs';
 import * as path from 'node:path';
@@ -198,14 +196,8 @@ function grammarSearchPaths(): string[] {
   if (vscodeWasms) {
     paths.push(path.join(vscodeWasms, 'wasm'));
   }
-  // Legacy fallback (older dylink format — may fail on web-tree-sitter ≥0.25)
-  const legacyWasms = resolvePackageDir('tree-sitter-wasms');
-  if (legacyWasms) {
-    paths.push(path.join(legacyWasms, 'out'));
-  }
   paths.push(
     path.join(__dirname, '..', '..', '..', 'node_modules', '@vscode', 'tree-sitter-wasm', 'wasm'),
-    path.join(__dirname, '..', '..', '..', 'node_modules', 'tree-sitter-wasms', 'out'),
     path.join(__dirname, 'grammars'),
   );
   return paths;

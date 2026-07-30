@@ -3,8 +3,6 @@
  *
  * Full project indexes run in a dedicated `worker_threads` worker so ONNX +
  * SQLite work does not block the Electron main process. Single-file
- *
- * Ported from Python `src/orchid/rag/indexer.py`.
  */
 import * as crypto from 'node:crypto';
 import * as fs from 'node:fs';
@@ -25,10 +23,6 @@ import {
 import { RAGStore } from './store';
 import type { RAGStoreStatus } from '../../shared/types/ipc-boundary';
 import type { RAGIndexResult, RAGIndexProgress } from '../../shared/types/ipc-boundary';
-
-export type { RAGIndexResult, RAGIndexProgress } from '../../shared/types/ipc-boundary';
-/** @deprecated Use RAGIndexResult from shared/types/ipc-boundary */
-export type IndexResult = RAGIndexResult;
 
 export type RAGIndexProgressCallback = (progress: RAGIndexProgress) => void;
 
@@ -145,7 +139,7 @@ export async function indexProject(
   embedder?: IEmbedder,
   progressCallback?: RAGIndexProgressCallback,
   options?: IndexProjectOptions,
-): Promise<IndexResult> {
+): Promise<RAGIndexResult> {
   if (!projectPath) {
     throw new Error('projectPath is required; pass the active workspace cwd');
   }
@@ -215,7 +209,7 @@ export async function runIndexProjectImpl(
   embedder?: IEmbedder,
   progressCallback?: RAGIndexProgressCallback,
   config?: Config,
-): Promise<IndexResult> {
+): Promise<RAGIndexResult> {
   const cfg = config ?? getConfig();
   if (!projectPath) {
     throw new Error('projectPath is required; pass the active workspace cwd');
@@ -248,7 +242,7 @@ export async function runIndexProjectImpl(
 
   // File discovery
   const files = await discoverFiles(root, paths, cfg.ignored_dirs);
-  const stats: IndexResult = {
+  const stats: RAGIndexResult = {
     filesScanned: files.length,
     filesIndexed: 0,
     filesSkipped: 0,
@@ -455,7 +449,7 @@ async function runIndexInWorker(
   config?: Config,
   workerPathOverride?: string,
   registerCancel?: (cancel: (reason: Error) => Promise<void>) => void,
-): Promise<IndexResult> {
+): Promise<RAGIndexResult> {
   const workerPath = workerPathOverride ?? path.join(__dirname, 'index-worker.js');
   if (!fs.existsSync(workerPath)) {
     // Dev fallback if worker bundle is missing — still produce a usable index.
@@ -479,7 +473,7 @@ async function runIndexInWorker(
     config,
   };
 
-  return new Promise<IndexResult>((resolve, reject) => {
+  return new Promise<RAGIndexResult>((resolve, reject) => {
     let settled = false;
     let watchdog: ReturnType<typeof setTimeout> | undefined;
     const worker = new Worker(workerPath, {
@@ -510,7 +504,7 @@ async function runIndexInWorker(
       }
     };
     const finish = (
-      result: IndexResult | undefined,
+      result: RAGIndexResult | undefined,
       error: Error | undefined,
       cleanupTempFiles: boolean,
     ): Promise<void> => {

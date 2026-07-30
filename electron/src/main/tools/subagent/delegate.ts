@@ -18,9 +18,10 @@ import {
   type GenericBuiltInToolOutcome,
 } from '../result';
 import type { SubagentManager, SubagentRecord } from '../../agents/manager';
-import { SubagentQueueFullError, SubagentState } from '../../agents/manager';
+import { SubagentQueueFullError } from '../../agents/manager';
+import { SubagentState } from '../../agents/types';
 import { getTierModelSelection } from '../../config/loader';
-import { getSessionManager } from '../../ipc/session';
+import { getSessionManager } from '../../session/singleton';
 
 /**
  * Result returned by all subagent tool handlers.

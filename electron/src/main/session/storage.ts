@@ -134,6 +134,8 @@ function getDb(dbPath: string): SqliteDatabase {
  * open-time recovery (move-aside + rebuild), so mid-life corruption heals
  * instead of permanently poisoning the cached handle.
  */
+const activeRecoveryPaths = new Set<string>();
+
 function withCorruptionRecovery<T>(dbPath: string, op: (db: SqliteDatabase) => T): T {
   try {
     return op(getDb(dbPath));
@@ -146,7 +148,14 @@ function withCorruptionRecovery<T>(dbPath: string, op: (db: SqliteDatabase) => T
       dbCache.delete(dbPath);
     }
     const result = op(getDb(dbPath));
-    notifySessionStorageRecovered();
+    if (!activeRecoveryPaths.has(dbPath)) {
+      activeRecoveryPaths.add(dbPath);
+      try {
+        notifySessionStorageRecovered();
+      } finally {
+        activeRecoveryPaths.delete(dbPath);
+      }
+    }
     return result;
   }
 }
@@ -188,7 +197,6 @@ interface SessionRow {
   model_label: string | null;
   cwd: string | null;
   active_chain_id: string | null;
-  subagent_chains_json: string;
   todo_store_json: string;
   reasoning_effort_override: string | null;
   permission_mode: string | null;
@@ -408,8 +416,6 @@ export function saveSession(session: Session, opts?: StorageOptions): void {
   }
   const { dbPath } = resolveOptions(opts);
   withCorruptionRecovery(dbPath, (db) => {
-    // The legacy `subagent_chains_json` column stays in the schema untouched
-    // but is never written; subagent records live in `subagent_chains` rows.
     const upsertSession = db.prepare(`
       INSERT INTO sessions (id, name, selection_json, model_label, cwd, active_chain_id, todo_store_json, reasoning_effort_override, permission_mode, created_at, updated_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)

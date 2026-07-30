@@ -68,7 +68,7 @@ vi.mock('../../src/main/config/loader', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../src/main/config/loader')>();
   return { ...actual, getConfig: infra.getConfig };
 });
-vi.mock('../../src/main/ipc/session', () => ({ getSessionManager: infra.getSessionManager }));
+vi.mock('../../src/main/session/singleton', () => ({ getSessionManager: infra.getSessionManager }));
 vi.mock('../../src/main/project/runtime', () => ({
   getProjectRuntimeRegistry: () => infra.runtimeRegistry,
 }));

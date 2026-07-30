@@ -25,22 +25,6 @@ export class SessionDb {
         schema: SESSION_SCHEMA_SQL,
         corruptionCheck: 'SELECT 1 FROM sessions LIMIT 1',
       });
-      try {
-        this._db.exec('ALTER TABLE sessions ADD COLUMN reasoning_effort_override TEXT');
-      } catch (error) {
-        // Ignore only the expected duplicate-column error on migrated databases;
-        // surface every other migration failure to the caller.
-        if (!(error instanceof Error && /duplicate column name/i.test(error.message))) {
-          throw error;
-        }
-      }
-      try {
-        this._db.exec('ALTER TABLE sessions ADD COLUMN permission_mode TEXT');
-      } catch (error) {
-        if (!(error instanceof Error && /duplicate column name/i.test(error.message))) {
-          throw error;
-        }
-      }
       this._db.pragma('foreign_keys = ON');
       this._db
         .prepare('INSERT OR REPLACE INTO schema_meta (key, value) VALUES (?, ?)')

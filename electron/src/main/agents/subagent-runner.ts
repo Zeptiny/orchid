@@ -11,7 +11,7 @@ import type { ModelSelection } from '../../shared/types/provider';
 import { streamChat, type StreamEvent } from '../llm/orchestrator';
 import { resolveSubagentEffort } from '../llm/reasoning-effort';
 import { getConfig } from '../config/loader';
-import { getSessionManager } from '../ipc/session';
+import { getSessionManager } from '../session/singleton';
 import {
   getProjectRuntimeRegistry,
   type ProjectRuntime,

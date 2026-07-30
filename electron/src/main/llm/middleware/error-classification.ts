@@ -8,7 +8,6 @@
 
 /**
  * Custom error for provider resolution failures.
- * Maps to Python's `ProviderResolutionError` (providers.py:51).
  */
 export class ProviderResolutionError extends Error {
   constructor(message: string) {
@@ -18,7 +17,7 @@ export class ProviderResolutionError extends Error {
 }
 
 // ---------------------------------------------------------------------------
-// Transient error detection — mirrors Python _is_transient_error (client.py:99-119)
+// Transient error detection
 // ---------------------------------------------------------------------------
 
 /** HTTP status codes that qualify as transient (worth retrying). */
@@ -27,7 +26,6 @@ const TRANSIENT_STATUS_CODES = new Set([408, 429, 500, 502, 503, 504]);
 /**
  * Check if an error is transient (worth retrying).
  *
- * Matches Python `_is_transient_error` exactly:
  * - HTTP status codes 408, 429, 500, 502, 503, 504
  * - Message-based detection for native errors
  */

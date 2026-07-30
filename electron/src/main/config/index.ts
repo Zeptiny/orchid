@@ -25,7 +25,6 @@ export { validateConfig } from './validation';
 
 export {
   loadConfig,
-  getConfigDiagnostics,
   ensureHomeConfig,
   ConfigManager,
   getConfig,
@@ -39,5 +38,3 @@ export {
   PROJECT_CONFIG_NAME,
   type LoadConfigOptions,
 } from './loader';
-
-export type { ConfigDiagnostic } from '../../shared/types/ipc-boundary';

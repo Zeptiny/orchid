@@ -132,12 +132,6 @@ export interface SubagentsConfig {
   prompt_task_max_chars: number;
 }
 
-/** Non-secret notice about provider compatibility state discarded on load. */
-export interface ConfigDiagnostic {
-  readonly code: 'legacy-provider-config-reset';
-  readonly message: string;
-}
-
 export type PermissionModeValue = PermissionMode;
 
 export type PermissionRule =
@@ -174,11 +168,6 @@ export interface Config {
   mcp_startup_timeout: number;
   mcp_per_server_timeout: number;
   mcp_servers: Record<string, Record<string, unknown>>;
-  /**
-   * Deprecated IPC compatibility field. Provider connections live outside
-   * layered config; this map is always empty and must not carry credentials.
-   */
-  providers: Record<string, Record<string, unknown>>;
   llm_stream_idle_timeout: number;
   llm_stream_retries: number;
   background_command_idle_timeout: number;
@@ -366,12 +355,9 @@ export interface CommandContext {
   onSetTheme: (name: string) => Promise<void>;
   /** Set the personality. */
   onSetPersonality: (name: string) => Promise<void>;
-  /**
-   * U1 compatibility hook for the legacy command palette. It has no model
-   * candidates until U8 replaces it with a connection-scoped selection.
-   */
+  /** Set the active model selection. */
   onSetModel: (model: string) => Promise<void>;
-  /** U1 returns no model candidates; U8 supplies typed selections. */
+  /** Return available model labels. */
   getAvailableModels: () => string[];
   /** Current model shown in the UI (session model or default). */
   getCurrentModel: () => string;

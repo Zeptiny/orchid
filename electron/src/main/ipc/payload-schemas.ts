@@ -81,13 +81,6 @@ export const configSaveSchema = z.object({
         path: ['updates', key],
       });
     }
-    if (key === 'providers') {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message: 'Legacy provider aliases are no longer accepted in config:save. Use provider connections instead.',
-        path: ['updates', key],
-      });
-    }
   }
 });
 

@@ -69,7 +69,7 @@ vi.mock('../../src/main/config/loader', () => ({
   getConfig: mocks.getConfig,
 }));
 
-vi.mock('../../src/main/ipc/session', () => ({
+vi.mock('../../src/main/session/singleton', () => ({
   getSessionManager: mocks.getSessionManager,
 }));
 
@@ -337,8 +337,11 @@ describe('createSubagentStreamRunner', () => {
       projectRuntime: runtime(),
     }));
 
-    expect(mocks.streamChat).toHaveBeenCalledWith(expect.objectContaining({
-      messages: [{ role: 'user', content: 'Inspect the project' }],
+    const call = mocks.streamChat.mock.calls.at(-1)?.[0];
+    expect(call.messages).toHaveLength(1);
+    expect(call.messages[0]).toEqual(expect.objectContaining({
+      role: 'user',
+      content: 'Inspect the project',
     }));
   });
 });

@@ -30,6 +30,7 @@ vi.mock('../../src/renderer/components/ChainFooter', () => ({
 
 import { ChatStream } from '../../src/renderer/components/ChatStream';
 import { MessageRole, MessageType, type Message, type Usage } from '../../src/shared/types/message';
+import { ChainStatus, type Chain } from '../../src/shared/types/chain';
 import type { SubagentUsageSummary } from '../../src/shared/usage';
 
 beforeEach(() => {
@@ -69,6 +70,23 @@ const history = [
   message('history-assistant', MessageRole.ASSISTANT, 'The cache is bounded.'),
 ];
 
+const historyChain: Chain = {
+  id: 'chain-1',
+  sessionId: 'session-1',
+  messages: history,
+  status: ChainStatus.COMPLETED,
+  selection: null,
+  modelLabel: null,
+  agentName: 'default',
+  agentType: 'main',
+  agentTier: 'crown',
+  subagentRecord: null,
+  startTime: null,
+  endTime: null,
+};
+
+const sessionChains = [historyChain];
+
 function usage(totalTokens: number): Usage {
   return {
     prompt_tokens: totalTokens - 1,
@@ -90,6 +108,7 @@ function props(streamingContent: string, streamRevision: number, currentTurnUsag
     currentTurnUsage,
     onClearError: vi.fn(),
     streamSegments: [{ kind: 'text' as const, id: 'live-text', content: streamingContent }],
+    sessionChains,
   };
 }
 

@@ -1,8 +1,5 @@
 /**
  * Config schema — single source of truth for types, defaults, and validation.
- *
- * Fields ported from Python `src/orchid/config.py`, plus Electron-only
- * `default_project_dir` and UI prefs such as `always_expand_tool_groups`.
  */
 import * as path from 'node:path';
 import { z } from 'zod';
@@ -45,17 +42,6 @@ export const ragConfigSchema = z.object({
   /** Optional API embedder, bound to the same connection/model identity as chat. */
   embedding_api_model: modelSelectionSchema.nullable().default(null),
 });
-
-/**
- * Kept solely so existing config IPC consumers can keep reading the field
- * while connections move to their own store. It must never carry a legacy
- * configured provider, endpoint, or credential.
- */
-const deprecatedProvidersSchema = z
-  .record(z.string(), z.record(z.string(), z.unknown()))
-  .refine((providers) => Object.keys(providers).length === 0, {
-    message: 'providers is deprecated and must be empty',
-  });
 
 export const permissionRuleSchema = z.union([
   z.enum(PERMISSION_MODE_VALUES),
@@ -190,13 +176,11 @@ export const configSchema = z
     mcp_servers: z
       .record(z.string(), z.record(z.string(), z.unknown()))
       .default({}),
-    providers: deprecatedProvidersSchema.default({}),
     llm_stream_idle_timeout: z.number().positive().default(300.0),
     llm_stream_retries: z.number().int().nonnegative().default(3),
     background_command_idle_timeout: z.number().positive().default(900.0),
     /**
      * Max multi-step tool-loop iterations per stream (AI SDK stopWhen).
-     * Python's tool loop is unbounded; 100 is a high practical default.
      */
     max_tool_steps: z.number().int().positive().default(100),
     permission_history_size: z.number().int().min(0).max(50).default(10),

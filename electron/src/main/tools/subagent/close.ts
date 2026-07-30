@@ -39,6 +39,7 @@ export function buildCloseTool(
     inputSchema: z.object({
       subagent_ids: z
         .array(z.string())
+        .min(1)
         .describe('List of subagent IDs to close'),
     }),
     category: 'subagent',

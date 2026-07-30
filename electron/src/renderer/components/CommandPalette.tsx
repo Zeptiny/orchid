@@ -20,6 +20,7 @@ import {
 import { useFocusTrap } from '../keyboard';
 import type { CommandContext, SessionSummary } from '../../shared/types/ipc-boundary';
 import type { ProviderModelOption } from '../../shared/types/ipc';
+import { emitOrchidEvent } from '../utils/events';
 import { resolveModelNotifyLabel } from '../utils/provider-selection';
 import { Icon, type IconName } from './Icon';
 import { Keycaps } from './Keycaps';
@@ -353,9 +354,7 @@ export const CommandPalette = memo(function CommandPalette({
         }
 
         if (result.action === 'navigation') {
-          window.dispatchEvent(
-            new CustomEvent('orchid:navigate', { detail: { section: result.value } }),
-          );
+          emitOrchidEvent('orchid:navigate', { section: result.value });
           onClose();
           return;
         }

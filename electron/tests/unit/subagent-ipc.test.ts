@@ -39,6 +39,14 @@ vi.mock('../../src/main/ipc/session', () => ({
   }),
 }));
 
+vi.mock('../../src/main/session/singleton', () => ({
+  getSessionManager: () => ({
+    getActive: (owner?: string) =>
+      (owner !== undefined ? activeByWebContents.get(owner) : stubActiveSession.current) ?? null,
+    syncSubagentRecords: sessionManagerStub.syncSubagentRecords,
+  }),
+}));
+
 const record = (id: string, status: string) => ({
   id, agent_name: 'agent', agent_type: 'subagent', agent_tier: 'bloom', task: id,
   status, chain_id: id, start_time: new Date(0).toISOString(), end_time: null,

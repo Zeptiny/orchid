@@ -3,8 +3,6 @@
  *
  * Full project indexes run in a dedicated `worker_threads` worker so
  * tree-sitter WASM + SQLite work does not block the Electron main process.
- *
- * Ported from Python `src/orchid/ast/indexer.py`.
  */
 import * as crypto from 'node:crypto';
 import * as fs from 'node:fs';
@@ -15,10 +13,6 @@ import { ASTStore, type Symbol } from './store';
 import { getConfig } from '../config';
 import { withDisposableAsync } from '../utils/with-disposable';
 import type { ASTIndexResult, ASTIndexProgress } from '../../shared/types/ipc-boundary';
-
-export type { ASTIndexResult, ASTIndexProgress } from '../../shared/types/ipc-boundary';
-/** @deprecated Use ASTIndexResult from shared/types/ipc-boundary */
-export type IndexResult = ASTIndexResult;
 
 export type ASTIndexProgressCallback = (progress: ASTIndexProgress) => void;
 

@@ -11,7 +11,6 @@ import type { ComponentType, LazyExoticComponent } from 'react';
 import type { DefinitionsListResult } from '../../shared/types/definitions';
 import type { Config, PermissionRule } from '../../shared/types/ipc-boundary';
 import type {
-  ConfigDiagnostic,
   ConfigPatch,
   ConfigPatchMap,
   PermissionConfigScope,
@@ -34,6 +33,7 @@ import {
   type ConfigSaveStage,
 } from '../utils/config-save';
 import { withMapDeletionTombstones } from '../utils/config-tombstones';
+import { emitOrchidEvent } from '../utils/events';
 import { Keycaps } from './Keycaps';
 import { Alert } from './ui/Alert';
 import { Button } from './ui/Button';
@@ -87,6 +87,12 @@ const SkillsTab = lazyWithPreload(() => import('./Preferences/SkillsTab').then((
 const TierModelsTab = lazyWithPreload(() => import('./Preferences/TierModelsTab').then((module) => ({
   default: module.TierModelsTab,
 })));
+const SubagentsTab = lazyWithPreload(() => import('./Preferences/SubagentsTab').then((module) => ({
+  default: module.SubagentsTab,
+})));
+const AgentsMdTab = lazyWithPreload(() => import('./Preferences/AgentsMdTab').then((module) => ({
+  default: module.AgentsMdTab,
+})));
 
 type TabId =
   | 'general'
@@ -95,6 +101,8 @@ type TabId =
   | 'mcp'
   | 'tier-models'
   | 'rag'
+  | 'agents-md'
+  | 'subagents'
   | 'skills'
   | 'agents'
   | 'personalities';
@@ -106,6 +114,8 @@ const TAB_COMPONENTS = {
   mcp: MCPServersTab,
   'tier-models': TierModelsTab,
   rag: RAGTab,
+  'agents-md': AgentsMdTab,
+  subagents: SubagentsTab,
   skills: SkillsTab,
   agents: AgentsTab,
   personalities: PersonalitiesTab,
@@ -123,6 +133,8 @@ const TABS: TabDef[] = [
   { id: 'mcp', label: 'MCP' },
   { id: 'tier-models', label: 'Tier Models' },
   { id: 'rag', label: 'RAG' },
+  { id: 'agents-md', label: 'AGENTS.md' },
+  { id: 'subagents', label: 'Subagents' },
   { id: 'skills', label: 'Skills' },
   { id: 'agents', label: 'Agents' },
   { id: 'personalities', label: 'Personalities' },
@@ -154,7 +166,6 @@ export function ConfigView({ onClose, initialTab = 'general' }: ConfigViewProps)
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [diagnostics, setDiagnostics] = useState<ConfigDiagnostic[]>([]);
   const [originalConfig, setOriginalConfig] = useState<Config | null>(null);
   const [draft, setDraft] = useState<ConfigPatch>({});
   const [permissionScope, setPermissionScope] = useState<PermissionConfigScope>('global');
@@ -285,23 +296,18 @@ export function ConfigView({ onClose, initialTab = 'general' }: ConfigViewProps)
     setError(null);
     setDraft({});
     setProjectPermissionDrafts({});
-    setDiagnostics([]);
 
     async function loadConfig() {
       try {
         if (!window.orchid?.config?.get) throw new Error('Configuration API is not available.');
-        const [config, diagnostics] = await Promise.all([
+        const [config] = await Promise.all([
           window.orchid.config.get(),
-          window.orchid.config.diagnostics
-            ? window.orchid.config.diagnostics()
-            : Promise.resolve([]),
           // Warm provider + model caches so Providers / Tier Models tabs
           // can switch without an intermediate empty frame.
           providers.ensureModelList().catch(() => undefined),
         ]);
         if (!cancelled) {
           setOriginalConfig(config);
-          setDiagnostics(diagnostics);
           setLoading(false);
         }
       } catch {
@@ -326,7 +332,7 @@ export function ConfigView({ onClose, initialTab = 'general' }: ConfigViewProps)
   // Refresh when workspace binding changes; drop in-progress definition edits.
   useEffect(() => {
     const unsub = window.orchid?.session?.onWorkspaceChanged?.(() => {
-      window.dispatchEvent(new CustomEvent('orchid:definitions-workspace-changed'));
+      emitOrchidEvent('orchid:definitions-workspace-changed');
       void loadDefinitions({ silent: true });
       void refreshPermissionScopes();
     });
@@ -419,9 +425,7 @@ export function ConfigView({ onClose, initialTab = 'general' }: ConfigViewProps)
               : current);
             setDraft((current) => reconcileConfigDraft(current, ordinaryDraftSnapshot));
             if (typeof ordinaryUpdates.theme === 'string') {
-              window.dispatchEvent(new CustomEvent('orchid:set-theme', {
-                detail: { theme: ordinaryUpdates.theme, persist: false },
-              }));
+              emitOrchidEvent('orchid:set-theme', { theme: ordinaryUpdates.theme, persist: false });
             }
           } else if (stage === 'global permissions' && globalPermissionUpdates) {
             setOriginalConfig((current) => current
@@ -473,18 +477,12 @@ export function ConfigView({ onClose, initialTab = 'general' }: ConfigViewProps)
         const refreshGeneration = permissionScopeRequests.current.begin();
         setProjectScopeLoading(true);
         try {
-          const [fresh, diagnostics, scopes] = await Promise.all([
+          const [fresh, scopes] = await Promise.all([
             window.orchid.config.get(),
-            window.orchid.config.diagnostics
-              ? window.orchid.config.diagnostics()
-              : Promise.resolve([]),
             window.orchid.config.permissionScopes?.() ?? Promise.resolve(permissionScopes),
           ]);
           setOriginalConfig({ ...fresh, permissions: fresh.permissions });
-          setDiagnostics(diagnostics);
-          window.dispatchEvent(
-            new CustomEvent('orchid:config-updated', { detail: fresh }),
-          );
+          emitOrchidEvent('orchid:config-updated', fresh);
           if (permissionScopeRequests.current.isCurrent(refreshGeneration) && scopes) {
             setPermissionScopes(scopes);
           }
@@ -540,10 +538,7 @@ export function ConfigView({ onClose, initialTab = 'general' }: ConfigViewProps)
 
   const handleSessionSelect = useCallback(
     (id: string) => {
-      // ChatView owns hydrate/affinity; rebind store alone leaves messages stale.
-      window.dispatchEvent(
-        new CustomEvent('orchid:select-session', { detail: { id } }),
-      );
+      emitOrchidEvent('orchid:select-session', { id });
       onClose();
     },
     [onClose],
@@ -647,18 +642,6 @@ export function ConfigView({ onClose, initialTab = 'general' }: ConfigViewProps)
             {error}
           </Alert>
         )}
-
-        {diagnostics.map((diagnostic) => (
-          <Alert
-            key={diagnostic.code}
-            tone="warning"
-            className="rounded-none py-2.5 text-sm"
-            icon="alert"
-            iconSize={14}
-          >
-            {diagnostic.message}
-          </Alert>
-        ))}
 
         <Tabs
           items={tabItems}
@@ -889,6 +872,8 @@ function renderTab(
           bgOutputTailBytes={config.bg_output_tail_bytes}
           readOutputLongPollMax={config.read_output_long_poll_max}
           mcpResultMaxBytes={config.mcp_result_max_bytes}
+          toolWorkerPoolSize={config.tool_worker_pool_size}
+          toolWorkerPoolMainAgentReserved={config.tool_worker_pool_main_agent_reserved}
           onChange={updateDraft}
         />
       );
@@ -933,6 +918,20 @@ function renderTab(
         <RAGTab
           rag={config.rag}
           onChange={(rag) => updateDraft({ rag })}
+        />
+      );
+    case 'agents-md':
+      return (
+        <AgentsMdTab
+          agentsMd={config.agents_md}
+          onChange={(agents_md) => updateDraft({ agents_md })}
+        />
+      );
+    case 'subagents':
+      return (
+        <SubagentsTab
+          subagents={config.subagents}
+          onChange={(subagents) => updateDraft({ subagents })}
         />
       );
     case 'skills':

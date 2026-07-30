@@ -4,7 +4,7 @@
  * Covers:
  * - Default config loads with all fields populated
  * - Deep merge: home + project overrides
- * - Deep merge for mcp_servers and providers (per-alias merge)
+ * - Deep merge for mcp_servers (per-alias merge)
  * - Env override casting (string, int, float, list)
  * - Validation rules
  * - Persistence: config load round-trips
@@ -26,7 +26,6 @@ import {
   applyEnvOverrides,
   validateConfig,
   loadConfig,
-  getConfigDiagnostics,
   getTierModelSelection,
   ConfigManager,
   isUnsafeKey,
@@ -102,7 +101,7 @@ function clearOrchidEnv(): void {
 // ===========================================================================
 
 describe('schema & defaults', () => {
-  it('starts without an executable provider selection or configured provider', () => {
+  it('starts without an executable provider selection', () => {
     const cfg = defaults();
 
     expect(cfg.default_model).toBeNull();
@@ -112,7 +111,6 @@ describe('schema & defaults', () => {
       bloom: null,
       crown: null,
     });
-    expect(cfg.providers).toEqual({});
   });
 
   it('selects a typed tier connection from the supplied config snapshot', () => {
@@ -179,9 +177,6 @@ describe('schema & defaults', () => {
 
     // mcp_servers: empty by default (recommended servers are opt-in onboarding)
     expect(cfg.mcp_servers).toEqual({});
-
-    // Deprecated IPC compatibility map stays empty.
-    expect(cfg.providers).toEqual({});
   });
 
   it('configSchema.parse({}) returns same as defaults()', () => {
@@ -311,39 +306,6 @@ describe('mergeConfigUpdates (config:save)', () => {
     expect(validated.rag.embedding_model).toBe('custom/embed');
   });
 
-  it('ignores legacy provider updates instead of retaining configured aliases', () => {
-    const current = defaults() as unknown as Record<string, unknown>;
-    current['providers'] = {
-      default: {
-        base_url: 'https://opencode.ai/zen/go/v1',
-        litellm_provider: 'openai',
-        models: { 'mimo-v2.5': {} },
-      },
-      openai: {
-        base_url: 'https://api.openai.com/v1',
-        litellm_provider: 'openai',
-        models: { 'gpt-4o': {} },
-      },
-      anthropic: {
-        base_url: 'https://api.anthropic.com',
-        litellm_provider: 'anthropic',
-        models: { 'claude-3': {} },
-      },
-    };
-
-    const merged = mergeConfigUpdates(current, {
-      providers: {
-        openai: { api_key: 'sk-new-key' },
-      },
-    });
-
-    const providers = merged['providers'] as Record<string, Record<string, unknown>>;
-    expect(providers).toEqual({});
-
-    const validated = configSchema.parse(merged);
-    expect(validated.providers).toEqual({});
-  });
-
   it('partial tier_models update preserves other tiers', () => {
     const current = defaults() as unknown as Record<string, unknown>;
     const merged = mergeConfigUpdates(current, {
@@ -354,21 +316,6 @@ describe('mergeConfigUpdates (config:save)', () => {
     expect(tiers['seed']).toBeNull();
     expect(tiers['sprout']).toBeNull();
     expect(tiers['crown']).toBeNull();
-  });
-
-  it('keeps the provider compatibility map empty when a legacy tombstone arrives', () => {
-    const current = defaults() as unknown as Record<string, unknown>;
-    current['providers'] = {
-      default: { base_url: 'https://example.com', models: {} },
-      openai: { base_url: 'https://api.openai.com/v1', models: {} },
-    };
-
-    const merged = mergeConfigUpdates(current, {
-      providers: { openai: null },
-    });
-
-    const providers = merged['providers'] as Record<string, unknown>;
-    expect(providers).toEqual({});
   });
 
   it('scalar top-level updates still replace', () => {
@@ -493,23 +440,6 @@ describe('mergeLayers (3-layer)', () => {
     const servers = result['mcp_servers'] as Record<string, unknown>;
     expect(servers['context7']).toEqual({ command: 'npx', args: ['-y', 'extra'] });
     expect(servers['custom']).toEqual({ command: 'my-cmd' });
-  });
-
-  it('does not merge legacy provider maps into config layers', () => {
-    const d = {
-      providers: {
-        default: { base_url: 'url', models: { 'mimo-v2.5': {} } },
-      },
-    };
-    const project = {
-      providers: {
-        default: { models: { 'gpt-4o': {} } },
-      },
-    };
-
-    const result = mergeLayers(d, {}, project) as Record<string, unknown>;
-    const provs = result['providers'] as Record<string, unknown>;
-    expect(provs).toEqual({});
   });
 
   it('ignores keys not present in defaults', () => {
@@ -638,35 +568,6 @@ describe('validateConfig', () => {
     expect(errors.some((e) => e.includes('chunk_overlap') && e.includes('chunk_size'))).toBe(true);
   });
 
-  it('legacy provider maps are rejected as deprecated', () => {
-    const cfg = {
-      ...defaults(),
-      providers: { 'bad/alias': { base_url: 'url' } },
-    };
-    const errors = validateConfig(cfg as unknown as ReturnType<typeof defaults>);
-    expect(errors.some((e) => e.includes('providers') && e.includes('deprecated'))).toBe(true);
-  });
-
-  it('rejects every non-empty legacy provider map', () => {
-    const cfg = {
-      ...defaults(),
-      providers: { fastembed: { base_url: 'url' } },
-    };
-    const errors = validateConfig(cfg as unknown as ReturnType<typeof defaults>);
-    expect(errors.some((e) => e.includes('providers') && e.includes('deprecated'))).toBe(true);
-  });
-
-  it('does not validate legacy credential fields as current config', () => {
-    const cfg = {
-      ...defaults(),
-      providers: {
-        test: { api_key: 'key', api_key_env: 'ENV_VAR' },
-      },
-    };
-    const errors = validateConfig(cfg as unknown as ReturnType<typeof defaults>);
-    expect(errors.some((e) => e.includes('providers') && e.includes('deprecated'))).toBe(true);
-  });
-
   it('invalid mcp_server name (contains uppercase) is an error', () => {
     const cfg = {
       ...defaults(),
@@ -708,20 +609,6 @@ describe('loadConfig', () => {
     expect(cfg.rag.chunk_size).toBe(2000);
   });
 
-  it('preserves unrelated project config while ignoring a legacy model alias', () => {
-    writeJson(path.join(tmpDir, '.orchid.json'), {
-      default_model: 'project/model',
-      ignored_dirs: ['.git', 'custom-dir'],
-    });
-
-    const cfg = loadNoHome();
-    expect(cfg.default_model).toBeNull();
-    // ignored_dirs is replaced (arrays are replaced, not merged)
-    expect(cfg.ignored_dirs).toEqual(['.git', 'custom-dir']);
-    // Other defaults still present
-    expect(cfg.command_timeout).toBe(30);
-  });
-
   it('deep merges nested rag from project', () => {
     writeJson(path.join(tmpDir, '.orchid.json'), {
       rag: { top_k: 10 },
@@ -731,19 +618,6 @@ describe('loadConfig', () => {
     expect(cfg.rag.top_k).toBe(10);
     expect(cfg.rag.chunk_size).toBe(2000); // default preserved
     expect(cfg.rag.embedding_model).toBe('fastembed/BAAI/bge-small-en-v1.5'); // default
-  });
-
-  it('keeps a legacy model environment override disabled while applying other overrides', () => {
-    writeJson(path.join(tmpDir, '.orchid.json'), {
-      default_model: 'project/model',
-      command_timeout: 60,
-    });
-    process.env['ORCHID_DEFAULT_MODEL'] = 'env/model';
-    process.env['ORCHID_COMMAND_TIMEOUT'] = '90';
-
-    const cfg = loadNoHome();
-    expect(cfg.default_model).toBeNull();
-    expect(cfg.command_timeout).toBe(90);
   });
 
   it('env override casts ORCHID_COMMAND_TIMEOUT to int', () => {
@@ -768,13 +642,12 @@ describe('loadConfig', () => {
     // Write a "home" config
     const homeConfig = path.join(tmpDir, 'home-config.json');
     writeJson(homeConfig, {
-      default_model: 'home/model',
       ignored_dirs: ['.git', 'home-dir'],
     });
 
-    // Write a project config that overrides default_model only
+    // Write a project config that overrides the command timeout
     writeJson(path.join(tmpDir, '.orchid.json'), {
-      default_model: 'project/model',
+      command_timeout: 45,
     });
 
     const cfg = loadConfig({
@@ -782,12 +655,10 @@ describe('loadConfig', () => {
       homeConfigPath: homeConfig,
     });
 
-    // Legacy aliases from both layers are ignored.
-    expect(cfg.default_model).toBeNull();
+    // Project's command_timeout wins over the default
+    expect(cfg.command_timeout).toBe(45);
     // Home's ignored_dirs is used (project doesn't override it)
     expect(cfg.ignored_dirs).toEqual(['.git', 'home-dir']);
-    // Default timeout preserved
-    expect(cfg.command_timeout).toBe(30);
   });
 
   it('deep merges mcp_servers across home and project', () => {
@@ -815,25 +686,6 @@ describe('loadConfig', () => {
     expect(cfg.mcp_servers).toHaveProperty('home_server');
     // Project server present
     expect(cfg.mcp_servers).toHaveProperty('project_server');
-  });
-
-  it('upgrades existing home config missing has_completed_onboarding to true', () => {
-    const homeConfig = path.join(tmpDir, 'upgrade-home-config.json');
-    writeJson(homeConfig, {
-      theme: 'bluey',
-      mcp_servers: {
-        context7: { command: 'npx', args: ['-y', '@upstash/context7-mcp'] },
-      },
-    });
-
-    const cfg = loadConfig({
-      projectDir: tmpDir,
-      homeConfigPath: homeConfig,
-    });
-
-    expect(cfg.has_completed_onboarding).toBe(true);
-    expect(cfg.theme).toBe('bluey');
-    expect(cfg.mcp_servers).toHaveProperty('context7');
   });
 
   it('keeps has_completed_onboarding false for brand-new defaults with no home file', () => {
@@ -971,60 +823,6 @@ describe('edge cases', () => {
     expect(cfg.mcp_servers['custom']!['command']).toBe('my-server');
   });
 
-  it('ignores legacy provider records in project config', () => {
-    writeJson(path.join(tmpDir, '.orchid.json'), {
-      providers: {
-        openai: {
-          base_url: 'https://api.openai.com/v1',
-          api_key_env: 'OPENAI_API_KEY',
-          models: { 'gpt-4o': {} },
-        },
-      },
-    });
-    const cfg = loadNoHome();
-    expect(cfg.providers).toEqual({});
-  });
-
-  it('resets legacy provider and embedding aliases while preserving unrelated preferences', () => {
-    const homeConfigPath = path.join(tmpDir, 'config.json');
-    writeJson(homeConfigPath, {
-      theme: 'night',
-      default_model: 'legacy/gpt-4o',
-      tier_models: { bloom: 'legacy/gpt-4o' },
-      rag: { top_k: 9, embedding_api_model: 'legacy/text-embedding' },
-      providers: {
-        legacy: { api_key: 'must-not-be-loaded', models: { 'gpt-4o': {} } },
-      },
-    });
-
-    const cfg = ConfigManager.load({ projectDir: tmpDir, homeConfigPath });
-
-    expect(cfg.theme).toBe('night');
-    expect(cfg.default_model).toBeNull();
-    expect(cfg.tier_models.bloom).toBeNull();
-    expect(cfg.rag.top_k).toBe(9);
-    expect(cfg.rag.embedding_api_model).toBeNull();
-    expect(cfg.providers).toEqual({});
-    expect(ConfigManager.diagnostics()).toEqual([
-      expect.objectContaining({ code: 'legacy-provider-config-reset' }),
-    ]);
-  });
-
-  it('reports a legacy provider reset from the selected project layer', () => {
-    writeJson(path.join(tmpDir, '.orchid.json'), {
-      providers: {
-        legacy: { api_key: 'must-not-be-loaded' },
-      },
-    });
-
-    expect(getConfigDiagnostics({
-      projectDir: tmpDir,
-      homeConfigPath: NO_HOME_CONFIG,
-    })).toEqual([
-      expect.objectContaining({ code: 'legacy-provider-config-reset' }),
-    ]);
-  });
-
   it('env override for RAG fields works end-to-end', () => {
     process.env['ORCHID_RAG_TOP_K'] = '20';
     process.env['ORCHID_RAG_CHUNK_SIZE'] = '4000';
@@ -1112,19 +910,6 @@ describe('prototype pollution protection', () => {
 // ===========================================================================
 
 describe('null tombstone protection for top-level object keys', () => {
-  it('providers: null retains an empty compatibility map', () => {
-    const current = defaults() as unknown as Record<string, unknown>;
-    current['providers'] = {
-      default: { base_url: 'url', models: {} },
-      openai: { base_url: 'https://api.openai.com/v1', models: {} },
-    };
-
-    const merged = mergeConfigUpdates(current, { providers: null });
-    expect(merged).toHaveProperty('providers');
-    const providers = merged['providers'] as Record<string, unknown>;
-    expect(providers).toEqual({});
-  });
-
   it('mcp_servers: null at top level is ignored', () => {
     const current = defaults() as unknown as Record<string, unknown>;
     current['mcp_servers'] = {
@@ -1157,21 +942,6 @@ describe('null tombstone protection for top-level object keys', () => {
 
     const merged = mergeConfigUpdates(current, { tier_models: null });
     expect(merged).toHaveProperty('tier_models');
-  });
-
-  it('alias-level provider tombstones do not restore legacy provider state', () => {
-    const current = defaults() as unknown as Record<string, unknown>;
-    current['providers'] = {
-      default: { base_url: 'url', models: {} },
-      openai: { base_url: 'https://api.openai.com/v1', models: {} },
-    };
-
-    const merged = mergeConfigUpdates(current, {
-      providers: { openai: null },
-    });
-
-    const providers = merged['providers'] as Record<string, unknown>;
-    expect(providers).toEqual({});
   });
 
   it('alias-level null tombstone still works for mcp_servers', () => {
@@ -1208,7 +978,6 @@ describe('config save IPC schema validation', () => {
     // But we can test that known keys work and unknown would be caught.
     const knownKeys = Object.keys(configSchema.shape);
     expect(knownKeys).toContain('default_model');
-    expect(knownKeys).toContain('providers');
     expect(knownKeys).toContain('mcp_servers');
     expect(knownKeys).toContain('rag');
     expect(knownKeys).toContain('tier_models');

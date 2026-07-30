@@ -2,6 +2,7 @@
 import { useEffect, useMemo } from 'react';
 import type { ModelSelection } from '../../../shared/types/provider';
 import { useProviders } from '../../hooks/useProviders';
+import { onOrchidEvent } from '../../utils/events';
 import { isTextGenerationModel } from '../../utils/models';
 import { ModelAssignments } from './ModelAssignments';
 
@@ -32,9 +33,9 @@ export function TierModelsTab({
   }, [providers.ensureModelList]);
 
   useEffect(() => {
-    const refresh = () => { void providers.refresh().then(() => providers.ensureModelList()); };
-    window.addEventListener('orchid:providers-updated', refresh);
-    return () => window.removeEventListener('orchid:providers-updated', refresh);
+    return onOrchidEvent('orchid:providers-updated', () => {
+      void providers.refresh().then(() => providers.ensureModelList());
+    });
   }, [providers.refresh, providers.ensureModelList]);
 
   const options = useMemo(

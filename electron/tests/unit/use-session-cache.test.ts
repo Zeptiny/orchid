@@ -296,7 +296,7 @@ describe('useSession shared cache', () => {
     expect(chatView).toMatch(/handleSessionSelect/);
     expect(chatView).toMatch(/beginSessionSwitch/);
     expect(chatView).toMatch(/hydrateSnapshot/);
-    expect(chatView).toMatch(/addEventListener\('orchid:select-session'/);
+    expect(chatView).toMatch(/onOrchidEvent\('orchid:select-session'/);
   });
 
   it('Config orchid:select-session event carries session id for Chat hydrate', () => {

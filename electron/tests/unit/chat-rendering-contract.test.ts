@@ -123,6 +123,7 @@ describe('chat rendering contract (U5)', () => {
 
     it('feeds history attribution from the low-frequency usage summary, not records', () => {
       const src = read('components/ChatStream.tsx');
+      const builder = read('utils/stream-building.ts');
       const historyStart = src.indexOf('const history = useMemo');
       expect(historyStart).toBeGreaterThanOrEqual(0);
       // Balanced-parenthesis extraction: the first generic `');'` could cut an
@@ -146,7 +147,7 @@ describe('chat rendering contract (U5)', () => {
       expect(historyMemo).not.toMatch(/\bsubagents\b/);
       // History builders consume the summary; record-derived usage computation
       // moved into the hook's memoized summary
-      expect(src).toMatch(/subagentUsage: SubagentUsageSummary;/);
+      expect(builder).toMatch(/subagentUsage: SubagentUsageSummary;/);
       expect(src).not.toMatch(/subUsageByParentChain\(/);
       expect(src).not.toMatch(/sumSubagentsUsage\(/);
       // Render path keeps title-only records for wait/interrupt chips
@@ -324,13 +325,13 @@ describe('chat rendering contract (U5)', () => {
 
     it('updates chain-footer agent usage from live stream events mid-turn', () => {
       const src = read('components/ChatStream.tsx');
+      const builder = read('utils/stream-building.ts');
       // Active/last-chain footers prefer live usage over persisted chain sums
       // so CHAT_USAGE events paint the agent: line before the turn commits.
       expect(src).toMatch(/const historyUsage = status === 'streaming' \? null : usage/);
       expect(src).toMatch(/currentTurnUsage/);
       expect(src).toMatch(/usage:\s*status === 'streaming'\s*\?\s*currentTurnUsage/);
-      expect(src).toMatch(/isLastChain \? liveUsage \?\? chainUsage/);
-      expect(src).toMatch(/isLastTurn\s*\?\s*liveUsage \?\? turnLastAssistantUsage/);
+      expect(builder).toMatch(/isLastChain \? liveUsage \?\? chainUsage/);
       // Must not gate live usage on idle/error only (regression: mid-stream stuck).
       expect(src).not.toMatch(
         /status === 'idle' \|\| status === 'error' \|\| interrupted\)\s*\?\s*liveUsage/,

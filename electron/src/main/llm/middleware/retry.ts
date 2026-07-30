@@ -1,7 +1,6 @@
 /**
  * Retry middleware — exponential backoff with jitter and content-delivered guard.
  *
- * Replicates Python client.py:478-591, 1146-1171:
  * - Backoff formula: 0.2 * 2^attempt + uniform(0, 0.2)
  * - Max retries from config (default 3)
  * - Critical guard: "no retry after content delivered" — once any token
@@ -115,10 +114,9 @@ export interface RetryMiddlewareOptions {
 /**
  * Create retry middleware with exponential backoff and content-delivered guard.
  *
- * Behavioral contract from Python client.py:1146-1171:
- * > "No retry after content delivered" — once any token has been streamed
- * > to the user, retries are suppressed. This prevents re-playing already
- * > visible content.
+ * "No retry after content delivered" — once any token has been streamed
+ * to the user, retries are suppressed. This prevents re-playing already
+ * visible content.
  *
  * Retries both doStream() setup failures and mid-stream errors that occur
  * before any content-bearing part is delivered. After content is delivered,

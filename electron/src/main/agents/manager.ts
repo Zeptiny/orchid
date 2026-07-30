@@ -7,8 +7,6 @@
  * - cancelOne / cancelAll / cancelRunning
  * - getStates / allRecords / getRecord
  *
- * Ported from Python `src/orchid/agents/manager.py` (SubagentManager).
- *
  * When a stream runner is configured (production), spawn fire-and-forgets an
  * isolated LLM stream, accumulates messages + token usage on the subagent
  * chain, and notifies listeners so the session can persist `subagent_chains`.
@@ -45,20 +43,30 @@ import {
 } from '../llm/message-factories';
 import { getConfig } from '../config/loader';
 import { subagentsConfigSchema } from '../config/schema';
+import { AdmissionController, type AdmissionCounters, type SubagentAdmissionLimits } from './admission';
+import {
+  SubagentWaitTimeoutError,
+  SubagentQueueFullError,
+  SubagentNotTerminalError,
+  SubagentClosedError,
+  SubagentEvictedError,
+  SubagentSummaryClosedError,
+  SubagentStillSettlingError,
+} from './errors';
 
-// ── Enums ───────────────────────────────────────────────────────────────────
+export type { SubagentAdmissionLimits } from './admission';
+export {
+  SubagentWaitTimeoutError,
+  SubagentQueueFullError,
+  SubagentNotTerminalError,
+  SubagentClosedError,
+  SubagentEvictedError,
+  SubagentSummaryClosedError,
+  SubagentStillSettlingError,
+} from './errors';
 
-export const SubagentState = {
-  /** Parked in the admission queue awaiting a run slot; never persisted. */
-  QUEUED: 'queued',
-  PENDING: 'pending',
-  RUNNING: 'running',
-  COMPLETED: 'completed',
-  FAILED: 'failed',
-  INTERRUPTED: 'interrupted',
-} as const;
-
-export type SubagentState = (typeof SubagentState)[keyof typeof SubagentState];
+export { SubagentState } from './types';
+import { SubagentState } from './types';
 
 /** Result of answering (or declining) a subagent's pending question. */
 export type SubagentQuestionResult =
@@ -150,13 +158,6 @@ export function getDefaultWaitTimeoutMs(): number {
   }
 }
 
-/** Admission limits resolved from `subagents.*` config. */
-export interface SubagentAdmissionLimits {
-  readonly maxActiveGlobal: number;
-  readonly maxActivePerSession: number;
-  readonly maxQueued: number;
-}
-
 /**
  * Resolve admission limits from the live process-wide config (`getConfig()`),
  * read at spawn/admission time so a runtime settings change takes effect
@@ -210,132 +211,6 @@ function getTerminalRetention(): number {
     return getConfig().subagents.terminal_retention;
   } catch {
     return getSubagentConfigDefaults().terminal_retention;
-  }
-}
-
-/**
- * Thrown by `SubagentManager.wait` when the wait budget elapses while any
- * target is still non-terminal. Subagents are not cancelled.
- */
-export class SubagentWaitTimeoutError extends Error {
-  readonly timeoutMs: number;
-  readonly statusSnapshot: string[];
-
-  constructor(timeoutMs: number, statusSnapshot: string[]) {
-    const seconds = Math.round(timeoutMs / 1000);
-    super(
-      `Wait timed out after ${seconds}s with no completion. ` +
-        `Subagents are still running (${statusSnapshot.join('; ')}). ` +
-        `Only the wait tool stopped waiting; they were not cancelled or interrupted. ` +
-        `Call wait_for_subagent again or interrupt_subagents to stop them.`,
-    );
-    this.name = 'SubagentWaitTimeoutError';
-    this.timeoutMs = timeoutMs;
-    this.statusSnapshot = statusSnapshot;
-  }
-}
-
-/**
- * Thrown by `SubagentManager.spawn` when the admission queue is full: every
- * active slot is taken (PENDING/RUNNING) and `max_queued` records already
- * wait. No record is created. The delegate tool converts this into a
- * structured tool error naming the limit.
- */
-export class SubagentQueueFullError extends Error {
-  readonly maxQueued: number;
-  readonly maxActiveGlobal: number;
-  readonly maxActivePerSession: number;
-
-  constructor(limits: SubagentAdmissionLimits) {
-    super(
-      `Subagent queue is full (subagents.max_queued=${limits.maxQueued}): all active slots are taken ` +
-        `(subagents.max_active_global=${limits.maxActiveGlobal}, ` +
-        `subagents.max_active_per_session=${limits.maxActivePerSession}). ` +
-        `Wait for running subagents to finish or interrupt them before delegating more.`,
-    );
-    this.name = 'SubagentQueueFullError';
-    this.maxQueued = limits.maxQueued;
-    this.maxActiveGlobal = limits.maxActiveGlobal;
-    this.maxActivePerSession = limits.maxActivePerSession;
-  }
-}
-
-/**
- * Thrown by `SubagentManager.followUp` when the target record is not in a
- * terminal state. Only completed/failed/interrupted subagents can be resumed;
- * the follow-up tool maps this to wait/interrupt guidance.
- */
-export class SubagentNotTerminalError extends Error {
-  readonly state: SubagentState;
-
-  constructor(subagentId: string, state: SubagentState) {
-    super(
-      `Subagent '${subagentId}' is ${state}, not terminal. ` +
-        `Only completed, failed, or interrupted subagents can be followed up. ` +
-        `Call wait_for_subagent or interrupt_subagents first.`,
-    );
-    this.name = 'SubagentNotTerminalError';
-    this.state = state;
-  }
-}
-
-/**
- * Thrown by `SubagentManager.followUp` when the target record is closed.
- * Closed subagents are hidden from the prompt and cannot be resumed; the
- * follow-up tool maps this to a named "closed" error.
- */
-export class SubagentClosedError extends Error {
-  constructor(subagentId: string) {
-    super(`Subagent '${subagentId}' is closed and cannot be followed up.`);
-    this.name = 'SubagentClosedError';
-  }
-}
-
-/**
- * Thrown by `SubagentManager.followUp` when the target record is an evicted
- * lean summary. Defensive only: the follow-up tool hydrates evicted records
- * first, so this should never fire in production — a summary holds no chain to
- * replay, so resuming it directly would stream an empty history.
- */
-export class SubagentEvictedError extends Error {
-  constructor(subagentId: string) {
-    super(
-      `Subagent '${subagentId}' is an evicted summary; hydrate it before following up.`,
-    );
-    this.name = 'SubagentEvictedError';
-  }
-}
-
-/**
- * Thrown by `SubagentManager.close` when the target record is an evicted lean
- * summary. A flag set on a summary never persists (every checkpoint skips
- * `_evicted` records), so the mutation must be loud instead of silent — the
- * close tool hydrates evicted records first and maps this to a retryable
- * failure for that id.
- */
-export class SubagentSummaryClosedError extends Error {
-  constructor(subagentId: string) {
-    super(
-      `Subagent '${subagentId}' is an evicted summary; hydrate it before closing.`,
-    );
-    this.name = 'SubagentSummaryClosedError';
-  }
-}
-
-/**
- * Thrown by `SubagentManager.followUp` when the previous run has not finished
- * unwinding. `cancelOne` on a RUNNING record leaves `_runPromise` set (the
- * runner owns the async interruption boundary and materializes the partial
- * tail), while the record is already terminal — resuming in that window would
- * let the zombie run loop clobber the resumed chain and orphan the new run's
- * abort controller.
- */
-export class SubagentStillSettlingError extends Error {
-  constructor(subagentId: string) {
-    super(
-      `Subagent '${subagentId}' is still settling its previous run; retry the follow-up shortly.`,
-    );
-    this.name = 'SubagentStillSettlingError';
   }
 }
 
@@ -498,7 +373,7 @@ type SubagentDeltaPayload = DistributiveOmit<SubagentDeltaEvent, keyof SubagentD
  * SubagentManager — manages the lifecycle of subagent runs.
  *
  * Spawn subagents, wait for their completion, cancel them, and query
- * their states. Mirrors Python's SubagentManager API.
+ * their states.
  */
 export class SubagentManager {
   private _subagents: Map<string, SubagentRecord> = new Map();
@@ -507,10 +382,7 @@ export class SubagentManager {
   private _onDelta: ((event: SubagentDeltaEvent) => void) | null = null;
   /** Per-session monotonic revision counter ordering events and snapshots. */
   private _sessionRevisions: Map<string, number> = new Map();
-  /** FIFO admission queue of QUEUED record ids awaiting a run slot. */
-  private _queue: string[] = [];
-  /** Session key ('' = unscoped) admitted last; round-robin fairness cursor. */
-  private _lastAdmittedSession: string | null = null;
+  private _admission = new AdmissionController();
   /**
    * Per-session FIFO of evicted terminal summary ids, capped at
    * `subagents.terminal_retention`. Oldest entries are removed from
@@ -565,8 +437,8 @@ export class SubagentManager {
     const id = `subagent-${randomUUID()}`;
     const sessionId = options.sessionId ?? null;
     const limits = getAdmissionLimits();
-    const admitted = this._canAdmit(sessionId, limits);
-    if (!admitted && this._queue.length >= limits.maxQueued) {
+    const admitted = this._admission.canAdmit(sessionId, limits, this._admissionCounters());
+    if (!admitted && this._admission.queueLength >= limits.maxQueued) {
       throw new SubagentQueueFullError(limits);
     }
 
@@ -614,8 +486,8 @@ export class SubagentManager {
     };
 
     this._subagents.set(id, record);
-    if (!admitted) this._queue.push(id);
-    else this._lastAdmittedSession = sessionId ?? '';
+    if (!admitted) this._admission.enqueue(id);
+    else this._admission.markAdmitted(sessionId);
     this._notify();
     this._emitDelta(record, {
       type: SubagentDeltaEventType.SPAWNED,
@@ -635,8 +507,7 @@ export class SubagentManager {
    * Surfaced by the delegate tool so the main agent sees backpressure.
    */
   getQueuePosition(subagentId: string): number | null {
-    const index = this._queue.indexOf(subagentId);
-    return index >= 0 ? index + 1 : null;
+    return this._admission.getQueuePosition(subagentId);
   }
 
   /**
@@ -671,11 +542,8 @@ export class SubagentManager {
     }
 
     const limits = getAdmissionLimits();
-    const admitted = this._canAdmit(record.sessionId, limits);
-    // Unlike spawn (which creates the record AFTER the capacity check), followUp
-    // mutates an existing durable record. Validate queue capacity FIRST so a
-    // rejected resume leaves the terminal record completely unmutated.
-    if (!admitted && this._queue.length >= limits.maxQueued) {
+    const admitted = this._admission.canAdmit(record.sessionId, limits, this._admissionCounters());
+    if (!admitted && this._admission.queueLength >= limits.maxQueued) {
       throw new SubagentQueueFullError(limits);
     }
 
@@ -727,7 +595,7 @@ export class SubagentManager {
     if (admitted) {
       record.state = SubagentState.PENDING;
       record.queuedAt = null;
-      this._lastAdmittedSession = record.sessionId ?? '';
+      this._admission.markAdmitted(record.sessionId);
       this._notify();
       this._emitDelta(record, {
         type: SubagentDeltaEventType.SPAWNED,
@@ -741,7 +609,7 @@ export class SubagentManager {
       record.state = SubagentState.QUEUED;
       record.queuedAt = now;
       record._resumeQueued = true;
-      this._queue.push(record.id);
+      this._admission.enqueue(record.id);
       this._notify();
       this._emitDelta(record, {
         type: SubagentDeltaEventType.SPAWNED,
@@ -763,6 +631,10 @@ export class SubagentManager {
       record.startedAt ??= Date.now();
       this._updateLive(record, { state: SubagentState.RUNNING });
       this._markRecordDirty(record);
+      this._emitDelta(record, {
+        type: SubagentDeltaEventType.STATUS_CHANGED,
+        status: SubagentStatus.RUNNING,
+      });
       this._notify();
     }
   }
@@ -775,7 +647,7 @@ export class SubagentManager {
     const record = this._subagents.get(subagentId);
     if (!record || TERMINAL_STATES.has(record.state)) return;
 
-    this._removeFromQueue(subagentId);
+    this._admission.removeFromQueue(subagentId);
     record.state = SubagentState.COMPLETED;
     record.result = result;
     record.endTime = Date.now();
@@ -795,7 +667,7 @@ export class SubagentManager {
     const record = this._subagents.get(subagentId);
     if (!record || TERMINAL_STATES.has(record.state)) return;
 
-    this._removeFromQueue(subagentId);
+    this._admission.removeFromQueue(subagentId);
     record.state = SubagentState.FAILED;
     record.error = error;
     record.endTime = Date.now();
@@ -976,7 +848,7 @@ export class SubagentManager {
     // INTERRUPTED, terminal delta emitted — no run slot was ever consumed, so
     // no admission follows.
     const wasQueued = record.state === SubagentState.QUEUED;
-    this._removeFromQueue(subagentId);
+    this._admission.removeFromQueue(subagentId);
     record.state = SubagentState.INTERRUPTED;
     record.error = record.error ?? 'Interrupted by user';
     record.endTime = record.endTime ?? Date.now();
@@ -1243,12 +1115,10 @@ export class SubagentManager {
     for (const [id, record] of this._subagents) {
       if (record.sessionId === sessionId) this._subagents.delete(id);
     }
-    this._queue = this._queue.filter(
+    this._admission.filterQueue(
       (id) => this._subagents.get(id)?.sessionId !== sessionId,
     );
-    // Drop queue entries whose records no longer exist (removed above), so
-    // the admission loop never looks them up after the purge.
-    this._queue = this._queue.filter((id) => this._subagents.has(id));
+    this._admission.filterQueue((id) => this._subagents.has(id));
     this._terminalSummaries.delete(sessionId);
     this._sessionRevisions.delete(sessionId);
     this._notify();
@@ -1377,77 +1247,37 @@ export class SubagentManager {
     return count;
   }
 
-  private _canAdmit(sessionId: string | null, limits: SubagentAdmissionLimits): boolean {
-    return (
-      this._activeCount() < limits.maxActiveGlobal &&
-      this._sessionActiveCount(sessionId) < limits.maxActivePerSession
-    );
+  private _admissionCounters(): AdmissionCounters {
+    return {
+      activeCountGlobal: () => this._activeCount(),
+      sessionActiveCount: (sid) => this._sessionActiveCount(sid),
+      recordSessionKey: (id) => this._subagents.get(id)?.sessionId ?? '',
+      isRecordQueued: (id) => this._subagents.get(id)?.state === SubagentState.QUEUED,
+    };
   }
 
-  private _removeFromQueue(subagentId: string): void {
-    const index = this._queue.indexOf(subagentId);
-    if (index >= 0) this._queue.splice(index, 1);
-  }
-
-  /**
-   * Admit queued records after a terminal transition frees capacity. FIFO
-   * within a session, round-robin across sessions: when the global limit is
-   * the binding constraint, sessions with queued work take turns; a session
-   * blocked by its per-session limit is skipped until its own slot frees.
-   */
   private _admitFromQueue(): void {
     const limits = getAdmissionLimits();
+    const counters = this._admissionCounters();
     for (;;) {
-      if (this._queue.length === 0) return;
-      if (this._activeCount() >= limits.maxActiveGlobal) return;
-      const sessionKey = this._nextAdmissibleSessionKey(limits);
-      if (sessionKey === null) return;
-      const index = this._queue.findIndex(
-        (id) => (this._subagents.get(id)?.sessionId ?? '') === sessionKey,
-      );
-      if (index < 0) return;
-      const [id] = this._queue.splice(index, 1);
+      const id = this._admission.nextAdmissible(limits, counters);
+      if (id === null) return;
       const record = this._subagents.get(id);
-      if (!record || record.state !== SubagentState.QUEUED) continue;
+      if (!record) continue;
       this._admit(record);
     }
   }
 
-  /**
-   * Session key ('' = unscoped) of the next queued session with per-session
-   * capacity, rotating past the last admitted session; null when no queued
-   * session can admit.
-   */
-  private _nextAdmissibleSessionKey(limits: SubagentAdmissionLimits): string | null {
-    const sessionKeys: string[] = [];
-    for (const id of this._queue) {
-      const key = this._subagents.get(id)?.sessionId ?? '';
-      if (!sessionKeys.includes(key)) sessionKeys.push(key);
-    }
-    if (sessionKeys.length === 0) return null;
-    const cursor = this._lastAdmittedSession === null
-      ? -1
-      : sessionKeys.indexOf(this._lastAdmittedSession);
-    for (let offset = 0; offset < sessionKeys.length; offset += 1) {
-      const key = sessionKeys[(cursor + 1 + offset) % sessionKeys.length];
-      if (this._sessionActiveCount(key === '' ? null : key) < limits.maxActivePerSession) {
-        return key;
-      }
-    }
-    return null;
-  }
-
-  /** Move a queued record into a run slot: PENDING, then start the runner. */
   private _admit(record: SubagentRecord): void {
     record.state = SubagentState.PENDING;
-    // Single-use resume marker: cleared once the record leaves the queue so a
-    // later terminal transition does not keep its durable row alive as queued.
     record._resumeQueued = false;
-    this._lastAdmittedSession = record.sessionId ?? '';
-    // Durable row eligibility begins at admission; queued records stay out of
-    // storage (persistRevision stays 0 until here).
+    this._admission.markAdmitted(record.sessionId);
     this._markRecordDirty(record);
     this._updateLive(record, { state: SubagentState.PENDING });
+    this._emitDelta(record, {
+      type: SubagentDeltaEventType.STATUS_CHANGED,
+      status: SubagentStatus.PENDING,
+    });
     this._notify();
     if (this._runner) {
       record._runPromise = this._startRun(record, record.cwd ?? undefined);

@@ -19,6 +19,7 @@ import type {
   ProviderStatusView,
   ProviderSubmitApiKeyMessage,
 } from '../../shared/types/ipc';
+import { emitOrchidEvent } from '../utils/events';
 
 export type ProviderLoadStatus = 'loading' | 'ready' | 'error';
 
@@ -88,9 +89,8 @@ function unavailableApiError(): Error {
   return new Error('The provider connection API is not available in this build.');
 }
 
-/** Notify independent renderer surfaces without putting provider data in an event. */
 function announceProviderUpdate(): void {
-  window.dispatchEvent(new CustomEvent('orchid:providers-updated'));
+  emitOrchidEvent('orchid:providers-updated');
 }
 
 // ── Shared store (one overview for all useProviders() callers) ───────────────

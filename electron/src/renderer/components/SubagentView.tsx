@@ -60,11 +60,12 @@ function SubagentRow({
   detail: ReturnType<UseSubagentsReturn['getDetail']>;
   onSelect: () => void;
 }) {
+  const displayState = detail?.state ?? record.status;
   return (
     <button
       type="button"
       className={`orchid-subagent-view-row ${selected ? 'orchid-subagent-view-row-selected' : ''}`}
-      aria-label={`Open ${record.agent_name || 'Subagent'} (${statusLabel(record.status)})`}
+      aria-label={`Open ${record.agent_name || 'Subagent'} (${statusLabel(displayState)})`}
       aria-current={selected ? 'true' : undefined}
       onClick={onSelect}
     >
@@ -74,7 +75,7 @@ function SubagentRow({
           Elapsed {detail?.elapsed ?? '—'} · {formatSubagentUsage(detail?.usage ?? null)}{detail?.type ? ` · ${detail.type}` : ''}
         </span>
       </span>
-      <StatusBadge tone={statusTone(record.status)} size="xs">{statusLabel(record.status)}</StatusBadge>
+      <StatusBadge tone={statusTone(displayState)} size="xs">{statusLabel(displayState)}</StatusBadge>
     </button>
   );
 }
@@ -154,7 +155,7 @@ export function SubagentView({ subagents, onBackToChat, openRequest }: SubagentV
         {selected ? (
           <SectionHeader
             title={selected.agent_name || 'Subagent'}
-            actions={<StatusBadge tone={statusTone(selected.status)}>{statusLabel(selected.status)}</StatusBadge>}
+            actions={<StatusBadge tone={statusTone(detail?.state ?? selected.status)}>{statusLabel(detail?.state ?? selected.status)}</StatusBadge>}
           />
         ) : null}
       </div>

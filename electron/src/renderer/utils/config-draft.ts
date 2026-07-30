@@ -3,7 +3,7 @@ import type { ConfigPatch, ConfigPatchMap } from '../../shared/types/ipc';
 import type { ModelSelection } from '../../shared/types/provider';
 
 /** Nested ConfigPatch keys that need specialized merge (not scalar assign). */
-type NestedPatchKey = 'rag' | 'agents_md' | 'subagents' | 'tier_models' | 'tier_reasoning_effort' | 'mcp_servers' | 'providers' | 'permissions';
+type NestedPatchKey = 'rag' | 'agents_md' | 'subagents' | 'tier_models' | 'tier_reasoning_effort' | 'mcp_servers' | 'permissions';
 
 /** Scalar / nullable top-level patch keys applied with simple defined-assign. */
 type ScalarPatchKey = Exclude<keyof ConfigPatch, NestedPatchKey>;
@@ -22,9 +22,6 @@ export function mergeConfigDraft(
   }
   if (updates.mcp_servers !== undefined) {
     next.mcp_servers = updates.mcp_servers;
-  }
-  if (updates.providers !== undefined) {
-    next.providers = updates.providers;
   }
   if (updates.permissions !== undefined) {
     next.permissions = { ...(current.permissions ?? {}), ...updates.permissions };
@@ -119,10 +116,6 @@ export function applyConfigDraft(base: Config, draft: ConfigPatch): Config {
     next.mcp_servers = applyRecordMap(base.mcp_servers, draft.mcp_servers);
   }
 
-  if (draft.providers !== undefined) {
-    next.providers = applyRecordMap(base.providers, draft.providers);
-  }
-
   if (draft.permissions !== undefined) {
     next.permissions = applyRecordMap(base.permissions, draft.permissions);
   }
@@ -138,7 +131,6 @@ function isNestedPatchKey(key: keyof ConfigPatch): key is NestedPatchKey {
     key === 'tier_models' ||
     key === 'tier_reasoning_effort' ||
     key === 'mcp_servers' ||
-    key === 'providers' ||
     key === 'permissions'
   );
 }

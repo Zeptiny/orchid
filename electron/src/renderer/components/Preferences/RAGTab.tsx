@@ -14,6 +14,7 @@ import {
   parseConfigNumber,
   type NumericRAGConfigKey,
 } from '../../utils/config-draft';
+import { onOrchidEvent } from '../../utils/events';
 import { isEmbeddingModel } from '../../utils/models';
 import {
   providerModelOptionDisplayName,
@@ -75,11 +76,9 @@ export function RAGTab({ rag, onChange }: RAGTabProps) {
   }, [providers.modelOptions]);
 
   useEffect(() => {
-    const refreshProviders = () => {
+    return onOrchidEvent('orchid:providers-updated', () => {
       void providers.refresh().then(() => providers.ensureModelList());
-    };
-    window.addEventListener('orchid:providers-updated', refreshProviders);
-    return () => window.removeEventListener('orchid:providers-updated', refreshProviders);
+    });
   }, [providers.refresh, providers.ensureModelList]);
 
   const updateField = useCallback(
@@ -286,6 +285,40 @@ export function RAGTab({ rag, onChange }: RAGTabProps) {
               className="w-full"
               min={0}
               max={10}
+            />
+          </FormField>
+
+          <FormField
+            label="Download Inactivity Timeout (s)"
+            htmlFor="rag-download-inactivity"
+            hint="Abort a model download that stops making progress."
+            className="config-field"
+          >
+            <TextInput
+              id="rag-download-inactivity"
+              type="number"
+              value={rag.model_download_inactivity_timeout ?? 30}
+              onChange={(e) => handleNumberChange('model_download_inactivity_timeout', e.target.value)}
+              bordered
+              className="w-full"
+              min={1}
+            />
+          </FormField>
+
+          <FormField
+            label="Download Total Timeout (s)"
+            htmlFor="rag-download-total"
+            hint="Hard cap for one model-file download, even if bytes continue flowing."
+            className="config-field"
+          >
+            <TextInput
+              id="rag-download-total"
+              type="number"
+              value={rag.model_download_total_timeout ?? 900}
+              onChange={(e) => handleNumberChange('model_download_total_timeout', e.target.value)}
+              bordered
+              className="w-full"
+              min={1}
             />
           </FormField>
         </div>

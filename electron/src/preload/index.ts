@@ -309,9 +309,6 @@ const orchidAPI: OrchidAPI = {
     get: () =>
       invoke(IPC_CHANNELS.CONFIG_GET),
 
-    diagnostics: () =>
-      invoke(IPC_CHANNELS.CONFIG_DIAGNOSTICS),
-
     save: (updates: ConfigSaveMessage) =>
       invoke(IPC_CHANNELS.CONFIG_SAVE, updates),
 

@@ -579,22 +579,17 @@ describe('Command Palette File Structure', () => {
     expect(fs.existsSync(path.join(commandsDir, 'registry.ts'))).toBe(true);
   });
 
-  it('chat.css or components.css contain command palette styles', () => {
-    const chatCss = fs.readFileSync(
-      path.resolve(__dirname, '../../src/renderer/styles/chat.css'),
-      'utf-8',
-    );
+  it('components.css contains command palette styles', () => {
     const componentsCss = fs.readFileSync(
       path.resolve(__dirname, '../../src/renderer/styles/components.css'),
       'utf-8',
     );
-    const css = `${chatCss}\n${componentsCss}`;
-    expect(css).toContain('.orchid-command-palette-overlay');
-    expect(css).toContain('.orchid-command-palette');
-    expect(css).toContain('.orchid-command-palette-results');
-    expect(css).toContain('.orchid-command-palette-item');
-    expect(css).toContain('.orchid-command-palette-group');
-    expect(css).toContain('.orchid-command-palette-footer');
+    expect(componentsCss).toContain('.orchid-command-palette-overlay');
+    expect(componentsCss).toContain('.orchid-command-palette');
+    expect(componentsCss).toContain('.orchid-command-palette-results');
+    expect(componentsCss).toContain('.orchid-command-palette-item');
+    expect(componentsCss).toContain('.orchid-command-palette-group');
+    expect(componentsCss).toContain('.orchid-command-palette-footer');
   });
 
   it('wires orchid:navigate from palette to ChatView/Sidebar', () => {

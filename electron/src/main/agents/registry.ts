@@ -6,8 +6,6 @@
  *   2. `.orchid/agents/`    (project overrides)
  *
  * Project agents overlay home agents (same name → project wins).
- *
- * Ported from Python `src/orchid/agents/__init__.py`.
  */
 import * as fs from 'node:fs';
 import * as path from 'node:path';

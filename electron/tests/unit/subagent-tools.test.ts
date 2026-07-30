@@ -67,7 +67,7 @@ vi.mock('../../src/main/config/loader', async (importOriginal) => {
 
 /**
  * The hydrate helper resolves stored records through the session manager via a
- * lazy `await import('../../ipc/session')` (mockable, unlike createRequire). A
+ * lazy `await import('../../session/singleton')` (mockable, unlike createRequire). A
  * per-test holder drives it; when unset, a null-returning stub keeps the other
  * tool handlers (delegate reads `getSession`) on their no-session path.
  */
@@ -81,7 +81,7 @@ interface FakeSessionManager {
 }
 const sessionManagerHolder = vi.hoisted(() => ({ current: null as FakeSessionManager | null }));
 
-vi.mock('../../src/main/ipc/session', () => ({
+vi.mock('../../src/main/session/singleton', () => ({
   getSessionManager: () =>
     sessionManagerHolder.current ?? {
       getSession: () => null,

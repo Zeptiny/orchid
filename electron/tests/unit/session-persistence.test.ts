@@ -23,6 +23,7 @@ import {
 } from '../../src/main/session/storage';
 import { openSqliteDb } from '../../src/main/utils/sqlite';
 import { onSessionDeleted, SessionManager } from '../../src/main/session/manager';
+import { sessionPermissionOverrides } from '../../src/main/permissions/session-overrides';
 import { createCanonicalToolResult } from '../../src/shared/types/tool-result';
 
 let tmpDir: string;
@@ -2227,7 +2228,7 @@ describe('loadSession resilience to corrupt columns', () => {
 
     const db = openSqliteDb(storageOpts.dbPath!);
     db.prepare(
-      "UPDATE sessions SET todo_store_json = '{not json', subagent_chains_json = '[[[', selection_json = 'oops' WHERE id = ?",
+      "UPDATE sessions SET todo_store_json = '{not json', selection_json = 'oops' WHERE id = ?",
     ).run(SID);
     db.prepare("UPDATE chains SET messages_json = 'garbage' WHERE id = ?").run('c1');
     db.close();
@@ -2448,5 +2449,23 @@ describe('permissionMode SQLite round-trip', () => {
 
     const loaded = loadSession(created.id, storageOpts)!;
     expect(loaded.permissionMode).toBeNull();
+  });
+
+  it('syncs the in-memory gate map so the selector takes effect this run', () => {
+    const manager = new SessionManager({ storage: storageOpts });
+    const created = manager.create(null, { cwd: null });
+
+    try {
+      manager.setPermissionMode(created.id, 'allow');
+      expect(sessionPermissionOverrides.get(created.id)).toBe('allow');
+
+      manager.setPermissionMode(created.id, 'ask');
+      expect(sessionPermissionOverrides.get(created.id)).toBe('ask');
+
+      manager.setPermissionMode(created.id, null);
+      expect(sessionPermissionOverrides.has(created.id)).toBe(false);
+    } finally {
+      sessionPermissionOverrides.delete(created.id);
+    }
   });
 });

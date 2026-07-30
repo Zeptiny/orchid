@@ -34,6 +34,7 @@ import {
 } from '../project/path';
 import { TodoStore } from '../tools/todo/store';
 import { AgentsMdContextStore } from './agents-md-context';
+import { hydrateSessionPermissionOverride } from '../permissions/session-overrides';
 import {
   appendActiveChain as storageAppendActiveChain,
   finishChain as storageFinishChain,
@@ -502,7 +503,8 @@ export class SessionManager {
 
   /**
    * Set or clear the per-session permission-mode override.
-   * Persists to disk immediately so the choice survives restarts.
+   * Persists to disk immediately so the choice survives restarts, and syncs
+   * the in-memory gate read-model so the selector takes effect this run.
    */
   setPermissionMode(id: string, mode: PermissionMode | null): void {
     if (!this.isSelectedByAnyOwner(id)) return;
@@ -517,6 +519,10 @@ export class SessionManager {
       permissionMode: updated.permissionMode,
       todoStore: updated.todoStore,
     });
+    // The gate reads sessionPermissionOverrides, not the session record, so the
+    // persisted field and the map must move together. Centralizing the sync here
+    // keeps every caller (draft promotion, explicit selector) from diverging.
+    hydrateSessionPermissionOverride(id, mode);
   }
 
   /**
@@ -819,9 +825,7 @@ export class SessionManager {
     dirtyRecords: readonly SubagentRecord[],
   ): { session: Session | null; bytes: number } {
     if (dirtyRecords.length === 0) {
-      const existing = this._sessions.get(sessionId) ??
-        storageLoadSession(sessionId, this._storageOpts);
-      return { session: existing ?? null, bytes: 0 };
+      return { session: this._sessions.get(sessionId) ?? null, bytes: 0 };
     }
     const now = new Date().toISOString();
     const merge = (existing: readonly SubagentRecord[]): SubagentRecord[] => {

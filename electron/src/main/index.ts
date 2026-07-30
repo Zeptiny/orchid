@@ -246,7 +246,7 @@ app.whenReady().then(async () => {
     seedPersonalitiesDir(HOME_PERSONALITIES_DIR);
     loadPersonalities();
 
-    // 3. Initialize legacy global state from home only. A project runtime is
+    // 3. Initialize global config from home only. A project runtime is
     // captured at turn start, so startup must not choose one project's layers
     // as the process-wide default for every concurrent session.
     ConfigManager.reset();
@@ -254,7 +254,7 @@ app.whenReady().then(async () => {
     const agents = loadAgents();
     const skills = loadSkills();
 
-    // 4. Register the legacy tool surface. Each turn creates its own project
+    // 4. Register built-in tools. Each turn creates its own project
     // MCP manager from its frozen ProjectRuntime, rather than sharing this
     // startup workspace's connections with every other project.
     registerBuiltinTools({ agents, skills, mcpManager: null });
