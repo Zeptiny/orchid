@@ -145,4 +145,124 @@ describe('eager tool execution through streamChat', () => {
     expect(order).toEqual(['call-A', 'call-B']);
     expect(events.some((e) => e.type === 'finish')).toBe(true);
   });
+
+  function installDeltaFakeAiSdk(script: Array<Record<string, unknown>>): void {
+    async function* fakeFullStream(): AsyncGenerator<Record<string, unknown>> {
+      for (const part of script) yield part;
+      yield { type: 'finish-step', usage: {}, finishReason: 'tool-calls' };
+    }
+    const fakeAi = {
+      streamText: vi.fn(() => ({
+        fullStream: fakeFullStream(),
+        finishReason: Promise.resolve('tool-calls'),
+      })),
+      wrapLanguageModel: ({ model }: { model: unknown }) => model,
+      isStepCount: () => () => false,
+    };
+    vi.mocked(importESM).mockResolvedValue(fakeAi as never);
+  }
+
+  const id = (e: StreamEvent): string => (e as { toolCallId: string }).toolCallId;
+
+  it('executes tools from streamed deltas and emits running/completed before step end', async () => {
+    // No `tool-input-available`/`tool-call` parts here — execution and UI events
+    // must come entirely from the streamed-delta finalization path.
+    installDeltaFakeAiSdk([
+      { type: 'tool-input-start', toolCallId: 'call-A', toolName: 'slow' },
+      { type: 'tool-input-delta', toolCallId: 'call-A', inputTextDelta: '{"x":' },
+      { type: 'tool-input-delta', toolCallId: 'call-A', inputTextDelta: '1}' },
+      // Model moves on to B → A's input is complete → A launches early (backstop).
+      { type: 'tool-input-start', toolCallId: 'call-B', toolName: 'fast' },
+      { type: 'tool-input-delta', toolCallId: 'call-B', inputTextDelta: '{"x":2}' },
+      // B's input ends → B launches.
+      { type: 'tool-input-end', toolCallId: 'call-B' },
+    ]);
+
+    const registry = new ToolRegistry();
+    registerTool(registry, 'slow', slowHandler);
+    registerTool(registry, 'fast', fastHandler);
+
+    const controller = new AbortController();
+    const gen = streamChat({
+      messages: [],
+      agent,
+      systemPrompt: '',
+      context: { cwd },
+      config: defaults(),
+      registry,
+      mcpManager: null,
+      abortSignal: controller.signal,
+      modelInstance: {} as never,
+    });
+
+    const events: StreamEvent[] = [];
+    while (true) {
+      const { value, done } = await gen.next();
+      if (done) break;
+      events.push(value);
+    }
+    await vi.waitFor(() => expect(slowHandler).toHaveBeenCalledOnce());
+    await vi.waitFor(() => expect(fastHandler).toHaveBeenCalledOnce());
+
+    // Both tools executed exactly once via the delta path.
+    expect(slowHandler).toHaveBeenCalledOnce();
+    expect(fastHandler).toHaveBeenCalledOnce();
+
+    // `running` and `completed` events were emitted for each tool.
+    const toolCalls = events.filter((e) => e.type === 'tool_call').map(id).sort();
+    const toolResults = events.filter((e) => e.type === 'tool_result').map(id).sort();
+    expect(toolCalls).toEqual(['call-A', 'call-B']);
+    expect(toolResults).toEqual(['call-A', 'call-B']);
+
+    // Ordering fix: A's `running` event precedes B's generation start.
+    const idxCallA = events.findIndex((e) => e.type === 'tool_call' && id(e) === 'call-A');
+    const idxStartB = events.findIndex((e) => e.type === 'tool_call_start' && id(e) === 'call-B');
+    expect(idxCallA).toBeGreaterThanOrEqual(0);
+    expect(idxStartB).toBeGreaterThan(idxCallA);
+
+    // `completed` lands before the stream finishes (emitted during streaming).
+    const idxResultA = events.findIndex((e) => e.type === 'tool_result' && id(e) === 'call-A');
+    const idxFinish = events.findIndex((e) => e.type === 'finish');
+    expect(idxResultA).toBeGreaterThanOrEqual(0);
+    expect(idxResultA).toBeLessThan(idxFinish);
+  });
+
+  it('does not execute a tool whose streamed input is incomplete/invalid JSON', async () => {
+    installDeltaFakeAiSdk([
+      { type: 'tool-input-start', toolCallId: 'call-A', toolName: 'slow' },
+      { type: 'tool-input-delta', toolCallId: 'call-A', inputTextDelta: '{"x":' },
+      // B starts → A finalizes, but A's accumulated text is not valid JSON.
+      { type: 'tool-input-start', toolCallId: 'call-B', toolName: 'fast' },
+      { type: 'tool-input-delta', toolCallId: 'call-B', inputTextDelta: '{"x":2}' },
+      { type: 'tool-input-end', toolCallId: 'call-B' },
+    ]);
+
+    const registry = new ToolRegistry();
+    registerTool(registry, 'slow', slowHandler);
+    registerTool(registry, 'fast', fastHandler);
+
+    const controller = new AbortController();
+    const gen = streamChat({
+      messages: [],
+      agent,
+      systemPrompt: '',
+      context: { cwd },
+      config: defaults(),
+      registry,
+      mcpManager: null,
+      abortSignal: controller.signal,
+      modelInstance: {} as never,
+    });
+
+    while (true) {
+      const { done } = await gen.next();
+      if (done) break;
+    }
+    await vi.waitFor(() => expect(fastHandler).toHaveBeenCalledOnce());
+
+    // A's invalid input was skipped by the delta path (no crash, no execution);
+    // B (valid) still executed.
+    expect(slowHandler).not.toHaveBeenCalled();
+    expect(fastHandler).toHaveBeenCalledOnce();
+  });
 });

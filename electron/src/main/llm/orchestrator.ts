@@ -551,6 +551,73 @@ export async function* streamChat(params: StreamChatParams): AsyncGenerator<Stre
     const pendingToolResults: PendingToolResult[] = [];
     const seenToolCallIds = new Set<string>();
     const seenToolResultIds = new Set<string>();
+    // Eager execution from streamed tool-input deltas. The AI SDK withholds the
+    // validated `tool-call` part until the step finishes (batched), so we
+    // reconstruct "input complete" ourselves: accumulate `tool-input-delta` text
+    // per tool and launch the tool when `tool-input-end` fires (or when the next
+    // tool / text begins, as a backstop). `eagerExecutor.start` is idempotent, so
+    // the SDK's later batched `tool-call` is a no-op for already-started tools.
+    const pendingToolInputs = new Map<string, { toolName: string; text: string }>();
+    let activeToolInputId: string | null = null;
+    // Early UI events for eagerly-started tools, drained into the stream so the
+    // renderer sees `running` / `completed` transitions as they actually happen
+    // rather than in the SDK's batched step-end burst.
+    const eagerStarts: Array<{ toolCallId: string; toolName: string; args: string }> = [];
+    const eagerCompletions: Array<{ toolCallId: string; execution: ToolExecutionResult }> = [];
+    const finalizeToolInput = (toolCallId: string): void => {
+      const pending = pendingToolInputs.get(toolCallId);
+      if (!pending) return;
+      pendingToolInputs.delete(toolCallId);
+      if (activeToolInputId === toolCallId) activeToolInputId = null;
+      let input: unknown;
+      try {
+        input = JSON.parse(pending.text);
+      } catch {
+        // Incomplete/invalid JSON — the SDK's `tool-call` path will handle it.
+        return;
+      }
+      const promise = eagerExecutor.getOrStart(toolCallId, pending.toolName, input);
+      if (!promise) return; // no launcher (provider-executed/unknown) — SDK handles it
+      eagerStarts.push({
+        toolCallId,
+        toolName: pending.toolName,
+        args: stringifyToolInput(input),
+      });
+      promise
+        .then((execution) => {
+          eagerCompletions.push({ toolCallId, execution });
+        })
+        .catch(() => {
+          // executeToolCall resolves to terminal executions rather than rejecting.
+        });
+    };
+    const drainEagerStarts = function* (): Generator<StreamEvent> {
+      while (eagerStarts.length > 0) {
+        const start = eagerStarts.shift()!;
+        if (seenToolCallIds.has(start.toolCallId)) continue;
+        seenToolCallIds.add(start.toolCallId);
+        deliveredAny = true;
+        yield {
+          type: 'tool_call',
+          toolCallId: start.toolCallId,
+          toolName: start.toolName,
+          args: start.args,
+        };
+      }
+    };
+    const drainEagerCompletions = function* (): Generator<StreamEvent> {
+      while (eagerCompletions.length > 0) {
+        const completion = eagerCompletions.shift()!;
+        if (seenToolResultIds.has(completion.toolCallId)) continue;
+        seenToolResultIds.add(completion.toolCallId);
+        deliveredAny = true;
+        yield {
+          type: 'tool_result',
+          toolCallId: completion.toolCallId,
+          ...streamResultFields(completion.execution),
+        };
+      }
+    };
     const pendingUsageEvents: Usage[] = [];
     let currentStepMessages: readonly ModelMessage[] = coreMessages;
     let stepIndex = 0;
@@ -680,6 +747,8 @@ export async function* streamChat(params: StreamChatParams): AsyncGenerator<Stre
             }
 
             case 'finish-step': {
+              // Backstop: finalize any tool still pending at step end.
+              if (activeToolInputId) finalizeToolInput(activeToolInputId);
               yield {
                 type: 'usage',
                 usage: buildStepUsage(
@@ -702,6 +771,8 @@ export async function* streamChat(params: StreamChatParams): AsyncGenerator<Stre
 
             case 'text-delta': {
               armIdleTimer();
+              // Model resumed text after tool inputs → finalize any pending tool.
+              if (activeToolInputId) finalizeToolInput(activeToolInputId);
               const text =
                 typeof part.text === 'string'
                   ? part.text
@@ -722,7 +793,18 @@ export async function* streamChat(params: StreamChatParams): AsyncGenerator<Stre
                 typeof part.toolName === 'string' ? part.toolName : 'unknown',
                 mcpManager,
               );
+              // The model moved to a new tool → the previously streaming tool's
+              // input is complete (backstop for providers without tool-input-end).
+              if (activeToolInputId && activeToolInputId !== toolCallId) {
+                finalizeToolInput(activeToolInputId);
+              }
+              // Surface the finalized tool's `running` state BEFORE announcing the
+              // new generating tool, so the single streamingToolCall slot settles
+              // on the tool that is actually still generating.
+              yield* drainEagerStarts();
               if (toolCallId) {
+                pendingToolInputs.set(toolCallId, { toolName, text: '' });
+                activeToolInputId = toolCallId;
                 deliveredAny = true;
                 yield { type: 'tool_call_start', toolCallId, toolName };
               }
@@ -739,9 +821,19 @@ export async function* streamChat(params: StreamChatParams): AsyncGenerator<Stre
                     ? part.delta
                     : '';
               if (toolCallId && argsDelta) {
+                const pending = pendingToolInputs.get(toolCallId);
+                if (pending) pending.text += argsDelta;
                 deliveredAny = true;
                 yield { type: 'tool_call_delta', toolCallId, argsDelta };
               }
+              break;
+            }
+
+            case 'tool-input-end': {
+              // This tool's input finished streaming — launch it now, before the
+              // SDK emits the batched `tool-call` at step end.
+              const toolCallId = streamToolCallId(part);
+              if (toolCallId) finalizeToolInput(toolCallId);
               break;
             }
 
@@ -842,6 +934,7 @@ export async function* streamChat(params: StreamChatParams): AsyncGenerator<Stre
             case 'reasoning-delta':
             case 'reasoning': {
               armIdleTimer();
+              if (activeToolInputId) finalizeToolInput(activeToolInputId);
               const text =
                 typeof part.text === 'string'
                   ? part.text
@@ -866,6 +959,11 @@ export async function* streamChat(params: StreamChatParams): AsyncGenerator<Stre
               break;
           }
 
+          // Surface eagerly-started tools and their early completions to the UI
+          // stream as soon as they happen (deduped against the SDK's batched
+          // `tool-call` / `tool-output-available` via the seen-id sets).
+          yield* drainEagerStarts();
+          yield* drainEagerCompletions();
           yield* drainPendingToolEvents(
             pendingToolCalls,
             pendingToolResults,
@@ -926,6 +1024,10 @@ export async function* streamChat(params: StreamChatParams): AsyncGenerator<Stre
 
       const finishReason = await result.finishReason;
 
+      // Flush any eager tool starts/completions that settled during the final
+      // await (e.g. the last tool in a step) before emitting `finish`.
+      yield* drainEagerStarts();
+      yield* drainEagerCompletions();
       yield* drainPendingToolEvents(
         pendingToolCalls,
         pendingToolResults,
