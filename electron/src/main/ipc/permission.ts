@@ -239,13 +239,9 @@ export function registerPermissionIPC(): void {
         return { ok: false, sessionId };
       }
 
-      // Persist to the session DB + sync the in-memory gate map.
+      // Persist to the session DB; setPermissionMode also syncs the in-memory
+      // gate map so the selector choice takes effect immediately.
       getSessionManager().setPermissionMode(sessionId, parsed.mode);
-      if (parsed.mode == null) {
-        sessionPermissionOverrides.delete(sessionId);
-      } else {
-        sessionPermissionOverrides.set(sessionId, parsed.mode);
-      }
       return { ok: true, sessionId };
     },
   );
