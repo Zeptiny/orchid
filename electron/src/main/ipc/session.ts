@@ -8,7 +8,11 @@ import { BrowserWindow, dialog, ipcMain } from 'electron';
 import { IPC_CHANNELS } from '../../shared/types/ipc';
 import { flattenSessionMessages } from '../../shared/types/session';
 import type { ModelSelection } from '../../shared/types/provider';
-import { SessionManager } from '../session/manager';
+import {
+  getSessionManager,
+  resolveBoundProjectPath,
+  resolveWindowWorkspace,
+} from '../session/singleton';
 import { getConfig } from '../config/loader';
 import { clearChatHistory, seedChatHistory } from './chat-history';
 import {
@@ -16,7 +20,6 @@ import {
   getDraftCwd,
   isWorkspaceBound,
   requireValidProjectDirectory,
-  resolveWorkspace,
   setDraftCwd,
   updateStickyDefaultProjectDir,
   type WorkspaceInfo,
@@ -44,50 +47,13 @@ import {
   sessionSetReasoningEffortSchema,
 } from './payload-schemas';
 
-// ── Singleton session manager ────────────────────────────────────────────────
-
-let sessionManager: SessionManager | null = null;
-
-/**
- * Get the singleton SessionManager instance.
- *
- * Creates one lazily on first call. Exported so that other IPC modules
- * (e.g. chat.ts for auto-naming) can share the same instance.
- */
-export function getSessionManager(): SessionManager {
-  if (!sessionManager) {
-    sessionManager = new SessionManager();
-  }
-  return sessionManager;
-}
+export {
+  getSessionManager,
+  resolveBoundProjectPath,
+  resolveWindowWorkspace,
+};
 
 export { flattenSessionMessages };
-
-/**
- * Resolve workspace for a window using draft + active session + sticky default.
- */
-export function resolveWindowWorkspace(windowId: string): WorkspaceInfo {
-  const active = getSessionManager().getActive(windowId);
-  return resolveWorkspace(windowId, {
-    sessionCwd: active?.cwd ?? null,
-    stickyDefault: getConfig().default_project_dir,
-  });
-}
-
-/**
- * Bound project path for IPC tools/indexers: draft → session → sticky, only when bound.
- */
-export function resolveBoundProjectPath(windowId?: string): string | null {
-  try {
-    const info = resolveWindowWorkspace(windowId ?? '');
-    if (isWorkspaceBound(info) && info.cwd != null) {
-      return info.cwd;
-    }
-  } catch {
-    // ignore
-  }
-  return null;
-}
 
 // ── Draft reasoning overrides (window-scoped, pre-session) ──────────────────
 

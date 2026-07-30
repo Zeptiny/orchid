@@ -11,7 +11,7 @@
  */
 import type { Session } from '../../shared/types/session';
 import type { SubagentRecord as DomainSubagentRecord } from '../../shared/types/subagent';
-import { getSessionManager } from '../ipc/session';
+import { getSessionManager } from '../session/singleton';
 import type { SubagentManager, SubagentRecord } from './manager';
 import { isTerminalSubagentState, runtimeToDomain } from './manager';
 

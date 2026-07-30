@@ -10,7 +10,8 @@
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { AgentType, AgentTier, type Agent } from '../../src/shared/types/agent';
-import { SubagentManager, SubagentState } from '../../src/main/agents/manager';
+import { SubagentManager } from '../../src/main/agents/manager';
+import { SubagentState } from '../../src/main/agents/types';
 import { buildInterruptTool } from '../../src/main/tools/subagent/interrupt';
 import type { SubagentToolResult } from '../../src/main/tools/subagent/delegate';
 

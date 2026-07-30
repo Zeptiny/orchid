@@ -69,7 +69,7 @@ vi.mock('../../src/main/config/loader', () => ({
   getConfig: mocks.getConfig,
 }));
 
-vi.mock('../../src/main/ipc/session', () => ({
+vi.mock('../../src/main/session/singleton', () => ({
   getSessionManager: mocks.getSessionManager,
 }));
 

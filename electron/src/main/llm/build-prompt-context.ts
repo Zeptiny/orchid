@@ -19,6 +19,7 @@ import type {
   TodoItem,
 } from './system-prompt';
 import { getSubagentManager } from '../tools';
+import { getSessionManager } from '../session/singleton';
 import { getBackgroundStore } from '../tools/process/background-store';
 import {
   filterTodosForScope,
@@ -226,12 +227,7 @@ export async function buildSystemPromptContext(
     options.getTodos ??
     (() => {
       try {
-        // Lazy require avoids circular init with session/tools.
-        // eslint-disable-next-line @typescript-eslint/no-require-imports
-        const { createRequire } = require('node:module') as typeof import('node:module');
-        const req = createRequire(__filename);
-        const session = req('../ipc/session') as typeof import('../ipc/session');
-        const manager = session.getSessionManager();
+        const manager = getSessionManager();
         const store = sessionId
           ? manager.getTodoStore(sessionId)
           : manager.getActiveTodoStore();
