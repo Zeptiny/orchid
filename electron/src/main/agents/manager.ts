@@ -379,6 +379,7 @@ export class SubagentManager {
   private _subagents: Map<string, SubagentRecord> = new Map();
   private _runner: SubagentStreamRunner | null = null;
   private _onChange: SubagentChangeListener | null = null;
+  private _changeListeners = new Set<SubagentChangeListener>();
   private _onDelta: ((event: SubagentDeltaEvent) => void) | null = null;
   /** Per-session monotonic revision counter ordering events and snapshots. */
   private _sessionRevisions: Map<string, number> = new Map();
@@ -402,6 +403,12 @@ export class SubagentManager {
   /** Register a listener invoked after any state/message change. */
   setOnChange(listener: SubagentChangeListener | null): void {
     this._onChange = listener;
+  }
+
+  /** Subscribe without replacing the production persistence callback. */
+  addOnChangeListener(listener: SubagentChangeListener): () => void {
+    this._changeListeners.add(listener);
+    return () => this._changeListeners.delete(listener);
   }
 
   /** Subscribe to typed incremental live deltas for active subagent runs. */
@@ -1834,7 +1841,11 @@ export class SubagentManager {
 
   private _notify(): void {
     try {
-      this._onChange?.(this.allRecords());
+      const records = this.allRecords();
+      this._onChange?.(records);
+      for (const listener of this._changeListeners) {
+        listener(records);
+      }
     } catch (err) {
       console.debug('Subagent onChange listener failed (non-fatal):', err);
     }

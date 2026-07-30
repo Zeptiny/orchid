@@ -292,11 +292,14 @@ function applyStatusToShared(observation: ProviderStatusView): void {
   setSharedState((previous) => {
     if (!previous.overview) return previous;
     const hasObservation = previous.overview.statuses.some(
-      (status) => status.providerId === observation.providerId,
+      (status) => status.providerId === observation.providerId
+        && status.connectionId === observation.connectionId,
     );
     const statuses = hasObservation
       ? previous.overview.statuses.map((status) =>
-          status.providerId === observation.providerId ? observation : status,
+          status.providerId === observation.providerId && status.connectionId === observation.connectionId
+            ? observation
+            : status,
         )
       : [...previous.overview.statuses, observation];
     return {

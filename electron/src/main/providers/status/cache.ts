@@ -27,6 +27,11 @@ export interface ProviderStatusError {
  */
 export interface ProviderStatusObservation {
   readonly providerId: string;
+  /**
+   * Authenticated account status is bound to the connection that supplied its
+   * credential. Omitted means a provider-wide, credential-free observation.
+   */
+  readonly connectionId?: string;
   /** When Orchid fetched or recorded this observation. */
   readonly observedAt: string;
   /** The provider's source timestamp, if it supplied a valid one. */
@@ -38,7 +43,7 @@ export interface ProviderStatusObservation {
 }
 
 interface ProviderStatusCacheDocument {
-  readonly version: 1;
+  readonly version: 2;
   readonly observations: Readonly<Record<string, ProviderStatusObservation>>;
 }
 
@@ -113,6 +118,8 @@ function normalizeObservation(value: unknown): ProviderStatusObservation | null 
   if (value === null || typeof value !== 'object' || Array.isArray(value)) return null;
   const observation = value as Record<string, unknown>;
   if (typeof observation['providerId'] !== 'string' || observation['providerId'].trim() === '') return null;
+  const connectionId = observation['connectionId'];
+  if (connectionId !== undefined && (typeof connectionId !== 'string' || connectionId.trim() === '')) return null;
   const observedAt = validTimestamp(observation['observedAt']);
   if (observedAt === null) return null;
   const rawData = observation['data'];
@@ -122,6 +129,7 @@ function normalizeObservation(value: unknown): ProviderStatusObservation | null 
   const error = validError(observation['error']);
   return {
     providerId: observation['providerId'],
+    ...(typeof connectionId === 'string' ? { connectionId } : {}),
     observedAt,
     providerUpdatedAt: validTimestamp(observation['providerUpdatedAt']),
     availability: validAvailability(observation['availability']),
@@ -129,6 +137,11 @@ function normalizeObservation(value: unknown): ProviderStatusObservation | null 
     data,
     ...(error === undefined ? {} : { error }),
   };
+}
+
+/** Stable identity shared by cached observations and in-flight refreshes. */
+export function providerStatusKey(providerId: string, connectionId?: string): string {
+  return JSON.stringify([providerId, connectionId ?? null]);
 }
 
 function cloneObservation(observation: ProviderStatusObservation): ProviderStatusObservation {
@@ -148,9 +161,9 @@ export class ProviderStatusCache {
     this.filePath = options.filePath === undefined ? PROVIDER_STATUS_CACHE_PATH : options.filePath;
   }
 
-  get(providerId: string): ProviderStatusObservation | undefined {
+  get(providerId: string, connectionId?: string): ProviderStatusObservation | undefined {
     this.load();
-    const observation = this.observations.get(providerId);
+    const observation = this.observations.get(providerStatusKey(providerId, connectionId));
     return observation ? cloneObservation(observation) : undefined;
   }
 
@@ -163,9 +176,17 @@ export class ProviderStatusCache {
     this.load();
     const normalized = normalizeObservation(observation);
     if (!normalized) throw new Error('Provider status observation is invalid');
-    this.observations.set(normalized.providerId, normalized);
+    this.observations.set(providerStatusKey(normalized.providerId, normalized.connectionId), normalized);
     this.persist();
     return cloneObservation(normalized);
+  }
+
+  /** Remove one provider/account observation without affecting provider-wide status. */
+  delete(providerId: string, connectionId?: string): boolean {
+    this.load();
+    const deleted = this.observations.delete(providerStatusKey(providerId, connectionId));
+    if (deleted) this.persist();
+    return deleted;
   }
 
   private load(): void {
@@ -177,12 +198,19 @@ export class ProviderStatusCache {
       const parsed: unknown = JSON.parse(fs.readFileSync(this.filePath, 'utf8'));
       if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) return;
       const document = parsed as Record<string, unknown>;
-      if (document['version'] !== 1 || document['observations'] === null || typeof document['observations'] !== 'object' || Array.isArray(document['observations'])) {
+      if ((document['version'] !== 1 && document['version'] !== 2)
+        || document['observations'] === null
+        || typeof document['observations'] !== 'object'
+        || Array.isArray(document['observations'])) {
         return;
       }
       for (const [providerId, value] of Object.entries(document['observations'] as Record<string, unknown>)) {
         const observation = normalizeObservation(value);
-        if (observation && observation.providerId === providerId) this.observations.set(providerId, observation);
+        // Version 1 keyed public observations by provider ID. Version 2 uses
+        // an opaque composite key so account-scoped entries cannot collide.
+        if (observation && (document['version'] === 2 || observation.providerId === providerId)) {
+          this.observations.set(providerStatusKey(observation.providerId, observation.connectionId), observation);
+        }
       }
     } catch {
       // Invalid/corrupt status data is informational and must never affect inference.
@@ -192,10 +220,10 @@ export class ProviderStatusCache {
   private persist(): void {
     if (this.filePath === null) return;
     const observations: Record<string, ProviderStatusObservation> = {};
-    for (const [providerId, observation] of this.observations.entries()) {
-      observations[providerId] = observation;
+    for (const [key, observation] of this.observations.entries()) {
+      observations[key] = observation;
     }
-    const document: ProviderStatusCacheDocument = { version: 1, observations };
+    const document: ProviderStatusCacheDocument = { version: 2, observations };
     try {
       atomicWriteJson(this.filePath, document);
     } catch {

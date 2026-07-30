@@ -145,7 +145,9 @@ function memoryServices(definitions: readonly ProviderDefinition[] = [OPENAI, GE
   };
   const status = {
     get: vi.fn(() => undefined),
+    list: vi.fn(() => []),
     refresh: vi.fn(),
+    invalidate: vi.fn(),
   };
   return {
     services: {
@@ -158,6 +160,7 @@ function memoryServices(definitions: readonly ProviderDefinition[] = [OPENAI, GE
     records,
     connections,
     vault,
+    status,
   };
 }
 
@@ -463,6 +466,31 @@ describe('provider IPC', () => {
       },
     });
     expect(JSON.stringify(result)).not.toContain('fixture-openai-key');
+    expect(memory.status.invalidate).toHaveBeenCalledWith('openai', id);
+  });
+
+  it('invalidates connection-scoped status when replacing a ready stored API key', async () => {
+    const memory = memoryServices();
+    const id = '00000000-0000-4000-8000-000000000029';
+    memory.records.set(id, {
+      id,
+      providerId: 'openai',
+      name: 'Replacement key',
+      protocol: 'openai-compatible',
+      authMethod: 'api-key',
+      credential: { kind: 'stored', handle: 'fixture-old-key' },
+      modelIds: ['gpt-5/test'],
+      health: 'ready',
+    });
+    providersIpc._setProviderIPCServicesForTests(memory.services);
+    providersIpc.registerProviderIPC();
+
+    await handler(IPC_CHANNELS.PROVIDERS_SUBMIT_API_KEY)(null, {
+      connectionId: id,
+      apiKey: 'replacement-api-key',
+    });
+
+    expect(memory.status.invalidate).toHaveBeenCalledWith('openai', id);
   });
 
   it('switches an environment connection to a newly stored API key', async () => {

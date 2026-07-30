@@ -28,6 +28,10 @@ const mocks = vi.hoisted(() => {
   };
 
   let activeSession: SessionShape | null = null;
+  const activeSessionsByWindow = new Map<string, SessionShape | null>();
+  const electronWebContents = {
+    getAllWebContents: vi.fn(() => []),
+  };
 
   /** Stable config object so sticky mutations stick across getConfig calls. */
   const configState = {
@@ -42,7 +46,13 @@ const mocks = vi.hoisted(() => {
   };
 
   const sessionManager = {
-    getActive: vi.fn(() => activeSession),
+    getActive: vi.fn((windowId?: string) => (
+      windowId === undefined
+        ? activeSession
+        : activeSessionsByWindow.has(windowId)
+          ? activeSessionsByWindow.get(windowId) ?? null
+          : activeSession
+    )),
     clearActive: vi.fn(() => {
       activeSession = null;
     }),
@@ -110,6 +120,7 @@ const mocks = vi.hoisted(() => {
     listSaved: vi.fn(() => []),
     _reset: () => {
       activeSession = null;
+      activeSessionsByWindow.clear();
       configState.default_project_dir = null;
       sessionManager.getActive.mockClear();
       sessionManager.create.mockClear();
@@ -119,6 +130,9 @@ const mocks = vi.hoisted(() => {
       sessionManager.getSession.mockClear();
       sessionManager.rename.mockClear();
       sessionManager.changeModel.mockClear();
+    },
+    _setActiveForWindow: (windowId: string, session: SessionShape | null) => {
+      activeSessionsByWindow.set(windowId, session);
     },
   };
 
@@ -147,6 +161,7 @@ const mocks = vi.hoisted(() => {
     BrowserWindow: {
       fromWebContents: vi.fn(() => ({ id: 1 })),
     },
+    electronWebContents,
   };
 });
 
@@ -154,6 +169,7 @@ vi.mock('electron', () => ({
   ipcMain: mocks.ipcMain,
   dialog: mocks.dialog,
   BrowserWindow: mocks.BrowserWindow,
+  webContents: mocks.electronWebContents,
 }));
 
 vi.mock('../../src/main/config/loader', () => ({
@@ -201,6 +217,8 @@ beforeEach(async () => {
   vi.clearAllMocks();
   mocks.handlers.clear();
   mocks.sessionManager._reset();
+  mocks.electronWebContents.getAllWebContents.mockReset();
+  mocks.electronWebContents.getAllWebContents.mockReturnValue([]);
   mocks.dialogResult.canceled = true;
   mocks.dialogResult.filePaths = [];
 
@@ -537,21 +555,39 @@ describe('session workspace IPC', () => {
     expect(s.send).not.toHaveBeenCalled();
   });
 
-  it('session:rename emits renamed when name changes', async () => {
+  it('session:rename notifies every window still selecting the renamed session', async () => {
     mocks.sessionManager.create('test/model', { cwd: tmpProject });
     const active = mocks.sessionManager.getActive()!;
     active.name = 'Old Name';
     const rename = mocks.handlers.get(IPC_CHANNELS.SESSION_RENAME)!;
-    const s = sender(13);
+    const source = sender(13);
+    const sameSession = sender(14);
+    const differentSession = sender(15);
+    mocks.sessionManager._setActiveForWindow('13', active);
+    mocks.sessionManager._setActiveForWindow('14', active);
+    mocks.sessionManager._setActiveForWindow('15', {
+      ...active,
+      id: 'different-session',
+    });
+    mocks.electronWebContents.getAllWebContents.mockReturnValue([
+      source,
+      sameSession,
+      differentSession,
+    ]);
 
-    const result = await rename({ sender: s }, { id: active.id, name: 'New Name' });
+    const result = await rename({ sender: source }, { id: active.id, name: 'New Name' });
 
     expect(result).toEqual({ status: 'renamed' });
     expect(mocks.sessionManager.rename).toHaveBeenCalledWith(active.id, 'New Name');
-    expect(s.send).toHaveBeenCalledWith(IPC_CHANNELS.SESSION_RENAMED, {
+    expect(source.send).toHaveBeenCalledWith(IPC_CHANNELS.SESSION_RENAMED, {
       id: active.id,
       name: 'New Name',
     });
+    expect(sameSession.send).toHaveBeenCalledWith(IPC_CHANNELS.SESSION_RENAMED, {
+      id: active.id,
+      name: 'New Name',
+    });
+    expect(differentSession.send).not.toHaveBeenCalled();
   });
 
   it('session:change_model returns unchanged when selection is already the same', async () => {

@@ -484,6 +484,8 @@ export interface ProviderConnectionView {
 /** Status data is timestamped and redacted before it crosses IPC. */
 export interface ProviderStatusView {
   providerId: string;
+  /** Present only for account status tied to one provider connection. */
+  connectionId?: string;
   observedAt: string;
   providerUpdatedAt: string | null;
   availability: 'available' | 'unavailable' | 'unknown';

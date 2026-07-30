@@ -49,6 +49,7 @@ const mocks = vi.hoisted(() => {
   const streamEventSequences: Array<Array<Record<string, unknown>>> = [];
   const electronWebContents = {
     fromId: vi.fn(() => null),
+    getAllWebContents: vi.fn(() => []),
   };
 
   type MockSession = {
@@ -68,6 +69,7 @@ const mocks = vi.hoisted(() => {
   };
   let activeSession: MockSession | null = null;
   const sessionsById = new Map<string, MockSession>();
+  const activeSessionsByWindow = new Map<string, MockSession | null>();
 
   let workspaceBound = true;
   const testProjectDir = '/tmp/orchid-chat-ipc-project';
@@ -188,7 +190,13 @@ const mocks = vi.hoisted(() => {
   const mcpManager = {};
 
   const sessionManager = {
-    getActive: vi.fn(() => activeSession),
+    getActive: vi.fn((windowId?: string) => (
+      windowId === undefined
+        ? activeSession
+        : activeSessionsByWindow.has(windowId)
+          ? activeSessionsByWindow.get(windowId) ?? null
+          : activeSession
+    )),
     clearActive: vi.fn(() => {
       activeSession = null;
     }),
@@ -358,6 +366,7 @@ const mocks = vi.hoisted(() => {
     _reset: () => {
       activeSession = null;
       sessionsById.clear();
+      activeSessionsByWindow.clear();
       workspaceBound = true;
       workspaceByWindow.clear();
       sessionManager.getActive.mockClear();
@@ -379,6 +388,9 @@ const mocks = vi.hoisted(() => {
     _setActive: (session: MockSession | null) => {
       activeSession = session;
       if (session) sessionsById.set(session.id, session);
+    },
+    _setActiveForWindow: (windowId: string, session: MockSession | null) => {
+      activeSessionsByWindow.set(windowId, session);
     },
     /** Test helper: register a session without selecting it for the window. */
     _putSession: (session: MockSession) => {
@@ -785,6 +797,8 @@ describe('chat IPC driver streaming', () => {
     mocks.runtimeRegistry._reset();
     mocks.electronWebContents.fromId.mockReset();
     mocks.electronWebContents.fromId.mockReturnValue(null);
+    mocks.electronWebContents.getAllWebContents.mockReset();
+    mocks.electronWebContents.getAllWebContents.mockReturnValue([]);
     mocks.sessionManager._reset();
 
     chatIpc = await import('../../src/main/ipc/chat');
@@ -1308,6 +1322,8 @@ describe('chat IPC provider gates', () => {
     mocks.streamEventSequences.length = 0;
     mocks.runtimeRegistry._reset();
     mocks.sessionManager._reset();
+    mocks.electronWebContents.getAllWebContents.mockReset();
+    mocks.electronWebContents.getAllWebContents.mockReturnValue([]);
     mocks.aiGenerateText.mockReset();
     mocks.aiGenerateText.mockResolvedValue({ text: 'Investigate Session Naming' });
     mocks.aiWrapLanguageModel.mockClear();
@@ -1504,9 +1520,24 @@ describe('chat IPC provider gates', () => {
     });
     mocks.streamResponses.push('The placeholder callback disables naming.');
     const send = vi.fn();
+    const source = { id: 905, send };
+    const sameSession = { id: 906, send: vi.fn() };
+    const differentSession = { id: 907, send: vi.fn() };
+    const selectedSession = mocks.sessionManager.getActive()!;
+    mocks.sessionManager._setActiveForWindow('905', selectedSession);
+    mocks.sessionManager._setActiveForWindow('906', selectedSession);
+    mocks.sessionManager._setActiveForWindow('907', {
+      ...selectedSession,
+      id: 'different-session',
+    });
+    mocks.electronWebContents.getAllWebContents.mockReturnValue([
+      source,
+      sameSession,
+      differentSession,
+    ]);
     const chatSend = mocks.handlers.get(IPC_CHANNELS.CHAT_SEND);
 
-    await chatSend!({ sender: { id: 905, send } }, { message: 'Why are sessions unnamed?' });
+    await chatSend!({ sender: source }, { message: 'Why are sessions unnamed?' });
     await waitForChannelCount(send, IPC_CHANNELS.SESSION_RENAMED, 1);
 
     expect(mocks.providerRuntime.resolveExecution).toHaveBeenCalledWith(titleSelection);
@@ -1534,6 +1565,18 @@ describe('chat IPC provider gates', () => {
       id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
       name: 'Investigate Session Naming',
     });
+    expect(channelEvents(send, IPC_CHANNELS.SESSION_UPDATED).at(-1)?.[1]).toMatchObject({
+      session: { id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', activeChainId: null },
+    });
+    expect(channelEvents(sameSession.send, IPC_CHANNELS.SESSION_UPDATED).at(-1)?.[1]).toMatchObject({
+      session: { id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', activeChainId: null },
+    });
+    expect(channelEvents(sameSession.send, IPC_CHANNELS.SESSION_RENAMED).at(-1)?.[1]).toEqual({
+      id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      name: 'Investigate Session Naming',
+    });
+    expect(channelEvents(differentSession.send, IPC_CHANNELS.SESSION_UPDATED)).toHaveLength(0);
+    expect(channelEvents(differentSession.send, IPC_CHANNELS.SESSION_RENAMED)).toHaveLength(0);
   });
 
   it('logs a visible warning when title generation fails', async () => {
@@ -1550,9 +1593,12 @@ describe('chat IPC provider gates', () => {
     mocks.aiGenerateText.mockRejectedValueOnce(new Error('title provider unavailable'));
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
     const send = vi.fn();
+    const source = { id: 906, send };
+    mocks.sessionManager._setActiveForWindow('906', mocks.sessionManager.getActive()!);
+    mocks.electronWebContents.getAllWebContents.mockReturnValue([source]);
     const chatSend = mocks.handlers.get(IPC_CHANNELS.CHAT_SEND);
 
-    await chatSend!({ sender: { id: 906, send } }, { message: 'Trigger naming' });
+    await chatSend!({ sender: source }, { message: 'Trigger naming' });
     await waitForChannelCount(send, IPC_CHANNELS.SESSION_RENAMED, 1);
 
     expect(warn).toHaveBeenCalledWith(

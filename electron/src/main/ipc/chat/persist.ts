@@ -13,7 +13,7 @@ import {
   makeThinkingMessage,
 } from '../../llm/message-factories';
 import { activeAgents, pendingCheckpoints, type ActiveAgent } from './state';
-import { canSend } from './events';
+import { sendSessionEvent, webContentsForWindowId } from './events';
 import { textSegmentIdAtOffset } from './snapshot';
 
 export function attachUsageToLatestAssistant(messages: Message[], usage: Usage): boolean {
@@ -119,7 +119,18 @@ export function checkpointActiveTurn(agent: ActiveAgent, context: AgentContext):
     const active = activeAgents.get(sessionId);
     if (!active || active.finalized) return;
     try {
-      getSessionManager().updateActiveChainMessages(entry?.messages ?? messages, sessionId);
+      const updated = getSessionManager().updateActiveChainMessages(
+        entry?.messages ?? messages,
+        sessionId,
+      );
+      if (updated) {
+        sendSessionEvent(
+          webContentsForWindowId(active.windowId),
+          sessionId,
+          IPC_CHANNELS.SESSION_UPDATED,
+          { session: updated },
+        );
+      }
     } catch (err) {
       console.debug('Failed to checkpoint active chat chain (non-fatal):', err);
     }
@@ -164,8 +175,8 @@ export function persistTurnConversation(
       agentType: agent.type,
       agentTier: agent.tier,
     }, sessionId);
-    if (updated && webContents && canSend(webContents)) {
-      webContents.send(IPC_CHANNELS.SESSION_UPDATED, { session: updated });
+    if (updated && webContents) {
+      sendSessionEvent(webContents, sessionId, IPC_CHANNELS.SESSION_UPDATED, { session: updated });
     }
   } catch (err) {
     console.debug('Failed to persist chat chain (non-fatal):', err);

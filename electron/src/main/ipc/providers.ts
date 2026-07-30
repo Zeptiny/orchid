@@ -140,7 +140,7 @@ interface ProviderIPCServices {
   readonly connections: Pick<ConnectionStore, 'list' | 'get' | 'create' | 'update'>;
   readonly vault: Pick<CredentialVault,
     'getAvailability' | 'replaceConnectionApiKey' | 'readSecret' | 'deleteConnectionCredentials'>;
-  readonly status: Pick<ProviderStatusService, 'get' | 'refresh'>;
+  readonly status: Pick<ProviderStatusService, 'get' | 'list' | 'refresh' | 'invalidate'>;
   readonly registry: ProviderDriverRegistry;
 }
 
@@ -310,6 +310,7 @@ function connectionView(
 function statusView(observation: ProviderStatusObservation): ProviderStatusView {
   return {
     providerId: observation.providerId,
+    ...(observation.connectionId ? { connectionId: observation.connectionId } : {}),
     observedAt: observation.observedAt,
     providerUpdatedAt: observation.providerUpdatedAt,
     availability: observation.availability,
@@ -339,9 +340,10 @@ async function overview(): Promise<ProviderOverview> {
       activeSessionsForProviderConnection(connection.id).length,
     ]),
   );
-  const statuses = definitions
-    .map((definition) => current.status.get(definition.id))
-    .filter((value): value is ProviderStatusObservation => value !== undefined)
+  const connectionProviderIds = new Map(connections.map((connection) => [connection.id, connection.providerId]));
+  const statuses = current.status.list()
+    .filter((observation) => observation.connectionId === undefined
+      || connectionProviderIds.get(observation.connectionId) === observation.providerId)
     .map(statusView);
   return {
     definitions: definitions.map((definition) => definitionView(definition, current.registry)),
@@ -438,6 +440,18 @@ function credentialBinding(connection: ProviderConnection, current = services())
     authMethod: connection.authMethod,
     origin: credentialOrigin(connection, current),
   });
+}
+
+/** Compare only the reference that selects an account, never its secret value. */
+function sameCredentialIdentity(left: ProviderConnection, right: ProviderConnection): boolean {
+  if (left.authMethod !== right.authMethod || left.credential.kind !== right.credential.kind) return false;
+  if (left.credential.kind === 'stored' && right.credential.kind === 'stored') {
+    return left.credential.handle === right.credential.handle;
+  }
+  if (left.credential.kind === 'environment' && right.credential.kind === 'environment') {
+    return left.credential.variable === right.credential.variable;
+  }
+  return true;
 }
 
 /** Return a safe readiness explanation without rendering any secret material. */
@@ -705,7 +719,10 @@ export function registerProviderIPC(): void {
       ) {
         Object.assign(patch, { credential: { kind: 'none' as const }, health: 'draft' });
       }
-      await current.connections.update(existing.id, patch);
+      const updated = await current.connections.update(existing.id, patch);
+      if (!sameCredentialIdentity(existing, updated)) {
+        current.status.invalidate(existing.providerId, existing.id);
+      }
       return validateConnection(existing.id);
     });
   });
@@ -730,10 +747,13 @@ export function registerProviderIPC(): void {
         credentialBinding(connection, current),
         parsed.data.apiKey,
       );
-      await current.connections.update(connection.id, {
+      const updated = await current.connections.update(connection.id, {
         credential: { kind: 'stored', handle },
         health: 'draft',
       });
+      if (!sameCredentialIdentity(connection, updated)) {
+        current.status.invalidate(connection.providerId, connection.id);
+      }
       // CAS cleanup: if health became disconnected after the connection write
       // (should not happen under this lock, but re-check and erase the key).
       const afterWrite = await requireConnection(connection.id);
@@ -822,6 +842,9 @@ export function registerProviderIPC(): void {
         credential: { kind: 'none' },
         health: 'disconnected',
       });
+      if (!sameCredentialIdentity(connection, updated)) {
+        current.status.invalidate(connection.providerId, connection.id);
+      }
       return {
         connection: connectionView(updated, current.catalog.getProviderDefinitions()),
         message: stoppedSessionIds.length > 0
@@ -885,7 +908,7 @@ async function refreshStatus(
     throw new Error('The requested connection does not belong to Neuralwatt');
   }
   const apiKey = await readApiKeyForTrustedStatus(connection, current);
-  return (await current.status.refresh(createNeuralwattStatusSource(apiKey), { manual: true })).observation;
+  return (await current.status.refresh(createNeuralwattStatusSource(connection.id, apiKey), { manual: true })).observation;
 }
 
 async function readApiKeyForTrustedStatus(

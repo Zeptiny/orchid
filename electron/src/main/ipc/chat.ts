@@ -66,8 +66,8 @@ import {
   type ActiveAgent,
 } from './chat/state';
 import {
-  canSend,
   emitSessionUpdated,
+  sendSessionEvent,
   sendChatState,
   sendTurnEvent,
   webContentsForWindowId,
@@ -516,8 +516,8 @@ export function registerChatIPC(): void {
         sessionManager
           .autoName(sessionId, generateTitle)
           .then((updated) => {
-            if (updated && canSend(webContents)) {
-              webContents.send(IPC_CHANNELS.SESSION_RENAMED, {
+            if (updated) {
+              sendSessionEvent(webContents, sessionId, IPC_CHANNELS.SESSION_RENAMED, {
                 id: updated.id,
                 name: updated.name,
               });

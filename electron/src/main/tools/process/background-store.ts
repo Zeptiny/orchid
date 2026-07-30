@@ -66,6 +66,28 @@ export interface ProcessEntry {
   description: string;
 }
 
+type BackgroundProcessChangeListener = (sessionId: string | null) => void;
+
+const backgroundProcessChangeListeners = new Set<BackgroundProcessChangeListener>();
+
+function emitBackgroundProcessChange(sessionId: string | null): void {
+  for (const listener of backgroundProcessChangeListeners) {
+    try {
+      listener(sessionId);
+    } catch (err) {
+      console.debug('Background-process change listener failed (non-fatal):', err);
+    }
+  }
+}
+
+/** Subscribe to process starts and terminal/removal transitions. */
+export function subscribeBackgroundProcessChanges(
+  listener: BackgroundProcessChangeListener,
+): () => void {
+  backgroundProcessChangeListeners.add(listener);
+  return () => backgroundProcessChangeListeners.delete(listener);
+}
+
 // ---------------------------------------------------------------------------
 // BackgroundProcessStore
 // ---------------------------------------------------------------------------
@@ -123,6 +145,7 @@ export class BackgroundProcessStore {
         entry.exitCode = e.exitCode;
         dataDisposable.dispose();
         exitDisposable.dispose();
+        emitBackgroundProcessChange(sessionId);
       });
 
       proc = ptyProc;
@@ -151,9 +174,13 @@ export class BackgroundProcessStore {
 
       childProc.on('exit', (code) => {
         entry.exitCode = code ?? -1;
+        emitBackgroundProcessChange(sessionId);
       });
       childProc.on('error', () => {
-        if (entry.exitCode === null) entry.exitCode = -1;
+        if (entry.exitCode === null) {
+          entry.exitCode = -1;
+          emitBackgroundProcessChange(sessionId);
+        }
       });
 
       proc = childProc;
@@ -175,6 +202,7 @@ export class BackgroundProcessStore {
       description,
     };
     this._entries.set(procId, entry);
+    emitBackgroundProcessChange(sessionId);
 
     this.pruneIfNeeded();
 
@@ -400,6 +428,9 @@ export class BackgroundProcessStore {
     const entry = this._entries.get(procId);
     if (!entry) return;
     this._entries.delete(procId);
+    if (entry.exitCode === null) {
+      emitBackgroundProcessChange(entry.sessionId);
+    }
 
     // Force-kill the process if still running
     if (entry.exitCode === null) {
@@ -430,8 +461,12 @@ export class BackgroundProcessStore {
   // -- cleanup -------------------------------------------------------------
 
   clear(): void {
+    const running = [...this._entries.values()].filter((entry) => entry.exitCode === null);
     this.terminateAll();
     this._entries.clear();
+    for (const entry of running) {
+      emitBackgroundProcessChange(entry.sessionId);
+    }
   }
 }
 

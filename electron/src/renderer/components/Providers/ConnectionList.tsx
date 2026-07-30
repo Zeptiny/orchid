@@ -9,7 +9,10 @@ import type {
   ProviderStatusRefreshMessage,
   ProviderStatusView,
 } from '../../../shared/types/ipc';
-import { providerStatusConnectionId } from '../../utils/provider-selection';
+import {
+  providerStatusForConnection,
+  providerStatusIsConnectionScoped,
+} from '../../utils/provider-selection';
 import { Icon } from '../Icon';
 import { Alert } from '../ui/Alert';
 import { Button } from '../ui/Button';
@@ -179,11 +182,10 @@ export function ConnectionList({
           const canValidate =
             connection.health === 'draft' || connection.health === 'needs_attention';
           const definition = definitions.find((candidate) => candidate.id === connection.providerId);
-          const status = statuses.find((candidate) => candidate.providerId === connection.providerId);
-          const showsProviderStatus = providerStatusConnectionId(
-            connections,
-            connection.providerId,
-          ) === connection.id;
+          const status = providerStatusForConnection(connections, connection, statuses);
+          const showsProviderStatus = status !== undefined
+            || (providerStatusIsConnectionScoped(connection.providerId)
+              && connection.credentialKind !== 'none');
           return (
             <ConfigCard key={connection.id}>
               <ConfigCard.Body className="flex flex-col gap-4">

@@ -150,7 +150,7 @@ describe('provider onboarding and disconnected UX', () => {
     expect(status).toContain('Informational only');
     expect(providersTab).not.toContain('<ProviderStatus');
     expect(connections).toContain('<ProviderStatus');
-    expect(connections).toContain('providerStatusConnectionId');
+    expect(connections).toContain('providerStatusForConnection');
   });
 
   it('manages connection settings and models through one edit modal', () => {

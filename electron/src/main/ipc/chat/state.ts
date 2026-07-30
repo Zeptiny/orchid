@@ -101,6 +101,12 @@ export function nextAgentGeneration(sessionId: string): number {
   return gen;
 }
 
+/** Whether a session still has a cancellable main-agent turn. */
+export function hasLiveMainTurn(sessionId: string): boolean {
+  const active = activeAgents.get(sessionId);
+  return active != null && !active.agentCancelled && !active.finalized;
+}
+
 /**
  * Whether this agent may still stream IPC to the renderer.
  * Drops events from cancelled, finalized, replaced, or generation-stale agents.

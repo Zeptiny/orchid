@@ -7,6 +7,36 @@ export function canSend(webContents: WebContents): boolean {
   return typeof webContents.isDestroyed !== 'function' || !webContents.isDestroyed();
 }
 
+/**
+ * Send a durable session event to every window that still has that session
+ * selected. The source window is deliberately subject to the same check: a
+ * delayed persistence or title update must not revive a session it left.
+ */
+export function sendSessionEvent(
+  source: WebContents | null,
+  sessionId: string,
+  channel: string,
+  payload: Record<string, unknown>,
+): void {
+  const recipients = new Map<number, WebContents>();
+  const addIfSelected = (candidate: WebContents): void => {
+    if (getSessionManager().getActive(String(candidate.id))?.id === sessionId) {
+      recipients.set(candidate.id, candidate);
+    }
+  };
+
+  if (source) addIfSelected(source);
+  for (const candidate of electronWebContents.getAllWebContents?.() ?? []) {
+    addIfSelected(candidate);
+  }
+
+  for (const recipient of recipients.values()) {
+    if (canSend(recipient)) {
+      recipient.send(channel, payload);
+    }
+  }
+}
+
 /** Resolve WebContents for a window id (forceAbort / SESSION_UPDATED). */
 export function webContentsForWindowId(windowId: string): WebContents | null {
   try {
@@ -82,8 +112,8 @@ export function sendChatState(
 export function emitSessionUpdated(webContents: WebContents, sessionId: string): void {
   try {
     const session = getSessionManager().getSession(sessionId);
-    if (session && canSend(webContents)) {
-      webContents.send(IPC_CHANNELS.SESSION_UPDATED, { session });
+    if (session) {
+      sendSessionEvent(webContents, sessionId, IPC_CHANNELS.SESSION_UPDATED, { session });
     }
   } catch {
     // non-fatal
