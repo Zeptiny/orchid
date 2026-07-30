@@ -45,6 +45,7 @@ import {
   executeToolCall,
   type ToolDispatchOptions,
 } from './tool-dispatch';
+import { EagerToolExecutor } from './eager-tool-executor';
 import {
   finalizeToolExecutionResult,
   genericAgentProjector,
@@ -462,6 +463,10 @@ export async function* streamChat(params: StreamChatParams): AsyncGenerator<Stre
     ? lastUserMessage.content
     : '';
 
+  // Eager execution: tools start as soon as their input is streamed, before the
+  // model finishes the step. The executor lives across idle-retry attempts;
+  // toolCallIds are unique, so stale in-flight entries never collide.
+  const eagerExecutor = new EagerToolExecutor();
   const tools = buildToolMap(agent.allowed_tools, registry, mcpManager, {
     sessionId,
     windowId,
@@ -476,7 +481,7 @@ export async function* streamChat(params: StreamChatParams): AsyncGenerator<Stre
       ? new Map(projectRuntime.skills)
       : getSkillsRegistry(),
     allowedSkills: agent.allowed_skills,
-  });
+  }, eagerExecutor);
   const buildUsageContext = createContextSnapshotBuilder(fullSystemPrompt, tools);
 
   // ── Compose middleware ──
@@ -753,6 +758,11 @@ export async function* streamChat(params: StreamChatParams): AsyncGenerator<Stre
               if (toolCallId && !seenToolCallIds.has(toolCallId)) {
                 seenToolCallIds.add(toolCallId);
                 deliveredAny = true;
+                // Start executing now, while the model keeps generating other
+                // tool calls. Provider-executed tools run remotely — skip them.
+                if (part.providerExecuted !== true) {
+                  eagerExecutor.start(toolCallId, toolName, part.input ?? part.args);
+                }
                 yield { type: 'tool_call', toolCallId, toolName, args };
               }
               break;
@@ -993,6 +1003,12 @@ export interface BuildToolMapSkillOptions {
  * When `skillOptions.skills` is provided and `skill` is in the map, the skill
  * tool is rebuilt with `allowedSkills` so restricted agents cannot load skills
  * outside their allowlist.
+ *
+ * When `eager` is provided, each tool registers a launcher (bound to its own
+ * registry and the frozen `dispatchOptions`) and its `execute` becomes a shim
+ * that awaits the pre-started in-flight promise. This lets a tool begin
+ * executing as soon as its input is streamed, before the model finishes the
+ * step. Without `eager`, `execute` runs `executeToolCall` directly as before.
  */
 export function buildToolMap(
   allowedTools: readonly string[],
@@ -1000,6 +1016,7 @@ export function buildToolMap(
   mcpManager: MCPManager | null,
   dispatchOptions: ToolDispatchOptions,
   skillOptions?: BuildToolMapSkillOptions,
+  eager?: EagerToolExecutor,
 ): Record<string, Tool> {
   // Use a loose record internally to avoid TS2589 (excessively deep
   // instantiation) from Tool's conditional generic types, then assert to
@@ -1016,6 +1033,13 @@ export function buildToolMap(
     if (!outputSchema) {
       throw new TypeError(`No execution schema registered for tool '${definition.name}'`);
     }
+    eager?.registerLauncher(definition.name, (toolCallId, input) =>
+      executeToolCall(
+        { id: toolCallId, name: definition.name, args: input },
+        registry,
+        dispatchOptions,
+      ),
+    );
     toolMap[definition.name] = {
       description: definition.description,
       inputSchema: definition.inputSchema,
@@ -1024,6 +1048,8 @@ export function buildToolMap(
         args: unknown,
         executionOptions: { toolCallId: string; abortSignal?: AbortSignal },
       ) => {
+        const inflight = eager?.getOrStart(executionOptions.toolCallId, definition.name, args);
+        if (inflight) return inflight;
         return executeToolCall(
           {
             id: executionOptions.toolCallId,
@@ -1058,6 +1084,13 @@ export function buildToolMap(
     if (!outputSchema) {
       throw new TypeError(`No execution schema registered for tool '${definition.name}'`);
     }
+    eager?.registerLauncher(definition.name, (toolCallId, input) =>
+      executeToolCall(
+        { id: toolCallId, name: definition.name, args: input },
+        skillRegistry,
+        dispatchOptions,
+      ),
+    );
     toolMap.skill = {
       description: definition.description,
       inputSchema: definition.inputSchema,
@@ -1066,6 +1099,8 @@ export function buildToolMap(
         args: unknown,
         executionOptions: { toolCallId: string; abortSignal?: AbortSignal },
       ) => {
+        const inflight = eager?.getOrStart(executionOptions.toolCallId, definition.name, args);
+        if (inflight) return inflight;
         return executeToolCall(
           {
             id: executionOptions.toolCallId,
@@ -1115,6 +1150,13 @@ export function buildToolMap(
         throw new TypeError(`No execution schema registered for MCP tool '${internalName}'`);
       }
 
+      eager?.registerLauncher(internalName, (toolCallId, input) =>
+        executeToolCall(
+          { id: toolCallId, name: internalName, args: input },
+          dynamicRegistry,
+          dispatchOptions,
+        ),
+      );
       toolMap[providerName] = {
         description: definition.description,
         inputSchema: definition.rawInputJsonSchema
@@ -1127,6 +1169,8 @@ export function buildToolMap(
             toolCallId: crypto.randomUUID(),
           },
         ) => {
+          const inflight = eager?.getOrStart(executionOptions.toolCallId, internalName, args);
+          if (inflight) return inflight;
           return executeToolCall(
             {
               id: executionOptions.toolCallId,
