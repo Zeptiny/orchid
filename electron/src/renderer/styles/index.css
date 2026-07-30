@@ -8,7 +8,6 @@
  * 4. Shared motion vocabulary
  * 5. Markdown / highlight exceptions
  * 6. Browser/runtime exceptions
- * 7. Residual chat.css compatibility bridge (header-only, frozen)
  *
  * Runtime themes load separately via applyTheme() (themes/*.css + data-theme).
  * Theme files override the `--color-*` / `--radius-*` tokens declared in the
@@ -23,7 +22,6 @@
 @import "./motion.css";
 @import "./markdown.css";
 @import "./exceptions.css";
-@import "./chat.css";
 
 /* ── Design tokens ──────────────────────────────────────────────────────────
  * Fallback values mirror the default (dark) theme. The runtime theme

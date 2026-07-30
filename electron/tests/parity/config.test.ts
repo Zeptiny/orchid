@@ -87,7 +87,6 @@ const EXPECTED_FIELDS: ConfigFieldExpectation[] = [
     envOverride: 'ORCHID_MCP_PER_SERVER_TIMEOUT',
   },
   { field: 'mcp_servers', type: 'record', defaultValue: undefined }, // complex default
-  { field: 'providers', type: 'record', defaultValue: undefined }, // complex default
   {
     field: 'llm_stream_idle_timeout',
     type: 'number',
@@ -324,7 +323,6 @@ describe('Config Parity', () => {
       expect(cfg).toHaveProperty('mcp_startup_timeout');
       expect(cfg).toHaveProperty('mcp_per_server_timeout');
       expect(cfg).toHaveProperty('mcp_servers');
-      expect(cfg).toHaveProperty('providers');
       expect(cfg).toHaveProperty('llm_stream_idle_timeout');
       expect(cfg).toHaveProperty('llm_stream_retries');
       expect(cfg).toHaveProperty('background_command_idle_timeout');
@@ -385,11 +383,11 @@ describe('Config Parity', () => {
       expect(cfg.subagents).toHaveProperty('prompt_task_max_chars');
     });
 
-    it('top-level field count matches expected (47 top-level + 12 rag + 7 agents_md + 11 subagents nested fields)', () => {
+    it('top-level field count matches expected (46 top-level + 12 rag + 7 agents_md + 11 subagents nested fields)', () => {
       const cfg = defaults();
       // Top-level keys count
       const topLevelKeys = Object.keys(cfg);
-      expect(topLevelKeys).toHaveLength(47); // 47 top-level fields (rag, agents_md, subagents are nested)
+      expect(topLevelKeys).toHaveLength(46); // 46 top-level fields (rag, agents_md, subagents are nested)
 
       // RAG nested keys count
       const ragKeys = Object.keys(cfg.rag);
@@ -464,11 +462,6 @@ describe('Config Parity', () => {
       const cfg = defaults();
       expect(cfg.mcp_servers).toEqual({});
     });
-
-    it('providers remains an empty deprecated compatibility map', () => {
-      const cfg = defaults();
-      expect(cfg.providers).toEqual({});
-    });
   });
 
   describe('field types', () => {
@@ -511,7 +504,6 @@ describe('Config Parity', () => {
       const cfg = defaults();
       expect(typeof cfg.tier_models).toBe('object');
       expect(typeof cfg.mcp_servers).toBe('object');
-      expect(typeof cfg.providers).toBe('object');
     });
   });
 

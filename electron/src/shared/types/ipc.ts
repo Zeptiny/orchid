@@ -38,7 +38,6 @@ import type {
   SessionSummary,
   SessionActivity,
   Config,
-  ConfigDiagnostic,
   MCPServerStatus,
   RAGStoreStatus,
   ASTStoreStatus,
@@ -71,7 +70,6 @@ export type {
   SessionSummary,
   SessionActivity,
   Config,
-  ConfigDiagnostic,
   MCPServerStatus,
   RAGStoreStatus,
   ASTStoreStatus,
@@ -359,8 +357,6 @@ export type ConfigPatch = {
   mcp_startup_timeout?: number;
   mcp_per_server_timeout?: number;
   mcp_servers?: ConfigPatchMap<Record<string, unknown>>;
-  /** Rejected at the main boundary; kept for draft tombstone helpers only. */
-  providers?: ConfigPatchMap<Record<string, unknown>>;
   llm_stream_idle_timeout?: number;
   llm_stream_retries?: number;
   background_command_idle_timeout?: number;
@@ -903,7 +899,6 @@ export interface OrchidAPI {
 
   config: {
     get: () => Promise<Config>;
-    diagnostics: () => Promise<ConfigDiagnostic[]>;
     save: (updates: ConfigSaveMessage) => Promise<{ status: string }>;
     permissionScopes: () => Promise<PermissionConfigScopes>;
     savePermissionScope: (message: PermissionConfigScopeSaveMessage) => Promise<{ status: string }>;

@@ -15,8 +15,6 @@
  * chunks to parent). Tool calls are handled inside the provider stream.
  *
  * Integrates with `streamChat` from U9 (electron/src/main/llm/orchestrator.ts).
- *
- * Ported from Python `src/orchid/agents/manager.py` and `src/orchid/app.py`.
  */
 
 import { assign, setup, fromCallback, type ActorRefFrom } from 'xstate';

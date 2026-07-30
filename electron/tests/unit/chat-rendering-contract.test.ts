@@ -330,7 +330,6 @@ describe('chat rendering contract (U5)', () => {
       expect(src).toMatch(/currentTurnUsage/);
       expect(src).toMatch(/usage:\s*status === 'streaming'\s*\?\s*currentTurnUsage/);
       expect(src).toMatch(/isLastChain \? liveUsage \?\? chainUsage/);
-      expect(src).toMatch(/isLastTurn\s*\?\s*liveUsage \?\? turnLastAssistantUsage/);
       // Must not gate live usage on idle/error only (regression: mid-stream stuck).
       expect(src).not.toMatch(
         /status === 'idle' \|\| status === 'error' \|\| interrupted\)\s*\?\s*liveUsage/,

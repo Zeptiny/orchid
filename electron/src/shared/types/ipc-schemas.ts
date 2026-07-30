@@ -304,7 +304,7 @@ export const subagentLiveProjectionSchema = z.object({
   segments: z.array(subagentLiveSegmentSchema), toolCalls: z.array(subagentToolSchema),
   usage: usageSchema.nullable(), result: z.string().nullable(), error: z.string().nullable(),
 });
-export const subagentRecordSchema = z.object({
+export const ipcSubagentRecordSchema = z.object({
   id: z.string(), agent_name: z.string(), agent_type: z.string(), agent_tier: z.string(),
   task: z.string(), status: subagentStatusSchema,
   chain_id: z.string(), start_time: z.string(), end_time: z.string().nullable(),
@@ -316,7 +316,7 @@ export const subagentRecordSchema = z.object({
 export const subagentSnapshotSchema = z.object({
   sessionId: z.string().uuid(),
   sessionRevision: z.number().int().nonnegative(),
-  records: z.array(subagentRecordSchema),
+  records: z.array(ipcSubagentRecordSchema),
   live: z.array(subagentLiveProjectionSchema),
 });
 
@@ -330,7 +330,7 @@ const subagentDeltaBaseSchema = z.object({
   sessionRevision: z.number().int().nonnegative(),
 });
 export const subagentSpawnedEventSchema = subagentDeltaBaseSchema.extend({
-  type: z.literal('spawned'), record: subagentRecordSchema, usage: usageSchema.nullable(),
+  type: z.literal('spawned'), record: ipcSubagentRecordSchema, usage: usageSchema.nullable(),
 });
 export const subagentTextDeltaEventSchema = subagentDeltaBaseSchema.extend({
   type: z.literal('text_delta'), segmentId: z.string(), append: z.string(),
@@ -355,7 +355,7 @@ export const subagentUsageEventSchema = subagentDeltaBaseSchema.extend({
   type: z.literal('usage'), usage: usageSchema,
 });
 export const subagentTerminalEventSchema = subagentDeltaBaseSchema.extend({
-  type: z.literal('terminal'), record: subagentRecordSchema,
+  type: z.literal('terminal'), record: ipcSubagentRecordSchema,
   state: z.enum(['completed', 'failed', 'interrupted']), usage: usageSchema.nullable(),
 });
 export const subagentDeltaEventSchema = z.discriminatedUnion('type', [

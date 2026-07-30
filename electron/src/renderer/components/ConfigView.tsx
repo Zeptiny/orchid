@@ -11,7 +11,6 @@ import type { ComponentType, LazyExoticComponent } from 'react';
 import type { DefinitionsListResult } from '../../shared/types/definitions';
 import type { Config, PermissionRule } from '../../shared/types/ipc-boundary';
 import type {
-  ConfigDiagnostic,
   ConfigPatch,
   ConfigPatchMap,
   PermissionConfigScope,
@@ -154,7 +153,6 @@ export function ConfigView({ onClose, initialTab = 'general' }: ConfigViewProps)
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [diagnostics, setDiagnostics] = useState<ConfigDiagnostic[]>([]);
   const [originalConfig, setOriginalConfig] = useState<Config | null>(null);
   const [draft, setDraft] = useState<ConfigPatch>({});
   const [permissionScope, setPermissionScope] = useState<PermissionConfigScope>('global');
@@ -285,23 +283,18 @@ export function ConfigView({ onClose, initialTab = 'general' }: ConfigViewProps)
     setError(null);
     setDraft({});
     setProjectPermissionDrafts({});
-    setDiagnostics([]);
 
     async function loadConfig() {
       try {
         if (!window.orchid?.config?.get) throw new Error('Configuration API is not available.');
-        const [config, diagnostics] = await Promise.all([
+        const [config] = await Promise.all([
           window.orchid.config.get(),
-          window.orchid.config.diagnostics
-            ? window.orchid.config.diagnostics()
-            : Promise.resolve([]),
           // Warm provider + model caches so Providers / Tier Models tabs
           // can switch without an intermediate empty frame.
           providers.ensureModelList().catch(() => undefined),
         ]);
         if (!cancelled) {
           setOriginalConfig(config);
-          setDiagnostics(diagnostics);
           setLoading(false);
         }
       } catch {
@@ -473,15 +466,11 @@ export function ConfigView({ onClose, initialTab = 'general' }: ConfigViewProps)
         const refreshGeneration = permissionScopeRequests.current.begin();
         setProjectScopeLoading(true);
         try {
-          const [fresh, diagnostics, scopes] = await Promise.all([
+          const [fresh, scopes] = await Promise.all([
             window.orchid.config.get(),
-            window.orchid.config.diagnostics
-              ? window.orchid.config.diagnostics()
-              : Promise.resolve([]),
             window.orchid.config.permissionScopes?.() ?? Promise.resolve(permissionScopes),
           ]);
           setOriginalConfig({ ...fresh, permissions: fresh.permissions });
-          setDiagnostics(diagnostics);
           window.dispatchEvent(
             new CustomEvent('orchid:config-updated', { detail: fresh }),
           );
@@ -647,18 +636,6 @@ export function ConfigView({ onClose, initialTab = 'general' }: ConfigViewProps)
             {error}
           </Alert>
         )}
-
-        {diagnostics.map((diagnostic) => (
-          <Alert
-            key={diagnostic.code}
-            tone="warning"
-            className="rounded-none py-2.5 text-sm"
-            icon="alert"
-            iconSize={14}
-          >
-            {diagnostic.message}
-          </Alert>
-        ))}
 
         <Tabs
           items={tabItems}

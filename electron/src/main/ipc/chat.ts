@@ -797,13 +797,6 @@ export function ensureActiveSession(
 
   if (active) {
     const selectedNow = manager.getActive(windowId)?.id === active.id;
-    // Legacy sessions may have null/empty cwd while the window workspace is
-    // bound via sticky/draft. Persist that cwd only when this window has the
-    // session selected (changeCwd requires selection; never switchTo to force it).
-    if (selectedNow && (!active.cwd || active.cwd.trim() === '')) {
-      manager.changeCwd(active.id, boundCwd);
-      active = manager.getSession(active.id) ?? { ...active, cwd: boundCwd };
-    }
     if (preferredModel && (
       active.selection?.connectionId !== preferredModel.connectionId
       || active.selection?.modelId !== preferredModel.modelId

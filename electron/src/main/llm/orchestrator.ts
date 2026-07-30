@@ -1,8 +1,7 @@
 /**
  * LLM stream orchestrator — the core agentic loop.
  *
- * Replicates Python `stream_response` (client.py:1018-1175) using AI SDK's
- * `streamText` with `tools` and `maxSteps` for multi-step tool calling.
+ * Uses AI SDK's `streamText` with `tools` and `maxSteps` for multi-step tool calling.
  *
  * Design:
  * - Uses AI SDK's `streamText` with `maxSteps` for multi-step agentic loop
@@ -457,7 +456,7 @@ export async function* streamChat(params: StreamChatParams): AsyncGenerator<Stre
 
   // ── Filter and build tools ──
   // Freeze session cwd from prompt context so tools match the turn's workspace.
-  // Rebuild skill tool with this agent's allowed_skills (Python per-stream filter).
+  // Rebuild skill tool with this agent's allowed_skills (per-stream filter).
   const lastUserMessage = [...messages].reverse().find((m) => m.role === 'user');
   const triggeringMessage = typeof lastUserMessage?.content === 'string'
     ? lastUserMessage.content
@@ -492,11 +491,11 @@ export async function* streamChat(params: StreamChatParams): AsyncGenerator<Stre
     middleware,
   });
 
-  // ── Determine max steps (config; Python loop is unbounded) ──
+  // ── Determine max steps (config) ──
   const maxSteps = config.max_tool_steps ?? 100;
 
   // ── Idle timeout ──
-  // Python only idles while waiting on LLM tokens — not during tool execution.
+  // Only idles while waiting on LLM tokens — not during tool execution.
   // Pause the watchdog on tool-input-available; re-arm when the model streams again.
   // Retry the whole stream attempt if idle fires before any content/tool was delivered.
   // Min 1ms so a zero/negative config cannot arm a no-op timer.
@@ -741,7 +740,7 @@ export async function* streamChat(params: StreamChatParams): AsyncGenerator<Stre
               break;
             }
 
-            // Args complete → tool is about to execute — pause idle (Python parity)
+            // Args complete → tool is about to execute — pause idle
             case 'tool-input-available':
             case 'tool-call': {
               pauseIdleForTool();
@@ -993,7 +992,7 @@ export interface BuildToolMapSkillOptions {
  *
  * When `skillOptions.skills` is provided and `skill` is in the map, the skill
  * tool is rebuilt with `allowedSkills` so restricted agents cannot load skills
- * outside their allowlist (Python `build_skill_tool(allowed_skills)` parity).
+ * outside their allowlist.
  */
 export function buildToolMap(
   allowedTools: readonly string[],

@@ -794,14 +794,12 @@ describe('CSS Structure', () => {
   const path = require('node:path');
 
   const stylesDir = path.resolve(__dirname, '../../src/renderer/styles');
-  const chatCssPath = path.join(stylesDir, 'chat.css');
   const componentsCssPath = path.join(stylesDir, 'components.css');
   const shellCssPath = path.join(stylesDir, 'shell.css');
   const exceptionsCssPath = path.join(stylesDir, 'exceptions.css');
 
   function readStyles(): string {
     return [
-      fs.readFileSync(chatCssPath, 'utf-8'),
       fs.readFileSync(componentsCssPath, 'utf-8'),
       fs.readFileSync(shellCssPath, 'utf-8'),
       fs.readFileSync(exceptionsCssPath, 'utf-8'),
@@ -813,7 +811,6 @@ describe('CSS Structure', () => {
     expect(fs.existsSync(componentsCssPath)).toBe(true);
     expect(fs.existsSync(shellCssPath)).toBe(true);
     expect(fs.existsSync(exceptionsCssPath)).toBe(true);
-    expect(fs.existsSync(chatCssPath)).toBe(true);
   });
 
   it('shell layout classes remain in style layers', () => {

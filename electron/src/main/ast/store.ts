@@ -3,17 +3,11 @@
  *
  * Uses `better-sqlite3` with WAL mode for concurrent read access.
  * Tables: files, symbols, meta. Corruption recovery on open.
- *
- * Ported from Python `src/orchid/ast/store.py`.
  */
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { openSqliteDb, deleteSqliteDb, type SqliteDatabase } from '../utils/sqlite';
 import type { ASTStoreStatus } from '../../shared/types/ipc-boundary';
-
-export type { ASTStoreStatus } from '../../shared/types/ipc-boundary';
-/** @deprecated Use ASTStoreStatus from shared/types/ipc-boundary */
-export type StoreStatus = ASTStoreStatus;
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -147,7 +141,6 @@ export class ASTStore {
   upsertFile(filePath: string, fileHash: string, symbols: Symbol[]): void {
     const db = this.getConn();
     // Disable FK checks to allow inserting symbols before the file record
-    // (matches Python behavior where FK enforcement is off by default).
     db.pragma('foreign_keys = OFF');
 
     const deleteStmt = db.prepare('DELETE FROM symbols WHERE file_path = ?');
@@ -283,7 +276,7 @@ export class ASTStore {
   /**
    * Get store status (file count, symbol count, last indexed time).
    */
-  status(): StoreStatus {
+  status(): ASTStoreStatus {
     if (!fs.existsSync(this.dbPath)) {
       return { totalFiles: 0, totalSymbols: 0, lastIndexed: null, lastIndexDuration: null };
     }

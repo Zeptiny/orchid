@@ -26,7 +26,6 @@ export function getToolOutputInlineThreshold(): number {
 
 /**
  * Tools exempt from output offloading.
- * Matches Python `_TOOLS_WITHOUT_OUTPUT_OFFLOAD` (client.py:47).
  */
 export const TOOLS_WITHOUT_OUTPUT_OFFLOAD = new Set([
   'read',

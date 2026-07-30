@@ -6,7 +6,6 @@
  *   user → tool → message → tool → tool → message → …
  *
  * Multi-chain: one footer per session chain (model · usage · elapsed).
- * Legacy mega-chains (single chain, many user turns) keep per-user footers.
  * Live stream segments (while streaming) continue after committed history.
  */
 import { useRef, useEffect, useCallback, useState, useMemo, type ReactNode } from 'react';
@@ -14,7 +13,6 @@ import type { Chain } from '../../shared/types/chain';
 import {
   ChainStatus,
   chainElapsedSeconds,
-  isLegacyMegaChain,
   isTerminalChainStatus,
   sumChainUsage,
 } from '../../shared/types/chain';
@@ -50,7 +48,7 @@ import { shouldAutoScroll } from '../hooks/useSmartAutoScroll';
 
 export { AUTO_SCROLL_THRESHOLD_PX, isUserScrolledAwayFromBottom, shouldAutoScroll } from '../hooks/useSmartAutoScroll';
 
-/** Maximum fully-mounted chains; older ones collapse to stubs (Python parity). */
+/** Maximum fully-mounted chains; older ones collapse to stubs. */
 export const CHAIN_COLLAPSE_THRESHOLD = 20;
 
 /** Live tool arguments belong to the cheap tail, not the committed-history memo. */
@@ -589,16 +587,7 @@ function buildHistoryStreamItems(opts: {
   interrupted: boolean;
   expandedChainIndexes: ReadonlySet<number>;
 }): HistoryBuildResult {
-  const { sessionChains } = opts;
-  // True multi-chain sessions: one storage chain per user turn.
-  // Legacy mega-chains keep the old per-user-turn footer heuristics.
-  if (
-    sessionChains.length > 0 &&
-    !isLegacyMegaChain(sessionChains)
-  ) {
-    return buildMultiChainHistoryStreamItems(opts);
-  }
-  return buildLegacyPerUserTurnHistory(opts);
+  return buildMultiChainHistoryStreamItems(opts);
 }
 
 /**
@@ -851,333 +840,6 @@ function walkMessagesToItems(
 }
 
 /**
- * Legacy mega-chain / no-chain fallback: one footer per user turn via
- * content fingerprint matching against sessionChains when available.
- */
-function buildLegacyPerUserTurnHistory(opts: {
-  messages: Message[];
-  toolBlocks: ToolBlock[];
-  status: ChatStatus;
-  liveUsage: Usage | null;
-  subagentUsage: SubagentUsageSummary;
-  sessionChains: readonly Chain[];
-  interrupted: boolean;
-  expandedChainIndexes?: ReadonlySet<number>;
-}): HistoryBuildResult {
-  const {
-    messages,
-    toolBlocks,
-    status,
-    liveUsage,
-    subagentUsage,
-    sessionChains,
-    interrupted,
-  } = opts;
-
-  const subByParent = subagentUsage.byParentChain;
-  const subTotal = subagentUsage.total;
-  // Ordered user-turn fingerprints → session chain index (ids often missing on restore).
-  const userTurnChainQueue = buildUserTurnChainQueue(sessionChains);
-  let userTurnMatchCursor = 0;
-
-  const visible = messages.filter((m) => !m.hidden);
-  const liveById = new Map(toolBlocks.map((b) => [b.id, b]));
-  const resultByCallId = new Map<string, Message>();
-  for (const m of visible) {
-    if (m.type === MessageType.TOOL_RESULT && m.tool_call_id) {
-      resultByCallId.set(m.tool_call_id, m);
-    }
-  }
-
-  const items: StreamItem[] = [];
-  const consumedResults = new Set<string>();
-  const emittedToolIds = new Set<string>();
-  const liveStreaming = status === 'streaming';
-  let activeFooter: FooterStreamItem | null = null;
-
-  // Track per-turn metadata for footers (still one footer per user turn).
-  let turnIndex = -1;
-  let turnUserId: string | null = null;
-  let turnChainIndex: number | null = null;
-  let turnHasBody = false;
-  let turnLastAssistantUsage: Usage | null = null;
-  let turnItemCountAtStart = 0;
-  /** Chain indexes that already showed their subagent usage on a footer. */
-  const subUsageShownForChain = new Set<number>();
-
-  const keyFor = (msg: Message, kind: string, idx: number) =>
-    msg.id && msg.id.length > 0 ? msg.id : `t${turnIndex}-${kind}-${idx}`;
-
-  const resolveSubUsage = (
-    isLastTurn: boolean,
-    isLastTurnOfParentChain: boolean,
-  ): Usage | null => {
-    // Show sub usage once on the last footer of the parent chain that spawned them.
-    if (
-      isLastTurnOfParentChain &&
-      turnChainIndex != null &&
-      subByParent.has(turnChainIndex) &&
-      !subUsageShownForChain.has(turnChainIndex)
-    ) {
-      return subByParent.get(turnChainIndex) ?? null;
-    }
-    if (isLastTurn) {
-      // Unattributed subagents, or totals not yet shown.
-      const unattributed = subByParent.get(-1) ?? null;
-      if (unattributed) return unattributed;
-      if (subByParent.size === 0) return subTotal;
-      let leftover: Usage | null = null;
-      for (const [idx, u] of subByParent) {
-        if (idx === -1) continue;
-        if (subUsageShownForChain.has(idx)) continue;
-        // Don't double-count the current chain if we're attaching it now
-        if (idx === turnChainIndex && isLastTurnOfParentChain) continue;
-        leftover = leftover
-          ? {
-              prompt_tokens: leftover.prompt_tokens + u.prompt_tokens,
-              completion_tokens: leftover.completion_tokens + u.completion_tokens,
-              total_tokens: leftover.total_tokens + u.total_tokens,
-              cached_tokens: leftover.cached_tokens + u.cached_tokens,
-            }
-          : u;
-      }
-      // Current chain's usage on last turn overall
-      if (
-        turnChainIndex != null &&
-        subByParent.has(turnChainIndex) &&
-        !subUsageShownForChain.has(turnChainIndex)
-      ) {
-        const cur = subByParent.get(turnChainIndex)!;
-        leftover = leftover
-          ? {
-              prompt_tokens: leftover.prompt_tokens + cur.prompt_tokens,
-              completion_tokens: leftover.completion_tokens + cur.completion_tokens,
-              total_tokens: leftover.total_tokens + cur.total_tokens,
-              cached_tokens: leftover.cached_tokens + cur.cached_tokens,
-            }
-          : cur;
-      }
-      return leftover;
-    }
-    return null;
-  };
-
-  const flushFooter = (isLastTurn: boolean, isLastTurnOfParentChain: boolean) => {
-    const isActive = isLastTurn && liveStreaming;
-    const isTerminal = isLastTurn && (status === 'error' || interrupted);
-    if (!shouldRenderChainFooter({
-      isActive,
-      isTerminal,
-      hasBody: turnHasBody,
-      hasUser: isLastTurn && turnUserId != null,
-    })) return;
-
-    // Prefer live usage on the last turn so mid-stream CHAT_USAGE updates the footer.
-    const turnUsage = isLastTurn
-      ? liveUsage ?? turnLastAssistantUsage
-      : turnLastAssistantUsage;
-
-    const subUsage = resolveSubUsage(isLastTurn, isLastTurnOfParentChain);
-    if (subUsage && turnChainIndex != null) {
-      subUsageShownForChain.add(turnChainIndex);
-    }
-
-    // Live elapsed is injected at render for the active footer only.
-    // Completed turns use the matched chain's stored start/end times.
-    const matchedChain =
-      turnChainIndex != null ? sessionChains[turnChainIndex] : undefined;
-    const elapsedSeconds =
-      isActive || !matchedChain?.startTime
-        ? undefined
-        : chainElapsedSeconds(matchedChain);
-
-    const footer: FooterStreamItem = {
-      kind: 'footer',
-      key: `footer-${turnUserId || turnIndex}`,
-      usage: turnUsage,
-      subUsage,
-      elapsedSeconds,
-      interrupted: isLastTurn ? interrupted : false,
-    };
-    if (isActive) {
-      activeFooter = footer;
-    } else {
-      items.push(footer);
-    }
-  };
-
-  const startTurn = (user: Message | null) => {
-    const nextChainIndex = user
-      ? matchUserTurnChain(user, userTurnChainQueue, userTurnMatchCursor)
-      : null;
-
-    // Close previous turn footer if any content was emitted.
-    if (turnIndex >= 0) {
-      // Attach sub usage when leaving a parent chain (or when no next turn).
-      const isLastOfChain =
-        nextChainIndex == null || nextChainIndex !== turnChainIndex;
-      flushFooter(false, isLastOfChain);
-    }
-    turnIndex += 1;
-    turnUserId = user?.id ?? null;
-    turnChainIndex = nextChainIndex;
-    if (turnChainIndex != null) {
-      // Advance cursor past this match so multi-turn chains stay ordered.
-      while (
-        userTurnMatchCursor < userTurnChainQueue.length &&
-        userTurnChainQueue[userTurnMatchCursor].chainIndex !== turnChainIndex
-      ) {
-        userTurnMatchCursor += 1;
-      }
-      if (
-        userTurnMatchCursor < userTurnChainQueue.length &&
-        userTurnChainQueue[userTurnMatchCursor].chainIndex === turnChainIndex
-      ) {
-        userTurnMatchCursor += 1;
-      }
-    }
-    turnHasBody = false;
-    turnLastAssistantUsage = null;
-    turnItemCountAtStart = items.length;
-
-    if (user) {
-      items.push({
-        kind: 'message',
-        key: keyFor(user, 'user', 0),
-        message: user,
-      });
-    }
-  };
-
-  // Ensure we have a turn context even when history starts with non-user msgs.
-  const ensureTurn = () => {
-    if (turnIndex < 0) startTurn(null);
-  };
-
-  const pushTool = (block: ToolBlock, keyPrefix = 'tool') => {
-    if (emittedToolIds.has(block.id)) return;
-    emittedToolIds.add(block.id);
-    ensureTurn();
-    turnHasBody = true;
-    items.push({
-      kind: 'tool',
-      key: block.id || `${keyPrefix}-${turnIndex}-${emittedToolIds.size}`,
-      block,
-    });
-  };
-
-  const pushMessage = (msg: Message, kind: string, idx: number) => {
-    ensureTurn();
-    turnHasBody = true;
-    if (msg.role === MessageRole.ASSISTANT && msg.type === MessageType.TEXT && msg.usage) {
-      turnLastAssistantUsage = msg.usage;
-    }
-    items.push({
-      kind: 'message',
-      key: keyFor(msg, kind, idx),
-      message: msg,
-    });
-  };
-
-  // ── Walk committed history in call/send order ────────────────────────────
-  let msgIdx = 0;
-  for (const m of visible) {
-    if (m.role === MessageRole.USER && m.type === MessageType.TEXT) {
-      startTurn(m);
-      msgIdx += 1;
-      continue;
-    }
-
-    if (m.type === MessageType.THINKING) {
-      pushMessage(m, 'thought', msgIdx++);
-      continue;
-    }
-
-    if (m.type === MessageType.TOOL_CALL) {
-      const callId = m.tool_call_id ?? m.tool_calls?.[0]?.id ?? m.id;
-      const result = resultByCallId.get(callId);
-      if (result) consumedResults.add(callId);
-      // Prefer live block when present (richer generating/running status)
-      // without changing chronological position.
-      const live = liveById.get(callId);
-      pushTool(live ?? messagePairToToolBlock(m, result ?? null));
-      msgIdx += 1;
-      continue;
-    }
-
-    if (m.type === MessageType.TOOL_RESULT) {
-      const callId = m.tool_call_id ?? m.id;
-      if (consumedResults.has(callId)) {
-        msgIdx += 1;
-        continue;
-      }
-      const live = liveById.get(callId);
-      pushTool(live ?? resultOnlyToToolBlock(m));
-      msgIdx += 1;
-      continue;
-    }
-
-    if (m.role === MessageRole.ASSISTANT && m.type === MessageType.TEXT) {
-      if (!m.content?.trim()) {
-        msgIdx += 1;
-        continue;
-      }
-      pushMessage(m, 'asst', msgIdx++);
-      continue;
-    }
-
-    if (m.type === MessageType.ERROR || m.role === MessageRole.SYSTEM) {
-      pushMessage(m, 'other', msgIdx++);
-      continue;
-    }
-
-    if (m.content?.trim()) {
-      pushMessage(m, 'other', msgIdx++);
-    } else {
-      msgIdx += 1;
-    }
-  }
-
-  // Idle but leftover live blocks not yet in history — append in order.
-  // While streaming, these belong in the live tail (buildLiveTailItems).
-  if (!liveStreaming && toolBlocks.length > 0) {
-    for (const block of toolBlocks) {
-      if (!emittedToolIds.has(block.id)) {
-        pushTool(block, 'live');
-      }
-    }
-  }
-
-  // Footer for the final turn, including the active turn while streaming.
-  if (turnIndex >= 0) {
-    // A user-only active turn still gets a footer while it is running.
-    const bodyBeyondUser = items.length > turnItemCountAtStart + (turnUserId ? 1 : 0);
-    if (bodyBeyondUser || turnHasBody || turnUserId != null) {
-      // Recompute: footer if we had tools or assistant content
-      const hasRenderableBody = items
-        .slice(turnItemCountAtStart)
-        .some(
-          (it) =>
-            it.kind === 'tool' ||
-            it.kind === 'tool-group' ||
-            (it.kind === 'message' && it.message.role !== MessageRole.USER),
-        );
-      if (shouldRenderChainFooter({
-        isActive: liveStreaming,
-        isTerminal: status === 'error' || interrupted,
-        hasBody: hasRenderableBody,
-        hasUser: turnUserId != null,
-      })) {
-        turnHasBody ||= hasRenderableBody;
-        flushFooter(true, true);
-      }
-    }
-  }
-
-  return { items, emittedToolIds, activeFooter };
-}
-
-/**
  * Build only the in-flight live tail (stream segments / fallback stream text).
  * Intentionally small so it can recompute cheaply on every token.
  */
@@ -1305,57 +967,6 @@ function buildLiveTailItems(opts: {
     );
   }
   return items;
-}
-
-interface UserTurnFingerprint {
-  content: string;
-  timestamp: string;
-  chainIndex: number;
-}
-
-/** Ordered user turns across session chains for parent_chain_index attribution. */
-function buildUserTurnChainQueue(chains: readonly Chain[]): UserTurnFingerprint[] {
-  const out: UserTurnFingerprint[] = [];
-  chains.forEach((chain, chainIndex) => {
-    for (const m of chain.messages) {
-      if (m.role === MessageRole.USER && m.type === MessageType.TEXT) {
-        out.push({
-          content: m.content ?? '',
-          timestamp: m.timestamp ?? '',
-          chainIndex,
-        });
-      }
-    }
-  });
-  return out;
-}
-
-/**
- * Match a rendered user message to a session chain index.
- * Prefers content+timestamp; falls back to content-only; then sequential order.
- */
-function matchUserTurnChain(
-  user: Message,
-  queue: UserTurnFingerprint[],
-  from: number,
-): number | null {
-  if (queue.length === 0) return null;
-  const content = user.content ?? '';
-  const timestamp = user.timestamp ?? '';
-
-  for (let i = from; i < queue.length; i++) {
-    if (queue[i].content === content && queue[i].timestamp === timestamp) {
-      return queue[i].chainIndex;
-    }
-  }
-  for (let i = from; i < queue.length; i++) {
-    if (queue[i].content === content) {
-      return queue[i].chainIndex;
-    }
-  }
-  // Sequential fallback — user turns appear in chain order after flatten.
-  if (from < queue.length) return queue[from].chainIndex;
-  return null;
 }
 
 function messagePairToToolBlock(call: Message, result: Message | null): ToolBlock {

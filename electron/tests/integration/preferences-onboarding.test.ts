@@ -72,7 +72,6 @@ describe('Config Defaults for Onboarding', () => {
     const config = defaults();
     expect(config).toHaveProperty('default_model');
     expect(config).toHaveProperty('tier_models');
-    expect(config).toHaveProperty('providers');
     expect(config).toHaveProperty('mcp_servers');
     expect(config).toHaveProperty('rag');
     expect(config).toHaveProperty('theme');
@@ -147,7 +146,6 @@ describe('Local-only onboarding defaults', () => {
     const defaultConfig = defaults();
     // Skip enters local-only Orchid with no inferred provider/model.
     expect(defaultConfig.default_model).toBeNull();
-    expect(defaultConfig.providers).toEqual({});
     expect(defaultConfig.mcp_servers).toEqual({});
     expect(defaultConfig.theme).toBeTruthy();
     expect(defaultConfig.personality).toBeTruthy();

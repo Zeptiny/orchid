@@ -51,17 +51,6 @@ describe('Config schema with embedding_api_model', () => {
     });
   });
 
-  it('rejects deprecated provider model metadata in general config', () => {
-    const cfg = defaults();
-    const providers = {
-      p: {
-        base_url: 'https://example.com',
-        litellm_provider: 'openai',
-        legacy_model_metadata: true,
-      },
-    };
-    expect(() => configSchema.parse({ ...cfg, providers })).toThrow(/providers is deprecated/i);
-  });
 });
 
 // ── ApiEmbedder retry tests ────────────────────────────────────────────────

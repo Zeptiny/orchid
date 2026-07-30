@@ -7,8 +7,6 @@
  * - cancelOne / cancelAll / cancelRunning
  * - getStates / allRecords / getRecord
  *
- * Ported from Python `src/orchid/agents/manager.py` (SubagentManager).
- *
  * When a stream runner is configured (production), spawn fire-and-forgets an
  * isolated LLM stream, accumulates messages + token usage on the subagent
  * chain, and notifies listeners so the session can persist `subagent_chains`.
@@ -498,7 +496,7 @@ type SubagentDeltaPayload = DistributiveOmit<SubagentDeltaEvent, keyof SubagentD
  * SubagentManager — manages the lifecycle of subagent runs.
  *
  * Spawn subagents, wait for their completion, cancel them, and query
- * their states. Mirrors Python's SubagentManager API.
+ * their states.
  */
 export class SubagentManager {
   private _subagents: Map<string, SubagentRecord> = new Map();

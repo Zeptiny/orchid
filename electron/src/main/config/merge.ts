@@ -70,8 +70,6 @@ export function deepMerge(
  * - both are dicts → shallow-merge `{...home, ...project}`, with recursive
  *   merge of a nested `models` sub-dict when both carry one
  * - non-dict on either side → project wins
- *
- * Matches Python `config.py:354-387`.
  */
 export function deepMergeNamedEntryDict(
   home: Record<string, unknown>,
@@ -111,9 +109,6 @@ export function deepMergeNamedEntryDict(
 
 /** Keys that use recursive per-alias merge instead of wholesale replacement. */
 const DEEP_MERGE_KEYS = new Set(['mcp_servers']);
-
-/** Legacy provider config is not a source of executable connection state. */
-const IGNORED_LEGACY_CONFIG_KEYS = new Set(['providers']);
 
 /**
  * Top-level keys whose values are required objects (maps or nested configs).
@@ -166,11 +161,10 @@ export function mergeConfigUpdates(
   current: Record<string, unknown>,
   updates: Record<string, unknown>,
 ): Record<string, unknown> {
-  const result: Record<string, unknown> = { ...current, providers: {} };
+  const result: Record<string, unknown> = { ...current };
 
   for (const key of Object.keys(updates)) {
     if (isUnsafeKey(key)) continue;
-    if (IGNORED_LEGACY_CONFIG_KEYS.has(key)) continue;
     const srcVal = updates[key];
     if (srcVal === undefined) continue;
 
@@ -249,9 +243,6 @@ export function mergeLayers(
   project: Record<string, unknown>,
 ): Record<string, unknown> {
   const merged = { ...defaults };
-  if ('providers' in merged) {
-    merged['providers'] = {};
-  }
 
   applyLayerOverrides(merged, home);
   applyLayerOverrides(merged, project);
@@ -265,7 +256,6 @@ function applyLayerOverrides(
 ): void {
   for (const key of Object.keys(layer)) {
     if (isUnsafeKey(key)) continue;
-    if (IGNORED_LEGACY_CONFIG_KEYS.has(key)) continue;
     if (!(key in merged)) continue;
     const layerVal = layer[key];
     const mergedVal = merged[key];
@@ -302,7 +292,7 @@ interface EnvMapping {
   type: 'string' | 'int' | 'float' | 'list';
 }
 
-/** Top-level env mappings — matches Python `config.py:119-134`. */
+/** Top-level env mappings. */
 const ENV_MAP: EnvMapping[] = [
   // ORCHID_DEFAULT_MODEL was an alias/model string. It deliberately has no
   // replacement: environment variables cannot construct a connection-scoped
@@ -341,7 +331,7 @@ const ENV_MAP: EnvMapping[] = [
   { envKey: 'ORCHID_LLM_RETRY_MAX_DELAY', configPath: ['llm_retry_max_delay'], type: 'float' },
 ];
 
-/** Nested RAG env mappings — matches Python `config.py:136-142`. */
+/** Nested RAG env mappings. */
 const RAG_ENV_MAP: EnvMapping[] = [
   { envKey: 'ORCHID_RAG_CHUNK_SIZE', configPath: ['rag', 'chunk_size'], type: 'int' },
   { envKey: 'ORCHID_RAG_CHUNK_OVERLAP', configPath: ['rag', 'chunk_overlap'], type: 'int' },

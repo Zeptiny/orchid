@@ -407,7 +407,6 @@ describe('Theme CSS Custom Properties', () => {
   it('active renderer rules do not hard-code a palette', () => {
     const stylesDir = path.resolve(__dirname, '../../src/renderer/styles');
     const activeCss = [
-      fs.readFileSync(path.join(stylesDir, 'chat.css'), 'utf-8'),
       fs.readFileSync(path.join(stylesDir, 'components.css'), 'utf-8'),
       fs.readFileSync(path.join(stylesDir, 'markdown.css'), 'utf-8'),
       fs.readFileSync(path.join(stylesDir, 'exceptions.css'), 'utf-8'),
@@ -427,7 +426,6 @@ describe('Theme CSS Custom Properties', () => {
     expect(indexCss).toMatch(/@import\s+["']\.\/components\.css["']/);
     expect(indexCss).toMatch(/@import\s+["']\.\/markdown\.css["']/);
     expect(indexCss).toMatch(/@import\s+["']\.\/exceptions\.css["']/);
-    expect(indexCss).toMatch(/@import\s+["']\.\/chat\.css["']/);
     expect(indexCss).toMatch(/@import\s+["']\.\/primitives\.css["']/);
     expect(indexCss.toLowerCase()).not.toContain('daisyui');
   });

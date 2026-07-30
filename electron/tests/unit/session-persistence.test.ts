@@ -2227,7 +2227,7 @@ describe('loadSession resilience to corrupt columns', () => {
 
     const db = openSqliteDb(storageOpts.dbPath!);
     db.prepare(
-      "UPDATE sessions SET todo_store_json = '{not json', subagent_chains_json = '[[[', selection_json = 'oops' WHERE id = ?",
+      "UPDATE sessions SET todo_store_json = '{not json', selection_json = 'oops' WHERE id = ?",
     ).run(SID);
     db.prepare("UPDATE chains SET messages_json = 'garbage' WHERE id = ?").run('c1');
     db.close();

@@ -568,14 +568,6 @@ export function scanNonTokenColors(stylesRoot = STYLES_ROOT): { key: string; cou
   return [...counts.entries()].map(([key, count]) => ({ key, count })).sort((a, b) => a.key.localeCompare(b.key));
 }
 
-// ─── chat.css growth guard ───────────────────────────────────────────────────
-
-export function countChatCssLines(stylesRoot = STYLES_ROOT): number {
-  const chatPath = path.join(stylesRoot, 'chat.css');
-  if (!fs.existsSync(chatPath)) return 0;
-  return fs.readFileSync(chatPath, 'utf8').trimEnd().split('\n').length;
-}
-
 // ─── Baselines (migration-driven shrink targets) ─────────────────────────────
 
 const BASELINE_COMPONENT_ROOT_HITS: ReadonlySet<string> = new Set([
@@ -621,8 +613,6 @@ const BASELINE_COMPONENT_ROOT_TOTAL_TOKENS = 66;
 
 const BASELINE_NON_TOKEN_COLORS: ReadonlyMap<string, number> = new Map([
 ]);
-
-const CHAT_CSS_BASELINE_LINES = 10;
 
 // ─── Tests ───────────────────────────────────────────────────────────────────
 
@@ -984,16 +974,6 @@ describe('Renderer style contract', () => {
         totalTokens,
         `Component-root total token occurrences (${totalTokens}) exceeded baseline (${BASELINE_COMPONENT_ROOT_TOTAL_TOKENS}). New file::root pairs or increased usage within baselined files.`,
       ).toBeLessThanOrEqual(BASELINE_COMPONENT_ROOT_TOTAL_TOKENS);
-    });
-  });
-
-  describe('chat.css growth guard', () => {
-    it('chat.css line count does not exceed baseline', () => {
-      const lines = countChatCssLines();
-      expect(
-        lines,
-        `chat.css grew to ${lines} lines (baseline ${CHAT_CSS_BASELINE_LINES}). Do not add new rules; migrate surfaces to components.css or primitives.`,
-      ).toBeLessThanOrEqual(CHAT_CSS_BASELINE_LINES);
     });
   });
 

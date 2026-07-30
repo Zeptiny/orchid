@@ -29,7 +29,6 @@ const KNOWN_CONFIG_KEYS = [
   'mcp_startup_timeout',
   'mcp_per_server_timeout',
   'mcp_servers',
-  'providers',
   'llm_stream_idle_timeout',
   'llm_stream_retries',
   'background_command_idle_timeout',
@@ -182,7 +181,6 @@ describe('applyConfigDraft', () => {
       mcp_startup_timeout: 5,
       mcp_per_server_timeout: 6,
       mcp_servers: { keep: { command: 'npx' }, drop: null },
-      providers: {},
       llm_stream_idle_timeout: 10,
       llm_stream_retries: 0,
       background_command_idle_timeout: 30,
@@ -239,7 +237,6 @@ describe('applyConfigDraft', () => {
     expect(next.mcp_startup_timeout).toBe(5);
     expect(next.mcp_per_server_timeout).toBe(6);
     expect(next.mcp_servers).toEqual({ keep: { command: 'npx' } });
-    expect(next.providers).toEqual({});
     expect(next.llm_stream_idle_timeout).toBe(10);
     expect(next.llm_stream_retries).toBe(0);
     expect(next.background_command_idle_timeout).toBe(30);

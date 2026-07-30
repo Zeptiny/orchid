@@ -1,8 +1,6 @@
 /**
  * History conversion — persisted messages to API messages.
  *
- * Replicates Python `_history_to_api_messages` (client.py:310-399).
- *
  * Enforces the OpenAI-shaped invariant both ways:
  * - Every `tool` message is preceded by an assistant message whose
  *   `tool_calls` contains the same `tool_call_id` (orphaned tool results

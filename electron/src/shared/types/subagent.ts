@@ -1,9 +1,7 @@
 /**
  * SubagentRecord types for the Orchid domain.
  *
- * Ported from src/orchid/agents/manager.py (SubagentRecord).
- *
- * Key restore behavior (matching Python):
+ * Key restore behavior:
  * - fromStorageDict() migrates PENDING/RUNNING → INTERRUPTED
  * - INTERRUPTED records without end_time get end_time set to now
  */
@@ -210,9 +208,8 @@ export interface SubagentRecord {
   readonly result: string | null;
   readonly error: string | null;
   /**
-   * Index of the parent session chain this subagent was spawned from
-   * (Python `parent_chain_index`). Used to attribute sub token usage
-   * to the correct chain footer.
+   * Index of the parent session chain this subagent was spawned from.
+   * Used to attribute sub token usage to the correct chain footer.
    */
   readonly parentChainIndex: number | null;
   /**
@@ -320,19 +317,16 @@ export interface SubagentRecordStorageDict {
   agent_type?: string;
   agent_tier?: string;
   task?: string;
-  state?: string;
   status?: string;
   chain_id?: string;
   start_time?: string;
   end_time?: string | null;
   result?: string | null;
   error?: string | null;
-  parent_chain_index?: number | null;
   parentChainIndex?: number | null;
   reasoning_effort?: string | number;
   closed?: boolean;
   chain?: unknown;
-  // Forward-compat: extra keys tolerated on restore
   [key: string]: unknown;
 }
 
@@ -351,7 +345,7 @@ export function subagentRecordToStorageDict(record: SubagentRecord): SubagentRec
     end_time: record.end_time,
     result: record.result,
     error: record.error,
-    parent_chain_index: record.parentChainIndex,
+    parentChainIndex: record.parentChainIndex,
     ...(record.reasoning_effort !== undefined &&
       (typeof record.reasoning_effort !== 'number' || Number.isFinite(record.reasoning_effort))
       ? { reasoning_effort: record.reasoning_effort }
@@ -365,9 +359,8 @@ export function subagentRecordFromStorageDict(data: unknown): SubagentRecord {
   const raw = data as Record<string, unknown>;
   const now = new Date().toISOString();
 
-  // Parse status — Python uses 'state' key
   let status: SubagentStatus = SubagentStatus.COMPLETED;
-  const rawStatus = (raw.state ?? raw.status) as string | undefined;
+  const rawStatus = raw.status as string | undefined;
   if (
     typeof rawStatus === 'string' &&
     (rawStatus === 'queued' || rawStatus === 'pending' || rawStatus === 'running' ||
@@ -377,9 +370,6 @@ export function subagentRecordFromStorageDict(data: unknown): SubagentRecord {
     status = rawStatus;
   }
 
-  // Migrate non-terminal states → INTERRUPTED on restore (matching Python).
-  // `queued` is a runtime-only state that must never be persisted; a stored
-  // row carrying it is treated like a crashed pending/running record.
   const migratedToInterrupted =
     status === SubagentStatus.QUEUED ||
     status === SubagentStatus.PENDING ||
@@ -388,30 +378,25 @@ export function subagentRecordFromStorageDict(data: unknown): SubagentRecord {
     status = SubagentStatus.INTERRUPTED;
   }
 
-  // Parse times
   const startTime = typeof raw.start_time === 'string' ? raw.start_time : now;
   let endTime = typeof raw.end_time === 'string' ? raw.end_time : null;
 
-  // INTERRUPTED records without end_time get end_time set to now (matching Python)
   if (status === SubagentStatus.INTERRUPTED && !endTime) {
     endTime = now;
   }
 
-  // Restore the chain
   let chain: Chain;
   const chainData = raw.chain;
   if (chainData && typeof chainData === 'object') {
     chain = chainFromStorageDict(chainData);
   } else {
-    // Legacy fallback: flat messages list
-    chain = chainFromStorageDict({ messages: raw.messages ?? [] });
+    chain = chainFromStorageDict({ messages: [] });
   }
 
   const chainId = typeof raw.chain_id === 'string' ? raw.chain_id : '';
 
-  // parent_chain_index (Python) / parentChainIndex (TS)
   let parentChainIndex: number | null = null;
-  const rawParent = raw.parent_chain_index ?? raw.parentChainIndex;
+  const rawParent = raw.parentChainIndex;
   if (typeof rawParent === 'number' && Number.isFinite(rawParent)) {
     parentChainIndex = rawParent;
   }

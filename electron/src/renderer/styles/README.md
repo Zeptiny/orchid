@@ -68,8 +68,7 @@ These component roots still appear in feature JSX and are tracked by the drift s
 - **Do not introduce raw non-token colors** (`oklch(...)`, `#hex`, `rgb(...)`, `hsl(...)`) in `styles/*.css` or feature `className` strings. Only `index.css` (the `@theme` fallback block) and `themes/*.css` may use raw color values. `primitives.css` is theme-driven end to end: every color is a `var(...)` / `color-mix(...)` / `currentColor` expression.
 - Keep dynamic values (grid tracks, textarea height, swatches, progress) as data via CSS variables or inline styles — not static utility classes.
 - Namespace new composites with `orchid-`. Define them in `components.css` `@layer orchid` using `@apply` + semantic tokens.
-- Keep `@layer orchid` after Tailwind's layers and the primitive engine (`@layer components`). Product geometry historically lived in unlayered `chat.css`; the dedicated final layer preserves that precedence over utilities and component defaults without returning to an unlayered compatibility sheet.
-- **`chat.css` is frozen**: do not add new rules or grow its line count. Product CSS has been migrated to `components.css`, `shell.css`, and `markdown.css`; `chat.css` is now header-only. Any new selector belongs in the appropriate `@layer orchid` surface file.
+- Keep `@layer orchid` after Tailwind's layers and the primitive engine (`@layer components`). The dedicated final layer preserves product geometry precedence over utilities and component defaults.
 - Do not redefine reserved component roots outside `primitives.css` (see below).
 - Do not add CSS Modules or a second styling library.
 - **Do not reintroduce DaisyUI** — no `@plugin "daisyui"`, no `daisyui` dependency, no DaisyUI-internal variables (`--fallback-*`, `--depth`, `--noise`, `--size-field`, `--size-selector`). The removal is gated by the contract test.
@@ -97,7 +96,6 @@ Product-specific names that only *start* like a reserved root but are not the ro
 | Runtime textarea height | `InputArea.tsx` + `.orchid-composer-textarea` in exceptions | Keep resize behavior; do not encode generated pixel heights as static utilities |
 | Runtime swatches / progress | `ContextGrid.tsx`, `Footer.tsx`, `CommandPalette.tsx` | Dynamic colors/fractions as data; classes for surrounding geometry |
 | Focus / modal browser quirks | focused exception selectors | Only after smoke proves utilities/engine insufficient |
-| Residual product CSS | `styles/chat.css` (header-only) | Shell/session selectors live in `shell.css`; onboarding/config/picker composites live in `components.css`; `chat.css` is empty and frozen |
 
 Every exception needs a short comment or a row in this table explaining why a predefined class cannot replace it.
 
@@ -145,7 +143,6 @@ Fonts: `Instrument Sans` (UI body), `Bricolage Grotesque` (display headings), an
 | `motion.css` | Shared state-transition vocabulary: mounted disclosures, semantic state swaps, entrances, overlays, and status transitions |
 | `markdown.css` | Markdown / GFM / highlight tokens |
 | `exceptions.css` | Scrollbars, keyframes, streaming cursor, shell grid tracks, composer height hooks |
-| `chat.css` | Header-only (no CSS rules); frozen — residual bridge comment only |
 | `README.md` | This contract |
 
 ### Import graph
@@ -159,8 +156,7 @@ main.tsx
         ├── shell.css
         ├── motion.css          ← shared state-transition vocabulary
         ├── markdown.css
-        ├── exceptions.css
-        └── chat.css            ← residual bridge only
+        └── exceptions.css
 ```
 
 Runtime themes are **not** part of this graph: `applyTheme()` swaps a single `#orchid-theme` stylesheet link (`themes/*.css`) and sets `document.documentElement.dataset.theme`.
@@ -177,11 +173,6 @@ Motion communicates continuity or a meaningful state change; it must not decorat
 - Do not animate streaming prose/reasoning, elapsed or token counters, terminal output, cursor movement, or other high-frequency text. Primitive progress geometry may transition.
 - Shell width and grid-column transitions are the only approved broad layout motion. New layout animation requires an explicit contract update.
 - Reduced-motion behavior is mandatory and centrally enforced; no component may override it with longer animation declarations.
-
-### Residual bridge (`chat.css`)
-
-- All previous rules were migrated; `chat.css` is header-only (comment block only, no CSS rules) and frozen.
-- **Do not add new rules** to `chat.css`. Shared composites → `components.css`; shell/session geometry → `shell.css`; markdown → `markdown.css`; browser exceptions → `exceptions.css`; component roots → `primitives.css`.
 
 ### Known reserved redefinitions outside primitives.css
 
