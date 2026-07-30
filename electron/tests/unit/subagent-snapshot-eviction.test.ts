@@ -60,7 +60,7 @@ vi.mock('../../src/main/config/loader', async (importOriginal) => {
   };
 });
 
-/** Real per-test SessionManager behind the ipc accessor persistSubagentChains uses. */
+/** Real per-test SessionManager behind the session accessor persistSubagentChains uses. */
 const sessionManagerHolder = vi.hoisted(() => ({
   current: null as import('../../src/main/session/manager').SessionManager | null,
 }));
@@ -70,7 +70,7 @@ const subagentManagerHolder = vi.hoisted(() => ({
   current: null as import('../../src/main/agents/manager').SubagentManager | null,
 }));
 
-vi.mock('../../src/main/ipc/session', () => ({
+vi.mock('../../src/main/session/singleton', () => ({
   getSessionManager: () => sessionManagerHolder.current,
 }));
 

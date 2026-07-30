@@ -34,6 +34,7 @@ import { WorkerTaskCancelledError, type WorkerTaskScope } from '../utils/worker-
 import { isMainAgentScope } from '../../shared/types/agent-scope';
 import type { ProjectRuntime } from '../project/runtime';
 import { getDefaultWaitTimeoutMs } from '../agents/manager';
+import { getSessionManager } from '../session/singleton';
 import {
   createCanonicalToolResult,
   type JsonValue,
@@ -642,9 +643,8 @@ export function _setAgentsMdStoreResolverForTests(
  *
  * Deviation from the plan's "thread the tracker through ToolExecutionContext":
  * resolving here (instead of editing orchestrator.ts's call sites, chat.ts, and
- * tools/types.ts) keeps U4 to two source files. The lazy `createRequire` mirrors
- * build-prompt-context.ts and avoids a circular init with session/tools. Returns
- * null when there is no session or resolution fails (no-session degradation, R17).
+ * tools/types.ts) keeps U4 to two source files. Returns null when there is no
+ * session or resolution fails (no-session degradation, R17).
  */
 function resolveAgentsMdStore(
   sessionId: string | undefined,
@@ -655,11 +655,7 @@ function resolveAgentsMdStore(
     return agentsMdStoreResolverOverride(sessionId, agentScopeId);
   }
   try {
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const { createRequire } = require('node:module') as typeof import('node:module');
-    const req = createRequire(__filename);
-    const session = req('../ipc/session') as typeof import('../ipc/session');
-    return session.getSessionManager().getAgentsMdContextStore(sessionId, agentScopeId);
+    return getSessionManager().getAgentsMdContextStore(sessionId, agentScopeId);
   } catch {
     return null;
   }

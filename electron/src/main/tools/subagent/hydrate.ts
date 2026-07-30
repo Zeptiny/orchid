@@ -56,7 +56,7 @@ export async function hydrateSubagentRecords(
 
   // Lazy import avoids the tools ↔ session IPC circular init and stays mockable
   // in unit tests (matches wait.ts's persistence trigger).
-  const { getSessionManager } = await import('../../ipc/session');
+  const { getSessionManager } = await import('../../session/singleton');
   const session = getSessionManager().getSession(sessionId);
   if (!session) {
     return { hydrated, agentMissing };
