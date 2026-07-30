@@ -71,6 +71,7 @@ export interface SubagentLiveProjection {
  */
 export const SubagentDeltaEventType = {
   SPAWNED: 'spawned',
+  STATUS_CHANGED: 'status_changed',
   TEXT_DELTA: 'text_delta',
   THINKING_DELTA: 'thinking_delta',
   TOOL_START: 'tool_start',
@@ -111,6 +112,15 @@ export interface SubagentSpawnedEvent extends SubagentDeltaEventBase {
   readonly type: typeof SubagentDeltaEventType.SPAWNED;
   readonly record: SubagentRecord;
   readonly usage: Usage | null;
+}
+
+/**
+ * Non-terminal status transition (queued→pending→running). Carries only the
+ * new status so the renderer can update its durable record without a snapshot.
+ */
+export interface SubagentStatusChangedEvent extends SubagentDeltaEventBase {
+  readonly type: typeof SubagentDeltaEventType.STATUS_CHANGED;
+  readonly status: SubagentStatus;
 }
 
 /** Append to a text live segment (`SubagentLiveSegment` kind `text`). */
@@ -185,6 +195,7 @@ export interface SubagentTerminalEvent extends SubagentDeltaEventBase {
 /** Typed incremental subagent live update; the unit of the live protocol. */
 export type SubagentDeltaEvent =
   | SubagentSpawnedEvent
+  | SubagentStatusChangedEvent
   | SubagentTextDeltaEvent
   | SubagentThinkingDeltaEvent
   | SubagentToolStartEvent
@@ -275,6 +286,9 @@ export function estimateDeltaBytes(event: SubagentDeltaEvent): number {
     case 'spawned':
     case 'terminal':
       bytes += estimateRecordBytes(event.record);
+      break;
+    case 'status_changed':
+      bytes += event.status.length;
       break;
     case 'usage':
       break;

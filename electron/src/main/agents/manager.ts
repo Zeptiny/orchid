@@ -631,6 +631,10 @@ export class SubagentManager {
       record.startedAt ??= Date.now();
       this._updateLive(record, { state: SubagentState.RUNNING });
       this._markRecordDirty(record);
+      this._emitDelta(record, {
+        type: SubagentDeltaEventType.STATUS_CHANGED,
+        status: SubagentStatus.RUNNING,
+      });
       this._notify();
     }
   }
@@ -1270,6 +1274,10 @@ export class SubagentManager {
     this._admission.markAdmitted(record.sessionId);
     this._markRecordDirty(record);
     this._updateLive(record, { state: SubagentState.PENDING });
+    this._emitDelta(record, {
+      type: SubagentDeltaEventType.STATUS_CHANGED,
+      status: SubagentStatus.PENDING,
+    });
     this._notify();
     if (this._runner) {
       record._runPromise = this._startRun(record, record.cwd ?? undefined);

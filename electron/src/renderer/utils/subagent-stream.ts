@@ -7,6 +7,7 @@ import type {
   SubagentRecord,
   SubagentSpawnedEvent,
   SubagentStatus,
+  SubagentStatusChangedEvent,
   SubagentTerminalEvent,
   SubagentToolSnapshot,
 } from '../../shared/types/subagent';
@@ -201,7 +202,7 @@ function draftFromSpawn(event: SubagentSpawnedEvent): LiveDraft {
   };
 }
 
-type ContentDelta = Exclude<SubagentDeltaEvent, SubagentSpawnedEvent | SubagentTerminalEvent>;
+type ContentDelta = Exclude<SubagentDeltaEvent, SubagentSpawnedEvent | SubagentStatusChangedEvent | SubagentTerminalEvent>;
 
 function applyDeltaToDraft(draft: LiveDraft, event: ContentDelta): void {
   // Any content delta proves the queued run was admitted and started: the
@@ -268,10 +269,10 @@ function applyDeltaToDraft(draft: LiveDraft, event: ContentDelta): void {
 }
 
 /**
- * Apply one flush of deltas in order. `records` identity changes only on
- * `spawned` (append, or replace on run rotation) and `terminal` (replace);
- * projection-only deltas rebuild one live projection per touched subagent
- * and leave records untouched.
+ * Apply one flush of deltas in order. `records` identity changes on
+ * `spawned` (append, or replace on run rotation), `status_changed` (status
+ * field update), and `terminal` (replace); projection-only deltas rebuild
+ * one live projection per touched subagent and leave records untouched.
  */
 function applyDeltaEvents(
   state: SubagentStreamState,
@@ -339,6 +340,11 @@ function applyDeltaEvents(
           ? records.map((item) => (item.id === event.record.id ? event.record : item))
           : [...records, event.record];
         draft = draftFromSpawn(event);
+      } else if (event.type === 'status_changed') {
+        records = records.map((item) => (
+          item.id === subagentId ? { ...item, status: event.status } : item
+        ));
+        if (draft) draft.state = event.status;
       } else if (event.type === 'terminal') {
         records = records.some((item) => item.id === event.record.id)
           ? records.map((item) => (item.id === event.record.id ? event.record : item))

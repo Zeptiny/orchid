@@ -1,7 +1,7 @@
 /** Session-affine subagent snapshot/live state for the inspector and view. */
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import type { Usage } from '../../shared/types/message';
-import type { SubagentLiveProjection, SubagentRecord } from '../../shared/types/subagent';
+import type { SubagentLiveProjection, SubagentRecord, SubagentStatus } from '../../shared/types/subagent';
 import {
   deriveSubagentUsageSummary,
   EMPTY_SUBAGENT_USAGE_SUMMARY,
@@ -31,7 +31,7 @@ export type SubagentListState =
 
 export interface SubagentDetail {
   readonly id: string; readonly name: string; readonly type: string; readonly tier: string;
-  readonly state: string; readonly task: string; readonly elapsed: string; readonly isRunning: boolean;
+  readonly state: SubagentStatus; readonly task: string; readonly elapsed: string; readonly isRunning: boolean;
   readonly result: string | null; readonly error: string | null; readonly usage: Usage | null;
 }
 
