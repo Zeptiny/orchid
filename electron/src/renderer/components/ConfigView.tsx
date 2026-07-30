@@ -87,6 +87,9 @@ const SkillsTab = lazyWithPreload(() => import('./Preferences/SkillsTab').then((
 const TierModelsTab = lazyWithPreload(() => import('./Preferences/TierModelsTab').then((module) => ({
   default: module.TierModelsTab,
 })));
+const SubagentsTab = lazyWithPreload(() => import('./Preferences/SubagentsTab').then((module) => ({
+  default: module.SubagentsTab,
+})));
 
 type TabId =
   | 'general'
@@ -95,6 +98,7 @@ type TabId =
   | 'mcp'
   | 'tier-models'
   | 'rag'
+  | 'subagents'
   | 'skills'
   | 'agents'
   | 'personalities';
@@ -106,6 +110,7 @@ const TAB_COMPONENTS = {
   mcp: MCPServersTab,
   'tier-models': TierModelsTab,
   rag: RAGTab,
+  subagents: SubagentsTab,
   skills: SkillsTab,
   agents: AgentsTab,
   personalities: PersonalitiesTab,
@@ -123,6 +128,7 @@ const TABS: TabDef[] = [
   { id: 'mcp', label: 'MCP' },
   { id: 'tier-models', label: 'Tier Models' },
   { id: 'rag', label: 'RAG' },
+  { id: 'subagents', label: 'Subagents' },
   { id: 'skills', label: 'Skills' },
   { id: 'agents', label: 'Agents' },
   { id: 'personalities', label: 'Personalities' },
@@ -904,6 +910,13 @@ function renderTab(
         <RAGTab
           rag={config.rag}
           onChange={(rag) => updateDraft({ rag })}
+        />
+      );
+    case 'subagents':
+      return (
+        <SubagentsTab
+          subagents={config.subagents}
+          onChange={(subagents) => updateDraft({ subagents })}
         />
       );
     case 'skills':
