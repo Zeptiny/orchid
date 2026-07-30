@@ -65,19 +65,8 @@ export {
   SubagentStillSettlingError,
 } from './errors';
 
-// ── Enums ───────────────────────────────────────────────────────────────────
-
-export const SubagentState = {
-  /** Parked in the admission queue awaiting a run slot; never persisted. */
-  QUEUED: 'queued',
-  PENDING: 'pending',
-  RUNNING: 'running',
-  COMPLETED: 'completed',
-  FAILED: 'failed',
-  INTERRUPTED: 'interrupted',
-} as const;
-
-export type SubagentState = (typeof SubagentState)[keyof typeof SubagentState];
+export { SubagentState } from './types';
+import { SubagentState } from './types';
 
 /** Result of answering (or declining) a subagent's pending question. */
 export type SubagentQuestionResult =

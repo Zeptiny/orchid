@@ -1,4 +1,4 @@
-import type { SubagentState } from './manager';
+import type { SubagentState } from './types';
 import type { SubagentAdmissionLimits } from './admission';
 
 export class SubagentWaitTimeoutError extends Error {
