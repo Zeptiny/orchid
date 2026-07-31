@@ -802,6 +802,9 @@ describe('provider IPC', () => {
         embedding_api_model: { connectionId, modelId: 'embedding-model' },
       },
     }));
+    fs.writeFileSync(path.join(root, '.orchid.json'), JSON.stringify({
+      theme: 'project-only-theme',
+    }));
 
     try {
       const result = await providersIpc.clearConnectionConfigReferences(connectionId, {
@@ -823,6 +826,7 @@ describe('provider IPC', () => {
         modelId: 'sibling-model',
       });
       expect(persisted.rag.embedding_api_model).toBeNull();
+      expect(persisted).not.toHaveProperty('theme');
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
     }
@@ -857,6 +861,38 @@ describe('provider IPC', () => {
     expect(memory.connections.update).not.toHaveBeenCalledWith(id, expect.objectContaining({
       health: 'disconnected',
     }));
+  });
+
+  it('restores connection health when deletion accounting cannot be finalized', async () => {
+    const memory = memoryServices();
+    const id = '00000000-0000-4000-8000-000000000063';
+    memory.records.set(id, {
+      id,
+      providerId: 'openai',
+      name: 'Deletion accounting unavailable',
+      protocol: 'openai-compatible',
+      authMethod: 'api-key',
+      credential: { kind: 'stored', handle: '00000000-0000-4000-8000-000000000064' },
+      modelIds: ['gpt-5/test'],
+      health: 'ready',
+    });
+    mocks.stopActiveProviderConnectionTurns.mockReturnValue(['session-active']);
+    mocks.interruptPendingForConnection.mockImplementation(() => {
+      throw new Error('ledger unavailable');
+    });
+    providersIpc._setProviderIPCServicesForTests(memory.services);
+    providersIpc.registerProviderIPC();
+
+    await expect(handler(IPC_CHANNELS.PROVIDERS_DELETE)(null, {
+      connectionId: id,
+      confirm: true,
+    })).rejects.toThrow(/connection was not deleted.*ledger unavailable/i);
+
+    expect(memory.connections.update).toHaveBeenNthCalledWith(1, id, { health: 'disabled' });
+    expect(memory.connections.update).toHaveBeenNthCalledWith(2, id, { health: 'ready' });
+    expect(memory.records.get(id)?.health).toBe('ready');
+    expect(memory.vault.deleteConnectionCredentials).not.toHaveBeenCalled();
+    expect(memory.connections.remove).not.toHaveBeenCalled();
   });
 
   it('serializes submit_api_key against concurrent disconnect so no live key remains', async () => {

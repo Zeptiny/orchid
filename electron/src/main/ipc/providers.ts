@@ -5,6 +5,7 @@
  * one-shot credential. It never receives a credential handle, API key,
  * driver origin, or executable driver configuration.
  */
+import * as fs from 'node:fs';
 import { ipcMain } from 'electron';
 import { z } from 'zod';
 import { IPC_CHANNELS } from '../../shared/types/ipc';
@@ -64,6 +65,7 @@ import {
   HOME_CONFIG_PATH,
   loadConfig,
 } from '../config/loader';
+import { isPlainObject } from '../config/merge';
 import { clearProjectRuntimeRegistry } from '../project/runtime';
 import { withConfigSaveLock } from './config';
 
@@ -380,24 +382,38 @@ export async function clearConnectionConfigReferences(
 ) {
   return withConfigSaveLock(async () => {
     const homeConfigPath = options.homeConfigPath ?? HOME_CONFIG_PATH;
-    const projectDir = options.projectDir ?? HOME_CONFIG_DIR;
-    const config = loadConfig({ projectDir, homeConfigPath });
-    const defaultModel = config.default_model?.connectionId === connectionId;
-    const tierModels = Object.entries(config.tier_models)
-      .filter(([, selection]) => selection?.connectionId === connectionId)
+    let homeConfig: Record<string, unknown> = {};
+    try {
+      const parsed: unknown = JSON.parse(fs.readFileSync(homeConfigPath, 'utf8'));
+      if (isPlainObject(parsed)) homeConfig = parsed;
+    } catch {
+      // Match loadConfig's missing or malformed home-layer behavior.
+    }
+    const defaultSelection = homeConfig['default_model'];
+    const tierSelections = isPlainObject(homeConfig['tier_models'])
+      ? homeConfig['tier_models']
+      : {};
+    const ragConfig = isPlainObject(homeConfig['rag']) ? homeConfig['rag'] : {};
+    const embeddingSelection = ragConfig['embedding_api_model'];
+    const defaultModel = isPlainObject(defaultSelection)
+      && defaultSelection['connectionId'] === connectionId;
+    const tierModels = Object.entries(tierSelections)
+      .filter(([, selection]) => isPlainObject(selection) && selection['connectionId'] === connectionId)
       .map(([tier]) => tier);
-    const ragEmbeddingModel = config.rag.embedding_api_model?.connectionId === connectionId;
-    if (defaultModel) config.default_model = null;
-    for (const tier of tierModels) config.tier_models[tier] = null;
-    if (ragEmbeddingModel) config.rag.embedding_api_model = null;
+    const ragEmbeddingModel = isPlainObject(embeddingSelection)
+      && embeddingSelection['connectionId'] === connectionId;
+    if (defaultModel) homeConfig['default_model'] = null;
+    for (const tier of tierModels) tierSelections[tier] = null;
+    if (ragEmbeddingModel) ragConfig['embedding_api_model'] = null;
     if (defaultModel || tierModels.length > 0 || ragEmbeddingModel) {
-      atomicWriteJson(homeConfigPath, config);
+      atomicWriteJson(homeConfigPath, homeConfig);
       if (options.refreshRuntime !== false) {
         ConfigManager.reset();
         clearProjectRuntimeRegistry();
         ConfigManager.load({ projectDir: HOME_CONFIG_DIR });
       }
     }
+    const config = loadConfig({ projectDir: HOME_CONFIG_DIR, homeConfigPath });
     return {
       config,
       clearedConfigReferences: { defaultModel, tierModels, ragEmbeddingModel },
@@ -586,6 +602,28 @@ async function requireConnection(connectionId: string): Promise<ProviderConnecti
   const connection = await services().connections.get(connectionId);
   if (!connection) throw new Error(`Unknown provider connection '${connectionId}'`);
   return connection;
+}
+
+async function stopProviderConnectionTurns(
+  connectionId: string,
+  accountingFailureOutcome: string,
+  restoreHealth?: () => Promise<unknown>,
+): Promise<readonly string[]> {
+  try {
+    const { stopActiveProviderConnectionTurns } = await import('./chat');
+    const stoppedSessionIds = stopActiveProviderConnectionTurns(connectionId);
+    if (stoppedSessionIds.length > 0) {
+      getProviderAccountingStore().interruptPendingForConnection(connectionId);
+    }
+    return stoppedSessionIds;
+  } catch (error) {
+    await restoreHealth?.();
+    const detail = error instanceof Error ? error.message : String(error);
+    throw new Error(
+      `Could not finalize active provider accounting; ${accountingFailureOutcome}: ${detail}`,
+      { cause: error },
+    );
+  }
 }
 
 // ── Model options ───────────────────────────────────────────────────────────
@@ -870,23 +908,10 @@ export function registerProviderIPC(): void {
       const connection = await requireConnection(parsed.data.connectionId);
       // KTD15: stop only turns already frozen to this connection. Their ledger
       // rows are then finalized as interrupted before the credential is erased.
-      const { stopActiveProviderConnectionTurns } = await import('./chat');
-      const stoppedSessionIds = stopActiveProviderConnectionTurns(connection.id);
-      if (stoppedSessionIds.length > 0) {
-        try {
-          getProviderAccountingStore().interruptPendingForConnection(connection.id);
-        } catch (error) {
-          // Cancellation has already prevented further credential use by the
-          // frozen turn, but destructive credential removal must wait until its
-          // durable attempt record is finalized. The user can retry disconnect
-          // once the ledger becomes available.
-          const detail = error instanceof Error ? error.message : String(error);
-          throw new Error(
-            `Could not finalize active provider accounting; credentials were not removed: ${detail}`,
-            { cause: error },
-          );
-        }
-      }
+      const stoppedSessionIds = await stopProviderConnectionTurns(
+        connection.id,
+        'credentials were not removed',
+      );
       await current.vault.deleteConnectionCredentials(connection.id);
       const updated = await current.connections.update(connection.id, {
         credential: { kind: 'none' },
@@ -916,22 +941,13 @@ export function registerProviderIPC(): void {
         await current.connections.update(connection.id, { health: 'disabled' });
         disabledForDeletion = true;
       }
-      const { stopActiveProviderConnectionTurns } = await import('./chat');
-      const stoppedSessionIds = stopActiveProviderConnectionTurns(connection.id);
-      if (stoppedSessionIds.length > 0) {
-        try {
-          getProviderAccountingStore().interruptPendingForConnection(connection.id);
-        } catch (error) {
-          if (disabledForDeletion) {
-            await current.connections.update(connection.id, { health: previousHealth });
-          }
-          const detail = error instanceof Error ? error.message : String(error);
-          throw new Error(
-            `Could not finalize active provider accounting; the connection was not deleted: ${detail}`,
-            { cause: error },
-          );
-        }
-      }
+      const stoppedSessionIds = await stopProviderConnectionTurns(
+        connection.id,
+        'the connection was not deleted',
+        disabledForDeletion
+          ? () => current.connections.update(connection.id, { health: previousHealth })
+          : undefined,
+      );
       await current.vault.deleteConnectionCredentials(connection.id);
       await current.connections.update(connection.id, {
         credential: { kind: 'none' },

@@ -1,5 +1,5 @@
 /** Redacted provider-connection cards and safe lifecycle actions. */
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import type {
   ProviderConnectionIdMessage,
   ProviderConnectionView,
@@ -19,6 +19,7 @@ import { Icon } from '../Icon';
 import { Alert } from '../ui/Alert';
 import { Button } from '../ui/Button';
 import { ConfigCard } from '../ui/ConfigCard';
+import { DialogSurface } from '../ui/DialogSurface';
 import { Panel } from '../ui/Panel';
 import { SectionHeader } from '../ui/SectionHeader';
 import { StateMessage } from '../ui/StateMessage';
@@ -108,6 +109,8 @@ export function ConnectionList({
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const deletePermanentRef = useRef<HTMLButtonElement>(null);
+  const deleteTriggerRef = useRef<HTMLButtonElement>(null);
 
   const runAction = async (
     connectionId: string,
@@ -301,45 +304,6 @@ export function ConnectionList({
                   </Alert>
                 )}
 
-                {confirmDeleteId === connection.id && (
-                  <Alert
-                    tone="warning"
-                    className="flex-wrap"
-                    icon="alert"
-                    action={
-                      <div className="flex gap-2">
-                        <Button
-                          size="sm"
-                          onClick={() => setConfirmDeleteId(null)}
-                          disabled={isBusy}
-                        >
-                          Cancel
-                        </Button>
-                        <Button
-                          variant="error"
-                          size="sm"
-                          onClick={() =>
-                            void runAction(
-                              connection.id,
-                              'delete',
-                              onDelete
-                                ? () => onDelete({ connectionId: connection.id, confirm: true })
-                                : undefined,
-                            )
-                          }
-                          disabled={isBusy || !onDelete}
-                        >
-                          Delete permanently
-                        </Button>
-                      </div>
-                    }
-                  >
-                    Delete permanently removes this connection and its stored credentials.
-                    Default, tier, and RAG model assignments that use it will be cleared.
-                    Historical sessions and accounting remain available.
-                  </Alert>
-                )}
-
                 <div className="flex justify-end gap-2">
                   {onEditConnection && (
                     <Button
@@ -409,20 +373,70 @@ export function ConnectionList({
                         Disconnect
                       </Button>
                     )}
-                  {confirmDeleteId !== connection.id && (
+                  <Button
+                    variant="error"
+                    size="sm"
+                    onClick={(event) => {
+                      deleteTriggerRef.current = event.currentTarget;
+                      setConfirmDisconnectId(null);
+                      setConfirmDeleteId(connection.id);
+                    }}
+                    disabled={isBusy || !onDelete}
+                  >
+                    Delete connection
+                  </Button>
+                </div>
+
+                <DialogSurface
+                  isOpen={confirmDeleteId === connection.id}
+                  onClose={() => setConfirmDeleteId(null)}
+                  labelledBy="provider-delete-confirmation-title"
+                  describedBy="provider-delete-confirmation-description"
+                  initialFocusRef={deletePermanentRef}
+                  restoreFocusRef={deleteTriggerRef}
+                  variant="modal"
+                  closeOnBackdrop={!isBusy}
+                  closeOnEscape={!isBusy}
+                  className="max-w-lg"
+                >
+                  <h2 id="provider-delete-confirmation-title" className="text-lg font-semibold">
+                    Delete {connection.name}?
+                  </h2>
+                  <p
+                    id="provider-delete-confirmation-description"
+                    className="py-3 text-sm text-base-content/70"
+                  >
+                    Delete permanently removes this connection and its stored credentials.
+                    Default, tier, and RAG model assignments that use it will be cleared.
+                    Historical sessions and accounting remain available.
+                  </p>
+                  <div className="flex justify-end gap-2">
                     <Button
+                      size="sm"
+                      onClick={() => setConfirmDeleteId(null)}
+                      disabled={isBusy}
+                    >
+                      Cancel
+                    </Button>
+                    <Button
+                      ref={deletePermanentRef}
                       variant="error"
                       size="sm"
-                      onClick={() => {
-                        setConfirmDisconnectId(null);
-                        setConfirmDeleteId(connection.id);
-                      }}
+                      onClick={() =>
+                        void runAction(
+                          connection.id,
+                          'delete',
+                          onDelete
+                            ? () => onDelete({ connectionId: connection.id, confirm: true })
+                            : undefined,
+                        )
+                      }
                       disabled={isBusy || !onDelete}
                     >
-                      Delete connection
+                      Delete permanently
                     </Button>
-                  )}
-                </div>
+                  </div>
+                </DialogSurface>
               </ConfigCard.Body>
             </ConfigCard>
           );

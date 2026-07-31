@@ -181,7 +181,11 @@ describe('provider onboarding and disconnected UX', () => {
     expect(connections).toContain('Delete connection');
     expect(connections).toContain('Delete permanently');
     expect(connections).toContain('Default, tier, and RAG model assignments');
-    expect(connections).toContain('confirm: true');
+    expect(connections).toMatch(
+      /onDelete\s*\?\s*\(\)\s*=>\s*onDelete\(\{\s*connectionId:\s*connection\.id,\s*confirm:\s*true\s*\}\)/,
+    );
+    expect(connections).toContain('initialFocusRef={deletePermanentRef}');
+    expect(connections).toContain('restoreFocusRef={deleteTriggerRef}');
   });
 
   it('omits fixed protocol controls from edit mode and removes the separate initial-model picker', () => {
