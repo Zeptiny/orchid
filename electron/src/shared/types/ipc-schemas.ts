@@ -7,6 +7,7 @@ import { z } from 'zod';
 import { contextSnapshotSchema } from './message';
 import { subagentStatusSchema } from './subagent';
 import { STARTUP_STEP_DEFINITIONS, type StartupStepId } from './ipc-boundary';
+import { toolCallSchema } from './tool';
 import {
   canonicalToolResultSchema,
   terminalToolResultStatusSchema,
@@ -64,6 +65,23 @@ const usageSchema = z.object({
   context: contextSnapshotSchema.optional(),
 });
 
+/** Durable messages are terminal-history authority, so validate their full shape. */
+const messageSchema = z.object({
+  id: z.string().min(1),
+  role: z.enum(['user', 'assistant', 'system', 'tool']),
+  content: z.string(),
+  type: z.enum(['text', 'thinking', 'tool_call', 'tool_result', 'error']),
+  tool_calls: z.array(toolCallSchema).nullable(),
+  tool_call_id: z.string().nullable(),
+  name: z.string().nullable(),
+  thinking: z.string().nullable(),
+  timestamp: z.string().datetime({ offset: true }),
+  usage: usageSchema.nullable(),
+  hidden: z.boolean(),
+  excludeFromModel: z.boolean().optional(),
+  tool_result: canonicalToolResultSchema.nullable(),
+}).strict();
+
 // ── Chat events ──────────────────────────────────────────────────────────────
 
 export const chatChunkEventSchema = chatEventIdentitySchema.extend({
@@ -88,6 +106,7 @@ export const chatStateEventSchema = chatEventIdentitySchema.extend({
 export const chatDoneEventSchema = chatEventIdentitySchema.extend({
   type: z.literal('done'),
   response: z.string(),
+  messages: z.array(messageSchema),
   interrupted: z.boolean().optional(),
   usage: usageSchema.nullable().optional(),
 });
@@ -95,6 +114,7 @@ export const chatDoneEventSchema = chatEventIdentitySchema.extend({
 export const chatErrorEventSchema = chatEventIdentitySchema.extend({
   type: z.literal('error'),
   error: z.string(),
+  messages: z.array(messageSchema),
   title: z.string().optional(),
   kind: z.enum(['stream', 'rate-limit', 'auth', 'generic']).optional(),
 });

@@ -495,6 +495,7 @@ export function registerChatIPC(): void {
         sendTurnEvent(webContents, activeAgent, IPC_CHANNELS.CHAT_DONE, {
           type: 'done',
           response: opts.response,
+          messages: fullHistory,
           interrupted: opts.interrupted,
           usage: opts.usage,
         });
@@ -793,12 +794,6 @@ export function registerChatIPC(): void {
         activeAgent.finalized = true;
         const detail = context.error ?? 'Unknown error';
         const title = context.errorTitle ?? 'Stream Error';
-        sendTurnEvent(webContents, activeAgent, IPC_CHANNELS.CHAT_ERROR, {
-          type: 'error',
-          error: detail,
-          title,
-          kind: classifyErrorKind(title, detail),
-        });
         publishSessionActivity(sessionId, {
           cwd: turnCtx.cwd,
           state: 'needs_attention',
@@ -818,6 +813,14 @@ export function registerChatIPC(): void {
           activeAgent.selection,
           webContents,
         );
+        activeAgent.messages = fullHistory;
+        sendTurnEvent(webContents, activeAgent, IPC_CHANNELS.CHAT_ERROR, {
+          type: 'error',
+          error: detail,
+          messages: fullHistory,
+          title,
+          kind: classifyErrorKind(title, detail),
+        });
         queueMicrotask(() => {
           disposeActiveAgent(sessionId, activeAgent);
         });
@@ -971,6 +974,7 @@ export function registerChatIPC(): void {
           existing.selection,
           streamWebContents,
         );
+        existing.messages = fullHistory;
         completeSessionActivity(
           sessionId,
           getSessionManager().getActive(existing.windowId)?.id !== sessionId,
@@ -979,6 +983,7 @@ export function registerChatIPC(): void {
         sendTurnEvent(streamWebContents, existing, IPC_CHANNELS.CHAT_DONE, {
           type: 'done',
           response: partial,
+          messages: fullHistory,
           interrupted: true,
           usage,
         });

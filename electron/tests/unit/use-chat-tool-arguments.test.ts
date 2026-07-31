@@ -8,6 +8,7 @@ import type {
   ChatToolCallStartEvent,
   ChatToolCallUpdateEvent,
 } from '../../src/shared/types/ipc';
+import type { Message } from '../../src/shared/types/message';
 
 type Listener<T> = ((event: T) => void) | null;
 
@@ -20,6 +21,27 @@ let cancelStatus = 'cancelled';
 
 function eventIdentity(sequence: number) {
   return { sessionId: 'session-1', turnId: 'turn-1', sequence };
+}
+
+function terminalToolHistory(args: string): Message[] {
+  return [{
+    id: 'durable-tool-call',
+    role: 'assistant',
+    content: '',
+    type: 'tool_call',
+    tool_calls: [{
+      id: 'tool-1',
+      type: 'function',
+      function: { name: 'write', arguments: args },
+    }],
+    tool_call_id: 'tool-1',
+    name: 'write',
+    thinking: null,
+    timestamp: '2026-07-31T00:00:00.000Z',
+    usage: null,
+    hidden: false,
+    tool_result: null,
+  }];
 }
 
 beforeEach(() => {
@@ -68,8 +90,9 @@ afterEach(() => {
 });
 
 describe('useChat tool argument streaming', () => {
-  it('publishes many tool argument fragments once per frame and flushes exact args at terminal commit', () => {
+  it('publishes many tool argument fragments once per frame and adopts authoritative terminal history', () => {
     const { result } = renderHook(() => useChat('session-1'));
+    const messages = terminalToolHistory('{"path":"/a"} trailing');
 
     act(() => {
       onToolStart?.({
@@ -117,11 +140,15 @@ describe('useChat tool argument streaming', () => {
         ...eventIdentity(5),
         type: 'done',
         response: '',
+        messages,
       });
+
     });
 
+    expect(result.current.messages).toEqual(messages);
     const toolCall = result.current.messages.find((message) => message.tool_call_id === 'tool-1');
     expect(toolCall?.tool_calls?.[0]?.function.arguments).toBe('{"path":"/a"} trailing');
+    expect(toolCall?.id).toBe('durable-tool-call');
   });
 
   it('flushes buffered arguments before back-to-back tool lifecycle events', () => {

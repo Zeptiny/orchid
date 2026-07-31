@@ -103,6 +103,7 @@ describe('useChat hydration replay', () => {
         title: 'Authentication failed',
         error: 'bad token',
         kind: 'auth',
+        messages: [],
       });
     });
     expect(result.current.error).toBe('Authentication failed: bad token');

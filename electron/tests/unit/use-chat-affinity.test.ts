@@ -6,7 +6,6 @@ import {
   beginCancelRequest,
   bindChatSession,
   chatToolSnapshotToBlock,
-  commitSegmentsToMessages,
   consumePendingCancel,
   cumulativeUsageFromMessages,
   dropOptimisticUserMessageIfLast,
@@ -21,10 +20,10 @@ import {
 } from '../../src/renderer/hooks/useChat';
 import {
   chatChunkEventSchema,
+  chatDoneEventSchema,
   chatThinkingEventSchema,
 } from '../../src/shared/types/ipc-schemas';
 import type { Message, Usage } from '../../src/shared/types/message';
-import { MessageType } from '../../src/shared/types/message';
 import { createCanonicalToolResult } from '../../src/shared/types/tool-result';
 
 function affinity(selectedSessionId: string | null): ChatEventAffinity {
@@ -165,7 +164,7 @@ describe('useChat event affinity', () => {
     });
   });
 
-  it('keeps usage on a tool-only terminal turn', () => {
+  it('accepts a canonical tool-only durable terminal history', () => {
     const usage: Usage = {
       prompt_tokens: 100,
       completion_tokens: 20,
@@ -177,31 +176,42 @@ describe('useChat event affinity', () => {
       data: { value: 'done' },
     });
 
-    const committed = commitSegmentsToMessages({
-      segments: [{ kind: 'tool', toolCallId: 'tool-1' }],
-      liveTools: [{
-        id: 'tool-1',
-        toolName: 'read',
-        status: 'complete',
-        partialArgs: '{}',
-        args: '{}',
-        agentProjection: 'done',
-        toolResult,
-        startedAt: '2026-07-19T00:00:00.000Z',
-        finishedAt: '2026-07-19T00:00:01.000Z',
-      }],
-      fallbackResponse: '',
-      interrupted: false,
-      usage,
+    const messages: Message[] = [{
+      id: 'tool-only-usage',
+      role: 'assistant',
+      content: '',
+      type: 'text',
+      tool_calls: null,
+      tool_call_id: null,
+      name: null,
       thinking: null,
-    });
+      timestamp: '2026-07-19T00:00:00.000Z',
+      usage,
+      hidden: true,
+      tool_result: null,
+    }, {
+      id: 'tool-result',
+      role: 'tool',
+      content: 'done',
+      type: 'tool_result',
+      tool_calls: null,
+      tool_call_id: 'tool-1',
+      name: 'read',
+      thinking: null,
+      timestamp: '2026-07-19T00:00:01.000Z',
+      usage: null,
+      hidden: false,
+      tool_result: toolResult,
+    }];
 
-    expect(committed.map((message) => message.type)).toEqual([
-      MessageType.TOOL_CALL,
-      MessageType.TOOL_RESULT,
-      MessageType.TEXT,
-    ]);
-    expect(committed.at(-1)).toMatchObject({ content: '', usage, hidden: true });
+    expect(chatDoneEventSchema.parse({
+      sessionId: 'session-1',
+      turnId: 'turn-1',
+      sequence: 1,
+      type: 'done',
+      response: '',
+      messages,
+    }).messages).toEqual(messages);
   });
 
   it('rejects events from a non-selected session', () => {

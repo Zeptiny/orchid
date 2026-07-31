@@ -249,6 +249,8 @@ export interface ChatStateEvent extends ChatEventIdentity {
 export interface ChatDoneEvent extends ChatEventIdentity {
   type: 'done';
   response: string;
+  /** Main-process materialized durable history after the terminal turn write. */
+  messages: Message[];
   /** True when the turn ended due to user Esc cancellation. */
   interrupted?: boolean;
   /** Latest token usage for the completed/interrupted turn. */
@@ -260,6 +262,8 @@ export type ChatErrorKind = 'stream' | 'rate-limit' | 'auth' | 'generic';
 export interface ChatErrorEvent extends ChatEventIdentity {
   type: 'error';
   error: string;
+  /** Main-process materialized durable partial history after the terminal write. */
+  messages: Message[];
   /** Short banner title (e.g. "Authentication failed"). */
   title?: string;
   /** Classified error kind for banner actions. */

@@ -100,13 +100,14 @@ export function forceAbortMainTurn(
   }
 
   let context: AgentContext | undefined;
+  let fullHistory = [...existing.messages, ...existing.turnMessages];
   try {
     const snapshot = existing.actor.getSnapshot();
     context = snapshot?.context as AgentContext | undefined;
     flushPartialTurnContent(existing, context);
 
     if (existing.messages.length > 0 || existing.turnMessages.length > 0) {
-      const fullHistory = [...existing.messages, ...existing.turnMessages];
+      fullHistory = [...existing.messages, ...existing.turnMessages];
       if (fullHistory.length > 0) {
         try {
           const wc = webContentsForWindowId(existing.windowId);
@@ -133,6 +134,7 @@ export function forceAbortMainTurn(
       err,
     );
   }
+  existing.messages = fullHistory;
 
   existing.agentCancelled = true;
   existing.finalized = true;
@@ -150,6 +152,7 @@ export function forceAbortMainTurn(
         sendTurnEvent(ownerWebContents, existing, IPC_CHANNELS.CHAT_DONE, {
           type: 'done',
           response,
+          messages: fullHistory,
           interrupted: true,
           usage,
         });
@@ -217,6 +220,7 @@ export function forceStopSession(sessionId: string): boolean {
       ownerWebContents ?? undefined,
     );
   }
+  existing.messages = fullHistory;
   completeSessionActivity(
     sessionId,
     getSessionManager().getActive(existing.windowId)?.id !== sessionId,
@@ -226,6 +230,7 @@ export function forceStopSession(sessionId: string): boolean {
     sendTurnEvent(ownerWebContents, existing, IPC_CHANNELS.CHAT_DONE, {
       type: 'done',
       response: context.response ?? '',
+      messages: fullHistory,
       interrupted: true,
       usage: context.usage ?? null,
     });

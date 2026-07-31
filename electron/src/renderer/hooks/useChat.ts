@@ -472,9 +472,6 @@ export function useChat(activeSessionId: string | null = null): UseChatReturn {
   const [messages, setMessages] = useState<Message[]>([]);
   const [projectionState, dispatchProjectionState] = useReducer(reduceProjectionState, { projection: null, revision: 0 });
   const [isSwitchingSession, setIsSwitchingSession] = useState(false);
-  // Temporary until durable message materialization leaves the renderer. It is
-  // the sole synchronous projection used by terminal commit paths.
-  const projectionRef = useRef<ChatTurnProjection | null>(null);
   const pendingFrameActionsRef = useRef<ChatTurnEventAction[]>([]);
   const streamFrameIdRef = useRef<number | null>(null);
   const isSendingRef = useRef(false);
@@ -486,7 +483,6 @@ export function useChat(activeSessionId: string | null = null): UseChatReturn {
   const hydrationRef = useRef<{ sessionId: string; events: BufferedProjectionEvent[] } | null>(null);
 
   const dispatchProjection = useCallback((action: ChatTurnProjectionAction) => {
-    projectionRef.current = reduceChatTurnProjection(projectionRef.current, action);
     dispatchProjectionState(action);
   }, []);
   const projection = projectionState.projection;
@@ -547,20 +543,6 @@ export function useChat(activeSessionId: string | null = null): UseChatReturn {
     cancelStreamFrame();
     pendingFrameActionsRef.current = [];
   }, [cancelStreamFrame]);
-  const commitLiveProjection = useCallback((interruptedTurn: boolean) => {
-    const live = projectionRef.current;
-    if (!live) return;
-    const liveTools = live.toolCalls.map(chatToolSnapshotToBlock);
-    const committed = commitSegmentsToMessages({
-      segments: live.streamSegments,
-      liveTools,
-      fallbackResponse: live.response,
-      interrupted: interruptedTurn,
-      usage: live.usage,
-      thinking: live.thinking || null,
-    });
-    if (committed.length > 0) setMessages((previous) => mergeCommittedMessages(previous, committed, liveTools));
-  }, []);
   const applyLiveEvent = useCallback((event: ChatTurnEventAction) => {
     const lifecycle = 'state' in event || event.type === 'tool_call_start' || event.type === 'tool_call_update' || event.type === 'done' || event.type === 'error';
     if (lifecycle) flushStreamFrame();
@@ -570,16 +552,16 @@ export function useChat(activeSessionId: string | null = null): UseChatReturn {
       return;
     }
     if (event.type === 'done') {
-      commitLiveProjection(Boolean(event.interrupted));
+      setMessages(event.messages);
       dispatchProjection({ type: 'clear_stream', status: 'idle' });
       isSendingRef.current = false;
     }
     if (event.type === 'error') {
-      commitLiveProjection(false);
+      setMessages(event.messages);
       dispatchProjection({ type: 'clear_stream', status: 'idle' });
       isSendingRef.current = false;
     }
-  }, [commitLiveProjection, dispatchProjection, flushStreamFrame]);
+  }, [dispatchProjection, flushStreamFrame]);
   const deliverEvent = useCallback((event: ChatTurnEventAction) => {
     const hydration = hydrationRef.current;
     if (shouldBufferChatEvent(hydration?.sessionId ?? null, event)) {
@@ -944,196 +926,4 @@ export function useChat(activeSessionId: string | null = null): UseChatReturn {
     setMessages: replaceMessages,
     isSwitchingSession,
   };
-}
-
-/**
- * Convert chronological stream segments into persisted messages.
- * Order matches call order: tool pair(s) and text segments interleaved.
- */
-export function commitSegmentsToMessages(opts: {
-  segments: readonly StreamSegment[];
-  liveTools: readonly ToolBlock[];
-  fallbackResponse: string;
-  interrupted: boolean;
-  usage: Usage | null;
-  thinking: string | null;
-}): Message[] {
-  const { segments, liveTools, fallbackResponse, interrupted, usage, thinking } = opts;
-  const toolsById = new Map(liveTools.map((b) => [b.id, b]));
-  const out: Message[] = [];
-  const usedToolIds = new Set<string>();
-
-  if (segments.length > 0) {
-    // Find last text segment so usage lands on the final assistant bubble.
-    let lastTextIndex = -1;
-    for (let i = segments.length - 1; i >= 0; i--) {
-      if (segments[i].kind === 'text') {
-        lastTextIndex = i;
-        break;
-      }
-    }
-
-    segments.forEach((seg, index) => {
-      if (seg.kind === 'tool') {
-        const block = toolsById.get(seg.toolCallId);
-        if (block) {
-          usedToolIds.add(block.id);
-          out.push(...toolBlockToMessages(block));
-        }
-        return;
-      }
-      if (seg.kind === 'text') {
-        if (!seg.content && !(interrupted && index === lastTextIndex)) return;
-        out.push({
-          id: seg.id || crypto.randomUUID(),
-          role: MessageRole.ASSISTANT,
-          content: seg.content,
-          type: MessageType.TEXT,
-          tool_calls: null,
-          tool_call_id: null,
-          name: null,
-          thinking: index === lastTextIndex ? thinking : null,
-          timestamp: new Date().toISOString(),
-          usage: index === lastTextIndex ? usage : null,
-          hidden: false,
-          tool_result: null,
-  });
-        return;
-      }
-      if (seg.kind === 'thinking' && seg.content) {
-        out.push({
-          id: seg.id || crypto.randomUUID(),
-          role: MessageRole.ASSISTANT,
-          content: seg.content,
-          type: MessageType.THINKING,
-          tool_calls: null,
-          tool_call_id: null,
-          name: null,
-          thinking: seg.content,
-          timestamp: new Date().toISOString(),
-          usage: null,
-          hidden: false,
-          tool_result: null,
-  });
-      }
-    });
-
-    // Any tools that never got a segment entry (should be rare) — append in start order.
-    for (const block of liveTools) {
-      if (!usedToolIds.has(block.id)) {
-        out.push(...toolBlockToMessages(block));
-      }
-    }
-    if (usage && lastTextIndex < 0) {
-      out.push({
-        id: crypto.randomUUID(),
-        role: MessageRole.ASSISTANT,
-        content: '',
-        type: MessageType.TEXT,
-        tool_calls: null,
-        tool_call_id: null,
-        name: null,
-        thinking,
-        timestamp: new Date().toISOString(),
-        usage,
-        hidden: true,
-        tool_result: null,
-      });
-    }
-    return out;
-  }
-
-  // Fallback: no segment timeline (older paths) — tools then single assistant.
-  for (const block of liveTools) {
-    out.push(...toolBlockToMessages(block));
-  }
-  if (fallbackResponse || interrupted || usage) {
-    out.push({
-      id: crypto.randomUUID(),
-      role: MessageRole.ASSISTANT,
-      content: fallbackResponse ?? '',
-      type: MessageType.TEXT,
-      tool_calls: null,
-      tool_call_id: null,
-      name: null,
-      thinking,
-      timestamp: new Date().toISOString(),
-      usage,
-      hidden: !fallbackResponse && !interrupted && usage != null,
-      tool_result: null,
-  });
-  }
-  return out;
-}
-
-/** Keep renderer-only terminal materialization stable until main owns it. */
-function mergeCommittedMessages(
-  previous: Message[],
-  committed: Message[],
-  liveTools: readonly ToolBlock[],
-): Message[] {
-  const liveIds = new Set(liveTools.map((block) => block.id));
-  const next = previous.filter((message) => !(
-    (message.type === MessageType.TOOL_CALL || message.type === MessageType.TOOL_RESULT) &&
-    message.tool_call_id &&
-    liveIds.has(message.tool_call_id)
-  ));
-  const lastCommitted = committed[committed.length - 1];
-  const lastPrevious = next[next.length - 1];
-  if (
-    lastCommitted?.role === MessageRole.ASSISTANT &&
-    lastCommitted.type === MessageType.TEXT &&
-    lastPrevious?.role === MessageRole.ASSISTANT &&
-    lastPrevious.type === MessageType.TEXT &&
-    lastPrevious.content === lastCommitted.content
-  ) {
-    const withoutDuplicate = committed.slice(0, -1);
-    return withoutDuplicate.length === 0 ? next : [...next, ...withoutDuplicate];
-  }
-  return [...next, ...committed];
-}
-
-/** Convert a live ToolBlock into persisted tool_call + tool_result messages. */
-function toolBlockToMessages(block: ToolBlock): Message[] {
-  const callId = block.id;
-  const toolName = block.toolName || 'unknown';
-  const args = block.args || block.partialArgs || '{}';
-  const call: Message = {
-    id: crypto.randomUUID(),
-    role: MessageRole.ASSISTANT,
-    content: '',
-    type: MessageType.TOOL_CALL,
-    tool_calls: [
-      {
-        id: callId,
-        type: 'function',
-        function: { name: toolName, arguments: args },
-      },
-    ],
-    tool_call_id: callId,
-    name: toolName,
-    thinking: null,
-    timestamp: block.startedAt,
-    usage: null,
-    hidden: false,
-    tool_result: null,
-  };
-
-  if (!block.toolResult) return [call];
-  const result: Message = {
-    id: crypto.randomUUID(),
-    role: MessageRole.TOOL,
-    content: block.agentProjection ?? '',
-    type: MessageType.TOOL_RESULT,
-    tool_calls: null,
-    tool_call_id: callId,
-    name: toolName,
-    thinking: null,
-    timestamp: block.finishedAt ?? block.startedAt,
-    usage: null,
-    hidden: false,
-    tool_result: block.toolResult,
-  };
-
-  return [call, result];
 }
