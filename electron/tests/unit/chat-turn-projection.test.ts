@@ -54,7 +54,7 @@ function identity(sequence: number) {
 
 describe('ChatTurnProjection', () => {
   it('uses the same reducer vocabulary for a local send start and its first wire event', () => {
-    const started = reduceChatTurnProjection(null, {
+    const started = reduceChatTurnProjection(seedChatTurnProjection(liveSnapshot({ usage: usage(7) })), {
       type: 'begin',
       sessionId: SESSION_ID,
       startedAt: STARTED_AT,
@@ -71,6 +71,7 @@ describe('ChatTurnProjection', () => {
       response: 'first',
       sequence: 1,
     });
+    expect(started?.usage).toBeNull();
   });
 
   it('seeds every live fact from an existing ChatSnapshot without materializing messages', () => {
