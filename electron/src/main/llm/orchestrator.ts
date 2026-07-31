@@ -50,17 +50,8 @@ import { StreamAttemptController } from './stream/attempt-controller';
 import {
   EagerToolBridge,
 } from './stream/eager-tool-bridge';
-import {
-  SdkEventAdapter,
-  classifyStreamError,
-  executionFromSdkOutput,
-  sdkPreExecutionError,
-  streamResultFields,
-  stringifyToolInput,
-  streamToolCallId,
-  toInternalToolName,
-  toProviderMcpToolName,
-} from './stream/sdk-event-adapter';
+import { NormalizedStream } from './stream/normalized-stream';
+import { classifyStreamError, toProviderMcpToolName } from './stream/sdk-event-adapter';
 import type { ProviderStepUsage } from './stream/sdk-event-adapter';
 import type { StreamEvent } from './stream/events';
 import { buildSystemPrompt, type SystemPromptContext } from './system-prompt';
@@ -265,8 +256,7 @@ export async function* streamChat(params: StreamChatParams): AsyncGenerator<Stre
       resumeIdleAfterTool: () => attempt.resumeIdleAfterTool(),
       markDeliveredOutput: () => attempt.markDeliveredOutput(),
     });
-    const pendingUsageEvents: Usage[] = [];
-    const sdkEvents = new SdkEventAdapter({
+    const normalizedStream = new NormalizedStream({
       coreMessages,
       mcpManager,
       attempt,
@@ -277,28 +267,6 @@ export async function* streamChat(params: StreamChatParams): AsyncGenerator<Stre
         buildUsageContext,
       ),
     });
-    let usedFullStream = false;
-    let pendingStepEventsSignaled = false;
-    let resolvePendingStepEvents: (() => void) | null = null;
-
-    const notifyPendingStepEvents = (): void => {
-      if (pendingStepEventsSignaled) return;
-      pendingStepEventsSignaled = true;
-      resolvePendingStepEvents?.();
-      resolvePendingStepEvents = null;
-    };
-    const waitForPendingStepEvents = (): Promise<void> => {
-      if (pendingStepEventsSignaled) {
-        pendingStepEventsSignaled = false;
-        return Promise.resolve();
-      }
-      return new Promise((resolve) => {
-        resolvePendingStepEvents = () => {
-          pendingStepEventsSignaled = false;
-          resolve();
-        };
-      });
-    };
 
     // Stop at the step-count limit OR when an early stop is requested (e.g. a
     // queued "next-request" message). Without a predicate the step-count
@@ -321,143 +289,11 @@ export async function* streamChat(params: StreamChatParams): AsyncGenerator<Stre
       // Retry ownership belongs to Orchid's accounting-aware middleware.
       maxRetries: 0,
       providerOptions,
-      onStepFinish: async ({ usage, request, toolCalls, toolResults, content }) => {
-        if (usage && !usedFullStream) {
-          pendingUsageEvents.push(buildStepUsage(
-            usage,
-            request?.messages ?? coreMessages,
-            buildUsageContext,
-          ));
-        }
-        if (toolCalls) {
-          for (const tc of toolCalls as Array<{ toolCallId: string; toolName: string; input?: unknown }>) {
-            eagerBridge.queuePendingToolCall({
-              toolCallId: tc.toolCallId,
-              toolName: toInternalToolName(tc.toolName, mcpManager),
-              args: stringifyToolInput(tc.input),
-            });
-          }
-        }
-        if (toolResults) {
-          for (const tr of toolResults as Array<{
-            toolCallId: string;
-            output?: unknown;
-            result?: unknown;
-            error?: unknown;
-          }>) {
-            const raw = tr.output ?? tr.result ?? tr.error ?? '';
-            const execution = tr.error != null && tr.output == null && tr.result == null
-              ? sdkPreExecutionError({ error: tr.error })
-              : executionFromSdkOutput(
-                  raw,
-                  'unknown',
-                );
-            eagerBridge.queuePendingToolResult({
-              toolCallId: tr.toolCallId,
-              ...streamResultFields(execution),
-            });
-          }
-        }
-        if (content) {
-          for (const rawPart of content as Array<Record<string, unknown>>) {
-            const type = String(rawPart.type ?? '');
-            if (type !== 'tool-error' && type !== 'tool-input-error') continue;
-            const toolCallId = streamToolCallId(rawPart);
-            if (!toolCallId) continue;
-            const execution = sdkPreExecutionError(rawPart, mcpManager);
-            eagerBridge.queuePendingToolResult({
-              toolCallId,
-              ...streamResultFields(execution),
-            });
-          }
-        }
-        if (
-          !usedFullStream &&
-          (pendingUsageEvents.length > 0 ||
-            eagerBridge.hasPendingFallbackEvents)
-        ) {
-          notifyPendingStepEvents();
-        }
-      },
+      onStepFinish: normalizedStream.onStepFinish,
     });
 
     try {
-      try {
-        for await (const chunk of result.fullStream) {
-          if (!usedFullStream) {
-            usedFullStream = true;
-            pendingUsageEvents.length = 0;
-          }
-          const part = chunk as Record<string, unknown>;
-          yield* sdkEvents.adapt(part);
-
-          yield* eagerBridge.drainEvents();
-        }
-      } catch (fullStreamErr) {
-        // Idle/user abort is not "fullStream unsupported" — rethrow so the
-        // outer catch can emit Stream idle timeout / cancel (not textStream fallback).
-        if (attempt.didIdleTimeout || attempt.didUserAbort || attempt.signal.aborted) {
-          throw fullStreamErr;
-        }
-        if (!usedFullStream) {
-          console.warn('[orchestrator] fullStream failed, falling back to textStream:', fullStreamErr);
-          const textIterator = result.textStream[Symbol.asyncIterator]();
-          let nextText = textIterator.next().then((value) => ({
-            kind: 'text' as const,
-            value,
-          }));
-          let nextStepEvents = waitForPendingStepEvents().then(() => ({
-            kind: 'step-events' as const,
-          }));
-
-          while (true) {
-            const next = await Promise.race([nextText, nextStepEvents]);
-            if (next.kind === 'step-events') {
-              yield* eagerBridge.drainEvents();
-              while (pendingUsageEvents.length > 0) {
-                yield { type: 'usage', usage: pendingUsageEvents.shift()! };
-              }
-              nextStepEvents = waitForPendingStepEvents().then(() => ({
-                kind: 'step-events' as const,
-              }));
-              continue;
-            }
-
-            if (next.value.done) break;
-            attempt.armIdleTimer();
-            if (next.value.value) {
-              attempt.markDeliveredOutput();
-              yield { type: 'content', text: next.value.value };
-            }
-            nextText = textIterator.next().then((value) => ({
-              kind: 'text' as const,
-              value,
-            }));
-          }
-        } else {
-          throw fullStreamErr;
-        }
-      }
-
-      const finishReason = await result.finishReason;
-
-      // Flush any eager tool starts/completions that settled during the final
-      // await (e.g. the last tool in a step) before emitting `finish`.
-      await eagerBridge.flush();
-      yield* eagerBridge.drainEvents();
-      if (!usedFullStream) {
-        while (pendingUsageEvents.length > 0) {
-          yield { type: 'usage', usage: pendingUsageEvents.shift()! };
-        }
-      }
-
-      yield { type: 'finish', finishReason: finishReason ?? 'stop' };
-
-      if (finishReason === 'length') {
-        console.warn('[orchestrator] Stream terminated due to max token limit');
-      } else if (finishReason === 'content-filter') {
-        console.warn('[orchestrator] Stream terminated by content filter');
-      }
+      yield* normalizedStream.events(result);
       return; // success
     } catch (err) {
       const canRetryIdle = attempt.canRetryIdle(idleAttempt, maxIdleAttempts);
