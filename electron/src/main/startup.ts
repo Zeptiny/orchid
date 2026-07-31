@@ -1,21 +1,15 @@
-import type {
-  StartupPhase,
-  StartupSnapshot,
-  StartupStep,
-  StartupStepId,
-  StartupStepState,
-  ToolWorkerStartupOutcome,
+import {
+  STARTUP_STEP_DEFINITIONS,
+  type StartupPhase,
+  type StartupSnapshot,
+  type StartupStepId,
+  type StartupStepState,
+  type ToolWorkerStartupOutcome,
 } from '../shared/types/ipc-boundary';
 
 export type StartupClock = () => number;
 
-export const STARTUP_STEPS = [
-  { id: 'opening_window', label: 'Opening window' },
-  { id: 'settings_providers', label: 'Loading settings and providers' },
-  { id: 'agents_tools', label: 'Loading agents and tools' },
-  { id: 'tool_workers', label: 'Starting tool workers' },
-  { id: 'preparing_interface', label: 'Preparing the application interface' },
-] as const satisfies ReadonlyArray<Pick<StartupStep, 'id' | 'label'>>;
+export const STARTUP_STEPS = STARTUP_STEP_DEFINITIONS;
 
 type MutableStep = {
   id: StartupStepId;

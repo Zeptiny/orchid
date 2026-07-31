@@ -53,6 +53,7 @@ function statusText(snapshot: StartupSnapshot | null): string {
 export function StartupScreen({ onReady }: StartupScreenProps) {
   const [snapshot, dispatchSnapshot] = useReducer(revisionMaxReducer, null);
   const [continuing, setContinuing] = useState(false);
+  const [continuationFailed, setContinuationFailed] = useState(false);
   const revisionRef = useRef(-1);
   const continuingRef = useRef(false);
 
@@ -96,8 +97,15 @@ export function StartupScreen({ onReady }: StartupScreenProps) {
 
     continuingRef.current = true;
     setContinuing(true);
+    setContinuationFailed(false);
     void bridge.continueDegraded().then(
       (result) => {
+        if (!result.ok) {
+          continuingRef.current = false;
+          setContinuing(false);
+          setContinuationFailed(true);
+          return;
+        }
         applySnapshot(result.snapshot);
         if (result.snapshot.phase !== 'ready') {
           continuingRef.current = false;
@@ -152,6 +160,9 @@ export function StartupScreen({ onReady }: StartupScreenProps) {
             )}
           >
             <p className="text-sm">Orchid can continue with inline tools, which may be less responsive for local work.</p>
+            {continuationFailed && (
+              <p className="text-sm">Could not continue with inline tools. Try again.</p>
+            )}
           </Alert>
         ) : null}
 

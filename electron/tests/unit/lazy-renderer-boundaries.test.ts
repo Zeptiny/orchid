@@ -22,6 +22,8 @@ describe('lazy renderer boundaries', () => {
     expect(readyApp).not.toMatch(/import \{ ConfigView \} from/);
     expect(readyApp).not.toMatch(/import \{ OnboardingScreen \} from/);
     expect(app).toContain('<Suspense');
+    expect(app).toContain('<ErrorBoundary');
+    expect(readyApp.match(/<ErrorBoundary/g)).toHaveLength(2);
     expect(readyApp).toContain('onboardingOpen && onboardingChecked');
   });
 

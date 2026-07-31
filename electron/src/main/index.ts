@@ -60,6 +60,7 @@ import {
   resetProviderAccountingStore,
 } from './providers/accounting/store';
 import { closeSessionDb } from './session/storage';
+import { withTimeoutPromise } from './utils/async';
 
 // ── Global state ─────────────────────────────────────────────────────────────
 
@@ -76,6 +77,8 @@ let providerStatusScheduler: ProviderStatusScheduler | null = null;
 
 /** Hard ceiling for graceful shutdown before forcing process exit. */
 const SHUTDOWN_DEADLINE_MS = 10_000;
+/** Time allowed for aborted startup work to observe its signal before teardown continues. */
+const STARTUP_ABORT_GRACE_MS = 1_000;
 
 /**
  * Runtime macOS code-signing check (not build-time CSC_NAME / CODESIGN_CERT).
@@ -387,7 +390,17 @@ app.on('before-quit', async (event) => {
 
     // Startup may be paused between stages. Let it observe the abort signal
     // before disposing the pool it could otherwise initialize afterwards.
-    await startupLifecycle;
+    if (startupLifecycle) {
+      try {
+        await withTimeoutPromise(
+          startupLifecycle,
+          STARTUP_ABORT_GRACE_MS,
+          'Startup did not stop within the shutdown grace period',
+        );
+      } catch (error) {
+        console.warn('Startup did not settle during shutdown grace period; continuing teardown', error);
+      }
+    }
     await disposeToolWorkerPool();
 
     // 5. Destroy auto-updater

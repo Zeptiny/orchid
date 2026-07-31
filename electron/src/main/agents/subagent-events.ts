@@ -137,17 +137,23 @@ export function createSubagentDeltaBatcher(
     const merged = mergeAppendDeltas(queue);
     const batch: SubagentDeltaEvent[] = [];
     const deferred: SubagentDeltaEvent[] = [];
+    let normalCount = 0;
     let bytes = 0;
     for (const event of merged) {
       const exempt = event.type === 'spawned' || event.type === 'terminal' || event.type === 'status_changed';
+      if (exempt) {
+        batch.push(event);
+        continue;
+      }
       const size = estimateDeltaBytes(event);
-      const overCount = batch.length >= maxPerFlush;
-      const overBytes = batch.length > 0 && bytes + size > byteBudget;
-      if (!exempt && (overCount || overBytes)) {
+      const overCount = normalCount >= maxPerFlush;
+      const overBytes = normalCount > 0 && bytes + size > byteBudget;
+      if (overCount || overBytes) {
         deferred.push(event);
         continue;
       }
       batch.push(event);
+      normalCount += 1;
       bytes += size;
     }
     queue = deferred;

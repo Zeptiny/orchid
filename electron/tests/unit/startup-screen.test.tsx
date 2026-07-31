@@ -141,6 +141,23 @@ describe('StartupScreen', () => {
     await waitFor(() => expect(onReady).toHaveBeenCalledTimes(1));
   });
 
+  it('reports a rejected degraded continuation and allows another attempt', async () => {
+    const degraded = snapshot(3, 'degraded', ['complete', 'complete', 'complete', 'warning', 'complete']);
+    const bridge = installStartupBridge({
+      initial: degraded,
+      continueResult: Promise.resolve({ ok: false, snapshot: degraded }),
+    });
+
+    render(<StartupScreen onReady={vi.fn()} />);
+
+    const continueButton = await screen.findByRole('button', { name: 'Continue with inline tools' });
+    fireEvent.click(continueButton);
+
+    expect(await screen.findByText(/could not continue with inline tools/i)).toBeTruthy();
+    await waitFor(() => expect((continueButton as HTMLButtonElement).disabled).toBe(false));
+    expect(bridge.continueDegraded).toHaveBeenCalledTimes(1);
+  });
+
   it('shows restart guidance for fatal startup failure without exposing details', async () => {
     const onReady = vi.fn();
     installStartupBridge({

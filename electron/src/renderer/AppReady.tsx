@@ -7,6 +7,7 @@ import {
   useState,
 } from 'react';
 import { ChatView } from './components/ChatView';
+import { ErrorBoundary } from './components/ui/ErrorBoundary';
 import { StateMessage } from './components/ui/StateMessage';
 import { applyTheme, type ThemeName, THEME_NAMES } from './themes';
 import { onOrchidEvent } from './utils/events';
@@ -93,14 +94,18 @@ function AppReady() {
         <ChatView isVisible={chatVisible} bootstrapConfig={bootstrapConfig} />
       </div>
       {configOpen && (
-        <Suspense fallback={<div className="flex h-screen min-h-0 items-center justify-center bg-base-100"><StateMessage kind="loading" title="Loading Settings…" role="status" aria-live="polite" /></div>}>
-          <ConfigView initialTab={settingsTab} onClose={() => setConfigOpen(false)} />
-        </Suspense>
+        <ErrorBoundary title="Settings could not load">
+          <Suspense fallback={<div className="flex h-screen min-h-0 items-center justify-center bg-base-100"><StateMessage kind="loading" title="Loading Settings…" role="status" aria-live="polite" /></div>}>
+            <ConfigView initialTab={settingsTab} onClose={() => setConfigOpen(false)} />
+          </Suspense>
+        </ErrorBoundary>
       )}
       {onboardingOpen && onboardingChecked ? (
-        <Suspense fallback={<div className="onb-overlay"><StateMessage kind="loading" title="Loading setup…" role="status" aria-live="polite" /></div>}>
-          <OnboardingScreen isOpen onComplete={() => setOnboardingOpen(false)} onSkip={() => setOnboardingOpen(false)} />
-        </Suspense>
+        <ErrorBoundary title="Setup could not load" className="onb-overlay">
+          <Suspense fallback={<div className="onb-overlay"><StateMessage kind="loading" title="Loading setup…" role="status" aria-live="polite" /></div>}>
+            <OnboardingScreen isOpen onComplete={() => setOnboardingOpen(false)} onSkip={() => setOnboardingOpen(false)} />
+          </Suspense>
+        </ErrorBoundary>
       ) : null}
     </div>
   );

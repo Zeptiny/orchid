@@ -130,4 +130,18 @@ describe('startup lifecycle', () => {
     expect(lifecycle.logFailure).toHaveBeenCalledWith('settings_providers', error);
     expect(lifecycle.prepareInterface).not.toHaveBeenCalled();
   });
+
+  it('still returns failed when the failure transition itself throws', async () => {
+    const startupError = new Error('settings failed');
+    const transitionError = new Error('failure transition failed');
+    const { lifecycle, state } = createLifecycle({
+      loadSettingsAndProviders: vi.fn(() => { throw startupError; }),
+    });
+    vi.spyOn(state, 'fail').mockImplementation(() => { throw transitionError; });
+
+    await expect(runStartupLifecycle(lifecycle)).resolves.toBe('failed');
+
+    expect(lifecycle.logFailure).toHaveBeenNthCalledWith(1, 'settings_providers', startupError);
+    expect(lifecycle.logFailure).toHaveBeenNthCalledWith(2, 'settings_providers', transitionError);
+  });
 });

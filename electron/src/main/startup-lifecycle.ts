@@ -84,7 +84,11 @@ export async function runStartupLifecycle(
   } catch (error) {
     dependencies.logFailure(activeStep, error);
     if (activeStep !== null && state.snapshot().phase === 'starting') {
-      state.fail(activeStep);
+      try {
+        state.fail(activeStep);
+      } catch (transitionError) {
+        dependencies.logFailure(activeStep, transitionError);
+      }
     }
     return 'failed';
   }

@@ -775,6 +775,38 @@ describe('subagent delta batcher (U3)', () => {
     expect(delivered).toHaveLength(2);
   });
 
+  it('does not charge exempt lifecycle deltas to the normal count or byte budgets', () => {
+    const delivered: SubagentEvent[] = [];
+    const batcher = createSubagentDeltaBatcher((envelope) => { delivered.push(envelope); }, {
+      budgets: () => ({ maxPerFlush: 2, byteBudgetKb: 1 }),
+    });
+    batcher.queue({
+      ...baseFields,
+      sequence: 1,
+      type: 'spawned',
+      record: { ...record('subagent-1', 'running'), task: 'x'.repeat(2_000) },
+      usage: null,
+    });
+    batcher.queue({ ...baseFields, sequence: 2, type: 'status_changed', status: 'running' });
+    batcher.queue({
+      ...baseFields,
+      sequence: 3,
+      type: 'terminal',
+      record: record('subagent-1', 'completed'),
+      state: 'completed',
+      usage: null,
+    });
+    batcher.queue(textDelta(4, 'a'.repeat(600), 'seg-a'));
+    batcher.queue(usageDelta(5));
+    batcher.queue(usageDelta(6));
+
+    vi.advanceTimersByTime(16);
+    expect(sequences(delivered)).toEqual([[1, 2, 3, 4, 5]]);
+
+    vi.advanceTimersByTime(16);
+    expect(sequences(delivered)).toEqual([[1, 2, 3, 4, 5], [6]]);
+  });
+
   it('skips sessions with no eligible recipient without delivering or deferring their deltas', () => {
     const delivered: SubagentEvent[] = [];
     const batcher = createSubagentDeltaBatcher((envelope) => { delivered.push(envelope); }, {

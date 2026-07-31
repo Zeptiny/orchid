@@ -4,6 +4,7 @@ import {
   STARTUP_STEPS,
   type StartupClock,
 } from '../../src/main/startup';
+import { STARTUP_STEP_DEFINITIONS } from '../../src/shared/types/ipc-boundary';
 
 function clockAt(initial = 0): { clock: StartupClock; advance: (ms: number) => void } {
   let now = initial;
@@ -14,6 +15,10 @@ function clockAt(initial = 0): { clock: StartupClock; advance: (ms: number) => v
 }
 
 describe('StartupState', () => {
+  it('reuses the shared ordered startup step definitions', () => {
+    expect(STARTUP_STEPS).toBe(STARTUP_STEP_DEFINITIONS);
+  });
+
   it('publishes ordered immutable snapshots with monotonic revisions and durations', () => {
     const time = clockAt(100);
     const state = new StartupState(time.clock);
@@ -56,6 +61,16 @@ describe('StartupState', () => {
     expect(state.snapshot().phase).toBe('failed');
     expect(() => state.activate('agents_tools')).toThrow(/terminal phase/i);
     expect(() => state.ready()).toThrow(/terminal phase/i);
+  });
+
+  it('rejects a clock regression while settling an active startup step', () => {
+    const time = clockAt(100);
+    const state = new StartupState(time.clock);
+
+    state.activate('opening_window');
+    time.advance(-1);
+
+    expect(() => state.complete('opening_window')).toThrow(/Startup clock regressed/);
   });
 
   it('maps worker outcomes to the fixed skipped, complete, and warning states', () => {

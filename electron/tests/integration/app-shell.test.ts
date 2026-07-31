@@ -96,6 +96,7 @@ describe('progressive startup shell', () => {
 
   it('seeds a local, accessible startup shell before the renderer module', () => {
     const indexHtml = fs.readFileSync(path.resolve(__dirname, '../../src/renderer/index.html'), 'utf8');
+    const indexCss = fs.readFileSync(path.resolve(__dirname, '../../src/renderer/styles/index.css'), 'utf8');
     const shellIndex = indexHtml.indexOf('class="startup-shell"');
     const moduleIndex = indexHtml.indexOf('<script type="module" src="./main.tsx"></script>');
 
@@ -104,8 +105,10 @@ describe('progressive startup shell', () => {
     expect(indexHtml).toContain('./assets/orchid-icon.svg');
     expect(indexHtml).toContain('role="status"');
     expect(indexHtml).toContain('aria-live="polite"');
-    expect(indexHtml).toContain('background: #09090b');
-    expect(indexHtml).toContain('prefers-reduced-motion: reduce');
+    expect(indexHtml).toContain('href="./styles/index.css"');
+    expect(indexHtml).not.toContain('<style>');
+    expect(indexCss).toContain('background: #09090b');
+    expect(indexCss).toContain('prefers-reduced-motion: reduce');
   });
 
   it('loads Google Fonts as a non-blocking enhancement', () => {
@@ -127,6 +130,10 @@ describe('progressive startup shell', () => {
     expect(mainIndex).toContain('startToolWorkers: () => initToolWorkerPool(getConfig())');
     expect(mainIndex).toContain('registerAllIPC();');
     expect(mainIndex).toContain('unregisterStartupIPC();');
+    expect(mainIndex).toContain('await withTimeoutPromise(');
+    expect(mainIndex.indexOf('await withTimeoutPromise(')).toBeLessThan(
+      mainIndex.indexOf('await disposeToolWorkerPool();'),
+    );
   });
 });
 
@@ -467,10 +474,10 @@ describe('Theme CSS Custom Properties', () => {
   });
 
   it('loads styles through the canonical index.css entry', () => {
-    const mainTsx = fs.readFileSync(path.resolve(__dirname, '../../src/renderer/main.tsx'), 'utf-8');
+    const indexHtml = fs.readFileSync(path.resolve(__dirname, '../../src/renderer/index.html'), 'utf-8');
     const appTsx = fs.readFileSync(path.resolve(__dirname, '../../src/renderer/App.tsx'), 'utf-8');
     const indexCss = fs.readFileSync(path.resolve(__dirname, '../../src/renderer/styles/index.css'), 'utf-8');
-    expect(mainTsx).toContain("./styles/index.css");
+    expect(indexHtml).toContain('href="./styles/index.css"');
     expect(appTsx).not.toMatch(/import\s+['"]\.\/styles\/chat\.css['"]/);
     expect(indexCss).toMatch(/@import\s+["']\.\/components\.css["']/);
     expect(indexCss).toMatch(/@import\s+["']\.\/markdown\.css["']/);

@@ -115,12 +115,16 @@ function runtimeModuleSpecifiers(sourceFile) {
   return specifiers;
 }
 
-function resolveLocalSourceFile(fromFile, specifier, sourceFiles) {
-  if (!specifier.startsWith('.')) {
+function resolveLocalSourceFile(root, fromFile, specifier, sourceFiles) {
+  let unresolved;
+  if (specifier.startsWith('@shared/')) {
+    unresolved = path.resolve(root, 'shared', specifier.slice('@shared/'.length));
+  } else if (specifier.startsWith('.')) {
+    unresolved = path.resolve(path.dirname(fromFile), specifier);
+  } else {
     return undefined;
   }
 
-  const unresolved = path.resolve(path.dirname(fromFile), specifier);
   const candidates = [];
   const extension = path.extname(unresolved);
 
@@ -156,7 +160,7 @@ function buildGraph(root) {
     const edges = graph.get(file);
 
     for (const specifier of runtimeModuleSpecifiers(sourceFile)) {
-      const target = resolveLocalSourceFile(file, specifier, sourceFiles);
+      const target = resolveLocalSourceFile(root, file, specifier, sourceFiles);
       if (target) {
         edges.add(target);
       }

@@ -91,6 +91,18 @@ describe('runtime dependency cycle guard', () => {
     expect(result.output).toMatch(/a\.ts\s*->\s*b\.ts\s*->\s*a\.ts|b\.ts\s*->\s*a\.ts\s*->\s*b\.ts/);
   });
 
+  it('resolves @shared path aliases as local runtime edges', () => {
+    const root = makeFixture({
+      'main/a.ts': "import { b } from '@shared/b.js';\nexport const a = b;\n",
+      'shared/b.ts': "import { a } from '../main/a';\nexport const b = a;\n",
+    });
+
+    const result = runGuard(root);
+
+    expect(result.status).not.toBe(0);
+    expect(result.output).toMatch(/main\/a\.ts\s*->\s*shared\/b\.ts\s*->\s*main\/a\.ts|shared\/b\.ts\s*->\s*main\/a\.ts\s*->\s*shared\/b\.ts/);
+  });
+
   it('allows type-only mutual references', () => {
     const root = makeFixture({
       'a.ts': "import type { B } from './b';\nexport type { B } from './b';\nexport interface A { b: B }\n",

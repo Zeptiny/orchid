@@ -83,6 +83,8 @@ describe('preload SUBAGENTS_EVENT validation', () => {
     vi.resetModules();
     electronMock.handlers.clear();
     electronMock.contextBridge.exposeInMainWorld.mockClear();
+    electronMock.ipcRenderer.invoke.mockReset();
+    electronMock.ipcRenderer.removeListener.mockReset();
     await import('../../src/preload/index');
     const exposed = electronMock.contextBridge.exposeInMainWorld.mock.calls
       .find(([name]) => name === 'orchid');
@@ -147,6 +149,8 @@ describe('preload startup validation', () => {
     vi.resetModules();
     electronMock.handlers.clear();
     electronMock.contextBridge.exposeInMainWorld.mockClear();
+    electronMock.ipcRenderer.invoke.mockReset();
+    electronMock.ipcRenderer.removeListener.mockReset();
     await import('../../src/preload/index');
   });
 
