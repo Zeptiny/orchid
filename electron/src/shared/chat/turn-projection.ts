@@ -22,6 +22,7 @@ import type {
   ChatUsageEvent,
 } from '../types/ipc';
 
+/** IPC events that contribute facts to the live turn projection. */
 export type ChatTurnEvent =
   | ChatChunkEvent
   | ChatThinkingEvent
@@ -42,6 +43,7 @@ export type ChatTurnEventAction = ChatTurnEvent & {
   occurredAt: string;
 };
 
+/** Durable outcome facts retained after the live stream reaches a terminal state. */
 export type ChatTurnTerminalFact =
   | {
     type: 'done';
@@ -61,6 +63,7 @@ export type ChatTurnToolSnapshot = Omit<ChatToolCallSnapshot, 'status'> & {
   status: ChatToolCallSnapshot['status'] | 'failed';
 };
 
+/** Renderer-neutral, in-flight view reconstructed from ordered turn events. */
 export interface ChatTurnProjection {
   sessionId: string;
   turnId: string;
@@ -320,7 +323,7 @@ function applyState(
 
 /** Normalize arbitrary XState values at the shared snapshot boundary. */
 export function normalizeChatSnapshotState(state: string): ChatSnapshotState {
-  if (state === 'idle') return 'idle';
+  if (state === 'idle' || state === 'interrupted') return 'idle';
   if (state === 'error') return 'error';
   return 'streaming';
 }

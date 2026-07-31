@@ -422,7 +422,10 @@ export function useChat(activeSessionId: string | null = null): UseChatReturn {
     return true;
   }, []);
   const applyLiveEvent = useCallback((event: ChatTurnEventAction) => {
-    if (isProjectionLifecycleEvent(event)) flushStreamFrame();
+    // Directly dispatched events advance the projection sequence watermark.
+    // Publish any frame-batched deltas first so a later usage or lifecycle
+    // event cannot make them stale before the next animation frame.
+    flushStreamFrame();
     dispatchProjection({ type: 'events', actions: [event] });
     if ('state' in event) {
       if (event.state === 'idle') isSendingRef.current = false;

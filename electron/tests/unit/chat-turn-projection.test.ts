@@ -252,15 +252,20 @@ describe('ChatTurnProjection', () => {
     expect(cancelled?.toolCalls[0]?.status).toBe('failed');
   });
 
-  it('preserves interrupted done facts and final usage', () => {
+  it('keeps a cancelled turn idle through the interrupted machine state and interrupt timeout', () => {
     const finalUsage = usage(12);
-    const projected = applyChatTurnEvents(seedChatTurnProjection(liveSnapshot()), [
+    const cancelled = applyChatTurnEvents(seedChatTurnProjection(liveSnapshot()), [
       event({ ...identity(1), type: 'usage', usage: finalUsage }, TOOL_STARTED_AT),
       event({ ...identity(2), type: 'done', response: 'partial answer', interrupted: true, usage: finalUsage }, TOOL_FINISHED_AT),
       event({ ...identity(3), type: 'state', state: 'idle', error: null, interruptState: 'confirmSubagents', cwd: '/workspace' }, TOOL_FINISHED_AT),
+      event({ ...identity(4), type: 'state', state: 'interrupted', error: null, interruptState: 'confirmSubagents', cwd: '/workspace' }, TOOL_FINISHED_AT),
     ]);
+    const afterTimeout = applyChatTurnEvent(
+      cancelled,
+      event({ ...identity(5), type: 'state', state: 'idle', error: null, interruptState: 'idle', cwd: '/workspace' }, TOOL_FINISHED_AT),
+    );
 
-    expect(projected).toMatchObject({
+    expect(cancelled).toMatchObject({
       status: 'idle',
       response: 'partial answer',
       usage: finalUsage,
@@ -268,6 +273,7 @@ describe('ChatTurnProjection', () => {
       interruptState: 'confirmSubagents',
       terminal: { type: 'done', response: 'partial answer', interrupted: true, usage: finalUsage },
     });
+    expect(afterTimeout).toMatchObject({ status: 'idle', interruptState: 'idle' });
   });
 
   it('rejects wrong identity and stale or duplicate sequence without mutating the projection', () => {
