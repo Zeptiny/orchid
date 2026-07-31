@@ -19,7 +19,6 @@ import {
 import { createCanonicalToolResult } from '../../../shared/types/tool-result';
 import type { EagerToolBridge } from './eager-tool-bridge';
 import type { StreamAttemptController } from './attempt-controller';
-import type { PendingToolResult } from './eager-tool-bridge';
 import type { StreamEvent } from './events';
 
 export interface ProviderStepUsage {
@@ -48,7 +47,7 @@ type BridgeActions = Pick<
 
 export interface SdkEventAdapterOptions {
   coreMessages: readonly ModelMessage[];
-  mcpManager: MCPManager | null;
+  resolveToolName: ToolNameResolver;
   attempt: AttemptActions;
   eagerBridge: BridgeActions;
   buildUsage: (
@@ -110,7 +109,7 @@ export class SdkEventAdapter {
       case 'tool-input-start': {
         this.options.attempt.armIdleTimer();
         const toolCallId = streamToolCallId(part);
-        const toolName = toInternalToolName(stringField(part.toolName) ?? 'unknown', this.options.mcpManager);
+        const toolName = this.options.resolveToolName(stringField(part.toolName) ?? 'unknown');
         if (toolCallId) this.options.eagerBridge.inputStarted(toolCallId, toolName);
         // Drain before this new start so a finalized previous input is visible
         // before a new generating tool takes the streaming UI slot.
@@ -143,7 +142,7 @@ export class SdkEventAdapter {
       case 'tool-input-available':
       case 'tool-call': {
         const toolCallId = streamToolCallId(part);
-        const toolName = toInternalToolName(stringField(part.toolName) ?? 'unknown', this.options.mcpManager);
+        const toolName = this.options.resolveToolName(stringField(part.toolName) ?? 'unknown');
         const rawInput = part.input ?? part.args;
         if (toolCallId) {
           const event = this.options.eagerBridge.sdkToolCall({
@@ -162,7 +161,7 @@ export class SdkEventAdapter {
       case 'tool-output-available':
       case 'tool-result': {
         const toolCallId = streamToolCallId(part);
-        const toolName = toInternalToolName(stringField(part.toolName) ?? 'unknown', this.options.mcpManager);
+        const toolName = this.options.resolveToolName(stringField(part.toolName) ?? 'unknown');
         const execution = executionFromSdkOutput(part.output ?? part.result ?? '', toolName);
         if (toolCallId) {
           const event = this.options.eagerBridge.sdkToolResult(toolCallId, execution);
@@ -174,7 +173,7 @@ export class SdkEventAdapter {
       case 'tool-output-error':
       case 'tool-error': {
         const toolCallId = streamToolCallId(part);
-        const execution = sdkPreExecutionError(part, this.options.mcpManager);
+        const execution = sdkPreExecutionError(part, this.options.resolveToolName);
         if (toolCallId) {
           const event = this.options.eagerBridge.sdkToolError(toolCallId, execution);
           if (event) yield event;
@@ -186,12 +185,12 @@ export class SdkEventAdapter {
         this.options.attempt.armIdleTimer();
         const toolCallId = streamToolCallId(part);
         if (toolCallId) {
-          const toolName = toInternalToolName(stringField(part.toolName) ?? 'unknown', this.options.mcpManager);
+          const toolName = this.options.resolveToolName(stringField(part.toolName) ?? 'unknown');
           yield* this.options.eagerBridge.sdkInputError({
             toolCallId,
             toolName,
             args: stringifyToolInput(part.input),
-            execution: sdkPreExecutionError(part, this.options.mcpManager),
+            execution: sdkPreExecutionError(part, this.options.resolveToolName),
           });
         }
         break;
@@ -221,13 +220,22 @@ export class SdkEventAdapter {
   }
 }
 
-/** Resolve provider-safe MCP aliases back to the internal tool identity. */
-export function toInternalToolName(toolName: string, mcpManager: MCPManager | null): string {
-  if (!mcpManager || toolName.startsWith('mcp::')) return toolName;
-  const match = mcpManager.getTools().find(({ definition }) =>
-    toProviderMcpToolName(definition.name) === toolName,
-  );
-  return match?.definition.name ?? toolName;
+export type ToolNameResolver = (providerToolName: string) => string;
+
+/** Snapshot provider-safe MCP aliases once for this frozen stream attempt. */
+export function createToolNameResolver(mcpManager: MCPManager | null): ToolNameResolver {
+  if (!mcpManager) return (toolName) => toolName;
+
+  const internalNamesByAlias = new Map<string, string>();
+  for (const { definition } of mcpManager.getTools()) {
+    const alias = toProviderMcpToolName(definition.name);
+    if (!internalNamesByAlias.has(alias)) {
+      internalNamesByAlias.set(alias, definition.name);
+    }
+  }
+  return (toolName) => toolName.startsWith('mcp::')
+    ? toolName
+    : internalNamesByAlias.get(toolName) ?? toolName;
 }
 
 const PROVIDER_TOOL_NAME_MAX_LENGTH = 64;
@@ -242,7 +250,7 @@ export function toProviderMcpToolName(internalName: string): string {
   return `${safePrefix.slice(0, PROVIDER_TOOL_NAME_MAX_LENGTH - hash.length - 1)}_${hash}`;
 }
 
-export function genericSdkExecution(
+function genericSdkExecution(
   toolName: string,
   content: string,
   options: {
@@ -269,14 +277,13 @@ export function executionFromSdkOutput(raw: unknown, toolName = 'unknown'): Tool
   }
 }
 
-export function sdkPreExecutionError(part: Record<string, unknown>, mcpManager: MCPManager | null = null): ToolExecutionResult {
+export function sdkPreExecutionError(
+  part: Record<string, unknown>,
+  resolveToolName: ToolNameResolver = (toolName) => toolName,
+): ToolExecutionResult {
   const content = stringField(part.errorText) ?? getErrorMessage(part.error ?? 'Tool failed');
-  const toolName = toInternalToolName(stringField(part.toolName) ?? 'unknown', mcpManager);
+  const toolName = resolveToolName(stringField(part.toolName) ?? 'unknown');
   return genericSdkExecution(toolName, content, { status: 'error', errorCode: 'sdk_tool_error' });
-}
-
-export function streamResultFields(execution: ToolExecutionResult): Pick<PendingToolResult, 'content' | 'execution'> {
-  return { content: execution.agentProjection.content, execution };
 }
 
 export function classifyStreamError(err: unknown): { title: string; detail: string } {

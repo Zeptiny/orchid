@@ -5,7 +5,17 @@
  * provider-neutral shape conversion required by AI SDK's `streamText`.
  */
 import type { AssistantContent, ModelMessage } from 'ai';
-import type { ApiMessage } from '../../shared/types/message';
+import {
+  MessageRole,
+  type ApiMessage,
+} from '../../shared/types/message';
+
+function toTextOnlyContent(content: ApiMessage['content']): string {
+  if (typeof content === 'string') return content;
+  return Array.isArray(content)
+    ? content.filter((part) => part.type === 'text').map((part) => part.text).join('')
+    : '';
+}
 
 /**
  * Convert replay-safe OpenAI-shaped messages into AI SDK model messages.
@@ -17,11 +27,11 @@ export function toModelMessages(historyMessages: readonly ApiMessage[]): ModelMe
   const modelMessages: ModelMessage[] = [];
 
   for (const message of historyMessages) {
-    if (message.role === 'system') {
+    if (message.role === MessageRole.SYSTEM) {
       continue;
     }
 
-    if (message.role === 'assistant') {
+    if (message.role === MessageRole.ASSISTANT) {
       const contentArray = Array.isArray(message.content)
         ? message.content.map((part) => {
             if (part.type === 'reasoning') {
@@ -58,19 +68,15 @@ export function toModelMessages(historyMessages: readonly ApiMessage[]): ModelMe
           : contentArray.length > 0
             ? contentArray
             : '';
-      modelMessages.push({ role: 'assistant', content });
+      modelMessages.push({ role: MessageRole.ASSISTANT, content });
       continue;
     }
 
-    if (message.role === 'tool') {
-      const textContent = typeof message.content === 'string'
-        ? message.content
-        : Array.isArray(message.content)
-          ? message.content.filter((part) => part.type === 'text').map((part) => part.text).join('')
-          : '';
+    if (message.role === MessageRole.TOOL) {
+      const textContent = toTextOnlyContent(message.content);
 
       modelMessages.push({
-        role: 'tool',
+        role: MessageRole.TOOL,
         content: [
           {
             type: 'tool-result' as const,
@@ -84,13 +90,11 @@ export function toModelMessages(historyMessages: readonly ApiMessage[]): ModelMe
       continue;
     }
 
-    if (message.role === 'user') {
-      const textContent = typeof message.content === 'string'
-        ? message.content
-        : Array.isArray(message.content)
-          ? message.content.filter((part) => part.type === 'text').map((part) => part.text).join('')
-          : '';
-      modelMessages.push({ role: 'user', content: textContent });
+    if (message.role === MessageRole.USER) {
+      modelMessages.push({
+        role: MessageRole.USER,
+        content: toTextOnlyContent(message.content),
+      });
     }
   }
 

@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { ModelMessage } from 'ai';
 import {
+  createToolNameResolver,
   SdkEventAdapter,
   toProviderMcpToolName,
 } from '../../src/main/llm/stream/sdk-event-adapter';
@@ -79,7 +80,7 @@ function createAdapter() {
   return {
     adapter: new SdkEventAdapter({
       coreMessages: initialMessages,
-      mcpManager: null,
+      resolveToolName: (toolName) => toolName,
       attempt,
       eagerBridge: bridge,
       buildUsage,
@@ -149,12 +150,13 @@ describe('SdkEventAdapter', () => {
   it('reverses provider-safe MCP aliases before invoking the bridge', () => {
     const { bridge } = createAdapter();
     const internalName = 'mcp::filesystem/read file';
+    const getTools = vi.fn(() => [{ definition: { name: internalName } }]);
     const mcpManager = {
-      getTools: () => [{ definition: { name: internalName } }],
+      getTools,
     } as unknown as MCPManager;
     const aliasAdapter = new SdkEventAdapter({
       coreMessages: [] as unknown as readonly ModelMessage[],
-      mcpManager,
+      resolveToolName: createToolNameResolver(mcpManager),
       attempt: {
         armIdleTimer: vi.fn(),
         markDeliveredOutput: vi.fn(),
@@ -171,6 +173,12 @@ describe('SdkEventAdapter', () => {
     })).toEqual([
       { type: 'tool_call', toolCallId: 'mcp-call', toolName: internalName, args: '{}' },
     ]);
+    adapt(aliasAdapter, {
+      type: 'tool-input-start',
+      toolCallId: 'mcp-call-2',
+      toolName: toProviderMcpToolName(internalName),
+    });
+    expect(getTools).toHaveBeenCalledOnce();
   });
 
   it('normalizes successful, error, and invalid-input tool terminal paths', () => {

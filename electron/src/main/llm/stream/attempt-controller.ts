@@ -21,30 +21,9 @@ export function combineAbortSignals(
   if (!userSignal) {
     return { signal: idleSignal, dispose: () => {} };
   }
-  // Node 20+ / modern Electron — no manual listeners to clean up.
-  if (typeof AbortSignal.any === 'function') {
-    return {
-      signal: AbortSignal.any([userSignal, idleSignal]),
-      dispose: () => {},
-    };
-  }
-
-  const controller = new AbortController();
-  const onAbort = (): void => {
-    if (!controller.signal.aborted) controller.abort();
-  };
-  if (userSignal.aborted || idleSignal.aborted) {
-    controller.abort();
-    return { signal: controller.signal, dispose: () => {} };
-  }
-  userSignal.addEventListener('abort', onAbort);
-  idleSignal.addEventListener('abort', onAbort);
   return {
-    signal: controller.signal,
-    dispose: () => {
-      userSignal.removeEventListener('abort', onAbort);
-      idleSignal.removeEventListener('abort', onAbort);
-    },
+    signal: AbortSignal.any([userSignal, idleSignal]),
+    dispose: () => {},
   };
 }
 

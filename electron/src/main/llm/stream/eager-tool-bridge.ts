@@ -243,7 +243,7 @@ export class EagerToolBridge {
     });
     promise
       .then((execution) => {
-        this.eagerCompletions.push({ toolCallId, ...resultFields(execution) });
+        this.eagerCompletions.push({ toolCallId, ...streamResultFields(execution) });
       })
       .catch(() => {
         // executeToolCall normally resolves terminal executions; SDK owns rejects.
@@ -262,11 +262,13 @@ export class EagerToolBridge {
     if (this.seenToolResultIds.has(toolCallId)) return undefined;
     this.seenToolResultIds.add(toolCallId);
     if (markDelivered) this.options.markDeliveredOutput();
-    return { type: 'tool_result', toolCallId, ...resultFields(execution) };
+    return { type: 'tool_result', toolCallId, ...streamResultFields(execution) };
   }
 }
 
-function resultFields(execution: ToolExecutionResult): Omit<PendingToolResult, 'toolCallId'> {
+export function streamResultFields(
+  execution: ToolExecutionResult,
+): Omit<PendingToolResult, 'toolCallId'> {
   return { content: execution.agentProjection.content, execution };
 }
 

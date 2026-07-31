@@ -8,16 +8,16 @@ import type { ModelMessage } from 'ai';
 import type { Usage } from '../../../shared/types/message';
 import type { MCPManager } from '../../mcp/manager';
 import type { StreamAttemptController } from './attempt-controller';
-import { EagerToolBridge } from './eager-tool-bridge';
+import { EagerToolBridge, streamResultFields } from './eager-tool-bridge';
 import {
+  createToolNameResolver,
   executionFromSdkOutput,
   sdkPreExecutionError,
   SdkEventAdapter,
-  streamResultFields,
   streamToolCallId,
   stringifyToolInput,
-  toInternalToolName,
   type ProviderStepUsage,
+  type ToolNameResolver,
 } from './sdk-event-adapter';
 import type { StreamEvent } from './events';
 
@@ -65,14 +65,16 @@ type NextText =
 export class NormalizedStream {
   private readonly pendingUsageEvents: Usage[] = [];
   private readonly sdkEvents: SdkEventAdapter;
+  private readonly resolveToolName: ToolNameResolver;
   private usedFullStream = false;
   private pendingStepEventsSignaled = false;
   private resolvePendingStepEvents: (() => void) | null = null;
 
   constructor(private readonly options: NormalizedStreamOptions) {
+    this.resolveToolName = createToolNameResolver(options.mcpManager);
     this.sdkEvents = new SdkEventAdapter({
       coreMessages: options.coreMessages,
-      mcpManager: options.mcpManager,
+      resolveToolName: this.resolveToolName,
       attempt: options.attempt,
       eagerBridge: options.eagerBridge,
       buildUsage: options.buildUsage,
@@ -152,7 +154,7 @@ export class NormalizedStream {
     for (const call of calls ?? []) {
       this.options.eagerBridge.queuePendingToolCall({
         toolCallId: call.toolCallId,
-        toolName: toInternalToolName(call.toolName, this.options.mcpManager),
+        toolName: this.resolveToolName(call.toolName),
         args: stringifyToolInput(call.input),
       });
     }
@@ -179,7 +181,7 @@ export class NormalizedStream {
       if (type !== 'tool-error' && type !== 'tool-input-error') continue;
       const toolCallId = streamToolCallId(part);
       if (!toolCallId) continue;
-      const execution = sdkPreExecutionError(part, this.options.mcpManager);
+      const execution = sdkPreExecutionError(part, this.resolveToolName);
       this.options.eagerBridge.queuePendingToolResult({
         toolCallId,
         ...streamResultFields(execution),
