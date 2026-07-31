@@ -37,10 +37,10 @@ import {
   buildToolMap,
   streamChat,
   drainPendingToolEvents,
-  combineAbortSignals,
   type StreamEvent,
   type StreamChatParams,
 } from '../../src/main/llm/orchestrator';
+import { combineAbortSignals } from '../../src/main/llm/stream/attempt-controller';
 import { ToolRegistry } from '../../src/main/tools/registry';
 import type { MCPManager } from '../../src/main/mcp/manager';
 import { defaults } from '../../src/main/config/schema';

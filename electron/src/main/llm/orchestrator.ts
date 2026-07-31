@@ -47,6 +47,7 @@ import {
   type ToolDispatchOptions,
 } from './tool-dispatch';
 import { EagerToolExecutor } from './eager-tool-executor';
+import { StreamAttemptController } from './stream/attempt-controller';
 import {
   finalizeToolExecutionResult,
   genericAgentProjector,
@@ -430,43 +431,11 @@ export async function* streamChat(params: StreamChatParams): AsyncGenerator<Stre
   const maxIdleAttempts = Math.max(1, (config.llm_stream_retries ?? 0) + 1);
 
   for (let idleAttempt = 0; idleAttempt < maxIdleAttempts; idleAttempt++) {
-    const idleController = new AbortController();
-    let idleTimer: ReturnType<typeof setTimeout> | null = null;
-    let idleTimedOut = false;
-    let deliveredAny = false;
-    let toolsInFlight = 0;
-
-    const clearIdleTimer = (): void => {
-      if (idleTimer !== null) {
-        clearTimeout(idleTimer);
-        idleTimer = null;
-      }
-    };
-    /** Arm/reset idle only when waiting on the model (not while tools run). */
-    const armIdleTimer = (): void => {
-      clearIdleTimer();
-      if (toolsInFlight > 0) return;
-      idleTimer = setTimeout(() => {
-        idleTimedOut = true;
-        idleController.abort();
-      }, idleTimeoutMs);
-    };
-    const pauseIdleForTool = (): void => {
-      toolsInFlight += 1;
-      clearIdleTimer();
-    };
-    const resumeIdleAfterTool = (): void => {
-      toolsInFlight = Math.max(0, toolsInFlight - 1);
-      if (toolsInFlight === 0) {
-        armIdleTimer();
-      }
-    };
-
-    armIdleTimer();
-    const { signal: combinedAbort, dispose: disposeAbortMerge } = combineAbortSignals(
-      abortSignal,
-      idleController.signal,
-    );
+    const attempt = new StreamAttemptController({
+      userAbortSignal: abortSignal,
+      idleTimeoutMs,
+    });
+    attempt.armIdleTimer();
 
     // Pending tool events (textStream fallback / safety net)
     const pendingToolCalls: PendingToolCall[] = [];
@@ -510,7 +479,7 @@ export async function* streamChat(params: StreamChatParams): AsyncGenerator<Stre
         toolCallId,
         pending.toolName,
         input,
-        combinedAbort,
+        attempt.signal,
       );
       if (!promise) return; // no launcher / invalid input — the SDK path handles it
       // The eager tool is now running: pause the idle watchdog for its duration
@@ -518,7 +487,7 @@ export async function* streamChat(params: StreamChatParams): AsyncGenerator<Stre
       // (the SDK only pauses idle at model-call-end, which the delta path beats).
       // The matching resume fires when the run settles, independent of the
       // seenToolResultIds UI dedup below.
-      pauseIdleForTool();
+      attempt.pauseIdleForTool();
       eagerStarts.push({
         toolCallId,
         toolName: pending.toolName,
@@ -531,7 +500,7 @@ export async function* streamChat(params: StreamChatParams): AsyncGenerator<Stre
         .catch(() => {
           // executeToolCall resolves to terminal executions rather than rejecting.
         })
-        .finally(() => resumeIdleAfterTool());
+        .finally(() => attempt.resumeIdleAfterTool());
     };
     /** Finalize the currently-streaming tool when an input boundary is reached. */
     const flushActiveToolInput = (): void => {
@@ -542,7 +511,7 @@ export async function* streamChat(params: StreamChatParams): AsyncGenerator<Stre
         const start = eagerStarts.shift()!;
         if (seenToolCallIds.has(start.toolCallId)) continue;
         seenToolCallIds.add(start.toolCallId);
-        deliveredAny = true;
+        attempt.markDeliveredOutput();
         yield {
           type: 'tool_call',
           toolCallId: start.toolCallId,
@@ -556,7 +525,7 @@ export async function* streamChat(params: StreamChatParams): AsyncGenerator<Stre
         const completion = eagerCompletions.shift()!;
         if (seenToolResultIds.has(completion.toolCallId)) continue;
         seenToolResultIds.add(completion.toolCallId);
-        deliveredAny = true;
+        attempt.markDeliveredOutput();
         yield {
           type: 'tool_result',
           toolCallId: completion.toolCallId,
@@ -607,7 +576,7 @@ export async function* streamChat(params: StreamChatParams): AsyncGenerator<Stre
       include: { requestMessages: true },
       tools: Object.keys(tools).length > 0 ? tools : undefined,
       stopWhen,
-      abortSignal: combinedAbort,
+      abortSignal: attempt.signal,
       // Retry ownership belongs to Orchid's accounting-aware middleware.
       maxRetries: 0,
       providerOptions,
@@ -716,7 +685,7 @@ export async function* streamChat(params: StreamChatParams): AsyncGenerator<Stre
             }
 
             case 'text-delta': {
-              armIdleTimer();
+              attempt.armIdleTimer();
               // Model resumed text after tool inputs → finalize any pending tool.
               flushActiveToolInput();
               const text =
@@ -726,14 +695,14 @@ export async function* streamChat(params: StreamChatParams): AsyncGenerator<Stre
                     ? part.textDelta
                     : '';
               if (text) {
-                deliveredAny = true;
+                attempt.markDeliveredOutput();
                 yield { type: 'content', text };
               }
               break;
             }
 
             case 'tool-input-start': {
-              armIdleTimer();
+              attempt.armIdleTimer();
               const toolCallId = streamToolCallId(part);
               const toolName = toInternalToolName(
                 typeof part.toolName === 'string' ? part.toolName : 'unknown',
@@ -751,14 +720,14 @@ export async function* streamChat(params: StreamChatParams): AsyncGenerator<Stre
               if (toolCallId) {
                 pendingToolInputs.set(toolCallId, { toolName, text: '' });
                 activeToolInputId = toolCallId;
-                deliveredAny = true;
+                attempt.markDeliveredOutput();
                 yield { type: 'tool_call_start', toolCallId, toolName };
               }
               break;
             }
 
             case 'tool-input-delta': {
-              armIdleTimer();
+              attempt.armIdleTimer();
               const toolCallId = streamToolCallId(part);
               const argsDelta =
                 typeof part.inputTextDelta === 'string'
@@ -769,7 +738,7 @@ export async function* streamChat(params: StreamChatParams): AsyncGenerator<Stre
               if (toolCallId && argsDelta) {
                 const pending = pendingToolInputs.get(toolCallId);
                 if (pending) pending.text += argsDelta;
-                deliveredAny = true;
+                attempt.markDeliveredOutput();
                 yield { type: 'tool_call_delta', toolCallId, argsDelta };
               }
               break;
@@ -786,7 +755,7 @@ export async function* streamChat(params: StreamChatParams): AsyncGenerator<Stre
             // Args complete → tool is about to execute — pause idle
             case 'tool-input-available':
             case 'tool-call': {
-              pauseIdleForTool();
+              attempt.pauseIdleForTool();
               const toolCallId = streamToolCallId(part);
               const toolName = toInternalToolName(
                 typeof part.toolName === 'string' ? part.toolName : 'unknown',
@@ -795,7 +764,7 @@ export async function* streamChat(params: StreamChatParams): AsyncGenerator<Stre
               const args = stringifyToolInput(part.input ?? part.args);
               if (toolCallId && !seenToolCallIds.has(toolCallId)) {
                 seenToolCallIds.add(toolCallId);
-                deliveredAny = true;
+                attempt.markDeliveredOutput();
                 // Start executing now, while the model keeps generating other
                 // tool calls. Skip provider-executed tools (the provider owns
                 // them) and SDK-invalid calls (the SDK will emit tool-input-error;
@@ -806,7 +775,7 @@ export async function* streamChat(params: StreamChatParams): AsyncGenerator<Stre
                     toolCallId,
                     toolName,
                     part.input ?? part.args,
-                    combinedAbort,
+                    attempt.signal,
                   );
                 }
                 yield { type: 'tool_call', toolCallId, toolName, args };
@@ -816,7 +785,7 @@ export async function* streamChat(params: StreamChatParams): AsyncGenerator<Stre
 
             case 'tool-output-available':
             case 'tool-result': {
-              resumeIdleAfterTool();
+              attempt.resumeIdleAfterTool();
               const toolCallId = streamToolCallId(part);
               // The SDK has the result, so the execute shim has run and will not
               // run again for this id — release the in-flight memo (bounds the
@@ -830,7 +799,7 @@ export async function* streamChat(params: StreamChatParams): AsyncGenerator<Stre
               const execution = executionFromSdkOutput(raw, toolName);
               if (toolCallId && !seenToolResultIds.has(toolCallId)) {
                 seenToolResultIds.add(toolCallId);
-                deliveredAny = true;
+                attempt.markDeliveredOutput();
                 yield {
                   type: 'tool_result',
                   toolCallId,
@@ -842,13 +811,13 @@ export async function* streamChat(params: StreamChatParams): AsyncGenerator<Stre
 
             case 'tool-output-error':
             case 'tool-error': {
-              resumeIdleAfterTool();
+              attempt.resumeIdleAfterTool();
               const toolCallId = streamToolCallId(part);
               if (toolCallId) eagerExecutor.forget(toolCallId);
               const execution = sdkPreExecutionError(part, mcpManager);
               if (toolCallId && !seenToolResultIds.has(toolCallId)) {
                 seenToolResultIds.add(toolCallId);
-                deliveredAny = true;
+                attempt.markDeliveredOutput();
                 yield {
                   type: 'tool_result',
                   toolCallId,
@@ -860,7 +829,7 @@ export async function* streamChat(params: StreamChatParams): AsyncGenerator<Stre
 
             case 'tool-input-error': {
               // Args never became valid — no execute, keep/reset idle
-              armIdleTimer();
+              attempt.armIdleTimer();
               const toolCallId = streamToolCallId(part);
               // Release any eager memo (the delta path may have started this tool
               // before the SDK's validation verdict); the SDK owns the error path.
@@ -873,7 +842,7 @@ export async function* streamChat(params: StreamChatParams): AsyncGenerator<Stre
                 );
                 if (!seenToolCallIds.has(toolCallId)) {
                   seenToolCallIds.add(toolCallId);
-                  deliveredAny = true;
+                  attempt.markDeliveredOutput();
                   yield {
                     type: 'tool_call',
                     toolCallId,
@@ -895,7 +864,7 @@ export async function* streamChat(params: StreamChatParams): AsyncGenerator<Stre
 
             case 'reasoning-delta':
             case 'reasoning': {
-              armIdleTimer();
+              attempt.armIdleTimer();
               flushActiveToolInput();
               const text =
                 typeof part.text === 'string'
@@ -904,7 +873,7 @@ export async function* streamChat(params: StreamChatParams): AsyncGenerator<Stre
                     ? part.delta
                     : '';
               if (text) {
-                deliveredAny = true;
+                attempt.markDeliveredOutput();
                 yield { type: 'thinking', text };
               }
               break;
@@ -936,7 +905,7 @@ export async function* streamChat(params: StreamChatParams): AsyncGenerator<Stre
       } catch (fullStreamErr) {
         // Idle/user abort is not "fullStream unsupported" — rethrow so the
         // outer catch can emit Stream idle timeout / cancel (not textStream fallback).
-        if (idleTimedOut || abortSignal?.aborted || combinedAbort.aborted) {
+        if (attempt.didIdleTimeout || attempt.didUserAbort || attempt.signal.aborted) {
           throw fullStreamErr;
         }
         if (!usedFullStream) {
@@ -969,9 +938,9 @@ export async function* streamChat(params: StreamChatParams): AsyncGenerator<Stre
             }
 
             if (next.value.done) break;
-            armIdleTimer();
+            attempt.armIdleTimer();
             if (next.value.value) {
-              deliveredAny = true;
+              attempt.markDeliveredOutput();
               yield { type: 'content', text: next.value.value };
             }
             nextText = textIterator.next().then((value) => ({
@@ -1011,11 +980,7 @@ export async function* streamChat(params: StreamChatParams): AsyncGenerator<Stre
       }
       return; // success
     } catch (err) {
-      const canRetryIdle =
-        idleTimedOut &&
-        !abortSignal?.aborted &&
-        !deliveredAny &&
-        idleAttempt + 1 < maxIdleAttempts;
+      const canRetryIdle = attempt.canRetryIdle(idleAttempt, maxIdleAttempts);
 
       if (canRetryIdle) {
         console.warn(
@@ -1024,7 +989,7 @@ export async function* streamChat(params: StreamChatParams): AsyncGenerator<Stre
         continue;
       }
 
-      if (idleTimedOut && !abortSignal?.aborted) {
+      if (attempt.didIdleTimeout && !attempt.didUserAbort) {
         yield {
           type: 'error',
           title: 'Stream idle timeout',
@@ -1033,7 +998,7 @@ export async function* streamChat(params: StreamChatParams): AsyncGenerator<Stre
         return;
       }
 
-      if (abortSignal?.aborted) {
+      if (attempt.didUserAbort) {
         return;
       }
 
@@ -1041,8 +1006,7 @@ export async function* streamChat(params: StreamChatParams): AsyncGenerator<Stre
       yield { type: 'error', title, detail };
       return;
     } finally {
-      clearIdleTimer();
-      disposeAbortMerge();
+      attempt.dispose();
     }
   }
 }
@@ -1286,45 +1250,6 @@ function withSdkAbortSignal(
   return {
     ...dispatchOptions,
     abortSignal: AbortSignal.any([dispatchOptions.abortSignal, sdkAbortSignal]),
-  };
-}
-
-/**
- * Merge optional user AbortSignal with the idle-timeout controller.
- * Aborts when either fires. Call `dispose` in finally to drop listeners.
- */
-export function combineAbortSignals(
-  userSignal: AbortSignal | undefined,
-  idleSignal: AbortSignal,
-): { signal: AbortSignal; dispose: () => void } {
-  if (!userSignal) {
-    return { signal: idleSignal, dispose: () => {} };
-  }
-  // Node 20+ / modern Electron — no manual listeners to clean up
-  if (typeof AbortSignal.any === 'function') {
-    return {
-      signal: AbortSignal.any([userSignal, idleSignal]),
-      dispose: () => {},
-    };
-  }
-  const controller = new AbortController();
-  const onAbort = (): void => {
-    if (!controller.signal.aborted) {
-      controller.abort();
-    }
-  };
-  if (userSignal.aborted || idleSignal.aborted) {
-    controller.abort();
-    return { signal: controller.signal, dispose: () => {} };
-  }
-  userSignal.addEventListener('abort', onAbort);
-  idleSignal.addEventListener('abort', onAbort);
-  return {
-    signal: controller.signal,
-    dispose: () => {
-      userSignal.removeEventListener('abort', onAbort);
-      idleSignal.removeEventListener('abort', onAbort);
-    },
   };
 }
 
