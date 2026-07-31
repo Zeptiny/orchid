@@ -26,6 +26,7 @@ import type {
   ChatToolCallSnapshot,
   ChatSnapshot,
   ChatSessionSnapshot,
+  ChatStreamSegmentSnapshot,
 } from '../../shared/types/ipc';
 import {
   addUsage,
@@ -92,74 +93,7 @@ export function chatToolSnapshotToBlock(tool: ChatToolCallSnapshot | ChatTurnToo
  * Chronological segments for the in-flight turn.
  * Preserves call order: tool → text → tool → text → …
  */
-export type StreamSegment =
-  | { kind: 'tool'; toolCallId: string }
-  | { kind: 'text'; id: string; content: string }
-  | { kind: 'thinking'; id: string; content: string };
-
-/** Append one canonical text/thinking delta without inventing renderer-local identity. */
-export function appendStreamSegmentDelta(
-  segments: readonly StreamSegment[],
-  kind: 'text' | 'thinking',
-  segmentId: string,
-  data: string,
-): StreamSegment[] {
-  const last = segments.at(-1);
-  if (last?.kind === kind && last.id === segmentId) {
-    return [
-      ...segments.slice(0, -1),
-      { ...last, content: last.content + data },
-    ];
-  }
-  return [...segments, { kind, id: segmentId, content: data }];
-}
-
-/** Buffered text/thinking delta data awaiting renderer-frame publication. */
-export interface StreamSegmentDelta {
-  kind: 'text' | 'thinking';
-  segmentId: string;
-  data: string;
-}
-
-/**
- * Apply one renderer frame of text/thinking deltas with a single array copy.
- * Existing segment objects remain immutable while a frame-local tail may be
- * extended in place before the new snapshot is published to React.
- */
-export function appendStreamSegmentDeltas(
-  segments: readonly StreamSegment[],
-  deltas: readonly StreamSegmentDelta[],
-): StreamSegment[] {
-  if (deltas.length === 0) return segments.slice();
-
-  const next = segments.slice();
-  let mutableTailIndex = -1;
-  for (const delta of deltas) {
-    const tailIndex = next.length - 1;
-    const tail = next[tailIndex];
-    if (
-      tail?.kind === delta.kind &&
-      tail.id === delta.segmentId
-    ) {
-      if (mutableTailIndex !== tailIndex) {
-        next[tailIndex] = { ...tail };
-        mutableTailIndex = tailIndex;
-      }
-      const mutableTail = next[tailIndex];
-      if (mutableTail.kind === 'text' || mutableTail.kind === 'thinking') {
-        mutableTail.content += delta.data;
-      }
-      continue;
-    }
-    next.push({
-      kind: delta.kind,
-      id: delta.segmentId,
-      content: delta.data,
-    });
-    mutableTailIndex = next.length - 1;
-  }
-  return next;
-}
+export type StreamSegment = ChatStreamSegmentSnapshot;
 
 export interface ChatState {
   /** All messages in the current chain. */
@@ -282,24 +216,6 @@ export function shouldBufferChatEvent(
   return hydratingSessionId != null && event.sessionId === hydratingSessionId;
 }
 
-/** Prefer a live turn snapshot, but keep persisted usage for idle sessions. */
-export function resolveHydratedUsage(
-  messages: readonly Message[],
-  liveUsage: Usage | null | undefined,
-): Usage | null {
-  return liveUsage && hasUsage(liveUsage)
-    ? liveUsage
-    : latestUsageFromMessages(messages);
-}
-
-/** Add the authoritative in-flight turn snapshot to persisted session usage. */
-export function cumulativeUsageFromMessages(
-  messages: readonly Message[],
-  currentTurnUsage: Usage | null = null,
-): Usage {
-  return addUsage(sumMessageUsages(messages), currentTurnUsage);
-}
-
 /** Cache persisted totals independently from high-frequency live-turn usage. */
 export function useCumulativeUsage(
   messages: readonly Message[],
@@ -326,30 +242,6 @@ export function seedAffinityFromLive(
   affinity.streamSessionId = live.sessionId;
   affinity.streamTurnId = live.turnId;
   affinity.lastSequence = live.sequence;
-}
-
-export type BufferedHydrationEvent = {
-  event: { sessionId: string; turnId: string; sequence: number };
-  apply: () => void;
-};
-
-/**
- * Replay buffered hydration applies through the same sequence-affinity gate
- * used by live IPC delivery. Mutates affinity as each event is accepted so
- * stale sequences / wrong-session / wrong-turn events are discarded.
- */
-export function drainBufferedHydrationEvents(
-  affinity: ChatEventAffinity,
-  events: ReadonlyArray<BufferedHydrationEvent>,
-  isSending: boolean,
-): number {
-  let applied = 0;
-  for (const item of events) {
-    if (!acceptChatEvent(affinity, item.event, isSending)) continue;
-    item.apply();
-    applied += 1;
-  }
-  return applied;
 }
 
 // ── Cancel queue (multi-phase Esc) ────────────────────────────────────────────
@@ -393,34 +285,6 @@ export function resetCancelQueue(state: CancelQueueState): void {
   state.pending = false;
 }
 
-// ── Send failure residual cleanup ────────────────────────────────────────────
-
-/**
- * Residual stream fields after a pre-stream send failure (structured error or
- * throw). Shared so every failure path leaves the composer ready to send again.
- */
-export type ResidualStreamAfterSendFailure = {
-  isSending: false;
-  status: 'error';
-  streamStartTime: null;
-  streamingContent: '';
-  streamingThinking: '';
-  accumulatedContent: '';
-  accumulatedThinking: '';
-};
-
-export function residualStateAfterSendFailure(): ResidualStreamAfterSendFailure {
-  return {
-    isSending: false,
-    status: 'error',
-    streamStartTime: null,
-    streamingContent: '',
-    streamingThinking: '',
-    accumulatedContent: '',
-    accumulatedThinking: '',
-  };
-}
-
 /** Drop the optimistic user bubble when send never started on the main side. */
 export function dropOptimisticUserMessageIfLast<T extends { id: string }>(
   messages: ReadonlyArray<T>,
@@ -462,6 +326,14 @@ export function useElapsedSeconds(
 type ProjectionState = { projection: ChatTurnProjection | null; revision: number };
 type AffinityController = { activeSessionId: string | null; value: ChatEventAffinity };
 type BufferedProjectionEvent = { event: ChatTurnEventAction };
+
+function isProjectionLifecycleEvent(event: ChatTurnEventAction): boolean {
+  return 'state' in event
+    || event.type === 'tool_call_start'
+    || event.type === 'tool_call_update'
+    || event.type === 'done'
+    || event.type === 'error';
+}
 
 function reduceProjectionState(state: ProjectionState, action: ChatTurnProjectionAction): ProjectionState {
   const projection = reduceChatTurnProjection(state.projection, action);
@@ -543,9 +415,14 @@ export function useChat(activeSessionId: string | null = null): UseChatReturn {
     cancelStreamFrame();
     pendingFrameActionsRef.current = [];
   }, [cancelStreamFrame]);
+  const bufferHydrationEvent = useCallback((event: ChatTurnEventAction): boolean => {
+    const hydration = hydrationRef.current;
+    if (!hydration || !shouldBufferChatEvent(hydration.sessionId, event)) return false;
+    hydration.events.push({ event });
+    return true;
+  }, []);
   const applyLiveEvent = useCallback((event: ChatTurnEventAction) => {
-    const lifecycle = 'state' in event || event.type === 'tool_call_start' || event.type === 'tool_call_update' || event.type === 'done' || event.type === 'error';
-    if (lifecycle) flushStreamFrame();
+    if (isProjectionLifecycleEvent(event)) flushStreamFrame();
     dispatchProjection({ type: 'events', actions: [event] });
     if ('state' in event) {
       if (event.state === 'idle') isSendingRef.current = false;
@@ -563,13 +440,9 @@ export function useChat(activeSessionId: string | null = null): UseChatReturn {
     }
   }, [dispatchProjection, flushStreamFrame]);
   const deliverEvent = useCallback((event: ChatTurnEventAction) => {
-    const hydration = hydrationRef.current;
-    if (shouldBufferChatEvent(hydration?.sessionId ?? null, event)) {
-      hydration?.events.push({ event });
-      return;
-    }
+    if (bufferHydrationEvent(event)) return;
     if (acceptsEvent(event)) applyLiveEvent(event);
-  }, [acceptsEvent, applyLiveEvent]);
+  }, [acceptsEvent, applyLiveEvent, bufferHydrationEvent]);
 
   // Subscribe to IPC events
   useEffect(() => {
@@ -580,11 +453,7 @@ export function useChat(activeSessionId: string | null = null): UseChatReturn {
 
     const normalize = <T extends ChatTurnEventAction>(event: Omit<T, 'occurredAt'>): T => ({ ...event, occurredAt: new Date().toISOString() } as T);
     const queueFrameEvent = (event: ChatTurnEventAction) => {
-      const hydration = hydrationRef.current;
-      if (shouldBufferChatEvent(hydration?.sessionId ?? null, event)) {
-        hydration?.events.push({ event });
-        return;
-      }
+      if (bufferHydrationEvent(event)) return;
       if (!acceptsEvent(event)) return;
       pendingFrameActionsRef.current.push(event);
       scheduleStreamFrame();
@@ -615,6 +484,7 @@ export function useChat(activeSessionId: string | null = null): UseChatReturn {
     cancelStreamFrame,
     deliverEvent,
     acceptsEvent,
+    bufferHydrationEvent,
     scheduleStreamFrame,
   ]);
 
@@ -851,10 +721,23 @@ export function useChat(activeSessionId: string | null = null): UseChatReturn {
   }, []);
 
   const replayHydrationBuffer = useCallback((buffered: BufferedProjectionEvent[]) => {
+    let batch: ChatTurnEventAction[] = [];
+    const flushBatch = () => {
+      if (batch.length === 0) return;
+      dispatchProjection({ type: 'events', actions: batch });
+      batch = [];
+    };
     for (const { event } of buffered) {
-      if (acceptsEvent(event)) applyLiveEvent(event);
+      if (!acceptsEvent(event)) continue;
+      if (isProjectionLifecycleEvent(event)) {
+        flushBatch();
+        applyLiveEvent(event);
+      } else {
+        batch.push(event);
+      }
     }
-  }, [acceptsEvent, applyLiveEvent]);
+    flushBatch();
+  }, [acceptsEvent, applyLiveEvent, dispatchProjection]);
 
   const hydrateSnapshot = useCallback((snapshot: ChatSessionSnapshot | null) => {
     const hydration = hydrationRef.current;

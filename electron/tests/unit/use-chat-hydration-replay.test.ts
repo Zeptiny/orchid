@@ -80,15 +80,18 @@ describe('useChat hydration replay', () => {
       result.current.beginSessionSwitch('session-b');
       onChunk?.(chunk(1, 'stale'));
       onChunk?.(chunk(3, 'newer'));
+      onChunk?.(chunk(4, ' together'));
       result.current.hydrateSnapshot(liveSnapshot());
     });
 
     expect(result.current.isSwitchingSession).toBe(false);
     expect(result.current.status).toBe('streaming');
-    expect(result.current.streamingContent).toBe('snapshot newer');
+    expect(result.current.streamingContent).toBe('snapshot newer together');
     expect(result.current.streamSegments).toEqual([
-      { kind: 'text', id: 'text-b', content: 'snapshot newer' },
+      { kind: 'text', id: 'text-b', content: 'snapshot newer together' },
     ]);
+    // One seed publish + one replay batch, regardless of buffered delta count.
+    expect(result.current.streamRevision).toBe(2);
   });
 
   it('clears a displayed terminal error through the reducer action', () => {

@@ -214,7 +214,7 @@ export function applyChatTurnEvents(
   projection: ChatTurnProjection,
   actions: readonly ChatTurnEventAction[],
 ): ChatTurnProjection {
-  return actions.reduce(applyChatTurnEvent, projection);
+  return coalesceAcceptedDeltas(projection, actions).reduce(applyChatTurnEvent, projection);
 }
 
 /**
@@ -311,17 +311,90 @@ function applyState(
 ): ChatTurnProjection {
   return {
     ...projection,
-    status: normalizeState(event.state),
+    status: normalizeChatSnapshotState(event.state),
     error: event.error,
     interruptState: event.interruptState,
     cwd: event.cwd ?? projection.cwd,
   };
 }
 
-function normalizeState(state: string): ChatSnapshotState {
+/** Normalize arbitrary XState values at the shared snapshot boundary. */
+export function normalizeChatSnapshotState(state: string): ChatSnapshotState {
   if (state === 'idle') return 'idle';
   if (state === 'error') return 'error';
   return 'streaming';
+}
+
+/**
+ * Frame batches commonly contain many adjacent text or tool-argument deltas.
+ * Reject stale/wrong-turn events first, then combine only behavior-equivalent
+ * adjacent deltas so the pure reducer does not copy projection arrays per token.
+ */
+function coalesceAcceptedDeltas(
+  projection: ChatTurnProjection,
+  actions: readonly ChatTurnEventAction[],
+): ChatTurnEventAction[] {
+  let sessionId = projection.sessionId;
+  let turnId = projection.turnId;
+  let sequence = projection.sequence;
+  const accepted: ChatTurnEventAction[] = [];
+
+  for (const action of actions) {
+    if (
+      (sessionId && action.sessionId !== sessionId)
+      || (turnId && action.turnId !== turnId)
+      || action.sequence <= sequence
+    ) {
+      continue;
+    }
+
+    sessionId ||= action.sessionId;
+    turnId ||= action.turnId;
+    sequence = action.sequence;
+    const previous = accepted.at(-1);
+    const merged = previous ? mergeAdjacentDelta(previous, action) : null;
+    if (merged) {
+      accepted[accepted.length - 1] = merged;
+    } else {
+      accepted.push(action);
+    }
+  }
+
+  return accepted;
+}
+
+function mergeAdjacentDelta(
+  previous: ChatTurnEventAction,
+  action: ChatTurnEventAction,
+): ChatTurnEventAction | null {
+  if (!('type' in previous) || !('type' in action)) return null;
+
+  if (
+    previous.type === 'chunk'
+    && action.type === 'chunk'
+    && previous.segmentId === action.segmentId
+  ) {
+    return { ...previous, sequence: action.sequence, data: previous.data + action.data };
+  }
+  if (
+    previous.type === 'thinking'
+    && action.type === 'thinking'
+    && previous.segmentId === action.segmentId
+  ) {
+    return { ...previous, sequence: action.sequence, data: previous.data + action.data };
+  }
+  if (
+    previous.type === 'tool_call_delta'
+    && action.type === 'tool_call_delta'
+    && previous.toolCallId === action.toolCallId
+  ) {
+    return {
+      ...previous,
+      sequence: action.sequence,
+      argsDelta: previous.argsDelta + action.argsDelta,
+    };
+  }
+  return null;
 }
 
 function updateTool(
@@ -369,11 +442,11 @@ function createTool(
 }
 
 function ensureToolSegment(
-  segments: readonly ChatStreamSegmentSnapshot[],
+  segments: ChatStreamSegmentSnapshot[],
   toolCallId: string,
 ): ChatStreamSegmentSnapshot[] {
   if (segments.some((segment) => segment.kind === 'tool' && segment.toolCallId === toolCallId)) {
-    return segments.slice();
+    return segments;
   }
   return [...segments, { kind: 'tool', toolCallId }];
 }

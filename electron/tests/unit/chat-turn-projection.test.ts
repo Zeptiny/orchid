@@ -132,6 +132,25 @@ describe('ChatTurnProjection', () => {
     });
   });
 
+  it('coalesces frame deltas without changing direct event-trace semantics', () => {
+    const actions: ChatTurnEventAction[] = [
+      event({ ...identity(1), type: 'chunk', data: 'Hello', segmentId: 'text-1' }, TOOL_STARTED_AT),
+      event({ ...identity(2), type: 'chunk', data: ' world', segmentId: 'text-1' }, TOOL_FINISHED_AT),
+      event({ ...identity(2), type: 'chunk', data: ' stale', segmentId: 'text-1' }, TOOL_FINISHED_AT),
+      event({ ...identity(3), type: 'tool_call_delta', toolCallId: 'tool-1', argsDelta: '{"path":' }, TOOL_STARTED_AT),
+      event({ ...identity(4), type: 'tool_call_delta', toolCallId: 'tool-1', argsDelta: '"a.ts"}' }, TOOL_FINISHED_AT),
+    ];
+    const initial = seedChatTurnProjection(liveSnapshot());
+    const direct = actions.reduce(applyChatTurnEvent, initial);
+
+    expect(applyChatTurnEvents(initial, actions)).toEqual(direct);
+    expect(direct).toMatchObject({
+      sequence: 4,
+      response: 'Hello world',
+      toolCalls: [{ partialArgs: '{"path":"a.ts"}', startedAt: TOOL_STARTED_AT }],
+    });
+  });
+
   it('keeps tool-heavy interleaving in one canonical timeline and accumulates arguments', () => {
     const projected = applyChatTurnEvents(seedChatTurnProjection(liveSnapshot()), [
       event({ ...identity(1), type: 'chunk', data: 'Before ', segmentId: 'text-1' }, TOOL_STARTED_AT),

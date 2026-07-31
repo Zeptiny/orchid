@@ -1,19 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import {
   acceptChatEvent,
-  appendStreamSegmentDelta,
-  appendStreamSegmentDeltas,
   beginCancelRequest,
   bindChatSession,
   chatToolSnapshotToBlock,
   consumePendingCancel,
-  cumulativeUsageFromMessages,
   dropOptimisticUserMessageIfLast,
-  drainBufferedHydrationEvents,
-  residualStateAfterSendFailure,
   resetCancelQueue,
-  resolveHydratedUsage,
-  seedAffinityFromLive,
   shouldBufferChatEvent,
   type CancelQueueState,
   type ChatEventAffinity,
@@ -35,41 +28,6 @@ function emptyCancelQueue(): CancelQueueState {
 }
 
 describe('useChat event affinity', () => {
-  it('keeps canonical segment ids while accumulating live text and thinking', () => {
-    const text = appendStreamSegmentDelta([], 'text', 'text-segment', 'Hello');
-    const continued = appendStreamSegmentDelta(text, 'text', 'text-segment', ' world');
-    const next = appendStreamSegmentDelta(continued, 'text', 'next-segment', '!');
-
-    expect(continued).toEqual([
-      { kind: 'text', id: 'text-segment', content: 'Hello world' },
-    ]);
-    expect(next).toEqual([
-      { kind: 'text', id: 'text-segment', content: 'Hello world' },
-      { kind: 'text', id: 'next-segment', content: '!' },
-    ]);
-  });
-
-  it('applies a frame of stream deltas without mutating the previous segments', () => {
-    const previous = [
-      { kind: 'text' as const, id: 'text-segment', content: 'Hello' },
-    ];
-
-    const next = appendStreamSegmentDeltas(previous, [
-      { kind: 'text', segmentId: 'text-segment', data: ' world' },
-      { kind: 'text', segmentId: 'text-segment', data: '!' },
-      { kind: 'thinking', segmentId: 'thinking-segment', data: 'Checking' },
-      { kind: 'thinking', segmentId: 'thinking-segment', data: ' files' },
-    ]);
-
-    expect(previous).toEqual([
-      { kind: 'text', id: 'text-segment', content: 'Hello' },
-    ]);
-    expect(next).toEqual([
-      { kind: 'text', id: 'text-segment', content: 'Hello world!' },
-      { kind: 'thinking', id: 'thinking-segment', content: 'Checking files' },
-    ]);
-  });
-
   it('preserves canonical segment ids at the preload validation boundary', () => {
     const identity = { sessionId: 'session-1', turnId: 'turn-1', sequence: 1 };
 
@@ -106,62 +64,6 @@ describe('useChat event affinity', () => {
 
     expect(block.toolResult).toEqual(canonical);
     expect(block.agentProjection).toBe('same projection');
-  });
-
-  it('keeps persisted usage when an idle live snapshot has no usage', () => {
-    const persisted: Usage = {
-      prompt_tokens: 900,
-      completion_tokens: 100,
-      total_tokens: 1_000,
-      cached_tokens: 300,
-      context: {
-        input_tokens: 900,
-        output_tokens: 100,
-        used_tokens: 1_000,
-        system_tokens: 100,
-        tools_tokens: 200,
-        tool_use_tokens: 300,
-        user_tokens: 200,
-        assistant_tokens: 200,
-      },
-    };
-    const messages = [{ usage: persisted }] as Message[];
-    const emptyLiveUsage: Usage = {
-      prompt_tokens: 0,
-      completion_tokens: 0,
-      total_tokens: 0,
-      cached_tokens: 0,
-    };
-    const liveUsage: Usage = { ...persisted, total_tokens: 1_100 };
-
-    expect(resolveHydratedUsage(messages, null)).toBe(persisted);
-    expect(resolveHydratedUsage(messages, emptyLiveUsage)).toBe(persisted);
-    expect(resolveHydratedUsage(messages, liveUsage)).toBe(liveUsage);
-  });
-
-  it('includes authoritative in-flight usage in session totals', () => {
-    const persisted: Usage = {
-      prompt_tokens: 900,
-      completion_tokens: 100,
-      total_tokens: 1_000,
-      cached_tokens: 300,
-    };
-    const live: Usage = {
-      prompt_tokens: 180,
-      completion_tokens: 30,
-      total_tokens: 210,
-      cached_tokens: 80,
-    };
-
-    expect(cumulativeUsageFromMessages(
-      [{ usage: persisted }] as Message[],
-      live,
-    )).toEqual({
-      prompt_tokens: 1_080,
-      completion_tokens: 130,
-      total_tokens: 1_210,
-      cached_tokens: 380,
-    });
   });
 
   it('accepts a canonical tool-only durable terminal history', () => {
@@ -262,77 +164,6 @@ describe('useChat event affinity', () => {
     expect(shouldBufferChatEvent(null, { sessionId: 'session-b' })).toBe(false);
   });
 
-  it('null-live drain discards wrong-session and stale-sequence buffered events', () => {
-    // After replaceMessages / beginSessionSwitch, affinity is rebound with no turn.
-    const state = affinity('session-b');
-    const applied: string[] = [];
-
-    const count = drainBufferedHydrationEvents(
-      state,
-      [
-        {
-          event: { sessionId: 'session-a', turnId: 'turn-old', sequence: 9 },
-          apply: () => applied.push('wrong-session'),
-        },
-        {
-          event: { sessionId: 'session-b', turnId: 'turn-b', sequence: 1 },
-          apply: () => applied.push('first'),
-        },
-        {
-          event: { sessionId: 'session-b', turnId: 'turn-b', sequence: 1 },
-          apply: () => applied.push('dup-seq'),
-        },
-        {
-          event: { sessionId: 'session-b', turnId: 'turn-b', sequence: 2 },
-          apply: () => applied.push('newer'),
-        },
-        {
-          event: { sessionId: 'session-b', turnId: 'turn-other', sequence: 5 },
-          apply: () => applied.push('wrong-turn'),
-        },
-      ],
-      false,
-    );
-
-    expect(count).toBe(2);
-    expect(applied).toEqual(['first', 'newer']);
-    expect(state.streamTurnId).toBe('turn-b');
-    expect(state.lastSequence).toBe(2);
-  });
-
-  it('live snapshot seed drops buffered events at or below sequence high-water mark', () => {
-    const state = affinity('session-b');
-    seedAffinityFromLive(state, {
-      sessionId: 'session-b',
-      turnId: 'turn-live',
-      sequence: 4,
-    });
-    const applied: number[] = [];
-
-    const count = drainBufferedHydrationEvents(
-      state,
-      [
-        {
-          event: { sessionId: 'session-b', turnId: 'turn-live', sequence: 3 },
-          apply: () => applied.push(3),
-        },
-        {
-          event: { sessionId: 'session-b', turnId: 'turn-live', sequence: 4 },
-          apply: () => applied.push(4),
-        },
-        {
-          event: { sessionId: 'session-b', turnId: 'turn-live', sequence: 5 },
-          apply: () => applied.push(5),
-        },
-      ],
-      true,
-    );
-
-    expect(count).toBe(1);
-    expect(applied).toEqual([5]);
-    expect(state.lastSequence).toBe(5);
-  });
-
   it('cancel queue serializes IPC and stages a second Esc for the next phase', async () => {
     const state = emptyCancelQueue();
     const phases: string[] = [];
@@ -397,22 +228,6 @@ describe('useChat event affinity', () => {
     expect(state).toEqual({ inFlight: true, pending: true });
     expect(beginCancelRequest(state)).toBe('queued');
     expect(state).toEqual({ inFlight: true, pending: true });
-  });
-
-  it('send failure residual state is identical for structured error and throw paths', () => {
-    const residual = residualStateAfterSendFailure();
-    expect(residual).toEqual({
-      isSending: false,
-      status: 'error',
-      streamStartTime: null,
-      streamingContent: '',
-      streamingThinking: '',
-      accumulatedContent: '',
-      accumulatedThinking: '',
-    });
-    // Composer can send again once isSending is false and status is not streaming.
-    expect(residual.isSending).toBe(false);
-    expect(residual.status).not.toBe('streaming');
   });
 
   it('dropOptimisticUserMessageIfLast only removes the trailing optimistic bubble', () => {

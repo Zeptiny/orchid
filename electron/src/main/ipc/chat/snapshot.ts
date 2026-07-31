@@ -2,9 +2,9 @@ import type { AgentContext } from '../../agents/xstate/agent-machine';
 import type { Usage } from '../../../shared/types/message';
 import type {
   ChatSnapshot,
-  ChatSnapshotState,
   ChatToolCallSnapshot,
 } from '../../../shared/types/ipc';
+import { normalizeChatSnapshotState } from '../../../shared/chat/turn-projection';
 import { activeAgents, type ActiveAgent } from './state';
 
 export function appendTextSegment(
@@ -75,13 +75,6 @@ export function updateToolSnapshot(
   return next;
 }
 
-function snapshotState(active: ActiveAgent): ChatSnapshotState {
-  const state = String(active.actor.getSnapshot().value);
-  if (state === 'error') return 'error';
-  if (state === 'idle') return 'idle';
-  return 'streaming';
-}
-
 export function snapshotForAgent(active: ActiveAgent): ChatSnapshot {
   const context = active.actor.getSnapshot().context as AgentContext;
   const interruptState = active.interruptActor.getSnapshot().value as
@@ -92,7 +85,7 @@ export function snapshotForAgent(active: ActiveAgent): ChatSnapshot {
     sessionId: active.sessionId,
     turnId: active.turnId,
     sequence: active.eventSequence,
-    state: snapshotState(active),
+    state: normalizeChatSnapshotState(String(active.actor.getSnapshot().value)),
     response: context.response ?? '',
     thinking: context.thinking ?? '',
     toolCalls: [...active.toolCalls.values()].map((tool) => ({ ...tool })),
