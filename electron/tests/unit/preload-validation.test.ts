@@ -141,3 +141,44 @@ describe('preload SUBAGENTS_EVENT validation', () => {
     expect(warn).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('preload startup validation', () => {
+  beforeEach(async () => {
+    vi.resetModules();
+    electronMock.handlers.clear();
+    electronMock.contextBridge.exposeInMainWorld.mockClear();
+    await import('../../src/preload/index');
+  });
+
+  it('drops malformed startup events and cleans up the listener', () => {
+    const exposed = electronMock.contextBridge.exposeInMainWorld.mock.calls
+      .find(([name]) => name === 'orchid');
+    if (!exposed) throw new Error('preload did not expose window.orchid');
+    const api = exposed[1] as OrchidAPI;
+    const received = vi.fn();
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+    const dispose = api.startup.onChanged(received);
+    const listener = electronMock.handlers.get(IPC_CHANNELS.STARTUP_CHANGED);
+    if (!listener) throw new Error('no STARTUP_CHANGED listener registered');
+    listener({}, { revision: -1, phase: 'ready', steps: [] });
+
+    expect(received).not.toHaveBeenCalled();
+    expect(warn).toHaveBeenCalledOnce();
+    dispose();
+    expect(electronMock.ipcRenderer.removeListener).toHaveBeenCalledWith(
+      IPC_CHANNELS.STARTUP_CHANGED,
+      expect.any(Function),
+    );
+  });
+
+  it('rejects malformed startup snapshots from the invoke boundary', async () => {
+    const exposed = electronMock.contextBridge.exposeInMainWorld.mock.calls
+      .find(([name]) => name === 'orchid');
+    if (!exposed) throw new Error('preload did not expose window.orchid');
+    const api = exposed[1] as OrchidAPI;
+    electronMock.ipcRenderer.invoke.mockResolvedValueOnce({ revision: 0, phase: 'starting', steps: [] });
+
+    await expect(api.startup.snapshot()).rejects.toThrow(/Invalid IPC response.*startup:snapshot/i);
+  });
+});

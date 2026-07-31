@@ -92,6 +92,8 @@ import type {
   PermissionResult,
   PermissionSessionModeMutationResult,
   PermissionSessionModeResult,
+  StartupSnapshot,
+  StartupContinueDegradedResult,
 } from '../shared/types/ipc';
 import {
   chatChunkEventSchema,
@@ -121,6 +123,8 @@ import {
   subagentSnapshotSchema,
   subagentEventSchema,
   subagentDeltaEventSchema,
+  startupSnapshotSchema,
+  startupContinueDegradedResultSchema,
 } from '../shared/types/ipc-schemas';
 
 // ── Security helpers ─────────────────────────────────────────────────────────
@@ -144,6 +148,8 @@ function assertAllowedEvent(channel: string): void {
  * channels still rely on TypeScript casts only (see M-P1-016 residual).
  */
 const INVOKE_RESULT_SCHEMAS: Partial<Record<string, z.ZodTypeAny>> = {
+  [IPC_CHANNELS.STARTUP_SNAPSHOT]: startupSnapshotSchema,
+  [IPC_CHANNELS.STARTUP_CONTINUE_DEGRADED]: startupContinueDegradedResultSchema,
   [IPC_CHANNELS.CHAT_SEND]: chatSendResultSchema,
   [IPC_CHANNELS.CHAT_SNAPSHOT]: chatSessionSnapshotSchema,
   [IPC_CHANNELS.SUBAGENTS_SNAPSHOT]: subagentSnapshotSchema,
@@ -262,6 +268,14 @@ function onSubagentEvent(callback: (event: SubagentEvent) => void): () => void {
 // ── Build the API surface ────────────────────────────────────────────────────
 
 const orchidAPI: OrchidAPI = {
+  startup: {
+    snapshot: () => invoke<StartupSnapshot>(IPC_CHANNELS.STARTUP_SNAPSHOT),
+    continueDegraded: () =>
+      invoke<StartupContinueDegradedResult>(IPC_CHANNELS.STARTUP_CONTINUE_DEGRADED),
+    onChanged: (callback: (snapshot: StartupSnapshot) => void) =>
+      onParsed(IPC_CHANNELS.STARTUP_CHANGED, startupSnapshotSchema, callback),
+  },
+
   chat: {
     send: (message: ChatSendMessage) =>
       invoke(IPC_CHANNELS.CHAT_SEND, message),

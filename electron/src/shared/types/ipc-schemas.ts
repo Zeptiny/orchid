@@ -12,6 +12,43 @@ import {
   toolExecutionResultSchema,
 } from './tool-result';
 
+// ── Startup ─────────────────────────────────────────────────────────────────
+
+const startupStepSchema = z.object({
+  id: z.enum(['opening_window', 'settings_providers', 'agents_tools', 'tool_workers', 'preparing_interface']),
+  label: z.string(),
+  state: z.enum(['pending', 'active', 'complete', 'skipped', 'warning', 'failed']),
+  durationMs: z.number().nonnegative().nullable(),
+});
+
+export const startupSnapshotSchema = z.object({
+  revision: z.number().int().nonnegative(),
+  phase: z.enum(['starting', 'ready', 'degraded', 'failed']),
+  steps: z.array(startupStepSchema).length(5),
+}).superRefine((snapshot, ctx) => {
+  const expected = [
+    ['opening_window', 'Opening window'],
+    ['settings_providers', 'Loading settings and providers'],
+    ['agents_tools', 'Loading agents and tools'],
+    ['tool_workers', 'Starting tool workers'],
+    ['preparing_interface', 'Preparing the application interface'],
+  ] as const;
+  snapshot.steps.forEach((step, index) => {
+    const expectedStep = expected[index];
+    if (!expectedStep || step.id !== expectedStep[0]) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['steps', index, 'id'], message: 'Startup steps must preserve their fixed order' });
+    }
+    if (!expectedStep || step.label !== expectedStep[1]) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['steps', index, 'label'], message: 'Startup step labels must be fixed' });
+    }
+  });
+});
+
+export const startupContinueDegradedResultSchema = z.object({
+  ok: z.boolean(),
+  snapshot: startupSnapshotSchema,
+});
+
 // ── Shared fragments ─────────────────────────────────────────────────────────
 
 const chatEventIdentitySchema = z.object({

@@ -12,6 +12,39 @@
 import type { ModelSelection } from './provider';
 import type { PermissionMode } from './permission';
 
+// ── Startup ─────────────────────────────────────────────────────────────────
+
+export type StartupStepId =
+  | 'opening_window'
+  | 'settings_providers'
+  | 'agents_tools'
+  | 'tool_workers'
+  | 'preparing_interface';
+
+export type StartupStepState = 'pending' | 'active' | 'complete' | 'skipped' | 'warning' | 'failed';
+export type StartupPhase = 'starting' | 'ready' | 'degraded' | 'failed';
+export type ToolWorkerStartupOutcome = 'disabled' | 'success' | 'failure';
+
+export interface StartupStep {
+  readonly id: StartupStepId;
+  readonly label: string;
+  readonly state: StartupStepState;
+  /** Monotonic elapsed time once the step has settled; never wall-clock data. */
+  readonly durationMs: number | null;
+}
+
+export interface StartupSnapshot {
+  /** Main-owned monotonic revision; renderers ignore revisions at or below their floor. */
+  readonly revision: number;
+  readonly phase: StartupPhase;
+  readonly steps: readonly StartupStep[];
+}
+
+export interface StartupContinueDegradedResult {
+  readonly ok: boolean;
+  readonly snapshot: StartupSnapshot;
+}
+
 // ── Session ─────────────────────────────────────────────────────────────────
 
 export interface SessionSummary {
