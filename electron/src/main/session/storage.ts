@@ -22,9 +22,9 @@ import {
   messageFromStorageDict,
 } from '../../shared/types/message';
 import {
-  subagentRecordToStorageDict,
   subagentRecordFromStorageDict,
-} from '../../shared/types/subagent';
+  subagentRecordToStorageDict,
+} from '../../shared/serialization/chain-subagent';
 import {
   todoStoreToStorageDict,
   todoStoreFromStorageDict,

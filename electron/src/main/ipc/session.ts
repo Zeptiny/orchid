@@ -13,6 +13,12 @@ import {
   resolveBoundProjectPath,
   resolveWindowWorkspace,
 } from '../session/singleton';
+import {
+  clearDraftReasoningOverrides,
+  getDraftReasoningOverride,
+  setDraftReasoningOverride,
+  takeDraftReasoningOverride,
+} from '../session/draft-reasoning';
 import { getConfig } from '../config/loader';
 import { clearChatHistory, seedChatHistory } from './chat-history';
 import { sendSessionEvent } from './chat/events';
@@ -56,26 +62,7 @@ export {
 
 export { flattenSessionMessages };
 
-// ── Draft reasoning overrides (window-scoped, pre-session) ──────────────────
-
-/**
- * Reasoning effort chosen in draft mode, before a session file exists.
- * Transferred to the session when one is created for the window.
- */
-const draftReasoningOverrides = new Map<string, string | number | null>();
-
-/**
- * Consume the stored draft reasoning override for a window, if any.
- * Called when a draft promotes into a session so the choice survives.
- */
-export function takeDraftReasoningOverride(
-  windowId: string,
-): string | number | null | undefined {
-  if (!draftReasoningOverrides.has(windowId)) return undefined;
-  const value = draftReasoningOverrides.get(windowId) ?? null;
-  draftReasoningOverrides.delete(windowId);
-  return value;
-}
+export { takeDraftReasoningOverride } from '../session/draft-reasoning';
 
 /**
  * Model selection to reason about in draft mode (no active session):
@@ -515,7 +502,7 @@ export function registerSessionIPC(): void {
     const active = manager.getActive(windowId);
     if (!active) {
       // Draft mode: no session file yet — park the override until one exists.
-      draftReasoningOverrides.set(windowId, parsed.data.effort);
+      setDraftReasoningOverride(windowId, parsed.data.effort);
       return { status: 'ok' };
     }
 
@@ -532,7 +519,7 @@ export function registerSessionIPC(): void {
     const selection = active?.selection ?? resolveDraftModelSelection(windowId);
     const override = active
       ? active.reasoningEffortOverride
-      : draftReasoningOverrides.get(windowId) ?? null;
+      : getDraftReasoningOverride(windowId);
 
     if (!selection) {
       return { levels: [], default: null, override, supportsReasoning: false };
@@ -580,7 +567,7 @@ export function unregisterSessionIPC(): void {
   ipcMain.removeHandler(IPC_CHANNELS.SESSION_CHANGE_CWD);
   ipcMain.removeHandler(IPC_CHANNELS.SESSION_SET_REASONING_EFFORT);
   ipcMain.removeHandler(IPC_CHANNELS.SESSION_GET_REASONING_CONFIG);
-  draftReasoningOverrides.clear();
+  clearDraftReasoningOverrides();
 }
 
 // Re-export draft helper for tests that need to seed draft without IPC.

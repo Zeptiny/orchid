@@ -23,7 +23,7 @@ import type { SubagentDeltaEvent, SubagentLiveProjection } from '../../src/share
 import {
   subagentRecordFromStorageDict,
   subagentRecordToStorageDict,
-} from '../../src/shared/types/subagent';
+} from '../../src/shared/serialization/chain-subagent';
 import { defaults } from '../../src/main/config/schema';
 import type { Config } from '../../src/shared/types/ipc-boundary';
 

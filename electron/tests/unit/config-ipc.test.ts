@@ -104,6 +104,7 @@ vi.mock('../../src/main/ipc/session', () => ({
 
 let configIpc: typeof import('../../src/main/ipc/config');
 let loader: typeof import('../../src/main/config/loader');
+let writeLock: typeof import('../../src/main/config/write-lock');
 let projectDir: string;
 
 beforeEach(async () => {
@@ -123,7 +124,8 @@ beforeEach(async () => {
 
   configIpc = await import('../../src/main/ipc/config');
   loader = await import('../../src/main/config/loader');
-  configIpc._resetConfigSaveChainForTests();
+  writeLock = await import('../../src/main/config/write-lock');
+  writeLock._resetConfigSaveChainForTests();
   configIpc.registerConfigIPC();
 });
 

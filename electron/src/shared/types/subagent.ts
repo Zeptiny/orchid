@@ -9,7 +9,6 @@
 import { z } from 'zod';
 import type { Chain } from './chain';
 import type { Usage } from './message';
-import { chainFromStorageDict, chainToStorageDict } from './chain';
 import type {
   CanonicalToolResult,
   TerminalToolResultStatus,
@@ -342,103 +341,4 @@ export interface SubagentRecordStorageDict {
   closed?: boolean;
   chain?: unknown;
   [key: string]: unknown;
-}
-
-// ── Serialization ───────────────────────────────────────────────────────────
-
-export function subagentRecordToStorageDict(record: SubagentRecord): SubagentRecordStorageDict {
-  return {
-    id: record.id,
-    agent_name: record.agent_name,
-    agent_type: record.agent_type,
-    agent_tier: record.agent_tier,
-    task: record.task,
-    status: record.status,
-    chain_id: record.chain_id,
-    start_time: record.start_time,
-    end_time: record.end_time,
-    result: record.result,
-    error: record.error,
-    parentChainIndex: record.parentChainIndex,
-    ...(record.reasoning_effort !== undefined &&
-      (typeof record.reasoning_effort !== 'number' || Number.isFinite(record.reasoning_effort))
-      ? { reasoning_effort: record.reasoning_effort }
-      : {}),
-    closed: record.closed,
-    chain: chainToStorageDict(record.chain),
-  };
-}
-
-export function subagentRecordFromStorageDict(data: unknown): SubagentRecord {
-  const raw = data as Record<string, unknown>;
-  const now = new Date().toISOString();
-
-  let status: SubagentStatus = SubagentStatus.COMPLETED;
-  const rawStatus = raw.status as string | undefined;
-  if (
-    typeof rawStatus === 'string' &&
-    (rawStatus === 'queued' || rawStatus === 'pending' || rawStatus === 'running' ||
-      rawStatus === 'completed' || rawStatus === 'failed' ||
-      rawStatus === 'interrupted')
-  ) {
-    status = rawStatus;
-  }
-
-  const migratedToInterrupted =
-    status === SubagentStatus.QUEUED ||
-    status === SubagentStatus.PENDING ||
-    status === SubagentStatus.RUNNING;
-  if (migratedToInterrupted) {
-    status = SubagentStatus.INTERRUPTED;
-  }
-
-  const startTime = typeof raw.start_time === 'string' ? raw.start_time : now;
-  let endTime = typeof raw.end_time === 'string' ? raw.end_time : null;
-
-  if (status === SubagentStatus.INTERRUPTED && !endTime) {
-    endTime = now;
-  }
-
-  let chain: Chain;
-  const chainData = raw.chain;
-  if (chainData && typeof chainData === 'object') {
-    chain = chainFromStorageDict(chainData);
-  } else {
-    chain = chainFromStorageDict({ messages: [] });
-  }
-
-  const chainId = typeof raw.chain_id === 'string' ? raw.chain_id : '';
-
-  let parentChainIndex: number | null = null;
-  const rawParent = raw.parentChainIndex;
-  if (typeof rawParent === 'number' && Number.isFinite(rawParent)) {
-    parentChainIndex = rawParent;
-  }
-
-  let reasoningEffort: string | number | undefined;
-  const rawEffort = raw.reasoning_effort;
-  if (
-    typeof rawEffort === 'string' ||
-    (typeof rawEffort === 'number' && Number.isFinite(rawEffort))
-  ) {
-    reasoningEffort = rawEffort;
-  }
-
-  return {
-    id: typeof raw.id === 'string' ? raw.id : '',
-    agent_name: typeof raw.agent_name === 'string' ? raw.agent_name : '',
-    agent_type: typeof raw.agent_type === 'string' ? raw.agent_type : 'subagent',
-    agent_tier: typeof raw.agent_tier === 'string' ? raw.agent_tier : 'bloom',
-    task: typeof raw.task === 'string' ? raw.task : '',
-    status,
-    chain_id: chainId,
-    start_time: startTime,
-    end_time: endTime,
-    result: typeof raw.result === 'string' ? raw.result : null,
-    error: typeof raw.error === 'string' ? raw.error : null,
-    parentChainIndex,
-    ...(reasoningEffort !== undefined ? { reasoning_effort: reasoningEffort } : {}),
-    closed: raw.closed === true,
-    chain,
-  };
 }

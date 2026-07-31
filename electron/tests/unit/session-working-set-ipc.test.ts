@@ -40,7 +40,7 @@ vi.mock('electron', () => ({
   },
 }));
 
-vi.mock('../../src/main/ipc/session', () => ({
+vi.mock('../../src/main/session/singleton', () => ({
   getSessionManager: () => ({
     listSaved: mocks.listSaved,
   }),

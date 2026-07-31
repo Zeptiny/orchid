@@ -600,14 +600,17 @@ vi.mock('../../src/main/mcp/project-registry', () => ({
   releaseProjectMCPManager: vi.fn(),
 }));
 
-vi.mock('../../src/main/ipc/session', () => ({
+vi.mock('../../src/main/session/singleton', () => ({
   getSessionManager: () => mocks.sessionManager,
-  flattenSessionMessages: (session: { chains: Array<{ messages?: unknown[] }> }) =>
-    session.chains.flatMap((chain) => chain.messages ?? []),
-  resolveWindowWorkspace: (windowId: string) =>
-    mocks.workspace.resolveWorkspace(windowId),
+  resolveWindowWorkspace: (windowId: string) => mocks.workspace.resolveWorkspace(windowId),
+}));
+
+vi.mock('../../src/main/session/draft-reasoning', () => ({
   takeDraftReasoningOverride: (windowId: string) =>
     mocks.takeDraftReasoningOverride(windowId),
+}));
+
+vi.mock('../../src/main/permissions/session-overrides', () => ({
   takeDraftPermissionOverride: (windowId: string) =>
     mocks.takeDraftPermissionOverride(windowId),
 }));

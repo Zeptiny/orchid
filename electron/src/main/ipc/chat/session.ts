@@ -3,12 +3,9 @@ import type { ModelSelection } from '../../../shared/types/provider';
 import type { Session } from '../../../shared/types/session';
 import type { ChatSendResult } from '../../../shared/types/ipc';
 import { IPC_CHANNELS } from '../../../shared/types/ipc';
-import {
-  getSessionManager,
-  resolveWindowWorkspace,
-  takeDraftReasoningOverride,
-  takeDraftPermissionOverride,
-} from '../session';
+import { getSessionManager, resolveWindowWorkspace } from '../../session/singleton';
+import { takeDraftReasoningOverride } from '../../session/draft-reasoning';
+import { takeDraftPermissionOverride } from '../../permissions/session-overrides';
 import { workingSetOpenOrFocus } from '../session-working-set';
 import { clearDraftCwd } from '../../project/workspace';
 import {

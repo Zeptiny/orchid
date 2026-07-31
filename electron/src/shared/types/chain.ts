@@ -12,16 +12,11 @@
  * - ACTIVE → INTERRUPTED on restore (process died; chain cannot still be live)
  */
 
-import {
-  copyModelSelection,
-  modelSelectionSchema,
-  type ModelSelection,
-} from './provider';
+import type { ModelSelection } from './provider';
 import type { Message, Usage } from './message';
-import { messageFromStorageDict, messageToStorageDict, MessageRole } from './message';
+import { MessageRole } from './message';
 import { sumMessageUsages } from '../usage';
 import type { SubagentRecord } from './subagent';
-import { subagentRecordFromStorageDict, subagentRecordToStorageDict } from './subagent';
 
 // ── Enums as const objects ──────────────────────────────────────────────────
 
@@ -154,27 +149,7 @@ export function reconcileOrphanToolResults(messages: Message[]): Message[] {
   return keep;
 }
 
-// ── Serialization ───────────────────────────────────────────────────────────
-
-export function chainToStorageDict(chain: Chain): ChainStorageDict {
-  const dict: ChainStorageDict = {
-    messages: chain.messages.map(messageToStorageDict),
-    status: chain.status,
-    selection: copyModelSelection(chain.selection),
-    modelLabel: chain.modelLabel ?? null,
-  };
-  if (chain.id) dict.id = chain.id;
-  if (chain.sessionId) dict.sessionId = chain.sessionId;
-  if (chain.agentName) dict.agentName = chain.agentName;
-  if (chain.agentType) dict.agentType = chain.agentType;
-  if (chain.agentTier) dict.agentTier = chain.agentTier;
-  if (chain.subagentRecord) {
-    dict.subagentRecord = subagentRecordToStorageDict(chain.subagentRecord);
-  }
-  if (chain.startTime) dict.startTime = chain.startTime;
-  if (chain.endTime != null) dict.endTime = chain.endTime;
-  return dict;
-}
+// ── Storage helpers ─────────────────────────────────────────────────────────
 
 export function parseChainStatus(raw: unknown): ChainStatus {
   if (typeof raw !== 'string') return ChainStatus.COMPLETED;
@@ -183,60 +158,4 @@ export function parseChainStatus(raw: unknown): ChainStatus {
   if (raw === 'interrupted') return ChainStatus.INTERRUPTED;
   if (raw === 'failed') return ChainStatus.FAILED;
   return ChainStatus.COMPLETED;
-}
-
-function parseTimeField(raw: unknown): string | null {
-  if (typeof raw === 'string' && raw.length > 0) return raw;
-  return null;
-}
-
-function parseEndTime(raw: unknown): string | null {
-  if (raw == null) return null;
-  if (typeof raw === 'string') return raw.length > 0 ? raw : null;
-  return null;
-}
-
-export function chainFromStorageDict(data: unknown): Chain {
-  const raw = data as Record<string, unknown>;
-  const parsedSelection = modelSelectionSchema.safeParse(raw.selection);
-  const selection: ModelSelection | null = parsedSelection.success ? parsedSelection.data : null;
-  const modelLabel: string | null =
-    typeof raw.modelLabel === 'string' ? raw.modelLabel : null;
-
-  const rawMessages = Array.isArray(raw.messages) ? raw.messages : [];
-  let messages = rawMessages.map((m) => messageFromStorageDict(m));
-  messages = reconcileOrphanToolResults(messages);
-
-  let status = parseChainStatus(raw.status);
-
-  let subagentRecord: SubagentRecord | null = null;
-  const srData = raw.subagentRecord;
-  if (srData && typeof srData === 'object') {
-    subagentRecord = subagentRecordFromStorageDict(srData);
-  }
-
-  const startTime = parseTimeField(raw.startTime);
-  let endTime = parseEndTime(raw.endTime);
-
-  if (status === ChainStatus.ACTIVE) {
-    status = ChainStatus.INTERRUPTED;
-    if (!endTime) {
-      endTime = new Date().toISOString();
-    }
-  }
-
-  return {
-    id: typeof raw.id === 'string' ? raw.id : '',
-    sessionId: typeof raw.sessionId === 'string' ? raw.sessionId : '',
-    messages,
-    status,
-    selection,
-    modelLabel,
-    agentName: typeof raw.agentName === 'string' ? raw.agentName : '',
-    agentType: typeof raw.agentType === 'string' ? raw.agentType : '',
-    agentTier: typeof raw.agentTier === 'string' ? raw.agentTier : '',
-    subagentRecord,
-    startTime,
-    endTime,
-  };
 }

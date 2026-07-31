@@ -208,7 +208,7 @@ export function buildWaitTool(
     // terminal result too. Route that through the scheduler's recovery entry
     // point so an earlier degraded checkpoint gets one deliberate retry.
     try {
-      const { recoverSubagentPersistence, persistSubagentChains } = await import('../../agents/wire-subagents.js');
+      const { recoverSubagentPersistence } = await import('../../agents/subagent-persistence-recovery.js');
       const sessionIds = new Set(
         [...records.values()]
           .map((record) => record.sessionId)
@@ -216,9 +216,9 @@ export function buildWaitTool(
       );
       if (sessionIds.size === 0) {
         // Preserve the legacy fallback for records created without an owner.
-        persistSubagentChains(manager);
+        recoverSubagentPersistence(manager);
       } else {
-        for (const sessionId of sessionIds) recoverSubagentPersistence(sessionId);
+        for (const sessionId of sessionIds) recoverSubagentPersistence(manager, sessionId);
       }
     } catch {
       // Non-fatal — UI can still read in-memory state on next refresh

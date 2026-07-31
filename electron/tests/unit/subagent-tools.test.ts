@@ -23,13 +23,13 @@ import {
 import {
   subagentRecordFromStorageDict,
   subagentRecordToStorageDict,
-} from '../../src/shared/types/subagent';
+} from '../../src/shared/serialization/chain-subagent';
 import {
   forgetSubagentPersistedRevision,
   persistSubagentChains,
 } from '../../src/main/agents/persist-subagent-chains';
 import { hydrateSubagentRecords } from '../../src/main/tools/subagent/hydrate';
-import { recoverSubagentPersistence } from '../../src/main/agents/wire-subagents';
+import { recoverSubagentPersistence } from '../../src/main/agents/subagent-persistence-recovery';
 import type { StreamEvent } from '../../src/main/llm/orchestrator';
 import { buildDelegateTool as buildDelegateToolRaw } from '../../src/main/tools/subagent/delegate';
 import { buildWaitTool as buildWaitToolRaw } from '../../src/main/tools/subagent/wait';
@@ -94,16 +94,14 @@ vi.mock('../../src/main/session/singleton', () => ({
 
 /**
  * The close tool flushes the closed flag through `recoverSubagentPersistence`
- * via a lazy `await import('../../agents/wire-subagents')` (same pattern as
+ * via a lazy `await import('../../agents/subagent-persistence-recovery')` (same pattern as
  * wait.ts). Spy on that entry point so the persistence-trigger test can assert
  * it fires. A plain factory (no `importOriginal`) is required: loading the real
  * module here pre-populates the module cache and the dependency's dynamic import
- * would bypass the mock. `persistSubagentChains` is the wait tool's legacy
- * fallback export — stub it too so the wait tests stay isolated from disk/IPC.
+ * would bypass the mock.
  */
-vi.mock('../../src/main/agents/wire-subagents', () => ({
+vi.mock('../../src/main/agents/subagent-persistence-recovery', () => ({
   recoverSubagentPersistence: vi.fn(),
-  persistSubagentChains: vi.fn(),
 }));
 
 const recoverSpy = vi.mocked(recoverSubagentPersistence);
@@ -960,7 +958,7 @@ describe('close_subagents', () => {
 
     await handler({ subagent_ids: [record.id] }, makeCtx(makeAgentMap()));
 
-    expect(recoverSpy).toHaveBeenCalledWith(sid);
+    expect(recoverSpy).toHaveBeenCalledWith(manager, sid);
   });
 
   it('does not trigger a persistence flush when nothing was closed', async () => {

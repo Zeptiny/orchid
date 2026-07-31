@@ -2,7 +2,7 @@ import { BrowserWindow, ipcMain } from 'electron';
 import { z } from 'zod';
 import { IPC_CHANNELS, type WorkingSetSnapshot } from '../../shared/types/ipc';
 import { sessionWorkingSet } from '../session/working-set';
-import { getSessionManager } from './session';
+import { getSessionManager } from '../session/singleton';
 
 const sessionIdSchema = z.object({ id: z.string().uuid() });
 const setFocusSchema = z.object({ id: z.string().uuid().nullable() });

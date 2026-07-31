@@ -19,7 +19,6 @@ import {
   parseFrontmatter,
   getString,
 } from '../../shared/utils/frontmatter';
-import { registerBuiltinTools } from '../tools';
 import { HOME_SKILLS_DIR } from '../config/loader';
 import { seedDefaultSubdirs } from '../utils/seed-defaults';
 
@@ -220,8 +219,7 @@ export function readSkills(
  * Load all skills by merging home and project skill directories.
  *
  * Merge semantics: home skills loaded first, then project skills overlay
- * (same name → project wins).  After loading, triggers a tool registry
- * reset so tool filtering can be rebuilt with the new skill context.
+ * (same name → project wins).
  *
  * @param options.homeDir  Override home skills directory (default: `~/.orchid/skills/`)
  * @param options.projectDir  Project skills directory (e.g. `<workspace>/.orchid/skills`).
@@ -232,9 +230,6 @@ export function loadSkills(
 ): Map<string, Skill> {
   const merged = readSkills(options);
   skillRegistry = merged;
-
-  // Rebuild dynamic tool descriptions with the latest skill registry.
-  registerBuiltinTools({ skills: merged });
 
   return merged;
 }

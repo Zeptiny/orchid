@@ -1,7 +1,7 @@
 import type { AgentContext } from '../../agents/xstate/agent-machine';
 import { ChainStatus } from '../../../shared/types/chain';
 import { IPC_CHANNELS } from '../../../shared/types/ipc';
-import { getSessionManager } from '../session';
+import { getSessionManager } from '../../session/singleton';
 import { getBackgroundStore } from '../../tools/process/background-store';
 import { getSubagentManager } from '../../tools';
 import { completeSessionActivity } from '../session-activity';

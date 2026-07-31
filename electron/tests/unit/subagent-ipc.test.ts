@@ -14,10 +14,14 @@ import {
   trackedSubagentPersistenceSessions,
 } from '../../src/main/agents/persist-subagent-chains';
 import {
-  createSubagentDeltaBatcher,
-  deliverSubagentDeltaEvent,
+  createSubagentDeltaBatcher as createIpcSubagentDeltaBatcher,
+  deliverSubagentDeltaEvent as deliverIpcSubagentDeltaEvent,
   mergeSubagentRecords,
 } from '../../src/main/ipc/subagents';
+import {
+  createSubagentDeltaBatcher,
+  deliverSubagentDeltaEvent,
+} from '../../src/main/agents/subagent-events';
 import {
   broadcastSubagentsChanged,
   createSubagentDeltaHandler,
@@ -120,6 +124,11 @@ describe('subagent IPC boundary', () => {
     expect(merged).toHaveLength(2);
     expect(merged.find((item) => item.id === 'same')?.status).toBe('running');
     expect(merged.find((item) => item.id === 'ended')?.status).toBe('failed');
+  });
+
+  it('keeps live-delta helpers available from the IPC compatibility surface', () => {
+    expect(createIpcSubagentDeltaBatcher).toBe(createSubagentDeltaBatcher);
+    expect(deliverIpcSubagentDeltaEvent).toBe(deliverSubagentDeltaEvent);
   });
 
   it('snapshot continuity: evicted records still appear from stored rows when absent from runtime', () => {
