@@ -70,6 +70,50 @@ describe('startup lifecycle', () => {
     expect(state.snapshot().steps[3]).toMatchObject({ state: 'skipped' });
   });
 
+  it('stops before workers when shutdown aborts a pending earlier stage', async () => {
+    const abortController = new AbortController();
+    let releaseAgents: (() => void) | undefined;
+    const agentsStarted = new Promise<void>((resolve) => {
+      releaseAgents = resolve;
+    });
+    const { lifecycle, state } = createLifecycle({
+      abortSignal: abortController.signal,
+      loadAgentsAndTools: vi.fn(() => agentsStarted),
+    });
+
+    const startup = runStartupLifecycle(lifecycle);
+    await vi.waitFor(() => expect(lifecycle.loadAgentsAndTools).toHaveBeenCalledOnce());
+    abortController.abort();
+    releaseAgents?.();
+
+    await expect(startup).resolves.toBe('aborted');
+    expect(lifecycle.startToolWorkers).not.toHaveBeenCalled();
+    expect(lifecycle.prepareInterface).not.toHaveBeenCalled();
+    expect(lifecycle.logFailure).not.toHaveBeenCalled();
+    expect(state.snapshot().phase).toBe('starting');
+  });
+
+  it('does not prepare the interface when shutdown aborts while workers settle', async () => {
+    const abortController = new AbortController();
+    let releaseWorkers: ((result: { status: 'ready' }) => void) | undefined;
+    const workerResult = new Promise<{ status: 'ready' }>((resolve) => {
+      releaseWorkers = resolve;
+    });
+    const { lifecycle } = createLifecycle({
+      abortSignal: abortController.signal,
+      startToolWorkers: vi.fn(() => workerResult),
+    });
+
+    const startup = runStartupLifecycle(lifecycle);
+    await vi.waitFor(() => expect(lifecycle.startToolWorkers).toHaveBeenCalledOnce());
+    abortController.abort();
+    releaseWorkers?.({ status: 'ready' });
+
+    await expect(startup).resolves.toBe('aborted');
+    expect(lifecycle.prepareInterface).not.toHaveBeenCalled();
+    expect(lifecycle.logFailure).not.toHaveBeenCalled();
+  });
+
   it('marks the active mandatory stage failed and keeps its terminal state when startup work throws', async () => {
     const error = new Error('provider credentials should stay local');
     const { lifecycle, state } = createLifecycle({

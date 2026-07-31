@@ -1,9 +1,12 @@
 import { BrowserWindow, ipcMain } from 'electron';
+import { z } from 'zod';
 import { IPC_CHANNELS } from '../../shared/types/ipc';
 import type { StartupContinueDegradedResult, StartupSnapshot } from '../../shared/types/ipc-boundary';
 import { startupState, type StartupState } from '../startup';
 
 let unsubscribe: (() => void) | null = null;
+
+const noPayloadSchema = z.tuple([]);
 
 function broadcast(snapshot: StartupSnapshot): void {
   for (const window of BrowserWindow.getAllWindows()) {
@@ -19,8 +22,9 @@ function broadcast(snapshot: StartupSnapshot): void {
 }
 
 function rejectPayload(channel: string, payload: unknown[]): void {
-  if (payload.length > 0) {
-    throw new Error(`${channel} does not accept payloads`);
+  const parsed = noPayloadSchema.safeParse(payload);
+  if (!parsed.success) {
+    throw new Error(`${channel} does not accept payloads: ${parsed.error.message}`);
   }
 }
 

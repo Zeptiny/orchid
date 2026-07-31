@@ -4,6 +4,7 @@ import { Alert } from './ui/Alert';
 import { Button } from './ui/Button';
 import { StateMessage } from './ui/StateMessage';
 import { StatusBadge, type StatusBadgeTone } from './ui/StatusBadge';
+import orchidIcon from '../assets/orchid-icon.svg';
 
 export interface StartupScreenProps {
   /** Called only after main publishes the terminal ready snapshot. */
@@ -125,7 +126,7 @@ export function StartupScreen({ onReady }: StartupScreenProps) {
     <main className="flex h-screen items-center justify-center bg-base-100 px-5 text-base-content" aria-labelledby="startup-title">
       <section className="w-full max-w-xl space-y-6" aria-describedby="startup-status">
         <header className="flex items-center gap-3">
-          <img src="./assets/orchid-icon.svg" width="36" height="36" alt="" aria-hidden />
+          <img src={orchidIcon} width="36" height="36" alt="" aria-hidden />
           <div>
             <h1 id="startup-title" className="font-display text-xl font-semibold tracking-tight">Orchid</h1>
             <p id="startup-status" className="mt-1 text-sm text-base-content/65" role="status" aria-live="polite" aria-atomic="true">

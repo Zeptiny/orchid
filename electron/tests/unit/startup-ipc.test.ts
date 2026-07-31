@@ -49,7 +49,14 @@ describe('startup IPC', () => {
   it('accepts no renderer payload and returns the current snapshot', async () => {
     const snapshot = handler(IPC_CHANNELS.STARTUP_SNAPSHOT);
     await expect(snapshot({ sender: {} })).resolves.toEqual(state.snapshot());
+  });
+
+  it('rejects payloads for both no-payload startup handlers', async () => {
+    const snapshot = handler(IPC_CHANNELS.STARTUP_SNAPSHOT);
+    const continueDegraded = handler(IPC_CHANNELS.STARTUP_CONTINUE_DEGRADED);
+
     await expect(snapshot({ sender: {} }, { ignored: true })).rejects.toThrow(/does not accept payload/i);
+    await expect(continueDegraded({ sender: {} }, { ignored: true })).rejects.toThrow(/does not accept payload/i);
   });
 
   it('broadcasts each immutable state change to live windows', () => {

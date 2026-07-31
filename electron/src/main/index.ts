@@ -37,7 +37,7 @@ import {
   disposeSubagentPersistence,
 } from './agents/wire-subagents';
 import { initToolWorkerPool, disposeToolWorkerPool } from './llm/tool-pool';
-import { runStartupLifecycle } from './startup-lifecycle';
+import { runStartupLifecycle, type StartupLifecycleResult } from './startup-lifecycle';
 import { startupState } from './startup';
 import { getConfig } from './config/loader';
 import { ProviderCatalogStore } from './providers/catalog/store';
@@ -66,6 +66,10 @@ import { closeSessionDb } from './session/storage';
 let mainWindow: BrowserWindow | null = null;
 /** True once before-quit has begun cleanup; blocks re-entrant preventDefault. */
 let isQuitting = false;
+/** Cancels startup before teardown can dispose resources it may still initialize. */
+let startupAbortController: AbortController | null = null;
+/** Joined by before-quit so startup cannot resume after resource disposal. */
+let startupLifecycle: Promise<StartupLifecycleResult> | null = null;
 /** Periodic reclaim of USER-owned bg command stdin after idle timeout. */
 let bgIdleOwnershipTimer: ReturnType<typeof setInterval> | null = null;
 let providerStatusScheduler: ProviderStatusScheduler | null = null;
@@ -245,12 +249,16 @@ function startBackgroundOwnershipReclaim(): void {
 
 app.whenReady().then(async () => {
   try {
+    if (isQuitting) return;
+
     // Logging and the narrow startup IPC surface must exist before the window.
     initFileLogging();
     registerStartupIPC(startupState);
 
-    const result = await runStartupLifecycle({
+    startupAbortController = new AbortController();
+    startupLifecycle = runStartupLifecycle({
       state: startupState,
+      abortSignal: startupAbortController.signal,
       openWindow: createWindow,
       yieldForPresentation: yieldForStartupPresentation,
       loadSettingsAndProviders: () => {
@@ -288,10 +296,11 @@ app.whenReady().then(async () => {
         console.error(`[startup] mandatory stage failed step=${step ?? 'unknown'}`, error);
       },
     });
+    const result = await startupLifecycle;
 
     // A mandatory startup failure is visible in the existing window. Do not
     // quit and erase the restart guidance the renderer just received.
-    if (result === 'failed') return;
+    if (result === 'failed' || result === 'aborted') return;
 
     try {
       // Auto-update is non-mandatory and starts only after the app interface is prepared.
@@ -334,6 +343,7 @@ app.on('before-quit', async (event) => {
     return;
   }
   isQuitting = true;
+  startupAbortController?.abort();
   event.preventDefault();
 
   const forceExitTimer = setTimeout(() => {
@@ -375,6 +385,9 @@ app.on('before-quit', async (event) => {
     // 4. Shut down MCP transports
     await shutdownProjectMCPManagers();
 
+    // Startup may be paused between stages. Let it observe the abort signal
+    // before disposing the pool it could otherwise initialize afterwards.
+    await startupLifecycle;
     await disposeToolWorkerPool();
 
     // 5. Destroy auto-updater

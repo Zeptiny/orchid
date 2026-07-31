@@ -83,6 +83,17 @@ describe('IPC Channel Names', () => {
 });
 
 describe('progressive startup shell', () => {
+  it('routes the React startup icon through Vite asset handling', () => {
+    const startupScreen = fs.readFileSync(
+      path.resolve(__dirname, '../../src/renderer/components/StartupScreen.tsx'),
+      'utf8',
+    );
+
+    expect(startupScreen).toContain("import orchidIcon from '../assets/orchid-icon.svg';");
+    expect(startupScreen).toContain('src={orchidIcon}');
+    expect(startupScreen).not.toContain('src="./assets/orchid-icon.svg"');
+  });
+
   it('seeds a local, accessible startup shell before the renderer module', () => {
     const indexHtml = fs.readFileSync(path.resolve(__dirname, '../../src/renderer/index.html'), 'utf8');
     const shellIndex = indexHtml.indexOf('class="startup-shell"');
