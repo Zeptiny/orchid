@@ -29,7 +29,7 @@
  * by toolCallId so the same call/result is never yielded twice.
  */
 import { createHash } from 'node:crypto';
-import type { AssistantContent, ModelMessage, Tool } from 'ai';
+import type { ModelMessage, Tool } from 'ai';
 import { getErrorMessage, type LanguageModelV4 } from '@ai-sdk/provider';
 import { jsonSchema } from '@ai-sdk/provider-utils';
 import type { Message, Usage } from '../../shared/types/message';
@@ -41,6 +41,7 @@ import { ToolRegistry as ToolRegistryClass } from '../tools/registry';
 import type { MCPManager } from '../mcp/manager';
 import type { ProjectRuntime } from '../project/runtime';
 import { toApiMessages } from './history';
+import { toModelMessages } from './model-messages';
 import {
   executeToolCall,
   type ToolDispatchOptions,
@@ -373,87 +374,8 @@ export async function* streamChat(params: StreamChatParams): AsyncGenerator<Stre
   // ── Convert history to API messages ──
   const historyMessages = toApiMessages(messages);
 
-  // ── Build CoreMessage array ──
-  const coreMessages: ModelMessage[] = [];
-
-  for (const msg of historyMessages) {
-    if (msg.role === 'system') {
-      // System messages are handled by the `system` param in streamText
-      continue;
-    }
-    if (msg.role === 'assistant') {
-      // Handle content that may be a string or an array with reasoning parts
-      const contentArray = Array.isArray(msg.content)
-        ? msg.content.map((part) => {
-            if (part.type === 'reasoning') {
-              return { type: 'reasoning' as const, text: part.text };
-            }
-            return { type: 'text' as const, text: part.text };
-          })
-        : msg.content
-          ? [{ type: 'text' as const, text: msg.content }]
-          : [];
-
-      const content: AssistantContent = msg.tool_calls
-        ? [
-            ...contentArray,
-            ...msg.tool_calls.flatMap((tc) => {
-              let input: unknown;
-              try {
-                input = JSON.parse(tc.function.arguments);
-              } catch {
-                return [];
-              }
-              return [
-                {
-                  type: 'tool-call' as const,
-                  toolCallId: tc.id,
-                  toolName: tc.function.name,
-                  input,
-                },
-              ];
-            }),
-          ]
-        : contentArray.length === 1 && contentArray[0].type === 'text'
-          ? contentArray[0].text
-          : contentArray.length > 0
-            ? contentArray
-            : '';
-      coreMessages.push({ role: 'assistant', content });
-    } else if (msg.role === 'tool') {
-      // Extract text content for tool results
-      const textContent = typeof msg.content === 'string'
-        ? msg.content
-        : Array.isArray(msg.content)
-          ? msg.content.filter((p) => p.type === 'text').map((p) => p.text).join('')
-          : '';
-      // For tool results, we need the tool name from the original tool call.
-      // Since we don't store it on the message, use 'unknown' — AI SDK
-      // matches by toolCallId, not toolName.
-      coreMessages.push({
-        role: 'tool',
-        content: [
-          {
-            type: 'tool-result' as const,
-            toolCallId: msg.tool_call_id!,
-            toolName: 'unknown',
-            output: { type: 'text', value: textContent },
-          },
-        ],
-      });
-    } else if (msg.role === 'user') {
-      // Extract text content for user messages
-      const textContent = typeof msg.content === 'string'
-        ? msg.content
-        : Array.isArray(msg.content)
-          ? msg.content.filter((p) => p.type === 'text').map((p) => p.text).join('')
-          : '';
-      coreMessages.push({
-        role: 'user',
-        content: textContent,
-      });
-    }
-  }
+  // System messages are handled by the `system` param in streamText.
+  const coreMessages = toModelMessages(historyMessages);
 
   // ── Filter and build tools ──
   // Freeze session cwd from prompt context so tools match the turn's workspace.
