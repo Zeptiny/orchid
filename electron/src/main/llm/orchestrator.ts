@@ -49,6 +49,10 @@ import {
 import { EagerToolExecutor } from './eager-tool-executor';
 import { StreamAttemptController } from './stream/attempt-controller';
 import {
+  EagerToolBridge,
+  type PendingToolResult,
+} from './stream/eager-tool-bridge';
+import {
   finalizeToolExecutionResult,
   genericAgentProjector,
   parseToolExecutionResult,
@@ -192,46 +196,11 @@ function buildStepUsage(
   };
 }
 
-/** Pending tool call captured from onStepFinish (textStream fallback / safety net). */
-export type PendingToolCall = {
-  toolCallId: string;
-  toolName: string;
-  args: string;
-};
-
-/** Pending tool result captured from onStepFinish (textStream fallback / safety net). */
-export type PendingToolResult = {
-  toolCallId: string;
-  content: string;
-  execution: ToolExecutionResult;
-};
-
-/**
- * Drain pending tool events from onStepFinish, skipping any toolCallId already
- * emitted from fullStream. Prevents double-yield when both sources report the
- * same tool call/result (P1-20).
- *
- * Mutates `pending*` (shift) and `seen*` (add). Exported for unit tests.
- */
-export function* drainPendingToolEvents(
-  pendingToolCalls: PendingToolCall[],
-  pendingToolResults: PendingToolResult[],
-  seenToolCallIds: Set<string>,
-  seenToolResultIds: Set<string>,
-): Generator<Extract<StreamEvent, { type: 'tool_call' | 'tool_result' }>> {
-  while (pendingToolCalls.length > 0) {
-    const tc = pendingToolCalls.shift()!;
-    if (seenToolCallIds.has(tc.toolCallId)) continue;
-    seenToolCallIds.add(tc.toolCallId);
-    yield { type: 'tool_call', ...tc };
-  }
-  while (pendingToolResults.length > 0) {
-    const tr = pendingToolResults.shift()!;
-    if (seenToolResultIds.has(tr.toolCallId)) continue;
-    seenToolResultIds.add(tr.toolCallId);
-    yield { type: 'tool_result', ...tr };
-  }
-}
+export {
+  drainPendingToolEvents,
+  type PendingToolCall,
+  type PendingToolResult,
+} from './stream/eager-tool-bridge';
 
 /** Build one exact-projection generic terminal execution at an SDK boundary. */
 function genericSdkExecution(
@@ -437,102 +406,13 @@ export async function* streamChat(params: StreamChatParams): AsyncGenerator<Stre
     });
     attempt.armIdleTimer();
 
-    // Pending tool events (textStream fallback / safety net)
-    const pendingToolCalls: PendingToolCall[] = [];
-    const pendingToolResults: PendingToolResult[] = [];
-    const seenToolCallIds = new Set<string>();
-    const seenToolResultIds = new Set<string>();
-    // Eager execution. The AI SDK emits each tool's input parts
-    // (tool-input-start/delta/end, then the validated tool-input-available)
-    // incrementally as the model streams, but defers actually RUNNING the tool
-    // until model-call-end (Promise.all). To overlap execution with the
-    // generation of subsequent tool calls, we reconstruct "input complete"
-    // ourselves: accumulate tool-input-delta text per tool and launch it when
-    // tool-input-end fires (or when the next tool / text begins, as a backstop).
-    // The tool-input-available case below also eager-starts via the same
-    // idempotent getOrStart, so whichever signal arrives first wins and the
-    // SDK's deferred execute becomes a no-op await for already-started tools.
-    const pendingToolInputs = new Map<string, { toolName: string; text: string }>();
-    let activeToolInputId: string | null = null;
-    // Early UI events for eagerly-started tools, drained into the stream so the
-    // renderer sees `running` / `completed` transitions as they actually happen
-    // rather than in the SDK's batched step-end burst.
-    const eagerStarts: Array<{ toolCallId: string; toolName: string; args: string }> = [];
-    const eagerCompletions: Array<{ toolCallId: string; execution: ToolExecutionResult }> = [];
-    const finalizeToolInput = (toolCallId: string): void => {
-      const pending = pendingToolInputs.get(toolCallId);
-      if (!pending) return;
-      pendingToolInputs.delete(toolCallId);
-      if (activeToolInputId === toolCallId) activeToolInputId = null;
-      let input: unknown;
-      try {
-        input = JSON.parse(pending.text);
-      } catch {
-        // Incomplete/invalid JSON — the SDK's `tool-call` path will handle it.
-        return;
-      }
-      // Pass the per-attempt combined (user + idle) abort signal so an idle
-      // timeout or turn death aborts the eagerly-running tool, matching the
-      // SDK `execute` path (which derives its per-call signal from the same
-      // combined signal).
-      const promise = eagerExecutor.getOrStart(
-        toolCallId,
-        pending.toolName,
-        input,
-        attempt.signal,
-      );
-      if (!promise) return; // no launcher / invalid input — the SDK path handles it
-      // The eager tool is now running: pause the idle watchdog for its duration
-      // so a quiet model tail can't spuriously abort a legitimately-running tool
-      // (the SDK only pauses idle at model-call-end, which the delta path beats).
-      // The matching resume fires when the run settles, independent of the
-      // seenToolResultIds UI dedup below.
-      attempt.pauseIdleForTool();
-      eagerStarts.push({
-        toolCallId,
-        toolName: pending.toolName,
-        args: stringifyToolInput(input),
-      });
-      promise
-        .then((execution) => {
-          eagerCompletions.push({ toolCallId, execution });
-        })
-        .catch(() => {
-          // executeToolCall resolves to terminal executions rather than rejecting.
-        })
-        .finally(() => attempt.resumeIdleAfterTool());
-    };
-    /** Finalize the currently-streaming tool when an input boundary is reached. */
-    const flushActiveToolInput = (): void => {
-      if (activeToolInputId) finalizeToolInput(activeToolInputId);
-    };
-    const drainEagerStarts = function* (): Generator<StreamEvent> {
-      while (eagerStarts.length > 0) {
-        const start = eagerStarts.shift()!;
-        if (seenToolCallIds.has(start.toolCallId)) continue;
-        seenToolCallIds.add(start.toolCallId);
-        attempt.markDeliveredOutput();
-        yield {
-          type: 'tool_call',
-          toolCallId: start.toolCallId,
-          toolName: start.toolName,
-          args: start.args,
-        };
-      }
-    };
-    const drainEagerCompletions = function* (): Generator<StreamEvent> {
-      while (eagerCompletions.length > 0) {
-        const completion = eagerCompletions.shift()!;
-        if (seenToolResultIds.has(completion.toolCallId)) continue;
-        seenToolResultIds.add(completion.toolCallId);
-        attempt.markDeliveredOutput();
-        yield {
-          type: 'tool_result',
-          toolCallId: completion.toolCallId,
-          ...streamResultFields(completion.execution),
-        };
-      }
-    };
+    const eagerBridge = new EagerToolBridge({
+      eager: eagerExecutor,
+      abortSignal: attempt.signal,
+      pauseIdleForTool: () => attempt.pauseIdleForTool(),
+      resumeIdleAfterTool: () => attempt.resumeIdleAfterTool(),
+      markDeliveredOutput: () => attempt.markDeliveredOutput(),
+    });
     const pendingUsageEvents: Usage[] = [];
     let currentStepMessages: readonly ModelMessage[] = coreMessages;
     let stepIndex = 0;
@@ -590,7 +470,7 @@ export async function* streamChat(params: StreamChatParams): AsyncGenerator<Stre
         }
         if (toolCalls) {
           for (const tc of toolCalls as Array<{ toolCallId: string; toolName: string; input?: unknown }>) {
-            pendingToolCalls.push({
+            eagerBridge.queuePendingToolCall({
               toolCallId: tc.toolCallId,
               toolName: toInternalToolName(tc.toolName, mcpManager),
               args: stringifyToolInput(tc.input),
@@ -614,7 +494,7 @@ export async function* streamChat(params: StreamChatParams): AsyncGenerator<Stre
                   raw,
                   'unknown',
                 );
-            pendingToolResults.push({
+            eagerBridge.queuePendingToolResult({
               toolCallId: tr.toolCallId,
               ...streamResultFields(execution),
             });
@@ -627,7 +507,7 @@ export async function* streamChat(params: StreamChatParams): AsyncGenerator<Stre
             const toolCallId = streamToolCallId(rawPart);
             if (!toolCallId) continue;
             const execution = sdkPreExecutionError(rawPart, mcpManager);
-            pendingToolResults.push({
+            eagerBridge.queuePendingToolResult({
               toolCallId,
               ...streamResultFields(execution),
             });
@@ -636,8 +516,7 @@ export async function* streamChat(params: StreamChatParams): AsyncGenerator<Stre
         if (
           !usedFullStream &&
           (pendingUsageEvents.length > 0 ||
-            pendingToolCalls.length > 0 ||
-            pendingToolResults.length > 0)
+            eagerBridge.hasPendingFallbackEvents)
         ) {
           notifyPendingStepEvents();
         }
@@ -663,7 +542,7 @@ export async function* streamChat(params: StreamChatParams): AsyncGenerator<Stre
 
             case 'finish-step': {
               // Backstop: finalize any tool still pending at step end.
-              flushActiveToolInput();
+              eagerBridge.flushActiveInput();
               yield {
                 type: 'usage',
                 usage: buildStepUsage(
@@ -687,7 +566,7 @@ export async function* streamChat(params: StreamChatParams): AsyncGenerator<Stre
             case 'text-delta': {
               attempt.armIdleTimer();
               // Model resumed text after tool inputs → finalize any pending tool.
-              flushActiveToolInput();
+              eagerBridge.flushActiveInput();
               const text =
                 typeof part.text === 'string'
                   ? part.text
@@ -710,16 +589,12 @@ export async function* streamChat(params: StreamChatParams): AsyncGenerator<Stre
               );
               // The model moved to a new tool → the previously streaming tool's
               // input is complete (backstop for providers without tool-input-end).
-              if (activeToolInputId && activeToolInputId !== toolCallId) {
-                finalizeToolInput(activeToolInputId);
-              }
+              if (toolCallId) eagerBridge.inputStarted(toolCallId, toolName);
               // Surface the finalized tool's `running` state BEFORE announcing the
               // new generating tool, so the single streamingToolCall slot settles
               // on the tool that is actually still generating.
-              yield* drainEagerStarts();
+              yield* eagerBridge.drainEvents();
               if (toolCallId) {
-                pendingToolInputs.set(toolCallId, { toolName, text: '' });
-                activeToolInputId = toolCallId;
                 attempt.markDeliveredOutput();
                 yield { type: 'tool_call_start', toolCallId, toolName };
               }
@@ -736,8 +611,7 @@ export async function* streamChat(params: StreamChatParams): AsyncGenerator<Stre
                     ? part.delta
                     : '';
               if (toolCallId && argsDelta) {
-                const pending = pendingToolInputs.get(toolCallId);
-                if (pending) pending.text += argsDelta;
+                eagerBridge.inputDelta(toolCallId, argsDelta);
                 attempt.markDeliveredOutput();
                 yield { type: 'tool_call_delta', toolCallId, argsDelta };
               }
@@ -748,81 +622,56 @@ export async function* streamChat(params: StreamChatParams): AsyncGenerator<Stre
               // This tool's input finished streaming — launch it now, before the
               // SDK emits the batched `tool-call` at step end.
               const toolCallId = streamToolCallId(part);
-              if (toolCallId) finalizeToolInput(toolCallId);
+              if (toolCallId) eagerBridge.inputEnded(toolCallId);
               break;
             }
 
             // Args complete → tool is about to execute — pause idle
             case 'tool-input-available':
             case 'tool-call': {
-              attempt.pauseIdleForTool();
               const toolCallId = streamToolCallId(part);
               const toolName = toInternalToolName(
                 typeof part.toolName === 'string' ? part.toolName : 'unknown',
                 mcpManager,
               );
               const args = stringifyToolInput(part.input ?? part.args);
-              if (toolCallId && !seenToolCallIds.has(toolCallId)) {
-                seenToolCallIds.add(toolCallId);
-                attempt.markDeliveredOutput();
-                // Start executing now, while the model keeps generating other
-                // tool calls. Skip provider-executed tools (the provider owns
-                // them) and SDK-invalid calls (the SDK will emit tool-input-error;
-                // running them eagerly would commit a handler the model is told
-                // failed).
-                if (part.providerExecuted !== true && part.invalid !== true) {
-                  eagerExecutor.start(
-                    toolCallId,
-                    toolName,
-                    part.input ?? part.args,
-                    attempt.signal,
-                  );
-                }
-                yield { type: 'tool_call', toolCallId, toolName, args };
+              if (toolCallId) {
+                const event = eagerBridge.sdkToolCall({
+                  toolCallId,
+                  toolName,
+                  args,
+                  rawInput: part.input ?? part.args,
+                  providerExecuted: part.providerExecuted === true,
+                  invalid: part.invalid === true,
+                });
+                if (event) yield event;
               }
               break;
             }
 
             case 'tool-output-available':
             case 'tool-result': {
-              attempt.resumeIdleAfterTool();
               const toolCallId = streamToolCallId(part);
-              // The SDK has the result, so the execute shim has run and will not
-              // run again for this id — release the in-flight memo (bounds the
-              // map to genuinely in-flight tools).
-              if (toolCallId) eagerExecutor.forget(toolCallId);
               const raw = part.output ?? part.result ?? '';
               const toolName = toInternalToolName(
                 typeof part.toolName === 'string' ? part.toolName : 'unknown',
                 mcpManager,
               );
               const execution = executionFromSdkOutput(raw, toolName);
-              if (toolCallId && !seenToolResultIds.has(toolCallId)) {
-                seenToolResultIds.add(toolCallId);
-                attempt.markDeliveredOutput();
-                yield {
-                  type: 'tool_result',
-                  toolCallId,
-                  ...streamResultFields(execution),
-                };
+              if (toolCallId) {
+                const event = eagerBridge.sdkToolResult(toolCallId, execution);
+                if (event) yield event;
               }
               break;
             }
 
             case 'tool-output-error':
             case 'tool-error': {
-              attempt.resumeIdleAfterTool();
               const toolCallId = streamToolCallId(part);
-              if (toolCallId) eagerExecutor.forget(toolCallId);
               const execution = sdkPreExecutionError(part, mcpManager);
-              if (toolCallId && !seenToolResultIds.has(toolCallId)) {
-                seenToolResultIds.add(toolCallId);
-                attempt.markDeliveredOutput();
-                yield {
-                  type: 'tool_result',
-                  toolCallId,
-                  ...streamResultFields(execution),
-                };
+              if (toolCallId) {
+                const event = eagerBridge.sdkToolError(toolCallId, execution);
+                if (event) yield event;
               }
               break;
             }
@@ -831,33 +680,18 @@ export async function* streamChat(params: StreamChatParams): AsyncGenerator<Stre
               // Args never became valid — no execute, keep/reset idle
               attempt.armIdleTimer();
               const toolCallId = streamToolCallId(part);
-              // Release any eager memo (the delta path may have started this tool
-              // before the SDK's validation verdict); the SDK owns the error path.
-              if (toolCallId) eagerExecutor.forget(toolCallId);
               const execution = sdkPreExecutionError(part, mcpManager);
               if (toolCallId) {
                 const toolName = toInternalToolName(
                   typeof part.toolName === 'string' ? part.toolName : 'unknown',
                   mcpManager,
                 );
-                if (!seenToolCallIds.has(toolCallId)) {
-                  seenToolCallIds.add(toolCallId);
-                  attempt.markDeliveredOutput();
-                  yield {
-                    type: 'tool_call',
-                    toolCallId,
-                    toolName,
-                    args: stringifyToolInput(part.input),
-                  };
-                }
-                if (!seenToolResultIds.has(toolCallId)) {
-                  seenToolResultIds.add(toolCallId);
-                  yield {
-                    type: 'tool_result',
-                    toolCallId,
-                    ...streamResultFields(execution),
-                  };
-                }
+                yield* eagerBridge.sdkInputError({
+                  toolCallId,
+                  toolName,
+                  args: stringifyToolInput(part.input),
+                  execution,
+                });
               }
               break;
             }
@@ -865,7 +699,7 @@ export async function* streamChat(params: StreamChatParams): AsyncGenerator<Stre
             case 'reasoning-delta':
             case 'reasoning': {
               attempt.armIdleTimer();
-              flushActiveToolInput();
+              eagerBridge.flushActiveInput();
               const text =
                 typeof part.text === 'string'
                   ? part.text
@@ -890,17 +724,7 @@ export async function* streamChat(params: StreamChatParams): AsyncGenerator<Stre
               break;
           }
 
-          // Surface eagerly-started tools and their early completions to the UI
-          // stream as soon as they happen (deduped against the SDK's batched
-          // `tool-call` / `tool-output-available` via the seen-id sets).
-          yield* drainEagerStarts();
-          yield* drainEagerCompletions();
-          yield* drainPendingToolEvents(
-            pendingToolCalls,
-            pendingToolResults,
-            seenToolCallIds,
-            seenToolResultIds,
-          );
+          yield* eagerBridge.drainEvents();
         }
       } catch (fullStreamErr) {
         // Idle/user abort is not "fullStream unsupported" — rethrow so the
@@ -922,12 +746,7 @@ export async function* streamChat(params: StreamChatParams): AsyncGenerator<Stre
           while (true) {
             const next = await Promise.race([nextText, nextStepEvents]);
             if (next.kind === 'step-events') {
-              yield* drainPendingToolEvents(
-                pendingToolCalls,
-                pendingToolResults,
-                seenToolCallIds,
-                seenToolResultIds,
-              );
+              yield* eagerBridge.drainEvents();
               while (pendingUsageEvents.length > 0) {
                 yield { type: 'usage', usage: pendingUsageEvents.shift()! };
               }
@@ -957,14 +776,8 @@ export async function* streamChat(params: StreamChatParams): AsyncGenerator<Stre
 
       // Flush any eager tool starts/completions that settled during the final
       // await (e.g. the last tool in a step) before emitting `finish`.
-      yield* drainEagerStarts();
-      yield* drainEagerCompletions();
-      yield* drainPendingToolEvents(
-        pendingToolCalls,
-        pendingToolResults,
-        seenToolCallIds,
-        seenToolResultIds,
-      );
+      await eagerBridge.flush();
+      yield* eagerBridge.drainEvents();
       if (!usedFullStream) {
         while (pendingUsageEvents.length > 0) {
           yield { type: 'usage', usage: pendingUsageEvents.shift()! };
