@@ -83,7 +83,9 @@ export class EagerToolExecutor {
    *   handler the SDK will reject with `tool-input-error`.
    *
    * Synchronous launcher failures are captured as a rejected promise so they
-   * surface through the SDK's normal error path.
+   * surface through the SDK's normal error path. A no-op rejection handler is
+   * attached to every stored promise so `forget()` never leaves an unhandled
+   * rejection; awaiters still see the original rejection.
    */
   getOrStart(
     toolCallId: string,
@@ -103,6 +105,7 @@ export class EagerToolExecutor {
     } catch (error) {
       promise = Promise.reject(error);
     }
+    promise.catch(() => {});
     this.inflight.set(toolCallId, promise);
     return promise;
   }

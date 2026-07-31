@@ -146,6 +146,21 @@ describe('EagerToolExecutor', () => {
     expect(launcher).toHaveBeenCalledOnce();
   });
 
+  it('validator rejection stores no memo — retrying the same id with valid input launches', () => {
+    const executor = new EagerToolExecutor();
+    const launcher = vi.fn().mockResolvedValue(sentinel);
+    executor.registerLauncher('tool', launcher);
+    executor.registerValidator('tool', (input) => (input as { ok?: boolean })?.ok === true);
+
+    expect(executor.getOrStart('call-1', 'tool', { ok: false })).toBeUndefined();
+    expect(launcher).not.toHaveBeenCalled();
+
+    const retry = executor.getOrStart('call-1', 'tool', { ok: true });
+    expect(retry).toBeInstanceOf(Promise);
+    expect(launcher).toHaveBeenCalledOnce();
+    expect(launcher).toHaveBeenCalledWith('call-1', { ok: true }, undefined);
+  });
+
   it('launches for any input when no validator is registered', () => {
     const executor = new EagerToolExecutor();
     const launcher = vi.fn().mockResolvedValue(sentinel);

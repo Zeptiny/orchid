@@ -164,6 +164,22 @@ describe('eager tool execution via buildToolMap', () => {
     expect(handler).toHaveBeenCalledOnce();
   });
 
+  it('start() with invalid input is a no-op; execute falls back to a validation error', async () => {
+    const eager = new EagerToolExecutor();
+    const handler = vi.fn(async () => ({ status: 'complete' as const, data: { value: 'ok' } }));
+    const tools = buildMap(handler, eager);
+
+    eager.start('call-bad', 'slow', { x: 'nope' });
+    expect(eager.getOrStart('call-bad', 'slow', { x: 'nope' })).toBeUndefined();
+
+    const result = (await (tools.slow.execute as unknown as ExecFn)(
+      { x: 'nope' },
+      { toolCallId: 'call-bad' },
+    )) as { canonical: { status: string } };
+    expect(result.canonical.status).toBe('error');
+    expect(handler).not.toHaveBeenCalled();
+  });
+
   it('executes exactly once when the execute shim runs before the stream loop starts the tool', async () => {
     const eager = new EagerToolExecutor();
     const handler = vi.fn(async () => ({ status: 'complete' as const, data: { value: 'shim-first' } }));

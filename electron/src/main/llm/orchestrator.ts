@@ -1144,8 +1144,8 @@ interface EagerToolWiring {
   /** Registry that owns this tool's handler. */
   registry: ToolRegistry;
   dispatchOptions: ToolDispatchOptions;
-  /** Zod input schema, used to gate eager execution on valid input. */
-  inputSchema: unknown;
+  /** Structural Zod-like input schema, used to gate eager execution on valid input. */
+  inputSchema: { safeParse(input: unknown): { success: boolean } };
 }
 
 /**
@@ -1163,10 +1163,7 @@ function registerEagerTool(wiring: EagerToolWiring): void {
       abortSignal ? { ...dispatchOptions, abortSignal } : dispatchOptions,
     ),
   );
-  const schema = inputSchema as { safeParse?: (input: unknown) => { success: boolean } } | undefined;
-  if (typeof schema?.safeParse === 'function') {
-    eager.registerValidator(internalName, (input) => schema.safeParse!(input).success);
-  }
+  eager.registerValidator(internalName, (input) => inputSchema.safeParse(input).success);
 }
 
 /**

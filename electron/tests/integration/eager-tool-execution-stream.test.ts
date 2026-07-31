@@ -485,18 +485,26 @@ describe('eager tool execution through streamChat', () => {
     });
 
     const events: StreamEvent[] = [];
+    let released = false;
     while (true) {
       const { value, done } = await gen.next();
       if (done) break;
       events.push(value);
+      if (!released && value.type === 'step_finish') {
+        releaseHandler();
+        await new Promise((r) => setTimeout(r, 10));
+        released = true;
+      }
     }
-    releaseHandler();
 
     expect(gatingHandler).toHaveBeenCalledOnce();
-    // The stream completed normally — the idle watchdog did NOT abort the in-flight tool.
     expect(events.some((e) => e.type === 'finish')).toBe(true);
     expect(
       events.some((e) => e.type === 'error' && (e as { title: string }).title === 'Stream idle timeout'),
     ).toBe(false);
+    const idxResult = events.findIndex((e) => e.type === 'tool_result' && id(e) === 'call-A');
+    const idxFinish = events.findIndex((e) => e.type === 'finish');
+    expect(idxResult).toBeGreaterThanOrEqual(0);
+    expect(idxResult).toBeLessThan(idxFinish);
   });
 });
