@@ -8,7 +8,13 @@ let unsubscribe: (() => void) | null = null;
 function broadcast(snapshot: StartupSnapshot): void {
   for (const window of BrowserWindow.getAllWindows()) {
     if (window.isDestroyed() || window.webContents.isDestroyed()) continue;
-    window.webContents.send(IPC_CHANNELS.STARTUP_CHANGED, snapshot);
+    try {
+      window.webContents.send(IPC_CHANNELS.STARTUP_CHANGED, snapshot);
+    } catch {
+      // A window can close between the guards and send. Startup state remains
+      // authoritative, so surviving or later windows hydrate from snapshot().
+      console.warn('[startup] skipped progress delivery to a closed window');
+    }
   }
 }
 

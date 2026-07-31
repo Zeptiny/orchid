@@ -13,6 +13,7 @@ import { spawnSync } from 'node:child_process';
 import * as path from 'path';
 import { registerAllIPC, unregisterAllIPC } from './ipc';
 import { handlePermissionOwnerDestroyed } from './ipc/permission';
+import { registerStartupIPC, unregisterStartupIPC } from './ipc/startup';
 import {
   ensureHomeConfig,
   ConfigManager,
@@ -35,6 +36,8 @@ import {
   disposeSubagentPersistence,
 } from './agents/wire-subagents';
 import { initToolWorkerPool, disposeToolWorkerPool } from './llm/tool-pool';
+import { runStartupLifecycle } from './startup-lifecycle';
+import { startupState } from './startup';
 import { getConfig } from './config/loader';
 import { ProviderCatalogStore } from './providers/catalog/store';
 import { ProviderCatalogUpdater, createHttpCatalogTransport } from './providers/catalog/updater';
@@ -192,7 +195,7 @@ function createWindow(): void {
     minHeight: 600,
     title: 'Orchid',
     icon: resolveAppIcon(),
-    backgroundColor: '#1a1a2e', // Match default dark theme
+    backgroundColor: '#09090b', // Match the dependency-free startup shell
     webPreferences: {
       preload: path.join(__dirname, '../preload/index.js'),
       contextIsolation: true,
@@ -223,91 +226,89 @@ function createWindow(): void {
 
 // ── App lifecycle ────────────────────────────────────────────────────────────
 
+function yieldForStartupPresentation(): Promise<void> {
+  return new Promise((resolve) => setImmediate(resolve));
+}
+
+function startBackgroundOwnershipReclaim(): void {
+  if (bgIdleOwnershipTimer) clearInterval(bgIdleOwnershipTimer);
+  bgIdleOwnershipTimer = setInterval(() => {
+    try {
+      const cfg = getConfig();
+      getBackgroundStore().checkIdleOwnership(cfg.background_command_idle_timeout * 1000);
+    } catch {
+      // Config / store may be unavailable during teardown.
+    }
+  }, 10_000);
+}
+
 app.whenReady().then(async () => {
   try {
-    // 0. Initialize persistent file logging (before anything else logs)
+    // Logging and the narrow startup IPC surface must exist before the window.
     initFileLogging();
+    registerStartupIPC(startupState);
 
-    // 1. Ensure home config structure exists
-    ensureHomeConfig();
+    const result = await runStartupLifecycle({
+      state: startupState,
+      openWindow: createWindow,
+      yieldForPresentation: yieldForStartupPresentation,
+      loadSettingsAndProviders: () => {
+        ensureHomeConfig();
+        const catalog = initializeProviderCatalog();
+        // Credential persistence must never prevent local-only startup.
+        const vault = initializeProviderCredentialVault();
+        const status = initializeProviderStatusServices();
+        initializeProviderRuntimeServices(catalog, vault, status);
+        initializeProviderAccounting();
+      },
+      loadAgentsAndTools: () => {
+        seedAgentsDir(HOME_AGENTS_DIR);
+        seedSkillsDir(HOME_SKILLS_DIR);
+        seedPersonalitiesDir(HOME_PERSONALITIES_DIR);
+        loadPersonalities();
 
-    // 1b. Load the bundled provider catalog before any provider-dependent IPC.
-    const catalog = initializeProviderCatalog();
-    // Credential persistence remains unavailable until used when the OS secure
-    // backend is unavailable; it must never abort local-only Orchid startup.
-    const vault = initializeProviderCredentialVault();
-    const status = initializeProviderStatusServices();
-    initializeProviderRuntimeServices(catalog, vault, status);
-    initializeProviderAccounting();
-
-    // 2. Seed defaults into home dirs (before any load)
-    seedAgentsDir(HOME_AGENTS_DIR);
-    seedSkillsDir(HOME_SKILLS_DIR);
-    seedPersonalitiesDir(HOME_PERSONALITIES_DIR);
-    loadPersonalities();
-
-    // 3. Initialize global config from home only. A project runtime is
-    // captured at turn start, so startup must not choose one project's layers
-    // as the process-wide default for every concurrent session.
-    ConfigManager.reset();
-    ConfigManager.load({ projectDir: HOME_CONFIG_DIR });
-    const agents = loadAgents();
-    const skills = loadSkills();
-
-    // 4. Register built-in tools. Each turn creates its own project
-    // MCP manager from its frozen ProjectRuntime, rather than sharing this
-    // startup workspace's connections with every other project.
-    registerBuiltinTools({ agents, skills, mcpManager: null });
-    // Start subagent stream runner + session persistence for token usage
-    wireSubagentRuntime();
-
-    const poolSize = getConfig().tool_worker_pool_size;
-    if (poolSize > 0) {
-      await initToolWorkerPool(getConfig(), poolSize);
-    }
-
-    // 5. Register all IPC handlers (before creating window)
-    registerAllIPC();
-
-    // 5b. Reclaim USER-owned background command stdin after idle timeout
-    // (Python app main loop calls check_idle_ownership periodically).
-    if (bgIdleOwnershipTimer) {
-      clearInterval(bgIdleOwnershipTimer);
-    }
-    bgIdleOwnershipTimer = setInterval(() => {
-      try {
-        const cfg = getConfig();
-        getBackgroundStore().checkIdleOwnership(
-          cfg.background_command_idle_timeout * 1000,
-        );
-      } catch {
-        // Config / store may be unavailable during teardown
-      }
-    }, 10_000);
-
-    // 6. Remove default File/Edit/View/Window menu bar (Linux/Windows)
-    Menu.setApplicationMenu(null);
-
-    // 7. Create the main window
-    createWindow();
-
-    // 8. Initialize auto-updater (headless — no renderer bridge yet)
-    // Auto-update is gated to signed releases (runtime detection on macOS)
-    // For unsigned beta builds, auto-download is disabled but manual check is allowed
-    initUpdater({
-      signed: detectReleaseSigned(),
-      flushBeforeInstall: flushSubagentPersistence,
+        // Do not select a project layer as a process-wide default.
+        ConfigManager.reset();
+        ConfigManager.load({ projectDir: HOME_CONFIG_DIR });
+        const agents = loadAgents();
+        const skills = loadSkills();
+        registerBuiltinTools({ agents, skills, mcpManager: null });
+        wireSubagentRuntime();
+      },
+      startToolWorkers: () => initToolWorkerPool(getConfig()),
+      prepareInterface: () => {
+        // Normal renderer consumers remain unavailable until this final stage.
+        registerAllIPC();
+        startBackgroundOwnershipReclaim();
+        Menu.setApplicationMenu(null);
+      },
+      logFailure: (step, error) => {
+        // Keep detailed diagnostics in local logs; StartupState exposes only fixed UI copy.
+        console.error(`[startup] mandatory stage failed step=${step ?? 'unknown'}`, error);
+      },
     });
 
-    // Check for updates on startup (non-blocking)
-    // Only in packaged mode — dev mode has no update server
-    if (app.isPackaged) {
-      checkForUpdates().catch((err) => {
-        console.warn('Startup update check failed (non-fatal):', err);
+    // A mandatory startup failure is visible in the existing window. Do not
+    // quit and erase the restart guidance the renderer just received.
+    if (result === 'failed') return;
+
+    try {
+      // Auto-update is non-mandatory and starts only after the app interface is prepared.
+      initUpdater({
+        signed: detectReleaseSigned(),
+        flushBeforeInstall: flushSubagentPersistence,
       });
+      if (app.isPackaged) {
+        checkForUpdates().catch((err) => {
+          console.warn('Startup update check failed (non-fatal):', err);
+        });
+      }
+    } catch (error) {
+      console.warn('Startup update initialization failed (non-fatal):', error);
     }
-  } catch (err) {
-    console.error('Failed to initialize app:', err);
+  } catch (error) {
+    // This only covers failures before the startup surface can be established.
+    console.error('Failed to establish startup shell:', error);
     app.quit();
   }
 });
@@ -368,6 +369,7 @@ app.on('before-quit', async (event) => {
 
     // 3. Unregister IPC handlers
     unregisterAllIPC();
+    unregisterStartupIPC();
 
     // 4. Shut down MCP transports
     await shutdownProjectMCPManagers();

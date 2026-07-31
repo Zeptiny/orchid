@@ -103,6 +103,20 @@ describe('progressive startup shell', () => {
     expect(indexHtml).toContain('fonts.googleapis.com');
     expect(indexHtml).toMatch(/media="print"[\s\S]*onload="this\.media='all'"/);
   });
+
+  it('wires the startup IPC surface and existing window before mandatory initialization', () => {
+    const mainIndex = fs.readFileSync(path.resolve(__dirname, '../../src/main/index.ts'), 'utf8');
+
+    expect(mainIndex).toContain("backgroundColor: '#09090b'");
+    expect(mainIndex).toContain('registerStartupIPC(startupState);');
+    expect(mainIndex.indexOf('registerStartupIPC(startupState);')).toBeLessThan(
+      mainIndex.indexOf('runStartupLifecycle({'),
+    );
+    expect(mainIndex).toContain('openWindow: createWindow');
+    expect(mainIndex).toContain('startToolWorkers: () => initToolWorkerPool(getConfig())');
+    expect(mainIndex).toContain('registerAllIPC();');
+    expect(mainIndex).toContain('unregisterStartupIPC();');
+  });
 });
 
 // ─── IPC Security ────────────────────────────────────────────────────────────

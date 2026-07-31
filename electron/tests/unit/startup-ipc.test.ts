@@ -63,6 +63,27 @@ describe('startup IPC', () => {
     expect(destroyed.webContents.send).not.toHaveBeenCalled();
   });
 
+  it('keeps publishing when a window is destroyed during delivery', () => {
+    const raced = {
+      isDestroyed: () => false,
+      webContents: {
+        isDestroyed: () => false,
+        send: vi.fn(() => { throw new Error('window closed'); }),
+      },
+    };
+    const healthy = {
+      isDestroyed: () => false,
+      webContents: { isDestroyed: () => false, send: vi.fn() },
+    };
+    mocks.BrowserWindow.getAllWindows.mockReturnValue([raced, healthy]);
+
+    expect(() => state.activate('opening_window')).not.toThrow();
+    expect(healthy.webContents.send).toHaveBeenCalledWith(
+      IPC_CHANNELS.STARTUP_CHANGED,
+      state.snapshot(),
+    );
+  });
+
   it('only acknowledges degraded once and only from degraded', async () => {
     const continueDegraded = handler(IPC_CHANNELS.STARTUP_CONTINUE_DEGRADED);
     await expect(continueDegraded({ sender: {} })).resolves.toEqual({ ok: false, snapshot: state.snapshot() });
