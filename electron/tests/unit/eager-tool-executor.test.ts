@@ -189,6 +189,27 @@ describe('EagerToolExecutor', () => {
     expect(() => executor.forget('never-seen')).not.toThrow();
   });
 
+  it('keeps a forgotten rejecting start handled without changing its rejection', async () => {
+    const executor = new EagerToolExecutor();
+    const rejection = new Error('forgotten launcher rejected');
+    const launcherPromise = Promise.reject(rejection);
+    const launcher = vi.fn(() => launcherPromise);
+    const onUnhandledRejection = vi.fn();
+    process.on('unhandledRejection', onUnhandledRejection);
+
+    try {
+      executor.registerLauncher('read', launcher);
+      executor.start('call-1', 'read', {});
+      executor.forget('call-1');
+
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(onUnhandledRejection).not.toHaveBeenCalled();
+      await expect(launcherPromise).rejects.toBe(rejection);
+    } finally {
+      process.off('unhandledRejection', onUnhandledRejection);
+    }
+  });
+
   it('threads the abortSignal through to the launcher', () => {
     const executor = new EagerToolExecutor();
     const signal = new AbortController().signal;

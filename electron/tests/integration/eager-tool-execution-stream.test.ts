@@ -433,8 +433,13 @@ describe('eager tool execution through streamChat', () => {
     const handlerGate = new Promise<void>((res) => {
       releaseHandler = res;
     });
+    let markHandlerComplete!: () => void;
+    const handlerComplete = new Promise<void>((resolve) => {
+      markHandlerComplete = resolve;
+    });
     const gatingHandler = vi.fn(async () => {
       await handlerGate;
+      markHandlerComplete();
       return { status: 'complete' as const, data: { value: 'ok' } };
     });
 
@@ -492,7 +497,7 @@ describe('eager tool execution through streamChat', () => {
       events.push(value);
       if (!released && value.type === 'step_finish') {
         releaseHandler();
-        await new Promise((r) => setTimeout(r, 10));
+        await handlerComplete;
         released = true;
       }
     }
