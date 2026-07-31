@@ -28,16 +28,12 @@ const STEP_STATE_TONE: Record<StartupStepState, StatusBadgeTone> = {
   failed: 'error',
 };
 
-interface StartupViewState {
-  snapshot: StartupSnapshot | null;
-  revision: number;
-}
-
 /** Snapshot and event delivery races always reduce to the highest revision. */
-function revisionMaxReducer(state: StartupViewState, next: StartupSnapshot): StartupViewState {
-  return next.revision > state.revision
-    ? { snapshot: next, revision: next.revision }
-    : state;
+function revisionMaxReducer(
+  current: StartupSnapshot | null,
+  next: StartupSnapshot,
+): StartupSnapshot | null {
+  return next.revision > (current?.revision ?? -1) ? next : current;
 }
 
 function statusText(snapshot: StartupSnapshot | null): string {
@@ -54,13 +50,9 @@ function statusText(snapshot: StartupSnapshot | null): string {
  * and deliberately owns no startup state beyond the newest snapshot received.
  */
 export function StartupScreen({ onReady }: StartupScreenProps) {
-  const [{ snapshot }, dispatchSnapshot] = useReducer(revisionMaxReducer, {
-    snapshot: null,
-    revision: -1,
-  });
+  const [snapshot, dispatchSnapshot] = useReducer(revisionMaxReducer, null);
   const [continuing, setContinuing] = useState(false);
   const revisionRef = useRef(-1);
-  const readyRevisionRef = useRef<number | null>(null);
   const continuingRef = useRef(false);
 
   const applySnapshot = useCallback((next: StartupSnapshot) => {
@@ -68,10 +60,7 @@ export function StartupScreen({ onReady }: StartupScreenProps) {
 
     revisionRef.current = next.revision;
     dispatchSnapshot(next);
-    if (next.phase === 'ready' && readyRevisionRef.current !== next.revision) {
-      readyRevisionRef.current = next.revision;
-      onReady();
-    }
+    if (next.phase === 'ready') onReady();
   }, [onReady]);
 
   useEffect(() => {

@@ -31,7 +31,6 @@ export async function runStartupLifecycle(
 ): Promise<StartupLifecycleResult> {
   const { state } = dependencies;
   let activeStep: StartupStepId | null = null;
-  let workersUnavailable: boolean;
 
   const runStage = async (
     id: Exclude<StartupStepId, 'tool_workers'>,
@@ -62,11 +61,10 @@ export async function runStartupLifecycle(
           ? 'disabled'
           : 'failure',
     );
-    workersUnavailable = workerResult.status === 'unavailable';
     activeStep = null;
 
     await runStage('preparing_interface', dependencies.prepareInterface);
-    if (workersUnavailable) {
+    if (workerResult.status === 'unavailable') {
       state.degraded();
       return 'degraded';
     }

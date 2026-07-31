@@ -11,6 +11,7 @@
 import { app, BrowserWindow, Menu } from 'electron';
 import { spawnSync } from 'node:child_process';
 import * as path from 'path';
+import { setImmediate as setImmediatePromise } from 'node:timers/promises';
 import { registerAllIPC, unregisterAllIPC } from './ipc';
 import { handlePermissionOwnerDestroyed } from './ipc/permission';
 import { registerStartupIPC, unregisterStartupIPC } from './ipc/startup';
@@ -227,7 +228,7 @@ function createWindow(): void {
 // ── App lifecycle ────────────────────────────────────────────────────────────
 
 function yieldForStartupPresentation(): Promise<void> {
-  return new Promise((resolve) => setImmediate(resolve));
+  return setImmediatePromise();
 }
 
 function startBackgroundOwnershipReclaim(): void {
