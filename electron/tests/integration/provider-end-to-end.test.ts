@@ -201,6 +201,18 @@ function createServices(root: string) {
       vault,
       status,
       registry,
+      clearConfigReferences: vi.fn(async () => ({
+        config: {
+          default_model: null,
+          tier_models: { seed: null, sprout: null, bloom: null, crown: null },
+          rag: { embedding_api_model: null },
+        },
+        clearedConfigReferences: {
+          defaultModel: false,
+          tierModels: [],
+          ragEmbeddingModel: false,
+        },
+      })) as never,
     },
   };
 }

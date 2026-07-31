@@ -51,7 +51,7 @@ describe('ConnectionStore', () => {
     expect(fs.statSync(providersPath).mode & 0o777).toBe(0o600);
   });
 
-  it('does not mutate a sibling connection or credential reference when one is disabled', async () => {
+  it('does not mutate a sibling connection or credential reference when one is disabled or removed', async () => {
     const store = createStore();
     const work = await store.create(input('Work', 'credential-work-v1'));
     const personal = await store.create(input('Personal', 'credential-personal-v1'));
@@ -59,7 +59,14 @@ describe('ConnectionStore', () => {
     await store.update(work.id, { health: 'disabled' });
     expect(await store.get(personal.id)).toEqual(personal);
 
+    expect(await store.remove(work.id)).toEqual(expect.objectContaining({ id: work.id }));
+    expect(await store.get(work.id)).toBeNull();
     expect(await store.get(personal.id)).toEqual(personal);
+  });
+
+  it('returns null when removing an unknown connection', async () => {
+    await expect(createStore().remove('33333333-3333-4333-8333-333333333333'))
+      .resolves.toBeNull();
   });
 
   it('serializes concurrent mutations across store instances without losing entries', async () => {

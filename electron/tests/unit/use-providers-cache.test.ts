@@ -19,6 +19,7 @@ function installOrchidApi() {
         disable: vi.fn(),
         enable: vi.fn(),
         disconnect: vi.fn(),
+        deleteConnection: vi.fn(),
         refreshStatus: vi.fn(),
       },
     },

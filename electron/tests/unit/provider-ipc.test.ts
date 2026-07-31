@@ -1,4 +1,7 @@
 /** Provider IPC tests — intent-only, redacted, connection-scoped boundary. */
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { IPC_CHANNELS } from '../../src/shared/types/ipc';
 import type {
@@ -136,6 +139,12 @@ function memoryServices(definitions: readonly ProviderDefinition[] = [OPENAI, GE
       records.set(id, record);
       return structuredClone(record);
     }),
+    remove: vi.fn(async (id: string) => {
+      const current = records.get(id);
+      if (!current) return null;
+      records.delete(id);
+      return structuredClone(current);
+    }),
   };
   const vault = {
     getAvailability: vi.fn(() => ({ available: true as const, backend: 'libsecret' })),
@@ -156,6 +165,18 @@ function memoryServices(definitions: readonly ProviderDefinition[] = [OPENAI, GE
       vault,
       status,
       registry: registry(),
+      clearConfigReferences: vi.fn(async () => ({
+        config: {
+          default_model: null,
+          tier_models: { seed: null, sprout: null, bloom: null, crown: null },
+          rag: { embedding_api_model: null },
+        },
+        clearedConfigReferences: {
+          defaultModel: false,
+          tierModels: [],
+          ragEmbeddingModel: false,
+        },
+      })) as never,
     },
     records,
     connections,
@@ -701,6 +722,110 @@ describe('provider IPC', () => {
       connection: { health: 'disconnected', credentialKind: 'none' },
       message: expect.stringMatching(/cancelled 1 active turn.*finalized.*removing stored credentials/i),
     });
+  });
+
+  it('deletes a connection and clears credentials, status, and configuration references', async () => {
+    const memory = memoryServices();
+    const id = '00000000-0000-4000-8000-000000000053';
+    memory.records.set(id, {
+      id,
+      providerId: 'openai',
+      name: 'Delete me',
+      protocol: 'openai-compatible',
+      authMethod: 'api-key',
+      credential: { kind: 'stored', handle: '00000000-0000-4000-8000-000000000054' },
+      modelIds: ['gpt-5/test'],
+      health: 'ready',
+    });
+    const clearConfigReferences = vi.fn(async () => ({
+      config: {
+        default_model: null,
+        tier_models: { seed: null, sprout: null, bloom: null, crown: null },
+        rag: { embedding_api_model: null },
+      },
+      clearedConfigReferences: {
+        defaultModel: true,
+        tierModels: ['bloom'],
+        ragEmbeddingModel: true,
+      },
+    })) as never;
+    providersIpc._setProviderIPCServicesForTests({
+      ...memory.services,
+      clearConfigReferences,
+    });
+    providersIpc.registerProviderIPC();
+
+    const result = await handler(IPC_CHANNELS.PROVIDERS_DELETE)(null, {
+      connectionId: id,
+      confirm: true,
+    });
+
+    expect(memory.vault.deleteConnectionCredentials).toHaveBeenCalledWith(id);
+    expect(memory.status.invalidate).toHaveBeenCalledWith('openai', id);
+    expect(clearConfigReferences).toHaveBeenCalledWith(id);
+    expect(memory.connections.remove).toHaveBeenCalledWith(id);
+    expect(memory.records.has(id)).toBe(false);
+    expect(result).toMatchObject({
+      connectionId: id,
+      clearedConfigReferences: {
+        defaultModel: true,
+        tierModels: ['bloom'],
+        ragEmbeddingModel: true,
+      },
+    });
+  });
+
+  it('requires explicit confirmation before deleting a connection', async () => {
+    const memory = memoryServices();
+    providersIpc._setProviderIPCServicesForTests(memory.services);
+    providersIpc.registerProviderIPC();
+
+    await expect(handler(IPC_CHANNELS.PROVIDERS_DELETE)(null, {
+      connectionId: '00000000-0000-4000-8000-000000000055',
+      confirm: false,
+    })).rejects.toThrow(/invalid providers:delete payload/i);
+    expect(memory.connections.remove).not.toHaveBeenCalled();
+  });
+
+  it('clears deleted connection references from default, tier, and RAG selections', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'orchid-provider-delete-config-'));
+    const configPath = path.join(root, 'config.json');
+    const connectionId = '00000000-0000-4000-8000-000000000056';
+    const siblingId = '00000000-0000-4000-8000-000000000057';
+    fs.writeFileSync(configPath, JSON.stringify({
+      default_model: { connectionId, modelId: 'default-model' },
+      tier_models: {
+        seed: { connectionId, modelId: 'seed-model' },
+        bloom: { connectionId: siblingId, modelId: 'sibling-model' },
+      },
+      rag: {
+        embedding_api_model: { connectionId, modelId: 'embedding-model' },
+      },
+    }));
+
+    try {
+      const result = await providersIpc.clearConnectionConfigReferences(connectionId, {
+        homeConfigPath: configPath,
+        projectDir: root,
+        refreshRuntime: false,
+      });
+      const persisted = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+
+      expect(result.clearedConfigReferences).toEqual({
+        defaultModel: true,
+        tierModels: ['seed'],
+        ragEmbeddingModel: true,
+      });
+      expect(persisted.default_model).toBeNull();
+      expect(persisted.tier_models.seed).toBeNull();
+      expect(persisted.tier_models.bloom).toEqual({
+        connectionId: siblingId,
+        modelId: 'sibling-model',
+      });
+      expect(persisted.rag.embedding_api_model).toBeNull();
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it('keeps credentials when active-turn accounting cannot be finalized', async () => {

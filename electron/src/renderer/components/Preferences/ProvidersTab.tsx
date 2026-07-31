@@ -75,6 +75,7 @@ export function ProvidersTab() {
         onDisable={providers.disableConnection}
         onEnable={providers.enableConnection}
         onDisconnect={providers.disconnectConnection}
+        onDelete={providers.deleteConnection}
         onRefreshStatus={providers.refreshStatus}
       />
 

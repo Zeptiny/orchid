@@ -9,6 +9,7 @@ import { ipcMain } from 'electron';
 import { z } from 'zod';
 import { IPC_CHANNELS } from '../../shared/types/ipc';
 import type {
+  ProviderDeleteConnectionResult,
   ProviderConnectionView,
   ProviderDefinitionView,
   ProviderModelOption,
@@ -56,6 +57,15 @@ import {
 import type { ProviderStatusObservation } from '../providers/status/cache';
 import type { ProviderStatusService } from '../providers/status/service';
 import { getProviderAccountingStore } from '../providers/accounting/store';
+import {
+  atomicWriteJson,
+  ConfigManager,
+  HOME_CONFIG_DIR,
+  HOME_CONFIG_PATH,
+  loadConfig,
+} from '../config/loader';
+import { clearProjectRuntimeRegistry } from '../project/runtime';
+import { withConfigSaveLock } from './config';
 
 // ── Renderer input schemas ──────────────────────────────────────────────────
 
@@ -129,6 +139,7 @@ const submitApiKeySchema = z.object({
 
 const connectionIdSchema = z.object({ connectionId: idSchema }).strict();
 const disconnectSchema = connectionIdSchema.extend({ confirm: z.literal(true) }).strict();
+const deleteConnectionSchema = connectionIdSchema.extend({ confirm: z.literal(true) }).strict();
 const statusRefreshSchema = z.object({
   providerId: z.string().trim().min(1),
   connectionId: idSchema.optional(),
@@ -137,11 +148,12 @@ const statusRefreshSchema = z.object({
 
 interface ProviderIPCServices {
   readonly catalog: Pick<ProviderCatalogStore, 'getProviderDefinitions' | 'load'>;
-  readonly connections: Pick<ConnectionStore, 'list' | 'get' | 'create' | 'update'>;
+  readonly connections: Pick<ConnectionStore, 'list' | 'get' | 'create' | 'update' | 'remove'>;
   readonly vault: Pick<CredentialVault,
     'getAvailability' | 'replaceConnectionApiKey' | 'readSecret' | 'deleteConnectionCredentials'>;
   readonly status: Pick<ProviderStatusService, 'get' | 'list' | 'refresh' | 'invalidate'>;
   readonly registry: ProviderDriverRegistry;
+  readonly clearConfigReferences?: typeof clearConnectionConfigReferences;
 }
 
 let testServices: ProviderIPCServices | null = null;
@@ -163,6 +175,7 @@ function services(): ProviderIPCServices {
     vault: getProviderCredentialVault(),
     status: getProviderStatusService(),
     registry: getCachedDriverRegistry(),
+    clearConfigReferences: clearConnectionConfigReferences,
   };
 }
 
@@ -178,7 +191,7 @@ export function _setProviderIPCServicesForTests(value: ProviderIPCServices | nul
 
 // ── Per-connection mutation lock ────────────────────────────────────────────
 // Serializes vault + connection-store mutations for the same connection so
-// concurrent submit_api_key / disconnect / disable / enable / update / validate
+// concurrent submit_api_key / disconnect / delete / disable / enable / update / validate
 // cannot leave a live vault secret after disconnect or clobber terminal health.
 
 const connectionMutationChains = new Map<string, Promise<void>>();
@@ -353,6 +366,43 @@ async function overview(): Promise<ProviderOverview> {
     statuses,
     secureStorage: secureStorageView(current.vault.getAvailability()),
   };
+}
+
+interface ConfigReferenceCleanupOptions {
+  readonly homeConfigPath?: string;
+  readonly projectDir?: string;
+  readonly refreshRuntime?: boolean;
+}
+
+export async function clearConnectionConfigReferences(
+  connectionId: string,
+  options: ConfigReferenceCleanupOptions = {},
+) {
+  return withConfigSaveLock(async () => {
+    const homeConfigPath = options.homeConfigPath ?? HOME_CONFIG_PATH;
+    const projectDir = options.projectDir ?? HOME_CONFIG_DIR;
+    const config = loadConfig({ projectDir, homeConfigPath });
+    const defaultModel = config.default_model?.connectionId === connectionId;
+    const tierModels = Object.entries(config.tier_models)
+      .filter(([, selection]) => selection?.connectionId === connectionId)
+      .map(([tier]) => tier);
+    const ragEmbeddingModel = config.rag.embedding_api_model?.connectionId === connectionId;
+    if (defaultModel) config.default_model = null;
+    for (const tier of tierModels) config.tier_models[tier] = null;
+    if (ragEmbeddingModel) config.rag.embedding_api_model = null;
+    if (defaultModel || tierModels.length > 0 || ragEmbeddingModel) {
+      atomicWriteJson(homeConfigPath, config);
+      if (options.refreshRuntime !== false) {
+        ConfigManager.reset();
+        clearProjectRuntimeRegistry();
+        ConfigManager.load({ projectDir: HOME_CONFIG_DIR });
+      }
+    }
+    return {
+      config,
+      clearedConfigReferences: { defaultModel, tierModels, ragEmbeddingModel },
+    };
+  });
 }
 
 // ── Static connection gate ──────────────────────────────────────────────────
@@ -854,6 +904,54 @@ export function registerProviderIPC(): void {
     });
   });
 
+  ipcMain.handle(IPC_CHANNELS.PROVIDERS_DELETE, async (_event, payload: unknown) => {
+    const parsed = deleteConnectionSchema.safeParse(payload);
+    if (!parsed.success) throw new Error('Invalid providers:delete payload');
+    return withConnectionMutationLock(parsed.data.connectionId, async () => {
+      const current = services();
+      const connection = await requireConnection(parsed.data.connectionId);
+      const previousHealth = connection.health;
+      let disabledForDeletion = false;
+      if (previousHealth !== 'disabled' && previousHealth !== 'disconnected') {
+        await current.connections.update(connection.id, { health: 'disabled' });
+        disabledForDeletion = true;
+      }
+      const { stopActiveProviderConnectionTurns } = await import('./chat');
+      const stoppedSessionIds = stopActiveProviderConnectionTurns(connection.id);
+      if (stoppedSessionIds.length > 0) {
+        try {
+          getProviderAccountingStore().interruptPendingForConnection(connection.id);
+        } catch (error) {
+          if (disabledForDeletion) {
+            await current.connections.update(connection.id, { health: previousHealth });
+          }
+          const detail = error instanceof Error ? error.message : String(error);
+          throw new Error(
+            `Could not finalize active provider accounting; the connection was not deleted: ${detail}`,
+            { cause: error },
+          );
+        }
+      }
+      await current.vault.deleteConnectionCredentials(connection.id);
+      await current.connections.update(connection.id, {
+        credential: { kind: 'none' },
+        health: 'disconnected',
+      });
+      const configResult = await (current.clearConfigReferences ?? clearConnectionConfigReferences)(connection.id);
+      current.status.invalidate(connection.providerId, connection.id);
+      const removed = await current.connections.remove(connection.id);
+      if (!removed) throw new Error(`Unknown provider connection '${connection.id}'`);
+      return {
+        connectionId: connection.id,
+        message: stoppedSessionIds.length > 0
+          ? `Cancelled ${stoppedSessionIds.length} active turn${stoppedSessionIds.length === 1 ? '' : 's'} and deleted the connection.`
+          : 'The connection was deleted. Historical sessions and accounting were preserved.',
+        config: configResult.config,
+        clearedConfigReferences: configResult.clearedConfigReferences,
+      } satisfies ProviderDeleteConnectionResult;
+    });
+  });
+
   ipcMain.handle(IPC_CHANNELS.PROVIDERS_MODEL_LIST, async (_event, payload: unknown) => {
     if (payload === undefined) return modelOptions();
     const parsed = connectionIdSchema.safeParse(payload);
@@ -878,6 +976,7 @@ export function unregisterProviderIPC(): void {
   ipcMain.removeHandler(IPC_CHANNELS.PROVIDERS_DISABLE);
   ipcMain.removeHandler(IPC_CHANNELS.PROVIDERS_ENABLE);
   ipcMain.removeHandler(IPC_CHANNELS.PROVIDERS_DISCONNECT);
+  ipcMain.removeHandler(IPC_CHANNELS.PROVIDERS_DELETE);
   ipcMain.removeHandler(IPC_CHANNELS.PROVIDERS_MODEL_LIST);
   ipcMain.removeHandler(IPC_CHANNELS.PROVIDERS_STATUS_REFRESH);
 }

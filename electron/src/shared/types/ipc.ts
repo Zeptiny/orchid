@@ -554,6 +554,11 @@ export interface ProviderDisconnectMessage extends ProviderConnectionIdMessage {
   confirm: true;
 }
 
+export interface ProviderDeleteConnectionMessage extends ProviderConnectionIdMessage {
+  /** Explicit UI confirmation is required before connection metadata is removed. */
+  confirm: true;
+}
+
 export interface ProviderStatusRefreshMessage {
   providerId: string;
   /** Required for connection-scoped authenticated status sources. */
@@ -575,6 +580,17 @@ export interface ProviderModelOption {
 export interface ProviderMutationResult {
   connection: ProviderConnectionView;
   message: string | null;
+}
+
+export interface ProviderDeleteConnectionResult {
+  connectionId: string;
+  message: string;
+  config: Config;
+  clearedConfigReferences: {
+    defaultModel: boolean;
+    tierModels: readonly string[];
+    ragEmbeddingModel: boolean;
+  };
 }
 
 // ── Session API ──────────────────────────────────────────────────────────────
@@ -928,6 +944,10 @@ export interface OrchidAPI {
     enable: (message: ProviderConnectionIdMessage) => Promise<ProviderMutationResult>;
     /** Remove stored credentials after explicit confirmation; preserves connection history. */
     disconnect: (message: ProviderDisconnectMessage) => Promise<ProviderMutationResult>;
+    /** Permanently remove one connection and clear live configuration references to it. */
+    deleteConnection: (
+      message: ProviderDeleteConnectionMessage,
+    ) => Promise<ProviderDeleteConnectionResult>;
     /** Connection-scoped typed model options, including unavailable reasons. */
     modelList: (message?: ProviderConnectionIdMessage) => Promise<readonly ProviderModelOption[]>;
     /** Refresh informational status only; it never changes connection health. */
@@ -1119,6 +1139,7 @@ export const IPC_CHANNELS = {
   PROVIDERS_DISABLE: 'providers:disable',
   PROVIDERS_ENABLE: 'providers:enable',
   PROVIDERS_DISCONNECT: 'providers:disconnect',
+  PROVIDERS_DELETE: 'providers:delete',
   PROVIDERS_MODEL_LIST: 'providers:model_list',
   PROVIDERS_STATUS_REFRESH: 'providers:status_refresh',
 
@@ -1248,6 +1269,7 @@ export const ALLOWED_INVOKE_CHANNELS = [
   IPC_CHANNELS.PROVIDERS_DISABLE,
   IPC_CHANNELS.PROVIDERS_ENABLE,
   IPC_CHANNELS.PROVIDERS_DISCONNECT,
+  IPC_CHANNELS.PROVIDERS_DELETE,
   IPC_CHANNELS.PROVIDERS_MODEL_LIST,
   IPC_CHANNELS.PROVIDERS_STATUS_REFRESH,
   IPC_CHANNELS.SESSION_LIST,

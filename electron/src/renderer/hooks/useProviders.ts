@@ -8,6 +8,8 @@
 import { useCallback, useEffect, useMemo, useRef, useSyncExternalStore } from 'react';
 import type {
   ProviderConnectionCreateMessage,
+  ProviderDeleteConnectionMessage,
+  ProviderDeleteConnectionResult,
   ProviderConnectionIdMessage,
   ProviderConnectionUpdateMessage,
   ProviderConnectionView,
@@ -67,6 +69,9 @@ export interface UseProvidersReturn {
   readonly disconnectConnection: (
     message: ProviderDisconnectMessage,
   ) => Promise<ProviderMutationResult>;
+  readonly deleteConnection: (
+    message: ProviderDeleteConnectionMessage,
+  ) => Promise<ProviderDeleteConnectionResult>;
   readonly modelList: (
     message?: ProviderConnectionIdMessage,
   ) => Promise<readonly ProviderModelOption[]>;
@@ -286,6 +291,29 @@ function applyMutationToShared(result: ProviderMutationResult): void {
   });
 }
 
+function applyDeletionToShared(result: ProviderDeleteConnectionResult): void {
+  overviewEpoch += 1;
+  invalidateModelList();
+  announceProviderUpdate();
+  emitOrchidEvent('orchid:config-updated', result.config);
+  setSharedState((previous) => {
+    if (!previous.overview) return previous;
+    return {
+      status: 'ready',
+      error: null,
+      overview: {
+        ...previous.overview,
+        connections: previous.overview.connections.filter(
+          (connection) => connection.id !== result.connectionId,
+        ),
+        statuses: previous.overview.statuses.filter(
+          (status) => status.connectionId !== result.connectionId,
+        ),
+      },
+    };
+  });
+}
+
 function applyStatusToShared(observation: ProviderStatusView): void {
   // Status observations do not change the model catalog — keep modelListEpoch.
   announceProviderUpdate();
@@ -433,6 +461,12 @@ export function useProviders(): UseProvidersReturn {
     [applyMutation, runMutation],
   );
 
+  const deleteConnection = useCallback(
+    (message: ProviderDeleteConnectionMessage) =>
+      runMutation((providers) => providers.deleteConnection(message), applyDeletionToShared),
+    [runMutation],
+  );
+
   const modelList = useCallback(
     (message?: ProviderConnectionIdMessage) =>
       runMutation((providers) => providers.modelList(message)),
@@ -477,6 +511,7 @@ export function useProviders(): UseProvidersReturn {
     disableConnection,
     enableConnection,
     disconnectConnection,
+    deleteConnection,
     modelList,
     refreshStatus,
   };
