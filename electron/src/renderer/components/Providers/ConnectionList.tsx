@@ -1,19 +1,25 @@
 /** Redacted provider-connection cards and safe lifecycle actions. */
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import type {
   ProviderConnectionIdMessage,
   ProviderConnectionView,
+  ProviderDeleteConnectionMessage,
+  ProviderDeleteConnectionResult,
   ProviderDefinitionView,
   ProviderDisconnectMessage,
   ProviderMutationResult,
   ProviderStatusRefreshMessage,
   ProviderStatusView,
 } from '../../../shared/types/ipc';
-import { providerStatusConnectionId } from '../../utils/provider-selection';
+import {
+  providerStatusForConnection,
+  providerStatusIsConnectionScoped,
+} from '../../utils/provider-selection';
 import { Icon } from '../Icon';
 import { Alert } from '../ui/Alert';
 import { Button } from '../ui/Button';
 import { ConfigCard } from '../ui/ConfigCard';
+import { DialogSurface } from '../ui/DialogSurface';
 import { Panel } from '../ui/Panel';
 import { SectionHeader } from '../ui/SectionHeader';
 import { StateMessage } from '../ui/StateMessage';
@@ -30,12 +36,20 @@ export interface ConnectionListProps {
   readonly onDisable?: (message: ProviderConnectionIdMessage) => Promise<ProviderMutationResult>;
   readonly onEnable?: (message: ProviderConnectionIdMessage) => Promise<ProviderMutationResult>;
   readonly onDisconnect?: (message: ProviderDisconnectMessage) => Promise<ProviderMutationResult>;
+  readonly onDelete?: (
+    message: ProviderDeleteConnectionMessage,
+  ) => Promise<ProviderDeleteConnectionResult>;
   readonly onRefreshStatus?: (
     message: ProviderStatusRefreshMessage,
   ) => Promise<ProviderStatusView | null>;
 }
 
-type ConnectionAction = 'validate' | 'disable' | 'enable' | 'disconnect';
+type ConnectionAction = 'validate' | 'disable' | 'enable' | 'disconnect' | 'delete';
+
+interface ConnectionActionResult {
+  readonly message: string | null;
+  readonly connection?: ProviderConnectionView;
+}
 
 function describeError(error: unknown): string {
   return error instanceof Error ? error.message : 'The connection action could not be completed.';
@@ -87,17 +101,21 @@ export function ConnectionList({
   onDisable,
   onEnable,
   onDisconnect,
+  onDelete,
   onRefreshStatus,
 }: ConnectionListProps) {
   const [busy, setBusy] = useState<{ connectionId: string; action: ConnectionAction } | null>(null);
   const [confirmDisconnectId, setConfirmDisconnectId] = useState<string | null>(null);
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const deletePermanentRef = useRef<HTMLButtonElement>(null);
+  const deleteTriggerRef = useRef<HTMLButtonElement>(null);
 
   const runAction = async (
     connectionId: string,
     action: ConnectionAction,
-    operation: (() => Promise<ProviderMutationResult>) | undefined,
+    operation: (() => Promise<ConnectionActionResult>) | undefined,
   ) => {
     if (!operation) return;
     setBusy({ connectionId, action });
@@ -105,8 +123,13 @@ export function ConnectionList({
     setMessage(null);
     try {
       const result = await operation();
-      setMessage(result.message ?? `${healthLabel(result.connection.health)} connection updated.`);
+      setMessage(
+        result.message ?? (result.connection
+          ? `${healthLabel(result.connection.health)} connection updated.`
+          : 'Connection updated.'),
+      );
       if (action === 'disconnect') setConfirmDisconnectId(null);
+      if (action === 'delete') setConfirmDeleteId(null);
     } catch (actionError) {
       setError(describeError(actionError));
     } finally {
@@ -179,11 +202,10 @@ export function ConnectionList({
           const canValidate =
             connection.health === 'draft' || connection.health === 'needs_attention';
           const definition = definitions.find((candidate) => candidate.id === connection.providerId);
-          const status = statuses.find((candidate) => candidate.providerId === connection.providerId);
-          const showsProviderStatus = providerStatusConnectionId(
-            connections,
-            connection.providerId,
-          ) === connection.id;
+          const status = providerStatusForConnection(connections, connection, statuses);
+          const showsProviderStatus = status !== undefined
+            || (providerStatusIsConnectionScoped(connection.providerId)
+              && connection.credentialKind !== 'none');
           return (
             <ConfigCard key={connection.id}>
               <ConfigCard.Body className="flex flex-col gap-4">
@@ -351,7 +373,70 @@ export function ConnectionList({
                         Disconnect
                       </Button>
                     )}
+                  <Button
+                    variant="error"
+                    size="sm"
+                    onClick={(event) => {
+                      deleteTriggerRef.current = event.currentTarget;
+                      setConfirmDisconnectId(null);
+                      setConfirmDeleteId(connection.id);
+                    }}
+                    disabled={isBusy || !onDelete}
+                  >
+                    Delete connection
+                  </Button>
                 </div>
+
+                <DialogSurface
+                  isOpen={confirmDeleteId === connection.id}
+                  onClose={() => setConfirmDeleteId(null)}
+                  labelledBy="provider-delete-confirmation-title"
+                  describedBy="provider-delete-confirmation-description"
+                  initialFocusRef={deletePermanentRef}
+                  restoreFocusRef={deleteTriggerRef}
+                  variant="modal"
+                  closeOnBackdrop={!isBusy}
+                  closeOnEscape={!isBusy}
+                  className="max-w-lg"
+                >
+                  <h2 id="provider-delete-confirmation-title" className="text-lg font-semibold">
+                    Delete {connection.name}?
+                  </h2>
+                  <p
+                    id="provider-delete-confirmation-description"
+                    className="py-3 text-sm text-base-content/70"
+                  >
+                    Delete permanently removes this connection and its stored credentials.
+                    Default, tier, and RAG model assignments that use it will be cleared.
+                    Historical sessions and accounting remain available.
+                  </p>
+                  <div className="flex justify-end gap-2">
+                    <Button
+                      size="sm"
+                      onClick={() => setConfirmDeleteId(null)}
+                      disabled={isBusy}
+                    >
+                      Cancel
+                    </Button>
+                    <Button
+                      ref={deletePermanentRef}
+                      variant="error"
+                      size="sm"
+                      onClick={() =>
+                        void runAction(
+                          connection.id,
+                          'delete',
+                          onDelete
+                            ? () => onDelete({ connectionId: connection.id, confirm: true })
+                            : undefined,
+                        )
+                      }
+                      disabled={isBusy || !onDelete}
+                    >
+                      Delete permanently
+                    </Button>
+                  </div>
+                </DialogSurface>
               </ConfigCard.Body>
             </ConfigCard>
           );

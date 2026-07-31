@@ -5,10 +5,12 @@
  * one-shot credential. It never receives a credential handle, API key,
  * driver origin, or executable driver configuration.
  */
+import * as fs from 'node:fs';
 import { ipcMain } from 'electron';
 import { z } from 'zod';
 import { IPC_CHANNELS } from '../../shared/types/ipc';
 import type {
+  ProviderDeleteConnectionResult,
   ProviderConnectionView,
   ProviderDefinitionView,
   ProviderModelOption,
@@ -56,6 +58,16 @@ import {
 import type { ProviderStatusObservation } from '../providers/status/cache';
 import type { ProviderStatusService } from '../providers/status/service';
 import { getProviderAccountingStore } from '../providers/accounting/store';
+import {
+  atomicWriteJson,
+  ConfigManager,
+  HOME_CONFIG_DIR,
+  HOME_CONFIG_PATH,
+  loadConfig,
+} from '../config/loader';
+import { isPlainObject } from '../config/merge';
+import { clearProjectRuntimeRegistry } from '../project/runtime';
+import { withConfigSaveLock } from './config';
 
 // ── Renderer input schemas ──────────────────────────────────────────────────
 
@@ -129,6 +141,7 @@ const submitApiKeySchema = z.object({
 
 const connectionIdSchema = z.object({ connectionId: idSchema }).strict();
 const disconnectSchema = connectionIdSchema.extend({ confirm: z.literal(true) }).strict();
+const deleteConnectionSchema = connectionIdSchema.extend({ confirm: z.literal(true) }).strict();
 const statusRefreshSchema = z.object({
   providerId: z.string().trim().min(1),
   connectionId: idSchema.optional(),
@@ -137,11 +150,12 @@ const statusRefreshSchema = z.object({
 
 interface ProviderIPCServices {
   readonly catalog: Pick<ProviderCatalogStore, 'getProviderDefinitions' | 'load'>;
-  readonly connections: Pick<ConnectionStore, 'list' | 'get' | 'create' | 'update'>;
+  readonly connections: Pick<ConnectionStore, 'list' | 'get' | 'create' | 'update' | 'remove'>;
   readonly vault: Pick<CredentialVault,
     'getAvailability' | 'replaceConnectionApiKey' | 'readSecret' | 'deleteConnectionCredentials'>;
-  readonly status: Pick<ProviderStatusService, 'get' | 'refresh'>;
+  readonly status: Pick<ProviderStatusService, 'get' | 'list' | 'refresh' | 'invalidate'>;
   readonly registry: ProviderDriverRegistry;
+  readonly clearConfigReferences?: typeof clearConnectionConfigReferences;
 }
 
 let testServices: ProviderIPCServices | null = null;
@@ -163,6 +177,7 @@ function services(): ProviderIPCServices {
     vault: getProviderCredentialVault(),
     status: getProviderStatusService(),
     registry: getCachedDriverRegistry(),
+    clearConfigReferences: clearConnectionConfigReferences,
   };
 }
 
@@ -178,7 +193,7 @@ export function _setProviderIPCServicesForTests(value: ProviderIPCServices | nul
 
 // ── Per-connection mutation lock ────────────────────────────────────────────
 // Serializes vault + connection-store mutations for the same connection so
-// concurrent submit_api_key / disconnect / disable / enable / update / validate
+// concurrent submit_api_key / disconnect / delete / disable / enable / update / validate
 // cannot leave a live vault secret after disconnect or clobber terminal health.
 
 const connectionMutationChains = new Map<string, Promise<void>>();
@@ -310,6 +325,7 @@ function connectionView(
 function statusView(observation: ProviderStatusObservation): ProviderStatusView {
   return {
     providerId: observation.providerId,
+    ...(observation.connectionId ? { connectionId: observation.connectionId } : {}),
     observedAt: observation.observedAt,
     providerUpdatedAt: observation.providerUpdatedAt,
     availability: observation.availability,
@@ -339,9 +355,10 @@ async function overview(): Promise<ProviderOverview> {
       activeSessionsForProviderConnection(connection.id).length,
     ]),
   );
-  const statuses = definitions
-    .map((definition) => current.status.get(definition.id))
-    .filter((value): value is ProviderStatusObservation => value !== undefined)
+  const connectionProviderIds = new Map(connections.map((connection) => [connection.id, connection.providerId]));
+  const statuses = current.status.list()
+    .filter((observation) => observation.connectionId === undefined
+      || connectionProviderIds.get(observation.connectionId) === observation.providerId)
     .map(statusView);
   return {
     definitions: definitions.map((definition) => definitionView(definition, current.registry)),
@@ -351,6 +368,57 @@ async function overview(): Promise<ProviderOverview> {
     statuses,
     secureStorage: secureStorageView(current.vault.getAvailability()),
   };
+}
+
+interface ConfigReferenceCleanupOptions {
+  readonly homeConfigPath?: string;
+  readonly projectDir?: string;
+  readonly refreshRuntime?: boolean;
+}
+
+export async function clearConnectionConfigReferences(
+  connectionId: string,
+  options: ConfigReferenceCleanupOptions = {},
+) {
+  return withConfigSaveLock(async () => {
+    const homeConfigPath = options.homeConfigPath ?? HOME_CONFIG_PATH;
+    let homeConfig: Record<string, unknown> = {};
+    try {
+      const parsed: unknown = JSON.parse(fs.readFileSync(homeConfigPath, 'utf8'));
+      if (isPlainObject(parsed)) homeConfig = parsed;
+    } catch {
+      // Match loadConfig's missing or malformed home-layer behavior.
+    }
+    const defaultSelection = homeConfig['default_model'];
+    const tierSelections = isPlainObject(homeConfig['tier_models'])
+      ? homeConfig['tier_models']
+      : {};
+    const ragConfig = isPlainObject(homeConfig['rag']) ? homeConfig['rag'] : {};
+    const embeddingSelection = ragConfig['embedding_api_model'];
+    const defaultModel = isPlainObject(defaultSelection)
+      && defaultSelection['connectionId'] === connectionId;
+    const tierModels = Object.entries(tierSelections)
+      .filter(([, selection]) => isPlainObject(selection) && selection['connectionId'] === connectionId)
+      .map(([tier]) => tier);
+    const ragEmbeddingModel = isPlainObject(embeddingSelection)
+      && embeddingSelection['connectionId'] === connectionId;
+    if (defaultModel) homeConfig['default_model'] = null;
+    for (const tier of tierModels) tierSelections[tier] = null;
+    if (ragEmbeddingModel) ragConfig['embedding_api_model'] = null;
+    if (defaultModel || tierModels.length > 0 || ragEmbeddingModel) {
+      atomicWriteJson(homeConfigPath, homeConfig);
+      if (options.refreshRuntime !== false) {
+        ConfigManager.reset();
+        clearProjectRuntimeRegistry();
+        ConfigManager.load({ projectDir: HOME_CONFIG_DIR });
+      }
+    }
+    const config = loadConfig({ projectDir: HOME_CONFIG_DIR, homeConfigPath });
+    return {
+      config,
+      clearedConfigReferences: { defaultModel, tierModels, ragEmbeddingModel },
+    };
+  });
 }
 
 // ── Static connection gate ──────────────────────────────────────────────────
@@ -440,6 +508,18 @@ function credentialBinding(connection: ProviderConnection, current = services())
   });
 }
 
+/** Compare only the reference that selects an account, never its secret value. */
+function sameCredentialIdentity(left: ProviderConnection, right: ProviderConnection): boolean {
+  if (left.authMethod !== right.authMethod || left.credential.kind !== right.credential.kind) return false;
+  if (left.credential.kind === 'stored' && right.credential.kind === 'stored') {
+    return left.credential.handle === right.credential.handle;
+  }
+  if (left.credential.kind === 'environment' && right.credential.kind === 'environment') {
+    return left.credential.variable === right.credential.variable;
+  }
+  return true;
+}
+
 /** Return a safe readiness explanation without rendering any secret material. */
 async function readiness(
   connection: ProviderConnection,
@@ -522,6 +602,28 @@ async function requireConnection(connectionId: string): Promise<ProviderConnecti
   const connection = await services().connections.get(connectionId);
   if (!connection) throw new Error(`Unknown provider connection '${connectionId}'`);
   return connection;
+}
+
+async function stopProviderConnectionTurns(
+  connectionId: string,
+  accountingFailureOutcome: string,
+  restoreHealth?: () => Promise<unknown>,
+): Promise<readonly string[]> {
+  try {
+    const { stopActiveProviderConnectionTurns } = await import('./chat');
+    const stoppedSessionIds = stopActiveProviderConnectionTurns(connectionId);
+    if (stoppedSessionIds.length > 0) {
+      getProviderAccountingStore().interruptPendingForConnection(connectionId);
+    }
+    return stoppedSessionIds;
+  } catch (error) {
+    await restoreHealth?.();
+    const detail = error instanceof Error ? error.message : String(error);
+    throw new Error(
+      `Could not finalize active provider accounting; ${accountingFailureOutcome}: ${detail}`,
+      { cause: error },
+    );
+  }
 }
 
 // ── Model options ───────────────────────────────────────────────────────────
@@ -705,7 +807,10 @@ export function registerProviderIPC(): void {
       ) {
         Object.assign(patch, { credential: { kind: 'none' as const }, health: 'draft' });
       }
-      await current.connections.update(existing.id, patch);
+      const updated = await current.connections.update(existing.id, patch);
+      if (!sameCredentialIdentity(existing, updated)) {
+        current.status.invalidate(existing.providerId, existing.id);
+      }
       return validateConnection(existing.id);
     });
   });
@@ -730,10 +835,13 @@ export function registerProviderIPC(): void {
         credentialBinding(connection, current),
         parsed.data.apiKey,
       );
-      await current.connections.update(connection.id, {
+      const updated = await current.connections.update(connection.id, {
         credential: { kind: 'stored', handle },
         health: 'draft',
       });
+      if (!sameCredentialIdentity(connection, updated)) {
+        current.status.invalidate(connection.providerId, connection.id);
+      }
       // CAS cleanup: if health became disconnected after the connection write
       // (should not happen under this lock, but re-check and erase the key).
       const afterWrite = await requireConnection(connection.id);
@@ -800,34 +908,63 @@ export function registerProviderIPC(): void {
       const connection = await requireConnection(parsed.data.connectionId);
       // KTD15: stop only turns already frozen to this connection. Their ledger
       // rows are then finalized as interrupted before the credential is erased.
-      const { stopActiveProviderConnectionTurns } = await import('./chat');
-      const stoppedSessionIds = stopActiveProviderConnectionTurns(connection.id);
-      if (stoppedSessionIds.length > 0) {
-        try {
-          getProviderAccountingStore().interruptPendingForConnection(connection.id);
-        } catch (error) {
-          // Cancellation has already prevented further credential use by the
-          // frozen turn, but destructive credential removal must wait until its
-          // durable attempt record is finalized. The user can retry disconnect
-          // once the ledger becomes available.
-          const detail = error instanceof Error ? error.message : String(error);
-          throw new Error(
-            `Could not finalize active provider accounting; credentials were not removed: ${detail}`,
-            { cause: error },
-          );
-        }
-      }
+      const stoppedSessionIds = await stopProviderConnectionTurns(
+        connection.id,
+        'credentials were not removed',
+      );
       await current.vault.deleteConnectionCredentials(connection.id);
       const updated = await current.connections.update(connection.id, {
         credential: { kind: 'none' },
         health: 'disconnected',
       });
+      if (!sameCredentialIdentity(connection, updated)) {
+        current.status.invalidate(connection.providerId, connection.id);
+      }
       return {
         connection: connectionView(updated, current.catalog.getProviderDefinitions()),
         message: stoppedSessionIds.length > 0
           ? `Cancelled ${stoppedSessionIds.length} active turn${stoppedSessionIds.length === 1 ? '' : 's'} and finalized its accounting before removing stored credentials. Revoke any upstream authorization or generated key from the provider account if needed.`
           : 'Stored credentials were removed. Revoke any upstream authorization or generated key from the provider account if needed.',
       } satisfies ProviderMutationResult;
+    });
+  });
+
+  ipcMain.handle(IPC_CHANNELS.PROVIDERS_DELETE, async (_event, payload: unknown) => {
+    const parsed = deleteConnectionSchema.safeParse(payload);
+    if (!parsed.success) throw new Error('Invalid providers:delete payload');
+    return withConnectionMutationLock(parsed.data.connectionId, async () => {
+      const current = services();
+      const connection = await requireConnection(parsed.data.connectionId);
+      const previousHealth = connection.health;
+      let disabledForDeletion = false;
+      if (previousHealth !== 'disabled' && previousHealth !== 'disconnected') {
+        await current.connections.update(connection.id, { health: 'disabled' });
+        disabledForDeletion = true;
+      }
+      const stoppedSessionIds = await stopProviderConnectionTurns(
+        connection.id,
+        'the connection was not deleted',
+        disabledForDeletion
+          ? () => current.connections.update(connection.id, { health: previousHealth })
+          : undefined,
+      );
+      await current.vault.deleteConnectionCredentials(connection.id);
+      await current.connections.update(connection.id, {
+        credential: { kind: 'none' },
+        health: 'disconnected',
+      });
+      const configResult = await (current.clearConfigReferences ?? clearConnectionConfigReferences)(connection.id);
+      current.status.invalidate(connection.providerId, connection.id);
+      const removed = await current.connections.remove(connection.id);
+      if (!removed) throw new Error(`Unknown provider connection '${connection.id}'`);
+      return {
+        connectionId: connection.id,
+        message: stoppedSessionIds.length > 0
+          ? `Cancelled ${stoppedSessionIds.length} active turn${stoppedSessionIds.length === 1 ? '' : 's'} and deleted the connection.`
+          : 'The connection was deleted. Historical sessions and accounting were preserved.',
+        config: configResult.config,
+        clearedConfigReferences: configResult.clearedConfigReferences,
+      } satisfies ProviderDeleteConnectionResult;
     });
   });
 
@@ -855,6 +992,7 @@ export function unregisterProviderIPC(): void {
   ipcMain.removeHandler(IPC_CHANNELS.PROVIDERS_DISABLE);
   ipcMain.removeHandler(IPC_CHANNELS.PROVIDERS_ENABLE);
   ipcMain.removeHandler(IPC_CHANNELS.PROVIDERS_DISCONNECT);
+  ipcMain.removeHandler(IPC_CHANNELS.PROVIDERS_DELETE);
   ipcMain.removeHandler(IPC_CHANNELS.PROVIDERS_MODEL_LIST);
   ipcMain.removeHandler(IPC_CHANNELS.PROVIDERS_STATUS_REFRESH);
 }
@@ -885,7 +1023,7 @@ async function refreshStatus(
     throw new Error('The requested connection does not belong to Neuralwatt');
   }
   const apiKey = await readApiKeyForTrustedStatus(connection, current);
-  return (await current.status.refresh(createNeuralwattStatusSource(apiKey), { manual: true })).observation;
+  return (await current.status.refresh(createNeuralwattStatusSource(connection.id, apiKey), { manual: true })).observation;
 }
 
 async function readApiKeyForTrustedStatus(

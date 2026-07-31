@@ -639,6 +639,24 @@ describe('Renderer style contract', () => {
   });
 
   describe('layout preservation contract', () => {
+    it('applies lifecycle accents through collapsible tool-result wrappers', () => {
+      const componentCss = fs.readFileSync(
+        path.join(STYLES_ROOT, 'components.css'),
+        'utf8',
+      );
+
+      for (const selector of [
+        '.orchid-tool-block.running .orchid-tool-block-content',
+        '.orchid-tool-block.generating .orchid-tool-block-content',
+        '.orchid-tool-block.failed .orchid-tool-block-content',
+        '.orchid-tool-block.error .orchid-tool-block-content',
+      ]) {
+        expect(findCssRuleBody(componentCss, selector), `${selector} is missing`).toContain(
+          'border-left-color:',
+        );
+      }
+    });
+
     it('documents layout preservation in styles README', () => {
       const readme = fs.readFileSync(path.join(STYLES_ROOT, 'README.md'), 'utf8');
       expect(readme).toMatch(/layout preservation/i);

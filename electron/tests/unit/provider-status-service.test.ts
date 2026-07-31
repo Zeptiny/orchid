@@ -42,6 +42,19 @@ function source(fetchStatus: ProviderStatusSource['fetchStatus']): ProviderStatu
   };
 }
 
+function accountSource(
+  connectionId: string,
+  fetchStatus: ProviderStatusSource['fetchStatus'],
+): ProviderStatusSource {
+  return {
+    providerId: 'neuralwatt',
+    connectionId,
+    ttlMs: 5 * 60_000,
+    minimumManualRefreshMs: 30_000,
+    fetchStatus: async () => ({ ...await fetchStatus(), connectionId }),
+  };
+}
+
 describe('ProviderStatusService', () => {
   it('uses TTL and the manual-refresh minimum without coupling status to request eligibility', async () => {
     let now = new Date('2026-07-12T12:00:00.000Z');
@@ -84,6 +97,87 @@ describe('ProviderStatusService', () => {
     ]);
   });
 
+  it('keeps authenticated account observations and refreshes separate by connection', async () => {
+    const service = new ProviderStatusService({
+      cache: new ProviderStatusCache({ filePath: null }),
+      now: () => new Date('2026-07-12T12:00:00.000Z'),
+    });
+    const personalFetch = vi.fn(async () => observation('2026-07-12T12:00:00.000Z', {
+      providerId: 'neuralwatt',
+      data: { creditsRemainingUsd: 12 },
+    }));
+    const workFetch = vi.fn(async () => observation('2026-07-12T12:00:00.000Z', {
+      providerId: 'neuralwatt',
+      data: { creditsRemainingUsd: 98 },
+    }));
+    const personal = accountSource('connection-personal', personalFetch);
+    const work = accountSource('connection-work', workFetch);
+
+    await expect(service.refresh(personal)).resolves.toMatchObject({
+      observation: { connectionId: 'connection-personal', data: { creditsRemainingUsd: 12 } },
+    });
+    await expect(service.refresh(work)).resolves.toMatchObject({
+      observation: { connectionId: 'connection-work', data: { creditsRemainingUsd: 98 } },
+    });
+
+    expect(service.get('neuralwatt', 'connection-personal')).toMatchObject({
+      data: { creditsRemainingUsd: 12 },
+    });
+    expect(service.get('neuralwatt', 'connection-work')).toMatchObject({
+      data: { creditsRemainingUsd: 98 },
+    });
+    expect(service.get('neuralwatt')).toBeUndefined();
+    expect(personalFetch).toHaveBeenCalledTimes(1);
+    expect(workFetch).toHaveBeenCalledTimes(1);
+  });
+
+  it('forgets a changed Neuralwatt account credential immediately without disturbing public status', async () => {
+    let now = new Date('2026-07-12T12:00:00.000Z');
+    const cache = new ProviderStatusCache({ filePath: null });
+    cache.put(observation(now.toISOString(), { data: { incident: 'all-clear' } }));
+    const service = new ProviderStatusService({ cache, now: () => now });
+    const oldAccount = accountSource('connection-personal', async () => observation(now.toISOString(), {
+      providerId: 'neuralwatt',
+      data: { creditsRemainingUsd: 12 },
+    }));
+    const newAccountFetch = vi.fn(async () => observation(now.toISOString(), {
+      providerId: 'neuralwatt',
+      data: { creditsRemainingUsd: 98 },
+    }));
+
+    await service.refresh(oldAccount);
+    service.invalidate('neuralwatt', 'connection-personal');
+
+    // A manual refresh would otherwise return the old cache for 30 seconds.
+    const refreshed = await service.refresh(accountSource('connection-personal', newAccountFetch), { manual: true });
+    expect(refreshed).toMatchObject({
+      source: 'network',
+      observation: { data: { creditsRemainingUsd: 98 } },
+    });
+    expect(newAccountFetch).toHaveBeenCalledTimes(1);
+    expect(service.get('lilac')).toMatchObject({ data: { incident: 'all-clear' } });
+  });
+
+  it('does not allow an invalidated in-flight account refresh to repopulate the cache', async () => {
+    let resolveFetch: ((value: ProviderStatusObservation) => void) | undefined;
+    const service = new ProviderStatusService({
+      cache: new ProviderStatusCache({ filePath: null }),
+      now: () => new Date('2026-07-12T12:00:00.000Z'),
+    });
+    const inFlight = service.refresh(accountSource('connection-personal', () =>
+      new Promise<ProviderStatusObservation>((resolve) => { resolveFetch = resolve; }),
+    ));
+
+    service.invalidate('neuralwatt', 'connection-personal');
+    resolveFetch?.(observation('2026-07-12T12:00:00.000Z', {
+      providerId: 'neuralwatt',
+      data: { creditsRemainingUsd: 12 },
+    }));
+    await inFlight;
+
+    expect(service.get('neuralwatt', 'connection-personal')).toBeUndefined();
+  });
+
   it('honors Retry-After, preserves the prior observation as stale, and redacts diagnostics', async () => {
     let now = new Date('2026-07-12T12:00:00.000Z');
     const cache = new ProviderStatusCache({ filePath: null });
@@ -114,6 +208,7 @@ describe('ProviderStatusService', () => {
     const cache = new ProviderStatusCache({ filePath });
 
     cache.put(observation('2026-07-12T12:00:00.000Z', {
+      connectionId: 'connection-personal',
       data: {
         model: 'kimi',
         authorization: 'Bearer should-not-persist',
@@ -125,8 +220,9 @@ describe('ProviderStatusService', () => {
       },
     }));
 
-    const restored = new ProviderStatusCache({ filePath }).get(PROVIDER_ID);
+    const restored = new ProviderStatusCache({ filePath }).get(PROVIDER_ID, 'connection-personal');
     expect(restored).toBeDefined();
+    expect(restored?.connectionId).toBe('connection-personal');
     expect(JSON.stringify(restored)).not.toContain('should-not-persist');
     expect(JSON.stringify(restored)).not.toContain('acct_123');
     expect(JSON.stringify(restored)).toContain('[REDACTED]');

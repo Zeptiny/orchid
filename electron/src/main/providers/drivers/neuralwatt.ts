@@ -203,11 +203,15 @@ export async function fetchNeuralwattQuotaStatus(options: {
 }
 
 /** Account-scoped caller supplies the secret only in the trusted main process. */
-export function createNeuralwattStatusSource(apiKey: string): ProviderStatusSource {
+export function createNeuralwattStatusSource(connectionId: string, apiKey: string): ProviderStatusSource {
   return {
     providerId: 'neuralwatt',
+    connectionId,
     ttlMs: NEURALWATT_STATUS_TTL_MS,
     minimumManualRefreshMs: NEURALWATT_STATUS_MINIMUM_MANUAL_REFRESH_MS,
-    fetchStatus: () => fetchNeuralwattQuotaStatus({ apiKey }),
+    fetchStatus: async () => ({
+      ...await fetchNeuralwattQuotaStatus({ apiKey }),
+      connectionId,
+    }),
   };
 }

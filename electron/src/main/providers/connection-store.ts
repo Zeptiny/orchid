@@ -154,4 +154,16 @@ export class ConnectionStore {
     });
   }
 
+  async remove(id: string): Promise<ProviderConnection | null> {
+    return withSerializedWrite(this.filePath, async () => {
+      const document = readDocument(this.filePath);
+      const removed = document.connections.find((connection) => connection.id === id);
+      if (!removed) return null;
+      const connections = document.connections.filter((connection) => connection.id !== id);
+      await this.beforePersist?.();
+      atomicWriteJson(this.filePath, { version: 1, connections });
+      return { ...removed };
+    });
+  }
+
 }

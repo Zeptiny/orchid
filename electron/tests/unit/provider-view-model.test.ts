@@ -1,11 +1,13 @@
 import { describe, expect, it } from 'vitest';
-import type { ProviderModelOption } from '../../src/shared/types/ipc';
+import type { ProviderModelOption, ProviderStatusView } from '../../src/shared/types/ipc';
 import {
   providerModelOptionContextLabel,
   providerModelOptionDisplayName,
   providerModelOptionKey,
   providerModelOptionLabel,
   providerModelOptionNotifyLabel,
+  providerStatusForConnection,
+  providerStatusIsConnectionScoped,
   providerStatusConnectionId,
   resolveModelNotifyLabel,
   selectionMatchesOption,
@@ -155,5 +157,54 @@ describe('provider selection view model', () => {
     expect(providerStatusConnectionId(connections, 'lilac')).toBe('lilac-ready');
     expect(providerStatusConnectionId(connections, 'neuralwatt')).toBe('neuralwatt-ready');
     expect(providerStatusConnectionId(connections, 'openai')).toBeNull();
+  });
+
+  it('attaches Neuralwatt quota observations to their exact account connection', () => {
+    const connection = (id: string): ProviderConnectionView => ({
+      id,
+      providerId: 'neuralwatt',
+      providerDisplayName: 'Neuralwatt',
+      name: id,
+      protocol: 'openai-compatible',
+      authMethod: 'api-key',
+      credentialKind: 'stored',
+      environmentVariable: null,
+      modelIds: [],
+      customModels: [],
+      health: 'ready',
+      activeTurnCount: 0,
+      endpoint: null,
+      allowInsecureHttp: false,
+    });
+    const personal = connection('personal');
+    const work = connection('work');
+    const statuses: readonly ProviderStatusView[] = [
+      {
+        providerId: 'neuralwatt',
+        connectionId: 'personal',
+        observedAt: '2026-07-12T12:00:00.000Z',
+        providerUpdatedAt: null,
+        availability: 'available',
+        stale: false,
+        data: { creditsRemainingUsd: 12 },
+        error: null,
+      },
+      {
+        providerId: 'neuralwatt',
+        connectionId: 'work',
+        observedAt: '2026-07-12T12:00:00.000Z',
+        providerUpdatedAt: null,
+        availability: 'available',
+        stale: false,
+        data: { creditsRemainingUsd: 98 },
+        error: null,
+      },
+    ];
+
+    expect(providerStatusIsConnectionScoped('neuralwatt')).toBe(true);
+    expect(providerStatusForConnection([personal, work], personal, statuses)?.data)
+      .toEqual({ creditsRemainingUsd: 12 });
+    expect(providerStatusForConnection([personal, work], work, statuses)?.data)
+      .toEqual({ creditsRemainingUsd: 98 });
   });
 });

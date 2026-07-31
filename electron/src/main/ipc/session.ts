@@ -15,6 +15,7 @@ import {
 } from '../session/singleton';
 import { getConfig } from '../config/loader';
 import { clearChatHistory, seedChatHistory } from './chat-history';
+import { sendSessionEvent } from './chat/events';
 import {
   clearDraftCwd,
   getDraftCwd,
@@ -382,8 +383,8 @@ export function registerSessionIPC(): void {
       return { status: 'not_active' };
     }
 
-    // Push rename event to renderer so sidebar/list updates reactively
-    event.sender.send(IPC_CHANNELS.SESSION_RENAMED, {
+    // Push rename event to every window currently viewing this session.
+    sendSessionEvent(event.sender, parsed.data.id, IPC_CHANNELS.SESSION_RENAMED, {
       id: parsed.data.id,
       name: parsed.data.name,
     });

@@ -15,9 +15,9 @@ describe('provider onboarding and disconnected UX', () => {
     type ProviderAPI = OrchidAPI['providers'];
     const methods: Array<keyof ProviderAPI> = [
       'list', 'create', 'update', 'submitApiKey', 'validate', 'disable', 'enable',
-      'disconnect', 'modelList', 'refreshStatus',
+      'disconnect', 'deleteConnection', 'modelList', 'refreshStatus',
     ];
-    expect(methods).toHaveLength(10);
+    expect(methods).toHaveLength(11);
   });
 
   it('opens onboarding based on has_completed_onboarding, not provider readiness', () => {
@@ -150,7 +150,7 @@ describe('provider onboarding and disconnected UX', () => {
     expect(status).toContain('Informational only');
     expect(providersTab).not.toContain('<ProviderStatus');
     expect(connections).toContain('<ProviderStatus');
-    expect(connections).toContain('providerStatusConnectionId');
+    expect(connections).toContain('providerStatusForConnection');
   });
 
   it('manages connection settings and models through one edit modal', () => {
@@ -171,6 +171,21 @@ describe('provider onboarding and disconnected UX', () => {
     expect(modelEditor).toContain('Add custom model');
     expect(modelEditor).toContain('Edit');
     expect(modelEditor).toContain('Remove');
+  });
+
+  it('requires confirmation before permanently deleting a connection', () => {
+    const providersTab = source('components', 'Preferences', 'ProvidersTab.tsx');
+    const connections = source('components', 'Providers', 'ConnectionList.tsx');
+
+    expect(providersTab).toContain('onDelete={providers.deleteConnection}');
+    expect(connections).toContain('Delete connection');
+    expect(connections).toContain('Delete permanently');
+    expect(connections).toContain('Default, tier, and RAG model assignments');
+    expect(connections).toMatch(
+      /onDelete\s*\?\s*\(\)\s*=>\s*onDelete\(\{\s*connectionId:\s*connection\.id,\s*confirm:\s*true\s*\}\)/,
+    );
+    expect(connections).toContain('initialFocusRef={deletePermanentRef}');
+    expect(connections).toContain('restoreFocusRef={deleteTriggerRef}');
   });
 
   it('omits fixed protocol controls from edit mode and removes the separate initial-model picker', () => {

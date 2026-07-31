@@ -410,7 +410,7 @@
     border-left-color: color-mix(in srgb, var(--color-warning) 55%, transparent);
   }
 
-  .orchid-tool-block.running > .orchid-tool-block-content {
+  .orchid-tool-block.running .orchid-tool-block-content {
     border-left-color: color-mix(in srgb, var(--color-warning) 55%, transparent);
   }
 
@@ -419,7 +419,7 @@
     border-left-color: color-mix(in srgb, var(--color-info) 55%, transparent);
   }
 
-  .orchid-tool-block.generating > .orchid-tool-block-content {
+  .orchid-tool-block.generating .orchid-tool-block-content {
     border-left-color: color-mix(in srgb, var(--color-info) 55%, transparent);
   }
 
@@ -434,8 +434,8 @@
     background: color-mix(in srgb, var(--color-error) 5%, transparent);
   }
 
-  .orchid-tool-block.failed > .orchid-tool-block-content,
-  .orchid-tool-block.error > .orchid-tool-block-content {
+  .orchid-tool-block.failed .orchid-tool-block-content,
+  .orchid-tool-block.error .orchid-tool-block-content {
     border-left-color: color-mix(in srgb, var(--color-error) 55%, transparent);
   }
 

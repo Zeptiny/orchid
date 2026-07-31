@@ -1,6 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
 import { fetchLilacStatus } from '../../src/main/providers/drivers/lilac';
-import { fetchNeuralwattQuotaStatus } from '../../src/main/providers/drivers/neuralwatt';
+import {
+  createNeuralwattStatusSource,
+  fetchNeuralwattQuotaStatus,
+} from '../../src/main/providers/drivers/neuralwatt';
 import { ProviderStatusCache } from '../../src/main/providers/status/cache';
 import { ProviderStatusService, type ProviderStatusSource } from '../../src/main/providers/status/service';
 
@@ -93,5 +96,26 @@ describe('provider status contracts', () => {
     });
     expect(result.observation.data).not.toHaveProperty('recommendedModel');
     expect(result.observation.data).not.toHaveProperty('requestEligibility');
+  });
+
+  it('binds Neuralwatt quota observations to the connection that supplied its credential', async () => {
+    const fetch = vi.fn(async () => new Response(JSON.stringify({
+      snapshot_at: '2026-07-12T12:00:00.000Z',
+      balance: { accounting_method: 'token', credits_remaining_usd: 12 },
+    }), { status: 200 }));
+    const originalFetch = globalThis.fetch;
+    vi.stubGlobal('fetch', fetch);
+    try {
+      const observation = await createNeuralwattStatusSource('connection-personal', 'test-key')
+        .fetchStatus();
+
+      expect(observation).toMatchObject({
+        providerId: 'neuralwatt',
+        connectionId: 'connection-personal',
+        data: { creditsRemainingUsd: 12 },
+      });
+    } finally {
+      vi.stubGlobal('fetch', originalFetch);
+    }
   });
 });

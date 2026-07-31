@@ -1,5 +1,5 @@
 /** Renderer-safe view-model helpers for typed connection-scoped selections. */
-import type { ProviderConnectionView, ProviderModelOption } from '../../shared/types/ipc';
+import type { ProviderConnectionView, ProviderModelOption, ProviderStatusView } from '../../shared/types/ipc';
 import type { ModelSelection } from '../../shared/types/provider';
 
 /**
@@ -102,4 +102,24 @@ export function providerStatusConnectionId(
   return matching.find((connection) => connection.health === 'ready')?.id
     ?? matching[0]?.id
     ?? null;
+}
+
+/** Account quota requires the credential-bound connection that fetched it. */
+export function providerStatusIsConnectionScoped(providerId: string): boolean {
+  return providerId === 'neuralwatt';
+}
+
+/** Return only the observation that belongs on this connection's card. */
+export function providerStatusForConnection(
+  connections: readonly ProviderConnectionView[],
+  connection: ProviderConnectionView,
+  statuses: readonly ProviderStatusView[],
+): ProviderStatusView | undefined {
+  const connectionStatus = statuses.find((status) =>
+    status.providerId === connection.providerId && status.connectionId === connection.id,
+  );
+  if (connectionStatus || providerStatusIsConnectionScoped(connection.providerId)) return connectionStatus;
+  return providerStatusConnectionId(connections, connection.providerId) === connection.id
+    ? statuses.find((status) => status.providerId === connection.providerId && status.connectionId === undefined)
+    : undefined;
 }
