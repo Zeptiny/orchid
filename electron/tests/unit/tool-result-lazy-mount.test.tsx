@@ -24,11 +24,11 @@ const result: CanonicalToolResult = {
   data: { value: 'result' },
 };
 
-function block(id: string): ToolBlock {
+function block(id: string, status: ToolBlock['status'] = 'complete'): ToolBlock {
   return {
     id,
     toolName: 'lazy_probe',
-    status: 'complete',
+    status,
     partialArgs: '',
     args: '{}',
     agentProjection: '',
@@ -132,6 +132,17 @@ describe('lazy tool disclosure mounting', () => {
     } finally {
       restore();
     }
+  });
+
+  it('nests expanded tool content inside the collapsible region', () => {
+    render(<ToolResultShell block={block('running-shell', 'running')} />);
+
+    fireEvent.click(screen.getByRole('button', { name: /lazy_probe/i }));
+
+    const content = screen.getByTitle('Click to collapse');
+    expect(content.parentElement?.classList.contains('orchid-collapsible-region-inner')).toBe(true);
+    expect(content.parentElement?.parentElement?.classList.contains('orchid-collapsible-region')).toBe(true);
+    expect(content.closest('.orchid-tool-block')?.classList.contains('running')).toBe(true);
   });
 
   it('bounds retained expansion choices', () => {
