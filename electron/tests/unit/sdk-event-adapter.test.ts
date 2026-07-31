@@ -58,6 +58,7 @@ function createAdapter() {
         execution: result as ToolExecutionResult,
       },
     ]),
+    drainEagerStarts: vi.fn(function* () {}),
     drainEvents: vi.fn(function* () {}),
   } as unknown as EagerToolBridge;
   const buildUsage = vi.fn((usage: { inputTokens?: number }, messages: readonly ModelMessage[]): Usage => ({

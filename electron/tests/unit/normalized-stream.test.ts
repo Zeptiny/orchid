@@ -39,6 +39,7 @@ function createBridge() {
     sdkToolResult: vi.fn(),
     sdkToolError: vi.fn(),
     sdkInputError: vi.fn(),
+    drainEagerStarts: vi.fn(function* () {}),
     hasPendingFallbackEvents: false,
     queuePendingToolCall: vi.fn((call) => {
       events.push({ type: 'tool_call', ...call });
@@ -180,6 +181,29 @@ describe('NormalizedStream', () => {
     expect(events).toEqual([
       { type: 'content', text: 'authoritative' },
       { type: 'finish', finishReason: 'stop' },
+    ]);
+  });
+
+  it('keeps an onStepFinish fallback call/result after its matching streamed start', async () => {
+    const { stream } = createNormalizer();
+    await stream.onStepFinish({
+      toolCalls: [{ toolCallId: 'call-1', toolName: 'read', input: { path: '/a' } }],
+      toolResults: [{ toolCallId: 'call-1', output: execution('file') }],
+    });
+
+    const events = await collect(stream, {
+      fullStream: asyncIterable([{ type: 'tool-input-start', toolCallId: 'call-1', toolName: 'read' }]),
+      textStream: asyncIterable([]),
+      finishReason: Promise.resolve('stop'),
+    });
+
+    expect(events.map((event) => event.type)).toEqual([
+      'tool_call_start', 'tool_call', 'tool_result', 'finish',
+    ]);
+    expect(events.slice(0, 3)).toEqual([
+      { type: 'tool_call_start', toolCallId: 'call-1', toolName: 'read' },
+      expect.objectContaining({ type: 'tool_call', toolCallId: 'call-1' }),
+      expect.objectContaining({ type: 'tool_result', toolCallId: 'call-1', content: 'file' }),
     ]);
   });
 

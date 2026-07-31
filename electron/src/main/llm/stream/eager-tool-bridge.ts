@@ -175,13 +175,7 @@ export class EagerToolBridge {
 
   /** Drain eager and step-fallback renderer events in their established order. */
   *drainEvents(): Generator<EagerToolBridgeEvent> {
-    while (this.eagerStarts.length > 0) {
-      const start = this.eagerStarts.shift()!;
-      if (this.seenToolCallIds.has(start.toolCallId)) continue;
-      this.seenToolCallIds.add(start.toolCallId);
-      this.options.markDeliveredOutput();
-      yield { type: 'tool_call', ...start };
-    }
+    yield* this.drainEagerStarts();
     while (this.eagerCompletions.length > 0) {
       const completion = this.eagerCompletions.shift()!;
       const result = this.toResultEvent(completion.toolCallId, completion.execution);
@@ -197,6 +191,17 @@ export class EagerToolBridge {
       const result = this.pendingToolResults.shift()!;
       const event = this.toResultEvent(result.toolCallId, result.execution, false);
       if (event) yield event;
+    }
+  }
+
+  /** Drain only finalized eager starts, preserving an incoming start part's lifecycle. */
+  *drainEagerStarts(): Generator<EagerToolBridgeEvent> {
+    while (this.eagerStarts.length > 0) {
+      const start = this.eagerStarts.shift()!;
+      if (this.seenToolCallIds.has(start.toolCallId)) continue;
+      this.seenToolCallIds.add(start.toolCallId);
+      this.options.markDeliveredOutput();
+      yield { type: 'tool_call', ...start };
     }
   }
 

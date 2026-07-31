@@ -42,6 +42,7 @@ type BridgeActions = Pick<
   | 'sdkToolResult'
   | 'sdkToolError'
   | 'sdkInputError'
+  | 'drainEagerStarts'
   | 'drainEvents'
 >;
 
@@ -111,9 +112,10 @@ export class SdkEventAdapter {
         const toolCallId = streamToolCallId(part);
         const toolName = this.options.resolveToolName(stringField(part.toolName) ?? 'unknown');
         if (toolCallId) this.options.eagerBridge.inputStarted(toolCallId, toolName);
-        // Drain before this new start so a finalized previous input is visible
-        // before a new generating tool takes the streaming UI slot.
-        yield* this.options.eagerBridge.drainEvents();
+        // Only a prior finalized eager start may precede this new generating
+        // state. Fallback calls/results must remain after it so the renderer
+        // cannot observe a completed tool before its streamed start.
+        yield* this.options.eagerBridge.drainEagerStarts();
         if (toolCallId) {
           this.options.attempt.markDeliveredOutput();
           yield { type: 'tool_call_start', toolCallId, toolName };
