@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   applyChatTurnEvent,
   applyChatTurnEvents,
+  reduceChatTurnProjection,
   seedChatTurnProjection,
   type ChatTurnEventAction,
 } from '../../src/shared/chat/turn-projection';
@@ -52,6 +53,26 @@ function identity(sequence: number) {
 }
 
 describe('ChatTurnProjection', () => {
+  it('uses the same reducer vocabulary for a local send start and its first wire event', () => {
+    const started = reduceChatTurnProjection(null, {
+      type: 'begin',
+      sessionId: SESSION_ID,
+      startedAt: STARTED_AT,
+    });
+    const projected = reduceChatTurnProjection(started, {
+      type: 'events',
+      actions: [event({ ...identity(1), type: 'chunk', data: 'first', segmentId: 'text-1' }, TOOL_STARTED_AT)],
+    });
+
+    expect(projected).toMatchObject({
+      sessionId: SESSION_ID,
+      turnId: TURN_ID,
+      status: 'streaming',
+      response: 'first',
+      sequence: 1,
+    });
+  });
+
   it('seeds every live fact from an existing ChatSnapshot without materializing messages', () => {
     const snapshot = liveSnapshot({
       sequence: 41,
@@ -168,6 +189,47 @@ describe('ChatTurnProjection', () => {
       error: 'bad token',
       terminal: { type: 'error', error: 'bad token', title: 'Authentication failed', kind: 'auth' },
     });
+  });
+
+  it('clears an error terminal fact without disturbing completed terminals', () => {
+    const errored = applyChatTurnEvent(
+      seedChatTurnProjection(liveSnapshot()),
+      event({ ...identity(1), type: 'error', error: 'bad token', title: 'Authentication failed' }, TOOL_FINISHED_AT),
+    );
+    const cleared = reduceChatTurnProjection(errored, { type: 'clear_error' });
+    const done = applyChatTurnEvent(
+      seedChatTurnProjection(liveSnapshot()),
+      event({ ...identity(1), type: 'done', response: 'complete' }, TOOL_FINISHED_AT),
+    );
+
+    expect(cleared).toMatchObject({ error: null, terminal: null });
+    expect(reduceChatTurnProjection(done, { type: 'clear_error' })?.terminal).toEqual(done.terminal);
+  });
+
+  it('keeps first-Esc confirmation phase-only but fails active tools on cancellation', () => {
+    const running = applyChatTurnEvent(
+      seedChatTurnProjection(liveSnapshot()),
+      event({ ...identity(1), type: 'tool_call_start', toolCallId: 'tool-1', toolName: 'read' }, TOOL_STARTED_AT),
+    );
+    const confirming = reduceChatTurnProjection(running, {
+      type: 'interrupt',
+      interruptState: 'confirmAgent',
+      occurredAt: TOOL_FINISHED_AT,
+      interrupted: false,
+      failActiveTools: false,
+    });
+    const cancelled = reduceChatTurnProjection(confirming, {
+      type: 'interrupt',
+      interruptState: 'idle',
+      occurredAt: TOOL_FINISHED_AT,
+      interrupted: true,
+      failActiveTools: true,
+    });
+
+    expect(confirming).toMatchObject({ interrupted: false, interruptState: 'confirmAgent' });
+    expect(confirming?.toolCalls[0]?.status).toBe('generating');
+    expect(cancelled).toMatchObject({ interrupted: true, interruptState: 'idle' });
+    expect(cancelled?.toolCalls[0]?.status).toBe('failed');
   });
 
   it('preserves interrupted done facts and final usage', () => {

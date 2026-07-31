@@ -9,7 +9,7 @@
  * - Usage tracking (tokens)
  * - Elapsed time tracking
  */
-import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
+import { useState, useEffect, useCallback, useRef, useMemo, useReducer } from 'react';
 import type { Message, Usage } from '../../shared/types/message';
 import type { ModelSelection } from '../../shared/types/provider';
 import { MessageRole, MessageType } from '../../shared/types/message';
@@ -34,6 +34,13 @@ import {
   sumMessageUsages,
 } from '../../shared/usage';
 import type { CanonicalToolResult } from '../../shared/types/tool-result';
+import {
+  reduceChatTurnProjection,
+  type ChatTurnEventAction,
+  type ChatTurnProjection,
+  type ChatTurnProjectionAction,
+  type ChatTurnToolSnapshot,
+} from '../../shared/chat/turn-projection';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -67,7 +74,7 @@ export interface ToolBlock {
 }
 
 /** Preserve canonical facts while adapting a main-process live snapshot. */
-export function chatToolSnapshotToBlock(tool: ChatToolCallSnapshot): ToolBlock {
+export function chatToolSnapshotToBlock(tool: ChatToolCallSnapshot | ChatTurnToolSnapshot): ToolBlock {
   return {
     id: tool.toolCallId,
     toolName: tool.toolName,
@@ -452,229 +459,135 @@ export function useElapsedSeconds(
 
 // ── Hook ─────────────────────────────────────────────────────────────────────
 
+type ProjectionState = { projection: ChatTurnProjection | null; revision: number };
+type AffinityController = { activeSessionId: string | null; value: ChatEventAffinity };
+type BufferedProjectionEvent = { event: ChatTurnEventAction };
+
+function reduceProjectionState(state: ProjectionState, action: ChatTurnProjectionAction): ProjectionState {
+  const projection = reduceChatTurnProjection(state.projection, action);
+  return projection === state.projection ? state : { projection, revision: state.revision + 1 };
+}
+
 export function useChat(activeSessionId: string | null = null): UseChatReturn {
   const [messages, setMessages] = useState<Message[]>([]);
-  const [status, setStatus] = useState<ChatStatus>('idle');
-  const [streamingContent, setStreamingContent] = useState('');
-  const [streamingThinking, setStreamingThinking] = useState('');
-  const [toolBlocks, setToolBlocks] = useState<ToolBlock[]>([]);
-  const [streamSegments, setStreamSegments] = useState<StreamSegment[]>([]);
-  const [streamRevision, setStreamRevision] = useState(0);
-  const [error, setError] = useState<string | null>(null);
-  // Live stream usage; also rehydrated from the last message with usage
-  // when replacing messages (session switch / load).
-  const [usage, setUsage] = useState<Usage | null>(null);
-  const [currentTurnUsage, setCurrentTurnUsage] = useState<Usage | null>(null);
-  const [streamStartTime, setStreamStartTime] = useState<number | null>(null);
-  const [interruptState, setInterruptState] = useState<InterruptState>('idle');
-  const [interrupted, setInterrupted] = useState(false);
-  const [cwd, setCwd] = useState('');
-  /** Affinity rebound but messages not yet replaced — hold previous UI. */
+  const [projectionState, dispatchProjectionState] = useReducer(reduceProjectionState, { projection: null, revision: 0 });
   const [isSwitchingSession, setIsSwitchingSession] = useState(false);
+  // Temporary until durable message materialization leaves the renderer. It is
+  // the sole synchronous projection used by terminal commit paths.
+  const projectionRef = useRef<ChatTurnProjection | null>(null);
+  const pendingFrameActionsRef = useRef<ChatTurnEventAction[]>([]);
+  const streamFrameIdRef = useRef<number | null>(null);
+  const isSendingRef = useRef(false);
+  const cancelQueueRef = useRef<CancelQueueState>({ inFlight: false, pending: false });
+  const affinityRef = useRef<AffinityController>({
+    activeSessionId,
+    value: { selectedSessionId: activeSessionId, streamSessionId: activeSessionId, streamTurnId: null, lastSequence: -1 },
+  });
+  const hydrationRef = useRef<{ sessionId: string; events: BufferedProjectionEvent[] } | null>(null);
 
-  // Persisted session totals plus the authoritative in-flight turn snapshot.
+  const dispatchProjection = useCallback((action: ChatTurnProjectionAction) => {
+    projectionRef.current = reduceChatTurnProjection(projectionRef.current, action);
+    dispatchProjectionState(action);
+  }, []);
+  const projection = projectionState.projection;
+  const persistedUsage = useMemo(() => latestUsageFromMessages(messages), [messages]);
+  const status: ChatStatus = projection?.status ?? 'idle';
+  const streamingContent = projection?.response ?? '';
+  const streamingThinking = projection?.thinking ?? '';
+  const toolBlocks = useMemo(() => projection?.toolCalls.map(chatToolSnapshotToBlock) ?? [], [projection?.toolCalls]);
+  const streamSegments = projection?.streamSegments ?? [];
+  const usage = projection?.usage ?? persistedUsage;
+  const currentTurnUsage = status === 'streaming' && projection?.usage && hasUsage(projection.usage) ? projection.usage : null;
+  const streamStartTime = status === 'streaming' ? projection?.startedAt ?? null : null;
+  const interruptState: InterruptState = projection?.interruptState ?? 'idle';
+  const interrupted = projection?.interrupted ?? false;
+  const cwd = projection?.cwd ?? '';
+  const error = projection?.terminal?.type === 'error' && projection.terminal.title && !projection.terminal.error.startsWith(projection.terminal.title)
+    ? `${projection.terminal.title}: ${projection.terminal.error}`
+    : projection?.error ?? null;
   const cumulativeUsage = useCumulativeUsage(messages, currentTurnUsage);
 
-  const accumulatedContentRef = useRef('');
-  const accumulatedThinkingRef = useRef('');
-  const usageRef = useRef<Usage | null>(null);
-  const toolBlocksRef = useRef<ToolBlock[]>([]);
-  const streamSegmentsRef = useRef<StreamSegment[]>([]);
-  const pendingContentChunksRef = useRef<string[]>([]);
-  const pendingThinkingChunksRef = useRef<string[]>([]);
-  const pendingStreamDeltasRef = useRef<StreamSegmentDelta[]>([]);
-  /** Tool argument fragments, keyed so interleaved calls retain wire order. */
-  const pendingToolArgsRef = useRef<Map<string, string>>(new Map());
-  const streamFrameIdRef = useRef<number | null>(null);
-  /** Sync guard against double-send before status re-render (P1-35). */
-  const isSendingRef = useRef(false);
-  /**
-   * Serialize staged Esc/cancel so overlapping IPC cannot race phases.
-   * A second Esc while in-flight is staged via `pending` and runs after RTT.
-   */
-  const cancelQueueRef = useRef<CancelQueueState>({ inFlight: false, pending: false });
-  const activeSessionIdRef = useRef<string | null>(activeSessionId);
-  const streamSessionIdRef = useRef<string | null>(activeSessionId);
-  const streamTurnIdRef = useRef<string | null>(null);
-  const lastSequenceRef = useRef(-1);
-  const priorActiveSessionIdRef = useRef<string | null>(activeSessionId);
-  const hydrationRef = useRef<{
-    sessionId: string;
-    events: BufferedHydrationEvent[];
-  } | null>(null);
-
   useEffect(() => {
-    // During gate-until-ready switch, beginSessionSwitch owns affinity.
-    // Do not clobber refs back to the still-painted previous activeSessionId.
     if (isSwitchingSession) return;
-    const switchedSession = priorActiveSessionIdRef.current !== activeSessionId;
-    const streamAlreadyBelongsToSelection =
-      streamSessionIdRef.current === activeSessionId;
-    activeSessionIdRef.current = activeSessionId;
-    streamSessionIdRef.current = activeSessionId;
-    if (switchedSession && !streamAlreadyBelongsToSelection) {
-      streamTurnIdRef.current = null;
-      lastSequenceRef.current = -1;
+    const controller = affinityRef.current;
+    const switched = controller.activeSessionId !== activeSessionId;
+    const belongsToSelection = controller.value.streamSessionId === activeSessionId;
+    controller.activeSessionId = activeSessionId;
+    controller.value.selectedSessionId = activeSessionId;
+    controller.value.streamSessionId = activeSessionId;
+    if (switched && !belongsToSelection) {
+      controller.value.streamTurnId = null;
+      controller.value.lastSequence = -1;
     }
-    priorActiveSessionIdRef.current = activeSessionId;
   }, [activeSessionId, isSwitchingSession]);
 
-  const acceptsEvent = useCallback((event: {
-    sessionId: string;
-    turnId: string;
-    sequence: number;
-  }): boolean => {
-    const affinity: ChatEventAffinity = {
-      selectedSessionId: activeSessionIdRef.current,
-      streamSessionId: streamSessionIdRef.current,
-      streamTurnId: streamTurnIdRef.current,
-      lastSequence: lastSequenceRef.current,
-    };
-    const accepted = acceptChatEvent(affinity, event, isSendingRef.current);
-    streamSessionIdRef.current = affinity.streamSessionId;
-    streamTurnIdRef.current = affinity.streamTurnId;
-    lastSequenceRef.current = affinity.lastSequence;
-    return accepted;
-  }, []);
-
-  const deliverEvent = useCallback((
-    event: { sessionId: string; turnId: string; sequence: number },
-    apply: () => void,
-  ) => {
-    const hydration = hydrationRef.current;
-    if (shouldBufferChatEvent(hydration?.sessionId ?? null, event)) {
-      hydration?.events.push({ event, apply });
-      return;
-    }
-    if (!acceptsEvent(event)) return;
-    apply();
-  }, [acceptsEvent]);
-
-  const flushPendingToolArgs = useCallback((): boolean => {
-    if (pendingToolArgsRef.current.size === 0) return false;
-
-    const pending = pendingToolArgsRef.current;
-    pendingToolArgsRef.current = new Map();
-    toolBlocksRef.current = toolBlocksRef.current.map((block) => {
-      const argsDelta = pending.get(block.id);
-      if (!argsDelta) return block;
-      return {
-        ...block,
-        partialArgs: block.partialArgs + argsDelta,
-        status: block.status !== 'generating' && block.status !== 'running'
-          ? block.status
-          : 'generating',
-      };
-    });
-    return true;
-  }, []);
-
-  const flushPendingStreamData = useCallback(() => {
-    const toolArgsChanged = pendingToolArgsRef.current.size > 0;
-    const hadPendingData =
-      pendingContentChunksRef.current.length > 0 ||
-      pendingThinkingChunksRef.current.length > 0 ||
-      pendingStreamDeltasRef.current.length > 0 ||
-      toolArgsChanged;
-    if (pendingContentChunksRef.current.length > 0) {
-      accumulatedContentRef.current += pendingContentChunksRef.current.join('');
-      pendingContentChunksRef.current = [];
-    }
-    if (pendingThinkingChunksRef.current.length > 0) {
-      accumulatedThinkingRef.current += pendingThinkingChunksRef.current.join('');
-      pendingThinkingChunksRef.current = [];
-    }
-    if (pendingStreamDeltasRef.current.length > 0) {
-      streamSegmentsRef.current = appendStreamSegmentDeltas(
-        streamSegmentsRef.current,
-        pendingStreamDeltasRef.current,
-      );
-      pendingStreamDeltasRef.current = [];
-    }
-    if (toolArgsChanged) flushPendingToolArgs();
-    return { hadPendingData, toolArgsChanged };
-  }, [flushPendingToolArgs]);
-
+  const acceptsEvent = useCallback((event: Pick<ChatTurnEventAction, 'sessionId' | 'turnId' | 'sequence'>) =>
+    acceptChatEvent(affinityRef.current.value, event, isSendingRef.current), []);
   const cancelStreamFrame = useCallback(() => {
     if (streamFrameIdRef.current == null) return;
     window.cancelAnimationFrame(streamFrameIdRef.current);
     streamFrameIdRef.current = null;
   }, []);
-
-  const publishStreamState = useCallback((publishToolBlocks = false) => {
-    if (publishToolBlocks) {
-      setToolBlocks(toolBlocksRef.current);
-    }
-    setStreamingContent(accumulatedContentRef.current);
-    setStreamingThinking(accumulatedThinkingRef.current);
-    setStreamSegments(streamSegmentsRef.current);
-    setStreamRevision((revision) => revision + 1);
-  }, []);
-
-  const publishBufferedStream = useCallback(() => {
-    streamFrameIdRef.current = null;
-    const flushed = flushPendingStreamData();
-    if (flushed.hadPendingData) {
-      publishStreamState(flushed.toolArgsChanged);
-    }
-  }, [flushPendingStreamData, publishStreamState]);
-
+  const flushStreamFrame = useCallback(() => {
+    cancelStreamFrame();
+    const actions = pendingFrameActionsRef.current;
+    pendingFrameActionsRef.current = [];
+    if (actions.length > 0) dispatchProjection({ type: 'events', actions });
+  }, [cancelStreamFrame, dispatchProjection]);
   const scheduleStreamFrame = useCallback(() => {
     if (streamFrameIdRef.current != null) return;
-    streamFrameIdRef.current = window.requestAnimationFrame(publishBufferedStream);
-  }, [publishBufferedStream]);
-
-  const flushStreamFrame = useCallback((publish: boolean) => {
-    cancelStreamFrame();
-    const flushed = flushPendingStreamData();
-    if (publish && flushed.hadPendingData) {
-      publishStreamState(flushed.toolArgsChanged);
-    }
-    return flushed;
-  }, [cancelStreamFrame, flushPendingStreamData, publishStreamState]);
-
+    streamFrameIdRef.current = window.requestAnimationFrame(() => {
+      streamFrameIdRef.current = null;
+      const actions = pendingFrameActionsRef.current;
+      pendingFrameActionsRef.current = [];
+      if (actions.length > 0) dispatchProjection({ type: 'events', actions });
+    });
+  }, [dispatchProjection]);
   const discardStreamFrame = useCallback(() => {
     cancelStreamFrame();
-    pendingContentChunksRef.current = [];
-    pendingThinkingChunksRef.current = [];
-    pendingStreamDeltasRef.current = [];
-    pendingToolArgsRef.current.clear();
+    pendingFrameActionsRef.current = [];
   }, [cancelStreamFrame]);
-
-  /**
-   * Update toolBlocksRef synchronously, then mirror into React state.
-   * onDone commits from the ref; useEffect/setState-updater-only sync races
-   * CHAT_DONE in the same tick as the last tool event (P1-33).
-   */
-  const applyToolBlocks = useCallback(
-    (updater: ToolBlock[] | ((prev: ToolBlock[]) => ToolBlock[])) => {
-      // A lifecycle event may arrive before the scheduled frame. Fold its
-      // buffered args into the synchronous source of truth before committing.
-      flushPendingToolArgs();
-      const prev = toolBlocksRef.current;
-      const next = typeof updater === 'function' ? updater(prev) : updater;
-      toolBlocksRef.current = next;
-      setToolBlocks(next);
-      setStreamRevision((revision) => revision + 1);
-    },
-    [flushPendingToolArgs],
-  );
-
-  /**
-   * Update streamSegmentsRef synchronously, then mirror into React state.
-   * Mirrors applyToolBlocks so onDone never reads a stale segment timeline.
-   */
-  const applyStreamSegments = useCallback(
-    (updater: StreamSegment[] | ((prev: StreamSegment[]) => StreamSegment[])) => {
-      flushStreamFrame(true);
-      const prev = streamSegmentsRef.current;
-      const next = typeof updater === 'function' ? updater(prev) : updater;
-      streamSegmentsRef.current = next;
-      setStreamSegments(next);
-      setStreamRevision((revision) => revision + 1);
-    },
-    [flushStreamFrame],
-  );
+  const commitLiveProjection = useCallback((interruptedTurn: boolean) => {
+    const live = projectionRef.current;
+    if (!live) return;
+    const liveTools = live.toolCalls.map(chatToolSnapshotToBlock);
+    const committed = commitSegmentsToMessages({
+      segments: live.streamSegments,
+      liveTools,
+      fallbackResponse: live.response,
+      interrupted: interruptedTurn,
+      usage: live.usage,
+      thinking: live.thinking || null,
+    });
+    if (committed.length > 0) setMessages((previous) => mergeCommittedMessages(previous, committed, liveTools));
+  }, []);
+  const applyLiveEvent = useCallback((event: ChatTurnEventAction) => {
+    const lifecycle = 'state' in event || event.type === 'tool_call_start' || event.type === 'tool_call_update' || event.type === 'done' || event.type === 'error';
+    if (lifecycle) flushStreamFrame();
+    dispatchProjection({ type: 'events', actions: [event] });
+    if ('state' in event) {
+      if (event.state === 'idle') isSendingRef.current = false;
+      return;
+    }
+    if (event.type === 'done') {
+      commitLiveProjection(Boolean(event.interrupted));
+      dispatchProjection({ type: 'clear_stream', status: 'idle' });
+      isSendingRef.current = false;
+    }
+    if (event.type === 'error') {
+      commitLiveProjection(false);
+      dispatchProjection({ type: 'clear_stream', status: 'idle' });
+      isSendingRef.current = false;
+    }
+  }, [commitLiveProjection, dispatchProjection, flushStreamFrame]);
+  const deliverEvent = useCallback((event: ChatTurnEventAction) => {
+    const hydration = hydrationRef.current;
+    if (shouldBufferChatEvent(hydration?.sessionId ?? null, event)) {
+      hydration?.events.push({ event });
+      return;
+    }
+    if (acceptsEvent(event)) applyLiveEvent(event);
+  }, [acceptsEvent, applyLiveEvent]);
 
   // Subscribe to IPC events
   useEffect(() => {
@@ -683,260 +596,26 @@ export function useChat(activeSessionId: string | null = null): UseChatReturn {
       return;
     }
 
-    const unsubChunk = window.orchid.chat.onChunk((event: ChatChunkEvent) => {
-      deliverEvent(event, () => {
-        pendingContentChunksRef.current.push(event.data);
-        pendingStreamDeltasRef.current.push({
-          kind: 'text',
-          segmentId: event.segmentId,
-          data: event.data,
-        });
-        scheduleStreamFrame();
-      });
-    });
-
-    const unsubThinking =
-      window.orchid.chat.onThinking?.((event: ChatThinkingEvent) => {
-        deliverEvent(event, () => {
-          pendingThinkingChunksRef.current.push(event.data);
-          pendingStreamDeltasRef.current.push({
-            kind: 'thinking',
-            segmentId: event.segmentId,
-            data: event.data,
-          });
-          scheduleStreamFrame();
-        });
-      }) ?? (() => {});
-
-    const unsubState = window.orchid.chat.onState((event: ChatStateEvent) => {
-      deliverEvent(event, () => {
-        if (event.state === 'streaming') {
-          setStatus('streaming');
-        } else if (event.state === 'error') {
-          setStatus('error');
-          setError(event.error);
-        } else if (event.state === 'idle') {
-          setStatus('idle');
-          // Stream finished from main — allow another send
-          isSendingRef.current = false;
-        }
-        // Track interrupt confirmation phase from main process (authoritative for
-        // confirmAgent / confirmSubagents; do not let onDone clobber this).
-        if (event.interruptState) {
-          setInterruptState(event.interruptState);
-        }
-        // Track working directory from main process
-        if (event.cwd) {
-          setCwd(event.cwd);
-        }
-      });
-    });
-
-    const unsubDone = window.orchid.chat.onDone((event: ChatDoneEvent) => {
-      deliverEvent(event, () => {
-      const flushed = flushStreamFrame(false);
-      if (flushed.toolArgsChanged) {
-        setToolBlocks(toolBlocksRef.current);
+    const normalize = <T extends ChatTurnEventAction>(event: Omit<T, 'occurredAt'>): T => ({ ...event, occurredAt: new Date().toISOString() } as T);
+    const queueFrameEvent = (event: ChatTurnEventAction) => {
+      const hydration = hydrationRef.current;
+      if (shouldBufferChatEvent(hydration?.sessionId ?? null, event)) {
+        hydration?.events.push({ event });
+        return;
       }
-      if (event.usage) {
-        setUsage(event.usage);
-        usageRef.current = event.usage;
-      }
-      setCurrentTurnUsage(null);
-
-      // toolBlocksRef / streamSegmentsRef are updated synchronously with state
-      // so a CHAT_DONE right after the last tool event still sees final tools.
-      const liveTools = toolBlocksRef.current;
-      const segments = streamSegmentsRef.current;
-      const usageForCommit = event.usage ?? usageRef.current;
-
-      // Build commit messages in chronological segment order (tool → text → …).
-      // Fall back to tools-then-response only when no segments were recorded.
-      const committed = commitSegmentsToMessages({
-        segments,
-        liveTools,
-        fallbackResponse: event.response ?? accumulatedContentRef.current,
-        interrupted: Boolean(event.interrupted),
-        usage: usageForCommit,
-        thinking: accumulatedThinkingRef.current || null,
-      });
-
-      if (committed.length > 0) {
-        setMessages((prev) => {
-          const liveIds = new Set(liveTools.map((b) => b.id));
-          // Drop any in-flight tool msgs already present (reload / double-done races)
-          const next = prev.filter(
-            (m) =>
-              !(
-                (m.type === MessageType.TOOL_CALL || m.type === MessageType.TOOL_RESULT) &&
-                m.tool_call_id &&
-                liveIds.has(m.tool_call_id)
-              ),
-          );
-
-          // Avoid double-append of identical trailing assistant text
-          const lastCommitted = committed[committed.length - 1];
-          const lastPrev = next[next.length - 1];
-          if (
-            lastCommitted &&
-            lastPrev &&
-            lastCommitted.role === MessageRole.ASSISTANT &&
-            lastPrev.role === MessageRole.ASSISTANT &&
-            lastCommitted.type === MessageType.TEXT &&
-            lastPrev.type === MessageType.TEXT &&
-            lastCommitted.content === lastPrev.content
-          ) {
-            const withoutDupAssistant = committed.slice(0, -1);
-            if (withoutDupAssistant.length === 0) return next;
-            return [...next, ...withoutDupAssistant];
-          }
-
-          return [...next, ...committed];
-        });
-      }
-
-      if (event.interrupted) {
-        setInterrupted(true);
-      }
-
-      setStreamingContent('');
-      setStreamingThinking('');
-      applyStreamSegments([]);
-      // Keep toolBlocks until next send so the last turn still renders them live;
-      // messages now also contain them for multi-turn history.
-      accumulatedContentRef.current = '';
-      accumulatedThinkingRef.current = '';
-      // P1-34: second Esc sends CHAT_DONE then CHAT_STATE(confirmSubagents).
-      // Never force interruptState idle on interrupted done — onState owns it.
-      if (!event.interrupted) {
-        setInterruptState('idle');
-      }
-      isSendingRef.current = false;
-      setStatus('idle');
-      });
-    });
-
-    const unsubError = window.orchid.chat.onError((event: ChatErrorEvent) => {
-      deliverEvent(event, () => {
-      const flushed = flushStreamFrame(false);
-      if (flushed.toolArgsChanged) {
-        setToolBlocks(toolBlocksRef.current);
-      }
-      // Prefer title + detail for banner classification when available
-      const display =
-        event.title && event.error && !event.error.startsWith(event.title)
-          ? `${event.title}: ${event.error}`
-          : event.error;
-      setError(display);
-
-      // Commit live tools/segments into flat messages so multi-chain UI length
-      // stays aligned with session chain.messages after FAILED persist.
-      const liveTools = toolBlocksRef.current;
-      const usageForCommit = usageRef.current;
-      const committed = commitSegmentsToMessages({
-        segments: streamSegmentsRef.current,
-        liveTools,
-        fallbackResponse: accumulatedContentRef.current,
-        interrupted: false,
-        usage: usageForCommit,
-        thinking: accumulatedThinkingRef.current || null,
-      });
-      if (committed.length > 0) {
-        setMessages((prev) => {
-          const liveIds = new Set(liveTools.map((b) => b.id));
-          const next = prev.filter(
-            (m) =>
-              !(
-                (m.type === MessageType.TOOL_CALL || m.type === MessageType.TOOL_RESULT) &&
-                m.tool_call_id &&
-                liveIds.has(m.tool_call_id)
-              ),
-          );
-          return [...next, ...committed];
-        });
-      }
-
-      setStatus('idle');
-      isSendingRef.current = false;
-      setCurrentTurnUsage(null);
-      setStreamingContent('');
-      setStreamingThinking('');
-      applyStreamSegments([]);
-      setInterruptState('idle');
-      accumulatedContentRef.current = '';
-      accumulatedThinkingRef.current = '';
-      });
-    });
-
-    const unsubUsage = window.orchid.chat.onUsage((event: ChatUsageEvent) => {
-      deliverEvent(event, () => {
-        setUsage(event.usage);
-        usageRef.current = event.usage;
-        setCurrentTurnUsage(event.usage);
-      });
-    });
-
-    const unsubToolStart = window.orchid.chat.onToolCallStart?.((event: ChatToolCallStartEvent) => {
-      deliverEvent(event, () => {
-      applyToolBlocks((prev) => upsertToolBlock(prev, {
-        id: event.toolCallId,
-        toolName: event.toolName,
-        status: 'generating',
-        partialArgs: '',
-        args: '',
-        agentProjection: null,
-        toolResult: null,
-        startedAt: new Date().toISOString(),
-        finishedAt: null,
-      }));
-      // Record tool position in the chronological segment timeline.
-      applyStreamSegments((prev) => {
-        if (prev.some((s) => s.kind === 'tool' && s.toolCallId === event.toolCallId)) {
-          return prev;
-        }
-        return [
-          ...prev,
-          { kind: 'tool', toolCallId: event.toolCallId },
-        ];
-      });
-      });
-    }) ?? (() => {});
-
-    const unsubToolDelta = window.orchid.chat.onToolCallDelta?.((event: ChatToolCallDeltaEvent) => {
-      deliverEvent(event, () => {
-      const previous = pendingToolArgsRef.current.get(event.toolCallId) ?? '';
-      pendingToolArgsRef.current.set(event.toolCallId, previous + event.argsDelta);
+      if (!acceptsEvent(event)) return;
+      pendingFrameActionsRef.current.push(event);
       scheduleStreamFrame();
-      });
-    }) ?? (() => {});
-
-    const unsubToolUpdate = window.orchid.chat.onToolCallUpdate?.((event: ChatToolCallUpdateEvent) => {
-      deliverEvent(event, () => {
-      applyToolBlocks((prev) => upsertToolBlock(prev, {
-        id: event.toolCallId,
-        toolName: event.toolName ?? 'unknown',
-        status: event.status === 'running'
-          ? 'running'
-          : event.status,
-        partialArgs: '',
-        args: event.args ?? '',
-        agentProjection: event.content ?? null,
-        toolResult: event.toolResult ?? null,
-        startedAt: new Date().toISOString(),
-        finishedAt: event.status === 'running' ? null : new Date().toISOString(),
-      }, true));
-      // Ensure tools that skip start events still appear in order.
-      applyStreamSegments((prev) => {
-        if (prev.some((s) => s.kind === 'tool' && s.toolCallId === event.toolCallId)) {
-          return prev;
-        }
-        return [
-          ...prev,
-          { kind: 'tool', toolCallId: event.toolCallId },
-        ];
-      });
-      });
-    }) ?? (() => {});
+    };
+    const unsubChunk = window.orchid.chat.onChunk((event: ChatChunkEvent) => queueFrameEvent(normalize(event)));
+    const unsubThinking = window.orchid.chat.onThinking?.((event: ChatThinkingEvent) => queueFrameEvent(normalize(event))) ?? (() => {});
+    const unsubState = window.orchid.chat.onState((event: ChatStateEvent) => deliverEvent(normalize(event)));
+    const unsubDone = window.orchid.chat.onDone((event: ChatDoneEvent) => deliverEvent(normalize(event)));
+    const unsubError = window.orchid.chat.onError((event: ChatErrorEvent) => deliverEvent(normalize(event)));
+    const unsubUsage = window.orchid.chat.onUsage((event: ChatUsageEvent) => deliverEvent(normalize(event)));
+    const unsubToolStart = window.orchid.chat.onToolCallStart?.((event: ChatToolCallStartEvent) => deliverEvent(normalize(event))) ?? (() => {});
+    const unsubToolDelta = window.orchid.chat.onToolCallDelta?.((event: ChatToolCallDeltaEvent) => queueFrameEvent(normalize(event))) ?? (() => {});
+    const unsubToolUpdate = window.orchid.chat.onToolCallUpdate?.((event: ChatToolCallUpdateEvent) => deliverEvent(normalize(event))) ?? (() => {});
 
     return () => {
       cancelStreamFrame();
@@ -951,11 +630,9 @@ export function useChat(activeSessionId: string | null = null): UseChatReturn {
       unsubToolUpdate();
     };
   }, [
-    applyToolBlocks,
-    applyStreamSegments,
     cancelStreamFrame,
     deliverEvent,
-    flushStreamFrame,
+    acceptsEvent,
     scheduleStreamFrame,
   ]);
 
@@ -966,14 +643,15 @@ export function useChat(activeSessionId: string | null = null): UseChatReturn {
       // Affinity already rebound but UI still shows previous session — do not send.
       if (isSwitchingSession) return;
       if (!window.orchid?.chat) {
-        setError('Chat IPC not available');
+        dispatchProjection({ type: 'local_error', error: 'Chat IPC not available', status: 'error' });
         return;
       }
 
       isSendingRef.current = true;
-      streamSessionIdRef.current = options?.sessionId ?? activeSessionIdRef.current;
-      streamTurnIdRef.current = null;
-      lastSequenceRef.current = -1;
+      const affinity = affinityRef.current.value;
+      affinity.streamSessionId = options?.sessionId ?? affinity.selectedSessionId;
+      affinity.streamTurnId = null;
+      affinity.lastSequence = -1;
 
       const trimmed = message.trim();
       const userMessage: Message = {
@@ -1006,21 +684,7 @@ export function useChat(activeSessionId: string | null = null): UseChatReturn {
         return [...prev, userMessage];
       });
       discardStreamFrame();
-      setError(null);
-      setStreamingContent('');
-      setStreamingThinking('');
-      applyToolBlocks([]);
-      applyStreamSegments([]);
-      setInterrupted(false);
-      // Keep the last completed snapshot visible while this turn streams, but
-      // do not let it attach to the new assistant message if no usage arrives.
-      usageRef.current = null;
-      setCurrentTurnUsage(null);
-      setStreamStartTime(Date.now());
-      setInterruptState('idle');
-      accumulatedContentRef.current = '';
-      accumulatedThinkingRef.current = '';
-      setStatus('streaming');
+      dispatchProjection({ type: 'begin', sessionId: affinity.streamSessionId ?? '', startedAt: Date.now() });
 
       try {
         const result = await window.orchid.chat.send({
@@ -1033,24 +697,17 @@ export function useChat(activeSessionId: string | null = null): UseChatReturn {
         });
         // Structured gate failures (e.g. unbound workspace) — no stream starts.
         if (result.status === 'error') {
-          const residual = residualStateAfterSendFailure();
-          isSendingRef.current = residual.isSending;
-          setError(
-            result.error ||
-              (result.kind === 'unbound_workspace'
-                ? 'No project folder selected. Choose a folder before sending a message.'
-                : 'Failed to send message'),
-          );
-          setStatus(residual.status);
+          isSendingRef.current = false;
+          dispatchProjection({ type: 'clear_stream', status: 'error' });
+          dispatchProjection({
+            type: 'local_error',
+            error: result.error || (result.kind === 'unbound_workspace'
+              ? 'No project folder selected. Choose a folder before sending a message.'
+              : 'Failed to send message'),
+            status: 'error',
+          });
           // Drop the optimistic user bubble when send never started.
           setMessages((prev) => dropOptimisticUserMessageIfLast(prev, userMessage.id));
-          setStreamStartTime(residual.streamStartTime);
-          setStreamingContent(residual.streamingContent);
-          setStreamingThinking(residual.streamingThinking);
-          applyToolBlocks([]);
-          applyStreamSegments([]);
-          accumulatedContentRef.current = residual.accumulatedContent;
-          accumulatedThinkingRef.current = residual.accumulatedThinking;
           return;
         }
 
@@ -1058,40 +715,31 @@ export function useChat(activeSessionId: string | null = null): UseChatReturn {
         // session (or still in draft). Navigation mid-send must not retarget
         // stream filters to the previous session.
         const stillViewingSendTarget =
-          !activeSessionIdRef.current ||
-          activeSessionIdRef.current === result.sessionId ||
-          streamSessionIdRef.current === result.sessionId;
+          !affinity.selectedSessionId ||
+          affinity.selectedSessionId === result.sessionId ||
+          affinity.streamSessionId === result.sessionId;
         if (stillViewingSendTarget) {
-          streamSessionIdRef.current = result.sessionId;
+          affinity.streamSessionId = result.sessionId;
           // Preserve any already-observed sequence for this same turn. Main
           // may emit its first state event before the invoke promise resolves.
-          if (streamTurnIdRef.current !== result.turnId) {
-            streamTurnIdRef.current = result.turnId;
-            lastSequenceRef.current = -1;
+          if (affinity.streamTurnId !== result.turnId) {
+            affinity.streamTurnId = result.turnId;
+            affinity.lastSequence = -1;
           }
         }
       } catch (err) {
         // Drop the optimistic user bubble when send never started (throw path).
-        const residual = residualStateAfterSendFailure();
-        isSendingRef.current = residual.isSending;
-        setError(err instanceof Error ? err.message : String(err));
-        setStatus(residual.status);
+        isSendingRef.current = false;
+        dispatchProjection({ type: 'clear_stream', status: 'error' });
+        dispatchProjection({ type: 'local_error', error: err instanceof Error ? err.message : String(err), status: 'error' });
         setMessages((prev) => dropOptimisticUserMessageIfLast(prev, userMessage.id));
-        setStreamStartTime(residual.streamStartTime);
-        setStreamingContent(residual.streamingContent);
-        setStreamingThinking(residual.streamingThinking);
-        applyToolBlocks([]);
-        applyStreamSegments([]);
-        accumulatedContentRef.current = residual.accumulatedContent;
-        accumulatedThinkingRef.current = residual.accumulatedThinking;
       }
     },
     [
       status,
       error,
       isSwitchingSession,
-      applyToolBlocks,
-      applyStreamSegments,
+      dispatchProjection,
       discardStreamFrame,
     ],
   );
@@ -1111,7 +759,8 @@ export function useChat(activeSessionId: string | null = null): UseChatReturn {
       let runCancelPhase = true;
       while (runCancelPhase) {
         try {
-          const sessionId = activeSessionIdRef.current ?? streamSessionIdRef.current;
+          const affinity = affinityRef.current.value;
+          const sessionId = affinity.selectedSessionId ?? affinity.streamSessionId;
           const result = await window.orchid.chat.cancel(
             sessionId ? { sessionId } : undefined,
           );
@@ -1119,7 +768,13 @@ export function useChat(activeSessionId: string | null = null): UseChatReturn {
 
           // First Esc only shows confirmAgent hint
           if (status === 'confirming') {
-            setInterruptState('confirmAgent');
+            dispatchProjection({
+              type: 'interrupt',
+              interruptState: 'confirmAgent',
+              occurredAt: new Date().toISOString(),
+              interrupted: false,
+              failActiveTools: false,
+            });
           } else if (status === 'confirming_subagents') {
             // Second Esc cancels the agent. Main process emits CHAT_DONE with
             // interrupted=true (partial content, no suffix). Stay in subagent phase
@@ -1127,43 +782,28 @@ export function useChat(activeSessionId: string | null = null): UseChatReturn {
             // Don't set status='idle' here — let onDone handle finalization to
             // avoid double-committing segments. interruptState is confirmSubagents
             // here and from onState; onDone must not reset it to idle (P1-34).
-            setInterruptState('confirmSubagents');
-            setInterrupted(true);
-            applyToolBlocks((prev) =>
-              prev.map((block) =>
-                block.status === 'generating' || block.status === 'running'
-                  ? {
-                      ...block,
-                      status: 'failed' as const,
-                      error: 'Interrupted by user',
-                      finishedAt: new Date().toISOString(),
-                    }
-                  : block,
-              ),
-            );
+            flushStreamFrame();
+            dispatchProjection({
+              type: 'interrupt',
+              interruptState: 'confirmSubagents',
+              occurredAt: new Date().toISOString(),
+              interrupted: true,
+              failActiveTools: true,
+            });
           } else if (status === 'cancelled') {
             // Third Esc (or full cancel with no subagents)
-            setInterruptState('idle');
-            setInterrupted(true);
             isSendingRef.current = false;
-            applyToolBlocks((prev) =>
-              prev.map((block) =>
-                block.status === 'generating' || block.status === 'running'
-                  ? {
-                      ...block,
-                      status: 'failed' as const,
-                      error: 'Interrupted by user',
-                      finishedAt: new Date().toISOString(),
-                    }
-                  : block,
-              ),
-            );
-            discardStreamFrame();
-            setStreamingContent('');
-            setStreamingThinking('');
-            accumulatedContentRef.current = '';
-            accumulatedThinkingRef.current = '';
-            setStatus('idle');
+            // Keep same-tick tool argument deltas before marking their tools terminal.
+            flushStreamFrame();
+            dispatchProjection({
+              type: 'interrupt',
+              interruptState: 'idle',
+              status: 'idle',
+              occurredAt: new Date().toISOString(),
+              interrupted: true,
+              failActiveTools: true,
+            });
+            dispatchProjection({ type: 'clear_stream', status: 'idle' });
           }
         } catch {
           // Ignore cancel errors — still release / drain the queue below.
@@ -1175,7 +815,7 @@ export function useChat(activeSessionId: string | null = null): UseChatReturn {
       // Unexpected throw outside the per-IPC try — never leave the mutex stuck.
       resetCancelQueue(cancelQueueRef.current);
     }
-  }, [applyToolBlocks, discardStreamFrame, isSwitchingSession]);
+  }, [dispatchProjection, flushStreamFrame, isSwitchingSession]);
 
   const stop = useCallback(async (sessionId: string) => {
     if (!window.orchid?.chat?.stop) return;
@@ -1196,42 +836,19 @@ export function useChat(activeSessionId: string | null = null): UseChatReturn {
   const replaceMessages = useCallback((next: Message[]) => {
     discardStreamFrame();
     setMessages(next);
-    applyToolBlocks([]);
-    applyStreamSegments([]);
-    setStreamingContent('');
-    setStreamingThinking('');
-    setError(null);
-    setInterrupted(false);
-    setInterruptState('idle');
+    dispatchProjection({ type: 'reset' });
     isSendingRef.current = false;
     resetCancelQueue(cancelQueueRef.current);
-    setStatus('idle');
-    // Rehydrate last-turn context usage from persisted messages; empty/new
-    // sessions correctly get null → 0% context until the next stream.
-    const restored = latestUsageFromMessages(next);
-    setUsage(restored);
-    usageRef.current = restored;
-    setCurrentTurnUsage(null);
-    setStreamStartTime(null);
-    accumulatedContentRef.current = '';
-    accumulatedThinkingRef.current = '';
-    streamTurnIdRef.current = null;
-    lastSequenceRef.current = -1;
+    affinityRef.current.value.streamTurnId = null;
+    affinityRef.current.value.lastSequence = -1;
     setIsSwitchingSession(false);
-  }, [applyToolBlocks, applyStreamSegments, discardStreamFrame]);
+  }, [discardStreamFrame, dispatchProjection]);
 
   const beginSessionSwitch = useCallback((sessionId: string | null) => {
-    const affinity: ChatEventAffinity = {
-      selectedSessionId: activeSessionIdRef.current,
-      streamSessionId: streamSessionIdRef.current,
-      streamTurnId: streamTurnIdRef.current,
-      lastSequence: lastSequenceRef.current,
-    };
+    const controller = affinityRef.current;
+    const affinity = controller.value;
     bindChatSession(affinity, sessionId);
-    activeSessionIdRef.current = affinity.selectedSessionId;
-    streamSessionIdRef.current = affinity.streamSessionId;
-    streamTurnIdRef.current = affinity.streamTurnId;
-    lastSequenceRef.current = affinity.lastSequence;
+    controller.activeSessionId = sessionId;
     hydrationRef.current = sessionId ? { sessionId, events: [] } : null;
     // Do not clear messages/tools/usage here — keep painting the previous
     // session until hydrate/replaceMessages commits the next view in one shot.
@@ -1251,24 +868,11 @@ export function useChat(activeSessionId: string | null = null): UseChatReturn {
     }
   }, []);
 
-  const replayHydrationBuffer = useCallback((
-    buffered: BufferedHydrationEvent[],
-    seedLive: Pick<ChatSnapshot, 'sessionId' | 'turnId' | 'sequence'> | null,
-  ) => {
-    const affinity: ChatEventAffinity = {
-      selectedSessionId: activeSessionIdRef.current,
-      streamSessionId: streamSessionIdRef.current,
-      streamTurnId: streamTurnIdRef.current,
-      lastSequence: lastSequenceRef.current,
-    };
-    if (seedLive) {
-      seedAffinityFromLive(affinity, seedLive);
+  const replayHydrationBuffer = useCallback((buffered: BufferedProjectionEvent[]) => {
+    for (const { event } of buffered) {
+      if (acceptsEvent(event)) applyLiveEvent(event);
     }
-    drainBufferedHydrationEvents(affinity, buffered, isSendingRef.current);
-    streamSessionIdRef.current = affinity.streamSessionId;
-    streamTurnIdRef.current = affinity.streamTurnId;
-    lastSequenceRef.current = affinity.lastSequence;
-  }, []);
+  }, [acceptsEvent, applyLiveEvent]);
 
   const hydrateSnapshot = useCallback((snapshot: ChatSessionSnapshot | null) => {
     const hydration = hydrationRef.current;
@@ -1278,10 +882,10 @@ export function useChat(activeSessionId: string | null = null): UseChatReturn {
       // target-session events observed during the request advance the view —
       // still sequence-affinity gated so a previous generation cannot land.
       setIsSwitchingSession(false);
-      replayHydrationBuffer(hydration?.events ?? [], null);
+      replayHydrationBuffer(hydration?.events ?? []);
       return;
     }
-    if (snapshot.sessionId !== activeSessionIdRef.current) {
+    if (snapshot.sessionId !== affinityRef.current.value.selectedSessionId) {
       // Affinity moved again; drop buffer without stranding the switch flag.
       hydrationRef.current = null;
       setIsSwitchingSession(false);
@@ -1297,44 +901,22 @@ export function useChat(activeSessionId: string | null = null): UseChatReturn {
       // No live actor: history is the base. Drain only events that pass
       // sequence affinity for the selected session so stale turn/sequence
       // leftovers from a prior generation are discarded (not blindly applied).
-      replayHydrationBuffer(bufferedEvents, null);
+      replayHydrationBuffer(bufferedEvents);
       return;
     }
 
-    streamSessionIdRef.current = live.sessionId;
-    streamTurnIdRef.current = live.turnId;
-    lastSequenceRef.current = live.sequence;
-    const liveTools: ToolBlock[] = live.toolCalls.map(chatToolSnapshotToBlock);
-    applyToolBlocks(liveTools);
-    applyStreamSegments(live.streamSegments.map((segment) => ({ ...segment })));
-    accumulatedContentRef.current = live.response;
-    accumulatedThinkingRef.current = live.thinking;
-    setStreamingContent(live.response);
-    setStreamingThinking(live.thinking);
-    const hydratedUsage = resolveHydratedUsage(snapshot.messages, live.usage);
-    setUsage(hydratedUsage);
-    usageRef.current = hydratedUsage;
-    setCurrentTurnUsage(
-      live.state === 'streaming' && live.usage && hasUsage(live.usage)
-        ? live.usage
-        : null,
-    );
-    setError(live.error);
-    setInterruptState(live.interruptState);
-    setInterrupted(live.interrupted);
-    setCwd(live.cwd ?? '');
+    seedAffinityFromLive(affinityRef.current.value, live);
+    dispatchProjection({ type: 'seed', snapshot: live });
     const isLive = live.state === 'streaming';
     isSendingRef.current = isLive;
-    setStatus(live.state);
-    setStreamStartTime(isLive ? live.startedAt ?? Date.now() : null);
 
     // Snapshot is the sequence high-water mark; drain only newer events.
-    replayHydrationBuffer(bufferedEvents, live);
-  }, [applyToolBlocks, applyStreamSegments, replaceMessages, replayHydrationBuffer]);
+    replayHydrationBuffer(bufferedEvents);
+  }, [dispatchProjection, replaceMessages, replayHydrationBuffer]);
 
   const clearError = useCallback(() => {
-    setError(null);
-  }, []);
+    dispatchProjection({ type: 'clear_error' });
+  }, [dispatchProjection]);
 
   return {
     messages,
@@ -1343,7 +925,7 @@ export function useChat(activeSessionId: string | null = null): UseChatReturn {
     streamingThinking,
     toolBlocks,
     streamSegments,
-    streamRevision,
+    streamRevision: projectionState.revision,
     error,
     usage,
     currentTurnUsage,
@@ -1484,6 +1066,33 @@ export function commitSegmentsToMessages(opts: {
   return out;
 }
 
+/** Keep renderer-only terminal materialization stable until main owns it. */
+function mergeCommittedMessages(
+  previous: Message[],
+  committed: Message[],
+  liveTools: readonly ToolBlock[],
+): Message[] {
+  const liveIds = new Set(liveTools.map((block) => block.id));
+  const next = previous.filter((message) => !(
+    (message.type === MessageType.TOOL_CALL || message.type === MessageType.TOOL_RESULT) &&
+    message.tool_call_id &&
+    liveIds.has(message.tool_call_id)
+  ));
+  const lastCommitted = committed[committed.length - 1];
+  const lastPrevious = next[next.length - 1];
+  if (
+    lastCommitted?.role === MessageRole.ASSISTANT &&
+    lastCommitted.type === MessageType.TEXT &&
+    lastPrevious?.role === MessageRole.ASSISTANT &&
+    lastPrevious.type === MessageType.TEXT &&
+    lastPrevious.content === lastCommitted.content
+  ) {
+    const withoutDuplicate = committed.slice(0, -1);
+    return withoutDuplicate.length === 0 ? next : [...next, ...withoutDuplicate];
+  }
+  return [...next, ...committed];
+}
+
 /** Convert a live ToolBlock into persisted tool_call + tool_result messages. */
 function toolBlockToMessages(block: ToolBlock): Message[] {
   const callId = block.id;
@@ -1527,25 +1136,4 @@ function toolBlockToMessages(block: ToolBlock): Message[] {
   };
 
   return [call, result];
-}
-
-function upsertToolBlock(blocks: ToolBlock[], next: ToolBlock, merge = false): ToolBlock[] {
-  const existing = blocks.find((block) => block.id === next.id);
-  if (!existing) return [...blocks, next];
-
-  return blocks.map((block) => {
-    if (block.id !== next.id) return block;
-    return merge
-      ? {
-          ...block,
-          toolName: next.toolName === 'unknown' ? block.toolName : next.toolName,
-          status: next.status,
-          partialArgs: next.partialArgs || block.partialArgs,
-          args: next.args || block.args || block.partialArgs,
-          agentProjection: next.agentProjection ?? block.agentProjection,
-          toolResult: next.toolResult ?? block.toolResult,
-          finishedAt: next.finishedAt ?? block.finishedAt,
-        }
-      : { ...block, ...next };
-  });
 }

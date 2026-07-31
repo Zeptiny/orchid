@@ -16,6 +16,7 @@ let onToolDelta: Listener<ChatToolCallDeltaEvent> = null;
 let onToolUpdate: Listener<ChatToolCallUpdateEvent> = null;
 let onDone: Listener<ChatDoneEvent> = null;
 let frameCallback: FrameRequestCallback | null = null;
+let cancelStatus = 'cancelled';
 
 function eventIdentity(sequence: number) {
   return { sessionId: 'session-1', turnId: 'turn-1', sequence };
@@ -27,6 +28,7 @@ beforeEach(() => {
   onToolUpdate = null;
   onDone = null;
   frameCallback = null;
+  cancelStatus = 'cancelled';
   vi.stubGlobal('requestAnimationFrame', vi.fn((callback: FrameRequestCallback) => {
     frameCallback = callback;
     return 1;
@@ -55,7 +57,7 @@ beforeEach(() => {
         onToolUpdate = callback;
         return () => {};
       }),
-      cancel: vi.fn(async () => ({ status: 'cancelled' })),
+      cancel: vi.fn(async () => ({ status: cancelStatus })),
     },
   } as never;
 });
@@ -193,5 +195,30 @@ describe('useChat tool argument streaming', () => {
       partialArgs: '{"path":"/cancelled"}',
       status: 'failed',
     });
+  });
+
+  it('keeps first-Esc confirmation phase-only until cancellation actually begins', async () => {
+    const { result } = renderHook(() => useChat('session-1'));
+    act(() => {
+      onToolStart?.({
+        ...eventIdentity(1),
+        type: 'tool_call_start',
+        toolCallId: 'tool-1',
+        toolName: 'write',
+      });
+    });
+
+    cancelStatus = 'confirming';
+    await act(async () => result.current.cancel());
+
+    expect(result.current.interruptState).toBe('confirmAgent');
+    expect(result.current.interrupted).toBe(false);
+    expect(result.current.toolBlocks[0]?.status).toBe('generating');
+
+    cancelStatus = 'cancelled';
+    await act(async () => result.current.cancel());
+
+    expect(result.current.interrupted).toBe(true);
+    expect(result.current.toolBlocks[0]?.status).toBe('failed');
   });
 });

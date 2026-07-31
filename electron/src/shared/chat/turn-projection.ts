@@ -56,6 +56,11 @@ export type ChatTurnTerminalFact =
     kind?: ChatErrorEvent['kind'];
   };
 
+/** Renderer-neutral live extension: locally cancelled tools may be `failed`. */
+export type ChatTurnToolSnapshot = Omit<ChatToolCallSnapshot, 'status'> & {
+  status: ChatToolCallSnapshot['status'] | 'failed';
+};
+
 export interface ChatTurnProjection {
   sessionId: string;
   turnId: string;
@@ -66,7 +71,7 @@ export interface ChatTurnProjection {
   response: string;
   thinking: string;
   streamSegments: ChatStreamSegmentSnapshot[];
-  toolCalls: ChatToolCallSnapshot[];
+  toolCalls: ChatTurnToolSnapshot[];
   usage: Usage | null;
   error: string | null;
   interruptState: ChatSnapshot['interruptState'];
@@ -75,6 +80,112 @@ export interface ChatTurnProjection {
   interrupted: boolean;
   /** Terminal facts are retained independently of later state notifications. */
   terminal: ChatTurnTerminalFact | null;
+}
+
+/**
+ * The reducer vocabulary is deliberately free of renderer concerns. Consumers
+ * can seed from a snapshot, fold one batch of normalized transport events, or
+ * perform the small lifecycle transitions that exist before/after a turn has
+ * a server-assigned identity.
+ */
+export type ChatTurnProjectionAction =
+  | { type: 'seed'; snapshot: ChatSnapshot }
+  | { type: 'begin'; sessionId: string; startedAt: number }
+  | { type: 'events'; actions: readonly ChatTurnEventAction[] }
+  | { type: 'clear_stream'; status?: ChatSnapshotState }
+  | { type: 'clear_error' }
+  | { type: 'local_error'; error: string; status?: ChatSnapshotState }
+  | {
+    type: 'interrupt';
+    interruptState: ChatSnapshot['interruptState'];
+    status?: ChatSnapshotState;
+    occurredAt: string;
+    /** First Esc is phase-only; later phases explicitly mark interruption. */
+    interrupted: boolean;
+    /** Only cancellation phases may fail currently-running tool projections. */
+    failActiveTools: boolean;
+  }
+  | { type: 'reset' };
+
+/** Empty local projection while a send awaits its server-assigned turn id. */
+export function beginChatTurnProjection(sessionId: string, startedAt: number | null): ChatTurnProjection {
+  return {
+    sessionId,
+    turnId: '',
+    sequence: -1,
+    status: 'streaming',
+    response: '',
+    thinking: '',
+    streamSegments: [],
+    toolCalls: [],
+    usage: null,
+    error: null,
+    interruptState: 'idle',
+    cwd: null,
+    startedAt,
+    interrupted: false,
+    terminal: null,
+  };
+}
+
+/** Reduce the shared turn vocabulary, without ever materializing Message[]. */
+export function reduceChatTurnProjection(
+  projection: ChatTurnProjection | null,
+  action: ChatTurnProjectionAction,
+): ChatTurnProjection | null {
+  switch (action.type) {
+    case 'seed':
+      return seedChatTurnProjection(action.snapshot);
+    case 'begin':
+      return beginChatTurnProjection(action.sessionId, action.startedAt);
+    case 'reset':
+      return null;
+    case 'events': {
+      if (action.actions.length === 0) return projection;
+      const first = action.actions[0]!;
+      const base = projection ?? beginChatTurnProjection(first.sessionId, null);
+      return applyChatTurnEvents(base, action.actions);
+    }
+    case 'clear_stream':
+      if (!projection) return projection;
+      return {
+        ...projection,
+        status: action.status ?? projection.status,
+        response: '',
+        thinking: '',
+        streamSegments: [],
+        startedAt: null,
+      };
+    case 'clear_error':
+      return projection
+        ? {
+          ...projection,
+          error: null,
+          terminal: projection.terminal?.type === 'error' ? null : projection.terminal,
+        }
+        : projection;
+    case 'local_error':
+      return projection
+        ? { ...projection, ...(action.status === undefined ? {} : { status: action.status }), error: action.error }
+        : {
+          ...beginChatTurnProjection('', null),
+          ...(action.status === undefined ? {} : { status: action.status }),
+          error: action.error,
+        };
+    case 'interrupt':
+      if (!projection) return projection;
+      return {
+        ...projection,
+        ...(action.status === undefined ? {} : { status: action.status }),
+        interrupted: action.interrupted,
+        interruptState: action.interruptState,
+        toolCalls: projection.toolCalls.map((tool) =>
+          action.failActiveTools && (tool.status === 'generating' || tool.status === 'running')
+            ? { ...tool, status: 'failed', finishedAt: tool.finishedAt ?? action.occurredAt }
+            : tool,
+        ),
+      };
+  }
 }
 
 /** Copy a main-process live snapshot exactly into the renderer-neutral shape. */
@@ -118,14 +229,19 @@ export function applyChatTurnEvent(
   action: ChatTurnEventAction,
 ): ChatTurnProjection {
   if (
-    action.sessionId !== projection.sessionId ||
-    action.turnId !== projection.turnId ||
+    (projection.sessionId && action.sessionId !== projection.sessionId) ||
+    (projection.turnId && action.turnId !== projection.turnId) ||
     action.sequence <= projection.sequence
   ) {
     return projection;
   }
 
-  const next = { ...projection, sequence: action.sequence };
+  const next = {
+    ...projection,
+    sessionId: projection.sessionId || action.sessionId,
+    turnId: projection.turnId || action.turnId,
+    sequence: action.sequence,
+  };
   if ('state' in action) return applyState(next, action);
 
   switch (action.type) {
@@ -213,13 +329,13 @@ function updateTool(
   toolCallId: string,
   toolName: string | undefined,
   occurredAt: string,
-  patch: (tool: ChatToolCallSnapshot) => Partial<ChatToolCallSnapshot>,
+  patch: (tool: ChatTurnToolSnapshot) => Partial<ChatTurnToolSnapshot>,
 ): ChatTurnProjection {
   const index = projection.toolCalls.findIndex((tool) => tool.toolCallId === toolCallId);
   const existing = index === -1
     ? createTool(toolCallId, toolName ?? 'unknown', occurredAt)
     : projection.toolCalls[index]!;
-  const updated: ChatToolCallSnapshot = {
+  const updated: ChatTurnToolSnapshot = {
     ...existing,
     ...(toolName === undefined ? {} : { toolName }),
     ...patch(existing),
@@ -238,7 +354,7 @@ function createTool(
   toolCallId: string,
   toolName: string,
   occurredAt: string,
-): ChatToolCallSnapshot {
+): ChatTurnToolSnapshot {
   return {
     toolCallId,
     toolName,

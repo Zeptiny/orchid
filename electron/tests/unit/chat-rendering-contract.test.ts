@@ -229,20 +229,19 @@ describe('chat rendering contract (U5)', () => {
   });
 
   describe('stream defect fixes', () => {
-    it('batches text and thinking deltas into one animation-frame publish', () => {
+    it('batches normalized stream actions into one animation-frame reducer dispatch', () => {
       const src = read('hooks/useChat.ts');
       const subscriptions = src.slice(
         src.indexOf('const unsubChunk'),
         src.indexOf('const unsubState'),
       );
 
-      expect(src).toContain('pendingStreamDeltasRef');
+      expect(src).toContain('pendingFrameActionsRef');
       expect(src).toContain('window.requestAnimationFrame');
       expect(src).toContain('scheduleStreamFrame');
-      expect(src).toContain('const publishStreamState = useCallback');
-      expect(subscriptions).not.toContain('setStreamingContent');
-      expect(subscriptions).not.toContain('setStreamingThinking');
-      expect(subscriptions).not.toContain('applyStreamSegments');
+      expect(src).toMatch(/dispatchProjection\(\{ type: 'events', actions \}\)/);
+      expect(subscriptions).toContain('queueFrameEvent(normalize(event))');
+      expect(subscriptions).not.toContain('dispatchProjection');
     });
 
     it('syntax-highlights active streaming text', () => {
@@ -259,38 +258,35 @@ describe('chat rendering contract (U5)', () => {
       );
     });
 
-    it('send failure cleanup removes optimistic bubble on throw', () => {
+    it('send failure cleanup clears the projection stream, sets local error, and removes optimistic bubbles', () => {
       const src = read('hooks/useChat.ts');
       expect(src).toMatch(/Drop the optimistic user bubble when send never started/);
-      // Shared residual helper + drop helper on both structured error and catch paths
-      expect(src).toMatch(/residualStateAfterSendFailure/);
       expect(src).toMatch(/dropOptimisticUserMessageIfLast/);
       const sendStart = src.indexOf('const send = useCallback');
       const sendEnd = src.indexOf('const cancel = useCallback', sendStart);
       const sendSource = src.slice(sendStart, sendEnd);
       expect(sendSource).toMatch(/result\.status === 'error'/);
       expect(sendSource).toMatch(/catch \(err\)/);
-      // Both branches call the same residual + drop helpers
-      const residualHits = sendSource.match(/residualStateAfterSendFailure\(\)/g) ?? [];
+      // Both structured and thrown failures clear live projection state, set the
+      // reducer's local error, and remove their own optimistic user bubble.
+      const clearStreamHits = sendSource.match(/type: 'clear_stream', status: 'error'/g) ?? [];
+      const localErrorHits = sendSource.match(/type: 'local_error'/g) ?? [];
       const dropHits = sendSource.match(/dropOptimisticUserMessageIfLast/g) ?? [];
-      expect(residualHits.length).toBeGreaterThanOrEqual(2);
+      expect(clearStreamHits.length).toBeGreaterThanOrEqual(2);
+      expect(localErrorHits.length).toBeGreaterThanOrEqual(2);
       expect(dropHits.length).toBeGreaterThanOrEqual(2);
     });
 
     it('null live snapshot drains buffered events through sequence affinity', () => {
       const src = read('hooks/useChat.ts');
       expect(src).toMatch(/if \(!live\)/);
-      expect(src).toMatch(/drainBufferedHydrationEvents|replayHydrationBuffer/);
-      expect(src).toMatch(/BufferedHydrationEvent/);
-      // Structured error path clears residual stream state like the throw path
-      expect(src).toMatch(/result\.status === 'error'/);
-      const errorBranch = src.slice(
-        src.indexOf("if (result.status === 'error')"),
-        src.indexOf('// Only adopt send resolution'),
-      );
-      expect(errorBranch).toMatch(/applyStreamSegments\(\[\]\)/);
-      expect(errorBranch).toMatch(/residualStateAfterSendFailure/);
-      expect(errorBranch).toMatch(/setStreamingContent\(residual\.streamingContent\)/);
+      expect(src).toContain('BufferedProjectionEvent');
+      expect(src).toContain('replayHydrationBuffer(bufferedEvents)');
+      const replayStart = src.indexOf('const replayHydrationBuffer');
+      const replayEnd = src.indexOf('const hydrateSnapshot', replayStart);
+      const replaySource = src.slice(replayStart, replayEnd);
+      expect(replaySource).toMatch(/acceptsEvent\(event\)/);
+      expect(replaySource).toMatch(/applyLiveEvent\(event\)/);
     });
 
     it('does not render a vertical streaming cursor', () => {
