@@ -62,7 +62,7 @@
     "turndown": "^7.2.4",
     "web-tree-sitter": "^0.26.11",
     "xstate": "^5.32.5",
-    "zod": "^3.23.0"
+    "zod": "^4.4.3"
   },
   "optionalDependencies": {
     "onnxruntime-node": "^1.20.0"
