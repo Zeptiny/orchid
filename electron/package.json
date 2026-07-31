@@ -10,7 +10,7 @@
   "homepage": "https://github.com/Zeptiny/orchid",
   "main": "dist/main/index.js",
   "engines": {
-    "node": ">=24 <25"
+    "node": ">=24.15.0 <25"
   },
   "scripts": {
     "predev": "npm run native:ensure:electron",
