@@ -25,6 +25,7 @@
     "catalog:validate": "node --experimental-strip-types scripts/provider-catalog/validate.ts",
     "catalog:sign": "node --experimental-strip-types scripts/provider-catalog/sign.ts",
     "typecheck": "tsc --noEmit",
+    "typecheck:migration": "tsc --noEmit -p tsconfig.migration.json",
     "lint": "eslint src/",
     "pretest": "npm run native:ensure:node",
     "test": "vitest run",

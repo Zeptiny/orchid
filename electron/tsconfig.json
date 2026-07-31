@@ -13,7 +13,6 @@
     "noEmit": true,
     "lib": ["ESNext", "DOM"],
     "types": ["node"],
-    "stableTypeOrdering": true,
     "paths": {
       "@shared/*": ["./src/shared/*"]
     }
