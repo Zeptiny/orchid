@@ -9,15 +9,20 @@ function source(path: string): string {
 }
 
 describe('lazy renderer boundaries', () => {
-  it('loads settings and onboarding only when their surfaces are requested', () => {
+  it('keeps normal application imports behind the startup-ready boundary', () => {
     const app = source('App.tsx');
+    const readyApp = source('AppReady.tsx');
 
-    expect(app).toContain('lazy(() => import(\'./components/ConfigView\')');
-    expect(app).toContain('lazy(() => import(\'./components/Onboarding/OnboardingScreen\')');
-    expect(app).not.toMatch(/import \{ ConfigView \} from/);
-    expect(app).not.toMatch(/import \{ OnboardingScreen \} from/);
+    expect(app).toContain('lazy(() => import(\'./AppReady\'))');
+    expect(app).toContain('<StartupScreen onReady={enterApplication} />');
+    expect(app).not.toMatch(/import \{ ChatView \} from/);
+    expect(app).not.toContain('window.orchid.config');
+    expect(readyApp).toContain('lazy(() => import(\'./components/ConfigView\')');
+    expect(readyApp).toContain('lazy(() => import(\'./components/Onboarding/OnboardingScreen\')');
+    expect(readyApp).not.toMatch(/import \{ ConfigView \} from/);
+    expect(readyApp).not.toMatch(/import \{ OnboardingScreen \} from/);
     expect(app).toContain('<Suspense');
-    expect(app).toContain('onboardingOpen && onboardingChecked');
+    expect(readyApp).toContain('onboardingOpen && onboardingChecked');
   });
 
   it('splits optional project and subagent surfaces from the initial chat', () => {

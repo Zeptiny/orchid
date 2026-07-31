@@ -9,8 +9,8 @@ function source(...parts: string[]): string {
 }
 
 describe('renderer bootstrap', () => {
-  it('shares one effective configuration snapshot across App and ChatView', () => {
-    const app = source('App.tsx');
+  it('shares one effective configuration snapshot across the ready app and ChatView', () => {
+    const app = source('AppReady.tsx');
     const chatView = source('components', 'ChatView.tsx');
     const configRequests = `${app}\n${chatView}`.match(
       /window\.orchid\.config\.get\(\)/g,

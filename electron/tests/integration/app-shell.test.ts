@@ -82,6 +82,29 @@ describe('IPC Channel Names', () => {
   });
 });
 
+describe('progressive startup shell', () => {
+  it('seeds a local, accessible startup shell before the renderer module', () => {
+    const indexHtml = fs.readFileSync(path.resolve(__dirname, '../../src/renderer/index.html'), 'utf8');
+    const shellIndex = indexHtml.indexOf('class="startup-shell"');
+    const moduleIndex = indexHtml.indexOf('<script type="module" src="./main.tsx"></script>');
+
+    expect(shellIndex).toBeGreaterThan(-1);
+    expect(shellIndex).toBeLessThan(moduleIndex);
+    expect(indexHtml).toContain('./assets/orchid-icon.svg');
+    expect(indexHtml).toContain('role="status"');
+    expect(indexHtml).toContain('aria-live="polite"');
+    expect(indexHtml).toContain('background: #09090b');
+    expect(indexHtml).toContain('prefers-reduced-motion: reduce');
+  });
+
+  it('loads Google Fonts as a non-blocking enhancement', () => {
+    const indexHtml = fs.readFileSync(path.resolve(__dirname, '../../src/renderer/index.html'), 'utf8');
+
+    expect(indexHtml).toContain('fonts.googleapis.com');
+    expect(indexHtml).toMatch(/media="print"[\s\S]*onload="this\.media='all'"/);
+  });
+});
+
 // ─── IPC Security ────────────────────────────────────────────────────────────
 
 describe('IPC Security', () => {
