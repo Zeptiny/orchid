@@ -113,7 +113,7 @@ export function buildCloseTool(
     // wait.ts's dynamic-import pattern).
     if (closed.length > 0) {
       try {
-        const { recoverSubagentPersistence } = await import('../../agents/wire-subagents');
+        const { recoverSubagentPersistence } = await import('../../agents/wire-subagents.js');
         recoverSubagentPersistence(sessionId);
       } catch {
         // Non-fatal — UI can still read in-memory state on next refresh

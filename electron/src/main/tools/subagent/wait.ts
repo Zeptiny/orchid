@@ -208,7 +208,7 @@ export function buildWaitTool(
     // terminal result too. Route that through the scheduler's recovery entry
     // point so an earlier degraded checkpoint gets one deliberate retry.
     try {
-      const { recoverSubagentPersistence, persistSubagentChains } = await import('../../agents/wire-subagents');
+      const { recoverSubagentPersistence, persistSubagentChains } = await import('../../agents/wire-subagents.js');
       const sessionIds = new Set(
         [...records.values()]
           .map((record) => record.sessionId)

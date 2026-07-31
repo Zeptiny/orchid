@@ -348,7 +348,7 @@ async function overview(): Promise<ProviderOverview> {
   // Keep destructive-disconnect confirmation honest without making provider
   // status or credential state part of renderer state. The active turn map is
   // process-local and only reports a count for each stable connection ID.
-  const { activeSessionsForProviderConnection } = await import('./chat');
+  const { activeSessionsForProviderConnection } = await import('./chat.js');
   const activeTurnCounts = new Map(
     connections.map((connection) => [
       connection.id,
@@ -610,7 +610,7 @@ async function stopProviderConnectionTurns(
   restoreHealth?: () => Promise<unknown>,
 ): Promise<readonly string[]> {
   try {
-    const { stopActiveProviderConnectionTurns } = await import('./chat');
+    const { stopActiveProviderConnectionTurns } = await import('./chat.js');
     const stoppedSessionIds = stopActiveProviderConnectionTurns(connectionId);
     if (stoppedSessionIds.length > 0) {
       getProviderAccountingStore().interruptPendingForConnection(connectionId);
@@ -871,7 +871,7 @@ export function registerProviderIPC(): void {
       const current = services();
       const connection = await requireConnection(parsed.data.connectionId);
       const updated = await current.connections.update(connection.id, { health: 'disabled' });
-      const { activeSessionsForProviderConnection } = await import('./chat');
+      const { activeSessionsForProviderConnection } = await import('./chat.js');
       return {
         connection: connectionView(
           updated,
