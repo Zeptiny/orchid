@@ -131,7 +131,7 @@ export async function bindProjectDirectory(
     const {
       clearFunctionHashesForSession,
       clearFunctionHashesForWorkspace,
-    } = await import('../tools/ast/get-function');
+    } = await import('../tools/ast/get-function.js');
     clearFunctionHashesForWorkspace(priorWorkspace.cwd);
     if (active && active.chains.length === 0) {
       clearFunctionHashesForSession(active.id);
@@ -197,7 +197,7 @@ export function registerSessionIPC(): void {
     // Sticky default is intentionally NOT updated on load (R4).
     clearDraftCwd(windowId);
     if (releasedDraftCwd) {
-      const { clearFunctionHashesForWorkspace } = await import('../tools/ast/get-function');
+      const { clearFunctionHashesForWorkspace } = await import('../tools/ast/get-function.js');
       clearFunctionHashesForWorkspace(releasedDraftCwd);
     }
 
@@ -262,7 +262,7 @@ export function registerSessionIPC(): void {
 
     // Live in-flight snapshot (chat.ts owns the active-agent registry). Dynamic
     // import avoids the session.ts <-> chat.ts circular dependency.
-    const { getLiveChatSnapshot } = await import('./chat');
+    const { getLiveChatSnapshot } = await import('./chat.js');
     const live = getLiveChatSnapshot(id);
 
     return { session, messages, live, workspace };
@@ -338,10 +338,10 @@ export function registerSessionIPC(): void {
       { clearToolCallHistoryForSession },
       { clearFunctionHashesForSession },
     ] = await Promise.all([
-      import('./chat'),
-      import('./permission'),
-      import('../permissions/history'),
-      import('../tools/ast/get-function'),
+      import('./chat.js'),
+      import('./permission.js'),
+      import('../permissions/history.js'),
+      import('../tools/ast/get-function.js'),
     ]);
     forceStopSession(parsed.data.id);
     clearPermissionSessionState(parsed.data.id);
@@ -538,8 +538,8 @@ export function registerSessionIPC(): void {
       return { levels: [], default: null, override, supportsReasoning: false };
     }
 
-    const { getProviderConnectionStore, getProviderCatalogStore } = await import('../providers/runtime-context');
-    const { resolveModelSelection } = await import('../providers/resolver');
+    const { getProviderConnectionStore, getProviderCatalogStore } = await import('../providers/runtime-context.js');
+    const { resolveModelSelection } = await import('../providers/resolver.js');
 
     const connections = await getProviderConnectionStore().list();
     const definitions = getProviderCatalogStore().getProviderDefinitions();

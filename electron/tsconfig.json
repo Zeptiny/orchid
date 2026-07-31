@@ -11,11 +11,11 @@
     "isolatedModules": true,
     "jsx": "react-jsx",
     "noEmit": true,
-    "lib": ["ESNext", "DOM", "DOM.Iterable"],
+    "lib": ["ESNext", "DOM"],
     "types": ["node"],
-    "baseUrl": ".",
+    "stableTypeOrdering": true,
     "paths": {
-      "@shared/*": ["src/shared/*"]
+      "@shared/*": ["./src/shared/*"]
     }
   },
   "include": ["src/**/*"],
