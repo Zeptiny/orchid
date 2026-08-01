@@ -10,10 +10,8 @@ import { getConfig } from '../config/loader';
 import { getSubagentManager } from '../tools';
 import { createSubagentStreamRunner } from './subagent-runner';
 import {
-  clearSubagentPersistenceTracking,
   createSubagentPersistenceScheduler,
   persistSubagentChains,
-  trackedSubagentPersistenceSessions,
   type SubagentPersistenceFlushInfo,
 } from './persist-subagent-chains';
 import {
@@ -103,10 +101,9 @@ export function wireSubagentRuntime(): void {
   removeSessionDeletionCleanup = onSessionDeleted((sessionId) => {
     manager.purgeSession(sessionId);
     persistenceScheduler?.clear(sessionId);
-    clearSubagentPersistenceTracking(sessionId);
   });
   removeStorageRecoveryListener = onSessionStorageRecovered(() => {
-    persistenceScheduler?.recoverAll(trackedSubagentPersistenceSessions());
+    persistenceScheduler?.recoverAll(manager.trackedPersistenceSessions());
   });
 
   manager.setOnDelta(createSubagentDeltaHandler({

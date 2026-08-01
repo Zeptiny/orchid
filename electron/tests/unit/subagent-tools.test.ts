@@ -24,10 +24,7 @@ import {
   subagentRecordFromStorageDict,
   subagentRecordToStorageDict,
 } from '../../src/shared/serialization/chain-subagent';
-import {
-  forgetSubagentPersistedRevision,
-  persistSubagentChains,
-} from '../../src/main/agents/persist-subagent-chains';
+import { persistSubagentChains } from '../../src/main/agents/persist-subagent-chains';
 import { hydrateSubagentRecords } from '../../src/main/tools/subagent/hydrate';
 import { recoverSubagentPersistence } from '../../src/main/agents/subagent-persistence-recovery';
 import type { StreamEvent } from '../../src/main/llm/orchestrator';
@@ -976,7 +973,7 @@ describe('close_subagents', () => {
     const domain = storedDomain(record);
     // Confirming persistence evicts the runtime record to a lean summary.
     manager.confirmRecordsPersisted(sid, [record.id]);
-    expect(manager.getRecord(record.id)?._evicted).toBe(true);
+    expect(manager.isSummary(record.id)).toBe(true);
     setSession([domain]);
 
     const result = (await handler(
@@ -987,7 +984,7 @@ describe('close_subagents', () => {
     expect(result.canonical.status).toBe('complete');
     expect(outcomeValue(result).closed).toContain(record.id);
     const restored = manager.getRecord(record.id)!;
-    expect(restored._evicted).toBe(false);
+    expect(manager.isSummary(restored.id)).toBe(false);
     expect(restored.closed).toBe(true);
     expect(restored.state).toBe(SubagentState.COMPLETED);
   });
@@ -1032,7 +1029,7 @@ describe('close_subagents', () => {
     // A concurrent checkpoint evicts the record to a summary; durable storage
     // lost its row (e.g. corruption rebuild), so hydration cannot restore it.
     manager.confirmRecordsPersisted(sid, [record.id]);
-    expect(manager.getRecord(record.id)?._evicted).toBe(true);
+    expect(manager.isSummary(record.id)).toBe(true);
     setSession([]);
 
     const result = (await handler(
@@ -1367,7 +1364,7 @@ describe('hydrateSubagentRecords helper', () => {
 
     expect(result).toEqual({ hydrated: [id], agentMissing: [] });
     const record = manager.getRecord(id)!;
-    expect(record._evicted).toBe(false);
+    expect(manager.isSummary(record.id)).toBe(false);
     expect(record.state).toBe(SubagentState.COMPLETED);
     expect(record.label).toBe('persisted');
     expect(record.result).toBe('stored result');
@@ -1384,14 +1381,14 @@ describe('hydrateSubagentRecords helper', () => {
     const domain = storedDomain(record);
     const messageCount = domain.chain.messages.length;
     manager.confirmRecordsPersisted(sid, [record.id]);
-    expect(manager.getRecord(record.id)?._evicted).toBe(true);
+    expect(manager.isSummary(record.id)).toBe(true);
     setSession([domain]);
 
     const result = await hydrateSubagentRecords(manager, sid, [record.id], makeCtx(agents));
 
     expect(result.hydrated).toEqual([record.id]);
     const restored = manager.getRecord(record.id)!;
-    expect(restored._evicted).toBe(false);
+    expect(manager.isSummary(restored.id)).toBe(false);
     expect(restored.chain?.messages.length).toBe(messageCount);
   });
 
@@ -1442,25 +1439,22 @@ describe('hydrateSubagentRecords helper', () => {
     persistSubagentChains(manager, sid);
     const writesBefore = synced.filter((r) => r.id === record.id).length;
     expect(writesBefore).toBe(1);
-    expect(manager.getRecord(record.id)?._evicted).toBe(true);
+    expect(manager.isSummary(record.id)).toBe(true);
 
     // Hydrate via the helper: materializes the record AND forgets the tracker entry.
     const result = await hydrateSubagentRecords(manager, sid, [record.id], makeCtx(agents));
     expect(result.hydrated).toEqual([record.id]);
-    expect(manager.getRecord(record.id)?._evicted).toBe(false);
+    expect(manager.isSummary(record.id)).toBe(false);
 
     // A dirtying mutation restarts the counter at 1; without the tracker reset
     // the revision gate (1 <= 1) would skip this record forever.
-    manager.getRecord(record.id)!.persistRevision += 1;
+    manager.close(record.id);
     persistSubagentChains(manager, sid);
 
     const writesAfter = synced.filter((r) => r.id === record.id).length;
     expect(writesAfter).toBe(writesBefore + 1);
   });
 
-  it('forgetSubagentPersistedRevision is a safe no-op for untracked sessions/ids', () => {
-    expect(() => forgetSubagentPersistedRevision('no-such-session', 'no-such-id')).not.toThrow();
-  });
 });
 
 // ── follow_up_subagent (U6) ──────────────────────────────────────────────────
@@ -1568,7 +1562,7 @@ describe('follow_up_subagent', () => {
 
     expect(result.canonical.status).toBe('complete');
     const resumed = manager.getRecord(original.id)!;
-    expect(resumed._evicted).toBe(false);
+    expect(manager.isSummary(resumed.id)).toBe(false);
     expect(resumed.state).toBe(SubagentState.PENDING);
     expect(manager.getRunGeneration(resumed.id)).toBe(2);
     const messages = resumed.chain?.messages ?? [];
@@ -1581,7 +1575,7 @@ describe('follow_up_subagent', () => {
     manager.markCompleted(record.id, 'first');
     const domain = storedDomain(record);
     manager.confirmRecordsPersisted(sid, [record.id]);
-    expect(manager.getRecord(record.id)?._evicted).toBe(true);
+    expect(manager.isSummary(record.id)).toBe(true);
     setSession([domain]);
 
     const result = (await handler(
@@ -1591,7 +1585,7 @@ describe('follow_up_subagent', () => {
 
     expect(result.canonical.status).toBe('complete');
     const restored = manager.getRecord(record.id)!;
-    expect(restored._evicted).toBe(false);
+    expect(manager.isSummary(restored.id)).toBe(false);
     expect(restored.state).toBe(SubagentState.PENDING);
     expect(manager.getRunGeneration(restored.id)).toBe(2);
   });

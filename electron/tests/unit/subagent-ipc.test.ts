@@ -8,11 +8,10 @@ import {
 import { SubagentDeltaEventType, type SubagentDeltaEvent } from '../../src/shared/types/subagent';
 import { subagentSnapshotSchema as requestSchema } from '../../src/main/ipc/payload-schemas';
 import {
-  clearSubagentPersistenceTracking,
   createSubagentPersistenceScheduler,
   persistSubagentChains,
-  trackedSubagentPersistenceSessions,
 } from '../../src/main/agents/persist-subagent-chains';
+import { SubagentPersistence } from '../../src/main/agents/subagent-persistence';
 import {
   createSubagentDeltaBatcher as createIpcSubagentDeltaBatcher,
   deliverSubagentDeltaEvent as deliverIpcSubagentDeltaEvent,
@@ -855,7 +854,7 @@ describe('persistSubagentChains dirty tracking (U6)', () => {
   const runtimeRecord = (id: string, sessionId: string | null, overrides: Record<string, unknown> = {}) => ({
     id,
     agent: { name: 'explorer', type: 'subagent', tier: 'bloom' },
-    state: 'completed',
+    state: 'running',
     label: id,
     task: `task ${id}`,
     result: 'done',
@@ -869,17 +868,39 @@ describe('persistSubagentChains dirty tracking (U6)', () => {
     sessionId,
     windowId: null,
     _resolveWait: null,
-    persistRevision: 1,
+    admitted: true,
     pendingQuestion: null,
     ...overrides,
   }) as never;
 
   const confirmSpy = vi.fn();
-  const managerOf = (...records: unknown[]) => ({
-    allRecords: () => records,
-    toDomainRecord: (runtime: never) => runtimeToDomain(runtime, { includeLiveTail: false }),
-    confirmRecordsPersisted: confirmSpy,
-  }) as never;
+  const managerOf = (...rawRecords: unknown[]) => {
+    const records = rawRecords as Array<{ id: string; sessionId: string | null; state: string; admitted?: boolean }>;
+    const persistence = new SubagentPersistence(() => 25);
+    for (const record of records) {
+      persistence.register(record.id, record.sessionId, { admitted: record.admitted !== false });
+    }
+    return {
+      allRecords: () => records,
+      toDomainRecord: (runtime: never) => runtimeToDomain(runtime, { includeLiveTail: false }),
+      checkpointCandidates: (sessionId: string, options: { recovery?: boolean; includeUnscoped?: boolean } = {}) => records.flatMap((record) => {
+        if (record.sessionId !== sessionId && !(options.includeUnscoped && record.sessionId === null)) return [];
+        const checkpoint = persistence.checkpointCandidate(
+          record.id,
+          sessionId,
+          ['completed', 'failed', 'interrupted'].includes(record.state),
+          options.recovery === true,
+        );
+        return checkpoint ? [{ record, checkpoint }] : [];
+      }),
+      confirmCheckpointCandidates: (candidates: never[]) => {
+        confirmSpy(candidates);
+        for (const candidate of candidates) persistence.confirmCheckpoint(candidate.checkpoint);
+      },
+      trackedPersistenceSessions: () => persistence.trackedSessions(),
+      markDirty: (id: string) => persistence.markDirty(id),
+    } as never;
+  };
 
   beforeEach(() => {
     sessionManagerStub.syncSubagentRecords.mockReset();
@@ -888,11 +909,6 @@ describe('persistSubagentChains dirty tracking (U6)', () => {
     );
     confirmSpy.mockReset();
     stubActiveSession.current = null;
-    clearSubagentPersistenceTracking(sid);
-  });
-
-  afterEach(() => {
-    clearSubagentPersistenceTracking(sid);
   });
 
   it('upserts only records dirtied since the last checkpoint', () => {
@@ -910,7 +926,7 @@ describe('persistSubagentChains dirty tracking (U6)', () => {
     expect(sessionManagerStub.syncSubagentRecords).toHaveBeenCalledTimes(1);
 
     // One record dirties → only that record is upserted.
-    (b as { persistRevision: number }).persistRevision += 1;
+    manager.markDirty('sub-b');
     persistSubagentChains(manager, sid);
     expect(sessionManagerStub.syncSubagentRecords).toHaveBeenCalledTimes(2);
     expect(sessionManagerStub.syncSubagentRecords.mock.calls[1][1].map((r: { id: string }) => r.id))
@@ -920,10 +936,10 @@ describe('persistSubagentChains dirty tracking (U6)', () => {
   it('never upserts queued or pre-admission records (queued is runtime-only)', () => {
     const admitted = runtimeRecord('sub-admitted', sid, { queuedAt: 5, startedAt: 9 });
     const queued = runtimeRecord('sub-queued', sid, {
-      state: 'queued', queuedAt: 5, startedAt: null, persistRevision: 0,
+      state: 'queued', queuedAt: 5, startedAt: null, admitted: false,
     });
     const cancelledWhileQueued = runtimeRecord('sub-cancelled', sid, {
-      state: 'interrupted', queuedAt: 5, startedAt: null,
+      state: 'interrupted', queuedAt: 5, startedAt: null, admitted: false,
     });
     const manager = managerOf(admitted, queued, cancelledWhileQueued);
 
@@ -949,7 +965,7 @@ describe('persistSubagentChains dirty tracking (U6)', () => {
 
     persistSubagentChains(manager, sid, { recovery: true });
     expect(sessionManagerStub.syncSubagentRecords).toHaveBeenCalledTimes(2);
-    expect(trackedSubagentPersistenceSessions()).toContain(sid);
+    expect(manager.trackedPersistenceSessions()).toContain(sid);
   });
 
   it('keeps records dirty when the storage write fails (persist-first)', () => {
@@ -975,17 +991,15 @@ describe('persistSubagentChains dirty tracking (U6)', () => {
     expect(sessionManagerStub.syncSubagentRecords).toHaveBeenCalledTimes(2);
   });
 
-  it('clears tracking for a deleted session so every record is dirty again', () => {
+  it('keeps confirmed tracking scoped to one manager instance', () => {
     const a = runtimeRecord('sub-a', sid);
     const manager = managerOf(a);
 
     persistSubagentChains(manager, sid);
-    expect(trackedSubagentPersistenceSessions()).toContain(sid);
-
-    clearSubagentPersistenceTracking(sid);
-    expect(trackedSubagentPersistenceSessions()).not.toContain(sid);
-
-    persistSubagentChains(manager, sid);
+    expect(manager.trackedPersistenceSessions()).toContain(sid);
+    const restoredManager = managerOf(a);
+    expect(restoredManager.trackedPersistenceSessions()).not.toContain(sid);
+    persistSubagentChains(restoredManager, sid);
     expect(sessionManagerStub.syncSubagentRecords).toHaveBeenCalledTimes(2);
   });
 
@@ -1019,7 +1033,10 @@ describe('persistSubagentChains dirty tracking (U6)', () => {
     persistSubagentChains(manager, sid);
 
     expect(confirmSpy).toHaveBeenCalledTimes(1);
-    expect(confirmSpy).toHaveBeenCalledWith(sid, ['sub-terminal']);
+    expect(confirmSpy.mock.calls[0][0]
+      .filter((candidate: { checkpoint: { terminal: boolean } }) => candidate.checkpoint.terminal)
+      .map((candidate: { record: { id: string } }) => candidate.record.id))
+      .toEqual(['sub-terminal']);
   });
 
   it('does NOT confirm records when the flush fails (no eviction on failure)', () => {

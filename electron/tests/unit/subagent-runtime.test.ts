@@ -900,7 +900,8 @@ describe('SubagentManager admission control (U7)', () => {
     expect(third.queuedAt).not.toBeNull();
     expect(third.startedAt).toBeNull();
     // Queued records stay out of durable tracking until admission.
-    expect(third.persistRevision).toBe(0);
+    expect(manager.checkpointCandidates('sess-admit').map((candidate) => candidate.record.id))
+      .not.toContain(third.id);
     expect(manager.getQueuePosition(third.id)).toBe(1);
     expect(gates).toHaveLength(2);
 
@@ -916,7 +917,8 @@ describe('SubagentManager admission control (U7)', () => {
     expect(third.state).toBe(SubagentState.RUNNING);
     expect(manager.getRunPromise(third.id)).not.toBeNull();
     expect(third.startedAt).not.toBeNull();
-    expect(third.persistRevision).toBeGreaterThan(0);
+    expect(manager.checkpointCandidates('sess-admit').map((candidate) => candidate.record.id))
+      .toContain(third.id);
     expect(manager.getQueuePosition(third.id)).toBeNull();
     expect(gates).toHaveLength(3);
 
@@ -1204,13 +1206,13 @@ describe('SubagentManager terminal eviction and session purge (U9)', () => {
     manager.markRunning(record.id);
     record.usage = { prompt_tokens: 10, completion_tokens: 20, total_tokens: 30 };
     manager.markCompleted(record.id, 'the result');
-    expect(record._evicted).toBe(false);
+    expect(manager.isSummary(record.id)).toBe(false);
 
     manager.confirmRecordsPersisted(sid, [record.id]);
 
     const summary = manager.getRecord(record.id)!;
     expect(summary).toBeDefined();
-    expect(summary._evicted).toBe(true);
+    expect(manager.isSummary(summary.id)).toBe(true);
     expect(summary.id).toBe(record.id);
     expect(summary.state).toBe(SubagentState.COMPLETED);
     expect(summary.result).toBe('the result');
@@ -1235,17 +1237,17 @@ describe('SubagentManager terminal eviction and session purge (U9)', () => {
     expect(entry!.task).toBe('important task');
   });
 
-  it('the _evicted flag never leaks into the domain (storage/IPC) record shape', () => {
+  it('summary bookkeeping never leaks into the domain (storage/IPC) record shape', () => {
     const sid = 'sess-flag-leak';
     const heavy = manager.spawn('heavy', 'task', testAgent, { sessionId: sid });
     manager.markCompleted(heavy.id, 'done');
     manager.confirmRecordsPersisted(sid, [heavy.id]);
-    expect(heavy._evicted).toBe(true);
+    expect(manager.isSummary(heavy.id)).toBe(true);
 
     // The storage dict is built from runtimeToDomain's output; a leak here
     // would surface runtime-only state in session rows and IPC snapshots.
-    expect('_evicted' in runtimeToDomain(heavy)).toBe(false);
-    expect(JSON.stringify(runtimeToDomain(heavy))).not.toContain('"_evicted"');
+    expect('persistRevision' in runtimeToDomain(heavy)).toBe(false);
+    expect(JSON.stringify(runtimeToDomain(heavy))).not.toContain('"persistRevision"');
   });
 
   it('eviction does NOT happen if the flush fails (record stays heavy)', () => {
@@ -1331,7 +1333,7 @@ describe('SubagentManager terminal eviction and session purge (U9)', () => {
       expect(manager.cancelOne(record.id)).toBe(true);
       queuedIds.push(record.id);
       // Cancelled while queued → evicted to a lean summary, not a full record.
-      expect(record._evicted).toBe(true);
+      expect(manager.isSummary(record.id)).toBe(true);
       expect(record.state).toBe(SubagentState.INTERRUPTED);
       expect(record.chain?.messages).toEqual([]);
     }
@@ -1343,7 +1345,7 @@ describe('SubagentManager terminal eviction and session purge (U9)', () => {
 
     // Re-confirming already-evicted summaries is a harmless no-op.
     manager.confirmRecordsPersisted(sid, queuedIds);
-    expect(manager.getRecord(queuedIds[1])?._evicted).toBe(true);
+    expect(manager.isSummary(queuedIds[1])).toBe(true);
     expect(manager.allRecords().filter((r) => r.sessionId === sid)).toHaveLength(3);
   });
 
@@ -1436,7 +1438,7 @@ describe('closed flag (U1)', () => {
     manager.confirmRecordsPersisted(sid, [record.id]);
 
     const summary = manager.getRecord(record.id)!;
-    expect(summary._evicted).toBe(true);
+    expect(manager.isSummary(summary.id)).toBe(true);
     expect(summary.closed).toBe(true);
     expect(manager.getStates(sid)).toEqual([]);
   });
@@ -1498,7 +1500,7 @@ describe('SubagentManager hydration (U3)', () => {
 
     const record = manager.getRecord(original.id);
     expect(record).toBeDefined();
-    expect(record!._evicted).toBe(false);
+    expect(manager.isSummary(record!.id)).toBe(false);
     expect(record!.state).toBe(SubagentState.COMPLETED);
     expect(record!.label).toBe('review auth');
     expect(record!.task).toBe('Review the auth module');
@@ -1511,7 +1513,8 @@ describe('SubagentManager hydration (U3)', () => {
     expect(record!.windowId).toBe('win-1');
     expect(record!.cwd).toBe('/tmp/project');
     // Hydration restarts the persistence counter and emits nothing.
-    expect(record!.persistRevision).toBe(0);
+    expect(manager.checkpointCandidates('sess-hydrate').map((candidate) => candidate.record.id))
+      .toContain(record!.id);
     expect(record!.startTime).toBeTypeOf('number');
     expect(record!.endTime).toBeTypeOf('number');
     // A hydrated terminal record shows in the prompt unless closed.
@@ -1544,7 +1547,7 @@ describe('SubagentManager hydration (U3)', () => {
     expect(after!.closed).toBe(false);
   });
 
-  it('hydrating an _evicted summary restores chain messages and clears _evicted', () => {
+  it('hydrating a summary restores chain messages and materializes a full record', () => {
     const sid = 'sess-rehydrate';
     const record = manager.spawn('summarized', 'important', testAgent, { sessionId: sid });
     manager.markCompleted(record.id, 'the result');
@@ -1555,7 +1558,7 @@ describe('SubagentManager hydration (U3)', () => {
 
     manager.confirmRecordsPersisted(sid, [record.id]);
     const summary = manager.getRecord(record.id)!;
-    expect(summary._evicted).toBe(true);
+    expect(manager.isSummary(summary.id)).toBe(true);
     expect(summary.chain?.messages).toEqual([]);
 
     manager.hydrate([{
@@ -1568,7 +1571,7 @@ describe('SubagentManager hydration (U3)', () => {
     }]);
 
     const restored = manager.getRecord(record.id)!;
-    expect(restored._evicted).toBe(false);
+    expect(manager.isSummary(restored.id)).toBe(false);
     expect(restored.chain?.messages.length).toBe(messageCount);
     expect(restored.result).toBe('the result');
     expect(restored.state).toBe(SubagentState.COMPLETED);
@@ -1609,12 +1612,12 @@ describe('SubagentManager hydration (U3)', () => {
     // Confirm all three: t-0 rolls off (cap 2); t-1 and t-2 remain as summaries.
     manager.confirmRecordsPersisted(sid, ids);
     expect(manager.getRecord(ids[0])).toBeUndefined();
-    expect(manager.getRecord(target)?._evicted).toBe(true);
-    expect(manager.getRecord(ids[2])?._evicted).toBe(true);
+    expect(manager.isSummary(target)).toBe(true);
+    expect(manager.isSummary(ids[2])).toBe(true);
 
     // Hydrate t-1: it becomes a full record and leaves the retention FIFO.
     manager.hydrate([{ id: target, agent: testAgent, domain, sessionId: sid, windowId: null, cwd: null }]);
-    expect(manager.getRecord(target)?._evicted).toBe(false);
+    expect(manager.isSummary(target)).toBe(false);
 
     // Two more terminal records roll the FIFO past the cap.
     for (let i = 3; i < 5; i += 1) {
@@ -1628,7 +1631,7 @@ describe('SubagentManager hydration (U3)', () => {
     // ...but the re-materialized t-1 survived every roll and kept its chain.
     const survived = manager.getRecord(target)!;
     expect(survived).toBeDefined();
-    expect(survived._evicted).toBe(false);
+    expect(manager.isSummary(survived.id)).toBe(false);
     expect(survived.chain?.messages.length).toBeGreaterThan(0);
   });
 
@@ -1753,7 +1756,8 @@ describe('SubagentManager follow-up resume (U4)', () => {
     manager.followUp(target.id, 'again');
     expect(target.state).toBe(SubagentState.QUEUED);
     expect(target.queuedAt).not.toBeNull();
-    expect(target._resumeQueued).toBe(true);
+    expect(manager.checkpointCandidates('sess-rq').map((candidate) => candidate.record.id))
+      .toContain(target.id);
     expect(manager.getQueuePosition(target.id)).toBe(1);
     // A SPAWNED delta is re-emitted carrying the queued record.
     const spawned = events.filter((event) => event.type === 'spawned');
@@ -1764,7 +1768,7 @@ describe('SubagentManager follow-up resume (U4)', () => {
     await manager.getRunPromise(blocker.id);
     await tick();
     expect(target.state).toBe(SubagentState.RUNNING);
-    expect(target._resumeQueued).toBe(false);
+    expect(manager.getQueuePosition(target.id)).toBeNull();
     expect(manager.getQueuePosition(target.id)).toBeNull();
 
     gates[2]();
@@ -1806,17 +1810,12 @@ describe('SubagentManager follow-up resume (U4)', () => {
     expect(target.chain?.status).toBe(statusBefore);
     expect(manager.getRunGeneration(target.id)).toBe(generationBefore);
     expect(manager.getLiveProjection(target.id)!.runId).toBe(liveRunIdBefore);
-    expect(target._resumeQueued).toBe(false);
+    expect(manager.getQueuePosition(target.id)).toBeNull();
     expect(manager.getQueuePosition(target.id)).toBeNull();
   });
 
   it('persistence eligibility: a resume-queued record keeps its durable row; a spawn-queued record is still skipped', async () => {
     setLimits({ max_active_per_session: 1 });
-    // Mirrors the durable-eligibility skip in persist-subagent-chains.ts:
-    // a record is skipped when queued && !started && !_resumeQueued.
-    const isDurableEligible = (record: SubagentRecord): boolean =>
-      !(record.queuedAt !== null && record.startedAt === null && !record._resumeQueued);
-
     const gates: Array<() => void> = [];
     manager.setRunner(gateRunner(gates));
 
@@ -1832,15 +1831,15 @@ describe('SubagentManager follow-up resume (U4)', () => {
 
     const spawnQueued = manager.spawn('spawn-queued', 'x', testAgent, { sessionId: 'sess-elig' });
     expect(spawnQueued.state).toBe(SubagentState.QUEUED);
-    expect(spawnQueued._resumeQueued).toBe(false);
-    expect(isDurableEligible(spawnQueued)).toBe(false);
+    expect(manager.checkpointCandidates('sess-elig').map((candidate) => candidate.record.id))
+      .not.toContain(spawnQueued.id);
 
     manager.followUp(target.id, 'again');
     expect(target.state).toBe(SubagentState.QUEUED);
-    expect(target._resumeQueued).toBe(true);
     expect(target.queuedAt).not.toBeNull();
     expect(target.startedAt).toBeNull();
-    expect(isDurableEligible(target)).toBe(true);
+    expect(manager.checkpointCandidates('sess-elig').map((candidate) => candidate.record.id))
+      .toContain(target.id);
   });
 
   it('cancelOne mid-resumed-run interrupts through the runner-owned boundary', async () => {
@@ -1895,7 +1894,8 @@ describe('SubagentManager follow-up resume (U4)', () => {
 
     manager.followUp(target.id, 'again');
     expect(target.state).toBe(SubagentState.QUEUED);
-    expect(target._resumeQueued).toBe(true);
+    expect(manager.checkpointCandidates('sess-int-queued').map((candidate) => candidate.record.id))
+      .toContain(target.id);
 
     expect(manager.cancelOne(target.id)).toBe(true);
     expect(target.state).toBe(SubagentState.INTERRUPTED);
@@ -1956,27 +1956,28 @@ describe('SubagentManager follow-up resume (U4)', () => {
 
     manager.followUp(target.id, 'again');
     expect(target.state).toBe(SubagentState.QUEUED);
-    expect(target._resumeQueued).toBe(true);
+    expect(manager.checkpointCandidates('sess-rq-cancel').map((candidate) => candidate.record.id))
+      .toContain(target.id);
 
     expect(manager.cancelOne(target.id)).toBe(true);
     expect(target.state).toBe(SubagentState.INTERRUPTED);
     // Not evicted: the record owns a durable row, so eviction would strand the
     // row with a stale pre-interrupt status and skip every later checkpoint.
-    expect(target._evicted).toBe(false);
+    expect(manager.isSummary(target.id)).toBe(false);
     // The follow-up message and the reopened chain survive for the terminal wave.
     expect(target.chain?.messages.some((message) => message.content === 'again')).toBe(true);
     // A later persistence confirmation evicts it through the normal path.
     manager.confirmRecordsPersisted('sess-rq-cancel', [target.id]);
-    expect(manager.getRecord(target.id)?._evicted).toBe(true);
+    expect(manager.isSummary(target.id)).toBe(true);
     expect(manager.getRecord(target.id)?.state).toBe(SubagentState.INTERRUPTED);
   });
 
-  it('close on an evicted summary throws instead of silently flagging an unpersistable record', () => {
+  it('close on a terminal summary throws instead of silently flagging an unpersistable record', () => {
     const sid = 'sess-close-evicted';
     const record = manager.spawn('close-evict', 'x', testAgent, { sessionId: sid });
     manager.markCompleted(record.id, 'done');
     manager.confirmRecordsPersisted(sid, [record.id]);
-    expect(record._evicted).toBe(true);
+    expect(manager.isSummary(record.id)).toBe(true);
 
     expect(() => manager.close(record.id)).toThrow(SubagentSummaryClosedError);
     expect(record.closed).toBe(false);
@@ -1999,7 +2000,7 @@ describe('SubagentManager follow-up resume (U4)', () => {
     const evicted = manager.spawn('evicted', 'x', testAgent, { sessionId: sid });
     manager.markCompleted(evicted.id, 'done');
     manager.confirmRecordsPersisted(sid, [evicted.id]);
-    expect(evicted._evicted).toBe(true);
+    expect(manager.isSummary(evicted.id)).toBe(true);
     expect(() => manager.followUp(evicted.id, 'x')).toThrow(SubagentEvictedError);
   });
 
@@ -2038,7 +2039,7 @@ describe('SubagentManager follow-up resume (U4)', () => {
     expect(manager.getRunGeneration(original.id)).toBe(1);
   });
 
-  it('_resumeQueued is true only between resume-queue and admission; false after _admit', async () => {
+  it('a queued follow-up remains checkpoint eligible after admission', async () => {
     setLimits({ max_active_per_session: 1 });
     const gates: Array<() => void> = [];
     manager.setRunner(gateRunner(gates));
@@ -2047,20 +2048,22 @@ describe('SubagentManager follow-up resume (U4)', () => {
     await tick();
     gates[0]();
     await manager.getRunPromise(target.id);
-    expect(target._resumeQueued).toBe(false);
+    expect(manager.getQueuePosition(target.id)).toBeNull();
 
     const blocker = manager.spawn('blocker', 'x', testAgent, { sessionId: 'sess-flag' });
     await tick();
 
     manager.followUp(target.id, 'again');
     expect(target.state).toBe(SubagentState.QUEUED);
-    expect(target._resumeQueued).toBe(true);
+    expect(manager.checkpointCandidates('sess-flag').map((candidate) => candidate.record.id))
+      .toContain(target.id);
 
     gates[1]();
     await manager.getRunPromise(blocker.id);
     await tick();
     expect(target.state).toBe(SubagentState.RUNNING);
-    expect(target._resumeQueued).toBe(false);
+    expect(manager.checkpointCandidates('sess-flag').map((candidate) => candidate.record.id))
+      .toContain(target.id);
 
     gates[2]();
     await manager.getRunPromise(target.id);

@@ -45,6 +45,10 @@ import {
   type SubagentProjectionCheckpoint,
 } from './subagent-live-projection';
 import {
+  SubagentPersistence,
+  type SubagentPersistenceCandidate,
+} from './subagent-persistence';
+import {
   SubagentWaitTimeoutError,
   SubagentQueueFullError,
   SubagentNotTerminalError,
@@ -268,26 +272,6 @@ export interface SubagentRecord {
    * terminal records; persisted with the durable row.
    */
   closed: boolean;
-  /**
-   * Runtime-only: the record was evicted to a lean terminal summary after its
-   * durable row was confirmed persisted. Persistence flushes and snapshot
-   * merges must skip flagged records — their confirmed durable row stays
-   * authoritative, and re-serializing the summary would clobber it with an
-   * empty chain. Cannot leak into storage/domain output: `runtimeToDomain`
-   * and the storage dicts build fresh explicit-field objects.
-   */
-  _evicted: boolean;
-  /**
-   * Runtime-only single-use marker: the record was re-queued by a follow-up
-   * resume rather than a fresh spawn. Persistence keeps a durable row for
-   * resume-queued records (the reopened chain + follow-up message survive a
-   * crash while queued); spawn-queued and cancelled-before-admission records
-   * still get no row. Cleared on admission. Cannot leak into storage/domain
-   * output: `runtimeToDomain` builds fresh explicit-field objects.
-   */
-  _resumeQueued: boolean;
-  /** Durable-mutation counter; the persistence scheduler upserts dirty records (U6). */
-  persistRevision: number;
   /** Pending question routed to the main agent (null when no question is outstanding). */
   pendingQuestion: {
     toolCallId: string;
@@ -332,6 +316,12 @@ export interface HydrateSpec {
   readonly projectRuntime?: ProjectRuntime;
 }
 
+/** A runtime record paired with the exact revision captured for a checkpoint. */
+export interface SubagentCheckpointCandidate {
+  readonly record: SubagentRecord;
+  readonly checkpoint: SubagentPersistenceCandidate;
+}
+
 // ── SubagentManager ─────────────────────────────────────────────────────────
 
 /**
@@ -348,13 +338,7 @@ export class SubagentManager {
   private _liveProjection = new SubagentLiveProjectionStore({ getUsageDeltaIntervalMs });
   private _admission = new AdmissionController();
   private _runs = new SubagentRunRegistry();
-  /**
-   * Per-session FIFO of evicted terminal summary ids, capped at
-   * `subagents.terminal_retention`. Oldest entries are removed from
-   * `_subagents` entirely once the cap is exceeded; their durable row
-   * remains the record of truth.
-   */
-  private _terminalSummaries: Map<string, string[]> = new Map();
+  private _persistence = new SubagentPersistence(getTerminalRetention);
 
   /**
    * Configure the stream runner. When set, spawn() starts a background run.
@@ -444,13 +428,11 @@ export class SubagentManager {
       projectRuntime: options.projectRuntime,
       _resolveWait: [],
       closed: false,
-      _evicted: false,
-      _resumeQueued: false,
-      persistRevision: 0,
       pendingQuestion: null,
     };
 
     this._subagents.set(id, record);
+    this._persistence.register(id, sessionId, { admitted });
     this._liveProjection.start({
       subagentId: id,
       sessionId,
@@ -492,14 +474,14 @@ export class SubagentManager {
    * a slot. Throws `SubagentQueueFullError` — leaving the terminal record
    * completely unmutated — when the queue is full.
    *
-   * Guards: the record must exist, must not be an `_evicted` summary (the
+   * Guards: the record must exist, must not be a terminal summary (the
    * follow-up tool hydrates those first; a summary has no chain to replay),
    * must be terminal, and must not be closed.
    */
   followUp(subagentId: string, input: string): SubagentRecord {
     const record = this._subagents.get(subagentId);
     if (!record) throw new Error(`Subagent '${subagentId}' not found`);
-    if (record._evicted) throw new SubagentEvictedError(subagentId);
+    if (this.isSummary(subagentId)) throw new SubagentEvictedError(subagentId);
     if (!TERMINAL_STATES.has(record.state)) {
       throw new SubagentNotTerminalError(subagentId, record.state);
     }
@@ -558,7 +540,7 @@ export class SubagentManager {
     record.pendingQuestion = null;
     // Reopened chain + follow-up message must persist via the next checkpoint
     // (spawn sets a fresh row; followUp reopens a terminal durable row).
-    this._markRecordDirty(record);
+    this._persistence.beginFollowUp(record.id, { queued: !admitted });
 
     if (admitted) {
       record.state = SubagentState.PENDING;
@@ -576,7 +558,6 @@ export class SubagentManager {
     } else {
       record.state = SubagentState.QUEUED;
       record.queuedAt = now;
-      record._resumeQueued = true;
       this._admission.enqueue(record.id);
       this._notify();
       this._emitDelta(record, {
@@ -657,9 +638,9 @@ export class SubagentManager {
   close(subagentId: string): void {
     const record = this._subagents.get(subagentId);
     if (!record || record.closed) return;
-    // A flag set on an `_evicted` summary never persists (every checkpoint
-    // skips evicted records) — refuse loudly; the tool hydrates these first.
-    if (record._evicted) throw new SubagentSummaryClosedError(subagentId);
+    // A flag set on a terminal summary never persists — refuse loudly; the
+    // tool hydrates these first.
+    if (this.isSummary(subagentId)) throw new SubagentSummaryClosedError(subagentId);
     record.closed = true;
     this._markRecordDirty(record);
     this._notify();
@@ -834,20 +815,19 @@ export class SubagentManager {
       this._finishLive(record, SubagentState.INTERRUPTED);
     }
     this._resolveWaiters(record);
-    if (wasQueued && !record._resumeQueued) {
+    if (wasQueued && !this._persistence.hasDurableEligibility(record.id)) {
       // A record cancelled while QUEUED was never admitted, so it never gets a
       // durable row (persistence eligibility begins at admission) — but it must
       // not linger as a full record either. Evict it to a lean terminal summary
       // under the same retention FIFO as persisted records; the terminal delta
       // above already carried the full record to the renderer. Eviction runs
       // after _resolveWaiters because _evictToSummary drops _resolveWait.
-      this._evictToSummary(record);
-      this._trackSummary(record.sessionId ?? '', record.id, getTerminalRetention());
+      this._applySummaryConfirmation(record, this._persistence.summarizeUndurable(record.id));
     }
     // A resume-queued record owns a durable row (persist-subagent-chains
     // eligibility carve-out), so evicting it here would strand the row with a
     // stale pre-interrupt status and drop the follow-up message — every later
-    // checkpoint skips `_evicted` records. Leave it as a full dirty INTERRUPTED
+    // checkpoint skips summaries. Leave it as a full dirty INTERRUPTED
     // record: the terminal wave persists it, then confirmRecordsPersisted
     // evicts it through the normal row-confirmed path.
     this._notify();
@@ -1064,23 +1044,62 @@ export class SubagentManager {
     return Array.from(this._subagents.values());
   }
 
-  /**
-   * Confirm that terminal records were durably persisted. Only after this
-   * confirmation does the manager evict heavy runtime data (persist-first
-   * ordering guarantee). Non-terminal ids are ignored.
-   */
-  confirmRecordsPersisted(sessionId: string, subagentIds: string[]): void {
-    const retention = getTerminalRetention();
-    for (const id of subagentIds) {
-      const record = this._subagents.get(id);
-      if (!record || record.sessionId !== sessionId) continue;
-      if (!TERMINAL_STATES.has(record.state)) continue;
-      // Already a summary (e.g. a queued cancel, or double confirmation):
-      // re-evicting would be an idempotent no-op, so skip it explicitly.
-      if (record._evicted) continue;
-      this._evictToSummary(record);
-      this._trackSummary(sessionId, id, retention);
+  /** Whether an in-memory record is a lean, durable-backed terminal summary. */
+  isSummary(subagentId: string): boolean {
+    return this._persistence.isSummary(subagentId);
+  }
+
+  /** Whether a stored row must be materialized before tools can mutate it. */
+  needsHydration(subagentId: string): boolean {
+    return this._persistence.needsHydration(subagentId);
+  }
+
+  /** Sessions with confirmed persistence state that recovery must revisit. */
+  trackedPersistenceSessions(): string[] {
+    return this._persistence.trackedSessions();
+  }
+
+  /** Capture dirty durable rows with their exact revisions for one storage write. */
+  checkpointCandidates(
+    sessionId: string,
+    options: { recovery?: boolean; includeUnscoped?: boolean } = {},
+  ): SubagentCheckpointCandidate[] {
+    const candidates: SubagentCheckpointCandidate[] = [];
+    for (const record of this._subagents.values()) {
+      if (record.sessionId !== sessionId && !(options.includeUnscoped && record.sessionId === null)) {
+        continue;
+      }
+      const checkpoint = this._persistence.checkpointCandidate(
+        record.id,
+        sessionId,
+        TERMINAL_STATES.has(record.state),
+        options.recovery === true,
+      );
+      if (checkpoint) candidates.push({ record, checkpoint });
     }
+    return candidates;
+  }
+
+  /** Apply exact-revision persistence confirmations and declared retention effects. */
+  confirmCheckpointCandidates(candidates: readonly SubagentCheckpointCandidate[]): void {
+    for (const candidate of candidates) {
+      const record = this._subagents.get(candidate.record.id);
+      const effect = this._persistence.confirmCheckpoint(candidate.checkpoint);
+      if (effect.evict && record === candidate.record) this._evictToSummary(record);
+      for (const id of effect.removeIds) {
+        this._subagents.delete(id);
+        this._runs.remove(id);
+        this._liveProjection.remove(id);
+      }
+    }
+  }
+
+  /** Compatibility facade for non-writer callers; writers use captured candidates. */
+  confirmRecordsPersisted(sessionId: string, subagentIds: string[]): void {
+    const wanted = new Set(subagentIds);
+    this.confirmCheckpointCandidates(
+      this.checkpointCandidates(sessionId).filter((candidate) => wanted.has(candidate.record.id)),
+    );
   }
 
   /**
@@ -1108,7 +1127,7 @@ export class SubagentManager {
       (id) => this._subagents.get(id)?.sessionId !== sessionId,
     );
     this._admission.filterQueue((id) => this._subagents.has(id));
-    this._terminalSummaries.delete(sessionId);
+    this._persistence.clearSession(sessionId);
     this._liveProjection.clearSessionRevision(sessionId);
     this._notify();
   }
@@ -1123,7 +1142,9 @@ export class SubagentManager {
       sessionId === undefined
         ? this.allRecords()
         : this.allRecords().filter((r) => r.sessionId === sessionId);
-    return records.map((record) => this.toDomainRecord(record));
+    return records
+      .filter((record) => !this.isSummary(record.id))
+      .map((record) => this.toDomainRecord(record));
   }
 
   /** Convert a runtime record using an explicit checkpoint from the live store. */
@@ -1142,24 +1163,22 @@ export class SubagentManager {
    * Materialize durable records back into the runtime map on demand (R9).
    *
    * Targets records whose full form lives only in `session.subagentChains`:
-   * evicted lean summaries (`_evicted`, chain emptied) and everything persisted
+   * terminal summaries (chain emptied) and everything persisted
    * before the current app launch. A live full record always wins (no-op); an
-   * `_evicted` summary shell is REPLACED, because its chain is empty and the
+   * terminal summary shell is REPLACED, because its chain is empty and the
    * stored domain record is the only replay source.
    *
    * Hydration is deliberately silent: no deltas, no `_notify`, no dirty mark —
    * the mutating tool that follows owns notification and persistence. Each
-   * rebuilt record restarts at `persistRevision: 0`, so the caller must also
-   * drop the id's `lastPersistedRevision` entry (see
-   * `forgetSubagentPersistedRevision`); otherwise the revision-gated checkpoint
-   * would skip the re-materialized record forever (R12).
+   * rebuilt record starts a new persistence revision timeline, so the next
+   * post-hydrate mutation cannot be hidden by an earlier confirmation (R12).
    */
   hydrate(specs: HydrateSpec[]): void {
     for (const spec of specs) {
       const existing = this._subagents.get(spec.id);
-      // A live full record wins; only absent ids and chain-less evicted
+      // A live full record wins; only absent ids and chain-less terminal
       // summaries are (re)materialized from durable storage.
-      if (existing && !existing._evicted) continue;
+      if (existing && !this.isSummary(spec.id)) continue;
 
       // Defensive: stored rows only ever carry terminal statuses (the restore
       // migration maps queued/pending/running → interrupted). Skip anything else.
@@ -1200,9 +1219,6 @@ export class SubagentManager {
         projectRuntime: spec.projectRuntime,
         _resolveWait: [],
         closed: domain.closed,
-        _evicted: false,
-        _resumeQueued: false,
-        persistRevision: 0,
         pendingQuestion: null,
       };
       if (domain.reasoning_effort !== undefined) {
@@ -1210,6 +1226,7 @@ export class SubagentManager {
       }
 
       this._subagents.set(spec.id, record);
+      this._persistence.rehydrate(spec.id, spec.sessionId);
       this._liveProjection.start({
         subagentId: spec.id,
         sessionId: spec.sessionId,
@@ -1217,12 +1234,6 @@ export class SubagentManager {
         runId: run.runId,
         terminalEmitted: true,
       });
-      // A re-materialized full record sharing an id with a FIFO-tracked summary
-      // would be deleted from the map when the retention FIFO rolls. Untrack it
-      // so subsequent retention rolls leave it alone (R12).
-      if (existing?._evicted) {
-        this._untrackSummary(spec.sessionId ?? '', spec.id);
-      }
     }
   }
 
@@ -1272,7 +1283,7 @@ export class SubagentManager {
 
   private _admit(record: SubagentRecord): void {
     record.state = SubagentState.PENDING;
-    record._resumeQueued = false;
+    this._persistence.markAdmitted(record.id);
     this._admission.markAdmitted(record.sessionId);
     this._markRecordDirty(record);
     this._updateLive(record, { state: SubagentState.PENDING });
@@ -1308,12 +1319,10 @@ export class SubagentManager {
    * Replace heavy runtime fields with a bounded summary. The record keeps its
    * SubagentRecord shape so downstream type contracts (getStates, wait,
    * prompt-context) don't break; chain messages, live state, projectRuntime,
-   * and abort artifacts are dropped. The `_evicted` flag marks the summary so
-   * persistence flushes and snapshot merges never let it overwrite the
-   * confirmed durable row.
+   * and abort artifacts are dropped. Persistence owns the corresponding
+   * summary status so writers and snapshots retain the durable row as truth.
    */
   private _evictToSummary(record: SubagentRecord): void {
-    record._evicted = true;
     record._resolveWait = null;
     record.pendingQuestion = null;
     record.projectRuntime = undefined;
@@ -1323,28 +1332,17 @@ export class SubagentManager {
     this._liveProjection.clearLiveTail(record.id);
   }
 
-  /** Track an evicted summary in the per-session FIFO; remove oldest over cap. */
-  private _trackSummary(sessionId: string, id: string, retention: number): void {
-    let fifo = this._terminalSummaries.get(sessionId);
-    if (!fifo) {
-      fifo = [];
-      this._terminalSummaries.set(sessionId, fifo);
+  /** Apply one summary declaration and any FIFO removals chosen by persistence. */
+  private _applySummaryConfirmation(
+    record: SubagentRecord,
+    effect: { evict: boolean; removeIds: readonly string[] },
+  ): void {
+    if (effect.evict) this._evictToSummary(record);
+    for (const id of effect.removeIds) {
+      this._subagents.delete(id);
+      this._runs.remove(id);
+      this._liveProjection.remove(id);
     }
-    if (fifo.includes(id)) return;
-    fifo.push(id);
-    while (fifo.length > retention) {
-      const evicted = fifo.shift()!;
-      this._subagents.delete(evicted);
-      this._runs.remove(evicted);
-    }
-  }
-
-  /** Remove an id from the per-session terminal-summary FIFO (no-op if absent). */
-  private _untrackSummary(sessionId: string, id: string): void {
-    const fifo = this._terminalSummaries.get(sessionId);
-    if (!fifo) return;
-    const index = fifo.indexOf(id);
-    if (index >= 0) fifo.splice(index, 1);
   }
 
   // ── Private: run loop ─────────────────────────────────────────────────────
@@ -1580,9 +1578,9 @@ export class SubagentManager {
     this._liveProjection.bumpSessionRevision(record.sessionId);
   }
 
-  /** Mark a durable record mutation: bump the persist revision and the session revision. */
+  /** Mark a durable record mutation and advance its manager-owned revision. */
   private _markRecordDirty(record: SubagentRecord): void {
-    record.persistRevision += 1;
+    this._persistence.markDirty(record.id);
     this._bumpSessionRevision(record);
   }
 

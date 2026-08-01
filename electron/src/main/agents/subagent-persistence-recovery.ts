@@ -6,10 +6,7 @@
  * the tool graph.
  */
 import type { SubagentManager } from './manager';
-import {
-  persistSubagentChains,
-  trackedSubagentPersistenceSessions,
-} from './persist-subagent-chains';
+import { persistSubagentChains } from './persist-subagent-chains';
 
 interface SubagentPersistenceRecoveryScheduler {
   recover: (sessionId: string) => void;
@@ -31,7 +28,7 @@ export function recoverSubagentPersistence(
 ): void {
   if (scheduler) {
     if (sessionId) scheduler.recover(sessionId);
-    else scheduler.recoverAll(trackedSubagentPersistenceSessions());
+    else scheduler.recoverAll(manager.trackedPersistenceSessions());
     return;
   }
   persistSubagentChains(manager, sessionId, { recovery: true });

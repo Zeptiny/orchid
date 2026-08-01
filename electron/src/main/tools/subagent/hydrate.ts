@@ -6,14 +6,12 @@
  * materialized back into the runtime manager on demand so the mutating tools can
  * operate on them (R9). Live full records are left untouched (they win).
  *
- * After a successful hydrate each id's `lastPersistedRevision` entry is dropped
- * so the revision-gated checkpoint does not skip the re-materialized record,
- * whose `persistRevision` restarted at 0 (R12).
+ * Successful hydration resets the manager-owned persistence timeline, so a
+ * post-hydrate mutation receives a fresh checkpoint revision (R12).
  */
 import type { Agent } from '../../../shared/types/agent';
 import type { SubagentRecord as DomainSubagentRecord } from '../../../shared/types/subagent';
 import type { HydrateSpec, SubagentManager } from '../../agents/manager';
-import { forgetSubagentPersistedRevision } from '../../agents/persist-subagent-chains';
 import type { ToolExecutionContext } from '../types';
 
 export interface HydrateSubagentRecordsResult {
@@ -44,11 +42,10 @@ export async function hydrateSubagentRecords(
 
   // Deduplicate so specs/hydrated/agentMissing carry no repeated entries.
   const uniqueIds = [...new Set(ids)];
-  // Only ids that are absent or evicted need materialization; a live full
+  // Only ids that are absent or summaries need materialization; a live full
   // record is the authoritative copy and is never replaced.
   const needsHydration = uniqueIds.filter((id) => {
-    const record = manager.getRecord(id);
-    return !record || record._evicted;
+    return manager.needsHydration(id);
   });
   if (needsHydration.length === 0) {
     return { hydrated, agentMissing };
@@ -93,8 +90,7 @@ export async function hydrateSubagentRecords(
     // A spec can still be skipped defensively (non-terminal status); only reset
     // the persistence tracker for records that actually materialized.
     const record = manager.getRecord(spec.id);
-    if (record && !record._evicted) {
-      forgetSubagentPersistedRevision(sessionId, spec.id);
+    if (record && !manager.isSummary(spec.id)) {
       hydrated.push(spec.id);
     }
   }
