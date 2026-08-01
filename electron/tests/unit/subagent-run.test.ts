@@ -43,4 +43,17 @@ describe('SubagentRunRegistry', () => {
     expect(registry.getPromise('subagent-1')).toBe(promise);
     expect(registry.getSeed('subagent-1')).toEqual({ windowId: null, cwd: null });
   });
+
+  it('reports settling only while a known run has an attached promise', () => {
+    const registry = new SubagentRunRegistry();
+    expect(registry.isSettling('unknown')).toBe(false);
+
+    registry.register('subagent-1');
+    const run = registry.start('subagent-1');
+    registry.attachPromise(run, Promise.resolve());
+    expect(registry.isSettling('subagent-1')).toBe(true);
+
+    registry.settle(run);
+    expect(registry.isSettling('subagent-1')).toBe(false);
+  });
 });

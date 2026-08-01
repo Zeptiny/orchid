@@ -108,7 +108,8 @@ describe('flushStateCallbacks', () => {
 
     const waitPromise = manager.wait([record.id]);
 
-    manager.flushStateCallbacks();
+    const firstFlush = manager.flushStateCallbacks();
+    expect(firstFlush).toContain(record.id);
     expect(manager.flushStateCallbacks()).toEqual([]);
     await waitPromise;
   });

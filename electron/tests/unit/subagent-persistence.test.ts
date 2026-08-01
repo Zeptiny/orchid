@@ -61,6 +61,17 @@ describe('SubagentPersistence', () => {
       .toBe(current.revision);
   });
 
+  it('admits a fresh record to checkpoint eligibility only after admission', () => {
+    const persistence = new SubagentPersistence(() => 2);
+    persistence.register('sub-1', 'session-1', { admitted: false });
+
+    expect(persistence.checkpointCandidate('sub-1', 'session-1', false)).toBeNull();
+
+    persistence.markAdmitted('sub-1');
+
+    expect(persistence.checkpointCandidate('sub-1', 'session-1', false)).not.toBeNull();
+  });
+
   it('uses the legacy empty-session FIFO for undurable queued cancellations', () => {
     const persistence = new SubagentPersistence(() => 1);
     persistence.register('old', null, { admitted: false });

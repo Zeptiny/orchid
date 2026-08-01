@@ -69,6 +69,14 @@ describe('SubagentLiveProjectionStore', () => {
       { type: 'text_delta', sequence: 1, sessionRevision: 1 },
       { type: 'usage', sequence: 2, sessionRevision: 2 },
     ]);
+
+    const batched = store.applyAssemblerEffects('subagent-1', [
+      { type: 'append_text', kind: 'thinking', segmentId: 'segment-2', append: 'thought' },
+      { type: 'append_text', kind: 'text', segmentId: 'segment-3', append: 'answer' },
+    ]);
+    for (const applied of batched) applied.publish?.();
+
+    expect(events.at(-2)?.sequence).toBeLessThan(events.at(-1)!.sequence);
   });
 
   it('advances the checkpoint cursor at a tool boundary so durable prefixes are not duplicated', () => {

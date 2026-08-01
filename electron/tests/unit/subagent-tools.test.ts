@@ -1369,7 +1369,7 @@ describe('hydrateSubagentRecords helper', () => {
     expect(record.label).toBe('persisted');
     expect(record.result).toBe('stored result');
     expect(record.chain?.messages.length).toBeGreaterThan(0);
-    // session.cwd wins over the turn cwd; windowId comes from the turn context.
+    // Runtime records omit cwd and windowId because the manager owns execution affinity.
     expect('cwd' in record).toBe(false);
     expect('windowId' in record).toBe(false);
   });

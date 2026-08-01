@@ -998,6 +998,7 @@ describe('persistSubagentChains dirty tracking (U6)', () => {
     expect(restoredManager.trackedPersistenceSessions()).not.toContain(sid);
     persistSubagentChains(restoredManager, sid);
     expect(sessionManagerStub.syncSubagentRecords).toHaveBeenCalledTimes(2);
+    expect(restoredManager.trackedPersistenceSessions()).toContain(sid);
   });
 
   it('logs checkpoint bytes and duration (R9)', () => {

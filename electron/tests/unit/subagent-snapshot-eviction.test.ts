@@ -171,6 +171,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.restoreAllMocks();
   setSubagentPersistenceRecoveryScheduler(null);
   sessionManagerHolder.current = null;
   subagentManagerHolder.current = null;

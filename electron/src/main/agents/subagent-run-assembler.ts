@@ -51,7 +51,7 @@ export type SubagentRunProjectionEffect =
       readonly toolResult: CanonicalToolResult;
       readonly finishedAt: string;
       readonly messages: readonly Message[];
-      readonly committedSegmentCount: number;
+      readonly committedSegmentCount?: number;
     };
 
 export interface SubagentRunFinalization {
@@ -199,7 +199,7 @@ export class SubagentRunAssembler {
     this.messages.push(makeToolCallMessage(toolCallId, toolName, args, tool?.segmentId));
     // A tool segment is represented by its durable tool-call message, not by
     // `commitThrough`, so advance past it after adding that message.
-    this.committedSegmentCount = this.segments.length;
+    this.committedSegmentCount = Math.max(this.committedSegmentCount, toolIndex + 1);
     effects.push({
       type: 'tool_call',
       toolCallId,
@@ -218,9 +218,10 @@ export class SubagentRunAssembler {
   ): SubagentRunProjectionEffect {
     const toolName = this.toolNames.get(event.toolCallId) ?? 'unknown';
     const tool = this.tools.get(event.toolCallId);
-    if (!this.messages.some(
+    const toolCallMaterialized = this.messages.some(
       (message) => message.type === 'tool_call' && message.tool_call_id === event.toolCallId,
-    )) {
+    );
+    if (!toolCallMaterialized) {
       this.messages.push(makeToolCallMessage(event.toolCallId, toolName, '{}', tool?.segmentId));
     }
     this.messages.push(makeToolResultMessage(
@@ -230,7 +231,6 @@ export class SubagentRunAssembler {
       event.execution.canonical,
       `${event.toolCallId}:result`,
     ));
-    this.committedSegmentCount = this.segments.length;
     return {
       type: 'tool_result',
       toolCallId: event.toolCallId,
@@ -239,7 +239,7 @@ export class SubagentRunAssembler {
       toolResult: event.execution.canonical,
       finishedAt: this.now(),
       messages: [...this.messages],
-      committedSegmentCount: this.committedSegmentCount,
+      ...(toolCallMaterialized ? { committedSegmentCount: this.committedSegmentCount } : {}),
     };
   }
 

@@ -1326,7 +1326,10 @@ export class SubagentManager {
     }
 
     const abort = run.abortController;
-    if (!abort) return;
+    if (!abort) {
+      this._runs.settle(run);
+      return;
+    }
     const seed = this._runs.getSeed(record.id);
     this.markRunning(record.id);
 

@@ -97,7 +97,8 @@ export class SubagentRunRegistry {
   }
 
   isSettling(subagentId: string): boolean {
-    return this.runs.get(subagentId)?.promise !== null;
+    const run = this.runs.get(subagentId);
+    return run !== undefined && run.promise !== null;
   }
 
   getPromise(subagentId: string): Promise<void> | null {

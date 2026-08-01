@@ -87,8 +87,8 @@ export async function hydrateSubagentRecords(
 
   manager.hydrate(specs);
   for (const spec of specs) {
-    // A spec can still be skipped defensively (non-terminal status); only reset
-    // the persistence tracker for records that actually materialized.
+    // A spec can still be skipped defensively (non-terminal status); only
+    // record IDs for specs that actually materialized.
     const record = manager.getRecord(spec.id);
     if (record && !manager.isSummary(spec.id)) {
       hydrated.push(spec.id);

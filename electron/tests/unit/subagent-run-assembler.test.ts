@@ -71,6 +71,24 @@ describe('SubagentRunAssembler', () => {
     expect(finalization.result).toBe('Before tool. Found it.');
   });
 
+  it('preserves content between overlapping tool starts when the earlier call materializes', () => {
+    const run = assembler();
+
+    const [startA] = run.accept({ type: 'tool_call_start', toolCallId: 'tool-a', toolName: 'read' });
+    const [content] = run.accept({ type: 'content', text: 'Between tools.' });
+    const [startB] = run.accept({ type: 'tool_call_start', toolCallId: 'tool-b', toolName: 'grep' });
+    run.accept({ type: 'tool_call', toolCallId: 'tool-a', toolName: 'read', args: '{}' });
+
+    const finalization = run.complete();
+
+    expect([startA, content, startB].map((effect) => 'segmentId' in effect ? effect.segmentId : null))
+      .toEqual(['segment-1', 'segment-2', 'segment-3']);
+    expect(messages(finalization)).toEqual([
+      { type: MessageType.TOOL_CALL, content: '', toolCallId: 'tool-a', name: 'read', id: 'segment-1' },
+      { type: MessageType.TEXT, content: 'Between tools.', toolCallId: null, name: null, id: 'segment-2' },
+    ]);
+  });
+
   it('uses the latest text-producing step as the final result', () => {
     const run = assembler();
 

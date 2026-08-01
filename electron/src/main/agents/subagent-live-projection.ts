@@ -223,16 +223,19 @@ export class SubagentLiveProjectionStore {
             });
           }
           this.advance(entry);
+          const sequence = entry.projection.sequence;
           applied.push({
             publish: () => this.emitEntry(entry, effect.kind === 'text'
               ? { type: SubagentDeltaEventType.TEXT_DELTA, segmentId: effect.segmentId, append: effect.append }
-              : { type: SubagentDeltaEventType.THINKING_DELTA, segmentId: effect.segmentId, append: effect.append }),
+              : { type: SubagentDeltaEventType.THINKING_DELTA, segmentId: effect.segmentId, append: effect.append },
+            sequence),
           });
           break;
         }
         case 'usage': {
           entry.projection.usage = effect.usage;
           this.advance(entry);
+          const sequence = entry.projection.sequence;
           const now = this.now();
           const publish = entry.lastUsageDeltaAt === 0 ||
             now - entry.lastUsageDeltaAt >= this.getUsageDeltaIntervalMs();
@@ -240,7 +243,13 @@ export class SubagentLiveProjectionStore {
           applied.push({
             usage: effect.usage,
             ...(publish
-              ? { publish: () => this.emitEntry(entry, { type: SubagentDeltaEventType.USAGE, usage: effect.usage }) }
+              ? {
+                  publish: () => this.emitEntry(
+                    entry,
+                    { type: SubagentDeltaEventType.USAGE, usage: effect.usage },
+                    sequence,
+                  ),
+                }
               : {}),
           });
           break;
@@ -260,6 +269,7 @@ export class SubagentLiveProjectionStore {
           });
           entry.projection.segments.push({ kind: 'tool', id: effect.segmentId, toolCallId: effect.toolCallId });
           this.advance(entry);
+          const sequence = entry.projection.sequence;
           applied.push({
             publish: () => this.emitEntry(entry, {
               type: SubagentDeltaEventType.TOOL_START,
@@ -269,7 +279,7 @@ export class SubagentLiveProjectionStore {
               status: 'generating',
               args: '',
               startedAt: effect.startedAt,
-            }),
+            }, sequence),
           });
           break;
         }
@@ -278,12 +288,13 @@ export class SubagentLiveProjectionStore {
           if (!tool) break;
           tool.partialArgs += effect.append;
           this.advance(entry);
+          const sequence = entry.projection.sequence;
           applied.push({
             publish: () => this.emitEntry(entry, {
               type: SubagentDeltaEventType.TOOL_ARGS_DELTA,
               toolCallId: effect.toolCallId,
               append: effect.append,
-            }),
+            }, sequence),
           });
           break;
         }
@@ -296,6 +307,7 @@ export class SubagentLiveProjectionStore {
             tool.partialArgs = effect.args;
             this.advance(entry);
           }
+          const sequence = entry.projection.sequence;
           // The assembler has committed every segment through this durable
           // tool-call boundary. Move the checkpoint cursor atomically with the
           // transcript effect so a later checkpoint cannot duplicate its
@@ -315,7 +327,7 @@ export class SubagentLiveProjectionStore {
                 status: 'running',
                 args: effect.args,
                 startedAt: effect.startedAt!,
-              }) }
+              }, sequence) }
               : {}),
           });
           break;
@@ -329,9 +341,13 @@ export class SubagentLiveProjectionStore {
             tool.finishedAt = effect.finishedAt;
             this.advance(entry);
           }
+          const sequence = entry.projection.sequence;
           // A result can also materialize a missing tool-call transcript, so
-          // it carries the same authoritative assembler cursor.
-          entry.committedSegmentCount = effect.committedSegmentCount;
+          // only advance the checkpoint when the assembler provides an
+          // authoritative cursor for an already-materialized call.
+          if (effect.committedSegmentCount !== undefined) {
+            entry.committedSegmentCount = effect.committedSegmentCount;
+          }
           applied.push({
             transcript: {
               messages: effect.messages,
@@ -344,7 +360,7 @@ export class SubagentLiveProjectionStore {
               content: effect.content,
               toolResult: effect.toolResult,
               finishedAt: effect.finishedAt,
-            }),
+            }, sequence),
           });
           break;
         }
@@ -408,14 +424,18 @@ export class SubagentLiveProjectionStore {
     this.bumpSessionRevision(entry.projection.sessionId);
   }
 
-  private emitEntry(entry: ProjectionEntry, delta: SubagentDeltaPayload): void {
+  private emitEntry(
+    entry: ProjectionEntry,
+    delta: SubagentDeltaPayload,
+    sequence = entry.projection.sequence,
+  ): void {
     if (!this.onDelta) return;
     const sessionId = entry.projection.sessionId ?? '';
     const event = {
       sessionId,
       subagentId: entry.projection.subagentId,
       runId: entry.projection.runId,
-      sequence: entry.projection.sequence,
+      sequence,
       sessionRevision: this.getSessionRevision(sessionId),
       ...delta,
     } as SubagentDeltaEvent;

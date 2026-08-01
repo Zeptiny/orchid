@@ -1839,7 +1839,6 @@ describe('SubagentManager follow-up resume (U4)', () => {
     await tick();
     expect(target.state).toBe(SubagentState.RUNNING);
     expect(manager.getQueuePosition(target.id)).toBeNull();
-    expect(manager.getQueuePosition(target.id)).toBeNull();
 
     gates[2]();
     await manager.getRunPromise(target.id);
@@ -1880,7 +1879,6 @@ describe('SubagentManager follow-up resume (U4)', () => {
     expect(target.chain?.status).toBe(statusBefore);
     expect(manager.getRunGeneration(target.id)).toBe(generationBefore);
     expect(manager.getLiveProjection(target.id)!.runId).toBe(liveRunIdBefore);
-    expect(manager.getQueuePosition(target.id)).toBeNull();
     expect(manager.getQueuePosition(target.id)).toBeNull();
   });
 
