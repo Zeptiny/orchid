@@ -10,6 +10,7 @@
  * - Error handling
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import * as path from 'node:path';
 
 // ---------------------------------------------------------------------------
 // Mock electron and electron-updater before importing updater
@@ -408,11 +409,27 @@ describe('checkForUpdates', () => {
 
     updater.initUpdater();
 
+    const updateAvailableHandler = mockAutoUpdater.on.mock.calls.find(
+      (call: unknown[]) => call[0] === 'update-available',
+    )?.[1] as ((info: unknown) => void) | undefined;
+    const downloadProgressHandler = mockAutoUpdater.on.mock.calls.find(
+      (call: unknown[]) => call[0] === 'download-progress',
+    )?.[1] as ((progress: unknown) => void) | undefined;
+
+    updateAvailableHandler!({ version: '2.0.0', releaseNotes: 'New features' });
+    downloadProgressHandler!({ percent: 50 });
+
     await updater.checkForUpdates();
 
+    expect(mockUpdateConfigExists).toHaveBeenCalledWith(
+      path.join('/test/orchid/resources', 'app-update.yml'),
+    );
     expect(mockAutoUpdater.checkForUpdates).not.toHaveBeenCalled();
-    expect(updater.getUpdaterState()).toMatchObject({
+    expect(updater.getUpdaterState()).toEqual({
       status: 'not-available',
+      version: null,
+      releaseNotes: null,
+      progress: null,
       error: null,
     });
   });

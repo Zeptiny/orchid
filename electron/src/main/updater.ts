@@ -149,6 +149,9 @@ export async function checkForUpdates(): Promise<void> {
 
   if (!hasPackagedUpdateConfiguration()) {
     state.status = 'not-available';
+    state.version = null;
+    state.releaseNotes = null;
+    state.progress = null;
     state.error = null;
     return;
   }
