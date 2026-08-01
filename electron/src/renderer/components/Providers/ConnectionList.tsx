@@ -307,8 +307,9 @@ export function ConnectionList({
                       label="Edit connection"
                       icon="edit"
                       size="sm"
+                      shape="square"
                       iconSize={14}
-                      className="btn-square h-7 w-7"
+                      className="h-7 w-7"
                       onClick={() => onEditConnection(connection)}
                       disabled={isBusy}
                     />
@@ -376,8 +377,9 @@ export function ConnectionList({
                     icon="trash"
                     variant="error"
                     size="sm"
+                    shape="square"
                     iconSize={14}
-                    className="btn-square h-7 w-7"
+                    className="h-7 w-7"
                     onClick={(event) => {
                       deleteTriggerRef.current = event.currentTarget;
                       setConfirmDisconnectId(null);

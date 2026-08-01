@@ -50,6 +50,14 @@ describe('IconButton', () => {
     expect(html).not.toContain('btn-circle');
   });
 
+  it('supports square icon-only controls without feature-level button classes', () => {
+    const html = markup(
+      createElement(IconButton, { label: 'Edit connection', icon: 'edit', shape: 'square' }),
+    );
+    expect(html).toContain('btn-square');
+    expect(html).not.toContain('btn-circle');
+  });
+
   it('disables and marks busy while loading', () => {
     const html = markup(
       createElement(IconButton, { label: 'Refresh', icon: 'refresh', loading: true }),
