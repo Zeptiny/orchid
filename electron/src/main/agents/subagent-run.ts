@@ -108,10 +108,6 @@ export class SubagentRunRegistry {
     return this.runs.get(subagentId)?.generation;
   }
 
-  getRunId(subagentId: string): string | undefined {
-    return this.runs.get(subagentId)?.runId;
-  }
-
   getSeed(subagentId: string): SubagentExecutionSeed | undefined {
     return this.runs.get(subagentId)?.seed;
   }

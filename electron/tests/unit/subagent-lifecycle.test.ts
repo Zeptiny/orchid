@@ -34,13 +34,14 @@ describe('SubagentLifecycle', () => {
 
     expect(lifecycle.transition(item, { type: 'running', now: 3 })).toBeNull();
     expect(item.state).toBe(SubagentState.QUEUED);
-    expect(lifecycle.transition(item, { type: 'admit' })?.state).toBe(SubagentState.PENDING);
+    expect(lifecycle.transition(item, { type: 'admit' })).not.toBeNull();
+    expect(item.state).toBe(SubagentState.PENDING);
     expect(item.queuedAt).toBe(2);
-    expect(lifecycle.transition(item, { type: 'running', now: 4 })?.state).toBe(SubagentState.RUNNING);
+    expect(lifecycle.transition(item, { type: 'running', now: 4 })).not.toBeNull();
+    expect(item.state).toBe(SubagentState.RUNNING);
     expect(item.startedAt).toBe(4);
     const completed = lifecycle.transition(item, { type: 'complete', result: 'done', now: 5 });
-    expect(completed?.terminal).toBe(true);
-    expect(completed?.effects).toMatchObject({
+    expect(completed).toMatchObject({
       persist: true, resolveWaiters: true, removeFromAdmissionQueue: true,
       admitNext: true, finishProjection: true,
     });
@@ -59,8 +60,9 @@ describe('SubagentLifecycle', () => {
       usage: { totalTokens: 3 },
     });
 
-    expect(lifecycle.transition(item, { type: 'follow-up', admitted: false, now: 20 })?.state)
-      .toBe(SubagentState.QUEUED);
+    expect(lifecycle.transition(item, { type: 'follow-up', admitted: false, now: 20 }))
+      .not.toBeNull();
+    expect(item.state).toBe(SubagentState.QUEUED);
     expect(item).toMatchObject({
       result: null,
       error: null,

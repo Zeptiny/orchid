@@ -69,7 +69,6 @@ describe('SubagentRunAssembler', () => {
       { type: MessageType.TEXT, content: 'Found it.', toolCallId: null, name: null, id: 'segment-4' },
     ]);
     expect(finalization.result).toBe('Before tool. Found it.');
-    expect(finalization.committedSegmentCount).toBe(4);
   });
 
   it('uses the latest text-producing step as the final result', () => {

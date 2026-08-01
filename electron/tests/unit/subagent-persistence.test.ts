@@ -8,7 +8,7 @@ describe('SubagentPersistence', () => {
     persistence.markDirty('sub-1');
     const terminal = persistence.checkpointCandidate('sub-1', 'session-1', true)!;
 
-    persistence.beginFollowUp('sub-1', { queued: false });
+    persistence.beginFollowUp('sub-1');
 
     expect(persistence.confirmCheckpoint(terminal)).toEqual({ evict: false, removeIds: [] });
     expect(persistence.checkpointCandidate('sub-1', 'session-1', false)?.revision)

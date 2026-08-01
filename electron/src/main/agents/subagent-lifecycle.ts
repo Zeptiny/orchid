@@ -1,19 +1,15 @@
-import { SubagentState } from './types';
+import type { AskQuestionAnswerMessage, AskQuestionAskedEvent } from '../../shared/types/ipc';
+import { isTerminalSubagentState, SubagentState } from './types';
 
 export type SubagentWaiterReason = 'state-change' | 'flush';
 
 export type SubagentQuestionResult =
-  | { type: 'answered'; answers: Array<{ selected: string[]; text: string | null; skipped: boolean }> }
+  | { type: 'answered'; answers: AskQuestionAnswerMessage['answers'] }
   | { type: 'declined' };
 
 export interface SubagentQuestion {
   readonly toolCallId: string;
-  readonly questions: Array<{
-    type: 'single' | 'multi';
-    title: string;
-    description?: string;
-    options: Array<{ label: string; description?: string }>;
-  }>;
+  readonly questions: AskQuestionAskedEvent['questions'];
 }
 
 interface PendingQuestion extends SubagentQuestion {
@@ -41,27 +37,16 @@ export type SubagentLifecycleEvent =
   | { type: 'follow-up'; admitted: boolean; now: number }
   | { type: 'close' };
 
-export interface SubagentLifecycleTransition {
-  readonly previous: SubagentState;
-  readonly state: SubagentState;
-  readonly terminal: boolean;
-  /** Effects the manager must coordinate with other focused collaborators. */
-  readonly effects: {
-    readonly persist: boolean;
-    readonly notify: boolean;
-    readonly resolveWaiters: boolean;
-    readonly removeFromAdmissionQueue: boolean;
-    readonly admitNext: boolean;
-    readonly finishProjection: boolean;
-    readonly clearQuestion: boolean;
-  };
+/** Effects the manager coordinates with the focused runtime collaborators. */
+export interface SubagentLifecycleEffects {
+  readonly persist: boolean;
+  readonly notify: boolean;
+  readonly resolveWaiters: boolean;
+  readonly removeFromAdmissionQueue: boolean;
+  readonly admitNext: boolean;
+  readonly finishProjection: boolean;
+  readonly clearQuestion: boolean;
 }
-
-const TERMINAL = new Set<SubagentState>([
-  SubagentState.COMPLETED,
-  SubagentState.FAILED,
-  SubagentState.INTERRUPTED,
-]);
 
 /**
  * Owns runtime-only coordination which must never leak into a persisted
@@ -74,8 +59,7 @@ export class SubagentLifecycle {
   private readonly waiters = new Map<string, Set<(reason: SubagentWaiterReason) => void>>();
   private readonly questions = new Map<string, PendingQuestion>();
 
-  transition(record: LifecycleRecord, event: SubagentLifecycleEvent): SubagentLifecycleTransition | null {
-    const previous = record.state;
+  transition(record: LifecycleRecord, event: SubagentLifecycleEvent): SubagentLifecycleEffects | null {
     switch (event.type) {
       case 'admit':
         if (record.state !== SubagentState.QUEUED) return null;
@@ -87,25 +71,25 @@ export class SubagentLifecycle {
         record.startedAt ??= event.now;
         break;
       case 'complete':
-        if (TERMINAL.has(record.state)) return null;
+        if (isTerminalSubagentState(record.state)) return null;
         record.state = SubagentState.COMPLETED;
         record.result = event.result;
         record.endTime = event.now;
         break;
       case 'fail':
-        if (TERMINAL.has(record.state)) return null;
+        if (isTerminalSubagentState(record.state)) return null;
         record.state = SubagentState.FAILED;
         record.error = event.error;
         record.endTime = event.now;
         break;
       case 'interrupt':
-        if (TERMINAL.has(record.state)) return null;
+        if (isTerminalSubagentState(record.state)) return null;
         record.state = SubagentState.INTERRUPTED;
         record.error ??= event.error;
         record.endTime ??= event.now;
         break;
       case 'follow-up':
-        if (!TERMINAL.has(record.state) || record.closed) return null;
+        if (!isTerminalSubagentState(record.state) || record.closed) return null;
         record.state = event.admitted ? SubagentState.PENDING : SubagentState.QUEUED;
         record.result = null;
         record.error = null;
@@ -120,20 +104,15 @@ export class SubagentLifecycle {
         record.closed = true;
         break;
     }
-    const terminal = TERMINAL.has(record.state);
+    const terminal = isTerminalSubagentState(record.state);
     return {
-      previous,
-      state: record.state,
-      terminal,
-      effects: {
-        persist: true,
-        notify: true,
-        resolveWaiters: terminal,
-        removeFromAdmissionQueue: terminal,
-        admitNext: terminal,
-        finishProjection: terminal,
-        clearQuestion: event.type === 'follow-up' || event.type === 'interrupt',
-      },
+      persist: true,
+      notify: true,
+      resolveWaiters: terminal,
+      removeFromAdmissionQueue: terminal,
+      admitNext: terminal,
+      finishProjection: terminal,
+      clearQuestion: event.type === 'follow-up' || event.type === 'interrupt',
     };
   }
 

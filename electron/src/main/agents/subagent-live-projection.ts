@@ -66,7 +66,6 @@ export interface SubagentProjectionDurableEffect {
   readonly usage?: Usage;
   readonly transcript?: {
     readonly messages: readonly Message[];
-    readonly committedSegmentCount: number;
   };
   readonly notify?: boolean;
   readonly publish?: () => void;
@@ -304,7 +303,6 @@ export class SubagentLiveProjectionStore {
           applied.push({
             transcript: {
               messages: effect.messages,
-              committedSegmentCount: effect.committedSegmentCount,
             },
             notify: true,
             ...(effect.segmentId && effect.startedAt
@@ -336,7 +334,6 @@ export class SubagentLiveProjectionStore {
           applied.push({
             transcript: {
               messages: effect.messages,
-              committedSegmentCount: effect.committedSegmentCount,
             },
             notify: true,
             publish: () => this.emitEntry(entry, {

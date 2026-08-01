@@ -85,7 +85,7 @@ export class SubagentPersistence {
   }
 
   /** A follow-up always owns an already durable record, even while queued. */
-  beginFollowUp(id: string, _options: { queued: boolean }): void {
+  beginFollowUp(id: string): void {
     const state = this.require(id);
     state.durableEligible = true;
     state.summary = false;

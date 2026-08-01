@@ -56,7 +56,6 @@ export type SubagentRunProjectionEffect =
 export interface SubagentRunFinalization {
   readonly state: 'completed' | 'interrupted' | 'failed';
   readonly messages: readonly Message[];
-  readonly committedSegmentCount: number;
   readonly usage: Usage | null;
   readonly result: string | null;
   readonly error: string | null;
@@ -272,7 +271,6 @@ export class SubagentRunAssembler {
     return {
       state,
       messages: [...this.messages],
-      committedSegmentCount: this.committedSegmentCount,
       usage: this.accumulatedUsage,
       result,
       error,
