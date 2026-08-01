@@ -19,10 +19,8 @@ import type { Chain } from '../../shared/types/chain';
 import { ChainStatus } from '../../shared/types/chain';
 import type { ModelSelection } from '../../shared/types/provider';
 import type { Message, Usage } from '../../shared/types/message';
-import { MessageType } from '../../shared/types/message';
 import type { StreamEvent } from '../llm/orchestrator';
 import type { ProjectRuntime } from '../project/runtime';
-import { addStepUsage } from '../../shared/usage';
 import type { SubagentRecord as DomainSubagentRecord } from '../../shared/types/subagent';
 import {
   SubagentDeltaEventType,
@@ -37,14 +35,17 @@ import {
 import {
   makeAssistantMessage,
   makeThinkingMessage,
-  makeToolCallMessage,
-  makeToolResultMessage,
   makeUserMessage,
 } from '../llm/message-factories';
 import { getConfig } from '../config/loader';
 import { subagentsConfigSchema } from '../config/schema';
 import { AdmissionController, type AdmissionCounters, type SubagentAdmissionLimits } from './admission';
 import { SubagentRunRegistry, type SubagentRun } from './subagent-run';
+import {
+  SubagentRunAssembler,
+  type SubagentRunFinalization,
+  type SubagentRunProjectionEffect,
+} from './subagent-run-assembler';
 import {
   SubagentWaitTimeoutError,
   SubagentQueueFullError,
@@ -1397,25 +1398,13 @@ export class SubagentManager {
     if (!abort) return;
     this.markRunning(record.id);
 
-    const messages: Message[] = [...(record.chain?.messages ?? [])];
-    let responseText = '';
-    let resultText = '';
-    // Per-step text tracking so the returned result is the subagent's last
-    // message rather than the concatenation of every step's narration.
-    // `stepText` accumulates the current step; `lastStepResult` remembers the
-    // most recent step that produced text (so a trailing tool-only step does
-    // not blank out the answer).
-    let stepText = '';
-    let lastStepResult = '';
-    let accumulatedUsage: Usage | null = null;
-    // Track open tool calls for result pairing in the chain
-    const toolNames = new Map<string, string>();
+    const assembler = new SubagentRunAssembler(record.chain?.messages ?? []);
 
     try {
       const stream = runner({
         task: record.task,
         // Replay the full chain on a resume; a mutable snapshot keeps the
-        // runner's history independent of the run-loop message accumulator.
+        // runner's history independent of the assembler's message accumulator.
         history: [...(record.chain?.messages ?? [])],
         agent: record.agent,
         selection: record.selection,
@@ -1440,251 +1429,173 @@ export class SubagentManager {
         if (abort.signal.aborted || record.state === SubagentState.INTERRUPTED) {
           break;
         }
-
-        switch (event.type) {
-          case 'content': {
-            responseText += event.text;
-            resultText += event.text;
-            stepText += event.text;
-            this._appendLiveText(record, 'text', event.text);
-            break;
-          }
-          case 'usage': {
-            accumulatedUsage = addStepUsage(accumulatedUsage, event.usage);
-            record.usage = accumulatedUsage;
-            this._updateLive(record, { usage: accumulatedUsage });
-            if (accumulatedUsage) {
-              const now = Date.now();
-              if (record._lastUsageDeltaAt === 0 || now - record._lastUsageDeltaAt >= getUsageDeltaIntervalMs()) {
-                record._lastUsageDeltaAt = now;
-                this._emitDelta(record, { type: SubagentDeltaEventType.USAGE, usage: accumulatedUsage });
-              }
-            }
-            break;
-          }
-          case 'thinking': {
-            this._appendLiveText(record, 'thinking', event.text);
-            break;
-          }
-          case 'tool_call':
-          case 'tool_call_start': {
-            const toolCallId =
-              'toolCallId' in event ? event.toolCallId : randomUUID();
-            const toolName =
-              'toolName' in event && event.toolName ? event.toolName : 'unknown';
-            const args =
-              event.type === 'tool_call' && 'args' in event ? event.args : '{}';
-            toolNames.set(toolCallId, toolName);
-            this._ensureLiveTool(record, toolCallId, toolName);
-            // Only record tool_call once we have args (tool_call event)
-            if (event.type === 'tool_call') {
-              const toolSegment = record.live.segments.find(
-                (segment) => segment.kind === 'tool' && segment.toolCallId === toolCallId,
-              );
-              const toolIndex = toolSegment
-                ? record.live.segments.indexOf(toolSegment)
-                : record.live.segments.length;
-              this._commitLiveSegments(record, messages, toolIndex);
-              this._updateLiveTool(record, toolCallId, {
-                status: 'running',
-                args,
-                partialArgs: args,
-              });
-              messages.push(makeToolCallMessage(toolCallId, toolName, args, toolSegment?.id));
-              this._markLiveCommitted(record);
-              this._setChainMessages(record, messages);
-              this._notify();
-              if (toolSegment) {
-                const startedAt = record.live.toolCalls.find(
-                  (tool) => tool.toolCallId === toolCallId,
-                )?.startedAt ?? new Date().toISOString();
-                this._emitDelta(record, {
-                  type: SubagentDeltaEventType.TOOL_START,
-                  segmentId: toolSegment.id,
-                  toolCallId,
-                  toolName,
-                  status: 'running',
-                  args,
-                  startedAt,
-                });
-              }
-            }
-            break;
-          }
-          case 'tool_call_delta': {
-            const current = record.live.toolCalls.find(
-              (tool) => tool.toolCallId === event.toolCallId,
-            );
-            this._ensureLiveTool(record, event.toolCallId, current?.toolName ?? 'unknown');
-            this._updateLiveTool(record, event.toolCallId, {
-              partialArgs: `${current?.partialArgs ?? ''}${event.argsDelta}`,
-            });
-            this._emitDelta(record, {
-              type: SubagentDeltaEventType.TOOL_ARGS_DELTA,
-              toolCallId: event.toolCallId,
-              append: event.argsDelta,
-            });
-            break;
-          }
-          case 'tool_result': {
-            const toolName = toolNames.get(event.toolCallId) ?? 'unknown';
-            // Ensure a tool_call exists (start-only path)
-            if (!messages.some(
-              (m) =>
-                m.type === MessageType.TOOL_CALL &&
-                m.tool_call_id === event.toolCallId,
-            )) {
-              const toolSegment = record.live.segments.find(
-                (segment) => segment.kind === 'tool' && segment.toolCallId === event.toolCallId,
-              );
-              messages.push(
-                makeToolCallMessage(event.toolCallId, toolName, '{}', toolSegment?.id),
-              );
-            }
-            messages.push(
-              makeToolResultMessage(
-                event.toolCallId,
-                toolName,
-                event.content,
-                event.execution.canonical,
-                `${event.toolCallId}:result`,
-              ),
-            );
-            const finishedAt = new Date().toISOString();
-            this._updateLiveTool(record, event.toolCallId, {
-              status: event.execution.canonical.status,
-              content: event.content,
-              toolResult: event.execution.canonical,
-              finishedAt,
-            });
-            this._markLiveCommitted(record);
-            this._setChainMessages(record, messages);
-            this._notify();
-            this._emitDelta(record, {
-              type: SubagentDeltaEventType.TOOL_RESULT,
-              toolCallId: event.toolCallId,
-              status: event.execution.canonical.status,
-              content: event.content,
-              toolResult: event.execution.canonical,
-              finishedAt,
-            });
-            break;
-          }
-          case 'error': {
-            throw new Error(event.detail || event.title || 'Subagent stream error');
-          }
-          case 'step_finish': {
-            if (stepText.trim()) lastStepResult = stepText;
-            stepText = '';
-            break;
-          }
-          case 'finish':
-          default:
-            break;
-        }
+        if (!this._applyAssemblerEffects(record, run, assembler.accept(event))) return;
       }
 
       if (!this._runs.isCurrent(run)) return;
       if (abort.signal.aborted || record.state === SubagentState.INTERRUPTED) {
-        this._flushPartialOnInterrupt(
-          record,
-          messages,
-          responseText,
-          resultText,
-          accumulatedUsage,
-        );
+        this._applyAssemblerFinalization(record, run, assembler.interrupt());
         return;
       }
-
-      // Commit the remaining live prefix in exactly the order emitted. Segment
-      // IDs become message IDs so a durable handoff cannot duplicate bubbles.
-      this._commitLiveSegments(record, messages, record.live.segments.length, accumulatedUsage);
-
-      // Prefer the last step's text (the subagent's final message). Fall back
-      // to the full accumulation when no step boundary was observed (e.g. the
-      // textStream fallback path, which does not emit step_finish).
-      const finalStepText = stepText.trim() ? stepText : lastStepResult;
-      record.result = finalStepText || resultText || record.result;
-      record.usage = accumulatedUsage;
-      this._setChainMessages(record, messages);
-      this._markLiveCommitted(record);
-      this.markCompleted(record.id, record.result ?? '');
+      this._applyAssemblerFinalization(record, run, assembler.complete());
     } catch (err) {
       if (!this._runs.isCurrent(run)) return;
       if (abort.signal.aborted || record.state === SubagentState.INTERRUPTED) {
-        this._flushPartialOnInterrupt(
-          record,
-          messages,
-          responseText,
-          resultText,
-          accumulatedUsage,
-        );
+        this._applyAssemblerFinalization(record, run, assembler.interrupt());
         return;
       }
-      // Keep partial content in the same chronological, ID-stable form as a
-      // normal completion. The live projection may already contain both text
-      // and thinking, so do not append the accumulator a second time.
-      this._commitLiveSegments(record, messages, record.live.segments.length, accumulatedUsage);
-      this._setChainMessages(record, messages);
       const message = err instanceof Error ? err.message : String(err);
-      record.usage = accumulatedUsage;
-      this.markFailed(record.id, message);
+      this._applyAssemblerFinalization(record, run, assembler.fail(message));
     } finally {
-      if (!this._runs.isCurrent(run)) return;
-      if (record.state === SubagentState.INTERRUPTED) {
-        this._finishLive(record, SubagentState.INTERRUPTED);
+      if (this._runs.isCurrent(run)) {
+        if (record.state === SubagentState.INTERRUPTED) {
+          this._finishLive(record, SubagentState.INTERRUPTED);
+        }
+        this._runs.settle(run);
+        if (this._subagents.get(record.id) !== record) this._runs.remove(record.id);
       }
-      this._runs.settle(run);
-      if (this._subagents.get(record.id) !== record) this._runs.remove(record.id);
     }
   }
 
-  private _flushPartialOnInterrupt(
+  /** Apply the assembler's small live-projection effects behind the run guard. */
+  private _applyAssemblerEffects(
     record: SubagentRecord,
-    messages: Message[],
-    responseText: string,
-    resultText: string,
-    accumulatedUsage: Usage | null,
-  ): void {
-    this._commitLiveSegments(record, messages, record.live.segments.length, accumulatedUsage);
-    if (resultText) {
-      record.result = resultText;
-    }
-    if (accumulatedUsage) {
-      record.usage = accumulatedUsage;
-    }
-    this._setChainMessages(record, messages);
-    this._markLiveCommitted(record);
-    if (record.state === SubagentState.INTERRUPTED) this._finalizeChain(record, ChainStatus.INTERRUPTED);
-    this._notify();
-  }
-
-  /** Commit only the live segment prefix before `endIndex`, preserving order. */
-  private _commitLiveSegments(
-    record: SubagentRecord,
-    messages: Message[],
-    endIndex: number,
-    usage: Usage | null = null,
-  ): void {
-    const segments = record.live.segments;
-    const lastTextIndex = segments
-      .slice(record._liveCommittedSegmentCount, endIndex)
-      .map((segment, index) => ({ segment, index: record._liveCommittedSegmentCount + index }))
-      .filter(({ segment }) => segment.kind === 'text')
-      .at(-1)?.index;
-    for (let index = record._liveCommittedSegmentCount; index < endIndex; index += 1) {
-      const segment = segments[index];
-      if (segment.kind === 'text' && segment.content.trim()) {
-        messages.push(makeAssistantMessage(
-          segment.content,
-          usage && index === lastTextIndex ? usage : null,
-          segment.id,
-        ));
-      } else if (segment.kind === 'thinking' && segment.content.trim()) {
-        messages.push(makeThinkingMessage(segment.content, segment.id));
+    run: SubagentRun,
+    effects: readonly SubagentRunProjectionEffect[],
+  ): boolean {
+    for (const effect of effects) {
+      if (!this._runs.isCurrent(run)) return false;
+      switch (effect.type) {
+        case 'append_text':
+          this._appendLiveText(record, effect.kind, effect.append, effect.segmentId);
+          break;
+        case 'usage':
+          record.usage = effect.usage;
+          this._updateLive(record, { usage: effect.usage });
+          this._emitUsageDelta(record, effect.usage);
+          break;
+        case 'tool_start':
+          this._ensureLiveTool(
+            record,
+            effect.toolCallId,
+            effect.toolName,
+            effect.segmentId,
+            effect.startedAt,
+          );
+          break;
+        case 'tool_args_delta': {
+          const current = record.live.toolCalls.find(
+            (tool) => tool.toolCallId === effect.toolCallId,
+          );
+          this._updateLiveTool(record, effect.toolCallId, {
+            partialArgs: `${current?.partialArgs ?? ''}${effect.append}`,
+          });
+          this._emitDelta(record, {
+            type: SubagentDeltaEventType.TOOL_ARGS_DELTA,
+            toolCallId: effect.toolCallId,
+            append: effect.append,
+          });
+          break;
+        }
+        case 'tool_call':
+          this._applyAssemblerTranscript(
+            record,
+            effect.messages,
+            effect.committedSegmentCount,
+          );
+          this._updateLiveTool(record, effect.toolCallId, {
+            status: 'running',
+            args: effect.args,
+            partialArgs: effect.args,
+          });
+          this._notify();
+          if (effect.segmentId && effect.startedAt) {
+            this._emitDelta(record, {
+              type: SubagentDeltaEventType.TOOL_START,
+              segmentId: effect.segmentId,
+              toolCallId: effect.toolCallId,
+              toolName: effect.toolName,
+              status: 'running',
+              args: effect.args,
+              startedAt: effect.startedAt,
+            });
+          }
+          break;
+        case 'tool_result':
+          this._updateLiveTool(record, effect.toolCallId, {
+            status: effect.status,
+            content: effect.content,
+            toolResult: effect.toolResult,
+            finishedAt: effect.finishedAt,
+          });
+          this._applyAssemblerTranscript(
+            record,
+            effect.messages,
+            effect.committedSegmentCount,
+          );
+          this._notify();
+          this._emitDelta(record, {
+            type: SubagentDeltaEventType.TOOL_RESULT,
+            toolCallId: effect.toolCallId,
+            status: effect.status,
+            content: effect.content,
+            toolResult: effect.toolResult,
+            finishedAt: effect.finishedAt,
+          });
+          break;
       }
     }
-    record._liveCommittedSegmentCount = Math.max(record._liveCommittedSegmentCount, endIndex);
+    return this._runs.isCurrent(run);
+  }
+
+  /** Apply a terminal transcript assembled independently of the runtime record. */
+  private _applyAssemblerFinalization(
+    record: SubagentRecord,
+    run: SubagentRun,
+    finalization: SubagentRunFinalization,
+  ): boolean {
+    if (!this._runs.isCurrent(run)) return false;
+    if (finalization.result !== null) record.result = finalization.result;
+    record.usage = finalization.usage;
+    this._applyAssemblerTranscript(
+      record,
+      finalization.messages,
+      finalization.committedSegmentCount,
+    );
+
+    switch (finalization.state) {
+      case 'completed':
+        this.markCompleted(record.id, record.result ?? '');
+        break;
+      case 'failed':
+        this.markFailed(record.id, finalization.error ?? 'Subagent stream error');
+        break;
+      case 'interrupted':
+        if (record.state === SubagentState.INTERRUPTED) {
+          this._finalizeChain(record, ChainStatus.INTERRUPTED);
+          this._notify();
+        }
+        break;
+    }
+    return this._runs.isCurrent(run);
+  }
+
+  /** The assembler owns the count; the manager mirrors it for live-tail reads. */
+  private _applyAssemblerTranscript(
+    record: SubagentRecord,
+    messages: readonly Message[],
+    committedSegmentCount: number,
+  ): void {
+    record._liveCommittedSegmentCount = committedSegmentCount;
+    this._setChainMessages(record, [...messages]);
+  }
+
+  private _emitUsageDelta(record: SubagentRecord, usage: Usage): void {
+    const now = Date.now();
+    if (record._lastUsageDeltaAt === 0 || now - record._lastUsageDeltaAt >= getUsageDeltaIntervalMs()) {
+      record._lastUsageDeltaAt = now;
+      this._emitDelta(record, { type: SubagentDeltaEventType.USAGE, usage });
+    }
   }
 
   private _setChainMessages(record: SubagentRecord, messages: Message[]): void {
@@ -1745,15 +1656,17 @@ export class SubagentManager {
     return false;
   }
 
-  private _appendLiveText(record: SubagentRecord, kind: 'text' | 'thinking', content: string): void {
+  private _appendLiveText(
+    record: SubagentRecord,
+    kind: 'text' | 'thinking',
+    content: string,
+    segmentId: string,
+  ): void {
     const live = this._live(record);
     const last = live.segments.at(-1);
-    let segmentId: string;
-    if (last && last.kind === kind) {
+    if (last && last.kind === kind && last.id === segmentId) {
       last.content += content;
-      segmentId = last.id;
     } else {
-      segmentId = randomUUID();
       live.segments.push({ kind, id: segmentId, content });
     }
     this._updateLive(record, {});
@@ -1762,15 +1675,19 @@ export class SubagentManager {
       : { type: SubagentDeltaEventType.THINKING_DELTA, segmentId, append: content });
   }
 
-  private _ensureLiveTool(record: SubagentRecord, toolCallId: string, toolName: string): void {
+  private _ensureLiveTool(
+    record: SubagentRecord,
+    toolCallId: string,
+    toolName: string,
+    segmentId: string,
+    startedAt: string,
+  ): void {
     const live = this._live(record);
     if (live.toolCalls.some((tool) => tool.toolCallId === toolCallId)) return;
-    const startedAt = new Date().toISOString();
     live.toolCalls.push({
       toolCallId, toolName, status: 'generating', partialArgs: '', args: '',
       content: null, toolResult: null, startedAt, finishedAt: null,
     });
-    const segmentId = randomUUID();
     live.segments.push({ kind: 'tool', id: segmentId, toolCallId });
     this._updateLive(record, {});
     this._emitDelta(record, {
@@ -1784,10 +1701,6 @@ export class SubagentManager {
     if (!tool) return;
     Object.assign(tool, patch);
     this._updateLive(record, {});
-  }
-
-  private _markLiveCommitted(record: SubagentRecord): void {
-    record._liveCommittedSegmentCount = record.live.segments.length;
   }
 
   /** Mutable view of a record's live projection for in-place run-loop accumulation. */
