@@ -1,6 +1,6 @@
 import { parentPort } from 'node:worker_threads';
 import { ConfigManager } from '../config/loader';
-import { createBuiltinToolRegistry } from './index';
+import { createToolWorkerRegistry } from './worker-registry';
 import type {
   ToolExecutionContext,
   ToolHandlerOutcome,
@@ -29,7 +29,7 @@ function post(msg: ToolWorkerOutbound): void {
 ConfigManager.reset();
 ConfigManager.load();
 
-const registry = createBuiltinToolRegistry();
+const registry = createToolWorkerRegistry();
 
 post({ type: 'ready' });
 
