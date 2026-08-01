@@ -42,6 +42,7 @@ import type {
   RAGStoreStatus,
 } from '../../shared/types/ipc-boundary';
 import type { ProviderModelOption, SessionOpenResult } from '../../shared/types/ipc';
+import type { Notify } from '../utils/notify';
 import { ChatStream } from './ChatStream';
 import { DeferredSurface } from './deferred-surface';
 import { InputArea } from './InputArea';
@@ -53,7 +54,6 @@ import { CommandPalette } from './CommandPalette';
 import { ShortcutsHelp } from './ShortcutsHelp';
 import { SessionHeader } from './session-header';
 import { SessionTabBar } from './SessionTabBar';
-import { Alert, type AlertTone } from './ui/Alert';
 import { Button } from './ui/Button';
 import { StateMessage } from './ui/StateMessage';
 import type { SubagentOpenRequest } from './SubagentView';
@@ -65,20 +65,16 @@ const SubagentView = lazy(() => import('./SubagentView').then((module) => ({
   default: module.SubagentView,
 })));
 
-type ToastSeverity = 'info' | 'warning' | 'error';
-interface Toast {
-  message: string;
-  severity: ToastSeverity;
-}
-
 interface ChatViewProps {
   /** False while a full-window surface owns presentation. */
   isVisible?: boolean;
   /** App-owned effective configuration loaded once during renderer startup. */
   bootstrapConfig?: Config | null;
+  /** App-level notification surface shared by chat and settings. */
+  onNotify: Notify;
 }
 
-export function ChatView({ isVisible = true, bootstrapConfig = null }: ChatViewProps) {
+export function ChatView({ isVisible = true, bootstrapConfig = null, onNotify }: ChatViewProps) {
   const session = useSession();
   const chat = useChat(session.activeSession?.id ?? null);
   const subagents = useSubagents(session.activeSession?.id ?? null);
@@ -120,13 +116,12 @@ export function ChatView({ isVisible = true, bootstrapConfig = null }: ChatViewP
   const [providerModelOptions, setProviderModelOptions] = useState<readonly ProviderModelOption[]>([]);
   const [maxContext, setMaxContext] = useState<number | null>(null);
   const [alwaysExpandToolGroups, setAlwaysExpandToolGroups] = useState(false);
-  const [toast, setToast] = useState<Toast | null>(null);
   const [helpOpen, setHelpOpen] = useState(false);
   const [contentMode, setContentMode] = useState<'chat' | 'subagents'>('chat');
   const [projectConfigDir, setProjectConfigDir] = useState<string | null>(null);
   const [subagentOpenRequest, setSubagentOpenRequest] = useState<SubagentOpenRequest>({ generation: 0, id: null });
   const chatContentRef = useRef<HTMLDivElement>(null);
-  const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const notify = onNotify;
 
   useEffect(() => {
     const element = chatContentRef.current;
@@ -388,11 +383,8 @@ export function ChatView({ isVisible = true, bootstrapConfig = null }: ChatViewP
     const workspace = await session.setWorkspace(projectDir);
     if (!workspace?.cwd || gen !== sessionSwitchGen.current) return;
     await enterDraftMode({ clearComposer: true });
-    setToast({
-      severity: 'info',
-      message: `New chat in project: ${workspace.cwd}`,
-    });
-  }, [session, enterDraftMode]);
+    notify(`New chat in project: ${workspace.cwd}`, 'info');
+  }, [session, enterDraftMode, notify]);
 
   const handleProjectSelect = useCallback((projectDir: string) => {
     setProjectConfigDir(projectDir);
@@ -504,16 +496,6 @@ export function ChatView({ isVisible = true, bootstrapConfig = null }: ChatViewP
     [session, chat.setMessages, tabs.refresh, focusAfterWorkingSet],
   );
 
-  const notify = useCallback((message: string, severity: ToastSeverity = 'info') => {
-    console.log(`[${severity.toUpperCase()}] ${message}`);
-    if (severity === 'error') {
-      console.error(message);
-    }
-    if (toastTimer.current) clearTimeout(toastTimer.current);
-    setToast({ message, severity });
-    toastTimer.current = setTimeout(() => setToast(null), 4500);
-  }, []);
-
   const handleSessionRename = useCallback(
     async (id: string, name: string) => {
       try {
@@ -525,12 +507,6 @@ export function ChatView({ isVisible = true, bootstrapConfig = null }: ChatViewP
     },
     [session, notify],
   );
-
-  useEffect(() => {
-    return () => {
-      if (toastTimer.current) clearTimeout(toastTimer.current);
-    };
-  }, []);
 
   // null workspace = still loading; allow send (main process still gates).
   // unbound/missing = block in UI (R3).
@@ -1016,22 +992,6 @@ export function ChatView({ isVisible = true, bootstrapConfig = null }: ChatViewP
       </DeferredSurface>
 
       <main className="main-pane min-h-0 min-w-0 overflow-hidden">
-        {toast && (
-          <Alert
-            tone={toast.severity as AlertTone}
-            variant="soft"
-            className={`command-toast command-toast-${toast.severity} orchid-state-enter py-2 text-sm`}
-            role="status"
-            aria-live="polite"
-            action={
-              <Button variant="ghost" size="xs" shape="circle" onClick={() => setToast(null)} aria-label="Dismiss">
-                ×
-              </Button>
-            }
-          >
-            <span className="command-toast-message min-w-0 flex-1">{toast.message}</span>
-          </Alert>
-        )}
         {projectConfigDir ? (
           <Suspense
             fallback={(

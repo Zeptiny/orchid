@@ -222,6 +222,27 @@ describe('provider onboarding and disconnected UX', () => {
     expect(wizard).toContain('title="Authentication"');
   });
 
+  it('keeps connection cards compact and sends lifecycle feedback to the settings surface', () => {
+    const connections = source('components', 'Providers', 'ConnectionList.tsx');
+    const providersTab = source('components', 'Preferences', 'ProvidersTab.tsx');
+
+    expect(connections).not.toContain('Each connection is a separate provider account or endpoint.');
+    expect(connections).not.toContain('New turns are disabled. A turn that already started can finish safely.');
+    expect(connections).not.toContain('{message && (');
+    expect(connections).not.toContain('{error && (');
+    expect(connections).toContain('onNotify');
+    expect(connections).toContain('className="h-full"');
+    expect(connections).toContain('mt-auto flex flex-wrap');
+    expect(connections).toContain('model.displayName');
+    expect(connections).toContain('definition?.models');
+    expect(providersTab).toContain('onNotify');
+    expect(providersTab).toContain("'info'");
+    expect(providersTab).not.toContain('statusMessage');
+    expect(providersTab).not.toContain('statusTimer');
+    expect(providersTab).toContain('result.message');
+    expect(source('AppReady.tsx')).toContain('onNotify={notify}');
+  });
+
   it('matches the provider wizard shell and edits explicit input/output capabilities', () => {
     const modelEditor = source('components', 'Providers', 'ConnectionModelsDialog.tsx');
     const wizard = source('components', 'Providers', 'ConnectionWizard.tsx');

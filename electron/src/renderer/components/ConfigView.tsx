@@ -34,6 +34,7 @@ import {
 } from '../utils/config-save';
 import { withMapDeletionTombstones } from '../utils/config-tombstones';
 import { emitOrchidEvent } from '../utils/events';
+import type { Notify } from '../utils/notify';
 import { Keycaps } from './Keycaps';
 import { Alert } from './ui/Alert';
 import { Button } from './ui/Button';
@@ -143,6 +144,7 @@ const TABS: TabDef[] = [
 interface ConfigViewProps {
   onClose: () => void;
   initialTab?: TabId;
+  onNotify: Notify;
 }
 
 interface PermissionTabContext {
@@ -155,7 +157,7 @@ interface PermissionTabContext {
   updateDraft: (updates: ConfigPatch) => void;
 }
 
-export function ConfigView({ onClose, initialTab = 'general' }: ConfigViewProps) {
+export function ConfigView({ onClose, initialTab = 'general', onNotify }: ConfigViewProps) {
   const session = useSession();
   const providers = useProviders();
   const rootRef = useRef<HTMLDivElement>(null);
@@ -689,6 +691,7 @@ export function ConfigView({ onClose, initialTab = 'general' }: ConfigViewProps)
                     ? updateProjectPermissionDraft
                     : updateDraft,
                 },
+                onNotify,
               )}
             </Suspense>
           ) : (
@@ -833,6 +836,7 @@ function renderTab(
     onScopeChange: () => {},
     updateDraft,
   },
+  onNotify: Notify = () => {},
 ) {
   switch (activeTab) {
     case 'general':
@@ -893,7 +897,7 @@ function renderTab(
         />
       );
     case 'providers':
-      return <ProvidersTab />;
+      return <ProvidersTab onNotify={onNotify} />;
     case 'mcp':
       return (
         <MCPServersTab
