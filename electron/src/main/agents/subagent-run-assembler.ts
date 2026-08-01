@@ -1,13 +1,14 @@
-import type { StreamEvent } from '../llm/orchestrator';
 import { addStepUsage } from '../../shared/usage';
-import type { Message, Usage } from '../../shared/types/message';
-import type { CanonicalToolResult, TerminalToolResultStatus } from '../../shared/types/tool-result';
 import {
   makeAssistantMessage,
   makeThinkingMessage,
   makeToolCallMessage,
   makeToolResultMessage,
 } from '../llm/message-factories';
+
+import type { Message, Usage } from '../../shared/types/message';
+import type { CanonicalToolResult, TerminalToolResultStatus } from '../../shared/types/tool-result';
+import type { StreamEvent } from '../llm/orchestrator';
 
 export type SubagentRunProjectionEffect =
   | {

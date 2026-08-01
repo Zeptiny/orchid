@@ -1018,10 +1018,16 @@ export class SubagentManager {
       if (record.sessionId !== sessionId && !(options.includeUnscoped && record.sessionId === null)) {
         continue;
       }
+      const terminal = isTerminalSubagentState(record.state);
+      // `cancelOne` makes a running record terminal before its runner has
+      // materialized the interrupted chain and emitted the terminal delta.
+      // A recovery checkpoint in that gap must not confirm/evict the record:
+      // the runner's finalization owns the first durable terminal snapshot.
+      if (terminal && this._runs.isSettling(record.id)) continue;
       const checkpoint = this._persistence.checkpointCandidate(
         record.id,
         sessionId,
-        isTerminalSubagentState(record.state),
+        terminal,
         options.recovery === true,
       );
       if (checkpoint) candidates.push({ record, checkpoint });

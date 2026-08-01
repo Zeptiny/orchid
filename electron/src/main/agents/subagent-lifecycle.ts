@@ -1,12 +1,15 @@
 import type { AskQuestionAnswerMessage, AskQuestionAskedEvent } from '../../shared/types/ipc';
 import { isTerminalSubagentState, SubagentState } from './types';
 
+/** Identifies why a pending subagent waiter was resolved. */
 export type SubagentWaiterReason = 'state-change' | 'flush';
 
+/** Describes the terminal response to a subagent's interactive question. */
 export type SubagentQuestionResult =
   | { type: 'answered'; answers: AskQuestionAnswerMessage['answers'] }
   | { type: 'declined' };
 
+/** Captures the active interactive question associated with a tool call. */
 export interface SubagentQuestion {
   readonly toolCallId: string;
   readonly questions: AskQuestionAskedEvent['questions'];
@@ -28,6 +31,7 @@ interface LifecycleRecord {
   closed: boolean;
 }
 
+/** Declares the state transition that a subagent lifecycle should apply. */
 export type SubagentLifecycleEvent =
   | { type: 'admit' }
   | { type: 'running'; now: number }

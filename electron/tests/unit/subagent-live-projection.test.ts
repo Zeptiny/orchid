@@ -4,6 +4,7 @@ import {
   SubagentLiveProjectionStore,
   materializeProjectionTail,
 } from '../../src/main/agents/subagent-live-projection';
+import { SubagentRunAssembler } from '../../src/main/agents/subagent-run-assembler';
 
 describe('SubagentLiveProjectionStore', () => {
   it('owns cloned run snapshots and rotates them for a fresh run', () => {
@@ -102,5 +103,30 @@ describe('SubagentLiveProjectionStore', () => {
     expect(checkpoint.committedSegmentCount).toBe(3);
     expect(materializeProjectionTail(checkpoint, durableChain).messages.map((message) => message.content))
       .toEqual(['before', 'thought', '', 'after']);
+  });
+
+  it('replaces an unknown live tool name when the full call follows an args delta', () => {
+    const store = new SubagentLiveProjectionStore();
+    const subagentId = 'subagent-1';
+    const assembler = new SubagentRunAssembler([], {
+      newId: () => 'tool-segment',
+      now: () => '2026-08-01T00:00:00.000Z',
+    });
+    store.start({ subagentId, sessionId: 'session-1', state: 'running', runId: 'run-1' });
+
+    store.applyAssemblerEffects(subagentId, assembler.accept({
+      type: 'tool_call_delta', toolCallId: 'tool-1', argsDelta: '{"path":',
+    }));
+    expect(store.get(subagentId)?.toolCalls[0]).toMatchObject({ toolName: 'unknown', status: 'generating' });
+
+    store.applyAssemblerEffects(subagentId, assembler.accept({
+      type: 'tool_call', toolCallId: 'tool-1', toolName: 'read', args: '{"path":"README.md"}',
+    }));
+
+    expect(store.get(subagentId)?.toolCalls[0]).toMatchObject({
+      toolName: 'read',
+      status: 'running',
+      args: '{"path":"README.md"}',
+    });
   });
 });

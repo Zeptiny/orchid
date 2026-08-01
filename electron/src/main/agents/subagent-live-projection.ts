@@ -290,6 +290,7 @@ export class SubagentLiveProjectionStore {
         case 'tool_call': {
           const tool = entry.projection.toolCalls.find((item) => item.toolCallId === effect.toolCallId);
           if (tool) {
+            tool.toolName = effect.toolName;
             tool.status = 'running';
             tool.args = effect.args;
             tool.partialArgs = effect.args;
