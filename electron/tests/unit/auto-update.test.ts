@@ -35,12 +35,19 @@ const mockApp = {
   exit: vi.fn(),
 };
 
+const mockUpdateConfigExists = vi.fn(() => true);
+const originalResourcesPath = Object.getOwnPropertyDescriptor(process, 'resourcesPath');
+
 vi.mock('electron-updater', () => ({
   autoUpdater: mockAutoUpdater,
 }));
 
 vi.mock('electron', () => ({
   app: mockApp,
+}));
+
+vi.mock('node:fs', () => ({
+  existsSync: mockUpdateConfigExists,
 }));
 
 const mockTerminateAll = vi.fn();
@@ -67,6 +74,12 @@ beforeEach(async () => {
   mockAutoUpdater.disableDifferentialDownload = false;
   mockApp.isPackaged = true;
   mockTerminateAll.mockClear();
+  mockUpdateConfigExists.mockReset();
+  mockUpdateConfigExists.mockReturnValue(true);
+  Object.defineProperty(process, 'resourcesPath', {
+    configurable: true,
+    value: '/test/orchid/resources',
+  });
 
   mockAutoUpdater.downloadUpdate.mockResolvedValue(undefined);
   mockAutoUpdater.checkForUpdates.mockResolvedValue(undefined);
@@ -85,6 +98,11 @@ beforeEach(async () => {
 afterEach(() => {
   updater.destroyUpdater();
   vi.restoreAllMocks();
+  if (originalResourcesPath) {
+    Object.defineProperty(process, 'resourcesPath', originalResourcesPath);
+  } else {
+    Reflect.deleteProperty(process, 'resourcesPath');
+  }
 });
 
 // ===========================================================================
@@ -382,6 +400,21 @@ describe('checkForUpdates', () => {
     await updater.checkForUpdates();
 
     expect(mockAutoUpdater.checkForUpdates).toHaveBeenCalled();
+  });
+
+  it('skips update checks when the packaged app has no update channel metadata', async () => {
+    mockApp.isPackaged = true;
+    mockUpdateConfigExists.mockReturnValue(false);
+
+    updater.initUpdater();
+
+    await updater.checkForUpdates();
+
+    expect(mockAutoUpdater.checkForUpdates).not.toHaveBeenCalled();
+    expect(updater.getUpdaterState()).toMatchObject({
+      status: 'not-available',
+      error: null,
+    });
   });
 
   it('handles checkForUpdates failure', async () => {

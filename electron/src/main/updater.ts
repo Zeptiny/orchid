@@ -12,6 +12,8 @@
  */
 import { autoUpdater, UpdateInfo } from 'electron-updater';
 import { app } from 'electron';
+import * as fs from 'node:fs';
+import * as path from 'node:path';
 import type { UpdaterState } from '../shared/types/ipc-boundary';
 import { getBackgroundStore } from './tools/process/background-store';
 
@@ -31,6 +33,10 @@ const state: UpdaterState = {
 let isSigned = false;
 
 let flushBeforeInstall: (() => void) | null = null;
+
+function hasPackagedUpdateConfiguration(): boolean {
+  return fs.existsSync(path.join(process.resourcesPath, 'app-update.yml'));
+}
 
 // ── Updater configuration ────────────────────────────────────────────────────
 
@@ -138,6 +144,12 @@ export async function checkForUpdates(): Promise<void> {
   if (!app.isPackaged) {
     state.status = 'not-available';
     state.error = 'Updates not available in development mode';
+    return;
+  }
+
+  if (!hasPackagedUpdateConfiguration()) {
+    state.status = 'not-available';
+    state.error = null;
     return;
   }
 
