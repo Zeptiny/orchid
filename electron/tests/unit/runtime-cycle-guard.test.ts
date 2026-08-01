@@ -98,9 +98,10 @@ describe('runtime dependency cycle guard', () => {
     });
 
     const result = runGuard(root);
+    const output = result.output.replaceAll('\\', '/');
 
     expect(result.status).not.toBe(0);
-    expect(result.output).toMatch(/main\/a\.ts\s*->\s*shared\/b\.ts\s*->\s*main\/a\.ts|shared\/b\.ts\s*->\s*main\/a\.ts\s*->\s*shared\/b\.ts/);
+    expect(output).toMatch(/main\/a\.ts\s*->\s*shared\/b\.ts\s*->\s*main\/a\.ts|shared\/b\.ts\s*->\s*main\/a\.ts\s*->\s*shared\/b\.ts/);
   });
 
   it('allows type-only mutual references', () => {

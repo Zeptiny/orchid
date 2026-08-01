@@ -27,4 +27,25 @@ describe('ErrorBoundary', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Reload Orchid' }));
     expect(onRetry).toHaveBeenCalledOnce();
   });
+
+  it('reloads the window when no retry handler is provided', () => {
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const reload = vi.fn();
+    const testWindow = Object.create(window) as Window;
+    Object.defineProperty(testWindow, 'location', { value: { reload } });
+
+    render(
+      <ErrorBoundary title="Orchid could not load">
+        <BrokenView />
+      </ErrorBoundary>,
+    );
+
+    vi.stubGlobal('window', testWindow);
+    try {
+      fireEvent.click(screen.getByRole('button', { name: 'Reload Orchid' }));
+      expect(reload).toHaveBeenCalledOnce();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
 });

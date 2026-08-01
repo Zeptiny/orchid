@@ -96,10 +96,17 @@ describe('progressive startup shell', () => {
 
   it('seeds a local, accessible startup shell before the renderer module', () => {
     const indexHtml = fs.readFileSync(path.resolve(__dirname, '../../src/renderer/index.html'), 'utf8');
-    const indexCss = fs.readFileSync(path.resolve(__dirname, '../../src/renderer/styles/index.css'), 'utf8');
+    const startupShellCss = fs.readFileSync(
+      path.resolve(__dirname, '../../src/renderer/public/startup-shell.css'),
+      'utf8',
+    );
+    const startupStylesIndex = indexHtml.indexOf('href="/startup-shell.css"');
+    const rendererStylesIndex = indexHtml.indexOf('href="./styles/index.css"');
     const shellIndex = indexHtml.indexOf('class="startup-shell"');
     const moduleIndex = indexHtml.indexOf('<script type="module" src="./main.tsx"></script>');
 
+    expect(startupStylesIndex).toBeGreaterThan(-1);
+    expect(startupStylesIndex).toBeLessThan(rendererStylesIndex);
     expect(shellIndex).toBeGreaterThan(-1);
     expect(shellIndex).toBeLessThan(moduleIndex);
     expect(indexHtml).toContain('./assets/orchid-icon.svg');
@@ -107,8 +114,8 @@ describe('progressive startup shell', () => {
     expect(indexHtml).toContain('aria-live="polite"');
     expect(indexHtml).toContain('href="./styles/index.css"');
     expect(indexHtml).not.toContain('<style>');
-    expect(indexCss).toContain('background: #09090b');
-    expect(indexCss).toContain('prefers-reduced-motion: reduce');
+    expect(startupShellCss).toContain('background: #09090b');
+    expect(startupShellCss).toContain('prefers-reduced-motion: reduce');
   });
 
   it('loads Google Fonts as a non-blocking enhancement', () => {
@@ -478,6 +485,7 @@ describe('Theme CSS Custom Properties', () => {
     const appTsx = fs.readFileSync(path.resolve(__dirname, '../../src/renderer/App.tsx'), 'utf-8');
     const indexCss = fs.readFileSync(path.resolve(__dirname, '../../src/renderer/styles/index.css'), 'utf-8');
     expect(indexHtml).toContain('href="./styles/index.css"');
+    expect(appTsx).not.toMatch(/import\s+['"]\.\/styles\/index\.css['"]/);
     expect(appTsx).not.toMatch(/import\s+['"]\.\/styles\/chat\.css['"]/);
     expect(indexCss).toMatch(/@import\s+["']\.\/components\.css["']/);
     expect(indexCss).toMatch(/@import\s+["']\.\/markdown\.css["']/);
