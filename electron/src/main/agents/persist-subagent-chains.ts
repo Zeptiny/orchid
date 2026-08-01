@@ -13,7 +13,7 @@ import type { Session } from '../../shared/types/session';
 import type { SubagentRecord as DomainSubagentRecord } from '../../shared/types/subagent';
 import { getSessionManager } from '../session/singleton';
 import type { SubagentManager, SubagentRecord } from './manager';
-import { isTerminalSubagentState, runtimeToDomain } from './manager';
+import { isTerminalSubagentState } from './manager';
 
 export interface PersistenceTimerApi {
   setTimeout: (callback: () => void, delay: number) => ReturnType<typeof setTimeout>;
@@ -291,7 +291,7 @@ export function persistSubagentChains(
     if (dirtyRecords.length === 0) continue;
 
     const domainRecords: DomainSubagentRecord[] =
-      dirtyRecords.map((record) => runtimeToDomain(record));
+      dirtyRecords.map((record) => manager.toDomainRecord(record));
     const started = performance.now();
     let result: { session: Session | null; bytes: number };
     try {

@@ -27,6 +27,7 @@ import {
   createSubagentDeltaHandler,
   createSubagentPersistenceWriteCallback,
 } from '../../src/main/agents/wire-subagents';
+import { runtimeToDomain } from '../../src/main/agents/manager';
 import { createCanonicalToolResult } from '../../src/shared/types/tool-result';
 
 const uuid = '00000000-0000-4000-8000-000000000001';
@@ -850,7 +851,7 @@ describe('subagent delta batcher (U3)', () => {
 describe('persistSubagentChains dirty tracking (U6)', () => {
   const sid = '00000000-0000-4000-8000-000000000010';
 
-  /** Minimal runtime SubagentRecord shaped for `runtimeToDomain`. */
+  /** Minimal runtime SubagentRecord; live state stays in the manager store. */
   const runtimeRecord = (id: string, sessionId: string | null, overrides: Record<string, unknown> = {}) => ({
     id,
     agent: { name: 'explorer', type: 'subagent', tier: 'bloom' },
@@ -868,14 +869,7 @@ describe('persistSubagentChains dirty tracking (U6)', () => {
     sessionId,
     windowId: null,
     _resolveWait: null,
-    live: {
-      sessionId, subagentId: id, runId: 'run', sequence: 0, state: 'completed',
-      segments: [], toolCalls: [], usage: null, result: null, error: null,
-    },
-    _liveCommittedSegmentCount: 0,
-    _liveTerminalEmitted: true,
     persistRevision: 1,
-    _lastUsageDeltaAt: 0,
     pendingQuestion: null,
     ...overrides,
   }) as never;
@@ -883,6 +877,7 @@ describe('persistSubagentChains dirty tracking (U6)', () => {
   const confirmSpy = vi.fn();
   const managerOf = (...records: unknown[]) => ({
     allRecords: () => records,
+    toDomainRecord: (runtime: never) => runtimeToDomain(runtime, { includeLiveTail: false }),
     confirmRecordsPersisted: confirmSpy,
   }) as never;
 

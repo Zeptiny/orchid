@@ -26,17 +26,10 @@ import {
   SubagentDeltaEventType,
   SubagentStatus,
   type SubagentDeltaEvent,
-  type SubagentDeltaEventBase,
   type SubagentLiveProjection,
-  type SubagentLiveSegment,
   type SubagentTerminalState,
-  type SubagentToolSnapshot,
 } from '../../shared/types/subagent';
-import {
-  makeAssistantMessage,
-  makeThinkingMessage,
-  makeUserMessage,
-} from '../llm/message-factories';
+import { makeUserMessage } from '../llm/message-factories';
 import { getConfig } from '../config/loader';
 import { subagentsConfigSchema } from '../config/schema';
 import { AdmissionController, type AdmissionCounters, type SubagentAdmissionLimits } from './admission';
@@ -46,6 +39,11 @@ import {
   type SubagentRunFinalization,
   type SubagentRunProjectionEffect,
 } from './subagent-run-assembler';
+import {
+  SubagentLiveProjectionStore,
+  materializeProjectionTail,
+  type SubagentProjectionCheckpoint,
+} from './subagent-live-projection';
 import {
   SubagentWaitTimeoutError,
   SubagentQueueFullError,
@@ -270,10 +268,6 @@ export interface SubagentRecord {
    * terminal records; persisted with the durable row.
    */
   closed: boolean;
-  /** Runtime-only live projection; durable history remains in `chain`. */
-  live: SubagentLiveProjection;
-  _liveCommittedSegmentCount: number;
-  _liveTerminalEmitted: boolean;
   /**
    * Runtime-only: the record was evicted to a lean terminal summary after its
    * durable row was confirmed persisted. Persistence flushes and snapshot
@@ -294,8 +288,6 @@ export interface SubagentRecord {
   _resumeQueued: boolean;
   /** Durable-mutation counter; the persistence scheduler upserts dirty records (U6). */
   persistRevision: number;
-  /** Epoch ms of the last emitted `usage` delta (0 = none yet); throttles usage deltas. */
-  _lastUsageDeltaAt: number;
   /** Pending question routed to the main agent (null when no question is outstanding). */
   pendingQuestion: {
     toolCallId: string;
@@ -340,29 +332,6 @@ export interface HydrateSpec {
   readonly projectRuntime?: ProjectRuntime;
 }
 
-// ── Mutable live state ──────────────────────────────────────────────────────
-
-/** Mutable view of a tool snapshot for in-place run-loop accumulation. */
-type MutableToolSnapshot = { -readonly [K in keyof SubagentToolSnapshot]: SubagentToolSnapshot[K] };
-
-/**
- * Mutable view of the live projection. The manager mutates the stored
- * projection in place during a run so accumulation is structurally cheap;
- * snapshot accessors deep-copy on read via `cloneLiveProjection`.
- */
-type MutableLiveProjection = {
-  -readonly [K in keyof SubagentLiveProjection]: K extends 'segments'
-    ? SubagentLiveSegment[]
-    : K extends 'toolCalls'
-      ? MutableToolSnapshot[]
-      : SubagentLiveProjection[K];
-};
-
-type DistributiveOmit<T, K extends PropertyKey> = T extends unknown ? Omit<T, K> : never;
-
-/** Variant-specific fields of a delta event, without the shared identity base. */
-type SubagentDeltaPayload = DistributiveOmit<SubagentDeltaEvent, keyof SubagentDeltaEventBase>;
-
 // ── SubagentManager ─────────────────────────────────────────────────────────
 
 /**
@@ -376,9 +345,7 @@ export class SubagentManager {
   private _runner: SubagentStreamRunner | null = null;
   private _onChange: SubagentChangeListener | null = null;
   private _changeListeners = new Set<SubagentChangeListener>();
-  private _onDelta: ((event: SubagentDeltaEvent) => void) | null = null;
-  /** Per-session monotonic revision counter ordering events and snapshots. */
-  private _sessionRevisions: Map<string, number> = new Map();
+  private _liveProjection = new SubagentLiveProjectionStore({ getUsageDeltaIntervalMs });
   private _admission = new AdmissionController();
   private _runs = new SubagentRunRegistry();
   /**
@@ -410,7 +377,7 @@ export class SubagentManager {
 
   /** Subscribe to typed incremental live deltas for active subagent runs. */
   setOnDelta(listener: ((event: SubagentDeltaEvent) => void) | null): void {
-    this._onDelta = listener;
+    this._liveProjection.setOnDelta(listener);
   }
 
   /**
@@ -477,23 +444,25 @@ export class SubagentManager {
       projectRuntime: options.projectRuntime,
       _resolveWait: [],
       closed: false,
-      live: makeLiveProjection(id, sessionId, admitted ? 'pending' : 'queued', run.runId),
-      _liveCommittedSegmentCount: 0,
-      _liveTerminalEmitted: false,
       _evicted: false,
       _resumeQueued: false,
       persistRevision: 0,
-      _lastUsageDeltaAt: 0,
       pendingQuestion: null,
     };
 
     this._subagents.set(id, record);
+    this._liveProjection.start({
+      subagentId: id,
+      sessionId,
+      state: admitted ? SubagentStatus.PENDING : SubagentStatus.QUEUED,
+      runId: run.runId,
+    });
     if (!admitted) this._admission.enqueue(id);
     else this._admission.markAdmitted(sessionId);
     this._notify();
     this._emitDelta(record, {
       type: SubagentDeltaEventType.SPAWNED,
-      record: runtimeToDomain(record, { includeLiveTail: false }),
+      record: this.toDomainRecord(record, { includeLiveTail: false }),
       usage: record.usage,
     });
 
@@ -580,15 +549,12 @@ export class SubagentManager {
     // not leak stale usage; the run loop re-accumulates fresh per run.
     record.usage = null;
     const run = this._runs.beginNext(record.id);
-    record.live = makeLiveProjection(
-      record.id,
-      record.sessionId,
-      admitted ? SubagentStatus.PENDING : SubagentStatus.QUEUED,
-      run.runId,
-    );
-    record._liveCommittedSegmentCount = 0;
-    record._liveTerminalEmitted = false;
-    record._lastUsageDeltaAt = 0;
+    this._liveProjection.start({
+      subagentId: record.id,
+      sessionId: record.sessionId,
+      state: admitted ? SubagentStatus.PENDING : SubagentStatus.QUEUED,
+      runId: run.runId,
+    });
     record.pendingQuestion = null;
     // Reopened chain + follow-up message must persist via the next checkpoint
     // (spawn sets a fresh row; followUp reopens a terminal durable row).
@@ -601,7 +567,7 @@ export class SubagentManager {
       this._notify();
       this._emitDelta(record, {
         type: SubagentDeltaEventType.SPAWNED,
-        record: runtimeToDomain(record, { includeLiveTail: false }),
+        record: this.toDomainRecord(record, { includeLiveTail: false }),
         usage: record.usage,
       });
       if (this._runner) {
@@ -615,7 +581,7 @@ export class SubagentManager {
       this._notify();
       this._emitDelta(record, {
         type: SubagentDeltaEventType.SPAWNED,
-        record: runtimeToDomain(record, { includeLiveTail: false }),
+        record: this.toDomainRecord(record, { includeLiveTail: false }),
         usage: record.usage,
       });
     }
@@ -1072,20 +1038,18 @@ export class SubagentManager {
 
   /** Snapshot a single live projection; deep-copied so callers never alias run state. */
   getLiveProjection(subagentId: string): SubagentLiveProjection | undefined {
-    const record = this._subagents.get(subagentId);
-    return record ? cloneLiveProjection(record.live) : undefined;
+    return this._subagents.has(subagentId) ? this._liveProjection.get(subagentId) : undefined;
   }
 
   /** Snapshot live projections for a session; each is deep-copied at call time. */
   getLiveProjections(sessionId?: string | null): SubagentLiveProjection[] {
-    return this.allRecords()
-      .filter((record) => sessionId === undefined || record.sessionId === sessionId)
-      .map((record) => cloneLiveProjection(record.live));
+    return this._liveProjection.getAll(sessionId)
+      .filter((projection) => this._subagents.has(projection.subagentId));
   }
 
   /** Current per-session revision; 0 for sessions with no recorded activity. */
   getSessionRevision(sessionId: string): number {
-    return this._sessionRevisions.get(sessionId) ?? 0;
+    return this._liveProjection.getSessionRevision(sessionId);
   }
 
   /**
@@ -1134,7 +1098,10 @@ export class SubagentManager {
         this._subagents.delete(id);
         // Let an already-started run unwind through its guarded terminal
         // projection. Its finally block drops the detached registry entry.
-        if (!this._runs.isSettling(id)) this._runs.remove(id);
+        if (!this._runs.isSettling(id)) {
+          this._runs.remove(id);
+          this._liveProjection.remove(id);
+        }
       }
     }
     this._admission.filterQueue(
@@ -1142,7 +1109,7 @@ export class SubagentManager {
     );
     this._admission.filterQueue((id) => this._subagents.has(id));
     this._terminalSummaries.delete(sessionId);
-    this._sessionRevisions.delete(sessionId);
+    this._liveProjection.clearSessionRevision(sessionId);
     this._notify();
   }
 
@@ -1156,7 +1123,19 @@ export class SubagentManager {
       sessionId === undefined
         ? this.allRecords()
         : this.allRecords().filter((r) => r.sessionId === sessionId);
-    return records.map((record) => runtimeToDomain(record));
+    return records.map((record) => this.toDomainRecord(record));
+  }
+
+  /** Convert a runtime record using an explicit checkpoint from the live store. */
+  toDomainRecord(
+    record: SubagentRecord,
+    options: Omit<RuntimeToDomainOptions, 'projectionCheckpoint'> = {},
+  ): DomainSubagentRecord {
+    const includeLiveTail = options.includeLiveTail ?? true;
+    const projectionCheckpoint = !includeLiveTail
+      ? undefined
+      : this._liveProjection.getCheckpoint(record.id);
+    return runtimeToDomain(record, { ...options, includeLiveTail, projectionCheckpoint });
   }
 
   /**
@@ -1221,13 +1200,9 @@ export class SubagentManager {
         projectRuntime: spec.projectRuntime,
         _resolveWait: [],
         closed: domain.closed,
-        live: makeLiveProjection(spec.id, spec.sessionId, domain.status, run.runId),
-        _liveCommittedSegmentCount: 0,
-        _liveTerminalEmitted: true,
         _evicted: false,
         _resumeQueued: false,
         persistRevision: 0,
-        _lastUsageDeltaAt: 0,
         pendingQuestion: null,
       };
       if (domain.reasoning_effort !== undefined) {
@@ -1235,6 +1210,13 @@ export class SubagentManager {
       }
 
       this._subagents.set(spec.id, record);
+      this._liveProjection.start({
+        subagentId: spec.id,
+        sessionId: spec.sessionId,
+        state: domain.status,
+        runId: run.runId,
+        terminalEmitted: true,
+      });
       // A re-materialized full record sharing an id with a FIFO-tracked summary
       // would be deleted from the map when the retention FIFO rolls. Untrack it
       // so subsequent retention rolls leave it alone (R12).
@@ -1338,12 +1320,7 @@ export class SubagentManager {
     if (record.chain) {
       record.chain = { ...record.chain, messages: [] };
     }
-    record.live = {
-      ...record.live,
-      segments: [],
-      toolCalls: [],
-    };
-    record._liveCommittedSegmentCount = 0;
+    this._liveProjection.clearLiveTail(record.id);
   }
 
   /** Track an evicted summary in the per-session FIFO; remove oldest over cap. */
@@ -1452,7 +1429,10 @@ export class SubagentManager {
           this._finishLive(record, SubagentState.INTERRUPTED);
         }
         this._runs.settle(run);
-        if (this._subagents.get(record.id) !== record) this._runs.remove(record.id);
+        if (this._subagents.get(record.id) !== record) {
+          this._runs.remove(record.id);
+          this._liveProjection.remove(record.id);
+        }
       }
     }
   }
@@ -1463,86 +1443,14 @@ export class SubagentManager {
     run: SubagentRun,
     effects: readonly SubagentRunProjectionEffect[],
   ): boolean {
-    for (const effect of effects) {
+    for (const assemblerEffect of effects) {
       if (!this._runs.isCurrent(run)) return false;
-      switch (effect.type) {
-        case 'append_text':
-          this._appendLiveText(record, effect.kind, effect.append, effect.segmentId);
-          break;
-        case 'usage':
-          record.usage = effect.usage;
-          this._updateLive(record, { usage: effect.usage });
-          this._emitUsageDelta(record, effect.usage);
-          break;
-        case 'tool_start':
-          this._ensureLiveTool(
-            record,
-            effect.toolCallId,
-            effect.toolName,
-            effect.segmentId,
-            effect.startedAt,
-          );
-          break;
-        case 'tool_args_delta': {
-          const current = record.live.toolCalls.find(
-            (tool) => tool.toolCallId === effect.toolCallId,
-          );
-          this._updateLiveTool(record, effect.toolCallId, {
-            partialArgs: `${current?.partialArgs ?? ''}${effect.append}`,
-          });
-          this._emitDelta(record, {
-            type: SubagentDeltaEventType.TOOL_ARGS_DELTA,
-            toolCallId: effect.toolCallId,
-            append: effect.append,
-          });
-          break;
-        }
-        case 'tool_call':
-          this._applyAssemblerTranscript(
-            record,
-            effect.messages,
-            effect.committedSegmentCount,
-          );
-          this._updateLiveTool(record, effect.toolCallId, {
-            status: 'running',
-            args: effect.args,
-            partialArgs: effect.args,
-          });
-          this._notify();
-          if (effect.segmentId && effect.startedAt) {
-            this._emitDelta(record, {
-              type: SubagentDeltaEventType.TOOL_START,
-              segmentId: effect.segmentId,
-              toolCallId: effect.toolCallId,
-              toolName: effect.toolName,
-              status: 'running',
-              args: effect.args,
-              startedAt: effect.startedAt,
-            });
-          }
-          break;
-        case 'tool_result':
-          this._updateLiveTool(record, effect.toolCallId, {
-            status: effect.status,
-            content: effect.content,
-            toolResult: effect.toolResult,
-            finishedAt: effect.finishedAt,
-          });
-          this._applyAssemblerTranscript(
-            record,
-            effect.messages,
-            effect.committedSegmentCount,
-          );
-          this._notify();
-          this._emitDelta(record, {
-            type: SubagentDeltaEventType.TOOL_RESULT,
-            toolCallId: effect.toolCallId,
-            status: effect.status,
-            content: effect.content,
-            toolResult: effect.toolResult,
-            finishedAt: effect.finishedAt,
-          });
-          break;
+      for (const effect of this._liveProjection.applyAssemblerEffects(record.id, [assemblerEffect])) {
+        if (!this._runs.isCurrent(run)) return false;
+        if (effect.usage !== undefined) record.usage = effect.usage;
+        if (effect.transcript) this._applyAssemblerTranscript(record, effect.transcript.messages);
+        if (effect.notify) this._notify();
+        effect.publish?.();
       }
     }
     return this._runs.isCurrent(run);
@@ -1560,7 +1468,6 @@ export class SubagentManager {
     this._applyAssemblerTranscript(
       record,
       finalization.messages,
-      finalization.committedSegmentCount,
     );
 
     switch (finalization.state) {
@@ -1580,22 +1487,12 @@ export class SubagentManager {
     return this._runs.isCurrent(run);
   }
 
-  /** The assembler owns the count; the manager mirrors it for live-tail reads. */
+  /** The projection store owns the cursor; the manager persists only the transcript. */
   private _applyAssemblerTranscript(
     record: SubagentRecord,
     messages: readonly Message[],
-    committedSegmentCount: number,
   ): void {
-    record._liveCommittedSegmentCount = committedSegmentCount;
     this._setChainMessages(record, [...messages]);
-  }
-
-  private _emitUsageDelta(record: SubagentRecord, usage: Usage): void {
-    const now = Date.now();
-    if (record._lastUsageDeltaAt === 0 || now - record._lastUsageDeltaAt >= getUsageDeltaIntervalMs()) {
-      record._lastUsageDeltaAt = now;
-      this._emitDelta(record, { type: SubagentDeltaEventType.USAGE, usage });
-    }
   }
 
   private _setChainMessages(record: SubagentRecord, messages: Message[]): void {
@@ -1656,123 +1553,31 @@ export class SubagentManager {
     return false;
   }
 
-  private _appendLiveText(
-    record: SubagentRecord,
-    kind: 'text' | 'thinking',
-    content: string,
-    segmentId: string,
-  ): void {
-    const live = this._live(record);
-    const last = live.segments.at(-1);
-    if (last && last.kind === kind && last.id === segmentId) {
-      last.content += content;
-    } else {
-      live.segments.push({ kind, id: segmentId, content });
-    }
-    this._updateLive(record, {});
-    this._emitDelta(record, kind === 'text'
-      ? { type: SubagentDeltaEventType.TEXT_DELTA, segmentId, append: content }
-      : { type: SubagentDeltaEventType.THINKING_DELTA, segmentId, append: content });
-  }
-
-  private _ensureLiveTool(
-    record: SubagentRecord,
-    toolCallId: string,
-    toolName: string,
-    segmentId: string,
-    startedAt: string,
-  ): void {
-    const live = this._live(record);
-    if (live.toolCalls.some((tool) => tool.toolCallId === toolCallId)) return;
-    live.toolCalls.push({
-      toolCallId, toolName, status: 'generating', partialArgs: '', args: '',
-      content: null, toolResult: null, startedAt, finishedAt: null,
-    });
-    live.segments.push({ kind: 'tool', id: segmentId, toolCallId });
-    this._updateLive(record, {});
-    this._emitDelta(record, {
-      type: SubagentDeltaEventType.TOOL_START, segmentId, toolCallId, toolName,
-      status: 'generating', args: '', startedAt,
-    });
-  }
-
-  private _updateLiveTool(record: SubagentRecord, toolCallId: string, patch: Partial<SubagentToolSnapshot>): void {
-    const tool = this._live(record).toolCalls.find((entry) => entry.toolCallId === toolCallId);
-    if (!tool) return;
-    Object.assign(tool, patch);
-    this._updateLive(record, {});
-  }
-
-  /** Mutable view of a record's live projection for in-place run-loop accumulation. */
-  private _live(record: SubagentRecord): MutableLiveProjection {
-    return record.live as MutableLiveProjection;
-  }
-
   private _updateLive(
     record: SubagentRecord,
     patch: Partial<Omit<SubagentLiveProjection, 'sequence' | 'subagentId' | 'runId'>>,
   ): void {
-    const live = this._live(record);
-    if (patch.sessionId !== undefined) live.sessionId = patch.sessionId;
-    if (patch.state !== undefined) live.state = patch.state;
-    if (patch.usage !== undefined) live.usage = patch.usage;
-    if (patch.result !== undefined) live.result = patch.result;
-    if (patch.error !== undefined) live.error = patch.error;
-    if (patch.segments !== undefined) {
-      live.segments.length = 0;
-      live.segments.push(...patch.segments);
-    }
-    if (patch.toolCalls !== undefined) {
-      live.toolCalls.length = 0;
-      live.toolCalls.push(...patch.toolCalls);
-    }
-    live.sequence += 1;
-    this._bumpSessionRevision(record);
+    this._liveProjection.update(record.id, patch);
   }
 
   private _finishLive(record: SubagentRecord, state: SubagentTerminalState): void {
-    if (record._liveTerminalEmitted) return;
-    record._liveTerminalEmitted = true;
-    this._updateLive(record, {
-      state, result: record.result, error: record.error, usage: record.usage,
-      segments: [], toolCalls: [],
-    });
-    record._liveCommittedSegmentCount = 0;
-    this._emitDelta(record, {
-      type: SubagentDeltaEventType.TERMINAL,
-      record: runtimeToDomain(record, { includeLiveTail: true }),
+    this._liveProjection.finish(record.id, {
       state,
+      result: record.result,
+      error: record.error,
       usage: record.usage,
+      terminalRecord: () => this.toDomainRecord(record, { includeLiveTail: true }),
     });
   }
 
-  /** Emit a typed live delta stamped with the current run sequence and session revision. */
-  private _emitDelta(record: SubagentRecord, delta: SubagentDeltaPayload): void {
-    const listener = this._onDelta;
-    if (!listener) return;
-    const sessionId = record.sessionId ?? '';
-    const event = {
-      sessionId,
-      subagentId: record.id,
-      runId: record.live.runId,
-      sequence: record.live.sequence,
-      sessionRevision: this.getSessionRevision(sessionId),
-      ...delta,
-    } as SubagentDeltaEvent;
-    try {
-      listener(event);
-    } catch (err) {
-      console.debug('Subagent delta listener failed (non-fatal):', err);
-    }
+  /** Delegates wire construction and publication to the live-projection store. */
+  private _emitDelta(record: SubagentRecord, delta: Parameters<SubagentLiveProjectionStore['emit']>[1]): void {
+    this._liveProjection.emit(record.id, delta);
   }
 
   /** Advance the per-session revision counter used to order events and snapshots. */
   private _bumpSessionRevision(record: SubagentRecord): void {
-    if (!record.sessionId) return;
-    this._sessionRevisions.set(
-      record.sessionId,
-      (this._sessionRevisions.get(record.sessionId) ?? 0) + 1,
-    );
+    this._liveProjection.bumpSessionRevision(record.sessionId);
   }
 
   /** Mark a durable record mutation: bump the persist revision and the session revision. */
@@ -1797,8 +1602,10 @@ export class SubagentManager {
 // ── Persistence helpers ─────────────────────────────────────────────────────
 
 export interface RuntimeToDomainOptions {
-  /** Include the uncommitted live tail in the returned durable chain. */
+  /** Include the uncommitted live tail from the explicit projection checkpoint. */
   includeLiveTail?: boolean;
+  /** Runtime-only checkpoint supplied by `SubagentLiveProjectionStore`. */
+  projectionCheckpoint?: SubagentProjectionCheckpoint;
 }
 
 /** Map runtime record → domain SubagentRecord for session JSON. */
@@ -1818,9 +1625,9 @@ export function runtimeToDomain(
   const chain =
     record.chain ??
     makeEmptyChain(record.sessionId ?? '', record.selection, record.agent);
-  const checkpointChain = options.includeLiveTail === false
-    ? chain
-    : materializeLiveTail(record, chain);
+  const checkpointChain = options.includeLiveTail === true && options.projectionCheckpoint
+    ? materializeProjectionTail(options.projectionCheckpoint, chain)
+    : chain;
 
   return {
     id: record.id,
@@ -1842,43 +1649,6 @@ export function runtimeToDomain(
       : {}),
     closed: record.closed,
     chain: checkpointChain,
-  };
-}
-
-/** Materialize only the uncommitted live tail for persistence checkpoints. */
-function materializeLiveTail(record: SubagentRecord, chain: Chain): Chain {
-  const tail = record.live.segments.slice(record._liveCommittedSegmentCount);
-  if (tail.length === 0) return chain;
-  const messages = [...chain.messages];
-  const lastTextIndex = tail.findLastIndex((segment) => segment.kind === 'text');
-  for (const [index, segment] of tail.entries()) {
-    if (segment.kind === 'thinking' && segment.content) {
-      messages.push(makeThinkingMessage(segment.content, segment.id));
-    } else if (segment.kind === 'text' && segment.content) {
-      messages.push(makeAssistantMessage(segment.content, index === lastTextIndex ? record.usage : null, segment.id));
-    }
-  }
-  return { ...chain, messages };
-}
-
-function makeLiveProjection(
-  subagentId: string,
-  sessionId: string | null,
-  state: SubagentStatus,
-  runId: string,
-): SubagentLiveProjection {
-  return {
-    sessionId, subagentId, runId, sequence: 0, state,
-    segments: [], toolCalls: [], usage: null, result: null, error: null,
-  };
-}
-
-/** Deep-copy a live projection so snapshot reads never alias mutable run state. */
-function cloneLiveProjection(projection: SubagentLiveProjection): SubagentLiveProjection {
-  return {
-    ...projection,
-    segments: projection.segments.map((segment) => ({ ...segment })),
-    toolCalls: projection.toolCalls.map((tool) => ({ ...tool })),
   };
 }
 

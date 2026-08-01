@@ -1,0 +1,106 @@
+import { describe, expect, it } from 'vitest';
+import type { Chain } from '../../src/shared/types/chain';
+import {
+  SubagentLiveProjectionStore,
+  materializeProjectionTail,
+} from '../../src/main/agents/subagent-live-projection';
+
+describe('SubagentLiveProjectionStore', () => {
+  it('owns cloned run snapshots and rotates them for a fresh run', () => {
+    const store = new SubagentLiveProjectionStore();
+
+    store.start({
+      subagentId: 'subagent-1',
+      sessionId: 'session-1',
+      state: 'pending',
+      runId: 'run-1',
+    });
+    const first = store.get('subagent-1');
+    const second = store.get('subagent-1');
+
+    expect(first).not.toBe(second);
+    expect(first?.segments).not.toBe(second?.segments);
+    expect(second?.segments).toEqual([]);
+
+    store.start({
+      subagentId: 'subagent-1',
+      sessionId: 'session-1',
+      state: 'pending',
+      runId: 'run-2',
+    });
+
+    expect(store.get('subagent-1')).toMatchObject({ runId: 'run-2', sequence: 0 });
+  });
+
+  it('tracks an explicit checkpoint and publishes monotonically ordered deltas', () => {
+    const store = new SubagentLiveProjectionStore({
+      now: () => 100,
+      getUsageDeltaIntervalMs: () => 0,
+    });
+    const events: Array<{ type: string; sequence: number; sessionRevision: number }> = [];
+    store.setOnDelta((event) => events.push(event));
+    store.start({
+      subagentId: 'subagent-1',
+      sessionId: 'session-1',
+      state: 'running',
+      runId: 'run-1',
+    });
+
+    for (const applied of store.applyAssemblerEffects('subagent-1', [{
+      type: 'append_text',
+      kind: 'text',
+      segmentId: 'segment-1',
+      append: 'partial',
+    }])) {
+      applied.publish?.();
+    }
+    const usage = { prompt_tokens: 2, completion_tokens: 1, total_tokens: 3, cached_tokens: 0 };
+    for (const applied of store.applyAssemblerEffects('subagent-1', [{ type: 'usage', usage }])) {
+      applied.publish?.();
+    }
+
+    expect(store.getCheckpoint('subagent-1')).toEqual({
+      segments: [{ kind: 'text', id: 'segment-1', content: 'partial' }],
+      committedSegmentCount: 0,
+      usage,
+    });
+    expect(events.map(({ type, sequence, sessionRevision }) => ({ type, sequence, sessionRevision }))).toEqual([
+      { type: 'text_delta', sequence: 1, sessionRevision: 1 },
+      { type: 'usage', sequence: 2, sessionRevision: 2 },
+    ]);
+  });
+
+  it('advances the checkpoint cursor at a tool boundary so durable prefixes are not duplicated', () => {
+    const store = new SubagentLiveProjectionStore();
+    const subagentId = 'subagent-1';
+    store.start({ subagentId, sessionId: 'session-1', state: 'running', runId: 'run-1' });
+
+    store.applyAssemblerEffects(subagentId, [{
+      type: 'append_text', kind: 'text', segmentId: 'text-before', append: 'before',
+    }]);
+    store.applyAssemblerEffects(subagentId, [{
+      type: 'append_text', kind: 'thinking', segmentId: 'thinking-before', append: 'thought',
+    }]);
+    store.applyAssemblerEffects(subagentId, [{
+      type: 'tool_start', toolCallId: 'tool-1', toolName: 'grep',
+      segmentId: 'tool-before', startedAt: '2026-08-01T00:00:00.000Z',
+    }]);
+    store.applyAssemblerEffects(subagentId, [{
+      type: 'tool_call', toolCallId: 'tool-1', toolName: 'grep', args: '{}',
+      segmentId: 'tool-before', startedAt: '2026-08-01T00:00:00.000Z',
+      messages: [], committedSegmentCount: 3,
+    }]);
+    store.applyAssemblerEffects(subagentId, [{
+      type: 'append_text', kind: 'text', segmentId: 'text-after', append: 'after',
+    }]);
+
+    const checkpoint = store.getCheckpoint(subagentId)!;
+    const durableChain = {
+      messages: [{ content: 'before' }, { content: 'thought' }, { content: '' }],
+    } as unknown as Chain;
+
+    expect(checkpoint.committedSegmentCount).toBe(3);
+    expect(materializeProjectionTail(checkpoint, durableChain).messages.map((message) => message.content))
+      .toEqual(['before', 'thought', '', 'after']);
+  });
+});

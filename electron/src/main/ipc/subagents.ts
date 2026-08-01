@@ -5,7 +5,6 @@ import type { SubagentRecord as DomainSubagentRecord } from '../../shared/types/
 import { getSubagentManager } from '../tools';
 import { getSessionManager } from '../session/singleton';
 import { subagentSnapshotSchema } from './payload-schemas';
-import { runtimeToDomain } from '../agents/manager';
 import { flushSubagentDeltas } from '../agents/subagent-events';
 
 // Compatibility exports for existing IPC consumers. Event ownership lives in
@@ -40,7 +39,7 @@ export function createSubagentSnapshot(sessionId: string): SubagentSnapshot {
     // exclude summaries here and let the full stored row (chain messages and
     // derived usage) win.
     .filter((record) => record.sessionId === sessionId && !record._evicted)
-    .map((record) => runtimeToDomain(record, { includeLiveTail: false }));
+    .map((record) => manager.toDomainRecord(record, { includeLiveTail: false }));
   const records = mergeSubagentRecords(session?.subagentChains ?? [], runtime);
   return {
     sessionId,
