@@ -122,6 +122,12 @@ interface IconProps extends Omit<SVGProps<SVGSVGElement>, 'name'> {
   label?: string;
 }
 
+const ICON_CENTERING: Partial<Record<IconName, string>> = {
+  // Trash2's lid polyline is asymmetric within its 24x24 viewBox (centered at x≈13
+  // instead of x=12), which makes the icon appear shifted right inside square buttons.
+  trash: '-translate-x-[4.5%]',
+};
+
 export function Icon({ name, size = 16, label, className = '', ...props }: IconProps) {
   const Component = ICONS[name];
 
@@ -129,7 +135,7 @@ export function Icon({ name, size = 16, label, className = '', ...props }: IconP
     <Component
       aria-hidden={label ? undefined : true}
       aria-label={label}
-      className={`shrink-0 ${className}`}
+      className={`shrink-0 ${ICON_CENTERING[name] ?? ''} ${className}`}
       focusable="false"
       size={size}
       strokeWidth={1.8}
