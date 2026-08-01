@@ -1,4 +1,12 @@
 import { randomUUID } from 'node:crypto';
+import type { ProjectRuntime } from '../project/runtime';
+
+/** Frozen parent-turn affinity required only while a run can execute. */
+export interface SubagentExecutionSeed {
+  readonly windowId: string | null;
+  readonly cwd: string | null;
+  readonly projectRuntime?: ProjectRuntime;
+}
 
 /** One generation of a subagent's runtime-only execution ownership. */
 export interface SubagentRun {
@@ -15,6 +23,7 @@ interface MutableSubagentRun {
   readonly runId: string;
   abortController: AbortController | null;
   promise: Promise<void> | null;
+  seed: SubagentExecutionSeed;
 }
 
 /**
@@ -27,29 +36,29 @@ interface MutableSubagentRun {
 export class SubagentRunRegistry {
   private readonly runs = new Map<string, MutableSubagentRun>();
 
-  register(subagentId: string, generation: number = 1): SubagentRun {
+  register(subagentId: string, generation: number = 1, seed: SubagentExecutionSeed = emptySeed()): SubagentRun {
     const existing = this.runs.get(subagentId);
     if (existing) return existing;
-    const run = this.createRun(subagentId, generation);
+    const run = this.createRun(subagentId, generation, seed);
     this.runs.set(subagentId, run);
     return run;
   }
 
-  reset(subagentId: string, generation: number = 1): SubagentRun {
-    const run = this.createRun(subagentId, generation);
+  reset(subagentId: string, generation: number = 1, seed: SubagentExecutionSeed = emptySeed()): SubagentRun {
+    const run = this.createRun(subagentId, generation, seed);
     this.runs.set(subagentId, run);
     return run;
   }
 
   beginNext(subagentId: string): SubagentRun {
     const current = this.runs.get(subagentId);
-    const run = this.createRun(subagentId, (current?.generation ?? 0) + 1);
+    const run = this.createRun(subagentId, (current?.generation ?? 0) + 1, current?.seed ?? emptySeed());
     this.runs.set(subagentId, run);
     return run;
   }
 
   start(subagentId: string): SubagentRun {
-    const run = this.runs.get(subagentId) ?? this.createRun(subagentId, 1);
+    const run = this.runs.get(subagentId) ?? this.createRun(subagentId, 1, emptySeed());
     this.runs.set(subagentId, run);
     run.abortController ??= new AbortController();
     return run;
@@ -103,17 +112,36 @@ export class SubagentRunRegistry {
     return this.runs.get(subagentId)?.runId;
   }
 
+  getSeed(subagentId: string): SubagentExecutionSeed | undefined {
+    return this.runs.get(subagentId)?.seed;
+  }
+
+  /** Drop heavyweight execution affinity while retaining generation ownership. */
+  releaseSeed(subagentId: string): void {
+    const run = this.runs.get(subagentId);
+    if (run) run.seed = emptySeed();
+  }
+
   remove(subagentId: string): void {
     this.runs.delete(subagentId);
   }
 
-  private createRun(subagentId: string, generation: number): MutableSubagentRun {
+  private createRun(
+    subagentId: string,
+    generation: number,
+    seed: SubagentExecutionSeed,
+  ): MutableSubagentRun {
     return {
       subagentId,
       generation,
       runId: randomUUID(),
       abortController: null,
       promise: null,
+      seed,
     };
   }
+}
+
+function emptySeed(): SubagentExecutionSeed {
+  return { windowId: null, cwd: null };
 }

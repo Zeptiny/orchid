@@ -35,6 +35,12 @@ import { subagentsConfigSchema } from '../config/schema';
 import { AdmissionController, type AdmissionCounters, type SubagentAdmissionLimits } from './admission';
 import { SubagentRunRegistry, type SubagentRun } from './subagent-run';
 import {
+  SubagentLifecycle,
+  type SubagentQuestion,
+  type SubagentQuestionResult,
+  type SubagentWaiterReason,
+} from './subagent-lifecycle';
+import {
   SubagentRunAssembler,
   type SubagentRunFinalization,
   type SubagentRunProjectionEffect,
@@ -73,9 +79,7 @@ export { SubagentState } from './types';
 import { SubagentState } from './types';
 
 /** Result of answering (or declining) a subagent's pending question. */
-export type SubagentQuestionResult =
-  | { type: 'answered'; answers: Array<{ selected: string[]; text: string | null; skipped: boolean }> }
-  | { type: 'declined' };
+export type { SubagentQuestionResult } from './subagent-lifecycle';
 
 /** Terminal states — subagents in these states cannot be cancelled. */
 const TERMINAL_STATES = new Set<SubagentState>([
@@ -141,7 +145,6 @@ export type SubagentStreamRunner = (params: {
 }) => AsyncGenerator<StreamEvent>;
 
 export type SubagentChangeListener = (records: readonly SubagentRecord[]) => void;
-type SubagentWaiterReason = 'state-change' | 'flush';
 
 /**
  * Resolve the default `wait_for_subagent` budget in milliseconds.
@@ -259,30 +262,12 @@ export interface SubagentRecord {
    * (global manager + getActive() would otherwise attach chains to the new session).
    */
   readonly sessionId: string | null;
-  /** Runtime-only owner window used for approval delivery. */
-  readonly windowId: string | null;
-  /** Frozen parent-turn workspace cwd; reused when a queued run is admitted. */
-  readonly cwd: string | null;
-  projectRuntime?: ProjectRuntime;
-  /** Pending completion promise resolvers. */
-  _resolveWait: Array<(reason: SubagentWaiterReason) => void> | null;
   /**
    * Hidden from the dynamic system prompt while the durable record, chain,
    * and terminal state stay intact (close_subagents tool). Only meaningful on
    * terminal records; persisted with the durable row.
    */
   closed: boolean;
-  /** Pending question routed to the main agent (null when no question is outstanding). */
-  pendingQuestion: {
-    toolCallId: string;
-    questions: Array<{
-      type: 'single' | 'multi';
-      title: string;
-      description?: string;
-      options: Array<{ label: string; description?: string }>;
-    }>;
-    resolve: (result: SubagentQuestionResult) => void;
-  } | null;
 }
 
 // ── SubagentResult ──────────────────────────────────────────────────────────
@@ -338,6 +323,7 @@ export class SubagentManager {
   private _liveProjection = new SubagentLiveProjectionStore({ getUsageDeltaIntervalMs });
   private _admission = new AdmissionController();
   private _runs = new SubagentRunRegistry();
+  private _lifecycle = new SubagentLifecycle();
   private _persistence = new SubagentPersistence(getTerminalRetention);
 
   /**
@@ -390,13 +376,17 @@ export class SubagentManager {
     } = {},
   ): SubagentRecord {
     const id = `subagent-${randomUUID()}`;
-    const run = this._runs.register(id);
     const sessionId = options.sessionId ?? null;
     const limits = getAdmissionLimits();
     const admitted = this._admission.canAdmit(sessionId, limits, this._admissionCounters());
     if (!admitted && this._admission.queueLength >= limits.maxQueued) {
       throw new SubagentQueueFullError(limits);
     }
+    const run = this._runs.register(id, 1, {
+      windowId: options.windowId ?? null,
+      cwd: options.cwd ?? null,
+      projectRuntime: options.projectRuntime,
+    });
 
     const userMessage = makeUserMessage(task);
     const selection = options.selection ?? null;
@@ -423,12 +413,7 @@ export class SubagentManager {
       selection,
       parentChainIndex: options.parentChainIndex ?? null,
       sessionId,
-      windowId: options.windowId ?? null,
-      cwd: options.cwd ?? null,
-      projectRuntime: options.projectRuntime,
-      _resolveWait: [],
       closed: false,
-      pendingQuestion: null,
     };
 
     this._subagents.set(id, record);
@@ -449,7 +434,7 @@ export class SubagentManager {
     });
 
     if (admitted && this._runner) {
-      this._startRecordRun(record, options.cwd);
+      this._startRecordRun(record);
     }
 
     return record;
@@ -519,17 +504,9 @@ export class SubagentManager {
           messages: [userMessage],
         };
 
-    // Per-run reset: clear the prior run's outcome and timing, advance the
-    // generation, and build a fresh live projection (new runId) so the renderer
-    // treats the resume as a new run.
-    record.result = null;
-    record.error = null;
-    record.endTime = null;
-    record.startedAt = null;
-    record.startTime = now;
-    // Clear the prior run's aggregate so the resumed run's SPAWNED delta does
-    // not leak stale usage; the run loop re-accumulates fresh per run.
-    record.usage = null;
+    // Per-run lifecycle reset and fresh projection make the resume a new run.
+    const transition = this._lifecycle.transition(record, { type: 'follow-up', admitted, now });
+    if (!transition) throw new SubagentNotTerminalError(subagentId, record.state);
     const run = this._runs.beginNext(record.id);
     this._liveProjection.start({
       subagentId: record.id,
@@ -537,14 +514,15 @@ export class SubagentManager {
       state: admitted ? SubagentStatus.PENDING : SubagentStatus.QUEUED,
       runId: run.runId,
     });
-    record.pendingQuestion = null;
+    if (transition.effects.clearQuestion) this._lifecycle.cancelQuestion(record.id);
     // Reopened chain + follow-up message must persist via the next checkpoint
     // (spawn sets a fresh row; followUp reopens a terminal durable row).
     this._persistence.beginFollowUp(record.id, { queued: !admitted });
+    // Persistence owns its dirty revision; the projection clock separately
+    // orders this durable lifecycle mutation against snapshots and deltas.
+    if (transition.effects.persist) this._bumpSessionRevision(record);
 
     if (admitted) {
-      record.state = SubagentState.PENDING;
-      record.queuedAt = null;
       this._admission.markAdmitted(record.sessionId);
       this._notify();
       this._emitDelta(record, {
@@ -553,11 +531,9 @@ export class SubagentManager {
         usage: record.usage,
       });
       if (this._runner) {
-        this._startRecordRun(record, record.cwd ?? undefined);
+        this._startRecordRun(record);
       }
     } else {
-      record.state = SubagentState.QUEUED;
-      record.queuedAt = now;
       this._admission.enqueue(record.id);
       this._notify();
       this._emitDelta(record, {
@@ -575,16 +551,17 @@ export class SubagentManager {
    */
   markRunning(subagentId: string): void {
     const record = this._subagents.get(subagentId);
-    if (record && record.state === SubagentState.PENDING) {
-      record.state = SubagentState.RUNNING;
-      record.startedAt ??= Date.now();
+    const transition = record
+      ? this._lifecycle.transition(record, { type: 'running', now: Date.now() })
+      : null;
+    if (record && transition) {
       this._updateLive(record, { state: SubagentState.RUNNING });
-      this._markRecordDirty(record);
+      if (transition.effects.persist) this._markRecordDirty(record);
       this._emitDelta(record, {
         type: SubagentDeltaEventType.STATUS_CHANGED,
         status: SubagentStatus.RUNNING,
       });
-      this._notify();
+      if (transition.effects.notify) this._notify();
     }
   }
 
@@ -594,18 +571,17 @@ export class SubagentManager {
    */
   markCompleted(subagentId: string, result: string): void {
     const record = this._subagents.get(subagentId);
-    if (!record || TERMINAL_STATES.has(record.state)) return;
+    if (!record) return;
+    const transition = this._lifecycle.transition(record, { type: 'complete', result, now: Date.now() });
+    if (!transition) return;
 
-    this._admission.removeFromQueue(subagentId);
-    record.state = SubagentState.COMPLETED;
-    record.result = result;
-    record.endTime = Date.now();
+    if (transition.effects.removeFromAdmissionQueue) this._admission.removeFromQueue(subagentId);
     this._finalizeChain(record, ChainStatus.COMPLETED);
-    this._markRecordDirty(record);
-    this._finishLive(record, SubagentState.COMPLETED);
-    this._resolveWaiters(record);
-    this._notify();
-    this._admitFromQueue();
+    if (transition.effects.persist) this._markRecordDirty(record);
+    if (transition.effects.finishProjection) this._finishLive(record, SubagentState.COMPLETED);
+    if (transition.effects.resolveWaiters) this._lifecycle.resolveWaiters(record.id);
+    if (transition.effects.notify) this._notify();
+    if (transition.effects.admitNext) this._admitFromQueue();
   }
 
   /**
@@ -614,18 +590,17 @@ export class SubagentManager {
    */
   markFailed(subagentId: string, error: string): void {
     const record = this._subagents.get(subagentId);
-    if (!record || TERMINAL_STATES.has(record.state)) return;
+    if (!record) return;
+    const transition = this._lifecycle.transition(record, { type: 'fail', error, now: Date.now() });
+    if (!transition) return;
 
-    this._admission.removeFromQueue(subagentId);
-    record.state = SubagentState.FAILED;
-    record.error = error;
-    record.endTime = Date.now();
+    if (transition.effects.removeFromAdmissionQueue) this._admission.removeFromQueue(subagentId);
     this._finalizeChain(record, ChainStatus.FAILED);
-    this._markRecordDirty(record);
-    this._finishLive(record, SubagentState.FAILED);
-    this._resolveWaiters(record);
-    this._notify();
-    this._admitFromQueue();
+    if (transition.effects.persist) this._markRecordDirty(record);
+    if (transition.effects.finishProjection) this._finishLive(record, SubagentState.FAILED);
+    if (transition.effects.resolveWaiters) this._lifecycle.resolveWaiters(record.id);
+    if (transition.effects.notify) this._notify();
+    if (transition.effects.admitNext) this._admitFromQueue();
   }
 
   /**
@@ -641,9 +616,10 @@ export class SubagentManager {
     // A flag set on a terminal summary never persists — refuse loudly; the
     // tool hydrates these first.
     if (this.isSummary(subagentId)) throw new SubagentSummaryClosedError(subagentId);
-    record.closed = true;
-    this._markRecordDirty(record);
-    this._notify();
+    const transition = this._lifecycle.transition(record, { type: 'close' });
+    if (!transition) return;
+    if (transition.effects.persist) this._markRecordDirty(record);
+    if (transition.effects.notify) this._notify();
   }
 
   /**
@@ -672,7 +648,7 @@ export class SubagentManager {
       .map((id) => this._subagents.get(id))
       .filter((record): record is SubagentRecord => record !== undefined);
     const shouldReturn = () =>
-      records.some((record) => record.pendingQuestion !== null) ||
+      records.some((record) => this._lifecycle.hasPendingQuestion(record.id)) ||
       records.every((record) => TERMINAL_STATES.has(record.state));
 
     if (!shouldReturn()) {
@@ -697,9 +673,6 @@ export class SubagentManager {
 
           for (const record of records) {
             if (TERMINAL_STATES.has(record.state)) continue;
-            if (!record._resolveWait) {
-              record._resolveWait = [];
-            }
             const entry = (reason: SubagentWaiterReason) => {
               if (reason === 'flush') {
                 settle(resolve);
@@ -707,15 +680,7 @@ export class SubagentManager {
               }
               checkPredicate();
             };
-            record._resolveWait.push(entry);
-            waiterCleanups.push(() => {
-              if (!record._resolveWait) return;
-              const idx = record._resolveWait.indexOf(entry);
-              if (idx >= 0) record._resolveWait.splice(idx, 1);
-              if (record._resolveWait.length === 0) {
-                record._resolveWait = null;
-              }
-            });
+            waiterCleanups.push(this._lifecycle.addWaiter(record.id, entry));
           }
 
           checkPredicate();
@@ -789,24 +754,24 @@ export class SubagentManager {
    */
   cancelOne(subagentId: string): boolean {
     const record = this._subagents.get(subagentId);
-    if (!record || TERMINAL_STATES.has(record.state)) {
+    if (!record) {
       return false;
     }
+    const wasQueued = record.state === SubagentState.QUEUED;
+    const transition = this._lifecycle.transition(record, {
+      type: 'interrupt',
+      error: 'Interrupted by user',
+      now: Date.now(),
+    });
+    if (!transition) return false;
 
     // A queued record is cancelled in place: removed from the queue, marked
     // INTERRUPTED, terminal delta emitted — no run slot was ever consumed, so
     // no admission follows.
-    const wasQueued = record.state === SubagentState.QUEUED;
-    this._admission.removeFromQueue(subagentId);
-    record.state = SubagentState.INTERRUPTED;
-    record.error = record.error ?? 'Interrupted by user';
-    record.endTime = record.endTime ?? Date.now();
+    if (transition.effects.removeFromAdmissionQueue) this._admission.removeFromQueue(subagentId);
     this._runs.abortCurrent(record.id);
-    if (record.pendingQuestion) {
-      record.pendingQuestion.resolve({ type: 'declined' });
-      record.pendingQuestion = null;
-    }
-    this._markRecordDirty(record);
+    if (transition.effects.clearQuestion) this._lifecycle.cancelQuestion(record.id);
+    if (transition.effects.persist) this._markRecordDirty(record);
     // The runner owns the async interruption boundary. It must materialize its
     // partial live tail before the terminal projection is emitted; otherwise
     // the terminal event can make the renderer flush an incomplete record.
@@ -814,14 +779,14 @@ export class SubagentManager {
       this._finalizeChain(record, ChainStatus.INTERRUPTED);
       this._finishLive(record, SubagentState.INTERRUPTED);
     }
-    this._resolveWaiters(record);
+    if (transition.effects.resolveWaiters) this._lifecycle.resolveWaiters(record.id);
     if (wasQueued && !this._persistence.hasDurableEligibility(record.id)) {
       // A record cancelled while QUEUED was never admitted, so it never gets a
       // durable row (persistence eligibility begins at admission) — but it must
       // not linger as a full record either. Evict it to a lean terminal summary
       // under the same retention FIFO as persisted records; the terminal delta
       // above already carried the full record to the renderer. Eviction runs
-      // after _resolveWaiters because _evictToSummary drops _resolveWait.
+      // after resolving waiters because eviction clears runtime lifecycle state.
       this._applySummaryConfirmation(record, this._persistence.summarizeUndurable(record.id));
     }
     // A resume-queued record owns a durable row (persist-subagent-chains
@@ -830,8 +795,8 @@ export class SubagentManager {
     // checkpoint skips summaries. Leave it as a full dirty INTERRUPTED
     // record: the terminal wave persists it, then confirmRecordsPersisted
     // evicts it through the normal row-confirmed path.
-    this._notify();
-    if (!wasQueued) this._admitFromQueue();
+    if (transition.effects.notify) this._notify();
+    if (!wasQueued && transition.effects.admitNext) this._admitFromQueue();
     return true;
   }
 
@@ -870,7 +835,7 @@ export class SubagentManager {
     const flushed: string[] = [];
 
     for (const record of this._subagents.values()) {
-      if (this._resolveWaiters(record, 'flush')) {
+      if (this._lifecycle.resolveWaiters(record.id, 'flush')) {
         flushed.push(record.id);
       }
     }
@@ -935,9 +900,9 @@ export class SubagentManager {
   }
 
   /**
-   * Store a pending question on the subagent record and unblock waiters.
+   * Store a runtime-only pending question and unblock waiters.
    *
-   * The record stays RUNNING — `_resolveWaiters` lets `wait_for_subagent`
+   * The record stays RUNNING — lifecycle waiters let `wait_for_subagent`
    * return early so the main agent can see and answer the question.
    */
   markQuestionPending(
@@ -952,14 +917,10 @@ export class SubagentManager {
   ): Promise<SubagentQuestionResult> {
     const record = this._subagents.get(subagentId);
     if (!record) throw new Error(`Subagent '${subagentId}' not found`);
-    if (record.pendingQuestion) {
-      return Promise.resolve({ type: 'declined' });
-    }
-
-    return new Promise((resolve) => {
-      record.pendingQuestion = { toolCallId, questions, resolve };
-      this._resolveWaiters(record);
-    });
+    if (this._lifecycle.hasPendingQuestion(subagentId)) return Promise.resolve({ type: 'declined' });
+    const promise = this._lifecycle.askQuestion(subagentId, { toolCallId, questions });
+    this._lifecycle.resolveWaiters(subagentId);
+    return promise;
   }
 
   /**
@@ -973,13 +934,12 @@ export class SubagentManager {
     toolCallId: string,
     result: SubagentQuestionResult,
   ): boolean {
-    const record = this._subagents.get(subagentId);
-    if (!record?.pendingQuestion || record.pendingQuestion.toolCallId !== toolCallId) {
-      return false;
-    }
-    record.pendingQuestion.resolve(result);
-    record.pendingQuestion = null;
-    return true;
+    return this._lifecycle.answerQuestion(subagentId, toolCallId, result);
+  }
+
+  /** Runtime-only pending question for a record, if any. */
+  getPendingQuestion(subagentId: string): SubagentQuestion | undefined {
+    return this._lifecycle.getPendingQuestion(subagentId);
   }
 
   /**
@@ -1003,13 +963,14 @@ export class SubagentManager {
       questions: unknown[];
     }> = [];
     for (const [id, record] of this._subagents) {
-      if (record.sessionId === sessionId && record.pendingQuestion) {
+      const pendingQuestion = this._lifecycle.getPendingQuestion(id);
+      if (record.sessionId === sessionId && pendingQuestion) {
         results.push({
           subagentId: id,
           name: record.label,
           type: record.agent.type,
-          toolCallId: record.pendingQuestion.toolCallId,
-          questions: record.pendingQuestion.questions,
+          toolCallId: pendingQuestion.toolCallId,
+          questions: pendingQuestion.questions,
         });
       }
     }
@@ -1089,6 +1050,7 @@ export class SubagentManager {
       for (const id of effect.removeIds) {
         this._subagents.delete(id);
         this._runs.remove(id);
+        this._lifecycle.clear(id);
         this._liveProjection.remove(id);
       }
     }
@@ -1115,6 +1077,7 @@ export class SubagentManager {
     for (const [id, record] of this._subagents) {
       if (record.sessionId === sessionId) {
         this._subagents.delete(id);
+        this._lifecycle.clear(id);
         // Let an already-started run unwind through its guarded terminal
         // projection. Its finally block drops the detached registry entry.
         if (!this._runs.isSettling(id)) {
@@ -1191,7 +1154,11 @@ export class SubagentManager {
       // and runtimeToDomain never receives an invalid Date.
       const startTime = Date.parse(domain.start_time) || 0;
       const endTime = domain.end_time ? (Date.parse(domain.end_time) || 0) : null;
-      const run = this._runs.reset(spec.id);
+      const run = this._runs.reset(spec.id, 1, {
+        windowId: spec.windowId,
+        cwd: spec.cwd,
+        projectRuntime: spec.projectRuntime,
+      });
 
       const record: SubagentRecord = {
         id: spec.id,
@@ -1214,12 +1181,7 @@ export class SubagentManager {
         selection: domain.chain.selection,
         parentChainIndex: domain.parentChainIndex,
         sessionId: spec.sessionId,
-        windowId: spec.windowId,
-        cwd: spec.cwd,
-        projectRuntime: spec.projectRuntime,
-        _resolveWait: [],
         closed: domain.closed,
-        pendingQuestion: null,
       };
       if (domain.reasoning_effort !== undefined) {
         record.reasoningEffort = domain.reasoning_effort;
@@ -1282,18 +1244,19 @@ export class SubagentManager {
   }
 
   private _admit(record: SubagentRecord): void {
-    record.state = SubagentState.PENDING;
+    const transition = this._lifecycle.transition(record, { type: 'admit' });
+    if (!transition) return;
     this._persistence.markAdmitted(record.id);
     this._admission.markAdmitted(record.sessionId);
-    this._markRecordDirty(record);
+    if (transition.effects.persist) this._markRecordDirty(record);
     this._updateLive(record, { state: SubagentState.PENDING });
     this._emitDelta(record, {
       type: SubagentDeltaEventType.STATUS_CHANGED,
       status: SubagentStatus.PENDING,
     });
-    this._notify();
+    if (transition.effects.notify) this._notify();
     if (this._runner) {
-      this._startRecordRun(record, record.cwd ?? undefined);
+      this._startRecordRun(record);
     }
   }
 
@@ -1318,14 +1281,16 @@ export class SubagentManager {
   /**
    * Replace heavy runtime fields with a bounded summary. The record keeps its
    * SubagentRecord shape so downstream type contracts (getStates, wait,
-   * prompt-context) don't break; chain messages, live state, projectRuntime,
-   * and abort artifacts are dropped. Persistence owns the corresponding
+   * prompt-context) don't break; chain messages and live state are dropped.
+   * Persistence owns the corresponding
    * summary status so writers and snapshots retain the durable row as truth.
    */
   private _evictToSummary(record: SubagentRecord): void {
-    record._resolveWait = null;
-    record.pendingQuestion = null;
-    record.projectRuntime = undefined;
+    this._lifecycle.clear(record.id);
+    // `_startRun` snapshots this seed before it starts consuming the stream;
+    // clearing it here releases heavyweight affinity without changing a
+    // settling generation's identity, abort signal, or promise.
+    this._runs.releaseSeed(record.id);
     if (record.chain) {
       record.chain = { ...record.chain, messages: [] };
     }
@@ -1341,22 +1306,22 @@ export class SubagentManager {
     for (const id of effect.removeIds) {
       this._subagents.delete(id);
       this._runs.remove(id);
+      this._lifecycle.clear(id);
       this._liveProjection.remove(id);
     }
   }
 
   // ── Private: run loop ─────────────────────────────────────────────────────
 
-  private _startRecordRun(record: SubagentRecord, cwd?: string): void {
+  private _startRecordRun(record: SubagentRecord): void {
     const run = this._runs.start(record.id);
-    const promise = this._startRun(record, run, cwd);
+    const promise = this._startRun(record, run);
     this._runs.attachPromise(run, promise);
   }
 
   private async _startRun(
     record: SubagentRecord,
     run: SubagentRun,
-    cwd?: string,
   ): Promise<void> {
     const runner = this._runner;
     if (!runner) {
@@ -1371,6 +1336,7 @@ export class SubagentManager {
 
     const abort = run.abortController;
     if (!abort) return;
+    const seed = this._runs.getSeed(record.id);
     this.markRunning(record.id);
 
     const assembler = new SubagentRunAssembler(record.chain?.messages ?? []);
@@ -1385,14 +1351,14 @@ export class SubagentManager {
         selection: record.selection,
         abortSignal: abort.signal,
         sessionId: record.sessionId ?? undefined,
-        windowId: record.windowId ?? undefined,
-        cwd,
+        windowId: seed?.windowId ?? undefined,
+        cwd: seed?.cwd ?? undefined,
         agentScopeId: record.id,
         chainId: record.chain?.id,
         // Per-run turn id keeps provider accounting attribution unique across
         // resumes (spawn path generation=1 reproduces a stable unique id).
         turnId: `${record.id}#${run.generation}`,
-        projectRuntime: record.projectRuntime,
+        projectRuntime: seed?.projectRuntime,
         onReasoningEffort: (effort) => {
           if (!this._runs.isCurrent(run)) return;
           record.reasoningEffort = effort;
@@ -1533,22 +1499,6 @@ export class SubagentManager {
       status: terminal,
       endTime: new Date().toISOString(),
     };
-  }
-
-  private _resolveWaiters(
-    record: SubagentRecord,
-    reason: SubagentWaiterReason = 'state-change',
-  ): boolean {
-    const waiters = record._resolveWait;
-    if (reason === 'flush' && waiters?.length === 0) return false;
-    if (waiters) {
-      for (const resolve of waiters) {
-        resolve(reason);
-      }
-      record._resolveWait = null;
-      return waiters.length > 0;
-    }
-    return false;
   }
 
   private _updateLive(

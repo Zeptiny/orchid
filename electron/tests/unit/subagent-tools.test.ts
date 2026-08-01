@@ -1112,7 +1112,7 @@ describe('answer_subagent', () => {
 
       expect(result.canonical.status).toBe('error');
       expect(result.agentProjection.content).toMatch(/main agent/i);
-      expect(manager.getRecord(id)?.pendingQuestion).not.toBeNull();
+      expect(manager.getPendingQuestion(id)).toBeDefined();
     } finally {
       manager.answerSubagentQuestion(id, 'tc-1', { type: 'declined' });
       await questionPromise;
@@ -1131,7 +1131,7 @@ describe('answer_subagent', () => {
 
       expect(result.canonical.status).toBe('error');
       expect(result.agentProjection.content).toContain('no pending question');
-      expect(manager.getRecord(id)?.pendingQuestion).not.toBeNull();
+      expect(manager.getPendingQuestion(id)).toBeDefined();
     } finally {
       manager.answerSubagentQuestion(id, 'tc-1', { type: 'declined' });
       await questionPromise;
@@ -1210,7 +1210,7 @@ describe('answer_subagent', () => {
 
     expect(result.canonical.status).toBe('error');
     expect(result.agentProjection.content).toContain('tc-stale');
-    expect(manager.getRecord(id)?.pendingQuestion?.toolCallId).toBe('tc-1');
+    expect(manager.getPendingQuestion(id)?.toolCallId).toBe('tc-1');
     manager.answerSubagentQuestion(id, 'tc-1', { type: 'declined' });
     await questionPromise;
   });
@@ -1370,8 +1370,8 @@ describe('hydrateSubagentRecords helper', () => {
     expect(record.result).toBe('stored result');
     expect(record.chain?.messages.length).toBeGreaterThan(0);
     // session.cwd wins over the turn cwd; windowId comes from the turn context.
-    expect(record.cwd).toBe('/tmp/session');
-    expect(record.windowId).toBe('win-9');
+    expect('cwd' in record).toBe(false);
+    expect('windowId' in record).toBe(false);
   });
 
   it('hydrates an evicted in-session summary back into a full record', async () => {

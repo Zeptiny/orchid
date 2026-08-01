@@ -108,7 +108,7 @@ describe('subagent ask_question production registry routing', () => {
           agentScopeId: 'main',
         },
       );
-      const pending = manager.getRecord(record.id)?.pendingQuestion;
+      const pending = manager.getPendingQuestion(record.id);
       expect(pending).not.toBeNull();
       const answerResult = await answerSubagent.handler(
         {

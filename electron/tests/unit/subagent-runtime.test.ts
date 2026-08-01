@@ -103,6 +103,11 @@ describe('SubagentManager runtime', () => {
     expect('_liveCommittedSegmentCount' in record).toBe(false);
     expect('_liveTerminalEmitted' in record).toBe(false);
     expect('_lastUsageDeltaAt' in record).toBe(false);
+    expect('_resolveWait' in record).toBe(false);
+    expect('pendingQuestion' in record).toBe(false);
+    expect('windowId' in record).toBe(false);
+    expect('cwd' in record).toBe(false);
+    expect('projectRuntime' in record).toBe(false);
     expect(manager.getRunGeneration(record.id)).toBe(1);
     expect(manager.getRunPromise(record.id)).toBeNull();
   });
@@ -121,7 +126,7 @@ describe('SubagentManager runtime', () => {
       sessionId: 'session-affinity',
       windowId: 'window-10',
     });
-    expect(record.windowId).toBe('window-10');
+    expect('windowId' in record).toBe(false);
 
     release();
     await manager.getRunPromise(record.id);
@@ -1221,7 +1226,7 @@ describe('SubagentManager terminal eviction and session purge (U9)', () => {
     expect(summary.startTime).toBeTypeOf('number');
     expect(summary.endTime).toBeTypeOf('number');
     expect(summary.chain?.messages).toEqual([]);
-    expect(summary.projectRuntime).toBeUndefined();
+    expect('projectRuntime' in summary).toBe(false);
     expect(manager.getRunPromise(summary.id)).toBeNull();
     expect('abortController' in summary).toBe(false);
     expect('_runPromise' in summary).toBe(false);
@@ -1317,6 +1322,19 @@ describe('SubagentManager terminal eviction and session purge (U9)', () => {
     expect(manager.getSessionRevision(sid)).toBe(0);
     manager.markRunning(replacement.id);
     expect(manager.getSessionRevision(sid)).toBeGreaterThan(0);
+  });
+
+  it('purgeSession releases a pending question resolver on a terminal record', async () => {
+    const sid = 'sess-purge-question';
+    const record = manager.spawn('question', 'ask', testAgent, { sessionId: sid });
+    manager.markRunning(record.id);
+    const question = manager.markQuestionPending(record.id, 'tool-question', []);
+    manager.markCompleted(record.id, 'done');
+
+    manager.purgeSession(sid);
+
+    await expect(question).resolves.toEqual({ type: 'declined' });
+    expect(manager.getRecord(record.id)).toBeUndefined();
   });
 
   it('cancelling a queued record evicts it to a retention-capped summary (review #15)', () => {
@@ -1510,8 +1528,8 @@ describe('SubagentManager hydration (U3)', () => {
     expect(record!.parentChainIndex).toBe(3);
     expect(record!.chain?.messages.length).toBeGreaterThan(0);
     expect(record!.sessionId).toBe('sess-hydrate');
-    expect(record!.windowId).toBe('win-1');
-    expect(record!.cwd).toBe('/tmp/project');
+    expect('windowId' in record!).toBe(false);
+    expect('cwd' in record!).toBe(false);
     // Hydration restarts the persistence counter and emits nothing.
     expect(manager.checkpointCandidates('sess-hydrate').map((candidate) => candidate.record.id))
       .toContain(record!.id);
@@ -1521,6 +1539,46 @@ describe('SubagentManager hydration (U3)', () => {
     expect(manager.getStates('sess-hydrate')).toEqual([]);
     record!.closed = false;
     expect(manager.getStates('sess-hydrate').map((s) => s.id)).toEqual([original.id]);
+  });
+
+  it('keeps hydrated execution affinity in runtime state for a follow-up runner', async () => {
+    const source = new SubagentManager();
+    const original = source.spawn('resume', 'original task', testAgent, { sessionId: 'sess-affinity' });
+    source.markCompleted(original.id, 'done');
+    const domain = subagentRecordFromStorageDict(subagentRecordToStorageDict(runtimeToDomain(original)));
+    const runtime = { projectDir: '/tmp/hydrated-project' } as never;
+    const received: Array<{ windowId?: string; cwd?: string; projectRuntime?: unknown; sessionId?: string }> = [];
+    manager.setRunner(async function* (params): AsyncGenerator<StreamEvent> {
+      received.push({
+        windowId: params.windowId,
+        cwd: params.cwd,
+        projectRuntime: params.projectRuntime,
+        sessionId: params.sessionId,
+      });
+      yield { type: 'finish', finishReason: 'stop' };
+    });
+    manager.hydrate([{
+      id: original.id,
+      agent: testAgent,
+      domain,
+      sessionId: 'sess-affinity',
+      windowId: 'window-hydrated',
+      cwd: '/tmp/hydrated-project',
+      projectRuntime: runtime,
+    }]);
+
+    const resumed = manager.followUp(original.id, 'continue');
+    await manager.getRunPromise(resumed.id);
+
+    expect('windowId' in resumed).toBe(false);
+    expect('cwd' in resumed).toBe(false);
+    expect('projectRuntime' in resumed).toBe(false);
+    expect(received).toEqual([{
+      windowId: 'window-hydrated',
+      cwd: '/tmp/hydrated-project',
+      projectRuntime: runtime,
+      sessionId: 'sess-affinity',
+    }]);
   });
 
   it('hydrating a live full record is a no-op (runtime record wins)', () => {
@@ -1667,6 +1725,18 @@ describe('SubagentManager follow-up resume (U4)', () => {
   beforeEach(() => {
     manager = new SubagentManager();
     configOverride.current = null;
+  });
+
+  it('advances the session revision when a terminal record is reopened', () => {
+    const sid = 'sess-follow-up-revision';
+    manager.setRunner(null);
+    const record = manager.spawn('revision', 'first', testAgent, { sessionId: sid });
+    manager.markCompleted(record.id, 'done');
+    const before = manager.getSessionRevision(sid);
+
+    manager.followUp(record.id, 'again');
+
+    expect(manager.getSessionRevision(sid)).toBeGreaterThan(before);
   });
 
   afterEach(() => {
@@ -1980,6 +2050,7 @@ describe('SubagentManager follow-up resume (U4)', () => {
     expect(manager.isSummary(record.id)).toBe(true);
 
     expect(() => manager.close(record.id)).toThrow(SubagentSummaryClosedError);
+    expect(manager.getRecord(record.id)?.closed).toBe(false);
     expect(record.closed).toBe(false);
   });
 

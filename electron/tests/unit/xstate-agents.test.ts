@@ -620,8 +620,8 @@ describe('SubagentManager', () => {
     ]);
 
     try {
-      const results = await manager.wait([record.id], { timeoutMs: 30 });
-      expect(results.get(record.id)?.pendingQuestion?.toolCallId).toBe('tc-before-wait');
+      await manager.wait([record.id], { timeoutMs: 30 });
+      expect(manager.getPendingQuestion(record.id)?.toolCallId).toBe('tc-before-wait');
     } finally {
       manager.answerSubagentQuestion(record.id, 'tc-before-wait', { type: 'declined' });
       await questionPromise;
@@ -648,7 +648,7 @@ describe('SubagentManager', () => {
     ]);
 
     await expect(second).resolves.toEqual({ type: 'declined' });
-    expect(record.pendingQuestion?.toolCallId).toBe('tc-first');
+    expect(manager.getPendingQuestion(record.id)?.toolCallId).toBe('tc-first');
     expect(manager.answerSubagentQuestion(record.id, 'tc-first', { type: 'declined' })).toBe(true);
     await expect(first).resolves.toEqual({ type: 'declined' });
   });
@@ -663,7 +663,7 @@ describe('SubagentManager', () => {
 
     const second = manager.markQuestionPending(record.id, 'tc-second', []);
     expect(manager.answerSubagentQuestion(record.id, 'tc-first', { type: 'declined' })).toBe(false);
-    expect(record.pendingQuestion?.toolCallId).toBe('tc-second');
+    expect(manager.getPendingQuestion(record.id)?.toolCallId).toBe('tc-second');
     expect(manager.answerSubagentQuestion(record.id, 'tc-second', { type: 'declined' })).toBe(true);
     await expect(second).resolves.toEqual({ type: 'declined' });
   });
@@ -710,9 +710,8 @@ describe('SubagentManager', () => {
 
     try {
       const results = await waitPromise;
-      expect(results.get(a.id)?.pendingQuestion?.toolCallId).toBe('tc-first-question');
+      expect(manager.getPendingQuestion(a.id)?.toolCallId).toBe('tc-first-question');
       expect(results.get(b.id)?.state).toBe(SubagentState.RUNNING);
-      expect(b._resolveWait).toBeNull();
     } finally {
       manager.answerSubagentQuestion(a.id, 'tc-first-question', { type: 'declined' });
       await questionPromise;
@@ -731,7 +730,6 @@ describe('SubagentManager', () => {
     });
 
     expect(record.state).toBe(SubagentState.RUNNING);
-    expect(record._resolveWait).toBeNull();
   });
 
   it('wait abort signal unblocks without cancelling children', async () => {

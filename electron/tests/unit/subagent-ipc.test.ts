@@ -866,10 +866,7 @@ describe('persistSubagentChains dirty tracking (U6)', () => {
     selection: null,
     parentChainIndex: null,
     sessionId,
-    windowId: null,
-    _resolveWait: null,
     admitted: true,
-    pendingQuestion: null,
     ...overrides,
   }) as never;
 
