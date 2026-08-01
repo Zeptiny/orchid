@@ -124,7 +124,7 @@ function makeSession(): string {
 /** Spawn + drive a subagent to completion; returns the full runtime record. */
 async function completeSubagent(label: string, task: string, sessionId: string) {
   const record = manager.spawn(label, task, testAgent, { sessionId });
-  await record._runPromise;
+  await manager.getRunPromise(record.id);
   expect(record.state).toBe(SubagentState.COMPLETED);
   return record;
 }

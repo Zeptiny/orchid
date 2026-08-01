@@ -44,6 +44,7 @@ import {
 import { getConfig } from '../config/loader';
 import { subagentsConfigSchema } from '../config/schema';
 import { AdmissionController, type AdmissionCounters, type SubagentAdmissionLimits } from './admission';
+import { SubagentRunRegistry, type SubagentRun } from './subagent-run';
 import {
   SubagentWaitTimeoutError,
   SubagentQueueFullError,
@@ -260,12 +261,8 @@ export interface SubagentRecord {
   /** Frozen parent-turn workspace cwd; reused when a queued run is admitted. */
   readonly cwd: string | null;
   projectRuntime?: ProjectRuntime;
-  /** Abort controller for the in-flight run. */
-  abortController: AbortController | null;
   /** Pending completion promise resolvers. */
   _resolveWait: Array<(reason: SubagentWaiterReason) => void> | null;
-  /** In-flight run promise (for debugging / optional await). */
-  _runPromise: Promise<void> | null;
   /**
    * Hidden from the dynamic system prompt while the durable record, chain,
    * and terminal state stay intact (close_subagents tool). Only meaningful on
@@ -296,8 +293,6 @@ export interface SubagentRecord {
   _resumeQueued: boolean;
   /** Durable-mutation counter; the persistence scheduler upserts dirty records (U6). */
   persistRevision: number;
-  /** Per-record run counter for per-run turnId attribution. */
-  runCount: number;
   /** Epoch ms of the last emitted `usage` delta (0 = none yet); throttles usage deltas. */
   _lastUsageDeltaAt: number;
   /** Pending question routed to the main agent (null when no question is outstanding). */
@@ -384,6 +379,7 @@ export class SubagentManager {
   /** Per-session monotonic revision counter ordering events and snapshots. */
   private _sessionRevisions: Map<string, number> = new Map();
   private _admission = new AdmissionController();
+  private _runs = new SubagentRunRegistry();
   /**
    * Per-session FIFO of evicted terminal summary ids, capped at
    * `subagents.terminal_retention`. Oldest entries are removed from
@@ -442,6 +438,7 @@ export class SubagentManager {
     } = {},
   ): SubagentRecord {
     const id = `subagent-${randomUUID()}`;
+    const run = this._runs.register(id);
     const sessionId = options.sessionId ?? null;
     const limits = getAdmissionLimits();
     const admitted = this._admission.canAdmit(sessionId, limits, this._admissionCounters());
@@ -477,17 +474,14 @@ export class SubagentManager {
       windowId: options.windowId ?? null,
       cwd: options.cwd ?? null,
       projectRuntime: options.projectRuntime,
-      abortController: null,
       _resolveWait: [],
-      _runPromise: null,
       closed: false,
-      live: makeLiveProjection(id, sessionId, admitted ? 'pending' : 'queued'),
+      live: makeLiveProjection(id, sessionId, admitted ? 'pending' : 'queued', run.runId),
       _liveCommittedSegmentCount: 0,
       _liveTerminalEmitted: false,
       _evicted: false,
       _resumeQueued: false,
       persistRevision: 0,
-      runCount: 1,
       _lastUsageDeltaAt: 0,
       pendingQuestion: null,
     };
@@ -503,7 +497,7 @@ export class SubagentManager {
     });
 
     if (admitted && this._runner) {
-      record._runPromise = this._startRun(record, options.cwd);
+      this._startRecordRun(record, options.cwd);
     }
 
     return record;
@@ -521,7 +515,7 @@ export class SubagentManager {
    * Resume a terminal, non-closed subagent with new user input (R5, R7, R8).
    *
    * Appends the input as a user message, reopens the chain, resets the per-run
-   * fields (fresh live projection / runId, `runCount += 1`), and runs the
+   * fields (fresh live projection / runId and generation), and runs the
    * resumed record through the same admission control as `spawn`: admitted
    * resumes start immediately (PENDING → runner); over-capacity resumes park in
    * the bounded FIFO queue as QUEUED and start when a terminal transition frees
@@ -541,10 +535,10 @@ export class SubagentManager {
     }
     if (record.closed) throw new SubagentClosedError(subagentId);
     // A cancelled RUNNING record is already terminal while its run loop still
-    // owns the interruption boundary (`_runPromise` set). Resuming now would
+    // owns the interruption boundary (a settling run). Resuming now would
     // hand the record to a second run while the zombie loop's partial flush
     // and finally block still write to it.
-    if (record._runPromise !== null) {
+    if (this._runs.isSettling(record.id)) {
       throw new SubagentStillSettlingError(subagentId);
     }
 
@@ -573,8 +567,8 @@ export class SubagentManager {
           messages: [userMessage],
         };
 
-    // Per-run reset: clear the prior run's outcome and timing, bump the run
-    // counter, and build a fresh live projection (new runId) so the renderer
+    // Per-run reset: clear the prior run's outcome and timing, advance the
+    // generation, and build a fresh live projection (new runId) so the renderer
     // treats the resume as a new run.
     record.result = null;
     record.error = null;
@@ -584,17 +578,17 @@ export class SubagentManager {
     // Clear the prior run's aggregate so the resumed run's SPAWNED delta does
     // not leak stale usage; the run loop re-accumulates fresh per run.
     record.usage = null;
+    const run = this._runs.beginNext(record.id);
     record.live = makeLiveProjection(
       record.id,
       record.sessionId,
       admitted ? SubagentStatus.PENDING : SubagentStatus.QUEUED,
+      run.runId,
     );
     record._liveCommittedSegmentCount = 0;
     record._liveTerminalEmitted = false;
     record._lastUsageDeltaAt = 0;
     record.pendingQuestion = null;
-    record.abortController = null;
-    record.runCount += 1;
     // Reopened chain + follow-up message must persist via the next checkpoint
     // (spawn sets a fresh row; followUp reopens a terminal durable row).
     this._markRecordDirty(record);
@@ -610,7 +604,7 @@ export class SubagentManager {
         usage: record.usage,
       });
       if (this._runner) {
-        record._runPromise = this._startRun(record, record.cwd ?? undefined);
+        this._startRecordRun(record, record.cwd ?? undefined);
       }
     } else {
       record.state = SubagentState.QUEUED;
@@ -859,7 +853,7 @@ export class SubagentManager {
     record.state = SubagentState.INTERRUPTED;
     record.error = record.error ?? 'Interrupted by user';
     record.endTime = record.endTime ?? Date.now();
-    record.abortController?.abort();
+    this._runs.abortCurrent(record.id);
     if (record.pendingQuestion) {
       record.pendingQuestion.resolve({ type: 'declined' });
       record.pendingQuestion = null;
@@ -868,7 +862,7 @@ export class SubagentManager {
     // The runner owns the async interruption boundary. It must materialize its
     // partial live tail before the terminal projection is emitted; otherwise
     // the terminal event can make the renderer flush an incomplete record.
-    if (!record._runPromise) {
+    if (!this._runs.isSettling(record.id)) {
       this._finalizeChain(record, ChainStatus.INTERRUPTED);
       this._finishLive(record, SubagentState.INTERRUPTED);
     }
@@ -976,6 +970,21 @@ export class SubagentManager {
 
   getRecord(subagentId: string): SubagentRecord | undefined {
     return this._subagents.get(subagentId);
+  }
+
+  /** In-flight run promise, if this record's current generation is settling. */
+  getRunPromise(subagentId: string): Promise<void> | null {
+    return this._runs.getPromise(subagentId);
+  }
+
+  /** Current generation used for per-run turn attribution and stale-run guards. */
+  getRunGeneration(subagentId: string): number | undefined {
+    return this._runs.getGeneration(subagentId);
+  }
+
+  /** Whether the current generation still owns asynchronous teardown. */
+  isRunSettling(subagentId: string): boolean {
+    return this._runs.isSettling(subagentId);
   }
 
   /**
@@ -1120,7 +1129,12 @@ export class SubagentManager {
       if (!TERMINAL_STATES.has(record.state)) this.cancelOne(id);
     }
     for (const [id, record] of this._subagents) {
-      if (record.sessionId === sessionId) this._subagents.delete(id);
+      if (record.sessionId === sessionId) {
+        this._subagents.delete(id);
+        // Let an already-started run unwind through its guarded terminal
+        // projection. Its finally block drops the detached registry entry.
+        if (!this._runs.isSettling(id)) this._runs.remove(id);
+      }
     }
     this._admission.filterQueue(
       (id) => this._subagents.get(id)?.sessionId !== sessionId,
@@ -1178,6 +1192,7 @@ export class SubagentManager {
       // and runtimeToDomain never receives an invalid Date.
       const startTime = Date.parse(domain.start_time) || 0;
       const endTime = domain.end_time ? (Date.parse(domain.end_time) || 0) : null;
+      const run = this._runs.reset(spec.id);
 
       const record: SubagentRecord = {
         id: spec.id,
@@ -1203,17 +1218,14 @@ export class SubagentManager {
         windowId: spec.windowId,
         cwd: spec.cwd,
         projectRuntime: spec.projectRuntime,
-        abortController: null,
         _resolveWait: [],
-        _runPromise: null,
         closed: domain.closed,
-        live: makeLiveProjection(spec.id, spec.sessionId, domain.status),
+        live: makeLiveProjection(spec.id, spec.sessionId, domain.status, run.runId),
         _liveCommittedSegmentCount: 0,
         _liveTerminalEmitted: true,
         _evicted: false,
         _resumeQueued: false,
         persistRevision: 0,
-        runCount: 1,
         _lastUsageDeltaAt: 0,
         pendingQuestion: null,
       };
@@ -1287,7 +1299,7 @@ export class SubagentManager {
     });
     this._notify();
     if (this._runner) {
-      record._runPromise = this._startRun(record, record.cwd ?? undefined);
+      this._startRecordRun(record, record.cwd ?? undefined);
     }
   }
 
@@ -1318,9 +1330,7 @@ export class SubagentManager {
    * confirmed durable row.
    */
   private _evictToSummary(record: SubagentRecord): void {
-    record._runPromise = null;
     record._evicted = true;
-    record.abortController = null;
     record._resolveWait = null;
     record.pendingQuestion = null;
     record.projectRuntime = undefined;
@@ -1347,6 +1357,7 @@ export class SubagentManager {
     while (fifo.length > retention) {
       const evicted = fifo.shift()!;
       this._subagents.delete(evicted);
+      this._runs.remove(evicted);
     }
   }
 
@@ -1360,17 +1371,30 @@ export class SubagentManager {
 
   // ── Private: run loop ─────────────────────────────────────────────────────
 
+  private _startRecordRun(record: SubagentRecord, cwd?: string): void {
+    const run = this._runs.start(record.id);
+    const promise = this._startRun(record, run, cwd);
+    this._runs.attachPromise(run, promise);
+  }
+
   private async _startRun(
     record: SubagentRecord,
+    run: SubagentRun,
     cwd?: string,
   ): Promise<void> {
     const runner = this._runner;
-    if (!runner) return;
+    if (!runner) {
+      this._runs.settle(run);
+      return;
+    }
 
-    if (TERMINAL_STATES.has(record.state)) return;
+    if (!this._runs.isCurrent(run) || TERMINAL_STATES.has(record.state)) {
+      this._runs.settle(run);
+      return;
+    }
 
-    const abort = new AbortController();
-    record.abortController = abort;
+    const abort = run.abortController;
+    if (!abort) return;
     this.markRunning(record.id);
 
     const messages: Message[] = [...(record.chain?.messages ?? [])];
@@ -1402,15 +1426,17 @@ export class SubagentManager {
         agentScopeId: record.id,
         chainId: record.chain?.id,
         // Per-run turn id keeps provider accounting attribution unique across
-        // resumes (spawn path runCount=1 reproduces a stable unique id).
-        turnId: `${record.id}#${record.runCount}`,
+        // resumes (spawn path generation=1 reproduces a stable unique id).
+        turnId: `${record.id}#${run.generation}`,
         projectRuntime: record.projectRuntime,
         onReasoningEffort: (effort) => {
+          if (!this._runs.isCurrent(run)) return;
           record.reasoningEffort = effort;
         },
       });
 
       for await (const event of stream) {
+        if (!this._runs.isCurrent(run)) return;
         if (abort.signal.aborted || record.state === SubagentState.INTERRUPTED) {
           break;
         }
@@ -1558,6 +1584,7 @@ export class SubagentManager {
         }
       }
 
+      if (!this._runs.isCurrent(run)) return;
       if (abort.signal.aborted || record.state === SubagentState.INTERRUPTED) {
         this._flushPartialOnInterrupt(
           record,
@@ -1583,6 +1610,7 @@ export class SubagentManager {
       this._markLiveCommitted(record);
       this.markCompleted(record.id, record.result ?? '');
     } catch (err) {
+      if (!this._runs.isCurrent(run)) return;
       if (abort.signal.aborted || record.state === SubagentState.INTERRUPTED) {
         this._flushPartialOnInterrupt(
           record,
@@ -1602,11 +1630,12 @@ export class SubagentManager {
       record.usage = accumulatedUsage;
       this.markFailed(record.id, message);
     } finally {
+      if (!this._runs.isCurrent(run)) return;
       if (record.state === SubagentState.INTERRUPTED) {
         this._finishLive(record, SubagentState.INTERRUPTED);
       }
-      record.abortController = null;
-      record._runPromise = null;
+      this._runs.settle(run);
+      if (this._subagents.get(record.id) !== record) this._runs.remove(record.id);
     }
   }
 
@@ -1923,9 +1952,10 @@ function makeLiveProjection(
   subagentId: string,
   sessionId: string | null,
   state: SubagentStatus,
+  runId: string,
 ): SubagentLiveProjection {
   return {
-    sessionId, subagentId, runId: randomUUID(), sequence: 0, state,
+    sessionId, subagentId, runId, sequence: 0, state,
     segments: [], toolCalls: [], usage: null, result: null, error: null,
   };
 }

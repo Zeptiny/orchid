@@ -182,7 +182,7 @@ describe('Architecture Properties (real modules)', () => {
 
       // Runner starts immediately for each spawn
       for (const r of records) {
-        expect(r._runPromise).not.toBeNull();
+        expect(manager.getRunPromise(r.id)).not.toBeNull();
       }
 
       const results = await manager.wait(records.map((r) => r.id));

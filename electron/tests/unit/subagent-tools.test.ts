@@ -1545,7 +1545,7 @@ describe('follow_up_subagent', () => {
     // R5: the chain is reopened with the follow-up message appended.
     const resumed = manager.getRecord(record.id)!;
     expect(resumed.state).toBe(SubagentState.PENDING);
-    expect(resumed.runCount).toBe(2);
+    expect(manager.getRunGeneration(resumed.id)).toBe(2);
     const messages = resumed.chain?.messages ?? [];
     expect(messages.length).toBeGreaterThan(0);
     expect(messages[messages.length - 1].role).toBe('user');
@@ -1570,7 +1570,7 @@ describe('follow_up_subagent', () => {
     const resumed = manager.getRecord(original.id)!;
     expect(resumed._evicted).toBe(false);
     expect(resumed.state).toBe(SubagentState.PENDING);
-    expect(resumed.runCount).toBe(2);
+    expect(manager.getRunGeneration(resumed.id)).toBe(2);
     const messages = resumed.chain?.messages ?? [];
     expect(messages[messages.length - 1].content).toBe('continue where you left off');
   });
@@ -1593,7 +1593,7 @@ describe('follow_up_subagent', () => {
     const restored = manager.getRecord(record.id)!;
     expect(restored._evicted).toBe(false);
     expect(restored.state).toBe(SubagentState.PENDING);
-    expect(restored.runCount).toBe(2);
+    expect(manager.getRunGeneration(restored.id)).toBe(2);
   });
 
   it('parks the resumed run in the FIFO queue when admission is full', async () => {
@@ -1636,7 +1636,7 @@ describe('follow_up_subagent', () => {
     expect(result.canonical.status).toBe('error');
     expect(result.agentProjection.content).toContain('cannot follow up on a closed subagent');
     // The terminal record is left unmutated.
-    expect(manager.getRecord(record.id)?.runCount).toBe(1);
+    expect(manager.getRunGeneration(record.id)).toBe(1);
   });
 
   it('rejects a running subagent with wait/interrupt guidance', async () => {
@@ -1682,7 +1682,7 @@ describe('follow_up_subagent', () => {
     expect(result.canonical.status).toBe('error');
     expect(result.agentProjection.content).toContain('not found');
     expect(manager.getRecord(peer.id)?.state).toBe(SubagentState.COMPLETED);
-    expect(manager.getRecord(peer.id)?.runCount).toBe(1);
+    expect(manager.getRunGeneration(peer.id)).toBe(1);
   });
 
   it('reports a named error when the stored agent definition is missing', async () => {
@@ -1743,7 +1743,7 @@ describe('follow_up_subagent', () => {
     // A rejected resume leaves the terminal record completely unmutated.
     const untouched = manager.getRecord(target.id)!;
     expect(untouched.state).toBe(SubagentState.COMPLETED);
-    expect(untouched.runCount).toBe(1);
+    expect(manager.getRunGeneration(untouched.id)).toBe(1);
     expect(untouched.chain?.status).toBe('completed');
   });
 
@@ -1765,7 +1765,7 @@ describe('follow_up_subagent', () => {
     // Terminal on paper, but the run loop still owns the interruption boundary.
     expect(manager.cancelOne(record.id)).toBe(true);
     expect(record.state).toBe(SubagentState.INTERRUPTED);
-    expect(record._runPromise).not.toBeNull();
+    expect(manager.getRunPromise(record.id)).not.toBeNull();
 
     const result = (await handler(
       { subagent_id: record.id, input: 'again' },
@@ -1777,10 +1777,10 @@ describe('follow_up_subagent', () => {
     expect(result.agentProjection.content).toContain('retry');
     // Unmutated: no chain reopen, no run bump.
     const untouched = manager.getRecord(record.id)!;
-    expect(untouched.runCount).toBe(1);
+    expect(manager.getRunGeneration(untouched.id)).toBe(1);
     expect(untouched.chain?.messages.some((message) => message.content === 'again')).toBe(false);
 
     release();
-    await record._runPromise;
+    await manager.getRunPromise(record.id);
   });
 });

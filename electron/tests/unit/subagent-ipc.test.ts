@@ -867,9 +867,7 @@ describe('persistSubagentChains dirty tracking (U6)', () => {
     parentChainIndex: null,
     sessionId,
     windowId: null,
-    abortController: null,
     _resolveWait: null,
-    _runPromise: null,
     live: {
       sessionId, subagentId: id, runId: 'run', sequence: 0, state: 'completed',
       segments: [], toolCalls: [], usage: null, result: null, error: null,
