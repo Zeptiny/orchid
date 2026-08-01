@@ -311,10 +311,23 @@ function stringField(value: unknown): string | undefined {
   return typeof value === 'string' ? value : undefined;
 }
 
-function extractErrorMessage(err: unknown): string {
+const MAX_ERROR_MESSAGE_DEPTH = 8;
+
+function extractErrorMessage(err: unknown, depth = 0): string {
+  if (depth >= MAX_ERROR_MESSAGE_DEPTH) return safeString(err);
   if (err && typeof err === 'object' && 'errors' in err) {
     const errors = (err as { errors: unknown[] }).errors;
-    if (Array.isArray(errors) && errors.length > 0) return extractErrorMessage(errors[errors.length - 1]);
+    if (Array.isArray(errors) && errors.length > 0) {
+      return extractErrorMessage(errors[errors.length - 1], depth + 1);
+    }
   }
-  return err instanceof Error ? err.message : String(err);
+  return err instanceof Error ? err.message : safeString(err);
+}
+
+function safeString(value: unknown): string {
+  try {
+    return String(value);
+  } catch {
+    return 'Unknown error';
+  }
 }

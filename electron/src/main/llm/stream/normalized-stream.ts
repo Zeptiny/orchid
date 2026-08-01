@@ -90,7 +90,7 @@ export class NormalizedStream {
       ));
     }
     this.queueFallbackToolCalls(step.toolCalls);
-    this.queueFallbackToolResults(step.toolResults);
+    this.queueFallbackToolResults(step.toolResults, step.toolCalls);
     this.queueFallbackToolErrors(step.content);
     if (!this.usedFullStream && this.hasPendingStepEvents()) {
       this.notifyPendingStepEvents();
@@ -107,7 +107,12 @@ export class NormalizedStream {
       yield* this.textStreamEvents(result.textStream);
     }
 
-    const finishReason = await result.finishReason;
+    let finishReason: string | undefined;
+    try {
+      finishReason = await result.finishReason;
+    } catch {
+      finishReason = undefined;
+    }
     await this.options.eagerBridge.flush();
     yield* this.options.eagerBridge.drainEvents();
     if (!this.usedFullStream) yield* this.drainPendingUsageEvents();
@@ -160,12 +165,18 @@ export class NormalizedStream {
     }
   }
 
-  private queueFallbackToolResults(results: StepFinishLike['toolResults']): void {
+  private queueFallbackToolResults(
+    results: StepFinishLike['toolResults'],
+    calls: StepFinishLike['toolCalls'],
+  ): void {
     for (const result of results ?? []) {
+      const toolName = this.resolveToolName(
+        calls?.find((call) => call.toolCallId === result.toolCallId)?.toolName ?? 'unknown',
+      );
       const raw = result.output ?? result.result ?? result.error ?? '';
       const execution = result.error != null && result.output == null && result.result == null
-        ? sdkPreExecutionError({ error: result.error })
-        : executionFromSdkOutput(raw, 'unknown');
+        ? sdkPreExecutionError({ error: result.error, toolName })
+        : executionFromSdkOutput(raw, toolName);
       this.options.eagerBridge.queuePendingToolResult({
         toolCallId: result.toolCallId,
         ...streamResultFields(execution),

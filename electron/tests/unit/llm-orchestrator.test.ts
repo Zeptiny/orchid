@@ -36,7 +36,6 @@ import {
 import {
   buildToolMap,
   streamChat,
-  drainPendingToolEvents,
   type StreamEvent,
   type StreamChatParams,
 } from '../../src/main/llm/orchestrator';
@@ -2224,6 +2223,87 @@ describe('streamChat', () => {
   );
 
   it(
+    'uses fresh eager execution state for each idle retry attempt',
+    async () => {
+      const registry = new ToolRegistry();
+      const handler = vi.fn(async (_input, context) => {
+        await new Promise<void>((resolve) => {
+          const signal = context.abortSignal;
+          if (signal?.aborted) {
+            resolve();
+            return;
+          }
+          signal?.addEventListener('abort', () => resolve(), { once: true });
+        });
+        return 'finished after abort';
+      });
+      registry.register(
+        {
+          name: 'retry_tool',
+          riskClass: 'read-only',
+          description: 'Tracks retry-local eager execution state',
+          inputSchema: z.object({}),
+          category: 'test',
+        },
+        handler,
+      );
+      const executionPromises: Promise<unknown>[] = [];
+      const attemptSignals: AbortSignal[] = [];
+      aiSdkMocks.streamText.mockImplementation((params: {
+        abortSignal: AbortSignal;
+        tools: Record<string, {
+          execute: (
+            input: unknown,
+            options: { toolCallId: string; abortSignal: AbortSignal },
+          ) => Promise<unknown>;
+        }>;
+      }) => {
+        attemptSignals.push(params.abortSignal);
+        executionPromises.push(params.tools.retry_tool.execute(
+          {},
+          { toolCallId: 'reused-id', abortSignal: params.abortSignal },
+        ));
+        return {
+          fullStream: {
+            async *[Symbol.asyncIterator]() {
+              await new Promise<void>((_resolve, reject) => {
+                params.abortSignal.addEventListener(
+                  'abort',
+                  () => reject(new DOMException('Aborted', 'AbortError')),
+                  { once: true },
+                );
+              });
+            },
+          },
+          textStream: createAsyncIterable<string>([]),
+          finishReason: Promise.resolve('stop'),
+        };
+      });
+
+      const events = await collectStreamEvents(streamChat(makeStreamChatParams({
+        agent: makeAgent({ allowed_tools: ['retry_tool'] }),
+        registry,
+        config: {
+          ...defaults(),
+          llm_stream_idle_timeout: 0.02,
+          llm_stream_retries: 1,
+        },
+      })));
+      await Promise.allSettled(executionPromises);
+
+      expect(aiSdkMocks.streamText).toHaveBeenCalledTimes(2);
+      expect(handler).toHaveBeenCalledTimes(2);
+      expect(attemptSignals).toHaveLength(2);
+      expect(attemptSignals.every((signal) => signal.aborted)).toBe(true);
+      expect(events).toContainEqual(expect.objectContaining({
+        type: 'error',
+        title: 'Stream idle timeout',
+      }));
+    },
+    10_000,
+  );
+
+  it(
     'does not idle-abort while a tool is in flight',
     async () => {
       aiSdkMocks.streamText.mockImplementation((params: {
@@ -2286,143 +2366,12 @@ describe('streamChat', () => {
 });
 
 describe('combineAbortSignals', () => {
-  it('aborts when either signal aborts and dispose is safe', () => {
+  it('aborts when either signal aborts', () => {
     const a = new AbortController();
     const b = new AbortController();
-    const { signal, dispose } = combineAbortSignals(a.signal, b.signal);
+    const signal = combineAbortSignals(a.signal, b.signal);
     expect(signal.aborted).toBe(false);
     b.abort();
     expect(signal.aborted).toBe(true);
-    dispose();
-  });
-});
-
-// P1-20: fullStream + onStepFinish must not double-yield tool events
-// ---------------------------------------------------------------------------
-
-describe('drainPendingToolEvents (P1-20 double-yield guard)', () => {
-  it('skips pending tool calls/results already emitted from fullStream', () => {
-    const pendingToolCalls = [
-      { toolCallId: 'tc-1', toolName: 'read', args: '{"path":"a.ts"}' },
-    ];
-    const pendingToolResults = [
-      { toolCallId: 'tc-1', content: 'file contents', execution: canonicalStreamOutput('file contents') },
-    ];
-    // Simulate fullStream already yielding tool_call + tool_result for tc-1
-    const seenToolCallIds = new Set(['tc-1']);
-    const seenToolResultIds = new Set(['tc-1']);
-
-    const events = [...drainPendingToolEvents(
-      pendingToolCalls,
-      pendingToolResults,
-      seenToolCallIds,
-      seenToolResultIds,
-    )];
-
-    expect(events).toEqual([]);
-    expect(pendingToolCalls).toHaveLength(0);
-    expect(pendingToolResults).toHaveLength(0);
-  });
-
-  it('yields pending tools when fullStream did not emit them (textStream fallback)', () => {
-    const pendingToolCalls = [
-      { toolCallId: 'tc-1', toolName: 'read', args: '{"path":"a.ts"}' },
-      { toolCallId: 'tc-2', toolName: 'grep', args: '{"pattern":"x"}' },
-    ];
-    const pendingToolResults = [
-      { toolCallId: 'tc-1', content: 'ok', execution: canonicalStreamOutput('ok') },
-      { toolCallId: 'tc-2', content: 'Error: boom', execution: canonicalStreamOutput('Error: boom', 'error') },
-    ];
-    const seenToolCallIds = new Set<string>();
-    const seenToolResultIds = new Set<string>();
-
-    const events = [...drainPendingToolEvents(
-      pendingToolCalls,
-      pendingToolResults,
-      seenToolCallIds,
-      seenToolResultIds,
-    )];
-
-    expect(events).toEqual([
-      { type: 'tool_call', toolCallId: 'tc-1', toolName: 'read', args: '{"path":"a.ts"}' },
-      { type: 'tool_call', toolCallId: 'tc-2', toolName: 'grep', args: '{"pattern":"x"}' },
-      { type: 'tool_result', toolCallId: 'tc-1', content: 'ok', execution: canonicalStreamOutput('ok') },
-      { type: 'tool_result', toolCallId: 'tc-2', content: 'Error: boom', execution: canonicalStreamOutput('Error: boom', 'error') },
-    ]);
-    expect(seenToolCallIds.has('tc-1')).toBe(true);
-    expect(seenToolCallIds.has('tc-2')).toBe(true);
-    expect(seenToolResultIds.has('tc-1')).toBe(true);
-    expect(seenToolResultIds.has('tc-2')).toBe(true);
-  });
-
-  it('yields only tools not yet seen (partial overlap / safety net)', () => {
-    const pendingToolCalls = [
-      { toolCallId: 'tc-stream', toolName: 'read', args: '{}' },
-      { toolCallId: 'tc-pending-only', toolName: 'write', args: '{}' },
-    ];
-    const pendingToolResults = [
-      { toolCallId: 'tc-stream', content: 'from-stream-dup', execution: canonicalStreamOutput('from-stream-dup') },
-      { toolCallId: 'tc-pending-only', content: 'from-pending', execution: canonicalStreamOutput('from-pending') },
-    ];
-    // fullStream already emitted tc-stream call+result
-    const seenToolCallIds = new Set(['tc-stream']);
-    const seenToolResultIds = new Set(['tc-stream']);
-
-    const events = [...drainPendingToolEvents(
-      pendingToolCalls,
-      pendingToolResults,
-      seenToolCallIds,
-      seenToolResultIds,
-    )];
-
-    expect(events).toEqual([
-      {
-        type: 'tool_call',
-        toolCallId: 'tc-pending-only',
-        toolName: 'write',
-        args: '{}',
-      },
-      {
-        type: 'tool_result',
-        toolCallId: 'tc-pending-only',
-        content: 'from-pending',
-        execution: canonicalStreamOutput('from-pending'),
-      },
-    ]);
-    // Duplicate drain must be a no-op
-    const again = [...drainPendingToolEvents(
-      pendingToolCalls,
-      pendingToolResults,
-      seenToolCallIds,
-      seenToolResultIds,
-    )];
-    expect(again).toEqual([]);
-  });
-
-  it('does not double-yield if the same pending id is drained twice via re-push', () => {
-    const pendingToolCalls = [
-      { toolCallId: 'tc-1', toolName: 'read', args: '{}' },
-    ];
-    const pendingToolResults: Array<{ toolCallId: string; content: string; execution: ToolExecutionResult }> = [];
-    const seenToolCallIds = new Set<string>();
-    const seenToolResultIds = new Set<string>();
-
-    const first = [...drainPendingToolEvents(
-      pendingToolCalls,
-      pendingToolResults,
-      seenToolCallIds,
-      seenToolResultIds,
-    )];
-    expect(first).toHaveLength(1);
-
-    // Simulate a buggy second onStepFinish push of the same id
-    pendingToolCalls.push({ toolCallId: 'tc-1', toolName: 'read', args: '{}' });
-    const second = [...drainPendingToolEvents(
-      pendingToolCalls,
-      pendingToolResults,
-      seenToolCallIds,
-      seenToolResultIds,
-    )];
-    expect(second).toEqual([]);
   });
 });

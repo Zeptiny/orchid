@@ -91,7 +91,7 @@ describe('EagerToolBridge', () => {
   });
 
   it('reconciles SDK calls with an eager run exactly once', async () => {
-    const { eager, bridge } = createBridge();
+    const { eager, bridge, pauseIdleForTool, resumeIdleAfterTool } = createBridge();
     const launch = vi.fn(async () => execution('done'));
     eager.registerLauncher('read', launch);
 
@@ -111,6 +111,8 @@ describe('EagerToolBridge', () => {
     await bridge.flush();
     expect(launch).toHaveBeenCalledOnce();
     expect(drain(bridge)).toHaveLength(1);
+    expect(pauseIdleForTool).toHaveBeenCalledOnce();
+    expect(resumeIdleAfterTool).toHaveBeenCalledOnce();
   });
 
   it('drains an eager completion before the SDK emits its batch result', async () => {

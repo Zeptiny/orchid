@@ -89,6 +89,28 @@ describe('StreamAttemptController', () => {
     expect(attempt.signal.aborted).toBe(false);
   });
 
+  it('does not re-arm a disposed watchdog when a tool settles later', () => {
+    vi.useFakeTimers();
+    const attempt = new StreamAttemptController({ idleTimeoutMs: 50 });
+
+    attempt.pauseIdleForTool();
+    attempt.dispose();
+    attempt.resumeIdleAfterTool();
+    vi.advanceTimersByTime(50);
+
+    expect(attempt.didIdleTimeout).toBe(false);
+    expect(attempt.signal.aborted).toBe(false);
+  });
+
+  it('aborts attempt-owned work without recording an idle timeout', () => {
+    const attempt = new StreamAttemptController({ idleTimeoutMs: 50 });
+
+    attempt.abort();
+
+    expect(attempt.signal.aborted).toBe(true);
+    expect(attempt.didIdleTimeout).toBe(false);
+  });
+
   it('retries only idle failures before output, user cancellation, and the final attempt', () => {
     vi.useFakeTimers();
     const retryable = new StreamAttemptController({ idleTimeoutMs: 50 });
@@ -118,14 +140,13 @@ describe('StreamAttemptController', () => {
 });
 
 describe('combineAbortSignals', () => {
-  it('aborts when either signal aborts and dispose is safe', () => {
+  it('aborts when either signal aborts', () => {
     const user = new AbortController();
     const idle = new AbortController();
-    const { signal, dispose } = combineAbortSignals(user.signal, idle.signal);
+    const signal = combineAbortSignals(user.signal, idle.signal);
 
     expect(signal.aborted).toBe(false);
     idle.abort();
     expect(signal.aborted).toBe(true);
-    dispose();
   });
 });

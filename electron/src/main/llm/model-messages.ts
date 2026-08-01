@@ -42,26 +42,27 @@ export function toModelMessages(historyMessages: readonly ApiMessage[]): ModelMe
         : message.content
           ? [{ type: 'text' as const, text: message.content }]
           : [];
+      const toolCallContent = message.tool_calls?.flatMap((toolCall) => {
+        let input: unknown;
+        try {
+          input = JSON.parse(toolCall.function.arguments);
+        } catch {
+          return [];
+        }
+        return [
+          {
+            type: 'tool-call' as const,
+            toolCallId: toolCall.id,
+            toolName: toolCall.function.name,
+            input,
+          },
+        ];
+      }) ?? [];
 
-      const content: AssistantContent = message.tool_calls
+      const content: AssistantContent = toolCallContent.length > 0
         ? [
             ...contentArray,
-            ...message.tool_calls.flatMap((toolCall) => {
-              let input: unknown;
-              try {
-                input = JSON.parse(toolCall.function.arguments);
-              } catch {
-                return [];
-              }
-              return [
-                {
-                  type: 'tool-call' as const,
-                  toolCallId: toolCall.id,
-                  toolName: toolCall.function.name,
-                  input,
-                },
-              ];
-            }),
+            ...toolCallContent,
           ]
         : contentArray.length === 1 && contentArray[0].type === 'text'
           ? contentArray[0].text
@@ -73,6 +74,7 @@ export function toModelMessages(historyMessages: readonly ApiMessage[]): ModelMe
     }
 
     if (message.role === MessageRole.TOOL) {
+      if (!message.tool_call_id) continue;
       const textContent = toTextOnlyContent(message.content);
 
       modelMessages.push({
@@ -80,7 +82,7 @@ export function toModelMessages(historyMessages: readonly ApiMessage[]): ModelMe
         content: [
           {
             type: 'tool-result' as const,
-            toolCallId: message.tool_call_id!,
+            toolCallId: message.tool_call_id,
             // The persisted result has no name; AI SDK pairs by toolCallId.
             toolName: 'unknown',
             output: { type: 'text', value: textContent },

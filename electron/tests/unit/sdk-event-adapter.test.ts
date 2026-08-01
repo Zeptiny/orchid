@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { ModelMessage } from 'ai';
 import {
+  classifyStreamError,
   createToolNameResolver,
   SdkEventAdapter,
   toProviderMcpToolName,
@@ -148,6 +149,31 @@ describe('SdkEventAdapter', () => {
     expect(bridge.sdkToolCall).toHaveBeenCalledTimes(2);
   });
 
+  it('emits finalized eager starts before a new streamed start without draining completions', () => {
+    const { adapter, bridge } = createAdapter();
+    vi.mocked(bridge.drainEagerStarts).mockImplementation(function* () {
+      yield { type: 'tool_call', toolCallId: 'eager', toolName: 'read', args: '{}' };
+    });
+    vi.mocked(bridge.drainEvents).mockImplementation(function* () {
+      yield {
+        type: 'tool_result',
+        toolCallId: 'eager',
+        content: 'done',
+        execution: execution('done'),
+      };
+    });
+
+    expect(adapt(adapter, {
+      type: 'tool-input-start',
+      toolCallId: 'streaming',
+      toolName: 'grep',
+    })).toEqual([
+      { type: 'tool_call', toolCallId: 'eager', toolName: 'read', args: '{}' },
+      { type: 'tool_call_start', toolCallId: 'streaming', toolName: 'grep' },
+    ]);
+    expect(bridge.drainEvents).not.toHaveBeenCalled();
+  });
+
   it('reverses provider-safe MCP aliases before invoking the bridge', () => {
     const { bridge } = createAdapter();
     const internalName = 'mcp::filesystem/read file';
@@ -206,5 +232,18 @@ describe('SdkEventAdapter', () => {
     expect(adapt(adapter, { type: 'error', errorText: 'request timed out waiting for provider' })).toEqual([
       { type: 'error', title: 'Request Timed Out', detail: 'request timed out waiting for provider' },
     ]);
+  });
+
+  it('bounds nested error extraction while preserving ordinary and last-error messages', () => {
+    expect(classifyStreamError({
+      errors: [new Error('first'), new Error('last')],
+    }).detail).toBe('last');
+
+    const cyclic: { errors: unknown[] } = { errors: [] };
+    cyclic.errors.push(cyclic);
+    expect(classifyStreamError(cyclic)).toEqual({
+      title: 'Unexpected Error',
+      detail: '[object Object]',
+    });
   });
 });

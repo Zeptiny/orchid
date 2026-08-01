@@ -17,14 +17,11 @@ export interface StreamAttemptControllerOptions {
 export function combineAbortSignals(
   userSignal: AbortSignal | undefined,
   idleSignal: AbortSignal,
-): { signal: AbortSignal; dispose: () => void } {
-  if (!userSignal) {
-    return { signal: idleSignal, dispose: () => {} };
-  }
-  return {
-    signal: AbortSignal.any([userSignal, idleSignal]),
-    dispose: () => {},
-  };
+): AbortSignal {
+  if (!userSignal) return idleSignal;
+  // Node >=24.15.0 does not retain source or composite signals across
+  // AbortSignal.any(), so there are no manually registered listeners to release.
+  return AbortSignal.any([userSignal, idleSignal]);
 }
 
 /**
@@ -34,20 +31,19 @@ export function combineAbortSignals(
  */
 export class StreamAttemptController {
   private readonly idleController = new AbortController();
-  private readonly mergedAbort: { signal: AbortSignal; dispose: () => void };
   private idleTimer: ReturnType<typeof setTimeout> | null = null;
   private idleTimedOut = false;
   private deliveredOutput = false;
   private toolsInFlight = 0;
+  private disposed = false;
 
   readonly signal: AbortSignal;
 
   constructor(private readonly options: StreamAttemptControllerOptions) {
-    this.mergedAbort = combineAbortSignals(
+    this.signal = combineAbortSignals(
       options.userAbortSignal,
       this.idleController.signal,
     );
-    this.signal = this.mergedAbort.signal;
   }
 
   get didIdleTimeout(): boolean {
@@ -65,7 +61,7 @@ export class StreamAttemptController {
   /** Clear then arm the watchdog, unless an active tool owns the quiet period. */
   armIdleTimer(): void {
     this.clearIdleTimer();
-    if (this.toolsInFlight > 0) return;
+    if (this.disposed || this.toolsInFlight > 0) return;
     this.idleTimer = setTimeout(() => {
       this.idleTimedOut = true;
       this.idleController.abort();
@@ -96,10 +92,15 @@ export class StreamAttemptController {
       attemptIndex + 1 < maxAttempts;
   }
 
-  /** Release timer/listener resources when this attempt settles. Safe to repeat. */
+  /** Abort work owned by this attempt without classifying it as an idle timeout. */
+  abort(): void {
+    this.idleController.abort();
+  }
+
+  /** Release timer resources when this attempt settles. Safe to repeat. */
   dispose(): void {
+    this.disposed = true;
     this.clearIdleTimer();
-    this.mergedAbort.dispose();
   }
 
   private clearIdleTimer(): void {

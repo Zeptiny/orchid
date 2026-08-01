@@ -43,8 +43,9 @@ describe('toModelMessages', () => {
     ]);
   });
 
-  it('skips tool calls whose persisted arguments are invalid JSON', () => {
+  it('compacts assistant content when no valid tool calls remain', () => {
     expect(toModelMessages([
+      assistant({ content: 'Empty calls.', tool_calls: [] }),
       assistant({
         content: 'Still answer normally.',
         tool_calls: [{
@@ -53,11 +54,17 @@ describe('toModelMessages', () => {
           function: { name: 'read', arguments: '{not json}' },
         }],
       }),
+      assistant({
+        tool_calls: [{
+          id: 'call-invalid-only',
+          type: 'function',
+          function: { name: 'read', arguments: '{not json}' },
+        }],
+      }),
     ])).toEqual([
-      {
-        role: 'assistant',
-        content: [{ type: 'text', text: 'Still answer normally.' }],
-      },
+      { role: 'assistant', content: 'Empty calls.' },
+      { role: 'assistant', content: 'Still answer normally.' },
+      { role: 'assistant', content: '' },
     ]);
   });
 
@@ -92,6 +99,13 @@ describe('toModelMessages', () => {
       },
       { role: 'user', content: 'Please continue.' },
     ]);
+  });
+
+  it('skips persisted tool results without a tool call ID', () => {
+    expect(toModelMessages([
+      { role: 'tool', content: 'orphaned result' },
+      { role: 'user', content: 'Continue.' },
+    ])).toEqual([{ role: 'user', content: 'Continue.' }]);
   });
 
   it('skips system messages because streamText receives system separately', () => {

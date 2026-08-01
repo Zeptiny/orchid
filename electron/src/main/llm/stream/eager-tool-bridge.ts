@@ -56,6 +56,8 @@ export class EagerToolBridge {
   private readonly pendingToolResults: PendingToolResult[] = [];
   private readonly seenToolCallIds = new Set<string>();
   private readonly seenToolResultIds = new Set<string>();
+  private readonly pausedToolCallIds = new Set<string>();
+  private readonly resumedToolCallIds = new Set<string>();
   private readonly eagerPromises = new Set<Promise<ToolExecutionResult>>();
 
   constructor(private readonly options: EagerToolBridgeOptions) {}
@@ -97,9 +99,9 @@ export class EagerToolBridge {
     providerExecuted: boolean;
     invalid: boolean;
   }): EagerToolBridgeEvent | undefined {
-    this.options.pauseIdleForTool();
     if (this.seenToolCallIds.has(input.toolCallId)) return undefined;
     this.seenToolCallIds.add(input.toolCallId);
+    this.pauseIdleForTool(input.toolCallId);
     this.options.markDeliveredOutput();
     if (!input.providerExecuted && !input.invalid) {
       this.options.eager.start(
@@ -122,7 +124,7 @@ export class EagerToolBridge {
     toolCallId: string,
     execution: ToolExecutionResult,
   ): EagerToolBridgeEvent | undefined {
-    this.options.resumeIdleAfterTool();
+    this.resumeIdleAfterTool(toolCallId);
     this.options.eager.forget(toolCallId);
     return this.toResultEvent(toolCallId, execution);
   }
@@ -240,7 +242,7 @@ export class EagerToolBridge {
     );
     if (!promise) return;
     this.eagerPromises.add(promise);
-    this.options.pauseIdleForTool();
+    this.pauseIdleForTool(toolCallId);
     this.eagerStarts.push({
       toolCallId,
       toolName: pending.toolName,
@@ -255,8 +257,23 @@ export class EagerToolBridge {
       })
       .finally(() => {
         this.eagerPromises.delete(promise);
-        this.options.resumeIdleAfterTool();
+        this.resumeIdleAfterTool(toolCallId);
       });
+  }
+
+  private pauseIdleForTool(toolCallId: string): void {
+    if (this.pausedToolCallIds.has(toolCallId)) return;
+    this.pausedToolCallIds.add(toolCallId);
+    this.options.pauseIdleForTool();
+  }
+
+  private resumeIdleAfterTool(toolCallId: string): void {
+    if (
+      !this.pausedToolCallIds.has(toolCallId) ||
+      this.resumedToolCallIds.has(toolCallId)
+    ) return;
+    this.resumedToolCallIds.add(toolCallId);
+    this.options.resumeIdleAfterTool();
   }
 
   private toResultEvent(
@@ -275,25 +292,4 @@ export function streamResultFields(
   execution: ToolExecutionResult,
 ): Omit<PendingToolResult, 'toolCallId'> {
   return { content: execution.agentProjection.content, execution };
-}
-
-/** Legacy-focused helper retained for direct callers while bridge owns the state in production. */
-export function* drainPendingToolEvents(
-  pendingToolCalls: PendingToolCall[],
-  pendingToolResults: PendingToolResult[],
-  seenToolCallIds: Set<string>,
-  seenToolResultIds: Set<string>,
-): Generator<EagerToolBridgeEvent> {
-  while (pendingToolCalls.length > 0) {
-    const call = pendingToolCalls.shift()!;
-    if (seenToolCallIds.has(call.toolCallId)) continue;
-    seenToolCallIds.add(call.toolCallId);
-    yield { type: 'tool_call', ...call };
-  }
-  while (pendingToolResults.length > 0) {
-    const result = pendingToolResults.shift()!;
-    if (seenToolResultIds.has(result.toolCallId)) continue;
-    seenToolResultIds.add(result.toolCallId);
-    yield { type: 'tool_result', ...result };
-  }
 }

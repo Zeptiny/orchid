@@ -135,12 +135,6 @@ function buildStepUsage(
   };
 }
 
-export {
-  drainPendingToolEvents,
-  type PendingToolCall,
-  type PendingToolResult,
-} from './stream/eager-tool-bridge';
-
 // ---------------------------------------------------------------------------
 // Orchestrator
 // ---------------------------------------------------------------------------
@@ -198,27 +192,6 @@ export async function* streamChat(params: StreamChatParams): AsyncGenerator<Stre
     ? lastUserMessage.content
     : '';
 
-  // Eager execution: tools start as soon as their input is streamed, before the
-  // model finishes the step. The executor lives across idle-retry attempts;
-  // toolCallIds are unique, so stale in-flight entries never collide.
-  const eagerExecutor = new EagerToolExecutor();
-  const tools = buildToolMap(agent.allowed_tools, registry, mcpManager, {
-    sessionId,
-    windowId,
-    timeoutSeconds: config.command_timeout,
-    cwd: context.cwd,
-    agentScopeId,
-    projectRuntime,
-    abortSignal,
-    triggeringMessage,
-  }, {
-    skills: projectRuntime
-      ? new Map(projectRuntime.skills)
-      : getSkillsRegistry(),
-    allowedSkills: agent.allowed_skills,
-  }, eagerExecutor);
-  const buildUsageContext = createContextSnapshotBuilder(fullSystemPrompt, tools);
-
   // ── Compose middleware ──
   const middleware = createMiddlewareStack({
     retry: { maxRetries: config.llm_stream_retries },
@@ -243,6 +216,25 @@ export async function* streamChat(params: StreamChatParams): AsyncGenerator<Stre
   const maxIdleAttempts = Math.max(1, (config.llm_stream_retries ?? 0) + 1);
 
   for (let idleAttempt = 0; idleAttempt < maxIdleAttempts; idleAttempt++) {
+    // Eager memoization is attempt-scoped so an idle retry cannot reuse a stale
+    // execution from the provider call it replaces.
+    const eagerExecutor = new EagerToolExecutor();
+    const tools = buildToolMap(agent.allowed_tools, registry, mcpManager, {
+      sessionId,
+      windowId,
+      timeoutSeconds: config.command_timeout,
+      cwd: context.cwd,
+      agentScopeId,
+      projectRuntime,
+      abortSignal,
+      triggeringMessage,
+    }, {
+      skills: projectRuntime
+        ? new Map(projectRuntime.skills)
+        : getSkillsRegistry(),
+      allowedSkills: agent.allowed_skills,
+    }, eagerExecutor);
+    const buildUsageContext = createContextSnapshotBuilder(fullSystemPrompt, tools);
     const attempt = new StreamAttemptController({
       userAbortSignal: abortSignal,
       idleTimeoutMs,
@@ -322,6 +314,8 @@ export async function* streamChat(params: StreamChatParams): AsyncGenerator<Stre
       yield { type: 'error', title, detail };
       return;
     } finally {
+      attempt.abort();
+      eagerBridge.dispose();
       attempt.dispose();
     }
   }

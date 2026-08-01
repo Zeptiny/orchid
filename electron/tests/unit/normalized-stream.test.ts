@@ -145,6 +145,53 @@ describe('NormalizedStream', () => {
     expect(events[1]).toMatchObject({ toolCallId: 'call-1', content: 'file' });
   });
 
+  it('correlates fallback results with their tool call names', async () => {
+    const { stream } = createNormalizer();
+    await stream.onStepFinish({
+      toolCalls: [
+        { toolCallId: 'invalid-result', toolName: 'read' },
+        { toolCallId: 'failed-result', toolName: 'grep' },
+      ],
+      toolResults: [
+        { toolCallId: 'invalid-result', output: { invalid: true } },
+        { toolCallId: 'failed-result', error: new Error('provider failed') },
+        { toolCallId: 'unmatched-result', output: { invalid: true } },
+      ],
+    });
+
+    const events = await collect(stream, {
+      fullStream: asyncIterable([], new Error('unsupported')),
+      textStream: asyncIterable([]),
+      finishReason: Promise.resolve('stop'),
+    });
+    const results = events.filter((event) => event.type === 'tool_result');
+
+    expect(results).toEqual([
+      expect.objectContaining({
+        toolCallId: 'invalid-result',
+        content: expect.stringContaining("Tool 'read'"),
+        execution: expect.objectContaining({
+          canonical: expect.objectContaining({
+            data: expect.objectContaining({ origin: expect.objectContaining({ name: 'read' }) }),
+          }),
+        }),
+      }),
+      expect.objectContaining({
+        toolCallId: 'failed-result',
+        content: expect.stringContaining('provider failed'),
+        execution: expect.objectContaining({
+          canonical: expect.objectContaining({
+            data: expect.objectContaining({ origin: expect.objectContaining({ name: 'grep' }) }),
+          }),
+        }),
+      }),
+      expect.objectContaining({
+        toolCallId: 'unmatched-result',
+        content: expect.stringContaining("Tool 'unknown'"),
+      }),
+    ]);
+  });
+
   it('delivers a step callback that races text before that text delta', async () => {
     const { stream } = createNormalizer();
     const result = {
@@ -227,20 +274,55 @@ describe('NormalizedStream', () => {
     expect(events).toEqual([{ type: 'content', text: 'partial' }]);
   });
 
-  it('rethrows an aborted fullStream failure instead of falling back', async () => {
-    const { stream } = createNormalizer(undefined, createAttempt({ didUserAbort: true }));
+  it.each([
+    ['user cancellation', { didUserAbort: true }],
+    ['idle timeout', { didIdleTimeout: true }],
+    ['pre-aborted signal', { signal: AbortSignal.abort() }],
+  ])('rethrows a %s fullStream failure instead of falling back', async (_label, overrides) => {
+    const { stream } = createNormalizer(undefined, createAttempt(overrides));
+    const error = new Error('original fullStream failure');
+    const textStreamStarted = vi.fn();
 
     await expect(collect(stream, {
-      fullStream: asyncIterable([], new Error('cancelled')),
-      textStream: asyncIterable(['must not appear']),
+      fullStream: asyncIterable([], error),
+      textStream: {
+        async *[Symbol.asyncIterator]() {
+          textStreamStarted();
+          yield 'must not appear';
+        },
+      },
       finishReason: Promise.resolve('stop'),
-    })).rejects.toThrow('cancelled');
+    })).rejects.toBe(error);
+    expect(textStreamStarted).not.toHaveBeenCalled();
+  });
+
+  it('finishes and drains final events when finishReason rejects', async () => {
+    const bridge = createBridge();
+    const { stream } = createNormalizer(bridge);
+    await stream.onStepFinish({
+      usage: { inputTokens: 3, outputTokens: 2, totalTokens: 5 },
+    });
+
+    const events = await collect(stream, {
+      fullStream: asyncIterable([]),
+      textStream: asyncIterable([]),
+      finishReason: Promise.reject(new Error('finish reason unavailable')),
+    });
+
+    expect(bridge.flush).toHaveBeenCalledOnce();
+    expect(bridge.drainEvents).toHaveBeenCalled();
+    expect(events.map((event) => event.type)).toEqual(['usage', 'finish']);
+    expect(events.at(-1)).toEqual({ type: 'finish', finishReason: 'stop' });
   });
 
   it('flushes final eager events before finish and preserves terminal warning reasons', async () => {
     const bridge = createBridge();
     bridge.flush.mockImplementation(async () => {
-      bridge.queuePendingToolResult({ toolCallId: 'last', ...{ content: 'done', execution: execution('done') } });
+      bridge.queuePendingToolResult({
+        toolCallId: 'last',
+        content: 'done',
+        execution: execution('done'),
+      });
     });
     const { stream } = createNormalizer(bridge);
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
