@@ -26,6 +26,9 @@
 @import "./markdown.css";
 @import "./exceptions.css";
 
+/* Dependency-free first paint, loaded before the renderer module executes. */
+#root { height: 100%; margin: 0; background: #09090b; color: #fafafa; }
+
 /* ── Design tokens ──────────────────────────────────────────────────────────
  * Fallback values mirror the default (dark) theme. The runtime theme
  * stylesheet re-declares these on :root and wins by document order.

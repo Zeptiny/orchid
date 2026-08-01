@@ -259,7 +259,7 @@ describe('useSession shared cache', () => {
     const chatView = fs.readFileSync(path.join(rendererRoot, 'components/ChatView.tsx'), 'utf8');
     const configView = fs.readFileSync(path.join(rendererRoot, 'components/ConfigView.tsx'), 'utf8');
     const useSessionSrc = fs.readFileSync(path.join(rendererRoot, 'hooks/useSession.ts'), 'utf8');
-    const appSrc = fs.readFileSync(path.join(rendererRoot, 'App.tsx'), 'utf8');
+    const appSrc = fs.readFileSync(path.join(rendererRoot, 'AppReady.tsx'), 'utf8');
 
     expect(chatView).toMatch(/import\s*\{\s*useSession\s*\}\s*from\s*['"].*useSession['"]/);
     expect(configView).toMatch(/import\s*\{\s*useSession\s*\}\s*from\s*['"].*useSession['"]/);

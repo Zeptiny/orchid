@@ -51,6 +51,8 @@ import type {
   SubagentsConfig,
   PermissionModeValue,
   PermissionRule,
+  StartupSnapshot,
+  StartupContinueDegradedResult,
 } from './ipc-boundary';
 
 export type {
@@ -83,6 +85,8 @@ export type {
   SubagentsConfig,
   PermissionModeValue,
   PermissionRule,
+  StartupSnapshot,
+  StartupContinueDegradedResult,
   UpdaterState,
   UpdateStatus,
 } from './ipc-boundary';
@@ -245,6 +249,8 @@ export interface ChatStateEvent extends ChatEventIdentity {
 export interface ChatDoneEvent extends ChatEventIdentity {
   type: 'done';
   response: string;
+  /** Main-process materialized durable history after the terminal turn write. */
+  messages: Message[];
   /** True when the turn ended due to user Esc cancellation. */
   interrupted?: boolean;
   /** Latest token usage for the completed/interrupted turn. */
@@ -256,6 +262,8 @@ export type ChatErrorKind = 'stream' | 'rate-limit' | 'auth' | 'generic';
 export interface ChatErrorEvent extends ChatEventIdentity {
   type: 'error';
   error: string;
+  /** Main-process materialized durable partial history after the terminal write. */
+  messages: Message[];
   /** Short banner title (e.g. "Authentication failed"). */
   title?: string;
   /** Classified error kind for banner actions. */
@@ -895,6 +903,14 @@ export interface ASTIndexMessage {
 // ── Orchid API (the full contextBridge surface) ──────────────────────────────
 
 export interface OrchidAPI {
+  startup: {
+    /** Current full startup state; subscribe before requesting this snapshot. */
+    snapshot: () => Promise<StartupSnapshot>;
+    /** Acknowledge the one allowed degraded → ready transition. */
+    continueDegraded: () => Promise<StartupContinueDegradedResult>;
+    onChanged: (callback: (snapshot: StartupSnapshot) => void) => () => void;
+  };
+
   chat: {
     send: (message: ChatSendMessage) => Promise<ChatSendResult>;
     cancel: (message?: ChatCancelMessage) => Promise<{ status: string }>;
@@ -1100,6 +1116,11 @@ export interface OrchidAPI {
 // ── IPC Channel names ────────────────────────────────────────────────────────
 
 export const IPC_CHANNELS = {
+  // Startup — registered before normal application IPC.
+  STARTUP_SNAPSHOT: 'startup:snapshot',
+  STARTUP_CONTINUE_DEGRADED: 'startup:continue_degraded',
+  STARTUP_CHANGED: 'startup:changed',
+
   // Chat
   CHAT_SEND: 'chat:send',
   CHAT_CANCEL: 'chat:cancel',
@@ -1247,6 +1268,8 @@ export type IPCChannel = (typeof IPC_CHANNELS)[keyof typeof IPC_CHANNELS];
 // ── Allowed invoke channels (preload security gate) ──────────────────────────
 
 export const ALLOWED_INVOKE_CHANNELS = [
+  IPC_CHANNELS.STARTUP_SNAPSHOT,
+  IPC_CHANNELS.STARTUP_CONTINUE_DEGRADED,
   IPC_CHANNELS.CHAT_SEND,
   IPC_CHANNELS.CHAT_CANCEL,
   IPC_CHANNELS.CHAT_QUEUE_NEXT,
@@ -1323,6 +1346,7 @@ export const ALLOWED_INVOKE_CHANNELS = [
 // ── Allowed event channels (preload security gate) ───────────────────────────
 
 export const ALLOWED_EVENT_CHANNELS = [
+  IPC_CHANNELS.STARTUP_CHANGED,
   IPC_CHANNELS.CHAT_CHUNK,
   IPC_CHANNELS.CHAT_THINKING,
   IPC_CHANNELS.CHAT_STATE,

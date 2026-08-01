@@ -10,17 +10,19 @@ import {
 import {
   ChainStatus,
   type Chain,
-  chainToStorageDict,
-  chainFromStorageDict,
   sumChainUsage,
   chainElapsedSeconds,
 } from '../../src/shared/types/chain';
 import {
   SubagentStatus,
   type SubagentRecord,
-  subagentRecordToStorageDict,
-  subagentRecordFromStorageDict,
 } from '../../src/shared/types/subagent';
+import {
+  chainFromStorageDict,
+  chainToStorageDict,
+  subagentRecordFromStorageDict,
+  subagentRecordToStorageDict,
+} from '../../src/shared/serialization/chain-subagent';
 import {
   type Session,
   sessionToStorageDict,

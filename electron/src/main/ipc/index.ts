@@ -32,7 +32,7 @@ import { registerPermissionIPC, unregisterPermissionIPC } from './permission';
 
 /**
  * Register all IPC handlers.
- * Must be called before creating the BrowserWindow.
+ * Must finish before startup publishes ready and normal renderer consumers mount.
  */
 export function registerAllIPC(): void {
   registerChatIPC();

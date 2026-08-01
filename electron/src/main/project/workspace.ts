@@ -13,7 +13,7 @@
 import * as fs from 'node:fs';
 import { getConfig, atomicWriteJson, HOME_CONFIG_PATH } from '../config/loader';
 import { isPlainObject } from '../config/merge';
-import { withConfigSaveLock } from '../ipc/config';
+import { withConfigSaveLock } from '../config/write-lock';
 import type { WorkspaceInfo, WorkspaceSource } from '../../shared/types/ipc';
 import { inspectProjectDirectory } from './path';
 import { clearProjectRuntimeRegistry } from './runtime';

@@ -19,7 +19,6 @@ import {
   getString,
   getStringArray,
 } from '../../shared/utils/frontmatter';
-import { registerBuiltinTools } from '../tools';
 import {
   HOME_AGENTS_DIR,
 } from '../config/loader';
@@ -161,8 +160,7 @@ export function readAgents(
  * Load all agents by merging home and project agent directories.
  *
  * Merge semantics: home agents loaded first, then project agents overlay
- * (same name → project wins).  After loading, triggers a tool registry
- * reset so tool filtering can be rebuilt with the new agent definitions.
+ * (same name → project wins).
  *
  * @param options.homeDir  Override home agents directory (default: `~/.orchid/agents/`)
  * @param options.projectDir  Project agents directory (e.g. `<workspace>/.orchid/agents`).
@@ -173,9 +171,6 @@ export function loadAgents(
 ): Map<string, Agent> {
   const merged = readAgents(options);
   agentRegistry = merged;
-
-  // Rebuild dynamic tool descriptions with the latest agent registry.
-  registerBuiltinTools({ agents: merged });
 
   return merged;
 }

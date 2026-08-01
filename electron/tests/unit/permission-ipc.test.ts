@@ -81,7 +81,7 @@ vi.mock('../../src/main/ipc/chat', () => ({
   },
 }));
 
-vi.mock('../../src/main/ipc/session', () => ({
+vi.mock('../../src/main/session/singleton', () => ({
   getSessionManager: () => mocks.sessionManager,
   resolveWindowWorkspace: (ownerId: string) => {
     const cwd = mocks.projectDirByWebContents.get(Number(ownerId)) ?? null;
@@ -95,7 +95,7 @@ import * as permissionIpc from '../../src/main/ipc/permission';
 import {
   _resetConfigSaveChainForTests,
   withConfigSaveLock,
-} from '../../src/main/ipc/config';
+} from '../../src/main/config/write-lock';
 import { approvalStore } from '../../src/main/permissions/approval-store';
 
 const SESSION_A = '11111111-1111-4111-8111-111111111111';

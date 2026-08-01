@@ -82,6 +82,68 @@ describe('IPC Channel Names', () => {
   });
 });
 
+describe('progressive startup shell', () => {
+  it('routes the React startup icon through Vite asset handling', () => {
+    const startupScreen = fs.readFileSync(
+      path.resolve(__dirname, '../../src/renderer/components/StartupScreen.tsx'),
+      'utf8',
+    );
+
+    expect(startupScreen).toContain("import orchidIcon from '../assets/orchid-icon.svg';");
+    expect(startupScreen).toContain('src={orchidIcon}');
+    expect(startupScreen).not.toContain('src="./assets/orchid-icon.svg"');
+  });
+
+  it('seeds a local, accessible startup shell before the renderer module', () => {
+    const indexHtml = fs.readFileSync(path.resolve(__dirname, '../../src/renderer/index.html'), 'utf8');
+    const startupShellCss = fs.readFileSync(
+      path.resolve(__dirname, '../../src/renderer/public/startup-shell.css'),
+      'utf8',
+    );
+    const startupStylesIndex = indexHtml.indexOf('href="/startup-shell.css"');
+    const rendererStylesIndex = indexHtml.indexOf('href="./styles/index.css"');
+    const shellIndex = indexHtml.indexOf('class="startup-shell"');
+    const moduleIndex = indexHtml.indexOf('<script type="module" src="./main.tsx"></script>');
+
+    expect(startupStylesIndex).toBeGreaterThan(-1);
+    expect(startupStylesIndex).toBeLessThan(rendererStylesIndex);
+    expect(shellIndex).toBeGreaterThan(-1);
+    expect(shellIndex).toBeLessThan(moduleIndex);
+    expect(indexHtml).toContain('./assets/orchid-icon.svg');
+    expect(indexHtml).toContain('role="status"');
+    expect(indexHtml).toContain('aria-live="polite"');
+    expect(indexHtml).toContain('href="./styles/index.css"');
+    expect(indexHtml).not.toContain('<style>');
+    expect(startupShellCss).toContain('background: #09090b');
+    expect(startupShellCss).toContain('prefers-reduced-motion: reduce');
+  });
+
+  it('loads Google Fonts as a non-blocking enhancement', () => {
+    const indexHtml = fs.readFileSync(path.resolve(__dirname, '../../src/renderer/index.html'), 'utf8');
+
+    expect(indexHtml).toContain('fonts.googleapis.com');
+    expect(indexHtml).toMatch(/media="print"[\s\S]*onload="this\.media='all'"/);
+  });
+
+  it('wires the startup IPC surface and existing window before mandatory initialization', () => {
+    const mainIndex = fs.readFileSync(path.resolve(__dirname, '../../src/main/index.ts'), 'utf8');
+
+    expect(mainIndex).toContain("backgroundColor: '#09090b'");
+    expect(mainIndex).toContain('registerStartupIPC(startupState);');
+    expect(mainIndex.indexOf('registerStartupIPC(startupState);')).toBeLessThan(
+      mainIndex.indexOf('runStartupLifecycle({'),
+    );
+    expect(mainIndex).toContain('openWindow: createWindow');
+    expect(mainIndex).toContain('startToolWorkers: () => initToolWorkerPool(getConfig())');
+    expect(mainIndex).toContain('registerAllIPC();');
+    expect(mainIndex).toContain('unregisterStartupIPC();');
+    expect(mainIndex).toContain('await withTimeoutPromise(');
+    expect(mainIndex.indexOf('await withTimeoutPromise(')).toBeLessThan(
+      mainIndex.indexOf('await disposeToolWorkerPool();'),
+    );
+  });
+});
+
 // ─── IPC Security ────────────────────────────────────────────────────────────
 
 describe('IPC Security', () => {
@@ -419,10 +481,11 @@ describe('Theme CSS Custom Properties', () => {
   });
 
   it('loads styles through the canonical index.css entry', () => {
-    const mainTsx = fs.readFileSync(path.resolve(__dirname, '../../src/renderer/main.tsx'), 'utf-8');
+    const indexHtml = fs.readFileSync(path.resolve(__dirname, '../../src/renderer/index.html'), 'utf-8');
     const appTsx = fs.readFileSync(path.resolve(__dirname, '../../src/renderer/App.tsx'), 'utf-8');
     const indexCss = fs.readFileSync(path.resolve(__dirname, '../../src/renderer/styles/index.css'), 'utf-8');
-    expect(mainTsx).toContain("./styles/index.css");
+    expect(indexHtml).toContain('href="./styles/index.css"');
+    expect(appTsx).not.toMatch(/import\s+['"]\.\/styles\/index\.css['"]/);
     expect(appTsx).not.toMatch(/import\s+['"]\.\/styles\/chat\.css['"]/);
     expect(indexCss).toMatch(/@import\s+["']\.\/components\.css["']/);
     expect(indexCss).toMatch(/@import\s+["']\.\/markdown\.css["']/);

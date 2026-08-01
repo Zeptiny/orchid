@@ -10,6 +10,7 @@
  * - Error handling
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import * as path from 'node:path';
 
 // ---------------------------------------------------------------------------
 // Mock electron and electron-updater before importing updater
@@ -35,12 +36,19 @@ const mockApp = {
   exit: vi.fn(),
 };
 
+const mockUpdateConfigExists = vi.fn(() => true);
+const originalResourcesPath = Object.getOwnPropertyDescriptor(process, 'resourcesPath');
+
 vi.mock('electron-updater', () => ({
   autoUpdater: mockAutoUpdater,
 }));
 
 vi.mock('electron', () => ({
   app: mockApp,
+}));
+
+vi.mock('node:fs', () => ({
+  existsSync: mockUpdateConfigExists,
 }));
 
 const mockTerminateAll = vi.fn();
@@ -67,6 +75,12 @@ beforeEach(async () => {
   mockAutoUpdater.disableDifferentialDownload = false;
   mockApp.isPackaged = true;
   mockTerminateAll.mockClear();
+  mockUpdateConfigExists.mockReset();
+  mockUpdateConfigExists.mockReturnValue(true);
+  Object.defineProperty(process, 'resourcesPath', {
+    configurable: true,
+    value: '/test/orchid/resources',
+  });
 
   mockAutoUpdater.downloadUpdate.mockResolvedValue(undefined);
   mockAutoUpdater.checkForUpdates.mockResolvedValue(undefined);
@@ -85,6 +99,11 @@ beforeEach(async () => {
 afterEach(() => {
   updater.destroyUpdater();
   vi.restoreAllMocks();
+  if (originalResourcesPath) {
+    Object.defineProperty(process, 'resourcesPath', originalResourcesPath);
+  } else {
+    Reflect.deleteProperty(process, 'resourcesPath');
+  }
 });
 
 // ===========================================================================
@@ -382,6 +401,37 @@ describe('checkForUpdates', () => {
     await updater.checkForUpdates();
 
     expect(mockAutoUpdater.checkForUpdates).toHaveBeenCalled();
+  });
+
+  it('skips update checks when the packaged app has no update channel metadata', async () => {
+    mockApp.isPackaged = true;
+    mockUpdateConfigExists.mockReturnValue(false);
+
+    updater.initUpdater();
+
+    const updateAvailableHandler = mockAutoUpdater.on.mock.calls.find(
+      (call: unknown[]) => call[0] === 'update-available',
+    )?.[1] as ((info: unknown) => void) | undefined;
+    const downloadProgressHandler = mockAutoUpdater.on.mock.calls.find(
+      (call: unknown[]) => call[0] === 'download-progress',
+    )?.[1] as ((progress: unknown) => void) | undefined;
+
+    updateAvailableHandler!({ version: '2.0.0', releaseNotes: 'New features' });
+    downloadProgressHandler!({ percent: 50 });
+
+    await updater.checkForUpdates();
+
+    expect(mockUpdateConfigExists).toHaveBeenCalledWith(
+      path.join('/test/orchid/resources', 'app-update.yml'),
+    );
+    expect(mockAutoUpdater.checkForUpdates).not.toHaveBeenCalled();
+    expect(updater.getUpdaterState()).toEqual({
+      status: 'not-available',
+      version: null,
+      releaseNotes: null,
+      progress: null,
+      error: null,
+    });
   });
 
   it('handles checkForUpdates failure', async () => {

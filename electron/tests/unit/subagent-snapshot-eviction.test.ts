@@ -33,11 +33,12 @@ import {
   runtimeToDomain,
 } from '../../src/main/agents/manager';
 import {
-  clearSubagentPersistenceTracking,
   createSubagentPersistenceScheduler,
   persistSubagentChains,
   type SubagentPersistenceFlushInfo,
 } from '../../src/main/agents/persist-subagent-chains';
+import { setSubagentPersistenceRecoveryScheduler } from '../../src/main/agents/subagent-persistence-recovery';
+import { buildWaitTool } from '../../src/main/tools/subagent/wait';
 import { createSubagentSnapshot } from '../../src/main/ipc/subagents';
 import { SessionManager } from '../../src/main/session/manager';
 import {
@@ -124,7 +125,7 @@ function makeSession(): string {
 /** Spawn + drive a subagent to completion; returns the full runtime record. */
 async function completeSubagent(label: string, task: string, sessionId: string) {
   const record = manager.spawn(label, task, testAgent, { sessionId });
-  await record._runPromise;
+  await manager.getRunPromise(record.id);
   expect(record.state).toBe(SubagentState.COMPLETED);
   return record;
 }
@@ -170,9 +171,8 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  for (const sessionId of createdSessionIds) {
-    clearSubagentPersistenceTracking(sessionId);
-  }
+  vi.restoreAllMocks();
+  setSubagentPersistenceRecoveryScheduler(null);
   sessionManagerHolder.current = null;
   subagentManagerHolder.current = null;
   configOverride.current = null;
@@ -192,7 +192,7 @@ describe('recovery flush after terminal eviction (P1 #2)', () => {
     // Terminal wave/checkpoint: the full row is upserted, confirmed, evicted.
     persistSubagentChains(manager, sid);
     manager.confirmRecordsPersisted(sid, [record.id]);
-    expect(record._evicted).toBe(true);
+    expect(manager.isSummary(record.id)).toBe(true);
     expect(record.chain?.messages).toEqual([]);
     const rawBefore = readRawRecordJson(sid, record.id);
     expect(rawBefore).toBeDefined();
@@ -243,7 +243,7 @@ describe('recovery flush after terminal eviction (P1 #2)', () => {
     const evicted = await completeSubagent('evicted', 'first task', sid);
     // Checkpoint persists + confirms + evicts the terminal record.
     persistSubagentChains(manager, sid);
-    expect(evicted._evicted).toBe(true);
+    expect(manager.isSummary(evicted.id)).toBe(true);
     const evictedRawBefore = readRawRecordJson(sid, evicted.id);
 
     // A non-terminal (running) record persisted by the next checkpoint stays
@@ -252,7 +252,7 @@ describe('recovery flush after terminal eviction (P1 #2)', () => {
     const retained = manager.spawn('retained', 'second task', testAgent, { sessionId: sid });
     manager.markRunning(retained.id);
     persistSubagentChains(manager, sid);
-    expect(retained._evicted).toBe(false);
+    expect(manager.isSummary(retained.id)).toBe(false);
     const retainedDigest = messageDigest(runtimeToDomain(retained).chain.messages);
     expect(readRawRecordJson(sid, retained.id)).toBeDefined();
 
@@ -305,7 +305,7 @@ describe('subagent snapshot after terminal eviction (P1 #3)', () => {
 
     persistSubagentChains(manager, sid);
     manager.confirmRecordsPersisted(sid, [record.id]);
-    expect(record._evicted).toBe(true);
+    expect(manager.isSummary(record.id)).toBe(true);
 
     const snapshot = createSubagentSnapshot(sid);
     const snap = snapshot.records.find((row) => row.id === record.id);
@@ -325,7 +325,7 @@ describe('subagent snapshot after terminal eviction (P1 #3)', () => {
     const sid = makeSession();
     const done = await completeSubagent('done-worker', 'finished task', sid);
     persistSubagentChains(manager, sid);
-    expect(done._evicted).toBe(true);
+    expect(manager.isSummary(done.id)).toBe(true);
 
     // An active record must still ride the runtime overlay.
     manager.setRunner(null);
@@ -343,6 +343,210 @@ describe('subagent snapshot after terminal eviction (P1 #3)', () => {
     expect(snapActive.status).toBe('pending');
     expect(snapshot.live.some((projection) => projection.subagentId === active.id))
       .toBe(true);
+  });
+});
+
+describe('exact-revision checkpoint confirmation', () => {
+  it('does not let a stale pre-hydrate checkpoint suppress or evict the replacement record', () => {
+    const sid = makeSession();
+    manager.setRunner(null);
+    const record = manager.spawn('timeline', 'first task', testAgent, { sessionId: sid });
+    manager.markCompleted(record.id, 'first result');
+    const captured = manager.checkpointCandidates(sid)[0];
+    const domain = runtimeToDomain(record);
+
+    manager.confirmCheckpointCandidates([captured]);
+    expect(manager.isSummary(record.id)).toBe(true);
+    manager.hydrate([{
+      id: record.id,
+      agent: testAgent,
+      domain,
+      sessionId: sid,
+      windowId: null,
+      cwd: null,
+    }]);
+    expect(manager.isSummary(record.id)).toBe(false);
+
+    manager.confirmCheckpointCandidates([captured]);
+    expect(manager.isSummary(record.id)).toBe(false);
+    manager.close(record.id);
+    expect(manager.checkpointCandidates(sid).map((candidate) => candidate.record.id))
+      .toContain(record.id);
+  });
+
+  it('does not clean or evict a resumed generation when the terminal write confirms stale', () => {
+    const sid = makeSession();
+    manager.setRunner(null);
+    const record = manager.spawn('stale', 'first task', testAgent, { sessionId: sid });
+    manager.markCompleted(record.id, 'first result');
+    const captured = manager.checkpointCandidates(sid)[0];
+    expect(captured).toBeDefined();
+
+    const write = sessionManager.syncSubagentRecords.bind(sessionManager);
+    let resumed = false;
+    vi.spyOn(sessionManager, 'syncSubagentRecords').mockImplementation((sessionId, records) => {
+      if (!resumed) {
+        resumed = true;
+        manager.followUp(record.id, 'continue with a second generation');
+      }
+      return write(sessionId, records);
+    });
+
+    persistSubagentChains(manager, sid);
+
+    expect(manager.isSummary(record.id)).toBe(false);
+    expect(record.state).toBe(SubagentState.PENDING);
+    const current = manager.checkpointCandidates(sid).find((candidate) => candidate.record.id === record.id);
+    expect(current?.checkpoint.revision).toBeGreaterThan(captured!.checkpoint.revision);
+  });
+
+  it('persists a cancelled resume-queue interruption and follow-up before eviction', () => {
+    const sid = makeSession();
+    configOverride.current = {
+      ...defaults(),
+      subagents: { ...defaults().subagents, max_active_per_session: 1 },
+    };
+    manager.setRunner(null);
+
+    const target = manager.spawn('target', 'first task', testAgent, { sessionId: sid });
+    manager.markCompleted(target.id, 'first result');
+    const blocker = manager.spawn('blocker', 'occupy the only slot', testAgent, { sessionId: sid });
+    expect(blocker.state).toBe(SubagentState.PENDING);
+
+    manager.followUp(target.id, 'continue after review');
+    expect(target.state).toBe(SubagentState.QUEUED);
+    expect(manager.cancelOne(target.id)).toBe(true);
+    expect(target.state).toBe(SubagentState.INTERRUPTED);
+    expect(manager.isSummary(target.id)).toBe(false);
+
+    const write = vi.spyOn(sessionManager, 'syncSubagentRecords')
+      .mockImplementationOnce(() => { throw new Error('temporary storage failure'); });
+    expect(() => persistSubagentChains(manager, sid)).toThrow('temporary storage failure');
+    expect(manager.isSummary(target.id)).toBe(false);
+    write.mockRestore();
+
+    persistSubagentChains(manager, sid);
+    const stored = loadSession(sid, storageOpts)!.subagentChains.find((row) => row.id === target.id)!;
+    expect(stored.status).toBe('interrupted');
+    expect(stored.chain.messages.some((message) => message.content === 'continue after review')).toBe(true);
+    expect(manager.isSummary(target.id)).toBe(true);
+  });
+
+  it('defers a cancelled settling run until wait recovery can persist its finalized chain', async () => {
+    const sid = makeSession();
+    let releaseRunner!: () => void;
+    let observeAbort!: () => void;
+    const runnerReleased = new Promise<void>((resolve) => { releaseRunner = resolve; });
+    const abortObserved = new Promise<void>((resolve) => { observeAbort = resolve; });
+    manager.setRunner(async function* (params): AsyncGenerator<StreamEvent> {
+      yield { type: 'content', text: 'partial answer' };
+      await new Promise<void>((resolve) => {
+        const onAbort = () => {
+          params.abortSignal.removeEventListener('abort', onAbort);
+          observeAbort();
+          resolve();
+        };
+        if (params.abortSignal.aborted) {
+          observeAbort();
+          resolve();
+          return;
+        }
+        params.abortSignal.addEventListener('abort', onAbort);
+      });
+      await runnerReleased;
+      yield { type: 'finish', finishReason: 'stop' };
+    });
+
+    const scheduled = new Map<number, () => void>();
+    let nextTimer = 0;
+    const scheduler = createSubagentPersistenceScheduler(
+      (sessionId, info) => persistSubagentChains(manager, sessionId, { recovery: info.recovery }),
+      {
+        setTimeout: (callback) => {
+          const timer = ++nextTimer;
+          scheduled.set(timer, callback);
+          return timer as unknown as ReturnType<typeof setTimeout>;
+        },
+        clearTimeout: (timer) => {
+          scheduled.delete(timer as unknown as number);
+        },
+      },
+    );
+    setSubagentPersistenceRecoveryScheduler(scheduler);
+    manager.setOnDelta((event) => {
+      if (!event.sessionId) return;
+      scheduler.markDirty(event.sessionId);
+      if (event.type === 'terminal') scheduler.scheduleWave(event.sessionId, 0);
+    });
+
+    const record = manager.spawn('settling', 'produce an answer', testAgent, { sessionId: sid });
+    await vi.waitFor(() => expect(record.state).toBe(SubagentState.RUNNING));
+    await vi.waitFor(() => {
+      expect(manager.getLiveProjection(record.id)?.segments)
+        .toEqual([{ kind: 'text', id: expect.any(String), content: 'partial answer' }]);
+    });
+
+    expect(manager.cancelOne(record.id)).toBe(true);
+    await abortObserved;
+    expect(record.state).toBe(SubagentState.INTERRUPTED);
+    expect(manager.isRunSettling(record.id)).toBe(true);
+
+    const write = vi.spyOn(sessionManager, 'syncSubagentRecords');
+    await buildWaitTool(manager).handler(
+      { subagent_ids: [record.id] },
+      { cwd: tmpDir, sessionId: sid },
+    );
+
+    // The wait tool uses the real recovery seam, but the terminal record is
+    // still runner-owned: it must not checkpoint or evict before finalization.
+    expect(write).not.toHaveBeenCalled();
+    expect(manager.isSummary(record.id)).toBe(false);
+    expect(readRawRecordJson(sid, record.id)).toBeUndefined();
+
+    releaseRunner();
+    await manager.getRunPromise(record.id);
+    expect(manager.isRunSettling(record.id)).toBe(false);
+    expect(record.chain?.status).toBe('interrupted');
+    expect(record.chain?.messages.some((message) => message.content === 'partial answer')).toBe(true);
+    expect(scheduler.hasPending(sid)).toBe(true);
+
+    for (const callback of [...scheduled.values()]) callback();
+
+    const stored = loadSession(sid, storageOpts)!.subagentChains.find((row) => row.id === record.id)!;
+    expect(stored.status).toBe('interrupted');
+    expect(stored.chain.messages.some((message) => message.content === 'partial answer')).toBe(true);
+    expect(manager.isSummary(record.id)).toBe(true);
+  });
+
+  it('rehydrates a summary, persists its next mutation, and re-evicts only after that write', () => {
+    const sid = makeSession();
+    manager.setRunner(null);
+    const record = manager.spawn('rehydrate', 'first task', testAgent, { sessionId: sid });
+    manager.markCompleted(record.id, 'first result');
+    persistSubagentChains(manager, sid);
+    expect(manager.isSummary(record.id)).toBe(true);
+    const domain = loadSession(sid, storageOpts)!.subagentChains.find((row) => row.id === record.id)!;
+
+    manager.hydrate([{
+      id: record.id,
+      agent: testAgent,
+      domain,
+      sessionId: sid,
+      windowId: null,
+      cwd: null,
+    }]);
+    expect(manager.isSummary(record.id)).toBe(false);
+    manager.close(record.id);
+
+    const write = vi.spyOn(sessionManager, 'syncSubagentRecords')
+      .mockImplementationOnce(() => { throw new Error('retry required'); });
+    expect(() => persistSubagentChains(manager, sid)).toThrow('retry required');
+    expect(manager.isSummary(record.id)).toBe(false);
+    write.mockRestore();
+
+    persistSubagentChains(manager, sid);
+    expect(manager.isSummary(record.id)).toBe(true);
+    expect(loadSession(sid, storageOpts)!.subagentChains.find((row) => row.id === record.id)?.closed).toBe(true);
   });
 });
 
@@ -370,7 +574,7 @@ describe('records cancelled while queued never persist (P3 #15)', () => {
       expect(manager.cancelOne(record.id)).toBe(true);
       queuedIds.push(record.id);
       // Cancelled while queued → evicted to a lean summary (chain emptied).
-      expect(record._evicted).toBe(true);
+      expect(manager.isSummary(record.id)).toBe(true);
       expect(record.chain?.messages).toEqual([]);
     }
 

@@ -18,6 +18,7 @@ import {
 } from '../config/loader';
 import { isPlainObject, mergeConfigUpdates } from '../config/merge';
 import { configSchema } from '../config/schema';
+import { withConfigSaveLock } from '../config/write-lock';
 import {
   listPersonalityNames,
   loadPersonalities,
@@ -31,46 +32,6 @@ import {
   configReadProjectSchema,
 } from './payload-schemas';
 import { resolveWindowWorkspace } from './session';
-
-// ── Config save lock ────────────────────────────────────────────────────────
-
-/**
- * Promise chain that serializes config:save operations.
- *
- * Without this, concurrent IPC calls each read the same `getConfig()` snapshot,
- * merge different updates, and the last writer overwrites earlier providers/
- * settings — a classic read-modify-write race (P1-3).
- *
- * The chain ensures each save reads → merges → writes atomically before the
- * next save begins. Errors from prior operations do not block subsequent ones.
- */
-let configSaveChain: Promise<void> = Promise.resolve();
-
-/**
- * Run `fn` exclusively after any prior config save completes.
- * Errors from previous operations do not block subsequent ones.
- *
- * Exported so sticky `default_project_dir` patches share the same lock and
- * cannot race with config:save read-modify-write cycles.
- */
-export function withConfigSaveLock<T>(fn: () => Promise<T>): Promise<T> {
-  const previous = configSaveChain;
-  const run = previous.catch(() => undefined).then(fn);
-  // Update the chain — swallow both success and error so the chain never blocks
-  configSaveChain = run.then(
-    () => undefined,
-    () => undefined,
-  );
-  return run;
-}
-
-/**
- * Reset the config-save chain. For test isolation only.
- * @internal
- */
-export function _resetConfigSaveChainForTests(): void {
-  configSaveChain = Promise.resolve();
-}
 
 const PROJECT_CONFIG_ALLOWED_KEYS = new Set([
   'command_timeout',

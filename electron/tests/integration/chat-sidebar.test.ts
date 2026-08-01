@@ -736,8 +736,8 @@ describe('Component File Structure', () => {
     const sendEnd = source.indexOf('const cancel = useCallback', sendStart);
     const sendSource = source.slice(sendStart, sendEnd);
 
-    expect(sendSource).not.toContain('setUsage(null)');
-    expect(sendSource).toContain('usageRef.current = null');
+    expect(sendSource).toContain("type: 'begin'");
+    expect(source).toContain('const usage = projection?.usage ?? persistedUsage');
   });
 
   it('useSession hook exists', () => {

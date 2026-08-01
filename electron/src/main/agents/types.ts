@@ -8,3 +8,13 @@ export const SubagentState = {
 } as const;
 
 export type SubagentState = (typeof SubagentState)[keyof typeof SubagentState];
+
+const TERMINAL_SUBAGENT_STATES = new Set<SubagentState>([
+  SubagentState.COMPLETED,
+  SubagentState.FAILED,
+  SubagentState.INTERRUPTED,
+]);
+
+export function isTerminalSubagentState(state: SubagentState): boolean {
+  return TERMINAL_SUBAGENT_STATES.has(state);
+}

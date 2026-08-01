@@ -26,6 +26,7 @@ import {
 } from '../config/loader';
 import { isPlainObject } from '../config/merge';
 import { permissionsConfigSchema } from '../config/schema';
+import { withConfigSaveLock } from '../config/write-lock';
 import { invalidateAllProjectMCPManagers } from '../mcp/project-registry';
 import { canonicalizeProjectDirectory } from '../project/path';
 import { clearProjectRuntimeRegistry } from '../project/runtime';
@@ -39,8 +40,7 @@ import {
   webContentsForWindowId,
 } from './chat';
 import { permissionConfigScopeSaveSchema } from './payload-schemas';
-import { withConfigSaveLock } from './config';
-import { getSessionManager, resolveWindowWorkspace } from './session';
+import { getSessionManager, resolveWindowWorkspace } from '../session/singleton';
 import {
   sessionPermissionOverrides,
   setDraftPermissionOverride,

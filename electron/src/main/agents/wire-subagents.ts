@@ -10,17 +10,19 @@ import { getConfig } from '../config/loader';
 import { getSubagentManager } from '../tools';
 import { createSubagentStreamRunner } from './subagent-runner';
 import {
-  clearSubagentPersistenceTracking,
   createSubagentPersistenceScheduler,
   persistSubagentChains,
-  trackedSubagentPersistenceSessions,
   type SubagentPersistenceFlushInfo,
 } from './persist-subagent-chains';
+import {
+  recoverSubagentPersistence as recoverSubagentPersistenceForManager,
+  setSubagentPersistenceRecoveryScheduler,
+} from './subagent-persistence-recovery';
 import {
   flushSubagentDeltas,
   isEligibleSubagentRecipient,
   queueSubagentDelta,
-} from '../ipc/subagents';
+} from './subagent-events';
 import { isTerminalSubagentState } from './manager';
 import { clearToolCallHistoryForAgentScope } from '../permissions/history';
 import { onSessionDeleted } from '../session/manager';
@@ -95,13 +97,13 @@ export function wireSubagentRuntime(): void {
       broadcastSubagentsChanged,
     ),
   );
+  setSubagentPersistenceRecoveryScheduler(persistenceScheduler);
   removeSessionDeletionCleanup = onSessionDeleted((sessionId) => {
     manager.purgeSession(sessionId);
     persistenceScheduler?.clear(sessionId);
-    clearSubagentPersistenceTracking(sessionId);
   });
   removeStorageRecoveryListener = onSessionStorageRecovered(() => {
-    persistenceScheduler?.recoverAll(trackedSubagentPersistenceSessions());
+    persistenceScheduler?.recoverAll(manager.trackedPersistenceSessions());
   });
 
   manager.setOnDelta(createSubagentDeltaHandler({
@@ -132,18 +134,14 @@ export function flushSubagentPersistence(): void {
 
 /** Explicit recovery for a user retry or an external storage recovery signal. */
 export function recoverSubagentPersistence(sessionId?: string): void {
-  if (persistenceScheduler) {
-    if (sessionId) persistenceScheduler.recover(sessionId);
-    else persistenceScheduler.recoverAll(trackedSubagentPersistenceSessions());
-    return;
-  }
-  persistSubagentChains(getSubagentManager(), sessionId, { recovery: true });
+  recoverSubagentPersistenceForManager(getSubagentManager(), sessionId);
 }
 
 /** Release retry timers and lifecycle hooks after the final shutdown flush. */
 export function disposeSubagentPersistence(): void {
   persistenceScheduler?.dispose();
   persistenceScheduler = null;
+  setSubagentPersistenceRecoveryScheduler(null);
   removeSessionDeletionCleanup?.();
   removeSessionDeletionCleanup = null;
   removeStorageRecoveryListener?.();

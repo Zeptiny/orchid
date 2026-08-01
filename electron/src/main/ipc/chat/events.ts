@@ -1,6 +1,6 @@
 import { webContents as electronWebContents, type WebContents } from 'electron';
 import { IPC_CHANNELS } from '../../../shared/types/ipc';
-import { getSessionManager } from '../session';
+import { getSessionManager } from '../../session/singleton';
 import type { ActiveAgent, ChatStatePayload } from './state';
 
 export function canSend(webContents: WebContents): boolean {

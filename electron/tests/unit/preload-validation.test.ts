@@ -9,7 +9,13 @@
  * dropped members' types/ids.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { IPC_CHANNELS, type OrchidAPI, type SubagentEvent } from '../../src/shared/types/ipc';
+import {
+  IPC_CHANNELS,
+  type ChatDoneEvent,
+  type ChatErrorEvent,
+  type OrchidAPI,
+  type SubagentEvent,
+} from '../../src/shared/types/ipc';
 
 type IpcEventHandler = (event: unknown, ...args: unknown[]) => void;
 
@@ -76,6 +82,69 @@ function terminalEvent(sequence: number): Record<string, unknown> {
   };
 }
 
+function terminalMessages(): Record<string, unknown>[] {
+  return [
+    {
+      id: 'message-user',
+      role: 'user',
+      content: 'Read the file',
+      type: 'text',
+      tool_calls: null,
+      tool_call_id: null,
+      name: null,
+      thinking: null,
+      timestamp: '2026-07-31T00:00:00.000Z',
+      usage: null,
+      hidden: false,
+      tool_result: null,
+    },
+    {
+      id: 'message-call',
+      role: 'assistant',
+      content: '',
+      type: 'tool_call',
+      tool_calls: [{
+        id: 'tool-1',
+        type: 'function',
+        function: { name: 'read', arguments: '{"path":"/tmp/a"}' },
+      }],
+      tool_call_id: 'tool-1',
+      name: 'read',
+      thinking: null,
+      timestamp: '2026-07-31T00:00:01.000Z',
+      usage: null,
+      hidden: false,
+      excludeFromModel: true,
+      tool_result: null,
+    },
+    {
+      id: 'message-result',
+      role: 'tool',
+      content: 'contents',
+      type: 'tool_result',
+      tool_calls: null,
+      tool_call_id: 'tool-1',
+      name: 'read',
+      thinking: null,
+      timestamp: '2026-07-31T00:00:02.000Z',
+      usage: {
+        prompt_tokens: 10,
+        completion_tokens: 3,
+        total_tokens: 13,
+        cached_tokens: 0,
+      },
+      hidden: false,
+      tool_result: {
+        schemaVersion: 1,
+        family: 'generic',
+        status: 'complete',
+        completeness: 'complete',
+        data: { value: 'contents' },
+      },
+    },
+  ];
+}
+
 describe('preload SUBAGENTS_EVENT validation', () => {
   let received: SubagentEvent[];
 
@@ -83,6 +152,8 @@ describe('preload SUBAGENTS_EVENT validation', () => {
     vi.resetModules();
     electronMock.handlers.clear();
     electronMock.contextBridge.exposeInMainWorld.mockClear();
+    electronMock.ipcRenderer.invoke.mockReset();
+    electronMock.ipcRenderer.removeListener.mockReset();
     await import('../../src/preload/index');
     const exposed = electronMock.contextBridge.exposeInMainWorld.mock.calls
       .find(([name]) => name === 'orchid');
@@ -139,5 +210,101 @@ describe('preload SUBAGENTS_EVENT validation', () => {
 
     expect(received).toHaveLength(0);
     expect(warn).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('preload startup validation', () => {
+  beforeEach(async () => {
+    vi.resetModules();
+    electronMock.handlers.clear();
+    electronMock.contextBridge.exposeInMainWorld.mockClear();
+    electronMock.ipcRenderer.invoke.mockReset();
+    electronMock.ipcRenderer.removeListener.mockReset();
+    await import('../../src/preload/index');
+  });
+
+  it('drops malformed startup events and cleans up the listener', () => {
+    const exposed = electronMock.contextBridge.exposeInMainWorld.mock.calls
+      .find(([name]) => name === 'orchid');
+    if (!exposed) throw new Error('preload did not expose window.orchid');
+    const api = exposed[1] as OrchidAPI;
+    const received = vi.fn();
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+    const dispose = api.startup.onChanged(received);
+    const listener = electronMock.handlers.get(IPC_CHANNELS.STARTUP_CHANGED);
+    if (!listener) throw new Error('no STARTUP_CHANGED listener registered');
+    listener({}, { revision: -1, phase: 'ready', steps: [] });
+
+    expect(received).not.toHaveBeenCalled();
+    expect(warn).toHaveBeenCalledOnce();
+    dispose();
+    expect(electronMock.ipcRenderer.removeListener).toHaveBeenCalledWith(
+      IPC_CHANNELS.STARTUP_CHANGED,
+      expect.any(Function),
+    );
+  });
+
+  it('rejects malformed startup snapshots from the invoke boundary', async () => {
+    const exposed = electronMock.contextBridge.exposeInMainWorld.mock.calls
+      .find(([name]) => name === 'orchid');
+    if (!exposed) throw new Error('preload did not expose window.orchid');
+    const api = exposed[1] as OrchidAPI;
+    electronMock.ipcRenderer.invoke.mockResolvedValueOnce({ revision: 0, phase: 'starting', steps: [] });
+
+    await expect(api.startup.snapshot()).rejects.toThrow(/Invalid IPC response.*startup:snapshot/i);
+  });
+});
+
+describe('preload terminal chat history validation', () => {
+  let done: ChatDoneEvent[];
+  let errors: ChatErrorEvent[];
+
+  beforeEach(async () => {
+    vi.resetModules();
+    electronMock.handlers.clear();
+    electronMock.contextBridge.exposeInMainWorld.mockClear();
+    await import('../../src/preload/index');
+    const exposed = electronMock.contextBridge.exposeInMainWorld.mock.calls
+      .find(([name]) => name === 'orchid');
+    if (!exposed) throw new Error('preload did not expose window.orchid');
+    const api = exposed[1] as OrchidAPI;
+    done = [];
+    errors = [];
+    api.chat.onDone((event) => done.push(event));
+    api.chat.onError((event) => errors.push(event));
+  });
+
+  function emit(channel: string, payload: unknown): void {
+    const listener = electronMock.handlers.get(channel);
+    if (!listener) throw new Error(`no ${channel} listener registered`);
+    listener({}, payload);
+  }
+
+  it('requires a meaningful durable history for done and error events', () => {
+    const base = { sessionId: SESSION_ID, turnId: 'turn-1', sequence: 1 };
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+    emit(IPC_CHANNELS.CHAT_DONE, { ...base, type: 'done', response: 'done' });
+    emit(IPC_CHANNELS.CHAT_ERROR, { ...base, type: 'error', error: 'failed' });
+    emit(IPC_CHANNELS.CHAT_DONE, {
+      ...base,
+      sequence: 2,
+      type: 'done',
+      response: 'done',
+      messages: [{ id: 'incomplete' }],
+    });
+    emit(IPC_CHANNELS.CHAT_ERROR, {
+      ...base,
+      sequence: 2,
+      type: 'error',
+      error: 'failed',
+      messages: terminalMessages(),
+    });
+
+    expect(done).toEqual([]);
+    expect(errors).toHaveLength(1);
+    expect(errors[0]?.messages).toEqual(terminalMessages());
+    expect(warn).toHaveBeenCalled();
   });
 });

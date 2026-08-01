@@ -19,31 +19,41 @@ import type { Chain } from '../../shared/types/chain';
 import { ChainStatus } from '../../shared/types/chain';
 import type { ModelSelection } from '../../shared/types/provider';
 import type { Message, Usage } from '../../shared/types/message';
-import { MessageType } from '../../shared/types/message';
 import type { StreamEvent } from '../llm/orchestrator';
 import type { ProjectRuntime } from '../project/runtime';
-import { addStepUsage } from '../../shared/usage';
 import type { SubagentRecord as DomainSubagentRecord } from '../../shared/types/subagent';
 import {
   SubagentDeltaEventType,
   SubagentStatus,
   type SubagentDeltaEvent,
-  type SubagentDeltaEventBase,
   type SubagentLiveProjection,
-  type SubagentLiveSegment,
   type SubagentTerminalState,
-  type SubagentToolSnapshot,
 } from '../../shared/types/subagent';
-import {
-  makeAssistantMessage,
-  makeThinkingMessage,
-  makeToolCallMessage,
-  makeToolResultMessage,
-  makeUserMessage,
-} from '../llm/message-factories';
+import { makeUserMessage } from '../llm/message-factories';
 import { getConfig } from '../config/loader';
 import { subagentsConfigSchema } from '../config/schema';
 import { AdmissionController, type AdmissionCounters, type SubagentAdmissionLimits } from './admission';
+import { SubagentRunRegistry, type SubagentRun } from './subagent-run';
+import {
+  SubagentLifecycle,
+  type SubagentQuestion,
+  type SubagentQuestionResult,
+  type SubagentWaiterReason,
+} from './subagent-lifecycle';
+import {
+  SubagentRunAssembler,
+  type SubagentRunFinalization,
+  type SubagentRunProjectionEffect,
+} from './subagent-run-assembler';
+import {
+  SubagentLiveProjectionStore,
+  materializeProjectionTail,
+  type SubagentProjectionCheckpoint,
+} from './subagent-live-projection';
+import {
+  SubagentPersistence,
+  type SubagentPersistenceCandidate,
+} from './subagent-persistence';
 import {
   SubagentWaitTimeoutError,
   SubagentQueueFullError,
@@ -65,25 +75,11 @@ export {
   SubagentStillSettlingError,
 } from './errors';
 
-export { SubagentState } from './types';
-import { SubagentState } from './types';
+export { isTerminalSubagentState, SubagentState } from './types';
+import { isTerminalSubagentState, SubagentState } from './types';
 
 /** Result of answering (or declining) a subagent's pending question. */
-export type SubagentQuestionResult =
-  | { type: 'answered'; answers: Array<{ selected: string[]; text: string | null; skipped: boolean }> }
-  | { type: 'declined' };
-
-/** Terminal states — subagents in these states cannot be cancelled. */
-const TERMINAL_STATES = new Set<SubagentState>([
-  SubagentState.COMPLETED,
-  SubagentState.FAILED,
-  SubagentState.INTERRUPTED,
-]);
-
-/** Terminal-state check shared by persistence, tools, and IPC wiring. */
-export function isTerminalSubagentState(state: SubagentState): boolean {
-  return TERMINAL_STATES.has(state);
-}
+export type { SubagentQuestionResult } from './subagent-lifecycle';
 
 /**
  * Terminal domain statuses map 1:1 onto runtime states for hydration. Stored
@@ -137,7 +133,6 @@ export type SubagentStreamRunner = (params: {
 }) => AsyncGenerator<StreamEvent>;
 
 export type SubagentChangeListener = (records: readonly SubagentRecord[]) => void;
-type SubagentWaiterReason = 'state-change' | 'flush';
 
 /**
  * Resolve the default `wait_for_subagent` budget in milliseconds.
@@ -255,62 +250,12 @@ export interface SubagentRecord {
    * (global manager + getActive() would otherwise attach chains to the new session).
    */
   readonly sessionId: string | null;
-  /** Runtime-only owner window used for approval delivery. */
-  readonly windowId: string | null;
-  /** Frozen parent-turn workspace cwd; reused when a queued run is admitted. */
-  readonly cwd: string | null;
-  projectRuntime?: ProjectRuntime;
-  /** Abort controller for the in-flight run. */
-  abortController: AbortController | null;
-  /** Pending completion promise resolvers. */
-  _resolveWait: Array<(reason: SubagentWaiterReason) => void> | null;
-  /** In-flight run promise (for debugging / optional await). */
-  _runPromise: Promise<void> | null;
   /**
    * Hidden from the dynamic system prompt while the durable record, chain,
    * and terminal state stay intact (close_subagents tool). Only meaningful on
    * terminal records; persisted with the durable row.
    */
   closed: boolean;
-  /** Runtime-only live projection; durable history remains in `chain`. */
-  live: SubagentLiveProjection;
-  _liveCommittedSegmentCount: number;
-  _liveTerminalEmitted: boolean;
-  /**
-   * Runtime-only: the record was evicted to a lean terminal summary after its
-   * durable row was confirmed persisted. Persistence flushes and snapshot
-   * merges must skip flagged records — their confirmed durable row stays
-   * authoritative, and re-serializing the summary would clobber it with an
-   * empty chain. Cannot leak into storage/domain output: `runtimeToDomain`
-   * and the storage dicts build fresh explicit-field objects.
-   */
-  _evicted: boolean;
-  /**
-   * Runtime-only single-use marker: the record was re-queued by a follow-up
-   * resume rather than a fresh spawn. Persistence keeps a durable row for
-   * resume-queued records (the reopened chain + follow-up message survive a
-   * crash while queued); spawn-queued and cancelled-before-admission records
-   * still get no row. Cleared on admission. Cannot leak into storage/domain
-   * output: `runtimeToDomain` builds fresh explicit-field objects.
-   */
-  _resumeQueued: boolean;
-  /** Durable-mutation counter; the persistence scheduler upserts dirty records (U6). */
-  persistRevision: number;
-  /** Per-record run counter for per-run turnId attribution. */
-  runCount: number;
-  /** Epoch ms of the last emitted `usage` delta (0 = none yet); throttles usage deltas. */
-  _lastUsageDeltaAt: number;
-  /** Pending question routed to the main agent (null when no question is outstanding). */
-  pendingQuestion: {
-    toolCallId: string;
-    questions: Array<{
-      type: 'single' | 'multi';
-      title: string;
-      description?: string;
-      options: Array<{ label: string; description?: string }>;
-    }>;
-    resolve: (result: SubagentQuestionResult) => void;
-  } | null;
 }
 
 // ── SubagentResult ──────────────────────────────────────────────────────────
@@ -344,28 +289,11 @@ export interface HydrateSpec {
   readonly projectRuntime?: ProjectRuntime;
 }
 
-// ── Mutable live state ──────────────────────────────────────────────────────
-
-/** Mutable view of a tool snapshot for in-place run-loop accumulation. */
-type MutableToolSnapshot = { -readonly [K in keyof SubagentToolSnapshot]: SubagentToolSnapshot[K] };
-
-/**
- * Mutable view of the live projection. The manager mutates the stored
- * projection in place during a run so accumulation is structurally cheap;
- * snapshot accessors deep-copy on read via `cloneLiveProjection`.
- */
-type MutableLiveProjection = {
-  -readonly [K in keyof SubagentLiveProjection]: K extends 'segments'
-    ? SubagentLiveSegment[]
-    : K extends 'toolCalls'
-      ? MutableToolSnapshot[]
-      : SubagentLiveProjection[K];
-};
-
-type DistributiveOmit<T, K extends PropertyKey> = T extends unknown ? Omit<T, K> : never;
-
-/** Variant-specific fields of a delta event, without the shared identity base. */
-type SubagentDeltaPayload = DistributiveOmit<SubagentDeltaEvent, keyof SubagentDeltaEventBase>;
+/** A runtime record paired with the exact revision captured for a checkpoint. */
+export interface SubagentCheckpointCandidate {
+  readonly record: SubagentRecord;
+  readonly checkpoint: SubagentPersistenceCandidate;
+}
 
 // ── SubagentManager ─────────────────────────────────────────────────────────
 
@@ -380,17 +308,11 @@ export class SubagentManager {
   private _runner: SubagentStreamRunner | null = null;
   private _onChange: SubagentChangeListener | null = null;
   private _changeListeners = new Set<SubagentChangeListener>();
-  private _onDelta: ((event: SubagentDeltaEvent) => void) | null = null;
-  /** Per-session monotonic revision counter ordering events and snapshots. */
-  private _sessionRevisions: Map<string, number> = new Map();
+  private _liveProjection = new SubagentLiveProjectionStore({ getUsageDeltaIntervalMs });
   private _admission = new AdmissionController();
-  /**
-   * Per-session FIFO of evicted terminal summary ids, capped at
-   * `subagents.terminal_retention`. Oldest entries are removed from
-   * `_subagents` entirely once the cap is exceeded; their durable row
-   * remains the record of truth.
-   */
-  private _terminalSummaries: Map<string, string[]> = new Map();
+  private _runs = new SubagentRunRegistry();
+  private _lifecycle = new SubagentLifecycle();
+  private _persistence = new SubagentPersistence(getTerminalRetention);
 
   /**
    * Configure the stream runner. When set, spawn() starts a background run.
@@ -413,7 +335,7 @@ export class SubagentManager {
 
   /** Subscribe to typed incremental live deltas for active subagent runs. */
   setOnDelta(listener: ((event: SubagentDeltaEvent) => void) | null): void {
-    this._onDelta = listener;
+    this._liveProjection.setOnDelta(listener);
   }
 
   /**
@@ -448,6 +370,11 @@ export class SubagentManager {
     if (!admitted && this._admission.queueLength >= limits.maxQueued) {
       throw new SubagentQueueFullError(limits);
     }
+    const run = this._runs.register(id, 1, {
+      windowId: options.windowId ?? null,
+      cwd: options.cwd ?? null,
+      projectRuntime: options.projectRuntime,
+    });
 
     const userMessage = makeUserMessage(task);
     const selection = options.selection ?? null;
@@ -474,36 +401,28 @@ export class SubagentManager {
       selection,
       parentChainIndex: options.parentChainIndex ?? null,
       sessionId,
-      windowId: options.windowId ?? null,
-      cwd: options.cwd ?? null,
-      projectRuntime: options.projectRuntime,
-      abortController: null,
-      _resolveWait: [],
-      _runPromise: null,
       closed: false,
-      live: makeLiveProjection(id, sessionId, admitted ? 'pending' : 'queued'),
-      _liveCommittedSegmentCount: 0,
-      _liveTerminalEmitted: false,
-      _evicted: false,
-      _resumeQueued: false,
-      persistRevision: 0,
-      runCount: 1,
-      _lastUsageDeltaAt: 0,
-      pendingQuestion: null,
     };
 
     this._subagents.set(id, record);
+    this._persistence.register(id, sessionId, { admitted });
+    this._liveProjection.start({
+      subagentId: id,
+      sessionId,
+      state: admitted ? SubagentStatus.PENDING : SubagentStatus.QUEUED,
+      runId: run.runId,
+    });
     if (!admitted) this._admission.enqueue(id);
     else this._admission.markAdmitted(sessionId);
     this._notify();
     this._emitDelta(record, {
       type: SubagentDeltaEventType.SPAWNED,
-      record: runtimeToDomain(record, { includeLiveTail: false }),
+      record: this.toDomainRecord(record, { includeLiveTail: false }),
       usage: record.usage,
     });
 
     if (admitted && this._runner) {
-      record._runPromise = this._startRun(record, options.cwd);
+      this._startRecordRun(record);
     }
 
     return record;
@@ -521,30 +440,30 @@ export class SubagentManager {
    * Resume a terminal, non-closed subagent with new user input (R5, R7, R8).
    *
    * Appends the input as a user message, reopens the chain, resets the per-run
-   * fields (fresh live projection / runId, `runCount += 1`), and runs the
+   * fields (fresh live projection / runId and generation), and runs the
    * resumed record through the same admission control as `spawn`: admitted
    * resumes start immediately (PENDING → runner); over-capacity resumes park in
    * the bounded FIFO queue as QUEUED and start when a terminal transition frees
    * a slot. Throws `SubagentQueueFullError` — leaving the terminal record
    * completely unmutated — when the queue is full.
    *
-   * Guards: the record must exist, must not be an `_evicted` summary (the
+   * Guards: the record must exist, must not be a terminal summary (the
    * follow-up tool hydrates those first; a summary has no chain to replay),
    * must be terminal, and must not be closed.
    */
   followUp(subagentId: string, input: string): SubagentRecord {
     const record = this._subagents.get(subagentId);
     if (!record) throw new Error(`Subagent '${subagentId}' not found`);
-    if (record._evicted) throw new SubagentEvictedError(subagentId);
-    if (!TERMINAL_STATES.has(record.state)) {
+    if (this.isSummary(subagentId)) throw new SubagentEvictedError(subagentId);
+    if (!isTerminalSubagentState(record.state)) {
       throw new SubagentNotTerminalError(subagentId, record.state);
     }
     if (record.closed) throw new SubagentClosedError(subagentId);
     // A cancelled RUNNING record is already terminal while its run loop still
-    // owns the interruption boundary (`_runPromise` set). Resuming now would
+    // owns the interruption boundary (a settling run). Resuming now would
     // hand the record to a second run while the zombie loop's partial flush
     // and finally block still write to it.
-    if (record._runPromise !== null) {
+    if (this._runs.isSettling(record.id)) {
       throw new SubagentStillSettlingError(subagentId);
     }
 
@@ -573,54 +492,41 @@ export class SubagentManager {
           messages: [userMessage],
         };
 
-    // Per-run reset: clear the prior run's outcome and timing, bump the run
-    // counter, and build a fresh live projection (new runId) so the renderer
-    // treats the resume as a new run.
-    record.result = null;
-    record.error = null;
-    record.endTime = null;
-    record.startedAt = null;
-    record.startTime = now;
-    // Clear the prior run's aggregate so the resumed run's SPAWNED delta does
-    // not leak stale usage; the run loop re-accumulates fresh per run.
-    record.usage = null;
-    record.live = makeLiveProjection(
-      record.id,
-      record.sessionId,
-      admitted ? SubagentStatus.PENDING : SubagentStatus.QUEUED,
-    );
-    record._liveCommittedSegmentCount = 0;
-    record._liveTerminalEmitted = false;
-    record._lastUsageDeltaAt = 0;
-    record.pendingQuestion = null;
-    record.abortController = null;
-    record.runCount += 1;
+    // Per-run lifecycle reset and fresh projection make the resume a new run.
+    const transition = this._lifecycle.transition(record, { type: 'follow-up', admitted, now });
+    if (!transition) throw new SubagentNotTerminalError(subagentId, record.state);
+    const run = this._runs.beginNext(record.id);
+    this._liveProjection.start({
+      subagentId: record.id,
+      sessionId: record.sessionId,
+      state: admitted ? SubagentStatus.PENDING : SubagentStatus.QUEUED,
+      runId: run.runId,
+    });
+    if (transition.clearQuestion) this._lifecycle.cancelQuestion(record.id);
     // Reopened chain + follow-up message must persist via the next checkpoint
     // (spawn sets a fresh row; followUp reopens a terminal durable row).
-    this._markRecordDirty(record);
+    this._persistence.beginFollowUp(record.id);
+    // Persistence owns its dirty revision; the projection clock separately
+    // orders this durable lifecycle mutation against snapshots and deltas.
+    if (transition.persist) this._bumpSessionRevision(record);
 
     if (admitted) {
-      record.state = SubagentState.PENDING;
-      record.queuedAt = null;
       this._admission.markAdmitted(record.sessionId);
       this._notify();
       this._emitDelta(record, {
         type: SubagentDeltaEventType.SPAWNED,
-        record: runtimeToDomain(record, { includeLiveTail: false }),
+        record: this.toDomainRecord(record, { includeLiveTail: false }),
         usage: record.usage,
       });
       if (this._runner) {
-        record._runPromise = this._startRun(record, record.cwd ?? undefined);
+        this._startRecordRun(record);
       }
     } else {
-      record.state = SubagentState.QUEUED;
-      record.queuedAt = now;
-      record._resumeQueued = true;
       this._admission.enqueue(record.id);
       this._notify();
       this._emitDelta(record, {
         type: SubagentDeltaEventType.SPAWNED,
-        record: runtimeToDomain(record, { includeLiveTail: false }),
+        record: this.toDomainRecord(record, { includeLiveTail: false }),
         usage: record.usage,
       });
     }
@@ -633,16 +539,17 @@ export class SubagentManager {
    */
   markRunning(subagentId: string): void {
     const record = this._subagents.get(subagentId);
-    if (record && record.state === SubagentState.PENDING) {
-      record.state = SubagentState.RUNNING;
-      record.startedAt ??= Date.now();
+    const transition = record
+      ? this._lifecycle.transition(record, { type: 'running', now: Date.now() })
+      : null;
+    if (record && transition) {
       this._updateLive(record, { state: SubagentState.RUNNING });
-      this._markRecordDirty(record);
+      if (transition.persist) this._markRecordDirty(record);
       this._emitDelta(record, {
         type: SubagentDeltaEventType.STATUS_CHANGED,
         status: SubagentStatus.RUNNING,
       });
-      this._notify();
+      if (transition.notify) this._notify();
     }
   }
 
@@ -652,18 +559,17 @@ export class SubagentManager {
    */
   markCompleted(subagentId: string, result: string): void {
     const record = this._subagents.get(subagentId);
-    if (!record || TERMINAL_STATES.has(record.state)) return;
+    if (!record) return;
+    const transition = this._lifecycle.transition(record, { type: 'complete', result, now: Date.now() });
+    if (!transition) return;
 
-    this._admission.removeFromQueue(subagentId);
-    record.state = SubagentState.COMPLETED;
-    record.result = result;
-    record.endTime = Date.now();
+    if (transition.removeFromAdmissionQueue) this._admission.removeFromQueue(subagentId);
     this._finalizeChain(record, ChainStatus.COMPLETED);
-    this._markRecordDirty(record);
-    this._finishLive(record, SubagentState.COMPLETED);
-    this._resolveWaiters(record);
-    this._notify();
-    this._admitFromQueue();
+    if (transition.persist) this._markRecordDirty(record);
+    if (transition.finishProjection) this._finishLive(record, SubagentState.COMPLETED);
+    if (transition.resolveWaiters) this._lifecycle.resolveWaiters(record.id);
+    if (transition.notify) this._notify();
+    if (transition.admitNext) this._admitFromQueue();
   }
 
   /**
@@ -672,18 +578,17 @@ export class SubagentManager {
    */
   markFailed(subagentId: string, error: string): void {
     const record = this._subagents.get(subagentId);
-    if (!record || TERMINAL_STATES.has(record.state)) return;
+    if (!record) return;
+    const transition = this._lifecycle.transition(record, { type: 'fail', error, now: Date.now() });
+    if (!transition) return;
 
-    this._admission.removeFromQueue(subagentId);
-    record.state = SubagentState.FAILED;
-    record.error = error;
-    record.endTime = Date.now();
+    if (transition.removeFromAdmissionQueue) this._admission.removeFromQueue(subagentId);
     this._finalizeChain(record, ChainStatus.FAILED);
-    this._markRecordDirty(record);
-    this._finishLive(record, SubagentState.FAILED);
-    this._resolveWaiters(record);
-    this._notify();
-    this._admitFromQueue();
+    if (transition.persist) this._markRecordDirty(record);
+    if (transition.finishProjection) this._finishLive(record, SubagentState.FAILED);
+    if (transition.resolveWaiters) this._lifecycle.resolveWaiters(record.id);
+    if (transition.notify) this._notify();
+    if (transition.admitNext) this._admitFromQueue();
   }
 
   /**
@@ -696,12 +601,13 @@ export class SubagentManager {
   close(subagentId: string): void {
     const record = this._subagents.get(subagentId);
     if (!record || record.closed) return;
-    // A flag set on an `_evicted` summary never persists (every checkpoint
-    // skips evicted records) — refuse loudly; the tool hydrates these first.
-    if (record._evicted) throw new SubagentSummaryClosedError(subagentId);
-    record.closed = true;
-    this._markRecordDirty(record);
-    this._notify();
+    // A flag set on a terminal summary never persists — refuse loudly; the
+    // tool hydrates these first.
+    if (this.isSummary(subagentId)) throw new SubagentSummaryClosedError(subagentId);
+    const transition = this._lifecycle.transition(record, { type: 'close' });
+    if (!transition) return;
+    if (transition.persist) this._markRecordDirty(record);
+    if (transition.notify) this._notify();
   }
 
   /**
@@ -730,8 +636,8 @@ export class SubagentManager {
       .map((id) => this._subagents.get(id))
       .filter((record): record is SubagentRecord => record !== undefined);
     const shouldReturn = () =>
-      records.some((record) => record.pendingQuestion !== null) ||
-      records.every((record) => TERMINAL_STATES.has(record.state));
+      records.some((record) => this._lifecycle.hasPendingQuestion(record.id)) ||
+      records.every((record) => isTerminalSubagentState(record.state));
 
     if (!shouldReturn()) {
       let timer: ReturnType<typeof setTimeout> | undefined;
@@ -754,10 +660,7 @@ export class SubagentManager {
           };
 
           for (const record of records) {
-            if (TERMINAL_STATES.has(record.state)) continue;
-            if (!record._resolveWait) {
-              record._resolveWait = [];
-            }
+            if (isTerminalSubagentState(record.state)) continue;
             const entry = (reason: SubagentWaiterReason) => {
               if (reason === 'flush') {
                 settle(resolve);
@@ -765,15 +668,7 @@ export class SubagentManager {
               }
               checkPredicate();
             };
-            record._resolveWait.push(entry);
-            waiterCleanups.push(() => {
-              if (!record._resolveWait) return;
-              const idx = record._resolveWait.indexOf(entry);
-              if (idx >= 0) record._resolveWait.splice(idx, 1);
-              if (record._resolveWait.length === 0) {
-                record._resolveWait = null;
-              }
-            });
+            waiterCleanups.push(this._lifecycle.addWaiter(record.id, entry));
           }
 
           checkPredicate();
@@ -847,50 +742,49 @@ export class SubagentManager {
    */
   cancelOne(subagentId: string): boolean {
     const record = this._subagents.get(subagentId);
-    if (!record || TERMINAL_STATES.has(record.state)) {
+    if (!record) {
       return false;
     }
+    const wasQueued = record.state === SubagentState.QUEUED;
+    const transition = this._lifecycle.transition(record, {
+      type: 'interrupt',
+      error: 'Interrupted by user',
+      now: Date.now(),
+    });
+    if (!transition) return false;
 
     // A queued record is cancelled in place: removed from the queue, marked
     // INTERRUPTED, terminal delta emitted — no run slot was ever consumed, so
     // no admission follows.
-    const wasQueued = record.state === SubagentState.QUEUED;
-    this._admission.removeFromQueue(subagentId);
-    record.state = SubagentState.INTERRUPTED;
-    record.error = record.error ?? 'Interrupted by user';
-    record.endTime = record.endTime ?? Date.now();
-    record.abortController?.abort();
-    if (record.pendingQuestion) {
-      record.pendingQuestion.resolve({ type: 'declined' });
-      record.pendingQuestion = null;
-    }
-    this._markRecordDirty(record);
+    if (transition.removeFromAdmissionQueue) this._admission.removeFromQueue(subagentId);
+    this._runs.abortCurrent(record.id);
+    if (transition.clearQuestion) this._lifecycle.cancelQuestion(record.id);
+    if (transition.persist) this._markRecordDirty(record);
     // The runner owns the async interruption boundary. It must materialize its
     // partial live tail before the terminal projection is emitted; otherwise
     // the terminal event can make the renderer flush an incomplete record.
-    if (!record._runPromise) {
+    if (!this._runs.isSettling(record.id)) {
       this._finalizeChain(record, ChainStatus.INTERRUPTED);
       this._finishLive(record, SubagentState.INTERRUPTED);
     }
-    this._resolveWaiters(record);
-    if (wasQueued && !record._resumeQueued) {
+    if (transition.resolveWaiters) this._lifecycle.resolveWaiters(record.id);
+    if (wasQueued && !this._persistence.hasDurableEligibility(record.id)) {
       // A record cancelled while QUEUED was never admitted, so it never gets a
       // durable row (persistence eligibility begins at admission) — but it must
       // not linger as a full record either. Evict it to a lean terminal summary
       // under the same retention FIFO as persisted records; the terminal delta
       // above already carried the full record to the renderer. Eviction runs
-      // after _resolveWaiters because _evictToSummary drops _resolveWait.
-      this._evictToSummary(record);
-      this._trackSummary(record.sessionId ?? '', record.id, getTerminalRetention());
+      // after resolving waiters because eviction clears runtime lifecycle state.
+      this._applySummaryConfirmation(record, this._persistence.summarizeUndurable(record.id));
     }
     // A resume-queued record owns a durable row (persist-subagent-chains
     // eligibility carve-out), so evicting it here would strand the row with a
     // stale pre-interrupt status and drop the follow-up message — every later
-    // checkpoint skips `_evicted` records. Leave it as a full dirty INTERRUPTED
+    // checkpoint skips summaries. Leave it as a full dirty INTERRUPTED
     // record: the terminal wave persists it, then confirmRecordsPersisted
     // evicts it through the normal row-confirmed path.
-    this._notify();
-    if (!wasQueued) this._admitFromQueue();
+    if (transition.notify) this._notify();
+    if (!wasQueued && transition.admitNext) this._admitFromQueue();
     return true;
   }
 
@@ -916,7 +810,7 @@ export class SubagentManager {
       if (sessionId !== undefined && sessionId !== null && record.sessionId !== sessionId) {
         continue;
       }
-      if (!TERMINAL_STATES.has(record.state)) {
+      if (!isTerminalSubagentState(record.state)) {
         if (this.cancelOne(id)) {
           cancelled.push(id);
         }
@@ -929,7 +823,7 @@ export class SubagentManager {
     const flushed: string[] = [];
 
     for (const record of this._subagents.values()) {
-      if (this._resolveWaiters(record, 'flush')) {
+      if (this._lifecycle.resolveWaiters(record.id, 'flush')) {
         flushed.push(record.id);
       }
     }
@@ -978,10 +872,25 @@ export class SubagentManager {
     return this._subagents.get(subagentId);
   }
 
+  /** In-flight run promise, if this record's current generation is settling. */
+  getRunPromise(subagentId: string): Promise<void> | null {
+    return this._runs.getPromise(subagentId);
+  }
+
+  /** Current generation used for per-run turn attribution and stale-run guards. */
+  getRunGeneration(subagentId: string): number | undefined {
+    return this._runs.getGeneration(subagentId);
+  }
+
+  /** Whether the current generation still owns asynchronous teardown. */
+  isRunSettling(subagentId: string): boolean {
+    return this._runs.isSettling(subagentId);
+  }
+
   /**
-   * Store a pending question on the subagent record and unblock waiters.
+   * Store a runtime-only pending question and unblock waiters.
    *
-   * The record stays RUNNING — `_resolveWaiters` lets `wait_for_subagent`
+   * The record stays RUNNING — lifecycle waiters let `wait_for_subagent`
    * return early so the main agent can see and answer the question.
    */
   markQuestionPending(
@@ -996,14 +905,10 @@ export class SubagentManager {
   ): Promise<SubagentQuestionResult> {
     const record = this._subagents.get(subagentId);
     if (!record) throw new Error(`Subagent '${subagentId}' not found`);
-    if (record.pendingQuestion) {
-      return Promise.resolve({ type: 'declined' });
-    }
-
-    return new Promise((resolve) => {
-      record.pendingQuestion = { toolCallId, questions, resolve };
-      this._resolveWaiters(record);
-    });
+    if (this._lifecycle.hasPendingQuestion(subagentId)) return Promise.resolve({ type: 'declined' });
+    const promise = this._lifecycle.askQuestion(subagentId, { toolCallId, questions });
+    this._lifecycle.resolveWaiters(subagentId);
+    return promise;
   }
 
   /**
@@ -1017,13 +922,12 @@ export class SubagentManager {
     toolCallId: string,
     result: SubagentQuestionResult,
   ): boolean {
-    const record = this._subagents.get(subagentId);
-    if (!record?.pendingQuestion || record.pendingQuestion.toolCallId !== toolCallId) {
-      return false;
-    }
-    record.pendingQuestion.resolve(result);
-    record.pendingQuestion = null;
-    return true;
+    return this._lifecycle.answerQuestion(subagentId, toolCallId, result);
+  }
+
+  /** Runtime-only pending question for a record, if any. */
+  getPendingQuestion(subagentId: string): SubagentQuestion | undefined {
+    return this._lifecycle.getPendingQuestion(subagentId);
   }
 
   /**
@@ -1047,13 +951,14 @@ export class SubagentManager {
       questions: unknown[];
     }> = [];
     for (const [id, record] of this._subagents) {
-      if (record.sessionId === sessionId && record.pendingQuestion) {
+      const pendingQuestion = this._lifecycle.getPendingQuestion(id);
+      if (record.sessionId === sessionId && pendingQuestion) {
         results.push({
           subagentId: id,
           name: record.label,
           type: record.agent.type,
-          toolCallId: record.pendingQuestion.toolCallId,
-          questions: record.pendingQuestion.questions,
+          toolCallId: pendingQuestion.toolCallId,
+          questions: pendingQuestion.questions,
         });
       }
     }
@@ -1062,20 +967,18 @@ export class SubagentManager {
 
   /** Snapshot a single live projection; deep-copied so callers never alias run state. */
   getLiveProjection(subagentId: string): SubagentLiveProjection | undefined {
-    const record = this._subagents.get(subagentId);
-    return record ? cloneLiveProjection(record.live) : undefined;
+    return this._subagents.has(subagentId) ? this._liveProjection.get(subagentId) : undefined;
   }
 
   /** Snapshot live projections for a session; each is deep-copied at call time. */
   getLiveProjections(sessionId?: string | null): SubagentLiveProjection[] {
-    return this.allRecords()
-      .filter((record) => sessionId === undefined || record.sessionId === sessionId)
-      .map((record) => cloneLiveProjection(record.live));
+    return this._liveProjection.getAll(sessionId)
+      .filter((projection) => this._subagents.has(projection.subagentId));
   }
 
   /** Current per-session revision; 0 for sessions with no recorded activity. */
   getSessionRevision(sessionId: string): number {
-    return this._sessionRevisions.get(sessionId) ?? 0;
+    return this._liveProjection.getSessionRevision(sessionId);
   }
 
   /**
@@ -1090,23 +993,64 @@ export class SubagentManager {
     return Array.from(this._subagents.values());
   }
 
-  /**
-   * Confirm that terminal records were durably persisted. Only after this
-   * confirmation does the manager evict heavy runtime data (persist-first
-   * ordering guarantee). Non-terminal ids are ignored.
-   */
-  confirmRecordsPersisted(sessionId: string, subagentIds: string[]): void {
-    const retention = getTerminalRetention();
-    for (const id of subagentIds) {
-      const record = this._subagents.get(id);
-      if (!record || record.sessionId !== sessionId) continue;
-      if (!TERMINAL_STATES.has(record.state)) continue;
-      // Already a summary (e.g. a queued cancel, or double confirmation):
-      // re-evicting would be an idempotent no-op, so skip it explicitly.
-      if (record._evicted) continue;
-      this._evictToSummary(record);
-      this._trackSummary(sessionId, id, retention);
+  /** Whether an in-memory record is a lean, durable-backed terminal summary. */
+  isSummary(subagentId: string): boolean {
+    return this._persistence.isSummary(subagentId);
+  }
+
+  /** Whether a stored row must be materialized before tools can mutate it. */
+  needsHydration(subagentId: string): boolean {
+    return this._persistence.needsHydration(subagentId);
+  }
+
+  /** Sessions with confirmed persistence state that recovery must revisit. */
+  trackedPersistenceSessions(): string[] {
+    return this._persistence.trackedSessions();
+  }
+
+  /** Capture dirty durable rows with their exact revisions for one storage write. */
+  checkpointCandidates(
+    sessionId: string,
+    options: { recovery?: boolean; includeUnscoped?: boolean } = {},
+  ): SubagentCheckpointCandidate[] {
+    const candidates: SubagentCheckpointCandidate[] = [];
+    for (const record of this._subagents.values()) {
+      if (record.sessionId !== sessionId && !(options.includeUnscoped && record.sessionId === null)) {
+        continue;
+      }
+      const terminal = isTerminalSubagentState(record.state);
+      // `cancelOne` makes a running record terminal before its runner has
+      // materialized the interrupted chain and emitted the terminal delta.
+      // A recovery checkpoint in that gap must not confirm/evict the record:
+      // the runner's finalization owns the first durable terminal snapshot.
+      if (terminal && this._runs.isSettling(record.id)) continue;
+      const checkpoint = this._persistence.checkpointCandidate(
+        record.id,
+        sessionId,
+        terminal,
+        options.recovery === true,
+      );
+      if (checkpoint) candidates.push({ record, checkpoint });
     }
+    return candidates;
+  }
+
+  /** Apply exact-revision persistence confirmations and declared retention effects. */
+  confirmCheckpointCandidates(candidates: readonly SubagentCheckpointCandidate[]): void {
+    for (const candidate of candidates) {
+      const record = this._subagents.get(candidate.record.id);
+      const effect = this._persistence.confirmCheckpoint(candidate.checkpoint);
+      if (effect.evict && record === candidate.record) this._evictToSummary(record);
+      for (const id of effect.removeIds) this._removeRuntimeState(id);
+    }
+  }
+
+  /** Compatibility facade for non-writer callers; writers use captured candidates. */
+  confirmRecordsPersisted(sessionId: string, subagentIds: string[]): void {
+    const wanted = new Set(subagentIds);
+    this.confirmCheckpointCandidates(
+      this.checkpointCandidates(sessionId).filter((candidate) => wanted.has(candidate.record.id)),
+    );
   }
 
   /**
@@ -1117,17 +1061,26 @@ export class SubagentManager {
   purgeSession(sessionId: string): void {
     for (const [id, record] of this._subagents) {
       if (record.sessionId !== sessionId) continue;
-      if (!TERMINAL_STATES.has(record.state)) this.cancelOne(id);
+      if (!isTerminalSubagentState(record.state)) this.cancelOne(id);
     }
     for (const [id, record] of this._subagents) {
-      if (record.sessionId === sessionId) this._subagents.delete(id);
+      if (record.sessionId === sessionId) {
+        this._subagents.delete(id);
+        this._lifecycle.clear(id);
+        // Let an already-started run unwind through its guarded terminal
+        // projection. Its finally block drops the detached registry entry.
+        if (!this._runs.isSettling(id)) {
+          this._runs.remove(id);
+          this._liveProjection.remove(id);
+        }
+      }
     }
     this._admission.filterQueue(
       (id) => this._subagents.get(id)?.sessionId !== sessionId,
     );
     this._admission.filterQueue((id) => this._subagents.has(id));
-    this._terminalSummaries.delete(sessionId);
-    this._sessionRevisions.delete(sessionId);
+    this._persistence.clearSession(sessionId);
+    this._liveProjection.clearSessionRevision(sessionId);
     this._notify();
   }
 
@@ -1141,31 +1094,43 @@ export class SubagentManager {
       sessionId === undefined
         ? this.allRecords()
         : this.allRecords().filter((r) => r.sessionId === sessionId);
-    return records.map((record) => runtimeToDomain(record));
+    return records
+      .filter((record) => !this.isSummary(record.id))
+      .map((record) => this.toDomainRecord(record));
+  }
+
+  /** Convert a runtime record using an explicit checkpoint from the live store. */
+  toDomainRecord(
+    record: SubagentRecord,
+    options: Omit<RuntimeToDomainOptions, 'projectionCheckpoint'> = {},
+  ): DomainSubagentRecord {
+    const includeLiveTail = options.includeLiveTail ?? true;
+    const projectionCheckpoint = !includeLiveTail
+      ? undefined
+      : this._liveProjection.getCheckpoint(record.id);
+    return runtimeToDomain(record, { ...options, includeLiveTail, projectionCheckpoint });
   }
 
   /**
    * Materialize durable records back into the runtime map on demand (R9).
    *
    * Targets records whose full form lives only in `session.subagentChains`:
-   * evicted lean summaries (`_evicted`, chain emptied) and everything persisted
+   * terminal summaries (chain emptied) and everything persisted
    * before the current app launch. A live full record always wins (no-op); an
-   * `_evicted` summary shell is REPLACED, because its chain is empty and the
+   * terminal summary shell is REPLACED, because its chain is empty and the
    * stored domain record is the only replay source.
    *
    * Hydration is deliberately silent: no deltas, no `_notify`, no dirty mark —
    * the mutating tool that follows owns notification and persistence. Each
-   * rebuilt record restarts at `persistRevision: 0`, so the caller must also
-   * drop the id's `lastPersistedRevision` entry (see
-   * `forgetSubagentPersistedRevision`); otherwise the revision-gated checkpoint
-   * would skip the re-materialized record forever (R12).
+   * rebuilt record starts a new persistence revision timeline, so the next
+   * post-hydrate mutation cannot be hidden by an earlier confirmation (R12).
    */
   hydrate(specs: HydrateSpec[]): void {
     for (const spec of specs) {
       const existing = this._subagents.get(spec.id);
-      // A live full record wins; only absent ids and chain-less evicted
+      // A live full record wins; only absent ids and chain-less terminal
       // summaries are (re)materialized from durable storage.
-      if (existing && !existing._evicted) continue;
+      if (existing && !this.isSummary(spec.id)) continue;
 
       // Defensive: stored rows only ever carry terminal statuses (the restore
       // migration maps queued/pending/running → interrupted). Skip anything else.
@@ -1178,6 +1143,11 @@ export class SubagentManager {
       // and runtimeToDomain never receives an invalid Date.
       const startTime = Date.parse(domain.start_time) || 0;
       const endTime = domain.end_time ? (Date.parse(domain.end_time) || 0) : null;
+      const run = this._runs.reset(spec.id, 1, {
+        windowId: spec.windowId,
+        cwd: spec.cwd,
+        projectRuntime: spec.projectRuntime,
+      });
 
       const record: SubagentRecord = {
         id: spec.id,
@@ -1200,34 +1170,21 @@ export class SubagentManager {
         selection: domain.chain.selection,
         parentChainIndex: domain.parentChainIndex,
         sessionId: spec.sessionId,
-        windowId: spec.windowId,
-        cwd: spec.cwd,
-        projectRuntime: spec.projectRuntime,
-        abortController: null,
-        _resolveWait: [],
-        _runPromise: null,
         closed: domain.closed,
-        live: makeLiveProjection(spec.id, spec.sessionId, domain.status),
-        _liveCommittedSegmentCount: 0,
-        _liveTerminalEmitted: true,
-        _evicted: false,
-        _resumeQueued: false,
-        persistRevision: 0,
-        runCount: 1,
-        _lastUsageDeltaAt: 0,
-        pendingQuestion: null,
       };
       if (domain.reasoning_effort !== undefined) {
         record.reasoningEffort = domain.reasoning_effort;
       }
 
       this._subagents.set(spec.id, record);
-      // A re-materialized full record sharing an id with a FIFO-tracked summary
-      // would be deleted from the map when the retention FIFO rolls. Untrack it
-      // so subsequent retention rolls leave it alone (R12).
-      if (existing?._evicted) {
-        this._untrackSummary(spec.sessionId ?? '', spec.id);
-      }
+      this._persistence.rehydrate(spec.id, spec.sessionId);
+      this._liveProjection.start({
+        subagentId: spec.id,
+        sessionId: spec.sessionId,
+        state: domain.status,
+        runId: run.runId,
+        terminalEmitted: true,
+      });
     }
   }
 
@@ -1276,18 +1233,19 @@ export class SubagentManager {
   }
 
   private _admit(record: SubagentRecord): void {
-    record.state = SubagentState.PENDING;
-    record._resumeQueued = false;
+    const transition = this._lifecycle.transition(record, { type: 'admit' });
+    if (!transition) return;
+    this._persistence.markAdmitted(record.id);
     this._admission.markAdmitted(record.sessionId);
-    this._markRecordDirty(record);
+    if (transition.persist) this._markRecordDirty(record);
     this._updateLive(record, { state: SubagentState.PENDING });
     this._emitDelta(record, {
       type: SubagentDeltaEventType.STATUS_CHANGED,
       status: SubagentStatus.PENDING,
     });
-    this._notify();
+    if (transition.notify) this._notify();
     if (this._runner) {
-      record._runPromise = this._startRun(record, record.cwd ?? undefined);
+      this._startRecordRun(record);
     }
   }
 
@@ -1312,350 +1270,187 @@ export class SubagentManager {
   /**
    * Replace heavy runtime fields with a bounded summary. The record keeps its
    * SubagentRecord shape so downstream type contracts (getStates, wait,
-   * prompt-context) don't break; chain messages, live state, projectRuntime,
-   * and abort artifacts are dropped. The `_evicted` flag marks the summary so
-   * persistence flushes and snapshot merges never let it overwrite the
-   * confirmed durable row.
+   * prompt-context) don't break; chain messages and live state are dropped.
+   * Persistence owns the corresponding
+   * summary status so writers and snapshots retain the durable row as truth.
    */
   private _evictToSummary(record: SubagentRecord): void {
-    record._runPromise = null;
-    record._evicted = true;
-    record.abortController = null;
-    record._resolveWait = null;
-    record.pendingQuestion = null;
-    record.projectRuntime = undefined;
+    this._lifecycle.clear(record.id);
+    // `_startRun` snapshots this seed before it starts consuming the stream;
+    // clearing it here releases heavyweight affinity without changing a
+    // settling generation's identity, abort signal, or promise.
+    this._runs.releaseSeed(record.id);
     if (record.chain) {
       record.chain = { ...record.chain, messages: [] };
     }
-    record.live = {
-      ...record.live,
-      segments: [],
-      toolCalls: [],
-    };
-    record._liveCommittedSegmentCount = 0;
+    this._liveProjection.clearLiveTail(record.id);
   }
 
-  /** Track an evicted summary in the per-session FIFO; remove oldest over cap. */
-  private _trackSummary(sessionId: string, id: string, retention: number): void {
-    let fifo = this._terminalSummaries.get(sessionId);
-    if (!fifo) {
-      fifo = [];
-      this._terminalSummaries.set(sessionId, fifo);
-    }
-    if (fifo.includes(id)) return;
-    fifo.push(id);
-    while (fifo.length > retention) {
-      const evicted = fifo.shift()!;
-      this._subagents.delete(evicted);
-    }
+  /** Apply one summary declaration and any FIFO removals chosen by persistence. */
+  private _applySummaryConfirmation(
+    record: SubagentRecord,
+    effect: { evict: boolean; removeIds: readonly string[] },
+  ): void {
+    if (effect.evict) this._evictToSummary(record);
+    for (const id of effect.removeIds) this._removeRuntimeState(id);
   }
 
-  /** Remove an id from the per-session terminal-summary FIFO (no-op if absent). */
-  private _untrackSummary(sessionId: string, id: string): void {
-    const fifo = this._terminalSummaries.get(sessionId);
-    if (!fifo) return;
-    const index = fifo.indexOf(id);
-    if (index >= 0) fifo.splice(index, 1);
+  private _removeRuntimeState(subagentId: string): void {
+    this._subagents.delete(subagentId);
+    this._runs.remove(subagentId);
+    this._lifecycle.clear(subagentId);
+    this._liveProjection.remove(subagentId);
   }
 
   // ── Private: run loop ─────────────────────────────────────────────────────
 
+  private _startRecordRun(record: SubagentRecord): void {
+    const run = this._runs.start(record.id);
+    const promise = this._startRun(record, run);
+    this._runs.attachPromise(run, promise);
+  }
+
   private async _startRun(
     record: SubagentRecord,
-    cwd?: string,
+    run: SubagentRun,
   ): Promise<void> {
     const runner = this._runner;
-    if (!runner) return;
+    if (!runner) {
+      this._runs.settle(run);
+      return;
+    }
 
-    if (TERMINAL_STATES.has(record.state)) return;
+    if (!this._runs.isCurrent(run) || isTerminalSubagentState(record.state)) {
+      this._runs.settle(run);
+      return;
+    }
 
-    const abort = new AbortController();
-    record.abortController = abort;
+    const abort = run.abortController;
+    if (!abort) {
+      this._runs.settle(run);
+      return;
+    }
+    const seed = this._runs.getSeed(record.id);
     this.markRunning(record.id);
 
-    const messages: Message[] = [...(record.chain?.messages ?? [])];
-    let responseText = '';
-    let resultText = '';
-    // Per-step text tracking so the returned result is the subagent's last
-    // message rather than the concatenation of every step's narration.
-    // `stepText` accumulates the current step; `lastStepResult` remembers the
-    // most recent step that produced text (so a trailing tool-only step does
-    // not blank out the answer).
-    let stepText = '';
-    let lastStepResult = '';
-    let accumulatedUsage: Usage | null = null;
-    // Track open tool calls for result pairing in the chain
-    const toolNames = new Map<string, string>();
+    const assembler = new SubagentRunAssembler(record.chain?.messages ?? []);
 
     try {
       const stream = runner({
         task: record.task,
         // Replay the full chain on a resume; a mutable snapshot keeps the
-        // runner's history independent of the run-loop message accumulator.
+        // runner's history independent of the assembler's message accumulator.
         history: [...(record.chain?.messages ?? [])],
         agent: record.agent,
         selection: record.selection,
         abortSignal: abort.signal,
         sessionId: record.sessionId ?? undefined,
-        windowId: record.windowId ?? undefined,
-        cwd,
+        windowId: seed?.windowId ?? undefined,
+        cwd: seed?.cwd ?? undefined,
         agentScopeId: record.id,
         chainId: record.chain?.id,
         // Per-run turn id keeps provider accounting attribution unique across
-        // resumes (spawn path runCount=1 reproduces a stable unique id).
-        turnId: `${record.id}#${record.runCount}`,
-        projectRuntime: record.projectRuntime,
+        // resumes (spawn path generation=1 reproduces a stable unique id).
+        turnId: `${record.id}#${run.generation}`,
+        projectRuntime: seed?.projectRuntime,
         onReasoningEffort: (effort) => {
+          if (!this._runs.isCurrent(run)) return;
           record.reasoningEffort = effort;
         },
       });
 
       for await (const event of stream) {
+        if (!this._runs.isCurrent(run)) return;
         if (abort.signal.aborted || record.state === SubagentState.INTERRUPTED) {
           break;
         }
+        if (!this._applyAssemblerEffects(record, run, assembler.accept(event))) return;
+      }
 
-        switch (event.type) {
-          case 'content': {
-            responseText += event.text;
-            resultText += event.text;
-            stepText += event.text;
-            this._appendLiveText(record, 'text', event.text);
-            break;
-          }
-          case 'usage': {
-            accumulatedUsage = addStepUsage(accumulatedUsage, event.usage);
-            record.usage = accumulatedUsage;
-            this._updateLive(record, { usage: accumulatedUsage });
-            if (accumulatedUsage) {
-              const now = Date.now();
-              if (record._lastUsageDeltaAt === 0 || now - record._lastUsageDeltaAt >= getUsageDeltaIntervalMs()) {
-                record._lastUsageDeltaAt = now;
-                this._emitDelta(record, { type: SubagentDeltaEventType.USAGE, usage: accumulatedUsage });
-              }
-            }
-            break;
-          }
-          case 'thinking': {
-            this._appendLiveText(record, 'thinking', event.text);
-            break;
-          }
-          case 'tool_call':
-          case 'tool_call_start': {
-            const toolCallId =
-              'toolCallId' in event ? event.toolCallId : randomUUID();
-            const toolName =
-              'toolName' in event && event.toolName ? event.toolName : 'unknown';
-            const args =
-              event.type === 'tool_call' && 'args' in event ? event.args : '{}';
-            toolNames.set(toolCallId, toolName);
-            this._ensureLiveTool(record, toolCallId, toolName);
-            // Only record tool_call once we have args (tool_call event)
-            if (event.type === 'tool_call') {
-              const toolSegment = record.live.segments.find(
-                (segment) => segment.kind === 'tool' && segment.toolCallId === toolCallId,
-              );
-              const toolIndex = toolSegment
-                ? record.live.segments.indexOf(toolSegment)
-                : record.live.segments.length;
-              this._commitLiveSegments(record, messages, toolIndex);
-              this._updateLiveTool(record, toolCallId, {
-                status: 'running',
-                args,
-                partialArgs: args,
-              });
-              messages.push(makeToolCallMessage(toolCallId, toolName, args, toolSegment?.id));
-              this._markLiveCommitted(record);
-              this._setChainMessages(record, messages);
-              this._notify();
-              if (toolSegment) {
-                const startedAt = record.live.toolCalls.find(
-                  (tool) => tool.toolCallId === toolCallId,
-                )?.startedAt ?? new Date().toISOString();
-                this._emitDelta(record, {
-                  type: SubagentDeltaEventType.TOOL_START,
-                  segmentId: toolSegment.id,
-                  toolCallId,
-                  toolName,
-                  status: 'running',
-                  args,
-                  startedAt,
-                });
-              }
-            }
-            break;
-          }
-          case 'tool_call_delta': {
-            const current = record.live.toolCalls.find(
-              (tool) => tool.toolCallId === event.toolCallId,
-            );
-            this._ensureLiveTool(record, event.toolCallId, current?.toolName ?? 'unknown');
-            this._updateLiveTool(record, event.toolCallId, {
-              partialArgs: `${current?.partialArgs ?? ''}${event.argsDelta}`,
-            });
-            this._emitDelta(record, {
-              type: SubagentDeltaEventType.TOOL_ARGS_DELTA,
-              toolCallId: event.toolCallId,
-              append: event.argsDelta,
-            });
-            break;
-          }
-          case 'tool_result': {
-            const toolName = toolNames.get(event.toolCallId) ?? 'unknown';
-            // Ensure a tool_call exists (start-only path)
-            if (!messages.some(
-              (m) =>
-                m.type === MessageType.TOOL_CALL &&
-                m.tool_call_id === event.toolCallId,
-            )) {
-              const toolSegment = record.live.segments.find(
-                (segment) => segment.kind === 'tool' && segment.toolCallId === event.toolCallId,
-              );
-              messages.push(
-                makeToolCallMessage(event.toolCallId, toolName, '{}', toolSegment?.id),
-              );
-            }
-            messages.push(
-              makeToolResultMessage(
-                event.toolCallId,
-                toolName,
-                event.content,
-                event.execution.canonical,
-                `${event.toolCallId}:result`,
-              ),
-            );
-            const finishedAt = new Date().toISOString();
-            this._updateLiveTool(record, event.toolCallId, {
-              status: event.execution.canonical.status,
-              content: event.content,
-              toolResult: event.execution.canonical,
-              finishedAt,
-            });
-            this._markLiveCommitted(record);
-            this._setChainMessages(record, messages);
-            this._notify();
-            this._emitDelta(record, {
-              type: SubagentDeltaEventType.TOOL_RESULT,
-              toolCallId: event.toolCallId,
-              status: event.execution.canonical.status,
-              content: event.content,
-              toolResult: event.execution.canonical,
-              finishedAt,
-            });
-            break;
-          }
-          case 'error': {
-            throw new Error(event.detail || event.title || 'Subagent stream error');
-          }
-          case 'step_finish': {
-            if (stepText.trim()) lastStepResult = stepText;
-            stepText = '';
-            break;
-          }
-          case 'finish':
-          default:
-            break;
+      if (!this._runs.isCurrent(run)) return;
+      if (abort.signal.aborted || record.state === SubagentState.INTERRUPTED) {
+        this._applyAssemblerFinalization(record, run, assembler.interrupt());
+        return;
+      }
+      this._applyAssemblerFinalization(record, run, assembler.complete());
+    } catch (err) {
+      if (!this._runs.isCurrent(run)) return;
+      if (abort.signal.aborted || record.state === SubagentState.INTERRUPTED) {
+        this._applyAssemblerFinalization(record, run, assembler.interrupt());
+        return;
+      }
+      const message = err instanceof Error ? err.message : String(err);
+      this._applyAssemblerFinalization(record, run, assembler.fail(message));
+    } finally {
+      if (this._runs.isCurrent(run)) {
+        if (record.state === SubagentState.INTERRUPTED) {
+          this._finishLive(record, SubagentState.INTERRUPTED);
+        }
+        this._runs.settle(run);
+        if (this._subagents.get(record.id) !== record) {
+          this._runs.remove(record.id);
+          this._liveProjection.remove(record.id);
         }
       }
-
-      if (abort.signal.aborted || record.state === SubagentState.INTERRUPTED) {
-        this._flushPartialOnInterrupt(
-          record,
-          messages,
-          responseText,
-          resultText,
-          accumulatedUsage,
-        );
-        return;
-      }
-
-      // Commit the remaining live prefix in exactly the order emitted. Segment
-      // IDs become message IDs so a durable handoff cannot duplicate bubbles.
-      this._commitLiveSegments(record, messages, record.live.segments.length, accumulatedUsage);
-
-      // Prefer the last step's text (the subagent's final message). Fall back
-      // to the full accumulation when no step boundary was observed (e.g. the
-      // textStream fallback path, which does not emit step_finish).
-      const finalStepText = stepText.trim() ? stepText : lastStepResult;
-      record.result = finalStepText || resultText || record.result;
-      record.usage = accumulatedUsage;
-      this._setChainMessages(record, messages);
-      this._markLiveCommitted(record);
-      this.markCompleted(record.id, record.result ?? '');
-    } catch (err) {
-      if (abort.signal.aborted || record.state === SubagentState.INTERRUPTED) {
-        this._flushPartialOnInterrupt(
-          record,
-          messages,
-          responseText,
-          resultText,
-          accumulatedUsage,
-        );
-        return;
-      }
-      // Keep partial content in the same chronological, ID-stable form as a
-      // normal completion. The live projection may already contain both text
-      // and thinking, so do not append the accumulator a second time.
-      this._commitLiveSegments(record, messages, record.live.segments.length, accumulatedUsage);
-      this._setChainMessages(record, messages);
-      const message = err instanceof Error ? err.message : String(err);
-      record.usage = accumulatedUsage;
-      this.markFailed(record.id, message);
-    } finally {
-      if (record.state === SubagentState.INTERRUPTED) {
-        this._finishLive(record, SubagentState.INTERRUPTED);
-      }
-      record.abortController = null;
-      record._runPromise = null;
     }
   }
 
-  private _flushPartialOnInterrupt(
+  /** Apply the assembler's small live-projection effects behind the run guard. */
+  private _applyAssemblerEffects(
     record: SubagentRecord,
-    messages: Message[],
-    responseText: string,
-    resultText: string,
-    accumulatedUsage: Usage | null,
-  ): void {
-    this._commitLiveSegments(record, messages, record.live.segments.length, accumulatedUsage);
-    if (resultText) {
-      record.result = resultText;
-    }
-    if (accumulatedUsage) {
-      record.usage = accumulatedUsage;
-    }
-    this._setChainMessages(record, messages);
-    this._markLiveCommitted(record);
-    if (record.state === SubagentState.INTERRUPTED) this._finalizeChain(record, ChainStatus.INTERRUPTED);
-    this._notify();
-  }
-
-  /** Commit only the live segment prefix before `endIndex`, preserving order. */
-  private _commitLiveSegments(
-    record: SubagentRecord,
-    messages: Message[],
-    endIndex: number,
-    usage: Usage | null = null,
-  ): void {
-    const segments = record.live.segments;
-    const lastTextIndex = segments
-      .slice(record._liveCommittedSegmentCount, endIndex)
-      .map((segment, index) => ({ segment, index: record._liveCommittedSegmentCount + index }))
-      .filter(({ segment }) => segment.kind === 'text')
-      .at(-1)?.index;
-    for (let index = record._liveCommittedSegmentCount; index < endIndex; index += 1) {
-      const segment = segments[index];
-      if (segment.kind === 'text' && segment.content.trim()) {
-        messages.push(makeAssistantMessage(
-          segment.content,
-          usage && index === lastTextIndex ? usage : null,
-          segment.id,
-        ));
-      } else if (segment.kind === 'thinking' && segment.content.trim()) {
-        messages.push(makeThinkingMessage(segment.content, segment.id));
+    run: SubagentRun,
+    effects: readonly SubagentRunProjectionEffect[],
+  ): boolean {
+    for (const assemblerEffect of effects) {
+      if (!this._runs.isCurrent(run)) return false;
+      for (const effect of this._liveProjection.applyAssemblerEffects(record.id, [assemblerEffect])) {
+        if (!this._runs.isCurrent(run)) return false;
+        if (effect.usage !== undefined) record.usage = effect.usage;
+        if (effect.transcript) this._applyAssemblerTranscript(record, effect.transcript.messages);
+        if (effect.notify) this._notify();
+        effect.publish?.();
       }
     }
-    record._liveCommittedSegmentCount = Math.max(record._liveCommittedSegmentCount, endIndex);
+    return this._runs.isCurrent(run);
+  }
+
+  /** Apply a terminal transcript assembled independently of the runtime record. */
+  private _applyAssemblerFinalization(
+    record: SubagentRecord,
+    run: SubagentRun,
+    finalization: SubagentRunFinalization,
+  ): boolean {
+    if (!this._runs.isCurrent(run)) return false;
+    if (finalization.result !== null) record.result = finalization.result;
+    record.usage = finalization.usage;
+    this._applyAssemblerTranscript(
+      record,
+      finalization.messages,
+    );
+
+    switch (finalization.state) {
+      case 'completed':
+        this.markCompleted(record.id, record.result ?? '');
+        break;
+      case 'failed':
+        this.markFailed(record.id, finalization.error ?? 'Subagent stream error');
+        break;
+      case 'interrupted':
+        if (record.state === SubagentState.INTERRUPTED) {
+          this._finalizeChain(record, ChainStatus.INTERRUPTED);
+          this._notify();
+        }
+        break;
+    }
+    return this._runs.isCurrent(run);
+  }
+
+  /** The projection store owns the cursor; the manager persists only the transcript. */
+  private _applyAssemblerTranscript(
+    record: SubagentRecord,
+    messages: readonly Message[],
+  ): void {
+    this._setChainMessages(record, [...messages]);
   }
 
   private _setChainMessages(record: SubagentRecord, messages: Message[]): void {
@@ -1700,142 +1495,36 @@ export class SubagentManager {
     };
   }
 
-  private _resolveWaiters(
-    record: SubagentRecord,
-    reason: SubagentWaiterReason = 'state-change',
-  ): boolean {
-    const waiters = record._resolveWait;
-    if (reason === 'flush' && waiters?.length === 0) return false;
-    if (waiters) {
-      for (const resolve of waiters) {
-        resolve(reason);
-      }
-      record._resolveWait = null;
-      return waiters.length > 0;
-    }
-    return false;
-  }
-
-  private _appendLiveText(record: SubagentRecord, kind: 'text' | 'thinking', content: string): void {
-    const live = this._live(record);
-    const last = live.segments.at(-1);
-    let segmentId: string;
-    if (last && last.kind === kind) {
-      last.content += content;
-      segmentId = last.id;
-    } else {
-      segmentId = randomUUID();
-      live.segments.push({ kind, id: segmentId, content });
-    }
-    this._updateLive(record, {});
-    this._emitDelta(record, kind === 'text'
-      ? { type: SubagentDeltaEventType.TEXT_DELTA, segmentId, append: content }
-      : { type: SubagentDeltaEventType.THINKING_DELTA, segmentId, append: content });
-  }
-
-  private _ensureLiveTool(record: SubagentRecord, toolCallId: string, toolName: string): void {
-    const live = this._live(record);
-    if (live.toolCalls.some((tool) => tool.toolCallId === toolCallId)) return;
-    const startedAt = new Date().toISOString();
-    live.toolCalls.push({
-      toolCallId, toolName, status: 'generating', partialArgs: '', args: '',
-      content: null, toolResult: null, startedAt, finishedAt: null,
-    });
-    const segmentId = randomUUID();
-    live.segments.push({ kind: 'tool', id: segmentId, toolCallId });
-    this._updateLive(record, {});
-    this._emitDelta(record, {
-      type: SubagentDeltaEventType.TOOL_START, segmentId, toolCallId, toolName,
-      status: 'generating', args: '', startedAt,
-    });
-  }
-
-  private _updateLiveTool(record: SubagentRecord, toolCallId: string, patch: Partial<SubagentToolSnapshot>): void {
-    const tool = this._live(record).toolCalls.find((entry) => entry.toolCallId === toolCallId);
-    if (!tool) return;
-    Object.assign(tool, patch);
-    this._updateLive(record, {});
-  }
-
-  private _markLiveCommitted(record: SubagentRecord): void {
-    record._liveCommittedSegmentCount = record.live.segments.length;
-  }
-
-  /** Mutable view of a record's live projection for in-place run-loop accumulation. */
-  private _live(record: SubagentRecord): MutableLiveProjection {
-    return record.live as MutableLiveProjection;
-  }
-
   private _updateLive(
     record: SubagentRecord,
     patch: Partial<Omit<SubagentLiveProjection, 'sequence' | 'subagentId' | 'runId'>>,
   ): void {
-    const live = this._live(record);
-    if (patch.sessionId !== undefined) live.sessionId = patch.sessionId;
-    if (patch.state !== undefined) live.state = patch.state;
-    if (patch.usage !== undefined) live.usage = patch.usage;
-    if (patch.result !== undefined) live.result = patch.result;
-    if (patch.error !== undefined) live.error = patch.error;
-    if (patch.segments !== undefined) {
-      live.segments.length = 0;
-      live.segments.push(...patch.segments);
-    }
-    if (patch.toolCalls !== undefined) {
-      live.toolCalls.length = 0;
-      live.toolCalls.push(...patch.toolCalls);
-    }
-    live.sequence += 1;
-    this._bumpSessionRevision(record);
+    this._liveProjection.update(record.id, patch);
   }
 
   private _finishLive(record: SubagentRecord, state: SubagentTerminalState): void {
-    if (record._liveTerminalEmitted) return;
-    record._liveTerminalEmitted = true;
-    this._updateLive(record, {
-      state, result: record.result, error: record.error, usage: record.usage,
-      segments: [], toolCalls: [],
-    });
-    record._liveCommittedSegmentCount = 0;
-    this._emitDelta(record, {
-      type: SubagentDeltaEventType.TERMINAL,
-      record: runtimeToDomain(record, { includeLiveTail: true }),
+    this._liveProjection.finish(record.id, {
       state,
+      result: record.result,
+      error: record.error,
       usage: record.usage,
+      terminalRecord: () => this.toDomainRecord(record, { includeLiveTail: true }),
     });
   }
 
-  /** Emit a typed live delta stamped with the current run sequence and session revision. */
-  private _emitDelta(record: SubagentRecord, delta: SubagentDeltaPayload): void {
-    const listener = this._onDelta;
-    if (!listener) return;
-    const sessionId = record.sessionId ?? '';
-    const event = {
-      sessionId,
-      subagentId: record.id,
-      runId: record.live.runId,
-      sequence: record.live.sequence,
-      sessionRevision: this.getSessionRevision(sessionId),
-      ...delta,
-    } as SubagentDeltaEvent;
-    try {
-      listener(event);
-    } catch (err) {
-      console.debug('Subagent delta listener failed (non-fatal):', err);
-    }
+  /** Delegates wire construction and publication to the live-projection store. */
+  private _emitDelta(record: SubagentRecord, delta: Parameters<SubagentLiveProjectionStore['emit']>[1]): void {
+    this._liveProjection.emit(record.id, delta);
   }
 
   /** Advance the per-session revision counter used to order events and snapshots. */
   private _bumpSessionRevision(record: SubagentRecord): void {
-    if (!record.sessionId) return;
-    this._sessionRevisions.set(
-      record.sessionId,
-      (this._sessionRevisions.get(record.sessionId) ?? 0) + 1,
-    );
+    this._liveProjection.bumpSessionRevision(record.sessionId);
   }
 
-  /** Mark a durable record mutation: bump the persist revision and the session revision. */
+  /** Mark a durable record mutation and advance its manager-owned revision. */
   private _markRecordDirty(record: SubagentRecord): void {
-    record.persistRevision += 1;
+    this._persistence.markDirty(record.id);
     this._bumpSessionRevision(record);
   }
 
@@ -1855,8 +1544,10 @@ export class SubagentManager {
 // ── Persistence helpers ─────────────────────────────────────────────────────
 
 export interface RuntimeToDomainOptions {
-  /** Include the uncommitted live tail in the returned durable chain. */
+  /** Include the uncommitted live tail from the explicit projection checkpoint. */
   includeLiveTail?: boolean;
+  /** Runtime-only checkpoint supplied by `SubagentLiveProjectionStore`. */
+  projectionCheckpoint?: SubagentProjectionCheckpoint;
 }
 
 /** Map runtime record → domain SubagentRecord for session JSON. */
@@ -1876,9 +1567,9 @@ export function runtimeToDomain(
   const chain =
     record.chain ??
     makeEmptyChain(record.sessionId ?? '', record.selection, record.agent);
-  const checkpointChain = options.includeLiveTail === false
-    ? chain
-    : materializeLiveTail(record, chain);
+  const checkpointChain = options.includeLiveTail === true && options.projectionCheckpoint
+    ? materializeProjectionTail(options.projectionCheckpoint, chain)
+    : chain;
 
   return {
     id: record.id,
@@ -1900,42 +1591,6 @@ export function runtimeToDomain(
       : {}),
     closed: record.closed,
     chain: checkpointChain,
-  };
-}
-
-/** Materialize only the uncommitted live tail for persistence checkpoints. */
-function materializeLiveTail(record: SubagentRecord, chain: Chain): Chain {
-  const tail = record.live.segments.slice(record._liveCommittedSegmentCount);
-  if (tail.length === 0) return chain;
-  const messages = [...chain.messages];
-  const lastTextIndex = tail.findLastIndex((segment) => segment.kind === 'text');
-  for (const [index, segment] of tail.entries()) {
-    if (segment.kind === 'thinking' && segment.content) {
-      messages.push(makeThinkingMessage(segment.content, segment.id));
-    } else if (segment.kind === 'text' && segment.content) {
-      messages.push(makeAssistantMessage(segment.content, index === lastTextIndex ? record.usage : null, segment.id));
-    }
-  }
-  return { ...chain, messages };
-}
-
-function makeLiveProjection(
-  subagentId: string,
-  sessionId: string | null,
-  state: SubagentStatus,
-): SubagentLiveProjection {
-  return {
-    sessionId, subagentId, runId: randomUUID(), sequence: 0, state,
-    segments: [], toolCalls: [], usage: null, result: null, error: null,
-  };
-}
-
-/** Deep-copy a live projection so snapshot reads never alias mutable run state. */
-function cloneLiveProjection(projection: SubagentLiveProjection): SubagentLiveProjection {
-  return {
-    ...projection,
-    segments: projection.segments.map((segment) => ({ ...segment })),
-    toolCalls: projection.toolCalls.map((tool) => ({ ...tool })),
   };
 }
 

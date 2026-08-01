@@ -23,13 +23,10 @@ import {
 import {
   subagentRecordFromStorageDict,
   subagentRecordToStorageDict,
-} from '../../src/shared/types/subagent';
-import {
-  forgetSubagentPersistedRevision,
-  persistSubagentChains,
-} from '../../src/main/agents/persist-subagent-chains';
+} from '../../src/shared/serialization/chain-subagent';
+import { persistSubagentChains } from '../../src/main/agents/persist-subagent-chains';
 import { hydrateSubagentRecords } from '../../src/main/tools/subagent/hydrate';
-import { recoverSubagentPersistence } from '../../src/main/agents/wire-subagents';
+import { recoverSubagentPersistence } from '../../src/main/agents/subagent-persistence-recovery';
 import type { StreamEvent } from '../../src/main/llm/orchestrator';
 import { buildDelegateTool as buildDelegateToolRaw } from '../../src/main/tools/subagent/delegate';
 import { buildWaitTool as buildWaitToolRaw } from '../../src/main/tools/subagent/wait';
@@ -94,16 +91,14 @@ vi.mock('../../src/main/session/singleton', () => ({
 
 /**
  * The close tool flushes the closed flag through `recoverSubagentPersistence`
- * via a lazy `await import('../../agents/wire-subagents')` (same pattern as
+ * via a lazy `await import('../../agents/subagent-persistence-recovery')` (same pattern as
  * wait.ts). Spy on that entry point so the persistence-trigger test can assert
  * it fires. A plain factory (no `importOriginal`) is required: loading the real
  * module here pre-populates the module cache and the dependency's dynamic import
- * would bypass the mock. `persistSubagentChains` is the wait tool's legacy
- * fallback export — stub it too so the wait tests stay isolated from disk/IPC.
+ * would bypass the mock.
  */
-vi.mock('../../src/main/agents/wire-subagents', () => ({
+vi.mock('../../src/main/agents/subagent-persistence-recovery', () => ({
   recoverSubagentPersistence: vi.fn(),
-  persistSubagentChains: vi.fn(),
 }));
 
 const recoverSpy = vi.mocked(recoverSubagentPersistence);
@@ -960,7 +955,7 @@ describe('close_subagents', () => {
 
     await handler({ subagent_ids: [record.id] }, makeCtx(makeAgentMap()));
 
-    expect(recoverSpy).toHaveBeenCalledWith(sid);
+    expect(recoverSpy).toHaveBeenCalledWith(manager, sid);
   });
 
   it('does not trigger a persistence flush when nothing was closed', async () => {
@@ -978,7 +973,7 @@ describe('close_subagents', () => {
     const domain = storedDomain(record);
     // Confirming persistence evicts the runtime record to a lean summary.
     manager.confirmRecordsPersisted(sid, [record.id]);
-    expect(manager.getRecord(record.id)?._evicted).toBe(true);
+    expect(manager.isSummary(record.id)).toBe(true);
     setSession([domain]);
 
     const result = (await handler(
@@ -989,7 +984,7 @@ describe('close_subagents', () => {
     expect(result.canonical.status).toBe('complete');
     expect(outcomeValue(result).closed).toContain(record.id);
     const restored = manager.getRecord(record.id)!;
-    expect(restored._evicted).toBe(false);
+    expect(manager.isSummary(restored.id)).toBe(false);
     expect(restored.closed).toBe(true);
     expect(restored.state).toBe(SubagentState.COMPLETED);
   });
@@ -1034,7 +1029,7 @@ describe('close_subagents', () => {
     // A concurrent checkpoint evicts the record to a summary; durable storage
     // lost its row (e.g. corruption rebuild), so hydration cannot restore it.
     manager.confirmRecordsPersisted(sid, [record.id]);
-    expect(manager.getRecord(record.id)?._evicted).toBe(true);
+    expect(manager.isSummary(record.id)).toBe(true);
     setSession([]);
 
     const result = (await handler(
@@ -1117,7 +1112,7 @@ describe('answer_subagent', () => {
 
       expect(result.canonical.status).toBe('error');
       expect(result.agentProjection.content).toMatch(/main agent/i);
-      expect(manager.getRecord(id)?.pendingQuestion).not.toBeNull();
+      expect(manager.getPendingQuestion(id)).toBeDefined();
     } finally {
       manager.answerSubagentQuestion(id, 'tc-1', { type: 'declined' });
       await questionPromise;
@@ -1136,7 +1131,7 @@ describe('answer_subagent', () => {
 
       expect(result.canonical.status).toBe('error');
       expect(result.agentProjection.content).toContain('no pending question');
-      expect(manager.getRecord(id)?.pendingQuestion).not.toBeNull();
+      expect(manager.getPendingQuestion(id)).toBeDefined();
     } finally {
       manager.answerSubagentQuestion(id, 'tc-1', { type: 'declined' });
       await questionPromise;
@@ -1215,7 +1210,7 @@ describe('answer_subagent', () => {
 
     expect(result.canonical.status).toBe('error');
     expect(result.agentProjection.content).toContain('tc-stale');
-    expect(manager.getRecord(id)?.pendingQuestion?.toolCallId).toBe('tc-1');
+    expect(manager.getPendingQuestion(id)?.toolCallId).toBe('tc-1');
     manager.answerSubagentQuestion(id, 'tc-1', { type: 'declined' });
     await questionPromise;
   });
@@ -1369,14 +1364,14 @@ describe('hydrateSubagentRecords helper', () => {
 
     expect(result).toEqual({ hydrated: [id], agentMissing: [] });
     const record = manager.getRecord(id)!;
-    expect(record._evicted).toBe(false);
+    expect(manager.isSummary(record.id)).toBe(false);
     expect(record.state).toBe(SubagentState.COMPLETED);
     expect(record.label).toBe('persisted');
     expect(record.result).toBe('stored result');
     expect(record.chain?.messages.length).toBeGreaterThan(0);
-    // session.cwd wins over the turn cwd; windowId comes from the turn context.
-    expect(record.cwd).toBe('/tmp/session');
-    expect(record.windowId).toBe('win-9');
+    // Runtime records omit cwd and windowId because the manager owns execution affinity.
+    expect('cwd' in record).toBe(false);
+    expect('windowId' in record).toBe(false);
   });
 
   it('hydrates an evicted in-session summary back into a full record', async () => {
@@ -1386,14 +1381,14 @@ describe('hydrateSubagentRecords helper', () => {
     const domain = storedDomain(record);
     const messageCount = domain.chain.messages.length;
     manager.confirmRecordsPersisted(sid, [record.id]);
-    expect(manager.getRecord(record.id)?._evicted).toBe(true);
+    expect(manager.isSummary(record.id)).toBe(true);
     setSession([domain]);
 
     const result = await hydrateSubagentRecords(manager, sid, [record.id], makeCtx(agents));
 
     expect(result.hydrated).toEqual([record.id]);
     const restored = manager.getRecord(record.id)!;
-    expect(restored._evicted).toBe(false);
+    expect(manager.isSummary(restored.id)).toBe(false);
     expect(restored.chain?.messages.length).toBe(messageCount);
   });
 
@@ -1444,25 +1439,22 @@ describe('hydrateSubagentRecords helper', () => {
     persistSubagentChains(manager, sid);
     const writesBefore = synced.filter((r) => r.id === record.id).length;
     expect(writesBefore).toBe(1);
-    expect(manager.getRecord(record.id)?._evicted).toBe(true);
+    expect(manager.isSummary(record.id)).toBe(true);
 
     // Hydrate via the helper: materializes the record AND forgets the tracker entry.
     const result = await hydrateSubagentRecords(manager, sid, [record.id], makeCtx(agents));
     expect(result.hydrated).toEqual([record.id]);
-    expect(manager.getRecord(record.id)?._evicted).toBe(false);
+    expect(manager.isSummary(record.id)).toBe(false);
 
     // A dirtying mutation restarts the counter at 1; without the tracker reset
     // the revision gate (1 <= 1) would skip this record forever.
-    manager.getRecord(record.id)!.persistRevision += 1;
+    manager.close(record.id);
     persistSubagentChains(manager, sid);
 
     const writesAfter = synced.filter((r) => r.id === record.id).length;
     expect(writesAfter).toBe(writesBefore + 1);
   });
 
-  it('forgetSubagentPersistedRevision is a safe no-op for untracked sessions/ids', () => {
-    expect(() => forgetSubagentPersistedRevision('no-such-session', 'no-such-id')).not.toThrow();
-  });
 });
 
 // ── follow_up_subagent (U6) ──────────────────────────────────────────────────
@@ -1547,7 +1539,7 @@ describe('follow_up_subagent', () => {
     // R5: the chain is reopened with the follow-up message appended.
     const resumed = manager.getRecord(record.id)!;
     expect(resumed.state).toBe(SubagentState.PENDING);
-    expect(resumed.runCount).toBe(2);
+    expect(manager.getRunGeneration(resumed.id)).toBe(2);
     const messages = resumed.chain?.messages ?? [];
     expect(messages.length).toBeGreaterThan(0);
     expect(messages[messages.length - 1].role).toBe('user');
@@ -1570,9 +1562,9 @@ describe('follow_up_subagent', () => {
 
     expect(result.canonical.status).toBe('complete');
     const resumed = manager.getRecord(original.id)!;
-    expect(resumed._evicted).toBe(false);
+    expect(manager.isSummary(resumed.id)).toBe(false);
     expect(resumed.state).toBe(SubagentState.PENDING);
-    expect(resumed.runCount).toBe(2);
+    expect(manager.getRunGeneration(resumed.id)).toBe(2);
     const messages = resumed.chain?.messages ?? [];
     expect(messages[messages.length - 1].content).toBe('continue where you left off');
   });
@@ -1583,7 +1575,7 @@ describe('follow_up_subagent', () => {
     manager.markCompleted(record.id, 'first');
     const domain = storedDomain(record);
     manager.confirmRecordsPersisted(sid, [record.id]);
-    expect(manager.getRecord(record.id)?._evicted).toBe(true);
+    expect(manager.isSummary(record.id)).toBe(true);
     setSession([domain]);
 
     const result = (await handler(
@@ -1593,9 +1585,9 @@ describe('follow_up_subagent', () => {
 
     expect(result.canonical.status).toBe('complete');
     const restored = manager.getRecord(record.id)!;
-    expect(restored._evicted).toBe(false);
+    expect(manager.isSummary(restored.id)).toBe(false);
     expect(restored.state).toBe(SubagentState.PENDING);
-    expect(restored.runCount).toBe(2);
+    expect(manager.getRunGeneration(restored.id)).toBe(2);
   });
 
   it('parks the resumed run in the FIFO queue when admission is full', async () => {
@@ -1638,7 +1630,7 @@ describe('follow_up_subagent', () => {
     expect(result.canonical.status).toBe('error');
     expect(result.agentProjection.content).toContain('cannot follow up on a closed subagent');
     // The terminal record is left unmutated.
-    expect(manager.getRecord(record.id)?.runCount).toBe(1);
+    expect(manager.getRunGeneration(record.id)).toBe(1);
   });
 
   it('rejects a running subagent with wait/interrupt guidance', async () => {
@@ -1684,7 +1676,7 @@ describe('follow_up_subagent', () => {
     expect(result.canonical.status).toBe('error');
     expect(result.agentProjection.content).toContain('not found');
     expect(manager.getRecord(peer.id)?.state).toBe(SubagentState.COMPLETED);
-    expect(manager.getRecord(peer.id)?.runCount).toBe(1);
+    expect(manager.getRunGeneration(peer.id)).toBe(1);
   });
 
   it('reports a named error when the stored agent definition is missing', async () => {
@@ -1745,7 +1737,7 @@ describe('follow_up_subagent', () => {
     // A rejected resume leaves the terminal record completely unmutated.
     const untouched = manager.getRecord(target.id)!;
     expect(untouched.state).toBe(SubagentState.COMPLETED);
-    expect(untouched.runCount).toBe(1);
+    expect(manager.getRunGeneration(untouched.id)).toBe(1);
     expect(untouched.chain?.status).toBe('completed');
   });
 
@@ -1767,7 +1759,7 @@ describe('follow_up_subagent', () => {
     // Terminal on paper, but the run loop still owns the interruption boundary.
     expect(manager.cancelOne(record.id)).toBe(true);
     expect(record.state).toBe(SubagentState.INTERRUPTED);
-    expect(record._runPromise).not.toBeNull();
+    expect(manager.getRunPromise(record.id)).not.toBeNull();
 
     const result = (await handler(
       { subagent_id: record.id, input: 'again' },
@@ -1779,10 +1771,10 @@ describe('follow_up_subagent', () => {
     expect(result.agentProjection.content).toContain('retry');
     // Unmutated: no chain reopen, no run bump.
     const untouched = manager.getRecord(record.id)!;
-    expect(untouched.runCount).toBe(1);
+    expect(manager.getRunGeneration(untouched.id)).toBe(1);
     expect(untouched.chain?.messages.some((message) => message.content === 'again')).toBe(false);
 
     release();
-    await record._runPromise;
+    await manager.getRunPromise(record.id);
   });
 });

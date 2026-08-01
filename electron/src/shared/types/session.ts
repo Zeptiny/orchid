@@ -8,10 +8,14 @@ import {
   type ModelSelection,
 } from './provider';
 import type { Chain } from './chain';
-import { chainFromStorageDict, chainToStorageDict } from './chain';
 import type { Message } from './message';
 import type { SubagentRecord } from './subagent';
-import { subagentRecordFromStorageDict, subagentRecordToStorageDict } from './subagent';
+import {
+  chainFromStorageDict,
+  chainToStorageDict,
+  subagentRecordFromStorageDict,
+  subagentRecordToStorageDict,
+} from '../serialization/chain-subagent';
 import type { TodoStoreData } from './todo';
 import { todoStoreFromStorageDict, todoStoreToStorageDict } from './todo';
 import { PERMISSION_MODE_VALUES, type PermissionMode } from './permission';

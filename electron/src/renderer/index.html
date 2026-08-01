@@ -4,16 +4,26 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <link rel="icon" type="image/svg+xml" href="./assets/orchid-icon.svg" />
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link rel="stylesheet" href="/startup-shell.css" />
+    <link rel="stylesheet" href="./styles/index.css" />
     <link
       href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500..800&family=Instrument+Sans:ital,wght@0,400..700;1,400..700&family=JetBrains+Mono:wght@400..700&display=swap"
       rel="stylesheet"
+      media="print"
+      onload="this.media='all'"
     />
     <title>Orchid</title>
   </head>
   <body>
-    <div id="root"></div>
+    <div id="root">
+      <main class="startup-shell" aria-label="Starting Orchid">
+        <img class="startup-shell__icon" src="./assets/orchid-icon.svg" alt="" aria-hidden="true" />
+        <div>
+          <div class="startup-shell__name">Orchid</div>
+          <div class="startup-shell__status" role="status" aria-live="polite">Starting Orchid…</div>
+        </div>
+      </main>
+    </div>
     <script type="module" src="./main.tsx"></script>
   </body>
 </html>

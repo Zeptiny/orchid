@@ -4,16 +4,15 @@
  * Extracted so tools (wait) and wire-subagents can share the logic without a
  * circular import through tools ↔ wire-subagents.
  *
- * Records persist as one `subagent_chains` row per record; checkpoints upsert
- * only records whose `persistRevision` exceeds their last-persisted revision
- * (R7). The last-persisted bookkeeping updates only after the storage write
- * succeeds, so a rejected write keeps its records dirty for the next attempt.
+ * Records persist as one `subagent_chains` row per record. The manager owns
+ * checkpoint revisions and retention policy; this writer only serializes a
+ * captured candidate set, then confirms those exact candidates after storage
+ * succeeds.
  */
 import type { Session } from '../../shared/types/session';
 import type { SubagentRecord as DomainSubagentRecord } from '../../shared/types/subagent';
 import { getSessionManager } from '../session/singleton';
-import type { SubagentManager, SubagentRecord } from './manager';
-import { isTerminalSubagentState, runtimeToDomain } from './manager';
+import type { SubagentManager } from './manager';
 
 export interface PersistenceTimerApi {
   setTimeout: (callback: () => void, delay: number) => ReturnType<typeof setTimeout>;
@@ -202,45 +201,14 @@ export function createSubagentPersistenceScheduler(
   };
 }
 
-// ---------------------------------------------------------------------------
-// Dirty-record checkpoint (R7, R9)
-// ---------------------------------------------------------------------------
-
-/** Last persisted `persistRevision` per session, per subagent id. */
-const lastPersistedRevision = new Map<string, Map<string, number>>();
-
-/** Drop persistence bookkeeping for a deleted session. */
-export function clearSubagentPersistenceTracking(sessionId: string): void {
-  lastPersistedRevision.delete(sessionId);
-}
-
-/** Sessions with persistence bookkeeping; recovery must re-check all of them. */
-export function trackedSubagentPersistenceSessions(): string[] {
-  return [...lastPersistedRevision.keys()];
-}
-
-/**
- * Drop the last-persisted revision for a single subagent id (R12).
- *
- * Hydration restarts a record's `persistRevision` at 0, which is ≤ any stored
- * tracker entry, so every later revision-gated checkpoint
- * (`persistRevision <= tracker`) would skip the re-materialized record forever.
- * The tool-side hydrate helper calls this after a successful `manager.hydrate`
- * so the next dirty checkpoint writes the record. No-op when the session or id
- * is not tracked.
- */
-export function forgetSubagentPersistedRevision(sessionId: string, subagentId: string): void {
-  lastPersistedRevision.get(sessionId)?.delete(subagentId);
-}
-
 export interface PersistSubagentChainsOptions {
   /** Recovery flush: treat every record as dirty (missing-row contract). */
   recovery?: boolean;
 }
 
 /**
- * Group runtime records by `sessionId` and upsert only the records dirtied
- * since their last persisted `persistRevision` onto each owning session.
+ * Group runtime records by `sessionId` and upsert only manager-provided
+ * checkpoint candidates onto each owning session.
  *
  * A debounced flush after session switch must not write prior-session chains
  * into `getActive()`. Records without a sessionId fall back to the active
@@ -253,7 +221,8 @@ export function persistSubagentChains(
 ): void {
   const recovery = options.recovery === true;
   const sessionManager = getSessionManager();
-  const bySession = new Map<string, SubagentRecord[]>();
+  const sessions = new Set<string>();
+  const hasUnscoped = new Set<string>();
   let activeId: string | null | undefined;
 
   for (const record of manager.allRecords()) {
@@ -264,34 +233,19 @@ export function persistSubagentChains(
     }
     if (!sessionId) continue;
     if (onlySessionId && sessionId !== onlySessionId) continue;
-    const list = bySession.get(sessionId) ?? [];
-    list.push(record);
-    bySession.set(sessionId, list);
+    sessions.add(sessionId);
+    if (record.sessionId === null) hasUnscoped.add(sessionId);
   }
 
-  for (const [sessionId, records] of bySession) {
-    const tracker = lastPersistedRevision.get(sessionId);
-    const dirtyRecords: SubagentRecord[] = [];
-    for (const record of records) {
-      // Evicted terminal summaries were confirmed persisted at eviction time
-      // (that is the eviction precondition) and no longer hold their chain, so
-      // re-serializing one would clobber the full durable row with an empty
-      // chain. Skip them even under a recovery flush, which otherwise treats
-      // every record as dirty.
-      if (record._evicted) continue;
-      // `queued` is a runtime-only state: records parked in the queue — or
-      // cancelled before admission — never get a durable row. Durable
-      // eligibility begins at admission (`startedAt`). A resume-queued record
-      // (`_resumeQueued`) keeps its durable row so the reopened chain +
-      // follow-up message survive a crash while queued.
-      if (record.queuedAt !== null && record.startedAt === null && !record._resumeQueued) continue;
-      if (!recovery && record.persistRevision <= (tracker?.get(record.id) ?? -1)) continue;
-      dirtyRecords.push(record);
-    }
-    if (dirtyRecords.length === 0) continue;
+  for (const sessionId of sessions) {
+    const candidates = manager.checkpointCandidates(sessionId, {
+      recovery,
+      includeUnscoped: hasUnscoped.has(sessionId),
+    });
+    if (candidates.length === 0) continue;
 
     const domainRecords: DomainSubagentRecord[] =
-      dirtyRecords.map((record) => runtimeToDomain(record));
+      candidates.map(({ record }) => manager.toDomainRecord(record));
     const started = performance.now();
     let result: { session: Session | null; bytes: number };
     try {
@@ -304,18 +258,10 @@ export function persistSubagentChains(
       throw err;
     }
     if (!result.session) continue;
-    const next = tracker ?? new Map<string, number>();
-    for (const record of dirtyRecords) next.set(record.id, record.persistRevision);
-    lastPersistedRevision.set(sessionId, next);
-    const terminalIds = dirtyRecords
-      .filter((r) => isTerminalSubagentState(r.state))
-      .map((r) => r.id);
-    if (terminalIds.length > 0) {
-      manager.confirmRecordsPersisted(sessionId, terminalIds);
-    }
+    manager.confirmCheckpointCandidates(candidates);
     const durationMs = (performance.now() - started).toFixed(1);
     console.debug(
-      `[subagents] checkpoint session=${sessionId} records=${dirtyRecords.length} ` +
+      `[subagents] checkpoint session=${sessionId} records=${candidates.length} ` +
         `bytes=${result.bytes} durationMs=${durationMs}${recovery ? ' (recovery)' : ''}`,
     );
   }

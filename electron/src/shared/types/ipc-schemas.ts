@@ -6,11 +6,48 @@
 import { z } from 'zod';
 import { contextSnapshotSchema } from './message';
 import { subagentStatusSchema } from './subagent';
+import { STARTUP_STEP_DEFINITIONS, type StartupStepId } from './ipc-boundary';
+import { toolCallSchema } from './tool';
 import {
   canonicalToolResultSchema,
   terminalToolResultStatusSchema,
   toolExecutionResultSchema,
 } from './tool-result';
+
+// ── Startup ─────────────────────────────────────────────────────────────────
+
+const startupStepIds = STARTUP_STEP_DEFINITIONS.map(({ id }) => id) as [
+  StartupStepId,
+  ...StartupStepId[],
+];
+
+const startupStepSchema = z.object({
+  id: z.enum(startupStepIds),
+  label: z.string(),
+  state: z.enum(['pending', 'active', 'complete', 'skipped', 'warning', 'failed']),
+  durationMs: z.number().nonnegative().nullable(),
+});
+
+export const startupSnapshotSchema = z.object({
+  revision: z.number().int().nonnegative(),
+  phase: z.enum(['starting', 'ready', 'degraded', 'failed']),
+  steps: z.array(startupStepSchema).length(STARTUP_STEP_DEFINITIONS.length),
+}).superRefine((snapshot, ctx) => {
+  snapshot.steps.forEach((step, index) => {
+    const expectedStep = STARTUP_STEP_DEFINITIONS[index];
+    if (!expectedStep || step.id !== expectedStep.id) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['steps', index, 'id'], message: 'Startup steps must preserve their fixed order' });
+    }
+    if (!expectedStep || step.label !== expectedStep.label) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['steps', index, 'label'], message: 'Startup step labels must be fixed' });
+    }
+  });
+});
+
+export const startupContinueDegradedResultSchema = z.object({
+  ok: z.boolean(),
+  snapshot: startupSnapshotSchema,
+});
 
 // ── Shared fragments ─────────────────────────────────────────────────────────
 
@@ -27,6 +64,23 @@ const usageSchema = z.object({
   cached_tokens: z.number().nonnegative(),
   context: contextSnapshotSchema.optional(),
 });
+
+/** Durable messages are terminal-history authority, so validate their full shape. */
+const messageSchema = z.object({
+  id: z.string().min(1),
+  role: z.enum(['user', 'assistant', 'system', 'tool']),
+  content: z.string(),
+  type: z.enum(['text', 'thinking', 'tool_call', 'tool_result', 'error']),
+  tool_calls: z.array(toolCallSchema).nullable(),
+  tool_call_id: z.string().nullable(),
+  name: z.string().nullable(),
+  thinking: z.string().nullable(),
+  timestamp: z.string().datetime({ offset: true }),
+  usage: usageSchema.nullable(),
+  hidden: z.boolean(),
+  excludeFromModel: z.boolean().optional(),
+  tool_result: canonicalToolResultSchema.nullable(),
+}).strict();
 
 // ── Chat events ──────────────────────────────────────────────────────────────
 
@@ -52,6 +106,7 @@ export const chatStateEventSchema = chatEventIdentitySchema.extend({
 export const chatDoneEventSchema = chatEventIdentitySchema.extend({
   type: z.literal('done'),
   response: z.string(),
+  messages: z.array(messageSchema),
   interrupted: z.boolean().optional(),
   usage: usageSchema.nullable().optional(),
 });
@@ -59,6 +114,7 @@ export const chatDoneEventSchema = chatEventIdentitySchema.extend({
 export const chatErrorEventSchema = chatEventIdentitySchema.extend({
   type: z.literal('error'),
   error: z.string(),
+  messages: z.array(messageSchema),
   title: z.string().optional(),
   kind: z.enum(['stream', 'rate-limit', 'auth', 'generic']).optional(),
 });

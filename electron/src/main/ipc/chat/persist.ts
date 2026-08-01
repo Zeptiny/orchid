@@ -6,7 +6,8 @@ import { MessageRole, MessageType } from '../../../shared/types/message';
 import type { Message, Usage } from '../../../shared/types/message';
 import { ChainStatus } from '../../../shared/types/chain';
 import { IPC_CHANNELS } from '../../../shared/types/ipc';
-import { flattenSessionMessages, getSessionManager } from '../session';
+import { flattenSessionMessages } from '../../../shared/types/session';
+import { getSessionManager } from '../../session/singleton';
 import { setChatHistory } from '../chat-history';
 import {
   makeAssistantMessage,

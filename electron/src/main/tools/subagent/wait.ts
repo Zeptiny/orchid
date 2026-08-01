@@ -64,14 +64,15 @@ function formatPendingQuestion(pending: {
     questionBlocks + '</pending_question>';
 }
 
-function formatRecordXml(sid: string, record: SubagentRecord): string {
+function formatRecordXml(manager: SubagentManager, sid: string, record: SubagentRecord): string {
   const elapsed = record.endTime !== null
     ? record.endTime - record.startTime
     : record.startTime
       ? Date.now() - record.startTime
       : null;
 
-  const status = record.pendingQuestion ? 'question_pending' : record.state;
+  const pendingQuestion = manager.getPendingQuestion(sid);
+  const status = pendingQuestion ? 'question_pending' : record.state;
 
   const attrs =
     'id="' + escapeXmlAttribute(sid) +
@@ -84,9 +85,9 @@ function formatRecordXml(sid: string, record: SubagentRecord): string {
   // tool-call args (message history) and is re-injected every turn via the
   // dynamic system prompt's <subagents> section. Re-sending it here would
   // duplicate it on every wait call.
-  if (record.pendingQuestion) {
+  if (pendingQuestion) {
     return '<subagent ' + attrs + '>' +
-      formatPendingQuestion(record.pendingQuestion) + '</subagent>';
+      formatPendingQuestion(pendingQuestion) + '</subagent>';
   }
   if (record.result) {
     return '<subagent ' + attrs + '>' +
@@ -100,12 +101,13 @@ function formatRecordXml(sid: string, record: SubagentRecord): string {
 }
 
 function formatSubagentRecords(
+  manager: SubagentManager,
   records: Map<string, SubagentRecord>,
   subagentIds: string[],
 ): string {
   const parts: string[] = [];
   for (const [sid, record] of records) {
-    parts.push(formatRecordXml(sid, record));
+    parts.push(formatRecordXml(manager, sid, record));
   }
   const foundIds = new Set(records.keys());
   const missing = subagentIds.filter((id) => !foundIds.has(id));
@@ -187,7 +189,7 @@ export function buildWaitTool(
           const record = manager.getRecord(id);
           if (record) partialRecords.set(id, record);
         }
-        const xml = formatSubagentRecords(partialRecords, subagent_ids);
+        const xml = formatSubagentRecords(manager, partialRecords, subagent_ids);
         const timeoutNotice =
           '\n<timeout>' + escapeXmlText(err.message) + '</timeout>';
         return genericBuiltInToolOutcome(
@@ -208,7 +210,7 @@ export function buildWaitTool(
     // terminal result too. Route that through the scheduler's recovery entry
     // point so an earlier degraded checkpoint gets one deliberate retry.
     try {
-      const { recoverSubagentPersistence, persistSubagentChains } = await import('../../agents/wire-subagents.js');
+      const { recoverSubagentPersistence } = await import('../../agents/subagent-persistence-recovery.js');
       const sessionIds = new Set(
         [...records.values()]
           .map((record) => record.sessionId)
@@ -216,9 +218,9 @@ export function buildWaitTool(
       );
       if (sessionIds.size === 0) {
         // Preserve the legacy fallback for records created without an owner.
-        persistSubagentChains(manager);
+        recoverSubagentPersistence(manager);
       } else {
-        for (const sessionId of sessionIds) recoverSubagentPersistence(sessionId);
+        for (const sessionId of sessionIds) recoverSubagentPersistence(manager, sessionId);
       }
     } catch {
       // Non-fatal — UI can still read in-memory state on next refresh
@@ -229,7 +231,7 @@ export function buildWaitTool(
       return genericBuiltInToolOutcome('wait_for_subagent', `No subagents found for IDs: ${subagent_ids.join(', ')}`, 'empty');
     }
 
-    const content = formatSubagentRecords(records, subagent_ids);
+    const content = formatSubagentRecords(manager, records, subagent_ids);
     return genericBuiltInToolOutcome('wait_for_subagent', content, 'complete');
   };
 

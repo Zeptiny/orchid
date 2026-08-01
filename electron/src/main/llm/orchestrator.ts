@@ -28,9 +28,8 @@
  * fallback path (when fullStream is unavailable). Drain of pending is deduped
  * by toolCallId so the same call/result is never yielded twice.
  */
-import { createHash } from 'node:crypto';
-import type { AssistantContent, ModelMessage, Tool } from 'ai';
-import { getErrorMessage, type LanguageModelV4 } from '@ai-sdk/provider';
+import type { ModelMessage, Tool } from 'ai';
+import type { LanguageModelV4 } from '@ai-sdk/provider';
 import { jsonSchema } from '@ai-sdk/provider-utils';
 import type { Message, Usage } from '../../shared/types/message';
 import type { Agent } from '../../shared/types/agent';
@@ -41,16 +40,20 @@ import { ToolRegistry as ToolRegistryClass } from '../tools/registry';
 import type { MCPManager } from '../mcp/manager';
 import type { ProjectRuntime } from '../project/runtime';
 import { toApiMessages } from './history';
+import { toModelMessages } from './model-messages';
 import {
   executeToolCall,
   type ToolDispatchOptions,
 } from './tool-dispatch';
 import { EagerToolExecutor } from './eager-tool-executor';
+import { StreamAttemptController } from './stream/attempt-controller';
 import {
-  finalizeToolExecutionResult,
-  genericAgentProjector,
-  parseToolExecutionResult,
-} from '../tools/result';
+  EagerToolBridge,
+} from './stream/eager-tool-bridge';
+import { NormalizedStream } from './stream/normalized-stream';
+import { classifyStreamError, toProviderMcpToolName } from './stream/sdk-event-adapter';
+import type { ProviderStepUsage } from './stream/sdk-event-adapter';
+import type { StreamEvent } from './stream/events';
 import { buildSystemPrompt, type SystemPromptContext } from './system-prompt';
 import { createMiddlewareStack } from './middleware/index';
 import type { ProviderAttemptAccountingContext } from '../providers/accounting/middleware';
@@ -59,65 +62,14 @@ import { createContextSnapshotBuilder } from './context-snapshot';
 import { importESM } from '../utils/esm-import';
 import { buildSkillTool } from '../tools/skill/skill';
 import { getSkillsRegistry } from '../tools';
-import {
-  createCanonicalToolResult,
-  type ToolExecutionResult,
-} from '../../shared/types/tool-result';
-
-const PROVIDER_TOOL_NAME_MAX_LENGTH = 64;
-const PROVIDER_TOOL_NAME_HASH_LENGTH = 16;
-
-/**
- * Convert an internal MCP tool identity into the conservative function-name
- * grammar shared by OpenAI-compatible and other providers. The hash preserves
- * uniqueness when different names sanitize to the same prefix.
- */
-function toProviderMcpToolName(internalName: string): string {
-  const safePrefix = internalName
-    .replace(/[^A-Za-z0-9_-]+/g, '_')
-    .replace(/^_+|_+$/g, '') || 'mcp_tool';
-  const hash = createHash('sha256')
-    .update(internalName)
-    .digest('hex')
-    .slice(0, PROVIDER_TOOL_NAME_HASH_LENGTH);
-  const prefixLength = PROVIDER_TOOL_NAME_MAX_LENGTH - hash.length - 1;
-
-  return `${safePrefix.slice(0, prefixLength)}_${hash}`;
-}
-
-function toInternalToolName(
-  toolName: string,
-  mcpManager: MCPManager | null,
-): string {
-  if (!mcpManager || toolName.startsWith('mcp::')) return toolName;
-  const match = mcpManager.getTools().find(
-    ({ definition }) => toProviderMcpToolName(definition.name) === toolName,
-  );
-  return match?.definition.name ?? toolName;
-}
+import type { ToolExecutionResult } from '../../shared/types/tool-result';
 
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
 
 /** Events yielded by the orchestrator's async generator. */
-export type StreamEvent =
-  | { type: 'thinking'; text: string }
-  | { type: 'content'; text: string }
-  | { type: 'tool_call'; toolCallId: string; toolName: string; args: string }
-  | { type: 'tool_call_start'; toolCallId: string; toolName: string }
-  | { type: 'tool_call_delta'; toolCallId: string; argsDelta: string }
-  | {
-      type: 'tool_result';
-      toolCallId: string;
-      content: string;
-      /** Raw canonical execution retained by Orchid; U3 transports it durably. */
-      execution: ToolExecutionResult;
-    }
-  | { type: 'usage'; usage: Usage }
-  | { type: 'error'; title: string; detail: string }
-  | { type: 'step_finish'; stepIndex: number; finishReason: string }
-  | { type: 'finish'; finishReason: string };
+export type { StreamEvent } from './stream/events';
 
 /** Parameters for the stream orchestrator. */
 export interface StreamChatParams {
@@ -163,13 +115,6 @@ export interface StreamChatParams {
   providerOptions?: ReasoningProviderOptions;
 }
 
-interface ProviderStepUsage {
-  inputTokens?: number;
-  inputTokenDetails?: { cacheReadTokens?: number };
-  outputTokens?: number;
-  totalTokens?: number;
-}
-
 function buildStepUsage(
   usage: ProviderStepUsage,
   messages: readonly ModelMessage[],
@@ -187,143 +132,6 @@ function buildStepUsage(
       inputTokens,
       outputTokens,
     }),
-  };
-}
-
-/** Pending tool call captured from onStepFinish (textStream fallback / safety net). */
-export type PendingToolCall = {
-  toolCallId: string;
-  toolName: string;
-  args: string;
-};
-
-/** Pending tool result captured from onStepFinish (textStream fallback / safety net). */
-export type PendingToolResult = {
-  toolCallId: string;
-  content: string;
-  execution: ToolExecutionResult;
-};
-
-/**
- * Drain pending tool events from onStepFinish, skipping any toolCallId already
- * emitted from fullStream. Prevents double-yield when both sources report the
- * same tool call/result (P1-20).
- *
- * Mutates `pending*` (shift) and `seen*` (add). Exported for unit tests.
- */
-export function* drainPendingToolEvents(
-  pendingToolCalls: PendingToolCall[],
-  pendingToolResults: PendingToolResult[],
-  seenToolCallIds: Set<string>,
-  seenToolResultIds: Set<string>,
-): Generator<Extract<StreamEvent, { type: 'tool_call' | 'tool_result' }>> {
-  while (pendingToolCalls.length > 0) {
-    const tc = pendingToolCalls.shift()!;
-    if (seenToolCallIds.has(tc.toolCallId)) continue;
-    seenToolCallIds.add(tc.toolCallId);
-    yield { type: 'tool_call', ...tc };
-  }
-  while (pendingToolResults.length > 0) {
-    const tr = pendingToolResults.shift()!;
-    if (seenToolResultIds.has(tr.toolCallId)) continue;
-    seenToolResultIds.add(tr.toolCallId);
-    yield { type: 'tool_result', ...tr };
-  }
-}
-
-/** Build one exact-projection generic terminal execution at an SDK boundary. */
-function genericSdkExecution(
-  toolName: string,
-  content: string,
-  options: {
-    status?: 'complete' | 'empty' | 'error' | 'cancelled';
-    errorCode?: string;
-    originKind?: 'built-in' | 'dynamic' | 'mcp';
-  } = {},
-): ToolExecutionResult {
-  const status = options.status ?? (content.length === 0 ? 'empty' : 'complete');
-  const data = {
-    value: content,
-    origin: {
-      kind: options.originKind ?? 'built-in',
-      name: toolName || 'unknown',
-    },
-  } as const;
-  const canonical = status === 'error'
-    ? createCanonicalToolResult('generic', {
-        status,
-        data,
-        error: {
-          code: options.errorCode ?? 'sdk_tool_error',
-          message: content,
-        },
-      })
-    : createCanonicalToolResult('generic', { status, data });
-
-  return finalizeToolExecutionResult({
-    canonical,
-    toolName,
-    expectedFamily: 'generic',
-    projector: genericAgentProjector,
-  }) as ToolExecutionResult;
-}
-
-/**
- * Validate the raw AI SDK execution wrapper. Provider stream parts must carry
- * the canonical execution wrapper; malformed values become explicit generic
- * errors rather than being interpreted as a legacy content result.
- */
-function executionFromSdkOutput(
-  raw: unknown,
-  toolName: string = 'unknown',
-): ToolExecutionResult {
-  try {
-    const execution = parseToolExecutionResult(raw);
-    return execution;
-  } catch {
-    if (
-      raw != null &&
-      typeof raw === 'object' &&
-      !Array.isArray(raw) &&
-      ('canonical' in raw || 'agentProjection' in raw)
-    ) {
-      return genericSdkExecution(
-        toolName,
-        `Tool '${toolName}' returned an invalid execution result.`,
-        { status: 'error', errorCode: 'invalid_tool_result' },
-      );
-    }
-  }
-
-  return genericSdkExecution(
-    toolName,
-    `Tool '${toolName}' returned an invalid execution result.`,
-    { status: 'error', errorCode: 'invalid_tool_result' },
-  );
-}
-
-function sdkPreExecutionError(
-  part: Record<string, unknown>,
-  mcpManager: MCPManager | null = null,
-): ToolExecutionResult {
-  const content = typeof part.errorText === 'string'
-    ? part.errorText
-    : getErrorMessage(part.error ?? 'Tool failed');
-  const providerToolName = typeof part.toolName === 'string' ? part.toolName : 'unknown';
-  const toolName = toInternalToolName(providerToolName, mcpManager);
-  return genericSdkExecution(toolName, content, {
-    status: 'error',
-    errorCode: 'sdk_tool_error',
-  });
-}
-
-function streamResultFields(execution: ToolExecutionResult): Pick<
-  PendingToolResult,
-  'content' | 'execution'
-> {
-  return {
-    content: execution.agentProjection.content,
-    execution,
   };
 }
 
@@ -373,87 +181,8 @@ export async function* streamChat(params: StreamChatParams): AsyncGenerator<Stre
   // ── Convert history to API messages ──
   const historyMessages = toApiMessages(messages);
 
-  // ── Build CoreMessage array ──
-  const coreMessages: ModelMessage[] = [];
-
-  for (const msg of historyMessages) {
-    if (msg.role === 'system') {
-      // System messages are handled by the `system` param in streamText
-      continue;
-    }
-    if (msg.role === 'assistant') {
-      // Handle content that may be a string or an array with reasoning parts
-      const contentArray = Array.isArray(msg.content)
-        ? msg.content.map((part) => {
-            if (part.type === 'reasoning') {
-              return { type: 'reasoning' as const, text: part.text };
-            }
-            return { type: 'text' as const, text: part.text };
-          })
-        : msg.content
-          ? [{ type: 'text' as const, text: msg.content }]
-          : [];
-
-      const content: AssistantContent = msg.tool_calls
-        ? [
-            ...contentArray,
-            ...msg.tool_calls.flatMap((tc) => {
-              let input: unknown;
-              try {
-                input = JSON.parse(tc.function.arguments);
-              } catch {
-                return [];
-              }
-              return [
-                {
-                  type: 'tool-call' as const,
-                  toolCallId: tc.id,
-                  toolName: tc.function.name,
-                  input,
-                },
-              ];
-            }),
-          ]
-        : contentArray.length === 1 && contentArray[0].type === 'text'
-          ? contentArray[0].text
-          : contentArray.length > 0
-            ? contentArray
-            : '';
-      coreMessages.push({ role: 'assistant', content });
-    } else if (msg.role === 'tool') {
-      // Extract text content for tool results
-      const textContent = typeof msg.content === 'string'
-        ? msg.content
-        : Array.isArray(msg.content)
-          ? msg.content.filter((p) => p.type === 'text').map((p) => p.text).join('')
-          : '';
-      // For tool results, we need the tool name from the original tool call.
-      // Since we don't store it on the message, use 'unknown' — AI SDK
-      // matches by toolCallId, not toolName.
-      coreMessages.push({
-        role: 'tool',
-        content: [
-          {
-            type: 'tool-result' as const,
-            toolCallId: msg.tool_call_id!,
-            toolName: 'unknown',
-            output: { type: 'text', value: textContent },
-          },
-        ],
-      });
-    } else if (msg.role === 'user') {
-      // Extract text content for user messages
-      const textContent = typeof msg.content === 'string'
-        ? msg.content
-        : Array.isArray(msg.content)
-          ? msg.content.filter((p) => p.type === 'text').map((p) => p.text).join('')
-          : '';
-      coreMessages.push({
-        role: 'user',
-        content: textContent,
-      });
-    }
-  }
+  // System messages are handled by the `system` param in streamText.
+  const coreMessages = toModelMessages(historyMessages);
 
   // ── Filter and build tools ──
   // Freeze session cwd from prompt context so tools match the turn's workspace.
@@ -462,27 +191,6 @@ export async function* streamChat(params: StreamChatParams): AsyncGenerator<Stre
   const triggeringMessage = typeof lastUserMessage?.content === 'string'
     ? lastUserMessage.content
     : '';
-
-  // Eager execution: tools start as soon as their input is streamed, before the
-  // model finishes the step. The executor lives across idle-retry attempts;
-  // toolCallIds are unique, so stale in-flight entries never collide.
-  const eagerExecutor = new EagerToolExecutor();
-  const tools = buildToolMap(agent.allowed_tools, registry, mcpManager, {
-    sessionId,
-    windowId,
-    timeoutSeconds: config.command_timeout,
-    cwd: context.cwd,
-    agentScopeId,
-    projectRuntime,
-    abortSignal,
-    triggeringMessage,
-  }, {
-    skills: projectRuntime
-      ? new Map(projectRuntime.skills)
-      : getSkillsRegistry(),
-    allowedSkills: agent.allowed_skills,
-  }, eagerExecutor);
-  const buildUsageContext = createContextSnapshotBuilder(fullSystemPrompt, tools);
 
   // ── Compose middleware ──
   const middleware = createMiddlewareStack({
@@ -508,165 +216,49 @@ export async function* streamChat(params: StreamChatParams): AsyncGenerator<Stre
   const maxIdleAttempts = Math.max(1, (config.llm_stream_retries ?? 0) + 1);
 
   for (let idleAttempt = 0; idleAttempt < maxIdleAttempts; idleAttempt++) {
-    const idleController = new AbortController();
-    let idleTimer: ReturnType<typeof setTimeout> | null = null;
-    let idleTimedOut = false;
-    let deliveredAny = false;
-    let toolsInFlight = 0;
-
-    const clearIdleTimer = (): void => {
-      if (idleTimer !== null) {
-        clearTimeout(idleTimer);
-        idleTimer = null;
-      }
-    };
-    /** Arm/reset idle only when waiting on the model (not while tools run). */
-    const armIdleTimer = (): void => {
-      clearIdleTimer();
-      if (toolsInFlight > 0) return;
-      idleTimer = setTimeout(() => {
-        idleTimedOut = true;
-        idleController.abort();
-      }, idleTimeoutMs);
-    };
-    const pauseIdleForTool = (): void => {
-      toolsInFlight += 1;
-      clearIdleTimer();
-    };
-    const resumeIdleAfterTool = (): void => {
-      toolsInFlight = Math.max(0, toolsInFlight - 1);
-      if (toolsInFlight === 0) {
-        armIdleTimer();
-      }
-    };
-
-    armIdleTimer();
-    const { signal: combinedAbort, dispose: disposeAbortMerge } = combineAbortSignals(
+    // Eager memoization is attempt-scoped so an idle retry cannot reuse a stale
+    // execution from the provider call it replaces.
+    const eagerExecutor = new EagerToolExecutor();
+    const tools = buildToolMap(agent.allowed_tools, registry, mcpManager, {
+      sessionId,
+      windowId,
+      timeoutSeconds: config.command_timeout,
+      cwd: context.cwd,
+      agentScopeId,
+      projectRuntime,
       abortSignal,
-      idleController.signal,
-    );
+      triggeringMessage,
+    }, {
+      skills: projectRuntime
+        ? new Map(projectRuntime.skills)
+        : getSkillsRegistry(),
+      allowedSkills: agent.allowed_skills,
+    }, eagerExecutor);
+    const buildUsageContext = createContextSnapshotBuilder(fullSystemPrompt, tools);
+    const attempt = new StreamAttemptController({
+      userAbortSignal: abortSignal,
+      idleTimeoutMs,
+    });
+    attempt.armIdleTimer();
 
-    // Pending tool events (textStream fallback / safety net)
-    const pendingToolCalls: PendingToolCall[] = [];
-    const pendingToolResults: PendingToolResult[] = [];
-    const seenToolCallIds = new Set<string>();
-    const seenToolResultIds = new Set<string>();
-    // Eager execution. The AI SDK emits each tool's input parts
-    // (tool-input-start/delta/end, then the validated tool-input-available)
-    // incrementally as the model streams, but defers actually RUNNING the tool
-    // until model-call-end (Promise.all). To overlap execution with the
-    // generation of subsequent tool calls, we reconstruct "input complete"
-    // ourselves: accumulate tool-input-delta text per tool and launch it when
-    // tool-input-end fires (or when the next tool / text begins, as a backstop).
-    // The tool-input-available case below also eager-starts via the same
-    // idempotent getOrStart, so whichever signal arrives first wins and the
-    // SDK's deferred execute becomes a no-op await for already-started tools.
-    const pendingToolInputs = new Map<string, { toolName: string; text: string }>();
-    let activeToolInputId: string | null = null;
-    // Early UI events for eagerly-started tools, drained into the stream so the
-    // renderer sees `running` / `completed` transitions as they actually happen
-    // rather than in the SDK's batched step-end burst.
-    const eagerStarts: Array<{ toolCallId: string; toolName: string; args: string }> = [];
-    const eagerCompletions: Array<{ toolCallId: string; execution: ToolExecutionResult }> = [];
-    const finalizeToolInput = (toolCallId: string): void => {
-      const pending = pendingToolInputs.get(toolCallId);
-      if (!pending) return;
-      pendingToolInputs.delete(toolCallId);
-      if (activeToolInputId === toolCallId) activeToolInputId = null;
-      let input: unknown;
-      try {
-        input = JSON.parse(pending.text);
-      } catch {
-        // Incomplete/invalid JSON — the SDK's `tool-call` path will handle it.
-        return;
-      }
-      // Pass the per-attempt combined (user + idle) abort signal so an idle
-      // timeout or turn death aborts the eagerly-running tool, matching the
-      // SDK `execute` path (which derives its per-call signal from the same
-      // combined signal).
-      const promise = eagerExecutor.getOrStart(
-        toolCallId,
-        pending.toolName,
-        input,
-        combinedAbort,
-      );
-      if (!promise) return; // no launcher / invalid input — the SDK path handles it
-      // The eager tool is now running: pause the idle watchdog for its duration
-      // so a quiet model tail can't spuriously abort a legitimately-running tool
-      // (the SDK only pauses idle at model-call-end, which the delta path beats).
-      // The matching resume fires when the run settles, independent of the
-      // seenToolResultIds UI dedup below.
-      pauseIdleForTool();
-      eagerStarts.push({
-        toolCallId,
-        toolName: pending.toolName,
-        args: stringifyToolInput(input),
-      });
-      promise
-        .then((execution) => {
-          eagerCompletions.push({ toolCallId, execution });
-        })
-        .catch(() => {
-          // executeToolCall resolves to terminal executions rather than rejecting.
-        })
-        .finally(() => resumeIdleAfterTool());
-    };
-    /** Finalize the currently-streaming tool when an input boundary is reached. */
-    const flushActiveToolInput = (): void => {
-      if (activeToolInputId) finalizeToolInput(activeToolInputId);
-    };
-    const drainEagerStarts = function* (): Generator<StreamEvent> {
-      while (eagerStarts.length > 0) {
-        const start = eagerStarts.shift()!;
-        if (seenToolCallIds.has(start.toolCallId)) continue;
-        seenToolCallIds.add(start.toolCallId);
-        deliveredAny = true;
-        yield {
-          type: 'tool_call',
-          toolCallId: start.toolCallId,
-          toolName: start.toolName,
-          args: start.args,
-        };
-      }
-    };
-    const drainEagerCompletions = function* (): Generator<StreamEvent> {
-      while (eagerCompletions.length > 0) {
-        const completion = eagerCompletions.shift()!;
-        if (seenToolResultIds.has(completion.toolCallId)) continue;
-        seenToolResultIds.add(completion.toolCallId);
-        deliveredAny = true;
-        yield {
-          type: 'tool_result',
-          toolCallId: completion.toolCallId,
-          ...streamResultFields(completion.execution),
-        };
-      }
-    };
-    const pendingUsageEvents: Usage[] = [];
-    let currentStepMessages: readonly ModelMessage[] = coreMessages;
-    let stepIndex = 0;
-    let usedFullStream = false;
-    let pendingStepEventsSignaled = false;
-    let resolvePendingStepEvents: (() => void) | null = null;
-
-    const notifyPendingStepEvents = (): void => {
-      if (pendingStepEventsSignaled) return;
-      pendingStepEventsSignaled = true;
-      resolvePendingStepEvents?.();
-      resolvePendingStepEvents = null;
-    };
-    const waitForPendingStepEvents = (): Promise<void> => {
-      if (pendingStepEventsSignaled) {
-        pendingStepEventsSignaled = false;
-        return Promise.resolve();
-      }
-      return new Promise((resolve) => {
-        resolvePendingStepEvents = () => {
-          pendingStepEventsSignaled = false;
-          resolve();
-        };
-      });
-    };
+    const eagerBridge = new EagerToolBridge({
+      eager: eagerExecutor,
+      abortSignal: attempt.signal,
+      pauseIdleForTool: () => attempt.pauseIdleForTool(),
+      resumeIdleAfterTool: () => attempt.resumeIdleAfterTool(),
+      markDeliveredOutput: () => attempt.markDeliveredOutput(),
+    });
+    const normalizedStream = new NormalizedStream({
+      coreMessages,
+      mcpManager,
+      attempt,
+      eagerBridge,
+      buildUsage: (usage, stepMessages) => buildStepUsage(
+        usage,
+        stepMessages,
+        buildUsageContext,
+      ),
+    });
 
     // Stop at the step-count limit OR when an early stop is requested (e.g. a
     // queued "next-request" message). Without a predicate the step-count
@@ -685,415 +277,18 @@ export async function* streamChat(params: StreamChatParams): AsyncGenerator<Stre
       include: { requestMessages: true },
       tools: Object.keys(tools).length > 0 ? tools : undefined,
       stopWhen,
-      abortSignal: combinedAbort,
+      abortSignal: attempt.signal,
       // Retry ownership belongs to Orchid's accounting-aware middleware.
       maxRetries: 0,
       providerOptions,
-      onStepFinish: async ({ usage, request, toolCalls, toolResults, content }) => {
-        if (usage && !usedFullStream) {
-          pendingUsageEvents.push(buildStepUsage(
-            usage,
-            request?.messages ?? coreMessages,
-            buildUsageContext,
-          ));
-        }
-        if (toolCalls) {
-          for (const tc of toolCalls as Array<{ toolCallId: string; toolName: string; input?: unknown }>) {
-            pendingToolCalls.push({
-              toolCallId: tc.toolCallId,
-              toolName: toInternalToolName(tc.toolName, mcpManager),
-              args: stringifyToolInput(tc.input),
-            });
-          }
-        }
-        if (toolResults) {
-          for (const tr of toolResults as Array<{
-            toolCallId: string;
-            output?: unknown;
-            result?: unknown;
-            error?: unknown;
-          }>) {
-            const raw = tr.output ?? tr.result ?? tr.error ?? '';
-            const execution = tr.error != null && tr.output == null && tr.result == null
-              ? genericSdkExecution('unknown', getErrorMessage(tr.error), {
-                  status: 'error',
-                  errorCode: 'sdk_tool_error',
-                })
-              : executionFromSdkOutput(
-                  raw,
-                  'unknown',
-                );
-            pendingToolResults.push({
-              toolCallId: tr.toolCallId,
-              ...streamResultFields(execution),
-            });
-          }
-        }
-        if (content) {
-          for (const rawPart of content as Array<Record<string, unknown>>) {
-            const type = String(rawPart.type ?? '');
-            if (type !== 'tool-error' && type !== 'tool-input-error') continue;
-            const toolCallId = streamToolCallId(rawPart);
-            if (!toolCallId) continue;
-            const execution = sdkPreExecutionError(rawPart, mcpManager);
-            pendingToolResults.push({
-              toolCallId,
-              ...streamResultFields(execution),
-            });
-          }
-        }
-        if (
-          !usedFullStream &&
-          (pendingUsageEvents.length > 0 ||
-            pendingToolCalls.length > 0 ||
-            pendingToolResults.length > 0)
-        ) {
-          notifyPendingStepEvents();
-        }
-      },
+      onStepFinish: normalizedStream.onStepFinish,
     });
 
     try {
-      try {
-        for await (const chunk of result.fullStream) {
-          if (!usedFullStream) {
-            usedFullStream = true;
-            pendingUsageEvents.length = 0;
-          }
-          const part = chunk as Record<string, unknown>;
-          const partType = String(part.type ?? '');
-
-          switch (partType) {
-            case 'start-step': {
-              const request = part.request as { messages?: readonly ModelMessage[] } | undefined;
-              currentStepMessages = request?.messages ?? coreMessages;
-              break;
-            }
-
-            case 'finish-step': {
-              // Backstop: finalize any tool still pending at step end.
-              flushActiveToolInput();
-              yield {
-                type: 'usage',
-                usage: buildStepUsage(
-                  (part.usage ?? {}) as ProviderStepUsage,
-                  currentStepMessages,
-                  buildUsageContext,
-                ),
-              };
-              yield {
-                type: 'step_finish',
-                stepIndex,
-                finishReason:
-                  typeof part.finishReason === 'string'
-                    ? part.finishReason
-                    : 'unknown',
-              };
-              stepIndex += 1;
-              break;
-            }
-
-            case 'text-delta': {
-              armIdleTimer();
-              // Model resumed text after tool inputs → finalize any pending tool.
-              flushActiveToolInput();
-              const text =
-                typeof part.text === 'string'
-                  ? part.text
-                  : typeof part.textDelta === 'string'
-                    ? part.textDelta
-                    : '';
-              if (text) {
-                deliveredAny = true;
-                yield { type: 'content', text };
-              }
-              break;
-            }
-
-            case 'tool-input-start': {
-              armIdleTimer();
-              const toolCallId = streamToolCallId(part);
-              const toolName = toInternalToolName(
-                typeof part.toolName === 'string' ? part.toolName : 'unknown',
-                mcpManager,
-              );
-              // The model moved to a new tool → the previously streaming tool's
-              // input is complete (backstop for providers without tool-input-end).
-              if (activeToolInputId && activeToolInputId !== toolCallId) {
-                finalizeToolInput(activeToolInputId);
-              }
-              // Surface the finalized tool's `running` state BEFORE announcing the
-              // new generating tool, so the single streamingToolCall slot settles
-              // on the tool that is actually still generating.
-              yield* drainEagerStarts();
-              if (toolCallId) {
-                pendingToolInputs.set(toolCallId, { toolName, text: '' });
-                activeToolInputId = toolCallId;
-                deliveredAny = true;
-                yield { type: 'tool_call_start', toolCallId, toolName };
-              }
-              break;
-            }
-
-            case 'tool-input-delta': {
-              armIdleTimer();
-              const toolCallId = streamToolCallId(part);
-              const argsDelta =
-                typeof part.inputTextDelta === 'string'
-                  ? part.inputTextDelta
-                  : typeof part.delta === 'string'
-                    ? part.delta
-                    : '';
-              if (toolCallId && argsDelta) {
-                const pending = pendingToolInputs.get(toolCallId);
-                if (pending) pending.text += argsDelta;
-                deliveredAny = true;
-                yield { type: 'tool_call_delta', toolCallId, argsDelta };
-              }
-              break;
-            }
-
-            case 'tool-input-end': {
-              // This tool's input finished streaming — launch it now, before the
-              // SDK emits the batched `tool-call` at step end.
-              const toolCallId = streamToolCallId(part);
-              if (toolCallId) finalizeToolInput(toolCallId);
-              break;
-            }
-
-            // Args complete → tool is about to execute — pause idle
-            case 'tool-input-available':
-            case 'tool-call': {
-              pauseIdleForTool();
-              const toolCallId = streamToolCallId(part);
-              const toolName = toInternalToolName(
-                typeof part.toolName === 'string' ? part.toolName : 'unknown',
-                mcpManager,
-              );
-              const args = stringifyToolInput(part.input ?? part.args);
-              if (toolCallId && !seenToolCallIds.has(toolCallId)) {
-                seenToolCallIds.add(toolCallId);
-                deliveredAny = true;
-                // Start executing now, while the model keeps generating other
-                // tool calls. Skip provider-executed tools (the provider owns
-                // them) and SDK-invalid calls (the SDK will emit tool-input-error;
-                // running them eagerly would commit a handler the model is told
-                // failed).
-                if (part.providerExecuted !== true && part.invalid !== true) {
-                  eagerExecutor.start(
-                    toolCallId,
-                    toolName,
-                    part.input ?? part.args,
-                    combinedAbort,
-                  );
-                }
-                yield { type: 'tool_call', toolCallId, toolName, args };
-              }
-              break;
-            }
-
-            case 'tool-output-available':
-            case 'tool-result': {
-              resumeIdleAfterTool();
-              const toolCallId = streamToolCallId(part);
-              // The SDK has the result, so the execute shim has run and will not
-              // run again for this id — release the in-flight memo (bounds the
-              // map to genuinely in-flight tools).
-              if (toolCallId) eagerExecutor.forget(toolCallId);
-              const raw = part.output ?? part.result ?? '';
-              const toolName = toInternalToolName(
-                typeof part.toolName === 'string' ? part.toolName : 'unknown',
-                mcpManager,
-              );
-              const execution = executionFromSdkOutput(raw, toolName);
-              if (toolCallId && !seenToolResultIds.has(toolCallId)) {
-                seenToolResultIds.add(toolCallId);
-                deliveredAny = true;
-                yield {
-                  type: 'tool_result',
-                  toolCallId,
-                  ...streamResultFields(execution),
-                };
-              }
-              break;
-            }
-
-            case 'tool-output-error':
-            case 'tool-error': {
-              resumeIdleAfterTool();
-              const toolCallId = streamToolCallId(part);
-              if (toolCallId) eagerExecutor.forget(toolCallId);
-              const execution = sdkPreExecutionError(part, mcpManager);
-              if (toolCallId && !seenToolResultIds.has(toolCallId)) {
-                seenToolResultIds.add(toolCallId);
-                deliveredAny = true;
-                yield {
-                  type: 'tool_result',
-                  toolCallId,
-                  ...streamResultFields(execution),
-                };
-              }
-              break;
-            }
-
-            case 'tool-input-error': {
-              // Args never became valid — no execute, keep/reset idle
-              armIdleTimer();
-              const toolCallId = streamToolCallId(part);
-              // Release any eager memo (the delta path may have started this tool
-              // before the SDK's validation verdict); the SDK owns the error path.
-              if (toolCallId) eagerExecutor.forget(toolCallId);
-              const execution = sdkPreExecutionError(part, mcpManager);
-              if (toolCallId) {
-                const toolName = toInternalToolName(
-                  typeof part.toolName === 'string' ? part.toolName : 'unknown',
-                  mcpManager,
-                );
-                if (!seenToolCallIds.has(toolCallId)) {
-                  seenToolCallIds.add(toolCallId);
-                  deliveredAny = true;
-                  yield {
-                    type: 'tool_call',
-                    toolCallId,
-                    toolName,
-                    args: stringifyToolInput(part.input),
-                  };
-                }
-                if (!seenToolResultIds.has(toolCallId)) {
-                  seenToolResultIds.add(toolCallId);
-                  yield {
-                    type: 'tool_result',
-                    toolCallId,
-                    ...streamResultFields(execution),
-                  };
-                }
-              }
-              break;
-            }
-
-            case 'reasoning-delta':
-            case 'reasoning': {
-              armIdleTimer();
-              flushActiveToolInput();
-              const text =
-                typeof part.text === 'string'
-                  ? part.text
-                  : typeof part.delta === 'string'
-                    ? part.delta
-                    : '';
-              if (text) {
-                deliveredAny = true;
-                yield { type: 'thinking', text };
-              }
-              break;
-            }
-
-            case 'error': {
-              const err = part.error ?? part.errorText ?? chunk;
-              const { title, detail } = classifyStreamError(err);
-              yield { type: 'error', title, detail };
-              break;
-            }
-
-            default:
-              break;
-          }
-
-          // Surface eagerly-started tools and their early completions to the UI
-          // stream as soon as they happen (deduped against the SDK's batched
-          // `tool-call` / `tool-output-available` via the seen-id sets).
-          yield* drainEagerStarts();
-          yield* drainEagerCompletions();
-          yield* drainPendingToolEvents(
-            pendingToolCalls,
-            pendingToolResults,
-            seenToolCallIds,
-            seenToolResultIds,
-          );
-        }
-      } catch (fullStreamErr) {
-        // Idle/user abort is not "fullStream unsupported" — rethrow so the
-        // outer catch can emit Stream idle timeout / cancel (not textStream fallback).
-        if (idleTimedOut || abortSignal?.aborted || combinedAbort.aborted) {
-          throw fullStreamErr;
-        }
-        if (!usedFullStream) {
-          console.warn('[orchestrator] fullStream failed, falling back to textStream:', fullStreamErr);
-          const textIterator = result.textStream[Symbol.asyncIterator]();
-          let nextText = textIterator.next().then((value) => ({
-            kind: 'text' as const,
-            value,
-          }));
-          let nextStepEvents = waitForPendingStepEvents().then(() => ({
-            kind: 'step-events' as const,
-          }));
-
-          while (true) {
-            const next = await Promise.race([nextText, nextStepEvents]);
-            if (next.kind === 'step-events') {
-              yield* drainPendingToolEvents(
-                pendingToolCalls,
-                pendingToolResults,
-                seenToolCallIds,
-                seenToolResultIds,
-              );
-              while (pendingUsageEvents.length > 0) {
-                yield { type: 'usage', usage: pendingUsageEvents.shift()! };
-              }
-              nextStepEvents = waitForPendingStepEvents().then(() => ({
-                kind: 'step-events' as const,
-              }));
-              continue;
-            }
-
-            if (next.value.done) break;
-            armIdleTimer();
-            if (next.value.value) {
-              deliveredAny = true;
-              yield { type: 'content', text: next.value.value };
-            }
-            nextText = textIterator.next().then((value) => ({
-              kind: 'text' as const,
-              value,
-            }));
-          }
-        } else {
-          throw fullStreamErr;
-        }
-      }
-
-      const finishReason = await result.finishReason;
-
-      // Flush any eager tool starts/completions that settled during the final
-      // await (e.g. the last tool in a step) before emitting `finish`.
-      yield* drainEagerStarts();
-      yield* drainEagerCompletions();
-      yield* drainPendingToolEvents(
-        pendingToolCalls,
-        pendingToolResults,
-        seenToolCallIds,
-        seenToolResultIds,
-      );
-      if (!usedFullStream) {
-        while (pendingUsageEvents.length > 0) {
-          yield { type: 'usage', usage: pendingUsageEvents.shift()! };
-        }
-      }
-
-      yield { type: 'finish', finishReason: finishReason ?? 'stop' };
-
-      if (finishReason === 'length') {
-        console.warn('[orchestrator] Stream terminated due to max token limit');
-      } else if (finishReason === 'content-filter') {
-        console.warn('[orchestrator] Stream terminated by content filter');
-      }
+      yield* normalizedStream.events(result);
       return; // success
     } catch (err) {
-      const canRetryIdle =
-        idleTimedOut &&
-        !abortSignal?.aborted &&
-        !deliveredAny &&
-        idleAttempt + 1 < maxIdleAttempts;
+      const canRetryIdle = attempt.canRetryIdle(idleAttempt, maxIdleAttempts);
 
       if (canRetryIdle) {
         console.warn(
@@ -1102,7 +297,7 @@ export async function* streamChat(params: StreamChatParams): AsyncGenerator<Stre
         continue;
       }
 
-      if (idleTimedOut && !abortSignal?.aborted) {
+      if (attempt.didIdleTimeout && !attempt.didUserAbort) {
         yield {
           type: 'error',
           title: 'Stream idle timeout',
@@ -1111,7 +306,7 @@ export async function* streamChat(params: StreamChatParams): AsyncGenerator<Stre
         return;
       }
 
-      if (abortSignal?.aborted) {
+      if (attempt.didUserAbort) {
         return;
       }
 
@@ -1119,8 +314,9 @@ export async function* streamChat(params: StreamChatParams): AsyncGenerator<Stre
       yield { type: 'error', title, detail };
       return;
     } finally {
-      clearIdleTimer();
-      disposeAbortMerge();
+      attempt.abort();
+      eagerBridge.dispose();
+      attempt.dispose();
     }
   }
 }
@@ -1365,99 +561,4 @@ function withSdkAbortSignal(
     ...dispatchOptions,
     abortSignal: AbortSignal.any([dispatchOptions.abortSignal, sdkAbortSignal]),
   };
-}
-
-/**
- * Merge optional user AbortSignal with the idle-timeout controller.
- * Aborts when either fires. Call `dispose` in finally to drop listeners.
- */
-export function combineAbortSignals(
-  userSignal: AbortSignal | undefined,
-  idleSignal: AbortSignal,
-): { signal: AbortSignal; dispose: () => void } {
-  if (!userSignal) {
-    return { signal: idleSignal, dispose: () => {} };
-  }
-  // Node 20+ / modern Electron — no manual listeners to clean up
-  if (typeof AbortSignal.any === 'function') {
-    return {
-      signal: AbortSignal.any([userSignal, idleSignal]),
-      dispose: () => {},
-    };
-  }
-  const controller = new AbortController();
-  const onAbort = (): void => {
-    if (!controller.signal.aborted) {
-      controller.abort();
-    }
-  };
-  if (userSignal.aborted || idleSignal.aborted) {
-    controller.abort();
-    return { signal: controller.signal, dispose: () => {} };
-  }
-  userSignal.addEventListener('abort', onAbort);
-  idleSignal.addEventListener('abort', onAbort);
-  return {
-    signal: controller.signal,
-    dispose: () => {
-      userSignal.removeEventListener('abort', onAbort);
-      idleSignal.removeEventListener('abort', onAbort);
-    },
-  };
-}
-
-// ---------------------------------------------------------------------------
-// Error classification
-// ---------------------------------------------------------------------------
-
-/**
- * Extract the deepest error message from an error chain.
- * AI SDK wraps errors in RetryError → APICallError; this unwraps to the
- * provider's actual message (e.g. "5-hour usage limit reached…").
- */
-function extractErrorMessage(err: unknown): string {
-  if (err && typeof err === 'object' && 'errors' in err) {
-    const errors = (err as { errors: unknown[] }).errors;
-    if (Array.isArray(errors) && errors.length > 0) {
-      return extractErrorMessage(errors[errors.length - 1]);
-    }
-  }
-  if (err instanceof Error) return err.message;
-  return String(err);
-}
-
-function classifyStreamError(err: unknown): { title: string; detail: string } {
-  const detail = extractErrorMessage(err);
-  const lower = detail.toLowerCase();
-
-  if (lower.includes('timeout') || lower.includes('timed out')) {
-    return { title: 'Request Timed Out', detail };
-  }
-  if (lower.includes('rate limit') || lower.includes('429') || lower.includes('usage limit')) {
-    return { title: 'Rate Limit Exceeded', detail };
-  }
-  if (lower.includes('auth') || lower.includes('401') || lower.includes('403')) {
-    return { title: 'Authentication Failed', detail };
-  }
-  if (err instanceof Error) {
-    return { title: 'Stream Error', detail };
-  }
-  return { title: 'Unexpected Error', detail };
-}
-
-function stringifyToolInput(input: unknown): string {
-  if (input == null) return '';
-  if (typeof input === 'string') return input;
-  try {
-    return JSON.stringify(input);
-  } catch {
-    return String(input);
-  }
-}
-
-/** Extract toolCallId from AI SDK 7 stream parts (and legacy `id` aliases). */
-function streamToolCallId(part: Record<string, unknown>): string {
-  if (typeof part.toolCallId === 'string' && part.toolCallId) return part.toolCallId;
-  if (typeof part.id === 'string' && part.id) return part.id;
-  return '';
 }

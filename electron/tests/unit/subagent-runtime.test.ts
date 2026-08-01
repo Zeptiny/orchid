@@ -23,9 +23,15 @@ import type { SubagentDeltaEvent, SubagentLiveProjection } from '../../src/share
 import {
   subagentRecordFromStorageDict,
   subagentRecordToStorageDict,
-} from '../../src/shared/types/subagent';
+} from '../../src/shared/serialization/chain-subagent';
 import { defaults } from '../../src/main/config/schema';
 import type { Config } from '../../src/shared/types/ipc-boundary';
+import {
+  applyDeltaBatch,
+  bindSubagentSession,
+  createSubagentStreamState,
+  seedSubagentSnapshot,
+} from '../../src/renderer/utils/subagent-stream';
 
 /**
  * The manager reads `subagents.usage_event_interval_ms` from the live config
@@ -87,6 +93,25 @@ describe('SubagentManager runtime', () => {
     configOverride.current = null;
   });
 
+  it('keeps execution handles out of exported records', () => {
+    const record = manager.spawn('opaque-run', 'inspect', testAgent);
+
+    expect('abortController' in record).toBe(false);
+    expect('_runPromise' in record).toBe(false);
+    expect('runCount' in record).toBe(false);
+    expect('live' in record).toBe(false);
+    expect('_liveCommittedSegmentCount' in record).toBe(false);
+    expect('_liveTerminalEmitted' in record).toBe(false);
+    expect('_lastUsageDeltaAt' in record).toBe(false);
+    expect('_resolveWait' in record).toBe(false);
+    expect('pendingQuestion' in record).toBe(false);
+    expect('windowId' in record).toBe(false);
+    expect('cwd' in record).toBe(false);
+    expect('projectRuntime' in record).toBe(false);
+    expect(manager.getRunGeneration(record.id)).toBe(1);
+    expect(manager.getRunPromise(record.id)).toBeNull();
+  });
+
   it('preserves frozen owner-window affinity into a background runner', async () => {
     let release!: () => void;
     const parentTurnFinalized = new Promise<void>((resolve) => { release = resolve; });
@@ -101,10 +126,10 @@ describe('SubagentManager runtime', () => {
       sessionId: 'session-affinity',
       windowId: 'window-10',
     });
-    expect(record.windowId).toBe('window-10');
+    expect('windowId' in record).toBe(false);
 
     release();
-    await record._runPromise;
+    await manager.getRunPromise(record.id);
 
     expect(received).toEqual([{ sessionId: 'session-affinity', windowId: 'window-10' }]);
   });
@@ -127,14 +152,15 @@ describe('SubagentManager runtime', () => {
     await new Promise((resolve) => setTimeout(resolve, 10));
 
     expect(record.state).toBe(SubagentState.RUNNING);
-    expect(record.live.segments).toEqual([{ kind: 'text', id: expect.any(String), content: 'Hello live' }]);
+    expect(manager.getLiveProjection(record.id)?.segments)
+      .toEqual([{ kind: 'text', id: expect.any(String), content: 'Hello live' }]);
     expect(record.chain?.messages).toHaveLength(1);
     expect(sequences).toEqual([...sequences].sort((a, b) => a - b));
     expect(new Set(sequences).size).toBe(sequences.length);
 
     release();
-    await record._runPromise;
-    expect(record.live.segments).toEqual([]);
+    await manager.getRunPromise(record.id);
+    expect(manager.getLiveProjection(record.id)?.segments).toEqual([]);
     expect(record.chain?.messages.filter((message) => message.content === 'Hello live')).toHaveLength(1);
   });
 
@@ -160,7 +186,7 @@ describe('SubagentManager runtime', () => {
       }
     });
     const record = manager.spawn('ordered', 'inspect', testAgent);
-    await record._runPromise;
+    await manager.getRunPromise(record.id);
 
     const types = record.chain?.messages.map((message) => message.type) ?? [];
     expect(types).toEqual(['text', 'text', 'thinking', 'tool_call', 'tool_result', 'text']);
@@ -169,8 +195,8 @@ describe('SubagentManager runtime', () => {
     expect(transcript.filter((message) => message.type === 'text' || message.type === 'thinking')
       .map((message) => message.id)).toEqual(liveSegmentIds);
     expect(record.chain?.messages.at(-1)?.content).toBe('after');
-    expect(record.live.toolCalls).toEqual([]);
-    expect(record.live.segments).toEqual([]);
+    expect(manager.getLiveProjection(record.id)?.toolCalls).toEqual([]);
+    expect(manager.getLiveProjection(record.id)?.segments).toEqual([]);
   });
 
   it('materializes text-thinking-text tails in emission order with segment IDs', async () => {
@@ -181,7 +207,7 @@ describe('SubagentManager runtime', () => {
       yield { type: 'finish', finishReason: 'stop' };
     });
     const record = manager.spawn('tail-order', 'inspect', testAgent);
-    await record._runPromise;
+    await manager.getRunPromise(record.id);
     const messages = record.chain?.messages.slice(1) ?? [];
     expect(messages.map((message) => message.content)).toEqual(['first', 'middle', 'last']);
     expect(messages.map((message) => message.type)).toEqual(['text', 'thinking', 'text']);
@@ -197,7 +223,7 @@ describe('SubagentManager runtime', () => {
       yield { type: 'finish', finishReason: 'stop' };
     });
     const record = manager.spawn('prefix-order', 'inspect', testAgent);
-    await record._runPromise;
+    await manager.getRunPromise(record.id);
     expect((record.chain?.messages ?? []).slice(1).map((message) => message.type))
       .toEqual(['thinking', 'text', 'tool_call', 'tool_result']);
   });
@@ -217,12 +243,13 @@ describe('SubagentManager runtime', () => {
     const canonical = runtimeToDomain(record, { includeLiveTail: false });
     expect(checkpoint.chain.messages.at(-1)?.content).toBe('partial');
     expect(canonical.chain.messages.filter((message) => message.role === 'assistant')).toHaveLength(0);
-    expect(record.live.segments.map((segment) => segment.content)).toEqual(['partial']);
+    expect(manager.getLiveProjection(record.id)?.segments.map((segment) => segment.kind === 'tool' ? '' : segment.content))
+      .toEqual(['partial']);
     expect(record.chain?.messages.length).toBe(before);
 
     release();
     manager.cancelOne(record.id);
-    await record._runPromise;
+    await manager.getRunPromise(record.id);
   });
 
   it('materializes interleaved live segments chronologically with usage on text', async () => {
@@ -238,7 +265,7 @@ describe('SubagentManager runtime', () => {
     const record = manager.spawn('ordered-tail', 'partial', testAgent);
     await new Promise((resolve) => setTimeout(resolve, 10));
 
-    const tail = runtimeToDomain(record).chain.messages.slice(1);
+    const tail = manager.toDomainRecord(record).chain.messages.slice(1);
     expect(tail.map((message) => [message.type, message.content])).toEqual([
       ['text', 'before'], ['thinking', 'reason'], ['text', 'after'],
     ]);
@@ -248,7 +275,7 @@ describe('SubagentManager runtime', () => {
 
     release();
     manager.cancelOne(record.id);
-    await record._runPromise;
+    await manager.getRunPromise(record.id);
   });
 
   it('isolates live sequence identity and ownership for concurrent sessions', async () => {
@@ -267,21 +294,23 @@ describe('SubagentManager runtime', () => {
     const b = manager.spawn('b', 'b', testAgent, { sessionId: 'session-b' });
     await new Promise((resolve) => setTimeout(resolve, 10));
 
-    expect(a.live.sessionId).toBe('session-a');
-    expect(b.live.sessionId).toBe('session-b');
-    expect(a.live.sequence).toBeGreaterThan(0);
-    expect(b.live.sequence).toBeGreaterThan(0);
+    const aLive = manager.getLiveProjection(a.id)!;
+    const bLive = manager.getLiveProjection(b.id)!;
+    expect(aLive.sessionId).toBe('session-a');
+    expect(bLive.sessionId).toBe('session-b');
+    expect(aLive.sequence).toBeGreaterThan(0);
+    expect(bLive.sequence).toBeGreaterThan(0);
     const aDeltas = deltas.filter((event) => event.subagentId === a.id);
     const bDeltas = deltas.filter((event) => event.subagentId === b.id);
     expect(aDeltas.every((event) => event.sessionId === 'session-a')).toBe(true);
     expect(bDeltas.every((event) => event.sessionId === 'session-b')).toBe(true);
-    expect(Math.max(...aDeltas.map((event) => event.sequence))).toBe(a.live.sequence);
-    expect(Math.max(...bDeltas.map((event) => event.sequence))).toBe(b.live.sequence);
+    expect(Math.max(...aDeltas.map((event) => event.sequence))).toBe(aLive.sequence);
+    expect(Math.max(...bDeltas.map((event) => event.sequence))).toBe(bLive.sequence);
     manager.cancelOne(a.id);
     manager.cancelOne(b.id);
     gates.get('session-a')?.();
     gates.get('session-b')?.();
-    await Promise.all([a._runPromise, b._runPromise]);
+    await Promise.all([manager.getRunPromise(a.id), manager.getRunPromise(b.id)]);
   });
 
   it('starts a runner and records usage on the chain', async () => {
@@ -333,9 +362,9 @@ describe('SubagentManager runtime', () => {
       parentChainIndex: 2,
     });
     // Runner starts immediately — may already be running before we await.
-    expect(record._runPromise).not.toBeNull();
+    expect(manager.getRunPromise(record.id)).not.toBeNull();
 
-    await record._runPromise;
+    await manager.getRunPromise(record.id);
 
     expect(record.state).toBe(SubagentState.COMPLETED);
     expect(record.result).toBe('Hello world');
@@ -390,7 +419,7 @@ describe('SubagentManager runtime', () => {
     });
 
     const record = manager.spawn('t2', 'find foo', testAgent);
-    await record._runPromise;
+    await manager.getRunPromise(record.id);
 
     expect(record.state).toBe(SubagentState.COMPLETED);
     expect(record.result).toBe('Looking…Found it.');
@@ -408,7 +437,7 @@ describe('SubagentManager runtime', () => {
     });
 
     const record = manager.spawn('t3', 'fail', testAgent);
-    await record._runPromise;
+    await manager.getRunPromise(record.id);
 
     expect(record.state).toBe(SubagentState.FAILED);
     expect(record.error).toContain('boom');
@@ -439,7 +468,7 @@ describe('SubagentManager runtime', () => {
     expect(cancelled).toBe(true);
     expect(record.state).toBe(SubagentState.INTERRUPTED);
 
-    await record._runPromise;
+    await manager.getRunPromise(record.id);
   });
 
   it('commits the partial tail before the terminal interruption projection', async () => {
@@ -464,7 +493,7 @@ describe('SubagentManager runtime', () => {
     const record = manager.spawn('interrupt-tail', 'partial', testAgent, { sessionId: 's-interrupt' });
     await new Promise((resolve) => setTimeout(resolve, 15));
     expect(manager.cancelOne(record.id)).toBe(true);
-    await record._runPromise;
+    await manager.getRunPromise(record.id);
 
     expect(terminalChanges).toHaveLength(1);
     expect(terminalChanges[0]).toEqual({ state: SubagentState.INTERRUPTED, messages: ['partial', 'reason', 'partial'] });
@@ -494,7 +523,7 @@ describe('SubagentManager runtime', () => {
     expect(record.state).toBe(SubagentState.RUNNING);
 
     expect(manager.cancelOne(record.id)).toBe(true);
-    await record._runPromise;
+    await manager.getRunPromise(record.id);
 
     expect(record.state).toBe(SubagentState.INTERRUPTED);
     expect(record.result).toBe('partial answer');
@@ -534,7 +563,7 @@ describe('SubagentManager runtime', () => {
   it('without runner stays pending until markCompleted', () => {
     const record = manager.spawn('manual', 'task', testAgent);
     expect(record.state).toBe(SubagentState.PENDING);
-    expect(record._runPromise).toBeNull();
+    expect(manager.getRunPromise(record.id)).toBeNull();
     manager.markCompleted(record.id, 'done');
     expect(record.state).toBe(SubagentState.COMPLETED);
     expect(record.result).toBe('done');
@@ -555,7 +584,7 @@ describe('SubagentManager runtime', () => {
       yield { type: 'finish', finishReason: 'stop' };
     });
     const record = manager.spawn('t5', 'x', testAgent, { parentChainIndex: 0 });
-    await record._runPromise;
+    await manager.getRunPromise(record.id);
     const domain = manager.toDomainRecords();
     expect(domain).toHaveLength(1);
     expect(domain[0].id).toBe(record.id);
@@ -608,7 +637,7 @@ describe('SubagentManager delta emission (U2)', () => {
     manager.setOnDelta((event) => deltas.push(event));
 
     const record = manager.spawn('delta-text', 'watch', testAgent, { sessionId: 's-delta-text' });
-    await record._runPromise;
+    await manager.getRunPromise(record.id);
 
     const textDeltas = deltas.filter(
       (d): d is Extract<SubagentDeltaEvent, { type: 'text_delta' }> => d.type === 'text_delta',
@@ -631,7 +660,7 @@ describe('SubagentManager delta emission (U2)', () => {
     const deltas: SubagentDeltaEvent[] = [];
     manager.setOnDelta((event) => deltas.push(event));
     const record = manager.spawn('mono-ok', 'x', testAgent, { sessionId: 's-mono-ok' });
-    await record._runPromise;
+    await manager.getRunPromise(record.id);
 
     expect(deltas.length).toBeGreaterThanOrEqual(4);
     expectStrictlyMonotonic(deltas.map((d) => d.sequence));
@@ -652,7 +681,7 @@ describe('SubagentManager delta emission (U2)', () => {
     const record = manager.spawn('mono-int', 'x', testAgent, { sessionId: 's-mono-int' });
     await new Promise((resolve) => setTimeout(resolve, 15));
     expect(manager.cancelOne(record.id)).toBe(true);
-    await record._runPromise;
+    await manager.getRunPromise(record.id);
 
     expect(deltas.filter((d) => d.type === 'terminal')).toHaveLength(1);
     expect(deltas.at(-1)?.type).toBe('terminal');
@@ -672,8 +701,8 @@ describe('SubagentManager delta emission (U2)', () => {
     });
     let lastProjection: SubagentLiveProjection | null = null;
     manager.setOnDelta((event) => {
-      const current = manager.getRecord(event.subagentId);
-      if (current) lastProjection = structuredClone(current.live);
+      const current = manager.getLiveProjection(event.subagentId);
+      if (current) lastProjection = current;
     });
     const record = manager.spawn('parity', 'x', testAgent, { sessionId: 's-parity' });
     await new Promise((resolve) => setTimeout(resolve, 10));
@@ -682,7 +711,7 @@ describe('SubagentManager delta emission (U2)', () => {
     expect(manager.getLiveProjection(record.id)).toEqual(lastProjection);
 
     release();
-    await record._runPromise;
+    await manager.getRunPromise(record.id);
   });
 
   it('carries the authoritative durable record on the terminal delta', async () => {
@@ -696,12 +725,63 @@ describe('SubagentManager delta emission (U2)', () => {
       if (event.type === 'terminal') terminal = event;
     });
     const record = manager.spawn('terminal-record', 'x', testAgent, { sessionId: 's-terminal' });
-    await record._runPromise;
+    await manager.getRunPromise(record.id);
 
     expect(terminal).not.toBeNull();
-    expect(terminal!.record).toEqual(runtimeToDomain(record, { includeLiveTail: true }));
+    expect(terminal!.record).toEqual(manager.toDomainRecord(record, { includeLiveTail: true }));
     expect(terminal!.state).toBe('completed');
     expect(terminal!.usage).toEqual(record.usage);
+  });
+
+  it('reconstructs actual manager text, thinking, tool, usage, and terminal deltas in the renderer', async () => {
+    const sessionId = 's-renderer-parity';
+    const deltas: SubagentDeltaEvent[] = [];
+    const projectionsAtEvent = new Map<number, SubagentLiveProjection | null>();
+    manager.setOnDelta((event) => {
+      deltas.push(event);
+      projectionsAtEvent.set(event.sequence, manager.getLiveProjection(event.subagentId) ?? null);
+    });
+    manager.setRunner(async function* (): AsyncGenerator<StreamEvent> {
+      yield { type: 'content', text: 'Answer: ' };
+      yield { type: 'thinking', text: 'Inspect first.' };
+      yield { type: 'tool_call_start', toolCallId: 'tool-renderer', toolName: 'grep' };
+      yield { type: 'tool_call_delta', toolCallId: 'tool-renderer', argsDelta: '{"pattern":' };
+      yield { type: 'tool_call', toolCallId: 'tool-renderer', toolName: 'grep', args: '{"pattern":"TODO"}' };
+      yield successfulToolResult('tool-renderer', 'one match');
+      yield { type: 'usage', usage: { prompt_tokens: 3, completion_tokens: 2, total_tokens: 5, cached_tokens: 0 } };
+      yield { type: 'finish', finishReason: 'stop' };
+    });
+
+    const record = manager.spawn('renderer-parity', 'inspect', testAgent, { sessionId });
+    await manager.getRunPromise(record.id);
+
+    let renderer = seedSubagentSnapshot(
+      bindSubagentSession(createSubagentStreamState(), sessionId),
+      { sessionId, sessionRevision: 0, records: [], live: [] },
+    );
+    for (const event of deltas) {
+      renderer = applyDeltaBatch(renderer, { sessionId, events: [event] });
+      if (event.type === 'terminal') {
+        expect(renderer.live.has(record.id)).toBe(false);
+        expect(renderer.records.find((item) => item.id === record.id)).toEqual(event.record);
+        expect(event.record).toEqual(manager.toDomainRecord(record));
+        continue;
+      }
+      if (event.type === 'text_delta' || event.type === 'thinking_delta' ||
+          event.type === 'tool_start' || event.type === 'tool_args_delta' ||
+          event.type === 'tool_result' || event.type === 'usage') {
+        expect(renderer.live.get(record.id)).toEqual(projectionsAtEvent.get(event.sequence));
+      }
+    }
+
+    expect(deltas.map((event) => event.type)).toEqual([
+      'spawned', 'status_changed', 'text_delta', 'thinking_delta', 'tool_start',
+      'tool_args_delta', 'tool_start', 'tool_result', 'usage', 'terminal',
+    ]);
+    expect(deltas.map((event) => event.sequence)).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
+    expect(deltas.map((event) => event.sessionRevision)).toEqual([...deltas]
+      .map((event) => event.sessionRevision)
+      .sort((left, right) => left - right));
   });
 
   it('throttles usage deltas within one interval and carries final usage on terminal', async () => {
@@ -718,7 +798,7 @@ describe('SubagentManager delta emission (U2)', () => {
       if (event.type === 'terminal') terminal = event;
     });
     const record = manager.spawn('usage-throttle', 'x', testAgent, { sessionId: 's-usage' });
-    await record._runPromise;
+    await manager.getRunPromise(record.id);
 
     // Five usage events in one interval collapse to a throttled emission (first only).
     expect(usageDeltas.length).toBeGreaterThanOrEqual(1);
@@ -743,7 +823,7 @@ describe('SubagentManager delta emission (U2)', () => {
       if (event.type === 'usage') usageDeltas.push(event);
     });
     const record = manager.spawn('usage-large-interval', 'x', testAgent, { sessionId: 's-usage-large' });
-    await record._runPromise;
+    await manager.getRunPromise(record.id);
 
     // A huge interval read live from config keeps only the first (seed) emission.
     expect(usageDeltas).toHaveLength(1);
@@ -766,7 +846,7 @@ describe('SubagentManager delta emission (U2)', () => {
       if (event.type === 'usage') usageDeltas.push(event);
     });
     const record = manager.spawn('usage-zero-interval', 'x', testAgent, { sessionId: 's-usage-zero' });
-    await record._runPromise;
+    await manager.getRunPromise(record.id);
 
     // A zero interval disables throttling: one delta per provider usage event.
     expect(usageDeltas).toHaveLength(5);
@@ -821,11 +901,12 @@ describe('SubagentManager admission control (U7)', () => {
     expect(first.state).toBe(SubagentState.RUNNING);
     expect(second.state).toBe(SubagentState.RUNNING);
     expect(third.state).toBe(SubagentState.QUEUED);
-    expect(third._runPromise).toBeNull();
+    expect(manager.getRunPromise(third.id)).toBeNull();
     expect(third.queuedAt).not.toBeNull();
     expect(third.startedAt).toBeNull();
     // Queued records stay out of durable tracking until admission.
-    expect(third.persistRevision).toBe(0);
+    expect(manager.checkpointCandidates('sess-admit').map((candidate) => candidate.record.id))
+      .not.toContain(third.id);
     expect(manager.getQueuePosition(third.id)).toBe(1);
     expect(gates).toHaveLength(2);
 
@@ -837,17 +918,18 @@ describe('SubagentManager admission control (U7)', () => {
 
     // First terminal admits the queued record exactly once: pending→running.
     gates[0]();
-    await first._runPromise;
+    await manager.getRunPromise(first.id);
     expect(third.state).toBe(SubagentState.RUNNING);
-    expect(third._runPromise).not.toBeNull();
+    expect(manager.getRunPromise(third.id)).not.toBeNull();
     expect(third.startedAt).not.toBeNull();
-    expect(third.persistRevision).toBeGreaterThan(0);
+    expect(manager.checkpointCandidates('sess-admit').map((candidate) => candidate.record.id))
+      .toContain(third.id);
     expect(manager.getQueuePosition(third.id)).toBeNull();
     expect(gates).toHaveLength(3);
 
     gates[1]();
     gates[2]();
-    await Promise.all([second._runPromise, third._runPromise]);
+    await Promise.all([manager.getRunPromise(second.id), manager.getRunPromise(third.id)]);
 
     const terminalOrder = events
       .filter((event) => event.type === 'terminal')
@@ -875,21 +957,21 @@ describe('SubagentManager admission control (U7)', () => {
     expect(b2.state).toBe(SubagentState.QUEUED);
 
     gates.get(a1.id)!();
-    await a1._runPromise;
+    await manager.getRunPromise(a1.id);
     expect(b1.state).toBe(SubagentState.RUNNING);
     expect(a2.state).toBe(SubagentState.QUEUED);
 
     gates.get(b1.id)!();
-    await b1._runPromise;
+    await manager.getRunPromise(b1.id);
     expect(a2.state).toBe(SubagentState.RUNNING);
     expect(b2.state).toBe(SubagentState.QUEUED);
 
     gates.get(a2.id)!();
-    await a2._runPromise;
+    await manager.getRunPromise(a2.id);
     expect(b2.state).toBe(SubagentState.RUNNING);
 
     gates.get(b2.id)!();
-    await b2._runPromise;
+    await manager.getRunPromise(b2.id);
     expect(manager.allRecords().every((record) => record.state === SubagentState.COMPLETED)).toBe(true);
   });
 
@@ -938,7 +1020,7 @@ describe('SubagentManager admission control (U7)', () => {
     expect(manager.cancelOne(queued.id)).toBe(true);
     expect(queued.state).toBe(SubagentState.INTERRUPTED);
     expect(queued.endTime).not.toBeNull();
-    expect(queued._runPromise).toBeNull();
+    expect(manager.getRunPromise(queued.id)).toBeNull();
     expect(queued.startedAt).toBeNull();
     expect(manager.getQueuePosition(queued.id)).toBeNull();
 
@@ -959,7 +1041,7 @@ describe('SubagentManager admission control (U7)', () => {
     expect(gates).toHaveLength(1);
 
     gates[0]();
-    await running._runPromise;
+    await manager.getRunPromise(running.id);
     // The running terminal admits queued2, never the cancelled record.
     expect(queued2.state).toBe(SubagentState.RUNNING);
   });
@@ -1088,7 +1170,7 @@ describe('SubagentManager terminal eviction and session purge (U9)', () => {
     expect(manager.getRecord(queued.id)).toBeDefined();
   });
 
-  it('_runPromise is null after settlement on success, failure, and interrupt paths', async () => {
+  it('run promises are cleared after success, failure, and interruption', async () => {
     const gates: Array<() => void> = [];
     manager.setRunner(async function* (params): AsyncGenerator<StreamEvent> {
       await new Promise<void>((resolve) => { gates.push(resolve); });
@@ -1107,15 +1189,19 @@ describe('SubagentManager terminal eviction and session purge (U9)', () => {
     gates[0]();
     gates[1]();
     gates[2]();
-    await Promise.all([success._runPromise, failure._runPromise, interrupted._runPromise].filter(Boolean));
+    await Promise.all([
+      manager.getRunPromise(success.id),
+      manager.getRunPromise(failure.id),
+      manager.getRunPromise(interrupted.id),
+    ].filter(Boolean));
     await new Promise((resolve) => setTimeout(resolve, 10));
 
     expect(success.state).toBe(SubagentState.COMPLETED);
-    expect(success._runPromise).toBeNull();
+    expect(manager.getRunPromise(success.id)).toBeNull();
     expect(failure.state).toBe(SubagentState.FAILED);
-    expect(failure._runPromise).toBeNull();
+    expect(manager.getRunPromise(failure.id)).toBeNull();
     expect(interrupted.state).toBe(SubagentState.INTERRUPTED);
-    expect(interrupted._runPromise).toBeNull();
+    expect(manager.getRunPromise(interrupted.id)).toBeNull();
   });
 
   it('evicted summary retains id/state/result/error/usage/timings; chain messages empty; getStates renders', () => {
@@ -1125,13 +1211,13 @@ describe('SubagentManager terminal eviction and session purge (U9)', () => {
     manager.markRunning(record.id);
     record.usage = { prompt_tokens: 10, completion_tokens: 20, total_tokens: 30 };
     manager.markCompleted(record.id, 'the result');
-    expect(record._evicted).toBe(false);
+    expect(manager.isSummary(record.id)).toBe(false);
 
     manager.confirmRecordsPersisted(sid, [record.id]);
 
     const summary = manager.getRecord(record.id)!;
     expect(summary).toBeDefined();
-    expect(summary._evicted).toBe(true);
+    expect(manager.isSummary(summary.id)).toBe(true);
     expect(summary.id).toBe(record.id);
     expect(summary.state).toBe(SubagentState.COMPLETED);
     expect(summary.result).toBe('the result');
@@ -1140,11 +1226,13 @@ describe('SubagentManager terminal eviction and session purge (U9)', () => {
     expect(summary.startTime).toBeTypeOf('number');
     expect(summary.endTime).toBeTypeOf('number');
     expect(summary.chain?.messages).toEqual([]);
-    expect(summary.projectRuntime).toBeUndefined();
-    expect(summary._runPromise).toBeNull();
-    expect(summary.abortController).toBeNull();
-    expect(summary.live.segments).toEqual([]);
-    expect(summary.live.toolCalls).toEqual([]);
+    expect('projectRuntime' in summary).toBe(false);
+    expect(manager.getRunPromise(summary.id)).toBeNull();
+    expect('abortController' in summary).toBe(false);
+    expect('_runPromise' in summary).toBe(false);
+    expect('runCount' in summary).toBe(false);
+    expect(manager.getLiveProjection(summary.id)?.segments).toEqual([]);
+    expect(manager.getLiveProjection(summary.id)?.toolCalls).toEqual([]);
 
     const states = manager.getStates(sid);
     const entry = states.find((s) => s.id === record.id);
@@ -1154,17 +1242,17 @@ describe('SubagentManager terminal eviction and session purge (U9)', () => {
     expect(entry!.task).toBe('important task');
   });
 
-  it('the _evicted flag never leaks into the domain (storage/IPC) record shape', () => {
+  it('summary bookkeeping never leaks into the domain (storage/IPC) record shape', () => {
     const sid = 'sess-flag-leak';
     const heavy = manager.spawn('heavy', 'task', testAgent, { sessionId: sid });
     manager.markCompleted(heavy.id, 'done');
     manager.confirmRecordsPersisted(sid, [heavy.id]);
-    expect(heavy._evicted).toBe(true);
+    expect(manager.isSummary(heavy.id)).toBe(true);
 
     // The storage dict is built from runtimeToDomain's output; a leak here
     // would surface runtime-only state in session rows and IPC snapshots.
-    expect('_evicted' in runtimeToDomain(heavy)).toBe(false);
-    expect(JSON.stringify(runtimeToDomain(heavy))).not.toContain('"_evicted"');
+    expect('persistRevision' in runtimeToDomain(heavy)).toBe(false);
+    expect(JSON.stringify(runtimeToDomain(heavy))).not.toContain('"persistRevision"');
   });
 
   it('eviction does NOT happen if the flush fails (record stays heavy)', () => {
@@ -1192,8 +1280,8 @@ describe('SubagentManager terminal eviction and session purge (U9)', () => {
       yield { type: 'finish', finishReason: 'stop' };
     });
 
-    const run1 = manager.spawn('r1', 'x', testAgent, { sessionId: sid });
-    const run2 = manager.spawn('r2', 'x', testAgent, { sessionId: sid });
+    manager.spawn('r1', 'x', testAgent, { sessionId: sid });
+    manager.spawn('r2', 'x', testAgent, { sessionId: sid });
     const queued = manager.spawn('q1', 'x', testAgent, { sessionId: sid });
     const otherSession = manager.spawn('t1', 'x', testAgent, { sessionId: 'other-session' });
     manager.markCompleted(otherSession.id, 'done');
@@ -1236,6 +1324,19 @@ describe('SubagentManager terminal eviction and session purge (U9)', () => {
     expect(manager.getSessionRevision(sid)).toBeGreaterThan(0);
   });
 
+  it('purgeSession releases a pending question resolver on a terminal record', async () => {
+    const sid = 'sess-purge-question';
+    const record = manager.spawn('question', 'ask', testAgent, { sessionId: sid });
+    manager.markRunning(record.id);
+    const question = manager.markQuestionPending(record.id, 'tool-question', []);
+    manager.markCompleted(record.id, 'done');
+
+    manager.purgeSession(sid);
+
+    await expect(question).resolves.toEqual({ type: 'declined' });
+    expect(manager.getRecord(record.id)).toBeUndefined();
+  });
+
   it('cancelling a queued record evicts it to a retention-capped summary (review #15)', () => {
     setConfig({ terminal_retention: 2, max_active_per_session: 1 });
     const sid = 'sess-queued-evict';
@@ -1250,7 +1351,7 @@ describe('SubagentManager terminal eviction and session purge (U9)', () => {
       expect(manager.cancelOne(record.id)).toBe(true);
       queuedIds.push(record.id);
       // Cancelled while queued → evicted to a lean summary, not a full record.
-      expect(record._evicted).toBe(true);
+      expect(manager.isSummary(record.id)).toBe(true);
       expect(record.state).toBe(SubagentState.INTERRUPTED);
       expect(record.chain?.messages).toEqual([]);
     }
@@ -1262,7 +1363,7 @@ describe('SubagentManager terminal eviction and session purge (U9)', () => {
 
     // Re-confirming already-evicted summaries is a harmless no-op.
     manager.confirmRecordsPersisted(sid, queuedIds);
-    expect(manager.getRecord(queuedIds[1])?._evicted).toBe(true);
+    expect(manager.isSummary(queuedIds[1])).toBe(true);
     expect(manager.allRecords().filter((r) => r.sessionId === sid)).toHaveLength(3);
   });
 
@@ -1355,7 +1456,7 @@ describe('closed flag (U1)', () => {
     manager.confirmRecordsPersisted(sid, [record.id]);
 
     const summary = manager.getRecord(record.id)!;
-    expect(summary._evicted).toBe(true);
+    expect(manager.isSummary(summary.id)).toBe(true);
     expect(summary.closed).toBe(true);
     expect(manager.getStates(sid)).toEqual([]);
   });
@@ -1417,7 +1518,7 @@ describe('SubagentManager hydration (U3)', () => {
 
     const record = manager.getRecord(original.id);
     expect(record).toBeDefined();
-    expect(record!._evicted).toBe(false);
+    expect(manager.isSummary(record!.id)).toBe(false);
     expect(record!.state).toBe(SubagentState.COMPLETED);
     expect(record!.label).toBe('review auth');
     expect(record!.task).toBe('Review the auth module');
@@ -1427,16 +1528,57 @@ describe('SubagentManager hydration (U3)', () => {
     expect(record!.parentChainIndex).toBe(3);
     expect(record!.chain?.messages.length).toBeGreaterThan(0);
     expect(record!.sessionId).toBe('sess-hydrate');
-    expect(record!.windowId).toBe('win-1');
-    expect(record!.cwd).toBe('/tmp/project');
+    expect('windowId' in record!).toBe(false);
+    expect('cwd' in record!).toBe(false);
     // Hydration restarts the persistence counter and emits nothing.
-    expect(record!.persistRevision).toBe(0);
+    expect(manager.checkpointCandidates('sess-hydrate').map((candidate) => candidate.record.id))
+      .toContain(record!.id);
     expect(record!.startTime).toBeTypeOf('number');
     expect(record!.endTime).toBeTypeOf('number');
     // A hydrated terminal record shows in the prompt unless closed.
     expect(manager.getStates('sess-hydrate')).toEqual([]);
     record!.closed = false;
     expect(manager.getStates('sess-hydrate').map((s) => s.id)).toEqual([original.id]);
+  });
+
+  it('keeps hydrated execution affinity in runtime state for a follow-up runner', async () => {
+    const source = new SubagentManager();
+    const original = source.spawn('resume', 'original task', testAgent, { sessionId: 'sess-affinity' });
+    source.markCompleted(original.id, 'done');
+    const domain = subagentRecordFromStorageDict(subagentRecordToStorageDict(runtimeToDomain(original)));
+    const runtime = { projectDir: '/tmp/hydrated-project' } as never;
+    const received: Array<{ windowId?: string; cwd?: string; projectRuntime?: unknown; sessionId?: string }> = [];
+    manager.setRunner(async function* (params): AsyncGenerator<StreamEvent> {
+      received.push({
+        windowId: params.windowId,
+        cwd: params.cwd,
+        projectRuntime: params.projectRuntime,
+        sessionId: params.sessionId,
+      });
+      yield { type: 'finish', finishReason: 'stop' };
+    });
+    manager.hydrate([{
+      id: original.id,
+      agent: testAgent,
+      domain,
+      sessionId: 'sess-affinity',
+      windowId: 'window-hydrated',
+      cwd: '/tmp/hydrated-project',
+      projectRuntime: runtime,
+    }]);
+
+    const resumed = manager.followUp(original.id, 'continue');
+    await manager.getRunPromise(resumed.id);
+
+    expect('windowId' in resumed).toBe(false);
+    expect('cwd' in resumed).toBe(false);
+    expect('projectRuntime' in resumed).toBe(false);
+    expect(received).toEqual([{
+      windowId: 'window-hydrated',
+      cwd: '/tmp/hydrated-project',
+      projectRuntime: runtime,
+      sessionId: 'sess-affinity',
+    }]);
   });
 
   it('hydrating a live full record is a no-op (runtime record wins)', () => {
@@ -1463,7 +1605,7 @@ describe('SubagentManager hydration (U3)', () => {
     expect(after!.closed).toBe(false);
   });
 
-  it('hydrating an _evicted summary restores chain messages and clears _evicted', () => {
+  it('hydrating a summary restores chain messages and materializes a full record', () => {
     const sid = 'sess-rehydrate';
     const record = manager.spawn('summarized', 'important', testAgent, { sessionId: sid });
     manager.markCompleted(record.id, 'the result');
@@ -1474,7 +1616,7 @@ describe('SubagentManager hydration (U3)', () => {
 
     manager.confirmRecordsPersisted(sid, [record.id]);
     const summary = manager.getRecord(record.id)!;
-    expect(summary._evicted).toBe(true);
+    expect(manager.isSummary(summary.id)).toBe(true);
     expect(summary.chain?.messages).toEqual([]);
 
     manager.hydrate([{
@@ -1487,7 +1629,7 @@ describe('SubagentManager hydration (U3)', () => {
     }]);
 
     const restored = manager.getRecord(record.id)!;
-    expect(restored._evicted).toBe(false);
+    expect(manager.isSummary(restored.id)).toBe(false);
     expect(restored.chain?.messages.length).toBe(messageCount);
     expect(restored.result).toBe('the result');
     expect(restored.state).toBe(SubagentState.COMPLETED);
@@ -1528,12 +1670,12 @@ describe('SubagentManager hydration (U3)', () => {
     // Confirm all three: t-0 rolls off (cap 2); t-1 and t-2 remain as summaries.
     manager.confirmRecordsPersisted(sid, ids);
     expect(manager.getRecord(ids[0])).toBeUndefined();
-    expect(manager.getRecord(target)?._evicted).toBe(true);
-    expect(manager.getRecord(ids[2])?._evicted).toBe(true);
+    expect(manager.isSummary(target)).toBe(true);
+    expect(manager.isSummary(ids[2])).toBe(true);
 
     // Hydrate t-1: it becomes a full record and leaves the retention FIFO.
     manager.hydrate([{ id: target, agent: testAgent, domain, sessionId: sid, windowId: null, cwd: null }]);
-    expect(manager.getRecord(target)?._evicted).toBe(false);
+    expect(manager.isSummary(target)).toBe(false);
 
     // Two more terminal records roll the FIFO past the cap.
     for (let i = 3; i < 5; i += 1) {
@@ -1547,7 +1689,7 @@ describe('SubagentManager hydration (U3)', () => {
     // ...but the re-materialized t-1 survived every roll and kept its chain.
     const survived = manager.getRecord(target)!;
     expect(survived).toBeDefined();
-    expect(survived._evicted).toBe(false);
+    expect(manager.isSummary(survived.id)).toBe(false);
     expect(survived.chain?.messages.length).toBeGreaterThan(0);
   });
 
@@ -1585,6 +1727,18 @@ describe('SubagentManager follow-up resume (U4)', () => {
     configOverride.current = null;
   });
 
+  it('advances the session revision when a terminal record is reopened', () => {
+    const sid = 'sess-follow-up-revision';
+    manager.setRunner(null);
+    const record = manager.spawn('revision', 'first', testAgent, { sessionId: sid });
+    manager.markCompleted(record.id, 'done');
+    const before = manager.getSessionRevision(sid);
+
+    manager.followUp(record.id, 'again');
+
+    expect(manager.getSessionRevision(sid)).toBeGreaterThan(before);
+  });
+
   afterEach(() => {
     configOverride.current = null;
     vi.useRealTimers();
@@ -1608,18 +1762,18 @@ describe('SubagentManager follow-up resume (U4)', () => {
 
   const tick = () => new Promise((resolve) => setTimeout(resolve, 10));
 
-  it('resume admitted: terminal → RUNNING, appends user message, reopens chain, fresh runId, runCount++, runner started', async () => {
+  it('resume admitted: terminal → RUNNING, appends user message, reopens chain, and advances generation', async () => {
     const gates: Array<() => void> = [];
     manager.setRunner(gateRunner(gates));
     const record = manager.spawn('orig', 'first task', testAgent, { sessionId: 'sess-resume' });
     await tick();
     expect(record.state).toBe(SubagentState.RUNNING);
-    expect(record.runCount).toBe(1);
-    const firstRunId = record.live.runId;
+    expect(manager.getRunGeneration(record.id)).toBe(1);
+    const firstRunId = manager.getLiveProjection(record.id)!.runId;
 
     // Complete the first run.
     gates[0]();
-    await record._runPromise;
+    await manager.getRunPromise(record.id);
     expect(record.state).toBe(SubagentState.COMPLETED);
     expect(record.chain?.status).toBe('completed');
     const messagesBefore = record.chain?.messages.length ?? 0;
@@ -1629,7 +1783,7 @@ describe('SubagentManager follow-up resume (U4)', () => {
     expect(resumed).toBe(record);
     await tick();
     expect(resumed.state).toBe(SubagentState.RUNNING);
-    expect(resumed._runPromise).not.toBeNull();
+    expect(manager.getRunPromise(resumed.id)).not.toBeNull();
 
     // The follow-up input is the last chain message.
     const last = resumed.chain?.messages.at(-1);
@@ -1637,16 +1791,16 @@ describe('SubagentManager follow-up resume (U4)', () => {
     expect(last?.content).toBe('keep going');
     expect(resumed.chain?.messages.length).toBe(messagesBefore + 1);
 
-    // Chain reopened; per-run fields reset; fresh runId; runCount bumped.
+    // Chain reopened; per-run fields reset; fresh runId; generation advanced.
     expect(resumed.chain?.status).toBe('active');
     expect(resumed.chain?.endTime).toBeNull();
-    expect(resumed.live.runId).not.toBe(firstRunId);
-    expect(resumed.runCount).toBe(2);
+    expect(manager.getLiveProjection(resumed.id)!.runId).not.toBe(firstRunId);
+    expect(manager.getRunGeneration(resumed.id)).toBe(2);
     expect(resumed.result).toBeNull();
     expect(resumed.error).toBeNull();
 
     gates[1]();
-    await resumed._runPromise;
+    await manager.getRunPromise(resumed.id);
     expect(resumed.state).toBe(SubagentState.COMPLETED);
   });
 
@@ -1659,7 +1813,7 @@ describe('SubagentManager follow-up resume (U4)', () => {
     const target = manager.spawn('target', 'first', testAgent, { sessionId: 'sess-rq' });
     await tick();
     gates[0]();
-    await target._runPromise;
+    await manager.getRunPromise(target.id);
     expect(target.state).toBe(SubagentState.COMPLETED);
 
     // Blocker occupies the only per-session slot.
@@ -1672,7 +1826,8 @@ describe('SubagentManager follow-up resume (U4)', () => {
     manager.followUp(target.id, 'again');
     expect(target.state).toBe(SubagentState.QUEUED);
     expect(target.queuedAt).not.toBeNull();
-    expect(target._resumeQueued).toBe(true);
+    expect(manager.checkpointCandidates('sess-rq').map((candidate) => candidate.record.id))
+      .toContain(target.id);
     expect(manager.getQueuePosition(target.id)).toBe(1);
     // A SPAWNED delta is re-emitted carrying the queued record.
     const spawned = events.filter((event) => event.type === 'spawned');
@@ -1680,14 +1835,13 @@ describe('SubagentManager follow-up resume (U4)', () => {
 
     // Completing the blocker admits the resumed record (leaves QUEUED).
     gates[1]();
-    await blocker._runPromise;
+    await manager.getRunPromise(blocker.id);
     await tick();
     expect(target.state).toBe(SubagentState.RUNNING);
-    expect(target._resumeQueued).toBe(false);
     expect(manager.getQueuePosition(target.id)).toBeNull();
 
     gates[2]();
-    await target._runPromise;
+    await manager.getRunPromise(target.id);
     expect(target.state).toBe(SubagentState.COMPLETED);
   });
 
@@ -1700,8 +1854,8 @@ describe('SubagentManager follow-up resume (U4)', () => {
     expect(target.state).toBe(SubagentState.COMPLETED);
     const messagesBefore = target.chain?.messages.length;
     const statusBefore = target.chain?.status;
-    const runCountBefore = target.runCount;
-    const liveRunIdBefore = target.live.runId;
+    const generationBefore = manager.getRunGeneration(target.id);
+    const liveRunIdBefore = manager.getLiveProjection(target.id)!.runId;
 
     // Fill the single active slot and the single queue slot.
     const active = manager.spawn('active', 'x', testAgent, { sessionId: 'sess-qf' });
@@ -1723,26 +1877,20 @@ describe('SubagentManager follow-up resume (U4)', () => {
     expect(target.result).toBe('done');
     expect(target.chain?.messages.length).toBe(messagesBefore);
     expect(target.chain?.status).toBe(statusBefore);
-    expect(target.runCount).toBe(runCountBefore);
-    expect(target.live.runId).toBe(liveRunIdBefore);
-    expect(target._resumeQueued).toBe(false);
+    expect(manager.getRunGeneration(target.id)).toBe(generationBefore);
+    expect(manager.getLiveProjection(target.id)!.runId).toBe(liveRunIdBefore);
     expect(manager.getQueuePosition(target.id)).toBeNull();
   });
 
   it('persistence eligibility: a resume-queued record keeps its durable row; a spawn-queued record is still skipped', async () => {
     setLimits({ max_active_per_session: 1 });
-    // Mirrors the durable-eligibility skip in persist-subagent-chains.ts:
-    // a record is skipped when queued && !started && !_resumeQueued.
-    const isDurableEligible = (record: SubagentRecord): boolean =>
-      !(record.queuedAt !== null && record.startedAt === null && !record._resumeQueued);
-
     const gates: Array<() => void> = [];
     manager.setRunner(gateRunner(gates));
 
     const target = manager.spawn('target', 'first', testAgent, { sessionId: 'sess-elig' });
     await tick();
     gates[0]();
-    await target._runPromise;
+    await manager.getRunPromise(target.id);
     expect(target.state).toBe(SubagentState.COMPLETED);
 
     // Blocker occupies the slot; subsequent spawn and resume both queue.
@@ -1751,15 +1899,15 @@ describe('SubagentManager follow-up resume (U4)', () => {
 
     const spawnQueued = manager.spawn('spawn-queued', 'x', testAgent, { sessionId: 'sess-elig' });
     expect(spawnQueued.state).toBe(SubagentState.QUEUED);
-    expect(spawnQueued._resumeQueued).toBe(false);
-    expect(isDurableEligible(spawnQueued)).toBe(false);
+    expect(manager.checkpointCandidates('sess-elig').map((candidate) => candidate.record.id))
+      .not.toContain(spawnQueued.id);
 
     manager.followUp(target.id, 'again');
     expect(target.state).toBe(SubagentState.QUEUED);
-    expect(target._resumeQueued).toBe(true);
     expect(target.queuedAt).not.toBeNull();
     expect(target.startedAt).toBeNull();
-    expect(isDurableEligible(target)).toBe(true);
+    expect(manager.checkpointCandidates('sess-elig').map((candidate) => candidate.record.id))
+      .toContain(target.id);
   });
 
   it('cancelOne mid-resumed-run interrupts through the runner-owned boundary', async () => {
@@ -1786,12 +1934,12 @@ describe('SubagentManager follow-up resume (U4)', () => {
     await tick();
     expect(record.state).toBe(SubagentState.RUNNING);
     // The runner owns the async boundary: a run promise is in flight.
-    expect(record._runPromise).not.toBeNull();
+    expect(manager.getRunPromise(record.id)).not.toBeNull();
 
     expect(manager.cancelOne(record.id)).toBe(true);
     expect(record.state).toBe(SubagentState.INTERRUPTED);
-    await record._runPromise;
-    expect(record._runPromise).toBeNull();
+    await manager.getRunPromise(record.id);
+    expect(manager.getRunPromise(record.id)).toBeNull();
     expect(record.state).toBe(SubagentState.INTERRUPTED);
     // The follow-up message survives the interruption.
     expect(record.chain?.messages.some((message) => message.content === 'continue')).toBe(true);
@@ -1805,7 +1953,7 @@ describe('SubagentManager follow-up resume (U4)', () => {
     const target = manager.spawn('target', 'first', testAgent, { sessionId: 'sess-int-queued' });
     await tick();
     gates[0]();
-    await target._runPromise;
+    await manager.getRunPromise(target.id);
     expect(target.state).toBe(SubagentState.COMPLETED);
 
     const blocker = manager.spawn('blocker', 'x', testAgent, { sessionId: 'sess-int-queued' });
@@ -1814,11 +1962,12 @@ describe('SubagentManager follow-up resume (U4)', () => {
 
     manager.followUp(target.id, 'again');
     expect(target.state).toBe(SubagentState.QUEUED);
-    expect(target._resumeQueued).toBe(true);
+    expect(manager.checkpointCandidates('sess-int-queued').map((candidate) => candidate.record.id))
+      .toContain(target.id);
 
     expect(manager.cancelOne(target.id)).toBe(true);
     expect(target.state).toBe(SubagentState.INTERRUPTED);
-    expect(target._runPromise).toBeNull();
+    expect(manager.getRunPromise(target.id)).toBeNull();
     expect(manager.getQueuePosition(target.id)).toBeNull();
 
     // No admission followed: the blocker is untouched and no extra run started.
@@ -1839,20 +1988,20 @@ describe('SubagentManager follow-up resume (U4)', () => {
     expect(record.state).toBe(SubagentState.RUNNING);
 
     // cancelOne marks the record terminal but leaves the run loop unwinding:
-    // the runner owns the async interruption boundary while _runPromise is set.
+    // the runner owns the async interruption boundary while it is settling.
     expect(manager.cancelOne(record.id)).toBe(true);
     expect(record.state).toBe(SubagentState.INTERRUPTED);
-    expect(record._runPromise).not.toBeNull();
+    expect(manager.getRunPromise(record.id)).not.toBeNull();
 
     expect(() => manager.followUp(record.id, 'again')).toThrow(SubagentStillSettlingError);
     // A rejected resume leaves the record unmutated: no message appended, no
     // run bump (the chain stays ACTIVE until the runner unwinds it).
     expect(record.chain?.messages.some((message) => message.content === 'again')).toBe(false);
-    expect(record.runCount).toBe(1);
+    expect(manager.getRunGeneration(record.id)).toBe(1);
 
     release();
-    await record._runPromise;
-    expect(record._runPromise).toBeNull();
+    await manager.getRunPromise(record.id);
+    expect(manager.getRunPromise(record.id)).toBeNull();
     expect(record.chain?.status).toBe('interrupted');
     // Once the zombie run unwound, the resume is allowed.
     expect(() => manager.followUp(record.id, 'again')).not.toThrow();
@@ -1866,7 +2015,7 @@ describe('SubagentManager follow-up resume (U4)', () => {
     const target = manager.spawn('target', 'first', testAgent, { sessionId: 'sess-rq-cancel' });
     await tick();
     gates[0]();
-    await target._runPromise;
+    await manager.getRunPromise(target.id);
     expect(target.state).toBe(SubagentState.COMPLETED);
 
     const blocker = manager.spawn('blocker', 'x', testAgent, { sessionId: 'sess-rq-cancel' });
@@ -1875,29 +2024,31 @@ describe('SubagentManager follow-up resume (U4)', () => {
 
     manager.followUp(target.id, 'again');
     expect(target.state).toBe(SubagentState.QUEUED);
-    expect(target._resumeQueued).toBe(true);
+    expect(manager.checkpointCandidates('sess-rq-cancel').map((candidate) => candidate.record.id))
+      .toContain(target.id);
 
     expect(manager.cancelOne(target.id)).toBe(true);
     expect(target.state).toBe(SubagentState.INTERRUPTED);
     // Not evicted: the record owns a durable row, so eviction would strand the
     // row with a stale pre-interrupt status and skip every later checkpoint.
-    expect(target._evicted).toBe(false);
+    expect(manager.isSummary(target.id)).toBe(false);
     // The follow-up message and the reopened chain survive for the terminal wave.
     expect(target.chain?.messages.some((message) => message.content === 'again')).toBe(true);
     // A later persistence confirmation evicts it through the normal path.
     manager.confirmRecordsPersisted('sess-rq-cancel', [target.id]);
-    expect(manager.getRecord(target.id)?._evicted).toBe(true);
+    expect(manager.isSummary(target.id)).toBe(true);
     expect(manager.getRecord(target.id)?.state).toBe(SubagentState.INTERRUPTED);
   });
 
-  it('close on an evicted summary throws instead of silently flagging an unpersistable record', () => {
+  it('close on a terminal summary throws instead of silently flagging an unpersistable record', () => {
     const sid = 'sess-close-evicted';
     const record = manager.spawn('close-evict', 'x', testAgent, { sessionId: sid });
     manager.markCompleted(record.id, 'done');
     manager.confirmRecordsPersisted(sid, [record.id]);
-    expect(record._evicted).toBe(true);
+    expect(manager.isSummary(record.id)).toBe(true);
 
     expect(() => manager.close(record.id)).toThrow(SubagentSummaryClosedError);
+    expect(manager.getRecord(record.id)?.closed).toBe(false);
     expect(record.closed).toBe(false);
   });
 
@@ -1918,7 +2069,7 @@ describe('SubagentManager follow-up resume (U4)', () => {
     const evicted = manager.spawn('evicted', 'x', testAgent, { sessionId: sid });
     manager.markCompleted(evicted.id, 'done');
     manager.confirmRecordsPersisted(sid, [evicted.id]);
-    expect(evicted._evicted).toBe(true);
+    expect(manager.isSummary(evicted.id)).toBe(true);
     expect(() => manager.followUp(evicted.id, 'x')).toThrow(SubagentEvictedError);
   });
 
@@ -1933,12 +2084,12 @@ describe('SubagentManager follow-up resume (U4)', () => {
     expect(record.chain?.endTime).toBeNull();
   });
 
-  it('runCount: spawn=1, after first followUp=2, hydrate initializes 1', () => {
+  it('generation: spawn=1, after first followUp=2, hydrate initializes 1', () => {
     const record = manager.spawn('rc', 'first', testAgent, { sessionId: 'sess-rc' });
-    expect(record.runCount).toBe(1);
+    expect(manager.getRunGeneration(record.id)).toBe(1);
     manager.markCompleted(record.id, 'done');
     manager.followUp(record.id, 'again');
-    expect(record.runCount).toBe(2);
+    expect(manager.getRunGeneration(record.id)).toBe(2);
 
     const source = new SubagentManager();
     const original = source.spawn('hyd', 'x', testAgent, { sessionId: 'sess-rc-hyd' });
@@ -1954,10 +2105,10 @@ describe('SubagentManager follow-up resume (U4)', () => {
       windowId: null,
       cwd: null,
     }]);
-    expect(manager.getRecord(original.id)?.runCount).toBe(1);
+    expect(manager.getRunGeneration(original.id)).toBe(1);
   });
 
-  it('_resumeQueued is true only between resume-queue and admission; false after _admit', async () => {
+  it('a queued follow-up remains checkpoint eligible after admission', async () => {
     setLimits({ max_active_per_session: 1 });
     const gates: Array<() => void> = [];
     manager.setRunner(gateRunner(gates));
@@ -1965,24 +2116,26 @@ describe('SubagentManager follow-up resume (U4)', () => {
     const target = manager.spawn('target', 'first', testAgent, { sessionId: 'sess-flag' });
     await tick();
     gates[0]();
-    await target._runPromise;
-    expect(target._resumeQueued).toBe(false);
+    await manager.getRunPromise(target.id);
+    expect(manager.getQueuePosition(target.id)).toBeNull();
 
     const blocker = manager.spawn('blocker', 'x', testAgent, { sessionId: 'sess-flag' });
     await tick();
 
     manager.followUp(target.id, 'again');
     expect(target.state).toBe(SubagentState.QUEUED);
-    expect(target._resumeQueued).toBe(true);
+    expect(manager.checkpointCandidates('sess-flag').map((candidate) => candidate.record.id))
+      .toContain(target.id);
 
     gates[1]();
-    await blocker._runPromise;
+    await manager.getRunPromise(blocker.id);
     await tick();
     expect(target.state).toBe(SubagentState.RUNNING);
-    expect(target._resumeQueued).toBe(false);
+    expect(manager.checkpointCandidates('sess-flag').map((candidate) => candidate.record.id))
+      .toContain(target.id);
 
     gates[2]();
-    await target._runPromise;
+    await manager.getRunPromise(target.id);
   });
 
   it('turn attribution: turnId differs between the first run and a resumed run', async () => {
@@ -1997,14 +2150,14 @@ describe('SubagentManager follow-up resume (U4)', () => {
     const record = manager.spawn('attr', 'first', testAgent, { sessionId: 'sess-attr' });
     await tick();
     gates[0]();
-    await record._runPromise;
-    expect(record.runCount).toBe(1);
+    await manager.getRunPromise(record.id);
+    expect(manager.getRunGeneration(record.id)).toBe(1);
 
     manager.followUp(record.id, 'again');
     await tick();
     gates[1]();
-    await record._runPromise;
-    expect(record.runCount).toBe(2);
+    await manager.getRunPromise(record.id);
+    expect(manager.getRunGeneration(record.id)).toBe(2);
 
     expect(turnIds).toHaveLength(2);
     expect(turnIds[0]).toBe(`${record.id}#1`);
@@ -2024,12 +2177,12 @@ describe('SubagentManager follow-up resume (U4)', () => {
     const record = manager.spawn('hist', 'first task', testAgent, { sessionId: 'sess-hist' });
     await tick();
     gates[0]();
-    await record._runPromise;
+    await manager.getRunPromise(record.id);
 
     manager.followUp(record.id, 'follow up');
     await tick();
     gates[1]();
-    await record._runPromise;
+    await manager.getRunPromise(record.id);
 
     // Spawn path history is the single task message.
     expect(histories[0]?.map((message) => message.content)).toEqual(['first task']);

@@ -2,13 +2,13 @@
  * Tests for flushStateCallbacks and interrupt waiter isolation (M-P0-013).
  *
  * Covers:
- * - flushStateCallbacks() resolves pending _resolveWait promises
+ * - flushStateCallbacks() resolves pending lifecycle wait promises
  * - flushStateCallbacks() is a no-op when no callbacks are pending
  * - interrupt_subagents resolves waiters only for cancelled records
  *   (does not process-wide flush)
  * - Session B interrupt does not unblock session A waiters
  */
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach } from 'vitest';
 import { AgentType, AgentTier, type Agent } from '../../src/shared/types/agent';
 import { SubagentManager } from '../../src/main/agents/manager';
 import { SubagentState } from '../../src/main/agents/types';
@@ -41,16 +41,12 @@ describe('flushStateCallbacks', () => {
     manager = new SubagentManager();
   });
 
-  it('should resolve pending _resolveWait promises on running subagents', async () => {
+  it('should resolve pending waits on running subagents', async () => {
     const record = manager.spawn('test', 'task', codeReviewerAgent);
     manager.markRunning(record.id);
 
-    // Start waiting — creates a pending _resolveWait promise
+    // Start waiting — registers a lifecycle waiter.
     const waitPromise = manager.wait([record.id]);
-
-    // Verify callbacks are pending
-    expect(record._resolveWait).not.toBeNull();
-    expect(record._resolveWait!.length).toBeGreaterThan(0);
 
     // Flush should resolve them
     const flushed = manager.flushStateCallbacks();
@@ -68,11 +64,9 @@ describe('flushStateCallbacks', () => {
     const record = manager.spawn('test', 'task', codeReviewerAgent);
     manager.markRunning(record.id);
 
-    // No one is waiting — _resolveWait should be empty array
     const flushed = manager.flushStateCallbacks();
 
     expect(flushed).toHaveLength(0);
-    expect(record._resolveWait).toEqual([]);
   });
 
   it('should be a no-op when no subagents exist', () => {
@@ -104,23 +98,20 @@ describe('flushStateCallbacks', () => {
     const record = manager.spawn('test', 'task', codeReviewerAgent);
     manager.markCompleted(record.id, 'done');
 
-    // _resolveWait is null after markCompleted
-    expect(record._resolveWait).toBeNull();
-
     const flushed = manager.flushStateCallbacks();
     expect(flushed).toHaveLength(0);
   });
 
-  it('should set _resolveWait to null after flushing', async () => {
+  it('does not flush the same lifecycle waiter twice', async () => {
     const record = manager.spawn('test', 'task', codeReviewerAgent);
     manager.markRunning(record.id);
 
-    manager.wait([record.id]); // creates pending callback
-    expect(record._resolveWait).not.toBeNull();
+    const waitPromise = manager.wait([record.id]);
 
-    manager.flushStateCallbacks();
-
-    expect(record._resolveWait).toBeNull();
+    const firstFlush = manager.flushStateCallbacks();
+    expect(firstFlush).toContain(record.id);
+    expect(manager.flushStateCallbacks()).toEqual([]);
+    await waitPromise;
   });
 });
 
@@ -142,7 +133,6 @@ describe('interrupt_subagents waiter isolation', () => {
     manager.markRunning(record.id);
 
     const waitPromise = manager.wait([record.id]);
-    expect(record._resolveWait).not.toBeNull();
 
     const result = (await handler(
       { subagent_ids: [record.id] },
@@ -154,7 +144,6 @@ describe('interrupt_subagents waiter isolation', () => {
 
     const waitResult = await waitPromise;
     expect(waitResult.has(record.id)).toBe(true);
-    expect(record._resolveWait).toBeNull();
   });
 
   it('empty-list interrupt resolves only cancelled in-session waiters', async () => {
@@ -182,8 +171,6 @@ describe('interrupt_subagents waiter isolation', () => {
 
     await waitPromiseA;
     await waitPromiseB;
-    expect(a._resolveWait).toBeNull();
-    expect(b._resolveWait).toBeNull();
   });
 
   it('session B interrupt does not unblock session A wait', async () => {
@@ -212,7 +199,6 @@ describe('interrupt_subagents waiter isolation', () => {
     expect(resultText(result)).toContain('"interrupted"');
     expect(b.state).toBe(SubagentState.INTERRUPTED);
     expect(a.state).toBe(SubagentState.RUNNING);
-    expect(a._resolveWait).not.toBeNull();
     expect(aWaitSettled).toBe(false);
 
     // Session A still waiting until its own subagent completes
@@ -267,6 +253,5 @@ describe('interrupt_subagents waiter isolation', () => {
     expect(resultText(result)).toContain('missing-id');
 
     await waitPromise;
-    expect(running._resolveWait).toBeNull();
   });
 });

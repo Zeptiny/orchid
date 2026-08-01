@@ -27,6 +27,7 @@
     "typecheck": "tsc --noEmit",
     "typecheck:migration": "tsc --noEmit -p tsconfig.migration.json",
     "lint": "eslint src/",
+    "check:runtime-cycles": "node scripts/check-runtime-cycles.mjs",
     "pretest": "npm run native:ensure:node",
     "test": "vitest run",
     "pretest:providers:live": "npm run native:ensure:node",

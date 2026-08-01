@@ -50,10 +50,9 @@ describe('composer contract (U6)', () => {
       const sendEnd = src.indexOf('const cancel = useCallback', sendStart);
       const sendSource = src.slice(sendStart, sendEnd);
       expect(sendSource).toMatch(/result\.status === 'error'/);
-      // Shared residual helper sets isSending: false on both failure paths.
-      expect(sendSource).toMatch(/residualStateAfterSendFailure/);
-      expect(sendSource).toMatch(/isSendingRef\.current = residual\.isSending/);
       expect(sendSource).toMatch(/catch \(err\)/);
+      const lockReleaseHits = sendSource.match(/isSendingRef\.current = false/g) ?? [];
+      expect(lockReleaseHits.length).toBeGreaterThanOrEqual(2);
     });
   });
 

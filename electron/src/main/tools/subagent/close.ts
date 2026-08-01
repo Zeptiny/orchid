@@ -63,7 +63,7 @@ export function buildCloseTool(
     const sessionId = ctx.sessionId;
 
     // Hydrate FIRST so evicted summaries and pre-restart records materialize
-    // before the guards run — a flag set on an `_evicted` summary would never
+    // before the guards run — a flag set on a terminal summary would never
     // persist (checkpoints skip evicted records). Ids whose stored agent
     // definition is gone surface separately as `agent_missing`.
     const { agentMissing } = await hydrateSubagentRecords(manager, sessionId, subagent_ids, ctx);
@@ -113,8 +113,8 @@ export function buildCloseTool(
     // wait.ts's dynamic-import pattern).
     if (closed.length > 0) {
       try {
-        const { recoverSubagentPersistence } = await import('../../agents/wire-subagents.js');
-        recoverSubagentPersistence(sessionId);
+        const { recoverSubagentPersistence } = await import('../../agents/subagent-persistence-recovery.js');
+        recoverSubagentPersistence(manager, sessionId);
       } catch {
         // Non-fatal — UI can still read in-memory state on next refresh
       }

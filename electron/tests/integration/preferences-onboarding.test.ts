@@ -320,7 +320,7 @@ describe('Preferences Keyboard Shortcuts', () => {
     const fs = await import('node:fs');
     const path = await import('node:path');
     const rendererRoot = path.resolve(__dirname, '../../src/renderer');
-    const appSrc = fs.readFileSync(path.join(rendererRoot, 'App.tsx'), 'utf8');
+    const appSrc = fs.readFileSync(path.join(rendererRoot, 'AppReady.tsx'), 'utf8');
     const inputArea = fs.readFileSync(path.join(rendererRoot, 'components/InputArea.tsx'), 'utf8');
 
     expect(appSrc).toMatch(/dataset\.orchidSettingsOpen/);

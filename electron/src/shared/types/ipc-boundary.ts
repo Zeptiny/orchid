@@ -5,12 +5,48 @@
  * modules and renderer modules import from here, inverting the dependency so
  * renderer never reaches into main/.
  *
- * Rule: only pure interfaces and type aliases live here. No Zod schemas, no
- * runtime code, no main-process imports.
+ * Rule: only pure cross-boundary contract definitions live here. No Zod
+ * schemas and no main-process imports.
  */
 
 import type { ModelSelection } from './provider';
 import type { PermissionMode } from './permission';
+
+// ── Startup ─────────────────────────────────────────────────────────────────
+
+export const STARTUP_STEP_DEFINITIONS = [
+  { id: 'opening_window', label: 'Opening window' },
+  { id: 'settings_providers', label: 'Loading settings and providers' },
+  { id: 'agents_tools', label: 'Loading agents and tools' },
+  { id: 'tool_workers', label: 'Starting tool workers' },
+  { id: 'preparing_interface', label: 'Preparing the application interface' },
+] as const;
+
+export type StartupStepId = (typeof STARTUP_STEP_DEFINITIONS)[number]['id'];
+
+export type StartupStepState = 'pending' | 'active' | 'complete' | 'skipped' | 'warning' | 'failed';
+export type StartupPhase = 'starting' | 'ready' | 'degraded' | 'failed';
+export type ToolWorkerStartupOutcome = 'disabled' | 'success' | 'failure';
+
+export interface StartupStep {
+  readonly id: StartupStepId;
+  readonly label: string;
+  readonly state: StartupStepState;
+  /** Monotonic elapsed time once the step has settled; never wall-clock data. */
+  readonly durationMs: number | null;
+}
+
+export interface StartupSnapshot {
+  /** Main-owned monotonic revision; renderers ignore revisions at or below their floor. */
+  readonly revision: number;
+  readonly phase: StartupPhase;
+  readonly steps: readonly StartupStep[];
+}
+
+export interface StartupContinueDegradedResult {
+  readonly ok: boolean;
+  readonly snapshot: StartupSnapshot;
+}
 
 // ── Session ─────────────────────────────────────────────────────────────────
 

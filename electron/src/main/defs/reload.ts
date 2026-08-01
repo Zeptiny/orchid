@@ -13,6 +13,7 @@ import { loadAgents } from '../agents/registry';
 import { loadSkills } from '../skills/registry';
 import { loadPersonalities } from '../personality/registry';
 import { getProjectRuntimeRegistry } from '../project/runtime';
+import { registerBuiltinTools } from '../tools';
 import {
   invalidateAllProjectMCPManagers,
   invalidateProjectMCPManagers,
@@ -31,8 +32,9 @@ export function reloadDefinitionRegistries(projectDir: string | null): void {
     // Global definitions are inherited by every project runtime.
     getProjectRuntimeRegistry().clear();
     invalidateAllProjectMCPManagers();
-    loadAgents({ homeDir: HOME_AGENTS_DIR });
-    loadSkills({ homeDir: HOME_SKILLS_DIR });
+    const agents = loadAgents({ homeDir: HOME_AGENTS_DIR });
+    const skills = loadSkills({ homeDir: HOME_SKILLS_DIR });
+    registerBuiltinTools({ agents, skills });
     loadPersonalities({ homeDir: HOME_PERSONALITIES_DIR });
   }
 }

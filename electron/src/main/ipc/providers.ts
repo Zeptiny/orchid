@@ -66,8 +66,8 @@ import {
   loadConfig,
 } from '../config/loader';
 import { isPlainObject } from '../config/merge';
+import { withConfigSaveLock } from '../config/write-lock';
 import { clearProjectRuntimeRegistry } from '../project/runtime';
-import { withConfigSaveLock } from './config';
 
 // ── Renderer input schemas ──────────────────────────────────────────────────
 

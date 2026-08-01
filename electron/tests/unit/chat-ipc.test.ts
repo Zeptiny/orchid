@@ -600,14 +600,17 @@ vi.mock('../../src/main/mcp/project-registry', () => ({
   releaseProjectMCPManager: vi.fn(),
 }));
 
-vi.mock('../../src/main/ipc/session', () => ({
+vi.mock('../../src/main/session/singleton', () => ({
   getSessionManager: () => mocks.sessionManager,
-  flattenSessionMessages: (session: { chains: Array<{ messages?: unknown[] }> }) =>
-    session.chains.flatMap((chain) => chain.messages ?? []),
-  resolveWindowWorkspace: (windowId: string) =>
-    mocks.workspace.resolveWorkspace(windowId),
+  resolveWindowWorkspace: (windowId: string) => mocks.workspace.resolveWorkspace(windowId),
+}));
+
+vi.mock('../../src/main/session/draft-reasoning', () => ({
   takeDraftReasoningOverride: (windowId: string) =>
     mocks.takeDraftReasoningOverride(windowId),
+}));
+
+vi.mock('../../src/main/permissions/session-overrides', () => ({
   takeDraftPermissionOverride: (windowId: string) =>
     mocks.takeDraftPermissionOverride(windowId),
 }));
@@ -859,6 +862,9 @@ describe('chat IPC driver streaming', () => {
       response: 'Waiting for your choice',
       interrupted: true,
     });
+    expect(doneEvents(send).at(-1)?.[1]?.messages).toEqual(
+      mocks.sessionManager.persistTurn.mock.calls.at(-1)?.[0]?.messages,
+    );
     expect(channelEvents(send, IPC_CHANNELS.CHAT_STATE).at(-1)?.[1]).toMatchObject({
       state: 'idle',
       interruptState: 'idle',
@@ -869,6 +875,42 @@ describe('chat IPC driver streaming', () => {
     expect(mocks.subagentManager.cancelRunning).not.toHaveBeenCalled();
     expect(mocks.backgroundStore.terminateSession).not.toHaveBeenCalled();
     releaseStream?.();
+  });
+
+  it('persists partial history before emitting an authoritative provider error', async () => {
+    const sessionId = 'abababab-abab-4aba-8aba-abababababab';
+    const selection = {
+      connectionId: '11111111-1111-4111-8111-111111111111',
+      modelId: 'vendor/path/model',
+    };
+    mocks.sessionManager._setActive({
+      ...makeSession(sessionId),
+      selection,
+      modelLabel: selection.modelId,
+    });
+    mocks.streamChat.mockImplementationOnce(async function* () {
+      yield { type: 'content', text: 'Partial response' };
+      yield { type: 'error', detail: 'Provider disconnected', title: 'Stream Error' };
+    });
+
+    const send = vi.fn();
+    const chatSend = mocks.handlers.get(IPC_CHANNELS.CHAT_SEND)!;
+    await chatSend({ sender: { id: 606, send } }, { message: 'Trigger error' });
+    await waitForChannelCount(send, IPC_CHANNELS.CHAT_ERROR, 1);
+
+    const error = channelEvents(send, IPC_CHANNELS.CHAT_ERROR).at(-1)?.[1] as {
+      messages: Array<Record<string, unknown>>;
+    };
+    const persisted = mocks.sessionManager.persistTurn.mock.calls.at(-1)?.[0] as {
+      messages: Array<Record<string, unknown>>;
+    };
+    expect(error.messages).toEqual(persisted.messages);
+    expect(error.messages).toEqual(expect.arrayContaining([
+      expect.objectContaining({ role: MessageRole.USER, content: 'Trigger error' }),
+      expect.objectContaining({ role: MessageRole.ASSISTANT, content: 'Partial response' }),
+    ]));
+    expect(send.mock.calls.findIndex(([channel]) => channel === IPC_CHANNELS.SESSION_UPDATED))
+      .toBeLessThan(send.mock.calls.findIndex(([channel]) => channel === IPC_CHANNELS.CHAT_ERROR));
   });
 
   it('keeps chunk-only updates out of CHAT_STATE payloads', async () => {
@@ -1103,6 +1145,24 @@ describe('chat IPC driver streaming', () => {
       content: 'src/index.ts',
       toolResult: expect.objectContaining({ status: 'complete' }),
     });
+    const done = doneEvents(send).at(-1)?.[1] as { messages: Array<Record<string, unknown>> };
+    const textSegmentId = channelEvents(send, IPC_CHANNELS.CHAT_CHUNK).at(-1)?.[1]
+      ?.segmentId;
+    const persisted = mocks.sessionManager.persistTurn.mock.calls.at(-1)?.[0] as {
+      messages: Array<Record<string, unknown>>;
+    };
+    expect(done.messages).toEqual(persisted.messages);
+    expect(done.messages).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: textSegmentId, role: MessageRole.ASSISTANT, type: MessageType.TEXT, content: 'Done' }),
+      expect.objectContaining({ type: MessageType.TOOL_CALL, tool_call_id: 'tc-shape-1' }),
+      expect.objectContaining({
+        type: MessageType.TOOL_RESULT,
+        tool_call_id: 'tc-shape-1',
+        tool_result: expect.objectContaining({ status: 'complete' }),
+      }),
+    ]));
+    expect(send.mock.calls.findIndex(([channel]) => channel === IPC_CHANNELS.SESSION_UPDATED))
+      .toBeLessThan(send.mock.calls.findIndex(([channel]) => channel === IPC_CHANNELS.CHAT_DONE));
   });
 
   it('persists usage when a turn completes with tools but no assistant text', async () => {
@@ -1159,6 +1219,17 @@ describe('chat IPC driver streaming', () => {
         cached_tokens: 10,
       },
     });
+    const done = doneEvents(send).at(-1)?.[1] as { messages: Array<Record<string, unknown>> };
+    expect(done.messages).toEqual(persisted.messages);
+    expect(done.messages).toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: MessageType.TOOL_CALL, tool_call_id: 'tc-usage-only' }),
+      expect.objectContaining({
+        type: MessageType.TOOL_RESULT,
+        tool_call_id: 'tc-usage-only',
+        tool_result: expect.objectContaining({ status: 'complete' }),
+      }),
+      expect.objectContaining({ hidden: true, usage: expect.objectContaining({ total_tokens: 120 }) }),
+    ]));
   });
 });
 

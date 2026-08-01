@@ -21,7 +21,7 @@ describe('provider onboarding and disconnected UX', () => {
   });
 
   it('opens onboarding based on has_completed_onboarding, not provider readiness', () => {
-    const app = source('App.tsx');
+    const app = source('AppReady.tsx');
     expect(app).toContain('window.orchid?.config?.get');
     expect(app).toContain('has_completed_onboarding');
     expect(app).toContain('First-run wizard opens only until finish/skip');

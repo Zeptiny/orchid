@@ -4,6 +4,7 @@ const mocks = vi.hoisted(() => ({
   loadAgents: vi.fn(),
   loadSkills: vi.fn(),
   loadPersonalities: vi.fn(),
+  registerBuiltinTools: vi.fn(),
   invalidate: vi.fn(),
   clear: vi.fn(),
 }));
@@ -26,6 +27,10 @@ vi.mock('../../src/main/personality/registry', () => ({
   loadPersonalities: mocks.loadPersonalities,
 }));
 
+vi.mock('../../src/main/tools', () => ({
+  registerBuiltinTools: mocks.registerBuiltinTools,
+}));
+
 vi.mock('../../src/main/project/runtime', () => ({
   getProjectRuntimeRegistry: () => ({
     invalidate: mocks.invalidate,
@@ -46,14 +51,25 @@ describe('reloadDefinitionRegistries', () => {
     expect(mocks.invalidate).toHaveBeenCalledWith('/projects/orchid');
     expect(mocks.clear).not.toHaveBeenCalled();
     expect(mocks.loadPersonalities).not.toHaveBeenCalled();
+    expect(mocks.registerBuiltinTools).not.toHaveBeenCalled();
   });
 
-  it('clears every project runtime when a global definition changes', () => {
+  it('rebuilds compatibility tools once after loading global agent and skill maps', () => {
+    const agents = new Map([['helper', { name: 'helper' }]]);
+    const skills = new Map([['work', { name: 'work' }]]);
+    mocks.loadAgents.mockReturnValue(agents);
+    mocks.loadSkills.mockReturnValue(skills);
+
     reloadDefinitionRegistries(null);
 
     expect(mocks.clear).toHaveBeenCalledTimes(1);
     expect(mocks.invalidate).not.toHaveBeenCalled();
     expect(mocks.loadAgents).toHaveBeenCalledWith({ homeDir: '/home/agents' });
     expect(mocks.loadSkills).toHaveBeenCalledWith({ homeDir: '/home/skills' });
+    expect(mocks.registerBuiltinTools).toHaveBeenCalledTimes(1);
+    expect(mocks.registerBuiltinTools).toHaveBeenCalledWith({ agents, skills });
+    expect(mocks.registerBuiltinTools.mock.invocationCallOrder[0]).toBeGreaterThan(
+      mocks.loadSkills.mock.invocationCallOrder[0],
+    );
   });
 });
