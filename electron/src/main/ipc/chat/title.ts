@@ -63,6 +63,7 @@ export function createGenerateTitleCallback(input: {
             agentType: titleAgent.type,
             agentTier: titleAgent.tier,
             snapshot: execution.snapshot,
+           attemptIdHolder: { value: null },
           },
         }),
       });

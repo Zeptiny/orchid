@@ -163,6 +163,7 @@ export async function startChatTurn(
   const accounting: ProviderAttemptAccountingContext = {
     store: accountingStore, sessionId, chainId, turnId, snapshot: providerSnapshot,
     agentScope: 'main', agentName: agent.name, agentType: agent.type, agentTier: agent.tier,
+   attemptIdHolder: { value: null },
   };
   const mcpManager = acquireProjectMCPManager(runtime);
   let resourcesReleased = false;

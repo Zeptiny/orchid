@@ -268,7 +268,7 @@ export async function* streamChat(params: StreamChatParams): AsyncGenerator<Stre
               sessionId: sessionId ?? '',
               chainId: accounting?.chainId ?? null,
               turnId: accounting?.turnId ?? null,
-              providerAttemptId: null,
+             providerAttemptId: accounting?.attemptIdHolder?.value ?? null,
               inputTokens: stepUsage.context.input_tokens,
               outputTokens: stepUsage.context.output_tokens,
               usedTokens: stepUsage.context.used_tokens,

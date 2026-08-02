@@ -180,6 +180,7 @@ export function createSubagentStreamRunner(): SubagentStreamRunner {
       agentName: params.agent.name,
       agentType: params.agent.type,
       agentTier: params.agent.tier,
+     attemptIdHolder: { value: null },
     };
     try {
       getSubagentAttributionStore().insert({

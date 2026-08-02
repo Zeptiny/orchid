@@ -695,7 +695,7 @@ export function getSubagents(): SubagentsResult {
   }>();
 
   for (const sa of allSubagents) {
-    const key = sa.agentName;
+    const key = `${sa.agentName}:${sa.agentTier}:${sa.agentType}`;
     const entry = summaryMap.get(key) ?? {
       agentName: sa.agentName, agentType: sa.agentType, agentTier: sa.agentTier,
       models: new Set<string>(), invocations: 0,

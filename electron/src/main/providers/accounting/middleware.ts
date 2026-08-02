@@ -26,6 +26,8 @@ export interface ProviderAttemptAccountingContext {
   readonly agentName?: string | null;
   readonly agentType?: string | null;
   readonly agentTier?: string | null;
+  /** Mutable holder — the middleware writes the per-call attemptId here so the orchestrator can link context snapshots. */
+  readonly attemptIdHolder?: { value: string | null };
 }
 
 function normalizeUsage(usage: LanguageModelV4Usage | undefined): NormalizedProviderUsage | null {
@@ -122,6 +124,7 @@ export function createAttemptAccountingMiddleware(
       model: LanguageModelV4;
     }): Promise<LanguageModelV4GenerateResult> => {
       const attemptId = randomUUID();
+      if (context.attemptIdHolder) context.attemptIdHolder.value = attemptId;
       context.store.insertPending({ ...context, attemptId, sdkCallId: attemptId });
       try {
         const result = await doGenerate();
@@ -160,6 +163,7 @@ export function createAttemptAccountingMiddleware(
       model: LanguageModelV4;
     }): Promise<LanguageModelV4StreamResult> => {
       const attemptId = randomUUID();
+      if (context.attemptIdHolder) context.attemptIdHolder.value = attemptId;
       context.store.insertPending({ ...context, attemptId, sdkCallId: attemptId });
       let result: LanguageModelV4StreamResult;
       try {
