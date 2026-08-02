@@ -131,6 +131,7 @@ export function AnalyticsView({ onClose, onOpenSettings, activity }: AnalyticsVi
           (session.workspace?.status === 'valid' ? session.workspace.cwd : null)
         }
         isCollapsed={leftCollapsed}
+        activeView="analytics"
         onOpenSettings={onOpenSettings ?? (() => {})}
         onOpenAnalytics={() => {}}
         onPickProjectDir={() => {

@@ -50,6 +50,11 @@ interface LeftSidebarProps {
   onRefreshSessions: () => void;
   onOpenSettings: () => void;
   onOpenAnalytics?: () => void;
+  /**
+   * Which footer view is currently open, so its button renders in the
+   * selected state (mirrors an active session row). null in chat mode.
+   */
+  activeView?: 'analytics' | 'settings' | null;
   /** Current workspace (draft → session → sticky → unbound). */
   workspace?: WorkspaceInfo | null;
   /**
@@ -94,6 +99,7 @@ export const LeftSidebar = memo(function LeftSidebar({
   onRefreshSessions,
   onOpenSettings,
   onOpenAnalytics,
+  activeView = null,
   workspace = null,
   selectedProjectPath = null,
   onProjectSelect,
@@ -175,6 +181,8 @@ export const LeftSidebar = memo(function LeftSidebar({
             size="sm"
             iconSize={18}
             onClick={onOpenAnalytics}
+            className={activeView === 'analytics' ? 'session-item-active' : ''}
+            aria-current={activeView === 'analytics' ? 'page' : undefined}
           />
         )}
         <IconButton
@@ -183,6 +191,8 @@ export const LeftSidebar = memo(function LeftSidebar({
           size="sm"
           iconSize={18}
           onClick={onOpenSettings}
+          className={activeView === 'settings' ? 'session-item-active' : ''}
+          aria-current={activeView === 'settings' ? 'page' : undefined}
         />
       </aside>
     );
@@ -265,8 +275,9 @@ export const LeftSidebar = memo(function LeftSidebar({
           <Button
             variant="ghost"
             size="md"
-            className="session-analytics-btn"
+            className={`session-analytics-btn ${activeView === 'analytics' ? 'session-item-active' : ''}`}
             onClick={onOpenAnalytics}
+            aria-current={activeView === 'analytics' ? 'page' : undefined}
           >
             <Icon name="barChart" size={18} />
             <span>Analytics</span>
@@ -275,8 +286,9 @@ export const LeftSidebar = memo(function LeftSidebar({
         <Button
           variant="ghost"
           size="md"
-          className="session-settings-btn"
+          className={`session-settings-btn ${activeView === 'settings' ? 'session-item-active' : ''}`}
           onClick={onOpenSettings}
+          aria-current={activeView === 'settings' ? 'page' : undefined}
         >
           <Icon name="settings" size={18} />
           <span>Settings</span>

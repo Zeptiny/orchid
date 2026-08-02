@@ -586,6 +586,7 @@ export function ConfigView({ onClose, initialTab = 'general', onNotify, onOpenAn
           (session.workspace?.status === 'valid' ? session.workspace.cwd : null)
         }
         isCollapsed={leftCollapsed}
+        activeView="settings"
         onOpenSettings={() => {}}
         onOpenAnalytics={onOpenAnalytics}
         onPickProjectDir={() => {
