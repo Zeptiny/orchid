@@ -56,6 +56,7 @@ Internal backlog for Orchid. User-facing summary lives in the [README known limi
 - SSH / remote connection support
 - Session compaction / compression (summarize or drop older turns so long sessions stay within context limits)
 - Analytics dashboard
+  - Energy metrics for Neuralwatt/Lilac providers (kWh consumed/charged, pricing multiplier, account quotas) — deferred from analytics page initial scope (R17). Data already exists in `usage_json` on `provider_attempts`; needs a dedicated UI section when energy-attributed attempts exist.
 - Allow to update the status of multiple tasks in one tool call
   - Also creating in one tool call
 - Investigate if its better to not create new chains with the queued messages
