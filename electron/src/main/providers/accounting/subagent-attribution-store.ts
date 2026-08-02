@@ -6,7 +6,6 @@ import {
   type SubagentAttributionStatus,
 } from '../../../shared/types/accounting';
 import { HOME_CONFIG_DIR } from '../../config/loader';
-import { redactLogString } from '../../logging';
 import { openSqliteDb, type SqliteDatabase } from '../../utils/sqlite';
 import { ACCOUNTING_SCHEMA_SQL } from './schema';
 

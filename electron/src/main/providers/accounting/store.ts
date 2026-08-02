@@ -365,10 +365,21 @@ export class ProviderAccountingStore {
       // Best effort on non-POSIX filesystems.
     }
     db.pragma('foreign_keys = ON');
+    this.migrateSchema(db);
     db.prepare('INSERT OR REPLACE INTO schema_meta (key, value) VALUES (?, ?)')
       .run('schema_version', String(ACCOUNTING_SCHEMA_VERSION));
     this.db = db;
     return db;
+  }
+
+  private migrateSchema(db: SqliteDatabase): void {
+    const columns = db.prepare('PRAGMA table_info(provider_attempts)').all() as Array<{ name: string }>;
+    const existing = new Set(columns.map((c) => c.name));
+    for (const col of ['agent_scope', 'agent_name', 'agent_tier', 'agent_type']) {
+      if (!existing.has(col)) {
+        db.prepare(`ALTER TABLE provider_attempts ADD COLUMN ${col} TEXT`).run();
+      }
+    }
   }
 }
 

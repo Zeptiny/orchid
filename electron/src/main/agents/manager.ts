@@ -1447,8 +1447,8 @@ export class SubagentManager {
       getSubagentAttributionStore().finalize(record.id, {
         status: finalization.state,
       });
-    } catch {
-      // telemetry failure must not break subagent lifecycle
+    } catch (error) {
+      console.warn('[subagent-manager] Attribution finalize failed', { subagentId: record.id, error });
     }
     return this._runs.isCurrent(run);
   }

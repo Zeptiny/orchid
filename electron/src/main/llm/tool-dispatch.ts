@@ -420,8 +420,8 @@ export async function executeToolCall(
           timedOut: isTimeout,
           error: err instanceof Error ? err.message : String(err),
         });
-      } catch {
-        // telemetry failure must not break tool execution
+      } catch (error) {
+        console.warn('[tool-dispatch] Tool telemetry finalize failed (error path)', { toolAttemptId, error });
       }
     }
     if (err instanceof ToolTimeoutError || timeoutAbort.signal.aborted) {
@@ -467,8 +467,8 @@ export async function executeToolCall(
           offloaded: false,
           timedOut: false,
         });
-      } catch {
-        // telemetry failure must not break tool execution
+      } catch (error) {
+        console.warn('[tool-dispatch] Tool telemetry finalize failed (parent abort)', { toolAttemptId, error });
       }
     }
     return genericTerminalExecution(
@@ -505,8 +505,8 @@ export async function executeToolCall(
           offloaded: execution.agentProjection.completeness === 'partial' && execution.agentProjection.retrieval.kind === 'cache',
           timedOut: false,
         });
-      } catch {
-        // telemetry failure must not break tool execution
+      } catch (error) {
+        console.warn('[tool-dispatch] Tool telemetry finalize failed (success path)', { toolAttemptId, error });
       }
     }
     return parsed;
@@ -519,8 +519,8 @@ export async function executeToolCall(
           offloaded: false,
           timedOut: false,
         });
-      } catch {
-        // telemetry failure must not break tool execution
+      } catch (error) {
+        console.warn('[tool-dispatch] Tool telemetry finalize failed (finalization error)', { toolAttemptId, error });
       }
     }
     console.warn('[tool-dispatch] Tool result finalization failed', {
