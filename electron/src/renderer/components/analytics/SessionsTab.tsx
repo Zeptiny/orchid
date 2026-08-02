@@ -41,6 +41,7 @@ function SessionList({ onRowClick }: { onRowClick: (row: SessionSummary) => void
       </div>
       <SortableTable
         columns={[
+          { key: 'sessionName', label: 'Session Name', sortable: true, sortValue: (r) => r.sessionName ?? '', render: (r) => r.sessionName ?? '—' },
           { key: 'sessionId', label: 'Session ID', render: (r) => <span title={r.sessionId}>{truncateId(r.sessionId)}</span> },
           { key: 'totalCost', label: 'Total Cost', render: (r) => formatCost(r.totalCost) },
           { key: 'inputTokens', label: 'Input Tokens', render: (r) => formatTokenCount(r.inputTokens) },

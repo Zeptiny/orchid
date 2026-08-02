@@ -960,4 +960,9 @@
     margin-top: 0;
   }
 
+  .recharts-tooltip-wrapper {
+    z-index: 1000;
+    pointer-events: none;
+  }
+
 }

@@ -36,6 +36,7 @@ export interface TimeSeriesPoint {
 
 export interface SessionSummary {
   readonly sessionId: string;
+  readonly sessionName: string | null;
   readonly totalCost: readonly CurrencyTotal[];
   readonly inputTokens: number;
   readonly outputTokens: number;
@@ -172,6 +173,23 @@ export interface ProviderBreakdown {
   readonly interrupted: number;
 }
 
+export interface ConnectionBreakdown {
+  readonly connectionId: string;
+  readonly connectionName: string | null;
+  readonly providerId: string;
+  readonly providerDisplayName: string | null;
+  readonly totalCost: string;
+  readonly totalInputTokens: number;
+  readonly totalOutputTokens: number;
+  readonly attempts: number;
+  readonly succeeded: number;
+  readonly failed: number;
+  readonly interrupted: number;
+  readonly modelCount: number;
+  readonly firstUsed: string | null;
+  readonly lastUsed: string | null;
+}
+
 export interface ToolBreakdown {
   readonly toolName: string;
   readonly toolSource: string;
@@ -232,9 +250,9 @@ export interface OverviewResult {
 
 export interface ModelsResult {
   readonly models: readonly ModelBreakdown[];
-  readonly providers: readonly ProviderBreakdown[];
+  readonly connections: readonly ConnectionBreakdown[];
   readonly costPerModelOverTime: readonly TimeSeriesPoint[];
-  readonly costPerProviderOverTime: readonly TimeSeriesPoint[];
+  readonly costPerConnectionOverTime: readonly TimeSeriesPoint[];
 }
 
 export interface ToolsResult {

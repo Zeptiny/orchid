@@ -1,7 +1,6 @@
-import type { ReactNode } from 'react';
 import { useAnalytics } from '../../hooks/useAnalytics';
 import type { ContextSnapshotSummary } from '../../../shared/types/analytics';
-import { StatCard, ChartCard, SortableTable, formatTokenCount } from './shared';
+import { StatCard, ChartCard, formatTokenCount } from './shared';
 import { CHART_PALETTE, GRID_STROKE, axisTickProps, tokenTooltipProps } from './shared';
 import { Button } from '../ui/Button';
 import {
@@ -72,26 +71,6 @@ export function ContextTab() {
     ? Math.round(data.snapshots.reduce((sum, s) => sum + s.usedTokens, 0) / data.snapshots.length)
     : 0;
 
-  const columns: ReadonlyArray<{
-    key: string;
-    label: string;
-    sortable?: boolean;
-    render: (row: ContextSnapshotSummary) => ReactNode;
-  }> = [
-    { key: 'sessionId', label: 'Session ID', sortable: true, render: (s) => s.sessionId },
-    { key: 'chainId', label: 'Chain ID', render: (s) => s.chainId ?? '—' },
-    { key: 'turnId', label: 'Turn ID', render: (s) => s.turnId ?? '—' },
-    { key: 'capturedAt', label: 'Captured At', sortable: true, render: (s) => formatTimestamp(s.capturedAt) },
-    { key: 'usedTokens', label: 'Used Tokens', sortable: true, render: (s) => formatTokenCount(s.usedTokens) },
-    { key: 'systemTokens', label: 'System', sortable: true, render: (s) => formatTokenCount(s.systemTokens) },
-    { key: 'toolsTokens', label: 'Tools', sortable: true, render: (s) => formatTokenCount(s.toolsTokens) },
-    { key: 'toolUseTokens', label: 'Tool Results', sortable: true, render: (s) => formatTokenCount(s.toolUseTokens) },
-    { key: 'userTokens', label: 'User', sortable: true, render: (s) => formatTokenCount(s.userTokens) },
-    { key: 'assistantTokens', label: 'Assistant', sortable: true, render: (s) => formatTokenCount(s.assistantTokens) },
-    { key: 'inputTokens', label: 'Input', sortable: true, render: (s) => formatTokenCount(s.inputTokens) },
-    { key: 'outputTokens', label: 'Output', sortable: true, render: (s) => formatTokenCount(s.outputTokens) },
-  ];
-
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
@@ -105,15 +84,6 @@ export function ContextTab() {
         <StatCard label="Avg System Tokens" value={formatTokenCount(data.avgBreakdown.systemTokens)} />
         <StatCard label="Avg Tools Tokens" value={formatTokenCount(data.avgBreakdown.toolsTokens + data.avgBreakdown.toolUseTokens)} />
       </div>
-
-      <ChartCard title="Context Snapshots">
-        <SortableTable
-          columns={columns}
-          rows={data.snapshots}
-          rowKey={(s) => s.snapshotId}
-          emptyMessage="No context snapshots"
-        />
-      </ChartCard>
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
         <ChartCard title="Context Growth per Session">

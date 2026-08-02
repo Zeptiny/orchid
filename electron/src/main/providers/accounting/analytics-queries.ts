@@ -17,6 +17,7 @@ import type {
   SessionSummary,
   SessionDetailResult,
   ModelsResult,
+  ConnectionBreakdown,
   ToolsResult,
   SubagentsResult,
   ContextResult,
@@ -25,6 +26,7 @@ import type {
   ToolCallDetail,
 } from '../../../shared/types/analytics';
 import type { SubagentAttributionRecord } from '../../../shared/types/accounting';
+import { getSessionNames } from '../../session/storage';
 
 const DEFAULT_LIMIT = 1000;
 
@@ -272,8 +274,15 @@ export function getSessions(limit = DEFAULT_LIMIT): readonly SessionSummary[] {
     costMap.set(r.session_id, arr);
   }
 
+  const sessionIds = sessions.map((s) => s.session_id);
+  let nameMap = new Map<string, string>();
+  try {
+    nameMap = getSessionNames(sessionIds);
+  } catch { /* session DB unavailable */ }
+
   return sessions.map((s) => ({
     sessionId: s.session_id,
+    sessionName: nameMap.get(s.session_id) ?? null,
     totalCost: costMap.get(s.session_id) ?? [],
     inputTokens: s.input_tokens,
     outputTokens: s.output_tokens,
@@ -488,53 +497,60 @@ export function getModels(): ModelsResult {
   });
 
   const providerRows = db.prepare(`
-    SELECT provider_id,
+    SELECT connection_id, provider_id,
       COUNT(*) as attempts,
       SUM(CASE WHEN outcome='succeeded' THEN 1 ELSE 0 END) as succeeded,
       SUM(CASE WHEN outcome='failed' THEN 1 ELSE 0 END) as failed,
       SUM(CASE WHEN outcome='interrupted' THEN 1 ELSE 0 END) as interrupted,
       COUNT(DISTINCT model_id) as model_count,
-      COUNT(DISTINCT connection_id) as connection_count
-    FROM provider_attempts GROUP BY provider_id
+      MIN(started_at) as first_used,
+      MAX(completed_at) as last_used
+    FROM provider_attempts GROUP BY connection_id ORDER BY first_used DESC
   `).all() as Array<{
-    provider_id: string; attempts: number; succeeded: number; failed: number;
-    interrupted: number; model_count: number; connection_count: number;
+    connection_id: string; provider_id: string; attempts: number; succeeded: number; failed: number;
+    interrupted: number; model_count: number; first_used: string; last_used: string | null;
   }>;
 
-  const providers = providerRows.map((p) => {
-    const detailRows = db.prepare('SELECT usage_json, cost_amount, currency, cost_state, snapshot_json FROM provider_attempts WHERE provider_id = ?').all(p.provider_id) as Array<{
-      usage_json: string | null; cost_amount: string | null; currency: string | null; cost_state: string; snapshot_json: string;
+  const connections: ConnectionBreakdown[] = providerRows.map((c) => {
+    const detailRows = db.prepare('SELECT usage_json, cost_amount, currency, cost_state, snapshot_json, started_at FROM provider_attempts WHERE connection_id = ? ORDER BY started_at DESC').all(c.connection_id) as Array<{
+      usage_json: string | null; cost_amount: string | null; currency: string | null; cost_state: string; snapshot_json: string; started_at: string;
     }>;
     let totalCost = new Decimal(0);
     let totalInput = 0, totalOutput = 0;
-    let displayName: string | null = null;
+    let connectionName: string | null = null;
+    let providerDisplayName: string | null = null;
     for (const r of detailRows) {
-      if (!displayName) displayName = parseSnapshotProviderName(r.snapshot_json);
+      if (!connectionName) connectionName = parseSnapshotConnectionName(r.snapshot_json);
+      if (!providerDisplayName) providerDisplayName = parseSnapshotProviderName(r.snapshot_json);
       const u = parseUsage(r.usage_json);
       totalInput += u.inputTokens; totalOutput += u.outputTokens;
       if (r.cost_amount && r.currency && (r.cost_state === 'reported' || r.cost_state === 'calculated')) { try { totalCost = totalCost.add(new Decimal(r.cost_amount)); } catch { /* skip */ } }
     }
     return {
-      providerId: p.provider_id,
-      providerDisplayName: displayName,
+      connectionId: c.connection_id,
+      connectionName,
+      providerId: c.provider_id,
+      providerDisplayName,
       totalCost: totalCost.toFixed(),
       totalInputTokens: totalInput,
       totalOutputTokens: totalOutput,
-      attempts: p.attempts,
-      modelCount: p.model_count,
-      connectionCount: p.connection_count,
-      failed: p.failed,
-      interrupted: p.interrupted,
+      attempts: c.attempts,
+      succeeded: c.succeeded,
+      failed: c.failed,
+      interrupted: c.interrupted,
+      modelCount: c.model_count,
+      firstUsed: c.first_used,
+      lastUsed: c.last_used,
     };
   });
 
   const tsRows = db.prepare(`
-    SELECT strftime('%Y-%m-%d', started_at) as date, model_id, provider_id, cost_amount, currency, cost_state
+    SELECT strftime('%Y-%m-%d', started_at) as date, model_id, connection_id, cost_amount, currency, cost_state
     FROM provider_attempts WHERE cost_state IN ('reported','calculated') ORDER BY date
-  `).all() as Array<{ date: string; model_id: string; provider_id: string; cost_amount: string; currency: string; cost_state: string }>;
+  `).all() as Array<{ date: string; model_id: string; connection_id: string; cost_amount: string; currency: string; cost_state: string }>;
 
   const modelTsMap = new Map<string, Map<string, Decimal>>();
-  const providerTsMap = new Map<string, Map<string, Decimal>>();
+  const connectionTsMap = new Map<string, Map<string, Decimal>>();
   for (const r of tsRows) {
     if (!r.currency || !r.cost_amount) continue;
     try {
@@ -543,10 +559,10 @@ export function getModels(): ModelsResult {
       modelMap.set(r.date, modelVal.add(new Decimal(r.cost_amount)));
       modelTsMap.set(r.model_id, modelMap);
 
-      const providerMap = providerTsMap.get(r.provider_id) ?? new Map<string, Decimal>();
-      const providerVal = providerMap.get(r.date) ?? new Decimal(0);
-      providerMap.set(r.date, providerVal.add(new Decimal(r.cost_amount)));
-      providerTsMap.set(r.provider_id, providerMap);
+      const connMap = connectionTsMap.get(r.connection_id) ?? new Map<string, Decimal>();
+      const connVal = connMap.get(r.date) ?? new Decimal(0);
+      connMap.set(r.date, connVal.add(new Decimal(r.cost_amount)));
+      connectionTsMap.set(r.connection_id, connMap);
     } catch { /* skip */ }
   }
 
@@ -558,15 +574,15 @@ export function getModels(): ModelsResult {
   }
   costPerModelOverTime.sort((a, b) => a.date.localeCompare(b.date));
 
-  const costPerProviderOverTime: TimeSeriesPoint[] = [];
-  for (const [, dateMap] of providerTsMap) {
+  const costPerConnectionOverTime: TimeSeriesPoint[] = [];
+  for (const [, dateMap] of connectionTsMap) {
     for (const [date, cost] of dateMap) {
-      costPerProviderOverTime.push({ date, cost: cost.toFixed(), inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, reasoningTokens: 0 });
+      costPerConnectionOverTime.push({ date, cost: cost.toFixed(), inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, reasoningTokens: 0 });
     }
   }
-  costPerProviderOverTime.sort((a, b) => a.date.localeCompare(b.date));
+  costPerConnectionOverTime.sort((a, b) => a.date.localeCompare(b.date));
 
-  return { models, providers, costPerModelOverTime, costPerProviderOverTime };
+  return { models, connections, costPerModelOverTime, costPerConnectionOverTime };
 }
 
 export function getTools(): ToolsResult {

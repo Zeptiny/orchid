@@ -2,7 +2,7 @@ import type { ReactNode } from 'react';
 import { useAnalytics } from '../../hooks/useAnalytics';
 import type {
   ModelBreakdown,
-  ProviderBreakdown,
+  ConnectionBreakdown,
   TimeSeriesPoint,
 } from '../../../shared/types/analytics';
 import {
@@ -55,17 +55,21 @@ const modelColumns: ReadonlyArray<Column<ModelBreakdown>> = [
   { key: 'lastUsed', label: 'Last Used', render: (m) => formatDate(m.lastUsed) },
 ];
 
-const providerColumns: ReadonlyArray<Column<ProviderBreakdown>> = [
-  { key: 'provider', label: 'Provider', render: (p) => p.providerId },
-  { key: 'displayName', label: 'Display Name', render: (p) => p.providerDisplayName ?? '—' },
-  { key: 'cost', label: 'Total Cost', render: (p) => formatCostAmount(p.totalCost, null) },
-  { key: 'input', label: 'Input Tokens', render: (p) => formatTokenCount(p.totalInputTokens) },
-  { key: 'output', label: 'Output Tokens', render: (p) => formatTokenCount(p.totalOutputTokens) },
-  { key: 'attempts', label: 'Attempts', render: (p) => p.attempts },
-  { key: 'models', label: 'Models', render: (p) => p.modelCount },
-  { key: 'connections', label: 'Connections', render: (p) => p.connectionCount },
-  { key: 'failed', label: 'Failed', render: (p) => p.failed },
-  { key: 'interrupted', label: 'Interrupted', render: (p) => p.interrupted },
+const connectionColumns: ReadonlyArray<Column<ConnectionBreakdown>> = [
+  { key: 'connectionName', label: 'Connection', render: (c) => c.connectionName ?? '—' },
+  { key: 'connectionId', label: 'Connection ID', render: (c) => <span title={c.connectionId}>{c.connectionId.slice(0, 8)}…</span> },
+  { key: 'provider', label: 'Provider', render: (c) => c.providerId },
+  { key: 'providerDisplay', label: 'Display Name', render: (c) => c.providerDisplayName ?? '—' },
+  { key: 'cost', label: 'Total Cost', render: (c) => formatCostAmount(c.totalCost, null) },
+  { key: 'input', label: 'Input Tokens', render: (c) => formatTokenCount(c.totalInputTokens) },
+  { key: 'output', label: 'Output Tokens', render: (c) => formatTokenCount(c.totalOutputTokens) },
+  { key: 'attempts', label: 'Attempts', render: (c) => c.attempts },
+  { key: 'succeeded', label: 'Succeeded', render: (c) => c.succeeded },
+  { key: 'failed', label: 'Failed', render: (c) => c.failed },
+  { key: 'interrupted', label: 'Interrupted', render: (c) => c.interrupted },
+  { key: 'models', label: 'Models', render: (c) => c.modelCount },
+  { key: 'firstUsed', label: 'First Used', render: (c) => formatDate(c.firstUsed) },
+  { key: 'lastUsed', label: 'Last Used', render: (c) => formatDate(c.lastUsed) },
 ];
 
 export function ModelsProvidersTab() {
@@ -105,7 +109,7 @@ export function ModelsProvidersTab() {
 
       <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
         <StatCard label="Models" value={data.models.length} />
-        <StatCard label="Providers" value={data.providers.length} />
+        <StatCard label="Connections" value={data.connections.length} />
         <StatCard label="Total Spend" value={formatCostAmount(String(totalCost), null)} />
         <StatCard label="Total Tokens" value={formatTokenCount(totalInput + totalOutput)} subtext={`${formatTokenCount(totalInput)} in / ${formatTokenCount(totalOutput)} out`} />
         <StatCard label="API Calls" value={totalAttempts} subtext={`${totalSucceeded} succeeded`} />
@@ -121,12 +125,12 @@ export function ModelsProvidersTab() {
         />
       </ChartCard>
 
-      <ChartCard title="Per-Provider Breakdown">
+      <ChartCard title="Per-Connection Breakdown">
         <SortableTable
-          columns={providerColumns}
-          rows={data.providers}
-          rowKey={(p) => p.providerId}
-          emptyMessage="No provider usage recorded"
+          columns={connectionColumns}
+          rows={data.connections}
+          rowKey={(c) => c.connectionId}
+          emptyMessage="No connection usage recorded"
         />
       </ChartCard>
 

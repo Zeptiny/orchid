@@ -160,7 +160,7 @@ export function AnalyticsView({ onClose, onOpenSettings, activity }: AnalyticsVi
           <div className="config-main-header-text">
             <h1 className="truncate">Analytics</h1>
             <p className="truncate">
-              Usage insights — cost, tokens, tools, subagents, and context snapshots.
+              Usage insights — cost, tokens, tools, subagents, and context.
             </p>
           </div>
           <div className="config-main-header-actions">
