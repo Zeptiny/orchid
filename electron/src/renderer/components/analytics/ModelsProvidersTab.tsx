@@ -3,7 +3,7 @@ import { useAnalytics } from '../../hooks/useAnalytics';
 import type {
   ModelBreakdown,
   ConnectionBreakdown,
-  TimeSeriesPoint,
+  ModelCostTimeSeriesPoint,
   AnalyticsTimeRange,
 } from '../../../shared/types/analytics';
 import {
@@ -11,6 +11,7 @@ import {
   ChartCard,
   SortableTable,
   formatTokenCount,
+  formatCost,
   formatCostAmount,
   formatPercent,
   formatDate,
@@ -18,7 +19,7 @@ import {
   GRID_STROKE,
   axisTickProps,
   tokenTooltipProps,
-  costTooltipProps,
+  tooltipProps,
 } from './shared';
 import { Button } from '../ui/Button';
 import {
@@ -28,20 +29,29 @@ import {
 
 type Column<T> = { key: string; label: string; render: (row: T) => ReactNode };
 
-function aggregateCostByDate(points: readonly TimeSeriesPoint[]): { date: string; cost: number }[] {
-  const map = new Map<string, number>();
+function pivotCostByDate(points: readonly ModelCostTimeSeriesPoint[]): {
+  rows: Record<string, string | number>[];
+  series: { key: string; currency: string }[];
+} {
+  const byDate = new Map<string, Record<string, string | number>>();
+  const series = new Map<string, string>();
   for (const p of points) {
-    map.set(p.date, (map.get(p.date) ?? 0) + Number(p.cost));
+    const key = `${p.providerId}/${p.modelId} · ${p.connectionId.slice(0, 8)} (${p.currency})`;
+    const row = byDate.get(p.date) ?? { date: p.date };
+    row[key] = Number(p.cost);
+    byDate.set(p.date, row);
+    series.set(key, p.currency);
   }
-  return [...map.entries()]
-    .map(([date, cost]) => ({ date, cost }))
-    .sort((a, b) => a.date.localeCompare(b.date));
+  return {
+    rows: [...byDate.values()].sort((a, b) => String(a.date).localeCompare(String(b.date))),
+    series: [...series].map(([key, currency]) => ({ key, currency })),
+  };
 }
 
 const modelColumns: ReadonlyArray<Column<ModelBreakdown>> = [
   { key: 'model', label: 'Model', render: (m) => m.modelId },
   { key: 'connection', label: 'Connection', render: (m) => m.connectionName ?? '—' },
-  { key: 'cost', label: 'Total Cost', render: (m) => formatCostAmount(m.totalCost, null) },
+  { key: 'cost', label: 'Total Cost', render: (m) => formatCost(m.totalCost) },
   { key: 'input', label: 'Input Tokens', render: (m) => formatTokenCount(m.inputTokens) },
   { key: 'output', label: 'Output Tokens', render: (m) => formatTokenCount(m.outputTokens) },
   { key: 'cacheRead', label: 'Cache Read', render: (m) => formatTokenCount(m.cacheReadTokens) },
@@ -57,7 +67,7 @@ const modelColumns: ReadonlyArray<Column<ModelBreakdown>> = [
 
 const connectionColumns: ReadonlyArray<Column<ConnectionBreakdown>> = [
   { key: 'connectionName', label: 'Connection', render: (c) => c.connectionName ?? '—' },
-  { key: 'cost', label: 'Total Cost', render: (c) => formatCostAmount(c.totalCost, null) },
+  { key: 'cost', label: 'Total Cost', render: (c) => formatCost(c.totalCost) },
   { key: 'input', label: 'Input Tokens', render: (c) => formatTokenCount(c.totalInputTokens) },
   { key: 'output', label: 'Output Tokens', render: (c) => formatTokenCount(c.totalOutputTokens) },
   { key: 'attempts', label: 'Attempts', render: (c) => c.attempts },
@@ -79,7 +89,6 @@ export function ModelsProvidersTab({ timeRange }: { timeRange: AnalyticsTimeRang
   if (error) return <div className="p-8 text-error">Error: {error}</div>;
   if (!data) return null;
 
-  const totalCost = data.models.reduce((sum, m) => sum + Number(m.totalCost), 0);
   const totalInput = data.models.reduce((sum, m) => sum + m.inputTokens, 0);
   const totalOutput = data.models.reduce((sum, m) => sum + m.outputTokens, 0);
   const totalAttempts = data.models.reduce((sum, m) => sum + m.attempts, 0);
@@ -90,8 +99,9 @@ export function ModelsProvidersTab({ timeRange }: { timeRange: AnalyticsTimeRang
     ? formatPercent((totalFailed + totalInterrupted) / totalAttempts)
     : '—';
 
-  const costOverTime = aggregateCostByDate(data.costPerModelOverTime);
+  const costOverTime = pivotCostByDate(data.costPerModelOverTime);
   const tokenPerModel = data.models.map((m) => ({
+    label: `${m.providerId}/${m.modelId} · ${m.connectionId.slice(0, 8)}`,
     modelId: m.modelId,
     inputTokens: m.inputTokens,
     outputTokens: m.outputTokens,
@@ -108,7 +118,7 @@ export function ModelsProvidersTab({ timeRange }: { timeRange: AnalyticsTimeRang
       <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
         <StatCard label="Models" value={data.models.length} />
         <StatCard label="Connections" value={data.connections.length} />
-        <StatCard label="Total Spend" value={formatCostAmount(String(totalCost), null)} />
+        <StatCard label="Total Spend" value={formatCost(data.totalCost)} />
         <StatCard label="Total Tokens" value={formatTokenCount(totalInput + totalOutput)} subtext={`${formatTokenCount(totalInput)} in / ${formatTokenCount(totalOutput)} out`} />
         <StatCard label="API Calls" value={totalAttempts} subtext={`${totalSucceeded} succeeded`} />
         <StatCard label="Error Rate" value={errorRate} subtext={`${totalFailed} failed / ${totalInterrupted} interrupted`} />
@@ -118,7 +128,7 @@ export function ModelsProvidersTab({ timeRange }: { timeRange: AnalyticsTimeRang
         <SortableTable
           columns={modelColumns}
           rows={data.models}
-          rowKey={(m) => `${m.providerId}:${m.modelId}`}
+          rowKey={(m) => `${m.connectionId}:${m.providerId}:${m.modelId}`}
           emptyMessage="No model usage recorded"
         />
       </ChartCard>
@@ -133,14 +143,20 @@ export function ModelsProvidersTab({ timeRange }: { timeRange: AnalyticsTimeRang
       </ChartCard>
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-        <ChartCard title="Cost per Model Over Time" empty={costOverTime.length === 0} emptyMessage="No cost data recorded">
+        <ChartCard title="Cost per Model Over Time" empty={costOverTime.rows.length === 0} emptyMessage="No cost data recorded">
           <ResponsiveContainer width="100%" height={250}>
-            <LineChart data={costOverTime}>
+            <LineChart data={costOverTime.rows}>
               <CartesianGrid strokeDasharray="3 3" stroke={GRID_STROKE} />
               <XAxis dataKey="date" tick={axisTickProps} />
               <YAxis tick={axisTickProps} />
-              <Tooltip {...costTooltipProps} />
-              <Line type="monotone" dataKey="cost" stroke={CHART_PALETTE[0]} strokeWidth={2} dot={false} />
+              <Tooltip {...tooltipProps} formatter={(value, name) => {
+                const currency = costOverTime.series.find((item) => item.key === name)?.currency ?? null;
+                return formatCostAmount(String(value), currency);
+              }} />
+              <Legend />
+              {costOverTime.series.map((item, index) => (
+                <Line key={item.key} type="monotone" dataKey={item.key} stroke={CHART_PALETTE[index % CHART_PALETTE.length]} strokeWidth={2} dot={false} />
+              ))}
             </LineChart>
           </ResponsiveContainer>
         </ChartCard>
@@ -150,12 +166,12 @@ export function ModelsProvidersTab({ timeRange }: { timeRange: AnalyticsTimeRang
             <BarChart data={tokenPerModel} layout="vertical">
               <CartesianGrid strokeDasharray="3 3" stroke={GRID_STROKE} />
               <XAxis type="number" tick={axisTickProps} tickFormatter={(value) => formatTokenCount(Number(value))} />
-              <YAxis type="category" dataKey="modelId" tick={axisTickProps} width={120} />
+              <YAxis type="category" dataKey="label" tick={axisTickProps} width={170} />
               <Tooltip {...tokenTooltipProps} />
               <Legend />
               <Bar dataKey="inputTokens" name="Input" fill={CHART_PALETTE[0]} />
               <Bar dataKey="outputTokens" name="Output" fill={CHART_PALETTE[1]} />
-              <Bar dataKey="reasoningTokens" name="Reasoning" fill={CHART_PALETTE[2]} />
+              <Bar dataKey="reasoningTokens" name="Reasoning detail" fill={CHART_PALETTE[2]} />
             </BarChart>
           </ResponsiveContainer>
         </ChartCard>

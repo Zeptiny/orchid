@@ -20,6 +20,8 @@ export interface OverviewStats {
   readonly failedAttempts: number;
   readonly interruptedAttempts: number;
   readonly unknownCostCount: number;
+  readonly knownUsageCount: number;
+  readonly unknownUsageCount: number;
   readonly totalSessions: number;
 }
 
@@ -31,12 +33,28 @@ export interface CurrencyTotal {
 
 export interface TimeSeriesPoint {
   readonly date: string;
-  readonly cost: string;
   readonly inputTokens: number;
   readonly outputTokens: number;
   readonly cacheReadTokens: number;
   readonly cacheWriteTokens: number;
   readonly reasoningTokens: number;
+}
+
+export interface CostTimeSeriesPoint {
+  readonly date: string;
+  readonly currency: string;
+  readonly cost: string;
+}
+
+export interface ModelCostTimeSeriesPoint extends CostTimeSeriesPoint {
+  readonly modelId: string;
+  readonly providerId: string;
+  readonly connectionId: string;
+}
+
+export interface ConnectionCostTimeSeriesPoint extends CostTimeSeriesPoint {
+  readonly connectionId: string;
+  readonly providerId: string;
 }
 
 export interface SessionSummary {
@@ -57,13 +75,21 @@ export interface SessionSummary {
   readonly subagentCount: number;
 }
 
+export interface SessionsResult {
+  readonly sessions: readonly SessionSummary[];
+  readonly totalSessions: number;
+  readonly truncated: boolean;
+}
+
 export interface AttemptDetail {
   readonly attemptId: string;
   readonly chainId: string | null;
   readonly turnId: string | null;
   readonly providerId: string;
   readonly modelId: string;
+  readonly connectionId: string;
   readonly outcome: string;
+  readonly costState: string;
   readonly costAmount: string | null;
   readonly currency: string | null;
   readonly inputTokens: number | null;
@@ -84,7 +110,7 @@ export interface ChainBreakdown {
   readonly chainId: string | null;
   readonly agentName: string | null;
   readonly agentTier: string | null;
-  readonly totalCost: string;
+  readonly totalCost: readonly CurrencyTotal[];
   readonly inputTokens: number;
   readonly outputTokens: number;
   readonly attempts: number;
@@ -116,7 +142,7 @@ export interface SubagentBreakdownRow {
   readonly agentTier: string;
   readonly modelId: string;
   readonly status: string;
-  readonly totalCost: string;
+  readonly totalCost: readonly CurrencyTotal[];
   readonly inputTokens: number;
   readonly outputTokens: number;
   readonly attempts: number;
@@ -151,8 +177,9 @@ export interface SessionDetailResult {
 export interface ModelBreakdown {
   readonly modelId: string;
   readonly providerId: string;
+  readonly connectionId: string;
   readonly connectionName: string | null;
-  readonly totalCost: string;
+  readonly totalCost: readonly CurrencyTotal[];
   readonly inputTokens: number;
   readonly outputTokens: number;
   readonly cacheReadTokens: number;
@@ -169,7 +196,7 @@ export interface ModelBreakdown {
 export interface ProviderBreakdown {
   readonly providerId: string;
   readonly providerDisplayName: string | null;
-  readonly totalCost: string;
+  readonly totalCost: readonly CurrencyTotal[];
   readonly totalInputTokens: number;
   readonly totalOutputTokens: number;
   readonly attempts: number;
@@ -184,7 +211,7 @@ export interface ConnectionBreakdown {
   readonly connectionName: string | null;
   readonly providerId: string;
   readonly providerDisplayName: string | null;
-  readonly totalCost: string;
+  readonly totalCost: readonly CurrencyTotal[];
   readonly totalInputTokens: number;
   readonly totalOutputTokens: number;
   readonly attempts: number;
@@ -217,7 +244,7 @@ export interface SubagentSummary {
   readonly agentTier: string;
   readonly modelsUsed: readonly string[];
   readonly invocations: number;
-  readonly totalCost: string;
+  readonly totalCost: readonly CurrencyTotal[];
   readonly inputTokens: number;
   readonly outputTokens: number;
   readonly attempts: number;
@@ -245,9 +272,9 @@ export interface ContextSnapshotSummary {
 
 export interface OverviewResult {
   readonly stats: OverviewStats;
-  readonly spendOverTime: readonly TimeSeriesPoint[];
+  readonly spendOverTime: readonly CostTimeSeriesPoint[];
   readonly tokenUsageOverTime: readonly TimeSeriesPoint[];
-  readonly spendByModel: readonly { readonly modelId: string; readonly cost: string; readonly currency: string }[];
+  readonly spendByModel: readonly { readonly modelId: string; readonly providerId: string; readonly cost: string; readonly currency: string }[];
   readonly spendByProvider: readonly { readonly providerId: string; readonly cost: string; readonly currency: string }[];
   readonly outcomeDistribution: readonly { readonly outcome: string; readonly count: number }[];
   readonly costSourceDistribution: readonly { readonly source: string; readonly count: number }[];
@@ -255,10 +282,11 @@ export interface OverviewResult {
 }
 
 export interface ModelsResult {
+  readonly totalCost: readonly CurrencyTotal[];
   readonly models: readonly ModelBreakdown[];
   readonly connections: readonly ConnectionBreakdown[];
-  readonly costPerModelOverTime: readonly TimeSeriesPoint[];
-  readonly costPerConnectionOverTime: readonly TimeSeriesPoint[];
+  readonly costPerModelOverTime: readonly ModelCostTimeSeriesPoint[];
+  readonly costPerConnectionOverTime: readonly ConnectionCostTimeSeriesPoint[];
 }
 
 export interface ToolsResult {
@@ -276,7 +304,10 @@ export interface SubagentsResult {
 
 export interface ContextResult {
   readonly snapshots: readonly ContextSnapshotSummary[];
+  readonly totalSnapshots: number;
+  readonly snapshotsTruncated: boolean;
   readonly avgBreakdown: {
+    readonly usedTokens: number;
     readonly systemTokens: number;
     readonly toolsTokens: number;
     readonly toolUseTokens: number;

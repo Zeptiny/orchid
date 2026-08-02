@@ -23,9 +23,9 @@ export const TIME_RANGE_PRESETS: ReadonlyArray<{ id: TimeRangePreset; label: str
 ];
 
 function toDateString(d: Date): string {
-  const yyyy = d.getFullYear();
-  const mm = String(d.getMonth() + 1).padStart(2, '0');
-  const dd = String(d.getDate()).padStart(2, '0');
+  const yyyy = d.getUTCFullYear();
+  const mm = String(d.getUTCMonth() + 1).padStart(2, '0');
+  const dd = String(d.getUTCDate()).padStart(2, '0');
   return `${yyyy}-${mm}-${dd}`;
 }
 
@@ -34,25 +34,25 @@ function computePresetDates(preset: TimeRangePreset): { startDate: string; endDa
 
   const now = new Date();
   const end = new Date(now);
-  end.setHours(23, 59, 59, 999);
+  end.setUTCHours(23, 59, 59, 999);
 
   const start = new Date(now);
-  start.setHours(0, 0, 0, 0);
+  start.setUTCHours(0, 0, 0, 0);
 
   switch (preset) {
     case '1d':
       break;
     case '7d':
-      start.setDate(start.getDate() - 6);
+      start.setUTCDate(start.getUTCDate() - 6);
       break;
     case '1m':
-      start.setMonth(start.getMonth() - 1);
+      start.setUTCMonth(start.getUTCMonth() - 1);
       break;
     case '6m':
-      start.setMonth(start.getMonth() - 6);
+      start.setUTCMonth(start.getUTCMonth() - 6);
       break;
     case '1y':
-      start.setFullYear(start.getFullYear() - 1);
+      start.setUTCFullYear(start.getUTCFullYear() - 1);
       break;
   }
 

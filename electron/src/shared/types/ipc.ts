@@ -1114,8 +1114,8 @@ export interface OrchidAPI {
  
   analytics: {
      overview: (params?: { readonly timeRange?: import('./analytics').AnalyticsTimeRange }) => Promise<import('./analytics').OverviewResult>;
-     sessions: (params?: { readonly limit?: number; readonly timeRange?: import('./analytics').AnalyticsTimeRange }) => Promise<readonly import('./analytics').SessionSummary[]>;
-     sessionDetail: (params: { readonly sessionId: string }) => Promise<import('./analytics').SessionDetailResult>;
+     sessions: (params?: { readonly limit?: number; readonly timeRange?: import('./analytics').AnalyticsTimeRange }) => Promise<import('./analytics').SessionsResult>;
+     sessionDetail: (params: { readonly sessionId: string; readonly timeRange?: import('./analytics').AnalyticsTimeRange }) => Promise<import('./analytics').SessionDetailResult>;
      models: (params?: { readonly timeRange?: import('./analytics').AnalyticsTimeRange }) => Promise<import('./analytics').ModelsResult>;
      tools: (params?: { readonly timeRange?: import('./analytics').AnalyticsTimeRange }) => Promise<import('./analytics').ToolsResult>;
      subagents: (params?: { readonly timeRange?: import('./analytics').AnalyticsTimeRange }) => Promise<import('./analytics').SubagentsResult>;

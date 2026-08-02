@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react';
 import { useAnalytics } from '../../hooks/useAnalytics';
 import type { SubagentSummary, AnalyticsTimeRange } from '../../../shared/types/analytics';
-import { StatCard, ChartCard, SortableTable, formatTokenCount, formatCostAmount, formatDuration, CHART_PALETTE, GRID_STROKE, axisTickProps, tooltipProps, tokenTooltipProps, costTooltipProps } from './shared';
+import { StatCard, ChartCard, SortableTable, formatTokenCount, formatCost, formatCostAmount, formatDuration, CHART_PALETTE, GRID_STROKE, axisTickProps, tooltipProps, tokenTooltipProps } from './shared';
 import { Button } from '../ui/Button';
 import {
   BarChart, Bar, PieChart, Pie, Cell,
@@ -29,19 +29,22 @@ export function SubagentsTab({ timeRange }: { timeRange: AnalyticsTimeRange }) {
   }));
 
   const costByNameData = data.costByAgentName.map((c) => ({
-    agentName: c.agentName,
+    agentName: `${c.agentName} (${c.currency})`,
     cost: Number(c.cost),
+    currency: c.currency,
   }));
 
   const costByTierData = data.costByAgentTier.map((c) => ({
-    tier: c.tier,
+    tier: `${c.tier} (${c.currency})`,
     cost: Number(c.cost),
+    currency: c.currency,
   }));
 
   const columns: ReadonlyArray<{
     key: string;
     label: string;
     sortable?: boolean;
+    sortValue?: (row: SubagentSummary) => string | number;
     render: (row: SubagentSummary) => ReactNode;
   }> = [
     { key: 'agentName', label: 'Agent Name', sortable: true, render: (s) => s.agentName },
@@ -49,7 +52,7 @@ export function SubagentsTab({ timeRange }: { timeRange: AnalyticsTimeRange }) {
     { key: 'agentTier', label: 'Tier', sortable: true, render: (s) => s.agentTier },
     { key: 'modelsUsed', label: 'Models Used', render: (s) => s.modelsUsed.join(', ') || '—' },
     { key: 'invocations', label: 'Invocations', sortable: true, render: (s) => s.invocations },
-    { key: 'totalCost', label: 'Total Cost', sortable: true, render: (s) => formatCostAmount(s.totalCost, null) },
+    { key: 'totalCost', label: 'Total Cost', sortable: true, sortValue: (s) => s.totalCost.map((cost) => cost.amount).join(','), render: (s) => formatCost(s.totalCost) },
     { key: 'inputTokens', label: 'Input Tokens', sortable: true, render: (s) => formatTokenCount(s.inputTokens) },
     { key: 'outputTokens', label: 'Output Tokens', sortable: true, render: (s) => formatTokenCount(s.outputTokens) },
     { key: 'attempts', label: 'Attempts', sortable: true, render: (s) => s.attempts },
@@ -77,7 +80,7 @@ export function SubagentsTab({ timeRange }: { timeRange: AnalyticsTimeRange }) {
         <SortableTable
           columns={columns}
           rows={data.summaries}
-          rowKey={(s) => s.agentName}
+          rowKey={(s) => `${s.agentName}:${s.agentType}:${s.agentTier}`}
           emptyMessage="No subagent data"
         />
       </ChartCard>
@@ -89,7 +92,7 @@ export function SubagentsTab({ timeRange }: { timeRange: AnalyticsTimeRange }) {
               <CartesianGrid strokeDasharray="3 3" stroke={GRID_STROKE} />
               <XAxis dataKey="agentName" tick={axisTickProps} />
               <YAxis tick={axisTickProps} />
-              <Tooltip {...costTooltipProps} />
+              <Tooltip {...tooltipProps} formatter={(value, _name, item) => formatCostAmount(String(value), item.payload.currency)} />
               <Bar dataKey="cost" fill={CHART_PALETTE[0]} />
             </BarChart>
           </ResponsiveContainer>
@@ -129,7 +132,7 @@ export function SubagentsTab({ timeRange }: { timeRange: AnalyticsTimeRange }) {
               <CartesianGrid strokeDasharray="3 3" stroke={GRID_STROKE} />
               <XAxis dataKey="tier" tick={axisTickProps} />
               <YAxis tick={axisTickProps} />
-              <Tooltip {...costTooltipProps} />
+              <Tooltip {...tooltipProps} formatter={(value, _name, item) => formatCostAmount(String(value), item.payload.currency)} />
               <Bar dataKey="cost" fill={CHART_PALETTE[3]} />
             </BarChart>
           </ResponsiveContainer>

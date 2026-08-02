@@ -92,7 +92,7 @@ export function ToolsTab({ timeRange }: { timeRange: AnalyticsTimeRange }) {
         <SortableTable
           columns={toolColumns}
           rows={data.tools}
-          rowKey={(t) => t.toolName}
+          rowKey={(t) => `${t.toolSource}:${t.mcpServerName ?? ''}:${t.toolFamily}:${t.toolName}`}
           emptyMessage="No tool invocations recorded"
         />
       </ChartCard>

@@ -24,6 +24,7 @@ const sessionsParamsSchema = z.object({
 
 const sessionDetailParamsSchema = z.object({
   sessionId: z.string().uuid(),
+  timeRange: timeRangeSchema,
 });
 
 const contextParamsSchema = z.object({
@@ -61,7 +62,7 @@ export function registerAnalyticsIPC(): void {
     const parsed = sessionDetailParamsSchema.safeParse(payload);
     if (!parsed.success) throw new Error('Invalid analytics:session_detail payload');
     try {
-      return getSessionDetail(parsed.data.sessionId);
+      return getSessionDetail(parsed.data.sessionId, parsed.data.timeRange as AnalyticsTimeRange | undefined);
     } catch (error) {
       console.error('[analytics] Session detail query failed', { error });
       throw new Error(`Analytics session detail query failed: ${error instanceof Error ? error.message : String(error)}`, { cause: error });

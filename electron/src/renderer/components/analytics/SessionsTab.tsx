@@ -19,7 +19,7 @@ import {
 } from './shared';
 import { Button } from '../ui/Button';
 import {
-  PieChart, Pie, Cell, BarChart, Bar,
+  BarChart, Bar,
   XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend,
 } from 'recharts';
 import type { SessionSummary, AnalyticsTimeRange } from '../../../shared/types/analytics';
@@ -60,19 +60,22 @@ function SessionList({ timeRange, onRowClick }: { timeRange: AnalyticsTimeRange;
           { key: 'models', label: 'Models', render: (r) => r.modelsUsed.join(', ') || '—' },
           { key: 'subagents', label: 'Subagents', render: (r) => r.subagentCount },
         ]}
-        rows={data}
+        rows={data.sessions}
         rowKey={(r) => r.sessionId}
         onRowClick={onRowClick}
         emptyMessage="No sessions found"
       />
+      {data.truncated && (
+        <div className="text-xs text-base-content/50">Showing {data.sessions.length} of {data.totalSessions} sessions in this range.</div>
+      )}
     </div>
   );
 }
 
-function SessionDetail({ sessionId, onBack }: { sessionId: string; onBack: () => void }) {
+function SessionDetail({ sessionId, timeRange, onBack }: { sessionId: string; timeRange: AnalyticsTimeRange; onBack: () => void }) {
   const { data, loading, error, refresh } = useAnalytics(
-    () => window.orchid.analytics.sessionDetail({ sessionId }),
-    [sessionId],
+    () => window.orchid.analytics.sessionDetail({ sessionId, timeRange }),
+    [sessionId, timeRange],
   );
 
   if (loading) return <div className="p-8 text-base-content/50">Loading session detail…</div>;
@@ -97,28 +100,49 @@ function SessionDetail({ sessionId, onBack }: { sessionId: string; onBack: () =>
     { name: 'Reasoning', value: reasoningTokens },
   ].filter((d) => d.value > 0);
 
-  const costByModelMap = new Map<string, number>();
-  const tokensByModelMap = new Map<string, { input: number; output: number; reasoning: number }>();
+  const costByModelMap = new Map<string, {
+    providerId: string; modelId: string; connectionId: string; currency: string; cost: number;
+  }>();
+  const tokensByModelMap = new Map<string, {
+    providerId: string; modelId: string; connectionId: string; input: number; output: number; reasoning: number;
+  }>();
   for (const a of data.attempts) {
-    if (a.costAmount !== null) {
-      costByModelMap.set(a.modelId, (costByModelMap.get(a.modelId) ?? 0) + Number(a.costAmount));
+    const identityKey = `${a.providerId}\0${a.modelId}\0${a.connectionId}`;
+    if ((a.costState === 'reported' || a.costState === 'calculated') && a.costAmount !== null && a.currency !== null) {
+      const key = `${identityKey}\0${a.currency}`;
+      const entry = costByModelMap.get(key) ?? {
+        providerId: a.providerId,
+        modelId: a.modelId,
+        connectionId: a.connectionId,
+        currency: a.currency,
+        cost: 0,
+      };
+      entry.cost += Number(a.costAmount);
+      costByModelMap.set(key, entry);
     }
-    const entry = tokensByModelMap.get(a.modelId) ?? { input: 0, output: 0, reasoning: 0 };
+    const entry = tokensByModelMap.get(identityKey) ?? {
+      providerId: a.providerId,
+      modelId: a.modelId,
+      connectionId: a.connectionId,
+      input: 0,
+      output: 0,
+      reasoning: 0,
+    };
     entry.input += a.inputTokens ?? 0;
     entry.output += a.outputTokens ?? 0;
     entry.reasoning += a.reasoningTokens ?? 0;
-    tokensByModelMap.set(a.modelId, entry);
+    tokensByModelMap.set(identityKey, entry);
   }
-  const costByModel = Array.from(costByModelMap, ([modelId, cost]) => ({ modelId, cost }));
-  const tokensByModel = Array.from(tokensByModelMap, ([modelId, t]) => ({
-    modelId,
+  const costByModel = Array.from(costByModelMap.values()).map((entry) => ({
+    ...entry,
+    label: `${entry.providerId}/${entry.modelId}/${truncateId(entry.connectionId)} (${entry.currency})`,
+  }));
+  const tokensByModel = Array.from(tokensByModelMap.values(), (t) => ({
+    label: `${t.providerId}/${t.modelId}/${truncateId(t.connectionId)}`,
     inputTokens: t.input,
     outputTokens: t.output,
     reasoningTokens: t.reasoning,
   }));
-
-  const pieLabel = (entry: { name?: string; value?: number }) =>
-    `${entry.name ?? ''}: ${formatTokenCount(entry.value ?? 0)}`;
 
   return (
     <div className="space-y-6">
@@ -144,17 +168,15 @@ function SessionDetail({ sessionId, onBack }: { sessionId: string; onBack: () =>
       </div>
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-        <ChartCard title="Token Breakdown" empty={tokenBreakdown.length === 0} emptyMessage="No token usage recorded">
+        <ChartCard title="Token Totals & Reported Details (not additive)" empty={tokenBreakdown.length === 0} emptyMessage="No token usage recorded">
           <ResponsiveContainer width="100%" height={250}>
-            <PieChart>
-              <Pie data={tokenBreakdown} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={80} label={pieLabel}>
-                {tokenBreakdown.map((_, i) => (
-                  <Cell key={i} fill={CHART_PALETTE[i % CHART_PALETTE.length]} />
-                ))}
-              </Pie>
+            <BarChart data={tokenBreakdown}>
+              <CartesianGrid strokeDasharray="3 3" stroke={GRID_STROKE} />
+              <XAxis dataKey="name" tick={axisTickProps} />
+              <YAxis tick={axisTickProps} tickFormatter={(value) => formatTokenCount(Number(value))} />
               <Tooltip {...tokenTooltipProps} />
-              <Legend />
-            </PieChart>
+              <Bar dataKey="value" fill={CHART_PALETTE[0]} />
+            </BarChart>
           </ResponsiveContainer>
         </ChartCard>
 
@@ -163,8 +185,8 @@ function SessionDetail({ sessionId, onBack }: { sessionId: string; onBack: () =>
             <BarChart data={costByModel} layout="vertical">
               <CartesianGrid strokeDasharray="3 3" stroke={GRID_STROKE} />
               <XAxis type="number" tick={axisTickProps} />
-              <YAxis type="category" dataKey="modelId" tick={axisTickProps} width={120} />
-              <Tooltip {...costTooltipProps} />
+              <YAxis type="category" dataKey="label" tick={axisTickProps} width={150} />
+              <Tooltip {...costTooltipProps} formatter={(value, _name, item) => formatCostAmount(String(value), item.payload.currency)} />
               <Bar dataKey="cost" fill={CHART_PALETTE[0]} />
             </BarChart>
           </ResponsiveContainer>
@@ -175,12 +197,12 @@ function SessionDetail({ sessionId, onBack }: { sessionId: string; onBack: () =>
             <BarChart data={tokensByModel} layout="vertical">
               <CartesianGrid strokeDasharray="3 3" stroke={GRID_STROKE} />
               <XAxis type="number" tick={axisTickProps} tickFormatter={(value) => formatTokenCount(Number(value))} />
-              <YAxis type="category" dataKey="modelId" tick={axisTickProps} width={120} />
+              <YAxis type="category" dataKey="label" tick={axisTickProps} width={180} />
               <Tooltip {...tokenTooltipProps} />
               <Legend />
               <Bar dataKey="inputTokens" name="Input" stackId="a" fill={CHART_PALETTE[0]} />
               <Bar dataKey="outputTokens" name="Output" stackId="a" fill={CHART_PALETTE[1]} />
-              <Bar dataKey="reasoningTokens" name="Reasoning" stackId="a" fill={CHART_PALETTE[2]} />
+              <Bar dataKey="reasoningTokens" name="Reasoning detail" fill={CHART_PALETTE[2]} />
             </BarChart>
           </ResponsiveContainer>
         </ChartCard>
@@ -192,7 +214,7 @@ function SessionDetail({ sessionId, onBack }: { sessionId: string; onBack: () =>
             { key: 'chainId', label: 'Chain ID', render: (r) => r.chainId ? <span title={r.chainId}>{truncateId(r.chainId)}</span> : '—' },
             { key: 'agentName', label: 'Agent', render: (r) => r.agentName ?? '—' },
             { key: 'agentTier', label: 'Tier', render: (r) => r.agentTier ?? '—' },
-            { key: 'totalCost', label: 'Cost', render: (r) => formatCostAmount(r.totalCost, null) },
+            { key: 'totalCost', label: 'Cost', render: (r) => formatCost(r.totalCost) },
             { key: 'inputTokens', label: 'Input Tokens', render: (r) => formatTokenCount(r.inputTokens) },
             { key: 'outputTokens', label: 'Output Tokens', render: (r) => formatTokenCount(r.outputTokens) },
             { key: 'attempts', label: 'Attempts', render: (r) => r.attempts },
@@ -211,7 +233,9 @@ function SessionDetail({ sessionId, onBack }: { sessionId: string; onBack: () =>
             { key: 'startedAt', label: 'Started', render: (r) => formatDate(r.startedAt) },
             { key: 'modelId', label: 'Model', render: (r) => r.modelId },
             { key: 'providerId', label: 'Provider', render: (r) => r.providerId },
+            { key: 'connectionId', label: 'Connection', render: (r) => <span title={r.connectionId}>{truncateId(r.connectionId)}</span> },
             { key: 'outcome', label: 'Outcome', render: (r) => r.outcome },
+            { key: 'costState', label: 'Cost State', render: (r) => r.costState },
             { key: 'costAmount', label: 'Cost', render: (r) => formatCostAmount(r.costAmount, r.currency) },
             { key: 'inputTokens', label: 'Input', render: (r) => r.inputTokens !== null ? formatTokenCount(r.inputTokens) : '—' },
             { key: 'outputTokens', label: 'Output', render: (r) => r.outputTokens !== null ? formatTokenCount(r.outputTokens) : '—' },
@@ -259,7 +283,7 @@ function SessionDetail({ sessionId, onBack }: { sessionId: string; onBack: () =>
             { key: 'agentTier', label: 'Tier', render: (r) => r.agentTier },
             { key: 'modelId', label: 'Model', render: (r) => r.modelId },
             { key: 'status', label: 'Status', render: (r) => r.status },
-            { key: 'totalCost', label: 'Cost', render: (r) => formatCostAmount(r.totalCost, null) },
+            { key: 'totalCost', label: 'Cost', render: (r) => formatCost(r.totalCost) },
             { key: 'inputTokens', label: 'Input Tokens', render: (r) => formatTokenCount(r.inputTokens) },
             { key: 'outputTokens', label: 'Output Tokens', render: (r) => formatTokenCount(r.outputTokens) },
             { key: 'attempts', label: 'Attempts', render: (r) => r.attempts },
@@ -280,7 +304,7 @@ export function SessionsTab({ timeRange }: { timeRange: AnalyticsTimeRange }) {
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
 
   if (selectedSessionId !== null) {
-    return <SessionDetail sessionId={selectedSessionId} onBack={() => setSelectedSessionId(null)} />;
+    return <SessionDetail sessionId={selectedSessionId} timeRange={timeRange} onBack={() => setSelectedSessionId(null)} />;
   }
   return <SessionList timeRange={timeRange} onRowClick={(row) => setSelectedSessionId(row.sessionId)} />;
 }

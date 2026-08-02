@@ -10,16 +10,16 @@ export function formatTokenCount(n: number): string {
 }
 
 export function formatCost(currencies: ReadonlyArray<{ currency: string; amount: string }>): string {
-  if (currencies.length === 0) return '$0.00';
-  return currencies.map((c) => `$${Number(c.amount).toFixed(4)} ${c.currency}`).join(', ');
+  if (currencies.length === 0) return '—';
+  return currencies.map((c) => formatCostAmount(c.amount, c.currency)).join(', ');
 }
 
 export function formatCostAmount(amount: string | null, currency: string | null): string {
   if (amount === null) return '—';
   const n = Number(amount);
   if (!Number.isFinite(n)) return '—';
-  const formatted = `$${n.toFixed(4)}`;
-  return currency ? `${formatted} ${currency}` : formatted;
+  const formatted = n.toFixed(4);
+  return currency ? `${currency} ${formatted}` : formatted;
 }
 
 export function formatDuration(ms: number | null): string {
@@ -43,12 +43,12 @@ export function formatDate(iso: string | null): string {
   if (iso === null) return '—';
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return '—';
-  const yyyy = d.getFullYear();
-  const mm = String(d.getMonth() + 1).padStart(2, '0');
-  const dd = String(d.getDate()).padStart(2, '0');
-  const hh = String(d.getHours()).padStart(2, '0');
-  const min = String(d.getMinutes()).padStart(2, '0');
-  return `${yyyy}-${mm}-${dd} ${hh}:${min}`;
+  const yyyy = d.getUTCFullYear();
+  const mm = String(d.getUTCMonth() + 1).padStart(2, '0');
+  const dd = String(d.getUTCDate()).padStart(2, '0');
+  const hh = String(d.getUTCHours()).padStart(2, '0');
+  const min = String(d.getUTCMinutes()).padStart(2, '0');
+  return `${yyyy}-${mm}-${dd} ${hh}:${min} UTC`;
 }
 
 export function truncateId(id: string, len = 8): string {

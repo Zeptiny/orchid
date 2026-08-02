@@ -32,7 +32,6 @@ export function useAnalytics<T>(
         }
       });
     return () => { cancelled = true; };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [refreshKey, ...deps]);
 
   return { ...state, refresh };

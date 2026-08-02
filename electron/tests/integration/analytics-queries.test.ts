@@ -113,8 +113,8 @@ function openaiSnapshot(): FrozenProviderRequestSnapshot {
 
 // ─── Cost helpers ─────────────────────────────────────────────────────────────
 
-function calculatedCost(amount: string): AttemptCostResolution {
-  return { state: 'calculated', source: 'token-formula', currency: 'USD', amount };
+function calculatedCost(amount: string, currency = 'USD'): AttemptCostResolution {
+  return { state: 'calculated', source: 'token-formula', currency, amount };
 }
 
 function unknownCost(reason: string): AttemptCostResolution {
@@ -264,7 +264,9 @@ describe('analytics-queries', () => {
       expect(overview.outcomeDistribution).toHaveLength(0);
 
       const sessions = getSessions();
-      expect(sessions).toHaveLength(0);
+      expect(sessions.sessions).toHaveLength(0);
+      expect(sessions.totalSessions).toBe(0);
+      expect(sessions.truncated).toBe(false);
 
       const detail = getSessionDetail('nonexistent');
       expect(detail.summary.attemptCount).toBe(0);
@@ -349,14 +351,13 @@ describe('analytics-queries', () => {
       expect(result.spendOverTime).toHaveLength(1);
       expect(result.spendOverTime[0].date).toBe('2026-07-12');
       expect(result.spendOverTime[0].cost).toBe('3');
-      expect(result.spendOverTime[0].inputTokens).toBe(3000);
-      expect(result.spendOverTime[0].outputTokens).toBe(1500);
-      // tokenUsageOverTime shares the same array
-      expect(result.tokenUsageOverTime).toBe(result.spendOverTime);
+      expect(result.spendOverTime[0].currency).toBe('USD');
+      expect(result.tokenUsageOverTime[0].inputTokens).toBe(3000);
+      expect(result.tokenUsageOverTime[0].outputTokens).toBe(1500);
 
       // Spend by model
       expect(result.spendByModel).toHaveLength(1);
-      expect(result.spendByModel[0]).toEqual({ modelId: 'claude-test', cost: '3', currency: 'USD' });
+      expect(result.spendByModel[0]).toEqual({ modelId: 'claude-test', providerId: 'anthropic', cost: '3', currency: 'USD' });
 
       // Spend by provider
       expect(result.spendByProvider).toHaveLength(1);
@@ -372,6 +373,29 @@ describe('analytics-queries', () => {
 
       // Agent tier distribution
       expect(result.agentTierDistribution).toContainEqual({ tier: 'main', count: 3 });
+    });
+
+    it('keeps currencies separate in spend time series and reports usage coverage', () => {
+      seedProviderAttempt({
+        attemptId: 'usd-attempt', sessionId: 'sess-1', chainId: null, turnId: 'turn-1',
+        outcome: 'succeeded', usage: { inputTokens: 10, outputTokens: 5 },
+        cost: calculatedCost('1', 'USD'),
+      });
+      seedProviderAttempt({
+        attemptId: 'eur-attempt', sessionId: 'sess-1', chainId: null, turnId: 'turn-2',
+        outcome: 'succeeded', usage: null,
+        cost: calculatedCost('2', 'EUR'),
+      });
+
+      const result = getOverview();
+
+      expect(result.spendOverTime).toEqual([
+        { date: '2026-07-12', currency: 'EUR', cost: '2' },
+        { date: '2026-07-12', currency: 'USD', cost: '1' },
+      ]);
+      expect(result.stats.knownUsageCount).toBe(1);
+      expect(result.stats.unknownUsageCount).toBe(1);
+      expect(result.tokenUsageOverTime[0]).toMatchObject({ inputTokens: 10, outputTokens: 5 });
     });
   });
 
@@ -404,10 +428,12 @@ describe('analytics-queries', () => {
       });
 
       const sessions = getSessions(100);
-      expect(sessions).toHaveLength(2);
+      expect(sessions.sessions).toHaveLength(2);
+      expect(sessions.totalSessions).toBe(2);
+      expect(sessions.truncated).toBe(false);
 
       // Session 1
-      const s1 = sessions.find((s) => s.sessionId === 'sess-1')!;
+      const s1 = sessions.sessions.find((s) => s.sessionId === 'sess-1')!;
       expect(s1.attempts).toBe(2);
       expect(s1.succeeded).toBe(2);
       expect(s1.failed).toBe(0);
@@ -424,7 +450,7 @@ describe('analytics-queries', () => {
       expect(s1.totalCost[0]).toEqual({ currency: 'USD', amount: '3', recordCount: 2 });
 
       // Session 2
-      const s2 = sessions.find((s) => s.sessionId === 'sess-2')!;
+      const s2 = sessions.sessions.find((s) => s.sessionId === 'sess-2')!;
       expect(s2.attempts).toBe(1);
       expect(s2.succeeded).toBe(0);
       expect(s2.failed).toBe(1);
@@ -434,6 +460,11 @@ describe('analytics-queries', () => {
       expect(s2.modelsUsed).toEqual(['claude-test']);
       expect(s2.subagentCount).toBe(0);
       expect(s2.totalCost).toHaveLength(0);
+
+      const limited = getSessions(1);
+      expect(limited.sessions).toHaveLength(1);
+      expect(limited.totalSessions).toBe(2);
+      expect(limited.truncated).toBe(true);
     });
   });
 
@@ -510,7 +541,10 @@ describe('analytics-queries', () => {
       expect(detail.attempts).toHaveLength(2);
       const att1 = detail.attempts.find((a) => a.attemptId === 'att-1')!;
       expect(att1.modelId).toBe('claude-test');
+      expect(att1.providerId).toBe('anthropic');
+      expect(att1.connectionId).toBe(ANTHROPIC_CONNECTION_ID);
       expect(att1.outcome).toBe('succeeded');
+      expect(att1.costState).toBe('calculated');
       expect(att1.inputTokens).toBe(1000);
       expect(att1.outputTokens).toBe(500);
       expect(att1.chainId).toBeNull();
@@ -534,7 +568,7 @@ describe('analytics-queries', () => {
       expect(mainChain.inputTokens).toBe(1000);
       expect(mainChain.outputTokens).toBe(500);
       expect(mainChain.succeeded).toBe(1);
-      expect(mainChain.totalCost).toBe('1');
+      expect(mainChain.totalCost).toEqual([{ currency: 'USD', amount: '1', recordCount: 1 }]);
 
       const subChain = detail.chains.find((c) => c.chainId === 'chain-sub-1')!;
       expect(subChain.attempts).toBe(1);
@@ -542,7 +576,7 @@ describe('analytics-queries', () => {
       expect(subChain.agentTier).toBe('sprout');
       expect(subChain.inputTokens).toBe(500);
       expect(subChain.outputTokens).toBe(250);
-      expect(subChain.totalCost).toBe('1');
+      expect(subChain.totalCost).toEqual([{ currency: 'USD', amount: '1', recordCount: 1 }]);
 
       // Tool calls
       expect(detail.toolCalls).toHaveLength(2);
@@ -573,8 +607,48 @@ describe('analytics-queries', () => {
       expect(sa.attempts).toBe(1);
       expect(sa.inputTokens).toBe(500);
       expect(sa.outputTokens).toBe(250);
-      expect(sa.totalCost).toBe('1');
+      expect(sa.totalCost).toEqual([{ currency: 'USD', amount: '1', recordCount: 1 }]);
       expect(sa.completedAt).not.toBeNull();
+    });
+
+    it('applies the selected time range to attempts, tools, and subagents', () => {
+      seedProviderAttempt({
+        attemptId: 'old-attempt', sessionId: 'sess-1', chainId: 'old-chain', turnId: 'old-turn',
+        outcome: 'succeeded', usage: { inputTokens: 10, outputTokens: 5 }, cost: calculatedCost('1'),
+      });
+      seedToolAttempt({
+        toolAttemptId: 'old-tool', sessionId: 'sess-1', chainId: 'old-chain', turnId: 'old-turn',
+        toolName: 'read', toolSource: 'builtin', toolFamily: 'filesystem', outcome: 'complete', resultSizeBytes: 10,
+      });
+      seedSubagentAttribution({
+        subagentId: 'old-subagent', sessionId: 'sess-1', chainId: 'old-chain', agentName: 'old',
+        agentType: 'worker', agentTier: 'sprout', modelId: 'claude-test', connectionId: ANTHROPIC_CONNECTION_ID,
+        status: 'completed',
+      });
+
+      clockMs = new Date('2026-07-15T10:00:00.000Z').getTime();
+      seedProviderAttempt({
+        attemptId: 'new-attempt', sessionId: 'sess-1', chainId: 'new-chain', turnId: 'new-turn',
+        outcome: 'succeeded', usage: { inputTokens: 20, outputTokens: 10 }, cost: calculatedCost('2'),
+      });
+      seedToolAttempt({
+        toolAttemptId: 'new-tool', sessionId: 'sess-1', chainId: 'new-chain', turnId: 'new-turn',
+        toolName: 'grep', toolSource: 'builtin', toolFamily: 'search', outcome: 'complete', resultSizeBytes: 20,
+      });
+      seedSubagentAttribution({
+        subagentId: 'new-subagent', sessionId: 'sess-1', chainId: 'new-chain', agentName: 'new',
+        agentType: 'worker', agentTier: 'sprout', modelId: 'claude-test', connectionId: ANTHROPIC_CONNECTION_ID,
+        status: 'completed',
+      });
+
+      const detail = getSessionDetail('sess-1', {
+        startDate: '2026-07-15T00:00:00.000Z',
+        endDate: '2026-07-15T23:59:59.999Z',
+      });
+
+      expect(detail.attempts.map((attempt) => attempt.attemptId)).toEqual(['new-attempt']);
+      expect(detail.toolCalls.map((tool) => tool.toolAttemptId)).toEqual(['new-tool']);
+      expect(detail.subagents.map((subagent) => subagent.subagentId)).toEqual(['new-subagent']);
     });
   });
 
@@ -622,7 +696,7 @@ describe('analytics-queries', () => {
       expect(claude.failed).toBe(1);
       expect(claude.inputTokens).toBe(1500);
       expect(claude.outputTokens).toBe(500);
-      expect(claude.totalCost).toBe('1'); // only att-1 has calculated cost
+      expect(claude.totalCost).toEqual([{ currency: 'USD', amount: '1', recordCount: 1 }]);
 
       const gpt = result.models.find((m) => m.modelId === 'gpt-test')!;
       expect(gpt.providerId).toBe('openai');
@@ -631,7 +705,7 @@ describe('analytics-queries', () => {
       expect(gpt.succeeded).toBe(1);
       expect(gpt.inputTokens).toBe(2000);
       expect(gpt.outputTokens).toBe(1000);
-      expect(gpt.totalCost).toBe('3');
+      expect(gpt.totalCost).toEqual([{ currency: 'USD', amount: '3', recordCount: 1 }]);
 
       // Connections
       expect(result.connections).toHaveLength(2);
@@ -645,7 +719,7 @@ describe('analytics-queries', () => {
       expect(anthropicConn.modelCount).toBe(1);
       expect(anthropicConn.totalInputTokens).toBe(1500);
       expect(anthropicConn.totalOutputTokens).toBe(500);
-      expect(anthropicConn.totalCost).toBe('1');
+      expect(anthropicConn.totalCost).toEqual([{ currency: 'USD', amount: '1', recordCount: 1 }]);
 
       const openaiConn = result.connections.find((c) => c.connectionId === OPENAI_CONNECTION_ID)!;
       expect(openaiConn.connectionName).toBe('Personal');
@@ -655,7 +729,7 @@ describe('analytics-queries', () => {
       expect(openaiConn.modelCount).toBe(1);
       expect(openaiConn.totalInputTokens).toBe(2000);
       expect(openaiConn.totalOutputTokens).toBe(1000);
-      expect(openaiConn.totalCost).toBe('3');
+      expect(openaiConn.totalCost).toEqual([{ currency: 'USD', amount: '3', recordCount: 1 }]);
 
       // Time series — 2 entries (one per model, same date)
       expect(result.costPerModelOverTime).toHaveLength(2);
@@ -667,6 +741,34 @@ describe('analytics-queries', () => {
       expect(result.costPerConnectionOverTime).toHaveLength(2);
       const connCosts = result.costPerConnectionOverTime.map((p) => p.cost).sort();
       expect(connCosts).toEqual(['1', '3']);
+    });
+
+    it('preserves model, provider, connection, and currency identity for costs', () => {
+      seedProviderAttempt({
+        attemptId: 'usd-model', sessionId: 'sess-1', chainId: null, turnId: 'turn-1',
+        outcome: 'succeeded', usage: { inputTokens: 1, outputTokens: 1 },
+        cost: calculatedCost('1', 'USD'), snapshot: anthropicSnapshot('shared-model'),
+      });
+      seedProviderAttempt({
+        attemptId: 'eur-model', sessionId: 'sess-1', chainId: null, turnId: 'turn-2',
+        outcome: 'succeeded', usage: { inputTokens: 1, outputTokens: 1 },
+        cost: calculatedCost('2', 'EUR'), snapshot: anthropicSnapshot('shared-model'),
+      });
+
+      const result = getModels();
+
+      expect(result.models[0].totalCost).toEqual([
+        { currency: 'EUR', amount: '2', recordCount: 1 },
+        { currency: 'USD', amount: '1', recordCount: 1 },
+      ]);
+      expect(result.costPerModelOverTime).toEqual([
+        expect.objectContaining({ modelId: 'shared-model', providerId: 'anthropic', currency: 'EUR', cost: '2' }),
+        expect.objectContaining({ modelId: 'shared-model', providerId: 'anthropic', currency: 'USD', cost: '1' }),
+      ]);
+      expect(result.costPerConnectionOverTime[0]).toEqual(expect.objectContaining({
+        connectionId: ANTHROPIC_CONNECTION_ID,
+        currency: 'EUR',
+      }));
     });
   });
 
@@ -726,6 +828,20 @@ describe('analytics-queries', () => {
       expect(result.invocationsOverTime).toContainEqual({ date: '2026-07-12', toolName: 'read', count: 2 });
       expect(result.invocationsOverTime).toContainEqual({ date: '2026-07-12', toolName: 'grep', count: 1 });
     });
+
+    it('aggregates every matching row beyond the raw-detail limit', () => {
+      for (let i = 0; i < 1001; i++) {
+        seedToolAttempt({
+          toolAttemptId: `tool-${i}`, sessionId: 'sess-1', chainId: null, turnId: `turn-${i}`,
+          toolName: 'read', toolSource: 'builtin', toolFamily: 'filesystem',
+          outcome: 'complete', resultSizeBytes: 1,
+        });
+      }
+
+      const result = getTools();
+      expect(result.tools[0].invocations).toBe(1001);
+      expect(result.outcomeDistribution).toContainEqual({ outcome: 'complete', count: 1001 });
+    });
   });
 
   // ── getSubagents ────────────────────────────────────────────────────────────
@@ -776,7 +892,7 @@ describe('analytics-queries', () => {
       expect(researcher.attempts).toBe(1);
       expect(researcher.inputTokens).toBe(1000);
       expect(researcher.outputTokens).toBe(500);
-      expect(researcher.totalCost).toBe('1');
+      expect(researcher.totalCost).toEqual([{ currency: 'USD', amount: '1', recordCount: 1 }]);
       expect(researcher.completed).toBe(1);
       expect(researcher.failed).toBe(0);
       expect(researcher.modelsUsed).toEqual(['claude-test']);
@@ -788,7 +904,7 @@ describe('analytics-queries', () => {
       expect(coder.attempts).toBe(1);
       expect(coder.inputTokens).toBe(2000);
       expect(coder.outputTokens).toBe(1000);
-      expect(coder.totalCost).toBe('2');
+      expect(coder.totalCost).toEqual([{ currency: 'USD', amount: '2', recordCount: 1 }]);
       expect(coder.completed).toBe(1);
       expect(coder.modelsUsed).toEqual(['claude-test']);
 
@@ -802,6 +918,52 @@ describe('analytics-queries', () => {
 
       // Outcome distribution
       expect(result.outcomeDistribution).toContainEqual({ status: 'completed', count: 2 });
+    });
+
+    it('aggregates every subagent attribution beyond 1,000 rows', () => {
+      for (let i = 0; i < 1001; i++) {
+        seedSubagentAttribution({
+          subagentId: `subagent-${i}`, sessionId: 'sess-1', chainId: `chain-${i}`,
+          agentName: 'researcher', agentType: 'worker', agentTier: 'sprout',
+          modelId: 'claude-test', connectionId: ANTHROPIC_CONNECTION_ID, status: 'completed',
+        });
+      }
+
+      const result = getSubagents();
+      expect(result.summaries[0].invocations).toBe(1001);
+      expect(result.outcomeDistribution).toContainEqual({ status: 'completed', count: 1001 });
+    });
+
+    it('applies the same time range to attributions and their provider attempts', () => {
+      seedProviderAttempt({
+        attemptId: 'old-provider', sessionId: 'sess-1', chainId: 'old-chain', turnId: 'old-turn',
+        outcome: 'succeeded', usage: { inputTokens: 10, outputTokens: 5 }, cost: calculatedCost('1'),
+      });
+      seedSubagentAttribution({
+        subagentId: 'old-subagent', sessionId: 'sess-1', chainId: 'old-chain', agentName: 'researcher',
+        agentType: 'worker', agentTier: 'sprout', modelId: 'claude-test', connectionId: ANTHROPIC_CONNECTION_ID,
+        status: 'completed',
+      });
+      clockMs = new Date('2026-07-15T10:00:00.000Z').getTime();
+      seedProviderAttempt({
+        attemptId: 'new-provider', sessionId: 'sess-1', chainId: 'new-chain', turnId: 'new-turn',
+        outcome: 'succeeded', usage: { inputTokens: 20, outputTokens: 10 }, cost: calculatedCost('2'),
+      });
+      seedSubagentAttribution({
+        subagentId: 'new-subagent', sessionId: 'sess-1', chainId: 'new-chain', agentName: 'researcher',
+        agentType: 'worker', agentTier: 'sprout', modelId: 'claude-test', connectionId: ANTHROPIC_CONNECTION_ID,
+        status: 'completed',
+      });
+
+      const result = getSubagents({
+        startDate: '2026-07-15T00:00:00.000Z',
+        endDate: '2026-07-15T23:59:59.999Z',
+      });
+
+      expect(result.summaries).toHaveLength(1);
+      expect(result.summaries[0].invocations).toBe(1);
+      expect(result.summaries[0].inputTokens).toBe(20);
+      expect(result.summaries[0].totalCost).toEqual([{ currency: 'USD', amount: '2', recordCount: 1 }]);
     });
   });
 
@@ -857,6 +1019,22 @@ describe('analytics-queries', () => {
       expect(empty.snapshots).toHaveLength(0);
       expect(empty.avgBreakdown.systemTokens).toBe(0);
       expect(empty.avgBreakdown.toolsTokens).toBe(0);
+    });
+
+    it('computes averages across all rows while bounding returned snapshots explicitly', () => {
+      for (let i = 0; i < 1001; i++) {
+        snapshotStore.insert({
+          sessionId: 'sess-1', chainId: null, turnId: `turn-${i}`, providerAttemptId: null,
+          inputTokens: i, outputTokens: 0, usedTokens: i,
+          systemTokens: i, toolsTokens: 0, toolUseTokens: 0, userTokens: 0, assistantTokens: 0,
+        });
+      }
+
+      const result = getContext();
+      expect(result.totalSnapshots).toBe(1001);
+      expect(result.snapshots).toHaveLength(1000);
+      expect(result.snapshotsTruncated).toBe(true);
+      expect(result.avgBreakdown.systemTokens).toBe(500);
     });
   });
 });

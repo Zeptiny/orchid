@@ -16,6 +16,8 @@ function formatTimestamp(ts: string): string {
     day: 'numeric',
     hour: '2-digit',
     minute: '2-digit',
+    timeZone: 'UTC',
+    timeZoneName: 'short',
   });
 }
 
@@ -68,10 +70,6 @@ export function ContextTab({ timeRange }: { timeRange: AnalyticsTimeRange }) {
     Assistant: data.avgBreakdown.assistantTokens,
   }];
 
-  const avgUsedTokens = data.snapshots.length > 0
-    ? Math.round(data.snapshots.reduce((sum, s) => sum + s.usedTokens, 0) / data.snapshots.length)
-    : 0;
-
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
@@ -80,8 +78,8 @@ export function ContextTab({ timeRange }: { timeRange: AnalyticsTimeRange }) {
       </div>
 
       <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
-        <StatCard label="Total Snapshots" value={data.snapshots.length} />
-        <StatCard label="Avg Used Tokens" value={formatTokenCount(avgUsedTokens)} />
+        <StatCard label="Total Snapshots" value={data.totalSnapshots} subtext={data.snapshotsTruncated ? `showing latest ${data.snapshots.length}` : undefined} />
+        <StatCard label="Avg Used Tokens" value={formatTokenCount(data.avgBreakdown.usedTokens)} />
         <StatCard label="Avg System Tokens" value={formatTokenCount(data.avgBreakdown.systemTokens)} />
         <StatCard label="Avg Tools Tokens" value={formatTokenCount(data.avgBreakdown.toolsTokens + data.avgBreakdown.toolUseTokens)} />
       </div>
@@ -112,7 +110,7 @@ export function ContextTab({ timeRange }: { timeRange: AnalyticsTimeRange }) {
           </ResponsiveContainer>
         </ChartCard>
 
-        <ChartCard title="Context Breakdown (Average)" empty={data.snapshots.length === 0} emptyMessage="No context snapshots recorded">
+        <ChartCard title="Context Breakdown (Average)" empty={data.totalSnapshots === 0} emptyMessage="No context snapshots recorded">
           <ResponsiveContainer width="100%" height={300}>
             <BarChart data={breakdownData}>
               <CartesianGrid strokeDasharray="3 3" stroke={GRID_STROKE} />

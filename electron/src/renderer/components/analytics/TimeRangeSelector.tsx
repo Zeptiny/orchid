@@ -47,6 +47,7 @@ export function TimeRangeSelector({ timeRange }: TimeRangeSelectorProps) {
       {preset === 'custom' && (
         <span className="text-xs text-base-content/40">Custom range</span>
       )}
+      <span className="ml-auto text-xs font-medium text-base-content/40">UTC</span>
     </div>
   );
 }

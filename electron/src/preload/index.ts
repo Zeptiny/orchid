@@ -97,7 +97,7 @@ import type {
 } from '../shared/types/ipc';
 import type {
   OverviewResult,
-  SessionSummary,
+  SessionsResult,
   SessionDetailResult,
   ModelsResult,
   ToolsResult,
@@ -616,9 +616,9 @@ const orchidAPI: OrchidAPI = {
       invoke<OverviewResult>(IPC_CHANNELS.ANALYTICS_OVERVIEW, params),
 
     sessions: (params?: { readonly limit?: number; readonly timeRange?: AnalyticsTimeRange }) =>
-      invoke<readonly SessionSummary[]>(IPC_CHANNELS.ANALYTICS_SESSIONS, params),
+      invoke<SessionsResult>(IPC_CHANNELS.ANALYTICS_SESSIONS, params),
 
-    sessionDetail: (params: { readonly sessionId: string }) =>
+    sessionDetail: (params: { readonly sessionId: string; readonly timeRange?: AnalyticsTimeRange }) =>
       invoke<SessionDetailResult>(IPC_CHANNELS.ANALYTICS_SESSION_DETAIL, params),
 
     models: (params?: { readonly timeRange?: AnalyticsTimeRange }) =>
