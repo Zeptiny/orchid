@@ -13,14 +13,17 @@ import {
   formatCostAmount,
   formatPercent,
   formatDate,
+  CHART_PALETTE,
+  GRID_STROKE,
+  axisTickProps,
+  tokenTooltipProps,
+  costTooltipProps,
 } from './shared';
 import { Button } from '../ui/Button';
 import {
   LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip,
   ResponsiveContainer, Legend,
 } from 'recharts';
-
-const CHART_COLORS = ['#3b82f6', '#10b981', '#ec4899', '#f59e0b', '#8b5cf6', '#ef4444'];
 
 type Column<T> = { key: string; label: string; render: (row: T) => ReactNode };
 
@@ -131,11 +134,11 @@ export function ModelsProvidersTab() {
         <ChartCard title="Cost per Model Over Time">
           <ResponsiveContainer width="100%" height={250}>
             <LineChart data={costOverTime}>
-              <CartesianGrid strokeDasharray="3 3" stroke="var(--base-300, #333)" />
-              <XAxis dataKey="date" tick={{ fontSize: 11 }} />
-              <YAxis tick={{ fontSize: 11 }} />
-              <Tooltip formatter={(value) => formatCostAmount(String(value), null)} />
-              <Line type="monotone" dataKey="cost" stroke={CHART_COLORS[0]} strokeWidth={2} dot={false} />
+              <CartesianGrid strokeDasharray="3 3" stroke={GRID_STROKE} />
+              <XAxis dataKey="date" tick={axisTickProps} />
+              <YAxis tick={axisTickProps} />
+              <Tooltip {...costTooltipProps} />
+              <Line type="monotone" dataKey="cost" stroke={CHART_PALETTE[0]} strokeWidth={2} dot={false} />
             </LineChart>
           </ResponsiveContainer>
         </ChartCard>
@@ -143,14 +146,14 @@ export function ModelsProvidersTab() {
         <ChartCard title="Token Usage per Model">
           <ResponsiveContainer width="100%" height={250}>
             <BarChart data={tokenPerModel} layout="vertical">
-              <CartesianGrid strokeDasharray="3 3" stroke="var(--base-300, #333)" />
-              <XAxis type="number" tick={{ fontSize: 11 }} />
-              <YAxis type="category" dataKey="modelId" tick={{ fontSize: 11 }} width={120} />
-              <Tooltip />
+              <CartesianGrid strokeDasharray="3 3" stroke={GRID_STROKE} />
+              <XAxis type="number" tick={axisTickProps} />
+              <YAxis type="category" dataKey="modelId" tick={axisTickProps} width={120} />
+              <Tooltip {...tokenTooltipProps} />
               <Legend />
-              <Bar dataKey="inputTokens" name="Input" fill={CHART_COLORS[0]} />
-              <Bar dataKey="outputTokens" name="Output" fill={CHART_COLORS[1]} />
-              <Bar dataKey="reasoningTokens" name="Reasoning" fill={CHART_COLORS[2]} />
+              <Bar dataKey="inputTokens" name="Input" fill={CHART_PALETTE[0]} />
+              <Bar dataKey="outputTokens" name="Output" fill={CHART_PALETTE[1]} />
+              <Bar dataKey="reasoningTokens" name="Reasoning" fill={CHART_PALETTE[2]} />
             </BarChart>
           </ResponsiveContainer>
         </ChartCard>

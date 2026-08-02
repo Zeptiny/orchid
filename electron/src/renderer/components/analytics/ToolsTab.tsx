@@ -1,14 +1,12 @@
 import type { ReactNode } from 'react';
 import { useAnalytics } from '../../hooks/useAnalytics';
 import type { ToolBreakdown } from '../../../shared/types/analytics';
-import { StatCard, ChartCard, SortableTable, formatDuration, formatBytes, formatPercent } from './shared';
+import { StatCard, ChartCard, SortableTable, formatDuration, formatBytes, formatPercent, CHART_PALETTE, GRID_STROKE, axisTickProps, tooltipProps } from './shared';
 import { Button } from '../ui/Button';
 import {
   BarChart, Bar, PieChart, Pie, Cell, XAxis, YAxis, CartesianGrid, Tooltip,
   ResponsiveContainer, Legend,
 } from 'recharts';
-
-const CHART_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#8b5cf6', '#ec4899', '#ef4444', '#06b6d4', '#84cc16'];
 
 type Column<T> = { key: string; label: string; render: (row: T) => ReactNode };
 
@@ -102,17 +100,17 @@ export function ToolsTab() {
         <ChartCard title="Tool Invocations Over Time">
           <ResponsiveContainer width="100%" height={250}>
             <BarChart data={invocationsData}>
-              <CartesianGrid strokeDasharray="3 3" stroke="var(--base-300, #333)" />
-              <XAxis dataKey="date" tick={{ fontSize: 11 }} />
-              <YAxis tick={{ fontSize: 11 }} />
-              <Tooltip />
+              <CartesianGrid strokeDasharray="3 3" stroke={GRID_STROKE} />
+              <XAxis dataKey="date" tick={axisTickProps} />
+              <YAxis tick={axisTickProps} />
+              <Tooltip {...tooltipProps} />
               <Legend />
               {toolNames.map((tn, i) => (
                 <Bar
                   key={tn}
                   dataKey={tn}
                   stackId="a"
-                  fill={CHART_COLORS[i % CHART_COLORS.length]}
+                  fill={CHART_PALETTE[i % CHART_PALETTE.length]}
                 />
               ))}
             </BarChart>
@@ -132,10 +130,10 @@ export function ToolsTab() {
                 label
               >
                 {data.outcomeDistribution.map((_, i) => (
-                  <Cell key={i} fill={CHART_COLORS[i % CHART_COLORS.length]} />
+                  <Cell key={i} fill={CHART_PALETTE[i % CHART_PALETTE.length]} />
                 ))}
               </Pie>
-              <Tooltip />
+              <Tooltip {...tooltipProps} />
               <Legend />
             </PieChart>
           </ResponsiveContainer>

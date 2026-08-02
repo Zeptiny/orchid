@@ -1,14 +1,12 @@
 import type { ReactNode } from 'react';
 import { useAnalytics } from '../../hooks/useAnalytics';
 import type { SubagentSummary } from '../../../shared/types/analytics';
-import { StatCard, ChartCard, SortableTable, formatTokenCount, formatCostAmount, formatDuration } from './shared';
+import { StatCard, ChartCard, SortableTable, formatTokenCount, formatCostAmount, formatDuration, CHART_PALETTE, GRID_STROKE, axisTickProps, tooltipProps, tokenTooltipProps, costTooltipProps } from './shared';
 import { Button } from '../ui/Button';
 import {
   BarChart, Bar, PieChart, Pie, Cell,
   XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend,
 } from 'recharts';
-
-const PIE_COLORS = ['#10b981', '#ef4444', '#f59e0b', '#3b82f6', '#8b5cf6', '#ec4899'];
 
 export function SubagentsTab() {
   const { data, loading, error, refresh } = useAnalytics(
@@ -87,11 +85,11 @@ export function SubagentsTab() {
         <ChartCard title="Cost per Agent Name">
           <ResponsiveContainer width="100%" height={250}>
             <BarChart data={costByNameData}>
-              <CartesianGrid strokeDasharray="3 3" stroke="var(--base-300, #333)" />
-              <XAxis dataKey="agentName" tick={{ fontSize: 11 }} />
-              <YAxis tick={{ fontSize: 11 }} />
-              <Tooltip />
-              <Bar dataKey="cost" fill="#3b82f6" />
+              <CartesianGrid strokeDasharray="3 3" stroke={GRID_STROKE} />
+              <XAxis dataKey="agentName" tick={axisTickProps} />
+              <YAxis tick={axisTickProps} />
+              <Tooltip {...costTooltipProps} />
+              <Bar dataKey="cost" fill={CHART_PALETTE[0]} />
             </BarChart>
           </ResponsiveContainer>
         </ChartCard>
@@ -99,13 +97,13 @@ export function SubagentsTab() {
         <ChartCard title="Token Usage per Agent Name">
           <ResponsiveContainer width="100%" height={250}>
             <BarChart data={tokenUsageData}>
-              <CartesianGrid strokeDasharray="3 3" stroke="var(--base-300, #333)" />
-              <XAxis dataKey="agentName" tick={{ fontSize: 11 }} />
-              <YAxis tick={{ fontSize: 11 }} />
-              <Tooltip />
+              <CartesianGrid strokeDasharray="3 3" stroke={GRID_STROKE} />
+              <XAxis dataKey="agentName" tick={axisTickProps} />
+              <YAxis tick={axisTickProps} />
+              <Tooltip {...tokenTooltipProps} />
               <Legend />
-              <Bar dataKey="inputTokens" name="Input" fill="#3b82f6" />
-              <Bar dataKey="outputTokens" name="Output" fill="#10b981" />
+              <Bar dataKey="inputTokens" name="Input" fill={CHART_PALETTE[0]} />
+              <Bar dataKey="outputTokens" name="Output" fill={CHART_PALETTE[1]} />
             </BarChart>
           </ResponsiveContainer>
         </ChartCard>
@@ -115,10 +113,10 @@ export function SubagentsTab() {
             <PieChart>
               <Pie data={data.outcomeDistribution} dataKey="count" nameKey="status" cx="50%" cy="50%" outerRadius={80} label>
                 {data.outcomeDistribution.map((_, i) => (
-                  <Cell key={i} fill={PIE_COLORS[i % PIE_COLORS.length]} />
+                  <Cell key={i} fill={CHART_PALETTE[i % CHART_PALETTE.length]} />
                 ))}
               </Pie>
-              <Tooltip />
+              <Tooltip {...tooltipProps} />
               <Legend />
             </PieChart>
           </ResponsiveContainer>
@@ -127,11 +125,11 @@ export function SubagentsTab() {
         <ChartCard title="Cost by Agent Tier">
           <ResponsiveContainer width="100%" height={250}>
             <BarChart data={costByTierData}>
-              <CartesianGrid strokeDasharray="3 3" stroke="var(--base-300, #333)" />
-              <XAxis dataKey="tier" tick={{ fontSize: 11 }} />
-              <YAxis tick={{ fontSize: 11 }} />
-              <Tooltip />
-              <Bar dataKey="cost" fill="#8b5cf6" />
+              <CartesianGrid strokeDasharray="3 3" stroke={GRID_STROKE} />
+              <XAxis dataKey="tier" tick={axisTickProps} />
+              <YAxis tick={axisTickProps} />
+              <Tooltip {...costTooltipProps} />
+              <Bar dataKey="cost" fill={CHART_PALETTE[3]} />
             </BarChart>
           </ResponsiveContainer>
         </ChartCard>

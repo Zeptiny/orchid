@@ -146,5 +146,20 @@
   --context-tool: #d97706;
   --context-user: #4f46e5;
   --context-assistant: #16a34a;
+ /* Chart colors — categorical palette + tooltip/axis theming */
+ --chart-1: #4f46e5;
+ --chart-2: #16a34a;
+ --chart-3: #d97706;
+ --chart-4: #dc2626;
+ --chart-5: #2563eb;
+ --chart-6: #0891b2;
+ --chart-7: #7c3aed;
+ --chart-8: #ea580c;
+ --chart-tooltip-bg: var(--bg-surface-overlay);
+ --chart-tooltip-border: var(--border-strong);
+ --chart-tooltip-text: var(--text-primary);
+ --chart-tooltip-label: var(--text-secondary);
+ --chart-axis-text: var(--text-secondary);
+ --chart-grid: var(--border-default);
   color-scheme: light;
 }

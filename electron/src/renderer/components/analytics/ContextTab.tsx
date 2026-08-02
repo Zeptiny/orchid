@@ -2,13 +2,12 @@ import type { ReactNode } from 'react';
 import { useAnalytics } from '../../hooks/useAnalytics';
 import type { ContextSnapshotSummary } from '../../../shared/types/analytics';
 import { StatCard, ChartCard, SortableTable, formatTokenCount } from './shared';
+import { CHART_PALETTE, GRID_STROKE, axisTickProps, tokenTooltipProps } from './shared';
 import { Button } from '../ui/Button';
 import {
   LineChart, Line, BarChart, Bar,
   XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend,
 } from 'recharts';
-
-const LINE_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#8b5cf6', '#ec4899', '#ef4444'];
 
 function formatTimestamp(ts: string): string {
   const d = new Date(ts);
@@ -123,17 +122,17 @@ export function ContextTab() {
           )}
           <ResponsiveContainer width="100%" height={300}>
             <LineChart data={growthData}>
-              <CartesianGrid strokeDasharray="3 3" stroke="var(--base-300, #333)" />
-              <XAxis dataKey="capturedAt" tick={{ fontSize: 11 }} tickFormatter={(value) => formatTimestamp(String(value))} />
-              <YAxis tick={{ fontSize: 11 }} tickFormatter={(value) => formatTokenCount(Number(value))} />
-              <Tooltip labelFormatter={(label) => formatTimestamp(String(label))} />
+              <CartesianGrid strokeDasharray="3 3" stroke={GRID_STROKE} />
+              <XAxis dataKey="capturedAt" tick={axisTickProps} tickFormatter={(value) => formatTimestamp(String(value))} />
+              <YAxis tick={axisTickProps} tickFormatter={(value) => formatTokenCount(Number(value))} />
+              <Tooltip {...tokenTooltipProps} labelFormatter={(label) => formatTimestamp(String(label))} />
               <Legend />
               {topSessionIds.map((sessionId, i) => (
                 <Line
                   key={sessionId}
                   type="monotone"
                   dataKey={sessionId}
-                  stroke={LINE_COLORS[i % LINE_COLORS.length]}
+                  stroke={CHART_PALETTE[i % CHART_PALETTE.length]}
                   strokeWidth={2}
                   connectNulls
                 />
@@ -145,16 +144,16 @@ export function ContextTab() {
         <ChartCard title="Context Breakdown (Average)">
           <ResponsiveContainer width="100%" height={300}>
             <BarChart data={breakdownData}>
-              <CartesianGrid strokeDasharray="3 3" stroke="var(--base-300, #333)" />
-              <XAxis dataKey="name" tick={{ fontSize: 11 }} />
-              <YAxis tick={{ fontSize: 11 }} tickFormatter={(value) => formatTokenCount(Number(value))} />
-              <Tooltip />
+              <CartesianGrid strokeDasharray="3 3" stroke={GRID_STROKE} />
+              <XAxis dataKey="name" tick={axisTickProps} />
+              <YAxis tick={axisTickProps} tickFormatter={(value) => formatTokenCount(Number(value))} />
+              <Tooltip {...tokenTooltipProps} />
               <Legend />
-              <Bar dataKey="System" stackId="a" fill="#3b82f6" />
-              <Bar dataKey="Tools" stackId="a" fill="#f59e0b" />
-              <Bar dataKey="Tool Results" stackId="a" fill="#8b5cf6" />
-              <Bar dataKey="User" stackId="a" fill="#10b981" />
-              <Bar dataKey="Assistant" stackId="a" fill="#ec4899" />
+              <Bar dataKey="System" stackId="a" fill={CHART_PALETTE[0]} />
+              <Bar dataKey="Tools" stackId="a" fill={CHART_PALETTE[2]} />
+              <Bar dataKey="Tool Results" stackId="a" fill={CHART_PALETTE[3]} />
+              <Bar dataKey="User" stackId="a" fill={CHART_PALETTE[1]} />
+              <Bar dataKey="Assistant" stackId="a" fill={CHART_PALETTE[4]} />
             </BarChart>
           </ResponsiveContainer>
         </ChartCard>

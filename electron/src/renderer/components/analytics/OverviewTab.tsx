@@ -1,12 +1,10 @@
 import { useAnalytics } from '../../hooks/useAnalytics';
-import { StatCard, ChartCard, formatTokenCount, formatCost } from './shared';
+import { StatCard, ChartCard, formatTokenCount, formatCost, CHART_PALETTE, GRID_STROKE, axisTickProps, tooltipProps, tokenTooltipProps, costTooltipProps } from './shared';
 import { Button } from '../ui/Button';
 import {
   LineChart, Line, BarChart, Bar, PieChart, Pie, Cell,
   XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend,
 } from 'recharts';
-
-const PIE_COLORS = ['#3b82f6', '#ef4444', '#f59e0b', '#10b981', '#8b5cf6', '#ec4899'];
 
 export function OverviewTab() {
   const { data, loading, error, refresh } = useAnalytics(
@@ -54,11 +52,11 @@ export function OverviewTab() {
         <ChartCard title="Spend Over Time">
           <ResponsiveContainer width="100%" height={250}>
             <LineChart data={data.spendOverTime}>
-              <CartesianGrid strokeDasharray="3 3" stroke="var(--base-300, #333)" />
-              <XAxis dataKey="date" tick={{ fontSize: 11 }} />
-              <YAxis tick={{ fontSize: 11 }} />
-              <Tooltip />
-              <Line type="monotone" dataKey="cost" stroke="#3b82f6" strokeWidth={2} />
+              <CartesianGrid strokeDasharray="3 3" stroke={GRID_STROKE} />
+              <XAxis dataKey="date" tick={axisTickProps} />
+              <YAxis tick={axisTickProps} />
+              <Tooltip {...costTooltipProps} />
+              <Line type="monotone" dataKey="cost" stroke={CHART_PALETTE[0]} strokeWidth={2} />
             </LineChart>
           </ResponsiveContainer>
         </ChartCard>
@@ -66,16 +64,16 @@ export function OverviewTab() {
         <ChartCard title="Token Usage Over Time">
           <ResponsiveContainer width="100%" height={250}>
             <BarChart data={data.tokenUsageOverTime}>
-              <CartesianGrid strokeDasharray="3 3" stroke="var(--base-300, #333)" />
-              <XAxis dataKey="date" tick={{ fontSize: 11 }} />
-              <YAxis tick={{ fontSize: 11 }} />
-              <Tooltip />
+              <CartesianGrid strokeDasharray="3 3" stroke={GRID_STROKE} />
+              <XAxis dataKey="date" tick={axisTickProps} />
+              <YAxis tick={axisTickProps} />
+              <Tooltip {...tokenTooltipProps} />
               <Legend />
-              <Bar dataKey="inputTokens" name="Input" stackId="a" fill="#3b82f6" />
-              <Bar dataKey="outputTokens" name="Output" stackId="a" fill="#10b981" />
-              <Bar dataKey="cacheReadTokens" name="Cache Read" stackId="a" fill="#f59e0b" />
-              <Bar dataKey="cacheWriteTokens" name="Cache Write" stackId="a" fill="#8b5cf6" />
-              <Bar dataKey="reasoningTokens" name="Reasoning" stackId="a" fill="#ec4899" />
+              <Bar dataKey="inputTokens" name="Input" stackId="a" fill={CHART_PALETTE[0]} />
+              <Bar dataKey="outputTokens" name="Output" stackId="a" fill={CHART_PALETTE[1]} />
+              <Bar dataKey="cacheReadTokens" name="Cache Read" stackId="a" fill={CHART_PALETTE[2]} />
+              <Bar dataKey="cacheWriteTokens" name="Cache Write" stackId="a" fill={CHART_PALETTE[3]} />
+              <Bar dataKey="reasoningTokens" name="Reasoning" stackId="a" fill={CHART_PALETTE[4]} />
             </BarChart>
           </ResponsiveContainer>
         </ChartCard>
@@ -83,11 +81,11 @@ export function OverviewTab() {
         <ChartCard title="Spend by Model">
           <ResponsiveContainer width="100%" height={250}>
             <BarChart data={data.spendByModel} layout="vertical">
-              <CartesianGrid strokeDasharray="3 3" stroke="var(--base-300, #333)" />
-              <XAxis type="number" tick={{ fontSize: 11 }} />
-              <YAxis type="category" dataKey="modelId" tick={{ fontSize: 11 }} width={120} />
-              <Tooltip />
-              <Bar dataKey="cost" fill="#3b82f6" />
+              <CartesianGrid strokeDasharray="3 3" stroke={GRID_STROKE} />
+              <XAxis type="number" tick={axisTickProps} />
+              <YAxis type="category" dataKey="modelId" tick={axisTickProps} width={120} />
+              <Tooltip {...costTooltipProps} />
+              <Bar dataKey="cost" fill={CHART_PALETTE[0]} />
             </BarChart>
           </ResponsiveContainer>
         </ChartCard>
@@ -95,11 +93,11 @@ export function OverviewTab() {
         <ChartCard title="Spend by Provider">
           <ResponsiveContainer width="100%" height={250}>
             <BarChart data={data.spendByProvider} layout="vertical">
-              <CartesianGrid strokeDasharray="3 3" stroke="var(--base-300, #333)" />
-              <XAxis type="number" tick={{ fontSize: 11 }} />
-              <YAxis type="category" dataKey="providerId" tick={{ fontSize: 11 }} width={100} />
-              <Tooltip />
-              <Bar dataKey="cost" fill="#10b981" />
+              <CartesianGrid strokeDasharray="3 3" stroke={GRID_STROKE} />
+              <XAxis type="number" tick={axisTickProps} />
+              <YAxis type="category" dataKey="providerId" tick={axisTickProps} width={100} />
+              <Tooltip {...costTooltipProps} />
+              <Bar dataKey="cost" fill={CHART_PALETTE[1]} />
             </BarChart>
           </ResponsiveContainer>
         </ChartCard>
@@ -109,10 +107,10 @@ export function OverviewTab() {
             <PieChart>
               <Pie data={data.outcomeDistribution} dataKey="count" nameKey="outcome" cx="50%" cy="50%" outerRadius={80} label>
                 {data.outcomeDistribution.map((_, i) => (
-                  <Cell key={i} fill={PIE_COLORS[i % PIE_COLORS.length]} />
+                  <Cell key={i} fill={CHART_PALETTE[i % CHART_PALETTE.length]} />
                 ))}
               </Pie>
-              <Tooltip />
+              <Tooltip {...tooltipProps} />
               <Legend />
             </PieChart>
           </ResponsiveContainer>
@@ -121,11 +119,11 @@ export function OverviewTab() {
         <ChartCard title="Agent Tier Distribution">
           <ResponsiveContainer width="100%" height={250}>
             <BarChart data={data.agentTierDistribution}>
-              <CartesianGrid strokeDasharray="3 3" stroke="var(--base-300, #333)" />
-              <XAxis dataKey="tier" tick={{ fontSize: 11 }} />
-              <YAxis tick={{ fontSize: 11 }} />
-              <Tooltip />
-              <Bar dataKey="count" fill="#8b5cf6" />
+              <CartesianGrid strokeDasharray="3 3" stroke={GRID_STROKE} />
+              <XAxis dataKey="tier" tick={axisTickProps} />
+              <YAxis tick={axisTickProps} />
+              <Tooltip {...tooltipProps} />
+              <Bar dataKey="count" fill={CHART_PALETTE[3]} />
             </BarChart>
           </ResponsiveContainer>
         </ChartCard>
@@ -135,10 +133,10 @@ export function OverviewTab() {
             <PieChart>
               <Pie data={data.costSourceDistribution} dataKey="count" nameKey="source" cx="50%" cy="50%" outerRadius={80} label>
                 {data.costSourceDistribution.map((_, i) => (
-                  <Cell key={i} fill={PIE_COLORS[i % PIE_COLORS.length]} />
+                  <Cell key={i} fill={CHART_PALETTE[i % CHART_PALETTE.length]} />
                 ))}
               </Pie>
-              <Tooltip />
+              <Tooltip {...tooltipProps} />
               <Legend />
             </PieChart>
           </ResponsiveContainer>

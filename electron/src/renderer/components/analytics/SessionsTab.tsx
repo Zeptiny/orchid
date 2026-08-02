@@ -11,6 +11,11 @@ import {
   formatDate,
   formatBytes,
   truncateId,
+  CHART_PALETTE,
+  GRID_STROKE,
+  axisTickProps,
+  tokenTooltipProps,
+  costTooltipProps,
 } from './shared';
 import { Button } from '../ui/Button';
 import {
@@ -18,8 +23,6 @@ import {
   XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend,
 } from 'recharts';
 import type { SessionSummary } from '../../../shared/types/analytics';
-
-const PIE_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#8b5cf6', '#ec4899'];
 
 function SessionList({ onRowClick }: { onRowClick: (row: SessionSummary) => void }) {
   const { data, loading, error, refresh } = useAnalytics(
@@ -124,10 +127,10 @@ function SessionDetail({ sessionId, onBack }: { sessionId: string; onBack: () =>
             <PieChart>
               <Pie data={tokenBreakdown} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={80} label>
                 {tokenBreakdown.map((_, i) => (
-                  <Cell key={i} fill={PIE_COLORS[i % PIE_COLORS.length]} />
+                  <Cell key={i} fill={CHART_PALETTE[i % CHART_PALETTE.length]} />
                 ))}
               </Pie>
-              <Tooltip />
+              <Tooltip {...tokenTooltipProps} />
               <Legend />
             </PieChart>
           </ResponsiveContainer>
@@ -136,11 +139,11 @@ function SessionDetail({ sessionId, onBack }: { sessionId: string; onBack: () =>
         <ChartCard title="Cost by Model">
           <ResponsiveContainer width="100%" height={250}>
             <BarChart data={costByModel} layout="vertical">
-              <CartesianGrid strokeDasharray="3 3" stroke="var(--base-300, #333)" />
-              <XAxis type="number" tick={{ fontSize: 11 }} />
-              <YAxis type="category" dataKey="modelId" tick={{ fontSize: 11 }} width={120} />
-              <Tooltip />
-              <Bar dataKey="cost" fill="#3b82f6" />
+              <CartesianGrid strokeDasharray="3 3" stroke={GRID_STROKE} />
+              <XAxis type="number" tick={axisTickProps} />
+              <YAxis type="category" dataKey="modelId" tick={axisTickProps} width={120} />
+              <Tooltip {...costTooltipProps} />
+              <Bar dataKey="cost" fill={CHART_PALETTE[0]} />
             </BarChart>
           </ResponsiveContainer>
         </ChartCard>

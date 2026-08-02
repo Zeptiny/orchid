@@ -55,6 +55,42 @@ export function truncateId(id: string, len = 8): string {
   return id.length > len ? `${id.slice(0, len)}…` : id;
 }
 
+export const CHART_PALETTE = [
+  'var(--chart-1)',
+  'var(--chart-2)',
+  'var(--chart-3)',
+  'var(--chart-4)',
+  'var(--chart-5)',
+  'var(--chart-6)',
+  'var(--chart-7)',
+  'var(--chart-8)',
+] as const;
+
+export const GRID_STROKE = 'var(--chart-grid)' as const;
+
+export const axisTickProps = { fontSize: 11, fill: 'var(--chart-axis-text)' } as const;
+
+export const tooltipProps = {
+  contentStyle: {
+    background: 'var(--chart-tooltip-bg)',
+    border: '1px solid var(--chart-tooltip-border)',
+    borderRadius: 'var(--radius-md)',
+    fontSize: 12,
+  },
+  labelStyle: { color: 'var(--chart-tooltip-label)', fontWeight: 600 },
+  itemStyle: { color: 'var(--chart-tooltip-text)' },
+} as const;
+
+export const tokenTooltipProps = {
+  ...tooltipProps,
+  formatter: (value: unknown) => formatTokenCount(Number(value)),
+};
+
+export const costTooltipProps = {
+  ...tooltipProps,
+  formatter: (value: unknown) => formatCostAmount(String(value), null),
+};
+
 interface StatCardProps {
   label: string;
   value: string | number;
