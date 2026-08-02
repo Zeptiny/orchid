@@ -308,6 +308,10 @@ export class ProviderAccountingStore {
     return (rows as AttemptRow[]).map(rowToRecord);
   }
 
+  getDatabase(): SqliteDatabase {
+    return this.connection();
+  }
+
   getSessionTotals(sessionId: string): CostTotalsSummary {
     return this.totals('session_id', sessionId);
   }

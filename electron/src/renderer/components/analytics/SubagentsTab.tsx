@@ -1,33 +1,14 @@
 import type { ReactNode } from 'react';
 import { useAnalytics } from '../../hooks/useAnalytics';
 import type { SubagentSummary } from '../../../shared/types/analytics';
-import { StatCard, ChartCard, SortableTable } from './shared';
+import { StatCard, ChartCard, SortableTable, formatTokenCount, formatCostAmount, formatDuration } from './shared';
+import { Button } from '../ui/Button';
 import {
   BarChart, Bar, PieChart, Pie, Cell,
   XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend,
 } from 'recharts';
 
 const PIE_COLORS = ['#10b981', '#ef4444', '#f59e0b', '#3b82f6', '#8b5cf6', '#ec4899'];
-
-function formatTokenCount(n: number): string {
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
-  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`;
-  return String(n);
-}
-
-function formatCost(cost: string): string {
-  return `$${Number(cost).toFixed(4)}`;
-}
-
-function formatDuration(ms: number | null): string {
-  if (ms === null) return '—';
-  if (ms < 1000) return `${ms}ms`;
-  const seconds = ms / 1000;
-  if (seconds < 60) return `${seconds.toFixed(1)}s`;
-  const minutes = Math.floor(seconds / 60);
-  const remaining = Math.round(seconds % 60);
-  return `${minutes}m ${remaining}s`;
-}
 
 export function SubagentsTab() {
   const { data, loading, error, refresh } = useAnalytics(
@@ -69,7 +50,7 @@ export function SubagentsTab() {
     { key: 'agentTier', label: 'Tier', sortable: true, render: (s) => s.agentTier },
     { key: 'modelsUsed', label: 'Models Used', render: (s) => s.modelsUsed.join(', ') || '—' },
     { key: 'invocations', label: 'Invocations', sortable: true, render: (s) => s.invocations },
-    { key: 'totalCost', label: 'Total Cost', sortable: true, render: (s) => formatCost(s.totalCost) },
+    { key: 'totalCost', label: 'Total Cost', sortable: true, render: (s) => formatCostAmount(s.totalCost, null) },
     { key: 'inputTokens', label: 'Input Tokens', sortable: true, render: (s) => formatTokenCount(s.inputTokens) },
     { key: 'outputTokens', label: 'Output Tokens', sortable: true, render: (s) => formatTokenCount(s.outputTokens) },
     { key: 'attempts', label: 'Attempts', sortable: true, render: (s) => s.attempts },
@@ -83,7 +64,7 @@ export function SubagentsTab() {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <h2 className="text-lg font-semibold text-base-content">Subagents</h2>
-        <button onClick={refresh} className="text-sm text-base-content/60 hover:text-base-content">↻ Refresh</button>
+        <Button variant="ghost" size="xs" onClick={refresh}>↻ Refresh</Button>
       </div>
 
       <div className="grid grid-cols-2 gap-3 md:grid-cols-4">

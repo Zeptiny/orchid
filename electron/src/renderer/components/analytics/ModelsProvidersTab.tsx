@@ -5,7 +5,16 @@ import type {
   ProviderBreakdown,
   TimeSeriesPoint,
 } from '../../../shared/types/analytics';
-import { StatCard, ChartCard, SortableTable } from './shared';
+import {
+  StatCard,
+  ChartCard,
+  SortableTable,
+  formatTokenCount,
+  formatCostAmount,
+  formatPercent,
+  formatDate,
+} from './shared';
+import { Button } from '../ui/Button';
 import {
   LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip,
   ResponsiveContainer, Legend,
@@ -14,30 +23,6 @@ import {
 const CHART_COLORS = ['#3b82f6', '#10b981', '#ec4899', '#f59e0b', '#8b5cf6', '#ef4444'];
 
 type Column<T> = { key: string; label: string; render: (row: T) => ReactNode };
-
-function formatTokenCount(n: number): string {
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
-  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`;
-  return String(n);
-}
-
-function formatCost(s: string): string {
-  const n = Number(s);
-  if (!Number.isFinite(n) || n === 0) return '$0.00';
-  if (n < 0.01) return `$${n.toFixed(4)}`;
-  return `$${n.toFixed(2)}`;
-}
-
-function formatPercent(n: number): string {
-  return `${(n * 100).toFixed(1)}%`;
-}
-
-function formatDate(s: string | null): string {
-  if (!s) return '—';
-  const d = new Date(s);
-  if (Number.isNaN(d.getTime())) return '—';
-  return d.toLocaleDateString();
-}
 
 function aggregateCostByDate(points: readonly TimeSeriesPoint[]): { date: string; cost: number }[] {
   const map = new Map<string, number>();
@@ -53,7 +38,7 @@ const modelColumns: ReadonlyArray<Column<ModelBreakdown>> = [
   { key: 'model', label: 'Model', render: (m) => m.modelId },
   { key: 'provider', label: 'Provider', render: (m) => m.providerId },
   { key: 'connection', label: 'Connection', render: (m) => m.connectionName ?? '—' },
-  { key: 'cost', label: 'Total Cost', render: (m) => formatCost(m.totalCost) },
+  { key: 'cost', label: 'Total Cost', render: (m) => formatCostAmount(m.totalCost, null) },
   { key: 'input', label: 'Input Tokens', render: (m) => formatTokenCount(m.inputTokens) },
   { key: 'output', label: 'Output Tokens', render: (m) => formatTokenCount(m.outputTokens) },
   { key: 'cacheRead', label: 'Cache Read', render: (m) => formatTokenCount(m.cacheReadTokens) },
@@ -70,7 +55,7 @@ const modelColumns: ReadonlyArray<Column<ModelBreakdown>> = [
 const providerColumns: ReadonlyArray<Column<ProviderBreakdown>> = [
   { key: 'provider', label: 'Provider', render: (p) => p.providerId },
   { key: 'displayName', label: 'Display Name', render: (p) => p.providerDisplayName ?? '—' },
-  { key: 'cost', label: 'Total Cost', render: (p) => formatCost(p.totalCost) },
+  { key: 'cost', label: 'Total Cost', render: (p) => formatCostAmount(p.totalCost, null) },
   { key: 'input', label: 'Input Tokens', render: (p) => formatTokenCount(p.totalInputTokens) },
   { key: 'output', label: 'Output Tokens', render: (p) => formatTokenCount(p.totalOutputTokens) },
   { key: 'attempts', label: 'Attempts', render: (p) => p.attempts },
@@ -112,13 +97,13 @@ export function ModelsProvidersTab() {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <h2 className="text-lg font-semibold text-base-content">Models &amp; Providers</h2>
-        <button onClick={refresh} className="text-sm text-base-content/60 hover:text-base-content">↻ Refresh</button>
+        <Button variant="ghost" size="xs" onClick={refresh}>↻ Refresh</Button>
       </div>
 
       <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
         <StatCard label="Models" value={data.models.length} />
         <StatCard label="Providers" value={data.providers.length} />
-        <StatCard label="Total Spend" value={formatCost(String(totalCost))} />
+        <StatCard label="Total Spend" value={formatCostAmount(String(totalCost), null)} />
         <StatCard label="Total Tokens" value={formatTokenCount(totalInput + totalOutput)} subtext={`${formatTokenCount(totalInput)} in / ${formatTokenCount(totalOutput)} out`} />
         <StatCard label="API Calls" value={totalAttempts} subtext={`${totalSucceeded} succeeded`} />
         <StatCard label="Error Rate" value={errorRate} subtext={`${totalFailed} failed / ${totalInterrupted} interrupted`} />
@@ -149,7 +134,7 @@ export function ModelsProvidersTab() {
               <CartesianGrid strokeDasharray="3 3" stroke="var(--base-300, #333)" />
               <XAxis dataKey="date" tick={{ fontSize: 11 }} />
               <YAxis tick={{ fontSize: 11 }} />
-              <Tooltip formatter={(value) => formatCost(String(value))} />
+              <Tooltip formatter={(value) => formatCostAmount(String(value), null)} />
               <Line type="monotone" dataKey="cost" stroke={CHART_COLORS[0]} strokeWidth={2} dot={false} />
             </LineChart>
           </ResponsiveContainer>

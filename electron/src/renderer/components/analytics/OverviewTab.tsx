@@ -1,23 +1,12 @@
 import { useAnalytics } from '../../hooks/useAnalytics';
-import type { OverviewResult } from '../../../shared/types/analytics';
-import { StatCard, ChartCard } from './shared';
+import { StatCard, ChartCard, formatTokenCount, formatCost } from './shared';
+import { Button } from '../ui/Button';
 import {
   LineChart, Line, BarChart, Bar, PieChart, Pie, Cell,
   XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend,
 } from 'recharts';
 
 const PIE_COLORS = ['#3b82f6', '#ef4444', '#f59e0b', '#10b981', '#8b5cf6', '#ec4899'];
-
-function formatTokenCount(n: number): string {
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
-  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`;
-  return String(n);
-}
-
-function formatCost(currencies: ReadonlyArray<{ currency: string; amount: string }>): string {
-  if (currencies.length === 0) return '$0.00';
-  return currencies.map((c) => `$${Number(c.amount).toFixed(4)} ${c.currency}`).join(', ');
-}
 
 export function OverviewTab() {
   const { data, loading, error, refresh } = useAnalytics(
@@ -47,7 +36,7 @@ export function OverviewTab() {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <h2 className="text-lg font-semibold text-base-content">Overview</h2>
-        <button onClick={refresh} className="text-sm text-base-content/60 hover:text-base-content">↻ Refresh</button>
+        <Button variant="ghost" size="xs" onClick={refresh}>↻ Refresh</Button>
       </div>
 
       <div className="grid grid-cols-2 gap-3 md:grid-cols-4">

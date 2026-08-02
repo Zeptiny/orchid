@@ -1,4 +1,59 @@
-import type { ReactNode } from 'react';
+import { useMemo, useState, type ReactNode } from 'react';
+
+export function formatTokenCount(n: number): string {
+  if (n === 0) return '0';
+  const abs = Math.abs(n);
+  const sign = n < 0 ? '-' : '';
+  if (abs >= 1_000_000) return `${sign}${(abs / 1_000_000).toFixed(1)}M`;
+  if (abs >= 1_000) return `${sign}${(abs / 1_000).toFixed(1)}k`;
+  return String(n);
+}
+
+export function formatCost(currencies: ReadonlyArray<{ currency: string; amount: string }>): string {
+  if (currencies.length === 0) return '$0.00';
+  return currencies.map((c) => `$${Number(c.amount).toFixed(4)} ${c.currency}`).join(', ');
+}
+
+export function formatCostAmount(amount: string | null, currency: string | null): string {
+  if (amount === null) return '—';
+  const n = Number(amount);
+  if (!Number.isFinite(n)) return '—';
+  const formatted = `$${n.toFixed(4)}`;
+  return currency ? `${formatted} ${currency}` : formatted;
+}
+
+export function formatDuration(ms: number | null): string {
+  if (ms === null || ms <= 0) return '—';
+  if (ms < 1000) return `${Math.round(ms)}ms`;
+  return `${(ms / 1000).toFixed(1)}s`;
+}
+
+export function formatBytes(bytes: number | null): string {
+  if (bytes === null || !Number.isFinite(bytes)) return '—';
+  if (bytes < 1024) return `${Math.round(bytes)} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)}KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)}MB`;
+}
+
+export function formatPercent(n: number): string {
+  return `${(n * 100).toFixed(1)}%`;
+}
+
+export function formatDate(iso: string | null): string {
+  if (iso === null) return '—';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '—';
+  const yyyy = d.getFullYear();
+  const mm = String(d.getMonth() + 1).padStart(2, '0');
+  const dd = String(d.getDate()).padStart(2, '0');
+  const hh = String(d.getHours()).padStart(2, '0');
+  const min = String(d.getMinutes()).padStart(2, '0');
+  return `${yyyy}-${mm}-${dd} ${hh}:${min}`;
+}
+
+export function truncateId(id: string, len = 8): string {
+  return id.length > len ? `${id.slice(0, len)}…` : id;
+}
 
 interface StatCardProps {
   label: string;
@@ -31,8 +86,16 @@ export function ChartCard({ title, children, className = '' }: ChartCardProps) {
   );
 }
 
+interface SortableTableColumn<T> {
+  key: string;
+  label: string;
+  sortable?: boolean;
+  sortValue?: (row: T) => string | number;
+  render: (row: T) => ReactNode;
+}
+
 interface SortableTableProps<T> {
-  columns: ReadonlyArray<{ key: string; label: string; sortable?: boolean; render: (row: T) => ReactNode }>;
+  columns: ReadonlyArray<SortableTableColumn<T>>;
   rows: readonly T[];
   rowKey: (row: T) => string;
   onRowClick?: (row: T) => void;
@@ -46,6 +109,37 @@ export function SortableTable<T>({
   onRowClick,
   emptyMessage = 'No data',
 }: SortableTableProps<T>) {
+  const firstSortableKey = useMemo(
+    () => columns.find((c) => c.sortable)?.key ?? null,
+    [columns],
+  );
+  const [sortKey, setSortKey] = useState<string | null>(firstSortableKey);
+  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc');
+
+  const handleSort = (key: string) => {
+    if (sortKey === key) {
+      setSortDir((prev) => (prev === 'asc' ? 'desc' : 'asc'));
+    } else {
+      setSortKey(key);
+      setSortDir('asc');
+    }
+  };
+
+  const sortedRows = useMemo(() => {
+    if (sortKey === null) return rows;
+    const col = columns.find((c) => c.key === sortKey);
+    if (!col) return rows;
+    const dir = sortDir === 'asc' ? 1 : -1;
+    return [...rows].sort((a, b) => {
+      const av = col.sortValue ? col.sortValue(a) : String(col.render(a));
+      const bv = col.sortValue ? col.sortValue(b) : String(col.render(b));
+      if (typeof av === 'number' && typeof bv === 'number') {
+        return (av - bv) * dir;
+      }
+      return String(av).localeCompare(String(bv)) * dir;
+    });
+  }, [rows, columns, sortKey, sortDir]);
+
   return (
     <div className="overflow-x-auto">
       <table className="w-full text-sm">
@@ -53,20 +147,30 @@ export function SortableTable<T>({
           <tr className="border-b border-base-300 text-left">
             {columns.map((col) => (
               <th key={col.key} className="px-3 py-2 font-medium text-base-content/70">
-                {col.label}
+                {col.sortable ? (
+                  <button
+                    className="inline-flex items-center gap-1 hover:text-base-content"
+                    onClick={() => handleSort(col.key)}
+                  >
+                    {col.label}
+                    {sortKey === col.key && (sortDir === 'asc' ? ' \u2191' : ' \u2193')}
+                  </button>
+                ) : (
+                  col.label
+                )}
               </th>
             ))}
           </tr>
         </thead>
         <tbody>
-          {rows.length === 0 ? (
+          {sortedRows.length === 0 ? (
             <tr>
               <td colSpan={columns.length} className="px-3 py-8 text-center text-base-content/40">
                 {emptyMessage}
               </td>
             </tr>
           ) : (
-            rows.map((row) => (
+            sortedRows.map((row) => (
               <tr
                 key={rowKey(row)}
                 className={`border-b border-base-300/50 ${onRowClick ? 'cursor-pointer hover:bg-base-200' : ''}`}

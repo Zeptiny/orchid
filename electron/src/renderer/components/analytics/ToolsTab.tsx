@@ -1,7 +1,8 @@
 import type { ReactNode } from 'react';
 import { useAnalytics } from '../../hooks/useAnalytics';
 import type { ToolBreakdown } from '../../../shared/types/analytics';
-import { StatCard, ChartCard, SortableTable } from './shared';
+import { StatCard, ChartCard, SortableTable, formatDuration, formatBytes, formatPercent } from './shared';
+import { Button } from '../ui/Button';
 import {
   BarChart, Bar, PieChart, Pie, Cell, XAxis, YAxis, CartesianGrid, Tooltip,
   ResponsiveContainer, Legend,
@@ -10,26 +11,6 @@ import {
 const CHART_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#8b5cf6', '#ec4899', '#ef4444', '#06b6d4', '#84cc16'];
 
 type Column<T> = { key: string; label: string; render: (row: T) => ReactNode };
-
-function formatDuration(ms: number | null): string {
-  if (ms === null || !Number.isFinite(ms)) return '—';
-  if (ms < 1000) return `${Math.round(ms)}ms`;
-  if (ms < 60_000) return `${(ms / 1000).toFixed(1)}s`;
-  const m = Math.floor(ms / 60_000);
-  const s = Math.round((ms % 60_000) / 1000);
-  return `${m}m ${s}s`;
-}
-
-function formatBytes(n: number | null): string {
-  if (n === null || !Number.isFinite(n)) return '—';
-  if (n < 1024) return `${Math.round(n)} B`;
-  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
-  return `${(n / (1024 * 1024)).toFixed(1)} MB`;
-}
-
-function formatPercent(n: number): string {
-  return `${(n * 100).toFixed(1)}%`;
-}
 
 function pivotInvocations(rows: readonly { date: string; toolName: string; count: number }[]) {
   const toolNames = [...new Set(rows.map((r) => r.toolName))];
@@ -98,7 +79,7 @@ export function ToolsTab() {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <h2 className="text-lg font-semibold text-base-content">Tools</h2>
-        <button onClick={refresh} className="text-sm text-base-content/60 hover:text-base-content">↻ Refresh</button>
+        <Button variant="ghost" size="xs" onClick={refresh}>↻ Refresh</Button>
       </div>
 
       <div className="grid grid-cols-2 gap-3 md:grid-cols-4">

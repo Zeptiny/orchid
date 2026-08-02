@@ -1,19 +1,14 @@
 import type { ReactNode } from 'react';
 import { useAnalytics } from '../../hooks/useAnalytics';
 import type { ContextSnapshotSummary } from '../../../shared/types/analytics';
-import { StatCard, ChartCard, SortableTable } from './shared';
+import { StatCard, ChartCard, SortableTable, formatTokenCount } from './shared';
+import { Button } from '../ui/Button';
 import {
   LineChart, Line, BarChart, Bar,
   XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend,
 } from 'recharts';
 
 const LINE_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#8b5cf6', '#ec4899', '#ef4444'];
-
-function formatTokenCount(n: number): string {
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
-  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`;
-  return String(n);
-}
 
 function formatTimestamp(ts: string): string {
   const d = new Date(ts);
@@ -56,7 +51,14 @@ export function ContextTab() {
   const growthData = Array.from(timestampMap.values()).sort((a, b) =>
     String(a.capturedAt).localeCompare(String(b.capturedAt)),
   );
-  const sessionIds = Array.from(sessionGroups.keys());
+
+  const sessionMaxTokens = Array.from(sessionGroups.entries()).map(([id, snaps]) => ({
+    id,
+    maxTokens: snaps.reduce((max, s) => Math.max(max, s.usedTokens), 0),
+  }));
+  sessionMaxTokens.sort((a, b) => b.maxTokens - a.maxTokens);
+  const topSessionIds = sessionMaxTokens.slice(0, 5).map((s) => s.id);
+  const totalSessionCount = sessionMaxTokens.length;
 
   const breakdownData = [{
     name: 'Average',
@@ -95,7 +97,7 @@ export function ContextTab() {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <h2 className="text-lg font-semibold text-base-content">Context</h2>
-        <button onClick={refresh} className="text-sm text-base-content/60 hover:text-base-content">↻ Refresh</button>
+        <Button variant="ghost" size="xs" onClick={refresh}>↻ Refresh</Button>
       </div>
 
       <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
@@ -116,6 +118,9 @@ export function ContextTab() {
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
         <ChartCard title="Context Growth per Session">
+          {totalSessionCount > 5 && (
+            <div className="mb-2 text-xs text-base-content/50">(showing top 5 of {totalSessionCount} sessions)</div>
+          )}
           <ResponsiveContainer width="100%" height={300}>
             <LineChart data={growthData}>
               <CartesianGrid strokeDasharray="3 3" stroke="var(--base-300, #333)" />
@@ -123,7 +128,7 @@ export function ContextTab() {
               <YAxis tick={{ fontSize: 11 }} tickFormatter={(value) => formatTokenCount(Number(value))} />
               <Tooltip labelFormatter={(label) => formatTimestamp(String(label))} />
               <Legend />
-              {sessionIds.map((sessionId, i) => (
+              {topSessionIds.map((sessionId, i) => (
                 <Line
                   key={sessionId}
                   type="monotone"

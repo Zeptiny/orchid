@@ -128,6 +128,10 @@ export interface ToolDispatchOptions {
   agentsMdDisabled?: boolean;
   /** The LLM provider attempt ID that triggered this tool call. */
   providerAttemptId?: string | null;
+  /** Chain ID for tool attempt telemetry. */
+  chainId?: string | null;
+  /** Turn ID for tool attempt telemetry. */
+  turnId?: string | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -357,8 +361,8 @@ export async function executeToolCall(
     toolAttemptId = getToolAttemptStore().insertPending({
       toolAttemptId: '',
       sessionId: options.sessionId ?? '',
-      chainId: null,
-      turnId: null,
+      chainId: options.chainId ?? null,
+      turnId: options.turnId ?? null,
       providerAttemptId: options.providerAttemptId ?? null,
       toolCallId,
       toolName: name,

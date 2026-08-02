@@ -22,12 +22,14 @@ import type {
   ContextResult,
   CurrencyTotal,
   TimeSeriesPoint,
+  ToolCallDetail,
 } from '../../../shared/types/analytics';
+import type { SubagentAttributionRecord } from '../../../shared/types/accounting';
 
 const DEFAULT_LIMIT = 1000;
 
 function getDb(): SqliteDatabase {
-  return (getProviderAccountingStore() as unknown as { connection(): SqliteDatabase }).connection();
+  return getProviderAccountingStore().getDatabase();
 }
 
 function parseUsage(usageJson: string | null): {
@@ -66,12 +68,6 @@ function parseSnapshotProviderName(snapshotJson: string): string | null {
   } catch { return null; }
 }
 
-function costFromRow(currency: string | null, costAmount: string | null, costState: string): CurrencyTotal | null {
-  if (!currency || !costAmount) return null;
-  if (costState !== 'reported' && costState !== 'calculated') return null;
-  return { currency, amount: costAmount, recordCount: 1 };
-}
-
 function sumCosts(rows: Array<{ currency: string | null; cost_amount: string | null; cost_state: string }>): {
   currencies: CurrencyTotal[];
   unknownCount: number;
@@ -100,113 +96,141 @@ function timeBucket(startedAt: string): string {
 
 export function getOverview(): OverviewResult {
   const db = getDb();
-  const allRows = db.prepare('SELECT session_id, model_id, provider_id, outcome, cost_state, cost_amount, currency, usage_json, started_at, agent_tier FROM provider_attempts').all() as Array<{
-    session_id: string; model_id: string; provider_id: string;
-    outcome: string; cost_state: string; cost_amount: string | null; currency: string | null;
-    usage_json: string | null; started_at: string; agent_tier: string | null;
+
+  const stats = db.prepare(`
+    SELECT COUNT(*) as total,
+      SUM(CASE WHEN outcome='succeeded' THEN 1 ELSE 0 END) as succeeded,
+      SUM(CASE WHEN outcome='failed' THEN 1 ELSE 0 END) as failed,
+      SUM(CASE WHEN outcome='interrupted' THEN 1 ELSE 0 END) as interrupted,
+      COUNT(DISTINCT session_id) as sessions
+    FROM provider_attempts
+  `).get() as { total: number; succeeded: number; failed: number; interrupted: number; sessions: number };
+
+  const tokens = db.prepare(`
+    SELECT
+      COALESCE(SUM(json_extract(usage_json, '$.inputTokens')), 0) as input_tokens,
+      COALESCE(SUM(json_extract(usage_json, '$.outputTokens')), 0) as output_tokens,
+      COALESCE(SUM(json_extract(usage_json, '$.cacheReadTokens')), 0) as cache_read_tokens,
+      COALESCE(SUM(json_extract(usage_json, '$.cacheWriteTokens')), 0) as cache_write_tokens,
+      COALESCE(SUM(json_extract(usage_json, '$.reasoningTokens')), 0) as reasoning_tokens
+    FROM provider_attempts WHERE usage_json IS NOT NULL
+  `).get() as {
+    input_tokens: number; output_tokens: number; cache_read_tokens: number;
+    cache_write_tokens: number; reasoning_tokens: number;
+  };
+
+  const costRows = db.prepare(`
+    SELECT currency, SUM(cost_amount) as amount, COUNT(*) as record_count
+    FROM provider_attempts
+    WHERE cost_state IN ('reported','calculated') AND currency IS NOT NULL AND cost_amount IS NOT NULL
+    GROUP BY currency
+  `).all() as Array<{ currency: string; amount: number; record_count: number }>;
+
+  const totalCost: CurrencyTotal[] = costRows.map((r) => ({
+    currency: r.currency,
+    amount: String(r.amount),
+    recordCount: r.record_count,
+  }));
+
+  const unknownRow = db.prepare(`
+    SELECT COUNT(*) as count FROM provider_attempts
+    WHERE cost_state = 'unknown' OR currency IS NULL OR cost_amount IS NULL
+  `).get() as { count: number };
+
+  const tsRows = db.prepare(`
+    SELECT strftime('%Y-%m-%d', started_at) as date,
+      COALESCE(SUM(json_extract(usage_json, '$.inputTokens')), 0) as input_tokens,
+      COALESCE(SUM(json_extract(usage_json, '$.outputTokens')), 0) as output_tokens,
+      COALESCE(SUM(json_extract(usage_json, '$.cacheReadTokens')), 0) as cache_read_tokens,
+      COALESCE(SUM(json_extract(usage_json, '$.cacheWriteTokens')), 0) as cache_write_tokens,
+      COALESCE(SUM(json_extract(usage_json, '$.reasoningTokens')), 0) as reasoning_tokens,
+      SUM(CASE WHEN cost_state IN ('reported','calculated') AND currency IS NOT NULL AND cost_amount IS NOT NULL THEN CAST(cost_amount AS REAL) ELSE 0 END) as cost
+    FROM provider_attempts GROUP BY date ORDER BY date
+  `).all() as Array<{
+    date: string; input_tokens: number; output_tokens: number;
+    cache_read_tokens: number; cache_write_tokens: number; reasoning_tokens: number;
+    cost: number;
   }>;
 
-  let totalInput = 0, totalOutput = 0, totalCacheRead = 0, totalCacheWrite = 0, totalReasoning = 0;
-  let succeeded = 0, failed = 0, interrupted = 0;
-  const sessionIds = new Set<string>();
-  const tierCounts = new Map<string, number>();
-  const tsMap = new Map<string, { cost: Decimal; input: number; output: number; cacheRead: number; cacheWrite: number; reasoning: number }>();
-  const modelCostMap = new Map<string, { cost: Decimal; currency: string }>();
-  const providerCostMap = new Map<string, { cost: Decimal; currency: string }>();
-  const costSourceCounts = new Map<string, number>();
+  const timeSeries: TimeSeriesPoint[] = tsRows.map((r) => ({
+    date: r.date,
+    cost: String(r.cost),
+    inputTokens: r.input_tokens,
+    outputTokens: r.output_tokens,
+    cacheReadTokens: r.cache_read_tokens,
+    cacheWriteTokens: r.cache_write_tokens,
+    reasoningTokens: r.reasoning_tokens,
+  }));
 
-  for (const row of allRows) {
-    sessionIds.add(row.session_id);
-    const usage = parseUsage(row.usage_json);
-    totalInput += usage.inputTokens;
-    totalOutput += usage.outputTokens;
-    totalCacheRead += usage.cacheReadTokens;
-    totalCacheWrite += usage.cacheWriteTokens;
-    totalReasoning += usage.reasoningTokens;
+  const spendByModelRows = db.prepare(`
+    SELECT model_id, currency, SUM(cost_amount) as cost
+    FROM provider_attempts
+    WHERE cost_state IN ('reported','calculated') AND currency IS NOT NULL AND cost_amount IS NOT NULL
+    GROUP BY model_id, currency
+  `).all() as Array<{ model_id: string; currency: string; cost: number }>;
 
-    if (row.outcome === 'succeeded') succeeded++;
-    else if (row.outcome === 'failed') failed++;
-    else if (row.outcome === 'interrupted') interrupted++;
+  const spendByModel = spendByModelRows.map((r) => ({
+    modelId: r.model_id,
+    cost: String(r.cost),
+    currency: r.currency,
+  }));
 
-    if (row.agent_tier) tierCounts.set(row.agent_tier, (tierCounts.get(row.agent_tier) ?? 0) + 1);
+  const spendByProviderRows = db.prepare(`
+    SELECT provider_id, currency, SUM(cost_amount) as cost
+    FROM provider_attempts
+    WHERE cost_state IN ('reported','calculated') AND currency IS NOT NULL AND cost_amount IS NOT NULL
+    GROUP BY provider_id, currency
+  `).all() as Array<{ provider_id: string; currency: string; cost: number }>;
 
-    const bucket = timeBucket(row.started_at);
-    const ts = tsMap.get(bucket) ?? { cost: new Decimal(0), input: 0, output: 0, cacheRead: 0, cacheWrite: 0, reasoning: 0 };
-    ts.input += usage.inputTokens; ts.output += usage.outputTokens;
-    ts.cacheRead += usage.cacheReadTokens; ts.cacheWrite += usage.cacheWriteTokens;
-    ts.reasoning += usage.reasoningTokens;
-    if (row.cost_state === 'reported' || row.cost_state === 'calculated') {
-      if (row.currency && row.cost_amount) {
-        try { ts.cost = ts.cost.add(new Decimal(row.cost_amount)); } catch { /* skip */ }
-      }
-    }
-    tsMap.set(bucket, ts);
+  const spendByProvider = spendByProviderRows.map((r) => ({
+    providerId: r.provider_id,
+    cost: String(r.cost),
+    currency: r.currency,
+  }));
 
-    costSourceCounts.set(row.cost_state, (costSourceCounts.get(row.cost_state) ?? 0) + 1);
+  const outcomeRows = db.prepare(`
+    SELECT outcome, COUNT(*) as count FROM provider_attempts GROUP BY outcome
+  `).all() as Array<{ outcome: string; count: number }>;
+  const outcomeDistribution = outcomeRows.map((r) => ({ outcome: r.outcome, count: r.count }));
 
-    const modelKey = row.model_id;
-    if ((row.cost_state === 'reported' || row.cost_state === 'calculated') && row.currency && row.cost_amount) {
-      try {
-        const mc = modelCostMap.get(modelKey) ?? { cost: new Decimal(0), currency: row.currency };
-        mc.cost = mc.cost.add(new Decimal(row.cost_amount));
-        modelCostMap.set(modelKey, mc);
-      } catch { /* skip */ }
-      const providerKey = row.provider_id;
-      try {
-        const pc = providerCostMap.get(providerKey) ?? { cost: new Decimal(0), currency: row.currency };
-        pc.cost = pc.cost.add(new Decimal(row.cost_amount));
-        providerCostMap.set(providerKey, pc);
-      } catch { /* skip */ }
-    }
-  }
+  const costSourceRows = db.prepare(`
+    SELECT cost_state, COUNT(*) as count FROM provider_attempts GROUP BY cost_state
+  `).all() as Array<{ cost_state: string; count: number }>;
+  const costSourceDistribution = costSourceRows.map((r) => ({ source: r.cost_state, count: r.count }));
 
-  const costSummary = sumCosts(allRows);
-
-  const timeSeries: TimeSeriesPoint[] = [...tsMap.entries()]
-    .sort(([a], [b]) => a.localeCompare(b))
-    .map(([date, ts]) => ({
-      date,
-      cost: ts.cost.toFixed(),
-      inputTokens: ts.input,
-      outputTokens: ts.output,
-      cacheReadTokens: ts.cacheRead,
-      cacheWriteTokens: ts.cacheWrite,
-      reasoningTokens: ts.reasoning,
-    }));
-
-  const total = allRows.length;
+  const tierRows = db.prepare(`
+    SELECT agent_tier, COUNT(*) as count FROM provider_attempts WHERE agent_tier IS NOT NULL GROUP BY agent_tier
+  `).all() as Array<{ agent_tier: string; count: number }>;
+  const agentTierDistribution = tierRows.map((r) => ({ tier: r.agent_tier, count: r.count }));
 
   return {
     stats: {
-      totalCost: costSummary.currencies,
-      totalInputTokens: totalInput,
-      totalOutputTokens: totalOutput,
-      totalCacheReadTokens: totalCacheRead,
-      totalCacheWriteTokens: totalCacheWrite,
-      totalReasoningTokens: totalReasoning,
-      totalAttempts: total,
-      succeededAttempts: succeeded,
-      failedAttempts: failed,
-      interruptedAttempts: interrupted,
-      unknownCostCount: costSummary.unknownCount,
-      totalSessions: sessionIds.size,
+      totalCost,
+      totalInputTokens: tokens.input_tokens,
+      totalOutputTokens: tokens.output_tokens,
+      totalCacheReadTokens: tokens.cache_read_tokens,
+      totalCacheWriteTokens: tokens.cache_write_tokens,
+      totalReasoningTokens: tokens.reasoning_tokens,
+      totalAttempts: stats.total,
+      succeededAttempts: stats.succeeded,
+      failedAttempts: stats.failed,
+      interruptedAttempts: stats.interrupted,
+      unknownCostCount: unknownRow.count,
+      totalSessions: stats.sessions,
     },
     spendOverTime: timeSeries,
     tokenUsageOverTime: timeSeries,
-    spendByModel: [...modelCostMap.entries()].map(([modelId, mc]) => ({ modelId, cost: mc.cost.toFixed(), currency: mc.currency })),
-    spendByProvider: [...providerCostMap.entries()].map(([providerId, pc]) => ({ providerId, cost: pc.cost.toFixed(), currency: pc.currency })),
-    outcomeDistribution: [
-      { outcome: 'succeeded', count: succeeded },
-      { outcome: 'failed', count: failed },
-      { outcome: 'interrupted', count: interrupted },
-    ],
-    costSourceDistribution: [...costSourceCounts.entries()].map(([source, count]) => ({ source, count })),
-    agentTierDistribution: [...tierCounts.entries()].map(([tier, count]) => ({ tier, count })),
+    spendByModel,
+    spendByProvider,
+    outcomeDistribution,
+    costSourceDistribution,
+    agentTierDistribution,
   };
 }
 
 export function getSessions(limit = DEFAULT_LIMIT): readonly SessionSummary[] {
   const db = getDb();
+
   const sessions = db.prepare(`
     SELECT session_id,
       COUNT(*) as attempts,
@@ -214,49 +238,56 @@ export function getSessions(limit = DEFAULT_LIMIT): readonly SessionSummary[] {
       SUM(CASE WHEN outcome='failed' THEN 1 ELSE 0 END) as failed,
       SUM(CASE WHEN outcome='interrupted' THEN 1 ELSE 0 END) as interrupted,
       MIN(started_at) as first_attempt,
-      MAX(completed_at) as last_attempt
+      MAX(completed_at) as last_attempt,
+      COALESCE(SUM(json_extract(usage_json, '$.inputTokens')), 0) as input_tokens,
+      COALESCE(SUM(json_extract(usage_json, '$.outputTokens')), 0) as output_tokens,
+      COALESCE(SUM(json_extract(usage_json, '$.cacheReadTokens')), 0) as cache_read_tokens,
+      GROUP_CONCAT(DISTINCT model_id) as models
     FROM provider_attempts GROUP BY session_id ORDER BY first_attempt DESC LIMIT ?
   `).all(limit) as Array<{
     session_id: string; attempts: number; succeeded: number; failed: number; interrupted: number;
     first_attempt: string; last_attempt: string | null;
+    input_tokens: number; output_tokens: number; cache_read_tokens: number;
+    models: string | null;
   }>;
 
-  const subagentStore = getSubagentAttributionStore();
+  const subagentRows = db.prepare(`
+    SELECT session_id, COUNT(*) as count FROM subagent_attribution GROUP BY session_id
+  `).all() as Array<{ session_id: string; count: number }>;
+  const subagentMap = new Map<string, number>();
+  for (const r of subagentRows) {
+    subagentMap.set(r.session_id, r.count);
+  }
 
-  return sessions.map((s) => {
-    const rows = db.prepare(`
-      SELECT usage_json, cost_state, cost_amount, currency, model_id FROM provider_attempts WHERE session_id = ?
-    `).all(s.session_id) as Array<{
-      usage_json: string | null; cost_state: string; cost_amount: string | null; currency: string | null; model_id: string;
-    }>;
+  const costRows = db.prepare(`
+    SELECT session_id, currency, SUM(cost_amount) as amount, COUNT(*) as record_count
+    FROM provider_attempts
+    WHERE cost_state IN ('reported','calculated') AND currency IS NOT NULL AND cost_amount IS NOT NULL
+    GROUP BY session_id, currency
+  `).all() as Array<{ session_id: string; currency: string; amount: number; record_count: number }>;
+  const costMap = new Map<string, CurrencyTotal[]>();
+  for (const r of costRows) {
+    const arr = costMap.get(r.session_id) ?? [];
+    arr.push({ currency: r.currency, amount: String(r.amount), recordCount: r.record_count });
+    costMap.set(r.session_id, arr);
+  }
 
-    let inputTokens = 0, outputTokens = 0, cacheReadTokens = 0;
-    const models = new Set<string>();
-    for (const r of rows) {
-      const u = parseUsage(r.usage_json);
-      inputTokens += u.inputTokens; outputTokens += u.outputTokens; cacheReadTokens += u.cacheReadTokens;
-      models.add(r.model_id);
-    }
-    const costs = sumCosts(rows.map((r) => ({ currency: r.currency, cost_amount: r.cost_amount, cost_state: r.cost_state })));
-    const subagents = subagentStore.listBySession(s.session_id);
-
-    return {
-      sessionId: s.session_id,
-      totalCost: costs.currencies,
-      inputTokens,
-      outputTokens,
-      cacheReadTokens,
-      totalTokens: inputTokens + outputTokens,
-      attempts: s.attempts,
-      succeeded: s.succeeded,
-      failed: s.failed,
-      interrupted: s.interrupted,
-      firstAttempt: s.first_attempt,
-      lastAttempt: s.last_attempt,
-      modelsUsed: [...models],
-      subagentCount: subagents.length,
-    };
-  });
+  return sessions.map((s) => ({
+    sessionId: s.session_id,
+    totalCost: costMap.get(s.session_id) ?? [],
+    inputTokens: s.input_tokens,
+    outputTokens: s.output_tokens,
+    cacheReadTokens: s.cache_read_tokens,
+    totalTokens: s.input_tokens + s.output_tokens,
+    attempts: s.attempts,
+    succeeded: s.succeeded,
+    failed: s.failed,
+    interrupted: s.interrupted,
+    firstAttempt: s.first_attempt,
+    lastAttempt: s.last_attempt,
+    modelsUsed: s.models ? s.models.split(',') : [],
+    subagentCount: subagentMap.get(s.session_id) ?? 0,
+  }));
 }
 
 export function getSessionDetail(sessionId: string): SessionDetailResult {
@@ -275,14 +306,15 @@ export function getSessionDetail(sessionId: string): SessionDetailResult {
     error: string | null; snapshot_json: string;
   }>;
 
+  const parsedRows = rows.map((r) => ({ row: r, usage: parseUsage(r.usage_json) }));
+
   let totalInput = 0, totalOutput = 0, totalCacheRead = 0;
   const models = new Set<string>();
   const providers = new Set<string>();
   let succeeded = 0, failed = 0, interrupted = 0;
   const costs = sumCosts(rows.map((r) => ({ currency: r.currency, cost_amount: r.cost_amount, cost_state: r.cost_state })));
 
-  const attempts = rows.map((r) => {
-    const u = parseUsage(r.usage_json);
+  const attempts = parsedRows.map(({ row: r, usage: u }) => {
     totalInput += u.inputTokens; totalOutput += u.outputTokens; totalCacheRead += u.cacheReadTokens;
     models.add(r.model_id); providers.add(r.provider_id);
     if (r.outcome === 'succeeded') succeeded++;
@@ -314,15 +346,14 @@ export function getSessionDetail(sessionId: string): SessionDetailResult {
   });
 
   const chainMap = new Map<string, { agentName: string | null; agentTier: string | null; cost: Decimal; input: number; output: number; attempts: number; succeeded: number; failed: number; interrupted: number }>();
-  for (const r of rows) {
+  for (const { row: r, usage: u } of parsedRows) {
     const key = r.chain_id ?? '__main__';
     const chain = chainMap.get(key) ?? { agentName: r.agent_name, agentTier: r.agent_tier, cost: new Decimal(0), input: 0, output: 0, attempts: 0, succeeded: 0, failed: 0, interrupted: 0 };
-    const u = parseUsage(r.usage_json);
     chain.input += u.inputTokens; chain.output += u.outputTokens; chain.attempts++;
     if (r.outcome === 'succeeded') chain.succeeded++;
     else if (r.outcome === 'failed') chain.failed++;
     else if (r.outcome === 'interrupted') chain.interrupted++;
-    if ((r.cost_amount) && r.currency) { try { chain.cost = chain.cost.add(new Decimal(r.cost_amount)); } catch { /* skip */ } }
+    if (r.cost_amount && r.currency && (r.cost_state === 'reported' || r.cost_state === 'calculated')) { try { chain.cost = chain.cost.add(new Decimal(r.cost_amount)); } catch { /* skip */ } }
     chainMap.set(key, chain);
   }
   const chains = [...chainMap.entries()].map(([chainId, c]) => ({
@@ -338,34 +369,40 @@ export function getSessionDetail(sessionId: string): SessionDetailResult {
     interrupted: c.interrupted,
   }));
 
-  const toolStore = getToolAttemptStore();
-  const toolRows = toolStore.listBySession(sessionId);
-  const toolCalls = toolRows.map((t) => ({
-    toolAttemptId: t.toolAttemptId,
-    toolName: t.toolName,
-    toolSource: t.toolSource,
-    mcpServerName: t.mcpServerName,
-    toolFamily: t.toolFamily,
-    startedAt: t.startedAt,
-    completedAt: t.completedAt,
-    durationMs: t.completedAt ? new Date(t.completedAt).getTime() - new Date(t.startedAt).getTime() : null,
-    outcome: t.outcome,
-    resultSizeBytes: t.resultSizeBytes,
-    offloaded: t.offloaded,
-    timedOut: t.timedOut,
-    agentScope: t.agentScope,
-  }));
+  let toolCalls: ToolCallDetail[] = [];
+  try {
+    const toolStore = getToolAttemptStore();
+    const toolRows = toolStore.listBySession(sessionId);
+    toolCalls = toolRows.map((t) => ({
+      toolAttemptId: t.toolAttemptId,
+      toolName: t.toolName,
+      toolSource: t.toolSource,
+      mcpServerName: t.mcpServerName,
+      toolFamily: t.toolFamily,
+      startedAt: t.startedAt,
+      completedAt: t.completedAt,
+      durationMs: t.completedAt ? new Date(t.completedAt).getTime() - new Date(t.startedAt).getTime() : null,
+      outcome: t.outcome,
+      resultSizeBytes: t.resultSizeBytes,
+      offloaded: t.offloaded,
+      timedOut: t.timedOut,
+      agentScope: t.agentScope,
+    }));
+  } catch { /* store unavailable */ }
 
-  const subagentStore = getSubagentAttributionStore();
-  const subagentRows = subagentStore.listBySession(sessionId);
+  let subagentRows: readonly SubagentAttributionRecord[] = [];
+  try {
+    const subagentStore = getSubagentAttributionStore();
+    subagentRows = subagentStore.listBySession(sessionId);
+  } catch { /* store unavailable */ }
+
   const subagents = subagentRows.map((sa) => {
-    const saAttempts = rows.filter((r) => r.chain_id === sa.chainId);
+    const saAttempts = parsedRows.filter(({ row: r }) => r.chain_id === sa.chainId);
     let saCost = new Decimal(0);
     let saInput = 0, saOutput = 0;
-    for (const r of saAttempts) {
-      const u = parseUsage(r.usage_json);
+    for (const { usage: u, row: r } of saAttempts) {
       saInput += u.inputTokens; saOutput += u.outputTokens;
-      if (r.cost_amount && r.currency) { try { saCost = saCost.add(new Decimal(r.cost_amount)); } catch { /* skip */ } }
+      if (r.cost_amount && r.currency && (r.cost_state === 'reported' || r.cost_state === 'calculated')) { try { saCost = saCost.add(new Decimal(r.cost_amount)); } catch { /* skip */ } }
     }
     return {
       subagentId: sa.subagentId,
@@ -415,7 +452,7 @@ export function getModels(): ModelsResult {
       SUM(CASE WHEN outcome='interrupted' THEN 1 ELSE 0 END) as interrupted,
       MIN(started_at) as first_used,
       MAX(completed_at) as last_used
-    FROM provider_attempts GROUP BY model_id ORDER BY first_used DESC
+    FROM provider_attempts GROUP BY model_id, provider_id ORDER BY first_used DESC
   `).all() as Array<{
     model_id: string; provider_id: string; snapshot_json: string;
     attempts: number; succeeded: number; failed: number; interrupted: number;
@@ -423,7 +460,7 @@ export function getModels(): ModelsResult {
   }>;
 
   const models = modelRows.map((m) => {
-    const tokenRows = db.prepare('SELECT usage_json, cost_state, cost_amount, currency FROM provider_attempts WHERE model_id = ?').all(m.model_id) as Array<{
+    const tokenRows = db.prepare('SELECT usage_json, cost_state, cost_amount, currency FROM provider_attempts WHERE model_id = ? AND provider_id = ?').all(m.model_id, m.provider_id) as Array<{
       usage_json: string | null; cost_state: string; cost_amount: string | null; currency: string | null;
     }>;
     let inputTokens = 0, outputTokens = 0, cacheReadTokens = 0, cacheWriteTokens = 0, reasoningTokens = 0;
@@ -433,7 +470,7 @@ export function getModels(): ModelsResult {
       inputTokens += u.inputTokens; outputTokens += u.outputTokens;
       cacheReadTokens += u.cacheReadTokens; cacheWriteTokens += u.cacheWriteTokens;
       reasoningTokens += u.reasoningTokens;
-      if (r.cost_amount && r.currency) { try { totalCost = totalCost.add(new Decimal(r.cost_amount)); } catch { /* skip */ } }
+      if (r.cost_amount && r.currency && (r.cost_state === 'reported' || r.cost_state === 'calculated')) { try { totalCost = totalCost.add(new Decimal(r.cost_amount)); } catch { /* skip */ } }
     }
     return {
       modelId: m.model_id,
@@ -465,22 +502,17 @@ export function getModels(): ModelsResult {
   }>;
 
   const providers = providerRows.map((p) => {
-    const costRows = db.prepare('SELECT cost_amount, currency, cost_state, snapshot_json FROM provider_attempts WHERE provider_id = ?').all(p.provider_id) as Array<{
-      cost_amount: string | null; currency: string | null; cost_state: string; snapshot_json: string;
+    const detailRows = db.prepare('SELECT usage_json, cost_amount, currency, cost_state, snapshot_json FROM provider_attempts WHERE provider_id = ?').all(p.provider_id) as Array<{
+      usage_json: string | null; cost_amount: string | null; currency: string | null; cost_state: string; snapshot_json: string;
     }>;
     let totalCost = new Decimal(0);
     let totalInput = 0, totalOutput = 0;
     let displayName: string | null = null;
-    for (const r of costRows) {
+    for (const r of detailRows) {
       if (!displayName) displayName = parseSnapshotProviderName(r.snapshot_json);
-      if (r.cost_amount && r.currency) { try { totalCost = totalCost.add(new Decimal(r.cost_amount)); } catch { /* skip */ } }
-      const u = parseUsage(null);
-      totalInput += u.inputTokens; totalOutput += u.outputTokens;
-    }
-    const tokenRows = db.prepare('SELECT usage_json FROM provider_attempts WHERE provider_id = ?').all(p.provider_id) as Array<{ usage_json: string | null }>;
-    for (const r of tokenRows) {
       const u = parseUsage(r.usage_json);
       totalInput += u.inputTokens; totalOutput += u.outputTokens;
+      if (r.cost_amount && r.currency && (r.cost_state === 'reported' || r.cost_state === 'calculated')) { try { totalCost = totalCost.add(new Decimal(r.cost_amount)); } catch { /* skip */ } }
     }
     return {
       providerId: p.provider_id,
@@ -497,30 +529,44 @@ export function getModels(): ModelsResult {
   });
 
   const tsRows = db.prepare(`
-    SELECT strftime('%Y-%m-%d', started_at) as date, model_id, cost_amount, currency, cost_state
+    SELECT strftime('%Y-%m-%d', started_at) as date, model_id, provider_id, cost_amount, currency, cost_state
     FROM provider_attempts WHERE cost_state IN ('reported','calculated') ORDER BY date
-  `).all() as Array<{ date: string; model_id: string; cost_amount: string; currency: string; cost_state: string }>;
+  `).all() as Array<{ date: string; model_id: string; provider_id: string; cost_amount: string; currency: string; cost_state: string }>;
 
   const modelTsMap = new Map<string, Map<string, Decimal>>();
+  const providerTsMap = new Map<string, Map<string, Decimal>>();
   for (const r of tsRows) {
     if (!r.currency || !r.cost_amount) continue;
-    const modelMap = modelTsMap.get(r.model_id) ?? new Map();
     try {
-      const val = modelMap.get(r.date) ?? new Decimal(0);
-      modelMap.set(r.date, val.add(new Decimal(r.cost_amount)));
+      const modelMap = modelTsMap.get(r.model_id) ?? new Map<string, Decimal>();
+      const modelVal = modelMap.get(r.date) ?? new Decimal(0);
+      modelMap.set(r.date, modelVal.add(new Decimal(r.cost_amount)));
       modelTsMap.set(r.model_id, modelMap);
+
+      const providerMap = providerTsMap.get(r.provider_id) ?? new Map<string, Decimal>();
+      const providerVal = providerMap.get(r.date) ?? new Decimal(0);
+      providerMap.set(r.date, providerVal.add(new Decimal(r.cost_amount)));
+      providerTsMap.set(r.provider_id, providerMap);
     } catch { /* skip */ }
   }
 
   const costPerModelOverTime: TimeSeriesPoint[] = [];
-  for (const [modelId, dateMap] of modelTsMap) {
+  for (const [, dateMap] of modelTsMap) {
     for (const [date, cost] of dateMap) {
       costPerModelOverTime.push({ date, cost: cost.toFixed(), inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, reasoningTokens: 0 });
     }
   }
   costPerModelOverTime.sort((a, b) => a.date.localeCompare(b.date));
 
-  return { models, providers, costPerModelOverTime, costPerProviderOverTime: [] };
+  const costPerProviderOverTime: TimeSeriesPoint[] = [];
+  for (const [, dateMap] of providerTsMap) {
+    for (const [date, cost] of dateMap) {
+      costPerProviderOverTime.push({ date, cost: cost.toFixed(), inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, reasoningTokens: 0 });
+    }
+  }
+  costPerProviderOverTime.sort((a, b) => a.date.localeCompare(b.date));
+
+  return { models, providers, costPerModelOverTime, costPerProviderOverTime };
 }
 
 export function getTools(): ToolsResult {
@@ -598,10 +644,52 @@ export function getSubagents(): SubagentsResult {
   const allSubagents = subagentStore.listAll(DEFAULT_LIMIT);
   const db = getDb();
 
+  const chainIds = [...new Set(allSubagents.map((sa) => sa.chainId))];
+
+  const chainAggMap = new Map<string, { inputTokens: number; outputTokens: number; totalCost: number; attempts: number }>();
+  const chainCurrencyMap = new Map<string, Map<string, number>>();
+
+  if (chainIds.length > 0) {
+    const placeholders = chainIds.map(() => '?').join(',');
+
+    const chainRows = db.prepare(`
+      SELECT chain_id,
+        COALESCE(SUM(json_extract(usage_json, '$.inputTokens')), 0) as input_tokens,
+        COALESCE(SUM(json_extract(usage_json, '$.outputTokens')), 0) as output_tokens,
+        SUM(CASE WHEN cost_state IN ('reported','calculated') AND cost_amount IS NOT NULL THEN CAST(cost_amount AS REAL) ELSE 0 END) as total_cost,
+        COUNT(*) as attempts
+      FROM provider_attempts WHERE chain_id IN (${placeholders}) GROUP BY chain_id
+    `).all(...chainIds) as Array<{
+      chain_id: string; input_tokens: number; output_tokens: number; total_cost: number; attempts: number;
+    }>;
+
+    for (const r of chainRows) {
+      chainAggMap.set(r.chain_id, {
+        inputTokens: r.input_tokens,
+        outputTokens: r.output_tokens,
+        totalCost: r.total_cost,
+        attempts: r.attempts,
+      });
+    }
+
+    const chainCurrencyRows = db.prepare(`
+      SELECT chain_id, currency, SUM(cost_amount) as cost
+      FROM provider_attempts
+      WHERE cost_state IN ('reported','calculated') AND cost_amount IS NOT NULL AND currency IS NOT NULL AND chain_id IN (${placeholders})
+      GROUP BY chain_id, currency
+    `).all(...chainIds) as Array<{ chain_id: string; currency: string; cost: number }>;
+
+    for (const r of chainCurrencyRows) {
+      const currMap = chainCurrencyMap.get(r.chain_id) ?? new Map<string, number>();
+      currMap.set(r.currency, (currMap.get(r.currency) ?? 0) + r.cost);
+      chainCurrencyMap.set(r.chain_id, currMap);
+    }
+  }
+
   const summaryMap = new Map<string, {
     agentName: string; agentType: string; agentTier: string;
     models: Set<string>; invocations: number;
-    totalCost: Decimal; inputTokens: number; outputTokens: number; attempts: number;
+    totalCost: number; inputTokens: number; outputTokens: number; attempts: number;
     completed: number; failed: number; interrupted: number;
     totalDurationMs: number; durationCount: number;
   }>();
@@ -611,7 +699,7 @@ export function getSubagents(): SubagentsResult {
     const entry = summaryMap.get(key) ?? {
       agentName: sa.agentName, agentType: sa.agentType, agentTier: sa.agentTier,
       models: new Set<string>(), invocations: 0,
-      totalCost: new Decimal(0), inputTokens: 0, outputTokens: 0, attempts: 0,
+      totalCost: 0, inputTokens: 0, outputTokens: 0, attempts: 0,
       completed: 0, failed: 0, interrupted: 0,
       totalDurationMs: 0, durationCount: 0,
     };
@@ -625,15 +713,13 @@ export function getSubagents(): SubagentsResult {
       entry.durationCount++;
     }
 
-    const saAttempts = db.prepare('SELECT usage_json, cost_amount, currency FROM provider_attempts WHERE chain_id = ?').all(sa.chainId) as Array<{
-      usage_json: string | null; cost_amount: string | null; currency: string | null;
-    }>;
-    for (const r of saAttempts) {
-      const u = parseUsage(r.usage_json);
-      entry.inputTokens += u.inputTokens; entry.outputTokens += u.outputTokens;
-      if (r.cost_amount && r.currency) { try { entry.totalCost = entry.totalCost.add(new Decimal(r.cost_amount)); } catch { /* skip */ } }
+    const agg = chainAggMap.get(sa.chainId);
+    if (agg) {
+      entry.inputTokens += agg.inputTokens;
+      entry.outputTokens += agg.outputTokens;
+      entry.totalCost += agg.totalCost;
+      entry.attempts += agg.attempts;
     }
-    entry.attempts += saAttempts.length;
     summaryMap.set(key, entry);
   }
 
@@ -643,7 +729,7 @@ export function getSubagents(): SubagentsResult {
     agentTier: s.agentTier,
     modelsUsed: [...s.models],
     invocations: s.invocations,
-    totalCost: s.totalCost.toFixed(),
+    totalCost: String(s.totalCost),
     inputTokens: s.inputTokens,
     outputTokens: s.outputTokens,
     attempts: s.attempts,
@@ -653,18 +739,35 @@ export function getSubagents(): SubagentsResult {
     avgDurationMs: s.durationCount > 0 ? Math.round(s.totalDurationMs / s.durationCount) : null,
   }));
 
-  const costByAgentName: { agentName: string; cost: string; currency: string }[] = [];
-  const costByAgentTier: { tier: string; cost: string; currency: string }[] = [];
-  const tierCostMap = new Map<string, Decimal>();
-  for (const s of summaryMap.values()) {
-    if (s.totalCost.greaterThan(0)) {
-      costByAgentName.push({ agentName: s.agentName, cost: s.totalCost.toFixed(), currency: 'USD' });
+  const agentNameCostMap = new Map<string, Map<string, number>>();
+  const agentTierCostMap = new Map<string, Map<string, number>>();
+
+  for (const sa of allSubagents) {
+    const chainCurrencies = chainCurrencyMap.get(sa.chainId);
+    if (!chainCurrencies) continue;
+    for (const [currency, cost] of chainCurrencies) {
+      const nameMap = agentNameCostMap.get(sa.agentName) ?? new Map<string, number>();
+      nameMap.set(currency, (nameMap.get(currency) ?? 0) + cost);
+      agentNameCostMap.set(sa.agentName, nameMap);
+
+      const tierMap = agentTierCostMap.get(sa.agentTier) ?? new Map<string, number>();
+      tierMap.set(currency, (tierMap.get(currency) ?? 0) + cost);
+      agentTierCostMap.set(sa.agentTier, tierMap);
     }
-    const tc = tierCostMap.get(s.agentTier) ?? new Decimal(0);
-    tierCostMap.set(s.agentTier, tc.add(s.totalCost));
   }
-  for (const [tier, cost] of tierCostMap) {
-    if (cost.greaterThan(0)) costByAgentTier.push({ tier, cost: cost.toFixed(), currency: 'USD' });
+
+  const costByAgentName: { agentName: string; cost: string; currency: string }[] = [];
+  for (const [agentName, currMap] of agentNameCostMap) {
+    for (const [currency, cost] of currMap) {
+      if (cost > 0) costByAgentName.push({ agentName, cost: String(cost), currency });
+    }
+  }
+
+  const costByAgentTier: { tier: string; cost: string; currency: string }[] = [];
+  for (const [tier, currMap] of agentTierCostMap) {
+    for (const [currency, cost] of currMap) {
+      if (cost > 0) costByAgentTier.push({ tier, cost: String(cost), currency });
+    }
   }
 
   const outcomeCounts = new Map<string, number>();

@@ -1,6 +1,18 @@
 import { useState } from 'react';
 import { useAnalytics } from '../../hooks/useAnalytics';
-import { StatCard, ChartCard, SortableTable } from './shared';
+import {
+  StatCard,
+  ChartCard,
+  SortableTable,
+  formatTokenCount,
+  formatCost,
+  formatCostAmount,
+  formatDuration,
+  formatDate,
+  formatBytes,
+  truncateId,
+} from './shared';
+import { Button } from '../ui/Button';
 import {
   PieChart, Pie, Cell, BarChart, Bar,
   XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend,
@@ -8,44 +20,6 @@ import {
 import type { SessionSummary } from '../../../shared/types/analytics';
 
 const PIE_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#8b5cf6', '#ec4899'];
-
-function formatTokenCount(n: number): string {
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
-  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`;
-  return String(n);
-}
-
-function formatCost(currencies: ReadonlyArray<{ currency: string; amount: string }>): string {
-  if (currencies.length === 0) return '$0.00';
-  return currencies.map((c) => `$${Number(c.amount).toFixed(4)} ${c.currency}`).join(', ');
-}
-
-function formatCostAmount(amount: string | null): string {
-  if (amount === null) return '—';
-  return `$${Number(amount).toFixed(4)}`;
-}
-
-function formatDuration(ms: number | null): string {
-  if (ms === null) return '—';
-  if (ms < 1000) return `${Math.round(ms)}ms`;
-  return `${(ms / 1000).toFixed(1)}s`;
-}
-
-function formatDate(iso: string | null): string {
-  if (iso === null) return '—';
-  return new Date(iso).toLocaleString();
-}
-
-function formatBytes(bytes: number | null): string {
-  if (bytes === null) return '—';
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-}
-
-function truncateId(id: string, len = 8): string {
-  return id.length > len ? `${id.slice(0, len)}…` : id;
-}
 
 function SessionList({ onRowClick }: { onRowClick: (row: SessionSummary) => void }) {
   const { data, loading, error, refresh } = useAnalytics(
@@ -60,7 +34,7 @@ function SessionList({ onRowClick }: { onRowClick: (row: SessionSummary) => void
     <div className="space-y-4">
       <div className="flex items-center justify-between">
         <h2 className="text-lg font-semibold text-base-content">Sessions</h2>
-        <button onClick={refresh} className="text-sm text-base-content/60 hover:text-base-content">↻ Refresh</button>
+        <Button variant="ghost" size="xs" onClick={refresh}>↻ Refresh</Button>
       </div>
       <SortableTable
         columns={[
@@ -128,7 +102,7 @@ function SessionDetail({ sessionId, onBack }: { sessionId: string; onBack: () =>
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <button onClick={onBack} className="text-sm text-base-content/60 hover:text-base-content">← Back to Sessions</button>
-        <button onClick={refresh} className="text-sm text-base-content/60 hover:text-base-content">↻ Refresh</button>
+        <Button variant="ghost" size="xs" onClick={refresh}>↻ Refresh</Button>
       </div>
 
       <h2 className="text-lg font-semibold text-base-content">Session {truncateId(sessionId, 12)}</h2>
@@ -178,7 +152,7 @@ function SessionDetail({ sessionId, onBack }: { sessionId: string; onBack: () =>
             { key: 'chainId', label: 'Chain ID', render: (r) => r.chainId ? <span title={r.chainId}>{truncateId(r.chainId)}</span> : '—' },
             { key: 'agentName', label: 'Agent', render: (r) => r.agentName ?? '—' },
             { key: 'agentTier', label: 'Tier', render: (r) => r.agentTier ?? '—' },
-            { key: 'totalCost', label: 'Cost', render: (r) => formatCostAmount(r.totalCost) },
+            { key: 'totalCost', label: 'Cost', render: (r) => formatCostAmount(r.totalCost, null) },
             { key: 'inputTokens', label: 'Input Tokens', render: (r) => formatTokenCount(r.inputTokens) },
             { key: 'outputTokens', label: 'Output Tokens', render: (r) => formatTokenCount(r.outputTokens) },
             { key: 'attempts', label: 'Attempts', render: (r) => r.attempts },
@@ -198,7 +172,7 @@ function SessionDetail({ sessionId, onBack }: { sessionId: string; onBack: () =>
             { key: 'modelId', label: 'Model', render: (r) => r.modelId },
             { key: 'providerId', label: 'Provider', render: (r) => r.providerId },
             { key: 'outcome', label: 'Outcome', render: (r) => r.outcome },
-            { key: 'costAmount', label: 'Cost', render: (r) => formatCostAmount(r.costAmount) },
+            { key: 'costAmount', label: 'Cost', render: (r) => formatCostAmount(r.costAmount, r.currency) },
             { key: 'inputTokens', label: 'Input', render: (r) => r.inputTokens !== null ? formatTokenCount(r.inputTokens) : '—' },
             { key: 'outputTokens', label: 'Output', render: (r) => r.outputTokens !== null ? formatTokenCount(r.outputTokens) : '—' },
             { key: 'cacheReadTokens', label: 'Cache Read', render: (r) => r.cacheReadTokens !== null ? formatTokenCount(r.cacheReadTokens) : '—' },
@@ -243,7 +217,7 @@ function SessionDetail({ sessionId, onBack }: { sessionId: string; onBack: () =>
             { key: 'agentTier', label: 'Tier', render: (r) => r.agentTier },
             { key: 'modelId', label: 'Model', render: (r) => r.modelId },
             { key: 'status', label: 'Status', render: (r) => r.status },
-            { key: 'totalCost', label: 'Cost', render: (r) => formatCostAmount(r.totalCost) },
+            { key: 'totalCost', label: 'Cost', render: (r) => formatCostAmount(r.totalCost, null) },
             { key: 'inputTokens', label: 'Input Tokens', render: (r) => formatTokenCount(r.inputTokens) },
             { key: 'outputTokens', label: 'Output Tokens', render: (r) => formatTokenCount(r.outputTokens) },
             { key: 'attempts', label: 'Attempts', render: (r) => r.attempts },

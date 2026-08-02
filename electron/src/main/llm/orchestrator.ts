@@ -229,6 +229,8 @@ export async function* streamChat(params: StreamChatParams): AsyncGenerator<Stre
       projectRuntime,
       abortSignal,
       triggeringMessage,
+      chainId: accounting?.chainId ?? null,
+      turnId: accounting?.turnId ?? null,
     }, {
       skills: projectRuntime
         ? new Map(projectRuntime.skills)

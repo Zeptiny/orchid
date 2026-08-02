@@ -77,22 +77,20 @@ export function AnalyticsView({ onClose }: AnalyticsViewProps) {
   }, [activeTab]);
 
   return (
-    <div ref={rootRef} className="analytics-shell absolute inset-0 z-50 flex bg-base-100 text-base-content" role="dialog" aria-label="Analytics">
+    <div ref={rootRef} className="orchid-view-enter absolute inset-0 z-50 flex bg-base-100 text-base-content" role="dialog" aria-label="Analytics">
       <div className="flex w-48 flex-col border-r border-base-300 bg-base-200/50">
         <div className="px-4 py-3 text-sm font-bold uppercase tracking-wide text-base-content/60">Analytics</div>
         <nav className="flex-1 space-y-1 px-2">
           {TABS.map((tab) => (
-            <button
+            <Button
               key={tab.id}
-              className={`w-full rounded-md px-3 py-2 text-left text-sm transition-colors ${
-                activeTab === tab.id
-                  ? 'bg-primary/15 text-primary font-medium'
-                  : 'text-base-content/70 hover:bg-base-300/50'
-              }`}
+              variant={activeTab === tab.id ? 'primary' : 'ghost'}
+              size="xs"
+              className="w-full justify-start"
               onClick={() => setActiveTab(tab.id)}
             >
               {tab.label}
-            </button>
+            </Button>
           ))}
         </nav>
       </div>
