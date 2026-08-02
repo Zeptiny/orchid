@@ -16,7 +16,7 @@ import { useChat } from '../hooks/useChat';
 import { useSession } from '../hooks/useSession';
 import { useSubagents } from '../hooks/useSubagents';
 import { useTodos } from '../hooks/useTodos';
-import { useSessionActivity } from '../hooks/useSessionActivity';
+import type { UseSessionActivityReturn } from '../hooks/useSessionActivity';
 import { useSessionTabs } from '../hooks/useSessionTabs';
 import { useProviders } from '../hooks/useProviders';
 import { useMessageQueue } from '../hooks/useMessageQueue';
@@ -72,14 +72,15 @@ interface ChatViewProps {
   bootstrapConfig?: Config | null;
   /** App-level notification surface shared by chat and settings. */
   onNotify: Notify;
+  /** Shared session activity state (owned by AppReady). */
+  activity: UseSessionActivityReturn;
 }
 
-export function ChatView({ isVisible = true, bootstrapConfig = null, onNotify }: ChatViewProps) {
+export function ChatView({ isVisible = true, bootstrapConfig = null, onNotify, activity }: ChatViewProps) {
   const session = useSession();
   const chat = useChat(session.activeSession?.id ?? null);
   const subagents = useSubagents(session.activeSession?.id ?? null);
   const todos = useTodos(session.activeSession?.id ?? null);
-  const activity = useSessionActivity();
   const tabs = useSessionTabs();
   const providers = useProviders();
   const messageQueue = useMessageQueue();

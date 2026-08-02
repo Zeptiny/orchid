@@ -1,7 +1,7 @@
 import { Suspense, lazy, useState, useCallback, useRef } from 'react';
 import { useFocusTrap, useGlobalShortcuts } from '../keyboard';
 import { useSession } from '../hooks/useSession';
-import { useSessionActivity } from '../hooks/useSessionActivity';
+import type { UseSessionActivityReturn } from '../hooks/useSessionActivity';
 import { emitOrchidEvent } from '../utils/events';
 import { LeftSidebar } from './LeftSidebar';
 import { Button } from './ui/Button';
@@ -29,11 +29,11 @@ const ContextTab = lazy(() => import('./analytics/ContextTab').then((m) => ({ de
 interface AnalyticsViewProps {
   onClose: () => void;
   onOpenSettings?: () => void;
+  activity: UseSessionActivityReturn;
 }
 
-export function AnalyticsView({ onClose, onOpenSettings }: AnalyticsViewProps) {
+export function AnalyticsView({ onClose, onOpenSettings, activity }: AnalyticsViewProps) {
   const session = useSession();
-  const activity = useSessionActivity();
   const [activeTab, setActiveTab] = useState<AnalyticsTab>('overview');
   const [leftCollapsed, setLeftCollapsed] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);

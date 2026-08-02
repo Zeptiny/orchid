@@ -15,6 +15,7 @@ import { StateMessage } from './components/ui/StateMessage';
 import { applyTheme, type ThemeName, THEME_NAMES } from './themes';
 import { onOrchidEvent } from './utils/events';
 import type { Notify, NotifySeverity } from './utils/notify';
+import { useSessionActivity } from './hooks/useSessionActivity';
 import type { Config } from '../shared/types/ipc-boundary';
 
 type SettingsTab = 'general' | 'providers' | 'mcp' | 'tier-models' | 'rag' | 'skills' | 'agents' | 'personalities';
@@ -44,6 +45,7 @@ function AppReady() {
   const [bootstrapConfig, setBootstrapConfig] = useState<Config | null>(null);
   const [toast, setToast] = useState<Toast | null>(null);
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const activity = useSessionActivity();
 
   useEffect(() => {
     applyTheme(theme);
@@ -146,19 +148,19 @@ function AppReady() {
       )}
       {/* Keep ChatView mounted under Config so selection and draft state stay shared. */}
       <div className={chatVisible ? 'contents' : 'hidden'} aria-hidden={!chatVisible}>
-        <ChatView isVisible={chatVisible} bootstrapConfig={bootstrapConfig} onNotify={notify} />
+        <ChatView isVisible={chatVisible} bootstrapConfig={bootstrapConfig} onNotify={notify} activity={activity} />
       </div>
       {configOpen && (
         <ErrorBoundary title="Settings could not load">
           <Suspense fallback={<div className="flex h-screen min-h-0 items-center justify-center bg-base-100"><StateMessage kind="loading" title="Loading Settings…" role="status" aria-live="polite" /></div>}>
-            <ConfigView initialTab={settingsTab} onClose={() => setConfigOpen(false)} onNotify={notify} onOpenAnalytics={() => { setConfigOpen(false); setAnalyticsOpen(true); }} />
+            <ConfigView initialTab={settingsTab} onClose={() => setConfigOpen(false)} onNotify={notify} onOpenAnalytics={() => { setConfigOpen(false); setAnalyticsOpen(true); }} activity={activity} />
           </Suspense>
         </ErrorBoundary>
       )}
       {analyticsOpen && (
         <ErrorBoundary title="Analytics could not load">
           <Suspense fallback={<div className="flex h-screen min-h-0 items-center justify-center bg-base-100"><StateMessage kind="loading" title="Loading Analytics…" role="status" aria-live="polite" /></div>}>
-            <AnalyticsView onClose={() => setAnalyticsOpen(false)} onOpenSettings={() => { setAnalyticsOpen(false); setConfigOpen(true); }} />
+            <AnalyticsView onClose={() => setAnalyticsOpen(false)} onOpenSettings={() => { setAnalyticsOpen(false); setConfigOpen(true); }} activity={activity} />
           </Suspense>
         </ErrorBoundary>
       )}

@@ -19,7 +19,7 @@ import type {
 import { LeftSidebar } from './LeftSidebar';
 import { useProviders } from '../hooks/useProviders';
 import { useSession } from '../hooks/useSession';
-import { useSessionActivity } from '../hooks/useSessionActivity';
+import type { UseSessionActivityReturn } from '../hooks/useSessionActivity';
 import { useFocusTrap, useGlobalShortcuts } from '../keyboard';
 import { applyConfigDraft, mergeConfigDraft } from '../utils/config-draft';
 import {
@@ -147,6 +147,7 @@ interface ConfigViewProps {
   initialTab?: TabId;
   onNotify: Notify;
   onOpenAnalytics?: () => void;
+  activity: UseSessionActivityReturn;
 }
 
 interface PermissionTabContext {
@@ -159,10 +160,9 @@ interface PermissionTabContext {
   updateDraft: (updates: ConfigPatch) => void;
 }
 
-export function ConfigView({ onClose, initialTab = 'general', onNotify, onOpenAnalytics }: ConfigViewProps) {
+export function ConfigView({ onClose, initialTab = 'general', onNotify, onOpenAnalytics, activity }: ConfigViewProps) {
   const session = useSession();
   const providers = useProviders();
-  const activity = useSessionActivity();
   const rootRef = useRef<HTMLDivElement>(null);
   const [leftCollapsed, setLeftCollapsed] = useState(false);
   /** Tab currently painted — only advances after target tab data is ready. */
