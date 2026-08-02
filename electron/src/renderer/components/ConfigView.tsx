@@ -19,6 +19,7 @@ import type {
 import { LeftSidebar } from './LeftSidebar';
 import { useProviders } from '../hooks/useProviders';
 import { useSession } from '../hooks/useSession';
+import { useSessionActivity } from '../hooks/useSessionActivity';
 import { useFocusTrap, useGlobalShortcuts } from '../keyboard';
 import { applyConfigDraft, mergeConfigDraft } from '../utils/config-draft';
 import {
@@ -161,6 +162,7 @@ interface PermissionTabContext {
 export function ConfigView({ onClose, initialTab = 'general', onNotify, onOpenAnalytics }: ConfigViewProps) {
   const session = useSession();
   const providers = useProviders();
+  const activity = useSessionActivity();
   const rootRef = useRef<HTMLDivElement>(null);
   const [leftCollapsed, setLeftCollapsed] = useState(false);
   /** Tab currently painted — only advances after target tab data is ready. */
@@ -568,6 +570,10 @@ export function ConfigView({ onClose, initialTab = 'general', onNotify, onOpenAn
     await session.enterDraft();
   }, [session]);
 
+  const handleStopSession = useCallback((sessionId: string) => {
+    void window.orchid?.chat?.stop?.({ sessionId });
+  }, []);
+
   return (
     <div
       ref={rootRef}
@@ -597,6 +603,8 @@ export function ConfigView({ onClose, initialTab = 'general', onNotify, onOpenAn
         }}
         onSessionDelete={session.deleteSession}
         onSessionSelect={handleSessionSelect}
+        activities={activity.activities}
+        onStopSession={handleStopSession}
         onToggle={() => setLeftCollapsed((prev) => !prev)}
         sessionListState={session.listState}
         workspace={session.workspace}

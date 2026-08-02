@@ -1,6 +1,7 @@
 import { Suspense, lazy, useState, useCallback, useRef } from 'react';
 import { useFocusTrap, useGlobalShortcuts } from '../keyboard';
 import { useSession } from '../hooks/useSession';
+import { useSessionActivity } from '../hooks/useSessionActivity';
 import { emitOrchidEvent } from '../utils/events';
 import { LeftSidebar } from './LeftSidebar';
 import { Button } from './ui/Button';
@@ -32,6 +33,7 @@ interface AnalyticsViewProps {
 
 export function AnalyticsView({ onClose, onOpenSettings }: AnalyticsViewProps) {
   const session = useSession();
+  const activity = useSessionActivity();
   const [activeTab, setActiveTab] = useState<AnalyticsTab>('overview');
   const [leftCollapsed, setLeftCollapsed] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
@@ -73,6 +75,10 @@ export function AnalyticsView({ onClose, onOpenSettings }: AnalyticsViewProps) {
     await session.setWorkspace(projectDir);
     await session.enterDraft();
   }, [session]);
+
+  const handleStopSession = useCallback((sessionId: string) => {
+    void window.orchid?.chat?.stop?.({ sessionId });
+  }, []);
 
   const renderTab = useCallback(() => {
     switch (activeTab) {
@@ -142,6 +148,8 @@ export function AnalyticsView({ onClose, onOpenSettings }: AnalyticsViewProps) {
         }}
         onSessionDelete={session.deleteSession}
         onSessionSelect={handleSessionSelect}
+        activities={activity.activities}
+        onStopSession={handleStopSession}
         onToggle={() => setLeftCollapsed((prev) => !prev)}
         sessionListState={session.listState}
         workspace={session.workspace}
