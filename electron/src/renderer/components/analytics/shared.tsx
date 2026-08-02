@@ -136,6 +136,7 @@ interface SortableTableProps<T> {
   rowKey: (row: T) => string;
   onRowClick?: (row: T) => void;
   emptyMessage?: string;
+  pageSize?: number;
 }
 
 export function SortableTable<T>({
@@ -144,6 +145,7 @@ export function SortableTable<T>({
   rowKey,
   onRowClick,
   emptyMessage = 'No data',
+  pageSize,
 }: SortableTableProps<T>) {
   const firstSortableKey = useMemo(
     () => columns.find((c) => c.sortable)?.key ?? null,
@@ -151,6 +153,7 @@ export function SortableTable<T>({
   );
   const [sortKey, setSortKey] = useState<string | null>(firstSortableKey);
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc');
+  const [page, setPage] = useState(0);
 
   const handleSort = (key: string) => {
     if (sortKey === key) {
@@ -159,6 +162,7 @@ export function SortableTable<T>({
       setSortKey(key);
       setSortDir('asc');
     }
+    setPage(0);
   };
 
   const sortedRows = useMemo(() => {
@@ -176,52 +180,84 @@ export function SortableTable<T>({
     });
   }, [rows, columns, sortKey, sortDir]);
 
+  const totalPages = pageSize ? Math.max(1, Math.ceil(sortedRows.length / pageSize)) : 1;
+  const clampedPage = Math.min(page, totalPages - 1);
+  const pagedRows = pageSize
+    ? sortedRows.slice(clampedPage * pageSize, (clampedPage + 1) * pageSize)
+    : sortedRows;
+
   return (
-    <div className="overflow-x-auto">
-      <table className="w-full text-sm">
-        <thead>
-          <tr className="border-b border-base-300 text-left">
-            {columns.map((col) => (
-              <th key={col.key} className="px-3 py-2 font-medium text-base-content/70">
-                {col.sortable ? (
-                  <button
-                    className="inline-flex items-center gap-1 hover:text-base-content"
-                    onClick={() => handleSort(col.key)}
-                  >
-                    {col.label}
-                    {sortKey === col.key && (sortDir === 'asc' ? ' \u2191' : ' \u2193')}
-                  </button>
-                ) : (
-                  col.label
-                )}
-              </th>
-            ))}
-          </tr>
-        </thead>
-        <tbody>
-          {sortedRows.length === 0 ? (
-            <tr>
-              <td colSpan={columns.length} className="px-3 py-8 text-center text-base-content/40">
-                {emptyMessage}
-              </td>
+    <div>
+      <div className="overflow-x-auto">
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="border-b border-base-300 text-left">
+              {columns.map((col) => (
+                <th key={col.key} className="px-3 py-2 font-medium text-base-content/70">
+                  {col.sortable ? (
+                    <button
+                      className="inline-flex items-center gap-1 hover:text-base-content"
+                      onClick={() => handleSort(col.key)}
+                    >
+                      {col.label}
+                      {sortKey === col.key && (sortDir === 'asc' ? ' \u2191' : ' \u2193')}
+                    </button>
+                  ) : (
+                    col.label
+                  )}
+                </th>
+              ))}
             </tr>
-          ) : (
-            sortedRows.map((row) => (
-              <tr
-                key={rowKey(row)}
-                className={`border-b border-base-300/50 ${onRowClick ? 'cursor-pointer hover:bg-base-200' : ''}`}
-                onClick={onRowClick ? () => onRowClick(row) : undefined}
-              >
-                {columns.map((col) => (
-                  <td key={col.key} className="px-3 py-2 text-base-content/90">
-                    {col.render(row)}
-                  </td>
-                ))}
+          </thead>
+          <tbody>
+            {pagedRows.length === 0 ? (
+              <tr>
+                <td colSpan={columns.length} className="px-3 py-8 text-center text-base-content/40">
+                  {emptyMessage}
+                </td>
               </tr>
-            ))
-          )}
-        </tbody>
-      </table>
+            ) : (
+              pagedRows.map((row) => (
+                <tr
+                  key={rowKey(row)}
+                  className={`border-b border-base-300/50 ${onRowClick ? 'cursor-pointer hover:bg-base-200' : ''}`}
+                  onClick={onRowClick ? () => onRowClick(row) : undefined}
+                >
+                  {columns.map((col) => (
+                    <td key={col.key} className="px-3 py-2 text-base-content/90">
+                      {col.render(row)}
+                    </td>
+                  ))}
+                </tr>
+              ))
+            )}
+          </tbody>
+        </table>
+      </div>
+      {pageSize && sortedRows.length > pageSize && (
+        <div className="flex items-center justify-between px-1 py-2 text-xs text-base-content/50">
+          <span>
+            {clampedPage * pageSize + 1}–{Math.min((clampedPage + 1) * pageSize, sortedRows.length)} of {sortedRows.length}
+          </span>
+          <div className="flex gap-1">
+            <button
+              className="rounded px-2 py-1 hover:bg-base-200 disabled:opacity-30"
+              onClick={() => setPage((p) => Math.max(0, p - 1))}
+              disabled={clampedPage === 0}
+            >
+              ← Prev
+            </button>
+            <span className="px-2 py-1">Page {clampedPage + 1}/{totalPages}</span>
+            <button
+              className="rounded px-2 py-1 hover:bg-base-200 disabled:opacity-30"
+              onClick={() => setPage((p) => Math.min(totalPages - 1, p + 1))}
+              disabled={clampedPage >= totalPages - 1}
+            >
+              Next →
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

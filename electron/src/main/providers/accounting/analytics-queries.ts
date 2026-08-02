@@ -429,8 +429,15 @@ export function getSessionDetail(sessionId: string): SessionDetailResult {
     };
   });
 
+  let sessionName: string | null = null;
+  try {
+    const nameMap = getSessionNames([sessionId]);
+    sessionName = nameMap.get(sessionId) ?? null;
+  } catch { /* session DB unavailable */ }
+
   return {
     sessionId,
+    sessionName,
     summary: {
       totalCost: costs.currencies,
       totalInputTokens: totalInput,

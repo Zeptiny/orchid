@@ -39,7 +39,6 @@ function aggregateCostByDate(points: readonly TimeSeriesPoint[]): { date: string
 
 const modelColumns: ReadonlyArray<Column<ModelBreakdown>> = [
   { key: 'model', label: 'Model', render: (m) => m.modelId },
-  { key: 'provider', label: 'Provider', render: (m) => m.providerId },
   { key: 'connection', label: 'Connection', render: (m) => m.connectionName ?? '—' },
   { key: 'cost', label: 'Total Cost', render: (m) => formatCostAmount(m.totalCost, null) },
   { key: 'input', label: 'Input Tokens', render: (m) => formatTokenCount(m.inputTokens) },

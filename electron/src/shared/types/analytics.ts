@@ -121,6 +121,7 @@ export interface SubagentBreakdownRow {
 
 export interface SessionDetailResult {
   readonly sessionId: string;
+  readonly sessionName: string | null;
   readonly summary: {
     readonly totalCost: readonly CurrencyTotal[];
     readonly totalInputTokens: number;

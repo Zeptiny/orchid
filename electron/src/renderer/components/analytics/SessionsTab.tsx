@@ -24,6 +24,8 @@ import {
 } from 'recharts';
 import type { SessionSummary } from '../../../shared/types/analytics';
 
+const DETAIL_PAGE_SIZE = 10;
+
 function SessionList({ onRowClick }: { onRowClick: (row: SessionSummary) => void }) {
   const { data, loading, error, refresh } = useAnalytics(
     () => window.orchid.analytics.sessions(),
@@ -95,12 +97,27 @@ function SessionDetail({ sessionId, onBack }: { sessionId: string; onBack: () =>
   ].filter((d) => d.value > 0);
 
   const costByModelMap = new Map<string, number>();
+  const tokensByModelMap = new Map<string, { input: number; output: number; reasoning: number }>();
   for (const a of data.attempts) {
     if (a.costAmount !== null) {
       costByModelMap.set(a.modelId, (costByModelMap.get(a.modelId) ?? 0) + Number(a.costAmount));
     }
+    const entry = tokensByModelMap.get(a.modelId) ?? { input: 0, output: 0, reasoning: 0 };
+    entry.input += a.inputTokens ?? 0;
+    entry.output += a.outputTokens ?? 0;
+    entry.reasoning += a.reasoningTokens ?? 0;
+    tokensByModelMap.set(a.modelId, entry);
   }
   const costByModel = Array.from(costByModelMap, ([modelId, cost]) => ({ modelId, cost }));
+  const tokensByModel = Array.from(tokensByModelMap, ([modelId, t]) => ({
+    modelId,
+    inputTokens: t.input,
+    outputTokens: t.output,
+    reasoningTokens: t.reasoning,
+  }));
+
+  const pieLabel = (entry: { name?: string; value?: number }) =>
+    `${entry.name ?? ''}: ${formatTokenCount(entry.value ?? 0)}`;
 
   return (
     <div className="space-y-6">
@@ -109,7 +126,10 @@ function SessionDetail({ sessionId, onBack }: { sessionId: string; onBack: () =>
         <Button variant="ghost" size="xs" onClick={refresh}>↻ Refresh</Button>
       </div>
 
-      <h2 className="text-lg font-semibold text-base-content">Session {truncateId(sessionId, 12)}</h2>
+      <h2 className="text-lg font-semibold text-base-content">
+        {data.sessionName ?? truncateId(sessionId, 12)}
+        <span className="ml-2 text-sm font-normal text-base-content/40" title={sessionId}>{truncateId(sessionId, 8)}</span>
+      </h2>
 
       <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
         <StatCard label="Total Cost" value={formatCost(summary.totalCost)} />
@@ -126,7 +146,7 @@ function SessionDetail({ sessionId, onBack }: { sessionId: string; onBack: () =>
         <ChartCard title="Token Breakdown">
           <ResponsiveContainer width="100%" height={250}>
             <PieChart>
-              <Pie data={tokenBreakdown} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={80} label>
+              <Pie data={tokenBreakdown} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={80} label={pieLabel}>
                 {tokenBreakdown.map((_, i) => (
                   <Cell key={i} fill={CHART_PALETTE[i % CHART_PALETTE.length]} />
                 ))}
@@ -145,6 +165,21 @@ function SessionDetail({ sessionId, onBack }: { sessionId: string; onBack: () =>
               <YAxis type="category" dataKey="modelId" tick={axisTickProps} width={120} />
               <Tooltip {...costTooltipProps} />
               <Bar dataKey="cost" fill={CHART_PALETTE[0]} />
+            </BarChart>
+          </ResponsiveContainer>
+        </ChartCard>
+
+        <ChartCard title="Tokens by Model" className="lg:col-span-2">
+          <ResponsiveContainer width="100%" height={250}>
+            <BarChart data={tokensByModel} layout="vertical">
+              <CartesianGrid strokeDasharray="3 3" stroke={GRID_STROKE} />
+              <XAxis type="number" tick={axisTickProps} tickFormatter={(value) => formatTokenCount(Number(value))} />
+              <YAxis type="category" dataKey="modelId" tick={axisTickProps} width={120} />
+              <Tooltip {...tokenTooltipProps} />
+              <Legend />
+              <Bar dataKey="inputTokens" name="Input" stackId="a" fill={CHART_PALETTE[0]} />
+              <Bar dataKey="outputTokens" name="Output" stackId="a" fill={CHART_PALETTE[1]} />
+              <Bar dataKey="reasoningTokens" name="Reasoning" stackId="a" fill={CHART_PALETTE[2]} />
             </BarChart>
           </ResponsiveContainer>
         </ChartCard>
@@ -189,6 +224,7 @@ function SessionDetail({ sessionId, onBack }: { sessionId: string; onBack: () =>
           rows={data.attempts}
           rowKey={(r) => r.attemptId}
           emptyMessage="No attempts"
+          pageSize={DETAIL_PAGE_SIZE}
         />
       </ChartCard>
 
@@ -209,6 +245,7 @@ function SessionDetail({ sessionId, onBack }: { sessionId: string; onBack: () =>
           rows={data.toolCalls}
           rowKey={(r) => r.toolAttemptId}
           emptyMessage="No tool calls"
+          pageSize={DETAIL_PAGE_SIZE}
         />
       </ChartCard>
 
@@ -231,6 +268,7 @@ function SessionDetail({ sessionId, onBack }: { sessionId: string; onBack: () =>
           rows={data.subagents}
           rowKey={(r) => r.subagentId}
           emptyMessage="No subagents"
+          pageSize={DETAIL_PAGE_SIZE}
         />
       </ChartCard>
     </div>
