@@ -21,6 +21,7 @@ import type {
 } from '../../shared/types/tool-result';
 import { genericToolResultDataSchema } from '../../shared/types/tool-result';
 import type { RiskClass } from '../../shared/types/permission';
+import type { ToolSource } from '../../shared/types/accounting';
 
 /** Shared explicit result contract for built-ins using the generic family. */
 export const genericToolResultMetadata = {
@@ -69,6 +70,16 @@ export interface ToolDefinition {
 
   /** Tool category for grouping/filtering */
   category: string;
+
+  /**
+   * Registration provenance for telemetry attribution.
+   *
+   * `'mcp'` is set when an MCP server tool is registered (see MCPManager);
+   * code-owned built-in tools omit it (treated as `'builtin'`). Do not infer
+   * provenance from `category` — the built-in MCP resource readers also use
+   * `category: 'mcp'`.
+   */
+  source?: ToolSource;
 
   /** Risk classification for permission gating */
   riskClass: RiskClass;

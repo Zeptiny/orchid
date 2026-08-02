@@ -27,7 +27,7 @@ import {
   genericAgentProjector,
   renderRetrieval,
 } from '../tools/result';
-import type { ToolExecutionContext } from '../tools/types';
+import type { ToolDefinition, ToolExecutionContext } from '../tools/types';
 import { toWorkerContext } from '../tools/types';
 import { getToolWorkerPool } from './tool-pool';
 import { WorkerTaskCancelledError, type WorkerTaskScope } from '../utils/worker-pool';
@@ -60,6 +60,7 @@ import { genericTerminalExecution } from './terminal-result';
 import { defaults } from '../config/schema';
 import type { Config } from '../../shared/types/ipc-boundary';
 import { getToolAttemptStore } from '../providers/accounting/tool-attempt-store';
+import type { ToolSource } from '../../shared/types/accounting';
 
 // Re-exported so existing consumers keep importing these from tool-dispatch.
 export { genericTerminalExecution };
@@ -143,6 +144,19 @@ const FALLBACK_CONFIG: Config = defaults();
 // ---------------------------------------------------------------------------
 // Tool dispatch
 // ---------------------------------------------------------------------------
+
+/**
+ * Resolve the telemetry provenance of a registered tool. The explicit
+ * `source` marker set at registration wins (MCPManager sets `'mcp'`);
+ * definitions without the marker fall back to the `mcp::` name prefix.
+ * `rawInputJsonSchema` and `category` are deliberately NOT consulted: the
+ * former is a schema-passthrough hint, and the built-in MCP resource readers
+ * share `category: 'mcp'` with real MCP tools.
+ */
+function resolveToolSource(definition: ToolDefinition, name: string): ToolSource {
+  if (definition.source !== undefined) return definition.source;
+  return name.startsWith('mcp::') ? 'mcp' : 'builtin';
+}
 
 /**
  * Execute a single tool call and return canonical facts plus the exact agent
@@ -352,28 +366,33 @@ export async function executeToolCall(
   const handlerArgs = validation.data;
   const noTimeout = Boolean(registered.definition.noTimeout);
 
+  // Tool telemetry is session-scoped: without a non-empty session id there is
+  // nowhere to attribute the row (the Analytics Sessions tab groups by
+  // session_id), so sessionless executions (e.g. the renderer tool:execute
+  // path with no active session) insert nothing. All finalize paths stay
+  // guarded by toolAttemptId !== null.
   let toolAttemptId: string | null = null;
-  try {
-    const isMcp = registered.definition.rawInputJsonSchema !== undefined || name.startsWith('mcp::');
-    const mcpServerName = name.startsWith('mcp::')
-      ? name.split('::')[1] ?? null
-      : null;
-    toolAttemptId = getToolAttemptStore().insertPending({
-      toolAttemptId: '',
-      sessionId: options.sessionId ?? '',
-      chainId: options.chainId ?? null,
-      turnId: options.turnId ?? null,
-      providerAttemptId: options.providerAttemptId ?? null,
-      toolCallId,
-      toolName: name,
-      toolSource: isMcp ? 'mcp' : 'builtin',
-      mcpServerName,
-      toolFamily: registered.definition.resultFamily,
-      timeoutSeconds: effectiveTimeoutSeconds,
-      agentScope: options.agentScopeId ?? null,
-    });
-  } catch (error) {
-    console.warn('[tool-dispatch] Tool telemetry insert failed', { toolName: name, error });
+  if (options.sessionId) {
+    try {
+      toolAttemptId = getToolAttemptStore().insertPending({
+        toolAttemptId: '',
+        sessionId: options.sessionId,
+        chainId: options.chainId ?? null,
+        turnId: options.turnId ?? null,
+        providerAttemptId: options.providerAttemptId ?? null,
+        toolCallId,
+        toolName: name,
+        toolSource: resolveToolSource(registered.definition, name),
+        mcpServerName: name.startsWith('mcp::')
+          ? name.split('::')[1] ?? null
+          : null,
+        toolFamily: registered.definition.resultFamily,
+        timeoutSeconds: effectiveTimeoutSeconds,
+        agentScope: options.agentScopeId ?? null,
+      });
+    } catch (error) {
+      console.warn('[tool-dispatch] Tool telemetry insert failed', { toolName: name, error });
+    }
   }
 
   let result: unknown;

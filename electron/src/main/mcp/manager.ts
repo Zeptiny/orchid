@@ -530,6 +530,7 @@ export class MCPManager {
           resultFamily: 'generic',
           outputDataSchema: genericToolResultDataSchema,
           category: 'mcp',
+          source: 'mcp',
           riskClass: RiskClass.MCP,
         };
 

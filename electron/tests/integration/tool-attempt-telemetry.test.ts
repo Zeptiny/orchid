@@ -14,6 +14,9 @@
  * Also covers:
  * - Pre-aborted signal (early return before telemetry insert → no row created)
  * - Telemetry failure (insertPending throws → tool still executes successfully)
+ * - Sessionless execution (no/empty sessionId → no row created, no phantom '' session)
+ * - toolSource classification (explicit `source` marker, `mcp::` prefix fallback,
+ *   and builtin tools carrying rawInputJsonSchema staying 'builtin')
  */
 import * as fs from 'node:fs';
 import * as os from 'node:os';
@@ -29,6 +32,7 @@ import {
   resetToolAttemptStore,
   getToolAttemptStore,
 } from '../../src/main/providers/accounting/tool-attempt-store';
+import { sessionPermissionOverrides } from '../../src/main/permissions/session-overrides';
 
 // ---------------------------------------------------------------------------
 // Dynamic import — tool-dispatch pulls in heavy session/provider machinery at
@@ -79,6 +83,34 @@ function makeRegistry(
   return registry;
 }
 
+/**
+ * Build a registry with one MCP-shaped tool, mirroring MCPManager's
+ * registration (namespaced `mcp::{server}::{tool}` name, raw JSON Schema,
+ * mcp category + risk class). `source` replicates the explicit provenance
+ * marker; omit it to exercise the name-prefix fallback.
+ */
+function makeMcpRegistry(
+  handler: ToolHandler,
+  options: { name: string; source?: 'builtin' | 'mcp' },
+): ToolRegistry {
+  const registry = new ToolRegistry();
+  registry.register(
+    {
+      name: options.name,
+      description: 'MCP test tool for telemetry verification',
+      inputSchema: z.object({}),
+      rawInputJsonSchema: { type: 'object', properties: {} },
+      resultFamily: 'generic' as const,
+      outputDataSchema: genericToolResultDataSchema,
+      category: 'mcp',
+      ...(options.source !== undefined ? { source: options.source } : {}),
+      riskClass: 'mcp' as const,
+    },
+    handler,
+  );
+  return registry;
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -120,6 +152,7 @@ describe('tool attempt telemetry', () => {
     vi.restoreAllMocks();
     _setToolOutputCacheRootForTests(null);
     _setAgentsMdStoreResolverForTests(null);
+    sessionPermissionOverrides.delete(sessionId);
     resetToolAttemptStore();
     fs.rmSync(tmpRoot, { recursive: true, force: true });
   });
@@ -312,5 +345,127 @@ describe('tool attempt telemetry', () => {
     // No telemetry row was finalized (toolAttemptId was null).
     const rows = getToolAttemptStore().listBySession(sessionId);
     expect(rows).toHaveLength(0);
+  });
+
+  // ── 7. Sessionless execution inserts nothing ─────────────────────────────
+
+  it('sessionless execution: tool runs normally but inserts no telemetry row', async () => {
+    const handler: ToolHandler = async () => ({
+      status: 'complete',
+      data: { value: 'no-session' },
+    });
+    const registry = makeRegistry(handler);
+
+    // Missing sessionId entirely (renderer tool:execute with no active session).
+    const resultMissing = await executeToolCall(
+      { id: 'call-no-session', name: 'test_tool', args: {} },
+      registry,
+      { cwd: workspace, agentsMdDisabled: true, timeoutSeconds: 5 },
+    );
+    expect(resultMissing.canonical.status).toBe('complete');
+
+    // Empty-string sessionId.
+    const resultEmpty = await executeToolCall(
+      { id: 'call-empty-session', name: 'test_tool', args: {} },
+      registry,
+      { cwd: workspace, sessionId: '', agentsMdDisabled: true, timeoutSeconds: 5 },
+    );
+    expect(resultEmpty.canonical.status).toBe('complete');
+
+    // The store is fresh per test, so any row would have come from these
+    // sessionless executions. There must be none — especially no phantom
+    // '' session row the Analytics Sessions tab would group by.
+    expect(getToolAttemptStore().listAll()).toHaveLength(0);
+    expect(getToolAttemptStore().listBySession('')).toHaveLength(0);
+  });
+
+  // ── 8. toolSource classification ─────────────────────────────────────────
+  // The builtin side is already asserted by test 1 (toolSource = 'builtin').
+
+  it('mcp tool: explicit source marker classifies as mcp with server name', async () => {
+    const handler: ToolHandler = async () => ({
+      status: 'complete',
+      data: { value: 'mcp-result' },
+    });
+    const registry = makeMcpRegistry(handler, {
+      name: 'mcp::fake-server::fake_tool',
+      source: 'mcp',
+    });
+    // Risk class 'mcp' defaults to 'ask'; a session-selector override keeps
+    // this test free of approval prompts.
+    sessionPermissionOverrides.set(sessionId, 'allow');
+
+    const result = await executeToolCall(
+      { id: 'call-mcp', name: 'mcp::fake-server::fake_tool', args: {} },
+      registry,
+      baseOptions(sessionId, workspace),
+    );
+
+    expect(result.canonical.status).toBe('complete');
+
+    const rows = getToolAttemptStore().listBySession(sessionId);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.toolSource).toBe('mcp');
+    expect(rows[0]!.mcpServerName).toBe('fake-server');
+  });
+
+  it('mcp tool without source marker: falls back to the mcp:: name prefix', async () => {
+    const handler: ToolHandler = async () => ({
+      status: 'complete',
+      data: { value: 'legacy-mcp' },
+    });
+    const registry = makeMcpRegistry(handler, {
+      name: 'mcp::legacy-server::legacy_tool',
+    });
+    sessionPermissionOverrides.set(sessionId, 'allow');
+
+    const result = await executeToolCall(
+      { id: 'call-mcp-fallback', name: 'mcp::legacy-server::legacy_tool', args: {} },
+      registry,
+      baseOptions(sessionId, workspace),
+    );
+
+    expect(result.canonical.status).toBe('complete');
+
+    const rows = getToolAttemptStore().listBySession(sessionId);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.toolSource).toBe('mcp');
+    expect(rows[0]!.mcpServerName).toBe('legacy-server');
+  });
+
+  it('builtin tool with rawInputJsonSchema: stays builtin (old heuristic regression)', async () => {
+    // The pre-fix heuristic treated any definition carrying rawInputJsonSchema
+    // as MCP. A code-owned tool with that field must still classify 'builtin'.
+    const handler: ToolHandler = async () => ({
+      status: 'complete',
+      data: { value: 'builtin-with-raw-schema' },
+    });
+    const registry = new ToolRegistry();
+    registry.register(
+      {
+        name: 'quirky_builtin_tool',
+        description: 'Builtin tool carrying a raw JSON Schema',
+        inputSchema: z.object({}),
+        rawInputJsonSchema: { type: 'object', properties: {} },
+        resultFamily: 'generic' as const,
+        outputDataSchema: genericToolResultDataSchema,
+        category: 'test',
+        riskClass: 'read-only' as const,
+      },
+      handler,
+    );
+
+    const result = await executeToolCall(
+      { id: 'call-quirky-builtin', name: 'quirky_builtin_tool', args: {} },
+      registry,
+      baseOptions(sessionId, workspace),
+    );
+
+    expect(result.canonical.status).toBe('complete');
+
+    const rows = getToolAttemptStore().listBySession(sessionId);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.toolSource).toBe('builtin');
+    expect(rows[0]!.mcpServerName).toBeNull();
   });
 });

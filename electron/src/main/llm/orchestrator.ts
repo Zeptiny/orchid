@@ -263,10 +263,13 @@ export async function* streamChat(params: StreamChatParams): AsyncGenerator<Stre
           stepMessages,
           buildUsageContext,
         );
-        if (stepUsage.context) {
+        // Context snapshots are session-scoped: without a session id there is
+        // nowhere to attribute the row (the Analytics Sessions tab groups by
+        // session_id), so sessionless streams insert nothing.
+        if (stepUsage.context && sessionId) {
           try {
             getContextSnapshotStore().insert({
-              sessionId: sessionId ?? '',
+              sessionId,
               chainId: accounting?.chainId ?? null,
               turnId: accounting?.turnId ?? null,
              providerAttemptId: accounting?.attemptIdHolder?.value ?? null,

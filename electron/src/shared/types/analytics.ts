@@ -254,20 +254,11 @@ export interface SubagentSummary {
   readonly avgDurationMs: number | null;
 }
 
-export interface ContextSnapshotSummary {
-  readonly snapshotId: string;
+export interface ContextSessionSeries {
   readonly sessionId: string;
-  readonly chainId: string | null;
-  readonly turnId: string | null;
-  readonly capturedAt: string;
-  readonly usedTokens: number;
-  readonly systemTokens: number;
-  readonly toolsTokens: number;
-  readonly toolUseTokens: number;
-  readonly userTokens: number;
-  readonly assistantTokens: number;
-  readonly inputTokens: number;
-  readonly outputTokens: number;
+  readonly sessionName: string | null;
+  readonly maxUsedTokens: number;
+  readonly points: ReadonlyArray<{ readonly capturedAt: string; readonly usedTokens: number }>;
 }
 
 export interface OverviewResult {
@@ -300,12 +291,12 @@ export interface SubagentsResult {
   readonly costByAgentName: readonly { readonly agentName: string; readonly cost: string; readonly currency: string }[];
   readonly costByAgentTier: readonly { readonly tier: string; readonly cost: string; readonly currency: string }[];
   readonly outcomeDistribution: readonly { readonly status: string; readonly count: number }[];
+  readonly invocationsOverTime: ReadonlyArray<{ readonly date: string; readonly count: number }>;
 }
 
 export interface ContextResult {
-  readonly snapshots: readonly ContextSnapshotSummary[];
   readonly totalSnapshots: number;
-  readonly snapshotsTruncated: boolean;
+  readonly topSessions: ReadonlyArray<ContextSessionSeries>;
   readonly avgBreakdown: {
     readonly usedTokens: number;
     readonly systemTokens: number;

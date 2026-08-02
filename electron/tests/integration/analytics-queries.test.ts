@@ -117,6 +117,10 @@ function calculatedCost(amount: string, currency = 'USD'): AttemptCostResolution
   return { state: 'calculated', source: 'token-formula', currency, amount };
 }
 
+function reportedCost(amount: string, currency = 'USD'): AttemptCostResolution {
+  return { state: 'reported', source: 'provider-reported', currency, amount };
+}
+
 function unknownCost(reason: string): AttemptCostResolution {
   return { state: 'unknown', source: 'unknown', reason };
 }
@@ -291,9 +295,11 @@ describe('analytics-queries', () => {
       expect(subagents.costByAgentName).toHaveLength(0);
       expect(subagents.costByAgentTier).toHaveLength(0);
       expect(subagents.outcomeDistribution).toHaveLength(0);
+      expect(subagents.invocationsOverTime).toHaveLength(0);
 
       const context = getContext();
-      expect(context.snapshots).toHaveLength(0);
+      expect(context.totalSnapshots).toBe(0);
+      expect(context.topSessions).toHaveLength(0);
       expect(context.avgBreakdown.systemTokens).toBe(0);
       expect(context.avgBreakdown.toolsTokens).toBe(0);
     });
@@ -368,7 +374,7 @@ describe('analytics-queries', () => {
       expect(result.outcomeDistribution).toContainEqual({ outcome: 'failed', count: 1 });
 
       // Cost source distribution
-      expect(result.costSourceDistribution).toContainEqual({ source: 'calculated', count: 2 });
+      expect(result.costSourceDistribution).toContainEqual({ source: 'token-formula', count: 2 });
       expect(result.costSourceDistribution).toContainEqual({ source: 'unknown', count: 1 });
 
       // Agent tier distribution
@@ -396,6 +402,60 @@ describe('analytics-queries', () => {
       expect(result.stats.knownUsageCount).toBe(1);
       expect(result.stats.unknownUsageCount).toBe(1);
       expect(result.tokenUsageOverTime[0]).toMatchObject({ inputTokens: 10, outputTokens: 5 });
+    });
+
+    it('groups costSourceDistribution by the cost_source column', () => {
+      seedProviderAttempt({
+        attemptId: 'att-reported', sessionId: 'sess-1', chainId: null, turnId: 'turn-1',
+        outcome: 'succeeded', usage: { inputTokens: 10, outputTokens: 5 },
+        cost: reportedCost('1'),
+      });
+      seedProviderAttempt({
+        attemptId: 'att-calculated', sessionId: 'sess-1', chainId: null, turnId: 'turn-2',
+        outcome: 'succeeded', usage: { inputTokens: 10, outputTokens: 5 },
+        cost: calculatedCost('2'),
+      });
+      seedProviderAttempt({
+        attemptId: 'att-unknown', sessionId: 'sess-1', chainId: null, turnId: 'turn-3',
+        outcome: 'failed', usage: null,
+        cost: unknownCost('no usage'),
+      });
+
+      const result = getOverview();
+      expect(result.costSourceDistribution).toContainEqual({ source: 'provider-reported', count: 1 });
+      expect(result.costSourceDistribution).toContainEqual({ source: 'token-formula', count: 1 });
+      expect(result.costSourceDistribution).toContainEqual({ source: 'unknown', count: 1 });
+      expect(result.costSourceDistribution).not.toContainEqual({ source: 'reported', count: 1 });
+      expect(result.costSourceDistribution).not.toContainEqual({ source: 'calculated', count: 1 });
+    });
+
+    it('sorts spendByModel and spendByProvider descending by numeric cost', () => {
+      seedProviderAttempt({
+        attemptId: 'att-small', sessionId: 'sess-1', chainId: null, turnId: 'turn-1',
+        outcome: 'succeeded', usage: { inputTokens: 1, outputTokens: 1 },
+        cost: calculatedCost('1'), snapshot: anthropicSnapshot('model-small'),
+      });
+      seedProviderAttempt({
+        attemptId: 'att-big', sessionId: 'sess-1', chainId: null, turnId: 'turn-2',
+        outcome: 'succeeded', usage: { inputTokens: 1, outputTokens: 1 },
+        cost: calculatedCost('30'), snapshot: anthropicSnapshot('model-big'),
+      });
+      seedProviderAttempt({
+        attemptId: 'att-mid', sessionId: 'sess-1', chainId: null, turnId: 'turn-3',
+        outcome: 'succeeded', usage: { inputTokens: 1, outputTokens: 1 },
+        cost: calculatedCost('5'), snapshot: openaiSnapshot(),
+      });
+
+      const result = getOverview();
+      expect(result.spendByModel.map((s) => ({ modelId: s.modelId, cost: s.cost }))).toEqual([
+        { modelId: 'model-big', cost: '30' },
+        { modelId: 'gpt-test', cost: '5' },
+        { modelId: 'model-small', cost: '1' },
+      ]);
+      expect(result.spendByProvider.map((s) => ({ providerId: s.providerId, cost: s.cost }))).toEqual([
+        { providerId: 'anthropic', cost: '31' },
+        { providerId: 'openai', cost: '5' },
+      ]);
     });
   });
 
@@ -649,6 +709,34 @@ describe('analytics-queries', () => {
       expect(detail.attempts.map((attempt) => attempt.attemptId)).toEqual(['new-attempt']);
       expect(detail.toolCalls.map((tool) => tool.toolAttemptId)).toEqual(['new-tool']);
       expect(detail.subagents.map((subagent) => subagent.subagentId)).toEqual(['new-subagent']);
+    });
+
+    it('computes summary.lastAttempt as the max non-null completed_at', () => {
+      seedProviderAttempt({
+        attemptId: 'att-done', sessionId: 'sess-1', chainId: null, turnId: 'turn-1',
+        outcome: 'succeeded', usage: { inputTokens: 10, outputTokens: 5 },
+        cost: calculatedCost('1'),
+      });
+      providerStore.insertPending({
+        attemptId: 'att-pending',
+        sessionId: 'sess-1',
+        chainId: null,
+        turnId: 'turn-2',
+        sdkCallId: 'sdk-att-pending',
+        snapshot: anthropicSnapshot(),
+        agentScope: null,
+        agentName: null,
+        agentTier: null,
+        agentType: null,
+      });
+
+      const detail = getSessionDetail('sess-1');
+      expect(detail.summary.attemptCount).toBe(2);
+      const completed = detail.attempts.find((a) => a.attemptId === 'att-done')!;
+      const pending = detail.attempts.find((a) => a.attemptId === 'att-pending')!;
+      expect(completed.completedAt).not.toBeNull();
+      expect(pending.completedAt).toBeNull();
+      expect(detail.summary.lastAttempt).toBe(completed.completedAt);
     });
   });
 
@@ -965,12 +1053,43 @@ describe('analytics-queries', () => {
       expect(result.summaries[0].inputTokens).toBe(20);
       expect(result.summaries[0].totalCost).toEqual([{ currency: 'USD', amount: '2', recordCount: 1 }]);
     });
+
+    it('returns invocations over time grouped by day, ordered ascending, respecting the time range', () => {
+      seedSubagentAttribution({
+        subagentId: 'sub-a', sessionId: 'sess-1', chainId: 'chain-a',
+        agentName: 'researcher', agentType: 'worker', agentTier: 'sprout',
+        modelId: 'claude-test', connectionId: ANTHROPIC_CONNECTION_ID, status: 'completed',
+      });
+      seedSubagentAttribution({
+        subagentId: 'sub-b', sessionId: 'sess-1', chainId: 'chain-b',
+        agentName: 'coder', agentType: 'worker', agentTier: 'bloom',
+        modelId: 'claude-test', connectionId: ANTHROPIC_CONNECTION_ID, status: 'completed',
+      });
+      clockMs = new Date('2026-07-15T10:00:00.000Z').getTime();
+      seedSubagentAttribution({
+        subagentId: 'sub-c', sessionId: 'sess-1', chainId: 'chain-c',
+        agentName: 'researcher', agentType: 'worker', agentTier: 'sprout',
+        modelId: 'claude-test', connectionId: ANTHROPIC_CONNECTION_ID, status: 'failed',
+      });
+
+      const result = getSubagents();
+      expect(result.invocationsOverTime).toEqual([
+        { date: '2026-07-12', count: 2 },
+        { date: '2026-07-15', count: 1 },
+      ]);
+
+      const ranged = getSubagents({
+        startDate: '2026-07-15T00:00:00.000Z',
+        endDate: '2026-07-15T23:59:59.999Z',
+      });
+      expect(ranged.invocationsOverTime).toEqual([{ date: '2026-07-15', count: 1 }]);
+    });
   });
 
   // ── getContext ──────────────────────────────────────────────────────────────
 
   describe('getContext', () => {
-    it('returns context snapshots and average breakdown', () => {
+    it('returns top session series, totals, and average breakdown', () => {
       // providerAttemptId is null because there is no matching provider_attempts
       // row in this test (FK constraint: context_snapshots.provider_attempt_id
       // REFERENCES provider_attempts(attempt_id)).
@@ -987,22 +1106,19 @@ describe('analytics-queries', () => {
         userTokens: 1200, assistantTokens: 800,
       });
 
-      // All snapshots
       const result = getContext();
-      expect(result.snapshots).toHaveLength(2);
+      expect(result.totalSnapshots).toBe(2);
+      expect(result.topSessions).toHaveLength(1);
 
-      const snap1 = result.snapshots.find((s) => s.turnId === 'turn-1')!;
-      expect(snap1.sessionId).toBe('sess-1');
-      expect(snap1.inputTokens).toBe(1000);
-      expect(snap1.outputTokens).toBe(500);
-      expect(snap1.usedTokens).toBe(1500);
-      expect(snap1.systemTokens).toBe(200);
-      expect(snap1.toolsTokens).toBe(100);
-      expect(snap1.toolUseTokens).toBe(50);
-      expect(snap1.userTokens).toBe(600);
-      expect(snap1.assistantTokens).toBe(400);
+      const series = result.topSessions[0];
+      expect(series.sessionId).toBe('sess-1');
+      expect(series.sessionName).toBeNull();
+      expect(series.maxUsedTokens).toBe(3000);
+      expect(series.points.map((p) => p.usedTokens)).toEqual([1500, 3000]);
+      expect(series.points[0].capturedAt.localeCompare(series.points[1].capturedAt)).toBeLessThan(0);
 
       // Average breakdown
+      expect(result.avgBreakdown.usedTokens).toBe(2250); // (1500 + 3000) / 2
       expect(result.avgBreakdown.systemTokens).toBe(300); // (200 + 400) / 2
       expect(result.avgBreakdown.toolsTokens).toBe(150); // (100 + 200) / 2
       expect(result.avgBreakdown.toolUseTokens).toBe(75); // (50 + 100) / 2
@@ -1011,17 +1127,38 @@ describe('analytics-queries', () => {
 
       // Filtered by session
       const filtered = getContext('sess-1');
-      expect(filtered.snapshots).toHaveLength(2);
+      expect(filtered.totalSnapshots).toBe(2);
+      expect(filtered.topSessions).toHaveLength(1);
+      expect(filtered.topSessions[0].sessionId).toBe('sess-1');
       expect(filtered.avgBreakdown.systemTokens).toBe(300);
 
       // Nonexistent session
       const empty = getContext('nonexistent');
-      expect(empty.snapshots).toHaveLength(0);
+      expect(empty.totalSnapshots).toBe(0);
+      expect(empty.topSessions).toHaveLength(0);
       expect(empty.avgBreakdown.systemTokens).toBe(0);
       expect(empty.avgBreakdown.toolsTokens).toBe(0);
     });
 
-    it('computes averages across all rows while bounding returned snapshots explicitly', () => {
+    it('selects the top 5 sessions by max used tokens, ordered descending', () => {
+      for (let i = 0; i < 6; i++) {
+        snapshotStore.insert({
+          sessionId: `sess-${i}`, chainId: null, turnId: 'turn-1', providerAttemptId: null,
+          inputTokens: 0, outputTokens: 0, usedTokens: (i + 1) * 1000,
+          systemTokens: 0, toolsTokens: 0, toolUseTokens: 0, userTokens: 0, assistantTokens: 0,
+        });
+      }
+
+      const result = getContext();
+      expect(result.totalSnapshots).toBe(6);
+      expect(result.topSessions).toHaveLength(5);
+      expect(result.topSessions.map((s) => s.sessionId)).toEqual([
+        'sess-5', 'sess-4', 'sess-3', 'sess-2', 'sess-1',
+      ]);
+      expect(result.topSessions.map((s) => s.maxUsedTokens)).toEqual([6000, 5000, 4000, 3000, 2000]);
+    });
+
+    it('computes averages across all rows and downsamples series beyond 500 points by stride', () => {
       for (let i = 0; i < 1001; i++) {
         snapshotStore.insert({
           sessionId: 'sess-1', chainId: null, turnId: `turn-${i}`, providerAttemptId: null,
@@ -1032,9 +1169,51 @@ describe('analytics-queries', () => {
 
       const result = getContext();
       expect(result.totalSnapshots).toBe(1001);
-      expect(result.snapshots).toHaveLength(1000);
-      expect(result.snapshotsTruncated).toBe(true);
       expect(result.avgBreakdown.systemTokens).toBe(500);
+
+      const series = result.topSessions[0];
+      expect(series.maxUsedTokens).toBe(1000);
+      const stride = Math.ceil(1001 / 500);
+      const expectedLength = Math.ceil(1001 / stride);
+      expect(series.points.length).toBeLessThanOrEqual(500);
+      expect(series.points).toHaveLength(expectedLength);
+      expect(series.points.map((p) => p.usedTokens)).toEqual(
+        Array.from({ length: expectedLength }, (_, i) => i * stride),
+      );
+    });
+
+    it('applies the time range to totals, top sessions, and series points', () => {
+      snapshotStore.insert({
+        sessionId: 'sess-1', chainId: null, turnId: 'turn-old', providerAttemptId: null,
+        inputTokens: 0, outputTokens: 0, usedTokens: 100,
+        systemTokens: 0, toolsTokens: 0, toolUseTokens: 0, userTokens: 0, assistantTokens: 0,
+      });
+      clockMs = new Date('2026-07-15T10:00:00.000Z').getTime();
+      snapshotStore.insert({
+        sessionId: 'sess-1', chainId: null, turnId: 'turn-new', providerAttemptId: null,
+        inputTokens: 0, outputTokens: 0, usedTokens: 500,
+        systemTokens: 0, toolsTokens: 0, toolUseTokens: 0, userTokens: 0, assistantTokens: 0,
+      });
+      snapshotStore.insert({
+        sessionId: 'sess-2', chainId: null, turnId: 'turn-new', providerAttemptId: null,
+        inputTokens: 0, outputTokens: 0, usedTokens: 900,
+        systemTokens: 0, toolsTokens: 0, toolUseTokens: 0, userTokens: 0, assistantTokens: 0,
+      });
+
+      const result = getContext(undefined, {
+        startDate: '2026-07-15T00:00:00.000Z',
+        endDate: '2026-07-15T23:59:59.999Z',
+      });
+      expect(result.totalSnapshots).toBe(2);
+      expect(result.topSessions.map((s) => s.sessionId)).toEqual(['sess-2', 'sess-1']);
+      expect(result.topSessions.map((s) => s.maxUsedTokens)).toEqual([900, 500]);
+      for (const series of result.topSessions) {
+        expect(series.points).toHaveLength(1);
+        for (const point of series.points) {
+          expect(point.capturedAt >= '2026-07-15T00:00:00.000Z').toBe(true);
+          expect(point.capturedAt <= '2026-07-15T23:59:59.999Z').toBe(true);
+        }
+      }
     });
   });
 });
