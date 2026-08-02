@@ -1111,6 +1111,16 @@ export interface OrchidAPI {
     onApprovalRequested: (callback: (event: PermissionApprovalRequestedEvent) => void) => () => void;
     onApprovalSettled: (callback: (event: PermissionApprovalSettledEvent) => void) => () => void;
   };
+ 
+  analytics: {
+     overview: () => Promise<import('./analytics').OverviewResult>;
+     sessions: (params?: { readonly limit?: number }) => Promise<readonly import('./analytics').SessionSummary[]>;
+     sessionDetail: (params: { readonly sessionId: string }) => Promise<import('./analytics').SessionDetailResult>;
+     models: () => Promise<import('./analytics').ModelsResult>;
+     tools: () => Promise<import('./analytics').ToolsResult>;
+     subagents: () => Promise<import('./analytics').SubagentsResult>;
+     context: (params?: { readonly sessionId?: string }) => Promise<import('./analytics').ContextResult>;
+   };
 }
 
 // ── IPC Channel names ────────────────────────────────────────────────────────
@@ -1261,6 +1271,15 @@ export const IPC_CHANNELS = {
   UPDATER_STATUS_UPDATE: 'updater:status_update',
   UPDATER_PROGRESS: 'updater:progress',
   UPDATER_ERROR: 'updater:error',
+
+  // Analytics
+  ANALYTICS_OVERVIEW: 'analytics:overview',
+  ANALYTICS_SESSIONS: 'analytics:sessions',
+  ANALYTICS_SESSION_DETAIL: 'analytics:session_detail',
+  ANALYTICS_MODELS: 'analytics:models',
+  ANALYTICS_TOOLS: 'analytics:tools',
+  ANALYTICS_SUBAGENTS: 'analytics:subagents',
+  ANALYTICS_CONTEXT: 'analytics:context',
 } as const;
 
 export type IPCChannel = (typeof IPC_CHANNELS)[keyof typeof IPC_CHANNELS];
@@ -1341,6 +1360,13 @@ export const ALLOWED_INVOKE_CHANNELS = [
   IPC_CHANNELS.PERMISSION_SNAPSHOT,
   IPC_CHANNELS.PERMISSION_SET_SESSION_MODE,
   IPC_CHANNELS.PERMISSION_GET_SESSION_MODE,
+  IPC_CHANNELS.ANALYTICS_OVERVIEW,
+  IPC_CHANNELS.ANALYTICS_SESSIONS,
+  IPC_CHANNELS.ANALYTICS_SESSION_DETAIL,
+  IPC_CHANNELS.ANALYTICS_MODELS,
+  IPC_CHANNELS.ANALYTICS_TOOLS,
+  IPC_CHANNELS.ANALYTICS_SUBAGENTS,
+  IPC_CHANNELS.ANALYTICS_CONTEXT,
 ] as const satisfies readonly IPCChannel[];
 
 // ── Allowed event channels (preload security gate) ───────────────────────────

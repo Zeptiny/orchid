@@ -29,6 +29,7 @@ import { registerProviderIPC, unregisterProviderIPC } from './providers';
 import { registerSubagentIPC, unregisterSubagentIPC } from './subagents';
 import { registerAskQuestionIPC, unregisterAskQuestionIPC } from './ask-question';
 import { registerPermissionIPC, unregisterPermissionIPC } from './permission';
+import { registerAnalyticsIPC, unregisterAnalyticsIPC } from './analytics';
 
 /**
  * Register all IPC handlers.
@@ -49,6 +50,7 @@ export function registerAllIPC(): void {
   registerSubagentIPC();
   registerAskQuestionIPC();
   registerPermissionIPC();
+  registerAnalyticsIPC();
 }
 
 /**
@@ -70,4 +72,5 @@ export function unregisterAllIPC(): void {
   unregisterSubagentIPC();
   unregisterAskQuestionIPC();
   unregisterPermissionIPC();
+  unregisterAnalyticsIPC();
 }

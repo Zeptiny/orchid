@@ -95,6 +95,15 @@ import type {
   StartupSnapshot,
   StartupContinueDegradedResult,
 } from '../shared/types/ipc';
+import type {
+  OverviewResult,
+  SessionSummary,
+  SessionDetailResult,
+  ModelsResult,
+  ToolsResult,
+  SubagentsResult,
+  ContextResult,
+} from '../shared/types/analytics';
 import {
   chatChunkEventSchema,
   chatThinkingEventSchema,
@@ -599,6 +608,29 @@ const orchidAPI: OrchidAPI = {
         IPC_CHANNELS.PERMISSION_APPROVAL_SETTLED,
         (...args) => callback(args[0] as PermissionApprovalSettledEvent),
       ),
+  },
+
+  analytics: {
+    overview: () =>
+      invoke<OverviewResult>(IPC_CHANNELS.ANALYTICS_OVERVIEW),
+
+    sessions: (params?: { readonly limit?: number }) =>
+      invoke<readonly SessionSummary[]>(IPC_CHANNELS.ANALYTICS_SESSIONS, params),
+
+    sessionDetail: (params: { readonly sessionId: string }) =>
+      invoke<SessionDetailResult>(IPC_CHANNELS.ANALYTICS_SESSION_DETAIL, params),
+
+    models: () =>
+      invoke<ModelsResult>(IPC_CHANNELS.ANALYTICS_MODELS),
+
+    tools: () =>
+      invoke<ToolsResult>(IPC_CHANNELS.ANALYTICS_TOOLS),
+
+    subagents: () =>
+      invoke<SubagentsResult>(IPC_CHANNELS.ANALYTICS_SUBAGENTS),
+
+    context: (params?: { readonly sessionId?: string }) =>
+      invoke<ContextResult>(IPC_CHANNELS.ANALYTICS_CONTEXT, params),
   },
 };
 
