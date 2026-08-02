@@ -9,6 +9,7 @@ Internal backlog for Orchid. User-facing summary lives in the [README known limi
 - RAG onnxruntime may not be being shipped correctly
 - Interface may prevent some changes while streaming (Such as model and reasoning level) but the command pallete still allows to execute
 - Interrupted subagents are being marked as complete - possibly after starting a new chain it is not preserved? - but only on some places (subagent view is correct, main agent context and main chat/session UI appears to not be)
+- replace_symbol can left trailing remnants
 
 ## Agent quality
 
