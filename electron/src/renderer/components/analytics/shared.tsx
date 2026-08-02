@@ -111,13 +111,21 @@ interface ChartCardProps {
   title: string;
   children: ReactNode;
   className?: string;
+  empty?: boolean;
+  emptyMessage?: string;
 }
 
-export function ChartCard({ title, children, className = '' }: ChartCardProps) {
+export function ChartCard({ title, children, className = '', empty = false, emptyMessage = 'No data to display' }: ChartCardProps) {
   return (
     <div className={`rounded-lg border border-base-300 bg-base-200/50 p-4 ${className}`}>
       <div className="mb-3 text-sm font-semibold text-base-content">{title}</div>
-      {children}
+      {empty ? (
+        <div className="flex h-48 items-center justify-center text-sm text-base-content/40">
+          {emptyMessage}
+        </div>
+      ) : (
+        children
+      )}
     </div>
   );
 }

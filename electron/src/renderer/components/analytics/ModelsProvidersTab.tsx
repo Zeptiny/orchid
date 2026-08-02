@@ -131,7 +131,7 @@ export function ModelsProvidersTab() {
       </ChartCard>
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-        <ChartCard title="Cost per Model Over Time">
+        <ChartCard title="Cost per Model Over Time" empty={costOverTime.length === 0} emptyMessage="No cost data recorded">
           <ResponsiveContainer width="100%" height={250}>
             <LineChart data={costOverTime}>
               <CartesianGrid strokeDasharray="3 3" stroke={GRID_STROKE} />
@@ -143,7 +143,7 @@ export function ModelsProvidersTab() {
           </ResponsiveContainer>
         </ChartCard>
 
-        <ChartCard title="Token Usage per Model">
+        <ChartCard title="Token Usage per Model" empty={tokenPerModel.length === 0} emptyMessage="No token usage recorded">
           <ResponsiveContainer width="100%" height={250}>
             <BarChart data={tokenPerModel} layout="vertical">
               <CartesianGrid strokeDasharray="3 3" stroke={GRID_STROKE} />

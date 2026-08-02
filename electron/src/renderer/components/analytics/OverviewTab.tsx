@@ -49,7 +49,7 @@ export function OverviewTab() {
       </div>
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-        <ChartCard title="Spend Over Time">
+        <ChartCard title="Spend Over Time" empty={data.spendOverTime.length === 0} emptyMessage="No spend data yet">
           <ResponsiveContainer width="100%" height={250}>
             <LineChart data={data.spendOverTime}>
               <CartesianGrid strokeDasharray="3 3" stroke={GRID_STROKE} />
@@ -61,7 +61,7 @@ export function OverviewTab() {
           </ResponsiveContainer>
         </ChartCard>
 
-        <ChartCard title="Token Usage Over Time">
+        <ChartCard title="Token Usage Over Time" empty={data.tokenUsageOverTime.length === 0} emptyMessage="No token usage yet">
           <ResponsiveContainer width="100%" height={250}>
             <BarChart data={data.tokenUsageOverTime}>
               <CartesianGrid strokeDasharray="3 3" stroke={GRID_STROKE} />
@@ -78,7 +78,7 @@ export function OverviewTab() {
           </ResponsiveContainer>
         </ChartCard>
 
-        <ChartCard title="Spend by Model">
+        <ChartCard title="Spend by Model" empty={data.spendByModel.length === 0} emptyMessage="No model spend recorded">
           <ResponsiveContainer width="100%" height={250}>
             <BarChart data={data.spendByModel} layout="vertical">
               <CartesianGrid strokeDasharray="3 3" stroke={GRID_STROKE} />
@@ -90,7 +90,7 @@ export function OverviewTab() {
           </ResponsiveContainer>
         </ChartCard>
 
-        <ChartCard title="Spend by Provider">
+        <ChartCard title="Spend by Provider" empty={data.spendByProvider.length === 0} emptyMessage="No provider spend recorded">
           <ResponsiveContainer width="100%" height={250}>
             <BarChart data={data.spendByProvider} layout="vertical">
               <CartesianGrid strokeDasharray="3 3" stroke={GRID_STROKE} />
@@ -102,7 +102,7 @@ export function OverviewTab() {
           </ResponsiveContainer>
         </ChartCard>
 
-        <ChartCard title="Outcome Distribution">
+        <ChartCard title="Outcome Distribution" empty={data.outcomeDistribution.length === 0} emptyMessage="No attempts recorded">
           <ResponsiveContainer width="100%" height={250}>
             <PieChart>
               <Pie data={data.outcomeDistribution} dataKey="count" nameKey="outcome" cx="50%" cy="50%" outerRadius={80} label>
@@ -116,7 +116,7 @@ export function OverviewTab() {
           </ResponsiveContainer>
         </ChartCard>
 
-        <ChartCard title="Agent Tier Distribution">
+        <ChartCard title="Agent Tier Distribution" empty={data.agentTierDistribution.length === 0} emptyMessage="No agent tier data">
           <ResponsiveContainer width="100%" height={250}>
             <BarChart data={data.agentTierDistribution}>
               <CartesianGrid strokeDasharray="3 3" stroke={GRID_STROKE} />
@@ -128,7 +128,7 @@ export function OverviewTab() {
           </ResponsiveContainer>
         </ChartCard>
 
-        <ChartCard title="Cost Source Distribution">
+        <ChartCard title="Cost Source Distribution" empty={data.costSourceDistribution.length === 0} emptyMessage="No cost source data">
           <ResponsiveContainer width="100%" height={250}>
             <PieChart>
               <Pie data={data.costSourceDistribution} dataKey="count" nameKey="source" cx="50%" cy="50%" outerRadius={80} label>

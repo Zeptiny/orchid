@@ -97,7 +97,7 @@ export function ToolsTab() {
       </ChartCard>
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-        <ChartCard title="Tool Invocations Over Time">
+        <ChartCard title="Tool Invocations Over Time" empty={invocationsData.length === 0} emptyMessage="No invocation data recorded">
           <ResponsiveContainer width="100%" height={250}>
             <BarChart data={invocationsData}>
               <CartesianGrid strokeDasharray="3 3" stroke={GRID_STROKE} />
@@ -117,7 +117,7 @@ export function ToolsTab() {
           </ResponsiveContainer>
         </ChartCard>
 
-        <ChartCard title="Outcome Distribution">
+        <ChartCard title="Outcome Distribution" empty={data.outcomeDistribution.length === 0} emptyMessage="No tool outcomes recorded">
           <ResponsiveContainer width="100%" height={250}>
             <PieChart>
               <Pie

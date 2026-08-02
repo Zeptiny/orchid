@@ -86,7 +86,7 @@ export function ContextTab() {
       </div>
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-        <ChartCard title="Context Growth per Session">
+        <ChartCard title="Context Growth per Session" empty={growthData.length === 0} emptyMessage="No context snapshots recorded">
           {totalSessionCount > 5 && (
             <div className="mb-2 text-xs text-base-content/50">(showing top 5 of {totalSessionCount} sessions)</div>
           )}
@@ -111,7 +111,7 @@ export function ContextTab() {
           </ResponsiveContainer>
         </ChartCard>
 
-        <ChartCard title="Context Breakdown (Average)">
+        <ChartCard title="Context Breakdown (Average)" empty={data.snapshots.length === 0} emptyMessage="No context snapshots recorded">
           <ResponsiveContainer width="100%" height={300}>
             <BarChart data={breakdownData}>
               <CartesianGrid strokeDasharray="3 3" stroke={GRID_STROKE} />

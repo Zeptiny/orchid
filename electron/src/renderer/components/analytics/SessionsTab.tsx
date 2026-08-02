@@ -143,7 +143,7 @@ function SessionDetail({ sessionId, onBack }: { sessionId: string; onBack: () =>
       </div>
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-        <ChartCard title="Token Breakdown">
+        <ChartCard title="Token Breakdown" empty={tokenBreakdown.length === 0} emptyMessage="No token usage recorded">
           <ResponsiveContainer width="100%" height={250}>
             <PieChart>
               <Pie data={tokenBreakdown} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={80} label={pieLabel}>
@@ -157,7 +157,7 @@ function SessionDetail({ sessionId, onBack }: { sessionId: string; onBack: () =>
           </ResponsiveContainer>
         </ChartCard>
 
-        <ChartCard title="Cost by Model">
+        <ChartCard title="Cost by Model" empty={costByModel.length === 0} emptyMessage="No cost data recorded">
           <ResponsiveContainer width="100%" height={250}>
             <BarChart data={costByModel} layout="vertical">
               <CartesianGrid strokeDasharray="3 3" stroke={GRID_STROKE} />
@@ -169,7 +169,7 @@ function SessionDetail({ sessionId, onBack }: { sessionId: string; onBack: () =>
           </ResponsiveContainer>
         </ChartCard>
 
-        <ChartCard title="Tokens by Model" className="lg:col-span-2">
+        <ChartCard title="Tokens by Model" className="lg:col-span-2" empty={tokensByModel.length === 0} emptyMessage="No token usage recorded">
           <ResponsiveContainer width="100%" height={250}>
             <BarChart data={tokensByModel} layout="vertical">
               <CartesianGrid strokeDasharray="3 3" stroke={GRID_STROKE} />

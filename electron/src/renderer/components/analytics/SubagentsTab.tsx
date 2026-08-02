@@ -82,7 +82,7 @@ export function SubagentsTab() {
       </ChartCard>
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-        <ChartCard title="Cost per Agent Name">
+        <ChartCard title="Cost per Agent Name" empty={costByNameData.length === 0} emptyMessage="No subagent cost recorded">
           <ResponsiveContainer width="100%" height={250}>
             <BarChart data={costByNameData}>
               <CartesianGrid strokeDasharray="3 3" stroke={GRID_STROKE} />
@@ -94,7 +94,7 @@ export function SubagentsTab() {
           </ResponsiveContainer>
         </ChartCard>
 
-        <ChartCard title="Token Usage per Agent Name">
+        <ChartCard title="Token Usage per Agent Name" empty={tokenUsageData.length === 0} emptyMessage="No token usage recorded">
           <ResponsiveContainer width="100%" height={250}>
             <BarChart data={tokenUsageData}>
               <CartesianGrid strokeDasharray="3 3" stroke={GRID_STROKE} />
@@ -108,7 +108,7 @@ export function SubagentsTab() {
           </ResponsiveContainer>
         </ChartCard>
 
-        <ChartCard title="Subagent Outcome Distribution">
+        <ChartCard title="Subagent Outcome Distribution" empty={data.outcomeDistribution.length === 0} emptyMessage="No subagent outcomes recorded">
           <ResponsiveContainer width="100%" height={250}>
             <PieChart>
               <Pie data={data.outcomeDistribution} dataKey="count" nameKey="status" cx="50%" cy="50%" outerRadius={80} label>
@@ -122,7 +122,7 @@ export function SubagentsTab() {
           </ResponsiveContainer>
         </ChartCard>
 
-        <ChartCard title="Cost by Agent Tier">
+        <ChartCard title="Cost by Agent Tier" empty={costByTierData.length === 0} emptyMessage="No cost by tier recorded">
           <ResponsiveContainer width="100%" height={250}>
             <BarChart data={costByTierData}>
               <CartesianGrid strokeDasharray="3 3" stroke={GRID_STROKE} />
