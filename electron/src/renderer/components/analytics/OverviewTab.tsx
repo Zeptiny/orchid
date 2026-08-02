@@ -71,7 +71,7 @@ export function OverviewTab({ timeRange }: { timeRange: AnalyticsTimeRange }) {
               <YAxis tick={axisTickProps} tickFormatter={(value) => formatTokenCount(Number(value))} />
               <Tooltip {...tokenTooltipProps} />
               <Legend />
-              <Bar dataKey="inputTokens" name="Input" stackId="a" fill={CHART_PALETTE[0]} />
+              <Bar dataKey={(d: typeof data.tokenUsageOverTime[number]) => d.inputTokens - d.cacheReadTokens} name="Input" stackId="a" fill={CHART_PALETTE[0]} />
               <Bar dataKey="outputTokens" name="Output" stackId="a" fill={CHART_PALETTE[1]} />
               <Bar dataKey="cacheReadTokens" name="Cache Read" stackId="a" fill={CHART_PALETTE[2]} />
               <Bar dataKey="cacheWriteTokens" name="Cache Write" stackId="a" fill={CHART_PALETTE[3]} />
