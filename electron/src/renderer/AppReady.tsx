@@ -74,10 +74,12 @@ function AppReady() {
   useEffect(() => onOrchidEvent('orchid:open-settings', (detail) => {
     const tab = detail?.tab as SettingsTab | undefined;
     if (tab) setSettingsTab(tab);
+    setAnalyticsOpen(false);
     setConfigOpen(true);
   }), []);
 
   useEffect(() => onOrchidEvent('orchid:open-analytics', () => {
+    setConfigOpen(false);
     setAnalyticsOpen(true);
   }), []);
 
@@ -149,7 +151,7 @@ function AppReady() {
       {configOpen && (
         <ErrorBoundary title="Settings could not load">
           <Suspense fallback={<div className="flex h-screen min-h-0 items-center justify-center bg-base-100"><StateMessage kind="loading" title="Loading Settings…" role="status" aria-live="polite" /></div>}>
-            <ConfigView initialTab={settingsTab} onClose={() => setConfigOpen(false)} onNotify={notify} />
+            <ConfigView initialTab={settingsTab} onClose={() => setConfigOpen(false)} onNotify={notify} onOpenAnalytics={() => setAnalyticsOpen(true)} />
           </Suspense>
         </ErrorBoundary>
       )}

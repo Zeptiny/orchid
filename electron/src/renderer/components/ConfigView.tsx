@@ -145,6 +145,7 @@ interface ConfigViewProps {
   onClose: () => void;
   initialTab?: TabId;
   onNotify: Notify;
+  onOpenAnalytics?: () => void;
 }
 
 interface PermissionTabContext {
@@ -157,7 +158,7 @@ interface PermissionTabContext {
   updateDraft: (updates: ConfigPatch) => void;
 }
 
-export function ConfigView({ onClose, initialTab = 'general', onNotify }: ConfigViewProps) {
+export function ConfigView({ onClose, initialTab = 'general', onNotify, onOpenAnalytics }: ConfigViewProps) {
   const session = useSession();
   const providers = useProviders();
   const rootRef = useRef<HTMLDivElement>(null);
@@ -580,6 +581,7 @@ export function ConfigView({ onClose, initialTab = 'general', onNotify }: Config
         }
         isCollapsed={leftCollapsed}
         onOpenSettings={() => {}}
+        onOpenAnalytics={onOpenAnalytics}
         onPickProjectDir={() => {
           void session.pickProjectDir();
         }}

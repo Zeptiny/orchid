@@ -168,6 +168,15 @@ export const LeftSidebar = memo(function LeftSidebar({
           </Button>
         )}
         <div className="left-panel-collapsed-spacer" />
+        {onOpenAnalytics && (
+          <IconButton
+            label="Analytics"
+            icon="barChart"
+            size="sm"
+            iconSize={18}
+            onClick={onOpenAnalytics}
+          />
+        )}
         <IconButton
           label="Settings"
           icon="settings"
@@ -252,15 +261,6 @@ export const LeftSidebar = memo(function LeftSidebar({
       </div>
 
       <div className="panel-footer">
-        <Button
-          variant="ghost"
-          size="md"
-          className="session-settings-btn"
-          onClick={onOpenSettings}
-        >
-          <Icon name="settings" size={18} />
-          <span>Settings</span>
-        </Button>
         {onOpenAnalytics && (
           <Button
             variant="ghost"
@@ -272,6 +272,15 @@ export const LeftSidebar = memo(function LeftSidebar({
             <span>Analytics</span>
           </Button>
         )}
+        <Button
+          variant="ghost"
+          size="md"
+          className="session-settings-btn"
+          onClick={onOpenSettings}
+        >
+          <Icon name="settings" size={18} />
+          <span>Settings</span>
+        </Button>
       </div>
     </aside>
   );
