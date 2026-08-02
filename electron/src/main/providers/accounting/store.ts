@@ -30,6 +30,10 @@ export interface InsertPendingAttemptInput {
   readonly turnId: string | null;
   readonly sdkCallId: string | null;
   readonly snapshot: FrozenProviderRequestSnapshot;
+  readonly agentScope?: string | null;
+  readonly agentName?: string | null;
+  readonly agentTier?: string | null;
+  readonly agentType?: string | null;
 }
 
 export interface FinalizeAttemptInput {
@@ -157,6 +161,10 @@ type AttemptRow = {
   currency: string | null;
   cost_amount: string | null;
   error: string | null;
+  agent_scope: string | null;
+  agent_name: string | null;
+  agent_tier: string | null;
+  agent_type: string | null;
 };
 
 function rowToRecord(row: AttemptRow): ProviderAttemptRecord {
@@ -179,6 +187,10 @@ function rowToRecord(row: AttemptRow): ProviderAttemptRecord {
     currency: row.currency,
     costAmount: row.cost_amount,
     error: row.error,
+    agentScope: row.agent_scope,
+    agentName: row.agent_name,
+    agentTier: row.agent_tier,
+    agentType: row.agent_type,
   };
 }
 
@@ -209,8 +221,9 @@ export class ProviderAccountingStore {
         attempt_id, session_id, chain_id, turn_id, sdk_call_id,
         provider_id, connection_id, model_id, protocol, snapshot_json,
         outcome, started_at, completed_at, usage_json, provider_evidence_json,
-        cost_state, cost_source, currency, cost_amount, error
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, NULL, NULL, '{}', 'unknown', 'unknown', NULL, NULL, NULL)
+        cost_state, cost_source, currency, cost_amount, error,
+        agent_scope, agent_name, agent_tier, agent_type
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, NULL, NULL, '{}', 'unknown', 'unknown', NULL, NULL, NULL, ?, ?, ?, ?)
     `).run(
       input.attemptId,
       input.sessionId,
@@ -223,6 +236,10 @@ export class ProviderAccountingStore {
       input.snapshot.protocol,
       json(input.snapshot),
       startedAt,
+      input.agentScope ?? null,
+      input.agentName ?? null,
+      input.agentTier ?? null,
+      input.agentType ?? null,
     );
   }
 

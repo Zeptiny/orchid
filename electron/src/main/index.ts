@@ -59,6 +59,18 @@ import {
   initializeProviderAccountingStore,
   resetProviderAccountingStore,
 } from './providers/accounting/store';
+import {
+  initializeToolAttemptStore,
+  resetToolAttemptStore,
+} from './providers/accounting/tool-attempt-store';
+import {
+  initializeContextSnapshotStore,
+  resetContextSnapshotStore,
+} from './providers/accounting/context-snapshot-store';
+import {
+  initializeSubagentAttributionStore,
+  resetSubagentAttributionStore,
+} from './providers/accounting/subagent-attribution-store';
 import { closeSessionDb } from './session/storage';
 import { withTimeoutPromise } from './utils/async';
 
@@ -177,9 +189,26 @@ function initializeProviderAccounting(): void {
   try {
     initializeProviderAccountingStore();
   } catch (error) {
-    // Ledger failure must disable provider attempts, not local-only Orchid.
     const message = error instanceof Error ? error.message : String(error);
     console.error(`Provider accounting is unavailable; provider requests are disabled: ${message}`);
+  }
+  try {
+    initializeToolAttemptStore();
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.error(`Tool attempt telemetry is unavailable: ${message}`);
+  }
+  try {
+    initializeContextSnapshotStore();
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.error(`Context snapshot telemetry is unavailable: ${message}`);
+  }
+  try {
+    initializeSubagentAttributionStore();
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.error(`Subagent attribution telemetry is unavailable: ${message}`);
   }
 }
 
@@ -413,6 +442,9 @@ app.on('before-quit', async (event) => {
     resetProviderRuntimeContext();
     resetProviderRuntime();
     resetProviderAccountingStore();
+    resetToolAttemptStore();
+    resetContextSnapshotStore();
+    resetSubagentAttributionStore();
 
     // 7. Now actually quit
     // Final safety flush after teardown, immediately before process exit.

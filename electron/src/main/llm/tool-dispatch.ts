@@ -59,6 +59,7 @@ import { recordToolCall } from '../permissions/history';
 import { genericTerminalExecution } from './terminal-result';
 import { defaults } from '../config/schema';
 import type { Config } from '../../shared/types/ipc-boundary';
+import { getToolAttemptStore } from '../providers/accounting/tool-attempt-store';
 
 // Re-exported so existing consumers keep importing these from tool-dispatch.
 export { genericTerminalExecution };
@@ -125,6 +126,8 @@ export interface ToolDispatchOptions {
   triggeringMessage?: string;
   /** When true, skip AGENTS.md read injection and write enforcement (renderer tool:execute UI path). */
   agentsMdDisabled?: boolean;
+  /** The LLM provider attempt ID that triggered this tool call. */
+  providerAttemptId?: string | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -344,6 +347,31 @@ export async function executeToolCall(
   // Prefer Zod-parsed data so defaults/coercions reach the handler.
   const handlerArgs = validation.data;
   const noTimeout = Boolean(registered.definition.noTimeout);
+
+  let toolAttemptId: string | null = null;
+  try {
+    const isMcp = registered.definition.rawInputJsonSchema !== undefined || name.startsWith('mcp::');
+    const mcpServerName = name.startsWith('mcp::')
+      ? name.split('::')[1] ?? null
+      : null;
+    toolAttemptId = getToolAttemptStore().insertPending({
+      toolAttemptId: '',
+      sessionId: options.sessionId ?? '',
+      chainId: null,
+      turnId: null,
+      providerAttemptId: options.providerAttemptId ?? null,
+      toolCallId,
+      toolName: name,
+      toolSource: isMcp ? 'mcp' : 'builtin',
+      mcpServerName,
+      toolFamily: registered.definition.resultFamily,
+      timeoutSeconds: effectiveTimeoutSeconds,
+      agentScope: options.agentScopeId ?? null,
+    });
+  } catch (error) {
+    console.warn('[tool-dispatch] Tool telemetry insert failed', { toolName: name, error });
+  }
+
   let result: unknown;
   try {
     const offloadPool = registered.definition.offload ? getToolWorkerPool() : null;
@@ -377,6 +405,21 @@ export async function executeToolCall(
       );
     }
   } catch (err) {
+    if (toolAttemptId !== null) {
+      const isTimeout = err instanceof ToolTimeoutError || timeoutAbort.signal.aborted;
+      const isCancelled = parentAbort?.aborted || err instanceof WorkerTaskCancelledError;
+      try {
+        getToolAttemptStore().finalize(toolAttemptId, {
+          outcome: isCancelled ? 'cancelled' : 'error',
+          resultSizeBytes: null,
+          offloaded: false,
+          timedOut: isTimeout,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      } catch {
+        // telemetry failure must not break tool execution
+      }
+    }
     if (err instanceof ToolTimeoutError || timeoutAbort.signal.aborted) {
       return genericTerminalExecution(
         toolCallId,
@@ -412,6 +455,18 @@ export async function executeToolCall(
   }
 
   if (parentAbort?.aborted) {
+    if (toolAttemptId !== null) {
+      try {
+        getToolAttemptStore().finalize(toolAttemptId, {
+          outcome: 'cancelled',
+          resultSizeBytes: null,
+          offloaded: false,
+          timedOut: false,
+        });
+      } catch {
+        // telemetry failure must not break tool execution
+      }
+    }
     return genericTerminalExecution(
       toolCallId,
       name,
@@ -437,8 +492,33 @@ export async function executeToolCall(
     if (!executionSchema) {
       throw new TypeError(`No execution schema registered for tool '${name}'`);
     }
-    return executionSchema.parse(execution) as ToolExecutionResult;
+    const parsed = executionSchema.parse(execution) as ToolExecutionResult;
+    if (toolAttemptId !== null) {
+      try {
+        getToolAttemptStore().finalize(toolAttemptId, {
+          outcome: execution.canonical.status,
+          resultSizeBytes: execution.agentProjection.content.length,
+          offloaded: execution.agentProjection.completeness === 'partial' && execution.agentProjection.retrieval.kind === 'cache',
+          timedOut: false,
+        });
+      } catch {
+        // telemetry failure must not break tool execution
+      }
+    }
+    return parsed;
   } catch (error) {
+    if (toolAttemptId !== null) {
+      try {
+        getToolAttemptStore().finalize(toolAttemptId, {
+          outcome: 'error',
+          resultSizeBytes: null,
+          offloaded: false,
+          timedOut: false,
+        });
+      } catch {
+        // telemetry failure must not break tool execution
+      }
+    }
     console.warn('[tool-dispatch] Tool result finalization failed', {
       toolCallId,
       toolName: name,

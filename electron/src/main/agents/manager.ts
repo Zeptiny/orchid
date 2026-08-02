@@ -63,6 +63,7 @@ import {
   SubagentSummaryClosedError,
   SubagentStillSettlingError,
 } from './errors';
+import { getSubagentAttributionStore } from '../providers/accounting/subagent-attribution-store';
 
 export type { SubagentAdmissionLimits } from './admission';
 export {
@@ -1441,6 +1442,13 @@ export class SubagentManager {
           this._notify();
         }
         break;
+    }
+    try {
+      getSubagentAttributionStore().finalize(record.id, {
+        status: finalization.state,
+      });
+    } catch {
+      // telemetry failure must not break subagent lifecycle
     }
     return this._runs.isCurrent(run);
   }

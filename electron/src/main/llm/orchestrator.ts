@@ -63,6 +63,7 @@ import { importESM } from '../utils/esm-import';
 import { buildSkillTool } from '../tools/skill/skill';
 import { getSkillsRegistry } from '../tools';
 import type { ToolExecutionResult } from '../../shared/types/tool-result';
+import { getContextSnapshotStore } from '../providers/accounting/context-snapshot-store';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -253,11 +254,34 @@ export async function* streamChat(params: StreamChatParams): AsyncGenerator<Stre
       mcpManager,
       attempt,
       eagerBridge,
-      buildUsage: (usage, stepMessages) => buildStepUsage(
-        usage,
-        stepMessages,
-        buildUsageContext,
-      ),
+      buildUsage: (usage, stepMessages) => {
+        const stepUsage = buildStepUsage(
+          usage,
+          stepMessages,
+          buildUsageContext,
+        );
+        if (stepUsage.context) {
+          try {
+            getContextSnapshotStore().insert({
+              sessionId: sessionId ?? '',
+              chainId: accounting?.chainId ?? null,
+              turnId: accounting?.turnId ?? null,
+              providerAttemptId: null,
+              inputTokens: stepUsage.context.input_tokens,
+              outputTokens: stepUsage.context.output_tokens,
+              usedTokens: stepUsage.context.used_tokens,
+              systemTokens: stepUsage.context.system_tokens,
+              toolsTokens: stepUsage.context.tools_tokens,
+              toolUseTokens: stepUsage.context.tool_use_tokens,
+              userTokens: stepUsage.context.user_tokens,
+              assistantTokens: stepUsage.context.assistant_tokens,
+            });
+          } catch (error) {
+            console.warn('[orchestrator] Context snapshot insert failed', { error });
+          }
+        }
+        return stepUsage;
+      },
     });
 
     // Stop at the step-count limit OR when an early stop is requested (e.g. a

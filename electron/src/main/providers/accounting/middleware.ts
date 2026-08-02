@@ -22,6 +22,10 @@ export interface ProviderAttemptAccountingContext {
   readonly chainId: string | null;
   readonly turnId: string | null;
   readonly snapshot: FrozenProviderRequestSnapshot;
+  readonly agentScope?: string | null;
+  readonly agentName?: string | null;
+  readonly agentType?: string | null;
+  readonly agentTier?: string | null;
 }
 
 function normalizeUsage(usage: LanguageModelV4Usage | undefined): NormalizedProviderUsage | null {

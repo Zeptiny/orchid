@@ -56,7 +56,14 @@ export function createGenerateTitleCallback(input: {
         model: execution.modelInstance,
         middleware: createMiddlewareStack({
           retry: { maxRetries: input.runtime.config.llm_stream_retries },
-          accounting: { ...input.accounting, snapshot: execution.snapshot },
+          accounting: {
+            ...input.accounting,
+            agentScope: 'main',
+            agentName: titleAgent.name,
+            agentType: titleAgent.type,
+            agentTier: titleAgent.tier,
+            snapshot: execution.snapshot,
+          },
         }),
       });
       const result = await generateText({
