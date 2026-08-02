@@ -856,6 +856,7 @@ describe('Domain Models: multi-chain helpers', () => {
       completion_tokens: 13,
       total_tokens: 43,
       cached_tokens: 2,
+      reasoning_tokens: 0,
     });
   });
 

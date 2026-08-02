@@ -62,6 +62,7 @@ const usageSchema = z.object({
   completion_tokens: z.number().nonnegative(),
   total_tokens: z.number().nonnegative(),
   cached_tokens: z.number().nonnegative(),
+  reasoning_tokens: z.number().nonnegative().optional(),
   context: contextSnapshotSchema.optional(),
 });
 

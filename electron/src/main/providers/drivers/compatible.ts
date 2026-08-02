@@ -70,6 +70,7 @@ export async function createCompatibleLanguageModel(
       baseURL: endpoint.endpoint,
       apiKey: input.apiKey,
       fetch: createUnwrappingFetch(),
+      includeUsage: true,
     })(input.modelId);
   }
   if (input.protocol !== 'anthropic-messages') throw new Error('Generic Anthropic-compatible provider requires anthropic-messages protocol');

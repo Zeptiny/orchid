@@ -8,5 +8,7 @@ export function formatTokenCount(value: number | undefined): string {
 }
 
 export function formatUsageSummary(usage: Usage | null | undefined): string {
-  return `in ${formatTokenCount(usage?.prompt_tokens)} cached ${formatTokenCount(usage?.cached_tokens)} out ${formatTokenCount(usage?.completion_tokens)}`;
+  const reasoning = usage?.reasoning_tokens ?? 0;
+  const reasoningPart = reasoning > 0 ? ` reasoning ${formatTokenCount(reasoning)}` : '';
+  return `in ${formatTokenCount(usage?.prompt_tokens)} cached ${formatTokenCount(usage?.cached_tokens)} out ${formatTokenCount(usage?.completion_tokens)}${reasoningPart}`;
 }

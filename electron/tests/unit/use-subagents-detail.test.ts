@@ -8,6 +8,7 @@ const durableUsage: Usage = {
   cached_tokens: 2,
   completion_tokens: 3,
   total_tokens: 13,
+  reasoning_tokens: 0,
 };
 
 const liveUsage: Usage = {
@@ -15,6 +16,7 @@ const liveUsage: Usage = {
   cached_tokens: 8,
   completion_tokens: 12,
   total_tokens: 52,
+  reasoning_tokens: 0,
 };
 
 function record(status: SubagentRecord['status']): SubagentRecord {

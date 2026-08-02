@@ -288,6 +288,7 @@ describe('Agent Machine', () => {
       completion_tokens: 50,
       total_tokens: 330,
       cached_tokens: 105,
+      reasoning_tokens: 0,
       context: latestContext,
     });
   });

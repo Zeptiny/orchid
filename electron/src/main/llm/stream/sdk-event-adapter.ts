@@ -25,6 +25,7 @@ export interface ProviderStepUsage {
   inputTokens?: number;
   inputTokenDetails?: { cacheReadTokens?: number };
   outputTokens?: number;
+  outputTokenDetails?: { reasoningTokens?: number };
   totalTokens?: number;
 }
 

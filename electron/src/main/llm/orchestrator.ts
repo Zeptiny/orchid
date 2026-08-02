@@ -128,6 +128,7 @@ function buildStepUsage(
     completion_tokens: outputTokens,
     total_tokens: usage.totalTokens ?? inputTokens + outputTokens,
     cached_tokens: usage.inputTokenDetails?.cacheReadTokens ?? 0,
+    reasoning_tokens: usage.outputTokenDetails?.reasoningTokens ?? 0,
     context: buildContextSnapshot({
       messages,
       inputTokens,

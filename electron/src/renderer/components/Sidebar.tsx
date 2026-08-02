@@ -1051,6 +1051,7 @@ function TokenUsageSection({ cumulativeUsage }: TokenUsageSectionProps) {
   const completion = cumulativeUsage?.completion_tokens ?? 0;
   const total = cumulativeUsage?.total_tokens ?? 0;
   const cached = cumulativeUsage?.cached_tokens ?? 0;
+  const reasoning = cumulativeUsage?.reasoning_tokens ?? 0;
 
   return (
     <div className="inspector-stack">
@@ -1070,6 +1071,12 @@ function TokenUsageSection({ cumulativeUsage }: TokenUsageSectionProps) {
         <strong>Cached</strong>
         <span className="subtle">{formatTokenCount(cached)}</span>
       </div>
+      {reasoning > 0 && (
+        <div className="inspector-row">
+          <strong>Reasoning</strong>
+          <span className="subtle">{formatTokenCount(reasoning)}</span>
+        </div>
+      )}
     </div>
   );
 }
