@@ -57,8 +57,6 @@ const modelColumns: ReadonlyArray<Column<ModelBreakdown>> = [
 const connectionColumns: ReadonlyArray<Column<ConnectionBreakdown>> = [
   { key: 'connectionName', label: 'Connection', render: (c) => c.connectionName ?? '—' },
   { key: 'connectionId', label: 'Connection ID', render: (c) => <span title={c.connectionId}>{c.connectionId.slice(0, 8)}…</span> },
-  { key: 'provider', label: 'Provider', render: (c) => c.providerId },
-  { key: 'providerDisplay', label: 'Display Name', render: (c) => c.providerDisplayName ?? '—' },
   { key: 'cost', label: 'Total Cost', render: (c) => formatCostAmount(c.totalCost, null) },
   { key: 'input', label: 'Input Tokens', render: (c) => formatTokenCount(c.totalInputTokens) },
   { key: 'output', label: 'Output Tokens', render: (c) => formatTokenCount(c.totalOutputTokens) },
@@ -150,7 +148,7 @@ export function ModelsProvidersTab() {
           <ResponsiveContainer width="100%" height={250}>
             <BarChart data={tokenPerModel} layout="vertical">
               <CartesianGrid strokeDasharray="3 3" stroke={GRID_STROKE} />
-              <XAxis type="number" tick={axisTickProps} />
+              <XAxis type="number" tick={axisTickProps} tickFormatter={(value) => formatTokenCount(Number(value))} />
               <YAxis type="category" dataKey="modelId" tick={axisTickProps} width={120} />
               <Tooltip {...tokenTooltipProps} />
               <Legend />

@@ -99,7 +99,7 @@ export function SubagentsTab() {
             <BarChart data={tokenUsageData}>
               <CartesianGrid strokeDasharray="3 3" stroke={GRID_STROKE} />
               <XAxis dataKey="agentName" tick={axisTickProps} />
-              <YAxis tick={axisTickProps} />
+              <YAxis tick={axisTickProps} tickFormatter={(value) => formatTokenCount(Number(value))} />
               <Tooltip {...tokenTooltipProps} />
               <Legend />
               <Bar dataKey="inputTokens" name="Input" fill={CHART_PALETTE[0]} />

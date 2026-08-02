@@ -66,7 +66,7 @@ export function OverviewTab() {
             <BarChart data={data.tokenUsageOverTime}>
               <CartesianGrid strokeDasharray="3 3" stroke={GRID_STROKE} />
               <XAxis dataKey="date" tick={axisTickProps} />
-              <YAxis tick={axisTickProps} />
+              <YAxis tick={axisTickProps} tickFormatter={(value) => formatTokenCount(Number(value))} />
               <Tooltip {...tokenTooltipProps} />
               <Legend />
               <Bar dataKey="inputTokens" name="Input" stackId="a" fill={CHART_PALETTE[0]} />
