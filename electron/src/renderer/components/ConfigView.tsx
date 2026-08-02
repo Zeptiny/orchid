@@ -571,7 +571,7 @@ export function ConfigView({ onClose, initialTab = 'general', onNotify, onOpenAn
   return (
     <div
       ref={rootRef}
-      className="config-shell orchid-view-enter grid h-screen min-h-0 overflow-hidden bg-base-100 text-base-content"
+      className="config-shell grid h-screen min-h-0 overflow-hidden bg-base-100 text-base-content"
     >
       <LeftSidebar
         activeSessionId={session.activeSession?.id ?? null}

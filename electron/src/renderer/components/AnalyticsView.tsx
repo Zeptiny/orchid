@@ -114,7 +114,7 @@ export function AnalyticsView({ onClose, onOpenSettings }: AnalyticsViewProps) {
   return (
     <div
       ref={rootRef}
-      className="config-shell orchid-view-enter grid h-screen min-h-0 overflow-hidden bg-base-100 text-base-content"
+      className="config-shell grid h-screen min-h-0 overflow-hidden bg-base-100 text-base-content"
       role="dialog"
       aria-label="Analytics"
     >
