@@ -56,7 +56,6 @@ const modelColumns: ReadonlyArray<Column<ModelBreakdown>> = [
 
 const connectionColumns: ReadonlyArray<Column<ConnectionBreakdown>> = [
   { key: 'connectionName', label: 'Connection', render: (c) => c.connectionName ?? '—' },
-  { key: 'connectionId', label: 'Connection ID', render: (c) => <span title={c.connectionId}>{c.connectionId.slice(0, 8)}…</span> },
   { key: 'cost', label: 'Total Cost', render: (c) => formatCostAmount(c.totalCost, null) },
   { key: 'input', label: 'Input Tokens', render: (c) => formatTokenCount(c.totalInputTokens) },
   { key: 'output', label: 'Output Tokens', render: (c) => formatTokenCount(c.totalOutputTokens) },
