@@ -1,6 +1,6 @@
 import { useAnalytics } from '../../hooks/useAnalytics';
-import type { ContextSnapshotSummary, AnalyticsTimeRange } from '../../../shared/types/analytics';
-import { StatCard, ChartCard, formatTokenCount } from './shared';
+import type { AnalyticsTimeRange } from '../../../shared/types/analytics';
+import { StatCard, ChartCard, formatTokenCount, truncateId } from './shared';
 import { CHART_PALETTE, GRID_STROKE, axisTickProps, tokenTooltipProps } from './shared';
 import { Button } from '../ui/Button';
 import {
@@ -21,6 +21,10 @@ function formatTimestamp(ts: string): string {
   });
 }
 
+function sessionLabel(sessionName: string | null, sessionId: string): string {
+  return sessionName ?? truncateId(sessionId);
+}
+
 export function ContextTab({ timeRange }: { timeRange: AnalyticsTimeRange }) {
   const { data, loading, error, refresh } = useAnalytics(
     () => window.orchid.analytics.context({ timeRange }),
@@ -31,35 +35,17 @@ export function ContextTab({ timeRange }: { timeRange: AnalyticsTimeRange }) {
   if (error) return <div className="p-8 text-error">Error: {error}</div>;
   if (!data) return null;
 
-  const sessionGroups = new Map<string, ContextSnapshotSummary[]>();
-  for (const snap of data.snapshots) {
-    const arr = sessionGroups.get(snap.sessionId) ?? [];
-    arr.push(snap);
-    sessionGroups.set(snap.sessionId, arr);
-  }
-  for (const arr of sessionGroups.values()) {
-    arr.sort((a, b) => a.capturedAt.localeCompare(b.capturedAt));
-  }
-
   const timestampMap = new Map<string, Record<string, number | string>>();
-  for (const [sessionId, snaps] of sessionGroups) {
-    for (const snap of snaps) {
-      const row = timestampMap.get(snap.capturedAt) ?? { capturedAt: snap.capturedAt };
-      row[sessionId] = snap.usedTokens;
-      timestampMap.set(snap.capturedAt, row);
+  for (const series of data.topSessions) {
+    for (const point of series.points) {
+      const row = timestampMap.get(point.capturedAt) ?? { capturedAt: point.capturedAt };
+      row[series.sessionId] = point.usedTokens;
+      timestampMap.set(point.capturedAt, row);
     }
   }
   const growthData = Array.from(timestampMap.values()).sort((a, b) =>
     String(a.capturedAt).localeCompare(String(b.capturedAt)),
   );
-
-  const sessionMaxTokens = Array.from(sessionGroups.entries()).map(([id, snaps]) => ({
-    id,
-    maxTokens: snaps.reduce((max, s) => Math.max(max, s.usedTokens), 0),
-  }));
-  sessionMaxTokens.sort((a, b) => b.maxTokens - a.maxTokens);
-  const topSessionIds = sessionMaxTokens.slice(0, 5).map((s) => s.id);
-  const totalSessionCount = sessionMaxTokens.length;
 
   const breakdownData = [{
     name: 'Average',
@@ -78,17 +64,19 @@ export function ContextTab({ timeRange }: { timeRange: AnalyticsTimeRange }) {
       </div>
 
       <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
-        <StatCard label="Total Snapshots" value={data.totalSnapshots} subtext={data.snapshotsTruncated ? `showing latest ${data.snapshots.length}` : undefined} />
+        <StatCard label="Total Snapshots" value={data.totalSnapshots} />
         <StatCard label="Avg Used Tokens" value={formatTokenCount(data.avgBreakdown.usedTokens)} />
         <StatCard label="Avg System Tokens" value={formatTokenCount(data.avgBreakdown.systemTokens)} />
         <StatCard label="Avg Tools Tokens" value={formatTokenCount(data.avgBreakdown.toolsTokens + data.avgBreakdown.toolUseTokens)} />
       </div>
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-        <ChartCard title="Context Growth per Session" empty={growthData.length === 0} emptyMessage="No context snapshots recorded">
-          {totalSessionCount > 5 && (
-            <div className="mb-2 text-xs text-base-content/50">(showing top 5 of {totalSessionCount} sessions)</div>
-          )}
+        <ChartCard
+          title="Context Growth per Session"
+          className="lg:col-span-2"
+          empty={growthData.length === 0}
+          emptyMessage="No context snapshots recorded"
+        >
           <ResponsiveContainer width="100%" height={300}>
             <LineChart data={growthData}>
               <CartesianGrid strokeDasharray="3 3" stroke={GRID_STROKE} />
@@ -96,11 +84,12 @@ export function ContextTab({ timeRange }: { timeRange: AnalyticsTimeRange }) {
               <YAxis tick={axisTickProps} tickFormatter={(value) => formatTokenCount(Number(value))} />
               <Tooltip {...tokenTooltipProps} labelFormatter={(label) => formatTimestamp(String(label))} />
               <Legend />
-              {topSessionIds.map((sessionId, i) => (
+              {data.topSessions.map((series, i) => (
                 <Line
-                  key={sessionId}
+                  key={series.sessionId}
                   type="monotone"
-                  dataKey={sessionId}
+                  dataKey={series.sessionId}
+                  name={sessionLabel(series.sessionName, series.sessionId)}
                   stroke={CHART_PALETTE[i % CHART_PALETTE.length]}
                   strokeWidth={2}
                   connectNulls
@@ -112,10 +101,10 @@ export function ContextTab({ timeRange }: { timeRange: AnalyticsTimeRange }) {
 
         <ChartCard title="Context Breakdown (Average)" empty={data.totalSnapshots === 0} emptyMessage="No context snapshots recorded">
           <ResponsiveContainer width="100%" height={300}>
-            <BarChart data={breakdownData}>
+            <BarChart data={breakdownData} layout="vertical">
               <CartesianGrid strokeDasharray="3 3" stroke={GRID_STROKE} />
-              <XAxis dataKey="name" tick={axisTickProps} />
-              <YAxis tick={axisTickProps} tickFormatter={(value) => formatTokenCount(Number(value))} />
+              <XAxis type="number" tick={axisTickProps} tickFormatter={(value) => formatTokenCount(Number(value))} />
+              <YAxis type="category" dataKey="name" tick={axisTickProps} />
               <Tooltip {...tokenTooltipProps} />
               <Legend />
               <Bar dataKey="System" stackId="a" fill={CHART_PALETTE[0]} />
@@ -125,6 +114,25 @@ export function ContextTab({ timeRange }: { timeRange: AnalyticsTimeRange }) {
               <Bar dataKey="Assistant" stackId="a" fill={CHART_PALETTE[4]} />
             </BarChart>
           </ResponsiveContainer>
+        </ChartCard>
+
+        <ChartCard title="Largest Contexts" empty={data.topSessions.length === 0} emptyMessage="No context snapshots recorded">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="border-b border-base-300 text-left">
+                <th className="px-3 py-2 font-medium text-base-content/70">Session</th>
+                <th className="px-3 py-2 text-right font-medium text-base-content/70">Max Used Tokens</th>
+              </tr>
+            </thead>
+            <tbody>
+              {data.topSessions.map((series) => (
+                <tr key={series.sessionId} className="border-b border-base-300/50">
+                  <td className="px-3 py-2 text-base-content/90">{sessionLabel(series.sessionName, series.sessionId)}</td>
+                  <td className="px-3 py-2 text-right text-base-content/90">{formatTokenCount(series.maxUsedTokens)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </ChartCard>
       </div>
     </div>

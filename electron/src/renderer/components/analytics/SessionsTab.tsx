@@ -26,6 +26,41 @@ import type { SessionSummary, AnalyticsTimeRange } from '../../../shared/types/a
 
 const DETAIL_PAGE_SIZE = 10;
 
+interface SessionTokenUsageRow {
+  label: string;
+  netInput: number;
+  cacheRead: number;
+  output: number;
+  cacheWrite: number;
+  reasoning: number;
+}
+
+function SessionTokenUsageTooltip({ active, payload }: {
+  active?: boolean;
+  payload?: ReadonlyArray<{ payload?: SessionTokenUsageRow }>;
+}) {
+  if (!active || !payload || payload.length === 0) return null;
+  const row = payload[0].payload;
+  if (!row) return null;
+  return (
+    <div style={{
+      background: 'var(--chart-tooltip-bg)',
+      border: '1px solid var(--chart-tooltip-border)',
+      borderRadius: 'var(--radius-md)',
+      fontSize: 12,
+      color: 'var(--chart-tooltip-text)',
+      padding: '8px 10px',
+    }}>
+      <div style={{ color: 'var(--chart-tooltip-label)', fontWeight: 600, marginBottom: 4 }}>Token Usage</div>
+      <div>Input (net): {formatTokenCount(row.netInput)}</div>
+      <div>Cache Read: {formatTokenCount(row.cacheRead)}</div>
+      <div>Output: {formatTokenCount(row.output)}</div>
+      <div>Cache Write: {formatTokenCount(row.cacheWrite)}</div>
+      <div>Reasoning: {formatTokenCount(row.reasoning)}</div>
+    </div>
+  );
+}
+
 function SessionList({ timeRange, onRowClick }: { timeRange: AnalyticsTimeRange; onRowClick: (row: SessionSummary) => void }) {
   const { data, loading, error, refresh } = useAnalytics(
     () => window.orchid.analytics.sessions({ timeRange }),
@@ -44,17 +79,12 @@ function SessionList({ timeRange, onRowClick }: { timeRange: AnalyticsTimeRange;
       </div>
       <SortableTable
         columns={[
-          { key: 'sessionName', label: 'Session Name', sortable: true, sortValue: (r) => r.sessionName ?? '', render: (r) => r.sessionName ?? '—' },
-          { key: 'sessionId', label: 'Session ID', render: (r) => <span title={r.sessionId}>{truncateId(r.sessionId)}</span> },
+          { key: 'sessionName', label: 'Session Name', sortable: true, sortValue: (r) => r.sessionName ?? '', render: (r) => <span title={r.sessionId}>{r.sessionName ?? '—'}</span> },
           { key: 'totalCost', label: 'Total Cost', render: (r) => formatCost(r.totalCost) },
           { key: 'inputTokens', label: 'Input Tokens', render: (r) => formatTokenCount(r.inputTokens) },
           { key: 'outputTokens', label: 'Output Tokens', render: (r) => formatTokenCount(r.outputTokens) },
-          { key: 'totalTokens', label: 'Total Tokens', render: (r) => formatTokenCount(r.totalTokens) },
           { key: 'cache', label: 'Cache', render: (r) => formatTokenCount(r.cacheReadTokens) },
-          { key: 'attempts', label: 'Attempts', render: (r) => r.attempts },
-          { key: 'succeeded', label: 'Succeeded', render: (r) => r.succeeded },
-          { key: 'failed', label: 'Failed', render: (r) => r.failed },
-          { key: 'interrupted', label: 'Interrupted', render: (r) => r.interrupted },
+          { key: 'outcomes', label: 'Outcomes', render: (r) => <span title={`${r.succeeded} succeeded / ${r.failed} failed / ${r.interrupted} interrupted`}>{r.succeeded}/{r.failed}/{r.interrupted}</span> },
           { key: 'firstAttempt', label: 'First Attempt', render: (r) => formatDate(r.firstAttempt) },
           { key: 'lastAttempt', label: 'Last Attempt', render: (r) => formatDate(r.lastAttempt) },
           { key: 'models', label: 'Models', render: (r) => r.modelsUsed.join(', ') || '—' },
@@ -92,13 +122,15 @@ function SessionDetail({ sessionId, timeRange, onBack }: { sessionId: string; ti
     cacheWrite += a.cacheWriteTokens ?? 0;
     reasoningTokens += a.reasoningTokens ?? 0;
   }
-  const tokenBreakdown = [
-    { name: 'Input', value: inputTokens },
-    { name: 'Output', value: outputTokens },
-    { name: 'Cache Read', value: cacheRead },
-    { name: 'Cache Write', value: cacheWrite },
-    { name: 'Reasoning', value: reasoningTokens },
-  ].filter((d) => d.value > 0);
+  const netInput = Math.max(0, inputTokens - cacheRead);
+  const tokenUsageRow: SessionTokenUsageRow = {
+    label: 'Total',
+    netInput,
+    cacheRead,
+    output: outputTokens,
+    cacheWrite,
+    reasoning: reasoningTokens,
+  };
 
   const costByModelMap = new Map<string, {
     providerId: string; modelId: string; connectionId: string; currency: string; cost: number;
@@ -160,22 +192,22 @@ function SessionDetail({ sessionId, timeRange, onBack }: { sessionId: string; ti
         <StatCard label="Total Cost" value={formatCost(summary.totalCost)} />
         <StatCard label="Total Tokens" value={formatTokenCount(summary.totalInputTokens + summary.totalOutputTokens)} subtext={`${formatTokenCount(summary.totalInputTokens)} in / ${formatTokenCount(summary.totalOutputTokens)} out`} />
         <StatCard label="Cache Read" value={formatTokenCount(summary.totalCacheReadTokens)} />
-        <StatCard label="Attempts" value={summary.attemptCount} subtext={`${summary.succeeded} succeeded / ${summary.failed} failed`} />
-        <StatCard label="Succeeded" value={summary.succeeded} />
-        <StatCard label="Failed" value={summary.failed} />
-        <StatCard label="Interrupted" value={summary.interrupted} />
+        <StatCard label="Attempts" value={summary.attemptCount} subtext={`${summary.succeeded} succeeded / ${summary.failed} failed / ${summary.interrupted} interrupted`} />
         <StatCard label="Subagents" value={summary.subagentCount} />
       </div>
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-        <ChartCard title="Token Totals & Reported Details (not additive)" empty={tokenBreakdown.length === 0} emptyMessage="No token usage recorded">
+        <ChartCard title="Token Usage" empty={netInput + cacheRead + outputTokens === 0} emptyMessage="No token usage recorded">
           <ResponsiveContainer width="100%" height={250}>
-            <BarChart data={tokenBreakdown}>
+            <BarChart data={[tokenUsageRow]}>
               <CartesianGrid strokeDasharray="3 3" stroke={GRID_STROKE} />
-              <XAxis dataKey="name" tick={axisTickProps} />
+              <XAxis dataKey="label" tick={axisTickProps} />
               <YAxis tick={axisTickProps} tickFormatter={(value) => formatTokenCount(Number(value))} />
-              <Tooltip {...tokenTooltipProps} />
-              <Bar dataKey="value" fill={CHART_PALETTE[0]} />
+              <Tooltip content={<SessionTokenUsageTooltip />} />
+              <Legend />
+              <Bar dataKey="netInput" name="Input (net)" stackId="a" fill={CHART_PALETTE[0]} />
+              <Bar dataKey="cacheRead" name="Cache Read" stackId="a" fill={CHART_PALETTE[2]} />
+              <Bar dataKey="output" name="Output" stackId="a" fill={CHART_PALETTE[1]} />
             </BarChart>
           </ResponsiveContainer>
         </ChartCard>

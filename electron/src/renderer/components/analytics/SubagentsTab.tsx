@@ -4,7 +4,7 @@ import type { SubagentSummary, AnalyticsTimeRange } from '../../../shared/types/
 import { StatCard, ChartCard, SortableTable, formatTokenCount, formatCost, formatCostAmount, formatDuration, CHART_PALETTE, GRID_STROKE, axisTickProps, tooltipProps, tokenTooltipProps } from './shared';
 import { Button } from '../ui/Button';
 import {
-  BarChart, Bar, PieChart, Pie, Cell,
+  BarChart, Bar, LineChart, Line, PieChart, Pie, Cell,
   XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend,
 } from 'recharts';
 
@@ -47,19 +47,19 @@ export function SubagentsTab({ timeRange }: { timeRange: AnalyticsTimeRange }) {
     sortValue?: (row: SubagentSummary) => string | number;
     render: (row: SubagentSummary) => ReactNode;
   }> = [
-    { key: 'agentName', label: 'Agent Name', sortable: true, render: (s) => s.agentName },
-    { key: 'agentType', label: 'Type', sortable: true, render: (s) => s.agentType },
-    { key: 'agentTier', label: 'Tier', sortable: true, render: (s) => s.agentTier },
+    { key: 'agentName', label: 'Agent Name', sortable: true, sortValue: (s) => s.agentName, render: (s) => s.agentName },
+    { key: 'agentType', label: 'Type', sortable: true, sortValue: (s) => s.agentType, render: (s) => s.agentType },
+    { key: 'agentTier', label: 'Tier', sortable: true, sortValue: (s) => s.agentTier, render: (s) => s.agentTier },
     { key: 'modelsUsed', label: 'Models Used', render: (s) => s.modelsUsed.join(', ') || '—' },
-    { key: 'invocations', label: 'Invocations', sortable: true, render: (s) => s.invocations },
-    { key: 'totalCost', label: 'Total Cost', sortable: true, sortValue: (s) => s.totalCost.map((cost) => cost.amount).join(','), render: (s) => formatCost(s.totalCost) },
-    { key: 'inputTokens', label: 'Input Tokens', sortable: true, render: (s) => formatTokenCount(s.inputTokens) },
-    { key: 'outputTokens', label: 'Output Tokens', sortable: true, render: (s) => formatTokenCount(s.outputTokens) },
-    { key: 'attempts', label: 'Attempts', sortable: true, render: (s) => s.attempts },
-    { key: 'completed', label: 'Completed', sortable: true, render: (s) => s.completed },
-    { key: 'failed', label: 'Failed', sortable: true, render: (s) => s.failed },
-    { key: 'interrupted', label: 'Interrupted', sortable: true, render: (s) => s.interrupted },
-    { key: 'avgDuration', label: 'Avg Duration', sortable: true, render: (s) => formatDuration(s.avgDurationMs) },
+    { key: 'invocations', label: 'Invocations', sortable: true, sortValue: (s) => s.invocations, render: (s) => s.invocations },
+    { key: 'totalCost', label: 'Total Cost', sortable: true, sortValue: (s) => Math.max(...s.totalCost.map((c) => Number(c.amount)), 0), render: (s) => formatCost(s.totalCost) },
+    { key: 'inputTokens', label: 'Input Tokens', sortable: true, sortValue: (s) => s.inputTokens, render: (s) => formatTokenCount(s.inputTokens) },
+    { key: 'outputTokens', label: 'Output Tokens', sortable: true, sortValue: (s) => s.outputTokens, render: (s) => formatTokenCount(s.outputTokens) },
+    { key: 'attempts', label: 'Attempts', sortable: true, sortValue: (s) => s.attempts, render: (s) => s.attempts },
+    { key: 'completed', label: 'Completed', sortable: true, sortValue: (s) => s.completed, render: (s) => s.completed },
+    { key: 'failed', label: 'Failed', sortable: true, sortValue: (s) => s.failed, render: (s) => s.failed },
+    { key: 'interrupted', label: 'Interrupted', sortable: true, sortValue: (s) => s.interrupted, render: (s) => s.interrupted },
+    { key: 'avgDuration', label: 'Avg Duration', sortable: true, sortValue: (s) => s.avgDurationMs ?? -1, render: (s) => formatDuration(s.avgDurationMs) },
   ];
 
   return (
@@ -86,6 +86,18 @@ export function SubagentsTab({ timeRange }: { timeRange: AnalyticsTimeRange }) {
       </ChartCard>
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+        <ChartCard title="Subagent Invocations Over Time" empty={data.invocationsOverTime.length === 0} emptyMessage="No invocation data recorded">
+          <ResponsiveContainer width="100%" height={250}>
+            <LineChart data={data.invocationsOverTime}>
+              <CartesianGrid strokeDasharray="3 3" stroke={GRID_STROKE} />
+              <XAxis dataKey="date" tick={axisTickProps} />
+              <YAxis tick={axisTickProps} allowDecimals={false} />
+              <Tooltip {...tooltipProps} />
+              <Line type="monotone" dataKey="count" stroke={CHART_PALETTE[0]} strokeWidth={2} />
+            </LineChart>
+          </ResponsiveContainer>
+        </ChartCard>
+
         <ChartCard title="Cost per Agent Name" empty={costByNameData.length === 0} emptyMessage="No subagent cost recorded">
           <ResponsiveContainer width="100%" height={250}>
             <BarChart data={costByNameData}>

@@ -3,7 +3,7 @@ import { useAnalytics } from '../../hooks/useAnalytics';
 import type {
   ModelBreakdown,
   ConnectionBreakdown,
-  ModelCostTimeSeriesPoint,
+  CostTimeSeriesPoint,
   AnalyticsTimeRange,
 } from '../../../shared/types/analytics';
 import {
@@ -29,14 +29,17 @@ import {
 
 type Column<T> = { key: string; label: string; render: (row: T) => ReactNode };
 
-function pivotCostByDate(points: readonly ModelCostTimeSeriesPoint[]): {
+function pivotCostByDate<T extends CostTimeSeriesPoint>(
+  points: readonly T[],
+  seriesKey: (point: T) => string,
+): {
   rows: Record<string, string | number>[];
   series: { key: string; currency: string }[];
 } {
   const byDate = new Map<string, Record<string, string | number>>();
   const series = new Map<string, string>();
   for (const p of points) {
-    const key = `${p.providerId}/${p.modelId} · ${p.connectionId.slice(0, 8)} (${p.currency})`;
+    const key = seriesKey(p);
     const row = byDate.get(p.date) ?? { date: p.date };
     row[key] = Number(p.cost);
     byDate.set(p.date, row);
@@ -99,7 +102,14 @@ export function ModelsProvidersTab({ timeRange }: { timeRange: AnalyticsTimeRang
     ? formatPercent((totalFailed + totalInterrupted) / totalAttempts)
     : '—';
 
-  const costOverTime = pivotCostByDate(data.costPerModelOverTime);
+  const costOverTime = pivotCostByDate(
+    data.costPerModelOverTime,
+    (p) => `${p.providerId}/${p.modelId} · ${p.connectionId.slice(0, 8)} (${p.currency})`,
+  );
+  const connectionCostOverTime = pivotCostByDate(
+    data.costPerConnectionOverTime,
+    (p) => `${p.providerId} · ${p.connectionId.slice(0, 8)} (${p.currency})`,
+  );
   const tokenPerModel = data.models.map((m) => ({
     label: `${m.providerId}/${m.modelId} · ${m.connectionId.slice(0, 8)}`,
     modelId: m.modelId,
@@ -161,7 +171,25 @@ export function ModelsProvidersTab({ timeRange }: { timeRange: AnalyticsTimeRang
           </ResponsiveContainer>
         </ChartCard>
 
-        <ChartCard title="Token Usage per Model" empty={tokenPerModel.length === 0} emptyMessage="No token usage recorded">
+        <ChartCard title="Cost per Connection Over Time" empty={connectionCostOverTime.rows.length === 0} emptyMessage="No cost data recorded">
+          <ResponsiveContainer width="100%" height={250}>
+            <LineChart data={connectionCostOverTime.rows}>
+              <CartesianGrid strokeDasharray="3 3" stroke={GRID_STROKE} />
+              <XAxis dataKey="date" tick={axisTickProps} />
+              <YAxis tick={axisTickProps} />
+              <Tooltip {...tooltipProps} formatter={(value, name) => {
+                const currency = connectionCostOverTime.series.find((item) => item.key === name)?.currency ?? null;
+                return formatCostAmount(String(value), currency);
+              }} />
+              <Legend />
+              {connectionCostOverTime.series.map((item, index) => (
+                <Line key={item.key} type="monotone" dataKey={item.key} stroke={CHART_PALETTE[index % CHART_PALETTE.length]} strokeWidth={2} dot={false} />
+              ))}
+            </LineChart>
+          </ResponsiveContainer>
+        </ChartCard>
+
+        <ChartCard title="Token Usage per Model" className="lg:col-span-2" empty={tokenPerModel.length === 0} emptyMessage="No token usage recorded">
           <ResponsiveContainer width="100%" height={250}>
             <BarChart data={tokenPerModel} layout="vertical">
               <CartesianGrid strokeDasharray="3 3" stroke={GRID_STROKE} />

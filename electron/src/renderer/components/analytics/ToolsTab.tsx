@@ -74,6 +74,17 @@ export function ToolsTab({ timeRange }: { timeRange: AnalyticsTimeRange }) {
 
   const { data: invocationsData, toolNames } = pivotInvocations(data.invocationsOverTime);
 
+  const topToolsByInvocations = [...data.tools]
+    .sort((a, b) => b.invocations - a.invocations)
+    .slice(0, 10)
+    .map((t) => ({ label: t.toolName, invocations: t.invocations }));
+
+  const topToolsByDuration = data.tools
+    .filter((t) => t.avgDurationMs !== null)
+    .sort((a, b) => b.invocations - a.invocations)
+    .slice(0, 10)
+    .map((t) => ({ label: t.toolName, durationMs: t.avgDurationMs ?? 0 }));
+
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
@@ -114,6 +125,32 @@ export function ToolsTab({ timeRange }: { timeRange: AnalyticsTimeRange }) {
                   fill={CHART_PALETTE[i % CHART_PALETTE.length]}
                 />
               ))}
+            </BarChart>
+          </ResponsiveContainer>
+        </ChartCard>
+
+        <ChartCard title="Top Tools by Invocations" empty={topToolsByInvocations.length === 0} emptyMessage="No tool invocations recorded">
+          <ResponsiveContainer width="100%" height={250}>
+            <BarChart data={topToolsByInvocations} layout="vertical">
+              <CartesianGrid strokeDasharray="3 3" stroke={GRID_STROKE} />
+              <XAxis type="number" tick={axisTickProps} />
+              <YAxis type="category" dataKey="label" tick={axisTickProps} width={170} />
+              <Tooltip {...tooltipProps} />
+              <Legend />
+              <Bar dataKey="invocations" name="Invocations" fill={CHART_PALETTE[1]} />
+            </BarChart>
+          </ResponsiveContainer>
+        </ChartCard>
+
+        <ChartCard title="Tool Duration (Top 10)" empty={topToolsByDuration.length === 0} emptyMessage="No duration data recorded">
+          <ResponsiveContainer width="100%" height={250}>
+            <BarChart data={topToolsByDuration} layout="vertical">
+              <CartesianGrid strokeDasharray="3 3" stroke={GRID_STROKE} />
+              <XAxis type="number" tick={axisTickProps} tickFormatter={(value) => formatDuration(Number(value))} />
+              <YAxis type="category" dataKey="label" tick={axisTickProps} width={170} />
+              <Tooltip {...tooltipProps} formatter={(value) => formatDuration(Number(value))} />
+              <Legend />
+              <Bar dataKey="durationMs" name="Avg Duration" fill={CHART_PALETTE[0]} />
             </BarChart>
           </ResponsiveContainer>
         </ChartCard>
