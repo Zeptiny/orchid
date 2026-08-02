@@ -49,6 +49,7 @@ interface LeftSidebarProps {
   onSessionRename?: (id: string, name: string) => void | Promise<void>;
   onRefreshSessions: () => void;
   onOpenSettings: () => void;
+  onOpenAnalytics?: () => void;
   /** Current workspace (draft → session → sticky → unbound). */
   workspace?: WorkspaceInfo | null;
   /**
@@ -92,6 +93,7 @@ export const LeftSidebar = memo(function LeftSidebar({
   onSessionRename,
   onRefreshSessions,
   onOpenSettings,
+  onOpenAnalytics,
   workspace = null,
   selectedProjectPath = null,
   onProjectSelect,
@@ -259,6 +261,17 @@ export const LeftSidebar = memo(function LeftSidebar({
           <Icon name="settings" size={18} />
           <span>Settings</span>
         </Button>
+        {onOpenAnalytics && (
+          <Button
+            variant="ghost"
+            size="md"
+            className="session-analytics-btn"
+            onClick={onOpenAnalytics}
+          >
+            <Icon name="barChart" size={18} />
+            <span>Analytics</span>
+          </Button>
+        )}
       </div>
     </aside>
   );

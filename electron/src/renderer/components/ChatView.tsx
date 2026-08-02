@@ -219,6 +219,10 @@ export function ChatView({ isVisible = true, bootstrapConfig = null, onNotify }:
     emitOrchidEvent('orchid:open-settings');
   }, []);
 
+  const openAnalytics = useCallback(() => {
+    emitOrchidEvent('orchid:open-analytics');
+  }, []);
+
   useEffect(() => {
     if (!bootstrapConfig) return;
     if (bootstrapConfig.theme) setCurrentTheme(bootstrapConfig.theme);
@@ -974,6 +978,7 @@ export function ChatView({ isVisible = true, bootstrapConfig = null, onNotify }:
         isCollapsed={leftSidebarCollapsed}
         isOverlay={leftOverlay}
         onOpenSettings={openSettings}
+        onOpenAnalytics={openAnalytics}
         onPickProjectDir={handlePickProjectDirClick}
         projectPickerCreatesDraft={Boolean(session.activeSession?.chains.length)}
         onRefreshSessions={session.refresh}

@@ -3,6 +3,7 @@ import type { Config } from '../../shared/types/ipc-boundary';
 
 export interface OrchidEventMap {
   'orchid:open-settings': { tab?: string } | undefined;
+  'orchid:open-analytics': undefined;
   'orchid:set-theme': { theme: string; persist?: boolean };
   'orchid:config-updated': Partial<Config>;
   'orchid:select-session': { id: string };

@@ -22,6 +22,9 @@ type SettingsTab = 'general' | 'providers' | 'mcp' | 'tier-models' | 'rag' | 'sk
 const ConfigView = lazy(() => import('./components/ConfigView').then((module) => ({
   default: module.ConfigView,
 })));
+const AnalyticsView = lazy(() => import('./components/AnalyticsView').then((module) => ({
+  default: module.AnalyticsView,
+})));
 const OnboardingScreen = lazy(() => import('./components/Onboarding/OnboardingScreen').then((module) => ({
   default: module.OnboardingScreen,
 })));
@@ -34,6 +37,7 @@ interface Toast {
 function AppReady() {
   const [theme, setThemeState] = useState<ThemeName>('default');
   const [configOpen, setConfigOpen] = useState(false);
+  const [analyticsOpen, setAnalyticsOpen] = useState(false);
   const [settingsTab, setSettingsTab] = useState<SettingsTab>('general');
   const [onboardingOpen, setOnboardingOpen] = useState(false);
   const [onboardingChecked, setOnboardingChecked] = useState(false);
@@ -73,6 +77,10 @@ function AppReady() {
     setConfigOpen(true);
   }), []);
 
+  useEffect(() => onOrchidEvent('orchid:open-analytics', () => {
+    setAnalyticsOpen(true);
+  }), []);
+
   const setTheme = useCallback(async (name: ThemeName) => {
     setThemeState(name);
     try {
@@ -108,7 +116,7 @@ function AppReady() {
     return () => { delete document.documentElement.dataset.orchidSettingsOpen; };
   }, [configOpen]);
 
-  const chatVisible = !configOpen && !(onboardingOpen && onboardingChecked);
+  const chatVisible = !configOpen && !analyticsOpen && !(onboardingOpen && onboardingChecked);
 
   return (
     <div className="app-root relative h-screen min-h-0 overflow-hidden bg-base-100 text-base-content" data-theme={theme}>
@@ -142,6 +150,13 @@ function AppReady() {
         <ErrorBoundary title="Settings could not load">
           <Suspense fallback={<div className="flex h-screen min-h-0 items-center justify-center bg-base-100"><StateMessage kind="loading" title="Loading Settings…" role="status" aria-live="polite" /></div>}>
             <ConfigView initialTab={settingsTab} onClose={() => setConfigOpen(false)} onNotify={notify} />
+          </Suspense>
+        </ErrorBoundary>
+      )}
+      {analyticsOpen && (
+        <ErrorBoundary title="Analytics could not load">
+          <Suspense fallback={<div className="flex h-screen min-h-0 items-center justify-center bg-base-100"><StateMessage kind="loading" title="Loading Analytics…" role="status" aria-live="polite" /></div>}>
+            <AnalyticsView onClose={() => setAnalyticsOpen(false)} />
           </Suspense>
         </ErrorBoundary>
       )}
