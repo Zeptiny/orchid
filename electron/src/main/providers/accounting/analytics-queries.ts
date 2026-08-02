@@ -587,7 +587,7 @@ export function getTools(): ToolsResult {
       totalDurationMs: 0, durationCount: 0, totalResultSize: 0, resultSizeCount: 0, offloadedCount: 0,
     };
     entry.invocations++;
-    if (t.outcome === 'complete') entry.complete++;
+    if (t.outcome === 'complete' || t.outcome === 'partial' || t.outcome === 'empty') entry.complete++;
     else if (t.outcome === 'error') entry.error++;
     else if (t.outcome === 'cancelled') entry.cancelled++;
     if (t.timedOut) entry.timedOut++;

@@ -1,12 +1,16 @@
-import { Suspense, lazy, useState, useCallback, useRef, useEffect } from 'react';
-import { useFocusTrap } from '../keyboard';
+import { Suspense, lazy, useState, useCallback, useRef } from 'react';
+import { useFocusTrap, useGlobalShortcuts } from '../keyboard';
+import { useSession } from '../hooks/useSession';
+import { emitOrchidEvent } from '../utils/events';
+import { LeftSidebar } from './LeftSidebar';
 import { Button } from './ui/Button';
 import { StateMessage } from './ui/StateMessage';
+import { Tabs } from './ui/Tabs';
 import { OverviewTab } from './analytics/OverviewTab';
 
 type AnalyticsTab = 'overview' | 'sessions' | 'models' | 'tools' | 'subagents' | 'context';
 
-const TABS: ReadonlyArray<{ id: AnalyticsTab; label: string }> = [
+const TAB_ITEMS: ReadonlyArray<{ id: AnalyticsTab; label: string }> = [
   { id: 'overview', label: 'Overview' },
   { id: 'sessions', label: 'Sessions' },
   { id: 'models', label: 'Models & Providers' },
@@ -23,21 +27,52 @@ const ContextTab = lazy(() => import('./analytics/ContextTab').then((m) => ({ de
 
 interface AnalyticsViewProps {
   onClose: () => void;
+  onOpenSettings?: () => void;
 }
 
-export function AnalyticsView({ onClose }: AnalyticsViewProps) {
+export function AnalyticsView({ onClose, onOpenSettings }: AnalyticsViewProps) {
+  const session = useSession();
   const [activeTab, setActiveTab] = useState<AnalyticsTab>('overview');
+  const [leftCollapsed, setLeftCollapsed] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
 
   useFocusTrap({ enabled: true, containerRef: rootRef });
 
-  useEffect(() => {
-    const handleKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
-    };
-    document.addEventListener('keydown', handleKey);
-    return () => document.removeEventListener('keydown', handleKey);
-  }, [onClose]);
+  useGlobalShortcuts({
+    handlers: {
+      'config.close': () => {
+        onClose();
+      },
+    },
+  });
+
+  const handleSessionSelect = useCallback(
+    (id: string) => {
+      emitOrchidEvent('orchid:select-session', { id });
+      onClose();
+    },
+    [onClose],
+  );
+
+  const handleSessionCreate = useCallback(async () => {
+    const inheritCwd =
+      session.activeSession?.cwd?.trim() ||
+      (session.workspace?.status === 'valid' ? session.workspace.cwd : null);
+    if (inheritCwd) {
+      await session.setWorkspace(inheritCwd);
+    }
+    await session.enterDraft();
+  }, [session]);
+
+  const handleProjectSelect = useCallback(async (projectDir: string) => {
+    await session.setWorkspace(projectDir);
+    await session.enterDraft();
+  }, [session]);
+
+  const handleProjectSessionCreate = useCallback(async (projectDir: string) => {
+    await session.setWorkspace(projectDir);
+    await session.enterDraft();
+  }, [session]);
 
   const renderTab = useCallback(() => {
     switch (activeTab) {
@@ -77,32 +112,82 @@ export function AnalyticsView({ onClose }: AnalyticsViewProps) {
   }, [activeTab]);
 
   return (
-    <div ref={rootRef} className="orchid-view-enter absolute inset-0 z-50 flex bg-base-100 text-base-content" role="dialog" aria-label="Analytics">
-      <div className="flex w-48 flex-col border-r border-base-300 bg-base-200/50">
-        <div className="px-4 py-3 text-sm font-bold uppercase tracking-wide text-base-content/60">Analytics</div>
-        <nav className="flex-1 space-y-1 px-2">
-          {TABS.map((tab) => (
-            <Button
-              key={tab.id}
-              variant={activeTab === tab.id ? 'primary' : 'ghost'}
-              size="xs"
-              className="w-full justify-start"
-              onClick={() => setActiveTab(tab.id)}
-            >
-              {tab.label}
+    <div
+      ref={rootRef}
+      className="config-shell orchid-view-enter grid h-screen min-h-0 overflow-hidden bg-base-100 text-base-content"
+      role="dialog"
+      aria-label="Analytics"
+    >
+      <LeftSidebar
+        activeSessionId={session.activeSession?.id ?? null}
+        selectedProjectPath={
+          session.activeSession?.cwd ??
+          (session.workspace?.status === 'valid' ? session.workspace.cwd : null)
+        }
+        isCollapsed={leftCollapsed}
+        onOpenSettings={onOpenSettings ?? (() => {})}
+        onPickProjectDir={() => {
+          void session.pickProjectDir();
+        }}
+        onRefreshSessions={session.refresh}
+        onSessionCreate={() => {
+          void handleSessionCreate();
+        }}
+        onProjectSelect={(projectDir) => {
+          void handleProjectSelect(projectDir);
+        }}
+        onProjectSessionCreate={(projectDir) => {
+          void handleProjectSessionCreate(projectDir);
+        }}
+        onSessionDelete={session.deleteSession}
+        onSessionSelect={handleSessionSelect}
+        onToggle={() => setLeftCollapsed((prev) => !prev)}
+        sessionListState={session.listState}
+        workspace={session.workspace}
+      />
+
+      <main className="flex min-h-0 min-w-0 flex-col bg-base-100">
+        <header className="config-main-header">
+          <div className="config-main-header-text">
+            <h1 className="truncate">Analytics</h1>
+            <p className="truncate">
+              Usage insights — cost, tokens, tools, subagents, and context snapshots.
+            </p>
+          </div>
+          <div className="config-main-header-actions">
+            <Button variant="ghost" size="sm" onClick={onClose}>
+              Close
             </Button>
-          ))}
-        </nav>
-      </div>
-      <div className="flex min-w-0 flex-1 flex-col">
-        <div className="flex items-center justify-between border-b border-base-300 px-4 py-2">
-          <span className="text-sm text-base-content/60">{TABS.find((t) => t.id === activeTab)?.label}</span>
-          <Button variant="ghost" size="xs" onClick={onClose} aria-label="Close analytics">✕</Button>
+          </div>
+        </header>
+
+        <Tabs
+          items={TAB_ITEMS}
+          value={activeTab}
+          onValueChange={(id) => setActiveTab(id as AnalyticsTab)}
+          variant="boxed"
+          className="config-tabs bg-base-200"
+          itemClassName="config-tab"
+          activeItemClassName="config-tab-active"
+          aria-label="Analytics sections"
+        />
+
+        <div className="config-body">
+          <div key={activeTab} className="orchid-view-enter">
+            {renderTab()}
+          </div>
         </div>
-        <div className="min-h-0 flex-1 overflow-y-auto p-6">
-          {renderTab()}
-        </div>
-      </div>
+
+        <footer className="orchid-shortcut-bar">
+          <span className="orchid-shortcut-bar-item">
+            <span>Esc</span>
+            <span>close</span>
+          </span>
+          <span className="config-footer-meta">
+            Data from local accounting ledger
+          </span>
+        </footer>
+      </main>
     </div>
   );
 }

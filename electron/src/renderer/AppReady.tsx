@@ -158,7 +158,7 @@ function AppReady() {
       {analyticsOpen && (
         <ErrorBoundary title="Analytics could not load">
           <Suspense fallback={<div className="flex h-screen min-h-0 items-center justify-center bg-base-100"><StateMessage kind="loading" title="Loading Analytics…" role="status" aria-live="polite" /></div>}>
-            <AnalyticsView onClose={() => setAnalyticsOpen(false)} />
+            <AnalyticsView onClose={() => setAnalyticsOpen(false)} onOpenSettings={() => setConfigOpen(true)} />
           </Suspense>
         </ErrorBoundary>
       )}
