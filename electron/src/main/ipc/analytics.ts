@@ -1,6 +1,7 @@
 import { ipcMain } from 'electron';
 import { IPC_CHANNELS } from '../../shared/types/ipc';
 import { z } from 'zod';
+import type { AnalyticsTimeRange } from '../../shared/types/analytics';
 import {
   getOverview,
   getSessions,
@@ -11,8 +12,14 @@ import {
   getContext,
 } from '../providers/accounting/analytics-queries';
 
+const timeRangeSchema = z.object({
+  startDate: z.string().optional(),
+  endDate: z.string().optional(),
+}).optional();
+
 const sessionsParamsSchema = z.object({
   limit: z.number().int().positive().max(10000).optional(),
+  timeRange: timeRangeSchema,
 }).optional();
 
 const sessionDetailParamsSchema = z.object({
@@ -21,15 +28,19 @@ const sessionDetailParamsSchema = z.object({
 
 const contextParamsSchema = z.object({
   sessionId: z.string().uuid().optional(),
+  timeRange: timeRangeSchema,
 }).optional();
 
 export function registerAnalyticsIPC(): void {
-  ipcMain.handle(IPC_CHANNELS.ANALYTICS_OVERVIEW, async () => {
+  ipcMain.handle(IPC_CHANNELS.ANALYTICS_OVERVIEW, async (_event, payload?: unknown) => {
+    const parsed = timeRangeSchema.safeParse(payload);
+    if (!parsed.success) throw new Error('Invalid analytics:overview payload');
+    const timeRange = parsed.data as AnalyticsTimeRange | undefined;
     try {
-      return getOverview();
+      return getOverview(timeRange);
     } catch (error) {
       console.error('[analytics] Overview query failed', { error });
-      throw new Error(`Analytics overview query failed: ${error instanceof Error ? error.message : String(error)}`);
+      throw new Error(`Analytics overview query failed: ${error instanceof Error ? error.message : String(error)}`, { cause: error });
     }
   });
 
@@ -37,11 +48,12 @@ export function registerAnalyticsIPC(): void {
     const parsed = sessionsParamsSchema.safeParse(payload);
     if (!parsed.success) throw new Error('Invalid analytics:sessions payload');
     const limit = parsed.data?.limit;
+    const timeRange = parsed.data?.timeRange as AnalyticsTimeRange | undefined;
     try {
-      return getSessions(limit);
+      return getSessions(limit, timeRange);
     } catch (error) {
       console.error('[analytics] Sessions query failed', { error });
-      throw new Error(`Analytics sessions query failed: ${error instanceof Error ? error.message : String(error)}`);
+      throw new Error(`Analytics sessions query failed: ${error instanceof Error ? error.message : String(error)}`, { cause: error });
     }
   });
 
@@ -52,34 +64,43 @@ export function registerAnalyticsIPC(): void {
       return getSessionDetail(parsed.data.sessionId);
     } catch (error) {
       console.error('[analytics] Session detail query failed', { error });
-      throw new Error(`Analytics session detail query failed: ${error instanceof Error ? error.message : String(error)}`);
+      throw new Error(`Analytics session detail query failed: ${error instanceof Error ? error.message : String(error)}`, { cause: error });
     }
   });
 
-  ipcMain.handle(IPC_CHANNELS.ANALYTICS_MODELS, async () => {
+  ipcMain.handle(IPC_CHANNELS.ANALYTICS_MODELS, async (_event, payload?: unknown) => {
+    const parsed = timeRangeSchema.safeParse(payload);
+    if (!parsed.success) throw new Error('Invalid analytics:models payload');
+    const timeRange = parsed.data as AnalyticsTimeRange | undefined;
     try {
-      return getModels();
+      return getModels(timeRange);
     } catch (error) {
       console.error('[analytics] Models query failed', { error });
-      throw new Error(`Analytics models query failed: ${error instanceof Error ? error.message : String(error)}`);
+      throw new Error(`Analytics models query failed: ${error instanceof Error ? error.message : String(error)}`, { cause: error });
     }
   });
 
-  ipcMain.handle(IPC_CHANNELS.ANALYTICS_TOOLS, async () => {
+  ipcMain.handle(IPC_CHANNELS.ANALYTICS_TOOLS, async (_event, payload?: unknown) => {
+    const parsed = timeRangeSchema.safeParse(payload);
+    if (!parsed.success) throw new Error('Invalid analytics:tools payload');
+    const timeRange = parsed.data as AnalyticsTimeRange | undefined;
     try {
-      return getTools();
+      return getTools(timeRange);
     } catch (error) {
       console.error('[analytics] Tools query failed', { error });
-      throw new Error(`Analytics tools query failed: ${error instanceof Error ? error.message : String(error)}`);
+      throw new Error(`Analytics tools query failed: ${error instanceof Error ? error.message : String(error)}`, { cause: error });
     }
   });
 
-  ipcMain.handle(IPC_CHANNELS.ANALYTICS_SUBAGENTS, async () => {
+  ipcMain.handle(IPC_CHANNELS.ANALYTICS_SUBAGENTS, async (_event, payload?: unknown) => {
+    const parsed = timeRangeSchema.safeParse(payload);
+    if (!parsed.success) throw new Error('Invalid analytics:subagents payload');
+    const timeRange = parsed.data as AnalyticsTimeRange | undefined;
     try {
-      return getSubagents();
+      return getSubagents(timeRange);
     } catch (error) {
       console.error('[analytics] Subagents query failed', { error });
-      throw new Error(`Analytics subagents query failed: ${error instanceof Error ? error.message : String(error)}`);
+      throw new Error(`Analytics subagents query failed: ${error instanceof Error ? error.message : String(error)}`, { cause: error });
     }
   });
 
@@ -87,11 +108,12 @@ export function registerAnalyticsIPC(): void {
     const parsed = contextParamsSchema.safeParse(payload);
     if (!parsed.success) throw new Error('Invalid analytics:context payload');
     const sessionId = parsed.data?.sessionId;
+    const timeRange = parsed.data?.timeRange as AnalyticsTimeRange | undefined;
     try {
-      return getContext(sessionId);
+      return getContext(sessionId, timeRange);
     } catch (error) {
       console.error('[analytics] Context query failed', { error });
-      throw new Error(`Analytics context query failed: ${error instanceof Error ? error.message : String(error)}`);
+      throw new Error(`Analytics context query failed: ${error instanceof Error ? error.message : String(error)}`, { cause: error });
     }
   });
 }

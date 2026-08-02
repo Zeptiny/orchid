@@ -4,6 +4,7 @@ import type {
   ModelBreakdown,
   ConnectionBreakdown,
   TimeSeriesPoint,
+  AnalyticsTimeRange,
 } from '../../../shared/types/analytics';
 import {
   StatCard,
@@ -68,9 +69,10 @@ const connectionColumns: ReadonlyArray<Column<ConnectionBreakdown>> = [
   { key: 'lastUsed', label: 'Last Used', render: (c) => formatDate(c.lastUsed) },
 ];
 
-export function ModelsProvidersTab() {
+export function ModelsProvidersTab({ timeRange }: { timeRange: AnalyticsTimeRange }) {
   const { data, loading, error, refresh } = useAnalytics(
-    () => window.orchid.analytics.models(),
+    () => window.orchid.analytics.models({ timeRange }),
+    [timeRange],
   );
 
   if (loading) return <div className="p-8 text-base-content/50">Loading analytics…</div>;

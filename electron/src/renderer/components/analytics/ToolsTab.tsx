@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react';
 import { useAnalytics } from '../../hooks/useAnalytics';
-import type { ToolBreakdown } from '../../../shared/types/analytics';
+import type { ToolBreakdown, AnalyticsTimeRange } from '../../../shared/types/analytics';
 import { StatCard, ChartCard, SortableTable, formatDuration, formatBytes, formatPercent, CHART_PALETTE, GRID_STROKE, axisTickProps, tooltipProps } from './shared';
 import { Button } from '../ui/Button';
 import {
@@ -48,9 +48,10 @@ const toolColumns: ReadonlyArray<Column<ToolBreakdown>> = [
   { key: 'offloadRate', label: 'Offload Rate', render: (t) => formatPercent(t.offloadRate) },
 ];
 
-export function ToolsTab() {
+export function ToolsTab({ timeRange }: { timeRange: AnalyticsTimeRange }) {
   const { data, loading, error, refresh } = useAnalytics(
-    () => window.orchid.analytics.tools(),
+    () => window.orchid.analytics.tools({ timeRange }),
+    [timeRange],
   );
 
   if (loading) return <div className="p-8 text-base-content/50">Loading analytics…</div>;

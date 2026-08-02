@@ -1,5 +1,5 @@
 import { useAnalytics } from '../../hooks/useAnalytics';
-import type { ContextSnapshotSummary } from '../../../shared/types/analytics';
+import type { ContextSnapshotSummary, AnalyticsTimeRange } from '../../../shared/types/analytics';
 import { StatCard, ChartCard, formatTokenCount } from './shared';
 import { CHART_PALETTE, GRID_STROKE, axisTickProps, tokenTooltipProps } from './shared';
 import { Button } from '../ui/Button';
@@ -19,9 +19,10 @@ function formatTimestamp(ts: string): string {
   });
 }
 
-export function ContextTab() {
+export function ContextTab({ timeRange }: { timeRange: AnalyticsTimeRange }) {
   const { data, loading, error, refresh } = useAnalytics(
-    () => window.orchid.analytics.context(),
+    () => window.orchid.analytics.context({ timeRange }),
+    [timeRange],
   );
 
   if (loading) return <div className="p-8 text-base-content/50">Loading…</div>;

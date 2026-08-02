@@ -121,10 +121,15 @@ export class ContextSnapshotStore {
     return rows.map(rowToRecord);
   }
 
-  listAll(limit = 1000): readonly ContextSnapshotRecord[] {
+  listAll(limit = 1000, startDate?: string, endDate?: string): readonly ContextSnapshotRecord[] {
+    const conditions: string[] = [];
+    const params: unknown[] = [];
+    if (startDate) { conditions.push('captured_at >= ?'); params.push(startDate); }
+    if (endDate) { conditions.push('captured_at <= ?'); params.push(endDate); }
+    const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
     const rows = this.connection().prepare(
-      'SELECT * FROM context_snapshots ORDER BY captured_at ASC LIMIT ?',
-    ).all(limit) as ContextSnapshotRow[];
+      `SELECT * FROM context_snapshots ${where} ORDER BY captured_at ASC LIMIT ?`,
+    ).all(...params, limit) as ContextSnapshotRow[];
     return rows.map(rowToRecord);
   }
 

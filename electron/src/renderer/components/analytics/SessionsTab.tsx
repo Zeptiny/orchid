@@ -22,13 +22,14 @@ import {
   PieChart, Pie, Cell, BarChart, Bar,
   XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend,
 } from 'recharts';
-import type { SessionSummary } from '../../../shared/types/analytics';
+import type { SessionSummary, AnalyticsTimeRange } from '../../../shared/types/analytics';
 
 const DETAIL_PAGE_SIZE = 10;
 
-function SessionList({ onRowClick }: { onRowClick: (row: SessionSummary) => void }) {
+function SessionList({ timeRange, onRowClick }: { timeRange: AnalyticsTimeRange; onRowClick: (row: SessionSummary) => void }) {
   const { data, loading, error, refresh } = useAnalytics(
-    () => window.orchid.analytics.sessions(),
+    () => window.orchid.analytics.sessions({ timeRange }),
+    [timeRange],
   );
 
   if (loading) return <div className="p-8 text-base-content/50">Loading sessions…</div>;
@@ -275,11 +276,11 @@ function SessionDetail({ sessionId, onBack }: { sessionId: string; onBack: () =>
   );
 }
 
-export function SessionsTab() {
+export function SessionsTab({ timeRange }: { timeRange: AnalyticsTimeRange }) {
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
 
   if (selectedSessionId !== null) {
     return <SessionDetail sessionId={selectedSessionId} onBack={() => setSelectedSessionId(null)} />;
   }
-  return <SessionList onRowClick={(row) => setSelectedSessionId(row.sessionId)} />;
+  return <SessionList timeRange={timeRange} onRowClick={(row) => setSelectedSessionId(row.sessionId)} />;
 }

@@ -24,6 +24,7 @@ import type {
   CurrencyTotal,
   TimeSeriesPoint,
   ToolCallDetail,
+  AnalyticsTimeRange,
 } from '../../../shared/types/analytics';
 import type { SubagentAttributionRecord } from '../../../shared/types/accounting';
 import { getSessionNames } from '../../session/storage';
@@ -96,8 +97,31 @@ function timeBucket(startedAt: string): string {
   return startedAt.slice(0, 10);
 }
 
-export function getOverview(): OverviewResult {
+function buildDateFilter(timeRange: AnalyticsTimeRange | undefined, column = 'started_at'): {
+  clause: string;
+  params: string[];
+} {
+  const conditions: string[] = [];
+  const params: string[] = [];
+  if (timeRange?.startDate) {
+    conditions.push(`${column} >= ?`);
+    params.push(timeRange.startDate);
+  }
+  if (timeRange?.endDate) {
+    conditions.push(`${column} <= ?`);
+    params.push(timeRange.endDate);
+  }
+  return { clause: conditions.join(' AND '), params };
+}
+
+function whereClause(existingConditions: string[], dateClause: string): string {
+  const all = [...existingConditions, dateClause].filter(Boolean);
+  return all.length > 0 ? `WHERE ${all.join(' AND ')}` : '';
+}
+
+export function getOverview(timeRange?: AnalyticsTimeRange): OverviewResult {
   const db = getDb();
+  const dateFilter = buildDateFilter(timeRange);
 
   const stats = db.prepare(`
     SELECT COUNT(*) as total,
@@ -105,8 +129,8 @@ export function getOverview(): OverviewResult {
       COALESCE(SUM(CASE WHEN outcome='failed' THEN 1 ELSE 0 END), 0) as failed,
       COALESCE(SUM(CASE WHEN outcome='interrupted' THEN 1 ELSE 0 END), 0) as interrupted,
       COUNT(DISTINCT session_id) as sessions
-    FROM provider_attempts
-  `).get() as { total: number; succeeded: number; failed: number; interrupted: number; sessions: number };
+    FROM provider_attempts ${whereClause([], dateFilter.clause)}
+  `).get(...dateFilter.params) as { total: number; succeeded: number; failed: number; interrupted: number; sessions: number };
 
   const tokens = db.prepare(`
     SELECT
@@ -115,15 +139,15 @@ export function getOverview(): OverviewResult {
       COALESCE(SUM(json_extract(usage_json, '$.cacheReadTokens')), 0) as cache_read_tokens,
       COALESCE(SUM(json_extract(usage_json, '$.cacheWriteTokens')), 0) as cache_write_tokens,
       COALESCE(SUM(json_extract(usage_json, '$.reasoningTokens')), 0) as reasoning_tokens
-    FROM provider_attempts WHERE usage_json IS NOT NULL
-  `).get() as {
+    FROM provider_attempts ${whereClause(['usage_json IS NOT NULL'], dateFilter.clause)}
+  `).get(...dateFilter.params) as {
     input_tokens: number; output_tokens: number; cache_read_tokens: number;
     cache_write_tokens: number; reasoning_tokens: number;
   };
 
   const allCostRows = db.prepare(`
-    SELECT currency, cost_amount, cost_state FROM provider_attempts
-  `).all() as Array<{ currency: string | null; cost_amount: string | null; cost_state: string }>;
+    SELECT currency, cost_amount, cost_state FROM provider_attempts ${whereClause([], dateFilter.clause)}
+  `).all(...dateFilter.params) as Array<{ currency: string | null; cost_amount: string | null; cost_state: string }>;
   const { currencies: totalCost, unknownCount } = sumCosts(allCostRows);
 
   const tsRows = db.prepare(`
@@ -134,8 +158,8 @@ export function getOverview(): OverviewResult {
       COALESCE(SUM(json_extract(usage_json, '$.cacheWriteTokens')), 0) as cache_write_tokens,
       COALESCE(SUM(json_extract(usage_json, '$.reasoningTokens')), 0) as reasoning_tokens,
       GROUP_CONCAT(CASE WHEN cost_state IN ('reported','calculated') AND currency IS NOT NULL AND cost_amount IS NOT NULL THEN cost_amount END, '|') as cost_amounts
-    FROM provider_attempts GROUP BY date ORDER BY date
-  `).all() as Array<{
+    FROM provider_attempts ${whereClause([], dateFilter.clause)} GROUP BY date ORDER BY date
+  `).all(...dateFilter.params) as Array<{
     date: string; input_tokens: number; output_tokens: number;
     cache_read_tokens: number; cache_write_tokens: number; reasoning_tokens: number;
     cost_amounts: string | null;
@@ -162,9 +186,9 @@ export function getOverview(): OverviewResult {
   const spendByModelRows = db.prepare(`
     SELECT model_id, currency, SUM(cost_amount) as cost
     FROM provider_attempts
-    WHERE cost_state IN ('reported','calculated') AND currency IS NOT NULL AND cost_amount IS NOT NULL
+    ${whereClause(["cost_state IN ('reported','calculated')", 'currency IS NOT NULL', 'cost_amount IS NOT NULL'], dateFilter.clause)}
     GROUP BY model_id, currency
-  `).all() as Array<{ model_id: string; currency: string; cost: number }>;
+  `).all(...dateFilter.params) as Array<{ model_id: string; currency: string; cost: number }>;
 
   const spendByModel = spendByModelRows.map((r) => ({
     modelId: r.model_id,
@@ -175,9 +199,9 @@ export function getOverview(): OverviewResult {
   const spendByProviderRows = db.prepare(`
     SELECT provider_id, currency, SUM(cost_amount) as cost
     FROM provider_attempts
-    WHERE cost_state IN ('reported','calculated') AND currency IS NOT NULL AND cost_amount IS NOT NULL
+    ${whereClause(["cost_state IN ('reported','calculated')", 'currency IS NOT NULL', 'cost_amount IS NOT NULL'], dateFilter.clause)}
     GROUP BY provider_id, currency
-  `).all() as Array<{ provider_id: string; currency: string; cost: number }>;
+  `).all(...dateFilter.params) as Array<{ provider_id: string; currency: string; cost: number }>;
 
   const spendByProvider = spendByProviderRows.map((r) => ({
     providerId: r.provider_id,
@@ -186,18 +210,18 @@ export function getOverview(): OverviewResult {
   }));
 
   const outcomeRows = db.prepare(`
-    SELECT outcome, COUNT(*) as count FROM provider_attempts GROUP BY outcome
-  `).all() as Array<{ outcome: string; count: number }>;
+    SELECT outcome, COUNT(*) as count FROM provider_attempts ${whereClause([], dateFilter.clause)} GROUP BY outcome
+  `).all(...dateFilter.params) as Array<{ outcome: string; count: number }>;
   const outcomeDistribution = outcomeRows.map((r) => ({ outcome: r.outcome, count: r.count }));
 
   const costSourceRows = db.prepare(`
-    SELECT cost_state, COUNT(*) as count FROM provider_attempts GROUP BY cost_state
-  `).all() as Array<{ cost_state: string; count: number }>;
+    SELECT cost_state, COUNT(*) as count FROM provider_attempts ${whereClause([], dateFilter.clause)} GROUP BY cost_state
+  `).all(...dateFilter.params) as Array<{ cost_state: string; count: number }>;
   const costSourceDistribution = costSourceRows.map((r) => ({ source: r.cost_state, count: r.count }));
 
   const tierRows = db.prepare(`
-    SELECT agent_tier, COUNT(*) as count FROM provider_attempts WHERE agent_tier IS NOT NULL GROUP BY agent_tier
-  `).all() as Array<{ agent_tier: string; count: number }>;
+    SELECT agent_tier, COUNT(*) as count FROM provider_attempts ${whereClause(['agent_tier IS NOT NULL'], dateFilter.clause)} GROUP BY agent_tier
+  `).all(...dateFilter.params) as Array<{ agent_tier: string; count: number }>;
   const agentTierDistribution = tierRows.map((r) => ({ tier: r.agent_tier, count: r.count }));
 
   return {
@@ -225,8 +249,9 @@ export function getOverview(): OverviewResult {
   };
 }
 
-export function getSessions(limit = DEFAULT_LIMIT): readonly SessionSummary[] {
+export function getSessions(limit = DEFAULT_LIMIT, timeRange?: AnalyticsTimeRange): readonly SessionSummary[] {
   const db = getDb();
+  const dateFilter = buildDateFilter(timeRange);
 
   const sessions = db.prepare(`
     SELECT session_id,
@@ -240,8 +265,8 @@ export function getSessions(limit = DEFAULT_LIMIT): readonly SessionSummary[] {
       COALESCE(SUM(json_extract(usage_json, '$.outputTokens')), 0) as output_tokens,
       COALESCE(SUM(json_extract(usage_json, '$.cacheReadTokens')), 0) as cache_read_tokens,
       GROUP_CONCAT(DISTINCT model_id) as models
-    FROM provider_attempts GROUP BY session_id ORDER BY first_attempt DESC LIMIT ?
-  `).all(limit) as Array<{
+    FROM provider_attempts ${whereClause([], dateFilter.clause)} GROUP BY session_id ORDER BY first_attempt DESC LIMIT ?
+  `).all(...dateFilter.params, limit) as Array<{
     session_id: string; attempts: number; succeeded: number; failed: number; interrupted: number;
     first_attempt: string; last_attempt: string | null;
     input_tokens: number; output_tokens: number; cache_read_tokens: number;
@@ -249,8 +274,8 @@ export function getSessions(limit = DEFAULT_LIMIT): readonly SessionSummary[] {
   }>;
 
   const subagentRows = db.prepare(`
-    SELECT session_id, COUNT(*) as count FROM subagent_attribution GROUP BY session_id
-  `).all() as Array<{ session_id: string; count: number }>;
+    SELECT session_id, COUNT(*) as count FROM subagent_attribution ${whereClause([], buildDateFilter(timeRange).clause)} GROUP BY session_id
+  `).all(...buildDateFilter(timeRange).params) as Array<{ session_id: string; count: number }>;
   const subagentMap = new Map<string, number>();
   for (const r of subagentRows) {
     subagentMap.set(r.session_id, r.count);
@@ -261,9 +286,9 @@ export function getSessions(limit = DEFAULT_LIMIT): readonly SessionSummary[] {
       GROUP_CONCAT(cost_amount, '|') as cost_amounts,
       COUNT(*) as record_count
     FROM provider_attempts
-    WHERE cost_state IN ('reported','calculated') AND currency IS NOT NULL AND cost_amount IS NOT NULL
+    ${whereClause(["cost_state IN ('reported','calculated')", 'currency IS NOT NULL', 'cost_amount IS NOT NULL'], dateFilter.clause)}
     GROUP BY session_id, currency
-  `).all() as Array<{ session_id: string; currency: string; cost_amounts: string; record_count: number }>;
+  `).all(...dateFilter.params) as Array<{ session_id: string; currency: string; cost_amounts: string; record_count: number }>;
   const costMap = new Map<string, CurrencyTotal[]>();
   for (const r of costRows) {
     let total = new Decimal(0);
@@ -459,8 +484,9 @@ export function getSessionDetail(sessionId: string): SessionDetailResult {
   };
 }
 
-export function getModels(): ModelsResult {
+export function getModels(timeRange?: AnalyticsTimeRange): ModelsResult {
   const db = getDb();
+  const dateFilter = buildDateFilter(timeRange);
 
   // Single GROUP BY for model-level aggregates — token sums via SQL json_extract
   // (integers are safe in SQL), counts and dates included directly.
@@ -477,8 +503,8 @@ export function getModels(): ModelsResult {
       COALESCE(SUM(json_extract(usage_json, '$.reasoningTokens')), 0) as reasoning_tokens,
       MIN(started_at) as first_used,
       MAX(completed_at) as last_used
-    FROM provider_attempts GROUP BY model_id, provider_id ORDER BY first_used DESC
-  `).all() as Array<{
+    FROM provider_attempts ${whereClause([], dateFilter.clause)} GROUP BY model_id, provider_id ORDER BY first_used DESC
+  `).all(...dateFilter.params) as Array<{
     model_id: string; provider_id: string; snapshot_json: string;
     attempts: number; succeeded: number; failed: number; interrupted: number;
     input_tokens: number; output_tokens: number; cache_read_tokens: number;
@@ -499,8 +525,8 @@ export function getModels(): ModelsResult {
       COALESCE(SUM(json_extract(usage_json, '$.outputTokens')), 0) as output_tokens,
       MIN(started_at) as first_used,
       MAX(completed_at) as last_used
-    FROM provider_attempts GROUP BY connection_id ORDER BY first_used DESC
-  `).all() as Array<{
+    FROM provider_attempts ${whereClause([], dateFilter.clause)} GROUP BY connection_id ORDER BY first_used DESC
+  `).all(...dateFilter.params) as Array<{
     connection_id: string; provider_id: string; snapshot_json: string;
     attempts: number; succeeded: number; failed: number; interrupted: number;
     model_count: number; input_tokens: number; output_tokens: number;
@@ -513,8 +539,8 @@ export function getModels(): ModelsResult {
   const costRows = db.prepare(`
     SELECT model_id, provider_id, connection_id, cost_amount
     FROM provider_attempts
-    WHERE cost_state IN ('reported','calculated') AND cost_amount IS NOT NULL AND currency IS NOT NULL
-  `).all() as Array<{
+    ${whereClause(["cost_state IN ('reported','calculated')", 'cost_amount IS NOT NULL', 'currency IS NOT NULL'], dateFilter.clause)}
+  `).all(...dateFilter.params) as Array<{
     model_id: string; provider_id: string; connection_id: string; cost_amount: string;
   }>;
 
@@ -570,10 +596,10 @@ export function getModels(): ModelsResult {
     SELECT strftime('%Y-%m-%d', started_at) as date, model_id, connection_id,
       GROUP_CONCAT(cost_amount, '|') as cost_amounts
     FROM provider_attempts
-    WHERE cost_state IN ('reported','calculated') AND cost_amount IS NOT NULL AND currency IS NOT NULL
+    ${whereClause(["cost_state IN ('reported','calculated')", 'cost_amount IS NOT NULL', 'currency IS NOT NULL'], dateFilter.clause)}
     GROUP BY date, model_id, connection_id
     ORDER BY date
-  `).all() as Array<{ date: string; model_id: string; connection_id: string; cost_amounts: string }>;
+  `).all(...dateFilter.params) as Array<{ date: string; model_id: string; connection_id: string; cost_amounts: string }>;
 
   const modelTsMap = new Map<string, Map<string, Decimal>>();
   const connectionTsMap = new Map<string, Map<string, Decimal>>();
@@ -610,10 +636,9 @@ export function getModels(): ModelsResult {
 
   return { models, connections, costPerModelOverTime, costPerConnectionOverTime };
 }
-
-export function getTools(): ToolsResult {
+export function getTools(timeRange?: AnalyticsTimeRange): ToolsResult {
   const toolStore = getToolAttemptStore();
-  const allTools = toolStore.listAll(DEFAULT_LIMIT);
+  const allTools = toolStore.listAll(DEFAULT_LIMIT, timeRange?.startDate, timeRange?.endDate);
 
   const toolMap = new Map<string, {
     toolName: string; toolSource: string; mcpServerName: string | null; toolFamily: string;
@@ -680,10 +705,11 @@ export function getTools(): ToolsResult {
 
   return { tools, invocationsOverTime, outcomeDistribution };
 }
-export function getSubagents(): SubagentsResult {
+export function getSubagents(timeRange?: AnalyticsTimeRange): SubagentsResult {
   const subagentStore = getSubagentAttributionStore();
-  const allSubagents = subagentStore.listAll(DEFAULT_LIMIT);
+  const allSubagents = subagentStore.listAll(DEFAULT_LIMIT, timeRange?.startDate, timeRange?.endDate);
   const db = getDb();
+  const dateFilter = buildDateFilter(timeRange);
 
   const chainIds = [...new Set(allSubagents.map((sa) => sa.chainId))];
 
@@ -696,23 +722,33 @@ export function getSubagents(): SubagentsResult {
 
     // Chain aggregation: tokens via SQL (integers are safe), cost loaded
     // separately as TEXT for Decimal.js summation.
+    const chainConditions = [`chain_id IN (${placeholders})`];
+    if (dateFilter.clause) chainConditions.push(dateFilter.clause);
+    const chainWhere = `WHERE ${chainConditions.join(' AND ')}`;
+    const chainParams = [...chainIds, ...dateFilter.params];
+
     const chainRows = db.prepare(`
       SELECT chain_id,
         COALESCE(SUM(json_extract(usage_json, '$.inputTokens')), 0) as input_tokens,
         COALESCE(SUM(json_extract(usage_json, '$.outputTokens')), 0) as output_tokens,
         COUNT(*) as attempts
-      FROM provider_attempts WHERE chain_id IN (${placeholders}) GROUP BY chain_id
-    `).all(...chainIds) as Array<{
+      FROM provider_attempts ${chainWhere} GROUP BY chain_id
+    `).all(...chainParams) as Array<{
       chain_id: string; input_tokens: number; output_tokens: number; attempts: number;
     }>;
 
     // Per-row cost_amount as TEXT — sum with Decimal.js instead of
     // CAST(cost_amount AS REAL) which loses precision.
+    const chainCostConditions = ["cost_state IN ('reported','calculated')", 'cost_amount IS NOT NULL', `chain_id IN (${placeholders})`];
+    if (dateFilter.clause) chainCostConditions.push(dateFilter.clause);
+    const chainCostWhere = `WHERE ${chainCostConditions.join(' AND ')}`;
+    const chainCostParams = [...dateFilter.params, ...chainIds];
+
     const chainCostRows = db.prepare(`
       SELECT chain_id, cost_amount
       FROM provider_attempts
-      WHERE cost_state IN ('reported','calculated') AND cost_amount IS NOT NULL AND chain_id IN (${placeholders})
-    `).all(...chainIds) as Array<{ chain_id: string; cost_amount: string }>;
+      ${chainCostWhere}
+    `).all(...chainCostParams) as Array<{ chain_id: string; cost_amount: string }>;
 
     const chainCostMap = new Map<string, Decimal>();
     for (const r of chainCostRows) {
@@ -732,13 +768,18 @@ export function getSubagents(): SubagentsResult {
 
     // Chain currency breakdown: GROUP_CONCAT preserves TEXT precision,
     // then Decimal.js sums the amounts per (chain_id, currency).
+    const chainCurrencyConditions = ["cost_state IN ('reported','calculated')", 'cost_amount IS NOT NULL', 'currency IS NOT NULL', `chain_id IN (${placeholders})`];
+    if (dateFilter.clause) chainCurrencyConditions.push(dateFilter.clause);
+    const chainCurrencyWhere = `WHERE ${chainCurrencyConditions.join(' AND ')}`;
+    const chainCurrencyParams = [...dateFilter.params, ...chainIds];
+
     const chainCurrencyRows = db.prepare(`
       SELECT chain_id, currency,
         GROUP_CONCAT(cost_amount, '|') as cost_amounts
       FROM provider_attempts
-      WHERE cost_state IN ('reported','calculated') AND cost_amount IS NOT NULL AND currency IS NOT NULL AND chain_id IN (${placeholders})
+      ${chainCurrencyWhere}
       GROUP BY chain_id, currency
-    `).all(...chainIds) as Array<{ chain_id: string; currency: string; cost_amounts: string }>;
+    `).all(...chainCurrencyParams) as Array<{ chain_id: string; currency: string; cost_amounts: string }>;
 
     for (const r of chainCurrencyRows) {
       let total = new Decimal(0);
@@ -843,10 +884,14 @@ export function getSubagents(): SubagentsResult {
 
   return { summaries, costByAgentName, costByAgentTier, outcomeDistribution };
 }
-
-export function getContext(sessionId?: string): ContextResult {
+export function getContext(sessionId?: string, timeRange?: AnalyticsTimeRange): ContextResult {
   const snapshotStore = getContextSnapshotStore();
-  const snapshots = sessionId ? snapshotStore.listBySession(sessionId) : snapshotStore.listAll(DEFAULT_LIMIT);
+  let snapshots: readonly import('../../../shared/types/accounting').ContextSnapshotRecord[];
+  if (sessionId) {
+    snapshots = snapshotStore.listBySession(sessionId);
+  } else {
+    snapshots = snapshotStore.listAll(DEFAULT_LIMIT, timeRange?.startDate, timeRange?.endDate);
+  }
 
   let systemTokens = 0, toolsTokens = 0, toolUseTokens = 0, userTokens = 0, assistantTokens = 0;
   const results = snapshots.map((s) => {

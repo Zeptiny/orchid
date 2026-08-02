@@ -103,6 +103,7 @@ import type {
   ToolsResult,
   SubagentsResult,
   ContextResult,
+  AnalyticsTimeRange,
 } from '../shared/types/analytics';
 import {
   chatChunkEventSchema,
@@ -611,25 +612,25 @@ const orchidAPI: OrchidAPI = {
   },
 
   analytics: {
-    overview: () =>
-      invoke<OverviewResult>(IPC_CHANNELS.ANALYTICS_OVERVIEW),
+    overview: (params?: { readonly timeRange?: AnalyticsTimeRange }) =>
+      invoke<OverviewResult>(IPC_CHANNELS.ANALYTICS_OVERVIEW, params),
 
-    sessions: (params?: { readonly limit?: number }) =>
+    sessions: (params?: { readonly limit?: number; readonly timeRange?: AnalyticsTimeRange }) =>
       invoke<readonly SessionSummary[]>(IPC_CHANNELS.ANALYTICS_SESSIONS, params),
 
     sessionDetail: (params: { readonly sessionId: string }) =>
       invoke<SessionDetailResult>(IPC_CHANNELS.ANALYTICS_SESSION_DETAIL, params),
 
-    models: () =>
-      invoke<ModelsResult>(IPC_CHANNELS.ANALYTICS_MODELS),
+    models: (params?: { readonly timeRange?: AnalyticsTimeRange }) =>
+      invoke<ModelsResult>(IPC_CHANNELS.ANALYTICS_MODELS, params),
 
-    tools: () =>
-      invoke<ToolsResult>(IPC_CHANNELS.ANALYTICS_TOOLS),
+    tools: (params?: { readonly timeRange?: AnalyticsTimeRange }) =>
+      invoke<ToolsResult>(IPC_CHANNELS.ANALYTICS_TOOLS, params),
 
-    subagents: () =>
-      invoke<SubagentsResult>(IPC_CHANNELS.ANALYTICS_SUBAGENTS),
+    subagents: (params?: { readonly timeRange?: AnalyticsTimeRange }) =>
+      invoke<SubagentsResult>(IPC_CHANNELS.ANALYTICS_SUBAGENTS, params),
 
-    context: (params?: { readonly sessionId?: string }) =>
+    context: (params?: { readonly sessionId?: string; readonly timeRange?: AnalyticsTimeRange }) =>
       invoke<ContextResult>(IPC_CHANNELS.ANALYTICS_CONTEXT, params),
   },
 };

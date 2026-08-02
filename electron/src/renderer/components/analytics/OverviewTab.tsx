@@ -1,4 +1,5 @@
 import { useAnalytics } from '../../hooks/useAnalytics';
+import type { AnalyticsTimeRange } from '../../../shared/types/analytics';
 import { StatCard, ChartCard, formatTokenCount, formatCost, CHART_PALETTE, GRID_STROKE, axisTickProps, tooltipProps, tokenTooltipProps, costTooltipProps } from './shared';
 import { Button } from '../ui/Button';
 import {
@@ -6,9 +7,10 @@ import {
   XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend,
 } from 'recharts';
 
-export function OverviewTab() {
+export function OverviewTab({ timeRange }: { timeRange: AnalyticsTimeRange }) {
   const { data, loading, error, refresh } = useAnalytics(
-    () => window.orchid.analytics.overview(),
+    () => window.orchid.analytics.overview({ timeRange }),
+    [timeRange],
   );
 
   if (loading) return <div className="p-8 text-base-content/50">Loading analytics…</div>;

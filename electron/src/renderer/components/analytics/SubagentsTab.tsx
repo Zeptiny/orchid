@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react';
 import { useAnalytics } from '../../hooks/useAnalytics';
-import type { SubagentSummary } from '../../../shared/types/analytics';
+import type { SubagentSummary, AnalyticsTimeRange } from '../../../shared/types/analytics';
 import { StatCard, ChartCard, SortableTable, formatTokenCount, formatCostAmount, formatDuration, CHART_PALETTE, GRID_STROKE, axisTickProps, tooltipProps, tokenTooltipProps, costTooltipProps } from './shared';
 import { Button } from '../ui/Button';
 import {
@@ -8,9 +8,10 @@ import {
   XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend,
 } from 'recharts';
 
-export function SubagentsTab() {
+export function SubagentsTab({ timeRange }: { timeRange: AnalyticsTimeRange }) {
   const { data, loading, error, refresh } = useAnalytics(
-    () => window.orchid.analytics.subagents(),
+    () => window.orchid.analytics.subagents({ timeRange }),
+    [timeRange],
   );
 
   if (loading) return <div className="p-8 text-base-content/50">Loading…</div>;

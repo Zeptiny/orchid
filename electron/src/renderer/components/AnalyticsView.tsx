@@ -2,12 +2,14 @@ import { Suspense, lazy, useState, useCallback, useRef } from 'react';
 import { useFocusTrap, useGlobalShortcuts } from '../keyboard';
 import { useSession } from '../hooks/useSession';
 import type { UseSessionActivityReturn } from '../hooks/useSessionActivity';
+import { useTimeRange } from '../hooks/useTimeRange';
 import { emitOrchidEvent } from '../utils/events';
 import { LeftSidebar } from './LeftSidebar';
 import { Button } from './ui/Button';
 import { StateMessage } from './ui/StateMessage';
 import { Tabs } from './ui/Tabs';
 import { OverviewTab } from './analytics/OverviewTab';
+import { TimeRangeSelector } from './analytics/TimeRangeSelector';
 
 type AnalyticsTab = 'overview' | 'sessions' | 'models' | 'tools' | 'subagents' | 'context';
 
@@ -37,6 +39,7 @@ export function AnalyticsView({ onClose, onOpenSettings, activity }: AnalyticsVi
   const [activeTab, setActiveTab] = useState<AnalyticsTab>('overview');
   const [leftCollapsed, setLeftCollapsed] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
+  const timeRange = useTimeRange();
 
   useFocusTrap({ enabled: true, containerRef: rootRef });
 
@@ -83,39 +86,39 @@ export function AnalyticsView({ onClose, onOpenSettings, activity }: AnalyticsVi
   const renderTab = useCallback(() => {
     switch (activeTab) {
       case 'overview':
-        return <OverviewTab />;
+        return <OverviewTab timeRange={timeRange.resolved} />;
       case 'sessions':
         return (
           <Suspense fallback={<StateMessage kind="loading" title="Loading Sessions…" />}>
-            <SessionsTab />
+            <SessionsTab timeRange={timeRange.resolved} />
           </Suspense>
         );
       case 'models':
         return (
           <Suspense fallback={<StateMessage kind="loading" title="Loading Models…" />}>
-            <ModelsProvidersTab />
+            <ModelsProvidersTab timeRange={timeRange.resolved} />
           </Suspense>
         );
       case 'tools':
         return (
           <Suspense fallback={<StateMessage kind="loading" title="Loading Tools…" />}>
-            <ToolsTab />
+            <ToolsTab timeRange={timeRange.resolved} />
           </Suspense>
         );
       case 'subagents':
         return (
           <Suspense fallback={<StateMessage kind="loading" title="Loading Subagents…" />}>
-            <SubagentsTab />
+            <SubagentsTab timeRange={timeRange.resolved} />
           </Suspense>
         );
       case 'context':
         return (
           <Suspense fallback={<StateMessage kind="loading" title="Loading Context…" />}>
-            <ContextTab />
+            <ContextTab timeRange={timeRange.resolved} />
           </Suspense>
         );
     }
-  }, [activeTab]);
+  }, [activeTab, timeRange.resolved]);
 
   return (
     <div
@@ -181,6 +184,8 @@ export function AnalyticsView({ onClose, onOpenSettings, activity }: AnalyticsVi
           activeItemClassName="config-tab-active"
           aria-label="Analytics sections"
         />
+
+        <TimeRangeSelector timeRange={timeRange} />
 
         <div className="config-body">
           <div key={activeTab} className="orchid-view-enter">

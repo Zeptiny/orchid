@@ -142,10 +142,15 @@ export class SubagentAttributionStore {
     return rows.map(rowToRecord);
   }
 
-  listAll(limit = 1000): readonly SubagentAttributionRecord[] {
+  listAll(limit = 1000, startDate?: string, endDate?: string): readonly SubagentAttributionRecord[] {
+    const conditions: string[] = [];
+    const params: unknown[] = [];
+    if (startDate) { conditions.push('started_at >= ?'); params.push(startDate); }
+    if (endDate) { conditions.push('started_at <= ?'); params.push(endDate); }
+    const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
     const rows = this.connection().prepare(
-      'SELECT * FROM subagent_attribution ORDER BY started_at DESC LIMIT ?',
-    ).all(limit) as SubagentAttributionRow[];
+      `SELECT * FROM subagent_attribution ${where} ORDER BY started_at DESC LIMIT ?`,
+    ).all(...params, limit) as SubagentAttributionRow[];
     return rows.map(rowToRecord);
   }
 

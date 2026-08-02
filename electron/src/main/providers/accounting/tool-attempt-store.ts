@@ -177,10 +177,15 @@ export class ToolAttemptStore {
     return rows.map(toolRowToRecord);
   }
 
-  listAll(limit = 1000): readonly ToolAttemptRecord[] {
+  listAll(limit = 1000, startDate?: string, endDate?: string): readonly ToolAttemptRecord[] {
+    const conditions: string[] = [];
+    const params: unknown[] = [];
+    if (startDate) { conditions.push('started_at >= ?'); params.push(startDate); }
+    if (endDate) { conditions.push('started_at <= ?'); params.push(endDate); }
+    const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
     const rows = this.connection().prepare(
-      'SELECT * FROM tool_attempts ORDER BY started_at DESC LIMIT ?',
-    ).all(limit) as ToolAttemptRow[];
+      `SELECT * FROM tool_attempts ${where} ORDER BY started_at DESC LIMIT ?`,
+    ).all(...params, limit) as ToolAttemptRow[];
     return rows.map(toolRowToRecord);
   }
 

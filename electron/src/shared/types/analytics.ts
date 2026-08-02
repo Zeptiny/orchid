@@ -3,6 +3,11 @@
  * methods and serialized over IPC to the renderer Analytics page.
  */
 
+export interface AnalyticsTimeRange {
+  readonly startDate?: string;
+  readonly endDate?: string;
+}
+
 export interface OverviewStats {
   readonly totalCost: readonly CurrencyTotal[];
   readonly totalInputTokens: number;
