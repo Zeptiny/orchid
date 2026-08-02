@@ -151,14 +151,14 @@ function AppReady() {
       {configOpen && (
         <ErrorBoundary title="Settings could not load">
           <Suspense fallback={<div className="flex h-screen min-h-0 items-center justify-center bg-base-100"><StateMessage kind="loading" title="Loading Settings…" role="status" aria-live="polite" /></div>}>
-            <ConfigView initialTab={settingsTab} onClose={() => setConfigOpen(false)} onNotify={notify} onOpenAnalytics={() => setAnalyticsOpen(true)} />
+            <ConfigView initialTab={settingsTab} onClose={() => setConfigOpen(false)} onNotify={notify} onOpenAnalytics={() => { setConfigOpen(false); setAnalyticsOpen(true); }} />
           </Suspense>
         </ErrorBoundary>
       )}
       {analyticsOpen && (
         <ErrorBoundary title="Analytics could not load">
           <Suspense fallback={<div className="flex h-screen min-h-0 items-center justify-center bg-base-100"><StateMessage kind="loading" title="Loading Analytics…" role="status" aria-live="polite" /></div>}>
-            <AnalyticsView onClose={() => setAnalyticsOpen(false)} onOpenSettings={() => setConfigOpen(true)} />
+            <AnalyticsView onClose={() => setAnalyticsOpen(false)} onOpenSettings={() => { setAnalyticsOpen(false); setConfigOpen(true); }} />
           </Suspense>
         </ErrorBoundary>
       )}
