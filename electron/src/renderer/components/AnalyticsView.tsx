@@ -126,6 +126,7 @@ export function AnalyticsView({ onClose, onOpenSettings }: AnalyticsViewProps) {
         }
         isCollapsed={leftCollapsed}
         onOpenSettings={onOpenSettings ?? (() => {})}
+        onOpenAnalytics={() => {}}
         onPickProjectDir={() => {
           void session.pickProjectDir();
         }}
