@@ -77,6 +77,11 @@ export function ContextTab({ timeRange }: { timeRange: AnalyticsTimeRange }) {
           empty={growthData.length === 0}
           emptyMessage="No context snapshots recorded"
         >
+          {data.totalSessionCount > data.topSessions.length && (
+            <div className="mb-2 text-xs text-base-content/50">
+              (showing top {data.topSessions.length} of {data.totalSessionCount} sessions)
+            </div>
+          )}
           <ResponsiveContainer width="100%" height={300}>
             <LineChart data={growthData}>
               <CartesianGrid strokeDasharray="3 3" stroke={GRID_STROKE} />

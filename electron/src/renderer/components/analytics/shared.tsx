@@ -91,6 +91,28 @@ export const costTooltipProps = {
   formatter: (value: unknown) => formatCostAmount(String(value), null),
 };
 
+interface TokenUsageTooltipProps {
+  label?: string;
+  rows: ReadonlyArray<{ name: string; value: number }>;
+  // Recharts tooltip content compatibility — content receives these on render.
+  active?: boolean;
+  payload?: ReadonlyArray<unknown>;
+}
+
+export function TokenUsageTooltip({ active = true, label, rows }: TokenUsageTooltipProps) {
+  if (!active || rows.length === 0) return null;
+  return (
+    <div style={tooltipProps.contentStyle}>
+      {label !== undefined && (
+        <div className="mb-1" style={tooltipProps.labelStyle}>{label}</div>
+      )}
+      {rows.map((row) => (
+        <div key={row.name} style={tooltipProps.itemStyle}>{row.name}: {formatTokenCount(row.value)}</div>
+      ))}
+    </div>
+  );
+}
+
 interface StatCardProps {
   label: string;
   value: string | number;

@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useAnalytics } from '../../hooks/useAnalytics';
 import type { AnalyticsTimeRange, TimeSeriesPoint } from '../../../shared/types/analytics';
-import { StatCard, ChartCard, formatTokenCount, formatCost, formatCostAmount, formatPercent, CHART_PALETTE, GRID_STROKE, axisTickProps, tooltipProps } from './shared';
+import { StatCard, ChartCard, formatTokenCount, formatCost, formatCostAmount, formatPercent, CHART_PALETTE, GRID_STROKE, axisTickProps, tooltipProps, TokenUsageTooltip } from './shared';
 import { Button } from '../ui/Button';
 import {
   LineChart, Line, BarChart, Bar, PieChart, Pie, Cell,
@@ -33,8 +33,9 @@ function collapseSpendTopN<T extends { cost: string; currency: string }, R>(
   labelRow: (row: T) => R,
   makeOther: (currency: string, cost: string, mixedCurrencies: boolean) => R,
 ): R[] {
-  const top = rows.slice(0, SPEND_TOP_N).map(labelRow);
-  const rest = rows.slice(SPEND_TOP_N);
+  const sorted = [...rows].sort((a, b) => Number(b.cost) - Number(a.cost));
+  const top = sorted.slice(0, SPEND_TOP_N).map(labelRow);
+  const rest = sorted.slice(SPEND_TOP_N);
   if (rest.length === 0) return top;
   const sums = new Map<string, number>();
   for (const row of rest) {
@@ -46,30 +47,6 @@ function collapseSpendTopN<T extends { cost: string; currency: string }, R>(
 }
 
 type TokenUsagePoint = TimeSeriesPoint & { netInput: number; cacheRead: number; output: number };
-
-function TokenUsageTooltip({ active, payload, label }: {
-  active?: boolean;
-  payload?: ReadonlyArray<{ payload?: TokenUsagePoint }>;
-  label?: string | number;
-}) {
-  const point = payload?.[0]?.payload;
-  if (!active || !point) return null;
-  const rows: ReadonlyArray<readonly [string, number]> = [
-    ['Input', point.inputTokens],
-    ['Output', point.outputTokens],
-    ['Cache Read', point.cacheReadTokens],
-    ['Cache Write', point.cacheWriteTokens],
-    ['Reasoning', point.reasoningTokens],
-  ];
-  return (
-    <div style={tooltipProps.contentStyle}>
-      <div style={tooltipProps.labelStyle}>{label ?? point.date}</div>
-      {rows.map(([name, value]) => (
-        <div key={name} style={tooltipProps.itemStyle}>{name}: {formatTokenCount(value)}</div>
-      ))}
-    </div>
-  );
-}
 
 export function OverviewTab({ timeRange }: { timeRange: AnalyticsTimeRange }) {
   const { data, loading, error, refresh } = useAnalytics(
@@ -184,7 +161,24 @@ export function OverviewTab({ timeRange }: { timeRange: AnalyticsTimeRange }) {
               <CartesianGrid strokeDasharray="3 3" stroke={GRID_STROKE} />
               <XAxis dataKey="date" tick={axisTickProps} />
               <YAxis tick={axisTickProps} tickFormatter={(value) => formatTokenCount(Number(value))} />
-              <Tooltip content={TokenUsageTooltip} />
+              <Tooltip content={(props) => {
+                const point = props.payload?.[0]?.payload as TokenUsagePoint | undefined;
+                if (!point) return null;
+                return (
+                  <TokenUsageTooltip
+                    active={props.active}
+                    label={String(props.label ?? point.date)}
+                    rows={[
+                      { name: 'Input', value: point.inputTokens },
+                      { name: 'Output', value: point.outputTokens },
+                      { name: 'Cache Read', value: point.cacheReadTokens },
+                      { name: 'Cache Write', value: point.cacheWriteTokens },
+                      { name: 'Reasoning', value: point.reasoningTokens },
+                    ]}
+                  />
+                );
+              }}
+              />
               <Legend />
               <Bar dataKey="netInput" name="Input (net)" stackId="a" fill={CHART_PALETTE[0]} />
               <Bar dataKey="cacheRead" name="Cache Read" stackId="a" fill={CHART_PALETTE[2]} />

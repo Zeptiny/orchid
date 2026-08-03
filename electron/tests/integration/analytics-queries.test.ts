@@ -1108,6 +1108,7 @@ describe('analytics-queries', () => {
 
       const result = getContext();
       expect(result.totalSnapshots).toBe(2);
+      expect(result.totalSessionCount).toBe(1);
       expect(result.topSessions).toHaveLength(1);
 
       const series = result.topSessions[0];
@@ -1151,6 +1152,7 @@ describe('analytics-queries', () => {
 
       const result = getContext();
       expect(result.totalSnapshots).toBe(6);
+      expect(result.totalSessionCount).toBe(6);
       expect(result.topSessions).toHaveLength(5);
       expect(result.topSessions.map((s) => s.sessionId)).toEqual([
         'sess-5', 'sess-4', 'sess-3', 'sess-2', 'sess-1',
@@ -1158,7 +1160,7 @@ describe('analytics-queries', () => {
       expect(result.topSessions.map((s) => s.maxUsedTokens)).toEqual([6000, 5000, 4000, 3000, 2000]);
     });
 
-    it('computes averages across all rows and downsamples series beyond 500 points by stride', () => {
+    it('computes averages across all rows and downsamples series beyond 500 points by stride, keeping the newest and peak points', () => {
       for (let i = 0; i < 1001; i++) {
         snapshotStore.insert({
           sessionId: 'sess-1', chainId: null, turnId: `turn-${i}`, providerAttemptId: null,
@@ -1169,17 +1171,20 @@ describe('analytics-queries', () => {
 
       const result = getContext();
       expect(result.totalSnapshots).toBe(1001);
+      expect(result.totalSessionCount).toBe(1);
       expect(result.avgBreakdown.systemTokens).toBe(500);
 
       const series = result.topSessions[0];
       expect(series.maxUsedTokens).toBe(1000);
       const stride = Math.ceil(1001 / 500);
-      const expectedLength = Math.ceil(1001 / stride);
-      expect(series.points.length).toBeLessThanOrEqual(500);
-      expect(series.points).toHaveLength(expectedLength);
-      expect(series.points.map((p) => p.usedTokens)).toEqual(
-        Array.from({ length: expectedLength }, (_, i) => i * stride),
-      );
+      const strideLength = Math.ceil(1001 / stride);
+      expect(series.points.length).toBeLessThanOrEqual(502);
+      expect(series.points).toHaveLength(strideLength + 1);
+      expect(series.points.map((p) => p.usedTokens)).toEqual([
+        ...Array.from({ length: strideLength }, (_, i) => i * stride),
+        1000,
+      ]);
+      expect(series.points[series.points.length - 1].usedTokens).toBe(series.maxUsedTokens);
     });
 
     it('applies the time range to totals, top sessions, and series points', () => {
@@ -1205,6 +1210,7 @@ describe('analytics-queries', () => {
         endDate: '2026-07-15T23:59:59.999Z',
       });
       expect(result.totalSnapshots).toBe(2);
+      expect(result.totalSessionCount).toBe(2);
       expect(result.topSessions.map((s) => s.sessionId)).toEqual(['sess-2', 'sess-1']);
       expect(result.topSessions.map((s) => s.maxUsedTokens)).toEqual([900, 500]);
       for (const series of result.topSessions) {

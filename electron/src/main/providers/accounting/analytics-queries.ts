@@ -128,19 +128,14 @@ function sumCosts(rows: Array<{ currency: string | null; cost_amount: string | n
   for (const row of rows) {
     if (row.cost_state !== 'reported' && row.cost_state !== 'calculated') { unknownCount++; continue; }
     if (!row.currency || !row.cost_amount) { unknownCount++; continue; }
-    try {
-      const entry = sums.get(row.currency) ?? { amount: new Decimal(0), count: 0 };
-      entry.amount = entry.amount.add(new Decimal(row.cost_amount));
-      entry.count++;
-      sums.set(row.currency, entry);
-    } catch { unknownCount++; }
+    const amount = parseCostAmount(row.cost_amount);
+    if (!amount) { unknownCount++; continue; }
+    const entry = sums.get(row.currency) ?? { amount: new Decimal(0), count: 0 };
+    entry.amount = entry.amount.add(amount);
+    entry.count++;
+    sums.set(row.currency, entry);
   }
-  return {
-    currencies: [...sums.entries()]
-      .map(([currency, e]) => ({ currency, amount: e.amount.toFixed(), recordCount: e.count }))
-      .sort((a, b) => a.currency.localeCompare(b.currency)),
-    unknownCount,
-  };
+  return { currencies: toCurrencyTotals(sums), unknownCount };
 }
 
 function buildDateFilter(timeRange: AnalyticsTimeRange | undefined, column = 'started_at'): {
@@ -233,21 +228,20 @@ export function getOverview(timeRange?: AnalyticsTimeRange): OverviewResult {
     reasoningTokens: r.reasoning_tokens,
   }));
 
-  const spendOverTimeMap = new Map<string, Decimal>();
+  const spendOverTimeMap = new Map<string, { date: string; currency: string; amount: Decimal }>();
   for (const row of iterateRows<{ date: string; currency: string; cost_amount: string }>(db, `
     SELECT strftime('%Y-%m-%d', started_at) as date, currency, cost_amount
     FROM provider_attempts
     ${whereClause(COST_ROW_CONDITIONS, dateFilter.clause)}
   `, dateFilter.params)) {
     const key = `${row.date}\0${row.currency}`;
-    const amount = spendOverTimeMap.get(key) ?? new Decimal(0);
-    spendOverTimeMap.set(key, amount.add(parseCostAmount(row.cost_amount) ?? new Decimal(0)));
+    const entry = spendOverTimeMap.get(key)
+      ?? { date: row.date, currency: row.currency, amount: new Decimal(0) };
+    entry.amount = entry.amount.add(parseCostAmount(row.cost_amount) ?? new Decimal(0));
+    spendOverTimeMap.set(key, entry);
   }
-  const spendOverTime: CostTimeSeriesPoint[] = [...spendOverTimeMap.entries()]
-    .map(([key, amount]) => {
-      const [date, currency] = key.split('\0');
-      return { date, currency, cost: amount.toFixed() };
-    })
+  const spendOverTime: CostTimeSeriesPoint[] = [...spendOverTimeMap.values()]
+    .map((entry) => ({ date: entry.date, currency: entry.currency, cost: entry.amount.toFixed() }))
     .sort((a, b) => a.date.localeCompare(b.date) || a.currency.localeCompare(b.currency));
 
   const spendByModelMap = new Map<string, { modelId: string; providerId: string; currency: string; amount: Decimal }>();
@@ -712,7 +706,9 @@ export function getModels(timeRange?: AnalyticsTimeRange): ModelsResult {
   const modelSeriesMap = new Map<string, {
     date: string; modelId: string; providerId: string; connectionId: string; currency: string; amount: Decimal;
   }>();
-  const connectionSeriesMap = new Map<string, Decimal>();
+  const connectionSeriesMap = new Map<string, {
+    date: string; connectionId: string; providerId: string; currency: string; amount: Decimal;
+  }>();
   for (const row of iterateRows<{
     date: string; model_id: string; provider_id: string; connection_id: string; currency: string; cost_amount: string;
   }>(db, `
@@ -730,7 +726,12 @@ export function getModels(timeRange?: AnalyticsTimeRange): ModelsResult {
     modelSeriesMap.set(modelKey, modelEntry);
 
     const connectionKey = `${row.date}\0${row.connection_id}\0${row.provider_id}\0${row.currency}`;
-    connectionSeriesMap.set(connectionKey, (connectionSeriesMap.get(connectionKey) ?? new Decimal(0)).add(amount));
+    const connectionEntry = connectionSeriesMap.get(connectionKey) ?? {
+      date: row.date, connectionId: row.connection_id, providerId: row.provider_id,
+      currency: row.currency, amount: new Decimal(0),
+    };
+    connectionEntry.amount = connectionEntry.amount.add(amount);
+    connectionSeriesMap.set(connectionKey, connectionEntry);
   }
 
   const costPerModelOverTime: ModelCostTimeSeriesPoint[] = [...modelSeriesMap.values()]
@@ -750,11 +751,14 @@ export function getModels(timeRange?: AnalyticsTimeRange): ModelsResult {
       || a.connectionId.localeCompare(b.connectionId)
     ));
 
-  const costPerConnectionOverTime: ConnectionCostTimeSeriesPoint[] = [...connectionSeriesMap.entries()]
-    .map(([key, amount]) => {
-      const [date, connectionId, providerId, currency] = key.split('\0');
-      return { date, connectionId, providerId, currency, cost: amount.toFixed() };
-    })
+  const costPerConnectionOverTime: ConnectionCostTimeSeriesPoint[] = [...connectionSeriesMap.values()]
+    .map((entry) => ({
+      date: entry.date,
+      connectionId: entry.connectionId,
+      providerId: entry.providerId,
+      currency: entry.currency,
+      cost: entry.amount.toFixed(),
+    }))
     .sort((a, b) => (
       a.date.localeCompare(b.date)
       || a.currency.localeCompare(b.currency)
@@ -963,30 +967,60 @@ export function getContext(sessionId?: string, timeRange?: AnalyticsTimeRange): 
   let nameMap = new Map<string, string>();
   try {
     nameMap = getSessionNames(topSessionRows.map((r) => r.session_id));
-  } catch { /* session DB unavailable */ }
+  } catch (error) {
+    console.warn('[analytics] Session name lookup failed', { error });
+  }
 
   const seriesWhere = whereClause(['session_id = ?'], dateFilter.clause);
-  const topSessions: ContextSessionSeries[] = topSessionRows.map((top) => {
-    const rows = db.prepare(`
-      SELECT captured_at, used_tokens
+  const seriesCountStmt = db.prepare(`
+    SELECT COUNT(*) as count FROM context_snapshots ${seriesWhere}
+  `);
+  const fullSeriesStmt = db.prepare(`
+    SELECT captured_at, used_tokens
+    FROM context_snapshots ${seriesWhere}
+    ORDER BY captured_at ASC
+  `);
+  // Oversized series are stride-sampled in SQL so only the kept rows cross
+  // into the main process: every stride-th row plus the newest snapshot and
+  // the peak used_tokens snapshot (first peak wins on ties).
+  const sampledSeriesStmt = db.prepare(`
+    WITH ordered AS (
+      SELECT captured_at, used_tokens,
+        row_number() OVER (ORDER BY captured_at ASC) AS rn
       FROM context_snapshots ${seriesWhere}
-      ORDER BY captured_at ASC
-    `).all(top.session_id, ...dateFilter.params) as Array<{ captured_at: string; used_tokens: number }>;
-    let points = rows.map((r) => ({ capturedAt: r.captured_at, usedTokens: r.used_tokens }));
-    if (points.length > CONTEXT_MAX_POINTS_PER_SESSION) {
-      const stride = Math.ceil(points.length / CONTEXT_MAX_POINTS_PER_SESSION);
-      points = points.filter((_, index) => index % stride === 0);
-    }
+    )
+    SELECT captured_at, used_tokens
+    FROM ordered
+    WHERE (rn - 1) % ? = 0
+      OR rn = ?
+      OR rn = (SELECT rn FROM ordered ORDER BY used_tokens DESC, rn ASC LIMIT 1)
+    ORDER BY rn ASC
+  `);
+  const topSessions: ContextSessionSeries[] = topSessionRows.map((top) => {
+    const { count } = seriesCountStmt.get(top.session_id, ...dateFilter.params) as { count: number };
+    const rows = count <= CONTEXT_MAX_POINTS_PER_SESSION
+      ? fullSeriesStmt.all(top.session_id, ...dateFilter.params) as Array<{ captured_at: string; used_tokens: number }>
+      : sampledSeriesStmt.all(
+          top.session_id,
+          ...dateFilter.params,
+          Math.ceil(count / CONTEXT_MAX_POINTS_PER_SESSION),
+          count,
+        ) as Array<{ captured_at: string; used_tokens: number }>;
     return {
       sessionId: top.session_id,
       sessionName: nameMap.get(top.session_id) ?? null,
       maxUsedTokens: top.max_used_tokens,
-      points,
+      points: rows.map((r) => ({ capturedAt: r.captured_at, usedTokens: r.used_tokens })),
     };
   });
 
+  const { count: totalSessionCount } = db.prepare(`
+    SELECT COUNT(DISTINCT session_id) as count FROM context_snapshots ${where}
+  `).get(...params) as { count: number };
+
   return {
     totalSnapshots: aggregate.total,
+    totalSessionCount,
     topSessions,
     avgBreakdown: {
       usedTokens: Math.round(aggregate.used_tokens),

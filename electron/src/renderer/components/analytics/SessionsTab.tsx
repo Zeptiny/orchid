@@ -16,6 +16,7 @@ import {
   axisTickProps,
   tokenTooltipProps,
   costTooltipProps,
+  TokenUsageTooltip,
 } from './shared';
 import { Button } from '../ui/Button';
 import {
@@ -33,32 +34,6 @@ interface SessionTokenUsageRow {
   output: number;
   cacheWrite: number;
   reasoning: number;
-}
-
-function SessionTokenUsageTooltip({ active, payload }: {
-  active?: boolean;
-  payload?: ReadonlyArray<{ payload?: SessionTokenUsageRow }>;
-}) {
-  if (!active || !payload || payload.length === 0) return null;
-  const row = payload[0].payload;
-  if (!row) return null;
-  return (
-    <div style={{
-      background: 'var(--chart-tooltip-bg)',
-      border: '1px solid var(--chart-tooltip-border)',
-      borderRadius: 'var(--radius-md)',
-      fontSize: 12,
-      color: 'var(--chart-tooltip-text)',
-      padding: '8px 10px',
-    }}>
-      <div style={{ color: 'var(--chart-tooltip-label)', fontWeight: 600, marginBottom: 4 }}>Token Usage</div>
-      <div>Input (net): {formatTokenCount(row.netInput)}</div>
-      <div>Cache Read: {formatTokenCount(row.cacheRead)}</div>
-      <div>Output: {formatTokenCount(row.output)}</div>
-      <div>Cache Write: {formatTokenCount(row.cacheWrite)}</div>
-      <div>Reasoning: {formatTokenCount(row.reasoning)}</div>
-    </div>
-  );
 }
 
 function SessionList({ timeRange, onRowClick }: { timeRange: AnalyticsTimeRange; onRowClick: (row: SessionSummary) => void }) {
@@ -203,7 +178,23 @@ function SessionDetail({ sessionId, timeRange, onBack }: { sessionId: string; ti
               <CartesianGrid strokeDasharray="3 3" stroke={GRID_STROKE} />
               <XAxis dataKey="label" tick={axisTickProps} />
               <YAxis tick={axisTickProps} tickFormatter={(value) => formatTokenCount(Number(value))} />
-              <Tooltip content={<SessionTokenUsageTooltip />} />
+              <Tooltip content={(props) => {
+                const row = props.payload?.[0]?.payload as SessionTokenUsageRow | undefined;
+                if (!row) return null;
+                return (
+                  <TokenUsageTooltip
+                    active={props.active}
+                    label={row.label}
+                    rows={[
+                      { name: 'Input (net)', value: row.netInput },
+                      { name: 'Cache Read', value: row.cacheRead },
+                      { name: 'Output', value: row.output },
+                      { name: 'Cache Write', value: row.cacheWrite },
+                      { name: 'Reasoning', value: row.reasoning },
+                    ]}
+                  />
+                );
+              }} />
               <Legend />
               <Bar dataKey="netInput" name="Input (net)" stackId="a" fill={CHART_PALETTE[0]} />
               <Bar dataKey="cacheRead" name="Cache Read" stackId="a" fill={CHART_PALETTE[2]} />

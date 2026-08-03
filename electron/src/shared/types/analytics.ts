@@ -296,6 +296,7 @@ export interface SubagentsResult {
 
 export interface ContextResult {
   readonly totalSnapshots: number;
+  readonly totalSessionCount: number;
   readonly topSessions: ReadonlyArray<ContextSessionSeries>;
   readonly avgBreakdown: {
     readonly usedTokens: number;
