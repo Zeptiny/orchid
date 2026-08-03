@@ -56,6 +56,8 @@ export interface FrozenProviderRequestSnapshot {
   readonly connectionId: string;
   readonly connectionName: string;
   readonly modelId: string;
+  /** Absent on ledger rows written before display-name capture existed. */
+  readonly modelDisplayName?: string | null;
   readonly protocol: string;
   readonly modelSource: 'catalog' | 'connection';
   readonly catalogVersion: number | null;
@@ -140,6 +142,8 @@ export interface ContextSnapshotRecord {
   readonly chainId: string | null;
   readonly turnId: string | null;
   readonly providerAttemptId: string | null;
+  /** Subagent scope id; null for the main agent. */
+  readonly agentScope: string | null;
   readonly capturedAt: string;
   readonly inputTokens: number;
   readonly outputTokens: number;

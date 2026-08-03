@@ -13,7 +13,7 @@ import { HOME_CONFIG_DIR } from '../../config/loader';
 import { redactLogString } from '../../logging';
 import { providerProtocolSchema } from '../../../shared/types/provider';
 import { openSqliteDb, type SqliteDatabase } from '../../utils/sqlite';
-import { ACCOUNTING_SCHEMA_SQL, ACCOUNTING_SCHEMA_VERSION } from './schema';
+import { ACCOUNTING_SCHEMA_SQL, ACCOUNTING_SCHEMA_VERSION, applyAccountingSchemaMigrations } from './schema';
 import type { AttemptCostResolution } from './cost';
 
 export const PROVIDER_ACCOUNTING_DB_PATH = path.join(HOME_CONFIG_DIR, 'accounting.db');
@@ -76,6 +76,7 @@ const frozenProviderRequestSnapshotSchema = z.object({
   connectionId: z.string().uuid(),
   connectionName: z.string().min(1),
   modelId: z.string().min(1),
+  modelDisplayName: z.string().min(1).nullable().optional(),
   protocol: providerProtocolSchema,
   modelSource: z.enum(['catalog', 'connection']),
   catalogVersion: z.number().int().nonnegative().nullable(),
@@ -365,21 +366,11 @@ export class ProviderAccountingStore {
       // Best effort on non-POSIX filesystems.
     }
     db.pragma('foreign_keys = ON');
-    this.migrateSchema(db);
+    applyAccountingSchemaMigrations(db);
     db.prepare('INSERT OR REPLACE INTO schema_meta (key, value) VALUES (?, ?)')
       .run('schema_version', String(ACCOUNTING_SCHEMA_VERSION));
     this.db = db;
     return db;
-  }
-
-  private migrateSchema(db: SqliteDatabase): void {
-    const columns = db.prepare('PRAGMA table_info(provider_attempts)').all() as Array<{ name: string }>;
-    const existing = new Set(columns.map((c) => c.name));
-    for (const col of ['agent_scope', 'agent_name', 'agent_tier', 'agent_type']) {
-      if (!existing.has(col)) {
-        db.prepare(`ALTER TABLE provider_attempts ADD COLUMN ${col} TEXT`).run();
-      }
-    }
   }
 }
 

@@ -1,5 +1,7 @@
+import type { SqliteDatabase } from '../../utils/sqlite';
+
 /** SQLite schema version for append-only provider attempt records. */
-export const ACCOUNTING_SCHEMA_VERSION = 2;
+export const ACCOUNTING_SCHEMA_VERSION = 3;
 
 export const ACCOUNTING_SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS schema_meta (
@@ -77,6 +79,7 @@ CREATE TABLE IF NOT EXISTS context_snapshots (
   chain_id TEXT,
   turn_id TEXT,
   provider_attempt_id TEXT REFERENCES provider_attempts(attempt_id) ON DELETE SET NULL,
+  agent_scope TEXT,
   captured_at TEXT NOT NULL,
   input_tokens INTEGER NOT NULL DEFAULT 0,
   output_tokens INTEGER NOT NULL DEFAULT 0,
@@ -114,3 +117,38 @@ CREATE INDEX IF NOT EXISTS idx_subagent_attribution_chain ON subagent_attributio
 CREATE INDEX IF NOT EXISTS idx_subagent_attribution_agent_name ON subagent_attribution(agent_name);
 CREATE INDEX IF NOT EXISTS idx_subagent_attribution_status ON subagent_attribution(status);
 `;
+
+/**
+ * Idempotent column migrations for databases created before the current
+ * schema version. Every store that opens accounting.db runs this so the
+ * columns exist regardless of which store connects first.
+ */
+export function applyAccountingSchemaMigrations(db: SqliteDatabase): void {
+  const tables = new Set(
+    (db.prepare('SELECT name FROM sqlite_master WHERE type = ?').all('table') as Array<{ name: string }>)
+      .map((row) => row.name),
+  );
+
+  if (tables.has('provider_attempts')) {
+    const attemptColumns = db.prepare('PRAGMA table_info(provider_attempts)').all() as Array<{ name: string }>;
+    const existingAttempts = new Set(attemptColumns.map((c) => c.name));
+    for (const col of ['agent_scope', 'agent_name', 'agent_tier', 'agent_type']) {
+      if (!existingAttempts.has(col)) {
+        db.prepare(`ALTER TABLE provider_attempts ADD COLUMN ${col} TEXT`).run();
+      }
+    }
+  }
+
+  if (tables.has('context_snapshots')) {
+    const snapshotColumns = db.prepare('PRAGMA table_info(context_snapshots)').all() as Array<{ name: string }>;
+    const existingSnapshots = new Set(snapshotColumns.map((c) => c.name));
+    if (!existingSnapshots.has('agent_scope')) {
+      db.prepare('ALTER TABLE context_snapshots ADD COLUMN agent_scope TEXT').run();
+    }
+    // Created here (not in the schema SQL) so it never references the column
+    // before the ALTER above exists on legacy databases.
+    db.prepare(
+      'CREATE INDEX IF NOT EXISTS idx_context_snapshots_agent_scope ON context_snapshots(agent_scope, captured_at)',
+    ).run();
+  }
+}

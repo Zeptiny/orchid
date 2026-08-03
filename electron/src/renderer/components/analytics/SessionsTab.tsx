@@ -111,7 +111,9 @@ function SessionDetail({ sessionId, timeRange, onBack }: { sessionId: string; ti
     providerId: string; modelId: string; connectionId: string; currency: string; cost: number;
   }>();
   const tokensByModelMap = new Map<string, {
-    providerId: string; modelId: string; connectionId: string; input: number; output: number; reasoning: number;
+    providerId: string; modelId: string; modelDisplayName: string | null;
+    connectionId: string; connectionName: string | null;
+    input: number; output: number; reasoning: number;
   }>();
   for (const a of data.attempts) {
     const identityKey = `${a.providerId}\0${a.modelId}\0${a.connectionId}`;
@@ -130,7 +132,9 @@ function SessionDetail({ sessionId, timeRange, onBack }: { sessionId: string; ti
     const entry = tokensByModelMap.get(identityKey) ?? {
       providerId: a.providerId,
       modelId: a.modelId,
+      modelDisplayName: a.modelDisplayName,
       connectionId: a.connectionId,
+      connectionName: a.connectionName,
       input: 0,
       output: 0,
       reasoning: 0,
@@ -145,7 +149,7 @@ function SessionDetail({ sessionId, timeRange, onBack }: { sessionId: string; ti
     label: `${entry.providerId}/${entry.modelId}/${truncateId(entry.connectionId)} (${entry.currency})`,
   }));
   const tokensByModel = Array.from(tokensByModelMap.values(), (t) => ({
-    label: `${t.providerId}/${t.modelId}/${truncateId(t.connectionId)}`,
+    label: `${t.connectionName ?? t.connectionId.slice(0, 8)} - ${t.modelDisplayName ?? t.modelId}`,
     inputTokens: t.input,
     outputTokens: t.output,
     reasoningTokens: t.reasoning,
@@ -255,8 +259,7 @@ function SessionDetail({ sessionId, timeRange, onBack }: { sessionId: string; ti
             { key: 'attemptId', label: 'Attempt ID', render: (r) => <span title={r.attemptId}>{truncateId(r.attemptId)}</span> },
             { key: 'startedAt', label: 'Started', render: (r) => formatDate(r.startedAt) },
             { key: 'modelId', label: 'Model', render: (r) => r.modelId },
-            { key: 'providerId', label: 'Provider', render: (r) => r.providerId },
-            { key: 'connectionId', label: 'Connection', render: (r) => <span title={r.connectionId}>{truncateId(r.connectionId)}</span> },
+            { key: 'connectionId', label: 'Connection', render: (r) => <span title={r.connectionId}>{r.connectionName ?? truncateId(r.connectionId)}</span> },
             { key: 'outcome', label: 'Outcome', render: (r) => r.outcome },
             { key: 'costState', label: 'Cost State', render: (r) => r.costState },
             { key: 'costAmount', label: 'Cost', render: (r) => formatCostAmount(r.costAmount, r.currency) },

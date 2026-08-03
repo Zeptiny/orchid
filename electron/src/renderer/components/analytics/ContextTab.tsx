@@ -25,6 +25,12 @@ function sessionLabel(sessionName: string | null, sessionId: string): string {
   return sessionName ?? truncateId(sessionId);
 }
 
+function subagentLabel(series: { agentName: string | null; subagentId: string }): string {
+  return `${series.agentName ?? 'subagent'} · ${truncateId(series.subagentId)}`;
+}
+
+const SUBAGENT_SERIES_KEY_PREFIX = 'subagent:';
+
 export function ContextTab({ timeRange }: { timeRange: AnalyticsTimeRange }) {
   const { data, loading, error, refresh } = useAnalytics(
     () => window.orchid.analytics.context({ timeRange }),
@@ -40,6 +46,14 @@ export function ContextTab({ timeRange }: { timeRange: AnalyticsTimeRange }) {
     for (const point of series.points) {
       const row = timestampMap.get(point.capturedAt) ?? { capturedAt: point.capturedAt };
       row[series.sessionId] = point.usedTokens;
+      timestampMap.set(point.capturedAt, row);
+    }
+  }
+  for (const series of data.topSubagents) {
+    const key = `${SUBAGENT_SERIES_KEY_PREFIX}${series.subagentId}`;
+    for (const point of series.points) {
+      const row = timestampMap.get(point.capturedAt) ?? { capturedAt: point.capturedAt };
+      row[key] = point.usedTokens;
       timestampMap.set(point.capturedAt, row);
     }
   }
@@ -72,14 +86,20 @@ export function ContextTab({ timeRange }: { timeRange: AnalyticsTimeRange }) {
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
         <ChartCard
-          title="Context Growth per Session"
+          title="Context Growth"
           className="lg:col-span-2"
           empty={growthData.length === 0}
           emptyMessage="No context snapshots recorded"
         >
-          {data.totalSessionCount > data.topSessions.length && (
-            <div className="mb-2 text-xs text-base-content/50">
-              (showing top {data.topSessions.length} of {data.totalSessionCount} sessions)
+          {(data.totalSessionCount > data.topSessions.length
+            || data.totalSubagentCount > data.topSubagents.length) && (
+            <div className="mb-2 space-y-0.5 text-xs text-base-content/50">
+              {data.totalSessionCount > data.topSessions.length && (
+                <div>(showing top {data.topSessions.length} of {data.totalSessionCount} sessions)</div>
+              )}
+              {data.totalSubagentCount > data.topSubagents.length && (
+                <div>(showing top {data.topSubagents.length} of {data.totalSubagentCount} subagents)</div>
+              )}
             </div>
           )}
           <ResponsiveContainer width="100%" height={300}>
@@ -97,6 +117,18 @@ export function ContextTab({ timeRange }: { timeRange: AnalyticsTimeRange }) {
                   name={sessionLabel(series.sessionName, series.sessionId)}
                   stroke={CHART_PALETTE[i % CHART_PALETTE.length]}
                   strokeWidth={2}
+                  connectNulls
+                />
+              ))}
+              {data.topSubagents.map((series, i) => (
+                <Line
+                  key={`${SUBAGENT_SERIES_KEY_PREFIX}${series.subagentId}`}
+                  type="monotone"
+                  dataKey={`${SUBAGENT_SERIES_KEY_PREFIX}${series.subagentId}`}
+                  name={subagentLabel(series)}
+                  stroke={CHART_PALETTE[(data.topSessions.length + i) % CHART_PALETTE.length]}
+                  strokeWidth={1.5}
+                  strokeDasharray="5 3"
                   connectNulls
                 />
               ))}

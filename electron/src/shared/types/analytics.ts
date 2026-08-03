@@ -87,7 +87,9 @@ export interface AttemptDetail {
   readonly turnId: string | null;
   readonly providerId: string;
   readonly modelId: string;
+  readonly modelDisplayName: string | null;
   readonly connectionId: string;
+  readonly connectionName: string | null;
   readonly outcome: string;
   readonly costState: string;
   readonly costAmount: string | null;
@@ -176,6 +178,7 @@ export interface SessionDetailResult {
 
 export interface ModelBreakdown {
   readonly modelId: string;
+  readonly modelDisplayName: string | null;
   readonly providerId: string;
   readonly connectionId: string;
   readonly connectionName: string | null;
@@ -261,6 +264,14 @@ export interface ContextSessionSeries {
   readonly points: ReadonlyArray<{ readonly capturedAt: string; readonly usedTokens: number }>;
 }
 
+export interface ContextSubagentSeries {
+  readonly subagentId: string;
+  readonly agentName: string | null;
+  readonly agentTier: string | null;
+  readonly maxUsedTokens: number;
+  readonly points: ReadonlyArray<{ readonly capturedAt: string; readonly usedTokens: number }>;
+}
+
 export interface OverviewResult {
   readonly stats: OverviewStats;
   readonly spendOverTime: readonly CostTimeSeriesPoint[];
@@ -297,7 +308,11 @@ export interface SubagentsResult {
 export interface ContextResult {
   readonly totalSnapshots: number;
   readonly totalSessionCount: number;
+  /** Main-agent series only (agent_scope IS NULL). */
   readonly topSessions: ReadonlyArray<ContextSessionSeries>;
+  /** One series per subagent scope (agent_scope IS NOT NULL). */
+  readonly topSubagents: ReadonlyArray<ContextSubagentSeries>;
+  readonly totalSubagentCount: number;
   readonly avgBreakdown: {
     readonly usedTokens: number;
     readonly systemTokens: number;

@@ -6,7 +6,7 @@ import {
 } from '../../../shared/types/accounting';
 import { HOME_CONFIG_DIR } from '../../config/loader';
 import { openSqliteDb, type SqliteDatabase } from '../../utils/sqlite';
-import { ACCOUNTING_SCHEMA_SQL } from './schema';
+import { ACCOUNTING_SCHEMA_SQL, applyAccountingSchemaMigrations } from './schema';
 
 export const CONTEXT_SNAPSHOT_DB_PATH = path.join(HOME_CONFIG_DIR, 'accounting.db');
 
@@ -21,6 +21,8 @@ export interface InsertContextSnapshotInput {
   readonly chainId: string | null;
   readonly turnId: string | null;
   readonly providerAttemptId: string | null;
+  /** Subagent scope id; null/omitted for the main agent. */
+  readonly agentScope?: string | null;
   readonly inputTokens: number;
   readonly outputTokens: number;
   readonly usedTokens: number;
@@ -37,6 +39,7 @@ type ContextSnapshotRow = {
   chain_id: string | null;
   turn_id: string | null;
   provider_attempt_id: string | null;
+  agent_scope: string | null;
   captured_at: string;
   input_tokens: number;
   output_tokens: number;
@@ -55,6 +58,7 @@ function rowToRecord(row: ContextSnapshotRow): ContextSnapshotRecord {
     chainId: row.chain_id,
     turnId: row.turn_id,
     providerAttemptId: row.provider_attempt_id,
+    agentScope: row.agent_scope,
     capturedAt: row.captured_at,
     inputTokens: row.input_tokens,
     outputTokens: row.output_tokens,
@@ -92,15 +96,16 @@ export class ContextSnapshotStore {
     db.prepare(`
       INSERT INTO context_snapshots (
         snapshot_id, session_id, chain_id, turn_id, provider_attempt_id,
-        captured_at, input_tokens, output_tokens, used_tokens,
+        agent_scope, captured_at, input_tokens, output_tokens, used_tokens,
         system_tokens, tools_tokens, tool_use_tokens, user_tokens, assistant_tokens
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       snapshotId,
       input.sessionId,
       input.chainId,
       input.turnId,
       input.providerAttemptId,
+      input.agentScope ?? null,
       this.now().toISOString(),
       input.inputTokens,
       input.outputTokens,
@@ -141,6 +146,7 @@ export class ContextSnapshotStore {
     const db = openSqliteDb(this.dbPath, { schema: ACCOUNTING_SCHEMA_SQL, recovery: 'preserve' });
     try { fs.chmodSync(this.dbPath, 0o600); } catch { /* best effort */ }
     db.pragma('foreign_keys = ON');
+    applyAccountingSchemaMigrations(db);
     this.db = db;
     return db;
   }

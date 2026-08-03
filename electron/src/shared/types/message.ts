@@ -61,6 +61,8 @@ export interface ContextSnapshot {
   readonly tool_use_tokens: number;
   readonly user_tokens: number;
   readonly assistant_tokens: number;
+  /** Provider-reported reasoning tokens included in `assistant_tokens`. */
+  readonly reasoning_tokens?: number;
 }
 
 export const contextSnapshotSchema = z.object({
@@ -72,6 +74,7 @@ export const contextSnapshotSchema = z.object({
   tool_use_tokens: z.number().nonnegative(),
   user_tokens: z.number().nonnegative(),
   assistant_tokens: z.number().nonnegative(),
+  reasoning_tokens: z.number().nonnegative().optional(),
 });
 
 // ── Message ─────────────────────────────────────────────────────────────────

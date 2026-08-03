@@ -1,6 +1,7 @@
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import Database from 'better-sqlite3';
 import { afterEach, describe, expect, it } from 'vitest';
 import { ContextSnapshotStore } from '../../src/main/providers/accounting/context-snapshot-store';
 
@@ -120,5 +121,45 @@ describe('ContextSnapshotStore', () => {
   it('returns an empty array when no snapshots exist for the session', () => {
     const store = makeStore();
     expect(store.listBySession('nonexistent-session')).toEqual([]);
+  });
+
+  it('persists agentScope for subagent snapshots and defaults to null for the main agent', () => {
+    const store = makeStore();
+    store.insert({ ...BASE_SNAPSHOT, snapshotId: 'snap-main' });
+    store.insert({ ...BASE_SNAPSHOT, snapshotId: 'snap-sub', agentScope: 'sub-123' });
+
+    const rows = store.listAll();
+    expect(rows.find((r) => r.snapshotId === 'snap-main')?.agentScope).toBeNull();
+    expect(rows.find((r) => r.snapshotId === 'snap-sub')?.agentScope).toBe('sub-123');
+  });
+
+  it('migrates a legacy context_snapshots table missing the agent_scope column', () => {
+    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'orchid-context-snapshot-'));
+    const legacyDbPath = path.join(tempDir, 'accounting.db');
+    const legacyDb = new Database(legacyDbPath);
+    legacyDb.exec(`
+      CREATE TABLE schema_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+      CREATE TABLE context_snapshots (
+        snapshot_id TEXT PRIMARY KEY,
+        session_id TEXT NOT NULL,
+        chain_id TEXT,
+        turn_id TEXT,
+        provider_attempt_id TEXT,
+        captured_at TEXT NOT NULL,
+        input_tokens INTEGER NOT NULL DEFAULT 0,
+        output_tokens INTEGER NOT NULL DEFAULT 0,
+        used_tokens INTEGER NOT NULL DEFAULT 0,
+        system_tokens INTEGER NOT NULL DEFAULT 0,
+        tools_tokens INTEGER NOT NULL DEFAULT 0,
+        tool_use_tokens INTEGER NOT NULL DEFAULT 0,
+        user_tokens INTEGER NOT NULL DEFAULT 0,
+        assistant_tokens INTEGER NOT NULL DEFAULT 0
+      );
+    `);
+    legacyDb.close();
+
+    const store = new ContextSnapshotStore({ dbPath: legacyDbPath });
+    store.insert({ ...BASE_SNAPSHOT, snapshotId: 'snap-legacy', agentScope: 'sub-legacy' });
+    expect(store.listAll()[0].agentScope).toBe('sub-legacy');
   });
 });

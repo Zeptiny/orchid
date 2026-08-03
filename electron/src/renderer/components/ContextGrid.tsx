@@ -128,6 +128,21 @@ function splitAssistantTokens(
   return { response: Math.max(0, tokens - reasoning), reasoning };
 }
 
+/**
+ * Provider-reported reasoning tokens are authoritative — visible reasoning
+ * text may be a summary, so character ratios can misattribute the split.
+ * Returns null when the provider reported none, leaving the char-based
+ * estimate to the caller.
+ */
+function splitByProviderReasoning(
+  tokens: number,
+  providerReasoning: number | undefined,
+): { response: number; reasoning: number } | null {
+  if (!providerReasoning || providerReasoning <= 0) return null;
+  const reasoning = Math.min(providerReasoning, Math.max(0, tokens));
+  return { response: Math.max(0, tokens) - reasoning, reasoning };
+}
+
 function computeBreakdown(
   messages: readonly Message[],
   usage: Usage | null,
@@ -142,10 +157,10 @@ function computeBreakdown(
     if (streamingThinkingChars && streamingThinkingChars > 0) {
       chars.reasoning += streamingThinkingChars;
     }
-    const assistant = splitAssistantTokens(
+    const assistant = splitByProviderReasoning(
       context.assistant_tokens,
-      chars,
-    );
+      context.reasoning_tokens,
+    ) ?? splitAssistantTokens(context.assistant_tokens, chars);
     return {
       system: context.system_tokens,
       tools: context.tools_tokens,
@@ -184,7 +199,10 @@ function computeBreakdown(
   const totalChars = chars.tools + chars.user + chars.response + chars.reasoning;
   const toolUseTokens = totalChars > 0 ? Math.round((chars.tools / totalChars) * promptTokens) : 0;
   const userTokens = totalChars > 0 ? Math.round((chars.user / totalChars) * promptTokens) : 0;
-  const assistantTokens = splitAssistantTokens(completionTokens, chars);
+  const assistantTokens = splitByProviderReasoning(
+    completionTokens,
+    usage.reasoning_tokens,
+  ) ?? splitAssistantTokens(completionTokens, chars);
   const systemTokens = Math.max(0, promptTokens - toolUseTokens - userTokens);
   const freeTokens = mc > 0
     ? Math.max(0, mc - promptTokens - completionTokens)

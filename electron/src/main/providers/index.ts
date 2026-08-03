@@ -141,6 +141,7 @@ export class ProviderRuntime {
       connectionId: resolution.connection.id,
       connectionName: resolution.connection.name,
       modelId: resolution.model.id,
+      modelDisplayName: resolution.model.displayName,
       protocol: resolution.model.protocol,
       modelSource: resolution.model.source,
       catalogVersion: catalogSnapshot?.catalog.catalogVersion ?? null,

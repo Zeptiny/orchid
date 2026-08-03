@@ -79,6 +79,101 @@ describe('provider attempt accounting middleware', () => {
     });
   });
 
+  it('estimates reasoning tokens from output characters when the provider does not report them', async () => {
+    const ledger = store();
+    const middleware = createAttemptAccountingMiddleware({
+      store: ledger, sessionId: 'session-1', chainId: 'chain-1', turnId: 'turn-1', snapshot: snapshot(),
+    });
+    const wrapStream = middleware.wrapStream! as unknown as (input: Record<string, unknown>) => Promise<{ stream: ReadableStream<unknown> }>;
+    const result = await wrapStream({
+      doStream: async () => ({
+        response: { headers: {} },
+        stream: new ReadableStream({
+          start(controller) {
+            controller.enqueue({ type: 'reasoning-delta', id: '0', delta: 'r'.repeat(300) });
+            controller.enqueue({ type: 'text-delta', id: '0', delta: 't'.repeat(100) });
+            controller.enqueue({
+              type: 'finish', finishReason: 'stop',
+              usage: {
+                inputTokens: { total: 1000, noCache: 1000, cacheRead: undefined, cacheWrite: undefined },
+                outputTokens: { total: 100, text: undefined, reasoning: undefined },
+              },
+            });
+            controller.close();
+          },
+        }),
+      }),
+      doGenerate: async () => { throw new Error('not used'); },
+      params: {}, model: {},
+    });
+    await consume(result.stream);
+
+    const attempt = ledger.listAttempts('session-1')[0];
+    expect(attempt.usage?.reasoningTokens).toBe(75);
+    // Cost stays calculated from provider-reported usage only.
+    expect(attempt).toMatchObject({ costState: 'calculated', costAmount: '0.0075' });
+  });
+
+  it('keeps provider-reported reasoning tokens instead of estimating', async () => {
+    const ledger = store();
+    const middleware = createAttemptAccountingMiddleware({
+      store: ledger, sessionId: 'session-1', chainId: 'chain-1', turnId: 'turn-1', snapshot: snapshot(),
+    });
+    const wrapStream = middleware.wrapStream! as unknown as (input: Record<string, unknown>) => Promise<{ stream: ReadableStream<unknown> }>;
+    const result = await wrapStream({
+      doStream: async () => ({
+        response: { headers: {} },
+        stream: new ReadableStream({
+          start(controller) {
+            controller.enqueue({ type: 'reasoning-delta', id: '0', delta: 'r'.repeat(300) });
+            controller.enqueue({ type: 'text-delta', id: '0', delta: 't'.repeat(100) });
+            controller.enqueue({
+              type: 'finish', finishReason: 'stop',
+              usage: {
+                inputTokens: { total: 1000, noCache: 1000, cacheRead: undefined, cacheWrite: undefined },
+                outputTokens: { total: 100, text: 60, reasoning: 40 },
+              },
+            });
+            controller.close();
+          },
+        }),
+      }),
+      doGenerate: async () => { throw new Error('not used'); },
+      params: {}, model: {},
+    });
+    await consume(result.stream);
+
+    expect(ledger.listAttempts('session-1')[0].usage?.reasoningTokens).toBe(40);
+  });
+
+  it('estimates reasoning tokens for non-streaming generation from content parts', async () => {
+    const ledger = store();
+    const middleware = createAttemptAccountingMiddleware({
+      store: ledger, sessionId: 'session-1', chainId: 'chain-1', turnId: 'turn-1', snapshot: snapshot(),
+    });
+    const wrapGenerate = middleware.wrapGenerate! as unknown as (input: Record<string, unknown>) => Promise<Record<string, unknown>>;
+    await wrapGenerate({
+      doGenerate: async () => ({
+        content: [
+          { type: 'reasoning', text: 'r'.repeat(300) },
+          { type: 'text', text: 't'.repeat(100) },
+        ],
+        response: { headers: {} },
+        usage: {
+          inputTokens: { total: 1000, noCache: 1000, cacheRead: undefined, cacheWrite: undefined },
+          outputTokens: { total: 100, text: undefined, reasoning: undefined },
+          raw: undefined,
+        },
+      }),
+      doStream: async () => { throw new Error('not used'); },
+      params: {}, model: {},
+    });
+
+    const attempt = ledger.listAttempts('session-1')[0];
+    expect(attempt.usage?.reasoningTokens).toBe(75);
+    expect(attempt).toMatchObject({ costState: 'calculated', costAmount: '0.0075' });
+  });
+
   it('records a distinct failed attempt for each retryable transport invocation', async () => {
     const ledger = store();
     const middleware = createAttemptAccountingMiddleware({

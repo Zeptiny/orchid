@@ -59,6 +59,7 @@ const modelColumns: ReadonlyArray<Column<ModelBreakdown>> = [
   { key: 'output', label: 'Output Tokens', render: (m) => formatTokenCount(m.outputTokens) },
   { key: 'cacheRead', label: 'Cache Read', render: (m) => formatTokenCount(m.cacheReadTokens) },
   { key: 'cacheWrite', label: 'Cache Write', render: (m) => formatTokenCount(m.cacheWriteTokens) },
+  { key: 'cacheHit', label: 'Cache Hit', render: (m) => m.inputTokens > 0 ? formatPercent(m.cacheReadTokens / m.inputTokens) : '—' },
   { key: 'reasoning', label: 'Reasoning', render: (m) => formatTokenCount(m.reasoningTokens) },
   { key: 'attempts', label: 'Attempts', render: (m) => m.attempts },
   { key: 'succeeded', label: 'Succeeded', render: (m) => m.succeeded },
@@ -111,7 +112,7 @@ export function ModelsProvidersTab({ timeRange }: { timeRange: AnalyticsTimeRang
     (p) => `${p.providerId} · ${p.connectionId.slice(0, 8)} (${p.currency})`,
   );
   const tokenPerModel = data.models.map((m) => ({
-    label: `${m.providerId}/${m.modelId} · ${m.connectionId.slice(0, 8)}`,
+    label: `${m.connectionName ?? m.connectionId.slice(0, 8)} - ${m.modelDisplayName ?? m.modelId}`,
     modelId: m.modelId,
     inputTokens: m.inputTokens,
     outputTokens: m.outputTokens,

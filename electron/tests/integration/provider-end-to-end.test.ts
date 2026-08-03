@@ -372,6 +372,7 @@ describe('provider end-to-end public contracts', () => {
       connectionId: work.connectionId,
       connectionName: 'Work Lilac',
       modelId: LILAC_MODEL_ID,
+      modelDisplayName: 'Kimi K2.6',
       protocol: 'openai-compatible',
     });
     expect(fixture.createLanguageModel).toHaveBeenCalledWith(

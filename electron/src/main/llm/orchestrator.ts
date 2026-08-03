@@ -133,6 +133,7 @@ function buildStepUsage(
       messages,
       inputTokens,
       outputTokens,
+      reasoningTokens: usage.outputTokenDetails?.reasoningTokens,
     }),
   };
 }
@@ -272,7 +273,8 @@ export async function* streamChat(params: StreamChatParams): AsyncGenerator<Stre
               sessionId,
               chainId: accounting?.chainId ?? null,
               turnId: accounting?.turnId ?? null,
-             providerAttemptId: accounting?.attemptIdHolder?.value ?? null,
+              providerAttemptId: accounting?.attemptIdHolder?.value ?? null,
+              agentScope: agentScopeId ?? null,
               inputTokens: stepUsage.context.input_tokens,
               outputTokens: stepUsage.context.output_tokens,
               usedTokens: stepUsage.context.used_tokens,

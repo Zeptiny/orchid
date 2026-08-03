@@ -64,6 +64,7 @@ function anthropicSnapshot(modelId = 'claude-test'): FrozenProviderRequestSnapsh
     connectionId: ANTHROPIC_CONNECTION_ID,
     connectionName: 'Work',
     modelId,
+    modelDisplayName: 'Claude Test',
     protocol: 'anthropic-messages',
     modelSource: 'catalog',
     catalogVersion: 1,
@@ -300,6 +301,8 @@ describe('analytics-queries', () => {
       const context = getContext();
       expect(context.totalSnapshots).toBe(0);
       expect(context.topSessions).toHaveLength(0);
+      expect(context.topSubagents).toHaveLength(0);
+      expect(context.totalSubagentCount).toBe(0);
       expect(context.avgBreakdown.systemTokens).toBe(0);
       expect(context.avgBreakdown.toolsTokens).toBe(0);
     });
@@ -601,8 +604,10 @@ describe('analytics-queries', () => {
       expect(detail.attempts).toHaveLength(2);
       const att1 = detail.attempts.find((a) => a.attemptId === 'att-1')!;
       expect(att1.modelId).toBe('claude-test');
+      expect(att1.modelDisplayName).toBe('Claude Test');
       expect(att1.providerId).toBe('anthropic');
       expect(att1.connectionId).toBe(ANTHROPIC_CONNECTION_ID);
+      expect(att1.connectionName).toBe('Work');
       expect(att1.outcome).toBe('succeeded');
       expect(att1.costState).toBe('calculated');
       expect(att1.inputTokens).toBe(1000);
@@ -778,6 +783,7 @@ describe('analytics-queries', () => {
 
       const claude = result.models.find((m) => m.modelId === 'claude-test')!;
       expect(claude.providerId).toBe('anthropic');
+      expect(claude.modelDisplayName).toBe('Claude Test');
       expect(claude.connectionName).toBe('Work');
       expect(claude.attempts).toBe(2);
       expect(claude.succeeded).toBe(1);
@@ -788,6 +794,8 @@ describe('analytics-queries', () => {
 
       const gpt = result.models.find((m) => m.modelId === 'gpt-test')!;
       expect(gpt.providerId).toBe('openai');
+      // Legacy snapshots without a captured display name fall back to null.
+      expect(gpt.modelDisplayName).toBeNull();
       expect(gpt.connectionName).toBe('Personal');
       expect(gpt.attempts).toBe(1);
       expect(gpt.succeeded).toBe(1);
@@ -1110,6 +1118,8 @@ describe('analytics-queries', () => {
       expect(result.totalSnapshots).toBe(2);
       expect(result.totalSessionCount).toBe(1);
       expect(result.topSessions).toHaveLength(1);
+      expect(result.topSubagents).toHaveLength(0);
+      expect(result.totalSubagentCount).toBe(0);
 
       const series = result.topSessions[0];
       expect(series.sessionId).toBe('sess-1');
@@ -1220,6 +1230,85 @@ describe('analytics-queries', () => {
           expect(point.capturedAt <= '2026-07-15T23:59:59.999Z').toBe(true);
         }
       }
+    });
+
+    it('splits main-agent and subagent snapshots into separate series', () => {
+      seedSubagentAttribution({
+        subagentId: 'sub-a',
+        sessionId: 'sess-1',
+        chainId: 'chain-sub-a',
+        agentName: 'explorer',
+        agentType: 'explorer',
+        agentTier: 'sprout',
+        modelId: 'claude-test',
+        connectionId: ANTHROPIC_CONNECTION_ID,
+        status: 'completed',
+      });
+
+      snapshotStore.insert({
+        sessionId: 'sess-1', chainId: null, turnId: 'turn-main-1', providerAttemptId: null,
+        inputTokens: 0, outputTokens: 0, usedTokens: 5000,
+        systemTokens: 0, toolsTokens: 0, toolUseTokens: 0, userTokens: 0, assistantTokens: 0,
+      });
+      snapshotStore.insert({
+        sessionId: 'sess-1', chainId: 'chain-sub-a', turnId: 'turn-sub-1', providerAttemptId: null,
+        agentScope: 'sub-a',
+        inputTokens: 0, outputTokens: 0, usedTokens: 800,
+        systemTokens: 0, toolsTokens: 0, toolUseTokens: 0, userTokens: 0, assistantTokens: 0,
+      });
+      snapshotStore.insert({
+        sessionId: 'sess-1', chainId: 'chain-sub-a', turnId: 'turn-sub-2', providerAttemptId: null,
+        agentScope: 'sub-a',
+        inputTokens: 0, outputTokens: 0, usedTokens: 1200,
+        systemTokens: 0, toolsTokens: 0, toolUseTokens: 0, userTokens: 0, assistantTokens: 0,
+      });
+
+      const result = getContext();
+      expect(result.totalSnapshots).toBe(3);
+      expect(result.totalSessionCount).toBe(1);
+      expect(result.totalSubagentCount).toBe(1);
+
+      // Main-agent series excludes the subagent snapshots.
+      expect(result.topSessions).toHaveLength(1);
+      expect(result.topSessions[0].points.map((p) => p.usedTokens)).toEqual([5000]);
+
+      // Subagent series is keyed by agent scope with attribution metadata.
+      expect(result.topSubagents).toHaveLength(1);
+      const sub = result.topSubagents[0];
+      expect(sub.subagentId).toBe('sub-a');
+      expect(sub.agentName).toBe('explorer');
+      expect(sub.agentTier).toBe('sprout');
+      expect(sub.maxUsedTokens).toBe(1200);
+      expect(sub.points.map((p) => p.usedTokens)).toEqual([800, 1200]);
+
+      // Session filter still scopes both series.
+      const filtered = getContext('sess-1');
+      expect(filtered.topSessions).toHaveLength(1);
+      expect(filtered.topSubagents).toHaveLength(1);
+    });
+
+    it('selects the top 5 subagents by max used tokens, ordered descending', () => {
+      for (let i = 0; i < 6; i++) {
+        snapshotStore.insert({
+          sessionId: 'sess-1', chainId: null, turnId: 'turn-1', providerAttemptId: null,
+          agentScope: `sub-${i}`,
+          inputTokens: 0, outputTokens: 0, usedTokens: (i + 1) * 100,
+          systemTokens: 0, toolsTokens: 0, toolUseTokens: 0, userTokens: 0, assistantTokens: 0,
+        });
+      }
+
+      const result = getContext();
+      expect(result.totalSubagentCount).toBe(6);
+      expect(result.topSubagents).toHaveLength(5);
+      expect(result.topSubagents.map((s) => s.subagentId)).toEqual([
+        'sub-5', 'sub-4', 'sub-3', 'sub-2', 'sub-1',
+      ]);
+      expect(result.topSubagents.map((s) => s.maxUsedTokens)).toEqual([600, 500, 400, 300, 200]);
+      // Subagent scopes are not sessions: no main-agent series exist.
+      expect(result.topSessions).toHaveLength(0);
+      // Attribution lookup misses degrade to null names.
+      expect(result.topSubagents[0].agentName).toBeNull();
+      expect(result.topSubagents[0].agentTier).toBeNull();
     });
   });
 });

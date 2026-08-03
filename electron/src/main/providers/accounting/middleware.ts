@@ -3,6 +3,7 @@ import type { LanguageModelMiddleware } from 'ai';
 import type {
   LanguageModelV4,
   LanguageModelV4CallOptions,
+  LanguageModelV4Content,
   LanguageModelV4GenerateResult,
   LanguageModelV4StreamPart,
   LanguageModelV4StreamResult,
@@ -45,6 +46,72 @@ function normalizeUsage(usage: LanguageModelV4Usage | undefined): NormalizedProv
   return Object.keys(result).length === 0 && total === 0
     ? null
     : { ...result, totalTokens: total };
+}
+
+interface OutputChars {
+  reasoning: number;
+  text: number;
+  tool: number;
+}
+
+function emptyOutputChars(): OutputChars {
+  return { reasoning: 0, text: 0, tool: 0 };
+}
+
+function serializedLength(value: unknown): number {
+  if (typeof value === 'string') return value.length;
+  try {
+    return JSON.stringify(value)?.length ?? 0;
+  } catch {
+    return String(value).length;
+  }
+}
+
+function trackStreamChars(chars: OutputChars, part: LanguageModelV4StreamPart): void {
+  if (part.type === 'reasoning-delta') chars.reasoning += part.delta.length;
+  else if (part.type === 'text-delta') chars.text += part.delta.length;
+  else if (part.type === 'tool-input-delta') chars.tool += part.delta.length;
+}
+
+function trackContentChars(chars: OutputChars, content: readonly LanguageModelV4Content[]): void {
+  for (const part of content) {
+    if (part.type === 'reasoning') chars.reasoning += part.text.length;
+    else if (part.type === 'text') chars.text += part.text.length;
+    else if (part.type === 'tool-call') chars.tool += serializedLength(part.input);
+  }
+}
+
+/**
+ * Same estimation as the context breakdown: apportion the provider's output
+ * total by the observed output characters. Returns undefined when the output
+ * total is unknown or no reasoning was observed.
+ */
+function estimateReasoningTokens(
+  chars: OutputChars,
+  outputTokens: number | undefined,
+): number | undefined {
+  if (outputTokens === undefined || outputTokens <= 0) return undefined;
+  const totalChars = chars.reasoning + chars.text + chars.tool;
+  if (chars.reasoning <= 0 || totalChars <= 0) return undefined;
+  return Math.min(
+    outputTokens,
+    Math.round((outputTokens * chars.reasoning) / totalChars),
+  );
+}
+
+/**
+ * Attach the reasoning estimate to the persisted ledger usage only. Cost is
+ * calculated from the provider-reported usage before this runs, so estimates
+ * never influence billing.
+ */
+function withEstimatedReasoning(
+  usage: NormalizedProviderUsage | null,
+  chars: OutputChars,
+  outputTokens: number | undefined,
+): NormalizedProviderUsage | null {
+  if (!usage || usage.reasoningTokens !== undefined) return usage;
+  const estimated = estimateReasoningTokens(chars, outputTokens);
+  return estimated === undefined ? usage : { ...usage, reasoningTokens: estimated };
 }
 
 function allowlistedHeaders(headers: Record<string, string> | undefined): Record<string, string> {
@@ -128,6 +195,8 @@ export function createAttemptAccountingMiddleware(
       context.store.insertPending({ ...context, attemptId, sdkCallId: attemptId });
       try {
         const result = await doGenerate();
+        const chars = emptyOutputChars();
+        trackContentChars(chars, result.content);
         const extracted = evidenceFor(
           context.snapshot,
           normalizeUsage(result.usage),
@@ -136,7 +205,7 @@ export function createAttemptAccountingMiddleware(
         );
         context.store.finalize(attemptId, {
           outcome: 'succeeded',
-          usage: extracted.usage,
+          usage: withEstimatedReasoning(extracted.usage, chars, result.usage.outputTokens.total),
           providerEvidence: extracted.providerEvidence,
           cost: calculateAttemptCost({ snapshot: context.snapshot, usage: extracted.usage, evidence: extracted.evidence }),
         });
@@ -180,6 +249,7 @@ export function createAttemptAccountingMiddleware(
       }
 
       let finalized = false;
+      const chars = emptyOutputChars();
       const finalize = (outcome: 'succeeded' | 'failed' | 'interrupted', part?: LanguageModelV4StreamPart, error?: unknown) => {
         if (finalized) return;
         finalized = true;
@@ -192,7 +262,7 @@ export function createAttemptAccountingMiddleware(
         );
         context.store.finalize(attemptId, {
           outcome,
-          usage: extracted.usage,
+          usage: withEstimatedReasoning(extracted.usage, chars, finish?.usage.outputTokens.total),
           providerEvidence: extracted.providerEvidence,
           cost: outcome === 'succeeded'
             ? calculateAttemptCost({ snapshot: context.snapshot, usage: extracted.usage, evidence: extracted.evidence })
@@ -211,6 +281,7 @@ export function createAttemptAccountingMiddleware(
               controller.close();
               return;
             }
+            trackStreamChars(chars, next.value);
             if (next.value.type === 'finish') finalize('succeeded', next.value);
             if (next.value.type === 'error') {
               finalize(params.abortSignal?.aborted ? 'interrupted' : 'failed', next.value, next.value.error);

@@ -54,6 +54,7 @@ describe('context snapshot', () => {
     expect(snapshot.tool_use_tokens).toBeGreaterThan(0);
     expect(snapshot.user_tokens).toBeGreaterThan(0);
     expect(snapshot.assistant_tokens).toBeGreaterThanOrEqual(100);
+    expect(snapshot.reasoning_tokens).toBe(0);
     expect(
       snapshot.system_tokens +
         snapshot.tools_tokens +
@@ -61,5 +62,47 @@ describe('context snapshot', () => {
         snapshot.user_tokens +
         snapshot.assistant_tokens,
     ).toBe(snapshot.used_tokens);
+  });
+
+  it('records provider-reported reasoning tokens without shifting other categories', () => {
+    const messages = [
+      { role: 'user', content: 'Open the file' },
+      { role: 'assistant', content: 'I will inspect it.' },
+    ] as ModelMessage[];
+
+    const withoutReasoning = buildContextSnapshot({
+      systemPrompt: 'System instructions',
+      tools: {},
+      messages,
+      inputTokens: 1_000,
+      outputTokens: 100,
+    });
+    const withReasoning = buildContextSnapshot({
+      systemPrompt: 'System instructions',
+      tools: {},
+      messages,
+      inputTokens: 1_000,
+      outputTokens: 100,
+      reasoningTokens: 60,
+    });
+
+    expect(withReasoning.reasoning_tokens).toBe(60);
+    expect(withReasoning.assistant_tokens).toBe(withoutReasoning.assistant_tokens);
+    expect(withReasoning.used_tokens).toBe(withoutReasoning.used_tokens);
+    expect(withReasoning.system_tokens).toBe(withoutReasoning.system_tokens);
+    expect(withReasoning.user_tokens).toBe(withoutReasoning.user_tokens);
+  });
+
+  it('clamps provider reasoning tokens that exceed the assistant total', () => {
+    const snapshot = buildContextSnapshot({
+      systemPrompt: 'System instructions',
+      tools: {},
+      messages: [{ role: 'user', content: 'Open the file' }] as ModelMessage[],
+      inputTokens: 100,
+      outputTokens: 10,
+      reasoningTokens: 5_000,
+    });
+
+    expect(snapshot.reasoning_tokens).toBe(snapshot.assistant_tokens);
   });
 });

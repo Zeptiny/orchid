@@ -16,6 +16,7 @@ import type {
   SubagentsResult,
   ContextResult,
   ContextSessionSeries,
+  ContextSubagentSeries,
   CurrencyTotal,
   TimeSeriesPoint,
   CostTimeSeriesPoint,
@@ -29,7 +30,8 @@ import { getSessionNames } from '../../session/storage';
 
 const DEFAULT_LIMIT = 1000;
 const CONTEXT_TOP_SESSIONS = 5;
-const CONTEXT_MAX_POINTS_PER_SESSION = 500;
+const CONTEXT_TOP_SUBAGENTS = 5;
+const CONTEXT_MAX_POINTS_PER_SERIES = 500;
 
 const COST_ROW_CONDITIONS = [
   "cost_state IN ('reported','calculated')",
@@ -116,6 +118,13 @@ function parseSnapshotProviderName(snapshotJson: string): string | null {
   try {
     const s = JSON.parse(snapshotJson) as Record<string, unknown>;
     return typeof s.providerDisplayName === 'string' ? s.providerDisplayName : null;
+  } catch { return null; }
+}
+
+function parseSnapshotModelDisplayName(snapshotJson: string): string | null {
+  try {
+    const s = JSON.parse(snapshotJson) as Record<string, unknown>;
+    return typeof s.modelDisplayName === 'string' ? s.modelDisplayName : null;
   } catch { return null; }
 }
 
@@ -443,7 +452,9 @@ export function getSessionDetail(sessionId: string, timeRange?: AnalyticsTimeRan
       turnId: r.turn_id,
       providerId: r.provider_id,
       modelId: r.model_id,
+      modelDisplayName: parseSnapshotModelDisplayName(r.snapshot_json),
       connectionId: r.connection_id,
+      connectionName: parseSnapshotConnectionName(r.snapshot_json),
       outcome: r.outcome,
       costState: r.cost_state,
       costAmount: r.cost_amount,
@@ -666,6 +677,7 @@ export function getModels(timeRange?: AnalyticsTimeRange): ModelsResult {
 
   const models = modelRows.map((m) => ({
     modelId: m.model_id,
+    modelDisplayName: parseSnapshotModelDisplayName(m.snapshot_json),
     providerId: m.provider_id,
     connectionId: m.connection_id,
     connectionName: parseSnapshotConnectionName(m.snapshot_json),
@@ -942,6 +954,8 @@ export function getContext(sessionId?: string, timeRange?: AnalyticsTimeRange): 
   const conditions = sessionId ? ['session_id = ?'] : [];
   const params = sessionId ? [sessionId, ...dateFilter.params] : dateFilter.params;
   const where = whereClause(conditions, dateFilter.clause);
+  const mainWhere = whereClause([...conditions, 'agent_scope IS NULL'], dateFilter.clause);
+  const subagentWhere = whereClause([...conditions, 'agent_scope IS NOT NULL'], dateFilter.clause);
   const aggregate = db.prepare(`
     SELECT COUNT(*) as total,
       COALESCE(AVG(used_tokens), 0) as used_tokens,
@@ -958,7 +972,7 @@ export function getContext(sessionId?: string, timeRange?: AnalyticsTimeRange): 
 
   const topSessionRows = db.prepare(`
     SELECT session_id, MAX(used_tokens) as max_used_tokens
-    FROM context_snapshots ${where}
+    FROM context_snapshots ${mainWhere}
     GROUP BY session_id
     ORDER BY max_used_tokens DESC, session_id ASC
     LIMIT ?
@@ -971,23 +985,23 @@ export function getContext(sessionId?: string, timeRange?: AnalyticsTimeRange): 
     console.warn('[analytics] Session name lookup failed', { error });
   }
 
-  const seriesWhere = whereClause(['session_id = ?'], dateFilter.clause);
-  const seriesCountStmt = db.prepare(`
-    SELECT COUNT(*) as count FROM context_snapshots ${seriesWhere}
+  const sessionSeriesWhere = whereClause(['session_id = ?', 'agent_scope IS NULL'], dateFilter.clause);
+  const sessionCountStmt = db.prepare(`
+    SELECT COUNT(*) as count FROM context_snapshots ${sessionSeriesWhere}
   `);
-  const fullSeriesStmt = db.prepare(`
+  const sessionFullStmt = db.prepare(`
     SELECT captured_at, used_tokens
-    FROM context_snapshots ${seriesWhere}
+    FROM context_snapshots ${sessionSeriesWhere}
     ORDER BY captured_at ASC
   `);
   // Oversized series are stride-sampled in SQL so only the kept rows cross
   // into the main process: every stride-th row plus the newest snapshot and
   // the peak used_tokens snapshot (first peak wins on ties).
-  const sampledSeriesStmt = db.prepare(`
+  const sessionSampledStmt = db.prepare(`
     WITH ordered AS (
       SELECT captured_at, used_tokens,
         row_number() OVER (ORDER BY captured_at ASC) AS rn
-      FROM context_snapshots ${seriesWhere}
+      FROM context_snapshots ${sessionSeriesWhere}
     )
     SELECT captured_at, used_tokens
     FROM ordered
@@ -997,13 +1011,13 @@ export function getContext(sessionId?: string, timeRange?: AnalyticsTimeRange): 
     ORDER BY rn ASC
   `);
   const topSessions: ContextSessionSeries[] = topSessionRows.map((top) => {
-    const { count } = seriesCountStmt.get(top.session_id, ...dateFilter.params) as { count: number };
-    const rows = count <= CONTEXT_MAX_POINTS_PER_SESSION
-      ? fullSeriesStmt.all(top.session_id, ...dateFilter.params) as Array<{ captured_at: string; used_tokens: number }>
-      : sampledSeriesStmt.all(
+    const { count } = sessionCountStmt.get(top.session_id, ...dateFilter.params) as { count: number };
+    const rows = count <= CONTEXT_MAX_POINTS_PER_SERIES
+      ? sessionFullStmt.all(top.session_id, ...dateFilter.params) as Array<{ captured_at: string; used_tokens: number }>
+      : sessionSampledStmt.all(
           top.session_id,
           ...dateFilter.params,
-          Math.ceil(count / CONTEXT_MAX_POINTS_PER_SESSION),
+          Math.ceil(count / CONTEXT_MAX_POINTS_PER_SERIES),
           count,
         ) as Array<{ captured_at: string; used_tokens: number }>;
     return {
@@ -1014,14 +1028,90 @@ export function getContext(sessionId?: string, timeRange?: AnalyticsTimeRange): 
     };
   });
 
+  const topSubagentRows = db.prepare(`
+    SELECT agent_scope, MAX(used_tokens) as max_used_tokens
+    FROM context_snapshots ${subagentWhere}
+    GROUP BY agent_scope
+    ORDER BY max_used_tokens DESC, agent_scope ASC
+    LIMIT ?
+  `).all(...params, CONTEXT_TOP_SUBAGENTS) as Array<{ agent_scope: string; max_used_tokens: number }>;
+
+  const subagentNameMap = new Map<string, { name: string; tier: string }>();
+  if (topSubagentRows.length > 0) {
+    try {
+      const placeholders = topSubagentRows.map(() => '?').join(', ');
+      const attributionRows = db.prepare(`
+        SELECT subagent_id, agent_name, agent_tier
+        FROM subagent_attribution
+        WHERE subagent_id IN (${placeholders})
+        GROUP BY subagent_id
+      `).all(...topSubagentRows.map((r) => r.agent_scope)) as Array<{
+        subagent_id: string; agent_name: string; agent_tier: string;
+      }>;
+      for (const row of attributionRows) {
+        subagentNameMap.set(row.subagent_id, { name: row.agent_name, tier: row.agent_tier });
+      }
+    } catch (error) {
+      console.warn('[analytics] Subagent name lookup failed', { error });
+    }
+  }
+
+  const subagentSeriesWhere = whereClause(['agent_scope = ?'], dateFilter.clause);
+  const subagentCountStmt = db.prepare(`
+    SELECT COUNT(*) as count FROM context_snapshots ${subagentSeriesWhere}
+  `);
+  const subagentFullStmt = db.prepare(`
+    SELECT captured_at, used_tokens
+    FROM context_snapshots ${subagentSeriesWhere}
+    ORDER BY captured_at ASC
+  `);
+  const subagentSampledStmt = db.prepare(`
+    WITH ordered AS (
+      SELECT captured_at, used_tokens,
+        row_number() OVER (ORDER BY captured_at ASC) AS rn
+      FROM context_snapshots ${subagentSeriesWhere}
+    )
+    SELECT captured_at, used_tokens
+    FROM ordered
+    WHERE (rn - 1) % ? = 0
+      OR rn = ?
+      OR rn = (SELECT rn FROM ordered ORDER BY used_tokens DESC, rn ASC LIMIT 1)
+    ORDER BY rn ASC
+  `);
+  const topSubagents: ContextSubagentSeries[] = topSubagentRows.map((top) => {
+    const { count } = subagentCountStmt.get(top.agent_scope, ...dateFilter.params) as { count: number };
+    const rows = count <= CONTEXT_MAX_POINTS_PER_SERIES
+      ? subagentFullStmt.all(top.agent_scope, ...dateFilter.params) as Array<{ captured_at: string; used_tokens: number }>
+      : subagentSampledStmt.all(
+          top.agent_scope,
+          ...dateFilter.params,
+          Math.ceil(count / CONTEXT_MAX_POINTS_PER_SERIES),
+          count,
+        ) as Array<{ captured_at: string; used_tokens: number }>;
+    const meta = subagentNameMap.get(top.agent_scope);
+    return {
+      subagentId: top.agent_scope,
+      agentName: meta?.name ?? null,
+      agentTier: meta?.tier ?? null,
+      maxUsedTokens: top.max_used_tokens,
+      points: rows.map((r) => ({ capturedAt: r.captured_at, usedTokens: r.used_tokens })),
+    };
+  });
+
   const { count: totalSessionCount } = db.prepare(`
     SELECT COUNT(DISTINCT session_id) as count FROM context_snapshots ${where}
+  `).get(...params) as { count: number };
+
+  const { count: totalSubagentCount } = db.prepare(`
+    SELECT COUNT(DISTINCT agent_scope) as count FROM context_snapshots ${subagentWhere}
   `).get(...params) as { count: number };
 
   return {
     totalSnapshots: aggregate.total,
     totalSessionCount,
     topSessions,
+    topSubagents,
+    totalSubagentCount,
     avgBreakdown: {
       usedTokens: Math.round(aggregate.used_tokens),
       systemTokens: Math.round(aggregate.system_tokens),
