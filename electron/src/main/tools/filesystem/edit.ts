@@ -58,6 +58,7 @@ function errorOutcome(
       addedLines: 0,
       removedLines: 0,
       resultingContent,
+      replacementCount: 0,
     },
     error: { code, message },
   };
@@ -126,7 +127,11 @@ export const editHandler: ToolHandler = async (input: unknown, ctx) => {
       oldContent: content,
       newContent,
     });
-    validated = fileChangeDataSchema.parse(data);
+    validated = fileChangeDataSchema.parse({
+      ...data,
+      replaceAll: replace_all,
+      replacementCount: matchCount,
+    });
     atomicWrite(filePath, newContent);
     return { status: 'complete', data: validated };
   } catch (error) {

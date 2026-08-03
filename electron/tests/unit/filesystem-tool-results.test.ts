@@ -209,6 +209,28 @@ describe('typed filesystem outcomes', () => {
     expect(fs.readFileSync(filePath, 'utf-8')).toBe('stable bytes\n');
   });
 
+  it('persists the true replacement count and replace_all flag on edit facts', async () => {
+    const filePath = writeFixture('rename.txt', 'foo one\nfoo two\nfoo three\n');
+    const result = outcome<FileChangeData>(await editHandler({
+      file_path: filePath,
+      old_string: 'foo',
+      new_string: 'bar',
+      replace_all: true,
+    }, { cwd: tmpDir }));
+
+    expect(result.status).toBe('complete');
+    expect(result.data.replacementCount).toBe(3);
+    expect(result.data.replaceAll).toBe(true);
+
+    const failed = outcome<FileChangeData>(await editHandler({
+      file_path: filePath,
+      old_string: 'absent',
+      new_string: 'bar',
+    }, { cwd: tmpDir }));
+    expect(failed.status).toBe('error');
+    expect(failed.data.replacementCount).toBe(0);
+  });
+
   it('distinguishes create and replace writes with exact content, bytes, and lines', async () => {
     const filePath = path.join(tmpDir, 'written.txt');
     const created = outcome<FileWriteData>(await writeHandler({
@@ -437,6 +459,50 @@ describe('XML agent projections', () => {
     expect(directory.agentProjection.content).toContain('<tree>\n');
     expect(directory.agentProjection.content).toContain('└── src/');
     expect(directory.agentProjection.content).not.toContain('format="dynamic-system-prompt"');
+  });
+
+  it('edit projection reports the replacement count, not the diff hunk count', async () => {
+    const lines = Array.from({ length: 20 }, (_, index) => `line ${index + 1}`);
+    const multiHunkPath = writeFixture('multi-hunk.txt', lines.join('\n') + '\n');
+    const changedBlock = lines.slice(1, 19);
+    changedBlock[1] = 'changed near top';
+    changedBlock[16] = 'changed near bottom';
+    const renamePath = writeFixture('rename.txt', 'foo one\nfoo two\nfoo three\nfoo four\n');
+    const registry = new ToolRegistry();
+    registry.register(editDefinition, editHandler);
+    const context = { cwd: tmpDir, sessionId: SESSION_ID };
+
+    const single = await executeToolCall({
+      id: 'edit-single-multi-hunk',
+      name: 'edit',
+      args: {
+        file_path: multiHunkPath,
+        old_string: lines.slice(1, 19).join('\n'),
+        new_string: changedBlock.join('\n'),
+      },
+    }, registry, context);
+    expect(fileChangeDataSchema.parse(single.canonical.data).hunks.length).toBeGreaterThan(1);
+    expect(single.agentProjection.content).toContain('replacements="1"');
+    expect(single.agentProjection.content).toContain(': 1 replacement\n');
+
+    const rename = await executeToolCall({
+      id: 'edit-rename-all',
+      name: 'edit',
+      args: { file_path: renamePath, old_string: 'foo', new_string: 'bar', replace_all: true },
+    }, registry, context);
+    expect(fileChangeDataSchema.parse(rename.canonical.data).hunks).toHaveLength(1);
+    expect(rename.agentProjection.content).toContain('replacements="4"');
+    expect(rename.agentProjection.content).toContain(': 4 replacements');
+    expect(rename.agentProjection.content).toContain('replace_all="true"');
+
+    const failed = await executeToolCall({
+      id: 'edit-not-found',
+      name: 'edit',
+      args: { file_path: renamePath, old_string: 'absent', new_string: 'x' },
+    }, registry, context);
+    expect(failed.canonical.status).toBe('error');
+    expect(failed.agentProjection.content).toContain('replacements="0"');
+    expect(failed.agentProjection.content).toContain(': 0 replacements');
   });
 
   it('write projection: empty file reports summary without content', async () => {
