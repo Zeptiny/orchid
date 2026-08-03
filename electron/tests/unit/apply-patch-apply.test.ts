@@ -331,6 +331,52 @@ describe('applyChunksToContent', () => {
     );
   });
 
+  it('tolerates an ambiguous match once a @@ hint anchored the file (F6)', () => {
+    // The hint chunk carries no lines; the pattern in the following chunk is
+    // still ambiguous after the hint advances the search position. Because a
+    // @@ header was supplied the first match is honored instead of erroring.
+    const content = 'foo\nbar\nbaz\nfoo\nbar\nbaz\n';
+    const chunks = [
+      chunk({ changeContext: 'foo', oldLines: [], newLines: [] }),
+      chunk({ oldLines: ['bar', 'baz'], newLines: ['BAR', 'BAZ'] }),
+    ];
+    expect(applyChunksToContent(content, chunks, 'test.txt')).toBe(
+      'foo\nBAR\nBAZ\nfoo\nbar\nbaz\n',
+    );
+  });
+
+  it('retries from the @@ hint line when the hunk includes it as context', () => {
+    // Agents commonly repeat the hinted line as the hunk's first context
+    // line. The hint search skips past that line, so the engine retries the
+    // pattern from the hint line itself.
+    const content = 'function greet() {\n  return "Hi";\n}\n';
+    const chunks = [
+      chunk({
+        changeContext: 'function greet()',
+        oldLines: ['function greet() {', '  return "Hi";'],
+        newLines: ['function greet() {', '  return "Hello";'],
+      }),
+    ];
+    expect(applyChunksToContent(content, chunks, 'test.txt')).toBe(
+      'function greet() {\n  return "Hello";\n}\n',
+    );
+  });
+
+  it('finds a @@ hint that names a symbol instead of the full line', () => {
+    // Hint `class Foo` is a prefix of the real line `class Foo:`.
+    const content = 'class Foo:\n    value = 1\n';
+    const chunks = [
+      chunk({
+        changeContext: 'class Foo',
+        oldLines: ['    value = 1'],
+        newLines: ['    value = 2'],
+      }),
+    ];
+    expect(applyChunksToContent(content, chunks, 'test.py')).toBe(
+      'class Foo:\n    value = 2\n',
+    );
+  });
+
   // ── Error paths ────────────────────────────────────────────────────────
 
   it('throws ApplyPatchApplyError when old lines not found', () => {

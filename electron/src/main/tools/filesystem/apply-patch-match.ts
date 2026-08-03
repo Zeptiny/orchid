@@ -143,6 +143,12 @@ export function seekSequenceWithMeta(
 /**
  * Find a @@ context hint line in the source, using the same 4-tier matching.
  * Returns the index after the found hint (so subsequent chunk matching starts after it).
+ *
+ * When no whole-line match exists, falls back to a prefix match so hints that
+ * name a symbol instead of quoting the full line still anchor the search
+ * (`@@ class Foo` finds `class Foo:` or `export class Foo {`). Hints are
+ * advisory — the hunk pattern match remains the authoritative check — so the
+ * first prefix candidate wins.
  */
 export function findContextHint(
   lines: string[],
@@ -150,5 +156,18 @@ export function findContextHint(
   start: number,
 ): number | null {
   const found = seekSequence(lines, [hint], start, false);
-  return found !== null ? found + 1 : null;
+  if (found !== null) return found + 1;
+
+  const normalizedHint = normalizeUnicode(hint);
+  if (normalizedHint.length === 0) return null;
+  for (let i = Math.max(0, start); i < lines.length; i++) {
+    const normalizedLine = normalizeUnicode(lines[i]);
+    if (
+      normalizedLine.length > normalizedHint.length &&
+      normalizedLine.startsWith(normalizedHint)
+    ) {
+      return i + 1;
+    }
+  }
+  return null;
 }

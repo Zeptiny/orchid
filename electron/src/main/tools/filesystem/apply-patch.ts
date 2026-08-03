@@ -166,6 +166,7 @@ export const applyPatchDefinition: ToolDefinition = {
     '*** Delete File: obsolete.txt\n' +
     '*** End Patch\n\n' +
     'Important:\n' +
+    '- You MUST start the patch with a *** Begin Patch line and end it with a *** End Patch line. Every patch is wrapped in this envelope.\n' +
     '- You MUST include a header (Add/Delete/Update) for each file operation.\n' +
     '- You MUST prefix new lines with + even when creating a new file.\n' +
     '- File paths must be relative to the working directory, NEVER absolute.\n' +
