@@ -23,7 +23,7 @@ The codebase compiles strict, lints clean, and has a genuinely large passing tes
 
 ## 2. Executive summary
 
-**Overall health: good internals, weak trust boundary for untrusted projects.** The in-app security-critical subsystems (credential vault, signed catalog, permission gating, IPC validation) are unusually disciplined and repeatedly verified clean across reviewers. But the wave-2 cross-cutting security review found that **the project-config layer is fully attacker-controlled**: a cloned repository's `.orchid.json` can rewrite permission rules and auto-launch MCP servers with no consent surface, and the repo's `AGENTS.md` is auto-injected into the model — together a complete clone → code-execution chain (§4.1). All four top wave-1 findings were independently re-traced and **confirmed** (§4.4).
+**Overall health: good internals, weak trust boundary for untrusted projects.** The in-app security-critical subsystems (credential vault, signed catalog, permission gating, IPC validation) are unusually disciplined and repeatedly verified clean across reviewers. But the wave-2 cross-cutting security review found that **the project-config layer is fully attacker-controlled**: a cloned repository's `.orchid.json` can rewrite permission rules and auto-launch MCP servers with no consent surface, and the repo's `AGENTS.md` is auto-injected into the model — together a complete clone → code-execution chain (§4.1). All three top wave-1 findings were independently re-traced and **confirmed** (§4.4).
 
 | # | Finding | Severity | Domain |
 |---|---------|----------|--------|
@@ -32,8 +32,7 @@ The codebase compiles strict, lints clean, and has a genuinely large passing tes
 | E3 | `session:set_workspace` lets renderer code rebind the workspace to any readable dir with no dialog, then renderer-allowlisted tools (`read`, `grep`, `glob`, `read_directory`) auto-allow reads "inside" it — a compromised renderer reads `~/.ssh/id_rsa` with zero user interaction | **high** | IPC/consent |
 | E4 | Malformed model tool-input JSON persists a tool_call whose args can't re-parse; `toModelMessages` drops the call but keeps the tool result → orphan tool result → provider 400 on **every** subsequent turn of that session | **high** | LLM history |
 | E5 | Renderer turn-affinity adoption race: sending a draft message while another session streams hijacks the new chat's projection (wrong text shown, composer locked for the whole turn) | **high** | Renderer |
-| E6 | Message-queue autofire on forced teardown (session delete / workspace rebind): queued messages either fire into a brand-new session (unrequested LLM call) or are silently dropped | **high** | Renderer |
-| E7 | Strict config schema + documented legacy `providers` key: any existing config.json containing it throws from every `loadConfig()` — startup crash risk on upgrade | **high** | Config |
+| E6 | Strict config schema + documented legacy `providers` key: any existing config.json containing it throws from every `loadConfig()` — startup crash risk on upgrade | **high** | Config |
 
 Recurring secondary themes:
 
@@ -297,15 +296,11 @@ Switching `rag.embedding_model` produces a mixed-dimension `vectors.npy` (rows t
 
 ### 3.8 Renderer (React UI)
 
-**Health:** good — **no XSS surface** (react-markdown without raw HTML, zero `dangerouslySetInnerHTML`, tool output inert text/JSON); listener/interval hygiene consistently correct; session switching defended by generation/affinity gates; subagent delta handling robust. Problems cluster around the turn-affinity model trusting *when* events arrive and queue autofire trusting *why* the stream went idle.
+**Health:** good — **no XSS surface** (react-markdown without raw HTML, zero `dangerouslySetInnerHTML`, tool output inert text/JSON); listener/interval hygiene consistently correct; session switching defended by generation/affinity gates; subagent delta handling robust. Problems cluster around the turn-affinity model trusting *when* events arrive.
 
 **F8.1 — high / high — `src/renderer/hooks/useChat.ts:191-194, 506-509, 572-584` + `src/shared/chat/turn-projection.ts:234-247`**
 Draft-send adoption hijack: `send()` resets affinity before awaiting `chat.send`; with `selectedSessionId` null (draft), the adoption branch adopts the *first event of any session* arriving during the await. If session B is streaming in the background, B's chunks land in the draft's fresh projection and pin its turnId; the send resolution then fixes affinity to new session C but never re-seeds the projection → all of C's events rejected by turnId/sequence checks. New chat pane shows B's text, composer locked for the whole turn, snapping to C only at `done`.
 *Fix:* don't adopt unknown-session events while a send is in flight (require explicit binding), or re-`begin` when the resolved turnId differs from the projection's.
-
-**F8.2 — high / high — `src/renderer/hooks/useQueueAutoFire.ts:48-70`, `src/renderer/components/ChatView.tsx:489-502, 552-567, 626-631`**
-Queued messages fire into a **new session or vanish** on forced teardown: autofire triggers on any `streaming→idle` transition, but `clearQueue()` only runs on session-select and enter-draft — not on session delete or workspace rebind. Deleting a streaming session with queued follow-ups: projection reset flips status to idle → autofire consumes → `activeSession === null` → draft branch creates a brand-new session and runs the deleted session's queue there (unrequested LLM call); if no default model, `handleSend` never rejects so `.catch(restoreBatch)` is dead code and messages are silently dropped.
-*Fix:* clear queue on every forced-teardown path; make autofire require same-session continuity; restore batch when handleSend returns without sending.
 
 **F8.3 — medium / high — `src/renderer/AppReady.tsx:150-166`, `ChatView.tsx:1001-1021, 1173-1191`, `App.tsx:15-26`**
 No error boundary around the chat surface: Config/Analytics/Onboarding have their own boundaries, but ChatView (always mounted) and lazy ProjectConfigView/SubagentView (Suspense doesn't catch errors) don't. A transcript render error replaces the entire UI with the fatal fallback, losing in-memory state.
@@ -339,7 +334,7 @@ Late terminal event for a previous turn could steal turn affinity mid-send (same
 | T4 | medium | `rag/store.ts` SQL | Never runs against real SQLite — a hand-rolled shim pattern-matches SQL strings and re-implements store semantics; schema drift passes silently (AST store, by contrast, uses real SQLite) |
 | T5 | medium | `MarkdownContent.tsx` XSS behavior | No test asserts raw-HTML suppression or `javascript:` href filtering; enabling rehype-raw would pass the whole suite |
 | T6 | medium | `useChat.ts` send-failure path | "Covered" only by regex-counting source text; no behavioral test ever makes `chat.send` reject |
-| T7 | medium | `useSessionTabs`, `useAnalytics`, `useTodos`, `useQueueAutoFire`, `useTimeRange` | No behavioral tests; queue autofire contains the logic behind F8.2 |
+| T7 | medium | `useSessionTabs`, `useAnalytics`, `useTodos`, `useTimeRange` | No behavioral tests |
 | T8 | medium-low | `ipc/definitions.ts` (196 lines) | Listing handlers unverified at the IPC boundary |
 | T9 | low | `rag/index-worker.ts`, `ast/index-worker.ts` packaging | Worker entry glue has no packaging test (tool-worker's does) |
 
@@ -487,14 +482,13 @@ God-modules: embedder mixes download + ONNX sessions + API fallback + file cachi
 
 ### 4.4 Adversarial scenario verification
 
-Independent re-tracing of the four highest-impact wave-1 findings against the actual code — **all four CONFIRMED**:
+Independent re-tracing of the three highest-impact wave-1 findings against the actual code — **all three CONFIRMED**:
 
 | Finding | Verdict | Key evidence |
 |---|---|---|
 | A. F1.1 `session:set_workspace` consent bypass | **CONFIRMED** | `ipc/session.ts:460-470` binds with no dialog (validation is only absolute/exists/R_OK|X_OK — `project/path.ts:43-111`, no project marker); `ipc/tool.ts:52-113` allows read/grep/glob with cwd = bound workspace; `permissions/resolver.ts:120-138` classifies inside as `allow` per `FILE_TOOL_DEFAULTS` (`shared/types/permission.ts:66-73`) |
 | B. F3.1 orphan tool result → permanent 400 | **CONFIRMED** | `model-messages.ts:45-60` drops unparseable-args tool calls; `:76-93` converts every TOOL message unconditionally → orphan; `history.ts:99-162` pairs by id only; poison source `stream/sdk-event-adapter.ts:187-200` persisted at `ipc/chat/send.ts:395-418` (status `error` ≠ `cancelled`, not excluded); 400 is non-transient → no retry, session poisoned until hand-edited |
 | C. F8.1 draft-send projection hijack | **CONFIRMED** | `useChat.ts:505-509` — draft send leaves both affinity ids null during the await; adoption branch `:191-194` takes the first event from any session (background sessions reach it — `ipc/chat/events.ts:64-84`); reducer identity guard (`shared/chat/turn-projection.ts:234-240`) then rejects the real session's events; post-await rebind fixes affinity but not the polluted projection |
-| D. F8.2 queue autofire on delete/rebind | **CONFIRMED** | `useQueueAutoFire.ts:17-26` fires on streaming→idle; delete emits `CHAT_DONE` + idle (`ipc/chat/abort.ts:229-243`) before the delete invoke resolves; `handleSessionDelete` never calls `clearQueue()`; structured errors resolve (don't reject) so `restoreBatch` never runs — messages silently lost, or fire into a lazily-created new session |
 
 **Scenarios traced that the system handles correctly:**
 1. **kill -9 mid-session-write → restart: HANDLED.** WAL-mode SQLite, transactional turn writes; recovery sets stale ACTIVE chains to INTERRUPTED in one transaction; individually corrupt rows skipped without failing load; dangling tool_calls filtered by the pairing invariant on next replay.
@@ -526,7 +520,7 @@ Crash windows in provider submit/disconnect: submit crash leaves an orphaned vau
 
 ### P1 — correctness bugs with durable user impact
 5. **Session-poisoning orphan tool result** (F3.1): symmetric drop in `toModelMessages` or sanitize at the sdkInputError boundary.
-6. **Renderer hijack + queue autofire** (F8.1, F8.2): explicit turn binding on send resolution; clear queue on all forced-teardown paths; restore batch on non-sending handleSend.
+6. **Renderer hijack** (F8.1): explicit turn binding on send resolution.
 7. **Signal-killed exit codes** (F4.3), **config:save env baking** (F6.1), **missing-workspace structured error** (F6.3), **two-window silent abort** (F12.1), **rebind abort drift** (F12.2).
 
 ### P2 — safety mechanisms that are dead or bypassable
@@ -541,7 +535,7 @@ Crash windows in provider submit/disconnect: submit crash leaves an orphaned vau
 ### Tests to add (from §3.9)
 - `chat:cancel` / `chat:stop` / `forceStopSession` handler suites (T1, T2) — the two-phase Esc flow is currently untested end-to-end.
 - Direct `atomicWriteJson` tests (T3) — crash safety and 0600 permissions of the app's core persistence primitive.
-- Real-SQLite RAG store tests (T4); behavioral MarkdownContent XSS tests (T5); behavioral useChat send-failure tests (T6); useQueueAutoFire tests (T7).
+- Real-SQLite RAG store tests (T4); behavioral MarkdownContent XSS tests (T5); behavioral useChat send-failure tests (T6); remaining renderer-hook behavioral tests (T7).
 
 ---
 
@@ -556,13 +550,13 @@ Crash windows in provider submit/disconnect: submit crash leaves an orphaned vau
 | 1 | data-integrity-guardian | Providers, credentials & accounting | ✅ 6 findings |
 | 1 | correctness-reviewer | Config, session, workspace, AGENTS.md | ✅ 8 findings |
 | 1 | reliability-reviewer | RAG, AST, MCP | ✅ 8 findings |
-| 1 | correctness-reviewer | Renderer (React UI) | ✅ 5 findings |
+| 1 | correctness-reviewer | Renderer (React UI) | ✅ 4 findings |
 | 1 | testing-reviewer | Test suite quality & coverage | ✅ 9 gaps + 4 quality findings |
 | 2 | security-reviewer | Permissions, logging, updater, skills | ✅ 7 findings (2 critical) |
 | 2 | performance-reviewer | Hot paths, scaling, SQLite patterns | ✅ 10 findings |
 | 2 | architecture-strategist | Layering, duplication, doc drift | ✅ 10 findings |
-| 2 | adversarial-reviewer | Scenario tracing + finding verification | ✅ 4/4 confirmed + 3 bonus |
+| 2 | adversarial-reviewer | Scenario tracing + finding verification | ✅ 3/3 confirmed + 3 bonus |
 
 **Orchestrator spot-verification:** F1.1 (session.ts:459-470 handler + comment), F4.3 (execute-command.ts:334 `?? 0`), and F6.1 (config.ts:139-148 merged-view write) were additionally re-verified directly by the orchestrator.
 
-**Totals:** 94 findings and gaps across 13 reviewer passes — 2 critical, 9 high-severity findings (+3 high-risk coverage gaps), 34 medium, 36 low — with extensive verified-clean inventories per domain (each section's "verified clean" list is part of the audit record).
+**Totals:** 93 findings and gaps across 13 reviewer passes — 2 critical, 8 high-severity findings (+3 high-risk coverage gaps), 34 medium, 36 low — with extensive verified-clean inventories per domain (each section's "verified clean" list is part of the audit record).
