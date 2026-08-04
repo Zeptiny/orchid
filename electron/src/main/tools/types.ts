@@ -108,6 +108,12 @@ export interface ToolDefinition {
 export interface ToolExecutionContext {
   /** Absolute working/project directory for this turn. */
   cwd: string;
+  /**
+   * Tool call id for this invocation (live-output mirror key).
+   * Set by the dispatch layer from the tool call request id; absent for
+   * direct tool callers that predate live mirroring.
+   */
+  toolCallId?: string;
   /** Session id when available (bg process ownership, output offload). */
   sessionId?: string;
   /** Originating renderer window frozen for approval delivery. */

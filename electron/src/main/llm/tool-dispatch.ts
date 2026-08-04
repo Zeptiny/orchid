@@ -333,6 +333,7 @@ export async function executeToolCall(
 
   const toolCtx: ToolExecutionContext = {
     cwd: options.cwd,
+    toolCallId,
     sessionId: options.sessionId,
     projectRuntime: options.projectRuntime,
     agentScopeId: options.agentScopeId,
