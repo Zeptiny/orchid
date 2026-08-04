@@ -690,6 +690,14 @@ export type WorkspaceSource = 'draft' | 'session' | 'default' | 'unbound';
 /** Coarse project-directory status (mirrors main project path helpers). */
 export type WorkspaceStatus = 'unbound' | 'valid' | 'missing';
 
+/**
+ * Trust posture of a bound project directory.
+ * - `trusted`: granted and fingerprint-current (or bare project, auto-trusted).
+ * - `untrusted`: has a project surface and no grant on record.
+ * - `changed`: previously trusted but the security surface fingerprint changed.
+ */
+export type TrustState = 'trusted' | 'untrusted' | 'changed';
+
 /** Resolved workspace for UI chrome and send gate. */
 export interface WorkspaceInfo {
   /** Canonical absolute path when bound; null when unbound. */
@@ -698,6 +706,11 @@ export interface WorkspaceInfo {
   source: WorkspaceSource;
   /** Directory usability status. */
   status: WorkspaceStatus;
+  /**
+   * Trust posture of the bound directory. Optional with a `trusted` default
+   * so producers that predate trusted-projects keep parsing.
+   */
+  trust?: TrustState;
 }
 
 export interface SessionChangeCwdMessage {
@@ -726,10 +739,104 @@ export interface SessionWorkspaceChangedEvent {
   workspace: WorkspaceInfo;
 }
 
+// ── Trusted projects API ─────────────────────────────────────────────────────
+
+/** One MCP server a project adds or overrides (display-safe fields only). */
+export interface TrustReportMcpServer {
+  name: string;
+  /** `added` when absent from home config; `override` when it shadows one. */
+  kind: 'added' | 'override';
+  command?: string;
+  url?: string;
+  args?: string[];
+  /** Environment variable names only — never values. */
+  envKeys?: string[];
+}
+
+/** One permission rule a project sets. */
+export interface TrustReportPermission {
+  tool: string;
+  /** Human-readable rule (mode name or inside/outside pair). */
+  rule: string;
+  /** True when the rule auto-allows (`allow` or `decide-for-me`). */
+  autoAllow: boolean;
+}
+
+/** One overridden config field, serialized for display. */
+export interface TrustReportConfigOverride {
+  key: string;
+  projectValue: string;
+  homeValue: string;
+}
+
+/** One model-selection override (`default_model` or a tier key). */
+export interface TrustReportModelOverride {
+  key: string;
+  connectionId: string;
+  modelId: string;
+}
+
+/** One project-local definition (agent / skill / personality). */
+export interface TrustReportDefinition {
+  kind: 'agent' | 'skill' | 'personality';
+  name: string;
+  /** True when it shadows a home definition of the same name. */
+  overridesHome: boolean;
+}
+
+/** Surface diff between a project and the home/global configuration. */
+export interface ProjectTrustReport {
+  /** Canonical absolute project path. */
+  projectDir: string;
+  /** Whether the project carries any project surface at all. */
+  hasSurface: boolean;
+  mcpServers: TrustReportMcpServer[];
+  permissions: TrustReportPermission[];
+  /** `agents_md` fields the project overrides. */
+  agentsMdOverrides: TrustReportConfigOverride[];
+  modelOverrides: TrustReportModelOverride[];
+  /** Remaining overridden top-level config keys. */
+  otherConfigOverrides: TrustReportConfigOverride[];
+  definitions: TrustReportDefinition[];
+  /** Root instruction files present (configured AGENTS.md aliases). */
+  instructionFiles: string[];
+}
+
+export interface ProjectTrustGetMessage {
+  cwd: string;
+}
+
+export interface ProjectTrustSetMessage {
+  cwd: string;
+  trusted: boolean;
+}
+
+/** Trust state plus report for one project. */
+export interface ProjectTrustInfo {
+  projectDir: string;
+  state: TrustState;
+  /** Null when trusted-and-current (nothing to disclose). */
+  report: ProjectTrustReport | null;
+}
+
+export interface ProjectTrustChangedEvent {
+  projectDir: string;
+  state: TrustState;
+}
+
+/** Entry shape for the settings trusted-projects list. */
+export interface TrustedProjectEntry {
+  projectDir: string;
+  trustedAt: string;
+  /** Live trust state (may be `changed` when the fingerprint drifted). */
+  state: TrustState;
+}
+
 /** Machine-readable chat:send gate / start failures. */
 export type ChatSendErrorKind =
   | 'session_not_found'
   | 'unbound_workspace'
+  | 'untrusted_project'
   | 'provider_required'
   | 'session_busy'
   | 'runtime_hydration_failed'
@@ -1033,6 +1140,17 @@ export interface OrchidAPI {
     onActivityChanged: (callback: (event: SessionActivityChangedEvent) => void) => () => void;
   };
 
+  projectTrust: {
+    /** Trust state + surface report for one project dir. */
+    get: (message: ProjectTrustGetMessage) => Promise<ProjectTrustInfo>;
+    /** Grant or revoke trust; broadcasts trust/workspace events. */
+    set: (message: ProjectTrustSetMessage) => Promise<ProjectTrustInfo>;
+    /** All trusted-project entries for the settings panel. */
+    list: () => Promise<TrustedProjectEntry[]>;
+    /** Trust state changed for a project dir. */
+    onChanged: (callback: (event: ProjectTrustChangedEvent) => void) => () => void;
+  };
+
   subagents: {
     snapshot: (request: SubagentSnapshotRequest) => Promise<SubagentSnapshot>;
     /** Batched subagent live deltas for the window's active session. */
@@ -1217,6 +1335,16 @@ export const IPC_CHANNELS = {
   SESSION_WORKING_SET_SET_FOCUS: 'session:working_set_set_focus',
   SESSION_WORKING_SET_CHANGED: 'session:working_set_changed',
 
+  // Project trust
+  /** Fetch trust state + surface report for one project dir. */
+  PROJECT_TRUST_GET: 'project:trust_get',
+  /** Grant or revoke trust for one project dir. */
+  PROJECT_TRUST_SET: 'project:trust_set',
+  /** List trusted-project entries (settings panel). */
+  PROJECT_TRUST_LIST: 'project:trust_list',
+  /** Push event: trust state changed for one project dir. */
+  PROJECT_TRUST_CHANGED: 'project:trust_changed',
+
   // Tool
   TOOL_EXECUTE: 'tool:execute',
 
@@ -1336,6 +1464,9 @@ export const ALLOWED_INVOKE_CHANNELS = [
   IPC_CHANNELS.SESSION_WORKING_SET_CLOSE,
   IPC_CHANNELS.SESSION_WORKING_SET_REMOVE,
   IPC_CHANNELS.SESSION_WORKING_SET_SET_FOCUS,
+  IPC_CHANNELS.PROJECT_TRUST_GET,
+  IPC_CHANNELS.PROJECT_TRUST_SET,
+  IPC_CHANNELS.PROJECT_TRUST_LIST,
   IPC_CHANNELS.TOOL_EXECUTE,
   IPC_CHANNELS.AGENT_SAVE,
   IPC_CHANNELS.AGENT_DELETE,
@@ -1392,6 +1523,7 @@ export const ALLOWED_EVENT_CHANNELS = [
   IPC_CHANNELS.SESSION_TODOS_CHANGED,
   IPC_CHANNELS.SESSION_ACTIVITY_CHANGED,
   IPC_CHANNELS.SESSION_WORKING_SET_CHANGED,
+  IPC_CHANNELS.PROJECT_TRUST_CHANGED,
   IPC_CHANNELS.RAG_PROGRESS,
   IPC_CHANNELS.AST_PROGRESS,
   IPC_CHANNELS.ASK_QUESTION_ASKED,

@@ -92,6 +92,11 @@ import type {
   PermissionResult,
   PermissionSessionModeMutationResult,
   PermissionSessionModeResult,
+  ProjectTrustGetMessage,
+  ProjectTrustSetMessage,
+  ProjectTrustInfo,
+  ProjectTrustChangedEvent,
+  TrustedProjectEntry,
   StartupSnapshot,
   StartupContinueDegradedResult,
 } from '../shared/types/ipc';
@@ -135,6 +140,9 @@ import {
   subagentDeltaEventSchema,
   startupSnapshotSchema,
   startupContinueDegradedResultSchema,
+  projectTrustInfoSchema,
+  projectTrustChangedEventSchema,
+  trustedProjectEntrySchema,
 } from '../shared/types/ipc-schemas';
 
 // ── Security helpers ─────────────────────────────────────────────────────────
@@ -170,6 +178,9 @@ const INVOKE_RESULT_SCHEMAS: Partial<Record<string, z.ZodTypeAny>> = {
   [IPC_CHANNELS.SESSION_PICK_PROJECT_DIR]: workspaceInfoSchema,
   [IPC_CHANNELS.SESSION_SET_WORKSPACE]: workspaceInfoSchema,
   [IPC_CHANNELS.SESSION_GET_REASONING_CONFIG]: sessionReasoningConfigResultSchema,
+  [IPC_CHANNELS.PROJECT_TRUST_GET]: projectTrustInfoSchema,
+  [IPC_CHANNELS.PROJECT_TRUST_SET]: projectTrustInfoSchema,
+  [IPC_CHANNELS.PROJECT_TRUST_LIST]: z.array(trustedProjectEntrySchema),
 };
 
 async function invoke<T>(channel: string, ...args: unknown[]): Promise<T> {
@@ -478,6 +489,20 @@ const orchidAPI: OrchidAPI = {
 
     onActivityChanged: (callback: (event: SessionActivityChangedEvent) => void) =>
       onParsed(IPC_CHANNELS.SESSION_ACTIVITY_CHANGED, sessionActivityChangedEventSchema, callback),
+  },
+
+  projectTrust: {
+    get: (message: ProjectTrustGetMessage) =>
+      invoke<ProjectTrustInfo>(IPC_CHANNELS.PROJECT_TRUST_GET, message),
+
+    set: (message: ProjectTrustSetMessage) =>
+      invoke<ProjectTrustInfo>(IPC_CHANNELS.PROJECT_TRUST_SET, message),
+
+    list: () =>
+      invoke<TrustedProjectEntry[]>(IPC_CHANNELS.PROJECT_TRUST_LIST),
+
+    onChanged: (callback: (event: ProjectTrustChangedEvent) => void) =>
+      onParsed(IPC_CHANNELS.PROJECT_TRUST_CHANGED, projectTrustChangedEventSchema, callback),
   },
 
   subagents: {

@@ -159,6 +159,17 @@ export const sessionSetWorkspaceSchema = z.object({
   cwd: z.string().min(1),
 });
 
+// ── Project trust ────────────────────────────────────────────────────────────
+
+export const projectTrustGetSchema = z.object({
+  cwd: z.string().min(1),
+});
+
+export const projectTrustSetSchema = z.object({
+  cwd: z.string().min(1),
+  trusted: z.boolean(),
+});
+
 export const sessionSetReasoningEffortSchema = z.object({
   effort: z.union([
     z.string().trim().min(1).max(256),

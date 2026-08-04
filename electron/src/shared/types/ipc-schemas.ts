@@ -187,12 +187,80 @@ export const sessionCreatedEventSchema = z.object({
   draftGeneration: z.number().optional(),
 });
 
+export const trustStateSchema = z.enum(['trusted', 'untrusted', 'changed']);
+
 export const sessionWorkspaceChangedEventSchema = z.object({
   workspace: z.object({
     cwd: z.string().nullable(),
     source: z.enum(['draft', 'session', 'default', 'unbound']),
     status: z.enum(['unbound', 'valid', 'missing']),
+    // Optional so payloads from pre-trust producers still parse.
+    trust: trustStateSchema.optional(),
   }),
+});
+
+// ── Trusted projects ────────────────────────────────────────────────────────
+
+export const trustReportMcpServerSchema = z.object({
+  name: z.string().min(1),
+  kind: z.enum(['added', 'override']),
+  command: z.string().optional(),
+  url: z.string().optional(),
+  args: z.array(z.string()).optional(),
+  envKeys: z.array(z.string()).optional(),
+});
+
+export const trustReportPermissionSchema = z.object({
+  tool: z.string().min(1),
+  rule: z.string(),
+  autoAllow: z.boolean(),
+});
+
+export const trustReportConfigOverrideSchema = z.object({
+  key: z.string().min(1),
+  projectValue: z.string(),
+  homeValue: z.string(),
+});
+
+export const trustReportModelOverrideSchema = z.object({
+  key: z.string().min(1),
+  connectionId: z.string(),
+  modelId: z.string(),
+});
+
+export const trustReportDefinitionSchema = z.object({
+  kind: z.enum(['agent', 'skill', 'personality']),
+  name: z.string().min(1),
+  overridesHome: z.boolean(),
+});
+
+export const projectTrustReportSchema = z.object({
+  projectDir: z.string().min(1),
+  hasSurface: z.boolean(),
+  mcpServers: z.array(trustReportMcpServerSchema),
+  permissions: z.array(trustReportPermissionSchema),
+  agentsMdOverrides: z.array(trustReportConfigOverrideSchema),
+  modelOverrides: z.array(trustReportModelOverrideSchema),
+  otherConfigOverrides: z.array(trustReportConfigOverrideSchema),
+  definitions: z.array(trustReportDefinitionSchema),
+  instructionFiles: z.array(z.string()),
+});
+
+export const projectTrustInfoSchema = z.object({
+  projectDir: z.string().min(1),
+  state: trustStateSchema,
+  report: projectTrustReportSchema.nullable(),
+});
+
+export const projectTrustChangedEventSchema = z.object({
+  projectDir: z.string().min(1),
+  state: trustStateSchema,
+});
+
+export const trustedProjectEntrySchema = z.object({
+  projectDir: z.string().min(1),
+  trustedAt: z.string(),
+  state: trustStateSchema,
 });
 
 export const sessionTodosChangedEventSchema = z.object({
@@ -265,6 +333,7 @@ export const updaterErrorEventSchema = z.object({
 export const chatSendErrorKindSchema = z.enum([
   'session_not_found',
   'unbound_workspace',
+  'untrusted_project',
   'provider_required',
   'session_busy',
   'runtime_hydration_failed',
@@ -305,6 +374,7 @@ export const workspaceInfoSchema = z.object({
   cwd: z.string().nullable(),
   source: z.enum(['draft', 'session', 'default', 'unbound']),
   status: z.enum(['unbound', 'valid', 'missing']),
+  trust: trustStateSchema.optional(),
 });
 
 export const sessionReasoningConfigResultSchema = z.object({
