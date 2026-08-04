@@ -1,12 +1,18 @@
 /**
- * useLiveCommandOutput — polls background command output from main process.
+ * useLiveCommandOutput — polls live command output from the main process.
  *
- * Throttled to 200ms to match Python's LiveCommandOutputWidget.
- * When the command finishes (exitCode !== null), polling stops automatically.
+ * Targets either a background command (`commandId`) or a foreground live
+ * mirror (`toolCallId`), resolving visibility against the explicit owning
+ * session. Throttled to 200ms; when the command exits or becomes
+ * unavailable, polling stops automatically.
  */
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import type { BgCommandOwner, BgCommandSnapshotRequest } from '../../shared/types/ipc';
 
 // ── Types ────────────────────────────────────────────────────────────────────
+
+/** Discriminated live-command target: exactly one of commandId / toolCallId. */
+export type LiveCommandTarget = { commandId: number } | { toolCallId: string };
 
 export interface LiveCommandState {
   /** Accumulated tail output. */
@@ -17,6 +23,18 @@ export interface LiveCommandState {
   isRunning: boolean;
   /** Whether the command is still available in the current process and session. */
   isAvailable: boolean;
+  /** Whether the command accepts user input (interactive PTY only). */
+  interactive: boolean;
+  /** Current input owner; null until the first found snapshot. */
+  owner: BgCommandOwner | null;
+  /** Spawned command line; empty until the first found snapshot. */
+  command: string;
+  /** Human-readable label, when the snapshot provides one. */
+  description: string | undefined;
+  /** Owning agent scope ('main' or a subagent id), once known. */
+  agentScopeId: string | undefined;
+  /** Force an immediate poll (e.g. right after a user control action). */
+  refresh: () => void;
 }
 
 // ── Constants ────────────────────────────────────────────────────────────────
@@ -27,22 +45,39 @@ const MAX_LINES = 50;
 // ── Hook ─────────────────────────────────────────────────────────────────────
 
 /**
- * Polls a background command's output.
+ * Polls a live command's output and metadata.
  *
- * @param commandId The background command ID (from the tool result content).
+ * @param target Background command id or foreground tool-call id; null disables polling.
+ * @param sessionId Owning session for visibility; omitted from the request when null.
  * @param enabled Whether status polling should be active.
  * @param refreshOutput Whether tail output should refresh while polling.
- * @returns Current output state.
+ * @returns Current output and metadata state.
  */
 export function useLiveCommandOutput(
-  commandId: number | null,
+  target: LiveCommandTarget | null,
+  sessionId: string | null,
   enabled: boolean,
   refreshOutput = enabled,
 ): LiveCommandState {
+  const commandId = target !== null && 'commandId' in target ? target.commandId : null;
+  const toolCallId = target !== null && 'toolCallId' in target ? target.toolCallId : null;
+  // Scalar identity for effect deps and stale-poll guarding.
+  const targetKey =
+    commandId !== null
+      ? `command:${commandId}`
+      : toolCallId !== null
+        ? `tool:${toolCallId}`
+        : null;
+
   const [output, setOutput] = useState('');
   const [exitCode, setExitCode] = useState<number | null>(null);
   const [isRunning, setIsRunning] = useState(true);
   const [isAvailable, setIsAvailable] = useState(true);
+  const [interactive, setInteractive] = useState(false);
+  const [owner, setOwner] = useState<BgCommandOwner | null>(null);
+  const [command, setCommand] = useState('');
+  const [description, setDescription] = useState<string | undefined>(undefined);
+  const [agentScopeId, setAgentScopeId] = useState<string | undefined>(undefined);
 
   // Track accumulated output for delta computation (matches Python pattern)
   const accumulatedRef = useRef('');
@@ -55,14 +90,9 @@ export function useLiveCommandOutput(
   const isPollingRef = useRef(false);
   // Guard against setState after unmount
   const mountedRef = useRef(true);
-  // Track the commandId that was active when poll() was invoked, so a stale
-  // in-flight IPC response can't write into a newer commandId's state.
-  const activeCommandIdRef = useRef(commandId);
-
-  // Keep activeCommandIdRef in sync with the latest commandId prop
-  useEffect(() => {
-    activeCommandIdRef.current = commandId;
-  }, [commandId]);
+  // Track the target that was active when poll() was invoked, so a stale
+  // in-flight IPC response can't write into a newer target's state.
+  const activeTargetRef = useRef(targetKey);
 
   // Mount status + cleanup — StrictMode safe (remount resets mounted flag)
   useEffect(() => {
@@ -73,32 +103,45 @@ export function useLiveCommandOutput(
     };
   }, []);
 
-  // P1 #5: Reset all accumulated state when commandId changes
+  // Reset all accumulated state when the target or owning session changes
   useEffect(() => {
     accumulatedRef.current = '';
     isPollingRef.current = false;
-    activeCommandIdRef.current = commandId;
+    activeTargetRef.current = targetKey;
     setOutput('');
     setExitCode(null);
     setIsRunning(true);
     setIsAvailable(true);
-  }, [commandId]);
+    setInteractive(false);
+    setOwner(null);
+    setCommand('');
+    setDescription(undefined);
+    setAgentScopeId(undefined);
+  }, [targetKey, sessionId]);
 
   const poll = useCallback(async () => {
-    if (!commandId || !window.orchid?.bgCmd) return;
+    const targetPayload: Pick<BgCommandSnapshotRequest, 'commandId' | 'toolCallId'> | null =
+      commandId !== null
+        ? { commandId }
+        : toolCallId !== null
+          ? { toolCallId }
+          : null;
+    if (!targetPayload || !window.orchid?.bgCmd) return;
     // Skip if a previous poll is still in flight — avoids out-of-order tail updates
     if (isPollingRef.current) return;
     isPollingRef.current = true;
 
     try {
       const snap = await window.orchid.bgCmd.snapshot({
-        commandId,
+        ...targetPayload,
         lastN: MAX_LINES,
+        // Explicit owning session — never the window's active-session fallback.
+        ...(sessionId ? { sessionId } : {}),
       });
 
-      // P2 #8: Bail if component unmounted or commandId changed during await
+      // Bail if component unmounted or the target changed during await
       if (!mountedRef.current) return;
-      if (activeCommandIdRef.current !== commandId) return;
+      if (activeTargetRef.current !== targetKey) return;
 
       if (!snap.found) {
         if (intervalRef.current) {
@@ -111,6 +154,11 @@ export function useLiveCommandOutput(
       }
 
       setIsAvailable(true);
+      setInteractive(snap.interactive);
+      setOwner(snap.owner);
+      setCommand(snap.command);
+      setDescription(snap.description);
+      setAgentScopeId(snap.agentScopeId);
 
       // Update exit code and running state
       if (snap.exitCode !== null) {
@@ -149,11 +197,15 @@ export function useLiveCommandOutput(
     } finally {
       isPollingRef.current = false;
     }
-  }, [commandId]);
+  }, [commandId, toolCallId, sessionId, targetKey]);
+
+  const refresh = useCallback(() => {
+    void poll();
+  }, [poll]);
 
   // Start/stop polling based on enabled state
   useEffect(() => {
-    if (!enabled || commandId === null) {
+    if (!enabled || targetKey === null) {
       if (intervalRef.current) {
         clearInterval(intervalRef.current);
         intervalRef.current = null;
@@ -173,7 +225,7 @@ export function useLiveCommandOutput(
         intervalRef.current = null;
       }
     };
-  }, [enabled, commandId, poll]);
+  }, [enabled, targetKey, poll]);
 
   // A command may finish while collapsed (and stop the status interval), so
   // reopening explicitly refreshes its final output tail once.
@@ -189,5 +241,16 @@ export function useLiveCommandOutput(
     }
   }, [isRunning]);
 
-  return { output, exitCode, isRunning, isAvailable };
+  return {
+    output,
+    exitCode,
+    isRunning,
+    isAvailable,
+    interactive,
+    owner,
+    command,
+    description,
+    agentScopeId,
+    refresh,
+  };
 }

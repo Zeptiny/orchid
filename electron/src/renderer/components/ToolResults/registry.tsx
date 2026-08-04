@@ -93,7 +93,8 @@ const ExecuteCommandRenderer: ToolResultRenderer = ({ canonical, isLive }) => {
   if (isLive) {
     return (
       <LiveCommandInline
-        commandId={bg.data.commandId}
+        target={{ commandId: bg.data.commandId }}
+        sessionId={null}
         commandText={bg.data.command}
         description={bg.data.description}
       />
