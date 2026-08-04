@@ -64,6 +64,7 @@ import {
   SubagentStillSettlingError,
 } from './errors';
 import { getSubagentAttributionStore } from '../providers/accounting/subagent-attribution-store';
+import { getBackgroundStore } from '../tools/process/background-store';
 
 export type { SubagentAdmissionLimits } from './admission';
 export {
@@ -1518,6 +1519,17 @@ export class SubagentManager {
       usage: record.usage,
       terminalRecord: () => this.toDomainRecord(record, { includeLiveTail: true }),
     });
+    // A terminal subagent's owned background commands die with it (R9); the
+    // scope id is the record id (see `_startRun`). Non-fatal: a cleanup
+    // failure must never break the terminal projection.
+    try {
+      getBackgroundStore().terminateScope(record.sessionId, record.id);
+    } catch (error) {
+      console.warn('[subagent-manager] Background scope cleanup failed', {
+        subagentId: record.id,
+        error,
+      });
+    }
   }
 
   /** Delegates wire construction and publication to the live-projection store. */

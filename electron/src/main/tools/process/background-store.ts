@@ -395,6 +395,20 @@ export class BackgroundProcessStore {
     }
   }
 
+  /**
+   * Terminate the running entries owned by one agent scope within a session
+   * (e.g. a subagent's commands when that subagent reaches a terminal state).
+   * A null session id never matches: unbound entries survive scope cleanup.
+   */
+  terminateScope(sessionId: string | null, agentScopeId: string): void {
+    if (sessionId === null) return;
+    for (const [procId, entry] of this._entries) {
+      if (entry.sessionId === sessionId && entry.agentScopeId === agentScopeId) {
+        this.terminate(procId);
+      }
+    }
+  }
+
   // -- LRU eviction --------------------------------------------------------
 
   pruneIfNeeded(): void {
