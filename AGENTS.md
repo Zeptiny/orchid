@@ -316,6 +316,14 @@ Instruction files (`AGENTS.md` and the configured `agents_md.filenames` aliases)
 - `resolveWindowWorkspace(windowId)` (session IPC) and pure `resolveWorkspaceFromParts` (project/) — never `process.cwd()` as product default
 - Intentional rebind (pick/set/change_cwd) aborts in-flight chat and reloads project config layers
 
+### Trusted Projects
+Project-supplied content (`.orchid.json`, `.orchid/` definitions, root AGENTS.md aliases, MCP servers) only runs after the user grants trust. Bind-then-gate: binding any directory succeeds, and every execution path enforces trust.
+- **Store** (`project/trust.ts`): `~/.orchid/trusted_projects.json`, keyed by canonical path. Trust state is `trusted | untrusted | changed`; a sha256 fingerprint over the security surface (`.orchid.json` + `.orchid/{agents,skills,personalities}` + root instruction files, size/count-capped) flips a grant to `changed` when it drifts. Bare projects (no surface) auto-trust without a store entry.
+- **Resolution**: `resolveWorkspaceFromParts` attaches `trust` to every usable `WorkspaceInfo` (`status`/`isWorkspaceBound` unchanged). Trust is fail-closed — un-canonicalizable paths read `untrusted`.
+- **Gate matrix** (while trust ≠ `trusted`): `chat:send` rejects `untrusted_project`; the MCP registry returns a dormant manager (no `startAll`); `tool:execute`, RAG/AST indexing, and `session:create` reject; `definitions:list` returns home-only. Subagent turns inherit the parent's captured runtime (no separate prompt).
+- **Revocation** (`ipc/session.ts` `revokeProjectTrustForDir`): drops the record, invalidates the runtime registry + MCP managers (lease-aware), and force-stops sessions bound to the dir. Grant invalidates runtime/MCP caches so services pick up trust immediately.
+- **Renderer**: `TrustProjectDialog` shows the surface-diff report; opened by bind results, `untrusted_project` send failures, and the workspace-chip badge — never auto-opened at startup. Settings → Trusted Projects lists/revokes entries.
+
 ### LLM Provider Resolution
 - Model identity is always a typed `{ connectionId, modelId }`; slash-delimited model IDs remain opaque and are never parsed as provider aliases
 - Connections store non-secret provider/auth/protocol metadata in `~/.orchid/providers.json`; secrets stay behind opaque handles in the encrypted credential vault
@@ -407,6 +415,7 @@ Defined in `src/main/config/schema.ts` — single source of truth:
 - User config: `~/.orchid/config.json`
 - Project config: `.orchid.json` (in project root)
 - Provider connections (non-secret): `~/.orchid/providers.json`
+- Trusted projects: `~/.orchid/trusted_projects.json` (canonical path → grant + fingerprint)
 - Merged: defaults → home → project → env overrides (deep-merged)
 
 ## Coding Conventions

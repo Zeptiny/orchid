@@ -77,3 +77,11 @@ Shared domain vocabulary for the orchid project. This file defines terms used ac
 - **Provider Connection** — One user-configured account or endpoint attached to a provider definition, with its own credentials, settings, models, and usage attribution. Multiple connections may use the same provider definition.
 - **Pricing Snapshot** — The immutable pricing inputs and provenance frozen when a provider request starts and retained with its accounting record.
 - **Request Cost Record** — Immutable usage and billing evidence for one attributable provider request. Chain and session costs are derived from these records.
+
+## Trusted Projects
+
+- **Trust State** — The posture of a bound project directory: `trusted` (granted and fingerprint-current, or a bare project auto-trusted), `untrusted` (has a project surface with no grant), or `changed` (previously trusted but the surface fingerprint drifted).
+- **Project Surface** — Anything a project supplies that Orchid would execute or inject: `.orchid.json`, `.orchid/{agents,skills,personalities}` definitions, root AGENTS.md alias files, and configured MCP servers. A directory with no surface is trusted automatically without prompting.
+- **Trust Fingerprint** — A sha256 over the security surface (`.orchid.json` bytes, definition-file listing/hashes, root instruction files; size- and count-capped) recorded at grant time. A mismatch moves the project to `changed` and requires re-confirmation.
+- **Trust Report** — The surface diff between a project and the home/global configuration (added/overridden MCP servers, permission rules, AGENTS.md policy changes, model and config overrides, project definitions, instruction files) shown in the trust dialog.
+- **Bind-then-Gate** — The trust model: binding any directory succeeds, and every execution path (`chat:send`, MCP start, renderer tools, indexing, session create) independently enforces trust rather than refusing the bind.
