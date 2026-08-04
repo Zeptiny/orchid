@@ -32,6 +32,9 @@ import {
   type WorkspaceInfo,
 } from '../project/workspace';
 import { getProjectRuntimeRegistry } from '../project/runtime';
+import { canonicalizeProjectDirectory } from '../project/path';
+import { getProjectTrustState, revokeProjectTrust } from '../project/trust';
+import { invalidateProjectMCPManagers } from '../mcp/project-registry';
 import { clearNextRequestStop } from './next-request-stop';
 import { removeSessionActivity } from './session-activity';
 import {
@@ -126,6 +129,35 @@ export async function bindProjectDirectory(
   }
 
   return resolveWindowWorkspace(windowId);
+}
+
+/**
+ * Revoke trust for one project and stop all of its activity.
+ *
+ * The trust record drops first so concurrent gate reads fail closed, then the
+ * cached runtime and MCP managers are invalidated (lease-aware shutdown
+ * retires them as running turns finish), and every session bound to the
+ * directory is force-stopped. Invalid directories are a no-op.
+ */
+export async function revokeProjectTrustForDir(projectDir: string): Promise<void> {
+  const canonical = canonicalizeProjectDirectory(projectDir);
+  if (canonical == null) return;
+
+  revokeProjectTrust(canonical);
+  getProjectRuntimeRegistry().invalidate(canonical);
+  invalidateProjectMCPManagers(canonical);
+
+  const boundSessionIds = getSessionManager()
+    .listSaved()
+    .filter((summary) => summary.cwd === canonical)
+    .map((summary) => summary.id);
+  if (boundSessionIds.length === 0) return;
+
+  // Dynamic import avoids the session.ts <-> chat.ts circular dependency.
+  const { forceStopSession } = await import('./chat.js');
+  for (const sessionId of boundSessionIds) {
+    forceStopSession(sessionId);
+  }
 }
 
 /** Emit session:workspace_changed to the sender window. */
@@ -267,6 +299,12 @@ export function registerSessionIPC(): void {
     if (!isWorkspaceBound(workspace) || workspace.cwd == null) {
       throw new Error(
         'Cannot create session: no project folder selected. Choose a folder first.',
+      );
+    }
+
+    if (getProjectTrustState(workspace.cwd) !== 'trusted') {
+      throw new Error(
+        'Cannot create session: project folder is not trusted. Trust the project first.',
       );
     }
 

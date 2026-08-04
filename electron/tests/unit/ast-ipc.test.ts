@@ -60,6 +60,12 @@ vi.mock('../../src/main/ipc/session', () => ({
   resolveBoundProjectPath: mocks.resolveBoundProjectPath,
 }));
 
+// The trust gate is fail-closed for the mocked (non-existent) project dir,
+// so this fixture resolves as trusted to keep the suite on its own seams.
+vi.mock('../../src/main/project/trust', () => ({
+  getProjectTrustState: () => 'trusted',
+}));
+
 vi.mock('../../src/main/ast/store', () => ({
   ASTStore: mocks.ASTStore,
 }));

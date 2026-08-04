@@ -22,6 +22,7 @@ import {
 } from '../defs/manage';
 import { assertPathUnderOrchidRoots } from '../defs/paths';
 import { reloadDefinitionRegistries } from '../defs/reload';
+import { getProjectTrustState } from '../project/trust';
 import { toolRegistry } from '../tools';
 import { resolveBoundProjectPath } from './session';
 
@@ -104,7 +105,12 @@ function withDefinitionMutation<TSchema extends z.ZodTypeAny, TResult>(
 export function registerDefinitionsIPC(): void {
   ipcMain.handle(IPC_CHANNELS.DEFINITIONS_LIST, async (event) => {
     const projectDir = projectDirFromEvent(event);
-    const skills = listManagedSkills(projectDir);
+    // Untrusted projects list home-only definitions (no project overlay).
+    const listProjectDir =
+      projectDir != null && getProjectTrustState(projectDir) === 'trusted'
+        ? projectDir
+        : null;
+    const skills = listManagedSkills(listProjectDir);
     const availableTools = toolRegistry
       .listAll()
       .map((t) => t.definition.name)
@@ -114,8 +120,8 @@ export function registerDefinitionsIPC(): void {
     return {
       projectDir,
       skills,
-      agents: listManagedAgents(projectDir),
-      personalities: listManagedPersonalities(projectDir),
+      agents: listManagedAgents(listProjectDir),
+      personalities: listManagedPersonalities(listProjectDir),
       availableTools,
       availableSkills: Array.from(skillNames).sort((a, b) => a.localeCompare(b)),
     };

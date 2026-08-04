@@ -202,6 +202,12 @@ vi.mock('../../src/main/project/runtime', () => ({
   clearProjectRuntimeRegistry: vi.fn(),
 }));
 
+// This suite's config/loader mock omits the home definition dirs the trust
+// store inspects, so trust resolves as trusted to keep it on its own seams.
+vi.mock('../../src/main/project/trust', () => ({
+  getProjectTrustState: () => 'trusted',
+}));
+
 vi.mock('../../src/main/ipc/chat-history', () => ({
   clearChatHistory: vi.fn(),
   seedChatHistory: vi.fn(),

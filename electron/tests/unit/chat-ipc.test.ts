@@ -635,6 +635,12 @@ vi.mock('../../src/main/ipc/session-activity', () => ({
   completeSessionActivity: mocks.completeSessionActivity,
 }));
 
+// The trust gate is fail-closed for the mocked (non-existent) workspace dirs,
+// so these fixture cwds resolve as trusted to keep the suite on its own seams.
+vi.mock('../../src/main/project/trust', () => ({
+  getProjectTrustState: () => 'trusted',
+}));
+
 vi.mock('../../src/main/project/workspace', () => ({
   resolveWorkspace: (...args: unknown[]) =>
     mocks.workspace.resolveWorkspace(...(args as [string, unknown?])),

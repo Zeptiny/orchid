@@ -16,6 +16,7 @@ import { toolRegistry } from '../tools';
 import type { ToolExecutionContext } from '../tools/types';
 import { getSessionManager, resolveBoundProjectPath } from './session';
 import { getProjectRuntimeRegistry } from '../project/runtime';
+import { getProjectTrustState } from '../project/trust';
 import {
   RENDERER_ALLOWED_TOOLS,
   toolExecuteSchema,
@@ -89,6 +90,16 @@ export function registerToolIPC(): void {
         'error',
         'No project folder selected. Choose a folder before running tools.',
         'missing_workspace',
+      );
+    }
+
+    if (getProjectTrustState(toolCtx.cwd) !== 'trusted') {
+      return genericTerminalExecution(
+        crypto.randomUUID(),
+        name,
+        'error',
+        'This project folder is not trusted. Trust it before running tools.',
+        'untrusted_project',
       );
     }
 

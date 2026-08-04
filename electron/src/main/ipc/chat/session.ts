@@ -4,6 +4,7 @@ import type { Session } from '../../../shared/types/session';
 import type { ChatSendResult } from '../../../shared/types/ipc';
 import { IPC_CHANNELS } from '../../../shared/types/ipc';
 import { getSessionManager, resolveWindowWorkspace } from '../../session/singleton';
+import { getProjectTrustState } from '../../project/trust';
 import { takeDraftReasoningOverride } from '../../session/draft-reasoning';
 import { takeDraftPermissionOverride } from '../../permissions/session-overrides';
 import { workingSetOpenOrFocus } from '../session-working-set';
@@ -71,6 +72,19 @@ export function ensureActiveSession(
         error:
           'No project folder selected. Choose a folder before sending a message.',
         kind: 'unbound_workspace',
+      },
+    };
+  }
+
+  // No project-supplied content may run until the project is trusted.
+  if (getProjectTrustState(boundCwd) !== 'trusted') {
+    return {
+      ok: false,
+      result: {
+        status: 'error',
+        error:
+          'This project folder is not trusted. Review and trust it before sending messages.',
+        kind: 'untrusted_project',
       },
     };
   }

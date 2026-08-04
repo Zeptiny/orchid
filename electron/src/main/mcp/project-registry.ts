@@ -7,6 +7,7 @@
  * workspace.
  */
 import type { ProjectRuntime } from '../project/runtime';
+import { getProjectTrustState } from '../project/trust';
 import { MCPManager } from './manager';
 import type { MCPServerConfig } from './schema';
 
@@ -59,7 +60,13 @@ export class ProjectMCPManagerRegistry {
     });
 
     const servers = projectServers(runtime);
-    if (Object.keys(servers).length > 0) {
+    // Untrusted projects get a dormant manager: cached so lease holders and
+    // status reads stay safe, but no server process starts. Granting trust
+    // invalidates the entry, so the next get() recreates and starts servers.
+    if (
+      Object.keys(servers).length > 0 &&
+      getProjectTrustState(runtime.projectDir) === 'trusted'
+    ) {
       void manager.startAll(servers, {
         perServerTimeout: runtime.config.mcp_per_server_timeout * 1000,
         startupTimeout: runtime.config.mcp_startup_timeout * 1000,

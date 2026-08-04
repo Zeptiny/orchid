@@ -38,6 +38,12 @@ vi.mock('../../src/main/project/runtime', () => ({
   }),
 }));
 
+// The MCP registry imports the trust store, whose module-scope singleton
+// needs config/loader exports this suite's mock does not provide.
+vi.mock('../../src/main/project/trust', () => ({
+  getProjectTrustState: () => 'trusted',
+}));
+
 import { reloadDefinitionRegistries } from '../../src/main/defs/reload';
 
 beforeEach(() => {
