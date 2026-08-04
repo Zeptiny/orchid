@@ -74,6 +74,10 @@ import type {
   ASTIndexMessage,
   ASTIndexProgress,
   BgCommandSnapshotRequest,
+  BgCommandListRequest,
+  BgCommandSendInputRequest,
+  BgCommandControlRequest,
+  BgCommandChangedEvent,
   SubagentSnapshotRequest,
   SubagentSnapshot,
   SubagentEvent,
@@ -131,6 +135,11 @@ import {
   chatSendResultSchema,
   toolExecuteResultSchema,
   bgCommandSnapshotResultSchema,
+  bgCommandListResultSchema,
+  bgCommandSendInputResultSchema,
+  bgCommandTerminateResultSchema,
+  bgCommandReleaseInputResultSchema,
+  bgCommandChangedEventSchema,
   configSaveResultSchema,
   workspaceInfoSchema,
   sessionReasoningConfigResultSchema,
@@ -173,6 +182,10 @@ const INVOKE_RESULT_SCHEMAS: Partial<Record<string, z.ZodTypeAny>> = {
   [IPC_CHANNELS.SUBAGENTS_SNAPSHOT]: subagentSnapshotSchema,
   [IPC_CHANNELS.TOOL_EXECUTE]: toolExecuteResultSchema,
   [IPC_CHANNELS.BG_CMD_SNAPSHOT]: bgCommandSnapshotResultSchema,
+  [IPC_CHANNELS.BG_CMD_LIST]: bgCommandListResultSchema,
+  [IPC_CHANNELS.BG_CMD_SEND_INPUT]: bgCommandSendInputResultSchema,
+  [IPC_CHANNELS.BG_CMD_TERMINATE]: bgCommandTerminateResultSchema,
+  [IPC_CHANNELS.BG_CMD_RELEASE_INPUT]: bgCommandReleaseInputResultSchema,
   [IPC_CHANNELS.CONFIG_SAVE]: configSaveResultSchema,
   [IPC_CHANNELS.SESSION_GET_WORKSPACE]: workspaceInfoSchema,
   [IPC_CHANNELS.SESSION_PICK_PROJECT_DIR]: workspaceInfoSchema,
@@ -588,6 +601,21 @@ const orchidAPI: OrchidAPI = {
   bgCmd: {
     snapshot: (request: BgCommandSnapshotRequest) =>
       invoke(IPC_CHANNELS.BG_CMD_SNAPSHOT, request),
+
+    list: (request?: BgCommandListRequest) =>
+      invoke(IPC_CHANNELS.BG_CMD_LIST, request ?? {}),
+
+    sendInput: (request: BgCommandSendInputRequest) =>
+      invoke(IPC_CHANNELS.BG_CMD_SEND_INPUT, request),
+
+    terminate: (request: BgCommandControlRequest) =>
+      invoke(IPC_CHANNELS.BG_CMD_TERMINATE, request),
+
+    releaseInput: (request: BgCommandControlRequest) =>
+      invoke(IPC_CHANNELS.BG_CMD_RELEASE_INPUT, request),
+
+    onChanged: (callback: (event: BgCommandChangedEvent) => void) =>
+      onParsed(IPC_CHANNELS.BG_CMD_CHANGED, bgCommandChangedEventSchema, callback),
   },
 
   askQuestion: {

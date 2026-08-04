@@ -302,6 +302,20 @@ idle → [USER_INPUT] → streaming → [TOOL_CALL] → toolExecuting → [TOOL_
 - **`ToolExecutionContext`**: frozen `{ cwd, sessionId? }` captured at turn start; every tool handler receives it (never re-reads live session/process.cwd mid-turn)
 - **`tool:execute` IPC**: allowlisted read-only tools only; args validated via `toolRegistry.validate` before the handler
 
+### Background Commands (visibility & user control)
+- Background `execute_command` processes live in the in-memory `BackgroundProcessStore` (`tools/process/background-store.ts`): head-tail buffers, LRU cap, `owner: 'AGENT' | 'USER'`, and session/scope metadata. Foreground runs additionally mirror output into `ForegroundLiveRegistry` (`tools/process/foreground-live.ts`) keyed by `toolCallId`; the mirror is display-only — the bounded collector stays the canonical result authority.
+- **User IPC surface** (`ipc/chat.ts`, preload `bgCmd`): `bgcmd:snapshot` accepts exactly one of `commandId` (background store) or `toolCallId` (foreground registry) and returns the tail plus `running/interactive/owner/command/description/agentScopeId` metadata; `bgcmd:list` returns the session's background fleet across all agent scopes (running-first, subagent display names joined from `SubagentManager`); `bgcmd:send_input`, `bgcmd:terminate`, and `bgcmd:release_input` are the user controls; `bgcmd:changed` push-broadcasts fleet changes. Every payload is Zod-validated and channel-allowlisted.
+- **Session-privileged vs scope-gated**: user control handlers match `entry.sessionId` only, so users reach any agent scope in their session; agent tools (`send_input`, `terminate_command`, `read_output`) stay scope-gated via `getVisible`. Successful user input flips `owner` to `'USER'`, which makes the agent `send_input` reject (`control: USER`) until `bgcmd:release_input` or the `background_command_idle_timeout` auto-release.
+- **Command kill matrix**:
+
+| Trigger | Effect |
+|---|---|
+| User Stop (`bgcmd:terminate`) | Single command, any scope in the session |
+| Subagent terminal transition | Owned scope's commands (`terminateScope`) |
+| Esc phase 2 / `chat:stop` / rebind / trust revoke | All session commands (`terminateSession`) |
+| LRU eviction at `max_background_processes` | Oldest evictable entries |
+| App quit | `terminateAll` |
+
 ### AGENTS.md Context Handling
 Instruction files (`AGENTS.md` and the configured `agents_md.filenames` aliases) are discovered and surfaced automatically — the agent never loads them manually.
 - **Discovery** (`agents-md/resolver.ts`): for any touched path, walk up from its directory to the workspace root, taking the first matching alias per directory. Symlinks that escape the workspace are ignored and filenames match case-insensitively. The workspace-root file is the `root` tier; the rest are `nested`.

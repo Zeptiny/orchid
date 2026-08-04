@@ -301,9 +301,16 @@ export interface ChatToolCallUpdateEvent extends ChatEventIdentity {
 
 // ── Background Command API ────────────────────────────────────────────────
 
+/** Input ownership of a background command. */
+export type BgCommandOwner = 'AGENT' | 'USER';
+
 export interface BgCommandSnapshotRequest {
-  /** The background command ID. */
-  commandId: number;
+  /** Background command ID (targets the background store). Exactly one of
+   * `commandId` / `toolCallId` must be provided. */
+  commandId?: number;
+  /** Foreground tool call ID (targets the foreground live registry). Exactly
+   * one of `commandId` / `toolCallId` must be provided. */
+  toolCallId?: string;
   /** Optional last N lines to retrieve (default: 50, max: 1000). */
   lastN?: number;
   /**
@@ -313,19 +320,95 @@ export interface BgCommandSnapshotRequest {
   sessionId?: string;
 }
 
+export interface BgCommandSnapshotFound {
+  /** The command exists and is visible to the requesting session. */
+  found: true;
+  /** Tail output text. */
+  tail: string;
+  /** Exit code (null if still running). */
+  exitCode: number | null;
+  /** Whether the process is still running (`exitCode === null`). */
+  running: boolean;
+  /** Whether the command accepts user input (interactive PTY commands only). */
+  interactive: boolean;
+  /** Current input owner. */
+  owner: BgCommandOwner;
+  /** The spawned command line. */
+  command: string;
+  /** Human-readable label; foreground commands reuse the command line. */
+  description?: string;
+  /** Owning agent scope (`'main'` or a subagent id). */
+  agentScopeId: string;
+}
+
 export type BgCommandSnapshotResult =
-  | {
-    /** The command exists and is visible to the requesting session. */
-    found: true;
-    /** Tail output text. */
-    tail: string;
-    /** Exit code (null if still running). */
-    exitCode: number | null;
-  }
+  | BgCommandSnapshotFound
   | {
     /** The command is unavailable after restart, eviction, or session mismatch. */
     found: false;
   };
+
+export interface BgCommandListRequest {
+  /**
+   * Session whose background fleet to list. When omitted, main resolves the
+   * calling window's active session.
+   */
+  sessionId?: string;
+}
+
+/** One background command in the session fleet view. */
+export interface BgCommandListItem {
+  id: number;
+  command: string;
+  description: string;
+  interactive: boolean;
+  owner: BgCommandOwner;
+  /** Owning agent scope (`'main'` or a subagent id). */
+  agentScopeId: string;
+  /** `'main'` for the main scope, else the subagent display name
+   * (falls back to the raw scope id). */
+  scopeName: string;
+  running: boolean;
+  exitCode: number | null;
+  createdAt: number;
+  lastOutputAt: number;
+}
+
+export type BgCommandListResult = BgCommandListItem[];
+
+export interface BgCommandSendInputRequest {
+  commandId: number;
+  /** Text to write to stdin (include \n for newline). */
+  text: string;
+  sessionId?: string;
+}
+
+export type BgCommandSendInputResult =
+  | { ok: true }
+  | {
+    ok: false;
+    /** `not_found` covers unknown ids and cross-session access alike. */
+    reason: 'not_found' | 'not_interactive' | 'exited' | 'write_failed';
+  };
+
+/** Target for user terminate / release-input (session-privileged). */
+export interface BgCommandControlRequest {
+  commandId: number;
+  sessionId?: string;
+}
+
+export type BgCommandTerminateResult =
+  | { ok: true }
+  | { ok: false; reason: 'not_found' };
+
+export interface BgCommandReleaseInputResult {
+  ok: boolean;
+}
+
+/** Push event: the background fleet of one session changed. */
+export interface BgCommandChangedEvent {
+  sessionId: string;
+}
 
 // ── Config API ───────────────────────────────────────────────────────────────
 
@@ -1212,6 +1295,16 @@ export interface OrchidAPI {
 
   bgCmd: {
     snapshot: (request: BgCommandSnapshotRequest) => Promise<BgCommandSnapshotResult>;
+    /** List the session's background fleet across agent scopes (running-first). */
+    list: (request?: BgCommandListRequest) => Promise<BgCommandListResult>;
+    /** Send one line of user input; success takes USER ownership of the command. */
+    sendInput: (request: BgCommandSendInputRequest) => Promise<BgCommandSendInputResult>;
+    /** Terminate a single command in any agent scope of the session. */
+    terminate: (request: BgCommandControlRequest) => Promise<BgCommandTerminateResult>;
+    /** Release USER input ownership back to the agent. */
+    releaseInput: (request: BgCommandControlRequest) => Promise<BgCommandReleaseInputResult>;
+    /** Subscribe to background fleet changes (spawn/exit/eviction). */
+    onChanged: (callback: (event: BgCommandChangedEvent) => void) => () => void;
   };
 
   askQuestion: {
@@ -1380,6 +1473,12 @@ export const IPC_CHANNELS = {
 
   // Background Commands
   BG_CMD_SNAPSHOT: 'bgcmd:snapshot',
+  BG_CMD_LIST: 'bgcmd:list',
+  BG_CMD_SEND_INPUT: 'bgcmd:send_input',
+  BG_CMD_TERMINATE: 'bgcmd:terminate',
+  BG_CMD_RELEASE_INPUT: 'bgcmd:release_input',
+  /** Push event: a session's background fleet changed (spawn/exit/eviction). */
+  BG_CMD_CHANGED: 'bgcmd:changed',
 
   // Ask Question
   ASK_QUESTION_ASKED: 'ask_question:asked',
@@ -1485,6 +1584,10 @@ export const ALLOWED_INVOKE_CHANNELS = [
   IPC_CHANNELS.AST_INDEX,
   IPC_CHANNELS.AST_INDEX_STATE,
   IPC_CHANNELS.BG_CMD_SNAPSHOT,
+  IPC_CHANNELS.BG_CMD_LIST,
+  IPC_CHANNELS.BG_CMD_SEND_INPUT,
+  IPC_CHANNELS.BG_CMD_TERMINATE,
+  IPC_CHANNELS.BG_CMD_RELEASE_INPUT,
   IPC_CHANNELS.ASK_QUESTION_SNAPSHOT,
   IPC_CHANNELS.ASK_QUESTION_ANSWER,
   IPC_CHANNELS.ASK_QUESTION_CANCEL,
@@ -1526,6 +1629,7 @@ export const ALLOWED_EVENT_CHANNELS = [
   IPC_CHANNELS.PROJECT_TRUST_CHANGED,
   IPC_CHANNELS.RAG_PROGRESS,
   IPC_CHANNELS.AST_PROGRESS,
+  IPC_CHANNELS.BG_CMD_CHANGED,
   IPC_CHANNELS.ASK_QUESTION_ASKED,
   IPC_CHANNELS.ASK_QUESTION_SETTLED,
   IPC_CHANNELS.PERMISSION_APPROVAL_REQUESTED,

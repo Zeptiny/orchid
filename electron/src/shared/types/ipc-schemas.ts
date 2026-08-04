@@ -357,16 +357,61 @@ export const chatSendResultSchema = z.discriminatedUnion('status', [
 
 export const toolExecuteResultSchema = toolExecutionResultSchema;
 
+export const bgCommandOwnerSchema = z.enum(['AGENT', 'USER']);
+
 export const bgCommandSnapshotResultSchema = z.discriminatedUnion('found', [
   z.object({
     found: z.literal(true),
     tail: z.string(),
     exitCode: z.number().nullable(),
+    running: z.boolean(),
+    interactive: z.boolean(),
+    owner: bgCommandOwnerSchema,
+    command: z.string(),
+    description: z.string().optional(),
+    agentScopeId: z.string(),
   }),
   z.object({
     found: z.literal(false),
   }),
 ]);
+
+export const bgCommandListItemSchema = z.object({
+  id: z.number().int().positive(),
+  command: z.string(),
+  description: z.string(),
+  interactive: z.boolean(),
+  owner: bgCommandOwnerSchema,
+  agentScopeId: z.string(),
+  scopeName: z.string(),
+  running: z.boolean(),
+  exitCode: z.number().nullable(),
+  createdAt: z.number(),
+  lastOutputAt: z.number(),
+});
+
+export const bgCommandListResultSchema = z.array(bgCommandListItemSchema);
+
+export const bgCommandSendInputResultSchema = z.discriminatedUnion('ok', [
+  z.object({ ok: z.literal(true) }),
+  z.object({
+    ok: z.literal(false),
+    reason: z.enum(['not_found', 'not_interactive', 'exited', 'write_failed']),
+  }),
+]);
+
+export const bgCommandTerminateResultSchema = z.discriminatedUnion('ok', [
+  z.object({ ok: z.literal(true) }),
+  z.object({ ok: z.literal(false), reason: z.literal('not_found') }),
+]);
+
+export const bgCommandReleaseInputResultSchema = z.object({
+  ok: z.boolean(),
+});
+
+export const bgCommandChangedEventSchema = z.object({
+  sessionId: z.string(),
+});
 
 export const configSaveResultSchema = z.object({
   status: z.string(),

@@ -469,6 +469,7 @@ const mocks = vi.hoisted(() => {
       if (!entry || entry.sessionId !== sessionId) return undefined;
       return { tail: entry.tail, exitCode: entry.exitCode };
     }),
+    get: vi.fn((commandId: number) => backgroundEntries.get(commandId)),
     list: vi.fn(() => []),
     _reset: () => {
       backgroundEntries.clear();
@@ -476,6 +477,7 @@ const mocks = vi.hoisted(() => {
       backgroundStore.snapshot.mockClear();
       backgroundStore.snapshotVisible.mockClear();
       backgroundStore.snapshotForSession.mockClear();
+      backgroundStore.get.mockClear();
     },
   };
 
@@ -629,6 +631,7 @@ vi.mock('../../src/main/tools/process/background-store', () => ({
   getBackgroundStore: () => mocks.backgroundStore,
   setBackgroundStore: vi.fn(),
   BackgroundProcessStore: vi.fn(),
+  subscribeBackgroundProcessChanges: vi.fn(() => vi.fn()),
 }));
 
 vi.mock('../../src/main/ipc/session-activity', () => ({
@@ -2009,7 +2012,16 @@ describe('chat IPC teardown and bgcmd bounds', () => {
       { sender: { id: 913, send: vi.fn() } },
       { commandId: 42, lastN: 50, sessionId: ownerSession },
     );
-    expect(allowed).toEqual({ found: true, tail: 'secret-output\n', exitCode: 0 });
+    expect(allowed).toEqual({
+      found: true,
+      tail: 'secret-output\n',
+      exitCode: 0,
+      running: false,
+      interactive: false,
+      owner: 'AGENT',
+      command: '',
+      agentScopeId: 'main',
+    });
   });
 
   it('bgcmd:snapshot allows subagent-scoped tails within the same session', async () => {
@@ -2033,7 +2045,16 @@ describe('chat IPC teardown and bgcmd bounds', () => {
       { sender: { id: 914, send: vi.fn() } },
       { commandId: 43, lastN: 50 },
     );
-    expect(result).toEqual({ found: true, tail: 'subagent-output\n', exitCode: null });
+    expect(result).toEqual({
+      found: true,
+      tail: 'subagent-output\n',
+      exitCode: null,
+      running: true,
+      interactive: false,
+      owner: 'AGENT',
+      command: '',
+      agentScopeId: 'subagent-xyz',
+    });
   });
 });
 

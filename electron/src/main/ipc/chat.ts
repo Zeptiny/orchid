@@ -1,8 +1,12 @@
 /** Chat IPC registration and small boundary handlers. */
-import { ipcMain, type WebContents } from 'electron';
+import { BrowserWindow, ipcMain, type IpcMainInvokeEvent, type WebContents } from 'electron';
 import { z } from 'zod';
 import { getSubagentManager } from '../tools';
-import { getBackgroundStore } from '../tools/process/background-store';
+import {
+  getBackgroundStore,
+  subscribeBackgroundProcessChanges,
+} from '../tools/process/background-store';
+import { getForegroundLiveRegistry } from '../tools/process/foreground-live';
 import { getSessionManager } from '../session/singleton';
 import { IPC_CHANNELS, type ChatSessionSnapshot } from '../../shared/types/ipc';
 import { ChainStatus } from '../../shared/types/chain';
@@ -38,11 +42,59 @@ export { forceAbortSession, forceStopSession, webContentsForWindowId };
 
 const BG_CMD_SNAPSHOT_MAX_LAST_N = 1000;
 
-const bgCommandSnapshotSchema = z.object({
-  commandId: z.number().int().positive(),
-  lastN: z.number().int().positive().max(BG_CMD_SNAPSHOT_MAX_LAST_N).optional(),
+/**
+ * Discriminated snapshot target: exactly one of `commandId` (background store)
+ * or `toolCallId` (foreground live registry). Zero or both targets reject.
+ */
+const bgCommandSnapshotSchema = z
+  .object({
+    commandId: z.number().int().positive().optional(),
+    toolCallId: z.string().min(1).optional(),
+    lastN: z.number().int().positive().max(BG_CMD_SNAPSHOT_MAX_LAST_N).optional(),
+    sessionId: z.string().uuid().optional(),
+  })
+  .refine(
+    (data) => (data.commandId !== undefined) !== (data.toolCallId !== undefined),
+    { message: 'Provide exactly one of commandId or toolCallId' },
+  );
+
+const bgCommandListSchema = z.object({
   sessionId: z.string().uuid().optional(),
 });
+
+const bgCommandSendInputSchema = z.object({
+  commandId: z.number().int().positive(),
+  text: z.string(),
+  sessionId: z.string().uuid().optional(),
+});
+
+/** Shared shape for bgcmd:terminate and bgcmd:release_input. */
+const bgCommandControlSchema = z.object({
+  commandId: z.number().int().positive(),
+  sessionId: z.string().uuid().optional(),
+});
+
+/**
+ * Payload-then-active-session convention shared by every bgcmd handler: an
+ * explicit sessionId wins, else the calling window's active session.
+ */
+function resolveBgCommandSessionId(
+  requestedSessionId: string | undefined,
+  event: IpcMainInvokeEvent,
+): string | null {
+  return requestedSessionId
+    ?? getSessionManager().getActive(String(event.sender.id))?.id
+    ?? null;
+}
+
+function broadcastBgCommandChanged(sessionId: string): void {
+  for (const win of BrowserWindow.getAllWindows()) {
+    if (win.isDestroyed() || win.webContents.isDestroyed()) continue;
+    win.webContents.send(IPC_CHANNELS.BG_CMD_CHANGED, { sessionId });
+  }
+}
+
+let removeBgCommandChangeListener: (() => void) | null = null;
 
 /** Register chat IPC boundaries; the turn lifecycle lives in `chat/send.ts`. */
 export function registerChatIPC(): void {
@@ -156,11 +208,123 @@ export function registerChatIPC(): void {
   ipcMain.handle(IPC_CHANNELS.BG_CMD_SNAPSHOT, async (event, payload: unknown) => {
     const parsed = bgCommandSnapshotSchema.safeParse(payload);
     if (!parsed.success) throw new Error(`Invalid bgcmd:snapshot payload: ${parsed.error.message}`);
-    const { commandId, lastN, sessionId: requestedSessionId } = parsed.data;
-    const sessionId = requestedSessionId ?? getSessionManager().getActive(String(event.sender.id))?.id ?? null;
+    const { commandId, toolCallId, lastN, sessionId: requestedSessionId } = parsed.data;
+    const sessionId = resolveBgCommandSessionId(requestedSessionId, event);
     if (!sessionId) return { found: false };
-    const snapshot = getBackgroundStore().snapshotForSession(commandId, lastN ?? 50, sessionId);
-    return snapshot ? { found: true, ...snapshot } : { found: false };
+    const lines = lastN ?? 50;
+    if (commandId !== undefined) {
+      const snapshot = getBackgroundStore().snapshotForSession(commandId, lines, sessionId);
+      if (!snapshot) return { found: false };
+      // snapshotForSession already enforced session visibility; nothing can
+      // remove the entry between the two synchronous lookups.
+      const entry = getBackgroundStore().get(commandId);
+      return {
+        found: true,
+        tail: snapshot.tail,
+        exitCode: snapshot.exitCode,
+        running: snapshot.exitCode === null,
+        interactive: entry?.interactive ?? false,
+        owner: entry?.owner ?? 'AGENT',
+        command: entry?.command ?? '',
+        description: entry?.description || undefined,
+        agentScopeId: entry?.agentScopeId ?? 'main',
+      };
+    }
+    const live = getForegroundLiveRegistry().get(toolCallId!);
+    if (!live || live.sessionId !== sessionId) return { found: false };
+    return {
+      found: true,
+      tail: live.buffer.getTail(lines),
+      exitCode: live.exitCode,
+      running: live.exitCode === null,
+      interactive: false,
+      owner: 'AGENT',
+      command: live.command,
+      // Foreground entries carry no separate description — reuse the command.
+      description: live.command,
+      agentScopeId: live.agentScopeId,
+    };
+  });
+
+  ipcMain.handle(IPC_CHANNELS.BG_CMD_LIST, async (event, payload: unknown) => {
+    const parsed = bgCommandListSchema.safeParse(payload ?? {});
+    if (!parsed.success) throw new Error(`Invalid bgcmd:list payload: ${parsed.error.message}`);
+    const sessionId = resolveBgCommandSessionId(parsed.data.sessionId, event);
+    if (!sessionId) return [];
+    const scopeNames = new Map<string, string>();
+    for (const state of getSubagentManager().getStates(sessionId)) {
+      scopeNames.set(state.id, state.name);
+    }
+    const items = getBackgroundStore()
+      .list()
+      .filter((entry) => entry.sessionId === sessionId)
+      .map((entry) => ({
+        id: entry.id,
+        command: entry.command,
+        description: entry.description,
+        interactive: entry.interactive,
+        owner: entry.owner,
+        agentScopeId: entry.agentScopeId,
+        scopeName: entry.agentScopeId === 'main'
+          ? 'main'
+          : scopeNames.get(entry.agentScopeId) ?? entry.agentScopeId,
+        running: entry.exitCode === null,
+        exitCode: entry.exitCode,
+        createdAt: entry.createdAt,
+        lastOutputAt: entry.lastOutputAt,
+      }));
+    // Running commands first, newest first within each group.
+    items.sort((a, b) => {
+      if (a.running !== b.running) return a.running ? -1 : 1;
+      return b.createdAt - a.createdAt;
+    });
+    return items;
+  });
+
+  ipcMain.handle(IPC_CHANNELS.BG_CMD_SEND_INPUT, async (event, payload: unknown) => {
+    const parsed = bgCommandSendInputSchema.safeParse(payload);
+    if (!parsed.success) throw new Error(`Invalid bgcmd:send_input payload: ${parsed.error.message}`);
+    const { commandId, text, sessionId: requestedSessionId } = parsed.data;
+    const sessionId = resolveBgCommandSessionId(requestedSessionId, event);
+    if (!sessionId) return { ok: false, reason: 'not_found' };
+    const store = getBackgroundStore();
+    // Session-privileged: any agent scope within the session is reachable.
+    const entry = store.get(commandId);
+    if (!entry || entry.sessionId !== sessionId) return { ok: false, reason: 'not_found' };
+    if (!entry.interactive) return { ok: false, reason: 'not_interactive' };
+    if (entry.exitCode !== null) return { ok: false, reason: 'exited' };
+    const sent = await store.send(commandId, text);
+    if (!sent) return { ok: false, reason: 'write_failed' };
+    // User input takes ownership; takeOwnership also stamps lastUserInputAt.
+    store.takeOwnership(commandId);
+    return { ok: true };
+  });
+
+  ipcMain.handle(IPC_CHANNELS.BG_CMD_TERMINATE, async (event, payload: unknown) => {
+    const parsed = bgCommandControlSchema.safeParse(payload);
+    if (!parsed.success) throw new Error(`Invalid bgcmd:terminate payload: ${parsed.error.message}`);
+    const { commandId, sessionId: requestedSessionId } = parsed.data;
+    const sessionId = resolveBgCommandSessionId(requestedSessionId, event);
+    if (!sessionId) return { ok: false, reason: 'not_found' };
+    const entry = getBackgroundStore().get(commandId);
+    if (!entry || entry.sessionId !== sessionId) return { ok: false, reason: 'not_found' };
+    getBackgroundStore().terminate(commandId);
+    return { ok: true };
+  });
+
+  ipcMain.handle(IPC_CHANNELS.BG_CMD_RELEASE_INPUT, async (event, payload: unknown) => {
+    const parsed = bgCommandControlSchema.safeParse(payload);
+    if (!parsed.success) throw new Error(`Invalid bgcmd:release_input payload: ${parsed.error.message}`);
+    const { commandId, sessionId: requestedSessionId } = parsed.data;
+    const sessionId = resolveBgCommandSessionId(requestedSessionId, event);
+    if (!sessionId) return { ok: false };
+    const entry = getBackgroundStore().get(commandId);
+    if (!entry || entry.sessionId !== sessionId) return { ok: false };
+    return { ok: getBackgroundStore().releaseOwnership(commandId) };
+  });
+
+  removeBgCommandChangeListener ??= subscribeBackgroundProcessChanges((sessionId) => {
+    if (sessionId) broadcastBgCommandChanged(sessionId);
   });
 }
 
@@ -172,6 +336,12 @@ export function unregisterChatIPC(): void {
   ipcMain.removeHandler(IPC_CHANNELS.CHAT_STOP);
   ipcMain.removeHandler(IPC_CHANNELS.CHAT_SNAPSHOT);
   ipcMain.removeHandler(IPC_CHANNELS.BG_CMD_SNAPSHOT);
+  ipcMain.removeHandler(IPC_CHANNELS.BG_CMD_LIST);
+  ipcMain.removeHandler(IPC_CHANNELS.BG_CMD_SEND_INPUT);
+  ipcMain.removeHandler(IPC_CHANNELS.BG_CMD_TERMINATE);
+  ipcMain.removeHandler(IPC_CHANNELS.BG_CMD_RELEASE_INPUT);
+  removeBgCommandChangeListener?.();
+  removeBgCommandChangeListener = null;
   for (const [sessionId, agent] of [...activeAgents.entries()]) {
     agent.agentCancelled = true;
     agent.finalized = true;
