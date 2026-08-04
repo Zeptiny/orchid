@@ -17,6 +17,7 @@ import { withConfigSaveLock } from '../config/write-lock';
 import type { WorkspaceInfo, WorkspaceSource } from '../../shared/types/ipc';
 import { inspectProjectDirectory } from './path';
 import { clearProjectRuntimeRegistry } from './runtime';
+import { getProjectTrustState } from './trust';
 
 // ---------------------------------------------------------------------------
 // Types — shared IPC contract (single source of truth)
@@ -120,6 +121,18 @@ export async function updateStickyDefaultProjectDir(
 // ---------------------------------------------------------------------------
 
 /**
+ * Attach the trust posture to a resolved workspace. Trust is only meaningful
+ * for a usable directory; invalid/unbound resolutions carry no `trust` field
+ * and every execution path fails closed on its own.
+ */
+function attachTrust(info: WorkspaceInfo): WorkspaceInfo {
+  if (info.status !== 'valid' || info.cwd == null || info.cwd === '') {
+    return info;
+  }
+  return { ...info, trust: getProjectTrustState(info.cwd) };
+}
+
+/**
  * Pure workspace resolution from explicit inputs.
  *
  * Priority: valid draft → session.cwd → sticky default → unbound.
@@ -136,11 +149,11 @@ export function resolveWorkspaceFromParts(
   if (draft != null && draft !== '') {
     const inspection = inspectProjectDirectory(draft);
     if (inspection.status === 'valid' && inspection.path != null) {
-      return {
+      return attachTrust({
         cwd: inspection.path,
         source: 'draft',
         status: 'valid',
-      };
+      });
     }
     // Stale draft (missing / inaccessible): fall through to session → sticky
   }
@@ -149,11 +162,11 @@ export function resolveWorkspaceFromParts(
   const sessionCwd = input.sessionCwd;
   if (sessionCwd != null && sessionCwd !== '') {
     const inspection = inspectProjectDirectory(sessionCwd);
-    return {
+    return attachTrust({
       cwd: inspection.path ?? sessionCwd,
       source: 'session',
       status: inspection.status,
-    };
+    });
   }
 
   // 3. Sticky default_project_dir
@@ -161,11 +174,11 @@ export function resolveWorkspaceFromParts(
   if (sticky != null && sticky !== '') {
     const inspection = inspectProjectDirectory(sticky);
     if (inspection.status === 'valid' && inspection.path != null) {
-      return {
+      return attachTrust({
         cwd: inspection.path,
         source: 'default',
         status: 'valid',
-      };
+      });
     }
     return {
       cwd: inspection.path,
