@@ -32,6 +32,7 @@ const { MockRAGStore, MockEmbedder, MockASTStore } = vi.hoisted(() => {
       chunkIds: [],
       vectors: [],
       idToIndex: new Map(),
+      consistent: true,
     });
     upsertFileBatch = vi.fn();
     deleteByFileBatch = vi.fn();

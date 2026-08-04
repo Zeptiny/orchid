@@ -799,6 +799,207 @@ describe('Batch Vector State', () => {
     expect(results).toHaveLength(3);
     expect(results[0]!.filePath).toBe('a.ts'); // closest to query
   });
+
+  it('should persist a chunk-id sidecar aligned with vectors.npy', () => {
+    const store = new RAGStore(tmpDir);
+    store.initDb();
+
+    store.upsert(
+      [
+        { filePath: 'a.ts', content: 'file a', startLine: 1, endLine: 1 },
+        { filePath: 'b.ts', content: 'file b', startLine: 1, endLine: 1 },
+      ],
+      [[1.0, 0.0], [0.0, 1.0]],
+    );
+
+    expect(fs.existsSync(store.vectorIdsFile)).toBe(true);
+    const persistedIds = JSON.parse(fs.readFileSync(store.vectorIdsFile, 'utf-8'));
+    const state = store.loadVectorState();
+    expect(state.consistent).toBe(true);
+    expect(persistedIds).toEqual(state.chunkIds);
+    expect(persistedIds).toHaveLength(2);
+  });
+
+  it('should report inconsistent state when an interrupted run left the DB ahead of vectors.npy', () => {
+    const store = new RAGStore(tmpDir);
+    store.initDb();
+
+    store.upsert(
+      [
+        { filePath: 'a.ts', content: 'file a', startLine: 1, endLine: 1 },
+        { filePath: 'b.ts', content: 'file b', startLine: 1, endLine: 1 },
+      ],
+      [[1.0, 0.0], [0.0, 1.0]],
+    );
+    expect(store.loadVectorState().consistent).toBe(true);
+
+    // Simulate an interrupted index run: upsertFileBatch commits DB rows
+    // immediately but vectors.npy is only written by flushVectorState at the
+    // end of the run. Killing the run before the flush leaves the DB ahead.
+    const state = store.loadVectorState();
+    store.upsertFileBatch(
+      state,
+      'b.ts',
+      [{ filePath: 'b.ts', content: 'file b changed', startLine: 1, endLine: 1 }],
+      [[0.5, 0.5]],
+    );
+    // No flushVectorState — the interruption.
+
+    const reloaded = store.loadVectorState();
+    expect(reloaded.consistent).toBe(false);
+    expect(reloaded.chunkIds).toHaveLength(0);
+    expect(reloaded.vectors).toHaveLength(0);
+  });
+
+  it('should fail search closed instead of scoring misaligned vectors', () => {
+    const store = new RAGStore(tmpDir);
+    store.initDb();
+
+    store.upsert(
+      [
+        { filePath: 'a.ts', content: 'file a', startLine: 1, endLine: 1 },
+        { filePath: 'b.ts', content: 'file b', startLine: 1, endLine: 1 },
+      ],
+      [[1.0, 0.0], [0.0, 1.0]],
+    );
+
+    // Interrupted-run simulation (same as above): DB committed, flush skipped.
+    const state = store.loadVectorState();
+    store.upsertFileBatch(
+      state,
+      'b.ts',
+      [{ filePath: 'b.ts', content: 'file b changed', startLine: 1, endLine: 1 }],
+      [[0.5, 0.5]],
+    );
+
+    // Vectors.npy now has 2 rows but the chunks table has 2 rows whose ids no
+    // longer match the persisted sidecar — scoring would pair new vectors with
+    // the wrong chunks. Search must return nothing until the next index run.
+    expect(store.search([1.0, 0.0], 3)).toHaveLength(0);
+    expect(store.search([0.5, 0.5], 3)).toHaveLength(0);
+  });
+
+  it('should treat a corrupt chunk-id sidecar as misaligned', () => {
+    const store = new RAGStore(tmpDir);
+    store.initDb();
+
+    store.upsert(
+      [{ filePath: 'a.ts', content: 'file a', startLine: 1, endLine: 1 }],
+      [[1.0, 0.0]],
+    );
+
+    fs.writeFileSync(store.vectorIdsFile, 'not json');
+
+    expect(store.loadVectorState().consistent).toBe(false);
+    expect(store.search([1.0, 0.0], 1)).toHaveLength(0);
+  });
+
+  it('should still load a legacy index without the id sidecar', () => {
+    const store = new RAGStore(tmpDir);
+    store.initDb();
+
+    store.upsert(
+      [
+        { filePath: 'a.ts', content: 'file a', startLine: 1, endLine: 1 },
+        { filePath: 'b.ts', content: 'file b', startLine: 1, endLine: 1 },
+      ],
+      [[1.0, 0.0], [0.0, 1.0]],
+    );
+
+    fs.unlinkSync(store.vectorIdsFile);
+
+    const state = store.loadVectorState();
+    expect(state.consistent).toBe(true);
+    expect(state.chunkIds).toHaveLength(2);
+    expect(store.search([1.0, 0.0], 2)[0]!.filePath).toBe('a.ts');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Interrupted index recovery (full rebuild on vector/chunk mismatch)
+// ---------------------------------------------------------------------------
+
+describe('Interrupted Index Recovery', () => {
+  let indexProject: typeof import('../../src/main/rag/indexer').indexProject;
+  let RAGStore: typeof import('../../src/main/rag/store').RAGStore;
+
+  function embedForText(text: string): Float32Array {
+    if (text.includes('alpha')) return Float32Array.from([1, 0, 0]);
+    if (text.includes('beta')) return Float32Array.from([0, 1, 0]);
+    return Float32Array.from([0, 0, 1]);
+  }
+
+  const contentEmbedder = {
+    embed: async (texts: string[]) => texts.map(embedForText),
+    embedSingle: async (text: string) => embedForText(text),
+    warmedUp: true,
+    modelName: 'test',
+    _warmup: async () => {},
+    _embedBatchWithRetry: async (texts: string[]) => texts.map(embedForText),
+    _embedBatch: async (texts: string[]) => texts.map(embedForText),
+  };
+
+  beforeEach(async () => {
+    const indexerModule = await import('../../src/main/rag/indexer');
+    indexProject = indexerModule.indexProject;
+    const storeModule = await import('../../src/main/rag/store');
+    RAGStore = storeModule.RAGStore;
+  });
+
+  it('should force a full rebuild after an interrupted run and restore correct search mapping', async () => {
+    writeFile('a.ts', 'const alphaValue = 1;');
+    writeFile('b.ts', 'const betaValue = 1;');
+
+    const embedder = contentEmbedder as unknown as import('../../src/main/rag/embedder').Embedder;
+
+    const result1 = await indexProject(tmpDir, undefined, undefined, embedder);
+    expect(result1.filesIndexed).toBe(2);
+    expect(result1.errors).toHaveLength(0);
+
+    const store = new RAGStore(tmpDir);
+    expect(store.search([1, 0, 0], 1)[0]!.filePath).toBe('a.ts');
+    expect(store.search([0, 1, 0], 1)[0]!.filePath).toBe('b.ts');
+
+    // Simulate an interrupted incremental run: b.ts changed on disk and its
+    // new chunk rows were committed, but the run died before the vector flush.
+    writeFile('b.ts', 'const betaValue = 2; // updated beta');
+    const state = store.loadVectorState();
+    store.upsertFileBatch(
+      state,
+      'b.ts',
+      [{ filePath: 'b.ts', content: 'const betaValue = 2; // updated beta', startLine: 1, endLine: 1 }],
+      [Array.from(embedForText('beta'))],
+    );
+    store.dispose();
+    // No flushVectorState — the interruption. Search must fail closed now.
+    expect(new RAGStore(tmpDir).search([0, 1, 0], 3)).toHaveLength(0);
+
+    // Next index run must detect the mismatch and fully rebuild (no skips).
+    const result2 = await indexProject(tmpDir, undefined, undefined, embedder);
+    expect(result2.errors).toHaveLength(0);
+    expect(result2.filesIndexed).toBe(2);
+    expect(result2.filesSkipped).toBe(0);
+
+    const rebuilt = new RAGStore(tmpDir);
+    const rebuiltState = rebuilt.loadVectorState();
+    expect(rebuiltState.consistent).toBe(true);
+
+    // Sidecar matches the DB ordering exactly
+    const persistedIds = JSON.parse(fs.readFileSync(rebuilt.vectorIdsFile, 'utf-8'));
+    expect(persistedIds).toEqual(rebuiltState.chunkIds);
+
+    // Search maps embeddings back to the correct files + content
+    const alpha = rebuilt.search([1, 0, 0], 3);
+    expect(alpha[0]!.filePath).toBe('a.ts');
+    const beta = rebuilt.search([0, 1, 0], 3);
+    expect(beta[0]!.filePath).toBe('b.ts');
+    expect(beta[0]!.content).toContain('updated beta');
+
+    // A subsequent incremental run skips both files again
+    const result3 = await indexProject(tmpDir, undefined, undefined, embedder);
+    expect(result3.filesSkipped).toBe(2);
+    expect(result3.filesIndexed).toBe(0);
+  });
 });
 
 // ---------------------------------------------------------------------------
