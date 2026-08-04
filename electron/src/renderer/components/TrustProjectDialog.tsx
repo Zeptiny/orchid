@@ -14,6 +14,7 @@ import type {
   TrustReportMcpServer,
   TrustReportModelOverride,
   TrustReportPermission,
+  TrustState,
 } from '../../shared/types/ipc';
 import { Icon } from './Icon';
 import { Alert } from './ui/Alert';
@@ -27,13 +28,19 @@ export interface TrustProjectDialogProps {
   open: boolean;
   /** Canonical absolute project directory under review. */
   cwd: string;
-  trustState: 'untrusted' | 'changed';
+  trustState: TrustState;
   /** Surface diff; null or empty sections fall back to a short state message. */
   report: ProjectTrustReport | null;
   /** True while a trust grant round-trip is in flight. */
   busy: boolean;
   onGrant: () => void;
   onDecline: () => void;
+  /**
+   * Read-only review mode (settings trusted-projects panel): hides the
+   * Trust/Don't-Trust footer and renders a single Close button mapped to
+   * onDecline. Default mode is unchanged.
+   */
+  readOnly?: boolean;
 }
 
 function McpServerRow({ server }: { server: TrustReportMcpServer }) {
@@ -137,8 +144,9 @@ export function TrustProjectDialog({
   busy,
   onGrant,
   onDecline,
+  readOnly = false,
 }: TrustProjectDialogProps) {
-  const grantRef = useRef<HTMLButtonElement>(null);
+  const primaryActionRef = useRef<HTMLButtonElement>(null);
 
   return (
     <DialogSurface
@@ -146,7 +154,7 @@ export function TrustProjectDialog({
       onClose={onDecline}
       labelledBy="trust-project-dialog-title"
       describedBy="trust-project-dialog-desc"
-      initialFocusRef={grantRef}
+      initialFocusRef={primaryActionRef}
       variant="modal"
       closeOnBackdrop
       closeOnEscape
@@ -161,7 +169,7 @@ export function TrustProjectDialog({
           </span>
           <div className="min-w-0">
             <h2 id="trust-project-dialog-title" className="m-0 text-base font-semibold leading-snug">
-              Do you trust this project folder?
+              {readOnly ? 'Project trust surface' : 'Do you trust this project folder?'}
             </h2>
             <p id="trust-project-dialog-desc" className="mono mt-1 break-all text-xs text-base-content/70">
               {cwd}
@@ -297,18 +305,26 @@ export function TrustProjectDialog({
         )}
 
         <div className="flex items-center justify-end gap-2 border-t border-base-300 pt-3">
-          <Button variant="ghost" onClick={onDecline} disabled={busy}>
-            Don&apos;t Trust
-          </Button>
-          <Button
-            ref={grantRef}
-            variant="primary"
-            onClick={onGrant}
-            disabled={busy}
-            loading={busy}
-          >
-            Trust &amp; Continue
-          </Button>
+          {readOnly ? (
+            <Button ref={primaryActionRef} variant="primary" onClick={onDecline} disabled={busy}>
+              Close
+            </Button>
+          ) : (
+            <>
+              <Button variant="ghost" onClick={onDecline} disabled={busy}>
+                Don&apos;t Trust
+              </Button>
+              <Button
+                ref={primaryActionRef}
+                variant="primary"
+                onClick={onGrant}
+                disabled={busy}
+                loading={busy}
+              >
+                Trust &amp; Continue
+              </Button>
+            </>
+          )}
         </div>
       </div>
     </DialogSurface>

@@ -95,10 +95,14 @@ const SubagentsTab = lazyWithPreload(() => import('./Preferences/SubagentsTab').
 const AgentsMdTab = lazyWithPreload(() => import('./Preferences/AgentsMdTab').then((module) => ({
   default: module.AgentsMdTab,
 })));
+const TrustedProjectsTab = lazyWithPreload(() => import('./Preferences/TrustedProjectsTab').then((module) => ({
+  default: module.TrustedProjectsTab,
+})));
 
 type TabId =
   | 'general'
   | 'permissions'
+  | 'trusted-projects'
   | 'providers'
   | 'mcp'
   | 'tier-models'
@@ -112,6 +116,7 @@ type TabId =
 const TAB_COMPONENTS = {
   general: GeneralTab,
   permissions: PermissionsTab,
+  'trusted-projects': TrustedProjectsTab,
   providers: ProvidersTab,
   mcp: MCPServersTab,
   'tier-models': TierModelsTab,
@@ -131,6 +136,7 @@ interface TabDef {
 const TABS: TabDef[] = [
   { id: 'general', label: 'General' },
   { id: 'permissions', label: 'Permissions' },
+  { id: 'trusted-projects', label: 'Trusted Projects' },
   { id: 'providers', label: 'Providers' },
   { id: 'mcp', label: 'MCP' },
   { id: 'tier-models', label: 'Tier Models' },
@@ -907,6 +913,8 @@ function renderTab(
           onScopeChange={permission.onScopeChange}
         />
       );
+    case 'trusted-projects':
+      return <TrustedProjectsTab onNotify={onNotify} />;
     case 'providers':
       return <ProvidersTab onNotify={onNotify} />;
     case 'mcp':
