@@ -105,6 +105,12 @@ const EXPECTED_FIELDS: ConfigFieldExpectation[] = [
     defaultValue: 900.0,
     envOverride: 'ORCHID_BG_CMD_IDLE_TIMEOUT',
   },
+  // Electron-only: deadline for auto-naming a default session mid-turn.
+  {
+    field: 'session_title_max_wait_seconds',
+    type: 'number',
+    defaultValue: 15,
+  },
   // Electron-only: AI SDK tool-loop cap (Python is unbounded)
   {
     field: 'max_tool_steps',
@@ -326,6 +332,7 @@ describe('Config Parity', () => {
       expect(cfg).toHaveProperty('llm_stream_idle_timeout');
       expect(cfg).toHaveProperty('llm_stream_retries');
       expect(cfg).toHaveProperty('background_command_idle_timeout');
+      expect(cfg).toHaveProperty('session_title_max_wait_seconds');
       expect(cfg).toHaveProperty('max_tool_steps');
       expect(cfg).toHaveProperty('default_project_dir');
       expect(cfg).toHaveProperty('always_expand_tool_groups');
@@ -383,11 +390,11 @@ describe('Config Parity', () => {
       expect(cfg.subagents).toHaveProperty('prompt_task_max_chars');
     });
 
-    it('top-level field count matches expected (46 top-level + 12 rag + 7 agents_md + 11 subagents nested fields)', () => {
+    it('top-level field count matches expected (47 top-level + 12 rag + 7 agents_md + 11 subagents nested fields)', () => {
       const cfg = defaults();
       // Top-level keys count
       const topLevelKeys = Object.keys(cfg);
-      expect(topLevelKeys).toHaveLength(46); // 46 top-level fields (rag, agents_md, subagents are nested)
+      expect(topLevelKeys).toHaveLength(47); // 47 top-level fields (rag, agents_md, subagents are nested)
 
       // RAG nested keys count
       const ragKeys = Object.keys(cfg.rag);
@@ -493,6 +500,7 @@ describe('Config Parity', () => {
       expect(typeof cfg.llm_stream_idle_timeout).toBe('number');
       expect(typeof cfg.llm_stream_retries).toBe('number');
       expect(typeof cfg.background_command_idle_timeout).toBe('number');
+      expect(typeof cfg.session_title_max_wait_seconds).toBe('number');
     });
 
     it('array fields are arrays', () => {

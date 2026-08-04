@@ -79,13 +79,17 @@ function hasVisibleChildren(
   }
 }
 
-interface DirectoryWalkOptions {
+export interface DirectoryWalkOptions {
   maxDepth: number;
   includeHidden: boolean;
   ignoredDirs: Set<string>;
 }
 
-function collectDirectoryEntries(
+/**
+ * Collect visible entries under `root` up to `maxDepth` levels. Shared with
+ * the `read` tool, which lists a directory one level deep when given one.
+ */
+export function collectDirectoryEntries(
   root: string,
   options: DirectoryWalkOptions,
 ): { entries: DirectoryEntry[]; depthLimitReached: boolean } {

@@ -110,6 +110,7 @@ const mocks = vi.hoisted(() => {
           command_timeout: 30,
           llm_stream_idle_timeout: 60,
           llm_stream_retries: 0,
+          session_title_max_wait_seconds: 15,
         },
         agents: new Map([
           ['general', generalAgent],
@@ -132,6 +133,7 @@ const mocks = vi.hoisted(() => {
           command_timeout: 30,
           llm_stream_idle_timeout: 60,
           llm_stream_retries: 0,
+          session_title_max_wait_seconds: 15,
         },
         agents: runtime.agents ?? new Map([
           ['general', generalAgent],
@@ -359,7 +361,10 @@ const mocks = vi.hoisted(() => {
     ) => {
       if (!activeSession || !generateTitle) return activeSession;
       const title = await generateTitle(activeSession);
-      if (title) activeSession = { ...activeSession, name: title };
+      if (title) {
+        activeSession = { ...activeSession, name: title };
+        sessionsById.set(activeSession.id, activeSession);
+      }
       return activeSession;
     }),
     /** Test helper: reset between cases */
@@ -1578,6 +1583,7 @@ describe('chat IPC provider gates', () => {
         command_timeout: 30,
         llm_stream_idle_timeout: 60,
         llm_stream_retries: 0,
+        session_title_max_wait_seconds: 15,
       },
       agents: new Map([
         ['general', mocks.generalAgent],
@@ -1682,6 +1688,196 @@ describe('chat IPC provider gates', () => {
       name: 'Session bbbbbbbb',
     });
     warn.mockRestore();
+  });
+
+  it('auto-names a long-running turn from the in-flight history after the deadline', async () => {
+    const selection = {
+      connectionId: '11111111-1111-4111-8111-111111111111',
+      modelId: 'vendor/path/model',
+    };
+    mocks.runtimeRegistry._set(mocks.workspace._testProjectDir, {
+      config: {
+        default_model: selection,
+        tier_models: { bloom: null },
+        command_timeout: 30,
+        llm_stream_idle_timeout: 60,
+        llm_stream_retries: 0,
+        session_title_max_wait_seconds: 0.05,
+      },
+    });
+    mocks.sessionManager._setActive({
+      ...makeSession('ffffffff-ffff-4fff-8fff-ffffffffffff'),
+      selection,
+      modelLabel: selection.modelId,
+    });
+    // Turn stays in flight past the deadline and never yields assistant text.
+    mocks.streamChat.mockImplementationOnce(async function* () {
+      await new Promise(() => {});
+    });
+    const send = vi.fn();
+    const source = { id: 910, send };
+    mocks.sessionManager._setActiveForWindow('910', mocks.sessionManager.getActive()!);
+    mocks.electronWebContents.getAllWebContents.mockReturnValue([source]);
+    const chatSend = mocks.handlers.get(IPC_CHANNELS.CHAT_SEND);
+
+    await chatSend!({ sender: source }, { message: 'Refactor the payment queue' });
+    await waitForChannelCount(send, IPC_CHANNELS.SESSION_RENAMED, 1);
+
+    expect(mocks.aiGenerateText).toHaveBeenCalledTimes(1);
+    const call = mocks.aiGenerateText.mock.calls[0]?.[0] as {
+      messages: Array<{ content: string }>;
+    };
+    // No assistant text exists yet — the user message alone must name the session.
+    expect(call.messages[0].content).toContain('Refactor the payment queue');
+    expect(call.messages[0].content).not.toContain('Assistant:');
+    expect(channelEvents(send, IPC_CHANNELS.SESSION_RENAMED).at(-1)?.[1]).toEqual({
+      id: 'ffffffff-ffff-4fff-8fff-ffffffffffff',
+      name: 'Investigate Session Naming',
+    });
+  });
+
+  it('deadline naming does not duplicate when the turn completes afterwards', async () => {
+    const selection = {
+      connectionId: '11111111-1111-4111-8111-111111111111',
+      modelId: 'vendor/path/model',
+    };
+    mocks.runtimeRegistry._set(mocks.workspace._testProjectDir, {
+      config: {
+        default_model: selection,
+        tier_models: { bloom: null },
+        command_timeout: 30,
+        llm_stream_idle_timeout: 60,
+        llm_stream_retries: 0,
+        session_title_max_wait_seconds: 0.05,
+      },
+    });
+    mocks.sessionManager._setActive({
+      ...makeSession('12121212-1212-4212-8212-121212121212'),
+      selection,
+      modelLabel: selection.modelId,
+    });
+    let releaseStream!: () => void;
+    const streamGate = new Promise<void>((resolve) => { releaseStream = resolve; });
+    mocks.streamChat.mockImplementationOnce(async function* () {
+      yield { type: 'content', text: 'Still working' };
+      await streamGate;
+      yield { type: 'finish', finishReason: 'stop' };
+    });
+    const send = vi.fn();
+    const source = { id: 911, send };
+    mocks.sessionManager._setActiveForWindow('911', mocks.sessionManager.getActive()!);
+    mocks.electronWebContents.getAllWebContents.mockReturnValue([source]);
+    const chatSend = mocks.handlers.get(IPC_CHANNELS.CHAT_SEND);
+
+    await chatSend!({ sender: source }, { message: 'Trace the flaky test' });
+    await waitForChannelCount(send, IPC_CHANNELS.SESSION_RENAMED, 1);
+    expect(mocks.aiGenerateText).toHaveBeenCalledTimes(1);
+
+    // Turn completes later; the already-renamed session must not trigger again.
+    releaseStream();
+    await waitForDoneCount(send, 1);
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(mocks.aiGenerateText).toHaveBeenCalledTimes(1);
+  });
+
+  it('auto-names an Esc-cancelled turn from the exchanged history', async () => {
+    const selection = {
+      connectionId: '11111111-1111-4111-8111-111111111111',
+      modelId: 'vendor/path/model',
+    };
+    mocks.sessionManager._setActive({
+      ...makeSession('abababab-abab-4bab-8bab-abababababab'),
+      selection,
+      modelLabel: selection.modelId,
+    });
+    let releaseStream!: () => void;
+    const streamGate = new Promise<void>((resolve) => { releaseStream = resolve; });
+    mocks.streamChat.mockImplementationOnce(async function* () {
+      yield { type: 'content', text: 'Working on it' };
+      await streamGate;
+      yield { type: 'finish', finishReason: 'stop' };
+    });
+    const send = vi.fn();
+    const source = { id: 912, send };
+    mocks.sessionManager._setActiveForWindow('912', mocks.sessionManager.getActive()!);
+    mocks.electronWebContents.getAllWebContents.mockReturnValue([source]);
+    const chatSend = mocks.handlers.get(IPC_CHANNELS.CHAT_SEND)!;
+    const chatCancel = mocks.handlers.get(IPC_CHANNELS.CHAT_CANCEL)!;
+
+    await chatSend({ sender: source }, { message: 'Migrate the config loader' });
+    await waitForChannelCount(send, IPC_CHANNELS.CHAT_CHUNK, 1);
+
+    const first = await chatCancel({ sender: source }, {});
+    expect(first).toMatchObject({ status: 'confirming' });
+    expect(mocks.aiGenerateText).not.toHaveBeenCalled();
+
+    await chatCancel({ sender: source }, {});
+    await waitForChannelCount(send, IPC_CHANNELS.SESSION_RENAMED, 1);
+
+    expect(mocks.aiGenerateText).toHaveBeenCalledTimes(1);
+    const call = mocks.aiGenerateText.mock.calls[0]?.[0] as {
+      messages: Array<{ content: string }>;
+    };
+    expect(call.messages[0].content).toContain('Migrate the config loader');
+    expect(call.messages[0].content).toContain('Working on it');
+    expect(channelEvents(send, IPC_CHANNELS.SESSION_RENAMED).at(-1)?.[1]).toEqual({
+      id: 'abababab-abab-4bab-8bab-abababababab',
+      name: 'Investigate Session Naming',
+    });
+    releaseStream();
+  });
+
+  it('auto-names a chat:stop turn and honors 0 as a disabled deadline', async () => {
+    const selection = {
+      connectionId: '11111111-1111-4111-8111-111111111111',
+      modelId: 'vendor/path/model',
+    };
+    mocks.runtimeRegistry._set(mocks.workspace._testProjectDir, {
+      config: {
+        default_model: selection,
+        tier_models: { bloom: null },
+        command_timeout: 30,
+        llm_stream_idle_timeout: 60,
+        llm_stream_retries: 0,
+        session_title_max_wait_seconds: 0,
+      },
+    });
+    mocks.sessionManager._setActive({
+      ...makeSession('cdcdcdcd-cdcd-4cdc-8cdc-cdcdcdcdcdcd'),
+      selection,
+      modelLabel: selection.modelId,
+    });
+    mocks.streamChat.mockImplementationOnce(async function* () {
+      await new Promise(() => {});
+    });
+    const send = vi.fn();
+    const source = { id: 913, send };
+    mocks.sessionManager._setActiveForWindow('913', mocks.sessionManager.getActive()!);
+    mocks.electronWebContents.fromId.mockReturnValue(source);
+    mocks.electronWebContents.getAllWebContents.mockReturnValue([source]);
+    const chatSend = mocks.handlers.get(IPC_CHANNELS.CHAT_SEND)!;
+    const chatStop = mocks.handlers.get(IPC_CHANNELS.CHAT_STOP)!;
+
+    await chatSend({ sender: source }, { message: 'Profile the renderer startup' });
+    // With the deadline disabled nothing may name the session on its own.
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    expect(mocks.aiGenerateText).not.toHaveBeenCalled();
+
+    const stopped = await chatStop(
+      { sender: source },
+      { sessionId: 'cdcdcdcd-cdcd-4cdc-8cdc-cdcdcdcdcdcd' },
+    );
+    expect(stopped).toEqual({ status: 'stopped' });
+    await waitForChannelCount(send, IPC_CHANNELS.SESSION_RENAMED, 1);
+    expect(mocks.aiGenerateText).toHaveBeenCalledTimes(1);
+    const call = mocks.aiGenerateText.mock.calls[0]?.[0] as {
+      messages: Array<{ content: string }>;
+    };
+    expect(call.messages[0].content).toContain('Profile the renderer startup');
+    expect(channelEvents(send, IPC_CHANNELS.SESSION_RENAMED).at(-1)?.[1]).toEqual({
+      id: 'cdcdcdcd-cdcd-4cdc-8cdc-cdcdcdcdcdcd',
+      name: 'Investigate Session Naming',
+    });
   });
 });
 

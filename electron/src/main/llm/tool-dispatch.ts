@@ -586,12 +586,24 @@ function finalizeHandlerResult(
   }
 
   const canonical = createCanonicalToolResult(registered.definition.resultFamily, result);
+  // A multi-family tool may override its family per outcome, but only with a
+  // family its definition declares. Guard against a handler emitting a
+  // family the registered schema/projector cannot represent.
+  const declaredFamilies = [
+    registered.definition.resultFamily,
+    ...(registered.definition.additionalResultFamilies ?? []),
+  ];
+  if (!declaredFamilies.includes(canonical.family)) {
+    throw new TypeError(
+      `Tool '${request.name}' returned undeclared result family '${canonical.family}'`,
+    );
+  }
   return finalizeToolExecutionResult({
     canonical,
     toolName: request.name,
     toolCallId: request.id,
     outputDataSchema: registered.definition.outputDataSchema,
-    expectedFamily: registered.definition.resultFamily,
+    expectedFamily: canonical.family,
     projector: registry.resolveAgentProjector(request.name).projector,
   });
 }
@@ -784,12 +796,15 @@ function maybeInjectAgentsMd(
     if (store === null) return execution;
 
     const config = options.projectRuntime?.config ?? FALLBACK_CONFIG;
+    // A `directory-entries` outcome means the touched path resolved to a
+    // directory (e.g. `read` on one), so inject as a directory target.
     const injection = buildAgentsMdInjection(
       request.name,
       args,
       options.cwd,
       config,
       store,
+      { isDirectory: execution.canonical.family === 'directory-entries' },
     );
     if (injection === null) return execution;
 

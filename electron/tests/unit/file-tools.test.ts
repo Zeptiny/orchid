@@ -19,6 +19,7 @@ import { editHandler } from '../../src/main/tools/filesystem/edit';
 import { writeHandler } from '../../src/main/tools/filesystem/write';
 import { readDirectoryHandler } from '../../src/main/tools/filesystem/read-directory';
 import { globHandler } from '../../src/main/tools/filesystem/glob';
+import type { DirectoryEntriesData } from '../../src/shared/types/tool-result-filesystem';
 import type { Config } from '../../src/main/config/schema';
 import type { ProjectRuntime } from '../../src/main/project/runtime';
 import type { ToolExecutionContext } from '../../src/main/tools/types';
@@ -162,6 +163,99 @@ describe('read tool', () => {
 
     expect(result.status).toBe('error');
     expect(result.error.message).toContain('Error reading file');
+  });
+});
+
+// ── read tool on a directory ───────────────────────────────────────────────
+
+describe('read tool on a directory', () => {
+  it('lists one level of entries with the read_directory structure', async () => {
+    writeFile('dir/file.txt', 'content');
+    writeFile('dir/sub/inner.txt', 'inner');
+    writeFile('dir/.hidden', 'secret');
+
+    const result = await readHandler({
+      file_path: path.join(tmpDir, 'dir'),
+    }, toolCtx());
+
+    expect(result.family).toBe('directory-entries');
+    expect(result.status).toBe('partial');
+    const data = result.data as unknown as DirectoryEntriesData;
+    expect(data.root).toBe(path.join(tmpDir, 'dir'));
+    expect(data.depthLimit).toBe(1);
+    expect(data.depthLimitReached).toBe(true);
+    expect(data.entries.map((entry) => entry.name)).toEqual(['file.txt', 'sub']);
+    expect(data.entries.every((entry) => entry.depth === 0)).toBe(true);
+    expect(data.entries.find((entry) => entry.name === 'sub')).toMatchObject({
+      kind: 'directory',
+      relativePath: 'sub',
+    });
+    if (result.status !== 'partial') throw new Error('expected partial listing');
+    expect(result.retrieval).toEqual({
+      kind: 'rerun',
+      toolName: 'read_directory',
+      input: {
+        directory_path: path.join(tmpDir, 'dir'),
+        max_depth: 2,
+        include_hidden: false,
+      },
+    });
+  });
+
+  it('is complete when no nested visible entries remain', async () => {
+    writeFile('flat/a.txt', 'a');
+    writeFile('flat/b.txt', 'b');
+
+    const result = await readHandler({
+      file_path: path.join(tmpDir, 'flat'),
+    }, toolCtx());
+
+    expect(result.family).toBe('directory-entries');
+    expect(result.status).toBe('complete');
+    const data = result.data as unknown as DirectoryEntriesData;
+    expect(data.depthLimitReached).toBe(false);
+    expect(data.entries.map((entry) => entry.name)).toEqual(['a.txt', 'b.txt']);
+  });
+
+  it('is empty for an empty directory', async () => {
+    fs.mkdirSync(path.join(tmpDir, 'void'));
+
+    const result = await readHandler({
+      file_path: path.join(tmpDir, 'void'),
+    }, toolCtx());
+
+    expect(result.family).toBe('directory-entries');
+    expect(result.status).toBe('empty');
+    expect((result.data as unknown as DirectoryEntriesData).entries).toEqual([]);
+  });
+
+  it('respects configured ignored directories', async () => {
+    writeFile('proj/src/app.ts', 'x');
+    writeFile('proj/node_modules/lib.js', 'y');
+
+    const result = await readHandler(
+      { file_path: path.join(tmpDir, 'proj') },
+      toolCtx(undefined, { ignored_dirs: ['node_modules'] }),
+    );
+
+    const data = result.data as unknown as DirectoryEntriesData;
+    expect(data.entries.map((entry) => entry.name)).toEqual(['src']);
+  });
+
+  it('matches read_directory at depth 1', async () => {
+    writeFile('parity/keep.txt', 'k');
+    writeFile('parity/nested/deep.txt', 'd');
+
+    const readResult = await readHandler({
+      file_path: path.join(tmpDir, 'parity'),
+    }, toolCtx());
+    const directoryResult = await readDirectoryHandler({
+      directory_path: path.join(tmpDir, 'parity'),
+      max_depth: 1,
+    }, toolCtx());
+
+    expect(readResult.family).toBe('directory-entries');
+    expect(readResult.data).toEqual(directoryResult.data);
   });
 });
 

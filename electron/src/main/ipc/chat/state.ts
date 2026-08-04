@@ -60,6 +60,12 @@ export type ActiveAgent = {
   unsubscribe: () => void;
   interruptUnsubscribe: () => void;
   interruptResetTimer: ReturnType<typeof setTimeout> | null;
+  /** Pending deadline that auto-names a still-default session mid-turn. */
+  sessionTitleTimer: ReturnType<typeof setTimeout> | null;
+  /** Project runtime frozen at turn start; reused for teardown-time naming. */
+  runtime: ProjectRuntime;
+  /** Chain id of this turn's chain (null when startChain failed). */
+  chainId: string | null;
   /** Releases turn-scoped resources exactly once when the actor is disposed. */
   releaseResources: () => void;
 };
@@ -74,6 +80,12 @@ export type ChatStatePayload = {
 export const activeAgents = new Map<string, ActiveAgent>();
 export const sessionsStarting = new Set<string>();
 export const pendingCheckpoints = new Map<string, { timer: ReturnType<typeof setTimeout>; messages: Message[] }>();
+/**
+ * Sessions with an auto-name LLM attempt in flight. Concurrent triggers
+ * (mid-turn deadline vs. turn end vs. interruption) must not each start a
+ * separate title call for the same session.
+ */
+export const namingInFlight = new Set<string>();
 /**
  * Single-flight draft session create per window. Concurrent first sends from
  * draft mode share one in-flight ensure promise so only one session is created.

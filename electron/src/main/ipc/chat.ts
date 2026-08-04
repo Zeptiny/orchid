@@ -22,6 +22,7 @@ import { snapshotForAgent } from './chat/snapshot';
 import { appendLiveTailMessages, persistTurnConversation, turnMessagesFromAgent } from './chat/persist';
 import { disposeActiveAgent, forceAbortSession, forceStopSession } from './chat/abort';
 import { startChatTurn } from './chat/send';
+import { triggerInterruptedTurnAutoName } from './chat/title';
 import type { AgentContext } from '../agents/xstate/agent-machine';
 
 export { getActiveMainTurnWindowId, getLiveChatSnapshot } from './chat/snapshot';
@@ -124,6 +125,8 @@ export function registerChatIPC(): void {
           existing.agent, existing.selection, streamWebContents,
         );
         existing.messages = fullHistory;
+        // Interrupted turns still name the session from what was exchanged so far.
+        triggerInterruptedTurnAutoName(existing, fullHistory);
         completeSessionActivity(
           sessionId,
           getSessionManager().getActive(existing.windowId)?.id !== sessionId,

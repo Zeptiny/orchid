@@ -208,6 +208,12 @@ export interface Config {
   llm_stream_retries: number;
   background_command_idle_timeout: number;
   /**
+   * Max seconds after a turn starts before a still-default-named session is
+   * auto-named from the current in-flight history. `0` disables the deadline;
+   * naming then only happens when a turn completes or is interrupted.
+   */
+  session_title_max_wait_seconds: number;
+  /**
    * Max multi-step tool-loop iterations per LLM stream (AI SDK stopWhen).
    * Default 100 — high enough for real agent workloads, not unbounded.
    */

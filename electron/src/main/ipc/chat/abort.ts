@@ -17,6 +17,7 @@ import {
   turnMessagesFromAgent,
 } from './persist';
 import { sendChatState, sendTurnEvent, webContentsForWindowId } from './events';
+import { triggerInterruptedTurnAutoName } from './title';
 
 export function disposeActiveAgent(sessionId: string, active: ActiveAgent): void {
   cancelPendingCheckpoint(sessionId);
@@ -29,6 +30,10 @@ export function disposeActiveAgent(sessionId: string, active: ActiveAgent): void
   if (active.interruptResetTimer) {
     clearTimeout(active.interruptResetTimer);
     active.interruptResetTimer = null;
+  }
+  if (active.sessionTitleTimer) {
+    clearTimeout(active.sessionTitleTimer);
+    active.sessionTitleTimer = null;
   }
   active.abortController.abort();
   active.actor.stop();
@@ -136,6 +141,9 @@ export function forceAbortMainTurn(
   }
   existing.messages = fullHistory;
 
+  // Interrupted turns still name the session from what was exchanged so far.
+  triggerInterruptedTurnAutoName(existing, fullHistory);
+
   existing.agentCancelled = true;
   existing.finalized = true;
   completeSessionActivity(
@@ -221,6 +229,8 @@ export function forceStopSession(sessionId: string): boolean {
     );
   }
   existing.messages = fullHistory;
+  // Interrupted turns still name the session from what was exchanged so far.
+  triggerInterruptedTurnAutoName(existing, fullHistory);
   completeSessionActivity(
     sessionId,
     getSessionManager().getActive(existing.windowId)?.id !== sessionId,

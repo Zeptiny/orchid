@@ -62,6 +62,14 @@ export interface ToolDefinition {
   /** Canonical result family for this tool's typed result data. */
   resultFamily: ToolResultFamily;
 
+  /**
+   * Extra result families this tool may emit besides `resultFamily`.
+   * The handler selects the family per outcome via `ToolHandlerOutcome.family`;
+   * finalization rejects any family not declared here. The `outputDataSchema`
+   * must accept the data of every declared family.
+   */
+  additionalResultFamilies?: readonly ToolResultFamily[];
+
   /** Schema for canonical `data`. */
   outputDataSchema: z.ZodTypeAny;
 

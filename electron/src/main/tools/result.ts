@@ -577,7 +577,7 @@ const fileWriteAgentProjector: AgentProjector = (canonical, toolName = 'write') 
   );
 };
 
-const fileContentAgentProjector: AgentProjector = (canonical, toolName = 'read') => {
+export const fileContentAgentProjector: AgentProjector = (canonical, toolName = 'read') => {
   const parsed = fileContentDataSchema.parse(canonical.data);
   const requested = parsed.requestedRange.start + '-' +
     (parsed.requestedRange.end ?? parsed.requestedRange.start);
@@ -636,7 +636,7 @@ function renderDirectoryTree(entries: Array<{
   return renderChildren(undefined, '').join('\n');
 }
 
-const directoryEntriesAgentProjector: AgentProjector = (
+export const directoryEntriesAgentProjector: AgentProjector = (
   canonical,
   toolName = 'read_directory',
 ) => {

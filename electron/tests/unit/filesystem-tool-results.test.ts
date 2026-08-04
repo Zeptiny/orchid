@@ -16,6 +16,7 @@ import {
 import {
   readDefinition,
   readHandler,
+  readOutputDataSchema,
 } from '../../src/main/tools/filesystem/read';
 import {
   readDirectoryDefinition,
@@ -47,7 +48,6 @@ import {
 import {
   directoryEntriesDataSchema,
   fileChangeDataSchema,
-  fileContentDataSchema,
   fileWriteDataSchema,
   searchResultsDataSchema,
   type DirectoryEntriesData,
@@ -91,7 +91,7 @@ describe('filesystem result metadata', () => {
   it.each([
     [editDefinition, 'file-change', fileChangeDataSchema],
     [writeDefinition, 'file-write', fileWriteDataSchema],
-    [readDefinition, 'file-content', fileContentDataSchema],
+    [readDefinition, 'file-content', readOutputDataSchema],
     [readDirectoryDefinition, 'directory-entries', directoryEntriesDataSchema],
     [globDefinition, 'search-results', searchResultsDataSchema],
     [grepToolDefinition, 'search-results', searchResultsDataSchema],
@@ -99,6 +99,11 @@ describe('filesystem result metadata', () => {
   ] as const)('declares the typed family for %s', (definition, family, schema) => {
     expect(definition.resultFamily).toBe(family);
     expect(definition.outputDataSchema).toBe(schema);
+  });
+
+  it('read declares directory-entries as an additional family it may emit', () => {
+    expect(readDefinition.resultFamily).toBe('file-content');
+    expect(readDefinition.additionalResultFamilies).toEqual(['directory-entries']);
   });
 });
 
@@ -279,6 +284,32 @@ describe('typed filesystem outcomes', () => {
     expect(result.retrieval).toEqual({ kind: 'read', path: filePath, offset: 4, limit: 2 });
   });
 
+  it('returns one directory level with a read_directory rerun when read targets a directory', async () => {
+    writeFixture('listing/src/app.ts', 'export {};\n');
+    writeFixture('listing/.hidden', 'secret');
+
+    const result = outcome<DirectoryEntriesData>(await readHandler({
+      file_path: path.join(tmpDir, 'listing'),
+    }, { cwd: tmpDir, projectRuntime: { config: { ignored_dirs: [] } as never } }));
+
+    expect(result.family).toBe('directory-entries');
+    expect(result.status).toBe('partial');
+    expect(result.data.depthLimit).toBe(1);
+    expect(result.data.depthLimitReached).toBe(true);
+    expect(result.data.entries.map((entry) => entry.name)).toEqual(['src']);
+    expect(result.data.entries.some((entry) => entry.name === '.hidden')).toBe(false);
+    if (result.status !== 'partial') throw new Error('expected partial listing');
+    expect(result.retrieval).toEqual({
+      kind: 'rerun',
+      toolName: 'read_directory',
+      input: {
+        directory_path: path.join(tmpDir, 'listing'),
+        max_depth: 2,
+        include_hidden: false,
+      },
+    });
+  });
+
   it('records directory hierarchy, kinds, metadata, and depth partiality', async () => {
     writeFixture('src/deep/file.ts', 'export {};\n');
     writeFixture('.hidden', 'secret');
@@ -400,6 +431,29 @@ describe('XML agent projections', () => {
     );
     expect(execution.agentProjection.content).toContain('2 | blank');
     expect(execution.agentProjection.content).not.toContain('1 | &lt;tag&gt;');
+  });
+
+  it('projects a directory read with the directory-entries tree format', async () => {
+    writeFixture('tree-src/src/app.ts', 'export {};\n');
+    const registry = new ToolRegistry();
+    registry.register(readDefinition, readHandler);
+
+    const execution = await executeToolCall({
+      id: 'read-directory',
+      name: 'read',
+      args: { file_path: path.join(tmpDir, 'tree-src') },
+    }, registry, {
+      cwd: tmpDir,
+      sessionId: SESSION_ID,
+      projectRuntime: { config: { ignored_dirs: [] } as never },
+    });
+
+    expect(execution.canonical.family).toBe('directory-entries');
+    expect(execution.agentProjection.content).toContain(
+      '<tool_result name="read" status="partial"',
+    );
+    expect(execution.agentProjection.content).toContain('<tree>');
+    expect(execution.agentProjection.content).toContain('└── src/');
   });
 
   it('uses the compact edit, glob, grep, and directory formats', async () => {

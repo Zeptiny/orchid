@@ -368,6 +368,7 @@ export type ConfigPatch = {
   llm_stream_idle_timeout?: number;
   llm_stream_retries?: number;
   background_command_idle_timeout?: number;
+  session_title_max_wait_seconds?: number;
   max_tool_steps?: number;
   permission_history_size?: number;
   permissions?: ConfigPatchMap<PermissionRule>;

@@ -105,7 +105,8 @@ const ExecuteCommandRenderer: ToolResultRenderer = ({ canonical, isLive }) => {
 toolRenderers.set('execute_command', ExecuteCommandRenderer);
 toolRenderers.set('edit', FileChangeToolResult);
 toolRenderers.set('write', FileWriteToolResult);
-toolRenderers.set('read', FileContentToolResult);
+// `read` resolves by family: file-content → FileContentToolResult,
+// directory-entries → DirectoryToolResult (read on a directory).
 toolRenderers.set('read_directory', DirectoryToolResult);
 toolRenderers.set('glob', SearchToolResult);
 toolRenderers.set('grep', SearchToolResult);

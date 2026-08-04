@@ -37,7 +37,7 @@ import { chatSendSchema } from '../payload-schemas';
 import { clearNextRequestStop } from '../next-request-stop';
 import { completeSessionActivity, publishSessionActivity } from '../session-activity';
 import { disposeActiveAgent, forceAbortSession } from './abort';
-import { emitSessionUpdated, sendChatState, sendSessionEvent, sendTurnEvent } from './events';
+import { emitSessionUpdated, sendChatState, sendTurnEvent } from './events';
 import {
   activeAgents,
   canEmitStreamEvents,
@@ -49,6 +49,7 @@ import {
 import {
   attachUsageToLatestAssistant,
   checkpointActiveTurn,
+  currentTurnSnapshot,
   flushPartialTurnContent,
   historyFromSession,
   persistTurnConversation,
@@ -62,7 +63,7 @@ import {
 } from './snapshot';
 import { ensureActiveSessionSingleFlight } from './session';
 import { classifyErrorKind, createProviderStreamFn } from './stream';
-import { createGenerateTitleCallback } from './title';
+import { triggerSessionAutoName } from './title';
 
 export type ChatSendPayload = z.infer<typeof chatSendSchema>;
 
@@ -224,10 +225,34 @@ export async function startChatTurn(
     finalized: false, generation, eventSequence: 0, lastChatState: null, toolCalls: new Map(),
     streamSegments: [], unsubscribe: () => subscription?.unsubscribe(),
     interruptUnsubscribe: () => interruptSubscription?.unsubscribe(), interruptResetTimer: null,
+    sessionTitleTimer: null, runtime, chainId,
     releaseResources,
   };
   activeAgents.set(sessionId, activeAgent);
   sessionsStarting.delete(sessionId);
+
+  // A long-running first turn must not leave the session unnamed forever:
+  // after the configured wait, name from the current in-flight history even
+  // while the agent keeps working. 0 disables the deadline.
+  const titleWaitSeconds = runtime.config.session_title_max_wait_seconds;
+  if (titleWaitSeconds > 0 && sessionGate.session.name.startsWith('Session ')) {
+    const titleTimer = setTimeout(() => {
+      activeAgent.sessionTitleTimer = null;
+      if (!isCurrentAgent(sessionId, activeAgent)) return;
+      if (activeAgent.finalized || activeAgent.agentCancelled) return;
+      const current = sessionManager.getSession(sessionId);
+      if (!current || !current.name.startsWith('Session ')) return;
+      triggerSessionAutoName({
+        sessionId,
+        runtime,
+        webContents,
+        messages: currentTurnSnapshot(activeAgent, actor.getSnapshot().context as AgentContext),
+        fallbackSelection: activeAgent.selection,
+        accounting: { store: accountingStore, sessionId, chainId, turnId },
+      });
+    }, Math.round(titleWaitSeconds * 1000));
+    activeAgent.sessionTitleTimer = titleTimer;
+  }
 
   const flushResponseSegment = (fullResponse: string, attachUsage: Usage | null = null) => {
     if (fullResponse.length <= activeAgent.responseCommittedLength) return;
@@ -249,6 +274,10 @@ export async function startChatTurn(
     if (activeAgent.finalized) return;
     activeAgent.finalized = true;
     completed = true;
+    if (activeAgent.sessionTitleTimer) {
+      clearTimeout(activeAgent.sessionTitleTimer);
+      activeAgent.sessionTitleTimer = null;
+    }
     flushThinkingSegment((activeAgent.actor.getSnapshot().context as AgentContext).thinking ?? '');
     const remaining = opts.response.slice(activeAgent.responseCommittedLength);
     if (remaining || (opts.interrupted && activeAgent.responseCommittedLength === 0 && !opts.response)) {
@@ -275,17 +304,17 @@ export async function startChatTurn(
         interrupted: opts.interrupted, usage: opts.usage,
       });
     }
-    if (!opts.interrupted) {
-      const generateTitle = createGenerateTitleCallback({
-        runtime, messages: fullHistory, fallbackSelection: activeAgent.selection,
-        accounting: { store: accountingStore, sessionId, chainId, turnId },
-      });
-      sessionManager.autoName(sessionId, generateTitle).then((updated) => {
-        if (updated) sendSessionEvent(webContents, sessionId, IPC_CHANNELS.SESSION_RENAMED, {
-          id: updated.id, name: updated.name,
-        });
-      }).catch((error) => console.warn('Auto-naming failed (non-fatal):', error));
-    }
+    // Interrupted turns name too: the user's request is already on record and
+    // an abandoned first turn should not stay "Session …" forever. The trigger
+    // dedupes against a mid-turn deadline attempt already in flight.
+    triggerSessionAutoName({
+      sessionId,
+      runtime,
+      webContents,
+      messages: fullHistory,
+      fallbackSelection: activeAgent.selection,
+      accounting: { store: accountingStore, sessionId, chainId, turnId },
+    });
   };
 
   interruptSubscription = interruptActor.subscribe((interruptSnapshot) => {

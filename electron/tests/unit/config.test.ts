@@ -145,6 +145,7 @@ describe('schema & defaults', () => {
     expect(cfg.max_tool_steps).toBe(100);
     expect(cfg.llm_stream_retries).toBe(3);
     expect(cfg.background_command_idle_timeout).toBe(900.0);
+    expect(cfg.session_title_max_wait_seconds).toBe(15);
     // Sticky project default: unbound until the user intentionally picks a folder
     expect(cfg.default_project_dir).toBeNull();
     // Tool activity groups stay collapsed unless the user opts in

@@ -397,6 +397,7 @@ Defined in `src/main/config/schema.ts` — single source of truth:
 | `llm_stream_idle_timeout` | 300s | Stream idle timeout |
 | `llm_stream_retries` | 3 | LLM retry count |
 | `background_command_idle_timeout` | 900s | Background cmd timeout |
+| `session_title_max_wait_seconds` | 15 | Max wait before auto-naming a default session from the still in-flight turn history; `0` disables the deadline (naming then only on turn complete/interrupt) |
 | `max_tool_steps` | 100 | Max multi-step tool-loop iterations per stream (AI SDK `stopWhen`) |
 | `tool_worker_pool_main_agent_reserved` | 1 | Tool worker slots reserved for main-agent tools so background subagents cannot starve the visible agent; clamped to `[0, tool_worker_pool_size - 1]` |
 | `always_expand_tool_groups` | `false` | Open chat tool-activity groups by default |
