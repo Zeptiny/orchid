@@ -22,6 +22,7 @@ import { useProviders } from '../hooks/useProviders';
 import { useMessageQueue } from '../hooks/useMessageQueue';
 import { useQueueAutoFire } from '../hooks/useQueueAutoFire';
 import { useResponsiveShell } from '../hooks/use-responsive-shell';
+import { useTrustPrompt } from '../hooks/useTrustPrompt';
 import {
   providerModelOptionDisplayName,
   providerModelOptionKey,
@@ -54,6 +55,7 @@ import { CommandPalette } from './CommandPalette';
 import { ShortcutsHelp } from './ShortcutsHelp';
 import { SessionHeader } from './session-header';
 import { SessionTabBar } from './SessionTabBar';
+import { TrustProjectDialog } from './TrustProjectDialog';
 import { Button } from './ui/Button';
 import { StateMessage } from './ui/StateMessage';
 import type { SubagentOpenRequest } from './SubagentView';
@@ -78,7 +80,6 @@ interface ChatViewProps {
 
 export function ChatView({ isVisible = true, bootstrapConfig = null, onNotify, activity }: ChatViewProps) {
   const session = useSession();
-  const chat = useChat(session.activeSession?.id ?? null);
   const subagents = useSubagents(session.activeSession?.id ?? null);
   const todos = useTodos(session.activeSession?.id ?? null);
   const tabs = useSessionTabs();
@@ -126,6 +127,51 @@ export function ChatView({ isVisible = true, bootstrapConfig = null, onNotify, a
   const [subagentOpenRequest, setSubagentOpenRequest] = useState<SubagentOpenRequest>({ generation: 0, id: null });
   const chatContentRef = useRef<HTMLDivElement>(null);
   const notify = onNotify;
+
+  // Workspace-scoped status refreshes (declared early so the trust grant
+  // callback can re-run them once a project becomes trusted).
+  const refreshMCP = useCallback(async () => {
+    try {
+      if (window.orchid?.mcp?.status) {
+        const status = await window.orchid.mcp.status();
+        setMcpServers(status);
+      }
+    } catch {
+      // Non-fatal
+    }
+  }, []);
+
+  const refreshIndex = useCallback(async () => {
+    try {
+      if (window.orchid?.rag?.status && window.orchid?.ast?.status) {
+        const [rag, ast] = await Promise.all([
+          window.orchid.rag.status(),
+          window.orchid.ast.status(),
+        ]);
+        setRagStatus(rag);
+        setAstStatus(ast);
+      }
+    } catch {
+      // Non-fatal
+    }
+  }, []);
+
+  // Trusted-projects prompt: explicit interactions (bind result, send failure,
+  // badge click) call openFor; granting re-resolves workspace + gated services.
+  const trustPrompt = useTrustPrompt({
+    onGranted: () => {
+      void session.getWorkspace();
+      void refreshMCP();
+      void refreshIndex();
+    },
+  });
+
+  const chat = useChat(session.activeSession?.id ?? null, {
+    onUntrustedProject: () => {
+      const cwd = session.workspace?.cwd ?? session.activeSession?.cwd;
+      if (cwd) trustPrompt.openFor(cwd);
+    },
+  });
 
   useEffect(() => {
     const element = chatContentRef.current;
@@ -379,9 +425,12 @@ export function ChatView({ isVisible = true, bootstrapConfig = null, onNotify, a
         applySessionMessages(null);
         return;
       }
+      if (workspace.trust !== 'trusted') {
+        trustPrompt.openFor(workspace.cwd);
+      }
     }
     await enterDraftMode({ clearComposer: true });
-  }, [session, enterDraftMode, applySessionMessages]);
+  }, [session, enterDraftMode, applySessionMessages, trustPrompt.openFor]);
 
   // Project-row New Chat: make that project the window's draft workspace, then
   // clear selection. The first message creates a new session there while any
@@ -390,9 +439,12 @@ export function ChatView({ isVisible = true, bootstrapConfig = null, onNotify, a
     const gen = ++sessionSwitchGen.current;
     const workspace = await session.setWorkspace(projectDir);
     if (!workspace?.cwd || gen !== sessionSwitchGen.current) return;
+    if (workspace.trust !== 'trusted') {
+      trustPrompt.openFor(workspace.cwd);
+    }
     await enterDraftMode({ clearComposer: true });
     notify(`New chat in project: ${workspace.cwd}`, 'info');
-  }, [session, enterDraftMode, notify]);
+  }, [session, enterDraftMode, notify, trustPrompt.openFor]);
 
   const handleProjectSelect = useCallback((projectDir: string) => {
     setProjectConfigDir(projectDir);
@@ -560,6 +612,9 @@ export function ChatView({ isVisible = true, bootstrapConfig = null, onNotify, a
     const startsDraft = Boolean(session.activeSession?.chains.length);
     const info = await session.pickProjectDir();
     if (info?.status === 'valid' && info.cwd) {
+      if (info.trust !== 'trusted') {
+        trustPrompt.openFor(info.cwd);
+      }
       if (startsDraft) {
         ++sessionSwitchGen.current;
         chat.beginSessionSwitch(null);
@@ -573,7 +628,13 @@ export function ChatView({ isVisible = true, bootstrapConfig = null, onNotify, a
         notify(`Project folder: ${info.cwd}`, 'info');
       }
     }
-  }, [session, chat.beginSessionSwitch, applySessionMessages, notify, messageQueue.clearQueue]);
+  }, [session, chat.beginSessionSwitch, applySessionMessages, notify, messageQueue.clearQueue, trustPrompt.openFor]);
+
+  // Workspace trust badge (LeftSidebar) opens the dialog for the bound cwd.
+  const handleTrustBadgeClick = useCallback(() => {
+    const cwd = session.workspace?.cwd;
+    if (cwd) trustPrompt.openFor(cwd);
+  }, [session.workspace?.cwd, trustPrompt.openFor]);
 
   // Stable prop wrappers for the memoized LeftSidebar. Inline arrows here would
   // give the rail a fresh identity every render and defeat React.memo, so the
@@ -815,32 +876,6 @@ export function ChatView({ isVisible = true, bootstrapConfig = null, onNotify, a
     return () => document.removeEventListener('keydown', onKeyDown, true);
   }, [closeConfirmId]);
 
-  const refreshMCP = useCallback(async () => {
-    try {
-      if (window.orchid?.mcp?.status) {
-        const status = await window.orchid.mcp.status();
-        setMcpServers(status);
-      }
-    } catch {
-      // Non-fatal
-    }
-  }, []);
-
-  const refreshIndex = useCallback(async () => {
-    try {
-      if (window.orchid?.rag?.status && window.orchid?.ast?.status) {
-        const [rag, ast] = await Promise.all([
-          window.orchid.rag.status(),
-          window.orchid.ast.status(),
-        ]);
-        setRagStatus(rag);
-        setAstStatus(ast);
-      }
-    } catch {
-      // Non-fatal
-    }
-  }, []);
-
   const handleIndexRAG = useCallback(async () => {
     if (!window.orchid?.rag?.index) {
       throw new Error('RAG IPC is not available');
@@ -1007,6 +1042,7 @@ export function ChatView({ isVisible = true, bootstrapConfig = null, onNotify, a
         onToggle={toggleLeftSidebar}
         sessionListState={session.listState}
         workspace={session.workspace}
+        onTrustBadgeClick={handleTrustBadgeClick}
         />
       </DeferredSurface>
 
@@ -1248,6 +1284,16 @@ export function ChatView({ isVisible = true, bootstrapConfig = null, onNotify, a
       />
 
       <ShortcutsHelp isOpen={helpOpen} onClose={() => setHelpOpen(false)} />
+
+      <TrustProjectDialog
+        open={trustPrompt.pending != null}
+        cwd={trustPrompt.pending?.cwd ?? ''}
+        trustState={trustPrompt.pending?.info.state === 'changed' ? 'changed' : 'untrusted'}
+        report={trustPrompt.pending?.info.report ?? null}
+        busy={trustPrompt.busy}
+        onGrant={() => void trustPrompt.grant()}
+        onDecline={trustPrompt.decline}
+      />
     </div>
   );
 }

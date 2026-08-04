@@ -31,6 +31,8 @@ import {
   ModelAssignments,
 } from '../Preferences/ModelAssignments';
 import { ModelPicker } from '../ModelPicker';
+import { TrustProjectDialog } from '../TrustProjectDialog';
+import { useTrustPrompt } from '../../hooks/useTrustPrompt';
 import { Button } from '../ui/Button';
 import { Alert } from '../ui/Alert';
 import { Select } from '../ui/Select';
@@ -105,8 +107,19 @@ export function OnboardingScreen({ isOpen, onComplete, onSkip }: OnboardingScree
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [configTheme, setConfigTheme] = useState<ThemeName>('default');
+  /** Inline guidance after declining trust for a picked project folder. */
+  const [trustGuidance, setTrustGuidance] = useState<string | null>(null);
   const modelSeededRef = useRef(false);
   const containerRef = useRef<HTMLDivElement>(null);
+
+  // Onboarding picks through the raw preload API (no useSession), so it owns
+  // its own trust-prompt controller. projectPath advances only once trusted.
+  const trustPrompt = useTrustPrompt({
+    onGranted: (cwd) => {
+      setProjectPath(cwd);
+      setTrustGuidance(null);
+    },
+  });
 
   const connections = providers.overview?.connections ?? [];
   const readyConnections = useMemo(
@@ -141,6 +154,7 @@ export function OnboardingScreen({ isOpen, onComplete, onSkip }: OnboardingScree
     setSelectedMcpIds([]);
     setSaving(false);
     setSaveError(null);
+    setTrustGuidance(null);
     modelSeededRef.current = false;
   }, [isOpen]);
 
@@ -302,11 +316,25 @@ export function OnboardingScreen({ isOpen, onComplete, onSkip }: OnboardingScree
     }
     try {
       const info = await window.orchid.session.pickProjectDir();
-      if (info?.cwd) setProjectPath(info.cwd);
+      if (!info?.cwd) return;
+      if (info.trust !== 'trusted') {
+        // Untrusted/changed: the dialog decides; projectPath advances only on grant.
+        trustPrompt.openFor(info.cwd);
+        return;
+      }
+      setTrustGuidance(null);
+      setProjectPath(info.cwd);
     } catch (error) {
       setSaveError(error instanceof Error ? error.message : 'Could not open project folder.');
     }
-  }, []);
+  }, [trustPrompt.openFor]);
+
+  const handleTrustDecline = useCallback(() => {
+    trustPrompt.decline();
+    setTrustGuidance(
+      'That folder was not trusted, so your default project stayed unchanged. Choose it again to review and trust it, or pick a different folder.',
+    );
+  }, [trustPrompt.decline]);
 
   const personalityOptions = useMemo(() => {
     if (personality && !personalities.includes(personality)) {
@@ -616,6 +644,12 @@ export function OnboardingScreen({ isOpen, onComplete, onSkip }: OnboardingScree
                 </Alert>
               )}
 
+              {trustGuidance && (
+                <Alert tone="warning" icon="alert" role="status">
+                  {trustGuidance}
+                </Alert>
+              )}
+
               {saveError && (
                 <Alert tone="error" icon="alertCircle">
                   {saveError}
@@ -765,6 +799,16 @@ export function OnboardingScreen({ isOpen, onComplete, onSkip }: OnboardingScree
           onComplete={handleProviderComplete}
         />
       )}
+
+      <TrustProjectDialog
+        open={trustPrompt.pending != null}
+        cwd={trustPrompt.pending?.cwd ?? ''}
+        trustState={trustPrompt.pending?.info.state === 'changed' ? 'changed' : 'untrusted'}
+        report={trustPrompt.pending?.info.report ?? null}
+        busy={trustPrompt.busy}
+        onGrant={() => void trustPrompt.grant()}
+        onDecline={handleTrustDecline}
+      />
     </>
   );
 }

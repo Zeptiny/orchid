@@ -75,6 +75,8 @@ interface LeftSidebarProps {
   activities?: readonly SessionActivity[];
   /** Immediate targeted stop from an Activity row. */
   onStopSession?: (sessionId: string) => void;
+  /** Open the trust dialog for the workspace (untrusted/changed badge click). */
+  onTrustBadgeClick?: () => void;
 }
 
 /**
@@ -108,6 +110,7 @@ export const LeftSidebar = memo(function LeftSidebar({
   projectPickerCreatesDraft = false,
   activities = [],
   onStopSession,
+  onTrustBadgeClick,
 }: LeftSidebarProps) {
   const [query, setQuery] = useState('');
 
@@ -234,6 +237,7 @@ export const LeftSidebar = memo(function LeftSidebar({
           onPickProjectDir={onPickProjectDir}
           onNewChatInProject={onSessionCreate}
           projectPickerCreatesDraft={projectPickerCreatesDraft}
+          onTrustBadgeClick={onTrustBadgeClick}
         />
 
         <div className="session-search">
@@ -306,6 +310,7 @@ function WorkspaceChip({
   onPickProjectDir,
   onNewChatInProject,
   projectPickerCreatesDraft,
+  onTrustBadgeClick,
 }: {
   workspace: WorkspaceInfo | null;
   isUnbound: boolean;
@@ -313,8 +318,12 @@ function WorkspaceChip({
   /** New chat in the current project (no directory dialog). */
   onNewChatInProject?: () => void;
   projectPickerCreatesDraft: boolean;
+  /** Open the trust dialog for this workspace. */
+  onTrustBadgeClick?: () => void;
 }) {
   const cwd = workspace?.cwd ?? null;
+  const trust = workspace?.trust ?? 'trusted';
+  const trustGated = !isUnbound && (trust === 'untrusted' || trust === 'changed');
   const label = isUnbound
     ? 'No project folder'
     : cwd
@@ -322,7 +331,11 @@ function WorkspaceChip({
       : 'No project folder';
   const title = isUnbound
     ? 'Choose a project folder to scope sessions and tools'
-    : (cwd ?? undefined);
+    : trustGated && trust === 'changed'
+      ? `${cwd ?? ''} — project changed since it was trusted; review the updated surface`
+      : trustGated
+        ? `${cwd ?? ''} — not trusted; review the project surface to continue`
+        : (cwd ?? undefined);
 
   // On a non-empty session the chip offers "New chat" in *this* project.
   // Folder picking is only for unbound / explicit project change.
@@ -334,6 +347,18 @@ function WorkspaceChip({
     <div className="workspace-chip border border-base-300 bg-base-100" title={title}>
       <Icon name="folder" size={12} className="workspace-chip-icon shrink-0 opacity-70" />
       <span className="workspace-chip-path mono truncate">{label}</span>
+      {trustGated && (
+        <button
+          type="button"
+          className="shrink-0"
+          onClick={onTrustBadgeClick}
+          title={trust === 'changed' ? 'Review the changed project surface' : 'Review the project surface to grant trust'}
+        >
+          <StatusBadge tone={trust === 'changed' ? 'error' : 'warning'} size="xs" withDot>
+            {trust === 'changed' ? 'Changed' : 'Not trusted'}
+          </StatusBadge>
+        </button>
+      )}
       {showNewChat && (
         <Button
           variant="ghost"
