@@ -23,18 +23,17 @@ The codebase compiles strict, lints clean, and has a genuinely large passing tes
 
 ## 2. Executive summary
 
-**Overall health: good internals, weak trust boundary for untrusted projects.** The in-app security-critical subsystems (credential vault, signed catalog, permission gating, IPC validation) are unusually disciplined and repeatedly verified clean across reviewers. But the wave-2 cross-cutting security review found that **the project-config layer is fully attacker-controlled**: a cloned repository's `.orchid.json` can rewrite permission rules and auto-launch MCP servers with no consent surface, and the repo's `AGENTS.md` is auto-injected into the model — together a complete clone → code-execution chain (§4.1). All five top wave-1 findings were independently re-traced and **confirmed** (§4.4).
+**Overall health: good internals, weak trust boundary for untrusted projects.** The in-app security-critical subsystems (credential vault, signed catalog, permission gating, IPC validation) are unusually disciplined and repeatedly verified clean across reviewers. But the wave-2 cross-cutting security review found that **the project-config layer is fully attacker-controlled**: a cloned repository's `.orchid.json` can rewrite permission rules and auto-launch MCP servers with no consent surface, and the repo's `AGENTS.md` is auto-injected into the model — together a complete clone → code-execution chain (§4.1). All four top wave-1 findings were independently re-traced and **confirmed** (§4.4).
 
 | # | Finding | Severity | Domain |
 |---|---------|----------|--------|
 | E1 | Project `.orchid.json` `permissions` are merged and honored verbatim — a cloned repo can auto-allow `execute_command` / out-of-workspace writes / MCP tools, defeating every approval mode | **CRITICAL** | Project trust |
 | E2 | Project `.orchid.json` `mcp_servers` are spawned automatically on first use — no consent, no allowlist; clone-a-repo → arbitrary code execution | **CRITICAL** | Project trust |
 | E3 | `session:set_workspace` lets renderer code rebind the workspace to any readable dir with no dialog, then renderer-allowlisted tools (`read`, `grep`, `glob`, `read_directory`) auto-allow reads "inside" it — a compromised renderer reads `~/.ssh/id_rsa` with zero user interaction | **high** | IPC/consent |
-| E4 | Interrupted RAG index permanently misaligns `vectors.npy` ↔ DB chunks; next incremental run + `rag_search` silently returns wrong files | **high** | RAG |
-| E5 | Malformed model tool-input JSON persists a tool_call whose args can't re-parse; `toModelMessages` drops the call but keeps the tool result → orphan tool result → provider 400 on **every** subsequent turn of that session | **high** | LLM history |
-| E6 | Renderer turn-affinity adoption race: sending a draft message while another session streams hijacks the new chat's projection (wrong text shown, composer locked for the whole turn) | **high** | Renderer |
-| E7 | Message-queue autofire on forced teardown (session delete / workspace rebind): queued messages either fire into a brand-new session (unrequested LLM call) or are silently dropped | **high** | Renderer |
-| E8 | Strict config schema + documented legacy `providers` key: any existing config.json containing it throws from every `loadConfig()` — startup crash risk on upgrade | **high** | Config |
+| E4 | Malformed model tool-input JSON persists a tool_call whose args can't re-parse; `toModelMessages` drops the call but keeps the tool result → orphan tool result → provider 400 on **every** subsequent turn of that session | **high** | LLM history |
+| E5 | Renderer turn-affinity adoption race: sending a draft message while another session streams hijacks the new chat's projection (wrong text shown, composer locked for the whole turn) | **high** | Renderer |
+| E6 | Message-queue autofire on forced teardown (session delete / workspace rebind): queued messages either fire into a brand-new session (unrequested LLM call) or are silently dropped | **high** | Renderer |
+| E7 | Strict config schema + documented legacy `providers` key: any existing config.json containing it throws from every `loadConfig()` — startup crash risk on upgrade | **high** | Config |
 
 Recurring secondary themes:
 
@@ -258,11 +257,7 @@ Session runtime caches (`_sessions` full histories, `_todoStores`, `_agentsMdSto
 
 ### 3.7 RAG, AST & MCP reliability
 
-**Health:** fair-to-good. Worker-thread isolation, bounded retries, download timeouts, WAL+busy_timeout, MCP per-call timeouts and lease lifecycle are solid; no confirmed unhandled-rejection paths. The one serious issue is RAG index atomicity.
-
-**F7.1 — high / high — `rag/store.ts:599-610, 616-682, 715-717` + `rag/indexer.ts:302-304, 420`**
-Interrupted RAG index permanently misaligns vectors↔chunks: DB rows commit per-file while `vectors.npy` writes once at the end. Cancel/quit after ≥1 file leaves DB ahead; next run detects the mismatch and silently returns **empty** vector state; unchanged files are skipped (chunks kept, vectors never re-added); flush writes vectors for changed files only. `search()` maps matrix row *i* → `chunks[i]` by DB order → new vectors score against wrong chunks → plausible-looking results pointing at wrong files.
-*Fix:* on mismatch force full reindex (or clear+rebuild) instead of continuing empty; persist chunk_ids alongside vectors to make alignment verifiable.
+**Health:** fair-to-good. Worker-thread isolation, bounded retries, download timeouts, WAL+busy_timeout, MCP per-call timeouts and lease lifecycle are solid; no confirmed unhandled-rejection paths. Remaining findings are watchdog/cancel gaps, fail-silent recovery modes, and teardown races.
 
 **F7.2 — medium / high — `ast/indexer.ts:413-457` vs `rag/indexer.ts:526-538`**
 AST index worker has **no idle watchdog and no cancel** (its RAG twin has both). A hung worker wedges the AST subsystem until app restart: `isIndexing` true forever, all later `ast:index` shares the hung promise, symbol tools hang until tool timeout.
@@ -280,23 +275,19 @@ MCP teardown race: `_awaitRunner()` gives up after 3s then `_clients.clear()`; i
 Server death never detected: no `client.onclose` handler; a crashed MCP server stays `connected` in status, every tool call fails individually until restart/config change.
 *Fix:* onclose → mark failed/disconnected, drop tools, optional bounded reconnect.
 
-**F7.6 — low / medium — `rag/store.ts:929-938` + `rag/indexer.ts:291-302`**
-Corrupt-npy recovery mid-index clears the DB **after** hashes were read — unchanged files skipped against a deleted DB; subsequent writes go to an unlinked inode and are lost on close. Rare but unsafe ordering.
-*Fix:* check mismatch/corruption before reading hashes; force full run.
-
-**F7.7 — low / medium — `rag/store.ts:303-311, 313-333` vs `utils/sqlite.ts:63-77`**
+**F7.6 — low / medium — `rag/store.ts:303-311, 313-333` vs `utils/sqlite.ts:63-77`**
 RAG corruption recovery permanently deletes the DB where the shared util moves it aside for salvage; `no such table` (e.g. partial schema from disk-full) triggers unrecoverable deletion of a salvageable index.
 *Fix:* `moveCorruptDbAside`; rebuild only on true corruption-class errors.
 
-**F7.8 — low / medium — `ast/parser.ts:21-25` + `ipc/index.ts:38-54`**
+**F7.7 — low / medium — `ast/parser.ts:21-25` + `ipc/index.ts:38-54`**
 `require('web-tree-sitter')` at module load in the startup chain with no try/catch — broken install crashes main at boot instead of degrading (unlike better-sqlite3/onnxruntime which produce actionable errors).
 *Fix:* lazy-load inside `ensureInitialized()`.
 
-**F7.9 — low / high — `rag/store.ts:121-166, 785-790`**
+**F7.8 — low / high — `rag/store.ts:121-166, 785-790`**
 Switching `rag.embedding_model` produces a mixed-dimension `vectors.npy` (rows truncated/NaN-padded silently); surfaces only at query time.
 *Fix:* store/compare embedding dimension at index time; auto-force full reindex on change.
 
-**F7.10 — low / high — `ast/store.ts:144, 175`**
+**F7.9 — low / high — `ast/store.ts:144, 175`**
 `pragma foreign_keys` toggled OFF→ON without try/finally — a thrown transaction leaves FK enforcement off for the store instance's lifetime.
 *Fix:* try/finally.
 
@@ -496,15 +487,14 @@ God-modules: embedder mixes download + ONNX sessions + API fallback + file cachi
 
 ### 4.4 Adversarial scenario verification
 
-Independent re-tracing of the five highest-impact wave-1 findings against the actual code — **all five CONFIRMED**:
+Independent re-tracing of the four highest-impact wave-1 findings against the actual code — **all four CONFIRMED**:
 
 | Finding | Verdict | Key evidence |
 |---|---|---|
 | A. F1.1 `session:set_workspace` consent bypass | **CONFIRMED** | `ipc/session.ts:460-470` binds with no dialog (validation is only absolute/exists/R_OK|X_OK — `project/path.ts:43-111`, no project marker); `ipc/tool.ts:52-113` allows read/grep/glob with cwd = bound workspace; `permissions/resolver.ts:120-138` classifies inside as `allow` per `FILE_TOOL_DEFAULTS` (`shared/types/permission.ts:66-73`) |
 | B. F3.1 orphan tool result → permanent 400 | **CONFIRMED** | `model-messages.ts:45-60` drops unparseable-args tool calls; `:76-93` converts every TOOL message unconditionally → orphan; `history.ts:99-162` pairs by id only; poison source `stream/sdk-event-adapter.ts:187-200` persisted at `ipc/chat/send.ts:395-418` (status `error` ≠ `cancelled`, not excluded); 400 is non-transient → no retry, session poisoned until hand-edited |
-| C. F7.1 interrupted RAG index misalignment | **CONFIRMED** | `rag/indexer.ts:353` commits DB rows per file vs `:420` npy written once at end; `store.ts:599-610` silently returns empty state on mismatch; unchanged files skipped by hash (`indexer.ts:336-338`); `store.ts:781` pairs vector row *i* with chunks ordered by AUTOINCREMENT — new vectors pair with the *oldest* other-file chunks. (The single-file `upsertFile` path has a mismatch guard at `store.ts:493-529`; the batch path used by `indexProject` does not) |
-| D. F8.1 draft-send projection hijack | **CONFIRMED** | `useChat.ts:505-509` — draft send leaves both affinity ids null during the await; adoption branch `:191-194` takes the first event from any session (background sessions reach it — `ipc/chat/events.ts:64-84`); reducer identity guard (`shared/chat/turn-projection.ts:234-240`) then rejects the real session's events; post-await rebind fixes affinity but not the polluted projection |
-| E. F8.2 queue autofire on delete/rebind | **CONFIRMED** | `useQueueAutoFire.ts:17-26` fires on streaming→idle; delete emits `CHAT_DONE` + idle (`ipc/chat/abort.ts:229-243`) before the delete invoke resolves; `handleSessionDelete` never calls `clearQueue()`; structured errors resolve (don't reject) so `restoreBatch` never runs — messages silently lost, or fire into a lazily-created new session |
+| C. F8.1 draft-send projection hijack | **CONFIRMED** | `useChat.ts:505-509` — draft send leaves both affinity ids null during the await; adoption branch `:191-194` takes the first event from any session (background sessions reach it — `ipc/chat/events.ts:64-84`); reducer identity guard (`shared/chat/turn-projection.ts:234-240`) then rejects the real session's events; post-await rebind fixes affinity but not the polluted projection |
+| D. F8.2 queue autofire on delete/rebind | **CONFIRMED** | `useQueueAutoFire.ts:17-26` fires on streaming→idle; delete emits `CHAT_DONE` + idle (`ipc/chat/abort.ts:229-243`) before the delete invoke resolves; `handleSessionDelete` never calls `clearQueue()`; structured errors resolve (don't reject) so `restoreBatch` never runs — messages silently lost, or fire into a lazily-created new session |
 
 **Scenarios traced that the system handles correctly:**
 1. **kill -9 mid-session-write → restart: HANDLED.** WAL-mode SQLite, transactional turn writes; recovery sets stale ACTIVE chains to INTERRUPTED in one transaction; individually corrupt rows skipped without failing load; dangling tool_calls filtered by the pairing invariant on next replay.
@@ -536,18 +526,17 @@ Crash windows in provider submit/disconnect: submit crash leaves an orphaned vau
 
 ### P1 — correctness bugs with durable user impact
 5. **Session-poisoning orphan tool result** (F3.1): symmetric drop in `toModelMessages` or sanitize at the sdkInputError boundary.
-6. **RAG index atomicity** (F7.1): force full reindex on vector/chunk mismatch; persist chunk_ids with vectors.
-7. **Renderer hijack + queue autofire** (F8.1, F8.2): explicit turn binding on send resolution; clear queue on all forced-teardown paths; restore batch on non-sending handleSend.
-8. **Signal-killed exit codes** (F4.3), **config:save env baking** (F6.1), **missing-workspace structured error** (F6.3), **two-window silent abort** (F12.1), **rebind abort drift** (F12.2).
+6. **Renderer hijack + queue autofire** (F8.1, F8.2): explicit turn binding on send resolution; clear queue on all forced-teardown paths; restore batch on non-sending handleSend.
+7. **Signal-killed exit codes** (F4.3), **config:save env baking** (F6.1), **missing-workspace structured error** (F6.3), **two-window silent abort** (F12.1), **rebind abort drift** (F12.2).
 
 ### P2 — safety mechanisms that are dead or bypassable
-9. grep per-file timeout (F4.1), glob symlink walk (F4.2), apply_patch symlink write-through (F4.6), edit/write symlink destruction (F4.10), skill resource symlink escape (F9.3), read byte-budget hole (F4.4), web_fetch SSRF/OOM (F4.5).
+8. grep per-file timeout (F4.1), glob symlink walk (F4.2), apply_patch symlink write-through (F4.6), edit/write symlink destruction (F4.10), skill resource symlink escape (F9.3), read byte-budget hole (F4.4), web_fetch SSRF/OOM (F4.5).
 
 ### P3 — operational & scaling
-10. Single-instance lock (F5.1); ledger retention + analytics SQL aggregation (F5.3, F10.3); session cache eviction (F6.7); chain-scoped SESSION_UPDATED diffs (F10.1); lazy session hydration (F10.5); MCP onclose + teardown race (F7.4, F7.5); AST watchdog/cancel (F7.2); log permissions + rotation (F9.5); updater signing posture (F9.6).
+9. Single-instance lock (F5.1); ledger retention + analytics SQL aggregation (F5.3, F10.3); session cache eviction (F6.7); chain-scoped SESSION_UPDATED diffs (F10.1); lazy session hydration (F10.5); MCP onclose + teardown race (F7.4, F7.5); AST watchdog/cancel (F7.2); log permissions + rotation (F9.5); updater signing posture (F9.6).
 
 ### P4 — structural debt
-11. Shared primitives: one atomic-write, one path-canonicalize, one error classifier (F11.3, F11.4, F11.5); tools layer off Electron windows + frozen-context invariant restored (F11.1, F11.2); AGENTS.md regeneration (F11.7); god-module splits (F11.10); projector/config limit consistency (F11.6).
+10. Shared primitives: one atomic-write, one path-canonicalize, one error classifier (F11.3, F11.4, F11.5); tools layer off Electron windows + frozen-context invariant restored (F11.1, F11.2); AGENTS.md regeneration (F11.7); god-module splits (F11.10); projector/config limit consistency (F11.6).
 
 ### Tests to add (from §3.9)
 - `chat:cancel` / `chat:stop` / `forceStopSession` handler suites (T1, T2) — the two-phase Esc flow is currently untested end-to-end.
@@ -566,14 +555,14 @@ Crash windows in provider submit/disconnect: submit crash leaves an orphaned vau
 | 1 | correctness-reviewer | Tool system | ✅ 10 findings |
 | 1 | data-integrity-guardian | Providers, credentials & accounting | ✅ 6 findings |
 | 1 | correctness-reviewer | Config, session, workspace, AGENTS.md | ✅ 8 findings |
-| 1 | reliability-reviewer | RAG, AST, MCP | ✅ 10 findings |
+| 1 | reliability-reviewer | RAG, AST, MCP | ✅ 8 findings |
 | 1 | correctness-reviewer | Renderer (React UI) | ✅ 5 findings |
 | 1 | testing-reviewer | Test suite quality & coverage | ✅ 9 gaps + 4 quality findings |
 | 2 | security-reviewer | Permissions, logging, updater, skills | ✅ 7 findings (2 critical) |
 | 2 | performance-reviewer | Hot paths, scaling, SQLite patterns | ✅ 10 findings |
 | 2 | architecture-strategist | Layering, duplication, doc drift | ✅ 10 findings |
-| 2 | adversarial-reviewer | Scenario tracing + finding verification | ✅ 5/5 confirmed + 3 bonus |
+| 2 | adversarial-reviewer | Scenario tracing + finding verification | ✅ 4/4 confirmed + 3 bonus |
 
 **Orchestrator spot-verification:** F1.1 (session.ts:459-470 handler + comment), F4.3 (execute-command.ts:334 `?? 0`), and F6.1 (config.ts:139-148 merged-view write) were additionally re-verified directly by the orchestrator.
 
-**Totals:** 96 findings and gaps across 13 reviewer passes — 2 critical, 10 high-severity findings (+3 high-risk coverage gaps), 34 medium, 37 low — with extensive verified-clean inventories per domain (each section's "verified clean" list is part of the audit record).
+**Totals:** 94 findings and gaps across 13 reviewer passes — 2 critical, 9 high-severity findings (+3 high-risk coverage gaps), 34 medium, 36 low — with extensive verified-clean inventories per domain (each section's "verified clean" list is part of the audit record).
