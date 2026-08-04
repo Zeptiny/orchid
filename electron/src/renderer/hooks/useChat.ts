@@ -147,8 +147,12 @@ export interface ChatSendOptions {
 }
 
 export interface UseChatReturn extends ChatState {
-  /** Send a message to the chat. */
-  send: (message: string, options?: ChatSendOptions) => Promise<void>;
+  /**
+   * Send a message to the chat. Resolves `true` only when a turn actually
+   * started; gate failures (busy, switching, structured send errors) resolve
+   * `false` instead of rejecting.
+   */
+  send: (message: string, options?: ChatSendOptions) => Promise<boolean>;
   /** Cancel the current stream. */
   cancel: () => Promise<void>;
   /** Immediately stop one session from a global activity control. */
@@ -494,12 +498,12 @@ export function useChat(activeSessionId: string | null = null): UseChatReturn {
   const send = useCallback(
     async (message: string, options?: ChatSendOptions) => {
       // isSendingRef is synchronous; status alone can be stale across rapid Enter.
-      if (!message.trim() || status === 'streaming' || isSendingRef.current) return;
+      if (!message.trim() || status === 'streaming' || isSendingRef.current) return false;
       // Affinity already rebound but UI still shows previous session — do not send.
-      if (isSwitchingSession) return;
+      if (isSwitchingSession) return false;
       if (!window.orchid?.chat) {
         dispatchProjection({ type: 'local_error', error: 'Chat IPC not available', status: 'error' });
-        return;
+        return false;
       }
 
       isSendingRef.current = true;
@@ -563,7 +567,7 @@ export function useChat(activeSessionId: string | null = null): UseChatReturn {
           });
           // Drop the optimistic user bubble when send never started.
           setMessages((prev) => dropOptimisticUserMessageIfLast(prev, userMessage.id));
-          return;
+          return false;
         }
 
         // Only adopt send resolution when the user is still viewing this turn's
@@ -582,12 +586,14 @@ export function useChat(activeSessionId: string | null = null): UseChatReturn {
             affinity.lastSequence = -1;
           }
         }
+        return true;
       } catch (err) {
         // Drop the optimistic user bubble when send never started (throw path).
         isSendingRef.current = false;
         dispatchProjection({ type: 'clear_stream', status: 'error' });
         dispatchProjection({ type: 'local_error', error: err instanceof Error ? err.message : String(err), status: 'error' });
         setMessages((prev) => dropOptimisticUserMessageIfLast(prev, userMessage.id));
+        return false;
       }
     },
     [

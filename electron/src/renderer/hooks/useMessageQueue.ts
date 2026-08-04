@@ -7,8 +7,15 @@
  *
  * Strict FIFO: the front message must fire before subsequent messages are eligible.
  * Editing the front message holds the entire queue.
+ *
+ * Ownership: the queue records the session key it was queued against
+ * (`ownerKey` param — active session id, or null in draft). When that owner
+ * disappears or changes (session delete, workspace rebind, session switch),
+ * the queue is stale: it is discarded rather than fired into another session
+ * or a lazily-created new one. Draft-owned queues (owner null) never go stale
+ * so follow-ups queued during a draft's first turn survive its promotion.
  */
-import { useState, useCallback, useRef } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -25,6 +32,8 @@ export interface QueuedMessage {
 export interface ConsumedBatch {
   text: string;
   batch: QueuedMessage[];
+  /** Owner session key captured at consume time (null = draft-owned). */
+  owner: string | null;
 }
 
 export interface UseMessageQueueReturn {
@@ -41,8 +50,13 @@ export interface UseMessageQueueReturn {
   clearQueue: () => void;
   /** Consume the next batch of messages eligible to fire. Returns text + batch, or null if held. */
   consumeNext: () => ConsumedBatch | null;
-  /** Restore a previously consumed batch to the front of the queue (FIFO). */
-  restoreBatch: (batch: readonly QueuedMessage[]) => void;
+  /**
+   * Restore a previously consumed batch to the front of the queue (FIFO).
+   * `owner` is the batch's owner at consume time; when the current owner no
+   * longer matches (session deleted / rebound in the meantime), the batch is
+   * dropped instead of resurrected.
+   */
+  restoreBatch: (batch: readonly QueuedMessage[], owner?: string | null) => void;
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -50,6 +64,16 @@ export interface UseMessageQueueReturn {
 let nextId = 1;
 function generateId(): string {
   return `qm-${nextId++}-${Date.now()}`;
+}
+
+/**
+ * A queue is stale when it was queued against a concrete session (`owner`)
+ * and the current context (`current`) no longer matches it. Draft-owned
+ * queues (owner null) are never stale — draft promotion must not clear
+ * follow-ups queued during the first turn.
+ */
+export function isStaleQueueOwner(owner: string | null, current: string | null): boolean {
+  return owner != null && owner !== current;
 }
 
 /** Pure FIFO batch selection: pick the front message plus consecutive next-request messages. */
@@ -95,19 +119,26 @@ export function reorderItems<T>(items: readonly T[], fromIndex: number, toIndex:
 
 // ── Hook ─────────────────────────────────────────────────────────────────────
 
-export function useMessageQueue(): UseMessageQueueReturn {
+export function useMessageQueue(ownerKey: string | null): UseMessageQueueReturn {
   const [queue, setQueue] = useState<QueuedMessage[]>([]);
   const [editingId, setEditingId] = useState<string | null>(null);
   const editSnapshotRef = useRef<string>('');
   const queueRef = useRef<QueuedMessage[]>([]);
   const editingIdRef = useRef<string | null>(null);
+  /** Owner key captured when the queue filled (null = draft-owned). */
+  const ownerRef = useRef<string | null>(null);
+  const ownerKeyRef = useRef<string | null>(ownerKey);
   queueRef.current = queue;
   editingIdRef.current = editingId;
+  ownerKeyRef.current = ownerKey;
 
   const addToQueue = useCallback(
     (text: string, trigger: QueueTrigger = 'next-request'): QueueTrigger | null => {
       const trimmed = text.trim();
       if (!trimmed) return null;
+      if (queueRef.current.length === 0) {
+        ownerRef.current = ownerKeyRef.current;
+      }
       setQueue((prev) => [
         ...prev,
         { id: generateId(), text: trimmed, trigger, createdAt: Date.now() },
@@ -164,20 +195,45 @@ export function useMessageQueue(): UseMessageQueueReturn {
     );
   }, []);
 
+  // Intentionally keeps ownerRef: the next addToQueue into an empty queue
+  // recaptures the current owner, and a same-commit teardown (owner change +
+  // idle edge landing together) still lets consumeNext's stale check see the
+  // vanished owner instead of a null that would read as draft-owned.
   const clearQueue = useCallback(() => {
     setQueue([]);
     setEditingId(null);
   }, []);
 
+  // Forced teardown (delete / rebind / switch) changes the owner key. A
+  // non-empty queue owned by the vanished session must never fire into
+  // whatever surface appears next — drop it proactively.
+  useEffect(() => {
+    if (queueRef.current.length > 0 && isStaleQueueOwner(ownerRef.current, ownerKey)) {
+      clearQueue();
+    }
+  }, [ownerKey, clearQueue]);
+
   const consumeNext = useCallback((): ConsumedBatch | null => {
+    // Belt-and-suspenders stale check: teardown can land between the idle
+    // transition and this call (e.g. terminal event for a deleted session).
+    if (queueRef.current.length > 0 && isStaleQueueOwner(ownerRef.current, ownerKeyRef.current)) {
+      clearQueue();
+      return null;
+    }
     const result = selectBatch(queueRef.current, editingIdRef.current);
     if (!result) return null;
     setQueue(result.remainder);
-    return { text: result.text, batch: result.batch };
-  }, []);
+    return { text: result.text, batch: result.batch, owner: ownerRef.current };
+  }, [clearQueue]);
 
-  const restoreBatch = useCallback((batch: readonly QueuedMessage[]) => {
+  const restoreBatch = useCallback((batch: readonly QueuedMessage[], owner: string | null = null) => {
     if (batch.length === 0) return;
+    // The send attempt raced a teardown: the batch's session is gone. Do not
+    // resurrect messages that no longer have a session to fire into.
+    if (isStaleQueueOwner(owner, ownerKeyRef.current)) return;
+    if (queueRef.current.length === 0) {
+      ownerRef.current = owner;
+    }
     setQueue((prev) => [...batch, ...prev]);
   }, []);
 

@@ -83,7 +83,10 @@ export function ChatView({ isVisible = true, bootstrapConfig = null, onNotify, a
   const todos = useTodos(session.activeSession?.id ?? null);
   const tabs = useSessionTabs();
   const providers = useProviders();
-  const messageQueue = useMessageQueue();
+  // Queue ownership follows the visible session: teardown paths (delete /
+  // workspace rebind / switch) change this key and drop stale queued messages
+  // instead of firing them into another session.
+  const messageQueue = useMessageQueue(session.activeSession?.id ?? null);
 
   const {
     rightOpen: sidebarOpen,
@@ -489,6 +492,10 @@ export function ChatView({ isVisible = true, bootstrapConfig = null, onNotify, a
   const handleSessionDelete = useCallback(
     async (id: string) => {
       const wasActive = session.activeSession?.id === id;
+      // Clear BEFORE the delete invoke resolves: main force-stops the session
+      // and emits the terminal idle transition during this await, which would
+      // otherwise trigger queue autofire against a vanishing session.
+      if (wasActive) messageQueue.clearQueue();
       await session.deleteSession(id);
       const snapshot = await tabs.refresh();
       if (!wasActive) return;
@@ -498,7 +505,7 @@ export function ChatView({ isVisible = true, bootstrapConfig = null, onNotify, a
       if (gen !== sessionSwitchGen.current) return;
       await focusAfterWorkingSet(snapshot);
     },
-    [session, chat.setMessages, tabs.refresh, focusAfterWorkingSet],
+    [session, chat.setMessages, tabs.refresh, focusAfterWorkingSet, messageQueue.clearQueue],
   );
 
   const handleSessionRename = useCallback(
@@ -556,6 +563,8 @@ export function ChatView({ isVisible = true, bootstrapConfig = null, onNotify, a
       if (startsDraft) {
         ++sessionSwitchGen.current;
         chat.beginSessionSwitch(null);
+        // Forced rebind: the queued messages belong to the session being left.
+        messageQueue.clearQueue();
         applySessionMessages(null);
         setDraftTabVisible(true);
         setComposerDraftKey((k) => k + 1);
@@ -564,7 +573,7 @@ export function ChatView({ isVisible = true, bootstrapConfig = null, onNotify, a
         notify(`Project folder: ${info.cwd}`, 'info');
       }
     }
-  }, [session, chat.beginSessionSwitch, applySessionMessages, notify]);
+  }, [session, chat.beginSessionSwitch, applySessionMessages, notify, messageQueue.clearQueue]);
 
   // Stable prop wrappers for the memoized LeftSidebar. Inline arrows here would
   // give the rail a fresh identity every render and defeat React.memo, so the
@@ -602,28 +611,31 @@ export function ChatView({ isVisible = true, bootstrapConfig = null, onNotify, a
     }
   }, [notify, providerModelByKey, session]);
 
+  // Resolves `true` only when a turn actually started. Queue autofire relies
+  // on the distinction: gate failures restore the consumed batch instead of
+  // silently dropping it (and never reject — rejection is not the signal).
   const handleSend = useCallback(
-    async (message: string) => {
+    async (message: string): Promise<boolean> => {
       // UI gate (R3): reinforce main-process unbound_workspace rejection.
-      if (chat.isSwitchingSession) return;
+      if (chat.isSwitchingSession) return false;
       if (!workspaceBound) {
         notify(
           'Choose a project folder before sending a message.',
           'warning',
         );
         void handlePickProjectDir();
-        return;
+        return false;
       }
       if (!providerAvailable) {
         notify('Connect a provider in Settings before sending a message.', 'warning');
         emitOrchidEvent('orchid:open-settings', { tab: 'providers' });
-        return;
+        return false;
       }
       if (!preferredSelection || !modelSelected) {
         notify('Select a ready connection and model before sending a message.', 'warning');
-        return;
+        return false;
       }
-      await chat.send(message, {
+      return chat.send(message, {
         ...(preferredSelection ? { model: preferredSelection } : {}),
         ...(session.activeSession?.id
           ? { sessionId: session.activeSession.id }
@@ -889,7 +901,7 @@ export function ChatView({ isVisible = true, bootstrapConfig = null, onNotify, a
   const commandContext: CommandContext = useMemo(() => ({
     onCreateSession: handleSessionCreate,
     onLoadSession: handleSessionSelect,
-    onDeleteSession: session.deleteSession,
+    onDeleteSession: handleSessionDelete,
     onRenameSession: session.rename,
     getActiveSessionId: () => session.activeSession?.id ?? null,
     getActiveSessionName: () => session.activeSession?.name ?? null,
@@ -932,6 +944,7 @@ export function ChatView({ isVisible = true, bootstrapConfig = null, onNotify, a
   }), [
     handleSessionCreate,
     handleSessionSelect,
+    handleSessionDelete,
     session,
     handleSelectProviderModel,
     availableProviderModels,
