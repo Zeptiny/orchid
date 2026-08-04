@@ -97,6 +97,7 @@ import {
   getProjectTrustState,
   grantProjectTrust,
   listTrustedProjects,
+  ProjectTrustStore,
   resetProjectTrustStore,
   revokeProjectTrust,
 } from '../../src/main/project/trust';
@@ -217,22 +218,29 @@ describe('project:trust_get', () => {
     });
   });
 
-  it('returns trusted with a null report after a grant', async () => {
+  it('returns trusted with a surface report after a grant', async () => {
     grantProjectTrust(surfaceProject);
 
     const info = await callTrustGet({ cwd: surfaceProject });
 
-    expect(info).toEqual({ projectDir: surfaceCanonical, state: 'trusted', report: null });
+    expect(info.projectDir).toBe(surfaceCanonical);
+    expect(info.state).toBe('trusted');
+    // The settings Review button renders this report read-only for trusted
+    // projects, so it must be populated regardless of state.
+    expect(info.report).not.toBeNull();
+    expect(info.report!.projectDir).toBe(surfaceCanonical);
+    expect(info.report!.hasSurface).toBe(true);
   });
 
   it('auto-trusts a bare project without a surface', async () => {
     const info = await callTrustGet({ cwd: bareProject });
 
-    expect(info).toEqual({
-      projectDir: fs.realpathSync(bareProject),
-      state: 'trusted',
-      report: null,
-    });
+    expect(info.projectDir).toBe(fs.realpathSync(bareProject));
+    expect(info.state).toBe('trusted');
+    expect(info.report).not.toBeNull();
+    expect(info.report!.hasSurface).toBe(false);
+    expect(info.report!.mcpServers).toEqual([]);
+    expect(info.report!.definitions).toEqual([]);
   });
 
   it('never throws for a nonexistent directory', async () => {
@@ -241,6 +249,61 @@ describe('project:trust_get', () => {
     const info = await callTrustGet({ cwd: missing });
 
     expect(info).toEqual({ projectDir: missing, state: 'untrusted', report: null });
+  });
+
+  it('keeps the real state but drops the report when the report build throws', async () => {
+    // A hostile/broken FS entry must never reject trust_get — the grant path
+    // has to stay reachable.
+    const spy = vi
+      .spyOn(ProjectTrustStore.prototype, 'buildReport')
+      .mockImplementation(() => {
+        throw new Error('hostile surface');
+      });
+
+    try {
+      const info = await callTrustGet({ cwd: surfaceProject });
+
+      expect(info.projectDir).toBe(surfaceCanonical);
+      expect(info.state).toBe('untrusted');
+      expect(info.report).toBeNull();
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('reports the updated surface after a granted project drifts', async () => {
+    grantProjectTrust(surfaceProject);
+    expect(getProjectTrustState(surfaceProject)).toBe('trusted');
+
+    // Drift the granted surface: keep the original override, add an MCP server.
+    fs.writeFileSync(
+      path.join(surfaceProject, '.orchid.json'),
+      JSON.stringify({
+        command_timeout: 99,
+        mcp_servers: {
+          context7: { command: 'npx', args: ['-y', '@upstash/context7-mcp'] },
+        },
+      }),
+      'utf-8',
+    );
+
+    const info = await callTrustGet({ cwd: surfaceProject });
+
+    expect(info.projectDir).toBe(surfaceCanonical);
+    expect(info.state).toBe('changed');
+    expect(info.report).not.toBeNull();
+    expect(info.report!.hasSurface).toBe(true);
+    expect(info.report!.mcpServers).toContainEqual({
+      name: 'context7',
+      kind: 'added',
+      command: 'npx',
+      args: ['-y', '@upstash/context7-mcp'],
+    });
+    expect(info.report!.otherConfigOverrides).toContainEqual({
+      key: 'command_timeout',
+      projectValue: '99',
+      homeValue: '30',
+    });
   });
 });
 
@@ -255,7 +318,10 @@ describe('project:trust_set', () => {
 
     const info = await callTrustSet({ cwd: surfaceProject, trusted: true });
 
-    expect(info).toEqual({ projectDir: surfaceCanonical, state: 'trusted', report: null });
+    expect(info.projectDir).toBe(surfaceCanonical);
+    expect(info.state).toBe('trusted');
+    expect(info.report).not.toBeNull();
+    expect(info.report!.projectDir).toBe(surfaceCanonical);
     expect(getProjectTrustState(surfaceProject)).toBe('trusted');
 
     const stored = JSON.parse(fs.readFileSync(storePath, 'utf-8')) as Record<

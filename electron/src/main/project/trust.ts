@@ -50,14 +50,40 @@ import { canonicalizeProjectDirectory } from './path';
 /** Store file name inside `~/.orchid/` (mirrors the providers.json precedent). */
 export const TRUST_STORE_NAME = 'trusted_projects.json';
 
-/** Surface files above this size fingerprint by size instead of content. */
+/** Surface files up to this size are read in one shot; larger ones stream. */
 export const TRUST_FINGERPRINT_MAX_FILE_BYTES = 1_048_576;
+
+/**
+ * Surface files above this size fingerprint as `size=N:truncated` — beyond
+ * this bound a file cannot plausibly be definition content, so same-size
+ * content changes past the cap are a documented residual.
+ */
+export const TRUST_FINGERPRINT_HARD_CAP_BYTES = 33_554_432;
+
+/** Chunk size for streaming content hashes of oversized surface files. */
+const FINGERPRINT_CHUNK_BYTES = 65_536;
 
 /** Max definition-tree files fingerprinted; overflow records a marker. */
 export const TRUST_FINGERPRINT_MAX_FILES = 1000;
 
 /** Freshness bound for the fingerprint and home-baseline caches. */
 export const TRUST_FINGERPRINT_CACHE_TTL_MS = 2000;
+
+/** Max `.orchid.json` size read for the report; larger files read as {}. */
+export const TRUST_REPORT_MAX_CONFIG_BYTES = TRUST_FINGERPRINT_MAX_FILE_BYTES * 4;
+
+/** Max definitions enumerated in the report. */
+export const TRUST_REPORT_MAX_DEFINITIONS = 500;
+
+/** Max characters per serialized config value in the report. */
+export const TRUST_REPORT_MAX_VALUE_CHARS = 200;
+
+/** Report key carrying the oversized-config note (survives diff filtering). */
+const TRUST_REPORT_NOTE_KEY = 'trust-report-note';
+
+const OVERSIZE_CONFIG_NOTE =
+  `.orchid.json exceeds ${TRUST_REPORT_MAX_CONFIG_BYTES} bytes; ` +
+  'its content is omitted from this report.';
 
 const DEFINITION_DIRS = ['agents', 'skills', 'personalities'] as const;
 
@@ -98,6 +124,7 @@ export interface ProjectTrustStoreOptions {
 interface SurfaceFile {
   readonly relPath: string;
   readonly absPath: string;
+  readonly size: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -126,12 +153,33 @@ function isFile(filePath: string): boolean {
   }
 }
 
-/** Tolerant raw project-layer read — missing or malformed content yields {}. */
+/** Keys that cannot appear in schema-valid report entries. */
+function isUnreportableKey(key: string): boolean {
+  return isUnsafeKey(key) || String(key).trim() === '';
+}
+
+/** JSON-serialize a config value for display, capped with an ellipsis. */
+function serializeForReport(value: unknown): string {
+  const text = JSON.stringify(value) ?? 'undefined';
+  if (text.length <= TRUST_REPORT_MAX_VALUE_CHARS) return text;
+  return `${text.slice(0, TRUST_REPORT_MAX_VALUE_CHARS)}…`;
+}
+
+/**
+ * Tolerant raw project-layer read — missing or malformed content yields {}.
+ * Oversized configs are skipped (with a report note) instead of being read.
+ */
 function readRawProjectLayer(canonicalDir: string): Record<string, unknown> {
+  const configPath = path.join(canonicalDir, PROJECT_CONFIG_NAME);
   try {
-    const parsed: unknown = JSON.parse(
-      fs.readFileSync(path.join(canonicalDir, PROJECT_CONFIG_NAME), 'utf-8'),
-    );
+    if (fs.statSync(configPath).size > TRUST_REPORT_MAX_CONFIG_BYTES) {
+      return { [TRUST_REPORT_NOTE_KEY]: OVERSIZE_CONFIG_NOTE };
+    }
+  } catch {
+    return {};
+  }
+  try {
+    const parsed: unknown = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
     return isPlainObject(parsed) ? parsed : {};
   } catch {
     return {};
@@ -160,12 +208,17 @@ function readTrustStoreFile(storePath: string): Map<string, TrustStoreRecord> {
 
 /**
  * Files under `.orchid/{agents,skills,personalities}` sorted by relative
- * path, capped at TRUST_FINGERPRINT_MAX_FILES. Symlinked directories are
- * followed with a realpath cycle guard.
+ * path, capped at TRUST_FINGERPRINT_MAX_FILES. The walk exits early once
+ * MAX_FILES + 1 files are collected; the first overflowing file is returned
+ * separately so the fingerprint can name it. Residual: files deeper past the
+ * cap are never enumerated, so they are covered only indirectly — swapping
+ * which file overflows changes the fingerprint, but edits to files the walk
+ * never reached do not. Symlinked directories are followed with a realpath
+ * cycle guard.
  */
 function listDefinitionFiles(canonicalDir: string): {
   files: SurfaceFile[];
-  omitted: number;
+  overflow: SurfaceFile | null;
 } {
   const files: SurfaceFile[] = [];
   const visitedDirs = new Set<string>();
@@ -176,12 +229,13 @@ function listDefinitionFiles(canonicalDir: string): {
       files,
       visitedDirs,
     );
+    if (files.length > TRUST_FINGERPRINT_MAX_FILES) break;
   }
   files.sort((a, b) => (a.relPath < b.relPath ? -1 : a.relPath > b.relPath ? 1 : 0));
-  if (files.length <= TRUST_FINGERPRINT_MAX_FILES) return { files, omitted: 0 };
+  if (files.length <= TRUST_FINGERPRINT_MAX_FILES) return { files, overflow: null };
   return {
     files: files.slice(0, TRUST_FINGERPRINT_MAX_FILES),
-    omitted: files.length - TRUST_FINGERPRINT_MAX_FILES,
+    overflow: files[TRUST_FINGERPRINT_MAX_FILES],
   };
 }
 
@@ -191,6 +245,8 @@ function walkDefinitionDir(
   out: SurfaceFile[],
   visitedDirs: Set<string>,
 ): void {
+  if (out.length > TRUST_FINGERPRINT_MAX_FILES) return;
+
   let realDir: string;
   try {
     realDir = fs.realpathSync(absDir);
@@ -208,6 +264,7 @@ function walkDefinitionDir(
   }
 
   for (const entry of entries) {
+    if (out.length > TRUST_FINGERPRINT_MAX_FILES) return;
     const absPath = path.join(absDir, entry);
     let stat: fs.Stats;
     try {
@@ -218,12 +275,21 @@ function walkDefinitionDir(
     if (stat.isDirectory()) {
       walkDefinitionDir(absPath, `${relDir}/${entry}`, out, visitedDirs);
     } else if (stat.isFile()) {
-      out.push({ relPath: `${relDir}/${entry}`, absPath });
+      out.push({ relPath: `${relDir}/${entry}`, absPath, size: stat.size });
     }
   }
 }
 
-/** Content hash for one surface file; oversized files fingerprint by size. */
+/** Fingerprint marker naming the first file past the definition-file cap. */
+function overflowMarker(overflow: SurfaceFile): string {
+  return `overflow:${overflow.relPath}:${overflow.size}`;
+}
+
+/**
+ * Content hash for one surface file. Files above the inline-read threshold
+ * are hashed by streaming chunks; only files past the hard cap degrade to a
+ * size marker.
+ */
 function fileFingerprintPart(absPath: string): string {
   let stat: fs.Stats;
   try {
@@ -232,15 +298,43 @@ function fileFingerprintPart(absPath: string): string {
     return 'missing';
   }
   if (!stat.isFile()) return 'not-a-file';
-  if (stat.size > TRUST_FINGERPRINT_MAX_FILE_BYTES) return `size=${stat.size}`;
+  if (stat.size > TRUST_FINGERPRINT_HARD_CAP_BYTES) {
+    return `size=${stat.size}:truncated`;
+  }
+  if (stat.size <= TRUST_FINGERPRINT_MAX_FILE_BYTES) {
+    try {
+      return createHash('sha256').update(fs.readFileSync(absPath)).digest('hex');
+    } catch {
+      return 'unreadable';
+    }
+  }
   try {
-    return createHash('sha256').update(fs.readFileSync(absPath)).digest('hex');
+    return hashFileStream(absPath);
   } catch {
     return 'unreadable';
   }
 }
 
-/** Cheap size + mtime signature used to keep the fingerprint cache fresh. */
+/** sha256 over a file read in fixed-size chunks (no full-buffer alloc). */
+function hashFileStream(absPath: string): string {
+  const hash = createHash('sha256');
+  const fd = fs.openSync(absPath, 'r');
+  try {
+    const buffer = Buffer.alloc(FINGERPRINT_CHUNK_BYTES);
+    let position = 0;
+    for (;;) {
+      const bytesRead = fs.readSync(fd, buffer, 0, buffer.length, position);
+      if (bytesRead === 0) break;
+      hash.update(buffer.subarray(0, bytesRead));
+      position += bytesRead;
+    }
+  } finally {
+    fs.closeSync(fd);
+  }
+  return hash.digest('hex');
+}
+
+/** Cheap size + mtime signature used to keep the caches fresh. */
 function fileSignaturePart(label: string, absPath: string): string {
   try {
     const stat = fs.statSync(absPath);
@@ -261,7 +355,7 @@ function diffMcpServers(
   const projectServers = isPlainObject(raw['mcp_servers']) ? raw['mcp_servers'] : {};
   const servers: TrustReportMcpServer[] = [];
   for (const name of Object.keys(projectServers).sort()) {
-    if (isUnsafeKey(name)) continue;
+    if (isUnreportableKey(name)) continue;
     const server: TrustReportMcpServer = {
       name,
       kind: Object.prototype.hasOwnProperty.call(baseline.mcp_servers, name)
@@ -287,7 +381,7 @@ function diffPermissions(raw: Record<string, unknown>): TrustReportPermission[] 
   const projectPermissions = isPlainObject(raw['permissions']) ? raw['permissions'] : {};
   const permissions: TrustReportPermission[] = [];
   for (const tool of Object.keys(projectPermissions).sort()) {
-    if (isUnsafeKey(tool)) continue;
+    if (isUnreportableKey(tool)) continue;
     const parsed = permissionRuleSchema.safeParse(projectPermissions[tool]);
     if (!parsed.success) continue;
 
@@ -316,22 +410,22 @@ function diffAgentsMd(
   if (!isPlainObject(project)) {
     return [{
       key: 'agents_md',
-      projectValue: JSON.stringify(project),
-      homeValue: JSON.stringify(baseline.agents_md),
+      projectValue: serializeForReport(project),
+      homeValue: serializeForReport(baseline.agents_md),
     }];
   }
 
   const overrides: TrustReportConfigOverride[] = [];
   for (const key of Object.keys(project).sort()) {
-    if (isUnsafeKey(key)) continue;
+    if (isUnreportableKey(key)) continue;
     const projectValue = project[key];
     if (projectValue === undefined) continue;
     const homeValue = baselineBlock[key];
     if (JSON.stringify(projectValue) === JSON.stringify(homeValue)) continue;
     overrides.push({
       key,
-      projectValue: JSON.stringify(projectValue),
-      homeValue: homeValue === undefined ? 'unset' : JSON.stringify(homeValue),
+      projectValue: serializeForReport(projectValue),
+      homeValue: homeValue === undefined ? 'unset' : serializeForReport(homeValue),
     });
   }
   return overrides;
@@ -354,7 +448,7 @@ function diffModelOverrides(raw: Record<string, unknown>): TrustReportModelOverr
   const tiers = raw['tier_models'];
   if (isPlainObject(tiers)) {
     for (const tier of Object.keys(tiers).sort()) {
-      if (isUnsafeKey(tier)) continue;
+      if (isUnreportableKey(tier)) continue;
       const value = tiers[tier];
       if (value == null) continue;
       const parsed = modelSelectionSchema.safeParse(value);
@@ -376,14 +470,14 @@ function diffOtherConfig(
   const baselineRecord = baseline as unknown as Record<string, unknown>;
   const overrides: TrustReportConfigOverride[] = [];
   for (const key of Object.keys(raw).sort()) {
-    if (isUnsafeKey(key) || SECTION_KEYS.has(key)) continue;
+    if (isUnreportableKey(key) || SECTION_KEYS.has(key)) continue;
     const projectValue = raw[key];
     if (projectValue === undefined) continue;
     const homeValue = baselineRecord[key];
     overrides.push({
       key,
-      projectValue: JSON.stringify(projectValue),
-      homeValue: homeValue === undefined ? 'unset' : JSON.stringify(homeValue),
+      projectValue: serializeForReport(projectValue),
+      homeValue: homeValue === undefined ? 'unset' : serializeForReport(homeValue),
     });
   }
   return overrides;
@@ -404,6 +498,10 @@ export class ProjectTrustStore {
   private readonly fingerprintCache = new Map<
     string,
     { fingerprint: string; signature: string; at: number }
+  >();
+  private readonly stateCache = new Map<
+    string,
+    { state: TrustState; signature: string; at: number }
   >();
   private baselineCache: { config: Config; at: number } | null = null;
 
@@ -430,7 +528,7 @@ export class ProjectTrustStore {
   /** Record a trust grant with the current surface fingerprint. */
   grant(dir: string): void {
     const canonical = requireCanonicalProjectDirectory(dir);
-    this.fingerprintCache.delete(canonical);
+    this.invalidateCaches(canonical);
     const fingerprint = this.computeFingerprint(canonical);
     const next = new Map(this.loadRecords());
     next.set(canonical, { trustedAt: new Date().toISOString(), fingerprint });
@@ -441,12 +539,26 @@ export class ProjectTrustStore {
   revoke(dir: string): void {
     const canonical = canonicalizeProjectDirectory(dir);
     if (canonical == null) return;
-    this.fingerprintCache.delete(canonical);
+    this.invalidateCaches(canonical);
 
     const records = this.loadRecords();
     if (!records.has(canonical)) return;
     const next = new Map(records);
     next.delete(canonical);
+    this.persist(next);
+  }
+
+  /**
+   * Delete the store record keyed by the EXACT supplied path string without
+   * canonicalizing — for revoking entries whose directory no longer exists.
+   * Idempotent for unknown keys. No cache invalidation: caches are keyed by
+   * canonical paths.
+   */
+  revokeRaw(dir: string): void {
+    const records = this.loadRecords();
+    if (!records.has(dir)) return;
+    const next = new Map(records);
+    next.delete(dir);
     this.persist(next);
   }
 
@@ -469,22 +581,16 @@ export class ProjectTrustStore {
     const raw = readRawProjectLayer(canonical);
     const baseline = this.homeBaseline();
 
-    const definitions = this.projectDefinitions(canonical);
-    const instructionFiles = this.presentInstructionFiles(canonical);
-
     return {
       projectDir: canonical,
-      hasSurface:
-        definitions.length > 0 ||
-        instructionFiles.length > 0 ||
-        isFile(path.join(canonical, PROJECT_CONFIG_NAME)),
+      hasSurface: this.surfacePresent(canonical),
       mcpServers: diffMcpServers(raw, baseline),
       permissions: diffPermissions(raw),
       agentsMdOverrides: diffAgentsMd(raw, baseline),
       modelOverrides: diffModelOverrides(raw),
       otherConfigOverrides: diffOtherConfig(raw, baseline),
-      definitions,
-      instructionFiles,
+      definitions: this.projectDefinitions(canonical),
+      instructionFiles: this.presentInstructionFiles(canonical),
     };
   }
 
@@ -506,22 +612,46 @@ export class ProjectTrustStore {
     );
   }
 
-  /** Drop in-memory caches; the next access re-reads from disk. */
-  clear(): void {
-    this.records = null;
-    this.fingerprintCache.clear();
-    this.baselineCache = null;
-  }
-
   // ── Internals ─────────────────────────────────────────────────────────────
 
+  /**
+   * Trust state for a canonical path, TTL-cached and validated by a cheap
+   * surface signature (stat-only — never re-parses definitions), so repeated
+   * workspace resolution does not re-walk or re-load the surface.
+   */
   private stateForCanonical(canonical: string): TrustState {
-    if (!this.surfacePresent(canonical)) return 'trusted';
-    const record = this.loadRecords().get(canonical);
-    if (record == null) return 'untrusted';
-    return record.fingerprint === this.computeFingerprint(canonical)
-      ? 'trusted'
-      : 'changed';
+    const signature = this.surfaceSignature(canonical);
+    const now = Date.now();
+    const cached = this.stateCache.get(canonical);
+    if (
+      cached != null &&
+      cached.signature === signature &&
+      now - cached.at < TRUST_FINGERPRINT_CACHE_TTL_MS
+    ) {
+      return cached.state;
+    }
+
+    let state: TrustState;
+    if (!this.surfacePresent(canonical)) {
+      state = 'trusted';
+    } else {
+      const record = this.loadRecords().get(canonical);
+      if (record == null) {
+        state = 'untrusted';
+      } else {
+        state =
+          record.fingerprint === this.computeFingerprint(canonical, signature)
+            ? 'trusted'
+            : 'changed';
+      }
+    }
+    this.stateCache.set(canonical, { state, signature, at: now });
+    return state;
+  }
+
+  private invalidateCaches(canonical: string): void {
+    this.fingerprintCache.delete(canonical);
+    this.stateCache.delete(canonical);
   }
 
   private loadRecords(): Map<string, TrustStoreRecord> {
@@ -535,9 +665,14 @@ export class ProjectTrustStore {
     this.records = records;
   }
 
+  /**
+   * Surface presence is file-based (config file, any definition-tree file,
+   * root alias file) — the same file set the fingerprint covers — so state
+   * resolution never runs the definition registries.
+   */
   private surfacePresent(canonical: string): boolean {
     if (isFile(path.join(canonical, PROJECT_CONFIG_NAME))) return true;
-    if (this.projectDefinitions(canonical).length > 0) return true;
+    if (listDefinitionFiles(canonical).files.length > 0) return true;
     return this.presentInstructionFiles(canonical).length > 0;
   }
 
@@ -614,9 +749,11 @@ export class ProjectTrustStore {
     return present;
   }
 
-  /** Project-local definitions with home-shadow markers. */
+  /**
+   * Project-local definitions with home-shadow markers, capped for the
+   * report. `homeDir: null` loads project definitions only — no probe path.
+   */
   private projectDefinitions(canonical: string): TrustReportDefinition[] {
-    const probeHomeDir = path.join(canonical, '.orchid', '__trust_probe__');
     const homeAgents = readAgents({
       homeDir: this.options.homeAgentsDir ?? HOME_AGENTS_DIR,
     });
@@ -627,49 +764,52 @@ export class ProjectTrustStore {
       homeDir: this.options.homePersonalitiesDir ?? HOME_PERSONALITIES_DIR,
     });
     const projectAgents = readAgents({
-      homeDir: probeHomeDir,
+      homeDir: null,
       projectDir: path.join(canonical, '.orchid', 'agents'),
     });
     const projectSkills = readSkills({
-      homeDir: probeHomeDir,
+      homeDir: null,
       projectDir: path.join(canonical, '.orchid', 'skills'),
     });
     const projectPersonalities = readPersonalities({
-      homeDir: probeHomeDir,
+      homeDir: null,
       projectDir: canonical,
     });
 
     const definitions: TrustReportDefinition[] = [];
     for (const name of [...projectAgents.keys()].sort()) {
+      if (name.trim() === '') continue;
       definitions.push({ kind: 'agent', name, overridesHome: homeAgents.has(name) });
     }
     for (const name of [...projectSkills.keys()].sort()) {
+      if (name.trim() === '') continue;
       definitions.push({ kind: 'skill', name, overridesHome: homeSkills.has(name) });
     }
     for (const name of [...projectPersonalities.keys()].sort()) {
+      if (name.trim() === '') continue;
       definitions.push({
         kind: 'personality',
         name,
         overridesHome: homePersonalities.has(name),
       });
     }
-    return definitions;
+    return definitions.slice(0, TRUST_REPORT_MAX_DEFINITIONS);
   }
 
-  private computeFingerprint(canonical: string): string {
+  private computeFingerprint(canonical: string, signature?: string): string {
     const now = Date.now();
-    const signature = this.surfaceSignature(canonical);
+    const sig = signature ?? this.surfaceSignature(canonical);
     const cached = this.fingerprintCache.get(canonical);
     if (
       cached != null &&
-      cached.signature === signature &&
+      cached.signature === sig &&
       now - cached.at < TRUST_FINGERPRINT_CACHE_TTL_MS
     ) {
       return cached.fingerprint;
     }
 
     const fingerprint = this.hashSurface(canonical);
-    this.fingerprintCache.set(canonical, { fingerprint, signature, at: now });
+    this.fingerprintCache.set(canonical, { fingerprint, signature: sig, at: now });
     return fingerprint;
   }
 
@@ -677,11 +817,11 @@ export class ProjectTrustStore {
     const parts = [
       fileSignaturePart('config', path.join(canonical, PROJECT_CONFIG_NAME)),
     ];
-    const { files, omitted } = listDefinitionFiles(canonical);
+    const { files, overflow } = listDefinitionFiles(canonical);
     for (const file of files) {
       parts.push(fileSignaturePart(file.relPath, file.absPath));
     }
-    if (omitted > 0) parts.push(`truncated:${omitted}`);
+    if (overflow != null) parts.push(overflowMarker(overflow));
     for (const name of this.presentInstructionFiles(canonical)) {
       parts.push(fileSignaturePart(`alias:${name}`, path.join(canonical, name)));
     }
@@ -693,11 +833,11 @@ export class ProjectTrustStore {
     hash.update(
       `config:${fileFingerprintPart(path.join(canonical, PROJECT_CONFIG_NAME))}\n`,
     );
-    const { files, omitted } = listDefinitionFiles(canonical);
+    const { files, overflow } = listDefinitionFiles(canonical);
     for (const file of files) {
       hash.update(`${file.relPath}:${fileFingerprintPart(file.absPath)}\n`);
     }
-    if (omitted > 0) hash.update(`truncated:${omitted}\n`);
+    if (overflow != null) hash.update(`${overflowMarker(overflow)}\n`);
     for (const name of this.presentInstructionFiles(canonical)) {
       hash.update(`alias:${name}:${fileFingerprintPart(path.join(canonical, name))}\n`);
     }
@@ -727,12 +867,13 @@ export function revokeProjectTrust(dir: string): void {
   getProjectTrustStore().revoke(dir);
 }
 
-export function buildProjectTrustReport(dir: string): ProjectTrustReport {
-  return getProjectTrustStore().buildReport(dir);
+/** Exact-string revocation (no canonicalization) for vanished directories. */
+export function revokeProjectTrustRaw(dir: string): void {
+  getProjectTrustStore().revokeRaw(dir);
 }
 
-export function hasProjectSurface(dir: string): boolean {
-  return getProjectTrustStore().hasSurface(dir);
+export function buildProjectTrustReport(dir: string): ProjectTrustReport {
+  return getProjectTrustStore().buildReport(dir);
 }
 
 export function listTrustedProjects(): TrustedProjectEntry[] {
@@ -742,9 +883,4 @@ export function listTrustedProjects(): TrustedProjectEntry[] {
 /** @internal — tests: replace the process store (no options → defaults). */
 export function resetProjectTrustStore(options?: ProjectTrustStoreOptions): void {
   projectTrustStore = new ProjectTrustStore(options);
-}
-
-/** @internal — tests: clear the current store's in-memory caches. */
-export function clearProjectTrustStore(): void {
-  projectTrustStore.clear();
 }

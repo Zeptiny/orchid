@@ -806,6 +806,7 @@ export function OnboardingScreen({ isOpen, onComplete, onSkip }: OnboardingScree
         trustState={trustPrompt.pending?.info.state === 'changed' ? 'changed' : 'untrusted'}
         report={trustPrompt.pending?.info.report ?? null}
         busy={trustPrompt.busy}
+        error={trustPrompt.error}
         onGrant={() => void trustPrompt.grant()}
         onDecline={handleTrustDecline}
       />

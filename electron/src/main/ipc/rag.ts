@@ -20,10 +20,6 @@ import { getProjectRuntimeRegistry } from '../project/runtime';
 import { getProjectTrustState } from '../project/trust';
 import { ragIndexSchema } from './payload-schemas';
 
-function isProjectTrusted(projectPath: string | null): projectPath is string {
-  return projectPath != null && getProjectTrustState(projectPath) === 'trusted';
-}
-
 function broadcastProgress(projectPath: string, progress: RAGIndexProgress): void {
   for (const win of BrowserWindow.getAllWindows()) {
     if (win.isDestroyed() || win.webContents.isDestroyed()) continue;
@@ -38,7 +34,7 @@ export function registerRAGIPC(): void {
   // rag:status — return RAG store status
   ipcMain.handle(IPC_CHANNELS.RAG_STATUS, async (event) => {
     const projectPath = resolveBoundProjectPath(String(event.sender.id));
-    if (!isProjectTrusted(projectPath)) {
+    if (projectPath == null || getProjectTrustState(projectPath) !== 'trusted') {
       return {
         totalChunks: 0,
         totalFiles: 0,
@@ -77,7 +73,7 @@ export function registerRAGIPC(): void {
       };
     }
 
-    if (!isProjectTrusted(projectPath)) {
+    if (getProjectTrustState(projectPath) !== 'trusted') {
       return {
         filesScanned: 0,
         filesIndexed: 0,
@@ -117,7 +113,7 @@ export function registerRAGIPC(): void {
   ipcMain.handle(IPC_CHANNELS.RAG_CLEAR, async (event) => {
     const projectPath = resolveBoundProjectPath(String(event.sender.id));
     // Untrusted projects keep their index untouched (no-op clear).
-    if (isProjectTrusted(projectPath)) {
+    if (projectPath != null && getProjectTrustState(projectPath) === 'trusted') {
       await cancelIndex(projectPath);
       clearIndex(projectPath);
     }

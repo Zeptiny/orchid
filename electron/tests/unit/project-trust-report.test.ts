@@ -5,7 +5,13 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { ProjectTrustStore } from '../../src/main/project/trust';
+import {
+  ProjectTrustStore,
+  TRUST_REPORT_MAX_CONFIG_BYTES,
+  TRUST_REPORT_MAX_DEFINITIONS,
+  TRUST_REPORT_MAX_VALUE_CHARS,
+} from '../../src/main/project/trust';
+import { projectTrustReportSchema } from '../../src/shared/types/ipc-schemas';
 
 let tmpRoot: string;
 let homeDir: string;
@@ -281,5 +287,108 @@ describe('ProjectTrustStore.buildReport', () => {
 
     fs.writeFileSync(path.join(project, '.orchid.json'), '{{{{', 'utf-8');
     expect(() => store.buildReport(project)).not.toThrow();
+  });
+
+  it('skips blank keys everywhere so the report stays schema-valid', () => {
+    fs.writeFileSync(
+      path.join(project, '.orchid.json'),
+      JSON.stringify({
+        mcp_servers: { '': { command: '/usr/bin/empty' }, '  ': { command: 'x' } },
+        permissions: { '': 'allow', '  ': 'allow' },
+        agents_md: { '': 'x', '  ': 'y' },
+        '': 1,
+        '  ': 2,
+      }),
+      'utf-8',
+    );
+    // A personality file whose name degenerates to an empty stem.
+    fs.mkdirSync(path.join(project, '.orchid', 'personalities'), { recursive: true });
+    fs.writeFileSync(path.join(project, '.orchid', 'personalities', '.md'), 'x', 'utf-8');
+
+    const report = store.buildReport(project);
+
+    expect(report.mcpServers).toEqual([]);
+    expect(report.permissions).toEqual([]);
+    expect(report.agentsMdOverrides).toEqual([]);
+    expect(report.otherConfigOverrides).toEqual([]);
+    for (const definition of report.definitions) {
+      expect(definition.name.trim()).not.toBe('');
+    }
+    expect(projectTrustReportSchema.safeParse(report).success).toBe(true);
+  });
+
+  it('caps an oversized .orchid.json with a note instead of throwing', () => {
+    const huge = { padding: 'x'.repeat(TRUST_REPORT_MAX_CONFIG_BYTES) };
+    fs.writeFileSync(
+      path.join(project, '.orchid.json'),
+      JSON.stringify(huge),
+      'utf-8',
+    );
+
+    let report!: ReturnType<ProjectTrustStore['buildReport']>;
+    expect(() => {
+      report = store.buildReport(project);
+    }).not.toThrow();
+    expect(report.hasSurface).toBe(true);
+    expect(report.mcpServers).toEqual([]);
+    expect(report.permissions).toEqual([]);
+
+    const byKey = new Map(report.otherConfigOverrides.map((o) => [o.key, o]));
+    expect(byKey.get('trust-report-note')?.projectValue).toContain(
+      String(TRUST_REPORT_MAX_CONFIG_BYTES),
+    );
+    expect(projectTrustReportSchema.safeParse(report).success).toBe(true);
+  });
+
+  it('caps serialized override values with an ellipsis', () => {
+    writeOrchidJson({ theme: 'a'.repeat(TRUST_REPORT_MAX_VALUE_CHARS * 3) });
+
+    const report = store.buildReport(project);
+    const byKey = new Map(report.otherConfigOverrides.map((o) => [o.key, o]));
+    const theme = byKey.get('theme');
+    expect(theme?.projectValue.length).toBe(TRUST_REPORT_MAX_VALUE_CHARS + 1);
+    expect(theme?.projectValue.endsWith('…')).toBe(true);
+  });
+
+  it('caps report definitions at TRUST_REPORT_MAX_DEFINITIONS', () => {
+    const personalitiesDir = path.join(project, '.orchid', 'personalities');
+    fs.mkdirSync(personalitiesDir, { recursive: true });
+    for (let i = 0; i < TRUST_REPORT_MAX_DEFINITIONS + 1; i += 1) {
+      fs.writeFileSync(
+        path.join(personalitiesDir, `persona-${String(i).padStart(4, '0')}.md`),
+        `persona ${i}`,
+        'utf-8',
+      );
+    }
+
+    const report = store.buildReport(project);
+    expect(report.definitions).toHaveLength(TRUST_REPORT_MAX_DEFINITIONS);
+    expect(report.definitions.every((d) => d.kind === 'personality')).toBe(true);
+  });
+
+  it('does not surface definitions planted under __trust_probe__', () => {
+    const probeDir = path.join(project, '.orchid', '__trust_probe__');
+    // Former home-probe injection vectors: direct agent subdir + personality
+    // file under the probe path, plus a nested agents tree.
+    writeAgentDefinition(path.join(probeDir, 'phantom-agent'), 'phantom', 'Phantom');
+    fs.mkdirSync(path.join(probeDir, 'agents', 'nested'), { recursive: true });
+    fs.writeFileSync(
+      path.join(probeDir, 'agents', 'nested', 'AGENT.md'),
+      '---\nname: nested-phantom\ntype: subagent\ntier: bloom\ndescription: Phantom\n---\nbody',
+      'utf-8',
+    );
+    fs.mkdirSync(probeDir, { recursive: true });
+    fs.writeFileSync(path.join(probeDir, 'phantom.md'), 'phantom personality', 'utf-8');
+
+    writeAgentDefinition(
+      path.join(project, '.orchid', 'agents'),
+      'real-agent',
+      'Real agent',
+    );
+
+    const report = store.buildReport(project);
+    expect(report.definitions).toEqual([
+      { kind: 'agent', name: 'real-agent', overridesHome: false },
+    ]);
   });
 });

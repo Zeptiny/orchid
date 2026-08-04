@@ -18,10 +18,6 @@ import { resolveBoundProjectPath } from './session';
 import { getProjectTrustState } from '../project/trust';
 import { astIndexSchema } from './payload-schemas';
 
-function isProjectTrusted(projectPath: string | null): projectPath is string {
-  return projectPath != null && getProjectTrustState(projectPath) === 'trusted';
-}
-
 function broadcastProgress(projectPath: string, progress: ASTIndexProgress): void {
   for (const win of BrowserWindow.getAllWindows()) {
     if (win.isDestroyed() || win.webContents.isDestroyed()) continue;
@@ -36,7 +32,7 @@ export function registerASTIPC(): void {
   // ast:status — return AST store status
   ipcMain.handle(IPC_CHANNELS.AST_STATUS, async (event) => {
     const projectPath = resolveBoundProjectPath(String(event.sender.id));
-    if (!isProjectTrusted(projectPath)) {
+    if (projectPath == null || getProjectTrustState(projectPath) !== 'trusted') {
       return {
         totalFiles: 0,
         totalSymbols: 0,
@@ -78,7 +74,7 @@ export function registerASTIPC(): void {
       };
     }
 
-    if (!isProjectTrusted(projectPath)) {
+    if (getProjectTrustState(projectPath) !== 'trusted') {
       return {
         filesScanned: 0,
         filesIndexed: 0,

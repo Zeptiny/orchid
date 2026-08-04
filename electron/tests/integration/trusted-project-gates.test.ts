@@ -85,6 +85,12 @@ vi.mock('../../src/main/ipc/session-working-set', () => ({
   workingSetOpenOrFocus: (...args: unknown[]) => mocks.workingSetOpenOrFocus(...args),
 }));
 
+// The revoke flow cancels any in-flight RAG index; keep the worker pipeline
+// out of this suite entirely.
+vi.mock('../../src/main/rag/indexer', () => ({
+  cancelIndex: vi.fn(async () => false),
+}));
+
 // ── Imports after mocks ─────────────────────────────────────────────────────
 
 import { ensureActiveSession } from '../../src/main/ipc/chat/session';
@@ -95,8 +101,10 @@ import {
 } from '../../src/main/ipc/session';
 import { MCPManager } from '../../src/main/mcp/manager';
 import {
+  acquireProjectMCPManager,
   getProjectMCPManager,
   invalidateProjectMCPManagers,
+  releaseProjectMCPManager,
   shutdownProjectMCPManagers,
 } from '../../src/main/mcp/project-registry';
 import type { ProjectRuntime } from '../../src/main/project/runtime';
@@ -111,6 +119,7 @@ import { _clearDbCache, type StorageOptions } from '../../src/main/session/stora
 // ── Fixtures ────────────────────────────────────────────────────────────────
 
 let tmpRoot: string;
+let storePath: string;
 let surfaceProject: string;
 let bareProject: string;
 let surfaceCanonical: string;
@@ -118,6 +127,7 @@ let bareCanonical: string;
 
 beforeEach(() => {
   tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'orchid-trust-gates-'));
+  storePath = path.join(tmpRoot, 'trusted_projects.json');
   surfaceProject = path.join(tmpRoot, 'surface-project');
   bareProject = path.join(tmpRoot, 'bare-project');
   fs.mkdirSync(surfaceProject);
@@ -138,7 +148,7 @@ beforeEach(() => {
   fs.writeFileSync(path.join(homeDir, 'config.json'), JSON.stringify({}), 'utf-8');
 
   resetProjectTrustStore({
-    storePath: path.join(tmpRoot, 'trusted_projects.json'),
+    storePath,
     homeConfigPath: path.join(homeDir, 'config.json'),
     homeAgentsDir: path.join(homeDir, 'agents'),
     homeSkillsDir: path.join(homeDir, 'skills'),
@@ -336,6 +346,70 @@ describe('MCP dormant manager (ProjectMCPManagerRegistry)', () => {
   });
 });
 
+// ── 'changed' state (surface drift) ─────────────────────────────────────────
+
+describe("'changed' trust state (surface drift)", () => {
+  function storedFingerprint(): string {
+    const records = JSON.parse(fs.readFileSync(storePath, 'utf-8')) as Record<
+      string,
+      { fingerprint: string }
+    >;
+    return records[surfaceCanonical].fingerprint;
+  }
+
+  it('blocks chat:send and keeps MCP dormant until re-granted', () => {
+    grantProjectTrust(surfaceProject);
+    expect(getProjectTrustState(surfaceProject)).toBe('trusted');
+    const fingerprintBefore = storedFingerprint();
+
+    // Drift the granted surface (new bytes -> new fingerprint).
+    fs.writeFileSync(
+      path.join(surfaceProject, '.orchid.json'),
+      JSON.stringify({ command_timeout: 12345 }),
+      'utf-8',
+    );
+    expect(getProjectTrustState(surfaceProject)).toBe('changed');
+
+    // The send gate fails closed for a drifted project.
+    mocks.sessionManager = makeFakeSessionManager();
+    mocks.workspaceFor = () => ({ cwd: surfaceProject, source: 'default', status: 'valid' });
+    const blocked = ensureActiveSession(fakeWebContents(705), TEST_SELECTION);
+    expect(blocked.ok).toBe(false);
+    if (!blocked.ok) {
+      expect(blocked.result).toMatchObject({
+        status: 'error',
+        kind: 'untrusted_project',
+      });
+    }
+
+    // The MCP registry stays dormant while the grant is stale.
+    const startAll = vi
+      .spyOn(MCPManager.prototype, 'startAll')
+      .mockResolvedValue(undefined);
+    try {
+      const dormant = getProjectMCPManager(mcpRuntime(surfaceCanonical));
+      expect(startAll).not.toHaveBeenCalled();
+      expect(dormant.getStatus()).toEqual([]);
+      expect(dormant.getTools()).toEqual([]);
+
+      // Re-granting records the new fingerprint and unblocks the gate.
+      grantProjectTrust(surfaceProject);
+      expect(getProjectTrustState(surfaceProject)).toBe('trusted');
+      expect(storedFingerprint()).not.toBe(fingerprintBefore);
+
+      const retry = ensureActiveSession(fakeWebContents(706), TEST_SELECTION);
+      expect(retry.ok).toBe(true);
+
+      // Grant invalidation (as trust:set performs) recreates + starts servers.
+      invalidateProjectMCPManagers(surfaceCanonical);
+      getProjectMCPManager(mcpRuntime(surfaceCanonical));
+      expect(startAll).toHaveBeenCalledTimes(1);
+    } finally {
+      startAll.mockRestore();
+    }
+  });
+});
+
 // ── Revocation orchestration ────────────────────────────────────────────────
 
 describe('revokeProjectTrustForDir', () => {
@@ -365,6 +439,56 @@ describe('revokeProjectTrustForDir', () => {
 
     expect(mocks.runtimeInvalidate).not.toHaveBeenCalled();
     expect(mocks.forceStopSession).not.toHaveBeenCalled();
+  });
+
+  it('keeps a leased MCP manager alive, retires it on release, stays dormant until re-grant', async () => {
+    const manager = new SessionManager({ storage: tempStorage() });
+    mocks.sessionManager = manager;
+    grantProjectTrust(surfaceProject);
+
+    const startAll = vi
+      .spyOn(MCPManager.prototype, 'startAll')
+      .mockResolvedValue(undefined);
+    const shutdown = vi
+      .spyOn(MCPManager.prototype, 'shutdown')
+      .mockResolvedValue(undefined);
+
+    try {
+      const runtime = mcpRuntime(surfaceCanonical);
+      const running = getProjectMCPManager(runtime);
+      expect(startAll).toHaveBeenCalledTimes(1);
+
+      // Hold a lease like a running turn does.
+      const leased = acquireProjectMCPManager(runtime);
+      expect(leased).toBe(running);
+
+      // Revocation marks the entry stale but the live lease keeps it alive.
+      await revokeProjectTrustForDir(surfaceProject);
+      expect(getProjectTrustState(surfaceProject)).toBe('untrusted');
+      expect(shutdown).not.toHaveBeenCalled();
+      expect(getProjectMCPManager(runtime)).toBe(running);
+
+      // Releasing the lease retires the superseded manager.
+      releaseProjectMCPManager(runtime);
+      expect(shutdown).toHaveBeenCalledTimes(1);
+
+      // A fresh get() while untrusted is dormant: no servers start.
+      const fresh = getProjectMCPManager(runtime);
+      expect(fresh).not.toBe(running);
+      expect(startAll).toHaveBeenCalledTimes(1);
+      expect(fresh.getStatus()).toEqual([]);
+      expect(fresh.getTools()).toEqual([]);
+
+      // Re-grant + invalidation restarts the servers.
+      grantProjectTrust(surfaceProject);
+      invalidateProjectMCPManagers(surfaceCanonical);
+      expect(shutdown).toHaveBeenCalledTimes(2); // the dormant entry retired
+      getProjectMCPManager(runtime);
+      expect(startAll).toHaveBeenCalledTimes(2);
+    } finally {
+      startAll.mockRestore();
+      shutdown.mockRestore();
+    }
   });
 });
 

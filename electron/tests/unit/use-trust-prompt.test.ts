@@ -59,6 +59,7 @@ function installTrustBridge(options: TrustBridgeOptions = {}) {
 
 afterEach(() => {
   cleanup();
+  vi.restoreAllMocks();
   vi.unstubAllGlobals();
   delete (window as Partial<Window>).orchid;
 });
@@ -123,6 +124,7 @@ describe('useTrustPrompt', () => {
     expect(set).toHaveBeenCalledWith({ cwd: '/proj', trusted: true });
     expect(result.current.pending).toBeNull();
     expect(result.current.busy).toBe(false);
+    expect(result.current.error).toBeNull();
     expect(onGranted).toHaveBeenCalledWith('/proj');
   });
 
@@ -170,6 +172,87 @@ describe('useTrustPrompt', () => {
       resolveFirst?.({ ...trustInfo('untrusted'), projectDir: '/stale' });
     });
     expect(result.current.pending?.cwd).toBe('/fresh');
+  });
+
+  it('keeps the dialog open with an error when grant fails', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    const { set } = installTrustBridge({
+      getState: 'untrusted',
+      setImpl: () => Promise.reject(new Error('vault locked')),
+    });
+    const { result } = renderHook(() => useTrustPrompt());
+
+    act(() => {
+      result.current.openFor('/proj');
+    });
+    await waitFor(() => expect(result.current.pending).not.toBeNull());
+
+    await act(async () => {
+      await result.current.grant();
+    });
+
+    expect(set).toHaveBeenCalledTimes(1);
+    // The dialog stays open for retry; busy resets and the error surfaces.
+    expect(result.current.pending?.cwd).toBe('/proj');
+    expect(result.current.busy).toBe(false);
+    expect(result.current.error).toBe('Trusting this project failed. Try again.');
+  });
+
+  it('sets an error without opening the dialog when the trust lookup fails', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    installTrustBridge({
+      getImpl: () => Promise.reject(new Error('ipc unavailable')),
+    });
+    const { result } = renderHook(() => useTrustPrompt());
+
+    act(() => {
+      expect(() => result.current.openFor('/proj')).not.toThrow();
+    });
+
+    await waitFor(() => {
+      expect(result.current.error).toBe("Could not check this project's trust state. Try again.");
+    });
+    expect(result.current.pending).toBeNull();
+    expect(result.current.busy).toBe(false);
+  });
+
+  it('clears the error on the next openFor start and on decline', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    let failLookup = true;
+    installTrustBridge({
+      getImpl: () => (failLookup
+        ? Promise.reject(new Error('ipc down'))
+        : Promise.resolve(trustInfo('untrusted'))),
+      setImpl: () => Promise.reject(new Error('vault locked')),
+    });
+    const { result } = renderHook(() => useTrustPrompt());
+
+    // Lookup failure sets the error without opening the dialog.
+    act(() => {
+      result.current.openFor('/proj');
+    });
+    await waitFor(() => expect(result.current.error).not.toBeNull());
+    expect(result.current.pending).toBeNull();
+
+    // The next openFor clears the error and opens normally.
+    failLookup = false;
+    act(() => {
+      result.current.openFor('/proj');
+    });
+    await waitFor(() => expect(result.current.pending).not.toBeNull());
+    expect(result.current.error).toBeNull();
+
+    // A failed grant sets the error again; decline clears it.
+    await act(async () => {
+      await result.current.grant();
+    });
+    expect(result.current.error).toBe('Trusting this project failed. Try again.');
+
+    act(() => {
+      result.current.decline();
+    });
+    expect(result.current.pending).toBeNull();
+    expect(result.current.error).toBeNull();
   });
 });
 

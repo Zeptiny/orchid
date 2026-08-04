@@ -33,6 +33,11 @@ export interface TrustProjectDialogProps {
   report: ProjectTrustReport | null;
   /** True while a trust grant round-trip is in flight. */
   busy: boolean;
+  /**
+   * Error to surface above the footer buttons (e.g. a failed trust grant);
+   * hidden when null/undefined.
+   */
+  error?: string | null;
   onGrant: () => void;
   onDecline: () => void;
   /**
@@ -142,6 +147,7 @@ export function TrustProjectDialog({
   trustState,
   report,
   busy,
+  error = null,
   onGrant,
   onDecline,
   readOnly = false,
@@ -302,6 +308,12 @@ export function TrustProjectDialog({
           </div>
         ) : (
           <StateMessage kind="empty" title="No project-specific configuration found." />
+        )}
+
+        {error != null && (
+          <Alert tone="error" icon="alert">
+            {error}
+          </Alert>
         )}
 
         <div className="flex items-center justify-end gap-2 border-t border-base-300 pt-3">

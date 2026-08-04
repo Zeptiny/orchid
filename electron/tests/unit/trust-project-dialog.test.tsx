@@ -203,6 +203,26 @@ describe('TrustProjectDialog decisions', () => {
   });
 });
 
+describe('TrustProjectDialog error surfacing', () => {
+  it('renders the error message in an alert above the footer when error is set', () => {
+    renderDialog({ error: 'Trusting this project failed. Try again.' });
+
+    const alert = screen.getByRole('alert');
+    expect(alert.textContent).toContain('Trusting this project failed. Try again.');
+
+    // The alert sits above the footer buttons (they follow it in the document).
+    const grantButton = screen.getByRole('button', { name: /Trust & Continue/ });
+    expect(
+      (alert.compareDocumentPosition(grantButton) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0,
+    ).toBe(true);
+  });
+
+  it('renders no alert when no error is set', () => {
+    renderDialog();
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+});
+
 describe('LeftSidebar workspace trust badge', () => {
   function renderSidebar(workspace: WorkspaceInfo | null) {
     const onTrustBadgeClick = vi.fn();

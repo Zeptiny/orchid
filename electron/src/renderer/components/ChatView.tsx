@@ -166,6 +166,15 @@ export function ChatView({ isVisible = true, bootstrapConfig = null, onNotify, a
     },
   });
 
+  // Surface trust failures that happen outside the dialog (e.g. the trust
+  // lookup itself failed). While the dialog is open its own alert shows the
+  // error, so notify only when no prompt is showing, then clear once consumed.
+  useEffect(() => {
+    if (trustPrompt.error == null || trustPrompt.pending != null) return;
+    notify(trustPrompt.error, 'error');
+    trustPrompt.clearError();
+  }, [trustPrompt.error, trustPrompt.pending, notify, trustPrompt.clearError]);
+
   const chat = useChat(session.activeSession?.id ?? null, {
     onUntrustedProject: () => {
       const cwd = session.workspace?.cwd ?? session.activeSession?.cwd;
@@ -1291,6 +1300,7 @@ export function ChatView({ isVisible = true, bootstrapConfig = null, onNotify, a
         trustState={trustPrompt.pending?.info.state === 'changed' ? 'changed' : 'untrusted'}
         report={trustPrompt.pending?.info.report ?? null}
         busy={trustPrompt.busy}
+        error={trustPrompt.error}
         onGrant={() => void trustPrompt.grant()}
         onDecline={trustPrompt.decline}
       />

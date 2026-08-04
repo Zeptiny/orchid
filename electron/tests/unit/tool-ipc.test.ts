@@ -65,6 +65,7 @@ const mocks = vi.hoisted(() => {
     resolveBoundProjectPath: vi.fn((): string | null => PROJECT_DIR),
     getActive: vi.fn(() => ({ id: SESSION_UUID })),
     getRuntime: vi.fn(() => ({ projectDir: PROJECT_DIR, config: {} })),
+    trustState: { current: 'trusted' as 'trusted' | 'untrusted' | 'changed' },
   };
 });
 
@@ -80,9 +81,10 @@ vi.mock('../../src/main/ipc/session', () => ({
 }));
 
 // The trust gate is fail-closed for the mocked (non-existent) project dir,
-// so this fixture resolves as trusted to keep the suite on its own seams.
+// so this fixture defaults to trusted to keep the suite on its own seams.
+// Tests flip `mocks.trustState.current` to exercise the untrusted branches.
 vi.mock('../../src/main/project/trust', () => ({
-  getProjectTrustState: () => 'trusted',
+  getProjectTrustState: () => mocks.trustState.current,
 }));
 
 vi.mock('../../src/main/project/runtime', () => ({
@@ -121,6 +123,7 @@ beforeEach(async () => {
   mocks.getActive.mockReset();
   mocks.getActive.mockReturnValue({ id: SESSION_UUID });
   mocks.getRuntime.mockClear();
+  mocks.trustState.current = 'trusted';
   sessionPermissionOverrides.set(SESSION_UUID, 'allow');
   toolIpc = await import('../../src/main/ipc/tool');
   toolIpc.registerToolIPC();
@@ -206,6 +209,24 @@ describe('tool:execute workspace ownership', () => {
       }),
     );
   });
+});
+
+describe('tool:execute trust gate', () => {
+  it.each(['untrusted', 'changed'] as const)(
+    'returns a terminal untrusted_project error for a %s project without dispatching',
+    async (state) => {
+      mocks.trustState.current = state;
+
+      const result = await execute({ name: 'read', args: { path: 'a.ts' } }) as ToolExecutionResult;
+
+      expect(result.canonical.status).toBe('error');
+      expect(result.canonical.error?.code).toBe('untrusted_project');
+      expect(result.canonical.error?.message).toMatch(/not trusted/i);
+      // The dispatch path never runs: no validation, no handler invocation.
+      expect(mocks.validate).not.toHaveBeenCalled();
+      expect(mocks.handler).not.toHaveBeenCalled();
+    },
+  );
 });
 
 describe('tool:execute registry validation', () => {

@@ -40,6 +40,7 @@ const mocks = vi.hoisted(() => {
     cancelIndex: vi.fn(async () => false),
     clearIndex: vi.fn(),
     getRuntime: vi.fn(() => ({ projectDir: PROJECT_DIR, config: { rag: {} } })),
+    trustState: { current: 'trusted' as 'trusted' | 'untrusted' | 'changed' },
   };
 });
 
@@ -53,9 +54,10 @@ vi.mock('../../src/main/ipc/session', () => ({
 }));
 
 // The trust gate is fail-closed for the mocked (non-existent) project dir,
-// so this fixture resolves as trusted to keep the suite on its own seams.
+// so this fixture defaults to trusted to keep the suite on its own seams.
+// Tests flip `mocks.trustState.current` to exercise the untrusted branches.
 vi.mock('../../src/main/project/trust', () => ({
-  getProjectTrustState: () => 'trusted',
+  getProjectTrustState: () => mocks.trustState.current,
 }));
 
 vi.mock('../../src/main/project/runtime', () => ({
@@ -85,6 +87,7 @@ beforeEach(async () => {
   mocks.cancelIndex.mockClear();
   mocks.clearIndex.mockClear();
   mocks.getRuntime.mockClear();
+  mocks.trustState.current = 'trusted';
 
   ragIpc = await import('../../src/main/ipc/rag');
   ragIpc.registerRAGIPC();
@@ -186,4 +189,56 @@ describe('rag:clear', () => {
     expect(mocks.cancelIndex).not.toHaveBeenCalled();
     expect(mocks.clearIndex).not.toHaveBeenCalled();
   });
+});
+
+describe('rag trust gate (untrusted project)', () => {
+  it('status returns the empty shape without reading the store', async () => {
+    mocks.trustState.current = 'untrusted';
+
+    await expect(handler(IPC_CHANNELS.RAG_STATUS)(event)).resolves.toEqual({
+      totalChunks: 0,
+      totalFiles: 0,
+      lastIndexed: null,
+      lastIndexDuration: null,
+    });
+    expect(mocks.getStatus).not.toHaveBeenCalled();
+  });
+
+  it('index returns the not-trusted error without indexing', async () => {
+    mocks.trustState.current = 'untrusted';
+
+    const result = await handler(IPC_CHANNELS.RAG_INDEX)(event, { force: true });
+
+    expect(result).toMatchObject({
+      filesScanned: 0,
+      filesIndexed: 0,
+      errors: ['Project folder is not trusted'],
+    });
+    expect(mocks.indexProject).not.toHaveBeenCalled();
+  });
+
+  it('clear is a no-op that leaves the index untouched', async () => {
+    mocks.trustState.current = 'untrusted';
+
+    await expect(handler(IPC_CHANNELS.RAG_CLEAR)(event)).resolves.toEqual({
+      status: 'cleared',
+    });
+    expect(mocks.cancelIndex).not.toHaveBeenCalled();
+    expect(mocks.clearIndex).not.toHaveBeenCalled();
+  });
+
+  it.each(['untrusted', 'changed'] as const)(
+    'treats a %s project as not trusted for status',
+    async (state) => {
+      mocks.trustState.current = state;
+
+      await expect(handler(IPC_CHANNELS.RAG_STATUS)(event)).resolves.toEqual({
+        totalChunks: 0,
+        totalFiles: 0,
+        lastIndexed: null,
+        lastIndexDuration: null,
+      });
+      expect(mocks.getStatus).not.toHaveBeenCalled();
+    },
+  );
 });

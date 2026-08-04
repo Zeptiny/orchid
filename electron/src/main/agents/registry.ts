@@ -123,8 +123,11 @@ const AGENT_RESOURCE_DIRS = ['scripts', 'references', 'assets'] as const;
 // ---------------------------------------------------------------------------
 
 export interface ReadAgentsOptions {
-  /** Override home agents directory (default: `~/.orchid/agents/`). */
-  homeDir?: string;
+  /**
+   * Override home agents directory (default: `~/.orchid/agents/`).
+   * `null` skips the home load entirely (project-only reads).
+   */
+  homeDir?: string | null;
   /** Project agents directory (for example `<workspace>/.orchid/agents`). */
   projectDir?: string;
 }
@@ -138,9 +141,10 @@ export interface ReadAgentsOptions {
 export function readAgents(
   options?: ReadAgentsOptions,
 ): Map<string, Agent> {
-  const homeDir = options?.homeDir ?? HOME_AGENTS_DIR;
-
-  const homeAgents = loadAgentsFromDir(homeDir);
+  const homeAgents =
+    options?.homeDir === null
+      ? new Map<string, Agent>()
+      : loadAgentsFromDir(options?.homeDir ?? HOME_AGENTS_DIR);
   const projectAgents = options?.projectDir
     ? loadAgentsFromDir(options.projectDir)
     : new Map<string, Agent>();

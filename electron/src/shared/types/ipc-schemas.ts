@@ -189,14 +189,16 @@ export const sessionCreatedEventSchema = z.object({
 
 export const trustStateSchema = z.enum(['trusted', 'untrusted', 'changed']);
 
+export const workspaceInfoSchema = z.object({
+  cwd: z.string().nullable(),
+  source: z.enum(['draft', 'session', 'default', 'unbound']),
+  status: z.enum(['unbound', 'valid', 'missing']),
+  // Optional so payloads from pre-trust producers still parse.
+  trust: trustStateSchema.optional(),
+});
+
 export const sessionWorkspaceChangedEventSchema = z.object({
-  workspace: z.object({
-    cwd: z.string().nullable(),
-    source: z.enum(['draft', 'session', 'default', 'unbound']),
-    status: z.enum(['unbound', 'valid', 'missing']),
-    // Optional so payloads from pre-trust producers still parse.
-    trust: trustStateSchema.optional(),
-  }),
+  workspace: workspaceInfoSchema,
 });
 
 // ── Trusted projects ────────────────────────────────────────────────────────
@@ -368,13 +370,6 @@ export const bgCommandSnapshotResultSchema = z.discriminatedUnion('found', [
 
 export const configSaveResultSchema = z.object({
   status: z.string(),
-});
-
-export const workspaceInfoSchema = z.object({
-  cwd: z.string().nullable(),
-  source: z.enum(['draft', 'session', 'default', 'unbound']),
-  status: z.enum(['unbound', 'valid', 'missing']),
-  trust: trustStateSchema.optional(),
 });
 
 export const sessionReasoningConfigResultSchema = z.object({

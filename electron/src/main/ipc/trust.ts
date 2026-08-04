@@ -11,6 +11,7 @@ import { BrowserWindow, ipcMain } from 'electron';
 import {
   IPC_CHANNELS,
   type ProjectTrustInfo,
+  type ProjectTrustReport,
   type TrustState,
 } from '../../shared/types/ipc';
 import { invalidateProjectMCPManagers } from '../mcp/project-registry';
@@ -32,26 +33,45 @@ function trustInfoFor(dir: string): ProjectTrustInfo {
     return { projectDir: dir, state: 'untrusted', report: null };
   }
   const state = getProjectTrustState(canonical);
-  return {
-    projectDir: canonical,
-    state,
-    report: state === 'trusted' ? null : buildProjectTrustReport(canonical),
-  };
+  // Always build the report regardless of state: the settings panel renders it
+  // read-only for trusted projects too. The payload is only fetched on explicit
+  // user action (dialog open / review click), so always-including is fine.
+  let report: ProjectTrustReport | null;
+  try {
+    report = buildProjectTrustReport(canonical);
+  } catch (error) {
+    // A broken symlink or hostile FS entry in the surface must not reject
+    // trust_get — the grant path has to stay reachable, so keep the real
+    // state and fall back to an empty report pane.
+    console.warn(`Failed to build trust report for '${canonical}':`, error);
+    report = null;
+  }
+  return { projectDir: canonical, state, report };
 }
 
 function broadcastTrustChanged(projectDir: string, state: TrustState): void {
   for (const win of BrowserWindow.getAllWindows()) {
-    if (win.isDestroyed() || win.webContents.isDestroyed()) continue;
-    win.webContents.send(IPC_CHANNELS.PROJECT_TRUST_CHANGED, { projectDir, state });
+    try {
+      if (win.isDestroyed() || win.webContents.isDestroyed()) continue;
+      win.webContents.send(IPC_CHANNELS.PROJECT_TRUST_CHANGED, { projectDir, state });
+    } catch (error) {
+      // One destroyed/racing window must not starve the remaining windows.
+      console.warn('Failed to broadcast project:trust_changed to a window:', error);
+    }
   }
 }
 
 function reemitWorkspaceChanged(canonical: string): void {
   for (const win of BrowserWindow.getAllWindows()) {
-    if (win.isDestroyed() || win.webContents.isDestroyed()) continue;
-    const workspace = resolveWindowWorkspace(String(win.webContents.id));
-    if (workspace.cwd !== canonical) continue;
-    win.webContents.send(IPC_CHANNELS.SESSION_WORKSPACE_CHANGED, { workspace });
+    try {
+      if (win.isDestroyed() || win.webContents.isDestroyed()) continue;
+      const workspace = resolveWindowWorkspace(String(win.webContents.id));
+      if (workspace.cwd !== canonical) continue;
+      win.webContents.send(IPC_CHANNELS.SESSION_WORKSPACE_CHANGED, { workspace });
+    } catch (error) {
+      // One destroyed/racing window must not starve the remaining windows.
+      console.warn('Failed to re-emit session:workspace_changed to a window:', error);
+    }
   }
 }
 

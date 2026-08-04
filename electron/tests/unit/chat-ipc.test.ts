@@ -1,4 +1,5 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import * as fs from 'node:fs';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { IPC_CHANNELS } from '../../src/shared/types/ipc';
 import type { Agent } from '../../src/shared/types/agent';
 import { MessageRole, MessageType } from '../../src/shared/types/message';
@@ -657,6 +658,17 @@ vi.mock('../../src/main/project/workspace', () => ({
 }));
 
 let chatIpc: typeof import('../../src/main/ipc/chat');
+
+// ensureActiveSession inspects the real fixture directory before the trust
+// gate (a deleted session folder must surface unbound_workspace), so the
+// fixture project path has to exist on disk.
+beforeAll(() => {
+  fs.mkdirSync(mocks.workspace._testProjectDir, { recursive: true });
+});
+
+afterAll(() => {
+  fs.rmSync(mocks.workspace._testProjectDir, { recursive: true, force: true });
+});
 
 describe('chat session selection gate', () => {
   beforeEach(async () => {
