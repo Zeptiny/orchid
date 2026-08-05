@@ -51,6 +51,10 @@ const MAX_LINES = 50;
  * @param sessionId Owning session for visibility; omitted from the request when null.
  * @param enabled Whether status polling should be active.
  * @param refreshOutput Whether tail output should refresh while polling.
+ * @param expectedCreatedAt Persisted spawn time (epoch ms) for a replayed background
+ *   command. When a found snapshot reports a different `createdAt`, the integer
+ *   commandId was reused by an unrelated process after an app restart, so the
+ *   widget freezes as unavailable. Never misfires when either value is undefined.
  * @returns Current output and metadata state.
  */
 export function useLiveCommandOutput(
@@ -58,6 +62,7 @@ export function useLiveCommandOutput(
   sessionId: string | null,
   enabled: boolean,
   refreshOutput = enabled,
+  expectedCreatedAt?: number,
 ): LiveCommandState {
   const commandId = target !== null && 'commandId' in target ? target.commandId : null;
   const toolCallId = target !== null && 'toolCallId' in target ? target.toolCallId : null;
@@ -119,6 +124,17 @@ export function useLiveCommandOutput(
     setAgentScopeId(undefined);
   }, [targetKey, sessionId]);
 
+  // Shared freeze path: the target either resolves now or never — stop polling
+  // and surface the command as unavailable and not running.
+  const freezeUnavailable = useCallback(() => {
+    if (intervalRef.current) {
+      clearInterval(intervalRef.current);
+      intervalRef.current = null;
+    }
+    setIsAvailable(false);
+    setIsRunning(false);
+  }, []);
+
   const poll = useCallback(async () => {
     const targetPayload: Pick<BgCommandSnapshotRequest, 'commandId' | 'toolCallId'> | null =
       commandId !== null
@@ -144,12 +160,29 @@ export function useLiveCommandOutput(
       if (activeTargetRef.current !== targetKey) return;
 
       if (!snap.found) {
-        if (intervalRef.current) {
-          clearInterval(intervalRef.current);
-          intervalRef.current = null;
-        }
-        setIsAvailable(false);
-        setIsRunning(false);
+        // A foreground mirror only registers once the tool actually starts
+        // executing — after the permission gate. Until then snapshots report
+        // not-found, so keep polling rather than freezing; the widget unmounts
+        // when the canonical result replaces the running block. Background and
+        // replayed targets keep the one-snapshot freeze (their id either
+        // resolves now or never).
+        if (toolCallId !== null) return;
+        freezeUnavailable();
+        return;
+      }
+
+      // Restart-aliasing guard: the background store's integer commandId
+      // counter restarts at 1 after an app restart, so a replayed widget could
+      // bind to an unrelated process that reused the id. A found snapshot
+      // whose spawn time differs from the persisted spawn fact is a different
+      // process — freeze as unavailable. Never misfires when either value is
+      // undefined.
+      if (
+        expectedCreatedAt !== undefined
+        && snap.createdAt !== undefined
+        && snap.createdAt !== expectedCreatedAt
+      ) {
+        freezeUnavailable();
         return;
       }
 
@@ -197,7 +230,7 @@ export function useLiveCommandOutput(
     } finally {
       isPollingRef.current = false;
     }
-  }, [commandId, toolCallId, sessionId, targetKey]);
+  }, [commandId, toolCallId, sessionId, targetKey, expectedCreatedAt, freezeUnavailable]);
 
   const refresh = useCallback(() => {
     void poll();

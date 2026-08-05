@@ -21,6 +21,8 @@ import {
 } from '../../src/main/tools/process/foreground-live';
 import {
   executeSendInput as executeSendInputRaw,
+  SEND_INPUT_MAX_TEXT_LENGTH,
+  sendInputSchema,
   sendInputToolDefinition,
 } from '../../src/main/tools/process/send-input';
 import { finalizeToolExecutionResult } from '../../src/main/tools/result';
@@ -361,6 +363,8 @@ describe('bgcmd:snapshot by commandId', () => {
       command: 'echo hello; sleep 30',
       description: 'greeter',
       agentScopeId: 'main',
+      // Restart-stable spawn identity comes from the store entry.
+      createdAt: store.get(procId)!.createdAt,
     });
   });
 
@@ -429,6 +433,8 @@ describe('bgcmd:snapshot by toolCallId', () => {
         command: 'ls -la',
         description: 'ls -la',
         agentScopeId: 'sub-1',
+        // Foreground mirrors report their startedAt as the spawn identity.
+        createdAt: registry.get('call-fg-1')!.startedAt,
       });
     });
   });
@@ -650,6 +656,32 @@ describe('bgcmd:send_input', () => {
 
     const agentUnblocked = await agentSendInput(procId, 'agent line\n', SESSION_A, 'sub-x');
     expect(agentUnblocked.canonical.status).toBe('complete');
+  });
+
+  it('rejects an oversized text payload at the IPC boundary', async () => {
+    const oversized = 'x'.repeat(SEND_INPUT_MAX_TEXT_LENGTH + 1);
+    await expect(
+      invokeChannel(
+        IPC_CHANNELS.BG_CMD_SEND_INPUT,
+        { commandId: 1, text: oversized, sessionId: SESSION_A },
+      ),
+    ).rejects.toThrow(/Invalid bgcmd:send_input payload/i);
+  });
+
+  it('accepts text exactly at the cap and continues to normal processing', async () => {
+    const atCap = 'x'.repeat(SEND_INPUT_MAX_TEXT_LENGTH);
+    const result = await invokeChannel<BgCommandSendInputResult>(
+      IPC_CHANNELS.BG_CMD_SEND_INPUT,
+      { commandId: 99999, text: atCap, sessionId: SESSION_A },
+    );
+    // Schema passed; the unknown command then fails normal processing.
+    expect(result).toEqual({ ok: false, reason: 'not_found' });
+  });
+
+  it('agent send_input schema rejects oversized text (parity with the IPC cap)', () => {
+    const oversized = 'x'.repeat(SEND_INPUT_MAX_TEXT_LENGTH + 1);
+    expect(sendInputSchema.safeParse({ id: 1, text: oversized }).success).toBe(false);
+    expect(sendInputSchema.safeParse({ id: 1, text: 'ok\n' }).success).toBe(true);
   });
 });
 

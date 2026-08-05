@@ -3,6 +3,7 @@ import { ChainStatus } from '../../../shared/types/chain';
 import { IPC_CHANNELS } from '../../../shared/types/ipc';
 import { getSessionManager } from '../../session/singleton';
 import { getBackgroundStore } from '../../tools/process/background-store';
+import { getForegroundLiveRegistry } from '../../tools/process/foreground-live';
 import { getSubagentManager } from '../../tools';
 import { completeSessionActivity } from '../session-activity';
 import {
@@ -65,6 +66,7 @@ export function forceAbortChat(windowId: string): void {
 /** Abort exactly one session without affecting work in any other session. */
 export function forceAbortSession(sessionId: string): void {
   getBackgroundStore().terminateSession(sessionId);
+  getForegroundLiveRegistry().dropSession(sessionId);
   try {
     getSubagentManager().cancelRunning(sessionId);
   } catch (err) {
@@ -192,6 +194,7 @@ export function forceAbortMainTurn(
  */
 export function forceStopSession(sessionId: string): boolean {
   getBackgroundStore().terminateSession(sessionId);
+  getForegroundLiveRegistry().dropSession(sessionId);
   const existing = activeAgents.get(sessionId);
   const cancelledSubagents = getSubagentManager().cancelRunning(sessionId);
   if (!existing) {

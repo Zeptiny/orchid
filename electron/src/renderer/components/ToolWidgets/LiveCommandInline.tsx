@@ -38,6 +38,12 @@ interface LiveCommandInlineProps {
   commandText: string;
   /** Optional description (from the parsed attributes). */
   description?: string;
+  /**
+   * Persisted spawn time (epoch ms) for replayed background commands. Guards
+   * against commandId reuse after an app restart aliasing this widget onto an
+   * unrelated live process.
+   */
+  expectedCreatedAt?: number;
 }
 
 // ── Constants ────────────────────────────────────────────────────────────────
@@ -59,6 +65,7 @@ export function LiveCommandInline({
   sessionId,
   commandText,
   description,
+  expectedCreatedAt,
 }: LiveCommandInlineProps) {
   const [expanded, setExpanded] = useState(false);
   const [inputValue, setInputValue] = useState('');
@@ -75,7 +82,7 @@ export function LiveCommandInline({
   // Keep lifecycle status current while collapsed, but refresh the output tail
   // only while the command body is visible.
   const { output, exitCode, isRunning, isAvailable, interactive, owner, refresh } =
-    useLiveCommandOutput(target, sessionId, true, expanded);
+    useLiveCommandOutput(target, sessionId, true, expanded, expectedCreatedAt);
 
   // Build title: matches Python's _build_title()
   const title = useMemo(() => {

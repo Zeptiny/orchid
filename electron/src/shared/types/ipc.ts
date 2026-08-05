@@ -339,6 +339,13 @@ export interface BgCommandSnapshotFound {
   description?: string;
   /** Owning agent scope (`'main'` or a subagent id). */
   agentScopeId: string;
+  /**
+   * Restart-stable spawn identity (epoch ms). Background: the store entry's
+   * `createdAt`; foreground: the mirror's `startedAt`. Replayed widgets compare
+   * this against the persisted spawn fact so a reused integer `commandId` after
+   * an app restart cannot alias onto an unrelated live process.
+   */
+  createdAt?: number;
 }
 
 export type BgCommandSnapshotResult =

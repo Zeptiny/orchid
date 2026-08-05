@@ -439,6 +439,12 @@ const mocks = vi.hoisted(() => {
     agentScopeId: string;
     tail: string;
     exitCode: number | null;
+    interactive?: boolean;
+    owner?: 'AGENT' | 'USER';
+    command?: string;
+    description?: string;
+    createdAt?: number;
+    buffer?: { getTail: (lastN?: number) => string };
   }>();
   const backgroundStore = {
     entries: backgroundEntries,
@@ -469,7 +475,20 @@ const mocks = vi.hoisted(() => {
       if (!entry || entry.sessionId !== sessionId) return undefined;
       return { tail: entry.tail, exitCode: entry.exitCode };
     }),
-    get: vi.fn((commandId: number) => backgroundEntries.get(commandId)),
+    // The bgcmd:snapshot handler builds its found response directly from the
+    // entry (single-lookup path), so hydrate the fields minimal fixtures omit,
+    // mirroring real ProcessEntry defaults.
+    get: vi.fn((commandId: number) => {
+      const entry = backgroundEntries.get(commandId);
+      if (!entry) return undefined;
+      return {
+        interactive: false,
+        owner: 'AGENT' as const,
+        command: '',
+        ...entry,
+        buffer: entry.buffer ?? { getTail: () => entry.tail },
+      };
+    }),
     list: vi.fn(() => []),
     _reset: () => {
       backgroundEntries.clear();

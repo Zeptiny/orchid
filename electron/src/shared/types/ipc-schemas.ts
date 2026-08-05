@@ -370,6 +370,7 @@ export const bgCommandSnapshotResultSchema = z.discriminatedUnion('found', [
     command: z.string(),
     description: z.string().optional(),
     agentScopeId: z.string(),
+    createdAt: z.number().optional(),
   }),
   z.object({
     found: z.literal(false),

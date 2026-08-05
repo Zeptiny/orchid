@@ -7,6 +7,7 @@ import {
   subscribeBackgroundProcessChanges,
 } from '../tools/process/background-store';
 import { getForegroundLiveRegistry } from '../tools/process/foreground-live';
+import { SEND_INPUT_MAX_TEXT_LENGTH } from '../tools/process/send-input';
 import { getSessionManager } from '../session/singleton';
 import { IPC_CHANNELS, type ChatSessionSnapshot } from '../../shared/types/ipc';
 import { ChainStatus } from '../../shared/types/chain';
@@ -64,7 +65,8 @@ const bgCommandListSchema = z.object({
 
 const bgCommandSendInputSchema = z.object({
   commandId: z.number().int().positive(),
-  text: z.string(),
+  // Cap stdin writes at the boundary; parity with the agent send_input tool.
+  text: z.string().max(SEND_INPUT_MAX_TEXT_LENGTH),
   sessionId: z.string().uuid().optional(),
 });
 
@@ -160,6 +162,7 @@ export function registerChatIPC(): void {
     }
     if (interruptState === 'confirmAgent') {
       getBackgroundStore().terminateSession(sessionId);
+      getForegroundLiveRegistry().dropSession(sessionId);
       existing.agentCancelled = true;
       const context = existing.actor.getSnapshot().context as AgentContext;
       existing.actor.send({ type: 'CANCEL' });
@@ -195,6 +198,7 @@ export function registerChatIPC(): void {
     }
     if (interruptState === 'confirmSubagents') {
       getBackgroundStore().terminateSession(sessionId);
+      getForegroundLiveRegistry().dropSession(sessionId);
       getSubagentManager().cancelRunning(sessionId);
       disposeActiveAgent(sessionId, existing);
       sendChatState(streamWebContents, existing, {
@@ -213,36 +217,36 @@ export function registerChatIPC(): void {
     if (!sessionId) return { found: false };
     const lines = lastN ?? 50;
     if (commandId !== undefined) {
-      const snapshot = getBackgroundStore().snapshotForSession(commandId, lines, sessionId);
-      if (!snapshot) return { found: false };
-      // snapshotForSession already enforced session visibility; nothing can
-      // remove the entry between the two synchronous lookups.
+      // Session-privileged visibility: any agent scope within the session.
       const entry = getBackgroundStore().get(commandId);
+      if (!entry || entry.sessionId !== sessionId) return { found: false };
       return {
         found: true,
-        tail: snapshot.tail,
-        exitCode: snapshot.exitCode,
-        running: snapshot.exitCode === null,
-        interactive: entry?.interactive ?? false,
-        owner: entry?.owner ?? 'AGENT',
-        command: entry?.command ?? '',
-        description: entry?.description || undefined,
-        agentScopeId: entry?.agentScopeId ?? 'main',
+        tail: entry.buffer.getTail(lines),
+        exitCode: entry.exitCode,
+        running: entry.exitCode === null,
+        interactive: entry.interactive,
+        owner: entry.owner,
+        command: entry.command,
+        description: entry.description || undefined,
+        agentScopeId: entry.agentScopeId,
+        createdAt: entry.createdAt,
       };
     }
-    const live = getForegroundLiveRegistry().get(toolCallId!);
-    if (!live || live.sessionId !== sessionId) return { found: false };
+    const live = getForegroundLiveRegistry().snapshotForSession(toolCallId!, lines, sessionId);
+    if (!live) return { found: false };
     return {
       found: true,
-      tail: live.buffer.getTail(lines),
+      tail: live.tail,
       exitCode: live.exitCode,
-      running: live.exitCode === null,
+      running: live.running,
       interactive: false,
       owner: 'AGENT',
       command: live.command,
       // Foreground entries carry no separate description — reuse the command.
       description: live.command,
       agentScopeId: live.agentScopeId,
+      createdAt: live.createdAt,
     };
   });
 

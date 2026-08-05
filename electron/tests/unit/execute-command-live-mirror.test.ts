@@ -348,6 +348,84 @@ describe('ForegroundLiveRegistry', () => {
     reg.append('lines', Buffer.from('one\ntwo\nthree\n'));
     expect(reg.snapshot('lines', 2)?.tail).toBe('two\nthree\n');
   });
+
+  it('snapshotForSession returns full metadata for the owning session', () => {
+    const reg = new ForegroundLiveRegistry();
+    const entry = reg.register('vis-1', {
+      command: 'npm test',
+      sessionId: 's1',
+      agentScopeId: 'sub-7',
+    });
+    reg.append('vis-1', Buffer.from('one\ntwo\nthree\n'));
+    reg.finalize('vis-1', 2);
+
+    expect(reg.snapshotForSession('vis-1', 2, 's1')).toEqual({
+      tail: 'two\nthree\n',
+      exitCode: 2,
+      running: false,
+      command: 'npm test',
+      agentScopeId: 'sub-7',
+      createdAt: entry.startedAt,
+    });
+  });
+
+  it('snapshotForSession reports running entries with a null exit code', () => {
+    const reg = new ForegroundLiveRegistry();
+    reg.register('vis-run', { command: 'sleep 5', sessionId: 's1', agentScopeId: 'main' });
+    reg.append('vis-run', Buffer.from('working\n'));
+
+    const snap = reg.snapshotForSession('vis-run', undefined, 's1');
+    expect(snap).toMatchObject({ tail: 'working\n', exitCode: null, running: true });
+    expect(snap?.createdAt).toBe(reg.get('vis-run')?.startedAt);
+  });
+
+  it('snapshotForSession denies mismatched sessions, unbound entries, and unknown ids', () => {
+    const reg = new ForegroundLiveRegistry();
+    reg.register('vis-2', { command: 'x', sessionId: 's1', agentScopeId: 'main' });
+    reg.register('vis-unbound', { command: 'x', sessionId: null, agentScopeId: 'main' });
+
+    expect(reg.snapshotForSession('vis-2', undefined, 's2')).toBeUndefined();
+    expect(reg.snapshotForSession('vis-unbound', undefined, 's1')).toBeUndefined();
+    expect(reg.snapshotForSession('vis-missing', undefined, 's1')).toBeUndefined();
+  });
+
+  it('dropSession and dropScope remove entries and cancel pending grace timers', () => {
+    vi.useFakeTimers();
+    try {
+      const reg = new ForegroundLiveRegistry({ graceMs: 1000 });
+      reg.register('d1', { command: 'x', sessionId: 's1', agentScopeId: 'main' });
+      reg.register('d2', { command: 'x', sessionId: 's1', agentScopeId: 'sub-1' });
+      reg.register('d3', { command: 'x', sessionId: 's2', agentScopeId: 'main' });
+      reg.finalize('d1', 0);
+
+      reg.dropScope('s1', 'sub-1');
+      expect(reg.get('d2')).toBeUndefined();
+      expect(reg.get('d1')).toBeDefined();
+      expect(reg.get('d3')).toBeDefined();
+
+      reg.dropSession('s1');
+      expect(reg.get('d1')).toBeUndefined();
+      expect(reg.get('d3')).toBeDefined();
+      expect(reg.size).toBe(1);
+      // The finalized entry's removal timer was cancelled with the drop.
+      expect(() => vi.advanceTimersByTime(5000)).not.toThrow();
+      expect(reg.get('d3')).toBeDefined();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('dropScope with a null session id never matches (unbound entries survive)', () => {
+    const reg = new ForegroundLiveRegistry();
+    reg.register('u1', { command: 'x', sessionId: null, agentScopeId: 'scope-x' });
+    reg.register('b1', { command: 'x', sessionId: 's1', agentScopeId: 'scope-x' });
+
+    reg.dropScope(null, 'scope-x');
+
+    expect(reg.get('u1')).toBeDefined();
+    expect(reg.get('b1')).toBeDefined();
+    expect(reg.size).toBe(2);
+  });
 });
 
 // ---------------------------------------------------------------------------

@@ -38,6 +38,17 @@ export interface ForegroundLiveSnapshot {
   exitCode: number | null;
 }
 
+/** Session-aware query result used by the bgcmd:snapshot IPC surface. */
+export interface ForegroundLiveSessionSnapshot {
+  tail: string;
+  exitCode: number | null;
+  running: boolean;
+  command: string;
+  agentScopeId: string;
+  /** Restart-stable spawn identity (the entry's `startedAt`). */
+  createdAt: number;
+}
+
 export interface ForegroundLiveRegistryOptions {
   /** Delay between finalize and entry removal (ms). */
   graceMs?: number;
@@ -120,6 +131,28 @@ export class ForegroundLiveRegistry {
     return { tail: entry.buffer.getTail(lastN), exitCode: entry.exitCode };
   }
 
+  /**
+   * Session-owned query for UI IPC: applies the session visibility check
+   * (entries owned by another session — or unbound entries — are denied).
+   * Returns undefined when the entry is absent or not visible to the session.
+   */
+  snapshotForSession(
+    toolCallId: string,
+    lastN: number | undefined,
+    sessionId: string,
+  ): ForegroundLiveSessionSnapshot | undefined {
+    const entry = this._entries.get(toolCallId);
+    if (!entry || entry.sessionId !== sessionId) return undefined;
+    return {
+      tail: entry.buffer.getTail(lastN),
+      exitCode: entry.exitCode,
+      running: entry.exitCode === null,
+      command: entry.command,
+      agentScopeId: entry.agentScopeId,
+      createdAt: entry.startedAt,
+    };
+  }
+
   get size(): number {
     return this._entries.size;
   }
@@ -133,8 +166,13 @@ export class ForegroundLiveRegistry {
     }
   }
 
-  /** Remove the entries owned by one agent scope within the session. */
-  dropScope(sessionId: string, agentScopeId: string): void {
+  /**
+   * Remove the entries owned by one agent scope within the session.
+   * A null session id never matches: unbound entries survive scope cleanup
+   * (mirrors `BackgroundProcessStore.terminateScope`).
+   */
+  dropScope(sessionId: string | null, agentScopeId: string): void {
+    if (sessionId === null) return;
     for (const [toolCallId, entry] of [...this._entries]) {
       if (entry.sessionId === sessionId && entry.agentScopeId === agentScopeId) {
         this._remove(toolCallId);

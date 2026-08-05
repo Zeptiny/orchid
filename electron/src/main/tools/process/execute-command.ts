@@ -226,6 +226,9 @@ export async function executeCommand(
       // active background command without recovering metadata from a string.
       // The generic projector still emits a compact human-readable sentence
       // for the model; canonical/session persistence retains every field.
+      // `createdAt` is the restart-stable spawn identity: replayed widgets
+      // compare it against live snapshots so a reused integer commandId after
+      // an app restart cannot alias onto an unrelated live process.
       return genericBuiltInToolOutcome(
         'execute_command',
         {
@@ -234,6 +237,7 @@ export async function executeCommand(
           description,
           background: true,
           running: true,
+          createdAt: store.get(procId)?.createdAt ?? Date.now(),
         },
         'complete',
       );

@@ -50,6 +50,9 @@ const backgroundCommandValueSchema = z.object({
   description: z.string().optional(),
   background: z.literal(true),
   running: z.boolean(),
+  // Persisted spawn time (epoch ms) used to detect commandId reuse after an
+  // app restart; absent on facts written before the field existed.
+  createdAt: z.number().int().optional(),
 }).passthrough();
 
 const ExecuteCommandRenderer: ToolResultRenderer = ({ canonical, sessionId }) => {
@@ -75,6 +78,7 @@ const ExecuteCommandRenderer: ToolResultRenderer = ({ canonical, sessionId }) =>
         sessionId={sessionId ?? null}
         commandText={bg.data.command}
         description={bg.data.description}
+        expectedCreatedAt={bg.data.createdAt}
       />
     </div>
   );

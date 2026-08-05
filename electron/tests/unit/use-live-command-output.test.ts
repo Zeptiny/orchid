@@ -54,6 +54,119 @@ describe('useLiveCommandOutput', () => {
     expect(result.current.isRunning).toBe(false);
   });
 
+  it('keeps polling a foreground target whose mirror has not registered yet', async () => {
+    // The foreground mirror registers only once the tool starts executing —
+    // after the permission gate — so early snapshots report not-found. The
+    // widget must keep polling instead of freezing at "unavailable".
+    const snapshot = vi
+      .fn()
+      .mockResolvedValueOnce({ found: false })
+      .mockResolvedValue(foundSnapshot({ tail: 'server ready\n' }));
+    window.orchid = { bgCmd: { snapshot } } as never;
+
+    const { result } = renderHook(() =>
+      useLiveCommandOutput({ toolCallId: 'call-1' }, null, true),
+    );
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    // First miss does not freeze: still running, still polling.
+    expect(snapshot).toHaveBeenCalledTimes(1);
+    expect(result.current.isRunning).toBe(true);
+    expect(result.current.isAvailable).toBe(true);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(200);
+    });
+
+    expect(snapshot.mock.calls.length).toBeGreaterThan(1);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(400);
+    });
+
+    expect(snapshot.mock.calls.length).toBeGreaterThan(2);
+    expect(result.current).toMatchObject({
+      output: 'server ready\n',
+      isRunning: true,
+      isAvailable: true,
+    });
+  });
+
+  it('freezes a background target when the snapshot createdAt mismatches the persisted spawn time', async () => {
+    // Restart aliasing: the background store restarts commandIds at 1, so a
+    // replayed widget must reject a process whose spawn time differs from the
+    // persisted spawn fact.
+    const snapshot = vi.fn().mockResolvedValue(foundSnapshot({ createdAt: 2000 }));
+    window.orchid = { bgCmd: { snapshot } } as never;
+
+    const { result } = renderHook(() =>
+      useLiveCommandOutput({ commandId: 42 }, 'sess-1', true, true, 1000),
+    );
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(result.current.isAvailable).toBe(false);
+    expect(result.current.isRunning).toBe(false);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1_000);
+    });
+
+    expect(snapshot).toHaveBeenCalledTimes(1);
+  });
+
+  it('stays live when the snapshot createdAt matches the persisted spawn time', async () => {
+    const snapshot = vi
+      .fn()
+      .mockResolvedValue(foundSnapshot({ tail: 'up\n', createdAt: 1000 }));
+    window.orchid = { bgCmd: { snapshot } } as never;
+
+    const { result } = renderHook(() =>
+      useLiveCommandOutput({ commandId: 42 }, 'sess-1', true, true, 1000),
+    );
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(result.current).toMatchObject({
+      output: 'up\n',
+      isRunning: true,
+      isAvailable: true,
+    });
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(600);
+    });
+
+    expect(snapshot.mock.calls.length).toBeGreaterThan(1);
+    expect(result.current.isAvailable).toBe(true);
+  });
+
+  it('does not freeze on createdAt when no persisted spawn time exists', async () => {
+    // Legacy facts without createdAt must never trip the aliasing guard.
+    const snapshot = vi
+      .fn()
+      .mockResolvedValue(foundSnapshot({ tail: 'ok\n', createdAt: 2000 }));
+    window.orchid = { bgCmd: { snapshot } } as never;
+
+    const { result } = renderHook(() =>
+      useLiveCommandOutput({ commandId: 42 }, 'sess-1', true),
+    );
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(result.current.isAvailable).toBe(true);
+    expect(result.current.isRunning).toBe(true);
+  });
+
   it('keeps polling a found running command and stops after it completes', async () => {
     const snapshot = vi
       .fn()

@@ -65,6 +65,7 @@ import {
 } from './errors';
 import { getSubagentAttributionStore } from '../providers/accounting/subagent-attribution-store';
 import { getBackgroundStore } from '../tools/process/background-store';
+import { getForegroundLiveRegistry } from '../tools/process/foreground-live';
 
 export type { SubagentAdmissionLimits } from './admission';
 export {
@@ -1520,10 +1521,12 @@ export class SubagentManager {
       terminalRecord: () => this.toDomainRecord(record, { includeLiveTail: true }),
     });
     // A terminal subagent's owned background commands die with it (R9); the
-    // scope id is the record id (see `_startRun`). Non-fatal: a cleanup
+    // scope id is the record id (see `_startRun`). The scope's foreground
+    // live mirrors are dropped with their commands. Non-fatal: a cleanup
     // failure must never break the terminal projection.
     try {
       getBackgroundStore().terminateScope(record.sessionId, record.id);
+      getForegroundLiveRegistry().dropScope(record.sessionId, record.id);
     } catch (error) {
       console.warn('[subagent-manager] Background scope cleanup failed', {
         subagentId: record.id,

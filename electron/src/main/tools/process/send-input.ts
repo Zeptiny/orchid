@@ -19,9 +19,15 @@ import { genericBuiltInToolOutcome, type GenericBuiltInToolOutcome } from '../re
 // Zod schema
 // ---------------------------------------------------------------------------
 
+/** Hard cap on one stdin write; enforced identically by the bgcmd IPC surface. */
+export const SEND_INPUT_MAX_TEXT_LENGTH = 8192;
+
 export const sendInputSchema = z.object({
   id: z.number().int().describe('The background command id'),
-  text: z.string().describe('Text to write to stdin (include \\n for newline)'),
+  text: z
+    .string()
+    .max(SEND_INPUT_MAX_TEXT_LENGTH)
+    .describe('Text to write to stdin (include \\n for newline)'),
 });
 
 export type SendInputInput = z.infer<typeof sendInputSchema>;
