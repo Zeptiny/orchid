@@ -62,7 +62,7 @@ function ResultBody({ block, canonical, sessionId }: { block: ToolBlock; canonic
 
   try {
     const Renderer = resolveToolResultRenderer(block.toolName, canonical.family);
-    return <Renderer canonical={canonical} toolName={block.toolName} isLive={block.status === 'running'} sessionId={sessionId} />;
+    return <Renderer canonical={canonical} toolName={block.toolName} sessionId={sessionId} />;
   } catch {
     return <GenericToolResult canonical={canonical} />;
   }

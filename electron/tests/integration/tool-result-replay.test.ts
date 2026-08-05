@@ -165,11 +165,11 @@ describe('background command replay gating', () => {
 
     expect(container.querySelector('.orchid-live-command')).toBeTruthy();
     expect(snapshot).toHaveBeenCalledTimes(1);
-    expect(snapshot).toHaveBeenCalledWith({
+    expect(snapshot).toHaveBeenCalledWith(expect.objectContaining({
       commandId: 7,
       lastN: 50,
       sessionId: 'sess-replay',
-    });
+    }));
     // The exited snapshot freezes the widget and surfaces the exit code.
     expect(container.querySelector('.orchid-live-command-title')?.textContent).toContain('exit 3');
 

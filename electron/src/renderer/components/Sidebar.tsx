@@ -28,7 +28,6 @@ import {
 import { formatUsageSummary } from '../utils/format-usage';
 import { groupSubagents } from '../utils/subagent-stream';
 import { Icon } from './Icon';
-import { LiveCommandInline } from './ToolWidgets/LiveCommandInline';
 import { Button } from './ui/Button';
 import { CollapsibleRegion } from './ui/CollapsibleRegion';
 import { DropdownMenu } from './ui/DropdownMenu';
@@ -36,6 +35,7 @@ import { IconButton } from './ui/IconButton';
 import { Spinner } from './ui/Spinner';
 import { StateMessage } from './ui/StateMessage';
 import { StatusBadge } from './ui/StatusBadge';
+import { CommandsSection } from './Sidebar/CommandsSection';
 
 interface SidebarProps {
   isOpen: boolean;
@@ -590,65 +590,6 @@ function TodosSection({ state }: TodosSectionProps) {
           >
             {todo.title}
           </span>
-        </div>
-      ))}
-    </div>
-  );
-}
-
-// ── Commands Section ─────────────────────────────────────────────────────────
-
-interface CommandsSectionProps {
-  state: BackgroundCommandsState;
-  onRefresh: () => void;
-  sessionId: string | null;
-}
-
-function CommandsSection({ state, onRefresh, sessionId }: CommandsSectionProps) {
-  if (state.status === 'loading') {
-    return <StateMessage kind="loading" className="inspector-empty py-4" title="Loading commands…" />;
-  }
-
-  if (state.status === 'error') {
-    return (
-      <StateMessage
-        kind="error"
-        className="inspector-empty py-4"
-        title={state.error}
-        action={
-          <Button variant="ghost" size="xs" onClick={onRefresh}>
-            Retry
-          </Button>
-        }
-      />
-    );
-  }
-
-  if (state.status === 'empty') {
-    return (
-      <StateMessage
-        kind="empty"
-        className="inspector-empty py-4"
-        title="No background commands"
-      />
-    );
-  }
-
-  return (
-    <div className="inspector-stack">
-      {state.commands.map((item) => (
-        <div key={item.id} className="inspector-stack gap-0">
-          {item.scopeName !== 'main' && (
-            <StatusBadge tone="info" size="xs" className="self-start">
-              {item.scopeName}
-            </StatusBadge>
-          )}
-          <LiveCommandInline
-            target={{ commandId: item.id }}
-            sessionId={sessionId}
-            commandText={item.command}
-            description={item.description}
-          />
         </div>
       ))}
     </div>

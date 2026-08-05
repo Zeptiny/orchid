@@ -221,6 +221,7 @@ describe('useLiveCommandOutput', () => {
     expect(snapshot).toHaveBeenLastCalledWith({
       commandId: 7,
       lastN: 50,
+      includeTail: true,
       sessionId: 'sess-9',
     });
     scoped.unmount();
@@ -229,7 +230,7 @@ describe('useLiveCommandOutput', () => {
     await act(async () => {
       await Promise.resolve();
     });
-    expect(snapshot).toHaveBeenLastCalledWith({ commandId: 8, lastN: 50 });
+    expect(snapshot).toHaveBeenLastCalledWith({ commandId: 8, lastN: 50, includeTail: true });
   });
 
   it('targets foreground snapshots by toolCallId instead of commandId', async () => {
@@ -244,7 +245,7 @@ describe('useLiveCommandOutput', () => {
       await Promise.resolve();
     });
 
-    expect(snapshot).toHaveBeenCalledWith({ toolCallId: 'call-1', lastN: 50 });
+    expect(snapshot).toHaveBeenCalledWith({ toolCallId: 'call-1', lastN: 50, includeTail: true });
     expect(result.current.output).toBe('fg\n');
   });
 
@@ -306,7 +307,7 @@ describe('useLiveCommandOutput', () => {
       isRunning: true,
       isAvailable: true,
     });
-    expect(snapshot).toHaveBeenNthCalledWith(1, { commandId: 44, lastN: 50 });
+    expect(snapshot).toHaveBeenNthCalledWith(1, { commandId: 44, lastN: 50, includeTail: true });
 
     rerender({ refreshOutput: false });
 
@@ -320,6 +321,7 @@ describe('useLiveCommandOutput', () => {
       isRunning: false,
       isAvailable: true,
     });
+    expect(snapshot).toHaveBeenNthCalledWith(2, { commandId: 44, lastN: 50, includeTail: false });
 
     rerender({ refreshOutput: true });
     await act(async () => {
@@ -327,7 +329,7 @@ describe('useLiveCommandOutput', () => {
     });
 
     expect(result.current.output).toBe('building\ndone\n');
-    expect(snapshot).toHaveBeenNthCalledWith(3, { commandId: 44, lastN: 50 });
+    expect(snapshot).toHaveBeenNthCalledWith(3, { commandId: 44, lastN: 50, includeTail: true });
 
     await act(async () => {
       await vi.advanceTimersByTimeAsync(1_000);
@@ -385,7 +387,7 @@ describe('useLiveCommandOutput', () => {
       await Promise.resolve();
     });
 
-    expect(snapshot).toHaveBeenLastCalledWith({ commandId: 2, lastN: 50 });
+    expect(snapshot).toHaveBeenLastCalledWith({ commandId: 2, lastN: 50, includeTail: true });
     expect(result.current.output).toBe('second\n');
   });
 
@@ -417,6 +419,7 @@ describe('useLiveCommandOutput', () => {
     expect(snapshot).toHaveBeenLastCalledWith({
       commandId: 5,
       lastN: 50,
+      includeTail: true,
       sessionId: 'sess-b',
     });
     expect(result.current.output).toBe('two\n');

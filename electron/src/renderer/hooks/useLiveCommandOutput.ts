@@ -151,6 +151,7 @@ export function useLiveCommandOutput(
       const snap = await window.orchid.bgCmd.snapshot({
         ...targetPayload,
         lastN: MAX_LINES,
+        includeTail: !!refreshOutputRef.current,
         // Explicit owning session — never the window's active-session fallback.
         ...(sessionId ? { sessionId } : {}),
       });

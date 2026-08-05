@@ -15,8 +15,6 @@ import { LiveCommandInline } from '../ToolWidgets/LiveCommandInline';
 export interface ToolResultRendererProps {
   canonical: CanonicalToolResult;
   toolName: string;
-  /** True only for a live in-flight call. */
-  isLive?: boolean;
   /**
    * Owning session live command widgets resolve visibility against. Widget
    * liveness follows the process, not the tool call: replayed background

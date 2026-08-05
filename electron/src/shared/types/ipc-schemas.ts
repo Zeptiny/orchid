@@ -357,6 +357,24 @@ export const chatSendResultSchema = z.discriminatedUnion('status', [
 
 export const toolExecuteResultSchema = toolExecutionResultSchema;
 
+export const bgCommandSnapshotRequestSchema = z
+  .object({
+    commandId: z.number().int().positive().optional(),
+    toolCallId: z.string().min(1).optional(),
+    lastN: z.number().int().positive().max(1000).optional(),
+    sessionId: z.string().uuid().optional(),
+    /**
+     * When false, the handler returns `tail: ''` without touching the buffer
+     * and keeps all other fields (running/exitCode/owner/etc). Default `true`
+     * when omitted.
+     */
+    includeTail: z.boolean().optional(),
+  })
+  .refine(
+    (data) => (data.commandId !== undefined) !== (data.toolCallId !== undefined),
+    { message: 'Provide exactly one of commandId or toolCallId' },
+  );
+
 export const bgCommandOwnerSchema = z.enum(['AGENT', 'USER']);
 
 export const bgCommandSnapshotResultSchema = z.discriminatedUnion('found', [

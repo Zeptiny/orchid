@@ -53,6 +53,7 @@ const bgCommandSnapshotSchema = z
     toolCallId: z.string().min(1).optional(),
     lastN: z.number().int().positive().max(BG_CMD_SNAPSHOT_MAX_LAST_N).optional(),
     sessionId: z.string().uuid().optional(),
+    includeTail: z.boolean().optional(),
   })
   .refine(
     (data) => (data.commandId !== undefined) !== (data.toolCallId !== undefined),
@@ -212,9 +213,10 @@ export function registerChatIPC(): void {
   ipcMain.handle(IPC_CHANNELS.BG_CMD_SNAPSHOT, async (event, payload: unknown) => {
     const parsed = bgCommandSnapshotSchema.safeParse(payload);
     if (!parsed.success) throw new Error(`Invalid bgcmd:snapshot payload: ${parsed.error.message}`);
-    const { commandId, toolCallId, lastN, sessionId: requestedSessionId } = parsed.data;
+    const { commandId, toolCallId, lastN, sessionId: requestedSessionId, includeTail } = parsed.data;
     const sessionId = resolveBgCommandSessionId(requestedSessionId, event);
     if (!sessionId) return { found: false };
+    const includeTailEffective = includeTail !== false;
     const lines = lastN ?? 50;
     if (commandId !== undefined) {
       // Session-privileged visibility: any agent scope within the session.
@@ -222,7 +224,7 @@ export function registerChatIPC(): void {
       if (!entry || entry.sessionId !== sessionId) return { found: false };
       return {
         found: true,
-        tail: entry.buffer.getTail(lines),
+        tail: includeTailEffective ? entry.buffer.getTail(lines) : '',
         exitCode: entry.exitCode,
         running: entry.exitCode === null,
         interactive: entry.interactive,
@@ -233,20 +235,37 @@ export function registerChatIPC(): void {
         createdAt: entry.createdAt,
       };
     }
-    const live = getForegroundLiveRegistry().snapshotForSession(toolCallId!, lines, sessionId);
-    if (!live) return { found: false };
+    if (includeTailEffective) {
+      const live = getForegroundLiveRegistry().snapshotForSession(toolCallId!, lines, sessionId);
+      if (!live) return { found: false };
+      return {
+        found: true,
+        tail: live.tail,
+        exitCode: live.exitCode,
+        running: live.running,
+        interactive: false,
+        owner: 'AGENT',
+        command: live.command,
+        // Foreground entries carry no separate description — reuse the command.
+        description: live.command,
+        agentScopeId: live.agentScopeId,
+        createdAt: live.createdAt,
+      };
+    }
+    // includeTail === false — return metadata without touching the buffer
+    const liveEntry = getForegroundLiveRegistry().get(toolCallId!);
+    if (!liveEntry || liveEntry.sessionId !== sessionId) return { found: false };
     return {
       found: true,
-      tail: live.tail,
-      exitCode: live.exitCode,
-      running: live.running,
+      tail: '',
+      exitCode: liveEntry.exitCode,
+      running: liveEntry.exitCode === null,
       interactive: false,
       owner: 'AGENT',
-      command: live.command,
-      // Foreground entries carry no separate description — reuse the command.
-      description: live.command,
-      agentScopeId: live.agentScopeId,
-      createdAt: live.createdAt,
+      command: liveEntry.command,
+      description: liveEntry.command,
+      agentScopeId: liveEntry.agentScopeId,
+      createdAt: liveEntry.startedAt,
     };
   });
 

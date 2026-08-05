@@ -62,11 +62,11 @@ describe('LiveCommandInline', () => {
     );
     await flush();
 
-    expect(api.snapshot).toHaveBeenCalledWith({
+    expect(api.snapshot).toHaveBeenCalledWith(expect.objectContaining({
       commandId: 3,
       lastN: 50,
       sessionId: 'sess-1',
-    });
+    }));
 
     expand(/\$ npm run dev \(running\)/);
 
@@ -200,11 +200,11 @@ describe('LiveCommandInline', () => {
     );
     await flush();
 
-    expect(api.snapshot).toHaveBeenCalledWith({
+    expect(api.snapshot).toHaveBeenCalledWith(expect.objectContaining({
       toolCallId: 'call-9',
       lastN: 50,
       sessionId: 'sess-1',
-    });
+    }));
 
     expand(/\$ sleep 5 \(running\)/);
 

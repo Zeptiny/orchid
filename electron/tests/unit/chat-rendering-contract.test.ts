@@ -455,7 +455,7 @@ describe('live command gating (process liveness)', () => {
 
     expect(container.querySelector('.orchid-live-command')).toBeTruthy();
     expect(container.querySelector('.orchid-tool-running-hint')).toBeNull();
-    expect(api.snapshot).toHaveBeenCalledWith({ commandId: 42, lastN: 50, sessionId: 'sess-1' });
+    expect(api.snapshot).toHaveBeenCalledWith({ commandId: 42, lastN: 50, sessionId: 'sess-1', includeTail: false });
   });
 
   it('renders a foreground live widget keyed by the tool call id while running', async () => {
@@ -478,7 +478,8 @@ describe('live command gating (process liveness)', () => {
     expect(container.querySelector('.orchid-live-command')).toBeTruthy();
     expect(container.querySelector('.orchid-tool-running-hint')).toBeNull();
     expect(container.querySelector('.orchid-live-command-title')?.textContent).toContain('sleep 30');
-    expect(api.snapshot).toHaveBeenCalledWith({ toolCallId: 'call-fg-1', lastN: 50, sessionId: 'sess-2' });
+    expect(api.snapshot).toHaveBeenCalledTimes(1);
+    expect(api.snapshot).toHaveBeenCalledWith(expect.objectContaining({ toolCallId: 'call-fg-1', lastN: 50, sessionId: 'sess-2' }));
   });
 
   it('keeps non-background execute_command results on the generic renderer', () => {

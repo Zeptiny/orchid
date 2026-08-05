@@ -318,6 +318,12 @@ export interface BgCommandSnapshotRequest {
    * window's active session; cross-session command tails are denied.
    */
   sessionId?: string;
+  /**
+   * When false, the handler returns `tail: ''` without touching the buffer
+   * and keeps all other fields (running/exitCode/owner/etc). Default `true`
+   * when omitted.
+   */
+  includeTail?: boolean;
 }
 
 export interface BgCommandSnapshotFound {

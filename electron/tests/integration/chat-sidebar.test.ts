@@ -448,11 +448,13 @@ describe('Sidebar Commands Section', () => {
     expect(mockOrchid.bgCmd.snapshot).toHaveBeenCalledWith({
       commandId: 1,
       lastN: 50,
+      includeTail: false,
       sessionId: 'sess-1',
     });
     expect(mockOrchid.bgCmd.snapshot).toHaveBeenCalledWith({
       commandId: 2,
       lastN: 50,
+      includeTail: false,
       sessionId: 'sess-1',
     });
 

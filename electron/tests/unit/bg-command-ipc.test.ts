@@ -487,6 +487,68 @@ describe('bgcmd:snapshot by toolCallId', () => {
   });
 });
 
+// ── Snapshot includeTail flag ───────────────────────────────────────────────
+
+describe('bgcmd:snapshot includeTail', () => {
+  it('returns tail === "" without touching the buffer when includeTail is false (background)', async () => {
+    const procId = await store.spawn('echo hello-tail; sleep 30', { sessionId: SESSION_A });
+    await waitForCondition(() => (store.snapshot(procId)?.tail ?? '').includes('hello-tail'));
+
+    const result = await invokeChannel<BgCommandSnapshotResult>(
+      IPC_CHANNELS.BG_CMD_SNAPSHOT,
+      { commandId: procId, sessionId: SESSION_A, includeTail: false },
+    );
+
+    expect(result).toMatchObject({ found: true, tail: '' });
+    // Still returns metadata; tail-less response passes the existing result schema
+    expect(result).toMatchObject({ running: true, exitCode: null });
+    const found = result as Extract<BgCommandSnapshotResult, { found: true }>;
+    // Validate tail-less response against the existing schema (empty string is valid)
+    const { bgCommandSnapshotResultSchema } = await import('../../src/shared/types/ipc-schemas');
+    expect(bgCommandSnapshotResultSchema.safeParse(result).success).toBe(true);
+    // Buffer still has content — a normal snapshot would have returned it
+    expect(store.snapshot(procId)?.tail).toContain('hello-tail');
+    expect(found.tail).toBe('');
+  });
+
+  it('returns tail === "" without touching the buffer when includeTail is false (foreground)', async () => {
+    registry.register('call-fg-tail', {
+      command: 'foreground-cmd',
+      sessionId: SESSION_A,
+      agentScopeId: 'main',
+    });
+    registry.append('call-fg-tail', Buffer.from('foreground-output\n'));
+
+    const result = await invokeChannel<BgCommandSnapshotResult>(
+      IPC_CHANNELS.BG_CMD_SNAPSHOT,
+      { toolCallId: 'call-fg-tail', sessionId: SESSION_A, includeTail: false },
+    );
+
+    expect(result).toMatchObject({ found: true, tail: '' });
+    const { bgCommandSnapshotResultSchema } = await import('../../src/shared/types/ipc-schemas');
+    expect(bgCommandSnapshotResultSchema.safeParse(result).success).toBe(true);
+    // Buffer has content but tail-less snapshot hides it
+    expect(registry.snapshot('call-fg-tail')?.tail).toContain('foreground-output');
+  });
+
+  it('materializes tail when includeTail is true or omitted', async () => {
+    const procId = await store.spawn('echo materialize; sleep 30', { sessionId: SESSION_A });
+    await waitForCondition(() => (store.snapshot(procId)?.tail ?? '').includes('materialize'));
+
+    const withTrue = await invokeChannel<BgCommandSnapshotResult>(
+      IPC_CHANNELS.BG_CMD_SNAPSHOT,
+      { commandId: procId, sessionId: SESSION_A, includeTail: true },
+    );
+    expect((withTrue as Extract<BgCommandSnapshotResult, { found: true }>).tail).toContain('materialize');
+
+    const omitted = await invokeChannel<BgCommandSnapshotResult>(
+      IPC_CHANNELS.BG_CMD_SNAPSHOT,
+      { commandId: procId, sessionId: SESSION_A },
+    );
+    expect((omitted as Extract<BgCommandSnapshotResult, { found: true }>).tail).toContain('materialize');
+  });
+});
+
 // ── Fleet list ───────────────────────────────────────────────────────────────
 
 describe('bgcmd:list', () => {
