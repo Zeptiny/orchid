@@ -1,15 +1,19 @@
+// @vitest-environment jsdom
 /**
  * Chat rendering contract — U5 flat chat + stream safety.
  *
  * Source-level contracts for flat message presentation (no DaisyUI chat bubbles),
  * history/live-tail memoization, auto-scroll threshold, and stream defect fixes.
  */
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
+import { act, cleanup, fireEvent, render } from '@testing-library/react';
 import { MessageRole, MessageType, type Message } from '../../src/shared/types/message';
+import type { CanonicalToolResult } from '../../src/shared/types/tool-result';
+import type { BgCommandSnapshotFound } from '../../src/shared/types/ipc';
 import {
   AUTO_SCROLL_THRESHOLD_PX,
   isUserScrolledAwayFromBottom,
@@ -19,6 +23,9 @@ import {
 import { MessageWidget } from '../../src/renderer/components/MessageWidget';
 import { MarkdownContent } from '../../src/renderer/components/MarkdownContent';
 import { scrollContainerToLatest } from '../../src/renderer/hooks/useSmartAutoScroll';
+import { ToolCallBlock } from '../../src/renderer/components/ToolCallBlock';
+import { resetToolResultExpansionState } from '../../src/renderer/components/ToolResults/ToolResultShell';
+import type { ToolBlock } from '../../src/renderer/hooks/useChat';
 
 const RENDERER = path.resolve(__dirname, '../../src/renderer');
 const COMPONENTS = path.join(RENDERER, 'components');
@@ -352,5 +359,195 @@ describe('chat rendering contract (U5)', () => {
         expect(fs.existsSync(path.join(COMPONENTS, file))).toBe(true);
       });
     }
+  });
+});
+
+/**
+ * Live command gating — widget liveness follows the process, not the tool
+ * call. Background results (live or replayed) render LiveCommandInline;
+ * foreground running commands render a live mirror keyed by the tool call
+ * id; terminal foreground results stay on the generic renderer.
+ */
+describe('live command gating (process liveness)', () => {
+  function snapshotWith(overrides: Partial<BgCommandSnapshotFound> = {}): BgCommandSnapshotFound {
+    return {
+      found: true,
+      tail: 'output\n',
+      exitCode: null,
+      running: true,
+      interactive: false,
+      owner: 'AGENT',
+      command: 'demo',
+      agentScopeId: 'main',
+      ...overrides,
+    };
+  }
+
+  function installBgCmd(overrides: Partial<BgCommandSnapshotFound> = {}) {
+    const api = {
+      snapshot: vi.fn().mockResolvedValue(snapshotWith(overrides)),
+      sendInput: vi.fn().mockResolvedValue({ ok: true }),
+      terminate: vi.fn().mockResolvedValue({ ok: true }),
+      releaseInput: vi.fn().mockResolvedValue({ ok: true }),
+    };
+    window.orchid = { bgCmd: api } as never;
+    return api;
+  }
+
+  async function flush(): Promise<void> {
+    await act(async () => {
+      await Promise.resolve();
+    });
+  }
+
+  function backgroundResultBlock(id: string): ToolBlock {
+    const canonical: CanonicalToolResult = {
+      schemaVersion: 1,
+      family: 'generic',
+      status: 'complete',
+      completeness: 'complete',
+      data: {
+        value: {
+          commandId: 42,
+          command: 'npm run dev',
+          description: 'Dev server',
+          background: true,
+          running: true,
+        },
+      },
+    };
+    return {
+      id,
+      toolName: 'execute_command',
+      status: 'completed',
+      partialArgs: '',
+      args: JSON.stringify({ command: 'npm run dev', background: true }),
+      agentProjection: null,
+      toolResult: canonical,
+      startedAt: '2026-08-04T00:00:00.000Z',
+      finishedAt: '2026-08-04T00:00:01.000Z',
+    };
+  }
+
+  function expandShell(container: HTMLElement): void {
+    fireEvent.click(container.querySelector('.orchid-tool-block-title') as HTMLElement);
+  }
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    resetToolResultExpansionState();
+  });
+
+  afterEach(() => {
+    cleanup();
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+    resetToolResultExpansionState();
+  });
+
+  it('renders the live widget for a terminal/replayed background result', async () => {
+    const api = installBgCmd();
+    const { container } = render(
+      createElement(ToolCallBlock, { block: backgroundResultBlock('bg-replay-1'), sessionId: 'sess-1' }),
+    );
+    expandShell(container);
+    await flush();
+
+    expect(container.querySelector('.orchid-live-command')).toBeTruthy();
+    expect(container.querySelector('.orchid-tool-running-hint')).toBeNull();
+    expect(api.snapshot).toHaveBeenCalledWith({ commandId: 42, lastN: 50, sessionId: 'sess-1' });
+  });
+
+  it('renders a foreground live widget keyed by the tool call id while running', async () => {
+    const api = installBgCmd();
+    const block: ToolBlock = {
+      id: 'call-fg-1',
+      toolName: 'execute_command',
+      status: 'running',
+      partialArgs: '',
+      args: JSON.stringify({ command: 'sleep 30', description: 'wait for it' }),
+      agentProjection: null,
+      toolResult: null,
+      startedAt: '2026-08-04T00:00:00.000Z',
+      finishedAt: null,
+    };
+    const { container } = render(createElement(ToolCallBlock, { block, sessionId: 'sess-2' }));
+    expandShell(container);
+    await flush();
+
+    expect(container.querySelector('.orchid-live-command')).toBeTruthy();
+    expect(container.querySelector('.orchid-tool-running-hint')).toBeNull();
+    expect(container.querySelector('.orchid-live-command-title')?.textContent).toContain('sleep 30');
+    expect(api.snapshot).toHaveBeenCalledWith({ toolCallId: 'call-fg-1', lastN: 50, sessionId: 'sess-2' });
+  });
+
+  it('keeps non-background execute_command results on the generic renderer', () => {
+    const api = installBgCmd();
+    const canonical: CanonicalToolResult = {
+      schemaVersion: 1,
+      family: 'generic',
+      status: 'complete',
+      completeness: 'complete',
+      data: { value: { stdout: 'hi\n', stderr: '', exitCode: 0 } },
+    };
+    const block: ToolBlock = {
+      id: 'fg-done-1',
+      toolName: 'execute_command',
+      status: 'completed',
+      partialArgs: '',
+      args: JSON.stringify({ command: 'echo hi' }),
+      agentProjection: null,
+      toolResult: canonical,
+      startedAt: '2026-08-04T00:00:00.000Z',
+      finishedAt: '2026-08-04T00:00:01.000Z',
+    };
+    const { container } = render(createElement(ToolCallBlock, { block, sessionId: 'sess-3' }));
+    expandShell(container);
+
+    expect(container.querySelector('[data-result-family="generic"]')).toBeTruthy();
+    expect(container.querySelector('.orchid-live-command')).toBeNull();
+    expect(api.snapshot).not.toHaveBeenCalled();
+  });
+
+  it('keeps the running hint for non-command running tools', () => {
+    installBgCmd();
+    const block: ToolBlock = {
+      id: 'tool-run-1',
+      toolName: 'web_fetch',
+      status: 'running',
+      partialArgs: '',
+      args: '{}',
+      agentProjection: null,
+      toolResult: null,
+      startedAt: '2026-08-04T00:00:00.000Z',
+      finishedAt: null,
+    };
+    const { container } = render(createElement(ToolCallBlock, { block, sessionId: 'sess-4' }));
+    expandShell(container);
+
+    expect(container.querySelector('.orchid-tool-running-hint')?.textContent).toContain('Running');
+    expect(container.querySelector('.orchid-live-command')).toBeNull();
+  });
+
+  it('does not collapse the shell when toggling the live widget itself', async () => {
+    installBgCmd();
+    const { container } = render(
+      createElement(ToolCallBlock, { block: backgroundResultBlock('bg-stop-prop'), sessionId: 'sess-5' }),
+    );
+    expandShell(container);
+    await flush();
+
+    const shellTitle = container.querySelector('.orchid-tool-block-title') as HTMLElement;
+    expect(shellTitle.getAttribute('aria-expanded')).toBe('true');
+
+    const widgetTitle = container.querySelector('.orchid-live-command-title') as HTMLElement;
+    fireEvent.click(widgetTitle);
+    await flush();
+
+    // The widget toggled its own disclosure open; the outer shell stayed open.
+    expect(widgetTitle.getAttribute('aria-expanded')).toBe('true');
+    expect(
+      container.querySelector('.orchid-tool-block-title')?.getAttribute('aria-expanded'),
+    ).toBe('true');
   });
 });

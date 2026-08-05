@@ -13,6 +13,8 @@ import { Spinner } from './ui/Spinner';
 export interface ToolCallBlockProps {
   block: ToolBlock;
   subagents?: readonly SubagentTitleRecord[];
+  /** Owning session live command widgets resolve visibility against. */
+  sessionId?: string | null;
 }
 
 function iconForTool(name: string): IconName {
@@ -30,7 +32,7 @@ function titleStatus(status: ToolBlock['status']): 'generating' | 'running' | 'c
   return status === 'failed' || status === 'error' ? 'failed' : 'completed';
 }
 
-export function ToolCallBlock({ block, subagents = [] }: ToolCallBlockProps) {
+export function ToolCallBlock({ block, subagents = [], sessionId = null }: ToolCallBlockProps) {
   const argsText = block.args || block.partialArgs;
   const title = useMemo(
     () => buildToolTitle({
@@ -59,6 +61,7 @@ export function ToolCallBlock({ block, subagents = [] }: ToolCallBlockProps) {
       title={renderToolTitle(title)}
       iconName={iconForTool(block.toolName)}
       loadingIndicator={loadingIndicator}
+      sessionId={sessionId}
     />
   );
 }
