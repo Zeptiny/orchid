@@ -14,6 +14,7 @@ import {
 } from 'react';
 import { useChat } from '../hooks/useChat';
 import { useSession } from '../hooks/useSession';
+import { useBackgroundCommands } from '../hooks/useBackgroundCommands';
 import { useSubagents } from '../hooks/useSubagents';
 import { useTodos } from '../hooks/useTodos';
 import type { UseSessionActivityReturn } from '../hooks/useSessionActivity';
@@ -82,6 +83,7 @@ export function ChatView({ isVisible = true, bootstrapConfig = null, onNotify, a
   const session = useSession();
   const subagents = useSubagents(session.activeSession?.id ?? null);
   const todos = useTodos(session.activeSession?.id ?? null);
+  const commands = useBackgroundCommands(session.activeSession?.id ?? null);
   const tabs = useSessionTabs();
   const providers = useProviders();
   // Queue ownership follows the visible session: teardown paths (delete /
@@ -1264,6 +1266,9 @@ export function ChatView({ isVisible = true, bootstrapConfig = null, onNotify, a
           onOpenSubagentView={openSubagentView}
           todoState={todos.state}
           onRefreshTodos={todos.refresh}
+          commandsState={commands.state}
+          onRefreshCommands={commands.refresh}
+          sessionId={session.activeSession?.id ?? null}
           mcpServers={mcpServers}
           ragStatus={ragStatus}
           astStatus={astStatus}

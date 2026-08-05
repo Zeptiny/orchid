@@ -1,5 +1,5 @@
 /**
- * Sidebar — right inspector panel (Todos, Subagents, Context, Usage, Index, MCP).
+ * Sidebar — right inspector panel (Todos, Subagents, Commands, Context, Usage, Index, MCP).
  * Iteration 012 mock-aligned collapse blocks.
  */
 import { memo, useEffect, useState, type ReactNode } from 'react';
@@ -18,6 +18,7 @@ import { TodoStatus } from '../../shared/types/todo';
 import type { SubagentRecord } from '../../shared/types/subagent';
 import type { SubagentListState, SubagentDetail } from '../hooks/useSubagents';
 import type { TodoListState } from '../hooks/useTodos';
+import type { BackgroundCommandsState } from '../hooks/useBackgroundCommands';
 import { formatShortcut } from '../keyboard';
 import {
   nextForceOpenEpoch,
@@ -27,6 +28,7 @@ import {
 import { formatUsageSummary } from '../utils/format-usage';
 import { groupSubagents } from '../utils/subagent-stream';
 import { Icon } from './Icon';
+import { LiveCommandInline } from './ToolWidgets/LiveCommandInline';
 import { Button } from './ui/Button';
 import { CollapsibleRegion } from './ui/CollapsibleRegion';
 import { DropdownMenu } from './ui/DropdownMenu';
@@ -47,6 +49,11 @@ interface SidebarProps {
   getSubagentDetail: (id: string) => SubagentDetail | null;
   todoState: TodoListState;
   onRefreshTodos: () => void;
+  /** Session-wide background command fleet (main + subagent scopes). */
+  commandsState: BackgroundCommandsState;
+  onRefreshCommands: () => void;
+  /** Active session the command widgets resolve visibility and controls against. */
+  sessionId: string | null;
   mcpServers: MCPServerStatus[];
   ragStatus?: RAGStoreStatus | null;
   astStatus?: ASTStoreStatus | null;
@@ -79,6 +86,9 @@ export const Sidebar = memo(function Sidebar({
   getSubagentDetail,
   todoState,
   onRefreshTodos,
+  commandsState,
+  onRefreshCommands,
+  sessionId = null,
   mcpServers,
   ragStatus = null,
   astStatus = null,
@@ -99,6 +109,9 @@ export const Sidebar = memo(function Sidebar({
   const [forceOpenEpoch, setForceOpenEpoch] = useState(0);
   const runningSubagentCount = subagentState.status === 'ready'
     ? countRunningSubagents(subagentState.subagents)
+    : 0;
+  const runningCommandCount = commandsState.status === 'ready'
+    ? commandsState.commands.filter((item) => item.running).length
     : 0;
 
   useEffect(() => {
@@ -184,6 +197,23 @@ export const Sidebar = memo(function Sidebar({
             onSelect={onSelectSubagent}
             getDetail={getSubagentDetail}
             onOpenView={onOpenSubagentView}
+          />
+        </CollapseBlock>
+
+        <CollapseBlock
+          title="Commands"
+          sectionId="inspector-commands"
+          forceOpenToken={forcedSection === 'inspector-commands' ? forceOpenEpoch : 0}
+          badge={
+            runningCommandCount > 0 ? (
+              <StatusBadge tone="success" size="xs">{runningCommandCount}</StatusBadge>
+            ) : null
+          }
+        >
+          <CommandsSection
+            state={commandsState}
+            onRefresh={onRefreshCommands}
+            sessionId={sessionId}
           />
         </CollapseBlock>
 
@@ -560,6 +590,65 @@ function TodosSection({ state }: TodosSectionProps) {
           >
             {todo.title}
           </span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// ── Commands Section ─────────────────────────────────────────────────────────
+
+interface CommandsSectionProps {
+  state: BackgroundCommandsState;
+  onRefresh: () => void;
+  sessionId: string | null;
+}
+
+function CommandsSection({ state, onRefresh, sessionId }: CommandsSectionProps) {
+  if (state.status === 'loading') {
+    return <StateMessage kind="loading" className="inspector-empty py-4" title="Loading commands…" />;
+  }
+
+  if (state.status === 'error') {
+    return (
+      <StateMessage
+        kind="error"
+        className="inspector-empty py-4"
+        title={state.error}
+        action={
+          <Button variant="ghost" size="xs" onClick={onRefresh}>
+            Retry
+          </Button>
+        }
+      />
+    );
+  }
+
+  if (state.status === 'empty') {
+    return (
+      <StateMessage
+        kind="empty"
+        className="inspector-empty py-4"
+        title="No background commands"
+      />
+    );
+  }
+
+  return (
+    <div className="inspector-stack">
+      {state.commands.map((item) => (
+        <div key={item.id} className="inspector-stack gap-0">
+          {item.scopeName !== 'main' && (
+            <StatusBadge tone="info" size="xs" className="self-start">
+              {item.scopeName}
+            </StatusBadge>
+          )}
+          <LiveCommandInline
+            target={{ commandId: item.id }}
+            sessionId={sessionId}
+            commandText={item.command}
+            description={item.description}
+          />
         </div>
       ))}
     </div>
