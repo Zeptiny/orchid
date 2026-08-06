@@ -382,12 +382,14 @@ export const bgCommandSnapshotResultSchema = z.discriminatedUnion('found', [
     found: z.literal(true),
     tail: z.string(),
     exitCode: z.number().nullable(),
-    running: z.boolean(),
-    interactive: z.boolean(),
-    owner: bgCommandOwnerSchema,
-    command: z.string(),
+    // New metadata fields are optional so old preloads that only expect
+    // tail/exitCode remain wire-compatible; handlers still emit them.
+    running: z.boolean().optional().default(true),
+    interactive: z.boolean().optional().default(false),
+    owner: bgCommandOwnerSchema.optional().default('AGENT'),
+    command: z.string().optional().default(''),
     description: z.string().optional(),
-    agentScopeId: z.string(),
+    agentScopeId: z.string().optional().default('main'),
     createdAt: z.number().optional(),
   }),
   z.object({

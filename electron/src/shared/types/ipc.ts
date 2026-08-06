@@ -333,18 +333,19 @@ export interface BgCommandSnapshotFound {
   tail: string;
   /** Exit code (null if still running). */
   exitCode: number | null;
-  /** Whether the process is still running (`exitCode === null`). */
-  running: boolean;
+  /** Whether the process is still running (`exitCode === null`). Optional for
+   * wire-compat with old clients that only expect tail/exitCode. */
+  running?: boolean;
   /** Whether the command accepts user input (interactive PTY commands only). */
-  interactive: boolean;
+  interactive?: boolean;
   /** Current input owner. */
-  owner: BgCommandOwner;
+  owner?: BgCommandOwner;
   /** The spawned command line. */
-  command: string;
+  command?: string;
   /** Human-readable label; foreground commands reuse the command line. */
   description?: string;
   /** Owning agent scope (`'main'` or a subagent id). */
-  agentScopeId: string;
+  agentScopeId?: string;
   /**
    * Restart-stable spawn identity (epoch ms). Background: the store entry's
    * `createdAt`; foreground: the mirror's `startedAt`. Replayed widgets compare

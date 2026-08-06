@@ -680,6 +680,34 @@ describe('bgcmd:send_input', () => {
     expect(result).toEqual({ ok: false, reason: 'write_failed' });
     expect(store.get(9000)?.owner).toBe('AGENT');
   });
+  it('user send_input does not leave USER ownership on write failure', async () => {
+    (store as unknown as { _entries: Map<number, unknown> })._entries.set(9001, {
+      id: 9001,
+      command: 'fake-interactive-2',
+      process: { write: () => { throw new Error('pipe broken'); } },
+      buffer: { getTail: () => '' },
+      owner: 'AGENT',
+      lastOutputAt: Date.now(),
+      lastUserInputAt: 12345,
+      exitCode: null,
+      createdAt: Date.now(),
+      interactive: true,
+      sessionId: SESSION_A,
+      agentScopeId: 'main',
+      description: '',
+    });
+
+    const beforeAt = 12345;
+    const result = await invokeChannel<BgCommandSendInputResult>(
+      IPC_CHANNELS.BG_CMD_SEND_INPUT,
+      { commandId: 9001, text: 'hi\n', sessionId: SESSION_A },
+    );
+    expect(result).toEqual({ ok: false, reason: 'write_failed' });
+    const entry = store.get(9001)!;
+    expect(entry.owner).toBe('AGENT');
+    expect(entry.lastUserInputAt).toBe(beforeAt);
+  });
+
 
   it('sends input to a running PTY, takes USER ownership, and blocks agent input', async () => {
     const procId = await store.spawn('cat', {
@@ -809,6 +837,8 @@ describe('bgcmd:terminate', () => {
 describe('bgcmd:changed', () => {
   it('broadcasts the owning sessionId on background process changes', async () => {
     const send = makeWindow();
+    // Broadcast is now filtered to windows whose active session matches.
+    mocks.sessionManager._setActiveForWindow(String(mocks.windows[0].webContents.id), { id: SESSION_A });
 
     await store.spawn('sleep 30', { sessionId: SESSION_A });
 
@@ -826,8 +856,42 @@ describe('bgcmd:changed', () => {
     );
   });
 
+
+  it('does not broadcast to windows whose active session does not match', async () => {
+    const sendForB = makeWindow();
+    // Window 1 is active on SESSION_B, so a SESSION_A spawn must not reach it.
+    mocks.sessionManager._setActiveForWindow(String(mocks.windows[0].webContents.id), { id: SESSION_B });
+
+    await store.spawn('sleep 30', { sessionId: SESSION_A });
+
+    expect(sendForB).not.toHaveBeenCalledWith(
+      IPC_CHANNELS.BG_CMD_CHANGED,
+      expect.anything(),
+    );
+  });
+
+  it('broadcast try/catch: a failing window does not abort delivery to others', async () => {
+    const sendA = makeWindow();
+    mocks.sessionManager._setActiveForWindow(String(mocks.windows[0].webContents.id), { id: SESSION_A });
+    // Second window's send throws; third window should still receive.
+    const throwingSend = vi.fn(() => { throw new Error('renderer gone'); });
+    mocks.windows.push({
+      isDestroyed: () => false,
+      webContents: { id: 999, send: throwingSend, isDestroyed: () => false },
+    });
+    mocks.sessionManager._setActiveForWindow('999', { id: SESSION_A });
+    const sendC = makeWindow();
+    mocks.sessionManager._setActiveForWindow(String(mocks.windows[2].webContents.id), { id: SESSION_A });
+
+    await store.spawn('sleep 30', { sessionId: SESSION_A });
+
+    expect(sendA).toHaveBeenCalledWith(IPC_CHANNELS.BG_CMD_CHANGED, { sessionId: SESSION_A });
+    expect(sendC).toHaveBeenCalledWith(IPC_CHANNELS.BG_CMD_CHANGED, { sessionId: SESSION_A });
+  });
+
   it('stops broadcasting after unregisterChatIPC unsubscribes', async () => {
     const send = makeWindow();
+    mocks.sessionManager._setActiveForWindow(String(mocks.windows[0].webContents.id), { id: SESSION_A });
 
     await store.spawn('sleep 30', { sessionId: SESSION_A });
     const callsAfterFirstSpawn = send.mock.calls.length;
@@ -839,5 +903,230 @@ describe('bgcmd:changed', () => {
 
     // Re-register so afterEach cleanup sees a balanced register/unregister pair.
     chatIpc.registerChatIPC();
+  });
+});
+
+// ── Foreground registry dropped on abort/stop (#12) ──────────────────────────
+
+describe('foreground registry abort/stop cleanup (#12)', () => {
+  it('dropSession clears foreground live entries for the session (direct)', async () => {
+    registry.register('call-abort-direct', {
+      command: 'sleep 30',
+      sessionId: SESSION_A,
+      agentScopeId: 'main',
+    });
+    registry.append('call-abort-direct', Buffer.from('hello tail\n'));
+    // Visible before abort.
+    let pre = await invokeChannel<BgCommandSnapshotResult>(IPC_CHANNELS.BG_CMD_SNAPSHOT, {
+      toolCallId: 'call-abort-direct',
+      sessionId: SESSION_A,
+    });
+    expect(pre).toMatchObject({ found: true, tail: expect.stringContaining('hello tail') });
+
+    // Simulate abort/stop: dropSession is the contract both paths call.
+    registry.dropSession(SESSION_A);
+
+    const post = await invokeChannel<BgCommandSnapshotResult>(IPC_CHANNELS.BG_CMD_SNAPSHOT, {
+      toolCallId: 'call-abort-direct',
+      sessionId: SESSION_A,
+    });
+    expect(post).toEqual({ found: false });
+    expect(registry.get('call-abort-direct')).toBeUndefined();
+  });
+
+  it('dropSession is scope-isolated: other sessions keep their entries', async () => {
+    registry.register('call-keep-a', { command: 'sleep 30', sessionId: SESSION_A, agentScopeId: 'main' });
+    registry.register('call-keep-b', { command: 'sleep 30', sessionId: SESSION_B, agentScopeId: 'main' });
+
+    registry.dropSession(SESSION_A);
+
+    expect(registry.get('call-keep-a')).toBeUndefined();
+    expect(registry.get('call-keep-b')).toBeDefined();
+    const snapB = await invokeChannel<BgCommandSnapshotResult>(IPC_CHANNELS.BG_CMD_SNAPSHOT, {
+      toolCallId: 'call-keep-b',
+      sessionId: SESSION_B,
+    });
+    expect(snapB).toMatchObject({ found: true });
+  });
+
+  it('forceAbortSession wiring drops the foreground live registry', async () => {
+    registry.register('call-via-abort', {
+      command: 'sleep 30',
+      sessionId: SESSION_A,
+      agentScopeId: 'main',
+    });
+    registry.append('call-via-abort', Buffer.from('before abort\n'));
+
+    // Sanity: snapshot is visible before abort.
+    expect(registry.snapshotForSession('call-via-abort', 50, SESSION_A)).toBeDefined();
+
+    const { forceAbortSession } = await import('../../src/main/ipc/chat/abort');
+    forceAbortSession(SESSION_A);
+
+    expect(registry.snapshotForSession('call-via-abort', 50, SESSION_A)).toBeUndefined();
+    expect(registry.get('call-via-abort')).toBeUndefined();
+
+    // IPC reflects the drop as found:false.
+    const post = await invokeChannel<BgCommandSnapshotResult>(IPC_CHANNELS.BG_CMD_SNAPSHOT, {
+      toolCallId: 'call-via-abort',
+      sessionId: SESSION_A,
+    });
+    expect(post).toEqual({ found: false });
+  });
+
+  it('chat:stop handler drops foreground entries (abort wiring via IPC)', async () => {
+    // Seed an active stream so the stop handler has a session to act on, then
+    // register a foreground entry that should be dropped when the handler runs.
+    // The bg-command harness reuses the same sessionManager mock as chat.ts;
+    // set the active session for the sender window so stop resolves it.
+    const session = { id: SESSION_A, name: 'test', cwd: '/tmp', chains: [], activeChainId: null, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), subagentChains: [], todoStore: { tasks: [] } } as unknown as { id: string };
+    mocks.sessionManager._setActiveForWindow(String(WINDOW_SENDER_ID), session as never);
+
+    registry.register('call-via-stop', {
+      command: 'sleep 30',
+      sessionId: SESSION_A,
+      agentScopeId: 'main',
+    });
+    registry.append('call-via-stop', Buffer.from('before stop\n'));
+    expect(registry.snapshotForSession('call-via-stop', 50, SESSION_A)).toBeDefined();
+
+    // Directly exercise the dropSession contract exercised by chat:stop's
+    // confirm path and by forceStopSession. The handler itself is exercised
+    // more fully in chat-ipc.test.ts; this asserts the registry seam.
+    const { forceStopSession } = await import('../../src/main/ipc/chat/abort');
+    forceStopSession(SESSION_A);
+
+    expect(registry.get('call-via-stop')).toBeUndefined();
+    const post = await invokeChannel<BgCommandSnapshotResult>(IPC_CHANNELS.BG_CMD_SNAPSHOT, {
+      toolCallId: 'call-via-stop',
+      sessionId: SESSION_A,
+    });
+    expect(post).toEqual({ found: false });
+  });
+});
+
+// ── USER ownership auto-release via idle timeout (#13) ───────────────────────
+
+describe('USER ownership auto-release via idle timeout (#13)', () => {
+  it('auto-releases USER ownership after background_command_idle_timeout and unblocks agent send_input', async () => {
+    vi.useFakeTimers();
+    try {
+      // Use a real entry so agentSendInput scope gating is exercised.
+      const now = Date.now();
+      // Spawn an interactive background command (PTY).
+      const procId = await store.spawn('cat', {
+        sessionId: SESSION_A,
+        agentScopeId: 'main',
+        interactive: true,
+        description: 'idle reclaim probe',
+      });
+      // Allow PTY to start before taking ownership.
+      vi.useRealTimers();
+      await new Promise((resolve) => setTimeout(resolve, 250));
+      vi.useFakeTimers();
+      // Re-establish Date.now baseline after the real delay.
+      // takeOwnership stamps lastUserInputAt = Date.now().
+      store.takeOwnership(procId);
+      expect(store.get(procId)!.owner).toBe('USER');
+      // Agent should be blocked while USER owns the input.
+      const blocked = await agentSendInput(procId, 'agent line\n', SESSION_A, 'main');
+      expect(blocked.canonical.status).toBe('error');
+      expect(blocked.agentProjection.content).toContain('control: USER');
+
+      // Advance past the idle timeout (900s) and reclaim.
+      const idleTimeoutMs = 900 * 1000;
+      await vi.advanceTimersByTimeAsync(idleTimeoutMs + 1);
+      store.checkIdleOwnership(idleTimeoutMs);
+
+      expect(store.get(procId)!.owner).toBe('AGENT');
+
+      // Agent is now unblocked.
+      const unblocked = await agentSendInput(procId, 'agent line\n', SESSION_A, 'main');
+      expect(unblocked.canonical.status).toBe('complete');
+
+      // Snapshot reflects the reclaimed ownership.
+      const snap = await invokeChannel<BgCommandSnapshotResult>(IPC_CHANNELS.BG_CMD_SNAPSHOT, {
+        commandId: procId,
+        sessionId: SESSION_A,
+      });
+      expect(snap).toMatchObject({ found: true, owner: 'AGENT' });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('does not release before the idle timeout', async () => {
+    vi.useFakeTimers();
+    try {
+      const procId = await store.spawn('cat', {
+        sessionId: SESSION_A,
+        agentScopeId: 'main',
+        interactive: true,
+      });
+      vi.useRealTimers();
+      await new Promise((resolve) => setTimeout(resolve, 150));
+      vi.useFakeTimers();
+
+      store.takeOwnership(procId);
+      expect(store.get(procId)!.owner).toBe('USER');
+
+      const idleTimeoutMs = 900 * 1000;
+      await vi.advanceTimersByTimeAsync(idleTimeoutMs - 1000);
+      store.checkIdleOwnership(idleTimeoutMs);
+      expect(store.get(procId)!.owner).toBe('USER');
+
+      // One ms past the boundary flips.
+      await vi.advanceTimersByTimeAsync(1001);
+      store.checkIdleOwnership(idleTimeoutMs);
+      expect(store.get(procId)!.owner).toBe('AGENT');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('checkIdleOwnership operates per-entry lastUserInputAt (unit-level)', () => {
+    vi.useFakeTimers();
+    try {
+      const now = Date.now();
+      // Inject two fake entries with controlled timestamps to avoid PTY overhead.
+      const idUserRecent = 8101;
+      const idUserStale = 8102;
+      (store as unknown as { _entries: Map<number, unknown> })._entries.set(idUserRecent, {
+        id: idUserRecent,
+        command: 'fake-recent',
+        process: { write: () => {} },
+        buffer: { getTail: () => '' },
+        owner: 'USER' as const,
+        lastOutputAt: now,
+        lastUserInputAt: now,
+        exitCode: null,
+        createdAt: now,
+        interactive: true,
+        sessionId: SESSION_A,
+        agentScopeId: 'main',
+        description: '',
+      });
+      (store as unknown as { _entries: Map<number, unknown> })._entries.set(idUserStale, {
+        id: idUserStale,
+        command: 'fake-stale',
+        process: { write: () => {} },
+        buffer: { getTail: () => '' },
+        owner: 'USER' as const,
+        lastOutputAt: now - 1_000_000,
+        lastUserInputAt: now - 1_000_000,
+        exitCode: null,
+        createdAt: now - 1_000_000,
+        interactive: true,
+        sessionId: SESSION_A,
+        agentScopeId: 'main',
+        description: '',
+      });
+      // Only the stale entry should be reclaimed.
+      store.checkIdleOwnership(900 * 1000);
+      expect((store.get(idUserRecent) as unknown as { owner: string }).owner).toBe('USER');
+      expect((store.get(idUserStale) as unknown as { owner: string }).owner).toBe('AGENT');
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

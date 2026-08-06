@@ -92,8 +92,18 @@ function resolveBgCommandSessionId(
 
 function broadcastBgCommandChanged(sessionId: string): void {
   for (const win of BrowserWindow.getAllWindows()) {
-    if (win.isDestroyed() || win.webContents.isDestroyed()) continue;
-    win.webContents.send(IPC_CHANNELS.BG_CMD_CHANGED, { sessionId });
+    try {
+      if (win.isDestroyed() || win.webContents.isDestroyed()) continue;
+      try {
+        const active = getSessionManager().getActive(String(win.webContents.id));
+        if (!active || active.id !== sessionId) continue;
+      } catch {
+        continue;
+      }
+      win.webContents.send(IPC_CHANNELS.BG_CMD_CHANGED, { sessionId });
+    } catch (err) {
+      console.debug('broadcastBgCommandChanged send failed (non-fatal):', err);
+    }
   }
 }
 
@@ -316,10 +326,26 @@ export function registerChatIPC(): void {
     if (!entry || entry.sessionId !== sessionId) return { ok: false, reason: 'not_found' };
     if (!entry.interactive) return { ok: false, reason: 'not_interactive' };
     if (entry.exitCode !== null) return { ok: false, reason: 'exited' };
-    const sent = await store.send(commandId, text);
-    if (!sent) return { ok: false, reason: 'write_failed' };
-    // User input takes ownership; takeOwnership also stamps lastUserInputAt.
-    store.takeOwnership(commandId);
+    // TOCTOU fix: take ownership before the async write so an agent send_input
+    // cannot interleave between the write and the flip. Roll back on failure.
+    const prevOwner = entry.owner;
+    const prevLastUserInputAt = entry.lastUserInputAt;
+    const took = store.takeOwnership(commandId);
+    if (!took) return { ok: false, reason: 'not_found' };
+    let sent: boolean;
+    try {
+      sent = await store.send(commandId, text);
+    } catch {
+      sent = false;
+    }
+    if (!sent) {
+      const current = store.get(commandId);
+      if (current) {
+        current.owner = prevOwner;
+        current.lastUserInputAt = prevLastUserInputAt;
+      }
+      return { ok: false, reason: 'write_failed' };
+    }
     return { ok: true };
   });
 

@@ -259,15 +259,29 @@ describe('canonical foreground semantics with mirroring', () => {
 // ---------------------------------------------------------------------------
 
 describe('ForegroundLiveRegistry', () => {
-  it('evicts the oldest entry when the cap is exceeded', () => {
+  it('evicts the oldest finalized entry when the cap is exceeded', () => {
     const reg = new ForegroundLiveRegistry({ maxEntries: 3 });
-    for (const id of ['a', 'b', 'c', 'd']) {
+    for (const id of ['a', 'b', 'c']) {
       reg.register(id, { command: id, sessionId: null, agentScopeId: 'main' });
+      reg.finalize(id, 0);
     }
+    reg.register('d', { command: 'd', sessionId: null, agentScopeId: 'main' });
+    reg.finalize('d', 0);
     expect(reg.size).toBe(3);
     expect(reg.snapshot('a')).toBeUndefined();
     expect(reg.snapshot('b')).toBeDefined();
     expect(reg.snapshot('c')).toBeDefined();
+    expect(reg.snapshot('d')).toBeDefined();
+  });
+
+  it('protects running entries from eviction when no finalized entry exists', () => {
+    const reg = new ForegroundLiveRegistry({ maxEntries: 3 });
+    for (const id of ['a', 'b', 'c', 'd']) {
+      reg.register(id, { command: id, sessionId: null, agentScopeId: 'main' });
+    }
+    // All entries are still running — eviction must not drop a live tail.
+    expect(reg.size).toBe(4);
+    expect(reg.snapshot('a')).toBeDefined();
     expect(reg.snapshot('d')).toBeDefined();
   });
 

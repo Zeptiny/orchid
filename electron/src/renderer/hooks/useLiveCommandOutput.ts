@@ -3,11 +3,13 @@
  *
  * Targets either a background command (`commandId`) or a foreground live
  * mirror (`toolCallId`), resolving visibility against the explicit owning
- * session. Throttled to 200ms; when the command exits or becomes
- * unavailable, polling stops automatically.
+ * session. Adaptive polling (200ms expanded / 1000ms collapsed) with
+ * inflight coalescing so concurrent widgets polling the same command share
+ * one IPC round-trip. When the command exits or becomes unavailable, polling
+ * stops automatically.
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { BgCommandOwner, BgCommandSnapshotRequest } from '../../shared/types/ipc';
+import type { BgCommandOwner, BgCommandSnapshotRequest, BgCommandSnapshotResult } from '../../shared/types/ipc';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -39,8 +41,73 @@ export interface LiveCommandState {
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
-const POLL_INTERVAL_MS = 200;
+const POLL_INTERVAL_EXPANDED_MS = 200;
+const POLL_INTERVAL_COLLAPSED_MS = 1000;
 const MAX_LINES = 50;
+
+// ── Snapshot coalescing cache ────────────────────────────────────────────────
+// Module-level dedup so concurrent widgets polling the same command share one
+// IPC round-trip while the request is in flight. Halves the chat+sidebar
+// double-poll cost without a snapshotBatch endpoint. Only inflight promises
+// are coalesced; settled snapshots are not cached for reuse so sequential
+// refresh() calls and interval polls still fetch fresh data.
+
+type SnapshotResult = BgCommandSnapshotResult;
+
+interface CoalesceEntry {
+  inflightPromise: Promise<SnapshotResult>;
+  snapshotFn: unknown;
+}
+
+const snapshotCoalesceCache = new Map<string, CoalesceEntry>();
+
+function buildCoalesceKey(
+  sessionId: string | null,
+  commandId: number | null,
+  toolCallId: string | null,
+  lastN: number,
+  includeTail: boolean,
+): string {
+  return `${sessionId ?? ''}:${commandId ?? ''}:${toolCallId ?? ''}:${lastN}:${includeTail ? '1' : '0'}`;
+}
+
+async function fetchCoalescedSnapshot(
+  request: BgCommandSnapshotRequest,
+): Promise<SnapshotResult> {
+  if (!window.orchid?.bgCmd) throw new Error('bgCmd unavailable');
+  const key = buildCoalesceKey(
+    request.sessionId ?? null,
+    request.commandId ?? null,
+    request.toolCallId ?? null,
+    request.lastN ?? MAX_LINES,
+    request.includeTail !== false,
+  );
+  const snapshotFn = window.orchid.bgCmd.snapshot;
+  const existing = snapshotCoalesceCache.get(key);
+  // Only reuse if the underlying snapshot function is the same instance
+  // (prevents cross-test pollution where window.orchid is re-stubbed).
+  if (existing && existing.snapshotFn === snapshotFn) {
+    return existing.inflightPromise;
+  }
+  const promise: Promise<SnapshotResult> = (window.orchid.bgCmd.snapshot(request) as Promise<SnapshotResult>)
+    .catch((err) => {
+      throw err;
+    })
+    .finally(() => {
+      // Clear inflight after settlement so the next poll fetches fresh data.
+      const cur = snapshotCoalesceCache.get(key);
+      if (cur?.inflightPromise === promise) {
+        snapshotCoalesceCache.delete(key);
+      }
+    });
+  snapshotCoalesceCache.set(key, { inflightPromise: promise, snapshotFn });
+  return promise;
+}
+
+/** Test helper: clear the coalesce cache between isolated tests. */
+export function __clearSnapshotCoalesceCacheForTest(): void {
+  snapshotCoalesceCache.clear();
+}
 
 // ── Hook ─────────────────────────────────────────────────────────────────────
 
@@ -54,7 +121,8 @@ const MAX_LINES = 50;
  * @param expectedCreatedAt Persisted spawn time (epoch ms) for a replayed background
  *   command. When a found snapshot reports a different `createdAt`, the integer
  *   commandId was reused by an unrelated process after an app restart, so the
- *   widget freezes as unavailable. Never misfires when either value is undefined.
+ *   widget freezes as unavailable. Legacy facts without createdAt must not alias
+ *   onto a new live process that does have a createdAt.
  * @returns Current output and metadata state.
  */
 export function useLiveCommandOutput(
@@ -148,7 +216,7 @@ export function useLiveCommandOutput(
     isPollingRef.current = true;
 
     try {
-      const snap = await window.orchid.bgCmd.snapshot({
+      const snap = await fetchCoalescedSnapshot({
         ...targetPayload,
         lastN: MAX_LINES,
         includeTail: !!refreshOutputRef.current,
@@ -176,23 +244,24 @@ export function useLiveCommandOutput(
       // counter restarts at 1 after an app restart, so a replayed widget could
       // bind to an unrelated process that reused the id. A found snapshot
       // whose spawn time differs from the persisted spawn fact is a different
-      // process — freeze as unavailable. Never misfires when either value is
-      // undefined.
-      if (
-        expectedCreatedAt !== undefined
-        && snap.createdAt !== undefined
-        && snap.createdAt !== expectedCreatedAt
-      ) {
+      // process — freeze as unavailable. Legacy facts without createdAt must
+      // not alias onto a new live process that does have a createdAt.
+      if (expectedCreatedAt == null) {
+        if (snap.createdAt != null) {
+          freezeUnavailable();
+          return;
+        }
+      } else if (snap.createdAt !== expectedCreatedAt) {
         freezeUnavailable();
         return;
       }
 
       setIsAvailable(true);
-      setInteractive(snap.interactive);
-      setOwner(snap.owner);
-      setCommand(snap.command);
+      setInteractive(snap.interactive ?? false);
+      setOwner(snap.owner ?? 'AGENT');
+      setCommand(snap.command ?? '');
       setDescription(snap.description);
-      setAgentScopeId(snap.agentScopeId);
+      setAgentScopeId(snap.agentScopeId ?? undefined);
 
       // Update exit code and running state
       if (snap.exitCode !== null) {
@@ -237,7 +306,8 @@ export function useLiveCommandOutput(
     void poll();
   }, [poll]);
 
-  // Start/stop polling based on enabled state
+  // Start/stop polling based on enabled state — adaptive interval: 200ms when
+  // tail is visible (expanded), 1000ms when collapsed (status-only).
   useEffect(() => {
     if (!enabled || targetKey === null) {
       if (intervalRef.current) {
@@ -248,10 +318,11 @@ export function useLiveCommandOutput(
     }
 
     // Initial poll
-    poll();
+    void poll();
 
     // Start polling interval
-    intervalRef.current = setInterval(poll, POLL_INTERVAL_MS);
+    const intervalMs = refreshOutput ? POLL_INTERVAL_EXPANDED_MS : POLL_INTERVAL_COLLAPSED_MS;
+    intervalRef.current = setInterval(() => void poll(), intervalMs);
 
     return () => {
       if (intervalRef.current) {
@@ -259,7 +330,7 @@ export function useLiveCommandOutput(
         intervalRef.current = null;
       }
     };
-  }, [enabled, targetKey, poll]);
+  }, [enabled, targetKey, poll, refreshOutput]);
 
   // A command may finish while collapsed (and stop the status interval), so
   // reopening explicitly refreshes its final output tail once.

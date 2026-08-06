@@ -197,12 +197,28 @@ export class ForegroundLiveRegistry {
     }
   }
 
-  /** Map iteration order is insertion order, so the first key is the oldest. */
+  /**
+   * Bounded eviction that preserves live tails: prefer evicting finalized
+   * entries (oldest first). Running entries are protected — if every
+   * remaining entry is still running, eviction pauses so the live tail
+   * does not vanish mid-execution. Size may transiently exceed the cap
+   * until entries finalize; the next insertion will evict finalized
+   * entries first.
+   */
   private _evictIfNeeded(): void {
     while (this._entries.size > this._maxEntries) {
-      const oldest = this._entries.keys().next();
-      if (oldest.done) break;
-      this._remove(oldest.value);
+      let victim: string | undefined;
+      for (const [toolCallId, entry] of this._entries) {
+        if (entry.exitCode !== null) {
+          victim = toolCallId;
+          break;
+        }
+      }
+      if (victim === undefined) {
+        // All remaining entries are running — protect them.
+        break;
+      }
+      this._remove(victim);
     }
   }
 }

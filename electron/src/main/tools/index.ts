@@ -31,6 +31,10 @@ import {
   terminateCommandToolDefinition,
   terminateCommandHandler,
 } from './process/terminate-command';
+import {
+  listBackgroundCommandsToolDefinition,
+  listBackgroundCommandsHandler,
+} from './process/list-background-commands';
 import { registerAstTools } from './ast';
 import { TodoStore } from './todo/store';
 import { buildCreateTool } from './todo/create';
@@ -234,6 +238,7 @@ function registerBuiltinToolsInto(
   registry.register(readOutputToolDefinition, readOutputHandler);
   registry.register(sendInputToolDefinition, sendInputHandler);
   registry.register(terminateCommandToolDefinition, terminateCommandHandler);
+  registry.register(listBackgroundCommandsToolDefinition, listBackgroundCommandsHandler);
   registerAstTools(registry);
 
   // Session-scoped store via getter (Python ContextVar parity). notifyChanged

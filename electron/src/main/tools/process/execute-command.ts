@@ -347,7 +347,7 @@ export async function executeCommand(
         if (proc.exitCode === null) {
           killProcessGroup(proc, 'SIGKILL');
         }
-        await waitForExit(proc);
+        await waitForExit(proc, WAIT_AFTER_KILL_MS);
         // Timeout / abort / spawn-error all end in a kill or a failed spawn.
         // A SIGKILL'd process reports no code, so fall back to the -1
         // sentinel (BackgroundProcessStore's exit-event convention).
@@ -373,10 +373,10 @@ export async function executeCommand(
       // If truncated and still running, kill it
       if (truncated && proc.exitCode === null) {
         killProcessGroup(proc, 'SIGKILL');
-        await waitForExit(proc);
+        await waitForExit(proc, WAIT_AFTER_KILL_MS);
       }
 
-      await waitForExit(proc);
+      await waitForExit(proc, WAIT_AFTER_KILL_MS);
 
       const stdoutStr = stdout.length > 0 ? stdout.toString('utf-8').trim() : '';
       const stderrStr = stderr.length > 0 ? stderr.toString('utf-8').trim() : '';
@@ -401,16 +401,32 @@ export async function executeCommand(
   }
 }
 
-function waitForExit(proc: ChildProcess): Promise<void> {
+function waitForExit(proc: ChildProcess, timeoutMs?: number): Promise<void> {
   return new Promise((resolve) => {
     if (proc.exitCode !== null) {
       resolve();
       return;
     }
-    proc.on('exit', () => resolve());
-    proc.on('error', () => resolve());
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let done = false;
+    const finish = () => {
+      if (done) return;
+      done = true;
+      if (timer !== undefined) clearTimeout(timer);
+      resolve();
+    };
+    if (timeoutMs !== undefined) {
+      timer = setTimeout(finish, timeoutMs);
+      if (typeof (timer as unknown as { unref?: () => void }).unref === 'function') {
+        (timer as unknown as { unref: () => void }).unref();
+      }
+    }
+    proc.on('exit', finish);
+    proc.on('error', finish);
   });
 }
+
+const WAIT_AFTER_KILL_MS = 2500;
 
 // ---------------------------------------------------------------------------
 // Tool definition

@@ -551,4 +551,65 @@ describe('live command gating (process liveness)', () => {
       container.querySelector('.orchid-tool-block-title')?.getAttribute('aria-expanded'),
     ).toBe('true');
   });
+
+  it('foreground running → canonical swap: live widget unmounts, canonical stdout shown, polling stops (#14)', async () => {
+    const api = installBgCmd();
+    // Start as a running foreground command — ToolResultShell should render
+    // the LiveCommandInline mirror keyed by block.id.
+    const runningBlock: ToolBlock = {
+      id: 'call-fg-swap-1',
+      toolName: 'execute_command',
+      status: 'running',
+      partialArgs: '',
+      args: JSON.stringify({ command: 'npm test', description: 'run tests' }),
+      agentProjection: null,
+      toolResult: null,
+      startedAt: '2026-08-04T00:00:00.000Z',
+      finishedAt: null,
+    };
+    const { container, rerender } = render(createElement(ToolCallBlock, { block: runningBlock, sessionId: 'sess-swap' }));
+    expandShell(container);
+    await flush();
+
+    expect(container.querySelector('.orchid-live-command')).toBeTruthy();
+    expect(container.querySelector('.orchid-tool-running-hint')).toBeNull();
+    const callsAfterMount = api.snapshot.mock.calls.length;
+    expect(callsAfterMount).toBeGreaterThanOrEqual(1);
+    expect(api.snapshot).toHaveBeenCalledWith(expect.objectContaining({ toolCallId: 'call-fg-swap-1', sessionId: 'sess-swap' }));
+    // Tail should be visible while running (enriched via metadata fallback).
+    expect(container.textContent).toContain('output');
+
+    // Complete the same block id — the canonical result replaces the live
+    // widget. The shell preserves the caller's expansion choice (open), so
+    // the replacment body is immediately visible.
+    const canonical: CanonicalToolResult = {
+      schemaVersion: 1,
+      family: 'generic',
+      status: 'complete',
+      completeness: 'complete',
+      data: { value: { stdout: 'PASS 2/2 tests\n', stderr: '', exitCode: 0 } },
+    };
+    const completedBlock: ToolBlock = {
+      ...runningBlock,
+      status: 'completed',
+      toolResult: canonical,
+      finishedAt: '2026-08-04T00:00:02.000Z',
+    };
+    rerender(createElement(ToolCallBlock, { block: completedBlock, sessionId: 'sess-swap' }));
+    // Live widget hooks run their effects on the completed render — flush them
+    // so polling timers are cleared before we assert.
+    await flush();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1_000);
+    });
+
+    // Live widget unmounted, canonical result rendered instead.
+    expect(container.querySelector('.orchid-live-command')).toBeNull();
+    expect(container.querySelector('[data-result-family="generic"]')).toBeTruthy();
+    // Generic canonical value is rendered as the tool stdout.
+    expect(container.textContent).toContain('PASS 2/2 tests');
+
+    // No additional snapshots after completion — polling stopped.
+    expect(api.snapshot.mock.calls.length).toBe(callsAfterMount);
+  });
 });

@@ -149,7 +149,9 @@ describe('useLiveCommandOutput', () => {
   });
 
   it('does not freeze on createdAt when no persisted spawn time exists', async () => {
-    // Legacy facts without createdAt must never trip the aliasing guard.
+    // Legacy facts without createdAt must not alias onto a new live process
+    // that does have a createdAt — the widget freezes as unavailable so a
+    // restarted integer commandId cannot show an unrelated tail (P1 #6).
     const snapshot = vi
       .fn()
       .mockResolvedValue(foundSnapshot({ tail: 'ok\n', createdAt: 2000 }));
@@ -163,8 +165,8 @@ describe('useLiveCommandOutput', () => {
       await Promise.resolve();
     });
 
-    expect(result.current.isAvailable).toBe(true);
-    expect(result.current.isRunning).toBe(true);
+    expect(result.current.isAvailable).toBe(false);
+    expect(result.current.isRunning).toBe(false);
   });
 
   it('keeps polling a found running command and stops after it completes', async () => {
