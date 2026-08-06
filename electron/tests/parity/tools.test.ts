@@ -28,6 +28,10 @@ import { readOutputToolDefinition, readOutputHandler } from '../../src/main/tool
 import { sendInputToolDefinition, sendInputHandler } from '../../src/main/tools/process/send-input';
 import { terminateCommandToolDefinition, terminateCommandHandler } from '../../src/main/tools/process/terminate-command';
 import {
+  listBackgroundCommandsToolDefinition,
+  listBackgroundCommandsHandler,
+} from '../../src/main/tools/process/list-background-commands';
+import {
   getFileSkeletonDefinition,
   getFileSkeletonHandler,
 } from '../../src/main/tools/ast/get-file-skeleton';
@@ -71,7 +75,7 @@ import { buildFollowUpTool } from '../../src/main/tools/subagent/follow-up';
 import { buildAskQuestionTool } from '../../src/main/tools/ask-question';
 import { registerBuiltinTools, toolRegistry } from '../../src/main/tools';
 
-// ── Expected tool names (34 total) ─────────────────────────────────────────
+// ── Expected tool names (35 total) ─────────────────────────────────────────
 
 const EXPECTED_TOOL_NAMES = [
   // Filesystem (6)
@@ -91,11 +95,12 @@ const EXPECTED_TOOL_NAMES = [
   'todo_update',
   'todo_list',
   'todo_delete',
-  // Process (4)
+  // Process (5)
   'execute_command',
   'read_output',
   'send_input',
   'terminate_command',
+  'list_background_commands',
   // Web (1)
   'web_fetch',
   // Subagent (6)
@@ -219,7 +224,7 @@ describe('Static Tool Definitions', () => {
     });
   });
 
-  describe('process tools (4)', () => {
+  describe('process tools (5)', () => {
     it('execute_command has valid definition, schema, and handler', () => {
       expectValidDefinition(executeCommandToolDefinition, 'execute_command');
       expectValidJsonSchema(executeCommandToolDefinition.inputSchema, 'execute_command');
@@ -246,6 +251,13 @@ describe('Static Tool Definitions', () => {
       expectValidJsonSchema(terminateCommandToolDefinition.inputSchema, 'terminate_command');
       expectValidHandler(terminateCommandHandler);
       expect(terminateCommandToolDefinition.category).toBe('process');
+    });
+
+    it('list_background_commands has valid definition, schema, and handler', () => {
+      expectValidDefinition(listBackgroundCommandsToolDefinition, 'list_background_commands');
+      expectValidJsonSchema(listBackgroundCommandsToolDefinition.inputSchema, 'list_background_commands');
+      expectValidHandler(listBackgroundCommandsHandler);
+      expect(listBackgroundCommandsToolDefinition.category).toBe('process');
     });
   });
 
@@ -416,14 +428,14 @@ describe('Dynamic Tool Builders', () => {
 // ── Completeness Check ─────────────────────────────────────────────────────
 
 describe('Tool Completeness', () => {
-  it('all 34 expected tool names are defined in this test file', () => {
+  it('all 35 expected tool names are defined in this test file', () => {
     // This test ensures we haven't accidentally removed a tool from our list.
     // If a new tool is added to the codebase, this list must be updated.
-    expect(EXPECTED_TOOL_NAMES).toHaveLength(34);
+    expect(EXPECTED_TOOL_NAMES).toHaveLength(35);
   });
 
   it('static tool count matches expected', () => {
-    // 6 filesystem + 1 search + 2 rag + 4 process + 6 ast = 19 static tools
+    // 6 filesystem + 1 search + 2 rag + 5 process + 6 ast = 20 static tools
     const staticDefinitions = [
       applyPatchDefinition,
       readDefinition,
@@ -438,6 +450,7 @@ describe('Tool Completeness', () => {
       readOutputToolDefinition,
       sendInputToolDefinition,
       terminateCommandToolDefinition,
+      listBackgroundCommandsToolDefinition,
       getFileSkeletonDefinition,
       getFunctionDefinition,
       findSymbolReferencesDefinition,
@@ -445,10 +458,10 @@ describe('Tool Completeness', () => {
       renameSymbolDefinition,
       astIndexDefinition,
     ];
-    expect(staticDefinitions).toHaveLength(19);
+    expect(staticDefinitions).toHaveLength(20);
     // All names should be unique
     const names = staticDefinitions.map((d) => d.name);
-    expect(new Set(names).size).toBe(19);
+    expect(new Set(names).size).toBe(20);
   });
 
   it('all tool names are unique across static and dynamic tools', () => {
@@ -466,6 +479,7 @@ describe('Tool Completeness', () => {
       readOutputToolDefinition.name,
       sendInputToolDefinition.name,
       terminateCommandToolDefinition.name,
+      listBackgroundCommandsToolDefinition.name,
       getFileSkeletonDefinition.name,
       getFunctionDefinition.name,
       findSymbolReferencesDefinition.name,
@@ -489,8 +503,8 @@ describe('Tool Completeness', () => {
       buildFollowUpTool({} as any).definition.name,
       buildAskQuestionTool({} as any).definition.name,
     ];
-    expect(allNames).toHaveLength(34);
-    expect(new Set(allNames).size).toBe(34);
+    expect(allNames).toHaveLength(35);
+    expect(new Set(allNames).size).toBe(35);
   });
 
   it('registerBuiltinTools populates the singleton registry with all tools', () => {
