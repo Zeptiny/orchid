@@ -240,20 +240,24 @@ export function useLiveCommandOutput(
         return;
       }
 
-      // Restart-aliasing guard: the background store's integer commandId
-      // counter restarts at 1 after an app restart, so a replayed widget could
-      // bind to an unrelated process that reused the id. A found snapshot
-      // whose spawn time differs from the persisted spawn fact is a different
-      // process — freeze as unavailable. Legacy facts without createdAt must
-      // not alias onto a new live process that does have a createdAt.
-      if (expectedCreatedAt == null) {
-        if (snap.createdAt != null) {
+      // Restart-aliasing guard (background integer commandIds only): the
+      // background store's counter restarts at 1 after an app restart, so a
+      // replayed widget could bind to an unrelated process that reused the id.
+      // Foreground toolCallIds are UUIDs and never alias, so skip the guard.
+      // For live fleet widgets CommandsSection now provides expectedCreatedAt
+      // (item.createdAt) so they match; persisted replay widgets compare
+      // against the stored fact. Legacy facts without createdAt must not alias
+      // onto a new live process that does have a createdAt.
+      if (commandId !== null) {
+        if (expectedCreatedAt == null) {
+          if (snap.createdAt != null) {
+            freezeUnavailable();
+            return;
+          }
+        } else if (snap.createdAt != null && snap.createdAt !== expectedCreatedAt) {
           freezeUnavailable();
           return;
         }
-      } else if (snap.createdAt !== expectedCreatedAt) {
-        freezeUnavailable();
-        return;
       }
 
       setIsAvailable(true);

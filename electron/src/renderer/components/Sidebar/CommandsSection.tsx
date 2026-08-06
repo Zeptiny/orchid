@@ -54,6 +54,7 @@ export function CommandsSection({ state, onRefresh, sessionId }: CommandsSection
             sessionId={sessionId}
             commandText={item.command}
             description={item.description}
+            expectedCreatedAt={item.createdAt}
           />
         </div>
       ))}
