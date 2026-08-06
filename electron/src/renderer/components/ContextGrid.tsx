@@ -138,9 +138,30 @@ function splitByProviderReasoning(
   tokens: number,
   providerReasoning: number | undefined,
 ): { response: number; reasoning: number } | null {
-  if (!providerReasoning || providerReasoning <= 0) return null;
+  if (providerReasoning == null || providerReasoning < 0) return null;
+  if (providerReasoning <= 0) return { response: Math.max(0, tokens), reasoning: 0 };
   const reasoning = Math.min(providerReasoning, Math.max(0, tokens));
   return { response: Math.max(0, tokens) - reasoning, reasoning };
+}
+
+function sumPersistedReasoning(messages: readonly Message[]): number {
+  let total = 0;
+  for (const message of messages) {
+    if (message.hidden) continue;
+    total += message.usage?.reasoning_tokens ?? 0;
+  }
+  return total;
+}
+
+function isPersistedUsageRef(
+  messages: readonly Message[],
+  usage: Usage | null,
+): boolean {
+  if (!usage) return false;
+  for (const message of messages) {
+    if (message.usage === usage) return true;
+  }
+  return false;
 }
 
 function computeBreakdown(
@@ -153,14 +174,42 @@ function computeBreakdown(
 
   if (usage?.context) {
     const context = usage.context;
-    const chars = countMessageChars(messages);
-    if (streamingThinkingChars && streamingThinkingChars > 0) {
-      chars.reasoning += streamingThinkingChars;
+    const persistedReasoning = sumPersistedReasoning(messages);
+    const isPersisted = isPersistedUsageRef(messages, usage);
+    const providerDelta = isPersisted
+      ? 0
+      : (usage.reasoning_tokens ?? usage.context?.reasoning_tokens ?? 0);
+    const streamingTokens =
+      streamingThinkingChars && streamingThinkingChars > 0
+        ? Math.round(streamingThinkingChars / 4)
+        : 0;
+    const liveOrStreaming = Math.max(providerDelta, streamingTokens);
+    const streamingDelta = Math.max(0, streamingTokens - providerDelta);
+    const effectiveAssistantTokens = context.assistant_tokens + streamingDelta;
+    const effectiveUsedTokens = context.used_tokens + streamingDelta;
+    const windowReasoning = persistedReasoning + liveOrStreaming;
+    const hasProviderReasoningData =
+      persistedReasoning !== 0 ||
+      usage.reasoning_tokens !== undefined ||
+      usage.context?.reasoning_tokens !== undefined ||
+      messages.some((m) => m.usage?.reasoning_tokens !== undefined);
+    let assistant: { response: number; reasoning: number };
+    if (windowReasoning > 0 || hasProviderReasoningData) {
+      const reasoning = Math.min(
+        Math.max(0, effectiveAssistantTokens),
+        Math.max(0, windowReasoning),
+      );
+      assistant = {
+        response: Math.max(0, effectiveAssistantTokens - reasoning),
+        reasoning,
+      };
+    } else {
+      const chars = countMessageChars(messages);
+      if (streamingThinkingChars && streamingThinkingChars > 0) {
+        chars.reasoning += streamingThinkingChars;
+      }
+      assistant = splitAssistantTokens(effectiveAssistantTokens, chars);
     }
-    const assistant = splitByProviderReasoning(
-      context.assistant_tokens,
-      context.reasoning_tokens,
-    ) ?? splitAssistantTokens(context.assistant_tokens, chars);
     return {
       system: context.system_tokens,
       tools: context.tools_tokens,
@@ -168,8 +217,8 @@ function computeBreakdown(
       user: context.user_tokens,
       assistantResponse: assistant.response,
       assistantReasoning: assistant.reasoning,
-      free: mc > 0 ? Math.max(0, mc - context.used_tokens) : 0,
-      total: mc > 0 ? mc : context.used_tokens,
+      free: mc > 0 ? Math.max(0, mc - effectiveUsedTokens) : 0,
+      total: mc > 0 ? mc : effectiveUsedTokens,
       maxContext: mc,
     };
   }
