@@ -624,6 +624,7 @@ export interface ProviderConnectionCreateMessage {
   authMethod: ProviderAuthMethod;
   modelIds: readonly string[];
   customModels?: readonly CustomConnectionModel[];
+  reasoningConfig?: Record<string, import('./provider').ReasoningModelConfig>;
   endpoint?: string | null;
   allowInsecureHttp?: boolean;
   /** Used only with `authMethod: 'environment'`; the value is never resolved here. */

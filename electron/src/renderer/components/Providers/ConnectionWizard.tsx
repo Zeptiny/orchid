@@ -299,6 +299,7 @@ export function ConnectionWizard({
         authMethod,
         modelIds,
         customModels,
+        ...(Object.keys(reasoningConfig).length > 0 ? { reasoningConfig } : {}),
         ...(supportsCustomEndpoint ? { endpoint: endpoint.trim(), allowInsecureHttp } : {}),
         ...(authMethod === 'environment'
           ? { environmentVariable: environmentVariable.trim() }
