@@ -17,6 +17,10 @@ const timeRangeSchema = z.object({
   endDate: z.string().optional(),
 }).optional();
 
+const analyticsParamsSchema = z.object({
+  timeRange: timeRangeSchema,
+}).optional();
+
 const sessionsParamsSchema = z.object({
   limit: z.number().int().positive().max(10000).optional(),
   timeRange: timeRangeSchema,
@@ -34,9 +38,9 @@ const contextParamsSchema = z.object({
 
 export function registerAnalyticsIPC(): void {
   ipcMain.handle(IPC_CHANNELS.ANALYTICS_OVERVIEW, async (_event, payload?: unknown) => {
-    const parsed = timeRangeSchema.safeParse(payload);
+    const parsed = analyticsParamsSchema.safeParse(payload);
     if (!parsed.success) throw new Error('Invalid analytics:overview payload');
-    const timeRange = parsed.data as AnalyticsTimeRange | undefined;
+    const timeRange = parsed.data?.timeRange as AnalyticsTimeRange | undefined;
     try {
       return getOverview(timeRange);
     } catch (error) {
@@ -70,9 +74,9 @@ export function registerAnalyticsIPC(): void {
   });
 
   ipcMain.handle(IPC_CHANNELS.ANALYTICS_MODELS, async (_event, payload?: unknown) => {
-    const parsed = timeRangeSchema.safeParse(payload);
+    const parsed = analyticsParamsSchema.safeParse(payload);
     if (!parsed.success) throw new Error('Invalid analytics:models payload');
-    const timeRange = parsed.data as AnalyticsTimeRange | undefined;
+    const timeRange = parsed.data?.timeRange as AnalyticsTimeRange | undefined;
     try {
       return getModels(timeRange);
     } catch (error) {
@@ -82,9 +86,9 @@ export function registerAnalyticsIPC(): void {
   });
 
   ipcMain.handle(IPC_CHANNELS.ANALYTICS_TOOLS, async (_event, payload?: unknown) => {
-    const parsed = timeRangeSchema.safeParse(payload);
+    const parsed = analyticsParamsSchema.safeParse(payload);
     if (!parsed.success) throw new Error('Invalid analytics:tools payload');
-    const timeRange = parsed.data as AnalyticsTimeRange | undefined;
+    const timeRange = parsed.data?.timeRange as AnalyticsTimeRange | undefined;
     try {
       return getTools(timeRange);
     } catch (error) {
@@ -94,9 +98,9 @@ export function registerAnalyticsIPC(): void {
   });
 
   ipcMain.handle(IPC_CHANNELS.ANALYTICS_SUBAGENTS, async (_event, payload?: unknown) => {
-    const parsed = timeRangeSchema.safeParse(payload);
+    const parsed = analyticsParamsSchema.safeParse(payload);
     if (!parsed.success) throw new Error('Invalid analytics:subagents payload');
-    const timeRange = parsed.data as AnalyticsTimeRange | undefined;
+    const timeRange = parsed.data?.timeRange as AnalyticsTimeRange | undefined;
     try {
       return getSubagents(timeRange);
     } catch (error) {
