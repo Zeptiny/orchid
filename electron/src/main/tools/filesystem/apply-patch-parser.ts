@@ -161,12 +161,25 @@ interface ChangeContextMarker {
  * line as a chunk boundary would silently corrupt output, so we prefer that
  * an indented `@@` header fail loudly instead.
  */
-function matchChangeContextMarker(line: string): ChangeContextMarker | null {
+function isGitUnifiedHeader(hint: string): boolean {
+  return /^-\d+(?:,\d+)?\s+\+\d+(?:,\d+)?\s*@@/.test(hint);
+}
+
+function matchChangeContextMarker(
+  line: string,
+  lineNumber?: number,
+): ChangeContextMarker | null {
   if (line === '' || line.startsWith(' ') || line.startsWith('+') || line.startsWith('-')) {
     return null;
   }
   if (!line.startsWith('@@')) return null;
   const hint = line.slice(2).trim();
+  if (hint.length > 0 && isGitUnifiedHeader(hint)) {
+    throw new ParseError(
+      `Invalid hunk header '${line}': git-style "@@ -a,b +c,d @@" is not supported. Use "@@" or "@@ <symbol>" with 3 verbatim context lines.`,
+      lineNumber,
+    );
+  }
   return { hint: hint.length > 0 ? hint : null };
 }
 
@@ -284,7 +297,7 @@ export function parsePatch(input: string): ParseResult {
       }
 
       const lastChunk = hunk.chunks.length > 0 ? hunk.chunks[hunk.chunks.length - 1] : null;
-      const contextMarker = matchChangeContextMarker(updateLine);
+      const contextMarker = matchChangeContextMarker(updateLine, lineNum);
 
       if (lastChunk && lastChunk.isEndOfFile) {
         if (updateLine === '') continue;

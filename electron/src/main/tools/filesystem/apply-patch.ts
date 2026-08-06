@@ -154,6 +154,7 @@ export const applyPatchDefinition: ToolDefinition = {
     'MoveTo := "*** Move to: " newPath NEWLINE\n' +
     'Hunk := "@@" [ header ] NEWLINE { HunkLine } [ "*** End of File" NEWLINE ]\n' +
     'HunkLine := (" " | "-" | "+") text NEWLINE\n\n' +
+    'Hunk header is "@@" or "@@ <func/class>" ONLY — NEVER git unified-diff "@@ -a,b +c,d @@" (invalid, causes match_failed).\n\n' +
     'Example:\n' +
     '*** Begin Patch\n' +
     '*** Add File: hello.txt\n' +
@@ -170,6 +171,7 @@ export const applyPatchDefinition: ToolDefinition = {
     '- You MUST include a header (Add/Delete/Update) for each file operation.\n' +
     '- You MUST prefix new lines with + even when creating a new file.\n' +
     '- File paths must be relative to the working directory, NEVER absolute.\n' +
+    '- Hunk header is "@@" or "@@ <symbol>" only. Do NOT use git-style "@@ -l,c +l,c @@".\n' +
     '- Do not re-read files after applying a patch — the tool reports success or failure per file.',
   inputSchema: applyPatchInputSchema,
   resultFamily: 'generic',
