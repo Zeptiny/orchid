@@ -473,6 +473,59 @@ describe('Sidebar Commands Section', () => {
     expect(screen.queryByText('main')).toBeNull();
   });
 
+  it('shows running commands inline and hides terminal commands behind the Other commands dropdown', () => {
+    mockOrchid.bgCmd.snapshot.mockImplementation(({ commandId }: { commandId: number }) =>
+      Promise.resolve({
+        found: true,
+        tail: '',
+        exitCode: commandId === 1 ? null : commandId === 2 ? 0 : 1,
+        running: commandId === 1,
+        interactive: false,
+        owner: 'AGENT',
+        command: 'demo',
+        agentScopeId: commandId === 3 ? 'sub-2' : 'main',
+      }),
+    );
+
+    renderCommandsSidebar({
+      status: 'ready',
+      commands: [
+        makeBgCommand({ id: 1, command: 'npm run dev' }),
+        makeBgCommand({ id: 2, command: 'pytest -x', running: false, exitCode: 0 }),
+        makeBgCommand({
+          id: 3,
+          command: 'cargo build',
+          running: false,
+          exitCode: 1,
+          scopeName: 'Builder',
+          agentScopeId: 'sub-2',
+        }),
+      ],
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: /^Commands/ }));
+
+    // Running commands stay visible with a running badge.
+    expect(screen.getByRole('button', { name: /\$ npm run dev/ })).toBeTruthy();
+    expect(screen.getByText('running')).toBeTruthy();
+
+    // Terminal commands are not rendered until the menu opens.
+    expect(screen.queryByRole('button', { name: /\$ pytest -x/ })).toBeNull();
+    expect(screen.queryByRole('button', { name: /\$ cargo build/ })).toBeNull();
+
+    const trigger = screen.getByRole('button', { name: 'Show 2 other commands' });
+    expect(trigger.textContent).toContain('Other commands');
+    expect(trigger.textContent).toContain('2');
+
+    // Opening the menu reveals the terminal rows with their status badges.
+    fireEvent.click(trigger);
+    expect(screen.getByRole('button', { name: /\$ pytest -x/ })).toBeTruthy();
+    expect(screen.getByRole('button', { name: /\$ cargo build/ })).toBeTruthy();
+    expect(screen.getByText('done')).toBeTruthy();
+    expect(screen.getByText('exit 1')).toBeTruthy();
+    expect(screen.getByText('Builder')).toBeTruthy();
+  });
+
   it('shows the empty state when the session has no background commands', () => {
     renderCommandsSidebar({ status: 'empty' });
 

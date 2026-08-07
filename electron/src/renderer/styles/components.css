@@ -899,13 +899,15 @@
     margin-top: var(--space-4);
   }
 
-  /* Keep the nested subagent menu in the parent collapse's layout. */
-  .orchid-subagent-dropdown-flow {
+  /* Keep nested inspector dropdown menus in the parent collapse's layout. */
+  .orchid-subagent-dropdown-flow,
+  .orchid-command-dropdown-flow {
     display: flex;
     flex-direction: column;
     align-items: stretch;
   }
-  .orchid-subagent-dropdown-flow > .dropdown-content {
+  .orchid-subagent-dropdown-flow > .dropdown-content,
+  .orchid-command-dropdown-flow > .dropdown-content {
     position: static;
     inset: auto;
     translate: none;

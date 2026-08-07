@@ -35,7 +35,7 @@ import { IconButton } from './ui/IconButton';
 import { Spinner } from './ui/Spinner';
 import { StateMessage } from './ui/StateMessage';
 import { StatusBadge } from './ui/StatusBadge';
-import { CommandsSection } from './Sidebar/CommandsSection';
+import { CommandsSection, countRunningCommands } from './Sidebar/CommandsSection';
 
 interface SidebarProps {
   isOpen: boolean;
@@ -111,7 +111,7 @@ export const Sidebar = memo(function Sidebar({
     ? countRunningSubagents(subagentState.subagents)
     : 0;
   const runningCommandCount = commandsState.status === 'ready'
-    ? commandsState.commands.filter((item) => item.running).length
+    ? countRunningCommands(commandsState.commands)
     : 0;
 
   useEffect(() => {

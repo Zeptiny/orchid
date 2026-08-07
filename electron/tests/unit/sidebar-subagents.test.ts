@@ -160,7 +160,7 @@ describe('subagent sidebar grouping', () => {
     );
 
     expect(styles).toMatch(
-      /\.orchid-subagent-dropdown-flow\s*>\s*\.dropdown-content\s*\{[\s\S]*?position:\s*static;/,
+      /\.orchid-subagent-dropdown-flow\s*>\s*\.dropdown-content(?:\s*,\s*\.orchid-command-dropdown-flow\s*>\s*\.dropdown-content)?\s*\{[\s\S]*?position:\s*static;/,
     );
   });
 
