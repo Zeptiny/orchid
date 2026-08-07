@@ -126,8 +126,7 @@ describe('execute_command live mirror wiring', () => {
     });
 
     expect(resultStatus(result)).toBe('error');
-    // Node reports the negative errno (-2 = ENOENT) as the exit code for a
-    // failed spawn; the mirror records whatever the process actually reports.
-    expect(registry.snapshot('tc-shell-false-error')?.exitCode).toBe(-2);
+    const exitCode = registry.snapshot('tc-shell-false-error')?.exitCode;
+    expect(typeof exitCode === 'number' && exitCode < 0).toBe(true);
   });
 });

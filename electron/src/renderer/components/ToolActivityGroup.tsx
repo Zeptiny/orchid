@@ -26,12 +26,15 @@ export interface ToolActivityGroupProps {
   subagents?: readonly SubagentTitleRecord[];
   /** When true, groups start expanded. */
   alwaysExpand?: boolean;
+  /** Owning session live command widgets resolve visibility against. */
+  sessionId?: string | null;
 }
 
 export function ToolActivityGroup({
   items,
   subagents = [],
   alwaysExpand = false,
+  sessionId = null,
 }: ToolActivityGroupProps) {
   const panelId = useId();
   const tools = useMemo(
@@ -132,6 +135,7 @@ export function ToolActivityGroup({
                     key={child.block.id}
                     block={child.block}
                     subagents={subagents}
+                    sessionId={sessionId}
                   />
                 );
               }

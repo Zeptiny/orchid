@@ -787,4 +787,40 @@ describe('lenient @@ markers', () => {
       '  from { opacity: 0; }',
     ]);
   });
+
+  it('rejects a git-style @@ -a,b +c,d @@ header with ParseError and lineNumber', () => {
+    const patch = [
+      '*** Begin Patch',
+      '*** Update File: file.txt',
+      '@@ -1,3 +1,3 @@',
+      '-old',
+      '+new',
+      '*** End Patch',
+    ].join('\n');
+    try {
+      parsePatch(patch);
+      expect.unreachable('should have thrown');
+    } catch (e) {
+      expect(e).toBeInstanceOf(ParseError);
+      const err = e as ParseError;
+      expect(err.message).toMatch(/git-style/);
+      expect(err.lineNumber).toBe(3);
+    }
+  });
+
+  it('accepts a valid @@ <symbol> context marker', () => {
+    const patch = [
+      '*** Begin Patch',
+      '*** Update File: file.txt',
+      '@@ mySymbol',
+      '-old',
+      '+new',
+      '*** End Patch',
+    ].join('\n');
+    const result = parsePatch(patch);
+    const hunk = result.hunks[0] as Extract<PatchHunk, { type: 'update' }>;
+    expect(hunk.chunks[0].changeContext).toBe('mySymbol');
+    expect(hunk.chunks[0].oldLines).toEqual(['old']);
+    expect(hunk.chunks[0].newLines).toEqual(['new']);
+  });
 });

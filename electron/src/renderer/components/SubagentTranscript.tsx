@@ -199,7 +199,7 @@ export function SubagentTranscript({ record, live = null, selectedId = null }: S
       <div className="orchid-chat-scroll min-h-0 min-w-0 w-full max-w-full flex-1 px-6 py-5" ref={scroll.containerRef}>
         {items.map((item) => {
           if (item.kind === 'tool') return <ToolCallBlock key={item.key} block={item.block} sessionId={sessionId} />;
-          if (item.kind === 'tool-group') return <ToolActivityGroup key={item.key} items={item.children} />;
+          if (item.kind === 'tool-group') return <ToolActivityGroup key={item.key} items={item.children} sessionId={sessionId} />;
           return <MessageWidget key={item.key} message={item.message} isStreaming={item.isStreaming} />;
         })}
         {record.error || record.status === 'interrupted' || record.status === 'failed' ? (

@@ -26,6 +26,7 @@ import { CollapsibleRegion } from '../ui/CollapsibleRegion';
 import { Spinner } from '../ui/Spinner';
 import { StatusBadge } from '../ui/StatusBadge';
 import { Button } from '../ui/Button';
+import { TextInput } from '../ui/TextInput';
 
 // ── Props ────────────────────────────────────────────────────────────────────
 
@@ -71,6 +72,7 @@ export function LiveCommandInline({
   const [inputValue, setInputValue] = useState('');
   const [inputHint, setInputHint] = useState<string | null>(null);
   const panelId = useId();
+  const hintId = useId();
 
   const isBackground = 'commandId' in target;
   const commandId = isBackground ? target.commandId : null;
@@ -206,12 +208,13 @@ export function LiveCommandInline({
                   className="orchid-live-command-input-row"
                   onSubmit={(event) => void handleSendInput(event)}
                 >
-                  <input
-                    type="text"
+                  <TextInput
+                    size="xs"
                     className="orchid-live-command-input"
                     value={inputValue}
                     placeholder="Send a line of input"
                     aria-label={`Send input to ${commandText || 'command'}`}
+                    aria-describedby={inputHint ? hintId : undefined}
                     onChange={(event) => setInputValue(event.target.value)}
                   />
                   <Button type="submit" size="xs" variant="primary">
@@ -234,7 +237,7 @@ export function LiveCommandInline({
             </div>
           )}
           {inputHint && (
-            <div className="orchid-live-command-hint">{inputHint}</div>
+            <div id={hintId} className="orchid-live-command-hint" role="status" aria-live="polite">{inputHint}</div>
           )}
         </div>
       </CollapsibleRegion>

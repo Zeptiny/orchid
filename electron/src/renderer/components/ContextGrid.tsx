@@ -148,7 +148,8 @@ function sumPersistedReasoning(messages: readonly Message[]): number {
   let total = 0;
   for (const message of messages) {
     if (message.hidden) continue;
-    total += message.usage?.reasoning_tokens ?? 0;
+    const value = message.usage?.reasoning_tokens;
+    if (typeof value === 'number' && value >= 0) total += value;
   }
   return total;
 }
@@ -176,9 +177,11 @@ function computeBreakdown(
     const context = usage.context;
     const persistedReasoning = sumPersistedReasoning(messages);
     const isPersisted = isPersistedUsageRef(messages, usage);
-    const providerDelta = isPersisted
-      ? 0
-      : (usage.reasoning_tokens ?? usage.context?.reasoning_tokens ?? 0);
+    const normalizeNonNegative = (value: number | undefined): number | undefined =>
+      typeof value === 'number' && value >= 0 ? value : undefined;
+    const usageReasoning = normalizeNonNegative(usage.reasoning_tokens);
+    const contextReasoning = normalizeNonNegative(usage.context?.reasoning_tokens);
+    const providerDelta = isPersisted ? 0 : (usageReasoning ?? contextReasoning ?? 0);
     const streamingTokens =
       streamingThinkingChars && streamingThinkingChars > 0
         ? Math.round(streamingThinkingChars / 4)
@@ -188,11 +191,15 @@ function computeBreakdown(
     const effectiveAssistantTokens = context.assistant_tokens + streamingDelta;
     const effectiveUsedTokens = context.used_tokens + streamingDelta;
     const windowReasoning = persistedReasoning + liveOrStreaming;
+    const hasPersistedReasoningData = messages.some((m) => {
+      const value = m.usage?.reasoning_tokens;
+      return typeof value === 'number' && value >= 0;
+    });
     const hasProviderReasoningData =
       persistedReasoning !== 0 ||
-      usage.reasoning_tokens !== undefined ||
-      usage.context?.reasoning_tokens !== undefined ||
-      messages.some((m) => m.usage?.reasoning_tokens !== undefined);
+      usageReasoning !== undefined ||
+      contextReasoning !== undefined ||
+      hasPersistedReasoningData;
     let assistant: { response: number; reasoning: number };
     if (windowReasoning > 0 || hasProviderReasoningData) {
       const reasoning = Math.min(

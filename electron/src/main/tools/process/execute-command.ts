@@ -413,16 +413,20 @@ function waitForExit(proc: ChildProcess, timeoutMs?: number): Promise<void> {
       if (done) return;
       done = true;
       if (timer !== undefined) clearTimeout(timer);
+      proc.removeListener('exit', onExit);
+      proc.removeListener('error', onError);
       resolve();
     };
+    const onExit = () => finish();
+    const onError = () => finish();
     if (timeoutMs !== undefined) {
       timer = setTimeout(finish, timeoutMs);
       if (typeof (timer as unknown as { unref?: () => void }).unref === 'function') {
         (timer as unknown as { unref: () => void }).unref();
       }
     }
-    proc.on('exit', finish);
-    proc.on('error', finish);
+    proc.once('exit', onExit);
+    proc.once('error', onError);
   });
 }
 

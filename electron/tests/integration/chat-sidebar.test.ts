@@ -90,9 +90,11 @@ beforeEach(() => {
   (window as unknown as Record<string, unknown>).orchid = mockOrchid;
 });
 
-afterEach(() => {
+afterEach(async () => {
   cleanup();
   vi.clearAllMocks();
+  const { __clearSnapshotCoalesceCacheForTest } = await import('../../src/renderer/hooks/useLiveCommandOutput');
+  __clearSnapshotCoalesceCacheForTest();
 });
 
 // ─── Chat Message Types ──────────────────────────────────────────────────────
@@ -459,6 +461,9 @@ describe('Sidebar Commands Section', () => {
     });
 
     fireEvent.click(screen.getByRole('button', { name: /^Commands/ }));
+    fireEvent.click(screen.getByRole('button', { name: /\$ npm run dev \(running\)/ }));
+    await flushSnapshots();
+    expect(document.body.textContent).toContain('out');
 
     expect(screen.getByRole('button', { name: /\$ npm run dev \(running\)/ })).toBeTruthy();
     expect(screen.getByRole('button', { name: /\$ pytest -x \(running\)/ })).toBeTruthy();

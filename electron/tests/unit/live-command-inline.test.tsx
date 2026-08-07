@@ -25,7 +25,7 @@ function installBgCmd(overrides: Partial<BgCommandSnapshotFound> = {}) {
     terminate: vi.fn().mockResolvedValue({ ok: true }),
     releaseInput: vi.fn().mockResolvedValue({ ok: true }),
   };
-  window.orchid = { bgCmd: api } as never;
+  vi.stubGlobal('orchid', { bgCmd: api });
   return api;
 }
 

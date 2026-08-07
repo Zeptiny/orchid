@@ -89,13 +89,7 @@ function verifyProjectWorkspace(senderId: number, projectDir: string): string {
   return expected;
 }
 
-function resolveRequestedProjectDir(projectDir: string): string {
-  const canonical = canonicalizeProjectDirectory(projectDir);
-  if (canonical == null) {
-    throw new Error('Cannot access project config without a bound project.');
-  }
-  return canonical;
-}
+
 
 // ── IPC registration ─────────────────────────────────────────────────────────
 
@@ -171,12 +165,12 @@ export function registerConfigIPC(): void {
     });
   });
 
-  ipcMain.handle(IPC_CHANNELS.CONFIG_READ_PROJECT, async (_event, projectDir: unknown) => {
+  ipcMain.handle(IPC_CHANNELS.CONFIG_READ_PROJECT, async (event, projectDir: unknown) => {
     const parsed = configReadProjectSchema.safeParse(projectDir);
     if (!parsed.success) {
       throw new Error('config:read_project requires a non-empty projectDir string');
     }
-    const verifiedProjectDir = resolveRequestedProjectDir(parsed.data);
+    const verifiedProjectDir = verifyProjectWorkspace(event.sender.id, parsed.data);
     const configPath = path.join(verifiedProjectDir, PROJECT_CONFIG_NAME);
     const raw = loadJsonSafe(configPath);
     return { projectDir: verifiedProjectDir, overrides: isPlainObject(raw) ? raw : {} };

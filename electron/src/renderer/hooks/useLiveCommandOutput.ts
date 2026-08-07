@@ -220,7 +220,7 @@ export function useLiveCommandOutput(
         ...targetPayload,
         lastN: MAX_LINES,
         includeTail: !!refreshOutputRef.current,
-        // Explicit owning session — never the window's active-session fallback.
+        // An explicit sessionId owns non-null sessions; omitting it for null sessions intentionally uses the window active-session fallback.
         ...(sessionId ? { sessionId } : {}),
       });
 

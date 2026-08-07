@@ -120,14 +120,14 @@ describe('background command replay gating', () => {
       agentScopeId: 'main',
     };
     const snapshot = vi.fn().mockResolvedValue(exited);
-    window.orchid = {
+    vi.stubGlobal('orchid', {
       bgCmd: {
         snapshot,
         sendInput: vi.fn().mockResolvedValue({ ok: true }),
         terminate: vi.fn().mockResolvedValue({ ok: true }),
         releaseInput: vi.fn().mockResolvedValue({ ok: true }),
       },
-    } as never;
+    });
 
     const canonical: CanonicalToolResult = {
       schemaVersion: 1,

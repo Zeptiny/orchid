@@ -223,8 +223,8 @@ describe('shared canonical tool-result renderer', () => {
     expect(shellSource).toContain('aria-controls={panelId}');
     expect(shellSource).toContain('id={panelId}');
     expect(shellSource).toContain('onClick={collapse}');
-    expect(shellSource).toContain('role="button"');
-    expect(shellSource).toContain('tabIndex={0}');
+    expect(shellSource).not.toContain('role="button"');
+    expect(shellSource).not.toContain('tabIndex={0}');
     expect(shellSource).toContain('title="Click to collapse"');
   });
 

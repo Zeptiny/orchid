@@ -148,7 +148,7 @@ describe('useLiveCommandOutput', () => {
     expect(result.current.isAvailable).toBe(true);
   });
 
-  it('does not freeze on createdAt when no persisted spawn time exists', async () => {
+  it('freezes when no persisted spawn time exists and the snapshot has a createdAt value', async () => {
     // Legacy facts without createdAt must not alias onto a new live process
     // that does have a createdAt — the widget freezes as unavailable so a
     // restarted integer commandId cannot show an unrelated tail (P1 #6).

@@ -197,14 +197,6 @@ export function ToolResultShell({
           className="orchid-tool-block-content min-w-0"
           aria-describedby={announcementId}
           onClick={collapse}
-          onKeyDown={(event) => {
-            if (event.key === 'Enter' || event.key === ' ') {
-              event.preventDefault();
-              collapse();
-            }
-          }}
-          role="button"
-          tabIndex={0}
           title="Click to collapse"
         >
           {body}

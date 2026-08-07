@@ -387,6 +387,7 @@ function renderStreamItem(
         items={item.children}
         subagents={subagents}
         alwaysExpand={alwaysExpandToolGroups}
+        sessionId={sessionId}
       />
     );
   }

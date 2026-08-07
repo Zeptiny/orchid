@@ -526,6 +526,7 @@
 
   .orchid-live-command-input {
     @apply min-w-0 flex-1 font-mono;
+
     appearance: none;
     min-height: 1.5rem;
     padding: 0 0.5rem;
@@ -552,12 +553,14 @@
 
   .orchid-live-command-hint {
     @apply border-t border-base-content/10 px-3 py-1;
+
     color: var(--color-error);
     font-size: 11px;
   }
 
   .orchid-live-command-owner {
     @apply shrink-0 rounded-sm border font-semibold uppercase tracking-wide;
+
     border-color: color-mix(in srgb, var(--color-warning) 45%, transparent);
     background: color-mix(in srgb, var(--color-warning) 12%, transparent);
     color: var(--color-warning);

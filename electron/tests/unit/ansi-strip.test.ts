@@ -37,4 +37,10 @@ describe('stripAnsi', () => {
     expect(stripAnsi('\x1b]0;title\x07')).toBe('');
     expect(stripAnsi('\x1b[2J\x1b[H\x1b[?25l')).toBe('');
   });
+
+  it('removes a truncated trailing escape while preserving visible text', () => {
+    expect(stripAnsi('hello\x1b[31')).toBe('hello\x1b[31');
+    expect(stripAnsi('hello\x1b')).toBe('hello\x1b');
+    expect(stripAnsi('\x1b[31mred\x1b')).toBe('red\x1b');
+  });
 });

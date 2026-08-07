@@ -333,22 +333,16 @@ describe('config:read_project', () => {
     await expect(callReadProject(null)).rejects.toThrow(/non-empty projectDir/);
   });
 
-  it('returns overrides even when the bound workspace is a different project', async () => {
+  it('rejects when the bound workspace is a different project', async () => {
     mocks.state.workspaceCwd = '/some/other/workspace';
 
-    await expect(callReadProject(projectDir)).resolves.toEqual({
-      projectDir,
-      overrides: {},
-    });
+    await expect(callReadProject(projectDir)).rejects.toThrow(/selected workspace|without a bound project/i);
   });
 
-  it('returns overrides even when no workspace is bound', async () => {
+  it('rejects when no workspace is bound', async () => {
     mocks.state.workspaceCwd = null;
 
-    await expect(callReadProject(projectDir)).resolves.toEqual({
-      projectDir,
-      overrides: {},
-    });
+    await expect(callReadProject(projectDir)).rejects.toThrow(/without a bound project/i);
   });
 });
 

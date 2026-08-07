@@ -716,7 +716,10 @@ describe('bgcmd:send_input', () => {
       interactive: true,
       description: 'echo bot',
     });
-    await sleep(300); // let the PTY shell start
+    await waitForCondition(() => {
+      const entry = store.get(procId);
+      return entry !== undefined && entry.interactive && entry.exitCode === null;
+    });
 
     const result = await invokeChannel<BgCommandSendInputResult>(
       IPC_CHANNELS.BG_CMD_SEND_INPUT,
@@ -974,7 +977,7 @@ describe('foreground registry abort/stop cleanup (#12)', () => {
     expect(post).toEqual({ found: false });
   });
 
-  it('chat:stop handler drops foreground entries (abort wiring via IPC)', async () => {
+  it('forceStopSession drops foreground live entries (registry abort seam)', async () => {
     // Seed an active stream so the stop handler has a session to act on, then
     // register a foreground entry that should be dropped when the handler runs.
     // The bg-command harness reuses the same sessionManager mock as chat.ts;

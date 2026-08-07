@@ -19,7 +19,7 @@ const timeRangeSchema = z.object({
 
 const analyticsParamsSchema = z.object({
   timeRange: timeRangeSchema,
-}).optional();
+}).strict().optional();
 
 const sessionsParamsSchema = z.object({
   limit: z.number().int().positive().max(10000).optional(),

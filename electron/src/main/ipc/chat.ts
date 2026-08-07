@@ -245,29 +245,14 @@ export function registerChatIPC(): void {
         createdAt: entry.createdAt,
       };
     }
-    if (includeTailEffective) {
-      const live = getForegroundLiveRegistry().snapshotForSession(toolCallId!, lines, sessionId);
-      if (!live) return { found: false };
-      return {
-        found: true,
-        tail: live.tail,
-        exitCode: live.exitCode,
-        running: live.running,
-        interactive: false,
-        owner: 'AGENT',
-        command: live.command,
-        // Foreground entries carry no separate description — reuse the command.
-        description: live.command,
-        agentScopeId: live.agentScopeId,
-        createdAt: live.createdAt,
-      };
-    }
-    // includeTail === false — return metadata without touching the buffer
     const liveEntry = getForegroundLiveRegistry().get(toolCallId!);
     if (!liveEntry || liveEntry.sessionId !== sessionId) return { found: false };
+    const tail = includeTailEffective
+      ? getForegroundLiveRegistry().snapshotForSession(toolCallId!, lines, sessionId)?.tail ?? ''
+      : '';
     return {
       found: true,
-      tail: '',
+      tail,
       exitCode: liveEntry.exitCode,
       running: liveEntry.exitCode === null,
       interactive: false,
