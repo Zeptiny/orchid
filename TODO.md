@@ -61,6 +61,7 @@ Internal backlog for Orchid. User-facing summary lives in the [README known limi
 - Investigate if its better to not create new chains with the queued messages
 - Chain snapshoting
 - Better retry / frozen agent handling / long ttft
+- Goal mode
 
 ## Native semantic code graph / AST tool improvements
 
