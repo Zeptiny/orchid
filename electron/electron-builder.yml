@@ -98,6 +98,7 @@ linux:
     - deb
   icon: build/icons
   category: Development
+  syncDesktopName: true
   artifactName: "${productName}-${version}-${arch}.${ext}"
 
 appImage:

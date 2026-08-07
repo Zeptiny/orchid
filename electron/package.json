@@ -9,6 +9,7 @@
   },
   "homepage": "https://github.com/Zeptiny/orchid",
   "main": "dist/main/index.js",
+  "desktopName": "com.orchid.app",
   "engines": {
     "node": ">=24.15.0 <25"
   },
