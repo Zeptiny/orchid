@@ -70,7 +70,7 @@ Reusable workflows guide multi-step work, including:
 - **MCP** — plug in Model Context Protocol servers (e.g. library docs via context7)
 
 ### Sessions & workspace
-Bind a project directory per session, keep history on disk (`~/.orchid/sessions/`), switch sessions, and track usage/cost attribution per connection.
+Bind a project directory per session, keep history on disk (`~/.orchid/sessions.db`, SQLite), switch sessions, and track usage/cost attribution per connection.
 
 ### Personalities & themes
 Change agent tone (default, zen, pirate, socrates, …) and pick a UI theme (dark default, solarized light, bluey, green terminal, Windows XP nostalgia).
@@ -97,7 +97,7 @@ There are no public installers yet. The supported way to try Orchid is to run it
 
 ### Requirements
 
-- **Node.js 24** (engines: `>=24 <25`)
+- **Node.js 24** (engines: `>=24.15.0 <25`)
 - An **LLM API key** (or compatible endpoint) — Orchid starts without a provider and only contacts models after you connect one
 - Optional: **Ollama** or any OpenAI-/Anthropic-compatible server if you prefer local or self-hosted models
 
@@ -161,7 +161,7 @@ Model identity is always `{ connectionId, modelId }` — two accounts for the sa
 | Command palette | `Cmd+K` / `Ctrl+K` |
 | Send message | `Enter` |
 | Cancel stream / close modal | `Escape` |
-| Toggle sidebar | `Ctrl+B` |
+| Toggle inspector | `Cmd+B` / `Ctrl+B` |
 
 Useful palette commands: `/new`, `/sessions`, `/model`, `/theme`, `/personality`, `/settings`, `/rag index`, `/ast index`.
 
@@ -187,11 +187,11 @@ Config lives in `~/.orchid/config.json` with optional project overrides in `.orc
 | Layer | Stack |
 |-------|--------|
 | Runtime | Electron 43, Node 24 |
-| UI | React 19, Tailwind CSS 4, DaisyUI 5 |
+| UI | React 19, Tailwind CSS 4, Orchid primitive engine |
 | Agent orchestration | XState 5 |
 | LLM | Vercel AI SDK 7 + multi-provider drivers |
 | Validation | Zod at IPC and tool boundaries |
-| Local data | SQLite (RAG/AST), JSON sessions under `~/.orchid/` |
+| Local data | SQLite (sessions, RAG/AST), JSON config under `~/.orchid/` |
 
 Deep developer map: [`AGENTS.md`](AGENTS.md). Domain vocabulary: [`CONCEPTS.md`](CONCEPTS.md).
 
