@@ -742,6 +742,22 @@ export function listSavedSessions(opts?: StorageOptions): SessionSummary[] {
   });
 }
 
+/**
+ * Look up session names for a set of session IDs.
+ * Returns a map of sessionId → name for all found sessions.
+ */
+export function getSessionNames(sessionIds: readonly string[], opts?: StorageOptions): Map<string, string> {
+  if (sessionIds.length === 0) return new Map();
+  const { dbPath } = resolveOptions(opts);
+  return withCorruptionRecovery(dbPath, (db) => {
+    const placeholders = sessionIds.map(() => '?').join(',');
+    const rows = db.prepare(
+      `SELECT id, name FROM sessions WHERE id IN (${placeholders})`,
+    ).all(...sessionIds) as Array<{ id: string; name: string }>;
+    return new Map(rows.map((r) => [r.id, r.name]));
+  });
+}
+
 // ---------------------------------------------------------------------------
 // updateChain — targeted turn-local write
 // ---------------------------------------------------------------------------

@@ -4,6 +4,8 @@ import type { Session } from '../../../shared/types/session';
 import type { ChatSendResult } from '../../../shared/types/ipc';
 import { IPC_CHANNELS } from '../../../shared/types/ipc';
 import { getSessionManager, resolveWindowWorkspace } from '../../session/singleton';
+import { inspectProjectDirectory } from '../../project/path';
+import { getProjectTrustState } from '../../project/trust';
 import { takeDraftReasoningOverride } from '../../session/draft-reasoning';
 import { takeDraftPermissionOverride } from '../../permissions/session-overrides';
 import { workingSetOpenOrFocus } from '../session-working-set';
@@ -71,6 +73,34 @@ export function ensureActiveSession(
         error:
           'No project folder selected. Choose a folder before sending a message.',
         kind: 'unbound_workspace',
+      },
+    };
+  }
+
+  // A session whose folder was deleted/moved externally must surface a
+  // re-bindable failure; the trust gate would instead report untrusted_project
+  // and open a dialog that can never grant an invalid directory.
+  if (inspectProjectDirectory(boundCwd).status !== 'valid') {
+    return {
+      ok: false,
+      result: {
+        status: 'error',
+        error:
+          'The project folder for this session no longer exists. Choose a folder before sending a message.',
+        kind: 'unbound_workspace',
+      },
+    };
+  }
+
+  // No project-supplied content may run until the project is trusted.
+  if (getProjectTrustState(boundCwd) !== 'trusted') {
+    return {
+      ok: false,
+      result: {
+        status: 'error',
+        error:
+          'This project folder is not trusted. Review and trust it before sending messages.',
+        kind: 'untrusted_project',
       },
     };
   }

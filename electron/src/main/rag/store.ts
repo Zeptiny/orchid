@@ -23,6 +23,7 @@ import type { RAGStoreStatus } from '../../shared/types/ipc-boundary';
 const PROJECT_RAG_DIR = '.orchid/rag';
 const RAG_INDEX_DB = 'index.db';
 const RAG_VECTORS_FILE = 'vectors.npy';
+const RAG_VECTOR_IDS_FILE = 'vector_ids.json';
 
 const DB_SCHEMA = `
 CREATE TABLE IF NOT EXISTS chunks (
@@ -63,6 +64,13 @@ export interface VectorState {
   chunkIds: number[];
   vectors: number[][];
   idToIndex: Map<number, number>;
+  /**
+   * False when vectors.npy does not line up with the chunks table (e.g. a
+   * previous index run was interrupted before the final vector flush).
+   * Callers must force a full rebuild instead of continuing incrementally,
+   * or vector rows would be scored against the wrong chunks.
+   */
+  consistent: boolean;
 }
 
 /** Lightweight chunk row used for search scoring (no content payload). */
@@ -230,6 +238,15 @@ function loadNpy(filePath: string): number[][] | null {
   return vectors;
 }
 
+/** True when two ordered ID lists contain identical values at every index. */
+function idListsEqual(a: number[], b: number[]): boolean {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    if (a[i] !== b[i]) return false;
+  }
+  return true;
+}
+
 // ---------------------------------------------------------------------------
 // RAGStore
 // ---------------------------------------------------------------------------
@@ -245,6 +262,8 @@ export class RAGStore {
   readonly ragDir: string;
   readonly dbPath: string;
   readonly vectorsFile: string;
+  /** Sidecar mapping vectors.npy rows to chunk IDs (alignment verification). */
+  readonly vectorIdsFile: string;
 
   /** Cached database connection (lazy-opened, reused). */
   private _db: SqliteDatabase | null = null;
@@ -260,6 +279,7 @@ export class RAGStore {
     this.ragDir = path.join(projectPath, PROJECT_RAG_DIR);
     this.dbPath = path.join(this.ragDir, RAG_INDEX_DB);
     this.vectorsFile = path.join(this.ragDir, RAG_VECTORS_FILE);
+    this.vectorIdsFile = path.join(this.ragDir, RAG_VECTOR_IDS_FILE);
   }
 
   /**
@@ -402,11 +422,13 @@ export class RAGStore {
   }
 
   private _clearVectorsFile(): void {
-    if (fs.existsSync(this.vectorsFile)) {
-      try {
-        fs.unlinkSync(this.vectorsFile);
-      } catch {
-        // ignore
+    for (const file of [this.vectorsFile, this.vectorIdsFile]) {
+      if (fs.existsSync(file)) {
+        try {
+          fs.unlinkSync(file);
+        } catch {
+          // ignore
+        }
       }
     }
   }
@@ -427,9 +449,6 @@ export class RAGStore {
 
     this._ensureDir();
     this._invalidateCache();
-
-    // Write vectors first — if DB commit fails, old vectors stay consistent
-    this._saveVectors(embeddings);
 
     const db = this._getDb();
     db.exec('DELETE FROM chunks');
@@ -464,6 +483,13 @@ export class RAGStore {
     db.prepare(
       'INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)',
     ).run('last_indexed', now);
+
+    // Write vectors after the DB commit, alongside the committed chunk IDs,
+    // so the persisted id sidecar keeps vector rows verifiable against the
+    // chunks table. If this write is interrupted, loadVectorState() detects
+    // the mismatch and the next index run forces a full rebuild.
+    const chunkIds = this._getOrderedChunkIds();
+    this._saveVectors(embeddings, chunkIds);
   }
 
   // -------------------------------------------------------------------------
@@ -524,7 +550,7 @@ export class RAGStore {
       freshDb
         .prepare('INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)')
         .run('last_indexed', new Date().toISOString());
-      this._saveVectors(embeddings);
+      this._saveVectors(embeddings, this._chunkIdsForFile(filePath));
       return;
     }
 
@@ -585,7 +611,7 @@ export class RAGStore {
       );
     }
 
-    this._saveVectors(newVectors);
+    this._saveVectors(newVectors, newIds);
   }
 
   // -------------------------------------------------------------------------
@@ -595,18 +621,42 @@ export class RAGStore {
   /**
    * Load chunk IDs + vectors, building a position index.
    * Used by the batch indexer to avoid repeated reads.
+   *
+   * When vectors.npy does not line up with the chunks table — a count
+   * mismatch or a disagreement with the persisted chunk-id sidecar, e.g.
+   * after an interrupted index run — returns an empty state with
+   * `consistent: false`. Callers must force a full rebuild instead of
+   * continuing incrementally, or vector rows would be permanently scored
+   * against the wrong chunks.
    */
   loadVectorState(): VectorState {
+    const empty = (consistent: boolean): VectorState => ({
+      chunkIds: [],
+      vectors: [],
+      idToIndex: new Map(),
+      consistent,
+    });
+
     const chunkIds = this._getOrderedChunkIds();
     const vectors = this._loadVectorsArray();
-    if (!vectors || vectors.length !== chunkIds.length) {
-      return { chunkIds: [], vectors: [], idToIndex: new Map() };
+
+    if (chunkIds.length === 0) {
+      return empty(!vectors || vectors.length === 0);
     }
+    if (!vectors || vectors.length !== chunkIds.length) {
+      return empty(false);
+    }
+
+    const persistedIds = this._loadVectorIds();
+    if (persistedIds && !idListsEqual(persistedIds, chunkIds)) {
+      return empty(false);
+    }
+
     const idToIndex = new Map<number, number>();
     for (let i = 0; i < chunkIds.length; i++) {
       idToIndex.set(chunkIds[i]!, i);
     }
-    return { chunkIds: [...chunkIds], vectors: [...vectors], idToIndex };
+    return { chunkIds: [...chunkIds], vectors: [...vectors], idToIndex, consistent: true };
   }
 
   /**
@@ -710,10 +760,10 @@ export class RAGStore {
   }
 
   /**
-   * Single write of the accumulated vectors to vectors.npy.
+   * Single write of the accumulated vectors to vectors.npy (+ id sidecar).
    */
   flushVectorState(state: VectorState): void {
-    this._saveVectors(state.vectors);
+    this._saveVectors(state.vectors, state.chunkIds);
   }
 
   // -------------------------------------------------------------------------
@@ -744,12 +794,11 @@ export class RAGStore {
     }
 
     const newIds = this._getOrderedChunkIds();
-    const aligned = newIds
-      .filter((cid) => idToVec.has(cid))
-      .map((cid) => idToVec.get(cid)!);
+    const alignedIds = newIds.filter((cid) => idToVec.has(cid));
+    const aligned = alignedIds.map((cid) => idToVec.get(cid)!);
 
     if (aligned.length > 0) {
-      this._saveVectors(aligned);
+      this._saveVectors(aligned, alignedIds);
     } else {
       this._clearVectorsFile();
     }
@@ -777,8 +826,9 @@ export class RAGStore {
     if (!data) return [];
 
     const { matrix, chunks } = data;
-    // Handle stale index (vector/chunk count mismatch)
-    const n = Math.min(matrix.rows, chunks.length);
+    // _loadSearchData() only returns aligned data (vector row i ↔ chunks[i]);
+    // a misaligned store returns null above instead of scoring wrong chunks.
+    const n = chunks.length;
     if (n === 0 || queryEmbedding.length === 0 || matrix.cols === 0) return [];
 
     // Dimension check
@@ -914,16 +964,56 @@ export class RAGStore {
   // Private helpers
   // -------------------------------------------------------------------------
 
-  private _saveVectors(embeddings: number[][]): void {
+  private _saveVectors(embeddings: number[][], chunkIds: number[]): void {
     this._ensureDir();
     if (embeddings.length === 0) {
       this._clearVectorsFile();
       this._invalidateCache();
       return;
     }
+    if (embeddings.length !== chunkIds.length) {
+      throw new Error(
+        `_saveVectors: embeddings (${embeddings.length}) and chunk ids (${chunkIds.length}) count mismatch`,
+      );
+    }
 
     saveNpy(this.vectorsFile, embeddings);
+    this._saveVectorIds(chunkIds);
     this._invalidateCache();
+  }
+
+  /**
+   * Atomically persist the ordered chunk IDs that vectors.npy rows correspond
+   * to. Makes row↔chunk alignment verifiable after crashes/interruptions
+   * instead of relying on positional coincidence.
+   */
+  private _saveVectorIds(chunkIds: number[]): void {
+    this._ensureDir();
+    const tmpPath = `${this.vectorIdsFile}.tmp.${process.pid}.${Date.now()}`;
+    fs.writeFileSync(tmpPath, JSON.stringify(chunkIds));
+    fs.renameSync(tmpPath, this.vectorIdsFile);
+  }
+
+  /**
+   * Load the persisted vector-row → chunk-ID mapping.
+   * Returns null when the sidecar is absent (legacy index written before the
+   * sidecar existed) and [] when it is corrupt — a corrupt sidecar cannot
+   * prove alignment, so it is treated as a mismatch.
+   */
+  private _loadVectorIds(): number[] | null {
+    if (!fs.existsSync(this.vectorIdsFile)) return null;
+    try {
+      const parsed: unknown = JSON.parse(fs.readFileSync(this.vectorIdsFile, 'utf-8'));
+      if (
+        Array.isArray(parsed) &&
+        parsed.every((v) => typeof v === 'number' && Number.isInteger(v))
+      ) {
+        return parsed as number[];
+      }
+      return [];
+    } catch {
+      return [];
+    }
   }
 
   private _loadVectorsArray(): number[][] | null {
@@ -988,9 +1078,35 @@ export class RAGStore {
     const chunks = this._getChunkMetas();
     if (chunks.length === 0) return null;
 
+    // Alignment guard: search pairs vector row i with chunks[i] (ordered by
+    // chunk_id). If the vector file and the chunks table disagree — e.g. an
+    // index run was interrupted before the final flush — scoring would match
+    // embeddings to the wrong chunks and silently return wrong files. Fail
+    // closed (empty results) instead; the next full index repairs the store.
+    if (!this._alignmentConsistent(matrix.rows, chunks)) {
+      return null;
+    }
+
     const entry: SearchCacheEntry = { matrix, chunks };
     this._setSearchCache(entry);
     return entry;
+  }
+
+  /**
+   * Verify vector rows align with DB chunks before scoring. Uses the persisted
+   * chunk-id sidecar when present (exact alignment), otherwise falls back to a
+   * row-count comparison for legacy indexes.
+   */
+  private _alignmentConsistent(vectorRows: number, chunks: ChunkMeta[]): boolean {
+    const persistedIds = this._loadVectorIds();
+    if (persistedIds) {
+      if (persistedIds.length !== chunks.length) return false;
+      for (let i = 0; i < chunks.length; i++) {
+        if (persistedIds[i] !== chunks[i]!.chunk_id) return false;
+      }
+      return true;
+    }
+    return vectorRows === chunks.length;
   }
 
   private _loadVectorsMatrix(): SearchMatrix | null {

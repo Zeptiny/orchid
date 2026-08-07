@@ -44,7 +44,8 @@ interface InputAreaProps {
   modelDetails?: Readonly<Record<string, ProviderModelOption>>;
   /** Staged Esc / cancel-button interrupt phase. */
   interruptState?: InterruptState;
-  onSend: (message: string) => Promise<void>;
+  /** Resolves once the send attempt settles; the value is caller-defined. */
+  onSend: (message: string) => Promise<unknown>;
   onCancel: () => Promise<void>;
   /** Called when the user submits a message while the agent is streaming. */
   onQueue?: (message: string) => void;

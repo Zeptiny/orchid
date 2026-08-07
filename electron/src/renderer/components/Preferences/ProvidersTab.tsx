@@ -3,6 +3,7 @@ import { useState } from 'react';
 import type { ProviderConnectionView } from '../../../shared/types/ipc';
 import { useProviders } from '../../hooks/useProviders';
 import { emitOrchidEvent } from '../../utils/events';
+import type { Notify } from '../../utils/notify';
 import {
   ConnectionWizard,
   type ProviderConnectionCompletion,
@@ -12,15 +13,19 @@ import { Alert } from '../ui/Alert';
 import { Button } from '../ui/Button';
 import { StateMessage } from '../ui/StateMessage';
 
-export function ProvidersTab() {
+export function ProvidersTab({ onNotify }: { readonly onNotify: Notify }) {
   const providers = useProviders();
   const [wizardOpen, setWizardOpen] = useState(false);
   const [connectionToEdit, setConnectionToEdit] = useState<ProviderConnectionView | null>(null);
-
   const completeConnection = async (result: ProviderConnectionCompletion) => {
     if (result.selection) {
       emitOrchidEvent('orchid:provider-selection-created', { selection: result.selection });
     }
+    onNotify(
+      result.message
+        ?? `${result.connection.health === 'ready' ? 'Ready' : 'Provider'} connection updated.`,
+      'info',
+    );
     await providers.refresh();
     setConnectionToEdit(null);
   };
@@ -76,6 +81,7 @@ export function ProvidersTab() {
         onEnable={providers.enableConnection}
         onDisconnect={providers.disconnectConnection}
         onDelete={providers.deleteConnection}
+        onNotify={onNotify}
         onRefreshStatus={providers.refreshStatus}
       />
 

@@ -177,7 +177,7 @@ describe('Architecture Properties (real modules)', () => {
 
       const wallStart = Date.now();
       const records = Array.from({ length: SUBAGENT_COUNT }, (_, i) =>
-        manager.spawn(`explorer-${i}`, `task-${i}`, testAgent),
+        manager.spawn(`explorer-${i}`, `task-${i}`, testAgent, { sessionId: `sess-parallel-${i}` }),
       );
 
       // Runner starts immediately for each spawn

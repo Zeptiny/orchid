@@ -13,7 +13,7 @@ import { HOME_CONFIG_DIR } from '../../config/loader';
 import { redactLogString } from '../../logging';
 import { providerProtocolSchema } from '../../../shared/types/provider';
 import { openSqliteDb, type SqliteDatabase } from '../../utils/sqlite';
-import { ACCOUNTING_SCHEMA_SQL, ACCOUNTING_SCHEMA_VERSION } from './schema';
+import { ACCOUNTING_SCHEMA_SQL, ACCOUNTING_SCHEMA_VERSION, applyAccountingSchemaMigrations } from './schema';
 import type { AttemptCostResolution } from './cost';
 
 export const PROVIDER_ACCOUNTING_DB_PATH = path.join(HOME_CONFIG_DIR, 'accounting.db');
@@ -30,6 +30,10 @@ export interface InsertPendingAttemptInput {
   readonly turnId: string | null;
   readonly sdkCallId: string | null;
   readonly snapshot: FrozenProviderRequestSnapshot;
+  readonly agentScope?: string | null;
+  readonly agentName?: string | null;
+  readonly agentTier?: string | null;
+  readonly agentType?: string | null;
 }
 
 export interface FinalizeAttemptInput {
@@ -72,6 +76,7 @@ const frozenProviderRequestSnapshotSchema = z.object({
   connectionId: z.string().uuid(),
   connectionName: z.string().min(1),
   modelId: z.string().min(1),
+  modelDisplayName: z.string().min(1).nullable().optional(),
   protocol: providerProtocolSchema,
   modelSource: z.enum(['catalog', 'connection']),
   catalogVersion: z.number().int().nonnegative().nullable(),
@@ -157,6 +162,10 @@ type AttemptRow = {
   currency: string | null;
   cost_amount: string | null;
   error: string | null;
+  agent_scope: string | null;
+  agent_name: string | null;
+  agent_tier: string | null;
+  agent_type: string | null;
 };
 
 function rowToRecord(row: AttemptRow): ProviderAttemptRecord {
@@ -179,6 +188,10 @@ function rowToRecord(row: AttemptRow): ProviderAttemptRecord {
     currency: row.currency,
     costAmount: row.cost_amount,
     error: row.error,
+    agentScope: row.agent_scope,
+    agentName: row.agent_name,
+    agentTier: row.agent_tier,
+    agentType: row.agent_type,
   };
 }
 
@@ -209,8 +222,9 @@ export class ProviderAccountingStore {
         attempt_id, session_id, chain_id, turn_id, sdk_call_id,
         provider_id, connection_id, model_id, protocol, snapshot_json,
         outcome, started_at, completed_at, usage_json, provider_evidence_json,
-        cost_state, cost_source, currency, cost_amount, error
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, NULL, NULL, '{}', 'unknown', 'unknown', NULL, NULL, NULL)
+        cost_state, cost_source, currency, cost_amount, error,
+        agent_scope, agent_name, agent_tier, agent_type
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, NULL, NULL, '{}', 'unknown', 'unknown', NULL, NULL, NULL, ?, ?, ?, ?)
     `).run(
       input.attemptId,
       input.sessionId,
@@ -223,6 +237,10 @@ export class ProviderAccountingStore {
       input.snapshot.protocol,
       json(input.snapshot),
       startedAt,
+      input.agentScope ?? null,
+      input.agentName ?? null,
+      input.agentTier ?? null,
+      input.agentType ?? null,
     );
   }
 
@@ -291,6 +309,10 @@ export class ProviderAccountingStore {
     return (rows as AttemptRow[]).map(rowToRecord);
   }
 
+  getDatabase(): SqliteDatabase {
+    return this.connection();
+  }
+
   getSessionTotals(sessionId: string): CostTotalsSummary {
     return this.totals('session_id', sessionId);
   }
@@ -344,6 +366,7 @@ export class ProviderAccountingStore {
       // Best effort on non-POSIX filesystems.
     }
     db.pragma('foreign_keys = ON');
+    applyAccountingSchemaMigrations(db);
     db.prepare('INSERT OR REPLACE INTO schema_meta (key, value) VALUES (?, ?)')
       .run('schema_version', String(ACCOUNTING_SCHEMA_VERSION));
     this.db = db;

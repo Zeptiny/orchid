@@ -96,11 +96,23 @@ export function turnMessagesFromAgent(agent: ActiveAgent): Message[] {
   return [...turnBase, ...agent.turnMessages];
 }
 
+/**
+ * Materialize the turn-local history including the uncommitted live tail,
+ * without mutating committed turn state. Used by checkpoint persistence and
+ * by mid-turn session naming.
+ */
+export function currentTurnSnapshot(
+  agent: ActiveAgent,
+  context: Pick<AgentContext, 'response' | 'thinking' | 'usage'> | undefined,
+): Message[] {
+  const snapshot = turnMessagesFromAgent(agent);
+  appendLiveTailMessages(snapshot, agent, context);
+  return snapshot;
+}
+
 /** Materialize the current live tail without mutating committed turn state. */
 function checkpointMessagesFromAgent(agent: ActiveAgent, context: AgentContext): Message[] {
-  const checkpoint = turnMessagesFromAgent(agent);
-  appendLiveTailMessages(checkpoint, agent, context);
-  return checkpoint;
+  return currentTurnSnapshot(agent, context);
 }
 
 const CHECKPOINT_DEBOUNCE_MS = 300;

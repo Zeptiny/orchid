@@ -51,6 +51,7 @@ const PROJECT_CONFIG_ALLOWED_KEYS = new Set([
   'llm_retry_max_delay',
   'max_tool_steps',
   'background_command_idle_timeout',
+  'session_title_max_wait_seconds',
   'approval_timeout',
   'subagent_wait_timeout',
   'permission_history_size',
@@ -87,6 +88,8 @@ function verifyProjectWorkspace(senderId: number, projectDir: string): string {
   }
   return expected;
 }
+
+
 
 // ── IPC registration ─────────────────────────────────────────────────────────
 

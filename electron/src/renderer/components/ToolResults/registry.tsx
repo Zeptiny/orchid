@@ -11,13 +11,17 @@ import { SearchToolResult } from './SearchToolResult';
 import { ApplyPatchToolResult } from './ApplyPatchToolResult';
 import { AskQuestionToolResult } from './AskQuestionToolResult';
 import { LiveCommandInline } from '../ToolWidgets/LiveCommandInline';
-import { StatusBadge } from '../ui/StatusBadge';
 
 export interface ToolResultRendererProps {
   canonical: CanonicalToolResult;
   toolName: string;
-  /** True only for a live in-flight call; replayed terminal results must not poll. */
-  isLive?: boolean;
+  /**
+   * Owning session live command widgets resolve visibility against. Widget
+   * liveness follows the process, not the tool call: replayed background
+   * results may poll until the first snapshot reports exited/unavailable,
+   * then stop (long-dead sessions cost one snapshot per widget).
+   */
+  sessionId?: string | null;
 }
 
 export type ToolResultRenderer = ComponentType<ToolResultRendererProps>;
@@ -44,44 +48,12 @@ const backgroundCommandValueSchema = z.object({
   description: z.string().optional(),
   background: z.literal(true),
   running: z.boolean(),
+  // Persisted spawn time (epoch ms) used to detect commandId reuse after an
+  // app restart; absent on facts written before the field existed.
+  createdAt: z.number().int().optional(),
 }).passthrough();
 
-const STATUS_TONE: Record<string, 'success' | 'error' | 'warning' | 'neutral'> = {
-  complete: 'success',
-  error: 'error',
-  cancelled: 'warning',
-  partial: 'neutral',
-  empty: 'neutral',
-};
-
-function TerminalBackgroundResult({
-  command,
-  status,
-}: {
-  command: z.infer<typeof backgroundCommandValueSchema>;
-  status: string;
-}) {
-  const tone = STATUS_TONE[status] ?? 'neutral';
-  return (
-    <div className="orchid-live-command">
-      <div className="orchid-live-command-title">
-        <span className="font-mono text-xs min-w-0 truncate">
-          $ {command.command}
-        </span>
-        <span className="inline-flex shrink-0 items-center gap-1.5">
-          <StatusBadge tone={tone} size="xs">{status}</StatusBadge>
-        </span>
-      </div>
-      {command.description && (
-        <div className="orchid-live-command-body">
-          <div className="text-xs text-base-content/60 px-2 py-1">{command.description}</div>
-        </div>
-      )}
-    </div>
-  );
-}
-
-const ExecuteCommandRenderer: ToolResultRenderer = ({ canonical, isLive }) => {
+const ExecuteCommandRenderer: ToolResultRenderer = ({ canonical, sessionId }) => {
   const outer = genericToolResultDataSchema.safeParse(canonical.data);
   if (!outer.success) {
     return <GenericToolResult canonical={canonical} />;
@@ -90,22 +62,31 @@ const ExecuteCommandRenderer: ToolResultRenderer = ({ canonical, isLive }) => {
   if (!bg.success) {
     return <GenericToolResult canonical={canonical} />;
   }
-  if (isLive) {
-    return (
+  // Liveness follows the process, not the tool call: a replayed background
+  // result still renders the live widget, which freezes once the first
+  // snapshot reports the command exited or unavailable. Stop propagation so
+  // the widget's own controls never collapse the enclosing tool shell.
+  return (
+    <div
+      onClick={(event) => event.stopPropagation()}
+      onKeyDown={(event) => event.stopPropagation()}
+    >
       <LiveCommandInline
-        commandId={bg.data.commandId}
+        target={{ commandId: bg.data.commandId }}
+        sessionId={sessionId ?? null}
         commandText={bg.data.command}
         description={bg.data.description}
+        expectedCreatedAt={bg.data.createdAt}
       />
-    );
-  }
-  return <TerminalBackgroundResult command={bg.data} status={canonical.status} />;
+    </div>
+  );
 };
 
 toolRenderers.set('execute_command', ExecuteCommandRenderer);
 toolRenderers.set('edit', FileChangeToolResult);
 toolRenderers.set('write', FileWriteToolResult);
-toolRenderers.set('read', FileContentToolResult);
+// `read` resolves by family: file-content → FileContentToolResult,
+// directory-entries → DirectoryToolResult (read on a directory).
 toolRenderers.set('read_directory', DirectoryToolResult);
 toolRenderers.set('glob', SearchToolResult);
 toolRenderers.set('grep', SearchToolResult);

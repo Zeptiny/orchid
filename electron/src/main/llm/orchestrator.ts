@@ -63,6 +63,7 @@ import { importESM } from '../utils/esm-import';
 import { buildSkillTool } from '../tools/skill/skill';
 import { getSkillsRegistry } from '../tools';
 import type { ToolExecutionResult } from '../../shared/types/tool-result';
+import { getContextSnapshotStore } from '../providers/accounting/context-snapshot-store';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -127,10 +128,12 @@ function buildStepUsage(
     completion_tokens: outputTokens,
     total_tokens: usage.totalTokens ?? inputTokens + outputTokens,
     cached_tokens: usage.inputTokenDetails?.cacheReadTokens ?? 0,
+    reasoning_tokens: usage.outputTokenDetails?.reasoningTokens ?? 0,
     context: buildContextSnapshot({
       messages,
       inputTokens,
       outputTokens,
+      reasoningTokens: usage.outputTokenDetails?.reasoningTokens,
     }),
   };
 }
@@ -228,6 +231,8 @@ export async function* streamChat(params: StreamChatParams): AsyncGenerator<Stre
       projectRuntime,
       abortSignal,
       triggeringMessage,
+      chainId: accounting?.chainId ?? null,
+      turnId: accounting?.turnId ?? null,
     }, {
       skills: projectRuntime
         ? new Map(projectRuntime.skills)
@@ -253,11 +258,38 @@ export async function* streamChat(params: StreamChatParams): AsyncGenerator<Stre
       mcpManager,
       attempt,
       eagerBridge,
-      buildUsage: (usage, stepMessages) => buildStepUsage(
-        usage,
-        stepMessages,
-        buildUsageContext,
-      ),
+      buildUsage: (usage, stepMessages) => {
+        const stepUsage = buildStepUsage(
+          usage,
+          stepMessages,
+          buildUsageContext,
+        );
+        // Context snapshots are session-scoped: without a session id there is
+        // nowhere to attribute the row (the Analytics Sessions tab groups by
+        // session_id), so sessionless streams insert nothing.
+        if (stepUsage.context && sessionId) {
+          try {
+            getContextSnapshotStore().insert({
+              sessionId,
+              chainId: accounting?.chainId ?? null,
+              turnId: accounting?.turnId ?? null,
+              providerAttemptId: accounting?.attemptIdHolder?.value ?? null,
+              agentScope: agentScopeId ?? null,
+              inputTokens: stepUsage.context.input_tokens,
+              outputTokens: stepUsage.context.output_tokens,
+              usedTokens: stepUsage.context.used_tokens,
+              systemTokens: stepUsage.context.system_tokens,
+              toolsTokens: stepUsage.context.tools_tokens,
+              toolUseTokens: stepUsage.context.tool_use_tokens,
+              userTokens: stepUsage.context.user_tokens,
+              assistantTokens: stepUsage.context.assistant_tokens,
+            });
+          } catch (error) {
+            console.warn('[orchestrator] Context snapshot insert failed', { error });
+          }
+        }
+        return stepUsage;
+      },
     });
 
     // Stop at the step-count limit OR when an early stop is requested (e.g. a

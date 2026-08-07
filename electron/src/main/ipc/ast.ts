@@ -15,6 +15,7 @@ import {
 import { ASTStore } from '../ast/store';
 import { withDisposable } from '../utils/with-disposable';
 import { resolveBoundProjectPath } from './session';
+import { getProjectTrustState } from '../project/trust';
 import { astIndexSchema } from './payload-schemas';
 
 function broadcastProgress(projectPath: string, progress: ASTIndexProgress): void {
@@ -31,7 +32,7 @@ export function registerASTIPC(): void {
   // ast:status — return AST store status
   ipcMain.handle(IPC_CHANNELS.AST_STATUS, async (event) => {
     const projectPath = resolveBoundProjectPath(String(event.sender.id));
-    if (!projectPath) {
+    if (projectPath == null || getProjectTrustState(projectPath) !== 'trusted') {
       return {
         totalFiles: 0,
         totalSymbols: 0,
@@ -69,6 +70,18 @@ export function registerASTIPC(): void {
         filesDeleted: 0,
         symbolsExtracted: 0,
         errors: ['No project folder selected'],
+        durationSeconds: 0,
+      };
+    }
+
+    if (getProjectTrustState(projectPath) !== 'trusted') {
+      return {
+        filesScanned: 0,
+        filesIndexed: 0,
+        filesSkipped: 0,
+        filesDeleted: 0,
+        symbolsExtracted: 0,
+        errors: ['Project folder is not trusted'],
         durationSeconds: 0,
       };
     }

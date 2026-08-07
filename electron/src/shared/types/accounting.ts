@@ -56,6 +56,8 @@ export interface FrozenProviderRequestSnapshot {
   readonly connectionId: string;
   readonly connectionName: string;
   readonly modelId: string;
+  /** Absent on ledger rows written before display-name capture existed. */
+  readonly modelDisplayName?: string | null;
   readonly protocol: string;
   readonly modelSource: 'catalog' | 'connection';
   readonly catalogVersion: number | null;
@@ -83,6 +85,10 @@ export interface ProviderAttemptRecord {
   readonly currency: string | null;
   readonly costAmount: DecimalText | null;
   readonly error: string | null;
+  readonly agentScope: string | null;
+  readonly agentName: string | null;
+  readonly agentTier: string | null;
+  readonly agentType: string | null;
 }
 
 /** Per-currency known cost sum (unknown costs are not included here). */
@@ -99,4 +105,72 @@ export interface KnownCostTotals {
 export interface CostTotalsSummary {
   readonly currencies: readonly KnownCostTotals[];
   readonly unknownCount: number;
+}
+
+// ── Tool attempt telemetry ──────────────────────────────────────────────────
+
+export type ToolAttemptOutcome = 'pending' | 'complete' | 'partial' | 'empty' | 'error' | 'cancelled';
+export type ToolSource = 'builtin' | 'mcp';
+
+export interface ToolAttemptRecord {
+  readonly toolAttemptId: string;
+  readonly sessionId: string;
+  readonly chainId: string | null;
+  readonly turnId: string | null;
+  readonly providerAttemptId: string | null;
+  readonly toolCallId: string;
+  readonly toolName: string;
+  readonly toolSource: ToolSource;
+  readonly mcpServerName: string | null;
+  readonly toolFamily: string;
+  readonly startedAt: string;
+  readonly completedAt: string | null;
+  readonly outcome: ToolAttemptOutcome;
+  readonly resultSizeBytes: number | null;
+  readonly offloaded: boolean;
+  readonly timeoutSeconds: number | null;
+  readonly timedOut: boolean;
+  readonly agentScope: string | null;
+  readonly error: string | null;
+}
+
+// ── Context snapshot telemetry ───────────────────────────────────────────────
+
+export interface ContextSnapshotRecord {
+  readonly snapshotId: string;
+  readonly sessionId: string;
+  readonly chainId: string | null;
+  readonly turnId: string | null;
+  readonly providerAttemptId: string | null;
+  /** Subagent scope id; null for the main agent. */
+  readonly agentScope: string | null;
+  readonly capturedAt: string;
+  readonly inputTokens: number;
+  readonly outputTokens: number;
+  readonly usedTokens: number;
+  readonly systemTokens: number;
+  readonly toolsTokens: number;
+  readonly toolUseTokens: number;
+  readonly userTokens: number;
+  readonly assistantTokens: number;
+}
+
+// ── Subagent attribution telemetry ──────────────────────────────────────────
+
+export type SubagentAttributionStatus = 'running' | 'completed' | 'failed' | 'interrupted';
+
+export interface SubagentAttributionRecord {
+  readonly attributionId: string;
+  readonly subagentId: string;
+  readonly sessionId: string;
+  readonly chainId: string;
+  readonly parentChainId: string | null;
+  readonly agentName: string;
+  readonly agentType: string;
+  readonly agentTier: string;
+  readonly modelId: string;
+  readonly connectionId: string;
+  readonly startedAt: string;
+  readonly completedAt: string | null;
+  readonly status: SubagentAttributionStatus;
 }

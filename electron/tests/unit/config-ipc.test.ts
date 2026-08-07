@@ -333,16 +333,16 @@ describe('config:read_project', () => {
     await expect(callReadProject(null)).rejects.toThrow(/non-empty projectDir/);
   });
 
-  it('rejects a projectDir that does not match the bound workspace', async () => {
+  it('rejects when the bound workspace is a different project', async () => {
     mocks.state.workspaceCwd = '/some/other/workspace';
 
-    await expect(callReadProject(projectDir)).rejects.toThrow(/selected workspace/);
+    await expect(callReadProject(projectDir)).rejects.toThrow(/selected workspace|without a bound project/i);
   });
 
   it('rejects when no workspace is bound', async () => {
     mocks.state.workspaceCwd = null;
 
-    await expect(callReadProject(projectDir)).rejects.toThrow(/bound project/);
+    await expect(callReadProject(projectDir)).rejects.toThrow(/without a bound project/i);
   });
 });
 

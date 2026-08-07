@@ -53,6 +53,7 @@ describe('usage helpers', () => {
       completion_tokens: 5,
       total_tokens: 20,
       cached_tokens: 5,
+      reasoning_tokens: 0,
     });
   });
 
@@ -82,6 +83,7 @@ describe('usage helpers', () => {
       completion_tokens: 5,
       total_tokens: 35,
       cached_tokens: 5,
+      reasoning_tokens: 0,
       context,
     });
   });
@@ -119,12 +121,14 @@ describe('usage helpers', () => {
       completion_tokens: 15,
       total_tokens: 135,
       cached_tokens: 50,
+      reasoning_tokens: 0,
     });
     expect(map.get(-1)).toEqual({
       prompt_tokens: 7,
       completion_tokens: 1,
       total_tokens: 8,
       cached_tokens: 0,
+      reasoning_tokens: 0,
     });
   });
 
@@ -164,6 +168,7 @@ describe('usage helpers', () => {
       completion_tokens: 0,
       total_tokens: 3,
       cached_tokens: 0,
+      reasoning_tokens: 0,
     });
   });
 
@@ -211,6 +216,7 @@ describe('usage helpers', () => {
       completion_tokens: 5,
       total_tokens: 35,
       cached_tokens: 5,
+      reasoning_tokens: 0,
       context: secondContext,
     });
   });
@@ -278,6 +284,7 @@ describe('usage helpers', () => {
       completion_tokens: 100,
       total_tokens: 700,
       cached_tokens: 200,
+      reasoning_tokens: 0,
     });
   });
 });

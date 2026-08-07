@@ -85,6 +85,13 @@ vi.mock('../../src/main/providers/accounting/store', () => ({
   getProviderAccountingStore: () => mocks.accountingStore,
 }));
 
+vi.mock('../../src/main/providers/accounting/subagent-attribution-store', () => ({
+  getSubagentAttributionStore: () => ({
+    insert: vi.fn(),
+    finalize: vi.fn(),
+  }),
+}));
+
 vi.mock('../../src/main/llm/orchestrator', () => ({
   streamChat: mocks.streamChat,
 }));

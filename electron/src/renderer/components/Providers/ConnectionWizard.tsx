@@ -45,6 +45,7 @@ import {
 export interface ProviderConnectionCompletion {
   readonly connection: ProviderConnectionView;
   readonly selection: ModelSelection | null;
+  readonly message: string | null;
 }
 
 export interface ConnectionWizardProps {
@@ -298,6 +299,7 @@ export function ConnectionWizard({
         authMethod,
         modelIds,
         customModels,
+        ...(Object.keys(reasoningConfig).length > 0 ? { reasoningConfig } : {}),
         ...(supportsCustomEndpoint ? { endpoint: endpoint.trim(), allowInsecureHttp } : {}),
         ...(authMethod === 'environment'
           ? { environmentVariable: environmentVariable.trim() }
@@ -339,6 +341,7 @@ export function ConnectionWizard({
       selection: selectionModelId
         ? { connectionId: result.connection.id, modelId: selectionModelId }
         : null,
+      message: result.message,
     });
     close(true);
     return true;
@@ -346,7 +349,7 @@ export function ConnectionWizard({
 
   const finishExistingUpdate = async (result: ProviderMutationResult): Promise<void> => {
     setPendingConnection(result.connection);
-    await onComplete?.({ connection: result.connection, selection: null });
+    await onComplete?.({ connection: result.connection, selection: null, message: result.message });
     close(true);
   };
 

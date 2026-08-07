@@ -9,6 +9,7 @@ Internal backlog for Orchid. User-facing summary lives in the [README known limi
 - RAG onnxruntime may not be being shipped correctly
 - Interface may prevent some changes while streaming (Such as model and reasoning level) but the command pallete still allows to execute
 - Interrupted subagents are being marked as complete - possibly after starting a new chain it is not preserved? - but only on some places (subagent view is correct, main agent context and main chat/session UI appears to not be)
+- replace_symbol can left trailing remnants
 
 ## Agent quality
 
@@ -45,22 +46,22 @@ Internal backlog for Orchid. User-facing summary lives in the [README known limi
 - **P0: Realpath-based path sandboxing for all filesystem tools** — `resolveToolPath` is lexical-only; symlinks inside the project can escape the working directory. `apply_patch` has a lexical containment check but it is bypassable via directory symlinks. `write` / `edit` have no containment at all. Reuse `assertPathInScopeRoot` from `defs/paths.ts` (realpath root + parent + leaf). Apply uniformly to all mutating filesystem tools. (code review 2026-07-19, P0)
 - **P1: `apply_patch` sync matching can block the event loop** — `seekSequence` is O(n×m×4) synchronous. Large file + non-matching pattern blocks the main process indefinitely; `Promise.race` timeout cannot fire. Add a line-count guard in `applyChunksToContent` and `.max()` on the patch Zod schema. (code review 2026-07-19, P1)
 - **P1: `apply_patch` agent projector emits redundant full diffs** — full `<old_string>` / `<new_string>` per file can exceed the 20KB offload threshold, stripping per-file error info the agent needs. Make the projector compact: per-file status + errors only; omit diffs (UI renderer keeps them). (code review 2026-07-19, P1)
-- Tools should start executing as soon as their generation is complete, even if the model is still generating output for other tool calls
 - RAG post-write callback + automatic reindex when changes are detected (AST freshness is covered by the native semantic code graph workstream below; also support reindex via commands / manual triggers that the post-write path does not cover)
 - Remaining work from `docs/code-review-reports/2026-07-15-electron-simplification-review.md`
 - Verify remote embedding models work correctly
-- Subagent viewing / live output polish
 - Do not re-parse markdown on every stream update
 - Concurrency control for file locking
 - LSP integration
 - SSH / remote connection support
 - Session compaction / compression (summarize or drop older turns so long sessions stay within context limits)
 - Analytics dashboard
+  - Energy metrics for Neuralwatt/Lilac providers (kWh consumed/charged, pricing multiplier, account quotas) — deferred from analytics page initial scope (R17). Data already exists in `usage_json` on `provider_attempts`; needs a dedicated UI section when energy-attributed attempts exist.
 - Allow to update the status of multiple tasks in one tool call
   - Also creating in one tool call
 - Investigate if its better to not create new chains with the queued messages
 - Chain snapshoting
 - Better retry / frozen agent handling / long ttft
+- Goal mode
 
 ## Native semantic code graph / AST tool improvements
 
@@ -165,7 +166,3 @@ Internal backlog for Orchid. User-facing summary lives in the [README known limi
 - Adding an MCP server currently allows command and URL at the same time
   - Show only one transport at a time, selected by toggle
   - No way to set an auth token yet
-
-## Considerations
-
-- Should the `read` tool work on directories as well?

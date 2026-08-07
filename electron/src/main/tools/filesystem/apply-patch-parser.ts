@@ -75,6 +75,50 @@ function stripHeredoc(lines: string[]): string[] {
   return lines;
 }
 
+function stripCodeFence(lines: string[]): string[] {
+  if (lines.length < 2) return lines;
+
+  const first = lines[0].trim();
+  const last = lines[lines.length - 1].trim();
+
+  if (first.startsWith('```') && last.startsWith('```')) {
+    return lines.slice(1, lines.length - 1);
+  }
+
+  return lines;
+}
+
+const FILE_OPERATION_PREFIXES = [ADD_FILE_MARKER, DELETE_FILE_MARKER, UPDATE_FILE_MARKER];
+
+function hasFileOperationHeader(lines: string[]): boolean {
+  return lines.some((line) => {
+    const trimmed = line.trimStart();
+    return FILE_OPERATION_PREFIXES.some((prefix) => trimmed.startsWith(prefix));
+  });
+}
+
+/**
+ * Models sometimes drop the envelope markers (most commonly the opening
+ * `*** Begin Patch`). When the body clearly contains at least one file
+ * operation header, synthesize any missing boundary marker instead of
+ * rejecting the whole patch. Without a file operation header the input is
+ * left untouched so genuinely malformed input still reports the boundary
+ * error.
+ */
+function repairEnvelope(lines: string[]): string[] {
+  if (lines.length === 0) return lines;
+  if (!hasFileOperationHeader(lines)) return lines;
+
+  let repaired = lines;
+  if (repaired[0].trim() !== BEGIN_PATCH_MARKER) {
+    repaired = [BEGIN_PATCH_MARKER, ...repaired];
+  }
+  if (repaired[repaired.length - 1].trim() !== END_PATCH_MARKER) {
+    repaired = [...repaired, END_PATCH_MARKER];
+  }
+  return repaired;
+}
+
 // ── Boundary validation ────────────────────────────────────────────────────
 
 function validateBoundaries(lines: string[]): void {
@@ -102,6 +146,43 @@ function ensureChunk(chunks: UpdateFileChunk[]): UpdateFileChunk {
   return chunks[chunks.length - 1];
 }
 
+interface ChangeContextMarker {
+  /** null for a bare `@@`; otherwise the hint text after the marker. */
+  hint: string | null;
+}
+
+/**
+ * Lenient `@@` change-context detection. Hunk content lines must always start
+ * with ' ', '+', or '-', so a line starting with `@@` at column 0 is a
+ * context marker. This tolerates the common model slip of `@@name` (missing
+ * space after the marker). Leading whitespace is NOT trimmed: a line with any
+ * leading space is a content line, which keeps context lines whose content
+ * starts with `@@` (e.g. ` @@keyframes`) unambiguous. Misreading a content
+ * line as a chunk boundary would silently corrupt output, so we prefer that
+ * an indented `@@` header fail loudly instead.
+ */
+function isGitUnifiedHeader(hint: string): boolean {
+  return /^-\d+(?:,\d+)?\s+\+\d+(?:,\d+)?\s*@@/.test(hint);
+}
+
+function matchChangeContextMarker(
+  line: string,
+  lineNumber?: number,
+): ChangeContextMarker | null {
+  if (line === '' || line.startsWith(' ') || line.startsWith('+') || line.startsWith('-')) {
+    return null;
+  }
+  if (!line.startsWith('@@')) return null;
+  const hint = line.slice(2).trim();
+  if (hint.length > 0 && isGitUnifiedHeader(hint)) {
+    throw new ParseError(
+      `Invalid hunk header '${line}': git-style "@@ -a,b +c,d @@" is not supported. Use "@@" or "@@ <symbol>" with 3 verbatim context lines.`,
+      lineNumber,
+    );
+  }
+  return { hint: hint.length > 0 ? hint : null };
+}
+
 // ── Parser ─────────────────────────────────────────────────────────────────
 
 type ParserMode = 'started' | 'add' | 'delete' | 'update';
@@ -114,6 +195,8 @@ interface UpdateState {
 export function parsePatch(input: string): ParseResult {
   let lines = input.trim().split('\n').map((l) => l.replace(/\r$/, ''));
   lines = stripHeredoc(lines);
+  lines = stripCodeFence(lines);
+  lines = repairEnvelope(lines);
   validateBoundaries(lines);
 
   const patch = lines.join('\n');
@@ -214,13 +297,11 @@ export function parsePatch(input: string): ParseResult {
       }
 
       const lastChunk = hunk.chunks.length > 0 ? hunk.chunks[hunk.chunks.length - 1] : null;
+      const contextMarker = matchChangeContextMarker(updateLine, lineNum);
 
       if (lastChunk && lastChunk.isEndOfFile) {
         if (updateLine === '') continue;
-        if (
-          updateLine !== EMPTY_CHANGE_CONTEXT_MARKER &&
-          !updateLine.startsWith(CHANGE_CONTEXT_MARKER)
-        ) {
+        if (!contextMarker) {
           throw new ParseError(
             `Expected update hunk to start with a @@ context marker, got: '${line}'`,
             lineNum,
@@ -228,17 +309,22 @@ export function parsePatch(input: string): ParseResult {
         }
       }
 
-      if (updateLine === EMPTY_CHANGE_CONTEXT_MARKER) {
-        if (lastChunk && lastChunk.oldLines.length === 0 && lastChunk.newLines.length === 0) {
-          lastChunk.changeContext = null;
-        } else {
-          hunk.chunks.push(newChunk(null));
+      if (contextMarker) {
+        if (contextMarker.hint === null) {
+          // Bare `@@`: start a new chunk unless the current one has no lines
+          // yet. A hint-only chunk keeps its hint — a bare `@@` following a
+          // stacked `@@ hint` must not wipe the disambiguation context.
+          if (
+            !lastChunk ||
+            lastChunk.oldLines.length > 0 ||
+            lastChunk.newLines.length > 0
+          ) {
+            hunk.chunks.push(newChunk(null));
+          }
+          continue;
         }
-        continue;
-      }
 
-      if (updateLine.startsWith(CHANGE_CONTEXT_MARKER)) {
-        const ctx = updateLine.slice(CHANGE_CONTEXT_MARKER.length);
+        const ctx = contextMarker.hint;
         if (lastChunk && lastChunk.oldLines.length === 0 && lastChunk.newLines.length === 0) {
           if (lastChunk.changeContext !== null) {
             hunk.chunks.push(newChunk(ctx));

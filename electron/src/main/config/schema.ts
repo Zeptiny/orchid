@@ -180,6 +180,13 @@ export const configSchema = z
     llm_stream_retries: z.number().int().nonnegative().default(3),
     background_command_idle_timeout: z.number().positive().default(900.0),
     /**
+     * Max seconds to wait after a turn starts before auto-naming a
+     * default-named session from the current (possibly still in-flight)
+     * conversation history. 0 disables the deadline entirely; naming then
+     * only happens when a turn completes or is interrupted.
+     */
+    session_title_max_wait_seconds: z.number().min(0).default(15),
+    /**
      * Max multi-step tool-loop iterations per stream (AI SDK stopWhen).
      */
     max_tool_steps: z.number().int().positive().default(100),

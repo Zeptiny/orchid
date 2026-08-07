@@ -85,9 +85,12 @@ export class ToolRegistry {
   getToolExecutionResultSchema(toolName: string) {
     const definition = this.tools.get(toolName)?.definition;
     if (!definition) return undefined;
+    const families = definition.additionalResultFamilies?.length
+      ? [definition.resultFamily, ...definition.additionalResultFamilies]
+      : definition.resultFamily;
     return createToolExecutionResultSchema(
       definition.outputDataSchema,
-      definition.resultFamily,
+      families,
     );
   }
 

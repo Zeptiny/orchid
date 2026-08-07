@@ -1,0 +1,397 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Ideation: Analytics Page</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #0d1117;
+      --surface: #151b24;
+      --surface-2: #1b2430;
+      --border: #2b3747;
+      --text: #e8eef7;
+      --muted: #a5b2c3;
+      --accent: #82d7c6;
+      --accent-soft: #153b38;
+      --blue: #8bb8ff;
+      --blue-soft: #182b47;
+      --warn: #f0c36a;
+      --warn-soft: #392f1b;
+      --danger: #ff9999;
+      --danger-soft: #3c2226;
+      --good: #96df9f;
+      --good-soft: #1d3826;
+      --shadow: 0 18px 46px rgba(0,0,0,.28);
+    }
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      font-size: 15px;
+      line-height: 1.62;
+    }
+    a { color: var(--accent); }
+    code { font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace; font-size: .9em; }
+    .page { width: min(960px, calc(100% - 32px)); margin: 0 auto; padding: 48px 0 64px; }
+    header.hero {
+      padding: 34px;
+      border: 1px solid var(--border);
+      border-radius: 20px;
+      background: var(--surface);
+      box-shadow: var(--shadow);
+    }
+    .eyebrow { margin: 0 0 8px; color: var(--accent); font-size: 12px; font-weight: 750; letter-spacing: .12em; text-transform: uppercase; }
+    h1 { margin: 0; font-size: clamp(32px, 5vw, 52px); line-height: 1.08; letter-spacing: -.035em; }
+    .lede { max-width: 72ch; margin: 18px 0 0; color: var(--muted); font-size: 17px; }
+    .metadata, .stats { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 22px; }
+    .pill { padding: 6px 10px; border: 1px solid var(--border); border-radius: 999px; background: var(--surface-2); color: var(--muted); font-size: 12px; }
+    .stats { display: grid; grid-template-columns: repeat(4, 1fr); }
+    .stat { padding: 16px; border-radius: 14px; background: var(--blue-soft); color: #dceaff; }
+    .stat b { display: block; font-size: 24px; line-height: 1.1; }
+    .stat span { display: block; margin-top: 5px; font-size: 12px; }
+    nav { margin: 22px 0 0; padding: 14px 18px; border: 1px solid var(--border); border-radius: 14px; background: var(--surface); }
+    nav ul, .jump-list { display: flex; flex-wrap: wrap; gap: 8px 16px; margin: 0; padding: 0; list-style: none; }
+    nav a, .jump-list a { text-decoration: none; font-size: 13px; font-weight: 650; }
+    section { margin-top: 42px; }
+    h2 { margin: 0 0 16px; font-size: 24px; letter-spacing: -.018em; }
+    h3 { margin: 0; font-size: 20px; letter-spacing: -.014em; }
+    p { max-width: 75ch; }
+    .grounding-grid, .axis-grid { display: grid; gap: 12px; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .grounding-card, .axis, .idea, .callout { border: 1px solid var(--border); border-radius: 16px; background: var(--surface); }
+    .grounding-card { padding: 18px; }
+    .grounding-card h3 { font-size: 15px; }
+    .grounding-card p { margin: 8px 0 0; color: var(--muted); font-size: 13px; }
+    .axis { padding: 14px 16px; color: var(--muted); }
+    .axis b { display: block; color: var(--text); }
+    .jump-list { margin: 0 0 18px; padding: 16px; border-radius: 14px; background: var(--accent-soft); }
+    .idea { margin-top: 18px; padding: 24px; scroll-margin-top: 20px; }
+    .idea-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; }
+    .rank { display: inline-flex; align-items: center; justify-content: center; width: 34px; height: 34px; margin-right: 10px; border-radius: 10px; background: var(--accent-soft); color: var(--accent); font-size: 14px; font-weight: 800; vertical-align: 2px; }
+    .idea-metrics { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 7px; }
+    .metric { padding: 5px 9px; border-radius: 999px; background: var(--surface-2); color: var(--muted); font-size: 11px; white-space: nowrap; }
+    .idea > p { margin: 16px 0; }
+    dl { display: grid; grid-template-columns: 110px 1fr; gap: 10px 16px; margin: 18px 0 0; }
+    dt { color: var(--muted); font-size: 11px; font-weight: 750; letter-spacing: .08em; text-transform: uppercase; }
+    dd { margin: 0; }
+    .diagram { margin: 20px 0 2px; padding: 14px; border: 1px solid var(--border); border-radius: 14px; background: #101720; overflow-x: auto; }
+    svg { display: block; width: 100%; min-width: 650px; height: auto; }
+    .callout { margin-top: 18px; padding: 18px; background: var(--warn-soft); color: #f7e6bd; }
+    table { width: 100%; border-collapse: collapse; border: 1px solid var(--border); background: var(--surface); font-size: 13px; }
+    th, td { padding: 11px 12px; border-bottom: 1px solid var(--border); text-align: left; vertical-align: top; }
+    th { background: var(--surface-2); color: var(--muted); font-size: 11px; letter-spacing: .06em; text-transform: uppercase; }
+    tbody tr:last-child td { border-bottom: 0; }
+    .sources li { margin: 8px 0; color: var(--muted); }
+    footer { margin-top: 42px; padding-top: 18px; border-top: 1px solid var(--border); color: var(--muted); font-size: 12px; }
+    @media (max-width: 700px) {
+      .page { width: min(100% - 20px, 960px); padding-top: 18px; }
+      header.hero { padding: 22px; }
+      .stats, .grounding-grid, .axis-grid { grid-template-columns: 1fr; }
+      .idea-head { display: block; }
+      .idea-metrics { justify-content: flex-start; margin-top: 12px; }
+      dl { grid-template-columns: 1fr; gap: 4px; }
+      dt:not(:first-child) { margin-top: 9px; }
+    }
+  </style>
+</head>
+<body>
+  <main class="page">
+    <header class="hero">
+      <p class="eyebrow">Ranked ideation</p>
+      <h1>Analytics should explain what to change next.</h1>
+      <p class="lede">The branch establishes a strong local telemetry foundation. The next move is not more charts by default; it is a smaller, more trustworthy decision surface that connects spend, speed, reliability, context pressure, and task outcome.</p>
+      <div class="metadata">
+        <span class="pill">Date · <time datetime="2026-08-02">2026-08-02</time></span>
+        <span class="pill">Topic · analytics-page</span>
+        <span class="pill">Focus · additions, removals, and graph value</span>
+        <span class="pill">Mode · repo-grounded</span>
+      </div>
+      <div class="stats">
+        <div class="stat"><b>41</b><span>raw candidates</span></div>
+        <div class="stat"><b>7</b><span>ranked directions</span></div>
+        <div class="stat"><b>5</b><span>topic axes covered</span></div>
+        <div class="stat"><b>36/36</b><span>focused tests passing</span></div>
+      </div>
+    </header>
+
+    <nav aria-label="Document sections">
+      <ul>
+        <li><a href="#grounding-context">Grounding Context</a></li>
+        <li><a href="#topic-axes">Topic Axes</a></li>
+        <li><a href="#ranked-ideas">Ranked Ideas</a></li>
+        <li><a href="#rejection-summary">Rejection Summary</a></li>
+        <li><a href="#sources">Sources</a></li>
+      </ul>
+    </nav>
+
+    <section id="grounding-context">
+      <p class="eyebrow">What the branch actually contains</p>
+      <h2>Grounding Context</h2>
+      <div class="grounding-grid">
+        <article class="grounding-card">
+          <h3>Codebase context</h3>
+          <p>Six tabs now expose provider attempts, sessions, models/connections, tools, subagents, and context snapshots through seven IPC queries. The diff includes roughly 7.5k added lines and a focused test suite that passes.</p>
+        </article>
+        <article class="grounding-card">
+          <h3>Current information shape</h3>
+          <p>Overview alone has eight stat cards and seven charts. Specialist tabs repeat total spend, tokens, calls, and outcome distributions while presenting wide tables of raw counters.</p>
+        </article>
+        <article class="grounding-card">
+          <h3>Trust gaps</h3>
+          <p>Some paths combine currencies, silently aggregate only 1,000 rows, lose the model dimension in a model trend, ignore the chosen date range in session detail, or stack token subcategories as if they were additive.</p>
+        </article>
+        <article class="grounding-card">
+          <h3>External pattern</h3>
+          <p>Current LLM observability dashboards converge on trace-level cost, latency percentiles, errors, tools, quality scores, explicit filters, and drill-down from a spike to its contributing events.</p>
+        </article>
+      </div>
+      <aside class="callout"><b>Point of view:</b> this is already enough telemetry for a useful v1. Correct the semantic foundation, simplify the landing page, and add turn-level latency/outcome before expanding the chart catalog.</aside>
+    </section>
+
+    <section id="topic-axes">
+      <p class="eyebrow">Decision surface</p>
+      <h2>Topic Axes</h2>
+      <div class="axis-grid">
+        <div class="axis"><b>Financial truth and efficiency</b>Can totals be trusted, compared, and acted on?</div>
+        <div class="axis"><b>Speed and reliability</b>Where does work stall, fail, retry, or waste spend?</div>
+        <div class="axis"><b>Agent/tool workflow diagnostics</b>Which component in the causal chain dominates?</div>
+        <div class="axis"><b>Context lifecycle</b>When is context approaching risk, and why?</div>
+        <div class="axis"><b>Information hierarchy and drill-down</b>Can a user move from signal to evidence quickly?</div>
+      </div>
+    </section>
+
+    <section id="ranked-ideas">
+      <p class="eyebrow">Strongest directions</p>
+      <h2>Ranked Ideas</h2>
+      <ul class="jump-list">
+        <li><a href="#idea-1">1. Trustworthy ledger</a></li>
+        <li><a href="#idea-2">2. Decision dashboard</a></li>
+        <li><a href="#idea-3">3. Turn performance</a></li>
+        <li><a href="#idea-4">4. Causal waterfall</a></li>
+        <li><a href="#idea-5">5. Context risk</a></li>
+        <li><a href="#idea-6">6. Delegation efficiency</a></li>
+        <li><a href="#idea-7">7. Outcome economics</a></li>
+      </ul>
+
+      <article class="idea" id="idea-1">
+        <div class="idea-head">
+          <h3><span class="rank">1</span>Trustworthy local ledger before more charts</h3>
+          <div class="idea-metrics"><span class="metric">Confidence 98%</span><span class="metric">Complexity Medium</span></div>
+        </div>
+        <p>Make every cost and usage view explicit about currency, range, timezone, sampling, and category semantics. Add a small data-quality strip showing known-cost coverage, currencies represented, last event time, and whether the result is complete or top-N. Separate currency series rather than summing them, push aggregates into SQL, apply the global date filter to drill-down, and render token categories as mutually exclusive segments.</p>
+        <dl>
+          <dt>Axis</dt><dd>Financial truth and efficiency</dd>
+          <dt>Basis</dt><dd><b>direct:</b> <code>analytics-queries.ts:153-183</code> drops currency from the spend time series; <code>analytics-queries.ts:539-554</code> aggregates model/connection cost without currency; Tools/Subagents/Context call <code>listAll(DEFAULT_LIMIT)</code> with <code>DEFAULT_LIMIT = 1000</code>; <code>SessionsTab.tsx:73-75</code> loads lifetime session detail without the selected range. The Overview stack adds full output and reasoning even though <code>cost.ts:144-149</code> recognizes reasoning may be a subset of output.</dd>
+          <dt>Rationale</dt><dd>A precise-looking wrong graph is worse than no graph. These fixes also create a reliable base for every later recommendation.</dd>
+          <dt>Downsides</dt><dd>Requires analytics result-shape changes, new SQL paths, and careful provider-specific token semantics. Currency conversion should remain out of scope unless a dated exchange-rate source is added.</dd>
+        </dl>
+      </article>
+
+      <article class="idea" id="idea-2">
+        <div class="idea-head">
+          <h3><span class="rank">2</span>A decision dashboard, not a telemetry gallery</h3>
+          <div class="idea-metrics"><span class="metric">Confidence 94%</span><span class="metric">Complexity Medium</span></div>
+        </div>
+        <p>Reduce Overview to six decision-grade widgets: spend trend, cost per turn/session, p95 turn latency, failed/retry tax, context-risk rate, and top expensive outliers. Each KPI should show change versus the preceding equal-length period and link to the filtered rows behind it. Move cost-source coverage to the trust strip; move tier/provider detail to specialist tabs; remove the two overview pies and the agent-tier call-count chart.</p>
+        <div class="diagram" aria-label="Conceptual flow from signal to action">
+          <svg viewBox="0 0 760 190" role="img" aria-labelledby="dash-title dash-desc">
+            <title id="dash-title">Decision dashboard flow</title>
+            <desc id="dash-desc">A compact signal leads to a comparison, then an outlier, then the exact trace.</desc>
+            <defs><marker id="arrow-a" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 Z" fill="#82d7c6"/></marker></defs>
+            <g font-family="Inter, sans-serif" font-size="14" text-anchor="middle">
+              <rect x="20" y="54" width="150" height="78" rx="14" fill="#153b38" stroke="#397d72"/>
+              <text x="95" y="84" fill="#e8eef7" font-weight="700">Signal</text><text x="95" y="108" fill="#a5b2c3">p95 latency +31%</text>
+              <rect x="220" y="54" width="150" height="78" rx="14" fill="#182b47" stroke="#476991"/>
+              <text x="295" y="84" fill="#e8eef7" font-weight="700">Comparison</text><text x="295" y="108" fill="#a5b2c3">vs previous 7 days</text>
+              <rect x="420" y="54" width="150" height="78" rx="14" fill="#392f1b" stroke="#79642e"/>
+              <text x="495" y="84" fill="#e8eef7" font-weight="700">Outlier</text><text x="495" y="108" fill="#a5b2c3">3 turns dominate</text>
+              <rect x="620" y="54" width="120" height="78" rx="14" fill="#1d3826" stroke="#41794d"/>
+              <text x="680" y="84" fill="#e8eef7" font-weight="700">Evidence</text><text x="680" y="108" fill="#a5b2c3">open trace</text>
+            </g>
+            <path d="M170 93 H212" stroke="#82d7c6" stroke-width="2" marker-end="url(#arrow-a)"/>
+            <path d="M370 93 H412" stroke="#82d7c6" stroke-width="2" marker-end="url(#arrow-a)"/>
+            <path d="M570 93 H612" stroke="#82d7c6" stroke-width="2" marker-end="url(#arrow-a)"/>
+          </svg>
+        </div>
+        <dl>
+          <dt>Axis</dt><dd>Information hierarchy and drill-down</dd>
+          <dt>Basis</dt><dd><b>direct + external:</b> <code>OverviewTab.tsx:42-144</code> currently renders eight cards and seven charts, several duplicated in later tabs. Langfuse Pulse explicitly makes an outlier bucket navigable to its underlying events; LangSmith prebuilt dashboards prioritize trace, latency, error, cost/token, and tool sections.</dd>
+          <dt>Rationale</dt><dd>The dashboard earns its space only when it shortens the path from “something changed” to “this component caused it.”</dd>
+          <dt>Downsides</dt><dd>Previous-period comparison needs careful behavior for All/custom ranges and sparse data. Removing charts may feel like lost scope unless the specialist views remain discoverable.</dd>
+        </dl>
+      </article>
+
+      <article class="idea" id="idea-3">
+        <div class="idea-head">
+          <h3><span class="rank">3</span>Turn performance and waste</h3>
+          <div class="idea-metrics"><span class="metric">Confidence 91%</span><span class="metric">Complexity High</span></div>
+        </div>
+        <p>Add a time series for p50/p95 end-to-end turn latency and time to first token, split by model or connection. Pair it with failed/retry tax: time, attempts, and known spend consumed by retries, provider failures, tool errors, timeouts, and interruptions. Clicking a spike opens the affected turns and groups failure causes into actionable categories.</p>
+        <dl>
+          <dt>Axis</dt><dd>Speed and reliability</dd>
+          <dt>Basis</dt><dd><b>direct + external:</b> provider and tool records already carry start/completion timestamps and outcomes, but the UI shows totals or averages rather than tail behavior. LangSmith exposes p50/p99 latency and first-token latency; both LangSmith and Langfuse make latency and error rate core dashboard measures.</dd>
+          <dt>Rationale</dt><dd>Users experience the tail, not the mean. “Waste” turns reliability into an economic decision: which failures are both frequent and expensive?</dd>
+          <dt>Downsides</dt><dd>True turn latency and TTFT need turn-level lifecycle timestamps and a first-token event. Error taxonomy must avoid leaking sensitive provider/tool messages.</dd>
+        </dl>
+      </article>
+
+      <article class="idea" id="idea-4">
+        <div class="idea-head">
+          <h3><span class="rank">4</span>A causal turn waterfall</h3>
+          <div class="idea-metrics"><span class="metric">Confidence 88%</span><span class="metric">Complexity High</span></div>
+        </div>
+        <p>Introduce a turn-level trace that nests provider attempts, tools, waits, and subagents. Render one APM-style waterfall in Session Detail with wall-time bars and cost labels, highlighting the operations responsible for most latency and spend. Keep raw attempt/tool tables behind the waterfall for exact inspection.</p>
+        <div class="diagram" aria-label="Illustrative turn waterfall">
+          <svg viewBox="0 0 760 245" role="img" aria-labelledby="waterfall-title waterfall-desc">
+            <title id="waterfall-title">Causal turn waterfall</title>
+            <desc id="waterfall-desc">Provider, tool, and subagent spans share one timeline so overlapping work and dominant cost are visible.</desc>
+            <g font-family="Inter, sans-serif" font-size="13">
+              <text x="18" y="36" fill="#a5b2c3">TURN</text><rect x="150" y="20" width="560" height="24" rx="7" fill="#153b38"/><text x="165" y="37" fill="#e8eef7">8.4s · $0.083</text>
+              <text x="18" y="82" fill="#a5b2c3">MODEL</text><rect x="150" y="66" width="190" height="24" rx="7" fill="#315f8e"/><text x="163" y="83" fill="#e8eef7">plan · 2.3s</text>
+              <text x="18" y="128" fill="#a5b2c3">TOOL</text><rect x="350" y="112" width="250" height="24" rx="7" fill="#725f2b"/><text x="363" y="129" fill="#fff4d1">execute_command · 3.1s</text>
+              <text x="18" y="174" fill="#a5b2c3">SUBAGENT</text><rect x="365" y="158" width="290" height="24" rx="7" fill="#397d72"/><text x="378" y="175" fill="#e8eef7">reviewer · 3.6s · $0.041</text>
+              <text x="18" y="220" fill="#a5b2c3">MODEL</text><rect x="615" y="204" width="95" height="24" rx="7" fill="#315f8e"/><text x="625" y="221" fill="#e8eef7">final</text>
+            </g>
+            <line x1="150" y1="52" x2="710" y2="52" stroke="#2b3747"/><line x1="150" y1="98" x2="710" y2="98" stroke="#2b3747"/>
+            <line x1="150" y1="144" x2="710" y2="144" stroke="#2b3747"/><line x1="150" y1="190" x2="710" y2="190" stroke="#2b3747"/>
+          </svg>
+        </div>
+        <dl>
+          <dt>Axis</dt><dd>Agent/tool workflow diagnostics</dd>
+          <dt>Basis</dt><dd><b>direct + external:</b> the branch already stores <code>provider_attempt_id</code> on tool/context records, chain/turn IDs, parent chain IDs, and lifecycle timestamps. Langfuse describes nested trace observations as the primary debugging primitive and highlights each span's share of aggregate cost and latency.</dd>
+          <dt>Rationale</dt><dd>Separate tabs cannot explain causality or concurrency. A single trace answers whether the model, a tool, a retry, or delegation dominated the turn.</dd>
+          <dt>Downsides</dt><dd>Requires a stable trace/span model and overlap-aware wall-time math. It should start in Session Detail rather than expand the Overview scope.</dd>
+        </dl>
+      </article>
+
+      <article class="idea" id="idea-5">
+        <div class="idea-head">
+          <h3><span class="rank">5</span>Context-risk explorer</h3>
+          <div class="idea-metrics"><span class="metric">Confidence 90%</span><span class="metric">Complexity Medium–High</span></div>
+        </div>
+        <p>Replace the cross-session raw-token spaghetti chart with context fill percentage for a selected session or top-risk turns. Add the model limit, peak/median fill, composition, and markers for compaction, truncation, output offload, or unusually large tool results. A jump opens the exact turn and contributing tool result.</p>
+        <div class="diagram" aria-label="Illustrative context pressure timeline">
+          <svg viewBox="0 0 760 210" role="img" aria-labelledby="context-title context-desc">
+            <title id="context-title">Context pressure timeline</title>
+            <desc id="context-desc">Context fill rises by turn, crosses a warning threshold, then drops at a compaction event.</desc>
+            <line x1="70" y1="170" x2="720" y2="170" stroke="#526174"/><line x1="70" y1="35" x2="70" y2="170" stroke="#526174"/>
+            <line x1="70" y1="72" x2="720" y2="72" stroke="#f0c36a" stroke-dasharray="7 6"/><text x="80" y="63" fill="#f0c36a" font-size="12">80% warning</text>
+            <polyline points="80,150 190,132 300,105 410,78 500,48 535,136 650,110 710,88" fill="none" stroke="#82d7c6" stroke-width="4"/>
+            <circle cx="500" cy="48" r="6" fill="#ff9999"/><text x="500" y="30" fill="#ffbaba" font-size="12" text-anchor="middle">92%</text>
+            <line x1="535" y1="136" x2="535" y2="185" stroke="#8bb8ff" stroke-width="2"/><text x="535" y="202" fill="#b9d4ff" font-size="12" text-anchor="middle">compaction</text>
+            <g fill="#a5b2c3" font-size="12"><text x="40" y="174">0%</text><text x="32" y="40">100%</text><text x="670" y="188">turns →</text></g>
+          </svg>
+        </div>
+        <dl>
+          <dt>Axis</dt><dd>Context lifecycle</dd>
+          <dt>Basis</dt><dd><b>direct:</b> <code>ContextTab.tsx:42-59</code> overlays up to five sessions by timestamp and raw <code>usedTokens</code>; <code>ContextTab.tsx:83-128</code> reports snapshot counts/averages without model limits or lifecycle events. The confirmed requirements originally named fill percentage, but the result type does not contain <code>maxContext</code>.</dd>
+          <dt>Rationale</dt><dd>Raw token counts are not comparable across models. Pressure plus lifecycle markers tells the user when context became risky and what caused the jump.</dd>
+          <dt>Downsides</dt><dd>Needs the frozen model context limit and new compaction/truncation events. Composition fields are estimates and should be labeled as such.</dd>
+        </dl>
+      </article>
+
+      <article class="idea" id="idea-6">
+        <div class="idea-head">
+          <h3><span class="rank">6</span>Delegation efficiency, not subagent volume</h3>
+          <div class="idea-metrics"><span class="metric">Confidence 82%</span><span class="metric">Complexity Medium–High</span></div>
+        </div>
+        <p>Reframe the Subagents tab around contribution: main-versus-subagent cost share, completion/failure rate, median duration, and estimated wall time saved by overlap. Compare agent name/tier only after normalizing per invocation or completed parent turn. Keep raw invocation and token totals as drill-down.</p>
+        <dl>
+          <dt>Axis</dt><dd>Agent/tool workflow diagnostics</dd>
+          <dt>Basis</dt><dd><b>direct:</b> subagent attribution already records parent chain, status, timestamps, model, connection, agent name, and tier, while the UI currently leads with invocation count and total input/output. The causal timestamps can establish overlap even before a quality score exists.</dd>
+          <dt>Rationale</dt><dd>“We used Crown agents 37 times” is trivia. “Reviewers consumed 22% of cost and removed 31% of wall time with a 96% completion rate” informs tier and delegation choices.</dd>
+          <dt>Downsides</dt><dd>Parallel-time-saved is an estimate and needs a transparent formula. Completion is not the same as usefulness, so this becomes much stronger after Idea 7.</dd>
+        </dl>
+      </article>
+
+      <article class="idea" id="idea-7">
+        <div class="idea-head">
+          <h3><span class="rank">7</span>Outcome-adjusted economics</h3>
+          <div class="idea-metrics"><span class="metric">Confidence 76%</span><span class="metric">Complexity High</span></div>
+        </div>
+        <p>Add a lightweight task outcome attached to a turn or session: explicit thumbs up/down, accepted result, stopped/corrected/retried, or a small post-task rating. Then chart cost per successful turn and success rate by model, tier, workspace, and delegation mode. Technical success remains a reliability signal; user outcome becomes the value signal.</p>
+        <dl>
+          <dt>Axis</dt><dd>Financial truth and efficiency</dd>
+          <dt>Basis</dt><dd><b>external + reasoned:</b> Langfuse treats user feedback, programmatic checks, and evaluation scores as the path from observing what an LLM does to measuring how well it does it. The branch currently records transport/tool/subagent outcomes only; a technically succeeded call can still produce unusable work.</dd>
+          <dt>Rationale</dt><dd>Without outcome, “cheapest model” and “best agent tier” are incomplete questions. This metric makes every cost comparison materially more useful.</dd>
+          <dt>Downsides</dt><dd>Feedback is sparse and selection-biased; inferred correction signals can be noisy. Start with explicit, optional feedback and report sample size rather than pretending to have objective quality.</dd>
+        </dl>
+      </article>
+    </section>
+
+    <section id="rejection-summary">
+      <p class="eyebrow">What did not earn separate scope</p>
+      <h2>Rejection Summary</h2>
+      <table>
+        <thead><tr><th>#</th><th>Candidate</th><th>Reason rejected or folded</th></tr></thead>
+        <tbody>
+          <tr><td>1</td><td>Correctness and coverage banner</td><td>Folded into Idea 1; a banner without fixing the underlying queries would be cosmetic.</td></tr>
+          <tr><td>2</td><td>Latency health</td><td>Folded into Idea 3 with tail latency and failure cost.</td></tr>
+          <tr><td>3</td><td>Failure and retry tax</td><td>Folded into Idea 3; stronger when read beside latency rather than as another isolated chart.</td></tr>
+          <tr><td>4</td><td>Context pressure</td><td>Folded into Idea 5 with lifecycle markers and drill-down.</td></tr>
+          <tr><td>5</td><td>Click-through outlier diagnosis</td><td>Folded into Ideas 2–5 as an interaction contract, not a standalone feature.</td></tr>
+          <tr><td>6</td><td>Workspace dimension</td><td>Keep as a cross-cutting filter, but it is below the meeting-test as a standalone direction.</td></tr>
+          <tr><td>7</td><td>Respect the global filter everywhere</td><td>Required correctness work under Idea 1, not a separate idea.</td></tr>
+          <tr><td>8</td><td>Remove overview pie charts</td><td>Folded into Idea 2's information hierarchy.</td></tr>
+          <tr><td>9</td><td>Remove duplicate aggregate cards</td><td>Folded into Idea 2.</td></tr>
+          <tr><td>10</td><td>Connection ranking</td><td>Useful specialist view, but not strong enough alone; provider should become a filter/dimension.</td></tr>
+          <tr><td>11</td><td>Automatic period comparison</td><td>Folded into Idea 2 as the default KPI treatment.</td></tr>
+          <tr><td>12</td><td>Top-N plus Other</td><td>Implementation/detail hygiene, not a product direction; retain for high-cardinality charts.</td></tr>
+          <tr><td>13</td><td>Automatic anomaly digest</td><td>Defer until trustworthy comparisons and enough history exist; a deterministic previous-period delta is the better v1.</td></tr>
+          <tr><td>14</td><td>Turn as primary unit</td><td>Folded into Ideas 3 and 4.</td></tr>
+          <tr><td>15</td><td>Four-question analytics structure</td><td>Folded into Idea 2.</td></tr>
+          <tr><td>16</td><td>Inline session insight in chat</td><td>Promising adjacent UX, but expands beyond evaluating the Analytics page itself.</td></tr>
+          <tr><td>17</td><td>Quality as first-class metric</td><td>Promoted as Idea 7 with a narrower, measurable first step.</td></tr>
+          <tr><td>18</td><td>Not every metric needs a graph</td><td>Folded into Idea 2's presentation rule.</td></tr>
+          <tr><td>19</td><td>Main and delegated work as one trace</td><td>Folded into Idea 4.</td></tr>
+          <tr><td>20</td><td>Trace/span foundation</td><td>Implementation foundation for Ideas 3 and 4, not a separate user-facing direction.</td></tr>
+          <tr><td>21</td><td>Shared filter grammar</td><td>Strong supporting requirement for Ideas 1–4, below the standalone ambition floor.</td></tr>
+          <tr><td>22</td><td>Cache economics</td><td>Worth adding after cost semantics are trustworthy; currently narrower than Ideas 1 and 3.</td></tr>
+          <tr><td>23</td><td>Delegation efficiency</td><td>Promoted as Idea 6.</td></tr>
+          <tr><td>24</td><td>Version/release dimension</td><td>Useful for regression analysis, but lower value for a single-user local v1 than workspace/turn dimensions.</td></tr>
+          <tr><td>25</td><td>SQL-native aggregates</td><td>Folded into Idea 1 as necessary query architecture.</td></tr>
+          <tr><td>26</td><td>Export/reconciliation</td><td>Useful follow-up, but the confirmed scope made export a non-goal and it does not improve the in-app decision surface first.</td></tr>
+          <tr><td>27</td><td>APM-style waterfall</td><td>Promoted as Idea 4.</td></tr>
+          <tr><td>28</td><td>Pareto frontier</td><td>Folded into Idea 2's top-outlier widget.</td></tr>
+          <tr><td>29</td><td>SLO health panel</td><td>Premature before users have stable baselines or configurable goals.</td></tr>
+          <tr><td>30</td><td>Control-chart regressions</td><td>Over-engineered for the likely local data volume; period deltas and top outliers are easier to interpret.</td></tr>
+          <tr><td>31</td><td>Finance-style reconciliation</td><td>Folded into Idea 1.</td></tr>
+          <tr><td>32</td><td>One-screen dashboard</td><td>Folded into Idea 2 as the pruning constraint.</td></tr>
+          <tr><td>33</td><td>No-chart event explorer</td><td>Too extreme; tables are valuable, but trends and outliers remain faster to perceive graphically.</td></tr>
+          <tr><td>34</td><td>Zero-new-telemetry pass</td><td>Good sequencing principle, but latency/outcome recommendations deliberately need small schema additions.</td></tr>
+          <tr><td>35</td><td>Million-row design now</td><td>Folded into Idea 1 as bounded query behavior; full scale architecture would be premature.</td></tr>
+          <tr><td>36</td><td>Single-user optimization</td><td>Adopted as a prioritization principle, not a standalone feature.</td></tr>
+          <tr><td>37</td><td>Decision dashboard</td><td>Promoted as Idea 2.</td></tr>
+          <tr><td>38</td><td>Causal efficiency trace</td><td>Promoted as Idea 4.</td></tr>
+          <tr><td>39</td><td>Outcome-adjusted economics</td><td>Promoted as Idea 7.</td></tr>
+          <tr><td>40</td><td>Context-risk explorer</td><td>Promoted as Idea 5.</td></tr>
+          <tr><td>41</td><td>Trustworthy local ledger</td><td>Promoted as Idea 1.</td></tr>
+        </tbody>
+      </table>
+      <p class="callout">Basis verification was performed in-thread because the repository tool map keeps subagent work in the main thread. The recommendations are grounded in direct code reads and primary external documentation, but no independent-agent agreement is claimed.</p>
+    </section>
+
+    <section id="sources" class="sources">
+      <p class="eyebrow">Evidence consulted</p>
+      <h2>Sources</h2>
+      <ul>
+        <li><a href="https://github.com/Zeptiny/orchid/blob/main/electron/src/renderer/components/analytics/OverviewTab.tsx">OverviewTab.tsx</a> — current Overview cards and charts.</li>
+        <li><a href="https://github.com/Zeptiny/orchid/blob/main/electron/src/main/providers/accounting/analytics-queries.ts">analytics-queries.ts</a> — aggregation, currency, sampling, and result-shape evidence.</li>
+        <li><a href="https://github.com/Zeptiny/orchid/blob/main/electron/src/renderer/components/analytics/ContextTab.tsx">ContextTab.tsx</a> — current context visualization behavior.</li>
+        <li><a href="https://github.com/Zeptiny/orchid/blob/main/docs/solutions/performance-issues/incremental-sqlite-session-lifecycle-writes.md">Incremental SQLite writes learning</a> — bounded database work aligned with the domain operation.</li>
+        <li><a href="https://docs.langchain.com/langsmith/dashboards">LangSmith dashboards</a> — trace, LLM, cost/token, and tool metric structure.</li>
+        <li><a href="https://docs.langchain.com/langsmith/fetch-perf-metrics-experiment">LangSmith performance metrics</a> — latency percentiles, TTFT, error, cost, and feedback metrics.</li>
+        <li><a href="https://langfuse.com/docs/metrics/overview">Langfuse metrics overview</a> — cost, latency, volume, quality, and dimensions.</li>
+        <li><a href="https://langfuse.com/docs/observability/features/pulse">Langfuse Pulse</a> — outlier-to-event drill-down pattern.</li>
+        <li><a href="https://help.openai.com/en/articles/20001072">OpenAI Usage Dashboard export</a> — time ranges, grouping, reconciliation, UTC, and CSV export.</li>
+      </ul>
+    </section>
+
+    <footer class="composition-signal">Composed 2026-08-02T17:05Z by ce-ideate from the Analytics branch review prompt and repository evidence.</footer>
+  </main>
+</body>
+</html>

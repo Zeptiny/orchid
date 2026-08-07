@@ -7,7 +7,7 @@
  */
 
 import type { UpdateFileChunk, HunkLineOp } from './apply-patch-parser';
-import { seekSequenceWithMeta, findContextHint } from './apply-patch-match';
+import { seekSequenceWithMeta, findContextHint, type SeekResult } from './apply-patch-match';
 
 // ── Error ──────────────────────────────────────────────────────────────────
 
@@ -57,8 +57,14 @@ function computeReplacements(
 ): Replacement[] {
   const replacements: Replacement[] = [];
   let lineIndex = 0;
+  // F6: once any @@ context hint in this file has anchored a search, later
+  // ambiguous chunks honor the first match instead of erroring — the agent
+  // already attempted disambiguation, possibly via a stacked hint chunk that
+  // precedes the chunk carrying the lines.
+  let sawContextHint = false;
 
   for (const chunk of chunks) {
+    let hintIndex: number | null = null;
     if (chunk.changeContext !== null) {
       const found = findContextHint(lines, chunk.changeContext, lineIndex);
       if (found === null) {
@@ -67,7 +73,9 @@ function computeReplacements(
           filePath,
         );
       }
+      hintIndex = found - 1;
       lineIndex = found;
+      sawContextHint = true;
     }
 
     if (chunk.lineOps.length === 0) {
@@ -90,10 +98,21 @@ function computeReplacements(
       continue;
     }
 
-    // Search for the old lines in the file.
+    // Search for the old lines in the file. When a @@ hint anchored this
+    // chunk, also retry from the hint line itself: hunks commonly include the
+    // hinted line as their first context line, which the hint search skipped.
+    const searchStarts = hintIndex !== null ? [lineIndex, hintIndex] : [lineIndex];
+    const seekFrom = (pattern: string[]): SeekResult | null => {
+      for (const start of searchStarts) {
+        const r = seekSequenceWithMeta(lines, pattern, start, chunk.isEndOfFile);
+        if (r !== null) return r;
+      }
+      return null;
+    };
+
     let pattern = oldLines;
     let lineOpsForBuild = chunk.lineOps;
-    let result = seekSequenceWithMeta(lines, pattern, lineIndex, chunk.isEndOfFile);
+    let result = seekFrom(pattern);
 
     // Retry without a trailing empty line in the pattern if the first seek
     // failed — the patch may have included a trailing-newline placeholder
@@ -109,7 +128,7 @@ function computeReplacements(
           lineOpsForBuild = lineOpsForBuild.slice(0, lineOpsForBuild.length - 1);
         }
       }
-      result = seekSequenceWithMeta(lines, pattern, lineIndex, chunk.isEndOfFile);
+      result = seekFrom(pattern);
     }
 
     if (result === null) {
@@ -141,11 +160,11 @@ function computeReplacements(
       );
     }
 
-    // F6: if the match is ambiguous AND the chunk has no @@ context header,
-    // error with disambiguation guidance. When a @@ header is present the
-    // user has already attempted to disambiguate, so we honor the first
-    // match.
-    if (result.ambiguous && chunk.changeContext === null) {
+    // F6: if the match is ambiguous AND no @@ context header anchored this
+    // file, error with disambiguation guidance. Once a @@ header is present
+    // (on this chunk or a stacked chunk before it) the user has already
+    // attempted to disambiguate, so we honor the first match.
+    if (result.ambiguous && !sawContextHint) {
       throw new ApplyPatchApplyError(
         `Hunk matches multiple locations in ${filePath}. Add a @@ header with the enclosing class or function name to disambiguate.\nUnmatched lines:\n${oldLines.join('\n')}`,
         filePath,

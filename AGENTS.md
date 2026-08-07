@@ -302,6 +302,20 @@ idle → [USER_INPUT] → streaming → [TOOL_CALL] → toolExecuting → [TOOL_
 - **`ToolExecutionContext`**: frozen `{ cwd, sessionId? }` captured at turn start; every tool handler receives it (never re-reads live session/process.cwd mid-turn)
 - **`tool:execute` IPC**: allowlisted read-only tools only; args validated via `toolRegistry.validate` before the handler
 
+### Background Commands (visibility & user control)
+- Background `execute_command` processes live in the in-memory `BackgroundProcessStore` (`tools/process/background-store.ts`): head-tail buffers, LRU cap, `owner: 'AGENT' | 'USER'`, and session/scope metadata. Foreground runs additionally mirror output into `ForegroundLiveRegistry` (`tools/process/foreground-live.ts`) keyed by `toolCallId`; the mirror is display-only — the bounded collector stays the canonical result authority.
+- **User IPC surface** (`ipc/chat.ts`, preload `bgCmd`): `bgcmd:snapshot` accepts exactly one of `commandId` (background store) or `toolCallId` (foreground registry) and returns the tail plus `running/interactive/owner/command/description/agentScopeId` metadata; `bgcmd:list` returns the session's background fleet across all agent scopes (running-first, subagent display names joined from `SubagentManager`); `bgcmd:send_input`, `bgcmd:terminate`, and `bgcmd:release_input` are the user controls; `bgcmd:changed` push-broadcasts fleet changes. Every payload is Zod-validated and channel-allowlisted.
+- **Session-privileged vs scope-gated**: user control handlers match `entry.sessionId` only, so users reach any agent scope in their session; agent tools (`send_input`, `terminate_command`, `read_output`) stay scope-gated via `getVisible`. Successful user input flips `owner` to `'USER'`, which makes the agent `send_input` reject (`control: USER`) until `bgcmd:release_input` or the `background_command_idle_timeout` auto-release.
+- **Command kill matrix**:
+
+| Trigger | Effect |
+|---|---|
+| User Stop (`bgcmd:terminate`) | Single command, any scope in the session |
+| Subagent terminal transition | Owned scope's commands (`terminateScope`) |
+| Esc phase 2 / `chat:stop` / rebind / trust revoke | All session commands (`terminateSession`) |
+| LRU eviction at `max_background_processes` | Oldest evictable entries |
+| App quit | `terminateAll` |
+
 ### AGENTS.md Context Handling
 Instruction files (`AGENTS.md` and the configured `agents_md.filenames` aliases) are discovered and surfaced automatically — the agent never loads them manually.
 - **Discovery** (`agents-md/resolver.ts`): for any touched path, walk up from its directory to the workspace root, taking the first matching alias per directory. Symlinks that escape the workspace are ignored and filenames match case-insensitively. The workspace-root file is the `root` tier; the rest are `nested`.
@@ -315,6 +329,14 @@ Instruction files (`AGENTS.md` and the configured `agents_md.filenames` aliases)
 - Resolution order: draft cwd → active `session.cwd` → sticky `default_project_dir` → unbound
 - `resolveWindowWorkspace(windowId)` (session IPC) and pure `resolveWorkspaceFromParts` (project/) — never `process.cwd()` as product default
 - Intentional rebind (pick/set/change_cwd) aborts in-flight chat and reloads project config layers
+
+### Trusted Projects
+Project-supplied content (`.orchid.json`, `.orchid/` definitions, root AGENTS.md aliases, MCP servers) only runs after the user grants trust. Bind-then-gate: binding any directory succeeds, and every execution path enforces trust.
+- **Store** (`project/trust.ts`): `~/.orchid/trusted_projects.json`, keyed by canonical path. Trust state is `trusted | untrusted | changed`; a sha256 fingerprint over the security surface (`.orchid.json` + `.orchid/{agents,skills,personalities}` + root instruction files, size/count-capped) flips a grant to `changed` when it drifts. Bare projects (no surface) auto-trust without a store entry.
+- **Resolution**: `resolveWorkspaceFromParts` attaches `trust` to every usable `WorkspaceInfo` (`status`/`isWorkspaceBound` unchanged). Trust is fail-closed — un-canonicalizable paths read `untrusted`.
+- **Gate matrix** (while trust ≠ `trusted`): `chat:send` rejects `untrusted_project`; the MCP registry returns a dormant manager (no `startAll`); `tool:execute`, RAG/AST indexing, and `session:create` reject; `definitions:list` returns home-only. Subagent turns inherit the parent's captured runtime (no separate prompt).
+- **Revocation** (`ipc/session.ts` `revokeProjectTrustForDir`): drops the record, invalidates the runtime registry + MCP managers (lease-aware), and force-stops sessions bound to the dir. Grant invalidates runtime/MCP caches so services pick up trust immediately.
+- **Renderer**: `TrustProjectDialog` shows the surface-diff report; opened by bind results, `untrusted_project` send failures, and the workspace-chip badge — never auto-opened at startup. Settings → Trusted Projects lists/revokes entries.
 
 ### LLM Provider Resolution
 - Model identity is always a typed `{ connectionId, modelId }`; slash-delimited model IDs remain opaque and are never parsed as provider aliases
@@ -397,6 +419,7 @@ Defined in `src/main/config/schema.ts` — single source of truth:
 | `llm_stream_idle_timeout` | 300s | Stream idle timeout |
 | `llm_stream_retries` | 3 | LLM retry count |
 | `background_command_idle_timeout` | 900s | Background cmd timeout |
+| `session_title_max_wait_seconds` | 15 | Max wait before auto-naming a default session from the still in-flight turn history; `0` disables the deadline (naming then only on turn complete/interrupt) |
 | `max_tool_steps` | 100 | Max multi-step tool-loop iterations per stream (AI SDK `stopWhen`) |
 | `tool_worker_pool_main_agent_reserved` | 1 | Tool worker slots reserved for main-agent tools so background subagents cannot starve the visible agent; clamped to `[0, tool_worker_pool_size - 1]` |
 | `always_expand_tool_groups` | `false` | Open chat tool-activity groups by default |
@@ -406,6 +429,7 @@ Defined in `src/main/config/schema.ts` — single source of truth:
 - User config: `~/.orchid/config.json`
 - Project config: `.orchid.json` (in project root)
 - Provider connections (non-secret): `~/.orchid/providers.json`
+- Trusted projects: `~/.orchid/trusted_projects.json` (canonical path → grant + fingerprint)
 - Merged: defaults → home → project → env overrides (deep-merged)
 
 ## Coding Conventions

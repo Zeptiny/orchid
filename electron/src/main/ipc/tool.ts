@@ -16,6 +16,7 @@ import { toolRegistry } from '../tools';
 import type { ToolExecutionContext } from '../tools/types';
 import { getSessionManager, resolveBoundProjectPath } from './session';
 import { getProjectRuntimeRegistry } from '../project/runtime';
+import { getProjectTrustState } from '../project/trust';
 import {
   RENDERER_ALLOWED_TOOLS,
   toolExecuteSchema,
@@ -57,10 +58,15 @@ export function registerToolIPC(): void {
 
     const { name, args } = parsed.data;
 
+    // One call id for the whole invocation — executeToolCall derives the
+    // handler ctx's toolCallId from request.id, so the live-output mirror
+    // and every terminal result below key off the same id.
+    const toolCallId = crypto.randomUUID();
+
     // Security: reject tools not in the allowlist
     if (!RENDERER_ALLOWED_TOOLS.has(name)) {
       return genericTerminalExecution(
-        crypto.randomUUID(),
+        toolCallId,
         name,
         'error',
         `Tool '${name}' is not allowed via IPC. Use the agent layer for non-read-only tools.`,
@@ -72,7 +78,7 @@ export function registerToolIPC(): void {
 
     if (!tool) {
       return genericTerminalExecution(
-        crypto.randomUUID(),
+        toolCallId,
         name,
         'error',
         `Tool '${name}' not found in registry`,
@@ -84,7 +90,7 @@ export function registerToolIPC(): void {
     const toolCtx = resolveToolExecuteContext(windowId);
     if (!toolCtx) {
       return genericTerminalExecution(
-        crypto.randomUUID(),
+        toolCallId,
         name,
         'error',
         'No project folder selected. Choose a folder before running tools.',
@@ -92,9 +98,19 @@ export function registerToolIPC(): void {
       );
     }
 
+    if (getProjectTrustState(toolCtx.cwd) !== 'trusted') {
+      return genericTerminalExecution(
+        toolCallId,
+        name,
+        'error',
+        'This project folder is not trusted. Trust it before running tools.',
+        'untrusted_project',
+      );
+    }
+
     return executeToolCall(
       {
-        id: crypto.randomUUID(),
+        id: toolCallId,
         name,
         args,
       },

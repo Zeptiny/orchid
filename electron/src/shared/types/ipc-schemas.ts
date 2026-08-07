@@ -62,6 +62,7 @@ const usageSchema = z.object({
   completion_tokens: z.number().nonnegative(),
   total_tokens: z.number().nonnegative(),
   cached_tokens: z.number().nonnegative(),
+  reasoning_tokens: z.number().nonnegative().optional(),
   context: contextSnapshotSchema.optional(),
 });
 
@@ -186,12 +187,82 @@ export const sessionCreatedEventSchema = z.object({
   draftGeneration: z.number().optional(),
 });
 
+export const trustStateSchema = z.enum(['trusted', 'untrusted', 'changed']);
+
+export const workspaceInfoSchema = z.object({
+  cwd: z.string().nullable(),
+  source: z.enum(['draft', 'session', 'default', 'unbound']),
+  status: z.enum(['unbound', 'valid', 'missing']),
+  // Optional so payloads from pre-trust producers still parse.
+  trust: trustStateSchema.optional(),
+});
+
 export const sessionWorkspaceChangedEventSchema = z.object({
-  workspace: z.object({
-    cwd: z.string().nullable(),
-    source: z.enum(['draft', 'session', 'default', 'unbound']),
-    status: z.enum(['unbound', 'valid', 'missing']),
-  }),
+  workspace: workspaceInfoSchema,
+});
+
+// ── Trusted projects ────────────────────────────────────────────────────────
+
+export const trustReportMcpServerSchema = z.object({
+  name: z.string().min(1),
+  kind: z.enum(['added', 'override']),
+  command: z.string().optional(),
+  url: z.string().optional(),
+  args: z.array(z.string()).optional(),
+  envKeys: z.array(z.string()).optional(),
+});
+
+export const trustReportPermissionSchema = z.object({
+  tool: z.string().min(1),
+  rule: z.string(),
+  autoAllow: z.boolean(),
+});
+
+export const trustReportConfigOverrideSchema = z.object({
+  key: z.string().min(1),
+  projectValue: z.string(),
+  homeValue: z.string(),
+});
+
+export const trustReportModelOverrideSchema = z.object({
+  key: z.string().min(1),
+  connectionId: z.string(),
+  modelId: z.string(),
+});
+
+export const trustReportDefinitionSchema = z.object({
+  kind: z.enum(['agent', 'skill', 'personality']),
+  name: z.string().min(1),
+  overridesHome: z.boolean(),
+});
+
+export const projectTrustReportSchema = z.object({
+  projectDir: z.string().min(1),
+  hasSurface: z.boolean(),
+  mcpServers: z.array(trustReportMcpServerSchema),
+  permissions: z.array(trustReportPermissionSchema),
+  agentsMdOverrides: z.array(trustReportConfigOverrideSchema),
+  modelOverrides: z.array(trustReportModelOverrideSchema),
+  otherConfigOverrides: z.array(trustReportConfigOverrideSchema),
+  definitions: z.array(trustReportDefinitionSchema),
+  instructionFiles: z.array(z.string()),
+});
+
+export const projectTrustInfoSchema = z.object({
+  projectDir: z.string().min(1),
+  state: trustStateSchema,
+  report: projectTrustReportSchema.nullable(),
+});
+
+export const projectTrustChangedEventSchema = z.object({
+  projectDir: z.string().min(1),
+  state: trustStateSchema,
+});
+
+export const trustedProjectEntrySchema = z.object({
+  projectDir: z.string().min(1),
+  trustedAt: z.string(),
+  state: trustStateSchema,
 });
 
 export const sessionTodosChangedEventSchema = z.object({
@@ -264,6 +335,7 @@ export const updaterErrorEventSchema = z.object({
 export const chatSendErrorKindSchema = z.enum([
   'session_not_found',
   'unbound_workspace',
+  'untrusted_project',
   'provider_required',
   'session_busy',
   'runtime_hydration_failed',
@@ -285,25 +357,85 @@ export const chatSendResultSchema = z.discriminatedUnion('status', [
 
 export const toolExecuteResultSchema = toolExecutionResultSchema;
 
+export const bgCommandSnapshotRequestSchema = z
+  .object({
+    commandId: z.number().int().positive().optional(),
+    toolCallId: z.string().min(1).optional(),
+    lastN: z.number().int().positive().max(1000).optional(),
+    sessionId: z.string().uuid().optional(),
+    /**
+     * When false, the handler returns `tail: ''` without touching the buffer
+     * and keeps all other fields (running/exitCode/owner/etc). Default `true`
+     * when omitted.
+     */
+    includeTail: z.boolean().optional(),
+  })
+  .refine(
+    (data) => (data.commandId !== undefined) !== (data.toolCallId !== undefined),
+    { message: 'Provide exactly one of commandId or toolCallId' },
+  );
+
+export const bgCommandOwnerSchema = z.enum(['AGENT', 'USER']);
+
 export const bgCommandSnapshotResultSchema = z.discriminatedUnion('found', [
   z.object({
     found: z.literal(true),
     tail: z.string(),
     exitCode: z.number().nullable(),
+    // New metadata fields are optional so old preloads that only expect
+    // tail/exitCode remain wire-compatible; handlers still emit them.
+    running: z.boolean().optional().default(true),
+    interactive: z.boolean().optional().default(false),
+    owner: bgCommandOwnerSchema.optional().default('AGENT'),
+    command: z.string().optional().default(''),
+    description: z.string().optional(),
+    agentScopeId: z.string().optional().default('main'),
+    createdAt: z.number().optional(),
   }),
   z.object({
     found: z.literal(false),
   }),
 ]);
 
-export const configSaveResultSchema = z.object({
-  status: z.string(),
+export const bgCommandListItemSchema = z.object({
+  id: z.number().int().positive(),
+  command: z.string(),
+  description: z.string(),
+  interactive: z.boolean(),
+  owner: bgCommandOwnerSchema,
+  agentScopeId: z.string(),
+  scopeName: z.string(),
+  running: z.boolean(),
+  exitCode: z.number().nullable(),
+  createdAt: z.number(),
+  lastOutputAt: z.number(),
 });
 
-export const workspaceInfoSchema = z.object({
-  cwd: z.string().nullable(),
-  source: z.enum(['draft', 'session', 'default', 'unbound']),
-  status: z.enum(['unbound', 'valid', 'missing']),
+export const bgCommandListResultSchema = z.array(bgCommandListItemSchema);
+
+export const bgCommandSendInputResultSchema = z.discriminatedUnion('ok', [
+  z.object({ ok: z.literal(true) }),
+  z.object({
+    ok: z.literal(false),
+    reason: z.enum(['not_found', 'not_interactive', 'exited', 'write_failed']),
+  }),
+]);
+
+export const bgCommandTerminateResultSchema = z.discriminatedUnion('ok', [
+  z.object({ ok: z.literal(true) }),
+  z.object({ ok: z.literal(false), reason: z.literal('not_found') }),
+]);
+
+export const bgCommandReleaseInputResultSchema = z.object({
+  ok: z.boolean(),
+});
+
+export const bgCommandChangedEventSchema = z.object({
+  sessionId: z.string(),
+});
+
+export const configSaveResultSchema = z.object({
+  status: z.string(),
 });
 
 export const sessionReasoningConfigResultSchema = z.object({

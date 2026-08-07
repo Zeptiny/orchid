@@ -84,7 +84,9 @@ describe('shared canonical tool-result renderer', () => {
   it('uses distinct native presenters for filesystem families and tools', () => {
     expect(resolveToolResultRenderer('edit', 'generic')).toBe(FileChangeToolResult);
     expect(resolveToolResultRenderer('write', 'generic')).toBe(FileWriteToolResult);
-    expect(resolveToolResultRenderer('read', 'generic')).toBe(FileContentToolResult);
+    // `read` resolves by family so a directory read gets the tree presenter.
+    expect(resolveToolResultRenderer('read', 'file-content')).toBe(FileContentToolResult);
+    expect(resolveToolResultRenderer('read', 'directory-entries')).toBe(DirectoryToolResult);
     expect(resolveToolResultRenderer('unknown', 'file-change')).toBe(FileChangeToolResult);
     expect(resolveToolResultRenderer('unknown', 'file-write')).toBe(FileWriteToolResult);
     expect(resolveToolResultRenderer('unknown', 'file-content')).toBe(FileContentToolResult);
@@ -221,8 +223,8 @@ describe('shared canonical tool-result renderer', () => {
     expect(shellSource).toContain('aria-controls={panelId}');
     expect(shellSource).toContain('id={panelId}');
     expect(shellSource).toContain('onClick={collapse}');
-    expect(shellSource).toContain('role="button"');
-    expect(shellSource).toContain('tabIndex={0}');
+    expect(shellSource).not.toContain('role="button"');
+    expect(shellSource).not.toContain('tabIndex={0}');
     expect(shellSource).toContain('title="Click to collapse"');
   });
 

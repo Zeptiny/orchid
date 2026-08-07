@@ -1,38 +1,68 @@
 /**
  * read tool — return a requested, numbered source range as structured data.
+ * When the target is a directory, it returns a one-level listing using the
+ * same canonical structure (and agent projection) as `read_directory`.
  */
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { z } from 'zod';
-import type { ToolDefinition, ToolHandler, ToolHandlerOutcome } from '../types';
+import type {
+  ToolDefinition,
+  ToolExecutionContext,
+  ToolHandler,
+  ToolHandlerOutcome,
+} from '../types';
 import { RiskClass } from '../../../shared/types/permission';
 import { getToolConfig, resolveToolPath } from '../types';
 import { isBinaryFileSync } from '../ast/utils';
 import {
+  directoryEntriesDataSchema,
   fileContentDataSchema,
+  type DirectoryEntriesData,
   type FileContentData,
 } from '../../../shared/types/tool-result-filesystem';
+import type { AgentProjector } from '../../../shared/types/tool-result';
+import {
+  directoryEntriesAgentProjector,
+  fileContentAgentProjector,
+} from '../result';
+import { collectDirectoryEntries } from './read-directory';
 
 // ── Schema ─────────────────────────────────────────────────────────────────
 
 export const readInputSchema = z.object({
-  file_path: z.string().describe('The path to the file to read, relative to the current working directory'),
+  file_path: z.string().describe('The path to the file or directory to read, relative to the current working directory'),
   offset: z.number().int().min(1).optional().describe('The line number to start from (default: 1, 1-indexed)'),
   limit: z.number().int().positive().optional().describe('The maximum number of lines to read (default: from config read_line_limit)'),
 });
 
 export type ReadInput = z.infer<typeof readInputSchema>;
 
+/** Canonical data schema — file content for files, entries for directories. */
+export const readOutputDataSchema = z.union([
+  fileContentDataSchema,
+  directoryEntriesDataSchema,
+]);
+
 // ── Tool definition ────────────────────────────────────────────────────────
+
+/** Project each outcome with the projector of the family it declared. */
+const readAgentProjector: AgentProjector = (canonical, toolName) =>
+  canonical.family === 'directory-entries'
+    ? directoryEntriesAgentProjector(canonical, toolName)
+    : fileContentAgentProjector(canonical, toolName);
 
 export const readDefinition: ToolDefinition = {
   name: 'read',
   description:
     'Read the content of a file. Returns lines with line numbers. ' +
-    'Use offset/limit to read specific sections of large files rather than reading the entire file.',
+    'Use offset/limit to read specific sections of large files rather than reading the entire file. ' +
+    'When the path is a directory, returns one level of its entries in the same tree format as read_directory.',
   inputSchema: readInputSchema,
   resultFamily: 'file-content',
-  outputDataSchema: fileContentDataSchema,
+  additionalResultFamilies: ['directory-entries'],
+  outputDataSchema: readOutputDataSchema,
+  agentProjector: readAgentProjector,
   category: 'filesystem',
   riskClass: RiskClass.READ_ONLY,
   offload: true,
@@ -106,6 +136,55 @@ function splitSourceLines(content: string): string[] {
   return lines.map((line) => line.endsWith('\r') ? line.slice(0, -1) : line);
 }
 
+// ── Directory branch ───────────────────────────────────────────────────────
+
+/** `read` on a directory lists exactly one level; deeper reads are `read_directory`. */
+const DIRECTORY_READ_DEPTH = 1;
+
+/**
+ * List a directory one level deep with the same canonical structure,
+ * visibility policy, and status semantics as `read_directory`.
+ */
+function directoryListingOutcome(
+  directoryPath: string,
+  ctx: ToolExecutionContext,
+): ToolHandlerOutcome<DirectoryEntriesData> {
+  const config = getToolConfig(ctx);
+  const { entries, depthLimitReached } = collectDirectoryEntries(directoryPath, {
+    maxDepth: DIRECTORY_READ_DEPTH,
+    includeHidden: false,
+    ignoredDirs: new Set(config.ignored_dirs),
+  });
+  const data: DirectoryEntriesData = {
+    root: directoryPath,
+    entries,
+    totalEntries: entries.length,
+    depthLimit: DIRECTORY_READ_DEPTH,
+    depthLimitReached,
+  };
+  directoryEntriesDataSchema.parse(data);
+  if (entries.length === 0) {
+    return { status: 'empty', data, family: 'directory-entries' };
+  }
+  if (!depthLimitReached) {
+    return { status: 'complete', data, family: 'directory-entries' };
+  }
+  return {
+    status: 'partial',
+    data,
+    family: 'directory-entries',
+    retrieval: {
+      kind: 'rerun',
+      toolName: 'read_directory',
+      input: {
+        directory_path: directoryPath,
+        max_depth: DIRECTORY_READ_DEPTH + 1,
+        include_hidden: false,
+      },
+    },
+  };
+}
+
 // ── Handler ────────────────────────────────────────────────────────────────
 
 export const readHandler: ToolHandler = async (input: unknown, ctx) => {
@@ -117,6 +196,12 @@ export const readHandler: ToolHandler = async (input: unknown, ctx) => {
   const requestedRange = { start: offset, end: requestedEnd };
 
   try {
+    // stat follows symlinks, matching readFileSync's resolution for files.
+    const stat = fs.statSync(filePath);
+    if (stat.isDirectory()) {
+      return directoryListingOutcome(filePath, ctx);
+    }
+
     if (isBinaryFileSync(filePath)) {
       return errorOutcome(
         filePath,

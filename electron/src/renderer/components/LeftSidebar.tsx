@@ -49,6 +49,12 @@ interface LeftSidebarProps {
   onSessionRename?: (id: string, name: string) => void | Promise<void>;
   onRefreshSessions: () => void;
   onOpenSettings: () => void;
+  onOpenAnalytics?: () => void;
+  /**
+   * Which footer view is currently open, so its button renders in the
+   * selected state (mirrors an active session row). null in chat mode.
+   */
+  activeView?: 'analytics' | 'settings' | null;
   /** Current workspace (draft → session → sticky → unbound). */
   workspace?: WorkspaceInfo | null;
   /**
@@ -69,6 +75,8 @@ interface LeftSidebarProps {
   activities?: readonly SessionActivity[];
   /** Immediate targeted stop from an Activity row. */
   onStopSession?: (sessionId: string) => void;
+  /** Open the trust dialog for the workspace (untrusted/changed badge click). */
+  onTrustBadgeClick?: () => void;
 }
 
 /**
@@ -92,6 +100,8 @@ export const LeftSidebar = memo(function LeftSidebar({
   onSessionRename,
   onRefreshSessions,
   onOpenSettings,
+  onOpenAnalytics,
+  activeView = null,
   workspace = null,
   selectedProjectPath = null,
   onProjectSelect,
@@ -100,6 +110,7 @@ export const LeftSidebar = memo(function LeftSidebar({
   projectPickerCreatesDraft = false,
   activities = [],
   onStopSession,
+  onTrustBadgeClick,
 }: LeftSidebarProps) {
   const [query, setQuery] = useState('');
 
@@ -166,12 +177,25 @@ export const LeftSidebar = memo(function LeftSidebar({
           </Button>
         )}
         <div className="left-panel-collapsed-spacer" />
+        {onOpenAnalytics && (
+          <IconButton
+            label="Analytics"
+            icon="barChart"
+            size="sm"
+            iconSize={18}
+            onClick={onOpenAnalytics}
+            className={activeView === 'analytics' ? 'session-item-active' : ''}
+            aria-current={activeView === 'analytics' ? 'page' : undefined}
+          />
+        )}
         <IconButton
           label="Settings"
           icon="settings"
           size="sm"
           iconSize={18}
           onClick={onOpenSettings}
+          className={activeView === 'settings' ? 'session-item-active' : ''}
+          aria-current={activeView === 'settings' ? 'page' : undefined}
         />
       </aside>
     );
@@ -213,6 +237,7 @@ export const LeftSidebar = memo(function LeftSidebar({
           onPickProjectDir={onPickProjectDir}
           onNewChatInProject={onSessionCreate}
           projectPickerCreatesDraft={projectPickerCreatesDraft}
+          onTrustBadgeClick={onTrustBadgeClick}
         />
 
         <div className="session-search">
@@ -250,11 +275,24 @@ export const LeftSidebar = memo(function LeftSidebar({
       </div>
 
       <div className="panel-footer">
+        {onOpenAnalytics && (
+          <Button
+            variant="ghost"
+            size="md"
+            className={`session-analytics-btn ${activeView === 'analytics' ? 'session-item-active' : ''}`}
+            onClick={onOpenAnalytics}
+            aria-current={activeView === 'analytics' ? 'page' : undefined}
+          >
+            <Icon name="barChart" size={18} />
+            <span>Analytics</span>
+          </Button>
+        )}
         <Button
           variant="ghost"
           size="md"
-          className="session-settings-btn"
+          className={`session-settings-btn ${activeView === 'settings' ? 'session-item-active' : ''}`}
           onClick={onOpenSettings}
+          aria-current={activeView === 'settings' ? 'page' : undefined}
         >
           <Icon name="settings" size={18} />
           <span>Settings</span>
@@ -272,6 +310,7 @@ function WorkspaceChip({
   onPickProjectDir,
   onNewChatInProject,
   projectPickerCreatesDraft,
+  onTrustBadgeClick,
 }: {
   workspace: WorkspaceInfo | null;
   isUnbound: boolean;
@@ -279,8 +318,12 @@ function WorkspaceChip({
   /** New chat in the current project (no directory dialog). */
   onNewChatInProject?: () => void;
   projectPickerCreatesDraft: boolean;
+  /** Open the trust dialog for this workspace. */
+  onTrustBadgeClick?: () => void;
 }) {
   const cwd = workspace?.cwd ?? null;
+  const trust = workspace?.trust ?? 'trusted';
+  const trustGated = !isUnbound && (trust === 'untrusted' || trust === 'changed');
   const label = isUnbound
     ? 'No project folder'
     : cwd
@@ -288,7 +331,11 @@ function WorkspaceChip({
       : 'No project folder';
   const title = isUnbound
     ? 'Choose a project folder to scope sessions and tools'
-    : (cwd ?? undefined);
+    : trustGated && trust === 'changed'
+      ? `${cwd ?? ''} — project changed since it was trusted; review the updated surface`
+      : trustGated
+        ? `${cwd ?? ''} — not trusted; review the project surface to continue`
+        : (cwd ?? undefined);
 
   // On a non-empty session the chip offers "New chat" in *this* project.
   // Folder picking is only for unbound / explicit project change.
@@ -300,6 +347,18 @@ function WorkspaceChip({
     <div className="workspace-chip border border-base-300 bg-base-100" title={title}>
       <Icon name="folder" size={12} className="workspace-chip-icon shrink-0 opacity-70" />
       <span className="workspace-chip-path mono truncate">{label}</span>
+      {trustGated && (
+        <button
+          type="button"
+          className="shrink-0"
+          onClick={onTrustBadgeClick}
+          title={trust === 'changed' ? 'Review the changed project surface' : 'Review the project surface to grant trust'}
+        >
+          <StatusBadge tone={trust === 'changed' ? 'error' : 'warning'} size="xs" withDot>
+            {trust === 'changed' ? 'Changed' : 'Not trusted'}
+          </StatusBadge>
+        </button>
+      )}
       {showNewChat && (
         <Button
           variant="ghost"

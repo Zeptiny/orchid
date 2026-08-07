@@ -1,5 +1,5 @@
 /**
- * Sidebar — right inspector panel (Todos, Subagents, Context, Usage, Index, MCP).
+ * Sidebar — right inspector panel (Todos, Subagents, Commands, Context, Usage, Index, MCP).
  * Iteration 012 mock-aligned collapse blocks.
  */
 import { memo, useEffect, useState, type ReactNode } from 'react';
@@ -18,6 +18,7 @@ import { TodoStatus } from '../../shared/types/todo';
 import type { SubagentRecord } from '../../shared/types/subagent';
 import type { SubagentListState, SubagentDetail } from '../hooks/useSubagents';
 import type { TodoListState } from '../hooks/useTodos';
+import type { BackgroundCommandsState } from '../hooks/useBackgroundCommands';
 import { formatShortcut } from '../keyboard';
 import {
   nextForceOpenEpoch,
@@ -34,6 +35,7 @@ import { IconButton } from './ui/IconButton';
 import { Spinner } from './ui/Spinner';
 import { StateMessage } from './ui/StateMessage';
 import { StatusBadge } from './ui/StatusBadge';
+import { CommandsSection, countRunningCommands } from './Sidebar/CommandsSection';
 
 interface SidebarProps {
   isOpen: boolean;
@@ -47,6 +49,11 @@ interface SidebarProps {
   getSubagentDetail: (id: string) => SubagentDetail | null;
   todoState: TodoListState;
   onRefreshTodos: () => void;
+  /** Session-wide background command fleet (main + subagent scopes). */
+  commandsState: BackgroundCommandsState;
+  onRefreshCommands: () => void;
+  /** Active session the command widgets resolve visibility and controls against. */
+  sessionId: string | null;
   mcpServers: MCPServerStatus[];
   ragStatus?: RAGStoreStatus | null;
   astStatus?: ASTStoreStatus | null;
@@ -79,6 +86,9 @@ export const Sidebar = memo(function Sidebar({
   getSubagentDetail,
   todoState,
   onRefreshTodos,
+  commandsState,
+  onRefreshCommands,
+  sessionId = null,
   mcpServers,
   ragStatus = null,
   astStatus = null,
@@ -99,6 +109,9 @@ export const Sidebar = memo(function Sidebar({
   const [forceOpenEpoch, setForceOpenEpoch] = useState(0);
   const runningSubagentCount = subagentState.status === 'ready'
     ? countRunningSubagents(subagentState.subagents)
+    : 0;
+  const runningCommandCount = commandsState.status === 'ready'
+    ? countRunningCommands(commandsState.commands)
     : 0;
 
   useEffect(() => {
@@ -184,6 +197,23 @@ export const Sidebar = memo(function Sidebar({
             onSelect={onSelectSubagent}
             getDetail={getSubagentDetail}
             onOpenView={onOpenSubagentView}
+          />
+        </CollapseBlock>
+
+        <CollapseBlock
+          title="Commands"
+          sectionId="inspector-commands"
+          forceOpenToken={forcedSection === 'inspector-commands' ? forceOpenEpoch : 0}
+          badge={
+            runningCommandCount > 0 ? (
+              <StatusBadge tone="success" size="xs">{runningCommandCount}</StatusBadge>
+            ) : null
+          }
+        >
+          <CommandsSection
+            state={commandsState}
+            onRefresh={onRefreshCommands}
+            sessionId={sessionId}
           />
         </CollapseBlock>
 
@@ -1051,6 +1081,7 @@ function TokenUsageSection({ cumulativeUsage }: TokenUsageSectionProps) {
   const completion = cumulativeUsage?.completion_tokens ?? 0;
   const total = cumulativeUsage?.total_tokens ?? 0;
   const cached = cumulativeUsage?.cached_tokens ?? 0;
+  const reasoning = cumulativeUsage?.reasoning_tokens ?? 0;
 
   return (
     <div className="inspector-stack">
@@ -1070,6 +1101,12 @@ function TokenUsageSection({ cumulativeUsage }: TokenUsageSectionProps) {
         <strong>Cached</strong>
         <span className="subtle">{formatTokenCount(cached)}</span>
       </div>
+      {reasoning > 0 && (
+        <div className="inspector-row">
+          <strong>Reasoning</strong>
+          <span className="subtle">{formatTokenCount(reasoning)}</span>
+        </div>
+      )}
     </div>
   );
 }

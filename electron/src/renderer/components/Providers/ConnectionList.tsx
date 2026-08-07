@@ -15,11 +15,13 @@ import {
   providerStatusForConnection,
   providerStatusIsConnectionScoped,
 } from '../../utils/provider-selection';
+import type { Notify } from '../../utils/notify';
 import { Icon } from '../Icon';
 import { Alert } from '../ui/Alert';
 import { Button } from '../ui/Button';
 import { ConfigCard } from '../ui/ConfigCard';
 import { DialogSurface } from '../ui/DialogSurface';
+import { IconButton } from '../ui/IconButton';
 import { Panel } from '../ui/Panel';
 import { SectionHeader } from '../ui/SectionHeader';
 import { StateMessage } from '../ui/StateMessage';
@@ -39,6 +41,7 @@ export interface ConnectionListProps {
   readonly onDelete?: (
     message: ProviderDeleteConnectionMessage,
   ) => Promise<ProviderDeleteConnectionResult>;
+  readonly onNotify?: Notify;
   readonly onRefreshStatus?: (
     message: ProviderStatusRefreshMessage,
   ) => Promise<ProviderStatusView | null>;
@@ -49,10 +52,6 @@ type ConnectionAction = 'validate' | 'disable' | 'enable' | 'disconnect' | 'dele
 interface ConnectionActionResult {
   readonly message: string | null;
   readonly connection?: ProviderConnectionView;
-}
-
-function describeError(error: unknown): string {
-  return error instanceof Error ? error.message : 'The connection action could not be completed.';
 }
 
 function healthLabel(health: ProviderConnectionView['health']): string {
@@ -87,6 +86,25 @@ function healthBadgeTone(
   }
 }
 
+function modelDisplayNames(
+  connection: ProviderConnectionView,
+  definition: ProviderDefinitionView | undefined,
+): readonly string[] {
+  const displayNames = new Map(
+    (definition?.models ?? []).map((model) => [model.id, model.displayName]),
+  );
+  for (const model of connection.customModels) {
+    displayNames.set(model.id, model.displayName);
+  }
+  const modelIds = [
+    ...connection.modelIds,
+    ...connection.customModels
+      .map((model) => model.id)
+      .filter((modelId) => !connection.modelIds.includes(modelId)),
+  ];
+  return modelIds.map((modelId) => displayNames.get(modelId) ?? modelId);
+}
+
 /**
  * Each card represents a single account/endpoint. It never shows a credential
  * handle or token, and disconnect requires an explicit in-context confirmation.
@@ -102,13 +120,12 @@ export function ConnectionList({
   onEnable,
   onDisconnect,
   onDelete,
+  onNotify,
   onRefreshStatus,
 }: ConnectionListProps) {
   const [busy, setBusy] = useState<{ connectionId: string; action: ConnectionAction } | null>(null);
   const [confirmDisconnectId, setConfirmDisconnectId] = useState<string | null>(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
-  const [message, setMessage] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
   const deletePermanentRef = useRef<HTMLButtonElement>(null);
   const deleteTriggerRef = useRef<HTMLButtonElement>(null);
 
@@ -119,19 +136,17 @@ export function ConnectionList({
   ) => {
     if (!operation) return;
     setBusy({ connectionId, action });
-    setError(null);
-    setMessage(null);
     try {
       const result = await operation();
-      setMessage(
+      onNotify?.(
         result.message ?? (result.connection
           ? `${healthLabel(result.connection.health)} connection updated.`
           : 'Connection updated.'),
       );
       if (action === 'disconnect') setConfirmDisconnectId(null);
       if (action === 'delete') setConfirmDeleteId(null);
-    } catch (actionError) {
-      setError(describeError(actionError));
+    } catch {
+      // useProviders surfaces action failures on the settings surface.
     } finally {
       setBusy(null);
     }
@@ -172,7 +187,6 @@ export function ConnectionList({
     >
       <SectionHeader
         title={<h2 id="provider-connections-title" className="text-sm font-semibold">Connections</h2>}
-        description="Each connection is a separate provider account or endpoint."
         actions={
           onAddConnection ? (
             <Button size="sm" onClick={onAddConnection}>
@@ -183,32 +197,20 @@ export function ConnectionList({
         }
       />
 
-      {message && (
-        <Alert tone="info" role="status" icon="alertCircle" aria-live="polite">{message}</Alert>
-      )}
-      {error && (
-        <Alert tone="error" icon="alertCircle" aria-live="assertive">{error}</Alert>
-      )}
-
       <div className="grid gap-3 xl:grid-cols-2">
         {connections.map((connection) => {
           const isBusy = busy?.connectionId === connection.id;
-          const modelNames = [
-            ...connection.modelIds,
-            ...connection.customModels
-              .map((model) => model.id)
-              .filter((modelId) => !connection.modelIds.includes(modelId)),
-          ];
           const canValidate =
             connection.health === 'draft' || connection.health === 'needs_attention';
           const definition = definitions.find((candidate) => candidate.id === connection.providerId);
+          const modelNames = modelDisplayNames(connection, definition);
           const status = providerStatusForConnection(connections, connection, statuses);
           const showsProviderStatus = status !== undefined
             || (providerStatusIsConnectionScoped(connection.providerId)
               && connection.credentialKind !== 'none');
           return (
-            <ConfigCard key={connection.id}>
-              <ConfigCard.Body className="flex flex-col gap-4">
+            <ConfigCard key={connection.id} className="h-full">
+              <ConfigCard.Body className="flex flex-1 flex-col gap-4">
                 <div className="flex flex-wrap items-start justify-between gap-3">
                   <div>
                     <h3 className="config-card-title font-semibold">{connection.name}</h3>
@@ -240,11 +242,6 @@ export function ConnectionList({
                   <Alert tone="warning" icon="alert">
                     Reconnect or validate this connection before using it. Other connections are
                     unaffected.
-                  </Alert>
-                )}
-                {connection.health === 'disabled' && (
-                  <Alert tone="info" role="status" icon="alertCircle">
-                    New turns are disabled. A turn that already started can finish safely.
                   </Alert>
                 )}
                 {connection.activeTurnCount > 0 && (
@@ -304,16 +301,18 @@ export function ConnectionList({
                   </Alert>
                 )}
 
-                <div className="flex justify-end gap-2">
+                <div className="mt-auto flex flex-wrap justify-end gap-2 border-t border-base-300 pt-3">
                   {onEditConnection && (
-                    <Button
+                    <IconButton
+                      label="Edit connection"
+                      icon="edit"
                       size="sm"
+                      shape="square"
+                      iconSize={14}
+                      className="h-7 w-7"
                       onClick={() => onEditConnection(connection)}
                       disabled={isBusy}
-                    >
-                      <Icon name="edit" size={14} />
-                      Edit connection
-                    </Button>
+                    />
                   )}
                   {canValidate && (
                     <Button
@@ -373,18 +372,21 @@ export function ConnectionList({
                         Disconnect
                       </Button>
                     )}
-                  <Button
+                  <IconButton
+                    label="Delete connection"
+                    icon="trash"
                     variant="error"
                     size="sm"
+                    shape="square"
+                    iconSize={14}
+                    className="h-7 w-7"
                     onClick={(event) => {
                       deleteTriggerRef.current = event.currentTarget;
                       setConfirmDisconnectId(null);
                       setConfirmDeleteId(connection.id);
                     }}
                     disabled={isBusy || !onDelete}
-                  >
-                    Delete connection
-                  </Button>
+                  />
                 </div>
 
                 <DialogSurface

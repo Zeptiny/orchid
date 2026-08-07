@@ -19,6 +19,7 @@ import type {
 import { LeftSidebar } from './LeftSidebar';
 import { useProviders } from '../hooks/useProviders';
 import { useSession } from '../hooks/useSession';
+import type { UseSessionActivityReturn } from '../hooks/useSessionActivity';
 import { useFocusTrap, useGlobalShortcuts } from '../keyboard';
 import { applyConfigDraft, mergeConfigDraft } from '../utils/config-draft';
 import {
@@ -34,6 +35,7 @@ import {
 } from '../utils/config-save';
 import { withMapDeletionTombstones } from '../utils/config-tombstones';
 import { emitOrchidEvent } from '../utils/events';
+import type { Notify } from '../utils/notify';
 import { Keycaps } from './Keycaps';
 import { Alert } from './ui/Alert';
 import { Button } from './ui/Button';
@@ -93,10 +95,14 @@ const SubagentsTab = lazyWithPreload(() => import('./Preferences/SubagentsTab').
 const AgentsMdTab = lazyWithPreload(() => import('./Preferences/AgentsMdTab').then((module) => ({
   default: module.AgentsMdTab,
 })));
+const TrustedProjectsTab = lazyWithPreload(() => import('./Preferences/TrustedProjectsTab').then((module) => ({
+  default: module.TrustedProjectsTab,
+})));
 
 type TabId =
   | 'general'
   | 'permissions'
+  | 'trusted-projects'
   | 'providers'
   | 'mcp'
   | 'tier-models'
@@ -110,6 +116,7 @@ type TabId =
 const TAB_COMPONENTS = {
   general: GeneralTab,
   permissions: PermissionsTab,
+  'trusted-projects': TrustedProjectsTab,
   providers: ProvidersTab,
   mcp: MCPServersTab,
   'tier-models': TierModelsTab,
@@ -129,6 +136,7 @@ interface TabDef {
 const TABS: TabDef[] = [
   { id: 'general', label: 'General' },
   { id: 'permissions', label: 'Permissions' },
+  { id: 'trusted-projects', label: 'Trusted Projects' },
   { id: 'providers', label: 'Providers' },
   { id: 'mcp', label: 'MCP' },
   { id: 'tier-models', label: 'Tier Models' },
@@ -143,6 +151,9 @@ const TABS: TabDef[] = [
 interface ConfigViewProps {
   onClose: () => void;
   initialTab?: TabId;
+  onNotify: Notify;
+  onOpenAnalytics?: () => void;
+  activity: UseSessionActivityReturn;
 }
 
 interface PermissionTabContext {
@@ -155,7 +166,7 @@ interface PermissionTabContext {
   updateDraft: (updates: ConfigPatch) => void;
 }
 
-export function ConfigView({ onClose, initialTab = 'general' }: ConfigViewProps) {
+export function ConfigView({ onClose, initialTab = 'general', onNotify, onOpenAnalytics, activity }: ConfigViewProps) {
   const session = useSession();
   const providers = useProviders();
   const rootRef = useRef<HTMLDivElement>(null);
@@ -565,10 +576,14 @@ export function ConfigView({ onClose, initialTab = 'general' }: ConfigViewProps)
     await session.enterDraft();
   }, [session]);
 
+  const handleStopSession = useCallback((sessionId: string) => {
+    void window.orchid?.chat?.stop?.({ sessionId });
+  }, []);
+
   return (
     <div
       ref={rootRef}
-      className="config-shell orchid-view-enter grid h-screen min-h-0 overflow-hidden bg-base-100 text-base-content"
+      className="config-shell grid h-screen min-h-0 overflow-hidden bg-base-100 text-base-content"
     >
       <LeftSidebar
         activeSessionId={session.activeSession?.id ?? null}
@@ -577,7 +592,9 @@ export function ConfigView({ onClose, initialTab = 'general' }: ConfigViewProps)
           (session.workspace?.status === 'valid' ? session.workspace.cwd : null)
         }
         isCollapsed={leftCollapsed}
+        activeView="settings"
         onOpenSettings={() => {}}
+        onOpenAnalytics={onOpenAnalytics}
         onPickProjectDir={() => {
           void session.pickProjectDir();
         }}
@@ -593,6 +610,8 @@ export function ConfigView({ onClose, initialTab = 'general' }: ConfigViewProps)
         }}
         onSessionDelete={session.deleteSession}
         onSessionSelect={handleSessionSelect}
+        activities={activity.activities}
+        onStopSession={handleStopSession}
         onToggle={() => setLeftCollapsed((prev) => !prev)}
         sessionListState={session.listState}
         workspace={session.workspace}
@@ -689,6 +708,7 @@ export function ConfigView({ onClose, initialTab = 'general' }: ConfigViewProps)
                     ? updateProjectPermissionDraft
                     : updateDraft,
                 },
+                onNotify,
               )}
             </Suspense>
           ) : (
@@ -833,6 +853,7 @@ function renderTab(
     onScopeChange: () => {},
     updateDraft,
   },
+  onNotify: Notify = () => {},
 ) {
   switch (activeTab) {
     case 'general':
@@ -892,8 +913,10 @@ function renderTab(
           onScopeChange={permission.onScopeChange}
         />
       );
+    case 'trusted-projects':
+      return <TrustedProjectsTab onNotify={onNotify} />;
     case 'providers':
-      return <ProvidersTab />;
+      return <ProvidersTab onNotify={onNotify} />;
     case 'mcp':
       return (
         <MCPServersTab

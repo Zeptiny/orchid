@@ -288,6 +288,23 @@ export async function runIndexProjectImpl(
     embedder = await createEmbedderFromConfig();
   }
 
+  // Verify vector/chunk alignment BEFORE reading file hashes. DB rows commit
+  // per file while vectors.npy flushes once at the end, so an interrupted
+  // previous run can leave the chunks table ahead of the vector file.
+  // Continuing incrementally from that state would permanently misalign
+  // vector rows against chunks (search returns wrong files), so force a full
+  // rebuild instead. Clearing before the hash read also ensures unchanged
+  // files are not skipped against a reset database.
+  let vectorState = store.loadVectorState();
+  if (!vectorState.consistent) {
+    console.warn(
+      '[RAG] vectors.npy is out of sync with the chunk database ' +
+        '(likely an interrupted index run); clearing index for full rebuild',
+    );
+    store.clear();
+    vectorState = store.loadVectorState();
+  }
+
   const existingHashes = store.getFileHashes();
   if (force) {
     for (const [k] of existingHashes) {
@@ -297,9 +314,6 @@ export async function runIndexProjectImpl(
 
   const indexedFiles = new Set<string>();
   const fileHashes = new Map<string, string>();
-
-  // Load vector state once; batch ops mutate it in place and flush at end
-  const vectorState = store.loadVectorState();
 
   for (let i = 0; i < files.length; i++) {
     const filepath = files[i]!;

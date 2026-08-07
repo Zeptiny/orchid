@@ -8,6 +8,7 @@ export const EMPTY_USAGE: Usage = {
   completion_tokens: 0,
   total_tokens: 0,
   cached_tokens: 0,
+  reasoning_tokens: 0,
 };
 
 /** True when any token counter is non-zero. */
@@ -17,7 +18,8 @@ export function hasUsage(usage: Usage | null | undefined): boolean {
     usage.prompt_tokens > 0 ||
     usage.completion_tokens > 0 ||
     usage.total_tokens > 0 ||
-    usage.cached_tokens > 0
+    usage.cached_tokens > 0 ||
+    (usage.reasoning_tokens ?? 0) > 0
   );
 }
 
@@ -34,6 +36,7 @@ export function addUsage(a: Usage | null | undefined, b: Usage | null | undefine
     completion_tokens: (a?.completion_tokens ?? 0) + (b?.completion_tokens ?? 0),
     total_tokens: (a?.total_tokens ?? 0) + (b?.total_tokens ?? 0),
     cached_tokens: (a?.cached_tokens ?? 0) + (b?.cached_tokens ?? 0),
+    reasoning_tokens: (a?.reasoning_tokens ?? 0) + (b?.reasoning_tokens ?? 0),
   };
 }
 
@@ -158,7 +161,8 @@ function usageCountersEqual(a: Usage | null | undefined, b: Usage | null | undef
     a.prompt_tokens === b.prompt_tokens &&
     a.completion_tokens === b.completion_tokens &&
     a.total_tokens === b.total_tokens &&
-    a.cached_tokens === b.cached_tokens
+    a.cached_tokens === b.cached_tokens &&
+    (a.reasoning_tokens ?? 0) === (b.reasoning_tokens ?? 0)
   );
 }
 

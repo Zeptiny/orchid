@@ -1171,6 +1171,7 @@ describe('SubagentManager terminal eviction and session purge (U9)', () => {
   });
 
   it('run promises are cleared after success, failure, and interruption', async () => {
+    setConfig({ max_active_global: 10, max_active_per_session: 10 });
     const gates: Array<() => void> = [];
     manager.setRunner(async function* (params): AsyncGenerator<StreamEvent> {
       await new Promise<void>((resolve) => { gates.push(resolve); });

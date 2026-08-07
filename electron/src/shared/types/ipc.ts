@@ -301,9 +301,16 @@ export interface ChatToolCallUpdateEvent extends ChatEventIdentity {
 
 // ── Background Command API ────────────────────────────────────────────────
 
+/** Input ownership of a background command. */
+export type BgCommandOwner = 'AGENT' | 'USER';
+
 export interface BgCommandSnapshotRequest {
-  /** The background command ID. */
-  commandId: number;
+  /** Background command ID (targets the background store). Exactly one of
+   * `commandId` / `toolCallId` must be provided. */
+  commandId?: number;
+  /** Foreground tool call ID (targets the foreground live registry). Exactly
+   * one of `commandId` / `toolCallId` must be provided. */
+  toolCallId?: string;
   /** Optional last N lines to retrieve (default: 50, max: 1000). */
   lastN?: number;
   /**
@@ -311,21 +318,111 @@ export interface BgCommandSnapshotRequest {
    * window's active session; cross-session command tails are denied.
    */
   sessionId?: string;
+  /**
+   * When false, the handler returns `tail: ''` without touching the buffer
+   * and keeps all other fields (running/exitCode/owner/etc). Default `true`
+   * when omitted.
+   */
+  includeTail?: boolean;
+}
+
+export interface BgCommandSnapshotFound {
+  /** The command exists and is visible to the requesting session. */
+  found: true;
+  /** Tail output text. */
+  tail: string;
+  /** Exit code (null if still running). */
+  exitCode: number | null;
+  /** Whether the process is still running (`exitCode === null`). Optional for
+   * wire-compat with old clients that only expect tail/exitCode. */
+  running?: boolean;
+  /** Whether the command accepts user input (interactive PTY commands only). */
+  interactive?: boolean;
+  /** Current input owner. */
+  owner?: BgCommandOwner;
+  /** The spawned command line. */
+  command?: string;
+  /** Human-readable label; foreground commands reuse the command line. */
+  description?: string;
+  /** Owning agent scope (`'main'` or a subagent id). */
+  agentScopeId?: string;
+  /**
+   * Restart-stable spawn identity (epoch ms). Background: the store entry's
+   * `createdAt`; foreground: the mirror's `startedAt`. Replayed widgets compare
+   * this against the persisted spawn fact so a reused integer `commandId` after
+   * an app restart cannot alias onto an unrelated live process.
+   */
+  createdAt?: number;
 }
 
 export type BgCommandSnapshotResult =
-  | {
-    /** The command exists and is visible to the requesting session. */
-    found: true;
-    /** Tail output text. */
-    tail: string;
-    /** Exit code (null if still running). */
-    exitCode: number | null;
-  }
+  | BgCommandSnapshotFound
   | {
     /** The command is unavailable after restart, eviction, or session mismatch. */
     found: false;
   };
+
+export interface BgCommandListRequest {
+  /**
+   * Session whose background fleet to list. When omitted, main resolves the
+   * calling window's active session.
+   */
+  sessionId?: string;
+}
+
+/** One background command in the session fleet view. */
+export interface BgCommandListItem {
+  id: number;
+  command: string;
+  description: string;
+  interactive: boolean;
+  owner: BgCommandOwner;
+  /** Owning agent scope (`'main'` or a subagent id). */
+  agentScopeId: string;
+  /** `'main'` for the main scope, else the subagent display name
+   * (falls back to the raw scope id). */
+  scopeName: string;
+  running: boolean;
+  exitCode: number | null;
+  createdAt: number;
+  lastOutputAt: number;
+}
+
+export type BgCommandListResult = BgCommandListItem[];
+
+export interface BgCommandSendInputRequest {
+  commandId: number;
+  /** Text to write to stdin (include \n for newline). */
+  text: string;
+  sessionId?: string;
+}
+
+export type BgCommandSendInputResult =
+  | { ok: true }
+  | {
+    ok: false;
+    /** `not_found` covers unknown ids and cross-session access alike. */
+    reason: 'not_found' | 'not_interactive' | 'exited' | 'write_failed';
+  };
+
+/** Target for user terminate / release-input (session-privileged). */
+export interface BgCommandControlRequest {
+  commandId: number;
+  sessionId?: string;
+}
+
+export type BgCommandTerminateResult =
+  | { ok: true }
+  | { ok: false; reason: 'not_found' };
+
+export interface BgCommandReleaseInputResult {
+  ok: boolean;
+}
+
+/** Push event: the background fleet of one session changed. */
+export interface BgCommandChangedEvent {
+  sessionId: string;
+}
 
 // ── Config API ───────────────────────────────────────────────────────────────
 
@@ -368,6 +465,7 @@ export type ConfigPatch = {
   llm_stream_idle_timeout?: number;
   llm_stream_retries?: number;
   background_command_idle_timeout?: number;
+  session_title_max_wait_seconds?: number;
   max_tool_steps?: number;
   permission_history_size?: number;
   permissions?: ConfigPatchMap<PermissionRule>;
@@ -526,6 +624,7 @@ export interface ProviderConnectionCreateMessage {
   authMethod: ProviderAuthMethod;
   modelIds: readonly string[];
   customModels?: readonly CustomConnectionModel[];
+  reasoningConfig?: Record<string, import('./provider').ReasoningModelConfig>;
   endpoint?: string | null;
   allowInsecureHttp?: boolean;
   /** Used only with `authMethod: 'environment'`; the value is never resolved here. */
@@ -689,6 +788,14 @@ export type WorkspaceSource = 'draft' | 'session' | 'default' | 'unbound';
 /** Coarse project-directory status (mirrors main project path helpers). */
 export type WorkspaceStatus = 'unbound' | 'valid' | 'missing';
 
+/**
+ * Trust posture of a bound project directory.
+ * - `trusted`: granted and fingerprint-current (or bare project, auto-trusted).
+ * - `untrusted`: has a project surface and no grant on record.
+ * - `changed`: previously trusted but the security surface fingerprint changed.
+ */
+export type TrustState = 'trusted' | 'untrusted' | 'changed';
+
 /** Resolved workspace for UI chrome and send gate. */
 export interface WorkspaceInfo {
   /** Canonical absolute path when bound; null when unbound. */
@@ -697,6 +804,11 @@ export interface WorkspaceInfo {
   source: WorkspaceSource;
   /** Directory usability status. */
   status: WorkspaceStatus;
+  /**
+   * Trust posture of the bound directory. Optional with a `trusted` default
+   * so producers that predate trusted-projects keep parsing.
+   */
+  trust?: TrustState;
 }
 
 export interface SessionChangeCwdMessage {
@@ -725,10 +837,104 @@ export interface SessionWorkspaceChangedEvent {
   workspace: WorkspaceInfo;
 }
 
+// ── Trusted projects API ─────────────────────────────────────────────────────
+
+/** One MCP server a project adds or overrides (display-safe fields only). */
+export interface TrustReportMcpServer {
+  name: string;
+  /** `added` when absent from home config; `override` when it shadows one. */
+  kind: 'added' | 'override';
+  command?: string;
+  url?: string;
+  args?: string[];
+  /** Environment variable names only — never values. */
+  envKeys?: string[];
+}
+
+/** One permission rule a project sets. */
+export interface TrustReportPermission {
+  tool: string;
+  /** Human-readable rule (mode name or inside/outside pair). */
+  rule: string;
+  /** True when the rule auto-allows (`allow` or `decide-for-me`). */
+  autoAllow: boolean;
+}
+
+/** One overridden config field, serialized for display. */
+export interface TrustReportConfigOverride {
+  key: string;
+  projectValue: string;
+  homeValue: string;
+}
+
+/** One model-selection override (`default_model` or a tier key). */
+export interface TrustReportModelOverride {
+  key: string;
+  connectionId: string;
+  modelId: string;
+}
+
+/** One project-local definition (agent / skill / personality). */
+export interface TrustReportDefinition {
+  kind: 'agent' | 'skill' | 'personality';
+  name: string;
+  /** True when it shadows a home definition of the same name. */
+  overridesHome: boolean;
+}
+
+/** Surface diff between a project and the home/global configuration. */
+export interface ProjectTrustReport {
+  /** Canonical absolute project path. */
+  projectDir: string;
+  /** Whether the project carries any project surface at all. */
+  hasSurface: boolean;
+  mcpServers: TrustReportMcpServer[];
+  permissions: TrustReportPermission[];
+  /** `agents_md` fields the project overrides. */
+  agentsMdOverrides: TrustReportConfigOverride[];
+  modelOverrides: TrustReportModelOverride[];
+  /** Remaining overridden top-level config keys. */
+  otherConfigOverrides: TrustReportConfigOverride[];
+  definitions: TrustReportDefinition[];
+  /** Root instruction files present (configured AGENTS.md aliases). */
+  instructionFiles: string[];
+}
+
+export interface ProjectTrustGetMessage {
+  cwd: string;
+}
+
+export interface ProjectTrustSetMessage {
+  cwd: string;
+  trusted: boolean;
+}
+
+/** Trust state plus report for one project. */
+export interface ProjectTrustInfo {
+  projectDir: string;
+  state: TrustState;
+  /** Null when trusted-and-current (nothing to disclose). */
+  report: ProjectTrustReport | null;
+}
+
+export interface ProjectTrustChangedEvent {
+  projectDir: string;
+  state: TrustState;
+}
+
+/** Entry shape for the settings trusted-projects list. */
+export interface TrustedProjectEntry {
+  projectDir: string;
+  trustedAt: string;
+  /** Live trust state (may be `changed` when the fingerprint drifted). */
+  state: TrustState;
+}
+
 /** Machine-readable chat:send gate / start failures. */
 export type ChatSendErrorKind =
   | 'session_not_found'
   | 'unbound_workspace'
+  | 'untrusted_project'
   | 'provider_required'
   | 'session_busy'
   | 'runtime_hydration_failed'
@@ -1032,6 +1238,17 @@ export interface OrchidAPI {
     onActivityChanged: (callback: (event: SessionActivityChangedEvent) => void) => () => void;
   };
 
+  projectTrust: {
+    /** Trust state + surface report for one project dir. */
+    get: (message: ProjectTrustGetMessage) => Promise<ProjectTrustInfo>;
+    /** Grant or revoke trust; broadcasts trust/workspace events. */
+    set: (message: ProjectTrustSetMessage) => Promise<ProjectTrustInfo>;
+    /** All trusted-project entries for the settings panel. */
+    list: () => Promise<TrustedProjectEntry[]>;
+    /** Trust state changed for a project dir. */
+    onChanged: (callback: (event: ProjectTrustChangedEvent) => void) => () => void;
+  };
+
   subagents: {
     snapshot: (request: SubagentSnapshotRequest) => Promise<SubagentSnapshot>;
     /** Batched subagent live deltas for the window's active session. */
@@ -1093,6 +1310,16 @@ export interface OrchidAPI {
 
   bgCmd: {
     snapshot: (request: BgCommandSnapshotRequest) => Promise<BgCommandSnapshotResult>;
+    /** List the session's background fleet across agent scopes (running-first). */
+    list: (request?: BgCommandListRequest) => Promise<BgCommandListResult>;
+    /** Send one line of user input; success takes USER ownership of the command. */
+    sendInput: (request: BgCommandSendInputRequest) => Promise<BgCommandSendInputResult>;
+    /** Terminate a single command in any agent scope of the session. */
+    terminate: (request: BgCommandControlRequest) => Promise<BgCommandTerminateResult>;
+    /** Release USER input ownership back to the agent. */
+    releaseInput: (request: BgCommandControlRequest) => Promise<BgCommandReleaseInputResult>;
+    /** Subscribe to background fleet changes (spawn/exit/eviction). */
+    onChanged: (callback: (event: BgCommandChangedEvent) => void) => () => void;
   };
 
   askQuestion: {
@@ -1111,6 +1338,16 @@ export interface OrchidAPI {
     onApprovalRequested: (callback: (event: PermissionApprovalRequestedEvent) => void) => () => void;
     onApprovalSettled: (callback: (event: PermissionApprovalSettledEvent) => void) => () => void;
   };
+ 
+  analytics: {
+     overview: (params?: { readonly timeRange?: import('./analytics').AnalyticsTimeRange }) => Promise<import('./analytics').OverviewResult>;
+     sessions: (params?: { readonly limit?: number; readonly timeRange?: import('./analytics').AnalyticsTimeRange }) => Promise<import('./analytics').SessionsResult>;
+     sessionDetail: (params: { readonly sessionId: string; readonly timeRange?: import('./analytics').AnalyticsTimeRange }) => Promise<import('./analytics').SessionDetailResult>;
+     models: (params?: { readonly timeRange?: import('./analytics').AnalyticsTimeRange }) => Promise<import('./analytics').ModelsResult>;
+     tools: (params?: { readonly timeRange?: import('./analytics').AnalyticsTimeRange }) => Promise<import('./analytics').ToolsResult>;
+     subagents: (params?: { readonly timeRange?: import('./analytics').AnalyticsTimeRange }) => Promise<import('./analytics').SubagentsResult>;
+     context: (params?: { readonly sessionId?: string; readonly timeRange?: import('./analytics').AnalyticsTimeRange }) => Promise<import('./analytics').ContextResult>;
+   };
 }
 
 // ── IPC Channel names ────────────────────────────────────────────────────────
@@ -1206,6 +1443,16 @@ export const IPC_CHANNELS = {
   SESSION_WORKING_SET_SET_FOCUS: 'session:working_set_set_focus',
   SESSION_WORKING_SET_CHANGED: 'session:working_set_changed',
 
+  // Project trust
+  /** Fetch trust state + surface report for one project dir. */
+  PROJECT_TRUST_GET: 'project:trust_get',
+  /** Grant or revoke trust for one project dir. */
+  PROJECT_TRUST_SET: 'project:trust_set',
+  /** List trusted-project entries (settings panel). */
+  PROJECT_TRUST_LIST: 'project:trust_list',
+  /** Push event: trust state changed for one project dir. */
+  PROJECT_TRUST_CHANGED: 'project:trust_changed',
+
   // Tool
   TOOL_EXECUTE: 'tool:execute',
 
@@ -1241,6 +1488,12 @@ export const IPC_CHANNELS = {
 
   // Background Commands
   BG_CMD_SNAPSHOT: 'bgcmd:snapshot',
+  BG_CMD_LIST: 'bgcmd:list',
+  BG_CMD_SEND_INPUT: 'bgcmd:send_input',
+  BG_CMD_TERMINATE: 'bgcmd:terminate',
+  BG_CMD_RELEASE_INPUT: 'bgcmd:release_input',
+  /** Push event: a session's background fleet changed (spawn/exit/eviction). */
+  BG_CMD_CHANGED: 'bgcmd:changed',
 
   // Ask Question
   ASK_QUESTION_ASKED: 'ask_question:asked',
@@ -1261,6 +1514,15 @@ export const IPC_CHANNELS = {
   UPDATER_STATUS_UPDATE: 'updater:status_update',
   UPDATER_PROGRESS: 'updater:progress',
   UPDATER_ERROR: 'updater:error',
+
+  // Analytics
+  ANALYTICS_OVERVIEW: 'analytics:overview',
+  ANALYTICS_SESSIONS: 'analytics:sessions',
+  ANALYTICS_SESSION_DETAIL: 'analytics:session_detail',
+  ANALYTICS_MODELS: 'analytics:models',
+  ANALYTICS_TOOLS: 'analytics:tools',
+  ANALYTICS_SUBAGENTS: 'analytics:subagents',
+  ANALYTICS_CONTEXT: 'analytics:context',
 } as const;
 
 export type IPCChannel = (typeof IPC_CHANNELS)[keyof typeof IPC_CHANNELS];
@@ -1316,6 +1578,9 @@ export const ALLOWED_INVOKE_CHANNELS = [
   IPC_CHANNELS.SESSION_WORKING_SET_CLOSE,
   IPC_CHANNELS.SESSION_WORKING_SET_REMOVE,
   IPC_CHANNELS.SESSION_WORKING_SET_SET_FOCUS,
+  IPC_CHANNELS.PROJECT_TRUST_GET,
+  IPC_CHANNELS.PROJECT_TRUST_SET,
+  IPC_CHANNELS.PROJECT_TRUST_LIST,
   IPC_CHANNELS.TOOL_EXECUTE,
   IPC_CHANNELS.AGENT_SAVE,
   IPC_CHANNELS.AGENT_DELETE,
@@ -1334,6 +1599,10 @@ export const ALLOWED_INVOKE_CHANNELS = [
   IPC_CHANNELS.AST_INDEX,
   IPC_CHANNELS.AST_INDEX_STATE,
   IPC_CHANNELS.BG_CMD_SNAPSHOT,
+  IPC_CHANNELS.BG_CMD_LIST,
+  IPC_CHANNELS.BG_CMD_SEND_INPUT,
+  IPC_CHANNELS.BG_CMD_TERMINATE,
+  IPC_CHANNELS.BG_CMD_RELEASE_INPUT,
   IPC_CHANNELS.ASK_QUESTION_SNAPSHOT,
   IPC_CHANNELS.ASK_QUESTION_ANSWER,
   IPC_CHANNELS.ASK_QUESTION_CANCEL,
@@ -1341,6 +1610,13 @@ export const ALLOWED_INVOKE_CHANNELS = [
   IPC_CHANNELS.PERMISSION_SNAPSHOT,
   IPC_CHANNELS.PERMISSION_SET_SESSION_MODE,
   IPC_CHANNELS.PERMISSION_GET_SESSION_MODE,
+  IPC_CHANNELS.ANALYTICS_OVERVIEW,
+  IPC_CHANNELS.ANALYTICS_SESSIONS,
+  IPC_CHANNELS.ANALYTICS_SESSION_DETAIL,
+  IPC_CHANNELS.ANALYTICS_MODELS,
+  IPC_CHANNELS.ANALYTICS_TOOLS,
+  IPC_CHANNELS.ANALYTICS_SUBAGENTS,
+  IPC_CHANNELS.ANALYTICS_CONTEXT,
 ] as const satisfies readonly IPCChannel[];
 
 // ── Allowed event channels (preload security gate) ───────────────────────────
@@ -1365,8 +1641,10 @@ export const ALLOWED_EVENT_CHANNELS = [
   IPC_CHANNELS.SESSION_TODOS_CHANGED,
   IPC_CHANNELS.SESSION_ACTIVITY_CHANGED,
   IPC_CHANNELS.SESSION_WORKING_SET_CHANGED,
+  IPC_CHANNELS.PROJECT_TRUST_CHANGED,
   IPC_CHANNELS.RAG_PROGRESS,
   IPC_CHANNELS.AST_PROGRESS,
+  IPC_CHANNELS.BG_CMD_CHANGED,
   IPC_CHANNELS.ASK_QUESTION_ASKED,
   IPC_CHANNELS.ASK_QUESTION_SETTLED,
   IPC_CHANNELS.PERMISSION_APPROVAL_REQUESTED,

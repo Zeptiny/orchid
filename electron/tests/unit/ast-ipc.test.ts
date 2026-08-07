@@ -48,6 +48,7 @@ const mocks = vi.hoisted(() => {
       errors: [],
       durationSeconds: 0.2,
     })),
+    trustState: { current: 'trusted' as 'trusted' | 'untrusted' | 'changed' },
   };
 });
 
@@ -58,6 +59,13 @@ vi.mock('electron', () => ({
 
 vi.mock('../../src/main/ipc/session', () => ({
   resolveBoundProjectPath: mocks.resolveBoundProjectPath,
+}));
+
+// The trust gate is fail-closed for the mocked (non-existent) project dir,
+// so this fixture defaults to trusted to keep the suite on its own seams.
+// Tests flip `mocks.trustState.current` to exercise the untrusted branches.
+vi.mock('../../src/main/project/trust', () => ({
+  getProjectTrustState: () => mocks.trustState.current,
 }));
 
 vi.mock('../../src/main/ast/store', () => ({
@@ -83,6 +91,7 @@ beforeEach(async () => {
   mocks.isIndexing.mockReset();
   mocks.isIndexing.mockReturnValue(false);
   mocks.indexProject.mockClear();
+  mocks.trustState.current = 'trusted';
 
   astIpc = await import('../../src/main/ipc/ast');
   astIpc.registerASTIPC();
@@ -173,4 +182,47 @@ describe('ast:index', () => {
       progressCallback: expect.any(Function),
     });
   });
+});
+
+describe('ast trust gate (untrusted project)', () => {
+  it('status returns the empty shape without opening the store', async () => {
+    mocks.trustState.current = 'untrusted';
+
+    await expect(handler(IPC_CHANNELS.AST_STATUS)(event)).resolves.toEqual({
+      totalFiles: 0,
+      totalSymbols: 0,
+      lastIndexed: null,
+      lastIndexDuration: null,
+    });
+    expect(mocks.ASTStore).not.toHaveBeenCalled();
+  });
+
+  it('index returns the not-trusted error without starting a run', async () => {
+    mocks.trustState.current = 'untrusted';
+
+    const result = await handler(IPC_CHANNELS.AST_INDEX)(event, { force: true });
+
+    expect(result).toMatchObject({
+      filesScanned: 0,
+      filesIndexed: 0,
+      symbolsExtracted: 0,
+      errors: ['Project folder is not trusted'],
+    });
+    expect(mocks.indexProject).not.toHaveBeenCalled();
+  });
+
+  it.each(['untrusted', 'changed'] as const)(
+    'treats a %s project as not trusted for status',
+    async (state) => {
+      mocks.trustState.current = state;
+
+      await expect(handler(IPC_CHANNELS.AST_STATUS)(event)).resolves.toEqual({
+        totalFiles: 0,
+        totalSymbols: 0,
+        lastIndexed: null,
+        lastIndexDuration: null,
+      });
+      expect(mocks.ASTStore).not.toHaveBeenCalled();
+    },
+  );
 });

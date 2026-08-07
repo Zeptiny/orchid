@@ -32,6 +32,14 @@ import {
   type WorkspaceInfo,
 } from '../project/workspace';
 import { getProjectRuntimeRegistry } from '../project/runtime';
+import { canonicalizeProjectDirectory } from '../project/path';
+import {
+  getProjectTrustState,
+  revokeProjectTrust,
+  revokeProjectTrustRaw,
+} from '../project/trust';
+import { invalidateProjectMCPManagers } from '../mcp/project-registry';
+import { cancelIndex } from '../rag/indexer';
 import { clearNextRequestStop } from './next-request-stop';
 import { removeSessionActivity } from './session-activity';
 import {
@@ -126,6 +134,62 @@ export async function bindProjectDirectory(
   }
 
   return resolveWindowWorkspace(windowId);
+}
+
+/**
+ * Revoke trust for one project and stop all of its activity.
+ *
+ * The trust record drops first so concurrent gate reads fail closed, then the
+ * cached runtime and MCP managers are invalidated (lease-aware shutdown
+ * retires them as running turns finish), any in-flight RAG indexing is
+ * cancelled, and every session bound to the directory is force-stopped.
+ *
+ * A directory that can no longer be canonicalized (deleted/moved) cannot be
+ * runtime-invalidated, but its store entry — keyed by the exact path string —
+ * is still removed so the settings listing can recover.
+ */
+export async function revokeProjectTrustForDir(projectDir: string): Promise<void> {
+  const canonical = canonicalizeProjectDirectory(projectDir);
+  if (canonical == null) {
+    try {
+      revokeProjectTrustRaw(projectDir);
+    } catch (error) {
+      console.warn(`Failed to remove trust record for '${projectDir}':`, error);
+    }
+    return;
+  }
+
+  revokeProjectTrust(canonical);
+  getProjectRuntimeRegistry().invalidate(canonical);
+  invalidateProjectMCPManagers(canonical);
+
+  // Trust just dropped — an in-flight index run for this directory must stop.
+  void cancelIndex(canonical).catch(() => {});
+
+  const boundSessionIds = getSessionManager()
+    .listSaved()
+    .filter((summary) => summary.cwd === canonical)
+    .map((summary) => summary.id);
+  if (boundSessionIds.length === 0) return;
+
+  // Dynamic import avoids the session.ts <-> chat.ts circular dependency.
+  // The store record is already deleted, so a load failure must not reject.
+  let forceStopSession: ((sessionId: string) => unknown) | null = null;
+  try {
+    ({ forceStopSession } = await import('./chat.js'));
+  } catch (error) {
+    console.warn(`Failed to load chat module while revoking trust for '${canonical}':`, error);
+  }
+  if (forceStopSession == null) return;
+
+  for (const sessionId of boundSessionIds) {
+    // One failing session stop must not prevent the remaining stops.
+    try {
+      forceStopSession(sessionId);
+    } catch (error) {
+      console.warn(`Failed to force-stop session '${sessionId}' during trust revocation:`, error);
+    }
+  }
 }
 
 /** Emit session:workspace_changed to the sender window. */
@@ -267,6 +331,12 @@ export function registerSessionIPC(): void {
     if (!isWorkspaceBound(workspace) || workspace.cwd == null) {
       throw new Error(
         'Cannot create session: no project folder selected. Choose a folder first.',
+      );
+    }
+
+    if (getProjectTrustState(workspace.cwd) !== 'trusted') {
+      throw new Error(
+        'Cannot create session: project folder is not trusted. Trust the project first.',
       );
     }
 

@@ -156,18 +156,31 @@ export const genericToolResultDataSchema = z.object({
 
 export type GenericToolResultData = z.infer<typeof genericToolResultDataSchema>;
 
-type ResultFamilySchema = typeof toolResultFamilySchema | z.ZodLiteral<ToolResultFamily>;
+/**
+ * The family or families a tool definition declares it may emit. A single
+ * family validates as a literal; multiple families validate as their union.
+ */
+export type ExpectedToolResultFamily =
+  | ToolResultFamily
+  | readonly ToolResultFamily[];
 
-function familySchema(expectedFamily?: ToolResultFamily): ResultFamilySchema {
-  return expectedFamily === undefined
-    ? toolResultFamilySchema
-    : z.literal(expectedFamily);
+function familySchema(expectedFamily?: ExpectedToolResultFamily): z.ZodTypeAny {
+  if (expectedFamily === undefined) return toolResultFamilySchema;
+  if (typeof expectedFamily === 'string') return z.literal(expectedFamily);
+  if (expectedFamily.length === 1) return z.literal(expectedFamily[0]!);
+  if (expectedFamily.length === 0) return toolResultFamilySchema;
+  const [first, second, ...rest] = expectedFamily;
+  return z.union([
+    z.literal(first!),
+    z.literal(second!),
+    ...rest.map((family) => z.literal(family)),
+  ]);
 }
 
 /** Build a canonical envelope schema whose data is owned by one tool definition. */
 export function createCanonicalToolResultSchema<T extends z.ZodTypeAny>(
   outputDataSchema: T,
-  expectedFamily?: ToolResultFamily,
+  expectedFamily?: ExpectedToolResultFamily,
 ) {
   const common = {
     schemaVersion: canonicalToolResultVersionSchema,
@@ -233,21 +246,27 @@ export type CanonicalToolResult<TData = JsonValue> =
     });
 
 export type ToolHandlerOutcome<TData = JsonValue> =
-  | { readonly status: 'complete'; readonly data: TData }
-  | { readonly status: 'partial'; readonly data: TData; readonly retrieval: ToolResultRetrieval }
-  | { readonly status: 'empty'; readonly data: TData }
-  | { readonly status: 'error'; readonly data: TData; readonly error: CanonicalToolError }
-  | { readonly status: 'cancelled'; readonly data: TData };
+  | { readonly status: 'complete'; readonly data: TData; readonly family?: ToolResultFamily }
+  | { readonly status: 'partial'; readonly data: TData; readonly retrieval: ToolResultRetrieval; readonly family?: ToolResultFamily }
+  | { readonly status: 'empty'; readonly data: TData; readonly family?: ToolResultFamily }
+  | { readonly status: 'error'; readonly data: TData; readonly error: CanonicalToolError; readonly family?: ToolResultFamily }
+  | { readonly status: 'cancelled'; readonly data: TData; readonly family?: ToolResultFamily };
 
-/** Add the version, family, and status-consistent completeness to an outcome. */
+/**
+ * Add the version, family, and status-consistent completeness to an outcome.
+ * An outcome may carry its own `family` when a tool emits more than one
+ * result family (the definition declares which are allowed); otherwise the
+ * definition's family is used.
+ */
 export function createCanonicalToolResult<TData>(
   family: ToolResultFamily,
   outcome: ToolHandlerOutcome<TData>,
 ): CanonicalToolResult<TData> {
+  const { family: outcomeFamily, ...rest } = outcome;
   const canonical = {
     schemaVersion: CANONICAL_TOOL_RESULT_VERSION,
-    family,
-    ...outcome,
+    family: outcomeFamily ?? family,
+    ...rest,
     completeness: outcome.status === 'partial' ? 'partial' : 'complete',
   };
   return canonicalToolResultSchema.parse(canonical) as CanonicalToolResult<TData>;
@@ -279,7 +298,7 @@ export interface ToolExecutionResult<TData = JsonValue> {
 /** Build the AI SDK raw-output schema separately from a handler data schema. */
 export function createToolExecutionResultSchema<T extends z.ZodTypeAny>(
   outputDataSchema: T,
-  expectedFamily?: ToolResultFamily,
+  expectedFamily?: ExpectedToolResultFamily,
 ) {
   return z.object({
     canonical: createCanonicalToolResultSchema(outputDataSchema, expectedFamily),

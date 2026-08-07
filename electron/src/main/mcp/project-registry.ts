@@ -7,6 +7,7 @@
  * workspace.
  */
 import type { ProjectRuntime } from '../project/runtime';
+import { getProjectTrustState } from '../project/trust';
 import { MCPManager } from './manager';
 import type { MCPServerConfig } from './schema';
 
@@ -29,6 +30,8 @@ export class ProjectMCPManagerRegistry {
     projectDir: string;
     leases: number;
     stale: boolean;
+    /** True once startAll ran — the entry may own live server processes. */
+    started: boolean;
   }>();
 
   private projectKey(runtime: ProjectRuntime): string {
@@ -48,18 +51,44 @@ export class ProjectMCPManagerRegistry {
   get(runtime: ProjectRuntime): MCPManager {
     const key = this.projectKey(runtime);
     const existing = this.byProject.get(key);
-    if (existing) return existing.manager;
+    if (existing) {
+      if (
+        !existing.started ||
+        getProjectTrustState(existing.projectDir) === 'trusted'
+      ) {
+        // A dormant entry owns no server processes and stays reusable while
+        // the trust posture is unchanged.
+        return existing.manager;
+      }
+      // Fingerprint drift or a revocation flipped a started manager's project
+      // out of `trusted`: retire it lease-aware so its servers stop. With no
+      // lease the entry shuts down now and the fall-through recreates a
+      // dormant manager; a running turn keeps its manager until release.
+      existing.stale = true;
+      this.retireIfUnused(key, existing);
+      const retained = this.byProject.get(key);
+      if (retained) return retained.manager;
+    }
 
     const manager = new MCPManager();
-    this.byProject.set(key, {
+    const entry = {
       manager,
       projectDir: runtime.projectDir,
       leases: 0,
       stale: false,
-    });
+      started: false,
+    };
+    this.byProject.set(key, entry);
 
     const servers = projectServers(runtime);
-    if (Object.keys(servers).length > 0) {
+    // Untrusted projects get a dormant manager: cached so lease holders and
+    // status reads stay safe, but no server process starts. Granting trust
+    // invalidates the entry, so the next get() recreates and starts servers.
+    if (
+      Object.keys(servers).length > 0 &&
+      getProjectTrustState(runtime.projectDir) === 'trusted'
+    ) {
+      entry.started = true;
       void manager.startAll(servers, {
         perServerTimeout: runtime.config.mcp_per_server_timeout * 1000,
         startupTimeout: runtime.config.mcp_startup_timeout * 1000,
@@ -111,7 +140,7 @@ export class ProjectMCPManagerRegistry {
 
   private retireIfUnused(
     key: string,
-    entry: { manager: MCPManager; leases: number; stale: boolean },
+    entry: { manager: MCPManager; leases: number; stale: boolean; started: boolean },
   ): void {
     if (!entry.stale || entry.leases > 0) return;
     this.byProject.delete(key);

@@ -95,6 +95,15 @@ export function subscribeBackgroundProcessChanges(
 export class BackgroundProcessStore {
   private _entries = new Map<number, ProcessEntry>();
   private _nextId = 1;
+  private _killTimers = new Map<number, ReturnType<typeof setTimeout>>();
+
+  private _clearKillTimer(procId: number): void {
+    const t = this._killTimers.get(procId);
+    if (t !== undefined) {
+      clearTimeout(t);
+      this._killTimers.delete(procId);
+    }
+  }
 
   // -- spawn ---------------------------------------------------------------
 
@@ -143,6 +152,7 @@ export class BackgroundProcessStore {
       });
       const exitDisposable = ptyProc.onExit((e: { exitCode: number }) => {
         entry.exitCode = e.exitCode;
+        this._clearKillTimer(procId);
         dataDisposable.dispose();
         exitDisposable.dispose();
         emitBackgroundProcessChange(sessionId);
@@ -174,11 +184,13 @@ export class BackgroundProcessStore {
 
       childProc.on('exit', (code) => {
         entry.exitCode = code ?? -1;
+        this._clearKillTimer(procId);
         emitBackgroundProcessChange(sessionId);
       });
       childProc.on('error', () => {
         if (entry.exitCode === null) {
           entry.exitCode = -1;
+          this._clearKillTimer(procId);
           emitBackgroundProcessChange(sessionId);
         }
       });
@@ -337,6 +349,7 @@ export class BackgroundProcessStore {
     const entry = this._entries.get(procId);
     if (!entry) return;
     if (entry.exitCode !== null) return;
+    this._clearKillTimer(procId);
 
     if (entry.interactive) {
       const pty = entry.process as IPty;
@@ -345,13 +358,18 @@ export class BackgroundProcessStore {
       } catch {
         // ignore
       }
-      setTimeout(() => {
+      const t = setTimeout(() => {
+        this._killTimers.delete(procId);
         try {
           pty.kill('SIGKILL');
         } catch {
           // ignore
         }
       }, 2000);
+      if (typeof (t as unknown as { unref?: () => void }).unref === 'function') {
+        (t as unknown as { unref: () => void }).unref();
+      }
+      this._killTimers.set(procId, t);
     } else {
       const proc = entry.process as ChildProcess;
       const pid = proc.pid;
@@ -366,7 +384,8 @@ export class BackgroundProcessStore {
             // ignore
           }
         }
-        setTimeout(() => {
+        const t = setTimeout(() => {
+          this._killTimers.delete(procId);
           try {
             process.kill(-pid, 'SIGKILL');
           } catch {
@@ -377,6 +396,10 @@ export class BackgroundProcessStore {
             }
           }
         }, 2000);
+        if (typeof (t as unknown as { unref?: () => void }).unref === 'function') {
+          (t as unknown as { unref: () => void }).unref();
+        }
+        this._killTimers.set(procId, t);
       }
     }
   }
@@ -390,6 +413,20 @@ export class BackgroundProcessStore {
   terminateSession(sessionId: string): void {
     for (const [procId, entry] of this._entries) {
       if (entry.sessionId === sessionId) {
+        this.terminate(procId);
+      }
+    }
+  }
+
+  /**
+   * Terminate the running entries owned by one agent scope within a session
+   * (e.g. a subagent's commands when that subagent reaches a terminal state).
+   * A null session id never matches: unbound entries survive scope cleanup.
+   */
+  terminateScope(sessionId: string | null, agentScopeId: string): void {
+    if (sessionId === null) return;
+    for (const [procId, entry] of this._entries) {
+      if (entry.sessionId === sessionId && entry.agentScopeId === agentScopeId) {
         this.terminate(procId);
       }
     }
@@ -428,9 +465,8 @@ export class BackgroundProcessStore {
     const entry = this._entries.get(procId);
     if (!entry) return;
     this._entries.delete(procId);
-    if (entry.exitCode === null) {
-      emitBackgroundProcessChange(entry.sessionId);
-    }
+    this._clearKillTimer(procId);
+    emitBackgroundProcessChange(entry.sessionId);
 
     // Force-kill the process if still running
     if (entry.exitCode === null) {
@@ -463,7 +499,11 @@ export class BackgroundProcessStore {
   clear(): void {
     const running = [...this._entries.values()].filter((entry) => entry.exitCode === null);
     this.terminateAll();
+    for (const procId of [...this._entries.keys()]) {
+      this._clearKillTimer(procId);
+    }
     this._entries.clear();
+    this._killTimers.clear();
     for (const entry of running) {
       emitBackgroundProcessChange(entry.sessionId);
     }

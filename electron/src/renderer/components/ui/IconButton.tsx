@@ -3,6 +3,7 @@ import { Icon, type IconName } from '../Icon';
 
 export type IconButtonSize = 'xs' | 'sm' | 'md';
 export type IconButtonVariant = 'ghost' | 'primary' | 'error' | 'warning' | 'neutral';
+export type IconButtonShape = 'default' | 'square' | 'circle';
 
 export interface IconButtonProps extends Omit<ButtonHTMLAttributes<HTMLButtonElement>, 'children'> {
   /** Accessible name — required for icon-only buttons. */
@@ -12,6 +13,7 @@ export interface IconButtonProps extends Omit<ButtonHTMLAttributes<HTMLButtonEle
   children?: ReactNode;
   size?: IconButtonSize;
   variant?: IconButtonVariant;
+  shape?: IconButtonShape;
   loading?: boolean;
   /** Tooltip; defaults to `label` for icon-only controls. */
   tooltip?: string;
@@ -32,6 +34,12 @@ const VARIANT_CLASS: Record<IconButtonVariant, string> = {
   neutral: '',
 };
 
+const SHAPE_CLASS: Record<IconButtonShape, string> = {
+  default: '',
+  square: 'btn-square',
+  circle: 'btn-circle',
+};
+
 const DEFAULT_ICON_SIZE: Record<IconButtonSize, number> = {
   xs: 12,
   sm: 14,
@@ -46,6 +54,7 @@ export const IconButton = forwardRef<HTMLButtonElement, IconButtonProps>(functio
     children,
     size = 'sm',
     variant = 'ghost',
+    shape,
     loading = false,
     tooltip,
     iconSize,
@@ -61,9 +70,13 @@ export const IconButton = forwardRef<HTMLButtonElement, IconButtonProps>(functio
   const resolvedIconSize = iconSize ?? DEFAULT_ICON_SIZE[size];
   const sizeClass = SIZE_CLASS[size];
   const variantClass = VARIANT_CLASS[variant];
-  // Prefer explicit square/circle from className; default icon-only to circle.
+  // Retain className compatibility while feature callers migrate to the shape prop.
   const hasShapeOverride = /\bbtn-(?:square|circle)\b/.test(className);
-  const shapeClass = isIconOnly && !hasShapeOverride ? 'btn-circle' : '';
+  const shapeClass = shape
+    ? SHAPE_CLASS[shape]
+    : isIconOnly && !hasShapeOverride
+      ? SHAPE_CLASS.circle
+      : '';
 
   return (
     <button

@@ -14,14 +14,16 @@ import {
 } from 'react';
 import { useChat } from '../hooks/useChat';
 import { useSession } from '../hooks/useSession';
+import { useBackgroundCommands } from '../hooks/useBackgroundCommands';
 import { useSubagents } from '../hooks/useSubagents';
 import { useTodos } from '../hooks/useTodos';
-import { useSessionActivity } from '../hooks/useSessionActivity';
+import type { UseSessionActivityReturn } from '../hooks/useSessionActivity';
 import { useSessionTabs } from '../hooks/useSessionTabs';
 import { useProviders } from '../hooks/useProviders';
 import { useMessageQueue } from '../hooks/useMessageQueue';
 import { useQueueAutoFire } from '../hooks/useQueueAutoFire';
 import { useResponsiveShell } from '../hooks/use-responsive-shell';
+import { useTrustPrompt } from '../hooks/useTrustPrompt';
 import {
   providerModelOptionDisplayName,
   providerModelOptionKey,
@@ -42,6 +44,7 @@ import type {
   RAGStoreStatus,
 } from '../../shared/types/ipc-boundary';
 import type { ProviderModelOption, SessionOpenResult } from '../../shared/types/ipc';
+import type { Notify } from '../utils/notify';
 import { ChatStream } from './ChatStream';
 import { DeferredSurface } from './deferred-surface';
 import { InputArea } from './InputArea';
@@ -53,7 +56,7 @@ import { CommandPalette } from './CommandPalette';
 import { ShortcutsHelp } from './ShortcutsHelp';
 import { SessionHeader } from './session-header';
 import { SessionTabBar } from './SessionTabBar';
-import { Alert, type AlertTone } from './ui/Alert';
+import { TrustProjectDialog } from './TrustProjectDialog';
 import { Button } from './ui/Button';
 import { StateMessage } from './ui/StateMessage';
 import type { SubagentOpenRequest } from './SubagentView';
@@ -65,28 +68,28 @@ const SubagentView = lazy(() => import('./SubagentView').then((module) => ({
   default: module.SubagentView,
 })));
 
-type ToastSeverity = 'info' | 'warning' | 'error';
-interface Toast {
-  message: string;
-  severity: ToastSeverity;
-}
-
 interface ChatViewProps {
   /** False while a full-window surface owns presentation. */
   isVisible?: boolean;
   /** App-owned effective configuration loaded once during renderer startup. */
   bootstrapConfig?: Config | null;
+  /** App-level notification surface shared by chat and settings. */
+  onNotify: Notify;
+  /** Shared session activity state (owned by AppReady). */
+  activity: UseSessionActivityReturn;
 }
 
-export function ChatView({ isVisible = true, bootstrapConfig = null }: ChatViewProps) {
+export function ChatView({ isVisible = true, bootstrapConfig = null, onNotify, activity }: ChatViewProps) {
   const session = useSession();
-  const chat = useChat(session.activeSession?.id ?? null);
   const subagents = useSubagents(session.activeSession?.id ?? null);
   const todos = useTodos(session.activeSession?.id ?? null);
-  const activity = useSessionActivity();
+  const commands = useBackgroundCommands(session.activeSession?.id ?? null);
   const tabs = useSessionTabs();
   const providers = useProviders();
-  const messageQueue = useMessageQueue();
+  // Queue ownership follows the visible session: teardown paths (delete /
+  // workspace rebind / switch) change this key and drop stale queued messages
+  // instead of firing them into another session.
+  const messageQueue = useMessageQueue(session.activeSession?.id ?? null);
 
   const {
     rightOpen: sidebarOpen,
@@ -120,13 +123,66 @@ export function ChatView({ isVisible = true, bootstrapConfig = null }: ChatViewP
   const [providerModelOptions, setProviderModelOptions] = useState<readonly ProviderModelOption[]>([]);
   const [maxContext, setMaxContext] = useState<number | null>(null);
   const [alwaysExpandToolGroups, setAlwaysExpandToolGroups] = useState(false);
-  const [toast, setToast] = useState<Toast | null>(null);
   const [helpOpen, setHelpOpen] = useState(false);
   const [contentMode, setContentMode] = useState<'chat' | 'subagents'>('chat');
   const [projectConfigDir, setProjectConfigDir] = useState<string | null>(null);
   const [subagentOpenRequest, setSubagentOpenRequest] = useState<SubagentOpenRequest>({ generation: 0, id: null });
   const chatContentRef = useRef<HTMLDivElement>(null);
-  const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const notify = onNotify;
+
+  // Workspace-scoped status refreshes (declared early so the trust grant
+  // callback can re-run them once a project becomes trusted).
+  const refreshMCP = useCallback(async () => {
+    try {
+      if (window.orchid?.mcp?.status) {
+        const status = await window.orchid.mcp.status();
+        setMcpServers(status);
+      }
+    } catch {
+      // Non-fatal
+    }
+  }, []);
+
+  const refreshIndex = useCallback(async () => {
+    try {
+      if (window.orchid?.rag?.status && window.orchid?.ast?.status) {
+        const [rag, ast] = await Promise.all([
+          window.orchid.rag.status(),
+          window.orchid.ast.status(),
+        ]);
+        setRagStatus(rag);
+        setAstStatus(ast);
+      }
+    } catch {
+      // Non-fatal
+    }
+  }, []);
+
+  // Trusted-projects prompt: explicit interactions (bind result, send failure,
+  // badge click) call openFor; granting re-resolves workspace + gated services.
+  const trustPrompt = useTrustPrompt({
+    onGranted: () => {
+      void session.getWorkspace();
+      void refreshMCP();
+      void refreshIndex();
+    },
+  });
+
+  // Surface trust failures that happen outside the dialog (e.g. the trust
+  // lookup itself failed). While the dialog is open its own alert shows the
+  // error, so notify only when no prompt is showing, then clear once consumed.
+  useEffect(() => {
+    if (trustPrompt.error == null || trustPrompt.pending != null) return;
+    notify(trustPrompt.error, 'error');
+    trustPrompt.clearError();
+  }, [trustPrompt.error, trustPrompt.pending, notify, trustPrompt.clearError]);
+
+  const chat = useChat(session.activeSession?.id ?? null, {
+    onUntrustedProject: () => {
+      const cwd = session.workspace?.cwd ?? session.activeSession?.cwd;
+      if (cwd) trustPrompt.openFor(cwd);
+    },
+  });
 
   useEffect(() => {
     const element = chatContentRef.current;
@@ -222,6 +278,10 @@ export function ChatView({ isVisible = true, bootstrapConfig = null }: ChatViewP
 
   const openSettings = useCallback(() => {
     emitOrchidEvent('orchid:open-settings');
+  }, []);
+
+  const openAnalytics = useCallback(() => {
+    emitOrchidEvent('orchid:open-analytics');
   }, []);
 
   useEffect(() => {
@@ -376,9 +436,12 @@ export function ChatView({ isVisible = true, bootstrapConfig = null }: ChatViewP
         applySessionMessages(null);
         return;
       }
+      if (workspace.trust !== 'trusted') {
+        trustPrompt.openFor(workspace.cwd);
+      }
     }
     await enterDraftMode({ clearComposer: true });
-  }, [session, enterDraftMode, applySessionMessages]);
+  }, [session, enterDraftMode, applySessionMessages, trustPrompt.openFor]);
 
   // Project-row New Chat: make that project the window's draft workspace, then
   // clear selection. The first message creates a new session there while any
@@ -387,12 +450,12 @@ export function ChatView({ isVisible = true, bootstrapConfig = null }: ChatViewP
     const gen = ++sessionSwitchGen.current;
     const workspace = await session.setWorkspace(projectDir);
     if (!workspace?.cwd || gen !== sessionSwitchGen.current) return;
+    if (workspace.trust !== 'trusted') {
+      trustPrompt.openFor(workspace.cwd);
+    }
     await enterDraftMode({ clearComposer: true });
-    setToast({
-      severity: 'info',
-      message: `New chat in project: ${workspace.cwd}`,
-    });
-  }, [session, enterDraftMode]);
+    notify(`New chat in project: ${workspace.cwd}`, 'info');
+  }, [session, enterDraftMode, notify, trustPrompt.openFor]);
 
   const handleProjectSelect = useCallback((projectDir: string) => {
     setProjectConfigDir(projectDir);
@@ -492,6 +555,10 @@ export function ChatView({ isVisible = true, bootstrapConfig = null }: ChatViewP
   const handleSessionDelete = useCallback(
     async (id: string) => {
       const wasActive = session.activeSession?.id === id;
+      // Clear BEFORE the delete invoke resolves: main force-stops the session
+      // and emits the terminal idle transition during this await, which would
+      // otherwise trigger queue autofire against a vanishing session.
+      if (wasActive) messageQueue.clearQueue();
       await session.deleteSession(id);
       const snapshot = await tabs.refresh();
       if (!wasActive) return;
@@ -501,18 +568,8 @@ export function ChatView({ isVisible = true, bootstrapConfig = null }: ChatViewP
       if (gen !== sessionSwitchGen.current) return;
       await focusAfterWorkingSet(snapshot);
     },
-    [session, chat.setMessages, tabs.refresh, focusAfterWorkingSet],
+    [session, chat.setMessages, tabs.refresh, focusAfterWorkingSet, messageQueue.clearQueue],
   );
-
-  const notify = useCallback((message: string, severity: ToastSeverity = 'info') => {
-    console.log(`[${severity.toUpperCase()}] ${message}`);
-    if (severity === 'error') {
-      console.error(message);
-    }
-    if (toastTimer.current) clearTimeout(toastTimer.current);
-    setToast({ message, severity });
-    toastTimer.current = setTimeout(() => setToast(null), 4500);
-  }, []);
 
   const handleSessionRename = useCallback(
     async (id: string, name: string) => {
@@ -525,12 +582,6 @@ export function ChatView({ isVisible = true, bootstrapConfig = null }: ChatViewP
     },
     [session, notify],
   );
-
-  useEffect(() => {
-    return () => {
-      if (toastTimer.current) clearTimeout(toastTimer.current);
-    };
-  }, []);
 
   // null workspace = still loading; allow send (main process still gates).
   // unbound/missing = block in UI (R3).
@@ -572,9 +623,14 @@ export function ChatView({ isVisible = true, bootstrapConfig = null }: ChatViewP
     const startsDraft = Boolean(session.activeSession?.chains.length);
     const info = await session.pickProjectDir();
     if (info?.status === 'valid' && info.cwd) {
+      if (info.trust !== 'trusted') {
+        trustPrompt.openFor(info.cwd);
+      }
       if (startsDraft) {
         ++sessionSwitchGen.current;
         chat.beginSessionSwitch(null);
+        // Forced rebind: the queued messages belong to the session being left.
+        messageQueue.clearQueue();
         applySessionMessages(null);
         setDraftTabVisible(true);
         setComposerDraftKey((k) => k + 1);
@@ -583,7 +639,13 @@ export function ChatView({ isVisible = true, bootstrapConfig = null }: ChatViewP
         notify(`Project folder: ${info.cwd}`, 'info');
       }
     }
-  }, [session, chat.beginSessionSwitch, applySessionMessages, notify]);
+  }, [session, chat.beginSessionSwitch, applySessionMessages, notify, messageQueue.clearQueue, trustPrompt.openFor]);
+
+  // Workspace trust badge (LeftSidebar) opens the dialog for the bound cwd.
+  const handleTrustBadgeClick = useCallback(() => {
+    const cwd = session.workspace?.cwd;
+    if (cwd) trustPrompt.openFor(cwd);
+  }, [session.workspace?.cwd, trustPrompt.openFor]);
 
   // Stable prop wrappers for the memoized LeftSidebar. Inline arrows here would
   // give the rail a fresh identity every render and defeat React.memo, so the
@@ -621,28 +683,31 @@ export function ChatView({ isVisible = true, bootstrapConfig = null }: ChatViewP
     }
   }, [notify, providerModelByKey, session]);
 
+  // Resolves `true` only when a turn actually started. Queue autofire relies
+  // on the distinction: gate failures restore the consumed batch instead of
+  // silently dropping it (and never reject — rejection is not the signal).
   const handleSend = useCallback(
-    async (message: string) => {
+    async (message: string): Promise<boolean> => {
       // UI gate (R3): reinforce main-process unbound_workspace rejection.
-      if (chat.isSwitchingSession) return;
+      if (chat.isSwitchingSession) return false;
       if (!workspaceBound) {
         notify(
           'Choose a project folder before sending a message.',
           'warning',
         );
         void handlePickProjectDir();
-        return;
+        return false;
       }
       if (!providerAvailable) {
         notify('Connect a provider in Settings before sending a message.', 'warning');
         emitOrchidEvent('orchid:open-settings', { tab: 'providers' });
-        return;
+        return false;
       }
       if (!preferredSelection || !modelSelected) {
         notify('Select a ready connection and model before sending a message.', 'warning');
-        return;
+        return false;
       }
-      await chat.send(message, {
+      return chat.send(message, {
         ...(preferredSelection ? { model: preferredSelection } : {}),
         ...(session.activeSession?.id
           ? { sessionId: session.activeSession.id }
@@ -822,32 +887,6 @@ export function ChatView({ isVisible = true, bootstrapConfig = null }: ChatViewP
     return () => document.removeEventListener('keydown', onKeyDown, true);
   }, [closeConfirmId]);
 
-  const refreshMCP = useCallback(async () => {
-    try {
-      if (window.orchid?.mcp?.status) {
-        const status = await window.orchid.mcp.status();
-        setMcpServers(status);
-      }
-    } catch {
-      // Non-fatal
-    }
-  }, []);
-
-  const refreshIndex = useCallback(async () => {
-    try {
-      if (window.orchid?.rag?.status && window.orchid?.ast?.status) {
-        const [rag, ast] = await Promise.all([
-          window.orchid.rag.status(),
-          window.orchid.ast.status(),
-        ]);
-        setRagStatus(rag);
-        setAstStatus(ast);
-      }
-    } catch {
-      // Non-fatal
-    }
-  }, []);
-
   const handleIndexRAG = useCallback(async () => {
     if (!window.orchid?.rag?.index) {
       throw new Error('RAG IPC is not available');
@@ -908,7 +947,7 @@ export function ChatView({ isVisible = true, bootstrapConfig = null }: ChatViewP
   const commandContext: CommandContext = useMemo(() => ({
     onCreateSession: handleSessionCreate,
     onLoadSession: handleSessionSelect,
-    onDeleteSession: session.deleteSession,
+    onDeleteSession: handleSessionDelete,
     onRenameSession: session.rename,
     getActiveSessionId: () => session.activeSession?.id ?? null,
     getActiveSessionName: () => session.activeSession?.name ?? null,
@@ -951,6 +990,7 @@ export function ChatView({ isVisible = true, bootstrapConfig = null }: ChatViewP
   }), [
     handleSessionCreate,
     handleSessionSelect,
+    handleSessionDelete,
     session,
     handleSelectProviderModel,
     availableProviderModels,
@@ -998,6 +1038,7 @@ export function ChatView({ isVisible = true, bootstrapConfig = null }: ChatViewP
         isCollapsed={leftSidebarCollapsed}
         isOverlay={leftOverlay}
         onOpenSettings={openSettings}
+        onOpenAnalytics={openAnalytics}
         onPickProjectDir={handlePickProjectDirClick}
         projectPickerCreatesDraft={Boolean(session.activeSession?.chains.length)}
         onRefreshSessions={session.refresh}
@@ -1012,26 +1053,11 @@ export function ChatView({ isVisible = true, bootstrapConfig = null }: ChatViewP
         onToggle={toggleLeftSidebar}
         sessionListState={session.listState}
         workspace={session.workspace}
+        onTrustBadgeClick={handleTrustBadgeClick}
         />
       </DeferredSurface>
 
       <main className="main-pane min-h-0 min-w-0 overflow-hidden">
-        {toast && (
-          <Alert
-            tone={toast.severity as AlertTone}
-            variant="soft"
-            className={`command-toast command-toast-${toast.severity} orchid-state-enter py-2 text-sm`}
-            role="status"
-            aria-live="polite"
-            action={
-              <Button variant="ghost" size="xs" shape="circle" onClick={() => setToast(null)} aria-label="Dismiss">
-                ×
-              </Button>
-            }
-          >
-            <span className="command-toast-message min-w-0 flex-1">{toast.message}</span>
-          </Alert>
-        )}
         {projectConfigDir ? (
           <Suspense
             fallback={(
@@ -1240,6 +1266,9 @@ export function ChatView({ isVisible = true, bootstrapConfig = null }: ChatViewP
           onOpenSubagentView={openSubagentView}
           todoState={todos.state}
           onRefreshTodos={todos.refresh}
+          commandsState={commands.state}
+          onRefreshCommands={commands.refresh}
+          sessionId={session.activeSession?.id ?? null}
           mcpServers={mcpServers}
           ragStatus={ragStatus}
           astStatus={astStatus}
@@ -1269,6 +1298,17 @@ export function ChatView({ isVisible = true, bootstrapConfig = null }: ChatViewP
       />
 
       <ShortcutsHelp isOpen={helpOpen} onClose={() => setHelpOpen(false)} />
+
+      <TrustProjectDialog
+        open={trustPrompt.pending != null}
+        cwd={trustPrompt.pending?.cwd ?? ''}
+        trustState={trustPrompt.pending?.info.state === 'changed' ? 'changed' : 'untrusted'}
+        report={trustPrompt.pending?.info.report ?? null}
+        busy={trustPrompt.busy}
+        error={trustPrompt.error}
+        onGrant={() => void trustPrompt.grant()}
+        onDecline={trustPrompt.decline}
+      />
     </div>
   );
 }

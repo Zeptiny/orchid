@@ -88,8 +88,11 @@ function loadFromDir(dir: string): Map<string, string> {
 // ---------------------------------------------------------------------------
 
 export interface ReadPersonalitiesOptions {
-  /** Override home personalities directory. */
-  homeDir?: string;
+  /**
+   * Override home personalities directory.
+   * `null` skips the home load entirely (project-only reads).
+   */
+  homeDir?: string | null;
   /** Project root whose `.orchid/personalities/` directory is overlaid. */
   projectDir?: string;
 }
@@ -103,8 +106,10 @@ export interface ReadPersonalitiesOptions {
 export function readPersonalities(
   options?: ReadPersonalitiesOptions,
 ): Map<string, string> {
-  const homeDir = options?.homeDir ?? HOME_PERSONALITIES_DIR;
-  const home = loadFromDir(homeDir);
+  const home =
+    options?.homeDir === null
+      ? new Map<string, string>()
+      : loadFromDir(options?.homeDir ?? HOME_PERSONALITIES_DIR);
   if (!options?.projectDir) {
     return home;
   }

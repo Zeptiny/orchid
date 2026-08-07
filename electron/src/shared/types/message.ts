@@ -46,6 +46,7 @@ export interface Usage {
   readonly completion_tokens: number;
   readonly total_tokens: number;
   readonly cached_tokens: number;
+  readonly reasoning_tokens?: number;
   /** Latest-step projected context after including the current output. */
   readonly context?: ContextSnapshot;
 }
@@ -60,6 +61,8 @@ export interface ContextSnapshot {
   readonly tool_use_tokens: number;
   readonly user_tokens: number;
   readonly assistant_tokens: number;
+  /** Provider-reported reasoning tokens included in `assistant_tokens`. */
+  readonly reasoning_tokens?: number;
 }
 
 export const contextSnapshotSchema = z.object({
@@ -71,6 +74,7 @@ export const contextSnapshotSchema = z.object({
   tool_use_tokens: z.number().nonnegative(),
   user_tokens: z.number().nonnegative(),
   assistant_tokens: z.number().nonnegative(),
+  reasoning_tokens: z.number().nonnegative().optional(),
 });
 
 // ── Message ─────────────────────────────────────────────────────────────────
@@ -109,6 +113,7 @@ export interface MessageStorageDict {
     completion_tokens?: number;
     total_tokens?: number;
     cached_tokens?: number;
+    reasoning_tokens?: number;
     context?: ContextSnapshot;
   };
   hidden?: boolean;
@@ -198,6 +203,7 @@ export function messageToStorageDict(msg: Message): MessageStorageDict {
       completion_tokens: msg.usage.completion_tokens,
       total_tokens: msg.usage.total_tokens,
       cached_tokens: msg.usage.cached_tokens,
+      ...(msg.usage.reasoning_tokens ? { reasoning_tokens: msg.usage.reasoning_tokens } : {}),
       ...(msg.usage.context ? { context: msg.usage.context } : {}),
     };
   }
@@ -252,6 +258,7 @@ export function messageFromStorageDict(data: unknown): Message {
       completion_tokens: typeof u.completion_tokens === 'number' ? u.completion_tokens : 0,
       total_tokens: typeof u.total_tokens === 'number' ? u.total_tokens : 0,
       cached_tokens: typeof u.cached_tokens === 'number' ? u.cached_tokens : 0,
+      reasoning_tokens: typeof u.reasoning_tokens === 'number' ? u.reasoning_tokens : 0,
       context: parsedContext.success ? parsedContext.data : undefined,
     };
   }

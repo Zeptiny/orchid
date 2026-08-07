@@ -19,6 +19,12 @@ vi.mock('../../src/main/mcp/manager', () => ({
   },
 }));
 
+// The trust gate is fail-closed for the mocked (non-existent) project dirs,
+// so these fixture runtimes resolve as trusted to keep the suite on its own seams.
+vi.mock('../../src/main/project/trust', () => ({
+  getProjectTrustState: () => 'trusted',
+}));
+
 import { ProjectMCPManagerRegistry } from '../../src/main/mcp/project-registry';
 
 function runtime(projectDir: string, serverName: string): ProjectRuntime {

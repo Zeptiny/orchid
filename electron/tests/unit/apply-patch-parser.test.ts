@@ -553,9 +553,7 @@ describe('mismatched heredoc quotes', () => {
     const wrapped = `<<"EOF'\n${innerPatch}\nEOF`;
 
     expect(() => parsePatch(wrapped)).toThrow(ParseError);
-    expect(() => parsePatch(wrapped)).toThrow(
-      "The first line of the patch must be '*** Begin Patch'",
-    );
+    expect(() => parsePatch(wrapped)).toThrow('is not a valid hunk header');
   });
 });
 
@@ -638,5 +636,191 @@ describe('ParseError', () => {
       expect(err.name).toBe('ParseError');
       expect(err.lineNumber).toBe(2);
     }
+  });
+});
+
+// ── Lenient envelope repair ────────────────────────────────────────────────
+
+describe('envelope repair', () => {
+  it('synthesizes a missing *** Begin Patch marker', () => {
+    const patch = [
+      '*** Update File: file.txt',
+      '@@',
+      '-old',
+      '+new',
+      '*** End Patch',
+    ].join('\n');
+    const result = parsePatch(patch);
+    expect(result.hunks).toHaveLength(1);
+    expect(result.patch.split('\n')[0]).toBe(BEGIN_PATCH_MARKER);
+  });
+
+  it('synthesizes a missing *** End Patch marker', () => {
+    const patch = [
+      '*** Begin Patch',
+      '*** Update File: file.txt',
+      '@@',
+      '-old',
+      '+new',
+    ].join('\n');
+    const result = parsePatch(patch);
+    expect(result.hunks).toHaveLength(1);
+    expect(result.patch.endsWith(END_PATCH_MARKER)).toBe(true);
+  });
+
+  it('synthesizes both markers when both are missing', () => {
+    const patch = [
+      '*** Add File: new.txt',
+      '+content',
+    ].join('\n');
+    const result = parsePatch(patch);
+    expect(result.hunks).toHaveLength(1);
+    const hunk = result.hunks[0] as Extract<PatchHunk, { type: 'add' }>;
+    expect(hunk.path).toBe('new.txt');
+    expect(hunk.contents).toBe('content\n');
+  });
+
+  it('still rejects input without any file operation header', () => {
+    expect(() => parsePatch('some prose\nwithout headers')).toThrow(
+      "The first line of the patch must be '*** Begin Patch'",
+    );
+  });
+
+  it('strips a markdown code fence wrapper', () => {
+    const patch = [
+      '```diff',
+      '*** Begin Patch',
+      '*** Update File: file.txt',
+      '@@',
+      '-old',
+      '+new',
+      '*** End Patch',
+      '```',
+    ].join('\n');
+    const result = parsePatch(patch);
+    expect(result.hunks).toHaveLength(1);
+  });
+
+  it('strips fences and repairs a missing Begin marker together', () => {
+    const patch = [
+      '```',
+      '*** Update File: file.txt',
+      '@@',
+      '-old',
+      '+new',
+      '```',
+    ].join('\n');
+    const result = parsePatch(patch);
+    expect(result.hunks).toHaveLength(1);
+  });
+});
+
+// ── Lenient @@ markers ─────────────────────────────────────────────────────
+
+describe('lenient @@ markers', () => {
+  it('accepts @@hint without a space after the marker', () => {
+    const patch = [
+      '*** Begin Patch',
+      '*** Update File: file.txt',
+      '@@function greet():',
+      '-old',
+      '+new',
+      '*** End Patch',
+    ].join('\n');
+    const result = parsePatch(patch);
+    const hunk = result.hunks[0] as Extract<PatchHunk, { type: 'update' }>;
+    expect(hunk.chunks[0].changeContext).toBe('function greet():');
+  });
+
+  it('treats an indented @@ line as content, not a header', () => {
+    // A leading space always marks a content line, so an indented `@@` is
+    // parsed as context (and will fail to match loudly) rather than being
+    // misread as a chunk boundary that could corrupt content lines starting
+    // with '@@'.
+    const patch = [
+      '*** Begin Patch',
+      '*** Update File: file.txt',
+      '@@',
+      '  @@ function greet():',
+      '-old',
+      '+new',
+      '*** End Patch',
+    ].join('\n');
+    const result = parsePatch(patch);
+    const hunk = result.hunks[0] as Extract<PatchHunk, { type: 'update' }>;
+    expect(hunk.chunks).toHaveLength(1);
+    expect(hunk.chunks[0].oldLines).toEqual([' @@ function greet():', 'old']);
+  });
+
+  it('keeps a stacked hint when a bare @@ follows it', () => {
+    const patch = [
+      '*** Begin Patch',
+      '*** Update File: file.txt',
+      '@@ class Foo',
+      '@@',
+      '-old',
+      '+new',
+      '*** End Patch',
+    ].join('\n');
+    const result = parsePatch(patch);
+    const hunk = result.hunks[0] as Extract<PatchHunk, { type: 'update' }>;
+    expect(hunk.chunks).toHaveLength(1);
+    expect(hunk.chunks[0].changeContext).toBe('class Foo');
+    expect(hunk.chunks[0].oldLines).toEqual(['old']);
+    expect(hunk.chunks[0].newLines).toEqual(['new']);
+  });
+
+  it('still treats prefixed @@ content lines as content', () => {
+    const patch = [
+      '*** Begin Patch',
+      '*** Update File: file.css',
+      '@@',
+      ' @@keyframes spin {',
+      '-  from { opacity: 0; }',
+      '+  from { opacity: 1; }',
+      '*** End Patch',
+    ].join('\n');
+    const result = parsePatch(patch);
+    const hunk = result.hunks[0] as Extract<PatchHunk, { type: 'update' }>;
+    expect(hunk.chunks[0].oldLines).toEqual([
+      '@@keyframes spin {',
+      '  from { opacity: 0; }',
+    ]);
+  });
+
+  it('rejects a git-style @@ -a,b +c,d @@ header with ParseError and lineNumber', () => {
+    const patch = [
+      '*** Begin Patch',
+      '*** Update File: file.txt',
+      '@@ -1,3 +1,3 @@',
+      '-old',
+      '+new',
+      '*** End Patch',
+    ].join('\n');
+    try {
+      parsePatch(patch);
+      expect.unreachable('should have thrown');
+    } catch (e) {
+      expect(e).toBeInstanceOf(ParseError);
+      const err = e as ParseError;
+      expect(err.message).toMatch(/git-style/);
+      expect(err.lineNumber).toBe(3);
+    }
+  });
+
+  it('accepts a valid @@ <symbol> context marker', () => {
+    const patch = [
+      '*** Begin Patch',
+      '*** Update File: file.txt',
+      '@@ mySymbol',
+      '-old',
+      '+new',
+      '*** End Patch',
+    ].join('\n');
+    const result = parsePatch(patch);
+    const hunk = result.hunks[0] as Extract<PatchHunk, { type: 'update' }>;
+    expect(hunk.chunks[0].changeContext).toBe('mySymbol');
+    expect(hunk.chunks[0].oldLines).toEqual(['old']);
+    expect(hunk.chunks[0].newLines).toEqual(['new']);
   });
 });

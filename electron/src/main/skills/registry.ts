@@ -191,8 +191,11 @@ const SKILL_RESOURCE_DIRS = ['scripts', 'references', 'assets'] as const;
 // ---------------------------------------------------------------------------
 
 export interface ReadSkillsOptions {
-  /** Override home skills directory (default: `~/.orchid/skills/`). */
-  homeDir?: string;
+  /**
+   * Override home skills directory (default: `~/.orchid/skills/`).
+   * `null` skips the home load entirely (project-only reads).
+   */
+  homeDir?: string | null;
   /** Project skills directory (for example `<workspace>/.orchid/skills`). */
   projectDir?: string;
 }
@@ -205,9 +208,10 @@ export interface ReadSkillsOptions {
 export function readSkills(
   options?: ReadSkillsOptions,
 ): Map<string, Skill> {
-  const homeDir = options?.homeDir ?? HOME_SKILLS_DIR;
-
-  const homeSkills = loadSkillsFromDir(homeDir);
+  const homeSkills =
+    options?.homeDir === null
+      ? new Map<string, Skill>()
+      : loadSkillsFromDir(options?.homeDir ?? HOME_SKILLS_DIR);
   const projectSkills = options?.projectDir
     ? loadSkillsFromDir(options.projectDir)
     : new Map<string, Skill>();

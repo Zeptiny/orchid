@@ -34,6 +34,7 @@ describe('compatible provider adapters', () => {
       baseURL: 'https://gateway.example.test/v1',
       apiKey: 'generic-key',
       fetch: expect.any(Function),
+      includeUsage: true,
     });
   });
 

@@ -27,7 +27,7 @@ import {
   genericAgentProjector,
   renderRetrieval,
 } from '../tools/result';
-import type { ToolExecutionContext } from '../tools/types';
+import type { ToolDefinition, ToolExecutionContext } from '../tools/types';
 import { toWorkerContext } from '../tools/types';
 import { getToolWorkerPool } from './tool-pool';
 import { WorkerTaskCancelledError, type WorkerTaskScope } from '../utils/worker-pool';
@@ -59,6 +59,8 @@ import { recordToolCall } from '../permissions/history';
 import { genericTerminalExecution } from './terminal-result';
 import { defaults } from '../config/schema';
 import type { Config } from '../../shared/types/ipc-boundary';
+import { getToolAttemptStore } from '../providers/accounting/tool-attempt-store';
+import type { ToolSource } from '../../shared/types/accounting';
 
 // Re-exported so existing consumers keep importing these from tool-dispatch.
 export { genericTerminalExecution };
@@ -125,6 +127,12 @@ export interface ToolDispatchOptions {
   triggeringMessage?: string;
   /** When true, skip AGENTS.md read injection and write enforcement (renderer tool:execute UI path). */
   agentsMdDisabled?: boolean;
+  /** The LLM provider attempt ID that triggered this tool call. */
+  providerAttemptId?: string | null;
+  /** Chain ID for tool attempt telemetry. */
+  chainId?: string | null;
+  /** Turn ID for tool attempt telemetry. */
+  turnId?: string | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -136,6 +144,19 @@ const FALLBACK_CONFIG: Config = defaults();
 // ---------------------------------------------------------------------------
 // Tool dispatch
 // ---------------------------------------------------------------------------
+
+/**
+ * Resolve the telemetry provenance of a registered tool. The explicit
+ * `source` marker set at registration wins (MCPManager sets `'mcp'`);
+ * definitions without the marker fall back to the `mcp::` name prefix.
+ * `rawInputJsonSchema` and `category` are deliberately NOT consulted: the
+ * former is a schema-passthrough hint, and the built-in MCP resource readers
+ * share `category: 'mcp'` with real MCP tools.
+ */
+function resolveToolSource(definition: ToolDefinition, name: string): ToolSource {
+  if (definition.source !== undefined) return definition.source;
+  return name.startsWith('mcp::') ? 'mcp' : 'builtin';
+}
 
 /**
  * Execute a single tool call and return canonical facts plus the exact agent
@@ -312,6 +333,7 @@ export async function executeToolCall(
 
   const toolCtx: ToolExecutionContext = {
     cwd: options.cwd,
+    toolCallId,
     sessionId: options.sessionId,
     projectRuntime: options.projectRuntime,
     agentScopeId: options.agentScopeId,
@@ -344,6 +366,36 @@ export async function executeToolCall(
   // Prefer Zod-parsed data so defaults/coercions reach the handler.
   const handlerArgs = validation.data;
   const noTimeout = Boolean(registered.definition.noTimeout);
+
+  // Tool telemetry is session-scoped: without a non-empty session id there is
+  // nowhere to attribute the row (the Analytics Sessions tab groups by
+  // session_id), so sessionless executions (e.g. the renderer tool:execute
+  // path with no active session) insert nothing. All finalize paths stay
+  // guarded by toolAttemptId !== null.
+  let toolAttemptId: string | null = null;
+  if (options.sessionId) {
+    try {
+      toolAttemptId = getToolAttemptStore().insertPending({
+        toolAttemptId: '',
+        sessionId: options.sessionId,
+        chainId: options.chainId ?? null,
+        turnId: options.turnId ?? null,
+        providerAttemptId: options.providerAttemptId ?? null,
+        toolCallId,
+        toolName: name,
+        toolSource: resolveToolSource(registered.definition, name),
+        mcpServerName: name.startsWith('mcp::')
+          ? name.split('::')[1] ?? null
+          : null,
+        toolFamily: registered.definition.resultFamily,
+        timeoutSeconds: effectiveTimeoutSeconds,
+        agentScope: options.agentScopeId ?? null,
+      });
+    } catch (error) {
+      console.warn('[tool-dispatch] Tool telemetry insert failed', { toolName: name, error });
+    }
+  }
+
   let result: unknown;
   try {
     const offloadPool = registered.definition.offload ? getToolWorkerPool() : null;
@@ -377,6 +429,21 @@ export async function executeToolCall(
       );
     }
   } catch (err) {
+    if (toolAttemptId !== null) {
+      const isTimeout = err instanceof ToolTimeoutError || timeoutAbort.signal.aborted;
+      const isCancelled = parentAbort?.aborted || err instanceof WorkerTaskCancelledError;
+      try {
+        getToolAttemptStore().finalize(toolAttemptId, {
+          outcome: isCancelled ? 'cancelled' : 'error',
+          resultSizeBytes: null,
+          offloaded: false,
+          timedOut: isTimeout,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      } catch (error) {
+        console.warn('[tool-dispatch] Tool telemetry finalize failed (error path)', { toolAttemptId, error });
+      }
+    }
     if (err instanceof ToolTimeoutError || timeoutAbort.signal.aborted) {
       return genericTerminalExecution(
         toolCallId,
@@ -412,6 +479,18 @@ export async function executeToolCall(
   }
 
   if (parentAbort?.aborted) {
+    if (toolAttemptId !== null) {
+      try {
+        getToolAttemptStore().finalize(toolAttemptId, {
+          outcome: 'cancelled',
+          resultSizeBytes: null,
+          offloaded: false,
+          timedOut: false,
+        });
+      } catch (error) {
+        console.warn('[tool-dispatch] Tool telemetry finalize failed (parent abort)', { toolAttemptId, error });
+      }
+    }
     return genericTerminalExecution(
       toolCallId,
       name,
@@ -437,8 +516,33 @@ export async function executeToolCall(
     if (!executionSchema) {
       throw new TypeError(`No execution schema registered for tool '${name}'`);
     }
-    return executionSchema.parse(execution) as ToolExecutionResult;
+    const parsed = executionSchema.parse(execution) as ToolExecutionResult;
+    if (toolAttemptId !== null) {
+      try {
+        getToolAttemptStore().finalize(toolAttemptId, {
+          outcome: execution.canonical.status,
+          resultSizeBytes: execution.agentProjection.content.length,
+          offloaded: execution.agentProjection.completeness === 'partial' && execution.agentProjection.retrieval.kind === 'cache',
+          timedOut: false,
+        });
+      } catch (error) {
+        console.warn('[tool-dispatch] Tool telemetry finalize failed (success path)', { toolAttemptId, error });
+      }
+    }
+    return parsed;
   } catch (error) {
+    if (toolAttemptId !== null) {
+      try {
+        getToolAttemptStore().finalize(toolAttemptId, {
+          outcome: 'error',
+          resultSizeBytes: null,
+          offloaded: false,
+          timedOut: false,
+        });
+      } catch (error) {
+        console.warn('[tool-dispatch] Tool telemetry finalize failed (finalization error)', { toolAttemptId, error });
+      }
+    }
     console.warn('[tool-dispatch] Tool result finalization failed', {
       toolCallId,
       toolName: name,
@@ -483,12 +587,24 @@ function finalizeHandlerResult(
   }
 
   const canonical = createCanonicalToolResult(registered.definition.resultFamily, result);
+  // A multi-family tool may override its family per outcome, but only with a
+  // family its definition declares. Guard against a handler emitting a
+  // family the registered schema/projector cannot represent.
+  const declaredFamilies = [
+    registered.definition.resultFamily,
+    ...(registered.definition.additionalResultFamilies ?? []),
+  ];
+  if (!declaredFamilies.includes(canonical.family)) {
+    throw new TypeError(
+      `Tool '${request.name}' returned undeclared result family '${canonical.family}'`,
+    );
+  }
   return finalizeToolExecutionResult({
     canonical,
     toolName: request.name,
     toolCallId: request.id,
     outputDataSchema: registered.definition.outputDataSchema,
-    expectedFamily: registered.definition.resultFamily,
+    expectedFamily: canonical.family,
     projector: registry.resolveAgentProjector(request.name).projector,
   });
 }
@@ -681,12 +797,15 @@ function maybeInjectAgentsMd(
     if (store === null) return execution;
 
     const config = options.projectRuntime?.config ?? FALLBACK_CONFIG;
+    // A `directory-entries` outcome means the touched path resolved to a
+    // directory (e.g. `read` on one), so inject as a directory target.
     const injection = buildAgentsMdInjection(
       request.name,
       args,
       options.cwd,
       config,
       store,
+      { isDirectory: execution.canonical.family === 'directory-entries' },
     );
     if (injection === null) return execution;
 

@@ -769,7 +769,7 @@ describe('Renderer style contract', () => {
       expect(leftSidebarSource).not.toContain('session-select-badge');
       expect(leftSidebarSource).not.toMatch(/>\s*(?:selected|project)\s*</);
       expect(leftSidebarSource).toMatch(
-        /size="md"\s+className="session-settings-btn"/,
+        /size="md"\s+className=\{`session-settings-btn \$\{activeView === 'settings' \? 'session-item-active' : ''\}`}/,
       );
 
       for (const selector of [

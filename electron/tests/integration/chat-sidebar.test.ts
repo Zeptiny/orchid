@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 /**
  * Chat + Sidebar Integration Tests — U20.
  *
@@ -6,6 +7,8 @@
  * Electron app (mocked window.orchid API).
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { createElement } from 'react';
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import type { Message } from '../../src/shared/types/message';
 import { MessageRole, MessageType } from '../../src/shared/types/message';
 import type { SessionSummary } from '../../src/main/session/storage';
@@ -14,7 +17,9 @@ import { SubagentStatus } from '../../src/shared/types/subagent';
 import type { Todo } from '../../src/shared/types/todo';
 import { TodoStatus } from '../../src/shared/types/todo';
 import type { MCPServerStatus } from '../../src/main/mcp/schema';
-import { countMCPServerStatuses } from '../../src/renderer/components/Sidebar';
+import type { BgCommandListItem } from '../../src/shared/types/ipc';
+import { countMCPServerStatuses, Sidebar } from '../../src/renderer/components/Sidebar';
+import type { BackgroundCommandsState } from '../../src/renderer/hooks/useBackgroundCommands';
 
 // ─── Mock Setup ──────────────────────────────────────────────────────────────
 
@@ -69,6 +74,14 @@ const mockOrchid = {
     indexState: vi.fn().mockResolvedValue({ indexing: false, progress: null }),
     onProgress: vi.fn().mockReturnValue(() => {}),
   },
+  bgCmd: {
+    snapshot: vi.fn().mockResolvedValue({ found: false }),
+    list: vi.fn().mockResolvedValue([]),
+    sendInput: vi.fn().mockResolvedValue({ ok: true }),
+    terminate: vi.fn().mockResolvedValue({ ok: true }),
+    releaseInput: vi.fn().mockResolvedValue({ ok: true }),
+    onChanged: vi.fn().mockReturnValue(() => {}),
+  },
 };
 
 // Setup global window.orchid
@@ -77,8 +90,11 @@ beforeEach(() => {
   (window as unknown as Record<string, unknown>).orchid = mockOrchid;
 });
 
-afterEach(() => {
+afterEach(async () => {
+  cleanup();
   vi.clearAllMocks();
+  const { __clearSnapshotCoalesceCacheForTest } = await import('../../src/renderer/hooks/useLiveCommandOutput');
+  __clearSnapshotCoalesceCacheForTest();
 });
 
 // ─── Chat Message Types ──────────────────────────────────────────────────────
@@ -326,6 +342,213 @@ describe('Sidebar Data Sources', () => {
   it('AST index triggers indexing', async () => {
     await mockOrchid.ast.index();
     expect(mockOrchid.ast.index).toHaveBeenCalled();
+  });
+});
+
+// ─── Sidebar Commands Section ────────────────────────────────────────────────
+
+describe('Sidebar Commands Section', () => {
+  function makeBgCommand(overrides: Partial<BgCommandListItem> = {}): BgCommandListItem {
+    return {
+      id: 1,
+      command: 'sleep 100',
+      description: 'long sleeper',
+      interactive: false,
+      owner: 'AGENT',
+      agentScopeId: 'main',
+      scopeName: 'main',
+      running: true,
+      exitCode: null,
+      createdAt: 1_000,
+      lastOutputAt: 2_000,
+      ...overrides,
+    };
+  }
+
+  function renderCommandsSidebar(
+    commandsState: BackgroundCommandsState,
+    options: { onRefreshCommands?: () => void; sessionId?: string | null } = {},
+  ) {
+    return render(
+      createElement(Sidebar, {
+        isOpen: true,
+        onToggle: () => {},
+        subagentState: { status: 'empty' },
+        onRefreshSubagents: () => {},
+        selectedSubagentId: null,
+        onSelectSubagent: () => {},
+        getSubagentDetail: () => null,
+        todoState: { status: 'empty' },
+        onRefreshTodos: () => {},
+        commandsState,
+        onRefreshCommands: options.onRefreshCommands ?? (() => {}),
+        sessionId: options.sessionId === undefined ? 'sess-1' : options.sessionId,
+        mcpServers: [],
+      }),
+    );
+  }
+
+  async function flushSnapshots() {
+    await act(async () => {
+      await Promise.resolve();
+    });
+  }
+
+  it('renders the running-count badge between Subagents and Context', () => {
+    renderCommandsSidebar({
+      status: 'ready',
+      commands: [
+        makeBgCommand(),
+        makeBgCommand({ id: 2 }),
+        makeBgCommand({ id: 3, running: false, exitCode: 0 }),
+      ],
+    });
+
+    const sections = Array.from(document.querySelectorAll('[data-inspector-section]'))
+      .map((el) => el.getAttribute('data-inspector-section'));
+    expect(sections.indexOf('inspector-commands')).toBe(sections.indexOf('inspector-subagents') + 1);
+    expect(sections.indexOf('inspector-context')).toBe(sections.indexOf('inspector-commands') + 1);
+
+    const trigger = document.getElementById('inspector-commands-trigger');
+    expect(trigger).toBeTruthy();
+    expect(trigger?.textContent).toContain('Commands');
+    expect(trigger?.querySelector('.badge')?.textContent).toBe('2');
+  });
+
+  it('shows no header badge when nothing is running', () => {
+    renderCommandsSidebar({
+      status: 'ready',
+      commands: [makeBgCommand({ running: false, exitCode: 0 })],
+    });
+
+    const trigger = document.getElementById('inspector-commands-trigger');
+    expect(trigger?.querySelector('.badge')).toBeNull();
+  });
+
+  it('renders one live widget row per item with scope badges only for non-main scopes', async () => {
+    mockOrchid.bgCmd.snapshot.mockResolvedValue({
+      found: true,
+      tail: 'out\n',
+      exitCode: null,
+      running: true,
+      interactive: false,
+      owner: 'AGENT',
+      command: 'demo',
+      agentScopeId: 'main',
+    });
+
+    renderCommandsSidebar({
+      status: 'ready',
+      commands: [
+        makeBgCommand({ command: 'npm run dev' }),
+        makeBgCommand({ id: 2, command: 'pytest -x', scopeName: 'Researcher', agentScopeId: 'sub-9' }),
+      ],
+    });
+    await flushSnapshots();
+
+    // Widgets resolve visibility against the owning session, never a fallback.
+    expect(mockOrchid.bgCmd.snapshot).toHaveBeenCalledWith({
+      commandId: 1,
+      lastN: 50,
+      includeTail: false,
+      sessionId: 'sess-1',
+    });
+    expect(mockOrchid.bgCmd.snapshot).toHaveBeenCalledWith({
+      commandId: 2,
+      lastN: 50,
+      includeTail: false,
+      sessionId: 'sess-1',
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: /^Commands/ }));
+    fireEvent.click(screen.getByRole('button', { name: /\$ npm run dev \(running\)/ }));
+    await flushSnapshots();
+    expect(document.body.textContent).toContain('out');
+
+    expect(screen.getByRole('button', { name: /\$ npm run dev \(running\)/ })).toBeTruthy();
+    expect(screen.getByRole('button', { name: /\$ pytest -x \(running\)/ })).toBeTruthy();
+
+    const scopeBadge = screen.getByText('Researcher');
+    expect(scopeBadge.className).toContain('badge');
+    expect(screen.queryByText('main')).toBeNull();
+  });
+
+  it('shows running commands inline and hides terminal commands behind the Other commands dropdown', () => {
+    mockOrchid.bgCmd.snapshot.mockImplementation(({ commandId }: { commandId: number }) =>
+      Promise.resolve({
+        found: true,
+        tail: '',
+        exitCode: commandId === 1 ? null : commandId === 2 ? 0 : 1,
+        running: commandId === 1,
+        interactive: false,
+        owner: 'AGENT',
+        command: 'demo',
+        agentScopeId: commandId === 3 ? 'sub-2' : 'main',
+      }),
+    );
+
+    renderCommandsSidebar({
+      status: 'ready',
+      commands: [
+        makeBgCommand({ id: 1, command: 'npm run dev' }),
+        makeBgCommand({ id: 2, command: 'pytest -x', running: false, exitCode: 0 }),
+        makeBgCommand({
+          id: 3,
+          command: 'cargo build',
+          running: false,
+          exitCode: 1,
+          scopeName: 'Builder',
+          agentScopeId: 'sub-2',
+        }),
+      ],
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: /^Commands/ }));
+
+    // Running commands stay visible with a running badge.
+    expect(screen.getByRole('button', { name: /\$ npm run dev/ })).toBeTruthy();
+    expect(screen.getByText('running')).toBeTruthy();
+
+    // Terminal commands are not rendered until the menu opens.
+    expect(screen.queryByRole('button', { name: /\$ pytest -x/ })).toBeNull();
+    expect(screen.queryByRole('button', { name: /\$ cargo build/ })).toBeNull();
+
+    const trigger = screen.getByRole('button', { name: 'Show 2 other commands' });
+    expect(trigger.textContent).toContain('Other commands');
+    expect(trigger.textContent).toContain('2');
+
+    // Opening the menu reveals the terminal rows with their status badges.
+    fireEvent.click(trigger);
+    expect(screen.getByRole('button', { name: /\$ pytest -x/ })).toBeTruthy();
+    expect(screen.getByRole('button', { name: /\$ cargo build/ })).toBeTruthy();
+    expect(screen.getByText('done')).toBeTruthy();
+    expect(screen.getByText('exit 1')).toBeTruthy();
+    expect(screen.getByText('Builder')).toBeTruthy();
+  });
+
+  it('shows the empty state when the session has no background commands', () => {
+    renderCommandsSidebar({ status: 'empty' });
+
+    expect(screen.getByText('No background commands')).toBeTruthy();
+  });
+
+  it('shows the loading state while the fleet list is fetched', () => {
+    renderCommandsSidebar({ status: 'loading' });
+
+    expect(screen.getByText('Loading commands…')).toBeTruthy();
+  });
+
+  it('surfaces list errors with a Retry affordance wired to onRefreshCommands', () => {
+    const onRefreshCommands = vi.fn();
+    renderCommandsSidebar(
+      { status: 'error', error: 'fleet unavailable' },
+      { onRefreshCommands },
+    );
+
+    expect(screen.getByText('fleet unavailable')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: /^Commands/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(onRefreshCommands).toHaveBeenCalledTimes(1);
   });
 });
 

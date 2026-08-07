@@ -7,6 +7,7 @@ import { Spinner } from '../ui/Spinner';
 import { StatusBadge } from '../ui/StatusBadge';
 import { GenericToolResult } from './GenericToolResult';
 import { resolveToolResultRenderer } from './registry';
+import { LiveCommandInline } from '../ToolWidgets/LiveCommandInline';
 
 export interface ToolResultShellProps {
   block: ToolBlock;
@@ -15,6 +16,8 @@ export interface ToolResultShellProps {
   subagents?: readonly unknown[];
   loadingIndicator?: ReactNode;
   statusBadge?: ReactNode;
+  /** Owning session live command widgets resolve visibility against. */
+  sessionId?: string | null;
 }
 
 const expansionChoices = new Map<string, boolean>();
@@ -55,14 +58,26 @@ export function toolStatusLabel(status: ToolBlock['status'], canonical?: Canonic
   return 'complete';
 }
 
-function ResultBody({ block, canonical }: { block: ToolBlock; canonical: CanonicalToolResult }) {
+function ResultBody({ block, canonical, sessionId }: { block: ToolBlock; canonical: CanonicalToolResult; sessionId?: string | null }) {
 
   try {
     const Renderer = resolveToolResultRenderer(block.toolName, canonical.family);
-    return <Renderer canonical={canonical} toolName={block.toolName} isLive={block.status === 'running'} />;
+    return <Renderer canonical={canonical} toolName={block.toolName} sessionId={sessionId} />;
   } catch {
     return <GenericToolResult canonical={canonical} />;
   }
+}
+
+/** Display label for a running foreground command, derived from its args. */
+function foregroundCommandLabel(block: ToolBlock): string {
+  try {
+    const parsed = JSON.parse(block.args) as { command?: unknown; description?: unknown };
+    if (typeof parsed.command === 'string' && parsed.command.trim()) return parsed.command;
+    if (typeof parsed.description === 'string' && parsed.description.trim()) return parsed.description;
+  } catch {
+    // Args can be partial while streaming; fall through to a generic label.
+  }
+  return block.toolName || 'command';
 }
 
 function lifecycleBadge(block: ToolBlock, canonical: CanonicalToolResult | null, custom?: ReactNode) {
@@ -85,6 +100,7 @@ export function ToolResultShell({
   iconName = 'terminal',
   loadingIndicator,
   statusBadge,
+  sessionId = null,
 }: ToolResultShellProps) {
   const panelId = useId();
   const announcementId = useId();
@@ -117,12 +133,30 @@ export function ToolResultShell({
         : null;
       const facts = value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : null;
       const hasStructuredCommand = block.toolName === 'execute_command' && facts && (typeof facts.commandId === 'number' || typeof facts.command_id === 'number');
-      return hasStructuredCommand && canonical
-        ? <ResultBody block={block} canonical={canonical} />
-        : <div className="orchid-tool-running-hint">Running…</div>;
+      if (hasStructuredCommand && canonical) {
+        return <ResultBody block={block} canonical={canonical} sessionId={sessionId} />;
+      }
+      if (block.toolName === 'execute_command') {
+        // Foreground live mirror keyed by the tool call id (block.id). The
+        // canonical stdout/stderr result replaces this widget on completion.
+        // Stop propagation so the widget's own controls never collapse the shell.
+        return (
+          <div
+            onClick={(event) => event.stopPropagation()}
+            onKeyDown={(event) => event.stopPropagation()}
+          >
+            <LiveCommandInline
+              target={{ toolCallId: block.id }}
+              sessionId={sessionId}
+              commandText={foregroundCommandLabel(block)}
+            />
+          </div>
+        );
+      }
+      return <div className="orchid-tool-running-hint">Running…</div>;
     }
-    return canonical ? <ResultBody block={block} canonical={canonical} /> : null;
-  }, [block, canonical, expanded, hasExpanded]);
+    return canonical ? <ResultBody block={block} canonical={canonical} sessionId={sessionId} /> : null;
+  }, [block, canonical, expanded, hasExpanded, sessionId]);
 
   const toggle = () => {
     const next = !expanded;
@@ -163,14 +197,6 @@ export function ToolResultShell({
           className="orchid-tool-block-content min-w-0"
           aria-describedby={announcementId}
           onClick={collapse}
-          onKeyDown={(event) => {
-            if (event.key === 'Enter' || event.key === ' ') {
-              event.preventDefault();
-              collapse();
-            }
-          }}
-          role="button"
-          tabIndex={0}
           title="Click to collapse"
         >
           {body}

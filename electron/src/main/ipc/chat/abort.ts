@@ -3,6 +3,7 @@ import { ChainStatus } from '../../../shared/types/chain';
 import { IPC_CHANNELS } from '../../../shared/types/ipc';
 import { getSessionManager } from '../../session/singleton';
 import { getBackgroundStore } from '../../tools/process/background-store';
+import { getForegroundLiveRegistry } from '../../tools/process/foreground-live';
 import { getSubagentManager } from '../../tools';
 import { completeSessionActivity } from '../session-activity';
 import {
@@ -17,6 +18,7 @@ import {
   turnMessagesFromAgent,
 } from './persist';
 import { sendChatState, sendTurnEvent, webContentsForWindowId } from './events';
+import { triggerInterruptedTurnAutoName } from './title';
 
 export function disposeActiveAgent(sessionId: string, active: ActiveAgent): void {
   cancelPendingCheckpoint(sessionId);
@@ -29,6 +31,10 @@ export function disposeActiveAgent(sessionId: string, active: ActiveAgent): void
   if (active.interruptResetTimer) {
     clearTimeout(active.interruptResetTimer);
     active.interruptResetTimer = null;
+  }
+  if (active.sessionTitleTimer) {
+    clearTimeout(active.sessionTitleTimer);
+    active.sessionTitleTimer = null;
   }
   active.abortController.abort();
   active.actor.stop();
@@ -60,6 +66,7 @@ export function forceAbortChat(windowId: string): void {
 /** Abort exactly one session without affecting work in any other session. */
 export function forceAbortSession(sessionId: string): void {
   getBackgroundStore().terminateSession(sessionId);
+  getForegroundLiveRegistry().dropSession(sessionId);
   try {
     getSubagentManager().cancelRunning(sessionId);
   } catch (err) {
@@ -136,6 +143,9 @@ export function forceAbortMainTurn(
   }
   existing.messages = fullHistory;
 
+  // Interrupted turns still name the session from what was exchanged so far.
+  triggerInterruptedTurnAutoName(existing, fullHistory);
+
   existing.agentCancelled = true;
   existing.finalized = true;
   completeSessionActivity(
@@ -184,6 +194,7 @@ export function forceAbortMainTurn(
  */
 export function forceStopSession(sessionId: string): boolean {
   getBackgroundStore().terminateSession(sessionId);
+  getForegroundLiveRegistry().dropSession(sessionId);
   const existing = activeAgents.get(sessionId);
   const cancelledSubagents = getSubagentManager().cancelRunning(sessionId);
   if (!existing) {
@@ -221,6 +232,8 @@ export function forceStopSession(sessionId: string): boolean {
     );
   }
   existing.messages = fullHistory;
+  // Interrupted turns still name the session from what was exchanged so far.
+  triggerInterruptedTurnAutoName(existing, fullHistory);
   completeSessionActivity(
     sessionId,
     getSessionManager().getActive(existing.windowId)?.id !== sessionId,

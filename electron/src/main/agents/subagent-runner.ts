@@ -27,6 +27,7 @@ import {
 import { getBuiltinToolRegistryForRuntime } from '../tools';
 import { getProviderRuntime } from '../providers';
 import { getProviderAccountingStore } from '../providers/accounting/store';
+import { getSubagentAttributionStore } from '../providers/accounting/subagent-attribution-store';
 import type { ProviderAttemptAccountingContext } from '../providers/accounting/middleware';
 
 /** Delegated workers cannot recursively fan out or control sibling workers. */
@@ -175,7 +176,27 @@ export function createSubagentStreamRunner(): SubagentStreamRunner {
       chainId: params.chainId ?? null,
       turnId: params.turnId ?? params.agentScopeId,
       snapshot: providerSnapshot,
+      agentScope: params.agentScopeId,
+      agentName: params.agent.name,
+      agentType: params.agent.type,
+      agentTier: params.agent.tier,
+     attemptIdHolder: { value: null },
     };
+    try {
+      getSubagentAttributionStore().insert({
+        subagentId: params.agentScopeId,
+        sessionId,
+        chainId: params.chainId ?? params.agentScopeId,
+        parentChainId: null,
+        agentName: params.agent.name,
+        agentType: params.agent.type,
+        agentTier: params.agent.tier,
+        modelId: selection.modelId,
+        connectionId: providerSnapshot.connectionId,
+      });
+    } catch (error) {
+      console.warn('[subagent-runner] Subagent attribution insert failed', { error });
+    }
     const mcpManager = acquireProjectMCPManager(runtime);
     try {
       const registry = getBuiltinToolRegistryForRuntime(runtime, {

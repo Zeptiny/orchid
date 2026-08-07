@@ -63,6 +63,9 @@ import {
   SubagentSummaryClosedError,
   SubagentStillSettlingError,
 } from './errors';
+import { getSubagentAttributionStore } from '../providers/accounting/subagent-attribution-store';
+import { getBackgroundStore } from '../tools/process/background-store';
+import { getForegroundLiveRegistry } from '../tools/process/foreground-live';
 
 export type { SubagentAdmissionLimits } from './admission';
 export {
@@ -1442,6 +1445,13 @@ export class SubagentManager {
         }
         break;
     }
+    try {
+      getSubagentAttributionStore().finalize(record.id, {
+        status: finalization.state,
+      });
+    } catch (error) {
+      console.warn('[subagent-manager] Attribution finalize failed', { subagentId: record.id, error });
+    }
     return this._runs.isCurrent(run);
   }
 
@@ -1510,6 +1520,19 @@ export class SubagentManager {
       usage: record.usage,
       terminalRecord: () => this.toDomainRecord(record, { includeLiveTail: true }),
     });
+    // A terminal subagent's owned background commands die with it (R9); the
+    // scope id is the record id (see `_startRun`). The scope's foreground
+    // live mirrors are dropped with their commands. Non-fatal: a cleanup
+    // failure must never break the terminal projection.
+    try {
+      getBackgroundStore().terminateScope(record.sessionId, record.id);
+      getForegroundLiveRegistry().dropScope(record.sessionId, record.id);
+    } catch (error) {
+      console.warn('[subagent-manager] Background scope cleanup failed', {
+        subagentId: record.id,
+        error,
+      });
+    }
   }
 
   /** Delegates wire construction and publication to the live-projection store. */

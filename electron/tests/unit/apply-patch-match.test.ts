@@ -115,6 +115,21 @@ describe('findContextHint', () => {
     const lines = ['  @@ context  '];
     expect(findContextHint(lines, '@@ context', 0)).toBe(1);
   });
+
+  it('falls back to prefix match when the hint names a symbol', () => {
+    const lines = ['import x', 'class Foo:', '    pass'];
+    expect(findContextHint(lines, 'class Foo', 0)).toBe(2);
+  });
+
+  it('prefix fallback respects the start offset', () => {
+    const lines = ['class FooBar', 'noise', 'class Foo:'];
+    expect(findContextHint(lines, 'class Foo', 1)).toBe(3);
+  });
+
+  it('prefers a whole-line match over a prefix match', () => {
+    const lines = ['class FooBar', 'class Foo'];
+    expect(findContextHint(lines, 'class Foo', 0)).toBe(2);
+  });
 });
 
 // ── normalizeUnicode ───────────────────────────────────────────────────────

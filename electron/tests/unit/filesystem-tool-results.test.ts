@@ -16,6 +16,7 @@ import {
 import {
   readDefinition,
   readHandler,
+  readOutputDataSchema,
 } from '../../src/main/tools/filesystem/read';
 import {
   readDirectoryDefinition,
@@ -47,7 +48,6 @@ import {
 import {
   directoryEntriesDataSchema,
   fileChangeDataSchema,
-  fileContentDataSchema,
   fileWriteDataSchema,
   searchResultsDataSchema,
   type DirectoryEntriesData,
@@ -91,7 +91,7 @@ describe('filesystem result metadata', () => {
   it.each([
     [editDefinition, 'file-change', fileChangeDataSchema],
     [writeDefinition, 'file-write', fileWriteDataSchema],
-    [readDefinition, 'file-content', fileContentDataSchema],
+    [readDefinition, 'file-content', readOutputDataSchema],
     [readDirectoryDefinition, 'directory-entries', directoryEntriesDataSchema],
     [globDefinition, 'search-results', searchResultsDataSchema],
     [grepToolDefinition, 'search-results', searchResultsDataSchema],
@@ -99,6 +99,11 @@ describe('filesystem result metadata', () => {
   ] as const)('declares the typed family for %s', (definition, family, schema) => {
     expect(definition.resultFamily).toBe(family);
     expect(definition.outputDataSchema).toBe(schema);
+  });
+
+  it('read declares directory-entries as an additional family it may emit', () => {
+    expect(readDefinition.resultFamily).toBe('file-content');
+    expect(readDefinition.additionalResultFamilies).toEqual(['directory-entries']);
   });
 });
 
@@ -209,6 +214,28 @@ describe('typed filesystem outcomes', () => {
     expect(fs.readFileSync(filePath, 'utf-8')).toBe('stable bytes\n');
   });
 
+  it('persists the true replacement count and replace_all flag on edit facts', async () => {
+    const filePath = writeFixture('rename.txt', 'foo one\nfoo two\nfoo three\n');
+    const result = outcome<FileChangeData>(await editHandler({
+      file_path: filePath,
+      old_string: 'foo',
+      new_string: 'bar',
+      replace_all: true,
+    }, { cwd: tmpDir }));
+
+    expect(result.status).toBe('complete');
+    expect(result.data.replacementCount).toBe(3);
+    expect(result.data.replaceAll).toBe(true);
+
+    const failed = outcome<FileChangeData>(await editHandler({
+      file_path: filePath,
+      old_string: 'absent',
+      new_string: 'bar',
+    }, { cwd: tmpDir }));
+    expect(failed.status).toBe('error');
+    expect(failed.data.replacementCount).toBe(0);
+  });
+
   it('distinguishes create and replace writes with exact content, bytes, and lines', async () => {
     const filePath = path.join(tmpDir, 'written.txt');
     const created = outcome<FileWriteData>(await writeHandler({
@@ -255,6 +282,32 @@ describe('typed filesystem outcomes', () => {
     });
     if (result.status !== 'partial') throw new Error('expected partial read');
     expect(result.retrieval).toEqual({ kind: 'read', path: filePath, offset: 4, limit: 2 });
+  });
+
+  it('returns one directory level with a read_directory rerun when read targets a directory', async () => {
+    writeFixture('listing/src/app.ts', 'export {};\n');
+    writeFixture('listing/.hidden', 'secret');
+
+    const result = outcome<DirectoryEntriesData>(await readHandler({
+      file_path: path.join(tmpDir, 'listing'),
+    }, { cwd: tmpDir, projectRuntime: { config: { ignored_dirs: [] } as never } }));
+
+    expect(result.family).toBe('directory-entries');
+    expect(result.status).toBe('partial');
+    expect(result.data.depthLimit).toBe(1);
+    expect(result.data.depthLimitReached).toBe(true);
+    expect(result.data.entries.map((entry) => entry.name)).toEqual(['src']);
+    expect(result.data.entries.some((entry) => entry.name === '.hidden')).toBe(false);
+    if (result.status !== 'partial') throw new Error('expected partial listing');
+    expect(result.retrieval).toEqual({
+      kind: 'rerun',
+      toolName: 'read_directory',
+      input: {
+        directory_path: path.join(tmpDir, 'listing'),
+        max_depth: 2,
+        include_hidden: false,
+      },
+    });
   });
 
   it('records directory hierarchy, kinds, metadata, and depth partiality', async () => {
@@ -380,6 +433,29 @@ describe('XML agent projections', () => {
     expect(execution.agentProjection.content).not.toContain('1 | &lt;tag&gt;');
   });
 
+  it('projects a directory read with the directory-entries tree format', async () => {
+    writeFixture('tree-src/src/app.ts', 'export {};\n');
+    const registry = new ToolRegistry();
+    registry.register(readDefinition, readHandler);
+
+    const execution = await executeToolCall({
+      id: 'read-directory',
+      name: 'read',
+      args: { file_path: path.join(tmpDir, 'tree-src') },
+    }, registry, {
+      cwd: tmpDir,
+      sessionId: SESSION_ID,
+      projectRuntime: { config: { ignored_dirs: [] } as never },
+    });
+
+    expect(execution.canonical.family).toBe('directory-entries');
+    expect(execution.agentProjection.content).toContain(
+      '<tool_result name="read" status="partial"',
+    );
+    expect(execution.agentProjection.content).toContain('<tree>');
+    expect(execution.agentProjection.content).toContain('└── src/');
+  });
+
   it('uses the compact edit, glob, grep, and directory formats', async () => {
     const first = writeFixture('src/a.ts', 'needle first\n');
     writeFixture('src/b.ts', 'needle second\n');
@@ -437,6 +513,50 @@ describe('XML agent projections', () => {
     expect(directory.agentProjection.content).toContain('<tree>\n');
     expect(directory.agentProjection.content).toContain('└── src/');
     expect(directory.agentProjection.content).not.toContain('format="dynamic-system-prompt"');
+  });
+
+  it('edit projection reports the replacement count, not the diff hunk count', async () => {
+    const lines = Array.from({ length: 20 }, (_, index) => `line ${index + 1}`);
+    const multiHunkPath = writeFixture('multi-hunk.txt', lines.join('\n') + '\n');
+    const changedBlock = lines.slice(1, 19);
+    changedBlock[1] = 'changed near top';
+    changedBlock[16] = 'changed near bottom';
+    const renamePath = writeFixture('rename.txt', 'foo one\nfoo two\nfoo three\nfoo four\n');
+    const registry = new ToolRegistry();
+    registry.register(editDefinition, editHandler);
+    const context = { cwd: tmpDir, sessionId: SESSION_ID };
+
+    const single = await executeToolCall({
+      id: 'edit-single-multi-hunk',
+      name: 'edit',
+      args: {
+        file_path: multiHunkPath,
+        old_string: lines.slice(1, 19).join('\n'),
+        new_string: changedBlock.join('\n'),
+      },
+    }, registry, context);
+    expect(fileChangeDataSchema.parse(single.canonical.data).hunks.length).toBeGreaterThan(1);
+    expect(single.agentProjection.content).toContain('replacements="1"');
+    expect(single.agentProjection.content).toContain(': 1 replacement\n');
+
+    const rename = await executeToolCall({
+      id: 'edit-rename-all',
+      name: 'edit',
+      args: { file_path: renamePath, old_string: 'foo', new_string: 'bar', replace_all: true },
+    }, registry, context);
+    expect(fileChangeDataSchema.parse(rename.canonical.data).hunks).toHaveLength(1);
+    expect(rename.agentProjection.content).toContain('replacements="4"');
+    expect(rename.agentProjection.content).toContain(': 4 replacements');
+    expect(rename.agentProjection.content).toContain('replace_all="true"');
+
+    const failed = await executeToolCall({
+      id: 'edit-not-found',
+      name: 'edit',
+      args: { file_path: renamePath, old_string: 'absent', new_string: 'x' },
+    }, registry, context);
+    expect(failed.canonical.status).toBe('error');
+    expect(failed.agentProjection.content).toContain('replacements="0"');
+    expect(failed.agentProjection.content).toContain(': 0 replacements');
   });
 
   it('write projection: empty file reports summary without content', async () => {

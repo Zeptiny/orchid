@@ -274,7 +274,7 @@ describe('subagent delta application', () => {
   });
 
   it('terminal removes the live entry and replaces the record with the authoritative durable record', () => {
-    const usage: Usage = { prompt_tokens: 7, cached_tokens: 1, completion_tokens: 3, total_tokens: 10 };
+    const usage: Usage = { prompt_tokens: 7, cached_tokens: 1, completion_tokens: 3, total_tokens: 10, reasoning_tokens: 0 };
     const done: SubagentRecord = {
       ...record('one', 'completed'),
       end_time: '2026-01-01T00:00:05.000Z',
@@ -428,7 +428,7 @@ describe('delta/snapshot parity', () => {
   });
 
   it('reaches terminal parity: live entry removed, record replaced at the same revision', () => {
-    const usage: Usage = { prompt_tokens: 3, cached_tokens: 0, completion_tokens: 2, total_tokens: 5 };
+    const usage: Usage = { prompt_tokens: 3, cached_tokens: 0, completion_tokens: 2, total_tokens: 5, reasoning_tokens: 0 };
     const done: SubagentRecord = {
       ...record(id, 'completed'),
       end_time: '2026-01-01T00:00:05.000Z',
@@ -651,6 +651,7 @@ describe('subagent usage summary identity (U5 history input)', () => {
     completion_tokens: completion,
     total_tokens: prompt + completion,
     cached_tokens: 0,
+    reasoning_tokens: 0,
   });
 
   const sourceWithUsage = (parentChainIndex: number | null, usage: Usage): SubagentUsageSource => ({

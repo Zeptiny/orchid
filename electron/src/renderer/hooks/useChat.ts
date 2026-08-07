@@ -146,9 +146,22 @@ export interface ChatSendOptions {
   draftGeneration?: number;
 }
 
+export interface UseChatOptions {
+  /**
+   * Invoked when chat:send fails with `untrusted_project`. When present the
+   * structured failure opens the trust dialog instead of pushing a raw error
+   * bubble; when absent the generic error behavior is kept.
+   */
+  onUntrustedProject?: () => void;
+}
+
 export interface UseChatReturn extends ChatState {
-  /** Send a message to the chat. */
-  send: (message: string, options?: ChatSendOptions) => Promise<void>;
+  /**
+   * Send a message to the chat. Resolves `true` only when a turn actually
+   * started; gate failures (busy, switching, structured send errors) resolve
+   * `false` instead of rejecting.
+   */
+  send: (message: string, options?: ChatSendOptions) => Promise<boolean>;
   /** Cancel the current stream. */
   cancel: () => Promise<void>;
   /** Immediately stop one session from a global activity control. */
@@ -340,8 +353,15 @@ function reduceProjectionState(state: ProjectionState, action: ChatTurnProjectio
   return projection === state.projection ? state : { projection, revision: state.revision + 1 };
 }
 
-export function useChat(activeSessionId: string | null = null): UseChatReturn {
+export function useChat(
+  activeSessionId: string | null = null,
+  options: UseChatOptions = {},
+): UseChatReturn {
   const [messages, setMessages] = useState<Message[]>([]);
+  // Ref-mirror the optional callback so `send` keeps a stable identity and a
+  // new closure from the caller never rebuilds every streaming token.
+  const onUntrustedProjectRef = useRef<(() => void) | undefined>(options.onUntrustedProject);
+  onUntrustedProjectRef.current = options.onUntrustedProject;
   const [projectionState, dispatchProjectionState] = useReducer(reduceProjectionState, { projection: null, revision: 0 });
   const [isSwitchingSession, setIsSwitchingSession] = useState(false);
   const pendingFrameActionsRef = useRef<ChatTurnEventAction[]>([]);
@@ -494,12 +514,12 @@ export function useChat(activeSessionId: string | null = null): UseChatReturn {
   const send = useCallback(
     async (message: string, options?: ChatSendOptions) => {
       // isSendingRef is synchronous; status alone can be stale across rapid Enter.
-      if (!message.trim() || status === 'streaming' || isSendingRef.current) return;
+      if (!message.trim() || status === 'streaming' || isSendingRef.current) return false;
       // Affinity already rebound but UI still shows previous session — do not send.
-      if (isSwitchingSession) return;
+      if (isSwitchingSession) return false;
       if (!window.orchid?.chat) {
         dispatchProjection({ type: 'local_error', error: 'Chat IPC not available', status: 'error' });
-        return;
+        return false;
       }
 
       isSendingRef.current = true;
@@ -553,6 +573,14 @@ export function useChat(activeSessionId: string | null = null): UseChatReturn {
         // Structured gate failures (e.g. unbound workspace) — no stream starts.
         if (result.status === 'error') {
           isSendingRef.current = false;
+          // Untrusted-project gates surface as the trust dialog, not a raw
+          // error, when the mount point wired a handler.
+          if (result.kind === 'untrusted_project' && onUntrustedProjectRef.current) {
+            dispatchProjection({ type: 'clear_stream', status: 'idle' });
+            setMessages((prev) => dropOptimisticUserMessageIfLast(prev, userMessage.id));
+            onUntrustedProjectRef.current();
+            return false;
+          }
           dispatchProjection({ type: 'clear_stream', status: 'error' });
           dispatchProjection({
             type: 'local_error',
@@ -563,7 +591,7 @@ export function useChat(activeSessionId: string | null = null): UseChatReturn {
           });
           // Drop the optimistic user bubble when send never started.
           setMessages((prev) => dropOptimisticUserMessageIfLast(prev, userMessage.id));
-          return;
+          return false;
         }
 
         // Only adopt send resolution when the user is still viewing this turn's
@@ -582,12 +610,14 @@ export function useChat(activeSessionId: string | null = null): UseChatReturn {
             affinity.lastSequence = -1;
           }
         }
+        return true;
       } catch (err) {
         // Drop the optimistic user bubble when send never started (throw path).
         isSendingRef.current = false;
         dispatchProjection({ type: 'clear_stream', status: 'error' });
         dispatchProjection({ type: 'local_error', error: err instanceof Error ? err.message : String(err), status: 'error' });
         setMessages((prev) => dropOptimisticUserMessageIfLast(prev, userMessage.id));
+        return false;
       }
     },
     [

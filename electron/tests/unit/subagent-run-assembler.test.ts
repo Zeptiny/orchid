@@ -12,6 +12,7 @@ const usage = (prompt_tokens: number, completion_tokens: number): Usage => ({
   completion_tokens,
   total_tokens: prompt_tokens + completion_tokens,
   cached_tokens: 0,
+  reasoning_tokens: 0,
 });
 
 function toolResult(toolCallId: string, content: string): Extract<StreamEvent, { type: 'tool_result' }> {

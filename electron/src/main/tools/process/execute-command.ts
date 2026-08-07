@@ -16,6 +16,7 @@ import { z } from 'zod';
 import { getConfig } from '../../config/loader';
 import type { Config } from '../../config/schema';
 import { getBackgroundStore, ENV_SUPPRESSION } from './background-store';
+import { getForegroundLiveRegistry } from './foreground-live';
 import type { ToolDefinition, ToolHandler } from '../types';
 import { RiskClass } from '../../../shared/types/permission';
 import { genericToolResultMetadata } from '../types';
@@ -142,6 +143,12 @@ function killProcessGroup(proc: ChildProcess, signal: NodeJS.Signals): void {
   }
 }
 
+/** Finalize the live mirror entry; safe no-op when mirroring is inactive. */
+function finalizeLiveMirror(toolCallId: string | undefined, exitCode: number): void {
+  if (toolCallId === undefined) return;
+  getForegroundLiveRegistry().finalize(toolCallId, exitCode);
+}
+
 // ---------------------------------------------------------------------------
 // Zod schema
 // ---------------------------------------------------------------------------
@@ -171,6 +178,11 @@ export interface ExecuteCommandOptions {
   agentScopeId?: string;
   config?: Pick<Config, 'command_timeout' | 'command_max_output_bytes'>;
   abortSignal?: AbortSignal;
+  /**
+   * Tool call id enabling the additive live-output mirror (foreground only).
+   * When absent, mirroring is skipped and behavior is exactly as before.
+   */
+  toolCallId?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -214,6 +226,9 @@ export async function executeCommand(
       // active background command without recovering metadata from a string.
       // The generic projector still emits a compact human-readable sentence
       // for the model; canonical/session persistence retains every field.
+      // `createdAt` is the restart-stable spawn identity: replayed widgets
+      // compare it against live snapshots so a reused integer commandId after
+      // an app restart cannot alias onto an unrelated live process.
       return genericBuiltInToolOutcome(
         'execute_command',
         {
@@ -222,6 +237,7 @@ export async function executeCommand(
           description,
           background: true,
           running: true,
+          createdAt: store.get(procId)?.createdAt ?? Date.now(),
         },
         'complete',
       );
@@ -237,6 +253,9 @@ export async function executeCommand(
   }
   const timeoutMs = timeout * 1000;
   const maxOutputBytes = options.config?.command_max_output_bytes ?? getConfig().command_max_output_bytes;
+
+  // Live mirror key — legacy callers omit it and skip all mirroring.
+  const liveToolCallId = options.toolCallId;
 
   const env = { ...process.env, ...ENV_SUPPRESSION };
 
@@ -270,12 +289,38 @@ export async function executeCommand(
       spawnArgs = spawnArgs.slice(1);
     }
 
+    // Live output mirror (additive side channel keyed by tool call id):
+    // register before spawn so snapshots work from the first chunk. The
+    // canonical bounded collection below stays untouched.
+    if (liveToolCallId !== undefined) {
+      getForegroundLiveRegistry().register(liveToolCallId, {
+        command,
+        sessionId: options.sessionId ?? null,
+        agentScopeId: options.agentScopeId ?? 'main',
+      });
+    }
+
     const proc = spawn(spawnCmd, spawnArgs, {
       stdio: ['ignore', 'pipe', 'pipe'],
       cwd: path.resolve(workingDirectory),
       detached: true,
       env,
     });
+
+    // Mirror every chunk into the live registry alongside readBounded's own
+    // bounded collectors — both listeners see every data event, so the
+    // canonical stdout/stderr collection is unaffected.
+    if (liveToolCallId !== undefined) {
+      const liveRegistry = getForegroundLiveRegistry();
+      const mirrorChunk = (chunk: Buffer | string): void => {
+        liveRegistry.append(
+          liveToolCallId,
+          typeof chunk === 'string' ? Buffer.from(chunk) : chunk,
+        );
+      };
+      proc.stdout?.on('data', mirrorChunk);
+      proc.stderr?.on('data', mirrorChunk);
+    }
 
     // Outer tool-dispatch timeout aborts this signal — kill the live handle only
     // (never bare PID after delay; PID reuse risk).
@@ -302,7 +347,11 @@ export async function executeCommand(
         if (proc.exitCode === null) {
           killProcessGroup(proc, 'SIGKILL');
         }
-        await waitForExit(proc);
+        await waitForExit(proc, WAIT_AFTER_KILL_MS);
+        // Timeout / abort / spawn-error all end in a kill or a failed spawn.
+        // A SIGKILL'd process reports no code, so fall back to the -1
+        // sentinel (BackgroundProcessStore's exit-event convention).
+        finalizeLiveMirror(liveToolCallId, proc.exitCode ?? -1);
         if (err instanceof Error && err.message === 'timeout') {
           return genericBuiltInToolOutcome('execute_command', `Error: ${description} timed out after ${timeout} seconds.`, 'error');
         }
@@ -324,14 +373,15 @@ export async function executeCommand(
       // If truncated and still running, kill it
       if (truncated && proc.exitCode === null) {
         killProcessGroup(proc, 'SIGKILL');
-        await waitForExit(proc);
+        await waitForExit(proc, WAIT_AFTER_KILL_MS);
       }
 
-      await waitForExit(proc);
+      await waitForExit(proc, WAIT_AFTER_KILL_MS);
 
       const stdoutStr = stdout.length > 0 ? stdout.toString('utf-8').trim() : '';
       const stderrStr = stderr.length > 0 ? stderr.toString('utf-8').trim() : '';
       const exitCode = proc.exitCode ?? 0;
+      finalizeLiveMirror(liveToolCallId, exitCode);
       return genericBuiltInToolOutcome(
         'execute_command',
         { stdout: stdoutStr, stderr: stderrStr, exitCode, truncated },
@@ -343,21 +393,44 @@ export async function executeCommand(
       abortSignal?.removeEventListener('abort', onAbort);
     }
   } catch (e) {
+    // Synchronous spawn failure or rethrown read error: either the inner
+    // finalizer already ran (finalize is idempotent) or no entry exists.
+    finalizeLiveMirror(liveToolCallId, -1);
     const msg = e instanceof Error ? e.message : String(e);
     return genericBuiltInToolOutcome('execute_command', `Error: ${msg}`, 'error');
   }
 }
 
-function waitForExit(proc: ChildProcess): Promise<void> {
+function waitForExit(proc: ChildProcess, timeoutMs?: number): Promise<void> {
   return new Promise((resolve) => {
     if (proc.exitCode !== null) {
       resolve();
       return;
     }
-    proc.on('exit', () => resolve());
-    proc.on('error', () => resolve());
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let done = false;
+    const finish = () => {
+      if (done) return;
+      done = true;
+      if (timer !== undefined) clearTimeout(timer);
+      proc.removeListener('exit', onExit);
+      proc.removeListener('error', onError);
+      resolve();
+    };
+    const onExit = () => finish();
+    const onError = () => finish();
+    if (timeoutMs !== undefined) {
+      timer = setTimeout(finish, timeoutMs);
+      if (typeof (timer as unknown as { unref?: () => void }).unref === 'function') {
+        (timer as unknown as { unref: () => void }).unref();
+      }
+    }
+    proc.once('exit', onExit);
+    proc.once('error', onError);
   });
 }
+
+const WAIT_AFTER_KILL_MS = 2500;
 
 // ---------------------------------------------------------------------------
 // Tool definition
@@ -393,5 +466,6 @@ export const executeCommandHandler: ToolHandler = async (input: unknown, ctx) =>
     agentScopeId: ctx.agentScopeId ?? 'main',
     config: getToolConfig(ctx),
     abortSignal: ctx.abortSignal,
+    toolCallId: ctx.toolCallId,
   });
 };

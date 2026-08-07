@@ -247,6 +247,7 @@ describe('Static Tool Definitions', () => {
       expectValidHandler(terminateCommandHandler);
       expect(terminateCommandToolDefinition.category).toBe('process');
     });
+
   });
 
   describe('AST tools (6)', () => {

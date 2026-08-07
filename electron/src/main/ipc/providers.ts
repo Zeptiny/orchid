@@ -81,6 +81,7 @@ const createConnectionSchema = z.object({
   authMethod: providerAuthMethodSchema,
   modelIds: modelIdsSchema,
   customModels: z.array(customConnectionModelSchema).max(500).optional(),
+  reasoningConfig: z.record(z.string(), reasoningModelConfigSchema).optional(),
   endpoint: providerEndpointSchema.nullable().optional(),
   allowInsecureHttp: z.boolean().optional(),
   environmentVariable: environmentVariableSchema.optional(),
@@ -736,6 +737,7 @@ export function registerProviderIPC(): void {
       credential,
       modelIds: parsed.data.modelIds,
       ...(parsed.data.customModels ? { customModels: parsed.data.customModels } : {}),
+      ...(parsed.data.reasoningConfig ? { reasoningConfig: parsed.data.reasoningConfig } : {}),
       ...(parsed.data.endpoint !== undefined ? { endpoint: parsed.data.endpoint } : {}),
       ...(parsed.data.allowInsecureHttp !== undefined
         ? { allowInsecureHttp: parsed.data.allowInsecureHttp }

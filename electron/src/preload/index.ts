@@ -74,6 +74,10 @@ import type {
   ASTIndexMessage,
   ASTIndexProgress,
   BgCommandSnapshotRequest,
+  BgCommandListRequest,
+  BgCommandSendInputRequest,
+  BgCommandControlRequest,
+  BgCommandChangedEvent,
   SubagentSnapshotRequest,
   SubagentSnapshot,
   SubagentEvent,
@@ -92,9 +96,24 @@ import type {
   PermissionResult,
   PermissionSessionModeMutationResult,
   PermissionSessionModeResult,
+  ProjectTrustGetMessage,
+  ProjectTrustSetMessage,
+  ProjectTrustInfo,
+  ProjectTrustChangedEvent,
+  TrustedProjectEntry,
   StartupSnapshot,
   StartupContinueDegradedResult,
 } from '../shared/types/ipc';
+import type {
+  OverviewResult,
+  SessionsResult,
+  SessionDetailResult,
+  ModelsResult,
+  ToolsResult,
+  SubagentsResult,
+  ContextResult,
+  AnalyticsTimeRange,
+} from '../shared/types/analytics';
 import {
   chatChunkEventSchema,
   chatThinkingEventSchema,
@@ -116,6 +135,11 @@ import {
   chatSendResultSchema,
   toolExecuteResultSchema,
   bgCommandSnapshotResultSchema,
+  bgCommandListResultSchema,
+  bgCommandSendInputResultSchema,
+  bgCommandTerminateResultSchema,
+  bgCommandReleaseInputResultSchema,
+  bgCommandChangedEventSchema,
   configSaveResultSchema,
   workspaceInfoSchema,
   sessionReasoningConfigResultSchema,
@@ -125,6 +149,9 @@ import {
   subagentDeltaEventSchema,
   startupSnapshotSchema,
   startupContinueDegradedResultSchema,
+  projectTrustInfoSchema,
+  projectTrustChangedEventSchema,
+  trustedProjectEntrySchema,
 } from '../shared/types/ipc-schemas';
 
 // ── Security helpers ─────────────────────────────────────────────────────────
@@ -155,11 +182,18 @@ const INVOKE_RESULT_SCHEMAS: Partial<Record<string, z.ZodTypeAny>> = {
   [IPC_CHANNELS.SUBAGENTS_SNAPSHOT]: subagentSnapshotSchema,
   [IPC_CHANNELS.TOOL_EXECUTE]: toolExecuteResultSchema,
   [IPC_CHANNELS.BG_CMD_SNAPSHOT]: bgCommandSnapshotResultSchema,
+  [IPC_CHANNELS.BG_CMD_LIST]: bgCommandListResultSchema,
+  [IPC_CHANNELS.BG_CMD_SEND_INPUT]: bgCommandSendInputResultSchema,
+  [IPC_CHANNELS.BG_CMD_TERMINATE]: bgCommandTerminateResultSchema,
+  [IPC_CHANNELS.BG_CMD_RELEASE_INPUT]: bgCommandReleaseInputResultSchema,
   [IPC_CHANNELS.CONFIG_SAVE]: configSaveResultSchema,
   [IPC_CHANNELS.SESSION_GET_WORKSPACE]: workspaceInfoSchema,
   [IPC_CHANNELS.SESSION_PICK_PROJECT_DIR]: workspaceInfoSchema,
   [IPC_CHANNELS.SESSION_SET_WORKSPACE]: workspaceInfoSchema,
   [IPC_CHANNELS.SESSION_GET_REASONING_CONFIG]: sessionReasoningConfigResultSchema,
+  [IPC_CHANNELS.PROJECT_TRUST_GET]: projectTrustInfoSchema,
+  [IPC_CHANNELS.PROJECT_TRUST_SET]: projectTrustInfoSchema,
+  [IPC_CHANNELS.PROJECT_TRUST_LIST]: z.array(trustedProjectEntrySchema),
 };
 
 async function invoke<T>(channel: string, ...args: unknown[]): Promise<T> {
@@ -470,6 +504,20 @@ const orchidAPI: OrchidAPI = {
       onParsed(IPC_CHANNELS.SESSION_ACTIVITY_CHANGED, sessionActivityChangedEventSchema, callback),
   },
 
+  projectTrust: {
+    get: (message: ProjectTrustGetMessage) =>
+      invoke<ProjectTrustInfo>(IPC_CHANNELS.PROJECT_TRUST_GET, message),
+
+    set: (message: ProjectTrustSetMessage) =>
+      invoke<ProjectTrustInfo>(IPC_CHANNELS.PROJECT_TRUST_SET, message),
+
+    list: () =>
+      invoke<TrustedProjectEntry[]>(IPC_CHANNELS.PROJECT_TRUST_LIST),
+
+    onChanged: (callback: (event: ProjectTrustChangedEvent) => void) =>
+      onParsed(IPC_CHANNELS.PROJECT_TRUST_CHANGED, projectTrustChangedEventSchema, callback),
+  },
+
   subagents: {
     snapshot: (request: SubagentSnapshotRequest) =>
       invoke<SubagentSnapshot>(IPC_CHANNELS.SUBAGENTS_SNAPSHOT, request),
@@ -553,6 +601,21 @@ const orchidAPI: OrchidAPI = {
   bgCmd: {
     snapshot: (request: BgCommandSnapshotRequest) =>
       invoke(IPC_CHANNELS.BG_CMD_SNAPSHOT, request),
+
+    list: (request?: BgCommandListRequest) =>
+      invoke(IPC_CHANNELS.BG_CMD_LIST, request ?? {}),
+
+    sendInput: (request: BgCommandSendInputRequest) =>
+      invoke(IPC_CHANNELS.BG_CMD_SEND_INPUT, request),
+
+    terminate: (request: BgCommandControlRequest) =>
+      invoke(IPC_CHANNELS.BG_CMD_TERMINATE, request),
+
+    releaseInput: (request: BgCommandControlRequest) =>
+      invoke(IPC_CHANNELS.BG_CMD_RELEASE_INPUT, request),
+
+    onChanged: (callback: (event: BgCommandChangedEvent) => void) =>
+      onParsed(IPC_CHANNELS.BG_CMD_CHANGED, bgCommandChangedEventSchema, callback),
   },
 
   askQuestion: {
@@ -599,6 +662,29 @@ const orchidAPI: OrchidAPI = {
         IPC_CHANNELS.PERMISSION_APPROVAL_SETTLED,
         (...args) => callback(args[0] as PermissionApprovalSettledEvent),
       ),
+  },
+
+  analytics: {
+    overview: (params?: { readonly timeRange?: AnalyticsTimeRange }) =>
+      invoke<OverviewResult>(IPC_CHANNELS.ANALYTICS_OVERVIEW, params),
+
+    sessions: (params?: { readonly limit?: number; readonly timeRange?: AnalyticsTimeRange }) =>
+      invoke<SessionsResult>(IPC_CHANNELS.ANALYTICS_SESSIONS, params),
+
+    sessionDetail: (params: { readonly sessionId: string; readonly timeRange?: AnalyticsTimeRange }) =>
+      invoke<SessionDetailResult>(IPC_CHANNELS.ANALYTICS_SESSION_DETAIL, params),
+
+    models: (params?: { readonly timeRange?: AnalyticsTimeRange }) =>
+      invoke<ModelsResult>(IPC_CHANNELS.ANALYTICS_MODELS, params),
+
+    tools: (params?: { readonly timeRange?: AnalyticsTimeRange }) =>
+      invoke<ToolsResult>(IPC_CHANNELS.ANALYTICS_TOOLS, params),
+
+    subagents: (params?: { readonly timeRange?: AnalyticsTimeRange }) =>
+      invoke<SubagentsResult>(IPC_CHANNELS.ANALYTICS_SUBAGENTS, params),
+
+    context: (params?: { readonly sessionId?: string; readonly timeRange?: AnalyticsTimeRange }) =>
+      invoke<ContextResult>(IPC_CHANNELS.ANALYTICS_CONTEXT, params),
   },
 };
 

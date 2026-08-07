@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   selectBatch,
   reorderItems,
+  isStaleQueueOwner,
   type QueuedMessage,
   type QueueTrigger,
 } from '../../src/renderer/hooks/useMessageQueue';
@@ -181,5 +182,26 @@ describe('shouldAutoFire', () => {
 
   it('does not fire on editing-end while a fire is in flight', () => {
     expect(shouldAutoFire('idle', 'idle', null, 'msg-1', true)).toBe(false);
+  });
+});
+
+// ── isStaleQueueOwner ───────────────────────────────────────────────────────
+
+describe('isStaleQueueOwner', () => {
+  it('is not stale when the owner still matches the current session', () => {
+    expect(isStaleQueueOwner('session-a', 'session-a')).toBe(false);
+  });
+
+  it('is stale when the owner session was deleted (current null)', () => {
+    expect(isStaleQueueOwner('session-a', null)).toBe(true);
+  });
+
+  it('is stale when the context switched to another session', () => {
+    expect(isStaleQueueOwner('session-a', 'session-b')).toBe(true);
+  });
+
+  it('draft-owned queues (owner null) are never stale', () => {
+    expect(isStaleQueueOwner(null, null)).toBe(false);
+    expect(isStaleQueueOwner(null, 'session-a')).toBe(false);
   });
 });

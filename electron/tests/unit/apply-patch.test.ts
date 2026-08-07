@@ -251,6 +251,112 @@ describe('apply_patch handler', () => {
     }
   });
 
+  it('applies a patch whose agent forgot the *** Begin Patch marker', async () => {
+    writeFile('hello.ts', 'const a = 1;\n');
+
+    const patch = [
+      '*** Update File: hello.ts',
+      '@@',
+      '-const a = 1;',
+      '+const a = 2;',
+      '*** End Patch',
+    ].join('\n');
+
+    const result = await applyPatchHandler({ patch }, toolCtx());
+
+    expect(result.status).toBe('complete');
+    const data = result.data as ApplyPatchResultData;
+    expect(data.modified).toBe(1);
+    expect(data.failed).toBe(0);
+    expect(readFile('hello.ts')).toBe('const a = 2;\n');
+  });
+
+  it('applies a patch whose agent forgot the *** End Patch marker', async () => {
+    writeFile('hello.ts', 'const a = 1;\n');
+
+    const patch = [
+      '*** Begin Patch',
+      '*** Update File: hello.ts',
+      '@@',
+      '-const a = 1;',
+      '+const a = 2;',
+    ].join('\n');
+
+    const result = await applyPatchHandler({ patch }, toolCtx());
+
+    expect(result.status).toBe('complete');
+    const data = result.data as ApplyPatchResultData;
+    expect(data.modified).toBe(1);
+    expect(readFile('hello.ts')).toBe('const a = 2;\n');
+  });
+
+  it('applies a patch wrapped in a markdown code fence', async () => {
+    writeFile('hello.ts', 'const a = 1;\n');
+
+    const patch = [
+      '```diff',
+      '*** Begin Patch',
+      '*** Update File: hello.ts',
+      '@@',
+      '-const a = 1;',
+      '+const a = 2;',
+      '*** End Patch',
+      '```',
+    ].join('\n');
+
+    const result = await applyPatchHandler({ patch }, toolCtx());
+
+    expect(result.status).toBe('complete');
+    const data = result.data as ApplyPatchResultData;
+    expect(data.modified).toBe(1);
+    expect(readFile('hello.ts')).toBe('const a = 2;\n');
+  });
+
+  it('applies a stacked @@ disambiguation patch end to end', async () => {
+    writeFile('dup.py', 'foo\nbar\nfoo\nbar\n');
+
+    const patch = [
+      '*** Begin Patch',
+      '*** Update File: dup.py',
+      '@@ foo',
+      '@@',
+      ' foo',
+      '-bar',
+      '+BAZ',
+      '*** End Patch',
+    ].join('\n');
+
+    const result = await applyPatchHandler({ patch }, toolCtx());
+
+    expect(result.status).toBe('complete');
+    const data = result.data as ApplyPatchResultData;
+    expect(data.modified).toBe(1);
+    expect(data.failed).toBe(0);
+    expect(readFile('dup.py')).toBe('foo\nbar\nfoo\nBAZ\n');
+  });
+
+  it('applies a hunk that repeats the @@ hint line as context', async () => {
+    writeFile('app.py', 'def greet():\n    print("Hi")\n');
+
+    const patch = [
+      '*** Begin Patch',
+      '*** Update File: app.py',
+      '@@ def greet():',
+      ' def greet():',
+      '-    print("Hi")',
+      '+    print("Hello")',
+      '*** End Patch',
+    ].join('\n');
+
+    const result = await applyPatchHandler({ patch }, toolCtx());
+
+    expect(result.status).toBe('complete');
+    const data = result.data as ApplyPatchResultData;
+    expect(data.modified).toBe(1);
+    expect(data.failed).toBe(0);
+    expect(readFile('app.py')).toBe('def greet():\n    print("Hello")\n');
+  });
+
   it('rejects a premature End Patch marker before creating any files', async () => {
     const patch = [
       '*** Begin Patch',

@@ -32,14 +32,16 @@ export function shouldAutoFire(
  * @param consumeNext - Returns the next eligible batch (text + messages), or null if held
  * @param restoreBatch - Restores a consumed batch to the front of the queue on send failure
  * @param editingId - Currently editing message ID (null when not editing)
- * @param sendFn - Sends a message via the chat (same signature as ChatView.handleSend)
+ * @param sendFn - Sends a message via the chat (same signature as ChatView.handleSend).
+ *   Resolves `true` only when a turn actually started; gate failures resolve
+ *   `false` (never throw), so the consumed batch is restored on both.
  */
 export function useQueueAutoFire(
   status: ChatStatus,
   consumeNext: () => ConsumedBatch | null,
-  restoreBatch: (batch: readonly QueuedMessage[]) => void,
+  restoreBatch: (batch: readonly QueuedMessage[], owner?: string | null) => void,
   editingId: string | null,
-  sendFn: (message: string) => Promise<void>,
+  sendFn: (message: string) => Promise<boolean>,
 ): void {
   const prevStatusRef = useRef<ChatStatus>(status);
   const prevEditingRef = useRef<string | null>(editingId);
@@ -57,11 +59,19 @@ export function useQueueAutoFire(
     if (!consumed) return;
 
     isFiringRef.current = true;
-    sendFn(consumed.text)
+    void sendFn(consumed.text)
+      .then((sent) => {
+        if (sent) return;
+        // Send was gated (no model, unbound workspace, vanished session, …)
+        // and never started a turn. Restore the consumed batch to its FIFO
+        // position so the messages are not permanently lost; ownership checks
+        // inside restoreBatch drop batches whose session was torn down.
+        restoreBatch(consumed.batch, consumed.owner);
+        console.warn('Queue auto-fire: send did not start; consumed messages restored to the queue.');
+      })
       .catch(() => {
-        // Send failed — restore the consumed batch to its FIFO position so the
-        // messages are not permanently lost; they fire on the next transition.
-        restoreBatch(consumed.batch);
+        // Send failed — same FIFO restore as the gated path.
+        restoreBatch(consumed.batch, consumed.owner);
         console.warn('Queue auto-fire: send failed, consumed messages restored to the queue.');
       })
       .finally(() => {

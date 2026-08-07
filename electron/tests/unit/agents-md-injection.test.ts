@@ -186,6 +186,41 @@ describe('buildAgentsMdInjection', () => {
     expect(injection!.injected[0]?.displayPath).toBe(path.join('docs', 'AGENTS.md'));
   });
 
+  it('read on a directory (isDirectory override) injects the AGENTS.md inside it', () => {
+    write('docs/AGENTS.md', 'docs instructions');
+    fs.mkdirSync(path.join(workspace, 'docs'), { recursive: true });
+
+    const injection = buildAgentsMdInjection(
+      'read',
+      { file_path: 'docs' },
+      workspace,
+      agentsConfig(),
+      store,
+      { isDirectory: true },
+    );
+
+    expect(injection).not.toBeNull();
+    expect(injection!.xml).toContain('docs instructions');
+    expect(injection!.injected[0]?.displayPath).toBe(path.join('docs', 'AGENTS.md'));
+  });
+
+  it('read on a directory without the override resolves as a file target', () => {
+    write('docs/AGENTS.md', 'docs instructions');
+    fs.mkdirSync(path.join(workspace, 'docs'), { recursive: true });
+
+    // Without the override, `read` treats the path as a file and walks from its
+    // parent, so the AGENTS.md inside `docs` itself is not governed.
+    const injection = buildAgentsMdInjection(
+      'read',
+      { file_path: 'docs' },
+      workspace,
+      agentsConfig(),
+      store,
+    );
+
+    expect(injection).toBeNull();
+  });
+
   it('renders an over-cap file with truncated="true" and a read pointer (R5)', () => {
     write('pkg/AGENTS.md', 'y'.repeat(100));
     write('pkg/x.ts', 'code');

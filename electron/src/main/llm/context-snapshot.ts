@@ -8,11 +8,13 @@ interface ContextSnapshotInput {
   messages: readonly ModelMessage[];
   inputTokens: number | undefined;
   outputTokens: number | undefined;
+  /** Provider-reported reasoning tokens, already included in `outputTokens`. */
+  reasoningTokens?: number | undefined;
 }
 
 type DynamicContextSnapshotInput = Pick<
   ContextSnapshotInput,
-  'messages' | 'inputTokens' | 'outputTokens'
+  'messages' | 'inputTokens' | 'outputTokens' | 'reasoningTokens'
 >;
 
 interface ContextChars {
@@ -115,6 +117,7 @@ export function createContextSnapshotBuilder(
     messages,
     inputTokens,
     outputTokens,
+    reasoningTokens,
   }: DynamicContextSnapshotInput): ContextSnapshot => {
     const input = Math.max(0, inputTokens ?? 0);
     const output = Math.max(0, outputTokens ?? 0);
@@ -128,6 +131,14 @@ export function createContextSnapshotBuilder(
       input,
     );
 
+    const assistantTokens = allocated.assistant + output;
+    // Provider-reported reasoning is authoritative: visible reasoning text
+    // may be a summary, so character ratios can misattribute it.
+    const reasoning = Math.min(
+      Math.max(0, reasoningTokens ?? 0),
+      assistantTokens,
+    );
+
     return {
       input_tokens: input,
       output_tokens: output,
@@ -136,7 +147,8 @@ export function createContextSnapshotBuilder(
       tools_tokens: allocated.tools,
       tool_use_tokens: allocated.toolUse,
       user_tokens: allocated.user,
-      assistant_tokens: allocated.assistant + output,
+      assistant_tokens: assistantTokens,
+      reasoning_tokens: reasoning,
     };
   };
 }
@@ -148,10 +160,12 @@ export function buildContextSnapshot({
   messages,
   inputTokens,
   outputTokens,
+  reasoningTokens,
 }: ContextSnapshotInput): ContextSnapshot {
   return createContextSnapshotBuilder(systemPrompt, tools)({
     messages,
     inputTokens,
     outputTokens,
+    reasoningTokens,
   });
 }

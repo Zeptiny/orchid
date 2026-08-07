@@ -71,6 +71,15 @@ export function renderAgentsMdBlock(entry: AgentsMdEntry, maxBytes: number): str
   );
 }
 
+export interface AgentsMdInjectionOptions {
+  /**
+   * Overrides the static per-tool `isDirectory` flag for tools whose target
+   * kind is only known after execution (e.g. `read` on a directory, detected
+   * via its `directory-entries` result family).
+   */
+  isDirectory?: boolean;
+}
+
 /**
  * Build the AGENTS.md injection for a read-tool call, or null when nothing new
  * should be injected.
@@ -87,6 +96,7 @@ export function buildAgentsMdInjection(
   cwd: string,
   config: Config,
   store: AgentsMdContextStore,
+  options?: AgentsMdInjectionOptions,
 ): AgentsMdInjection | null {
   // A missing `agents_md` block (e.g. a partial config) degrades to disabled.
   if (!config.agents_md?.enabled || !config.agents_md?.inject_on_read) return null;
@@ -100,7 +110,8 @@ export function buildAgentsMdInjection(
   // Directory targets resolve for a synthetic child so the walk starts at the
   // directory itself rather than its parent (mirrors project/agents-md.ts).
   const resolvedPath = resolveToolPath(cwd, rawPath);
-  const resolvedTarget = spec.isDirectory
+  const isDirectory = options?.isDirectory ?? spec.isDirectory;
+  const resolvedTarget = isDirectory
     ? path.join(resolvedPath, 'AGENTS.md')
     : resolvedPath;
 

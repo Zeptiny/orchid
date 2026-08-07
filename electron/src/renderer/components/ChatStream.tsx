@@ -239,15 +239,15 @@ export function ChatStream({
   // commits before CHAT_DONE retains its DOM node at the live→history boundary.
   const historyNodes = useMemo(
     () => historyItems.map((item) =>
-      renderStreamItem(item, alwaysExpandToolGroups, expandChain, subagents),
+      renderStreamItem(item, alwaysExpandToolGroups, expandChain, subagents, sessionId),
     ),
-    [historyItems, alwaysExpandToolGroups, expandChain, subagents],
+    [historyItems, alwaysExpandToolGroups, expandChain, subagents, sessionId],
   );
   const liveTailNodes = useMemo(
     () => liveGroupedItems.map((item) =>
-      renderStreamItem(item, alwaysExpandToolGroups, expandChain, subagents),
+      renderStreamItem(item, alwaysExpandToolGroups, expandChain, subagents, sessionId),
     ),
-    [liveGroupedItems, alwaysExpandToolGroups, expandChain, subagents],
+    [liveGroupedItems, alwaysExpandToolGroups, expandChain, subagents, sessionId],
   );
   const activeFooterNode = useMemo(() => {
     if (!history.activeFooter) return null;
@@ -266,6 +266,7 @@ export function ChatStream({
       alwaysExpandToolGroups,
       expandChain,
       subagents,
+      sessionId,
     );
   }, [
     history.activeFooter,
@@ -276,6 +277,7 @@ export function ChatStream({
     alwaysExpandToolGroups,
     expandChain,
     subagents,
+    sessionId,
   ]);
   const streamNodes = useMemo(
     () => activeFooterNode
@@ -373,9 +375,10 @@ function renderStreamItem(
   alwaysExpandToolGroups: boolean,
   onExpandChain: (chainIndex: number) => void,
   subagents: readonly SubagentTitleRecord[],
+  sessionId: string | null,
 ): ReactNode {
   if (item.kind === 'tool') {
-    return <ToolCallBlock key={item.key} block={item.block} subagents={subagents} />;
+    return <ToolCallBlock key={item.key} block={item.block} subagents={subagents} sessionId={sessionId} />;
   }
   if (item.kind === 'tool-group') {
     return (
@@ -384,6 +387,7 @@ function renderStreamItem(
         items={item.children}
         subagents={subagents}
         alwaysExpand={alwaysExpandToolGroups}
+        sessionId={sessionId}
       />
     );
   }

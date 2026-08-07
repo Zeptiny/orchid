@@ -541,7 +541,12 @@ export function genericBuiltInToolOutcome(
 
 const fileChangeAgentProjector: AgentProjector = (canonical, toolName = 'edit') => {
   const parsed = fileChangeDataSchema.parse(canonical.data);
-  const replacements = parsed.replacementCount ?? (parsed.hunks.length > 0 ? parsed.hunks.length : 1);
+  const fallbackReplacements = canonical.status === 'error'
+    || canonical.status === 'cancelled'
+    || canonical.status === 'empty'
+    ? 0
+    : Math.max(parsed.hunks.length, 1);
+  const replacements = parsed.replacementCount ?? fallbackReplacements;
   const summary = `${parsed.path}: ${replacements} replacement${replacements === 1 ? '' : 's'}`;
   return projectionWithCanonicalCompleteness(
     canonical,
@@ -572,7 +577,7 @@ const fileWriteAgentProjector: AgentProjector = (canonical, toolName = 'write') 
   );
 };
 
-const fileContentAgentProjector: AgentProjector = (canonical, toolName = 'read') => {
+export const fileContentAgentProjector: AgentProjector = (canonical, toolName = 'read') => {
   const parsed = fileContentDataSchema.parse(canonical.data);
   const requested = parsed.requestedRange.start + '-' +
     (parsed.requestedRange.end ?? parsed.requestedRange.start);
@@ -631,7 +636,7 @@ function renderDirectoryTree(entries: Array<{
   return renderChildren(undefined, '').join('\n');
 }
 
-const directoryEntriesAgentProjector: AgentProjector = (
+export const directoryEntriesAgentProjector: AgentProjector = (
   canonical,
   toolName = 'read_directory',
 ) => {
