@@ -1,6 +1,12 @@
 import type { LanguageModelV4 } from '@ai-sdk/provider';
 import { importESM } from '../../utils/esm-import';
 import type { EffectiveModel, ProviderProtocol } from '../../../shared/types/provider';
+import type { ThinkingPolicy } from '../../../shared/types/provider-facets';
+import {
+  ANTHROPIC_THINKING_POLICY,
+  OPENAI_OPAQUE_THINKING_POLICY,
+  OPENAI_RESPONSES_THINKING_POLICY,
+} from '../facets/thinking';
 import type { DriverCredential, ProviderDriver, ReasoningProviderOptions } from './types';
 
 export const BUILTIN_PROVIDER_ORIGINS = {
@@ -82,6 +88,15 @@ export function createNativeProviderDrivers(): readonly ProviderDriver[] {
         : id === 'xai'
           ? 'xai'
           : 'openai-compatible';
+    const thinkingPolicyFor = (model: EffectiveModel): ThinkingPolicy | undefined => {
+      if (id === 'anthropic') return ANTHROPIC_THINKING_POLICY;
+      if (id === 'openai') {
+        return model.protocol === 'openai-responses'
+          ? OPENAI_RESPONSES_THINKING_POLICY
+          : OPENAI_OPAQUE_THINKING_POLICY;
+      }
+      return undefined;
+    };
     const driver: ProviderDriver = {
       id,
       supportedAuthMethods: ['api-key', 'environment'],
@@ -94,6 +109,7 @@ export function createNativeProviderDrivers(): readonly ProviderDriver[] {
         modelId: model.id,
         apiKey: apiKeyForDriver(credential),
       }),
+      ...(id === 'openai' || id === 'anthropic' ? { thinkingPolicy: thinkingPolicyFor } : {}),
     };
     // OpenAI embeddings use the same code-owned OpenAI origin, but only the
     // typed provider runtime may surface this main-process target to RAG.

@@ -1,5 +1,10 @@
 import type { LanguageModelV4 } from '@ai-sdk/provider';
-import type { ProviderProtocol } from '../../../shared/types/provider';
+import type { EffectiveModel, ProviderProtocol } from '../../../shared/types/provider';
+import type { ThinkingPolicy } from '../../../shared/types/provider-facets';
+import {
+  ANTHROPIC_THINKING_POLICY,
+  OPENAI_RESPONSES_THINKING_POLICY,
+} from '../facets/thinking';
 import { createUnwrappingFetch } from '../../llm/response-unwrap';
 import { importESM } from '../../utils/esm-import';
 import type { ProviderDriver } from './types';
@@ -71,6 +76,14 @@ export function createOpenCodeGoProviderDriver(): ProviderDriver {
         modelId: model.id,
         apiKey: apiKeyForDriver(credential),
       });
+    },
+    // Policy follows the frozen per-model protocol: Anthropic-routed models
+    // need signed replay, Responses-routed models replay encrypted items, and
+    // chat-completions models keep the default plain-text policy.
+    thinkingPolicy: (model: EffectiveModel): ThinkingPolicy | undefined => {
+      if (model.protocol === 'anthropic-messages') return ANTHROPIC_THINKING_POLICY;
+      if (model.protocol === 'openai-responses') return OPENAI_RESPONSES_THINKING_POLICY;
+      return undefined;
     },
   };
 }

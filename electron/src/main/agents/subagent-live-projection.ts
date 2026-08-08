@@ -332,6 +332,15 @@ export class SubagentLiveProjectionStore {
           });
           break;
         }
+        case 'thinking_artifact': {
+          // No live segment: artifact-only reasoning carries no displayable
+          // text, so only the durable transcript advances.
+          applied.push({
+            transcript: { messages: effect.messages },
+            notify: true,
+          });
+          break;
+        }
         case 'tool_result': {
           const tool = entry.projection.toolCalls.find((item) => item.toolCallId === effect.toolCallId);
           if (tool) {

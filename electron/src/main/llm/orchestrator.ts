@@ -39,7 +39,7 @@ import type { ToolRegistry } from '../tools/registry';
 import { ToolRegistry as ToolRegistryClass } from '../tools/registry';
 import type { MCPManager } from '../mcp/manager';
 import type { ProjectRuntime } from '../project/runtime';
-import { toApiMessages } from './history';
+import { toApiMessages, type ThinkingReplayContext } from './history';
 import { toModelMessages } from './model-messages';
 import {
   executeToolCall,
@@ -114,6 +114,8 @@ export interface StreamChatParams {
   accounting?: ProviderAttemptAccountingContext;
   /** Provider-native reasoning options forwarded to streamText. */
   providerOptions?: ReasoningProviderOptions;
+  /** Current model's thinking policy + identity for artifact replay (R16). */
+  thinkingReplay?: ThinkingReplayContext;
 }
 
 function buildStepUsage(
@@ -173,6 +175,7 @@ export async function* streamChat(params: StreamChatParams): AsyncGenerator<Stre
     modelInstance,
     accounting,
     providerOptions,
+    thinkingReplay,
   } = params;
 
   // Dynamic import — `ai` is ESM-only but Electron main compiles to CJS
@@ -182,7 +185,7 @@ export async function* streamChat(params: StreamChatParams): AsyncGenerator<Stre
   const fullSystemPrompt = buildSystemPrompt(systemPrompt, context);
 
   // ── Convert history to API messages ──
-  const historyMessages = toApiMessages(messages);
+  const historyMessages = toApiMessages(messages, thinkingReplay);
 
   // System messages are handled by the `system` param in streamText.
   const coreMessages = toModelMessages(historyMessages);
@@ -258,6 +261,7 @@ export async function* streamChat(params: StreamChatParams): AsyncGenerator<Stre
       mcpManager,
       attempt,
       eagerBridge,
+      artifactIdentity: thinkingReplay?.selection,
       buildUsage: (usage, stepMessages) => {
         const stepUsage = buildStepUsage(
           usage,

@@ -3,7 +3,7 @@ import type { EffectiveModel, ModelSelection, ProviderConnection } from '../../s
 import type {
   FrozenProviderRequestSnapshot,
 } from '../../shared/types/accounting';
-import type { PricingRateFields } from '../../shared/types/provider-facets';
+import type { PricingRateFields, ThinkingPolicy } from '../../shared/types/provider-facets';
 import { resolveModelSelection } from './resolver';
 import type { ConnectionStore } from './connection-store';
 import type { ProviderCatalogSnapshot, ProviderCatalogStore } from './catalog/store';
@@ -51,6 +51,8 @@ export interface ResolvedProviderExecution {
   ) => ReasoningProviderOptions | undefined;
   /** Driver pricing facet for evidence extraction during attempt accounting. */
   readonly pricingFacet?: DriverPricingFacet;
+  /** Thinking exposure/replay policy resolved for the frozen model (R15). */
+  readonly thinkingPolicy?: ThinkingPolicy;
 }
 
 /**
@@ -92,7 +94,13 @@ export class ProviderRuntime {
         ? (effort: string | number) => buildReasoning(effort, request.model)
         : undefined,
       pricingFacet: driver.pricingFacet,
+      thinkingPolicy: driver.thinkingPolicy?.(request.model),
     };
+  }
+
+  /** Latest-known dynamic pricing cache (invalidated on connection identity changes). */
+  get pricingRefresher(): PricingRefresher {
+    return this.pricing;
   }
 
   /** Halt background pricing refreshes; the ledger of attempts is unaffected. */
@@ -270,6 +278,11 @@ export function initializeProviderRuntime(options: ProviderRuntimeOptions): Prov
 export function getProviderRuntime(): ProviderRuntime {
   if (!providerRuntime) throw new Error('Provider runtime has not been initialized');
   return providerRuntime;
+}
+
+/** Null before runtime initialization so IPC services can degrade gracefully. */
+export function getProviderPricingRefresher(): PricingRefresher | null {
+  return providerRuntime?.pricingRefresher ?? null;
 }
 
 export function resetProviderRuntime(): void {

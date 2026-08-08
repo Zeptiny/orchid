@@ -66,6 +66,17 @@ const usageSchema = z.object({
   context: contextSnapshotSchema.optional(),
 });
 
+/** Replay artifact shape; opaque provider blobs cross the boundary uninterpreted. */
+const thinkingReplayPayloadSchema = z.object({
+  providerId: z.string().min(1),
+  modelId: z.string().min(1),
+  kind: z.enum(['signed', 'redacted', 'encrypted', 'opaque', 'text']),
+  blob: z.string().nullable(),
+  displayText: z.string().nullable(),
+  itemId: z.string().optional(),
+  reasoningTokenCount: z.number().nonnegative().optional(),
+}).strict();
+
 /** Durable messages are terminal-history authority, so validate their full shape. */
 const messageSchema = z.object({
   id: z.string().min(1),
@@ -76,6 +87,7 @@ const messageSchema = z.object({
   tool_call_id: z.string().nullable(),
   name: z.string().nullable(),
   thinking: z.string().nullable(),
+  thinking_payload: thinkingReplayPayloadSchema.optional(),
   timestamp: z.string().datetime({ offset: true }),
   usage: usageSchema.nullable(),
   hidden: z.boolean(),

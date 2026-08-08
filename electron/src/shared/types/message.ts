@@ -11,12 +11,76 @@
  */
 
 import { z } from 'zod';
+import type { JSONValue } from 'ai';
 import type { ToolCall } from './tool';
 import { toolCallToStorageDict, toolCallFromStorageDict } from './tool';
 import {
   canonicalToolResultSchema,
   type CanonicalToolResult,
 } from './tool-result';
+
+// ── Thinking replay payload ─────────────────────────────────────────────────
+
+export const ThinkingArtifactKind = {
+  SIGNED: 'signed',
+  REDACTED: 'redacted',
+  ENCRYPTED: 'encrypted',
+  OPAQUE: 'opaque',
+  TEXT: 'text',
+} as const;
+
+export type ThinkingArtifactKind =
+  (typeof ThinkingArtifactKind)[keyof typeof ThinkingArtifactKind];
+
+const thinkingArtifactKinds = new Set<string>(Object.values(ThinkingArtifactKind));
+
+/**
+ * Provider-specific replay artifact captured from one thinking segment (R16).
+ * `blob` carries the provider value (Anthropic signature, redacted data,
+ * Responses encrypted content); `displayText` is present only when the
+ * provider exposes readable thinking or summaries.
+ */
+export interface ThinkingReplayPayload {
+  readonly providerId: string;
+  readonly modelId: string;
+  readonly kind: ThinkingArtifactKind;
+  readonly blob: string | null;
+  readonly displayText: string | null;
+  /** Responses reasoning item id when the provider identifies items. */
+  readonly itemId?: string;
+  /** Reported reasoning tokens, for opaque render metadata (R17). */
+  readonly reasoningTokenCount?: number;
+}
+
+/** Tolerant parse: unknown shapes degrade to no payload, extra keys pass through. */
+export function thinkingReplayPayloadFromUnknown(
+  value: unknown,
+): ThinkingReplayPayload | undefined {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    return undefined;
+  }
+  const raw = value as Record<string, unknown>;
+  if (
+    typeof raw.providerId !== 'string' || raw.providerId.length === 0 ||
+    typeof raw.modelId !== 'string' || raw.modelId.length === 0 ||
+    typeof raw.kind !== 'string' || !thinkingArtifactKinds.has(raw.kind)
+  ) {
+    return undefined;
+  }
+  return {
+    providerId: raw.providerId,
+    modelId: raw.modelId,
+    kind: raw.kind as ThinkingArtifactKind,
+    blob: typeof raw.blob === 'string' ? raw.blob : null,
+    displayText: typeof raw.displayText === 'string' ? raw.displayText : null,
+    ...(typeof raw.itemId === 'string' && raw.itemId.length > 0
+      ? { itemId: raw.itemId }
+      : {}),
+    ...(typeof raw.reasoningTokenCount === 'number' && raw.reasoningTokenCount >= 0
+      ? { reasoningTokenCount: raw.reasoningTokenCount }
+      : {}),
+  };
+}
 
 // ── Enums as const objects ──────────────────────────────────────────────────
 
@@ -88,6 +152,8 @@ export interface Message {
   readonly tool_call_id: string | null;
   readonly name: string | null;
   readonly thinking: string | null;
+  /** Replay artifact for THINKING messages; absent for plain-text reasoning. */
+  readonly thinking_payload?: ThinkingReplayPayload;
   readonly timestamp: string;
   readonly usage: Usage | null;
   readonly hidden: boolean;
@@ -107,6 +173,7 @@ export interface MessageStorageDict {
   tool_call_id?: string;
   name?: string;
   thinking?: string;
+  thinking_payload?: ThinkingReplayPayload;
   timestamp?: string;
   usage?: {
     prompt_tokens?: number;
@@ -129,9 +196,23 @@ export interface MessageStorageDict {
 
 // ── API format (OpenAI-shaped) ──────────────────────────────────────────────
 
+/**
+ * Provider-specific options attached to one replayed content part. Values are
+ * produced only by trusted main-process code (thinking replay artifacts), so
+ * the shape stays an open record rather than a zod-validated boundary type.
+ */
+export type ApiContentPartOptions = Record<string, Record<string, JSONValue>>;
+
 export interface ApiMessage {
   role: string;
-  content: string | Array<{ type: string; text: string }> | null;
+  content:
+    | string
+    | Array<{
+        type: string;
+        text: string;
+        providerOptions?: ApiContentPartOptions;
+      }>
+    | null;
   tool_call_id?: string;
   tool_calls?: Array<{
     id: string;
@@ -193,6 +274,9 @@ export function messageToStorageDict(msg: Message): MessageStorageDict {
   }
   if (msg.thinking) {
     d.thinking = msg.thinking;
+  }
+  if (msg.thinking_payload) {
+    d.thinking_payload = msg.thinking_payload;
   }
   if (msg.timestamp) {
     d.timestamp = msg.timestamp;
@@ -277,6 +361,7 @@ export function messageFromStorageDict(data: unknown): Message {
   const toolResult = parsedToolResult.success
     ? parsedToolResult.data as CanonicalToolResult
     : null;
+  const thinkingPayload = thinkingReplayPayloadFromUnknown(raw.thinking_payload);
 
   return {
     id,
@@ -287,6 +372,7 @@ export function messageFromStorageDict(data: unknown): Message {
     tool_call_id: typeof raw.tool_call_id === 'string' ? raw.tool_call_id : null,
     name: typeof raw.name === 'string' ? raw.name : null,
     thinking: typeof raw.thinking === 'string' ? raw.thinking : null,
+    ...(thinkingPayload ? { thinking_payload: thinkingPayload } : {}),
     timestamp: typeof raw.timestamp === 'string' ? raw.timestamp : new Date().toISOString(),
     usage,
     hidden: raw.hidden === true,

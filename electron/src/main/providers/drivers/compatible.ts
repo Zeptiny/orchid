@@ -2,6 +2,11 @@ import type { LanguageModelV4 } from '@ai-sdk/provider';
 import { importESM } from '../../utils/esm-import';
 import { createUnwrappingFetch } from '../../llm/response-unwrap';
 import type { EffectiveModel, ProviderProtocol } from '../../../shared/types/provider';
+import type { ThinkingPolicy } from '../../../shared/types/provider-facets';
+import {
+  ANTHROPIC_THINKING_POLICY,
+  OPENAI_RESPONSES_THINKING_POLICY,
+} from '../facets/thinking';
 import type { DriverCredential, ProviderDriver, ReasoningProviderOptions } from './types';
 
 export interface GenericEndpoint {
@@ -133,6 +138,11 @@ export function createCompatibleProviderDrivers(): readonly ProviderDriver[] {
           ? { openai: { reasoningEffort: effort } }
           : { openaiCompatible: { reasoningEffort: effort } };
       },
+      // The Responses adapter keys reasoning metadata/options to 'openai' even
+      // under a renamed provider; chat-completions endpoints stay on the
+      // default plain-text policy.
+      thinkingPolicy: (model: EffectiveModel): ThinkingPolicy | undefined =>
+        model.protocol === 'openai-responses' ? OPENAI_RESPONSES_THINKING_POLICY : undefined,
     },
     {
       id: 'generic-anthropic-compatible',
@@ -150,6 +160,7 @@ export function createCompatibleProviderDrivers(): readonly ProviderDriver[] {
           endpoint,
         });
       },
+      thinkingPolicy: (): ThinkingPolicy => ANTHROPIC_THINKING_POLICY,
     },
   ];
 }

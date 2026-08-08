@@ -7,6 +7,8 @@ import {
 } from '../llm/message-factories';
 
 import type { Message, Usage } from '../../shared/types/message';
+import { MessageType } from '../../shared/types/message';
+import type { ThinkingReplayPayload } from '../../shared/types/message';
 import type { CanonicalToolResult, TerminalToolResultStatus } from '../../shared/types/tool-result';
 import type { StreamEvent } from '../llm/orchestrator';
 
@@ -16,6 +18,11 @@ export type SubagentRunProjectionEffect =
       readonly kind: 'text' | 'thinking';
       readonly segmentId: string;
       readonly append: string;
+    }
+  | {
+      readonly type: 'thinking_artifact';
+      readonly payload: ThinkingReplayPayload;
+      readonly messages: readonly Message[];
     }
   | {
       readonly type: 'usage';
@@ -89,6 +96,7 @@ export class SubagentRunAssembler {
   private readonly segments: AssemblySegment[] = [];
   private readonly tools = new Map<string, AssemblyTool>();
   private readonly toolNames = new Map<string, string>();
+  private readonly thinkingPayloads = new Map<string, ThinkingReplayPayload>();
   private readonly newId: () => string;
   private readonly now: () => string;
   private committedSegmentCount = 0;
@@ -114,6 +122,25 @@ export class SubagentRunAssembler {
       }
       case 'thinking':
         return [this.appendText('thinking', event.text)];
+      case 'thinking_artifact': {
+        if (event.hasText) {
+          // The sequence's text already streamed; its segment is the latest
+          // thinking one (a reasoning block closes before any tool call).
+          const segment = this.segments.findLast((entry) => entry.kind === 'thinking');
+          if (segment) {
+            this.thinkingPayloads.set(segment.id, event.payload);
+            return [];
+          }
+        }
+        // Artifact-only reasoning (redacted/encrypted without text) has no
+        // streamable content; it still persists as its own replayable message.
+        this.messages.push(makeThinkingMessage('', this.newId(), event.payload));
+        return [{
+          type: 'thinking_artifact',
+          payload: event.payload,
+          messages: [...this.messages],
+        }];
+      }
       case 'usage': {
         this.accumulatedUsage = addStepUsage(this.accumulatedUsage, event.usage);
         return this.accumulatedUsage ? [{ type: 'usage', usage: this.accumulatedUsage }] : [];
@@ -258,7 +285,11 @@ export class SubagentRunAssembler {
           segment.id,
         ));
       } else if (segment.kind === 'thinking' && segment.content.trim()) {
-        this.messages.push(makeThinkingMessage(segment.content, segment.id));
+        this.messages.push(makeThinkingMessage(
+          segment.content,
+          segment.id,
+          this.thinkingPayloads.get(segment.id),
+        ));
       }
     }
     this.committedSegmentCount = Math.max(this.committedSegmentCount, endIndex);
@@ -269,9 +300,27 @@ export class SubagentRunAssembler {
     result: string | null,
     error: string | null,
   ): SubagentRunFinalization {
+    const messages = [...this.messages];
+    // A single text-less artifact owns the step's reported reasoning tokens;
+    // the count feeds the opaque render indicator (R17).
+    const reasoningTokens = this.accumulatedUsage?.reasoning_tokens;
+    if (reasoningTokens) {
+      const candidates = messages.filter((message) =>
+        message.type === MessageType.THINKING
+        && !message.content
+        && message.thinking_payload
+        && message.thinking_payload.reasoningTokenCount === undefined);
+      if (candidates.length === 1) {
+        const target = candidates[0];
+        messages[messages.indexOf(target)] = {
+          ...target,
+          thinking_payload: { ...target.thinking_payload!, reasoningTokenCount: reasoningTokens },
+        };
+      }
+    }
     return {
       state,
-      messages: [...this.messages],
+      messages,
       usage: this.accumulatedUsage,
       result,
       error,

@@ -32,7 +32,10 @@ export function attachUsageToLatestAssistant(messages: Message[], usage: Usage):
 export function appendLiveTailMessages(
   messages: Message[],
   agent: ActiveAgent,
-  context: Pick<AgentContext, 'response' | 'thinking' | 'usage'> | undefined,
+  context: Pick<
+    AgentContext,
+    'response' | 'thinking' | 'thinkingPayloads' | 'thinkingArtifacts' | 'usage'
+  > | undefined,
   opts?: { placeholderWhenEmpty?: boolean },
 ): void {
   const partialResponse = context?.response ?? '';
@@ -45,8 +48,13 @@ export function appendLiveTailMessages(
       messages.push(makeThinkingMessage(
         segment,
         textSegmentIdAtOffset(agent, 'thinking', agent.thinkingCommittedLength),
+        context?.thinkingPayloads?.[thinking.length],
       ));
     }
+  }
+  const artifacts = context?.thinkingArtifacts ?? [];
+  for (let index = agent.thinkingArtifactsCommitted; index < artifacts.length; index += 1) {
+    messages.push(makeThinkingMessage('', undefined, artifacts[index]));
   }
 
   const remaining = partialResponse.slice(agent.responseCommittedLength);
@@ -81,6 +89,10 @@ export function flushPartialTurnContent(agent: ActiveAgent, context: AgentContex
   if (thinking.length > agent.thinkingCommittedLength) {
     agent.thinkingCommittedLength = thinking.length;
   }
+  const artifacts = context?.thinkingArtifacts ?? [];
+  if (artifacts.length > agent.thinkingArtifactsCommitted) {
+    agent.thinkingArtifactsCommitted = artifacts.length;
+  }
   if (partialResponse.length > agent.responseCommittedLength) {
     agent.responseCommittedLength = partialResponse.length;
   }
@@ -103,7 +115,10 @@ export function turnMessagesFromAgent(agent: ActiveAgent): Message[] {
  */
 export function currentTurnSnapshot(
   agent: ActiveAgent,
-  context: Pick<AgentContext, 'response' | 'thinking' | 'usage'> | undefined,
+  context: Pick<
+    AgentContext,
+    'response' | 'thinking' | 'thinkingPayloads' | 'thinkingArtifacts' | 'usage'
+  > | undefined,
 ): Message[] {
   const snapshot = turnMessagesFromAgent(agent);
   appendLiveTailMessages(snapshot, agent, context);

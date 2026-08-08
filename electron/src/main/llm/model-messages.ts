@@ -35,7 +35,13 @@ export function toModelMessages(historyMessages: readonly ApiMessage[]): ModelMe
       const contentArray = Array.isArray(message.content)
         ? message.content.map((part) => {
             if (part.type === 'reasoning') {
-              return { type: 'reasoning' as const, text: part.text };
+              // Replay artifacts ride as providerOptions so the provider
+              // adapter can re-emit signed/encrypted thinking blocks.
+              return {
+                type: 'reasoning' as const,
+                text: part.text,
+                ...(part.providerOptions ? { providerOptions: part.providerOptions } : {}),
+              };
             }
             return { type: 'text' as const, text: part.text };
           })

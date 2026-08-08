@@ -7,6 +7,13 @@
 import type { Agent } from '../../shared/types/agent';
 import type { Message } from '../../shared/types/message';
 import type { ReasoningProviderOptions } from '../providers/drivers/types';
+import {
+  buildThinkingRequestOptions,
+  DEFAULT_THINKING_POLICY,
+  mergeThinkingProviderOptions,
+} from '../providers/facets/thinking';
+import type { ThinkingReplayContext } from '../llm/history';
+import type { ThinkingPolicy } from '../../shared/types/provider-facets';
 import type { ModelSelection } from '../../shared/types/provider';
 import { streamChat, type StreamEvent } from '../llm/orchestrator';
 import { resolveSubagentEffort } from '../llm/reasoning-effort';
@@ -135,6 +142,7 @@ export function createSubagentStreamRunner(): SubagentStreamRunner {
     let providerSnapshot: ProviderAttemptAccountingContext['snapshot'];
     let providerOptions: ReasoningProviderOptions | undefined;
     let pricingFacet: ProviderAttemptAccountingContext['pricingFacet'];
+    let thinkingPolicy: ThinkingPolicy | undefined;
     let accountingStore: ReturnType<typeof getProviderAccountingStore>;
     try {
       accountingStore = getProviderAccountingStore();
@@ -142,6 +150,7 @@ export function createSubagentStreamRunner(): SubagentStreamRunner {
       modelInstance = execution.modelInstance;
       providerSnapshot = execution.snapshot;
       pricingFacet = execution.pricingFacet;
+      thinkingPolicy = execution.thinkingPolicy;
       const effort = resolveSubagentEffort(
         params.agent,
         config,
@@ -152,6 +161,12 @@ export function createSubagentStreamRunner(): SubagentStreamRunner {
       params.onReasoningEffort?.(effort);
       providerOptions =
         effort === undefined ? undefined : execution.buildReasoningOptions?.(effort);
+      if (thinkingPolicy) {
+        providerOptions = mergeThinkingProviderOptions(
+          providerOptions,
+          buildThinkingRequestOptions(thinkingPolicy, providerSnapshot.providerId),
+        );
+      }
     } catch (error) {
       yield {
         type: 'error',
@@ -240,6 +255,10 @@ export function createSubagentStreamRunner(): SubagentStreamRunner {
         modelInstance,
         accounting,
         providerOptions,
+        thinkingReplay: {
+          policy: thinkingPolicy ?? DEFAULT_THINKING_POLICY,
+          selection: { providerId: providerSnapshot.providerId, modelId: selection.modelId },
+        } satisfies ThinkingReplayContext,
       });
     } finally {
       releaseProjectMCPManager(runtime);

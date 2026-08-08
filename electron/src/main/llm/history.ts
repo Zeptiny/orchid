@@ -12,9 +12,54 @@
  *
  * THINKING messages are replayed as assistant content with reasoning parts
  * so reasoning-capable models (GLM, DeepSeek, Qwen) retain prior deliberation.
+ * When a thinking replay context is supplied, the current model's thinking
+ * policy decides per message: persisted artifacts (Anthropic signatures,
+ * redacted blocks, Responses encrypted items) replay unmodified for the
+ * producing provider/model, are stripped on a provider/model switch, and are
+ * omitted entirely when the policy makes replay impossible (R15, R16).
  */
-import type { Message, ApiMessage } from '../../shared/types/message';
+import type {
+  ApiContentPartOptions,
+  ApiMessage,
+  Message,
+  ThinkingReplayPayload,
+} from '../../shared/types/message';
 import { MessageType, MessageRole, messageToApiFormat } from '../../shared/types/message';
+import type { ThinkingPolicy } from '../../shared/types/provider-facets';
+import {
+  buildThinkingProviderOptions,
+  decideThinkingReplay,
+  type ThinkingReplayIdentity,
+} from '../providers/facets/thinking';
+
+/** Frozen per-turn thinking replay context: the current model's policy. */
+export interface ThinkingReplayContext {
+  readonly policy: ThinkingPolicy;
+  readonly selection: ThinkingReplayIdentity;
+}
+
+function thinkingReplayPart(
+  msg: Message,
+  thinking: ThinkingReplayContext,
+): { type: string; text: string; providerOptions?: ApiContentPartOptions } | null {
+  const decision = decideThinkingReplay({
+    policy: thinking.policy,
+    selection: thinking.selection,
+    content: msg.content,
+    payload: msg.thinking_payload,
+  });
+  if (decision.emit === 'none') return null;
+  if (decision.emit === 'artifact') {
+    const payload: ThinkingReplayPayload = decision.payload;
+    const providerOptions = buildThinkingProviderOptions(payload);
+    return {
+      type: 'reasoning',
+      text: payload.displayText ?? msg.content,
+      ...(providerOptions ? { providerOptions } : {}),
+    };
+  }
+  return { type: 'reasoning', text: decision.text };
+}
 
 function isReplayableToolCallMessage(message: Message): boolean {
   return message.role === MessageRole.ASSISTANT &&
@@ -83,7 +128,7 @@ function coalesceConsecutiveToolCallMessages(messages: Message[]): Message[] {
  * @param messages - Persisted messages from the session
  * @returns API-shaped messages with pairing invariant enforced
  */
-export function toApiMessages(messages: Message[]): ApiMessage[] {
+export function toApiMessages(messages: Message[], thinking?: ThinkingReplayContext): ApiMessage[] {
   const replayMessages = coalesceConsecutiveToolCallMessages(messages);
 
   // ── Pre-pass: collect tool_call_ids that have a properly-sequenced
@@ -181,11 +226,18 @@ export function toApiMessages(messages: Message[]): ApiMessage[] {
     }
 
     // THINKING: replay with reasoning content parts so reasoning-capable
-    // models (GLM, DeepSeek, Qwen) retain prior deliberation.
-    // The match-set is NOT reset on THINKING: an intervening THINKING between
-    // assistant(tool_calls=[A]) and tool(A) must not cause A to be
-    // dropped as orphaned.
+    // models (GLM, DeepSeek, Qwen) retain prior deliberation; with a thinking
+    // context the current model's policy chooses artifact, plain text, or
+    // omission. The match-set is NOT reset on THINKING: an intervening
+    // THINKING between assistant(tool_calls=[A]) and tool(A) must not cause
+    // A to be dropped as orphaned.
     if (msg.type === MessageType.THINKING) {
+      if (thinking) {
+        const part = thinkingReplayPart(msg, thinking);
+        if (!part) continue;
+        apiMessages.push({ role: 'assistant', content: [part] });
+        continue;
+      }
       if (!msg.content) {
         continue;
       }

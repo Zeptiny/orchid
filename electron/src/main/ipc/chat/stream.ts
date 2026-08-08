@@ -1,5 +1,6 @@
 import type { ReasoningProviderOptions } from '../../providers/drivers/types';
 import { streamChat, type StreamEvent } from '../../llm/orchestrator';
+import type { ThinkingReplayContext } from '../../llm/history';
 import { buildSystemPromptContext } from '../../llm/build-prompt-context';
 import type { Agent } from '../../../shared/types/agent';
 import type { Message } from '../../../shared/types/message';
@@ -51,6 +52,7 @@ export function createProviderStreamFn(input: {
   readonly registry: ReturnType<typeof getBuiltinToolRegistryForRuntime>;
   readonly mcpManager: ReturnType<typeof acquireProjectMCPManager>;
   readonly providerOptions?: ReasoningProviderOptions;
+  readonly thinkingReplay?: ThinkingReplayContext;
 }) {
   return async function* ({
     agent,
@@ -85,6 +87,7 @@ export function createProviderStreamFn(input: {
       modelInstance: input.modelInstance,
       accounting: input.accounting,
       providerOptions: input.providerOptions,
+      thinkingReplay: input.thinkingReplay,
     });
   };
 }
