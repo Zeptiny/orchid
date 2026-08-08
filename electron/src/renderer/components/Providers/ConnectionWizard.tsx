@@ -733,6 +733,8 @@ function protocolLabel(protocol: ProviderProtocol): string {
       return 'Google Generative AI';
     case 'openai-compatible':
       return 'OpenAI-compatible';
+    case 'openai-responses':
+      return 'OpenAI Responses';
     case 'xai':
       return 'xAI';
   }

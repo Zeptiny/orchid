@@ -1,4 +1,10 @@
 import { z } from 'zod';
+import {
+  pricingRateFieldsSchema,
+  providerRateCardSchema,
+} from './provider-facets';
+
+const isoTimestampSchema = z.string().datetime({ offset: true });
 
 /** A model is executable only in the context of a specific connection. */
 export const modelSelectionSchema = z.object({
@@ -22,6 +28,7 @@ export function copyModelSelection(
 
 export const providerProtocolSchema = z.enum([
   'openai-compatible',
+  'openai-responses',
   'anthropic-messages',
   'google-generative-ai',
   'xai',
@@ -148,6 +155,33 @@ export const reasoningModelConfigSchema = z.object({
 
 export type ReasoningModelConfig = z.infer<typeof reasoningModelConfigSchema>;
 
+/**
+ * Model metadata returned by a driver's live discovery hook, before merge.
+ * Endpoints returning only ids contribute nothing beyond the id (R27).
+ */
+export const discoveredProviderModelSchema = z.object({
+  id: z.string().trim().min(1),
+  displayName: z.string().trim().min(1).optional(),
+  /** Absent when the endpoint does not say; the connection protocol applies. */
+  protocol: providerProtocolSchema.optional(),
+  capabilities: providerModelDefinitionSchema.shape.capabilities,
+  limits: providerModelDefinitionSchema.shape.limits,
+  reasoningLevels: reasoningModelConfigSchema.shape.levels.optional(),
+  reasoningDefault: reasoningModelConfigSchema.shape.default.optional(),
+  /** Latest rates published inline by the provider endpoint, when present. */
+  pricing: providerRateCardSchema.optional(),
+}).strict();
+
+export type DiscoveredProviderModel = z.infer<typeof discoveredProviderModelSchema>;
+
+/** A discovered model persisted on the connection with provider provenance. */
+export const discoveredConnectionModelSchema = discoveredProviderModelSchema.extend({
+  provenance: z.literal('provider'),
+  discoveredAt: isoTimestampSchema,
+}).strict();
+
+export type DiscoveredConnectionModel = z.infer<typeof discoveredConnectionModelSchema>;
+
 export const providerDefinitionSchema = z.object({
   id: z.string().trim().min(1),
   displayName: z.string().trim().min(1),
@@ -174,6 +208,12 @@ export const providerConnectionSchema = z.object({
   customModels: z.array(customConnectionModelSchema).optional(),
   /** Per-model reasoning effort configuration, keyed by modelId. */
   reasoningConfig: z.record(z.string(), reasoningModelConfigSchema).optional(),
+  /** Models discovered from the provider's live models endpoint (R26, R27). */
+  discoveredModels: z.array(discoveredConnectionModelSchema).optional(),
+  /** Per-model field-level rate overrides, keyed by modelId (R6). */
+  pricingOverrides: z.record(z.string(), pricingRateFieldsSchema).optional(),
+  /** Per-model service tier selection (tier id), keyed by modelId (R21). */
+  tierSelections: z.record(z.string(), z.string().trim().min(1)).optional(),
   health: connectionHealthSchema,
   endpoint: providerEndpointSchema.nullable().optional(),
   /** Explicit user acknowledgement required for a non-loopback HTTP endpoint. */
@@ -191,8 +231,10 @@ export const updateProviderConnectionSchema = providerConnectionSchema
   .strict();
 export type UpdateProviderConnectionInput = z.infer<typeof updateProviderConnectionSchema>;
 
+export const PROVIDER_CONNECTION_DOCUMENT_VERSION = 2;
+
 export const providerConnectionDocumentSchema = z.object({
-  version: z.literal(1),
+  version: z.literal(PROVIDER_CONNECTION_DOCUMENT_VERSION),
   connections: z.array(providerConnectionSchema),
 }).strict().superRefine((document, ctx) => {
   const ids = new Set<string>();
@@ -209,6 +251,42 @@ export const providerConnectionDocumentSchema = z.object({
 });
 
 export type ProviderConnectionDocument = z.infer<typeof providerConnectionDocumentSchema>;
+
+/** Version 1 predates discoveredModels, pricingOverrides, and tierSelections. */
+export const legacyProviderConnectionDocumentSchema = z.object({
+  version: z.literal(1),
+  connections: z.array(providerConnectionSchema),
+}).strict();
+
+export type LegacyProviderConnectionDocument = z.infer<
+  typeof legacyProviderConnectionDocumentSchema
+>;
+
+/**
+ * Upgrade a persisted v1 document. Fill-absent-only: every connection field
+ * added in v2 is optional, so legacy connections pass through unchanged.
+ */
+export function migrateProviderConnectionDocument(
+  document: LegacyProviderConnectionDocument,
+): ProviderConnectionDocument {
+  return providerConnectionDocumentSchema.parse({
+    version: PROVIDER_CONNECTION_DOCUMENT_VERSION,
+    connections: document.connections,
+  });
+}
+
+/** Parse a persisted document, migrating legacy versions forward on read. */
+export function parseProviderConnectionDocument(value: unknown): ProviderConnectionDocument {
+  if (
+    typeof value === 'object'
+    && value !== null
+    && !Array.isArray(value)
+    && (value as Record<string, unknown>)['version'] === 1
+  ) {
+    return migrateProviderConnectionDocument(legacyProviderConnectionDocumentSchema.parse(value));
+  }
+  return providerConnectionDocumentSchema.parse(value);
+}
 
 export interface EffectiveModel extends ProviderModelDefinition {
   readonly source: 'catalog' | 'connection';

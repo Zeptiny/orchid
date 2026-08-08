@@ -1,6 +1,8 @@
 import { verify } from 'node:crypto';
 import {
   catalogEnvelopeSchema,
+  type CatalogFacetKind,
+  type CatalogFacets,
   type ProviderCatalog,
 } from './schema';
 import type { ProviderAuthMethod, ProviderProtocol } from '../../../shared/types/provider';
@@ -17,21 +19,24 @@ export interface TrustedCatalogProviderPolicy {
   readonly authMethods: readonly ProviderAuthMethod[];
   readonly protocols: readonly ProviderProtocol[];
   readonly allowsCustomModels: boolean;
+  /** Catalog facet declarations this provider may carry; absent pins none. */
+  readonly facets?: readonly CatalogFacetKind[];
 }
 
 /**
  * The catalog may only describe drivers that are present in trusted app code.
  * U4 owns their executable implementations; this table establishes the
- * conservative catalog boundary first.
+ * conservative catalog boundary first. Facet pins reflect capabilities
+ * verified against provider documentation.
  */
 export const TRUSTED_CATALOG_PROVIDER_POLICIES: readonly TrustedCatalogProviderPolicy[] = [
-  { id: 'openai', authMethods: ['api-key', 'environment'], protocols: ['openai-compatible'], allowsCustomModels: true },
-  { id: 'anthropic', authMethods: ['api-key', 'environment'], protocols: ['anthropic-messages'], allowsCustomModels: true },
+  { id: 'openai', authMethods: ['api-key', 'environment'], protocols: ['openai-compatible'], allowsCustomModels: true, facets: ['thinking', 'cache'] },
+  { id: 'anthropic', authMethods: ['api-key', 'environment'], protocols: ['anthropic-messages'], allowsCustomModels: true, facets: ['thinking', 'cache'] },
   { id: 'google-gemini', authMethods: ['api-key', 'environment'], protocols: ['google-generative-ai'], allowsCustomModels: true },
   { id: 'xai', authMethods: ['api-key', 'environment'], protocols: ['xai'], allowsCustomModels: true },
   { id: 'opencode-go', authMethods: ['api-key', 'environment'], protocols: ['openai-compatible', 'anthropic-messages'], allowsCustomModels: true },
   { id: 'lilac', authMethods: ['api-key', 'environment'], protocols: ['openai-compatible'], allowsCustomModels: true },
-  { id: 'neuralwatt', authMethods: ['api-key', 'environment'], protocols: ['openai-compatible'], allowsCustomModels: true },
+  { id: 'neuralwatt', authMethods: ['api-key', 'environment'], protocols: ['openai-compatible'], allowsCustomModels: true, facets: ['tiers'] },
   { id: 'generic-openai-compatible', authMethods: ['api-key', 'environment', 'none'], protocols: ['openai-compatible'], allowsCustomModels: true },
   { id: 'generic-anthropic-compatible', authMethods: ['api-key', 'environment', 'none'], protocols: ['anthropic-messages'], allowsCustomModels: true },
 ];
@@ -119,6 +124,20 @@ export function validateTrustedProviderDeclarations(
   policies: readonly TrustedCatalogProviderPolicy[] = TRUSTED_CATALOG_PROVIDER_POLICIES,
 ): void {
   const policyById = new Map(policies.map((policy) => [policy.id, policy]));
+  const validateFacets = (
+    facets: CatalogFacets | undefined,
+    policy: TrustedCatalogProviderPolicy,
+    owner: string,
+  ): void => {
+    if (!facets) return;
+    for (const facet of Object.keys(facets) as CatalogFacetKind[]) {
+      if (!policy.facets?.includes(facet)) {
+        throw new CatalogTrustError(
+          `Catalog declares untrusted facet '${facet}' for '${owner}'`,
+        );
+      }
+    }
+  };
   for (const provider of catalog.providers) {
     const policy = policyById.get(provider.id);
     if (!policy) {
@@ -145,6 +164,7 @@ export function validateTrustedProviderDeclarations(
         );
       }
     }
+    validateFacets(provider.facets, policy, provider.id);
     for (const model of provider.models) {
       if (!provider.supportedProtocols.includes(model.protocol)
         || !policy.protocols.includes(model.protocol)) {
@@ -152,6 +172,7 @@ export function validateTrustedProviderDeclarations(
           `Catalog model '${provider.id}/${model.id}' uses an unsupported protocol`,
         );
       }
+      validateFacets(model.facets, policy, `${provider.id}/${model.id}`);
     }
   }
 }

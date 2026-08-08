@@ -109,4 +109,86 @@ describe('ConnectionStore', () => {
 
     expect(fs.readFileSync(providersPath, 'utf8')).not.toContain('secret');
   });
+
+  it('migrates a v1 document on read and writes back as v2 with connections preserved', async () => {
+    const v1Connections = [
+      {
+        id: '11111111-1111-4111-8111-111111111111',
+        providerId: 'openai',
+        name: 'Work',
+        protocol: 'openai-compatible',
+        authMethod: 'api-key',
+        credential: { kind: 'stored', handle: 'credential-work-v1' },
+        modelIds: ['vendor/path/model'],
+        reasoningConfig: {
+          'vendor/path/model': { levels: ['low', 'high'], default: 'low' },
+        },
+        health: 'ready',
+      },
+      {
+        id: '22222222-2222-4222-8222-222222222222',
+        providerId: 'openai',
+        name: 'Personal',
+        protocol: 'openai-compatible',
+        authMethod: 'api-key',
+        credential: { kind: 'stored', handle: 'credential-personal-v1' },
+        modelIds: ['vendor/path/model'],
+        health: 'disabled',
+      },
+    ];
+    fs.writeFileSync(providersPath, JSON.stringify({ version: 1, connections: v1Connections }));
+
+    const listed = await createStore().list();
+    expect(listed).toEqual(v1Connections);
+    expect(listed[0].discoveredModels).toBeUndefined();
+    expect(listed[0].pricingOverrides).toBeUndefined();
+    expect(listed[0].tierSelections).toBeUndefined();
+
+    await createStore().create(input('Third', 'credential-third-v1'));
+    const persisted = JSON.parse(fs.readFileSync(providersPath, 'utf8')) as {
+      version: number;
+      connections: unknown[];
+    };
+    expect(persisted.version).toBe(2);
+    expect(persisted.connections).toHaveLength(3);
+    expect(persisted.connections.slice(0, 2)).toEqual(v1Connections);
+  });
+
+  it('round-trips discovered models, pricing overrides, and tier selections', async () => {
+    const store = createStore();
+    const created = await store.create({
+      ...input('Work', 'credential-work-v1'),
+      discoveredModels: [{
+        id: 'vendor/path/discovered',
+        displayName: 'Discovered model',
+        limits: { contextTokens: 200_000, outputTokens: 8_192 },
+        provenance: 'provider',
+        discoveredAt: '2026-08-08T12:00:00.000Z',
+      }],
+      pricingOverrides: {
+        'vendor/path/model': {
+          input: { amount: '2.500000', per: 1_000_000, unit: 'tokens' },
+          perRequest: { amount: '0.01', per: 1, unit: 'requests' },
+          cacheWriteByTtl: {
+            '1h': { amount: '6.250000', per: 1_000_000, unit: 'tokens' },
+          },
+        },
+      },
+      tierSelections: { 'vendor/path/model': 'flex' },
+    });
+
+    const reloaded = await createStore().get(created.id);
+    expect(reloaded).toEqual(created);
+    expect(reloaded?.discoveredModels?.[0]?.provenance).toBe('provider');
+    expect(reloaded?.pricingOverrides?.['vendor/path/model']?.input?.amount).toBe('2.500000');
+    expect(reloaded?.tierSelections?.['vendor/path/model']).toBe('flex');
+
+    const persisted = JSON.parse(fs.readFileSync(providersPath, 'utf8')) as { version: number };
+    expect(persisted.version).toBe(2);
+
+    const updated = await createStore().update(created.id, { health: 'disabled' });
+    expect(updated.discoveredModels).toEqual(created.discoveredModels);
+    expect(updated.pricingOverrides).toEqual(created.pricingOverrides);
+    expect(updated.tierSelections).toEqual(created.tierSelections);
+  });
 });

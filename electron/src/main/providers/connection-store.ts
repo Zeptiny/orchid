@@ -3,9 +3,10 @@ import * as path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import {
   createProviderConnectionSchema,
-  providerConnectionDocumentSchema,
+  parseProviderConnectionDocument,
   providerConnectionSchema,
   updateProviderConnectionSchema,
+  PROVIDER_CONNECTION_DOCUMENT_VERSION,
   type CreateProviderConnectionInput,
   type ProviderConnection,
   type ProviderConnectionDocument,
@@ -68,13 +69,13 @@ export function _clearConnectionStoreWriteChains(): void {
 }
 
 function emptyDocument(): ProviderConnectionDocument {
-  return { version: 1, connections: [] };
+  return { version: PROVIDER_CONNECTION_DOCUMENT_VERSION, connections: [] };
 }
 
 function readDocument(filePath: string): ProviderConnectionDocument {
   if (!fs.existsSync(filePath)) return emptyDocument();
   try {
-    return providerConnectionDocumentSchema.parse(
+    return parseProviderConnectionDocument(
       JSON.parse(fs.readFileSync(filePath, 'utf8')),
     );
   } catch (error) {
@@ -128,7 +129,7 @@ export class ConnectionStore {
       }
       await this.beforePersist?.();
       atomicWriteJson(this.filePath, {
-        version: 1,
+        version: PROVIDER_CONNECTION_DOCUMENT_VERSION,
         connections: [...document.connections, connection],
       });
       return connection;
@@ -149,7 +150,7 @@ export class ConnectionStore {
       const connections = [...document.connections];
       connections[index] = updated;
       await this.beforePersist?.();
-      atomicWriteJson(this.filePath, { version: 1, connections });
+      atomicWriteJson(this.filePath, { version: PROVIDER_CONNECTION_DOCUMENT_VERSION, connections });
       return updated;
     });
   }
@@ -161,7 +162,7 @@ export class ConnectionStore {
       if (!removed) return null;
       const connections = document.connections.filter((connection) => connection.id !== id);
       await this.beforePersist?.();
-      atomicWriteJson(this.filePath, { version: 1, connections });
+      atomicWriteJson(this.filePath, { version: PROVIDER_CONNECTION_DOCUMENT_VERSION, connections });
       return { ...removed };
     });
   }
