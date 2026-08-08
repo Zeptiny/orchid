@@ -1,12 +1,17 @@
 import type { LanguageModelV4 } from '@ai-sdk/provider';
 import { importESM } from '../../utils/esm-import';
 import { createUnwrappingFetch } from '../../llm/response-unwrap';
-import type { EffectiveModel, ProviderProtocol } from '../../../shared/types/provider';
+import type {
+  DiscoveredProviderModel,
+  EffectiveModel,
+  ProviderProtocol,
+} from '../../../shared/types/provider';
 import type { ThinkingPolicy } from '../../../shared/types/provider-facets';
 import {
   ANTHROPIC_THINKING_POLICY,
   OPENAI_RESPONSES_THINKING_POLICY,
 } from '../facets/thinking';
+import { fetchModelsEndpoint, modelsListEntries } from './models-endpoint';
 import type { DriverCredential, ProviderDriver, ReasoningProviderOptions } from './types';
 
 export interface GenericEndpoint {
@@ -106,7 +111,38 @@ function apiKeyForEmbedding(credential: DriverCredential): string | undefined {
   return undefined;
 }
 
-export function createCompatibleProviderDrivers(): readonly ProviderDriver[] {
+/**
+ * A user-configured OpenAI-compatible endpoint is treated as ids-only:
+ * nothing beyond the id is trusted from an unverified shape (R27).
+ */
+export function parseCompatibleModels(payload: unknown): DiscoveredProviderModel[] {
+  return modelsListEntries(payload, 'Generic OpenAI-compatible')
+    .map((entry) => ({ id: entry['id'] as string }));
+}
+
+export async function fetchCompatibleModels(options: {
+  readonly endpoint: string;
+  readonly apiKey: string;
+  readonly allowInsecureNonLoopbackHttp?: boolean;
+  readonly fetch?: typeof globalThis.fetch;
+  readonly signal?: AbortSignal;
+  readonly timeoutMs?: number;
+}): Promise<readonly DiscoveredProviderModel[]> {
+  const endpoint = validateGenericEndpoint(options.endpoint, {
+    allowInsecureNonLoopbackHttp: options.allowInsecureNonLoopbackHttp,
+  });
+  const payload = await fetchModelsEndpoint(
+    `${endpoint.endpoint}/models`,
+    options.apiKey,
+    'Generic OpenAI-compatible',
+    { fetch: options.fetch, signal: options.signal, timeoutMs: options.timeoutMs },
+  );
+  return parseCompatibleModels(payload);
+}
+
+export function createCompatibleProviderDrivers(options: {
+  readonly fetch?: typeof globalThis.fetch;
+} = {}): readonly ProviderDriver[] {
   return [
     {
       id: 'generic-openai-compatible',
@@ -143,6 +179,17 @@ export function createCompatibleProviderDrivers(): readonly ProviderDriver[] {
       // default plain-text policy.
       thinkingPolicy: (model: EffectiveModel): ThinkingPolicy | undefined =>
         model.protocol === 'openai-responses' ? OPENAI_RESPONSES_THINKING_POLICY : undefined,
+      discoveryFacet: {
+        fetchModels: async ({ connection, credential, endpoint }) => {
+          if (!endpoint) throw new Error('Generic OpenAI-compatible connection requires an endpoint');
+          return fetchCompatibleModels({
+            endpoint,
+            apiKey: apiKeyForDriver(credential),
+            allowInsecureNonLoopbackHttp: connection.allowInsecureHttp === true,
+            fetch: options.fetch,
+          });
+        },
+      },
     },
     {
       id: 'generic-anthropic-compatible',

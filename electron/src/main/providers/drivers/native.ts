@@ -1,13 +1,24 @@
 import type { LanguageModelV4 } from '@ai-sdk/provider';
 import { importESM } from '../../utils/esm-import';
-import type { EffectiveModel, ProviderProtocol } from '../../../shared/types/provider';
+import type {
+  DiscoveredProviderModel,
+  EffectiveModel,
+  ProviderModelDefinition,
+  ProviderProtocol,
+} from '../../../shared/types/provider';
 import type { ThinkingPolicy } from '../../../shared/types/provider-facets';
 import {
   ANTHROPIC_THINKING_POLICY,
   OPENAI_OPAQUE_THINKING_POLICY,
   OPENAI_RESPONSES_THINKING_POLICY,
 } from '../facets/thinking';
-import type { DriverCredential, ProviderDriver, ReasoningProviderOptions } from './types';
+import { fetchModelsEndpoint, modelsListEntries } from './models-endpoint';
+import type {
+  DriverCredential,
+  DriverDiscoveryFacet,
+  ProviderDriver,
+  ReasoningProviderOptions,
+} from './types';
 
 export const BUILTIN_PROVIDER_ORIGINS = {
   openai: 'https://api.openai.com/v1',
@@ -15,6 +26,8 @@ export const BUILTIN_PROVIDER_ORIGINS = {
   'google-gemini': 'https://generativelanguage.googleapis.com/v1beta',
   xai: 'https://api.x.ai/v1',
 } as const;
+
+export const OPENAI_MODELS_URL = `${BUILTIN_PROVIDER_ORIGINS.openai}/models`;
 
 export interface NativeLanguageModelInput {
   readonly providerId: keyof typeof BUILTIN_PROVIDER_ORIGINS;
@@ -78,8 +91,46 @@ function apiKeyForEmbedding(credential: DriverCredential): string | undefined {
   return undefined;
 }
 
+/**
+ * OpenAI's models list carries ids only, so a discovered entry contributes
+ * nothing beyond the id — plus the Responses routing when the frozen catalog
+ * marks that id openai-responses, the same per-model protocol that selects
+ * the request adapter (R27, R31).
+ */
+export function parseOpenAIModels(
+  payload: unknown,
+  catalogModels: readonly ProviderModelDefinition[] = [],
+): DiscoveredProviderModel[] {
+  const protocolById = new Map<string, ProviderProtocol>();
+  for (const model of catalogModels) protocolById.set(model.id, model.protocol);
+  return modelsListEntries(payload, 'OpenAI').map((entry) => {
+    const id = entry['id'] as string;
+    return {
+      id,
+      ...(protocolById.get(id) === 'openai-responses' ? { protocol: 'openai-responses' as const } : {}),
+    };
+  });
+}
+
+export async function fetchOpenAIModels(options: {
+  readonly apiKey: string;
+  readonly catalogModels?: readonly ProviderModelDefinition[];
+  readonly fetch?: typeof globalThis.fetch;
+  readonly signal?: AbortSignal;
+  readonly timeoutMs?: number;
+}): Promise<readonly DiscoveredProviderModel[]> {
+  const payload = await fetchModelsEndpoint(OPENAI_MODELS_URL, options.apiKey, 'OpenAI', {
+    fetch: options.fetch,
+    signal: options.signal,
+    timeoutMs: options.timeoutMs,
+  });
+  return parseOpenAIModels(payload, options.catalogModels);
+}
+
 /** Built-in code-owned drivers that U4 can execute. */
-export function createNativeProviderDrivers(): readonly ProviderDriver[] {
+export function createNativeProviderDrivers(options: {
+  readonly fetch?: typeof globalThis.fetch;
+} = {}): readonly ProviderDriver[] {
   return (Object.keys(BUILTIN_PROVIDER_ORIGINS) as Array<keyof typeof BUILTIN_PROVIDER_ORIGINS>).map((id) => {
     const protocol: ProviderProtocol = id === 'anthropic'
       ? 'anthropic-messages'
@@ -97,6 +148,15 @@ export function createNativeProviderDrivers(): readonly ProviderDriver[] {
       }
       return undefined;
     };
+    const discoveryFacet: DriverDiscoveryFacet | undefined = id === 'openai'
+      ? {
+        fetchModels: ({ provider, credential }) => fetchOpenAIModels({
+          apiKey: apiKeyForDriver(credential),
+          catalogModels: provider.models,
+          fetch: options.fetch,
+        }),
+      }
+      : undefined;
     const driver: ProviderDriver = {
       id,
       supportedAuthMethods: ['api-key', 'environment'],
@@ -110,6 +170,7 @@ export function createNativeProviderDrivers(): readonly ProviderDriver[] {
         apiKey: apiKeyForDriver(credential),
       }),
       ...(id === 'openai' || id === 'anthropic' ? { thinkingPolicy: thinkingPolicyFor } : {}),
+      ...(discoveryFacet ? { discoveryFacet } : {}),
     };
     // OpenAI embeddings use the same code-owned OpenAI origin, but only the
     // typed provider runtime may surface this main-process target to RAG.

@@ -4,6 +4,8 @@ import type {
   DiscoveredProviderModel,
   ProviderConnection,
   ProviderDefinition,
+  ProviderModelDefinition,
+  ProviderProtocol,
 } from '../../src/shared/types/provider';
 import {
   discoverConnectionModels,
@@ -21,6 +23,20 @@ import {
   LILAC_MODELS_URL,
   parseLilacModels,
 } from '../../src/main/providers/drivers/lilac';
+import {
+  createNativeProviderDrivers,
+  OPENAI_MODELS_URL,
+  parseOpenAIModels,
+} from '../../src/main/providers/drivers/native';
+import {
+  createOpenCodeGoProviderDriver,
+  OPENCODE_GO_MODELS_URL,
+  parseOpenCodeGoModels,
+} from '../../src/main/providers/drivers/opencode-go';
+import {
+  createCompatibleProviderDrivers,
+  parseCompatibleModels,
+} from '../../src/main/providers/drivers/compatible';
 import { resolveModelSelection } from '../../src/main/providers/resolver';
 import type { DriverDiscoveryRequest, ProviderDriver } from '../../src/main/providers/drivers/types';
 
@@ -84,6 +100,10 @@ function jsonResponse(payload: unknown, status = 200): Response {
     status,
     headers: { 'content-type': 'application/json' },
   });
+}
+
+function catalogModel(id: string, protocol: ProviderProtocol): ProviderModelDefinition {
+  return { id, displayName: id, protocol };
 }
 
 afterEach(() => {
@@ -211,6 +231,231 @@ describe('Lilac models endpoint', () => {
 
     expect(models).toEqual([{ id: 'moonshotai/kimi-k2.6' }]);
     expect(fetch.mock.calls[0]?.[0]).toBe(LILAC_MODELS_URL);
+  });
+});
+
+describe('OpenAI models endpoint', () => {
+  it('parses ids-only entries and stamps the catalog-declared Responses protocol', () => {
+    const models = parseOpenAIModels({
+      object: 'list',
+      data: [
+        { id: 'gpt-5.2', object: 'model', created: 1_755_270_000, owned_by: 'openai' },
+        { id: 'gpt-4.1' },
+        { id: 'gpt-unlisted' },
+        { name: 'missing id' },
+      ],
+    }, [
+      catalogModel('gpt-5.2', 'openai-responses'),
+      catalogModel('gpt-4.1', 'openai-compatible'),
+    ]);
+
+    expect(models).toEqual([
+      { id: 'gpt-5.2', protocol: 'openai-responses' },
+      { id: 'gpt-4.1' },
+      { id: 'gpt-unlisted' },
+    ]);
+  });
+
+  it('fetches the code-owned OpenAI models URL with the connection credential', async () => {
+    const fetch = vi.fn(async () => jsonResponse({ data: [{ id: 'gpt-4.1' }] }));
+    const openai = createNativeProviderDrivers({ fetch: fetch as typeof globalThis.fetch })
+      .find((driver) => driver.id === 'openai')!;
+
+    const models = await openai.discoveryFacet!.fetchModels({
+      connection: connection({ providerId: 'openai' }),
+      provider: definition({ id: 'openai', models: [] }),
+      credential: { kind: 'api-key', apiKey: 'sk-openai-key' },
+    });
+
+    expect(models).toEqual([{ id: 'gpt-4.1' }]);
+    const [url, init] = fetch.mock.calls[0]!;
+    expect(url).toBe(OPENAI_MODELS_URL);
+    expect(new Headers(init?.headers).get('authorization')).toBe('Bearer sk-openai-key');
+  });
+
+  it('drops Responses-routed ids from a chat-protocol connection snapshot', async () => {
+    const fetch = vi.fn(async () => jsonResponse({
+      data: [{ id: 'gpt-5.2' }, { id: 'gpt-4.1' }, { id: 'gpt-new' }],
+    }));
+    const openai = createNativeProviderDrivers({ fetch: fetch as typeof globalThis.fetch })
+      .find((driver) => driver.id === 'openai')!;
+
+    const outcome = await discoverConnectionModels({
+      driver: openai,
+      connection: connection({ providerId: 'openai', protocol: 'openai-compatible' }),
+      provider: definition({
+        id: 'openai',
+        supportedProtocols: ['openai-compatible', 'openai-responses'],
+        models: [
+          catalogModel('gpt-5.2', 'openai-responses'),
+          catalogModel('gpt-4.1', 'openai-compatible'),
+        ],
+      }),
+      credential: { kind: 'api-key', apiKey: 'sk-openai-key' },
+      now: () => new Date('2026-08-08T12:00:00.000Z'),
+    });
+
+    expect(outcome.status).toBe('ok');
+    expect(outcome.discoveredModels.map((model) => model.id)).toEqual(['gpt-4.1', 'gpt-new']);
+    expect(outcome.addedModelIds).toEqual(['gpt-new']);
+  });
+
+  it('fails with the HTTP status when the endpoint rejects the fetch', async () => {
+    const fetch = vi.fn(async () => jsonResponse({ error: 'nope' }, 401));
+    const openai = createNativeProviderDrivers({ fetch: fetch as typeof globalThis.fetch })
+      .find((driver) => driver.id === 'openai')!;
+
+    await expect(openai.discoveryFacet!.fetchModels({
+      connection: connection({ providerId: 'openai' }),
+      provider: definition({ id: 'openai', models: [] }),
+      credential: { kind: 'api-key', apiKey: 'sk-openai-key' },
+    })).rejects.toThrow(/HTTP 401/);
+  });
+
+  it('leaves native drivers without a verified models endpoint undiscoverable', () => {
+    const drivers = createNativeProviderDrivers();
+    for (const id of ['anthropic', 'google-gemini', 'xai']) {
+      expect(drivers.find((driver) => driver.id === id)?.discoveryFacet).toBeUndefined();
+    }
+  });
+});
+
+describe('OpenCode Go models endpoint', () => {
+  it('parses ids-only entries and maps protocols from the frozen catalog table', () => {
+    const models = parseOpenCodeGoModels({
+      data: [
+        { id: 'glm-5.2' },
+        { id: 'claude-opus-4-6' },
+        { id: 'gpt-5.2' },
+        { id: 'unlisted-model' },
+      ],
+    }, [
+      catalogModel('glm-5.2', 'openai-compatible'),
+      catalogModel('claude-opus-4-6', 'anthropic-messages'),
+      catalogModel('gpt-5.2', 'openai-responses'),
+    ]);
+
+    expect(models).toEqual([
+      { id: 'glm-5.2', protocol: 'openai-compatible' },
+      { id: 'claude-opus-4-6', protocol: 'anthropic-messages' },
+      { id: 'gpt-5.2', protocol: 'openai-responses' },
+      { id: 'unlisted-model' },
+    ]);
+  });
+
+  it('wires the discovery facet through the driver with injected transport', async () => {
+    const fetch = vi.fn(async () => jsonResponse({ data: [{ id: 'glm-5.2' }] }));
+    const driver = createOpenCodeGoProviderDriver({ fetch: fetch as typeof globalThis.fetch });
+
+    const models = await driver.discoveryFacet!.fetchModels({
+      connection: connection({ providerId: 'opencode-go' }),
+      provider: definition({
+        id: 'opencode-go',
+        models: [catalogModel('glm-5.2', 'openai-compatible')],
+      }),
+      credential: { kind: 'api-key', apiKey: 'go-key' },
+    });
+
+    expect(models).toEqual([{ id: 'glm-5.2', protocol: 'openai-compatible' }]);
+    expect(fetch.mock.calls[0]?.[0]).toBe(OPENCODE_GO_MODELS_URL);
+  });
+
+  it('fails with the HTTP status when the endpoint rejects the fetch', async () => {
+    const fetch = vi.fn(async () => jsonResponse({ error: 'down' }, 503));
+    const driver = createOpenCodeGoProviderDriver({ fetch: fetch as typeof globalThis.fetch });
+
+    await expect(driver.discoveryFacet!.fetchModels({
+      connection: connection({ providerId: 'opencode-go' }),
+      provider: definition({ id: 'opencode-go', models: [] }),
+      credential: { kind: 'api-key', apiKey: 'go-key' },
+    })).rejects.toThrow(/HTTP 503/);
+  });
+});
+
+describe('generic OpenAI-compatible models endpoint', () => {
+  it('parses the ids-only list and skips malformed rows', () => {
+    expect(parseCompatibleModels({
+      data: [{ id: 'local-model' }, { id: 'local-model' }, { name: 'missing id' }],
+    })).toEqual([{ id: 'local-model' }]);
+  });
+
+  it('builds the models URL from the validated connection endpoint', async () => {
+    const fetch = vi.fn(async () => jsonResponse({ data: [{ id: 'local-model' }] }));
+    const driver = createCompatibleProviderDrivers({ fetch: fetch as typeof globalThis.fetch })
+      .find((candidate) => candidate.id === 'generic-openai-compatible')!;
+
+    const models = await driver.discoveryFacet!.fetchModels({
+      connection: connection({
+        providerId: 'generic-openai-compatible',
+        endpoint: 'http://localhost:1234/v1/',
+      }),
+      provider: definition({ id: 'generic-openai-compatible', models: [] }),
+      credential: { kind: 'api-key', apiKey: 'local-key' },
+      endpoint: 'http://localhost:1234/v1/',
+    });
+
+    expect(models).toEqual([{ id: 'local-model' }]);
+    expect(fetch.mock.calls[0]?.[0]).toBe('http://localhost:1234/v1/models');
+  });
+
+  it('threads the connection endpoint through discovery orchestration', async () => {
+    const fetch = vi.fn(async () => jsonResponse({ data: [{ id: 'local-model' }] }));
+    const driver = createCompatibleProviderDrivers({ fetch: fetch as typeof globalThis.fetch })
+      .find((candidate) => candidate.id === 'generic-openai-compatible')!;
+
+    const outcome = await discoverConnectionModels({
+      driver,
+      connection: connection({
+        providerId: 'generic-openai-compatible',
+        endpoint: 'http://localhost:1234/v1',
+      }),
+      provider: definition({ id: 'generic-openai-compatible', models: [] }),
+      credential: { kind: 'api-key', apiKey: 'local-key' },
+      now: () => new Date('2026-08-08T12:00:00.000Z'),
+    });
+
+    expect(outcome.status).toBe('ok');
+    expect(outcome.addedModelIds).toEqual(['local-model']);
+    expect(fetch.mock.calls[0]?.[0]).toBe('http://localhost:1234/v1/models');
+  });
+
+  it('requires an endpoint and refuses unconfirmed non-loopback HTTP before fetching', async () => {
+    const fetch = vi.fn(async () => jsonResponse({ data: [] }));
+    const driver = createCompatibleProviderDrivers({ fetch: fetch as typeof globalThis.fetch })
+      .find((candidate) => candidate.id === 'generic-openai-compatible')!;
+
+    await expect(driver.discoveryFacet!.fetchModels({
+      connection: connection({ providerId: 'generic-openai-compatible' }),
+      provider: definition({ id: 'generic-openai-compatible', models: [] }),
+      credential: { kind: 'api-key', apiKey: 'local-key' },
+    })).rejects.toThrow(/requires an endpoint/);
+
+    await expect(driver.discoveryFacet!.fetchModels({
+      connection: connection({
+        providerId: 'generic-openai-compatible',
+        endpoint: 'http://192.168.1.10:8000/v1',
+      }),
+      provider: definition({ id: 'generic-openai-compatible', models: [] }),
+      credential: { kind: 'api-key', apiKey: 'local-key' },
+      endpoint: 'http://192.168.1.10:8000/v1',
+    })).rejects.toThrow(/Non-loopback HTTP/);
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it('fails with the HTTP status when the endpoint rejects the fetch', async () => {
+    const fetch = vi.fn(async () => jsonResponse({ error: 'nope' }, 502));
+    const driver = createCompatibleProviderDrivers({ fetch: fetch as typeof globalThis.fetch })
+      .find((candidate) => candidate.id === 'generic-openai-compatible')!;
+
+    await expect(driver.discoveryFacet!.fetchModels({
+      connection: connection({
+        providerId: 'generic-openai-compatible',
+        endpoint: 'http://localhost:1234/v1',
+      }),
+      provider: definition({ id: 'generic-openai-compatible', models: [] }),
+      credential: { kind: 'api-key', apiKey: 'local-key' },
+      endpoint: 'http://localhost:1234/v1',
+    })).rejects.toThrow(/HTTP 502/);
   });
 });
 
