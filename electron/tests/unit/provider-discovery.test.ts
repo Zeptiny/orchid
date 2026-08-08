@@ -1,0 +1,505 @@
+/** Live model discovery (U5): driver fetchModels hooks, precedence merge, unified rows. */
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import type {
+  DiscoveredProviderModel,
+  ProviderConnection,
+  ProviderDefinition,
+} from '../../src/shared/types/provider';
+import {
+  discoverConnectionModels,
+  listConnectionModelRows,
+  mergeDiscoveredModels,
+  resolveEffectiveModel,
+} from '../../src/main/providers/facets/discovery';
+import {
+  createNeuralwattProviderDriver,
+  NEURALWATT_MODELS_URL,
+  parseNeuralwattModels,
+} from '../../src/main/providers/drivers/neuralwatt';
+import {
+  createLilacProviderDriver,
+  LILAC_MODELS_URL,
+  parseLilacModels,
+} from '../../src/main/providers/drivers/lilac';
+import { resolveModelSelection } from '../../src/main/providers/resolver';
+import type { DriverDiscoveryRequest, ProviderDriver } from '../../src/main/providers/drivers/types';
+
+const CONNECTION_ID = '11111111-1111-4111-8111-111111111111';
+
+function definition(overrides: Partial<ProviderDefinition> = {}): ProviderDefinition {
+  return {
+    id: 'neuralwatt',
+    displayName: 'Neuralwatt',
+    supportedAuthMethods: ['api-key', 'environment'],
+    supportedProtocols: ['openai-compatible'],
+    allowsCustomModels: true,
+    lifecycle: 'active',
+    models: [{
+      id: 'nw-base',
+      displayName: 'NW Base',
+      protocol: 'openai-compatible',
+      lifecycle: 'active',
+      capabilities: {
+        inputModalities: ['text'],
+        outputModalities: ['text'],
+        tools: true,
+        reasoning: true,
+      },
+      limits: { contextTokens: 1000, outputTokens: 100 },
+    }],
+    ...overrides,
+  };
+}
+
+function connection(overrides: Partial<ProviderConnection> = {}): ProviderConnection {
+  return {
+    id: CONNECTION_ID,
+    providerId: 'neuralwatt',
+    name: 'NW account',
+    protocol: 'openai-compatible',
+    authMethod: 'api-key',
+    credential: { kind: 'stored', handle: 'credential-nw-v1' },
+    modelIds: ['nw-base'],
+    health: 'ready',
+    ...overrides,
+  };
+}
+
+function driverWithModels(
+  fetchModels: (request: DriverDiscoveryRequest) => Promise<readonly DiscoveredProviderModel[]>,
+): ProviderDriver {
+  return {
+    id: 'neuralwatt',
+    supportedAuthMethods: ['api-key', 'environment'],
+    supportedProtocols: ['openai-compatible'],
+    allowsCustomEndpoint: false,
+    origin: 'https://api.neuralwatt.com/v1',
+    createLanguageModel: vi.fn(),
+    discoveryFacet: { fetchModels },
+  };
+}
+
+function jsonResponse(payload: unknown, status = 200): Response {
+  return new Response(JSON.stringify(payload), {
+    status,
+    headers: { 'content-type': 'application/json' },
+  });
+}
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+  vi.useRealTimers();
+});
+
+describe('Neuralwatt models endpoint', () => {
+  it('parses inline pricing, limits, capabilities, and reasoning metadata', () => {
+    const models = parseNeuralwattModels({
+      object: 'list',
+      data: [{
+        id: 'glm-5.2',
+        display_name: 'GLM 5.2',
+        input_modalities: ['text', 'image'],
+        output_modalities: ['text'],
+        tools: true,
+        reasoning: true,
+        context_tokens: 202_752,
+        output_tokens: 16_384,
+        reasoning_levels: ['low', 'medium', 'high'],
+        reasoning_default: 'medium',
+        pricing: {
+          currency: 'USD',
+          observed_at: '2026-08-08T10:00:00.000Z',
+          input_usd_per_million_tokens: '1.25',
+          output_usd_per_million_tokens: 10,
+          cache_read_usd_per_million_tokens: '0.125',
+          request_fee_usd: '0.001',
+          energy_usd_per_kwh: '0.42',
+        },
+      }],
+    }, new Date('2026-08-08T12:00:00.000Z'));
+
+    expect(models).toEqual([{
+      id: 'glm-5.2',
+      displayName: 'GLM 5.2',
+      capabilities: {
+        inputModalities: ['text', 'image'],
+        outputModalities: ['text'],
+        tools: true,
+        reasoning: true,
+      },
+      limits: { contextTokens: 202_752, outputTokens: 16_384 },
+      reasoningLevels: ['low', 'medium', 'high'],
+      reasoningDefault: 'medium',
+      pricing: {
+        currencyUnit: { kind: 'fiat', code: 'USD' },
+        observedAt: '2026-08-08T10:00:00.000Z',
+        rates: {
+          input: { amount: '1.25', per: 1_000_000, unit: 'tokens' },
+          output: { amount: '10', per: 1_000_000, unit: 'tokens' },
+          cacheRead: { amount: '0.125', per: 1_000_000, unit: 'tokens' },
+          perRequest: { amount: '0.001', per: 1, unit: 'requests' },
+          energy: { amount: '0.42', per: 1, unit: 'energy' },
+        },
+      },
+    }]);
+  });
+
+  it('contributes only the id from ids-only entries and skips malformed rows', () => {
+    const models = parseNeuralwattModels({
+      data: [
+        { id: 'glm-5.2-flex' },
+        { id: 'glm-5.2-flex' },
+        { name: 'missing id' },
+        'not-a-record',
+      ],
+    });
+    expect(models).toEqual([{ id: 'glm-5.2-flex' }]);
+    expect(() => parseNeuralwattModels({ unexpected: true })).toThrow(/no data array/i);
+  });
+
+  it('fetches the code-owned models URL with the connection credential', async () => {
+    const fetch = vi.fn(async () => jsonResponse({ data: [{ id: 'glm-5.2' }] }));
+    const driver = createNeuralwattProviderDriver({ fetch: fetch as typeof globalThis.fetch });
+
+    const models = await driver.discoveryFacet!.fetchModels({
+      connection: connection(),
+      provider: definition(),
+      credential: { kind: 'api-key', apiKey: 'nw-secret-key' },
+    });
+
+    expect(models).toEqual([{ id: 'glm-5.2' }]);
+    expect(fetch).toHaveBeenCalledTimes(1);
+    const [url, init] = fetch.mock.calls[0]!;
+    expect(url).toBe(NEURALWATT_MODELS_URL);
+    expect(new Headers(init?.headers).get('authorization')).toBe('Bearer nw-secret-key');
+  });
+
+  it('fails with the HTTP status when the endpoint rejects the fetch', async () => {
+    const fetch = vi.fn(async () => jsonResponse({ error: 'nope' }, 401));
+    const driver = createNeuralwattProviderDriver({ fetch: fetch as typeof globalThis.fetch });
+    await expect(driver.discoveryFacet!.fetchModels({
+      connection: connection(),
+      provider: definition(),
+      credential: { kind: 'api-key', apiKey: 'nw-secret-key' },
+    })).rejects.toThrow(/HTTP 401/);
+  });
+});
+
+describe('Lilac models endpoint', () => {
+  it('parses the OpenAI-style ids-only list with an optional display name', () => {
+    expect(parseLilacModels({
+      object: 'list',
+      data: [
+        { id: 'moonshotai/kimi-k2.6', object: 'model', created: 1, owned_by: 'lilac' },
+        { id: 'zai-org/glm-5.2', name: 'GLM 5.2' },
+      ],
+    })).toEqual([
+      { id: 'moonshotai/kimi-k2.6' },
+      { id: 'zai-org/glm-5.2', displayName: 'GLM 5.2' },
+    ]);
+  });
+
+  it('wires the discovery facet through the driver with injected transport', async () => {
+    const fetch = vi.fn(async () => jsonResponse({ data: [{ id: 'moonshotai/kimi-k2.6' }] }));
+    const driver = createLilacProviderDriver({ fetch: fetch as typeof globalThis.fetch });
+
+    const models = await driver.discoveryFacet!.fetchModels({
+      connection: connection(),
+      provider: definition(),
+      credential: { kind: 'api-key', apiKey: 'lilac-key' },
+    });
+
+    expect(models).toEqual([{ id: 'moonshotai/kimi-k2.6' }]);
+    expect(fetch.mock.calls[0]?.[0]).toBe(LILAC_MODELS_URL);
+  });
+});
+
+describe('discovery merge', () => {
+  it('stamps provider provenance and drops protocol-mismatched and duplicate entries', () => {
+    const merged = mergeDiscoveredModels(connection(), [
+      { id: 'nw-base', limits: { contextTokens: 2000, outputTokens: null } },
+      { id: 'nw-base', displayName: 'duplicate' },
+      { id: 'nw-other-protocol', protocol: 'anthropic-messages' },
+      { id: 'nw-new' },
+    ], new Date('2026-08-08T12:00:00.000Z'));
+
+    expect(merged).toEqual([
+      {
+        id: 'nw-base',
+        limits: { contextTokens: 2000, outputTokens: null },
+        provenance: 'provider',
+        discoveredAt: '2026-08-08T12:00:00.000Z',
+      },
+      { id: 'nw-new', provenance: 'provider', discoveredAt: '2026-08-08T12:00:00.000Z' },
+    ]);
+  });
+
+  it('reports unsupported, missing-credential, and redacted failures without touching models', async () => {
+    const plain: ProviderDriver = {
+      id: 'neuralwatt',
+      supportedAuthMethods: ['api-key'],
+      supportedProtocols: ['openai-compatible'],
+      allowsCustomEndpoint: false,
+      origin: 'https://api.neuralwatt.com/v1',
+      createLanguageModel: vi.fn(),
+    };
+    const prior = connection({
+      discoveredModels: [{
+        id: 'nw-old',
+        provenance: 'provider',
+        discoveredAt: '2026-08-01T00:00:00.000Z',
+      }],
+    });
+
+    await expect(discoverConnectionModels({
+      driver: plain,
+      connection: prior,
+      provider: definition(),
+      credential: { kind: 'api-key', apiKey: 'key' },
+    })).resolves.toMatchObject({ status: 'unsupported', discoveredModels: prior.discoveredModels });
+
+    await expect(discoverConnectionModels({
+      driver: driverWithModels(vi.fn()),
+      connection: prior,
+      provider: definition(),
+      credential: undefined,
+    })).resolves.toMatchObject({ status: 'no-credential' });
+
+    const failure = await discoverConnectionModels({
+      driver: driverWithModels(async () => {
+        throw new Error('request failed: authorization=sk-live-secret-key-value');
+      }),
+      connection: prior,
+      provider: definition(),
+      credential: { kind: 'api-key', apiKey: 'sk-live-secret-key-value' },
+    });
+    expect(failure.status).toBe('failed');
+    expect(failure.discoveredModels).toEqual(prior.discoveredModels);
+    expect(failure.message).not.toContain('sk-live-secret-key-value');
+  });
+
+  it('merges a successful fetch, names added models, and seeds reasoning fill-absent', async () => {
+    const existing = connection({
+      reasoningConfig: { 'nw-new': { levels: ['user-low'], default: 'user-low' } },
+      discoveredModels: [{ id: 'nw-gone', provenance: 'provider', discoveredAt: '2026-08-01T00:00:00.000Z' }],
+    });
+    const outcome = await discoverConnectionModels({
+      driver: driverWithModels(async () => [
+        { id: 'nw-base' },
+        {
+          id: 'nw-new',
+          capabilities: {
+            inputModalities: ['text'],
+            outputModalities: ['text'],
+            tools: true,
+            reasoning: true,
+          },
+          reasoningLevels: ['low', 'high'],
+          reasoningDefault: 'low',
+        },
+      ]),
+      connection: existing,
+      provider: definition(),
+      credential: { kind: 'api-key', apiKey: 'key' },
+      now: () => new Date('2026-08-08T12:00:00.000Z'),
+    });
+
+    expect(outcome.status).toBe('ok');
+    expect(outcome.addedModelIds).toEqual(['nw-new']);
+    // The stale snapshot entry disappears; the fresh snapshot replaces it.
+    expect(outcome.discoveredModels.map((model) => model.id)).toEqual(['nw-base', 'nw-new']);
+    // Existing user reasoning configuration wins over the live levels.
+    expect(outcome.reasoningConfig).toBeUndefined();
+  });
+
+  it('seeds reasoning levels from live metadata only when nothing is configured', async () => {
+    const outcome = await discoverConnectionModels({
+      driver: driverWithModels(async () => [{
+        id: 'nw-new',
+        capabilities: { inputModalities: ['text'], outputModalities: ['text'], tools: true, reasoning: true },
+        reasoningLevels: ['low', 'high'],
+        reasoningDefault: 'low',
+      }]),
+      connection: connection(),
+      provider: definition(),
+      credential: { kind: 'api-key', apiKey: 'key' },
+    });
+    expect(outcome.reasoningConfig).toEqual({ 'nw-new': { levels: ['low', 'high'], default: 'low' } });
+  });
+
+  it('never schedules background polling work', async () => {
+    vi.useFakeTimers();
+    const fetchModels = vi.fn(async (): Promise<readonly DiscoveredProviderModel[]> => [{ id: 'nw-new' }]);
+    const outcome = await discoverConnectionModels({
+      driver: driverWithModels(fetchModels),
+      connection: connection(),
+      provider: definition(),
+      credential: { kind: 'api-key', apiKey: 'key' },
+    });
+    expect(outcome.status).toBe('ok');
+    expect(vi.getTimerCount()).toBe(0);
+    await vi.advanceTimersByTimeAsync(7 * 24 * 60 * 60 * 1000);
+    expect(fetchModels).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('unified listing rows', () => {
+  it('lets live metadata override catalog values with a provider badge', () => {
+    const rows = listConnectionModelRows(connection({
+      discoveredModels: [{
+        id: 'nw-base',
+        displayName: 'NW Base Live',
+        limits: { contextTokens: 2000, outputTokens: null },
+        provenance: 'provider',
+        discoveredAt: '2026-08-08T12:00:00.000Z',
+      }],
+    }), definition());
+
+    const row = rows.find((candidate) => candidate.model.id === 'nw-base');
+    expect(row).toMatchObject({
+      source: 'provider',
+      enabled: true,
+      customized: false,
+      discoveredAt: '2026-08-08T12:00:00.000Z',
+      model: {
+        displayName: 'NW Base Live',
+        // The live context length replaces the catalog one (AE8); the absent
+        // live output limit falls through to the catalog value.
+        limits: { contextTokens: 2000, outputTokens: 100 },
+        capabilities: { reasoning: true },
+      },
+    });
+  });
+
+  it('preserves explicit user overrides over live and catalog values', () => {
+    const rows = listConnectionModelRows(connection({
+      customModels: [{
+        id: 'nw-base',
+        displayName: 'My tuned base',
+        protocol: 'openai-compatible',
+        capabilities: { inputModalities: ['text'], outputModalities: ['text'], tools: false, reasoning: true },
+        limits: { contextTokens: 32_000, outputTokens: 4_000 },
+      }],
+      discoveredModels: [{
+        id: 'nw-base',
+        limits: { contextTokens: 999_999, outputTokens: 99_999 },
+        provenance: 'provider',
+        discoveredAt: '2026-08-08T12:00:00.000Z',
+      }],
+    }), definition());
+
+    const row = rows.find((candidate) => candidate.model.id === 'nw-base');
+    expect(row).toMatchObject({
+      customized: true,
+      model: {
+        displayName: 'My tuned base',
+        limits: { contextTokens: 32_000, outputTokens: 4_000 },
+        capabilities: { tools: false, reasoning: true },
+      },
+    });
+  });
+
+  it('keeps catalog metadata intact for ids-only discovery and badges all three origins', () => {
+    const rows = listConnectionModelRows(connection({
+      customModels: [{
+        id: 'nw-custom',
+        displayName: 'Custom entry',
+        protocol: 'openai-compatible',
+        capabilities: { inputModalities: ['text'], outputModalities: ['text'], tools: true, reasoning: false },
+        limits: { contextTokens: 4096, outputTokens: 1024 },
+      }],
+      discoveredModels: [
+        { id: 'nw-base', provenance: 'provider', discoveredAt: '2026-08-08T12:00:00.000Z' },
+        { id: 'nw-live-only', provenance: 'provider', discoveredAt: '2026-08-08T12:00:00.000Z' },
+      ],
+    }), definition());
+
+    const byId = new Map(rows.map((row) => [row.model.id, row]));
+    // Ids-only live data contributes nothing beyond the id (R27).
+    expect(byId.get('nw-base')).toMatchObject({
+      source: 'catalog',
+      model: { displayName: 'NW Base', limits: { contextTokens: 1000, outputTokens: 100 } },
+    });
+    expect(byId.get('nw-live-only')).toMatchObject({
+      source: 'provider',
+      enabled: false,
+      model: { id: 'nw-live-only', displayName: 'nw-live-only' },
+    });
+    expect(byId.get('nw-custom')).toMatchObject({
+      source: 'user',
+      enabled: false,
+      customized: false,
+      model: { displayName: 'Custom entry', limits: { contextTokens: 4096 } },
+    });
+    expect(rows.every((row) => typeof row.enabled === 'boolean')).toBe(true);
+  });
+});
+
+describe('resolver integration', () => {
+  it('resolves a discovered-only model with its live metadata', () => {
+    const result = resolveModelSelection(
+      { connectionId: CONNECTION_ID, modelId: 'nw-live-only' },
+      [connection({
+        modelIds: ['nw-base', 'nw-live-only'],
+        discoveredModels: [{
+          id: 'nw-live-only',
+          displayName: 'NW Live',
+          capabilities: { inputModalities: ['text'], outputModalities: ['text'], tools: true, reasoning: true },
+          limits: { contextTokens: 5000, outputTokens: 500 },
+          provenance: 'provider',
+          discoveredAt: '2026-08-08T12:00:00.000Z',
+        }],
+      })],
+      [definition()],
+    );
+
+    expect(result).toMatchObject({
+      kind: 'resolved',
+      model: {
+        id: 'nw-live-only',
+        source: 'connection',
+        displayName: 'NW Live',
+        capabilities: { reasoning: true },
+        limits: { contextTokens: 5000, outputTokens: 500 },
+      },
+    });
+  });
+
+  it('applies live metadata over catalog metadata at request time', () => {
+    const result = resolveModelSelection(
+      { connectionId: CONNECTION_ID, modelId: 'nw-base' },
+      [connection({
+        discoveredModels: [{
+          id: 'nw-base',
+          limits: { contextTokens: 2000, outputTokens: null },
+          provenance: 'provider',
+          discoveredAt: '2026-08-08T12:00:00.000Z',
+        }],
+      })],
+      [definition()],
+    );
+
+    expect(result).toMatchObject({
+      kind: 'resolved',
+      model: { source: 'catalog', limits: { contextTokens: 2000, outputTokens: 100 } },
+    });
+  });
+
+  it('resolveEffectiveModel fills absent live fields from the catalog without degradation', () => {
+    const effective = resolveEffectiveModel({
+      catalog: definition().models[0],
+      discovered: {
+        id: 'nw-base',
+        provenance: 'provider',
+        discoveredAt: '2026-08-08T12:00:00.000Z',
+      },
+      fallbackId: 'nw-base',
+      fallbackProtocol: 'openai-compatible',
+    });
+    expect(effective).toMatchObject({
+      displayName: 'NW Base',
+      capabilities: { reasoning: true },
+      limits: { contextTokens: 1000, outputTokens: 100 },
+    });
+  });
+});

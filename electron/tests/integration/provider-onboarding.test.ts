@@ -116,7 +116,7 @@ describe('provider onboarding and disconnected UX', () => {
     expect(modelEditor).toContain('Select all models');
     expect(modelEditor).toContain('Deselect all models');
     expect(modelEditor).toContain('catalogModelIds');
-    expect(modelEditor).toContain('customModelIds');
+    expect(modelEditor).toContain('selectableModelIds');
     expect(onboarding).toContain('<ConnectionWizard');
     expect(providersTab).toContain('<ConnectionWizard');
   });
@@ -251,7 +251,7 @@ describe('provider onboarding and disconnected UX', () => {
     expect(wizard).toContain('provider-wizard-header');
     expect(wizard).toContain('provider-wizard-body');
     expect(wizard).toContain('provider-wizard-actions');
-    expect(modelEditor).toContain('startEditingCatalogModel');
+    expect(modelEditor).toContain('startEditingRow');
     expect(modelEditor).toContain('Customized');
     expect(modelEditor).toContain('Input capabilities');
     expect(modelEditor).toContain('Output capabilities');

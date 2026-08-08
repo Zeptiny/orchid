@@ -2,6 +2,7 @@ import type { LanguageModelV4 } from '@ai-sdk/provider';
 import Decimal from 'decimal.js';
 import { createUnwrappingFetch } from '../../llm/response-unwrap';
 import { importESM } from '../../utils/esm-import';
+import type { DiscoveredProviderModel } from '../../../shared/types/provider';
 import type { ProviderDriver } from './types';
 import type { ProviderStatusObservation } from '../status/cache';
 import type {
@@ -9,6 +10,7 @@ import type {
   ProviderModelRateCard,
 } from '../../../shared/types/provider-facets';
 import { scalePricingRateFields } from '../facets/pricing';
+import { fetchModelsEndpoint, modelsListEntries } from './models-endpoint';
 import {
   parseRetryAfter,
   StatusRefreshError,
@@ -17,6 +19,7 @@ import {
 
 /** Lilac’s documented OpenAI-compatible inference API, owned by driver code. */
 export const LILAC_INFERENCE_BASE_URL = 'https://api.getlilac.com/v1';
+export const LILAC_MODELS_URL = `${LILAC_INFERENCE_BASE_URL}/models`;
 /** Lilac’s public status source; it deliberately receives no API credential. */
 export const LILAC_STATUS_URL = 'https://api.getlilac.com/status?window=5m';
 export const LILAC_STATUS_TTL_MS = 5 * 60_000;
@@ -111,6 +114,34 @@ export async function fetchLilacPricingRateCards(input: {
 }
 
 /**
+ * Lilac's OpenAI-compatible models list carries ids (and at most a display
+ * name), so discovered entries contribute nothing beyond the id (R27).
+ */
+export function parseLilacModels(payload: unknown): DiscoveredProviderModel[] {
+  return modelsListEntries(payload, 'Lilac').map((entry) => {
+    const name = entry['name'];
+    return {
+      id: entry['id'] as string,
+      ...(typeof name === 'string' && name.trim() !== '' ? { displayName: name.trim() } : {}),
+    };
+  });
+}
+
+export async function fetchLilacModels(options: {
+  readonly apiKey: string;
+  readonly fetch?: typeof globalThis.fetch;
+  readonly signal?: AbortSignal;
+  readonly timeoutMs?: number;
+}): Promise<readonly DiscoveredProviderModel[]> {
+  const payload = await fetchModelsEndpoint(LILAC_MODELS_URL, options.apiKey, 'Lilac', {
+    fetch: options.fetch,
+    signal: options.signal,
+    timeoutMs: options.timeoutMs,
+  });
+  return parseLilacModels(payload);
+}
+
+/**
  * A specialized, code-owned Lilac driver. Catalog data can select models but
  * cannot redirect credentials or transport to another endpoint.
  */
@@ -137,6 +168,12 @@ export function createLilacProviderDriver(options: {
           now: options.now,
         }),
       },
+    },
+    discoveryFacet: {
+      fetchModels: ({ credential }) => fetchLilacModels({
+        apiKey: apiKeyForLilac(credential),
+        fetch: options.fetch,
+      }),
     },
   };
 }

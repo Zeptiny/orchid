@@ -145,6 +145,21 @@ function memoryServices(definitions: readonly ProviderDefinition[] = [OPENAI, GE
       records.delete(id);
       return structuredClone(current);
     }),
+    persistDiscoveredModels: vi.fn(async (
+      id: string,
+      discoveredModels: readonly unknown[],
+      reasoningConfig?: Record<string, unknown>,
+    ) => {
+      const current = records.get(id);
+      if (!current) throw new Error(`Unknown provider connection '${id}'`);
+      const record = {
+        ...current,
+        discoveredModels: structuredClone([...discoveredModels]),
+        ...(reasoningConfig ? { reasoningConfig: structuredClone(reasoningConfig) } : {}),
+      } as ProviderConnection;
+      records.set(id, record);
+      return structuredClone(record);
+    }),
   };
   const vault = {
     getAvailability: vi.fn(() => ({ available: true as const, backend: 'libsecret' })),
@@ -158,12 +173,14 @@ function memoryServices(definitions: readonly ProviderDefinition[] = [OPENAI, GE
     refresh: vi.fn(),
     invalidate: vi.fn(),
   };
+  const pricing = { invalidate: vi.fn() };
   return {
     services: {
       catalog: { getProviderDefinitions: () => definitions, load: () => emptyCatalogSnapshot() },
       connections,
       vault,
       status,
+      pricing,
       registry: registry(),
       clearConfigReferences: vi.fn(async () => ({
         config: {
@@ -182,6 +199,7 @@ function memoryServices(definitions: readonly ProviderDefinition[] = [OPENAI, GE
     connections,
     vault,
     status,
+    pricing,
   };
 }
 
@@ -297,7 +315,7 @@ describe('provider IPC', () => {
     expect(result.connection).toMatchObject({
       providerId: 'openai',
       modelIds: ['gpt-next'],
-      customModels: [{ id: 'gpt-next', source: 'connection' }],
+      customModels: [{ id: 'gpt-next', source: 'user' }],
     });
   });
 
@@ -337,7 +355,7 @@ describe('provider IPC', () => {
     expect(result.connection).toMatchObject({
       id,
       modelIds: ['gpt-next'],
-      customModels: [{ id: 'gpt-next', source: 'connection' }],
+      customModels: [{ id: 'gpt-next', source: 'user' }],
       health: 'ready',
     });
   });
@@ -415,10 +433,12 @@ describe('provider IPC', () => {
     expect(options).toMatchObject([{
       model: {
         id: 'gpt-5/test',
-        source: 'connection',
+        source: 'catalog',
         displayName: 'GPT 5 Vision override',
         capabilities: { inputModalities: ['text', 'image'] },
       },
+      customized: true,
+      enabled: true,
     }]);
   });
 
@@ -1056,5 +1076,363 @@ describe('provider IPC', () => {
     })).rejects.toThrow(/disabled/i);
 
     expect(memory.vault.replaceConnectionApiKey).not.toHaveBeenCalled();
+  });
+});
+
+describe('provider live model discovery IPC', () => {
+  const NEURALWATT: ProviderDefinition = {
+    id: 'neuralwatt',
+    displayName: 'Neuralwatt',
+    supportedAuthMethods: ['api-key', 'environment'],
+    supportedProtocols: ['openai-compatible'],
+    allowsCustomModels: true,
+    lifecycle: 'active',
+    models: [{
+      id: 'nw-base',
+      displayName: 'NW Base',
+      protocol: 'openai-compatible',
+      lifecycle: 'active',
+      capabilities: {
+        inputModalities: ['text'],
+        outputModalities: ['text'],
+        tools: true,
+        reasoning: false,
+      },
+      limits: { contextTokens: 1000, outputTokens: 100 },
+    }],
+  };
+
+  function discoveryServices(fetchModels: unknown) {
+    const memory = memoryServices([NEURALWATT]);
+    const registryWithDiscovery = new ProviderDriverRegistry([{
+      id: 'neuralwatt',
+      supportedAuthMethods: ['api-key', 'environment'],
+      supportedProtocols: ['openai-compatible'],
+      allowsCustomEndpoint: false,
+      origin: 'https://api.neuralwatt.com/v1',
+      createLanguageModel: vi.fn(),
+      discoveryFacet: { fetchModels: fetchModels as never },
+    }]);
+    return { ...memory, services: { ...memory.services, registry: registryWithDiscovery } };
+  }
+
+  it('discovers models once when a connection is created with a working credential', async () => {
+    const fetchModels = vi.fn(async () => [
+      { id: 'nw-base', displayName: 'NW Base Live', limits: { contextTokens: 2000, outputTokens: null } },
+      {
+        id: 'nw-new',
+        capabilities: { inputModalities: ['text'], outputModalities: ['text'], tools: true, reasoning: true },
+        limits: { contextTokens: 5000, outputTokens: 500 },
+        reasoningLevels: ['low', 'high'],
+        reasoningDefault: 'low',
+      },
+    ]);
+    const memory = discoveryServices(fetchModels);
+    process.env.ORCHID_TEST_NEURALWATT_KEY = 'nw-env-key';
+    try {
+      providersIpc._setProviderIPCServicesForTests(memory.services);
+      providersIpc.registerProviderIPC();
+
+      const result = await handler(IPC_CHANNELS.PROVIDERS_CREATE)(null, {
+        providerId: 'neuralwatt',
+        name: 'NW',
+        protocol: 'openai-compatible',
+        authMethod: 'environment',
+        environmentVariable: 'ORCHID_TEST_NEURALWATT_KEY',
+        modelIds: ['nw-base'],
+      });
+
+      expect(fetchModels).toHaveBeenCalledTimes(1);
+      expect(result).toMatchObject({
+        connection: { health: 'ready' },
+        message: expect.stringMatching(/discovered 1 new model/i),
+      });
+      const record = memory.records.get(result.connection.id);
+      expect(record?.discoveredModels).toHaveLength(2);
+      expect(record?.discoveredModels?.[1]).toMatchObject({
+        id: 'nw-new',
+        provenance: 'provider',
+        limits: { contextTokens: 5000, outputTokens: 500 },
+      });
+      expect(record?.discoveredModels?.every(
+        (model: { discoveredAt?: string }) => typeof model.discoveredAt === 'string',
+      )).toBe(true);
+      // Live reasoning levels seed the connection fill-absent (R28 affordance parity).
+      expect(record?.reasoningConfig?.['nw-new']).toEqual({ levels: ['low', 'high'], default: 'low' });
+    } finally {
+      delete process.env.ORCHID_TEST_NEURALWATT_KEY;
+    }
+  });
+
+  it('discovers on the first working API key submission and never polls afterwards', async () => {
+    const fetchModels = vi.fn(async () => [{ id: 'nw-new' }]);
+    const memory = discoveryServices(fetchModels);
+    const id = '00000000-0000-4000-8000-000000000091';
+    memory.records.set(id, {
+      id,
+      providerId: 'neuralwatt',
+      name: 'NW keys',
+      protocol: 'openai-compatible',
+      authMethod: 'api-key',
+      credential: { kind: 'none' },
+      modelIds: ['nw-base'],
+      health: 'draft',
+    });
+    providersIpc._setProviderIPCServicesForTests(memory.services);
+    providersIpc.registerProviderIPC();
+
+    const first = await handler(IPC_CHANNELS.PROVIDERS_SUBMIT_API_KEY)(null, {
+      connectionId: id,
+      apiKey: 'nw-first-key',
+    });
+    expect(first).toMatchObject({
+      connection: { health: 'ready' },
+      message: expect.stringMatching(/discovered 1 new model/i),
+    });
+    expect(fetchModels).toHaveBeenCalledTimes(1);
+    expect(memory.records.get(id)?.discoveredModels).toEqual([
+      expect.objectContaining({ id: 'nw-new', provenance: 'provider' }),
+    ]);
+
+    // A later credential rotation does not rediscover: discovery is one-shot
+    // per connection plus explicit manual fetches (R26, no background polling).
+    const second = await handler(IPC_CHANNELS.PROVIDERS_SUBMIT_API_KEY)(null, {
+      connectionId: id,
+      apiKey: 'nw-rotated-key',
+    });
+    expect(second).toMatchObject({ connection: { health: 'ready' }, message: null });
+    expect(fetchModels).toHaveBeenCalledTimes(1);
+    expect(memory.pricing.invalidate).toHaveBeenCalledWith('neuralwatt', id);
+  });
+
+  it('merges live metadata over catalog and preserves user overrides over live', async () => {
+    const fetchModels = vi.fn(async () => [
+      { id: 'nw-base', limits: { contextTokens: 2000, outputTokens: null } },
+      { id: 'nw-live-only', displayName: 'NW Live Only' },
+    ]);
+    const memory = discoveryServices(fetchModels);
+    const id = '00000000-0000-4000-8000-000000000092';
+    memory.records.set(id, {
+      id,
+      providerId: 'neuralwatt',
+      name: 'NW precedence',
+      protocol: 'openai-compatible',
+      authMethod: 'api-key',
+      credential: { kind: 'stored', handle: 'fixture-nw-key' },
+      modelIds: ['nw-base'],
+      health: 'ready',
+    });
+    providersIpc._setProviderIPCServicesForTests(memory.services);
+    providersIpc.registerProviderIPC();
+
+    await handler(IPC_CHANNELS.PROVIDERS_DISCOVER_MODELS)(null, { connectionId: id });
+
+    const unified = await handler(IPC_CHANNELS.PROVIDERS_MODEL_LIST)(null, {
+      connectionId: id,
+      includeDisabled: true,
+    });
+    const byId = new Map(unified.map((option: { model: { id: string } }) => [option.model.id, option]));
+    expect(byId.get('nw-base')).toMatchObject({
+      enabled: true,
+      customized: false,
+      model: {
+        source: 'provider',
+        limits: { contextTokens: 2000, outputTokens: 100 },
+      },
+    });
+    expect(byId.get('nw-live-only')).toMatchObject({
+      enabled: false,
+      model: { source: 'provider', displayName: 'NW Live Only' },
+    });
+    // The picker path keeps its enabled-only cardinality.
+    const pickerOptions = await handler(IPC_CHANNELS.PROVIDERS_MODEL_LIST)(null, { connectionId: id });
+    expect(pickerOptions.map((option: { model: { id: string } }) => option.model.id)).toEqual(['nw-base']);
+
+    // A user-set override wins over the live value (fill-absent philosophy).
+    await handler(IPC_CHANNELS.PROVIDERS_UPDATE)(null, {
+      connectionId: id,
+      customModels: [{
+        id: 'nw-base',
+        displayName: 'NW Base tuned',
+        protocol: 'openai-compatible',
+        capabilities: { inputModalities: ['text'], outputModalities: ['text'], tools: true, reasoning: false },
+        limits: { contextTokens: 32_000, outputTokens: 4_000 },
+      }],
+    });
+    const overridden = await handler(IPC_CHANNELS.PROVIDERS_MODEL_LIST)(null, {
+      connectionId: id,
+      includeDisabled: true,
+    });
+    expect(overridden.find((option: { model: { id: string } }) => option.model.id === 'nw-base'))
+      .toMatchObject({
+        customized: true,
+        model: {
+          displayName: 'NW Base tuned',
+          limits: { contextTokens: 32_000, outputTokens: 4_000 },
+        },
+      });
+  });
+
+  it('adds ids-only discoveries without degrading catalog metadata and lists uniform rows', async () => {
+    const fetchModels = vi.fn(async () => [{ id: 'nw-base' }, { id: 'nw-id-only' }]);
+    const memory = discoveryServices(fetchModels);
+    const id = '00000000-0000-4000-8000-000000000093';
+    memory.records.set(id, {
+      id,
+      providerId: 'neuralwatt',
+      name: 'NW ids only',
+      protocol: 'openai-compatible',
+      authMethod: 'api-key',
+      credential: { kind: 'stored', handle: 'fixture-nw-key' },
+      modelIds: ['nw-base'],
+      customModels: [{
+        id: 'nw-custom',
+        displayName: 'NW Custom',
+        protocol: 'openai-compatible',
+        capabilities: { inputModalities: ['text'], outputModalities: ['text'], tools: true, reasoning: false },
+        limits: { contextTokens: 4096, outputTokens: 512 },
+      }],
+      health: 'ready',
+    });
+    providersIpc._setProviderIPCServicesForTests(memory.services);
+    providersIpc.registerProviderIPC();
+
+    const discovered = await handler(IPC_CHANNELS.PROVIDERS_DISCOVER_MODELS)(null, { connectionId: id });
+    expect(discovered).toMatchObject({ status: 'ok', addedModelIds: ['nw-id-only'] });
+
+    const unified = await handler(IPC_CHANNELS.PROVIDERS_MODEL_LIST)(null, {
+      connectionId: id,
+      includeDisabled: true,
+    });
+    const byId = new Map(unified.map((option: { model: { id: string } }) => [option.model.id, option]));
+    // Ids-only data contributes nothing beyond the id (R27).
+    expect(byId.get('nw-base')).toMatchObject({
+      model: { source: 'catalog', limits: { contextTokens: 1000, outputTokens: 100 } },
+    });
+    expect(byId.get('nw-id-only')).toMatchObject({
+      enabled: false,
+      model: { source: 'provider', capabilities: null, limits: null },
+    });
+    expect(byId.get('nw-custom')).toMatchObject({
+      enabled: false,
+      model: { source: 'user' },
+    });
+    // Uniform affordances: every row carries the same affordance fields.
+    for (const option of unified) {
+      expect(option).toMatchObject({
+        enabled: expect.any(Boolean),
+        customized: expect.any(Boolean),
+        available: expect.any(Boolean),
+      });
+      expect(option).toHaveProperty('discoveredAt');
+    }
+
+    // Enabling a discovered model passes the static gate and resolves live.
+    await handler(IPC_CHANNELS.PROVIDERS_UPDATE)(null, {
+      connectionId: id,
+      modelIds: ['nw-base', 'nw-id-only'],
+    });
+    const enabled = await handler(IPC_CHANNELS.PROVIDERS_MODEL_LIST)(null, { connectionId: id });
+    expect(enabled.map((option: { model: { id: string } }) => option.model.id).sort())
+      .toEqual(['nw-base', 'nw-id-only']);
+    expect(enabled.find((option: { model: { id: string } }) => option.model.id === 'nw-id-only'))
+      .toMatchObject({ available: true, model: { source: 'provider' } });
+  });
+
+  it('reports unsupported and missing-credential discovery without failing the connection', async () => {
+    const memory = memoryServices();
+    const id = '00000000-0000-4000-8000-000000000094';
+    memory.records.set(id, {
+      id,
+      providerId: 'openai',
+      name: 'No discovery driver',
+      protocol: 'openai-compatible',
+      authMethod: 'api-key',
+      credential: { kind: 'stored', handle: 'fixture-openai-key' },
+      modelIds: ['gpt-5/test'],
+      health: 'ready',
+    });
+    providersIpc._setProviderIPCServicesForTests(memory.services);
+    providersIpc.registerProviderIPC();
+
+    const unsupported = await handler(IPC_CHANNELS.PROVIDERS_DISCOVER_MODELS)(null, { connectionId: id });
+    expect(unsupported).toMatchObject({
+      status: 'unsupported',
+      message: expect.stringMatching(/does not publish/i),
+    });
+
+    const withDiscovery = discoveryServices(vi.fn());
+    const missingId = '00000000-0000-4000-8000-000000000095';
+    withDiscovery.records.set(missingId, {
+      id: missingId,
+      providerId: 'neuralwatt',
+      name: 'No credential yet',
+      protocol: 'openai-compatible',
+      authMethod: 'api-key',
+      credential: { kind: 'none' },
+      modelIds: ['nw-base'],
+      health: 'draft',
+    });
+    providersIpc._setProviderIPCServicesForTests(withDiscovery.services);
+
+    const noCredential = await handler(IPC_CHANNELS.PROVIDERS_DISCOVER_MODELS)(null, { connectionId: missingId });
+    expect(noCredential).toMatchObject({
+      status: 'no-credential',
+      message: expect.stringMatching(/credential/i),
+    });
+  });
+
+  it('keeps catalog and custom models intact with a redacted note when discovery fails', async () => {
+    const fetchModels = vi.fn(async () => {
+      throw new Error('HTTP 401 for authorization: Bearer sk-nw-live-secret');
+    });
+    const memory = discoveryServices(fetchModels);
+    const id = '00000000-0000-4000-8000-000000000096';
+    memory.records.set(id, {
+      id,
+      providerId: 'neuralwatt',
+      name: 'Failing discovery',
+      protocol: 'openai-compatible',
+      authMethod: 'api-key',
+      credential: { kind: 'stored', handle: 'fixture-nw-key' },
+      modelIds: ['nw-base'],
+      health: 'ready',
+    });
+    providersIpc._setProviderIPCServicesForTests(memory.services);
+    providersIpc.registerProviderIPC();
+
+    const result = await handler(IPC_CHANNELS.PROVIDERS_DISCOVER_MODELS)(null, { connectionId: id });
+    expect(result.status).toBe('failed');
+    expect(result.message).toMatch(/discovery failed/i);
+    expect(JSON.stringify(result)).not.toContain('sk-nw-live-secret');
+    expect(memory.records.get(id)?.discoveredModels).toBeUndefined();
+
+    const options = await handler(IPC_CHANNELS.PROVIDERS_MODEL_LIST)(null, { connectionId: id });
+    expect(options).toMatchObject([{
+      model: { id: 'nw-base', source: 'catalog', limits: { contextTokens: 1000 } },
+      available: true,
+    }]);
+  });
+
+  it('invalidates latest-known pricing when a connection is deleted', async () => {
+    const memory = memoryServices();
+    const id = '00000000-0000-4000-8000-000000000097';
+    memory.records.set(id, {
+      id,
+      providerId: 'openai',
+      name: 'Pricing invalidation',
+      protocol: 'openai-compatible',
+      authMethod: 'api-key',
+      credential: { kind: 'stored', handle: 'fixture-openai-key' },
+      modelIds: ['gpt-5/test'],
+      health: 'ready',
+    });
+    providersIpc._setProviderIPCServicesForTests(memory.services);
+    providersIpc.registerProviderIPC();
+
+    await handler(IPC_CHANNELS.PROVIDERS_DELETE)(null, { connectionId: id, confirm: true });
+
+    expect(memory.status.invalidate).toHaveBeenCalledWith('openai', id);
+    expect(memory.pricing.invalidate).toHaveBeenCalledWith('openai', id);
   });
 });

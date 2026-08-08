@@ -13,7 +13,9 @@ import type {
   ProviderConnectionIdMessage,
   ProviderConnectionUpdateMessage,
   ProviderConnectionView,
+  ProviderDiscoverModelsResult,
   ProviderDisconnectMessage,
+  ProviderModelListMessage,
   ProviderModelOption,
   ProviderMutationResult,
   ProviderOverview,
@@ -73,8 +75,12 @@ export interface UseProvidersReturn {
     message: ProviderDeleteConnectionMessage,
   ) => Promise<ProviderDeleteConnectionResult>;
   readonly modelList: (
-    message?: ProviderConnectionIdMessage,
+    message?: ProviderModelListMessage,
   ) => Promise<readonly ProviderModelOption[]>;
+  /** One explicit live-discovery fetch; the result message is non-blocking. */
+  readonly discoverModels: (
+    message: ProviderConnectionIdMessage,
+  ) => Promise<ProviderDiscoverModelsResult>;
   readonly refreshStatus: (
     message: ProviderStatusRefreshMessage,
   ) => Promise<ProviderStatusView | null>;
@@ -468,8 +474,17 @@ export function useProviders(): UseProvidersReturn {
   );
 
   const modelList = useCallback(
-    (message?: ProviderConnectionIdMessage) =>
+    (message?: ProviderModelListMessage) =>
       runMutation((providers) => providers.modelList(message)),
+    [runMutation],
+  );
+
+  const discoverModels = useCallback(
+    (message: ProviderConnectionIdMessage) =>
+      runMutation(
+        (providers) => providers.discoverModels(message),
+        (result) => applyMutationToShared({ connection: result.connection, message: result.message }),
+      ),
     [runMutation],
   );
 
@@ -513,6 +528,7 @@ export function useProviders(): UseProvidersReturn {
     disconnectConnection,
     deleteConnection,
     modelList,
+    discoverModels,
     refreshStatus,
   };
 }

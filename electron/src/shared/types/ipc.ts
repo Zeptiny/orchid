@@ -538,7 +538,8 @@ export interface ProviderModelView {
   displayName: string;
   protocol: ProviderProtocol;
   lifecycle: ProviderLifecycle | null;
-  source: 'catalog' | 'connection';
+  /** Provenance badge: signed catalog, live provider discovery, or user-defined (R28). */
+  source: 'catalog' | 'provider' | 'user';
   capabilities: {
     inputModalities: readonly string[];
     outputModalities: readonly string[];
@@ -561,6 +562,8 @@ export interface ProviderDefinitionView {
   lifecycle: ProviderLifecycle | null;
   available: boolean;
   unavailableReason: string | null;
+  /** The trusted driver publishes a live models endpoint for this provider (R26). */
+  supportsDiscovery: boolean;
   models: readonly ProviderModelView[];
 }
 
@@ -672,16 +675,39 @@ export interface ProviderStatusRefreshMessage {
   connectionId?: string;
 }
 
+export interface ProviderModelListMessage extends ProviderConnectionIdMessage {
+  /** Include rows not enabled on the connection (the unified per-connection listing). */
+  includeDisabled?: boolean;
+}
+
 export interface ProviderModelOption {
   selection: ModelSelection;
   connectionName: string;
   providerId: string;
   providerDisplayName: string | null;
   model: ProviderModelView;
+  /** Enabled models are usable in chat (present in the connection's model list). */
+  enabled: boolean;
+  /** A user metadata override exists over the catalog/discovered entry. */
+  customized: boolean;
+  /** When the provider's live endpoint last published this model, if ever. */
+  discoveredAt: string | null;
   available: boolean;
   unavailableReason: string | null;
   /** Whether the trusted provider driver can route this selection to RAG embeddings. */
   embeddingSupported?: boolean;
+}
+
+/** Result of one explicit live-discovery fetch; never thrown for endpoint failures. */
+export interface ProviderDiscoverModelsResult {
+  connection: ProviderConnectionView;
+  status: 'ok' | 'unsupported' | 'no-credential' | 'failed';
+  /** Live models now tracked on the connection. */
+  discoveredModelCount: number;
+  /** Discovered ids unknown to the catalog and user-defined models. */
+  addedModelIds: readonly string[];
+  /** Redacted, user-presentable detail; null when nothing needs surfacing. */
+  message: string | null;
 }
 
 export interface ProviderMutationResult {
@@ -1171,7 +1197,9 @@ export interface OrchidAPI {
       message: ProviderDeleteConnectionMessage,
     ) => Promise<ProviderDeleteConnectionResult>;
     /** Connection-scoped typed model options, including unavailable reasons. */
-    modelList: (message?: ProviderConnectionIdMessage) => Promise<readonly ProviderModelOption[]>;
+    modelList: (message?: ProviderModelListMessage) => Promise<readonly ProviderModelOption[]>;
+    /** One explicit live model discovery fetch for a connection; never polled (R26). */
+    discoverModels: (message: ProviderConnectionIdMessage) => Promise<ProviderDiscoverModelsResult>;
     /** Refresh informational status only; it never changes connection health. */
     refreshStatus: (message: ProviderStatusRefreshMessage) => Promise<ProviderStatusView | null>;
   };
@@ -1399,6 +1427,7 @@ export const IPC_CHANNELS = {
   PROVIDERS_DISCONNECT: 'providers:disconnect',
   PROVIDERS_DELETE: 'providers:delete',
   PROVIDERS_MODEL_LIST: 'providers:model_list',
+  PROVIDERS_DISCOVER_MODELS: 'providers:discover_models',
   PROVIDERS_STATUS_REFRESH: 'providers:status_refresh',
 
   // Session
@@ -1556,6 +1585,7 @@ export const ALLOWED_INVOKE_CHANNELS = [
   IPC_CHANNELS.PROVIDERS_DISCONNECT,
   IPC_CHANNELS.PROVIDERS_DELETE,
   IPC_CHANNELS.PROVIDERS_MODEL_LIST,
+  IPC_CHANNELS.PROVIDERS_DISCOVER_MODELS,
   IPC_CHANNELS.PROVIDERS_STATUS_REFRESH,
   IPC_CHANNELS.SESSION_LIST,
   IPC_CHANNELS.SESSION_LOAD,

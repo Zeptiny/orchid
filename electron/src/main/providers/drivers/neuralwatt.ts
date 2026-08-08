@@ -1,7 +1,14 @@
 import type { LanguageModelV4 } from '@ai-sdk/provider';
 import { createUnwrappingFetch } from '../../llm/response-unwrap';
 import { importESM } from '../../utils/esm-import';
+import type { DiscoveredProviderModel } from '../../../shared/types/provider';
+import type {
+  PriceRate,
+  PricingRateFields,
+  ProviderRateCard,
+} from '../../../shared/types/provider-facets';
 import type { ProviderDriver } from './types';
+import { fetchModelsEndpoint, modelsListEntries, recordEntries } from './models-endpoint';
 import type { ProviderStatusObservation } from '../status/cache';
 import {
   parseRetryAfter,
@@ -11,6 +18,7 @@ import {
 
 /** Code-owned Neuralwatt OpenAI-compatible API origin. */
 export const NEURALWATT_API_ORIGIN = 'https://api.neuralwatt.com/v1';
+export const NEURALWATT_MODELS_URL = `${NEURALWATT_API_ORIGIN}/models`;
 export const NEURALWATT_QUOTA_URL = `${NEURALWATT_API_ORIGIN}/quota`;
 export const NEURALWATT_STATUS_TTL_MS = 5 * 60_000;
 export const NEURALWATT_STATUS_MINIMUM_MANUAL_REFRESH_MS = 30_000;
@@ -88,7 +96,143 @@ function apiKeyForDriver(credential: { kind: string; apiKey?: string }): string 
   return '';
 }
 
-export function createNeuralwattProviderDriver(): ProviderDriver {
+const NEURALWATT_MODALITIES = ['text', 'image', 'audio', 'video', 'pdf', 'embedding'] as const;
+
+type NeuralwattModality = (typeof NEURALWATT_MODALITIES)[number];
+
+function neuralwattModalities(value: unknown): readonly NeuralwattModality[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const modalities = value.filter(
+    (item): item is NeuralwattModality =>
+      typeof item === 'string'
+      && (NEURALWATT_MODALITIES as readonly string[]).includes(item),
+  );
+  return modalities.length > 0 ? modalities : undefined;
+}
+
+function positiveInteger(value: unknown): number | null {
+  return typeof value === 'number' && Number.isInteger(value) && value > 0 ? value : null;
+}
+
+function firstPositiveInteger(...values: readonly unknown[]): number | null {
+  for (const value of values) {
+    const parsed = positiveInteger(value);
+    if (parsed !== null) return parsed;
+  }
+  return null;
+}
+
+function tokenRate(value: unknown): PriceRate | undefined {
+  const amount = decimal(value);
+  return amount === undefined ? undefined : { amount, per: 1_000_000, unit: 'tokens' };
+}
+
+/** Inline rates published per model; absent fields simply contribute nothing. */
+function parseNeuralwattInlinePricing(value: unknown, now: Date): ProviderRateCard | undefined {
+  const pricing = recordEntries(value);
+  if (!pricing) return undefined;
+  const currency = pricing['currency'];
+  const rates: PricingRateFields = {};
+  const input = tokenRate(pricing['input_usd_per_million_tokens']);
+  const output = tokenRate(pricing['output_usd_per_million_tokens']);
+  const cacheRead = tokenRate(pricing['cache_read_usd_per_million_tokens']);
+  const cacheWrite = tokenRate(pricing['cache_write_usd_per_million_tokens']);
+  const reasoning = tokenRate(pricing['reasoning_usd_per_million_tokens']);
+  const perRequestAmount = decimal(pricing['request_fee_usd']);
+  const energyAmount = decimal(pricing['energy_usd_per_kwh']);
+  if (input) rates.input = input;
+  if (output) rates.output = output;
+  if (cacheRead) rates.cacheRead = cacheRead;
+  if (cacheWrite) rates.cacheWrite = cacheWrite;
+  if (reasoning) rates.reasoning = reasoning;
+  if (perRequestAmount !== undefined) rates.perRequest = { amount: perRequestAmount, per: 1, unit: 'requests' };
+  if (energyAmount !== undefined) rates.energy = { amount: energyAmount, per: 1, unit: 'energy' };
+  if (Object.keys(rates).length === 0) return undefined;
+  const observedAt = timestamp(pricing['observed_at']) ?? now.toISOString();
+  return {
+    currencyUnit: {
+      kind: 'fiat',
+      code: typeof currency === 'string' && /^[A-Z]{3}$/.test(currency) ? currency : 'USD',
+    },
+    observedAt,
+    rates,
+  };
+}
+
+/**
+ * Parse Neuralwatt's models list. Entries carry inline pricing, limits, and
+ * reasoning metadata when published; an entry that only carries an id
+ * contributes nothing beyond that id (R27).
+ */
+export function parseNeuralwattModels(payload: unknown, now = new Date()): DiscoveredProviderModel[] {
+  return modelsListEntries(payload, 'Neuralwatt').map((entry) => {
+    const id = entry['id'] as string;
+    const displayName = entry['display_name'] ?? entry['name'];
+    const inputModalities = neuralwattModalities(entry['input_modalities']);
+    const outputModalities = neuralwattModalities(entry['output_modalities']);
+    const contextTokens = firstPositiveInteger(
+      entry['context_tokens'],
+      entry['context_length'],
+      entry['max_context_tokens'],
+    );
+    const outputTokens = firstPositiveInteger(entry['output_tokens'], entry['max_output_tokens']);
+    const reasoningLevels = Array.isArray(entry['reasoning_levels'])
+      ? entry['reasoning_levels']
+        .filter((level): level is string => typeof level === 'string' && level.trim() !== '')
+        .slice(0, 50)
+      : undefined;
+    const reasoningDefault = entry['reasoning_default'];
+    const pricing = parseNeuralwattInlinePricing(entry['pricing'], now);
+    return {
+      id,
+      ...(typeof displayName === 'string' && displayName.trim() !== ''
+        ? { displayName: displayName.trim() }
+        : {}),
+      // A capabilities block is emitted only when the endpoint describes the
+      // modality surface; otherwise catalog/user metadata must not degrade.
+      ...(inputModalities && outputModalities
+        ? {
+          capabilities: {
+            inputModalities: [...inputModalities],
+            outputModalities: [...outputModalities],
+            tools: entry['tools'] === true,
+            reasoning: entry['reasoning'] === true,
+          },
+        }
+        : {}),
+      ...(contextTokens !== null || outputTokens !== null
+        ? { limits: { contextTokens, outputTokens } }
+        : {}),
+      ...(reasoningLevels && reasoningLevels.length > 0 ? { reasoningLevels } : {}),
+      ...(typeof reasoningDefault === 'string' && reasoningDefault.trim() !== ''
+        ? { reasoningDefault: reasoningDefault.trim() }
+        : positiveInteger(reasoningDefault) !== null
+          ? { reasoningDefault: reasoningDefault as number }
+          : {}),
+      ...(pricing ? { pricing } : {}),
+    };
+  });
+}
+
+export async function fetchNeuralwattModels(options: {
+  readonly apiKey: string;
+  readonly fetch?: typeof globalThis.fetch;
+  readonly now?: () => Date;
+  readonly signal?: AbortSignal;
+  readonly timeoutMs?: number;
+}): Promise<readonly DiscoveredProviderModel[]> {
+  const payload = await fetchModelsEndpoint(NEURALWATT_MODELS_URL, options.apiKey, 'Neuralwatt', {
+    fetch: options.fetch,
+    signal: options.signal,
+    timeoutMs: options.timeoutMs,
+  });
+  return parseNeuralwattModels(payload, options.now?.() ?? new Date());
+}
+
+export function createNeuralwattProviderDriver(options: {
+  readonly fetch?: typeof globalThis.fetch;
+  readonly now?: () => Date;
+} = {}): ProviderDriver {
   return {
     id: 'neuralwatt',
     supportedAuthMethods: ['api-key', 'environment'],
@@ -118,6 +262,13 @@ export function createNeuralwattProviderDriver(): ProviderDriver {
           providerEvidence: { ...neural },
         };
       },
+    },
+    discoveryFacet: {
+      fetchModels: ({ credential }) => fetchNeuralwattModels({
+        apiKey: apiKeyForDriver(credential),
+        fetch: options.fetch,
+        now: options.now,
+      }),
     },
   };
 }

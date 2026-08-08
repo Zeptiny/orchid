@@ -43,6 +43,7 @@ import type {
   ProviderConnectionIdMessage,
   ProviderDisconnectMessage,
   ProviderDeleteConnectionMessage,
+  ProviderModelListMessage,
   ProviderStatusRefreshMessage,
   SessionLoadMessage,
   SessionOpenMessage,
@@ -408,8 +409,11 @@ const orchidAPI: OrchidAPI = {
     deleteConnection: (message: ProviderDeleteConnectionMessage) =>
       invoke(IPC_CHANNELS.PROVIDERS_DELETE, message),
 
-    modelList: (message?: ProviderConnectionIdMessage) =>
+    modelList: (message?: ProviderModelListMessage) =>
       invoke(IPC_CHANNELS.PROVIDERS_MODEL_LIST, message),
+
+    discoverModels: (message: ProviderConnectionIdMessage) =>
+      invoke(IPC_CHANNELS.PROVIDERS_DISCOVER_MODELS, message),
 
     refreshStatus: (message: ProviderStatusRefreshMessage) =>
       invoke(IPC_CHANNELS.PROVIDERS_STATUS_REFRESH, message),

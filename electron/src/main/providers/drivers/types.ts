@@ -34,6 +34,15 @@ export interface DriverModelRequest {
   readonly endpoint?: string;
 }
 
+/** Discovery requests resolve no model: the hook enumerates what exists. */
+export interface DriverDiscoveryRequest {
+  readonly connection: ProviderConnection;
+  readonly provider: ProviderDefinition;
+  readonly credential: DriverCredential;
+  /** Present only for generic drivers after URL validation. */
+  readonly endpoint?: string;
+}
+
 /**
  * Main-process-only target for Orchid's OpenAI-compatible embedding client.
  * It is deliberately constructed by trusted driver code rather than from a
@@ -97,7 +106,7 @@ export interface DriverQuotaFacet {
 
 /** Live model discovery from the provider's models endpoint (R26). */
 export interface DriverDiscoveryFacet {
-  readonly fetchModels: (request: DriverModelRequest) => Promise<readonly DiscoveredProviderModel[]>;
+  readonly fetchModels: (request: DriverDiscoveryRequest) => Promise<readonly DiscoveredProviderModel[]>;
 }
 
 /**

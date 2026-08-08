@@ -8,6 +8,7 @@ import {
   updateProviderConnectionSchema,
   PROVIDER_CONNECTION_DOCUMENT_VERSION,
   type CreateProviderConnectionInput,
+  type DiscoveredConnectionModel,
   type ProviderConnection,
   type ProviderConnectionDocument,
   type ReasoningModelConfig,
@@ -152,6 +153,22 @@ export class ConnectionStore {
       await this.beforePersist?.();
       atomicWriteJson(this.filePath, { version: PROVIDER_CONNECTION_DOCUMENT_VERSION, connections });
       return updated;
+    });
+  }
+
+  /**
+   * Persist one fresh live-discovery snapshot. User configuration layers
+   * (customModels, pricingOverrides, tierSelections, modelIds) are never
+   * touched; reasoningConfig arrives pre-merged fill-absent by the caller.
+   */
+  async persistDiscoveredModels(
+    id: string,
+    discoveredModels: readonly DiscoveredConnectionModel[],
+    reasoningConfig?: Record<string, ReasoningModelConfig>,
+  ): Promise<ProviderConnection> {
+    return this.update(id, {
+      discoveredModels: [...discoveredModels],
+      ...(reasoningConfig ? { reasoningConfig } : {}),
     });
   }
 

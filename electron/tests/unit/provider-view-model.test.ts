@@ -34,6 +34,9 @@ function option(connectionId: string, modelId: string): ProviderModelOption {
       capabilities: null,
       limits: null,
     },
+    enabled: true,
+    customized: false,
+    discoveredAt: null,
     available: true,
     unavailableReason: null,
   };
