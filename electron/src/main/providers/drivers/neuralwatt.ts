@@ -104,6 +104,21 @@ export function createNeuralwattProviderDriver(): ProviderDriver {
         apiKey: apiKeyForDriver(credential),
       });
     },
+    pricingFacet: {
+      costEvidence: ({ headers, rawUsage }) => {
+        const neural = extractNeuralwattBillingEvidence(new Headers(headers), rawUsage);
+        return {
+          ...(neural.reportedCostUsd ? { reportedCostAmount: neural.reportedCostUsd, reportedCurrency: 'USD' } : {}),
+          ...(neural.accountingMethod ? { accountingMethod: neural.accountingMethod } : {}),
+          ...(neural.energyRateUsdPerKwh ? { energyRateUsdPerKwh: neural.energyRateUsdPerKwh } : {}),
+          ...(neural.accountingMethod ? { currency: 'USD' } : {}),
+          ...(neural.energyKwhConsumed ? { energyKwhConsumed: neural.energyKwhConsumed } : {}),
+          ...(neural.energyKwhCharged ? { energyKwhCharged: neural.energyKwhCharged } : {}),
+          ...(neural.pricingMultiplier ? { pricingMultiplier: neural.pricingMultiplier } : {}),
+          providerEvidence: { ...neural },
+        };
+      },
+    },
   };
 }
 

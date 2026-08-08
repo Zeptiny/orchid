@@ -1,8 +1,14 @@
 import type { LanguageModelV4 } from '@ai-sdk/provider';
+import Decimal from 'decimal.js';
 import { createUnwrappingFetch } from '../../llm/response-unwrap';
 import { importESM } from '../../utils/esm-import';
 import type { ProviderDriver } from './types';
 import type { ProviderStatusObservation } from '../status/cache';
+import type {
+  PricingRateFields,
+  ProviderModelRateCard,
+} from '../../../shared/types/provider-facets';
+import { scalePricingRateFields } from '../facets/pricing';
 import {
   parseRetryAfter,
   StatusRefreshError,
@@ -16,6 +22,7 @@ export const LILAC_STATUS_URL = 'https://api.getlilac.com/status?window=5m';
 export const LILAC_STATUS_TTL_MS = 5 * 60_000;
 export const LILAC_STATUS_MINIMUM_MANUAL_REFRESH_MS = 30_000;
 export const LILAC_STATUS_REQUEST_TIMEOUT_MS = 15_000;
+export const LILAC_PRICING_REFRESH_INTERVAL_SECONDS = LILAC_STATUS_TTL_MS / 1000;
 
 export type LilacSupplyState = 'low' | 'medium' | 'high' | 'surplus';
 
@@ -62,10 +69,55 @@ export async function createLilacLanguageModel(input: {
 }
 
 /**
+ * Lilac publishes a live subscription multiplier alongside its discount. Both
+ * values must be present, fresh, and tied to a model before they can adjust
+ * that model's list rates. We never derive either value from the other,
+ * supply state, or performance data. The public status endpoint deliberately
+ * receives no API credential.
+ */
+export async function fetchLilacPricingRateCards(input: {
+  readonly catalogRates?: Readonly<Record<string, PricingRateFields>>;
+  readonly fetch?: typeof globalThis.fetch;
+  readonly now?: () => Date;
+}): Promise<readonly ProviderModelRateCard[]> {
+  const observation = await fetchLilacStatus({ fetch: input.fetch, now: input.now });
+  if (observation.stale || observation.availability !== 'available') {
+    throw new Error('Lilac live pricing is unavailable from a stale status observation');
+  }
+  const data = observation.data as LilacStatusData;
+  const cards: ProviderModelRateCard[] = [];
+  for (const model of data.models) {
+    const { subscription } = model;
+    if (subscription.availability !== 'available') continue;
+    if (subscription.discountPercent === null || subscription.creditMultiplier === null) continue;
+    const base = input.catalogRates?.[model.modelId];
+    if (!base) continue;
+    const multiplier = new Decimal(String(subscription.creditMultiplier));
+    cards.push({
+      modelId: model.modelId,
+      currencyUnit: { kind: 'fiat', code: 'USD' },
+      observedAt: data.subscriptionSupplyUpdatedAt ?? observation.providerUpdatedAt ?? observation.observedAt,
+      rates: scalePricingRateFields(base, multiplier),
+      adjustment: {
+        kind: 'subscription-multiplier',
+        multiplier: multiplier.toFixed(),
+        discountPercent: subscription.discountPercent,
+        providerUpdatedAt: observation.providerUpdatedAt,
+        supplyUpdatedAt: data.subscriptionSupplyUpdatedAt,
+      },
+    });
+  }
+  return cards;
+}
+
+/**
  * A specialized, code-owned Lilac driver. Catalog data can select models but
  * cannot redirect credentials or transport to another endpoint.
  */
-export function createLilacProviderDriver(): ProviderDriver {
+export function createLilacProviderDriver(options: {
+  readonly fetch?: typeof globalThis.fetch;
+  readonly now?: () => Date;
+} = {}): ProviderDriver {
   return {
     id: 'lilac',
     supportedAuthMethods: ['api-key', 'environment'],
@@ -76,6 +128,16 @@ export function createLilacProviderDriver(): ProviderDriver {
       modelId: model.id,
       apiKey: apiKeyForLilac(credential),
     }),
+    pricingFacet: {
+      dynamic: {
+        refreshIntervalSeconds: LILAC_PRICING_REFRESH_INTERVAL_SECONDS,
+        fetchRates: (_request, context) => fetchLilacPricingRateCards({
+          catalogRates: context.catalogRates,
+          fetch: options.fetch,
+          now: options.now,
+        }),
+      },
+    },
   };
 }
 

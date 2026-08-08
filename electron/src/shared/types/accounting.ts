@@ -2,6 +2,7 @@
  * Immutable provider-attempt accounting contract. Values here are persisted in
  * the main-process ledger only; no credential-bearing fields are permitted.
  */
+import type { CurrencyUnit } from './provider-facets';
 
 export type AttemptOutcome = 'pending' | 'succeeded' | 'failed' | 'interrupted';
 export type CostState = 'reported' | 'calculated' | 'unknown';
@@ -10,10 +11,22 @@ export type CostSource = 'provider-reported' | 'token-formula' | 'energy-formula
 /** Decimal strings avoid floating-point drift in immutable money records. */
 export type DecimalText = string;
 
+/** Pricing ladder rung that produced a frozen rate (R5). */
+export type PricingRateSource = 'provider-api' | 'user' | 'catalog';
+
+export interface PricingRateProvenance {
+  readonly source: PricingRateSource;
+  /** Source observation time; null for sources without one (user overrides). */
+  readonly observedAt: string | null;
+  /** True when a dynamic provider source served latest-known data past its cadence. */
+  readonly stale?: boolean;
+}
+
 export interface PricingRateSnapshot {
   readonly amount: DecimalText;
   readonly per: number;
   readonly unit: 'tokens' | 'requests' | 'characters' | 'energy';
+  readonly provenance?: PricingRateProvenance;
 }
 
 export interface PricingInclusionSemantics {
@@ -22,17 +35,34 @@ export interface PricingInclusionSemantics {
   readonly reasoning: 'subset-of-output' | 'additional' | 'unknown';
 }
 
+/** Full rate dimension set frozen for one pricing scope (R9). */
+export interface PricingRateSnapshotSet {
+  readonly input?: PricingRateSnapshot;
+  readonly output?: PricingRateSnapshot;
+  readonly cacheRead?: PricingRateSnapshot;
+  readonly cacheWrite?: PricingRateSnapshot;
+  /** Cache-write rates for non-default TTLs, keyed by TTL label. */
+  readonly cacheWriteByTtl?: Readonly<Record<string, PricingRateSnapshot>>;
+  readonly reasoning?: PricingRateSnapshot;
+  /** Flat fee charged per request, independent of token usage. */
+  readonly perRequest?: PricingRateSnapshot;
+  readonly energy?: PricingRateSnapshot;
+}
+
+/** Rates that apply once the context exceeds a threshold of input tokens. */
+export interface FrozenPricingContextTier {
+  readonly overContextTokens: number;
+  readonly rates: PricingRateSnapshotSet;
+}
+
 export interface FrozenPricingSnapshot {
+  /** Cost-bucketing label: the ISO-4217 code for fiat, the native unit otherwise. */
   readonly currency: string;
+  /** Typed unit declaration; required context whenever currency is non-fiat (R8). */
+  readonly currencyUnit?: CurrencyUnit;
   readonly effectiveAt: string;
-  readonly rates: Readonly<{
-    input?: PricingRateSnapshot;
-    output?: PricingRateSnapshot;
-    cacheRead?: PricingRateSnapshot;
-    cacheWrite?: PricingRateSnapshot;
-    reasoning?: PricingRateSnapshot;
-    energy?: PricingRateSnapshot;
-  }>;
+  readonly rates: PricingRateSnapshotSet;
+  readonly contextTiers?: readonly FrozenPricingContextTier[];
   readonly inclusion: PricingInclusionSemantics;
   readonly provenance: Readonly<Record<string, unknown>>;
 }
@@ -82,6 +112,8 @@ export interface ProviderAttemptRecord {
   readonly providerEvidence: Readonly<Record<string, unknown>>;
   readonly costState: CostState;
   readonly costSource: CostSource;
+  /** Pricing ladder rung that produced a calculated cost; null when reported/unknown. */
+  readonly costRung: PricingRateSource | null;
   readonly currency: string | null;
   readonly costAmount: DecimalText | null;
   readonly error: string | null;

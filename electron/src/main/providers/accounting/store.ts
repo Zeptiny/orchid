@@ -7,11 +7,13 @@ import {
   type CostTotalsSummary,
   type KnownCostTotals,
   type NormalizedProviderUsage,
+  type PricingRateSource,
   type ProviderAttemptRecord,
 } from '../../../shared/types/accounting';
 import { HOME_CONFIG_DIR } from '../../config/loader';
 import { redactLogString } from '../../logging';
 import { providerProtocolSchema } from '../../../shared/types/provider';
+import { currencyUnitSchema } from '../../../shared/types/provider-facets';
 import { openSqliteDb, type SqliteDatabase } from '../../utils/sqlite';
 import { ACCOUNTING_SCHEMA_SQL, ACCOUNTING_SCHEMA_VERSION, applyAccountingSchemaMigrations } from './schema';
 import type { AttemptCostResolution } from './cost';
@@ -65,10 +67,26 @@ function json(value: unknown): string {
 }
 
 const decimalTextSchema = z.string().regex(/^(?:0|[1-9]\d*)(?:\.\d+)?$/);
+const pricingRateProvenanceSchema = z.object({
+  source: z.enum(['provider-api', 'user', 'catalog']),
+  observedAt: z.string().datetime().nullable(),
+  stale: z.boolean().optional(),
+});
 const pricingRateSnapshotSchema = z.object({
   amount: decimalTextSchema,
   per: z.number().int().positive(),
   unit: z.enum(['tokens', 'requests', 'characters', 'energy']),
+  provenance: pricingRateProvenanceSchema.optional(),
+});
+const pricingRateSnapshotSetSchema = z.object({
+  input: pricingRateSnapshotSchema.optional(),
+  output: pricingRateSnapshotSchema.optional(),
+  cacheRead: pricingRateSnapshotSchema.optional(),
+  cacheWrite: pricingRateSnapshotSchema.optional(),
+  cacheWriteByTtl: z.record(pricingRateSnapshotSchema).optional(),
+  reasoning: pricingRateSnapshotSchema.optional(),
+  perRequest: pricingRateSnapshotSchema.optional(),
+  energy: pricingRateSnapshotSchema.optional(),
 });
 const frozenProviderRequestSnapshotSchema = z.object({
   providerId: z.string().min(1),
@@ -83,16 +101,14 @@ const frozenProviderRequestSnapshotSchema = z.object({
   catalogSource: z.enum(['bundled', 'cache', 'none']),
   catalogObservedAt: z.string().datetime().nullable(),
   pricing: z.object({
-    currency: z.string().regex(/^[A-Z]{3}$/),
+    currency: z.string().trim().min(1).max(24),
+    currencyUnit: currencyUnitSchema.optional(),
     effectiveAt: z.string().datetime(),
-    rates: z.object({
-      input: pricingRateSnapshotSchema.optional(),
-      output: pricingRateSnapshotSchema.optional(),
-      cacheRead: pricingRateSnapshotSchema.optional(),
-      cacheWrite: pricingRateSnapshotSchema.optional(),
-      reasoning: pricingRateSnapshotSchema.optional(),
-      energy: pricingRateSnapshotSchema.optional(),
-    }),
+    rates: pricingRateSnapshotSetSchema,
+    contextTiers: z.array(z.object({
+      overContextTokens: z.number().int().nonnegative(),
+      rates: pricingRateSnapshotSetSchema,
+    })).optional(),
     inclusion: z.object({
       cacheRead: z.enum(['subset-of-input', 'additional', 'unknown']),
       cacheWrite: z.enum(['subset-of-input', 'additional', 'unknown']),
@@ -159,6 +175,7 @@ type AttemptRow = {
   provider_evidence_json: string;
   cost_state: ProviderAttemptRecord['costState'];
   cost_source: ProviderAttemptRecord['costSource'];
+  cost_rung: string | null;
   currency: string | null;
   cost_amount: string | null;
   error: string | null;
@@ -169,6 +186,10 @@ type AttemptRow = {
 };
 
 function rowToRecord(row: AttemptRow): ProviderAttemptRecord {
+  const costRung: PricingRateSource | null =
+    row.cost_rung === 'provider-api' || row.cost_rung === 'user' || row.cost_rung === 'catalog'
+      ? row.cost_rung
+      : null;
   return {
     attemptId: row.attempt_id,
     sessionId: row.session_id,
@@ -185,6 +206,7 @@ function rowToRecord(row: AttemptRow): ProviderAttemptRecord {
     providerEvidence: parseJson(row.provider_evidence_json, 'provider evidence', providerEvidenceSchema),
     costState: row.cost_state,
     costSource: row.cost_source,
+    costRung,
     currency: row.currency,
     costAmount: row.cost_amount,
     error: row.error,
@@ -222,9 +244,9 @@ export class ProviderAccountingStore {
         attempt_id, session_id, chain_id, turn_id, sdk_call_id,
         provider_id, connection_id, model_id, protocol, snapshot_json,
         outcome, started_at, completed_at, usage_json, provider_evidence_json,
-        cost_state, cost_source, currency, cost_amount, error,
+        cost_state, cost_source, cost_rung, currency, cost_amount, error,
         agent_scope, agent_name, agent_tier, agent_type
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, NULL, NULL, '{}', 'unknown', 'unknown', NULL, NULL, NULL, ?, ?, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, NULL, NULL, '{}', 'unknown', 'unknown', NULL, NULL, NULL, NULL, ?, ?, ?, ?)
     `).run(
       input.attemptId,
       input.sessionId,
@@ -249,10 +271,11 @@ export class ProviderAccountingStore {
     const db = this.connection();
     const evidence: Record<string, unknown> = { ...input.providerEvidence };
     if (input.cost.state === 'unknown') evidence.costReason = input.cost.reason;
+    if (input.cost.state !== 'unknown' && input.cost.rateRungStale) evidence.costRungStale = true;
     const result = db.prepare(`
       UPDATE provider_attempts
       SET outcome = ?, completed_at = ?, usage_json = ?, provider_evidence_json = ?,
-          cost_state = ?, cost_source = ?, currency = ?, cost_amount = ?, error = ?
+          cost_state = ?, cost_source = ?, cost_rung = ?, currency = ?, cost_amount = ?, error = ?
       WHERE attempt_id = ? AND outcome = 'pending'
     `).run(
       input.outcome,
@@ -261,6 +284,7 @@ export class ProviderAccountingStore {
       json(evidence),
       input.cost.state,
       input.cost.source,
+      input.cost.state === 'unknown' ? null : input.cost.rateRung ?? null,
       input.cost.state === 'unknown' ? null : input.cost.currency,
       input.cost.state === 'unknown' ? null : input.cost.amount,
       input.error ? redactLogString(input.error) : null,

@@ -104,12 +104,14 @@ export async function startChatTurn(
   let modelInstance: LanguageModelV4;
   let providerSnapshot: ProviderAttemptAccountingContext['snapshot'];
   let providerOptions: ReasoningProviderOptions | undefined;
+  let pricingFacet: ProviderAttemptAccountingContext['pricingFacet'];
   let accountingStore: ReturnType<typeof getProviderAccountingStore>;
   try {
     accountingStore = getProviderAccountingStore();
     const execution = await getProviderRuntime().resolveExecution(turnSelection);
     modelInstance = execution.modelInstance;
     providerSnapshot = execution.snapshot;
+    pricingFacet = execution.pricingFacet;
     const effort = resolveMainAgentEffort(
       sessionGate.session, execution.connection, turnSelection.modelId,
       execution.model.capabilities?.reasoning === true,
@@ -164,7 +166,7 @@ export async function startChatTurn(
   const accounting: ProviderAttemptAccountingContext = {
     store: accountingStore, sessionId, chainId, turnId, snapshot: providerSnapshot,
     agentScope: 'main', agentName: agent.name, agentType: agent.type, agentTier: agent.tier,
-   attemptIdHolder: { value: null },
+   attemptIdHolder: { value: null }, pricingFacet,
   };
   const mcpManager = acquireProjectMCPManager(runtime);
   let resourcesReleased = false;

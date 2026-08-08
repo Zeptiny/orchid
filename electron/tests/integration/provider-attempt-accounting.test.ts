@@ -229,4 +229,70 @@ describe('provider attempt accounting middleware', () => {
     })).rejects.toThrow(/ledger unavailable/);
     expect(transportCalls).toBe(0);
   });
+
+  it('routes evidence through the driver pricing facet and records the rate rung', async () => {
+    const ledger = store();
+    const energySnapshot: FrozenProviderRequestSnapshot = {
+      ...snapshot(),
+      providerId: 'neuralwatt',
+      pricing: {
+        currency: 'USD', effectiveAt: '2026-07-12T00:00:00.000Z',
+        rates: {
+          energy: {
+            amount: '5', per: 1, unit: 'energy',
+            provenance: { source: 'provider-api', observedAt: '2026-07-12T00:00:00.000Z' },
+          },
+        },
+        inclusion: { cacheRead: 'unknown', cacheWrite: 'unknown', reasoning: 'unknown' },
+        provenance: { source: 'provider-api' },
+      },
+    };
+    const middleware = createAttemptAccountingMiddleware({
+      store: ledger, sessionId: 'session-1', chainId: 'chain-1', turnId: 'turn-1', snapshot: energySnapshot,
+      pricingFacet: {
+        costEvidence: () => ({
+          accountingMethod: 'energy',
+          currency: 'USD',
+          energyKwhConsumed: '0.02',
+          energyKwhCharged: '0.013',
+          pricingMultiplier: '0.65',
+          providerEvidence: { accountingMethod: 'energy', measurementAvailable: true },
+        }),
+      },
+    });
+    const wrapStream = middleware.wrapStream! as unknown as (input: Record<string, unknown>) => Promise<{ stream: ReadableStream<unknown> }>;
+    const result = await wrapStream({
+      doStream: async () => ({
+        response: { headers: {} },
+        stream: new ReadableStream({
+          start(controller) {
+            controller.enqueue({
+              type: 'finish', finishReason: 'stop',
+              usage: {
+                inputTokens: { total: 10, noCache: 10, cacheRead: undefined, cacheWrite: undefined },
+                outputTokens: { total: 5, text: 5, reasoning: undefined },
+                raw: { accounting_method: 'energy' },
+              },
+            });
+            controller.close();
+          },
+        }),
+      }),
+      doGenerate: async () => { throw new Error('not used'); },
+      params: {}, model: {},
+    });
+    await consume(result.stream);
+
+    expect(ledger.listAttempts('session-1')[0]).toMatchObject({
+      outcome: 'succeeded',
+      costState: 'calculated',
+      costSource: 'energy-formula',
+      costRung: 'provider-api',
+      costAmount: '0.065',
+      usage: { energyKwhConsumed: '0.02', energyKwhCharged: '0.013', pricingMultiplier: '0.65' },
+      // The ledger sanitizer redacts account-shaped keys before persistence.
+      providerEvidence: { neuralwatt: { accountingMethod: '[REDACTED]', measurementAvailable: true } },
+    });
+    ledger.close();
+  });
 });

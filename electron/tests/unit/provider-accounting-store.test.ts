@@ -167,4 +167,152 @@ describe('ProviderAccountingStore', () => {
     expect(() => restored.getAttempt('corrupt-snapshot')).toThrow(/invalid snapshot/i);
     restored.close();
   });
+
+  it('persists the pricing ladder rung on calculated attempts and null otherwise', () => {
+    const store = createStore();
+    store.insertPending({ attemptId: 'rung-user', sessionId: 'session-1', chainId: null, turnId: null, sdkCallId: null, snapshot: snapshot() });
+    store.insertPending({ attemptId: 'rung-reported', sessionId: 'session-1', chainId: null, turnId: null, sdkCallId: null, snapshot: snapshot() });
+    store.finalize('rung-user', {
+      outcome: 'succeeded',
+      usage: { inputTokens: 10, outputTokens: 5, totalTokens: 15 },
+      providerEvidence: {},
+      cost: {
+        state: 'calculated', source: 'token-formula', currency: 'USD', amount: '0.001',
+        rateRung: 'user', rateRungStale: true,
+      },
+    });
+    store.finalize('rung-reported', {
+      outcome: 'succeeded',
+      usage: null,
+      providerEvidence: {},
+      cost: { state: 'reported', source: 'provider-reported', currency: 'USD', amount: '0.002' },
+    });
+    store.close();
+
+    const restored = new ProviderAccountingStore({ dbPath: path.join(tempDir!, 'accounting.db') });
+    const calculated = restored.getAttempt('rung-user');
+    expect(calculated).toMatchObject({ costRung: 'user', costState: 'calculated' });
+    expect(calculated?.providerEvidence.costRungStale).toBe(true);
+    expect(restored.getAttempt('rung-reported')).toMatchObject({ costRung: null, costState: 'reported' });
+    restored.close();
+  });
+
+  it('round-trips frozen pricing with ladder provenance, TTL variants, tiers, and native units', () => {
+    const store = createStore();
+    const frozen: FrozenProviderRequestSnapshot = {
+      ...snapshot(),
+      pricing: {
+      currency: 'kWh',
+      currencyUnit: { kind: 'non-fiat', unit: 'kWh', displayName: 'kilowatt-hour' },
+      effectiveAt: '2026-07-12T00:00:00.000Z',
+      rates: {
+        input: {
+          amount: '5', per: 1_000_000, unit: 'tokens',
+          provenance: { source: 'provider-api', observedAt: '2026-07-12T00:00:00.000Z', stale: true },
+        },
+        cacheWriteByTtl: {
+          '1h': {
+            amount: '6', per: 1_000_000, unit: 'tokens',
+            provenance: { source: 'user', observedAt: null },
+          },
+        },
+        perRequest: { amount: '0.01', per: 1, unit: 'requests' },
+        energy: { amount: '1.5', per: 1, unit: 'energy' },
+      },
+      contextTiers: [{
+        overContextTokens: 100_000,
+        rates: { input: { amount: '10', per: 1_000_000, unit: 'tokens' } },
+      }],
+        inclusion: { cacheRead: 'subset-of-input', cacheWrite: 'additional', reasoning: 'unknown' },
+        provenance: { source: 'provider-api', dynamic: { state: 'stale' } },
+      },
+    };
+    store.insertPending({ attemptId: 'rich-snapshot', sessionId: 'session-1', chainId: null, turnId: null, sdkCallId: null, snapshot: frozen });
+    store.finalize('rich-snapshot', {
+      outcome: 'succeeded',
+      usage: { energyKwhConsumed: '0.02', energyKwhCharged: '0.013', pricingMultiplier: '0.65' },
+      providerEvidence: {},
+      cost: {
+        state: 'calculated', source: 'energy-formula', currency: 'kWh', amount: '0.0195',
+        rateRung: 'provider-api', rateRungStale: true,
+      },
+    });
+    store.close();
+
+    const restored = new ProviderAccountingStore({ dbPath: path.join(tempDir!, 'accounting.db') });
+    const attempt = restored.getAttempt('rich-snapshot');
+    expect(attempt).toMatchObject({
+      costRung: 'provider-api',
+      currency: 'kWh',
+      costAmount: '0.0195',
+      usage: { energyKwhConsumed: '0.02', energyKwhCharged: '0.013', pricingMultiplier: '0.65' },
+      snapshot: {
+        pricing: {
+          currency: 'kWh',
+          currencyUnit: { kind: 'non-fiat', unit: 'kWh' },
+          rates: {
+            input: { provenance: { source: 'provider-api', stale: true } },
+            cacheWriteByTtl: { '1h': { amount: '6' } },
+            perRequest: { amount: '0.01', unit: 'requests' },
+          },
+          contextTiers: [{ overContextTokens: 100_000 }],
+        },
+      },
+    });
+    restored.close();
+  });
+
+  it('migrates a legacy provider_attempts table without a cost_rung column', () => {
+    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'orchid-accounting-'));
+    const dbPath = path.join(tempDir, 'accounting.db');
+    const legacy = new Database(dbPath);
+    legacy.prepare(`
+      CREATE TABLE provider_attempts (
+        attempt_id TEXT PRIMARY KEY,
+        session_id TEXT NOT NULL,
+        chain_id TEXT,
+        turn_id TEXT,
+        sdk_call_id TEXT,
+        provider_id TEXT NOT NULL,
+        connection_id TEXT NOT NULL,
+        model_id TEXT NOT NULL,
+        protocol TEXT NOT NULL,
+        snapshot_json TEXT NOT NULL,
+        outcome TEXT NOT NULL,
+        started_at TEXT NOT NULL,
+        completed_at TEXT,
+        usage_json TEXT,
+        provider_evidence_json TEXT NOT NULL DEFAULT '{}',
+        cost_state TEXT NOT NULL,
+        cost_source TEXT NOT NULL,
+        currency TEXT,
+        cost_amount TEXT,
+        error TEXT,
+        agent_scope TEXT,
+        agent_name TEXT,
+        agent_tier TEXT,
+        agent_type TEXT
+      )
+    `).run();
+    legacy.prepare(`
+      INSERT INTO provider_attempts (
+        attempt_id, session_id, provider_id, connection_id, model_id, protocol,
+        snapshot_json, outcome, started_at, cost_state, cost_source
+      ) VALUES ('legacy-row', 'session-1', 'anthropic', '11111111-1111-4111-8111-111111111111',
+        'claude-test', 'anthropic-messages', ?, 'succeeded', '2026-07-12T00:00:00.000Z', 'calculated', 'token-formula')
+    `).run(JSON.stringify(snapshot()));
+    legacy.close();
+
+    const store = new ProviderAccountingStore({ dbPath });
+    expect(store.getAttempt('legacy-row')).toMatchObject({ costRung: null, costState: 'calculated' });
+    store.insertPending({ attemptId: 'after-migration', sessionId: 'session-1', chainId: null, turnId: null, sdkCallId: null, snapshot: snapshot() });
+    store.finalize('after-migration', {
+      outcome: 'succeeded',
+      usage: null,
+      providerEvidence: {},
+      cost: { state: 'calculated', source: 'token-formula', currency: 'USD', amount: '0.1', rateRung: 'catalog' },
+    });
+    expect(store.getAttempt('after-migration')).toMatchObject({ costRung: 'catalog' });
+    store.close();
+  });
 });

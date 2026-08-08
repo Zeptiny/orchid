@@ -76,12 +76,33 @@ export const pricingContextTierSchema = z.object({
 
 export type PricingContextTier = z.infer<typeof pricingContextTierSchema>;
 
+/**
+ * Typed evidence for a driver-applied rate adjustment, for example a live
+ * subscription multiplier composed over the provider's base rates (R4).
+ */
+export const pricingRateAdjustmentSchema = z.object({
+  /** Machine-readable adjustment kind, for example 'subscription-multiplier'. */
+  kind: nonEmptyString,
+  /** Multiplier the driver applied to the base rates, as decimal text. */
+  multiplier: decimalStringSchema,
+  /** Provider-disclosed discount percentage accompanying the multiplier. */
+  discountPercent: z.number().nonnegative().optional(),
+  /** Provider source timestamp for the adjusted pricing data. */
+  providerUpdatedAt: isoTimestampSchema.nullable().optional(),
+  /** Provider source timestamp for the underlying supply/subscription state. */
+  supplyUpdatedAt: isoTimestampSchema.nullable().optional(),
+}).strict();
+
+export type PricingRateAdjustment = z.infer<typeof pricingRateAdjustmentSchema>;
+
 /** One model's rates as returned by a provider pricing API (R7). */
 export const providerRateCardSchema = z.object({
   currencyUnit: currencyUnitSchema,
   observedAt: isoTimestampSchema,
   rates: pricingRateFieldsSchema,
   contextTiers: z.array(pricingContextTierSchema).optional(),
+  /** Typed adjustment evidence when the driver composed the rates (R4). */
+  adjustment: pricingRateAdjustmentSchema.optional(),
 }).strict();
 
 export type ProviderRateCard = z.infer<typeof providerRateCardSchema>;

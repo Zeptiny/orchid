@@ -13,7 +13,7 @@ import type {
   FrozenProviderRequestSnapshot,
   NormalizedProviderUsage,
 } from '../../../shared/types/accounting';
-import { extractNeuralwattBillingEvidence } from '../drivers/neuralwatt';
+import type { DriverPricingFacet } from '../drivers/types';
 import { calculateAttemptCost, type AttemptCostEvidence } from './cost';
 import { ProviderAccountingStore } from './store';
 
@@ -29,6 +29,8 @@ export interface ProviderAttemptAccountingContext {
   readonly agentTier?: string | null;
   /** Mutable holder — the middleware writes the per-call attemptId here so the orchestrator can link context snapshots. */
   readonly attemptIdHolder?: { value: string | null };
+  /** Driver pricing facet that owns provider-specific cost evidence extraction. */
+  readonly pricingFacet?: DriverPricingFacet;
 }
 
 function normalizeUsage(usage: LanguageModelV4Usage | undefined): NormalizedProviderUsage | null {
@@ -130,8 +132,12 @@ function allowlistedHeaders(headers: Record<string, string> | undefined): Record
   return result;
 }
 
+/**
+ * The header allowlist applies to every provider; a driver pricing facet may
+ * replace the derived evidence with its own typed extraction (R4).
+ */
 function evidenceFor(
-  snapshot: FrozenProviderRequestSnapshot,
+  context: ProviderAttemptAccountingContext,
   usage: NormalizedProviderUsage | null,
   headers: Record<string, string> | undefined,
   rawUsage: unknown,
@@ -149,21 +155,26 @@ function evidenceFor(
     ...(rawUsage === undefined ? {} : { rawUsage }),
   };
 
-  if (snapshot.providerId === 'neuralwatt') {
-    const neural = extractNeuralwattBillingEvidence(new Headers(allowedHeaders), rawUsage);
+  const extracted = context.pricingFacet?.costEvidence?.({ headers: allowedHeaders, rawUsage });
+  if (extracted) {
     normalizedUsage = {
       ...(usage ?? {}),
-      ...(neural.energyKwhConsumed ? { energyKwhConsumed: neural.energyKwhConsumed } : {}),
-      ...(neural.energyKwhCharged ? { energyKwhCharged: neural.energyKwhCharged } : {}),
-      ...(neural.pricingMultiplier ? { pricingMultiplier: neural.pricingMultiplier } : {}),
+      ...(extracted.energyKwhConsumed ? { energyKwhConsumed: extracted.energyKwhConsumed } : {}),
+      ...(extracted.energyKwhCharged ? { energyKwhCharged: extracted.energyKwhCharged } : {}),
+      ...(extracted.pricingMultiplier ? { pricingMultiplier: extracted.pricingMultiplier } : {}),
     };
     evidence = {
-      ...(neural.reportedCostUsd ? { reportedCostAmount: neural.reportedCostUsd, reportedCurrency: 'USD' } : {}),
-      ...(neural.accountingMethod ? { accountingMethod: neural.accountingMethod } : {}),
-      ...(neural.energyRateUsdPerKwh ? { energyRateUsdPerKwh: neural.energyRateUsdPerKwh } : {}),
-      ...(neural.accountingMethod ? { currency: 'USD' } : {}),
+      ...(extracted.reportedCostAmount ? {
+        reportedCostAmount: extracted.reportedCostAmount,
+        ...(extracted.reportedCurrency ? { reportedCurrency: extracted.reportedCurrency } : {}),
+      } : {}),
+      ...(extracted.accountingMethod ? { accountingMethod: extracted.accountingMethod } : {}),
+      ...(extracted.energyRateUsdPerKwh ? { energyRateUsdPerKwh: extracted.energyRateUsdPerKwh } : {}),
+      ...(extracted.currency ? { currency: extracted.currency } : {}),
     };
-    providerEvidence.neuralwatt = neural;
+    if (extracted.providerEvidence) {
+      providerEvidence[context.snapshot.providerId] = extracted.providerEvidence;
+    }
   }
   return { evidence, providerEvidence, usage: normalizedUsage };
 }
@@ -198,7 +209,7 @@ export function createAttemptAccountingMiddleware(
         const chars = emptyOutputChars();
         trackContentChars(chars, result.content);
         const extracted = evidenceFor(
-          context.snapshot,
+          context,
           normalizeUsage(result.usage),
           result.response?.headers,
           result.usage.raw,
@@ -255,7 +266,7 @@ export function createAttemptAccountingMiddleware(
         finalized = true;
         const finish = part?.type === 'finish' ? part : undefined;
         const extracted = evidenceFor(
-          context.snapshot,
+          context,
           normalizeUsage(finish?.usage),
           result.response?.headers,
           finish?.usage.raw,

@@ -11,6 +11,7 @@ import type {
 import type {
   CacheFacet,
   CurrencyUnit,
+  PricingRateFields,
   ProviderModelRateCard,
   ProviderQuota,
   ThinkingPolicy,
@@ -43,15 +44,50 @@ export interface ProviderEmbeddingTarget {
   readonly apiKey: string | undefined;
 }
 
-/** Pricing metadata: native billing unit plus an optional dynamic-rate hook. */
+/** Catalog base rates handed to a dynamic pricing hook, keyed by model id. */
+export interface DriverPricingFetchContext {
+  /**
+   * Signed-catalog rate fields per model, for drivers whose live pricing is
+   * published relative to list rates (for example a subscription multiplier).
+   */
+  readonly catalogRates?: Readonly<Record<string, PricingRateFields>>;
+}
+
+/** Typed cost evidence a driver extracts from one provider response (R4). */
+export interface DriverCostEvidenceInput {
+  /** Allowlisted response headers with lowercased names. */
+  readonly headers: Readonly<Record<string, string>>;
+  /** Raw provider usage payload exactly as reported by the adapter. */
+  readonly rawUsage: unknown;
+}
+
+export interface DriverCostEvidence {
+  readonly reportedCostAmount?: string;
+  readonly reportedCurrency?: string;
+  readonly accountingMethod?: 'energy' | 'token';
+  readonly energyRateUsdPerKwh?: string;
+  readonly currency?: string;
+  readonly energyKwhConsumed?: string;
+  readonly energyKwhCharged?: string;
+  readonly pricingMultiplier?: string;
+  /** Provider-keyed typed detail persisted with the attempt evidence. */
+  readonly providerEvidence?: Readonly<Record<string, unknown>>;
+}
+
+/** Pricing metadata: native billing unit plus optional dynamic-rate/evidence hooks. */
 export interface DriverPricingFacet {
   /** Native billing unit for non-fiat providers (R8); fiat providers omit this. */
   readonly currencyUnit?: CurrencyUnit;
   /** Dynamic rates refresh in the background on a declared cadence (R7). */
   readonly dynamic?: {
     readonly refreshIntervalSeconds: number;
-    readonly fetchRates: (request: DriverModelRequest) => Promise<readonly ProviderModelRateCard[]>;
+    readonly fetchRates: (
+      request: DriverModelRequest,
+      context: DriverPricingFetchContext,
+    ) => Promise<readonly ProviderModelRateCard[]>;
   };
+  /** Extract typed cost evidence from a provider response (R4). */
+  readonly costEvidence?: (input: DriverCostEvidenceInput) => DriverCostEvidence | undefined;
 }
 
 /** Typed quota/subscription state in provider-native units (R24). */

@@ -134,12 +134,14 @@ export function createSubagentStreamRunner(): SubagentStreamRunner {
     let modelInstance;
     let providerSnapshot: ProviderAttemptAccountingContext['snapshot'];
     let providerOptions: ReasoningProviderOptions | undefined;
+    let pricingFacet: ProviderAttemptAccountingContext['pricingFacet'];
     let accountingStore: ReturnType<typeof getProviderAccountingStore>;
     try {
       accountingStore = getProviderAccountingStore();
       const execution = await getProviderRuntime().resolveExecution(selection);
       modelInstance = execution.modelInstance;
       providerSnapshot = execution.snapshot;
+      pricingFacet = execution.pricingFacet;
       const effort = resolveSubagentEffort(
         params.agent,
         config,
@@ -181,6 +183,7 @@ export function createSubagentStreamRunner(): SubagentStreamRunner {
       agentType: params.agent.type,
       agentTier: params.agent.tier,
      attemptIdHolder: { value: null },
+      pricingFacet,
     };
     try {
       getSubagentAttributionStore().insert({
