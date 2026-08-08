@@ -1,11 +1,15 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { importESM } from '../../src/main/utils/esm-import';
+import type { ProviderConnection, ProviderDefinition } from '../../src/shared/types/provider';
 
 vi.mock('../../src/main/utils/esm-import', () => ({ importESM: vi.fn() }));
 
 const openaiCompatibleModel = { kind: 'openai-compatible' };
+const openaiResponsesModel = { kind: 'openai-responses' };
 const anthropicModel = { kind: 'anthropic-messages' };
 const createOpenAICompatible = vi.fn(() => vi.fn(() => openaiCompatibleModel));
+const openAIResponses = vi.fn(() => openaiResponsesModel);
+const createOpenAI = vi.fn(() => ({ responses: openAIResponses }));
 const createAnthropic = vi.fn(() => ({ messages: vi.fn(() => anthropicModel) }));
 
 describe('OpenCode Go and Neuralwatt trusted drivers', () => {
@@ -13,6 +17,7 @@ describe('OpenCode Go and Neuralwatt trusted drivers', () => {
     vi.clearAllMocks();
     vi.mocked(importESM).mockImplementation(async (specifier: string) => {
       if (specifier === '@ai-sdk/openai-compatible') return { createOpenAICompatible };
+      if (specifier === '@ai-sdk/openai') return { createOpenAI };
       if (specifier === '@ai-sdk/anthropic') return { createAnthropic };
       throw new Error(`Unexpected adapter import ${specifier}`);
     });
@@ -45,6 +50,66 @@ describe('OpenCode Go and Neuralwatt trusted drivers', () => {
       baseURL: OPENCODE_GO_API_ORIGIN,
       apiKey: 'go-key',
     });
+  });
+
+  it('maps an OpenCode Go Responses-protocol model to the responses route', async () => {
+    const {
+      OPENCODE_GO_API_ORIGIN,
+      createOpenCodeGoLanguageModel,
+    } = await import('../../src/main/providers/drivers/opencode-go');
+
+    await expect(createOpenCodeGoLanguageModel({
+      protocol: 'openai-responses',
+      modelId: 'gpt-5.2',
+      apiKey: 'go-key',
+    })).resolves.toBe(openaiResponsesModel);
+    expect(createOpenAI).toHaveBeenCalledWith(expect.objectContaining({
+      name: 'opencode-go',
+      baseURL: OPENCODE_GO_API_ORIGIN,
+      apiKey: 'go-key',
+    }));
+    expect(openAIResponses).toHaveBeenCalledWith('gpt-5.2');
+    expect(createOpenAICompatible).not.toHaveBeenCalled();
+  });
+
+  it('declares the Responses protocol and routes per-model protocol through the trusted driver', async () => {
+    const { createOpenCodeGoProviderDriver } = await import('../../src/main/providers/drivers/opencode-go');
+    const driver = createOpenCodeGoProviderDriver();
+    expect(driver.supportedProtocols).toEqual(['openai-compatible', 'openai-responses', 'anthropic-messages']);
+
+    const connection: ProviderConnection = {
+      id: '44444444-4444-4444-8444-444444444444',
+      providerId: 'opencode-go',
+      name: 'Go',
+      protocol: 'openai-responses',
+      authMethod: 'api-key',
+      credential: { kind: 'stored', handle: '55555555-5555-4555-8555-555555555555' },
+      modelIds: ['gpt-5.2'],
+      health: 'ready',
+    };
+    const provider: ProviderDefinition = {
+      id: 'opencode-go',
+      displayName: 'OpenCode Go',
+      supportedAuthMethods: ['api-key'],
+      supportedProtocols: ['openai-compatible', 'openai-responses', 'anthropic-messages'],
+      allowsCustomModels: false,
+      models: [],
+    };
+
+    await expect(driver.createLanguageModel({
+      connection,
+      provider,
+      model: { id: 'gpt-5.2', displayName: 'GPT-5.2', protocol: 'openai-responses', source: 'catalog' },
+      credential: { kind: 'api-key', apiKey: 'go-key' },
+    })).resolves.toBe(openaiResponsesModel);
+    expect(openAIResponses).toHaveBeenCalledWith('gpt-5.2');
+
+    await expect(driver.createLanguageModel({
+      connection,
+      provider,
+      model: { id: 'grok-4.3', displayName: 'Grok', protocol: 'xai', source: 'catalog' },
+      credential: { kind: 'api-key', apiKey: 'go-key' },
+    })).rejects.toThrow(/does not support protocol 'xai'/);
   });
 
   it("uses Neuralwatt's code-owned OpenAI-compatible origin and retains authoritative billing evidence", async () => {

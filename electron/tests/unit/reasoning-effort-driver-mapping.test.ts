@@ -30,10 +30,14 @@ describe('reasoning effort driver mapping', () => {
       });
     });
 
-    it('maps numeric effort to maxReasoningTokens', () => {
-      expect(openai.buildReasoningOptions!(8192, model)).toEqual({
-        openai: { maxReasoningTokens: 8192 },
+    it('maps text effort to reasoningEffort for the responses protocol', () => {
+      expect(openai.buildReasoningOptions!('low', { ...model, protocol: 'openai-responses' })).toEqual({
+        openai: { reasoningEffort: 'low' },
       });
+    });
+
+    it('omits numeric effort because neither OpenAI schema accepts a reasoning budget', () => {
+      expect(openai.buildReasoningOptions!(8192, model)).toBeUndefined();
     });
   });
 
@@ -46,9 +50,9 @@ describe('reasoning effort driver mapping', () => {
       });
     });
 
-    it('maps text effort to reasoningEffort', () => {
+    it('maps text effort to the anthropic effort field', () => {
       expect(anthropic.buildReasoningOptions!('high', model)).toEqual({
-        anthropic: { reasoningEffort: 'high' },
+        anthropic: { effort: 'high' },
       });
     });
   });
@@ -83,6 +87,12 @@ describe('reasoning effort driver mapping', () => {
     it('maps text effort to openaiCompatible reasoningEffort', () => {
       expect(generic.buildReasoningOptions!('high', model)).toEqual({
         openaiCompatible: { reasoningEffort: 'high' },
+      });
+    });
+
+    it('maps text effort to the openai key for the responses protocol', () => {
+      expect(generic.buildReasoningOptions!('high', { ...model, protocol: 'openai-responses' })).toEqual({
+        openai: { reasoningEffort: 'high' },
       });
     });
 

@@ -8,7 +8,7 @@ import type { ProviderDriver } from './types';
 export const OPENCODE_GO_API_ORIGIN = 'https://opencode.ai/zen/go/v1';
 
 export interface OpenCodeGoLanguageModelInput {
-  readonly protocol: Extract<ProviderProtocol, 'openai-compatible' | 'anthropic-messages'>;
+  readonly protocol: Extract<ProviderProtocol, 'openai-compatible' | 'openai-responses' | 'anthropic-messages'>;
   readonly modelId: string;
   readonly apiKey: string;
 }
@@ -30,6 +30,16 @@ export async function createOpenCodeGoLanguageModel(
     })(input.modelId);
   }
 
+  if (input.protocol === 'openai-responses') {
+    const { createOpenAI } = await importESM<typeof import('@ai-sdk/openai')>('@ai-sdk/openai');
+    return createOpenAI({
+      name: 'opencode-go',
+      baseURL: OPENCODE_GO_API_ORIGIN,
+      apiKey: input.apiKey,
+      fetch: createUnwrappingFetch(),
+    }).responses(input.modelId);
+  }
+
   const { createAnthropic } = await importESM<typeof import('@ai-sdk/anthropic')>('@ai-sdk/anthropic');
   return createAnthropic({
     name: 'opencode-go',
@@ -47,11 +57,13 @@ export function createOpenCodeGoProviderDriver(): ProviderDriver {
   return {
     id: 'opencode-go',
     supportedAuthMethods: ['api-key', 'environment'],
-    supportedProtocols: ['openai-compatible', 'anthropic-messages'],
+    supportedProtocols: ['openai-compatible', 'openai-responses', 'anthropic-messages'],
     allowsCustomEndpoint: false,
     origin: OPENCODE_GO_API_ORIGIN,
     createLanguageModel: async ({ model, credential }) => {
-      if (model.protocol !== 'openai-compatible' && model.protocol !== 'anthropic-messages') {
+      if (model.protocol !== 'openai-compatible'
+        && model.protocol !== 'openai-responses'
+        && model.protocol !== 'anthropic-messages') {
         throw new Error(`OpenCode Go does not support protocol '${model.protocol}'`);
       }
       return createOpenCodeGoLanguageModel({

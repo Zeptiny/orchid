@@ -30,14 +30,14 @@ export interface TrustedCatalogProviderPolicy {
  * verified against provider documentation.
  */
 export const TRUSTED_CATALOG_PROVIDER_POLICIES: readonly TrustedCatalogProviderPolicy[] = [
-  { id: 'openai', authMethods: ['api-key', 'environment'], protocols: ['openai-compatible'], allowsCustomModels: true, facets: ['thinking', 'cache'] },
+  { id: 'openai', authMethods: ['api-key', 'environment'], protocols: ['openai-compatible', 'openai-responses'], allowsCustomModels: true, facets: ['thinking', 'cache'] },
   { id: 'anthropic', authMethods: ['api-key', 'environment'], protocols: ['anthropic-messages'], allowsCustomModels: true, facets: ['thinking', 'cache'] },
   { id: 'google-gemini', authMethods: ['api-key', 'environment'], protocols: ['google-generative-ai'], allowsCustomModels: true },
   { id: 'xai', authMethods: ['api-key', 'environment'], protocols: ['xai'], allowsCustomModels: true },
-  { id: 'opencode-go', authMethods: ['api-key', 'environment'], protocols: ['openai-compatible', 'anthropic-messages'], allowsCustomModels: true },
+  { id: 'opencode-go', authMethods: ['api-key', 'environment'], protocols: ['openai-compatible', 'openai-responses', 'anthropic-messages'], allowsCustomModels: true },
   { id: 'lilac', authMethods: ['api-key', 'environment'], protocols: ['openai-compatible'], allowsCustomModels: true },
   { id: 'neuralwatt', authMethods: ['api-key', 'environment'], protocols: ['openai-compatible'], allowsCustomModels: true, facets: ['tiers'] },
-  { id: 'generic-openai-compatible', authMethods: ['api-key', 'environment', 'none'], protocols: ['openai-compatible'], allowsCustomModels: true },
+  { id: 'generic-openai-compatible', authMethods: ['api-key', 'environment', 'none'], protocols: ['openai-compatible', 'openai-responses'], allowsCustomModels: true },
   { id: 'generic-anthropic-compatible', authMethods: ['api-key', 'environment', 'none'], protocols: ['anthropic-messages'], allowsCustomModels: true },
 ];
 

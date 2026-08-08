@@ -23,12 +23,17 @@ export async function createNativeLanguageModel(
 ): Promise<LanguageModelV4> {
   switch (input.providerId) {
     case 'openai': {
-      if (input.protocol !== 'openai-compatible') throw new Error('OpenAI requires openai-compatible protocol');
+      if (input.protocol !== 'openai-compatible' && input.protocol !== 'openai-responses') {
+        throw new Error('OpenAI requires openai-compatible or openai-responses protocol');
+      }
       const { createOpenAI } = await importESM<typeof import('@ai-sdk/openai')>('@ai-sdk/openai');
-      return createOpenAI({
+      const provider = createOpenAI({
         apiKey: input.apiKey,
         baseURL: BUILTIN_PROVIDER_ORIGINS.openai,
-      }).chat(input.modelId);
+      });
+      return input.protocol === 'openai-responses'
+        ? provider.responses(input.modelId)
+        : provider.chat(input.modelId);
     }
     case 'anthropic': {
       if (input.protocol !== 'anthropic-messages') throw new Error('Anthropic requires anthropic-messages protocol');
@@ -80,7 +85,7 @@ export function createNativeProviderDrivers(): readonly ProviderDriver[] {
     const driver: ProviderDriver = {
       id,
       supportedAuthMethods: ['api-key', 'environment'],
-      supportedProtocols: [protocol],
+      supportedProtocols: id === 'openai' ? ['openai-compatible', 'openai-responses'] : [protocol],
       allowsCustomEndpoint: false,
       origin: BUILTIN_PROVIDER_ORIGINS[id],
       createLanguageModel: async ({ model, credential }) => createNativeLanguageModel({
@@ -105,16 +110,18 @@ export function createNativeProviderDrivers(): readonly ProviderDriver[] {
     }
     switch (id) {
       case 'openai':
+        // Both the Chat Completions and Responses schemas accept
+        // reasoningEffort; neither accepts a numeric reasoning budget.
         driver.buildReasoningOptions = (effort: string | number, _model: EffectiveModel): ReasoningProviderOptions | undefined =>
-          typeof effort === 'number'
-            ? { openai: { maxReasoningTokens: effort } }
-            : { openai: { reasoningEffort: effort } };
+          typeof effort === 'string'
+            ? { openai: { reasoningEffort: effort } }
+            : undefined;
         break;
       case 'anthropic':
         driver.buildReasoningOptions = (effort: string | number, _model: EffectiveModel): ReasoningProviderOptions | undefined =>
           typeof effort === 'number'
             ? { anthropic: { thinking: { type: 'enabled', budgetTokens: effort } } }
-            : { anthropic: { reasoningEffort: effort } };
+            : { anthropic: { effort } };
         break;
       case 'google-gemini':
         driver.buildReasoningOptions = (effort: string | number, _model: EffectiveModel): ReasoningProviderOptions | undefined =>
