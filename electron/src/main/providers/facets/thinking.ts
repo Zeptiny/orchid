@@ -226,8 +226,8 @@ export function buildThinkingRequestOptions(
   return undefined;
 }
 
-/** Merge thinking request knobs under the reasoning-effort options. */
-export function mergeThinkingProviderOptions(
+/** Merge provider options per namespace: thinking knobs, tier, cache, effort. */
+export function mergeProviderOptions(
   base: ReasoningProviderOptions | undefined,
   extra: ReasoningProviderOptions | undefined,
 ): ReasoningProviderOptions | undefined {

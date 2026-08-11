@@ -18,18 +18,12 @@ import { getProviderAccountingStore } from '../../providers/accounting/store';
 import type { ProviderAttemptAccountingContext } from '../../providers/accounting/middleware';
 import type { ReasoningProviderOptions } from '../../providers/drivers/types';
 import {
-  buildThinkingRequestOptions,
   DEFAULT_THINKING_POLICY,
-  mergeThinkingProviderOptions,
 } from '../../providers/facets/thinking';
 import type { ThinkingReplayContext } from '../../llm/history';
 import type { CacheFacet, ThinkingPolicy } from '../../../shared/types/provider-facets';
-import {
-  buildCacheProviderOptions,
-  deriveCacheSessionKey,
-  resolveCacheTtl,
-} from '../../providers/facets/cache';
-import { buildTierProviderOptions, resolveMainAgentTier } from '../../providers/facets/tiers';
+import { resolveMainAgentTier } from '../../providers/facets/tiers';
+import { assembleFacetProviderOptions } from '../../providers/facets/turn-options';
 import { getSessionManager } from '../../session/singleton';
 import { getBuiltinToolRegistryForRuntime } from '../../tools';
 import type { ToolExecutionContext } from '../../tools/types';
@@ -150,27 +144,21 @@ export async function startChatTurn(
       execution.model.capabilities?.reasoning === true,
     );
     providerOptions = effort === undefined ? undefined : execution.buildReasoningOptions?.(effort);
-    if (thinkingPolicy) {
-      providerOptions = mergeThinkingProviderOptions(
-        providerOptions,
-        buildThinkingRequestOptions(thinkingPolicy, execution.snapshot.providerId),
-      );
-    }
-    providerOptions = mergeThinkingProviderOptions(
+    const facetOptions = assembleFacetProviderOptions({
       providerOptions,
-      buildTierProviderOptions(
-        execution.tierMechanism,
-        resolveMainAgentTier(
-          sessionGate.session, execution.connection, turnSelection.modelId, execution.tierMechanism,
-        ),
+      thinkingPolicy,
+      providerId: execution.snapshot.providerId,
+      tierId: resolveMainAgentTier(
+        sessionGate.session, execution.connection, turnSelection.modelId, execution.tierMechanism,
       ),
-    );
-    cacheSessionKey = deriveCacheSessionKey(sessionId);
-    cacheTtl = resolveCacheTtl(cacheFacet, execution.connection.cacheTtl);
-    providerOptions = mergeThinkingProviderOptions(
-      providerOptions,
-      buildCacheProviderOptions(cacheFacet, cacheSessionKey),
-    );
+      tierMechanism: execution.tierMechanism,
+      cacheFacet,
+      cacheTtlSelection: execution.connection.cacheTtl,
+      sessionId,
+    });
+    providerOptions = facetOptions.providerOptions;
+    cacheSessionKey = facetOptions.cacheSessionKey;
+    cacheTtl = facetOptions.cacheTtl;
   } catch (error) {
     sessionsStarting.delete(sessionId);
     completeSessionActivity(sessionId, false);

@@ -11,11 +11,12 @@ import {
   buildThinkingProviderOptions,
   buildThinkingRequestOptions,
   decideThinkingReplay,
-  mergeThinkingProviderOptions,
+  mergeProviderOptions,
   resolveThinkingPolicy,
   thinkingArtifactMatchesSelection,
   thinkingReplayPayloadWithinLimits,
 } from '../../src/main/providers/facets/thinking';
+import { assembleFacetProviderOptions } from '../../src/main/providers/facets/turn-options';
 import {
   isOpaqueThinkingPayload,
   thinkingRenderMetadata,
@@ -25,6 +26,11 @@ import { createCompatibleProviderDrivers } from '../../src/main/providers/driver
 import { createOpenCodeGoProviderDriver } from '../../src/main/providers/drivers/opencode-go';
 import type { ProviderDriver } from '../../src/main/providers/drivers/types';
 import type { EffectiveModel, ProviderProtocol } from '../../src/shared/types/provider';
+import type {
+  CacheFacet,
+  ThinkingPolicy,
+  TierMechanism,
+} from '../../src/shared/types/provider-facets';
 import {
   ThinkingArtifactKind,
   THINKING_BLOB_MAX_LENGTH,
@@ -307,9 +313,9 @@ describe('buildThinkingRequestOptions', () => {
   });
 });
 
-describe('mergeThinkingProviderOptions', () => {
+describe('mergeProviderOptions', () => {
   it('merges per namespace without dropping the reasoning effort options', () => {
-    expect(mergeThinkingProviderOptions(
+    expect(mergeProviderOptions(
       { openai: { reasoningEffort: 'high' } },
       { openai: { reasoningSummary: 'auto', include: ['reasoning.encrypted_content'] } },
     )).toEqual({
@@ -319,10 +325,95 @@ describe('mergeThinkingProviderOptions', () => {
         include: ['reasoning.encrypted_content'],
       },
     });
-    expect(mergeThinkingProviderOptions(undefined, { openai: { reasoningSummary: 'auto' } }))
+    expect(mergeProviderOptions(undefined, { openai: { reasoningSummary: 'auto' } }))
       .toEqual({ openai: { reasoningSummary: 'auto' } });
-    expect(mergeThinkingProviderOptions({ openai: { reasoningEffort: 'high' } }, undefined))
+    expect(mergeProviderOptions({ openai: { reasoningEffort: 'high' } }, undefined))
       .toEqual({ openai: { reasoningEffort: 'high' } });
+  });
+});
+
+describe('assembleFacetProviderOptions', () => {
+  const parameterMechanism: TierMechanism = {
+    kind: 'request-parameter',
+    parameter: 'serviceTier',
+    tiers: [{ id: 'flex' }, { id: 'fast' }],
+  };
+  const defaultKnobPolicy: ThinkingPolicy = {
+    exposure: 'readable',
+    replay: 'recommended',
+    knobs: { displayModes: ['summarized', 'omitted'], defaultDisplayMode: 'summarized' },
+  };
+  const cacheFacet: CacheFacet = { mode: 'automatic', sessionKey: true, ttlOptions: [{ id: '5m' }] };
+
+  it('merges thinking, tier, and cache options in the fixed facet order', () => {
+    expect(assembleFacetProviderOptions({
+      providerOptions: { openai: { reasoningEffort: 'high' } },
+      thinkingPolicy: defaultKnobPolicy,
+      providerId: 'anthropic',
+      tierId: 'flex',
+      tierMechanism: parameterMechanism,
+      cacheFacet,
+      cacheTtlSelection: '5m',
+      sessionId: 'session-1',
+    })).toEqual({
+      providerOptions: {
+        anthropic: { thinking: { type: 'adaptive', display: 'summarized' } },
+        openai: {
+          reasoningEffort: 'high',
+          serviceTier: 'flex',
+          promptCacheKey: 'orchid-session-session-1',
+        },
+      },
+      cacheSessionKey: 'orchid-session-session-1',
+      cacheTtl: '5m',
+    });
+  });
+
+  it('returns the base options unchanged when every facet is inert', () => {
+    expect(assembleFacetProviderOptions({
+      providerOptions: { openai: { reasoningEffort: 'high' } },
+      thinkingPolicy: undefined,
+      providerId: 'openai',
+      tierId: undefined,
+      tierMechanism: undefined,
+      cacheFacet: undefined,
+      cacheTtlSelection: '5m',
+      sessionId: 'session-2',
+    })).toEqual({
+      providerOptions: { openai: { reasoningEffort: 'high' } },
+      cacheSessionKey: 'orchid-session-session-2',
+      cacheTtl: undefined,
+    });
+  });
+
+  it('drops an undeclared TTL but keeps the session cache key option', () => {
+    const result = assembleFacetProviderOptions({
+      providerOptions: undefined,
+      thinkingPolicy: undefined,
+      providerId: 'openai',
+      tierId: undefined,
+      tierMechanism: undefined,
+      cacheFacet,
+      cacheTtlSelection: '1h',
+      sessionId: 'session-3',
+    });
+    expect(result.cacheSessionKey).toBe('orchid-session-session-3');
+    expect(result.cacheTtl).toBeUndefined();
+    expect(result.providerOptions).toEqual({
+      openai: { promptCacheKey: 'orchid-session-session-3' },
+    });
+
+    // No session key means no cache provider option.
+    expect(assembleFacetProviderOptions({
+      providerOptions: undefined,
+      thinkingPolicy: undefined,
+      providerId: 'openai',
+      tierId: undefined,
+      tierMechanism: undefined,
+      cacheFacet: { mode: 'automatic', sessionKey: true },
+      cacheTtlSelection: undefined,
+      sessionId: undefined,
+    }).providerOptions).toBeUndefined();
   });
 });
 

@@ -8,18 +8,12 @@ import type { Agent } from '../../shared/types/agent';
 import type { Message } from '../../shared/types/message';
 import type { ReasoningProviderOptions } from '../providers/drivers/types';
 import {
-  buildThinkingRequestOptions,
   DEFAULT_THINKING_POLICY,
-  mergeThinkingProviderOptions,
 } from '../providers/facets/thinking';
 import type { ThinkingReplayContext } from '../llm/history';
 import type { CacheFacet, ThinkingPolicy } from '../../shared/types/provider-facets';
-import {
-  buildCacheProviderOptions,
-  deriveCacheSessionKey,
-  resolveCacheTtl,
-} from '../providers/facets/cache';
-import { buildTierProviderOptions, resolveSubagentTier } from '../providers/facets/tiers';
+import { resolveSubagentTier } from '../providers/facets/tiers';
+import { assembleFacetProviderOptions } from '../providers/facets/turn-options';
 import type { ModelSelection } from '../../shared/types/provider';
 import { streamChat, type StreamEvent } from '../llm/orchestrator';
 import { resolveSubagentEffort } from '../llm/reasoning-effort';
@@ -180,27 +174,21 @@ export function createSubagentStreamRunner(): SubagentStreamRunner {
       params.onReasoningEffort?.(effort);
       providerOptions =
         effort === undefined ? undefined : execution.buildReasoningOptions?.(effort);
-      if (thinkingPolicy) {
-        providerOptions = mergeThinkingProviderOptions(
-          providerOptions,
-          buildThinkingRequestOptions(thinkingPolicy, providerSnapshot.providerId),
-        );
-      }
-      providerOptions = mergeThinkingProviderOptions(
+      const facetOptions = assembleFacetProviderOptions({
         providerOptions,
-        buildTierProviderOptions(
-          execution.tierMechanism,
-          resolveSubagentTier(
-            execution.connection, selection.modelId, execution.tierMechanism,
-          ),
+        thinkingPolicy,
+        providerId: providerSnapshot.providerId,
+        tierId: resolveSubagentTier(
+          execution.connection, selection.modelId, execution.tierMechanism,
         ),
-      );
-      cacheSessionKey = deriveCacheSessionKey(sessionId);
-      cacheTtl = resolveCacheTtl(cacheFacet, execution.connection.cacheTtl);
-      providerOptions = mergeThinkingProviderOptions(
-        providerOptions,
-        buildCacheProviderOptions(cacheFacet, cacheSessionKey),
-      );
+        tierMechanism: execution.tierMechanism,
+        cacheFacet,
+        cacheTtlSelection: execution.connection.cacheTtl,
+        sessionId,
+      });
+      providerOptions = facetOptions.providerOptions;
+      cacheSessionKey = facetOptions.cacheSessionKey;
+      cacheTtl = facetOptions.cacheTtl;
     } catch (error) {
       yield {
         type: 'error',
