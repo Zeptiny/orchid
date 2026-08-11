@@ -40,6 +40,11 @@ export class PricingRefresher {
   private readonly now: () => Date;
   private readonly entries = new Map<string, DynamicPricingCacheEntry>();
   private readonly inFlight = new Map<string, Promise<DynamicPricingCacheEntry>>();
+  /**
+   * Bumped on invalidate; a refresh that began before an identity change may
+   * finish, but must not repopulate its old rates.
+   */
+  private readonly generations = new Map<string, number>();
 
   constructor(options: { readonly now?: () => Date } = {}) {
     this.now = options.now ?? (() => new Date());
@@ -47,15 +52,23 @@ export class PricingRefresher {
 
   /**
    * Kick an unawaited refresh when the latest-known rates are missing or older
-   * than the driver-declared cadence. Safe to call on every request resolve.
+   * than the driver-declared cadence. A recent failed attempt holds the next
+   * probe until the failure cooldown elapses, so a dead endpoint is not
+   * re-hammered once per request. Safe to call on every request resolve.
    */
   ensureFresh(target: PricingRefreshTarget): void {
     const dynamic = target.driver.pricingFacet?.dynamic;
     if (!dynamic) return;
     const entry = this.entries.get(keyOf(target.driver.id, target.request.connection.id));
     const fetchedAt = entry?.fetchedAt ? Date.parse(entry.fetchedAt) : null;
-    const due = fetchedAt === null
-      || this.now().getTime() - fetchedAt >= dynamic.refreshIntervalSeconds * 1000;
+    const failedAt = entry?.failedAt ? Date.parse(entry.failedAt) : null;
+    const nowMs = this.now().getTime();
+    const failureCooldownMs = Math.min(dynamic.refreshIntervalSeconds, 60) * 1000;
+    const holdingOff = failedAt !== null
+      && (fetchedAt === null || failedAt > fetchedAt)
+      && nowMs - failedAt < failureCooldownMs;
+    const due = (fetchedAt === null || nowMs - fetchedAt >= dynamic.refreshIntervalSeconds * 1000)
+      && !holdingOff;
     if (due) void this.refresh(target);
   }
 
@@ -64,7 +77,8 @@ export class PricingRefresher {
     const key = keyOf(target.driver.id, target.request.connection.id);
     const existing = this.inFlight.get(key);
     if (existing) return existing;
-    const pending = this.refreshOnce(target).finally(() => {
+    const generation = this.generations.get(key) ?? 0;
+    const pending = this.refreshOnce(target, generation).finally(() => {
       if (this.inFlight.get(key) === pending) this.inFlight.delete(key);
     });
     this.inFlight.set(key, pending);
@@ -101,7 +115,10 @@ export class PricingRefresher {
 
   /** Forget one connection's latest-known rates after an identity change. */
   invalidate(providerId: string, connectionId: string): void {
-    this.entries.delete(keyOf(providerId, connectionId));
+    const key = keyOf(providerId, connectionId);
+    this.generations.set(key, (this.generations.get(key) ?? 0) + 1);
+    this.inFlight.delete(key);
+    this.entries.delete(key);
   }
 
   stop(): void {
@@ -109,7 +126,10 @@ export class PricingRefresher {
     this.inFlight.clear();
   }
 
-  private async refreshOnce(target: PricingRefreshTarget): Promise<DynamicPricingCacheEntry> {
+  private async refreshOnce(
+    target: PricingRefreshTarget,
+    generation: number,
+  ): Promise<DynamicPricingCacheEntry> {
     const key = keyOf(target.driver.id, target.request.connection.id);
     const dynamic = target.driver.pricingFacet?.dynamic;
     const prior = this.entries.get(key);
@@ -122,8 +142,7 @@ export class PricingRefresher {
         cards: structuredClone(cards),
         fetchedAt: this.now().toISOString(),
       };
-      this.entries.set(key, entry);
-      return entry;
+      return this.putIfCurrent(key, generation, entry);
     } catch (error) {
       const entry: DynamicPricingCacheEntry = {
         cards: prior?.cards ?? [],
@@ -131,8 +150,18 @@ export class PricingRefresher {
         failedAt: this.now().toISOString(),
         error: redactStatusDiagnostic(error instanceof Error ? error.message : String(error)),
       };
-      this.entries.set(key, entry);
-      return entry;
+      return this.putIfCurrent(key, generation, entry);
     }
+  }
+
+  /** Cache a refresh result only if the key was not invalidated meanwhile. */
+  private putIfCurrent(
+    key: string,
+    generation: number,
+    entry: DynamicPricingCacheEntry,
+  ): DynamicPricingCacheEntry {
+    if ((this.generations.get(key) ?? 0) !== generation) return structuredClone(entry);
+    this.entries.set(key, entry);
+    return entry;
   }
 }

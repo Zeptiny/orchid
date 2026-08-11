@@ -34,6 +34,27 @@ export type ThinkingArtifactKind =
 
 const thinkingArtifactKinds = new Set<string>(Object.values(ThinkingArtifactKind));
 
+// Replay artifacts persist provider blobs and replay them into later
+// requests; every boundary caps these fields so a hostile/corrupt payload
+// cannot grow the chain DB or inflate request bodies without limit.
+export const THINKING_BLOB_MAX_LENGTH = 64 * 1024;
+export const THINKING_DISPLAY_TEXT_MAX_LENGTH = 64 * 1024;
+export const THINKING_ITEM_ID_MAX_LENGTH = 256;
+
+/** Bound one provider blob (signature, redacted data, encrypted content). */
+export function capThinkingBlob(value: string): string {
+  return value.length > THINKING_BLOB_MAX_LENGTH
+    ? value.slice(0, THINKING_BLOB_MAX_LENGTH)
+    : value;
+}
+
+/** Bound accumulated reasoning text persisted as displayText. */
+export function capThinkingDisplayText(value: string): string {
+  return value.length > THINKING_DISPLAY_TEXT_MAX_LENGTH
+    ? value.slice(0, THINKING_DISPLAY_TEXT_MAX_LENGTH)
+    : value;
+}
+
 /**
  * Provider-specific replay artifact captured from one thinking segment (R16).
  * `blob` carries the provider value (Anthropic signature, redacted data,
@@ -52,7 +73,7 @@ export interface ThinkingReplayPayload {
   readonly reasoningTokenCount?: number;
 }
 
-/** Tolerant parse: unknown shapes degrade to no payload, extra keys pass through. */
+/** Tolerant parse: unknown shapes degrade to no payload, extra keys pass through; oversized blobs/display text truncate and oversized item ids drop. */
 export function thinkingReplayPayloadFromUnknown(
   value: unknown,
 ): ThinkingReplayPayload | undefined {
@@ -71,9 +92,11 @@ export function thinkingReplayPayloadFromUnknown(
     providerId: raw.providerId,
     modelId: raw.modelId,
     kind: raw.kind as ThinkingArtifactKind,
-    blob: typeof raw.blob === 'string' ? raw.blob : null,
-    displayText: typeof raw.displayText === 'string' ? raw.displayText : null,
-    ...(typeof raw.itemId === 'string' && raw.itemId.length > 0
+    blob: typeof raw.blob === 'string' ? capThinkingBlob(raw.blob) : null,
+    displayText: typeof raw.displayText === 'string' ? capThinkingDisplayText(raw.displayText) : null,
+    ...(typeof raw.itemId === 'string'
+      && raw.itemId.length > 0
+      && raw.itemId.length <= THINKING_ITEM_ID_MAX_LENGTH
       ? { itemId: raw.itemId }
       : {}),
     ...(typeof raw.reasoningTokenCount === 'number' && raw.reasoningTokenCount >= 0

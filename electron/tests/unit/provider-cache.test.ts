@@ -19,6 +19,10 @@ function userMessage(text: string): ModelMessage {
   return { role: 'user', content: text };
 }
 
+function reasoningMessage(text: string): ModelMessage {
+  return { role: 'assistant', content: [{ type: 'reasoning', text }] };
+}
+
 describe('resolveCacheTtl (R11)', () => {
   it('honors a declared TTL option', () => {
     expect(resolveCacheTtl(ANTHROPIC_CACHE_FACET, '1h')).toBe('1h');
@@ -107,6 +111,83 @@ describe('applyCacheBreakpoints — Anthropic explicit (R10, R11)', () => {
       (last as { providerOptions?: { anthropic?: { cacheControl?: unknown } } })
         .providerOptions?.anthropic?.cacheControl,
     ).toEqual({ type: 'ephemeral' });
+  });
+
+  it('does not attach the tail breakpoint to a reasoning part (mid-reasoning stop)', () => {
+    const result = applyCacheBreakpoints({
+      system: 'STATIC',
+      messages: [userMessage('hi'), reasoningMessage('thinking…')],
+      tools: undefined,
+      cacheFacet: ANTHROPIC_CACHE_FACET,
+      providerNamespace: 'anthropic',
+    });
+    const [user, reasoning] = result.messages;
+    expect((reasoning as { providerOptions?: unknown }).providerOptions).toBeUndefined();
+    // The advancing marker walks back to the last cacheable message.
+    expect(
+      (user as { providerOptions?: { anthropic?: { cacheControl?: unknown } } })
+        .providerOptions?.anthropic?.cacheControl,
+    ).toEqual({ type: 'ephemeral' });
+  });
+
+  it('walks the tail breakpoint back past thinking to the last tool result', () => {
+    const messages: ModelMessage[] = [
+      userMessage('do it'),
+      {
+        role: 'assistant',
+        content: [
+          { type: 'reasoning', text: 'plan' },
+          { type: 'tool-call', toolCallId: 'call-1', toolName: 'read_file', input: {} },
+        ],
+      },
+      {
+        role: 'tool',
+        content: [
+          {
+            type: 'tool-result',
+            toolCallId: 'call-1',
+            toolName: 'read_file',
+            output: { type: 'text', value: 'content' },
+          },
+        ],
+      },
+      reasoningMessage('thinking after the result'),
+    ];
+    const result = applyCacheBreakpoints({
+      system: 'STATIC',
+      messages,
+      tools: undefined,
+      cacheFacet: ANTHROPIC_CACHE_FACET,
+      providerNamespace: 'anthropic',
+    });
+    const [, assistant, tool, reasoning] = result.messages;
+    expect((assistant as { providerOptions?: unknown }).providerOptions).toBeUndefined();
+    expect((reasoning as { providerOptions?: unknown }).providerOptions).toBeUndefined();
+    expect(
+      (tool as { providerOptions?: { anthropic?: { cacheControl?: unknown } } })
+        .providerOptions?.anthropic?.cacheControl,
+    ).toEqual({ type: 'ephemeral' });
+  });
+
+  it('places no more than two breakpoints when the tail carries thinking', () => {
+    const result = applyCacheBreakpoints({
+      system: 'STATIC',
+      messages: [userMessage('hi'), reasoningMessage('thinking…')],
+      tools,
+      cacheFacet: ANTHROPIC_CACHE_FACET,
+      providerNamespace: 'anthropic',
+    });
+    const carriers: unknown[] = [
+      result.system,
+      ...result.messages,
+      ...(result.tools ? Object.values(result.tools) : []),
+    ];
+    const marked = carriers.filter(
+      (carrier) =>
+        (carrier as { providerOptions?: { anthropic?: { cacheControl?: unknown } } })
+          .providerOptions?.anthropic?.cacheControl,
+    );
+    expect(marked).toHaveLength(2);
   });
 
   it('applies the user-selected TTL to both breakpoints (R11)', () => {

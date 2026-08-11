@@ -9,7 +9,13 @@ import { createHash } from 'node:crypto';
 import { getErrorMessage } from '@ai-sdk/provider';
 import type { ModelMessage } from 'ai';
 import type { ThinkingReplayPayload, Usage } from '../../../shared/types/message';
-import { ThinkingArtifactKind } from '../../../shared/types/message';
+import {
+  capThinkingBlob,
+  capThinkingDisplayText,
+  ThinkingArtifactKind,
+  THINKING_DISPLAY_TEXT_MAX_LENGTH,
+  THINKING_ITEM_ID_MAX_LENGTH,
+} from '../../../shared/types/message';
 import type { ToolExecutionResult } from '../../../shared/types/tool-result';
 import type { MCPManager } from '../../mcp/manager';
 import {
@@ -269,7 +275,10 @@ export class SdkEventAdapter {
     const id = stringField(part.id) || stringField(part.toolCallId) || '';
     const entry = this.reasoningParts.get(id) ?? { text: '', payload: undefined };
     const text = stringField(part.text) ?? stringField(part.delta) ?? '';
-    if (text) entry.text += text;
+    if (text) {
+      const remaining = THINKING_DISPLAY_TEXT_MAX_LENGTH - entry.text.length;
+      if (remaining > 0) entry.text += text.slice(0, remaining);
+    }
     const candidate = payloadFromProviderMetadata(part.providerMetadata, identity, entry.text);
     if (!entry.payload) {
       entry.payload = candidate;
@@ -318,6 +327,7 @@ export function payloadFromProviderMetadata(
 ): ThinkingReplayPayload | undefined {
   if (typeof providerMetadata !== 'object' || providerMetadata === null) return undefined;
   const metadata = providerMetadata as Record<string, unknown>;
+  const boundedDisplayText = capThinkingDisplayText(displayText);
 
   const anthropic = metadata.anthropic;
   if (typeof anthropic === 'object' && anthropic !== null) {
@@ -327,8 +337,8 @@ export function payloadFromProviderMetadata(
         providerId: identity.providerId,
         modelId: identity.modelId,
         kind: ThinkingArtifactKind.SIGNED,
-        blob: options.signature,
-        displayText,
+        blob: capThinkingBlob(options.signature),
+        displayText: boundedDisplayText,
       };
     }
     if (typeof options.redactedData === 'string' && options.redactedData.length > 0) {
@@ -336,7 +346,7 @@ export function payloadFromProviderMetadata(
         providerId: identity.providerId,
         modelId: identity.modelId,
         kind: ThinkingArtifactKind.REDACTED,
-        blob: options.redactedData,
+        blob: capThinkingBlob(options.redactedData),
         displayText: null,
       };
     }
@@ -345,12 +355,14 @@ export function payloadFromProviderMetadata(
   const openai = metadata.openai;
   if (typeof openai === 'object' && openai !== null) {
     const options = openai as Record<string, unknown>;
-    const itemId = typeof options.itemId === 'string' && options.itemId.length > 0
+    const itemId = typeof options.itemId === 'string'
+      && options.itemId.length > 0
+      && options.itemId.length <= THINKING_ITEM_ID_MAX_LENGTH
       ? options.itemId
       : undefined;
     const encrypted = typeof options.reasoningEncryptedContent === 'string'
       && options.reasoningEncryptedContent.length > 0
-      ? options.reasoningEncryptedContent
+      ? capThinkingBlob(options.reasoningEncryptedContent)
       : undefined;
     if (!itemId && !encrypted) return undefined;
     return {
@@ -358,7 +370,7 @@ export function payloadFromProviderMetadata(
       modelId: identity.modelId,
       kind: encrypted ? ThinkingArtifactKind.ENCRYPTED : ThinkingArtifactKind.OPAQUE,
       blob: encrypted ?? null,
-      displayText: displayText || null,
+      displayText: boundedDisplayText || null,
       ...(itemId ? { itemId } : {}),
     };
   }

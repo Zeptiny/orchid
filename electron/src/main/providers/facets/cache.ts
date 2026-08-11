@@ -11,8 +11,10 @@
  * are absent, otherwise to the last tool definition, whose cache marker
  * covers the entire earlier system+tools prefix — and one that advances with
  * the conversation tail (the last message; the adapter maps message-level
- * options onto its final content block). The Anthropic adapter enforces the
- * provider's 4-breakpoint limit.
+ * options onto its final content block). A tail whose final content part is
+ * reasoning is skipped — the adapter refuses cache_control on thinking blocks —
+ * and the marker walks back to the last message that ends in a cacheable
+ * part. The Anthropic adapter enforces the provider's 4-breakpoint limit.
  *
  * OpenAI (automatic + session key): the session-scoped `promptCacheKey`
  * rides the request-level provider options where the driver declares
@@ -99,6 +101,15 @@ function lastToolName(tools: Record<string, unknown>): string | undefined {
   return names.length > 0 ? names[names.length - 1] : undefined;
 }
 
+/** True when the message's final content part is a reasoning artifact (the
+ * Anthropic adapter maps these to thinking blocks, which reject cache_control). */
+function finalPartIsReasoning(message: ModelMessage): boolean {
+  const content = message.content;
+  if (typeof content === 'string') return false;
+  const final = content[content.length - 1];
+  return final?.type === 'reasoning' || final?.type === 'reasoning-file';
+}
+
 /**
  * Place the explicit breakpoints for one assembled request. Only the
  * 'anthropic' namespace places markers today; every other facet mode returns
@@ -132,11 +143,20 @@ export function applyCacheBreakpoints(input: CachePlacementInput): CachePlacemen
     system = withAnthropicCacheControl(systemMessage, ttl);
   }
 
-  // Breakpoint 2: advance with the conversation tail.
-  const tail = input.messages[input.messages.length - 1];
-  const messages: ModelMessage[] = tail
-    ? [...input.messages.slice(0, -1), withAnthropicCacheControl(tail, ttl)]
-    : [...input.messages];
+  // Breakpoint 2: advance with the conversation tail. A tail ending in a
+  // reasoning part cannot carry cache_control (thinking blocks are rejected),
+  // so walk back to the last message whose final part is cacheable; when none
+  // exists the turn gets no tail breakpoint.
+  let tailIndex = input.messages.length - 1;
+  while (tailIndex >= 0 && finalPartIsReasoning(input.messages[tailIndex])) {
+    tailIndex--;
+  }
+  const messages: ModelMessage[] =
+    tailIndex >= 0
+      ? input.messages.map((message, index) =>
+          index === tailIndex ? withAnthropicCacheControl(message, ttl) : message,
+        )
+      : [...input.messages];
 
   return { system, messages, tools, providerOptions: undefined };
 }

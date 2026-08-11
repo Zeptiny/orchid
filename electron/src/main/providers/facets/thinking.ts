@@ -20,6 +20,9 @@
 import type { ThinkingPolicy } from '../../../shared/types/provider-facets';
 import {
   ThinkingArtifactKind,
+  THINKING_BLOB_MAX_LENGTH,
+  THINKING_DISPLAY_TEXT_MAX_LENGTH,
+  THINKING_ITEM_ID_MAX_LENGTH,
   type ThinkingReplayPayload,
 } from '../../../shared/types/message';
 import type { EffectiveModel } from '../../../shared/types/provider';
@@ -95,6 +98,17 @@ export function thinkingArtifactMatchesSelection(
     && payload.modelId === selection.modelId;
 }
 
+/** Size guard: replay artifacts feed request bodies, so oversized fields never replay. */
+export function thinkingReplayPayloadWithinLimits(payload: ThinkingReplayPayload): boolean {
+  return (
+    (payload.blob === null || payload.blob.length <= THINKING_BLOB_MAX_LENGTH)
+    && (payload.displayText === null
+      || payload.displayText.length <= THINKING_DISPLAY_TEXT_MAX_LENGTH)
+    && (payload.itemId === undefined
+      || payload.itemId.length <= THINKING_ITEM_ID_MAX_LENGTH)
+  );
+}
+
 /** Decide how one persisted THINKING message reaches the current model. */
 export function decideThinkingReplay(input: {
   readonly policy: ThinkingPolicy;
@@ -106,12 +120,15 @@ export function decideThinkingReplay(input: {
 
   if (policy.replay === 'impossible') return { emit: 'none' };
 
+  const boundedPayload =
+    payload && thinkingReplayPayloadWithinLimits(payload) ? payload : undefined;
+
   if (
-    payload &&
-    thinkingArtifactMatchesSelection(payload, selection) &&
-    (payload.blob !== null || payload.displayText !== null)
+    boundedPayload &&
+    thinkingArtifactMatchesSelection(boundedPayload, selection) &&
+    (boundedPayload.blob !== null || boundedPayload.displayText !== null)
   ) {
-    return { emit: 'artifact', payload };
+    return { emit: 'artifact', payload: boundedPayload };
   }
 
   if (policy.replay === 'mandatory-in-tool-loop') {
@@ -120,7 +137,7 @@ export function decideThinkingReplay(input: {
 
   // Recommended: a mismatched artifact is stripped, but its readable text (or
   // a legacy payload-free message) still replays as plain reasoning.
-  const text = payload?.displayText ?? content;
+  const text = boundedPayload?.displayText ?? content;
   return text.length > 0 ? { emit: 'text', text } : { emit: 'none' };
 }
 
@@ -133,6 +150,7 @@ export function decideThinkingReplay(input: {
 export function buildThinkingProviderOptions(
   payload: ThinkingReplayPayload,
 ): ReasoningProviderOptions | undefined {
+  if (!thinkingReplayPayloadWithinLimits(payload)) return undefined;
   switch (payload.kind) {
     case ThinkingArtifactKind.SIGNED:
       return payload.blob !== null

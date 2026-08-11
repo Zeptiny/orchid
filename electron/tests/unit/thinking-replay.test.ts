@@ -19,9 +19,13 @@ import {
   MessageRole,
   MessageType,
   ThinkingArtifactKind,
+  THINKING_BLOB_MAX_LENGTH,
+  THINKING_DISPLAY_TEXT_MAX_LENGTH,
+  THINKING_ITEM_ID_MAX_LENGTH,
   messageFromStorageDict,
   messageToStorageDict,
 } from '../../src/shared/types/message';
+import { thinkingReplayPayloadSchema } from '../../src/shared/types/ipc-schemas';
 import type { ToolCall } from '../../src/shared/types/tool';
 import type { Agent } from '../../src/shared/types/agent';
 import { AgentTier, AgentType } from '../../src/shared/types/agent';
@@ -338,6 +342,27 @@ describe('thinking_payload storage', () => {
     expect(legacy.thinking_payload).toBeUndefined();
     expect(legacy.content).toBe('old reasoning');
   });
+
+  it('truncates oversized blobs and display text and drops oversized item ids on restore', () => {
+    const restored = messageFromStorageDict({
+      ...messageToStorageDict(makeThinkingMessage('text')),
+      thinking_payload: {
+        providerId: 'anthropic',
+        modelId: 'claude-1',
+        kind: 'signed',
+        blob: 'b'.repeat(THINKING_BLOB_MAX_LENGTH + 100),
+        displayText: 'd'.repeat(THINKING_DISPLAY_TEXT_MAX_LENGTH + 100),
+        itemId: 'i'.repeat(THINKING_ITEM_ID_MAX_LENGTH + 1),
+      },
+    });
+    expect(restored.thinking_payload).toEqual({
+      providerId: 'anthropic',
+      modelId: 'claude-1',
+      kind: ThinkingArtifactKind.SIGNED,
+      blob: 'b'.repeat(THINKING_BLOB_MAX_LENGTH),
+      displayText: 'd'.repeat(THINKING_DISPLAY_TEXT_MAX_LENGTH),
+    });
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -503,6 +528,60 @@ describe('SdkEventAdapter thinking artifact capture', () => {
       { type: 'reasoning-end', id: '0' },
     ]);
     expect(events).toEqual([]);
+  });
+
+  it('caps accumulated display text and truncates oversized blobs at capture', () => {
+    const adapter = new SdkEventAdapter(makeAdapterOptions({ artifactIdentity: identity }));
+    const events = adaptAll(adapter, [
+      { type: 'reasoning-start', id: '0' },
+      { type: 'reasoning-delta', id: '0', delta: 'x'.repeat(THINKING_DISPLAY_TEXT_MAX_LENGTH + 10) },
+      {
+        type: 'reasoning-delta',
+        id: '0',
+        delta: '',
+        providerMetadata: { anthropic: { signature: 's'.repeat(THINKING_BLOB_MAX_LENGTH + 10) } },
+      },
+      { type: 'reasoning-end', id: '0' },
+    ]);
+
+    const artifact = events.find((event) => event.type === 'thinking_artifact');
+    expect(artifact).toEqual({
+      type: 'thinking_artifact',
+      hasText: true,
+      payload: signedPayload({
+        blob: 's'.repeat(THINKING_BLOB_MAX_LENGTH),
+        displayText: 'x'.repeat(THINKING_DISPLAY_TEXT_MAX_LENGTH),
+      }),
+    });
+  });
+
+  it('truncates oversized encrypted blobs and drops oversized item ids at capture', () => {
+    const adapter = new SdkEventAdapter(makeAdapterOptions({
+      artifactIdentity: { providerId: 'openai', modelId: 'gpt-5' },
+    }));
+    const events = adaptAll(adapter, [
+      {
+        type: 'reasoning-start',
+        id: 'rs_1:0',
+        providerMetadata: {
+          openai: {
+            itemId: 'i'.repeat(THINKING_ITEM_ID_MAX_LENGTH + 1),
+            reasoningEncryptedContent: 'e'.repeat(THINKING_BLOB_MAX_LENGTH + 10),
+          },
+        },
+      },
+      { type: 'reasoning-end', id: 'rs_1:0' },
+    ]);
+
+    expect(events).toEqual([{
+      type: 'thinking_artifact',
+      hasText: false,
+      payload: encryptedPayload({
+        blob: 'e'.repeat(THINKING_BLOB_MAX_LENGTH),
+        displayText: null,
+        itemId: undefined,
+      }),
+    }]);
   });
 });
 
@@ -804,5 +883,43 @@ describe('streamChat thinking replay', () => {
       payload: signedPayload(),
     });
     expect(events).toContainEqual({ type: 'content', text: 'Done' });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// IPC schema size bounds
+// ---------------------------------------------------------------------------
+
+describe('thinkingReplayPayloadSchema size bounds', () => {
+  const base = {
+    providerId: 'anthropic',
+    modelId: 'claude-1',
+    kind: 'signed',
+    blob: null,
+    displayText: null,
+  };
+
+  it('accepts at-limit values', () => {
+    expect(thinkingReplayPayloadSchema.safeParse({
+      ...base,
+      blob: 'b'.repeat(THINKING_BLOB_MAX_LENGTH),
+      displayText: 'd'.repeat(THINKING_DISPLAY_TEXT_MAX_LENGTH),
+      itemId: 'i'.repeat(THINKING_ITEM_ID_MAX_LENGTH),
+    }).success).toBe(true);
+  });
+
+  it('rejects oversized blob, display text, and item ids', () => {
+    expect(thinkingReplayPayloadSchema.safeParse({
+      ...base,
+      blob: 'b'.repeat(THINKING_BLOB_MAX_LENGTH + 1),
+    }).success).toBe(false);
+    expect(thinkingReplayPayloadSchema.safeParse({
+      ...base,
+      displayText: 'd'.repeat(THINKING_DISPLAY_TEXT_MAX_LENGTH + 1),
+    }).success).toBe(false);
+    expect(thinkingReplayPayloadSchema.safeParse({
+      ...base,
+      itemId: 'i'.repeat(THINKING_ITEM_ID_MAX_LENGTH + 1),
+    }).success).toBe(false);
   });
 });

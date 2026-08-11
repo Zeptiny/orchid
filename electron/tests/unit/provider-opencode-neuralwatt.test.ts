@@ -167,8 +167,8 @@ describe('OpenCode Go and Neuralwatt trusted drivers', () => {
   });
 
   it('parses Neuralwatt quota/accounting status without retaining account or key identity', async () => {
-    const { parseNeuralwattQuotaStatus } = await import('../../src/main/providers/drivers/neuralwatt');
-    const observation = parseNeuralwattQuotaStatus({
+    const { parseNeuralwattQuotaObservation } = await import('../../src/main/providers/drivers/neuralwatt-quota');
+    const observation = parseNeuralwattQuotaObservation({
       snapshot_at: '2026-07-12T12:00:00.000Z',
       balance: {
         credits_remaining_usd: 32.6774,

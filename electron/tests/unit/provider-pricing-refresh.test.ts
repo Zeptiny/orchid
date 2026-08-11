@@ -169,4 +169,47 @@ describe('PricingRefresher', () => {
     refresher.invalidate(PROVIDER_ID, CONNECTION_ID);
     expect(refresher.stateFor(PROVIDER_ID, CONNECTION_ID, MODEL_ID, 300).card).toBeUndefined();
   });
+
+  it('does not retry a failed refresh before the failure cooldown elapses', async () => {
+    now = new Date('2026-07-12T12:00:00.000Z');
+    const refresher = new PricingRefresher({ now: () => now });
+    const fetchRates = vi.fn(() => Promise.reject(new Error('HTTP 503')));
+    const refreshTarget = target(fetchRates);
+
+    refresher.ensureFresh(refreshTarget);
+    await refresher.settled();
+    refresher.ensureFresh(refreshTarget);
+    await refresher.settled();
+    refresher.ensureFresh(refreshTarget);
+    await refresher.settled();
+    expect(fetchRates).toHaveBeenCalledTimes(1);
+
+    now = new Date(now.getTime() + 60_001);
+    refresher.ensureFresh(refreshTarget);
+    await refresher.settled();
+    expect(fetchRates).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not repopulate the cache when invalidated during an in-flight refresh', async () => {
+    now = new Date('2026-07-12T12:00:00.000Z');
+    const refresher = new PricingRefresher({ now: () => now });
+    let release!: (cards: ProviderModelRateCard[]) => void;
+    const fetchRates = vi.fn()
+      .mockImplementationOnce(() => new Promise<readonly ProviderModelRateCard[]>((resolvePromise) => {
+        release = resolvePromise;
+      }))
+      .mockResolvedValue([card('1')]);
+    const refreshTarget = target(fetchRates);
+
+    const pending = refresher.refresh(refreshTarget);
+    refresher.invalidate(PROVIDER_ID, CONNECTION_ID);
+    release([card('1')]);
+    await pending;
+    expect(refresher.stateFor(PROVIDER_ID, CONNECTION_ID, MODEL_ID, 300).card).toBeUndefined();
+
+    await refresher.refresh(refreshTarget);
+    const state = refresher.stateFor(PROVIDER_ID, CONNECTION_ID, MODEL_ID, 300);
+    expect(state.card?.rates.input?.amount).toBe('1');
+    expect(state.stale).toBe(false);
+  });
 });

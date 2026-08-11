@@ -4,7 +4,12 @@
  * malformed outbound events and rejects unexpected invoke shapes.
  */
 import { z } from 'zod';
-import { contextSnapshotSchema } from './message';
+import {
+  contextSnapshotSchema,
+  THINKING_BLOB_MAX_LENGTH,
+  THINKING_DISPLAY_TEXT_MAX_LENGTH,
+  THINKING_ITEM_ID_MAX_LENGTH,
+} from './message';
 import { subagentStatusSchema } from './subagent';
 import { STARTUP_STEP_DEFINITIONS, type StartupStepId } from './ipc-boundary';
 import { toolCallSchema } from './tool';
@@ -67,13 +72,13 @@ const usageSchema = z.object({
 });
 
 /** Replay artifact shape; opaque provider blobs cross the boundary uninterpreted. */
-const thinkingReplayPayloadSchema = z.object({
+export const thinkingReplayPayloadSchema = z.object({
   providerId: z.string().min(1),
   modelId: z.string().min(1),
   kind: z.enum(['signed', 'redacted', 'encrypted', 'opaque', 'text']),
-  blob: z.string().nullable(),
-  displayText: z.string().nullable(),
-  itemId: z.string().optional(),
+  blob: z.string().max(THINKING_BLOB_MAX_LENGTH).nullable(),
+  displayText: z.string().max(THINKING_DISPLAY_TEXT_MAX_LENGTH).nullable(),
+  itemId: z.string().max(THINKING_ITEM_ID_MAX_LENGTH).optional(),
   reasoningTokenCount: z.number().nonnegative().optional(),
 }).strict();
 

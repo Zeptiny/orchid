@@ -14,6 +14,7 @@ import {
   mergeThinkingProviderOptions,
   resolveThinkingPolicy,
   thinkingArtifactMatchesSelection,
+  thinkingReplayPayloadWithinLimits,
 } from '../../src/main/providers/facets/thinking';
 import {
   isOpaqueThinkingPayload,
@@ -24,7 +25,13 @@ import { createCompatibleProviderDrivers } from '../../src/main/providers/driver
 import { createOpenCodeGoProviderDriver } from '../../src/main/providers/drivers/opencode-go';
 import type { ProviderDriver } from '../../src/main/providers/drivers/types';
 import type { EffectiveModel, ProviderProtocol } from '../../src/shared/types/provider';
-import { ThinkingArtifactKind, type ThinkingReplayPayload } from '../../src/shared/types/message';
+import {
+  ThinkingArtifactKind,
+  THINKING_BLOB_MAX_LENGTH,
+  THINKING_DISPLAY_TEXT_MAX_LENGTH,
+  THINKING_ITEM_ID_MAX_LENGTH,
+  type ThinkingReplayPayload,
+} from '../../src/shared/types/message';
 
 function model(protocol: ProviderProtocol, id = 'model-1'): EffectiveModel {
   return { id, displayName: id, protocol, source: 'catalog' } as EffectiveModel;
@@ -222,6 +229,42 @@ describe('buildThinkingProviderOptions', () => {
       kind: ThinkingArtifactKind.TEXT,
       blob: null,
     }))).toBeUndefined();
+  });
+});
+
+describe('thinkingReplayPayloadWithinLimits', () => {
+  it('bounds each replayable field so requests cannot be amplified', () => {
+    expect(thinkingReplayPayloadWithinLimits(payload())).toBe(true);
+    expect(thinkingReplayPayloadWithinLimits(payload({
+      blob: 'b'.repeat(THINKING_BLOB_MAX_LENGTH),
+    }))).toBe(true);
+    expect(thinkingReplayPayloadWithinLimits(payload({
+      blob: 'b'.repeat(THINKING_BLOB_MAX_LENGTH + 1),
+    }))).toBe(false);
+    expect(thinkingReplayPayloadWithinLimits(payload({
+      displayText: 'd'.repeat(THINKING_DISPLAY_TEXT_MAX_LENGTH + 1),
+    }))).toBe(false);
+    expect(thinkingReplayPayloadWithinLimits(payload({
+      itemId: 'i'.repeat(THINKING_ITEM_ID_MAX_LENGTH + 1),
+    }))).toBe(false);
+  });
+
+  it('refuses oversized artifacts at replay and degrades to text or nothing', () => {
+    const oversized = payload({ blob: 'b'.repeat(THINKING_BLOB_MAX_LENGTH + 1) });
+    expect(decideThinkingReplay({
+      policy: ANTHROPIC_THINKING_POLICY,
+      selection: ANTHROPIC_SELECTION,
+      content: 'Let me analyze',
+      payload: oversized,
+    })).toEqual({ emit: 'none' });
+    expect(buildThinkingProviderOptions(oversized)).toBeUndefined();
+    // An oversized displayText must not leak into the plain-text fallback.
+    expect(decideThinkingReplay({
+      policy: DEFAULT_THINKING_POLICY,
+      selection: ANTHROPIC_SELECTION,
+      content: 'plain reasoning',
+      payload: payload({ displayText: 'd'.repeat(THINKING_DISPLAY_TEXT_MAX_LENGTH + 1) }),
+    })).toEqual({ emit: 'text', text: 'plain reasoning' });
   });
 });
 
