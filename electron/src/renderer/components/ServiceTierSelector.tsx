@@ -114,10 +114,21 @@ export function ServiceTierSelector({
                 size="xs"
                 className="w-full justify-start"
                 aria-pressed={selected}
-                title={tier.description ?? undefined}
+                title={
+                  [tier.description, tier.requiresStreaming ? 'Requires a streaming request' : null]
+                    .filter(Boolean)
+                    .join(' — ') || undefined
+                }
                 onClick={() => choose(tier.id)}
               >
-                {tier.displayName ?? tier.id}
+                <span className="flex min-w-0 items-center justify-between gap-2">
+                  <span className="truncate">{tier.displayName ?? tier.id}</span>
+                  {tier.requiresStreaming && (
+                    <span className="shrink-0 text-xs font-medium opacity-60">
+                      Requires streaming
+                    </span>
+                  )}
+                </span>
               </Button>
             );
           })}

@@ -305,4 +305,57 @@ describe('provider cost calculation', () => {
       evidence: { accountingMethod: 'energy', energyRateUsdPerKwh: '5', currency: 'USD' },
     })).toMatchObject({ state: 'unknown', source: 'unknown' });
   });
+
+  it('refuses to bill base rates for a request-parameter tier without tier-aware rates (R22)', () => {
+    const tiered = snapshot({
+      tier: { mechanism: 'request-parameter', requestedTier: 'flex' },
+    });
+    expect(calculateAttemptCost({
+      snapshot: tiered,
+      usage: { inputTokens: 1000, outputTokens: 100 },
+      evidence: {},
+    })).toEqual({
+      state: 'unknown',
+      source: 'unknown',
+      reason: "Service tier 'flex' was requested but tier-aware rates are not frozen for this attempt",
+    });
+  });
+
+  it('gives a provider-reported charge precedence over the request-parameter tier guard', () => {
+    const tiered = snapshot({
+      tier: { mechanism: 'request-parameter', requestedTier: 'flex' },
+    });
+    expect(calculateAttemptCost({
+      snapshot: tiered,
+      usage: { inputTokens: 1000, outputTokens: 100 },
+      evidence: { reportedCostAmount: '0.25', reportedCurrency: 'USD' },
+    })).toEqual({
+      state: 'reported',
+      source: 'provider-reported',
+      currency: 'USD',
+      amount: '0.25',
+    });
+  });
+
+  it('keeps billing model-name-variant tiers from the frozen served variant rates', () => {
+    const tiered = snapshot({
+      modelId: 'glm-5.2-flex',
+      tier: {
+        mechanism: 'model-name-variants',
+        requestedTier: 'flex',
+        servedModelId: 'glm-5.2-flex',
+        baseModelId: 'glm-5.2',
+      },
+    });
+    expect(calculateAttemptCost({
+      snapshot: tiered,
+      usage: { inputTokens: 1000, outputTokens: 100 },
+      evidence: {},
+    })).toMatchObject({
+      state: 'calculated',
+      source: 'token-formula',
+      currency: 'USD',
+      amount: '0.0075',
+    });
+  });
 });

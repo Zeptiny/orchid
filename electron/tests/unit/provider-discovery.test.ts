@@ -557,6 +557,68 @@ describe('discovery merge', () => {
     expect(outcome.reasoningConfig).toBeUndefined();
   });
 
+  it('prunes selections whose models the fresh snapshot no longer backs', async () => {
+    const existing = connection({
+      modelIds: ['nw-base', 'nw-gone'],
+      tierSelections: { 'nw-base': 'lite', 'nw-gone': 'pro' },
+      reasoningConfig: {
+        'nw-base': { levels: ['low', 'high'], default: 'low' },
+        'nw-gone': { levels: ['low'], default: 'low' },
+      },
+      discoveredModels: [{
+        id: 'nw-gone',
+        provenance: 'provider',
+        discoveredAt: '2026-08-01T00:00:00.000Z',
+      }],
+    });
+    const outcome = await discoverConnectionModels({
+      driver: driverWithModels(async () => [{ id: 'nw-base' }]),
+      connection: existing,
+      provider: definition(),
+      credential: { kind: 'api-key', apiKey: 'key' },
+      now: () => new Date('2026-08-08T12:00:00.000Z'),
+    });
+
+    expect(outcome.status).toBe('ok');
+    expect(outcome.discoveredModels.map((model) => model.id)).toEqual(['nw-base']);
+    // The delisted model's selections are flagged for pruning rather than left
+    // orphaned, while selections for still-backed models are untouched.
+    expect(outcome.prune).toEqual({
+      modelIds: ['nw-gone'],
+      tierSelections: ['nw-gone'],
+      reasoningConfig: ['nw-gone'],
+    });
+  });
+
+  it('never prunes selections backed by the catalog, custom models, or the fresh snapshot', async () => {
+    const outcome = await discoverConnectionModels({
+      driver: driverWithModels(async () => [{ id: 'nw-new' }]),
+      connection: connection({
+        modelIds: ['nw-base', 'nw-custom', 'nw-new'],
+        customModels: [{
+          id: 'nw-custom',
+          displayName: 'Custom entry',
+          protocol: 'openai-compatible',
+          capabilities: {
+            inputModalities: ['text'],
+            outputModalities: ['text'],
+            tools: true,
+            reasoning: false,
+          },
+          limits: { contextTokens: 4096, outputTokens: 1024 },
+        }],
+        tierSelections: { 'nw-base': 'lite' },
+        reasoningConfig: { 'nw-new': { levels: ['low'], default: 'low' } },
+      }),
+      provider: definition(),
+      credential: { kind: 'api-key', apiKey: 'key' },
+      now: () => new Date('2026-08-08T12:00:00.000Z'),
+    });
+
+    expect(outcome.status).toBe('ok');
+    expect(outcome.prune).toEqual({ modelIds: [], tierSelections: [], reasoningConfig: [] });
+  });
+
   it('seeds reasoning levels from live metadata only when nothing is configured', async () => {
     const outcome = await discoverConnectionModels({
       driver: driverWithModels(async () => [{

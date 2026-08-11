@@ -169,6 +169,17 @@ export function calculateAttemptCost(input: {
     };
   }
 
+  // Request-parameter tiers (R22): the frozen ladder holds only the base
+  // model's rates, so a tiered attempt must not be silently billed at base
+  // rates. Variant mechanisms freeze the served variant's rates and stay on
+  // the formula path; a provider-reported charge above always wins.
+  const tier = input.snapshot.tier;
+  if (tier?.mechanism === 'request-parameter' && tier.requestedTier) {
+    return unknown(
+      `Service tier '${tier.requestedTier}' was requested but tier-aware rates are not frozen for this attempt`,
+    );
+  }
+
   const usage = input.usage;
   if (!usage || !pricing) return unknown('No frozen pricing formula or authoritative usage is available');
 

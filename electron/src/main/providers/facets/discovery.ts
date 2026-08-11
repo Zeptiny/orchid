@@ -23,6 +23,21 @@ import type { DriverCredential, ProviderDriver } from '../drivers/types';
 
 export type ConnectionDiscoveryStatus = 'ok' | 'unsupported' | 'no-credential' | 'failed';
 
+export interface DiscoverySelectionPrune {
+  /** Enabled modelIds no longer backed by the catalog, custom models, or the fresh snapshot. */
+  readonly modelIds: readonly string[];
+  /** tierSelections keys for models no longer backed by any layer. */
+  readonly tierSelections: readonly string[];
+  /** reasoningConfig keys for models no longer backed by any layer. */
+  readonly reasoningConfig: readonly string[];
+}
+
+const EMPTY_DISCOVERY_PRUNE: DiscoverySelectionPrune = {
+  modelIds: [],
+  tierSelections: [],
+  reasoningConfig: [],
+};
+
 export interface ConnectionDiscoveryOutcome {
   readonly status: ConnectionDiscoveryStatus;
   /** Fresh snapshot on success; the connection's prior entries otherwise. */
@@ -31,8 +46,22 @@ export interface ConnectionDiscoveryOutcome {
   readonly addedModelIds: readonly string[];
   /** Fill-absent reasoning seeds from live metadata; undefined when nothing seeded. */
   readonly reasoningConfig: Record<string, ReasoningModelConfig> | undefined;
+  /** Selections to drop when persisting the snapshot; empty when nothing was delisted. */
+  readonly prune: DiscoverySelectionPrune;
   /** Redacted failure detail for non-blocking surfacing; null on success. */
   readonly message: string | null;
+}
+
+/** Ids in a connection's selection layers with no catalog, custom, or fresh-snapshot backing. */
+export function orphanedSelectionPrune(
+  connection: Pick<ProviderConnection, 'modelIds' | 'tierSelections' | 'reasoningConfig'>,
+  supportedIds: ReadonlySet<string>,
+): DiscoverySelectionPrune {
+  return {
+    modelIds: connection.modelIds.filter((id) => !supportedIds.has(id)),
+    tierSelections: Object.keys(connection.tierSelections ?? {}).filter((id) => !supportedIds.has(id)),
+    reasoningConfig: Object.keys(connection.reasoningConfig ?? {}).filter((id) => !supportedIds.has(id)),
+  };
 }
 
 export interface DiscoverConnectionModelsInput {
@@ -97,6 +126,7 @@ export async function discoverConnectionModels(
     discoveredModels: prior,
     addedModelIds: [],
     reasoningConfig: undefined,
+    prune: EMPTY_DISCOVERY_PRUNE,
   };
   const facet = input.driver.discoveryFacet;
   if (!facet) return { ...idle, status: 'unsupported', message: null };
@@ -127,11 +157,16 @@ export async function discoverConnectionModels(
     ...input.provider.models.map((model) => model.id),
     ...(input.connection.customModels ?? []).map((model) => model.id),
   ]);
+  const supportedIds = new Set([
+    ...knownIds,
+    ...discoveredModels.map((model) => model.id),
+  ]);
   return {
     status: 'ok',
     discoveredModels,
     addedModelIds: discoveredModels.map((model) => model.id).filter((id) => !knownIds.has(id)),
     reasoningConfig: seedDiscoveredReasoningConfig(input.connection, discoveredModels),
+    prune: orphanedSelectionPrune(input.connection, supportedIds),
     message: null,
   };
 }

@@ -9,6 +9,7 @@ import {
   requestNextRequestStop,
   shouldStopNextRequest,
 } from '../../src/main/ipc/next-request-stop';
+import { OPENAI_TIER_MECHANISM } from '../../src/main/providers/drivers/native';
 
 function successfulToolResult(toolCallId: string, content: string): Record<string, unknown> {
   const canonical = createCanonicalToolResult('generic', {
@@ -67,6 +68,7 @@ const mocks = vi.hoisted(() => {
     selection?: { connectionId: string; modelId: string } | null;
     modelLabel?: string;
     reasoningEffortOverride?: string | number | null;
+    tierOverride?: string | null;
   };
   let activeSession: MockSession | null = null;
   const sessionsById = new Map<string, MockSession>();
@@ -566,23 +568,27 @@ vi.mock('electron', () => ({
   webContents: mocks.electronWebContents,
 }));
 
-vi.mock('../../src/main/config/loader', () => ({
-  HOME_PERSONALITIES_DIR: '/tmp/orchid-test-personalities',
-  getTierModelSelection: (
-    config: {
-      default_model: unknown;
-      tier_models: Record<string, unknown>;
-    },
-    tier: string,
-  ) => config.tier_models[tier] ?? config.default_model,
-  getConfig: vi.fn(() => ({
-    default_model: null,
-    tier_models: { bloom: null },
-    command_timeout: 30,
-    llm_stream_idle_timeout: 60,
-    llm_stream_retries: 0,
-  })),
-}));
+vi.mock('../../src/main/config/loader', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../src/main/config/loader')>();
+  return {
+    ...actual,
+    HOME_PERSONALITIES_DIR: '/tmp/orchid-test-personalities',
+    getTierModelSelection: (
+      config: {
+        default_model: unknown;
+        tier_models: Record<string, unknown>;
+      },
+      tier: string,
+    ) => config.tier_models[tier] ?? config.default_model,
+    getConfig: vi.fn(() => ({
+      default_model: null,
+      tier_models: { bloom: null },
+      command_timeout: 30,
+      llm_stream_idle_timeout: 60,
+      llm_stream_retries: 0,
+    })),
+  };
+});
 
 vi.mock('../../src/main/tools', () => ({
   toolRegistry: mocks.toolRegistry,
@@ -1596,6 +1602,68 @@ describe('chat IPC provider gates', () => {
     }));
   });
 
+  it('merges a session tier override into providerOptions and the frozen snapshot (R19/R21/R22)', async () => {
+    const sessionId = 'f1f1f1f1-f1f1-4f1f-8f1f-f1f1f1f1f1f1';
+    const selection = {
+      connectionId: '11111111-1111-4111-8111-111111111111',
+      modelId: 'vendor/path/model',
+    };
+    mocks.sessionManager._setActive({
+      ...makeSession(sessionId),
+      model: selection.modelId,
+      selection,
+      modelLabel: selection.modelId,
+      tierOverride: 'flex',
+    });
+    mocks.providerRuntime.resolveTierContext.mockResolvedValueOnce({
+      connection: { tierSelections: { 'vendor/path/model': 'fast' } },
+      tierMechanism: OPENAI_TIER_MECHANISM,
+    } as never);
+    mocks.providerRuntime.resolveExecution.mockResolvedValueOnce({
+      modelInstance: mocks.modelInstance,
+      connection: { tierSelections: { 'vendor/path/model': 'fast' } },
+      model: { id: 'vendor/path/model', capabilities: { reasoning: false } },
+      snapshot: {
+        providerId: 'openai',
+        providerDisplayName: 'OpenAI',
+        connectionId: '11111111-1111-4111-8111-111111111111',
+        connectionName: 'Work',
+        modelId: 'vendor/path/model',
+        protocol: 'openai-compatible',
+        modelSource: 'catalog',
+        catalogVersion: 1,
+        catalogSource: 'bundled',
+        catalogObservedAt: null,
+        pricing: null,
+        fieldProvenance: {},
+        statusObservation: null,
+        tier: { mechanism: 'request-parameter', requestedTier: 'flex' },
+      },
+      tierMechanism: OPENAI_TIER_MECHANISM,
+    } as never);
+    mocks.streamChat.mockImplementationOnce(async function* () {
+      yield { type: 'content', text: 'Tiered reply' };
+      yield { type: 'finish', finishReason: 'stop' };
+    });
+
+    const send = vi.fn();
+    const chatSend = mocks.handlers.get(IPC_CHANNELS.CHAT_SEND)!;
+    await chatSend({ sender: { id: 909, send } }, { message: 'Tiered request' });
+    await waitForDoneCount(send, 1);
+
+    // The session override 'flex' wins over the connection selection 'fast' (R21).
+    expect(mocks.providerRuntime.resolveExecution).toHaveBeenCalledWith(selection, { tier: 'flex' });
+    // The request-parameter mechanism rides serviceTier into the merged providerOptions (R19).
+    expect(mocks.streamChat).toHaveBeenCalledWith(expect.objectContaining({
+      providerOptions: { openai: { serviceTier: 'flex' } },
+      accounting: expect.objectContaining({
+        snapshot: expect.objectContaining({
+          tier: { mechanism: 'request-parameter', requestedTier: 'flex' },
+        }),
+      }),
+    }));
+  });
+
   it('auto-names a completed default session through the internal session-namer agent', async () => {
     const turnSelection = {
       connectionId: '11111111-1111-4111-8111-111111111111',
@@ -1754,6 +1822,7 @@ describe('chat IPC provider gates', () => {
     // Turn stays in flight past the deadline and never yields assistant text.
     mocks.streamChat.mockImplementationOnce(async function* () {
       await new Promise(() => {});
+      yield { type: 'finish', finishReason: 'stop' };
     });
     const send = vi.fn();
     const source = { id: 910, send };
@@ -1890,6 +1959,7 @@ describe('chat IPC provider gates', () => {
     });
     mocks.streamChat.mockImplementationOnce(async function* () {
       await new Promise(() => {});
+      yield { type: 'finish', finishReason: 'stop' };
     });
     const send = vi.fn();
     const source = { id: 913, send };

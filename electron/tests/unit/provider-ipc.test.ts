@@ -1414,6 +1414,75 @@ describe('provider live model discovery IPC', () => {
     }]);
   });
 
+  it('prunes an enabled model that a manual refresh delists', async () => {
+    const fetchModels = vi.fn(async () => [{ id: 'nw-base' }]);
+    const memory = discoveryServices(fetchModels);
+    const id = '00000000-0000-4000-8000-000000000098';
+    memory.records.set(id, {
+      id,
+      providerId: 'neuralwatt',
+      name: 'NW delist',
+      protocol: 'openai-compatible',
+      authMethod: 'api-key',
+      credential: { kind: 'stored', handle: 'fixture-nw-key' },
+      modelIds: ['nw-base', 'nw-gone'],
+      tierSelections: { 'nw-base': 'lite', 'nw-gone': 'pro' },
+      reasoningConfig: { 'nw-gone': { levels: ['low'], default: 'low' } },
+      discoveredModels: [{
+        id: 'nw-gone',
+        provenance: 'provider',
+        discoveredAt: '2026-08-01T00:00:00.000Z',
+      }],
+      health: 'ready',
+    });
+    providersIpc._setProviderIPCServicesForTests(memory.services);
+    providersIpc.registerProviderIPC();
+
+    const result = await handler(IPC_CHANNELS.PROVIDERS_DISCOVER_MODELS)(null, { connectionId: id });
+    expect(result).toMatchObject({ status: 'ok' });
+
+    const record = memory.records.get(id);
+    expect(record?.discoveredModels?.map((model: { id: string }) => model.id)).toEqual(['nw-base']);
+    // The delisted id is dropped from the enabled list and its selections are
+    // pruned with the fresh snapshot instead of orphaning every later update.
+    expect(record?.modelIds).toEqual(['nw-base']);
+    expect(record?.tierSelections).toEqual({ 'nw-base': 'lite' });
+    expect(record?.reasoningConfig).toEqual({});
+  });
+
+  it('reports an orphaned enabled modelId instead of failing validate and name-only updates', async () => {
+    const memory = discoveryServices(vi.fn());
+    const id = '00000000-0000-4000-8000-000000000099';
+    memory.records.set(id, {
+      id,
+      providerId: 'neuralwatt',
+      name: 'NW orphan',
+      protocol: 'openai-compatible',
+      authMethod: 'api-key',
+      credential: { kind: 'stored', handle: 'fixture-nw-key' },
+      modelIds: ['nw-base', 'nw-orphan'],
+      health: 'ready',
+    });
+    providersIpc._setProviderIPCServicesForTests(memory.services);
+    providersIpc.registerProviderIPC();
+
+    const validated = await handler(IPC_CHANNELS.PROVIDERS_VALIDATE)(null, { connectionId: id });
+    expect(validated).toMatchObject({ connection: { health: 'ready' } });
+    expect(validated.message).toMatch(/'nw-orphan'/);
+    expect(validated.message).toMatch(/no longer available/i);
+
+    const renamed = await handler(IPC_CHANNELS.PROVIDERS_UPDATE)(null, {
+      connectionId: id,
+      name: 'NW orphan renamed',
+    });
+    expect(renamed).toMatchObject({
+      connection: { name: 'NW orphan renamed', health: 'ready' },
+    });
+    expect(renamed.message).toMatch(/'nw-orphan'/);
+    // The orphan is reported, never silently clobbered by a name-only update.
+    expect(memory.records.get(id)?.modelIds).toEqual(['nw-base', 'nw-orphan']);
+  });
+
   it('invalidates latest-known pricing when a connection is deleted', async () => {
     const memory = memoryServices();
     const id = '00000000-0000-4000-8000-000000000097';
@@ -1434,5 +1503,41 @@ describe('provider live model discovery IPC', () => {
 
     expect(memory.status.invalidate).toHaveBeenCalledWith('openai', id);
     expect(memory.pricing.invalidate).toHaveBeenCalledWith('openai', id);
+  });
+});
+
+describe('provider channel zod rejection', () => {
+  it('rejects providers:discover_models with a non-uuid connection id', async () => {
+    providersIpc.registerProviderIPC();
+
+    await expect(handler(IPC_CHANNELS.PROVIDERS_DISCOVER_MODELS)(null, {
+      connectionId: 'not-a-uuid',
+    })).rejects.toThrow('Invalid providers:discover_models payload');
+  });
+
+  it('rejects providers:discover_models with a missing payload', async () => {
+    providersIpc.registerProviderIPC();
+
+    await expect(handler(IPC_CHANNELS.PROVIDERS_DISCOVER_MODELS)(null, undefined))
+      .rejects.toThrow('Invalid providers:discover_models payload');
+    await expect(handler(IPC_CHANNELS.PROVIDERS_DISCOVER_MODELS)(null, {}))
+      .rejects.toThrow('Invalid providers:discover_models payload');
+  });
+
+  it('rejects providers:quota_refresh with a non-uuid connection id', async () => {
+    providersIpc.registerProviderIPC();
+
+    await expect(handler(IPC_CHANNELS.PROVIDERS_QUOTA_REFRESH)(null, {
+      connectionId: 'not-a-uuid',
+    })).rejects.toThrow('Invalid providers:quota_refresh payload');
+  });
+
+  it('rejects providers:quota_refresh with a missing payload', async () => {
+    providersIpc.registerProviderIPC();
+
+    await expect(handler(IPC_CHANNELS.PROVIDERS_QUOTA_REFRESH)(null, undefined))
+      .rejects.toThrow('Invalid providers:quota_refresh payload');
+    await expect(handler(IPC_CHANNELS.PROVIDERS_QUOTA_REFRESH)(null, {}))
+      .rejects.toThrow('Invalid providers:quota_refresh payload');
   });
 });

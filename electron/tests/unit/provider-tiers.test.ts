@@ -2,7 +2,7 @@
  * Service tier facet — resolution, variant mapping, opt-in behavior, grouping,
  * and served-tier evidence (R19–R23).
  */
-import { describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   applyVariantTier,
   buildTierProviderOptions,
@@ -18,6 +18,11 @@ import { NEURALWATT_TIER_MECHANISM } from '../../src/main/providers/drivers/neur
 import { OPENAI_TIER_MECHANISM } from '../../src/main/providers/drivers/native';
 import type { TierMechanism } from '../../src/shared/types/provider-facets';
 import type { EffectiveModel } from '../../src/shared/types/provider';
+import { ProviderRuntime } from '../../src/main/providers';
+import { ProviderDriverRegistry } from '../../src/main/providers/drivers/registry';
+import { ProviderResolutionError } from '../../src/main/llm/middleware/error-classification';
+import type { ProviderConnection, ProviderDefinition } from '../../src/shared/types/provider';
+import type { ProviderDriver } from '../../src/main/providers/drivers/types';
 
 const variantMechanism: TierMechanism = NEURALWATT_TIER_MECHANISM;
 const parameterMechanism: TierMechanism = OPENAI_TIER_MECHANISM;
@@ -223,6 +228,17 @@ describe('extractServedTier (R22)', () => {
   it('returns undefined when no tier facet is active', () => {
     expect(extractServedTier({ mechanism: undefined, servedModelId: 'gpt-5.6' })).toBeUndefined();
   });
+
+  it('reports a requested-but-unserved tier as { requestedTier } without a tier field (R22)', () => {
+    expect(
+      extractServedTier({
+        mechanism: parameterMechanism,
+        servedModelId: 'gpt-5.6',
+        requestedTier: 'flex',
+        finishMetadata: {},
+      }),
+    ).toEqual({ requestedTier: 'flex' });
+  });
 });
 
 describe('declaredTier', () => {
@@ -230,5 +246,120 @@ describe('declaredTier', () => {
     expect(declaredTier(variantMechanism, 'flex')).toEqual({ id: 'flex', requiresStreaming: true });
     expect(declaredTier(variantMechanism, 'fast')).toEqual({ id: 'fast', requiresStreaming: false });
     expect(declaredTier(variantMechanism, 'turbo')).toBeUndefined();
+  });
+});
+
+describe('ProviderRuntime tier context and execution glue (R19–R22)', () => {
+  const runtimeConnection: ProviderConnection = {
+    id: '44444444-4444-4444-8444-444444444444',
+    providerId: 'neuralwatt',
+    name: 'Neuralwatt',
+    protocol: 'openai-compatible',
+    authMethod: 'api-key',
+    credential: { kind: 'stored', handle: '55555555-5555-4555-8555-555555555555' },
+    modelIds: ['glm-5.2'],
+    discoveredModels: [{
+      id: 'glm-5.2',
+      provenance: 'provider',
+      discoveredAt: '2026-07-12T11:50:00.000Z',
+      pricing: {
+        currencyUnit: { kind: 'fiat', code: 'USD' },
+        observedAt: '2026-07-12T11:55:00.000Z',
+        rates: {
+          input: { amount: '1', per: 1_000_000, unit: 'tokens' },
+          output: { amount: '4', per: 1_000_000, unit: 'tokens' },
+        },
+      },
+    }],
+    health: 'ready',
+  };
+  const runtimeProvider: ProviderDefinition = {
+    id: 'neuralwatt',
+    displayName: 'Neuralwatt',
+    supportedAuthMethods: ['api-key'],
+    supportedProtocols: ['openai-compatible'],
+    allowsCustomModels: false,
+    models: [{ id: 'glm-5.2', displayName: 'GLM 5.2', protocol: 'openai-compatible' }],
+  };
+  const selection = { connectionId: runtimeConnection.id, modelId: 'glm-5.2' };
+
+  let createLanguageModel: ReturnType<typeof vi.fn>;
+  let runtimeDriver: ProviderDriver;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    createLanguageModel = vi.fn(async () => ({ kind: 'trusted-model' }));
+    runtimeDriver = {
+      id: 'neuralwatt',
+      supportedAuthMethods: ['api-key'],
+      supportedProtocols: ['openai-compatible'],
+      allowsCustomEndpoint: false,
+      origin: 'https://api.neuralwatt.com/v1',
+      createLanguageModel,
+      tierMechanism: NEURALWATT_TIER_MECHANISM,
+      pricingFacet: { currencyUnit: { kind: 'fiat', code: 'USD' } },
+    };
+  });
+
+  function runtime(connections: readonly ProviderConnection[] = [runtimeConnection]): ProviderRuntime {
+    return new ProviderRuntime({
+      catalog: { getProviderDefinitions: () => [runtimeProvider] },
+      connections: { list: async () => connections },
+      vault: { readSecret: vi.fn(async () => ({ kind: 'api-key' as const, apiKey: 'vault-key' })) },
+      registry: new ProviderDriverRegistry([runtimeDriver]),
+    });
+  }
+
+  it('resolves a selection to the connection and its driver tier mechanism', async () => {
+    const context = await runtime().resolveTierContext(selection);
+
+    expect(context.connection).toBe(runtimeConnection);
+    expect(context.tierMechanism).toBe(NEURALWATT_TIER_MECHANISM);
+  });
+
+  it('throws ProviderResolutionError when the selection cannot resolve', async () => {
+    await expect(
+      runtime([]).resolveTierContext(selection),
+    ).rejects.toBeInstanceOf(ProviderResolutionError);
+  });
+
+  it('freezes the served variant id and bills the discovered base-id pricing for a variant-tier execution (R22, R27)', async () => {
+    const execution = await runtime().resolveExecution(selection, { tier: 'flex' });
+
+    expect(execution.snapshot.tier).toEqual({
+      mechanism: 'model-name-variants',
+      requestedTier: 'flex',
+      servedModelId: 'glm-5.2-flex',
+      baseModelId: 'glm-5.2',
+    });
+    expect(execution.snapshot.pricing?.rates.input).toMatchObject({
+      amount: '1',
+      provenance: { source: 'provider-api', observedAt: '2026-07-12T11:50:00.000Z' },
+    });
+    expect(execution.snapshot.pricing?.provenance).toMatchObject({
+      source: 'provider-api',
+      discovered: { observedAt: '2026-07-12T11:50:00.000Z' },
+    });
+    expect(createLanguageModel).toHaveBeenCalledWith(expect.objectContaining({
+      model: expect.objectContaining({ id: 'glm-5.2' }),
+      tier: 'flex',
+    }));
+  });
+
+  it('applies a user override keyed by the base model id to a variant-tier execution', async () => {
+    const execution = await runtime([{
+      ...runtimeConnection,
+      discoveredModels: undefined,
+      pricingOverrides: {
+        'glm-5.2': { input: { amount: '2', per: 1_000_000, unit: 'tokens' } },
+      },
+    }]).resolveExecution(selection, { tier: 'flex' });
+
+    expect(execution.snapshot.tier?.servedModelId).toBe('glm-5.2-flex');
+    expect(execution.snapshot.pricing?.rates.input).toMatchObject({
+      amount: '2',
+      provenance: { source: 'user', observedAt: null },
+    });
+    expect(execution.snapshot.pricing?.provenance).toMatchObject({ source: 'user', user: true });
   });
 });

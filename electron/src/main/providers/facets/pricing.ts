@@ -5,6 +5,7 @@ import type {
   PricingContextTier,
   PricingRateFields,
   ProviderModelRateCard,
+  ProviderRateCard,
 } from '../../../shared/types/provider-facets';
 import type {
   FrozenPricingSnapshot,
@@ -49,12 +50,26 @@ export interface DynamicPricingState {
   readonly error?: string;
 }
 
+/** Live inline rates parsed from the provider's models endpoint (R27). */
+export interface DiscoveredPricingRung {
+  readonly pricing: ProviderRateCard;
+  readonly discoveredAt: string;
+}
+
 export interface PricingResolverInput {
   readonly pricingFacet: DriverPricingFacet | undefined;
   readonly connection: ProviderConnection;
+  /** Billed model identity: variant tiers freeze the served variant id (R22). */
   readonly modelId: string;
+  /**
+   * Base model id the user-override rung keys off; variant requests bill the
+   * variant id but users key overrides by the base id (R6, R22).
+   */
+  readonly userOverrideModelId?: string;
   readonly catalogPricing: CatalogPricing | undefined;
   readonly dynamic: DynamicPricingState | undefined;
+  /** Live inline rates parsed from the provider's models endpoint (R27). */
+  readonly discovered?: DiscoveredPricingRung;
   readonly now: Date;
 }
 
@@ -159,16 +174,27 @@ export function scalePricingRateFields(rates: PricingRateFields, multiplier: Dec
 }
 
 /**
- * Compose the pricing ladder provider API → user override → catalog into one
- * immutable frozen snapshot. Every frozen rate carries its rung provenance so
- * attempt accounting can report which rung produced a cost (R5–R9). Returns
- * null when no rung can price the model in a known billing unit.
+ * Compose the pricing ladder live-discovered → provider API → user override →
+ * catalog into one immutable frozen snapshot. Every frozen rate carries its
+ * rung provenance so attempt accounting can report which rung produced a cost
+ * (R5–R9). Returns null when no rung can price the model in a known billing
+ * unit.
  */
 export function resolveFrozenPricing(input: PricingResolverInput): FrozenPricingSnapshot | null {
   const card = input.dynamic?.card && cardHasRates(input.dynamic.card)
     ? input.dynamic.card
     : undefined;
+  const discoveredRung: RungView | undefined = input.discovered
+    ? {
+        source: 'provider-api',
+        observedAt: input.discovered.discoveredAt,
+        stale: false,
+        rates: input.discovered.pricing.rates,
+        contextTiers: input.discovered.pricing.contextTiers,
+      }
+    : undefined;
   const rungs: RungView[] = [
+    ...(discoveredRung ? [discoveredRung] : []),
     {
       source: 'provider-api',
       observedAt: card?.observedAt ?? null,
@@ -180,7 +206,7 @@ export function resolveFrozenPricing(input: PricingResolverInput): FrozenPricing
       source: 'user',
       observedAt: null,
       stale: false,
-      rates: input.connection.pricingOverrides?.[input.modelId],
+      rates: input.connection.pricingOverrides?.[input.userOverrideModelId ?? input.modelId],
       contextTiers: undefined,
     },
     {
@@ -203,6 +229,7 @@ export function resolveFrozenPricing(input: PricingResolverInput): FrozenPricing
   if (contributing.size === 0) return null;
 
   const currencyUnit = card?.currencyUnit
+    ?? input.discovered?.pricing.currencyUnit
     ?? input.pricingFacet?.currencyUnit
     ?? input.catalogPricing?.currencyUnit;
   const currency = currencyUnit ? currencyUnitLabel(currencyUnit) : input.catalogPricing?.currency;
@@ -221,12 +248,18 @@ export function resolveFrozenPricing(input: PricingResolverInput): FrozenPricing
       ...(card?.adjustment ? { adjustment: card.adjustment } : {}),
     };
   }
+  if (input.discovered) {
+    provenance.discovered = { observedAt: input.discovered.discoveredAt };
+  }
   if (contributing.has('user')) provenance.user = true;
 
   return {
     currency,
     ...(currencyUnit ? { currencyUnit } : {}),
-    effectiveAt: card?.observedAt ?? input.catalogPricing?.effectiveAt ?? input.now.toISOString(),
+    effectiveAt: input.discovered?.pricing.observedAt
+      ?? card?.observedAt
+      ?? input.catalogPricing?.effectiveAt
+      ?? input.now.toISOString(),
     rates,
     ...(contextTiers && contextTiers.length > 0 ? { contextTiers } : {}),
     inclusion: {

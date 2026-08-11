@@ -3,6 +3,7 @@ import type { Agent } from '../../src/shared/types/agent';
 import type { Message } from '../../src/shared/types/message';
 import type { StreamEvent } from '../../src/main/llm/orchestrator';
 import type { ProjectRuntime } from '../../src/main/project/runtime';
+import { NEURALWATT_TIER_MECHANISM } from '../../src/main/providers/drivers/neuralwatt';
 
 const mocks = vi.hoisted(() => ({
   getConfig: vi.fn(() => ({ default_project_dir: null })),
@@ -66,9 +67,10 @@ const mocks = vi.hoisted(() => ({
   getBuiltinToolRegistryForRuntime: vi.fn(),
 }));
 
-vi.mock('../../src/main/config/loader', () => ({
-  getConfig: mocks.getConfig,
-}));
+vi.mock('../../src/main/config/loader', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../src/main/config/loader')>();
+  return { ...actual, getConfig: mocks.getConfig };
+});
 
 vi.mock('../../src/main/session/singleton', () => ({
   getSessionManager: mocks.getSessionManager,
@@ -350,6 +352,61 @@ describe('createSubagentStreamRunner', () => {
     expect(call.messages[0]).toEqual(expect.objectContaining({
       role: 'user',
       content: 'Inspect the project',
+    }));
+  });
+
+  it('resolves a connection tier selection into the variant tier for the subagent execution (R21/R22)', async () => {
+    const tieredSnapshot = {
+      providerId: 'neuralwatt',
+      providerDisplayName: 'Neuralwatt',
+      connectionId: '11111111-1111-4111-8111-111111111111',
+      connectionName: 'Work',
+      modelId: 'vendor/path/model-flex',
+      protocol: 'openai-compatible',
+      modelSource: 'catalog',
+      catalogVersion: 1,
+      catalogSource: 'bundled',
+      catalogObservedAt: null,
+      pricing: null,
+      fieldProvenance: {},
+      statusObservation: null,
+      tier: {
+        mechanism: 'model-name-variants' as const,
+        requestedTier: 'flex',
+        servedModelId: 'vendor/path/model-flex',
+        baseModelId: 'vendor/path/model',
+      },
+    };
+    mocks.providerRuntime.resolveTierContext.mockResolvedValueOnce({
+      connection: { tierSelections: { 'vendor/path/model': 'flex' } },
+      tierMechanism: NEURALWATT_TIER_MECHANISM,
+    } as never);
+    mocks.providerRuntime.resolveExecution.mockResolvedValueOnce({
+      modelInstance: { provider: 'trusted-test-driver' },
+      connection: { tierSelections: { 'vendor/path/model': 'flex' } },
+      model: { id: 'vendor/path/model-flex', capabilities: { reasoning: false } },
+      snapshot: tieredSnapshot,
+      tierMechanism: NEURALWATT_TIER_MECHANISM,
+    } as never);
+
+    await collect(createSubagentStreamRunner()({
+      task: 'Inspect the project',
+      agent,
+      selection,
+      abortSignal: new AbortController().signal,
+      agentScopeId: 'scope-variant-tier',
+      sessionId: 'session-variant-tier',
+      cwd: '/tmp/project',
+      projectRuntime: runtime(),
+    }));
+
+    expect(mocks.providerRuntime.resolveExecution).toHaveBeenCalledWith(selection, { tier: 'flex' });
+    // Variant mechanisms ignore the parameter form, so no serviceTier is sent (R19).
+    expect(mocks.streamChat).toHaveBeenCalledWith(expect.objectContaining({
+      providerOptions: undefined,
+      accounting: expect.objectContaining({
+        snapshot: expect.objectContaining({ tier: tieredSnapshot.tier }),
+      }),
     }));
   });
 });

@@ -82,6 +82,7 @@ function makeSession(overrides: Partial<Session> & { model?: string } = {}): Ses
     subagentChains: overrides.subagentChains ?? [],
     todoStore: overrides.todoStore ?? { tasks: [] },
     reasoningEffortOverride: overrides.reasoningEffortOverride ?? null,
+    tierOverride: overrides.tierOverride ?? null,
     permissionMode: overrides.permissionMode ?? null,
   };
 }
@@ -2141,6 +2142,7 @@ describe('incremental session persistence', () => {
       manager.getTodoStore(session.id).create('Persist incrementally');
       manager.persistTodos(session.id);
       manager.setReasoningEffortOverride(session.id, 'high');
+      manager.setTierOverride(session.id, 'flex');
       manager.setPermissionMode(session.id, 'allow');
       manager.syncSubagentRecords(session.id, [
         makeSubagentRecord(session.id, { id: 'incremental-sub' }),
@@ -2162,6 +2164,7 @@ describe('incremental session persistence', () => {
       'Persist incrementally',
     ]);
     expect(loaded.reasoningEffortOverride).toBe('high');
+    expect(loaded.tierOverride).toBe('flex');
     expect(loaded.permissionMode).toBe('allow');
   });
 
@@ -2467,5 +2470,161 @@ describe('permissionMode SQLite round-trip', () => {
     } finally {
       sessionPermissionOverrides.delete(created.id);
     }
+  });
+});
+
+// ===========================================================================
+// SessionManager.setTierOverride
+// ===========================================================================
+
+describe('SessionManager.setTierOverride', () => {
+  it('sets the override and advances updatedAt', () => {
+    const manager = new SessionManager({ storage: storageOpts });
+    const session = manager.create(DEFAULT_SELECTION);
+    const before = session.updatedAt;
+
+    const start = Date.now();
+    while (Date.now() - start < 5) { /* tick */ }
+
+    manager.setTierOverride(session.id, 'flex');
+
+    const active = manager.getActive()!;
+    expect(active.tierOverride).toBe('flex');
+    expect(active.updatedAt >= before).toBe(true);
+  });
+
+  it('early-returns without mutation when session is not selected by any owner', () => {
+    const manager = new SessionManager({ storage: storageOpts });
+    const session1 = manager.create(DEFAULT_SELECTION);
+    manager.create(ANTHROPIC_SELECTION);
+
+    manager.setTierOverride(session1.id, 'flex');
+
+    const loaded = loadSession(session1.id, storageOpts)!;
+    expect(loaded.tierOverride).toBeNull();
+  });
+
+  it('does not throw for an unknown session id', () => {
+    const manager = new SessionManager({ storage: storageOpts });
+    manager.create(DEFAULT_SELECTION);
+
+    expect(() =>
+      manager.setTierOverride(randomUUID(), 'flex'),
+    ).not.toThrow();
+  });
+
+  it('persists the updated session to storage', () => {
+    const manager = new SessionManager({ storage: storageOpts });
+    const session = manager.create(DEFAULT_SELECTION);
+
+    manager.setTierOverride(session.id, 'turbo');
+
+    _clearDbCache();
+    const loaded = loadSession(session.id, storageOpts)!;
+    expect(loaded.tierOverride).toBe('turbo');
+  });
+
+  it('clears the override when set to null', () => {
+    const manager = new SessionManager({ storage: storageOpts });
+    const session = manager.create(DEFAULT_SELECTION);
+
+    manager.setTierOverride(session.id, 'flex');
+    expect(manager.getActive()!.tierOverride).toBe('flex');
+
+    manager.setTierOverride(session.id, null);
+    expect(manager.getActive()!.tierOverride).toBeNull();
+
+    _clearDbCache();
+    const loaded = loadSession(session.id, storageOpts)!;
+    expect(loaded.tierOverride).toBeNull();
+  });
+});
+
+// ===========================================================================
+// tierOverride SQLite round-trip
+// ===========================================================================
+
+describe('tierOverride SQLite round-trip', () => {
+  it('round-trips a string override', () => {
+    const session = makeSession({
+      id: 'e1e1e1e1-e1e1-4e1e-8e1e-e1e1e1e1e1e1',
+      tierOverride: 'flex',
+    });
+    saveSession(session, storageOpts);
+
+    const loaded = loadSession(session.id, storageOpts)!;
+    expect(loaded.tierOverride).toBe('flex');
+  });
+
+  it('deserializes a blank stored value to null', () => {
+    const sid = 'e2e2e2e2-e2e2-4e2e-8e2e-e2e2e2e2e2e2';
+    const session = makeSession({ id: sid, tierOverride: 'flex' });
+    saveSession(session, storageOpts);
+
+    const db = openSqliteDb(storageOpts.dbPath!);
+    db.prepare('UPDATE sessions SET tier_override = ? WHERE id = ?').run('   ', sid);
+    db.close();
+    _clearDbCache();
+
+    const loaded = loadSession(sid, storageOpts)!;
+    expect(loaded.tierOverride).toBeNull();
+  });
+
+  it('round-trips null override as null', () => {
+    const session = makeSession({
+      id: 'e3e3e3e3-e3e3-4e3e-8e3e-e3e3e3e3e3e3',
+      tierOverride: null,
+    });
+    saveSession(session, storageOpts);
+
+    const loaded = loadSession(session.id, storageOpts)!;
+    expect(loaded.tierOverride).toBeNull();
+  });
+});
+
+// ===========================================================================
+// tierOverride updateSessionFields round-trip
+// ===========================================================================
+
+describe('tierOverride updateSessionFields round-trip', () => {
+  it('writes the override column and loadSession reads it back', () => {
+    const sid = 'e4e4e4e4-e4e4-4e4e-8e4e-e4e4e4e4e4e4';
+    saveSession(makeSession({ id: sid }), storageOpts);
+
+    const persisted = updateSessionFields(sid, {
+      tierOverride: 'fast',
+      updatedAt: '2026-08-01T00:00:00.000Z',
+    }, storageOpts);
+    expect(persisted).toBe(true);
+
+    const loaded = loadSession(sid, storageOpts)!;
+    expect(loaded.tierOverride).toBe('fast');
+  });
+
+  it('clears a prior override when tierOverride is set to null', () => {
+    const sid = 'e5e5e5e5-e5e5-4e5e-8e5e-e5e5e5e5e5e5';
+    saveSession(makeSession({ id: sid, tierOverride: 'fast' }), storageOpts);
+
+    const persisted = updateSessionFields(sid, {
+      tierOverride: null,
+      updatedAt: '2026-08-01T00:00:00.000Z',
+    }, storageOpts);
+    expect(persisted).toBe(true);
+
+    const loaded = loadSession(sid, storageOpts)!;
+    expect(loaded.tierOverride).toBeNull();
+  });
+
+  it('leaves the stored override untouched when tierOverride is not supplied', () => {
+    const sid = 'e6e6e6e6-e6e6-4e6e-8e6e-e6e6e6e6e6e6';
+    saveSession(makeSession({ id: sid, tierOverride: 'flex' }), storageOpts);
+
+    updateSessionFields(sid, {
+      name: 'Renamed without touching tier',
+      updatedAt: '2026-08-01T00:00:00.000Z',
+    }, storageOpts);
+
+    const loaded = loadSession(sid, storageOpts)!;
+    expect(loaded.tierOverride).toBe('flex');
   });
 });

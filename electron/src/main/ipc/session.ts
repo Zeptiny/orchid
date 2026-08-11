@@ -43,6 +43,8 @@ import {
   revokeProjectTrust,
   revokeProjectTrustRaw,
 } from '../project/trust';
+import { listConnectionModelRows } from '../providers/facets/discovery';
+import { groupTierVariantRows } from '../providers/facets/tiers';
 import { invalidateProjectMCPManagers } from '../mcp/project-registry';
 import { cancelIndex } from '../rag/indexer';
 import { clearNextRequestStop } from './next-request-stop';
@@ -667,16 +669,30 @@ export function registerSessionIPC(): void {
     if (!mechanism) return { ...empty, override };
 
     const selected = resolution.connection.tierSelections?.[selection.modelId] ?? null;
-    const tiers = mechanism.tiers.map((tier) => {
-      const requiresStreaming = mechanism.kind === 'model-name-variants'
-        && (tier as { requiresStreaming?: boolean }).requiresStreaming === true;
-      return {
-        id: tier.id,
-        displayName: tier.displayName ?? null,
-        description: tier.description ?? null,
-        ...(requiresStreaming ? { requiresStreaming: true } : {}),
-      };
-    });
+    // Variant-mechanism tiers are offered only when the variant model id is
+    // actually present for the active model; selecting an absent variant would
+    // rewrite the request to a model id the provider does not serve (R20).
+    const variantTierIds = mechanism.kind === 'model-name-variants'
+      ? groupTierVariantRows(
+          listConnectionModelRows(resolution.connection, resolution.provider),
+          mechanism,
+        ).variantTiersByBase.get(resolution.model.id)
+      : undefined;
+    if (mechanism.kind === 'model-name-variants' && variantTierIds === undefined) {
+      return { ...empty, override };
+    }
+    const tiers = mechanism.tiers
+      .filter((tier) => variantTierIds === undefined || variantTierIds.includes(tier.id))
+      .map((tier) => {
+        const requiresStreaming = mechanism.kind === 'model-name-variants'
+          && (tier as { requiresStreaming?: boolean }).requiresStreaming === true;
+        return {
+          id: tier.id,
+          displayName: tier.displayName ?? null,
+          description: tier.description ?? null,
+          ...(requiresStreaming ? { requiresStreaming: true } : {}),
+        };
+      });
     const effective = override ?? selected ?? null;
     return {
       mechanism: mechanism.kind,

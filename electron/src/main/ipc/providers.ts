@@ -460,6 +460,8 @@ export async function clearConnectionConfigReferences(
 interface StaticConnectionCheck {
   readonly definition: ProviderDefinition;
   readonly genericEndpointOrigin: string | null;
+  /** Enabled modelIds with no catalog, custom, or discovered backing; reported, not fatal. */
+  readonly orphanedModelIds: readonly string[];
 }
 
 function requireStaticConnectionSupport(
@@ -505,20 +507,22 @@ function requireStaticConnectionSupport(
       throw new Error(`Custom model '${model.id}' does not match connection protocol '${connection.protocol}'`);
     }
   }
+  const orphanedModelIds: string[] = [];
   for (const modelId of connection.modelIds) {
     const catalogModel = definition.models.find((model) => model.id === modelId);
     const customModel = connection.customModels?.find((model) => model.id === modelId);
     const discoveredModel = connection.discoveredModels?.find((model) => model.id === modelId);
     if (!catalogModel && !customModel && !discoveredModel) {
-      throw new Error(definition.allowsCustomModels
-        ? `User-defined model '${modelId}' requires explicit capabilities and limits`
-        : `Model '${modelId}' is not available for '${definition.displayName}'`);
+      // A delisted model must not block every validate/update; the caller
+      // reports it as a removable warning instead (finding #11).
+      orphanedModelIds.push(modelId);
+      continue;
     }
     if (catalogModel && catalogModel.protocol !== connection.protocol) {
       throw new Error(`Model '${modelId}' does not match connection protocol '${connection.protocol}'`);
     }
   }
-  return { definition, genericEndpointOrigin };
+  return { definition, genericEndpointOrigin, orphanedModelIds };
 }
 
 function credentialOrigin(connection: ProviderConnection, current = services()): string | null {
@@ -555,19 +559,32 @@ function sameCredentialIdentity(left: ProviderConnection, right: ProviderConnect
   return true;
 }
 
+function orphanedModelWarning(
+  orphanedModelIds: readonly string[],
+  definition: ProviderDefinition,
+): string {
+  const plural = orphanedModelIds.length !== 1;
+  const list = orphanedModelIds.map((id) => `'${id}'`).join(', ');
+  return `Model${plural ? 's' : ''} ${list} ${plural ? 'are' : 'is'} no longer available from '${definition.displayName}' and should be removed from the connection's enabled models.`;
+}
+
 /** Return a safe readiness explanation without rendering any secret material. */
 async function readiness(
   connection: ProviderConnection,
   current = services(),
 ): Promise<{ readonly ready: boolean; readonly message: string | null }> {
+  let check: StaticConnectionCheck;
   try {
-    requireStaticConnectionSupport(connection, current);
+    check = requireStaticConnectionSupport(connection, current);
   } catch (error) {
     return { ready: false, message: error instanceof Error ? error.message : 'Connection configuration is invalid' };
   }
+  const orphanWarning = check.orphanedModelIds.length > 0
+    ? orphanedModelWarning(check.orphanedModelIds, check.definition)
+    : null;
   if (connection.authMethod === 'none') {
     return connection.credential.kind === 'none'
-      ? { ready: true, message: null }
+      ? { ready: true, message: orphanWarning }
       : { ready: false, message: 'No-credential authentication must not retain a credential reference' };
   }
   if (connection.authMethod === 'environment') {
@@ -575,7 +592,7 @@ async function readiness(
       return { ready: false, message: 'Choose an environment variable for this connection' };
     }
     return process.env[connection.credential.variable]
-      ? { ready: true, message: null }
+      ? { ready: true, message: orphanWarning }
       : { ready: false, message: `Environment credential '${connection.credential.variable}' is not available` };
   }
   if (connection.credential.kind !== 'stored') {
@@ -583,7 +600,7 @@ async function readiness(
   }
   try {
     await current.vault.readSecret(connection.credential.handle, credentialBinding(connection, current));
-    return { ready: true, message: null };
+    return { ready: true, message: orphanWarning };
   } catch {
     return { ready: false, message: 'Stored credentials need to be reconnected' };
   }
@@ -685,6 +702,17 @@ async function discoveryCredential(
   }
 }
 
+/** Copy a selection record without the ids a fresh snapshot no longer backs. */
+function dropRecordKeys<T extends Record<string, unknown>>(
+  record: T | undefined,
+  dropIds: readonly string[],
+): T | undefined {
+  if (record === undefined || dropIds.length === 0) return record;
+  const drop = new Set(dropIds);
+  const entries = Object.entries(record).filter(([id]) => !drop.has(id));
+  return entries.length === 0 ? undefined : (Object.fromEntries(entries) as T);
+}
+
 /**
  * Run one on-demand discovery fetch and persist the fresh snapshot. Returns
  * null when the driver publishes no models endpoint. Endpoint failures keep
@@ -708,11 +736,24 @@ async function runConnectionDiscovery(
     credential: await discoveryCredential(connection, current),
   });
   if (outcome.status === 'ok') {
-    await current.connections.persistDiscoveredModels(
-      connectionId,
-      outcome.discoveredModels,
-      outcome.reasoningConfig,
-    );
+    const prunedModelIds = outcome.prune.modelIds.length > 0
+      ? connection.modelIds.filter((id) => !outcome.prune.modelIds.includes(id))
+      : undefined;
+    const prunedTierSelections = outcome.prune.tierSelections.length > 0
+      ? dropRecordKeys(connection.tierSelections, outcome.prune.tierSelections) ?? {}
+      : undefined;
+    const prunedReasoningConfig = outcome.prune.reasoningConfig.length > 0
+      ? dropRecordKeys(
+          outcome.reasoningConfig ?? connection.reasoningConfig,
+          outcome.prune.reasoningConfig,
+        ) ?? {}
+      : outcome.reasoningConfig;
+    await current.connections.update(connectionId, {
+      discoveredModels: [...outcome.discoveredModels],
+      ...(prunedReasoningConfig ? { reasoningConfig: prunedReasoningConfig } : {}),
+      ...(prunedModelIds ? { modelIds: prunedModelIds } : {}),
+      ...(prunedTierSelections ? { tierSelections: prunedTierSelections } : {}),
+    });
   }
   return outcome;
 }
@@ -1160,6 +1201,7 @@ export function registerProviderIPC(): void {
           discoveredModels: connection.discoveredModels ?? [],
           addedModelIds: [],
           reasoningConfig: undefined,
+          prune: { modelIds: [], tierSelections: [], reasoningConfig: [] },
           message: null,
         };
       return {

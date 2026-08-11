@@ -5,7 +5,6 @@ import type { CatalogPricing } from '../../src/main/providers/catalog/schema';
 import type { DriverPricingFacet } from '../../src/main/providers/drivers/types';
 import {
   resolveFrozenPricing,
-  type DynamicPricingState,
   type PricingResolverInput,
 } from '../../src/main/providers/facets/pricing';
 
@@ -307,6 +306,84 @@ describe('pricing resolver ladder', () => {
       },
     });
     expect(snapshot?.provenance.dynamic).toBeUndefined();
+    expect(snapshot?.provenance.user).toBeUndefined();
+  });
+
+  it('keys the user-override rung off the base model id for variant-tier requests (R22)', () => {
+    const snapshot = resolve({
+      connection: connection({
+        pricingOverrides: {
+          [MODEL_ID]: {
+            input: { amount: '2', per: 1_000_000, unit: 'tokens' },
+            output: { amount: '8', per: 1_000_000, unit: 'tokens' },
+          },
+        },
+      }),
+      modelId: `${MODEL_ID}-flex`,
+      userOverrideModelId: MODEL_ID,
+      catalogPricing: catalogPricing({
+        rates: {
+          input: { amount: '3', per: 1_000_000, unit: 'tokens' },
+          output: { amount: '9', per: 1_000_000, unit: 'tokens' },
+          cacheRead: { amount: '0.3', per: 1_000_000, unit: 'tokens' },
+        },
+      }),
+    });
+
+    expect(snapshot?.rates.input).toMatchObject({
+      amount: '2',
+      provenance: { source: 'user', observedAt: null },
+    });
+    expect(snapshot?.rates.output).toMatchObject({
+      amount: '8',
+      provenance: { source: 'user', observedAt: null },
+    });
+    expect(snapshot?.rates.cacheRead).toMatchObject({
+      amount: '0.3',
+      provenance: { source: 'catalog', observedAt: '2026-07-11T00:00:00.000Z' },
+    });
+    expect(snapshot?.provenance).toMatchObject({ source: 'user', user: true });
+  });
+
+  it('feeds live-discovered inline pricing into the top provider-api rung (R27)', () => {
+    const snapshot = resolve({
+      connection: connection({
+        pricingOverrides: {
+          [MODEL_ID]: {
+            input: { amount: '2', per: 1_000_000, unit: 'tokens' },
+            output: { amount: '8', per: 1_000_000, unit: 'tokens' },
+          },
+        },
+      }),
+      catalogPricing: catalogPricing({
+        rates: {
+          input: { amount: '3', per: 1_000_000, unit: 'tokens' },
+          output: { amount: '9', per: 1_000_000, unit: 'tokens' },
+        },
+      }),
+      discovered: {
+        pricing: rateCard({
+          rates: {
+            input: { amount: '1', per: 1_000_000, unit: 'tokens' },
+            output: { amount: '4', per: 1_000_000, unit: 'tokens' },
+          },
+        }),
+        discoveredAt: '2026-07-12T11:50:00.000Z',
+      },
+    });
+
+    expect(snapshot?.rates.input).toMatchObject({
+      amount: '1',
+      provenance: { source: 'provider-api', observedAt: '2026-07-12T11:50:00.000Z' },
+    });
+    expect(snapshot?.rates.output).toMatchObject({
+      amount: '4',
+      provenance: { source: 'provider-api', observedAt: '2026-07-12T11:50:00.000Z' },
+    });
+    expect(snapshot?.provenance).toMatchObject({
+      source: 'provider-api',
+      discovered: { observedAt: '2026-07-12T11:50:00.000Z' },
+    });
     expect(snapshot?.provenance.user).toBeUndefined();
   });
 });

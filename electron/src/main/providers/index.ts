@@ -220,6 +220,15 @@ export class ProviderRuntime {
         driver.pricingFacet.dynamic.refreshIntervalSeconds,
       )
       : undefined;
+    // Live inline rates published by the provider's models endpoint (R27).
+    // Discovered pricing is provider-provenance data keyed by the base model
+    // id, so it applies to variant requests the same way user overrides do.
+    const discoveredModel = resolution.connection.discoveredModels?.find(
+      (candidate) => candidate.id === resolution.model.id,
+    );
+    const discovered = discoveredModel?.pricing
+      ? { pricing: discoveredModel.pricing, discoveredAt: discoveredModel.discoveredAt }
+      : undefined;
     return structuredClone({
       providerId: resolution.provider.id,
       providerDisplayName: resolution.provider.displayName,
@@ -236,10 +245,12 @@ export class ProviderRuntime {
         pricingFacet: driver.pricingFacet,
         connection: resolution.connection,
         // Variant billing freezes the served variant's rates (R22); the
-        // user-override ladder layer still keys off the base model id.
+        // user-override and live-discovered ladder rungs key off the base id.
         modelId: variantModelId ?? resolution.model.id,
+        userOverrideModelId: resolution.model.id,
         catalogPricing: billedCatalogModel?.pricing,
         dynamic,
+        discovered,
         now: new Date(),
       }),
       ...(tierMechanism
