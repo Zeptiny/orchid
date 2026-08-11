@@ -347,6 +347,7 @@ export class SessionManager {
       subagentChains: [],
       todoStore: { tasks: [] },
       reasoningEffortOverride: null,
+      tierOverride: null,
       permissionMode: null,
     };
     this._sessions.set(session.id, session);
@@ -438,12 +439,14 @@ export class SessionManager {
       selection,
       modelLabel,
       reasoningEffortOverride: null,
+      tierOverride: null,
       updatedAt: new Date().toISOString(),
     };
     this.persistSessionFields(updated, {
       selection: updated.selection,
       modelLabel: updated.modelLabel,
       reasoningEffortOverride: updated.reasoningEffortOverride,
+      tierOverride: updated.tierOverride,
       todoStore: updated.todoStore,
     });
   }
@@ -497,6 +500,25 @@ export class SessionManager {
     };
     this.persistSessionFields(updated, {
       reasoningEffortOverride: updated.reasoningEffortOverride,
+      todoStore: updated.todoStore,
+    });
+  }
+
+  /**
+   * Set or clear the per-session service tier override for the active model.
+   * Persists to disk immediately.
+   */
+  setTierOverride(id: string, tier: string | null): void {
+    if (!this.isSelectedByAnyOwner(id)) return;
+    const session = this.flushTodos(id);
+    if (!session) return;
+    const updated = {
+      ...session,
+      tierOverride: tier,
+      updatedAt: new Date().toISOString(),
+    };
+    this.persistSessionFields(updated, {
+      tierOverride: updated.tierOverride,
       todoStore: updated.todoStore,
     });
   }

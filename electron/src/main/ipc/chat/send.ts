@@ -23,7 +23,13 @@ import {
   mergeThinkingProviderOptions,
 } from '../../providers/facets/thinking';
 import type { ThinkingReplayContext } from '../../llm/history';
-import type { ThinkingPolicy } from '../../../shared/types/provider-facets';
+import type { CacheFacet, ThinkingPolicy } from '../../../shared/types/provider-facets';
+import {
+  buildCacheProviderOptions,
+  deriveCacheSessionKey,
+  resolveCacheTtl,
+} from '../../providers/facets/cache';
+import { buildTierProviderOptions, resolveMainAgentTier } from '../../providers/facets/tiers';
 import { getSessionManager } from '../../session/singleton';
 import { getBuiltinToolRegistryForRuntime } from '../../tools';
 import type { ToolExecutionContext } from '../../tools/types';
@@ -113,14 +119,32 @@ export async function startChatTurn(
   let providerOptions: ReasoningProviderOptions | undefined;
   let pricingFacet: ProviderAttemptAccountingContext['pricingFacet'];
   let thinkingPolicy: ThinkingPolicy | undefined;
+  let cacheFacet: CacheFacet | undefined;
+  let cacheTtl: string | undefined;
+  let cacheSessionKey: string | undefined;
+  let tierMechanism: ProviderAttemptAccountingContext['tierMechanism'];
   let accountingStore: ReturnType<typeof getProviderAccountingStore>;
   try {
     accountingStore = getProviderAccountingStore();
-    const execution = await getProviderRuntime().resolveExecution(turnSelection);
+    // Resolve the effective tier before model construction so the variant
+    // mapping and the frozen snapshot both observe the same selection (R21).
+    const tierContext = await getProviderRuntime().resolveTierContext(turnSelection);
+    const effectiveTier = resolveMainAgentTier(
+      sessionGate.session,
+      tierContext.connection,
+      turnSelection.modelId,
+      tierContext.tierMechanism,
+    );
+    const execution = await getProviderRuntime().resolveExecution(
+      turnSelection,
+      effectiveTier !== undefined ? { tier: effectiveTier } : {},
+    );
+    tierMechanism = execution.tierMechanism;
     modelInstance = execution.modelInstance;
     providerSnapshot = execution.snapshot;
     pricingFacet = execution.pricingFacet;
     thinkingPolicy = execution.thinkingPolicy;
+    cacheFacet = execution.cacheFacet;
     const effort = resolveMainAgentEffort(
       sessionGate.session, execution.connection, turnSelection.modelId,
       execution.model.capabilities?.reasoning === true,
@@ -132,6 +156,21 @@ export async function startChatTurn(
         buildThinkingRequestOptions(thinkingPolicy, execution.snapshot.providerId),
       );
     }
+    providerOptions = mergeThinkingProviderOptions(
+      providerOptions,
+      buildTierProviderOptions(
+        execution.tierMechanism,
+        resolveMainAgentTier(
+          sessionGate.session, execution.connection, turnSelection.modelId, execution.tierMechanism,
+        ),
+      ),
+    );
+    cacheSessionKey = deriveCacheSessionKey(sessionId);
+    cacheTtl = resolveCacheTtl(cacheFacet, execution.connection.cacheTtl);
+    providerOptions = mergeThinkingProviderOptions(
+      providerOptions,
+      buildCacheProviderOptions(cacheFacet, cacheSessionKey),
+    );
   } catch (error) {
     sessionsStarting.delete(sessionId);
     completeSessionActivity(sessionId, false);
@@ -185,7 +224,7 @@ export async function startChatTurn(
   const accounting: ProviderAttemptAccountingContext = {
     store: accountingStore, sessionId, chainId, turnId, snapshot: providerSnapshot,
     agentScope: 'main', agentName: agent.name, agentType: agent.type, agentTier: agent.tier,
-   attemptIdHolder: { value: null }, pricingFacet,
+   attemptIdHolder: { value: null }, pricingFacet, tierMechanism,
   };
   const mcpManager = acquireProjectMCPManager(runtime);
   let resourcesReleased = false;
@@ -213,6 +252,9 @@ export async function startChatTurn(
         streamFn: createProviderStreamFn({
           messages, runtime, sessionId, windowId, modelInstance, accounting, registry: turnRegistry,
           mcpManager, providerOptions, thinkingReplay,
+          cachePlacement: cacheFacet
+            ? { facet: cacheFacet, ttl: cacheTtl, sessionKey: cacheSessionKey }
+            : undefined,
         }),
       },
     });

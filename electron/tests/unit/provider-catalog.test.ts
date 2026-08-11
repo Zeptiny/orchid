@@ -254,7 +254,11 @@ describe('provider catalog trust', () => {
   });
 
   it('rejects a provider declaring a facet not pinned in the trusted policy list', () => {
+    // xai pins no facets, so any tier declaration is untrusted there.
     const providerLevel = createCatalog();
+    providerLevel.providers[0].id = 'xai';
+    providerLevel.providers[0].supportedProtocols = ['xai'];
+    providerLevel.providers[0].models[0].protocol = 'xai';
     providerLevel.providers[0].facets = {
       tiers: {
         kind: 'model-name-variants',
@@ -271,6 +275,9 @@ describe('provider catalog trust', () => {
     )).toThrow(/facet/i);
 
     const modelLevel = createCatalog();
+    modelLevel.providers[0].id = 'xai';
+    modelLevel.providers[0].supportedProtocols = ['xai'];
+    modelLevel.providers[0].models[0].protocol = 'xai';
     modelLevel.providers[0].models[0].facets = {
       tiers: { kind: 'request-parameter', parameter: 'service_tier', tiers: [{ id: 'flex' }] },
     };
@@ -307,7 +314,11 @@ describe('provider catalog trust', () => {
   });
 
   it('treats the injected policy list as the facet gate', () => {
+    // xai pins no facets in the default policy list; the injected list grants tiers.
     const catalog = createCatalog();
+    catalog.providers[0].id = 'xai';
+    catalog.providers[0].supportedProtocols = ['xai'];
+    catalog.providers[0].models[0].protocol = 'xai';
     catalog.providers[0].facets = {
       tiers: { kind: 'request-parameter', parameter: 'service_tier', tiers: [{ id: 'flex' }] },
     };
@@ -322,9 +333,9 @@ describe('provider catalog trust', () => {
       appVersion: '0.1.0',
       now: new Date(NOW),
       policies: [{
-        id: 'openai',
+        id: 'xai',
         authMethods: ['api-key'],
-        protocols: ['openai-compatible'],
+        protocols: ['xai'],
         allowsCustomModels: true,
         facets: ['tiers'],
       }],

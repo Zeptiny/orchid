@@ -30,7 +30,7 @@ export interface TrustedCatalogProviderPolicy {
  * verified against provider documentation.
  */
 export const TRUSTED_CATALOG_PROVIDER_POLICIES: readonly TrustedCatalogProviderPolicy[] = [
-  { id: 'openai', authMethods: ['api-key', 'environment'], protocols: ['openai-compatible', 'openai-responses'], allowsCustomModels: true, facets: ['thinking', 'cache'] },
+  { id: 'openai', authMethods: ['api-key', 'environment'], protocols: ['openai-compatible', 'openai-responses'], allowsCustomModels: true, facets: ['thinking', 'cache', 'tiers'] },
   { id: 'anthropic', authMethods: ['api-key', 'environment'], protocols: ['anthropic-messages'], allowsCustomModels: true, facets: ['thinking', 'cache'] },
   { id: 'google-gemini', authMethods: ['api-key', 'environment'], protocols: ['google-generative-ai'], allowsCustomModels: true },
   { id: 'xai', authMethods: ['api-key', 'environment'], protocols: ['xai'], allowsCustomModels: true },

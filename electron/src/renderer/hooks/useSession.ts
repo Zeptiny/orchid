@@ -661,6 +661,7 @@ function makeLocalSession(): Session {
     subagentChains: [],
     todoStore: { tasks: [] },
     reasoningEffortOverride: null,
+    tierOverride: null,
     permissionMode: null,
   };
 }

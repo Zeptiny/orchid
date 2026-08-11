@@ -457,6 +457,21 @@ export const sessionReasoningConfigResultSchema = z.object({
   supportsReasoning: z.boolean(),
 });
 
+export const serviceTierOptionViewSchema = z.object({
+  id: z.string(),
+  displayName: z.string().nullable(),
+  description: z.string().nullable(),
+  requiresStreaming: z.boolean().optional(),
+});
+
+export const sessionServiceTierConfigResultSchema = z.object({
+  mechanism: z.enum(['request-parameter', 'model-name-variants']).nullable(),
+  tiers: z.array(serviceTierOptionViewSchema),
+  selected: z.string().nullable(),
+  override: z.string().nullable(),
+  effective: z.string().nullable(),
+});
+
 /** Loose session snapshot: identity + array containers, not full Message graph. */
 export const chatSessionSnapshotSchema = z
   .object({

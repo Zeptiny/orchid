@@ -14,6 +14,7 @@ const mocks = vi.hoisted(() => ({
   modelInstance: { provider: 'trusted-test-driver' },
   providerRuntime: {
     resolveLanguageModel: vi.fn(async () => ({ provider: 'trusted-test-driver' })),
+    resolveTierContext: vi.fn(async () => ({ connection: {}, tierMechanism: undefined })),
     resolveExecution: vi.fn(async () => ({
       modelInstance: { provider: 'trusted-test-driver' },
       connection: {},
@@ -231,7 +232,7 @@ describe('createSubagentStreamRunner', () => {
       { type: 'content', text: 'delegated result' },
       { type: 'finish', finishReason: 'stop' },
     ]);
-    expect(mocks.providerRuntime.resolveExecution).toHaveBeenCalledWith(selection);
+    expect(mocks.providerRuntime.resolveExecution).toHaveBeenCalledWith(selection, {});
     expect(mocks.streamChat).toHaveBeenCalledWith(expect.objectContaining({
       modelInstance: expect.any(Object),
       sessionId: 'session-4',

@@ -1,7 +1,8 @@
 /** SQLite schema for session storage. */
+import type { SqliteDatabase } from '../utils/sqlite';
 
 /** Current session schema version. */
-export const SESSION_SCHEMA_VERSION = 2;
+export const SESSION_SCHEMA_VERSION = 3;
 
 /** Idempotent DDL for the session database. */
 export const SESSION_SCHEMA_SQL = `
@@ -19,6 +20,7 @@ CREATE TABLE IF NOT EXISTS sessions (
   active_chain_id TEXT,
   todo_store_json TEXT NOT NULL DEFAULT '{}',
   reasoning_effort_override TEXT,
+  tier_override TEXT,
   permission_mode TEXT,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
@@ -50,3 +52,24 @@ CREATE TABLE IF NOT EXISTS subagent_chains (
 CREATE INDEX IF NOT EXISTS idx_chains_session ON chains(session_id, ordinal);
 CREATE INDEX IF NOT EXISTS idx_sessions_updated ON sessions(updated_at DESC);
 `;
+
+/**
+ * Idempotent column migrations for databases created before the current
+ * schema version.
+ */
+export function applySessionSchemaMigrations(db: SqliteDatabase): void {
+  const tables = new Set(
+    (db.prepare('SELECT name FROM sqlite_master WHERE type = ?').all('table') as Array<{ name: string }>)
+      .map((row) => row.name),
+  );
+
+  if (tables.has('sessions')) {
+    const sessionColumns = db.prepare('PRAGMA table_info(sessions)').all() as Array<{ name: string }>;
+    const existing = new Set(sessionColumns.map((c) => c.name));
+    for (const col of ['tier_override']) {
+      if (!existing.has(col)) {
+        db.prepare(`ALTER TABLE sessions ADD COLUMN ${col} TEXT`).run();
+      }
+    }
+  }
+}

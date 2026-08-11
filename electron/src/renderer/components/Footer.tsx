@@ -15,6 +15,7 @@ import type {
   PermissionSetSessionModeMessage,
   ProviderModelOption,
   SessionReasoningConfigResult,
+  SessionServiceTierConfigResult,
 } from '../../shared/types/ipc';
 import type { PermissionMode } from '../../shared/types/permission';
 import { useElapsedSeconds, type InterruptState } from '../hooks/useChat';
@@ -27,6 +28,7 @@ import { Keycaps } from './Keycaps';
 import { ModelPicker } from './ModelPicker';
 import { PermissionSelector } from './PermissionSelector';
 import { ReasoningSelector, shouldShowReasoningSelector } from './ReasoningSelector';
+import { ServiceTierSelector, shouldShowServiceTierSelector } from './ServiceTierSelector';
 import { Button } from './ui/Button';
 import { Spinner } from './ui/Spinner';
 import { StatusBadge } from './ui/StatusBadge';
@@ -124,6 +126,7 @@ export const Footer = memo(function Footer({
   const [contextOpen, setContextOpen] = useState(false);
   const contextMenuId = useId();
   const [reasoningConfig, setReasoningConfig] = useState<SessionReasoningConfigResult | null>(null);
+  const [serviceTierConfig, setServiceTierConfig] = useState<SessionServiceTierConfigResult | null>(null);
   const [sessionPermissionMode, setSessionPermissionMode] = useState<PermissionMode | null>(null);
   const permissionModeCoordinator = useRef(new PermissionModeCoordinator());
 
@@ -181,6 +184,26 @@ export const Footer = memo(function Footer({
   }, [model, sessionId]);
 
   useEffect(() => {
+    let cancelled = false;
+    const session = window.orchid?.session;
+    if (!session?.getServiceTierConfig) {
+      setServiceTierConfig(null);
+      return;
+    }
+    session
+      .getServiceTierConfig()
+      .then((config) => {
+        if (!cancelled) setServiceTierConfig(config);
+      })
+      .catch(() => {
+        if (!cancelled) setServiceTierConfig(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [model, sessionId]);
+
+  useEffect(() => {
     const permission = window.orchid?.permission;
     const coordinator = permissionModeCoordinator.current;
     if (!permission?.getSessionMode) {
@@ -228,6 +251,22 @@ export const Footer = memo(function Footer({
       try {
         await window.orchid?.session?.setReasoningEffort({ effort: next });
         setReasoningConfig((prev) => (prev ? { ...prev, override: next } : prev));
+      } catch {
+        // Non-fatal — selector keeps the last good value
+      }
+    },
+    [],
+  );
+
+  const handleServiceTierChange = useCallback(
+    async (next: string | null) => {
+      try {
+        await window.orchid?.session?.setServiceTier({ tier: next });
+        setServiceTierConfig((prev) =>
+          prev
+            ? { ...prev, override: next, effective: next ?? prev.selected ?? null }
+            : prev,
+        );
       } catch {
         // Non-fatal — selector keeps the last good value
       }
@@ -322,6 +361,13 @@ export const Footer = memo(function Footer({
             value={reasoningConfig.override}
             defaultValue={reasoningConfig.default}
             onChange={(next) => void handleReasoningChange(next)}
+            disabled={isStreaming || interruptState === 'confirmAgent'}
+          />
+        )}
+        {serviceTierConfig && shouldShowServiceTierSelector(serviceTierConfig) && (
+          <ServiceTierSelector
+            config={serviceTierConfig}
+            onChange={(next) => void handleServiceTierChange(next)}
             disabled={isStreaming || interruptState === 'confirmAgent'}
           />
         )}

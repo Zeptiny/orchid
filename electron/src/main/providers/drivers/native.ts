@@ -6,7 +6,7 @@ import type {
   ProviderModelDefinition,
   ProviderProtocol,
 } from '../../../shared/types/provider';
-import type { ThinkingPolicy } from '../../../shared/types/provider-facets';
+import type { CacheFacet, ThinkingPolicy, TierMechanism } from '../../../shared/types/provider-facets';
 import {
   ANTHROPIC_THINKING_POLICY,
   OPENAI_OPAQUE_THINKING_POLICY,
@@ -28,6 +28,40 @@ export const BUILTIN_PROVIDER_ORIGINS = {
 } as const;
 
 export const OPENAI_MODELS_URL = `${BUILTIN_PROVIDER_ORIGINS.openai}/models`;
+
+/** OpenAI service tiers ride the request-level serviceTier option (R19). */
+export const OPENAI_TIER_MECHANISM: TierMechanism = {
+  kind: 'request-parameter',
+  parameter: 'serviceTier',
+  tiers: [
+    { id: 'auto', displayName: 'Auto' },
+    { id: 'default', displayName: 'Default' },
+    { id: 'flex', displayName: 'Flex' },
+    { id: 'priority', displayName: 'Priority' },
+  ],
+};
+
+/**
+ * Automatic prefix caching with a session-scoped routing key (R10); OpenAI
+ * places no explicit breakpoints.
+ */
+export const OPENAI_CACHE_FACET: CacheFacet = {
+  mode: 'automatic',
+  sessionKey: true,
+};
+
+/**
+ * Anthropic owns explicit cache_control breakpoints; the TTL choice (5m
+ * default, 1h) is the only user knob (R10, R11).
+ */
+export const ANTHROPIC_CACHE_FACET: CacheFacet = {
+  mode: 'explicit',
+  sessionKey: false,
+  ttlOptions: [
+    { id: '5m', displayName: '5 minutes' },
+    { id: '1h', displayName: '1 hour' },
+  ],
+};
 
 export interface NativeLanguageModelInput {
   readonly providerId: keyof typeof BUILTIN_PROVIDER_ORIGINS;
@@ -170,6 +204,12 @@ export function createNativeProviderDrivers(options: {
         apiKey: apiKeyForDriver(credential),
       }),
       ...(id === 'openai' || id === 'anthropic' ? { thinkingPolicy: thinkingPolicyFor } : {}),
+      ...(id === 'openai' ? { tierMechanism: OPENAI_TIER_MECHANISM } : {}),
+      ...(id === 'openai'
+        ? { cacheFacet: OPENAI_CACHE_FACET }
+        : id === 'anthropic'
+          ? { cacheFacet: ANTHROPIC_CACHE_FACET }
+          : {}),
       ...(discoveryFacet ? { discoveryFacet } : {}),
     };
     // OpenAI embeddings use the same code-owned OpenAI origin, but only the

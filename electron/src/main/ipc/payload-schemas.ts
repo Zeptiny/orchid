@@ -177,6 +177,10 @@ export const sessionSetReasoningEffortSchema = z.object({
   ]).nullable(),
 });
 
+export const sessionSetServiceTierSchema = z.object({
+  tier: z.string().trim().min(1).max(128).nullable(),
+});
+
 // ── Tool ─────────────────────────────────────────────────────────────────────
 
 export const toolExecuteSchema = z.object({

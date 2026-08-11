@@ -68,6 +68,7 @@ export interface SessionFieldsUpdate {
   activeChainId?: string | null;
   todoStore?: TodoStoreData;
   reasoningEffortOverride?: string | number | null;
+  tierOverride?: string | null;
   permissionMode?: PermissionMode | null;
   updatedAt: string;
 }
@@ -199,6 +200,7 @@ interface SessionRow {
   active_chain_id: string | null;
   todo_store_json: string;
   reasoning_effort_override: string | null;
+  tier_override: string | null;
   permission_mode: string | null;
   created_at: string;
   updated_at: string;
@@ -310,6 +312,14 @@ function deserializeReasoningEffortOverride(json: string | null): string | numbe
   }
 }
 
+function serializeTierOverride(value: string | null | undefined): string | null {
+  return typeof value === 'string' && value.trim() !== '' ? value : null;
+}
+
+function deserializeTierOverride(value: string | null | undefined): string | null {
+  return typeof value === 'string' && value.trim() !== '' ? value : null;
+}
+
 function serializePermissionMode(mode: PermissionMode | null): string | null {
   return mode ?? null;
 }
@@ -335,6 +345,7 @@ function sessionFromRow(row: SessionRow, chains: Chain[], subagentChains: Subage
     subagentChains,
     todoStore: deserializeTodoStore(row.todo_store_json),
     reasoningEffortOverride: deserializeReasoningEffortOverride(row.reasoning_effort_override),
+    tierOverride: deserializeTierOverride(row.tier_override),
     permissionMode: deserializePermissionMode(row.permission_mode),
   };
 }
@@ -417,8 +428,8 @@ export function saveSession(session: Session, opts?: StorageOptions): void {
   const { dbPath } = resolveOptions(opts);
   withCorruptionRecovery(dbPath, (db) => {
     const upsertSession = db.prepare(`
-      INSERT INTO sessions (id, name, selection_json, model_label, cwd, active_chain_id, todo_store_json, reasoning_effort_override, permission_mode, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO sessions (id, name, selection_json, model_label, cwd, active_chain_id, todo_store_json, reasoning_effort_override, tier_override, permission_mode, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(id) DO UPDATE SET
         name = excluded.name,
         selection_json = excluded.selection_json,
@@ -427,6 +438,7 @@ export function saveSession(session: Session, opts?: StorageOptions): void {
         active_chain_id = excluded.active_chain_id,
         todo_store_json = excluded.todo_store_json,
         reasoning_effort_override = excluded.reasoning_effort_override,
+        tier_override = excluded.tier_override,
         permission_mode = excluded.permission_mode,
         updated_at = excluded.updated_at
     `);
@@ -446,6 +458,7 @@ export function saveSession(session: Session, opts?: StorageOptions): void {
         session.activeChainId,
         serializeTodoStore(session.todoStore),
         serializeReasoningEffortOverride(session.reasoningEffortOverride),
+        serializeTierOverride(session.tierOverride),
         serializePermissionMode(session.permissionMode),
         session.createdAt,
         session.updatedAt,
@@ -510,6 +523,9 @@ export function updateSessionFields(
       'reasoning_effort_override',
       serializeReasoningEffortOverride(update.reasoningEffortOverride ?? null),
     );
+  }
+  if (Object.hasOwn(update, 'tierOverride')) {
+    add('tier_override', serializeTierOverride(update.tierOverride ?? null));
   }
   if (Object.hasOwn(update, 'permissionMode')) {
     add('permission_mode', serializePermissionMode(update.permissionMode ?? null));

@@ -10,6 +10,7 @@ import type { acquireProjectMCPManager } from '../../mcp/project-registry';
 import type { ProjectRuntime } from '../../project/runtime';
 import type { LanguageModelV4 } from '@ai-sdk/provider';
 import type { ProviderAttemptAccountingContext } from '../../providers/accounting/middleware';
+import type { CacheFacet } from '../../../shared/types/provider-facets';
 import { shouldStopNextRequest } from '../next-request-stop';
 
 export function classifyErrorKind(title: string | null | undefined, detail: string): ChatErrorKind {
@@ -53,6 +54,12 @@ export function createProviderStreamFn(input: {
   readonly mcpManager: ReturnType<typeof acquireProjectMCPManager>;
   readonly providerOptions?: ReasoningProviderOptions;
   readonly thinkingReplay?: ThinkingReplayContext;
+  /** Driver-owned prompt-cache placement inputs; absent = no markers (R12). */
+  readonly cachePlacement?: {
+    readonly facet: CacheFacet;
+    readonly ttl?: string;
+    readonly sessionKey?: string;
+  };
 }) {
   return async function* ({
     agent,
@@ -88,6 +95,7 @@ export function createProviderStreamFn(input: {
       accounting: input.accounting,
       providerOptions: input.providerOptions,
       thinkingReplay: input.thinkingReplay,
+      cachePlacement: input.cachePlacement,
     });
   };
 }

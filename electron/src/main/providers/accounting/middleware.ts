@@ -14,6 +14,7 @@ import type {
   NormalizedProviderUsage,
 } from '../../../shared/types/accounting';
 import type { DriverPricingFacet } from '../drivers/types';
+import { extractServedTier } from '../facets/tiers';
 import { calculateAttemptCost, type AttemptCostEvidence } from './cost';
 import { ProviderAccountingStore } from './store';
 
@@ -31,6 +32,8 @@ export interface ProviderAttemptAccountingContext {
   readonly attemptIdHolder?: { value: string | null };
   /** Driver pricing facet that owns provider-specific cost evidence extraction. */
   readonly pricingFacet?: DriverPricingFacet;
+  /** Driver tier mechanism for served-tier evidence capture (R22). */
+  readonly tierMechanism?: import('../../../shared/types/provider-facets').TierMechanism;
 }
 
 function normalizeUsage(usage: LanguageModelV4Usage | undefined): NormalizedProviderUsage | null {
@@ -141,6 +144,7 @@ function evidenceFor(
   usage: NormalizedProviderUsage | null,
   headers: Record<string, string> | undefined,
   rawUsage: unknown,
+  finishMetadata?: Readonly<Record<string, unknown>>,
 ): { evidence: AttemptCostEvidence; providerEvidence: Record<string, unknown>; usage: NormalizedProviderUsage | null } {
   const allowedHeaders = allowlistedHeaders(headers);
   let normalizedUsage = usage;
@@ -155,7 +159,7 @@ function evidenceFor(
     ...(rawUsage === undefined ? {} : { rawUsage }),
   };
 
-  const extracted = context.pricingFacet?.costEvidence?.({ headers: allowedHeaders, rawUsage });
+  const extracted = context.pricingFacet?.costEvidence?.({ headers: allowedHeaders, rawUsage, finishMetadata });
   if (extracted) {
     normalizedUsage = {
       ...(usage ?? {}),
@@ -176,6 +180,20 @@ function evidenceFor(
       providerEvidence[context.snapshot.providerId] = extracted.providerEvidence;
     }
   }
+
+  // Served tier (R22): the provider-reported tier (parameter mechanism) or
+  // the served variant id (variant mechanism) lands in attempt evidence so
+  // billing selects the served tier's rates.
+  const snapshot = context.snapshot;
+  const servedTier = extractServedTier({
+    mechanism: context.tierMechanism,
+    servedModelId: snapshot.tier?.servedModelId ?? snapshot.modelId,
+    baseModelId: snapshot.tier?.baseModelId,
+    requestedTier: snapshot.tier?.requestedTier,
+    finishMetadata,
+  });
+  if (servedTier) providerEvidence.servedTier = servedTier;
+
   return { evidence, providerEvidence, usage: normalizedUsage };
 }
 
@@ -213,6 +231,7 @@ export function createAttemptAccountingMiddleware(
           normalizeUsage(result.usage),
           result.response?.headers,
           result.usage.raw,
+          result.providerMetadata as Readonly<Record<string, unknown>> | undefined,
         );
         context.store.finalize(attemptId, {
           outcome: 'succeeded',
@@ -270,6 +289,7 @@ export function createAttemptAccountingMiddleware(
           normalizeUsage(finish?.usage),
           result.response?.headers,
           finish?.usage.raw,
+          finish?.providerMetadata as Readonly<Record<string, unknown>> | undefined,
         );
         context.store.finalize(attemptId, {
           outcome,

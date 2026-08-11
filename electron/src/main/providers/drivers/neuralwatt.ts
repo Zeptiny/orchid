@@ -8,7 +8,10 @@ import type {
   ProviderRateCard,
 } from '../../../shared/types/provider-facets';
 import type { ProviderDriver } from './types';
+import type { TierMechanism } from '../../../shared/types/provider-facets';
+import { applyVariantTier } from '../facets/tiers';
 import { fetchModelsEndpoint, modelsListEntries, recordEntries } from './models-endpoint';
+import { neuralwattQuotaFacet } from './neuralwatt-quota';
 import type { ProviderStatusObservation } from '../status/cache';
 import {
   parseRetryAfter,
@@ -229,22 +232,40 @@ export async function fetchNeuralwattModels(options: {
   return parseNeuralwattModels(payload, options.now?.() ?? new Date());
 }
 
+/**
+ * Neuralwatt service tiers are model-name variants: the driver maps the
+ * selected tier onto the variant model id and ignores any service_tier
+ * parameter (R19). Flex is served only over streaming requests (R23).
+ */
+export const NEURALWATT_TIER_MECHANISM: TierMechanism = {
+  kind: 'model-name-variants',
+  tiers: [
+    { id: 'fast', displayName: 'Fast', modelIdSuffix: '-fast' },
+    { id: 'flex', displayName: 'Flex', modelIdSuffix: '-flex', requiresStreaming: true },
+    { id: 'short', displayName: 'Short', modelIdSuffix: '-short' },
+  ],
+};
+
 export function createNeuralwattProviderDriver(options: {
   readonly fetch?: typeof globalThis.fetch;
   readonly now?: () => Date;
 } = {}): ProviderDriver {
-  return {
+  const driver: ProviderDriver = {
     id: 'neuralwatt',
     supportedAuthMethods: ['api-key', 'environment'],
     supportedProtocols: ['openai-compatible'],
     allowsCustomEndpoint: false,
     origin: NEURALWATT_API_ORIGIN,
-    createLanguageModel: async ({ model, credential }) => {
+    tierMechanism: NEURALWATT_TIER_MECHANISM,
+    createLanguageModel: async ({ model, credential, tier }) => {
       if (model.protocol !== 'openai-compatible') {
         throw new Error('Neuralwatt requires the OpenAI-compatible protocol');
       }
+      // The orchestrator always streams; the assertion is loud so a future
+      // non-streaming caller fails here rather than at the provider (R23).
+      const served = applyVariantTier(driver, model, tier, { streaming: true });
       return createNeuralwattLanguageModel({
-        modelId: model.id,
+        modelId: served.id,
         apiKey: apiKeyForDriver(credential),
       });
     },
@@ -270,7 +291,12 @@ export function createNeuralwattProviderDriver(options: {
         now: options.now,
       }),
     },
+    quotaFacet: neuralwattQuotaFacet({
+      fetch: options.fetch,
+      now: options.now,
+    }),
   };
+  return driver;
 }
 
 function finiteNumber(value: unknown): number | null {

@@ -19,6 +19,11 @@ import {
   setDraftReasoningOverride,
   takeDraftReasoningOverride,
 } from '../session/draft-reasoning';
+import {
+  clearDraftTierOverrides,
+  getDraftTierOverride,
+  setDraftTierOverride,
+} from '../session/draft-tier';
 import { getConfig } from '../config/loader';
 import { clearChatHistory, seedChatHistory } from './chat-history';
 import { sendSessionEvent } from './chat/events';
@@ -60,6 +65,7 @@ import {
   sessionRenameSchema,
   sessionSetWorkspaceSchema,
   sessionSetReasoningEffortSchema,
+  sessionSetServiceTierSchema,
 } from './payload-schemas';
 
 export {
@@ -617,6 +623,69 @@ export function registerSessionIPC(): void {
       supportsReasoning,
     };
   });
+
+  ipcMain.handle(IPC_CHANNELS.SESSION_SET_SERVICE_TIER, async (event, payload: unknown) => {
+    const parsed = sessionSetServiceTierSchema.safeParse(payload);
+    if (!parsed.success) {
+      throw new Error(`Invalid session:set_service_tier payload: ${parsed.error.message}`);
+    }
+
+    const windowId = String(event.sender.id);
+    const manager = getSessionManager();
+    const active = manager.getActive(windowId);
+    if (!active) {
+      // Draft mode: park the override until a session exists.
+      setDraftTierOverride(windowId, parsed.data.tier);
+      return { status: 'ok' };
+    }
+
+    manager.setTierOverride(active.id, parsed.data.tier);
+    return { status: 'ok' };
+  });
+
+  ipcMain.handle(IPC_CHANNELS.SESSION_GET_SERVICE_TIER_CONFIG, async (event) => {
+    const empty = { mechanism: null, tiers: [], selected: null, override: null, effective: null };
+    const windowId = String(event.sender.id);
+    const manager = getSessionManager();
+    const active = manager.getActive(windowId);
+    const selection = active?.selection ?? resolveDraftModelSelection(windowId);
+    const override = active ? active.tierOverride : getDraftTierOverride(windowId);
+
+    if (!selection) return { ...empty, override };
+
+    const { getProviderConnectionStore, getProviderCatalogStore } = await import('../providers/runtime-context.js');
+    const { resolveModelSelection } = await import('../providers/resolver.js');
+    const { getProviderDriverRegistry } = await import('../providers/runtime-context.js');
+
+    const connections = await getProviderConnectionStore().list();
+    const definitions = getProviderCatalogStore().getProviderDefinitions();
+    const resolution = resolveModelSelection(selection, connections, definitions);
+    if (resolution.kind !== 'resolved') return { ...empty, override };
+
+    const driver = getProviderDriverRegistry().get(resolution.provider.id);
+    const mechanism = driver?.tierMechanism;
+    if (!mechanism) return { ...empty, override };
+
+    const selected = resolution.connection.tierSelections?.[selection.modelId] ?? null;
+    const tiers = mechanism.tiers.map((tier) => {
+      const requiresStreaming = mechanism.kind === 'model-name-variants'
+        && (tier as { requiresStreaming?: boolean }).requiresStreaming === true;
+      return {
+        id: tier.id,
+        displayName: tier.displayName ?? null,
+        description: tier.description ?? null,
+        ...(requiresStreaming ? { requiresStreaming: true } : {}),
+      };
+    });
+    const effective = override ?? selected ?? null;
+    return {
+      mechanism: mechanism.kind,
+      tiers,
+      selected,
+      override,
+      effective,
+    };
+  });
 }
 
 /**
@@ -637,7 +706,10 @@ export function unregisterSessionIPC(): void {
   ipcMain.removeHandler(IPC_CHANNELS.SESSION_CHANGE_CWD);
   ipcMain.removeHandler(IPC_CHANNELS.SESSION_SET_REASONING_EFFORT);
   ipcMain.removeHandler(IPC_CHANNELS.SESSION_GET_REASONING_CONFIG);
+  ipcMain.removeHandler(IPC_CHANNELS.SESSION_SET_SERVICE_TIER);
+  ipcMain.removeHandler(IPC_CHANNELS.SESSION_GET_SERVICE_TIER_CONFIG);
   clearDraftReasoningOverrides();
+  clearDraftTierOverrides();
 }
 
 // Re-export draft helper for tests that need to seed draft without IPC.

@@ -3,7 +3,7 @@ import type { EffectiveModel, ModelSelection, ProviderConnection } from '../../s
 import type {
   FrozenProviderRequestSnapshot,
 } from '../../shared/types/accounting';
-import type { PricingRateFields, ThinkingPolicy } from '../../shared/types/provider-facets';
+import type { CacheFacet, PricingRateFields, ThinkingPolicy } from '../../shared/types/provider-facets';
 import { resolveModelSelection } from './resolver';
 import type { ConnectionStore } from './connection-store';
 import type { ProviderCatalogSnapshot, ProviderCatalogStore } from './catalog/store';
@@ -24,6 +24,7 @@ import type {
 } from './drivers/types';
 import { resolveFrozenPricing } from './facets/pricing';
 import { PricingRefresher } from './facets/pricing-refresh';
+import { tierVariantModelId } from './facets/tiers';
 import { ProviderResolutionError } from '../llm/middleware/error-classification';
 import type { ProviderStatusService } from './status/service';
 
@@ -53,6 +54,10 @@ export interface ResolvedProviderExecution {
   readonly pricingFacet?: DriverPricingFacet;
   /** Thinking exposure/replay policy resolved for the frozen model (R15). */
   readonly thinkingPolicy?: ThinkingPolicy;
+  /** Driver cache facet; generic compatible connections declare none (R12). */
+  readonly cacheFacet?: CacheFacet;
+  /** Driver tier mechanism; absent when the provider has no tier facet. */
+  readonly tierMechanism?: ProviderDriver['tierMechanism'];
 }
 
 /**
@@ -80,9 +85,17 @@ export class ProviderRuntime {
     return (await this.resolveExecution(selection)).modelInstance;
   }
 
-  /** Resolve one immutable turn context and its trusted model together. */
-  async resolveExecution(selection: ModelSelection): Promise<ResolvedProviderExecution> {
-    const resolved = await this.resolveDriverRequest(selection);
+  /**
+   * Resolve one immutable turn context and its trusted model together.
+   * `options.tier` is the effective service tier id (session override →
+   * connection selection) resolved by the caller through the tier facet;
+   * variant-mechanism drivers map it to the executable model id (R19, R21).
+   */
+  async resolveExecution(
+    selection: ModelSelection,
+    options: { readonly tier?: string } = {},
+  ): Promise<ResolvedProviderExecution> {
+    const resolved = await this.resolveDriverRequest(selection, options.tier);
     const { request, driver } = resolved;
     const buildReasoning = driver.buildReasoningOptions;
     return {
@@ -95,7 +108,28 @@ export class ProviderRuntime {
         : undefined,
       pricingFacet: driver.pricingFacet,
       thinkingPolicy: driver.thinkingPolicy?.(request.model),
+      cacheFacet: driver.cacheFacet,
+      tierMechanism: driver.tierMechanism,
     };
+  }
+
+  /**
+   * Resolve the connection, driver tier mechanism, and declared tiers for one
+   * selection without constructing a model — the caller resolves the effective
+   * tier and passes it back into `resolveExecution(selection, { tier })`.
+   */
+  async resolveTierContext(selection: ModelSelection): Promise<{
+    readonly connection: ProviderConnection;
+    readonly tierMechanism?: ProviderDriver['tierMechanism'];
+  }> {
+    const connections = await this.connections.list();
+    const definitions = this.catalog.getProviderDefinitions();
+    const resolution = resolveModelSelection(selection, connections, definitions);
+    if (resolution.kind !== 'resolved') {
+      throw new ProviderResolutionError(this.describeResolutionFailure(resolution.kind, resolution.reason));
+    }
+    const driver = this.registry.require(resolution.provider.id);
+    return { connection: resolution.connection, tierMechanism: driver.tierMechanism };
   }
 
   /** Latest-known dynamic pricing cache (invalidated on connection identity changes). */
@@ -118,7 +152,7 @@ export class ProviderRuntime {
     return this.registry.createEmbeddingTarget(resolved.request);
   }
 
-  private async resolveDriverRequest(selection: ModelSelection): Promise<{
+  private async resolveDriverRequest(selection: ModelSelection, tier?: string): Promise<{
     readonly request: DriverModelRequest;
     readonly snapshot: FrozenProviderRequestSnapshot;
     readonly driver: ProviderDriver;
@@ -139,6 +173,7 @@ export class ProviderRuntime {
       provider: resolution.provider,
       model: resolution.model,
       credential,
+      ...(tier !== undefined ? { tier } : {}),
     };
     if (driver.pricingFacet?.dynamic) {
       // The snapshot below freezes latest-known rates synchronously; the
@@ -151,7 +186,7 @@ export class ProviderRuntime {
     }
     return {
       request,
-      snapshot: this.freezeSnapshot(resolution, catalogSnapshot, driver),
+      snapshot: this.freezeSnapshot(resolution, catalogSnapshot, driver, tier),
       driver,
     };
   }
@@ -160,12 +195,23 @@ export class ProviderRuntime {
     resolution: Extract<ReturnType<typeof resolveModelSelection>, { kind: 'resolved' }>,
     catalogSnapshot: ProviderCatalogSnapshot | undefined,
     driver: ProviderDriver,
+    tier?: string,
   ): FrozenProviderRequestSnapshot {
     const catalogProvider = catalogSnapshot?.catalog.providers.find(
       (provider) => provider.id === resolution.provider.id,
     );
     const catalogModel = catalogProvider?.models.find((model) => model.id === resolution.model.id);
     const observation = this.status?.get(resolution.provider.id);
+    const tierMechanism = driver.tierMechanism;
+    // Variant-mechanism billing: the served variant id is the billed identity,
+    // so the snapshot freezes that variant's catalog rates (R22).
+    const variantModelId = tierMechanism?.kind === 'model-name-variants' && tier
+      ? tierVariantModelId(tierMechanism, resolution.model.id, tier)
+      : undefined;
+    const servedModelId = variantModelId ?? resolution.model.id;
+    const billedCatalogModel = variantModelId
+      ? catalogProvider?.models.find((model) => model.id === variantModelId) ?? catalogModel
+      : catalogModel;
     const dynamic = driver.pricingFacet?.dynamic
       ? this.pricing.stateFor(
         resolution.provider.id,
@@ -189,11 +235,27 @@ export class ProviderRuntime {
       pricing: resolveFrozenPricing({
         pricingFacet: driver.pricingFacet,
         connection: resolution.connection,
-        modelId: resolution.model.id,
-        catalogPricing: catalogModel?.pricing,
+        // Variant billing freezes the served variant's rates (R22); the
+        // user-override ladder layer still keys off the base model id.
+        modelId: variantModelId ?? resolution.model.id,
+        catalogPricing: billedCatalogModel?.pricing,
         dynamic,
         now: new Date(),
       }),
+      ...(tierMechanism
+        ? {
+            tier: {
+              mechanism: tierMechanism.kind,
+              ...(tier ? { requestedTier: tier } : {}),
+              ...(tierMechanism.kind === 'model-name-variants'
+                ? {
+                    servedModelId,
+                    ...(variantModelId ? { baseModelId: resolution.model.id } : {}),
+                  }
+                : {}),
+            },
+          }
+        : {}),
       fieldProvenance: catalogModel
         ? { provider: catalogProvider?.provenance ?? {}, model: catalogModel.provenance }
         : { source: 'user' },

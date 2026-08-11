@@ -58,6 +58,8 @@ import { buildSystemPrompt, type SystemPromptContext } from './system-prompt';
 import { createMiddlewareStack } from './middleware/index';
 import type { ProviderAttemptAccountingContext } from '../providers/accounting/middleware';
 import type { ReasoningProviderOptions } from '../providers/drivers/types';
+import { applyCacheBreakpoints } from '../providers/facets/cache';
+import type { CacheFacet } from '../../shared/types/provider-facets';
 import { createContextSnapshotBuilder } from './context-snapshot';
 import { importESM } from '../utils/esm-import';
 import { buildSkillTool } from '../tools/skill/skill';
@@ -116,6 +118,16 @@ export interface StreamChatParams {
   providerOptions?: ReasoningProviderOptions;
   /** Current model's thinking policy + identity for artifact replay (R16). */
   thinkingReplay?: ThinkingReplayContext;
+  /**
+   * Driver-owned prompt-cache placement. Absent facet = no markers (R12);
+   * explicit facets place breakpoints on the stable prefix and conversation
+   * tail (R10), with the TTL selection as the only user knob (R11).
+   */
+  cachePlacement?: {
+    readonly facet: CacheFacet;
+    readonly ttl?: string;
+    readonly sessionKey?: string;
+  };
 }
 
 function buildStepUsage(
@@ -176,6 +188,7 @@ export async function* streamChat(params: StreamChatParams): AsyncGenerator<Stre
     accounting,
     providerOptions,
     thinkingReplay,
+    cachePlacement,
   } = params;
 
   // Dynamic import — `ai` is ESM-only but Electron main compiles to CJS
@@ -306,12 +319,22 @@ export async function* streamChat(params: StreamChatParams): AsyncGenerator<Stre
           stepLimit(ctx) || shouldStopEarly()
       : stepLimit;
 
-    const result = streamText({
-      model: wrappedModel,
+    const placed = applyCacheBreakpoints({
       system: fullSystemPrompt,
       messages: coreMessages,
-      include: { requestMessages: true },
       tools: Object.keys(tools).length > 0 ? tools : undefined,
+      sessionKey: cachePlacement?.sessionKey,
+      ttl: cachePlacement?.ttl,
+      cacheFacet: cachePlacement?.facet,
+      providerNamespace: accounting?.snapshot.providerId ?? '',
+    });
+
+    const result = streamText({
+      model: wrappedModel,
+      system: placed.system,
+      messages: placed.messages,
+      include: { requestMessages: true },
+      tools: placed.tools as Record<string, Tool> | undefined,
       stopWhen,
       abortSignal: attempt.signal,
       // Retry ownership belongs to Orchid's accounting-aware middleware.

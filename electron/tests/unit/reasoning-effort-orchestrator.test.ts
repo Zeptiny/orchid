@@ -56,7 +56,10 @@ const infra = vi.hoisted(() => ({
     getActive: vi.fn(() => ({ cwd: null })),
   })),
   runtimeRegistry: { get: vi.fn() },
-  providerRuntime: { resolveExecution: vi.fn() },
+  providerRuntime: {
+    resolveExecution: vi.fn(),
+    resolveTierContext: vi.fn(async () => ({ connection: {}, tierMechanism: undefined })),
+  },
   accountingStore: {},
   buildSystemPromptContext: vi.fn(async ({ cwd }: { cwd: string }) => ({ cwd })),
   acquireProjectMCPManager: vi.fn(() => ({ getTools: () => [] })),

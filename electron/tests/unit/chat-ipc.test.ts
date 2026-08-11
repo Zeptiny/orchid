@@ -157,6 +157,7 @@ const mocks = vi.hoisted(() => {
   const modelInstance = { provider: 'trusted-test-driver' };
   const providerRuntime = {
     resolveLanguageModel: vi.fn(async () => modelInstance),
+    resolveTierContext: vi.fn(async () => ({ connection: {}, tierMechanism: undefined })),
     resolveExecution: vi.fn(async () => ({
       modelInstance,
       connection: {},
@@ -1535,7 +1536,7 @@ describe('chat IPC provider gates', () => {
 
     expect(result).toMatchObject({ status: 'started' });
     await waitForDoneCount(send, 1);
-    expect(mocks.providerRuntime.resolveExecution).toHaveBeenCalledWith(typedSelection);
+    expect(mocks.providerRuntime.resolveExecution).toHaveBeenCalledWith(typedSelection, {});
     expect(mocks.streamChat).toHaveBeenCalledWith(expect.objectContaining({
       modelInstance: mocks.modelInstance,
       sessionId: 'dddddddd-dddd-4ddd-8ddd-dddddddddddd',

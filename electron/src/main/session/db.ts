@@ -5,7 +5,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as os from 'node:os';
 import { openSqliteDb, type SqliteDatabase } from '../utils/sqlite';
-import { SESSION_SCHEMA_SQL, SESSION_SCHEMA_VERSION } from './schema';
+import { SESSION_SCHEMA_SQL, SESSION_SCHEMA_VERSION, applySessionSchemaMigrations } from './schema';
 
 /** Default session database path (~/.orchid/sessions.db). */
 export const SESSION_DB_PATH = path.join(os.homedir(), '.orchid', 'sessions.db');
@@ -26,6 +26,7 @@ export class SessionDb {
         corruptionCheck: 'SELECT 1 FROM sessions LIMIT 1',
       });
       this._db.pragma('foreign_keys = ON');
+      applySessionSchemaMigrations(this._db);
       this._db
         .prepare('INSERT OR REPLACE INTO schema_meta (key, value) VALUES (?, ?)')
         .run('schema_version', String(SESSION_SCHEMA_VERSION));

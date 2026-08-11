@@ -46,6 +46,8 @@ export interface Session {
   readonly subagentChains: readonly SubagentRecord[];
   readonly todoStore: TodoStoreData;
   readonly reasoningEffortOverride: string | number | null;
+  /** Per-session service tier override for the active model (R21). */
+  readonly tierOverride: string | null;
   readonly permissionMode: PermissionMode | null;
 }
 
@@ -66,6 +68,7 @@ export interface SessionStorageDict {
   subagentChains?: unknown[];
   todoStore?: unknown;
   reasoningEffortOverride?: string | number | null;
+  tierOverride?: string | null;
   permissionMode?: string | null;
   [key: string]: unknown;
 }
@@ -87,6 +90,7 @@ export function sessionToStorageDict(session: Session): SessionStorageDict {
     subagentChains: session.subagentChains.map(subagentRecordToStorageDict),
     todoStore: todoStoreToStorageDict(session.todoStore),
     reasoningEffortOverride: session.reasoningEffortOverride,
+    tierOverride: session.tierOverride,
     permissionMode: session.permissionMode,
   };
 }
@@ -145,6 +149,10 @@ export function sessionFromStorageDict(data: unknown): Session {
       typeof raw.reasoningEffortOverride === 'string' ||
       typeof raw.reasoningEffortOverride === 'number'
         ? raw.reasoningEffortOverride
+        : null,
+    tierOverride:
+      typeof raw.tierOverride === 'string' && raw.tierOverride.trim() !== ''
+        ? raw.tierOverride
         : null,
     permissionMode: parsePermissionMode(raw.permissionMode),
   };

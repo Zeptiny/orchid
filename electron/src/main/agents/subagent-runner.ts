@@ -13,7 +13,13 @@ import {
   mergeThinkingProviderOptions,
 } from '../providers/facets/thinking';
 import type { ThinkingReplayContext } from '../llm/history';
-import type { ThinkingPolicy } from '../../shared/types/provider-facets';
+import type { CacheFacet, ThinkingPolicy } from '../../shared/types/provider-facets';
+import {
+  buildCacheProviderOptions,
+  deriveCacheSessionKey,
+  resolveCacheTtl,
+} from '../providers/facets/cache';
+import { buildTierProviderOptions, resolveSubagentTier } from '../providers/facets/tiers';
 import type { ModelSelection } from '../../shared/types/provider';
 import { streamChat, type StreamEvent } from '../llm/orchestrator';
 import { resolveSubagentEffort } from '../llm/reasoning-effort';
@@ -143,14 +149,27 @@ export function createSubagentStreamRunner(): SubagentStreamRunner {
     let providerOptions: ReasoningProviderOptions | undefined;
     let pricingFacet: ProviderAttemptAccountingContext['pricingFacet'];
     let thinkingPolicy: ThinkingPolicy | undefined;
+    let cacheFacet: CacheFacet | undefined;
+    let cacheTtl: string | undefined;
+    let cacheSessionKey: string | undefined;
+    let tierMechanism: ProviderAttemptAccountingContext['tierMechanism'];
     let accountingStore: ReturnType<typeof getProviderAccountingStore>;
     try {
       accountingStore = getProviderAccountingStore();
-      const execution = await getProviderRuntime().resolveExecution(selection);
+      const tierContext = await getProviderRuntime().resolveTierContext(selection);
+      const effectiveTier = resolveSubagentTier(
+        tierContext.connection, selection.modelId, tierContext.tierMechanism,
+      );
+      const execution = await getProviderRuntime().resolveExecution(
+        selection,
+        effectiveTier !== undefined ? { tier: effectiveTier } : {},
+      );
+      tierMechanism = execution.tierMechanism;
       modelInstance = execution.modelInstance;
       providerSnapshot = execution.snapshot;
       pricingFacet = execution.pricingFacet;
       thinkingPolicy = execution.thinkingPolicy;
+      cacheFacet = execution.cacheFacet;
       const effort = resolveSubagentEffort(
         params.agent,
         config,
@@ -167,6 +186,21 @@ export function createSubagentStreamRunner(): SubagentStreamRunner {
           buildThinkingRequestOptions(thinkingPolicy, providerSnapshot.providerId),
         );
       }
+      providerOptions = mergeThinkingProviderOptions(
+        providerOptions,
+        buildTierProviderOptions(
+          execution.tierMechanism,
+          resolveSubagentTier(
+            execution.connection, selection.modelId, execution.tierMechanism,
+          ),
+        ),
+      );
+      cacheSessionKey = deriveCacheSessionKey(sessionId);
+      cacheTtl = resolveCacheTtl(cacheFacet, execution.connection.cacheTtl);
+      providerOptions = mergeThinkingProviderOptions(
+        providerOptions,
+        buildCacheProviderOptions(cacheFacet, cacheSessionKey),
+      );
     } catch (error) {
       yield {
         type: 'error',
@@ -199,6 +233,7 @@ export function createSubagentStreamRunner(): SubagentStreamRunner {
       agentTier: params.agent.tier,
      attemptIdHolder: { value: null },
       pricingFacet,
+      tierMechanism,
     };
     try {
       getSubagentAttributionStore().insert({
@@ -259,6 +294,9 @@ export function createSubagentStreamRunner(): SubagentStreamRunner {
           policy: thinkingPolicy ?? DEFAULT_THINKING_POLICY,
           selection: { providerId: providerSnapshot.providerId, modelId: selection.modelId },
         } satisfies ThinkingReplayContext,
+        cachePlacement: cacheFacet
+          ? { facet: cacheFacet, ttl: cacheTtl, sessionKey: cacheSessionKey }
+          : undefined,
       });
     } finally {
       releaseProjectMCPManager(runtime);

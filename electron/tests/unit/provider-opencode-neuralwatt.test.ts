@@ -193,4 +193,61 @@ describe('OpenCode Go and Neuralwatt trusted drivers', () => {
     });
     expect(JSON.stringify(observation)).not.toContain('must-not-persist');
   });
+
+  it('maps a selected Neuralwatt tier onto the variant model id at construction time (R19)', async () => {
+    const { createNeuralwattProviderDriver } = await import('../../src/main/providers/drivers/neuralwatt');
+    const driver = createNeuralwattProviderDriver();
+    expect(driver.tierMechanism?.kind).toBe('model-name-variants');
+
+    const connection: ProviderConnection = {
+      id: '44444444-4444-4444-8444-444444444444',
+      providerId: 'neuralwatt',
+      name: 'NW',
+      protocol: 'openai-compatible',
+      authMethod: 'api-key',
+      credential: { kind: 'stored', handle: '55555555-5555-4555-8555-555555555555' },
+      modelIds: ['glm-5.2'],
+      tierSelections: { 'glm-5.2': 'flex' },
+      health: 'ready',
+    };
+    const provider: ProviderDefinition = {
+      id: 'neuralwatt',
+      displayName: 'Neuralwatt',
+      supportedAuthMethods: ['api-key'],
+      supportedProtocols: ['openai-compatible'],
+      allowsCustomModels: false,
+      models: [],
+    };
+
+    const request = {
+      connection,
+      provider,
+      model: { id: 'glm-5.2', displayName: 'GLM 5.2', protocol: 'openai-compatible' as const, source: 'catalog' as const },
+      credential: { kind: 'api-key' as const, apiKey: 'neuralwatt-key' },
+    };
+
+    // Selecting flex sends the variant id (streaming is always asserted here).
+    await expect(driver.createLanguageModel({ ...request, tier: 'flex' })).resolves.toBe(openaiCompatibleModel);
+    let factory = vi.mocked(createOpenAICompatible).mock.results.at(-1)?.value;
+    expect(vi.mocked(factory).mock.calls.at(-1)?.[0]).toBe('glm-5.2-flex');
+
+    // No selection sends the base id unchanged (opt-in, R23).
+    await expect(driver.createLanguageModel(request)).resolves.toBe(openaiCompatibleModel);
+    factory = vi.mocked(createOpenAICompatible).mock.results.at(-1)?.value;
+    expect(vi.mocked(factory).mock.calls.at(-1)?.[0]).toBe('glm-5.2');
+  });
+
+  it('rejects a flex tier for a non-streaming construction path (R23)', async () => {
+    const { createNeuralwattProviderDriver } = await import('../../src/main/providers/drivers/neuralwatt');
+    const { applyVariantTier } = await import('../../src/main/providers/facets/tiers');
+    const driver = createNeuralwattProviderDriver();
+    expect(() =>
+      applyVariantTier(
+        driver,
+        { id: 'glm-5.2', displayName: 'GLM 5.2', protocol: 'openai-compatible', source: 'catalog' },
+        'flex',
+        { streaming: false },
+      ),
+    ).toThrow(/requires a streaming request/);
+  });
 });

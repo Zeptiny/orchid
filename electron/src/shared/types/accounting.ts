@@ -96,6 +96,18 @@ export interface FrozenProviderRequestSnapshot {
   readonly pricing: FrozenPricingSnapshot | null;
   readonly fieldProvenance: Readonly<Record<string, unknown>>;
   readonly statusObservation: Readonly<Record<string, unknown>> | null;
+  /**
+   * Tier-facet context frozen at request start (R22). `mechanism` is the
+   * driver-declared kind; `requestedTier` is the opt-in selection; for
+   * variant mechanisms `servedModelId`/`baseModelId` identify the billed
+   * variant so cost resolution can select served rates.
+   */
+  readonly tier?: {
+    readonly mechanism: 'request-parameter' | 'model-name-variants';
+    readonly requestedTier?: string;
+    readonly servedModelId?: string;
+    readonly baseModelId?: string;
+  };
 }
 
 export interface ProviderAttemptRecord {
