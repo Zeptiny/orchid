@@ -27,6 +27,7 @@ import type {
   ProviderProtocol,
   ReasoningModelConfig,
 } from '../../../shared/types/provider';
+import type { PricingRateFields } from '../../../shared/types/provider-facets';
 import { isTextGenerationModel } from '../../utils/models';
 import { Alert } from '../ui/Alert';
 import { Button } from '../ui/Button';
@@ -132,6 +133,7 @@ export function ConnectionWizard({
   const [connectionModelIds, setConnectionModelIds] = useState<readonly string[]>([]);
   const [connectionCustomModels, setConnectionCustomModels] = useState<readonly CustomConnectionModel[]>([]);
   const [reasoningConfig, setReasoningConfig] = useState<Record<string, ReasoningModelConfig>>({});
+  const [pricingOverrides, setPricingOverrides] = useState<Record<string, PricingRateFields>>({});
   const [tierSelections, setTierSelections] = useState<Record<string, string>>({});
   const [modelsEditing, setModelsEditing] = useState(false);
   const [endpoint, setEndpoint] = useState('');
@@ -187,6 +189,7 @@ export function ConnectionWizard({
     setConnectionModelIds(defaultModelIds(definition, nextProtocol));
     setConnectionCustomModels([]);
     setReasoningConfig({});
+    setPricingOverrides({});
     setTierSelections({});
     setModelsEditing(false);
     setEndpoint('');
@@ -206,6 +209,7 @@ export function ConnectionWizard({
     setConnectionModelIds([...connection.modelIds]);
     setConnectionCustomModels(connectionCustomModelDrafts(connection));
     setReasoningConfig(connection.reasoningConfig ?? {});
+    setPricingOverrides(connection.pricingOverrides ?? {});
     setTierSelections(connection.tierSelections ?? {});
     setModelsEditing(false);
     setEndpoint(connection.endpoint ?? '');
@@ -358,6 +362,7 @@ export function ConnectionWizard({
         modelIds,
         customModels,
         ...(Object.keys(reasoningConfig).length > 0 ? { reasoningConfig } : {}),
+        ...(Object.keys(pricingOverrides).length > 0 ? { pricingOverrides } : {}),
         ...(Object.keys(tierSelections).length > 0 ? { tierSelections } : {}),
         ...(supportsCustomEndpoint ? { endpoint: endpoint.trim(), allowInsecureHttp } : {}),
         ...(authMethod === 'environment'
@@ -377,6 +382,7 @@ export function ConnectionWizard({
     modelIds: message.modelIds,
     customModels: message.customModels ?? [],
     reasoningConfig,
+    pricingOverrides,
     tierSelections,
     ...(message.endpoint === undefined ? {} : { endpoint: message.endpoint }),
     ...(message.allowInsecureHttp === undefined
@@ -751,6 +757,8 @@ export function ConnectionWizard({
                   onSelectedModelIdsChange={setConnectionModelIds}
                   onCustomModelsChange={setConnectionCustomModels}
                   onReasoningConfigChange={setReasoningConfig}
+                  pricingOverrides={pricingOverrides}
+                  onPricingOverridesChange={setPricingOverrides}
                   tierSelections={tierSelections}
                   onTierSelectionsChange={setTierSelections}
                   onEditingChange={setModelsEditing}

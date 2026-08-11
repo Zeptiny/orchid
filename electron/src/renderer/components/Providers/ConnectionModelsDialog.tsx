@@ -12,6 +12,7 @@ import type {
   ProviderProtocol,
   ReasoningModelConfig,
 } from '../../../shared/types/provider';
+import type { PricingRateFields } from '../../../shared/types/provider-facets';
 import {
   CONNECTION_MODEL_MODALITIES,
   connectionModelCapabilities,
@@ -53,12 +54,44 @@ const EMPTY_CUSTOM_MODEL: CustomModelForm = {
 
 const EMPTY_REASONING_CONFIG: ReasoningModelConfig = { levels: [], default: null };
 
+/** One text-editable rate field of a per-model pricing override (R6). */
+interface PricingRateFieldDef {
+  readonly key: keyof Pick<
+    PricingRateFields,
+    'input' | 'output' | 'cacheRead' | 'cacheWrite' | 'reasoning' | 'perRequest'
+  >;
+  readonly label: string;
+  readonly placeholder: string;
+}
+
+const PRICING_RATE_FIELDS: readonly PricingRateFieldDef[] = [
+  { key: 'input', label: 'Input rate', placeholder: 'e.g. 1.25' },
+  { key: 'output', label: 'Output rate', placeholder: 'e.g. 5.00' },
+  { key: 'cacheRead', label: 'Cache read rate', placeholder: 'e.g. 0.25' },
+  { key: 'cacheWrite', label: 'Cache write rate', placeholder: 'e.g. 2.50' },
+  { key: 'reasoning', label: 'Reasoning rate', placeholder: 'e.g. 8.00' },
+  { key: 'perRequest', label: 'Per-request fee', placeholder: 'e.g. 0.02' },
+];
+
+const EMPTY_PRICING_DRAFT: Record<PricingRateFieldDef['key'], string> = {
+  input: '',
+  output: '',
+  cacheRead: '',
+  cacheWrite: '',
+  reasoning: '',
+  perRequest: '',
+};
+
+const PRICING_AMOUNT_PATTERN = /^(?:0|[1-9]\d*)(?:\.\d+)?$/;
+
 export interface ConnectionModelsEditorProps {
   readonly protocol: ProviderProtocol;
   readonly definition: ProviderDefinitionView;
   readonly selectedModelIds: readonly string[];
   readonly customModels: readonly CustomConnectionModel[];
   readonly reasoningConfig: Record<string, ReasoningModelConfig>;
+  /** Per-model field-level rate overrides (R6); rendered per row. */
+  readonly pricingOverrides?: Record<string, PricingRateFields>;
   /** Per-model service tier selections (R20); only rendered for tier-capable rows. */
   readonly tierSelections?: Record<string, string>;
   readonly disabled?: boolean;
@@ -70,6 +103,7 @@ export interface ConnectionModelsEditorProps {
   readonly onSelectedModelIdsChange: (modelIds: readonly string[]) => void;
   readonly onCustomModelsChange: (models: readonly CustomConnectionModel[]) => void;
   readonly onReasoningConfigChange: (config: Record<string, ReasoningModelConfig>) => void;
+  readonly onPricingOverridesChange?: (overrides: Record<string, PricingRateFields>) => void;
   readonly onTierSelectionsChange?: (selections: Record<string, string>) => void;
   readonly onEditingChange?: (editing: boolean) => void;
 }
@@ -158,6 +192,53 @@ function formForCustomModel(model: CustomConnectionModel): CustomModelForm {
   };
 }
 
+function pricingDraftFor(
+  override: PricingRateFields | undefined,
+): Record<PricingRateFieldDef['key'], string> {
+  const amount = (
+    rate: { amount: string; per: number; unit: string } | undefined,
+    per: number,
+    unit: 'tokens' | 'requests',
+  ): string => rate && rate.per === per && rate.unit === unit ? rate.amount : '';
+  return {
+    input: amount(override?.input, 1_000_000, 'tokens'),
+    output: amount(override?.output, 1_000_000, 'tokens'),
+    cacheRead: amount(override?.cacheRead, 1_000_000, 'tokens'),
+    cacheWrite: amount(override?.cacheWrite, 1_000_000, 'tokens'),
+    reasoning: amount(override?.reasoning, 1_000_000, 'tokens'),
+    perRequest: amount(override?.perRequest, 1, 'requests'),
+  };
+}
+
+function pricingOverrideFromDraft(
+  draft: Record<PricingRateFieldDef['key'], string>,
+): PricingRateFields {
+  const tokenRate = (value: string) => value.trim() === ''
+    ? undefined
+    : { amount: value.trim(), per: 1_000_000, unit: 'tokens' as const };
+  const requestFee = (value: string) => value.trim() === ''
+    ? undefined
+    : { amount: value.trim(), per: 1, unit: 'requests' as const };
+  const fields: PricingRateFields = {};
+  const input = tokenRate(draft.input);
+  if (input) fields.input = input;
+  const output = tokenRate(draft.output);
+  if (output) fields.output = output;
+  const cacheRead = tokenRate(draft.cacheRead);
+  if (cacheRead) fields.cacheRead = cacheRead;
+  const cacheWrite = tokenRate(draft.cacheWrite);
+  if (cacheWrite) fields.cacheWrite = cacheWrite;
+  const reasoning = tokenRate(draft.reasoning);
+  if (reasoning) fields.reasoning = reasoning;
+  const perRequest = requestFee(draft.perRequest);
+  if (perRequest) fields.perRequest = perRequest;
+  return fields;
+}
+
+function invalidPricingAmount(value: string): boolean {
+  return value.trim() !== '' && !PRICING_AMOUNT_PATTERN.test(value.trim());
+}
+
 function sourceLabel(source: EditorModelRow['source']): string {
   switch (source) {
     case 'catalog':
@@ -190,6 +271,7 @@ export function ConnectionModelsEditor({
   selectedModelIds,
   customModels,
   reasoningConfig,
+  pricingOverrides = {},
   tierSelections = {},
   disabled = false,
   unifiedModels = null,
@@ -199,12 +281,16 @@ export function ConnectionModelsEditor({
   onSelectedModelIdsChange,
   onCustomModelsChange,
   onReasoningConfigChange,
+  onPricingOverridesChange,
   onTierSelectionsChange,
   onEditingChange,
 }: ConnectionModelsEditorProps) {
   const [editingCustomModelId, setEditingCustomModelId] = useState<string | null>(null);
   const [customForm, setCustomForm] = useState<CustomModelForm>(EMPTY_CUSTOM_MODEL);
   const [reasoningDraft, setReasoningDraft] = useState<ReasoningModelConfig>(EMPTY_REASONING_CONFIG);
+  const [pricingEditingModelId, setPricingEditingModelId] = useState<string | null>(null);
+  const [pricingDraft, setPricingDraft] = useState(EMPTY_PRICING_DRAFT);
+  const [pricingError, setPricingError] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
 
@@ -314,8 +400,8 @@ export function ConnectionModelsEditor({
   );
 
   useEffect(() => {
-    onEditingChange?.(editingCustomModelId !== null);
-  }, [editingCustomModelId, onEditingChange]);
+    onEditingChange?.(editingCustomModelId !== null || pricingEditingModelId !== null);
+  }, [editingCustomModelId, pricingEditingModelId, onEditingChange]);
 
   const toggleModel = (modelId: string) => {
     onSelectedModelIdsChange(selectedModelIds.includes(modelId)
@@ -356,6 +442,51 @@ export function ConnectionModelsEditor({
     setCustomForm(EMPTY_CUSTOM_MODEL);
     setReasoningDraft(EMPTY_REASONING_CONFIG);
     setError(null);
+  };
+
+  const startEditingPricing = (modelId: string) => {
+    setPricingEditingModelId(modelId);
+    setPricingDraft(pricingDraftFor(pricingOverrides[modelId]));
+    setPricingError(null);
+  };
+
+  const cancelPricingEditing = () => {
+    setPricingEditingModelId(null);
+    setPricingDraft(EMPTY_PRICING_DRAFT);
+    setPricingError(null);
+  };
+
+  const savePricingOverride = () => {
+    if (!pricingEditingModelId) return;
+    for (const field of PRICING_RATE_FIELDS) {
+      if (invalidPricingAmount(pricingDraft[field.key])) {
+        setPricingError(`Enter a non-negative decimal amount for ${field.label.toLowerCase()}.`);
+        return;
+      }
+    }
+    const next = { ...pricingOverrides };
+    const override = pricingOverrideFromDraft(pricingDraft);
+    if (Object.keys(override).length === 0) delete next[pricingEditingModelId];
+    else {
+      // Preserve dimensions this minimal form does not edit (energy, TTL-keyed
+      // cache writes) so saving one field never silently drops another.
+      const existing = pricingOverrides[pricingEditingModelId];
+      if (existing?.energy) override.energy = existing.energy;
+      if (existing?.cacheWriteByTtl) override.cacheWriteByTtl = existing.cacheWriteByTtl;
+      next[pricingEditingModelId] = override;
+    }
+    onPricingOverridesChange?.(next);
+    setPricingEditingModelId(null);
+    setPricingDraft(EMPTY_PRICING_DRAFT);
+    setPricingError(null);
+  };
+
+  const clearPricingOverride = (modelId: string) => {
+    if (!pricingOverrides[modelId]) return;
+    const next = { ...pricingOverrides };
+    delete next[modelId];
+    onPricingOverridesChange?.(next);
+    if (pricingEditingModelId === modelId) cancelPricingEditing();
   };
 
   const toggleModality = (
@@ -513,7 +644,7 @@ export function ConnectionModelsEditor({
                         variant="ghost"
                         size="sm"
                         onClick={() => void discoverModels()}
-                        disabled={disabled || discovering || editingCustomModelId !== null}
+                        disabled={disabled || discovering || editingCustomModelId !== null || pricingEditingModelId !== null}
                       >
                         <Icon name="refresh" size={14} />
                         {discovering ? 'Fetching…' : 'Fetch models'}
@@ -523,7 +654,7 @@ export function ConnectionModelsEditor({
                       variant="ghost"
                       size="sm"
                       onClick={toggleAllModels}
-                      disabled={disabled || editingCustomModelId !== null || selectableModelIds.length === 0}
+                      disabled={disabled || editingCustomModelId !== null || pricingEditingModelId !== null || selectableModelIds.length === 0}
                       aria-pressed={allModelsSelected}
                     >
                       {allModelsSelected ? 'Deselect all models' : 'Select all models'}
@@ -532,7 +663,7 @@ export function ConnectionModelsEditor({
                       <Button
                         size="sm"
                         onClick={startAddingCustomModel}
-                        disabled={disabled}
+                        disabled={disabled || pricingEditingModelId !== null}
                       >
                         <Icon name="plus" size={14} />
                         Add custom model
@@ -573,7 +704,7 @@ export function ConnectionModelsEditor({
                             checked={selected}
                             onChange={() => toggleModel(row.view.id)}
                             aria-label={`Use ${row.view.displayName}`}
-                            disabled={disabled || editingCustomModelId !== null}
+                            disabled={disabled || editingCustomModelId !== null || pricingEditingModelId !== null}
                           />
                           <div className="min-w-0">
                             <div className="flex flex-wrap items-center gap-2">
@@ -586,6 +717,9 @@ export function ConnectionModelsEditor({
                                 {sourceLabel(row.source)}
                               </StatusBadge>
                               {row.customized && <StatusBadge size="sm">Customized</StatusBadge>}
+                              {pricingOverrides[row.view.id] && (
+                                <StatusBadge size="sm" tone="ghost">Pricing override</StatusBadge>
+                              )}
                             </div>
                             <div className="mt-1 break-all font-mono text-xs text-base-content/60">{row.view.id}</div>
                             {row.view.capabilities && (
@@ -613,7 +747,7 @@ export function ConnectionModelsEditor({
                                   size="xs"
                                   className="rounded-md"
                                   value={tierSelections[row.view.id] ?? row.tierOptions.selected ?? ''}
-                                  disabled={disabled || editingCustomModelId !== null}
+                                  disabled={disabled || editingCustomModelId !== null || pricingEditingModelId !== null}
                                   onChange={(event) => selectTier(row.view.id, event.target.value)}
                                   onClick={(event) => event.stopPropagation()}
                                 >
@@ -632,11 +766,22 @@ export function ConnectionModelsEditor({
                           <Button
                             variant="ghost"
                             size="sm"
+                            onClick={() => startEditingPricing(row.view.id)}
+                            aria-label={`Edit pricing for ${row.view.displayName}`}
+                            title="Edit per-model rate override"
+                            disabled={disabled || editingCustomModelId !== null || pricingEditingModelId !== null}
+                          >
+                            <Icon name="sliders" size={14} />
+                            Pricing
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="sm"
                             shape="square"
                             onClick={() => startEditingRow(row)}
                             aria-label={`Edit ${row.view.displayName}`}
                             title={`Edit ${row.view.displayName}`}
-                            disabled={disabled || editingCustomModelId !== null}
+                            disabled={disabled || editingCustomModelId !== null || pricingEditingModelId !== null}
                           >
                             <Icon name="edit" size={14} />
                           </Button>
@@ -646,7 +791,7 @@ export function ConnectionModelsEditor({
                               size="sm"
                               onClick={() => resetModelOverride(row.view.id)}
                               title="Reset to the underlying metadata"
-                              disabled={disabled || editingCustomModelId !== null}
+                              disabled={disabled || editingCustomModelId !== null || pricingEditingModelId !== null}
                             >
                               Reset
                             </Button>
@@ -660,7 +805,7 @@ export function ConnectionModelsEditor({
                               onClick={() => removeCustomModel(row.view.id)}
                               aria-label={`Remove ${row.view.displayName}`}
                               title={`Remove ${row.view.displayName}`}
-                              disabled={disabled || editingCustomModelId !== null}
+                              disabled={disabled || editingCustomModelId !== null || pricingEditingModelId !== null}
                             >
                               <Icon name="trash" size={14} />
                             </Button>
@@ -846,6 +991,75 @@ export function ConnectionModelsEditor({
                       disabled={disabled}
                     >
                       {editingCustomModelId === NEW_CUSTOM_MODEL ? 'Add model' : 'Save model'}
+                    </Button>
+                  </div>
+                </div>
+              )}
+
+              {pricingEditingModelId !== null && (
+                <div className="rounded-box border border-base-300 bg-base-200/40 p-4">
+                  <h3 className="text-sm font-semibold">Pricing override</h3>
+                  <p className="mt-0.5 break-all font-mono text-xs text-base-content/60">
+                    {pricingEditingModelId}
+                  </p>
+                  <p className="mt-1 text-xs text-base-content/60">
+                    Set field-level rates that win over the catalog, provider, and discovered
+                    pricing rungs for this model. Empty fields keep the underlying rate.
+                  </p>
+                  <div className="mt-3 grid gap-3 md:grid-cols-2">
+                    {PRICING_RATE_FIELDS.map((field) => (
+                      <div key={field.key}>
+                        <label
+                          className="label"
+                          htmlFor={`pricing-${field.key}-${pricingEditingModelId}`}
+                        >
+                          {field.label}
+                        </label>
+                        <TextInput
+                          id={`pricing-${field.key}-${pricingEditingModelId}`}
+                          bordered={false}
+                          className="w-full"
+                          inputMode="decimal"
+                          value={pricingDraft[field.key]}
+                          onChange={(event) => setPricingDraft({ ...pricingDraft, [field.key]: event.target.value })}
+                          placeholder={field.placeholder}
+                          disabled={disabled}
+                        />
+                      </div>
+                    ))}
+                  </div>
+                  <p className="label mt-2">
+                    Token rates are per 1,000,000 tokens; the per-request fee is charged once per request.
+                  </p>
+                  {pricingError && (
+                    <Alert tone="error" icon="alertCircle" aria-live="assertive">{pricingError}</Alert>
+                  )}
+                  <div className="mt-4 flex justify-end gap-2">
+                    {pricingOverrides[pricingEditingModelId] && (
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="text-error"
+                        onClick={() => clearPricingOverride(pricingEditingModelId)}
+                        disabled={disabled}
+                      >
+                        Clear override
+                      </Button>
+                    )}
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={cancelPricingEditing}
+                      disabled={disabled}
+                    >
+                      Cancel
+                    </Button>
+                    <Button
+                      size="sm"
+                      onClick={savePricingOverride}
+                      disabled={disabled}
+                    >
+                      Save pricing override
                     </Button>
                   </div>
                 </div>

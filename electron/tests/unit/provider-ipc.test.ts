@@ -45,6 +45,12 @@ vi.mock('../../src/main/ipc/chat', () => ({
 }));
 
 let providersIpc: typeof import('../../src/main/ipc/providers');
+let providerModelsIpc: typeof import('../../src/main/ipc/provider-models');
+
+function registerProviderIpc(): void {
+  providersIpc.registerProviderIPC();
+  providerModelsIpc.registerProviderModelsIPC();
+}
 
 const OPENAI: ProviderDefinition = {
   id: 'openai',
@@ -217,12 +223,14 @@ beforeEach(async () => {
   mocks.stopActiveProviderConnectionTurns.mockReset();
   mocks.stopActiveProviderConnectionTurns.mockReturnValue([]);
   providersIpc = await import('../../src/main/ipc/providers');
+  providerModelsIpc = await import('../../src/main/ipc/provider-models');
   providersIpc._setProviderIPCServicesForTests(null);
   providersIpc._clearConnectionMutationLocksForTests();
 });
 
 afterEach(() => {
   providersIpc.unregisterProviderIPC();
+  providerModelsIpc.unregisterProviderModelsIPC();
   providersIpc._setProviderIPCServicesForTests(null);
   providersIpc._clearConnectionMutationLocksForTests();
 });
@@ -241,7 +249,7 @@ describe('provider IPC', () => {
       health: 'ready',
     });
     providersIpc._setProviderIPCServicesForTests(memory.services);
-    providersIpc.registerProviderIPC();
+    registerProviderIpc();
 
     const result = await handler(IPC_CHANNELS.PROVIDERS_LIST)(null);
     const serialized = JSON.stringify(result);
@@ -258,7 +266,7 @@ describe('provider IPC', () => {
   it('rejects renderer credential handles, unsupported auth, and code-owned endpoint overrides', async () => {
     const memory = memoryServices();
     providersIpc._setProviderIPCServicesForTests(memory.services);
-    providersIpc.registerProviderIPC();
+    registerProviderIpc();
 
     await expect(handler(IPC_CHANNELS.PROVIDERS_CREATE)(null, {
       providerId: 'openai',
@@ -290,7 +298,7 @@ describe('provider IPC', () => {
   it('accepts a user-defined model for a named provider when the catalog is stale', async () => {
     const memory = memoryServices();
     providersIpc._setProviderIPCServicesForTests(memory.services);
-    providersIpc.registerProviderIPC();
+    registerProviderIpc();
 
     const result = await handler(IPC_CHANNELS.PROVIDERS_CREATE)(null, {
       providerId: 'openai',
@@ -333,7 +341,7 @@ describe('provider IPC', () => {
       health: 'ready',
     });
     providersIpc._setProviderIPCServicesForTests(memory.services);
-    providersIpc.registerProviderIPC();
+    registerProviderIpc();
 
     const result = await handler(IPC_CHANNELS.PROVIDERS_UPDATE)(null, {
       connectionId: id,
@@ -379,7 +387,7 @@ describe('provider IPC', () => {
       health: 'ready',
     });
     providersIpc._setProviderIPCServicesForTests(memory.services);
-    providersIpc.registerProviderIPC();
+    registerProviderIpc();
 
     const initial = await handler(IPC_CHANNELS.PROVIDERS_MODEL_LIST)(null, { connectionId: id });
     expect(initial.map((option: { model: { id: string } }) => option.model.id)).toEqual([
@@ -411,7 +419,7 @@ describe('provider IPC', () => {
       health: 'ready',
     });
     providersIpc._setProviderIPCServicesForTests(memory.services);
-    providersIpc.registerProviderIPC();
+    registerProviderIpc();
 
     await handler(IPC_CHANNELS.PROVIDERS_UPDATE)(null, {
       connectionId: id,
@@ -456,7 +464,7 @@ describe('provider IPC', () => {
       health: 'draft',
     });
     providersIpc._setProviderIPCServicesForTests(memory.services);
-    providersIpc.registerProviderIPC();
+    registerProviderIpc();
 
     const result = await handler(IPC_CHANNELS.PROVIDERS_SUBMIT_API_KEY)(null, {
       connectionId: id,
@@ -486,7 +494,7 @@ describe('provider IPC', () => {
       health: 'ready',
     });
     providersIpc._setProviderIPCServicesForTests(memory.services);
-    providersIpc.registerProviderIPC();
+    registerProviderIpc();
 
     const result = await handler(IPC_CHANNELS.PROVIDERS_UPDATE)(null, {
       connectionId: id,
@@ -524,7 +532,7 @@ describe('provider IPC', () => {
       health: 'ready',
     });
     providersIpc._setProviderIPCServicesForTests(memory.services);
-    providersIpc.registerProviderIPC();
+    registerProviderIpc();
 
     await handler(IPC_CHANNELS.PROVIDERS_SUBMIT_API_KEY)(null, {
       connectionId: id,
@@ -548,7 +556,7 @@ describe('provider IPC', () => {
       health: 'ready',
     });
     providersIpc._setProviderIPCServicesForTests(memory.services);
-    providersIpc.registerProviderIPC();
+    registerProviderIpc();
 
     const unauthenticated = await handler(IPC_CHANNELS.PROVIDERS_UPDATE)(null, {
       connectionId: id,
@@ -590,7 +598,7 @@ describe('provider IPC', () => {
       health: 'ready',
     });
     providersIpc._setProviderIPCServicesForTests(memory.services);
-    providersIpc.registerProviderIPC();
+    registerProviderIpc();
 
     await expect(handler(IPC_CHANNELS.PROVIDERS_UPDATE)(null, {
       connectionId: id,
@@ -627,7 +635,7 @@ describe('provider IPC', () => {
       health: 'ready',
     });
     providersIpc._setProviderIPCServicesForTests(memory.services);
-    providersIpc.registerProviderIPC();
+    registerProviderIpc();
 
     const result = await handler(IPC_CHANNELS.PROVIDERS_UPDATE)(null, {
       connectionId: id,
@@ -664,7 +672,7 @@ describe('provider IPC', () => {
       health: 'ready',
     });
     providersIpc._setProviderIPCServicesForTests(memory.services);
-    providersIpc.registerProviderIPC();
+    registerProviderIpc();
 
     const invalidated = await handler(IPC_CHANNELS.PROVIDERS_UPDATE)(null, {
       connectionId: id,
@@ -692,7 +700,7 @@ describe('provider IPC', () => {
     });
     mocks.activeSessionsForProviderConnection.mockReturnValue(['session-active']);
     providersIpc._setProviderIPCServicesForTests(memory.services);
-    providersIpc.registerProviderIPC();
+    registerProviderIpc();
 
     const result = await handler(IPC_CHANNELS.PROVIDERS_DISABLE)(null, {
       connectionId: id,
@@ -724,7 +732,7 @@ describe('provider IPC', () => {
     mocks.stopActiveProviderConnectionTurns.mockReturnValue(['session-active']);
     mocks.interruptPendingForConnection.mockReturnValue(1);
     providersIpc._setProviderIPCServicesForTests(memory.services);
-    providersIpc.registerProviderIPC();
+    registerProviderIpc();
 
     const result = await handler(IPC_CHANNELS.PROVIDERS_DISCONNECT)(null, {
       connectionId: id,
@@ -773,7 +781,7 @@ describe('provider IPC', () => {
       ...memory.services,
       clearConfigReferences,
     });
-    providersIpc.registerProviderIPC();
+    registerProviderIpc();
 
     const result = await handler(IPC_CHANNELS.PROVIDERS_DELETE)(null, {
       connectionId: id,
@@ -798,7 +806,7 @@ describe('provider IPC', () => {
   it('requires explicit confirmation before deleting a connection', async () => {
     const memory = memoryServices();
     providersIpc._setProviderIPCServicesForTests(memory.services);
-    providersIpc.registerProviderIPC();
+    registerProviderIpc();
 
     await expect(handler(IPC_CHANNELS.PROVIDERS_DELETE)(null, {
       connectionId: '00000000-0000-4000-8000-000000000055',
@@ -870,7 +878,7 @@ describe('provider IPC', () => {
       throw new Error('ledger unavailable');
     });
     providersIpc._setProviderIPCServicesForTests(memory.services);
-    providersIpc.registerProviderIPC();
+    registerProviderIpc();
 
     await expect(handler(IPC_CHANNELS.PROVIDERS_DISCONNECT)(null, {
       connectionId: id,
@@ -901,7 +909,7 @@ describe('provider IPC', () => {
       throw new Error('ledger unavailable');
     });
     providersIpc._setProviderIPCServicesForTests(memory.services);
-    providersIpc.registerProviderIPC();
+    registerProviderIpc();
 
     await expect(handler(IPC_CHANNELS.PROVIDERS_DELETE)(null, {
       connectionId: id,
@@ -941,7 +949,7 @@ describe('provider IPC', () => {
     });
 
     providersIpc._setProviderIPCServicesForTests(memory.services);
-    providersIpc.registerProviderIPC();
+    registerProviderIpc();
 
     const submitPromise = handler(IPC_CHANNELS.PROVIDERS_SUBMIT_API_KEY)(null, {
       connectionId: id,
@@ -1004,7 +1012,7 @@ describe('provider IPC', () => {
     });
 
     providersIpc._setProviderIPCServicesForTests(memory.services);
-    providersIpc.registerProviderIPC();
+    registerProviderIpc();
 
     const validatePromise = handler(IPC_CHANNELS.PROVIDERS_VALIDATE)(null, { connectionId: id });
     await vi.waitFor(() => expect(validateEnteredReadiness).toBe(true));
@@ -1042,7 +1050,7 @@ describe('provider IPC', () => {
       health: 'disabled',
     });
     providersIpc._setProviderIPCServicesForTests(memory.services);
-    providersIpc.registerProviderIPC();
+    registerProviderIpc();
 
     const result = await handler(IPC_CHANNELS.PROVIDERS_VALIDATE)(null, { connectionId: id });
 
@@ -1068,7 +1076,7 @@ describe('provider IPC', () => {
       health: 'disabled',
     });
     providersIpc._setProviderIPCServicesForTests(memory.services);
-    providersIpc.registerProviderIPC();
+    registerProviderIpc();
 
     await expect(handler(IPC_CHANNELS.PROVIDERS_SUBMIT_API_KEY)(null, {
       connectionId: id,
@@ -1131,7 +1139,7 @@ describe('provider live model discovery IPC', () => {
     process.env.ORCHID_TEST_NEURALWATT_KEY = 'nw-env-key';
     try {
       providersIpc._setProviderIPCServicesForTests(memory.services);
-      providersIpc.registerProviderIPC();
+      registerProviderIpc();
 
       const result = await handler(IPC_CHANNELS.PROVIDERS_CREATE)(null, {
         providerId: 'neuralwatt',
@@ -1179,7 +1187,7 @@ describe('provider live model discovery IPC', () => {
       health: 'draft',
     });
     providersIpc._setProviderIPCServicesForTests(memory.services);
-    providersIpc.registerProviderIPC();
+    registerProviderIpc();
 
     const first = await handler(IPC_CHANNELS.PROVIDERS_SUBMIT_API_KEY)(null, {
       connectionId: id,
@@ -1223,7 +1231,7 @@ describe('provider live model discovery IPC', () => {
       health: 'ready',
     });
     providersIpc._setProviderIPCServicesForTests(memory.services);
-    providersIpc.registerProviderIPC();
+    registerProviderIpc();
 
     await handler(IPC_CHANNELS.PROVIDERS_DISCOVER_MODELS)(null, { connectionId: id });
 
@@ -1295,7 +1303,7 @@ describe('provider live model discovery IPC', () => {
       health: 'ready',
     });
     providersIpc._setProviderIPCServicesForTests(memory.services);
-    providersIpc.registerProviderIPC();
+    registerProviderIpc();
 
     const discovered = await handler(IPC_CHANNELS.PROVIDERS_DISCOVER_MODELS)(null, { connectionId: id });
     expect(discovered).toMatchObject({ status: 'ok', addedModelIds: ['nw-id-only'] });
@@ -1353,7 +1361,7 @@ describe('provider live model discovery IPC', () => {
       health: 'ready',
     });
     providersIpc._setProviderIPCServicesForTests(memory.services);
-    providersIpc.registerProviderIPC();
+    registerProviderIpc();
 
     const unsupported = await handler(IPC_CHANNELS.PROVIDERS_DISCOVER_MODELS)(null, { connectionId: id });
     expect(unsupported).toMatchObject({
@@ -1399,7 +1407,7 @@ describe('provider live model discovery IPC', () => {
       health: 'ready',
     });
     providersIpc._setProviderIPCServicesForTests(memory.services);
-    providersIpc.registerProviderIPC();
+    registerProviderIpc();
 
     const result = await handler(IPC_CHANNELS.PROVIDERS_DISCOVER_MODELS)(null, { connectionId: id });
     expect(result.status).toBe('failed');
@@ -1436,7 +1444,7 @@ describe('provider live model discovery IPC', () => {
       health: 'ready',
     });
     providersIpc._setProviderIPCServicesForTests(memory.services);
-    providersIpc.registerProviderIPC();
+    registerProviderIpc();
 
     const result = await handler(IPC_CHANNELS.PROVIDERS_DISCOVER_MODELS)(null, { connectionId: id });
     expect(result).toMatchObject({ status: 'ok' });
@@ -1464,7 +1472,7 @@ describe('provider live model discovery IPC', () => {
       health: 'ready',
     });
     providersIpc._setProviderIPCServicesForTests(memory.services);
-    providersIpc.registerProviderIPC();
+    registerProviderIpc();
 
     const validated = await handler(IPC_CHANNELS.PROVIDERS_VALIDATE)(null, { connectionId: id });
     expect(validated).toMatchObject({ connection: { health: 'ready' } });
@@ -1497,7 +1505,7 @@ describe('provider live model discovery IPC', () => {
       health: 'ready',
     });
     providersIpc._setProviderIPCServicesForTests(memory.services);
-    providersIpc.registerProviderIPC();
+    registerProviderIpc();
 
     await handler(IPC_CHANNELS.PROVIDERS_DELETE)(null, { connectionId: id, confirm: true });
 
@@ -1506,9 +1514,111 @@ describe('provider live model discovery IPC', () => {
   });
 });
 
+describe('provider per-model pricing override IPC', () => {
+  const OVERRIDE = {
+    input: { amount: '1.25', per: 1_000_000, unit: 'tokens' as const },
+    output: { amount: '5.00', per: 1_000_000, unit: 'tokens' as const },
+    cacheRead: { amount: '0.25', per: 1_000_000, unit: 'tokens' as const },
+    perRequest: { amount: '0.02', per: 1, unit: 'requests' as const },
+  };
+
+  it('creates a connection with per-model pricing overrides and returns them on the view', async () => {
+    const memory = memoryServices();
+    providersIpc._setProviderIPCServicesForTests(memory.services);
+    registerProviderIpc();
+
+    const result = await handler(IPC_CHANNELS.PROVIDERS_CREATE)(null, {
+      providerId: 'openai',
+      name: 'Priced',
+      protocol: 'openai-compatible',
+      authMethod: 'api-key',
+      modelIds: ['gpt-5/test'],
+      pricingOverrides: { 'gpt-5/test': OVERRIDE },
+    });
+
+    expect(memory.records.get(result.connection.id)).toMatchObject({
+      pricingOverrides: { 'gpt-5/test': OVERRIDE },
+    });
+    expect(result.connection.pricingOverrides).toEqual({ 'gpt-5/test': OVERRIDE });
+  });
+
+  it('updates per-model pricing overrides and carries them on the unified model rows', async () => {
+    const memory = memoryServices();
+    const id = '00000000-0000-4000-8000-000000000111';
+    memory.records.set(id, {
+      id,
+      providerId: 'openai',
+      name: 'Pricing editor',
+      protocol: 'openai-compatible',
+      authMethod: 'api-key',
+      credential: { kind: 'stored', handle: 'fixture-openai-key' },
+      modelIds: ['gpt-5/test'],
+      health: 'ready',
+    });
+    providersIpc._setProviderIPCServicesForTests(memory.services);
+    registerProviderIpc();
+
+    const result = await handler(IPC_CHANNELS.PROVIDERS_UPDATE)(null, {
+      connectionId: id,
+      pricingOverrides: { 'gpt-5/test': OVERRIDE },
+    });
+    expect(memory.records.get(id)).toMatchObject({
+      pricingOverrides: { 'gpt-5/test': OVERRIDE },
+    });
+    expect(result.connection.pricingOverrides).toEqual({ 'gpt-5/test': OVERRIDE });
+
+    const options = await handler(IPC_CHANNELS.PROVIDERS_MODEL_LIST)(null, { connectionId: id });
+    expect(options).toMatchObject([{
+      model: { id: 'gpt-5/test' },
+      pricingOverrides: OVERRIDE,
+    }]);
+
+    await handler(IPC_CHANNELS.PROVIDERS_UPDATE)(null, {
+      connectionId: id,
+      pricingOverrides: {},
+    });
+    const cleared = await handler(IPC_CHANNELS.PROVIDERS_MODEL_LIST)(null, { connectionId: id });
+    expect(cleared[0]).not.toHaveProperty('pricingOverrides');
+  });
+
+  it('rejects malformed per-model pricing overrides on create and update', async () => {
+    const memory = memoryServices();
+    providersIpc._setProviderIPCServicesForTests(memory.services);
+    registerProviderIpc();
+
+    await expect(handler(IPC_CHANNELS.PROVIDERS_CREATE)(null, {
+      providerId: 'openai',
+      name: 'Bad pricing',
+      protocol: 'openai-compatible',
+      authMethod: 'api-key',
+      modelIds: ['gpt-5/test'],
+      pricingOverrides: {
+        'gpt-5/test': { input: { amount: 'not-a-number', per: 1_000_000, unit: 'tokens' } },
+      },
+    })).rejects.toThrow('Invalid providers:create payload');
+
+    const id = '00000000-0000-4000-8000-000000000112';
+    memory.records.set(id, {
+      id,
+      providerId: 'openai',
+      name: 'Pricing editor',
+      protocol: 'openai-compatible',
+      authMethod: 'api-key',
+      credential: { kind: 'stored', handle: 'fixture-openai-key' },
+      modelIds: ['gpt-5/test'],
+      health: 'ready',
+    });
+    await expect(handler(IPC_CHANNELS.PROVIDERS_UPDATE)(null, {
+      connectionId: id,
+      pricingOverrides: { 'gpt-5/test': { output: { amount: '5', per: 0, unit: 'tokens' } } },
+    })).rejects.toThrow('Invalid providers:update payload');
+    expect(memory.records.get(id)?.pricingOverrides).toBeUndefined();
+  });
+});
+
 describe('provider channel zod rejection', () => {
   it('rejects providers:discover_models with a non-uuid connection id', async () => {
-    providersIpc.registerProviderIPC();
+    registerProviderIpc();
 
     await expect(handler(IPC_CHANNELS.PROVIDERS_DISCOVER_MODELS)(null, {
       connectionId: 'not-a-uuid',
@@ -1516,7 +1626,7 @@ describe('provider channel zod rejection', () => {
   });
 
   it('rejects providers:discover_models with a missing payload', async () => {
-    providersIpc.registerProviderIPC();
+    registerProviderIpc();
 
     await expect(handler(IPC_CHANNELS.PROVIDERS_DISCOVER_MODELS)(null, undefined))
       .rejects.toThrow('Invalid providers:discover_models payload');
@@ -1525,7 +1635,7 @@ describe('provider channel zod rejection', () => {
   });
 
   it('rejects providers:quota_refresh with a non-uuid connection id', async () => {
-    providersIpc.registerProviderIPC();
+    registerProviderIpc();
 
     await expect(handler(IPC_CHANNELS.PROVIDERS_QUOTA_REFRESH)(null, {
       connectionId: 'not-a-uuid',
@@ -1533,7 +1643,7 @@ describe('provider channel zod rejection', () => {
   });
 
   it('rejects providers:quota_refresh with a missing payload', async () => {
-    providersIpc.registerProviderIPC();
+    registerProviderIpc();
 
     await expect(handler(IPC_CHANNELS.PROVIDERS_QUOTA_REFRESH)(null, undefined))
       .rejects.toThrow('Invalid providers:quota_refresh payload');

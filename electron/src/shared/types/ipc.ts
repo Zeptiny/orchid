@@ -590,6 +590,8 @@ export interface ProviderConnectionView {
   endpoint: string | null;
   allowInsecureHttp: boolean;
   reasoningConfig?: Record<string, import('./provider').ReasoningModelConfig>;
+  /** Per-model field-level rate overrides, keyed by modelId (R6). */
+  pricingOverrides?: Record<string, import('./provider-facets').PricingRateFields>;
   /** Per-model service tier selections, keyed by modelId (R21). */
   tierSelections?: Record<string, string>;
   /** Driver-declared cache TTL options; absent when the driver has no cache facet. */
@@ -638,6 +640,7 @@ export interface ProviderConnectionCreateMessage {
   modelIds: readonly string[];
   customModels?: readonly CustomConnectionModel[];
   reasoningConfig?: Record<string, import('./provider').ReasoningModelConfig>;
+  pricingOverrides?: Record<string, import('./provider-facets').PricingRateFields>;
   tierSelections?: Record<string, string>;
   cacheTtl?: string | null;
   endpoint?: string | null;
@@ -655,6 +658,7 @@ export interface ProviderConnectionUpdateMessage {
   modelIds?: readonly string[];
   customModels?: readonly CustomConnectionModel[];
   reasoningConfig?: Record<string, import('./provider').ReasoningModelConfig>;
+  pricingOverrides?: Record<string, import('./provider-facets').PricingRateFields>;
   tierSelections?: Record<string, string>;
   /** Omit to keep the stored TTL; null clears back to the driver default. */
   cacheTtl?: string | null;
@@ -711,6 +715,8 @@ export interface ProviderModelOption {
   unavailableReason: string | null;
   /** Whether the trusted provider driver can route this selection to RAG embeddings. */
   embeddingSupported?: boolean;
+  /** Per-model user rate override honored by the pricing ladder (R6). */
+  pricingOverrides?: import('./provider-facets').PricingRateFields;
   /** Tier selector data; present only when the driver declares a tier mechanism (R20). */
   tierOptions?: {
     mechanism: 'request-parameter' | 'model-name-variants';
