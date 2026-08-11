@@ -10,6 +10,9 @@ Internal backlog for Orchid. User-facing summary lives in the [README known limi
 - Interface may prevent some changes while streaming (Such as model and reasoning level) but the command pallete still allows to execute
 - Interrupted subagents are being marked as complete - possibly after starting a new chain it is not preserved? - but only on some places (subagent view is correct, main agent context and main chat/session UI appears to not be)
 - replace_symbol can left trailing remnants
+- crashed / closed app can make the agent lose context (Subagents - on the interface they still appear, for the main againt they do not - IDs not found)
+- Remove todo status change restictions - only confuses the agent
+- Are read results or other tools content being scaped, with the possibility of confusing the agent?
 
 ## Agent quality
 
@@ -19,6 +22,40 @@ Internal backlog for Orchid. User-facing summary lives in the [README known limi
   - Reviewers should catch this — investigate why they don’t always
   - Subagents should make it easier to follow plans end-to-end
 - Skills and agents are not fully updated for the current harness capabilities
+
+## Rework Providers / Connections
+- Standardized interface for builtin provider
+  - For subscription quota when availiable
+  - For custom currency (Ex: KwH from neuralwatt)
+  - For multiple API types (Ex: Opencode Go uses both Openai and Anthropic depending on the model)
+  - For dynamic pricing (Ex: Lilac that updates every 10 minutes, NW dynamic energy pricing)
+  - For cache breakpoints (Ex: openai, openrouter, kimi)
+    - Where would those breakpoints be?
+  - For summarized / encoded thinking (Such as Meta - it has a very specific way of handling that, openai, anthropic, etc.)
+  - For priority / tiering / options (Ex: Neuralwatt flex/short/fast tiering, openrouter flex/exacto/nitro)
+- Allow for setting the pricing of each model
+  - Still always getting and prioritizing the API returned usage and cost
+- Same listing on the connection edit / add for configured and custom models
+- Allow to getting the models from the API (v1/models for example) and update their information
+- Provide the maximum configurability for the user
+- Easy/maintainable to add new providers
+- Relevant docs:
+  - https://portal.neuralwatt.com/docs/api/overview
+  - https://portal.neuralwatt.com/docs/api/chat-completions
+  - https://portal.neuralwatt.com/docs/api/models
+  - https://portal.neuralwatt.com/docs/api/usage
+  - https://portal.neuralwatt.com/docs/api/quota
+  - https://docs.getlilac.com/inference/chat-completions
+  - https://docs.getlilac.com/inference/responses
+  - https://docs.getlilac.com/inference/status
+  - https://opencode.ai/docs/go/
+  - https://developers.openai.com/api/docs/guides/prompt-caching
+  - https://openrouter.ai/docs/api/api-reference/chat/create-a-chat-completion.md
+  - https://openrouter.ai/docs/guides/best-practices/prompt-caching.md
+  - https://openrouter.ai/docs/guides/features/service-tiers.md
+  - https://dev.meta.ai/docs/reasoning
+  - https://dev.meta.ai/docs/prompt-caching
+  - https://dev.meta.ai/docs/protocols/responses
 
 ## Interface
 
