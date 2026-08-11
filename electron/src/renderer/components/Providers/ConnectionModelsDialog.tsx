@@ -22,6 +22,7 @@ import { Alert } from '../ui/Alert';
 import { Button } from '../ui/Button';
 import { Panel } from '../ui/Panel';
 import { SectionHeader } from '../ui/SectionHeader';
+import { Select } from '../ui/Select';
 import { StatusBadge, type StatusBadgeTone } from '../ui/StatusBadge';
 import { TextInput } from '../ui/TextInput';
 import { ReasoningFields } from './ReasoningConfigEditor';
@@ -58,6 +59,8 @@ export interface ConnectionModelsEditorProps {
   readonly selectedModelIds: readonly string[];
   readonly customModels: readonly CustomConnectionModel[];
   readonly reasoningConfig: Record<string, ReasoningModelConfig>;
+  /** Per-model service tier selections (R20); only rendered for tier-capable rows. */
+  readonly tierSelections?: Record<string, string>;
   readonly disabled?: boolean;
   /** Unified listing rows from the main process (edit mode); locally composed when absent. */
   readonly unifiedModels?: readonly ProviderModelOption[] | null;
@@ -67,6 +70,7 @@ export interface ConnectionModelsEditorProps {
   readonly onSelectedModelIdsChange: (modelIds: readonly string[]) => void;
   readonly onCustomModelsChange: (models: readonly CustomConnectionModel[]) => void;
   readonly onReasoningConfigChange: (config: Record<string, ReasoningModelConfig>) => void;
+  readonly onTierSelectionsChange?: (selections: Record<string, string>) => void;
   readonly onEditingChange?: (editing: boolean) => void;
 }
 
@@ -78,6 +82,8 @@ interface EditorModelRow {
   readonly discoveredAt: string | null;
   /** User-defined with no catalog/discovered layer beneath it. */
   readonly removable: boolean;
+  /** Tier selector data when the driver declares a tier mechanism (R20). */
+  readonly tierOptions?: ProviderModelOption['tierOptions'];
 }
 
 function modelAvailable(model: ProviderModelView): boolean {
@@ -184,6 +190,7 @@ export function ConnectionModelsEditor({
   selectedModelIds,
   customModels,
   reasoningConfig,
+  tierSelections = {},
   disabled = false,
   unifiedModels = null,
   discoveryAvailable = false,
@@ -192,6 +199,7 @@ export function ConnectionModelsEditor({
   onSelectedModelIdsChange,
   onCustomModelsChange,
   onReasoningConfigChange,
+  onTierSelectionsChange,
   onEditingChange,
 }: ConnectionModelsEditorProps) {
   const [editingCustomModelId, setEditingCustomModelId] = useState<string | null>(null);
@@ -236,6 +244,7 @@ export function ConnectionModelsEditor({
           customized,
           discoveredAt: option.discoveredAt,
           removable: option.model.source === 'user' && !customized,
+          tierOptions: option.tierOptions,
         };
       });
       // Custom drafts saved locally but not yet persisted never wait for a refresh.
@@ -312,6 +321,14 @@ export function ConnectionModelsEditor({
     onSelectedModelIdsChange(selectedModelIds.includes(modelId)
       ? selectedModelIds.filter((candidate) => candidate !== modelId)
       : [...selectedModelIds, modelId]);
+  };
+
+  const selectTier = (modelId: string, tierId: string) => {
+    if (!onTierSelectionsChange) return;
+    const next = { ...tierSelections };
+    if (tierId === '') delete next[modelId];
+    else next[modelId] = tierId;
+    onTierSelectionsChange(next);
   };
 
   const toggleAllModels = () => {
@@ -581,6 +598,32 @@ export function ConnectionModelsEditor({
                                 </StatusBadge>
                                 {row.view.capabilities.tools && <StatusBadge tone="ghost" size="sm">Tools</StatusBadge>}
                                 {row.view.capabilities.reasoning && <StatusBadge tone="ghost" size="sm">Reasoning</StatusBadge>}
+                              </div>
+                            )}
+                            {row.tierOptions && row.tierOptions.tiers.length > 0 && (
+                              <div className="mt-2 flex items-center gap-2">
+                                <label
+                                  className="text-xs text-base-content/60"
+                                  htmlFor={`tier-select-${row.view.id}`}
+                                >
+                                  Service tier
+                                </label>
+                                <Select
+                                  id={`tier-select-${row.view.id}`}
+                                  size="xs"
+                                  className="rounded-md"
+                                  value={tierSelections[row.view.id] ?? row.tierOptions.selected ?? ''}
+                                  disabled={disabled || editingCustomModelId !== null}
+                                  onChange={(event) => selectTier(row.view.id, event.target.value)}
+                                  onClick={(event) => event.stopPropagation()}
+                                >
+                                  <option value="">Standard</option>
+                                  {row.tierOptions.tiers.map((tier) => (
+                                    <option key={tier.id} value={tier.id}>
+                                      {tier.displayName ?? tier.id}
+                                    </option>
+                                  ))}
+                                </Select>
                               </div>
                             )}
                           </div>

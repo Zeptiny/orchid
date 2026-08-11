@@ -132,6 +132,7 @@ export function ConnectionWizard({
   const [connectionModelIds, setConnectionModelIds] = useState<readonly string[]>([]);
   const [connectionCustomModels, setConnectionCustomModels] = useState<readonly CustomConnectionModel[]>([]);
   const [reasoningConfig, setReasoningConfig] = useState<Record<string, ReasoningModelConfig>>({});
+  const [tierSelections, setTierSelections] = useState<Record<string, string>>({});
   const [modelsEditing, setModelsEditing] = useState(false);
   const [endpoint, setEndpoint] = useState('');
   const [allowInsecureHttp, setAllowInsecureHttp] = useState(false);
@@ -186,6 +187,7 @@ export function ConnectionWizard({
     setConnectionModelIds(defaultModelIds(definition, nextProtocol));
     setConnectionCustomModels([]);
     setReasoningConfig({});
+    setTierSelections({});
     setModelsEditing(false);
     setEndpoint('');
     setAllowInsecureHttp(false);
@@ -204,6 +206,7 @@ export function ConnectionWizard({
     setConnectionModelIds([...connection.modelIds]);
     setConnectionCustomModels(connectionCustomModelDrafts(connection));
     setReasoningConfig(connection.reasoningConfig ?? {});
+    setTierSelections(connection.tierSelections ?? {});
     setModelsEditing(false);
     setEndpoint(connection.endpoint ?? '');
     setAllowInsecureHttp(connection.allowInsecureHttp);
@@ -355,6 +358,7 @@ export function ConnectionWizard({
         modelIds,
         customModels,
         ...(Object.keys(reasoningConfig).length > 0 ? { reasoningConfig } : {}),
+        ...(Object.keys(tierSelections).length > 0 ? { tierSelections } : {}),
         ...(supportsCustomEndpoint ? { endpoint: endpoint.trim(), allowInsecureHttp } : {}),
         ...(authMethod === 'environment'
           ? { environmentVariable: environmentVariable.trim() }
@@ -373,6 +377,7 @@ export function ConnectionWizard({
     modelIds: message.modelIds,
     customModels: message.customModels ?? [],
     reasoningConfig,
+    tierSelections,
     ...(message.endpoint === undefined ? {} : { endpoint: message.endpoint }),
     ...(message.allowInsecureHttp === undefined
       ? {}
@@ -746,6 +751,8 @@ export function ConnectionWizard({
                   onSelectedModelIdsChange={setConnectionModelIds}
                   onCustomModelsChange={setConnectionCustomModels}
                   onReasoningConfigChange={setReasoningConfig}
+                  tierSelections={tierSelections}
+                  onTierSelectionsChange={setTierSelections}
                   onEditingChange={setModelsEditing}
                 />
               )}

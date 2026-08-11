@@ -26,7 +26,10 @@ import type {
   AnalyticsTimeRange,
 } from '../../../shared/types/analytics';
 import type { SubagentAttributionRecord } from '../../../shared/types/accounting';
+import type { QuotaOverviewEntry } from '../../../shared/types/analytics';
+import { providerQuotaSchema } from '../../../shared/types/provider-facets';
 import { getSessionNames } from '../../session/storage';
+import { getProviderStatusService } from '../runtime-context';
 
 const DEFAULT_LIMIT = 1000;
 const CONTEXT_TOP_SESSIONS = 5;
@@ -91,8 +94,14 @@ function parseUsage(usageJson: string | null): {
   cacheReadTokens: number;
   cacheWriteTokens: number;
   reasoningTokens: number;
+  energyKwhConsumed: string | null;
+  energyKwhCharged: string | null;
+  pricingMultiplier: string | null;
 } {
-  if (!usageJson) return { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, reasoningTokens: 0 };
+  if (!usageJson) return {
+    inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, reasoningTokens: 0,
+    energyKwhConsumed: null, energyKwhCharged: null, pricingMultiplier: null,
+  };
   try {
     const u = JSON.parse(usageJson) as Record<string, unknown>;
     return {
@@ -101,9 +110,15 @@ function parseUsage(usageJson: string | null): {
       cacheReadTokens: typeof u.cacheReadTokens === 'number' ? u.cacheReadTokens : 0,
       cacheWriteTokens: typeof u.cacheWriteTokens === 'number' ? u.cacheWriteTokens : 0,
       reasoningTokens: typeof u.reasoningTokens === 'number' ? u.reasoningTokens : 0,
+      energyKwhConsumed: typeof u.energyKwhConsumed === 'string' ? u.energyKwhConsumed : null,
+      energyKwhCharged: typeof u.energyKwhCharged === 'string' ? u.energyKwhCharged : null,
+      pricingMultiplier: typeof u.pricingMultiplier === 'string' ? u.pricingMultiplier : null,
     };
   } catch {
-    return { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, reasoningTokens: 0 };
+    return {
+      inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, reasoningTokens: 0,
+      energyKwhConsumed: null, energyKwhCharged: null, pricingMultiplier: null,
+    };
   }
 }
 
@@ -126,6 +141,45 @@ function parseSnapshotModelDisplayName(snapshotJson: string): string | null {
     const s = JSON.parse(snapshotJson) as Record<string, unknown>;
     return typeof s.modelDisplayName === 'string' ? s.modelDisplayName : null;
   } catch { return null; }
+}
+
+/**
+ * Read the latest typed quota observations from the status cache (R24). These
+ * render in native units and are informational only; the ledger is never joined
+ * against them, and an unavailable status service yields an empty list.
+ */
+function getQuotaOverview(): QuotaOverviewEntry[] {
+  try {
+    const status = getProviderStatusService();
+    const entries: QuotaOverviewEntry[] = [];
+    for (const observation of status.list()) {
+      const parsed = providerQuotaSchema.safeParse(observation.data['quota']);
+      if (!parsed.success) continue;
+      const quota = parsed.data;
+      entries.push({
+        providerId: observation.providerId,
+        connectionId: observation.connectionId ?? null,
+        observedAt: quota.observedAt,
+        stale: observation.stale,
+        balances: quota.balances.map((balance) => ({ ...balance })),
+        subscription: quota.subscription === null
+          ? null
+          : {
+            state: quota.subscription.state,
+            displayName: quota.subscription.displayName ?? null,
+            renewsAt: quota.subscription.renewsAt ?? null,
+          },
+        allowances: quota.allowances.map((allowance) => ({
+          label: allowance.label,
+          state: allowance.state,
+          detail: allowance.detail ?? null,
+        })),
+      });
+    }
+    return entries.sort((a, b) => a.providerId.localeCompare(b.providerId));
+  } catch {
+    return [];
+  }
 }
 
 function sumCosts(rows: Array<{ currency: string | null; cost_amount: string | null; cost_state: string }>): {
@@ -333,6 +387,7 @@ export function getOverview(timeRange?: AnalyticsTimeRange): OverviewResult {
     outcomeDistribution,
     costSourceDistribution,
     agentTierDistribution,
+    quotaByProvider: getQuotaOverview(),
   };
 }
 
@@ -464,6 +519,9 @@ export function getSessionDetail(sessionId: string, timeRange?: AnalyticsTimeRan
       cacheReadTokens: u.cacheReadTokens ?? null,
       cacheWriteTokens: u.cacheWriteTokens ?? null,
       reasoningTokens: u.reasoningTokens ?? null,
+      energyKwhConsumed: u.energyKwhConsumed,
+      energyKwhCharged: u.energyKwhCharged,
+      pricingMultiplier: u.pricingMultiplier,
       startedAt: r.started_at,
       completedAt: r.completed_at,
       latencyMs: r.completed_at ? new Date(r.completed_at).getTime() - new Date(r.started_at).getTime() : null,

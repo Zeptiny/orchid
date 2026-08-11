@@ -7,6 +7,7 @@ import {
   formatTokenCount,
   formatCost,
   formatCostAmount,
+  formatNativeAmount,
   formatDuration,
   formatDate,
   formatBytes,
@@ -268,6 +269,16 @@ function SessionDetail({ sessionId, timeRange, onBack }: { sessionId: string; ti
             { key: 'cacheReadTokens', label: 'Cache Read', render: (r) => r.cacheReadTokens !== null ? formatTokenCount(r.cacheReadTokens) : '—' },
             { key: 'cacheWriteTokens', label: 'Cache Write', render: (r) => r.cacheWriteTokens !== null ? formatTokenCount(r.cacheWriteTokens) : '—' },
             { key: 'reasoningTokens', label: 'Reasoning', render: (r) => r.reasoningTokens !== null ? formatTokenCount(r.reasoningTokens) : '—' },
+            { key: 'energy', label: 'Energy (kWh)', render: (r) => r.energyKwhCharged !== null || r.energyKwhConsumed !== null
+              ? (
+                <span title={r.pricingMultiplier !== null ? `×${r.pricingMultiplier} multiplier` : undefined}>
+                  {formatNativeAmount(r.energyKwhCharged ?? r.energyKwhConsumed, 'kWh')}
+                  {r.energyKwhCharged !== null && r.energyKwhConsumed !== null && r.energyKwhCharged !== r.energyKwhConsumed && (
+                    <span className="ml-1 text-base-content/40">(of {formatNativeAmount(r.energyKwhConsumed, 'kWh')})</span>
+                  )}
+                </span>
+              )
+              : '—' },
             { key: 'latencyMs', label: 'Latency', render: (r) => formatDuration(r.latencyMs) },
             { key: 'agent', label: 'Agent', render: (r) => r.agentName ?? r.agentScope ?? '—' },
             { key: 'error', label: 'Error', render: (r) => r.error ?? '—' },

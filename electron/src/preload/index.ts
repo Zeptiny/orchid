@@ -56,6 +56,8 @@ import type {
   SessionSetWorkspaceMessage,
   SessionSetReasoningEffortMessage,
   SessionReasoningConfigResult,
+  SessionSetServiceTierMessage,
+  SessionServiceTierConfigResult,
   SessionWorkspaceChangedEvent,
   SessionTodosChangedEvent,
   SessionActivityChangedEvent,
@@ -144,6 +146,7 @@ import {
   configSaveResultSchema,
   workspaceInfoSchema,
   sessionReasoningConfigResultSchema,
+  sessionServiceTierConfigResultSchema,
   chatSessionSnapshotSchema,
   subagentSnapshotSchema,
   subagentEventSchema,
@@ -192,6 +195,7 @@ const INVOKE_RESULT_SCHEMAS: Partial<Record<string, z.ZodTypeAny>> = {
   [IPC_CHANNELS.SESSION_PICK_PROJECT_DIR]: workspaceInfoSchema,
   [IPC_CHANNELS.SESSION_SET_WORKSPACE]: workspaceInfoSchema,
   [IPC_CHANNELS.SESSION_GET_REASONING_CONFIG]: sessionReasoningConfigResultSchema,
+  [IPC_CHANNELS.SESSION_GET_SERVICE_TIER_CONFIG]: sessionServiceTierConfigResultSchema,
   [IPC_CHANNELS.PROJECT_TRUST_GET]: projectTrustInfoSchema,
   [IPC_CHANNELS.PROJECT_TRUST_SET]: projectTrustInfoSchema,
   [IPC_CHANNELS.PROJECT_TRUST_LIST]: z.array(trustedProjectEntrySchema),
@@ -417,6 +421,9 @@ const orchidAPI: OrchidAPI = {
 
     refreshStatus: (message: ProviderStatusRefreshMessage) =>
       invoke(IPC_CHANNELS.PROVIDERS_STATUS_REFRESH, message),
+
+    refreshQuota: (message: ProviderConnectionIdMessage) =>
+      invoke(IPC_CHANNELS.PROVIDERS_QUOTA_REFRESH, message),
   },
 
   session: {
@@ -461,6 +468,12 @@ const orchidAPI: OrchidAPI = {
 
     getReasoningConfig: () =>
       invoke<SessionReasoningConfigResult>(IPC_CHANNELS.SESSION_GET_REASONING_CONFIG),
+
+    setServiceTier: (message: SessionSetServiceTierMessage) =>
+      invoke(IPC_CHANNELS.SESSION_SET_SERVICE_TIER, message),
+
+    getServiceTierConfig: () =>
+      invoke<SessionServiceTierConfigResult>(IPC_CHANNELS.SESSION_GET_SERVICE_TIER_CONFIG),
 
     listActivity: () =>
       invoke(IPC_CHANNELS.SESSION_ACTIVITY_LIST),

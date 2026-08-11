@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useAnalytics } from '../../hooks/useAnalytics';
 import type { AnalyticsTimeRange, TimeSeriesPoint } from '../../../shared/types/analytics';
-import { StatCard, ChartCard, formatTokenCount, formatCost, formatCostAmount, formatPercent, CHART_PALETTE, GRID_STROKE, axisTickProps, tooltipProps, TokenUsageTooltip } from './shared';
+import { StatCard, ChartCard, QuotaPanel, formatTokenCount, formatCost, formatCostAmount, formatPercent, CHART_PALETTE, GRID_STROKE, axisTickProps, tooltipProps, TokenUsageTooltip } from './shared';
 import { Button } from '../ui/Button';
 import {
   LineChart, Line, BarChart, Bar, PieChart, Pie, Cell,
@@ -116,6 +116,8 @@ export function OverviewTab({ timeRange }: { timeRange: AnalyticsTimeRange }) {
         <h2 className="text-lg font-semibold text-base-content">Overview</h2>
         <Button variant="ghost" size="xs" onClick={refresh}>↻ Refresh</Button>
       </div>
+
+      <QuotaPanel entries={data.quotaByProvider} />
 
       <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
         <StatCard label="Total Spend" value={formatCost(stats.totalCost)} subtext={`${paidCostRecords} paid · ${stats.unknownCostCount} unknown`} />

@@ -8,14 +8,17 @@ import type { ProviderStatusObservation } from '../status/cache';
 import type {
   PricingRateFields,
   ProviderModelRateCard,
+  ProviderQuota,
 } from '../../../shared/types/provider-facets';
 import { scalePricingRateFields } from '../facets/pricing';
+import { observationWithQuota } from '../facets/quota';
 import { fetchModelsEndpoint, modelsListEntries } from './models-endpoint';
 import {
   parseRetryAfter,
   StatusRefreshError,
   type ProviderStatusSource,
 } from '../status/service';
+import type { DriverQuotaRequest } from './types';
 
 /** Lilac’s documented OpenAI-compatible inference API, owned by driver code. */
 export const LILAC_INFERENCE_BASE_URL = 'https://api.getlilac.com/v1';
@@ -175,6 +178,12 @@ export function createLilacProviderDriver(options: {
         fetch: options.fetch,
       }),
     },
+    quotaFacet: {
+      fetchQuota: (request) => fetchLilacQuota(request, {
+        fetch: options.fetch,
+        now: options.now,
+      }),
+    },
   };
 }
 
@@ -290,12 +299,64 @@ export async function fetchLilacStatus(options: FetchLilacStatusOptions = {}): P
   return parseLilacStatus(payload, now());
 }
 
+/**
+ * Lilac's public status endpoint documents no balance or account-subscription
+ * fields; the typed balances/subscription surface therefore stays empty rather
+ * than fabricating state. The documented per-model supply state maps into typed
+ * allowances; unavailable supply data surfaces as 'unknown', never inferred (R4).
+ */
+export function quotaFromLilacObservation(observation: ProviderStatusObservation): ProviderQuota {
+  const data = observation.data as LilacStatusData;
+  const allowances = data.models
+    .filter((model) => model.subscription.availability === 'available')
+    .map((model) => ({
+      label: model.name ?? model.modelId,
+      state: 'available' as const,
+      detail: `Supply: ${model.subscription.supplyState ?? 'unknown'} · Discount: ${
+        model.subscription.discountPercent !== null ? `${model.subscription.discountPercent}%` : 'unavailable'
+      } · Credit multiplier: ${
+        model.subscription.creditMultiplier !== null ? String(model.subscription.creditMultiplier) : 'unavailable'
+      }`,
+    }));
+  return {
+    observedAt: data.subscriptionSupplyUpdatedAt ?? observation.providerUpdatedAt ?? observation.observedAt,
+    balances: [],
+    subscription: null,
+    allowances,
+  };
+}
+
+/** Fetch typed Lilac quota from the public, credential-free status endpoint. */
+export async function fetchLilacQuota(
+  _request: DriverQuotaRequest,
+  options: {
+    readonly fetch?: typeof globalThis.fetch;
+    readonly now?: () => Date;
+    readonly signal?: AbortSignal;
+  } = {},
+): Promise<ProviderQuota> {
+  const observation = await fetchLilacStatus({
+    fetch: options.fetch,
+    now: options.now,
+    signal: options.signal,
+  });
+  if (observation.stale || observation.availability !== 'available') {
+    throw new StatusRefreshError('Lilac quota is unavailable from a stale status observation', {
+      kind: 'network',
+    });
+  }
+  return quotaFromLilacObservation(observation);
+}
+
 /** The scheduler-facing source remains public, credential-free, and informational. */
 export function createLilacStatusSource(): ProviderStatusSource {
   return {
     providerId: 'lilac',
     ttlMs: LILAC_STATUS_TTL_MS,
     minimumManualRefreshMs: LILAC_STATUS_MINIMUM_MANUAL_REFRESH_MS,
-    fetchStatus: () => fetchLilacStatus(),
+    fetchStatus: async () => {
+      const observation = await fetchLilacStatus();
+      return observationWithQuota(observation, quotaFromLilacObservation(observation));
+    },
   };
 }

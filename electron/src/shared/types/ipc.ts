@@ -564,6 +564,8 @@ export interface ProviderDefinitionView {
   unavailableReason: string | null;
   /** The trusted driver publishes a live models endpoint for this provider (R26). */
   supportsDiscovery: boolean;
+  /** The trusted driver declares a typed quota facet for this provider (R24). */
+  supportsQuota: boolean;
   models: readonly ProviderModelView[];
 }
 
@@ -588,6 +590,12 @@ export interface ProviderConnectionView {
   endpoint: string | null;
   allowInsecureHttp: boolean;
   reasoningConfig?: Record<string, import('./provider').ReasoningModelConfig>;
+  /** Per-model service tier selections, keyed by modelId (R21). */
+  tierSelections?: Record<string, string>;
+  /** Driver-declared cache TTL options; absent when the driver has no cache facet. */
+  cacheTtlOptions?: readonly import('./provider-facets').CacheTtlOption[];
+  /** Selected cache TTL; the driver's default applies when absent (R11). */
+  cacheTtl?: string | null;
 }
 
 /** Status data is timestamped and redacted before it crosses IPC. */
@@ -600,6 +608,8 @@ export interface ProviderStatusView {
   availability: 'available' | 'unavailable' | 'unknown';
   stale: boolean;
   data: Readonly<Record<string, unknown>>;
+  /** Typed driver quota (R24); present only for facet-capable providers. */
+  quota?: import('./provider-facets').ProviderQuota | null;
   error: {
     kind: 'network' | 'unauthorized' | 'rate-limited' | 'schema' | 'unknown';
     message: string;
@@ -628,6 +638,8 @@ export interface ProviderConnectionCreateMessage {
   modelIds: readonly string[];
   customModels?: readonly CustomConnectionModel[];
   reasoningConfig?: Record<string, import('./provider').ReasoningModelConfig>;
+  tierSelections?: Record<string, string>;
+  cacheTtl?: string | null;
   endpoint?: string | null;
   allowInsecureHttp?: boolean;
   /** Used only with `authMethod: 'environment'`; the value is never resolved here. */
@@ -643,6 +655,9 @@ export interface ProviderConnectionUpdateMessage {
   modelIds?: readonly string[];
   customModels?: readonly CustomConnectionModel[];
   reasoningConfig?: Record<string, import('./provider').ReasoningModelConfig>;
+  tierSelections?: Record<string, string>;
+  /** Omit to keep the stored TTL; null clears back to the driver default. */
+  cacheTtl?: string | null;
   endpoint?: string | null;
   allowInsecureHttp?: boolean;
   /** Select or replace an environment reference without exposing its value. */
@@ -696,6 +711,13 @@ export interface ProviderModelOption {
   unavailableReason: string | null;
   /** Whether the trusted provider driver can route this selection to RAG embeddings. */
   embeddingSupported?: boolean;
+  /** Tier selector data; present only when the driver declares a tier mechanism (R20). */
+  tierOptions?: {
+    mechanism: 'request-parameter' | 'model-name-variants';
+    tiers: readonly ServiceTierOptionView[];
+    /** Connection per-model selection for this model. */
+    selected: string | null;
+  };
 }
 
 /** Result of one explicit live-discovery fetch; never thrown for endpoint failures. */
@@ -857,6 +879,32 @@ export interface SessionReasoningConfigResult {
   default: string | number | null;
   override: string | number | null;
   supportsReasoning: boolean;
+}
+
+/** Per-session service tier override; null clears back to the connection selection (R21). */
+export interface SessionSetServiceTierMessage {
+  tier: string | null;
+}
+
+/** Driver-declared tier descriptor surfaced to selectors (R19, R20). */
+export interface ServiceTierOptionView {
+  id: string;
+  displayName: string | null;
+  description: string | null;
+  /** Variant mechanism only: requires a streaming request path (R23). */
+  requiresStreaming?: boolean;
+}
+
+export interface SessionServiceTierConfigResult {
+  /** How a selected tier reaches the provider; absent = no tier facet. */
+  mechanism: 'request-parameter' | 'model-name-variants' | null;
+  tiers: ServiceTierOptionView[];
+  /** Connection per-model selection for the active model. */
+  selected: string | null;
+  /** Session override; wins over the connection selection when set. */
+  override: string | null;
+  /** Effective tier: override, then connection selection. */
+  effective: string | null;
 }
 
 export interface SessionWorkspaceChangedEvent {
@@ -1202,6 +1250,12 @@ export interface OrchidAPI {
     discoverModels: (message: ProviderConnectionIdMessage) => Promise<ProviderDiscoverModelsResult>;
     /** Refresh informational status only; it never changes connection health. */
     refreshStatus: (message: ProviderStatusRefreshMessage) => Promise<ProviderStatusView | null>;
+    /**
+     * Refresh typed quota for a facet-capable connection (R24). Informational
+     * only: the result renders in connection details and analytics and never
+     * gates connection usability, routing, or sends (R25).
+     */
+    refreshQuota: (message: ProviderConnectionIdMessage) => Promise<ProviderStatusView | null>;
   };
 
   session: {
@@ -1241,6 +1295,9 @@ export interface OrchidAPI {
     changeCwd: (message: SessionChangeCwdMessage) => Promise<Session | null>;
     setReasoningEffort: (message: SessionSetReasoningEffortMessage) => Promise<{ status: string }>;
     getReasoningConfig: () => Promise<SessionReasoningConfigResult>;
+    /** Per-session service tier override for the active model (R21). */
+    setServiceTier: (message: SessionSetServiceTierMessage) => Promise<{ status: string }>;
+    getServiceTierConfig: () => Promise<SessionServiceTierConfigResult>;
     /** Process-wide sessions currently working, waiting, needing attention, or unread. */
     listActivity: () => Promise<SessionActivity[]>;
     /** Mark an off-screen completion as viewed. */
@@ -1429,6 +1486,7 @@ export const IPC_CHANNELS = {
   PROVIDERS_MODEL_LIST: 'providers:model_list',
   PROVIDERS_DISCOVER_MODELS: 'providers:discover_models',
   PROVIDERS_STATUS_REFRESH: 'providers:status_refresh',
+  PROVIDERS_QUOTA_REFRESH: 'providers:quota_refresh',
 
   // Session
   SESSION_LIST: 'session:list',
@@ -1456,6 +1514,8 @@ export const IPC_CHANNELS = {
   SESSION_CHANGE_CWD: 'session:change_cwd',
   SESSION_SET_REASONING_EFFORT: 'session:set_reasoning_effort',
   SESSION_GET_REASONING_CONFIG: 'session:get_reasoning_config',
+  SESSION_SET_SERVICE_TIER: 'session:set_service_tier',
+  SESSION_GET_SERVICE_TIER_CONFIG: 'session:get_service_tier_config',
   /** Fired when workspace binding changes. */
   SESSION_WORKSPACE_CHANGED: 'session:workspace_changed',
   /** Fired when subagent_chains are persisted (spawn progress / complete). */
@@ -1587,6 +1647,7 @@ export const ALLOWED_INVOKE_CHANNELS = [
   IPC_CHANNELS.PROVIDERS_MODEL_LIST,
   IPC_CHANNELS.PROVIDERS_DISCOVER_MODELS,
   IPC_CHANNELS.PROVIDERS_STATUS_REFRESH,
+  IPC_CHANNELS.PROVIDERS_QUOTA_REFRESH,
   IPC_CHANNELS.SESSION_LIST,
   IPC_CHANNELS.SESSION_LOAD,
   IPC_CHANNELS.SESSION_OPEN,
@@ -1601,6 +1662,8 @@ export const ALLOWED_INVOKE_CHANNELS = [
   IPC_CHANNELS.SESSION_CHANGE_CWD,
   IPC_CHANNELS.SESSION_SET_REASONING_EFFORT,
   IPC_CHANNELS.SESSION_GET_REASONING_CONFIG,
+  IPC_CHANNELS.SESSION_SET_SERVICE_TIER,
+  IPC_CHANNELS.SESSION_GET_SERVICE_TIER_CONFIG,
   IPC_CHANNELS.SESSION_ACTIVITY_LIST,
   IPC_CHANNELS.SESSION_ACTIVITY_MARK_SEEN,
   IPC_CHANNELS.SESSION_WORKING_SET_GET,

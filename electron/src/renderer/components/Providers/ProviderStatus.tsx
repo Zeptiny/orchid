@@ -1,11 +1,13 @@
 /** Informational provider status cards. Status never changes send eligibility. */
 import { useEffect, useState } from 'react';
 import type {
+  ProviderConnectionIdMessage,
   ProviderConnectionView,
   ProviderDefinitionView,
   ProviderStatusRefreshMessage,
   ProviderStatusView,
 } from '../../../shared/types/ipc';
+import type { ProviderQuota } from '../../../shared/types/provider-facets';
 import { Icon } from '../Icon';
 import { Alert } from '../ui/Alert';
 import { Button } from '../ui/Button';
@@ -19,6 +21,9 @@ export interface ProviderStatusProps {
   readonly status?: ProviderStatusView;
   readonly onRefresh?: (
     message: ProviderStatusRefreshMessage,
+  ) => Promise<ProviderStatusView | null>;
+  readonly onRefreshQuota?: (
+    message: ProviderConnectionIdMessage,
   ) => Promise<ProviderStatusView | null>;
 }
 
@@ -37,7 +42,12 @@ function asRecordArray(value: unknown): readonly Readonly<Record<string, unknown
 }
 
 function finiteNumber(value: unknown): number | null {
-  return typeof value === 'number' && Number.isFinite(value) ? value : null;
+  if (typeof value === 'number') return Number.isFinite(value) ? value : null;
+  if (typeof value === 'string' && value.trim() !== '') {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+  return null;
 }
 
 function text(value: unknown): string | null {
@@ -109,11 +119,14 @@ export function ProviderStatus({
   definition,
   status,
   onRefresh,
+  onRefreshQuota,
 }: ProviderStatusProps) {
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const { providerId } = connection;
   const supportsKnownStatus = providerId === 'lilac' || providerId === 'neuralwatt';
+  // A typed quota hook (R24) makes the typed surface authoritative for this card.
+  const supportsQuota = definition?.supportsQuota === true;
 
   const refresh = async () => {
     if (!onRefresh) return;
@@ -143,14 +156,20 @@ export function ProviderStatus({
   // status view is open, refresh at the documented 60s UI cadence; the main
   // status service still coalesces calls and enforces its 30s manual minimum.
   useEffect(() => {
-    if (!onRefresh || providerId !== 'neuralwatt' || connection.health !== 'ready') return;
-    const refreshQuota = () => {
-      void onRefresh({ providerId, connectionId: connection.id }).catch(() => undefined);
+    if (providerId !== 'neuralwatt' || connection.health !== 'ready') return;
+    const tick = () => {
+      const request = supportsQuota && onRefreshQuota
+        ? onRefreshQuota({ connectionId: connection.id })
+        : onRefresh
+          ? onRefresh({ providerId, connectionId: connection.id })
+          : Promise.resolve(null);
+      void request.catch(() => undefined);
     };
-    refreshQuota();
-    const timer = window.setInterval(refreshQuota, 60_000);
+    if (!supportsQuota && !onRefresh) return;
+    tick();
+    const timer = window.setInterval(tick, 60_000);
     return () => window.clearInterval(timer);
-  }, [connection.health, connection.id, onRefresh, providerId]);
+  }, [connection.health, connection.id, onRefresh, onRefreshQuota, providerId, supportsQuota]);
 
   if (!supportsKnownStatus && !status) return null;
 
@@ -226,6 +245,7 @@ function LilacStatusDetails({ status }: { readonly status: ProviderStatusView | 
 
   return (
     <div className="space-y-3">
+      {status?.quota && <TypedQuotaSection quota={status.quota} />}
       {supplyUpdatedAt && (
         <p className="text-sm text-base-content/70">
           Supply source updated: {formatTimestamp(supplyUpdatedAt)}
@@ -288,38 +308,41 @@ function NeuralwattStatusDetails({ status }: { readonly status: ProviderStatusVi
   }
 
   return (
-    <dl className="grid gap-x-4 gap-y-2 text-sm sm:grid-cols-2">
-      <StatusField
-        label="Accounting method"
-        value={text(data['accountingMethod']) ?? 'Unavailable'}
-      />
-      <StatusField label="Rate-limit tier" value={text(data['rateLimitTier']) ?? 'Unavailable'} />
-      <StatusField label="Credits remaining" value={currency(data['creditsRemainingUsd'])} />
-      <StatusField label="Credits used" value={currency(data['creditsUsedUsd'])} />
-      <StatusField label="Monthly requests" value={formatNumber(currentMonth?.['requests'], 0)} />
-      <StatusField label="Monthly tokens" value={formatNumber(currentMonth?.['tokens'], 0)} />
-      <StatusField
-        label="Monthly energy"
-        value={formatUnit(currentMonth?.['energyKwh'], 'kWh', 4)}
-      />
-      <StatusField label="Monthly cost" value={currency(currentMonth?.['costUsd'])} />
-      <StatusField
-        label="Subscription plan"
-        value={text(subscription?.['plan']) ?? 'Unavailable'}
-      />
-      <StatusField
-        label="Subscription status"
-        value={text(subscription?.['status']) ?? 'Unavailable'}
-      />
-      <StatusField
-        label="Included energy"
-        value={formatUnit(subscription?.['kwhIncluded'], 'kWh', 4)}
-      />
-      <StatusField
-        label="Energy remaining"
-        value={formatUnit(subscription?.['kwhRemaining'], 'kWh', 4)}
-      />
-    </dl>
+    <div className="space-y-3">
+      {status?.quota && <TypedQuotaSection quota={status.quota} />}
+      <dl className="grid gap-x-4 gap-y-2 text-sm sm:grid-cols-2">
+        <StatusField
+          label="Accounting method"
+          value={text(data['accountingMethod']) ?? 'Unavailable'}
+        />
+        <StatusField label="Rate-limit tier" value={text(data['rateLimitTier']) ?? 'Unavailable'} />
+        <StatusField label="Credits remaining" value={currency(data['creditsRemainingUsd'])} />
+        <StatusField label="Credits used" value={currency(data['creditsUsedUsd'])} />
+        <StatusField label="Monthly requests" value={formatNumber(currentMonth?.['requests'], 0)} />
+        <StatusField label="Monthly tokens" value={formatNumber(currentMonth?.['tokens'], 0)} />
+        <StatusField
+          label="Monthly energy"
+          value={formatUnit(currentMonth?.['energyKwh'], 'kWh', 4)}
+        />
+        <StatusField label="Monthly cost" value={currency(currentMonth?.['costUsd'])} />
+        <StatusField
+          label="Subscription plan"
+          value={text(subscription?.['plan']) ?? 'Unavailable'}
+        />
+        <StatusField
+          label="Subscription status"
+          value={text(subscription?.['status']) ?? 'Unavailable'}
+        />
+        <StatusField
+          label="Included energy"
+          value={formatUnit(subscription?.['kwhIncluded'], 'kWh', 4)}
+        />
+        <StatusField
+          label="Energy remaining"
+          value={formatUnit(subscription?.['kwhRemaining'], 'kWh', 4)}
+        />
+      </dl>
+    </div>
   );
 }
 
@@ -328,6 +351,74 @@ function StatusField({ label, value }: { readonly label: string; readonly value:
     <div>
       <dt className="font-medium text-base-content/70">{label}</dt>
       <dd className="break-words">{value}</dd>
+    </div>
+  );
+}
+
+function allowanceBadgeTone(state: string): 'success' | 'warning' | 'error' | 'neutral' {
+  switch (state) {
+    case 'available': return 'success';
+    case 'limited': return 'warning';
+    case 'blocked': return 'error';
+    default: return 'neutral';
+  }
+}
+
+/**
+ * Typed quota/subscription/allowance surface (R24). Values render in
+ * provider-native units and are informational only: a blocked allowance is
+ * shown as data, never as a reason a send is prevented (R25/AE6).
+ */
+function TypedQuotaSection({ quota }: { readonly quota: ProviderQuota }) {
+  return (
+    <div className="rounded-box border border-base-300 p-3">
+      <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-base-content/60">
+        Quota &amp; subscription
+      </div>
+      {quota.balances.length > 0 && (
+        <dl className="grid gap-x-4 gap-y-2 text-sm sm:grid-cols-2">
+          {quota.balances.map((balance) => (
+            <StatusField
+              key={balance.label}
+              label={balance.label}
+              value={formatUnit(balance.amount, balance.unit, 4)}
+            />
+          ))}
+        </dl>
+      )}
+      {quota.subscription && (
+        <div className="mt-2 flex items-center gap-2 text-sm">
+          <StatusBadge
+            tone={quota.subscription.state === 'active' || quota.subscription.state === 'trialing'
+              ? 'success'
+              : quota.subscription.state === 'past-due'
+                ? 'warning'
+                : quota.subscription.state === 'cancelled' || quota.subscription.state === 'expired'
+                  ? 'error'
+                  : 'neutral'}
+            size="sm"
+          >
+            {quota.subscription.state}
+          </StatusBadge>
+          <span className="text-base-content/70">
+            {quota.subscription.displayName ?? 'Subscription'}
+            {quota.subscription.renewsAt ? ` · renews ${formatTimestamp(quota.subscription.renewsAt)}` : ''}
+          </span>
+        </div>
+      )}
+      {quota.allowances.length > 0 && (
+        <div className="mt-2 flex flex-wrap gap-1.5">
+          {quota.allowances.map((allowance) => (
+            <StatusBadge
+              key={allowance.label}
+              tone={allowanceBadgeTone(allowance.state)}
+              size="sm"
+            >
+              {allowance.label}: {allowance.state}
+            </StatusBadge>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

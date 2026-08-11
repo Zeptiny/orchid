@@ -84,6 +84,10 @@ export interface UseProvidersReturn {
   readonly refreshStatus: (
     message: ProviderStatusRefreshMessage,
   ) => Promise<ProviderStatusView | null>;
+  /** Explicit typed-quota refresh for a facet-capable connection (R24). */
+  readonly refreshQuota: (
+    message: ProviderConnectionIdMessage,
+  ) => Promise<ProviderStatusView | null>;
 }
 
 const INITIAL_STATE: ProvidersState = {
@@ -499,6 +503,17 @@ export function useProviders(): UseProvidersReturn {
     [runMutation],
   );
 
+  const refreshQuota = useCallback(
+    (message: ProviderConnectionIdMessage) =>
+      runMutation(
+        (providers) => providers.refreshQuota(message),
+        (observation) => {
+          if (observation) applyStatusToShared(observation);
+        },
+      ),
+    [runMutation],
+  );
+
   const clearError = useCallback(() => {
     if (!mountedRef.current) return;
     setSharedState((previous) => ({ ...previous, error: null }));
@@ -530,5 +545,6 @@ export function useProviders(): UseProvidersReturn {
     modelList,
     discoverModels,
     refreshStatus,
+    refreshQuota,
   };
 }

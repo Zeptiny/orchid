@@ -20,6 +20,7 @@ import type {
   ProviderOverview,
   ProviderStatusView,
 } from '../../shared/types/ipc';
+import { providerQuotaSchema } from '../../shared/types/provider-facets';
 import {
   customConnectionModelSchema,
   environmentVariableSchema,
@@ -44,6 +45,7 @@ import {
   listConnectionModelRows,
   type ConnectionDiscoveryOutcome,
 } from '../providers/facets/discovery';
+import { groupTierVariantRows } from '../providers/facets/tiers';
 import type { DriverCredential } from '../providers/drivers/types';
 import type { ConnectionStore } from '../providers/connection-store';
 import type { ProviderCatalogStore } from '../providers/catalog/store';
@@ -62,8 +64,8 @@ import {
 import { validateGenericEndpoint } from '../providers/drivers/compatible';
 import { createLilacStatusSource } from '../providers/drivers/lilac';
 import {
-  createNeuralwattStatusSource,
-} from '../providers/drivers/neuralwatt';
+  createNeuralwattQuotaStatusSource,
+} from '../providers/drivers/neuralwatt-quota';
 import type { ProviderStatusObservation } from '../providers/status/cache';
 import type { ProviderStatusService } from '../providers/status/service';
 import { getProviderAccountingStore } from '../providers/accounting/store';
@@ -82,6 +84,8 @@ import { clearProjectRuntimeRegistry } from '../project/runtime';
 
 const idSchema = z.string().uuid();
 const modelIdsSchema = z.array(z.string().trim().min(1)).max(500).default([]);
+const tierSelectionsSchema = z.record(z.string().trim().min(1), z.string().trim().min(1).max(128));
+const cacheTtlSchema = z.string().trim().min(1).max(24).nullable();
 
 const createConnectionSchema = z.object({
   providerId: z.string().trim().min(1),
@@ -91,6 +95,8 @@ const createConnectionSchema = z.object({
   modelIds: modelIdsSchema,
   customModels: z.array(customConnectionModelSchema).max(500).optional(),
   reasoningConfig: z.record(z.string(), reasoningModelConfigSchema).optional(),
+  tierSelections: tierSelectionsSchema.optional(),
+  cacheTtl: cacheTtlSchema.optional(),
   endpoint: providerEndpointSchema.nullable().optional(),
   allowInsecureHttp: z.boolean().optional(),
   environmentVariable: environmentVariableSchema.optional(),
@@ -118,6 +124,8 @@ const updateConnectionSchema = z.object({
   modelIds: modelIdsSchema.optional(),
   customModels: z.array(customConnectionModelSchema).max(500).optional(),
   reasoningConfig: z.record(z.string(), reasoningModelConfigSchema).optional(),
+  tierSelections: tierSelectionsSchema.optional(),
+  cacheTtl: cacheTtlSchema.optional(),
   endpoint: providerEndpointSchema.nullable().optional(),
   allowInsecureHttp: z.boolean().optional(),
   environmentVariable: environmentVariableSchema.optional(),
@@ -304,6 +312,7 @@ function definitionView(
     available: unavailableReason === null,
     unavailableReason,
     supportsDiscovery: Boolean(registry.get(definition.id)?.discoveryFacet),
+    supportsQuota: Boolean(registry.get(definition.id)?.quotaFacet),
     models: definition.models.map((model) => modelView(model, 'catalog')),
   };
 }
@@ -312,11 +321,13 @@ function connectionView(
   connection: ProviderConnection,
   definitions: readonly ProviderDefinition[],
   activeTurnCount = 0,
+  current?: ProviderIPCServices,
 ): ProviderConnectionView {
   const definition = definitions.find((item) => item.id === connection.providerId);
   const allowsCustomEndpoint = definition?.allowsCustomModels === true
     && (connection.providerId === 'generic-openai-compatible'
       || connection.providerId === 'generic-anthropic-compatible');
+  const cacheFacet = (current ?? services()).registry.get(connection.providerId)?.cacheFacet;
   return {
     id: connection.id,
     providerId: connection.providerId,
@@ -337,10 +348,14 @@ function connectionView(
     endpoint: allowsCustomEndpoint ? connection.endpoint ?? null : null,
     allowInsecureHttp: connection.allowInsecureHttp === true,
     reasoningConfig: connection.reasoningConfig,
+    tierSelections: connection.tierSelections,
+    ...(cacheFacet?.ttlOptions ? { cacheTtlOptions: cacheFacet.ttlOptions } : {}),
+    ...(cacheFacet?.ttlOptions ? { cacheTtl: connection.cacheTtl ?? null } : {}),
   };
 }
 
 function statusView(observation: ProviderStatusObservation): ProviderStatusView {
+  const quota = providerQuotaSchema.safeParse(observation.data['quota']);
   return {
     providerId: observation.providerId,
     ...(observation.connectionId ? { connectionId: observation.connectionId } : {}),
@@ -349,6 +364,7 @@ function statusView(observation: ProviderStatusObservation): ProviderStatusView 
     availability: observation.availability,
     stale: observation.stale,
     data: structuredClone(observation.data),
+    quota: quota.success ? quota.data : null,
     error: observation.error ? { ...observation.error } : null,
   };
 }
@@ -768,7 +784,13 @@ async function modelOptions(
   for (const connection of selectedConnections) {
     const definition = definitions.find((item) => item.id === connection.providerId);
     if (!definition) continue;
-    for (const row of listConnectionModelRows(connection, definition)) {
+    const driver = current.registry.get(definition.id);
+    const tierMechanism = driver?.tierMechanism;
+    const { rows, variantTiersByBase } = groupTierVariantRows(
+      listConnectionModelRows(connection, definition),
+      tierMechanism?.kind === 'model-name-variants' ? tierMechanism : undefined,
+    );
+    for (const row of rows) {
       if (!includeDisabled && !row.enabled) continue;
       const selection = { connectionId: connection.id, modelId: row.model.id };
       const resolution = row.enabled
@@ -784,6 +806,27 @@ async function modelOptions(
             : resolution.kind === 'provider-required'
               ? 'A ready provider connection is required.'
               : 'Choose a model before sending.';
+      // Variant rows fold under the base; the selector offers only the tiers
+      // whose variants were actually present for this base model (R20).
+      const variantTierIds = variantTiersByBase.get(row.model.id);
+      const tierOptions = tierMechanism && (tierMechanism.kind !== 'model-name-variants' || variantTierIds)
+        ? {
+            mechanism: tierMechanism.kind,
+            tiers: (tierMechanism.kind === 'model-name-variants' && variantTierIds
+              ? tierMechanism.tiers.filter((tier) => variantTierIds.includes(tier.id))
+              : tierMechanism.tiers
+            ).map((tier) => ({
+              id: tier.id,
+              displayName: tier.displayName ?? null,
+              description: tier.description ?? null,
+              ...(tierMechanism.kind === 'model-name-variants'
+                && (tier as { requiresStreaming?: boolean }).requiresStreaming === true
+                ? { requiresStreaming: true }
+                : {}),
+            })),
+            selected: connection.tierSelections?.[row.model.id] ?? null,
+          }
+        : undefined;
       options.push({
         selection,
         connectionName: connection.name,
@@ -795,7 +838,8 @@ async function modelOptions(
         discoveredAt: row.discoveredAt,
         available,
         unavailableReason,
-        embeddingSupported: Boolean(current.registry.get(definition.id)?.createEmbeddingTarget),
+        embeddingSupported: Boolean(driver?.createEmbeddingTarget),
+        ...(tierOptions ? { tierOptions } : {}),
       });
     }
   }
@@ -843,6 +887,8 @@ export function registerProviderIPC(): void {
       modelIds: parsed.data.modelIds,
       ...(parsed.data.customModels ? { customModels: parsed.data.customModels } : {}),
       ...(parsed.data.reasoningConfig ? { reasoningConfig: parsed.data.reasoningConfig } : {}),
+      ...(parsed.data.tierSelections ? { tierSelections: parsed.data.tierSelections } : {}),
+      ...(parsed.data.cacheTtl != null ? { cacheTtl: parsed.data.cacheTtl } : {}),
       ...(parsed.data.endpoint !== undefined ? { endpoint: parsed.data.endpoint } : {}),
       ...(parsed.data.allowInsecureHttp !== undefined
         ? { allowInsecureHttp: parsed.data.allowInsecureHttp }
@@ -879,6 +925,12 @@ export function registerProviderIPC(): void {
         ...(parsed.data.modelIds === undefined ? {} : { modelIds: parsed.data.modelIds }),
         ...(parsed.data.customModels === undefined ? {} : { customModels: parsed.data.customModels }),
         ...(parsed.data.reasoningConfig === undefined ? {} : { reasoningConfig: parsed.data.reasoningConfig }),
+        ...(parsed.data.tierSelections === undefined ? {} : { tierSelections: parsed.data.tierSelections }),
+        ...(parsed.data.cacheTtl === undefined
+          ? {}
+          : parsed.data.cacheTtl === null
+            ? { cacheTtl: undefined }
+            : { cacheTtl: parsed.data.cacheTtl }),
         ...(parsed.data.endpoint === undefined ? {} : { endpoint: parsed.data.endpoint }),
         ...(parsed.data.allowInsecureHttp === undefined
           ? {}
@@ -1129,6 +1181,13 @@ export function registerProviderIPC(): void {
     const observation = await refreshStatus(parsed.data.providerId, parsed.data.connectionId);
     return observation ? statusView(observation) : null;
   });
+
+  ipcMain.handle(IPC_CHANNELS.PROVIDERS_QUOTA_REFRESH, async (_event, payload: unknown) => {
+    const parsed = connectionIdSchema.safeParse(payload);
+    if (!parsed.success) throw new Error('Invalid providers:quota_refresh payload');
+    const observation = await refreshQuota(parsed.data.connectionId);
+    return observation ? statusView(observation) : null;
+  });
 }
 
 export function unregisterProviderIPC(): void {
@@ -1144,6 +1203,7 @@ export function unregisterProviderIPC(): void {
   ipcMain.removeHandler(IPC_CHANNELS.PROVIDERS_MODEL_LIST);
   ipcMain.removeHandler(IPC_CHANNELS.PROVIDERS_DISCOVER_MODELS);
   ipcMain.removeHandler(IPC_CHANNELS.PROVIDERS_STATUS_REFRESH);
+  ipcMain.removeHandler(IPC_CHANNELS.PROVIDERS_QUOTA_REFRESH);
 }
 
 function genericOrigin(connection: ProviderConnection, current: ProviderIPCServices): string | null {
@@ -1172,7 +1232,59 @@ async function refreshStatus(
     throw new Error('The requested connection does not belong to Neuralwatt');
   }
   const apiKey = await readApiKeyForTrustedStatus(connection, current);
-  return (await current.status.refresh(createNeuralwattStatusSource(connection.id, apiKey), { manual: true })).observation;
+  return (await current.status.refresh(createNeuralwattQuotaStatusSource(connection.id, apiKey), { manual: true })).observation;
+}
+
+/**
+ * Explicit typed-quota refresh (R24). It resolves the connection's driver quota
+ * hook through the status service's TTL/manual-minimum path; a quota failure
+ * degrades to a stale/unavailable observation and never gates the connection.
+ */
+async function refreshQuota(connectionId: string): Promise<ProviderStatusObservation | null> {
+  const current = services();
+  const connection = await requireConnection(connectionId);
+  const driver = current.registry.require(connection.providerId);
+  if (!driver.quotaFacet) return current.status.get(connection.providerId) ?? null;
+  return (await current.status.refresh({
+    providerId: connection.providerId,
+    ttlMs: QUOTA_REFRESH_TTL_MS,
+    minimumManualRefreshMs: QUOTA_REFRESH_MINIMUM_MANUAL_MS,
+    fetchStatus: async () => {
+      const quota = await driver.quotaFacet!.fetchQuota({
+        connection,
+        provider: requireProviderDefinition(current, connection.providerId),
+        credential: await credentialForQuota(connection, current),
+      });
+      return {
+        providerId: connection.providerId,
+        observedAt: quota.observedAt,
+        providerUpdatedAt: quota.observedAt,
+        availability: 'available',
+        stale: false,
+        data: { quota },
+      };
+    },
+  }, { manual: true })).observation;
+}
+
+const QUOTA_REFRESH_TTL_MS = 5 * 60_000;
+const QUOTA_REFRESH_MINIMUM_MANUAL_MS = 30_000;
+
+function requireProviderDefinition(
+  current: ProviderIPCServices,
+  providerId: string,
+): ProviderDefinition {
+  const definition = current.catalog.getProviderDefinitions().find((item) => item.id === providerId);
+  if (!definition) throw new Error(`Provider definition '${providerId}' is unavailable`);
+  return definition;
+}
+
+async function credentialForQuota(
+  connection: ProviderConnection,
+  current: ProviderIPCServices,
+): Promise<DriverCredential> {
+  const apiKey = await readApiKeyForTrustedStatus(connection, current);
+  return { kind: 'api-key', apiKey };
 }
 
 async function readApiKeyForTrustedStatus(

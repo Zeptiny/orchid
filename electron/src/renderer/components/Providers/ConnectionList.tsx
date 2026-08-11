@@ -45,6 +45,9 @@ export interface ConnectionListProps {
   readonly onRefreshStatus?: (
     message: ProviderStatusRefreshMessage,
   ) => Promise<ProviderStatusView | null>;
+  readonly onRefreshQuota?: (
+    message: ProviderConnectionIdMessage,
+  ) => Promise<ProviderStatusView | null>;
 }
 
 type ConnectionAction = 'validate' | 'disable' | 'enable' | 'disconnect' | 'delete';
@@ -122,6 +125,7 @@ export function ConnectionList({
   onDelete,
   onNotify,
   onRefreshStatus,
+  onRefreshQuota,
 }: ConnectionListProps) {
   const [busy, setBusy] = useState<{ connectionId: string; action: ConnectionAction } | null>(null);
   const [confirmDisconnectId, setConfirmDisconnectId] = useState<string | null>(null);
@@ -257,6 +261,7 @@ export function ConnectionList({
                     definition={definition}
                     status={status}
                     onRefresh={onRefreshStatus}
+                    onRefreshQuota={onRefreshQuota}
                   />
                 )}
 

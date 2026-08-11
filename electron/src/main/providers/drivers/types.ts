@@ -32,6 +32,12 @@ export interface DriverModelRequest {
   readonly credential: DriverCredential;
   /** Present only for generic drivers after URL validation. */
   readonly endpoint?: string;
+  /**
+   * Effective service tier id (session override → connection selection),
+   * resolved by the caller through the tier facet. Variant-mechanism drivers
+   * map it to a model id; parameter-mechanism drivers receive options (R19).
+   */
+  readonly tier?: string;
 }
 
 /** Discovery requests resolve no model: the hook enumerates what exists. */
@@ -68,6 +74,8 @@ export interface DriverCostEvidenceInput {
   readonly headers: Readonly<Record<string, string>>;
   /** Raw provider usage payload exactly as reported by the adapter. */
   readonly rawUsage: unknown;
+  /** Finish-part provider metadata (served tier, response id) when streamed (R22). */
+  readonly finishMetadata?: Readonly<Record<string, unknown>>;
 }
 
 export interface DriverCostEvidence {
@@ -99,9 +107,16 @@ export interface DriverPricingFacet {
   readonly costEvidence?: (input: DriverCostEvidenceInput) => DriverCostEvidence | undefined;
 }
 
+/** Quota requests resolve no model: the hook reads account-wide state (R24). */
+export interface DriverQuotaRequest {
+  readonly connection: ProviderConnection;
+  readonly provider: ProviderDefinition;
+  readonly credential: DriverCredential;
+}
+
 /** Typed quota/subscription state in provider-native units (R24). */
 export interface DriverQuotaFacet {
-  readonly fetchQuota: (request: DriverModelRequest) => Promise<ProviderQuota>;
+  readonly fetchQuota: (request: DriverQuotaRequest) => Promise<ProviderQuota>;
 }
 
 /** Live model discovery from the provider's models endpoint (R26). */

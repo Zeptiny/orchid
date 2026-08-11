@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import {
+  cacheTtlLabelSchema,
   pricingRateFieldsSchema,
   providerRateCardSchema,
 } from './provider-facets';
@@ -214,6 +215,8 @@ export const providerConnectionSchema = z.object({
   pricingOverrides: z.record(z.string(), pricingRateFieldsSchema).optional(),
   /** Per-model service tier selection (tier id), keyed by modelId (R21). */
   tierSelections: z.record(z.string(), z.string().trim().min(1)).optional(),
+  /** Prompt-cache TTL selection from the driver's declared options (R11). */
+  cacheTtl: cacheTtlLabelSchema.optional(),
   health: connectionHealthSchema,
   endpoint: providerEndpointSchema.nullable().optional(),
   /** Explicit user acknowledgement required for a non-loopback HTTP endpoint. */
@@ -252,7 +255,7 @@ export const providerConnectionDocumentSchema = z.object({
 
 export type ProviderConnectionDocument = z.infer<typeof providerConnectionDocumentSchema>;
 
-/** Version 1 predates discoveredModels, pricingOverrides, and tierSelections. */
+/** Version 1 predates discoveredModels, pricingOverrides, tierSelections, and cacheTtl. */
 export const legacyProviderConnectionDocumentSchema = z.object({
   version: z.literal(1),
   connections: z.array(providerConnectionSchema),
@@ -290,6 +293,24 @@ export function parseProviderConnectionDocument(value: unknown): ProviderConnect
 
 export interface EffectiveModel extends ProviderModelDefinition {
   readonly source: 'catalog' | 'connection';
+  /**
+   * Base model id when a variant-driver tier selection rewrote the executable
+   * id (R19). The variant suffix encodes the served tier.
+   */
+  readonly baseModelId?: string;
+}
+
+/** Strip a known variant-driver tier suffix from a served model id. */
+export function tierBaseModelId(
+  modelId: string,
+  suffixes: readonly string[],
+): string | undefined {
+  for (const suffix of suffixes) {
+    if (suffix.length > 0 && modelId.endsWith(suffix) && modelId.length > suffix.length) {
+      return modelId.slice(0, modelId.length - suffix.length);
+    }
+  }
+  return undefined;
 }
 
 export type ProviderResolution =

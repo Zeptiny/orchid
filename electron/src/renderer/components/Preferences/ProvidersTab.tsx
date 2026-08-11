@@ -83,6 +83,7 @@ export function ProvidersTab({ onNotify }: { readonly onNotify: Notify }) {
         onDelete={providers.deleteConnection}
         onNotify={onNotify}
         onRefreshStatus={providers.refreshStatus}
+        onRefreshQuota={providers.refreshQuota}
       />
 
       <ConnectionWizard
