@@ -15,7 +15,7 @@ import { ContextGrid, contextPercent as getContextPercent } from './ContextGrid'
 import { contextUsedTokens } from '../../shared/usage';
 import type { Message, Usage } from '../../shared/types/message';
 import { TodoStatus } from '../../shared/types/todo';
-import type { SubagentRecord } from '../../shared/types/subagent';
+import type { SubagentSummary } from '../../shared/types/subagent';
 import type { SubagentListState, SubagentDetail } from '../hooks/useSubagents';
 import type { TodoListState } from '../hooks/useTodos';
 import type { BackgroundCommandsState } from '../hooks/useBackgroundCommands';
@@ -344,20 +344,20 @@ function CollapseBlock({
 // ── Subagents Section ────────────────────────────────────────────────────────
 
 export interface SubagentStatusGroups {
-  running: readonly SubagentRecord[];
-  queued: readonly SubagentRecord[];
-  other: readonly SubagentRecord[];
+  running: readonly SubagentSummary[];
+  queued: readonly SubagentSummary[];
+  other: readonly SubagentSummary[];
 }
 
 /** Keep active work visible while putting terminal subagents behind a menu. */
 export function partitionSubagentsByStatus(
-  agents: readonly SubagentRecord[],
+  agents: readonly SubagentSummary[],
 ): SubagentStatusGroups {
   const { running, queued, ended } = groupSubagents(agents);
   return { running, queued, other: ended };
 }
 
-export function countRunningSubagents(agents: readonly SubagentRecord[]): number {
+export function countRunningSubagents(agents: readonly SubagentSummary[]): number {
   return partitionSubagentsByStatus(agents).running.length;
 }
 
@@ -461,7 +461,7 @@ export function SubagentsSection({
 }
 
 interface SubagentRowProps {
-  agent: SubagentRecord;
+  agent: SubagentSummary;
   selectedId: string | null;
   onSelect: (id: string | null) => void;
   getDetail: (id: string) => SubagentDetail | null;

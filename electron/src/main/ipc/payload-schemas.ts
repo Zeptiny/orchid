@@ -38,6 +38,11 @@ export const subagentSnapshotSchema = z.object({
   sessionId: z.string().uuid(),
 }).strict();
 
+export const subagentDetailSchema = z.object({
+  sessionId: z.string().uuid(),
+  subagentId: z.string().min(1),
+}).strict();
+
 // ── Ask Question ────────────────────────────────────────────────────────────
 
 export const askQuestionAnswerSchema = z.object({

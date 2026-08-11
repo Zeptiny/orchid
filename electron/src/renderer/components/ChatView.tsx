@@ -341,15 +341,13 @@ export function ChatView({ isVisible = true, bootstrapConfig = null, onNotify, a
     (loadedSession: Session | null) => {
       if (!loadedSession) {
         chat.setMessages([]);
-        subagents.applyFromSession([]);
         todos.applyFromSession([]);
         return;
       }
       chat.setMessages(flattenSessionMessages(loadedSession));
-      subagents.applyFromSession(loadedSession.subagentChains);
       todos.applyFromSession(loadedSession.todoStore.tasks);
     },
-    [chat.setMessages, subagents.applyFromSession, todos.applyFromSession],
+    [chat.setMessages, todos.applyFromSession],
   );
 
   const handleSessionSelect = useCallback(
@@ -387,9 +385,8 @@ export function ChatView({ isVisible = true, bootstrapConfig = null, onNotify, a
 
       setDraftTabVisible(false);
       messageQueue.clearQueue();
-      // Commit once: sidebar lists from the session, chat (messages + live) via
-      // hydrate. hydrateSnapshot owns the single message replace (no double set).
-      subagents.applyFromSession(result.session.subagentChains);
+      // Commit once: subagent summaries hydrate independently; chat messages
+      // and live state hydrate here without a duplicate message replace.
       todos.applyFromSession(result.session.todoStore.tasks);
       chat.hydrateSnapshot({
         sessionId: result.session.id,
@@ -397,7 +394,7 @@ export function ChatView({ isVisible = true, bootstrapConfig = null, onNotify, a
         live: result.live,
       });
     },
-    [session, chat.beginSessionSwitch, chat.hydrateSnapshot, subagents.applyFromSession, todos.applyFromSession, draftTabVisible, messageQueue.clearQueue],
+    [session, chat.beginSessionSwitch, chat.hydrateSnapshot, todos.applyFromSession, draftTabVisible, messageQueue.clearQueue],
   );
 
   useEffect(() => {

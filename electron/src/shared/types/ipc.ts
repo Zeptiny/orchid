@@ -8,13 +8,19 @@
  */
 
 import type { Session } from './session';
+import type { Chain } from './chain';
 import type { Message, Usage } from './message';
 import type {
   CanonicalToolResult,
   TerminalToolResultStatus,
   ToolExecutionResult,
 } from './tool-result';
-import type { SubagentDeltaEvent, SubagentLiveProjection, SubagentRecord } from './subagent';
+import type {
+  SubagentDeltaEvent,
+  SubagentLiveProjection,
+  SubagentRecord,
+  SubagentSummary,
+} from './subagent';
 import type { RiskClass, ToolScope } from './permission';
 import type {
   CustomConnectionModel,
@@ -200,13 +206,22 @@ export interface SubagentSnapshot {
    * renderer rejects snapshots below its recorded revision floor.
    */
   sessionRevision: number;
-  records: SubagentRecord[];
+  records: SubagentSummary[];
   live: SubagentLiveProjection[];
+}
+export interface SubagentDetailRequest {
+  sessionId: string;
+  subagentId: string;
+}
+export interface SubagentDetailResult {
+  sessionId: string;
+  subagentId: string;
+  record: SubagentRecord | null;
 }
 /**
  * Unit of SUBAGENTS_EVENT delivery: one budgeted flush of typed live deltas
- * for a single session. Records ride only `spawned`/`terminal` deltas, so
- * projection-only batches keep renderer record identity stable.
+ * for a single session. Summaries ride only `spawned`/`terminal` deltas, so
+ * projection-only batches keep renderer row identity stable.
  */
 export interface SubagentEvent {
   sessionId: string;
@@ -825,10 +840,17 @@ export interface SessionCreatedEvent {
 }
 
 /**
- * Fired when the active session's multi-chain state changes (start/finish turn).
- * Same payload shape as SessionCreatedEvent so the renderer can refresh chains.
+ * Narrow durable patch emitted when one main-agent chain changes.
+ *
+ * Deliberately excludes `subagentChains` and every other unchanged session
+ * field so a checkpoint cannot clone the full session graph into a renderer.
  */
-export type SessionUpdatedEvent = SessionCreatedEvent;
+export interface SessionUpdatedEvent {
+  sessionId: string;
+  chain: Chain;
+  activeChainId: string | null;
+  updatedAt: string;
+}
 
 export interface SessionChangeModelMessage {
   id: string;
@@ -1342,6 +1364,8 @@ export interface OrchidAPI {
 
   subagents: {
     snapshot: (request: SubagentSnapshotRequest) => Promise<SubagentSnapshot>;
+    /** Fetch the full durable transcript for the currently selected row. */
+    detail: (request: SubagentDetailRequest) => Promise<SubagentDetailResult>;
     /** Batched subagent live deltas for the window's active session. */
     onEvent: (callback: (event: SubagentEvent) => void) => () => void;
   };
@@ -1466,6 +1490,7 @@ export const IPC_CHANNELS = {
   CHAT_TOOL_CALL_UPDATE: 'chat:tool_call_update',
 
   SUBAGENTS_SNAPSHOT: 'subagents:snapshot',
+  SUBAGENTS_DETAIL: 'subagents:detail',
   SUBAGENTS_EVENT: 'subagents:event',
 
   // Config
@@ -1633,6 +1658,7 @@ export const ALLOWED_INVOKE_CHANNELS = [
   IPC_CHANNELS.CHAT_STOP,
   IPC_CHANNELS.CHAT_SNAPSHOT,
   IPC_CHANNELS.SUBAGENTS_SNAPSHOT,
+  IPC_CHANNELS.SUBAGENTS_DETAIL,
   IPC_CHANNELS.CONFIG_GET,
   IPC_CHANNELS.CONFIG_SAVE,
   IPC_CHANNELS.CONFIG_PERMISSION_SCOPES,

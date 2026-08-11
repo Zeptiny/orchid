@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import type { SubagentRecord } from '../../shared/types/subagent';
+import type { SubagentSummary } from '../../shared/types/subagent';
 import type { UseSubagentsReturn } from '../hooks/useSubagents';
 import { formatUsageSummary } from '../utils/format-usage';
 import { SubagentTranscript } from './SubagentTranscript';
@@ -37,7 +37,7 @@ export function keepSubagentRowSelected(currentId: string | null, rowId: string)
 
 export const formatSubagentUsage = formatUsageSummary;
 
-function statusTone(status: SubagentRecord['status']): 'neutral' | 'warning' | 'success' | 'error' | 'info' {
+function statusTone(status: SubagentSummary['status']): 'neutral' | 'warning' | 'success' | 'error' | 'info' {
   if (status === 'running') return 'warning';
   if (status === 'pending' || status === 'queued') return 'neutral';
   if (status === 'completed') return 'success';
@@ -45,7 +45,7 @@ function statusTone(status: SubagentRecord['status']): 'neutral' | 'warning' | '
   return 'info';
 }
 
-function statusLabel(status: SubagentRecord['status']): string {
+function statusLabel(status: SubagentSummary['status']): string {
   return status === 'completed' ? 'completed' : status;
 }
 
@@ -55,7 +55,7 @@ function SubagentRow({
   detail,
   onSelect,
 }: {
-  record: SubagentRecord;
+  record: SubagentSummary;
   selected: boolean;
   detail: ReturnType<UseSubagentsReturn['getDetail']>;
   onSelect: () => void;
@@ -111,7 +111,7 @@ export function SubagentView({ subagents, onBackToChat, openRequest }: SubagentV
     setNarrowDetail(true);
   };
 
-  const renderGroup = (title: string, group: readonly SubagentRecord[]) => (
+  const renderGroup = (title: string, group: readonly SubagentSummary[]) => (
     <section className="orchid-subagent-view-group" aria-labelledby={`subagent-${title.toLowerCase()}`}>
       <SectionHeader title={<span id={`subagent-${title.toLowerCase()}`}>{title}</span>} />
       {group.length === 0 ? (
@@ -183,7 +183,23 @@ export function SubagentView({ subagents, onBackToChat, openRequest }: SubagentV
             </Disclosure>
           ) : null}
           <div className="orchid-subagent-view-transcript">
-            <SubagentTranscript record={selected} live={subagents.getLive(selected.id)} selectedId={selected.id} />
+            {subagents.transcript.status === 'ready' ? (
+              <SubagentTranscript
+                record={subagents.transcript.record}
+                live={subagents.getLive(selected.id)}
+                selectedId={selected.id}
+              />
+            ) : subagents.transcript.status === 'error' ? (
+              <StateMessage
+                kind="error"
+                title={subagents.transcript.error}
+                action={<Button size="sm" variant="ghost" onClick={() => void subagents.retryTranscript()}>Retry</Button>}
+              />
+            ) : subagents.transcript.status === 'unavailable' ? (
+              <StateMessage kind="warning" title="Subagent transcript is no longer available" />
+            ) : (
+              <StateMessage kind="loading" title="Loading transcript…" />
+            )}
           </div>
         </>
       ) : (

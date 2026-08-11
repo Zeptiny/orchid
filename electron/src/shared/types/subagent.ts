@@ -9,6 +9,7 @@
 import { z } from 'zod';
 import type { Chain } from './chain';
 import type { Usage } from './message';
+import { sumMessageUsages } from '../usage';
 import type {
   CanonicalToolResult,
   TerminalToolResultStatus,
@@ -104,12 +105,12 @@ export interface SubagentDeltaEventBase {
 }
 
 /**
- * Durable record seed emitted once at spawn. One of only two record carriers
- * (the other is `terminal`), so projection-only deltas never rebuild records.
+ * Lightweight row seed emitted once at spawn. One of only two summary
+ * carriers (the other is `terminal`), so transcript data stays off this wire.
  */
 export interface SubagentSpawnedEvent extends SubagentDeltaEventBase {
   readonly type: typeof SubagentDeltaEventType.SPAWNED;
-  readonly record: SubagentRecord;
+  readonly record: SubagentSummary;
   readonly usage: Usage | null;
 }
 
@@ -181,12 +182,12 @@ export interface SubagentUsageEvent extends SubagentDeltaEventBase {
 }
 
 /**
- * Authoritative durable handoff emitted once when the run settles. Carries
- * the final durable record so no post-terminal snapshot is required.
+ * Authoritative list handoff emitted once when the run settles. Carries the
+ * final summary so no post-terminal snapshot is required.
  */
 export interface SubagentTerminalEvent extends SubagentDeltaEventBase {
   readonly type: typeof SubagentDeltaEventType.TERMINAL;
-  readonly record: SubagentRecord;
+  readonly record: SubagentSummary;
   readonly state: SubagentTerminalState;
   readonly usage: Usage | null;
 }
@@ -236,6 +237,43 @@ export interface SubagentRecord {
   readonly chain: Chain;
 }
 
+/**
+ * Lightweight renderer list row. Full transcripts remain in SubagentRecord
+ * and cross IPC only through the selected-record detail request.
+ */
+export interface SubagentSummary {
+  readonly id: string;
+  readonly agent_name: string;
+  readonly agent_type: string;
+  readonly agent_tier: string;
+  readonly agentRole: string;
+  readonly task: string;
+  readonly status: SubagentStatus;
+  readonly chain_id: string;
+  readonly start_time: string;
+  readonly end_time: string | null;
+  readonly parentChainIndex: number | null;
+  readonly usage: Usage | null;
+}
+
+/** Collapse a durable record into the bounded list/delta wire representation. */
+export function summarizeSubagentRecord(record: SubagentRecord): SubagentSummary {
+  return {
+    id: record.id,
+    agent_name: record.agent_name,
+    agent_type: record.agent_type,
+    agent_tier: record.agent_tier,
+    agentRole: record.chain.agentName,
+    task: record.task,
+    status: record.status,
+    chain_id: record.chain_id,
+    start_time: record.start_time,
+    end_time: record.end_time,
+    parentChainIndex: record.parentChainIndex,
+    usage: sumMessageUsages(record.chain.messages),
+  };
+}
+
 // ── Wire size estimation ────────────────────────────────────────────────────
 
 /**
@@ -245,13 +283,9 @@ export interface SubagentRecord {
  */
 const TOOL_RESULT_PAYLOAD_PROXY_BYTES = 256;
 
-const CHAIN_MESSAGE_PROXY_BYTES = 128;
-
-function estimateRecordBytes(record: SubagentRecord): number {
+function estimateSummaryBytes(record: SubagentSummary): number {
   return record.id.length + record.agent_name.length + record.agent_type.length
-    + record.agent_tier.length + record.task.length
-    + (record.result?.length ?? 0) + (record.error?.length ?? 0)
-    + (record.chain?.messages?.length ?? 0) * CHAIN_MESSAGE_PROXY_BYTES;
+    + record.agent_tier.length + record.agentRole.length + record.task.length;
 }
 
 /**
@@ -284,7 +318,7 @@ export function estimateDeltaBytes(event: SubagentDeltaEvent): number {
       break;
     case 'spawned':
     case 'terminal':
-      bytes += estimateRecordBytes(event.record);
+      bytes += estimateSummaryBytes(event.record);
       break;
     case 'status_changed':
       bytes += event.status.length;

@@ -39,7 +39,7 @@ import {
 } from '../../src/main/agents/persist-subagent-chains';
 import { setSubagentPersistenceRecoveryScheduler } from '../../src/main/agents/subagent-persistence-recovery';
 import { buildWaitTool } from '../../src/main/tools/subagent/wait';
-import { createSubagentSnapshot } from '../../src/main/ipc/subagents';
+import { createSubagentDetail, createSubagentSnapshot } from '../../src/main/ipc/subagents';
 import { SessionManager } from '../../src/main/session/manager';
 import {
   loadSession,
@@ -293,7 +293,7 @@ describe('recovery flush after terminal eviction (P1 #2)', () => {
 });
 
 describe('subagent snapshot after terminal eviction (P1 #3)', () => {
-  it('serves the stored full record — chain messages and usage intact — for an evicted summary', async () => {
+  it('serves a bounded summary and fetches the stored transcript only as detail', async () => {
     const sid = makeSession();
     const record = await completeSubagent('snapshotted', 'summarize findings', sid);
     // Capture the durable shape BEFORE the flush evicts the runtime record.
@@ -312,13 +312,18 @@ describe('subagent snapshot after terminal eviction (P1 #3)', () => {
     expect(snap).toBeDefined();
     expect(snap!.status).toBe('completed');
 
-    // The snapshot must equal the durable row, not the empty-chain summary.
+    expect(snap).not.toHaveProperty('chain');
+    expect(snap!.usage).toEqual(durableUsage);
+
+    // The selected-detail endpoint returns the durable row, not the evicted
+    // runtime shell whose chain was intentionally emptied.
     const stored = loadSession(sid, storageOpts)!
       .subagentChains.find((row) => row.id === record.id)!;
-    expect(snap!.chain.messages).toHaveLength(messageCount);
-    expect(messageDigest(snap!.chain.messages)).toEqual(messageDigest(stored.chain.messages));
-    expect(messageDigest(snap!.chain.messages)).toEqual(durableDigest);
-    expect(sumSubagentUsage(snap!)).toEqual(durableUsage);
+    const detail = createSubagentDetail(sid, record.id).record!;
+    expect(detail.chain.messages).toHaveLength(messageCount);
+    expect(messageDigest(detail.chain.messages)).toEqual(messageDigest(stored.chain.messages));
+    expect(messageDigest(detail.chain.messages)).toEqual(durableDigest);
+    expect(sumSubagentUsage(detail)).toEqual(durableUsage);
   });
 
   it('keeps runtime precedence for active records while an evicted sibling comes from storage', async () => {
@@ -337,10 +342,12 @@ describe('subagent snapshot after terminal eviction (P1 #3)', () => {
 
     const snapDone = snapshot.records.find((row) => row.id === done.id)!;
     expect(snapDone.status).toBe('completed');
-    expect(snapDone.chain.messages.length).toBeGreaterThan(0);
+    expect(snapDone).not.toHaveProperty('chain');
+    expect(snapDone.usage).not.toBeNull();
 
     const snapActive = snapshot.records.find((row) => row.id === active.id)!;
     expect(snapActive.status).toBe('pending');
+    expect(snapActive).not.toHaveProperty('chain');
     expect(snapshot.live.some((projection) => projection.subagentId === active.id))
       .toBe(true);
   });

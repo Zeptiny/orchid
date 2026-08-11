@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import type { Session } from '../../src/shared/types/session';
+import { sessionForRenderer, type Session } from '../../src/shared/types/session';
 import type { Message } from '../../src/shared/types/message';
 import type { Chain } from '../../src/shared/types/chain';
 import { ChainStatus } from '../../src/shared/types/chain';
@@ -173,6 +173,20 @@ afterEach(() => {
 // ===========================================================================
 // Save → load round-trip
 // ===========================================================================
+
+describe('renderer session projection', () => {
+  it('omits subagent transcripts without mutating the domain session', () => {
+    const session = makeSession({ id: randomUUID() });
+    const transcript = makeSubagentRecord(session.id, { id: 'selected-lazily' });
+    const domain = { ...session, subagentChains: [transcript] };
+
+    const renderer = sessionForRenderer(domain);
+
+    expect(renderer.subagentChains).toEqual([]);
+    expect(domain.subagentChains).toEqual([transcript]);
+    expect(renderer.chains).toBe(domain.chains);
+  });
+});
 
 describe('saveSession → loadSession round-trip', () => {
   it('preserves canonical tool facts through session storage', () => {

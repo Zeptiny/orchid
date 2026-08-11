@@ -14,7 +14,7 @@ import {
   makeThinkingMessage,
 } from '../../llm/message-factories';
 import { activeAgents, pendingCheckpoints, type ActiveAgent } from './state';
-import { sendSessionEvent, webContentsForWindowId } from './events';
+import { buildSessionUpdatedEvent, sendSessionEvent, webContentsForWindowId } from './events';
 import { textSegmentIdAtOffset } from './snapshot';
 
 export function attachUsageToLatestAssistant(messages: Message[], usage: Usage): boolean {
@@ -151,12 +151,13 @@ export function checkpointActiveTurn(agent: ActiveAgent, context: AgentContext):
         entry?.messages ?? messages,
         sessionId,
       );
-      if (updated) {
+      const update = updated ? buildSessionUpdatedEvent(updated) : null;
+      if (update) {
         sendSessionEvent(
           webContentsForWindowId(active.windowId),
           sessionId,
           IPC_CHANNELS.SESSION_UPDATED,
-          { session: updated },
+          update,
         );
       }
     } catch (err) {
@@ -203,8 +204,9 @@ export function persistTurnConversation(
       agentType: agent.type,
       agentTier: agent.tier,
     }, sessionId);
-    if (updated && webContents) {
-      sendSessionEvent(webContents, sessionId, IPC_CHANNELS.SESSION_UPDATED, { session: updated });
+    const update = updated ? buildSessionUpdatedEvent(updated, null) : null;
+    if (update && webContents) {
+      sendSessionEvent(webContents, sessionId, IPC_CHANNELS.SESSION_UPDATED, update);
     }
   } catch (err) {
     console.debug('Failed to persist chat chain (non-fatal):', err);

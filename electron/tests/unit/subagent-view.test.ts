@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
-import type { SubagentRecord } from '../../src/shared/types/subagent';
+import type { SubagentRecord, SubagentSummary } from '../../src/shared/types/subagent';
 import { EMPTY_SUBAGENT_USAGE_SUMMARY } from '../../src/shared/usage';
 import {
   formatSubagentUsage,
@@ -11,11 +11,31 @@ import {
   SubagentView,
 } from '../../src/renderer/components/SubagentView';
 
-function record(id: string, status: SubagentRecord['status'], start_time: string): SubagentRecord {
+function record(id: string, status: SubagentSummary['status'], start_time: string): SubagentSummary {
   return {
     id, agent_name: id, agent_type: 'worker', agent_tier: 'bloom', task: `Task ${id}`,
+    agentRole: 'worker',
     status, chain_id: `${id}-chain`, start_time, end_time: status === 'running' ? null : start_time,
-    result: null, error: null, parentChainIndex: null, chain: { messages: [] } as SubagentRecord['chain'],
+    parentChainIndex: null, usage: null,
+  };
+}
+
+function transcript(summary: SubagentSummary): SubagentRecord {
+  return {
+    id: summary.id,
+    agent_name: summary.agent_name,
+    agent_type: summary.agent_type,
+    agent_tier: summary.agent_tier,
+    task: summary.task,
+    status: summary.status,
+    chain_id: summary.chain_id,
+    start_time: summary.start_time,
+    end_time: summary.end_time,
+    result: null,
+    error: null,
+    parentChainIndex: summary.parentChainIndex,
+    closed: false,
+    chain: { messages: [] } as SubagentRecord['chain'],
   };
 }
 
@@ -45,13 +65,14 @@ describe('SubagentView', () => {
       subagents: {
         state, subagents: state.subagents, groups: { queued: [], running: state.subagents, ended: [] },
         totalUsage: null, usageByParentChain: new Map(), usageSummary: EMPTY_SUBAGENT_USAGE_SUMMARY, refresh: async () => {}, retry: async () => {},
-        isRetrying: false, applyFromSession: () => {}, selectedId: 'running', select: () => {},
+        isRetrying: false, selectedId: 'running', select: () => {},
         getDetail: () => ({
           id: 'running', name: 'running', type: 'Explorer', tier: 'bloom', state: 'running',
           task: prompt, elapsed: '1s', isRunning: true, result: null, error: null,
           usage: { prompt_tokens: 1_234, cached_tokens: 345, completion_tokens: 5_678, total_tokens: 6_912 },
         }),
-        live: new Map(), getLive: () => null,
+        transcript: { status: 'ready', record: transcript(selectedRecord) },
+        retryTranscript: async () => {}, live: new Map(), getLive: () => null,
       },
       onBackToChat: () => {},
       openRequest: { generation: 1, id: 'running' },
@@ -82,8 +103,9 @@ describe('SubagentView', () => {
       subagents: {
         state, subagents: state.subagents, groups: { queued: state.subagents, running: [], ended: [] },
         totalUsage: null, usageByParentChain: new Map(), usageSummary: EMPTY_SUBAGENT_USAGE_SUMMARY, refresh: async () => {}, retry: async () => {},
-        isRetrying: false, applyFromSession: () => {}, selectedId: null, select: () => {},
+        isRetrying: false, selectedId: null, select: () => {},
         getDetail: () => null, live: new Map(), getLive: () => null,
+        transcript: { status: 'idle' }, retryTranscript: async () => {},
       },
       onBackToChat: () => {},
       openRequest: { generation: 1, id: null },
@@ -107,8 +129,9 @@ describe('SubagentView', () => {
         state: { status: 'ready', subagents: records }, subagents: records,
         groups: { queued: [], running: [], ended: records }, totalUsage: null,
         usageByParentChain: new Map(), usageSummary: EMPTY_SUBAGENT_USAGE_SUMMARY, refresh: async () => {}, retry: async () => {},
-        isRetrying: false, applyFromSession: () => {}, selectedId: records[0].id, select: () => {},
+        isRetrying: false, selectedId: records[0].id, select: () => {},
         getDetail: () => null, live: new Map(), getLive: () => null,
+        transcript: { status: 'idle' }, retryTranscript: async () => {},
       },
       onBackToChat: () => {},
       openRequest: { generation: 1, id: null },
@@ -124,8 +147,9 @@ describe('SubagentView', () => {
         state: { status: 'ready', subagents: [] }, subagents: [],
         groups: { queued: [], running: [], ended: [] }, totalUsage: null,
         usageByParentChain: new Map(), usageSummary: EMPTY_SUBAGENT_USAGE_SUMMARY, refresh: async () => {}, retry: async () => {},
-        isRetrying: false, applyFromSession: () => {}, selectedId: null, select: () => {},
+        isRetrying: false, selectedId: null, select: () => {},
         getDetail: () => null, live: new Map(), getLive: () => null,
+        transcript: { status: 'idle' }, retryTranscript: async () => {},
       },
       onBackToChat: () => {},
       openRequest: { generation: 1, id: 'missing-agent' },

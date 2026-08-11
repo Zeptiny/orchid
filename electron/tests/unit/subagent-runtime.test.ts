@@ -19,7 +19,11 @@ import type { Message } from '../../src/shared/types/message';
 import type { StreamEvent } from '../../src/main/llm/orchestrator';
 import { sumSubagentUsage } from '../../src/shared/usage';
 import { createCanonicalToolResult } from '../../src/shared/types/tool-result';
-import type { SubagentDeltaEvent, SubagentLiveProjection } from '../../src/shared/types/subagent';
+import {
+  summarizeSubagentRecord,
+  type SubagentDeltaEvent,
+  type SubagentLiveProjection,
+} from '../../src/shared/types/subagent';
 import {
   subagentRecordFromStorageDict,
   subagentRecordToStorageDict,
@@ -728,7 +732,10 @@ describe('SubagentManager delta emission (U2)', () => {
     await manager.getRunPromise(record.id);
 
     expect(terminal).not.toBeNull();
-    expect(terminal!.record).toEqual(manager.toDomainRecord(record, { includeLiveTail: true }));
+    expect(terminal!.record).toEqual(summarizeSubagentRecord(
+      manager.toDomainRecord(record, { includeLiveTail: true }),
+    ));
+    expect(terminal!.record).not.toHaveProperty('chain');
     expect(terminal!.state).toBe('completed');
     expect(terminal!.usage).toEqual(record.usage);
   });
@@ -764,7 +771,7 @@ describe('SubagentManager delta emission (U2)', () => {
       if (event.type === 'terminal') {
         expect(renderer.live.has(record.id)).toBe(false);
         expect(renderer.records.find((item) => item.id === record.id)).toEqual(event.record);
-        expect(event.record).toEqual(manager.toDomainRecord(record));
+        expect(event.record).toEqual(summarizeSubagentRecord(manager.toDomainRecord(record)));
         continue;
       }
       if (event.type === 'text_delta' || event.type === 'thinking_delta' ||

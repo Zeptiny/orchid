@@ -1,10 +1,15 @@
 /** Session-affine subagent snapshot and live projection IPC. */
 import { ipcMain } from 'electron';
-import { IPC_CHANNELS, type SubagentSnapshot } from '../../shared/types/ipc';
+import {
+  IPC_CHANNELS,
+  type SubagentDetailResult,
+  type SubagentSnapshot,
+} from '../../shared/types/ipc';
 import type { SubagentRecord as DomainSubagentRecord } from '../../shared/types/subagent';
+import { summarizeSubagentRecord } from '../../shared/types/subagent';
 import { getSubagentManager } from '../tools';
 import { getSessionManager } from '../session/singleton';
-import { subagentSnapshotSchema } from './payload-schemas';
+import { subagentDetailSchema, subagentSnapshotSchema } from './payload-schemas';
 import { flushSubagentDeltas } from '../agents/subagent-events';
 
 // Compatibility exports for existing IPC consumers. Event ownership lives in
@@ -30,6 +35,16 @@ export function mergeSubagentRecords(stored: readonly DomainSubagentRecord[], ru
   return [...merged.values()];
 }
 
+export function selectSubagentDetailRecord(
+  subagentId: string,
+  stored: readonly DomainSubagentRecord[],
+  runtime: DomainSubagentRecord | null,
+): DomainSubagentRecord | null {
+  return (runtime?.id === subagentId ? runtime : null)
+    ?? stored.find((record) => record.id === subagentId)
+    ?? null;
+}
+
 export function createSubagentSnapshot(sessionId: string): SubagentSnapshot {
   const manager = getSubagentManager();
   const session = getSessionManager().getSession(sessionId);
@@ -44,9 +59,24 @@ export function createSubagentSnapshot(sessionId: string): SubagentSnapshot {
   return {
     sessionId,
     sessionRevision: manager.getSessionRevision(sessionId),
-    records,
+    records: records.map(summarizeSubagentRecord),
     live: manager.getLiveProjections(sessionId),
   };
+}
+
+/** Materialize only the transcript explicitly selected in the renderer. */
+export function createSubagentDetail(
+  sessionId: string,
+  subagentId: string,
+): SubagentDetailResult {
+  const manager = getSubagentManager();
+  const candidate = manager.getRecord(subagentId);
+  const runtime = candidate?.sessionId === sessionId && !manager.isSummary(candidate.id)
+    ? manager.toDomainRecord(candidate, { includeLiveTail: true })
+    : null;
+  const stored = getSessionManager().getSession(sessionId)?.subagentChains ?? [];
+  const record = selectSubagentDetailRecord(subagentId, stored, runtime);
+  return { sessionId, subagentId, record };
 }
 
 let wired = false;
@@ -59,11 +89,17 @@ export function registerSubagentIPC(): void {
     if (!parsed.success) throw new Error(`Invalid subagent snapshot request: ${parsed.error.message}`);
     return createSubagentSnapshot(parsed.data.sessionId);
   });
+  ipcMain.handle(IPC_CHANNELS.SUBAGENTS_DETAIL, (_event, raw: unknown) => {
+    const parsed = subagentDetailSchema.safeParse(raw);
+    if (!parsed.success) throw new Error(`Invalid subagent detail request: ${parsed.error.message}`);
+    return createSubagentDetail(parsed.data.sessionId, parsed.data.subagentId);
+  });
 }
 
 export function unregisterSubagentIPC(): void {
   if (!wired) return;
   wired = false;
   ipcMain.removeHandler(IPC_CHANNELS.SUBAGENTS_SNAPSHOT);
+  ipcMain.removeHandler(IPC_CHANNELS.SUBAGENTS_DETAIL);
   flushSubagentDeltas();
 }

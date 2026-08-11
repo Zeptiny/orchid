@@ -51,6 +51,16 @@ export interface Session {
   readonly permissionMode: PermissionMode | null;
 }
 
+/**
+ * Session DTO for renderer navigation. Historical subagent transcripts are
+ * fetched through the selected-subagent detail endpoint instead.
+ */
+export function sessionForRenderer(session: Session): Session {
+  return session.subagentChains.length === 0
+    ? session
+    : { ...session, subagentChains: [] };
+}
+
 // ── Storage dict ────────────────────────────────────────────────────────────
 
 export interface SessionStorageDict {

@@ -83,6 +83,8 @@ import type {
   BgCommandChangedEvent,
   SubagentSnapshotRequest,
   SubagentSnapshot,
+  SubagentDetailRequest,
+  SubagentDetailResult,
   SubagentEvent,
   AskQuestionAnswerMessage,
   AskQuestionCancelMessage,
@@ -129,6 +131,7 @@ import {
   chatToolCallUpdateEventSchema,
   sessionRenamedEventSchema,
   sessionCreatedEventSchema,
+  sessionUpdatedEventSchema,
   sessionWorkspaceChangedEventSchema,
   sessionTodosChangedEventSchema,
   sessionActivityChangedEventSchema,
@@ -149,6 +152,7 @@ import {
   sessionServiceTierConfigResultSchema,
   chatSessionSnapshotSchema,
   subagentSnapshotSchema,
+  subagentDetailResultSchema,
   subagentEventSchema,
   subagentDeltaEventSchema,
   startupSnapshotSchema,
@@ -184,6 +188,7 @@ const INVOKE_RESULT_SCHEMAS: Partial<Record<string, z.ZodTypeAny>> = {
   [IPC_CHANNELS.CHAT_SEND]: chatSendResultSchema,
   [IPC_CHANNELS.CHAT_SNAPSHOT]: chatSessionSnapshotSchema,
   [IPC_CHANNELS.SUBAGENTS_SNAPSHOT]: subagentSnapshotSchema,
+  [IPC_CHANNELS.SUBAGENTS_DETAIL]: subagentDetailResultSchema,
   [IPC_CHANNELS.TOOL_EXECUTE]: toolExecuteResultSchema,
   [IPC_CHANNELS.BG_CMD_SNAPSHOT]: bgCommandSnapshotResultSchema,
   [IPC_CHANNELS.BG_CMD_LIST]: bgCommandListResultSchema,
@@ -506,7 +511,7 @@ const orchidAPI: OrchidAPI = {
       onParsed(IPC_CHANNELS.SESSION_CREATED, sessionCreatedEventSchema, callback),
 
     onUpdated: (callback: (event: SessionUpdatedEvent) => void) =>
-      onParsed(IPC_CHANNELS.SESSION_UPDATED, sessionCreatedEventSchema, callback),
+      onParsed(IPC_CHANNELS.SESSION_UPDATED, sessionUpdatedEventSchema, callback),
 
     onWorkspaceChanged: (callback: (event: SessionWorkspaceChangedEvent) => void) =>
       onParsed(IPC_CHANNELS.SESSION_WORKSPACE_CHANGED, sessionWorkspaceChangedEventSchema, callback),
@@ -538,6 +543,8 @@ const orchidAPI: OrchidAPI = {
   subagents: {
     snapshot: (request: SubagentSnapshotRequest) =>
       invoke<SubagentSnapshot>(IPC_CHANNELS.SUBAGENTS_SNAPSHOT, request),
+    detail: (request: SubagentDetailRequest) =>
+      invoke<SubagentDetailResult>(IPC_CHANNELS.SUBAGENTS_DETAIL, request),
     onEvent: (callback: (event: SubagentEvent) => void) =>
       onSubagentEvent(callback),
   },

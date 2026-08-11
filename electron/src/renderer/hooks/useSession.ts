@@ -252,10 +252,17 @@ function ensureBootstrapped(): void {
         setActiveSession((prev) => {
           // Only update when the same session is still active. Never resurrect
           // a session after New Chat/draft (prev === null) from a late event.
-          if (prev?.id === event.session.id) {
-            return event.session;
-          }
-          return prev;
+          if (prev?.id !== event.sessionId) return prev;
+          const chainIndex = prev.chains.findIndex((chain) => chain.id === event.chain.id);
+          const chains = chainIndex < 0
+            ? [...prev.chains, event.chain]
+            : prev.chains.map((chain, index) => index === chainIndex ? event.chain : chain);
+          return {
+            ...prev,
+            chains,
+            activeChainId: event.activeChainId,
+            updatedAt: event.updatedAt,
+          };
         });
       }),
     );

@@ -6,7 +6,7 @@
  */
 import { BrowserWindow, dialog, ipcMain } from 'electron';
 import { IPC_CHANNELS } from '../../shared/types/ipc';
-import { flattenSessionMessages } from '../../shared/types/session';
+import { flattenSessionMessages, sessionForRenderer } from '../../shared/types/session';
 import type { ModelSelection } from '../../shared/types/provider';
 import {
   getSessionManager,
@@ -76,7 +76,7 @@ export {
   resolveWindowWorkspace,
 };
 
-export { flattenSessionMessages };
+export { flattenSessionMessages, sessionForRenderer };
 
 export { takeDraftReasoningOverride } from '../session/draft-reasoning';
 
@@ -234,7 +234,8 @@ export function registerSessionIPC(): void {
 
     // Read-only peek (todos / subagents refresh) — do not switch or reseed.
     if (!activate) {
-      return manager.load(id);
+      const session = manager.load(id);
+      return session ? sessionForRenderer(session) : null;
     }
 
     const releasedDraftCwd = getDraftCwd(windowId);
@@ -274,7 +275,7 @@ export function registerSessionIPC(): void {
     const workspace = resolveWindowWorkspace(windowId);
 
     emitWorkspaceChanged(event.sender, workspace);
-    return session;
+    return session ? sessionForRenderer(session) : null;
   });
 
   // session:open — activate a session and return its full view payload in one
@@ -324,7 +325,12 @@ export function registerSessionIPC(): void {
     const { getLiveChatSnapshot } = await import('./chat.js');
     const live = getLiveChatSnapshot(id);
 
-    return { session, messages, live, workspace };
+    return {
+      session: session ? sessionForRenderer(session) : null,
+      messages,
+      live,
+      workspace,
+    };
   });
 
   // session:create — eagerly create + activate a session (writes to disk).

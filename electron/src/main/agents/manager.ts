@@ -25,6 +25,7 @@ import type { SubagentRecord as DomainSubagentRecord } from '../../shared/types/
 import {
   SubagentDeltaEventType,
   SubagentStatus,
+  summarizeSubagentRecord,
   type SubagentDeltaEvent,
   type SubagentLiveProjection,
   type SubagentTerminalState,
@@ -420,7 +421,7 @@ export class SubagentManager {
     this._notify();
     this._emitDelta(record, {
       type: SubagentDeltaEventType.SPAWNED,
-      record: this.toDomainRecord(record, { includeLiveTail: false }),
+      record: summarizeSubagentRecord(this.toDomainRecord(record, { includeLiveTail: false })),
       usage: record.usage,
     });
 
@@ -518,7 +519,7 @@ export class SubagentManager {
       this._notify();
       this._emitDelta(record, {
         type: SubagentDeltaEventType.SPAWNED,
-        record: this.toDomainRecord(record, { includeLiveTail: false }),
+        record: summarizeSubagentRecord(this.toDomainRecord(record, { includeLiveTail: false })),
         usage: record.usage,
       });
       if (this._runner) {
@@ -529,7 +530,7 @@ export class SubagentManager {
       this._notify();
       this._emitDelta(record, {
         type: SubagentDeltaEventType.SPAWNED,
-        record: this.toDomainRecord(record, { includeLiveTail: false }),
+        record: summarizeSubagentRecord(this.toDomainRecord(record, { includeLiveTail: false })),
         usage: record.usage,
       });
     }
@@ -1518,7 +1519,9 @@ export class SubagentManager {
       result: record.result,
       error: record.error,
       usage: record.usage,
-      terminalRecord: () => this.toDomainRecord(record, { includeLiveTail: true }),
+      terminalRecord: () => summarizeSubagentRecord(
+        this.toDomainRecord(record, { includeLiveTail: true }),
+      ),
     });
     // A terminal subagent's owned background commands die with it (R9); the
     // scope id is the record id (see `_startRun`). The scope's foreground

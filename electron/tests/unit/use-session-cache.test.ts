@@ -20,7 +20,14 @@ const createdHandlers: Array<(event: {
   session: Session;
   draftGeneration?: number;
 }) => void> = [];
-const updatedHandlers: Array<(event: { session: Session }) => void> = [];
+type SessionUpdatePatch = {
+  sessionId: string;
+  chain: Session['chains'][number];
+  activeChainId: string | null;
+  updatedAt: string;
+};
+
+const updatedHandlers: Array<(event: SessionUpdatePatch) => void> = [];
 const workspaceHandlers: Array<(event: {
   workspace: { cwd: string | null; source: string; status: string };
 }) => void> = [];
@@ -91,7 +98,7 @@ function installOrchidApi() {
             if (idx >= 0) createdHandlers.splice(idx, 1);
           };
         },
-        onUpdated: (handler: (event: { session: Session }) => void) => {
+        onUpdated: (handler: (event: SessionUpdatePatch) => void) => {
           updatedHandlers.push(handler);
           return () => {
             const idx = updatedHandlers.indexOf(handler);
@@ -155,6 +162,43 @@ describe('useSession shared cache', () => {
     expect(__sessionCacheTest.getActiveSession()?.id).toBe('b');
     expect(__sessionCacheTest.getActiveSession()?.name).toBe('Beta');
     expect(loadMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('merges a narrow session update without replacing unrelated session state', async () => {
+    const retainedSubagents = [{ id: 'subagent-retained' } as never];
+    const session = makeSession({
+      id: 's1',
+      name: 'Keep me',
+      subagentChains: retainedSubagents,
+    });
+    listMock.mockResolvedValue([]);
+    getWorkspaceMock.mockResolvedValue({ cwd: null, source: 'unbound', status: 'unbound' });
+    loadMock.mockResolvedValue(session);
+
+    const { __sessionCacheTest } = await import('../../src/renderer/hooks/useSession');
+    __sessionCacheTest.reset();
+    __sessionCacheTest.ensureBootstrapped();
+    await __sessionCacheTest.load('s1');
+
+    const updatedAt = new Date(Date.parse(session.updatedAt) + 1_000).toISOString();
+    const updatedChain = {
+      ...session.chains[0],
+      status: ChainStatus.COMPLETED,
+      endTime: updatedAt,
+    };
+    updatedHandlers[0]?.({
+      sessionId: session.id,
+      chain: updatedChain,
+      activeChainId: null,
+      updatedAt,
+    });
+
+    const updated = __sessionCacheTest.getActiveSession();
+    expect(updated?.name).toBe('Keep me');
+    expect(updated?.chains).toEqual([updatedChain]);
+    expect(updated?.activeChainId).toBeNull();
+    expect(updated?.updatedAt).toBe(updatedAt);
+    expect(updated?.subagentChains).toBe(retainedSubagents);
   });
 
   it('enterDraft clears active session for all consumers', async () => {

@@ -1751,12 +1751,20 @@ describe('chat IPC provider gates', () => {
       id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
       name: 'Investigate Session Naming',
     });
-    expect(channelEvents(send, IPC_CHANNELS.SESSION_UPDATED).at(-1)?.[1]).toMatchObject({
-      session: { id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', activeChainId: null },
+    const sourceUpdate = channelEvents(send, IPC_CHANNELS.SESSION_UPDATED).at(-1)?.[1];
+    const peerUpdate = channelEvents(sameSession.send, IPC_CHANNELS.SESSION_UPDATED).at(-1)?.[1];
+    expect(sourceUpdate).toMatchObject({
+      sessionId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      activeChainId: null,
+      chain: { id: 'chain-1', status: 'completed' },
     });
-    expect(channelEvents(sameSession.send, IPC_CHANNELS.SESSION_UPDATED).at(-1)?.[1]).toMatchObject({
-      session: { id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', activeChainId: null },
+    expect(peerUpdate).toMatchObject({
+      sessionId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      activeChainId: null,
+      chain: { id: 'chain-1', status: 'completed' },
     });
+    expect(sourceUpdate).not.toHaveProperty('session');
+    expect(sourceUpdate).not.toHaveProperty('subagentChains');
     expect(channelEvents(sameSession.send, IPC_CHANNELS.SESSION_RENAMED).at(-1)?.[1]).toEqual({
       id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
       name: 'Investigate Session Naming',

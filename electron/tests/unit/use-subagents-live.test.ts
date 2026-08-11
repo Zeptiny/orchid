@@ -4,7 +4,7 @@ import type { Usage } from '../../src/shared/types/message';
 import type {
   SubagentDeltaEvent,
   SubagentLiveProjection,
-  SubagentRecord,
+  SubagentSummary,
   SubagentSpawnedEvent,
   SubagentTerminalEvent,
 } from '../../src/shared/types/subagent';
@@ -32,11 +32,12 @@ import {
 const sessionA = '11111111-1111-4111-8111-111111111111';
 const sessionB = '22222222-2222-4222-8222-222222222222';
 
-function record(id: string, status: SubagentRecord['status'], start = '2026-01-01T00:00:00.000Z'): SubagentRecord {
+function record(id: string, status: SubagentSummary['status'], start = '2026-01-01T00:00:00.000Z'): SubagentSummary {
   return {
     id, agent_name: id, agent_type: 'subagent', agent_tier: 'bloom', task: id,
+    agentRole: 'general',
     status, chain_id: `${id}-chain`, start_time: start, end_time: null,
-    result: null, error: null, parentChainIndex: null, chain: { messages: [] } as SubagentRecord['chain'],
+    parentChainIndex: null, usage: null,
   };
 }
 
@@ -64,14 +65,14 @@ function deltaBase(options: DeltaFactoryOptions = {}) {
   };
 }
 
-function spawned(id: string, runId: string, rec: SubagentRecord, sequence = 0, revision = 0): SubagentSpawnedEvent {
+function spawned(id: string, runId: string, rec: SubagentSummary, sequence = 0, revision = 0): SubagentSpawnedEvent {
   return { ...deltaBase({ subagentId: id, runId, sessionRevision: revision }), sequence, type: 'spawned', record: rec, usage: null };
 }
 
 function terminal(
   id: string,
   runId: string,
-  rec: SubagentRecord,
+  rec: SubagentSummary,
   sequence: number,
   usage: Usage | null = null,
   revision = 0,
@@ -90,7 +91,7 @@ function batch(events: SubagentDeltaEvent[], sessionId = sessionA): SubagentEven
   return { sessionId, events };
 }
 
-function snapshot(sessionId: string, sessionRevision: number, records: SubagentRecord[], live: SubagentLiveProjection[] = []): SubagentSnapshot {
+function snapshot(sessionId: string, sessionRevision: number, records: SubagentSummary[], live: SubagentLiveProjection[] = []): SubagentSnapshot {
   return { sessionId, sessionRevision, records, live: live.map((item) => ({ ...item, sessionId })) };
 }
 
@@ -98,7 +99,7 @@ function snapshot(sessionId: string, sessionRevision: number, records: SubagentR
 function seeded(
   sessionId: string,
   revision: number,
-  records: SubagentRecord[] = [],
+  records: SubagentSummary[] = [],
   live: SubagentLiveProjection[] = [],
 ): SubagentStreamState {
   return seedSubagentSnapshot(
@@ -220,7 +221,7 @@ describe('subagent delta application', () => {
     expect(state.live.get('one')?.sequence).toBe(100);
     expect(state.highWater.get('one')).toBe(100);
 
-    const done = { ...record('one', 'completed'), end_time: '2026-01-01T00:01:40.000Z', result: 'done' };
+    const done = { ...record('one', 'completed'), end_time: '2026-01-01T00:01:40.000Z' };
     state = applyDeltaBatch(state, batch([terminal('one', 'run-1', done, 101)]));
     expect(state.records).not.toBe(seededRecords);
     expect(state.records[0]).toBe(done);
@@ -273,13 +274,12 @@ describe('subagent delta application', () => {
     }]);
   });
 
-  it('terminal removes the live entry and replaces the record with the authoritative durable record', () => {
+  it('terminal removes the live entry and replaces the row with the authoritative summary', () => {
     const usage: Usage = { prompt_tokens: 7, cached_tokens: 1, completion_tokens: 3, total_tokens: 10, reasoning_tokens: 0 };
-    const done: SubagentRecord = {
+    const done: SubagentSummary = {
       ...record('one', 'completed'),
       end_time: '2026-01-01T00:00:05.000Z',
-      result: 'finished',
-      chain: { messages: [{ usage }] } as SubagentRecord['chain'],
+      usage,
     };
     let state = seeded(sessionA, 3, [record('one', 'running')], [projection({ subagentId: 'one', sequence: 3 })]);
     state = applyDeltaBatch(state, batch([terminal('one', 'run-1', done, 4, usage)]));
@@ -288,7 +288,7 @@ describe('subagent delta application', () => {
     expect(state.records[0]).toBe(done);
     expect(state.records[0].status).toBe('completed');
     const detail = buildSubagentDetail(state.records[0], Date.parse('2026-01-01T00:00:06.000Z'), state.live.get('one') ?? null);
-    expect(detail.result).toBe('finished');
+    expect(detail.result).toBeNull();
     expect(detail.usage).toEqual(usage);
     expect(detail.isRunning).toBe(false);
   });
@@ -429,11 +429,10 @@ describe('delta/snapshot parity', () => {
 
   it('reaches terminal parity: live entry removed, record replaced at the same revision', () => {
     const usage: Usage = { prompt_tokens: 3, cached_tokens: 0, completion_tokens: 2, total_tokens: 5, reasoning_tokens: 0 };
-    const done: SubagentRecord = {
+    const done: SubagentSummary = {
       ...record(id, 'completed'),
       end_time: '2026-01-01T00:00:05.000Z',
-      result: 'finished',
-      chain: { messages: [{ usage }] } as SubagentRecord['chain'],
+      usage,
     };
     const revision = 12;
     const fromDeltas = applyDeltaBatch(
@@ -497,25 +496,20 @@ describe('hydration buffering and reseed floor', () => {
     expect(state.hydration).toBe('loading');
   });
 
-  it('enforces the byte bound for record-carrying deltas (spawned with populated chain)', () => {
+  it('keeps lifecycle record carriers bounded regardless of transcript size', () => {
     let state = bindSubagentSession(createSubagentStreamState(), sessionA);
-    const chainMessages = Array.from({ length: 20 }, (_, i) => ({
-      id: `msg-${i}`, role: 'assistant', content: 'x'.repeat(100), type: 'text',
-      tool_calls: null, tool_call_id: null, name: null, thinking: null,
-      timestamp: '2026-01-01T00:00:00.000Z', usage: null, hidden: false, tool_result: null,
-    }));
-    const heavyRecord: SubagentRecord = {
+    const summary: SubagentSummary = {
       ...record('heavy', 'running'),
-      chain: { messages: chainMessages } as SubagentRecord['chain'],
+      task: 'x'.repeat(100),
     };
-    const spawnEvent = spawned('heavy', 'run-heavy', heavyRecord, 1, 5);
+    const spawnEvent = spawned('heavy', 'run-heavy', summary, 1, 5);
     const eventBytes = estimateDeltaBytes(spawnEvent);
-    expect(eventBytes).toBeGreaterThan(2048);
+    expect(eventBytes).toBeLessThan(2048);
 
     state = applyDeltaBatch(state, batch([spawnEvent]), { hydrationBufferBytes: 2048 });
-    expect(state.buffered).toHaveLength(0);
-    expect(state.bufferedBytes).toBe(0);
-    expect(state.reseedFloor).toBe(5);
+    expect(state.buffered).toEqual([spawnEvent]);
+    expect(state.bufferedBytes).toBe(eventBytes);
+    expect(state.reseedFloor).toBeNull();
     expect(state.hydration).toBe('loading');
   });
 
@@ -627,10 +621,10 @@ describe('snapshot hydration guards', () => {
     expect(state.records).toEqual([stale]);
     expect(isSubagentSnapshotAffine(state, snapshot(sessionA, 2, []), state.generation)).toBe(true);
     state = applyDeltaBatch(state, batch([textDelta(2, 'more', { sessionRevision: 2 })]));
-    const fresh = { ...record('one', 'completed'), chain: { messages: [{ role: 'assistant', content: 'durable' }] } as SubagentRecord['chain'] };
+    const fresh = { ...record('one', 'completed'), task: 'fresh durable summary' };
     state = seedSubagentSnapshot(state, snapshot(sessionA, 2, [fresh], [projection({ subagentId: 'one', sequence: 1 })]));
     expect(state.generation).toBe(generation + 1);
-    expect(state.records[0].chain.messages).toEqual([{ role: 'assistant', content: 'durable' }]);
+    expect(state.records[0].task).toBe('fresh durable summary');
     expect(state.live.get('one')?.sequence).toBe(2);
   });
 
@@ -690,10 +684,10 @@ describe('subagent usage summary identity (U5 history input)', () => {
     expect(state.live.get('one')?.usage).toEqual(runUsage);
     expect(deriveSubagentUsageSummary(state.records, summary)).toBe(summary);
 
-    const done: SubagentRecord = {
+    const done: SubagentSummary = {
       ...record('one', 'completed'),
       end_time: '2026-01-01T00:00:05.000Z',
-      chain: { messages: [{ usage: runUsage }] } as SubagentRecord['chain'],
+      usage: runUsage,
     };
     state = applyDeltaBatch(state, batch([terminal('one', 'run-1', done, 3, runUsage)]));
     const updated = deriveSubagentUsageSummary(state.records, summary);
@@ -745,7 +739,7 @@ describe('run rotation for resumed subagents', () => {
     ]));
     expect(state.live.get('one')?.segments).toEqual([{ kind: 'text', id: 'seg-text', content: 'run A work' }]);
 
-    const doneA = { ...record('one', 'completed'), end_time: '2026-01-01T00:00:05.000Z', result: 'A done' };
+    const doneA = { ...record('one', 'completed'), end_time: '2026-01-01T00:00:05.000Z' };
     state = applyDeltaBatch(state, batch([terminal('one', 'run-A', doneA, 2, null, 3)]));
     expect(state.live.has('one')).toBe(false);
     expect(state.records[0].status).toBe('completed');
@@ -765,12 +759,11 @@ describe('run rotation for resumed subagents', () => {
     expect(state.highWater.get('one')).toBe(1);
 
     // Run B terminal replaces the record with run B's authoritative record.
-    const doneB = { ...record('one', 'completed'), end_time: '2026-01-01T00:02:00.000Z', result: 'B done' };
+    const doneB = { ...record('one', 'completed'), end_time: '2026-01-01T00:02:00.000Z' };
     state = applyDeltaBatch(state, batch([terminal('one', 'run-B', doneB, 2, null, 6)]));
     expect(state.live.has('one')).toBe(false);
     expect(state.records).toHaveLength(1);
     expect(state.records[0]).toBe(doneB);
-    expect(state.records[0].result).toBe('B done');
   });
 
   it('drops late deltas from the old run after rotation', () => {
@@ -780,7 +773,7 @@ describe('run rotation for resumed subagents', () => {
       textDelta(1, 'A', { runId: 'run-A', sessionRevision: 2 }),
     ]));
     state = applyDeltaBatch(state, batch([
-      terminal('one', 'run-A', { ...record('one', 'completed'), result: 'A' }, 2, null, 3),
+      terminal('one', 'run-A', record('one', 'completed'), 2, null, 3),
     ]));
 
     // Rotate to run B.
@@ -804,7 +797,7 @@ describe('run rotation for resumed subagents', () => {
       spawned('one', 'run-A', record('one', 'pending'), 0, 1),
     ]));
     state = applyDeltaBatch(state, batch([
-      terminal('one', 'run-A', { ...record('one', 'completed'), result: 'done' }, 1, null, 2),
+      terminal('one', 'run-A', record('one', 'completed'), 1, null, 2),
     ]));
     expect(state.records[0].status).toBe('completed');
 
@@ -815,7 +808,6 @@ describe('run rotation for resumed subagents', () => {
     expect(state.records).toHaveLength(1);
     expect(state.records[0]).toBe(resumed);
     expect(state.records[0].status).toBe('running');
-    expect(state.records[0].result).toBeNull();
   });
 
   it('leaves the stream and record untouched for a duplicate spawned of the same run', () => {
@@ -843,7 +835,7 @@ describe('run rotation for resumed subagents', () => {
       spawned('one', 'run-A', record('one', 'pending'), 0, 1),
     ]));
     state = applyDeltaBatch(state, batch([
-      terminal('one', 'run-A', { ...record('one', 'completed'), result: 'done' }, 1, null, 2),
+      terminal('one', 'run-A', record('one', 'completed'), 1, null, 2),
     ]));
     expect(groupSubagents(state.records).ended.map((item) => item.id)).toEqual(['one']);
 
@@ -855,7 +847,7 @@ describe('run rotation for resumed subagents', () => {
 
     // Terminal again, then a resume parked in the queue lands in the queued bucket.
     state = applyDeltaBatch(state, batch([
-      terminal('one', 'run-B', { ...record('one', 'completed'), result: 'done again' }, 1, null, 4),
+      terminal('one', 'run-B', record('one', 'completed'), 1, null, 4),
     ]));
     expect(groupSubagents(state.records).ended.map((item) => item.id)).toEqual(['one']);
     state = applyDeltaBatch(state, batch([spawned('one', 'run-C', record('one', 'queued'), 0, 5)]));

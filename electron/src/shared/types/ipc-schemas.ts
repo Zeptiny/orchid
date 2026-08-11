@@ -100,6 +100,17 @@ const messageSchema = z.object({
   tool_result: canonicalToolResultSchema.nullable(),
 }).strict();
 
+/**
+ * Minimum durable chain shape required by renderer consumers. Remaining chain
+ * metadata stays passthrough so this boundary does not duplicate the domain
+ * schema, while `id`/`sessionId`/`messages` can never disappear silently.
+ */
+const ipcChainEnvelopeSchema = z.object({
+  id: z.string().min(1),
+  sessionId: z.string(),
+  messages: z.array(messageSchema),
+}).passthrough();
+
 // ── Chat events ──────────────────────────────────────────────────────────────
 
 export const chatChunkEventSchema = chatEventIdentitySchema.extend({
@@ -203,6 +214,14 @@ export const sessionCreatedEventSchema = z.object({
   session: sessionIdentitySchema,
   draftGeneration: z.number().optional(),
 });
+
+/** The patch envelope is strict and its changed chain is structurally present. */
+export const sessionUpdatedEventSchema = z.object({
+  sessionId: z.string().min(1),
+  chain: ipcChainEnvelopeSchema,
+  activeChainId: z.string().nullable(),
+  updatedAt: z.string(),
+}).strict();
 
 export const trustStateSchema = z.enum(['trusted', 'untrusted', 'changed']);
 
@@ -531,14 +550,25 @@ export const ipcSubagentRecordSchema = z.object({
   result: z.string().nullable(), error: z.string().nullable(), parentChainIndex: z.number().int().nullable(),
   reasoning_effort: z.union([z.string(), z.number()]).optional(),
   closed: z.boolean().default(false),
-  chain: z.unknown(),
+  chain: ipcChainEnvelopeSchema,
 });
+export const ipcSubagentSummarySchema = z.object({
+  id: z.string(), agent_name: z.string(), agent_type: z.string(), agent_tier: z.string(),
+  agentRole: z.string(), task: z.string(), status: subagentStatusSchema,
+  chain_id: z.string(), start_time: z.string(), end_time: z.string().nullable(),
+  parentChainIndex: z.number().int().nullable(), usage: usageSchema.nullable(),
+}).strict();
 export const subagentSnapshotSchema = z.object({
   sessionId: z.string().uuid(),
   sessionRevision: z.number().int().nonnegative(),
-  records: z.array(ipcSubagentRecordSchema),
+  records: z.array(ipcSubagentSummarySchema),
   live: z.array(subagentLiveProjectionSchema),
 });
+export const subagentDetailResultSchema = z.object({
+  sessionId: z.string().uuid(),
+  subagentId: z.string(),
+  record: ipcSubagentRecordSchema.nullable(),
+}).strict();
 
 // ── Subagent live delta events ───────────────────────────────────────────────
 
@@ -550,7 +580,7 @@ const subagentDeltaBaseSchema = z.object({
   sessionRevision: z.number().int().nonnegative(),
 });
 export const subagentSpawnedEventSchema = subagentDeltaBaseSchema.extend({
-  type: z.literal('spawned'), record: ipcSubagentRecordSchema, usage: usageSchema.nullable(),
+  type: z.literal('spawned'), record: ipcSubagentSummarySchema, usage: usageSchema.nullable(),
 });
 export const subagentTextDeltaEventSchema = subagentDeltaBaseSchema.extend({
   type: z.literal('text_delta'), segmentId: z.string(), append: z.string(),
@@ -575,7 +605,7 @@ export const subagentUsageEventSchema = subagentDeltaBaseSchema.extend({
   type: z.literal('usage'), usage: usageSchema,
 });
 export const subagentTerminalEventSchema = subagentDeltaBaseSchema.extend({
-  type: z.literal('terminal'), record: ipcSubagentRecordSchema,
+  type: z.literal('terminal'), record: ipcSubagentSummarySchema,
   state: z.enum(['completed', 'failed', 'interrupted']), usage: usageSchema.nullable(),
 });
 export const subagentDeltaEventSchema = z.discriminatedUnion('type', [

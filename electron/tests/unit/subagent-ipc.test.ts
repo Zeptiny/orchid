@@ -2,11 +2,16 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ALLOWED_EVENT_CHANNELS, ALLOWED_INVOKE_CHANNELS, IPC_CHANNELS, type SubagentEvent } from '../../src/shared/types/ipc';
 import {
   subagentDeltaEventSchema,
+  subagentDetailResultSchema,
   subagentEventSchema,
+  sessionUpdatedEventSchema,
   subagentSnapshotSchema,
 } from '../../src/shared/types/ipc-schemas';
 import { SubagentDeltaEventType, type SubagentDeltaEvent } from '../../src/shared/types/subagent';
-import { subagentSnapshotSchema as requestSchema } from '../../src/main/ipc/payload-schemas';
+import {
+  subagentDetailSchema as detailRequestSchema,
+  subagentSnapshotSchema as requestSchema,
+} from '../../src/main/ipc/payload-schemas';
 import {
   createSubagentPersistenceScheduler,
   persistSubagentChains,
@@ -16,6 +21,7 @@ import {
   createSubagentDeltaBatcher as createIpcSubagentDeltaBatcher,
   deliverSubagentDeltaEvent as deliverIpcSubagentDeltaEvent,
   mergeSubagentRecords,
+  selectSubagentDetailRecord,
 } from '../../src/main/ipc/subagents';
 import {
   createSubagentDeltaBatcher,
@@ -54,7 +60,15 @@ vi.mock('../../src/main/session/singleton', () => ({
 const record = (id: string, status: string) => ({
   id, agent_name: 'agent', agent_type: 'subagent', agent_tier: 'bloom', task: id,
   status, chain_id: id, start_time: new Date(0).toISOString(), end_time: null,
-  result: null, error: null, parentChainIndex: null, chain: {} as never,
+  result: null, error: null, parentChainIndex: null,
+  chain: { id, sessionId: session, messages: [] } as never,
+}) as never;
+
+const summary = (id: string, status: string) => ({
+  id, agent_name: 'agent', agent_type: 'subagent', agent_tier: 'bloom',
+  agentRole: 'general', task: id, status, chain_id: id,
+  start_time: new Date(0).toISOString(), end_time: null,
+  parentChainIndex: null, usage: null,
 }) as never;
 
 const deltaBase = { sessionId: session, subagentId: 'subagent-1', runId: uuid, sessionRevision: 0 };
@@ -65,7 +79,7 @@ const textDelta = (sequence: number, append: string, segmentId = 'seg-1'): Subag
 
 const terminalDelta = (sequence: number): SubagentDeltaEvent => ({
   ...deltaBase, sequence, type: 'terminal',
-  record: record('subagent-1', 'completed'), state: 'completed', usage: null,
+  record: summary('subagent-1', 'completed'), state: 'completed', usage: null,
 });
 
 describe('subagent IPC boundary', () => {
@@ -82,9 +96,44 @@ describe('subagent IPC boundary', () => {
     expect(requestSchema.safeParse({ sessionId: uuid }).success).toBe(true);
   });
 
+  it('requires a session-affine selected subagent detail request', () => {
+    expect(detailRequestSchema.safeParse({ sessionId: uuid, subagentId: 'subagent-1' }).success).toBe(true);
+    expect(detailRequestSchema.safeParse({ sessionId: 'bad', subagentId: 'subagent-1' }).success).toBe(false);
+    expect(detailRequestSchema.safeParse({ sessionId: uuid, subagentId: '' }).success).toBe(false);
+    expect(detailRequestSchema.safeParse({ sessionId: uuid, subagentId: 'subagent-1', extra: true }).success).toBe(false);
+  });
+
+  it('requires the changed chain in a strict session update patch', () => {
+    const update = {
+      sessionId: session,
+      chain: { id: 'chain-1', sessionId: session, messages: [] },
+      activeChainId: null,
+      updatedAt: new Date(0).toISOString(),
+    };
+    expect(sessionUpdatedEventSchema.safeParse(update).success).toBe(true);
+    expect(sessionUpdatedEventSchema.safeParse({ ...update, chain: undefined }).success).toBe(false);
+    expect(sessionUpdatedEventSchema.safeParse({ ...update, subagentChains: [] }).success).toBe(false);
+  });
+
   it('keeps the new invoke/event channels allowlisted exactly once', () => {
     expect(ALLOWED_INVOKE_CHANNELS.filter((channel) => channel === IPC_CHANNELS.SUBAGENTS_SNAPSHOT)).toHaveLength(1);
+    expect(ALLOWED_INVOKE_CHANNELS.filter((channel) => channel === IPC_CHANNELS.SUBAGENTS_DETAIL)).toHaveLength(1);
     expect(ALLOWED_EVENT_CHANNELS.filter((channel) => channel === IPC_CHANNELS.SUBAGENTS_EVENT)).toHaveLength(1);
+  });
+
+  it('validates one selected full record as a detail response', () => {
+    const result = {
+      sessionId: session,
+      subagentId: 'subagent-1',
+      record: record('subagent-1', 'completed'),
+    };
+    expect(subagentDetailResultSchema.safeParse(result).success).toBe(true);
+    expect(subagentDetailResultSchema.safeParse({ ...result, subagentId: 'other', extra: true }).success).toBe(false);
+    expect(subagentDetailResultSchema.safeParse({ ...result, record: null }).success).toBe(true);
+    expect(subagentDetailResultSchema.safeParse({
+      ...result,
+      record: { ...result.record, chain: undefined },
+    }).success).toBe(false);
   });
 
   it('accepts canonical terminal tool snapshots and rejects terminal string-only snapshots', () => {
@@ -139,6 +188,16 @@ describe('subagent IPC boundary', () => {
     expect(merged).toHaveLength(2);
     expect(merged.find((item) => item.id === 'evicted-1')?.status).toBe('completed');
     expect(merged.find((item) => item.id === 'active-1')?.status).toBe('running');
+  });
+
+  it('selects exactly one detail transcript with runtime precedence', () => {
+    const stored = [record('first', 'completed'), record('selected', 'completed')];
+    const runtime = [{ ...record('selected', 'running'), task: 'runtime transcript' }];
+
+    const selected = selectSubagentDetailRecord('selected', stored, runtime[0]);
+
+    expect(selected?.task).toBe('runtime transcript');
+    expect(selectSubagentDetailRecord('missing', stored, runtime[0])).toBeNull();
   });
 
   it('targets batched delta envelopes only at non-destroyed windows owning the session', () => {
@@ -534,7 +593,7 @@ describe('subagent delta event protocol (U1)', () => {
 
   const canonical = createCanonicalToolResult('generic', { status: 'complete', data: { value: 'done' } });
   const deltas: SubagentDeltaEvent[] = [
-    { ...base, type: 'spawned', record: record('subagent-1', 'running'), usage: null },
+    { ...base, type: 'spawned', record: summary('subagent-1', 'running'), usage: null },
     { ...base, type: 'text_delta', segmentId: 'seg-text', append: 'hel', sequence: 2 },
     { ...base, type: 'thinking_delta', segmentId: 'seg-think', append: 'hmm', sequence: 3 },
     {
@@ -547,7 +606,7 @@ describe('subagent delta event protocol (U1)', () => {
       toolResult: canonical, finishedAt: new Date(1).toISOString(), sequence: 6,
     },
     { ...base, type: 'usage', usage, sequence: 7 },
-    { ...base, type: 'terminal', record: record('subagent-1', 'completed'), state: 'completed', usage, sequence: 8 },
+    { ...base, type: 'terminal', record: summary('subagent-1', 'completed'), state: 'completed', usage, sequence: 8 },
   ];
 
   it('covers every delta variant in an exhaustive switch and validates each against the wire schema', () => {
@@ -599,8 +658,28 @@ describe('subagent delta event protocol (U1)', () => {
     expect(subagentSnapshotSchema.safeParse({ ...valid, sessionRevision: -1 }).success).toBe(false);
   });
 
+  it('rejects eager transcript records in snapshot and lifecycle delta payloads', () => {
+    const eagerRecord = record('subagent-eager', 'completed');
+    const snapshot = {
+      sessionId: session,
+      sessionRevision: 1,
+      records: [eagerRecord],
+      live: [],
+    };
+    const terminal = {
+      ...base,
+      type: 'terminal',
+      record: eagerRecord,
+      state: 'completed',
+      usage: null,
+    };
+
+    expect(subagentSnapshotSchema.safeParse(snapshot).success).toBe(false);
+    expect(subagentDeltaEventSchema.safeParse(terminal).success).toBe(false);
+  });
+
   it('accepts a spawned-delta envelope carrying a queued record (U7 admission queue)', () => {
-    const queued = { ...base, type: 'spawned', record: record('subagent-queued', 'queued'), usage: null };
+    const queued = { ...base, type: 'spawned', record: summary('subagent-queued', 'queued'), usage: null };
     expect(subagentEventSchema.safeParse({ sessionId: session, events: [queued] }).success).toBe(true);
   });
 
@@ -611,7 +690,7 @@ describe('subagent delta event protocol (U1)', () => {
     const snapshot = {
       sessionId: session,
       sessionRevision: 1,
-      records: [record('subagent-queued', 'queued')],
+      records: [summary('subagent-queued', 'queued')],
       live: [{
         sessionId: session, subagentId: 'subagent-queued', runId: uuid, sequence: 0,
         state: 'queued', segments: [], toolCalls: [], usage: null, result: null, error: null,
@@ -760,9 +839,9 @@ describe('subagent delta batcher (U3)', () => {
     for (let sequence = 1; sequence <= 4; sequence += 1) {
       batcher.queue(usageDelta(sequence));
     }
-    batcher.queue({ ...baseFields, sequence: 5, type: 'spawned', record: record('subagent-1', 'running'), usage: null });
+    batcher.queue({ ...baseFields, sequence: 5, type: 'spawned', record: summary('subagent-1', 'running'), usage: null });
     batcher.queue({
-      ...baseFields, sequence: 6, type: 'terminal', record: record('subagent-1', 'completed'), state: 'completed', usage: null,
+      ...baseFields, sequence: 6, type: 'terminal', record: summary('subagent-1', 'completed'), state: 'completed', usage: null,
     });
 
     vi.advanceTimersByTime(16);
@@ -784,7 +863,7 @@ describe('subagent delta batcher (U3)', () => {
       ...baseFields,
       sequence: 1,
       type: 'spawned',
-      record: { ...record('subagent-1', 'running'), task: 'x'.repeat(2_000) },
+      record: { ...summary('subagent-1', 'running'), task: 'x'.repeat(2_000) },
       usage: null,
     });
     batcher.queue({ ...baseFields, sequence: 2, type: 'status_changed', status: 'running' });
@@ -792,7 +871,7 @@ describe('subagent delta batcher (U3)', () => {
       ...baseFields,
       sequence: 3,
       type: 'terminal',
-      record: record('subagent-1', 'completed'),
+      record: summary('subagent-1', 'completed'),
       state: 'completed',
       usage: null,
     });
