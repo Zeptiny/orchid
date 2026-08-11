@@ -77,6 +77,11 @@ Shared domain vocabulary for the orchid project. This file defines terms used ac
 - **Provider Connection** — One user-configured account or endpoint attached to a provider definition, with its own credentials, settings, models, and usage attribution. Multiple connections may use the same provider definition.
 - **Pricing Snapshot** — The immutable pricing inputs and provenance frozen when a provider request starts and retained with its accounting record.
 - **Request Cost Record** — Immutable usage and billing evidence for one attributable provider request. Chain and session costs are derived from these records.
+- **Provider Facet** — An optional, code-owned driver capability (quota, currency, dynamic pricing, caching, thinking, tiers) with typed metadata consumed generically by UI and accounting. Remote and user data may select among declared options but never construct requests or introduce behavior.
+- **Pricing Ladder** — Cost resolution order: API-reported cost wins, then API-reported usage priced by rates resolved provider pricing API → user-set rates → catalog rates. Every resolved cost carries provenance of the rung that produced it.
+- **Thinking Policy** — A per-driver/model declaration of reasoning handling: exposure (`readable`, `summary`, `opaque`, `none`), replay rule (`mandatory-in-tool-loop`, `recommended`, `impossible`), and provider request knobs. Replay artifacts are persisted with the chain and stripped on provider/model switch.
+- **Service Tier Mechanism** — Provider tiering expressed either as a request parameter (e.g. OpenRouter `service_tier`) or model-name variants (e.g. Neuralwatt `-flex`/`-fast`/`-short`). Variant tiers are grouped under one base model entry with no duplicate rows; selection is per-model with session override.
+- **Unified Model Listing** — The single per-connection model list that treats catalog, live-discovered, and user-custom models identically (enable/disable, pricing override, reasoning levels, tier selection), distinguished only by a provenance badge.
 
 ## Trusted Projects
 
