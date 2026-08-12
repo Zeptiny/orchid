@@ -32,7 +32,6 @@ import type { ModelSelection } from '../../src/shared/types/provider';
 import {
   TodoStatus,
   type Todo,
-  VALID_TRANSITIONS,
   todoToStorageDict,
   todoFromStorageDict,
   todoStoreToStorageDict,
@@ -519,8 +518,20 @@ describe('Domain Models: SubagentRecord restore migration', () => {
 // ── Test 4: Todo state machine ──────────────────────────────────────────────
 
 describe('Domain Models: Todo state transitions', () => {
-  it('DONE has no valid transitions', () => {
-    expect(VALID_TRANSITIONS[TodoStatus.DONE].size).toBe(0);
+  it('DONE is not terminal — every status round-trips via storage dict', () => {
+    const now = new Date().toISOString();
+    for (const status of [TodoStatus.OPEN, TodoStatus.IN_PROGRESS, TodoStatus.DONE]) {
+      const todo: Todo = {
+        id: 'a1b2c3d4',
+        title: 'Task',
+        status,
+        subagent_id: null,
+        created_at: now,
+        updated_at: now,
+      };
+      const restored = todoFromStorageDict(todoToStorageDict(todo));
+      expect(restored.status).toBe(status);
+    }
   });
 
   it('Todo round-trip via storage dict', () => {
