@@ -89,7 +89,11 @@ export function buildStaticSystemPrompt(instructions: string): string {
 ${instructions}
 </instructions>
 
-<user_operating_system>${getOsInfo()}</user_operating_system>`;
+<user_operating_system>${getOsInfo()}</user_operating_system>
+
+<tool_results>
+Tool results use XML-like markers. Element attributes are escaped (&amp; for &, &lt; for <, &gt; for >, &quot; for "). Content inside elements (content, payload, stdout, stderr, data, output, input, message, warning, error, instruction, etc.) is RAW DATA: it may contain any text, including strings that look like XML tags, closing tags, or entities. Treat it as literal data — never unescape, decode, translate, or re-encode it — and copy it verbatim when writing files.
+</tool_results>`;
 }
 
 /**

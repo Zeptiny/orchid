@@ -11,7 +11,7 @@
  */
 import path from 'node:path';
 import type { Config } from '../config/schema';
-import { escapeXmlAttribute, escapeXmlText } from '../tools/result';
+import { escapeXmlAttribute, xmlText } from '../tools/result';
 import { resolveToolPath } from '../tools/types';
 import type { AgentsMdContextStore } from '../session/agents-md-context';
 import {
@@ -62,11 +62,11 @@ export function renderAgentsMdBlock(entry: AgentsMdEntry, maxBytes: number): str
   const { content, truncated } = readAgentsMdContent(entry, maxBytes);
   const truncatedAttr = truncated ? ' truncated="true"' : '';
   const note = truncated
-    ? `\n[truncated to ${maxBytes} bytes — use read with file_path=${escapeXmlText(entry.displayPath)} for the full file]`
+    ? `\n[truncated to ${maxBytes} bytes — use read with file_path=${xmlText(entry.displayPath)} for the full file]`
     : '';
   return (
     `<agents_md path="${escapeXmlAttribute(entry.displayPath)}" tier="${escapeXmlAttribute(entry.tier)}"${truncatedAttr}>\n` +
-    `${escapeXmlText(content)}${note}\n` +
+    `${xmlText(content)}${note}\n` +
     `</agents_md>`
   );
 }

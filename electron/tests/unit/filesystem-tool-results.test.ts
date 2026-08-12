@@ -412,7 +412,7 @@ describe('bounded family projections', () => {
 });
 
 describe('XML agent projections', () => {
-  it('preserves read line content while escaping XML syntax', async () => {
+  it('preserves read line content verbatim as raw data', async () => {
     const filePath = writeFixture('exact.txt', '  <tag>&\nblank\n');
     const registry = new ToolRegistry();
     registry.register(readDefinition, readHandler);
@@ -426,11 +426,9 @@ describe('XML agent projections', () => {
     expect(execution.agentProjection.content).toContain(
       '<tool_result name="read" status="complete"',
     );
-    expect(execution.agentProjection.content).toContain(
-      '1 |   &lt;tag&gt;&amp;',
-    );
+    expect(execution.agentProjection.content).toContain('1 |   <tag>&');
     expect(execution.agentProjection.content).toContain('2 | blank');
-    expect(execution.agentProjection.content).not.toContain('1 | &lt;tag&gt;');
+    expect(execution.agentProjection.content).not.toContain('1 |   &lt;tag&gt;&amp;');
   });
 
   it('projects a directory read with the directory-entries tree format', async () => {

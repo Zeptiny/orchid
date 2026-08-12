@@ -18,7 +18,7 @@ import type { Skill } from '../../../shared/types/skill';
 import type { ToolDefinition, ToolHandler } from '../types';
 import { RiskClass } from '../../../shared/types/permission';
 import { genericToolResultMetadata } from '../types';
-import { genericBuiltInToolOutcome, type GenericBuiltInToolOutcome } from '../result';
+import { genericBuiltInToolOutcome, xmlText, type GenericBuiltInToolOutcome } from '../result';
 import { parseFrontmatter } from '../../../shared/utils/frontmatter';
 
 // ---------------------------------------------------------------------------
@@ -221,7 +221,7 @@ function executeResourceRead(
   const e = escapeXml;
   const content =
     `<resource skill="${e(skillName)}" path="${e(resourcePath)}">\n` +
-    `<content>${e(fileContent)}</content>\n` +
+    `<content>${xmlText(fileContent)}</content>\n` +
     `</resource>`;
 
   return genericBuiltInToolOutcome('skill', content, 'complete');
@@ -283,7 +283,7 @@ function executeSkill(
       `Skill '${skill.name}' loaded (no content file found)`;
     parts.push(
       `<instructions skill="${e(skill.name)}">\n` +
-        `${e(skillContent)}\n` +
+        `${xmlText(skillContent)}\n` +
         `</instructions>`,
     );
 

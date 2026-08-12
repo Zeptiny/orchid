@@ -5,7 +5,7 @@
  */
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { escapeXmlAttribute, escapeXmlText } from '../result';
+import { escapeXmlAttribute, xmlText } from '../result';
 import { safeFsync } from '../../utils/safe-fsync';
 
 // ---------------------------------------------------------------------------
@@ -166,7 +166,7 @@ export function formatEditResult(opts: {
 
   const lines = [`<edit_result ${attrs.join(' ')}>`];
   if (opts.message) {
-    lines.push('<message>' + escapeXmlText(opts.message) + '</message>');
+    lines.push('<message>' + xmlText(opts.message) + '</message>');
   }
   lines.push('</edit_result>');
   return lines.join('\n');

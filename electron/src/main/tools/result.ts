@@ -45,13 +45,16 @@ const XML_ILLEGAL_CONTROL_CHARS = new RegExp(
   'g',
 );
 
-/** Escape text for an XML element. Strips XML 1.0 illegal control characters. */
-export function escapeXmlText(value: unknown): string {
-  return String(value ?? '')
-    .replace(XML_ILLEGAL_CONTROL_CHARS, '')
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;');
+/**
+ * Raw text for an XML element. Strips XML 1.0 illegal control characters but
+ * does NOT entity-escape: element content is raw data by contract and may
+ * contain anything, including strings that look like tags, closing tags, or
+ * entities. The agent must copy it verbatim, never translate it (see the
+ * `<tool_results>` contract in the static system prompt). Only attribute
+ * values are escaped (escapeXmlAttribute).
+ */
+export function xmlText(value: unknown): string {
+  return String(value ?? '').replace(XML_ILLEGAL_CONTROL_CHARS, '');
 }
 
 /** Escape a value for an XML attribute. Strips XML 1.0 illegal control characters. */
@@ -82,7 +85,7 @@ export function renderXmlToolResult(
   const status = statusOverride ?? canonical.status;
   const error = canonical.status === 'error'
     ? '<error code="' + escapeXmlAttribute(canonical.error.code) + '">' +
-      escapeXmlText(canonical.error.message) + '</error>'
+      xmlText(canonical.error.message) + '</error>'
     : '';
   const payload = canonical.status === 'error' && !includeBodyOnError
     ? error
@@ -97,7 +100,7 @@ export function renderXmlToolResult(
 }
 
 export function xmlTextElement(name: string, value: string): string {
-  return '<' + name + '>' + escapeXmlText(value) + '</' + name + '>';
+  return '<' + name + '>' + xmlText(value) + '</' + name + '>';
 }
 
 export function renderRetrieval(retrieval: ToolResultRetrieval | undefined): string {
@@ -170,7 +173,7 @@ function renderExecuteCommandPayload(record: Record<string, JsonValue>): string 
 function renderReadOutputPayload(record: Record<string, JsonValue>): string {
   return [
     '<output command_id="' + escapeXmlAttribute(record.commandId) + '">' +
-      escapeXmlText(typeof record.output === 'string' ? record.output : '') +
+      xmlText(typeof record.output === 'string' ? record.output : '') +
       '</output>',
     typeof record.exitCode === 'number'
       ? xmlTextElement('exit_code', String(record.exitCode))
@@ -180,7 +183,7 @@ function renderReadOutputPayload(record: Record<string, JsonValue>): string {
 
 function renderSendInputPayload(record: Record<string, JsonValue>): string {
   return '<input command_id="' + escapeXmlAttribute(record.commandId) + '">' +
-    escapeXmlText(typeof record.input === 'string' ? record.input : '') +
+    xmlText(typeof record.input === 'string' ? record.input : '') +
     '</input>';
 }
 
@@ -277,7 +280,7 @@ function renderRagSearchPayload(record: Record<string, JsonValue>): string {
 }
 
 function renderReadMcpResourcePayload(record: Record<string, JsonValue>): string {
-  return '<content>' + escapeXmlText(record.content as string) + '</content>';
+  return '<content>' + xmlText(record.content as string) + '</content>';
 }
 
 function renderListMcpResourcesPayload(record: Record<string, JsonValue>): string {
@@ -349,7 +352,7 @@ function renderGetFileSkeletonPayload(record: Record<string, JsonValue>): string
     '" count="' + definitions.length +
     '" format="line | name | line_count">\n' +
     definitions.map((def) =>
-      escapeXmlText(String(def.line) + ' | ' + String(def.name) + ' | ' + String(def.lineCount)),
+      xmlText(String(def.line) + ' | ' + String(def.name) + ' | ' + String(def.lineCount)),
     ).join('\n') +
     '\n</definitions>';
 }
@@ -585,7 +588,7 @@ export const fileContentAgentProjector: AgentProjector = (canonical, toolName = 
     ? 'none'
     : parsed.returnedRange.start + '-' + parsed.returnedRange.end;
   const lines = parsed.lines
-    .map((line) => escapeXmlText(line.number + ' | ' + line.content))
+    .map((line) => xmlText(line.number + ' | ' + line.content))
     .join('\n');
   const content = '<content format="line | content">' +
     (lines.length > 0 ? '\n' + lines + '\n' : '') +
@@ -684,8 +687,8 @@ const searchResultsAgentProjector: AgentProjector = (canonical, toolName) => {
     '" pattern="' + escapeXmlAttribute(parsed.pattern) + '" />';
   const isGlob = parsed.kind === 'glob';
   const rows = parsed.matches.map((match) => 'line' in match
-    ? escapeXmlText(match.path + ' | ' + match.line + ' | ' + match.text)
-    : escapeXmlText(match.path));
+    ? xmlText(match.path + ' | ' + match.line + ' | ' + match.text)
+    : xmlText(match.path));
   const list = isGlob
     ? '<files format="path-per-line">' +
       (rows.length > 0 ? '\n' + rows.join('\n') + '\n' : '') +
@@ -696,8 +699,8 @@ const searchResultsAgentProjector: AgentProjector = (canonical, toolName) => {
   const resolvedToolName = toolName ?? parsed.kind;
   if (parsed.matches.length > 100) {
     const boundedRows = parsed.matches.slice(0, 100).map((match) => 'line' in match
-      ? escapeXmlText(match.path + ' | ' + match.line + ' | ' + match.text)
-      : escapeXmlText(match.path));
+      ? xmlText(match.path + ' | ' + match.line + ' | ' + match.text)
+      : xmlText(match.path));
     const boundedList = parsed.kind === 'glob'
       ? '<files format="path-per-line">\n' + boundedRows.join('\n') + '\n</files>'
       : '<matches format="path | line | content">\n' + boundedRows.join('\n') + '\n</matches>';
