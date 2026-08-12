@@ -1,5 +1,6 @@
 /**
- * Tool-side hydration helper for the close/follow-up subagent tools (U3).
+ * Hydration helpers for the close/follow-up subagent tools (U3) and for
+ * session open (R9).
  *
  * Records whose full form lives only in `session.subagentChains` — evicted lean
  * summaries and everything persisted before the current app launch — are
@@ -12,6 +13,7 @@
 import type { Agent } from '../../../shared/types/agent';
 import type { SubagentRecord as DomainSubagentRecord } from '../../../shared/types/subagent';
 import type { HydrateSpec, SubagentManager } from '../../agents/manager';
+import type { ProjectRuntime } from '../../project/runtime';
 import type { ToolExecutionContext } from '../types';
 
 export interface HydrateSubagentRecordsResult {
@@ -19,6 +21,13 @@ export interface HydrateSubagentRecordsResult {
   hydrated: string[];
   /** Ids whose stored agent definition is no longer in the project registry. */
   agentMissing: string[];
+}
+
+/** Runtime resolution inputs shared by the tool and session-open paths. */
+export interface HydrateSubagentDeps {
+  projectRuntime?: ProjectRuntime | null;
+  windowId?: string | null;
+  cwd?: string | null;
 }
 
 /**
@@ -31,11 +40,11 @@ export interface HydrateSubagentRecordsResult {
  * reported in `agentMissing` and not hydrated (synthesizing a permissive
  * fallback agent would grant tools the original definition may not have allowed).
  */
-export async function hydrateSubagentRecords(
+async function hydrateStoredRecords(
   manager: SubagentManager,
   sessionId: string,
   ids: string[],
-  ctx: ToolExecutionContext,
+  deps: HydrateSubagentDeps,
 ): Promise<HydrateSubagentRecordsResult> {
   const hydrated: string[] = [];
   const agentMissing: string[] = [];
@@ -64,7 +73,7 @@ export async function hydrateSubagentRecords(
     storedById.set(record.id, record);
   }
 
-  const agents: ReadonlyMap<string, Agent> = ctx.projectRuntime?.agents ?? new Map();
+  const agents: ReadonlyMap<string, Agent> = deps.projectRuntime?.agents ?? new Map();
   const specs: HydrateSpec[] = [];
   for (const id of needsHydration) {
     const domain = storedById.get(id);
@@ -79,9 +88,9 @@ export async function hydrateSubagentRecords(
       agent,
       domain,
       sessionId,
-      windowId: ctx.windowId ?? null,
-      cwd: session.cwd ?? ctx.cwd ?? null,
-      projectRuntime: ctx.projectRuntime,
+      windowId: deps.windowId ?? null,
+      cwd: session.cwd ?? deps.cwd ?? null,
+      projectRuntime: deps.projectRuntime ?? undefined,
     });
   }
 
@@ -96,4 +105,69 @@ export async function hydrateSubagentRecords(
   }
 
   return { hydrated, agentMissing };
+}
+
+/**
+ * Tool-path entry: hydrate the given ids from durable storage, resolving the
+ * project definitions from the frozen per-turn runtime.
+ */
+export async function hydrateSubagentRecords(
+  manager: SubagentManager,
+  sessionId: string,
+  ids: string[],
+  ctx: ToolExecutionContext,
+): Promise<HydrateSubagentRecordsResult> {
+  return hydrateStoredRecords(manager, sessionId, ids, {
+    projectRuntime: ctx.projectRuntime,
+    windowId: ctx.windowId,
+    cwd: ctx.cwd,
+  });
+}
+
+/**
+ * Session-open entry: materialize every stored subagent chain of one session
+ * back into the runtime manager, so the main agent regains its subagent context
+ * after an app restart. The UI already renders stored rows; the dynamic system
+ * prompt and the wait/interrupt/answer tools only see the manager, which starts
+ * empty each launch.
+ *
+ * Idempotent: live full records win and are never replaced, so repeated opens
+ * are no-ops. Records whose stored `agent_type` no longer resolves are left in
+ * storage (the tool path reports them as `agentMissing`). When the project
+ * runtime cannot be resolved (directory deleted/moved, runtime load failure)
+ * hydration is skipped entirely — the session is unusable without it.
+ */
+export async function hydrateSessionSubagents(
+  manager: SubagentManager,
+  sessionId: string,
+  deps: HydrateSubagentDeps = {},
+): Promise<HydrateSubagentRecordsResult> {
+  const { getSessionManager } = await import('../../session/singleton.js');
+  const session = getSessionManager().getSession(sessionId);
+  if (!session || session.subagentChains.length === 0) {
+    return { hydrated: [], agentMissing: [] };
+  }
+
+  let projectRuntime: ProjectRuntime | null = deps.projectRuntime ?? null;
+  const cwd = session.cwd ?? deps.cwd ?? null;
+  if (!projectRuntime && cwd) {
+    try {
+      const { getProjectRuntimeRegistry } = await import('../../project/runtime.js');
+      projectRuntime = getProjectRuntimeRegistry().get(cwd);
+    } catch {
+      // Project directory deleted/moved or runtime load failed; leave the
+      // records stored and visible in the UI.
+      projectRuntime = null;
+    }
+  }
+  if (!projectRuntime) {
+    return { hydrated: [], agentMissing: [] };
+  }
+
+  return hydrateStoredRecords(
+    manager,
+    sessionId,
+    session.subagentChains.map((record) => record.id),
+    { projectRuntime, windowId: deps.windowId, cwd },
+  );
 }

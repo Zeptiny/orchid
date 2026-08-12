@@ -213,6 +213,26 @@ function emitWorkspaceChanged(
   sender.send(IPC_CHANNELS.SESSION_WORKSPACE_CHANGED, { workspace });
 }
 
+/**
+ * Materialize a session's persisted subagent chains back into the runtime
+ * manager so the main agent regains its subagent context after an app restart
+ * (records live only in memory for the current launch). No-op when the records
+ * are already live or the project runtime is unresolvable. Session open must
+ * not fail because hydration could not run, so errors are contained.
+ */
+async function hydrateOpenedSessionSubagents(
+  sessionId: string,
+  windowId: string,
+): Promise<void> {
+  try {
+    const { getSubagentManager } = await import('../tools/index.js');
+    const { hydrateSessionSubagents } = await import('../tools/subagent/hydrate.js');
+    await hydrateSessionSubagents(getSubagentManager(), sessionId, { windowId });
+  } catch (error) {
+    console.warn(`[subagents] session-open hydration failed for ${sessionId}:`, error);
+  }
+}
+
 // ── IPC registration ─────────────────────────────────────────────────────────
 
 export function registerSessionIPC(): void {
@@ -250,6 +270,9 @@ export function registerSessionIPC(): void {
       // Hydrate the in-memory permission gate map from the persisted session
       // record so the override survives restarts.
       hydrateSessionPermissionOverride(session.id, session.permissionMode);
+      // Restore the runtime subagent records (prompt context + wait/interrupt)
+      // after a restart; the renderer already renders the stored rows.
+      await hydrateOpenedSessionSubagents(session.id, windowId);
     } else {
       // Drop ghost tabs when the session cannot be loaded (missing/corrupt).
       workingSetRemove(id, windowId);
@@ -301,6 +324,9 @@ export function registerSessionIPC(): void {
     if (session) {
       workingSetOpenOrFocus(session.id, windowId);
       hydrateSessionPermissionOverride(session.id, session.permissionMode);
+      // Restore the runtime subagent records (prompt context + wait/interrupt)
+      // after a restart; the renderer already renders the stored rows.
+      await hydrateOpenedSessionSubagents(session.id, windowId);
     } else {
       // Drop ghost tabs when the session cannot be loaded (missing/corrupt).
       workingSetRemove(id, windowId);

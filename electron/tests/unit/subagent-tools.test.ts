@@ -25,7 +25,7 @@ import {
   subagentRecordToStorageDict,
 } from '../../src/shared/serialization/chain-subagent';
 import { persistSubagentChains } from '../../src/main/agents/persist-subagent-chains';
-import { hydrateSubagentRecords } from '../../src/main/tools/subagent/hydrate';
+import { hydrateSubagentRecords, hydrateSessionSubagents } from '../../src/main/tools/subagent/hydrate';
 import { recoverSubagentPersistence } from '../../src/main/agents/subagent-persistence-recovery';
 import type { StreamEvent } from '../../src/main/llm/orchestrator';
 import { buildDelegateTool as buildDelegateToolRaw } from '../../src/main/tools/subagent/delegate';
@@ -1455,6 +1455,139 @@ describe('hydrateSubagentRecords helper', () => {
     expect(writesAfter).toBe(writesBefore + 1);
   });
 
+});
+
+// ── hydrateSessionSubagents (R9 session-open) ────────────────────────────────
+
+describe('hydrateSessionSubagents', () => {
+  let manager: SubagentManager;
+  const sid = 'sess-session-open-hydrate';
+
+  beforeEach(() => {
+    manager = new SubagentManager();
+    sessionManagerHolder.current = null;
+  });
+
+  afterEach(() => {
+    sessionManagerHolder.current = null;
+  });
+
+  function makeSessionRuntime(agents: Map<string, Agent>) {
+    return {
+      projectDir: '/tmp',
+      config: defaults(),
+      agents,
+      skills: new Map(),
+      personalities: new Map(),
+    };
+  }
+
+  /** Build a durable domain record (in a side manager) for the helper to load. */
+  function storedRecord(label: string, agent: Agent) {
+    const source = new SubagentManager();
+    const original = source.spawn(label, 'task text', agent, { sessionId: sid });
+    source.markCompleted(original.id, 'stored result');
+    return {
+      id: original.id,
+      domain: subagentRecordFromStorageDict(subagentRecordToStorageDict(runtimeToDomain(original))),
+    };
+  }
+
+  function setSession(subagentChains: unknown[], opts: { cwd?: string | null } = {}) {
+    const session = { id: sid, cwd: opts.cwd ?? '/tmp/session', subagentChains };
+    sessionManagerHolder.current = {
+      getSession: (id: string) => (id === sid ? session : null),
+      getActive: () => null,
+    };
+    return session;
+  }
+
+  it('hydrates every stored record of the session (app-restart case)', async () => {
+    const agents = makeAgentMap();
+    const a = storedRecord('persisted-a', codeReviewerAgent);
+    const b = storedRecord('persisted-b', fileExplorerAgent);
+    setSession([a.domain, b.domain]);
+    expect(manager.getRecord(a.id)).toBeUndefined();
+    expect(manager.getRecord(b.id)).toBeUndefined();
+
+    const result = await hydrateSessionSubagents(manager, sid, {
+      projectRuntime: makeSessionRuntime(agents),
+    });
+
+    expect(result).toEqual({ hydrated: [a.id, b.id], agentMissing: [] });
+    const restored = manager.getRecord(a.id)!;
+    expect(restored.result).toBe('stored result');
+    expect(restored.state).toBe(SubagentState.COMPLETED);
+    expect(manager.isSummary(restored.id)).toBe(false);
+    expect(manager.getRecord(b.id)?.label).toBe('persisted-b');
+  });
+
+  it('is idempotent — live full records win and are never replaced', async () => {
+    const agents = makeAgentMap();
+    const { id, domain } = storedRecord('dup', codeReviewerAgent);
+    setSession([domain]);
+
+    await hydrateSessionSubagents(manager, sid, { projectRuntime: makeSessionRuntime(agents) });
+    expect(manager.getRecord(id)).toBeDefined();
+
+    // The live record is mutated after hydration; a re-open must keep it.
+    manager.close(id);
+    const before = manager.getRecord(id)!;
+    expect(before.closed).toBe(true);
+
+    const second = await hydrateSessionSubagents(manager, sid, {
+      projectRuntime: makeSessionRuntime(agents),
+    });
+
+    expect(second).toEqual({ hydrated: [], agentMissing: [] });
+    expect(manager.getRecord(id)!.closed).toBe(true);
+  });
+
+  it('returns empty when the session has no stored subagent chains', async () => {
+    setSession([]);
+
+    const result = await hydrateSessionSubagents(manager, sid, {
+      projectRuntime: makeSessionRuntime(makeAgentMap()),
+    });
+
+    expect(result).toEqual({ hydrated: [], agentMissing: [] });
+  });
+
+  it('skips hydration when the project runtime cannot be resolved', async () => {
+    const { id, domain } = storedRecord('orphan', codeReviewerAgent);
+    setSession([domain], { cwd: '/definitely/not/a/project' });
+
+    const result = await hydrateSessionSubagents(manager, sid);
+
+    expect(result).toEqual({ hydrated: [], agentMissing: [] });
+    expect(manager.getRecord(id)).toBeUndefined();
+  });
+
+  it('reports agentMissing for stored records whose agent definition is gone', async () => {
+    // Registry WITHOUT code-reviewer, which the stored record references.
+    const agents = new Map<string, Agent>();
+    agents.set(fileExplorerAgent.name, fileExplorerAgent);
+    const { id, domain } = storedRecord('orphan', codeReviewerAgent);
+    setSession([domain]);
+
+    const result = await hydrateSessionSubagents(manager, sid, {
+      projectRuntime: makeSessionRuntime(agents),
+    });
+
+    expect(result).toEqual({ hydrated: [], agentMissing: [id] });
+    expect(manager.getRecord(id)).toBeUndefined();
+  });
+
+  it('returns empty when the session is not found', async () => {
+    sessionManagerHolder.current = {
+      getSession: () => null,
+      getActive: () => null,
+    };
+
+    const result = await hydrateSessionSubagents(manager, sid);
+
+    expect(result).toEqual({ hydrated: [], agentMissing: [] });
+  });
 });
 
 // ── follow_up_subagent (U6) ──────────────────────────────────────────────────
