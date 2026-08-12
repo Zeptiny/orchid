@@ -170,8 +170,9 @@ export const Footer = memo(function Footer({
       setReasoningConfig(null);
       return;
     }
+    const selection = model && modelDetails?.[model]?.selection ? modelDetails[model].selection : null;
     session
-      .getReasoningConfig()
+      .getReasoningConfig(selection ? { selection } : {})
       .then((config) => {
         if (!cancelled) setReasoningConfig(config);
       })
@@ -181,7 +182,7 @@ export const Footer = memo(function Footer({
     return () => {
       cancelled = true;
     };
-  }, [model, sessionId]);
+  }, [model, sessionId, modelDetails]);
 
   useEffect(() => {
     let cancelled = false;
@@ -190,8 +191,9 @@ export const Footer = memo(function Footer({
       setServiceTierConfig(null);
       return;
     }
+    const selection = model && modelDetails?.[model]?.selection ? modelDetails[model].selection : null;
     session
-      .getServiceTierConfig()
+      .getServiceTierConfig(selection ? { selection } : {})
       .then((config) => {
         if (!cancelled) setServiceTierConfig(config);
       })
@@ -201,7 +203,7 @@ export const Footer = memo(function Footer({
     return () => {
       cancelled = true;
     };
-  }, [model, sessionId]);
+  }, [model, sessionId, modelDetails]);
 
   useEffect(() => {
     const permission = window.orchid?.permission;

@@ -902,6 +902,14 @@ export interface SessionSetReasoningEffortMessage {
   effort: string | number | null;
 }
 
+export interface SessionGetReasoningConfigMessage {
+  selection?: ModelSelection | null;
+}
+
+export interface SessionGetServiceTierConfigMessage {
+  selection?: ModelSelection | null;
+}
+
 export interface SessionReasoningConfigResult {
   levels: string[];
   default: string | number | null;
@@ -1322,10 +1330,10 @@ export interface OrchidAPI {
      */
     changeCwd: (message: SessionChangeCwdMessage) => Promise<Session | null>;
     setReasoningEffort: (message: SessionSetReasoningEffortMessage) => Promise<{ status: string }>;
-    getReasoningConfig: () => Promise<SessionReasoningConfigResult>;
+    getReasoningConfig: (message?: SessionGetReasoningConfigMessage) => Promise<SessionReasoningConfigResult>;
     /** Per-session service tier override for the active model (R21). */
     setServiceTier: (message: SessionSetServiceTierMessage) => Promise<{ status: string }>;
-    getServiceTierConfig: () => Promise<SessionServiceTierConfigResult>;
+    getServiceTierConfig: (message?: SessionGetServiceTierConfigMessage) => Promise<SessionServiceTierConfigResult>;
     /** Process-wide sessions currently working, waiting, needing attention, or unread. */
     listActivity: () => Promise<SessionActivity[]>;
     /** Mark an off-screen completion as viewed. */

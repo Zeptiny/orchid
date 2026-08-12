@@ -68,6 +68,8 @@ import {
   sessionSetWorkspaceSchema,
   sessionSetReasoningEffortSchema,
   sessionSetServiceTierSchema,
+  sessionGetReasoningConfigSchema,
+  sessionGetServiceTierConfigSchema,
 } from './payload-schemas';
 
 export {
@@ -594,13 +596,20 @@ export function registerSessionIPC(): void {
     return { status: 'ok' };
   });
 
-  ipcMain.handle(IPC_CHANNELS.SESSION_GET_REASONING_CONFIG, async (event) => {
+  ipcMain.handle(IPC_CHANNELS.SESSION_GET_REASONING_CONFIG, async (event, payload: unknown) => {
+    const parsed = sessionGetReasoningConfigSchema.safeParse(payload ?? {});
+    if (!parsed.success) {
+      throw new Error(`Invalid session:get_reasoning_config payload: ${parsed.error.message}`);
+    }
+    const draftSelection = parsed.data?.selection ?? null;
     const windowId = String(event.sender.id);
     const manager = getSessionManager();
     const active = manager.getActive(windowId);
-    // Draft mode falls back to the draft/default model selection so the
-    // selector is usable before the first message creates a session.
-    const selection = active?.selection ?? resolveDraftModelSelection(windowId);
+    // Draft mode: prefer the renderer's current picker selection so switching
+    // models in a draft (no session yet) immediately updates reasoning options.
+    // Falls back to the project/default model for backward compat when no
+    // selection is supplied.
+    const selection = active?.selection ?? draftSelection ?? resolveDraftModelSelection(windowId);
     const override = active
       ? active.reasoningEffortOverride
       : getDraftReasoningOverride(windowId);
@@ -651,12 +660,17 @@ export function registerSessionIPC(): void {
     return { status: 'ok' };
   });
 
-  ipcMain.handle(IPC_CHANNELS.SESSION_GET_SERVICE_TIER_CONFIG, async (event) => {
+  ipcMain.handle(IPC_CHANNELS.SESSION_GET_SERVICE_TIER_CONFIG, async (event, payload: unknown) => {
+    const parsed = sessionGetServiceTierConfigSchema.safeParse(payload ?? {});
+    if (!parsed.success) {
+      throw new Error(`Invalid session:get_service_tier_config payload: ${parsed.error.message}`);
+    }
+    const draftSelection = parsed.data?.selection ?? null;
     const empty = { mechanism: null, tiers: [], selected: null, override: null, effective: null };
     const windowId = String(event.sender.id);
     const manager = getSessionManager();
     const active = manager.getActive(windowId);
-    const selection = active?.selection ?? resolveDraftModelSelection(windowId);
+    const selection = active?.selection ?? draftSelection ?? resolveDraftModelSelection(windowId);
     const override = active ? active.tierOverride : getDraftTierOverride(windowId);
 
     if (!selection) return { ...empty, override };

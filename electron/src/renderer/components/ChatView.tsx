@@ -677,6 +677,17 @@ export function ChatView({ isVisible = true, bootstrapConfig = null, onNotify, a
         selection,
         providerModelOptionLabel(option),
       );
+    } else {
+      try {
+        await window.orchid?.session?.setReasoningEffort({ effort: null });
+      } catch {
+        // Non-fatal — draft override remains
+      }
+      try {
+        await window.orchid?.session?.setServiceTier({ tier: null });
+      } catch {
+        // Non-fatal — draft tier remains
+      }
     }
   }, [notify, providerModelByKey, session]);
 

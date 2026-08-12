@@ -186,6 +186,14 @@ export const sessionSetServiceTierSchema = z.object({
   tier: z.string().trim().min(1).max(128).nullable(),
 });
 
+export const sessionGetReasoningConfigSchema = z.object({
+  selection: modelSelectionSchema.nullable().optional(),
+}).strict().optional();
+
+export const sessionGetServiceTierConfigSchema = z.object({
+  selection: modelSelectionSchema.nullable().optional(),
+}).strict().optional();
+
 // ── Tool ─────────────────────────────────────────────────────────────────────
 
 export const toolExecuteSchema = z.object({

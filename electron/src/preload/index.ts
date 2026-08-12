@@ -471,14 +471,14 @@ const orchidAPI: OrchidAPI = {
     setReasoningEffort: (message: SessionSetReasoningEffortMessage) =>
       invoke(IPC_CHANNELS.SESSION_SET_REASONING_EFFORT, message),
 
-    getReasoningConfig: () =>
-      invoke<SessionReasoningConfigResult>(IPC_CHANNELS.SESSION_GET_REASONING_CONFIG),
+    getReasoningConfig: (message?: import('../shared/types/ipc').SessionGetReasoningConfigMessage) =>
+      invoke<SessionReasoningConfigResult>(IPC_CHANNELS.SESSION_GET_REASONING_CONFIG, message ?? {}),
 
     setServiceTier: (message: SessionSetServiceTierMessage) =>
       invoke(IPC_CHANNELS.SESSION_SET_SERVICE_TIER, message),
 
-    getServiceTierConfig: () =>
-      invoke<SessionServiceTierConfigResult>(IPC_CHANNELS.SESSION_GET_SERVICE_TIER_CONFIG),
+    getServiceTierConfig: (message?: import('../shared/types/ipc').SessionGetServiceTierConfigMessage) =>
+      invoke<SessionServiceTierConfigResult>(IPC_CHANNELS.SESSION_GET_SERVICE_TIER_CONFIG, message ?? {}),
 
     listActivity: () =>
       invoke(IPC_CHANNELS.SESSION_ACTIVITY_LIST),
