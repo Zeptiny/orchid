@@ -58,6 +58,18 @@ describe('deriveCacheSessionKey + buildCacheProviderOptions (R10)', () => {
   it('sends nothing without a session (no key, R12-safe)', () => {
     expect(buildCacheProviderOptions(OPENAI_CACHE_FACET, undefined)).toBeUndefined();
   });
+
+  it('sends promptCacheRetention for a retention-hint facet (Meta)', async () => {
+    const { META_CACHE_FACET } = await import('../../src/main/providers/drivers/meta');
+    expect(buildCacheProviderOptions(META_CACHE_FACET, undefined, '24h')).toEqual({
+      openai: { promptCacheRetention: '24h' },
+    });
+    expect(buildCacheProviderOptions(META_CACHE_FACET, undefined, 'in_memory')).toEqual({
+      openai: { promptCacheRetention: 'in_memory' },
+    });
+    // No TTL selection: no retention option is sent.
+    expect(buildCacheProviderOptions(META_CACHE_FACET, undefined, undefined)).toBeUndefined();
+  });
 });
 
 describe('applyCacheBreakpoints — Anthropic explicit (R10, R11)', () => {

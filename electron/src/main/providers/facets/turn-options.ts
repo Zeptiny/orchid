@@ -58,7 +58,7 @@ export function assembleFacetProviderOptions(
   const cacheTtl = resolveCacheTtl(input.cacheFacet, input.cacheTtlSelection);
   providerOptions = mergeProviderOptions(
     providerOptions,
-    buildCacheProviderOptions(input.cacheFacet, cacheSessionKey),
+    buildCacheProviderOptions(input.cacheFacet, cacheSessionKey, cacheTtl),
   );
   return { providerOptions, cacheSessionKey, cacheTtl };
 }

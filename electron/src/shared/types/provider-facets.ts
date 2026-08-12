@@ -45,10 +45,15 @@ export const priceRateSchema = z.object({
 
 export type PriceRate = z.infer<typeof priceRateSchema>;
 
-/** TTL labels key cache-write rate variants and driver TTL options: '5m', '1h'. */
+/**
+ * TTL labels key cache-write rate variants and driver TTL options: '5m', '1h'.
+ * Responses-protocol providers also expose retention hints as the same knob
+ * (Meta `prompt_cache_retention`: 'in_memory' | '24h'), so retention labels
+ * are accepted alongside duration labels.
+ */
 export const cacheTtlLabelSchema = z.string().regex(
-  /^\d+[smhd]$/,
-  'Expected a TTL label such as 5m or 1h',
+  /^(?:\d+[smhd]|in_memory)$/,
+  'Expected a TTL label such as 5m or 1h, or a retention label such as in_memory',
 );
 
 export const pricingRateFieldsSchema = z.object({
@@ -203,6 +208,12 @@ export const cacheFacetSchema = z.object({
   /** The provider supports a stable session-scoped cache/routing key. */
   sessionKey: z.boolean(),
   ttlOptions: z.array(cacheTtlOptionSchema).min(1).optional(),
+  /**
+   * Automatic-cache providers whose TTL selection rides a request-level
+   * retention hint (for example Meta `prompt_cache_retention`) instead of a
+   * breakpoint marker. The selected ttl id is sent verbatim (R11).
+   */
+  retentionHint: z.boolean().optional(),
 }).strict();
 
 export type CacheFacet = z.infer<typeof cacheFacetSchema>;

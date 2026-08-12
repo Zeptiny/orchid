@@ -59,13 +59,22 @@ export function deriveCacheSessionKey(sessionId: string | undefined): string | u
   return sessionId ? `orchid-session-${sessionId}` : undefined;
 }
 
-/** Build the request-level cache options (session routing key, OpenAI). */
+/**
+ * Build the request-level cache options. OpenAI-style automatic caching rides
+ * the session routing key (`promptCacheKey`); Responses-protocol providers
+ * with a retention hint ride the selected ttl id as `promptCacheRetention`
+ * (for example Meta's `in_memory` | `24h`).
+ */
 export function buildCacheProviderOptions(
   facet: CacheFacet | undefined,
   sessionKey: string | undefined,
+  ttl: string | undefined,
 ): ReasoningProviderOptions | undefined {
-  if (!facet?.sessionKey || !sessionKey) return undefined;
-  return { openai: { promptCacheKey: sessionKey } };
+  if (!facet) return undefined;
+  const openai: Record<string, string> = {};
+  if (facet.sessionKey && sessionKey) openai.promptCacheKey = sessionKey;
+  if (facet.retentionHint === true && ttl) openai.promptCacheRetention = ttl;
+  return Object.keys(openai).length > 0 ? { openai } : undefined;
 }
 
 type AnthropicCacheControl = { type: 'ephemeral'; ttl?: string };

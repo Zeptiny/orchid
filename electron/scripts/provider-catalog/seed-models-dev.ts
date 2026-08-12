@@ -18,6 +18,7 @@ const PROVIDERS = [
   { sourceId: 'opencode-go', id: 'opencode-go', protocol: 'openai-compatible', auth: ['api-key', 'environment'] },
   { sourceId: 'lilac', id: 'lilac', protocol: 'openai-compatible', auth: ['api-key', 'environment'] },
   { sourceId: 'neuralwatt', id: 'neuralwatt', protocol: 'openai-compatible', auth: ['api-key', 'environment'] },
+  { sourceId: 'meta', id: 'meta', protocol: 'openai-responses', auth: ['api-key', 'environment'] },
 ];
 
 /** Generic providers are Orchid-owned definitions, not models.dev providers. */

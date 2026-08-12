@@ -6,6 +6,7 @@ import { describe, it, expect } from 'vitest';
 import {
   ANTHROPIC_THINKING_POLICY,
   DEFAULT_THINKING_POLICY,
+  META_THINKING_POLICY,
   OPENAI_OPAQUE_THINKING_POLICY,
   OPENAI_RESPONSES_THINKING_POLICY,
   buildThinkingProviderOptions,
@@ -302,6 +303,24 @@ describe('buildThinkingRequestOptions', () => {
       summaryProfile: 'bogus',
       encryptedContent: false,
     })).toBeUndefined();
+  });
+
+  it('emits stateless encrypted replay for Meta regardless of knobs', () => {
+    expect(buildThinkingRequestOptions(META_THINKING_POLICY, 'meta')).toEqual({
+      openai: {
+        store: false,
+        include: ['reasoning.encrypted_content'],
+      },
+    });
+    // The knob surface does not change the always-on stateless replay contract.
+    expect(buildThinkingRequestOptions(META_THINKING_POLICY, 'meta', {
+      encryptedContent: false,
+    })).toEqual({
+      openai: {
+        store: false,
+        include: ['reasoning.encrypted_content'],
+      },
+    });
   });
 
   it('emits nothing for policies without knobs or unknown providers', () => {

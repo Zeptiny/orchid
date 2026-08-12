@@ -62,6 +62,24 @@ export const OPENAI_RESPONSES_THINKING_POLICY: ThinkingPolicy = {
 };
 
 /**
+ * Meta (Muse Spark) Responses reasoning: raw chain of thought never streams
+ * and never persists — the only cross-turn carriers are the streamed summary
+ * and the opt-in encrypted reasoning items, so replay rides encrypted items
+ * when present (R15, R16). The driver always requests encrypted content and
+ * stateless storage (see buildThinkingRequestOptions); the knob only declares
+ * what the API supports.
+ */
+export const META_THINKING_POLICY: ThinkingPolicy = {
+  exposure: 'summary',
+  replay: 'recommended',
+  knobs: {
+    summaryProfiles: ['auto', 'detailed', 'concise'],
+    defaultSummaryProfile: 'auto',
+    encryptedContentOption: true,
+  },
+};
+
+/**
  * OpenAI Chat Completions: reasoning is opaque — no readable text persists
  * and replay is impossible, so each turn reasons from scratch.
  */
@@ -220,6 +238,19 @@ export function buildThinkingRequestOptions(
       openai: {
         ...(summaryProfile ? { reasoningSummary: summaryProfile } : {}),
         ...(encryptedContent ? { include: ['reasoning.encrypted_content'] } : {}),
+      },
+    };
+  }
+  if (providerId === 'meta') {
+    // Stateless encrypted replay is the recommended Responses path for
+    // agentic/tool loops (Meta docs): keep no server state and always carry
+    // the encrypted chain-of-thought items. `include` cannot combine with
+    // `previous_response_id`, which Orchid never uses (history is replayed
+    // client-side).
+    return {
+      openai: {
+        store: false,
+        include: ['reasoning.encrypted_content'],
       },
     };
   }
