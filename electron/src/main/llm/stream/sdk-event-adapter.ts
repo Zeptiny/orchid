@@ -19,6 +19,10 @@ import {
 import type { ToolExecutionResult } from '../../../shared/types/tool-result';
 import type { MCPManager } from '../../mcp/manager';
 import {
+  emptyReasoningChars,
+  type ReasoningChars,
+} from '../reasoning-tokens';
+import {
   finalizeToolExecutionResult,
   genericAgentProjector,
   parseToolExecutionResult,
@@ -64,6 +68,7 @@ export interface SdkEventAdapterOptions {
   buildUsage: (
     usage: ProviderStepUsage,
     messages: readonly ModelMessage[],
+    chars?: ReasoningChars,
   ) => Usage;
 }
 
@@ -81,6 +86,7 @@ interface PendingReasoningSequence {
 export class SdkEventAdapter {
   private currentStepMessages: readonly ModelMessage[];
   private stepIndex = 0;
+  private stepChars: ReasoningChars = emptyReasoningChars();
   private readonly reasoningParts = new Map<string, PendingReasoningSequence>();
 
   constructor(private readonly options: SdkEventAdapterOptions) {
@@ -93,6 +99,7 @@ export class SdkEventAdapter {
         const request = part.request as { messages?: readonly ModelMessage[] } | undefined;
         this.currentStepMessages = request?.messages ?? this.options.coreMessages;
         this.reasoningParts.clear();
+        this.stepChars = emptyReasoningChars();
         break;
       }
 
@@ -104,6 +111,7 @@ export class SdkEventAdapter {
           usage: this.options.buildUsage(
             (part.usage ?? {}) as ProviderStepUsage,
             this.currentStepMessages,
+            this.stepChars,
           ),
         };
         yield {
@@ -119,6 +127,7 @@ export class SdkEventAdapter {
         this.options.eagerBridge.flushActiveInput();
         const text = stringField(part.text) ?? stringField(part.textDelta) ?? '';
         if (text) {
+          this.stepChars.text += text.length;
           this.options.attempt.markDeliveredOutput();
           yield { type: 'content', text };
         }
@@ -146,6 +155,7 @@ export class SdkEventAdapter {
         const toolCallId = streamToolCallId(part);
         const argsDelta = stringField(part.inputTextDelta) ?? stringField(part.delta) ?? '';
         if (toolCallId && argsDelta) {
+          this.stepChars.tool += argsDelta.length;
           this.options.eagerBridge.inputDelta(toolCallId, argsDelta);
           this.options.attempt.markDeliveredOutput();
           yield { type: 'tool_call_delta', toolCallId, argsDelta };
@@ -223,6 +233,7 @@ export class SdkEventAdapter {
         this.trackReasoningPart(part);
         const text = stringField(part.text) ?? stringField(part.delta) ?? '';
         if (text) {
+          this.stepChars.reasoning += text.length;
           this.options.attempt.markDeliveredOutput();
           yield { type: 'thinking', text };
         }

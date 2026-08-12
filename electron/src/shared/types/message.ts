@@ -365,7 +365,7 @@ export function messageFromStorageDict(data: unknown): Message {
       completion_tokens: typeof u.completion_tokens === 'number' ? u.completion_tokens : 0,
       total_tokens: typeof u.total_tokens === 'number' ? u.total_tokens : 0,
       cached_tokens: typeof u.cached_tokens === 'number' ? u.cached_tokens : 0,
-      reasoning_tokens: typeof u.reasoning_tokens === 'number' ? u.reasoning_tokens : 0,
+      ...(typeof u.reasoning_tokens === 'number' ? { reasoning_tokens: u.reasoning_tokens } : {}),
       context: parsedContext.success ? parsedContext.data : undefined,
     };
   }

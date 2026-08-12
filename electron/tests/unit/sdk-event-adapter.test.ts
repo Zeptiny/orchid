@@ -115,6 +115,28 @@ describe('SdkEventAdapter', () => {
     expect(bridge.flushActiveInput).toHaveBeenCalledTimes(2);
   });
 
+  it('passes per-step output chars to buildUsage and resets them each step', () => {
+    const { adapter, buildUsage } = createAdapter();
+
+    adapt(adapter, { type: 'start-step' });
+    adapt(adapter, { type: 'text-delta', text: 'answer' });
+    adapt(adapter, { type: 'reasoning-delta', delta: 'think hard' });
+    adapt(adapter, { type: 'tool-input-delta', toolCallId: 'tc-1', delta: '{"a":1}' });
+    adapt(adapter, { type: 'finish-step', usage: { inputTokens: 7 } });
+
+    expect(buildUsage.mock.calls[0]?.[2]).toEqual({
+      reasoning: 10,
+      text: 6,
+      tool: 7,
+    });
+
+    adapt(adapter, { type: 'start-step' });
+    adapt(adapter, { type: 'text-delta', text: 'second' });
+    adapt(adapter, { type: 'finish-step', usage: { inputTokens: 9 } });
+
+    expect(buildUsage.mock.calls[1]?.[2]).toEqual({ reasoning: 0, text: 6, tool: 0 });
+  });
+
   it('normalizes text/textDelta and reasoning text/delta while notifying the attempt', () => {
     const { adapter, attempt, bridge } = createAdapter();
 

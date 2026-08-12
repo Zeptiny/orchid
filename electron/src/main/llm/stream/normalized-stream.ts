@@ -8,6 +8,7 @@ import type { ModelMessage } from 'ai';
 import type { Usage } from '../../../shared/types/message';
 import type { MCPManager } from '../../mcp/manager';
 import type { StreamAttemptController } from './attempt-controller';
+import type { ReasoningChars } from '../reasoning-tokens';
 import { EagerToolBridge, streamResultFields } from './eager-tool-bridge';
 import {
   createToolNameResolver,
@@ -51,6 +52,7 @@ export interface NormalizedStreamOptions {
   buildUsage: (
     usage: ProviderStepUsage,
     messages: readonly ModelMessage[],
+    chars?: ReasoningChars,
   ) => Usage;
 }
 

@@ -15,6 +15,11 @@ import type {
 } from '../../../shared/types/accounting';
 import type { DriverPricingFacet } from '../drivers/types';
 import { extractServedTier } from '../facets/tiers';
+import {
+  emptyReasoningChars,
+  estimateReasoningTokens,
+  type ReasoningChars,
+} from '../../llm/reasoning-tokens';
 import { calculateAttemptCost, type AttemptCostEvidence } from './cost';
 import { ProviderAccountingStore } from './store';
 
@@ -53,14 +58,8 @@ function normalizeUsage(usage: LanguageModelV4Usage | undefined): NormalizedProv
     : { ...result, totalTokens: total };
 }
 
-interface OutputChars {
-  reasoning: number;
-  text: number;
-  tool: number;
-}
-
-function emptyOutputChars(): OutputChars {
-  return { reasoning: 0, text: 0, tool: 0 };
+function emptyOutputChars(): ReasoningChars {
+  return emptyReasoningChars();
 }
 
 function serializedLength(value: unknown): number {
@@ -72,36 +71,18 @@ function serializedLength(value: unknown): number {
   }
 }
 
-function trackStreamChars(chars: OutputChars, part: LanguageModelV4StreamPart): void {
+function trackStreamChars(chars: ReasoningChars, part: LanguageModelV4StreamPart): void {
   if (part.type === 'reasoning-delta') chars.reasoning += part.delta.length;
   else if (part.type === 'text-delta') chars.text += part.delta.length;
   else if (part.type === 'tool-input-delta') chars.tool += part.delta.length;
 }
 
-function trackContentChars(chars: OutputChars, content: readonly LanguageModelV4Content[]): void {
+function trackContentChars(chars: ReasoningChars, content: readonly LanguageModelV4Content[]): void {
   for (const part of content) {
     if (part.type === 'reasoning') chars.reasoning += part.text.length;
     else if (part.type === 'text') chars.text += part.text.length;
     else if (part.type === 'tool-call') chars.tool += serializedLength(part.input);
   }
-}
-
-/**
- * Same estimation as the context breakdown: apportion the provider's output
- * total by the observed output characters. Returns undefined when the output
- * total is unknown or no reasoning was observed.
- */
-function estimateReasoningTokens(
-  chars: OutputChars,
-  outputTokens: number | undefined,
-): number | undefined {
-  if (outputTokens === undefined || outputTokens <= 0) return undefined;
-  const totalChars = chars.reasoning + chars.text + chars.tool;
-  if (chars.reasoning <= 0 || totalChars <= 0) return undefined;
-  return Math.min(
-    outputTokens,
-    Math.round((outputTokens * chars.reasoning) / totalChars),
-  );
 }
 
 /**
@@ -111,7 +92,7 @@ function estimateReasoningTokens(
  */
 function withEstimatedReasoning(
   usage: NormalizedProviderUsage | null,
-  chars: OutputChars,
+  chars: ReasoningChars,
   outputTokens: number | undefined,
 ): NormalizedProviderUsage | null {
   if (!usage || usage.reasoningTokens !== undefined) return usage;

@@ -60,6 +60,10 @@ import type { ProviderAttemptAccountingContext } from '../providers/accounting/m
 import type { ReasoningProviderOptions } from '../providers/drivers/types';
 import { applyCacheBreakpoints } from '../providers/facets/cache';
 import type { CacheFacet } from '../../shared/types/provider-facets';
+import {
+  estimateReasoningTokens,
+  type ReasoningChars,
+} from './reasoning-tokens';
 import { createContextSnapshotBuilder } from './context-snapshot';
 import { importESM } from '../utils/esm-import';
 import { buildSkillTool } from '../tools/skill/skill';
@@ -134,20 +138,28 @@ function buildStepUsage(
   usage: ProviderStepUsage,
   messages: readonly ModelMessage[],
   buildContextSnapshot: ReturnType<typeof createContextSnapshotBuilder>,
+  chars?: ReasoningChars,
 ): Usage {
   const inputTokens = usage.inputTokens ?? 0;
   const outputTokens = usage.outputTokens ?? 0;
+  // Provider-reported reasoning tokens are authoritative. When the provider
+  // does not report them, fall back to the same char-ratio estimate the
+  // accounting ledger uses — never an explicit zero, so the UI can tell
+  // "unknown" apart from a real count of zero.
+  const reportedReasoning = usage.outputTokenDetails?.reasoningTokens;
+  const reasoningTokens = reportedReasoning
+    ?? (chars ? estimateReasoningTokens(chars, outputTokens) : undefined);
   return {
     prompt_tokens: inputTokens,
     completion_tokens: outputTokens,
     total_tokens: usage.totalTokens ?? inputTokens + outputTokens,
     cached_tokens: usage.inputTokenDetails?.cacheReadTokens ?? 0,
-    reasoning_tokens: usage.outputTokenDetails?.reasoningTokens ?? 0,
+    ...(reasoningTokens === undefined ? {} : { reasoning_tokens: reasoningTokens }),
     context: buildContextSnapshot({
       messages,
       inputTokens,
       outputTokens,
-      reasoningTokens: usage.outputTokenDetails?.reasoningTokens,
+      ...(reasoningTokens === undefined ? {} : { reasoningTokens }),
     }),
   };
 }
@@ -277,11 +289,12 @@ export async function* streamChat(params: StreamChatParams): AsyncGenerator<Stre
       attempt,
       eagerBridge,
       artifactIdentity: thinkingReplay?.selection,
-      buildUsage: (usage, stepMessages) => {
+      buildUsage: (usage, stepMessages, stepChars) => {
         const stepUsage = buildStepUsage(
           usage,
           stepMessages,
           buildUsageContext,
+          stepChars,
         );
         // Context snapshots are session-scoped: without a session id there is
         // nowhere to attribute the row (the Analytics Sessions tab groups by

@@ -54,7 +54,7 @@ describe('context snapshot', () => {
     expect(snapshot.tool_use_tokens).toBeGreaterThan(0);
     expect(snapshot.user_tokens).toBeGreaterThan(0);
     expect(snapshot.assistant_tokens).toBeGreaterThanOrEqual(100);
-    expect(snapshot.reasoning_tokens).toBe(0);
+    expect(snapshot.reasoning_tokens).toBeUndefined();
     expect(
       snapshot.system_tokens +
         snapshot.tools_tokens +

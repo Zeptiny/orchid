@@ -133,7 +133,9 @@ export function createContextSnapshotBuilder(
 
     const assistantTokens = allocated.assistant + output;
     // Provider-reported reasoning is authoritative: visible reasoning text
-    // may be a summary, so character ratios can misattribute it.
+    // may be a summary, so character ratios can misattribute it. Omit the
+    // field entirely when the provider did not report a count, so consumers
+    // can distinguish "unknown" from an explicit zero.
     const reasoning = Math.min(
       Math.max(0, reasoningTokens ?? 0),
       assistantTokens,
@@ -148,7 +150,7 @@ export function createContextSnapshotBuilder(
       tool_use_tokens: allocated.toolUse,
       user_tokens: allocated.user,
       assistant_tokens: assistantTokens,
-      reasoning_tokens: reasoning,
+      ...(reasoningTokens === undefined ? {} : { reasoning_tokens: reasoning }),
     };
   };
 }
