@@ -14,7 +14,7 @@ import type { ThinkingReplayContext } from '../llm/history';
 import type { CacheFacet, ThinkingPolicy } from '../../shared/types/provider-facets';
 import { resolveSubagentTier } from '../providers/facets/tiers';
 import { assembleFacetProviderOptions } from '../providers/facets/turn-options';
-import type { ModelSelection } from '../../shared/types/provider';
+import type { ModelSelection, ProviderProtocol } from '../../shared/types/provider';
 import { streamChat, type StreamEvent } from '../llm/orchestrator';
 import { resolveSubagentEffort } from '../llm/reasoning-effort';
 import { getConfig } from '../config/loader';
@@ -281,6 +281,7 @@ export function createSubagentStreamRunner(): SubagentStreamRunner {
         thinkingReplay: {
           policy: thinkingPolicy ?? DEFAULT_THINKING_POLICY,
           selection: { providerId: providerSnapshot.providerId, modelId: selection.modelId },
+          protocol: providerSnapshot.protocol as ProviderProtocol,
         } satisfies ThinkingReplayContext,
         cachePlacement: cacheFacet
           ? { facet: cacheFacet, ttl: cacheTtl, sessionKey: cacheSessionKey }

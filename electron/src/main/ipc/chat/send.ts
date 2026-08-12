@@ -22,6 +22,7 @@ import {
 } from '../../providers/facets/thinking';
 import type { ThinkingReplayContext } from '../../llm/history';
 import type { CacheFacet, ThinkingPolicy } from '../../../shared/types/provider-facets';
+import type { ProviderProtocol } from '../../../shared/types/provider';
 import { resolveMainAgentTier } from '../../providers/facets/tiers';
 import { assembleFacetProviderOptions } from '../../providers/facets/turn-options';
 import { getSessionManager } from '../../session/singleton';
@@ -176,6 +177,7 @@ export async function startChatTurn(
   const thinkingReplay: ThinkingReplayContext = {
     policy: thinkingPolicy ?? DEFAULT_THINKING_POLICY,
     selection: { providerId: providerSnapshot.providerId, modelId: turnSelection.modelId },
+    protocol: providerSnapshot.protocol as ProviderProtocol,
   };
   const agent = agents.find((candidate) => candidate.name === 'general') ?? agents[0] ?? {
     name: 'general', type: 'subagent' as const, tier: 'bloom' as const,

@@ -201,7 +201,9 @@ export async function* streamChat(params: StreamChatParams): AsyncGenerator<Stre
   const historyMessages = toApiMessages(messages, thinkingReplay);
 
   // System messages are handled by the `system` param in streamText.
-  const coreMessages = toModelMessages(historyMessages);
+  const coreMessages = toModelMessages(historyMessages, {
+    responsesReplay: thinkingReplay?.protocol === 'openai-responses',
+  });
 
   // ── Filter and build tools ──
   // Freeze session cwd from prompt context so tools match the turn's workspace.

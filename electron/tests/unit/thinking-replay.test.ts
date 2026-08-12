@@ -14,7 +14,7 @@ import { createActor } from 'xstate';
 import {
   agentMachine,
 } from '../../src/main/agents/xstate/agent-machine';
-import type { Message, ThinkingReplayPayload } from '../../src/shared/types/message';
+import type { Message, ThinkingReplayPayload, ApiMessage } from '../../src/shared/types/message';
 import {
   MessageRole,
   MessageType,
@@ -887,8 +887,135 @@ describe('streamChat thinking replay', () => {
 });
 
 // ---------------------------------------------------------------------------
-// IPC schema size bounds
+// Responses-protocol replay structure (phase + reasoning ordering)
 // ---------------------------------------------------------------------------
+
+describe('Responses-protocol replay structure', () => {
+  it('tags assistant text that precedes tool calls as commentary phase', () => {
+    const messages = toModelMessages([
+      makeApiMessage({
+        role: MessageRole.ASSISTANT,
+        content: [{ type: 'text', text: 'Let me check the file first.' }],
+        tool_calls: [makeToolCall('tc-1', 'read')],
+      }),
+    ], { responsesReplay: true });
+
+    expect(messages[0]).toEqual({
+      role: 'assistant',
+      content: [
+        {
+          type: 'text',
+          text: 'Let me check the file first.',
+          providerOptions: { openai: { phase: 'commentary' } },
+        },
+        {
+          type: 'tool-call',
+          toolCallId: 'tc-1',
+          toolName: 'read',
+          input: {},
+        },
+      ],
+    });
+  });
+
+  it('leaves final-answer text unphased and does not phase without the option', () => {
+    // Final answer: no tool calls, no phase.
+    const final = toModelMessages([
+      makeApiMessage({
+        role: MessageRole.ASSISTANT,
+        content: [{ type: 'text', text: 'Done.' }],
+      }),
+    ], { responsesReplay: true });
+    expect(final[0].content).toBe('Done.');
+
+    // Without responsesReplay the option is inert for tool-calling text too.
+    const plain = toModelMessages([
+      makeApiMessage({
+        role: MessageRole.ASSISTANT,
+        content: [{ type: 'text', text: 'Let me check.' }],
+        tool_calls: [makeToolCall('tc-1', 'read')],
+      }),
+    ]);
+    expect(plain[0].content).toEqual([
+      { type: 'text', text: 'Let me check.' },
+      { type: 'tool-call', toolCallId: 'tc-1', toolName: 'read', input: {} },
+    ]);
+  });
+
+  it('inserts a minimal assistant message after a reasoning-only turn before a user message', () => {
+    const messages = toModelMessages([
+      makeApiMessage({ role: MessageRole.USER, content: 'Fix it' }),
+      makeApiMessage({
+        role: MessageRole.ASSISTANT,
+        content: [{ type: 'reasoning', text: 'thinking only' }],
+      }),
+      makeApiMessage({ role: MessageRole.USER, content: 'Never mind' }),
+    ], { responsesReplay: true });
+
+    expect(messages.map((message) => message.role)).toEqual([
+      'user',
+      'assistant',
+      'assistant',
+      'user',
+    ]);
+    expect(messages[2]).toEqual({
+      role: 'assistant',
+      content: [{ type: 'text', text: '' }],
+    });
+  });
+
+  it('inserts a minimal assistant message after a trailing reasoning-only turn', () => {
+    const messages = toModelMessages([
+      makeApiMessage({ role: MessageRole.USER, content: 'Fix it' }),
+      makeApiMessage({
+        role: MessageRole.ASSISTANT,
+        content: [{ type: 'reasoning', text: 'interrupted mid-thought' }],
+      }),
+    ], { responsesReplay: true });
+
+    expect(messages.map((message) => message.role)).toEqual(['user', 'assistant', 'assistant']);
+  });
+
+  it('does not insert when the reasoning item is followed by an assistant message', () => {
+    const messages = toModelMessages([
+      makeApiMessage({ role: MessageRole.USER, content: 'Fix it' }),
+      makeApiMessage({
+        role: MessageRole.ASSISTANT,
+        content: [{ type: 'reasoning', text: 'plan' }],
+      }),
+      makeApiMessage({
+        role: MessageRole.ASSISTANT,
+        content: [{ type: 'text', text: 'Done.' }],
+      }),
+    ], { responsesReplay: true });
+
+    expect(messages).toHaveLength(3);
+    expect(messages.map((message) => message.role)).toEqual(['user', 'assistant', 'assistant']);
+  });
+
+  it('does not insert reasoning-order guards without responsesReplay', () => {
+    const messages = toModelMessages([
+      makeApiMessage({ role: MessageRole.USER, content: 'Fix it' }),
+      makeApiMessage({
+        role: MessageRole.ASSISTANT,
+        content: [{ type: 'reasoning', text: 'thinking only' }],
+      }),
+      makeApiMessage({ role: MessageRole.USER, content: 'Never mind' }),
+    ]);
+
+    expect(messages.map((message) => message.role)).toEqual(['user', 'assistant', 'user']);
+  });
+});
+
+function makeApiMessage(overrides: Partial<ApiMessage> = {}): ApiMessage {
+  return {
+    role: MessageRole.USER,
+    content: '',
+    tool_calls: undefined,
+    ...overrides,
+  } as ApiMessage;
+}
+
 
 describe('thinkingReplayPayloadSchema size bounds', () => {
   const base = {

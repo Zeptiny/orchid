@@ -26,6 +26,7 @@ import type {
 } from '../../shared/types/message';
 import { MessageType, MessageRole, messageToApiFormat } from '../../shared/types/message';
 import type { ThinkingPolicy } from '../../shared/types/provider-facets';
+import type { ProviderProtocol } from '../../shared/types/provider';
 import {
   buildThinkingProviderOptions,
   decideThinkingReplay,
@@ -36,6 +37,12 @@ import {
 export interface ThinkingReplayContext {
   readonly policy: ThinkingPolicy;
   readonly selection: ThinkingReplayIdentity;
+  /**
+   * Frozen model protocol. Responses-protocol models enforce reasoning-item
+   * ordering at replay (a reasoning item must be followed by an assistant
+   * message or function_call, or the provider rejects the input).
+   */
+  readonly protocol?: ProviderProtocol;
 }
 
 function thinkingReplayPart(
