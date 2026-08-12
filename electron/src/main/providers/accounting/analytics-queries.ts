@@ -44,8 +44,20 @@ const COST_ROW_CONDITIONS = [
 
 type DecimalTotal = { amount: Decimal; count: number };
 
-function getDb(): SqliteDatabase {
-  return getProviderAccountingStore().getDatabase();
+/**
+ * Dependency injection seam for query execution. Lets the worker thread run
+ * analytics queries against its own SQLite connection and defer session-name
+ * resolution to the main process (sessions.db stays main-process-owned).
+ */
+export interface AnalyticsQueryContext {
+  /** Connection to accounting.db. Defaults to the main-process singleton. */
+  db?: SqliteDatabase;
+  /** Resolve session names for the top-N session ids. Defaults to `getSessionNames`. */
+  resolveSessionNames?: (sessionIds: readonly string[]) => Map<string, string>;
+}
+
+function getDb(ctx?: AnalyticsQueryContext): SqliteDatabase {
+  return ctx?.db ?? getProviderAccountingStore().getDatabase();
 }
 
 /**
@@ -1006,8 +1018,8 @@ export function getSubagents(timeRange?: AnalyticsTimeRange): SubagentsResult {
     invocationsOverTime: invocationsOverTime.map((row) => ({ date: row.date, count: row.count })),
   };
 }
-export function getContext(sessionId?: string, timeRange?: AnalyticsTimeRange): ContextResult {
-  const db = getDb();
+export function getContext(sessionId?: string, timeRange?: AnalyticsTimeRange, ctx: AnalyticsQueryContext = {}): ContextResult {
+  const db = getDb(ctx);
   const dateFilter = buildDateFilter(timeRange, 'captured_at');
   const conditions = sessionId ? ['session_id = ?'] : [];
   const params = sessionId ? [sessionId, ...dateFilter.params] : dateFilter.params;
@@ -1038,7 +1050,7 @@ export function getContext(sessionId?: string, timeRange?: AnalyticsTimeRange): 
 
   let nameMap = new Map<string, string>();
   try {
-    nameMap = getSessionNames(topSessionRows.map((r) => r.session_id));
+    nameMap = (ctx.resolveSessionNames ?? getSessionNames)(topSessionRows.map((r) => r.session_id));
   } catch (error) {
     console.warn('[analytics] Session name lookup failed', { error });
   }

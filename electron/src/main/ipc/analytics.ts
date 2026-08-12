@@ -9,8 +9,8 @@ import {
   getModels,
   getTools,
   getSubagents,
-  getContext,
 } from '../providers/accounting/analytics-queries';
+import { runContextQuery } from '../providers/accounting/analytics-query-runner';
 
 const timeRangeSchema = z.object({
   startDate: z.string().optional(),
@@ -115,7 +115,7 @@ export function registerAnalyticsIPC(): void {
     const sessionId = parsed.data?.sessionId;
     const timeRange = parsed.data?.timeRange as AnalyticsTimeRange | undefined;
     try {
-      return getContext(sessionId, timeRange);
+      return await runContextQuery(sessionId, timeRange);
     } catch (error) {
       console.error('[analytics] Context query failed', { error });
       throw new Error(`Analytics context query failed: ${error instanceof Error ? error.message : String(error)}`, { cause: error });

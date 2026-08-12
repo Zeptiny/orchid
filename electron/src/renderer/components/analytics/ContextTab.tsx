@@ -1,8 +1,10 @@
+import { useMemo } from 'react';
 import { useAnalytics } from '../../hooks/useAnalytics';
 import type { AnalyticsTimeRange } from '../../../shared/types/analytics';
 import { StatCard, ChartCard, formatTokenCount, truncateId } from './shared';
 import { CHART_PALETTE, GRID_STROKE, axisTickProps, tokenTooltipProps } from './shared';
 import { Button } from '../ui/Button';
+import { StateMessage } from '../ui/StateMessage';
 import {
   LineChart, Line, BarChart, Bar,
   XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend,
@@ -31,44 +33,76 @@ function subagentLabel(series: { agentName: string | null; subagentId: string })
 
 const SUBAGENT_SERIES_KEY_PREFIX = 'subagent:';
 
+/** Display cap per series. The server strides to 500 points; a 300px-tall chart
+ * needs far fewer, and Recharts cost scales with total points. */
+const DISPLAY_MAX_POINTS_PER_SERIES = 200;
+
+type ContextPoint = { capturedAt: string; usedTokens: number };
+
+/**
+ * Stride-sample a series for display, keeping the peak and the newest point so
+ * the chart shape (and the context window ceiling) stays faithful.
+ */
+export function downsamplePoints(points: ReadonlyArray<ContextPoint>, max: number): ReadonlyArray<ContextPoint> {
+  if (points.length <= max) return points;
+  const stride = Math.ceil(points.length / max);
+  const sampled = points.filter((_, i) => i % stride === 0);
+  let peakIdx = 0;
+  for (let i = 1; i < points.length; i++) {
+    if (points[i].usedTokens > points[peakIdx].usedTokens) peakIdx = i;
+  }
+  if (peakIdx % stride !== 0) {
+    const peak = points[peakIdx];
+    const insertAt = sampled.findIndex((p) => p.capturedAt >= peak.capturedAt);
+    if (insertAt === -1) sampled.push(peak);
+    else sampled.splice(insertAt, 0, peak);
+  }
+  const last = points[points.length - 1];
+  if (sampled[sampled.length - 1] !== last) sampled.push(last);
+  return sampled;
+}
+
 export function ContextTab({ timeRange }: { timeRange: AnalyticsTimeRange }) {
   const { data, loading, error, refresh } = useAnalytics(
     () => window.orchid.analytics.context({ timeRange }),
     [timeRange],
   );
 
-  if (loading) return <div className="p-8 text-base-content/50">Loading…</div>;
-  if (error) return <div className="p-8 text-error">Error: {error}</div>;
-  if (!data) return null;
-
-  const timestampMap = new Map<string, Record<string, number | string>>();
-  for (const series of data.topSessions) {
-    for (const point of series.points) {
-      const row = timestampMap.get(point.capturedAt) ?? { capturedAt: point.capturedAt };
-      row[series.sessionId] = point.usedTokens;
-      timestampMap.set(point.capturedAt, row);
+  const growthData = useMemo(() => {
+    if (!data) return [];
+    const timestampMap = new Map<string, Record<string, number | string>>();
+    for (const series of data.topSessions) {
+      for (const point of downsamplePoints(series.points, DISPLAY_MAX_POINTS_PER_SERIES)) {
+        const row = timestampMap.get(point.capturedAt) ?? { capturedAt: point.capturedAt };
+        row[series.sessionId] = point.usedTokens;
+        timestampMap.set(point.capturedAt, row);
+      }
     }
-  }
-  for (const series of data.topSubagents) {
-    const key = `${SUBAGENT_SERIES_KEY_PREFIX}${series.subagentId}`;
-    for (const point of series.points) {
-      const row = timestampMap.get(point.capturedAt) ?? { capturedAt: point.capturedAt };
-      row[key] = point.usedTokens;
-      timestampMap.set(point.capturedAt, row);
+    for (const series of data.topSubagents) {
+      const key = `${SUBAGENT_SERIES_KEY_PREFIX}${series.subagentId}`;
+      for (const point of downsamplePoints(series.points, DISPLAY_MAX_POINTS_PER_SERIES)) {
+        const row = timestampMap.get(point.capturedAt) ?? { capturedAt: point.capturedAt };
+        row[key] = point.usedTokens;
+        timestampMap.set(point.capturedAt, row);
+      }
     }
-  }
-  const growthData = Array.from(timestampMap.values()).sort((a, b) =>
-    String(a.capturedAt).localeCompare(String(b.capturedAt)),
-  );
+    return Array.from(timestampMap.values()).sort((a, b) =>
+      String(a.capturedAt).localeCompare(String(b.capturedAt)),
+    );
+  }, [data]);
 
-  const breakdownData = [{
+  const breakdownData = useMemo(() => data ? [{
     name: 'Average',
     System: data.avgBreakdown.systemTokens,
     Tools: data.avgBreakdown.toolsTokens,
     'Tool Results': data.avgBreakdown.toolUseTokens,
     User: data.avgBreakdown.userTokens,
     Assistant: data.avgBreakdown.assistantTokens,
-  }];
+  }] : [], [data]);
+
+  if (loading) return <StateMessage kind="loading" title="Loading Context…" />;
+  if (error) return <div className="p-8 text-error">Error: {error}</div>;
+  if (!data) return null;
 
   return (
     <div className="space-y-6">
@@ -118,6 +152,7 @@ export function ContextTab({ timeRange }: { timeRange: AnalyticsTimeRange }) {
                   stroke={CHART_PALETTE[i % CHART_PALETTE.length]}
                   strokeWidth={2}
                   connectNulls
+                  isAnimationActive={false}
                 />
               ))}
               {data.topSubagents.map((series, i) => (
@@ -130,6 +165,7 @@ export function ContextTab({ timeRange }: { timeRange: AnalyticsTimeRange }) {
                   strokeWidth={1.5}
                   strokeDasharray="5 3"
                   connectNulls
+                  isAnimationActive={false}
                 />
               ))}
             </LineChart>

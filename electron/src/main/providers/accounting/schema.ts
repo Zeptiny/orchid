@@ -148,8 +148,19 @@ export function applyAccountingSchemaMigrations(db: SqliteDatabase): void {
     }
     // Created here (not in the schema SQL) so it never references the column
     // before the ALTER above exists on legacy databases.
-    db.prepare(
-      'CREATE INDEX IF NOT EXISTS idx_context_snapshots_agent_scope ON context_snapshots(agent_scope, captured_at)',
-    ).run();
+    // The top-N context queries GROUP BY session_id/agent_scope and ORDER BY
+    // MAX(used_tokens); these covering indexes keep those scans index-only
+    // (no rowid lookups for used_tokens). The narrow (agent_scope, captured_at)
+    // index is replaced by the wider agent_scope_tokens variant so the date-
+    // filtered paths stay covering too.
+    db.prepare('DROP INDEX IF EXISTS idx_context_snapshots_agent_scope').run();
+    db.prepare(`
+      CREATE INDEX IF NOT EXISTS idx_context_snapshots_scope_session_tokens
+      ON context_snapshots(agent_scope, session_id, used_tokens)
+    `).run();
+    db.prepare(`
+      CREATE INDEX IF NOT EXISTS idx_context_snapshots_agent_scope_tokens
+      ON context_snapshots(agent_scope, captured_at, session_id, used_tokens)
+    `).run();
   }
 }
