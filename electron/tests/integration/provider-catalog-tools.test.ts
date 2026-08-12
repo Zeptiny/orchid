@@ -47,6 +47,7 @@ describe('provider catalog operator tools', () => {
       'opencode-go',
       'lilac',
       'neuralwatt',
+      'meta',
       'generic-openai-compatible',
       'generic-anthropic-compatible',
     ]);
