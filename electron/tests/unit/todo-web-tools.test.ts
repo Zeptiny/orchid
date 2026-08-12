@@ -2,8 +2,8 @@
  * Tests for Todo & Web Tools (U15).
  *
  * Covers:
- * - Todo: create → ID, OPEN status, OPEN → IN_PROGRESS → DONE (valid),
- *   DONE → IN_PROGRESS (invalid), list, delete
+ * - Todo: create → ID, OPEN status, free status transitions (any → any),
+ *   list, delete
  * - Web fetch: URL validation (scheme/empty only), summarize mode,
  *   raw mode, large content caching
  */
@@ -203,7 +203,7 @@ describe('Todo Tools', () => {
       expect(store.get(id)!.status).toBe(TodoStatus.DONE);
     });
 
-    it('should reject DONE → IN_PROGRESS transition', async () => {
+    it('should allow DONE → IN_PROGRESS transition (no restrictions)', async () => {
       const createHandler = buildCreateTool(store).handler;
       const createResult = (await callTool(createHandler, {
         title: 'Test',
@@ -216,18 +216,18 @@ describe('Todo Tools', () => {
       await callTool(updateHandler, { id, status: TodoStatus.IN_PROGRESS });
       await callTool(updateHandler, { id, status: TodoStatus.DONE });
 
-      // Try to go back to IN_PROGRESS
+      // Go back to IN_PROGRESS — allowed
       const result = (await callTool(updateHandler, {
         id,
         status: TodoStatus.IN_PROGRESS,
       })) as ToolExecutionResult;
 
-      expect(result.canonical.status).toBe('error');
-      expect(result.agentProjection.content).toContain('terminal status');
-      expect(store.get(id)!.status).toBe(TodoStatus.DONE);
+      expect(result.canonical.status).toBe('complete');
+      expect(result.agentProjection.content).toContain('<status>IN_PROGRESS</status>');
+      expect(store.get(id)!.status).toBe(TodoStatus.IN_PROGRESS);
     });
 
-    it('should reject OPEN → DONE transition (must go through IN_PROGRESS)', async () => {
+    it('should allow OPEN → DONE transition directly', async () => {
       const createHandler = buildCreateTool(store).handler;
       const createResult = (await callTool(createHandler, {
         title: 'Test',
@@ -240,8 +240,9 @@ describe('Todo Tools', () => {
         status: TodoStatus.DONE,
       })) as ToolExecutionResult;
 
-      expect(result.canonical.status).toBe('error');
-      expect(result.agentProjection.content).toContain('Cannot transition');
+      expect(result.canonical.status).toBe('complete');
+      expect(result.agentProjection.content).toContain('<status>DONE</status>');
+      expect(store.get(id)!.status).toBe(TodoStatus.DONE);
     });
 
     it('should reject invalid status values at schema boundary', async () => {
@@ -288,9 +289,7 @@ describe('Todo Tools', () => {
 
     it('should filter by status', async () => {
       const createHandler = buildCreateTool(store).handler;
-      const r1 = (await callTool(createHandler, { title: 'Open task' })) as {
-        content: string;
-      };
+      await callTool(createHandler, { title: 'Open task' });
       const r2 = (await callTool(createHandler, { title: 'Progress task' })) as {
         content: string;
       };

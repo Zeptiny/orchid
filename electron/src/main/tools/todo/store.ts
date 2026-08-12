@@ -1,12 +1,11 @@
 /**
- * TodoStore — in-memory store for todo tasks with state machine validation.
+ * TodoStore — in-memory store for todo tasks.
  *
  * Ported from Python `src/orchid/domain/todo.py` (TodoStore class).
  *
- * Key behaviors (matching Python):
+ * Key behaviors:
  * - Session-scoped in-memory store
  * - 8-hex UUID generation with collision retry
- * - State machine validation via VALID_TRANSITIONS
  * - create(), get(), list(), update(), delete()
  * - toData() for serialization (TodoStoreData)
  *
@@ -16,7 +15,6 @@
 import { randomUUID } from 'node:crypto';
 import {
   TodoStatus,
-  VALID_TRANSITIONS,
   type Todo,
   type TodoStoreData,
 } from '../../../shared/types/todo';
@@ -108,8 +106,7 @@ export class TodoStore {
   /**
    * Update a task. Returns [task, error]. On success, error is null.
    *
-   * Validates status transitions against VALID_TRANSITIONS.
-   * Terminal status tasks (DONE) cannot be updated.
+   * No status-transition restrictions — any status can go to any status.
    *
    * @param id - Task ID to update
    * @param updates - Fields to update (title, status, subagent_id)
@@ -122,27 +119,6 @@ export class TodoStore {
     const task = this._tasks.get(id);
     if (!task) {
       return [null, `No task found with ID '${id}'.`];
-    }
-
-    // DONE is terminal — no transitions allowed (matches Python TERMINAL_STATUSES)
-    if (task.status === TodoStatus.DONE) {
-      return [
-        null,
-        `Task '${id}' is in terminal status '${task.status}' and cannot be updated.`,
-      ];
-    }
-
-    // Validate status transition
-    if (updates.status !== undefined) {
-      const allowed = VALID_TRANSITIONS[task.status];
-      if (!allowed.has(updates.status)) {
-        const targets =
-          [...allowed].sort().join(', ') || 'none';
-        return [
-          null,
-          `Cannot transition from '${task.status}' to '${updates.status}'. Allowed: ${targets}`,
-        ];
-      }
     }
 
     // Apply updates

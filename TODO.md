@@ -11,7 +11,6 @@ Internal backlog for Orchid. User-facing summary lives in the [README known limi
 - Interrupted subagents are being marked as complete - possibly after starting a new chain it is not preserved? - but only on some places (subagent view is correct, main agent context and main chat/session UI appears to not be)
 - replace_symbol can left trailing remnants
 - crashed / closed app can make the agent lose context (Subagents - on the interface they still appear, for the main againt they do not - IDs not found)
-- Remove todo status change restictions - only confuses the agent
 - Are read results or other tools content being scaped, with the possibility of confusing the agent?
 
 ## Agent quality
