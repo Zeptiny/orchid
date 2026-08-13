@@ -297,15 +297,19 @@ function deserializeSelection(json: string | null): ModelSelection | null {
   }
 }
 
-function deserializeMessages(json: string): Message[] {
+function tryDeserializeMessages(json: string): Message[] | null {
   let raw: unknown;
   try {
     raw = JSON.parse(json);
   } catch {
-    return [];
+    return null;
   }
-  if (!Array.isArray(raw)) return [];
+  if (!Array.isArray(raw)) return null;
   return reconcileOrphanToolResults(raw.map((m) => messageFromStorageDict(m)));
+}
+
+function deserializeMessages(json: string): Message[] {
+  return tryDeserializeMessages(json) ?? [];
 }
 
 function chainPreview(messages: readonly Message[]): string | null {
@@ -1211,11 +1215,35 @@ function loadSessionInternal(
            SET summary_json = ?, recent_messages_json = ?
            WHERE session_id = ? AND id = ?`,
         );
+        const selectLegacyMessages = db.prepare(
+          'SELECT messages_json FROM chains WHERE session_id = ? AND id = ?',
+        );
         const pagedChains = new Array<Chain>(chainRows.length);
         for (let index = chainRows.length - 1; index >= 0; index -= 1) {
           const cr = chainRows[index]!;
           const persistedSummary = parseChainViewSummary(cr.summary_json);
           let summary = persistedSummary ?? resolveChainViewSummary(cr);
+          if (!persistedSummary) {
+            const row = selectLegacyMessages.get(sessionId, cr.id) as {
+              messages_json: string;
+            } | undefined;
+            const legacyMessages = row
+              ? tryDeserializeMessages(row.messages_json)
+              : null;
+            if (legacyMessages) {
+              const serialized = serializeChainMessages(legacyMessages);
+              const serializedSummary = parseChainViewSummary(serialized.summaryJson);
+              if (serializedSummary) {
+                summary = serializedSummary;
+                backfillSummary.run(
+                  serialized.summaryJson,
+                  serialized.recentMessagesJson,
+                  sessionId,
+                  cr.id,
+                );
+              }
+            }
+          }
           let page: LoadedHistoryPage | null = null;
           if (remainingMessages > 0 && remainingBytes > 0 && summary.messageCount > 0) {
             const newestMessageBytes = summary.newestMessageBytes;
@@ -1233,16 +1261,6 @@ function loadSessionInternal(
           }
           const messages = page?.messages ?? [];
           const startIndex = page?.startIndex ?? summary.messageCount;
-          if (!persistedSummary && startIndex === 0) {
-            const serialized = serializeChainMessages(messages);
-            summary = parseChainViewSummary(serialized.summaryJson) ?? summary;
-            backfillSummary.run(
-              serialized.summaryJson,
-              serialized.recentMessagesJson,
-              sessionId,
-              cr.id,
-            );
-          }
           remainingMessages = Math.max(0, remainingMessages - messages.length);
           remainingBytes = Math.max(0, remainingBytes - (page?.loadedBytes ?? 0));
           try {

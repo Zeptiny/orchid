@@ -1978,6 +1978,61 @@ describe('bounded renderer history views', () => {
     expect(older.complete).toBe(true);
   });
 
+  it('backfills bounded projections for truncated legacy chains on first view load', () => {
+    const messages = [
+      makeMessage({ id: 'legacy-0', role: 'user', content: 'question' }),
+      makeMessage({ id: 'legacy-1', role: 'assistant', content: 'one' }),
+      makeMessage({ id: 'legacy-2', role: 'assistant', content: 'two' }),
+      makeMessage({ id: 'legacy-3', role: 'assistant', content: 'three' }),
+    ];
+    saveSession(makeSession({
+      id: SID,
+      chains: [makeChain(SID, { id: 'chain-legacy-window', messages })],
+    }), storageOpts);
+
+    const db = openSqliteDb(storageOpts.dbPath!);
+    db.prepare(`
+      UPDATE chains
+      SET summary_json = NULL, recent_messages_json = NULL
+      WHERE session_id = ? AND id = ?
+    `).run(SID, 'chain-legacy-window');
+
+    const first = loadSessionView(SID, {
+      ...storageOpts,
+      sessionViewMessageBudget: 2,
+      sessionViewByteBudget: 1024 * 1024,
+    })!;
+    expect(first.chains[0].messages.map((message) => message.id))
+      .toEqual(['legacy-2', 'legacy-3']);
+    expect(first.chains[0].messageStartIndex).toBe(2);
+
+    const projection = db.prepare(`
+      SELECT summary_json, recent_messages_json
+      FROM chains WHERE session_id = ? AND id = ?
+    `).get(SID, 'chain-legacy-window') as {
+      summary_json: string | null;
+      recent_messages_json: string | null;
+    };
+    expect(projection.summary_json).not.toBeNull();
+    expect(projection.recent_messages_json).not.toBeNull();
+
+    db.prepare(`
+      UPDATE chains SET messages_json = ?
+      WHERE session_id = ? AND id = ?
+    `).run('not-json', SID, 'chain-legacy-window');
+    db.close();
+
+    const second = loadSessionView(SID, {
+      ...storageOpts,
+      sessionViewMessageBudget: 2,
+      sessionViewByteBudget: 1024 * 1024,
+    })!;
+    expect(second.chains[0].messages.map((message) => message.id))
+      .toEqual(['legacy-2', 'legacy-3']);
+    expect(second.chains[0].messageCount).toBe(4);
+    expect(second.chains[0].messageStartIndex).toBe(2);
+  });
+
   it('pages older messages without breaking tool-call/result reconstruction', () => {
     const toolCall = makeMessage({
       id: 'call-message',
