@@ -42,6 +42,9 @@ export function useBackgroundCommands(
   const [state, setState] = useState<BackgroundCommandsState>({ status: 'loading' });
   const sessionIdRef = useRef(activeSessionId);
   sessionIdRef.current = activeSessionId;
+  const enabledRef = useRef(enabled);
+  enabledRef.current = enabled;
+  const requestGenerationRef = useRef(0);
   const aliveRef = useRef(true);
 
   useEffect(() => {
@@ -52,6 +55,7 @@ export function useBackgroundCommands(
   }, []);
 
   const refresh = useCallback(async () => {
+    const generation = ++requestGenerationRef.current;
     if (!enabled || !activeSessionId || !window.orchid?.bgCmd?.list) {
       if (aliveRef.current) setState({ status: 'empty' });
       return;
@@ -60,10 +64,20 @@ export function useBackgroundCommands(
     const requestId = activeSessionId;
     try {
       const commands = await window.orchid.bgCmd.list({ sessionId: activeSessionId });
-      if (!aliveRef.current || sessionIdRef.current !== requestId) return;
+      if (
+        !aliveRef.current
+        || !enabledRef.current
+        || requestGenerationRef.current !== generation
+        || sessionIdRef.current !== requestId
+      ) return;
       setState(listStateFrom(commands));
     } catch (err) {
-      if (!aliveRef.current || sessionIdRef.current !== requestId) return;
+      if (
+        !aliveRef.current
+        || !enabledRef.current
+        || requestGenerationRef.current !== generation
+        || sessionIdRef.current !== requestId
+      ) return;
       const error = err instanceof Error ? err.message : String(err);
       setState({ status: 'error', error });
     }

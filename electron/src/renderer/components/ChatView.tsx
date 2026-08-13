@@ -83,6 +83,9 @@ interface ChatViewProps {
 
 export function ChatView({ isVisible = true, bootstrapConfig = null, onNotify, activity }: ChatViewProps) {
   const session = useSession();
+  const workspaceCwd = session.workspace?.cwd ?? session.activeSession?.cwd ?? null;
+  const workspaceCwdRef = useRef(workspaceCwd);
+  workspaceCwdRef.current = workspaceCwd;
   const subagents = useSubagents(session.activeSession?.id ?? null);
   const todos = useTodos(
     session.activeSession?.id ?? null,
@@ -136,14 +139,22 @@ export function ChatView({ isVisible = true, bootstrapConfig = null, onNotify, a
   const [projectConfigDir, setProjectConfigDir] = useState<string | null>(null);
   const [subagentOpenRequest, setSubagentOpenRequest] = useState<SubagentOpenRequest>({ generation: 0, id: null });
   const chatContentRef = useRef<HTMLDivElement>(null);
+  const mcpRefreshGeneration = useRef(0);
+  const indexRefreshGeneration = useRef(0);
   const notify = onNotify;
 
   // Workspace-scoped status refreshes (declared early so the trust grant
   // callback can re-run them once a project becomes trusted).
-  const refreshMCP = useCallback(async () => {
+  const refreshMCP = useCallback(async (expectedWorkspaceKey?: string | null) => {
+    const generation = ++mcpRefreshGeneration.current;
     try {
       if (window.orchid?.mcp?.status) {
         const status = await window.orchid.mcp.status();
+        if (
+          generation !== mcpRefreshGeneration.current
+          || (expectedWorkspaceKey !== undefined
+            && workspaceCwdRef.current !== expectedWorkspaceKey)
+        ) return;
         setMcpServers(status);
       }
     } catch {
@@ -151,13 +162,19 @@ export function ChatView({ isVisible = true, bootstrapConfig = null, onNotify, a
     }
   }, []);
 
-  const refreshIndex = useCallback(async () => {
+  const refreshIndex = useCallback(async (expectedWorkspaceKey?: string | null) => {
+    const generation = ++indexRefreshGeneration.current;
     try {
       if (window.orchid?.rag?.status && window.orchid?.ast?.status) {
         const [rag, ast] = await Promise.all([
           window.orchid.rag.status(),
           window.orchid.ast.status(),
         ]);
+        if (
+          generation !== indexRefreshGeneration.current
+          || (expectedWorkspaceKey !== undefined
+            && workspaceCwdRef.current !== expectedWorkspaceKey)
+        ) return;
         setRagStatus(rag);
         setAstStatus(ast);
       }
@@ -933,7 +950,6 @@ export function ChatView({ isVisible = true, bootstrapConfig = null, onNotify, a
     }
   }, [refreshIndex]);
 
-  const workspaceCwd = session.activeSession?.cwd ?? null;
   useInspectorHydration({
     enabled: sidebarOpen,
     workspaceKey: workspaceCwd,

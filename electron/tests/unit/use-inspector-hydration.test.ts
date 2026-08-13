@@ -30,9 +30,13 @@ describe('useInspectorHydration', () => {
     rerender({ enabled: true, workspaceKey: '/project-a' });
     await waitFor(() => expect(refreshMCP).toHaveBeenCalledOnce());
     expect(refreshIndex).toHaveBeenCalledOnce();
+    expect(refreshMCP).toHaveBeenLastCalledWith('/project-a');
+    expect(refreshIndex).toHaveBeenLastCalledWith('/project-a');
 
     rerender({ enabled: true, workspaceKey: '/project-b' });
     await waitFor(() => expect(refreshMCP).toHaveBeenCalledTimes(2));
     expect(refreshIndex).toHaveBeenCalledTimes(2);
+    expect(refreshMCP).toHaveBeenLastCalledWith('/project-b');
+    expect(refreshIndex).toHaveBeenLastCalledWith('/project-b');
   });
 });
