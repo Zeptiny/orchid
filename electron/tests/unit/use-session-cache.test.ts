@@ -29,7 +29,7 @@ type SessionUpdatePatch = {
 
 const updatedHandlers: Array<(event: SessionUpdatePatch) => void> = [];
 const workspaceHandlers: Array<(event: {
-  workspace: { cwd: string | null; source: string; status: string };
+  workspace: { cwd: string | null; source: string; status: string; trust?: string };
 }) => void> = [];
 
 function makeSession(overrides: Partial<Session> = {}): Session {
@@ -108,7 +108,7 @@ function installOrchidApi() {
           };
         },
         onWorkspaceChanged: (handler: (event: {
-          workspace: { cwd: string | null; source: string; status: string };
+          workspace: { cwd: string | null; source: string; status: string; trust?: string };
         }) => void) => {
           workspaceHandlers.push(handler);
           return () => {
@@ -137,6 +137,39 @@ describe('useSession shared cache', () => {
 
   afterEach(() => {
     vi.unstubAllGlobals();
+  });
+
+  it('keeps unused loading state out of the shared snapshot', async () => {
+    const { __sessionCacheTest } = await import('../../src/renderer/hooks/useSession');
+    __sessionCacheTest.reset();
+
+    expect(__sessionCacheTest.getSnapshot()).not.toHaveProperty('isLoading');
+  });
+
+  it('deduplicates workspace updates by stable fields', async () => {
+    listMock.mockResolvedValue([]);
+    getWorkspaceMock.mockResolvedValue({ cwd: null, source: 'unbound', status: 'unbound' });
+    const { __sessionCacheTest } = await import('../../src/renderer/hooks/useSession');
+    __sessionCacheTest.reset();
+    __sessionCacheTest.ensureBootstrapped();
+    await Promise.resolve();
+
+    const listener = vi.fn();
+    const unsubscribe = __sessionCacheTest.subscribe(listener);
+    for (const handler of workspaceHandlers) {
+      handler({ workspace: { cwd: '/project', source: 'session', status: 'valid' } });
+      handler({
+        workspace: {
+          cwd: '/project',
+          source: 'session',
+          status: 'valid',
+          trust: 'trusted',
+        },
+      });
+    }
+
+    expect(listener).toHaveBeenCalledOnce();
+    unsubscribe();
   });
 
   it('shares active session across load from a second consumer', async () => {
@@ -401,13 +434,26 @@ describe('useSession shared cache', () => {
     expect(__sessionCacheTest.getSnapshot().activeSession?.id).toBe('b');
     expect(__sessionCacheTest.getSnapshot().activeSession?.name).toBe('Beta');
 
-    // Workspace event fans out to every subscriber.
+    // An equivalent workspace event is ignored; a semantic change fans out.
     chatListener.mockClear();
     configListener.mockClear();
     for (const handler of workspaceHandlers) {
       handler({ workspace: { cwd: '/proj/b', source: 'session', status: 'valid' } });
     }
     expect(__sessionCacheTest.getSnapshot().workspace?.cwd).toBe('/proj/b');
+    expect(chatListener).not.toHaveBeenCalled();
+    expect(configListener).not.toHaveBeenCalled();
+
+    for (const handler of workspaceHandlers) {
+      handler({
+        workspace: {
+          cwd: '/proj/b',
+          source: 'session',
+          status: 'valid',
+          trust: 'untrusted',
+        },
+      });
+    }
     expect(chatListener).toHaveBeenCalled();
     expect(configListener).toHaveBeenCalled();
 

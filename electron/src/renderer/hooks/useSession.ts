@@ -8,7 +8,7 @@
  * - Active session
  * - Session list
  * - load(), create(), delete(), rename() actions
- * - Loading/error states (interaction states)
+ * - Session-list error states
  */
 import { useCallback, useMemo, useSyncExternalStore } from 'react';
 import type { Session } from '../../shared/types/session';
@@ -68,8 +68,6 @@ export interface UseSessionReturn {
   draftGeneration: number;
   /** Refresh the session list. */
   refresh: () => Promise<void>;
-  /** Whether a session is currently loading. */
-  isLoading: boolean;
 }
 
 const UNBOUND_WORKSPACE: WorkspaceInfo = {
@@ -86,14 +84,12 @@ interface SharedSnapshot {
   readonly activeSession: Session | null;
   readonly listState: SessionListState;
   readonly workspace: WorkspaceInfo | null;
-  readonly isLoading: boolean;
   readonly draftGeneration: number;
 }
 
 let activeSession: Session | null = null;
 let listState: SessionListState = { status: 'loading' };
 let workspace: WorkspaceInfo | null = null;
-let isLoading = false;
 let draftGeneration = 0;
 /** Monotonic generation so out-of-order session:load responses are dropped. */
 let loadGeneration = 0;
@@ -105,7 +101,6 @@ let cachedSnapshot: SharedSnapshot = {
   activeSession,
   listState,
   workspace,
-  isLoading,
   draftGeneration,
 };
 
@@ -114,7 +109,6 @@ function rebuildSnapshot(): void {
     activeSession,
     listState,
     workspace,
-    isLoading,
     draftGeneration,
   };
   for (const listener of listeners) listener();
@@ -146,15 +140,18 @@ function setListState(next: SessionListState | ((prev: SessionListState) => Sess
 }
 
 function setWorkspaceState(next: WorkspaceInfo | null): void {
-  if (next === workspace) return;
+  if (workspaceStatesEqual(next, workspace)) return;
   workspace = next;
   rebuildSnapshot();
 }
 
-function setIsLoading(next: boolean): void {
-  if (next === isLoading) return;
-  isLoading = next;
-  rebuildSnapshot();
+function workspaceStatesEqual(a: WorkspaceInfo | null, b: WorkspaceInfo | null): boolean {
+  if (a === b) return true;
+  if (!a || !b) return false;
+  return a.cwd === b.cwd
+    && a.source === b.source
+    && a.status === b.status
+    && (a.trust ?? 'trusted') === (b.trust ?? 'trusted');
 }
 
 function advanceDraftGeneration(): number {
@@ -285,7 +282,6 @@ async function loadShared(id: string): Promise<Session | null> {
 
   const generation = ++loadGeneration;
   advanceDraftGeneration();
-  setIsLoading(true);
   try {
     const session = await window.orchid.session.load({ id });
     // Drop stale responses when a newer load (or draft) superseded this one.
@@ -299,10 +295,6 @@ async function loadShared(id: string): Promise<Session | null> {
   } catch (err) {
     console.error('Failed to load session:', err);
     return null;
-  } finally {
-    if (generation === loadGeneration) {
-      setIsLoading(false);
-    }
   }
 }
 
@@ -313,7 +305,6 @@ async function openShared(id: string): Promise<SessionOpenResult | null> {
 
   const generation = ++loadGeneration;
   advanceDraftGeneration();
-  setIsLoading(true);
   try {
     const result = await window.orchid.session.open({ id });
     // Drop stale responses when a newer load (or draft) superseded this one.
@@ -330,10 +321,6 @@ async function openShared(id: string): Promise<SessionOpenResult | null> {
   } catch (err) {
     console.error('Failed to open session:', err);
     return null;
-  } finally {
-    if (generation === loadGeneration) {
-      setIsLoading(false);
-    }
   }
 }
 
@@ -355,15 +342,10 @@ async function createShared(): Promise<Session> {
     return session;
   }
 
-  setIsLoading(true);
-  try {
-    const session = await window.orchid.session.create();
-    setActiveSession(session);
-    await refreshShared();
-    return session;
-  } finally {
-    setIsLoading(false);
-  }
+  const session = await window.orchid.session.create();
+  setActiveSession(session);
+  await refreshShared();
+  return session;
 }
 
 async function enterDraftShared(): Promise<void> {
@@ -538,7 +520,6 @@ export const __sessionCacheTest = {
     activeSession = null;
     listState = { status: 'loading' };
     workspace = null;
-    isLoading = false;
     draftGeneration = 0;
     loadGeneration = 0;
     bootstrapped = false;
@@ -547,7 +528,6 @@ export const __sessionCacheTest = {
       activeSession,
       listState,
       workspace,
-      isLoading,
       draftGeneration,
     };
   },
@@ -618,7 +598,6 @@ export function useSession(): UseSessionReturn {
       changeCwd,
       draftGeneration: snapshot.draftGeneration,
       refresh,
-      isLoading: snapshot.isLoading,
     }),
     [
       snapshot,
