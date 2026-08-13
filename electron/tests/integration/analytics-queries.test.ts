@@ -34,6 +34,14 @@ import {
   getContext,
 } from '../../src/main/providers/accounting/analytics-queries';
 import { _clearDbCache } from '../../src/main/session/storage';
+import type { ConnectionStore } from '../../src/main/providers/connection-store';
+import type { ProviderStatusObservation } from '../../src/main/providers/status/cache';
+import type { ProviderStatusService } from '../../src/main/providers/status/service';
+import {
+  resetProviderRuntimeContext,
+  setProviderConnectionStore,
+  setProviderStatusService,
+} from '../../src/main/providers/runtime-context';
 
 // ─── Shared state ─────────────────────────────────────────────────────────────
 
@@ -245,6 +253,7 @@ afterEach(() => {
   resetToolAttemptStore();
   resetContextSnapshotStore();
   resetSubagentAttributionStore();
+  resetProviderRuntimeContext();
   _clearDbCache();
   fs.rmSync(tempDir, { recursive: true, force: true });
 });
@@ -459,6 +468,71 @@ describe('analytics-queries', () => {
         { providerId: 'anthropic', cost: '31' },
         { providerId: 'openai', cost: '5' },
       ]);
+    });
+  });
+
+  // ── Quota overview (connection gating) ─────────────────────────────────────
+
+  describe('quotaByProvider connection gating', () => {
+    function quotaObservation(providerId: string, connectionId?: string): ProviderStatusObservation {
+      return {
+        providerId,
+        ...(connectionId ? { connectionId } : {}),
+        observedAt: '2026-07-12T10:00:00.000Z',
+        providerUpdatedAt: null,
+        availability: 'available',
+        stale: false,
+        data: {
+          quota: {
+            observedAt: '2026-07-12T10:00:00.000Z',
+            balances: [{ label: 'Credits remaining', amount: '12.5', unit: 'USD' }],
+            subscription: null,
+            allowances: [{ label: 'API key', state: 'available' }],
+          },
+        },
+      };
+    }
+
+    function fakeStatusService(observations: readonly ProviderStatusObservation[]): ProviderStatusService {
+      return { list: () => observations } as unknown as ProviderStatusService;
+    }
+
+    function fakeConnectionStore(providerIds: readonly string[]): ConnectionStore {
+      return { listProviderIdsSync: () => new Set(providerIds) } as unknown as ConnectionStore;
+    }
+
+    it('hides cached quota for providers with no configured connection', () => {
+      setProviderStatusService(fakeStatusService([
+        quotaObservation('lilac'),
+        quotaObservation('neuralwatt', 'conn-1'),
+      ]));
+      setProviderConnectionStore(fakeConnectionStore(['neuralwatt']));
+
+      const result = getOverview();
+      expect(result.quotaByProvider).toHaveLength(1);
+      expect(result.quotaByProvider[0].providerId).toBe('neuralwatt');
+      expect(result.quotaByProvider[0].connectionId).toBe('conn-1');
+    });
+
+    it('shows no quota cards when no connections are configured', () => {
+      setProviderStatusService(fakeStatusService([
+        quotaObservation('lilac'),
+        quotaObservation('neuralwatt', 'conn-1'),
+      ]));
+      setProviderConnectionStore(fakeConnectionStore([]));
+
+      const result = getOverview();
+      expect(result.quotaByProvider).toHaveLength(0);
+    });
+
+    it('shows a provider-wide observation when a connection exists for that provider', () => {
+      setProviderStatusService(fakeStatusService([quotaObservation('lilac')]));
+      setProviderConnectionStore(fakeConnectionStore(['lilac']));
+
+      const result = getOverview();
+      expect(result.quotaByProvider).toHaveLength(1);
+      expect(result.quotaByProvider[0].providerId).toBe('lilac');
+      expect(result.quotaByProvider[0].connectionId).toBeNull();
     });
   });
 

@@ -29,7 +29,7 @@ import type { SubagentAttributionRecord } from '../../../shared/types/accounting
 import type { QuotaOverviewEntry } from '../../../shared/types/analytics';
 import { providerQuotaSchema } from '../../../shared/types/provider-facets';
 import { getSessionNames } from '../../session/storage';
-import { getProviderStatusService } from '../runtime-context';
+import { getProviderConnectionStore, getProviderStatusService } from '../runtime-context';
 
 const DEFAULT_LIMIT = 1000;
 const CONTEXT_TOP_SESSIONS = 5;
@@ -159,12 +159,20 @@ function parseSnapshotModelDisplayName(snapshotJson: string): string | null {
  * Read the latest typed quota observations from the status cache (R24). These
  * render in native units and are informational only; the ledger is never joined
  * against them, and an unavailable status service yields an empty list.
+ *
+ * Entries are gated on configured connections: quota is only shown for a
+ * provider the user actually has a connection for. Without this gate, the
+ * credential-free provider-wide sources (e.g. Lilac, scheduled unconditionally)
+ * and persisted cache entries would surface quota for providers with no
+ * connection — information that is irrelevant to the user.
  */
 function getQuotaOverview(): QuotaOverviewEntry[] {
   try {
     const status = getProviderStatusService();
+    const connectedProviders = getProviderConnectionStore().listProviderIdsSync();
     const entries: QuotaOverviewEntry[] = [];
     for (const observation of status.list()) {
+      if (!connectedProviders.has(observation.providerId)) continue;
       const parsed = providerQuotaSchema.safeParse(observation.data['quota']);
       if (!parsed.success) continue;
       const quota = parsed.data;

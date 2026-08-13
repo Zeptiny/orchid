@@ -106,6 +106,15 @@ export class ConnectionStore {
     return readDocument(this.filePath).connections.map((connection) => ({ ...connection }));
   }
 
+  /**
+   * Synchronous read of the configured provider ids. The async surface stays
+   * authoritative for mutations; this read-only variant serves main-process
+   * consumers (analytics) that cannot await without rippling sync APIs.
+   */
+  listProviderIdsSync(): Set<string> {
+    return new Set(readDocument(this.filePath).connections.map((connection) => connection.providerId));
+  }
+
   async get(id: string): Promise<ProviderConnection | null> {
     const connection = readDocument(this.filePath).connections.find((item) => item.id === id);
     return connection ? { ...connection } : null;
