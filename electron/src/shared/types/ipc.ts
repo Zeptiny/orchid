@@ -831,6 +831,12 @@ export interface SessionDeleteResult {
   workingSet: WorkingSetSnapshot;
 }
 
+/** Authoritative deletion broadcast with the recipient window's next focus. */
+export interface SessionDeletedEvent {
+  id: string;
+  workingSet: WorkingSetSnapshot;
+}
+
 export interface SessionRenameMessage {
   id: string;
   name: string;
@@ -1389,6 +1395,8 @@ export interface OrchidAPI {
     removeTab: (message: WorkingSetIdMessage) => Promise<WorkingSetSnapshot>;
     setTabFocus: (message: WorkingSetSetFocusMessage) => Promise<WorkingSetSnapshot>;
     onWorkingSetChanged: (callback: (event: WorkingSetChangedEvent) => void) => () => void;
+    /** A session disappeared; each window receives its own focus snapshot. */
+    onDeleted: (callback: (event: SessionDeletedEvent) => void) => () => void;
     onRenamed: (callback: (event: SessionRenamedEvent) => void) => () => void;
     /** Session auto-created on first message from draft mode. */
     onCreated: (callback: (event: SessionCreatedEvent) => void) => () => void;
@@ -1581,6 +1589,8 @@ export const IPC_CHANNELS = {
   /** Clear active session without creating a file (draft / new chat). */
   SESSION_CLEAR_ACTIVE: 'session:clear_active',
   SESSION_DELETE: 'session:delete',
+  /** Fired after durable deletion with a per-window working-set snapshot. */
+  SESSION_DELETED: 'session:deleted',
   SESSION_RENAME: 'session:rename',
   SESSION_RENAMED: 'session:renamed',
   /** Fired when a session is created (eager create or first-message lazy create). */
@@ -1812,6 +1822,7 @@ export const ALLOWED_EVENT_CHANNELS = [
   IPC_CHANNELS.CHAT_TOOL_CALL_DELTA,
   IPC_CHANNELS.CHAT_TOOL_CALL_UPDATE,
   IPC_CHANNELS.SUBAGENTS_EVENT,
+  IPC_CHANNELS.SESSION_DELETED,
   IPC_CHANNELS.SESSION_RENAMED,
   IPC_CHANNELS.SESSION_CREATED,
   IPC_CHANNELS.SESSION_UPDATED,

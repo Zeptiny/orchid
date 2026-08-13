@@ -56,6 +56,7 @@ import {
 } from '../permissions/session-overrides';
 import {
   workingSetClearFocus,
+  getWorkingSetSnapshot,
   workingSetOpenOrFocus,
   workingSetRemove,
 } from './session-working-set';
@@ -222,6 +223,25 @@ function emitWorkspaceChanged(
     return;
   }
   sender.send(IPC_CHANNELS.SESSION_WORKSPACE_CHANGED, { workspace });
+}
+
+/** Broadcast durable deletion with each recipient's own MRU/focus snapshot. */
+function broadcastSessionDeleted(sessionId: string): void {
+  const windows = typeof BrowserWindow.getAllWindows === 'function'
+    ? BrowserWindow.getAllWindows()
+    : [];
+  for (const win of windows) {
+    try {
+      if (win.isDestroyed() || win.webContents.isDestroyed()) continue;
+      const ownerId = String(win.webContents.id);
+      win.webContents.send(IPC_CHANNELS.SESSION_DELETED, {
+        id: sessionId,
+        workingSet: getWorkingSetSnapshot(ownerId),
+      });
+    } catch {
+      // Window closed while the deletion broadcast was being assembled.
+    }
+  }
 }
 
 /**
@@ -492,9 +512,12 @@ export function registerSessionIPC(): void {
       removeSessionActivity(parsed.data.id);
     }
     const workingSet = workingSetRemove(parsed.data.id, String(event.sender.id));
+    clearChatHistory(parsed.data.id);
+    // `not_found` is still authoritative absence and must clear stale copies
+    // held by other windows just like a newly deleted row.
+    broadcastSessionDeleted(parsed.data.id);
     if (deleted && wasActive) {
       const windowId = String(event.sender.id);
-      clearChatHistory(parsed.data.id);
       emitWorkspaceChanged(event.sender, resolveWindowWorkspace(windowId));
     }
     return { status: deleted ? 'deleted' : 'not_found', workingSet };

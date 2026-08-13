@@ -344,6 +344,28 @@ describe('preload session deletion validation', () => {
 
     await expect(api.session.delete({ id: SESSION_ID })).resolves.toEqual(result);
   });
+
+  it('delivers only well-formed session deletion events', () => {
+    const received: unknown[] = [];
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    api.session.onDeleted((event) => received.push(event));
+    const listener = electronMock.handlers.get(IPC_CHANNELS.SESSION_DELETED);
+    if (!listener) throw new Error('session:deleted listener was not registered');
+    const valid = {
+      id: SESSION_ID,
+      workingSet: {
+        openSessionIds: ['session-2'],
+        focusedSessionId: 'session-2',
+        mruSessionIds: ['session-2'],
+      },
+    };
+
+    listener({}, valid);
+    listener({}, { id: SESSION_ID, workingSet: { openSessionIds: [] } });
+
+    expect(received).toEqual([valid]);
+    expect(warn).toHaveBeenCalled();
+  });
 });
 
 describe('preload terminal chat history validation', () => {

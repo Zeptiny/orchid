@@ -24,6 +24,10 @@ const CONNECTION_UUID = '11111111-2222-4333-8444-555555555555';
 
 const mocks = vi.hoisted(() => {
   const handlers = new Map<string, (...args: unknown[]) => unknown>();
+  const windows: Array<{
+    isDestroyed: () => boolean;
+    webContents: { id: number; isDestroyed: () => boolean; send: ReturnType<typeof vi.fn> };
+  }> = [];
 
   type SessionShape = {
     id: string;
@@ -133,7 +137,14 @@ const mocks = vi.hoisted(() => {
       focusedSessionId: 'remaining-session',
       mruSessionIds: ['remaining-session'],
     })),
+    getWorkingSetSnapshot: vi.fn((ownerId: string) => ({
+      openSessionIds: [`remaining-${ownerId}`],
+      focusedSessionId: `remaining-${ownerId}`,
+      mruSessionIds: [`remaining-${ownerId}`],
+    })),
+    windows,
     discardDeletedSessionRuntime: vi.fn(),
+    clearChatHistory: vi.fn(),
     clearPermissionSessionState: vi.fn(),
     clearToolCallHistoryForSession: vi.fn(),
     clearFunctionHashesForSession: vi.fn(),
@@ -152,7 +163,10 @@ const mocks = vi.hoisted(() => {
 
 vi.mock('electron', () => ({
   ipcMain: mocks.ipcMain,
-  BrowserWindow: { fromWebContents: vi.fn(() => null) },
+  BrowserWindow: {
+    fromWebContents: vi.fn(() => null),
+    getAllWindows: vi.fn(() => mocks.windows),
+  },
   dialog: { showOpenDialog: vi.fn() },
   webContents: { getAllWebContents: vi.fn(() => []) },
 }));
@@ -187,7 +201,7 @@ vi.mock('../../src/main/project/trust', () => ({
 }));
 
 vi.mock('../../src/main/ipc/chat-history', () => ({
-  clearChatHistory: vi.fn(),
+  clearChatHistory: mocks.clearChatHistory,
   seedChatHistory: vi.fn(),
 }));
 
@@ -195,6 +209,7 @@ vi.mock('../../src/main/ipc/session-working-set', () => ({
   workingSetClearFocus: vi.fn(),
   workingSetOpenOrFocus: mocks.workingSetOpenOrFocus,
   workingSetRemove: mocks.workingSetRemove,
+  getWorkingSetSnapshot: mocks.getWorkingSetSnapshot,
 }));
 
 vi.mock('../../src/main/ipc/chat', () => ({
@@ -322,6 +337,7 @@ function mockTieredProvider(): void {
 beforeEach(async () => {
   vi.clearAllMocks();
   mocks.handlers.clear();
+  mocks.windows.length = 0;
   mocks.sessionManager._reset();
   mocks.connectionStore.list.mockReturnValue([]);
   mocks.catalogStore.getProviderDefinitions.mockReturnValue([]);
@@ -379,6 +395,65 @@ describe('session:delete', () => {
 
     expect(mocks.discardDeletedSessionRuntime).not.toHaveBeenCalled();
     expect(mocks.workingSetRemove).not.toHaveBeenCalled();
+  });
+
+  it('broadcasts a window-specific deletion snapshot to every live renderer', async () => {
+    const first = {
+      isDestroyed: () => false,
+      webContents: { id: 9, isDestroyed: () => false, send: vi.fn() },
+    };
+    const second = {
+      isDestroyed: () => false,
+      webContents: { id: 10, isDestroyed: () => false, send: vi.fn() },
+    };
+    mocks.windows.push(first, second);
+    const handler = mocks.handlers.get(IPC_CHANNELS.SESSION_DELETE);
+    expect(handler).toBeDefined();
+
+    await handler!({ sender: sender(9) }, { id: SESSION_UUID });
+
+    expect(first.webContents.send).toHaveBeenCalledWith(
+      IPC_CHANNELS.SESSION_DELETED,
+      {
+        id: SESSION_UUID,
+        workingSet: {
+          openSessionIds: ['remaining-9'],
+          focusedSessionId: 'remaining-9',
+          mruSessionIds: ['remaining-9'],
+        },
+      },
+    );
+    expect(second.webContents.send).toHaveBeenCalledWith(
+      IPC_CHANNELS.SESSION_DELETED,
+      {
+        id: SESSION_UUID,
+        workingSet: {
+          openSessionIds: ['remaining-10'],
+          focusedSessionId: 'remaining-10',
+          mruSessionIds: ['remaining-10'],
+        },
+      },
+    );
+  });
+
+  it('broadcasts authoritative absence when the durable row was already missing', async () => {
+    mocks.sessionManager.delete.mockReturnValueOnce(false);
+    const recipient = {
+      isDestroyed: () => false,
+      webContents: { id: 10, isDestroyed: () => false, send: vi.fn() },
+    };
+    mocks.windows.push(recipient);
+    const handler = mocks.handlers.get(IPC_CHANNELS.SESSION_DELETE);
+    expect(handler).toBeDefined();
+
+    const result = await handler!({ sender: sender(9) }, { id: SESSION_UUID });
+
+    expect(result).toMatchObject({ status: 'not_found' });
+    expect(mocks.clearChatHistory).toHaveBeenCalledWith(SESSION_UUID);
+    expect(recipient.webContents.send).toHaveBeenCalledWith(
+      IPC_CHANNELS.SESSION_DELETED,
+      expect.objectContaining({ id: SESSION_UUID }),
+    );
   });
 });
 

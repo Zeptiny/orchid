@@ -17,6 +17,7 @@ import type { SessionSummary } from '../../shared/types/ipc-boundary';
 import type {
   WorkspaceInfo,
   SessionDeleteResult,
+  SessionDeletedEvent,
   SessionOpenResult,
   SessionHistoryPageResult,
 } from '../../shared/types/ipc';
@@ -31,6 +32,14 @@ export type SessionListState =
   | { status: 'partial'; sessions: SessionSummary[]; error: string }
   | { status: 'error'; error: string };
 
+/** One deduplicated deletion for renderer navigation reconciliation. */
+export interface SessionDeletionNotice extends SessionDeletedEvent {
+  /** Whether this renderer was displaying the deleted session. */
+  wasActive: boolean;
+  /** Monotonic renderer-local identity used to run navigation exactly once. */
+  sequence: number;
+}
+
 export interface UseSessionReturn {
   /** The active (loaded) session, or null (draft / new chat). */
   activeSession: Session | null;
@@ -38,6 +47,8 @@ export interface UseSessionReturn {
   listState: SessionListState;
   /** Session IDs with a durable delete currently in flight. */
   pendingDeleteIds: ReadonlySet<string>;
+  /** Latest authoritative deletion, deduplicated across event and invoke result. */
+  deletionNotice: SessionDeletionNotice | null;
   /** Current workspace (draft → session → sticky → unbound). */
   workspace: WorkspaceInfo | null;
   /** Load a session by ID. Returns the loaded session (or null on failure). */
@@ -93,6 +104,7 @@ interface SharedSnapshot {
   readonly activeSession: Session | null;
   readonly listState: SessionListState;
   readonly pendingDeleteIds: ReadonlySet<string>;
+  readonly deletionNotice: SessionDeletionNotice | null;
   readonly workspace: WorkspaceInfo | null;
   readonly draftGeneration: number;
 }
@@ -100,6 +112,8 @@ interface SharedSnapshot {
 let activeSession: Session | null = null;
 let listState: SessionListState = { status: 'loading' };
 let pendingDeleteIds: ReadonlySet<string> = new Set();
+let deletionNotice: SessionDeletionNotice | null = null;
+let deletionSequence = 0;
 let workspace: WorkspaceInfo | null = null;
 let draftGeneration = 0;
 /** Monotonic generation so out-of-order session:load responses are dropped. */
@@ -117,6 +131,7 @@ let cachedSnapshot: SharedSnapshot = {
   activeSession,
   listState,
   pendingDeleteIds,
+  deletionNotice,
   workspace,
   draftGeneration,
 };
@@ -126,6 +141,7 @@ function rebuildSnapshot(): void {
     activeSession,
     listState,
     pendingDeleteIds,
+    deletionNotice,
     workspace,
     draftGeneration,
   };
@@ -166,14 +182,29 @@ function setDeletePending(id: string, pending: boolean): void {
   rebuildSnapshot();
 }
 
-function removeSessionSummary(id: string): void {
-  setListState((prev) => {
-    if (prev.status !== 'ready' && prev.status !== 'partial') return prev;
-    const sessions = prev.sessions.filter((session) => session.id !== id);
-    if (sessions.length === prev.sessions.length) return prev;
-    if (sessions.length === 0 && prev.status === 'ready') return { status: 'empty' };
-    return { ...prev, sessions };
-  });
+function withoutSessionSummary(state: SessionListState, id: string): SessionListState {
+  if (state.status !== 'ready' && state.status !== 'partial') return state;
+  const sessions = state.sessions.filter((session) => session.id !== id);
+  if (sessions.length === state.sessions.length) return state;
+  if (sessions.length === 0 && state.status === 'ready') return { status: 'empty' };
+  return { ...state, sessions };
+}
+
+/** Apply the event/invoke deletion authority once for this renderer. */
+function applySessionDeletion(event: SessionDeletedEvent): boolean {
+  if (deletedSessionIds.has(event.id)) return false;
+  const wasActive = activeSession?.id === event.id;
+  deletedSessionIds.add(event.id);
+  loadGeneration += 1;
+  if (wasActive) activeSession = null;
+  listState = withoutSessionSummary(listState, event.id);
+  deletionNotice = {
+    ...event,
+    wasActive,
+    sequence: ++deletionSequence,
+  };
+  rebuildSnapshot();
+  return true;
 }
 
 function setWorkspaceState(next: WorkspaceInfo | null): void {
@@ -256,6 +287,14 @@ function ensureBootstrapped(): void {
           return prev;
         });
         void refreshShared();
+      }),
+    );
+  }
+
+  if (window.orchid?.session?.onDeleted) {
+    unsubscribers.push(
+      window.orchid.session.onDeleted((event) => {
+        applySessionDeletion(event);
       }),
     );
   }
@@ -527,12 +566,7 @@ function deleteSessionShared(id: string): Promise<SessionDeleteResult> {
 
 async function deleteSessionOnce(id: string): Promise<SessionDeleteResult> {
   if (!window.orchid?.session?.delete) {
-    if (activeSession?.id === id) {
-      setActiveSession(null);
-    }
-    deletedSessionIds.add(id);
-    removeSessionSummary(id);
-    return {
+    const result: SessionDeleteResult = {
       status: 'deleted',
       workingSet: {
         openSessionIds: [],
@@ -540,15 +574,14 @@ async function deleteSessionOnce(id: string): Promise<SessionDeleteResult> {
         mruSessionIds: [],
       },
     };
+    applySessionDeletion({ id, workingSet: result.workingSet });
+    return result;
   }
 
   const result = await window.orchid.session.delete({ id });
-  deletedSessionIds.add(id);
-  loadGeneration += 1;
-  if (activeSession?.id === id) {
-    setActiveSession(null);
-  }
-  removeSessionSummary(id);
+  // The broadcast normally arrives first; the invoke result is the fallback
+  // when this sender is no longer represented in BrowserWindow.getAllWindows.
+  applySessionDeletion({ id, workingSet: result.workingSet });
   return result;
 }
 
@@ -633,6 +666,8 @@ export const __sessionCacheTest = {
     activeSession = null;
     listState = { status: 'loading' };
     pendingDeleteIds = new Set();
+    deletionNotice = null;
+    deletionSequence = 0;
     workspace = null;
     draftGeneration = 0;
     loadGeneration = 0;
@@ -646,6 +681,7 @@ export const __sessionCacheTest = {
       activeSession,
       listState,
       pendingDeleteIds,
+      deletionNotice,
       workspace,
       draftGeneration,
     };
@@ -706,6 +742,7 @@ export function useSession(): UseSessionReturn {
       activeSession: snapshot.activeSession,
       listState: snapshot.listState,
       pendingDeleteIds: snapshot.pendingDeleteIds,
+      deletionNotice: snapshot.deletionNotice,
       workspace: snapshot.workspace,
       load,
       open,

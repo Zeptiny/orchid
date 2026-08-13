@@ -51,6 +51,7 @@ import type {
   SessionHistoryPageMessage,
   SessionHistoryPageResult,
   SessionDeleteMessage,
+  SessionDeletedEvent,
   SessionRenamedEvent,
   SessionCreatedEvent,
   SessionUpdatedEvent,
@@ -154,6 +155,7 @@ import {
   sessionServiceTierConfigResultSchema,
   sessionHistoryPageResultSchema,
   sessionDeleteResultSchema,
+  sessionDeletedEventSchema,
   chatSessionSnapshotSchema,
   subagentSnapshotSchema,
   subagentDetailResultSchema,
@@ -512,6 +514,9 @@ const orchidAPI: OrchidAPI = {
 
     onWorkingSetChanged: (callback: (event: WorkingSetChangedEvent) => void) =>
       onParsed(IPC_CHANNELS.SESSION_WORKING_SET_CHANGED, workingSetChangedEventSchema, callback),
+
+    onDeleted: (callback: (event: SessionDeletedEvent) => void) =>
+      onParsed(IPC_CHANNELS.SESSION_DELETED, sessionDeletedEventSchema, callback),
 
     onRenamed: (callback: (event: SessionRenamedEvent) => void) =>
       onParsed(IPC_CHANNELS.SESSION_RENAMED, sessionRenamedEventSchema, callback),

@@ -20,6 +20,7 @@ import { useSubagents } from '../hooks/useSubagents';
 import { useTodos } from '../hooks/useTodos';
 import type { UseSessionActivityReturn } from '../hooks/useSessionActivity';
 import { useSessionTabs } from '../hooks/useSessionTabs';
+import { useSessionDeletionReconciliation } from '../hooks/useSessionDeletionReconciliation';
 import { useProviders } from '../hooks/useProviders';
 import { useMessageQueue } from '../hooks/useMessageQueue';
 import { useQueueAutoFire } from '../hooks/useQueueAutoFire';
@@ -570,6 +571,29 @@ export function ChatView({ isVisible = true, bootstrapConfig = null, onNotify, a
     [handleSessionSelect, enterDraftMode],
   );
 
+  const handleSessionDeleteError = useCallback((error: unknown) => {
+    const message = error instanceof Error ? error.message : String(error);
+    notify(`Delete failed: ${message}`, 'error');
+  }, [notify]);
+
+  const deletionReconciliation = useMemo(() => ({
+    applySnapshot: tabs.applySnapshot,
+    clearQueue: messageQueue.clearQueue,
+    clearMessages: () => chat.setMessages([]),
+    focusAfterWorkingSet,
+    onError: handleSessionDeleteError,
+  }), [
+    tabs.applySnapshot,
+    messageQueue.clearQueue,
+    chat.setMessages,
+    focusAfterWorkingSet,
+    handleSessionDeleteError,
+  ]);
+  useSessionDeletionReconciliation(
+    session.deletionNotice,
+    deletionReconciliation,
+  );
+
   const performCloseTab = useCallback(
     async (id: string) => {
       const wasFocused = session.activeSession?.id === id;
@@ -592,30 +616,17 @@ export function ChatView({ isVisible = true, bootstrapConfig = null, onNotify, a
     [isLiveSession, performCloseTab],
   );
 
-  // When the active session is deleted, follow MRU among remaining open tabs.
+  // The deletion event/result reconciliation follows MRU for every window.
   const handleSessionDelete = useCallback(
     async (id: string) => {
       const wasActive = session.activeSession?.id === id;
-      // Clear BEFORE the delete invoke resolves: main force-stops the session
-      // and emits the terminal idle transition during this await, which would
-      // otherwise trigger queue autofire against a vanishing session.
+      // Clear before the invoke so queued work can never target a session whose
+      // durable row is about to disappear.
       if (wasActive) messageQueue.clearQueue();
-      const result = await session.deleteSession(id);
-      const snapshot = tabs.applySnapshot(result.workingSet);
-      if (!wasActive) return;
-
-      const gen = ++sessionSwitchGen.current;
-      chat.setMessages([]);
-      if (gen !== sessionSwitchGen.current) return;
-      await focusAfterWorkingSet(snapshot);
+      await session.deleteSession(id);
     },
-    [session, chat.setMessages, tabs.applySnapshot, focusAfterWorkingSet, messageQueue.clearQueue],
+    [session, messageQueue.clearQueue],
   );
-
-  const handleSessionDeleteError = useCallback((error: unknown) => {
-    const message = error instanceof Error ? error.message : String(error);
-    notify(`Delete failed: ${message}`, 'error');
-  }, [notify]);
 
   const handleSessionRename = useCallback(
     async (id: string, name: string) => {

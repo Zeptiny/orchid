@@ -5,6 +5,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ChainStatus } from '../../src/shared/types/chain';
 import type { Session } from '../../src/shared/types/session';
+import type { SessionDeletedEvent } from '../../src/shared/types/ipc';
 
 const listMock = vi.fn();
 const loadMock = vi.fn();
@@ -32,6 +33,7 @@ const updatedHandlers: Array<(event: SessionUpdatePatch) => void> = [];
 const workspaceHandlers: Array<(event: {
   workspace: { cwd: string | null; source: string; status: string; trust?: string };
 }) => void> = [];
+const deletedHandlers: Array<(event: SessionDeletedEvent) => void> = [];
 
 function makeSession(overrides: Partial<Session> = {}): Session {
   const now = new Date().toISOString();
@@ -72,6 +74,7 @@ function installOrchidApi() {
   createdHandlers.length = 0;
   updatedHandlers.length = 0;
   workspaceHandlers.length = 0;
+  deletedHandlers.length = 0;
 
   vi.stubGlobal('window', {
     orchid: {
@@ -116,6 +119,13 @@ function installOrchidApi() {
           return () => {
             const idx = workspaceHandlers.indexOf(handler);
             if (idx >= 0) workspaceHandlers.splice(idx, 1);
+          };
+        },
+        onDeleted: (handler: (event: SessionDeletedEvent) => void) => {
+          deletedHandlers.push(handler);
+          return () => {
+            const idx = deletedHandlers.indexOf(handler);
+            if (idx >= 0) deletedHandlers.splice(idx, 1);
           };
         },
       },
@@ -482,6 +492,49 @@ describe('useSession shared cache', () => {
       status: 'ready',
       sessions: [summaryB],
     });
+  });
+
+  it('applies a deletion broadcast once when the invoke response arrives later', async () => {
+    const sessionA = makeSession({ id: 'a', name: 'Alpha' });
+    const summaries = [
+      { id: 'a', name: 'Alpha', modelLabel: null, cwd: null, chainCount: 1, updatedAt: 2 },
+      { id: 'b', name: 'Beta', modelLabel: null, cwd: null, chainCount: 1, updatedAt: 1 },
+    ];
+    listMock.mockResolvedValue(summaries);
+    loadMock.mockResolvedValue(sessionA);
+    getWorkspaceMock.mockResolvedValue({ cwd: null, source: 'unbound', status: 'unbound' });
+    let resolveDelete!: (value: unknown) => void;
+    deleteMock.mockReturnValue(new Promise((resolve) => { resolveDelete = resolve; }));
+
+    const { __sessionCacheTest } = await import('../../src/renderer/hooks/useSession');
+    __sessionCacheTest.reset();
+    __sessionCacheTest.ensureBootstrapped();
+    await __sessionCacheTest.refresh();
+    await __sessionCacheTest.load('a');
+    const deletion = __sessionCacheTest.deleteSession('a');
+    const event = {
+      id: 'a',
+      workingSet: {
+        openSessionIds: ['b'],
+        focusedSessionId: 'b',
+        mruSessionIds: ['b'],
+      },
+    };
+
+    deletedHandlers[0]?.(event);
+    const firstNotice = __sessionCacheTest.getSnapshot().deletionNotice;
+    expect(firstNotice).toMatchObject({ id: 'a', wasActive: true, sequence: 1 });
+    expect(__sessionCacheTest.getActiveSession()).toBeNull();
+    expect(__sessionCacheTest.getListState()).toEqual({
+      status: 'ready',
+      sessions: [summaries[1]],
+    });
+
+    resolveDelete({ status: 'deleted', workingSet: event.workingSet });
+    await deletion;
+
+    expect(__sessionCacheTest.getSnapshot().deletionNotice).toBe(firstNotice);
+    expect(listMock).toHaveBeenCalledTimes(2);
   });
 
   it('drops stale load when a newer load supersedes it', async () => {

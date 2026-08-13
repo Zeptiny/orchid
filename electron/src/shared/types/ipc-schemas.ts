@@ -121,6 +121,11 @@ export const sessionDeleteResultSchema = z.object({
   workingSet: workingSetSnapshotSchema,
 }).strict();
 
+export const sessionDeletedEventSchema = z.object({
+  id: z.string().uuid(),
+  workingSet: workingSetSnapshotSchema,
+}).strict();
+
 /**
  * Minimum durable chain shape required by renderer consumers. Remaining chain
  * metadata stays passthrough so this boundary does not duplicate the domain
