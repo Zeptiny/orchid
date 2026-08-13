@@ -1978,6 +1978,63 @@ describe('bounded renderer history views', () => {
     expect(older.complete).toBe(true);
   });
 
+  it('falls back to canonical history when the recent projection is malformed', () => {
+    const messages = [
+      makeMessage({ id: 'fallback-0', role: 'user', content: 'question' }),
+      makeMessage({ id: 'fallback-1', role: 'assistant', content: 'one' }),
+      makeMessage({ id: 'fallback-2', role: 'assistant', content: 'two' }),
+      makeMessage({ id: 'fallback-3', role: 'assistant', content: 'three' }),
+    ];
+    saveSession(makeSession({
+      id: SID,
+      chains: [makeChain(SID, { id: 'chain-malformed-window', messages })],
+    }), storageOpts);
+
+    const db = openSqliteDb(storageOpts.dbPath!);
+    db.prepare(`
+      UPDATE chains SET recent_messages_json = ?
+      WHERE session_id = ? AND id = ?
+    `).run('[null,null,null,null]', SID, 'chain-malformed-window');
+    db.close();
+
+    const view = loadSessionView(SID, {
+      ...storageOpts,
+      sessionViewMessageBudget: 2,
+      sessionViewByteBudget: 1024 * 1024,
+    })!;
+    expect(view.chains[0].messages.map((message) => message.id))
+      .toEqual(['fallback-2', 'fallback-3']);
+    expect(view.chains[0].messageStartIndex).toBe(2);
+  });
+
+  it('keeps healthy chains loadable beside a malformed legacy message array', () => {
+    saveSession(makeSession({
+      id: SID,
+      chains: [
+        makeChain(SID, {
+          id: 'chain-malformed-legacy',
+          messages: [makeMessage({ id: 'bad-placeholder' })],
+        }),
+        makeChain(SID, {
+          id: 'chain-healthy',
+          messages: [makeMessage({ id: 'healthy-message', content: 'still visible' })],
+        }),
+      ],
+    }), storageOpts);
+
+    const db = openSqliteDb(storageOpts.dbPath!);
+    db.prepare(`
+      UPDATE chains
+      SET messages_json = '[null]', summary_json = NULL, recent_messages_json = NULL
+      WHERE session_id = ? AND id = ?
+    `).run(SID, 'chain-malformed-legacy');
+    db.close();
+
+    const view = loadSessionView(SID, storageOpts)!;
+    expect(view.chains.find((chain) => chain.id === 'chain-healthy')?.messages[0]?.id)
+      .toBe('healthy-message');
+  });
+
   it('backfills bounded projections for truncated legacy chains on first view load', () => {
     const messages = [
       makeMessage({ id: 'legacy-0', role: 'user', content: 'question' }),

@@ -298,15 +298,18 @@ function deserializeSelection(json: string | null): ModelSelection | null {
   }
 }
 
-function tryDeserializeMessages(json: string): Message[] | null {
-  let raw: unknown;
+function tryDeserializeMessages(
+  json: string,
+  reconcile = true,
+): Message[] | null {
   try {
-    raw = JSON.parse(json);
+    const raw: unknown = JSON.parse(json);
+    if (!Array.isArray(raw)) return null;
+    const messages = raw.map((message) => messageFromStorageDict(message));
+    return reconcile ? reconcileOrphanToolResults(messages) : messages;
   } catch {
     return null;
   }
-  if (!Array.isArray(raw)) return null;
-  return reconcileOrphanToolResults(raw.map((m) => messageFromStorageDict(m)));
 }
 
 function deserializeMessages(json: string): Message[] {
@@ -988,13 +991,20 @@ function loadRecentHistoryPage(
     loadedBytes += nextBytes;
   }
 
+  let messages: Message[];
+  try {
+    messages = storedMessages
+      .slice(startOffset, endOffset)
+      .map((message) => messageFromStorageDict(message));
+  } catch {
+    return null;
+  }
+
   const startIndex = summary.recentStartIndex + startOffset;
   return {
     sessionId,
     chainId,
-    messages: storedMessages
-      .slice(startOffset, endOffset)
-      .map((message) => messageFromStorageDict(message)),
+    messages,
     startIndex,
     totalMessages: summary.messageCount,
     complete: startIndex === 0,
