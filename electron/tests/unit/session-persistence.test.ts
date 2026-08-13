@@ -2035,6 +2035,40 @@ describe('bounded renderer history views', () => {
       .toBe('healthy-message');
   });
 
+  it('advances history pagination past malformed canonical rows', () => {
+    saveSession(makeSession({
+      id: SID,
+      chains: [makeChain(SID, {
+        id: 'chain-corrupt-cursor',
+        messages: [
+          makeMessage({ id: 'cursor-0', content: 'oldest' }),
+          makeMessage({ id: 'cursor-1', content: 'middle' }),
+          makeMessage({ id: 'cursor-2', content: 'newest' }),
+        ],
+      })],
+    }), storageOpts);
+
+    const db = openSqliteDb(storageOpts.dbPath!);
+    db.prepare(`
+      UPDATE chains
+      SET messages_json = '[null,{"id":"cursor-1","role":"user","content":"middle","type":"text"},{"id":"cursor-2","role":"user","content":"newest","type":"text"}]',
+          summary_json = NULL,
+          recent_messages_json = NULL
+      WHERE session_id = ? AND id = ?
+    `).run(SID, 'chain-corrupt-cursor');
+    db.close();
+
+    const page = loadSessionHistoryPage(
+      SID,
+      'chain-corrupt-cursor',
+      3,
+      storageOpts,
+    )!;
+    expect(page.messages.map((message) => message.id)).toEqual(['cursor-1', 'cursor-2']);
+    expect(page.startIndex).toBe(0);
+    expect(page.complete).toBe(true);
+  });
+
   it('backfills bounded projections for truncated legacy chains on first view load', () => {
     const messages = [
       makeMessage({ id: 'legacy-0', role: 'user', content: 'question' }),

@@ -1123,10 +1123,12 @@ function loadHistoryPageFromDb(
   let loadedBytes = 0;
   let startIndex = before;
   for (const row of rows) {
+    // Cursor progress follows durable row positions even when one row cannot
+    // be decoded; otherwise the renderer can request the same corrupt page forever.
+    startIndex = Math.min(startIndex, row.message_index);
     try {
       messages.push(messageFromStorageDict(JSON.parse(row.message_json)));
       loadedBytes += row.message_bytes;
-      startIndex = Math.min(startIndex, row.message_index);
     } catch (err) {
       console.error(
         `[session] skipping corrupt message ${row.message_index} in chain ${chainId}`,
