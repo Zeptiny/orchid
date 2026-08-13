@@ -1,11 +1,10 @@
 /**
- * Session DB v2 → v3 migration tests.
+ * Session DB legacy → v4 migration tests.
  *
- * v3 added the `tier_override` column to the sessions table (service-tier
- * per-session override). These tests open databases created with the v2
- * schema (no tier_override), run the store's open path / migration helper,
- * and assert the column is added and pre-existing rows load with
- * `tierOverride: null`.
+ * v3 added `tier_override`; v4 added the bounded `summary_json` subagent read
+ * model. These tests open databases created with the v2 schema, run the
+ * store's open path / migration helper, and assert both columns are added
+ * while pre-existing session rows remain readable.
  */
 import * as fs from 'node:fs';
 import * as os from 'node:os';
@@ -88,6 +87,13 @@ function sessionColumnNames(dbPath: string): string[] {
   return columns.map((column) => column.name);
 }
 
+function subagentColumnNames(dbPath: string): string[] {
+  const db = openSqliteDb(dbPath);
+  const columns = db.prepare('PRAGMA table_info(subagent_chains)').all() as Array<{ name: string }>;
+  db.close();
+  return columns.map((column) => column.name);
+}
+
 beforeEach(() => {
   tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'orchid-session-db-migration-'));
   instances = [];
@@ -99,7 +105,7 @@ afterEach(() => {
   fs.rmSync(tempDir, { recursive: true, force: true });
 });
 
-describe('session schema v2 → v3 tier_override migration', () => {
+describe('session schema legacy → v4 migration', () => {
   it('adds the tier_override column through the store open path', () => {
     const dbPath = path.join(tempDir, 'v2.db');
     makeV2Database(dbPath);
@@ -110,6 +116,7 @@ describe('session schema v2 → v3 tier_override migration', () => {
     void db.connection;
 
     expect(sessionColumnNames(dbPath)).toContain('tier_override');
+    expect(subagentColumnNames(dbPath)).toContain('summary_json');
   });
 
   it('loads pre-existing v2 rows with tierOverride null after migration', () => {
@@ -137,6 +144,9 @@ describe('session schema v2 → v3 tier_override migration', () => {
     expect(
       db.prepare('PRAGMA table_info(sessions)').all() as Array<{ name: string }>,
     ).toEqual(expect.arrayContaining([expect.objectContaining({ name: 'tier_override' })]));
+    expect(
+      db.prepare('PRAGMA table_info(subagent_chains)').all() as Array<{ name: string }>,
+    ).toEqual(expect.arrayContaining([expect.objectContaining({ name: 'summary_json' })]));
 
     // Running again must not throw or duplicate the column.
     expect(() => applySessionSchemaMigrations(db)).not.toThrow();

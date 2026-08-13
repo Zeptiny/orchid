@@ -5,7 +5,10 @@ import {
   type SubagentDetailResult,
   type SubagentSnapshot,
 } from '../../shared/types/ipc';
-import type { SubagentRecord as DomainSubagentRecord } from '../../shared/types/subagent';
+import type {
+  SubagentRecord as DomainSubagentRecord,
+  SubagentSummary,
+} from '../../shared/types/subagent';
 import { summarizeSubagentRecord } from '../../shared/types/subagent';
 import { getSubagentManager } from '../tools';
 import { getSessionManager } from '../session/singleton';
@@ -35,6 +38,15 @@ export function mergeSubagentRecords(stored: readonly DomainSubagentRecord[], ru
   return [...merged.values()];
 }
 
+export function mergeSubagentSummaries(
+  stored: readonly SubagentSummary[],
+  runtime: readonly SubagentSummary[],
+): SubagentSummary[] {
+  const merged = new Map(stored.map((record) => [record.id, record]));
+  for (const record of runtime) merged.set(record.id, record);
+  return [...merged.values()];
+}
+
 export function selectSubagentDetailRecord(
   subagentId: string,
   stored: readonly DomainSubagentRecord[],
@@ -47,19 +59,20 @@ export function selectSubagentDetailRecord(
 
 export function createSubagentSnapshot(sessionId: string): SubagentSnapshot {
   const manager = getSubagentManager();
-  const session = getSessionManager().getSession(sessionId);
+  const stored = getSessionManager().getSubagentSummaries(sessionId);
   const runtime = manager.recordsForSession(sessionId)
     // Evicted terminal summaries are lean shadows of rows already confirmed
-    // persisted. Merge order gives runtime precedence over stored rows, so
-    // exclude summaries here and let the full stored row (transcript and
-    // precomputed usage) win.
+    // persisted. Exclude those shadows so the independently persisted summary
+    // (including its precomputed usage) remains authoritative.
     .filter((record) => !manager.isSummary(record.id))
-    .map((record) => manager.toDomainRecord(record, { includeLiveTail: false }));
-  const records = mergeSubagentRecords(session?.subagentChains ?? [], runtime);
+    .map((record) => summarizeSubagentRecord(
+      manager.toDomainRecord(record, { includeLiveTail: false }),
+    ));
+  const records = mergeSubagentSummaries(stored, runtime);
   return {
     sessionId,
     sessionRevision: manager.getSessionRevision(sessionId),
-    records: records.map(summarizeSubagentRecord),
+    records,
     live: manager.getLiveProjections(sessionId),
   };
 }
@@ -74,8 +87,8 @@ export function createSubagentDetail(
   const runtime = candidate?.sessionId === sessionId && !manager.isSummary(candidate.id)
     ? manager.toDomainRecord(candidate, { includeLiveTail: true })
     : null;
-  const stored = getSessionManager().getSession(sessionId)?.subagentChains ?? [];
-  const record = selectSubagentDetailRecord(subagentId, stored, runtime);
+  const stored = getSessionManager().getSubagentRecord(sessionId, subagentId);
+  const record = runtime ?? stored;
   return { sessionId, subagentId, record };
 }
 

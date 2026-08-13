@@ -2,7 +2,7 @@
 import type { SqliteDatabase } from '../utils/sqlite';
 
 /** Current session schema version. */
-export const SESSION_SCHEMA_VERSION = 3;
+export const SESSION_SCHEMA_VERSION = 4;
 
 /** Idempotent DDL for the session database. */
 export const SESSION_SCHEMA_SQL = `
@@ -48,6 +48,7 @@ CREATE TABLE IF NOT EXISTS subagent_chains (
   session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
   subagent_id TEXT NOT NULL,
   record_json TEXT NOT NULL,
+  summary_json TEXT,
   PRIMARY KEY (session_id, subagent_id)
 );
 
@@ -82,6 +83,14 @@ export function applySessionSchemaMigrations(db: SqliteDatabase): void {
       if (!existing.has(col)) {
         db.prepare(`ALTER TABLE chains ADD COLUMN ${col} TEXT`).run();
       }
+    }
+  }
+
+  if (tables.has('subagent_chains')) {
+    const subagentColumns = db.prepare('PRAGMA table_info(subagent_chains)').all() as Array<{ name: string }>;
+    const existing = new Set(subagentColumns.map((c) => c.name));
+    if (!existing.has('summary_json')) {
+      db.prepare('ALTER TABLE subagent_chains ADD COLUMN summary_json TEXT').run();
     }
   }
 }

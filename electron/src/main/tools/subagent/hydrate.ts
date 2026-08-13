@@ -2,8 +2,8 @@
  * Hydration helpers for the close/follow-up subagent tools (U3) and for
  * session open (R9).
  *
- * Records whose full form lives only in `session.subagentChains` — evicted lean
- * summaries and everything persisted before the current app launch — are
+ * Records whose full form lives only in durable `record_json` rows — evicted
+ * lean summaries and everything persisted before the current app launch — are
  * materialized back into the runtime manager on demand so the mutating tools can
  * operate on them (R9). Live full records are left untouched (they win).
  *
@@ -37,7 +37,7 @@ const sessionHydrationReadiness =
   new SubagentHydrationReadiness<HydrateSubagentRecordsResult>();
 
 /**
- * Hydrate the given ids from `session.subagentChains` into the runtime manager.
+ * Hydrate the given ids from targeted durable rows into the runtime manager.
  *
  * Ids already live in the manager as full (non-evicted) records are skipped —
  * the runtime record wins. Ids absent from the session's stored chains are left
@@ -69,13 +69,17 @@ async function hydrateStoredRecords(
   // Lazy import avoids the tools ↔ session IPC circular init and stays mockable
   // in unit tests (matches wait.ts's persistence trigger).
   const { getSessionManager } = await import('../../session/singleton.js');
-  const session = getSessionManager().getSession(sessionId);
+  const sessionManager = getSessionManager();
+  const session = sessionManager.getSession(sessionId);
   if (!session) {
     return { hydrated, agentMissing };
   }
 
   const storedById = new Map<string, DomainSubagentRecord>();
-  for (const record of session.subagentChains) {
+  const storedRecords = typeof sessionManager.getSubagentRecords === 'function'
+    ? sessionManager.getSubagentRecords(sessionId, needsHydration)
+    : session.subagentChains.filter((record) => needsHydration.includes(record.id));
+  for (const record of storedRecords) {
     storedById.set(record.id, record);
   }
 
@@ -165,10 +169,15 @@ export async function hydrateSessionSubagents(
   deps: HydrateSubagentDeps = {},
 ): Promise<HydrateSubagentRecordsResult> {
   const { getSessionManager } = await import('../../session/singleton.js');
-  const session = getSessionManager().getSession(sessionId);
-  if (!session || session.subagentChains.length === 0) {
+  const sessionManager = getSessionManager();
+  const session = sessionManager.getSession(sessionId);
+  if (!session) {
     return { hydrated: [], agentMissing: [] };
   }
+  const recordIds = typeof sessionManager.getSubagentRecordIds === 'function'
+    ? sessionManager.getSubagentRecordIds(sessionId)
+    : session.subagentChains.map((record) => record.id);
+  if (recordIds.length === 0) return { hydrated: [], agentMissing: [] };
 
   let projectRuntime: ProjectRuntime | null = deps.projectRuntime ?? null;
   const cwd = session.cwd ?? deps.cwd ?? null;
@@ -194,7 +203,7 @@ export async function hydrateSessionSubagents(
   return hydrateStoredRecords(
     manager,
     sessionId,
-    session.subagentChains.map((record) => record.id),
+    recordIds,
     { projectRuntime, windowId: deps.windowId, cwd },
   );
 }

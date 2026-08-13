@@ -14,7 +14,13 @@ import type { Chain } from '../../shared/types/chain';
 import { ChainStatus, parseChainStatus, reconcileOrphanToolResults } from '../../shared/types/chain';
 import type { Message } from '../../shared/types/message';
 import type { ModelSelection } from '../../shared/types/provider';
-import type { SubagentRecord } from '../../shared/types/subagent';
+import {
+  SubagentStatus,
+  summarizeSubagentRecord,
+  type SubagentRecord,
+  type SubagentSummary,
+} from '../../shared/types/subagent';
+import { ipcSubagentSummarySchema } from '../../shared/types/ipc-schemas';
 import type { TodoStoreData } from '../../shared/types/todo';
 import { PERMISSION_MODE_VALUES, type PermissionMode } from '../../shared/types/permission';
 import {
@@ -227,6 +233,7 @@ interface ChainRow {
 interface SubagentChainRow {
   subagent_id: string;
   record_json: string;
+  summary_json: string | null;
 }
 
 function serializeSelection(selection: ModelSelection | null): string | null {
@@ -360,12 +367,42 @@ const INSERT_CHAIN_SQL = `
 `;
 
 const INSERT_SUBAGENT_CHAIN_SQL = `
-  INSERT INTO subagent_chains (session_id, subagent_id, record_json)
-  VALUES (?, ?, ?)
+  INSERT INTO subagent_chains (session_id, subagent_id, record_json, summary_json)
+  VALUES (?, ?, ?, ?)
 `;
 
 function serializeSubagentRecord(record: SubagentRecord): string {
   return JSON.stringify(subagentRecordToStorageDict(record));
+}
+
+function serializeSubagentSummary(record: SubagentRecord): string {
+  return JSON.stringify(summarizeSubagentRecord(record));
+}
+
+function restoreSubagentSummary(value: unknown): SubagentSummary | null {
+  const parsed = ipcSubagentSummarySchema.safeParse(value);
+  if (!parsed.success) return null;
+  const summary = parsed.data;
+  if (
+    summary.status !== SubagentStatus.QUEUED
+    && summary.status !== SubagentStatus.PENDING
+    && summary.status !== SubagentStatus.RUNNING
+  ) {
+    return summary;
+  }
+  return {
+    ...summary,
+    status: SubagentStatus.INTERRUPTED,
+    end_time: summary.end_time ?? new Date().toISOString(),
+  };
+}
+
+function deserializeSubagentSummary(json: string): SubagentSummary | null {
+  try {
+    return restoreSubagentSummary(JSON.parse(json));
+  } catch {
+    return null;
+  }
 }
 
 function insertChainRow(
@@ -482,7 +519,12 @@ export function saveSession(session: Session, opts?: StorageOptions): void {
 
       deleteSubagentChains.run(session.id);
       for (const record of session.subagentChains) {
-        insertSubagentChain.run(session.id, record.id, serializeSubagentRecord(record));
+        insertSubagentChain.run(
+          session.id,
+          record.id,
+          serializeSubagentRecord(record),
+          serializeSubagentSummary(record),
+        );
       }
     });
 
@@ -649,7 +691,11 @@ export function finishChain(
  * session active-chain pointer are updated in one transaction before the
  * session is materialized.
  */
-export function loadSession(sessionId: string, opts?: StorageOptions): Session | null {
+function loadSessionInternal(
+  sessionId: string,
+  includeSubagentRecords: boolean,
+  opts?: StorageOptions,
+): Session | null {
   if (!isValidSessionId(sessionId)) {
     return null;
   }
@@ -709,26 +755,180 @@ export function loadSession(sessionId: string, opts?: StorageOptions): Session |
         }
       }
 
-      const subagentRows = db
-        .prepare(
-          'SELECT subagent_id, record_json FROM subagent_chains WHERE session_id = ? ORDER BY rowid',
-        )
-        .all(sessionId) as SubagentChainRow[];
       const subagentChains: SubagentRecord[] = [];
-      for (const sr of subagentRows) {
-        try {
-          subagentChains.push(subagentRecordFromStorageDict(JSON.parse(sr.record_json)));
-        } catch (err) {
-          console.error(
-            `[session] skipping corrupt subagent record ${sr.subagent_id} on load (session ${sessionId})`,
-            err,
-          );
+      if (includeSubagentRecords) {
+        const subagentRows = db
+          .prepare(
+            'SELECT subagent_id, record_json, summary_json FROM subagent_chains WHERE session_id = ? ORDER BY rowid',
+          )
+          .all(sessionId) as SubagentChainRow[];
+        for (const sr of subagentRows) {
+          try {
+            subagentChains.push(subagentRecordFromStorageDict(JSON.parse(sr.record_json)));
+          } catch (err) {
+            console.error(
+              `[session] skipping corrupt subagent record ${sr.subagent_id} on load (session ${sessionId})`,
+              err,
+            );
+          }
         }
       }
 
       return sessionFromRow(row, chains, subagentChains);
     });
     return load();
+  });
+}
+
+/** Load the complete durable session, including full subagent transcripts. */
+export function loadSession(sessionId: string, opts?: StorageOptions): Session | null {
+  return loadSessionInternal(sessionId, true, opts);
+}
+
+/** Load the navigation payload without selecting or parsing subagent record_json. */
+export function loadSessionView(sessionId: string, opts?: StorageOptions): Session | null {
+  return loadSessionInternal(sessionId, false, opts);
+}
+
+/**
+ * Load bounded persisted summaries. Legacy rows are derived once from the full
+ * record and backfilled so subsequent navigation/snapshot reads stay bounded.
+ */
+export function loadSubagentSummaries(
+  sessionId: string,
+  opts?: StorageOptions,
+): SubagentSummary[] {
+  if (!isValidSessionId(sessionId)) return [];
+  const { dbPath } = resolveOptions(opts);
+  return withCorruptionRecovery(dbPath, (db) => {
+    const rows = db.prepare(
+      'SELECT rowid, subagent_id, summary_json FROM subagent_chains WHERE session_id = ? ORDER BY rowid',
+    ).all(sessionId) as Array<{
+      rowid: number;
+      subagent_id: string;
+      summary_json: string | null;
+    }>;
+    if (rows.length === 0) return [];
+
+    const legacyRecords = new Map(
+      (db.prepare(
+        'SELECT subagent_id, record_json FROM subagent_chains WHERE session_id = ? AND summary_json IS NULL',
+      ).all(sessionId) as Array<{ subagent_id: string; record_json: string }>)
+        .map((row) => [row.subagent_id, row.record_json]),
+    );
+    const loadRecord = db.prepare(
+      'SELECT record_json FROM subagent_chains WHERE session_id = ? AND subagent_id = ?',
+    );
+    const backfill = db.prepare(
+      'UPDATE subagent_chains SET summary_json = ? WHERE session_id = ? AND subagent_id = ?',
+    );
+    const summaries: SubagentSummary[] = [];
+
+    for (const row of rows) {
+      let summary = row.summary_json
+        ? deserializeSubagentSummary(row.summary_json)
+        : null;
+      if (!summary) {
+        const recordJson = legacyRecords.get(row.subagent_id)
+          ?? (loadRecord.get(sessionId, row.subagent_id) as { record_json: string } | undefined)
+            ?.record_json;
+        if (!recordJson) continue;
+        try {
+          const record = subagentRecordFromStorageDict(JSON.parse(recordJson));
+          summary = summarizeSubagentRecord(record);
+          backfill.run(JSON.stringify(summary), sessionId, row.subagent_id);
+        } catch (err) {
+          console.error(
+            `[session] skipping corrupt subagent record ${row.subagent_id} while loading summaries (session ${sessionId})`,
+            err,
+          );
+          continue;
+        }
+      }
+      summaries.push(summary);
+    }
+    return summaries;
+  });
+}
+
+/** Load exactly one full persisted subagent transcript for detail/lifecycle use. */
+export function loadSubagentRecord(
+  sessionId: string,
+  subagentId: string,
+  opts?: StorageOptions,
+): SubagentRecord | null {
+  if (!isValidSessionId(sessionId)) return null;
+  const { dbPath } = resolveOptions(opts);
+  return withCorruptionRecovery(dbPath, (db) => {
+    const row = db.prepare(
+      'SELECT record_json FROM subagent_chains WHERE session_id = ? AND subagent_id = ?',
+    ).get(sessionId, subagentId) as { record_json: string } | undefined;
+    if (!row) return null;
+    try {
+      return subagentRecordFromStorageDict(JSON.parse(row.record_json));
+    } catch (err) {
+      console.error(
+        `[session] failed to load subagent record ${subagentId} (session ${sessionId})`,
+        err,
+      );
+      return null;
+    }
+  });
+}
+
+/** List durable subagent identities without selecting transcript or summary JSON. */
+export function listSubagentRecordIds(
+  sessionId: string,
+  opts?: StorageOptions,
+): string[] {
+  if (!isValidSessionId(sessionId)) return [];
+  const { dbPath } = resolveOptions(opts);
+  return withCorruptionRecovery(dbPath, (db) => (
+    db.prepare(
+      'SELECT subagent_id FROM subagent_chains WHERE session_id = ? ORDER BY rowid',
+    ).all(sessionId) as Array<{ subagent_id: string }>
+  ).map((row) => row.subagent_id));
+}
+
+/** Load selected full records; omit ids to restore the entire session runtime. */
+export function loadSubagentRecords(
+  sessionId: string,
+  subagentIds?: readonly string[],
+  opts?: StorageOptions,
+): SubagentRecord[] {
+  if (!isValidSessionId(sessionId)) return [];
+  const uniqueIds = subagentIds ? [...new Set(subagentIds)] : null;
+  if (uniqueIds?.length === 0) return [];
+  const { dbPath } = resolveOptions(opts);
+  return withCorruptionRecovery(dbPath, (db) => {
+    const rows: Array<{ subagent_id: string; record_json: string }> = [];
+    if (uniqueIds == null) {
+      rows.push(...db.prepare(
+        'SELECT subagent_id, record_json FROM subagent_chains WHERE session_id = ? ORDER BY rowid',
+      ).all(sessionId) as Array<{ subagent_id: string; record_json: string }>);
+    } else {
+      for (let offset = 0; offset < uniqueIds.length; offset += 900) {
+        const chunk = uniqueIds.slice(offset, offset + 900);
+        const placeholders = chunk.map(() => '?').join(', ');
+        rows.push(...db.prepare(
+          `SELECT subagent_id, record_json FROM subagent_chains
+           WHERE session_id = ? AND subagent_id IN (${placeholders}) ORDER BY rowid`,
+        ).all(sessionId, ...chunk) as Array<{ subagent_id: string; record_json: string }>);
+      }
+    }
+
+    const records: SubagentRecord[] = [];
+    for (const row of rows) {
+      try {
+        records.push(subagentRecordFromStorageDict(JSON.parse(row.record_json)));
+      } catch (err) {
+        console.error(
+          `[session] skipping corrupt subagent record ${row.subagent_id} during runtime load (session ${sessionId})`,
+          err,
+        );
+      }
+    }
+    return records;
   });
 }
 
@@ -841,9 +1041,11 @@ export function upsertSubagentRecords(
       if (sessionResult.changes === 0) return false;
 
       const upsert = db.prepare(`
-        INSERT INTO subagent_chains (session_id, subagent_id, record_json)
-        VALUES (?, ?, ?)
-        ON CONFLICT(session_id, subagent_id) DO UPDATE SET record_json = excluded.record_json
+        INSERT INTO subagent_chains (session_id, subagent_id, record_json, summary_json)
+        VALUES (?, ?, ?, ?)
+        ON CONFLICT(session_id, subagent_id) DO UPDATE SET
+          record_json = excluded.record_json,
+          summary_json = excluded.summary_json
       `);
       let bytes = 0;
       for (const record of records) {
@@ -851,7 +1053,7 @@ export function upsertSubagentRecords(
         // UTF-8 bytes, not UTF-16 code units (json.length) — the R9 checkpoint
         // diagnostic is a byte count and must not undercount multibyte content.
         bytes += Buffer.byteLength(json, 'utf8');
-        upsert.run(sessionId, record.id, json);
+        upsert.run(sessionId, record.id, json, serializeSubagentSummary(record));
       }
       return { bytes };
     });

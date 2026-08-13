@@ -25,7 +25,7 @@ import type { Session } from '../../shared/types/session';
 import type { ModelSelection } from '../../shared/types/provider';
 import type { Message } from '../../shared/types/message';
 import { ChainStatus, type Chain } from '../../shared/types/chain';
-import type { SubagentRecord } from '../../shared/types/subagent';
+import type { SubagentRecord, SubagentSummary } from '../../shared/types/subagent';
 import type { PermissionMode } from '../../shared/types/permission';
 import { normalizeAgentScopeId } from '../../shared/types/agent-scope';
 import {
@@ -40,6 +40,11 @@ import {
   finishChain as storageFinishChain,
   saveSession as storageSaveSession,
   loadSession as storageLoadSession,
+  loadSessionView as storageLoadSessionView,
+  loadSubagentRecord as storageLoadSubagentRecord,
+  loadSubagentRecords as storageLoadSubagentRecords,
+  loadSubagentSummaries as storageLoadSubagentSummaries,
+  listSubagentRecordIds as storageListSubagentRecordIds,
   deleteSession as storageDeleteSession,
   listSavedSessions as storageListSavedSessions,
   updateChain as storageUpdateChain,
@@ -153,7 +158,7 @@ export class SessionManager {
     const cached = this._sessions.get(id);
     if (cached) return cached;
 
-    const loaded = storageLoadSession(id, this._storageOpts);
+    const loaded = storageLoadSessionView(id, this._storageOpts);
     if (!loaded) return null;
     const todos = TodoStore.fromData(loaded.todoStore ?? { tasks: [] });
     const session = { ...loaded, todoStore: todos.toData() };
@@ -372,7 +377,7 @@ export class SessionManager {
     if (this._sessions.has(id)) {
       session = this.ensureSession(id);
     } else {
-      const loaded = storageLoadSession(id, this._storageOpts);
+      const loaded = storageLoadSessionView(id, this._storageOpts);
       if (!loaded) return null;
       const todos = TodoStore.fromData(loaded.todoStore ?? { tasks: [] });
       session = { ...loaded, todoStore: todos.toData() };
@@ -556,7 +561,27 @@ export class SessionManager {
    * Returns null if the session file doesn't exist or fails to parse.
    */
   load(id: string): Session | null {
-    return this._sessions.get(id) ?? storageLoadSession(id, this._storageOpts);
+    return this._sessions.get(id) ?? storageLoadSessionView(id, this._storageOpts);
+  }
+
+  /** Bounded persisted list rows; legacy full records are lazily backfilled. */
+  getSubagentSummaries(sessionId: string): SubagentSummary[] {
+    return storageLoadSubagentSummaries(sessionId, this._storageOpts);
+  }
+
+  /** Targeted detail read that does not materialize sibling transcripts. */
+  getSubagentRecord(sessionId: string, subagentId: string): SubagentRecord | null {
+    return storageLoadSubagentRecord(sessionId, subagentId, this._storageOpts);
+  }
+
+  /** Durable identities for background runtime hydration. */
+  getSubagentRecordIds(sessionId: string): string[] {
+    return storageListSubagentRecordIds(sessionId, this._storageOpts);
+  }
+
+  /** Full records for runtime restoration; optional ids keep lifecycle reads targeted. */
+  getSubagentRecords(sessionId: string, subagentIds?: readonly string[]): SubagentRecord[] {
+    return storageLoadSubagentRecords(sessionId, subagentIds, this._storageOpts);
   }
 
   /**

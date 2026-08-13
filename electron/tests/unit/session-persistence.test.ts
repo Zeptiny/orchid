@@ -13,6 +13,9 @@ import type { StorageOptions } from '../../src/main/session/storage';
 import {
   saveSession,
   loadSession,
+  loadSessionView,
+  loadSubagentRecord,
+  loadSubagentSummaries,
   listSavedSessions,
   deleteSession,
   updateChain,
@@ -157,6 +160,10 @@ function makeSubagentRecord(
     result: overrides.result ?? 'done',
     error: overrides.error ?? null,
     parentChainIndex: overrides.parentChainIndex ?? 0,
+    ...(overrides.usage !== undefined ? { usage: overrides.usage } : {}),
+    ...(overrides.reasoning_effort !== undefined
+      ? { reasoning_effort: overrides.reasoning_effort }
+      : {}),
     closed: overrides.closed ?? false,
     chain,
   };
@@ -1562,14 +1569,19 @@ describe('SessionManager multi-chain lifecycle', () => {
 function readSubagentRows(
   dbPath: string,
   sessionId: string,
-): Array<{ rowid: number; subagent_id: string; record_json: string }> {
+): Array<{ rowid: number; subagent_id: string; record_json: string; summary_json: string | null }> {
   const db = openSqliteDb(dbPath);
   try {
     return db
       .prepare(
-        'SELECT rowid, subagent_id, record_json FROM subagent_chains WHERE session_id = ? ORDER BY rowid',
+        'SELECT rowid, subagent_id, record_json, summary_json FROM subagent_chains WHERE session_id = ? ORDER BY rowid',
       )
-      .all(sessionId) as Array<{ rowid: number; subagent_id: string; record_json: string }>;
+      .all(sessionId) as Array<{
+        rowid: number;
+        subagent_id: string;
+        record_json: string;
+        summary_json: string | null;
+      }>;
   } finally {
     db.close();
   }
@@ -1606,6 +1618,86 @@ describe('subagent_chains row storage (U6)', () => {
 
     const loaded = loadSession(SID, storageOpts)!;
     expect(loaded.subagentChains).toEqual(records);
+  });
+
+  it('loads navigation summaries without materializing full transcript records', () => {
+    const record = makeSubagentRecord(SID, {
+      id: 'sub-summary',
+      task: 'inspect a large transcript',
+      result: 'full result remains detail-only',
+      usage: {
+        prompt_tokens: 12,
+        completion_tokens: 3,
+        total_tokens: 15,
+        cached_tokens: 2,
+      },
+    });
+    saveSession(makeSession({ id: SID, subagentChains: [record] }), storageOpts);
+
+    const row = readSubagentRows(storageOpts.dbPath!, SID)[0];
+    expect(row.summary_json).not.toBeNull();
+    expect(JSON.parse(row.summary_json!)).not.toHaveProperty('chain');
+    expect(JSON.parse(row.summary_json!)).not.toHaveProperty('result');
+
+    const view = loadSessionView(SID, storageOpts)!;
+    expect(view.subagentChains).toEqual([]);
+
+    const summaries = loadSubagentSummaries(SID, storageOpts);
+    expect(summaries).toHaveLength(1);
+    expect(summaries[0]).toMatchObject({
+      id: record.id,
+      task: record.task,
+      usage: record.usage,
+    });
+
+    const detail = loadSubagentRecord(SID, record.id, storageOpts);
+    expect(detail?.result).toBe('full result remains detail-only');
+    expect(detail?.chain).toEqual(record.chain);
+  });
+
+  it('lazily derives and backfills summaries for legacy rows', () => {
+    const record = makeSubagentRecord(SID, { id: 'sub-legacy-summary' });
+    saveSession(makeSession({ id: SID, subagentChains: [record] }), storageOpts);
+
+    const db = openSqliteDb(storageOpts.dbPath!);
+    db.prepare(
+      'UPDATE subagent_chains SET summary_json = NULL WHERE session_id = ? AND subagent_id = ?',
+    ).run(SID, record.id);
+    db.close();
+    _clearDbCache();
+
+    expect(readSubagentRows(storageOpts.dbPath!, SID)[0].summary_json).toBeNull();
+    expect(loadSubagentSummaries(SID, storageOpts).map((summary) => summary.id))
+      .toEqual([record.id]);
+    expect(readSubagentRows(storageOpts.dbPath!, SID)[0].summary_json).not.toBeNull();
+  });
+
+  it('serves a valid summary without parsing a corrupt full transcript', () => {
+    const record = makeSubagentRecord(SID, { id: 'sub-independent-summary' });
+    saveSession(makeSession({ id: SID, subagentChains: [record] }), storageOpts);
+
+    const db = openSqliteDb(storageOpts.dbPath!);
+    db.prepare(
+      'UPDATE subagent_chains SET record_json = ? WHERE session_id = ? AND subagent_id = ?',
+    ).run('{corrupt transcript', SID, record.id);
+    db.close();
+    _clearDbCache();
+
+    expect(loadSubagentSummaries(SID, storageOpts).map((summary) => summary.id))
+      .toEqual([record.id]);
+    expect(loadSubagentRecord(SID, record.id, storageOpts)).toBeNull();
+  });
+
+  it('switches cold sessions through the transcript-free view cache', () => {
+    const record = makeSubagentRecord(SID, { id: 'sub-cold-switch' });
+    saveSession(makeSession({ id: SID, subagentChains: [record] }), storageOpts);
+
+    const manager = new SessionManager({ storage: storageOpts });
+    const opened = manager.switchTo(SID, 'window-a');
+
+    expect(opened?.subagentChains).toEqual([]);
+    expect(manager.getSubagentSummaries(SID).map((summary) => summary.id)).toEqual([record.id]);
+    expect(manager.getSubagentRecord(SID, record.id)?.id).toBe(record.id);
   });
 
   it('saveSession wholesale-replaces prior subagent rows (creation/recovery primitive)', () => {
