@@ -56,7 +56,6 @@ import {
 } from '../permissions/session-overrides';
 import {
   workingSetClearFocus,
-  getWorkingSetSnapshot,
   workingSetOpenOrFocus,
   workingSetRemove,
 } from './session-working-set';
@@ -234,12 +233,13 @@ function broadcastSessionDeleted(sessionId: string): void {
     try {
       if (win.isDestroyed() || win.webContents.isDestroyed()) continue;
       const ownerId = String(win.webContents.id);
+      const workingSet = workingSetRemove(sessionId, ownerId);
       win.webContents.send(IPC_CHANNELS.SESSION_DELETED, {
         id: sessionId,
-        workingSet: getWorkingSetSnapshot(ownerId),
+        workingSet,
       });
-    } catch {
-      // Window closed while the deletion broadcast was being assembled.
+    } catch (error) {
+      console.debug('[session] deletion broadcast failed for a window', error);
     }
   }
 }
@@ -508,9 +508,7 @@ export function registerSessionIPC(): void {
     clearToolCallHistoryForSession(parsed.data.id);
     clearFunctionHashesForSession(parsed.data.id);
     clearNextRequestStop(parsed.data.id);
-    if (deleted) {
-      removeSessionActivity(parsed.data.id);
-    }
+    removeSessionActivity(parsed.data.id);
     const workingSet = workingSetRemove(parsed.data.id, String(event.sender.id));
     clearChatHistory(parsed.data.id);
     // `not_found` is still authoritative absence and must clear stale copies

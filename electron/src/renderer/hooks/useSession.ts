@@ -22,6 +22,7 @@ import type {
   SessionHistoryPageResult,
 } from '../../shared/types/ipc';
 import { ChainStatus } from '../../shared/types/chain';
+import { __resetDeletionReconciliation } from './useSessionDeletionReconciliation';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -668,6 +669,7 @@ export const __sessionCacheTest = {
     pendingDeleteIds = new Set();
     deletionNotice = null;
     deletionSequence = 0;
+    __resetDeletionReconciliation();
     workspace = null;
     draftGeneration = 0;
     loadGeneration = 0;

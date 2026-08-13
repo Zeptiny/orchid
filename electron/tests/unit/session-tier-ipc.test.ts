@@ -132,10 +132,10 @@ const mocks = vi.hoisted(() => {
       openSessionIds: [id],
       focusedSessionId: id,
     })),
-    workingSetRemove: vi.fn(() => ({
-      openSessionIds: ['remaining-session'],
-      focusedSessionId: 'remaining-session',
-      mruSessionIds: ['remaining-session'],
+    workingSetRemove: vi.fn((_id: string, ownerId?: string) => ({
+      openSessionIds: [`remaining-${ownerId ?? 'primary'}`],
+      focusedSessionId: `remaining-${ownerId ?? 'primary'}`,
+      mruSessionIds: [`remaining-${ownerId ?? 'primary'}`],
     })),
     getWorkingSetSnapshot: vi.fn((ownerId: string) => ({
       openSessionIds: [`remaining-${ownerId}`],
@@ -376,9 +376,9 @@ describe('session:delete', () => {
     expect(result).toEqual({
       status: 'deleted',
       workingSet: {
-        openSessionIds: ['remaining-session'],
-        focusedSessionId: 'remaining-session',
-        mruSessionIds: ['remaining-session'],
+        openSessionIds: ['remaining-9'],
+        focusedSessionId: 'remaining-9',
+        mruSessionIds: ['remaining-9'],
       },
     });
   });
@@ -434,6 +434,8 @@ describe('session:delete', () => {
         },
       },
     );
+    expect(mocks.workingSetRemove).toHaveBeenCalledWith(SESSION_UUID, '9');
+    expect(mocks.workingSetRemove).toHaveBeenCalledWith(SESSION_UUID, '10');
   });
 
   it('broadcasts authoritative absence when the durable row was already missing', async () => {
@@ -450,6 +452,7 @@ describe('session:delete', () => {
 
     expect(result).toMatchObject({ status: 'not_found' });
     expect(mocks.clearChatHistory).toHaveBeenCalledWith(SESSION_UUID);
+    expect(mocks.removeSessionActivity).toHaveBeenCalledWith(SESSION_UUID);
     expect(recipient.webContents.send).toHaveBeenCalledWith(
       IPC_CHANNELS.SESSION_DELETED,
       expect.objectContaining({ id: SESSION_UUID }),
