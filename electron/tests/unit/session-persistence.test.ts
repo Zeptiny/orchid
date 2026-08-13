@@ -2639,6 +2639,88 @@ describe('incremental session persistence', () => {
     expect(loaded.permissionMode).toBe('allow');
   });
 
+  it('restores a missing active row without replacing bounded sibling history', () => {
+    const sessionId = 'edededed-eded-4ede-8ded-edededededed';
+    const historical = [
+      makeChain(sessionId, {
+        id: 'historical-one',
+        messages: [
+          makeMessage({ id: 'h1-user', content: 'older question' }),
+          makeMessage({ id: 'h1-answer', role: 'assistant', content: 'older answer' }),
+        ],
+      }),
+      makeChain(sessionId, {
+        id: 'historical-two',
+        messages: [
+          makeMessage({ id: 'h2-user', content: 'newer question' }),
+          makeMessage({ id: 'h2-answer', role: 'assistant', content: 'newer answer' }),
+        ],
+      }),
+    ];
+    const subagent = makeSubagentRecord(sessionId, { id: 'preserved-subagent' });
+    saveSession(makeSession({
+      id: sessionId,
+      chains: historical,
+      subagentChains: [subagent],
+    }), storageOpts);
+
+    const manager = new SessionManager({
+      storage: {
+        ...storageOpts,
+        sessionViewMessageBudget: 1,
+        sessionViewByteBudget: 1024 * 1024,
+      },
+    });
+    const bounded = manager.switchTo(sessionId)!;
+    expect(bounded.chains.some((chain) => chain.messagesLoaded === false)).toBe(true);
+
+    const active = manager.startChain({
+      messages: [makeMessage({ id: 'active-user', content: 'current question' })],
+    }, sessionId)!;
+    const db = openSqliteDb(storageOpts.dbPath!);
+    db.prepare('DELETE FROM chains WHERE session_id = ? AND id = ?')
+      .run(sessionId, active.id);
+    db.close();
+
+    manager.updateActiveChainMessages([
+      makeMessage({ id: 'active-user', content: 'current question' }),
+      makeMessage({ id: 'active-answer', role: 'assistant', content: 'partial answer' }),
+    ], sessionId);
+
+    let full = loadSession(sessionId, storageOpts)!;
+    expect(full.chains.filter((chain) => chain.id.startsWith('historical-')).map((chain) => ({
+      id: chain.id,
+      messageIds: chain.messages.map((message) => message.id),
+    }))).toEqual([
+      { id: 'historical-one', messageIds: ['h1-user', 'h1-answer'] },
+      { id: 'historical-two', messageIds: ['h2-user', 'h2-answer'] },
+    ]);
+    expect(full.subagentChains.map((record) => record.id)).toEqual([subagent.id]);
+
+    const secondDb = openSqliteDb(storageOpts.dbPath!);
+    secondDb.prepare('DELETE FROM chains WHERE session_id = ? AND id = ?')
+      .run(sessionId, active.id);
+    secondDb.close();
+
+    manager.finishActiveChain(ChainStatus.COMPLETED, sessionId);
+    full = loadSession(sessionId, storageOpts)!;
+    expect(full.chains.filter((chain) => chain.id.startsWith('historical-')).map((chain) => ({
+      id: chain.id,
+      messageIds: chain.messages.map((message) => message.id),
+    }))).toEqual([
+      { id: 'historical-one', messageIds: ['h1-user', 'h1-answer'] },
+      { id: 'historical-two', messageIds: ['h2-user', 'h2-answer'] },
+    ]);
+    expect(full.chains.find((chain) => chain.id === active.id)).toMatchObject({
+      status: ChainStatus.COMPLETED,
+      messages: [
+        expect.objectContaining({ id: 'active-user' }),
+        expect.objectContaining({ id: 'active-answer' }),
+      ],
+    });
+    expect(full.subagentChains.map((record) => record.id)).toEqual([subagent.id]);
+  });
+
   it('rolls back a failed terminal chain update without clearing the active chain', () => {
     const manager = new SessionManager({ storage: storageOpts });
     const session = manager.create(DEFAULT_SELECTION);

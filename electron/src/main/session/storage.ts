@@ -874,6 +874,43 @@ export function finishChain(
   });
 }
 
+/**
+ * Recreate one missing chain row and update its owning session pointer without
+ * replacing any sibling chains or subagent rows.
+ */
+export function restoreMissingChain(
+  chain: Chain,
+  updatedAt: string,
+  todoStore: TodoStoreData,
+  opts?: StorageOptions,
+): boolean {
+  if (!isValidSessionId(chain.sessionId)) return false;
+  const { dbPath } = resolveOptions(opts);
+  return withCorruptionRecovery(dbPath, (db) => {
+    const insertChain = db.prepare(INSERT_CHAIN_SQL);
+    const txn = db.transaction(() => {
+      const sessionResult = db.prepare(
+        `UPDATE sessions
+         SET active_chain_id = ?, todo_store_json = ?, updated_at = ?
+         WHERE id = ?`,
+      ).run(
+        chain.status === ChainStatus.ACTIVE ? chain.id : null,
+        serializeTodoStore(todoStore),
+        updatedAt,
+        chain.sessionId,
+      );
+      if (sessionResult.changes === 0) return false;
+
+      const ordinal = db.prepare(
+        'SELECT COALESCE(MAX(ordinal), -1) + 1 AS value FROM chains WHERE session_id = ?',
+      ).pluck().get(chain.sessionId) as number;
+      insertChainRow(insertChain, chain, ordinal);
+      return true;
+    });
+    return txn();
+  });
+}
+
 // ---------------------------------------------------------------------------
 // loadSession
 // ---------------------------------------------------------------------------

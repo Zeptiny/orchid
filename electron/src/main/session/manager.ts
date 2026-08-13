@@ -38,6 +38,7 @@ import { hydrateSessionPermissionOverride } from '../permissions/session-overrid
 import {
   appendActiveChain as storageAppendActiveChain,
   finishChain as storageFinishChain,
+  restoreMissingChain as storageRestoreMissingChain,
   saveSession as storageSaveSession,
   loadSession as storageLoadSession,
   loadSessionView as storageLoadSessionView,
@@ -747,7 +748,13 @@ export class SessionManager {
     };
     const persisted = storageUpdateChain(chain, now, this._storageOpts);
     if (!persisted) {
-      storageSaveSession(updated, this._storageOpts);
+      const restored = storageRestoreMissingChain(
+        chain,
+        now,
+        updated.todoStore,
+        this._storageOpts,
+      );
+      if (!restored) storageSaveSession(updated, this._storageOpts);
     }
     this.replaceSession(updated);
     return updated;
@@ -801,7 +808,13 @@ export class SessionManager {
       this._storageOpts,
     );
     if (!persisted) {
-      storageSaveSession(updated, this._storageOpts);
+      const restored = storageRestoreMissingChain(
+        chain,
+        now,
+        updated.todoStore,
+        this._storageOpts,
+      );
+      if (!restored) storageSaveSession(updated, this._storageOpts);
     }
     this.replaceSession(updated);
     return updated;
