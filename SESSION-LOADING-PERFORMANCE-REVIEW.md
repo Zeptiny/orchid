@@ -6,7 +6,7 @@
 | **Branch reviewed** | `fix/persist-and-reposition-chat-errors` @ `d2cb2b9` |
 | **Scope** | Session list bootstrap, session open/switch, conversation hydration, subagent restoration, renderer first paint, and session-scoped follow-up requests |
 | **Method** | Static code-path trace, relevant git-history review, aggregate inspection of a local development session database, and focused local microbenchmarks |
-| **Change mode** | Report only; no application code changed |
+| **Change mode** | Initial review was report-only; implementation disposition is recorded below |
 
 ## Executive summary
 
@@ -398,3 +398,56 @@ Track at least cold-open duration, warm-open duration, first-message paint, byte
 ## Conclusion
 
 The current architecture has already eliminated unnecessary sequential navigation IPC. The next performance step is to stop treating a session as one indivisible object at read time. The largest expected gains come from avoiding full subagent transcript materialization, decoupling runtime restoration from visual navigation, and loading only the initial conversation window. Duplicate effects, durability writes, cache policy, and status fan-out are worthwhile follow-ups once those dominant costs are instrumented and removed.
+
+## Implementation follow-up — 2026-08-13
+
+The sections above preserve the point-in-time review of `d2cb2b9`. The implementation branch `perf/session-loading-optimizations` subsequently addressed the requested findings and the correctness issues discovered while validating them. No production latency claims are added here without a packaged-build benchmark; the completed claims below are structural and covered by automated tests.
+
+### Original finding dispositions
+
+| ID | Disposition | Implementation |
+|---|---|---|
+| F1 | **Implemented** | `a845382` persists bounded subagent summaries separately from full transcripts, so navigation and list snapshots do not parse historical `record_json`. |
+| F2 | **Implemented** | `4a0233d` starts session hydration outside the navigation response and makes sends/lifecycle operations join a retryable per-session readiness boundary. |
+| F3 | **Implemented** | `c72d660` adds byte/message-bounded renderer views and explicit older-history pages while keeping full model context main-process-only. `eb58507` adds indexed byte ranges so deep pages no longer expand the full earlier JSON prefix on every request. |
+| F4 | **Implemented** | `952e389` seeds todos from `session:open` and suppresses the duplicate immediate reload. |
+| F5 | **Implemented** | `d6f52b8` removes duplicate switch-time summary work and reuses persisted usage summaries. |
+| F6 | **Deferred** | A byte-budgeted LRU and revision-aware no-change responses remain useful, but were outside the requested P0/F4/F5/F8/F10 scope. Active renderer payloads and subagent transcripts are now bounded independently, reducing the immediate risk. |
+| F7 | **Deferred** | Synchronous working-set focus durability remains unchanged because moving it off-path deliberately weakens the hard-crash focus/MRU guarantee and requires a product decision. |
+| F8 | **Implemented** | `a7f2fd5` moves noncritical inspector and workspace hydration out of the session-open paint path. |
+| F9 | **Deferred** | A shared revisioned startup catalog remains a lower-priority optimization; it was not dominant in the measured dataset. |
+| F10 | **Implemented** | `bd713d2` removes unused shared loading invalidations and deduplicates workspace state delivery by value. |
+
+### Follow-up findings and dispositions
+
+| Finding | Severity | Disposition |
+|---|---:|---|
+| Truncated legacy chains lacked bounded projections and could reopen with incomplete history metadata | P1 | Fixed in `85f7672` with lazy canonical backfill. |
+| Malformed recent-history projections could suppress a valid canonical fallback | P1 | Fixed in `a873df4`. |
+| Reconciled legacy tool results could shift durable indexes and break paging cursors | P1 | Fixed in `41f48fe` by preserving canonical cardinality for projections. |
+| An older binary could update canonical blobs while leaving newer projections stale | P1 | Fixed in `2c1911e`; schema upgrades invalidate derived projections. `eb58507` extends this rule to the message-offset index. |
+| A corrupt message row could leave the pagination cursor stuck on the same page | P1 | Fixed in `c60ae4e`; cursor progress follows durable row positions even when decoding skips a row. |
+| Missing-chain recovery could replace a partially loaded session and erase durable siblings | P1 | Fixed in `2141464` with targeted chain restoration. |
+| Deferred inspector/background hydration could commit results for the wrong session or workspace | P1 | Fixed in `b0ba4f4` with generation, session, workspace, and pending-request guards. |
+| Terminal chat events rematerialized the complete model history in the renderer | P1 | Fixed in `ee0b04d`; terminal events carry only the authoritative turn and merge it into the bounded renderer view. |
+| Paged renderer messages undercounted cumulative session usage and latest context | P1 | Fixed in `ee0b04d` using durable chain usage summaries. |
+| A model-history read failure silently produced an empty-context send | P1 | Fixed in `ee0b04d` with a retryable, fail-closed `history_load_failed` result. |
+| The paged-history preload API trusted an unchecked invoke result | P2 | Fixed in `ee0b04d` with strict result validation. |
+| One malformed stored message discarded every otherwise-valid message in the same chain | P1 | Fixed in `d2e5570` with per-message recovery and orphan-result reconciliation. |
+| Follow-up subagent runs replaced cumulative usage with only the latest run | P1 | Fixed in `76596d0`. |
+| Hydration with a temporarily missing agent definition was cached as permanently ready | P1 | Fixed in `76596d0`; incomplete readiness is evicted so a later operation can retry. |
+| Deep history pages repeatedly ran `json_each` across the complete earlier prefix, making sequential paging quadratic | P2 | Fixed in `eb58507` with compact `(chain_id, message_index)` byte offsets, bounded indexed candidates, transactional checkpoint updates, and one-time legacy backfill. |
+
+### Simplification and maintainability dispositions
+
+- `cc935ca` removed duplicate full-history flattening, consolidated collapsed/history stub rendering, and added the required exported-function documentation.
+- `eb58507` serializes each stored message once and reuses that fragment for the canonical blob, recent window, byte budget, and byte-offset projection.
+- Generic merge helpers, a shared hydration abstraction, and removal of compatibility branches were not adopted: they either obscured distinct lifecycle rules or would remove required legacy/downgrade behavior.
+- Splitting the large session storage and subagent manager modules remains a maintainability option, not a performance or correctness fix by itself. It should be done only around a coherent ownership boundary rather than as part of this optimization patch.
+
+### Verification status
+
+- Focused session database, migration, and persistence coverage passes with 156 tests.
+- The broader review-fix slice passes 284 focused tests, TypeScript typechecking, and ESLint.
+- Final branch verification passes: 270 test files / 3,970 tests, TypeScript typechecking, ESLint, and the runtime dependency-cycle check.
+- The test run emitted only the repository's existing Vite native-config warning and expected AI SDK reasoning-part warnings; no check failed.
