@@ -72,11 +72,16 @@ export function buildAnswerSubagentTool(
     }
 
     if (ctx.sessionId) {
-      await awaitSessionSubagentHydration(manager, ctx.sessionId, {
-        projectRuntime: ctx.projectRuntime,
-        windowId: ctx.windowId,
-        cwd: ctx.cwd,
-      });
+      try {
+        await awaitSessionSubagentHydration(manager, ctx.sessionId, {
+          projectRuntime: ctx.projectRuntime,
+          windowId: ctx.windowId,
+          cwd: ctx.cwd,
+        });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        return genericBuiltInToolOutcome('answer_subagent', `Error: ${message}`, 'error');
+      }
     }
 
     const record = manager.getRecord(subagent_id);

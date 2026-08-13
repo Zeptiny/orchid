@@ -161,6 +161,11 @@ describe('useSession shared cache', () => {
     const unsubscribe = __sessionCacheTest.subscribe(listener);
     for (const handler of workspaceHandlers) {
       handler({ workspace: { cwd: '/project', source: 'session', status: 'valid' } });
+    }
+    expect(listener).toHaveBeenCalledOnce();
+
+    listener.mockClear();
+    for (const handler of workspaceHandlers) {
       handler({
         workspace: {
           cwd: '/project',
@@ -170,7 +175,18 @@ describe('useSession shared cache', () => {
         },
       });
     }
+    expect(listener).not.toHaveBeenCalled();
 
+    for (const handler of workspaceHandlers) {
+      handler({
+        workspace: {
+          cwd: '/project',
+          source: 'session',
+          status: 'valid',
+          trust: 'untrusted',
+        },
+      });
+    }
     expect(listener).toHaveBeenCalledOnce();
     unsubscribe();
   });
@@ -292,6 +308,8 @@ describe('useSession shared cache', () => {
     await pageFlight;
 
     expect(__sessionCacheTest.getActiveSession()?.id).toBe(sessionB.id);
+    expect(__sessionCacheTest.getActiveSession()?.chains[0])
+      .toEqual(sessionB.chains[0]);
   });
 
   it('merges a narrow session update without replacing unrelated session state', async () => {
@@ -536,6 +554,19 @@ describe('useSession shared cache', () => {
       handler({ workspace: { cwd: '/proj/b', source: 'session', status: 'valid' } });
     }
     expect(__sessionCacheTest.getSnapshot().workspace?.cwd).toBe('/proj/b');
+    expect(chatListener).not.toHaveBeenCalled();
+    expect(configListener).not.toHaveBeenCalled();
+
+    for (const handler of workspaceHandlers) {
+      handler({
+        workspace: {
+          cwd: '/proj/b',
+          source: 'session',
+          status: 'valid',
+          trust: 'trusted',
+        },
+      });
+    }
     expect(chatListener).not.toHaveBeenCalled();
     expect(configListener).not.toHaveBeenCalled();
 

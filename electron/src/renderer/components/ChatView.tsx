@@ -977,10 +977,10 @@ export function ChatView({ isVisible = true, bootstrapConfig = null, onNotify, a
     const stillStarting = mcpServers.some((s) => s.status === 'starting');
     if (!stillStarting) return;
     const id = setInterval(() => {
-      void refreshMCP();
+      void refreshMCP(workspaceCwd);
     }, 1500);
     return () => clearInterval(id);
-  }, [mcpServers, refreshMCP, sidebarOpen]);
+  }, [mcpServers, refreshMCP, sidebarOpen, workspaceCwd]);
 
   // After a turn completes in the same session, refresh subagents so chain
   // footers pick up token usage written into subagent_chains. Initial idle

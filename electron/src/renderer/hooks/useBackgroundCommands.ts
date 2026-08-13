@@ -35,6 +35,13 @@ function listStateFrom(commands: readonly BgCommandListItem[]): BackgroundComman
 
 // ── Hook ─────────────────────────────────────────────────────────────────────
 
+/**
+ * Track the background-command fleet for one session and subscribe to updates.
+ *
+ * @param activeSessionId - Session whose background commands should be listed.
+ * @param enabled - Whether background-command loading and subscriptions are active.
+ * @returns The fleet state and an explicit refresh action.
+ */
 export function useBackgroundCommands(
   activeSessionId: string | null,
   enabled = true,

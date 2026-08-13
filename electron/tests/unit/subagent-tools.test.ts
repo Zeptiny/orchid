@@ -92,6 +92,10 @@ vi.mock('../../src/main/session/singleton', () => ({
     },
 }));
 
+afterEach(() => {
+  sessionManagerHolder.current = null;
+});
+
 /**
  * The close tool flushes the closed flag through `recoverSubagentPersistence`
  * via a lazy `await import('../../agents/subagent-persistence-recovery')` (same pattern as
@@ -123,6 +127,25 @@ const codeReviewerAgent: Agent = {
   allowed_tools: ['read', 'grep', 'glob'],
   allowed_skills: ['*'],
 };
+
+function installUnresolvableStoredSession(sessionId: string): string {
+  const source = new SubagentManager();
+  const stored = source.spawn('stored', 'old task', codeReviewerAgent, { sessionId });
+  source.markCompleted(stored.id, 'stored result');
+  const domain = subagentRecordFromStorageDict(
+    subagentRecordToStorageDict(runtimeToDomain(stored)),
+  );
+  const session = {
+    id: sessionId,
+    cwd: '/definitely/not/a/project',
+    subagentChains: [domain],
+  };
+  sessionManagerHolder.current = {
+    getSession: (id) => id === sessionId ? session : null,
+    getActive: () => null,
+  };
+  return stored.id;
+}
 
 const fileExplorerAgent: Agent = {
   name: 'file-explorer',
@@ -433,6 +456,24 @@ describe('wait_for_subagent', () => {
     expect(manager.getRecord(stored.id)?.sessionId).toBe(sessionId);
   });
 
+  it('returns a framed tool error when session hydration fails', async () => {
+    const sessionId = 'session-unresolvable-wait';
+    const storedId = installUnresolvableStoredSession(sessionId);
+    const { handler } = buildWaitTool(manager);
+
+    const result = await handler(
+      { subagent_ids: [storedId] },
+      {
+        cwd: '/definitely/not/a/project',
+        sessionId,
+        agentScopeId: 'main',
+      },
+    );
+
+    expect(result.canonical.status).toBe('error');
+    expect(result.agentProjection.content).toMatch(/project runtime/i);
+  });
+
   it('should block until subagent completes then return result', async () => {
     const { handler } = buildWaitTool(manager);
     const record = manager.spawn('test', 'task', codeReviewerAgent);
@@ -693,6 +734,24 @@ describe('interrupt_subagents', () => {
     expect(result.agentProjection.content).toContain('<interrupted>');
     expect(result.agentProjection.content).toContain(record.id);
     expect(record.state).toBe(SubagentState.INTERRUPTED);
+  });
+
+  it('returns a framed tool error when session hydration fails', async () => {
+    const sessionId = 'session-unresolvable-interrupt';
+    const storedId = installUnresolvableStoredSession(sessionId);
+    const { handler } = buildInterruptTool(manager);
+
+    const result = await handler(
+      { subagent_ids: [storedId] },
+      {
+        cwd: '/definitely/not/a/project',
+        sessionId,
+        agentScopeId: 'main',
+      },
+    );
+
+    expect(result.canonical.status).toBe('error');
+    expect(result.agentProjection.content).toMatch(/project runtime/i);
   });
 
   it('should cancel all running subagents in this session when IDs empty', async () => {
@@ -1124,6 +1183,24 @@ describe('answer_subagent', () => {
     expect(result.agentProjection.content).toContain('answered');
     expect(result.agentProjection.content).toContain(id);
     await expect(questionPromise).resolves.toEqual({ type: 'answered', answers });
+  });
+
+  it('returns a framed tool error when session hydration fails', async () => {
+    const sessionId = 'session-unresolvable-answer';
+    const storedId = installUnresolvableStoredSession(sessionId);
+    const { handler } = buildAnswerSubagentTool(manager);
+
+    const result = await handler(
+      { subagent_id: storedId, tool_call_id: 'tc-1', decline: true },
+      {
+        cwd: '/definitely/not/a/project',
+        sessionId,
+        agentScopeId: 'main',
+      },
+    );
+
+    expect(result.canonical.status).toBe('error');
+    expect(result.agentProjection.content).toMatch(/project runtime/i);
   });
 
   it('declines a pending question', async () => {

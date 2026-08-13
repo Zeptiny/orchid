@@ -38,6 +38,7 @@ export function mergeSubagentRecords(stored: readonly DomainSubagentRecord[], ru
   return [...merged.values()];
 }
 
+/** Merge stored summaries with runtime state, giving live records precedence. */
 export function mergeSubagentSummaries(
   stored: readonly SubagentSummary[],
   runtime: readonly SubagentSummary[],

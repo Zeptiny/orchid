@@ -285,6 +285,28 @@ describe('preload session history validation', () => {
       chainId: 'chain-1',
     })).rejects.toThrow(/Invalid IPC response.*session:history_page/i);
   });
+
+  it('accepts and preserves a well-formed paged-history invoke result', async () => {
+    electronMock.ipcRenderer.invoke.mockResolvedValueOnce({
+      sessionId: SESSION_ID,
+      chainId: 'chain-1',
+      messages: terminalMessages(),
+      startIndex: 0,
+      totalMessages: 3,
+      complete: true,
+    });
+
+    const page = await api.session.loadHistoryPage({
+      sessionId: SESSION_ID,
+      chainId: 'chain-1',
+    });
+
+    expect(page.messages.map((message) => message.id))
+      .toEqual(['message-user', 'message-call', 'message-result']);
+    expect(page.startIndex).toBe(0);
+    expect(page.totalMessages).toBe(3);
+    expect(page.complete).toBe(true);
+  });
 });
 
 describe('preload terminal chat history validation', () => {

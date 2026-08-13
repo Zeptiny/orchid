@@ -251,6 +251,58 @@ describe('session schema legacy → v6 migration', () => {
     ).pluck().get('schema_version')).toBe(String(SESSION_SCHEMA_VERSION));
   });
 
+  it('keeps derived projections when reopening at the current schema version', () => {
+    const dbPath = path.join(tempDir, 'same-version.db');
+    const initial = new SessionDb(dbPath);
+    instances.push(initial);
+    const db = initial.connection;
+    db.prepare(`
+      INSERT INTO sessions (id, name, todo_store_json, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?)
+    `).run(
+      V2_SID,
+      'Stable session',
+      '{}',
+      '2026-01-01T00:00:00.000Z',
+      '2026-01-01T00:00:00.000Z',
+    );
+    db.prepare(`
+      INSERT INTO chains (
+        id, session_id, ordinal, status, messages_json,
+        summary_json, recent_messages_json
+      ) VALUES (?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      'chain-stable',
+      V2_SID,
+      0,
+      'completed',
+      '[{"id":"keep"}]',
+      '{"messageCount":1}',
+      '[{"id":"keep"}]',
+    );
+    db.prepare(`
+      INSERT INTO chain_message_offsets (chain_id, message_index, byte_offset, byte_length)
+      VALUES (?, ?, ?, ?)
+    `).run('chain-stable', 0, 1, 13);
+    initial.dispose();
+
+    const reopened = new SessionDb(dbPath);
+    instances.push(reopened);
+    expect(reopened.connection.prepare(`
+      SELECT summary_json, recent_messages_json
+      FROM chains WHERE id = ?
+    `).get('chain-stable')).toEqual({
+      summary_json: '{"messageCount":1}',
+      recent_messages_json: '[{"id":"keep"}]',
+    });
+    expect(reopened.connection.prepare(
+      'SELECT COUNT(*) FROM chain_message_offsets WHERE chain_id = ?',
+    ).pluck().get('chain-stable')).toBe(1);
+    expect(reopened.connection.prepare(
+      'SELECT value FROM schema_meta WHERE key = ?',
+    ).pluck().get('schema_version')).toBe(String(SESSION_SCHEMA_VERSION));
+  });
+
   it('keeps new saves able to persist a tier override after migration', () => {
     const dbPath = path.join(tempDir, 'v2-save.db');
     makeV2Database(dbPath);

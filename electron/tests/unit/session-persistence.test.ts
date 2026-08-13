@@ -13,6 +13,7 @@ import type { StorageOptions } from '../../src/main/session/storage';
 import {
   saveSession,
   loadSession,
+  loadSessionForReplacement,
   loadSessionView,
   loadSessionHistoryPage,
   loadSessionMessages,
@@ -2172,6 +2173,7 @@ describe('bounded renderer history views', () => {
       SET summary_json = NULL, recent_messages_json = NULL
       WHERE session_id = ? AND id = ?
     `).run(SID, 'chain-legacy-window');
+    db.close();
 
     const first = loadSessionView(SID, {
       ...storageOpts,
@@ -2182,7 +2184,8 @@ describe('bounded renderer history views', () => {
       .toEqual(['legacy-2', 'legacy-3']);
     expect(first.chains[0].messageStartIndex).toBe(2);
 
-    const projection = db.prepare(`
+    const projectionDb = openSqliteDb(storageOpts.dbPath!);
+    const projection = projectionDb.prepare(`
       SELECT summary_json, recent_messages_json
       FROM chains WHERE session_id = ? AND id = ?
     `).get(SID, 'chain-legacy-window') as {
@@ -2192,11 +2195,11 @@ describe('bounded renderer history views', () => {
     expect(projection.summary_json).not.toBeNull();
     expect(projection.recent_messages_json).not.toBeNull();
 
-    db.prepare(`
+    projectionDb.prepare(`
       UPDATE chains SET messages_json = ?
       WHERE session_id = ? AND id = ?
     `).run('not-json', SID, 'chain-legacy-window');
-    db.close();
+    projectionDb.close();
 
     const second = loadSessionView(SID, {
       ...storageOpts,
@@ -2722,6 +2725,93 @@ describe('incremental session persistence', () => {
     expect(loaded.reasoningEffortOverride).toBe('high');
     expect(loaded.tierOverride).toBe('flex');
     expect(loaded.permissionMode).toBe('allow');
+  });
+
+  it('reloads complete durable state before bounded full-save fallbacks', () => {
+    const sessionId = 'abababab-abab-4aba-8aba-abababababab';
+    const historical = [
+      makeChain(sessionId, {
+        id: 'fallback-history-one',
+        messages: [
+          makeMessage({ id: 'fallback-h1-user', content: 'older question' }),
+          makeMessage({ id: 'fallback-h1-answer', role: 'assistant', content: 'older answer' }),
+        ],
+      }),
+      makeChain(sessionId, {
+        id: 'fallback-history-two',
+        messages: [
+          makeMessage({ id: 'fallback-h2-user', content: 'newer question' }),
+          makeMessage({ id: 'fallback-h2-answer', role: 'assistant', content: 'newer answer' }),
+        ],
+      }),
+    ];
+    const storedSubagent = makeSubagentRecord(sessionId, { id: 'fallback-sub-stored' });
+    saveSession(makeSession({
+      id: sessionId,
+      chains: historical,
+      subagentChains: [storedSubagent],
+    }), storageOpts);
+
+    const manager = new SessionManager({
+      storage: {
+        ...storageOpts,
+        sessionViewMessageBudget: 1,
+        sessionViewByteBudget: 1024 * 1024,
+      },
+    });
+    const bounded = manager.switchTo(sessionId)!;
+    expect(bounded.chains.some((chain) => chain.messagesLoaded === false)).toBe(true);
+    expect(bounded.subagentChains).toEqual([]);
+
+    let db = openSqliteDb(storageOpts.dbPath!);
+    db.exec(`
+      CREATE TABLE fallback_update_gate (remaining INTEGER NOT NULL);
+      INSERT INTO fallback_update_gate (remaining) VALUES (1);
+      CREATE TRIGGER ignore_next_session_update
+      BEFORE UPDATE ON sessions
+      WHEN (SELECT remaining FROM fallback_update_gate) = 1
+      BEGIN
+        UPDATE fallback_update_gate SET remaining = 0;
+        SELECT RAISE(IGNORE);
+      END
+    `);
+    db.close();
+    manager.rename(sessionId, 'Fallback-safe session');
+
+    db = openSqliteDb(storageOpts.dbPath!);
+    db.prepare('UPDATE fallback_update_gate SET remaining = 1').run();
+    db.close();
+    const active = manager.startChain({
+      messages: [makeMessage({ id: 'fallback-active-user', content: 'current question' })],
+    }, sessionId)!;
+
+    db = openSqliteDb(storageOpts.dbPath!);
+    db.prepare('UPDATE fallback_update_gate SET remaining = 1').run();
+    db.close();
+    manager.syncSubagentRecords(sessionId, [
+      makeSubagentRecord(sessionId, { id: 'fallback-sub-new' }),
+    ]);
+
+    const full = loadSessionForReplacement(sessionId, storageOpts)!;
+    expect(full.name).toBe('Fallback-safe session');
+    expect(full.chains.slice(0, 2).map((chain) => ({
+      id: chain.id,
+      messageIds: chain.messages.map((message) => message.id),
+    }))).toEqual([
+      {
+        id: 'fallback-history-one',
+        messageIds: ['fallback-h1-user', 'fallback-h1-answer'],
+      },
+      {
+        id: 'fallback-history-two',
+        messageIds: ['fallback-h2-user', 'fallback-h2-answer'],
+      },
+    ]);
+    expect(full.activeChainId).toBe(active.id);
+    expect(full.chains.find((chain) => chain.id === active.id)?.status)
+      .toBe(ChainStatus.ACTIVE);
+    expect(full.subagentChains.map((record) => record.id))
+      .toEqual(['fallback-sub-stored', 'fallback-sub-new']);
   });
 
   it('restores a missing active row without replacing bounded sibling history', () => {

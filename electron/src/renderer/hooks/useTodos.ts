@@ -39,6 +39,14 @@ function listStateFrom(todos: readonly Todo[]): TodoListState {
 
 // ── Hook ─────────────────────────────────────────────────────────────────────
 
+/**
+ * Track todos for one session, preferring the supplied session snapshot over
+ * a redundant reload while still supporting explicit and event-driven refreshes.
+ *
+ * @param activeSessionId - Session whose todo state should be exposed.
+ * @param sessionTodos - Authoritative todos already loaded with that session.
+ * @returns The current todo state plus refresh and snapshot-application actions.
+ */
 export function useTodos(
   activeSessionId: string | null,
   sessionTodos: readonly Todo[] | null = null,
@@ -46,12 +54,15 @@ export function useTodos(
   const [state, setState] = useState<TodoListState>({ status: 'loading' });
   const sessionIdRef = useRef(activeSessionId);
   sessionIdRef.current = activeSessionId;
+  const refreshGenerationRef = useRef(0);
 
   const applyFromSession = useCallback((todos: readonly Todo[]) => {
+    refreshGenerationRef.current += 1;
     setState(listStateFrom(todos));
   }, []);
 
   const refresh = useCallback(async () => {
+    const generation = ++refreshGenerationRef.current;
     if (!activeSessionId || !window.orchid?.session?.load) {
       setState({ status: 'empty' });
       return;
@@ -64,7 +75,10 @@ export function useTodos(
         id: activeSessionId,
         activate: false,
       });
-      if (sessionIdRef.current !== requestId) return;
+      if (
+        sessionIdRef.current !== requestId
+        || refreshGenerationRef.current !== generation
+      ) return;
       if (!session) {
         setState({ status: 'empty' });
         return;
@@ -72,7 +86,10 @@ export function useTodos(
 
       setState(listStateFrom(session.todoStore.tasks));
     } catch (err) {
-      if (sessionIdRef.current !== requestId) return;
+      if (
+        sessionIdRef.current !== requestId
+        || refreshGenerationRef.current !== generation
+      ) return;
       const error = err instanceof Error ? err.message : String(err);
       setState({ status: 'error', error });
     }
@@ -87,11 +104,11 @@ export function useTodos(
       return;
     }
     if (sessionTodos !== null) {
-      setState(listStateFrom(sessionTodos));
+      applyFromSession(sessionTodos);
       return;
     }
     void refresh();
-  }, [activeSessionId, refresh, sessionTodos]);
+  }, [activeSessionId, applyFromSession, refresh, sessionTodos]);
 
   // Live updates when tools mutate the session-scoped todo store.
   useEffect(() => {

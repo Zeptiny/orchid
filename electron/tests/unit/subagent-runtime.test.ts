@@ -137,8 +137,10 @@ describe('SubagentManager runtime', () => {
       total_tokens: 18,
       cached_tokens: 2,
     };
-    const domain = { ...runtimeToDomain(runtime), usage };
+    runtime.usage = usage;
+    const domain = runtimeToDomain(runtime);
 
+    expect(domain.usage).toEqual(usage);
     expect(summarizeSubagentRecord(domain).usage).toEqual(usage);
   });
 

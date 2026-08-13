@@ -46,11 +46,16 @@ export function buildInterruptTool(
     const { subagent_ids } = input as { subagent_ids: string[] };
 
     if (ctx?.sessionId) {
-      await awaitSessionSubagentHydration(manager, ctx.sessionId, {
-        projectRuntime: ctx.projectRuntime,
-        windowId: ctx.windowId,
-        cwd: ctx.cwd,
-      });
+      try {
+        await awaitSessionSubagentHydration(manager, ctx.sessionId, {
+          projectRuntime: ctx.projectRuntime,
+          windowId: ctx.windowId,
+          cwd: ctx.cwd,
+        });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        return genericBuiltInToolOutcome('interrupt_subagents', `Error: ${message}`, 'error');
+      }
     }
 
     // Empty list → cancel all running in this session only (never process-wide).

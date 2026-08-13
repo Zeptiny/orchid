@@ -140,6 +140,7 @@ export const sessionOpenSchema = z.object({
   id: z.string().uuid(),
 });
 
+/** Validate a bounded history-page request and its optional exclusive cursor. */
 export const sessionHistoryPageSchema = z.object({
   sessionId: z.string().uuid(),
   chainId: z.string().min(1),

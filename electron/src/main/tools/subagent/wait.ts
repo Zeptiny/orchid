@@ -153,11 +153,16 @@ export function buildWaitTool(
     }
 
     if (ctx?.sessionId) {
-      await awaitSessionSubagentHydration(manager, ctx.sessionId, {
-        projectRuntime: ctx.projectRuntime,
-        windowId: ctx.windowId,
-        cwd: ctx.cwd,
-      });
+      try {
+        await awaitSessionSubagentHydration(manager, ctx.sessionId, {
+          projectRuntime: ctx.projectRuntime,
+          windowId: ctx.windowId,
+          cwd: ctx.cwd,
+        });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        return genericBuiltInToolOutcome('wait_for_subagent', `Error: ${message}`, 'error');
+      }
     }
 
     // Explicit IDs are untrusted model input. Keep the same ownership boundary

@@ -1389,6 +1389,7 @@ function loadSessionInternal(
   sessionId: string,
   loadFullSession: boolean,
   opts?: StorageOptions,
+  recoverActiveChains = true,
 ): Session | null {
   if (!isValidSessionId(sessionId)) {
     return null;
@@ -1408,7 +1409,7 @@ function loadSessionInternal(
         .filter((chain) => parseChainStatus(chain.status) === ChainStatus.ACTIVE)
         .map((chain) => chain.id);
 
-      if (activeChainIds.length > 0) {
+      if (recoverActiveChains && activeChainIds.length > 0) {
         const recoveredAt = new Date().toISOString();
         const activePlaceholders = activeChainIds.map(() => '?').join(', ');
 
@@ -1544,6 +1545,14 @@ export function loadSession(sessionId: string, opts?: StorageOptions): Session |
   return loadSessionInternal(sessionId, true, opts);
 }
 
+/** Load complete durable state without applying process-restart recovery. */
+export function loadSessionForReplacement(
+  sessionId: string,
+  opts?: StorageOptions,
+): Session | null {
+  return loadSessionInternal(sessionId, true, opts, false);
+}
+
 /** Load the navigation payload without selecting or parsing subagent record_json. */
 export function loadSessionView(sessionId: string, opts?: StorageOptions): Session | null {
   return loadSessionInternal(sessionId, false, opts);
@@ -1608,12 +1617,6 @@ export function loadSubagentSummaries(
     }>;
     if (rows.length === 0) return [];
 
-    const legacyRecords = new Map(
-      (db.prepare(
-        'SELECT subagent_id, record_json FROM subagent_chains WHERE session_id = ? AND summary_json IS NULL',
-      ).all(sessionId) as Array<{ subagent_id: string; record_json: string }>)
-        .map((row) => [row.subagent_id, row.record_json]),
-    );
     const loadRecord = db.prepare(
       'SELECT record_json FROM subagent_chains WHERE session_id = ? AND subagent_id = ?',
     );
@@ -1627,9 +1630,9 @@ export function loadSubagentSummaries(
         ? deserializeSubagentSummary(row.summary_json)
         : null;
       if (!summary) {
-        const recordJson = legacyRecords.get(row.subagent_id)
-          ?? (loadRecord.get(sessionId, row.subagent_id) as { record_json: string } | undefined)
-            ?.record_json;
+        const recordJson = (
+          loadRecord.get(sessionId, row.subagent_id) as { record_json: string } | undefined
+        )?.record_json;
         if (!recordJson) continue;
         try {
           const record = subagentRecordFromStorageDict(JSON.parse(recordJson));

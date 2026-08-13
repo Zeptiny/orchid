@@ -364,6 +364,33 @@ describe('buildHistoryStreamItems', () => {
     expect(result.items[0]).toMatchObject({ kind: 'history-gap', chainIndex: 1 });
   });
 
+  it('emits the global history gap only when its collapsed chain is expanded', () => {
+    const chains = Array.from(
+      { length: CHAIN_COLLAPSE_THRESHOLD + 1 },
+      (_, index) => chain({
+        id: `chain-${index}`,
+        ...(index === 0
+          ? {
+              messagesLoaded: false,
+              messageStartIndex: 2,
+              messageCount: 2,
+            }
+          : {}),
+      }),
+    );
+
+    const collapsed = buildHistoryStreamItems({ ...baseOpts, sessionChains: chains });
+    expect(collapsed.items.some((item) => item.kind === 'history-gap')).toBe(false);
+
+    const expanded = buildHistoryStreamItems({
+      ...baseOpts,
+      sessionChains: chains,
+      expandedChainIndexes: new Set([0]),
+    });
+    expect(expanded.items.filter((item) => item.kind === 'history-gap'))
+      .toEqual([expect.objectContaining({ chainIndex: 0 })]);
+  });
+
   it('marks footer as interrupted for INTERRUPTED chains', () => {
     const chains = [
       chain({ id: 'c1', status: ChainStatus.INTERRUPTED, messages: [userMsg('u1', 'hi')] }),

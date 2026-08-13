@@ -24,9 +24,10 @@ describe('renderer bootstrap', () => {
   it('delegates initial index-status work to deferred inspector hydration', () => {
     const chatView = source('components', 'ChatView.tsx');
     const hydrationCall = chatView.match(
-      /const workspaceCwd[\s\S]*?useInspectorHydration\(\{[\s\S]*?\}\);/,
+      /useInspectorHydration\(\{\s*enabled:\s*sidebarOpen,\s*workspaceKey:\s*workspaceCwd,\s*refreshMCP,\s*refreshIndex,\s*\}\);/,
     )?.[0];
 
+    expect(hydrationCall).toBeDefined();
     expect(hydrationCall).toContain('enabled: sidebarOpen');
     expect(hydrationCall).toContain('workspaceKey: workspaceCwd');
     expect(hydrationCall).toContain('refreshMCP');

@@ -81,4 +81,30 @@ describe('useTodos', () => {
     expect(sessionApi.load).toHaveBeenCalledWith({ id: sessionId, activate: false });
     expect(result.current.state).toEqual({ status: 'ready', todos: refreshed });
   });
+
+  it('does not let an older refresh overwrite a newer session snapshot', async () => {
+    const sessionApi = installSessionApi();
+    const stale = [makeTodo('todo-stale', 'Stale refresh')];
+    const seeded = [makeTodo('todo-current', 'Current snapshot')];
+    let resolveLoad!: (value: { todoStore: { tasks: readonly Todo[] } }) => void;
+    sessionApi.load.mockReturnValue(new Promise((resolve) => {
+      resolveLoad = resolve;
+    }));
+
+    const { result, rerender } = renderHook(
+      ({ todos }) => useTodos(sessionId, todos),
+      { initialProps: { todos: null as readonly Todo[] | null } },
+    );
+    expect(sessionApi.load).toHaveBeenCalledOnce();
+
+    rerender({ todos: seeded });
+    expect(result.current.state).toEqual({ status: 'ready', todos: seeded });
+
+    await act(async () => {
+      resolveLoad({ todoStore: { tasks: stale } });
+      await Promise.resolve();
+    });
+
+    expect(result.current.state).toEqual({ status: 'ready', todos: seeded });
+  });
 });

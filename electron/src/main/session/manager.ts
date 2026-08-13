@@ -41,6 +41,7 @@ import {
   restoreMissingChain as storageRestoreMissingChain,
   saveSession as storageSaveSession,
   loadSession as storageLoadSession,
+  loadSessionForReplacement as storageLoadSessionForReplacement,
   loadSessionView as storageLoadSessionView,
   loadSessionHistoryPage as storageLoadSessionHistoryPage,
   loadSessionMessages as storageLoadSessionMessages,
@@ -176,6 +177,49 @@ export class SessionManager {
     return session;
   }
 
+  /**
+   * Recover a failed targeted write without replacing durable history with a
+   * bounded navigation snapshot.
+   */
+  private saveFullSessionFallback(
+    session: Session,
+    changedChains: readonly Chain[] = [],
+    preserveDurableMessageIds: ReadonlySet<string> = new Set(),
+  ): void {
+    const durable = storageLoadSessionForReplacement(session.id, this._storageOpts);
+    if (!durable) {
+      storageSaveSession(session, this._storageOpts);
+      return;
+    }
+
+    const pendingChains = new Map(changedChains.map((chain) => [chain.id, chain]));
+    const durableChainIds = new Set(durable.chains.map((chain) => chain.id));
+    const chains = durable.chains.map((chain) => {
+      const pending = pendingChains.get(chain.id);
+      if (!pending) return chain;
+      return preserveDurableMessageIds.has(chain.id)
+        ? { ...pending, messages: chain.messages }
+        : pending;
+    });
+    for (const chain of changedChains) {
+      if (!durableChainIds.has(chain.id)) chains.push(chain);
+    }
+
+    const subagentChains = new Map(
+      durable.subagentChains.map((record) => [record.id, record]),
+    );
+    for (const record of session.subagentChains) {
+      subagentChains.set(record.id, record);
+    }
+
+    storageSaveSession({
+      ...durable,
+      ...session,
+      chains,
+      subagentChains: [...subagentChains.values()],
+    }, this._storageOpts);
+  }
+
   private persistSessionFields(
     session: Session,
     update: Omit<SessionFieldsUpdate, 'updatedAt'>,
@@ -186,7 +230,7 @@ export class SessionManager {
       this._storageOpts,
     );
     if (!persisted) {
-      storageSaveSession(session, this._storageOpts);
+      this.saveFullSessionFallback(session);
     }
     return this.replaceSession(session);
   }
@@ -707,7 +751,12 @@ export class SessionManager {
       this._storageOpts,
     );
     if (!persisted) {
-      storageSaveSession(updated, this._storageOpts);
+      const changedIds = new Set([...interruptedChainIds, chain.id]);
+      this.saveFullSessionFallback(
+        updated,
+        updated.chains.filter((candidate) => changedIds.has(candidate.id)),
+        new Set(interruptedChainIds),
+      );
     }
     this.replaceSession(updated);
     return chain;
@@ -754,7 +803,7 @@ export class SessionManager {
         updated.todoStore,
         this._storageOpts,
       );
-      if (!restored) storageSaveSession(updated, this._storageOpts);
+      if (!restored) this.saveFullSessionFallback(updated, [chain]);
     }
     this.replaceSession(updated);
     return updated;
@@ -814,7 +863,7 @@ export class SessionManager {
         updated.todoStore,
         this._storageOpts,
       );
-      if (!restored) storageSaveSession(updated, this._storageOpts);
+      if (!restored) this.saveFullSessionFallback(updated, [chain]);
     }
     this.replaceSession(updated);
     return updated;
@@ -945,7 +994,7 @@ export class SessionManager {
         todoStore: this.getTodoStore(sessionId).toData(),
         updatedAt: now,
       };
-      if (outcome === false) storageSaveSession(updated, this._storageOpts);
+      if (outcome === false) this.saveFullSessionFallback(updated);
       this.replaceSession(updated);
       return { session: updated, bytes: outcome ? outcome.bytes : 0 };
     }
@@ -967,7 +1016,7 @@ export class SessionManager {
       subagentChains: merge(loaded.subagentChains),
       updatedAt: now,
     };
-    if (outcome === false) storageSaveSession(updated, this._storageOpts);
+    if (outcome === false) this.saveFullSessionFallback(updated);
     return { session: updated, bytes: outcome ? outcome.bytes : 0 };
   }
 
