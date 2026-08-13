@@ -2090,6 +2090,56 @@ describe('bounded renderer history views', () => {
     expect(second.chains[0].messageStartIndex).toBe(2);
   });
 
+  it('preserves canonical indexes when legacy history contains an orphan tool result', () => {
+    const orphan = makeMessage({
+      id: 'legacy-orphan',
+      role: 'tool',
+      type: 'tool_result',
+      tool_call_id: 'missing-call',
+      content: 'orphaned result',
+    });
+    const messages = [
+      orphan,
+      ...Array.from({ length: 241 }, (_, index) => makeMessage({
+        id: `legacy-index-${index + 1}`,
+        role: index % 2 === 0 ? 'user' : 'assistant',
+        content: `message ${index + 1}`,
+      })),
+    ];
+    saveSession(makeSession({
+      id: SID,
+      chains: [makeChain(SID, { id: 'chain-legacy-indexes', messages })],
+    }), storageOpts);
+
+    const db = openSqliteDb(storageOpts.dbPath!);
+    db.prepare(`
+      UPDATE chains
+      SET summary_json = NULL, recent_messages_json = NULL
+      WHERE session_id = ? AND id = ?
+    `).run(SID, 'chain-legacy-indexes');
+    db.close();
+
+    const view = loadSessionView(SID, {
+      ...storageOpts,
+      sessionViewMessageBudget: 1,
+      sessionViewByteBudget: 1024 * 1024,
+    })!;
+    const chain = view.chains[0];
+    expect(chain.messageCount).toBe(messages.length);
+
+    let beforeIndex = chain.messageStartIndex!;
+    const loaded = [...chain.messages];
+    while (beforeIndex > 0) {
+      const page = loadSessionHistoryPage(SID, chain.id, beforeIndex, storageOpts)!;
+      loaded.unshift(...page.messages);
+      expect(page.startIndex).toBeLessThan(beforeIndex);
+      beforeIndex = page.startIndex;
+    }
+
+    expect(loaded.map((message) => message.id))
+      .toEqual(messages.map((message) => message.id));
+  });
+
   it('pages older messages without breaking tool-call/result reconstruction', () => {
     const toolCall = makeMessage({
       id: 'call-message',

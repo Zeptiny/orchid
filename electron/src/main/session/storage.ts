@@ -1239,7 +1239,7 @@ function loadSessionInternal(
               messages_json: string;
             } | undefined;
             const legacyMessages = row
-              ? tryDeserializeMessages(row.messages_json)
+              ? tryDeserializeMessages(row.messages_json, false)
               : null;
             if (legacyMessages) {
               const serialized = serializeChainMessages(legacyMessages);
