@@ -116,6 +116,32 @@ describe('SubagentManager runtime', () => {
     expect(manager.getRunPromise(record.id)).toBeNull();
   });
 
+  it('indexes runtime records by owning session', () => {
+    const first = manager.spawn('first', 'inspect A', testAgent, { sessionId: 'session-a' });
+    const second = manager.spawn('second', 'inspect B', testAgent, { sessionId: 'session-b' });
+    manager.spawn('unscoped', 'inspect draft', testAgent);
+
+    expect(manager.recordsForSession('session-a')).toEqual([first]);
+    expect(manager.recordsForSession('session-b')).toEqual([second]);
+
+    manager.purgeSession('session-a');
+    expect(manager.recordsForSession('session-a')).toEqual([]);
+    expect(manager.recordsForSession('session-b')).toEqual([second]);
+  });
+
+  it('summarizes a durable record from its precomputed usage', () => {
+    const runtime = manager.spawn('usage', 'inspect usage', testAgent, { sessionId: 'session-a' });
+    const usage = {
+      prompt_tokens: 13,
+      completion_tokens: 5,
+      total_tokens: 18,
+      cached_tokens: 2,
+    };
+    const domain = { ...runtimeToDomain(runtime), usage };
+
+    expect(summarizeSubagentRecord(domain).usage).toEqual(usage);
+  });
+
   it('preserves frozen owner-window affinity into a background runner', async () => {
     let release!: () => void;
     const parentTurnFinalized = new Promise<void>((resolve) => { release = resolve; });

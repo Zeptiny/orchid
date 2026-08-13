@@ -223,6 +223,8 @@ export interface SubagentRecord {
    * Used to attribute sub token usage to the correct chain footer.
    */
   readonly parentChainIndex: number | null;
+  /** Precomputed aggregate usage; absent only on legacy persisted rows. */
+  readonly usage?: Usage | null;
   /**
    * Resolved reasoning effort for this subagent's turn (agent field → tier
    * config → connection default). Undefined when the model lacks reasoning.
@@ -270,7 +272,9 @@ export function summarizeSubagentRecord(record: SubagentRecord): SubagentSummary
     start_time: record.start_time,
     end_time: record.end_time,
     parentChainIndex: record.parentChainIndex,
-    usage: sumMessageUsages(record.chain.messages),
+    usage: record.usage !== undefined
+      ? record.usage
+      : sumMessageUsages(record.chain.messages),
   };
 }
 
@@ -371,6 +375,7 @@ export interface SubagentRecordStorageDict {
   result?: string | null;
   error?: string | null;
   parentChainIndex?: number | null;
+  usage?: unknown;
   reasoning_effort?: string | number;
   closed?: boolean;
   chain?: unknown;

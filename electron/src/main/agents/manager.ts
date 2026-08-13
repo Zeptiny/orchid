@@ -19,6 +19,7 @@ import type { Chain } from '../../shared/types/chain';
 import { ChainStatus } from '../../shared/types/chain';
 import type { ModelSelection } from '../../shared/types/provider';
 import type { Message, Usage } from '../../shared/types/message';
+import { sumMessageUsages } from '../../shared/usage';
 import type { StreamEvent } from '../llm/orchestrator';
 import type { ProjectRuntime } from '../project/runtime';
 import type { SubagentRecord as DomainSubagentRecord } from '../../shared/types/subagent';
@@ -309,6 +310,7 @@ export interface SubagentCheckpointCandidate {
  */
 export class SubagentManager {
   private _subagents: Map<string, SubagentRecord> = new Map();
+  private _recordIdsBySession = new Map<string, Set<string>>();
   private _runner: SubagentStreamRunner | null = null;
   private _onChange: SubagentChangeListener | null = null;
   private _changeListeners = new Set<SubagentChangeListener>();
@@ -408,7 +410,7 @@ export class SubagentManager {
       closed: false,
     };
 
-    this._subagents.set(id, record);
+    this._storeRecord(record);
     this._persistence.register(id, sessionId, { admitted });
     this._liveProjection.start({
       subagentId: id,
@@ -997,6 +999,18 @@ export class SubagentManager {
     return Array.from(this._subagents.values());
   }
 
+  /** Runtime records owned by one session, without traversing global state. */
+  recordsForSession(sessionId: string): SubagentRecord[] {
+    const ids = this._recordIdsBySession.get(sessionId);
+    if (!ids) return [];
+    const records: SubagentRecord[] = [];
+    for (const id of ids) {
+      const record = this._subagents.get(id);
+      if (record) records.push(record);
+    }
+    return records;
+  }
+
   /** Whether an in-memory record is a lean, durable-backed terminal summary. */
   isSummary(subagentId: string): boolean {
     return this._persistence.isSummary(subagentId);
@@ -1063,20 +1077,20 @@ export class SubagentManager {
    * all records including summaries.
    */
   purgeSession(sessionId: string): void {
-    for (const [id, record] of this._subagents) {
-      if (record.sessionId !== sessionId) continue;
+    for (const record of this.recordsForSession(sessionId)) {
+      const id = record.id;
       if (!isTerminalSubagentState(record.state)) this.cancelOne(id);
     }
-    for (const [id, record] of this._subagents) {
-      if (record.sessionId === sessionId) {
-        this._subagents.delete(id);
-        this._lifecycle.clear(id);
-        // Let an already-started run unwind through its guarded terminal
-        // projection. Its finally block drops the detached registry entry.
-        if (!this._runs.isSettling(id)) {
-          this._runs.remove(id);
-          this._liveProjection.remove(id);
-        }
+    for (const record of this.recordsForSession(sessionId)) {
+      const id = record.id;
+      this._subagents.delete(id);
+      this._unindexRecord(record);
+      this._lifecycle.clear(id);
+      // Let an already-started run unwind through its guarded terminal
+      // projection. Its finally block drops the detached registry entry.
+      if (!this._runs.isSettling(id)) {
+        this._runs.remove(id);
+        this._liveProjection.remove(id);
       }
     }
     this._admission.filterQueue(
@@ -1097,7 +1111,9 @@ export class SubagentManager {
     const records =
       sessionId === undefined
         ? this.allRecords()
-        : this.allRecords().filter((r) => r.sessionId === sessionId);
+        : sessionId === null
+          ? this.allRecords().filter((record) => record.sessionId === null)
+          : this.recordsForSession(sessionId);
     return records
       .filter((record) => !this.isSummary(record.id))
       .map((record) => this.toDomainRecord(record));
@@ -1168,9 +1184,9 @@ export class SubagentManager {
         startedAt: startTime,
         endTime,
         chain: domain.chain,
-        // Usage lives on the chain messages; hydration does not reconstruct the
-        // aggregate (summaries keep it, storage does not carry it).
-        usage: null,
+        usage: domain.usage !== undefined
+          ? domain.usage
+          : sumMessageUsages(domain.chain.messages),
         selection: domain.chain.selection,
         parentChainIndex: domain.parentChainIndex,
         sessionId: spec.sessionId,
@@ -1180,7 +1196,7 @@ export class SubagentManager {
         record.reasoningEffort = domain.reasoning_effort;
       }
 
-      this._subagents.set(spec.id, record);
+      this._storeRecord(record);
       this._persistence.rehydrate(spec.id, spec.sessionId);
       this._liveProjection.start({
         subagentId: spec.id,
@@ -1300,10 +1316,33 @@ export class SubagentManager {
   }
 
   private _removeRuntimeState(subagentId: string): void {
+    const record = this._subagents.get(subagentId);
     this._subagents.delete(subagentId);
+    if (record) this._unindexRecord(record);
     this._runs.remove(subagentId);
     this._lifecycle.clear(subagentId);
     this._liveProjection.remove(subagentId);
+  }
+
+  private _storeRecord(record: SubagentRecord): void {
+    const previous = this._subagents.get(record.id);
+    if (previous) this._unindexRecord(previous);
+    this._subagents.set(record.id, record);
+    if (!record.sessionId) return;
+    let ids = this._recordIdsBySession.get(record.sessionId);
+    if (!ids) {
+      ids = new Set();
+      this._recordIdsBySession.set(record.sessionId, ids);
+    }
+    ids.add(record.id);
+  }
+
+  private _unindexRecord(record: SubagentRecord): void {
+    if (!record.sessionId) return;
+    const ids = this._recordIdsBySession.get(record.sessionId);
+    if (!ids) return;
+    ids.delete(record.id);
+    if (ids.size === 0) this._recordIdsBySession.delete(record.sessionId);
   }
 
   // ── Private: run loop ─────────────────────────────────────────────────────
@@ -1616,6 +1655,7 @@ export function runtimeToDomain(
       ? { reasoning_effort: record.reasoningEffort }
       : {}),
     closed: record.closed,
+    usage: record.usage,
     chain: checkpointChain,
   };
 }

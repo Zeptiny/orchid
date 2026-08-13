@@ -33,6 +33,7 @@ import {
 import { isTextGenerationModel } from '../utils/models';
 import { emitOrchidEvent, onOrchidEvent } from '../utils/events';
 import { resolveOrchidNavigate } from '../utils/navigate-shell';
+import { shouldRefreshSubagentsAfterTurn } from '../utils/subagent-refresh';
 import { useFocusTrap, useGlobalShortcuts } from '../keyboard';
 import type { ModelSelection } from '../../shared/types/provider';
 import { flattenSessionMessages, type Session } from '../../shared/types/session';
@@ -945,13 +946,21 @@ export function ChatView({ isVisible = true, bootstrapConfig = null, onNotify, a
     return () => clearInterval(id);
   }, [mcpServers, refreshMCP]);
 
-  // After a turn completes (or session switches), refresh subagents so chain
-  // footers pick up token usage written into subagent_chains.
+  // After a turn completes in the same session, refresh subagents so chain
+  // footers pick up token usage written into subagent_chains. Initial idle
+  // mounts and idle session switches already hydrate in useSubagents.
+  const subagentRefreshState = {
+    sessionId: session.activeSession?.id ?? null,
+    status: chat.status,
+  } as const;
+  const previousSubagentRefreshState = useRef(subagentRefreshState);
   useEffect(() => {
-    if (chat.status !== 'idle') return;
-    if (!session.activeSession?.id) return;
-    void subagents.refresh();
-  }, [chat.status, chat.messages.length, session.activeSession?.id, subagents.refresh]);
+    const previous = previousSubagentRefreshState.current;
+    previousSubagentRefreshState.current = subagentRefreshState;
+    if (shouldRefreshSubagentsAfterTurn(previous, subagentRefreshState)) {
+      void subagents.refresh();
+    }
+  }, [subagentRefreshState.sessionId, subagentRefreshState.status, subagents.refresh]);
 
   // Memoized so the composer, footer, and command palette (all memoized) are
   // not invalidated on every render — previously a fresh object each render
