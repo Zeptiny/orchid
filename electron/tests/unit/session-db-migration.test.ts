@@ -11,7 +11,10 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { SessionDb } from '../../src/main/session/db';
-import { applySessionSchemaMigrations } from '../../src/main/session/schema';
+import {
+  applySessionSchemaMigrations,
+  SESSION_SCHEMA_VERSION,
+} from '../../src/main/session/schema';
 import { openSqliteDb } from '../../src/main/utils/sqlite';
 import {
   loadSession,
@@ -160,6 +163,80 @@ describe('session schema legacy → v5 migration', () => {
     // Running again must not throw or duplicate the column.
     expect(() => applySessionSchemaMigrations(db)).not.toThrow();
     db.close();
+  });
+
+  it('invalidates stale projections after an older writer updates canonical rows', () => {
+    const dbPath = path.join(tempDir, 'downgrade-write.db');
+    const initial = new SessionDb(dbPath);
+    instances.push(initial);
+    const db = initial.connection;
+    db.prepare(`
+      INSERT INTO sessions (
+        id, name, todo_store_json, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?)
+    `).run(
+      V2_SID,
+      'Downgrade session',
+      '{}',
+      '2026-01-01T00:00:00.000Z',
+      '2026-01-01T00:00:00.000Z',
+    );
+    db.prepare(`
+      INSERT INTO chains (
+        id, session_id, ordinal, status, messages_json,
+        summary_json, recent_messages_json
+      ) VALUES (?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      'chain-downgrade',
+      V2_SID,
+      0,
+      'completed',
+      '[{"id":"before"}]',
+      '{"messageCount":1}',
+      '[{"id":"before"}]',
+    );
+    db.prepare(`
+      INSERT INTO subagent_chains (
+        session_id, subagent_id, record_json, summary_json
+      ) VALUES (?, ?, ?, ?)
+    `).run(
+      V2_SID,
+      'sub-downgrade',
+      '{"id":"before"}',
+      '{"id":"before-summary"}',
+    );
+
+    // Simulate a v4 binary reopening a v5 database and updating only the
+    // canonical columns known to that writer.
+    db.prepare('UPDATE chains SET messages_json = ? WHERE id = ?')
+      .run('[{"id":"after"}]', 'chain-downgrade');
+    db.prepare('UPDATE subagent_chains SET record_json = ? WHERE subagent_id = ?')
+      .run('{"id":"after"}', 'sub-downgrade');
+    db.prepare('UPDATE schema_meta SET value = ? WHERE key = ?')
+      .run('4', 'schema_version');
+    initial.dispose();
+
+    const reopened = new SessionDb(dbPath);
+    instances.push(reopened);
+    const migrated = reopened.connection;
+    expect(migrated.prepare(`
+      SELECT messages_json, summary_json, recent_messages_json
+      FROM chains WHERE id = ?
+    `).get('chain-downgrade')).toEqual({
+      messages_json: '[{"id":"after"}]',
+      summary_json: null,
+      recent_messages_json: null,
+    });
+    expect(migrated.prepare(`
+      SELECT record_json, summary_json
+      FROM subagent_chains WHERE subagent_id = ?
+    `).get('sub-downgrade')).toEqual({
+      record_json: '{"id":"after"}',
+      summary_json: null,
+    });
+    expect(migrated.prepare(
+      'SELECT value FROM schema_meta WHERE key = ?',
+    ).pluck().get('schema_version')).toBe(String(SESSION_SCHEMA_VERSION));
   });
 
   it('keeps new saves able to persist a tier override after migration', () => {
