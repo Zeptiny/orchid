@@ -1640,5 +1640,7 @@ function makeEmptyChain(
     subagentRecord: null,
     startTime: new Date().toISOString(),
     endTime: null,
+    errorDetail: null,
+    errorTitle: null,
   };
 }

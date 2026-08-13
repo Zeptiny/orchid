@@ -39,7 +39,9 @@ CREATE TABLE IF NOT EXISTS chains (
   subagent_record_json TEXT,
   messages_json TEXT NOT NULL DEFAULT '[]',
   start_time TEXT,
-  end_time TEXT
+  end_time TEXT,
+  error_detail TEXT,
+  error_title TEXT
 );
 
 CREATE TABLE IF NOT EXISTS subagent_chains (
@@ -69,6 +71,16 @@ export function applySessionSchemaMigrations(db: SqliteDatabase): void {
     for (const col of ['tier_override']) {
       if (!existing.has(col)) {
         db.prepare(`ALTER TABLE sessions ADD COLUMN ${col} TEXT`).run();
+      }
+    }
+  }
+
+  if (tables.has('chains')) {
+    const chainColumns = db.prepare('PRAGMA table_info(chains)').all() as Array<{ name: string }>;
+    const existing = new Set(chainColumns.map((c) => c.name));
+    for (const col of ['error_detail', 'error_title']) {
+      if (!existing.has(col)) {
+        db.prepare(`ALTER TABLE chains ADD COLUMN ${col} TEXT`).run();
       }
     }
   }

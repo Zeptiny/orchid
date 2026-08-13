@@ -392,6 +392,7 @@ export function ChatView({ isVisible = true, bootstrapConfig = null, onNotify, a
         sessionId: result.session.id,
         messages: result.messages,
         live: result.live,
+        lastChainError: result.lastChainError,
       });
     },
     [session, chat.beginSessionSwitch, chat.hydrateSnapshot, todos.applyFromSession, draftTabVisible, messageQueue.clearQueue],

@@ -549,6 +549,7 @@ export async function startChatTurn(
       persistTurnConversation(
         sessionId, fullHistory, turnMessagesFromAgent(activeAgent), ChainStatus.FAILED,
         agent, activeAgent.selection, webContents,
+        detail, title,
       );
       activeAgent.messages = fullHistory;
       sendTurnEvent(webContents, activeAgent, IPC_CHANNELS.CHAT_ERROR, {

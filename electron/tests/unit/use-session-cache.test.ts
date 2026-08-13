@@ -55,6 +55,8 @@ function makeSession(overrides: Partial<Session> = {}): Session {
       subagentRecord: null,
       startTime: now,
       endTime: null,
+      errorDetail: null,
+      errorTitle: null,
     }],
     activeChainId: overrides.activeChainId ?? chainId,
     createdAt: overrides.createdAt ?? now,

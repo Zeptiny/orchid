@@ -282,6 +282,8 @@ const mocks = vi.hoisted(() => {
         subagentRecord: null,
         startTime: new Date().toISOString(),
         endTime: null,
+        errorDetail: null,
+        errorTitle: null,
       };
       const updated = {
         ...target,

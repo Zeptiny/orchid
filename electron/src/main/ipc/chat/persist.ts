@@ -191,6 +191,8 @@ export function persistTurnConversation(
   agent: Agent,
   selection?: ModelSelection | null,
   webContents?: WebContents,
+  errorDetail?: string | null,
+  errorTitle?: string | null,
 ): void {
   setChatHistory(sessionId, fullHistory);
   try {
@@ -203,6 +205,8 @@ export function persistTurnConversation(
       agentName: agent.name,
       agentType: agent.type,
       agentTier: agent.tier,
+      errorDetail,
+      errorTitle,
     }, sessionId);
     const update = updated ? buildSessionUpdatedEvent(updated, null) : null;
     if (update && webContents) {

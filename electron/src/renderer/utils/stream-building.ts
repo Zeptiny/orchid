@@ -40,6 +40,7 @@ export type StreamItem =
       elapsedSeconds?: number;
       interrupted?: boolean;
       failed?: boolean;
+      errorDetail?: string | null;
     }
   | {
       kind: 'collapsed-stub';
@@ -288,6 +289,7 @@ export function buildHistoryStreamItems(opts: {
           chain.status === ChainStatus.INTERRUPTED ||
           (isLastChain && interrupted),
         failed: chain.status === ChainStatus.FAILED,
+        errorDetail: chain.errorDetail,
       };
       if (isActive) {
         activeFooter = footer;

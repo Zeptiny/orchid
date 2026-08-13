@@ -661,6 +661,8 @@ function makeLocalSession(): Session {
       subagentRecord: null,
       startTime: now,
       endTime: null,
+      errorDetail: null,
+      errorTitle: null,
     }],
     activeChainId: chainId,
     createdAt: now,

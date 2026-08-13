@@ -13,6 +13,8 @@ interface ChainFooterProps {
   elapsedSeconds?: number;
   interrupted?: boolean;
   failed?: boolean;
+  /** Error detail from a FAILED chain, shown as a tooltip on the badge. */
+  errorDetail?: string | null;
 }
 
 export function ChainFooter({
@@ -22,6 +24,7 @@ export function ChainFooter({
   elapsedSeconds,
   interrupted,
   failed,
+  errorDetail,
 }: ChainFooterProps) {
   const showSub = hasUsage(subUsage);
   const showUsage = hasUsage(usage);
@@ -35,7 +38,7 @@ export function ChainFooter({
         </StatusBadge>
       )}
       {failed && !interrupted && (
-        <StatusBadge tone="error" size="xs" className="gap-1">
+        <StatusBadge tone="error" size="xs" className="gap-1" title={errorDetail ?? undefined}>
           <Icon name="alert" size={12} />
           Failed
         </StatusBadge>

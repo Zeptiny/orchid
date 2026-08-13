@@ -639,6 +639,8 @@ export class SessionManager {
       subagentRecord: null,
       startTime: now,
       endTime: null,
+      errorDetail: null,
+      errorTitle: null,
     };
     chains = [...chains, chain];
 
@@ -711,6 +713,8 @@ export class SessionManager {
   finishActiveChain(
     status: ChainStatus = ChainStatus.COMPLETED,
     sessionId?: string,
+    errorDetail?: string | null,
+    errorTitle?: string | null,
   ): Session | null {
     const targetId = sessionId ?? this.selectedSessionId();
     const session = targetId ? this.ensureSession(targetId) : null;
@@ -729,6 +733,8 @@ export class SessionManager {
       ...existing,
       status: terminal,
       endTime: now,
+      errorDetail: errorDetail ?? null,
+      errorTitle: errorTitle ?? null,
     };
     const chains = session.chains.map((c) =>
       c.id === chain.id ? chain : c,
@@ -769,6 +775,8 @@ export class SessionManager {
     agentName?: string;
     agentType?: string;
     agentTier?: string;
+    errorDetail?: string | null;
+    errorTitle?: string | null;
   }, sessionId?: string): Session | null {
     const targetId = sessionId ?? this.selectedSessionId();
     let session = targetId ? this.ensureSession(targetId) : null;
@@ -827,7 +835,12 @@ export class SessionManager {
     if (status === ChainStatus.ACTIVE) {
       return session;
     }
-    return this.finishActiveChain(status, targetId ?? undefined);
+    return this.finishActiveChain(
+      status,
+      targetId ?? undefined,
+      params.errorDetail,
+      params.errorTitle,
+    );
   }
 
   /**

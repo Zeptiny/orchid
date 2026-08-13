@@ -45,6 +45,8 @@ export function chainToStorageDict(chain: Chain): ChainStorageDict {
   }
   if (chain.startTime) dict.startTime = chain.startTime;
   if (chain.endTime != null) dict.endTime = chain.endTime;
+  if (chain.errorDetail) dict.errorDetail = chain.errorDetail;
+  if (chain.errorTitle) dict.errorTitle = chain.errorTitle;
   return dict;
 }
 
@@ -92,6 +94,8 @@ export function chainFromStorageDict(data: unknown): Chain {
     subagentRecord,
     startTime,
     endTime,
+    errorDetail: typeof raw.errorDetail === 'string' ? raw.errorDetail : null,
+    errorTitle: typeof raw.errorTitle === 'string' ? raw.errorTitle : null,
   };
 }
 

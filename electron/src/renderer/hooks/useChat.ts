@@ -800,6 +800,14 @@ export function useChat(
       // sequence affinity for the selected session so stale turn/sequence
       // leftovers from a prior generation are discarded (not blindly applied).
       replayHydrationBuffer(bufferedEvents);
+      // Restore error from the last FAILED chain so the banner persists
+      // across session switches and restarts.
+      if (snapshot.lastChainError) {
+        const errorText = snapshot.lastChainError.title && !snapshot.lastChainError.detail.startsWith(snapshot.lastChainError.title)
+          ? `${snapshot.lastChainError.title}: ${snapshot.lastChainError.detail}`
+          : snapshot.lastChainError.detail;
+        dispatchProjection({ type: 'local_error', error: errorText, status: 'error' });
+      }
       return;
     }
 

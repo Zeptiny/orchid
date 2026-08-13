@@ -337,6 +337,12 @@ export function ChatStream({
   return (
     <div className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
       <div className="orchid-chat-scroll px-6 py-5" ref={containerRef}>
+        {/* History + live tail + active footer render as ONE keyed sequence.
+            History nodes remain referentially stable across live-only frames,
+            while the small tail/footer path updates independently. Keeping the
+            final nodes flat lets React retain shared segment/footer keys across
+            the live→committed swap instead of replaying entrance animation. */}
+        {streamNodes}
         {error && (
           <div className="orchid-error-slot">
             <ErrorBanner
@@ -347,13 +353,6 @@ export function ChatStream({
             />
           </div>
         )}
-
-        {/* History + live tail + active footer render as ONE keyed sequence.
-            History nodes remain referentially stable across live-only frames,
-            while the small tail/footer path updates independently. Keeping the
-            final nodes flat lets React retain shared segment/footer keys across
-            the live→committed swap instead of replaying entrance animation. */}
-        {streamNodes}
       </div>
       {isUserScrolledUp ? (
         <Button
@@ -411,6 +410,7 @@ function renderStreamItem(
         elapsedSeconds={item.elapsedSeconds}
         interrupted={item.interrupted}
         failed={item.failed}
+        errorDetail={item.errorDetail}
       />
     );
   }

@@ -179,6 +179,8 @@ export interface ChatSessionSnapshot {
   sessionId: string;
   messages: Message[];
   live: ChatSnapshot | null;
+  /** Error detail from the last FAILED chain, if any (for hydration restore). */
+  lastChainError?: { detail: string; title?: string | null } | null;
 }
 
 /**
@@ -196,6 +198,8 @@ export interface SessionOpenResult {
   live: ChatSnapshot | null;
   /** Resolved workspace after activation (session → sticky → unbound). */
   workspace: WorkspaceInfo;
+  /** Error detail from the last FAILED chain, if any (for hydration restore). */
+  lastChainError?: { detail: string; title?: string | null } | null;
 }
 
 export interface SubagentSnapshotRequest { sessionId: string; }

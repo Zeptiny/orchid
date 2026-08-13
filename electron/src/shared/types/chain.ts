@@ -69,6 +69,10 @@ export interface Chain {
    * ISO timestamp when the chain finished, or null while ACTIVE / unknown.
    */
   readonly endTime: string | null;
+  /** Error detail persisted when status is FAILED; null otherwise. */
+  readonly errorDetail: string | null;
+  /** Short error title (auth/rate-limit/timeout/etc) persisted when FAILED. */
+  readonly errorTitle: string | null;
 }
 
 // ── Storage dict ────────────────────────────────────────────────────────────
@@ -86,6 +90,8 @@ export interface ChainStorageDict {
   subagentRecord?: unknown;
   startTime?: string;
   endTime?: string | null;
+  errorDetail?: string | null;
+  errorTitle?: string | null;
   [key: string]: unknown;
 }
 
@@ -158,4 +164,17 @@ export function parseChainStatus(raw: unknown): ChainStatus {
   if (raw === 'interrupted') return ChainStatus.INTERRUPTED;
   if (raw === 'failed') return ChainStatus.FAILED;
   return ChainStatus.COMPLETED;
+}
+
+/** Extract the error detail from the last FAILED chain in a session, if any. */
+export function lastChainError(
+  chains: readonly Chain[],
+): { detail: string; title?: string | null } | null {
+  for (let i = chains.length - 1; i >= 0; i--) {
+    const chain = chains[i]!;
+    if (chain.status === ChainStatus.FAILED && chain.errorDetail) {
+      return { detail: chain.errorDetail, title: chain.errorTitle };
+    }
+  }
+  return null;
 }

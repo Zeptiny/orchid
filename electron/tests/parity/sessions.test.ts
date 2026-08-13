@@ -261,6 +261,8 @@ describe('Session Parity', () => {
             subagentRecord: null,
             startTime: null,
             endTime: null,
+            errorDetail: null,
+            errorTitle: null,
           },
           {
             id: 'c2',
@@ -275,6 +277,8 @@ describe('Session Parity', () => {
             subagentRecord: null,
             startTime: null,
             endTime: null,
+            errorDetail: null,
+            errorTitle: null,
           },
         ],
       });

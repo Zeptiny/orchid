@@ -125,6 +125,8 @@ function makeChain(sessionId: string, overrides: Partial<Chain> & { model?: stri
         : overrides.status === ChainStatus.ACTIVE
           ? null
           : now,
+    errorDetail: overrides.errorDetail ?? null,
+    errorTitle: overrides.errorTitle ?? null,
   };
 }
 

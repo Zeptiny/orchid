@@ -220,6 +220,8 @@ interface ChainRow {
   messages_json: string;
   start_time: string | null;
   end_time: string | null;
+  error_detail: string | null;
+  error_title: string | null;
 }
 
 interface SubagentChainRow {
@@ -293,6 +295,8 @@ function chainFromRow(row: ChainRow): Chain {
     subagentRecord,
     startTime: row.start_time,
     endTime: row.end_time,
+    errorDetail: row.error_detail ?? null,
+    errorTitle: row.error_title ?? null,
   };
 }
 
@@ -351,8 +355,8 @@ function sessionFromRow(row: SessionRow, chains: Chain[], subagentChains: Subage
 }
 
 const INSERT_CHAIN_SQL = `
-  INSERT INTO chains (id, session_id, ordinal, status, selection_json, model_label, agent_name, agent_type, agent_tier, subagent_record_json, messages_json, start_time, end_time)
-  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  INSERT INTO chains (id, session_id, ordinal, status, selection_json, model_label, agent_name, agent_type, agent_tier, subagent_record_json, messages_json, start_time, end_time, error_detail, error_title)
+  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 `;
 
 const INSERT_SUBAGENT_CHAIN_SQL = `
@@ -385,6 +389,8 @@ function insertChainRow(
     serializeMessages(chain.messages),
     chain.startTime,
     chain.endTime,
+    chain.errorDetail,
+    chain.errorTitle,
   );
 }
 
@@ -395,7 +401,8 @@ function updateChainRow(db: SqliteDatabase, chain: Chain): number {
        SET status = ?, selection_json = ?, model_label = ?,
            agent_name = ?, agent_type = ?, agent_tier = ?,
            subagent_record_json = ?, messages_json = ?,
-           start_time = ?, end_time = ?
+           start_time = ?, end_time = ?,
+           error_detail = ?, error_title = ?
        WHERE id = ? AND session_id = ?`,
     )
     .run(
@@ -411,6 +418,8 @@ function updateChainRow(db: SqliteDatabase, chain: Chain): number {
       serializeMessages(chain.messages),
       chain.startTime,
       chain.endTime,
+      chain.errorDetail,
+      chain.errorTitle,
       chain.id,
       chain.sessionId,
     ).changes;

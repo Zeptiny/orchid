@@ -10,7 +10,7 @@ import { getForegroundLiveRegistry } from '../tools/process/foreground-live';
 import { SEND_INPUT_MAX_TEXT_LENGTH } from '../tools/process/send-input';
 import { getSessionManager } from '../session/singleton';
 import { IPC_CHANNELS, type ChatSessionSnapshot } from '../../shared/types/ipc';
-import { ChainStatus } from '../../shared/types/chain';
+import { ChainStatus, lastChainError } from '../../shared/types/chain';
 import { flattenSessionMessages } from '../../shared/types/session';
 import { clearAllChatHistory } from './chat-history';
 import { chatCancelSchema, chatQueueNextSchema, chatSendSchema, chatSnapshotSchema, chatStopSchema } from './payload-schemas';
@@ -137,6 +137,7 @@ export function registerChatIPC(): void {
         sessionId,
         messages: liveAgent && live ? [...liveAgent.messages] : flattenSessionMessages(session),
         live,
+        lastChainError: live ? null : lastChainError(session.chains),
       };
     },
   );

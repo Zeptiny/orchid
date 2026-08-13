@@ -7,6 +7,7 @@
 import { BrowserWindow, dialog, ipcMain } from 'electron';
 import { IPC_CHANNELS } from '../../shared/types/ipc';
 import { flattenSessionMessages, sessionForRenderer } from '../../shared/types/session';
+import { lastChainError } from '../../shared/types/chain';
 import type { ModelSelection } from '../../shared/types/provider';
 import {
   getSessionManager,
@@ -358,6 +359,7 @@ export function registerSessionIPC(): void {
       messages,
       live,
       workspace,
+      lastChainError: session && !live ? lastChainError(session.chains) : null,
     };
   });
 
