@@ -268,7 +268,7 @@ export interface ChatStateEvent extends ChatEventIdentity {
 export interface ChatDoneEvent extends ChatEventIdentity {
   type: 'done';
   response: string;
-  /** Main-process materialized durable history after the terminal turn write. */
+  /** Durable messages for the completed turn only; prior model history stays main-process-only. */
   messages: Message[];
   /** True when the turn ended due to user Esc cancellation. */
   interrupted?: boolean;
@@ -281,7 +281,7 @@ export type ChatErrorKind = 'stream' | 'rate-limit' | 'auth' | 'generic';
 export interface ChatErrorEvent extends ChatEventIdentity {
   type: 'error';
   error: string;
-  /** Main-process materialized durable partial history after the terminal write. */
+  /** Durable messages for the failed turn only; prior model history stays main-process-only. */
   messages: Message[];
   /** Short banner title (e.g. "Authentication failed"). */
   title?: string;
@@ -1084,6 +1084,7 @@ export type ChatSendErrorKind =
   | 'provider_required'
   | 'session_busy'
   | 'runtime_hydration_failed'
+  | 'history_load_failed'
   | 'provider_unavailable';
 
 /** Result of chat:send (started stream or structured gate failure). */

@@ -100,6 +100,16 @@ const messageSchema = z.object({
   tool_result: canonicalToolResultSchema.nullable(),
 }).strict();
 
+/** Bounded durable history page returned by the session navigation API. */
+export const sessionHistoryPageResultSchema = z.object({
+  sessionId: z.string().min(1),
+  chainId: z.string().min(1),
+  messages: z.array(messageSchema),
+  startIndex: z.number().int().nonnegative(),
+  totalMessages: z.number().int().nonnegative(),
+  complete: z.boolean(),
+}).strict().nullable();
+
 /**
  * Minimum durable chain shape required by renderer consumers. Remaining chain
  * metadata stays passthrough so this boundary does not duplicate the domain
@@ -375,6 +385,7 @@ export const chatSendErrorKindSchema = z.enum([
   'provider_required',
   'session_busy',
   'runtime_hydration_failed',
+  'history_load_failed',
   'provider_unavailable',
 ]);
 

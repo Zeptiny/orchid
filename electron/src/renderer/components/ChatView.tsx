@@ -37,7 +37,9 @@ import { resolveOrchidNavigate } from '../utils/navigate-shell';
 import { shouldRefreshSubagentsAfterTurn } from '../utils/subagent-refresh';
 import { useFocusTrap, useGlobalShortcuts } from '../keyboard';
 import type { ModelSelection } from '../../shared/types/provider';
+import { sumChainUsage } from '../../shared/types/chain';
 import { flattenSessionMessages, type Session } from '../../shared/types/session';
+import { sumUsages } from '../../shared/usage';
 import type {
   ASTStoreStatus,
   CommandContext,
@@ -193,6 +195,14 @@ export function ChatView({ isVisible = true, bootstrapConfig = null, onNotify, a
     },
   });
 
+  const sessionUsage = useMemo(() => {
+    const usages = session.activeSession?.chains.map(sumChainUsage) ?? [];
+    return {
+      total: sumUsages(usages),
+      latest: usages.findLast((usage) => usage != null) ?? null,
+    };
+  }, [session.activeSession?.chains]);
+
   // Surface trust failures that happen outside the dialog (e.g. the trust
   // lookup itself failed). While the dialog is open its own alert shows the
   // error, so notify only when no prompt is showing, then clear once consumed.
@@ -203,6 +213,8 @@ export function ChatView({ isVisible = true, bootstrapConfig = null, onNotify, a
   }, [trustPrompt.error, trustPrompt.pending, notify, trustPrompt.clearError]);
 
   const chat = useChat(session.activeSession?.id ?? null, {
+    persistedSessionUsage: sessionUsage.total,
+    latestPersistedUsage: sessionUsage.latest,
     onUntrustedProject: () => {
       const cwd = session.workspace?.cwd ?? session.activeSession?.cwd;
       if (cwd) trustPrompt.openFor(cwd);

@@ -153,6 +153,10 @@ export interface UseChatOptions {
    * bubble; when absent the generic error behavior is kept.
    */
   onUntrustedProject?: () => void;
+  /** Durable session total derived from chain summaries, including unloaded pages. */
+  persistedSessionUsage?: Usage | null;
+  /** Newest durable turn usage, including its context snapshot when available. */
+  latestPersistedUsage?: Usage | null;
 }
 
 export interface UseChatReturn extends ChatState {
@@ -233,10 +237,11 @@ export function shouldBufferChatEvent(
 export function useCumulativeUsage(
   messages: readonly Message[],
   currentTurnUsage: Usage | null,
+  persistedSessionUsage?: Usage | null,
 ): Usage {
   const persistedUsage = useMemo(
-    () => sumMessageUsages(messages),
-    [messages],
+    () => persistedSessionUsage ?? sumMessageUsages(messages),
+    [messages, persistedSessionUsage],
   );
   return useMemo(
     () => addUsage(persistedUsage, currentTurnUsage),
@@ -310,6 +315,30 @@ export function dropOptimisticUserMessageIfLast<T extends { id: string }>(
   return messages.slice();
 }
 
+/** Merge one authoritative terminal turn without rematerializing full model history. */
+export function mergeTerminalTurnMessages(
+  current: readonly Message[],
+  terminal: readonly Message[],
+): Message[] {
+  if (terminal.length === 0) return [...current];
+  const terminalIds = new Set(terminal.map((message) => message.id));
+  const base = current.filter((message) => !terminalIds.has(message.id));
+  const firstUser = terminal.find((message) => message.role === MessageRole.USER);
+  if (firstUser) {
+    for (let index = base.length - 1; index >= 0; index -= 1) {
+      const candidate = base[index];
+      if (
+        candidate?.role === MessageRole.USER
+        && candidate.content === firstUser.content
+      ) {
+        base.splice(index, 1);
+        break;
+      }
+    }
+  }
+  return [...base, ...terminal];
+}
+
 // ── Elapsed display (footer-local; never feed history memos) ─────────────────
 
 /**
@@ -378,7 +407,10 @@ export function useChat(
     dispatchProjectionState(action);
   }, []);
   const projection = projectionState.projection;
-  const persistedUsage = useMemo(() => latestUsageFromMessages(messages), [messages]);
+  const persistedUsage = useMemo(
+    () => latestUsageFromMessages(messages) ?? options.latestPersistedUsage ?? null,
+    [messages, options.latestPersistedUsage],
+  );
   const status: ChatStatus = projection?.status ?? 'idle';
   const streamingContent = projection?.response ?? '';
   const streamingThinking = projection?.thinking ?? '';
@@ -393,7 +425,11 @@ export function useChat(
   const error = projection?.terminal?.type === 'error' && projection.terminal.title && !projection.terminal.error.startsWith(projection.terminal.title)
     ? `${projection.terminal.title}: ${projection.terminal.error}`
     : projection?.error ?? null;
-  const cumulativeUsage = useCumulativeUsage(messages, currentTurnUsage);
+  const cumulativeUsage = useCumulativeUsage(
+    messages,
+    currentTurnUsage,
+    options.persistedSessionUsage,
+  );
 
   useEffect(() => {
     if (isSwitchingSession) return;
@@ -452,12 +488,12 @@ export function useChat(
       return;
     }
     if (event.type === 'done') {
-      setMessages(event.messages);
+      setMessages((current) => mergeTerminalTurnMessages(current, event.messages));
       dispatchProjection({ type: 'clear_stream', status: 'idle' });
       isSendingRef.current = false;
     }
     if (event.type === 'error') {
-      setMessages(event.messages);
+      setMessages((current) => mergeTerminalTurnMessages(current, event.messages));
       dispatchProjection({ type: 'clear_stream', status: 'idle' });
       isSendingRef.current = false;
     }

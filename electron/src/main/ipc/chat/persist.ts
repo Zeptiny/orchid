@@ -218,9 +218,5 @@ export function persistTurnConversation(
 
 /** Flatten all session chains — never only the active/last chain. */
 export function historyFromSession(sessionId: string): Message[] {
-  try {
-    return getSessionManager().getModelHistory(sessionId);
-  } catch {
-    return [];
-  }
+  return getSessionManager().getModelHistory(sessionId);
 }

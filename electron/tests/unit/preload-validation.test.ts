@@ -255,6 +255,38 @@ describe('preload startup validation', () => {
   });
 });
 
+describe('preload session history validation', () => {
+  let api: OrchidAPI;
+
+  beforeEach(async () => {
+    vi.resetModules();
+    electronMock.handlers.clear();
+    electronMock.contextBridge.exposeInMainWorld.mockClear();
+    electronMock.ipcRenderer.invoke.mockReset();
+    await import('../../src/preload/index');
+    const exposed = electronMock.contextBridge.exposeInMainWorld.mock.calls
+      .find(([name]) => name === 'orchid');
+    if (!exposed) throw new Error('preload did not expose window.orchid');
+    api = exposed[1] as OrchidAPI;
+  });
+
+  it('rejects malformed paged-history invoke results', async () => {
+    electronMock.ipcRenderer.invoke.mockResolvedValueOnce({
+      sessionId: SESSION_ID,
+      chainId: 'chain-1',
+      messages: terminalMessages(),
+      startIndex: -1,
+      totalMessages: 3,
+      complete: false,
+    });
+
+    await expect(api.session.loadHistoryPage({
+      sessionId: SESSION_ID,
+      chainId: 'chain-1',
+    })).rejects.toThrow(/Invalid IPC response.*session:history_page/i);
+  });
+});
+
 describe('preload terminal chat history validation', () => {
   let done: ChatDoneEvent[];
   let errors: ChatErrorEvent[];

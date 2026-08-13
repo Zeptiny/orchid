@@ -49,6 +49,7 @@ const mocks = vi.hoisted(() => {
   const handlers = new Map<string, (...args: unknown[]) => unknown>();
   const streamResponses: string[] = [];
   const streamEventSequences: Array<Array<Record<string, unknown>>> = [];
+  let modelHistory: Array<Record<string, unknown>> = [];
   const electronWebContents = {
     fromId: vi.fn(() => null),
     getAllWebContents: vi.fn(() => []),
@@ -260,6 +261,7 @@ const mocks = vi.hoisted(() => {
       if (activeSession?.id === id) activeSession = updated;
     }),
     getSession: vi.fn((id: string) => sessionsById.get(id) ?? (activeSession?.id === id ? activeSession : null)),
+    getModelHistory: vi.fn(() => modelHistory),
     switchTo: vi.fn((id: string) => {
       const session = sessionsById.get(id) ?? (activeSession?.id === id ? activeSession : null);
       if (session) activeSession = session;
@@ -378,6 +380,7 @@ const mocks = vi.hoisted(() => {
       activeSession = null;
       sessionsById.clear();
       activeSessionsByWindow.clear();
+      modelHistory = [];
       workspaceBound = true;
       workspaceByWindow.clear();
       sessionManager.getActive.mockClear();
@@ -385,6 +388,7 @@ const mocks = vi.hoisted(() => {
       sessionManager.changeCwd.mockClear();
       sessionManager.changeModel.mockClear();
       sessionManager.getSession.mockClear();
+      sessionManager.getModelHistory.mockClear();
       sessionManager.switchTo.mockClear();
       sessionManager.clearActive.mockClear();
       sessionManager.startChain.mockClear();
@@ -406,6 +410,9 @@ const mocks = vi.hoisted(() => {
     /** Test helper: register a session without selecting it for the window. */
     _putSession: (session: MockSession) => {
       sessionsById.set(session.id, session);
+    },
+    _setModelHistory: (messages: Array<Record<string, unknown>>) => {
+      modelHistory = messages;
     },
   };
 
@@ -875,6 +882,95 @@ describe('chat IPC driver streaming', () => {
 
     expect(mocks.subagentManager.cancelRunning).not.toHaveBeenCalled();
     expect(mocks.backgroundStore.terminateSession).not.toHaveBeenCalled();
+  });
+
+  it('keeps prior model history out of terminal renderer events', async () => {
+    const sessionId = '89898989-8989-4989-8989-898989898989';
+    const selection = {
+      connectionId: '11111111-1111-4111-8111-111111111111',
+      modelId: 'vendor/path/model',
+    };
+    mocks.sessionManager._setActive({
+      ...makeSession(sessionId),
+      selection,
+      model: selection.modelId,
+      modelLabel: selection.modelId,
+    });
+    mocks.sessionManager._setModelHistory([{
+      id: 'old-history-message',
+      role: MessageRole.USER,
+      content: 'A very old request',
+      type: MessageType.TEXT,
+      tool_calls: null,
+      tool_call_id: null,
+      name: null,
+      thinking: null,
+      timestamp: '2026-01-01T00:00:00.000Z',
+      usage: null,
+      hidden: false,
+      tool_result: null,
+    }]);
+    mocks.streamResponses.push('Current answer');
+
+    const send = vi.fn();
+    const chatSend = mocks.handlers.get(IPC_CHANNELS.CHAT_SEND)!;
+    await chatSend({ sender: { id: 612, send } }, { message: 'Current request' });
+    await waitForDoneCount(send, 1);
+
+    const done = doneEvents(send).at(-1)?.[1] as {
+      messages: Array<Record<string, unknown>>;
+    };
+    expect(done.messages).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: 'old-history-message' }),
+    ]));
+    expect(done.messages).toEqual(
+      mocks.sessionManager.persistTurn.mock.calls.at(-1)?.[0]?.messages,
+    );
+    expect(done.messages).toEqual(expect.arrayContaining([
+      expect.objectContaining({ role: MessageRole.USER, content: 'Current request' }),
+      expect.objectContaining({ role: MessageRole.ASSISTANT, content: 'Current answer' }),
+    ]));
+  });
+
+  it('fails closed when complete model history cannot be loaded and permits retry', async () => {
+    const sessionId = '78787878-7878-4787-8787-787878787878';
+    const selection = {
+      connectionId: '11111111-1111-4111-8111-111111111111',
+      modelId: 'vendor/path/model',
+    };
+    mocks.sessionManager._setActive({
+      ...makeSession(sessionId),
+      selection,
+      model: selection.modelId,
+      modelLabel: selection.modelId,
+    });
+    mocks.sessionManager.getModelHistory
+      .mockImplementationOnce(() => {
+        throw new Error('database temporarily unavailable');
+      })
+      .mockReturnValueOnce([]);
+
+    const send = vi.fn();
+    const chatSend = mocks.handlers.get(IPC_CHANNELS.CHAT_SEND)!;
+    const failed = await chatSend(
+      { sender: { id: 613, send } },
+      { message: 'Must retain context' },
+    );
+    expect(failed).toEqual(expect.objectContaining({
+      status: 'error',
+      kind: 'history_load_failed',
+      error: expect.stringContaining('database temporarily unavailable'),
+    }));
+    expect(mocks.sessionManager.startChain).not.toHaveBeenCalled();
+    expect(mocks.providerRuntime.resolveTierContext).not.toHaveBeenCalled();
+
+    mocks.streamResponses.push('Safe retry');
+    const retried = await chatSend(
+      { sender: { id: 613, send } },
+      { message: 'Must retain context' },
+    );
+    expect(retried).toEqual(expect.objectContaining({ status: 'started', sessionId }));
+    await waitForDoneCount(send, 1);
   });
 
   it('visible main-turn abort persists interruption and resets the renderer', async () => {

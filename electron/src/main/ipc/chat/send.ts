@@ -124,6 +124,21 @@ export async function startChatTurn(
     };
   }
 
+  let existingMessages: Message[];
+  try {
+    existingMessages = getChatHistory(sessionId) ?? historyFromSession(sessionId);
+  } catch (error) {
+    sessionsStarting.delete(sessionId);
+    completeSessionActivity(sessionId, false);
+    return {
+      status: 'error',
+      error: `Could not load complete conversation history: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+      kind: 'history_load_failed',
+    };
+  }
+
   let modelInstance: LanguageModelV4;
   let providerSnapshot: ProviderAttemptAccountingContext['snapshot'];
   let providerOptions: ReasoningProviderOptions | undefined;
@@ -185,7 +200,6 @@ export async function startChatTurn(
   }
 
   const agents = [...runtime.agents.values()];
-  const existingMessages: Message[] = getChatHistory(sessionId) ?? historyFromSession(sessionId);
   const userMessage = makeUserMessage(message);
   const priorMessageCount = existingMessages.length;
   const messages = [...existingMessages, userMessage];
@@ -390,9 +404,10 @@ export async function startChatTurn(
       activeAgent.turnMessages.push({ ...makeAssistantMessage('', opts.usage), hidden: true });
     }
     const turnExtras = [...activeAgent.turnMessages];
+    const terminalMessages = turnMessagesFromAgent(activeAgent);
     const fullHistory = [...messages, ...turnExtras];
     persistTurnConversation(
-      sessionId, fullHistory, turnMessagesFromAgent(activeAgent),
+      sessionId, fullHistory, terminalMessages,
       opts.interrupted ? ChainStatus.INTERRUPTED : ChainStatus.COMPLETED,
       agent, activeAgent.selection, webContents,
     );
@@ -400,7 +415,7 @@ export async function startChatTurn(
     completeSessionActivity(sessionId, getSessionManager().getActive(windowId)?.id !== sessionId);
     if (opts.sendDone) {
       sendTurnEvent(webContents, activeAgent, IPC_CHANNELS.CHAT_DONE, {
-        type: 'done', response: opts.response, messages: fullHistory,
+        type: 'done', response: opts.response, messages: terminalMessages,
         interrupted: opts.interrupted, usage: opts.usage,
       });
     }
@@ -560,15 +575,16 @@ export async function startChatTurn(
         cwd: turnCtx.cwd, state: 'needs_attention', phase: 'agent', detail: title || detail, canCancel: false,
       });
       flushPartialTurnContent(activeAgent, context);
+      const terminalMessages = turnMessagesFromAgent(activeAgent);
       const fullHistory = [...messages, ...activeAgent.turnMessages];
       persistTurnConversation(
-        sessionId, fullHistory, turnMessagesFromAgent(activeAgent), ChainStatus.FAILED,
+        sessionId, fullHistory, terminalMessages, ChainStatus.FAILED,
         agent, activeAgent.selection, webContents,
         detail, title,
       );
       activeAgent.messages = fullHistory;
       sendTurnEvent(webContents, activeAgent, IPC_CHANNELS.CHAT_ERROR, {
-        type: 'error', error: detail, messages: fullHistory, title, kind: classifyErrorKind(title, detail),
+        type: 'error', error: detail, messages: terminalMessages, title, kind: classifyErrorKind(title, detail),
       });
       queueMicrotask(() => disposeActiveAgent(sessionId, activeAgent));
     }

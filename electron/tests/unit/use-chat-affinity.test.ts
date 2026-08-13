@@ -6,6 +6,7 @@ import {
   chatToolSnapshotToBlock,
   consumePendingCancel,
   dropOptimisticUserMessageIfLast,
+  mergeTerminalTurnMessages,
   resetCancelQueue,
   shouldBufferChatEvent,
   type CancelQueueState,
@@ -240,5 +241,19 @@ describe('useChat event affinity', () => {
     ]);
     expect(dropOptimisticUserMessageIfLast([prior], 'opt')).toEqual([prior]);
     expect(dropOptimisticUserMessageIfLast([], 'opt')).toEqual([]);
+  });
+
+  it('merges a terminal turn without replacing bounded prior history', () => {
+    const current = [
+      { id: 'bounded-old', role: 'assistant', content: 'Loaded tail' },
+      { id: 'optimistic-user', role: 'user', content: 'Current request' },
+    ] as Message[];
+    const terminal = [
+      { id: 'durable-user', role: 'user', content: 'Current request' },
+      { id: 'durable-answer', role: 'assistant', content: 'Current answer' },
+    ] as Message[];
+
+    expect(mergeTerminalTurnMessages(current, terminal).map((message) => message.id))
+      .toEqual(['bounded-old', 'durable-user', 'durable-answer']);
   });
 });

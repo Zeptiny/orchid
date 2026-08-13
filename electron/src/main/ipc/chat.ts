@@ -186,9 +186,10 @@ export function registerChatIPC(): void {
         appendLiveTailMessages(existing.turnMessages, existing, context, { placeholderWhenEmpty: true });
         if (thinking.length > existing.thinkingCommittedLength) existing.thinkingCommittedLength = thinking.length;
         if (partial.length > existing.responseCommittedLength) existing.responseCommittedLength = partial.length;
+        const terminalMessages = turnMessagesFromAgent(existing);
         const fullHistory = [...existing.messages, ...existing.turnMessages];
         persistTurnConversation(
-          sessionId, fullHistory, turnMessagesFromAgent(existing), ChainStatus.INTERRUPTED,
+          sessionId, fullHistory, terminalMessages, ChainStatus.INTERRUPTED,
           existing.agent, existing.selection, streamWebContents,
         );
         existing.messages = fullHistory;
@@ -199,7 +200,7 @@ export function registerChatIPC(): void {
           getSessionManager().getActive(existing.windowId)?.id !== sessionId,
         );
         sendTurnEvent(streamWebContents, existing, IPC_CHANNELS.CHAT_DONE, {
-          type: 'done', response: partial, messages: fullHistory, interrupted: true, usage,
+          type: 'done', response: partial, messages: terminalMessages, interrupted: true, usage,
         });
         sendChatState(streamWebContents, existing, {
           state: 'idle', error: null, interruptState: 'confirmSubagents', cwd: existing.cwd,

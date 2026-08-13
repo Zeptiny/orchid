@@ -45,4 +45,21 @@ describe('useCumulativeUsage', () => {
       cached_tokens: 10,
     });
   });
+
+  it('uses the durable chain total when renderer messages are paged', () => {
+    const makeUsage = (total: number): Usage => ({
+      prompt_tokens: total,
+      completion_tokens: 0,
+      total_tokens: total,
+      cached_tokens: 0,
+    });
+    const messages = [{ usage: makeUsage(10) } as Message];
+    const durable = makeUsage(100);
+    const current = makeUsage(5);
+    const { result } = renderHook(() =>
+      useCumulativeUsage(messages, current, durable),
+    );
+
+    expect(result.current.total_tokens).toBe(105);
+  });
 });
