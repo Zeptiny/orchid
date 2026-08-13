@@ -1979,6 +1979,59 @@ describe('bounded renderer history views', () => {
     expect(older.complete).toBe(true);
   });
 
+  it('indexes message byte ranges and backfills a missing legacy index once', () => {
+    const messages = Array.from({ length: 260 }, (_, index) => makeMessage({
+      id: `indexed-${index}`,
+      content: index % 2 === 0 ? `unicode-${index}-🌺` : `plain-${index}`,
+    }));
+    saveSession(makeSession({
+      id: SID,
+      chains: [makeChain(SID, { id: 'chain-indexed-history', messages })],
+    }), storageOpts);
+
+    const db = openSqliteDb(storageOpts.dbPath!);
+    expect(db.prepare(
+      'SELECT COUNT(*) FROM chain_message_offsets WHERE chain_id = ?',
+    ).pluck().get('chain-indexed-history')).toBe(messages.length);
+    db.close();
+
+    const updatedMessages = [
+      ...messages,
+      makeMessage({ id: 'indexed-260', content: 'checkpoint-🌺' }),
+    ];
+    expect(updateChain(makeChain(SID, {
+      id: 'chain-indexed-history',
+      messages: updatedMessages,
+    }), new Date().toISOString(), storageOpts)).toBe(true);
+
+    const projection = openSqliteDb(storageOpts.dbPath!);
+    expect(projection.prepare(
+      'SELECT COUNT(*) FROM chain_message_offsets WHERE chain_id = ?',
+    ).pluck().get('chain-indexed-history')).toBe(updatedMessages.length);
+    projection.prepare('DELETE FROM chain_message_offsets WHERE chain_id = ?')
+      .run('chain-indexed-history');
+    projection.prepare(`
+      UPDATE chains SET recent_messages_json = NULL
+      WHERE session_id = ? AND id = ?
+    `).run(SID, 'chain-indexed-history');
+    projection.close();
+
+    const page = loadSessionHistoryPage(
+      SID,
+      'chain-indexed-history',
+      160,
+      storageOpts,
+    )!;
+    expect(page.messages.map((message) => message.id))
+      .toEqual(messages.slice(60, 160).map((message) => message.id));
+
+    const afterBackfill = openSqliteDb(storageOpts.dbPath!);
+    expect(afterBackfill.prepare(
+      'SELECT COUNT(*) FROM chain_message_offsets WHERE chain_id = ?',
+    ).pluck().get('chain-indexed-history')).toBe(updatedMessages.length);
+    afterBackfill.close();
+  });
+
   it('falls back to canonical history when the recent projection is malformed', () => {
     const messages = [
       makeMessage({ id: 'fallback-0', role: 'user', content: 'question' }),

@@ -35,6 +35,7 @@ describe('SessionDb', () => {
     expect(names).toContain('schema_meta');
     expect(names).toContain('sessions');
     expect(names).toContain('chains');
+    expect(names).toContain('chain_message_offsets');
     expect(fs.existsSync(dbPath)).toBe(true);
   });
 

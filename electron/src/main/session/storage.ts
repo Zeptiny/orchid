@@ -345,22 +345,34 @@ interface SerializedChainMessages {
   readonly messagesJson: string;
   readonly summaryJson: string;
   readonly recentMessagesJson: string;
+  readonly messageOffsets: readonly MessageByteOffset[];
+}
+
+interface MessageByteOffset {
+  readonly messageIndex: number;
+  readonly byteOffset: number;
+  readonly byteLength: number;
 }
 
 function serializeChainMessages(messages: readonly Message[]): SerializedChainMessages {
   const storedMessages = messages.map(messageToStorageDict);
-  const messagesJson = JSON.stringify(storedMessages);
-  const recentMessages: typeof storedMessages = [];
+  const serializedMessages = storedMessages.map((message) => JSON.stringify(message));
+  const messageOffsets: MessageByteOffset[] = [];
+  let byteOffset = 1; // Skip the opening '[' byte.
+  for (let index = 0; index < serializedMessages.length; index += 1) {
+    const byteLength = Buffer.byteLength(serializedMessages[index]!, 'utf8');
+    messageOffsets.push({ messageIndex: index, byteOffset, byteLength });
+    byteOffset += byteLength + 1; // Each non-final fragment is followed by ','.
+  }
+  const messagesJson = `[${serializedMessages.join(',')}]`;
   const recentMessageSizes: number[] = [];
   let recentBytes = 0;
   let recentStartIndex = storedMessages.length;
 
   for (let index = storedMessages.length - 1; index >= 0; index -= 1) {
-    if (recentMessages.length >= DEFAULT_SESSION_VIEW_MESSAGE_BUDGET) break;
-    const storedMessage = storedMessages[index]!;
-    const messageBytes = Buffer.byteLength(JSON.stringify(storedMessage), 'utf8');
+    if (recentMessageSizes.length >= DEFAULT_SESSION_VIEW_MESSAGE_BUDGET) break;
+    const messageBytes = messageOffsets[index]!.byteLength;
     if (recentBytes + messageBytes > DEFAULT_SESSION_VIEW_BYTE_BUDGET) break;
-    recentMessages.unshift(storedMessage);
     recentMessageSizes.unshift(messageBytes);
     recentBytes += messageBytes;
     recentStartIndex = index;
@@ -382,8 +394,132 @@ function serializeChainMessages(messages: readonly Message[]): SerializedChainMe
   return {
     messagesJson,
     summaryJson: JSON.stringify(summary),
-    recentMessagesJson: JSON.stringify(recentMessages),
+    recentMessagesJson: `[${serializedMessages.slice(recentStartIndex).join(',')}]`,
+    messageOffsets,
   };
+}
+
+function isJsonWhitespace(byte: number): boolean {
+  return byte === 0x20 || byte === 0x09 || byte === 0x0a || byte === 0x0d;
+}
+
+/** Build exact UTF-8 byte ranges for top-level members of a stored JSON array. */
+function messageOffsetsFromJson(messagesJson: string): MessageByteOffset[] | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(messagesJson);
+  } catch {
+    return null;
+  }
+  if (!Array.isArray(parsed)) return null;
+
+  const bytes = Buffer.from(messagesJson, 'utf8');
+  let cursor = 0;
+  while (cursor < bytes.length && isJsonWhitespace(bytes[cursor]!)) cursor += 1;
+  if (bytes[cursor] !== 0x5b) return null; // '['
+  cursor += 1;
+
+  const offsets: MessageByteOffset[] = [];
+  while (cursor < bytes.length) {
+    while (cursor < bytes.length && isJsonWhitespace(bytes[cursor]!)) cursor += 1;
+    if (bytes[cursor] === 0x5d) { // ']'
+      cursor += 1;
+      while (cursor < bytes.length && isJsonWhitespace(bytes[cursor]!)) cursor += 1;
+      return cursor === bytes.length && offsets.length === parsed.length ? offsets : null;
+    }
+
+    const start = cursor;
+    let depth = 0;
+    let inString = false;
+    let escaped = false;
+    let completed = false;
+    for (; cursor < bytes.length; cursor += 1) {
+      const byte = bytes[cursor]!;
+      if (inString) {
+        if (escaped) escaped = false;
+        else if (byte === 0x5c) escaped = true; // '\\'
+        else if (byte === 0x22) inString = false; // '"'
+        continue;
+      }
+      if (byte === 0x22) {
+        inString = true;
+      } else if (byte === 0x7b || byte === 0x5b) { // '{' or '['
+        depth += 1;
+      } else if (byte === 0x7d) { // '}'
+        if (depth === 0) return null;
+        depth -= 1;
+      } else if (byte === 0x5d) { // ']'
+        if (depth > 0) {
+          depth -= 1;
+          continue;
+        }
+        let end = cursor;
+        while (end > start && isJsonWhitespace(bytes[end - 1]!)) end -= 1;
+        if (end === start) return null;
+        offsets.push({
+          messageIndex: offsets.length,
+          byteOffset: start,
+          byteLength: end - start,
+        });
+        completed = true;
+        break;
+      } else if (byte === 0x2c && depth === 0) { // ','
+        let end = cursor;
+        while (end > start && isJsonWhitespace(bytes[end - 1]!)) end -= 1;
+        if (end === start) return null;
+        offsets.push({
+          messageIndex: offsets.length,
+          byteOffset: start,
+          byteLength: end - start,
+        });
+        cursor += 1;
+        completed = true;
+        break;
+      }
+    }
+    if (!completed) return null;
+  }
+  return null;
+}
+
+function replaceChainMessageOffsets(
+  db: SqliteDatabase,
+  chainId: string,
+  offsets: readonly MessageByteOffset[],
+): void {
+  db.prepare('DELETE FROM chain_message_offsets WHERE chain_id = ?').run(chainId);
+  if (offsets.length === 0) return;
+  const insert = db.prepare(`
+    INSERT INTO chain_message_offsets (
+      chain_id, message_index, byte_offset, byte_length
+    ) VALUES (?, ?, ?, ?)
+  `);
+  for (const offset of offsets) {
+    insert.run(
+      chainId,
+      offset.messageIndex,
+      offset.byteOffset,
+      offset.byteLength,
+    );
+  }
+}
+
+function ensureChainMessageOffsets(
+  db: SqliteDatabase,
+  chainId: string,
+  messagesJson: string,
+  force = false,
+): boolean {
+  if (!force) {
+    const exists = db.prepare(
+      'SELECT 1 FROM chain_message_offsets WHERE chain_id = ? LIMIT 1',
+    ).get(chainId);
+    if (exists) return true;
+  }
+  const offsets = messageOffsetsFromJson(messagesJson);
+  if (!offsets) return false;
+  db.transaction(() => replaceChainMessageOffsets(db, chainId, offsets))();
+  return true;
 }
 
 function parseUsage(value: unknown): Usage | null {
@@ -611,6 +747,7 @@ function deserializeSubagentSummary(json: string): SubagentSummary | null {
 }
 
 function insertChainRow(
+  db: SqliteDatabase,
   insertChain: import('better-sqlite3').Statement,
   chain: Chain,
   ordinal: number,
@@ -637,11 +774,12 @@ function insertChainRow(
     serialized.summaryJson,
     serialized.recentMessagesJson,
   );
+  replaceChainMessageOffsets(db, chain.id, serialized.messageOffsets);
 }
 
 function updateChainRow(db: SqliteDatabase, chain: Chain): number {
   const serialized = serializeChainMessages(chain.messages);
-  return db
+  const changes = db
     .prepare(
       `UPDATE chains
        SET status = ?, selection_json = ?, model_label = ?,
@@ -671,6 +809,10 @@ function updateChainRow(db: SqliteDatabase, chain: Chain): number {
       chain.id,
       chain.sessionId,
     ).changes;
+  if (changes > 0) {
+    replaceChainMessageOffsets(db, chain.id, serialized.messageOffsets);
+  }
+  return changes;
 }
 
 // ---------------------------------------------------------------------------
@@ -725,7 +867,7 @@ export function saveSession(session: Session, opts?: StorageOptions): void {
 
       for (let i = 0; i < session.chains.length; i++) {
         const chain = session.chains[i]!;
-        insertChainRow(insertChain, chain, i);
+        insertChainRow(db, insertChain, chain, i);
       }
 
       deleteSubagentChains.run(session.id);
@@ -853,7 +995,7 @@ export function appendActiveChain(
           'SELECT COALESCE(MAX(ordinal), -1) + 1 AS ordinal FROM chains WHERE session_id = ?',
         )
         .get(chain.sessionId) as { ordinal: number };
-      insertChainRow(insertChain, chain, ordinalRow.ordinal);
+      insertChainRow(db, insertChain, chain, ordinalRow.ordinal);
       return true;
     });
     return txn();
@@ -920,7 +1062,7 @@ export function restoreMissingChain(
       const ordinal = db.prepare(
         'SELECT COALESCE(MAX(ordinal), -1) + 1 AS value FROM chains WHERE session_id = ?',
       ).pluck().get(chain.sessionId) as number;
-      insertChainRow(insertChain, chain, ordinal);
+      insertChainRow(db, insertChain, chain, ordinal);
       return true;
     });
     return txn();
@@ -1078,6 +1220,7 @@ function loadHistoryPageFromDb(
     allowOneOversizedMessage,
   } = query;
   let summary = query.summary;
+  let rebuildMessageOffsets = false;
   let recentMessagesJson: string | null | undefined;
   if (!summary) {
     const metadata = db.prepare(`
@@ -1092,6 +1235,7 @@ function loadHistoryPageFromDb(
     if (!metadata) return null;
     summary = parseChainViewSummary(metadata.summary_json) ?? undefined;
     if (!summary) {
+      rebuildMessageOffsets = true;
       const legacyMessageCount = Math.max(0, db.prepare(`
         SELECT CASE WHEN json_valid(messages_json)
           THEN json_array_length(messages_json) ELSE 0 END AS message_count
@@ -1144,30 +1288,62 @@ function loadHistoryPageFromDb(
   );
   if (recentPage) return recentPage;
 
+  const hasOffsets = !rebuildMessageOffsets && Boolean(db.prepare(
+    'SELECT 1 FROM chain_message_offsets WHERE chain_id = ? LIMIT 1',
+  ).get(chainId));
+  if (!hasOffsets) {
+    const source = db.prepare(
+      'SELECT messages_json FROM chains WHERE session_id = ? AND id = ?',
+    ).get(sessionId, chainId) as { messages_json: string } | undefined;
+    if (!source || !ensureChainMessageOffsets(
+      db,
+      chainId,
+      source.messages_json,
+      true,
+    )) {
+      console.error(`[session] could not index canonical history for chain ${chainId}`);
+      return {
+        sessionId,
+        chainId,
+        messages: [],
+        startIndex: 0,
+        totalMessages,
+        complete: true,
+        loadedBytes: 0,
+      };
+    }
+  }
+
   const rows = db.prepare(`
-    WITH message_rows AS (
-      SELECT CAST(j.key AS INTEGER) AS message_index,
-             CAST(j.value AS TEXT) AS message_json,
-             length(CAST(j.value AS BLOB)) AS message_bytes
-      FROM chains c,
-           json_each(CASE WHEN json_valid(c.messages_json) THEN c.messages_json ELSE '[]' END) AS j
-      WHERE c.session_id = ? AND c.id = ? AND CAST(j.key AS INTEGER) < ?
+    WITH candidates AS (
+      SELECT message_index, byte_offset, byte_length
+      FROM chain_message_offsets
+      WHERE chain_id = ? AND message_index < ?
+      ORDER BY message_index DESC
+      LIMIT ?
     ), ranked AS (
-      SELECT message_index, message_json, message_bytes,
+      SELECT message_index, byte_offset, byte_length,
              ROW_NUMBER() OVER (ORDER BY message_index DESC) AS message_rank,
-             SUM(message_bytes) OVER (ORDER BY message_index DESC) AS cumulative_bytes
-      FROM message_rows
+             SUM(byte_length) OVER (ORDER BY message_index DESC) AS cumulative_bytes
+      FROM candidates
     )
-    SELECT message_index, message_json, message_bytes
-    FROM ranked
-    WHERE message_rank <= ?
-      AND (cumulative_bytes <= ? OR (? = 1 AND message_rank = 1))
-    ORDER BY message_index
+    SELECT r.message_index,
+           CAST(substr(
+             CAST(c.messages_json AS BLOB),
+             r.byte_offset + 1,
+             r.byte_length
+           ) AS TEXT) AS message_json,
+           r.byte_length AS message_bytes
+    FROM ranked r
+    JOIN chains c ON c.id = ? AND c.session_id = ?
+    WHERE cumulative_bytes <= ? OR (? = 1 AND message_rank = 1)
+    ORDER BY r.message_index
   `).all(
-    sessionId,
     chainId,
     before,
     Math.max(1, Math.floor(maxMessages)),
+    chainId,
+    sessionId,
     Math.max(1, Math.floor(maxBytes)),
     allowOneOversizedMessage ? 1 : 0,
   ) as Array<{ message_index: number; message_json: string; message_bytes: number }>;

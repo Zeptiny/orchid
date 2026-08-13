@@ -2,7 +2,7 @@
 import type { SqliteDatabase } from '../utils/sqlite';
 
 /** Current session schema version. */
-export const SESSION_SCHEMA_VERSION = 5;
+export const SESSION_SCHEMA_VERSION = 6;
 
 /** Idempotent DDL for the session database. */
 export const SESSION_SCHEMA_SQL = `
@@ -44,6 +44,14 @@ CREATE TABLE IF NOT EXISTS chains (
   error_title TEXT,
   summary_json TEXT,
   recent_messages_json TEXT
+);
+
+CREATE TABLE IF NOT EXISTS chain_message_offsets (
+  chain_id TEXT NOT NULL REFERENCES chains(id) ON DELETE CASCADE,
+  message_index INTEGER NOT NULL,
+  byte_offset INTEGER NOT NULL,
+  byte_length INTEGER NOT NULL,
+  PRIMARY KEY (chain_id, message_index)
 );
 
 CREATE TABLE IF NOT EXISTS subagent_chains (

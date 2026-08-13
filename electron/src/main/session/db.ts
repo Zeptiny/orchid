@@ -46,6 +46,7 @@ export class SessionDb {
           this._db!.prepare(
             'UPDATE subagent_chains SET summary_json = NULL',
           ).run();
+          this._db!.prepare('DELETE FROM chain_message_offsets').run();
         }
         this._db!
           .prepare('INSERT OR REPLACE INTO schema_meta (key, value) VALUES (?, ?)')

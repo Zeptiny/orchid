@@ -1,8 +1,9 @@
 /**
- * Session DB legacy → v5 migration tests.
+ * Session DB legacy → v6 migration tests.
  *
  * v3 added `tier_override`; v4 added the bounded `summary_json` subagent read
- * model; v5 added the equivalent chain summary. These tests open databases
+ * model; v5 added the equivalent chain summary; v6 added indexed message byte
+ * ranges for bounded deep paging. These tests open databases
  * created with the v2 schema, run the store's open path / migration helper,
  * and assert the columns are added while pre-existing rows remain readable.
  */
@@ -115,7 +116,7 @@ afterEach(() => {
   fs.rmSync(tempDir, { recursive: true, force: true });
 });
 
-describe('session schema legacy → v5 migration', () => {
+describe('session schema legacy → v6 migration', () => {
   it('adds the tier_override column through the store open path', () => {
     const dbPath = path.join(tempDir, 'v2.db');
     makeV2Database(dbPath);
@@ -129,6 +130,9 @@ describe('session schema legacy → v5 migration', () => {
     expect(subagentColumnNames(dbPath)).toContain('summary_json');
     expect(chainColumnNames(dbPath)).toContain('summary_json');
     expect(chainColumnNames(dbPath)).toContain('recent_messages_json');
+    expect(db.connection.prepare(
+      "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'chain_message_offsets'",
+    ).pluck().get()).toBe(1);
   });
 
   it('loads pre-existing v2 rows with tierOverride null after migration', () => {
@@ -205,15 +209,20 @@ describe('session schema legacy → v5 migration', () => {
       '{"id":"before"}',
       '{"id":"before-summary"}',
     );
+    db.prepare(`
+      INSERT INTO chain_message_offsets (
+        chain_id, message_index, byte_offset, byte_length
+      ) VALUES (?, ?, ?, ?)
+    `).run('chain-downgrade', 0, 1, 15);
 
-    // Simulate a v4 binary reopening a v5 database and updating only the
+    // Simulate a v5 binary reopening a v6 database and updating only the
     // canonical columns known to that writer.
     db.prepare('UPDATE chains SET messages_json = ? WHERE id = ?')
       .run('[{"id":"after"}]', 'chain-downgrade');
     db.prepare('UPDATE subagent_chains SET record_json = ? WHERE subagent_id = ?')
       .run('{"id":"after"}', 'sub-downgrade');
     db.prepare('UPDATE schema_meta SET value = ? WHERE key = ?')
-      .run('4', 'schema_version');
+      .run('5', 'schema_version');
     initial.dispose();
 
     const reopened = new SessionDb(dbPath);
@@ -234,6 +243,9 @@ describe('session schema legacy → v5 migration', () => {
       record_json: '{"id":"after"}',
       summary_json: null,
     });
+    expect(migrated.prepare(
+      'SELECT COUNT(*) FROM chain_message_offsets WHERE chain_id = ?',
+    ).pluck().get('chain-downgrade')).toBe(0);
     expect(migrated.prepare(
       'SELECT value FROM schema_meta WHERE key = ?',
     ).pluck().get('schema_version')).toBe(String(SESSION_SCHEMA_VERSION));
