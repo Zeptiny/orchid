@@ -1,5 +1,6 @@
 import type { ChatStatus } from '../hooks/useChat';
 
+/** Minimal transition state used to detect completion of one in-place chat turn. */
 export interface SubagentRefreshState {
   readonly sessionId: string | null;
   readonly status: ChatStatus;

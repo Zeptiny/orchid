@@ -804,6 +804,7 @@ export interface SessionOpenMessage {
   id: string;
 }
 
+/** Request the bounded page immediately preceding one durable chain index. */
 export interface SessionHistoryPageMessage {
   sessionId: string;
   chainId: string;
@@ -811,6 +812,7 @@ export interface SessionHistoryPageMessage {
   beforeIndex?: number;
 }
 
+/** One bounded page of durable messages and its absolute position in the chain. */
 export interface SessionHistoryPageResult {
   sessionId: string;
   chainId: string;

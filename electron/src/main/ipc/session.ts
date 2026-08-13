@@ -84,9 +84,12 @@ export { flattenSessionMessages, sessionForRenderer };
 
 export { takeDraftReasoningOverride } from '../session/draft-reasoning';
 
-function seedCompleteChatHistory(session: Parameters<typeof flattenSessionMessages>[0]): void {
+function seedCompleteChatHistory(
+  session: Parameters<typeof flattenSessionMessages>[0],
+  messages = flattenSessionMessages(session),
+): void {
   if (session.chains.every((chain) => chain.messagesLoaded !== false)) {
-    seedChatHistory(session.id, flattenSessionMessages(session));
+    seedChatHistory(session.id, messages);
   }
 }
 
@@ -359,7 +362,7 @@ export function registerSessionIPC(): void {
     // chat:send continues the full conversation) and the renderer payload.
     const messages = session ? flattenSessionMessages(session) : [];
     if (session) {
-      seedCompleteChatHistory(session);
+      seedCompleteChatHistory(session, messages);
     } else {
       clearChatHistory(id);
     }

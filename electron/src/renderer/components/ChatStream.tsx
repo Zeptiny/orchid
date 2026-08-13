@@ -437,25 +437,14 @@ function renderStreamItem(
       />
     );
   }
-  if (item.kind === 'collapsed-stub') {
+  if (item.kind === 'collapsed-stub' || item.kind === 'history-gap') {
     return (
       <CollapsedChainStub
         key={item.key}
         chain={item.chain}
         chainIndex={item.chainIndex}
         onExpand={onExpandChain}
-        loading={loadingHistoryChainIds.has(item.chain.id)}
-      />
-    );
-  }
-  if (item.kind === 'history-gap') {
-    return (
-      <CollapsedChainStub
-        key={item.key}
-        chain={item.chain}
-        chainIndex={item.chainIndex}
-        onExpand={onExpandChain}
-        mode="history"
+        mode={item.kind === 'history-gap' ? 'history' : undefined}
         loading={loadingHistoryChainIds.has(item.chain.id)}
       />
     );

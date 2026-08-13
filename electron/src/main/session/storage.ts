@@ -267,6 +267,7 @@ interface ChainViewSummary {
   readonly recentMessageSizes: readonly number[] | null;
 }
 
+/** One bounded durable history page returned without changing active selection. */
 export interface SessionHistoryPage {
   readonly sessionId: string;
   readonly chainId: string;
