@@ -217,21 +217,32 @@ function emitWorkspaceChanged(
 /**
  * Materialize a session's persisted subagent chains back into the runtime
  * manager so the main agent regains its subagent context after an app restart
- * (records live only in memory for the current launch). No-op when the records
- * are already live or the project runtime is unresolvable. Session open must
- * not fail because hydration could not run, so errors are contained.
+ * (records live only in memory for the current launch). The task is detached
+ * from navigation; send and lifecycle operations join the same readiness
+ * promise. Session open must not fail because hydration could not run, so
+ * errors are logged and left retryable.
  */
-async function hydrateOpenedSessionSubagents(
+function startOpenedSessionSubagentHydration(
   sessionId: string,
   windowId: string,
-): Promise<void> {
-  try {
+): void {
+  void (async () => {
     const { getSubagentManager } = await import('../tools/index.js');
-    const { hydrateSessionSubagents } = await import('../tools/subagent/hydrate.js');
-    await hydrateSessionSubagents(getSubagentManager(), sessionId, { windowId });
-  } catch (error) {
+    const { awaitSessionSubagentHydration } = await import('../tools/subagent/hydrate.js');
+    const result = await awaitSessionSubagentHydration(
+      getSubagentManager(),
+      sessionId,
+      { windowId },
+    );
+    if (result.agentMissing.length > 0) {
+      console.warn(
+        `[subagents] session-open hydration skipped records with missing agent definitions for ${sessionId}:`,
+        result.agentMissing,
+      );
+    }
+  })().catch((error) => {
     console.warn(`[subagents] session-open hydration failed for ${sessionId}:`, error);
-  }
+  });
 }
 
 // ── IPC registration ─────────────────────────────────────────────────────────
@@ -273,7 +284,7 @@ export function registerSessionIPC(): void {
       hydrateSessionPermissionOverride(session.id, session.permissionMode);
       // Restore the runtime subagent records (prompt context + wait/interrupt)
       // after a restart; the renderer already renders the stored rows.
-      await hydrateOpenedSessionSubagents(session.id, windowId);
+      startOpenedSessionSubagentHydration(session.id, windowId);
     } else {
       // Drop ghost tabs when the session cannot be loaded (missing/corrupt).
       workingSetRemove(id, windowId);
@@ -327,7 +338,7 @@ export function registerSessionIPC(): void {
       hydrateSessionPermissionOverride(session.id, session.permissionMode);
       // Restore the runtime subagent records (prompt context + wait/interrupt)
       // after a restart; the renderer already renders the stored rows.
-      await hydrateOpenedSessionSubagents(session.id, windowId);
+      startOpenedSessionSubagentHydration(session.id, windowId);
     } else {
       // Drop ghost tabs when the session cannot be loaded (missing/corrupt).
       workingSetRemove(id, windowId);

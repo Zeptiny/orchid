@@ -14,6 +14,7 @@ import { genericBuiltInToolOutcome } from '../result';
 import type { SubagentManager } from '../../agents/manager';
 import { isTerminalSubagentState } from '../../agents/manager';
 import type { SubagentToolResult } from './delegate';
+import { awaitSessionSubagentHydration } from './hydrate';
 
 /**
  * Build the interrupt_subagents tool.
@@ -43,6 +44,14 @@ export function buildInterruptTool(
 
   const handler: ToolHandler = async (input: unknown, ctx): Promise<SubagentToolResult> => {
     const { subagent_ids } = input as { subagent_ids: string[] };
+
+    if (ctx?.sessionId) {
+      await awaitSessionSubagentHydration(manager, ctx.sessionId, {
+        projectRuntime: ctx.projectRuntime,
+        windowId: ctx.windowId,
+        cwd: ctx.cwd,
+      });
+    }
 
     // Empty list → cancel all running in this session only (never process-wide).
     if (!subagent_ids || subagent_ids.length === 0) {

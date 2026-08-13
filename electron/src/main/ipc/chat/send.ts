@@ -26,8 +26,9 @@ import type { ProviderProtocol } from '../../../shared/types/provider';
 import { resolveMainAgentTier } from '../../providers/facets/tiers';
 import { assembleFacetProviderOptions } from '../../providers/facets/turn-options';
 import { getSessionManager } from '../../session/singleton';
-import { getBuiltinToolRegistryForRuntime } from '../../tools';
+import { getBuiltinToolRegistryForRuntime, getSubagentManager } from '../../tools';
 import type { ToolExecutionContext } from '../../tools/types';
+import { awaitSessionSubagentHydration } from '../../tools/subagent/hydrate';
 import { resolveMainAgentEffort } from '../../llm/reasoning-effort';
 import {
   makeAssistantMessage,
@@ -93,6 +94,20 @@ export async function startChatTurn(
   sessionsStarting.add(sessionId);
   const existing = activeAgents.get(sessionId);
   const runtime = sessionGate.runtime;
+  try {
+    await awaitSessionSubagentHydration(getSubagentManager(), sessionId, {
+      projectRuntime: runtime,
+      windowId,
+      cwd: sessionGate.cwd,
+    });
+  } catch (error) {
+    sessionsStarting.delete(sessionId);
+    return {
+      status: 'error',
+      error: error instanceof Error ? error.message : String(error),
+      kind: 'runtime_hydration_failed',
+    };
+  }
   if (existing) forceAbortSession(sessionId);
   publishSessionActivity(sessionId, {
     cwd: sessionGate.cwd, state: 'working', phase: 'agent', detail: 'Generating response',

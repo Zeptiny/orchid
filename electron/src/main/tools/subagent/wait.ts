@@ -20,6 +20,7 @@ import {
   type SubagentRecord,
 } from '../../agents/manager';
 import type { SubagentToolResult } from './delegate';
+import { awaitSessionSubagentHydration } from './hydrate';
 
 function formatElapsed(ms: number): string {
   const seconds = Math.floor(Math.max(0, ms) / 1000);
@@ -149,6 +150,14 @@ export function buildWaitTool(
     // Validate non-empty
     if (!subagent_ids || subagent_ids.length === 0) {
       return genericBuiltInToolOutcome('wait_for_subagent', 'Error: subagent_ids must be a non-empty list of IDs.', 'error');
+    }
+
+    if (ctx?.sessionId) {
+      await awaitSessionSubagentHydration(manager, ctx.sessionId, {
+        projectRuntime: ctx.projectRuntime,
+        windowId: ctx.windowId,
+        cwd: ctx.cwd,
+      });
     }
 
     // Explicit IDs are untrusted model input. Keep the same ownership boundary

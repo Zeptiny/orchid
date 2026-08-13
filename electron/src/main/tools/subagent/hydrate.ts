@@ -15,6 +15,7 @@ import type { SubagentRecord as DomainSubagentRecord } from '../../../shared/typ
 import type { HydrateSpec, SubagentManager } from '../../agents/manager';
 import type { ProjectRuntime } from '../../project/runtime';
 import type { ToolExecutionContext } from '../types';
+import { SubagentHydrationReadiness } from './hydration-readiness';
 
 export interface HydrateSubagentRecordsResult {
   /** Ids materialized into the manager from durable storage. */
@@ -28,7 +29,12 @@ export interface HydrateSubagentDeps {
   projectRuntime?: ProjectRuntime | null;
   windowId?: string | null;
   cwd?: string | null;
+  /** Fail instead of silently skipping when durable records need a runtime. */
+  requireRuntime?: boolean;
 }
+
+const sessionHydrationReadiness =
+  new SubagentHydrationReadiness<HydrateSubagentRecordsResult>();
 
 /**
  * Hydrate the given ids from `session.subagentChains` into the runtime manager.
@@ -117,11 +123,27 @@ export async function hydrateSubagentRecords(
   ids: string[],
   ctx: ToolExecutionContext,
 ): Promise<HydrateSubagentRecordsResult> {
-  return hydrateStoredRecords(manager, sessionId, ids, {
+  const ready = await awaitSessionSubagentHydration(manager, sessionId, {
     projectRuntime: ctx.projectRuntime,
     windowId: ctx.windowId,
     cwd: ctx.cwd,
   });
+  const targeted = await hydrateStoredRecords(manager, sessionId, ids, {
+    projectRuntime: ctx.projectRuntime,
+    windowId: ctx.windowId,
+    cwd: ctx.cwd,
+  });
+  const requested = new Set(ids);
+  return {
+    hydrated: [...new Set([
+      ...ready.hydrated.filter((id) => requested.has(id)),
+      ...targeted.hydrated,
+    ])],
+    agentMissing: [...new Set([
+      ...ready.agentMissing.filter((id) => requested.has(id)),
+      ...targeted.agentMissing,
+    ])],
+  };
 }
 
 /**
@@ -161,6 +183,11 @@ export async function hydrateSessionSubagents(
     }
   }
   if (!projectRuntime) {
+    if (deps.requireRuntime) {
+      throw new Error(
+        `Cannot hydrate stored subagents for session '${sessionId}': project runtime is unavailable.`,
+      );
+    }
     return { hydrated: [], agentMissing: [] };
   }
 
@@ -170,4 +197,30 @@ export async function hydrateSessionSubagents(
     session.subagentChains.map((record) => record.id),
     { projectRuntime, windowId: deps.windowId, cwd },
   );
+}
+
+/**
+ * Start or join the correctness boundary for one session's persisted records.
+ * Navigation may fire-and-forget this promise; sends and lifecycle tools await
+ * it. A rejection is not cached, allowing the next caller to retry.
+ */
+export function awaitSessionSubagentHydration(
+  manager: SubagentManager,
+  sessionId: string,
+  deps: HydrateSubagentDeps = {},
+): Promise<HydrateSubagentRecordsResult> {
+  return sessionHydrationReadiness.ensure(manager, sessionId, () => (
+    hydrateSessionSubagents(manager, sessionId, {
+      ...deps,
+      requireRuntime: true,
+    })
+  ));
+}
+
+/** Clear retained readiness when a durable session is removed or invalidated. */
+export function clearSessionSubagentHydration(
+  manager: SubagentManager,
+  sessionId?: string,
+): void {
+  sessionHydrationReadiness.clear(manager, sessionId);
 }

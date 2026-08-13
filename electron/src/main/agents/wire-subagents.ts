@@ -8,6 +8,7 @@ import { IPC_CHANNELS } from '../../shared/types/ipc';
 import type { SubagentDeltaEvent } from '../../shared/types/subagent';
 import { getConfig } from '../config/loader';
 import { getSubagentManager } from '../tools';
+import { clearSessionSubagentHydration } from '../tools/subagent/hydrate';
 import { createSubagentStreamRunner } from './subagent-runner';
 import {
   createSubagentPersistenceScheduler,
@@ -100,6 +101,7 @@ export function wireSubagentRuntime(): void {
   setSubagentPersistenceRecoveryScheduler(persistenceScheduler);
   removeSessionDeletionCleanup = onSessionDeleted((sessionId) => {
     manager.purgeSession(sessionId);
+    clearSessionSubagentHydration(manager, sessionId);
     persistenceScheduler?.clear(sessionId);
   });
   removeStorageRecoveryListener = onSessionStorageRecovered(() => {

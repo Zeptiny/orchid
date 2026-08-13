@@ -25,7 +25,10 @@ import {
   subagentRecordToStorageDict,
 } from '../../src/shared/serialization/chain-subagent';
 import { persistSubagentChains } from '../../src/main/agents/persist-subagent-chains';
-import { hydrateSubagentRecords, hydrateSessionSubagents } from '../../src/main/tools/subagent/hydrate';
+import {
+  hydrateSubagentRecords,
+  hydrateSessionSubagents,
+} from '../../src/main/tools/subagent/hydrate';
 import { recoverSubagentPersistence } from '../../src/main/agents/subagent-persistence-recovery';
 import type { StreamEvent } from '../../src/main/llm/orchestrator';
 import { buildDelegateTool as buildDelegateToolRaw } from '../../src/main/tools/subagent/delegate';
@@ -377,6 +380,7 @@ describe('wait_for_subagent', () => {
 
   beforeEach(() => {
     manager = new SubagentManager();
+    sessionManagerHolder.current = null;
   });
 
   it('should return result when subagent completes', async () => {
@@ -394,6 +398,39 @@ describe('wait_for_subagent', () => {
     expect(result.agentProjection.content).toContain(record.id);
     expect(result.agentProjection.content).toContain('completed');
     expect(result.agentProjection.content).toContain('Found 3 issues');
+  });
+
+  it('hydrates a persisted record before applying the ownership filter', async () => {
+    const sessionId = 'session-persisted-wait';
+    const source = new SubagentManager();
+    const stored = source.spawn('persisted', 'old task', codeReviewerAgent, { sessionId });
+    source.markCompleted(stored.id, 'restored result');
+    const domain = subagentRecordFromStorageDict(
+      subagentRecordToStorageDict(runtimeToDomain(stored)),
+    );
+    sessionManagerHolder.current = {
+      getSession: (id) => id === sessionId
+        ? { id: sessionId, cwd: '/tmp', subagentChains: [domain] }
+        : null,
+      getActive: () => null,
+    };
+
+    const { handler } = buildWaitTool(manager);
+    const result = (await handler(
+      { subagent_ids: [stored.id] },
+      {
+        ...toolContext,
+        sessionId,
+        projectRuntime: {
+          ...toolContext.projectRuntime,
+          agents: makeAgentMap(),
+        },
+      },
+    )) as ToolExecutionResult;
+
+    expect(result.canonical.status).toBe('complete');
+    expect(result.agentProjection.content).toContain('restored result');
+    expect(manager.getRecord(stored.id)?.sessionId).toBe(sessionId);
   });
 
   it('should block until subagent completes then return result', async () => {
@@ -1561,6 +1598,15 @@ describe('hydrateSessionSubagents', () => {
 
     expect(result).toEqual({ hydrated: [], agentMissing: [] });
     expect(manager.getRecord(id)).toBeUndefined();
+  });
+
+  it('rejects readiness when stored records cannot resolve a project runtime', async () => {
+    const { domain } = storedRecord('orphan', codeReviewerAgent);
+    setSession([domain], { cwd: '/definitely/not/a/project' });
+
+    await expect(hydrateSessionSubagents(manager, sid, {
+      requireRuntime: true,
+    })).rejects.toThrow('project runtime');
   });
 
   it('reports agentMissing for stored records whose agent definition is gone', async () => {
