@@ -1743,10 +1743,12 @@ export function listSavedSessions(opts?: StorageOptions): SessionSummary[] {
   return withCorruptionRecovery(dbPath, (db) => {
     const rows = db.prepare(`
       SELECT s.id, s.name, s.model_label, s.cwd, s.updated_at,
-             COUNT(c.id) as chain_count
+             (
+               SELECT COUNT(*)
+               FROM chains c
+               WHERE c.session_id = s.id
+             ) as chain_count
       FROM sessions s
-      LEFT JOIN chains c ON c.session_id = s.id
-      GROUP BY s.id
       ORDER BY s.updated_at DESC
     `).all() as Array<{
       id: string;

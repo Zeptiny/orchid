@@ -60,6 +60,7 @@ const mocks = vi.hoisted(() => {
         activeSession = { ...activeSession, tierOverride: tier };
       }
     }),
+    delete: vi.fn(() => true),
     create: vi.fn((
       selection: { connectionId: string; modelId: string } | null,
       options?: { cwd?: string | null },
@@ -96,6 +97,7 @@ const mocks = vi.hoisted(() => {
       sessionManager.getSession.mockClear();
       sessionManager.setTierOverride.mockClear();
       sessionManager.create.mockClear();
+      sessionManager.delete.mockClear();
     },
   };
 
@@ -126,6 +128,17 @@ const mocks = vi.hoisted(() => {
       openSessionIds: [id],
       focusedSessionId: id,
     })),
+    workingSetRemove: vi.fn(() => ({
+      openSessionIds: ['remaining-session'],
+      focusedSessionId: 'remaining-session',
+      mruSessionIds: ['remaining-session'],
+    })),
+    forceStopSession: vi.fn(),
+    clearPermissionSessionState: vi.fn(),
+    clearToolCallHistoryForSession: vi.fn(),
+    clearFunctionHashesForSession: vi.fn(),
+    clearNextRequestStop: vi.fn(),
+    removeSessionActivity: vi.fn(),
     ipcMain: {
       handle: vi.fn((channel: string, handler: (...args: unknown[]) => unknown) => {
         handlers.set(channel, handler);
@@ -181,7 +194,31 @@ vi.mock('../../src/main/ipc/chat-history', () => ({
 vi.mock('../../src/main/ipc/session-working-set', () => ({
   workingSetClearFocus: vi.fn(),
   workingSetOpenOrFocus: mocks.workingSetOpenOrFocus,
-  workingSetRemove: vi.fn(),
+  workingSetRemove: mocks.workingSetRemove,
+}));
+
+vi.mock('../../src/main/ipc/chat', () => ({
+  forceStopSession: mocks.forceStopSession,
+}));
+
+vi.mock('../../src/main/ipc/permission', () => ({
+  clearPermissionSessionState: mocks.clearPermissionSessionState,
+}));
+
+vi.mock('../../src/main/permissions/history', () => ({
+  clearToolCallHistoryForSession: mocks.clearToolCallHistoryForSession,
+}));
+
+vi.mock('../../src/main/tools/ast/get-function', () => ({
+  clearFunctionHashesForSession: mocks.clearFunctionHashesForSession,
+}));
+
+vi.mock('../../src/main/ipc/next-request-stop', () => ({
+  clearNextRequestStop: mocks.clearNextRequestStop,
+}));
+
+vi.mock('../../src/main/ipc/session-activity', () => ({
+  removeSessionActivity: mocks.removeSessionActivity,
 }));
 
 vi.mock('../../src/main/providers/runtime-context', () => ({
@@ -306,6 +343,26 @@ afterEach(() => {
   mocks.handlers.clear();
   mocks.sessionManager._reset();
   clearDraftTierOverrides();
+});
+
+describe('session:delete', () => {
+  it('returns the post-delete working-set snapshot to the invoking renderer', async () => {
+    const handler = mocks.handlers.get(IPC_CHANNELS.SESSION_DELETE);
+    expect(handler).toBeDefined();
+
+    const result = await handler!({ sender: sender(9) }, { id: SESSION_UUID });
+
+    expect(mocks.sessionManager.delete).toHaveBeenCalledWith(SESSION_UUID);
+    expect(mocks.workingSetRemove).toHaveBeenCalledWith(SESSION_UUID, '9');
+    expect(result).toEqual({
+      status: 'deleted',
+      workingSet: {
+        openSessionIds: ['remaining-session'],
+        focusedSessionId: 'remaining-session',
+        mruSessionIds: ['remaining-session'],
+      },
+    });
+  });
 });
 
 describe('session:set_service_tier', () => {

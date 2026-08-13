@@ -309,6 +309,43 @@ describe('preload session history validation', () => {
   });
 });
 
+describe('preload session deletion validation', () => {
+  let api: OrchidAPI;
+
+  beforeEach(async () => {
+    vi.resetModules();
+    electronMock.handlers.clear();
+    electronMock.contextBridge.exposeInMainWorld.mockClear();
+    electronMock.ipcRenderer.invoke.mockReset();
+    await import('../../src/preload/index');
+    const exposed = electronMock.contextBridge.exposeInMainWorld.mock.calls
+      .find(([name]) => name === 'orchid');
+    if (!exposed) throw new Error('preload did not expose window.orchid');
+    api = exposed[1] as OrchidAPI;
+  });
+
+  it('rejects a deletion response without an authoritative working-set snapshot', async () => {
+    electronMock.ipcRenderer.invoke.mockResolvedValueOnce({ status: 'deleted' });
+
+    await expect(api.session.delete({ id: SESSION_ID }))
+      .rejects.toThrow(/Invalid IPC response.*session:delete/i);
+  });
+
+  it('accepts and preserves a well-formed deletion response', async () => {
+    const result = {
+      status: 'deleted' as const,
+      workingSet: {
+        openSessionIds: ['session-2'],
+        focusedSessionId: 'session-2',
+        mruSessionIds: ['session-2'],
+      },
+    };
+    electronMock.ipcRenderer.invoke.mockResolvedValueOnce(result);
+
+    await expect(api.session.delete({ id: SESSION_ID })).resolves.toEqual(result);
+  });
+});
+
 describe('preload terminal chat history validation', () => {
   let done: ChatDoneEvent[];
   let errors: ChatErrorEvent[];

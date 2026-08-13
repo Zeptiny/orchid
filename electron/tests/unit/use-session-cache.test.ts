@@ -370,6 +370,120 @@ describe('useSession shared cache', () => {
     expect(__sessionCacheTest.getDraftGeneration()).toBeGreaterThan(0);
   });
 
+  it('marks a deletion pending immediately, deduplicates it, and removes the session locally', async () => {
+    const sessionA = makeSession({ id: 'a', name: 'Alpha' });
+    const summaries = [
+      { id: 'a', name: 'Alpha', modelLabel: null, cwd: null, chainCount: 1, updatedAt: 2 },
+      { id: 'b', name: 'Beta', modelLabel: null, cwd: null, chainCount: 1, updatedAt: 1 },
+    ];
+    listMock.mockResolvedValue(summaries);
+    loadMock.mockResolvedValue(sessionA);
+    let resolveDelete!: (value: unknown) => void;
+    deleteMock.mockReturnValue(new Promise((resolve) => {
+      resolveDelete = resolve;
+    }));
+
+    const { __sessionCacheTest } = await import('../../src/renderer/hooks/useSession');
+    __sessionCacheTest.reset();
+    await __sessionCacheTest.refresh();
+    await __sessionCacheTest.load('a');
+
+    const first = __sessionCacheTest.deleteSession('a');
+    const second = __sessionCacheTest.deleteSession('a');
+    expect(__sessionCacheTest.getSnapshot().pendingDeleteIds.has('a')).toBe(true);
+    expect(deleteMock).toHaveBeenCalledTimes(1);
+
+    const workingSet = {
+      openSessionIds: ['b'],
+      focusedSessionId: 'b',
+      mruSessionIds: ['b'],
+    };
+    resolveDelete({ status: 'deleted', workingSet });
+
+    await expect(first).resolves.toEqual({ status: 'deleted', workingSet });
+    await expect(second).resolves.toEqual({ status: 'deleted', workingSet });
+    expect(__sessionCacheTest.getSnapshot().pendingDeleteIds.has('a')).toBe(false);
+    expect(__sessionCacheTest.getActiveSession()).toBeNull();
+    expect(__sessionCacheTest.getListState()).toEqual({
+      status: 'ready',
+      sessions: [summaries[1]],
+    });
+    expect(listMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('clears pending deletion state and preserves the row when deletion fails', async () => {
+    const summary = {
+      id: 'a',
+      name: 'Alpha',
+      modelLabel: null,
+      cwd: null,
+      chainCount: 1,
+      updatedAt: 1,
+    };
+    listMock.mockResolvedValue([summary]);
+    deleteMock.mockRejectedValue(new Error('disk unavailable'));
+
+    const { __sessionCacheTest } = await import('../../src/renderer/hooks/useSession');
+    __sessionCacheTest.reset();
+    await __sessionCacheTest.refresh();
+
+    const deletion = __sessionCacheTest.deleteSession('a');
+    expect(__sessionCacheTest.getSnapshot().pendingDeleteIds.has('a')).toBe(true);
+    await expect(deletion).rejects.toThrow('disk unavailable');
+    expect(__sessionCacheTest.getSnapshot().pendingDeleteIds.has('a')).toBe(false);
+    expect(__sessionCacheTest.getListState()).toEqual({
+      status: 'ready',
+      sessions: [summary],
+    });
+  });
+
+  it('does not let a pre-delete catalog refresh resurrect the deleted row', async () => {
+    const summaryA = {
+      id: 'a',
+      name: 'Alpha',
+      modelLabel: null,
+      cwd: null,
+      chainCount: 1,
+      updatedAt: 2,
+    };
+    const summaryB = {
+      id: 'b',
+      name: 'Beta',
+      modelLabel: null,
+      cwd: null,
+      chainCount: 1,
+      updatedAt: 1,
+    };
+    let resolveStaleRefresh!: (value: unknown) => void;
+    listMock
+      .mockResolvedValueOnce([summaryA, summaryB])
+      .mockReturnValueOnce(new Promise((resolve) => {
+        resolveStaleRefresh = resolve;
+      }))
+      .mockResolvedValueOnce([summaryA, summaryB]);
+    deleteMock.mockResolvedValue({
+      status: 'deleted',
+      workingSet: {
+        openSessionIds: ['b'],
+        focusedSessionId: 'b',
+        mruSessionIds: ['b'],
+      },
+    });
+
+    const { __sessionCacheTest } = await import('../../src/renderer/hooks/useSession');
+    __sessionCacheTest.reset();
+    await __sessionCacheTest.refresh();
+    const staleRefresh = __sessionCacheTest.refresh();
+    await __sessionCacheTest.deleteSession('a');
+    resolveStaleRefresh([summaryA, summaryB]);
+    await staleRefresh;
+
+    expect(__sessionCacheTest.getListState()).toEqual({
+      status: 'ready',
+      sessions: [summaryB],
+    });
+  });
+
   it('drops stale load when a newer load supersedes it', async () => {
     const sessionA = makeSession({ id: 'a', name: 'Alpha' });
     const sessionB = makeSession({ id: 'b', name: 'Beta' });

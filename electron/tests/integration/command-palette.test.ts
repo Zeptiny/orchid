@@ -45,7 +45,10 @@ const mockOrchid = {
     list: vi.fn().mockResolvedValue([]),
     load: vi.fn().mockResolvedValue(null),
     create: vi.fn().mockResolvedValue({ id: 'new-session', name: 'New Session' }),
-    delete: vi.fn().mockResolvedValue({ status: 'ok' }),
+    delete: vi.fn().mockResolvedValue({
+      status: 'deleted',
+      workingSet: { openSessionIds: [], focusedSessionId: null, mruSessionIds: [] },
+    }),
     rename: vi.fn().mockResolvedValue({ status: 'ok' }),
   },
   tool: {
@@ -396,6 +399,19 @@ describe('Command Execution', () => {
     const cmd = findCommand('/delete');
     await cmd!.execute(mockContext);
     expect(mockContext.onDeleteSession).not.toHaveBeenCalled();
+  });
+
+  it('/delete reports a deletion failure instead of showing success', async () => {
+    vi.mocked(mockContext.onDeleteSession).mockRejectedValueOnce(new Error('disk unavailable'));
+    const cmd = findCommand('/delete');
+
+    await cmd!.execute(mockContext);
+
+    expect(mockContext.onNotify).toHaveBeenCalledWith(
+      'Delete failed: disk unavailable',
+      'error',
+    );
+    expect(mockContext.onNotify).not.toHaveBeenCalledWith('Session deleted.', 'info');
   });
 
   it('/delete notifies when no active session', async () => {

@@ -600,8 +600,8 @@ export function ChatView({ isVisible = true, bootstrapConfig = null, onNotify, a
       // and emits the terminal idle transition during this await, which would
       // otherwise trigger queue autofire against a vanishing session.
       if (wasActive) messageQueue.clearQueue();
-      await session.deleteSession(id);
-      const snapshot = await tabs.refresh();
+      const result = await session.deleteSession(id);
+      const snapshot = tabs.applySnapshot(result.workingSet);
       if (!wasActive) return;
 
       const gen = ++sessionSwitchGen.current;
@@ -609,8 +609,13 @@ export function ChatView({ isVisible = true, bootstrapConfig = null, onNotify, a
       if (gen !== sessionSwitchGen.current) return;
       await focusAfterWorkingSet(snapshot);
     },
-    [session, chat.setMessages, tabs.refresh, focusAfterWorkingSet, messageQueue.clearQueue],
+    [session, chat.setMessages, tabs.applySnapshot, focusAfterWorkingSet, messageQueue.clearQueue],
   );
+
+  const handleSessionDeleteError = useCallback((error: unknown) => {
+    const message = error instanceof Error ? error.message : String(error);
+    notify(`Delete failed: ${message}`, 'error');
+  }, [notify]);
 
   const handleSessionRename = useCallback(
     async (id: string, name: string) => {
@@ -1103,6 +1108,8 @@ export function ChatView({ isVisible = true, bootstrapConfig = null, onNotify, a
         onProjectSessionCreate={handleProjectSessionCreateClick}
         onProjectSelect={handleProjectSelect}
         onSessionDelete={handleSessionDelete}
+        onSessionDeleteError={handleSessionDeleteError}
+        deletingSessionIds={session.pendingDeleteIds}
         onSessionSelect={handleSessionSelect}
         onSessionRename={handleSessionRename}
         activities={activity.activities}

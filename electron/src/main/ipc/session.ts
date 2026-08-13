@@ -487,14 +487,14 @@ export function registerSessionIPC(): void {
     const deleted = manager.delete(parsed.data.id);
     if (deleted) {
       removeSessionActivity(parsed.data.id);
-      workingSetRemove(parsed.data.id, String(event.sender.id));
     }
+    const workingSet = workingSetRemove(parsed.data.id, String(event.sender.id));
     if (deleted && wasActive) {
       const windowId = String(event.sender.id);
       clearChatHistory(parsed.data.id);
       emitWorkspaceChanged(event.sender, resolveWindowWorkspace(windowId));
     }
-    return { status: deleted ? 'deleted' : 'not_found' };
+    return { status: deleted ? 'deleted' : 'not_found', workingSet };
   });
 
   // session:rename — rename a session

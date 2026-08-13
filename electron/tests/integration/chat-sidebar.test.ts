@@ -46,7 +46,10 @@ const mockOrchid = {
     load: vi.fn().mockResolvedValue(null),
     create: vi.fn().mockResolvedValue({ id: 'new-session', name: 'New Session' }),
     clearActive: vi.fn().mockResolvedValue({ status: 'cleared' }),
-    delete: vi.fn().mockResolvedValue({ status: 'ok' }),
+    delete: vi.fn().mockResolvedValue({
+      status: 'deleted',
+      workingSet: { openSessionIds: [], focusedSessionId: null, mruSessionIds: [] },
+    }),
     rename: vi.fn().mockResolvedValue({ status: 'ok' }),
     onCreated: vi.fn().mockReturnValue(() => {}),
     onRenamed: vi.fn().mockReturnValue(() => {}),

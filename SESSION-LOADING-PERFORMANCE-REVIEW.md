@@ -451,3 +451,124 @@ The sections above preserve the point-in-time review of `d2cb2b9`. The implement
 - The broader review-fix slice passes 284 focused tests, TypeScript typechecking, and ESLint.
 - Final branch verification passes: 270 test files / 3,970 tests, TypeScript typechecking, ESLint, and the runtime dependency-cycle check.
 - The test run emitted only the repository's existing Vite native-config warning and expected AI SDK reasoning-part warnings; no check failed.
+
+## Session deletion follow-up — 2026-08-13
+
+This follow-up began as a report-only investigation. It traces deletion from the sidebar through renderer state, IPC cleanup, SQLite, cache removal, working-set persistence, and post-delete navigation. The first two implementation slices were subsequently authorized and implemented on this branch; the remaining lifecycle work stays explicitly deferred below.
+
+### Outcome
+
+Session deletion can feel substantially faster without moving SQLite work to a worker. The durable delete is not the dominant measured cost: the renderer waits for two full catalog queries after deletion, and the current catalog query is unexpectedly expensive on a transcript-heavy database. The recommended first slice is:
+
+1. make the delete visible immediately with a per-session pending state and explicit failure notification;
+2. replace the session-summary join/group query with the equivalent indexed correlated count;
+3. return the post-delete working-set snapshot from `session:delete`, remove the deleted summary locally, and eliminate both post-delete catalog refreshes;
+4. use deletion-specific runtime teardown so an active turn is not persisted or auto-named immediately before its session is erased.
+
+This keeps durable success authoritative while making acknowledgement immediate and reducing the measured warm delete path by roughly 120 ms before any next-session open cost.
+
+### Current deletion path
+
+1. The sidebar trash button calls `onDelete(session.id)` without recording a pending state or handling the returned promise (`electron/src/renderer/components/LeftSidebar.tsx:820-834`).
+2. `ChatView.handleSessionDelete` clears the active message queue, then waits for `useSession.deleteSession` (`electron/src/renderer/components/ChatView.tsx:595-612`).
+3. The main handler dynamically resolves cleanup modules, calls the ordinary force-stop path, clears session-scoped caches, deletes the session, durably rewrites the working set, and only then replies (`electron/src/main/ipc/session.ts:460-497`).
+4. `useSession.deleteSessionShared` clears the active session only after the reply and then waits for a full `session:list` refresh (`electron/src/renderer/hooks/useSession.ts:481-495`).
+5. `ChatView` then calls `tabs.refresh()`. The working-set GET validates the catalog by calling `manager.listSaved()` again, even though `workingSetRemove` already updated, persisted, and broadcast the authoritative snapshot during deletion (`electron/src/renderer/hooks/useSessionTabs.ts:35-57`, `electron/src/main/ipc/session-working-set.ts:211-216`).
+6. If the deleted session was active, only after both refreshes does `ChatView` clear the transcript and open the next MRU session or enter draft mode.
+
+The active session and sidebar row therefore remain visually present through the main-process cleanup and first catalog refresh. There is no row-level spinner, disabled state, success notification for sidebar deletion, or caught error path. The slash command is the only deletion surface that confirms and reports success.
+
+### Measurements
+
+Measurements used aggregate metadata from the same local development database and a temporary SQLite backup for destructive timing. No message, path, session name, or transcript content was copied into this report. Timings are warm local measurements and should guide prioritization rather than serve as production latency guarantees.
+
+| Measure | Observed value |
+|---|---:|
+| Session database size | 506 MiB |
+| Sessions / chains / subagents | 130 / 692 / 207 |
+| Largest session serialized main + subagent payload | 68.2 MiB |
+| SQLite cascade delete, eight largest sessions | 4.5-22.6 ms |
+| Current production session-summary query | 60.6 ms median, 62.6 ms slowest of 10 warm samples |
+| Equivalent correlated-count query | 0.216 ms median, 0.377 ms slowest of 10 warm samples |
+| Post-delete catalog queries in the active renderer path | 2 |
+| Largest per-session tool-output cache currently present | 18 files / 0.9 MiB |
+| Largest per-session web-fetch cache currently present | 6 files / 2.9 MiB |
+
+The current summary query joins `sessions` to `chains`, groups by session ID, counts `c.id`, and sorts through a temporary B-tree (`electron/src/main/session/storage.ts:1741-1768`). On this database, changing only the chain-count expression to a correlated `SELECT COUNT(*) FROM chains WHERE session_id = s.id` produced byte-for-byte equivalent result rows. SQLite then used `idx_sessions_updated` for ordering and the covering `idx_chains_session` index for each count. The approximately 280x microbenchmark difference is unusually large, but the plan improvement is structural and the behavioral equivalence was verified against all 130 rows.
+
+### Findings
+
+#### D1 — P0: deletion has no immediate pending or failure state
+
+The renderer does not update session state until `session:delete` resolves. The sidebar callback is typed as returning `void`, invokes an async callback without awaiting it, and provides neither a disabled/deleting state nor an error surface. `deleteSessionShared` also lets IPC rejection propagate without restoring or notifying (`electron/src/renderer/components/LeftSidebar.tsx:820-834`, `electron/src/renderer/hooks/useSession.ts:481-495`).
+
+**Impact:** even a healthy delete appears inert while main-process cleanup runs. On I/O failure, a trash-click rejection can become unhandled and the user receives no actionable feedback.
+
+**Recommendation:** track `pendingDeleteIds` in the shared session store. Immediately disable the row action and render a compact deleting state; optionally hide the row optimistically while retaining the canonical summary for rollback. Catch failures centrally, remove the pending marker, restore visibility if necessary, and surface `Delete failed: …`. Guard list responses with a catalog generation so an older in-flight refresh cannot reintroduce a successfully deleted row.
+
+#### D2 — P0: two expensive catalog queries run after every ChatView deletion
+
+The first query comes from `deleteSessionShared -> refreshShared`. The second comes from `handleSessionDelete -> tabs.refresh -> session:working_set_get -> tryListSessionCatalog` (`electron/src/renderer/hooks/useSession.ts:490-494`, `electron/src/renderer/components/ChatView.tsx:603-610`, `electron/src/main/ipc/session-working-set.ts:61-105`). The second refresh is additionally redundant with the working-set change event already broadcast by `workingSetRemove` inside the delete handler.
+
+**Impact:** the two warm queries cost roughly 121 ms on the measured database, over five times the largest measured SQLite cascade delete. An active delete then still has to open the next session.
+
+**Recommendation:** make the delete response typed and authoritative, for example `{ status, workingSet }`. Apply that snapshot directly to the tab store and remove the known summary from the local catalog; do not re-list either store on the success path. Keep an explicit refresh only as recovery after a failed or ambiguous response.
+
+#### D3 — P0: the session-summary query misses the available fast plan
+
+`listSavedSessions` uses `LEFT JOIN chains`, `GROUP BY s.id`, `COUNT(c.id)`, and `ORDER BY s.updated_at DESC`. The measured plan does not use `idx_sessions_updated` for ordering and builds a temporary B-tree. The equivalent correlated count uses both existing indexes and avoids reading transcript-heavy chain table rows (`electron/src/main/session/storage.ts:1741-1768`, `electron/src/main/session/schema.ts:65-66`).
+
+**Impact:** this affects deletion, startup, explicit refresh, and working-set validation. It upgrades the previously deferred F9 catalog work from a lower-priority architectural cache to a small, directly measured query fix.
+
+**Recommendation:** first replace the join/group count with a correlated indexed count and retain the existing zero-chain and multi-chain behavior tests. A revisioned catalog cache may still help later, but it is not necessary to obtain the measured query-plan win.
+
+#### D4 — P1: active deletion persists and auto-names data that is immediately erased
+
+The delete handler calls the generic `forceStopSession` before deleting. For a non-finalized main turn, that path materializes the live tail, persists an interrupted chain, emits terminal events, and starts interrupted-turn auto-naming before `manager.delete` removes the SQLite row (`electron/src/main/ipc/session.ts:482-487`, `electron/src/main/ipc/chat/abort.ts:196-255`). The title request is detached, so deletion does not await it, but it can still consume provider work and accounting after the session has disappeared.
+
+**Impact:** live-session deletion performs avoidable serialization and SQLite writes on the critical path and may launch a useless model request. Terminal renderer events also create state churn for a view that is about to be discarded.
+
+**Recommendation:** add a deletion-specific teardown mode that aborts and disposes main-agent/subagent/process state without checkpoint persistence, terminal UI events, or auto-naming. To preserve failure semantics, perform the synchronous durable row delete first and discard runtime state immediately after success in the same main-process task; JavaScript callbacks cannot interleave with the synchronous delete. If the durable delete throws, keep the session and running state intact and report the failure.
+
+#### D5 — P2: non-durable cache cleanup blocks the main process and delete response
+
+After the durable row is gone, storage synchronously walks and removes the tool-output and web-fetch directories with `rmSync` (`electron/src/main/session/storage.ts:1869-1900`). These caches are small in the current dataset, so this is not a measured dominant cost today.
+
+**Impact:** sessions with many small cached files can block all Electron main-process work even though cache deletion is explicitly best-effort and non-fatal.
+
+**Recommendation:** split durable record deletion from cache cleanup and schedule `fs.promises.rm(..., { recursive: true, force: true })` after success. Log failures, as today, and consider startup garbage collection for cache directories whose session IDs no longer exist. Do not add `VACUUM` to the interactive path; deleted SQLite pages can be reused without shrinking the database immediately.
+
+#### D6 — P1 correctness/UX: deletion is not broadcast as a catalog event to other windows
+
+`workingSetRemove` broadcasts tab membership, but there is no `session:deleted` event. `SessionManager.delete` clears selection for every owner, while the IPC handler emits workspace changes only to the initiating sender (`electron/src/main/session/manager.ts:445-457`, `electron/src/main/ipc/session.ts:487-497`). A second renderer can therefore retain the deleted session summary, active-session object, transcript, and workspace even after its tab snapshot loses the ID.
+
+**Impact:** multi-window state can remain visibly stale until another refresh or navigation. This also prevents one authoritative event from providing immediate feedback everywhere.
+
+**Recommendation:** broadcast a validated `session:deleted` event to every window, including the deleted ID and that window's post-delete working-set snapshot/focus. Each renderer should remove the summary, invalidate an active matching session, and follow its own MRU focus through the normal generation-guarded switch path. The initiating window may use the same event or the typed invoke response, but must not apply both as independent refreshes.
+
+### Recommended implementation slices
+
+1. **Fast query and redundant-read removal:** change the catalog query, return the working-set snapshot from delete, locally remove the summary, and remove `refreshShared()` / `tabs.refresh()` from the success path.
+2. **Immediate user feedback:** add pending-delete state, disable repeat actions, show failure, and guard concurrent catalog refreshes. Preserve the current active-session queue clear before main emits teardown events.
+3. **Deletion-specific teardown:** avoid interrupted-turn persistence, terminal emissions, and auto-naming; split asynchronous best-effort cache cleanup from durable deletion.
+4. **Multi-window convergence:** add a validated deletion event and use per-window focus snapshots to navigate every affected renderer.
+
+Slices 1 and 2 should deliver most of the perceived improvement with small surface area. Slices 3 and 4 carry more lifecycle risk and should land with focused tests.
+
+### Implementation status and deferred TODOs
+
+- [x] **Slice 1 — fast query and redundant-read removal:** use the indexed correlated chain count, return and validate the post-delete working-set snapshot, remove the summary locally, and apply the snapshot without post-delete `session:list` or `session:working_set_get` calls.
+- [x] **Slice 2 — immediate user feedback:** expose per-session pending deletion state, show a disabled row-level spinner, deduplicate repeat requests, surface failures through the app notification UI, and prevent stale catalog responses from resurrecting deleted rows.
+- [ ] **TODO — Slice 3, deletion-specific teardown:** avoid interrupted-turn persistence, terminal emissions, and auto-naming; move best-effort cache cleanup off the durable response path. This remains deferred because it changes live-agent cancellation and persistence ordering.
+- [ ] **TODO — Slice 4, multi-window convergence:** add a validated deletion broadcast and use per-window working-set focus snapshots to reconcile every affected renderer. This remains deferred because it changes cross-window ownership and navigation behavior.
+
+### Validation plan
+
+- Assert the optimized catalog query returns identical summaries and correct zero/multiple chain counts.
+- Assert a delete marks only its row pending synchronously, prevents duplicate clicks, removes it without calling `session:list` or `session:working_set_get`, and reports/reverts on rejection.
+- Resolve an older in-flight catalog refresh after deletion and prove it cannot resurrect the row.
+- Delete the active session and prove the returned/event working-set focus selects the correct MRU session exactly once.
+- Delete a live main turn and prove no interrupted-chain persistence, auto-title request, or late terminal event occurs.
+- Delete a session with running and queued subagents/background commands and prove all work is cancelled without a late persistence flush recreating the row.
+- Delete from one window while the same session is active in another and prove both catalogs, tabs, center panes, and workspace states converge.
+- Exercise cache cleanup failure and prove durable deletion still succeeds and user feedback is not delayed.

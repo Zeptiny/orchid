@@ -110,6 +110,17 @@ export const sessionHistoryPageResultSchema = z.object({
   complete: z.boolean(),
 }).strict().nullable();
 
+export const workingSetSnapshotSchema = z.object({
+  openSessionIds: z.array(z.string()),
+  focusedSessionId: z.string().nullable(),
+  mruSessionIds: z.array(z.string()),
+}).strict();
+
+export const sessionDeleteResultSchema = z.object({
+  status: z.enum(['deleted', 'not_found']),
+  workingSet: workingSetSnapshotSchema,
+}).strict();
+
 /**
  * Minimum durable chain shape required by renderer consumers. Remaining chain
  * metadata stays passthrough so this boundary does not duplicate the domain
@@ -326,11 +337,7 @@ export const sessionActivityChangedEventSchema = z.object({
 });
 
 export const workingSetChangedEventSchema = z.object({
-  snapshot: z.object({
-    openSessionIds: z.array(z.string()),
-    focusedSessionId: z.string().nullable(),
-    mruSessionIds: z.array(z.string()),
-  }),
+  snapshot: workingSetSnapshotSchema,
 });
 
 // ── Index progress ───────────────────────────────────────────────────────────

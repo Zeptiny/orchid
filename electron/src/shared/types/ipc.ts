@@ -826,6 +826,11 @@ export interface SessionDeleteMessage {
   id: string;
 }
 
+export interface SessionDeleteResult {
+  status: 'deleted' | 'not_found';
+  workingSet: WorkingSetSnapshot;
+}
+
 export interface SessionRenameMessage {
   id: string;
   name: string;
@@ -1348,7 +1353,7 @@ export interface OrchidAPI {
      * window history. Does not write a session file.
      */
     clearActive: () => Promise<{ status: string }>;
-    delete: (id: SessionDeleteMessage) => Promise<{ status: string }>;
+    delete: (id: SessionDeleteMessage) => Promise<SessionDeleteResult>;
     rename: (id: string, name: string) => Promise<{ status: string }>;
     changeModel: (id: string, selection: ModelSelection | null, modelLabel?: string | null) => Promise<{ status: string }>;
     /** Resolve current workspace (draft → session → sticky default → unbound). */
