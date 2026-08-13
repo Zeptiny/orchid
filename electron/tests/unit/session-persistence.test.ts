@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { randomUUID } from 'node:crypto';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
@@ -15,6 +15,7 @@ import {
   loadSession,
   loadSessionView,
   loadSessionHistoryPage,
+  loadSessionMessages,
   loadSubagentRecord,
   loadSubagentSummaries,
   listSavedSessions,
@@ -2033,6 +2034,37 @@ describe('bounded renderer history views', () => {
     const view = loadSessionView(SID, storageOpts)!;
     expect(view.chains.find((chain) => chain.id === 'chain-healthy')?.messages[0]?.id)
       .toBe('healthy-message');
+  });
+
+  it('keeps valid model-history messages beside a malformed stored message', () => {
+    saveSession(makeSession({
+      id: SID,
+      chains: [makeChain(SID, {
+        id: 'chain-partial-corruption',
+        messages: [
+          makeMessage({ id: 'history-valid-0', content: 'oldest' }),
+          makeMessage({ id: 'history-corrupt-1', content: 'corrupt me' }),
+          makeMessage({ id: 'history-valid-2', content: 'newest' }),
+        ],
+      })],
+    }), storageOpts);
+
+    const db = openSqliteDb(storageOpts.dbPath!);
+    db.prepare(`
+      UPDATE chains
+      SET messages_json = json_set(messages_json, '$[1]', json('null'))
+      WHERE session_id = ? AND id = ?
+    `).run(SID, 'chain-partial-corruption');
+    db.close();
+    const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+    expect(loadSessionMessages(SID, storageOpts).map((message) => message.id))
+      .toEqual(['history-valid-0', 'history-valid-2']);
+    expect(error).toHaveBeenCalledWith(
+      '[session] skipping malformed message while loading history',
+      expect.anything(),
+    );
+    error.mockRestore();
   });
 
   it('advances history pagination past malformed canonical rows', () => {

@@ -313,7 +313,23 @@ function tryDeserializeMessages(
 }
 
 function deserializeMessages(json: string): Message[] {
-  return tryDeserializeMessages(json) ?? [];
+  let raw: unknown;
+  try {
+    raw = JSON.parse(json);
+  } catch {
+    return [];
+  }
+  if (!Array.isArray(raw)) return [];
+
+  const messages: Message[] = [];
+  for (const storedMessage of raw) {
+    try {
+      messages.push(messageFromStorageDict(storedMessage));
+    } catch (error) {
+      console.error('[session] skipping malformed message while loading history', error);
+    }
+  }
+  return reconcileOrphanToolResults(messages);
 }
 
 function chainPreview(messages: readonly Message[]): string | null {
