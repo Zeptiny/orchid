@@ -39,7 +39,10 @@ function listStateFrom(todos: readonly Todo[]): TodoListState {
 
 // ── Hook ─────────────────────────────────────────────────────────────────────
 
-export function useTodos(activeSessionId: string | null): UseTodosReturn {
+export function useTodos(
+  activeSessionId: string | null,
+  sessionTodos: readonly Todo[] | null = null,
+): UseTodosReturn {
   const [state, setState] = useState<TodoListState>({ status: 'loading' });
   const sessionIdRef = useRef(activeSessionId);
   sessionIdRef.current = activeSessionId;
@@ -75,14 +78,20 @@ export function useTodos(activeSessionId: string | null): UseTodosReturn {
     }
   }, [activeSessionId]);
 
-  // Stale-while-revalidate: do not blank ready data before the peek resolves.
+  // Session navigation already returns the authoritative todo snapshot. Seed
+  // from it instead of reloading the entire session after every switch. The
+  // fallback keeps standalone callers working when no snapshot is available.
   useEffect(() => {
     if (!activeSessionId) {
       setState({ status: 'empty' });
       return;
     }
+    if (sessionTodos !== null) {
+      setState(listStateFrom(sessionTodos));
+      return;
+    }
     void refresh();
-  }, [activeSessionId, refresh]);
+  }, [activeSessionId, refresh, sessionTodos]);
 
   // Live updates when tools mutate the session-scoped todo store.
   useEffect(() => {

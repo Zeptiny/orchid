@@ -82,7 +82,10 @@ interface ChatViewProps {
 export function ChatView({ isVisible = true, bootstrapConfig = null, onNotify, activity }: ChatViewProps) {
   const session = useSession();
   const subagents = useSubagents(session.activeSession?.id ?? null);
-  const todos = useTodos(session.activeSession?.id ?? null);
+  const todos = useTodos(
+    session.activeSession?.id ?? null,
+    session.activeSession?.todoStore.tasks ?? null,
+  );
   const commands = useBackgroundCommands(session.activeSession?.id ?? null);
   const tabs = useSessionTabs();
   const providers = useProviders();
