@@ -21,17 +21,15 @@ describe('renderer bootstrap', () => {
     expect(chatView).toContain('bootstrapConfig?: Config | null');
   });
 
-  it('uses the workspace effect as the sole initial index-status trigger', () => {
+  it('delegates initial index-status work to deferred inspector hydration', () => {
     const chatView = source('components', 'ChatView.tsx');
-    const startupEffect = chatView.match(
-      /useEffect\(\(\) => \{\s*refreshMCP\(\);[\s\S]*?\}, \[refreshMCP[^\]]*\]\);/,
-    )?.[0];
-    const workspaceEffect = chatView.match(
-      /const workspaceCwd[\s\S]*?useEffect\(\(\) => \{\s*void refreshIndex\(\);[\s\S]*?\}, \[workspaceCwd, refreshIndex\]\);/,
+    const hydrationCall = chatView.match(
+      /const workspaceCwd[\s\S]*?useInspectorHydration\(\{[\s\S]*?\}\);/,
     )?.[0];
 
-    expect(startupEffect).toBeDefined();
-    expect(startupEffect).not.toContain('refreshIndex');
-    expect(workspaceEffect).toBeDefined();
+    expect(hydrationCall).toContain('enabled: sidebarOpen');
+    expect(hydrationCall).toContain('workspaceKey: workspaceCwd');
+    expect(hydrationCall).toContain('refreshMCP');
+    expect(hydrationCall).toContain('refreshIndex');
   });
 });
