@@ -14,6 +14,7 @@ import {
   saveSession,
   loadSession,
   loadSessionView,
+  loadSessionHistoryPage,
   loadSubagentRecord,
   loadSubagentSummaries,
   listSavedSessions,
@@ -1892,6 +1893,172 @@ describe('subagent_chains row storage (U6)', () => {
     }).not.toThrow();
 
     expect(readSubagentRows(dbPath, session.id)).toEqual(before);
+  });
+});
+
+describe('bounded renderer history views', () => {
+  const SID = 'cdcdcdcd-cdcd-4dcd-8dcd-cdcdcdcdcdcd';
+
+  it('loads a recent message-bounded tail while retaining full chain metadata', () => {
+    const usage = {
+      prompt_tokens: 40,
+      completion_tokens: 10,
+      total_tokens: 50,
+      cached_tokens: 5,
+    };
+    const messages = [
+      makeMessage({ id: 'm0', role: 'user', content: 'original question' }),
+      makeMessage({ id: 'm1', role: 'assistant', content: 'middle' }),
+      makeMessage({ id: 'm2', role: 'assistant', content: 'later' }),
+      makeMessage({ id: 'm3', role: 'assistant', content: 'final', usage }),
+    ];
+    saveSession(makeSession({
+      id: SID,
+      chains: [makeChain(SID, { id: 'chain-bounded', messages })],
+    }), storageOpts);
+
+    const view = loadSessionView(SID, {
+      ...storageOpts,
+      sessionViewMessageBudget: 2,
+      sessionViewByteBudget: 1024 * 1024,
+    })!;
+    const chain = view.chains[0];
+
+    expect(chain.messages.map((message) => message.id)).toEqual(['m2', 'm3']);
+    expect(chain.messagesLoaded).toBe(false);
+    expect(chain.messageStartIndex).toBe(2);
+    expect(chain.messageCount).toBe(4);
+    expect(chain.usageSummary).toMatchObject(usage);
+    expect(chain.preview).toBe('original question');
+
+    const manager = new SessionManager({
+      storage: {
+        ...storageOpts,
+        sessionViewMessageBudget: 2,
+        sessionViewByteBudget: 1024 * 1024,
+      },
+    });
+    expect(manager.switchTo(SID)?.chains[0].messages).toHaveLength(2);
+    expect(manager.getModelHistory(SID).map((message) => message.id))
+      .toEqual(messages.map((message) => message.id));
+  });
+
+  it('loads and pages the persisted recent window without reading the full message blob', () => {
+    const messages = [
+      makeMessage({ id: 'window-0', role: 'user', content: 'question' }),
+      makeMessage({ id: 'window-1', role: 'assistant', content: 'one' }),
+      makeMessage({ id: 'window-2', role: 'assistant', content: 'two' }),
+      makeMessage({ id: 'window-3', role: 'assistant', content: 'three' }),
+    ];
+    saveSession(makeSession({
+      id: SID,
+      chains: [makeChain(SID, { id: 'chain-window', messages })],
+    }), storageOpts);
+
+    const db = openSqliteDb(storageOpts.dbPath!);
+    db.prepare('UPDATE chains SET messages_json = ? WHERE session_id = ?')
+      .run('not-json', SID);
+    db.close();
+
+    const view = loadSessionView(SID, {
+      ...storageOpts,
+      sessionViewMessageBudget: 1,
+      sessionViewByteBudget: 1024 * 1024,
+    })!;
+    expect(view.chains[0].messages.map((message) => message.id)).toEqual(['window-3']);
+
+    const older = loadSessionHistoryPage(
+      SID,
+      view.chains[0].id,
+      view.chains[0].messageStartIndex,
+      storageOpts,
+    )!;
+    expect(older.messages.map((message) => message.id))
+      .toEqual(['window-0', 'window-1', 'window-2']);
+    expect(older.complete).toBe(true);
+  });
+
+  it('pages older messages without breaking tool-call/result reconstruction', () => {
+    const toolCall = makeMessage({
+      id: 'call-message',
+      role: 'assistant',
+      type: 'tool_call',
+      tool_call_id: 'tool-1',
+      tool_calls: [{
+        id: 'tool-1',
+        type: 'function',
+        function: { name: 'read', arguments: '{}' },
+      }],
+    });
+    const toolResult = makeMessage({
+      id: 'result-message',
+      role: 'tool',
+      type: 'tool_result',
+      tool_call_id: 'tool-1',
+      content: 'result',
+    });
+    const messages = [
+      makeMessage({ id: 'user-message', role: 'user', content: 'inspect' }),
+      toolCall,
+      toolResult,
+      makeMessage({ id: 'answer-message', role: 'assistant', content: 'done' }),
+    ];
+    saveSession(makeSession({
+      id: SID,
+      chains: [makeChain(SID, { id: 'chain-tools', messages })],
+    }), storageOpts);
+
+    const view = loadSessionView(SID, {
+      ...storageOpts,
+      sessionViewMessageBudget: 2,
+      sessionViewByteBudget: 1024 * 1024,
+    })!;
+    const tail = view.chains[0];
+    expect(tail.messages.map((message) => message.id))
+      .toEqual(['result-message', 'answer-message']);
+
+    const older = loadSessionHistoryPage(
+      SID,
+      tail.id,
+      tail.messageStartIndex,
+      storageOpts,
+    )!;
+    const combined = [...older.messages, ...tail.messages];
+    expect(combined.map((message) => message.id)).toEqual(messages.map((message) => message.id));
+    expect(combined.find((message) => message.id === 'call-message')?.tool_calls?.[0]?.id)
+      .toBe(combined.find((message) => message.id === 'result-message')?.tool_call_id);
+    expect(older.complete).toBe(true);
+  });
+
+  it('keeps an oversized newest message off first paint until explicitly requested', () => {
+    const messages = [
+      makeMessage({ id: 'large-1', content: 'a'.repeat(4_000) }),
+      makeMessage({ id: 'large-2', content: 'b'.repeat(4_000) }),
+      makeMessage({ id: 'large-3', content: 'c'.repeat(4_000) }),
+    ];
+    saveSession(makeSession({
+      id: SID,
+      chains: [makeChain(SID, { id: 'chain-oversized', messages })],
+    }), storageOpts);
+
+    const view = loadSessionView(SID, {
+      ...storageOpts,
+      sessionViewMessageBudget: 50,
+      sessionViewByteBudget: 512,
+    })!;
+
+    expect(view.chains[0].messages).toEqual([]);
+    expect(view.chains[0].messageStartIndex).toBe(3);
+
+    const page = loadSessionHistoryPage(
+      SID,
+      view.chains[0].id,
+      view.chains[0].messageStartIndex,
+      storageOpts,
+    )!;
+    expect(page.messages.map((message) => message.id))
+      .toEqual(['large-1', 'large-2', 'large-3']);
+    expect(page.startIndex).toBe(0);
   });
 });
 

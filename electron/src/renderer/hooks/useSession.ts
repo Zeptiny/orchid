@@ -14,7 +14,11 @@ import { useCallback, useMemo, useSyncExternalStore } from 'react';
 import type { Session } from '../../shared/types/session';
 import type { ModelSelection } from '../../shared/types/provider';
 import type { SessionSummary } from '../../shared/types/ipc-boundary';
-import type { WorkspaceInfo, SessionOpenResult } from '../../shared/types/ipc';
+import type {
+  WorkspaceInfo,
+  SessionOpenResult,
+  SessionHistoryPageResult,
+} from '../../shared/types/ipc';
 import { ChainStatus } from '../../shared/types/chain';
 
 // ── Types ────────────────────────────────────────────────────────────────────
@@ -36,10 +40,12 @@ export interface UseSessionReturn {
   /** Load a session by ID. Returns the loaded session (or null on failure). */
   load: (id: string) => Promise<Session | null>;
   /**
-   * Activate a session and return its full view payload (session, flattened
-   * messages, live snapshot, workspace) in one round-trip. Used by switching.
+   * Activate a session and return its bounded renderer view (session, flattened
+   * loaded messages, live snapshot, workspace) in one round-trip.
    */
   open: (id: string) => Promise<SessionOpenResult | null>;
+  /** Prepend the next older bounded message page for one active-session chain. */
+  loadHistoryPage: (chainId: string) => Promise<SessionHistoryPageResult | null>;
   /**
    * Eagerly create a session file (legacy / tests). Prefer `enterDraft` for
    * the New Chat button — session is created on first message instead.
@@ -96,6 +102,7 @@ let loadGeneration = 0;
 let bootstrapped = false;
 const listeners = new Set<Listener>();
 const unsubscribers: Array<() => void> = [];
+const historyPageFlights = new Map<string, Promise<SessionHistoryPageResult | null>>();
 
 let cachedSnapshot: SharedSnapshot = {
   activeSession,
@@ -324,6 +331,54 @@ async function openShared(id: string): Promise<SessionOpenResult | null> {
   }
 }
 
+async function loadHistoryPageShared(
+  chainId: string,
+): Promise<SessionHistoryPageResult | null> {
+  const session = activeSession;
+  const chain = session?.chains.find((candidate) => candidate.id === chainId);
+  if (!session || !chain || chain.messagesLoaded !== false) return null;
+  if (!window.orchid?.session?.loadHistoryPage) return null;
+
+  const beforeIndex = chain.messageStartIndex ?? chain.messageCount ?? 0;
+  if (beforeIndex <= 0) return null;
+  const flightKey = `${session.id}:${chainId}:${beforeIndex}`;
+  const existing = historyPageFlights.get(flightKey);
+  if (existing) return existing;
+
+  const flight = window.orchid.session.loadHistoryPage({
+    sessionId: session.id,
+    chainId,
+    beforeIndex,
+  }).then((page) => {
+    if (!page) return null;
+    setActiveSession((current) => {
+      if (current?.id !== page.sessionId) return current;
+      const target = current.chains.find((candidate) => candidate.id === page.chainId);
+      if (!target || target.messageStartIndex !== beforeIndex) return current;
+      return {
+        ...current,
+        chains: current.chains.map((candidate) => candidate.id === page.chainId
+          ? {
+              ...candidate,
+              messages: [...page.messages, ...candidate.messages],
+              messagesLoaded: page.complete,
+              messageStartIndex: page.startIndex,
+              messageCount: page.totalMessages,
+            }
+          : candidate),
+      };
+    });
+    return page;
+  }).catch((error) => {
+    console.error('Failed to load older session history:', error);
+    return null;
+  }).finally(() => {
+    historyPageFlights.delete(flightKey);
+  });
+  historyPageFlights.set(flightKey, flight);
+  return flight;
+}
+
 async function createShared(): Promise<Session> {
   if (!window.orchid?.session?.create) {
     const session = makeLocalSession();
@@ -522,6 +577,7 @@ export const __sessionCacheTest = {
     workspace = null;
     draftGeneration = 0;
     loadGeneration = 0;
+    historyPageFlights.clear();
     bootstrapped = false;
     listeners.clear();
     cachedSnapshot = {
@@ -537,10 +593,11 @@ export const __sessionCacheTest = {
   getWorkspace: () => workspace,
   getDraftGeneration: () => draftGeneration,
   getLoadGeneration: () => loadGeneration,
-    refresh: refreshShared,
-    load: loadShared,
-    open: openShared,
-    enterDraft: enterDraftShared,
+  refresh: refreshShared,
+  load: loadShared,
+  open: openShared,
+  loadHistoryPage: loadHistoryPageShared,
+  enterDraft: enterDraftShared,
   create: createShared,
   deleteSession: deleteSessionShared,
   rename: renameShared,
@@ -561,6 +618,7 @@ export function useSession(): UseSessionReturn {
 
   const load = useCallback((id: string) => loadShared(id), []);
   const open = useCallback((id: string) => openShared(id), []);
+  const loadHistoryPage = useCallback((chainId: string) => loadHistoryPageShared(chainId), []);
   const create = useCallback(() => createShared(), []);
   const enterDraft = useCallback(() => enterDraftShared(), []);
   const deleteSession = useCallback((id: string) => deleteSessionShared(id), []);
@@ -587,6 +645,7 @@ export function useSession(): UseSessionReturn {
       workspace: snapshot.workspace,
       load,
       open,
+      loadHistoryPage,
       create,
       enterDraft,
       deleteSession,
@@ -603,6 +662,7 @@ export function useSession(): UseSessionReturn {
       snapshot,
       load,
       open,
+      loadHistoryPage,
       create,
       enterDraft,
       deleteSession,

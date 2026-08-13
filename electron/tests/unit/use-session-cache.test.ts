@@ -8,6 +8,7 @@ import type { Session } from '../../src/shared/types/session';
 
 const listMock = vi.fn();
 const loadMock = vi.fn();
+const historyPageMock = vi.fn();
 const createMock = vi.fn();
 const clearActiveMock = vi.fn();
 const deleteMock = vi.fn();
@@ -77,6 +78,7 @@ function installOrchidApi() {
       session: {
         list: listMock,
         load: loadMock,
+        loadHistoryPage: historyPageMock,
         create: createMock,
         clearActive: clearActiveMock,
         delete: deleteMock,
@@ -126,6 +128,7 @@ describe('useSession shared cache', () => {
     vi.resetModules();
     listMock.mockReset();
     loadMock.mockReset();
+    historyPageMock.mockReset();
     createMock.mockReset();
     clearActiveMock.mockReset();
     deleteMock.mockReset();
@@ -197,6 +200,98 @@ describe('useSession shared cache', () => {
     expect(__sessionCacheTest.getActiveSession()?.id).toBe('b');
     expect(__sessionCacheTest.getActiveSession()?.name).toBe('Beta');
     expect(loadMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('prepends an older bounded history page into the active chain', async () => {
+    const recent = {
+      id: 'recent',
+      role: 'assistant' as const,
+      content: 'recent',
+      type: 'text' as const,
+      tool_calls: null,
+      tool_call_id: null,
+      name: null,
+      thinking: null,
+      timestamp: new Date().toISOString(),
+      usage: null,
+      hidden: false,
+      tool_result: null,
+    };
+    const older = { ...recent, id: 'older', content: 'older' };
+    const base = makeSession({ id: 'paged-session' });
+    const session = makeSession({
+      id: 'paged-session',
+      chains: [{
+        ...base.chains[0],
+        id: 'paged-chain',
+        messages: [recent],
+        messagesLoaded: false,
+        messageStartIndex: 1,
+        messageCount: 2,
+      }],
+    });
+    loadMock.mockResolvedValue(session);
+    historyPageMock.mockResolvedValue({
+      sessionId: session.id,
+      chainId: 'paged-chain',
+      messages: [older],
+      startIndex: 0,
+      totalMessages: 2,
+      complete: true,
+    });
+
+    const { __sessionCacheTest } = await import('../../src/renderer/hooks/useSession');
+    __sessionCacheTest.reset();
+    await __sessionCacheTest.load(session.id);
+    await __sessionCacheTest.loadHistoryPage('paged-chain');
+
+    const chain = __sessionCacheTest.getActiveSession()?.chains[0];
+    expect(chain?.messages.map((message) => message.id)).toEqual(['older', 'recent']);
+    expect(chain?.messagesLoaded).toBe(true);
+    expect(chain?.messageStartIndex).toBe(0);
+  });
+
+  it('drops a history page that resolves after switching sessions', async () => {
+    const makePaged = (id: string) => {
+      const base = makeSession({ id });
+      return makeSession({
+        id,
+        chains: [{
+          ...base.chains[0],
+          id: `${id}-chain`,
+          messages: [],
+          messagesLoaded: false,
+          messageStartIndex: 1,
+          messageCount: 1,
+        }],
+      });
+    };
+    const sessionA = makePaged('session-a');
+    const sessionB = makeSession({ id: 'session-b' });
+    loadMock.mockImplementation(async ({ id }: { id: string }) => (
+      id === sessionA.id ? sessionA : sessionB
+    ));
+    let resolvePage!: (value: unknown) => void;
+    historyPageMock.mockReturnValue(new Promise((resolve) => {
+      resolvePage = resolve;
+    }));
+
+    const { __sessionCacheTest } = await import('../../src/renderer/hooks/useSession');
+    __sessionCacheTest.reset();
+    await __sessionCacheTest.load(sessionA.id);
+    const pageFlight = __sessionCacheTest.loadHistoryPage(`${sessionA.id}-chain`);
+    await __sessionCacheTest.load(sessionB.id);
+    resolvePage({
+      sessionId: sessionA.id,
+      chainId: `${sessionA.id}-chain`,
+      messages: [],
+      startIndex: 0,
+      totalMessages: 1,
+      complete: true,
+    });
+    await pageFlight;
+
+    expect(__sessionCacheTest.getActiveSession()?.id).toBe(sessionB.id);
   });
 
   it('merges a narrow session update without replacing unrelated session state', async () => {

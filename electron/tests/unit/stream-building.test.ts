@@ -307,6 +307,37 @@ describe('buildHistoryStreamItems', () => {
     expect(footers[0]).toMatchObject({ kind: 'footer', model: 'gpt-4o' });
   });
 
+  it('renders a history gap while preserving full-chain footer usage and errors', () => {
+    const usage: Usage = {
+      prompt_tokens: 100,
+      completion_tokens: 25,
+      total_tokens: 125,
+      cached_tokens: 10,
+    };
+    const chains = [chain({
+      id: 'paged-chain',
+      status: ChainStatus.FAILED,
+      messages: [assistantText('recent', 'recent tail')],
+      messagesLoaded: false,
+      messageStartIndex: 8,
+      messageCount: 9,
+      usageSummary: usage,
+      preview: 'original question',
+      errorDetail: 'provider failed',
+    })];
+
+    const result = buildHistoryStreamItems({ ...baseOpts, sessionChains: chains });
+
+    expect(result.items[0]).toMatchObject({ kind: 'history-gap', chainIndex: 0 });
+    expect(result.items.find((item) => item.kind === 'message')).toBeDefined();
+    expect(result.items.find((item) => item.kind === 'footer')).toMatchObject({
+      kind: 'footer',
+      usage,
+      failed: true,
+      errorDetail: 'provider failed',
+    });
+  });
+
   it('marks footer as interrupted for INTERRUPTED chains', () => {
     const chains = [
       chain({ id: 'c1', status: ChainStatus.INTERRUPTED, messages: [userMsg('u1', 'hi')] }),

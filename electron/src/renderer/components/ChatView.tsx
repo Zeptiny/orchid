@@ -373,8 +373,8 @@ export function ChatView({ isVisible = true, bootstrapConfig = null, onNotify, a
       // the full target payload is ready (no intermediate empty/zero state).
       chat.beginSessionSwitch(id);
 
-      // Single round-trip: activate the session and fetch its full view payload
-      // (session + flattened messages + live snapshot + workspace) at once.
+      // Single round-trip: activate the session and fetch its bounded renderer
+      // view (session + loaded messages + live snapshot + workspace) at once.
       // Replaces the prior peek + chat:snapshot + activate sequence.
       let result: SessionOpenResult | null = null;
       try {
@@ -405,6 +405,12 @@ export function ChatView({ isVisible = true, bootstrapConfig = null, onNotify, a
     },
     [session, chat.beginSessionSwitch, chat.hydrateSnapshot, todos.applyFromSession, draftTabVisible, messageQueue.clearQueue],
   );
+
+  const handleLoadHistoryPage = useCallback(async (chainIndex: number) => {
+    const chain = session.activeSession?.chains[chainIndex];
+    if (!chain) return;
+    await session.loadHistoryPage(chain.id);
+  }, [session]);
 
   useEffect(() => {
     return onOrchidEvent('orchid:select-session', (detail) => {
@@ -1199,6 +1205,7 @@ export function ChatView({ isVisible = true, bootstrapConfig = null, onNotify, a
             streamStartTime={chat.streamStartTime}
             interrupted={chat.interrupted}
             alwaysExpandToolGroups={alwaysExpandToolGroups}
+            onLoadHistoryPage={handleLoadHistoryPage}
           />
         </DeferredSurface>
         <MessageQueue

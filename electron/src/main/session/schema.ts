@@ -2,7 +2,7 @@
 import type { SqliteDatabase } from '../utils/sqlite';
 
 /** Current session schema version. */
-export const SESSION_SCHEMA_VERSION = 4;
+export const SESSION_SCHEMA_VERSION = 5;
 
 /** Idempotent DDL for the session database. */
 export const SESSION_SCHEMA_SQL = `
@@ -41,7 +41,9 @@ CREATE TABLE IF NOT EXISTS chains (
   start_time TEXT,
   end_time TEXT,
   error_detail TEXT,
-  error_title TEXT
+  error_title TEXT,
+  summary_json TEXT,
+  recent_messages_json TEXT
 );
 
 CREATE TABLE IF NOT EXISTS subagent_chains (
@@ -79,7 +81,7 @@ export function applySessionSchemaMigrations(db: SqliteDatabase): void {
   if (tables.has('chains')) {
     const chainColumns = db.prepare('PRAGMA table_info(chains)').all() as Array<{ name: string }>;
     const existing = new Set(chainColumns.map((c) => c.name));
-    for (const col of ['error_detail', 'error_title']) {
+    for (const col of ['error_detail', 'error_title', 'summary_json', 'recent_messages_json']) {
       if (!existing.has(col)) {
         db.prepare(`ALTER TABLE chains ADD COLUMN ${col} TEXT`).run();
       }

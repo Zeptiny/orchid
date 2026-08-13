@@ -99,6 +99,8 @@ interface ChatStreamProps {
    * tool groups). Default false.
    */
   alwaysExpandToolGroups?: boolean;
+  /** Hydrate the next older bounded page for a chain. */
+  onLoadHistoryPage?: (chainIndex: number) => Promise<unknown> | void;
 }
 
 /**
@@ -128,6 +130,7 @@ export function ChatStream({
   streamStartTime = null,
   interrupted,
   alwaysExpandToolGroups = false,
+  onLoadHistoryPage,
 }: ChatStreamProps) {
   const {
     containerRef,
@@ -143,6 +146,9 @@ export function ChatStream({
   const [expandedChainIndexes, setExpandedChainIndexes] = useState<Set<number>>(
     () => new Set(),
   );
+  const [loadingHistoryChainIds, setLoadingHistoryChainIds] = useState<Set<string>>(
+    () => new Set(),
+  );
   // Active footer only — never a history-memo dependency.
   const liveElapsedSeconds = useElapsedSeconds(
     streamStartTime,
@@ -156,7 +162,26 @@ export function ChatStream({
       next.add(chainIndex);
       return next;
     });
-  }, []);
+    const chain = sessionChains[chainIndex];
+    if (
+      chain?.messagesLoaded === false
+      && (chain.messageStartIndex ?? 0) > 0
+      && onLoadHistoryPage
+      && !loadingHistoryChainIds.has(chain.id)
+    ) {
+      setLoadingHistoryChainIds((prev) => new Set(prev).add(chain.id));
+      void Promise.resolve()
+        .then(() => onLoadHistoryPage(chainIndex))
+        .catch(() => undefined)
+        .finally(() => {
+          setLoadingHistoryChainIds((prev) => {
+            const next = new Set(prev);
+            next.delete(chain.id);
+            return next;
+          });
+        });
+    }
+  }, [sessionChains, onLoadHistoryPage, loadingHistoryChainIds]);
 
   // When a new stream starts, pin to bottom only if the user was already near
   // the bottom. Do not force-scroll readers who scrolled away mid-history.
@@ -174,6 +199,7 @@ export function ChatStream({
   // Reset scroll-away + expanded stubs only when the session is replaced.
   useEffect(() => {
     setExpandedChainIndexes(new Set());
+    setLoadingHistoryChainIds(new Set());
   }, [sessionId]);
 
   // Committed history is independent of per-token stream text, live usage,
@@ -239,15 +265,29 @@ export function ChatStream({
   // commits before CHAT_DONE retains its DOM node at the live→history boundary.
   const historyNodes = useMemo(
     () => historyItems.map((item) =>
-      renderStreamItem(item, alwaysExpandToolGroups, expandChain, subagents, sessionId),
+      renderStreamItem(
+        item,
+        alwaysExpandToolGroups,
+        expandChain,
+        loadingHistoryChainIds,
+        subagents,
+        sessionId,
+      ),
     ),
-    [historyItems, alwaysExpandToolGroups, expandChain, subagents, sessionId],
+    [historyItems, alwaysExpandToolGroups, expandChain, loadingHistoryChainIds, subagents, sessionId],
   );
   const liveTailNodes = useMemo(
     () => liveGroupedItems.map((item) =>
-      renderStreamItem(item, alwaysExpandToolGroups, expandChain, subagents, sessionId),
+      renderStreamItem(
+        item,
+        alwaysExpandToolGroups,
+        expandChain,
+        loadingHistoryChainIds,
+        subagents,
+        sessionId,
+      ),
     ),
-    [liveGroupedItems, alwaysExpandToolGroups, expandChain, subagents, sessionId],
+    [liveGroupedItems, alwaysExpandToolGroups, expandChain, loadingHistoryChainIds, subagents, sessionId],
   );
   const activeFooterNode = useMemo(() => {
     if (!history.activeFooter) return null;
@@ -265,6 +305,7 @@ export function ChatStream({
       },
       alwaysExpandToolGroups,
       expandChain,
+      loadingHistoryChainIds,
       subagents,
       sessionId,
     );
@@ -276,6 +317,7 @@ export function ChatStream({
     liveElapsedSeconds,
     alwaysExpandToolGroups,
     expandChain,
+    loadingHistoryChainIds,
     subagents,
     sessionId,
   ]);
@@ -286,8 +328,12 @@ export function ChatStream({
     [historyNodes, liveTailNodes, activeFooterNode],
   );
 
+  const hasPagedSessionHistory = sessionChains.some(
+    (chain) => (chain.messageCount ?? chain.messages.length) > 0,
+  );
   if (
     messages.length === 0 &&
+    !hasPagedSessionHistory &&
     !streamingContent &&
     toolBlocks.length === 0 &&
     streamSegments.length === 0 &&
@@ -373,6 +419,7 @@ function renderStreamItem(
   item: StreamItem,
   alwaysExpandToolGroups: boolean,
   onExpandChain: (chainIndex: number) => void,
+  loadingHistoryChainIds: ReadonlySet<string>,
   subagents: readonly SubagentTitleRecord[],
   sessionId: string | null,
 ): ReactNode {
@@ -397,6 +444,19 @@ function renderStreamItem(
         chain={item.chain}
         chainIndex={item.chainIndex}
         onExpand={onExpandChain}
+        loading={loadingHistoryChainIds.has(item.chain.id)}
+      />
+    );
+  }
+  if (item.kind === 'history-gap') {
+    return (
+      <CollapsedChainStub
+        key={item.key}
+        chain={item.chain}
+        chainIndex={item.chainIndex}
+        onExpand={onExpandChain}
+        mode="history"
+        loading={loadingHistoryChainIds.has(item.chain.id)}
       />
     );
   }

@@ -65,6 +65,7 @@ import {
   sessionDeleteSchema,
   sessionLoadSchema,
   sessionOpenSchema,
+  sessionHistoryPageSchema,
   sessionRenameSchema,
   sessionSetWorkspaceSchema,
   sessionSetReasoningEffortSchema,
@@ -82,6 +83,12 @@ export {
 export { flattenSessionMessages, sessionForRenderer };
 
 export { takeDraftReasoningOverride } from '../session/draft-reasoning';
+
+function seedCompleteChatHistory(session: Parameters<typeof flattenSessionMessages>[0]): void {
+  if (session.chains.every((chain) => chain.messagesLoaded !== false)) {
+    seedChatHistory(session.id, flattenSessionMessages(session));
+  }
+}
 
 /**
  * Model selection to reason about in draft mode (no active session):
@@ -301,7 +308,7 @@ export function registerSessionIPC(): void {
     // Seed history with ALL chains (matches renderer flatten) so the next
     // chat:send continues the full conversation, not only the active chain.
     if (session) {
-      seedChatHistory(session.id, flattenSessionMessages(session));
+      seedCompleteChatHistory(session);
     } else {
       clearChatHistory(id);
     }
@@ -315,8 +322,8 @@ export function registerSessionIPC(): void {
     return session ? sessionForRenderer(session) : null;
   });
 
-  // session:open — activate a session and return its full view payload in one
-  // round-trip (session + flattened messages + live snapshot + workspace).
+  // session:open — activate a session and return its bounded renderer view in
+  // one round-trip (session + loaded messages + live snapshot + workspace).
   // Replaces the prior peek + chat:snapshot + activate sequence so a switch
   // reads/parses the session file once and serializes it across IPC once.
   ipcMain.handle(IPC_CHANNELS.SESSION_OPEN, async (event, payload: unknown) => {
@@ -352,7 +359,7 @@ export function registerSessionIPC(): void {
     // chat:send continues the full conversation) and the renderer payload.
     const messages = session ? flattenSessionMessages(session) : [];
     if (session) {
-      seedChatHistory(session.id, messages);
+      seedCompleteChatHistory(session);
     } else {
       clearChatHistory(id);
     }
@@ -372,6 +379,20 @@ export function registerSessionIPC(): void {
       workspace,
       lastChainError: session && !live ? lastChainError(session.chains) : null,
     };
+  });
+
+  // session:history_page — bounded older-message hydration for one chain.
+  // This never changes active selection or the full model-history cache.
+  ipcMain.handle(IPC_CHANNELS.SESSION_HISTORY_PAGE, async (_event, payload: unknown) => {
+    const parsed = sessionHistoryPageSchema.safeParse(payload);
+    if (!parsed.success) {
+      throw new Error(`Invalid session:history_page payload: ${parsed.error.message}`);
+    }
+    return getSessionManager().getHistoryPage(
+      parsed.data.sessionId,
+      parsed.data.chainId,
+      parsed.data.beforeIndex,
+    );
   });
 
   // session:create — eagerly create + activate a session (writes to disk).
@@ -770,6 +791,7 @@ export function unregisterSessionIPC(): void {
   ipcMain.removeHandler(IPC_CHANNELS.SESSION_LIST);
   ipcMain.removeHandler(IPC_CHANNELS.SESSION_LOAD);
   ipcMain.removeHandler(IPC_CHANNELS.SESSION_OPEN);
+  ipcMain.removeHandler(IPC_CHANNELS.SESSION_HISTORY_PAGE);
   ipcMain.removeHandler(IPC_CHANNELS.SESSION_CREATE);
   ipcMain.removeHandler(IPC_CHANNELS.SESSION_CLEAR_ACTIVE);
   ipcMain.removeHandler(IPC_CHANNELS.SESSION_DELETE);

@@ -12,7 +12,13 @@ import type { Session } from '../../shared/types/session';
 import type { SessionSummary } from '../../shared/types/ipc-boundary';
 import type { Chain } from '../../shared/types/chain';
 import { ChainStatus, parseChainStatus, reconcileOrphanToolResults } from '../../shared/types/chain';
-import type { Message } from '../../shared/types/message';
+import {
+  contextSnapshotSchema,
+  MessageRole,
+  MessageType,
+  type Message,
+  type Usage,
+} from '../../shared/types/message';
 import type { ModelSelection } from '../../shared/types/provider';
 import {
   SubagentStatus,
@@ -41,6 +47,7 @@ import {
 } from '../../shared/types/provider';
 import { type SqliteDatabase, isSqliteCorruptionError } from '../utils/sqlite';
 import { SESSION_DB_PATH, SessionDb } from './db';
+import { sumMessageUsages } from '../../shared/usage';
 
 export type { SessionSummary } from '../../shared/types/ipc-boundary';
 
@@ -63,7 +70,16 @@ export interface StorageOptions {
   toolOutputCacheDir?: string;
   /** Override path to web-fetch cache directory. */
   webFetchCacheDir?: string;
+  /** Initial renderer history budget; primarily overridden by focused tests. */
+  sessionViewMessageBudget?: number;
+  /** Initial renderer serialized-message byte budget. */
+  sessionViewByteBudget?: number;
 }
+
+export const DEFAULT_SESSION_VIEW_MESSAGE_BUDGET = 240;
+export const DEFAULT_SESSION_VIEW_BYTE_BUDGET = 2 * 1024 * 1024;
+export const DEFAULT_HISTORY_PAGE_MESSAGE_BUDGET = 100;
+export const DEFAULT_HISTORY_PAGE_BYTE_BUDGET = 512 * 1024;
 
 /** Session columns that can be updated without touching persisted chains. */
 export interface SessionFieldsUpdate {
@@ -84,6 +100,10 @@ function resolveOptions(opts?: StorageOptions) {
     dbPath: opts?.dbPath ?? SESSION_DB_PATH,
     toolOutputCacheDir: opts?.toolOutputCacheDir ?? TOOL_OUTPUT_CACHE_DIR,
     webFetchCacheDir: opts?.webFetchCacheDir ?? WEB_FETCH_CACHE_DIR,
+    sessionViewMessageBudget:
+      opts?.sessionViewMessageBudget ?? DEFAULT_SESSION_VIEW_MESSAGE_BUDGET,
+    sessionViewByteBudget:
+      opts?.sessionViewByteBudget ?? DEFAULT_SESSION_VIEW_BYTE_BUDGET,
   };
 }
 
@@ -223,11 +243,37 @@ interface ChainRow {
   agent_type: string;
   agent_tier: string;
   subagent_record_json: string | null;
-  messages_json: string;
+  messages_json: string | null;
+  message_count?: number;
+  message_bytes?: number;
+  summary_json: string | null;
+  recent_messages_json: string | null;
   start_time: string | null;
   end_time: string | null;
   error_detail: string | null;
   error_title: string | null;
+}
+
+interface ChainViewSummary {
+  readonly messageCount: number;
+  readonly messageBytes: number;
+  readonly usage: Usage | null;
+  readonly preview: string | null;
+  /** Lets first paint skip an oversized newest message without parsing the chain blob. */
+  readonly newestMessageBytes: number | null;
+  /** Absolute index represented by the first persisted recent message. */
+  readonly recentStartIndex: number;
+  /** Serialized sizes for the bounded recent-message window only. */
+  readonly recentMessageSizes: readonly number[] | null;
+}
+
+export interface SessionHistoryPage {
+  readonly sessionId: string;
+  readonly chainId: string;
+  readonly messages: Message[];
+  readonly startIndex: number;
+  readonly totalMessages: number;
+  readonly complete: boolean;
 }
 
 interface SubagentChainRow {
@@ -251,10 +297,6 @@ function deserializeSelection(json: string | null): ModelSelection | null {
   }
 }
 
-function serializeMessages(messages: readonly Message[]): string {
-  return JSON.stringify(messages.map(messageToStorageDict));
-}
-
 function deserializeMessages(json: string): Message[] {
   let raw: unknown;
   try {
@@ -264,6 +306,129 @@ function deserializeMessages(json: string): Message[] {
   }
   if (!Array.isArray(raw)) return [];
   return reconcileOrphanToolResults(raw.map((m) => messageFromStorageDict(m)));
+}
+
+function chainPreview(messages: readonly Message[]): string | null {
+  const user = messages.find(
+    (message) => message.role === MessageRole.USER && message.type === MessageType.TEXT,
+  );
+  if (!user?.content) return null;
+  const text = user.content.trim();
+  return text.length > 120 ? `${text.slice(0, 120)}…` : text;
+}
+
+interface SerializedChainMessages {
+  readonly messagesJson: string;
+  readonly summaryJson: string;
+  readonly recentMessagesJson: string;
+}
+
+function serializeChainMessages(messages: readonly Message[]): SerializedChainMessages {
+  const storedMessages = messages.map(messageToStorageDict);
+  const messagesJson = JSON.stringify(storedMessages);
+  const recentMessages: typeof storedMessages = [];
+  const recentMessageSizes: number[] = [];
+  let recentBytes = 0;
+  let recentStartIndex = storedMessages.length;
+
+  for (let index = storedMessages.length - 1; index >= 0; index -= 1) {
+    if (recentMessages.length >= DEFAULT_SESSION_VIEW_MESSAGE_BUDGET) break;
+    const storedMessage = storedMessages[index]!;
+    const messageBytes = Buffer.byteLength(JSON.stringify(storedMessage), 'utf8');
+    if (recentBytes + messageBytes > DEFAULT_SESSION_VIEW_BYTE_BUDGET) break;
+    recentMessages.unshift(storedMessage);
+    recentMessageSizes.unshift(messageBytes);
+    recentBytes += messageBytes;
+    recentStartIndex = index;
+  }
+
+  const newestStoredMessage = storedMessages.at(-1);
+  const summary: ChainViewSummary = {
+    messageCount: messages.length,
+    messageBytes: Buffer.byteLength(messagesJson, 'utf8'),
+    usage: sumMessageUsages(messages),
+    preview: chainPreview(messages),
+    newestMessageBytes: recentMessageSizes.at(-1)
+      ?? (newestStoredMessage
+        ? Buffer.byteLength(JSON.stringify(newestStoredMessage), 'utf8')
+        : null),
+    recentStartIndex,
+    recentMessageSizes,
+  };
+  return {
+    messagesJson,
+    summaryJson: JSON.stringify(summary),
+    recentMessagesJson: JSON.stringify(recentMessages),
+  };
+}
+
+function parseUsage(value: unknown): Usage | null {
+  if (value == null) return null;
+  if (typeof value !== 'object' || Array.isArray(value)) return null;
+  const raw = value as Record<string, unknown>;
+  for (const key of ['prompt_tokens', 'completion_tokens', 'total_tokens', 'cached_tokens']) {
+    if (typeof raw[key] !== 'number' || !Number.isFinite(raw[key]) || raw[key] < 0) return null;
+  }
+  const context = contextSnapshotSchema.safeParse(raw.context);
+  return {
+    prompt_tokens: raw.prompt_tokens as number,
+    completion_tokens: raw.completion_tokens as number,
+    total_tokens: raw.total_tokens as number,
+    cached_tokens: raw.cached_tokens as number,
+    ...(typeof raw.reasoning_tokens === 'number'
+      && Number.isFinite(raw.reasoning_tokens)
+      && raw.reasoning_tokens >= 0
+      ? { reasoning_tokens: raw.reasoning_tokens }
+      : {}),
+    ...(context.success ? { context: context.data } : {}),
+  };
+}
+
+function parseChainViewSummary(json: string | null): ChainViewSummary | null {
+  if (!json) return null;
+  try {
+    const raw = JSON.parse(json) as Record<string, unknown>;
+    if (
+      typeof raw.messageCount !== 'number'
+      || !Number.isInteger(raw.messageCount)
+      || raw.messageCount < 0
+      || typeof raw.messageBytes !== 'number'
+      || !Number.isInteger(raw.messageBytes)
+      || raw.messageBytes < 0
+      || (raw.preview !== null && typeof raw.preview !== 'string')
+    ) {
+      return null;
+    }
+    const newestMessageBytes = typeof raw.newestMessageBytes === 'number'
+      && Number.isInteger(raw.newestMessageBytes)
+      && raw.newestMessageBytes >= 0
+      ? raw.newestMessageBytes
+      : null;
+    const recentStartIndex = typeof raw.recentStartIndex === 'number'
+      && Number.isInteger(raw.recentStartIndex)
+      && raw.recentStartIndex >= 0
+      && raw.recentStartIndex <= raw.messageCount
+      ? raw.recentStartIndex
+      : raw.messageCount;
+    const recentMessageSizes = Array.isArray(raw.recentMessageSizes)
+      && raw.recentMessageSizes.length === raw.messageCount - recentStartIndex
+      && raw.recentMessageSizes.every((size) => (
+        typeof size === 'number' && Number.isInteger(size) && size >= 0
+      ))
+      ? raw.recentMessageSizes as number[]
+      : null;
+    return {
+      messageCount: raw.messageCount,
+      messageBytes: raw.messageBytes,
+      usage: parseUsage(raw.usage),
+      preview: raw.preview as string | null,
+      newestMessageBytes,
+      recentStartIndex,
+      recentMessageSizes,
+    };
+  } catch {
+    return null;
+  }
 }
 
 function serializeTodoStore(data: TodoStoreData): string {
@@ -279,7 +444,14 @@ function deserializeTodoStore(json: string): TodoStoreData {
   }
 }
 
-function chainFromRow(row: ChainRow): Chain {
+function chainFromRow(
+  row: ChainRow,
+  view?: {
+    messages: Message[];
+    startIndex: number;
+    summary: ChainViewSummary;
+  },
+): Chain {
   let subagentRecord: SubagentRecord | null = null;
   if (row.subagent_record_json) {
     try {
@@ -292,7 +464,7 @@ function chainFromRow(row: ChainRow): Chain {
   return {
     id: row.id,
     sessionId: row.session_id,
-    messages: deserializeMessages(row.messages_json),
+    messages: view?.messages ?? deserializeMessages(row.messages_json ?? '[]'),
     status: parseChainStatus(row.status),
     selection: deserializeSelection(row.selection_json),
     modelLabel: row.model_label,
@@ -304,6 +476,15 @@ function chainFromRow(row: ChainRow): Chain {
     endTime: row.end_time,
     errorDetail: row.error_detail ?? null,
     errorTitle: row.error_title ?? null,
+    ...(view
+      ? {
+          messagesLoaded: view.startIndex === 0,
+          messageStartIndex: view.startIndex,
+          messageCount: view.summary.messageCount,
+          usageSummary: view.summary.usage,
+          preview: view.summary.preview,
+        }
+      : {}),
   };
 }
 
@@ -362,8 +543,8 @@ function sessionFromRow(row: SessionRow, chains: Chain[], subagentChains: Subage
 }
 
 const INSERT_CHAIN_SQL = `
-  INSERT INTO chains (id, session_id, ordinal, status, selection_json, model_label, agent_name, agent_type, agent_tier, subagent_record_json, messages_json, start_time, end_time, error_detail, error_title)
-  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  INSERT INTO chains (id, session_id, ordinal, status, selection_json, model_label, agent_name, agent_type, agent_tier, subagent_record_json, messages_json, start_time, end_time, error_detail, error_title, summary_json, recent_messages_json)
+  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 `;
 
 const INSERT_SUBAGENT_CHAIN_SQL = `
@@ -410,6 +591,7 @@ function insertChainRow(
   chain: Chain,
   ordinal: number,
 ): void {
+  const serialized = serializeChainMessages(chain.messages);
   insertChain.run(
     chain.id,
     chain.sessionId,
@@ -423,15 +605,18 @@ function insertChainRow(
     chain.subagentRecord
       ? JSON.stringify(subagentRecordToStorageDict(chain.subagentRecord))
       : null,
-    serializeMessages(chain.messages),
+    serialized.messagesJson,
     chain.startTime,
     chain.endTime,
     chain.errorDetail,
     chain.errorTitle,
+    serialized.summaryJson,
+    serialized.recentMessagesJson,
   );
 }
 
 function updateChainRow(db: SqliteDatabase, chain: Chain): number {
+  const serialized = serializeChainMessages(chain.messages);
   return db
     .prepare(
       `UPDATE chains
@@ -439,7 +624,7 @@ function updateChainRow(db: SqliteDatabase, chain: Chain): number {
            agent_name = ?, agent_type = ?, agent_tier = ?,
            subagent_record_json = ?, messages_json = ?,
            start_time = ?, end_time = ?,
-           error_detail = ?, error_title = ?
+           error_detail = ?, error_title = ?, summary_json = ?, recent_messages_json = ?
        WHERE id = ? AND session_id = ?`,
     )
     .run(
@@ -452,11 +637,13 @@ function updateChainRow(db: SqliteDatabase, chain: Chain): number {
       chain.subagentRecord
         ? JSON.stringify(subagentRecordToStorageDict(chain.subagentRecord))
         : null,
-      serializeMessages(chain.messages),
+      serialized.messagesJson,
       chain.startTime,
       chain.endTime,
       chain.errorDetail,
       chain.errorTitle,
+      serialized.summaryJson,
+      serialized.recentMessagesJson,
       chain.id,
       chain.sessionId,
     ).changes;
@@ -683,6 +870,267 @@ export function finishChain(
 // loadSession
 // ---------------------------------------------------------------------------
 
+const CHAIN_VIEW_COLUMNS = `
+  id, session_id, ordinal, status, selection_json, model_label,
+  agent_name, agent_type, agent_tier, subagent_record_json,
+  NULL AS messages_json, NULL AS recent_messages_json,
+  start_time, end_time, error_detail, error_title,
+  summary_json,
+  COALESCE(
+    CASE WHEN json_valid(summary_json) THEN
+      CASE
+        WHEN json_type(summary_json, '$.messageCount') = 'integer'
+          AND json_extract(summary_json, '$.messageCount') >= 0
+          THEN json_extract(summary_json, '$.messageCount')
+      END
+    END,
+    CASE WHEN json_valid(messages_json) THEN json_array_length(messages_json) ELSE 0 END
+  ) AS message_count,
+  COALESCE(
+    CASE WHEN json_valid(summary_json) THEN
+      CASE
+        WHEN json_type(summary_json, '$.messageBytes') = 'integer'
+          AND json_extract(summary_json, '$.messageBytes') >= 0
+          THEN json_extract(summary_json, '$.messageBytes')
+      END
+    END,
+    length(CAST(messages_json AS BLOB))
+  ) AS message_bytes
+`;
+
+const CHAIN_VIEW_SELECT = `
+  SELECT ${CHAIN_VIEW_COLUMNS}
+  FROM chains WHERE session_id = ? ORDER BY ordinal
+`;
+
+function selectChainRows(
+  db: SqliteDatabase,
+  sessionId: string,
+  includeMessages: boolean,
+): ChainRow[] {
+  return db
+    .prepare(includeMessages
+      ? 'SELECT * FROM chains WHERE session_id = ? ORDER BY ordinal'
+      : CHAIN_VIEW_SELECT)
+    .all(sessionId) as ChainRow[];
+}
+
+function resolveChainViewSummary(row: ChainRow): ChainViewSummary {
+  return parseChainViewSummary(row.summary_json) ?? {
+    messageCount: row.message_count ?? 0,
+    messageBytes: row.message_bytes ?? 0,
+    usage: null,
+    preview: null,
+    newestMessageBytes: null,
+    recentStartIndex: row.message_count ?? 0,
+    recentMessageSizes: null,
+  };
+}
+
+interface LoadedHistoryPage extends SessionHistoryPage {
+  readonly loadedBytes: number;
+}
+
+interface HistoryPageQuery {
+  readonly sessionId: string;
+  readonly chainId: string;
+  readonly beforeIndex?: number;
+  readonly maxMessages: number;
+  readonly maxBytes: number;
+  readonly allowOneOversizedMessage: boolean;
+  readonly summary?: ChainViewSummary;
+}
+
+function loadRecentHistoryPage(
+  summary: ChainViewSummary,
+  recentMessagesJson: string | null,
+  query: HistoryPageQuery & { beforeIndex: number },
+): LoadedHistoryPage | null {
+  const {
+    sessionId,
+    chainId,
+    beforeIndex,
+    maxMessages,
+    maxBytes,
+    allowOneOversizedMessage,
+  } = query;
+  const sizes = summary.recentMessageSizes;
+  if (!sizes || !recentMessagesJson || beforeIndex <= summary.recentStartIndex) return null;
+
+  let storedMessages: unknown;
+  try {
+    storedMessages = JSON.parse(recentMessagesJson);
+  } catch {
+    return null;
+  }
+  if (!Array.isArray(storedMessages) || storedMessages.length !== sizes.length) return null;
+
+  const endOffset = Math.min(
+    sizes.length,
+    beforeIndex - summary.recentStartIndex,
+  );
+  let startOffset = endOffset;
+  let loadedBytes = 0;
+  while (startOffset > 0 && endOffset - startOffset < maxMessages) {
+    const nextBytes = sizes[startOffset - 1]!;
+    if (
+      loadedBytes + nextBytes > maxBytes
+      && !(allowOneOversizedMessage && startOffset === endOffset)
+    ) {
+      break;
+    }
+    startOffset -= 1;
+    loadedBytes += nextBytes;
+  }
+
+  const startIndex = summary.recentStartIndex + startOffset;
+  return {
+    sessionId,
+    chainId,
+    messages: storedMessages
+      .slice(startOffset, endOffset)
+      .map((message) => messageFromStorageDict(message)),
+    startIndex,
+    totalMessages: summary.messageCount,
+    complete: startIndex === 0,
+    loadedBytes,
+  };
+}
+
+function loadHistoryPageFromDb(
+  db: SqliteDatabase,
+  query: HistoryPageQuery,
+): LoadedHistoryPage | null {
+  const {
+    sessionId,
+    chainId,
+    beforeIndex,
+    maxMessages,
+    maxBytes,
+    allowOneOversizedMessage,
+  } = query;
+  let summary = query.summary;
+  let recentMessagesJson: string | null | undefined;
+  if (!summary) {
+    const metadata = db.prepare(`
+      SELECT summary_json, recent_messages_json,
+             length(CAST(messages_json AS BLOB)) AS message_bytes
+      FROM chains WHERE session_id = ? AND id = ?
+    `).get(sessionId, chainId) as {
+      summary_json: string | null;
+      recent_messages_json: string | null;
+      message_bytes: number;
+    } | undefined;
+    if (!metadata) return null;
+    summary = parseChainViewSummary(metadata.summary_json) ?? undefined;
+    if (!summary) {
+      const legacyMessageCount = Math.max(0, db.prepare(`
+        SELECT CASE WHEN json_valid(messages_json)
+          THEN json_array_length(messages_json) ELSE 0 END AS message_count
+        FROM chains WHERE session_id = ? AND id = ?
+      `).pluck().get(sessionId, chainId) as number ?? 0);
+      summary = {
+        messageCount: legacyMessageCount,
+        messageBytes: metadata.message_bytes ?? 0,
+        usage: null,
+        preview: null,
+        newestMessageBytes: null,
+        recentStartIndex: legacyMessageCount,
+        recentMessageSizes: null,
+      };
+    }
+    recentMessagesJson = metadata.recent_messages_json;
+  }
+
+  const totalMessages = summary.messageCount;
+  const before = Math.min(
+    totalMessages,
+    Math.max(0, beforeIndex ?? totalMessages),
+  );
+  if (before === 0 || maxMessages <= 0 || maxBytes <= 0) {
+    return {
+      sessionId,
+      chainId,
+      messages: [],
+      startIndex: before,
+      totalMessages,
+      complete: before === 0,
+      loadedBytes: 0,
+    };
+  }
+
+  if (recentMessagesJson === undefined && summary.recentMessageSizes) {
+    recentMessagesJson = db.prepare(
+      'SELECT recent_messages_json FROM chains WHERE session_id = ? AND id = ?',
+    ).pluck().get(sessionId, chainId) as string | null | undefined;
+  }
+  const recentPage = loadRecentHistoryPage(
+    summary,
+    recentMessagesJson ?? null,
+    {
+      ...query,
+      beforeIndex: before,
+      maxMessages: Math.max(1, Math.floor(maxMessages)),
+      maxBytes: Math.max(1, Math.floor(maxBytes)),
+    },
+  );
+  if (recentPage) return recentPage;
+
+  const rows = db.prepare(`
+    WITH message_rows AS (
+      SELECT CAST(j.key AS INTEGER) AS message_index,
+             CAST(j.value AS TEXT) AS message_json,
+             length(CAST(j.value AS BLOB)) AS message_bytes
+      FROM chains c,
+           json_each(CASE WHEN json_valid(c.messages_json) THEN c.messages_json ELSE '[]' END) AS j
+      WHERE c.session_id = ? AND c.id = ? AND CAST(j.key AS INTEGER) < ?
+    ), ranked AS (
+      SELECT message_index, message_json, message_bytes,
+             ROW_NUMBER() OVER (ORDER BY message_index DESC) AS message_rank,
+             SUM(message_bytes) OVER (ORDER BY message_index DESC) AS cumulative_bytes
+      FROM message_rows
+    )
+    SELECT message_index, message_json, message_bytes
+    FROM ranked
+    WHERE message_rank <= ?
+      AND (cumulative_bytes <= ? OR (? = 1 AND message_rank = 1))
+    ORDER BY message_index
+  `).all(
+    sessionId,
+    chainId,
+    before,
+    Math.max(1, Math.floor(maxMessages)),
+    Math.max(1, Math.floor(maxBytes)),
+    allowOneOversizedMessage ? 1 : 0,
+  ) as Array<{ message_index: number; message_json: string; message_bytes: number }>;
+
+  const messages: Message[] = [];
+  let loadedBytes = 0;
+  let startIndex = before;
+  for (const row of rows) {
+    try {
+      messages.push(messageFromStorageDict(JSON.parse(row.message_json)));
+      loadedBytes += row.message_bytes;
+      startIndex = Math.min(startIndex, row.message_index);
+    } catch (err) {
+      console.error(
+        `[session] skipping corrupt message ${row.message_index} in chain ${chainId}`,
+        err,
+      );
+    }
+  }
+
+  return {
+    sessionId,
+    chainId,
+    messages,
+    startIndex,
+    totalMessages,
+    complete: startIndex === 0,
+    loadedBytes,
+  };
+}
+
 /**
  * Load a session by ID (null if absent/invalid).
  *
@@ -693,21 +1141,23 @@ export function finishChain(
  */
 function loadSessionInternal(
   sessionId: string,
-  includeSubagentRecords: boolean,
+  loadFullSession: boolean,
   opts?: StorageOptions,
 ): Session | null {
   if (!isValidSessionId(sessionId)) {
     return null;
   }
-  const { dbPath } = resolveOptions(opts);
+  const {
+    dbPath,
+    sessionViewMessageBudget,
+    sessionViewByteBudget,
+  } = resolveOptions(opts);
   return withCorruptionRecovery(dbPath, (db) => {
     const load = db.transaction(() => {
       let row = db.prepare('SELECT * FROM sessions WHERE id = ?').get(sessionId) as SessionRow | undefined;
       if (!row) return null;
 
-      let chainRows = db
-        .prepare('SELECT * FROM chains WHERE session_id = ? ORDER BY ordinal')
-        .all(sessionId) as ChainRow[];
+      let chainRows = selectChainRows(db, sessionId, loadFullSession);
       const activeChainIds = chainRows
         .filter((chain) => parseChainStatus(chain.status) === ChainStatus.ACTIVE)
         .map((chain) => chain.id);
@@ -741,22 +1191,71 @@ function loadSessionInternal(
         );
 
         row = db.prepare('SELECT * FROM sessions WHERE id = ?').get(sessionId) as SessionRow;
-        chainRows = db
-          .prepare('SELECT * FROM chains WHERE session_id = ? ORDER BY ordinal')
-          .all(sessionId) as ChainRow[];
+        chainRows = selectChainRows(db, sessionId, loadFullSession);
       }
 
       const chains: Chain[] = [];
-      for (const cr of chainRows) {
-        try {
-          chains.push(chainFromRow(cr));
-        } catch (err) {
-          console.error(`[session] skipping corrupt chain ${cr.id} on load (session ${sessionId})`, err);
+      if (loadFullSession) {
+        for (const cr of chainRows) {
+          try {
+            chains.push(chainFromRow(cr));
+          } catch (err) {
+            console.error(`[session] skipping corrupt chain ${cr.id} on load (session ${sessionId})`, err);
+          }
         }
+      } else {
+        let remainingMessages = Math.max(0, sessionViewMessageBudget);
+        let remainingBytes = Math.max(0, sessionViewByteBudget);
+        const backfillSummary = db.prepare(
+          `UPDATE chains
+           SET summary_json = ?, recent_messages_json = ?
+           WHERE session_id = ? AND id = ?`,
+        );
+        const pagedChains = new Array<Chain>(chainRows.length);
+        for (let index = chainRows.length - 1; index >= 0; index -= 1) {
+          const cr = chainRows[index]!;
+          const persistedSummary = parseChainViewSummary(cr.summary_json);
+          let summary = persistedSummary ?? resolveChainViewSummary(cr);
+          let page: LoadedHistoryPage | null = null;
+          if (remainingMessages > 0 && remainingBytes > 0 && summary.messageCount > 0) {
+            const newestMessageBytes = summary.newestMessageBytes;
+            if (newestMessageBytes == null || newestMessageBytes <= remainingBytes) {
+              page = loadHistoryPageFromDb(db, {
+                sessionId,
+                chainId: cr.id,
+                beforeIndex: summary.messageCount,
+                maxMessages: remainingMessages,
+                maxBytes: remainingBytes,
+                allowOneOversizedMessage: false,
+                summary,
+              });
+            }
+          }
+          const messages = page?.messages ?? [];
+          const startIndex = page?.startIndex ?? summary.messageCount;
+          if (!persistedSummary && startIndex === 0) {
+            const serialized = serializeChainMessages(messages);
+            summary = parseChainViewSummary(serialized.summaryJson) ?? summary;
+            backfillSummary.run(
+              serialized.summaryJson,
+              serialized.recentMessagesJson,
+              sessionId,
+              cr.id,
+            );
+          }
+          remainingMessages = Math.max(0, remainingMessages - messages.length);
+          remainingBytes = Math.max(0, remainingBytes - (page?.loadedBytes ?? 0));
+          try {
+            pagedChains[index] = chainFromRow(cr, { messages, startIndex, summary });
+          } catch (err) {
+            console.error(`[session] skipping corrupt chain ${cr.id} on view load (session ${sessionId})`, err);
+          }
+        }
+        chains.push(...pagedChains.filter((chain): chain is Chain => chain != null));
       }
 
       const subagentChains: SubagentRecord[] = [];
-      if (includeSubagentRecords) {
+      if (loadFullSession) {
         const subagentRows = db
           .prepare(
             'SELECT subagent_id, record_json, summary_json FROM subagent_chains WHERE session_id = ? ORDER BY rowid',
@@ -788,6 +1287,45 @@ export function loadSession(sessionId: string, opts?: StorageOptions): Session |
 /** Load the navigation payload without selecting or parsing subagent record_json. */
 export function loadSessionView(sessionId: string, opts?: StorageOptions): Session | null {
   return loadSessionInternal(sessionId, false, opts);
+}
+
+/** Load the next older bounded page for one chain in a renderer session view. */
+export function loadSessionHistoryPage(
+  sessionId: string,
+  chainId: string,
+  beforeIndex?: number,
+  opts?: StorageOptions,
+): SessionHistoryPage | null {
+  if (!isValidSessionId(sessionId)) return null;
+  const { dbPath } = resolveOptions(opts);
+  return withCorruptionRecovery(dbPath, (db) => {
+    const page = loadHistoryPageFromDb(db, {
+      sessionId,
+      chainId,
+      beforeIndex,
+      maxMessages: DEFAULT_HISTORY_PAGE_MESSAGE_BUDGET,
+      maxBytes: DEFAULT_HISTORY_PAGE_BYTE_BUDGET,
+      allowOneOversizedMessage: true,
+    });
+    if (!page) return null;
+    const { loadedBytes: _loadedBytes, ...result } = page;
+    return result;
+  });
+}
+
+/** Full main-conversation history for model context, independent from renderer paging. */
+export function loadSessionMessages(
+  sessionId: string,
+  opts?: StorageOptions,
+): Message[] {
+  if (!isValidSessionId(sessionId)) return [];
+  const { dbPath } = resolveOptions(opts);
+  return withCorruptionRecovery(dbPath, (db) => {
+    const rows = db.prepare(
+      'SELECT messages_json FROM chains WHERE session_id = ? ORDER BY ordinal',
+    ).all(sessionId) as Array<{ messages_json: string }>;
+    return rows.flatMap((row) => deserializeMessages(row.messages_json));
+  });
 }
 
 /**

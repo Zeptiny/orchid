@@ -47,6 +47,12 @@ export type StreamItem =
       key: string;
       chain: Chain;
       chainIndex: number;
+    }
+  | {
+      kind: 'history-gap';
+      key: string;
+      chain: Chain;
+      chainIndex: number;
     };
 
 export type FooterStreamItem = Extract<StreamItem, { kind: 'footer' }>;
@@ -237,6 +243,15 @@ export function buildHistoryStreamItems(opts: {
       continue;
     }
 
+    if (chain.messagesLoaded === false && (chain.messageStartIndex ?? 0) > 0) {
+      items.push({
+        kind: 'history-gap',
+        key: `history-gap-${chain.id || chainIndex}-${chain.messageStartIndex}`,
+        chain,
+        chainIndex,
+      });
+    }
+
     // Authoritative storage for each chain body — avoids flat-messages length
     // desync after FAILED/INTERRUPTED when the renderer lags or only partially commits.
     // Live tools/text for the active turn still render via buildLiveTailItems.
@@ -275,7 +290,7 @@ export function buildHistoryStreamItems(opts: {
     );
     const hasUser = chain.messages.some(
       (m) => m.role === MessageRole.USER && m.type === MessageType.TEXT,
-    );
+    ) || Boolean(chain.preview);
     // Every visible chain gets a footer, including the running/active chain.
     if (shouldRenderChainFooter({ isActive, isTerminal: terminal, hasBody, hasUser })) {
       const footer: FooterStreamItem = {

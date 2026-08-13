@@ -799,9 +799,25 @@ export interface SessionLoadMessage {
   activate?: boolean;
 }
 
-/** Activate a session and return its full view payload in one round-trip. */
+/** Activate a session and return its bounded renderer view in one round-trip. */
 export interface SessionOpenMessage {
   id: string;
+}
+
+export interface SessionHistoryPageMessage {
+  sessionId: string;
+  chainId: string;
+  /** Exclusive durable message index; omit to start from the chain tail. */
+  beforeIndex?: number;
+}
+
+export interface SessionHistoryPageResult {
+  sessionId: string;
+  chainId: string;
+  messages: Message[];
+  startIndex: number;
+  totalMessages: number;
+  complete: boolean;
 }
 
 export interface SessionDeleteMessage {
@@ -1316,11 +1332,13 @@ export interface OrchidAPI {
     list: () => Promise<SessionSummary[]>;
     load: (id: SessionLoadMessage) => Promise<Session | null>;
     /**
-     * Activate a session and return its full view payload (session, flattened
-     * messages, live snapshot, workspace) in one round-trip. Replaces the prior
-     * peek + chat:snapshot + activate sequence for session switching.
+     * Activate a session and return its bounded renderer view (session,
+     * flattened loaded messages, live snapshot, workspace) in one round-trip.
+     * Replaces the prior peek + chat:snapshot + activate sequence for switching.
      */
     open: (message: SessionOpenMessage) => Promise<SessionOpenResult>;
+    /** Fetch the next older bounded page for one renderer chain. */
+    loadHistoryPage: (message: SessionHistoryPageMessage) => Promise<SessionHistoryPageResult | null>;
     create: () => Promise<Session>;
     /**
      * Enter draft mode: clear active session, abort in-flight chat, clear
@@ -1548,8 +1566,9 @@ export const IPC_CHANNELS = {
   // Session
   SESSION_LIST: 'session:list',
   SESSION_LOAD: 'session:load',
-  /** Activate a session and return its full view payload in one round-trip. */
+  /** Activate a session and return its bounded renderer view in one round-trip. */
   SESSION_OPEN: 'session:open',
+  SESSION_HISTORY_PAGE: 'session:history_page',
   SESSION_CREATE: 'session:create',
   /** Clear active session without creating a file (draft / new chat). */
   SESSION_CLEAR_ACTIVE: 'session:clear_active',
@@ -1709,6 +1728,7 @@ export const ALLOWED_INVOKE_CHANNELS = [
   IPC_CHANNELS.SESSION_LIST,
   IPC_CHANNELS.SESSION_LOAD,
   IPC_CHANNELS.SESSION_OPEN,
+  IPC_CHANNELS.SESSION_HISTORY_PAGE,
   IPC_CHANNELS.SESSION_CREATE,
   IPC_CHANNELS.SESSION_CLEAR_ACTIVE,
   IPC_CHANNELS.SESSION_DELETE,

@@ -73,6 +73,16 @@ export interface Chain {
   readonly errorDetail: string | null;
   /** Short error title (auth/rate-limit/timeout/etc) persisted when FAILED. */
   readonly errorTitle: string | null;
+  /** False when this renderer view contains only a recent message page. */
+  readonly messagesLoaded?: boolean;
+  /** Index of `messages[0]` in the durable chain (0 when fully loaded). */
+  readonly messageStartIndex?: number;
+  /** Total durable message count, including unloaded history. */
+  readonly messageCount?: number;
+  /** Precomputed full-chain usage for footers when messages are paged. */
+  readonly usageSummary?: Usage | null;
+  /** Bounded first-user preview for unloaded chain placeholders. */
+  readonly preview?: string | null;
 }
 
 // ── Storage dict ────────────────────────────────────────────────────────────
@@ -108,7 +118,10 @@ export function chainElapsedSeconds(chain: Chain, nowMs: number = Date.now()): n
 }
 
 /** Sum message.usage across a chain. */
-export function sumChainUsage(chain: Pick<Chain, 'messages'>): Usage | null {
+export function sumChainUsage(
+  chain: Pick<Chain, 'messages'> & Partial<Pick<Chain, 'usageSummary'>>,
+): Usage | null {
+  if (Object.hasOwn(chain, 'usageSummary')) return chain.usageSummary ?? null;
   return sumMessageUsages(chain.messages);
 }
 

@@ -41,6 +41,8 @@ import {
   saveSession as storageSaveSession,
   loadSession as storageLoadSession,
   loadSessionView as storageLoadSessionView,
+  loadSessionHistoryPage as storageLoadSessionHistoryPage,
+  loadSessionMessages as storageLoadSessionMessages,
   loadSubagentRecord as storageLoadSubagentRecord,
   loadSubagentRecords as storageLoadSubagentRecords,
   loadSubagentSummaries as storageLoadSubagentSummaries,
@@ -51,6 +53,7 @@ import {
   updateSessionFields as storageUpdateSessionFields,
   upsertSubagentRecords as storageUpsertSubagentRecords,
   type SessionFieldsUpdate,
+  type SessionHistoryPage,
   type StorageOptions,
   type SessionSummary,
 } from './storage';
@@ -582,6 +585,25 @@ export class SessionManager {
   /** Full records for runtime restoration; optional ids keep lifecycle reads targeted. */
   getSubagentRecords(sessionId: string, subagentIds?: readonly string[]): SubagentRecord[] {
     return storageLoadSubagentRecords(sessionId, subagentIds, this._storageOpts);
+  }
+
+  /** Load one older renderer page without changing selection or the model-history cache. */
+  getHistoryPage(
+    sessionId: string,
+    chainId: string,
+    beforeIndex?: number,
+  ): SessionHistoryPage | null {
+    return storageLoadSessionHistoryPage(
+      sessionId,
+      chainId,
+      beforeIndex,
+      this._storageOpts,
+    );
+  }
+
+  /** Complete durable main conversation used only when a model turn needs it. */
+  getModelHistory(sessionId: string): Message[] {
+    return storageLoadSessionMessages(sessionId, this._storageOpts);
   }
 
   /**

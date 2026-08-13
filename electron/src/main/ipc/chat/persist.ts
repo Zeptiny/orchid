@@ -6,7 +6,6 @@ import { MessageRole, MessageType } from '../../../shared/types/message';
 import type { Message, Usage } from '../../../shared/types/message';
 import { ChainStatus } from '../../../shared/types/chain';
 import { IPC_CHANNELS } from '../../../shared/types/ipc';
-import { flattenSessionMessages } from '../../../shared/types/session';
 import { getSessionManager } from '../../session/singleton';
 import { setChatHistory } from '../chat-history';
 import {
@@ -220,9 +219,7 @@ export function persistTurnConversation(
 /** Flatten all session chains — never only the active/last chain. */
 export function historyFromSession(sessionId: string): Message[] {
   try {
-    const session = getSessionManager().getSession(sessionId);
-    if (!session) return [];
-    return flattenSessionMessages(session);
+    return getSessionManager().getModelHistory(sessionId);
   } catch {
     return [];
   }

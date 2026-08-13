@@ -140,6 +140,12 @@ export const sessionOpenSchema = z.object({
   id: z.string().uuid(),
 });
 
+export const sessionHistoryPageSchema = z.object({
+  sessionId: z.string().uuid(),
+  chainId: z.string().min(1),
+  beforeIndex: z.number().int().nonnegative().optional(),
+}).strict();
+
 export const sessionDeleteSchema = z.object({
   id: z.string().uuid(),
 });

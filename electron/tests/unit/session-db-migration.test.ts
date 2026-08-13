@@ -1,10 +1,10 @@
 /**
- * Session DB legacy → v4 migration tests.
+ * Session DB legacy → v5 migration tests.
  *
  * v3 added `tier_override`; v4 added the bounded `summary_json` subagent read
- * model. These tests open databases created with the v2 schema, run the
- * store's open path / migration helper, and assert both columns are added
- * while pre-existing session rows remain readable.
+ * model; v5 added the equivalent chain summary. These tests open databases
+ * created with the v2 schema, run the store's open path / migration helper,
+ * and assert the columns are added while pre-existing rows remain readable.
  */
 import * as fs from 'node:fs';
 import * as os from 'node:os';
@@ -94,6 +94,13 @@ function subagentColumnNames(dbPath: string): string[] {
   return columns.map((column) => column.name);
 }
 
+function chainColumnNames(dbPath: string): string[] {
+  const db = openSqliteDb(dbPath);
+  const columns = db.prepare('PRAGMA table_info(chains)').all() as Array<{ name: string }>;
+  db.close();
+  return columns.map((column) => column.name);
+}
+
 beforeEach(() => {
   tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'orchid-session-db-migration-'));
   instances = [];
@@ -105,7 +112,7 @@ afterEach(() => {
   fs.rmSync(tempDir, { recursive: true, force: true });
 });
 
-describe('session schema legacy → v4 migration', () => {
+describe('session schema legacy → v5 migration', () => {
   it('adds the tier_override column through the store open path', () => {
     const dbPath = path.join(tempDir, 'v2.db');
     makeV2Database(dbPath);
@@ -117,6 +124,8 @@ describe('session schema legacy → v4 migration', () => {
 
     expect(sessionColumnNames(dbPath)).toContain('tier_override');
     expect(subagentColumnNames(dbPath)).toContain('summary_json');
+    expect(chainColumnNames(dbPath)).toContain('summary_json');
+    expect(chainColumnNames(dbPath)).toContain('recent_messages_json');
   });
 
   it('loads pre-existing v2 rows with tierOverride null after migration', () => {

@@ -48,6 +48,8 @@ import type {
   SessionLoadMessage,
   SessionOpenMessage,
   SessionOpenResult,
+  SessionHistoryPageMessage,
+  SessionHistoryPageResult,
   SessionDeleteMessage,
   SessionRenamedEvent,
   SessionCreatedEvent,
@@ -440,6 +442,9 @@ const orchidAPI: OrchidAPI = {
 
     open: (message: SessionOpenMessage) =>
       invoke<SessionOpenResult>(IPC_CHANNELS.SESSION_OPEN, message),
+
+    loadHistoryPage: (message: SessionHistoryPageMessage) =>
+      invoke<SessionHistoryPageResult | null>(IPC_CHANNELS.SESSION_HISTORY_PAGE, message),
 
     create: () =>
       invoke(IPC_CHANNELS.SESSION_CREATE),
