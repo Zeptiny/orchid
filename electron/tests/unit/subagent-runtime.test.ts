@@ -1615,6 +1615,39 @@ describe('SubagentManager hydration (U3)', () => {
     }]);
   });
 
+  it('retains cumulative usage across follow-up runs', async () => {
+    let runNumber = 0;
+    manager.setRunner(async function* (): AsyncGenerator<StreamEvent> {
+      runNumber += 1;
+      yield { type: 'content', text: `answer-${runNumber}` };
+      yield {
+        type: 'usage',
+        usage: {
+          prompt_tokens: runNumber * 10,
+          completion_tokens: runNumber,
+          total_tokens: runNumber * 11,
+          cached_tokens: 0,
+        },
+      };
+      yield { type: 'finish', finishReason: 'stop' };
+    });
+
+    const record = manager.spawn('usage', 'first', testAgent, { sessionId: 'sess-usage' });
+    await manager.getRunPromise(record.id);
+    expect(record.usage?.total_tokens).toBe(11);
+
+    manager.followUp(record.id, 'second');
+    await manager.getRunPromise(record.id);
+
+    expect(record.usage).toMatchObject({
+      prompt_tokens: 30,
+      completion_tokens: 3,
+      total_tokens: 33,
+      cached_tokens: 0,
+    });
+    expect(sumSubagentUsage(runtimeToDomain(record))).toEqual(record.usage);
+  });
+
   it('hydrating a live full record is a no-op (runtime record wins)', () => {
     const record = manager.spawn('live', 'task', testAgent, { sessionId: 'sess-live' });
     manager.markCompleted(record.id, 'live result');

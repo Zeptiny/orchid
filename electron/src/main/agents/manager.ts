@@ -19,7 +19,7 @@ import type { Chain } from '../../shared/types/chain';
 import { ChainStatus } from '../../shared/types/chain';
 import type { ModelSelection } from '../../shared/types/provider';
 import type { Message, Usage } from '../../shared/types/message';
-import { sumMessageUsages } from '../../shared/usage';
+import { addStepUsage, sumMessageUsages } from '../../shared/usage';
 import type { StreamEvent } from '../llm/orchestrator';
 import type { ProjectRuntime } from '../project/runtime';
 import type { SubagentRecord as DomainSubagentRecord } from '../../shared/types/subagent';
@@ -1376,6 +1376,7 @@ export class SubagentManager {
     const seed = this._runs.getSeed(record.id);
     this.markRunning(record.id);
 
+    const priorUsage = record.usage ?? sumMessageUsages(record.chain?.messages ?? []);
     const assembler = new SubagentRunAssembler(record.chain?.messages ?? []);
 
     try {
@@ -1412,18 +1413,18 @@ export class SubagentManager {
 
       if (!this._runs.isCurrent(run)) return;
       if (abort.signal.aborted || record.state === SubagentState.INTERRUPTED) {
-        this._applyAssemblerFinalization(record, run, assembler.interrupt());
+        this._applyAssemblerFinalization(record, run, assembler.interrupt(), priorUsage);
         return;
       }
-      this._applyAssemblerFinalization(record, run, assembler.complete());
+      this._applyAssemblerFinalization(record, run, assembler.complete(), priorUsage);
     } catch (err) {
       if (!this._runs.isCurrent(run)) return;
       if (abort.signal.aborted || record.state === SubagentState.INTERRUPTED) {
-        this._applyAssemblerFinalization(record, run, assembler.interrupt());
+        this._applyAssemblerFinalization(record, run, assembler.interrupt(), priorUsage);
         return;
       }
       const message = err instanceof Error ? err.message : String(err);
-      this._applyAssemblerFinalization(record, run, assembler.fail(message));
+      this._applyAssemblerFinalization(record, run, assembler.fail(message), priorUsage);
     } finally {
       if (this._runs.isCurrent(run)) {
         if (record.state === SubagentState.INTERRUPTED) {
@@ -1462,10 +1463,13 @@ export class SubagentManager {
     record: SubagentRecord,
     run: SubagentRun,
     finalization: SubagentRunFinalization,
+    priorUsage: Usage | null,
   ): boolean {
     if (!this._runs.isCurrent(run)) return false;
     if (finalization.result !== null) record.result = finalization.result;
-    record.usage = finalization.usage;
+    record.usage = finalization.usage
+      ? addStepUsage(priorUsage, finalization.usage)
+      : priorUsage;
     this._applyAssemblerTranscript(
       record,
       finalization.messages,

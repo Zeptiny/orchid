@@ -223,7 +223,7 @@ export function awaitSessionSubagentHydration(
       ...deps,
       requireRuntime: true,
     })
-  ));
+  ), (result) => result.agentMissing.length === 0);
 }
 
 /** Clear retained readiness when a durable session is removed or invalidated. */

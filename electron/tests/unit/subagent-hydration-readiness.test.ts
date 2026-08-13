@@ -40,6 +40,29 @@ describe('SubagentHydrationReadiness', () => {
     expect(hydrate).toHaveBeenCalledTimes(2);
   });
 
+  it('drops incomplete results so restored definitions can hydrate on retry', async () => {
+    const readiness = new SubagentHydrationReadiness<{ missing: string[] }>();
+    const owner = {};
+    const hydrate = vi.fn()
+      .mockResolvedValueOnce({ missing: ['reviewer'] })
+      .mockResolvedValueOnce({ missing: [] });
+
+    await expect(readiness.ensure(
+      owner,
+      'session-a',
+      hydrate,
+      (result) => result.missing.length === 0,
+    )).resolves.toEqual({ missing: ['reviewer'] });
+    await expect(readiness.ensure(
+      owner,
+      'session-a',
+      hydrate,
+      (result) => result.missing.length === 0,
+    )).resolves.toEqual({ missing: [] });
+
+    expect(hydrate).toHaveBeenCalledTimes(2);
+  });
+
   it('isolates readiness by manager and session', async () => {
     const readiness = new SubagentHydrationReadiness<number>();
     const firstOwner = {};

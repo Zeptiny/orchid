@@ -1,13 +1,18 @@
 /**
  * Per-manager, per-session readiness cache for persisted subagent hydration.
  *
- * Successful work remains ready for the lifetime of the manager. Failed work
- * is evicted immediately so the next send or lifecycle operation can retry.
+ * Complete work remains ready for the lifetime of the manager. Failed or
+ * caller-rejected results are evicted so a later lifecycle operation can retry.
  */
 export class SubagentHydrationReadiness<TResult> {
   private readonly tasksByOwner = new WeakMap<object, Map<string, Promise<TResult>>>();
 
-  ensure(owner: object, sessionId: string, hydrate: () => Promise<TResult>): Promise<TResult> {
+  ensure(
+    owner: object,
+    sessionId: string,
+    hydrate: () => Promise<TResult>,
+    retain = (_result: TResult): boolean => true,
+  ): Promise<TResult> {
     let tasks = this.tasksByOwner.get(owner);
     if (!tasks) {
       tasks = new Map();
@@ -24,11 +29,14 @@ export class SubagentHydrationReadiness<TResult> {
       task = Promise.reject(error);
     }
     tasks.set(sessionId, task);
-    void task.catch(() => {
+    const evictCurrent = () => {
       if (tasks?.get(sessionId) === task) {
         tasks.delete(sessionId);
       }
-    });
+    };
+    void task.then((result) => {
+      if (!retain(result)) evictCurrent();
+    }, evictCurrent);
     return task;
   }
 
