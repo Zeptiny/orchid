@@ -28,6 +28,7 @@ import {
   connectionIdSchema,
   connectionView,
   modelView,
+  pricingView,
   readApiKeyForTrustedStatus,
   requireConnection,
   runConnectionDiscovery,
@@ -57,11 +58,20 @@ async function modelOptions(
     throw new Error(`Unknown provider connection '${connectionId}'`);
   }
   const options: ProviderModelOption[] = [];
+  const catalogSnapshot = current.catalog.load();
+  const catalogPricingByProviderId = new Map<string, ReadonlyMap<string, import('../providers/catalog/schema').CatalogPricing>>();
+  for (const provider of catalogSnapshot.catalog.providers) {
+    catalogPricingByProviderId.set(
+      provider.id,
+      new Map(provider.models.map((model) => [model.id, model.pricing])),
+    );
+  }
   for (const connection of selectedConnections) {
     const definition = definitions.find((item) => item.id === connection.providerId);
     if (!definition) continue;
     const driver = current.registry.get(definition.id);
     const tierMechanism = driver?.tierMechanism;
+    const providerCatalogPricing = catalogPricingByProviderId.get(connection.providerId);
     const { rows, variantTiersByBase } = groupTierVariantRows(
       listConnectionModelRows(connection, definition),
       tierMechanism?.kind === 'model-name-variants' ? tierMechanism : undefined,
@@ -104,12 +114,19 @@ async function modelOptions(
           }
         : undefined;
       const pricingOverride = connection.pricingOverrides?.[row.model.id];
+      const catalogPricing = row.source === 'catalog'
+        ? providerCatalogPricing?.get(row.model.id)
+        : undefined;
       options.push({
         selection,
         connectionName: connection.name,
         providerId: connection.providerId,
         providerDisplayName: definition.displayName,
-        model: modelView(row.model, row.source),
+        model: modelView(
+          row.model,
+          row.source,
+          catalogPricing ? pricingView(catalogPricing) : undefined,
+        ),
         enabled: row.enabled,
         customized: row.customized,
         discoveredAt: row.discoveredAt,

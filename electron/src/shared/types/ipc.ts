@@ -545,6 +545,18 @@ export interface ProjectConfigSaveMessage {
 // ── Provider API ─────────────────────────────────────────────────────────────
 
 /**
+ * Renderer-safe catalog pricing for one model: the rate fields plus the
+ * billing-unit context needed to label them. Provenance stays in main.
+ */
+export interface ProviderModelPricingView {
+  currency: string;
+  currencyUnit?: import('./provider-facets').CurrencyUnit;
+  effectiveAt: string;
+  rates: import('./provider-facets').PricingRateFields;
+  contextTiers?: readonly import('./provider-facets').PricingContextTier[];
+}
+
+/**
  * Renderer-safe provider model metadata. Driver origins, pricing internals,
  * and catalog signatures stay in the main process.
  */
@@ -565,6 +577,8 @@ export interface ProviderModelView {
     contextTokens: number | null;
     outputTokens: number | null;
   } | null;
+  /** Signed-catalog rate card for catalog rows; absent for other origins. */
+  pricing?: ProviderModelPricingView;
 }
 
 /** A catalog preset rendered by onboarding and settings. */

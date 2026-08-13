@@ -13,12 +13,14 @@ import type {
   ProviderDeleteConnectionResult,
   ProviderConnectionView,
   ProviderDefinitionView,
+  ProviderModelPricingView,
   ProviderModelView,
   ProviderMutationResult,
   ProviderOverview,
   ProviderStatusView,
 } from '../../shared/types/ipc';
 import { pricingRateFieldsSchema, providerQuotaSchema } from '../../shared/types/provider-facets';
+import type { CatalogPricing } from '../providers/catalog/schema';
 import {
   customConnectionModelSchema,
   environmentVariableSchema,
@@ -264,9 +266,23 @@ function unavailableProviderReason(
   return null;
 }
 
+/** Renderer-safe view of one signed-catalog rate card; provenance never leaves main. */
+export function pricingView(pricing: CatalogPricing): ProviderModelPricingView {
+  return {
+    currency: pricing.currency,
+    ...(pricing.currencyUnit ? { currencyUnit: pricing.currencyUnit } : {}),
+    effectiveAt: pricing.effectiveAt,
+    rates: pricing.rates,
+    ...(pricing.contextTiers && pricing.contextTiers.length > 0
+      ? { contextTiers: pricing.contextTiers }
+      : {}),
+  };
+}
+
 export function modelView(
   model: ProviderModelDefinition,
   source: 'catalog' | 'provider' | 'user',
+  pricing?: ProviderModelPricingView,
 ): ProviderModelView {
   return {
     id: model.id,
@@ -288,12 +304,14 @@ export function modelView(
           outputTokens: model.limits.outputTokens,
         }
       : null,
+    ...(pricing ? { pricing } : {}),
   };
 }
 
 function definitionView(
   definition: ProviderDefinition,
   registry: ProviderDriverRegistry,
+  pricingByModelId?: ReadonlyMap<string, CatalogPricing>,
 ): ProviderDefinitionView {
   const unavailableReason = unavailableProviderReason(definition, registry);
   return {
@@ -307,7 +325,10 @@ function definitionView(
     unavailableReason,
     supportsDiscovery: Boolean(registry.get(definition.id)?.discoveryFacet),
     supportsQuota: Boolean(registry.get(definition.id)?.quotaFacet),
-    models: definition.models.map((model) => modelView(model, 'catalog')),
+    models: definition.models.map((model) => {
+      const pricing = pricingByModelId?.get(model.id);
+      return modelView(model, 'catalog', pricing ? pricingView(pricing) : undefined);
+    }),
   };
 }
 
@@ -389,8 +410,20 @@ async function overview(): Promise<ProviderOverview> {
     .filter((observation) => observation.connectionId === undefined
       || connectionProviderIds.get(observation.connectionId) === observation.providerId)
     .map(statusView);
+  const catalogSnapshot = current.catalog.load();
+  const pricingByProviderId = new Map<string, ReadonlyMap<string, CatalogPricing>>();
+  for (const provider of catalogSnapshot.catalog.providers) {
+    pricingByProviderId.set(
+      provider.id,
+      new Map(provider.models.map((model) => [model.id, model.pricing])),
+    );
+  }
   return {
-    definitions: definitions.map((definition) => definitionView(definition, current.registry)),
+    definitions: definitions.map((definition) => definitionView(
+      definition,
+      current.registry,
+      pricingByProviderId.get(definition.id),
+    )),
     connections: connections.map((connection) =>
       connectionView(connection, definitions, activeTurnCounts.get(connection.id) ?? 0),
     ),

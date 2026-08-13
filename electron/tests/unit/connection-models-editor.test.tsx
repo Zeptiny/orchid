@@ -29,6 +29,14 @@ function definition(overrides: Partial<ProviderDefinitionView> = {}): ProviderDe
       source: 'catalog',
       capabilities: { inputModalities: ['text'], outputModalities: ['text'], tools: true, reasoning: true },
       limits: { contextTokens: 1000, outputTokens: 100 },
+      pricing: {
+        currency: 'USD',
+        effectiveAt: '2026-08-01T00:00:00.000Z',
+        rates: {
+          input: { amount: '0.5', per: 1_000_000, unit: 'tokens' },
+          output: { amount: '1.5', per: 1_000_000, unit: 'tokens' },
+        },
+      },
     }],
     ...overrides,
   };
@@ -208,50 +216,56 @@ describe('connection models unified listing', () => {
     expect(screen.queryByRole('button', { name: /fetch models/i })).toBeNull();
   });
 
-  it('renders the per-model pricing override form and clears an existing override', () => {
+  it('pre-fills the pricing section from the signed-catalog rate card when no override is set', () => {
+    renderEditor();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Edit NW Base' }));
+    expect(screen.getByRole('heading', { name: 'Pricing override' })).toBeDefined();
+    expect(screen.getByLabelText('Input rate')).toBeDefined();
+    expect(screen.getByDisplayValue('0.5')).toBeDefined();
+    expect(screen.getByDisplayValue('1.5')).toBeDefined();
+    expect(screen.queryByRole('button', { name: 'Clear override' })).toBeNull();
+  });
+
+  it('shows an existing override in the model form and clears it back to catalog rates', () => {
     const override = {
       input: { amount: '1.25', per: 1_000_000, unit: 'tokens' as const },
       output: { amount: '5.00', per: 1_000_000, unit: 'tokens' as const },
     };
     const onPricingOverridesChange = vi.fn();
     renderEditor({
-      unifiedModels: [
-        option('nw-base', { enabled: true, pricingOverrides: override, model: { displayName: 'NW Base' } }),
-      ],
       pricingOverrides: { 'nw-base': override },
       onPricingOverridesChange,
     });
 
     expect(screen.getByText('NW Base').closest('li')?.textContent).toContain('Pricing override');
-    fireEvent.click(screen.getByRole('button', { name: 'Edit pricing for NW Base' }));
-    expect(screen.getByRole('heading', { name: 'Pricing override' })).toBeDefined();
-    expect(screen.getByLabelText('Input rate')).toBeDefined();
+    fireEvent.click(screen.getByRole('button', { name: 'Edit NW Base' }));
     expect(screen.getByDisplayValue('1.25')).toBeDefined();
     expect(screen.getByDisplayValue('5.00')).toBeDefined();
 
     fireEvent.click(screen.getByRole('button', { name: 'Clear override' }));
     expect(onPricingOverridesChange).toHaveBeenCalledWith({});
-    expect(screen.queryByRole('button', { name: 'Clear override' })).toBeNull();
+    // The form falls back to the catalog rate card as the visible base.
+    expect(screen.getByDisplayValue('0.5')).toBeDefined();
   });
 
-  it('saves a per-model pricing override from the form fields', () => {
+  it('saves a per-model pricing override together with the model from the edit form', () => {
     const onPricingOverridesChange = vi.fn();
     renderEditor({
-      unifiedModels: [
-        option('nw-base', { enabled: true, model: { displayName: 'NW Base' } }),
-      ],
       pricingOverrides: {},
+      reasoningConfig: { 'nw-base': { levels: ['low'], default: 'low' } },
       onPricingOverridesChange,
     });
 
-    fireEvent.click(screen.getByRole('button', { name: 'Edit pricing for NW Base' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Edit NW Base' }));
     fireEvent.change(screen.getByLabelText('Input rate'), { target: { value: '1.5' } });
     fireEvent.change(screen.getByLabelText('Per-request fee'), { target: { value: '0.02' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Save pricing override' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Save model' }));
 
     expect(onPricingOverridesChange).toHaveBeenCalledWith({
       'nw-base': {
         input: { amount: '1.5', per: 1_000_000, unit: 'tokens' },
+        output: { amount: '1.5', per: 1_000_000, unit: 'tokens' },
         perRequest: { amount: '0.02', per: 1, unit: 'requests' },
       },
     });
