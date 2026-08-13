@@ -338,6 +338,32 @@ describe('buildHistoryStreamItems', () => {
     });
   });
 
+  it('renders one global history gap targeting the newest incomplete chain', () => {
+    const chains = [
+      chain({
+        id: 'older-incomplete',
+        messages: [],
+        messagesLoaded: false,
+        messageStartIndex: 8,
+        messageCount: 8,
+      }),
+      chain({
+        id: 'newer-incomplete',
+        messages: [assistantText('recent', 'recent tail')],
+        messagesLoaded: false,
+        messageStartIndex: 4,
+        messageCount: 5,
+      }),
+    ];
+
+    const result = buildHistoryStreamItems({ ...baseOpts, sessionChains: chains });
+    const gaps = result.items.filter((item) => item.kind === 'history-gap');
+
+    expect(gaps).toHaveLength(1);
+    expect(gaps[0]).toMatchObject({ chainIndex: 1 });
+    expect(result.items[0]).toMatchObject({ kind: 'history-gap', chainIndex: 1 });
+  });
+
   it('marks footer as interrupted for INTERRUPTED chains', () => {
     const chains = [
       chain({ id: 'c1', status: ChainStatus.INTERRUPTED, messages: [userMsg('u1', 'hi')] }),

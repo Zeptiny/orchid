@@ -217,14 +217,34 @@ export function buildHistoryStreamItems(opts: {
   const liveById = new Map(toolBlocks.map((b) => [b.id, b]));
   let activeFooter: FooterStreamItem | null = null;
 
+  const isActiveChain = (chain: Chain, chainIndex: number): boolean => (
+    chain.status === ChainStatus.ACTIVE
+    || (chainIndex === sessionChains.length - 1 && liveStreaming)
+  );
+  const globalHistoryGapChainIndex = sessionChains.findLastIndex((chain, chainIndex) => {
+    const collapsed = chainIndex < collapseCount
+      && !expandedChainIndexes.has(chainIndex)
+      && !isActiveChain(chain, chainIndex);
+    return !collapsed
+      && chain.messagesLoaded === false
+      && (chain.messageStartIndex ?? 0) > 0;
+  });
+  if (globalHistoryGapChainIndex >= 0) {
+    const chain = sessionChains[globalHistoryGapChainIndex]!;
+    items.push({
+      kind: 'history-gap',
+      key: `history-gap-global-${chain.id || globalHistoryGapChainIndex}-${chain.messageStartIndex}`,
+      chain,
+      chainIndex: globalHistoryGapChainIndex,
+    });
+  }
+
   // Each chain body comes from chain.messages (authoritative storage). Live
   // tools/text for the active turn still render via buildLiveTailItems.
   for (let chainIndex = 0; chainIndex < sessionChains.length; chainIndex++) {
     const chain = sessionChains[chainIndex];
     const isLastChain = chainIndex === sessionChains.length - 1;
-    const isActive =
-      chain.status === ChainStatus.ACTIVE ||
-      (isLastChain && liveStreaming);
+    const isActive = isActiveChain(chain, chainIndex);
     const terminal =
       isTerminalChainStatus(chain.status) ||
       (isLastChain && (interrupted || status === 'error'));
@@ -241,15 +261,6 @@ export function buildHistoryStreamItems(opts: {
         chainIndex,
       });
       continue;
-    }
-
-    if (chain.messagesLoaded === false && (chain.messageStartIndex ?? 0) > 0) {
-      items.push({
-        kind: 'history-gap',
-        key: `history-gap-${chain.id || chainIndex}-${chain.messageStartIndex}`,
-        chain,
-        chainIndex,
-      });
     }
 
     // Authoritative storage for each chain body — avoids flat-messages length
