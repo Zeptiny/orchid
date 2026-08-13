@@ -466,10 +466,10 @@ export function registerSessionIPC(): void {
 
     const manager = getSessionManager();
     const wasActive = manager.getActive(String(event.sender.id))?.id === parsed.data.id;
-    // A deleted background session must not keep spending provider/tool work or
-    // recreate activity after it disappears from the catalog.
+    // Load cleanup seams before the durable mutation, but do not stop any work
+    // until the synchronous row deletion succeeds.
     const [
-      { forceStopSession },
+      { discardDeletedSessionRuntime },
       { clearPermissionSessionState },
       { clearToolCallHistoryForSession },
       { clearFunctionHashesForSession },
@@ -479,12 +479,15 @@ export function registerSessionIPC(): void {
       import('../permissions/history.js'),
       import('../tools/ast/get-function.js'),
     ]);
-    forceStopSession(parsed.data.id);
+    const deleted = manager.delete(parsed.data.id);
+    // A deleted background session must not keep spending provider/tool work or
+    // recreate activity after it disappears from the catalog. This teardown is
+    // intentionally non-persistent because the durable row is already gone.
+    discardDeletedSessionRuntime(parsed.data.id);
     clearPermissionSessionState(parsed.data.id);
     clearToolCallHistoryForSession(parsed.data.id);
     clearFunctionHashesForSession(parsed.data.id);
     clearNextRequestStop(parsed.data.id);
-    const deleted = manager.delete(parsed.data.id);
     if (deleted) {
       removeSessionActivity(parsed.data.id);
     }

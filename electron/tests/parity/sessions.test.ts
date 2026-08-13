@@ -4,7 +4,7 @@
  * Verifies that session create/load/save/delete/auto-naming work.
  * Tests STRUCTURE (operations complete without error), not deep behavior.
  */
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { randomUUID } from 'node:crypto';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
@@ -192,7 +192,7 @@ describe('Session Parity', () => {
       expect(result).toBe(false);
     });
 
-    it('delete cleans up cache directories', () => {
+    it('delete cleans up cache directories asynchronously', async () => {
       const session = makeSession({ id: 'c6666666-6666-4666-8666-666666666666' });
       saveSession(session, storageOpts);
 
@@ -214,8 +214,10 @@ describe('Session Parity', () => {
 
       deleteSession('c6666666-6666-4666-8666-666666666666', storageOpts);
 
-      expect(fs.existsSync(toolOutputDir)).toBe(false);
-      expect(fs.existsSync(webFetchDir)).toBe(false);
+      await vi.waitFor(() => {
+        expect(fs.existsSync(toolOutputDir)).toBe(false);
+        expect(fs.existsSync(webFetchDir)).toBe(false);
+      });
     });
   });
 

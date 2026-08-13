@@ -21,6 +21,7 @@ import {
   loadSubagentSummaries,
   listSavedSessions,
   deleteSession,
+  deleteSessionCaches,
   updateChain,
   updateSessionFields,
   upsertSubagentRecords,
@@ -671,7 +672,7 @@ describe('deleteSession', () => {
     expect(result).toBe(false);
   });
 
-  it('cleans up tool-output cache directory', () => {
+  it('cleans up tool-output cache directory asynchronously', async () => {
     const session = makeSession({ id: 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee' });
     saveSession(session, storageOpts);
 
@@ -688,10 +689,10 @@ describe('deleteSession', () => {
 
     deleteSession('eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee', storageOpts);
 
-    expect(fs.existsSync(toolOutputDir)).toBe(false);
+    await vi.waitFor(() => expect(fs.existsSync(toolOutputDir)).toBe(false));
   });
 
-  it('cleans up web-fetch cache directory', () => {
+  it('cleans up web-fetch cache directory asynchronously', async () => {
     const session = makeSession({ id: 'ffffffff-ffff-4fff-8fff-ffffffffffff' });
     saveSession(session, storageOpts);
 
@@ -708,10 +709,10 @@ describe('deleteSession', () => {
 
     deleteSession('ffffffff-ffff-4fff-8fff-ffffffffffff', storageOpts);
 
-    expect(fs.existsSync(webFetchDir)).toBe(false);
+    await vi.waitFor(() => expect(fs.existsSync(webFetchDir)).toBe(false));
   });
 
-  it('cleans up both caches simultaneously', () => {
+  it('cleans up both caches simultaneously', async () => {
     const session = makeSession({ id: 'a1111111-1111-4111-8111-111111111112' });
     saveSession(session, storageOpts);
 
@@ -734,8 +735,32 @@ describe('deleteSession', () => {
 
     deleteSession('a1111111-1111-4111-8111-111111111112', storageOpts);
 
-    expect(fs.existsSync(toolOutputDir)).toBe(false);
-    expect(fs.existsSync(webFetchDir)).toBe(false);
+    await vi.waitFor(() => {
+      expect(fs.existsSync(toolOutputDir)).toBe(false);
+      expect(fs.existsSync(webFetchDir)).toBe(false);
+    });
+  });
+
+  it('keeps cache cleanup failures non-fatal after durable deletion', async () => {
+    const sessionId = 'a2222222-2222-4222-8222-222222222222';
+    saveSession(makeSession({ id: sessionId }), storageOpts);
+    const blockingPath = path.join(tmpDir, 'cache-blocker');
+    fs.writeFileSync(blockingPath, 'not a directory');
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+    expect(deleteSession(sessionId, {
+      ...storageOpts,
+      toolOutputCacheDir: blockingPath,
+      webFetchCacheDir: blockingPath,
+    })).toBe(true);
+    expect(loadSession(sessionId, storageOpts)).toBeNull();
+    await deleteSessionCaches(sessionId, {
+      ...storageOpts,
+      toolOutputCacheDir: blockingPath,
+      webFetchCacheDir: blockingPath,
+    });
+
+    expect(warn).toHaveBeenCalled();
   });
 });
 

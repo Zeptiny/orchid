@@ -1868,36 +1868,40 @@ export function upsertSubagentRecords(
 // deleteSession
 // ---------------------------------------------------------------------------
 
-/** Delete a session (chains and subagent rows cascade) plus its file caches; true if it existed. */
+async function removeSessionCacheDirectory(cacheDir: string, sessionId: string): Promise<void> {
+  const target = path.join(cacheDir, sessionId);
+  try {
+    await fs.promises.rm(target, { recursive: true, force: true });
+  } catch (error) {
+    console.warn(`Failed to remove deleted session cache '${target}':`, error);
+  }
+}
+
+/** Best-effort cache cleanup scheduled after the durable session row is gone. */
+export async function deleteSessionCaches(
+  sessionId: string,
+  opts?: StorageOptions,
+): Promise<void> {
+  if (!isValidSessionId(sessionId)) return;
+  const { toolOutputCacheDir, webFetchCacheDir } = resolveOptions(opts);
+  await Promise.all([
+    removeSessionCacheDirectory(toolOutputCacheDir, sessionId),
+    removeSessionCacheDirectory(webFetchCacheDir, sessionId),
+  ]);
+}
+
+/** Delete a session durably; file-cache cleanup continues asynchronously. */
 export function deleteSession(sessionId: string, opts?: StorageOptions): boolean {
   if (!isValidSessionId(sessionId)) {
     return false;
   }
-  const { dbPath, toolOutputCacheDir, webFetchCacheDir } = resolveOptions(opts);
+  const { dbPath } = resolveOptions(opts);
   const deleted = withCorruptionRecovery(dbPath, (db) => {
     return db.prepare('DELETE FROM sessions WHERE id = ?').run(sessionId).changes > 0;
   });
   if (!deleted) {
     return false;
   }
-
-  const toolOutputDir = path.join(toolOutputCacheDir, sessionId);
-  try {
-    if (fs.existsSync(toolOutputDir)) {
-      fs.rmSync(toolOutputDir, { recursive: true, force: true });
-    }
-  } catch {
-    // non-fatal
-  }
-
-  const webFetchDir = path.join(webFetchCacheDir, sessionId);
-  try {
-    if (fs.existsSync(webFetchDir)) {
-      fs.rmSync(webFetchDir, { recursive: true, force: true });
-    }
-  } catch {
-    // non-fatal
-  }
-
+  void deleteSessionCaches(sessionId, opts);
   return true;
 }

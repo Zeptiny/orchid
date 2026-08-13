@@ -1103,6 +1103,35 @@ export class SubagentManager {
   }
 
   /**
+   * Silently discard every runtime record owned by a durably deleted session.
+   *
+   * Unlike purgeSession, this path does not transition records through an
+   * interrupted terminal state, emit deltas, or mark them for persistence.
+   * Removing the run generation immediately also makes an asynchronously
+   * unwinding runner stale before it can publish or checkpoint a late tail.
+   */
+  discardSession(sessionId: string): void {
+    const records = this.recordsForSession(sessionId);
+    for (const record of records) {
+      this._admission.removeFromQueue(record.id);
+      this._runs.abortCurrent(record.id);
+      this._lifecycle.resolveWaiters(record.id, 'flush');
+      this._subagents.delete(record.id);
+      this._unindexRecord(record);
+      this._lifecycle.clear(record.id);
+      this._runs.remove(record.id);
+      this._liveProjection.remove(record.id);
+    }
+    this._admission.filterQueue((id) => this._subagents.has(id));
+    this._persistence.clearSession(sessionId);
+    this._liveProjection.clearSessionRevision(sessionId);
+    if (records.length > 0) {
+      this._admitFromQueue();
+      this._notify();
+    }
+  }
+
+  /**
    * Convert runtime records to domain SubagentRecords for session storage.
    *
    * @param sessionId - When provided, only include records owned by that session.

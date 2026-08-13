@@ -548,6 +548,7 @@ const mocks = vi.hoisted(() => {
     }),
     subagentManager: {
       cancelRunning: vi.fn(() => []),
+      discardSession: vi.fn(),
     },
     publishSessionActivity: vi.fn(),
     completeSessionActivity: vi.fn(),
@@ -2095,6 +2096,49 @@ describe('chat IPC provider gates', () => {
       id: 'cdcdcdcd-cdcd-4cdc-8cdc-cdcdcdcdcdcd',
       name: 'Investigate Session Naming',
     });
+  });
+
+  it('discards a deleted live turn without persistence, terminal events, or auto-naming', async () => {
+    const sessionId = 'dededede-dede-4ede-8ede-dededededede';
+    const selection = {
+      connectionId: '11111111-1111-4111-8111-111111111111',
+      modelId: 'vendor/path/model',
+    };
+    mocks.sessionManager._setActive({
+      ...makeSession(sessionId),
+      selection,
+      modelLabel: selection.modelId,
+    });
+
+    let releaseStream!: () => void;
+    const streamGate = new Promise<void>((resolve) => { releaseStream = resolve; });
+    mocks.streamChat.mockImplementationOnce(async function* () {
+      yield { type: 'content', text: 'partial deletion tail' };
+      await streamGate;
+      yield { type: 'finish', finishReason: 'stop' };
+    });
+    const send = vi.fn();
+    const source = { id: 915, send };
+    mocks.sessionManager._setActiveForWindow('915', mocks.sessionManager.getActive()!);
+    mocks.electronWebContents.getAllWebContents.mockReturnValue([source]);
+    const chatSend = mocks.handlers.get(IPC_CHANNELS.CHAT_SEND)!;
+
+    await chatSend({ sender: source }, { message: 'Delete this live turn' });
+    await waitForChannelCount(send, IPC_CHANNELS.CHAT_CHUNK, 1);
+    mocks.sessionManager.persistTurn.mockClear();
+    mocks.aiGenerateText.mockClear();
+    send.mockClear();
+
+    expect(chatIpc.discardDeletedSessionRuntime(sessionId)).toBe(true);
+    releaseStream();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(mocks.backgroundStore.terminateSession).toHaveBeenCalledWith(sessionId);
+    expect(mocks.subagentManager.discardSession).toHaveBeenCalledWith(sessionId);
+    expect(mocks.sessionManager.persistTurn).not.toHaveBeenCalled();
+    expect(mocks.aiGenerateText).not.toHaveBeenCalled();
+    expect(channelEvents(send, IPC_CHANNELS.CHAT_DONE)).toEqual([]);
+    expect(channelEvents(send, IPC_CHANNELS.CHAT_STATE)).toEqual([]);
   });
 });
 

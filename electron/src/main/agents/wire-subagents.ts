@@ -100,7 +100,7 @@ export function wireSubagentRuntime(): void {
   );
   setSubagentPersistenceRecoveryScheduler(persistenceScheduler);
   removeSessionDeletionCleanup = onSessionDeleted((sessionId) => {
-    manager.purgeSession(sessionId);
+    manager.discardSession(sessionId);
     clearSessionSubagentHydration(manager, sessionId);
     persistenceScheduler?.clear(sessionId);
   });

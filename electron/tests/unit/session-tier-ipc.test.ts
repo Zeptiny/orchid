@@ -133,7 +133,7 @@ const mocks = vi.hoisted(() => {
       focusedSessionId: 'remaining-session',
       mruSessionIds: ['remaining-session'],
     })),
-    forceStopSession: vi.fn(),
+    discardDeletedSessionRuntime: vi.fn(),
     clearPermissionSessionState: vi.fn(),
     clearToolCallHistoryForSession: vi.fn(),
     clearFunctionHashesForSession: vi.fn(),
@@ -198,7 +198,7 @@ vi.mock('../../src/main/ipc/session-working-set', () => ({
 }));
 
 vi.mock('../../src/main/ipc/chat', () => ({
-  forceStopSession: mocks.forceStopSession,
+  discardDeletedSessionRuntime: mocks.discardDeletedSessionRuntime,
 }));
 
 vi.mock('../../src/main/ipc/permission', () => ({
@@ -346,13 +346,16 @@ afterEach(() => {
 });
 
 describe('session:delete', () => {
-  it('returns the post-delete working-set snapshot to the invoking renderer', async () => {
+  it('durably deletes before discarding runtime state and returns the working set', async () => {
     const handler = mocks.handlers.get(IPC_CHANNELS.SESSION_DELETE);
     expect(handler).toBeDefined();
 
     const result = await handler!({ sender: sender(9) }, { id: SESSION_UUID });
 
     expect(mocks.sessionManager.delete).toHaveBeenCalledWith(SESSION_UUID);
+    expect(mocks.discardDeletedSessionRuntime).toHaveBeenCalledWith(SESSION_UUID);
+    expect(mocks.sessionManager.delete.mock.invocationCallOrder[0])
+      .toBeLessThan(mocks.discardDeletedSessionRuntime.mock.invocationCallOrder[0]!);
     expect(mocks.workingSetRemove).toHaveBeenCalledWith(SESSION_UUID, '9');
     expect(result).toEqual({
       status: 'deleted',
@@ -362,6 +365,20 @@ describe('session:delete', () => {
         mruSessionIds: ['remaining-session'],
       },
     });
+  });
+
+  it('keeps runtime state intact when durable deletion throws', async () => {
+    mocks.sessionManager.delete.mockImplementationOnce(() => {
+      throw new Error('database unavailable');
+    });
+    const handler = mocks.handlers.get(IPC_CHANNELS.SESSION_DELETE);
+    expect(handler).toBeDefined();
+
+    await expect(handler!({ sender: sender(9) }, { id: SESSION_UUID }))
+      .rejects.toThrow('database unavailable');
+
+    expect(mocks.discardDeletedSessionRuntime).not.toHaveBeenCalled();
+    expect(mocks.workingSetRemove).not.toHaveBeenCalled();
   });
 });
 

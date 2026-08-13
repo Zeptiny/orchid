@@ -1344,6 +1344,32 @@ describe('SubagentManager terminal eviction and session purge (U9)', () => {
     expect(terminalEvents.length).toBeGreaterThanOrEqual(3);
   });
 
+  it('discardSession silently aborts and removes every session record', async () => {
+    setConfig({ max_active_per_session: 1 });
+    const sid = 'sess-discard';
+    const events: SubagentDeltaEvent[] = [];
+    manager.setOnDelta((event) => events.push(event));
+    manager.setRunner(async function* (params): AsyncGenerator<StreamEvent> {
+      await new Promise<void>((resolve) => {
+        if (params.abortSignal.aborted) return resolve();
+        params.abortSignal.addEventListener('abort', () => resolve(), { once: true });
+      });
+      yield { type: 'finish', finishReason: 'stop' };
+    });
+
+    manager.spawn('running', 'x', testAgent, { sessionId: sid });
+    manager.spawn('queued', 'x', testAgent, { sessionId: sid });
+    const other = manager.spawn('other', 'x', testAgent, { sessionId: 'other-session' });
+    events.length = 0;
+
+    manager.discardSession(sid);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(manager.recordsForSession(sid)).toEqual([]);
+    expect(manager.getRecord(other.id)).toBeDefined();
+    expect(events.filter((event) => event.sessionId === sid)).toEqual([]);
+  });
+
   it('purgeSession resets the per-session revision counter (no slow leak, review #11)', () => {
     const sid = 'sess-purge-revisions';
     const record = manager.spawn('r1', 'x', testAgent, { sessionId: sid });

@@ -262,6 +262,35 @@ export function forceStopSession(sessionId: string): boolean {
   return true;
 }
 
+/**
+ * Discard execution state after a session has been durably deleted.
+ *
+ * This destructive path deliberately skips partial-turn persistence,
+ * interrupted terminal events, activity completion, and auto-naming. The
+ * caller must delete the durable session first so a storage failure leaves the
+ * still-running turn intact.
+ */
+export function discardDeletedSessionRuntime(sessionId: string): boolean {
+  getBackgroundStore().terminateSession(sessionId);
+  getForegroundLiveRegistry().dropSession(sessionId);
+  try {
+    getSubagentManager().discardSession(sessionId);
+  } catch (err) {
+    console.debug(
+      'discardDeletedSessionRuntime subagent cleanup failed (non-fatal):',
+      err,
+    );
+  }
+
+  const existing = activeAgents.get(sessionId);
+  if (!existing) return false;
+  existing.agentCancelled = true;
+  existing.finalized = true;
+  nextAgentGeneration(sessionId);
+  disposeActiveAgent(sessionId, existing);
+  return true;
+}
+
 /** Active session IDs whose frozen turn uses the given provider connection. */
 export function activeSessionsForProviderConnection(connectionId: string): readonly string[] {
   return [...activeAgents.values()]

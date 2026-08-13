@@ -25,7 +25,12 @@ import {
 import { sendChatState, sendTurnEvent, webContentsForWindowId } from './chat/events';
 import { snapshotForAgent } from './chat/snapshot';
 import { appendLiveTailMessages, persistTurnConversation, turnMessagesFromAgent } from './chat/persist';
-import { disposeActiveAgent, forceAbortSession, forceStopSession } from './chat/abort';
+import {
+  discardDeletedSessionRuntime,
+  disposeActiveAgent,
+  forceAbortSession,
+  forceStopSession,
+} from './chat/abort';
 import { startChatTurn } from './chat/send';
 import { triggerInterruptedTurnAutoName } from './chat/title';
 import type { AgentContext } from '../agents/xstate/agent-machine';
@@ -39,7 +44,12 @@ export {
 } from './chat/abort';
 export type { ForceAbortMainTurnOptions } from './chat/abort';
 export { ensureActiveSession } from './chat/session';
-export { forceAbortSession, forceStopSession, webContentsForWindowId };
+export {
+  discardDeletedSessionRuntime,
+  forceAbortSession,
+  forceStopSession,
+  webContentsForWindowId,
+};
 
 const BG_CMD_SNAPSHOT_MAX_LAST_N = 1000;
 
