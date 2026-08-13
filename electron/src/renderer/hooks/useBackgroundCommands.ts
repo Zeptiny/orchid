@@ -35,7 +35,10 @@ function listStateFrom(commands: readonly BgCommandListItem[]): BackgroundComman
 
 // ── Hook ─────────────────────────────────────────────────────────────────────
 
-export function useBackgroundCommands(activeSessionId: string | null): UseBackgroundCommandsReturn {
+export function useBackgroundCommands(
+  activeSessionId: string | null,
+  enabled = true,
+): UseBackgroundCommandsReturn {
   const [state, setState] = useState<BackgroundCommandsState>({ status: 'loading' });
   const sessionIdRef = useRef(activeSessionId);
   sessionIdRef.current = activeSessionId;
@@ -49,7 +52,7 @@ export function useBackgroundCommands(activeSessionId: string | null): UseBackgr
   }, []);
 
   const refresh = useCallback(async () => {
-    if (!activeSessionId || !window.orchid?.bgCmd?.list) {
+    if (!enabled || !activeSessionId || !window.orchid?.bgCmd?.list) {
       if (aliveRef.current) setState({ status: 'empty' });
       return;
     }
@@ -64,25 +67,25 @@ export function useBackgroundCommands(activeSessionId: string | null): UseBackgr
       const error = err instanceof Error ? err.message : String(err);
       setState({ status: 'error', error });
     }
-  }, [activeSessionId]);
+  }, [activeSessionId, enabled]);
 
   // Initial load + session switch: reset to loading, then fetch the fleet.
   useEffect(() => {
-    if (!activeSessionId) {
+    if (!enabled || !activeSessionId) {
       setState({ status: 'empty' });
       return;
     }
     setState({ status: 'loading' });
     void refresh();
-  }, [activeSessionId, refresh]);
+  }, [activeSessionId, enabled, refresh]);
 
   // Push refresh on fleet changes; only the owning session re-lists.
   useEffect(() => {
-    if (!activeSessionId || !window.orchid?.bgCmd?.onChanged) return undefined;
+    if (!enabled || !activeSessionId || !window.orchid?.bgCmd?.onChanged) return undefined;
     return window.orchid.bgCmd.onChanged((event) => {
       if (event.sessionId === activeSessionId) void refresh();
     });
-  }, [activeSessionId, refresh]);
+  }, [activeSessionId, enabled, refresh]);
 
   return { state, refresh };
 }

@@ -84,6 +84,26 @@ describe('useBackgroundCommands', () => {
     expect(bgCmd.onChanged).not.toHaveBeenCalled();
   });
 
+  it('defers fleet hydration until its inspector surface is enabled', async () => {
+    const bgCmd = installBgCmd(async () => [listItem()]);
+    const { result, rerender } = renderHook(
+      ({ enabled }) => useBackgroundCommands('sess-1', enabled),
+      { initialProps: { enabled: false } },
+    );
+    await flush();
+
+    expect(result.current.state.status).toBe('empty');
+    expect(bgCmd.list).not.toHaveBeenCalled();
+    expect(bgCmd.onChanged).not.toHaveBeenCalled();
+
+    rerender({ enabled: true });
+    await flush();
+
+    expect(bgCmd.list).toHaveBeenCalledOnce();
+    expect(bgCmd.onChanged).toHaveBeenCalledOnce();
+    expect(result.current.state.status).toBe('ready');
+  });
+
   it('refetches when a bgcmd:changed event matches the active session', async () => {
     const bgCmd = installBgCmd(async () => [listItem()]);
     const { result } = renderHook(() => useBackgroundCommands('sess-1'));

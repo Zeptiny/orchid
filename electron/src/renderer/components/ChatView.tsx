@@ -15,6 +15,7 @@ import {
 import { useChat } from '../hooks/useChat';
 import { useSession } from '../hooks/useSession';
 import { useBackgroundCommands } from '../hooks/useBackgroundCommands';
+import { useInspectorHydration } from '../hooks/useInspectorHydration';
 import { useSubagents } from '../hooks/useSubagents';
 import { useTodos } from '../hooks/useTodos';
 import type { UseSessionActivityReturn } from '../hooks/useSessionActivity';
@@ -87,7 +88,6 @@ export function ChatView({ isVisible = true, bootstrapConfig = null, onNotify, a
     session.activeSession?.id ?? null,
     session.activeSession?.todoStore.tasks ?? null,
   );
-  const commands = useBackgroundCommands(session.activeSession?.id ?? null);
   const tabs = useSessionTabs();
   const providers = useProviders();
   // Queue ownership follows the visible session: teardown paths (delete /
@@ -107,6 +107,10 @@ export function ChatView({ isVisible = true, bootstrapConfig = null, onNotify, a
     openRight: openSidebar,
     openLeft: openLeftSidebar,
   } = useResponsiveShell();
+  const commands = useBackgroundCommands(
+    session.activeSession?.id ?? null,
+    sidebarOpen,
+  );
   const [paletteOpen, setPaletteOpen] = useState(false);
   /** One-shot inspector section focus from command-palette navigation. */
   const [inspectorFocusSection, setInspectorFocusSection] = useState<string | null>(null);
@@ -923,28 +927,26 @@ export function ChatView({ isVisible = true, bootstrapConfig = null, onNotify, a
     }
   }, [refreshIndex]);
 
-  useEffect(() => {
-    refreshMCP();
-  }, [refreshMCP]);
-
-  // Re-fetch RAG/AST status when the active workspace changes (counts are
-  // project-scoped; no manual reload control in the inspector).
   const workspaceCwd = session.activeSession?.cwd ?? null;
-  useEffect(() => {
-    void refreshIndex();
-  }, [workspaceCwd, refreshIndex]);
+  useInspectorHydration({
+    enabled: sidebarOpen,
+    workspaceKey: workspaceCwd,
+    refreshMCP,
+    refreshIndex,
+  });
 
   // MCP starts in the background after the window opens, so the first status
   // snapshot often lands on "starting". Poll until every server leaves that
   // state (connected / failed / unavailable) so the right sidebar updates.
   useEffect(() => {
+    if (!sidebarOpen) return;
     const stillStarting = mcpServers.some((s) => s.status === 'starting');
     if (!stillStarting) return;
     const id = setInterval(() => {
       void refreshMCP();
     }, 1500);
     return () => clearInterval(id);
-  }, [mcpServers, refreshMCP]);
+  }, [mcpServers, refreshMCP, sidebarOpen]);
 
   // After a turn completes in the same session, refresh subagents so chain
   // footers pick up token usage written into subagent_chains. Initial idle
@@ -1248,6 +1250,9 @@ export function ChatView({ isVisible = true, bootstrapConfig = null, onNotify, a
             modelDetails={providerModelDetails}
             commandContext={commandContext}
             sessionId={session.activeSession?.id ?? null}
+            reasoningEffortOverride={session.activeSession?.reasoningEffortOverride ?? null}
+            serviceTierOverride={session.activeSession?.tierOverride ?? null}
+            permissionMode={session.activeSession?.permissionMode ?? null}
           />
         </DeferredSurface>
         </div>

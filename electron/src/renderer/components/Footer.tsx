@@ -101,6 +101,9 @@ interface FooterProps {
   modelDetails?: Readonly<Record<string, ProviderModelOption>>;
   commandContext?: CommandContext;
   sessionId?: string | null;
+  reasoningEffortOverride?: string | number | null;
+  serviceTierOverride?: string | null;
+  permissionMode?: PermissionMode | null;
 }
 
 export const Footer = memo(function Footer({
@@ -117,6 +120,9 @@ export const Footer = memo(function Footer({
   modelDetails,
   commandContext,
   sessionId,
+  reasoningEffortOverride = null,
+  serviceTierOverride = null,
+  permissionMode = null,
 }: FooterProps) {
   const confirming = interruptState && interruptState !== 'idle';
   const elapsedSeconds = useElapsedSeconds(
@@ -127,8 +133,15 @@ export const Footer = memo(function Footer({
   const contextMenuId = useId();
   const [reasoningConfig, setReasoningConfig] = useState<SessionReasoningConfigResult | null>(null);
   const [serviceTierConfig, setServiceTierConfig] = useState<SessionServiceTierConfigResult | null>(null);
-  const [sessionPermissionMode, setSessionPermissionMode] = useState<PermissionMode | null>(null);
+  const [sessionPermissionMode, setSessionPermissionMode] = useState<PermissionMode | null>(permissionMode);
   const permissionModeCoordinator = useRef(new PermissionModeCoordinator());
+  const sessionIdRef = useRef(sessionId ?? null);
+  const reasoningOverrideRef = useRef(reasoningEffortOverride);
+  const serviceTierOverrideRef = useRef(serviceTierOverride);
+  sessionIdRef.current = sessionId ?? null;
+  reasoningOverrideRef.current = reasoningEffortOverride;
+  serviceTierOverrideRef.current = serviceTierOverride;
+  const isDraft = sessionId == null;
 
   const usedContextTokens = contextUsedTokens(usage);
   const contextPercent = getContextPercent(usage, maxContext);
@@ -174,7 +187,14 @@ export const Footer = memo(function Footer({
     session
       .getReasoningConfig(selection ? { selection } : {})
       .then((config) => {
-        if (!cancelled) setReasoningConfig(config);
+        if (!cancelled) {
+          setReasoningConfig({
+            ...config,
+            override: sessionIdRef.current === null
+              ? config.override
+              : reasoningOverrideRef.current,
+          });
+        }
       })
       .catch(() => {
         if (!cancelled) setReasoningConfig(null);
@@ -182,7 +202,14 @@ export const Footer = memo(function Footer({
     return () => {
       cancelled = true;
     };
-  }, [model, sessionId, modelDetails]);
+  }, [isDraft, model, modelDetails]);
+
+  useEffect(() => {
+    if (isDraft) return;
+    setReasoningConfig((previous) => previous
+      ? { ...previous, override: reasoningEffortOverride }
+      : previous);
+  }, [isDraft, reasoningEffortOverride, sessionId]);
 
   useEffect(() => {
     let cancelled = false;
@@ -195,7 +222,16 @@ export const Footer = memo(function Footer({
     session
       .getServiceTierConfig(selection ? { selection } : {})
       .then((config) => {
-        if (!cancelled) setServiceTierConfig(config);
+        if (!cancelled) {
+          const override = sessionIdRef.current === null
+            ? config.override
+            : serviceTierOverrideRef.current;
+          setServiceTierConfig({
+            ...config,
+            override,
+            effective: override ?? config.selected,
+          });
+        }
       })
       .catch(() => {
         if (!cancelled) setServiceTierConfig(null);
@@ -203,11 +239,27 @@ export const Footer = memo(function Footer({
     return () => {
       cancelled = true;
     };
-  }, [model, sessionId, modelDetails]);
+  }, [isDraft, model, modelDetails]);
+
+  useEffect(() => {
+    if (isDraft) return;
+    setServiceTierConfig((previous) => previous
+      ? {
+          ...previous,
+          override: serviceTierOverride,
+          effective: serviceTierOverride ?? previous.selected,
+        }
+      : previous);
+  }, [isDraft, serviceTierOverride, sessionId]);
 
   useEffect(() => {
     const permission = window.orchid?.permission;
     const coordinator = permissionModeCoordinator.current;
+    if (sessionId != null) {
+      coordinator.invalidate();
+      setSessionPermissionMode(permissionMode);
+      return () => coordinator.invalidate();
+    }
     if (!permission?.getSessionMode) {
       coordinator.invalidate();
       setSessionPermissionMode(null);
@@ -219,7 +271,7 @@ export const Footer = memo(function Footer({
       setSessionPermissionMode,
     );
     return () => coordinator.invalidate();
-  }, [sessionId]);
+  }, [permissionMode, sessionId]);
 
   const badgeTone =
     contextPercent != null && contextPercent >= 85
