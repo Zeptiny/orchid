@@ -188,6 +188,48 @@ describe('context grid breakdown', () => {
     });
   });
 
+  it('counts reasoning tokens on a hidden usage message after the chain finishes', () => {
+    // When a turn produces no text response (only thinking/tool calls),
+    // finalizeTurn attaches the accumulated usage to a hidden assistant
+    // message. The done event carries the same usage reference, so
+    // isPersistedUsageRef returns true and providerDelta is zeroed.
+    // sumPersistedReasoning must still find the reasoning tokens on the
+    // hidden message — otherwise all assistant tokens are misattributed
+    // to "response" instead of being split between response and reasoning.
+    const usage = {
+      prompt_tokens: 100,
+      completion_tokens: 50,
+      total_tokens: 150,
+      cached_tokens: 0,
+      reasoning_tokens: 40,
+      context: {
+        input_tokens: 100,
+        output_tokens: 50,
+        used_tokens: 150,
+        system_tokens: 10,
+        tools_tokens: 0,
+        tool_use_tokens: 0,
+        user_tokens: 30,
+        assistant_tokens: 110,
+        reasoning_tokens: 40,
+      },
+    } as const;
+
+    const hiddenUsageMessage = {
+      role: 'assistant',
+      content: '',
+      type: MessageType.TEXT,
+      thinking: null,
+      hidden: true,
+      usage,
+    } as unknown as Message;
+
+    const categories = computeContextCategories([hiddenUsageMessage], usage, 1_000);
+
+    expect(categories.reasoning).toBe(40);
+    expect(categories.response).toBe(70);
+  });
+
   it('excludes hidden messages from every character bucket', () => {
     const hiddenTool = {
       role: 'assistant',

@@ -147,7 +147,6 @@ function splitByProviderReasoning(
 function sumPersistedReasoning(messages: readonly Message[]): number {
   let total = 0;
   for (const message of messages) {
-    if (message.hidden) continue;
     const value = message.usage?.reasoning_tokens;
     if (typeof value === 'number' && value >= 0) total += value;
   }
