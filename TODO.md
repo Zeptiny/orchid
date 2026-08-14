@@ -4,64 +4,20 @@ Internal backlog for Orchid. User-facing summary lives in the [README known limi
 
 ---
 
-## Bugs
-
-- RAG onnxruntime may not be being shipped correctly
-- Interface may prevent some changes while streaming (Such as model and reasoning level) but the command pallete still allows to execute
-- Interrupted subagents are being marked as complete - possibly after starting a new chain it is not preserved? - but only on some places (subagent view is correct, main agent context and main chat/session UI appears to not be)
-- replace_symbol can left trailing remnants
-
 ## Agent quality
 
 - LLM can deviate from the intended architecture
   - `AGENT.md` and docs should constrain this
 - LLM can produce dead code, incomplete implementations, or ignore the plan
-  - Reviewers should catch this — investigate why they don’t always
+  - Reviewers should catch this — investigate why they don't always
   - Subagents should make it easier to follow plans end-to-end
 - Skills and agents are not fully updated for the current harness capabilities
 
-## Interface
-
-- Verify every tool has generating and running states
-  - `edit` / `write` appear to lack them
-- Execute-command widget should show the command **description** in the title, with the raw command in the dropdown / body
-- Allow viewing background commands and sending input when needed
-- Errors are not returned / surfaced correctly in the UI
-  - Check that subagent errors propagate properly
-  - Example: API returned 429 but no message appeared in the interface
-- Add dedicated UI handling instead of the generic structured viewer for:
-  - RAG: `rag_search`, `rag_index`
-  - Process: `read_output`, `send_input`, `terminate_command`
-  - AST / semantic graph: `ast_index`, `explore_code`, `get_symbol`, `trace_calls`, `analyze_change_impact`, `get_file_skeleton`, `get_function`, `find_symbol_references`, `replace_symbol`, `rename_symbol`
-  - Todo: `todo_create`, `todo_update`, `todo_list`, `todo_delete`
-  - Web / subagents / skills: `web_fetch`, `delegate_to_subagent`, `wait_for_subagent`, `interrupt_subagents`, `skill`
-  - MCP: `read_mcp_resource`, `list_mcp_resources`, and dynamically registered MCP tools
-- Notifications / sounds when:
-  - Chain ends
-  - Needs user input (Ex: ask_question)
-- Tool widgets / tool groups may be collapsing when a chain ends
-
 ## General backlog
 
-- **P0: Realpath-based path sandboxing for all filesystem tools** — `resolveToolPath` is lexical-only; symlinks inside the project can escape the working directory. `apply_patch` has a lexical containment check but it is bypassable via directory symlinks. `write` / `edit` have no containment at all. Reuse `assertPathInScopeRoot` from `defs/paths.ts` (realpath root + parent + leaf). Apply uniformly to all mutating filesystem tools. (code review 2026-07-19, P0)
-- **P1: `apply_patch` sync matching can block the event loop** — `seekSequence` is O(n×m×4) synchronous. Large file + non-matching pattern blocks the main process indefinitely; `Promise.race` timeout cannot fire. Add a line-count guard in `applyChunksToContent` and `.max()` on the patch Zod schema. (code review 2026-07-19, P1)
-- **P1: `apply_patch` agent projector emits redundant full diffs** — full `<old_string>` / `<new_string>` per file can exceed the 20KB offload threshold, stripping per-file error info the agent needs. Make the projector compact: per-file status + errors only; omit diffs (UI renderer keeps them). (code review 2026-07-19, P1)
-- RAG post-write callback + automatic reindex when changes are detected (AST freshness is covered by the native semantic code graph workstream below; also support reindex via commands / manual triggers that the post-write path does not cover)
-- Remaining work from `docs/code-review-reports/2026-07-15-electron-simplification-review.md`
 - Verify remote embedding models work correctly
-- Do not re-parse markdown on every stream update
-- Concurrency control for file locking
-- LSP integration
-- SSH / remote connection support
-- Session compaction / compression (summarize or drop older turns so long sessions stay within context limits)
-- Analytics dashboard
-  - Energy metrics for Neuralwatt/Lilac providers (kWh consumed/charged, pricing multiplier, account quotas) — deferred from analytics page initial scope (R17). Data already exists in `usage_json` on `provider_attempts`; needs a dedicated UI section when energy-attributed attempts exist.
-- Allow to update the status of multiple tasks in one tool call
-  - Also creating in one tool call
+- LSP integration — no defined servers or features yet, still to be analyzed
 - Investigate if its better to not create new chains with the queued messages
-- Chain snapshoting
-- Better retry / frozen agent handling / long ttft
-- Goal mode
 
 ## Native semantic code graph / AST tool improvements
 
@@ -148,21 +104,3 @@ Internal backlog for Orchid. User-facing summary lives in the [README known limi
 
 - **Do not change this until the design is clearer**
 - Multiple primary agent types (general, plan, etc.) that can be switched mid-conversation
-
-## Subagents
-
-- Side / “BTW” agent (ask a question without interrupting the main flow)
-  - Best UI placement still TBD
-  - Read-only tools only
-  - Multi-turn? Still under consideration
-  - Useful for clarifications without stopping work
-    - e.g. “How does function X interact with system Y?”
-- A tool to view what the agent is currently doing / working
-  - May be summarized?
-  - Maybe only its TODOs are enough?
-
-## Configuration UI
-
-- Adding an MCP server currently allows command and URL at the same time
-  - Show only one transport at a time, selected by toggle
-  - No way to set an auth token yet
