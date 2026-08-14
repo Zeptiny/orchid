@@ -38,6 +38,11 @@ export const subagentSnapshotSchema = z.object({
   sessionId: z.string().uuid(),
 }).strict();
 
+export const subagentDetailSchema = z.object({
+  sessionId: z.string().uuid(),
+  subagentId: z.string().min(1),
+}).strict();
+
 // ── Ask Question ────────────────────────────────────────────────────────────
 
 export const askQuestionAnswerSchema = z.object({
@@ -135,6 +140,13 @@ export const sessionOpenSchema = z.object({
   id: z.string().uuid(),
 });
 
+/** Validate a bounded history-page request and its optional exclusive cursor. */
+export const sessionHistoryPageSchema = z.object({
+  sessionId: z.string().uuid(),
+  chainId: z.string().min(1),
+  beforeIndex: z.number().int().nonnegative().optional(),
+}).strict();
+
 export const sessionDeleteSchema = z.object({
   id: z.string().uuid(),
 });
@@ -176,6 +188,18 @@ export const sessionSetReasoningEffortSchema = z.object({
     z.number().int().min(1).max(1_000_000),
   ]).nullable(),
 });
+
+export const sessionSetServiceTierSchema = z.object({
+  tier: z.string().trim().min(1).max(128).nullable(),
+});
+
+export const sessionGetReasoningConfigSchema = z.object({
+  selection: modelSelectionSchema.nullable().optional(),
+}).strict().optional();
+
+export const sessionGetServiceTierConfigSchema = z.object({
+  selection: modelSelectionSchema.nullable().optional(),
+}).strict().optional();
 
 // ── Tool ─────────────────────────────────────────────────────────────────────
 

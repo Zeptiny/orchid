@@ -7,7 +7,7 @@
  */
 import { memo, useState, useCallback, useMemo, useEffect, useId, useRef } from 'react';
 import type { Message } from '../../shared/types/message';
-import { MessageRole, MessageType } from '../../shared/types/message';
+import { MessageRole, MessageType, ThinkingArtifactKind } from '../../shared/types/message';
 import {
   estimateThoughtDurationMs,
   formatDurationMs,
@@ -78,6 +78,20 @@ function AssistantMessage({
   );
 }
 
+/** Opaque/redacted thinking persists no readable text: render an indicator. */
+function OpaqueThinkingMessage({ tokenCount }: { tokenCount?: number }) {
+  return (
+    <div className="orchid-thought">
+      <div className="orchid-thought-title" aria-disabled="true">
+        <span className="inline-flex items-center gap-1.5">
+          <Icon name="alertCircle" size={12} />
+          {tokenCount != null ? `Thought (${tokenCount} tokens)` : 'Thought'}
+        </span>
+      </div>
+    </div>
+  );
+}
+
 function ThinkingMessage({
   message,
   isStreaming,
@@ -97,6 +111,8 @@ function ThinkingMessage({
     setExpanded(false);
   }, []);
   const content = message.content || (message.thinking ?? '');
+  const payload = message.thinking_payload;
+  const isOpaque = !content && !!payload && payload.kind !== ThinkingArtifactKind.TEXT;
   // Mock shows "Thought 936ms" — estimate from content length when no duration field
   const durationLabel = useMemo(() => {
     if (isStreaming) return formatDurationMs(streamingElapsedMs);
@@ -119,6 +135,10 @@ function ThinkingMessage({
     const intervalId = window.setInterval(updateElapsed, 100);
     return () => window.clearInterval(intervalId);
   }, [isStreaming]);
+
+  if (isOpaque && !isStreaming) {
+    return <OpaqueThinkingMessage tokenCount={payload?.reasoningTokenCount} />;
+  }
 
   return (
     <div

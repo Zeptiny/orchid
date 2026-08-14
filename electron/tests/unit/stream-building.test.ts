@@ -307,6 +307,90 @@ describe('buildHistoryStreamItems', () => {
     expect(footers[0]).toMatchObject({ kind: 'footer', model: 'gpt-4o' });
   });
 
+  it('renders a history gap while preserving full-chain footer usage and errors', () => {
+    const usage: Usage = {
+      prompt_tokens: 100,
+      completion_tokens: 25,
+      total_tokens: 125,
+      cached_tokens: 10,
+    };
+    const chains = [chain({
+      id: 'paged-chain',
+      status: ChainStatus.FAILED,
+      messages: [assistantText('recent', 'recent tail')],
+      messagesLoaded: false,
+      messageStartIndex: 8,
+      messageCount: 9,
+      usageSummary: usage,
+      preview: 'original question',
+      errorDetail: 'provider failed',
+    })];
+
+    const result = buildHistoryStreamItems({ ...baseOpts, sessionChains: chains });
+
+    expect(result.items[0]).toMatchObject({ kind: 'history-gap', chainIndex: 0 });
+    expect(result.items.find((item) => item.kind === 'message')).toBeDefined();
+    expect(result.items.find((item) => item.kind === 'footer')).toMatchObject({
+      kind: 'footer',
+      usage,
+      failed: true,
+      errorDetail: 'provider failed',
+    });
+  });
+
+  it('renders one global history gap targeting the newest incomplete chain', () => {
+    const chains = [
+      chain({
+        id: 'older-incomplete',
+        messages: [],
+        messagesLoaded: false,
+        messageStartIndex: 8,
+        messageCount: 8,
+      }),
+      chain({
+        id: 'newer-incomplete',
+        messages: [assistantText('recent', 'recent tail')],
+        messagesLoaded: false,
+        messageStartIndex: 4,
+        messageCount: 5,
+      }),
+    ];
+
+    const result = buildHistoryStreamItems({ ...baseOpts, sessionChains: chains });
+    const gaps = result.items.filter((item) => item.kind === 'history-gap');
+
+    expect(gaps).toHaveLength(1);
+    expect(gaps[0]).toMatchObject({ chainIndex: 1 });
+    expect(result.items[0]).toMatchObject({ kind: 'history-gap', chainIndex: 1 });
+  });
+
+  it('emits the global history gap only when its collapsed chain is expanded', () => {
+    const chains = Array.from(
+      { length: CHAIN_COLLAPSE_THRESHOLD + 1 },
+      (_, index) => chain({
+        id: `chain-${index}`,
+        ...(index === 0
+          ? {
+              messagesLoaded: false,
+              messageStartIndex: 2,
+              messageCount: 2,
+            }
+          : {}),
+      }),
+    );
+
+    const collapsed = buildHistoryStreamItems({ ...baseOpts, sessionChains: chains });
+    expect(collapsed.items.some((item) => item.kind === 'history-gap')).toBe(false);
+
+    const expanded = buildHistoryStreamItems({
+      ...baseOpts,
+      sessionChains: chains,
+      expandedChainIndexes: new Set([0]),
+    });
+    expect(expanded.items.filter((item) => item.kind === 'history-gap'))
+      .toEqual([expect.objectContaining({ chainIndex: 0 })]);
+  });
+
   it('marks footer as interrupted for INTERRUPTED chains', () => {
     const chains = [
       chain({ id: 'c1', status: ChainStatus.INTERRUPTED, messages: [userMsg('u1', 'hi')] }),

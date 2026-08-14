@@ -8,6 +8,7 @@ import {
 import {
   CatalogTrustError,
   MAX_CATALOG_BYTES,
+  validateCatalogBytes,
   validateSignedCatalog,
   type CatalogKeyring,
 } from '../../src/main/providers/catalog/trust';
@@ -93,6 +94,69 @@ describe('provider catalog schema', () => {
       providers: [...duplicateProvider.providers, structuredClone(duplicateProvider.providers[0])],
     })).toThrow(/duplicate provider/i);
     expect(() => catalogEnvelopeSchema.parse(duplicateModel)).toThrow(/duplicate model/i);
+  });
+
+  it('accepts richer pricing dimensions and a declared non-fiat currency unit', () => {
+    const catalog = createCatalog();
+    const pricing = catalog.providers[0].models[0].pricing;
+    pricing.currency = 'kWh';
+    pricing.currencyUnit = { kind: 'non-fiat', unit: 'kWh', displayName: 'Kilowatt-hour' };
+    pricing.rates.cacheWriteByTtl = {
+      '1h': { amount: '6.250000', per: 1_000_000, unit: 'tokens' },
+    };
+    pricing.rates.perRequest = { amount: '0.01', per: 1, unit: 'requests' };
+    pricing.rates.energy = { amount: '0.040000', per: 1, unit: 'energy' };
+    pricing.contextTiers = [{
+      overContextTokens: 200_000,
+      rates: {
+        input: { amount: '2.500000', per: 1_000_000, unit: 'tokens' },
+        perRequest: { amount: '0.02', per: 1, unit: 'requests' },
+      },
+    }];
+
+    const parsed = catalogEnvelopeSchema.parse(catalog);
+    const parsedPricing = parsed.providers[0].models[0].pricing;
+    expect(parsedPricing.currencyUnit).toEqual({
+      kind: 'non-fiat',
+      unit: 'kWh',
+      displayName: 'Kilowatt-hour',
+    });
+    expect(parsedPricing.rates.cacheWriteByTtl?.['1h']?.amount).toBe('6.250000');
+    expect(parsedPricing.rates.perRequest?.unit).toBe('requests');
+    expect(parsedPricing.contextTiers?.[0]?.rates.perRequest?.amount).toBe('0.02');
+  });
+
+  it('rejects a currency that lacks a matching currencyUnit declaration', () => {
+    const undeclared = createCatalog();
+    undeclared.providers[0].models[0].pricing.currency = 'kWh';
+    expect(() => catalogEnvelopeSchema.parse(undeclared)).toThrow(/currencyUnit/i);
+
+    const mismatched = createCatalog();
+    mismatched.providers[0].models[0].pricing.currency = 'USD';
+    mismatched.providers[0].models[0].pricing.currencyUnit = { kind: 'non-fiat', unit: 'kWh' };
+    expect(() => catalogEnvelopeSchema.parse(mismatched)).toThrow(/currencyUnit/i);
+  });
+
+  it('rejects invalid rate dimensions and unknown facet keys', () => {
+    const badTtl = createCatalog();
+    badTtl.providers[0].models[0].pricing.rates.cacheWriteByTtl = {
+      weekly: { amount: '1.000000', per: 1_000_000, unit: 'tokens' },
+    };
+    expect(() => catalogEnvelopeSchema.parse(badTtl)).toThrow();
+
+    const negativeRate = createCatalog();
+    negativeRate.providers[0].models[0].pricing.rates.input = {
+      amount: '-1.000000',
+      per: 1_000_000,
+      unit: 'tokens',
+    };
+    expect(() => catalogEnvelopeSchema.parse(negativeRate)).toThrow();
+
+    const unknownFacet = createCatalog() as unknown as {
+      providers: Array<{ facets?: Record<string, unknown> }>;
+    };
+    unknownFacet.providers[0].facets = { quota: {} };
+    expect(() => catalogEnvelopeSchema.parse(unknownFacet)).toThrow();
   });
 });
 
@@ -187,6 +251,96 @@ describe('provider catalog trust', () => {
       bytes: truncatedBytes,
       signature: sign(null, truncatedBytes, privateKey),
     })).toThrow(/JSON/i);
+  });
+
+  it('rejects a provider declaring a facet not pinned in the trusted policy list', () => {
+    // xai pins no facets, so any tier declaration is untrusted there.
+    const providerLevel = createCatalog();
+    providerLevel.providers[0].id = 'xai';
+    providerLevel.providers[0].supportedProtocols = ['xai'];
+    providerLevel.providers[0].models[0].protocol = 'xai';
+    providerLevel.providers[0].facets = {
+      tiers: {
+        kind: 'model-name-variants',
+        tiers: [{ id: 'flex', modelIdSuffix: '-flex', requiresStreaming: true }],
+      },
+    };
+    expect(() => validateCatalogBytes(
+      Buffer.from(JSON.stringify(providerLevel), 'utf8'),
+      { appVersion: '0.1.0', now: new Date(NOW) },
+    )).toThrow(CatalogTrustError);
+    expect(() => validateCatalogBytes(
+      Buffer.from(JSON.stringify(providerLevel), 'utf8'),
+      { appVersion: '0.1.0', now: new Date(NOW) },
+    )).toThrow(/facet/i);
+
+    const modelLevel = createCatalog();
+    modelLevel.providers[0].id = 'xai';
+    modelLevel.providers[0].supportedProtocols = ['xai'];
+    modelLevel.providers[0].models[0].protocol = 'xai';
+    modelLevel.providers[0].models[0].facets = {
+      tiers: { kind: 'request-parameter', parameter: 'service_tier', tiers: [{ id: 'flex' }] },
+    };
+    expect(() => validateCatalogBytes(
+      Buffer.from(JSON.stringify(modelLevel), 'utf8'),
+      { appVersion: '0.1.0', now: new Date(NOW) },
+    )).toThrow(/facet/i);
+  });
+
+  it('accepts facet declarations pinned in the trusted policy list', () => {
+    const catalog = createCatalog();
+    catalog.providers[0].facets = {
+      thinking: {
+        exposure: 'readable',
+        replay: 'mandatory-in-tool-loop',
+        knobs: {
+          displayModes: ['summarized'],
+          defaultDisplayMode: 'summarized',
+          encryptedContentOption: true,
+        },
+      },
+      cache: { mode: 'explicit', sessionKey: true, ttlOptions: [{ id: '5m' }, { id: '1h' }] },
+    };
+    catalog.providers[0].models[0].facets = {
+      thinking: { exposure: 'opaque', replay: 'impossible' },
+    };
+
+    const result = validateCatalogBytes(
+      Buffer.from(JSON.stringify(catalog), 'utf8'),
+      { appVersion: '0.1.0', now: new Date(NOW) },
+    );
+    expect(result.catalog.providers[0].facets?.cache?.mode).toBe('explicit');
+    expect(result.catalog.providers[0].models[0].facets?.thinking?.exposure).toBe('opaque');
+  });
+
+  it('treats the injected policy list as the facet gate', () => {
+    // xai pins no facets in the default policy list; the injected list grants tiers.
+    const catalog = createCatalog();
+    catalog.providers[0].id = 'xai';
+    catalog.providers[0].supportedProtocols = ['xai'];
+    catalog.providers[0].models[0].protocol = 'xai';
+    catalog.providers[0].facets = {
+      tiers: { kind: 'request-parameter', parameter: 'service_tier', tiers: [{ id: 'flex' }] },
+    };
+    const bytes = Buffer.from(JSON.stringify(catalog), 'utf8');
+
+    expect(() => validateCatalogBytes(bytes, {
+      appVersion: '0.1.0',
+      now: new Date(NOW),
+    })).toThrow(/facet/i);
+
+    const result = validateCatalogBytes(bytes, {
+      appVersion: '0.1.0',
+      now: new Date(NOW),
+      policies: [{
+        id: 'xai',
+        authMethods: ['api-key'],
+        protocols: ['xai'],
+        allowsCustomModels: true,
+        facets: ['tiers'],
+      }],
+    });
+    expect(result.catalog.providers[0].facets?.tiers?.kind).toBe('request-parameter');
   });
 });
 

@@ -2,10 +2,14 @@ import { describe, expect, it } from 'vitest';
 import {
   modelSelectionSchema,
   copyModelSelection,
+  parseProviderConnectionDocument,
   providerConnectionSchema,
+  providerProtocolSchema,
   type ProviderConnection,
   type ProviderDefinition,
 } from '../../src/shared/types/provider';
+import { ProviderDriverRegistry } from '../../src/main/providers/drivers/registry';
+import type { ProviderDriver } from '../../src/main/providers/drivers/types';
 import { resolveModelSelection } from '../../src/main/providers/resolver';
 
 const CONNECTION_ID = '11111111-1111-4111-8111-111111111111';
@@ -167,5 +171,126 @@ describe('provider domain', () => {
       [connection()],
       [definition()],
     )).toMatchObject({ kind: 'unavailable', reason: 'missing-model' });
+  });
+});
+
+describe('provider protocol extensions', () => {
+  it('accepts openai-responses as a first-class protocol', () => {
+    expect(providerProtocolSchema.parse('openai-responses')).toBe('openai-responses');
+    expect(providerConnectionSchema.parse(connection({ protocol: 'openai-responses' })).protocol)
+      .toBe('openai-responses');
+  });
+});
+
+describe('provider connection document v2', () => {
+  it('migrates a v1 document to v2 with empty new fields, preserving connections', () => {
+    const legacy = connection();
+    const migrated = parseProviderConnectionDocument({
+      version: 1,
+      connections: [legacy],
+    });
+
+    expect(migrated.version).toBe(2);
+    expect(migrated.connections).toEqual([legacy]);
+    expect(migrated.connections[0].discoveredModels).toBeUndefined();
+    expect(migrated.connections[0].pricingOverrides).toBeUndefined();
+    expect(migrated.connections[0].tierSelections).toBeUndefined();
+  });
+
+  it('passes current documents through and rejects malformed documents', () => {
+    const current = { version: 2, connections: [connection()] };
+    expect(parseProviderConnectionDocument(current).connections).toEqual([connection()]);
+
+    expect(() => parseProviderConnectionDocument({ version: 3, connections: [] })).toThrow();
+    expect(() => parseProviderConnectionDocument({
+      version: 1,
+      connections: [connection(), connection()],
+    })).toThrow(/duplicate/i);
+  });
+
+  it('round-trips discovered models, pricing overrides, and tier selections', () => {
+    const parsed = providerConnectionSchema.parse(connection({
+      discoveredModels: [{
+        id: 'vendor/path/discovered',
+        displayName: 'Discovered model',
+        protocol: 'openai-compatible',
+        reasoningLevels: ['low', 'high'],
+        pricing: {
+          currencyUnit: { kind: 'fiat', code: 'USD' },
+          observedAt: '2026-08-08T12:00:00.000Z',
+          rates: { input: { amount: '1.250000', per: 1_000_000, unit: 'tokens' } },
+        },
+        provenance: 'provider',
+        discoveredAt: '2026-08-08T12:00:00.000Z',
+      }],
+      pricingOverrides: {
+        'vendor/path/model': {
+          output: { amount: '9.000000', per: 1_000_000, unit: 'tokens' },
+          cacheWriteByTtl: { '1h': { amount: '6.250000', per: 1_000_000, unit: 'tokens' } },
+        },
+      },
+      tierSelections: { 'vendor/path/model': 'flex' },
+    }));
+
+    expect(parsed.discoveredModels?.[0]).toMatchObject({
+      id: 'vendor/path/discovered',
+      provenance: 'provider',
+    });
+    expect(parsed.pricingOverrides?.['vendor/path/model']?.output?.amount).toBe('9.000000');
+    expect(parsed.tierSelections?.['vendor/path/model']).toBe('flex');
+  });
+
+  it('rejects malformed facet data on connections', () => {
+    expect(() => providerConnectionSchema.parse({
+      ...connection(),
+      discoveredModels: [{
+        id: 'vendor/path/discovered',
+        provenance: 'user',
+        discoveredAt: '2026-08-08T12:00:00.000Z',
+      }],
+    })).toThrow();
+
+    expect(() => providerConnectionSchema.parse({
+      ...connection(),
+      pricingOverrides: {
+        'vendor/path/model': {
+          cacheWriteByTtl: { weekly: { amount: '1', per: 1_000_000, unit: 'tokens' } },
+        },
+      },
+    })).toThrow();
+
+    expect(() => providerConnectionSchema.parse({
+      ...connection(),
+      pricingOverrides: {
+        'vendor/path/model': { input: { amount: '-1', per: 1_000_000, unit: 'tokens' } },
+      },
+    })).toThrow();
+
+    expect(() => providerConnectionSchema.parse({
+      ...connection(),
+      tierSelections: { 'vendor/path/model': ' ' },
+    })).toThrow();
+  });
+});
+
+describe('provider driver facets', () => {
+  it('keeps a driver with no facet hooks valid', () => {
+    const driver: ProviderDriver = {
+      id: 'bare-driver',
+      supportedAuthMethods: ['api-key'],
+      supportedProtocols: ['openai-compatible'],
+      allowsCustomEndpoint: false,
+      origin: 'https://example.test',
+      createLanguageModel: () => Promise.reject(new Error('not exercised')),
+    };
+
+    const registry = new ProviderDriverRegistry([driver]);
+    expect(registry.require('bare-driver')).toBe(driver);
+    expect(driver.thinkingPolicy).toBeUndefined();
+    expect(driver.tierMechanism).toBeUndefined();
+    expect(driver.pricingFacet).toBeUndefined();
+    expect(driver.cacheFacet).toBeUndefined();
+    expect(driver.quotaFacet).toBeUndefined();
+    expect(driver.discoveryFacet).toBeUndefined();
   });
 });

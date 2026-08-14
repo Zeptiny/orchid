@@ -141,6 +141,7 @@ export function forceAbortMainTurn(
       err,
     );
   }
+  const terminalMessages = turnMessagesFromAgent(existing);
   existing.messages = fullHistory;
 
   // Interrupted turns still name the session from what was exchanged so far.
@@ -162,7 +163,7 @@ export function forceAbortMainTurn(
         sendTurnEvent(ownerWebContents, existing, IPC_CHANNELS.CHAT_DONE, {
           type: 'done',
           response,
-          messages: fullHistory,
+          messages: terminalMessages,
           interrupted: true,
           usage,
         });
@@ -219,6 +220,7 @@ export function forceStopSession(sessionId: string): boolean {
   const context = existing.actor.getSnapshot().context as AgentContext;
   existing.actor.send({ type: 'CANCEL' });
   flushPartialTurnContent(existing, context);
+  const terminalMessages = turnMessagesFromAgent(existing);
   const fullHistory = [...existing.messages, ...existing.turnMessages];
   if (fullHistory.length > 0) {
     persistTurnConversation(
@@ -243,7 +245,7 @@ export function forceStopSession(sessionId: string): boolean {
     sendTurnEvent(ownerWebContents, existing, IPC_CHANNELS.CHAT_DONE, {
       type: 'done',
       response: context.response ?? '',
-      messages: fullHistory,
+      messages: terminalMessages,
       interrupted: true,
       usage: context.usage ?? null,
     });
@@ -255,6 +257,35 @@ export function forceStopSession(sessionId: string): boolean {
     });
   }
 
+  nextAgentGeneration(sessionId);
+  disposeActiveAgent(sessionId, existing);
+  return true;
+}
+
+/**
+ * Discard execution state after a session has been durably deleted.
+ *
+ * This destructive path deliberately skips partial-turn persistence,
+ * interrupted terminal events, activity completion, and auto-naming. The
+ * caller must delete the durable session first so a storage failure leaves the
+ * still-running turn intact.
+ */
+export function discardDeletedSessionRuntime(sessionId: string): boolean {
+  getBackgroundStore().terminateSession(sessionId);
+  getForegroundLiveRegistry().dropSession(sessionId);
+  try {
+    getSubagentManager().discardSession(sessionId);
+  } catch (err) {
+    console.debug(
+      'discardDeletedSessionRuntime subagent cleanup failed (non-fatal):',
+      err,
+    );
+  }
+
+  const existing = activeAgents.get(sessionId);
+  if (!existing) return false;
+  existing.agentCancelled = true;
+  existing.finalized = true;
   nextAgentGeneration(sessionId);
   disposeActiveAgent(sessionId, existing);
   return true;

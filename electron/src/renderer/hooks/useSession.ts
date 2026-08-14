@@ -8,14 +8,21 @@
  * - Active session
  * - Session list
  * - load(), create(), delete(), rename() actions
- * - Loading/error states (interaction states)
+ * - Session-list error states
  */
 import { useCallback, useMemo, useSyncExternalStore } from 'react';
 import type { Session } from '../../shared/types/session';
 import type { ModelSelection } from '../../shared/types/provider';
 import type { SessionSummary } from '../../shared/types/ipc-boundary';
-import type { WorkspaceInfo, SessionOpenResult } from '../../shared/types/ipc';
+import type {
+  WorkspaceInfo,
+  SessionDeleteResult,
+  SessionDeletedEvent,
+  SessionOpenResult,
+  SessionHistoryPageResult,
+} from '../../shared/types/ipc';
 import { ChainStatus } from '../../shared/types/chain';
+import { __resetDeletionReconciliation } from './useSessionDeletionReconciliation';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -26,20 +33,34 @@ export type SessionListState =
   | { status: 'partial'; sessions: SessionSummary[]; error: string }
   | { status: 'error'; error: string };
 
+/** One deduplicated deletion for renderer navigation reconciliation. */
+export interface SessionDeletionNotice extends SessionDeletedEvent {
+  /** Whether this renderer was displaying the deleted session. */
+  wasActive: boolean;
+  /** Monotonic renderer-local identity used to run navigation exactly once. */
+  sequence: number;
+}
+
 export interface UseSessionReturn {
   /** The active (loaded) session, or null (draft / new chat). */
   activeSession: Session | null;
   /** Session list state with interaction states. */
   listState: SessionListState;
+  /** Session IDs with a durable delete currently in flight. */
+  pendingDeleteIds: ReadonlySet<string>;
+  /** Latest authoritative deletion, deduplicated across event and invoke result. */
+  deletionNotice: SessionDeletionNotice | null;
   /** Current workspace (draft → session → sticky → unbound). */
   workspace: WorkspaceInfo | null;
   /** Load a session by ID. Returns the loaded session (or null on failure). */
   load: (id: string) => Promise<Session | null>;
   /**
-   * Activate a session and return its full view payload (session, flattened
-   * messages, live snapshot, workspace) in one round-trip. Used by switching.
+   * Activate a session and return its bounded renderer view (session, flattened
+   * loaded messages, live snapshot, workspace) in one round-trip.
    */
   open: (id: string) => Promise<SessionOpenResult | null>;
+  /** Prepend the next older bounded message page for one active-session chain. */
+  loadHistoryPage: (chainId: string) => Promise<SessionHistoryPageResult | null>;
   /**
    * Eagerly create a session file (legacy / tests). Prefer `enterDraft` for
    * the New Chat button — session is created on first message instead.
@@ -51,7 +72,7 @@ export interface UseSessionReturn {
    */
   enterDraft: () => Promise<void>;
   /** Delete a session by ID. */
-  deleteSession: (id: string) => Promise<void>;
+  deleteSession: (id: string) => Promise<SessionDeleteResult>;
   /** Rename a session. */
   rename: (id: string, name: string) => Promise<void>;
   /** Change the connection-scoped selection for a session (active only in main). */
@@ -68,8 +89,6 @@ export interface UseSessionReturn {
   draftGeneration: number;
   /** Refresh the session list. */
   refresh: () => Promise<void>;
-  /** Whether a session is currently loading. */
-  isLoading: boolean;
 }
 
 const UNBOUND_WORKSPACE: WorkspaceInfo = {
@@ -85,27 +104,36 @@ type Listener = () => void;
 interface SharedSnapshot {
   readonly activeSession: Session | null;
   readonly listState: SessionListState;
+  readonly pendingDeleteIds: ReadonlySet<string>;
+  readonly deletionNotice: SessionDeletionNotice | null;
   readonly workspace: WorkspaceInfo | null;
-  readonly isLoading: boolean;
   readonly draftGeneration: number;
 }
 
 let activeSession: Session | null = null;
 let listState: SessionListState = { status: 'loading' };
+let pendingDeleteIds: ReadonlySet<string> = new Set();
+let deletionNotice: SessionDeletionNotice | null = null;
+let deletionSequence = 0;
 let workspace: WorkspaceInfo | null = null;
-let isLoading = false;
 let draftGeneration = 0;
 /** Monotonic generation so out-of-order session:load responses are dropped. */
 let loadGeneration = 0;
+/** Monotonic generation so older session:list responses cannot win. */
+let listRefreshGeneration = 0;
 let bootstrapped = false;
 const listeners = new Set<Listener>();
 const unsubscribers: Array<() => void> = [];
+const historyPageFlights = new Map<string, Promise<SessionHistoryPageResult | null>>();
+const deleteFlights = new Map<string, Promise<SessionDeleteResult>>();
+const deletedSessionIds = new Set<string>();
 
 let cachedSnapshot: SharedSnapshot = {
   activeSession,
   listState,
+  pendingDeleteIds,
+  deletionNotice,
   workspace,
-  isLoading,
   draftGeneration,
 };
 
@@ -113,8 +141,9 @@ function rebuildSnapshot(): void {
   cachedSnapshot = {
     activeSession,
     listState,
+    pendingDeleteIds,
+    deletionNotice,
     workspace,
-    isLoading,
     draftGeneration,
   };
   for (const listener of listeners) listener();
@@ -145,16 +174,53 @@ function setListState(next: SessionListState | ((prev: SessionListState) => Sess
   rebuildSnapshot();
 }
 
+function setDeletePending(id: string, pending: boolean): void {
+  if (pending === pendingDeleteIds.has(id)) return;
+  const next = new Set(pendingDeleteIds);
+  if (pending) next.add(id);
+  else next.delete(id);
+  pendingDeleteIds = next;
+  rebuildSnapshot();
+}
+
+function withoutSessionSummary(state: SessionListState, id: string): SessionListState {
+  if (state.status !== 'ready' && state.status !== 'partial') return state;
+  const sessions = state.sessions.filter((session) => session.id !== id);
+  if (sessions.length === state.sessions.length) return state;
+  if (sessions.length === 0 && state.status === 'ready') return { status: 'empty' };
+  return { ...state, sessions };
+}
+
+/** Apply the event/invoke deletion authority once for this renderer. */
+function applySessionDeletion(event: SessionDeletedEvent): boolean {
+  if (deletedSessionIds.has(event.id)) return false;
+  const wasActive = activeSession?.id === event.id;
+  deletedSessionIds.add(event.id);
+  loadGeneration += 1;
+  if (wasActive) activeSession = null;
+  listState = withoutSessionSummary(listState, event.id);
+  deletionNotice = {
+    ...event,
+    wasActive,
+    sequence: ++deletionSequence,
+  };
+  rebuildSnapshot();
+  return true;
+}
+
 function setWorkspaceState(next: WorkspaceInfo | null): void {
-  if (next === workspace) return;
+  if (workspaceStatesEqual(next, workspace)) return;
   workspace = next;
   rebuildSnapshot();
 }
 
-function setIsLoading(next: boolean): void {
-  if (next === isLoading) return;
-  isLoading = next;
-  rebuildSnapshot();
+function workspaceStatesEqual(a: WorkspaceInfo | null, b: WorkspaceInfo | null): boolean {
+  if (a === b) return true;
+  if (!a || !b) return false;
+  return a.cwd === b.cwd
+    && a.source === b.source
+    && a.status === b.status
+    && (a.trust ?? 'trusted') === (b.trust ?? 'trusted');
 }
 
 function advanceDraftGeneration(): number {
@@ -169,14 +235,18 @@ async function refreshShared(): Promise<void> {
     return;
   }
 
+  const generation = ++listRefreshGeneration;
   try {
-    const sessions = await window.orchid.session.list();
+    const loaded = await window.orchid.session.list();
+    if (generation !== listRefreshGeneration) return;
+    const sessions = loaded.filter((session) => !deletedSessionIds.has(session.id));
     if (sessions.length === 0) {
       setListState({ status: 'empty' });
     } else {
       setListState({ status: 'ready', sessions });
     }
   } catch (err) {
+    if (generation !== listRefreshGeneration) return;
     const error = err instanceof Error ? err.message : String(err);
     setListState((prev) => {
       if (prev.status === 'ready' || prev.status === 'partial') {
@@ -222,6 +292,14 @@ function ensureBootstrapped(): void {
     );
   }
 
+  if (window.orchid?.session?.onDeleted) {
+    unsubscribers.push(
+      window.orchid.session.onDeleted((event) => {
+        applySessionDeletion(event);
+      }),
+    );
+  }
+
   // Lazy create: first chat:send with no active session creates one in main
   // and pushes SESSION_CREATED so the sidebar gains a list entry. Only adopt
   // when this window is still in draft (no active session) so a concurrent
@@ -252,10 +330,17 @@ function ensureBootstrapped(): void {
         setActiveSession((prev) => {
           // Only update when the same session is still active. Never resurrect
           // a session after New Chat/draft (prev === null) from a late event.
-          if (prev?.id === event.session.id) {
-            return event.session;
-          }
-          return prev;
+          if (prev?.id !== event.sessionId) return prev;
+          const chainIndex = prev.chains.findIndex((chain) => chain.id === event.chain.id);
+          const chains = chainIndex < 0
+            ? [...prev.chains, event.chain]
+            : prev.chains.map((chain, index) => index === chainIndex ? event.chain : chain);
+          return {
+            ...prev,
+            chains,
+            activeChainId: event.activeChainId,
+            updatedAt: event.updatedAt,
+          };
         });
       }),
     );
@@ -278,7 +363,6 @@ async function loadShared(id: string): Promise<Session | null> {
 
   const generation = ++loadGeneration;
   advanceDraftGeneration();
-  setIsLoading(true);
   try {
     const session = await window.orchid.session.load({ id });
     // Drop stale responses when a newer load (or draft) superseded this one.
@@ -292,10 +376,6 @@ async function loadShared(id: string): Promise<Session | null> {
   } catch (err) {
     console.error('Failed to load session:', err);
     return null;
-  } finally {
-    if (generation === loadGeneration) {
-      setIsLoading(false);
-    }
   }
 }
 
@@ -306,7 +386,6 @@ async function openShared(id: string): Promise<SessionOpenResult | null> {
 
   const generation = ++loadGeneration;
   advanceDraftGeneration();
-  setIsLoading(true);
   try {
     const result = await window.orchid.session.open({ id });
     // Drop stale responses when a newer load (or draft) superseded this one.
@@ -323,11 +402,55 @@ async function openShared(id: string): Promise<SessionOpenResult | null> {
   } catch (err) {
     console.error('Failed to open session:', err);
     return null;
-  } finally {
-    if (generation === loadGeneration) {
-      setIsLoading(false);
-    }
   }
+}
+
+async function loadHistoryPageShared(
+  chainId: string,
+): Promise<SessionHistoryPageResult | null> {
+  const session = activeSession;
+  const chain = session?.chains.find((candidate) => candidate.id === chainId);
+  if (!session || !chain || chain.messagesLoaded !== false) return null;
+  if (!window.orchid?.session?.loadHistoryPage) return null;
+
+  const beforeIndex = chain.messageStartIndex ?? chain.messageCount ?? 0;
+  if (beforeIndex <= 0) return null;
+  const flightKey = `${session.id}:${chainId}:${beforeIndex}`;
+  const existing = historyPageFlights.get(flightKey);
+  if (existing) return existing;
+
+  const flight = window.orchid.session.loadHistoryPage({
+    sessionId: session.id,
+    chainId,
+    beforeIndex,
+  }).then((page) => {
+    if (!page) return null;
+    setActiveSession((current) => {
+      if (current?.id !== page.sessionId) return current;
+      const target = current.chains.find((candidate) => candidate.id === page.chainId);
+      if (!target || target.messageStartIndex !== beforeIndex) return current;
+      return {
+        ...current,
+        chains: current.chains.map((candidate) => candidate.id === page.chainId
+          ? {
+              ...candidate,
+              messages: [...page.messages, ...candidate.messages],
+              messagesLoaded: page.complete,
+              messageStartIndex: page.startIndex,
+              messageCount: page.totalMessages,
+            }
+          : candidate),
+      };
+    });
+    return page;
+  }).catch((error) => {
+    console.error('Failed to load older session history:', error);
+    return null;
+  }).finally(() => {
+    historyPageFlights.delete(flightKey);
+  });
+  historyPageFlights.set(flightKey, flight);
+  return flight;
 }
 
 async function createShared(): Promise<Session> {
@@ -348,15 +471,10 @@ async function createShared(): Promise<Session> {
     return session;
   }
 
-  setIsLoading(true);
-  try {
-    const session = await window.orchid.session.create();
-    setActiveSession(session);
-    await refreshShared();
-    return session;
-  } finally {
-    setIsLoading(false);
-  }
+  const session = await window.orchid.session.create();
+  setActiveSession(session);
+  await refreshShared();
+  return session;
 }
 
 async function enterDraftShared(): Promise<void> {
@@ -434,20 +552,38 @@ async function changeCwdShared(id: string, cwd: string): Promise<Session | null>
   }
 }
 
-async function deleteSessionShared(id: string): Promise<void> {
+function deleteSessionShared(id: string): Promise<SessionDeleteResult> {
+  const existing = deleteFlights.get(id);
+  if (existing) return existing;
+
+  setDeletePending(id, true);
+  const flight = deleteSessionOnce(id).finally(() => {
+    deleteFlights.delete(id);
+    setDeletePending(id, false);
+  });
+  deleteFlights.set(id, flight);
+  return flight;
+}
+
+async function deleteSessionOnce(id: string): Promise<SessionDeleteResult> {
   if (!window.orchid?.session?.delete) {
-    if (activeSession?.id === id) {
-      setActiveSession(null);
-    }
-    setListState({ status: 'empty' });
-    return;
+    const result: SessionDeleteResult = {
+      status: 'deleted',
+      workingSet: {
+        openSessionIds: [],
+        focusedSessionId: null,
+        mruSessionIds: [],
+      },
+    };
+    applySessionDeletion({ id, workingSet: result.workingSet });
+    return result;
   }
 
-  await window.orchid.session.delete({ id });
-  if (activeSession?.id === id) {
-    setActiveSession(null);
-  }
-  await refreshShared();
+  const result = await window.orchid.session.delete({ id });
+  // The broadcast normally arrives first; the invoke result is the fallback
+  // when this sender is no longer represented in BrowserWindow.getAllWindows.
+  applySessionDeletion({ id, workingSet: result.workingSet });
+  return result;
 }
 
 async function renameShared(id: string, name: string): Promise<void> {
@@ -530,17 +666,25 @@ export const __sessionCacheTest = {
     }
     activeSession = null;
     listState = { status: 'loading' };
+    pendingDeleteIds = new Set();
+    deletionNotice = null;
+    deletionSequence = 0;
+    __resetDeletionReconciliation();
     workspace = null;
-    isLoading = false;
     draftGeneration = 0;
     loadGeneration = 0;
+    listRefreshGeneration = 0;
+    historyPageFlights.clear();
+    deleteFlights.clear();
+    deletedSessionIds.clear();
     bootstrapped = false;
     listeners.clear();
     cachedSnapshot = {
       activeSession,
       listState,
+      pendingDeleteIds,
+      deletionNotice,
       workspace,
-      isLoading,
       draftGeneration,
     };
   },
@@ -550,10 +694,11 @@ export const __sessionCacheTest = {
   getWorkspace: () => workspace,
   getDraftGeneration: () => draftGeneration,
   getLoadGeneration: () => loadGeneration,
-    refresh: refreshShared,
-    load: loadShared,
-    open: openShared,
-    enterDraft: enterDraftShared,
+  refresh: refreshShared,
+  load: loadShared,
+  open: openShared,
+  loadHistoryPage: loadHistoryPageShared,
+  enterDraft: enterDraftShared,
   create: createShared,
   deleteSession: deleteSessionShared,
   rename: renameShared,
@@ -574,6 +719,7 @@ export function useSession(): UseSessionReturn {
 
   const load = useCallback((id: string) => loadShared(id), []);
   const open = useCallback((id: string) => openShared(id), []);
+  const loadHistoryPage = useCallback((chainId: string) => loadHistoryPageShared(chainId), []);
   const create = useCallback(() => createShared(), []);
   const enterDraft = useCallback(() => enterDraftShared(), []);
   const deleteSession = useCallback((id: string) => deleteSessionShared(id), []);
@@ -597,9 +743,12 @@ export function useSession(): UseSessionReturn {
     () => ({
       activeSession: snapshot.activeSession,
       listState: snapshot.listState,
+      pendingDeleteIds: snapshot.pendingDeleteIds,
+      deletionNotice: snapshot.deletionNotice,
       workspace: snapshot.workspace,
       load,
       open,
+      loadHistoryPage,
       create,
       enterDraft,
       deleteSession,
@@ -611,12 +760,12 @@ export function useSession(): UseSessionReturn {
       changeCwd,
       draftGeneration: snapshot.draftGeneration,
       refresh,
-      isLoading: snapshot.isLoading,
     }),
     [
       snapshot,
       load,
       open,
+      loadHistoryPage,
       create,
       enterDraft,
       deleteSession,
@@ -654,6 +803,8 @@ function makeLocalSession(): Session {
       subagentRecord: null,
       startTime: now,
       endTime: null,
+      errorDetail: null,
+      errorTitle: null,
     }],
     activeChainId: chainId,
     createdAt: now,
@@ -661,6 +812,7 @@ function makeLocalSession(): Session {
     subagentChains: [],
     todoStore: { tasks: [] },
     reasoningEffortOverride: null,
+    tierOverride: null,
     permissionMode: null,
   };
 }

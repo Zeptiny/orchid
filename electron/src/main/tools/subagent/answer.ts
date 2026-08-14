@@ -14,6 +14,7 @@ import { genericToolResultMetadata } from '../types';
 import { genericBuiltInToolOutcome } from '../result';
 import type { SubagentManager, SubagentQuestionResult } from '../../agents/manager';
 import type { SubagentToolResult } from './delegate';
+import { awaitSessionSubagentHydration } from './hydrate';
 
 /**
  * Build the answer_subagent tool.
@@ -68,6 +69,19 @@ export function buildAnswerSubagentTool(
         'Error: answer_subagent is available only to the main agent.',
         'error',
       );
+    }
+
+    if (ctx.sessionId) {
+      try {
+        await awaitSessionSubagentHydration(manager, ctx.sessionId, {
+          projectRuntime: ctx.projectRuntime,
+          windowId: ctx.windowId,
+          cwd: ctx.cwd,
+        });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        return genericBuiltInToolOutcome('answer_subagent', `Error: ${message}`, 'error');
+      }
     }
 
     const record = manager.getRecord(subagent_id);

@@ -35,10 +35,23 @@ function listStateFrom(commands: readonly BgCommandListItem[]): BackgroundComman
 
 // ── Hook ─────────────────────────────────────────────────────────────────────
 
-export function useBackgroundCommands(activeSessionId: string | null): UseBackgroundCommandsReturn {
+/**
+ * Track the background-command fleet for one session and subscribe to updates.
+ *
+ * @param activeSessionId - Session whose background commands should be listed.
+ * @param enabled - Whether background-command loading and subscriptions are active.
+ * @returns The fleet state and an explicit refresh action.
+ */
+export function useBackgroundCommands(
+  activeSessionId: string | null,
+  enabled = true,
+): UseBackgroundCommandsReturn {
   const [state, setState] = useState<BackgroundCommandsState>({ status: 'loading' });
   const sessionIdRef = useRef(activeSessionId);
   sessionIdRef.current = activeSessionId;
+  const enabledRef = useRef(enabled);
+  enabledRef.current = enabled;
+  const requestGenerationRef = useRef(0);
   const aliveRef = useRef(true);
 
   useEffect(() => {
@@ -49,7 +62,8 @@ export function useBackgroundCommands(activeSessionId: string | null): UseBackgr
   }, []);
 
   const refresh = useCallback(async () => {
-    if (!activeSessionId || !window.orchid?.bgCmd?.list) {
+    const generation = ++requestGenerationRef.current;
+    if (!enabled || !activeSessionId || !window.orchid?.bgCmd?.list) {
       if (aliveRef.current) setState({ status: 'empty' });
       return;
     }
@@ -57,32 +71,42 @@ export function useBackgroundCommands(activeSessionId: string | null): UseBackgr
     const requestId = activeSessionId;
     try {
       const commands = await window.orchid.bgCmd.list({ sessionId: activeSessionId });
-      if (!aliveRef.current || sessionIdRef.current !== requestId) return;
+      if (
+        !aliveRef.current
+        || !enabledRef.current
+        || requestGenerationRef.current !== generation
+        || sessionIdRef.current !== requestId
+      ) return;
       setState(listStateFrom(commands));
     } catch (err) {
-      if (!aliveRef.current || sessionIdRef.current !== requestId) return;
+      if (
+        !aliveRef.current
+        || !enabledRef.current
+        || requestGenerationRef.current !== generation
+        || sessionIdRef.current !== requestId
+      ) return;
       const error = err instanceof Error ? err.message : String(err);
       setState({ status: 'error', error });
     }
-  }, [activeSessionId]);
+  }, [activeSessionId, enabled]);
 
   // Initial load + session switch: reset to loading, then fetch the fleet.
   useEffect(() => {
-    if (!activeSessionId) {
+    if (!enabled || !activeSessionId) {
       setState({ status: 'empty' });
       return;
     }
     setState({ status: 'loading' });
     void refresh();
-  }, [activeSessionId, refresh]);
+  }, [activeSessionId, enabled, refresh]);
 
   // Push refresh on fleet changes; only the owning session re-lists.
   useEffect(() => {
-    if (!activeSessionId || !window.orchid?.bgCmd?.onChanged) return undefined;
+    if (!enabled || !activeSessionId || !window.orchid?.bgCmd?.onChanged) return undefined;
     return window.orchid.bgCmd.onChanged((event) => {
       if (event.sessionId === activeSessionId) void refresh();
     });
-  }, [activeSessionId, refresh]);
+  }, [activeSessionId, enabled, refresh]);
 
   return { state, refresh };
 }

@@ -12,7 +12,7 @@ import { RiskClass } from '../../../shared/types/permission';
 import { resolveToolPath } from '../types';
 import {
   renderXmlToolResult,
-  escapeXmlText,
+  xmlText,
   escapeXmlAttribute,
   projectionWithCanonicalCompleteness,
 } from '../result';
@@ -79,7 +79,7 @@ const applyPatchAgentProjector: AgentProjector = (canonical, toolName = 'apply_p
       .join('');
 
     if (file.status === 'error' && file.error) {
-      return `<file${attrString}>\n<error code="${escapeXmlAttribute(file.error.code)}">${escapeXmlText(file.error.message)}</error>\n</file>`;
+      return `<file${attrString}>\n<error code="${escapeXmlAttribute(file.error.code)}">${xmlText(file.error.message)}</error>\n</file>`;
     }
 
     return `<file${attrString} />`;

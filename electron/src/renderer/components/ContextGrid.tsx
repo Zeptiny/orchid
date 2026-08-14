@@ -147,7 +147,6 @@ function splitByProviderReasoning(
 function sumPersistedReasoning(messages: readonly Message[]): number {
   let total = 0;
   for (const message of messages) {
-    if (message.hidden) continue;
     const value = message.usage?.reasoning_tokens;
     if (typeof value === 'number' && value >= 0) total += value;
   }
@@ -186,22 +185,16 @@ function computeBreakdown(
       streamingThinkingChars && streamingThinkingChars > 0
         ? Math.round(streamingThinkingChars / 4)
         : 0;
-    const liveOrStreaming = Math.max(providerDelta, streamingTokens);
+    // A positive provider count is authoritative; the thinking-char estimate is
+    // only a fallback for providers that never report reasoning tokens. Taking
+    // the max would let the estimate inflate a turn the provider already counted.
+    const liveOrStreaming = providerDelta > 0 ? providerDelta : streamingTokens;
     const streamingDelta = Math.max(0, streamingTokens - providerDelta);
     const effectiveAssistantTokens = context.assistant_tokens + streamingDelta;
     const effectiveUsedTokens = context.used_tokens + streamingDelta;
     const windowReasoning = persistedReasoning + liveOrStreaming;
-    const hasPersistedReasoningData = messages.some((m) => {
-      const value = m.usage?.reasoning_tokens;
-      return typeof value === 'number' && value >= 0;
-    });
-    const hasProviderReasoningData =
-      persistedReasoning !== 0 ||
-      usageReasoning !== undefined ||
-      contextReasoning !== undefined ||
-      hasPersistedReasoningData;
     let assistant: { response: number; reasoning: number };
-    if (windowReasoning > 0 || hasProviderReasoningData) {
+    if (windowReasoning > 0) {
       const reasoning = Math.min(
         Math.max(0, effectiveAssistantTokens),
         Math.max(0, windowReasoning),
@@ -211,6 +204,12 @@ function computeBreakdown(
         reasoning,
       };
     } else {
+      // No positive provider count. A provider-reported zero is not treated as
+      // authoritative here: models that stream visible thinking but report
+      // reasoning_tokens = 0 would otherwise show no reasoning once the chain
+      // finishes (the live view counts the same thinking via streaming chars).
+      // Fall back to the character-ratio estimate, which yields zero on its own
+      // when there is no visible reasoning text.
       const chars = countMessageChars(messages);
       if (streamingThinkingChars && streamingThinkingChars > 0) {
         chars.reasoning += streamingThinkingChars;

@@ -8,13 +8,19 @@
  */
 
 import type { Session } from './session';
+import type { Chain } from './chain';
 import type { Message, Usage } from './message';
 import type {
   CanonicalToolResult,
   TerminalToolResultStatus,
   ToolExecutionResult,
 } from './tool-result';
-import type { SubagentDeltaEvent, SubagentLiveProjection, SubagentRecord } from './subagent';
+import type {
+  SubagentDeltaEvent,
+  SubagentLiveProjection,
+  SubagentRecord,
+  SubagentSummary,
+} from './subagent';
 import type { RiskClass, ToolScope } from './permission';
 import type {
   CustomConnectionModel,
@@ -173,6 +179,8 @@ export interface ChatSessionSnapshot {
   sessionId: string;
   messages: Message[];
   live: ChatSnapshot | null;
+  /** Error detail from the last FAILED chain, if any (for hydration restore). */
+  lastChainError?: { detail: string; title?: string | null } | null;
 }
 
 /**
@@ -190,6 +198,8 @@ export interface SessionOpenResult {
   live: ChatSnapshot | null;
   /** Resolved workspace after activation (session → sticky → unbound). */
   workspace: WorkspaceInfo;
+  /** Error detail from the last FAILED chain, if any (for hydration restore). */
+  lastChainError?: { detail: string; title?: string | null } | null;
 }
 
 export interface SubagentSnapshotRequest { sessionId: string; }
@@ -200,13 +210,22 @@ export interface SubagentSnapshot {
    * renderer rejects snapshots below its recorded revision floor.
    */
   sessionRevision: number;
-  records: SubagentRecord[];
+  records: SubagentSummary[];
   live: SubagentLiveProjection[];
+}
+export interface SubagentDetailRequest {
+  sessionId: string;
+  subagentId: string;
+}
+export interface SubagentDetailResult {
+  sessionId: string;
+  subagentId: string;
+  record: SubagentRecord | null;
 }
 /**
  * Unit of SUBAGENTS_EVENT delivery: one budgeted flush of typed live deltas
- * for a single session. Records ride only `spawned`/`terminal` deltas, so
- * projection-only batches keep renderer record identity stable.
+ * for a single session. Summaries ride only `spawned`/`terminal` deltas, so
+ * projection-only batches keep renderer row identity stable.
  */
 export interface SubagentEvent {
   sessionId: string;
@@ -249,7 +268,7 @@ export interface ChatStateEvent extends ChatEventIdentity {
 export interface ChatDoneEvent extends ChatEventIdentity {
   type: 'done';
   response: string;
-  /** Main-process materialized durable history after the terminal turn write. */
+  /** Durable messages for the completed turn only; prior model history stays main-process-only. */
   messages: Message[];
   /** True when the turn ended due to user Esc cancellation. */
   interrupted?: boolean;
@@ -262,7 +281,7 @@ export type ChatErrorKind = 'stream' | 'rate-limit' | 'auth' | 'generic';
 export interface ChatErrorEvent extends ChatEventIdentity {
   type: 'error';
   error: string;
-  /** Main-process materialized durable partial history after the terminal write. */
+  /** Durable messages for the failed turn only; prior model history stays main-process-only. */
   messages: Message[];
   /** Short banner title (e.g. "Authentication failed"). */
   title?: string;
@@ -530,6 +549,18 @@ export interface ProjectConfigSaveMessage {
 // ── Provider API ─────────────────────────────────────────────────────────────
 
 /**
+ * Renderer-safe catalog pricing for one model: the rate fields plus the
+ * billing-unit context needed to label them. Provenance stays in main.
+ */
+export interface ProviderModelPricingView {
+  currency: string;
+  currencyUnit?: import('./provider-facets').CurrencyUnit;
+  effectiveAt: string;
+  rates: import('./provider-facets').PricingRateFields;
+  contextTiers?: readonly import('./provider-facets').PricingContextTier[];
+}
+
+/**
  * Renderer-safe provider model metadata. Driver origins, pricing internals,
  * and catalog signatures stay in the main process.
  */
@@ -538,7 +569,8 @@ export interface ProviderModelView {
   displayName: string;
   protocol: ProviderProtocol;
   lifecycle: ProviderLifecycle | null;
-  source: 'catalog' | 'connection';
+  /** Provenance badge: signed catalog, live provider discovery, or user-defined (R28). */
+  source: 'catalog' | 'provider' | 'user';
   capabilities: {
     inputModalities: readonly string[];
     outputModalities: readonly string[];
@@ -549,6 +581,8 @@ export interface ProviderModelView {
     contextTokens: number | null;
     outputTokens: number | null;
   } | null;
+  /** Signed-catalog rate card for catalog rows; absent for other origins. */
+  pricing?: ProviderModelPricingView;
 }
 
 /** A catalog preset rendered by onboarding and settings. */
@@ -561,6 +595,10 @@ export interface ProviderDefinitionView {
   lifecycle: ProviderLifecycle | null;
   available: boolean;
   unavailableReason: string | null;
+  /** The trusted driver publishes a live models endpoint for this provider (R26). */
+  supportsDiscovery: boolean;
+  /** The trusted driver declares a typed quota facet for this provider (R24). */
+  supportsQuota: boolean;
   models: readonly ProviderModelView[];
 }
 
@@ -585,6 +623,14 @@ export interface ProviderConnectionView {
   endpoint: string | null;
   allowInsecureHttp: boolean;
   reasoningConfig?: Record<string, import('./provider').ReasoningModelConfig>;
+  /** Per-model field-level rate overrides, keyed by modelId (R6). */
+  pricingOverrides?: Record<string, import('./provider-facets').PricingRateFields>;
+  /** Per-model service tier selections, keyed by modelId (R21). */
+  tierSelections?: Record<string, string>;
+  /** Driver-declared cache TTL options; absent when the driver has no cache facet. */
+  cacheTtlOptions?: readonly import('./provider-facets').CacheTtlOption[];
+  /** Selected cache TTL; the driver's default applies when absent (R11). */
+  cacheTtl?: string | null;
 }
 
 /** Status data is timestamped and redacted before it crosses IPC. */
@@ -597,6 +643,8 @@ export interface ProviderStatusView {
   availability: 'available' | 'unavailable' | 'unknown';
   stale: boolean;
   data: Readonly<Record<string, unknown>>;
+  /** Typed driver quota (R24); present only for facet-capable providers. */
+  quota?: import('./provider-facets').ProviderQuota | null;
   error: {
     kind: 'network' | 'unauthorized' | 'rate-limited' | 'schema' | 'unknown';
     message: string;
@@ -625,6 +673,9 @@ export interface ProviderConnectionCreateMessage {
   modelIds: readonly string[];
   customModels?: readonly CustomConnectionModel[];
   reasoningConfig?: Record<string, import('./provider').ReasoningModelConfig>;
+  pricingOverrides?: Record<string, import('./provider-facets').PricingRateFields>;
+  tierSelections?: Record<string, string>;
+  cacheTtl?: string | null;
   endpoint?: string | null;
   allowInsecureHttp?: boolean;
   /** Used only with `authMethod: 'environment'`; the value is never resolved here. */
@@ -640,6 +691,10 @@ export interface ProviderConnectionUpdateMessage {
   modelIds?: readonly string[];
   customModels?: readonly CustomConnectionModel[];
   reasoningConfig?: Record<string, import('./provider').ReasoningModelConfig>;
+  pricingOverrides?: Record<string, import('./provider-facets').PricingRateFields>;
+  tierSelections?: Record<string, string>;
+  /** Omit to keep the stored TTL; null clears back to the driver default. */
+  cacheTtl?: string | null;
   endpoint?: string | null;
   allowInsecureHttp?: boolean;
   /** Select or replace an environment reference without exposing its value. */
@@ -672,16 +727,48 @@ export interface ProviderStatusRefreshMessage {
   connectionId?: string;
 }
 
+export interface ProviderModelListMessage extends ProviderConnectionIdMessage {
+  /** Include rows not enabled on the connection (the unified per-connection listing). */
+  includeDisabled?: boolean;
+}
+
 export interface ProviderModelOption {
   selection: ModelSelection;
   connectionName: string;
   providerId: string;
   providerDisplayName: string | null;
   model: ProviderModelView;
+  /** Enabled models are usable in chat (present in the connection's model list). */
+  enabled: boolean;
+  /** A user metadata override exists over the catalog/discovered entry. */
+  customized: boolean;
+  /** When the provider's live endpoint last published this model, if ever. */
+  discoveredAt: string | null;
   available: boolean;
   unavailableReason: string | null;
   /** Whether the trusted provider driver can route this selection to RAG embeddings. */
   embeddingSupported?: boolean;
+  /** Per-model user rate override honored by the pricing ladder (R6). */
+  pricingOverrides?: import('./provider-facets').PricingRateFields;
+  /** Tier selector data; present only when the driver declares a tier mechanism (R20). */
+  tierOptions?: {
+    mechanism: 'request-parameter' | 'model-name-variants';
+    tiers: readonly ServiceTierOptionView[];
+    /** Connection per-model selection for this model. */
+    selected: string | null;
+  };
+}
+
+/** Result of one explicit live-discovery fetch; never thrown for endpoint failures. */
+export interface ProviderDiscoverModelsResult {
+  connection: ProviderConnectionView;
+  status: 'ok' | 'unsupported' | 'no-credential' | 'failed';
+  /** Live models now tracked on the connection. */
+  discoveredModelCount: number;
+  /** Discovered ids unknown to the catalog and user-defined models. */
+  addedModelIds: readonly string[];
+  /** Redacted, user-presentable detail; null when nothing needs surfacing. */
+  message: string | null;
 }
 
 export interface ProviderMutationResult {
@@ -712,13 +799,42 @@ export interface SessionLoadMessage {
   activate?: boolean;
 }
 
-/** Activate a session and return its full view payload in one round-trip. */
+/** Activate a session and return its bounded renderer view in one round-trip. */
 export interface SessionOpenMessage {
   id: string;
 }
 
+/** Request the bounded page immediately preceding one durable chain index. */
+export interface SessionHistoryPageMessage {
+  sessionId: string;
+  chainId: string;
+  /** Exclusive durable message index; omit to start from the chain tail. */
+  beforeIndex?: number;
+}
+
+/** One bounded page of durable messages and its absolute position in the chain. */
+export interface SessionHistoryPageResult {
+  sessionId: string;
+  chainId: string;
+  messages: Message[];
+  startIndex: number;
+  totalMessages: number;
+  complete: boolean;
+}
+
 export interface SessionDeleteMessage {
   id: string;
+}
+
+export interface SessionDeleteResult {
+  status: 'deleted' | 'not_found';
+  workingSet: WorkingSetSnapshot;
+}
+
+/** Authoritative deletion broadcast with the recipient window's next focus. */
+export interface SessionDeletedEvent {
+  id: string;
+  workingSet: WorkingSetSnapshot;
 }
 
 export interface SessionRenameMessage {
@@ -771,10 +887,17 @@ export interface SessionCreatedEvent {
 }
 
 /**
- * Fired when the active session's multi-chain state changes (start/finish turn).
- * Same payload shape as SessionCreatedEvent so the renderer can refresh chains.
+ * Narrow durable patch emitted when one main-agent chain changes.
+ *
+ * Deliberately excludes `subagentChains` and every other unchanged session
+ * field so a checkpoint cannot clone the full session graph into a renderer.
  */
-export type SessionUpdatedEvent = SessionCreatedEvent;
+export interface SessionUpdatedEvent {
+  sessionId: string;
+  chain: Chain;
+  activeChainId: string | null;
+  updatedAt: string;
+}
 
 export interface SessionChangeModelMessage {
   id: string;
@@ -826,11 +949,45 @@ export interface SessionSetReasoningEffortMessage {
   effort: string | number | null;
 }
 
+export interface SessionGetReasoningConfigMessage {
+  selection?: ModelSelection | null;
+}
+
+export interface SessionGetServiceTierConfigMessage {
+  selection?: ModelSelection | null;
+}
+
 export interface SessionReasoningConfigResult {
   levels: string[];
   default: string | number | null;
   override: string | number | null;
   supportsReasoning: boolean;
+}
+
+/** Per-session service tier override; null clears back to the connection selection (R21). */
+export interface SessionSetServiceTierMessage {
+  tier: string | null;
+}
+
+/** Driver-declared tier descriptor surfaced to selectors (R19, R20). */
+export interface ServiceTierOptionView {
+  id: string;
+  displayName: string | null;
+  description: string | null;
+  /** Variant mechanism only: requires a streaming request path (R23). */
+  requiresStreaming?: boolean;
+}
+
+export interface SessionServiceTierConfigResult {
+  /** How a selected tier reaches the provider; absent = no tier facet. */
+  mechanism: 'request-parameter' | 'model-name-variants' | null;
+  tiers: ServiceTierOptionView[];
+  /** Connection per-model selection for the active model. */
+  selected: string | null;
+  /** Session override; wins over the connection selection when set. */
+  override: string | null;
+  /** Effective tier: override, then connection selection. */
+  effective: string | null;
 }
 
 export interface SessionWorkspaceChangedEvent {
@@ -938,6 +1095,7 @@ export type ChatSendErrorKind =
   | 'provider_required'
   | 'session_busy'
   | 'runtime_hydration_failed'
+  | 'history_load_failed'
   | 'provider_unavailable';
 
 /** Result of chat:send (started stream or structured gate failure). */
@@ -1171,27 +1329,37 @@ export interface OrchidAPI {
       message: ProviderDeleteConnectionMessage,
     ) => Promise<ProviderDeleteConnectionResult>;
     /** Connection-scoped typed model options, including unavailable reasons. */
-    modelList: (message?: ProviderConnectionIdMessage) => Promise<readonly ProviderModelOption[]>;
+    modelList: (message?: ProviderModelListMessage) => Promise<readonly ProviderModelOption[]>;
+    /** One explicit live model discovery fetch for a connection; never polled (R26). */
+    discoverModels: (message: ProviderConnectionIdMessage) => Promise<ProviderDiscoverModelsResult>;
     /** Refresh informational status only; it never changes connection health. */
     refreshStatus: (message: ProviderStatusRefreshMessage) => Promise<ProviderStatusView | null>;
+    /**
+     * Refresh typed quota for a facet-capable connection (R24). Informational
+     * only: the result renders in connection details and analytics and never
+     * gates connection usability, routing, or sends (R25).
+     */
+    refreshQuota: (message: ProviderConnectionIdMessage) => Promise<ProviderStatusView | null>;
   };
 
   session: {
     list: () => Promise<SessionSummary[]>;
     load: (id: SessionLoadMessage) => Promise<Session | null>;
     /**
-     * Activate a session and return its full view payload (session, flattened
-     * messages, live snapshot, workspace) in one round-trip. Replaces the prior
-     * peek + chat:snapshot + activate sequence for session switching.
+     * Activate a session and return its bounded renderer view (session,
+     * flattened loaded messages, live snapshot, workspace) in one round-trip.
+     * Replaces the prior peek + chat:snapshot + activate sequence for switching.
      */
     open: (message: SessionOpenMessage) => Promise<SessionOpenResult>;
+    /** Fetch the next older bounded page for one renderer chain. */
+    loadHistoryPage: (message: SessionHistoryPageMessage) => Promise<SessionHistoryPageResult | null>;
     create: () => Promise<Session>;
     /**
      * Enter draft mode: clear active session, abort in-flight chat, clear
      * window history. Does not write a session file.
      */
     clearActive: () => Promise<{ status: string }>;
-    delete: (id: SessionDeleteMessage) => Promise<{ status: string }>;
+    delete: (id: SessionDeleteMessage) => Promise<SessionDeleteResult>;
     rename: (id: string, name: string) => Promise<{ status: string }>;
     changeModel: (id: string, selection: ModelSelection | null, modelLabel?: string | null) => Promise<{ status: string }>;
     /** Resolve current workspace (draft → session → sticky default → unbound). */
@@ -1212,7 +1380,10 @@ export interface OrchidAPI {
      */
     changeCwd: (message: SessionChangeCwdMessage) => Promise<Session | null>;
     setReasoningEffort: (message: SessionSetReasoningEffortMessage) => Promise<{ status: string }>;
-    getReasoningConfig: () => Promise<SessionReasoningConfigResult>;
+    getReasoningConfig: (message?: SessionGetReasoningConfigMessage) => Promise<SessionReasoningConfigResult>;
+    /** Per-session service tier override for the active model (R21). */
+    setServiceTier: (message: SessionSetServiceTierMessage) => Promise<{ status: string }>;
+    getServiceTierConfig: (message?: SessionGetServiceTierConfigMessage) => Promise<SessionServiceTierConfigResult>;
     /** Process-wide sessions currently working, waiting, needing attention, or unread. */
     listActivity: () => Promise<SessionActivity[]>;
     /** Mark an off-screen completion as viewed. */
@@ -1224,6 +1395,8 @@ export interface OrchidAPI {
     removeTab: (message: WorkingSetIdMessage) => Promise<WorkingSetSnapshot>;
     setTabFocus: (message: WorkingSetSetFocusMessage) => Promise<WorkingSetSnapshot>;
     onWorkingSetChanged: (callback: (event: WorkingSetChangedEvent) => void) => () => void;
+    /** A session disappeared; each window receives its own focus snapshot. */
+    onDeleted: (callback: (event: SessionDeletedEvent) => void) => () => void;
     onRenamed: (callback: (event: SessionRenamedEvent) => void) => () => void;
     /** Session auto-created on first message from draft mode. */
     onCreated: (callback: (event: SessionCreatedEvent) => void) => () => void;
@@ -1251,6 +1424,8 @@ export interface OrchidAPI {
 
   subagents: {
     snapshot: (request: SubagentSnapshotRequest) => Promise<SubagentSnapshot>;
+    /** Fetch the full durable transcript for the currently selected row. */
+    detail: (request: SubagentDetailRequest) => Promise<SubagentDetailResult>;
     /** Batched subagent live deltas for the window's active session. */
     onEvent: (callback: (event: SubagentEvent) => void) => () => void;
   };
@@ -1375,6 +1550,7 @@ export const IPC_CHANNELS = {
   CHAT_TOOL_CALL_UPDATE: 'chat:tool_call_update',
 
   SUBAGENTS_SNAPSHOT: 'subagents:snapshot',
+  SUBAGENTS_DETAIL: 'subagents:detail',
   SUBAGENTS_EVENT: 'subagents:event',
 
   // Config
@@ -1399,17 +1575,22 @@ export const IPC_CHANNELS = {
   PROVIDERS_DISCONNECT: 'providers:disconnect',
   PROVIDERS_DELETE: 'providers:delete',
   PROVIDERS_MODEL_LIST: 'providers:model_list',
+  PROVIDERS_DISCOVER_MODELS: 'providers:discover_models',
   PROVIDERS_STATUS_REFRESH: 'providers:status_refresh',
+  PROVIDERS_QUOTA_REFRESH: 'providers:quota_refresh',
 
   // Session
   SESSION_LIST: 'session:list',
   SESSION_LOAD: 'session:load',
-  /** Activate a session and return its full view payload in one round-trip. */
+  /** Activate a session and return its bounded renderer view in one round-trip. */
   SESSION_OPEN: 'session:open',
+  SESSION_HISTORY_PAGE: 'session:history_page',
   SESSION_CREATE: 'session:create',
   /** Clear active session without creating a file (draft / new chat). */
   SESSION_CLEAR_ACTIVE: 'session:clear_active',
   SESSION_DELETE: 'session:delete',
+  /** Fired after durable deletion with a per-window working-set snapshot. */
+  SESSION_DELETED: 'session:deleted',
   SESSION_RENAME: 'session:rename',
   SESSION_RENAMED: 'session:renamed',
   /** Fired when a session is created (eager create or first-message lazy create). */
@@ -1427,6 +1608,8 @@ export const IPC_CHANNELS = {
   SESSION_CHANGE_CWD: 'session:change_cwd',
   SESSION_SET_REASONING_EFFORT: 'session:set_reasoning_effort',
   SESSION_GET_REASONING_CONFIG: 'session:get_reasoning_config',
+  SESSION_SET_SERVICE_TIER: 'session:set_service_tier',
+  SESSION_GET_SERVICE_TIER_CONFIG: 'session:get_service_tier_config',
   /** Fired when workspace binding changes. */
   SESSION_WORKSPACE_CHANGED: 'session:workspace_changed',
   /** Fired when subagent_chains are persisted (spawn progress / complete). */
@@ -1538,6 +1721,7 @@ export const ALLOWED_INVOKE_CHANNELS = [
   IPC_CHANNELS.CHAT_STOP,
   IPC_CHANNELS.CHAT_SNAPSHOT,
   IPC_CHANNELS.SUBAGENTS_SNAPSHOT,
+  IPC_CHANNELS.SUBAGENTS_DETAIL,
   IPC_CHANNELS.CONFIG_GET,
   IPC_CHANNELS.CONFIG_SAVE,
   IPC_CHANNELS.CONFIG_PERMISSION_SCOPES,
@@ -1556,10 +1740,13 @@ export const ALLOWED_INVOKE_CHANNELS = [
   IPC_CHANNELS.PROVIDERS_DISCONNECT,
   IPC_CHANNELS.PROVIDERS_DELETE,
   IPC_CHANNELS.PROVIDERS_MODEL_LIST,
+  IPC_CHANNELS.PROVIDERS_DISCOVER_MODELS,
   IPC_CHANNELS.PROVIDERS_STATUS_REFRESH,
+  IPC_CHANNELS.PROVIDERS_QUOTA_REFRESH,
   IPC_CHANNELS.SESSION_LIST,
   IPC_CHANNELS.SESSION_LOAD,
   IPC_CHANNELS.SESSION_OPEN,
+  IPC_CHANNELS.SESSION_HISTORY_PAGE,
   IPC_CHANNELS.SESSION_CREATE,
   IPC_CHANNELS.SESSION_CLEAR_ACTIVE,
   IPC_CHANNELS.SESSION_DELETE,
@@ -1571,6 +1758,8 @@ export const ALLOWED_INVOKE_CHANNELS = [
   IPC_CHANNELS.SESSION_CHANGE_CWD,
   IPC_CHANNELS.SESSION_SET_REASONING_EFFORT,
   IPC_CHANNELS.SESSION_GET_REASONING_CONFIG,
+  IPC_CHANNELS.SESSION_SET_SERVICE_TIER,
+  IPC_CHANNELS.SESSION_GET_SERVICE_TIER_CONFIG,
   IPC_CHANNELS.SESSION_ACTIVITY_LIST,
   IPC_CHANNELS.SESSION_ACTIVITY_MARK_SEEN,
   IPC_CHANNELS.SESSION_WORKING_SET_GET,
@@ -1633,6 +1822,7 @@ export const ALLOWED_EVENT_CHANNELS = [
   IPC_CHANNELS.CHAT_TOOL_CALL_DELTA,
   IPC_CHANNELS.CHAT_TOOL_CALL_UPDATE,
   IPC_CHANNELS.SUBAGENTS_EVENT,
+  IPC_CHANNELS.SESSION_DELETED,
   IPC_CHANNELS.SESSION_RENAMED,
   IPC_CHANNELS.SESSION_CREATED,
   IPC_CHANNELS.SESSION_UPDATED,

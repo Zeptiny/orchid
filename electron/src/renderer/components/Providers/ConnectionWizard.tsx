@@ -12,6 +12,9 @@ import type {
   ProviderConnectionUpdateMessage,
   ProviderConnectionView,
   ProviderDefinitionView,
+  ProviderDiscoverModelsResult,
+  ProviderModelListMessage,
+  ProviderModelOption,
   ProviderModelView,
   ProviderMutationResult,
   ProviderOverview,
@@ -24,6 +27,7 @@ import type {
   ProviderProtocol,
   ReasoningModelConfig,
 } from '../../../shared/types/provider';
+import type { PricingRateFields } from '../../../shared/types/provider-facets';
 import { isTextGenerationModel } from '../../utils/models';
 import { Alert } from '../ui/Alert';
 import { Button } from '../ui/Button';
@@ -61,6 +65,14 @@ export interface ConnectionWizardProps {
     message: ProviderSubmitApiKeyMessage,
   ) => Promise<ProviderMutationResult>;
   readonly onValidate: (message: ProviderConnectionIdMessage) => Promise<ProviderMutationResult>;
+  /** Manual live model discovery for the connection being edited (R26). */
+  readonly onDiscoverModels?: (
+    message: ProviderConnectionIdMessage,
+  ) => Promise<ProviderDiscoverModelsResult>;
+  /** Unified per-connection listing used by the models editor in edit mode. */
+  readonly onListModels?: (
+    message: ProviderModelListMessage,
+  ) => Promise<readonly ProviderModelOption[]>;
   readonly onComplete?: (result: ProviderConnectionCompletion) => void | Promise<void>;
 }
 
@@ -106,6 +118,8 @@ export function ConnectionWizard({
   onUpdate,
   onSubmitApiKey,
   onValidate,
+  onDiscoverModels,
+  onListModels,
   onComplete,
 }: ConnectionWizardProps) {
   const nameInputRef = useRef<HTMLInputElement>(null);
@@ -119,6 +133,8 @@ export function ConnectionWizard({
   const [connectionModelIds, setConnectionModelIds] = useState<readonly string[]>([]);
   const [connectionCustomModels, setConnectionCustomModels] = useState<readonly CustomConnectionModel[]>([]);
   const [reasoningConfig, setReasoningConfig] = useState<Record<string, ReasoningModelConfig>>({});
+  const [pricingOverrides, setPricingOverrides] = useState<Record<string, PricingRateFields>>({});
+  const [tierSelections, setTierSelections] = useState<Record<string, string>>({});
   const [modelsEditing, setModelsEditing] = useState(false);
   const [endpoint, setEndpoint] = useState('');
   const [allowInsecureHttp, setAllowInsecureHttp] = useState(false);
@@ -128,6 +144,8 @@ export function ConnectionWizard({
   const [feedback, setFeedback] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [unifiedModels, setUnifiedModels] = useState<readonly ProviderModelOption[] | null>(null);
+  const [discovering, setDiscovering] = useState(false);
 
   const availableDefinitions = useMemo(
     () => definitions.filter((definition) => definition.available),
@@ -171,6 +189,8 @@ export function ConnectionWizard({
     setConnectionModelIds(defaultModelIds(definition, nextProtocol));
     setConnectionCustomModels([]);
     setReasoningConfig({});
+    setPricingOverrides({});
+    setTierSelections({});
     setModelsEditing(false);
     setEndpoint('');
     setAllowInsecureHttp(false);
@@ -189,6 +209,8 @@ export function ConnectionWizard({
     setConnectionModelIds([...connection.modelIds]);
     setConnectionCustomModels(connectionCustomModelDrafts(connection));
     setReasoningConfig(connection.reasoningConfig ?? {});
+    setPricingOverrides(connection.pricingOverrides ?? {});
+    setTierSelections(connection.tierSelections ?? {});
     setModelsEditing(false);
     setEndpoint(connection.endpoint ?? '');
     setAllowInsecureHttp(connection.allowInsecureHttp);
@@ -202,6 +224,46 @@ export function ConnectionWizard({
         : null);
     setError(null);
   }, []);
+
+  const refreshUnifiedModels = useCallback(async (connectionId: string) => {
+    if (!onListModels) return;
+    try {
+      const options = await onListModels({ connectionId, includeDisabled: true });
+      setUnifiedModels(options);
+    } catch {
+      // The editor falls back to its locally composed catalog/custom rows.
+      setUnifiedModels(null);
+    }
+  }, [onListModels]);
+
+  useEffect(() => {
+    if (!isOpen || !existingConnection || !onListModels) {
+      setUnifiedModels(null);
+      return;
+    }
+    let cancelled = false;
+    setUnifiedModels(null);
+    void onListModels({ connectionId: existingConnection.id, includeDisabled: true })
+      .then((options) => { if (!cancelled) setUnifiedModels(options); })
+      .catch(() => { if (!cancelled) setUnifiedModels(null); });
+    return () => {
+      cancelled = true;
+    };
+  }, [isOpen, existingConnection, onListModels]);
+
+  const discoverModels = useCallback(async (): Promise<ProviderDiscoverModelsResult> => {
+    if (!existingConnection || !onDiscoverModels) {
+      throw new Error('Live model discovery is unavailable for this connection.');
+    }
+    setDiscovering(true);
+    try {
+      const result = await onDiscoverModels({ connectionId: existingConnection.id });
+      if (result.status === 'ok') await refreshUnifiedModels(existingConnection.id);
+      return result;
+    } finally {
+      setDiscovering(false);
+    }
+  }, [existingConnection, onDiscoverModels, refreshUnifiedModels]);
 
   useEffect(() => {
     if (!isOpen) {
@@ -300,6 +362,8 @@ export function ConnectionWizard({
         modelIds,
         customModels,
         ...(Object.keys(reasoningConfig).length > 0 ? { reasoningConfig } : {}),
+        ...(Object.keys(pricingOverrides).length > 0 ? { pricingOverrides } : {}),
+        ...(Object.keys(tierSelections).length > 0 ? { tierSelections } : {}),
         ...(supportsCustomEndpoint ? { endpoint: endpoint.trim(), allowInsecureHttp } : {}),
         ...(authMethod === 'environment'
           ? { environmentVariable: environmentVariable.trim() }
@@ -318,6 +382,8 @@ export function ConnectionWizard({
     modelIds: message.modelIds,
     customModels: message.customModels ?? [],
     reasoningConfig,
+    pricingOverrides,
+    tierSelections,
     ...(message.endpoint === undefined ? {} : { endpoint: message.endpoint }),
     ...(message.allowInsecureHttp === undefined
       ? {}
@@ -682,9 +748,19 @@ export function ConnectionWizard({
                   customModels={connectionCustomModels}
                   reasoningConfig={reasoningConfig}
                   disabled={metadataLocked}
+                  unifiedModels={existingConnection ? unifiedModels : null}
+                  discoveryAvailable={Boolean(
+                    existingConnection && selectedDefinition.supportsDiscovery && onDiscoverModels,
+                  )}
+                  discovering={discovering}
+                  onDiscoverModels={existingConnection && onDiscoverModels ? discoverModels : undefined}
                   onSelectedModelIdsChange={setConnectionModelIds}
                   onCustomModelsChange={setConnectionCustomModels}
                   onReasoningConfigChange={setReasoningConfig}
+                  pricingOverrides={pricingOverrides}
+                  onPricingOverridesChange={setPricingOverrides}
+                  tierSelections={tierSelections}
+                  onTierSelectionsChange={setTierSelections}
                   onEditingChange={setModelsEditing}
                 />
               )}
@@ -733,6 +809,8 @@ function protocolLabel(protocol: ProviderProtocol): string {
       return 'Google Generative AI';
     case 'openai-compatible':
       return 'OpenAI-compatible';
+    case 'openai-responses':
+      return 'OpenAI Responses';
     case 'xai':
       return 'xAI';
   }

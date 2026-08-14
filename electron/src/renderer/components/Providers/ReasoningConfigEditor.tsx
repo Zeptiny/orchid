@@ -12,6 +12,8 @@ import { TextInput } from '../ui/TextInput';
 export interface ReasoningModelEntry {
   readonly modelId: string;
   readonly displayName: string;
+  /** False when the driver accepts only text effort levels (see ReasoningFieldsProps). */
+  readonly numericBudgetSupported?: boolean;
 }
 
 const EMPTY_REASONING_CONFIG: ReasoningModelConfig = { levels: [], default: null };
@@ -22,6 +24,12 @@ export interface ReasoningFieldsProps {
   readonly levels: readonly string[];
   readonly default: string | number | null;
   readonly disabled?: boolean;
+  /**
+   * False when the provider driver accepts only text effort levels (for
+   * example OpenAI); numeric token budgets are then silently dropped at
+   * request time. Undefined means the driver is not known to reject them.
+   */
+  readonly numericBudgetSupported?: boolean;
   readonly onChange: (levels: readonly string[], def: string | number | null) => void;
 }
 
@@ -36,6 +44,7 @@ export function ReasoningFields({
   levels,
   default: defaultValue,
   disabled = false,
+  numericBudgetSupported,
   onChange,
 }: ReasoningFieldsProps) {
   const [newLevel, setNewLevel] = useState('');
@@ -180,7 +189,12 @@ export function ReasoningFields({
             {levels.map((level) => (
               <option key={level} value={level}>{level}</option>
             ))}
-            <option value="__numeric__">Numeric (token budget)</option>
+            <option
+              value="__numeric__"
+              disabled={numericBudgetSupported === false}
+            >
+              Numeric (token budget)
+            </option>
           </Select>
           {numericMode && (
             <TextInput
@@ -195,6 +209,16 @@ export function ReasoningFields({
             />
           )}
         </div>
+        {numericBudgetSupported === false && (
+          <p className="mt-1 text-xs text-warning" role="note">
+            This provider driver sends text effort levels only; numeric token budgets are not applied.
+          </p>
+        )}
+        {numericBudgetSupported === false && numericMode && (
+          <p className="mt-1 text-xs text-warning" role="alert">
+            A numeric budget is configured but will not be sent for this model. Choose a text level instead.
+          </p>
+        )}
         {numericError && numericMode && (
           <p className="mt-1 text-xs text-error" role="alert">{numericError}</p>
         )}
@@ -253,6 +277,10 @@ export function ReasoningConfigEditor({
         setError(`"${model.displayName}" has an invalid numeric default.`);
         return;
       }
+      if (typeof draft.default === 'number' && model.numericBudgetSupported === false) {
+        setError(`"${model.displayName}" does not support numeric token budgets — choose a text level instead.`);
+        return;
+      }
       result[model.modelId] = { levels: draft.levels, default: draft.default };
     }
     setError(null);
@@ -284,6 +312,7 @@ export function ReasoningConfigEditor({
               levels={draft.levels}
               default={draft.default}
               disabled={disabled}
+              numericBudgetSupported={model.numericBudgetSupported}
               onChange={(levels, def) => updateDraft(model.modelId, { levels: [...levels], default: def })}
             />
           </div>

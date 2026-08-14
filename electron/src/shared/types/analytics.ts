@@ -99,6 +99,14 @@ export interface AttemptDetail {
   readonly cacheReadTokens: number | null;
   readonly cacheWriteTokens: number | null;
   readonly reasoningTokens: number | null;
+  /**
+   * Native-unit billing evidence retained from the attempt (R8). Present only
+   * when the driver reported energy accounting (e.g. Neuralwatt kWh); never
+   * force-converted into a fiat bucket.
+   */
+  readonly energyKwhConsumed: string | null;
+  readonly energyKwhCharged: string | null;
+  readonly pricingMultiplier: string | null;
   readonly startedAt: string;
   readonly completedAt: string | null;
   readonly latencyMs: number | null;
@@ -281,6 +289,34 @@ export interface OverviewResult {
   readonly outcomeDistribution: readonly { readonly outcome: string; readonly count: number }[];
   readonly costSourceDistribution: readonly { readonly source: string; readonly count: number }[];
   readonly agentTierDistribution: readonly { readonly tier: string; readonly count: number }[];
+  /**
+   * Typed quota snapshots by provider for facet-capable connections (R24).
+   * Rendered in native units; informational only, never merged with spend (AE7).
+   */
+  readonly quotaByProvider: readonly QuotaOverviewEntry[];
+}
+
+/** One provider's latest typed quota snapshot for analytics (R24). */
+export interface QuotaOverviewEntry {
+  readonly providerId: string;
+  readonly connectionId: string | null;
+  readonly observedAt: string;
+  readonly stale: boolean;
+  readonly balances: readonly {
+    readonly label: string;
+    readonly amount: string;
+    readonly unit: string;
+  }[];
+  readonly subscription: {
+    readonly state: string;
+    readonly displayName: string | null;
+    readonly renewsAt: string | null;
+  } | null;
+  readonly allowances: readonly {
+    readonly label: string;
+    readonly state: string;
+    readonly detail: string | null;
+  }[];
 }
 
 export interface ModelsResult {

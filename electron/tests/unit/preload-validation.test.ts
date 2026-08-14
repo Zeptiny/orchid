@@ -67,15 +67,14 @@ function terminalEvent(sequence: number): Record<string, unknown> {
       agent_name: 'Explorer',
       agent_type: 'explorer',
       agent_tier: 'bloom',
+      agentRole: 'explorer',
       task: 'Inspect the project',
       status: 'completed',
       chain_id: 'chain-1',
       start_time: '2026-01-01T00:00:00.000Z',
       end_time: '2026-01-01T00:00:05.000Z',
-      result: 'done',
-      error: null,
       parentChainIndex: null,
-      chain: { messages: [] },
+      usage: null,
     },
     state: 'completed',
     usage: null,
@@ -253,6 +252,119 @@ describe('preload startup validation', () => {
     electronMock.ipcRenderer.invoke.mockResolvedValueOnce({ revision: 0, phase: 'starting', steps: [] });
 
     await expect(api.startup.snapshot()).rejects.toThrow(/Invalid IPC response.*startup:snapshot/i);
+  });
+});
+
+describe('preload session history validation', () => {
+  let api: OrchidAPI;
+
+  beforeEach(async () => {
+    vi.resetModules();
+    electronMock.handlers.clear();
+    electronMock.contextBridge.exposeInMainWorld.mockClear();
+    electronMock.ipcRenderer.invoke.mockReset();
+    await import('../../src/preload/index');
+    const exposed = electronMock.contextBridge.exposeInMainWorld.mock.calls
+      .find(([name]) => name === 'orchid');
+    if (!exposed) throw new Error('preload did not expose window.orchid');
+    api = exposed[1] as OrchidAPI;
+  });
+
+  it('rejects malformed paged-history invoke results', async () => {
+    electronMock.ipcRenderer.invoke.mockResolvedValueOnce({
+      sessionId: SESSION_ID,
+      chainId: 'chain-1',
+      messages: terminalMessages(),
+      startIndex: -1,
+      totalMessages: 3,
+      complete: false,
+    });
+
+    await expect(api.session.loadHistoryPage({
+      sessionId: SESSION_ID,
+      chainId: 'chain-1',
+    })).rejects.toThrow(/Invalid IPC response.*session:history_page/i);
+  });
+
+  it('accepts and preserves a well-formed paged-history invoke result', async () => {
+    electronMock.ipcRenderer.invoke.mockResolvedValueOnce({
+      sessionId: SESSION_ID,
+      chainId: 'chain-1',
+      messages: terminalMessages(),
+      startIndex: 0,
+      totalMessages: 3,
+      complete: true,
+    });
+
+    const page = await api.session.loadHistoryPage({
+      sessionId: SESSION_ID,
+      chainId: 'chain-1',
+    });
+
+    expect(page.messages.map((message) => message.id))
+      .toEqual(['message-user', 'message-call', 'message-result']);
+    expect(page.startIndex).toBe(0);
+    expect(page.totalMessages).toBe(3);
+    expect(page.complete).toBe(true);
+  });
+});
+
+describe('preload session deletion validation', () => {
+  let api: OrchidAPI;
+
+  beforeEach(async () => {
+    vi.resetModules();
+    electronMock.handlers.clear();
+    electronMock.contextBridge.exposeInMainWorld.mockClear();
+    electronMock.ipcRenderer.invoke.mockReset();
+    await import('../../src/preload/index');
+    const exposed = electronMock.contextBridge.exposeInMainWorld.mock.calls
+      .find(([name]) => name === 'orchid');
+    if (!exposed) throw new Error('preload did not expose window.orchid');
+    api = exposed[1] as OrchidAPI;
+  });
+
+  it('rejects a deletion response without an authoritative working-set snapshot', async () => {
+    electronMock.ipcRenderer.invoke.mockResolvedValueOnce({ status: 'deleted' });
+
+    await expect(api.session.delete({ id: SESSION_ID }))
+      .rejects.toThrow(/Invalid IPC response.*session:delete/i);
+  });
+
+  it('accepts and preserves a well-formed deletion response', async () => {
+    const result = {
+      status: 'deleted' as const,
+      workingSet: {
+        openSessionIds: ['session-2'],
+        focusedSessionId: 'session-2',
+        mruSessionIds: ['session-2'],
+      },
+    };
+    electronMock.ipcRenderer.invoke.mockResolvedValueOnce(result);
+
+    await expect(api.session.delete({ id: SESSION_ID })).resolves.toEqual(result);
+  });
+
+  it('delivers only well-formed session deletion events', () => {
+    const received: unknown[] = [];
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    api.session.onDeleted((event) => received.push(event));
+    const listener = electronMock.handlers.get(IPC_CHANNELS.SESSION_DELETED);
+    if (!listener) throw new Error('session:deleted listener was not registered');
+    const valid = {
+      id: SESSION_ID,
+      workingSet: {
+        openSessionIds: ['session-2'],
+        focusedSessionId: 'session-2',
+        mruSessionIds: ['session-2'],
+      },
+    };
+
+    listener({}, valid);
+    listener({}, { id: SESSION_ID, workingSet: { openSessionIds: [] } });
+
+    expect(received).toEqual([valid]);
+    expect(warn).toHaveBeenCalled();
   });
 });
 

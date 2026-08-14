@@ -1,16 +1,16 @@
 import { describe, expect, it, vi } from 'vitest';
 import { fetchLilacStatus } from '../../src/main/providers/drivers/lilac';
 import {
-  createNeuralwattStatusSource,
-  fetchNeuralwattQuotaStatus,
-} from '../../src/main/providers/drivers/neuralwatt';
+  createNeuralwattQuotaStatusSource,
+  fetchNeuralwattQuotaObservation,
+} from '../../src/main/providers/drivers/neuralwatt-quota';
 import { ProviderStatusCache } from '../../src/main/providers/status/cache';
 import { ProviderStatusService, type ProviderStatusSource } from '../../src/main/providers/status/service';
 
 describe('provider status contracts', () => {
   it.each([
     ['Lilac', (fetch: typeof globalThis.fetch) => fetchLilacStatus({ fetch, timeoutMs: 5 })],
-    ['Neuralwatt', (fetch: typeof globalThis.fetch) => fetchNeuralwattQuotaStatus({
+    ['Neuralwatt', (fetch: typeof globalThis.fetch) => fetchNeuralwattQuotaObservation({
       apiKey: 'test-key', fetch, timeoutMs: 5,
     })],
   ])('aborts %s status requests when the request deadline expires', async (_name, request) => {
@@ -106,7 +106,7 @@ describe('provider status contracts', () => {
     const originalFetch = globalThis.fetch;
     vi.stubGlobal('fetch', fetch);
     try {
-      const observation = await createNeuralwattStatusSource('connection-personal', 'test-key')
+      const observation = await createNeuralwattQuotaStatusSource('connection-personal', 'test-key')
         .fetchStatus();
 
       expect(observation).toMatchObject({

@@ -26,6 +26,10 @@ import {
 import { registerRAGIPC, unregisterRAGIPC } from './rag';
 import { registerASTIPC, unregisterASTIPC } from './ast';
 import { registerProviderIPC, unregisterProviderIPC } from './providers';
+import {
+  registerProviderModelsIPC,
+  unregisterProviderModelsIPC,
+} from './provider-models';
 import { registerSubagentIPC, unregisterSubagentIPC } from './subagents';
 import { registerAskQuestionIPC, unregisterAskQuestionIPC } from './ask-question';
 import { registerPermissionIPC, unregisterPermissionIPC } from './permission';
@@ -40,6 +44,7 @@ export function registerAllIPC(): void {
   registerChatIPC();
   registerConfigIPC();
   registerProviderIPC();
+  registerProviderModelsIPC();
   registerSessionIPC();
   registerSessionActivityIPC();
   registerSessionWorkingSetIPC();
@@ -63,6 +68,7 @@ export function unregisterAllIPC(): void {
   unregisterChatIPC();
   unregisterConfigIPC();
   unregisterProviderIPC();
+  unregisterProviderModelsIPC();
   unregisterSessionIPC();
   unregisterSessionActivityIPC();
   unregisterSessionWorkingSetIPC();

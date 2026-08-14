@@ -76,6 +76,7 @@ export function createGenerateTitleCallback(input: {
             agentType: titleAgent.type,
             agentTier: titleAgent.tier,
             snapshot: execution.snapshot,
+            pricingFacet: execution.pricingFacet,
            attemptIdHolder: { value: null },
           },
         }),

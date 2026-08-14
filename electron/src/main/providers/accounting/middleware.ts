@@ -13,7 +13,13 @@ import type {
   FrozenProviderRequestSnapshot,
   NormalizedProviderUsage,
 } from '../../../shared/types/accounting';
-import { extractNeuralwattBillingEvidence } from '../drivers/neuralwatt';
+import type { DriverPricingFacet } from '../drivers/types';
+import { extractServedTier } from '../facets/tiers';
+import {
+  emptyReasoningChars,
+  estimateReasoningTokens,
+  type ReasoningChars,
+} from '../../llm/reasoning-tokens';
 import { calculateAttemptCost, type AttemptCostEvidence } from './cost';
 import { ProviderAccountingStore } from './store';
 
@@ -29,6 +35,10 @@ export interface ProviderAttemptAccountingContext {
   readonly agentTier?: string | null;
   /** Mutable holder — the middleware writes the per-call attemptId here so the orchestrator can link context snapshots. */
   readonly attemptIdHolder?: { value: string | null };
+  /** Driver pricing facet that owns provider-specific cost evidence extraction. */
+  readonly pricingFacet?: DriverPricingFacet;
+  /** Driver tier mechanism for served-tier evidence capture (R22). */
+  readonly tierMechanism?: import('../../../shared/types/provider-facets').TierMechanism;
 }
 
 function normalizeUsage(usage: LanguageModelV4Usage | undefined): NormalizedProviderUsage | null {
@@ -48,14 +58,8 @@ function normalizeUsage(usage: LanguageModelV4Usage | undefined): NormalizedProv
     : { ...result, totalTokens: total };
 }
 
-interface OutputChars {
-  reasoning: number;
-  text: number;
-  tool: number;
-}
-
-function emptyOutputChars(): OutputChars {
-  return { reasoning: 0, text: 0, tool: 0 };
+function emptyOutputChars(): ReasoningChars {
+  return emptyReasoningChars();
 }
 
 function serializedLength(value: unknown): number {
@@ -67,36 +71,18 @@ function serializedLength(value: unknown): number {
   }
 }
 
-function trackStreamChars(chars: OutputChars, part: LanguageModelV4StreamPart): void {
+function trackStreamChars(chars: ReasoningChars, part: LanguageModelV4StreamPart): void {
   if (part.type === 'reasoning-delta') chars.reasoning += part.delta.length;
   else if (part.type === 'text-delta') chars.text += part.delta.length;
   else if (part.type === 'tool-input-delta') chars.tool += part.delta.length;
 }
 
-function trackContentChars(chars: OutputChars, content: readonly LanguageModelV4Content[]): void {
+function trackContentChars(chars: ReasoningChars, content: readonly LanguageModelV4Content[]): void {
   for (const part of content) {
     if (part.type === 'reasoning') chars.reasoning += part.text.length;
     else if (part.type === 'text') chars.text += part.text.length;
     else if (part.type === 'tool-call') chars.tool += serializedLength(part.input);
   }
-}
-
-/**
- * Same estimation as the context breakdown: apportion the provider's output
- * total by the observed output characters. Returns undefined when the output
- * total is unknown or no reasoning was observed.
- */
-function estimateReasoningTokens(
-  chars: OutputChars,
-  outputTokens: number | undefined,
-): number | undefined {
-  if (outputTokens === undefined || outputTokens <= 0) return undefined;
-  const totalChars = chars.reasoning + chars.text + chars.tool;
-  if (chars.reasoning <= 0 || totalChars <= 0) return undefined;
-  return Math.min(
-    outputTokens,
-    Math.round((outputTokens * chars.reasoning) / totalChars),
-  );
 }
 
 /**
@@ -106,10 +92,14 @@ function estimateReasoningTokens(
  */
 function withEstimatedReasoning(
   usage: NormalizedProviderUsage | null,
-  chars: OutputChars,
+  chars: ReasoningChars,
   outputTokens: number | undefined,
 ): NormalizedProviderUsage | null {
-  if (!usage || usage.reasoningTokens !== undefined) return usage;
+  if (!usage) return usage;
+  // A positive provider-reported count is authoritative. A zero or missing count
+  // falls back to the character estimate: models can stream visible reasoning yet
+  // report reasoningTokens = 0, which would otherwise record no reasoning at all.
+  if (typeof usage.reasoningTokens === 'number' && usage.reasoningTokens > 0) return usage;
   const estimated = estimateReasoningTokens(chars, outputTokens);
   return estimated === undefined ? usage : { ...usage, reasoningTokens: estimated };
 }
@@ -130,11 +120,16 @@ function allowlistedHeaders(headers: Record<string, string> | undefined): Record
   return result;
 }
 
+/**
+ * The header allowlist applies to every provider; a driver pricing facet may
+ * replace the derived evidence with its own typed extraction (R4).
+ */
 function evidenceFor(
-  snapshot: FrozenProviderRequestSnapshot,
+  context: ProviderAttemptAccountingContext,
   usage: NormalizedProviderUsage | null,
   headers: Record<string, string> | undefined,
   rawUsage: unknown,
+  finishMetadata?: Readonly<Record<string, unknown>>,
 ): { evidence: AttemptCostEvidence; providerEvidence: Record<string, unknown>; usage: NormalizedProviderUsage | null } {
   const allowedHeaders = allowlistedHeaders(headers);
   let normalizedUsage = usage;
@@ -149,22 +144,41 @@ function evidenceFor(
     ...(rawUsage === undefined ? {} : { rawUsage }),
   };
 
-  if (snapshot.providerId === 'neuralwatt') {
-    const neural = extractNeuralwattBillingEvidence(new Headers(allowedHeaders), rawUsage);
+  const extracted = context.pricingFacet?.costEvidence?.({ headers: allowedHeaders, rawUsage, finishMetadata });
+  if (extracted) {
     normalizedUsage = {
       ...(usage ?? {}),
-      ...(neural.energyKwhConsumed ? { energyKwhConsumed: neural.energyKwhConsumed } : {}),
-      ...(neural.energyKwhCharged ? { energyKwhCharged: neural.energyKwhCharged } : {}),
-      ...(neural.pricingMultiplier ? { pricingMultiplier: neural.pricingMultiplier } : {}),
+      ...(extracted.energyKwhConsumed ? { energyKwhConsumed: extracted.energyKwhConsumed } : {}),
+      ...(extracted.energyKwhCharged ? { energyKwhCharged: extracted.energyKwhCharged } : {}),
+      ...(extracted.pricingMultiplier ? { pricingMultiplier: extracted.pricingMultiplier } : {}),
     };
     evidence = {
-      ...(neural.reportedCostUsd ? { reportedCostAmount: neural.reportedCostUsd, reportedCurrency: 'USD' } : {}),
-      ...(neural.accountingMethod ? { accountingMethod: neural.accountingMethod } : {}),
-      ...(neural.energyRateUsdPerKwh ? { energyRateUsdPerKwh: neural.energyRateUsdPerKwh } : {}),
-      ...(neural.accountingMethod ? { currency: 'USD' } : {}),
+      ...(extracted.reportedCostAmount ? {
+        reportedCostAmount: extracted.reportedCostAmount,
+        ...(extracted.reportedCurrency ? { reportedCurrency: extracted.reportedCurrency } : {}),
+      } : {}),
+      ...(extracted.accountingMethod ? { accountingMethod: extracted.accountingMethod } : {}),
+      ...(extracted.energyRateUsdPerKwh ? { energyRateUsdPerKwh: extracted.energyRateUsdPerKwh } : {}),
+      ...(extracted.currency ? { currency: extracted.currency } : {}),
     };
-    providerEvidence.neuralwatt = neural;
+    if (extracted.providerEvidence) {
+      providerEvidence[context.snapshot.providerId] = extracted.providerEvidence;
+    }
   }
+
+  // Served tier (R22): the provider-reported tier (parameter mechanism) or
+  // the served variant id (variant mechanism) lands in attempt evidence so
+  // billing selects the served tier's rates.
+  const snapshot = context.snapshot;
+  const servedTier = extractServedTier({
+    mechanism: context.tierMechanism,
+    servedModelId: snapshot.tier?.servedModelId ?? snapshot.modelId,
+    baseModelId: snapshot.tier?.baseModelId,
+    requestedTier: snapshot.tier?.requestedTier,
+    finishMetadata,
+  });
+  if (servedTier) providerEvidence.servedTier = servedTier;
+
   return { evidence, providerEvidence, usage: normalizedUsage };
 }
 
@@ -198,10 +212,11 @@ export function createAttemptAccountingMiddleware(
         const chars = emptyOutputChars();
         trackContentChars(chars, result.content);
         const extracted = evidenceFor(
-          context.snapshot,
+          context,
           normalizeUsage(result.usage),
           result.response?.headers,
           result.usage.raw,
+          result.providerMetadata as Readonly<Record<string, unknown>> | undefined,
         );
         context.store.finalize(attemptId, {
           outcome: 'succeeded',
@@ -255,10 +270,11 @@ export function createAttemptAccountingMiddleware(
         finalized = true;
         const finish = part?.type === 'finish' ? part : undefined;
         const extracted = evidenceFor(
-          context.snapshot,
+          context,
           normalizeUsage(finish?.usage),
           result.response?.headers,
           finish?.usage.raw,
+          finish?.providerMetadata as Readonly<Record<string, unknown>> | undefined,
         );
         context.store.finalize(attemptId, {
           outcome,

@@ -1,7 +1,7 @@
 import type { SqliteDatabase } from '../../utils/sqlite';
 
 /** SQLite schema version for append-only provider attempt records. */
-export const ACCOUNTING_SCHEMA_VERSION = 3;
+export const ACCOUNTING_SCHEMA_VERSION = 4;
 
 export const ACCOUNTING_SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS schema_meta (
@@ -27,6 +27,7 @@ CREATE TABLE IF NOT EXISTS provider_attempts (
   provider_evidence_json TEXT NOT NULL DEFAULT '{}',
   cost_state TEXT NOT NULL CHECK (cost_state IN ('reported', 'calculated', 'unknown')),
   cost_source TEXT NOT NULL CHECK (cost_source IN ('provider-reported', 'token-formula', 'energy-formula', 'unknown')),
+  cost_rung TEXT CHECK (cost_rung IS NULL OR cost_rung IN ('provider-api', 'user', 'catalog')),
   currency TEXT,
   cost_amount TEXT,
   error TEXT,
@@ -132,7 +133,7 @@ export function applyAccountingSchemaMigrations(db: SqliteDatabase): void {
   if (tables.has('provider_attempts')) {
     const attemptColumns = db.prepare('PRAGMA table_info(provider_attempts)').all() as Array<{ name: string }>;
     const existingAttempts = new Set(attemptColumns.map((c) => c.name));
-    for (const col of ['agent_scope', 'agent_name', 'agent_tier', 'agent_type']) {
+    for (const col of ['agent_scope', 'agent_name', 'agent_tier', 'agent_type', 'cost_rung']) {
       if (!existingAttempts.has(col)) {
         db.prepare(`ALTER TABLE provider_attempts ADD COLUMN ${col} TEXT`).run();
       }
@@ -147,8 +148,19 @@ export function applyAccountingSchemaMigrations(db: SqliteDatabase): void {
     }
     // Created here (not in the schema SQL) so it never references the column
     // before the ALTER above exists on legacy databases.
-    db.prepare(
-      'CREATE INDEX IF NOT EXISTS idx_context_snapshots_agent_scope ON context_snapshots(agent_scope, captured_at)',
-    ).run();
+    // The top-N context queries GROUP BY session_id/agent_scope and ORDER BY
+    // MAX(used_tokens); these covering indexes keep those scans index-only
+    // (no rowid lookups for used_tokens). The narrow (agent_scope, captured_at)
+    // index is replaced by the wider agent_scope_tokens variant so the date-
+    // filtered paths stay covering too.
+    db.prepare('DROP INDEX IF EXISTS idx_context_snapshots_agent_scope').run();
+    db.prepare(`
+      CREATE INDEX IF NOT EXISTS idx_context_snapshots_scope_session_tokens
+      ON context_snapshots(agent_scope, session_id, used_tokens)
+    `).run();
+    db.prepare(`
+      CREATE INDEX IF NOT EXISTS idx_context_snapshots_agent_scope_tokens
+      ON context_snapshots(agent_scope, captured_at, session_id, used_tokens)
+    `).run();
   }
 }

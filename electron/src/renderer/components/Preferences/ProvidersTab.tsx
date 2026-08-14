@@ -83,6 +83,7 @@ export function ProvidersTab({ onNotify }: { readonly onNotify: Notify }) {
         onDelete={providers.deleteConnection}
         onNotify={onNotify}
         onRefreshStatus={providers.refreshStatus}
+        onRefreshQuota={providers.refreshQuota}
       />
 
       <ConnectionWizard
@@ -98,6 +99,8 @@ export function ProvidersTab({ onNotify }: { readonly onNotify: Notify }) {
         onUpdate={providers.updateConnection}
         onSubmitApiKey={providers.submitApiKey}
         onValidate={providers.validateConnection}
+        onDiscoverModels={providers.discoverModels}
+        onListModels={providers.modelList}
         onComplete={completeConnection}
       />
     </div>

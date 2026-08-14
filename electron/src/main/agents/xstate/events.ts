@@ -6,7 +6,7 @@
  */
 
 import type { StreamEvent } from '../../llm/orchestrator';
-import type { Usage } from '../../../shared/types/message';
+import type { ThinkingReplayPayload, Usage } from '../../../shared/types/message';
 import type { ToolExecutionResult } from '../../../shared/types/tool-result';
 
 // ── Agent events ────────────────────────────────────────────────────────────
@@ -27,6 +27,17 @@ export interface ChunkEvent {
 export interface ThinkingChunkEvent {
   type: 'THINKING';
   data: string;
+}
+
+/**
+ * A reasoning sequence closed with a replay artifact. `hasText` marks whether
+ * the sequence produced displayable text: with text, the payload belongs to
+ * the thinking accumulated so far; without, it is its own text-less message.
+ */
+export interface ThinkingArtifactEvent {
+  type: 'THINKING_ARTIFACT';
+  payload: ThinkingReplayPayload;
+  hasText: boolean;
 }
 
 /** LLM stream requests a tool call. */
@@ -101,6 +112,7 @@ export type AgentEvent =
   | UserInputEvent
   | ChunkEvent
   | ThinkingChunkEvent
+  | ThinkingArtifactEvent
   | ToolCallEvent
   | ToolCallStartEvent
   | ToolCallDeltaEvent

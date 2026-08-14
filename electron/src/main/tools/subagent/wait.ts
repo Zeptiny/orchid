@@ -12,7 +12,7 @@ import type { ToolDefinition, ToolHandler } from '../types';
 import { getToolConfig } from '../types';
 import { RiskClass } from '../../../shared/types/permission';
 import { genericToolResultMetadata } from '../types';
-import { escapeXmlAttribute, escapeXmlText, genericBuiltInToolOutcome } from '../result';
+import { escapeXmlAttribute, xmlText, genericBuiltInToolOutcome } from '../result';
 import {
   getDefaultWaitTimeoutMs,
   SubagentWaitTimeoutError,
@@ -20,6 +20,7 @@ import {
   type SubagentRecord,
 } from '../../agents/manager';
 import type { SubagentToolResult } from './delegate';
+import { awaitSessionSubagentHydration } from './hydrate';
 
 function formatElapsed(ms: number): string {
   const seconds = Math.floor(Math.max(0, ms) / 1000);
@@ -91,11 +92,11 @@ function formatRecordXml(manager: SubagentManager, sid: string, record: Subagent
   }
   if (record.result) {
     return '<subagent ' + attrs + '>' +
-      '<result>' + escapeXmlText(record.result) + '</result></subagent>';
+      '<result>' + xmlText(record.result) + '</result></subagent>';
   }
   if (record.error) {
     return '<subagent ' + attrs + '>' +
-      '<error>' + escapeXmlText(record.error) + '</error></subagent>';
+      '<error>' + xmlText(record.error) + '</error></subagent>';
   }
   return '<subagent ' + attrs + '></subagent>';
 }
@@ -112,7 +113,7 @@ function formatSubagentRecords(
   const foundIds = new Set(records.keys());
   const missing = subagentIds.filter((id) => !foundIds.has(id));
   const missingBlock = missing.length > 0
-    ? '<not_found>' + escapeXmlText(missing.join(', ')) + '</not_found>'
+    ? '<not_found>' + xmlText(missing.join(', ')) + '</not_found>'
     : '';
   return '<subagents>' + parts.join('\n') + missingBlock + '</subagents>';
 }
@@ -149,6 +150,19 @@ export function buildWaitTool(
     // Validate non-empty
     if (!subagent_ids || subagent_ids.length === 0) {
       return genericBuiltInToolOutcome('wait_for_subagent', 'Error: subagent_ids must be a non-empty list of IDs.', 'error');
+    }
+
+    if (ctx?.sessionId) {
+      try {
+        await awaitSessionSubagentHydration(manager, ctx.sessionId, {
+          projectRuntime: ctx.projectRuntime,
+          windowId: ctx.windowId,
+          cwd: ctx.cwd,
+        });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        return genericBuiltInToolOutcome('wait_for_subagent', `Error: ${message}`, 'error');
+      }
     }
 
     // Explicit IDs are untrusted model input. Keep the same ownership boundary
@@ -191,7 +205,7 @@ export function buildWaitTool(
         }
         const xml = formatSubagentRecords(manager, partialRecords, subagent_ids);
         const timeoutNotice =
-          '\n<timeout>' + escapeXmlText(err.message) + '</timeout>';
+          '\n<timeout>' + xmlText(err.message) + '</timeout>';
         return genericBuiltInToolOutcome(
           'wait_for_subagent',
           xml + timeoutNotice,

@@ -146,6 +146,44 @@ describe('provider attempt accounting middleware', () => {
     expect(ledger.listAttempts('session-1')[0].usage?.reasoningTokens).toBe(40);
   });
 
+  it('estimates reasoning when the provider reports zero but streamed visible thinking', async () => {
+    // Some models stream visible reasoning yet report reasoningTokens = 0. A zero
+    // is not authoritative — otherwise the ledger (and Analytics) would record no
+    // reasoning at all. Fall back to the character estimate; cost still derives
+    // from the provider-reported usage only.
+    const ledger = store();
+    const middleware = createAttemptAccountingMiddleware({
+      store: ledger, sessionId: 'session-1', chainId: 'chain-1', turnId: 'turn-1', snapshot: snapshot(),
+    });
+    const wrapStream = middleware.wrapStream! as unknown as (input: Record<string, unknown>) => Promise<{ stream: ReadableStream<unknown> }>;
+    const result = await wrapStream({
+      doStream: async () => ({
+        response: { headers: {} },
+        stream: new ReadableStream({
+          start(controller) {
+            controller.enqueue({ type: 'reasoning-delta', id: '0', delta: 'r'.repeat(300) });
+            controller.enqueue({ type: 'text-delta', id: '0', delta: 't'.repeat(100) });
+            controller.enqueue({
+              type: 'finish', finishReason: 'stop',
+              usage: {
+                inputTokens: { total: 1000, noCache: 1000, cacheRead: undefined, cacheWrite: undefined },
+                outputTokens: { total: 100, text: undefined, reasoning: 0 },
+              },
+            });
+            controller.close();
+          },
+        }),
+      }),
+      doGenerate: async () => { throw new Error('not used'); },
+      params: {}, model: {},
+    });
+    await consume(result.stream);
+
+    const attempt = ledger.listAttempts('session-1')[0];
+    expect(attempt.usage?.reasoningTokens).toBe(75);
+    expect(attempt).toMatchObject({ costState: 'calculated', costAmount: '0.0075' });
+  });
+
   it('estimates reasoning tokens for non-streaming generation from content parts', async () => {
     const ledger = store();
     const middleware = createAttemptAccountingMiddleware({
@@ -228,5 +266,173 @@ describe('provider attempt accounting middleware', () => {
       doGenerate: async () => { throw new Error('not used'); }, params: {}, model: {},
     })).rejects.toThrow(/ledger unavailable/);
     expect(transportCalls).toBe(0);
+  });
+
+  it('routes evidence through the driver pricing facet and records the rate rung', async () => {
+    const ledger = store();
+    const energySnapshot: FrozenProviderRequestSnapshot = {
+      ...snapshot(),
+      providerId: 'neuralwatt',
+      pricing: {
+        currency: 'USD', effectiveAt: '2026-07-12T00:00:00.000Z',
+        rates: {
+          energy: {
+            amount: '5', per: 1, unit: 'energy',
+            provenance: { source: 'provider-api', observedAt: '2026-07-12T00:00:00.000Z' },
+          },
+        },
+        inclusion: { cacheRead: 'unknown', cacheWrite: 'unknown', reasoning: 'unknown' },
+        provenance: { source: 'provider-api' },
+      },
+    };
+    const middleware = createAttemptAccountingMiddleware({
+      store: ledger, sessionId: 'session-1', chainId: 'chain-1', turnId: 'turn-1', snapshot: energySnapshot,
+      pricingFacet: {
+        costEvidence: () => ({
+          accountingMethod: 'energy',
+          currency: 'USD',
+          energyKwhConsumed: '0.02',
+          energyKwhCharged: '0.013',
+          pricingMultiplier: '0.65',
+          providerEvidence: { accountingMethod: 'energy', measurementAvailable: true },
+        }),
+      },
+    });
+    const wrapStream = middleware.wrapStream! as unknown as (input: Record<string, unknown>) => Promise<{ stream: ReadableStream<unknown> }>;
+    const result = await wrapStream({
+      doStream: async () => ({
+        response: { headers: {} },
+        stream: new ReadableStream({
+          start(controller) {
+            controller.enqueue({
+              type: 'finish', finishReason: 'stop',
+              usage: {
+                inputTokens: { total: 10, noCache: 10, cacheRead: undefined, cacheWrite: undefined },
+                outputTokens: { total: 5, text: 5, reasoning: undefined },
+                raw: { accounting_method: 'energy' },
+              },
+            });
+            controller.close();
+          },
+        }),
+      }),
+      doGenerate: async () => { throw new Error('not used'); },
+      params: {}, model: {},
+    });
+    await consume(result.stream);
+
+    expect(ledger.listAttempts('session-1')[0]).toMatchObject({
+      outcome: 'succeeded',
+      costState: 'calculated',
+      costSource: 'energy-formula',
+      costRung: 'provider-api',
+      costAmount: '0.065',
+      usage: { energyKwhConsumed: '0.02', energyKwhCharged: '0.013', pricingMultiplier: '0.65' },
+      // The ledger sanitizer redacts account-shaped keys before persistence.
+      providerEvidence: { neuralwatt: { accountingMethod: '[REDACTED]', measurementAvailable: true } },
+    });
+    ledger.close();
+  });
+  it('records the served tier from finish metadata and bills the served variant rates (R22)', async () => {
+    const ledger = store();
+    const tiered = snapshot();
+    // Variant-mechanism snapshot: the served variant id + base are frozen at
+    // request start, and pricing freezes the variant's (discounted) rates.
+    tiered.providerId = 'neuralwatt';
+    tiered.modelId = 'glm-5.2-flex';
+    tiered.pricing = {
+      currency: 'USD', effectiveAt: '2026-07-12T00:00:00.000Z',
+      rates: {
+        input: { amount: '0.725', per: 1_000_000, unit: 'tokens' },
+        output: { amount: '2.25', per: 1_000_000, unit: 'tokens' },
+      },
+      inclusion: { cacheRead: 'subset-of-input', cacheWrite: 'unknown', reasoning: 'unknown' },
+      provenance: {},
+    };
+    tiered.tier = {
+      mechanism: 'model-name-variants',
+      requestedTier: 'flex',
+      servedModelId: 'glm-5.2-flex',
+      baseModelId: 'glm-5.2',
+    };
+    const middleware = createAttemptAccountingMiddleware({
+      store: ledger, sessionId: 'session-1', chainId: 'chain-1', turnId: 'turn-1', snapshot: tiered,
+      tierMechanism: {
+        kind: 'model-name-variants',
+        tiers: [{ id: 'flex', modelIdSuffix: '-flex' }],
+      },
+    });
+    const wrapStream = middleware.wrapStream! as unknown as (input: Record<string, unknown>) => Promise<{ stream: ReadableStream<unknown> }>;
+    const result = await wrapStream({
+      doStream: async () => ({
+        response: { headers: {} },
+        stream: new ReadableStream({
+          start(controller) {
+            controller.enqueue({
+              type: 'finish', finishReason: 'stop',
+              usage: {
+                inputTokens: { total: 1000, noCache: 1000, cacheRead: undefined, cacheWrite: undefined },
+                outputTokens: { total: 100, text: 100, reasoning: undefined },
+              },
+            });
+            controller.close();
+          },
+        }),
+      }),
+      doGenerate: async () => { throw new Error('not used'); },
+      params: {}, model: {},
+    });
+    await consume(result.stream);
+
+    const attempt = ledger.listAttempts('session-1')[0];
+    // Billed at the served variant's flex rates: 1000*0.725/M + 100*2.25/M.
+    expect(attempt).toMatchObject({ outcome: 'succeeded', costState: 'calculated', costAmount: '0.00095' });
+    expect(attempt.providerEvidence.servedTier).toMatchObject({
+      tier: 'flex', servedModelId: 'glm-5.2-flex', baseModelId: 'glm-5.2', requestedTier: 'flex',
+    });
+    ledger.close();
+  });
+
+  it('captures the provider-reported service tier for parameter mechanisms (R22)', async () => {
+    const ledger = store();
+    const tiered = snapshot();
+    tiered.providerId = 'openai';
+    tiered.modelId = 'gpt-5.6';
+    tiered.tier = { mechanism: 'request-parameter', requestedTier: 'flex' };
+    const middleware = createAttemptAccountingMiddleware({
+      store: ledger, sessionId: 'session-1', chainId: 'chain-1', turnId: 'turn-1', snapshot: tiered,
+      tierMechanism: {
+        kind: 'request-parameter',
+        parameter: 'serviceTier',
+        tiers: [{ id: 'flex' }],
+      },
+    });
+    const wrapStream = middleware.wrapStream! as unknown as (input: Record<string, unknown>) => Promise<{ stream: ReadableStream<unknown> }>;
+    const result = await wrapStream({
+      doStream: async () => ({
+        response: { headers: {} },
+        stream: new ReadableStream({
+          start(controller) {
+            controller.enqueue({
+              type: 'finish', finishReason: 'stop',
+              providerMetadata: { openai: { serviceTier: 'flex' } },
+              usage: {
+                inputTokens: { total: 10, noCache: 10, cacheRead: undefined, cacheWrite: undefined },
+                outputTokens: { total: 5, text: 5, reasoning: undefined },
+              },
+            });
+            controller.close();
+          },
+        }),
+      }),
+      doGenerate: async () => { throw new Error('not used'); },
+      params: {}, model: {},
+    });
+    await consume(result.stream);
+
+    expect(ledger.listAttempts('session-1')[0].providerEvidence.servedTier).toMatchObject({
+      tier: 'flex', requestedTier: 'flex',
+    });
+    ledger.close();
   });
 });

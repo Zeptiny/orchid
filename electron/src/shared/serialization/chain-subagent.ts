@@ -10,8 +10,10 @@ import {
   type ModelSelection,
 } from '../types/provider';
 import {
+  contextSnapshotSchema,
   messageFromStorageDict,
   messageToStorageDict,
+  type Usage,
 } from '../types/message';
 import {
   ChainStatus,
@@ -45,6 +47,8 @@ export function chainToStorageDict(chain: Chain): ChainStorageDict {
   }
   if (chain.startTime) dict.startTime = chain.startTime;
   if (chain.endTime != null) dict.endTime = chain.endTime;
+  if (chain.errorDetail) dict.errorDetail = chain.errorDetail;
+  if (chain.errorTitle) dict.errorTitle = chain.errorTitle;
   return dict;
 }
 
@@ -92,6 +96,8 @@ export function chainFromStorageDict(data: unknown): Chain {
     subagentRecord,
     startTime,
     endTime,
+    errorDetail: typeof raw.errorDetail === 'string' ? raw.errorDetail : null,
+    errorTitle: typeof raw.errorTitle === 'string' ? raw.errorTitle : null,
   };
 }
 
@@ -110,6 +116,7 @@ export function subagentRecordToStorageDict(record: SubagentRecord): SubagentRec
     result: record.result,
     error: record.error,
     parentChainIndex: record.parentChainIndex,
+    ...('usage' in record ? { usage: record.usage ?? null } : {}),
     ...(record.reasoning_effort !== undefined
       && (typeof record.reasoning_effort !== 'number' || Number.isFinite(record.reasoning_effort))
       ? { reasoning_effort: record.reasoning_effort }
@@ -163,6 +170,8 @@ export function subagentRecordFromStorageDict(data: unknown): SubagentRecord {
     reasoningEffort = rawEffort;
   }
 
+  const usage = usageFromStorageValue(raw.usage);
+
   return {
     id: typeof raw.id === 'string' ? raw.id : '',
     agent_name: typeof raw.agent_name === 'string' ? raw.agent_name : '',
@@ -176,9 +185,34 @@ export function subagentRecordFromStorageDict(data: unknown): SubagentRecord {
     result: typeof raw.result === 'string' ? raw.result : null,
     error: typeof raw.error === 'string' ? raw.error : null,
     parentChainIndex,
+    ...(usage !== undefined ? { usage } : {}),
     ...(reasoningEffort !== undefined ? { reasoning_effort: reasoningEffort } : {}),
     closed: raw.closed === true,
     chain,
+  };
+}
+
+function usageFromStorageValue(value: unknown): Usage | null | undefined {
+  if (value === undefined) return undefined;
+  if (value === null) return null;
+  if (typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const raw = value as Record<string, unknown>;
+  const numberOrZero = (candidate: unknown): number =>
+    typeof candidate === 'number' && Number.isFinite(candidate) && candidate >= 0
+      ? candidate
+      : 0;
+  const parsedContext = contextSnapshotSchema.safeParse(raw.context);
+  return {
+    prompt_tokens: numberOrZero(raw.prompt_tokens),
+    completion_tokens: numberOrZero(raw.completion_tokens),
+    total_tokens: numberOrZero(raw.total_tokens),
+    cached_tokens: numberOrZero(raw.cached_tokens),
+    ...(typeof raw.reasoning_tokens === 'number'
+      && Number.isFinite(raw.reasoning_tokens)
+      && raw.reasoning_tokens >= 0
+      ? { reasoning_tokens: raw.reasoning_tokens }
+      : {}),
+    ...(parsedContext.success ? { context: parsedContext.data } : {}),
   };
 }
 

@@ -19,7 +19,11 @@ import type { Message } from '../../src/shared/types/message';
 import type { StreamEvent } from '../../src/main/llm/orchestrator';
 import { sumSubagentUsage } from '../../src/shared/usage';
 import { createCanonicalToolResult } from '../../src/shared/types/tool-result';
-import type { SubagentDeltaEvent, SubagentLiveProjection } from '../../src/shared/types/subagent';
+import {
+  summarizeSubagentRecord,
+  type SubagentDeltaEvent,
+  type SubagentLiveProjection,
+} from '../../src/shared/types/subagent';
 import {
   subagentRecordFromStorageDict,
   subagentRecordToStorageDict,
@@ -110,6 +114,34 @@ describe('SubagentManager runtime', () => {
     expect('projectRuntime' in record).toBe(false);
     expect(manager.getRunGeneration(record.id)).toBe(1);
     expect(manager.getRunPromise(record.id)).toBeNull();
+  });
+
+  it('indexes runtime records by owning session', () => {
+    const first = manager.spawn('first', 'inspect A', testAgent, { sessionId: 'session-a' });
+    const second = manager.spawn('second', 'inspect B', testAgent, { sessionId: 'session-b' });
+    manager.spawn('unscoped', 'inspect draft', testAgent);
+
+    expect(manager.recordsForSession('session-a')).toEqual([first]);
+    expect(manager.recordsForSession('session-b')).toEqual([second]);
+
+    manager.purgeSession('session-a');
+    expect(manager.recordsForSession('session-a')).toEqual([]);
+    expect(manager.recordsForSession('session-b')).toEqual([second]);
+  });
+
+  it('summarizes a durable record from its precomputed usage', () => {
+    const runtime = manager.spawn('usage', 'inspect usage', testAgent, { sessionId: 'session-a' });
+    const usage = {
+      prompt_tokens: 13,
+      completion_tokens: 5,
+      total_tokens: 18,
+      cached_tokens: 2,
+    };
+    runtime.usage = usage;
+    const domain = runtimeToDomain(runtime);
+
+    expect(domain.usage).toEqual(usage);
+    expect(summarizeSubagentRecord(domain).usage).toEqual(usage);
   });
 
   it('preserves frozen owner-window affinity into a background runner', async () => {
@@ -728,7 +760,10 @@ describe('SubagentManager delta emission (U2)', () => {
     await manager.getRunPromise(record.id);
 
     expect(terminal).not.toBeNull();
-    expect(terminal!.record).toEqual(manager.toDomainRecord(record, { includeLiveTail: true }));
+    expect(terminal!.record).toEqual(summarizeSubagentRecord(
+      manager.toDomainRecord(record, { includeLiveTail: true }),
+    ));
+    expect(terminal!.record).not.toHaveProperty('chain');
     expect(terminal!.state).toBe('completed');
     expect(terminal!.usage).toEqual(record.usage);
   });
@@ -764,7 +799,7 @@ describe('SubagentManager delta emission (U2)', () => {
       if (event.type === 'terminal') {
         expect(renderer.live.has(record.id)).toBe(false);
         expect(renderer.records.find((item) => item.id === record.id)).toEqual(event.record);
-        expect(event.record).toEqual(manager.toDomainRecord(record));
+        expect(event.record).toEqual(summarizeSubagentRecord(manager.toDomainRecord(record)));
         continue;
       }
       if (event.type === 'text_delta' || event.type === 'thinking_delta' ||
@@ -1309,6 +1344,32 @@ describe('SubagentManager terminal eviction and session purge (U9)', () => {
     expect(terminalEvents.length).toBeGreaterThanOrEqual(3);
   });
 
+  it('discardSession silently aborts and removes every session record', async () => {
+    setConfig({ max_active_per_session: 1 });
+    const sid = 'sess-discard';
+    const events: SubagentDeltaEvent[] = [];
+    manager.setOnDelta((event) => events.push(event));
+    manager.setRunner(async function* (params): AsyncGenerator<StreamEvent> {
+      await new Promise<void>((resolve) => {
+        if (params.abortSignal.aborted) return resolve();
+        params.abortSignal.addEventListener('abort', () => resolve(), { once: true });
+      });
+      yield { type: 'finish', finishReason: 'stop' };
+    });
+
+    manager.spawn('running', 'x', testAgent, { sessionId: sid });
+    manager.spawn('queued', 'x', testAgent, { sessionId: sid });
+    const other = manager.spawn('other', 'x', testAgent, { sessionId: 'other-session' });
+    events.length = 0;
+
+    manager.discardSession(sid);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(manager.recordsForSession(sid)).toEqual([]);
+    expect(manager.getRecord(other.id)).toBeDefined();
+    expect(events.filter((event) => event.sessionId === sid)).toEqual([]);
+  });
+
   it('purgeSession resets the per-session revision counter (no slow leak, review #11)', () => {
     const sid = 'sess-purge-revisions';
     const record = manager.spawn('r1', 'x', testAgent, { sessionId: sid });
@@ -1580,6 +1641,39 @@ describe('SubagentManager hydration (U3)', () => {
       projectRuntime: runtime,
       sessionId: 'sess-affinity',
     }]);
+  });
+
+  it('retains cumulative usage across follow-up runs', async () => {
+    let runNumber = 0;
+    manager.setRunner(async function* (): AsyncGenerator<StreamEvent> {
+      runNumber += 1;
+      yield { type: 'content', text: `answer-${runNumber}` };
+      yield {
+        type: 'usage',
+        usage: {
+          prompt_tokens: runNumber * 10,
+          completion_tokens: runNumber,
+          total_tokens: runNumber * 11,
+          cached_tokens: 0,
+        },
+      };
+      yield { type: 'finish', finishReason: 'stop' };
+    });
+
+    const record = manager.spawn('usage', 'first', testAgent, { sessionId: 'sess-usage' });
+    await manager.getRunPromise(record.id);
+    expect(record.usage?.total_tokens).toBe(11);
+
+    manager.followUp(record.id, 'second');
+    await manager.getRunPromise(record.id);
+
+    expect(record.usage).toMatchObject({
+      prompt_tokens: 30,
+      completion_tokens: 3,
+      total_tokens: 33,
+      cached_tokens: 0,
+    });
+    expect(sumSubagentUsage(runtimeToDomain(record))).toEqual(record.usage);
   });
 
   it('hydrating a live full record is a no-op (runtime record wins)', () => {

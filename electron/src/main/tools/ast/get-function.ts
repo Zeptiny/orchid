@@ -145,16 +145,16 @@ export const getFunctionHandler: ToolHandler = async (input: unknown, ctx) => {
           );
           if (extraction.importsText) {
             parts.push('<imports>');
-            parts.push(escapeXml(extraction.importsText));
+            parts.push(extraction.importsText);
             parts.push('</imports>');
           }
           if (match.classContext) {
             parts.push('<class_context>');
-            parts.push(escapeXml(match.classContext));
+            parts.push(match.classContext);
             parts.push('</class_context>');
           }
           parts.push('<body>');
-          parts.push(escapeXml(match.body));
+          parts.push(match.body);
           parts.push('</body>');
           parts.push('</function>');
           foundFunctions.push(parts.join('\n'));
@@ -207,9 +207,3 @@ function storeFunctionHash(key: string, hash: string): void {
   }
 }
 
-function escapeXml(s: string): string {
-  return s
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;');
-}

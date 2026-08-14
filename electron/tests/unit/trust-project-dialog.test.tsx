@@ -284,6 +284,83 @@ describe('LeftSidebar workspace trust badge', () => {
   });
 });
 
+describe('LeftSidebar session deletion feedback', () => {
+  beforeEach(() => {
+    Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', {
+      configurable: true,
+      value: vi.fn(),
+    });
+  });
+
+  it('renders the deleting row as busy and prevents another delete click', () => {
+    const onSessionDelete = vi.fn();
+    render(
+      <LeftSidebar
+        isCollapsed={false}
+        onToggle={() => {}}
+        sessionListState={{
+          status: 'ready',
+          sessions: [{
+            id: 'session-1',
+            name: 'Pending deletion',
+            modelLabel: null,
+            cwd: '/home/user/proj',
+            chainCount: 1,
+            updatedAt: 1,
+          }],
+        }}
+        activeSessionId="session-1"
+        onSessionSelect={() => {}}
+        onSessionCreate={() => {}}
+        onSessionDelete={onSessionDelete}
+        deletingSessionIds={new Set(['session-1'])}
+        onRefreshSessions={() => {}}
+        onOpenSettings={() => {}}
+      />,
+    );
+
+    const button = screen.getByRole('button', { name: 'Deleting session' });
+    expect((button as HTMLButtonElement).disabled).toBe(true);
+    expect(button.getAttribute('aria-busy')).toBe('true');
+    fireEvent.click(button);
+    expect(onSessionDelete).not.toHaveBeenCalled();
+  });
+
+  it('routes a rejected delete to the visible error callback', async () => {
+    const error = new Error('disk unavailable');
+    const onSessionDelete = vi.fn().mockRejectedValue(error);
+    const onSessionDeleteError = vi.fn();
+    render(
+      <LeftSidebar
+        isCollapsed={false}
+        onToggle={() => {}}
+        sessionListState={{
+          status: 'ready',
+          sessions: [{
+            id: 'session-1',
+            name: 'Delete me',
+            modelLabel: null,
+            cwd: '/home/user/proj',
+            chainCount: 1,
+            updatedAt: 1,
+          }],
+        }}
+        activeSessionId={null}
+        onSessionSelect={() => {}}
+        onSessionCreate={() => {}}
+        onSessionDelete={onSessionDelete}
+        onSessionDeleteError={onSessionDeleteError}
+        onRefreshSessions={() => {}}
+        onOpenSettings={() => {}}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Delete session' }));
+
+    await waitFor(() => expect(onSessionDeleteError).toHaveBeenCalledWith(error));
+  });
+});
+
 // ── OnboardingScreen trust gating ────────────────────────────────────────────
 
 function onboardingReport(): ProjectTrustReport {

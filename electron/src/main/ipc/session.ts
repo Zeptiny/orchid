@@ -6,7 +6,8 @@
  */
 import { BrowserWindow, dialog, ipcMain } from 'electron';
 import { IPC_CHANNELS } from '../../shared/types/ipc';
-import { flattenSessionMessages } from '../../shared/types/session';
+import { flattenSessionMessages, sessionForRenderer } from '../../shared/types/session';
+import { lastChainError } from '../../shared/types/chain';
 import type { ModelSelection } from '../../shared/types/provider';
 import {
   getSessionManager,
@@ -19,6 +20,11 @@ import {
   setDraftReasoningOverride,
   takeDraftReasoningOverride,
 } from '../session/draft-reasoning';
+import {
+  clearDraftTierOverrides,
+  getDraftTierOverride,
+  setDraftTierOverride,
+} from '../session/draft-tier';
 import { getConfig } from '../config/loader';
 import { clearChatHistory, seedChatHistory } from './chat-history';
 import { sendSessionEvent } from './chat/events';
@@ -38,6 +44,8 @@ import {
   revokeProjectTrust,
   revokeProjectTrustRaw,
 } from '../project/trust';
+import { listConnectionModelRows } from '../providers/facets/discovery';
+import { groupTierVariantRows } from '../providers/facets/tiers';
 import { invalidateProjectMCPManagers } from '../mcp/project-registry';
 import { cancelIndex } from '../rag/indexer';
 import { clearNextRequestStop } from './next-request-stop';
@@ -57,9 +65,13 @@ import {
   sessionDeleteSchema,
   sessionLoadSchema,
   sessionOpenSchema,
+  sessionHistoryPageSchema,
   sessionRenameSchema,
   sessionSetWorkspaceSchema,
   sessionSetReasoningEffortSchema,
+  sessionSetServiceTierSchema,
+  sessionGetReasoningConfigSchema,
+  sessionGetServiceTierConfigSchema,
 } from './payload-schemas';
 
 export {
@@ -68,9 +80,18 @@ export {
   resolveWindowWorkspace,
 };
 
-export { flattenSessionMessages };
+export { flattenSessionMessages, sessionForRenderer };
 
 export { takeDraftReasoningOverride } from '../session/draft-reasoning';
+
+function seedCompleteChatHistory(
+  session: Parameters<typeof flattenSessionMessages>[0],
+  messages = flattenSessionMessages(session),
+): void {
+  if (session.chains.every((chain) => chain.messagesLoaded !== false)) {
+    seedChatHistory(session.id, messages);
+  }
+}
 
 /**
  * Model selection to reason about in draft mode (no active session):
@@ -203,6 +224,57 @@ function emitWorkspaceChanged(
   sender.send(IPC_CHANNELS.SESSION_WORKSPACE_CHANGED, { workspace });
 }
 
+/** Broadcast durable deletion with each recipient's own MRU/focus snapshot. */
+function broadcastSessionDeleted(sessionId: string): void {
+  const windows = typeof BrowserWindow.getAllWindows === 'function'
+    ? BrowserWindow.getAllWindows()
+    : [];
+  for (const win of windows) {
+    try {
+      if (win.isDestroyed() || win.webContents.isDestroyed()) continue;
+      const ownerId = String(win.webContents.id);
+      const workingSet = workingSetRemove(sessionId, ownerId);
+      win.webContents.send(IPC_CHANNELS.SESSION_DELETED, {
+        id: sessionId,
+        workingSet,
+      });
+    } catch (error) {
+      console.debug('[session] deletion broadcast failed for a window', error);
+    }
+  }
+}
+
+/**
+ * Materialize a session's persisted subagent chains back into the runtime
+ * manager so the main agent regains its subagent context after an app restart
+ * (records live only in memory for the current launch). The task is detached
+ * from navigation; send and lifecycle operations join the same readiness
+ * promise. Session open must not fail because hydration could not run, so
+ * errors are logged and left retryable.
+ */
+function startOpenedSessionSubagentHydration(
+  sessionId: string,
+  windowId: string,
+): void {
+  void (async () => {
+    const { getSubagentManager } = await import('../tools/index.js');
+    const { awaitSessionSubagentHydration } = await import('../tools/subagent/hydrate.js');
+    const result = await awaitSessionSubagentHydration(
+      getSubagentManager(),
+      sessionId,
+      { windowId },
+    );
+    if (result.agentMissing.length > 0) {
+      console.warn(
+        `[subagents] session-open hydration skipped records with missing agent definitions for ${sessionId}:`,
+        result.agentMissing,
+      );
+    }
+  })().catch((error) => {
+    console.warn(`[subagents] session-open hydration failed for ${sessionId}:`, error);
+  });
+}
+
 // ── IPC registration ─────────────────────────────────────────────────────────
 
 export function registerSessionIPC(): void {
@@ -226,7 +298,8 @@ export function registerSessionIPC(): void {
 
     // Read-only peek (todos / subagents refresh) — do not switch or reseed.
     if (!activate) {
-      return manager.load(id);
+      const session = manager.load(id);
+      return session ? sessionForRenderer(session) : null;
     }
 
     const releasedDraftCwd = getDraftCwd(windowId);
@@ -239,6 +312,9 @@ export function registerSessionIPC(): void {
       // Hydrate the in-memory permission gate map from the persisted session
       // record so the override survives restarts.
       hydrateSessionPermissionOverride(session.id, session.permissionMode);
+      // Restore the runtime subagent records (prompt context + wait/interrupt)
+      // after a restart; the renderer already renders the stored rows.
+      startOpenedSessionSubagentHydration(session.id, windowId);
     } else {
       // Drop ghost tabs when the session cannot be loaded (missing/corrupt).
       workingSetRemove(id, windowId);
@@ -255,7 +331,7 @@ export function registerSessionIPC(): void {
     // Seed history with ALL chains (matches renderer flatten) so the next
     // chat:send continues the full conversation, not only the active chain.
     if (session) {
-      seedChatHistory(session.id, flattenSessionMessages(session));
+      seedCompleteChatHistory(session);
     } else {
       clearChatHistory(id);
     }
@@ -266,11 +342,11 @@ export function registerSessionIPC(): void {
     const workspace = resolveWindowWorkspace(windowId);
 
     emitWorkspaceChanged(event.sender, workspace);
-    return session;
+    return session ? sessionForRenderer(session) : null;
   });
 
-  // session:open — activate a session and return its full view payload in one
-  // round-trip (session + flattened messages + live snapshot + workspace).
+  // session:open — activate a session and return its bounded renderer view in
+  // one round-trip (session + loaded messages + live snapshot + workspace).
   // Replaces the prior peek + chat:snapshot + activate sequence so a switch
   // reads/parses the session file once and serializes it across IPC once.
   ipcMain.handle(IPC_CHANNELS.SESSION_OPEN, async (event, payload: unknown) => {
@@ -290,6 +366,9 @@ export function registerSessionIPC(): void {
     if (session) {
       workingSetOpenOrFocus(session.id, windowId);
       hydrateSessionPermissionOverride(session.id, session.permissionMode);
+      // Restore the runtime subagent records (prompt context + wait/interrupt)
+      // after a restart; the renderer already renders the stored rows.
+      startOpenedSessionSubagentHydration(session.id, windowId);
     } else {
       // Drop ghost tabs when the session cannot be loaded (missing/corrupt).
       workingSetRemove(id, windowId);
@@ -303,7 +382,7 @@ export function registerSessionIPC(): void {
     // chat:send continues the full conversation) and the renderer payload.
     const messages = session ? flattenSessionMessages(session) : [];
     if (session) {
-      seedChatHistory(session.id, messages);
+      seedCompleteChatHistory(session, messages);
     } else {
       clearChatHistory(id);
     }
@@ -316,7 +395,27 @@ export function registerSessionIPC(): void {
     const { getLiveChatSnapshot } = await import('./chat.js');
     const live = getLiveChatSnapshot(id);
 
-    return { session, messages, live, workspace };
+    return {
+      session: session ? sessionForRenderer(session) : null,
+      messages,
+      live,
+      workspace,
+      lastChainError: session && !live ? lastChainError(session.chains) : null,
+    };
+  });
+
+  // session:history_page — bounded older-message hydration for one chain.
+  // This never changes active selection or the full model-history cache.
+  ipcMain.handle(IPC_CHANNELS.SESSION_HISTORY_PAGE, async (_event, payload: unknown) => {
+    const parsed = sessionHistoryPageSchema.safeParse(payload);
+    if (!parsed.success) {
+      throw new Error(`Invalid session:history_page payload: ${parsed.error.message}`);
+    }
+    return getSessionManager().getHistoryPage(
+      parsed.data.sessionId,
+      parsed.data.chainId,
+      parsed.data.beforeIndex,
+    );
   });
 
   // session:create — eagerly create + activate a session (writes to disk).
@@ -387,10 +486,10 @@ export function registerSessionIPC(): void {
 
     const manager = getSessionManager();
     const wasActive = manager.getActive(String(event.sender.id))?.id === parsed.data.id;
-    // A deleted background session must not keep spending provider/tool work or
-    // recreate activity after it disappears from the catalog.
+    // Load cleanup seams before the durable mutation, but do not stop any work
+    // until the synchronous row deletion succeeds.
     const [
-      { forceStopSession },
+      { discardDeletedSessionRuntime },
       { clearPermissionSessionState },
       { clearToolCallHistoryForSession },
       { clearFunctionHashesForSession },
@@ -400,22 +499,26 @@ export function registerSessionIPC(): void {
       import('../permissions/history.js'),
       import('../tools/ast/get-function.js'),
     ]);
-    forceStopSession(parsed.data.id);
+    const deleted = manager.delete(parsed.data.id);
+    // A deleted background session must not keep spending provider/tool work or
+    // recreate activity after it disappears from the catalog. This teardown is
+    // intentionally non-persistent because the durable row is already gone.
+    discardDeletedSessionRuntime(parsed.data.id);
     clearPermissionSessionState(parsed.data.id);
     clearToolCallHistoryForSession(parsed.data.id);
     clearFunctionHashesForSession(parsed.data.id);
     clearNextRequestStop(parsed.data.id);
-    const deleted = manager.delete(parsed.data.id);
-    if (deleted) {
-      removeSessionActivity(parsed.data.id);
-      workingSetRemove(parsed.data.id, String(event.sender.id));
-    }
+    removeSessionActivity(parsed.data.id);
+    const workingSet = workingSetRemove(parsed.data.id, String(event.sender.id));
+    clearChatHistory(parsed.data.id);
+    // `not_found` is still authoritative absence and must clear stale copies
+    // held by other windows just like a newly deleted row.
+    broadcastSessionDeleted(parsed.data.id);
     if (deleted && wasActive) {
       const windowId = String(event.sender.id);
-      clearChatHistory(parsed.data.id);
       emitWorkspaceChanged(event.sender, resolveWindowWorkspace(windowId));
     }
-    return { status: deleted ? 'deleted' : 'not_found' };
+    return { status: deleted ? 'deleted' : 'not_found', workingSet };
   });
 
   // session:rename — rename a session
@@ -580,13 +683,20 @@ export function registerSessionIPC(): void {
     return { status: 'ok' };
   });
 
-  ipcMain.handle(IPC_CHANNELS.SESSION_GET_REASONING_CONFIG, async (event) => {
+  ipcMain.handle(IPC_CHANNELS.SESSION_GET_REASONING_CONFIG, async (event, payload: unknown) => {
+    const parsed = sessionGetReasoningConfigSchema.safeParse(payload ?? {});
+    if (!parsed.success) {
+      throw new Error(`Invalid session:get_reasoning_config payload: ${parsed.error.message}`);
+    }
+    const draftSelection = parsed.data?.selection ?? null;
     const windowId = String(event.sender.id);
     const manager = getSessionManager();
     const active = manager.getActive(windowId);
-    // Draft mode falls back to the draft/default model selection so the
-    // selector is usable before the first message creates a session.
-    const selection = active?.selection ?? resolveDraftModelSelection(windowId);
+    // Draft mode: prefer the renderer's current picker selection so switching
+    // models in a draft (no session yet) immediately updates reasoning options.
+    // Falls back to the project/default model for backward compat when no
+    // selection is supplied.
+    const selection = active?.selection ?? draftSelection ?? resolveDraftModelSelection(windowId);
     const override = active
       ? active.reasoningEffortOverride
       : getDraftReasoningOverride(windowId);
@@ -617,6 +727,88 @@ export function registerSessionIPC(): void {
       supportsReasoning,
     };
   });
+
+  ipcMain.handle(IPC_CHANNELS.SESSION_SET_SERVICE_TIER, async (event, payload: unknown) => {
+    const parsed = sessionSetServiceTierSchema.safeParse(payload);
+    if (!parsed.success) {
+      throw new Error(`Invalid session:set_service_tier payload: ${parsed.error.message}`);
+    }
+
+    const windowId = String(event.sender.id);
+    const manager = getSessionManager();
+    const active = manager.getActive(windowId);
+    if (!active) {
+      // Draft mode: park the override until a session exists.
+      setDraftTierOverride(windowId, parsed.data.tier);
+      return { status: 'ok' };
+    }
+
+    manager.setTierOverride(active.id, parsed.data.tier);
+    return { status: 'ok' };
+  });
+
+  ipcMain.handle(IPC_CHANNELS.SESSION_GET_SERVICE_TIER_CONFIG, async (event, payload: unknown) => {
+    const parsed = sessionGetServiceTierConfigSchema.safeParse(payload ?? {});
+    if (!parsed.success) {
+      throw new Error(`Invalid session:get_service_tier_config payload: ${parsed.error.message}`);
+    }
+    const draftSelection = parsed.data?.selection ?? null;
+    const empty = { mechanism: null, tiers: [], selected: null, override: null, effective: null };
+    const windowId = String(event.sender.id);
+    const manager = getSessionManager();
+    const active = manager.getActive(windowId);
+    const selection = active?.selection ?? draftSelection ?? resolveDraftModelSelection(windowId);
+    const override = active ? active.tierOverride : getDraftTierOverride(windowId);
+
+    if (!selection) return { ...empty, override };
+
+    const { getProviderConnectionStore, getProviderCatalogStore } = await import('../providers/runtime-context.js');
+    const { resolveModelSelection } = await import('../providers/resolver.js');
+    const { getProviderDriverRegistry } = await import('../providers/runtime-context.js');
+
+    const connections = await getProviderConnectionStore().list();
+    const definitions = getProviderCatalogStore().getProviderDefinitions();
+    const resolution = resolveModelSelection(selection, connections, definitions);
+    if (resolution.kind !== 'resolved') return { ...empty, override };
+
+    const driver = getProviderDriverRegistry().get(resolution.provider.id);
+    const mechanism = driver?.tierMechanism;
+    if (!mechanism) return { ...empty, override };
+
+    const selected = resolution.connection.tierSelections?.[selection.modelId] ?? null;
+    // Variant-mechanism tiers are offered only when the variant model id is
+    // actually present for the active model; selecting an absent variant would
+    // rewrite the request to a model id the provider does not serve (R20).
+    const variantTierIds = mechanism.kind === 'model-name-variants'
+      ? groupTierVariantRows(
+          listConnectionModelRows(resolution.connection, resolution.provider),
+          mechanism,
+        ).variantTiersByBase.get(resolution.model.id)
+      : undefined;
+    if (mechanism.kind === 'model-name-variants' && variantTierIds === undefined) {
+      return { ...empty, override };
+    }
+    const tiers = mechanism.tiers
+      .filter((tier) => variantTierIds === undefined || variantTierIds.includes(tier.id))
+      .map((tier) => {
+        const requiresStreaming = mechanism.kind === 'model-name-variants'
+          && (tier as { requiresStreaming?: boolean }).requiresStreaming === true;
+        return {
+          id: tier.id,
+          displayName: tier.displayName ?? null,
+          description: tier.description ?? null,
+          ...(requiresStreaming ? { requiresStreaming: true } : {}),
+        };
+      });
+    const effective = override ?? selected ?? null;
+    return {
+      mechanism: mechanism.kind,
+      tiers,
+      selected,
+      override,
+      effective,
+    };
+  });
 }
 
 /**
@@ -626,6 +818,7 @@ export function unregisterSessionIPC(): void {
   ipcMain.removeHandler(IPC_CHANNELS.SESSION_LIST);
   ipcMain.removeHandler(IPC_CHANNELS.SESSION_LOAD);
   ipcMain.removeHandler(IPC_CHANNELS.SESSION_OPEN);
+  ipcMain.removeHandler(IPC_CHANNELS.SESSION_HISTORY_PAGE);
   ipcMain.removeHandler(IPC_CHANNELS.SESSION_CREATE);
   ipcMain.removeHandler(IPC_CHANNELS.SESSION_CLEAR_ACTIVE);
   ipcMain.removeHandler(IPC_CHANNELS.SESSION_DELETE);
@@ -637,7 +830,10 @@ export function unregisterSessionIPC(): void {
   ipcMain.removeHandler(IPC_CHANNELS.SESSION_CHANGE_CWD);
   ipcMain.removeHandler(IPC_CHANNELS.SESSION_SET_REASONING_EFFORT);
   ipcMain.removeHandler(IPC_CHANNELS.SESSION_GET_REASONING_CONFIG);
+  ipcMain.removeHandler(IPC_CHANNELS.SESSION_SET_SERVICE_TIER);
+  ipcMain.removeHandler(IPC_CHANNELS.SESSION_GET_SERVICE_TIER_CONFIG);
   clearDraftReasoningOverrides();
+  clearDraftTierOverrides();
 }
 
 // Re-export draft helper for tests that need to seed draft without IPC.

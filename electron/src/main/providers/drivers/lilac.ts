@@ -1,21 +1,34 @@
 import type { LanguageModelV4 } from '@ai-sdk/provider';
+import Decimal from 'decimal.js';
 import { createUnwrappingFetch } from '../../llm/response-unwrap';
 import { importESM } from '../../utils/esm-import';
+import type { DiscoveredProviderModel } from '../../../shared/types/provider';
 import type { ProviderDriver } from './types';
 import type { ProviderStatusObservation } from '../status/cache';
+import type {
+  PricingRateFields,
+  ProviderModelRateCard,
+  ProviderQuota,
+} from '../../../shared/types/provider-facets';
+import { scalePricingRateFields } from '../facets/pricing';
+import { observationWithQuota } from '../facets/quota';
+import { fetchModelsEndpoint, modelsListEntries } from './models-endpoint';
 import {
   parseRetryAfter,
   StatusRefreshError,
   type ProviderStatusSource,
 } from '../status/service';
+import type { DriverQuotaRequest } from './types';
 
 /** Lilac’s documented OpenAI-compatible inference API, owned by driver code. */
 export const LILAC_INFERENCE_BASE_URL = 'https://api.getlilac.com/v1';
+export const LILAC_MODELS_URL = `${LILAC_INFERENCE_BASE_URL}/models`;
 /** Lilac’s public status source; it deliberately receives no API credential. */
 export const LILAC_STATUS_URL = 'https://api.getlilac.com/status?window=5m';
 export const LILAC_STATUS_TTL_MS = 5 * 60_000;
 export const LILAC_STATUS_MINIMUM_MANUAL_REFRESH_MS = 30_000;
 export const LILAC_STATUS_REQUEST_TIMEOUT_MS = 15_000;
+export const LILAC_PRICING_REFRESH_INTERVAL_SECONDS = LILAC_STATUS_TTL_MS / 1000;
 
 export type LilacSupplyState = 'low' | 'medium' | 'high' | 'surplus';
 
@@ -62,10 +75,83 @@ export async function createLilacLanguageModel(input: {
 }
 
 /**
+ * Lilac publishes a live subscription multiplier alongside its discount. Both
+ * values must be present, fresh, and tied to a model before they can adjust
+ * that model's list rates. We never derive either value from the other,
+ * supply state, or performance data. The public status endpoint deliberately
+ * receives no API credential.
+ */
+export async function fetchLilacPricingRateCards(input: {
+  readonly catalogRates?: Readonly<Record<string, PricingRateFields>>;
+  readonly fetch?: typeof globalThis.fetch;
+  readonly now?: () => Date;
+}): Promise<readonly ProviderModelRateCard[]> {
+  const observation = await fetchLilacStatus({ fetch: input.fetch, now: input.now });
+  if (observation.stale || observation.availability !== 'available') {
+    throw new Error('Lilac live pricing is unavailable from a stale status observation');
+  }
+  const data = observation.data as LilacStatusData;
+  const cards: ProviderModelRateCard[] = [];
+  for (const model of data.models) {
+    const { subscription } = model;
+    if (subscription.availability !== 'available') continue;
+    if (subscription.discountPercent === null || subscription.creditMultiplier === null) continue;
+    const base = input.catalogRates?.[model.modelId];
+    if (!base) continue;
+    const multiplier = new Decimal(String(subscription.creditMultiplier));
+    cards.push({
+      modelId: model.modelId,
+      currencyUnit: { kind: 'fiat', code: 'USD' },
+      observedAt: data.subscriptionSupplyUpdatedAt ?? observation.providerUpdatedAt ?? observation.observedAt,
+      rates: scalePricingRateFields(base, multiplier),
+      adjustment: {
+        kind: 'subscription-multiplier',
+        multiplier: multiplier.toFixed(),
+        discountPercent: subscription.discountPercent,
+        providerUpdatedAt: observation.providerUpdatedAt,
+        supplyUpdatedAt: data.subscriptionSupplyUpdatedAt,
+      },
+    });
+  }
+  return cards;
+}
+
+/**
+ * Lilac's OpenAI-compatible models list carries ids (and at most a display
+ * name), so discovered entries contribute nothing beyond the id (R27).
+ */
+export function parseLilacModels(payload: unknown): DiscoveredProviderModel[] {
+  return modelsListEntries(payload, 'Lilac').map((entry) => {
+    const name = entry['name'];
+    return {
+      id: entry['id'] as string,
+      ...(typeof name === 'string' && name.trim() !== '' ? { displayName: name.trim() } : {}),
+    };
+  });
+}
+
+export async function fetchLilacModels(options: {
+  readonly apiKey: string;
+  readonly fetch?: typeof globalThis.fetch;
+  readonly signal?: AbortSignal;
+  readonly timeoutMs?: number;
+}): Promise<readonly DiscoveredProviderModel[]> {
+  const payload = await fetchModelsEndpoint(LILAC_MODELS_URL, options.apiKey, 'Lilac', {
+    fetch: options.fetch,
+    signal: options.signal,
+    timeoutMs: options.timeoutMs,
+  });
+  return parseLilacModels(payload);
+}
+
+/**
  * A specialized, code-owned Lilac driver. Catalog data can select models but
  * cannot redirect credentials or transport to another endpoint.
  */
-export function createLilacProviderDriver(): ProviderDriver {
+export function createLilacProviderDriver(options: {
+  readonly fetch?: typeof globalThis.fetch;
+  readonly now?: () => Date;
+} = {}): ProviderDriver {
   return {
     id: 'lilac',
     supportedAuthMethods: ['api-key', 'environment'],
@@ -76,6 +162,28 @@ export function createLilacProviderDriver(): ProviderDriver {
       modelId: model.id,
       apiKey: apiKeyForLilac(credential),
     }),
+    pricingFacet: {
+      dynamic: {
+        refreshIntervalSeconds: LILAC_PRICING_REFRESH_INTERVAL_SECONDS,
+        fetchRates: (_request, context) => fetchLilacPricingRateCards({
+          catalogRates: context.catalogRates,
+          fetch: options.fetch,
+          now: options.now,
+        }),
+      },
+    },
+    discoveryFacet: {
+      fetchModels: ({ credential }) => fetchLilacModels({
+        apiKey: apiKeyForLilac(credential),
+        fetch: options.fetch,
+      }),
+    },
+    quotaFacet: {
+      fetchQuota: (request) => fetchLilacQuota(request, {
+        fetch: options.fetch,
+        now: options.now,
+      }),
+    },
   };
 }
 
@@ -191,12 +299,64 @@ export async function fetchLilacStatus(options: FetchLilacStatusOptions = {}): P
   return parseLilacStatus(payload, now());
 }
 
+/**
+ * Lilac's public status endpoint documents no balance or account-subscription
+ * fields; the typed balances/subscription surface therefore stays empty rather
+ * than fabricating state. The documented per-model supply state maps into typed
+ * allowances; unavailable supply data surfaces as 'unknown', never inferred (R4).
+ */
+export function quotaFromLilacObservation(observation: ProviderStatusObservation): ProviderQuota {
+  const data = observation.data as LilacStatusData;
+  const allowances = data.models
+    .filter((model) => model.subscription.availability === 'available')
+    .map((model) => ({
+      label: model.name ?? model.modelId,
+      state: 'available' as const,
+      detail: `Supply: ${model.subscription.supplyState ?? 'unknown'} · Discount: ${
+        model.subscription.discountPercent !== null ? `${model.subscription.discountPercent}%` : 'unavailable'
+      } · Credit multiplier: ${
+        model.subscription.creditMultiplier !== null ? String(model.subscription.creditMultiplier) : 'unavailable'
+      }`,
+    }));
+  return {
+    observedAt: data.subscriptionSupplyUpdatedAt ?? observation.providerUpdatedAt ?? observation.observedAt,
+    balances: [],
+    subscription: null,
+    allowances,
+  };
+}
+
+/** Fetch typed Lilac quota from the public, credential-free status endpoint. */
+export async function fetchLilacQuota(
+  _request: DriverQuotaRequest,
+  options: {
+    readonly fetch?: typeof globalThis.fetch;
+    readonly now?: () => Date;
+    readonly signal?: AbortSignal;
+  } = {},
+): Promise<ProviderQuota> {
+  const observation = await fetchLilacStatus({
+    fetch: options.fetch,
+    now: options.now,
+    signal: options.signal,
+  });
+  if (observation.stale || observation.availability !== 'available') {
+    throw new StatusRefreshError('Lilac quota is unavailable from a stale status observation', {
+      kind: 'network',
+    });
+  }
+  return quotaFromLilacObservation(observation);
+}
+
 /** The scheduler-facing source remains public, credential-free, and informational. */
 export function createLilacStatusSource(): ProviderStatusSource {
   return {
     providerId: 'lilac',
     ttlMs: LILAC_STATUS_TTL_MS,
     minimumManualRefreshMs: LILAC_STATUS_MINIMUM_MANUAL_REFRESH_MS,
-    fetchStatus: () => fetchLilacStatus(),
+    fetchStatus: async () => {
+      const observation = await fetchLilacStatus();
+      return observationWithQuota(observation, quotaFromLilacObservation(observation));
+    },
   };
 }

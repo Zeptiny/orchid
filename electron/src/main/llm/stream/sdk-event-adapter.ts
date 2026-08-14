@@ -8,9 +8,20 @@
 import { createHash } from 'node:crypto';
 import { getErrorMessage } from '@ai-sdk/provider';
 import type { ModelMessage } from 'ai';
-import type { Usage } from '../../../shared/types/message';
+import type { ThinkingReplayPayload, Usage } from '../../../shared/types/message';
+import {
+  capThinkingBlob,
+  capThinkingDisplayText,
+  ThinkingArtifactKind,
+  THINKING_DISPLAY_TEXT_MAX_LENGTH,
+  THINKING_ITEM_ID_MAX_LENGTH,
+} from '../../../shared/types/message';
 import type { ToolExecutionResult } from '../../../shared/types/tool-result';
 import type { MCPManager } from '../../mcp/manager';
+import {
+  emptyReasoningChars,
+  type ReasoningChars,
+} from '../reasoning-tokens';
 import {
   finalizeToolExecutionResult,
   genericAgentProjector,
@@ -52,10 +63,18 @@ export interface SdkEventAdapterOptions {
   resolveToolName: ToolNameResolver;
   attempt: AttemptActions;
   eagerBridge: BridgeActions;
+  /** Producing provider/model stamped onto captured replay artifacts. */
+  artifactIdentity?: { readonly providerId: string; readonly modelId: string };
   buildUsage: (
     usage: ProviderStepUsage,
     messages: readonly ModelMessage[],
+    chars?: ReasoningChars,
   ) => Usage;
+}
+
+interface PendingReasoningSequence {
+  text: string;
+  payload: ThinkingReplayPayload | undefined;
 }
 
 /**
@@ -67,6 +86,8 @@ export interface SdkEventAdapterOptions {
 export class SdkEventAdapter {
   private currentStepMessages: readonly ModelMessage[];
   private stepIndex = 0;
+  private stepChars: ReasoningChars = emptyReasoningChars();
+  private readonly reasoningParts = new Map<string, PendingReasoningSequence>();
 
   constructor(private readonly options: SdkEventAdapterOptions) {
     this.currentStepMessages = options.coreMessages;
@@ -77,16 +98,20 @@ export class SdkEventAdapter {
       case 'start-step': {
         const request = part.request as { messages?: readonly ModelMessage[] } | undefined;
         this.currentStepMessages = request?.messages ?? this.options.coreMessages;
+        this.reasoningParts.clear();
+        this.stepChars = emptyReasoningChars();
         break;
       }
 
       case 'finish-step':
         this.options.eagerBridge.flushActiveInput();
+        yield* this.drainReasoningArtifacts();
         yield {
           type: 'usage',
           usage: this.options.buildUsage(
             (part.usage ?? {}) as ProviderStepUsage,
             this.currentStepMessages,
+            this.stepChars,
           ),
         };
         yield {
@@ -102,6 +127,7 @@ export class SdkEventAdapter {
         this.options.eagerBridge.flushActiveInput();
         const text = stringField(part.text) ?? stringField(part.textDelta) ?? '';
         if (text) {
+          this.stepChars.text += text.length;
           this.options.attempt.markDeliveredOutput();
           yield { type: 'content', text };
         }
@@ -129,6 +155,7 @@ export class SdkEventAdapter {
         const toolCallId = streamToolCallId(part);
         const argsDelta = stringField(part.inputTextDelta) ?? stringField(part.delta) ?? '';
         if (toolCallId && argsDelta) {
+          this.stepChars.tool += argsDelta.length;
           this.options.eagerBridge.inputDelta(toolCallId, argsDelta);
           this.options.attempt.markDeliveredOutput();
           yield { type: 'tool_call_delta', toolCallId, argsDelta };
@@ -203,11 +230,36 @@ export class SdkEventAdapter {
       case 'reasoning': {
         this.options.attempt.armIdleTimer();
         this.options.eagerBridge.flushActiveInput();
+        this.trackReasoningPart(part);
         const text = stringField(part.text) ?? stringField(part.delta) ?? '';
         if (text) {
+          this.stepChars.reasoning += text.length;
           this.options.attempt.markDeliveredOutput();
           yield { type: 'thinking', text };
         }
+        break;
+      }
+
+      case 'reasoning-start': {
+        this.trackReasoningPart(part);
+        break;
+      }
+
+      case 'reasoning-end': {
+        this.trackReasoningPart(part);
+        // Signatures/encrypted content are complete only when the sequence
+        // closes; a closed sequence precedes any following tool calls, so its
+        // artifact must reach consumers before them.
+        const id = stringField(part.id) ?? '';
+        const entry = this.reasoningParts.get(id);
+        if (entry?.payload) {
+          yield {
+            type: 'thinking_artifact',
+            payload: withDisplayText(entry.payload, entry.text),
+            hasText: entry.text.length > 0,
+          };
+        }
+        this.reasoningParts.delete(id);
         break;
       }
 
@@ -221,6 +273,120 @@ export class SdkEventAdapter {
         break;
     }
   }
+
+  /**
+   * Record the per-item reasoning sequence. The first provider metadata seen
+   * for one item usually wins, but a later part carrying a blob upgrades a
+   * blob-less payload (Responses repeats the item id with a null encrypted
+   * blob on deltas and may deliver the blob only at reasoning-end).
+   */
+  private trackReasoningPart(part: Record<string, unknown>): void {
+    const identity = this.options.artifactIdentity;
+    if (!identity) return;
+    const id = stringField(part.id) || stringField(part.toolCallId) || '';
+    const entry = this.reasoningParts.get(id) ?? { text: '', payload: undefined };
+    const text = stringField(part.text) ?? stringField(part.delta) ?? '';
+    if (text) {
+      const remaining = THINKING_DISPLAY_TEXT_MAX_LENGTH - entry.text.length;
+      if (remaining > 0) entry.text += text.slice(0, remaining);
+    }
+    const candidate = payloadFromProviderMetadata(part.providerMetadata, identity, entry.text);
+    if (!entry.payload) {
+      entry.payload = candidate;
+    } else if (entry.payload.blob === null && candidate?.blob != null) {
+      entry.payload = { ...candidate, displayText: entry.payload.displayText };
+    }
+    this.reasoningParts.set(id, entry);
+  }
+
+  /**
+   * Emit artifacts for reasoning sequences left open at step finish (an
+   * incomplete stream still persists what it produced).
+   */
+  private *drainReasoningArtifacts(): Generator<StreamEvent> {
+    for (const entry of this.reasoningParts.values()) {
+      if (entry.payload) {
+        yield {
+          type: 'thinking_artifact',
+          payload: withDisplayText(entry.payload, entry.text),
+          hasText: entry.text.length > 0,
+        };
+      }
+    }
+    this.reasoningParts.clear();
+  }
+}
+
+/** Attach the sequence's accumulated display text to its payload. */
+function withDisplayText(
+  payload: ThinkingReplayPayload,
+  text: string,
+): ThinkingReplayPayload {
+  if (payload.displayText !== null || text.length === 0) return payload;
+  return { ...payload, displayText: text };
+}
+
+/**
+ * Translate streamed provider metadata into a replay artifact (R15, R16).
+ * Anthropic signs thinking blocks and marks redacted ones; Responses models
+ * identify reasoning items and may carry encrypted content.
+ */
+export function payloadFromProviderMetadata(
+  providerMetadata: unknown,
+  identity: { readonly providerId: string; readonly modelId: string },
+  displayText: string,
+): ThinkingReplayPayload | undefined {
+  if (typeof providerMetadata !== 'object' || providerMetadata === null) return undefined;
+  const metadata = providerMetadata as Record<string, unknown>;
+  const boundedDisplayText = capThinkingDisplayText(displayText);
+
+  const anthropic = metadata.anthropic;
+  if (typeof anthropic === 'object' && anthropic !== null) {
+    const options = anthropic as Record<string, unknown>;
+    if (typeof options.signature === 'string' && options.signature.length > 0) {
+      return {
+        providerId: identity.providerId,
+        modelId: identity.modelId,
+        kind: ThinkingArtifactKind.SIGNED,
+        blob: capThinkingBlob(options.signature),
+        displayText: boundedDisplayText,
+      };
+    }
+    if (typeof options.redactedData === 'string' && options.redactedData.length > 0) {
+      return {
+        providerId: identity.providerId,
+        modelId: identity.modelId,
+        kind: ThinkingArtifactKind.REDACTED,
+        blob: capThinkingBlob(options.redactedData),
+        displayText: null,
+      };
+    }
+  }
+
+  const openai = metadata.openai;
+  if (typeof openai === 'object' && openai !== null) {
+    const options = openai as Record<string, unknown>;
+    const itemId = typeof options.itemId === 'string'
+      && options.itemId.length > 0
+      && options.itemId.length <= THINKING_ITEM_ID_MAX_LENGTH
+      ? options.itemId
+      : undefined;
+    const encrypted = typeof options.reasoningEncryptedContent === 'string'
+      && options.reasoningEncryptedContent.length > 0
+      ? capThinkingBlob(options.reasoningEncryptedContent)
+      : undefined;
+    if (!itemId && !encrypted) return undefined;
+    return {
+      providerId: identity.providerId,
+      modelId: identity.modelId,
+      kind: encrypted ? ThinkingArtifactKind.ENCRYPTED : ThinkingArtifactKind.OPAQUE,
+      blob: encrypted ?? null,
+      displayText: boundedDisplayText || null,
+      ...(itemId ? { itemId } : {}),
+    };
+  }
+
+  return undefined;
 }
 
 export type ToolNameResolver = (providerToolName: string) => string;

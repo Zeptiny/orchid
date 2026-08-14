@@ -473,7 +473,7 @@ describe('buildSkillTool', () => {
     expect(result.agentProjection.content).toContain('not available for this agent');
   });
 
-  it('should produce XML-escaped content', async () => {
+  it('should produce raw content without XML escaping', async () => {
     const skills = new Map<string, Skill>([
       [
         'test',
@@ -490,9 +490,10 @@ describe('buildSkillTool', () => {
       content: string;
     };
 
-    expect(result.agentProjection.content).toContain('&lt;special&gt;');
-    expect(result.agentProjection.content).toContain('&amp;');
-    expect(result.agentProjection.content).toContain('&quot;quotes&quot;');
+    expect(result.agentProjection.content).toContain(
+      'Content with <special> & "quotes" and \'apostrophes\'',
+    );
+    expect(result.agentProjection.content).not.toContain('&lt;special&gt;');
   });
 
   it('should list skill resources in output', async () => {
@@ -607,9 +608,9 @@ describe('Skill resource reads', () => {
     };
 
     expect(result.canonical.status).toBe('complete');
-    // Content is XML-escaped in the output
-    expect(result.agentProjection.content).toContain('&quot;key&quot;');
-    expect(result.agentProjection.content).toContain('&quot;value&quot;');
+    // Content is raw data in the output
+    expect(result.agentProjection.content).toContain('{"key": "value"}');
+    expect(result.agentProjection.content).not.toContain('&quot;key&quot;');
   });
 
   it('should reject path traversal with ../..', async () => {

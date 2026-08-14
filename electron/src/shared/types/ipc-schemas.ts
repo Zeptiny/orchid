@@ -4,7 +4,12 @@
  * malformed outbound events and rejects unexpected invoke shapes.
  */
 import { z } from 'zod';
-import { contextSnapshotSchema } from './message';
+import {
+  contextSnapshotSchema,
+  THINKING_BLOB_MAX_LENGTH,
+  THINKING_DISPLAY_TEXT_MAX_LENGTH,
+  THINKING_ITEM_ID_MAX_LENGTH,
+} from './message';
 import { subagentStatusSchema } from './subagent';
 import { STARTUP_STEP_DEFINITIONS, type StartupStepId } from './ipc-boundary';
 import { toolCallSchema } from './tool';
@@ -66,6 +71,17 @@ const usageSchema = z.object({
   context: contextSnapshotSchema.optional(),
 });
 
+/** Replay artifact shape; opaque provider blobs cross the boundary uninterpreted. */
+export const thinkingReplayPayloadSchema = z.object({
+  providerId: z.string().min(1),
+  modelId: z.string().min(1),
+  kind: z.enum(['signed', 'redacted', 'encrypted', 'opaque', 'text']),
+  blob: z.string().max(THINKING_BLOB_MAX_LENGTH).nullable(),
+  displayText: z.string().max(THINKING_DISPLAY_TEXT_MAX_LENGTH).nullable(),
+  itemId: z.string().max(THINKING_ITEM_ID_MAX_LENGTH).optional(),
+  reasoningTokenCount: z.number().nonnegative().optional(),
+}).strict();
+
 /** Durable messages are terminal-history authority, so validate their full shape. */
 const messageSchema = z.object({
   id: z.string().min(1),
@@ -76,12 +92,50 @@ const messageSchema = z.object({
   tool_call_id: z.string().nullable(),
   name: z.string().nullable(),
   thinking: z.string().nullable(),
+  thinking_payload: thinkingReplayPayloadSchema.optional(),
   timestamp: z.string().datetime({ offset: true }),
   usage: usageSchema.nullable(),
   hidden: z.boolean(),
   excludeFromModel: z.boolean().optional(),
   tool_result: canonicalToolResultSchema.nullable(),
 }).strict();
+
+/** Bounded durable history page returned by the session navigation API. */
+export const sessionHistoryPageResultSchema = z.object({
+  sessionId: z.string().min(1),
+  chainId: z.string().min(1),
+  messages: z.array(messageSchema),
+  startIndex: z.number().int().nonnegative(),
+  totalMessages: z.number().int().nonnegative(),
+  complete: z.boolean(),
+}).strict().nullable();
+
+export const workingSetSnapshotSchema = z.object({
+  openSessionIds: z.array(z.string()),
+  focusedSessionId: z.string().nullable(),
+  mruSessionIds: z.array(z.string()),
+}).strict();
+
+export const sessionDeleteResultSchema = z.object({
+  status: z.enum(['deleted', 'not_found']),
+  workingSet: workingSetSnapshotSchema,
+}).strict();
+
+export const sessionDeletedEventSchema = z.object({
+  id: z.string().uuid(),
+  workingSet: workingSetSnapshotSchema,
+}).strict();
+
+/**
+ * Minimum durable chain shape required by renderer consumers. Remaining chain
+ * metadata stays passthrough so this boundary does not duplicate the domain
+ * schema, while `id`/`sessionId`/`messages` can never disappear silently.
+ */
+const ipcChainEnvelopeSchema = z.object({
+  id: z.string().min(1),
+  sessionId: z.string(),
+  messages: z.array(messageSchema),
+}).passthrough();
 
 // ── Chat events ──────────────────────────────────────────────────────────────
 
@@ -187,6 +241,14 @@ export const sessionCreatedEventSchema = z.object({
   draftGeneration: z.number().optional(),
 });
 
+/** The patch envelope is strict and its changed chain is structurally present. */
+export const sessionUpdatedEventSchema = z.object({
+  sessionId: z.string().min(1),
+  chain: ipcChainEnvelopeSchema,
+  activeChainId: z.string().nullable(),
+  updatedAt: z.string(),
+}).strict();
+
 export const trustStateSchema = z.enum(['trusted', 'untrusted', 'changed']);
 
 export const workspaceInfoSchema = z.object({
@@ -280,11 +342,7 @@ export const sessionActivityChangedEventSchema = z.object({
 });
 
 export const workingSetChangedEventSchema = z.object({
-  snapshot: z.object({
-    openSessionIds: z.array(z.string()),
-    focusedSessionId: z.string().nullable(),
-    mruSessionIds: z.array(z.string()),
-  }),
+  snapshot: workingSetSnapshotSchema,
 });
 
 // ── Index progress ───────────────────────────────────────────────────────────
@@ -339,6 +397,7 @@ export const chatSendErrorKindSchema = z.enum([
   'provider_required',
   'session_busy',
   'runtime_hydration_failed',
+  'history_load_failed',
   'provider_unavailable',
 ]);
 
@@ -445,6 +504,21 @@ export const sessionReasoningConfigResultSchema = z.object({
   supportsReasoning: z.boolean(),
 });
 
+export const serviceTierOptionViewSchema = z.object({
+  id: z.string(),
+  displayName: z.string().nullable(),
+  description: z.string().nullable(),
+  requiresStreaming: z.boolean().optional(),
+});
+
+export const sessionServiceTierConfigResultSchema = z.object({
+  mechanism: z.enum(['request-parameter', 'model-name-variants']).nullable(),
+  tiers: z.array(serviceTierOptionViewSchema),
+  selected: z.string().nullable(),
+  override: z.string().nullable(),
+  effective: z.string().nullable(),
+});
+
 /** Loose session snapshot: identity + array containers, not full Message graph. */
 export const chatSessionSnapshotSchema = z
   .object({
@@ -499,14 +573,25 @@ export const ipcSubagentRecordSchema = z.object({
   result: z.string().nullable(), error: z.string().nullable(), parentChainIndex: z.number().int().nullable(),
   reasoning_effort: z.union([z.string(), z.number()]).optional(),
   closed: z.boolean().default(false),
-  chain: z.unknown(),
+  chain: ipcChainEnvelopeSchema,
 });
+export const ipcSubagentSummarySchema = z.object({
+  id: z.string(), agent_name: z.string(), agent_type: z.string(), agent_tier: z.string(),
+  agentRole: z.string(), task: z.string(), status: subagentStatusSchema,
+  chain_id: z.string(), start_time: z.string(), end_time: z.string().nullable(),
+  parentChainIndex: z.number().int().nullable(), usage: usageSchema.nullable(),
+}).strict();
 export const subagentSnapshotSchema = z.object({
   sessionId: z.string().uuid(),
   sessionRevision: z.number().int().nonnegative(),
-  records: z.array(ipcSubagentRecordSchema),
+  records: z.array(ipcSubagentSummarySchema),
   live: z.array(subagentLiveProjectionSchema),
 });
+export const subagentDetailResultSchema = z.object({
+  sessionId: z.string().uuid(),
+  subagentId: z.string(),
+  record: ipcSubagentRecordSchema.nullable(),
+}).strict();
 
 // ── Subagent live delta events ───────────────────────────────────────────────
 
@@ -518,7 +603,7 @@ const subagentDeltaBaseSchema = z.object({
   sessionRevision: z.number().int().nonnegative(),
 });
 export const subagentSpawnedEventSchema = subagentDeltaBaseSchema.extend({
-  type: z.literal('spawned'), record: ipcSubagentRecordSchema, usage: usageSchema.nullable(),
+  type: z.literal('spawned'), record: ipcSubagentSummarySchema, usage: usageSchema.nullable(),
 });
 export const subagentTextDeltaEventSchema = subagentDeltaBaseSchema.extend({
   type: z.literal('text_delta'), segmentId: z.string(), append: z.string(),
@@ -543,7 +628,7 @@ export const subagentUsageEventSchema = subagentDeltaBaseSchema.extend({
   type: z.literal('usage'), usage: usageSchema,
 });
 export const subagentTerminalEventSchema = subagentDeltaBaseSchema.extend({
-  type: z.literal('terminal'), record: ipcSubagentRecordSchema,
+  type: z.literal('terminal'), record: ipcSubagentSummarySchema,
   state: z.enum(['completed', 'failed', 'interrupted']), usage: usageSchema.nullable(),
 });
 export const subagentDeltaEventSchema = z.discriminatedUnion('type', [

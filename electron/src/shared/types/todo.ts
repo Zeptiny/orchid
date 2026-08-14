@@ -3,12 +3,8 @@
  *
  * Ported from src/orchid/domain/todo.py.
  *
- * The TodoStore is session-scoped and tracks task state transitions
- * via VALID_TRANSITIONS (matching Python's state machine).
- *
- * Python has 7 statuses; the TS port includes all of them for
- * storage-compat. The task description's minimal subset (OPEN,
- * IN_PROGRESS, DONE) is the most commonly used.
+ * The TodoStore is session-scoped. Status is free-form: any status
+ * can transition to any status (no state-machine restrictions).
  */
 
 // ── Enums as const objects ──────────────────────────────────────────────────
@@ -20,14 +16,6 @@ export const TodoStatus = {
 } as const;
 
 export type TodoStatus = (typeof TodoStatus)[keyof typeof TodoStatus];
-
-// ── Valid transitions ───────────────────────────────────────────────────────
-
-export const VALID_TRANSITIONS: Record<TodoStatus, ReadonlySet<TodoStatus>> = {
-  [TodoStatus.OPEN]: new Set<TodoStatus>([TodoStatus.IN_PROGRESS]),
-  [TodoStatus.IN_PROGRESS]: new Set<TodoStatus>([TodoStatus.DONE]),
-  [TodoStatus.DONE]: new Set<TodoStatus>([]),
-};
 
 // ── Todo ────────────────────────────────────────────────────────────────────
 

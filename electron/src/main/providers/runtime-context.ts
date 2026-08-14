@@ -9,11 +9,16 @@ import type { ProviderCatalogStore } from './catalog/store';
 import type { ConnectionStore } from './connection-store';
 import type { CredentialVault } from './credentials/vault';
 import type { ProviderStatusService } from './status/service';
+import {
+  createDefaultProviderDriverRegistry,
+  type ProviderDriverRegistry,
+} from './drivers/registry';
 
 let providerCatalogStore: ProviderCatalogStore | null = null;
 let providerCredentialVault: CredentialVault | null = null;
 let providerConnectionStore: ConnectionStore | null = null;
 let providerStatusService: ProviderStatusService | null = null;
+let providerDriverRegistry: ProviderDriverRegistry | null = null;
 
 export function setProviderCatalogStore(store: ProviderCatalogStore | null): void {
   providerCatalogStore = store;
@@ -63,10 +68,19 @@ export function getProviderStatusService(): ProviderStatusService {
   return providerStatusService;
 }
 
+/** Trusted driver registry for read-only facet metadata (tiers, cache). */
+export function getProviderDriverRegistry(): ProviderDriverRegistry {
+  if (!providerDriverRegistry) {
+    providerDriverRegistry = createDefaultProviderDriverRegistry();
+  }
+  return providerDriverRegistry;
+}
+
 /** Clear all provider runtime handles (shutdown / test teardown). */
 export function resetProviderRuntimeContext(): void {
   providerCatalogStore = null;
   providerCredentialVault = null;
   providerConnectionStore = null;
   providerStatusService = null;
+  providerDriverRegistry = null;
 }

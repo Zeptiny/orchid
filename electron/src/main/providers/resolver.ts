@@ -6,6 +6,7 @@ import {
   type ProviderDefinition,
   type ProviderResolution,
 } from '../../shared/types/provider';
+import { resolveEffectiveModel } from './facets/discovery';
 
 /** Resolve a typed selection without selecting a default or parsing a string reference. */
 export function resolveModelSelection(
@@ -48,6 +49,7 @@ export function resolveModelSelection(
     return { kind: 'unavailable', selection, reason: 'model-disabled' };
   }
   const customModel = connection.customModels?.find((model) => model.id === selection.modelId);
+  const discoveredModel = connection.discoveredModels?.find((model) => model.id === selection.modelId);
   if (customModel && (provider.allowsCustomModels || catalogModel)) {
     if (customModel.lifecycle === 'disabled' || customModel.lifecycle === 'retired') {
       return { kind: 'unavailable', selection, reason: 'model-disabled' };
@@ -55,7 +57,16 @@ export function resolveModelSelection(
     if (customModel.protocol !== connection.protocol) {
       return { kind: 'unavailable', selection, reason: 'provider-mismatch' };
     }
-    const model: EffectiveModel = { ...customModel, source: 'connection' };
+    const model: EffectiveModel = {
+      ...resolveEffectiveModel({
+        catalog: catalogModel,
+        discovered: discoveredModel,
+        custom: customModel,
+        fallbackId: selection.modelId,
+        fallbackProtocol: connection.protocol,
+      }),
+      source: 'connection',
+    };
     return { kind: 'resolved', selection, connection, provider, model };
   }
 
@@ -63,7 +74,30 @@ export function resolveModelSelection(
     if (catalogModel.protocol !== connection.protocol) {
       return { kind: 'unavailable', selection, reason: 'provider-mismatch' };
     }
-    const model: EffectiveModel = { ...catalogModel, source: 'catalog' };
+    const model: EffectiveModel = {
+      ...resolveEffectiveModel({
+        catalog: catalogModel,
+        discovered: discoveredModel,
+        fallbackId: selection.modelId,
+        fallbackProtocol: connection.protocol,
+      }),
+      source: 'catalog',
+    };
+    return { kind: 'resolved', selection, connection, provider, model };
+  }
+
+  if (discoveredModel) {
+    if (discoveredModel.protocol !== undefined && discoveredModel.protocol !== connection.protocol) {
+      return { kind: 'unavailable', selection, reason: 'provider-mismatch' };
+    }
+    const model: EffectiveModel = {
+      ...resolveEffectiveModel({
+        discovered: discoveredModel,
+        fallbackId: selection.modelId,
+        fallbackProtocol: connection.protocol,
+      }),
+      source: 'connection',
+    };
     return { kind: 'resolved', selection, connection, provider, model };
   }
 

@@ -17,9 +17,18 @@ import { getProviderRuntime } from '../../providers';
 import { getProviderAccountingStore } from '../../providers/accounting/store';
 import type { ProviderAttemptAccountingContext } from '../../providers/accounting/middleware';
 import type { ReasoningProviderOptions } from '../../providers/drivers/types';
+import {
+  DEFAULT_THINKING_POLICY,
+} from '../../providers/facets/thinking';
+import type { ThinkingReplayContext } from '../../llm/history';
+import type { CacheFacet, ThinkingPolicy } from '../../../shared/types/provider-facets';
+import type { ProviderProtocol } from '../../../shared/types/provider';
+import { resolveMainAgentTier } from '../../providers/facets/tiers';
+import { assembleFacetProviderOptions } from '../../providers/facets/turn-options';
 import { getSessionManager } from '../../session/singleton';
-import { getBuiltinToolRegistryForRuntime } from '../../tools';
+import { getBuiltinToolRegistryForRuntime, getSubagentManager } from '../../tools';
 import type { ToolExecutionContext } from '../../tools/types';
+import { awaitSessionSubagentHydration } from '../../tools/subagent/hydrate';
 import { resolveMainAgentEffort } from '../../llm/reasoning-effort';
 import {
   makeAssistantMessage,
@@ -85,6 +94,20 @@ export async function startChatTurn(
   sessionsStarting.add(sessionId);
   const existing = activeAgents.get(sessionId);
   const runtime = sessionGate.runtime;
+  try {
+    await awaitSessionSubagentHydration(getSubagentManager(), sessionId, {
+      projectRuntime: runtime,
+      windowId,
+      cwd: sessionGate.cwd,
+    });
+  } catch (error) {
+    sessionsStarting.delete(sessionId);
+    return {
+      status: 'error',
+      error: error instanceof Error ? error.message : String(error),
+      kind: 'runtime_hydration_failed',
+    };
+  }
   if (existing) forceAbortSession(sessionId);
   publishSessionActivity(sessionId, {
     cwd: sessionGate.cwd, state: 'working', phase: 'agent', detail: 'Generating response',
@@ -101,20 +124,72 @@ export async function startChatTurn(
     };
   }
 
+  let existingMessages: Message[];
+  try {
+    existingMessages = getChatHistory(sessionId) ?? historyFromSession(sessionId);
+  } catch (error) {
+    sessionsStarting.delete(sessionId);
+    completeSessionActivity(sessionId, false);
+    return {
+      status: 'error',
+      error: `Could not load complete conversation history: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+      kind: 'history_load_failed',
+    };
+  }
+
   let modelInstance: LanguageModelV4;
   let providerSnapshot: ProviderAttemptAccountingContext['snapshot'];
   let providerOptions: ReasoningProviderOptions | undefined;
+  let pricingFacet: ProviderAttemptAccountingContext['pricingFacet'];
+  let thinkingPolicy: ThinkingPolicy | undefined;
+  let cacheFacet: CacheFacet | undefined;
+  let cacheTtl: string | undefined;
+  let cacheSessionKey: string | undefined;
+  let tierMechanism: ProviderAttemptAccountingContext['tierMechanism'];
   let accountingStore: ReturnType<typeof getProviderAccountingStore>;
   try {
     accountingStore = getProviderAccountingStore();
-    const execution = await getProviderRuntime().resolveExecution(turnSelection);
+    // Resolve the effective tier before model construction so the variant
+    // mapping and the frozen snapshot both observe the same selection (R21).
+    const tierContext = await getProviderRuntime().resolveTierContext(turnSelection);
+    const effectiveTier = resolveMainAgentTier(
+      sessionGate.session,
+      tierContext.connection,
+      turnSelection.modelId,
+      tierContext.tierMechanism,
+    );
+    const execution = await getProviderRuntime().resolveExecution(
+      turnSelection,
+      effectiveTier !== undefined ? { tier: effectiveTier } : {},
+    );
+    tierMechanism = execution.tierMechanism;
     modelInstance = execution.modelInstance;
     providerSnapshot = execution.snapshot;
+    pricingFacet = execution.pricingFacet;
+    thinkingPolicy = execution.thinkingPolicy;
+    cacheFacet = execution.cacheFacet;
     const effort = resolveMainAgentEffort(
       sessionGate.session, execution.connection, turnSelection.modelId,
       execution.model.capabilities?.reasoning === true,
     );
     providerOptions = effort === undefined ? undefined : execution.buildReasoningOptions?.(effort);
+    const facetOptions = assembleFacetProviderOptions({
+      providerOptions,
+      thinkingPolicy,
+      providerId: execution.snapshot.providerId,
+      tierId: resolveMainAgentTier(
+        sessionGate.session, execution.connection, turnSelection.modelId, execution.tierMechanism,
+      ),
+      tierMechanism: execution.tierMechanism,
+      cacheFacet,
+      cacheTtlSelection: execution.connection.cacheTtl,
+      sessionId,
+    });
+    providerOptions = facetOptions.providerOptions;
+    cacheSessionKey = facetOptions.cacheSessionKey;
+    cacheTtl = facetOptions.cacheTtl;
   } catch (error) {
     sessionsStarting.delete(sessionId);
     completeSessionActivity(sessionId, false);
@@ -125,10 +200,14 @@ export async function startChatTurn(
   }
 
   const agents = [...runtime.agents.values()];
-  const existingMessages: Message[] = getChatHistory(sessionId) ?? historyFromSession(sessionId);
   const userMessage = makeUserMessage(message);
   const priorMessageCount = existingMessages.length;
   const messages = [...existingMessages, userMessage];
+  const thinkingReplay: ThinkingReplayContext = {
+    policy: thinkingPolicy ?? DEFAULT_THINKING_POLICY,
+    selection: { providerId: providerSnapshot.providerId, modelId: turnSelection.modelId },
+    protocol: providerSnapshot.protocol as ProviderProtocol,
+  };
   const agent = agents.find((candidate) => candidate.name === 'general') ?? agents[0] ?? {
     name: 'general', type: 'subagent' as const, tier: 'bloom' as const,
     description: 'General-purpose agent', system_prompt: 'You are a helpful assistant.',
@@ -164,7 +243,7 @@ export async function startChatTurn(
   const accounting: ProviderAttemptAccountingContext = {
     store: accountingStore, sessionId, chainId, turnId, snapshot: providerSnapshot,
     agentScope: 'main', agentName: agent.name, agentType: agent.type, agentTier: agent.tier,
-   attemptIdHolder: { value: null },
+   attemptIdHolder: { value: null }, pricingFacet, tierMechanism,
   };
   const mcpManager = acquireProjectMCPManager(runtime);
   let resourcesReleased = false;
@@ -191,7 +270,10 @@ export async function startChatTurn(
         agent, systemPrompt: fullSystemPrompt,
         streamFn: createProviderStreamFn({
           messages, runtime, sessionId, windowId, modelInstance, accounting, registry: turnRegistry,
-          mcpManager, providerOptions,
+          mcpManager, providerOptions, thinkingReplay,
+          cachePlacement: cacheFacet
+            ? { facet: cacheFacet, ttl: cacheTtl, sessionKey: cacheSessionKey }
+            : undefined,
         }),
       },
     });
@@ -221,7 +303,8 @@ export async function startChatTurn(
   const activeAgent: ActiveAgent = {
     sessionId, windowId, turnId, cwd: turnCtx.cwd, startedAt: Date.now(), actor, interruptActor,
     abortController, messages, priorMessageCount, turnMessages: [], responseCommittedLength: 0,
-    thinkingCommittedLength: 0, agent, selection: turnSelection, agentCancelled: false,
+    thinkingCommittedLength: 0, thinkingArtifactsCommitted: 0, agent, selection: turnSelection,
+    thinkingReplay, agentCancelled: false,
     finalized: false, generation, eventSequence: 0, lastChatState: null, toolCalls: new Map(),
     streamSegments: [], unsubscribe: () => subscription?.unsubscribe(),
     interruptUnsubscribe: () => interruptSubscription?.unsubscribe(), interruptResetTimer: null,
@@ -262,13 +345,43 @@ export async function startChatTurn(
     if (!segment.trim() && !attachUsage) return;
     activeAgent.turnMessages.push(makeAssistantMessage(segment, attachUsage, segmentId));
   };
-  const flushThinkingSegment = (fullThinking: string) => {
-    if (fullThinking.length <= activeAgent.thinkingCommittedLength) return;
-    const segment = fullThinking.slice(activeAgent.thinkingCommittedLength);
-    const segmentId = textSegmentIdAtOffset(activeAgent, 'thinking', activeAgent.thinkingCommittedLength);
-    activeAgent.thinkingCommittedLength = fullThinking.length;
-    if (!segment.trim()) return;
-    activeAgent.turnMessages.push(makeThinkingMessage(segment, segmentId));
+  const flushThinkingSegment = (
+    context: Pick<AgentContext, 'thinking' | 'thinkingPayloads' | 'thinkingArtifacts'>,
+  ) => {
+    const fullThinking = context.thinking ?? '';
+    if (fullThinking.length > activeAgent.thinkingCommittedLength) {
+      const segment = fullThinking.slice(activeAgent.thinkingCommittedLength);
+      const segmentId = textSegmentIdAtOffset(activeAgent, 'thinking', activeAgent.thinkingCommittedLength);
+      const payload = context.thinkingPayloads?.[fullThinking.length];
+      activeAgent.thinkingCommittedLength = fullThinking.length;
+      if (segment.trim()) {
+        activeAgent.turnMessages.push(makeThinkingMessage(segment, segmentId, payload));
+      }
+    }
+    const artifacts = context.thinkingArtifacts ?? [];
+    for (let index = activeAgent.thinkingArtifactsCommitted; index < artifacts.length; index += 1) {
+      activeAgent.turnMessages.push(makeThinkingMessage('', undefined, artifacts[index]));
+    }
+    activeAgent.thinkingArtifactsCommitted = artifacts.length;
+  };
+  // Opaque thinking renders as an indicator with a token count (R17); the
+  // provider reports reasoning tokens per step, so only a single text-less
+  // artifact can be stamped unambiguously.
+  const stampOpaqueThinkingTokenCount = (usage: Usage | null) => {
+    const reasoningTokens = usage?.reasoning_tokens;
+    if (!reasoningTokens) return;
+    const candidates = activeAgent.turnMessages.filter((message) =>
+      message.type === MessageType.THINKING
+      && !message.content
+      && message.thinking_payload
+      && message.thinking_payload.reasoningTokenCount === undefined);
+    if (candidates.length !== 1) return;
+    const target = candidates[0];
+    const index = activeAgent.turnMessages.indexOf(target);
+    activeAgent.turnMessages[index] = {
+      ...target,
+      thinking_payload: { ...target.thinking_payload!, reasoningTokenCount: reasoningTokens },
+    };
   };
   const finalizeTurn = (opts: { response: string; usage: Usage | null; interrupted: boolean; sendDone: boolean }) => {
     if (activeAgent.finalized) return;
@@ -278,7 +391,8 @@ export async function startChatTurn(
       clearTimeout(activeAgent.sessionTitleTimer);
       activeAgent.sessionTitleTimer = null;
     }
-    flushThinkingSegment((activeAgent.actor.getSnapshot().context as AgentContext).thinking ?? '');
+    flushThinkingSegment(activeAgent.actor.getSnapshot().context as AgentContext);
+    stampOpaqueThinkingTokenCount(opts.usage);
     const remaining = opts.response.slice(activeAgent.responseCommittedLength);
     if (remaining || (opts.interrupted && activeAgent.responseCommittedLength === 0 && !opts.response)) {
       activeAgent.turnMessages.push(makeAssistantMessage(
@@ -290,9 +404,10 @@ export async function startChatTurn(
       activeAgent.turnMessages.push({ ...makeAssistantMessage('', opts.usage), hidden: true });
     }
     const turnExtras = [...activeAgent.turnMessages];
+    const terminalMessages = turnMessagesFromAgent(activeAgent);
     const fullHistory = [...messages, ...turnExtras];
     persistTurnConversation(
-      sessionId, fullHistory, turnMessagesFromAgent(activeAgent),
+      sessionId, fullHistory, terminalMessages,
       opts.interrupted ? ChainStatus.INTERRUPTED : ChainStatus.COMPLETED,
       agent, activeAgent.selection, webContents,
     );
@@ -300,7 +415,7 @@ export async function startChatTurn(
     completeSessionActivity(sessionId, getSessionManager().getActive(windowId)?.id !== sessionId);
     if (opts.sendDone) {
       sendTurnEvent(webContents, activeAgent, IPC_CHANNELS.CHAT_DONE, {
-        type: 'done', response: opts.response, messages: fullHistory,
+        type: 'done', response: opts.response, messages: terminalMessages,
         interrupted: opts.interrupted, usage: opts.usage,
       });
     }
@@ -414,7 +529,7 @@ export async function startChatTurn(
           entry.type === MessageType.TOOL_CALL && entry.tool_call_id === update.toolCallId,
         );
         if (!already) {
-          flushThinkingSegment(context.thinking ?? '');
+          flushThinkingSegment(context);
           flushResponseSegment(context.response);
           activeAgent.turnMessages.push(makeToolCallMessage(
             update.toolCallId, update.toolName ?? 'unknown', update.args,
@@ -426,7 +541,7 @@ export async function startChatTurn(
           entry.type === MessageType.TOOL_CALL && entry.tool_call_id === update.toolCallId,
         );
         if (!hasCall) {
-          flushThinkingSegment(context.thinking ?? '');
+          flushThinkingSegment(context);
           flushResponseSegment(context.response);
           activeAgent.turnMessages.push(makeToolCallMessage(
             update.toolCallId, update.toolName ?? 'unknown', update.args ?? '{}',
@@ -460,14 +575,16 @@ export async function startChatTurn(
         cwd: turnCtx.cwd, state: 'needs_attention', phase: 'agent', detail: title || detail, canCancel: false,
       });
       flushPartialTurnContent(activeAgent, context);
+      const terminalMessages = turnMessagesFromAgent(activeAgent);
       const fullHistory = [...messages, ...activeAgent.turnMessages];
       persistTurnConversation(
-        sessionId, fullHistory, turnMessagesFromAgent(activeAgent), ChainStatus.FAILED,
+        sessionId, fullHistory, terminalMessages, ChainStatus.FAILED,
         agent, activeAgent.selection, webContents,
+        detail, title,
       );
       activeAgent.messages = fullHistory;
       sendTurnEvent(webContents, activeAgent, IPC_CHANNELS.CHAT_ERROR, {
-        type: 'error', error: detail, messages: fullHistory, title, kind: classifyErrorKind(title, detail),
+        type: 'error', error: detail, messages: terminalMessages, title, kind: classifyErrorKind(title, detail),
       });
       queueMicrotask(() => disposeActiveAgent(sessionId, activeAgent));
     }

@@ -106,8 +106,13 @@ export const COMMANDS: (Command & { execute: (ctx: CommandContext) => Promise<vo
       ctx.onClose();
       const ok = window.confirm(`Delete session “${name}”? This cannot be undone.`);
       if (!ok) return;
-      await ctx.onDeleteSession(sessionId);
-      ctx.onNotify('Session deleted.', 'info');
+      try {
+        await ctx.onDeleteSession(sessionId);
+        ctx.onNotify('Session deleted.', 'info');
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        ctx.onNotify(`Delete failed: ${message}`, 'error');
+      }
     },
   },
   {

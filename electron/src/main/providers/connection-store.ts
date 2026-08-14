@@ -3,10 +3,12 @@ import * as path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import {
   createProviderConnectionSchema,
-  providerConnectionDocumentSchema,
+  parseProviderConnectionDocument,
   providerConnectionSchema,
   updateProviderConnectionSchema,
+  PROVIDER_CONNECTION_DOCUMENT_VERSION,
   type CreateProviderConnectionInput,
+  type DiscoveredConnectionModel,
   type ProviderConnection,
   type ProviderConnectionDocument,
   type ReasoningModelConfig,
@@ -68,13 +70,13 @@ export function _clearConnectionStoreWriteChains(): void {
 }
 
 function emptyDocument(): ProviderConnectionDocument {
-  return { version: 1, connections: [] };
+  return { version: PROVIDER_CONNECTION_DOCUMENT_VERSION, connections: [] };
 }
 
 function readDocument(filePath: string): ProviderConnectionDocument {
   if (!fs.existsSync(filePath)) return emptyDocument();
   try {
-    return providerConnectionDocumentSchema.parse(
+    return parseProviderConnectionDocument(
       JSON.parse(fs.readFileSync(filePath, 'utf8')),
     );
   } catch (error) {
@@ -104,6 +106,15 @@ export class ConnectionStore {
     return readDocument(this.filePath).connections.map((connection) => ({ ...connection }));
   }
 
+  /**
+   * Synchronous read of the configured provider ids. The async surface stays
+   * authoritative for mutations; this read-only variant serves main-process
+   * consumers (analytics) that cannot await without rippling sync APIs.
+   */
+  listProviderIdsSync(): Set<string> {
+    return new Set(readDocument(this.filePath).connections.map((connection) => connection.providerId));
+  }
+
   async get(id: string): Promise<ProviderConnection | null> {
     const connection = readDocument(this.filePath).connections.find((item) => item.id === id);
     return connection ? { ...connection } : null;
@@ -128,7 +139,7 @@ export class ConnectionStore {
       }
       await this.beforePersist?.();
       atomicWriteJson(this.filePath, {
-        version: 1,
+        version: PROVIDER_CONNECTION_DOCUMENT_VERSION,
         connections: [...document.connections, connection],
       });
       return connection;
@@ -149,8 +160,24 @@ export class ConnectionStore {
       const connections = [...document.connections];
       connections[index] = updated;
       await this.beforePersist?.();
-      atomicWriteJson(this.filePath, { version: 1, connections });
+      atomicWriteJson(this.filePath, { version: PROVIDER_CONNECTION_DOCUMENT_VERSION, connections });
       return updated;
+    });
+  }
+
+  /**
+   * Persist one fresh live-discovery snapshot. User configuration layers
+   * (customModels, pricingOverrides, tierSelections, modelIds) are never
+   * touched; reasoningConfig arrives pre-merged fill-absent by the caller.
+   */
+  async persistDiscoveredModels(
+    id: string,
+    discoveredModels: readonly DiscoveredConnectionModel[],
+    reasoningConfig?: Record<string, ReasoningModelConfig>,
+  ): Promise<ProviderConnection> {
+    return this.update(id, {
+      discoveredModels: [...discoveredModels],
+      ...(reasoningConfig ? { reasoningConfig } : {}),
     });
   }
 
@@ -161,7 +188,7 @@ export class ConnectionStore {
       if (!removed) return null;
       const connections = document.connections.filter((connection) => connection.id !== id);
       await this.beforePersist?.();
-      atomicWriteJson(this.filePath, { version: 1, connections });
+      atomicWriteJson(this.filePath, { version: PROVIDER_CONNECTION_DOCUMENT_VERSION, connections });
       return { ...removed };
     });
   }

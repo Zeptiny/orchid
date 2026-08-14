@@ -21,7 +21,7 @@ import { assign, setup, fromCallback, type ActorRefFrom } from 'xstate';
 import type { StreamEvent } from '../../llm/orchestrator';
 import type { AgentEvent } from './events';
 import type { Agent } from '../../../shared/types/agent';
-import type { Usage } from '../../../shared/types/message';
+import type { ThinkingReplayPayload, Usage } from '../../../shared/types/message';
 import { addStepUsage } from '../../../shared/usage';
 import type {
   CanonicalToolResult,
@@ -35,6 +35,13 @@ export interface AgentContext {
   response: string;
   /** Accumulated reasoning/thinking text for the current turn. */
   thinking: string;
+  /**
+   * Thinking replay artifacts keyed by the text offset at which their segment
+   * ends. Persisted onto THINKING messages when segments flush.
+   */
+  thinkingPayloads: Record<number, ThinkingReplayPayload>;
+  /** Artifacts with no displayable text, flushed as their own THINKING messages. */
+  thinkingArtifacts: ThinkingReplayPayload[];
   /** User input that triggered the current stream. */
   currentInput: string;
   /** Current tool call being streamed (generating state). */
@@ -156,6 +163,9 @@ const streamCallback = fromCallback(
             case 'thinking':
               sendBack({ type: 'THINKING', data: event.text });
               break;
+            case 'thinking_artifact':
+              sendBack({ type: 'THINKING_ARTIFACT', payload: event.payload, hasText: event.hasText });
+              break;
             case 'tool_call':
               sendBack({
                 type: 'TOOL_CALL',
@@ -251,6 +261,8 @@ export const agentMachine = setup({
   context: ({ input }) => ({
     response: '',
     thinking: '',
+    thinkingPayloads: {},
+    thinkingArtifacts: [],
     currentInput: '',
     streamingToolCall: null,
     toolCallNames: {},
@@ -275,6 +287,8 @@ export const agentMachine = setup({
             currentInput: ({ event }) => event.message,
             response: '',
             thinking: '',
+            thinkingPayloads: () => ({}),
+            thinkingArtifacts: () => [],
             error: null,
             errorTitle: null,
             wasInterrupted: false,
@@ -314,6 +328,16 @@ export const agentMachine = setup({
         THINKING: {
           actions: assign({
             thinking: ({ context, event }) => context.thinking + event.data,
+          }),
+        },
+        THINKING_ARTIFACT: {
+          actions: assign({
+            thinkingPayloads: ({ context, event }) => {
+              if (!event.hasText) return context.thinkingPayloads;
+              return { ...context.thinkingPayloads, [context.thinking.length]: event.payload };
+            },
+            thinkingArtifacts: ({ context, event }) =>
+              event.hasText ? context.thinkingArtifacts : [...context.thinkingArtifacts, event.payload],
           }),
         },
         TOOL_CALL: {
@@ -452,6 +476,8 @@ export const agentMachine = setup({
             currentInput: ({ event }) => event.message,
             response: '',
             thinking: '',
+            thinkingPayloads: () => ({}),
+            thinkingArtifacts: () => [],
             error: null,
             errorTitle: null,
             wasInterrupted: false,
@@ -474,6 +500,8 @@ export const agentMachine = setup({
             currentInput: ({ event }) => event.message,
             response: '',
             thinking: '',
+            thinkingPayloads: () => ({}),
+            thinkingArtifacts: () => [],
             error: null,
             errorTitle: null,
             wasInterrupted: false,

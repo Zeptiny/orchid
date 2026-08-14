@@ -296,7 +296,7 @@ describe('evaluateAgentsMdEnforcement', () => {
     expect(enforcement!.unseen[0]?.displayPath).toBe(path.join('pkg', 'AGENTS.md'));
   });
 
-  it('escapes XML metacharacters in the warning block', () => {
+  it('renders metacharacters raw in the warning block', () => {
     const block = buildAgentsMdWarningBlock([
       {
         path: '/w/pkg/AGENTS.md',
@@ -307,9 +307,8 @@ describe('evaluateAgentsMdEnforcement', () => {
       },
     ]);
     expect(block).toContain('<agents_md_warning>');
-    expect(block).toContain('&lt;weird&gt;');
-    expect(block).toContain('&amp;');
-    expect(block).not.toContain('<weird>');
+    expect(block).toContain('pkg/<weird> & "AGENTS".md');
+    expect(block).not.toContain('&lt;weird&gt;');
   });
 });
 

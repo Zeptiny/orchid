@@ -8,10 +8,12 @@ import type { ModelMessage } from 'ai';
 import type { Usage } from '../../../shared/types/message';
 import type { MCPManager } from '../../mcp/manager';
 import type { StreamAttemptController } from './attempt-controller';
+import type { ReasoningChars } from '../reasoning-tokens';
 import { EagerToolBridge, streamResultFields } from './eager-tool-bridge';
 import {
   createToolNameResolver,
   executionFromSdkOutput,
+  payloadFromProviderMetadata,
   sdkPreExecutionError,
   SdkEventAdapter,
   streamToolCallId,
@@ -45,9 +47,12 @@ export interface NormalizedStreamOptions {
   mcpManager: MCPManager | null;
   attempt: StreamAttemptController;
   eagerBridge: EagerToolBridge;
+  /** Producing provider/model stamped onto captured replay artifacts. */
+  artifactIdentity?: { readonly providerId: string; readonly modelId: string };
   buildUsage: (
     usage: ProviderStepUsage,
     messages: readonly ModelMessage[],
+    chars?: ReasoningChars,
   ) => Usage;
 }
 
@@ -64,6 +69,7 @@ type NextText =
  */
 export class NormalizedStream {
   private readonly pendingUsageEvents: Usage[] = [];
+  private readonly pendingThinkingEvents: StreamEvent[] = [];
   private readonly sdkEvents: SdkEventAdapter;
   private readonly resolveToolName: ToolNameResolver;
   private usedFullStream = false;
@@ -77,6 +83,7 @@ export class NormalizedStream {
       resolveToolName: this.resolveToolName,
       attempt: options.attempt,
       eagerBridge: options.eagerBridge,
+      artifactIdentity: options.artifactIdentity,
       buildUsage: options.buildUsage,
     });
   }
@@ -89,6 +96,7 @@ export class NormalizedStream {
         step.request?.messages ?? this.options.coreMessages,
       ));
     }
+    this.queueFallbackThinking(step.content);
     this.queueFallbackToolCalls(step.toolCalls);
     this.queueFallbackToolResults(step.toolResults, step.toolCalls);
     this.queueFallbackToolErrors(step.content);
@@ -115,7 +123,10 @@ export class NormalizedStream {
     }
     await this.options.eagerBridge.flush();
     yield* this.options.eagerBridge.drainEvents();
-    if (!this.usedFullStream) yield* this.drainPendingUsageEvents();
+    if (!this.usedFullStream) {
+      yield* this.drainPendingThinkingEvents();
+      yield* this.drainPendingUsageEvents();
+    }
 
     yield { type: 'finish', finishReason: finishReason ?? 'stop' };
     warnOnFinishReason(finishReason);
@@ -140,6 +151,7 @@ export class NormalizedStream {
     while (true) {
       const next = await Promise.race([nextText, nextStepEvents]);
       if (next.kind === 'step-events') {
+        yield* this.drainPendingThinkingEvents();
         yield* this.options.eagerBridge.drainEvents();
         yield* this.drainPendingUsageEvents();
         nextStepEvents = this.waitForPendingStepEvents();
@@ -200,8 +212,34 @@ export class NormalizedStream {
     }
   }
 
+  /**
+   * The textStream fallback never surfaces reasoning deltas; recover thinking
+   * text and replay artifacts from the finished step content instead.
+   */
+  private queueFallbackThinking(content: StepFinishLike['content']): void {
+    if (this.usedFullStream) return;
+    const identity = this.options.artifactIdentity;
+    for (const rawPart of content ?? []) {
+      if (!isRecord(rawPart) || rawPart.type !== 'reasoning') continue;
+      const text = typeof rawPart.text === 'string' ? rawPart.text : '';
+      const payload = identity
+        ? payloadFromProviderMetadata(rawPart.providerMetadata, identity, text)
+        : undefined;
+      if (text) this.pendingThinkingEvents.push({ type: 'thinking', text });
+      if (payload) {
+        this.pendingThinkingEvents.push({
+          type: 'thinking_artifact',
+          payload,
+          hasText: text.length > 0,
+        });
+      }
+    }
+  }
+
   private hasPendingStepEvents(): boolean {
-    return this.pendingUsageEvents.length > 0 || this.options.eagerBridge.hasPendingFallbackEvents;
+    return this.pendingUsageEvents.length > 0
+      || this.pendingThinkingEvents.length > 0
+      || this.options.eagerBridge.hasPendingFallbackEvents;
   }
 
   private notifyPendingStepEvents(): void {
@@ -231,6 +269,12 @@ export class NormalizedStream {
   private *drainPendingUsageEvents(): Generator<StreamEvent> {
     while (this.pendingUsageEvents.length > 0) {
       yield { type: 'usage', usage: this.pendingUsageEvents.shift()! };
+    }
+  }
+
+  private *drainPendingThinkingEvents(): Generator<StreamEvent> {
+    while (this.pendingThinkingEvents.length > 0) {
+      yield this.pendingThinkingEvents.shift()!;
     }
   }
 

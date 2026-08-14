@@ -22,6 +22,7 @@ const chain = (messages: Message[]): Chain => ({
   id: 'chain-1', sessionId: 'session-1', status: 'completed', messages,
   selection: null, modelLabel: null, agentName: 'worker', agentType: 'worker', agentTier: 'bloom',
   startTime: null, endTime: null, subagentRecord: null,
+  errorDetail: null, errorTitle: null,
 });
 
 const record = (messages: Message[]): SubagentRecord => ({

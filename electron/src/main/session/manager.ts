@@ -25,7 +25,7 @@ import type { Session } from '../../shared/types/session';
 import type { ModelSelection } from '../../shared/types/provider';
 import type { Message } from '../../shared/types/message';
 import { ChainStatus, type Chain } from '../../shared/types/chain';
-import type { SubagentRecord } from '../../shared/types/subagent';
+import type { SubagentRecord, SubagentSummary } from '../../shared/types/subagent';
 import type { PermissionMode } from '../../shared/types/permission';
 import { normalizeAgentScopeId } from '../../shared/types/agent-scope';
 import {
@@ -38,14 +38,24 @@ import { hydrateSessionPermissionOverride } from '../permissions/session-overrid
 import {
   appendActiveChain as storageAppendActiveChain,
   finishChain as storageFinishChain,
+  restoreMissingChain as storageRestoreMissingChain,
   saveSession as storageSaveSession,
   loadSession as storageLoadSession,
+  loadSessionForReplacement as storageLoadSessionForReplacement,
+  loadSessionView as storageLoadSessionView,
+  loadSessionHistoryPage as storageLoadSessionHistoryPage,
+  loadSessionMessages as storageLoadSessionMessages,
+  loadSubagentRecord as storageLoadSubagentRecord,
+  loadSubagentRecords as storageLoadSubagentRecords,
+  loadSubagentSummaries as storageLoadSubagentSummaries,
+  listSubagentRecordIds as storageListSubagentRecordIds,
   deleteSession as storageDeleteSession,
   listSavedSessions as storageListSavedSessions,
   updateChain as storageUpdateChain,
   updateSessionFields as storageUpdateSessionFields,
   upsertSubagentRecords as storageUpsertSubagentRecords,
   type SessionFieldsUpdate,
+  type SessionHistoryPage,
   type StorageOptions,
   type SessionSummary,
 } from './storage';
@@ -153,7 +163,7 @@ export class SessionManager {
     const cached = this._sessions.get(id);
     if (cached) return cached;
 
-    const loaded = storageLoadSession(id, this._storageOpts);
+    const loaded = storageLoadSessionView(id, this._storageOpts);
     if (!loaded) return null;
     const todos = TodoStore.fromData(loaded.todoStore ?? { tasks: [] });
     const session = { ...loaded, todoStore: todos.toData() };
@@ -167,6 +177,49 @@ export class SessionManager {
     return session;
   }
 
+  /**
+   * Recover a failed targeted write without replacing durable history with a
+   * bounded navigation snapshot.
+   */
+  private saveFullSessionFallback(
+    session: Session,
+    changedChains: readonly Chain[] = [],
+    preserveDurableMessageIds: ReadonlySet<string> = new Set(),
+  ): void {
+    const durable = storageLoadSessionForReplacement(session.id, this._storageOpts);
+    if (!durable) {
+      storageSaveSession(session, this._storageOpts);
+      return;
+    }
+
+    const pendingChains = new Map(changedChains.map((chain) => [chain.id, chain]));
+    const durableChainIds = new Set(durable.chains.map((chain) => chain.id));
+    const chains = durable.chains.map((chain) => {
+      const pending = pendingChains.get(chain.id);
+      if (!pending) return chain;
+      return preserveDurableMessageIds.has(chain.id)
+        ? { ...pending, messages: chain.messages }
+        : pending;
+    });
+    for (const chain of changedChains) {
+      if (!durableChainIds.has(chain.id)) chains.push(chain);
+    }
+
+    const subagentChains = new Map(
+      durable.subagentChains.map((record) => [record.id, record]),
+    );
+    for (const record of session.subagentChains) {
+      subagentChains.set(record.id, record);
+    }
+
+    storageSaveSession({
+      ...durable,
+      ...session,
+      chains,
+      subagentChains: [...subagentChains.values()],
+    }, this._storageOpts);
+  }
+
   private persistSessionFields(
     session: Session,
     update: Omit<SessionFieldsUpdate, 'updatedAt'>,
@@ -177,7 +230,7 @@ export class SessionManager {
       this._storageOpts,
     );
     if (!persisted) {
-      storageSaveSession(session, this._storageOpts);
+      this.saveFullSessionFallback(session);
     }
     return this.replaceSession(session);
   }
@@ -347,6 +400,7 @@ export class SessionManager {
       subagentChains: [],
       todoStore: { tasks: [] },
       reasoningEffortOverride: null,
+      tierOverride: null,
       permissionMode: null,
     };
     this._sessions.set(session.id, session);
@@ -371,7 +425,7 @@ export class SessionManager {
     if (this._sessions.has(id)) {
       session = this.ensureSession(id);
     } else {
-      const loaded = storageLoadSession(id, this._storageOpts);
+      const loaded = storageLoadSessionView(id, this._storageOpts);
       if (!loaded) return null;
       const todos = TodoStore.fromData(loaded.todoStore ?? { tasks: [] });
       session = { ...loaded, todoStore: todos.toData() };
@@ -438,12 +492,14 @@ export class SessionManager {
       selection,
       modelLabel,
       reasoningEffortOverride: null,
+      tierOverride: null,
       updatedAt: new Date().toISOString(),
     };
     this.persistSessionFields(updated, {
       selection: updated.selection,
       modelLabel: updated.modelLabel,
       reasoningEffortOverride: updated.reasoningEffortOverride,
+      tierOverride: updated.tierOverride,
       todoStore: updated.todoStore,
     });
   }
@@ -502,6 +558,25 @@ export class SessionManager {
   }
 
   /**
+   * Set or clear the per-session service tier override for the active model.
+   * Persists to disk immediately.
+   */
+  setTierOverride(id: string, tier: string | null): void {
+    if (!this.isSelectedByAnyOwner(id)) return;
+    const session = this.flushTodos(id);
+    if (!session) return;
+    const updated = {
+      ...session,
+      tierOverride: tier,
+      updatedAt: new Date().toISOString(),
+    };
+    this.persistSessionFields(updated, {
+      tierOverride: updated.tierOverride,
+      todoStore: updated.todoStore,
+    });
+  }
+
+  /**
    * Set or clear the per-session permission-mode override.
    * Persists to disk immediately so the choice survives restarts, and syncs
    * the in-memory gate read-model so the selector takes effect this run.
@@ -534,7 +609,46 @@ export class SessionManager {
    * Returns null if the session file doesn't exist or fails to parse.
    */
   load(id: string): Session | null {
-    return this._sessions.get(id) ?? storageLoadSession(id, this._storageOpts);
+    return this._sessions.get(id) ?? storageLoadSessionView(id, this._storageOpts);
+  }
+
+  /** Bounded persisted list rows; legacy full records are lazily backfilled. */
+  getSubagentSummaries(sessionId: string): SubagentSummary[] {
+    return storageLoadSubagentSummaries(sessionId, this._storageOpts);
+  }
+
+  /** Targeted detail read that does not materialize sibling transcripts. */
+  getSubagentRecord(sessionId: string, subagentId: string): SubagentRecord | null {
+    return storageLoadSubagentRecord(sessionId, subagentId, this._storageOpts);
+  }
+
+  /** Durable identities for background runtime hydration. */
+  getSubagentRecordIds(sessionId: string): string[] {
+    return storageListSubagentRecordIds(sessionId, this._storageOpts);
+  }
+
+  /** Full records for runtime restoration; optional ids keep lifecycle reads targeted. */
+  getSubagentRecords(sessionId: string, subagentIds?: readonly string[]): SubagentRecord[] {
+    return storageLoadSubagentRecords(sessionId, subagentIds, this._storageOpts);
+  }
+
+  /** Load one older renderer page without changing selection or the model-history cache. */
+  getHistoryPage(
+    sessionId: string,
+    chainId: string,
+    beforeIndex?: number,
+  ): SessionHistoryPage | null {
+    return storageLoadSessionHistoryPage(
+      sessionId,
+      chainId,
+      beforeIndex,
+      this._storageOpts,
+    );
+  }
+
+  /** Complete durable main conversation used only when a model turn needs it. */
+  getModelHistory(sessionId: string): Message[] {
+    return storageLoadSessionMessages(sessionId, this._storageOpts);
   }
 
   /**
@@ -617,6 +731,8 @@ export class SessionManager {
       subagentRecord: null,
       startTime: now,
       endTime: null,
+      errorDetail: null,
+      errorTitle: null,
     };
     chains = [...chains, chain];
 
@@ -635,7 +751,12 @@ export class SessionManager {
       this._storageOpts,
     );
     if (!persisted) {
-      storageSaveSession(updated, this._storageOpts);
+      const changedIds = new Set([...interruptedChainIds, chain.id]);
+      this.saveFullSessionFallback(
+        updated,
+        updated.chains.filter((candidate) => changedIds.has(candidate.id)),
+        new Set(interruptedChainIds),
+      );
     }
     this.replaceSession(updated);
     return chain;
@@ -676,7 +797,13 @@ export class SessionManager {
     };
     const persisted = storageUpdateChain(chain, now, this._storageOpts);
     if (!persisted) {
-      storageSaveSession(updated, this._storageOpts);
+      const restored = storageRestoreMissingChain(
+        chain,
+        now,
+        updated.todoStore,
+        this._storageOpts,
+      );
+      if (!restored) this.saveFullSessionFallback(updated, [chain]);
     }
     this.replaceSession(updated);
     return updated;
@@ -689,6 +816,8 @@ export class SessionManager {
   finishActiveChain(
     status: ChainStatus = ChainStatus.COMPLETED,
     sessionId?: string,
+    errorDetail?: string | null,
+    errorTitle?: string | null,
   ): Session | null {
     const targetId = sessionId ?? this.selectedSessionId();
     const session = targetId ? this.ensureSession(targetId) : null;
@@ -707,6 +836,8 @@ export class SessionManager {
       ...existing,
       status: terminal,
       endTime: now,
+      errorDetail: errorDetail ?? null,
+      errorTitle: errorTitle ?? null,
     };
     const chains = session.chains.map((c) =>
       c.id === chain.id ? chain : c,
@@ -726,7 +857,13 @@ export class SessionManager {
       this._storageOpts,
     );
     if (!persisted) {
-      storageSaveSession(updated, this._storageOpts);
+      const restored = storageRestoreMissingChain(
+        chain,
+        now,
+        updated.todoStore,
+        this._storageOpts,
+      );
+      if (!restored) this.saveFullSessionFallback(updated, [chain]);
     }
     this.replaceSession(updated);
     return updated;
@@ -747,6 +884,8 @@ export class SessionManager {
     agentName?: string;
     agentType?: string;
     agentTier?: string;
+    errorDetail?: string | null;
+    errorTitle?: string | null;
   }, sessionId?: string): Session | null {
     const targetId = sessionId ?? this.selectedSessionId();
     let session = targetId ? this.ensureSession(targetId) : null;
@@ -805,7 +944,12 @@ export class SessionManager {
     if (status === ChainStatus.ACTIVE) {
       return session;
     }
-    return this.finishActiveChain(status, targetId ?? undefined);
+    return this.finishActiveChain(
+      status,
+      targetId ?? undefined,
+      params.errorDetail,
+      params.errorTitle,
+    );
   }
 
   /**
@@ -850,7 +994,7 @@ export class SessionManager {
         todoStore: this.getTodoStore(sessionId).toData(),
         updatedAt: now,
       };
-      if (outcome === false) storageSaveSession(updated, this._storageOpts);
+      if (outcome === false) this.saveFullSessionFallback(updated);
       this.replaceSession(updated);
       return { session: updated, bytes: outcome ? outcome.bytes : 0 };
     }
@@ -872,7 +1016,7 @@ export class SessionManager {
       subagentChains: merge(loaded.subagentChains),
       updatedAt: now,
     };
-    if (outcome === false) storageSaveSession(updated, this._storageOpts);
+    if (outcome === false) this.saveFullSessionFallback(updated);
     return { session: updated, bytes: outcome ? outcome.bytes : 0 };
   }
 

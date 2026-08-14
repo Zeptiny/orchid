@@ -37,6 +37,7 @@ import {
   disposeSubagentPersistence,
 } from './agents/wire-subagents';
 import { initToolWorkerPool, disposeToolWorkerPool } from './llm/tool-pool';
+import { disposeAnalyticsWorkerPool } from './providers/accounting/analytics-query-runner';
 import { runStartupLifecycle, type StartupLifecycleResult } from './startup-lifecycle';
 import { startupState } from './startup';
 import { getConfig } from './config/loader';
@@ -431,6 +432,7 @@ app.on('before-quit', async (event) => {
       }
     }
     await disposeToolWorkerPool();
+    await disposeAnalyticsWorkerPool();
 
     // 5. Destroy auto-updater
     destroyUpdater();

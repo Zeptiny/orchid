@@ -13,12 +13,14 @@ import type {
   ProviderDeleteConnectionResult,
   ProviderConnectionView,
   ProviderDefinitionView,
-  ProviderModelOption,
+  ProviderModelPricingView,
   ProviderModelView,
   ProviderMutationResult,
   ProviderOverview,
   ProviderStatusView,
 } from '../../shared/types/ipc';
+import { pricingRateFieldsSchema, providerQuotaSchema } from '../../shared/types/provider-facets';
+import type { CatalogPricing } from '../providers/catalog/schema';
 import {
   customConnectionModelSchema,
   environmentVariableSchema,
@@ -36,6 +38,16 @@ import {
   getProviderCredentialVault,
   getProviderStatusService,
 } from '../providers/runtime-context';
+import { getProviderPricingRefresher } from '../providers';
+import type { PricingRefresher } from '../providers/facets/pricing-refresh';
+import {
+  discoverConnectionModels,
+  type ConnectionDiscoveryOutcome,
+} from '../providers/facets/discovery';
+import type { DriverCredential } from '../providers/drivers/types';
+import type { ProviderStatusObservation } from '../providers/status/cache';
+import type { ProviderStatusService } from '../providers/status/service';
+import { getProviderAccountingStore } from '../providers/accounting/store';
 import type { ConnectionStore } from '../providers/connection-store';
 import type { ProviderCatalogStore } from '../providers/catalog/store';
 import {
@@ -45,7 +57,6 @@ import {
   type CredentialSecret,
   type SecureStorageAvailability,
 } from '../providers/credentials/vault';
-import { resolveModelSelection } from '../providers/resolver';
 import {
   ProviderDriverRegistry,
   createDefaultProviderDriverRegistry,
@@ -53,11 +64,8 @@ import {
 import { validateGenericEndpoint } from '../providers/drivers/compatible';
 import { createLilacStatusSource } from '../providers/drivers/lilac';
 import {
-  createNeuralwattStatusSource,
-} from '../providers/drivers/neuralwatt';
-import type { ProviderStatusObservation } from '../providers/status/cache';
-import type { ProviderStatusService } from '../providers/status/service';
-import { getProviderAccountingStore } from '../providers/accounting/store';
+  createNeuralwattQuotaStatusSource,
+} from '../providers/drivers/neuralwatt-quota';
 import {
   atomicWriteJson,
   ConfigManager,
@@ -73,6 +81,8 @@ import { clearProjectRuntimeRegistry } from '../project/runtime';
 
 const idSchema = z.string().uuid();
 const modelIdsSchema = z.array(z.string().trim().min(1)).max(500).default([]);
+const tierSelectionsSchema = z.record(z.string().trim().min(1), z.string().trim().min(1).max(128));
+const cacheTtlSchema = z.string().trim().min(1).max(24).nullable();
 
 const createConnectionSchema = z.object({
   providerId: z.string().trim().min(1),
@@ -82,6 +92,9 @@ const createConnectionSchema = z.object({
   modelIds: modelIdsSchema,
   customModels: z.array(customConnectionModelSchema).max(500).optional(),
   reasoningConfig: z.record(z.string(), reasoningModelConfigSchema).optional(),
+  pricingOverrides: z.record(z.string(), pricingRateFieldsSchema).optional(),
+  tierSelections: tierSelectionsSchema.optional(),
+  cacheTtl: cacheTtlSchema.optional(),
   endpoint: providerEndpointSchema.nullable().optional(),
   allowInsecureHttp: z.boolean().optional(),
   environmentVariable: environmentVariableSchema.optional(),
@@ -109,6 +122,9 @@ const updateConnectionSchema = z.object({
   modelIds: modelIdsSchema.optional(),
   customModels: z.array(customConnectionModelSchema).max(500).optional(),
   reasoningConfig: z.record(z.string(), reasoningModelConfigSchema).optional(),
+  pricingOverrides: z.record(z.string(), pricingRateFieldsSchema).optional(),
+  tierSelections: tierSelectionsSchema.optional(),
+  cacheTtl: cacheTtlSchema.optional(),
   endpoint: providerEndpointSchema.nullable().optional(),
   allowInsecureHttp: z.boolean().optional(),
   environmentVariable: environmentVariableSchema.optional(),
@@ -140,7 +156,7 @@ const submitApiKeySchema = z.object({
   apiKey: z.string().trim().min(1).max(32_768),
 }).strict();
 
-const connectionIdSchema = z.object({ connectionId: idSchema }).strict();
+export const connectionIdSchema = z.object({ connectionId: idSchema }).strict();
 const disconnectSchema = connectionIdSchema.extend({ confirm: z.literal(true) }).strict();
 const deleteConnectionSchema = connectionIdSchema.extend({ confirm: z.literal(true) }).strict();
 const statusRefreshSchema = z.object({
@@ -149,13 +165,16 @@ const statusRefreshSchema = z.object({
 }).strict();
 // ── Main-process dependency boundary ────────────────────────────────────────
 
-interface ProviderIPCServices {
+export interface ProviderIPCServices {
   readonly catalog: Pick<ProviderCatalogStore, 'getProviderDefinitions' | 'load'>;
-  readonly connections: Pick<ConnectionStore, 'list' | 'get' | 'create' | 'update' | 'remove'>;
+  readonly connections: Pick<ConnectionStore,
+    'list' | 'get' | 'create' | 'update' | 'remove' | 'persistDiscoveredModels'>;
   readonly vault: Pick<CredentialVault,
     'getAvailability' | 'replaceConnectionApiKey' | 'readSecret' | 'deleteConnectionCredentials'>;
   readonly status: Pick<ProviderStatusService, 'get' | 'list' | 'refresh' | 'invalidate'>;
   readonly registry: ProviderDriverRegistry;
+  /** Latest-known dynamic pricing cache; absent until the provider runtime initializes. */
+  readonly pricing?: Pick<PricingRefresher, 'invalidate'>;
   readonly clearConfigReferences?: typeof clearConnectionConfigReferences;
 }
 
@@ -170,7 +189,7 @@ function getCachedDriverRegistry(): ProviderDriverRegistry {
   return cachedDriverRegistry;
 }
 
-function services(): ProviderIPCServices {
+export function services(): ProviderIPCServices {
   if (testServices) return testServices;
   return {
     catalog: getProviderCatalogStore(),
@@ -178,6 +197,7 @@ function services(): ProviderIPCServices {
     vault: getProviderCredentialVault(),
     status: getProviderStatusService(),
     registry: getCachedDriverRegistry(),
+    pricing: getProviderPricingRefresher() ?? undefined,
     clearConfigReferences: clearConnectionConfigReferences,
   };
 }
@@ -199,7 +219,7 @@ export function _setProviderIPCServicesForTests(value: ProviderIPCServices | nul
 
 const connectionMutationChains = new Map<string, Promise<void>>();
 
-function withConnectionMutationLock<T>(
+export function withConnectionMutationLock<T>(
   connectionId: string,
   task: () => Promise<T>,
 ): Promise<T> {
@@ -246,9 +266,23 @@ function unavailableProviderReason(
   return null;
 }
 
-function modelView(
+/** Renderer-safe view of one signed-catalog rate card; provenance never leaves main. */
+export function pricingView(pricing: CatalogPricing): ProviderModelPricingView {
+  return {
+    currency: pricing.currency,
+    ...(pricing.currencyUnit ? { currencyUnit: pricing.currencyUnit } : {}),
+    effectiveAt: pricing.effectiveAt,
+    rates: pricing.rates,
+    ...(pricing.contextTiers && pricing.contextTiers.length > 0
+      ? { contextTiers: pricing.contextTiers }
+      : {}),
+  };
+}
+
+export function modelView(
   model: ProviderModelDefinition,
-  source: 'catalog' | 'connection',
+  source: 'catalog' | 'provider' | 'user',
+  pricing?: ProviderModelPricingView,
 ): ProviderModelView {
   return {
     id: model.id,
@@ -270,12 +304,14 @@ function modelView(
           outputTokens: model.limits.outputTokens,
         }
       : null,
+    ...(pricing ? { pricing } : {}),
   };
 }
 
 function definitionView(
   definition: ProviderDefinition,
   registry: ProviderDriverRegistry,
+  pricingByModelId?: ReadonlyMap<string, CatalogPricing>,
 ): ProviderDefinitionView {
   const unavailableReason = unavailableProviderReason(definition, registry);
   return {
@@ -287,19 +323,26 @@ function definitionView(
     lifecycle: definition.lifecycle ?? null,
     available: unavailableReason === null,
     unavailableReason,
-    models: definition.models.map((model) => modelView(model, 'catalog')),
+    supportsDiscovery: Boolean(registry.get(definition.id)?.discoveryFacet),
+    supportsQuota: Boolean(registry.get(definition.id)?.quotaFacet),
+    models: definition.models.map((model) => {
+      const pricing = pricingByModelId?.get(model.id);
+      return modelView(model, 'catalog', pricing ? pricingView(pricing) : undefined);
+    }),
   };
 }
 
-function connectionView(
+export function connectionView(
   connection: ProviderConnection,
   definitions: readonly ProviderDefinition[],
   activeTurnCount = 0,
+  current?: ProviderIPCServices,
 ): ProviderConnectionView {
   const definition = definitions.find((item) => item.id === connection.providerId);
   const allowsCustomEndpoint = definition?.allowsCustomModels === true
     && (connection.providerId === 'generic-openai-compatible'
       || connection.providerId === 'generic-anthropic-compatible');
+  const cacheFacet = (current ?? services()).registry.get(connection.providerId)?.cacheFacet;
   return {
     id: connection.id,
     providerId: connection.providerId,
@@ -312,7 +355,7 @@ function connectionView(
       ? connection.credential.variable
       : null,
     modelIds: [...connection.modelIds],
-    customModels: (connection.customModels ?? []).map((model) => modelView(model, 'connection')),
+    customModels: (connection.customModels ?? []).map((model) => modelView(model, 'user')),
     health: connection.health,
     activeTurnCount,
     // Generic endpoints are user-owned metadata. Code-owned driver origins are
@@ -320,10 +363,15 @@ function connectionView(
     endpoint: allowsCustomEndpoint ? connection.endpoint ?? null : null,
     allowInsecureHttp: connection.allowInsecureHttp === true,
     reasoningConfig: connection.reasoningConfig,
+    pricingOverrides: connection.pricingOverrides,
+    tierSelections: connection.tierSelections,
+    ...(cacheFacet?.ttlOptions ? { cacheTtlOptions: cacheFacet.ttlOptions } : {}),
+    ...(cacheFacet?.ttlOptions ? { cacheTtl: connection.cacheTtl ?? null } : {}),
   };
 }
 
-function statusView(observation: ProviderStatusObservation): ProviderStatusView {
+export function statusView(observation: ProviderStatusObservation): ProviderStatusView {
+  const quota = providerQuotaSchema.safeParse(observation.data['quota']);
   return {
     providerId: observation.providerId,
     ...(observation.connectionId ? { connectionId: observation.connectionId } : {}),
@@ -332,6 +380,7 @@ function statusView(observation: ProviderStatusObservation): ProviderStatusView 
     availability: observation.availability,
     stale: observation.stale,
     data: structuredClone(observation.data),
+    quota: quota.success ? quota.data : null,
     error: observation.error ? { ...observation.error } : null,
   };
 }
@@ -361,8 +410,20 @@ async function overview(): Promise<ProviderOverview> {
     .filter((observation) => observation.connectionId === undefined
       || connectionProviderIds.get(observation.connectionId) === observation.providerId)
     .map(statusView);
+  const catalogSnapshot = current.catalog.load();
+  const pricingByProviderId = new Map<string, ReadonlyMap<string, CatalogPricing>>();
+  for (const provider of catalogSnapshot.catalog.providers) {
+    pricingByProviderId.set(
+      provider.id,
+      new Map(provider.models.map((model) => [model.id, model.pricing])),
+    );
+  }
   return {
-    definitions: definitions.map((definition) => definitionView(definition, current.registry)),
+    definitions: definitions.map((definition) => definitionView(
+      definition,
+      current.registry,
+      pricingByProviderId.get(definition.id),
+    )),
     connections: connections.map((connection) =>
       connectionView(connection, definitions, activeTurnCounts.get(connection.id) ?? 0),
     ),
@@ -427,6 +488,8 @@ export async function clearConnectionConfigReferences(
 interface StaticConnectionCheck {
   readonly definition: ProviderDefinition;
   readonly genericEndpointOrigin: string | null;
+  /** Enabled modelIds with no catalog, custom, or discovered backing; reported, not fatal. */
+  readonly orphanedModelIds: readonly string[];
 }
 
 function requireStaticConnectionSupport(
@@ -472,19 +535,22 @@ function requireStaticConnectionSupport(
       throw new Error(`Custom model '${model.id}' does not match connection protocol '${connection.protocol}'`);
     }
   }
+  const orphanedModelIds: string[] = [];
   for (const modelId of connection.modelIds) {
     const catalogModel = definition.models.find((model) => model.id === modelId);
     const customModel = connection.customModels?.find((model) => model.id === modelId);
-    if (!catalogModel && !customModel) {
-      throw new Error(definition.allowsCustomModels
-        ? `User-defined model '${modelId}' requires explicit capabilities and limits`
-        : `Model '${modelId}' is not available for '${definition.displayName}'`);
+    const discoveredModel = connection.discoveredModels?.find((model) => model.id === modelId);
+    if (!catalogModel && !customModel && !discoveredModel) {
+      // A delisted model must not block every validate/update; the caller
+      // reports it as a removable warning instead (finding #11).
+      orphanedModelIds.push(modelId);
+      continue;
     }
     if (catalogModel && catalogModel.protocol !== connection.protocol) {
       throw new Error(`Model '${modelId}' does not match connection protocol '${connection.protocol}'`);
     }
   }
-  return { definition, genericEndpointOrigin };
+  return { definition, genericEndpointOrigin, orphanedModelIds };
 }
 
 function credentialOrigin(connection: ProviderConnection, current = services()): string | null {
@@ -497,7 +563,7 @@ function credentialOrigin(connection: ProviderConnection, current = services()):
   return driver.origin;
 }
 
-function credentialBinding(connection: ProviderConnection, current = services()) {
+export function credentialBinding(connection: ProviderConnection, current = services()) {
   if (connection.authMethod !== 'api-key') {
     throw new Error(`Connection '${connection.name}' does not use a stored credential`);
   }
@@ -521,19 +587,32 @@ function sameCredentialIdentity(left: ProviderConnection, right: ProviderConnect
   return true;
 }
 
+function orphanedModelWarning(
+  orphanedModelIds: readonly string[],
+  definition: ProviderDefinition,
+): string {
+  const plural = orphanedModelIds.length !== 1;
+  const list = orphanedModelIds.map((id) => `'${id}'`).join(', ');
+  return `Model${plural ? 's' : ''} ${list} ${plural ? 'are' : 'is'} no longer available from '${definition.displayName}' and should be removed from the connection's enabled models.`;
+}
+
 /** Return a safe readiness explanation without rendering any secret material. */
 async function readiness(
   connection: ProviderConnection,
   current = services(),
 ): Promise<{ readonly ready: boolean; readonly message: string | null }> {
+  let check: StaticConnectionCheck;
   try {
-    requireStaticConnectionSupport(connection, current);
+    check = requireStaticConnectionSupport(connection, current);
   } catch (error) {
     return { ready: false, message: error instanceof Error ? error.message : 'Connection configuration is invalid' };
   }
+  const orphanWarning = check.orphanedModelIds.length > 0
+    ? orphanedModelWarning(check.orphanedModelIds, check.definition)
+    : null;
   if (connection.authMethod === 'none') {
     return connection.credential.kind === 'none'
-      ? { ready: true, message: null }
+      ? { ready: true, message: orphanWarning }
       : { ready: false, message: 'No-credential authentication must not retain a credential reference' };
   }
   if (connection.authMethod === 'environment') {
@@ -541,7 +620,7 @@ async function readiness(
       return { ready: false, message: 'Choose an environment variable for this connection' };
     }
     return process.env[connection.credential.variable]
-      ? { ready: true, message: null }
+      ? { ready: true, message: orphanWarning }
       : { ready: false, message: `Environment credential '${connection.credential.variable}' is not available` };
   }
   if (connection.credential.kind !== 'stored') {
@@ -549,7 +628,7 @@ async function readiness(
   }
   try {
     await current.vault.readSecret(connection.credential.handle, credentialBinding(connection, current));
-    return { ready: true, message: null };
+    return { ready: true, message: orphanWarning };
   } catch {
     return { ready: false, message: 'Stored credentials need to be reconnected' };
   }
@@ -599,7 +678,7 @@ async function validateConnection(connectionId: string): Promise<ProviderMutatio
   };
 }
 
-async function requireConnection(connectionId: string): Promise<ProviderConnection> {
+export async function requireConnection(connectionId: string): Promise<ProviderConnection> {
   const connection = await services().connections.get(connectionId);
   if (!connection) throw new Error(`Unknown provider connection '${connectionId}'`);
   return connection;
@@ -627,93 +706,117 @@ async function stopProviderConnectionTurns(
   }
 }
 
-// ── Model options ───────────────────────────────────────────────────────────
+// ── Live model discovery ────────────────────────────────────────────────────
 
-function candidateModels(
+/** Resolve the request credential for one discovery fetch; undefined when unusable. */
+export async function discoveryCredential(
   connection: ProviderConnection,
-  definition: ProviderDefinition,
-): Array<{ readonly model: ProviderModelDefinition; readonly source: 'catalog' | 'connection' }> {
-  const candidates: Array<{ model: ProviderModelDefinition; source: 'catalog' | 'connection' }> = [];
-  for (const id of connection.modelIds) {
-    const customModel = connection.customModels?.find(
-      (model) => model.id === id && model.protocol === connection.protocol,
+  current: ProviderIPCServices,
+): Promise<DriverCredential | undefined> {
+  if (connection.authMethod === 'none') return undefined;
+  if (connection.credential.kind === 'environment') {
+    const apiKey = process.env[connection.credential.variable];
+    return apiKey ? { kind: 'api-key', apiKey } : undefined;
+  }
+  if (connection.credential.kind !== 'stored') return undefined;
+  try {
+    const secret = await current.vault.readSecret(
+      connection.credential.handle,
+      credentialBinding(connection, current),
     );
-    if (customModel) {
-      candidates.push({ model: customModel, source: 'connection' });
-      continue;
-    }
-    const catalogModel = definition.models.find(
-      (model) => model.id === id && model.protocol === connection.protocol,
-    );
-    if (catalogModel) {
-      candidates.push({ model: catalogModel, source: 'catalog' });
-      continue;
-    }
-    candidates.push({
-      source: 'connection',
-      model: { id, displayName: id, protocol: connection.protocol },
+    return secret.kind === 'api-key' ? { kind: 'api-key', apiKey: secret.apiKey } : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** Copy a selection record without the ids a fresh snapshot no longer backs. */
+export function dropRecordKeys<T extends Record<string, unknown>>(
+  record: T | undefined,
+  dropIds: readonly string[],
+): T | undefined {
+  if (record === undefined || dropIds.length === 0) return record;
+  const drop = new Set(dropIds);
+  const entries = Object.entries(record).filter(([id]) => !drop.has(id));
+  return entries.length === 0 ? undefined : (Object.fromEntries(entries) as T);
+}
+
+/**
+ * Run one on-demand discovery fetch and persist the fresh snapshot. Returns
+ * null when the driver publishes no models endpoint. Endpoint failures keep
+ * catalog/custom models intact and surface only a redacted message.
+ */
+export async function runConnectionDiscovery(
+  connectionId: string,
+  current: ProviderIPCServices,
+): Promise<ConnectionDiscoveryOutcome | null> {
+  const connection = await current.connections.get(connectionId);
+  if (!connection) return null;
+  const definition = current.catalog.getProviderDefinitions().find(
+    (item) => item.id === connection.providerId,
+  );
+  const driver = definition ? current.registry.get(definition.id) : undefined;
+  if (!definition || !driver?.discoveryFacet) return null;
+  const outcome = await discoverConnectionModels({
+    driver,
+    connection,
+    provider: definition,
+    credential: await discoveryCredential(connection, current),
+  });
+  if (outcome.status === 'ok') {
+    const prunedModelIds = outcome.prune.modelIds.length > 0
+      ? connection.modelIds.filter((id) => !outcome.prune.modelIds.includes(id))
+      : undefined;
+    const prunedTierSelections = outcome.prune.tierSelections.length > 0
+      ? dropRecordKeys(connection.tierSelections, outcome.prune.tierSelections) ?? {}
+      : undefined;
+    const prunedReasoningConfig = outcome.prune.reasoningConfig.length > 0
+      ? dropRecordKeys(
+          outcome.reasoningConfig ?? connection.reasoningConfig,
+          outcome.prune.reasoningConfig,
+        ) ?? {}
+      : outcome.reasoningConfig;
+    await current.connections.update(connectionId, {
+      discoveredModels: [...outcome.discoveredModels],
+      ...(prunedReasoningConfig ? { reasoningConfig: prunedReasoningConfig } : {}),
+      ...(prunedModelIds ? { modelIds: prunedModelIds } : {}),
+      ...(prunedTierSelections ? { tierSelections: prunedTierSelections } : {}),
     });
   }
-  return candidates;
+  return outcome;
 }
 
-async function modelOptions(connectionId?: string): Promise<readonly ProviderModelOption[]> {
-  const current = services();
-  const definitions = current.catalog.getProviderDefinitions();
-  const connections = await current.connections.list();
-  const selectedConnections = connectionId
-    ? connections.filter((connection) => connection.id === connectionId)
-    : connections;
-  if (connectionId && selectedConnections.length === 0) {
-    throw new Error(`Unknown provider connection '${connectionId}'`);
+/** Non-blocking discovery detail attached to an automatic (create/auth) flow. */
+export function automaticDiscoveryMessage(outcome: ConnectionDiscoveryOutcome): string | null {
+  switch (outcome.status) {
+    case 'ok':
+      return outcome.addedModelIds.length > 0
+        ? `Discovered ${outcome.addedModelIds.length} new model${outcome.addedModelIds.length === 1 ? '' : 's'} from the live provider endpoint.`
+        : null;
+    case 'failed':
+      return `Live model discovery failed (${outcome.message}); catalog and custom models are unchanged.`;
+    default:
+      return null;
   }
-  const options: ProviderModelOption[] = [];
-  for (const connection of selectedConnections) {
-    const definition = definitions.find((item) => item.id === connection.providerId);
-    if (!definition) continue;
-    for (const candidate of candidateModels(connection, definition)) {
-      const selection = { connectionId: connection.id, modelId: candidate.model.id };
-      const resolution = resolveModelSelection(selection, connections, definitions);
-      const available = resolution.kind === 'resolved';
-      const unavailableReason = available
-        ? null
-        : resolution.kind === 'unavailable'
-          ? humanizeUnavailableReason(resolution.reason)
-          : resolution.kind === 'provider-required'
-            ? 'A ready provider connection is required.'
-            : 'Choose a model before sending.';
-      options.push({
-        selection,
-        connectionName: connection.name,
-        providerId: connection.providerId,
-        providerDisplayName: definition.displayName,
-        model: modelView(candidate.model, candidate.source),
-        available,
-        unavailableReason,
-        embeddingSupported: Boolean(current.registry.get(definition.id)?.createEmbeddingTarget),
-      });
-    }
-  }
-  return options.sort((left, right) => {
-    const provider = (left.providerDisplayName ?? left.providerId).localeCompare(
-      right.providerDisplayName ?? right.providerId,
-    );
-    if (provider !== 0) return provider;
-    const connection = left.connectionName.localeCompare(right.connectionName);
-    return connection !== 0 ? connection : left.model.displayName.localeCompare(right.model.displayName);
-  });
 }
 
-function humanizeUnavailableReason(reason: string): string {
-  switch (reason) {
-    case 'connection-not-ready': return 'Reconnect or validate this connection before using it.';
-    case 'provider-disabled': return 'This provider is disabled in the current catalog.';
-    case 'model-disabled': return 'This model is disabled in the current catalog.';
-    case 'unsupported-connection': return 'This connection no longer matches the trusted driver contract.';
-    case 'provider-mismatch': return 'This model requires a different protocol.';
-    case 'missing-model': return 'This model is no longer available on the connection.';
-    default: return 'This model selection is unavailable.';
-  }
+/** Attach a non-blocking discovery note to an otherwise-finished mutation. */
+export async function withDiscoveryOutcome(
+  connectionId: string,
+  result: ProviderMutationResult,
+  current: ProviderIPCServices,
+): Promise<ProviderMutationResult> {
+  const outcome = await runConnectionDiscovery(connectionId, current);
+  const message = outcome ? automaticDiscoveryMessage(outcome) : null;
+  if (!message) return result;
+  return {
+    connection: connectionView(
+      await requireConnection(connectionId),
+      current.catalog.getProviderDefinitions(),
+      result.connection.activeTurnCount,
+    ),
+    message: result.message ? `${result.message} ${message}` : message,
+  };
 }
 
 // ── Registration ────────────────────────────────────────────────────────────
@@ -738,6 +841,9 @@ export function registerProviderIPC(): void {
       modelIds: parsed.data.modelIds,
       ...(parsed.data.customModels ? { customModels: parsed.data.customModels } : {}),
       ...(parsed.data.reasoningConfig ? { reasoningConfig: parsed.data.reasoningConfig } : {}),
+      ...(parsed.data.pricingOverrides ? { pricingOverrides: parsed.data.pricingOverrides } : {}),
+      ...(parsed.data.tierSelections ? { tierSelections: parsed.data.tierSelections } : {}),
+      ...(parsed.data.cacheTtl != null ? { cacheTtl: parsed.data.cacheTtl } : {}),
       ...(parsed.data.endpoint !== undefined ? { endpoint: parsed.data.endpoint } : {}),
       ...(parsed.data.allowInsecureHttp !== undefined
         ? { allowInsecureHttp: parsed.data.allowInsecureHttp }
@@ -753,7 +859,11 @@ export function registerProviderIPC(): void {
       .find((provider) => provider.id === parsed.data.providerId)
       ?.models;
     const connection = await current.connections.create(createInput, catalogModels);
-    return withConnectionMutationLock(connection.id, () => validateConnection(connection.id));
+    return withConnectionMutationLock(connection.id, async () => {
+      const result = await validateConnection(connection.id);
+      if (result.connection.health !== 'ready') return result;
+      return withDiscoveryOutcome(connection.id, result, current);
+    });
   });
 
   ipcMain.handle(IPC_CHANNELS.PROVIDERS_UPDATE, async (_event, payload: unknown) => {
@@ -770,6 +880,15 @@ export function registerProviderIPC(): void {
         ...(parsed.data.modelIds === undefined ? {} : { modelIds: parsed.data.modelIds }),
         ...(parsed.data.customModels === undefined ? {} : { customModels: parsed.data.customModels }),
         ...(parsed.data.reasoningConfig === undefined ? {} : { reasoningConfig: parsed.data.reasoningConfig }),
+        ...(parsed.data.pricingOverrides === undefined
+          ? {}
+          : { pricingOverrides: parsed.data.pricingOverrides }),
+        ...(parsed.data.tierSelections === undefined ? {} : { tierSelections: parsed.data.tierSelections }),
+        ...(parsed.data.cacheTtl === undefined
+          ? {}
+          : parsed.data.cacheTtl === null
+            ? { cacheTtl: undefined }
+            : { cacheTtl: parsed.data.cacheTtl }),
         ...(parsed.data.endpoint === undefined ? {} : { endpoint: parsed.data.endpoint }),
         ...(parsed.data.allowInsecureHttp === undefined
           ? {}
@@ -812,6 +931,7 @@ export function registerProviderIPC(): void {
       const updated = await current.connections.update(existing.id, patch);
       if (!sameCredentialIdentity(existing, updated)) {
         current.status.invalidate(existing.providerId, existing.id);
+        current.pricing?.invalidate(existing.providerId, existing.id);
       }
       return validateConnection(existing.id);
     });
@@ -843,6 +963,7 @@ export function registerProviderIPC(): void {
       });
       if (!sameCredentialIdentity(connection, updated)) {
         current.status.invalidate(connection.providerId, connection.id);
+        current.pricing?.invalidate(connection.providerId, connection.id);
       }
       // CAS cleanup: if health became disconnected after the connection write
       // (should not happen under this lock, but re-check and erase the key).
@@ -854,7 +975,13 @@ export function registerProviderIPC(): void {
           message: terminalHealthMessage('disconnected'),
         } satisfies ProviderMutationResult;
       }
-      return validateConnection(connection.id);
+      const result = await validateConnection(connection.id);
+      // Run discovery once, the first time a credential validates (R26).
+      const latest = await requireConnection(connection.id);
+      if (result.connection.health === 'ready' && latest.discoveredModels === undefined) {
+        return withDiscoveryOutcome(connection.id, result, current);
+      }
+      return result;
     });
   });
 
@@ -921,6 +1048,7 @@ export function registerProviderIPC(): void {
       });
       if (!sameCredentialIdentity(connection, updated)) {
         current.status.invalidate(connection.providerId, connection.id);
+        current.pricing?.invalidate(connection.providerId, connection.id);
       }
       return {
         connection: connectionView(updated, current.catalog.getProviderDefinitions()),
@@ -957,6 +1085,7 @@ export function registerProviderIPC(): void {
       });
       const configResult = await (current.clearConfigReferences ?? clearConnectionConfigReferences)(connection.id);
       current.status.invalidate(connection.providerId, connection.id);
+      current.pricing?.invalidate(connection.providerId, connection.id);
       const removed = await current.connections.remove(connection.id);
       if (!removed) throw new Error(`Unknown provider connection '${connection.id}'`);
       return {
@@ -968,13 +1097,6 @@ export function registerProviderIPC(): void {
         clearedConfigReferences: configResult.clearedConfigReferences,
       } satisfies ProviderDeleteConnectionResult;
     });
-  });
-
-  ipcMain.handle(IPC_CHANNELS.PROVIDERS_MODEL_LIST, async (_event, payload: unknown) => {
-    if (payload === undefined) return modelOptions();
-    const parsed = connectionIdSchema.safeParse(payload);
-    if (!parsed.success) throw new Error('Invalid providers:model_list payload');
-    return modelOptions(parsed.data.connectionId);
   });
 
   ipcMain.handle(IPC_CHANNELS.PROVIDERS_STATUS_REFRESH, async (_event, payload: unknown) => {
@@ -995,7 +1117,6 @@ export function unregisterProviderIPC(): void {
   ipcMain.removeHandler(IPC_CHANNELS.PROVIDERS_ENABLE);
   ipcMain.removeHandler(IPC_CHANNELS.PROVIDERS_DISCONNECT);
   ipcMain.removeHandler(IPC_CHANNELS.PROVIDERS_DELETE);
-  ipcMain.removeHandler(IPC_CHANNELS.PROVIDERS_MODEL_LIST);
   ipcMain.removeHandler(IPC_CHANNELS.PROVIDERS_STATUS_REFRESH);
 }
 
@@ -1025,10 +1146,10 @@ async function refreshStatus(
     throw new Error('The requested connection does not belong to Neuralwatt');
   }
   const apiKey = await readApiKeyForTrustedStatus(connection, current);
-  return (await current.status.refresh(createNeuralwattStatusSource(connection.id, apiKey), { manual: true })).observation;
+  return (await current.status.refresh(createNeuralwattQuotaStatusSource(connection.id, apiKey), { manual: true })).observation;
 }
 
-async function readApiKeyForTrustedStatus(
+export async function readApiKeyForTrustedStatus(
   connection: ProviderConnection,
   current: ProviderIPCServices,
 ): Promise<string> {

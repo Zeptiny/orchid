@@ -1,5 +1,6 @@
 import { webContents as electronWebContents, type WebContents } from 'electron';
-import { IPC_CHANNELS } from '../../../shared/types/ipc';
+import { IPC_CHANNELS, type SessionUpdatedEvent } from '../../../shared/types/ipc';
+import type { Session } from '../../../shared/types/session';
 import { getSessionManager } from '../../session/singleton';
 import type { ActiveAgent, ChatStatePayload } from './state';
 
@@ -16,7 +17,7 @@ export function sendSessionEvent(
   source: WebContents | null,
   sessionId: string,
   channel: string,
-  payload: Record<string, unknown>,
+  payload: object,
 ): void {
   const recipients = new Map<number, WebContents>();
   const addIfSelected = (candidate: WebContents): void => {
@@ -108,12 +109,30 @@ export function sendChatState(
   sendTurnEvent(webContents, active, IPC_CHANNELS.CHAT_STATE, payload);
 }
 
+/** Build the bounded renderer patch for the chain changed by this write. */
+export function buildSessionUpdatedEvent(
+  session: Session,
+  chainId: string | null = session.activeChainId,
+): SessionUpdatedEvent | null {
+  const chain = chainId
+    ? session.chains.find((candidate) => candidate.id === chainId)
+    : session.chains.at(-1);
+  if (!chain) return null;
+  return {
+    sessionId: session.id,
+    chain,
+    activeChainId: session.activeChainId,
+    updatedAt: session.updatedAt,
+  };
+}
+
 /** Notify renderer of live session (multi-chain) state after startChain. */
 export function emitSessionUpdated(webContents: WebContents, sessionId: string): void {
   try {
     const session = getSessionManager().getSession(sessionId);
-    if (session) {
-      sendSessionEvent(webContents, sessionId, IPC_CHANNELS.SESSION_UPDATED, { session });
+    const update = session ? buildSessionUpdatedEvent(session) : null;
+    if (update) {
+      sendSessionEvent(webContents, sessionId, IPC_CHANNELS.SESSION_UPDATED, update);
     }
   } catch {
     // non-fatal

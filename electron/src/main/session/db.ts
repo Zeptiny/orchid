@@ -5,7 +5,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as os from 'node:os';
 import { openSqliteDb, type SqliteDatabase } from '../utils/sqlite';
-import { SESSION_SCHEMA_SQL, SESSION_SCHEMA_VERSION } from './schema';
+import { SESSION_SCHEMA_SQL, SESSION_SCHEMA_VERSION, applySessionSchemaMigrations } from './schema';
 
 /** Default session database path (~/.orchid/sessions.db). */
 export const SESSION_DB_PATH = path.join(os.homedir(), '.orchid', 'sessions.db');
@@ -26,9 +26,32 @@ export class SessionDb {
         corruptionCheck: 'SELECT 1 FROM sessions LIMIT 1',
       });
       this._db.pragma('foreign_keys = ON');
-      this._db
-        .prepare('INSERT OR REPLACE INTO schema_meta (key, value) VALUES (?, ?)')
-        .run('schema_version', String(SESSION_SCHEMA_VERSION));
+      const versionRow = this._db
+        .prepare('SELECT value FROM schema_meta WHERE key = ?')
+        .get('schema_version') as { value: string } | undefined;
+      const previousVersion = versionRow
+        ? Number.parseInt(versionRow.value, 10)
+        : null;
+      applySessionSchemaMigrations(this._db);
+      this._db.transaction(() => {
+        if (
+          versionRow
+          && (!Number.isInteger(previousVersion) || previousVersion! < SESSION_SCHEMA_VERSION)
+        ) {
+          // An older binary may have updated canonical blobs while leaving
+          // additive read projections from a newer version untouched.
+          this._db!.prepare(
+            'UPDATE chains SET summary_json = NULL, recent_messages_json = NULL',
+          ).run();
+          this._db!.prepare(
+            'UPDATE subagent_chains SET summary_json = NULL',
+          ).run();
+          this._db!.prepare('DELETE FROM chain_message_offsets').run();
+        }
+        this._db!
+          .prepare('INSERT OR REPLACE INTO schema_meta (key, value) VALUES (?, ?)')
+          .run('schema_version', String(SESSION_SCHEMA_VERSION));
+      })();
       this.harden();
     }
     return this._db;

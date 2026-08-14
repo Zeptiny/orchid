@@ -1978,6 +1978,72 @@ describe('streamChat', () => {
     }));
   });
 
+  it('estimates reasoning tokens from output chars when the provider reports none', async () => {
+    setupStreamText({
+      fullStreamParts: [
+        {
+          type: 'start-step',
+          request: { messages: [{ role: 'user', content: 'Solve it' }] },
+        },
+        { type: 'reasoning-delta', delta: 'let me think through this carefully' },
+        { type: 'text-delta', text: 'answer' },
+        {
+          type: 'finish-step',
+          finishReason: 'stop',
+          usage: { inputTokens: 100, outputTokens: 50, totalTokens: 150 },
+        },
+      ],
+      finishReason: 'stop',
+    });
+
+    const events = await collectStreamEvents(streamChat(makeStreamChatParams()));
+    const usageEvent = events.find((event) => event.type === 'usage');
+
+    // 35 reasoning chars vs 6 text chars of a 50-token output total.
+    expect(usageEvent).toMatchObject({
+      type: 'usage',
+      usage: {
+        reasoning_tokens: 43,
+        context: { reasoning_tokens: 43 },
+      },
+    });
+  });
+
+  it('prefers provider-reported reasoning tokens over the char estimate', async () => {
+    setupStreamText({
+      fullStreamParts: [
+        {
+          type: 'start-step',
+          request: { messages: [{ role: 'user', content: 'Solve it' }] },
+        },
+        { type: 'reasoning-delta', delta: 'let me think through this carefully' },
+        { type: 'text-delta', text: 'answer' },
+        {
+          type: 'finish-step',
+          finishReason: 'stop',
+          usage: {
+            inputTokens: 100,
+            outputTokens: 50,
+            outputTokenDetails: { reasoningTokens: 20 },
+            totalTokens: 150,
+          },
+        },
+      ],
+      finishReason: 'stop',
+    });
+
+    const events = await collectStreamEvents(streamChat(makeStreamChatParams()));
+    const usageEvent = events.find((event) => event.type === 'usage');
+
+    expect(usageEvent).toMatchObject({
+      type: 'usage',
+      usage: {
+        reasoning_tokens: 20,
+        context: { reasoning_tokens: 20 },
+      },
+    });
+  });
+
   it('captures provider cache reads and the latest request context snapshot', async () => {
     setupStreamText({
       fullStreamError: new Error('fullStream unavailable'),

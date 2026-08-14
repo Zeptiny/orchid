@@ -580,6 +580,11 @@ export function ConfigView({ onClose, initialTab = 'general', onNotify, onOpenAn
     void window.orchid?.chat?.stop?.({ sessionId });
   }, []);
 
+  const handleSessionDeleteError = useCallback((error: unknown) => {
+    const message = error instanceof Error ? error.message : String(error);
+    onNotify(`Delete failed: ${message}`, 'error');
+  }, [onNotify]);
+
   return (
     <div
       ref={rootRef}
@@ -609,6 +614,8 @@ export function ConfigView({ onClose, initialTab = 'general', onNotify, onOpenAn
           void handleProjectSessionCreate(projectDir);
         }}
         onSessionDelete={session.deleteSession}
+        onSessionDeleteError={handleSessionDeleteError}
+        deletingSessionIds={session.pendingDeleteIds}
         onSessionSelect={handleSessionSelect}
         activities={activity.activities}
         onStopSession={handleStopSession}

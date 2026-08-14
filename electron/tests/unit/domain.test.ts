@@ -32,7 +32,6 @@ import type { ModelSelection } from '../../src/shared/types/provider';
 import {
   TodoStatus,
   type Todo,
-  VALID_TRANSITIONS,
   todoToStorageDict,
   todoFromStorageDict,
   todoStoreToStorageDict,
@@ -514,13 +513,56 @@ describe('Domain Models: SubagentRecord restore migration', () => {
     expect(dict.parentChainIndex).toBe(4);
   });
 
+  it('round-trips precomputed usage without rebuilding it from chain messages', () => {
+    const now = new Date().toISOString();
+    const usage = {
+      prompt_tokens: 21,
+      completion_tokens: 8,
+      total_tokens: 29,
+      cached_tokens: 5,
+      reasoning_tokens: 3,
+    };
+    const record: SubagentRecord = {
+      id: 'sub-usage',
+      agent_name: 'Explorer',
+      agent_type: 'subagent',
+      agent_tier: 'bloom',
+      task: 'Measure usage',
+      status: SubagentStatus.COMPLETED,
+      chain_id: 'chain-usage',
+      start_time: now,
+      end_time: now,
+      result: 'done',
+      error: null,
+      parentChainIndex: 0,
+      usage,
+      chain: makeChain({ id: 'chain-usage', sessionId: 'session-1' }),
+    };
+
+    const restored = subagentRecordFromStorageDict(subagentRecordToStorageDict(record));
+
+    expect(restored.usage).toEqual(usage);
+  });
+
 });
 
 // ── Test 4: Todo state machine ──────────────────────────────────────────────
 
 describe('Domain Models: Todo state transitions', () => {
-  it('DONE has no valid transitions', () => {
-    expect(VALID_TRANSITIONS[TodoStatus.DONE].size).toBe(0);
+  it('DONE is not terminal — every status round-trips via storage dict', () => {
+    const now = new Date().toISOString();
+    for (const status of [TodoStatus.OPEN, TodoStatus.IN_PROGRESS, TodoStatus.DONE]) {
+      const todo: Todo = {
+        id: 'a1b2c3d4',
+        title: 'Task',
+        status,
+        subagent_id: null,
+        created_at: now,
+        updated_at: now,
+      };
+      const restored = todoFromStorageDict(todoToStorageDict(todo));
+      expect(restored.status).toBe(status);
+    }
   });
 
   it('Todo round-trip via storage dict', () => {

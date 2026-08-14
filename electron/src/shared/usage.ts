@@ -97,11 +97,14 @@ export function latestUsageFromMessages(
  */
 export interface SubagentUsageSource {
   readonly parentChainIndex?: number | null;
+  /** Pre-aggregated usage carried by lightweight subagent summaries. */
+  readonly usage?: Usage | null;
   readonly chain?: { readonly messages?: readonly Message[] } | null;
 }
 
 /** Sum usage from one subagent's chain messages. */
 export function sumSubagentUsage(subagent: SubagentUsageSource): Usage | null {
+  if ('usage' in subagent) return subagent.usage ?? null;
   const messages = subagent.chain?.messages;
   if (!messages || messages.length === 0) return null;
   return sumMessageUsages(messages);

@@ -1,9 +1,9 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { randomUUID } from 'node:crypto';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import type { Session } from '../../src/shared/types/session';
+import { sessionForRenderer, type Session } from '../../src/shared/types/session';
 import type { Message } from '../../src/shared/types/message';
 import type { Chain } from '../../src/shared/types/chain';
 import { ChainStatus } from '../../src/shared/types/chain';
@@ -13,8 +13,15 @@ import type { StorageOptions } from '../../src/main/session/storage';
 import {
   saveSession,
   loadSession,
+  loadSessionForReplacement,
+  loadSessionView,
+  loadSessionHistoryPage,
+  loadSessionMessages,
+  loadSubagentRecord,
+  loadSubagentSummaries,
   listSavedSessions,
   deleteSession,
+  deleteSessionCaches,
   updateChain,
   updateSessionFields,
   upsertSubagentRecords,
@@ -82,6 +89,7 @@ function makeSession(overrides: Partial<Session> & { model?: string } = {}): Ses
     subagentChains: overrides.subagentChains ?? [],
     todoStore: overrides.todoStore ?? { tasks: [] },
     reasoningEffortOverride: overrides.reasoningEffortOverride ?? null,
+    tierOverride: overrides.tierOverride ?? null,
     permissionMode: overrides.permissionMode ?? null,
   };
 }
@@ -124,6 +132,8 @@ function makeChain(sessionId: string, overrides: Partial<Chain> & { model?: stri
         : overrides.status === ChainStatus.ACTIVE
           ? null
           : now,
+    errorDetail: overrides.errorDetail ?? null,
+    errorTitle: overrides.errorTitle ?? null,
   };
 }
 
@@ -154,6 +164,10 @@ function makeSubagentRecord(
     result: overrides.result ?? 'done',
     error: overrides.error ?? null,
     parentChainIndex: overrides.parentChainIndex ?? 0,
+    ...(overrides.usage !== undefined ? { usage: overrides.usage } : {}),
+    ...(overrides.reasoning_effort !== undefined
+      ? { reasoning_effort: overrides.reasoning_effort }
+      : {}),
     closed: overrides.closed ?? false,
     chain,
   };
@@ -172,6 +186,20 @@ afterEach(() => {
 // ===========================================================================
 // Save → load round-trip
 // ===========================================================================
+
+describe('renderer session projection', () => {
+  it('omits subagent transcripts without mutating the domain session', () => {
+    const session = makeSession({ id: randomUUID() });
+    const transcript = makeSubagentRecord(session.id, { id: 'selected-lazily' });
+    const domain = { ...session, subagentChains: [transcript] };
+
+    const renderer = sessionForRenderer(domain);
+
+    expect(renderer.subagentChains).toEqual([]);
+    expect(domain.subagentChains).toEqual([transcript]);
+    expect(renderer.chains).toBe(domain.chains);
+  });
+});
 
 describe('saveSession → loadSession round-trip', () => {
   it('preserves canonical tool facts through session storage', () => {
@@ -644,7 +672,7 @@ describe('deleteSession', () => {
     expect(result).toBe(false);
   });
 
-  it('cleans up tool-output cache directory', () => {
+  it('cleans up tool-output cache directory asynchronously', async () => {
     const session = makeSession({ id: 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee' });
     saveSession(session, storageOpts);
 
@@ -661,10 +689,10 @@ describe('deleteSession', () => {
 
     deleteSession('eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee', storageOpts);
 
-    expect(fs.existsSync(toolOutputDir)).toBe(false);
+    await vi.waitFor(() => expect(fs.existsSync(toolOutputDir)).toBe(false));
   });
 
-  it('cleans up web-fetch cache directory', () => {
+  it('cleans up web-fetch cache directory asynchronously', async () => {
     const session = makeSession({ id: 'ffffffff-ffff-4fff-8fff-ffffffffffff' });
     saveSession(session, storageOpts);
 
@@ -681,10 +709,10 @@ describe('deleteSession', () => {
 
     deleteSession('ffffffff-ffff-4fff-8fff-ffffffffffff', storageOpts);
 
-    expect(fs.existsSync(webFetchDir)).toBe(false);
+    await vi.waitFor(() => expect(fs.existsSync(webFetchDir)).toBe(false));
   });
 
-  it('cleans up both caches simultaneously', () => {
+  it('cleans up both caches simultaneously', async () => {
     const session = makeSession({ id: 'a1111111-1111-4111-8111-111111111112' });
     saveSession(session, storageOpts);
 
@@ -707,8 +735,32 @@ describe('deleteSession', () => {
 
     deleteSession('a1111111-1111-4111-8111-111111111112', storageOpts);
 
-    expect(fs.existsSync(toolOutputDir)).toBe(false);
-    expect(fs.existsSync(webFetchDir)).toBe(false);
+    await vi.waitFor(() => {
+      expect(fs.existsSync(toolOutputDir)).toBe(false);
+      expect(fs.existsSync(webFetchDir)).toBe(false);
+    });
+  });
+
+  it('keeps cache cleanup failures non-fatal after durable deletion', async () => {
+    const sessionId = 'a2222222-2222-4222-8222-222222222222';
+    saveSession(makeSession({ id: sessionId }), storageOpts);
+    const blockingPath = path.join(tmpDir, 'cache-blocker');
+    fs.writeFileSync(blockingPath, 'not a directory');
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+    expect(deleteSession(sessionId, {
+      ...storageOpts,
+      toolOutputCacheDir: blockingPath,
+      webFetchCacheDir: blockingPath,
+    })).toBe(true);
+    expect(loadSession(sessionId, storageOpts)).toBeNull();
+    await deleteSessionCaches(sessionId, {
+      ...storageOpts,
+      toolOutputCacheDir: blockingPath,
+      webFetchCacheDir: blockingPath,
+    });
+
+    expect(warn).toHaveBeenCalled();
   });
 });
 
@@ -1545,14 +1597,19 @@ describe('SessionManager multi-chain lifecycle', () => {
 function readSubagentRows(
   dbPath: string,
   sessionId: string,
-): Array<{ rowid: number; subagent_id: string; record_json: string }> {
+): Array<{ rowid: number; subagent_id: string; record_json: string; summary_json: string | null }> {
   const db = openSqliteDb(dbPath);
   try {
     return db
       .prepare(
-        'SELECT rowid, subagent_id, record_json FROM subagent_chains WHERE session_id = ? ORDER BY rowid',
+        'SELECT rowid, subagent_id, record_json, summary_json FROM subagent_chains WHERE session_id = ? ORDER BY rowid',
       )
-      .all(sessionId) as Array<{ rowid: number; subagent_id: string; record_json: string }>;
+      .all(sessionId) as Array<{
+        rowid: number;
+        subagent_id: string;
+        record_json: string;
+        summary_json: string | null;
+      }>;
   } finally {
     db.close();
   }
@@ -1589,6 +1646,86 @@ describe('subagent_chains row storage (U6)', () => {
 
     const loaded = loadSession(SID, storageOpts)!;
     expect(loaded.subagentChains).toEqual(records);
+  });
+
+  it('loads navigation summaries without materializing full transcript records', () => {
+    const record = makeSubagentRecord(SID, {
+      id: 'sub-summary',
+      task: 'inspect a large transcript',
+      result: 'full result remains detail-only',
+      usage: {
+        prompt_tokens: 12,
+        completion_tokens: 3,
+        total_tokens: 15,
+        cached_tokens: 2,
+      },
+    });
+    saveSession(makeSession({ id: SID, subagentChains: [record] }), storageOpts);
+
+    const row = readSubagentRows(storageOpts.dbPath!, SID)[0];
+    expect(row.summary_json).not.toBeNull();
+    expect(JSON.parse(row.summary_json!)).not.toHaveProperty('chain');
+    expect(JSON.parse(row.summary_json!)).not.toHaveProperty('result');
+
+    const view = loadSessionView(SID, storageOpts)!;
+    expect(view.subagentChains).toEqual([]);
+
+    const summaries = loadSubagentSummaries(SID, storageOpts);
+    expect(summaries).toHaveLength(1);
+    expect(summaries[0]).toMatchObject({
+      id: record.id,
+      task: record.task,
+      usage: record.usage,
+    });
+
+    const detail = loadSubagentRecord(SID, record.id, storageOpts);
+    expect(detail?.result).toBe('full result remains detail-only');
+    expect(detail?.chain).toEqual(record.chain);
+  });
+
+  it('lazily derives and backfills summaries for legacy rows', () => {
+    const record = makeSubagentRecord(SID, { id: 'sub-legacy-summary' });
+    saveSession(makeSession({ id: SID, subagentChains: [record] }), storageOpts);
+
+    const db = openSqliteDb(storageOpts.dbPath!);
+    db.prepare(
+      'UPDATE subagent_chains SET summary_json = NULL WHERE session_id = ? AND subagent_id = ?',
+    ).run(SID, record.id);
+    db.close();
+    _clearDbCache();
+
+    expect(readSubagentRows(storageOpts.dbPath!, SID)[0].summary_json).toBeNull();
+    expect(loadSubagentSummaries(SID, storageOpts).map((summary) => summary.id))
+      .toEqual([record.id]);
+    expect(readSubagentRows(storageOpts.dbPath!, SID)[0].summary_json).not.toBeNull();
+  });
+
+  it('serves a valid summary without parsing a corrupt full transcript', () => {
+    const record = makeSubagentRecord(SID, { id: 'sub-independent-summary' });
+    saveSession(makeSession({ id: SID, subagentChains: [record] }), storageOpts);
+
+    const db = openSqliteDb(storageOpts.dbPath!);
+    db.prepare(
+      'UPDATE subagent_chains SET record_json = ? WHERE session_id = ? AND subagent_id = ?',
+    ).run('{corrupt transcript', SID, record.id);
+    db.close();
+    _clearDbCache();
+
+    expect(loadSubagentSummaries(SID, storageOpts).map((summary) => summary.id))
+      .toEqual([record.id]);
+    expect(loadSubagentRecord(SID, record.id, storageOpts)).toBeNull();
+  });
+
+  it('switches cold sessions through the transcript-free view cache', () => {
+    const record = makeSubagentRecord(SID, { id: 'sub-cold-switch' });
+    saveSession(makeSession({ id: SID, subagentChains: [record] }), storageOpts);
+
+    const manager = new SessionManager({ storage: storageOpts });
+    const opened = manager.switchTo(SID, 'window-a');
+
+    expect(opened?.subagentChains).toEqual([]);
+    expect(manager.getSubagentSummaries(SID).map((summary) => summary.id)).toEqual([record.id]);
+    expect(manager.getSubagentRecord(SID, record.id)?.id).toBe(record.id);
   });
 
   it('saveSession wholesale-replaces prior subagent rows (creation/recovery primitive)', () => {
@@ -1783,6 +1920,454 @@ describe('subagent_chains row storage (U6)', () => {
     }).not.toThrow();
 
     expect(readSubagentRows(dbPath, session.id)).toEqual(before);
+  });
+});
+
+describe('bounded renderer history views', () => {
+  const SID = 'cdcdcdcd-cdcd-4dcd-8dcd-cdcdcdcdcdcd';
+
+  it('loads a recent message-bounded tail while retaining full chain metadata', () => {
+    const usage = {
+      prompt_tokens: 40,
+      completion_tokens: 10,
+      total_tokens: 50,
+      cached_tokens: 5,
+    };
+    const messages = [
+      makeMessage({ id: 'm0', role: 'user', content: 'original question' }),
+      makeMessage({ id: 'm1', role: 'assistant', content: 'middle' }),
+      makeMessage({ id: 'm2', role: 'assistant', content: 'later' }),
+      makeMessage({ id: 'm3', role: 'assistant', content: 'final', usage }),
+    ];
+    saveSession(makeSession({
+      id: SID,
+      chains: [makeChain(SID, { id: 'chain-bounded', messages })],
+    }), storageOpts);
+
+    const view = loadSessionView(SID, {
+      ...storageOpts,
+      sessionViewMessageBudget: 2,
+      sessionViewByteBudget: 1024 * 1024,
+    })!;
+    const chain = view.chains[0];
+
+    expect(chain.messages.map((message) => message.id)).toEqual(['m2', 'm3']);
+    expect(chain.messagesLoaded).toBe(false);
+    expect(chain.messageStartIndex).toBe(2);
+    expect(chain.messageCount).toBe(4);
+    expect(chain.usageSummary).toMatchObject(usage);
+    expect(chain.preview).toBe('original question');
+
+    const manager = new SessionManager({
+      storage: {
+        ...storageOpts,
+        sessionViewMessageBudget: 2,
+        sessionViewByteBudget: 1024 * 1024,
+      },
+    });
+    expect(manager.switchTo(SID)?.chains[0].messages).toHaveLength(2);
+    expect(manager.getModelHistory(SID).map((message) => message.id))
+      .toEqual(messages.map((message) => message.id));
+  });
+
+  it('loads and pages the persisted recent window without reading the full message blob', () => {
+    const messages = [
+      makeMessage({ id: 'window-0', role: 'user', content: 'question' }),
+      makeMessage({ id: 'window-1', role: 'assistant', content: 'one' }),
+      makeMessage({ id: 'window-2', role: 'assistant', content: 'two' }),
+      makeMessage({ id: 'window-3', role: 'assistant', content: 'three' }),
+    ];
+    saveSession(makeSession({
+      id: SID,
+      chains: [makeChain(SID, { id: 'chain-window', messages })],
+    }), storageOpts);
+
+    const db = openSqliteDb(storageOpts.dbPath!);
+    db.prepare('UPDATE chains SET messages_json = ? WHERE session_id = ?')
+      .run('not-json', SID);
+    db.close();
+
+    const view = loadSessionView(SID, {
+      ...storageOpts,
+      sessionViewMessageBudget: 1,
+      sessionViewByteBudget: 1024 * 1024,
+    })!;
+    expect(view.chains[0].messages.map((message) => message.id)).toEqual(['window-3']);
+
+    const older = loadSessionHistoryPage(
+      SID,
+      view.chains[0].id,
+      view.chains[0].messageStartIndex,
+      storageOpts,
+    )!;
+    expect(older.messages.map((message) => message.id))
+      .toEqual(['window-0', 'window-1', 'window-2']);
+    expect(older.complete).toBe(true);
+  });
+
+  it('indexes message byte ranges and backfills a missing legacy index once', () => {
+    const messages = Array.from({ length: 260 }, (_, index) => makeMessage({
+      id: `indexed-${index}`,
+      content: index % 2 === 0 ? `unicode-${index}-🌺` : `plain-${index}`,
+    }));
+    saveSession(makeSession({
+      id: SID,
+      chains: [makeChain(SID, { id: 'chain-indexed-history', messages })],
+    }), storageOpts);
+
+    const db = openSqliteDb(storageOpts.dbPath!);
+    expect(db.prepare(
+      'SELECT COUNT(*) FROM chain_message_offsets WHERE chain_id = ?',
+    ).pluck().get('chain-indexed-history')).toBe(messages.length);
+    db.close();
+
+    const updatedMessages = [
+      ...messages,
+      makeMessage({ id: 'indexed-260', content: 'checkpoint-🌺' }),
+    ];
+    expect(updateChain(makeChain(SID, {
+      id: 'chain-indexed-history',
+      messages: updatedMessages,
+    }), new Date().toISOString(), storageOpts)).toBe(true);
+
+    const projection = openSqliteDb(storageOpts.dbPath!);
+    expect(projection.prepare(
+      'SELECT COUNT(*) FROM chain_message_offsets WHERE chain_id = ?',
+    ).pluck().get('chain-indexed-history')).toBe(updatedMessages.length);
+    projection.prepare('DELETE FROM chain_message_offsets WHERE chain_id = ?')
+      .run('chain-indexed-history');
+    projection.prepare(`
+      UPDATE chains SET recent_messages_json = NULL
+      WHERE session_id = ? AND id = ?
+    `).run(SID, 'chain-indexed-history');
+    projection.close();
+
+    const page = loadSessionHistoryPage(
+      SID,
+      'chain-indexed-history',
+      160,
+      storageOpts,
+    )!;
+    expect(page.messages.map((message) => message.id))
+      .toEqual(messages.slice(60, 160).map((message) => message.id));
+
+    const afterBackfill = openSqliteDb(storageOpts.dbPath!);
+    expect(afterBackfill.prepare(
+      'SELECT COUNT(*) FROM chain_message_offsets WHERE chain_id = ?',
+    ).pluck().get('chain-indexed-history')).toBe(updatedMessages.length);
+    afterBackfill.close();
+  });
+
+  it('falls back to canonical history when the recent projection is malformed', () => {
+    const messages = [
+      makeMessage({ id: 'fallback-0', role: 'user', content: 'question' }),
+      makeMessage({ id: 'fallback-1', role: 'assistant', content: 'one' }),
+      makeMessage({ id: 'fallback-2', role: 'assistant', content: 'two' }),
+      makeMessage({ id: 'fallback-3', role: 'assistant', content: 'three' }),
+    ];
+    saveSession(makeSession({
+      id: SID,
+      chains: [makeChain(SID, { id: 'chain-malformed-window', messages })],
+    }), storageOpts);
+
+    const db = openSqliteDb(storageOpts.dbPath!);
+    db.prepare(`
+      UPDATE chains SET recent_messages_json = ?
+      WHERE session_id = ? AND id = ?
+    `).run('[null,null,null,null]', SID, 'chain-malformed-window');
+    db.close();
+
+    const view = loadSessionView(SID, {
+      ...storageOpts,
+      sessionViewMessageBudget: 2,
+      sessionViewByteBudget: 1024 * 1024,
+    })!;
+    expect(view.chains[0].messages.map((message) => message.id))
+      .toEqual(['fallback-2', 'fallback-3']);
+    expect(view.chains[0].messageStartIndex).toBe(2);
+  });
+
+  it('keeps healthy chains loadable beside a malformed legacy message array', () => {
+    saveSession(makeSession({
+      id: SID,
+      chains: [
+        makeChain(SID, {
+          id: 'chain-malformed-legacy',
+          messages: [makeMessage({ id: 'bad-placeholder' })],
+        }),
+        makeChain(SID, {
+          id: 'chain-healthy',
+          messages: [makeMessage({ id: 'healthy-message', content: 'still visible' })],
+        }),
+      ],
+    }), storageOpts);
+
+    const db = openSqliteDb(storageOpts.dbPath!);
+    db.prepare(`
+      UPDATE chains
+      SET messages_json = '[null]', summary_json = NULL, recent_messages_json = NULL
+      WHERE session_id = ? AND id = ?
+    `).run(SID, 'chain-malformed-legacy');
+    db.close();
+
+    const view = loadSessionView(SID, storageOpts)!;
+    expect(view.chains.find((chain) => chain.id === 'chain-healthy')?.messages[0]?.id)
+      .toBe('healthy-message');
+  });
+
+  it('keeps valid model-history messages beside a malformed stored message', () => {
+    saveSession(makeSession({
+      id: SID,
+      chains: [makeChain(SID, {
+        id: 'chain-partial-corruption',
+        messages: [
+          makeMessage({ id: 'history-valid-0', content: 'oldest' }),
+          makeMessage({ id: 'history-corrupt-1', content: 'corrupt me' }),
+          makeMessage({ id: 'history-valid-2', content: 'newest' }),
+        ],
+      })],
+    }), storageOpts);
+
+    const db = openSqliteDb(storageOpts.dbPath!);
+    db.prepare(`
+      UPDATE chains
+      SET messages_json = json_set(messages_json, '$[1]', json('null'))
+      WHERE session_id = ? AND id = ?
+    `).run(SID, 'chain-partial-corruption');
+    db.close();
+    const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+    expect(loadSessionMessages(SID, storageOpts).map((message) => message.id))
+      .toEqual(['history-valid-0', 'history-valid-2']);
+    expect(error).toHaveBeenCalledWith(
+      '[session] skipping malformed message while loading history',
+      expect.anything(),
+    );
+    error.mockRestore();
+  });
+
+  it('advances history pagination past malformed canonical rows', () => {
+    saveSession(makeSession({
+      id: SID,
+      chains: [makeChain(SID, {
+        id: 'chain-corrupt-cursor',
+        messages: [
+          makeMessage({ id: 'cursor-0', content: 'oldest' }),
+          makeMessage({ id: 'cursor-1', content: 'middle' }),
+          makeMessage({ id: 'cursor-2', content: 'newest' }),
+        ],
+      })],
+    }), storageOpts);
+
+    const db = openSqliteDb(storageOpts.dbPath!);
+    db.prepare(`
+      UPDATE chains
+      SET messages_json = '[null,{"id":"cursor-1","role":"user","content":"middle","type":"text"},{"id":"cursor-2","role":"user","content":"newest","type":"text"}]',
+          summary_json = NULL,
+          recent_messages_json = NULL
+      WHERE session_id = ? AND id = ?
+    `).run(SID, 'chain-corrupt-cursor');
+    db.close();
+
+    const page = loadSessionHistoryPage(
+      SID,
+      'chain-corrupt-cursor',
+      3,
+      storageOpts,
+    )!;
+    expect(page.messages.map((message) => message.id)).toEqual(['cursor-1', 'cursor-2']);
+    expect(page.startIndex).toBe(0);
+    expect(page.complete).toBe(true);
+  });
+
+  it('backfills bounded projections for truncated legacy chains on first view load', () => {
+    const messages = [
+      makeMessage({ id: 'legacy-0', role: 'user', content: 'question' }),
+      makeMessage({ id: 'legacy-1', role: 'assistant', content: 'one' }),
+      makeMessage({ id: 'legacy-2', role: 'assistant', content: 'two' }),
+      makeMessage({ id: 'legacy-3', role: 'assistant', content: 'three' }),
+    ];
+    saveSession(makeSession({
+      id: SID,
+      chains: [makeChain(SID, { id: 'chain-legacy-window', messages })],
+    }), storageOpts);
+
+    const db = openSqliteDb(storageOpts.dbPath!);
+    db.prepare(`
+      UPDATE chains
+      SET summary_json = NULL, recent_messages_json = NULL
+      WHERE session_id = ? AND id = ?
+    `).run(SID, 'chain-legacy-window');
+    db.close();
+
+    const first = loadSessionView(SID, {
+      ...storageOpts,
+      sessionViewMessageBudget: 2,
+      sessionViewByteBudget: 1024 * 1024,
+    })!;
+    expect(first.chains[0].messages.map((message) => message.id))
+      .toEqual(['legacy-2', 'legacy-3']);
+    expect(first.chains[0].messageStartIndex).toBe(2);
+
+    const projectionDb = openSqliteDb(storageOpts.dbPath!);
+    const projection = projectionDb.prepare(`
+      SELECT summary_json, recent_messages_json
+      FROM chains WHERE session_id = ? AND id = ?
+    `).get(SID, 'chain-legacy-window') as {
+      summary_json: string | null;
+      recent_messages_json: string | null;
+    };
+    expect(projection.summary_json).not.toBeNull();
+    expect(projection.recent_messages_json).not.toBeNull();
+
+    projectionDb.prepare(`
+      UPDATE chains SET messages_json = ?
+      WHERE session_id = ? AND id = ?
+    `).run('not-json', SID, 'chain-legacy-window');
+    projectionDb.close();
+
+    const second = loadSessionView(SID, {
+      ...storageOpts,
+      sessionViewMessageBudget: 2,
+      sessionViewByteBudget: 1024 * 1024,
+    })!;
+    expect(second.chains[0].messages.map((message) => message.id))
+      .toEqual(['legacy-2', 'legacy-3']);
+    expect(second.chains[0].messageCount).toBe(4);
+    expect(second.chains[0].messageStartIndex).toBe(2);
+  });
+
+  it('preserves canonical indexes when legacy history contains an orphan tool result', () => {
+    const orphan = makeMessage({
+      id: 'legacy-orphan',
+      role: 'tool',
+      type: 'tool_result',
+      tool_call_id: 'missing-call',
+      content: 'orphaned result',
+    });
+    const messages = [
+      orphan,
+      ...Array.from({ length: 241 }, (_, index) => makeMessage({
+        id: `legacy-index-${index + 1}`,
+        role: index % 2 === 0 ? 'user' : 'assistant',
+        content: `message ${index + 1}`,
+      })),
+    ];
+    saveSession(makeSession({
+      id: SID,
+      chains: [makeChain(SID, { id: 'chain-legacy-indexes', messages })],
+    }), storageOpts);
+
+    const db = openSqliteDb(storageOpts.dbPath!);
+    db.prepare(`
+      UPDATE chains
+      SET summary_json = NULL, recent_messages_json = NULL
+      WHERE session_id = ? AND id = ?
+    `).run(SID, 'chain-legacy-indexes');
+    db.close();
+
+    const view = loadSessionView(SID, {
+      ...storageOpts,
+      sessionViewMessageBudget: 1,
+      sessionViewByteBudget: 1024 * 1024,
+    })!;
+    const chain = view.chains[0];
+    expect(chain.messageCount).toBe(messages.length);
+
+    let beforeIndex = chain.messageStartIndex!;
+    const loaded = [...chain.messages];
+    while (beforeIndex > 0) {
+      const page = loadSessionHistoryPage(SID, chain.id, beforeIndex, storageOpts)!;
+      loaded.unshift(...page.messages);
+      expect(page.startIndex).toBeLessThan(beforeIndex);
+      beforeIndex = page.startIndex;
+    }
+
+    expect(loaded.map((message) => message.id))
+      .toEqual(messages.map((message) => message.id));
+  });
+
+  it('pages older messages without breaking tool-call/result reconstruction', () => {
+    const toolCall = makeMessage({
+      id: 'call-message',
+      role: 'assistant',
+      type: 'tool_call',
+      tool_call_id: 'tool-1',
+      tool_calls: [{
+        id: 'tool-1',
+        type: 'function',
+        function: { name: 'read', arguments: '{}' },
+      }],
+    });
+    const toolResult = makeMessage({
+      id: 'result-message',
+      role: 'tool',
+      type: 'tool_result',
+      tool_call_id: 'tool-1',
+      content: 'result',
+    });
+    const messages = [
+      makeMessage({ id: 'user-message', role: 'user', content: 'inspect' }),
+      toolCall,
+      toolResult,
+      makeMessage({ id: 'answer-message', role: 'assistant', content: 'done' }),
+    ];
+    saveSession(makeSession({
+      id: SID,
+      chains: [makeChain(SID, { id: 'chain-tools', messages })],
+    }), storageOpts);
+
+    const view = loadSessionView(SID, {
+      ...storageOpts,
+      sessionViewMessageBudget: 2,
+      sessionViewByteBudget: 1024 * 1024,
+    })!;
+    const tail = view.chains[0];
+    expect(tail.messages.map((message) => message.id))
+      .toEqual(['result-message', 'answer-message']);
+
+    const older = loadSessionHistoryPage(
+      SID,
+      tail.id,
+      tail.messageStartIndex,
+      storageOpts,
+    )!;
+    const combined = [...older.messages, ...tail.messages];
+    expect(combined.map((message) => message.id)).toEqual(messages.map((message) => message.id));
+    expect(combined.find((message) => message.id === 'call-message')?.tool_calls?.[0]?.id)
+      .toBe(combined.find((message) => message.id === 'result-message')?.tool_call_id);
+    expect(older.complete).toBe(true);
+  });
+
+  it('keeps an oversized newest message off first paint until explicitly requested', () => {
+    const messages = [
+      makeMessage({ id: 'large-1', content: 'a'.repeat(4_000) }),
+      makeMessage({ id: 'large-2', content: 'b'.repeat(4_000) }),
+      makeMessage({ id: 'large-3', content: 'c'.repeat(4_000) }),
+    ];
+    saveSession(makeSession({
+      id: SID,
+      chains: [makeChain(SID, { id: 'chain-oversized', messages })],
+    }), storageOpts);
+
+    const view = loadSessionView(SID, {
+      ...storageOpts,
+      sessionViewMessageBudget: 50,
+      sessionViewByteBudget: 512,
+    })!;
+
+    expect(view.chains[0].messages).toEqual([]);
+    expect(view.chains[0].messageStartIndex).toBe(3);
+
+    const page = loadSessionHistoryPage(
+      SID,
+      view.chains[0].id,
+      view.chains[0].messageStartIndex,
+      storageOpts,
+    )!;
+    expect(page.messages.map((message) => message.id))
+      .toEqual(['large-1', 'large-2', 'large-3']);
+    expect(page.startIndex).toBe(0);
   });
 });
 
@@ -2141,6 +2726,7 @@ describe('incremental session persistence', () => {
       manager.getTodoStore(session.id).create('Persist incrementally');
       manager.persistTodos(session.id);
       manager.setReasoningEffortOverride(session.id, 'high');
+      manager.setTierOverride(session.id, 'flex');
       manager.setPermissionMode(session.id, 'allow');
       manager.syncSubagentRecords(session.id, [
         makeSubagentRecord(session.id, { id: 'incremental-sub' }),
@@ -2162,7 +2748,177 @@ describe('incremental session persistence', () => {
       'Persist incrementally',
     ]);
     expect(loaded.reasoningEffortOverride).toBe('high');
+    expect(loaded.tierOverride).toBe('flex');
     expect(loaded.permissionMode).toBe('allow');
+  });
+
+  it('reloads complete durable state before bounded full-save fallbacks', () => {
+    const sessionId = 'abababab-abab-4aba-8aba-abababababab';
+    const historical = [
+      makeChain(sessionId, {
+        id: 'fallback-history-one',
+        messages: [
+          makeMessage({ id: 'fallback-h1-user', content: 'older question' }),
+          makeMessage({ id: 'fallback-h1-answer', role: 'assistant', content: 'older answer' }),
+        ],
+      }),
+      makeChain(sessionId, {
+        id: 'fallback-history-two',
+        messages: [
+          makeMessage({ id: 'fallback-h2-user', content: 'newer question' }),
+          makeMessage({ id: 'fallback-h2-answer', role: 'assistant', content: 'newer answer' }),
+        ],
+      }),
+    ];
+    const storedSubagent = makeSubagentRecord(sessionId, { id: 'fallback-sub-stored' });
+    saveSession(makeSession({
+      id: sessionId,
+      chains: historical,
+      subagentChains: [storedSubagent],
+    }), storageOpts);
+
+    const manager = new SessionManager({
+      storage: {
+        ...storageOpts,
+        sessionViewMessageBudget: 1,
+        sessionViewByteBudget: 1024 * 1024,
+      },
+    });
+    const bounded = manager.switchTo(sessionId)!;
+    expect(bounded.chains.some((chain) => chain.messagesLoaded === false)).toBe(true);
+    expect(bounded.subagentChains).toEqual([]);
+
+    let db = openSqliteDb(storageOpts.dbPath!);
+    db.exec(`
+      CREATE TABLE fallback_update_gate (remaining INTEGER NOT NULL);
+      INSERT INTO fallback_update_gate (remaining) VALUES (1);
+      CREATE TRIGGER ignore_next_session_update
+      BEFORE UPDATE ON sessions
+      WHEN (SELECT remaining FROM fallback_update_gate) = 1
+      BEGIN
+        UPDATE fallback_update_gate SET remaining = 0;
+        SELECT RAISE(IGNORE);
+      END
+    `);
+    db.close();
+    manager.rename(sessionId, 'Fallback-safe session');
+
+    db = openSqliteDb(storageOpts.dbPath!);
+    db.prepare('UPDATE fallback_update_gate SET remaining = 1').run();
+    db.close();
+    const active = manager.startChain({
+      messages: [makeMessage({ id: 'fallback-active-user', content: 'current question' })],
+    }, sessionId)!;
+
+    db = openSqliteDb(storageOpts.dbPath!);
+    db.prepare('UPDATE fallback_update_gate SET remaining = 1').run();
+    db.close();
+    manager.syncSubagentRecords(sessionId, [
+      makeSubagentRecord(sessionId, { id: 'fallback-sub-new' }),
+    ]);
+
+    const full = loadSessionForReplacement(sessionId, storageOpts)!;
+    expect(full.name).toBe('Fallback-safe session');
+    expect(full.chains.slice(0, 2).map((chain) => ({
+      id: chain.id,
+      messageIds: chain.messages.map((message) => message.id),
+    }))).toEqual([
+      {
+        id: 'fallback-history-one',
+        messageIds: ['fallback-h1-user', 'fallback-h1-answer'],
+      },
+      {
+        id: 'fallback-history-two',
+        messageIds: ['fallback-h2-user', 'fallback-h2-answer'],
+      },
+    ]);
+    expect(full.activeChainId).toBe(active.id);
+    expect(full.chains.find((chain) => chain.id === active.id)?.status)
+      .toBe(ChainStatus.ACTIVE);
+    expect(full.subagentChains.map((record) => record.id))
+      .toEqual(['fallback-sub-stored', 'fallback-sub-new']);
+  });
+
+  it('restores a missing active row without replacing bounded sibling history', () => {
+    const sessionId = 'edededed-eded-4ede-8ded-edededededed';
+    const historical = [
+      makeChain(sessionId, {
+        id: 'historical-one',
+        messages: [
+          makeMessage({ id: 'h1-user', content: 'older question' }),
+          makeMessage({ id: 'h1-answer', role: 'assistant', content: 'older answer' }),
+        ],
+      }),
+      makeChain(sessionId, {
+        id: 'historical-two',
+        messages: [
+          makeMessage({ id: 'h2-user', content: 'newer question' }),
+          makeMessage({ id: 'h2-answer', role: 'assistant', content: 'newer answer' }),
+        ],
+      }),
+    ];
+    const subagent = makeSubagentRecord(sessionId, { id: 'preserved-subagent' });
+    saveSession(makeSession({
+      id: sessionId,
+      chains: historical,
+      subagentChains: [subagent],
+    }), storageOpts);
+
+    const manager = new SessionManager({
+      storage: {
+        ...storageOpts,
+        sessionViewMessageBudget: 1,
+        sessionViewByteBudget: 1024 * 1024,
+      },
+    });
+    const bounded = manager.switchTo(sessionId)!;
+    expect(bounded.chains.some((chain) => chain.messagesLoaded === false)).toBe(true);
+
+    const active = manager.startChain({
+      messages: [makeMessage({ id: 'active-user', content: 'current question' })],
+    }, sessionId)!;
+    const db = openSqliteDb(storageOpts.dbPath!);
+    db.prepare('DELETE FROM chains WHERE session_id = ? AND id = ?')
+      .run(sessionId, active.id);
+    db.close();
+
+    manager.updateActiveChainMessages([
+      makeMessage({ id: 'active-user', content: 'current question' }),
+      makeMessage({ id: 'active-answer', role: 'assistant', content: 'partial answer' }),
+    ], sessionId);
+
+    let full = loadSession(sessionId, storageOpts)!;
+    expect(full.chains.filter((chain) => chain.id.startsWith('historical-')).map((chain) => ({
+      id: chain.id,
+      messageIds: chain.messages.map((message) => message.id),
+    }))).toEqual([
+      { id: 'historical-one', messageIds: ['h1-user', 'h1-answer'] },
+      { id: 'historical-two', messageIds: ['h2-user', 'h2-answer'] },
+    ]);
+    expect(full.subagentChains.map((record) => record.id)).toEqual([subagent.id]);
+
+    const secondDb = openSqliteDb(storageOpts.dbPath!);
+    secondDb.prepare('DELETE FROM chains WHERE session_id = ? AND id = ?')
+      .run(sessionId, active.id);
+    secondDb.close();
+
+    manager.finishActiveChain(ChainStatus.COMPLETED, sessionId);
+    full = loadSession(sessionId, storageOpts)!;
+    expect(full.chains.filter((chain) => chain.id.startsWith('historical-')).map((chain) => ({
+      id: chain.id,
+      messageIds: chain.messages.map((message) => message.id),
+    }))).toEqual([
+      { id: 'historical-one', messageIds: ['h1-user', 'h1-answer'] },
+      { id: 'historical-two', messageIds: ['h2-user', 'h2-answer'] },
+    ]);
+    expect(full.chains.find((chain) => chain.id === active.id)).toMatchObject({
+      status: ChainStatus.COMPLETED,
+      messages: [
+        expect.objectContaining({ id: 'active-user' }),
+        expect.objectContaining({ id: 'active-answer' }),
+      ],
+    });
+    expect(full.subagentChains.map((record) => record.id)).toEqual([subagent.id]);
   });
 
   it('rolls back a failed terminal chain update without clearing the active chain', () => {
@@ -2467,5 +3223,161 @@ describe('permissionMode SQLite round-trip', () => {
     } finally {
       sessionPermissionOverrides.delete(created.id);
     }
+  });
+});
+
+// ===========================================================================
+// SessionManager.setTierOverride
+// ===========================================================================
+
+describe('SessionManager.setTierOverride', () => {
+  it('sets the override and advances updatedAt', () => {
+    const manager = new SessionManager({ storage: storageOpts });
+    const session = manager.create(DEFAULT_SELECTION);
+    const before = session.updatedAt;
+
+    const start = Date.now();
+    while (Date.now() - start < 5) { /* tick */ }
+
+    manager.setTierOverride(session.id, 'flex');
+
+    const active = manager.getActive()!;
+    expect(active.tierOverride).toBe('flex');
+    expect(active.updatedAt >= before).toBe(true);
+  });
+
+  it('early-returns without mutation when session is not selected by any owner', () => {
+    const manager = new SessionManager({ storage: storageOpts });
+    const session1 = manager.create(DEFAULT_SELECTION);
+    manager.create(ANTHROPIC_SELECTION);
+
+    manager.setTierOverride(session1.id, 'flex');
+
+    const loaded = loadSession(session1.id, storageOpts)!;
+    expect(loaded.tierOverride).toBeNull();
+  });
+
+  it('does not throw for an unknown session id', () => {
+    const manager = new SessionManager({ storage: storageOpts });
+    manager.create(DEFAULT_SELECTION);
+
+    expect(() =>
+      manager.setTierOverride(randomUUID(), 'flex'),
+    ).not.toThrow();
+  });
+
+  it('persists the updated session to storage', () => {
+    const manager = new SessionManager({ storage: storageOpts });
+    const session = manager.create(DEFAULT_SELECTION);
+
+    manager.setTierOverride(session.id, 'turbo');
+
+    _clearDbCache();
+    const loaded = loadSession(session.id, storageOpts)!;
+    expect(loaded.tierOverride).toBe('turbo');
+  });
+
+  it('clears the override when set to null', () => {
+    const manager = new SessionManager({ storage: storageOpts });
+    const session = manager.create(DEFAULT_SELECTION);
+
+    manager.setTierOverride(session.id, 'flex');
+    expect(manager.getActive()!.tierOverride).toBe('flex');
+
+    manager.setTierOverride(session.id, null);
+    expect(manager.getActive()!.tierOverride).toBeNull();
+
+    _clearDbCache();
+    const loaded = loadSession(session.id, storageOpts)!;
+    expect(loaded.tierOverride).toBeNull();
+  });
+});
+
+// ===========================================================================
+// tierOverride SQLite round-trip
+// ===========================================================================
+
+describe('tierOverride SQLite round-trip', () => {
+  it('round-trips a string override', () => {
+    const session = makeSession({
+      id: 'e1e1e1e1-e1e1-4e1e-8e1e-e1e1e1e1e1e1',
+      tierOverride: 'flex',
+    });
+    saveSession(session, storageOpts);
+
+    const loaded = loadSession(session.id, storageOpts)!;
+    expect(loaded.tierOverride).toBe('flex');
+  });
+
+  it('deserializes a blank stored value to null', () => {
+    const sid = 'e2e2e2e2-e2e2-4e2e-8e2e-e2e2e2e2e2e2';
+    const session = makeSession({ id: sid, tierOverride: 'flex' });
+    saveSession(session, storageOpts);
+
+    const db = openSqliteDb(storageOpts.dbPath!);
+    db.prepare('UPDATE sessions SET tier_override = ? WHERE id = ?').run('   ', sid);
+    db.close();
+    _clearDbCache();
+
+    const loaded = loadSession(sid, storageOpts)!;
+    expect(loaded.tierOverride).toBeNull();
+  });
+
+  it('round-trips null override as null', () => {
+    const session = makeSession({
+      id: 'e3e3e3e3-e3e3-4e3e-8e3e-e3e3e3e3e3e3',
+      tierOverride: null,
+    });
+    saveSession(session, storageOpts);
+
+    const loaded = loadSession(session.id, storageOpts)!;
+    expect(loaded.tierOverride).toBeNull();
+  });
+});
+
+// ===========================================================================
+// tierOverride updateSessionFields round-trip
+// ===========================================================================
+
+describe('tierOverride updateSessionFields round-trip', () => {
+  it('writes the override column and loadSession reads it back', () => {
+    const sid = 'e4e4e4e4-e4e4-4e4e-8e4e-e4e4e4e4e4e4';
+    saveSession(makeSession({ id: sid }), storageOpts);
+
+    const persisted = updateSessionFields(sid, {
+      tierOverride: 'fast',
+      updatedAt: '2026-08-01T00:00:00.000Z',
+    }, storageOpts);
+    expect(persisted).toBe(true);
+
+    const loaded = loadSession(sid, storageOpts)!;
+    expect(loaded.tierOverride).toBe('fast');
+  });
+
+  it('clears a prior override when tierOverride is set to null', () => {
+    const sid = 'e5e5e5e5-e5e5-4e5e-8e5e-e5e5e5e5e5e5';
+    saveSession(makeSession({ id: sid, tierOverride: 'fast' }), storageOpts);
+
+    const persisted = updateSessionFields(sid, {
+      tierOverride: null,
+      updatedAt: '2026-08-01T00:00:00.000Z',
+    }, storageOpts);
+    expect(persisted).toBe(true);
+
+    const loaded = loadSession(sid, storageOpts)!;
+    expect(loaded.tierOverride).toBeNull();
+  });
+
+  it('leaves the stored override untouched when tierOverride is not supplied', () => {
+    const sid = 'e6e6e6e6-e6e6-4e6e-8e6e-e6e6e6e6e6e6';
+    saveSession(makeSession({ id: sid, tierOverride: 'flex' }), storageOpts);
+
+    updateSessionFields(sid, {
+      name: 'Renamed without touching tier',
+      updatedAt: '2026-08-01T00:00:00.000Z',
+    }, storageOpts);
+
+    const loaded = loadSession(sid, storageOpts)!;
+    expect(loaded.tierOverride).toBe('flex');
   });
 });

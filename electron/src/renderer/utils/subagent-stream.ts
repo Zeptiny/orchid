@@ -4,7 +4,7 @@ import type {
   SubagentDeltaEvent,
   SubagentLiveProjection,
   SubagentLiveSegment,
-  SubagentRecord,
+  SubagentSummary,
   SubagentSpawnedEvent,
   SubagentStatus,
   SubagentStatusChangedEvent,
@@ -18,7 +18,7 @@ export type SubagentHydrationState = 'loading' | 'ready' | 'empty' | 'error';
 export interface SubagentStreamState {
   readonly sessionId: string | null;
   readonly hydration: SubagentHydrationState;
-  readonly records: readonly SubagentRecord[];
+  readonly records: readonly SubagentSummary[];
   readonly live: ReadonlyMap<string, SubagentLiveProjection>;
   readonly highWater: ReadonlyMap<string, number>;
   readonly runs: ReadonlyMap<string, string>;
@@ -47,7 +47,7 @@ const isRunning = (status: SubagentStatus): boolean =>
 // Timestamp-descending only: sort is stable, so equal timestamps keep input
 // order (spawn/insertion order) — the ordering callers like the Sidebar
 // partition expect when delegating their bucketing to groupSubagents.
-function compareNewest(a: SubagentRecord, b: SubagentRecord): number {
+function compareNewest(a: SubagentSummary, b: SubagentSummary): number {
   return Date.parse(b.start_time) - Date.parse(a.start_time);
 }
 
@@ -124,10 +124,10 @@ export interface SubagentSelectionOptions {
   existingSessionId?: string | null;
 }
 
-export function groupSubagents(records: readonly SubagentRecord[]): {
-  queued: readonly SubagentRecord[];
-  running: readonly SubagentRecord[];
-  ended: readonly SubagentRecord[];
+export function groupSubagents(records: readonly SubagentSummary[]): {
+  queued: readonly SubagentSummary[];
+  running: readonly SubagentSummary[];
+  ended: readonly SubagentSummary[];
 } {
   const sorted = [...records].sort(compareNewest);
   return {
@@ -138,7 +138,7 @@ export function groupSubagents(records: readonly SubagentRecord[]): {
 }
 
 export function resolveSubagentSelection(
-  records: readonly SubagentRecord[],
+  records: readonly SubagentSummary[],
   options: SubagentSelectionOptions,
 ): string | null {
   const ids = new Set(records.map((record) => record.id));
@@ -475,19 +475,4 @@ export function seedSubagentSnapshot(
 
 export function failSubagentSnapshot(state: SubagentStreamState, error: string): SubagentStreamState {
   return { ...state, hydration: 'error', error, buffered: [], bufferedBytes: 0 };
-}
-
-/** Apply session-loaded durable records without disturbing a live projection. */
-export function replaceSubagentRecords(
-  state: SubagentStreamState,
-  records: readonly SubagentRecord[],
-): SubagentStreamState {
-  // ChatView may hand us the session-load result while the richer snapshot is
-  // still in flight. Keep loading affinity intact so the response can seed
-  // high-water marks and replay buffered events over these durable records.
-  return {
-    ...state,
-    records: [...records].sort(compareNewest),
-    hydration: state.hydration === 'loading' ? 'loading' : records.length ? 'ready' : 'empty',
-  };
 }

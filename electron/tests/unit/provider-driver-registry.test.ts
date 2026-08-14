@@ -1,7 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { ProviderConnection, ProviderDefinition } from '../../src/shared/types/provider';
 import type { ProviderCatalogSnapshot } from '../../src/main/providers/catalog/store';
-import type { ProviderStatusObservation } from '../../src/main/providers/status/cache';
 import { catalogToProviderDefinitions } from '../../src/main/providers/catalog/schema';
 import { createCatalogFixture } from '../fixtures/provider-catalog/catalog-fixture';
 
@@ -155,9 +154,11 @@ describe('ProviderDriverRegistry', () => {
     }));
   });
 
-  it('freezes Lilac’s authoritative live discount multiplier into one request price', async () => {
+  it('freezes Lilac live subscription pricing through the driver pricing facet', async () => {
     const { ProviderDriverRegistry } = await import('../../src/main/providers/drivers/registry');
     const { ProviderRuntime } = await import('../../src/main/providers');
+    const { createLilacProviderDriver } = await import('../../src/main/providers/drivers/lilac');
+    const { PricingRefresher } = await import('../../src/main/providers/facets/pricing-refresh');
     const lilacConnection: ProviderConnection = {
       ...connection,
       providerId: 'lilac',
@@ -209,33 +210,27 @@ describe('ProviderDriverRegistry', () => {
         }],
       },
     } as unknown as ProviderCatalogSnapshot;
-    let status: ProviderStatusObservation = {
-      providerId: 'lilac',
-      observedAt: '2026-07-12T12:01:00.000Z',
-      providerUpdatedAt: '2026-07-12T12:01:00.000Z',
-      availability: 'available',
+    let now = new Date('2026-07-12T12:00:30.000Z');
+    const statusPayload = (multiplier: number, discount: number, updatedAt: string) => ({
+      updated_at: updatedAt,
+      window: '5m',
+      window_secs: 300,
       stale: false,
-      error: null,
-      data: {
-        subscriptionSupplyUpdatedAt: '2026-07-12T12:01:00.000Z',
-        models: [{
-          modelId: 'moonshotai/kimi-k2.6',
-          subscription: {
-            availability: 'available',
-            discountPercent: 75,
-            creditMultiplier: 0.25,
-          },
-        }],
-      },
-    };
-    const registry = new ProviderDriverRegistry([{
-      id: 'lilac',
-      supportedAuthMethods: ['api-key'],
-      supportedProtocols: ['openai-compatible'],
-      allowsCustomEndpoint: false,
-      origin: 'https://api.getlilac.com/v1',
+      current_subscription_supply_updated_at: updatedAt,
+      models: [{
+        id: 'moonshotai/kimi-k2.6',
+        current_subscription_supply_state: 'surplus',
+        current_subscription_discount_percent: discount,
+        current_subscription_credit_multiplier: multiplier,
+      }],
+    });
+    let payload = statusPayload(0.25, 75, '2026-07-12T12:00:00.000Z');
+    const fetch = vi.fn(async () => new Response(JSON.stringify(payload), { status: 200 }));
+    const refresher = new PricingRefresher({ now: () => now });
+    const lilacDriver = {
+      ...createLilacProviderDriver({ fetch: fetch as typeof globalThis.fetch, now: () => now }),
       createLanguageModel: vi.fn(async () => ({ kind: 'lilac-model' })),
-    }]);
+    };
     const runtime = new ProviderRuntime({
       catalog: {
         getProviderDefinitions: () => [lilacProvider],
@@ -243,61 +238,58 @@ describe('ProviderDriverRegistry', () => {
       },
       connections: { list: async () => [lilacConnection] },
       vault: { readSecret: vi.fn(async () => ({ kind: 'api-key' as const, apiKey: 'vault-key' })) },
-      status: { get: () => status },
-      registry,
+      registry: new ProviderDriverRegistry([lilacDriver]),
+      pricing: refresher,
+    });
+    const selection = { connectionId: lilacConnection.id, modelId: 'moonshotai/kimi-k2.6' };
+
+    // A request never blocks on pricing freshness: the first freeze holds
+    // catalog list rates while the live fetch runs in the background.
+    const first = await runtime.resolveExecution(selection);
+    expect(first.snapshot.pricing).toMatchObject({
+      rates: { input: { amount: '0.7' }, output: { amount: '3.5' } },
+      provenance: { source: 'catalog', dynamic: { state: 'unavailable' } },
     });
 
-    const first = await runtime.resolveExecution({
-      connectionId: lilacConnection.id,
-      modelId: 'moonshotai/kimi-k2.6',
-    });
-    expect(first.snapshot.pricing).toMatchObject({
-      effectiveAt: '2026-07-12T12:01:00.000Z',
+    await refresher.settled();
+    const second = await runtime.resolveExecution(selection);
+    expect(second.snapshot.pricing).toMatchObject({
+      effectiveAt: '2026-07-12T12:00:00.000Z',
       rates: {
-        input: { amount: '0.175' },
+        input: { amount: '0.175', provenance: { source: 'provider-api' } },
         output: { amount: '0.875' },
       },
       provenance: {
-        source: 'lilac-public-status',
-        discountPercent: 75,
-        creditMultiplier: '0.25',
+        source: 'provider-api',
+        dynamic: { state: 'fresh', adjustment: { multiplier: '0.25', discountPercent: 75 } },
       },
     });
+    // The second resolve stayed inside the declared cadence: no refetch.
+    expect(fetch).toHaveBeenCalledTimes(1);
 
-    // A later status observation changes only a future request snapshot.
-    status = {
-      ...status,
-      observedAt: '2026-07-12T12:06:00.000Z',
-      providerUpdatedAt: '2026-07-12T12:06:00.000Z',
-      data: {
-        subscriptionSupplyUpdatedAt: '2026-07-12T12:06:00.000Z',
-        models: [{
-          modelId: 'moonshotai/kimi-k2.6',
-          subscription: {
-            availability: 'available',
-            discountPercent: 50,
-            creditMultiplier: 0.5,
-          },
-        }],
-      },
-    };
-    const second = await runtime.resolveExecution({
-      connectionId: lilacConnection.id,
-      modelId: 'moonshotai/kimi-k2.6',
+    // A changed multiplier only affects snapshots frozen after its refresh lands.
+    payload = statusPayload(0.5, 50, '2026-07-12T12:06:00.000Z');
+    now = new Date('2026-07-12T12:06:30.000Z');
+    const third = await runtime.resolveExecution(selection);
+    expect(third.snapshot.pricing?.rates.input).toMatchObject({
+      amount: '0.175',
+      provenance: { source: 'provider-api', stale: true },
     });
-    expect(first.snapshot.pricing?.rates.input?.amount).toBe('0.175');
-    expect(second.snapshot.pricing?.rates.input?.amount).toBe('0.35');
+    await refresher.settled();
+    const fourth = await runtime.resolveExecution(selection);
+    expect(fourth.snapshot.pricing?.rates.input).toMatchObject({ amount: '0.35' });
+    expect(second.snapshot.pricing?.rates.input?.amount).toBe('0.175');
 
-    // Stale or incomplete supply data is informational: it cannot block the
-    // model and cannot invent a price, so the signed catalog rate remains.
-    status = { ...status, stale: true };
-    const third = await runtime.resolveExecution({
-      connectionId: lilacConnection.id,
-      modelId: 'moonshotai/kimi-k2.6',
-    });
-    expect(third.snapshot.pricing).toMatchObject({
-      rates: { input: { amount: '0.7' } },
-      provenance: { source: 'signed-catalog' },
+    // An unreachable pricing endpoint keeps last-known rates marked stale.
+    now = new Date('2026-07-12T12:12:00.000Z');
+    fetch.mockRejectedValueOnce(new Error('HTTP 503'));
+    const fifth = await runtime.resolveExecution(selection);
+    expect(fifth.snapshot.pricing?.rates.input?.amount).toBe('0.35');
+    await refresher.settled();
+    const sixth = await runtime.resolveExecution(selection);
+    expect(sixth.snapshot.pricing).toMatchObject({
+      rates: { input: { amount: '0.35', provenance: { source: 'provider-api', stale: true } } },
+      provenance: { source: 'provider-api', dynamic: { state: 'stale', error: 'HTTP 503' } },
     });
   });
 

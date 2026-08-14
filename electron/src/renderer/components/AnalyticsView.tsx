@@ -4,6 +4,7 @@ import { useSession } from '../hooks/useSession';
 import type { UseSessionActivityReturn } from '../hooks/useSessionActivity';
 import { useTimeRange } from '../hooks/useTimeRange';
 import { emitOrchidEvent } from '../utils/events';
+import type { Notify } from '../utils/notify';
 import { LeftSidebar } from './LeftSidebar';
 import { Button } from './ui/Button';
 import { StateMessage } from './ui/StateMessage';
@@ -31,10 +32,11 @@ const ContextTab = lazy(() => import('./analytics/ContextTab').then((m) => ({ de
 interface AnalyticsViewProps {
   onClose: () => void;
   onOpenSettings?: () => void;
+  onNotify: Notify;
   activity: UseSessionActivityReturn;
 }
 
-export function AnalyticsView({ onClose, onOpenSettings, activity }: AnalyticsViewProps) {
+export function AnalyticsView({ onClose, onOpenSettings, onNotify, activity }: AnalyticsViewProps) {
   const session = useSession();
   const [activeTab, setActiveTab] = useState<AnalyticsTab>('overview');
   const [leftCollapsed, setLeftCollapsed] = useState(false);
@@ -82,6 +84,11 @@ export function AnalyticsView({ onClose, onOpenSettings, activity }: AnalyticsVi
   const handleStopSession = useCallback((sessionId: string) => {
     void window.orchid?.chat?.stop?.({ sessionId });
   }, []);
+
+  const handleSessionDeleteError = useCallback((error: unknown) => {
+    const message = error instanceof Error ? error.message : String(error);
+    onNotify(`Delete failed: ${message}`, 'error');
+  }, [onNotify]);
 
   const renderTab = useCallback(() => {
     switch (activeTab) {
@@ -151,6 +158,8 @@ export function AnalyticsView({ onClose, onOpenSettings, activity }: AnalyticsVi
           void handleProjectSessionCreate(projectDir);
         }}
         onSessionDelete={session.deleteSession}
+        onSessionDeleteError={handleSessionDeleteError}
+        deletingSessionIds={session.pendingDeleteIds}
         onSessionSelect={handleSessionSelect}
         activities={activity.activities}
         onStopSession={handleStopSession}

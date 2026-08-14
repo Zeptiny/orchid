@@ -5,9 +5,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ChainStatus } from '../../src/shared/types/chain';
 import type { Session } from '../../src/shared/types/session';
+import type { SessionDeletedEvent } from '../../src/shared/types/ipc';
 
 const listMock = vi.fn();
 const loadMock = vi.fn();
+const historyPageMock = vi.fn();
 const createMock = vi.fn();
 const clearActiveMock = vi.fn();
 const deleteMock = vi.fn();
@@ -20,10 +22,18 @@ const createdHandlers: Array<(event: {
   session: Session;
   draftGeneration?: number;
 }) => void> = [];
-const updatedHandlers: Array<(event: { session: Session }) => void> = [];
+type SessionUpdatePatch = {
+  sessionId: string;
+  chain: Session['chains'][number];
+  activeChainId: string | null;
+  updatedAt: string;
+};
+
+const updatedHandlers: Array<(event: SessionUpdatePatch) => void> = [];
 const workspaceHandlers: Array<(event: {
-  workspace: { cwd: string | null; source: string; status: string };
+  workspace: { cwd: string | null; source: string; status: string; trust?: string };
 }) => void> = [];
+const deletedHandlers: Array<(event: SessionDeletedEvent) => void> = [];
 
 function makeSession(overrides: Partial<Session> = {}): Session {
   const now = new Date().toISOString();
@@ -48,6 +58,8 @@ function makeSession(overrides: Partial<Session> = {}): Session {
       subagentRecord: null,
       startTime: now,
       endTime: null,
+      errorDetail: null,
+      errorTitle: null,
     }],
     activeChainId: overrides.activeChainId ?? chainId,
     createdAt: overrides.createdAt ?? now,
@@ -62,12 +74,14 @@ function installOrchidApi() {
   createdHandlers.length = 0;
   updatedHandlers.length = 0;
   workspaceHandlers.length = 0;
+  deletedHandlers.length = 0;
 
   vi.stubGlobal('window', {
     orchid: {
       session: {
         list: listMock,
         load: loadMock,
+        loadHistoryPage: historyPageMock,
         create: createMock,
         clearActive: clearActiveMock,
         delete: deleteMock,
@@ -91,7 +105,7 @@ function installOrchidApi() {
             if (idx >= 0) createdHandlers.splice(idx, 1);
           };
         },
-        onUpdated: (handler: (event: { session: Session }) => void) => {
+        onUpdated: (handler: (event: SessionUpdatePatch) => void) => {
           updatedHandlers.push(handler);
           return () => {
             const idx = updatedHandlers.indexOf(handler);
@@ -99,12 +113,19 @@ function installOrchidApi() {
           };
         },
         onWorkspaceChanged: (handler: (event: {
-          workspace: { cwd: string | null; source: string; status: string };
+          workspace: { cwd: string | null; source: string; status: string; trust?: string };
         }) => void) => {
           workspaceHandlers.push(handler);
           return () => {
             const idx = workspaceHandlers.indexOf(handler);
             if (idx >= 0) workspaceHandlers.splice(idx, 1);
+          };
+        },
+        onDeleted: (handler: (event: SessionDeletedEvent) => void) => {
+          deletedHandlers.push(handler);
+          return () => {
+            const idx = deletedHandlers.indexOf(handler);
+            if (idx >= 0) deletedHandlers.splice(idx, 1);
           };
         },
       },
@@ -117,6 +138,7 @@ describe('useSession shared cache', () => {
     vi.resetModules();
     listMock.mockReset();
     loadMock.mockReset();
+    historyPageMock.mockReset();
     createMock.mockReset();
     clearActiveMock.mockReset();
     deleteMock.mockReset();
@@ -128,6 +150,55 @@ describe('useSession shared cache', () => {
 
   afterEach(() => {
     vi.unstubAllGlobals();
+  });
+
+  it('keeps unused loading state out of the shared snapshot', async () => {
+    const { __sessionCacheTest } = await import('../../src/renderer/hooks/useSession');
+    __sessionCacheTest.reset();
+
+    expect(__sessionCacheTest.getSnapshot()).not.toHaveProperty('isLoading');
+  });
+
+  it('deduplicates workspace updates by stable fields', async () => {
+    listMock.mockResolvedValue([]);
+    getWorkspaceMock.mockResolvedValue({ cwd: null, source: 'unbound', status: 'unbound' });
+    const { __sessionCacheTest } = await import('../../src/renderer/hooks/useSession');
+    __sessionCacheTest.reset();
+    __sessionCacheTest.ensureBootstrapped();
+    await Promise.resolve();
+
+    const listener = vi.fn();
+    const unsubscribe = __sessionCacheTest.subscribe(listener);
+    for (const handler of workspaceHandlers) {
+      handler({ workspace: { cwd: '/project', source: 'session', status: 'valid' } });
+    }
+    expect(listener).toHaveBeenCalledOnce();
+
+    listener.mockClear();
+    for (const handler of workspaceHandlers) {
+      handler({
+        workspace: {
+          cwd: '/project',
+          source: 'session',
+          status: 'valid',
+          trust: 'trusted',
+        },
+      });
+    }
+    expect(listener).not.toHaveBeenCalled();
+
+    for (const handler of workspaceHandlers) {
+      handler({
+        workspace: {
+          cwd: '/project',
+          source: 'session',
+          status: 'valid',
+          trust: 'untrusted',
+        },
+      });
+    }
+    expect(listener).toHaveBeenCalledOnce();
+    unsubscribe();
   });
 
   it('shares active session across load from a second consumer', async () => {
@@ -157,6 +228,137 @@ describe('useSession shared cache', () => {
     expect(loadMock).toHaveBeenCalledTimes(2);
   });
 
+  it('prepends an older bounded history page into the active chain', async () => {
+    const recent = {
+      id: 'recent',
+      role: 'assistant' as const,
+      content: 'recent',
+      type: 'text' as const,
+      tool_calls: null,
+      tool_call_id: null,
+      name: null,
+      thinking: null,
+      timestamp: new Date().toISOString(),
+      usage: null,
+      hidden: false,
+      tool_result: null,
+    };
+    const older = { ...recent, id: 'older', content: 'older' };
+    const base = makeSession({ id: 'paged-session' });
+    const session = makeSession({
+      id: 'paged-session',
+      chains: [{
+        ...base.chains[0],
+        id: 'paged-chain',
+        messages: [recent],
+        messagesLoaded: false,
+        messageStartIndex: 1,
+        messageCount: 2,
+      }],
+    });
+    loadMock.mockResolvedValue(session);
+    historyPageMock.mockResolvedValue({
+      sessionId: session.id,
+      chainId: 'paged-chain',
+      messages: [older],
+      startIndex: 0,
+      totalMessages: 2,
+      complete: true,
+    });
+
+    const { __sessionCacheTest } = await import('../../src/renderer/hooks/useSession');
+    __sessionCacheTest.reset();
+    await __sessionCacheTest.load(session.id);
+    await __sessionCacheTest.loadHistoryPage('paged-chain');
+
+    const chain = __sessionCacheTest.getActiveSession()?.chains[0];
+    expect(chain?.messages.map((message) => message.id)).toEqual(['older', 'recent']);
+    expect(chain?.messagesLoaded).toBe(true);
+    expect(chain?.messageStartIndex).toBe(0);
+  });
+
+  it('drops a history page that resolves after switching sessions', async () => {
+    const makePaged = (id: string) => {
+      const base = makeSession({ id });
+      return makeSession({
+        id,
+        chains: [{
+          ...base.chains[0],
+          id: `${id}-chain`,
+          messages: [],
+          messagesLoaded: false,
+          messageStartIndex: 1,
+          messageCount: 1,
+        }],
+      });
+    };
+    const sessionA = makePaged('session-a');
+    const sessionB = makeSession({ id: 'session-b' });
+    loadMock.mockImplementation(async ({ id }: { id: string }) => (
+      id === sessionA.id ? sessionA : sessionB
+    ));
+    let resolvePage!: (value: unknown) => void;
+    historyPageMock.mockReturnValue(new Promise((resolve) => {
+      resolvePage = resolve;
+    }));
+
+    const { __sessionCacheTest } = await import('../../src/renderer/hooks/useSession');
+    __sessionCacheTest.reset();
+    await __sessionCacheTest.load(sessionA.id);
+    const pageFlight = __sessionCacheTest.loadHistoryPage(`${sessionA.id}-chain`);
+    await __sessionCacheTest.load(sessionB.id);
+    resolvePage({
+      sessionId: sessionA.id,
+      chainId: `${sessionA.id}-chain`,
+      messages: [],
+      startIndex: 0,
+      totalMessages: 1,
+      complete: true,
+    });
+    await pageFlight;
+
+    expect(__sessionCacheTest.getActiveSession()?.id).toBe(sessionB.id);
+    expect(__sessionCacheTest.getActiveSession()?.chains[0])
+      .toEqual(sessionB.chains[0]);
+  });
+
+  it('merges a narrow session update without replacing unrelated session state', async () => {
+    const retainedSubagents = [{ id: 'subagent-retained' } as never];
+    const session = makeSession({
+      id: 's1',
+      name: 'Keep me',
+      subagentChains: retainedSubagents,
+    });
+    listMock.mockResolvedValue([]);
+    getWorkspaceMock.mockResolvedValue({ cwd: null, source: 'unbound', status: 'unbound' });
+    loadMock.mockResolvedValue(session);
+
+    const { __sessionCacheTest } = await import('../../src/renderer/hooks/useSession');
+    __sessionCacheTest.reset();
+    __sessionCacheTest.ensureBootstrapped();
+    await __sessionCacheTest.load('s1');
+
+    const updatedAt = new Date(Date.parse(session.updatedAt) + 1_000).toISOString();
+    const updatedChain = {
+      ...session.chains[0],
+      status: ChainStatus.COMPLETED,
+      endTime: updatedAt,
+    };
+    updatedHandlers[0]?.({
+      sessionId: session.id,
+      chain: updatedChain,
+      activeChainId: null,
+      updatedAt,
+    });
+
+    const updated = __sessionCacheTest.getActiveSession();
+    expect(updated?.name).toBe('Keep me');
+    expect(updated?.chains).toEqual([updatedChain]);
+    expect(updated?.activeChainId).toBeNull();
+    expect(updated?.updatedAt).toBe(updatedAt);
+    expect(updated?.subagentChains).toBe(retainedSubagents);
+  });
+
   it('enterDraft clears active session for all consumers', async () => {
     const session = makeSession({ id: 's1' });
     listMock.mockResolvedValue([
@@ -176,6 +378,163 @@ describe('useSession shared cache', () => {
     expect(__sessionCacheTest.getActiveSession()).toBeNull();
     expect(clearActiveMock).toHaveBeenCalledTimes(1);
     expect(__sessionCacheTest.getDraftGeneration()).toBeGreaterThan(0);
+  });
+
+  it('marks a deletion pending immediately, deduplicates it, and removes the session locally', async () => {
+    const sessionA = makeSession({ id: 'a', name: 'Alpha' });
+    const summaries = [
+      { id: 'a', name: 'Alpha', modelLabel: null, cwd: null, chainCount: 1, updatedAt: 2 },
+      { id: 'b', name: 'Beta', modelLabel: null, cwd: null, chainCount: 1, updatedAt: 1 },
+    ];
+    listMock.mockResolvedValue(summaries);
+    loadMock.mockResolvedValue(sessionA);
+    let resolveDelete!: (value: unknown) => void;
+    deleteMock.mockReturnValue(new Promise((resolve) => {
+      resolveDelete = resolve;
+    }));
+
+    const { __sessionCacheTest } = await import('../../src/renderer/hooks/useSession');
+    __sessionCacheTest.reset();
+    await __sessionCacheTest.refresh();
+    await __sessionCacheTest.load('a');
+
+    const first = __sessionCacheTest.deleteSession('a');
+    const second = __sessionCacheTest.deleteSession('a');
+    expect(__sessionCacheTest.getSnapshot().pendingDeleteIds.has('a')).toBe(true);
+    expect(deleteMock).toHaveBeenCalledTimes(1);
+
+    const workingSet = {
+      openSessionIds: ['b'],
+      focusedSessionId: 'b',
+      mruSessionIds: ['b'],
+    };
+    resolveDelete({ status: 'deleted', workingSet });
+
+    await expect(first).resolves.toEqual({ status: 'deleted', workingSet });
+    await expect(second).resolves.toEqual({ status: 'deleted', workingSet });
+    expect(__sessionCacheTest.getSnapshot().pendingDeleteIds.has('a')).toBe(false);
+    expect(__sessionCacheTest.getActiveSession()).toBeNull();
+    expect(__sessionCacheTest.getListState()).toEqual({
+      status: 'ready',
+      sessions: [summaries[1]],
+    });
+    expect(listMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('clears pending deletion state and preserves the row when deletion fails', async () => {
+    const summary = {
+      id: 'a',
+      name: 'Alpha',
+      modelLabel: null,
+      cwd: null,
+      chainCount: 1,
+      updatedAt: 1,
+    };
+    listMock.mockResolvedValue([summary]);
+    deleteMock.mockRejectedValue(new Error('disk unavailable'));
+
+    const { __sessionCacheTest } = await import('../../src/renderer/hooks/useSession');
+    __sessionCacheTest.reset();
+    await __sessionCacheTest.refresh();
+
+    const deletion = __sessionCacheTest.deleteSession('a');
+    expect(__sessionCacheTest.getSnapshot().pendingDeleteIds.has('a')).toBe(true);
+    await expect(deletion).rejects.toThrow('disk unavailable');
+    expect(__sessionCacheTest.getSnapshot().pendingDeleteIds.has('a')).toBe(false);
+    expect(__sessionCacheTest.getListState()).toEqual({
+      status: 'ready',
+      sessions: [summary],
+    });
+  });
+
+  it('does not let a pre-delete catalog refresh resurrect the deleted row', async () => {
+    const summaryA = {
+      id: 'a',
+      name: 'Alpha',
+      modelLabel: null,
+      cwd: null,
+      chainCount: 1,
+      updatedAt: 2,
+    };
+    const summaryB = {
+      id: 'b',
+      name: 'Beta',
+      modelLabel: null,
+      cwd: null,
+      chainCount: 1,
+      updatedAt: 1,
+    };
+    let resolveStaleRefresh!: (value: unknown) => void;
+    listMock
+      .mockResolvedValueOnce([summaryA, summaryB])
+      .mockReturnValueOnce(new Promise((resolve) => {
+        resolveStaleRefresh = resolve;
+      }))
+      .mockResolvedValueOnce([summaryA, summaryB]);
+    deleteMock.mockResolvedValue({
+      status: 'deleted',
+      workingSet: {
+        openSessionIds: ['b'],
+        focusedSessionId: 'b',
+        mruSessionIds: ['b'],
+      },
+    });
+
+    const { __sessionCacheTest } = await import('../../src/renderer/hooks/useSession');
+    __sessionCacheTest.reset();
+    await __sessionCacheTest.refresh();
+    const staleRefresh = __sessionCacheTest.refresh();
+    await __sessionCacheTest.deleteSession('a');
+    resolveStaleRefresh([summaryA, summaryB]);
+    await staleRefresh;
+
+    expect(__sessionCacheTest.getListState()).toEqual({
+      status: 'ready',
+      sessions: [summaryB],
+    });
+  });
+
+  it('applies a deletion broadcast once when the invoke response arrives later', async () => {
+    const sessionA = makeSession({ id: 'a', name: 'Alpha' });
+    const summaries = [
+      { id: 'a', name: 'Alpha', modelLabel: null, cwd: null, chainCount: 1, updatedAt: 2 },
+      { id: 'b', name: 'Beta', modelLabel: null, cwd: null, chainCount: 1, updatedAt: 1 },
+    ];
+    listMock.mockResolvedValue(summaries);
+    loadMock.mockResolvedValue(sessionA);
+    getWorkspaceMock.mockResolvedValue({ cwd: null, source: 'unbound', status: 'unbound' });
+    let resolveDelete!: (value: unknown) => void;
+    deleteMock.mockReturnValue(new Promise((resolve) => { resolveDelete = resolve; }));
+
+    const { __sessionCacheTest } = await import('../../src/renderer/hooks/useSession');
+    __sessionCacheTest.reset();
+    __sessionCacheTest.ensureBootstrapped();
+    await __sessionCacheTest.refresh();
+    await __sessionCacheTest.load('a');
+    const deletion = __sessionCacheTest.deleteSession('a');
+    const event = {
+      id: 'a',
+      workingSet: {
+        openSessionIds: ['b'],
+        focusedSessionId: 'b',
+        mruSessionIds: ['b'],
+      },
+    };
+
+    deletedHandlers[0]?.(event);
+    const firstNotice = __sessionCacheTest.getSnapshot().deletionNotice;
+    expect(firstNotice).toMatchObject({ id: 'a', wasActive: true, sequence: 1 });
+    expect(__sessionCacheTest.getActiveSession()).toBeNull();
+    expect(__sessionCacheTest.getListState()).toEqual({
+      status: 'ready',
+      sessions: [summaries[1]],
+    });
+
+    resolveDelete({ status: 'deleted', workingSet: event.workingSet });
+    await deletion;
+
+    expect(__sessionCacheTest.getSnapshot().deletionNotice).toBe(firstNotice);
+    expect(listMock).toHaveBeenCalledTimes(2);
   });
 
   it('drops stale load when a newer load supersedes it', async () => {
@@ -355,13 +714,39 @@ describe('useSession shared cache', () => {
     expect(__sessionCacheTest.getSnapshot().activeSession?.id).toBe('b');
     expect(__sessionCacheTest.getSnapshot().activeSession?.name).toBe('Beta');
 
-    // Workspace event fans out to every subscriber.
+    // An equivalent workspace event is ignored; a semantic change fans out.
     chatListener.mockClear();
     configListener.mockClear();
     for (const handler of workspaceHandlers) {
       handler({ workspace: { cwd: '/proj/b', source: 'session', status: 'valid' } });
     }
     expect(__sessionCacheTest.getSnapshot().workspace?.cwd).toBe('/proj/b');
+    expect(chatListener).not.toHaveBeenCalled();
+    expect(configListener).not.toHaveBeenCalled();
+
+    for (const handler of workspaceHandlers) {
+      handler({
+        workspace: {
+          cwd: '/proj/b',
+          source: 'session',
+          status: 'valid',
+          trust: 'trusted',
+        },
+      });
+    }
+    expect(chatListener).not.toHaveBeenCalled();
+    expect(configListener).not.toHaveBeenCalled();
+
+    for (const handler of workspaceHandlers) {
+      handler({
+        workspace: {
+          cwd: '/proj/b',
+          source: 'session',
+          status: 'valid',
+          trust: 'untrusted',
+        },
+      });
+    }
     expect(chatListener).toHaveBeenCalled();
     expect(configListener).toHaveBeenCalled();
 

@@ -37,6 +37,8 @@ import { StatusBadge } from './ui/StatusBadge';
 import { SessionActivitySection } from './session-activity-section';
 import { SessionNameEditor } from './SessionNameEditor';
 
+const EMPTY_SESSION_IDS: ReadonlySet<string> = new Set();
+
 interface LeftSidebarProps {
   isCollapsed: boolean;
   isOverlay?: boolean;
@@ -45,7 +47,9 @@ interface LeftSidebarProps {
   activeSessionId: string | null;
   onSessionSelect: (id: string) => void;
   onSessionCreate: () => void;
-  onSessionDelete: (id: string) => void;
+  onSessionDelete: (id: string) => void | Promise<unknown>;
+  onSessionDeleteError?: (error: unknown) => void;
+  deletingSessionIds?: ReadonlySet<string>;
   onSessionRename?: (id: string, name: string) => void | Promise<void>;
   onRefreshSessions: () => void;
   onOpenSettings: () => void;
@@ -97,6 +101,8 @@ export const LeftSidebar = memo(function LeftSidebar({
   onSessionSelect,
   onSessionCreate,
   onSessionDelete,
+  onSessionDeleteError,
+  deletingSessionIds = EMPTY_SESSION_IDS,
   onSessionRename,
   onRefreshSessions,
   onOpenSettings,
@@ -262,6 +268,8 @@ export const LeftSidebar = memo(function LeftSidebar({
             activeSessionId={activeSessionId}
             selectedProjectPath={selectedProjectPath}
             onDelete={onSessionDelete}
+            onDeleteError={onSessionDeleteError}
+            deletingSessionIds={deletingSessionIds}
             onRename={onSessionRename}
             onRefresh={onRefreshSessions}
             onSelect={onSessionSelect}
@@ -428,7 +436,9 @@ interface ProjectSessionListProps {
   selectedProjectPath: string | null;
   onSelect: (id: string) => void;
   onProjectSelect?: (projectDir: string) => void;
-  onDelete: (id: string) => void;
+  onDelete: (id: string) => void | Promise<unknown>;
+  onDeleteError?: (error: unknown) => void;
+  deletingSessionIds: ReadonlySet<string>;
   onRename?: (id: string, name: string) => void | Promise<void>;
   onRefresh: () => void;
   isUnbound: boolean;
@@ -446,6 +456,8 @@ function ProjectSessionList({
   onSelect,
   onProjectSelect,
   onDelete,
+  onDeleteError,
+  deletingSessionIds,
   onRename,
   onRefresh,
   isUnbound,
@@ -702,6 +714,8 @@ function ProjectSessionList({
                     onActivate={setActiveIndex}
                     onSelect={onSelect}
                     onDelete={onDelete}
+                    onDeleteError={onDeleteError}
+                    isDeleting={deletingSessionIds.has(session.id)}
                     onRename={onRename}
                   />
                 );
@@ -749,6 +763,8 @@ const SessionRow = memo(function SessionRow({
   onActivate,
   onSelect,
   onDelete,
+  onDeleteError,
+  isDeleting,
   onRename,
 }: {
   session: SessionSummary;
@@ -760,7 +776,9 @@ const SessionRow = memo(function SessionRow({
   showPathHint: boolean;
   onActivate: (index: number) => void;
   onSelect: (id: string) => void;
-  onDelete: (id: string) => void;
+  onDelete: (id: string) => void | Promise<unknown>;
+  onDeleteError?: (error: unknown) => void;
+  isDeleting: boolean;
   onRename?: (id: string, name: string) => void | Promise<void>;
 }) {
   const pathHint = session.cwd
@@ -771,9 +789,10 @@ const SessionRow = memo(function SessionRow({
     : null;
 
   const handleSelect = useCallback(() => {
+    if (isDeleting) return;
     onActivate(sessionIndex);
     onSelect(session.id);
-  }, [onActivate, onSelect, sessionIndex, session.id]);
+  }, [isDeleting, onActivate, onSelect, sessionIndex, session.id]);
 
   return (
     <div
@@ -784,6 +803,7 @@ const SessionRow = memo(function SessionRow({
         id={optionId}
         role="option"
         aria-selected={isActive}
+        aria-disabled={isDeleting || undefined}
         tabIndex={-1}
         className={`session-item ${isActive ? 'session-item-active' : ''} ${
           isKeyboardActive ? 'session-item-keyboard' : ''
@@ -798,7 +818,7 @@ const SessionRow = memo(function SessionRow({
           />
         )}
         <span className="session-item-main min-w-0">
-          {onRename ? (
+          {onRename && !isDeleting ? (
             <SessionNameEditor
               name={session.name}
               className="session-item-name truncate"
@@ -823,14 +843,24 @@ const SessionRow = memo(function SessionRow({
         shape="square"
         className="session-item-delete"
         tabIndex={-1}
+        loading={isDeleting}
         onClick={(event) => {
           event.stopPropagation();
-          onDelete(session.id);
+          if (isDeleting) return;
+          try {
+            void Promise.resolve(onDelete(session.id)).catch((error) => {
+              if (onDeleteError) onDeleteError(error);
+              else console.error('Failed to delete session:', error);
+            });
+          } catch (error) {
+            if (onDeleteError) onDeleteError(error);
+            else console.error('Failed to delete session:', error);
+          }
         }}
-        title="Delete session"
-        aria-label="Delete session"
+        title={isDeleting ? 'Deleting session' : 'Delete session'}
+        aria-label={isDeleting ? 'Deleting session' : 'Delete session'}
       >
-        <Icon name="trash" size={12} />
+        {!isDeleting && <Icon name="trash" size={12} />}
       </Button>
     </div>
   );

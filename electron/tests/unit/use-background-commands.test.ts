@@ -84,6 +84,26 @@ describe('useBackgroundCommands', () => {
     expect(bgCmd.onChanged).not.toHaveBeenCalled();
   });
 
+  it('defers fleet hydration until its inspector surface is enabled', async () => {
+    const bgCmd = installBgCmd(async () => [listItem()]);
+    const { result, rerender } = renderHook(
+      ({ enabled }) => useBackgroundCommands('sess-1', enabled),
+      { initialProps: { enabled: false } },
+    );
+    await flush();
+
+    expect(result.current.state.status).toBe('empty');
+    expect(bgCmd.list).not.toHaveBeenCalled();
+    expect(bgCmd.onChanged).not.toHaveBeenCalled();
+
+    rerender({ enabled: true });
+    await flush();
+
+    expect(bgCmd.list).toHaveBeenCalledOnce();
+    expect(bgCmd.onChanged).toHaveBeenCalledOnce();
+    expect(result.current.state.status).toBe('ready');
+  });
+
   it('refetches when a bgcmd:changed event matches the active session', async () => {
     const bgCmd = installBgCmd(async () => [listItem()]);
     const { result } = renderHook(() => useBackgroundCommands('sess-1'));
@@ -189,6 +209,65 @@ describe('useBackgroundCommands', () => {
     });
 
     expect(result.current.state.status).toBe('empty');
+  });
+
+  it('discards a pending list result after the inspector is disabled', async () => {
+    let resolveList!: (items: BgCommandListItem[]) => void;
+    const bgCmd = installBgCmd(() => new Promise<BgCommandListItem[]>((resolve) => {
+      resolveList = resolve;
+    }));
+    const { result, rerender } = renderHook(
+      ({ enabled }) => useBackgroundCommands('sess-1', enabled),
+      { initialProps: { enabled: true } },
+    );
+    expect(bgCmd.list).toHaveBeenCalledOnce();
+
+    rerender({ enabled: false });
+    expect(result.current.state.status).toBe('empty');
+
+    await act(async () => {
+      resolveList([listItem()]);
+      await Promise.resolve();
+    });
+    expect(result.current.state.status).toBe('empty');
+  });
+
+  it('keeps the newest same-session refresh when requests resolve out of order', async () => {
+    const bgCmd = installBgCmd(async () => []);
+    const { result } = renderHook(() => useBackgroundCommands('sess-1'));
+    await flush();
+
+    let resolveOlder!: (items: BgCommandListItem[]) => void;
+    let resolveNewer!: (items: BgCommandListItem[]) => void;
+    bgCmd.list
+      .mockImplementationOnce(() => new Promise<BgCommandListItem[]>((resolve) => {
+        resolveOlder = resolve;
+      }))
+      .mockImplementationOnce(() => new Promise<BgCommandListItem[]>((resolve) => {
+        resolveNewer = resolve;
+      }));
+
+    act(() => {
+      void result.current.refresh();
+      void result.current.refresh();
+    });
+    await act(async () => {
+      resolveNewer([listItem({ id: 2 })]);
+      await Promise.resolve();
+    });
+    expect(result.current.state).toEqual({
+      status: 'ready',
+      commands: [expect.objectContaining({ id: 2 })],
+    });
+
+    await act(async () => {
+      resolveOlder([listItem({ id: 1 })]);
+      await Promise.resolve();
+    });
+    expect(result.current.state).toEqual({
+      status: 'ready',
+      commands: [expect.objectContaining({ id: 2 })],
+    });
   });
 
   it('cleans up the subscription on unmount and guards late results', async () => {

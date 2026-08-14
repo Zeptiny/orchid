@@ -71,6 +71,10 @@ vi.mock('../../src/main/providers/runtime-context', () => ({
 }));
 
 import * as providerIpc from '../../src/main/ipc/providers';
+import {
+  registerProviderModelsIPC,
+  unregisterProviderModelsIPC,
+} from '../../src/main/ipc/provider-models';
 import { ProviderRuntime } from '../../src/main/providers';
 import { calculateAttemptCost } from '../../src/main/providers/accounting/cost';
 import { ProviderAccountingStore } from '../../src/main/providers/accounting/store';
@@ -276,6 +280,7 @@ function createLilacFixtureFetch(): {
 
 afterEach(() => {
   providerIpc.unregisterProviderIPC();
+  unregisterProviderModelsIPC();
   providerIpc._setProviderIPCServicesForTests(null);
   electron.handlers.clear();
   for (const ledger of ledgers) ledger.close();
@@ -293,6 +298,7 @@ describe('provider end-to-end public contracts', () => {
     const fixture = createServices(root);
     providerIpc._setProviderIPCServicesForTests(fixture.services);
     providerIpc.registerProviderIPC();
+    registerProviderModelsIPC();
 
     const freshOverview = await invoke<ProviderOverview>(IPC_CHANNELS.PROVIDERS_LIST);
     expect(freshOverview.connections).toEqual([]);
@@ -440,6 +446,7 @@ describe('provider end-to-end public contracts', () => {
     const fixture = createServices(root);
     providerIpc._setProviderIPCServicesForTests(fixture.services);
     providerIpc.registerProviderIPC();
+    registerProviderModelsIPC();
     const ready = await createReadyConnection('Status Lilac');
     const transport = createLilacFixtureFetch();
     const source: ProviderStatusSource = {

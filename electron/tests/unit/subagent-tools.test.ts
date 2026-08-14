@@ -25,7 +25,10 @@ import {
   subagentRecordToStorageDict,
 } from '../../src/shared/serialization/chain-subagent';
 import { persistSubagentChains } from '../../src/main/agents/persist-subagent-chains';
-import { hydrateSubagentRecords } from '../../src/main/tools/subagent/hydrate';
+import {
+  hydrateSubagentRecords,
+  hydrateSessionSubagents,
+} from '../../src/main/tools/subagent/hydrate';
 import { recoverSubagentPersistence } from '../../src/main/agents/subagent-persistence-recovery';
 import type { StreamEvent } from '../../src/main/llm/orchestrator';
 import { buildDelegateTool as buildDelegateToolRaw } from '../../src/main/tools/subagent/delegate';
@@ -89,6 +92,10 @@ vi.mock('../../src/main/session/singleton', () => ({
     },
 }));
 
+afterEach(() => {
+  sessionManagerHolder.current = null;
+});
+
 /**
  * The close tool flushes the closed flag through `recoverSubagentPersistence`
  * via a lazy `await import('../../agents/subagent-persistence-recovery')` (same pattern as
@@ -120,6 +127,25 @@ const codeReviewerAgent: Agent = {
   allowed_tools: ['read', 'grep', 'glob'],
   allowed_skills: ['*'],
 };
+
+function installUnresolvableStoredSession(sessionId: string): string {
+  const source = new SubagentManager();
+  const stored = source.spawn('stored', 'old task', codeReviewerAgent, { sessionId });
+  source.markCompleted(stored.id, 'stored result');
+  const domain = subagentRecordFromStorageDict(
+    subagentRecordToStorageDict(runtimeToDomain(stored)),
+  );
+  const session = {
+    id: sessionId,
+    cwd: '/definitely/not/a/project',
+    subagentChains: [domain],
+  };
+  sessionManagerHolder.current = {
+    getSession: (id) => id === sessionId ? session : null,
+    getActive: () => null,
+  };
+  return stored.id;
+}
 
 const fileExplorerAgent: Agent = {
   name: 'file-explorer',
@@ -377,6 +403,7 @@ describe('wait_for_subagent', () => {
 
   beforeEach(() => {
     manager = new SubagentManager();
+    sessionManagerHolder.current = null;
   });
 
   it('should return result when subagent completes', async () => {
@@ -394,6 +421,57 @@ describe('wait_for_subagent', () => {
     expect(result.agentProjection.content).toContain(record.id);
     expect(result.agentProjection.content).toContain('completed');
     expect(result.agentProjection.content).toContain('Found 3 issues');
+  });
+
+  it('hydrates a persisted record before applying the ownership filter', async () => {
+    const sessionId = 'session-persisted-wait';
+    const source = new SubagentManager();
+    const stored = source.spawn('persisted', 'old task', codeReviewerAgent, { sessionId });
+    source.markCompleted(stored.id, 'restored result');
+    const domain = subagentRecordFromStorageDict(
+      subagentRecordToStorageDict(runtimeToDomain(stored)),
+    );
+    sessionManagerHolder.current = {
+      getSession: (id) => id === sessionId
+        ? { id: sessionId, cwd: '/tmp', subagentChains: [domain] }
+        : null,
+      getActive: () => null,
+    };
+
+    const { handler } = buildWaitTool(manager);
+    const result = (await handler(
+      { subagent_ids: [stored.id] },
+      {
+        ...toolContext,
+        sessionId,
+        projectRuntime: {
+          ...toolContext.projectRuntime,
+          agents: makeAgentMap(),
+        },
+      },
+    )) as ToolExecutionResult;
+
+    expect(result.canonical.status).toBe('complete');
+    expect(result.agentProjection.content).toContain('restored result');
+    expect(manager.getRecord(stored.id)?.sessionId).toBe(sessionId);
+  });
+
+  it('returns a framed tool error when session hydration fails', async () => {
+    const sessionId = 'session-unresolvable-wait';
+    const storedId = installUnresolvableStoredSession(sessionId);
+    const { handler } = buildWaitTool(manager);
+
+    const result = await handler(
+      { subagent_ids: [storedId] },
+      {
+        cwd: '/definitely/not/a/project',
+        sessionId,
+        agentScopeId: 'main',
+      },
+    );
+
+    expect(result.canonical.status).toBe('error');
+    expect(result.agentProjection.content).toMatch(/project runtime/i);
   });
 
   it('should block until subagent completes then return result', async () => {
@@ -656,6 +734,24 @@ describe('interrupt_subagents', () => {
     expect(result.agentProjection.content).toContain('<interrupted>');
     expect(result.agentProjection.content).toContain(record.id);
     expect(record.state).toBe(SubagentState.INTERRUPTED);
+  });
+
+  it('returns a framed tool error when session hydration fails', async () => {
+    const sessionId = 'session-unresolvable-interrupt';
+    const storedId = installUnresolvableStoredSession(sessionId);
+    const { handler } = buildInterruptTool(manager);
+
+    const result = await handler(
+      { subagent_ids: [storedId] },
+      {
+        cwd: '/definitely/not/a/project',
+        sessionId,
+        agentScopeId: 'main',
+      },
+    );
+
+    expect(result.canonical.status).toBe('error');
+    expect(result.agentProjection.content).toMatch(/project runtime/i);
   });
 
   it('should cancel all running subagents in this session when IDs empty', async () => {
@@ -1089,6 +1185,24 @@ describe('answer_subagent', () => {
     await expect(questionPromise).resolves.toEqual({ type: 'answered', answers });
   });
 
+  it('returns a framed tool error when session hydration fails', async () => {
+    const sessionId = 'session-unresolvable-answer';
+    const storedId = installUnresolvableStoredSession(sessionId);
+    const { handler } = buildAnswerSubagentTool(manager);
+
+    const result = await handler(
+      { subagent_id: storedId, tool_call_id: 'tc-1', decline: true },
+      {
+        cwd: '/definitely/not/a/project',
+        sessionId,
+        agentScopeId: 'main',
+      },
+    );
+
+    expect(result.canonical.status).toBe('error');
+    expect(result.agentProjection.content).toMatch(/project runtime/i);
+  });
+
   it('declines a pending question', async () => {
     const { handler } = buildAnswerSubagentTool(manager);
     const { id, questionPromise } = spawnWithPendingQuestion();
@@ -1455,6 +1569,148 @@ describe('hydrateSubagentRecords helper', () => {
     expect(writesAfter).toBe(writesBefore + 1);
   });
 
+});
+
+// ── hydrateSessionSubagents (R9 session-open) ────────────────────────────────
+
+describe('hydrateSessionSubagents', () => {
+  let manager: SubagentManager;
+  const sid = 'sess-session-open-hydrate';
+
+  beforeEach(() => {
+    manager = new SubagentManager();
+    sessionManagerHolder.current = null;
+  });
+
+  afterEach(() => {
+    sessionManagerHolder.current = null;
+  });
+
+  function makeSessionRuntime(agents: Map<string, Agent>) {
+    return {
+      projectDir: '/tmp',
+      config: defaults(),
+      agents,
+      skills: new Map(),
+      personalities: new Map(),
+    };
+  }
+
+  /** Build a durable domain record (in a side manager) for the helper to load. */
+  function storedRecord(label: string, agent: Agent) {
+    const source = new SubagentManager();
+    const original = source.spawn(label, 'task text', agent, { sessionId: sid });
+    source.markCompleted(original.id, 'stored result');
+    return {
+      id: original.id,
+      domain: subagentRecordFromStorageDict(subagentRecordToStorageDict(runtimeToDomain(original))),
+    };
+  }
+
+  function setSession(subagentChains: unknown[], opts: { cwd?: string | null } = {}) {
+    const session = { id: sid, cwd: opts.cwd ?? '/tmp/session', subagentChains };
+    sessionManagerHolder.current = {
+      getSession: (id: string) => (id === sid ? session : null),
+      getActive: () => null,
+    };
+    return session;
+  }
+
+  it('hydrates every stored record of the session (app-restart case)', async () => {
+    const agents = makeAgentMap();
+    const a = storedRecord('persisted-a', codeReviewerAgent);
+    const b = storedRecord('persisted-b', fileExplorerAgent);
+    setSession([a.domain, b.domain]);
+    expect(manager.getRecord(a.id)).toBeUndefined();
+    expect(manager.getRecord(b.id)).toBeUndefined();
+
+    const result = await hydrateSessionSubagents(manager, sid, {
+      projectRuntime: makeSessionRuntime(agents),
+    });
+
+    expect(result).toEqual({ hydrated: [a.id, b.id], agentMissing: [] });
+    const restored = manager.getRecord(a.id)!;
+    expect(restored.result).toBe('stored result');
+    expect(restored.state).toBe(SubagentState.COMPLETED);
+    expect(manager.isSummary(restored.id)).toBe(false);
+    expect(manager.getRecord(b.id)?.label).toBe('persisted-b');
+  });
+
+  it('is idempotent — live full records win and are never replaced', async () => {
+    const agents = makeAgentMap();
+    const { id, domain } = storedRecord('dup', codeReviewerAgent);
+    setSession([domain]);
+
+    await hydrateSessionSubagents(manager, sid, { projectRuntime: makeSessionRuntime(agents) });
+    expect(manager.getRecord(id)).toBeDefined();
+
+    // The live record is mutated after hydration; a re-open must keep it.
+    manager.close(id);
+    const before = manager.getRecord(id)!;
+    expect(before.closed).toBe(true);
+
+    const second = await hydrateSessionSubagents(manager, sid, {
+      projectRuntime: makeSessionRuntime(agents),
+    });
+
+    expect(second).toEqual({ hydrated: [], agentMissing: [] });
+    expect(manager.getRecord(id)!.closed).toBe(true);
+  });
+
+  it('returns empty when the session has no stored subagent chains', async () => {
+    setSession([]);
+
+    const result = await hydrateSessionSubagents(manager, sid, {
+      projectRuntime: makeSessionRuntime(makeAgentMap()),
+    });
+
+    expect(result).toEqual({ hydrated: [], agentMissing: [] });
+  });
+
+  it('skips hydration when the project runtime cannot be resolved', async () => {
+    const { id, domain } = storedRecord('orphan', codeReviewerAgent);
+    setSession([domain], { cwd: '/definitely/not/a/project' });
+
+    const result = await hydrateSessionSubagents(manager, sid);
+
+    expect(result).toEqual({ hydrated: [], agentMissing: [] });
+    expect(manager.getRecord(id)).toBeUndefined();
+  });
+
+  it('rejects readiness when stored records cannot resolve a project runtime', async () => {
+    const { domain } = storedRecord('orphan', codeReviewerAgent);
+    setSession([domain], { cwd: '/definitely/not/a/project' });
+
+    await expect(hydrateSessionSubagents(manager, sid, {
+      requireRuntime: true,
+    })).rejects.toThrow('project runtime');
+  });
+
+  it('reports agentMissing for stored records whose agent definition is gone', async () => {
+    // Registry WITHOUT code-reviewer, which the stored record references.
+    const agents = new Map<string, Agent>();
+    agents.set(fileExplorerAgent.name, fileExplorerAgent);
+    const { id, domain } = storedRecord('orphan', codeReviewerAgent);
+    setSession([domain]);
+
+    const result = await hydrateSessionSubagents(manager, sid, {
+      projectRuntime: makeSessionRuntime(agents),
+    });
+
+    expect(result).toEqual({ hydrated: [], agentMissing: [id] });
+    expect(manager.getRecord(id)).toBeUndefined();
+  });
+
+  it('returns empty when the session is not found', async () => {
+    sessionManagerHolder.current = {
+      getSession: () => null,
+      getActive: () => null,
+    };
+
+    const result = await hydrateSessionSubagents(manager, sid);
+
+    expect(result).toEqual({ hydrated: [], agentMissing: [] });
+  });
 });
 
 // ── follow_up_subagent (U6) ──────────────────────────────────────────────────

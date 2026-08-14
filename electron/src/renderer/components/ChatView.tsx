@@ -15,10 +15,12 @@ import {
 import { useChat } from '../hooks/useChat';
 import { useSession } from '../hooks/useSession';
 import { useBackgroundCommands } from '../hooks/useBackgroundCommands';
+import { useInspectorHydration } from '../hooks/useInspectorHydration';
 import { useSubagents } from '../hooks/useSubagents';
 import { useTodos } from '../hooks/useTodos';
 import type { UseSessionActivityReturn } from '../hooks/useSessionActivity';
 import { useSessionTabs } from '../hooks/useSessionTabs';
+import { useSessionDeletionReconciliation } from '../hooks/useSessionDeletionReconciliation';
 import { useProviders } from '../hooks/useProviders';
 import { useMessageQueue } from '../hooks/useMessageQueue';
 import { useQueueAutoFire } from '../hooks/useQueueAutoFire';
@@ -33,9 +35,12 @@ import {
 import { isTextGenerationModel } from '../utils/models';
 import { emitOrchidEvent, onOrchidEvent } from '../utils/events';
 import { resolveOrchidNavigate } from '../utils/navigate-shell';
+import { shouldRefreshSubagentsAfterTurn } from '../utils/subagent-refresh';
 import { useFocusTrap, useGlobalShortcuts } from '../keyboard';
 import type { ModelSelection } from '../../shared/types/provider';
+import { sumChainUsage } from '../../shared/types/chain';
 import { flattenSessionMessages, type Session } from '../../shared/types/session';
+import { sumUsages } from '../../shared/usage';
 import type {
   ASTStoreStatus,
   CommandContext,
@@ -81,9 +86,14 @@ interface ChatViewProps {
 
 export function ChatView({ isVisible = true, bootstrapConfig = null, onNotify, activity }: ChatViewProps) {
   const session = useSession();
+  const workspaceCwd = session.workspace?.cwd ?? session.activeSession?.cwd ?? null;
+  const workspaceCwdRef = useRef(workspaceCwd);
+  workspaceCwdRef.current = workspaceCwd;
   const subagents = useSubagents(session.activeSession?.id ?? null);
-  const todos = useTodos(session.activeSession?.id ?? null);
-  const commands = useBackgroundCommands(session.activeSession?.id ?? null);
+  const todos = useTodos(
+    session.activeSession?.id ?? null,
+    session.activeSession?.todoStore.tasks ?? null,
+  );
   const tabs = useSessionTabs();
   const providers = useProviders();
   // Queue ownership follows the visible session: teardown paths (delete /
@@ -103,6 +113,10 @@ export function ChatView({ isVisible = true, bootstrapConfig = null, onNotify, a
     openRight: openSidebar,
     openLeft: openLeftSidebar,
   } = useResponsiveShell();
+  const commands = useBackgroundCommands(
+    session.activeSession?.id ?? null,
+    sidebarOpen,
+  );
   const [paletteOpen, setPaletteOpen] = useState(false);
   /** One-shot inspector section focus from command-palette navigation. */
   const [inspectorFocusSection, setInspectorFocusSection] = useState<string | null>(null);
@@ -128,14 +142,22 @@ export function ChatView({ isVisible = true, bootstrapConfig = null, onNotify, a
   const [projectConfigDir, setProjectConfigDir] = useState<string | null>(null);
   const [subagentOpenRequest, setSubagentOpenRequest] = useState<SubagentOpenRequest>({ generation: 0, id: null });
   const chatContentRef = useRef<HTMLDivElement>(null);
+  const mcpRefreshGeneration = useRef(0);
+  const indexRefreshGeneration = useRef(0);
   const notify = onNotify;
 
   // Workspace-scoped status refreshes (declared early so the trust grant
   // callback can re-run them once a project becomes trusted).
-  const refreshMCP = useCallback(async () => {
+  const refreshMCP = useCallback(async (expectedWorkspaceKey?: string | null) => {
+    const generation = ++mcpRefreshGeneration.current;
     try {
       if (window.orchid?.mcp?.status) {
         const status = await window.orchid.mcp.status();
+        if (
+          generation !== mcpRefreshGeneration.current
+          || (expectedWorkspaceKey !== undefined
+            && workspaceCwdRef.current !== expectedWorkspaceKey)
+        ) return;
         setMcpServers(status);
       }
     } catch {
@@ -143,13 +165,19 @@ export function ChatView({ isVisible = true, bootstrapConfig = null, onNotify, a
     }
   }, []);
 
-  const refreshIndex = useCallback(async () => {
+  const refreshIndex = useCallback(async (expectedWorkspaceKey?: string | null) => {
+    const generation = ++indexRefreshGeneration.current;
     try {
       if (window.orchid?.rag?.status && window.orchid?.ast?.status) {
         const [rag, ast] = await Promise.all([
           window.orchid.rag.status(),
           window.orchid.ast.status(),
         ]);
+        if (
+          generation !== indexRefreshGeneration.current
+          || (expectedWorkspaceKey !== undefined
+            && workspaceCwdRef.current !== expectedWorkspaceKey)
+        ) return;
         setRagStatus(rag);
         setAstStatus(ast);
       }
@@ -168,6 +196,14 @@ export function ChatView({ isVisible = true, bootstrapConfig = null, onNotify, a
     },
   });
 
+  const sessionUsage = useMemo(() => {
+    const usages = session.activeSession?.chains.map(sumChainUsage) ?? [];
+    return {
+      total: sumUsages(usages),
+      latest: usages.findLast((usage) => usage != null) ?? null,
+    };
+  }, [session.activeSession?.chains]);
+
   // Surface trust failures that happen outside the dialog (e.g. the trust
   // lookup itself failed). While the dialog is open its own alert shows the
   // error, so notify only when no prompt is showing, then clear once consumed.
@@ -178,6 +214,8 @@ export function ChatView({ isVisible = true, bootstrapConfig = null, onNotify, a
   }, [trustPrompt.error, trustPrompt.pending, notify, trustPrompt.clearError]);
 
   const chat = useChat(session.activeSession?.id ?? null, {
+    persistedSessionUsage: sessionUsage.total,
+    latestPersistedUsage: sessionUsage.latest,
     onUntrustedProject: () => {
       const cwd = session.workspace?.cwd ?? session.activeSession?.cwd;
       if (cwd) trustPrompt.openFor(cwd);
@@ -341,15 +379,13 @@ export function ChatView({ isVisible = true, bootstrapConfig = null, onNotify, a
     (loadedSession: Session | null) => {
       if (!loadedSession) {
         chat.setMessages([]);
-        subagents.applyFromSession([]);
         todos.applyFromSession([]);
         return;
       }
       chat.setMessages(flattenSessionMessages(loadedSession));
-      subagents.applyFromSession(loadedSession.subagentChains);
       todos.applyFromSession(loadedSession.todoStore.tasks);
     },
-    [chat.setMessages, subagents.applyFromSession, todos.applyFromSession],
+    [chat.setMessages, todos.applyFromSession],
   );
 
   const handleSessionSelect = useCallback(
@@ -367,8 +403,8 @@ export function ChatView({ isVisible = true, bootstrapConfig = null, onNotify, a
       // the full target payload is ready (no intermediate empty/zero state).
       chat.beginSessionSwitch(id);
 
-      // Single round-trip: activate the session and fetch its full view payload
-      // (session + flattened messages + live snapshot + workspace) at once.
+      // Single round-trip: activate the session and fetch its bounded renderer
+      // view (session + loaded messages + live snapshot + workspace) at once.
       // Replaces the prior peek + chat:snapshot + activate sequence.
       let result: SessionOpenResult | null = null;
       try {
@@ -387,18 +423,24 @@ export function ChatView({ isVisible = true, bootstrapConfig = null, onNotify, a
 
       setDraftTabVisible(false);
       messageQueue.clearQueue();
-      // Commit once: sidebar lists from the session, chat (messages + live) via
-      // hydrate. hydrateSnapshot owns the single message replace (no double set).
-      subagents.applyFromSession(result.session.subagentChains);
+      // Commit once: subagent summaries hydrate independently; chat messages
+      // and live state hydrate here without a duplicate message replace.
       todos.applyFromSession(result.session.todoStore.tasks);
       chat.hydrateSnapshot({
         sessionId: result.session.id,
         messages: result.messages,
         live: result.live,
+        lastChainError: result.lastChainError,
       });
     },
-    [session, chat.beginSessionSwitch, chat.hydrateSnapshot, subagents.applyFromSession, todos.applyFromSession, draftTabVisible, messageQueue.clearQueue],
+    [session, chat.beginSessionSwitch, chat.hydrateSnapshot, todos.applyFromSession, draftTabVisible, messageQueue.clearQueue],
   );
+
+  const handleLoadHistoryPage = useCallback(async (chainIndex: number) => {
+    const chain = session.activeSession?.chains[chainIndex];
+    if (!chain) return;
+    await session.loadHistoryPage(chain.id);
+  }, [session]);
 
   useEffect(() => {
     return onOrchidEvent('orchid:select-session', (detail) => {
@@ -529,6 +571,29 @@ export function ChatView({ isVisible = true, bootstrapConfig = null, onNotify, a
     [handleSessionSelect, enterDraftMode],
   );
 
+  const handleSessionDeleteError = useCallback((error: unknown) => {
+    const message = error instanceof Error ? error.message : String(error);
+    notify(`Delete failed: ${message}`, 'error');
+  }, [notify]);
+
+  const deletionReconciliation = useMemo(() => ({
+    applySnapshot: tabs.applySnapshot,
+    clearQueue: messageQueue.clearQueue,
+    clearMessages: () => chat.setMessages([]),
+    focusAfterWorkingSet,
+    onError: handleSessionDeleteError,
+  }), [
+    tabs.applySnapshot,
+    messageQueue.clearQueue,
+    chat.setMessages,
+    focusAfterWorkingSet,
+    handleSessionDeleteError,
+  ]);
+  useSessionDeletionReconciliation(
+    session.deletionNotice,
+    deletionReconciliation,
+  );
+
   const performCloseTab = useCallback(
     async (id: string) => {
       const wasFocused = session.activeSession?.id === id;
@@ -551,24 +616,16 @@ export function ChatView({ isVisible = true, bootstrapConfig = null, onNotify, a
     [isLiveSession, performCloseTab],
   );
 
-  // When the active session is deleted, follow MRU among remaining open tabs.
+  // The deletion event/result reconciliation follows MRU for every window.
   const handleSessionDelete = useCallback(
     async (id: string) => {
       const wasActive = session.activeSession?.id === id;
-      // Clear BEFORE the delete invoke resolves: main force-stops the session
-      // and emits the terminal idle transition during this await, which would
-      // otherwise trigger queue autofire against a vanishing session.
+      // Clear before the invoke so queued work can never target a session whose
+      // durable row is about to disappear.
       if (wasActive) messageQueue.clearQueue();
       await session.deleteSession(id);
-      const snapshot = await tabs.refresh();
-      if (!wasActive) return;
-
-      const gen = ++sessionSwitchGen.current;
-      chat.setMessages([]);
-      if (gen !== sessionSwitchGen.current) return;
-      await focusAfterWorkingSet(snapshot);
     },
-    [session, chat.setMessages, tabs.refresh, focusAfterWorkingSet, messageQueue.clearQueue],
+    [session, messageQueue.clearQueue],
   );
 
   const handleSessionRename = useCallback(
@@ -680,6 +737,17 @@ export function ChatView({ isVisible = true, bootstrapConfig = null, onNotify, a
         selection,
         providerModelOptionLabel(option),
       );
+    } else {
+      try {
+        await window.orchid?.session?.setReasoningEffort({ effort: null });
+      } catch {
+        // Non-fatal — draft override remains
+      }
+      try {
+        await window.orchid?.session?.setServiceTier({ tier: null });
+      } catch {
+        // Non-fatal — draft tier remains
+      }
     }
   }, [notify, providerModelByKey, session]);
 
@@ -910,36 +978,41 @@ export function ChatView({ isVisible = true, bootstrapConfig = null, onNotify, a
     }
   }, [refreshIndex]);
 
-  useEffect(() => {
-    refreshMCP();
-  }, [refreshMCP]);
-
-  // Re-fetch RAG/AST status when the active workspace changes (counts are
-  // project-scoped; no manual reload control in the inspector).
-  const workspaceCwd = session.activeSession?.cwd ?? null;
-  useEffect(() => {
-    void refreshIndex();
-  }, [workspaceCwd, refreshIndex]);
+  useInspectorHydration({
+    enabled: sidebarOpen,
+    workspaceKey: workspaceCwd,
+    refreshMCP,
+    refreshIndex,
+  });
 
   // MCP starts in the background after the window opens, so the first status
   // snapshot often lands on "starting". Poll until every server leaves that
   // state (connected / failed / unavailable) so the right sidebar updates.
   useEffect(() => {
+    if (!sidebarOpen) return;
     const stillStarting = mcpServers.some((s) => s.status === 'starting');
     if (!stillStarting) return;
     const id = setInterval(() => {
-      void refreshMCP();
+      void refreshMCP(workspaceCwd);
     }, 1500);
     return () => clearInterval(id);
-  }, [mcpServers, refreshMCP]);
+  }, [mcpServers, refreshMCP, sidebarOpen, workspaceCwd]);
 
-  // After a turn completes (or session switches), refresh subagents so chain
-  // footers pick up token usage written into subagent_chains.
+  // After a turn completes in the same session, refresh subagents so chain
+  // footers pick up token usage written into subagent_chains. Initial idle
+  // mounts and idle session switches already hydrate in useSubagents.
+  const subagentRefreshState = {
+    sessionId: session.activeSession?.id ?? null,
+    status: chat.status,
+  } as const;
+  const previousSubagentRefreshState = useRef(subagentRefreshState);
   useEffect(() => {
-    if (chat.status !== 'idle') return;
-    if (!session.activeSession?.id) return;
-    void subagents.refresh();
-  }, [chat.status, chat.messages.length, session.activeSession?.id, subagents.refresh]);
+    const previous = previousSubagentRefreshState.current;
+    previousSubagentRefreshState.current = subagentRefreshState;
+    if (shouldRefreshSubagentsAfterTurn(previous, subagentRefreshState)) {
+      void subagents.refresh();
+    }
+  }, [subagentRefreshState.sessionId, subagentRefreshState.status, subagents.refresh]);
 
   // Memoized so the composer, footer, and command palette (all memoized) are
   // not invalidated on every render — previously a fresh object each render
@@ -1046,6 +1119,8 @@ export function ChatView({ isVisible = true, bootstrapConfig = null, onNotify, a
         onProjectSessionCreate={handleProjectSessionCreateClick}
         onProjectSelect={handleProjectSelect}
         onSessionDelete={handleSessionDelete}
+        onSessionDeleteError={handleSessionDeleteError}
+        deletingSessionIds={session.pendingDeleteIds}
         onSessionSelect={handleSessionSelect}
         onSessionRename={handleSessionRename}
         activities={activity.activities}
@@ -1176,6 +1251,7 @@ export function ChatView({ isVisible = true, bootstrapConfig = null, onNotify, a
             streamStartTime={chat.streamStartTime}
             interrupted={chat.interrupted}
             alwaysExpandToolGroups={alwaysExpandToolGroups}
+            onLoadHistoryPage={handleLoadHistoryPage}
           />
         </DeferredSurface>
         <MessageQueue
@@ -1227,6 +1303,9 @@ export function ChatView({ isVisible = true, bootstrapConfig = null, onNotify, a
             modelDetails={providerModelDetails}
             commandContext={commandContext}
             sessionId={session.activeSession?.id ?? null}
+            reasoningEffortOverride={session.activeSession?.reasoningEffortOverride ?? null}
+            serviceTierOverride={session.activeSession?.tierOverride ?? null}
+            permissionMode={session.activeSession?.permissionMode ?? null}
           />
         </DeferredSurface>
         </div>

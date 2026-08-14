@@ -43,11 +43,15 @@ import type {
   ProviderConnectionIdMessage,
   ProviderDisconnectMessage,
   ProviderDeleteConnectionMessage,
+  ProviderModelListMessage,
   ProviderStatusRefreshMessage,
   SessionLoadMessage,
   SessionOpenMessage,
   SessionOpenResult,
+  SessionHistoryPageMessage,
+  SessionHistoryPageResult,
   SessionDeleteMessage,
+  SessionDeletedEvent,
   SessionRenamedEvent,
   SessionCreatedEvent,
   SessionUpdatedEvent,
@@ -55,6 +59,8 @@ import type {
   SessionSetWorkspaceMessage,
   SessionSetReasoningEffortMessage,
   SessionReasoningConfigResult,
+  SessionSetServiceTierMessage,
+  SessionServiceTierConfigResult,
   SessionWorkspaceChangedEvent,
   SessionTodosChangedEvent,
   SessionActivityChangedEvent,
@@ -80,6 +86,8 @@ import type {
   BgCommandChangedEvent,
   SubagentSnapshotRequest,
   SubagentSnapshot,
+  SubagentDetailRequest,
+  SubagentDetailResult,
   SubagentEvent,
   AskQuestionAnswerMessage,
   AskQuestionCancelMessage,
@@ -126,6 +134,7 @@ import {
   chatToolCallUpdateEventSchema,
   sessionRenamedEventSchema,
   sessionCreatedEventSchema,
+  sessionUpdatedEventSchema,
   sessionWorkspaceChangedEventSchema,
   sessionTodosChangedEventSchema,
   sessionActivityChangedEventSchema,
@@ -143,8 +152,13 @@ import {
   configSaveResultSchema,
   workspaceInfoSchema,
   sessionReasoningConfigResultSchema,
+  sessionServiceTierConfigResultSchema,
+  sessionHistoryPageResultSchema,
+  sessionDeleteResultSchema,
+  sessionDeletedEventSchema,
   chatSessionSnapshotSchema,
   subagentSnapshotSchema,
+  subagentDetailResultSchema,
   subagentEventSchema,
   subagentDeltaEventSchema,
   startupSnapshotSchema,
@@ -180,6 +194,7 @@ const INVOKE_RESULT_SCHEMAS: Partial<Record<string, z.ZodTypeAny>> = {
   [IPC_CHANNELS.CHAT_SEND]: chatSendResultSchema,
   [IPC_CHANNELS.CHAT_SNAPSHOT]: chatSessionSnapshotSchema,
   [IPC_CHANNELS.SUBAGENTS_SNAPSHOT]: subagentSnapshotSchema,
+  [IPC_CHANNELS.SUBAGENTS_DETAIL]: subagentDetailResultSchema,
   [IPC_CHANNELS.TOOL_EXECUTE]: toolExecuteResultSchema,
   [IPC_CHANNELS.BG_CMD_SNAPSHOT]: bgCommandSnapshotResultSchema,
   [IPC_CHANNELS.BG_CMD_LIST]: bgCommandListResultSchema,
@@ -191,6 +206,9 @@ const INVOKE_RESULT_SCHEMAS: Partial<Record<string, z.ZodTypeAny>> = {
   [IPC_CHANNELS.SESSION_PICK_PROJECT_DIR]: workspaceInfoSchema,
   [IPC_CHANNELS.SESSION_SET_WORKSPACE]: workspaceInfoSchema,
   [IPC_CHANNELS.SESSION_GET_REASONING_CONFIG]: sessionReasoningConfigResultSchema,
+  [IPC_CHANNELS.SESSION_GET_SERVICE_TIER_CONFIG]: sessionServiceTierConfigResultSchema,
+  [IPC_CHANNELS.SESSION_HISTORY_PAGE]: sessionHistoryPageResultSchema,
+  [IPC_CHANNELS.SESSION_DELETE]: sessionDeleteResultSchema,
   [IPC_CHANNELS.PROJECT_TRUST_GET]: projectTrustInfoSchema,
   [IPC_CHANNELS.PROJECT_TRUST_SET]: projectTrustInfoSchema,
   [IPC_CHANNELS.PROJECT_TRUST_LIST]: z.array(trustedProjectEntrySchema),
@@ -408,11 +426,17 @@ const orchidAPI: OrchidAPI = {
     deleteConnection: (message: ProviderDeleteConnectionMessage) =>
       invoke(IPC_CHANNELS.PROVIDERS_DELETE, message),
 
-    modelList: (message?: ProviderConnectionIdMessage) =>
+    modelList: (message?: ProviderModelListMessage) =>
       invoke(IPC_CHANNELS.PROVIDERS_MODEL_LIST, message),
+
+    discoverModels: (message: ProviderConnectionIdMessage) =>
+      invoke(IPC_CHANNELS.PROVIDERS_DISCOVER_MODELS, message),
 
     refreshStatus: (message: ProviderStatusRefreshMessage) =>
       invoke(IPC_CHANNELS.PROVIDERS_STATUS_REFRESH, message),
+
+    refreshQuota: (message: ProviderConnectionIdMessage) =>
+      invoke(IPC_CHANNELS.PROVIDERS_QUOTA_REFRESH, message),
   },
 
   session: {
@@ -424,6 +448,9 @@ const orchidAPI: OrchidAPI = {
 
     open: (message: SessionOpenMessage) =>
       invoke<SessionOpenResult>(IPC_CHANNELS.SESSION_OPEN, message),
+
+    loadHistoryPage: (message: SessionHistoryPageMessage) =>
+      invoke<SessionHistoryPageResult | null>(IPC_CHANNELS.SESSION_HISTORY_PAGE, message),
 
     create: () =>
       invoke(IPC_CHANNELS.SESSION_CREATE),
@@ -455,8 +482,14 @@ const orchidAPI: OrchidAPI = {
     setReasoningEffort: (message: SessionSetReasoningEffortMessage) =>
       invoke(IPC_CHANNELS.SESSION_SET_REASONING_EFFORT, message),
 
-    getReasoningConfig: () =>
-      invoke<SessionReasoningConfigResult>(IPC_CHANNELS.SESSION_GET_REASONING_CONFIG),
+    getReasoningConfig: (message?: import('../shared/types/ipc').SessionGetReasoningConfigMessage) =>
+      invoke<SessionReasoningConfigResult>(IPC_CHANNELS.SESSION_GET_REASONING_CONFIG, message ?? {}),
+
+    setServiceTier: (message: SessionSetServiceTierMessage) =>
+      invoke(IPC_CHANNELS.SESSION_SET_SERVICE_TIER, message),
+
+    getServiceTierConfig: (message?: import('../shared/types/ipc').SessionGetServiceTierConfigMessage) =>
+      invoke<SessionServiceTierConfigResult>(IPC_CHANNELS.SESSION_GET_SERVICE_TIER_CONFIG, message ?? {}),
 
     listActivity: () =>
       invoke(IPC_CHANNELS.SESSION_ACTIVITY_LIST),
@@ -482,6 +515,9 @@ const orchidAPI: OrchidAPI = {
     onWorkingSetChanged: (callback: (event: WorkingSetChangedEvent) => void) =>
       onParsed(IPC_CHANNELS.SESSION_WORKING_SET_CHANGED, workingSetChangedEventSchema, callback),
 
+    onDeleted: (callback: (event: SessionDeletedEvent) => void) =>
+      onParsed(IPC_CHANNELS.SESSION_DELETED, sessionDeletedEventSchema, callback),
+
     onRenamed: (callback: (event: SessionRenamedEvent) => void) =>
       onParsed(IPC_CHANNELS.SESSION_RENAMED, sessionRenamedEventSchema, callback),
 
@@ -489,7 +525,7 @@ const orchidAPI: OrchidAPI = {
       onParsed(IPC_CHANNELS.SESSION_CREATED, sessionCreatedEventSchema, callback),
 
     onUpdated: (callback: (event: SessionUpdatedEvent) => void) =>
-      onParsed(IPC_CHANNELS.SESSION_UPDATED, sessionCreatedEventSchema, callback),
+      onParsed(IPC_CHANNELS.SESSION_UPDATED, sessionUpdatedEventSchema, callback),
 
     onWorkspaceChanged: (callback: (event: SessionWorkspaceChangedEvent) => void) =>
       onParsed(IPC_CHANNELS.SESSION_WORKSPACE_CHANGED, sessionWorkspaceChangedEventSchema, callback),
@@ -521,6 +557,8 @@ const orchidAPI: OrchidAPI = {
   subagents: {
     snapshot: (request: SubagentSnapshotRequest) =>
       invoke<SubagentSnapshot>(IPC_CHANNELS.SUBAGENTS_SNAPSHOT, request),
+    detail: (request: SubagentDetailRequest) =>
+      invoke<SubagentDetailResult>(IPC_CHANNELS.SUBAGENTS_DETAIL, request),
     onEvent: (callback: (event: SubagentEvent) => void) =>
       onSubagentEvent(callback),
   },

@@ -1,15 +1,12 @@
 import type { LanguageModelV4 } from '@ai-sdk/provider';
-import Decimal from 'decimal.js';
 import type { EffectiveModel, ModelSelection, ProviderConnection } from '../../shared/types/provider';
 import type {
-  FrozenPricingSnapshot,
   FrozenProviderRequestSnapshot,
-  PricingRateSnapshot,
 } from '../../shared/types/accounting';
+import type { CacheFacet, PricingRateFields, ThinkingPolicy } from '../../shared/types/provider-facets';
 import { resolveModelSelection } from './resolver';
 import type { ConnectionStore } from './connection-store';
 import type { ProviderCatalogSnapshot, ProviderCatalogStore } from './catalog/store';
-import type { CatalogPricing } from './catalog/schema';
 import { catalogToProviderDefinitions } from './catalog/schema';
 import {
   CredentialVault,
@@ -18,11 +15,16 @@ import {
 import { ProviderDriverRegistry, createDefaultProviderDriverRegistry } from './drivers/registry';
 import { validateGenericEndpoint } from './drivers/compatible';
 import type {
+  DriverPricingFacet,
+  DriverPricingFetchContext,
   DriverModelRequest,
   ProviderDriver,
   ProviderEmbeddingTarget,
   ReasoningProviderOptions,
 } from './drivers/types';
+import { resolveFrozenPricing } from './facets/pricing';
+import { PricingRefresher } from './facets/pricing-refresh';
+import { tierVariantModelId } from './facets/tiers';
 import { ProviderResolutionError } from '../llm/middleware/error-classification';
 import type { ProviderStatusService } from './status/service';
 
@@ -34,6 +36,7 @@ export interface ProviderRuntimeOptions {
   readonly vault: Pick<CredentialVault, 'readSecret'>;
   readonly status?: Pick<ProviderStatusService, 'get'>;
   readonly registry?: ProviderDriverRegistry;
+  readonly pricing?: PricingRefresher;
 }
 
 export interface ResolvedProviderExecution {
@@ -47,6 +50,14 @@ export interface ResolvedProviderExecution {
   readonly buildReasoningOptions?: (
     effort: string | number,
   ) => ReasoningProviderOptions | undefined;
+  /** Driver pricing facet for evidence extraction during attempt accounting. */
+  readonly pricingFacet?: DriverPricingFacet;
+  /** Thinking exposure/replay policy resolved for the frozen model (R15). */
+  readonly thinkingPolicy?: ThinkingPolicy;
+  /** Driver cache facet; generic compatible connections declare none (R12). */
+  readonly cacheFacet?: CacheFacet;
+  /** Driver tier mechanism; absent when the provider has no tier facet. */
+  readonly tierMechanism?: ProviderDriver['tierMechanism'];
 }
 
 /**
@@ -59,6 +70,7 @@ export class ProviderRuntime {
   private readonly vault: Pick<CredentialVault, 'readSecret'>;
   private readonly status: Pick<ProviderStatusService, 'get'> | undefined;
   private readonly registry: ProviderDriverRegistry;
+  private readonly pricing: PricingRefresher;
 
   constructor(options: ProviderRuntimeOptions) {
     this.catalog = options.catalog;
@@ -66,15 +78,24 @@ export class ProviderRuntime {
     this.vault = options.vault;
     this.status = options.status;
     this.registry = options.registry ?? createDefaultProviderDriverRegistry();
+    this.pricing = options.pricing ?? new PricingRefresher();
   }
 
   async resolveLanguageModel(selection: ModelSelection): Promise<LanguageModelV4> {
     return (await this.resolveExecution(selection)).modelInstance;
   }
 
-  /** Resolve one immutable turn context and its trusted model together. */
-  async resolveExecution(selection: ModelSelection): Promise<ResolvedProviderExecution> {
-    const resolved = await this.resolveDriverRequest(selection);
+  /**
+   * Resolve one immutable turn context and its trusted model together.
+   * `options.tier` is the effective service tier id (session override →
+   * connection selection) resolved by the caller through the tier facet;
+   * variant-mechanism drivers map it to the executable model id (R19, R21).
+   */
+  async resolveExecution(
+    selection: ModelSelection,
+    options: { readonly tier?: string } = {},
+  ): Promise<ResolvedProviderExecution> {
+    const resolved = await this.resolveDriverRequest(selection, options.tier);
     const { request, driver } = resolved;
     const buildReasoning = driver.buildReasoningOptions;
     return {
@@ -85,7 +106,40 @@ export class ProviderRuntime {
       buildReasoningOptions: buildReasoning
         ? (effort: string | number) => buildReasoning(effort, request.model)
         : undefined,
+      pricingFacet: driver.pricingFacet,
+      thinkingPolicy: driver.thinkingPolicy?.(request.model),
+      cacheFacet: driver.cacheFacet,
+      tierMechanism: driver.tierMechanism,
     };
+  }
+
+  /**
+   * Resolve the connection, driver tier mechanism, and declared tiers for one
+   * selection without constructing a model — the caller resolves the effective
+   * tier and passes it back into `resolveExecution(selection, { tier })`.
+   */
+  async resolveTierContext(selection: ModelSelection): Promise<{
+    readonly connection: ProviderConnection;
+    readonly tierMechanism?: ProviderDriver['tierMechanism'];
+  }> {
+    const connections = await this.connections.list();
+    const definitions = this.catalog.getProviderDefinitions();
+    const resolution = resolveModelSelection(selection, connections, definitions);
+    if (resolution.kind !== 'resolved') {
+      throw new ProviderResolutionError(this.describeResolutionFailure(resolution.kind, resolution.reason));
+    }
+    const driver = this.registry.require(resolution.provider.id);
+    return { connection: resolution.connection, tierMechanism: driver.tierMechanism };
+  }
+
+  /** Latest-known dynamic pricing cache (invalidated on connection identity changes). */
+  get pricingRefresher(): PricingRefresher {
+    return this.pricing;
+  }
+
+  /** Halt background pricing refreshes; the ledger of attempts is unaffected. */
+  dispose(): void {
+    this.pricing.stop();
   }
 
   /**
@@ -98,7 +152,7 @@ export class ProviderRuntime {
     return this.registry.createEmbeddingTarget(resolved.request);
   }
 
-  private async resolveDriverRequest(selection: ModelSelection): Promise<{
+  private async resolveDriverRequest(selection: ModelSelection, tier?: string): Promise<{
     readonly request: DriverModelRequest;
     readonly snapshot: FrozenProviderRequestSnapshot;
     readonly driver: ProviderDriver;
@@ -114,14 +168,25 @@ export class ProviderRuntime {
     }
     const driver = this.registry.require(resolution.provider.id);
     const credential = await this.resolveCredential(resolution.connection, driver);
+    const request: DriverModelRequest = {
+      connection: resolution.connection,
+      provider: resolution.provider,
+      model: resolution.model,
+      credential,
+      ...(tier !== undefined ? { tier } : {}),
+    };
+    if (driver.pricingFacet?.dynamic) {
+      // The snapshot below freezes latest-known rates synchronously; the
+      // refresh itself runs in the background and never blocks a request (R7).
+      this.pricing.ensureFresh({
+        driver,
+        request,
+        fetchContext: () => this.catalogPricingContext(resolution.provider.id),
+      });
+    }
     return {
-      request: {
-        connection: resolution.connection,
-        provider: resolution.provider,
-        model: resolution.model,
-        credential,
-      },
-      snapshot: this.freezeSnapshot(resolution, catalogSnapshot),
+      request,
+      snapshot: this.freezeSnapshot(resolution, catalogSnapshot, driver, tier),
       driver,
     };
   }
@@ -129,12 +194,41 @@ export class ProviderRuntime {
   private freezeSnapshot(
     resolution: Extract<ReturnType<typeof resolveModelSelection>, { kind: 'resolved' }>,
     catalogSnapshot: ProviderCatalogSnapshot | undefined,
+    driver: ProviderDriver,
+    tier?: string,
   ): FrozenProviderRequestSnapshot {
     const catalogProvider = catalogSnapshot?.catalog.providers.find(
       (provider) => provider.id === resolution.provider.id,
     );
     const catalogModel = catalogProvider?.models.find((model) => model.id === resolution.model.id);
     const observation = this.status?.get(resolution.provider.id);
+    const tierMechanism = driver.tierMechanism;
+    // Variant-mechanism billing: the served variant id is the billed identity,
+    // so the snapshot freezes that variant's catalog rates (R22).
+    const variantModelId = tierMechanism?.kind === 'model-name-variants' && tier
+      ? tierVariantModelId(tierMechanism, resolution.model.id, tier)
+      : undefined;
+    const servedModelId = variantModelId ?? resolution.model.id;
+    const billedCatalogModel = variantModelId
+      ? catalogProvider?.models.find((model) => model.id === variantModelId) ?? catalogModel
+      : catalogModel;
+    const dynamic = driver.pricingFacet?.dynamic
+      ? this.pricing.stateFor(
+        resolution.provider.id,
+        resolution.connection.id,
+        resolution.model.id,
+        driver.pricingFacet.dynamic.refreshIntervalSeconds,
+      )
+      : undefined;
+    // Live inline rates published by the provider's models endpoint (R27).
+    // Discovered pricing is provider-provenance data keyed by the base model
+    // id, so it applies to variant requests the same way user overrides do.
+    const discoveredModel = resolution.connection.discoveredModels?.find(
+      (candidate) => candidate.id === resolution.model.id,
+    );
+    const discovered = discoveredModel?.pricing
+      ? { pricing: discoveredModel.pricing, discoveredAt: discoveredModel.discoveredAt }
+      : undefined;
     return structuredClone({
       providerId: resolution.provider.id,
       providerDisplayName: resolution.provider.displayName,
@@ -147,13 +241,32 @@ export class ProviderRuntime {
       catalogVersion: catalogSnapshot?.catalog.catalogVersion ?? null,
       catalogSource: catalogSnapshot?.source ?? 'none',
       catalogObservedAt: catalogSnapshot?.catalog.issuedAt ?? null,
-      pricing: catalogModel?.pricing
-        ? freezePricing(catalogModel.pricing, liveLilacPricing(
-          resolution.provider.id,
-          resolution.model.id,
-          observation,
-        ))
-        : null,
+      pricing: resolveFrozenPricing({
+        pricingFacet: driver.pricingFacet,
+        connection: resolution.connection,
+        // Variant billing freezes the served variant's rates (R22); the
+        // user-override and live-discovered ladder rungs key off the base id.
+        modelId: variantModelId ?? resolution.model.id,
+        userOverrideModelId: resolution.model.id,
+        catalogPricing: billedCatalogModel?.pricing,
+        dynamic,
+        discovered,
+        now: new Date(),
+      }),
+      ...(tierMechanism
+        ? {
+            tier: {
+              mechanism: tierMechanism.kind,
+              ...(tier ? { requestedTier: tier } : {}),
+              ...(tierMechanism.kind === 'model-name-variants'
+                ? {
+                    servedModelId,
+                    ...(variantModelId ? { baseModelId: resolution.model.id } : {}),
+                  }
+                : {}),
+            },
+          }
+        : {}),
       fieldProvenance: catalogModel
         ? { provider: catalogProvider?.provenance ?? {}, model: catalogModel.provenance }
         : { source: 'user' },
@@ -161,6 +274,16 @@ export class ProviderRuntime {
         ? { observedAt: observation.observedAt, providerUpdatedAt: observation.providerUpdatedAt, data: observation.data }
         : null,
     });
+  }
+
+  /** Catalog base rates for drivers whose live pricing is relative to list rates. */
+  private catalogPricingContext(providerId: string): DriverPricingFetchContext {
+    const snapshot = this.catalog.load?.();
+    const provider = snapshot?.catalog.providers.find((candidate) => candidate.id === providerId);
+    if (!provider) return {};
+    const catalogRates: Record<string, PricingRateFields> = {};
+    for (const model of provider.models) catalogRates[model.id] = model.pricing.rates;
+    return { catalogRates };
   }
 
   private async resolveCredential(
@@ -217,122 +340,10 @@ export class ProviderRuntime {
   }
 }
 
-interface LiveLilacPricing {
-  readonly multiplier: Decimal;
-  readonly discountPercent: number;
-  readonly observedAt: string;
-  readonly providerUpdatedAt: string | null;
-  readonly supplyUpdatedAt: string | null;
-}
-
-function record(value: unknown): Record<string, unknown> | null {
-  return value !== null && typeof value === 'object' && !Array.isArray(value)
-    ? value as Record<string, unknown>
-    : null;
-}
-
-function finiteNumber(value: unknown, min: number, max: number): number | null {
-  return typeof value === 'number'
-    && Number.isFinite(value)
-    && value >= min
-    && value <= max
-    ? value
-    : null;
-}
-
-/**
- * Lilac publishes a live subscription multiplier alongside its discount. Both
- * values must be present, fresh, and tied to the selected model before they
- * can adjust a frozen monetary formula. We never derive either value from the
- * other, supply state, or performance data.
- */
-function liveLilacPricing(
-  providerId: string,
-  modelId: string,
-  observation: ReturnType<NonNullable<ProviderRuntimeOptions['status']>['get']>,
-): LiveLilacPricing | null {
-  if (providerId !== 'lilac' || !observation || observation.stale || observation.availability !== 'available') {
-    return null;
-  }
-  const data = record(observation.data);
-  const models = data?.['models'];
-  if (!Array.isArray(models)) return null;
-  const model = models
-    .map(record)
-    .find((item) => item?.['modelId'] === modelId);
-  const subscription = model ? record(model['subscription']) : null;
-  if (!subscription || subscription['availability'] !== 'available') return null;
-  const discountPercent = finiteNumber(subscription['discountPercent'], 0, 100);
-  const multiplier = finiteNumber(subscription['creditMultiplier'], 0, Number.POSITIVE_INFINITY);
-  if (discountPercent === null || multiplier === null) return null;
-  try {
-    const decimalMultiplier = new Decimal(String(multiplier));
-    if (!decimalMultiplier.isFinite() || decimalMultiplier.isNegative()) return null;
-    return {
-      multiplier: decimalMultiplier,
-      discountPercent,
-      observedAt: observation.observedAt,
-      providerUpdatedAt: observation.providerUpdatedAt,
-      supplyUpdatedAt: typeof data?.['subscriptionSupplyUpdatedAt'] === 'string'
-        ? data['subscriptionSupplyUpdatedAt']
-        : null,
-    };
-  } catch {
-    return null;
-  }
-}
-
-function freezeRate(
-  rate: CatalogPricing['rates']['input'] | undefined,
-  live: LiveLilacPricing | null,
-): PricingRateSnapshot | undefined {
-  if (!rate) return undefined;
-  if (!live) return { ...rate };
-  return {
-    ...rate,
-    amount: new Decimal(rate.amount).mul(live.multiplier).toFixed(),
-  };
-}
-
-function freezePricing(
-  pricing: CatalogPricing,
-  live: LiveLilacPricing | null,
-): FrozenPricingSnapshot {
-  return {
-    currency: pricing.currency,
-    effectiveAt: live?.supplyUpdatedAt ?? live?.providerUpdatedAt ?? pricing.effectiveAt,
-    rates: {
-      input: freezeRate(pricing.rates.input, live),
-      output: freezeRate(pricing.rates.output, live),
-      cacheRead: freezeRate(pricing.rates.cacheRead, live),
-      cacheWrite: freezeRate(pricing.rates.cacheWrite, live),
-      reasoning: freezeRate(pricing.rates.reasoning, live),
-    },
-    inclusion: {
-      cacheRead: 'subset-of-input',
-      cacheWrite: pricing.rates.cacheWrite ? 'additional' : 'unknown',
-      reasoning: pricing.rates.reasoning ? 'subset-of-output' : 'unknown',
-    },
-    provenance: live
-      ? {
-          source: 'lilac-public-status',
-          signedCatalog: structuredClone(pricing.provenance),
-          statusObservedAt: live.observedAt,
-          providerUpdatedAt: live.providerUpdatedAt,
-          supplyUpdatedAt: live.supplyUpdatedAt,
-          discountPercent: live.discountPercent,
-          creditMultiplier: live.multiplier.toFixed(),
-        }
-      : {
-          source: 'signed-catalog',
-          signedCatalog: structuredClone(pricing.provenance),
-        },
-  };
-}
-
 let providerRuntime: ProviderRuntime | null = null;
 
 export function initializeProviderRuntime(options: ProviderRuntimeOptions): ProviderRuntime {
+  providerRuntime?.dispose();
   providerRuntime = new ProviderRuntime(options);
   return providerRuntime;
 }
@@ -342,6 +353,12 @@ export function getProviderRuntime(): ProviderRuntime {
   return providerRuntime;
 }
 
+/** Null before runtime initialization so IPC services can degrade gracefully. */
+export function getProviderPricingRefresher(): PricingRefresher | null {
+  return providerRuntime?.pricingRefresher ?? null;
+}
+
 export function resetProviderRuntime(): void {
+  providerRuntime?.dispose();
   providerRuntime = null;
 }

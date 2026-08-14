@@ -17,7 +17,7 @@ import path from 'node:path';
 import type { AgentsMdEnforcePolicy, Config } from '../config/schema';
 import { extractPathsFromArgs } from '../permissions/resolver';
 import type { AgentsMdContextStore } from '../session/agents-md-context';
-import { escapeXmlText } from '../tools/result';
+import { xmlText } from '../tools/result';
 import { resolveToolPath } from '../tools/types';
 import { effectiveAgentsMdFilenames } from './config';
 import { renderAgentsMdBlock } from './inject';
@@ -148,7 +148,7 @@ export function buildAgentsMdWarningBlock(unseen: AgentsMdEntry[]): string {
   return (
     `<agents_md_warning>\n` +
     `You modified files governed by instruction file(s) not yet in your ` +
-    `context: ${escapeXmlText(names)}. Read them to follow project conventions.\n` +
+    `context: ${xmlText(names)}. Read them to follow project conventions.\n` +
     `</agents_md_warning>`
   );
 }

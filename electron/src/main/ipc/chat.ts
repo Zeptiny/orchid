@@ -10,7 +10,7 @@ import { getForegroundLiveRegistry } from '../tools/process/foreground-live';
 import { SEND_INPUT_MAX_TEXT_LENGTH } from '../tools/process/send-input';
 import { getSessionManager } from '../session/singleton';
 import { IPC_CHANNELS, type ChatSessionSnapshot } from '../../shared/types/ipc';
-import { ChainStatus } from '../../shared/types/chain';
+import { ChainStatus, lastChainError } from '../../shared/types/chain';
 import { flattenSessionMessages } from '../../shared/types/session';
 import { clearAllChatHistory } from './chat-history';
 import { chatCancelSchema, chatQueueNextSchema, chatSendSchema, chatSnapshotSchema, chatStopSchema } from './payload-schemas';
@@ -25,7 +25,12 @@ import {
 import { sendChatState, sendTurnEvent, webContentsForWindowId } from './chat/events';
 import { snapshotForAgent } from './chat/snapshot';
 import { appendLiveTailMessages, persistTurnConversation, turnMessagesFromAgent } from './chat/persist';
-import { disposeActiveAgent, forceAbortSession, forceStopSession } from './chat/abort';
+import {
+  discardDeletedSessionRuntime,
+  disposeActiveAgent,
+  forceAbortSession,
+  forceStopSession,
+} from './chat/abort';
 import { startChatTurn } from './chat/send';
 import { triggerInterruptedTurnAutoName } from './chat/title';
 import type { AgentContext } from '../agents/xstate/agent-machine';
@@ -39,7 +44,12 @@ export {
 } from './chat/abort';
 export type { ForceAbortMainTurnOptions } from './chat/abort';
 export { ensureActiveSession } from './chat/session';
-export { forceAbortSession, forceStopSession, webContentsForWindowId };
+export {
+  discardDeletedSessionRuntime,
+  forceAbortSession,
+  forceStopSession,
+  webContentsForWindowId,
+};
 
 const BG_CMD_SNAPSHOT_MAX_LAST_N = 1000;
 
@@ -137,6 +147,7 @@ export function registerChatIPC(): void {
         sessionId,
         messages: liveAgent && live ? [...liveAgent.messages] : flattenSessionMessages(session),
         live,
+        lastChainError: live ? null : lastChainError(session.chains),
       };
     },
   );
@@ -185,9 +196,10 @@ export function registerChatIPC(): void {
         appendLiveTailMessages(existing.turnMessages, existing, context, { placeholderWhenEmpty: true });
         if (thinking.length > existing.thinkingCommittedLength) existing.thinkingCommittedLength = thinking.length;
         if (partial.length > existing.responseCommittedLength) existing.responseCommittedLength = partial.length;
+        const terminalMessages = turnMessagesFromAgent(existing);
         const fullHistory = [...existing.messages, ...existing.turnMessages];
         persistTurnConversation(
-          sessionId, fullHistory, turnMessagesFromAgent(existing), ChainStatus.INTERRUPTED,
+          sessionId, fullHistory, terminalMessages, ChainStatus.INTERRUPTED,
           existing.agent, existing.selection, streamWebContents,
         );
         existing.messages = fullHistory;
@@ -198,7 +210,7 @@ export function registerChatIPC(): void {
           getSessionManager().getActive(existing.windowId)?.id !== sessionId,
         );
         sendTurnEvent(streamWebContents, existing, IPC_CHANNELS.CHAT_DONE, {
-          type: 'done', response: partial, messages: fullHistory, interrupted: true, usage,
+          type: 'done', response: partial, messages: terminalMessages, interrupted: true, usage,
         });
         sendChatState(streamWebContents, existing, {
           state: 'idle', error: null, interruptState: 'confirmSubagents', cwd: existing.cwd,

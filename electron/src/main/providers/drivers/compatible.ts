@@ -1,8 +1,18 @@
 import type { LanguageModelV4 } from '@ai-sdk/provider';
 import { importESM } from '../../utils/esm-import';
 import { createUnwrappingFetch } from '../../llm/response-unwrap';
-import type { EffectiveModel, ProviderProtocol } from '../../../shared/types/provider';
-import type { DriverCredential, ProviderDriver } from './types';
+import type {
+  DiscoveredProviderModel,
+  EffectiveModel,
+  ProviderProtocol,
+} from '../../../shared/types/provider';
+import type { ThinkingPolicy } from '../../../shared/types/provider-facets';
+import {
+  ANTHROPIC_THINKING_POLICY,
+  OPENAI_RESPONSES_THINKING_POLICY,
+} from '../facets/thinking';
+import { fetchModelsEndpoint, modelsListEntries } from './models-endpoint';
+import type { DriverCredential, ProviderDriver, ReasoningProviderOptions } from './types';
 
 export interface GenericEndpoint {
   readonly endpoint: string;
@@ -63,7 +73,16 @@ export async function createCompatibleLanguageModel(
 ): Promise<LanguageModelV4> {
   const endpoint = validateGenericEndpoint(input.endpoint);
   if (input.providerId === 'generic-openai-compatible') {
-    if (input.protocol !== 'openai-compatible') throw new Error('Generic OpenAI-compatible provider requires openai-compatible protocol');
+    if (input.protocol === 'openai-responses') {
+      const { createOpenAI } = await importESM<typeof import('@ai-sdk/openai')>('@ai-sdk/openai');
+      return createOpenAI({
+        name: input.providerId,
+        baseURL: endpoint.endpoint,
+        apiKey: input.apiKey,
+        fetch: createUnwrappingFetch(),
+      }).responses(input.modelId);
+    }
+    if (input.protocol !== 'openai-compatible') throw new Error('Generic OpenAI-compatible provider requires openai-compatible or openai-responses protocol');
     const { createOpenAICompatible } = await importESM<typeof import('@ai-sdk/openai-compatible')>('@ai-sdk/openai-compatible');
     return createOpenAICompatible({
       name: input.providerId,
@@ -92,12 +111,43 @@ function apiKeyForEmbedding(credential: DriverCredential): string | undefined {
   return undefined;
 }
 
-export function createCompatibleProviderDrivers(): readonly ProviderDriver[] {
+/**
+ * A user-configured OpenAI-compatible endpoint is treated as ids-only:
+ * nothing beyond the id is trusted from an unverified shape (R27).
+ */
+export function parseCompatibleModels(payload: unknown): DiscoveredProviderModel[] {
+  return modelsListEntries(payload, 'Generic OpenAI-compatible')
+    .map((entry) => ({ id: entry['id'] as string }));
+}
+
+export async function fetchCompatibleModels(options: {
+  readonly endpoint: string;
+  readonly apiKey: string;
+  readonly allowInsecureNonLoopbackHttp?: boolean;
+  readonly fetch?: typeof globalThis.fetch;
+  readonly signal?: AbortSignal;
+  readonly timeoutMs?: number;
+}): Promise<readonly DiscoveredProviderModel[]> {
+  const endpoint = validateGenericEndpoint(options.endpoint, {
+    allowInsecureNonLoopbackHttp: options.allowInsecureNonLoopbackHttp,
+  });
+  const payload = await fetchModelsEndpoint(
+    `${endpoint.endpoint}/models`,
+    options.apiKey,
+    'Generic OpenAI-compatible',
+    { fetch: options.fetch, signal: options.signal, timeoutMs: options.timeoutMs },
+  );
+  return parseCompatibleModels(payload);
+}
+
+export function createCompatibleProviderDrivers(options: {
+  readonly fetch?: typeof globalThis.fetch;
+} = {}): readonly ProviderDriver[] {
   return [
     {
       id: 'generic-openai-compatible',
       supportedAuthMethods: ['api-key', 'environment', 'none'],
-      supportedProtocols: ['openai-compatible'],
+      supportedProtocols: ['openai-compatible', 'openai-responses'],
       allowsCustomEndpoint: true,
       origin: null,
       createLanguageModel: async ({ model, credential, endpoint }) => {
@@ -116,10 +166,30 @@ export function createCompatibleProviderDrivers(): readonly ProviderDriver[] {
         }
         return { baseURL: endpoint, apiKey: apiKeyForEmbedding(credential) };
       },
-      buildReasoningOptions: (effort: string | number, _model: EffectiveModel) =>
-        typeof effort === 'string'
-          ? { openaiCompatible: { reasoningEffort: effort } }
-          : undefined,
+      // The Responses adapter always parses the 'openai' options key, even
+      // under a renamed provider; the chat adapter parses 'openaiCompatible'.
+      buildReasoningOptions: (effort: string | number, model: EffectiveModel): ReasoningProviderOptions | undefined => {
+        if (typeof effort !== 'string') return undefined;
+        return model.protocol === 'openai-responses'
+          ? { openai: { reasoningEffort: effort } }
+          : { openaiCompatible: { reasoningEffort: effort } };
+      },
+      // The Responses adapter keys reasoning metadata/options to 'openai' even
+      // under a renamed provider; chat-completions endpoints stay on the
+      // default plain-text policy.
+      thinkingPolicy: (model: EffectiveModel): ThinkingPolicy | undefined =>
+        model.protocol === 'openai-responses' ? OPENAI_RESPONSES_THINKING_POLICY : undefined,
+      discoveryFacet: {
+        fetchModels: async ({ connection, credential, endpoint }) => {
+          if (!endpoint) throw new Error('Generic OpenAI-compatible connection requires an endpoint');
+          return fetchCompatibleModels({
+            endpoint,
+            apiKey: apiKeyForDriver(credential),
+            allowInsecureNonLoopbackHttp: connection.allowInsecureHttp === true,
+            fetch: options.fetch,
+          });
+        },
+      },
     },
     {
       id: 'generic-anthropic-compatible',
@@ -137,6 +207,7 @@ export function createCompatibleProviderDrivers(): readonly ProviderDriver[] {
           endpoint,
         });
       },
+      thinkingPolicy: (): ThinkingPolicy => ANTHROPIC_THINKING_POLICY,
     },
   ];
 }

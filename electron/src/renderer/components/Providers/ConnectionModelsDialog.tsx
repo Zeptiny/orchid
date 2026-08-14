@@ -1,8 +1,10 @@
-/** Configure catalog selections and user-defined models during connection setup or editing. */
+/** Unified model listing for connection setup and editing: catalog, live-discovered, and custom rows share one list with identical affordances and a provenance badge. */
 import { useEffect, useMemo, useState } from 'react';
 import type {
   ProviderConnectionView,
   ProviderDefinitionView,
+  ProviderDiscoverModelsResult,
+  ProviderModelOption,
   ProviderModelView,
 } from '../../../shared/types/ipc';
 import type {
@@ -10,6 +12,7 @@ import type {
   ProviderProtocol,
   ReasoningModelConfig,
 } from '../../../shared/types/provider';
+import type { PricingRateFields } from '../../../shared/types/provider-facets';
 import {
   CONNECTION_MODEL_MODALITIES,
   connectionModelCapabilities,
@@ -20,7 +23,8 @@ import { Alert } from '../ui/Alert';
 import { Button } from '../ui/Button';
 import { Panel } from '../ui/Panel';
 import { SectionHeader } from '../ui/SectionHeader';
-import { StatusBadge } from '../ui/StatusBadge';
+import { Select } from '../ui/Select';
+import { StatusBadge, type StatusBadgeTone } from '../ui/StatusBadge';
 import { TextInput } from '../ui/TextInput';
 import { ReasoningFields } from './ReasoningConfigEditor';
 
@@ -50,17 +54,70 @@ const EMPTY_CUSTOM_MODEL: CustomModelForm = {
 
 const EMPTY_REASONING_CONFIG: ReasoningModelConfig = { levels: [], default: null };
 
+/** One text-editable rate field of a per-model pricing override (R6). */
+interface PricingRateFieldDef {
+  readonly key: keyof Pick<
+    PricingRateFields,
+    'input' | 'output' | 'cacheRead' | 'cacheWrite' | 'reasoning' | 'perRequest'
+  >;
+  readonly label: string;
+  readonly placeholder: string;
+}
+
+const PRICING_RATE_FIELDS: readonly PricingRateFieldDef[] = [
+  { key: 'input', label: 'Input rate', placeholder: 'e.g. 1.25' },
+  { key: 'output', label: 'Output rate', placeholder: 'e.g. 5.00' },
+  { key: 'cacheRead', label: 'Cache read rate', placeholder: 'e.g. 0.25' },
+  { key: 'cacheWrite', label: 'Cache write rate', placeholder: 'e.g. 2.50' },
+  { key: 'reasoning', label: 'Reasoning rate', placeholder: 'e.g. 8.00' },
+  { key: 'perRequest', label: 'Per-request fee', placeholder: 'e.g. 0.02' },
+];
+
+const EMPTY_PRICING_DRAFT: Record<PricingRateFieldDef['key'], string> = {
+  input: '',
+  output: '',
+  cacheRead: '',
+  cacheWrite: '',
+  reasoning: '',
+  perRequest: '',
+};
+
+const PRICING_AMOUNT_PATTERN = /^(?:0|[1-9]\d*)(?:\.\d+)?$/;
+
 export interface ConnectionModelsEditorProps {
   readonly protocol: ProviderProtocol;
   readonly definition: ProviderDefinitionView;
   readonly selectedModelIds: readonly string[];
   readonly customModels: readonly CustomConnectionModel[];
   readonly reasoningConfig: Record<string, ReasoningModelConfig>;
+  /** Per-model field-level rate overrides (R6); rendered per row. */
+  readonly pricingOverrides?: Record<string, PricingRateFields>;
+  /** Per-model service tier selections (R20); only rendered for tier-capable rows. */
+  readonly tierSelections?: Record<string, string>;
   readonly disabled?: boolean;
+  /** Unified listing rows from the main process (edit mode); locally composed when absent. */
+  readonly unifiedModels?: readonly ProviderModelOption[] | null;
+  readonly discoveryAvailable?: boolean;
+  readonly discovering?: boolean;
+  readonly onDiscoverModels?: () => Promise<ProviderDiscoverModelsResult>;
   readonly onSelectedModelIdsChange: (modelIds: readonly string[]) => void;
   readonly onCustomModelsChange: (models: readonly CustomConnectionModel[]) => void;
   readonly onReasoningConfigChange: (config: Record<string, ReasoningModelConfig>) => void;
+  readonly onPricingOverridesChange?: (overrides: Record<string, PricingRateFields>) => void;
+  readonly onTierSelectionsChange?: (selections: Record<string, string>) => void;
   readonly onEditingChange?: (editing: boolean) => void;
+}
+
+/** One row of the unified listing, regardless of the model's origin. */
+interface EditorModelRow {
+  readonly view: ProviderModelView;
+  readonly source: 'catalog' | 'provider' | 'user';
+  readonly customized: boolean;
+  readonly discoveredAt: string | null;
+  /** User-defined with no catalog/discovered layer beneath it. */
+  readonly removable: boolean;
+  /** Tier selector data when the driver declares a tier mechanism (R20). */
+  readonly tierOptions?: ProviderModelOption['tierOptions'];
 }
 
 function modelAvailable(model: ProviderModelView): boolean {
@@ -135,22 +192,105 @@ function formForCustomModel(model: CustomConnectionModel): CustomModelForm {
   };
 }
 
+function pricingDraftFor(
+  override: PricingRateFields | undefined,
+): Record<PricingRateFieldDef['key'], string> {
+  const amount = (
+    rate: { amount: string; per: number; unit: string } | undefined,
+    per: number,
+    unit: 'tokens' | 'requests',
+  ): string => rate && rate.per === per && rate.unit === unit ? rate.amount : '';
+  return {
+    input: amount(override?.input, 1_000_000, 'tokens'),
+    output: amount(override?.output, 1_000_000, 'tokens'),
+    cacheRead: amount(override?.cacheRead, 1_000_000, 'tokens'),
+    cacheWrite: amount(override?.cacheWrite, 1_000_000, 'tokens'),
+    reasoning: amount(override?.reasoning, 1_000_000, 'tokens'),
+    perRequest: amount(override?.perRequest, 1, 'requests'),
+  };
+}
+
+function pricingOverrideFromDraft(
+  draft: Record<PricingRateFieldDef['key'], string>,
+): PricingRateFields {
+  const tokenRate = (value: string) => value.trim() === ''
+    ? undefined
+    : { amount: value.trim(), per: 1_000_000, unit: 'tokens' as const };
+  const requestFee = (value: string) => value.trim() === ''
+    ? undefined
+    : { amount: value.trim(), per: 1, unit: 'requests' as const };
+  const fields: PricingRateFields = {};
+  const input = tokenRate(draft.input);
+  if (input) fields.input = input;
+  const output = tokenRate(draft.output);
+  if (output) fields.output = output;
+  const cacheRead = tokenRate(draft.cacheRead);
+  if (cacheRead) fields.cacheRead = cacheRead;
+  const cacheWrite = tokenRate(draft.cacheWrite);
+  if (cacheWrite) fields.cacheWrite = cacheWrite;
+  const reasoning = tokenRate(draft.reasoning);
+  if (reasoning) fields.reasoning = reasoning;
+  const perRequest = requestFee(draft.perRequest);
+  if (perRequest) fields.perRequest = perRequest;
+  return fields;
+}
+
+function invalidPricingAmount(value: string): boolean {
+  return value.trim() !== '' && !PRICING_AMOUNT_PATTERN.test(value.trim());
+}
+
+function sourceLabel(source: EditorModelRow['source']): string {
+  switch (source) {
+    case 'catalog':
+      return 'Catalog';
+    case 'provider':
+      return 'Discovered';
+    case 'user':
+      return 'Custom';
+  }
+}
+
+function sourceTone(source: EditorModelRow['source']): StatusBadgeTone {
+  switch (source) {
+    case 'catalog':
+      return 'ghost';
+    case 'provider':
+      return 'info';
+    case 'user':
+      return 'primary';
+  }
+}
+
+function describeDiscoveryError(error: unknown): string {
+  return error instanceof Error ? error.message : 'Live model discovery could not be completed.';
+}
+
 export function ConnectionModelsEditor({
   protocol,
   definition,
   selectedModelIds,
   customModels,
   reasoningConfig,
+  pricingOverrides = {},
+  tierSelections = {},
   disabled = false,
+  unifiedModels = null,
+  discoveryAvailable = false,
+  discovering = false,
+  onDiscoverModels,
   onSelectedModelIdsChange,
   onCustomModelsChange,
   onReasoningConfigChange,
+  onPricingOverridesChange,
+  onTierSelectionsChange,
   onEditingChange,
 }: ConnectionModelsEditorProps) {
   const [editingCustomModelId, setEditingCustomModelId] = useState<string | null>(null);
   const [customForm, setCustomForm] = useState<CustomModelForm>(EMPTY_CUSTOM_MODEL);
   const [reasoningDraft, setReasoningDraft] = useState<ReasoningModelConfig>(EMPTY_REASONING_CONFIG);
+  const [pricingDraft, setPricingDraft] = useState(EMPTY_PRICING_DRAFT);
   const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
 
   const catalogModels = useMemo(
     () => definition.models.filter(
@@ -162,19 +302,99 @@ export function ConnectionModelsEditor({
     () => new Set(catalogModels.map((model) => model.id)),
     [catalogModels],
   );
-  const customModelIds = useMemo(
-    () => new Set(customModels.map((model) => model.id)),
-    [customModels],
-  );
+
+  const rows = useMemo<readonly EditorModelRow[]>(() => {
+    const overrideView = (
+      view: ProviderModelView,
+      override: CustomConnectionModel | undefined,
+    ): ProviderModelView => override
+      ? {
+        ...view,
+        displayName: override.displayName,
+        capabilities: { ...override.capabilities },
+        limits: { ...override.limits },
+      }
+      : view;
+    if (unifiedModels) {
+      const unified: EditorModelRow[] = unifiedModels.map((option) => {
+        const override = customModels.find((candidate) => candidate.id === option.model.id);
+        const layered = option.model.source !== 'user' || option.discoveredAt !== null;
+        // Local drafts initialize from the saved connection, so they track
+        // override add/reset immediately without waiting on a refetch.
+        const customized = override !== undefined && layered;
+        return {
+          view: overrideView(option.model, override),
+          source: option.model.source,
+          customized,
+          discoveredAt: option.discoveredAt,
+          removable: option.model.source === 'user' && !customized,
+          tierOptions: option.tierOptions,
+        };
+      });
+      // Custom drafts saved locally but not yet persisted never wait for a refresh.
+      for (const model of customModels) {
+        if (unified.some((row) => row.view.id === model.id)) continue;
+        unified.push({
+          view: {
+            id: model.id,
+            displayName: model.displayName,
+            protocol: model.protocol,
+            lifecycle: null,
+            source: 'user',
+            capabilities: { ...model.capabilities },
+            limits: { ...model.limits },
+          },
+          source: 'user',
+          customized: false,
+          discoveredAt: null,
+          removable: true,
+        });
+      }
+      return unified;
+    }
+    const local: EditorModelRow[] = catalogModels.map((model) => {
+      const override = customModels.find((candidate) => candidate.id === model.id);
+      return {
+        view: overrideView(model, override),
+        source: 'catalog',
+        customized: override !== undefined,
+        discoveredAt: null,
+        removable: false,
+      };
+    });
+    for (const model of customModels) {
+      if (catalogModelIds.has(model.id)) continue;
+      local.push({
+        view: {
+          id: model.id,
+          displayName: model.displayName,
+          protocol: model.protocol,
+          lifecycle: null,
+          source: 'user',
+          capabilities: { ...model.capabilities },
+          limits: { ...model.limits },
+        },
+        source: 'user',
+        customized: false,
+        discoveredAt: null,
+        removable: true,
+      });
+    }
+    return local;
+  }, [unifiedModels, catalogModels, catalogModelIds, customModels]);
+
   const selectableModelIds = useMemo(
-    () => Array.from(new Set([...catalogModelIds, ...customModelIds])),
-    [catalogModelIds, customModelIds],
+    () => rows.map((row) => row.view.id),
+    [rows],
+  );
+  const discoveredRowIds = useMemo(
+    () => new Set(rows.filter((row) => row.discoveredAt !== null).map((row) => row.view.id)),
+    [rows],
   );
   const allModelsSelected = selectableModelIds.length > 0
     && selectableModelIds.every((modelId) => selectedModelIds.includes(modelId));
-  const userDefinedModels = customModels.filter((model) => !catalogModelIds.has(model.id));
   const orphanModelIds = selectedModelIds.filter(
-    (modelId) => !catalogModelIds.has(modelId) && !customModelIds.has(modelId),
+    (modelId) => !selectableModelIds.includes(modelId),
   );
 
   useEffect(() => {
@@ -187,6 +407,14 @@ export function ConnectionModelsEditor({
       : [...selectedModelIds, modelId]);
   };
 
+  const selectTier = (modelId: string, tierId: string) => {
+    if (!onTierSelectionsChange) return;
+    const next = { ...tierSelections };
+    if (tierId === '') delete next[modelId];
+    else next[modelId] = tierId;
+    onTierSelectionsChange(next);
+  };
+
   const toggleAllModels = () => {
     onSelectedModelIdsChange(allModelsSelected ? [] : selectableModelIds);
   };
@@ -195,22 +423,19 @@ export function ConnectionModelsEditor({
     setEditingCustomModelId(NEW_CUSTOM_MODEL);
     setCustomForm(EMPTY_CUSTOM_MODEL);
     setReasoningDraft(EMPTY_REASONING_CONFIG);
+    setPricingDraft(EMPTY_PRICING_DRAFT);
     setError(null);
   };
 
-  const startEditingCatalogModel = (model: ProviderModelView) => {
-    const override = customModels.find((candidate) => candidate.id === model.id);
-    const editable = override ?? editableCustomModel(model, protocol);
-    setEditingCustomModelId(model.id);
+  const startEditingRow = (row: EditorModelRow) => {
+    const override = customModels.find((candidate) => candidate.id === row.view.id);
+    const editable = override ?? editableCustomModel(row.view, protocol);
+    setEditingCustomModelId(row.view.id);
     setCustomForm(formForCustomModel(editable));
-    setReasoningDraft(reasoningConfig[model.id] ?? EMPTY_REASONING_CONFIG);
-    setError(null);
-  };
-
-  const startEditingCustomModel = (model: CustomConnectionModel) => {
-    setEditingCustomModelId(model.id);
-    setCustomForm(formForCustomModel(model));
-    setReasoningDraft(reasoningConfig[model.id] ?? EMPTY_REASONING_CONFIG);
+    setReasoningDraft(reasoningConfig[row.view.id] ?? EMPTY_REASONING_CONFIG);
+    // Seed the override draft from the saved override, or the signed-catalog
+    // rate card when no override exists, so the current rate is always visible.
+    setPricingDraft(pricingDraftFor(pricingOverrides[row.view.id] ?? row.view.pricing?.rates));
     setError(null);
   };
 
@@ -218,6 +443,18 @@ export function ConnectionModelsEditor({
     setEditingCustomModelId(null);
     setCustomForm(EMPTY_CUSTOM_MODEL);
     setReasoningDraft(EMPTY_REASONING_CONFIG);
+    setPricingDraft(EMPTY_PRICING_DRAFT);
+    setError(null);
+  };
+
+  const clearPricingOverride = (modelId: string) => {
+    if (!pricingOverrides[modelId]) return;
+    const next = { ...pricingOverrides };
+    delete next[modelId];
+    onPricingOverridesChange?.(next);
+    // Return the form to the underlying catalog rates as the visible base.
+    const row = rows.find((candidate) => candidate.view.id === modelId);
+    setPricingDraft(pricingDraftFor(row?.view.pricing?.rates));
     setError(null);
   };
 
@@ -238,8 +475,16 @@ export function ConnectionModelsEditor({
 
   const saveCustomModel = () => {
     if (!editingCustomModelId) return;
+    for (const field of PRICING_RATE_FIELDS) {
+      if (invalidPricingAmount(pricingDraft[field.key])) {
+        setError(`Enter a non-negative decimal amount for ${field.label.toLowerCase()}.`);
+        return;
+      }
+    }
+    const fixedId = editingCustomModelId !== NEW_CUSTOM_MODEL
+      && (catalogModelIds.has(editingCustomModelId) || discoveredRowIds.has(editingCustomModelId));
     const catalogModel = catalogModels.find((model) => model.id === editingCustomModelId);
-    const id = catalogModel ? catalogModel.id : customForm.id.trim();
+    const id = fixedId ? editingCustomModelId : customForm.id.trim();
     if (!id) {
       setError('Enter the model ID supplied by this provider.');
       return;
@@ -247,7 +492,7 @@ export function ConnectionModelsEditor({
     const duplicateCustomModel = customModels.some(
       (model) => model.id === id && model.id !== editingCustomModelId,
     );
-    const createsCatalogCollision = catalogModelIds.has(id) && !catalogModel;
+    const createsCatalogCollision = catalogModelIds.has(id) && !catalogModel && !fixedId;
     if (duplicateCustomModel || createsCatalogCollision) {
       setError(`A model named '${id}' already exists on this connection.`);
       return;
@@ -292,7 +537,7 @@ export function ConnectionModelsEditor({
     onCustomModelsChange(existing
       ? customModels.map((candidate) => candidate.id === existing.id ? model : candidate)
       : [...customModels, model]);
-    if (!existing && !catalogModel) {
+    if (!existing && !fixedId) {
       onSelectedModelIdsChange(
         selectedModelIds.includes(id) ? selectedModelIds : [...selectedModelIds, id],
       );
@@ -311,13 +556,31 @@ export function ConnectionModelsEditor({
     }
     onReasoningConfigChange(nextReasoningConfig);
 
+    // The override lives on the same form as the model: saving the model
+    // persists the rate override too, migrating its key on a rename.
+    const override = pricingOverrideFromDraft(pricingDraft);
+    const nextPricingOverrides = { ...pricingOverrides };
+    if (existing && existing.id !== id) delete nextPricingOverrides[existing.id];
+    if (Object.keys(override).length === 0) {
+      delete nextPricingOverrides[id];
+    } else {
+      // Preserve dimensions this minimal form does not edit (energy, TTL-keyed
+      // cache writes) so saving one field never silently drops another.
+      const prior = pricingOverrides[existing?.id ?? id] ?? pricingOverrides[id];
+      if (prior?.energy) override.energy = prior.energy;
+      if (prior?.cacheWriteByTtl) override.cacheWriteByTtl = prior.cacheWriteByTtl;
+      nextPricingOverrides[id] = override;
+    }
+    onPricingOverridesChange?.(nextPricingOverrides);
+
     setEditingCustomModelId(null);
     setCustomForm(EMPTY_CUSTOM_MODEL);
     setReasoningDraft(EMPTY_REASONING_CONFIG);
+    setPricingDraft(EMPTY_PRICING_DRAFT);
     setError(null);
   };
 
-  const resetCatalogModel = (modelId: string) => {
+  const resetModelOverride = (modelId: string) => {
     onCustomModelsChange(customModels.filter((model) => model.id !== modelId));
     if (reasoningConfig[modelId]) {
       const nextReasoningConfig = { ...reasoningConfig };
@@ -338,16 +601,48 @@ export function ConnectionModelsEditor({
     if (editingCustomModelId === modelId) cancelCustomModel();
   };
 
+  const discoverModels = async () => {
+    if (!onDiscoverModels) return;
+    setNotice(null);
+    setError(null);
+    try {
+      const result = await onDiscoverModels();
+      setNotice(result.message);
+    } catch (discoverError) {
+      // Discovery failures are non-blocking: existing rows stay authoritative.
+      setNotice(describeDiscoveryError(discoverError));
+    }
+  };
+
+  const editingHeading = editingCustomModelId === NEW_CUSTOM_MODEL
+    ? 'Add custom model'
+    : editingCustomModelId !== null && catalogModelIds.has(editingCustomModelId)
+      ? 'Customize catalog model'
+      : editingCustomModelId !== null && discoveredRowIds.has(editingCustomModelId)
+        ? 'Customize discovered model'
+        : 'Edit custom model';
+
   return (
     <>
             <Panel as="section" className="config-fieldset flex flex-col gap-3">
               <SectionHeader
-                title="Catalog models"
+                title="Models"
                 actions={
                   <>
                     <StatusBadge tone="ghost" size="sm" className="whitespace-nowrap">
                       {selectedModelIds.length} selected
                     </StatusBadge>
+                    {discoveryAvailable && onDiscoverModels && (
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => void discoverModels()}
+                        disabled={disabled || discovering || editingCustomModelId !== null}
+                      >
+                        <Icon name="refresh" size={14} />
+                        {discovering ? 'Fetching…' : 'Fetch models'}
+                      </Button>
+                    )}
                     <Button
                       variant="ghost"
                       size="sm"
@@ -357,26 +652,38 @@ export function ConnectionModelsEditor({
                     >
                       {allModelsSelected ? 'Deselect all models' : 'Select all models'}
                     </Button>
+                    {definition.allowsCustomModels && editingCustomModelId === null && (
+                      <Button
+                        size="sm"
+                        onClick={startAddingCustomModel}
+                        disabled={disabled}
+                      >
+                        <Icon name="plus" size={14} />
+                        Add custom model
+                      </Button>
+                    )}
                   </>
                 }
               />
               <p className="label">
                 Selected models become available to chat, tier assignment, or RAG according to
-                their declared capabilities.
+                their declared capabilities. Discovered models come from the provider&apos;s live
+                endpoint; custom metadata is explicit connection configuration.
               </p>
-              {catalogModels.length === 0 ? (
+              {notice && (
+                <Alert tone="info" role="status" icon="alertCircle" aria-live="polite">{notice}</Alert>
+              )}
+              {rows.length === 0 ? (
                 <Alert tone="info" role="status" icon="cpu">
-                  No catalog models match this connection protocol.
+                  No models are available for this connection protocol.
                 </Alert>
               ) : (
                 <ul className="list max-h-96 overflow-y-auto rounded-box border border-base-300 bg-base-100">
-                  {catalogModels.map((model) => {
-                    const override = customModels.find((candidate) => candidate.id === model.id);
-                    const effective = override ?? editableCustomModel(model, protocol);
-                    const selected = selectedModelIds.includes(model.id);
+                  {rows.map((row) => {
+                    const selected = selectedModelIds.includes(row.view.id);
                     return (
                       <li
-                        key={model.id}
+                        key={row.view.id}
                         className={[
                           'flex min-w-0 items-start justify-between gap-x-4 gap-y-2',
                           'rounded-md border-b border-base-300 p-3 !pl-6 transition-colors last:border-b-0',
@@ -388,26 +695,64 @@ export function ConnectionModelsEditor({
                             type="checkbox"
                             className="sr-only"
                             checked={selected}
-                            onChange={() => toggleModel(model.id)}
-                            aria-label={`Use ${effective.displayName}`}
+                            onChange={() => toggleModel(row.view.id)}
+                            aria-label={`Use ${row.view.displayName}`}
                             disabled={disabled || editingCustomModelId !== null}
                           />
                           <div className="min-w-0">
                             <div className="flex flex-wrap items-center gap-2">
-                              <span className="text-sm font-medium break-words">{effective.displayName}</span>
-                              {override && <StatusBadge size="sm">Customized</StatusBadge>}
-                            </div>
-                            <div className="mt-1 break-all font-mono text-xs text-base-content/60">{model.id}</div>
-                            <div className="mt-2 flex flex-wrap items-center gap-1.5">
-                              <StatusBadge tone="ghost" size="sm">
-                                {modelCapabilityLabel('Input', effective.capabilities.inputModalities)}
+                              <span className="text-sm font-medium break-words">{row.view.displayName}</span>
+                              <StatusBadge
+                                size="sm"
+                                tone={sourceTone(row.source)}
+                                title={row.discoveredAt ? `Discovered ${row.discoveredAt}` : undefined}
+                              >
+                                {sourceLabel(row.source)}
                               </StatusBadge>
-                              <StatusBadge tone="ghost" size="sm">
-                                {modelCapabilityLabel('Output', effective.capabilities.outputModalities)}
-                              </StatusBadge>
-                              {effective.capabilities.tools && <StatusBadge tone="ghost" size="sm">Tools</StatusBadge>}
-                              {effective.capabilities.reasoning && <StatusBadge tone="ghost" size="sm">Reasoning</StatusBadge>}
+                              {row.customized && <StatusBadge size="sm">Customized</StatusBadge>}
+                              {pricingOverrides[row.view.id] && (
+                                <StatusBadge size="sm" tone="ghost">Pricing override</StatusBadge>
+                              )}
                             </div>
+                            <div className="mt-1 break-all font-mono text-xs text-base-content/60">{row.view.id}</div>
+                            {row.view.capabilities && (
+                              <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                                <StatusBadge tone="ghost" size="sm">
+                                  {modelCapabilityLabel('Input', customModalities(row.view.capabilities.inputModalities))}
+                                </StatusBadge>
+                                <StatusBadge tone="ghost" size="sm">
+                                  {modelCapabilityLabel('Output', customModalities(row.view.capabilities.outputModalities))}
+                                </StatusBadge>
+                                {row.view.capabilities.tools && <StatusBadge tone="ghost" size="sm">Tools</StatusBadge>}
+                                {row.view.capabilities.reasoning && <StatusBadge tone="ghost" size="sm">Reasoning</StatusBadge>}
+                              </div>
+                            )}
+                            {row.tierOptions && row.tierOptions.tiers.length > 0 && (
+                              <div className="mt-2 flex items-center gap-2">
+                                <label
+                                  className="text-xs text-base-content/60"
+                                  htmlFor={`tier-select-${row.view.id}`}
+                                >
+                                  Service tier
+                                </label>
+                                <Select
+                                  id={`tier-select-${row.view.id}`}
+                                  size="xs"
+                                  className="rounded-md"
+                                  value={tierSelections[row.view.id] ?? row.tierOptions.selected ?? ''}
+                                  disabled={disabled || editingCustomModelId !== null}
+                                  onChange={(event) => selectTier(row.view.id, event.target.value)}
+                                  onClick={(event) => event.stopPropagation()}
+                                >
+                                  <option value="">Standard</option>
+                                  {row.tierOptions.tiers.map((tier) => (
+                                    <option key={tier.id} value={tier.id}>
+                                      {tier.displayName ?? tier.id}
+                                    </option>
+                                  ))}
+                                </Select>
+                              </div>
+                            )}
                           </div>
                         </label>
                         <div className="flex shrink-0 flex-wrap items-start justify-end gap-1">
@@ -415,22 +760,36 @@ export function ConnectionModelsEditor({
                             variant="ghost"
                             size="sm"
                             shape="square"
-                            onClick={() => startEditingCatalogModel(model)}
-                            aria-label={`Edit ${effective.displayName}`}
-                            title={`Edit ${effective.displayName}`}
+                            onClick={() => startEditingRow(row)}
+                            aria-label={`Edit ${row.view.displayName}`}
+                            title={`Edit ${row.view.displayName} metadata and pricing`}
                             disabled={disabled || editingCustomModelId !== null}
                           >
                             <Icon name="edit" size={14} />
                           </Button>
-                          {override && (
+                          {row.customized && (
                             <Button
                               variant="ghost"
                               size="sm"
-                              onClick={() => resetCatalogModel(model.id)}
-                              title="Reset catalog metadata"
+                              onClick={() => resetModelOverride(row.view.id)}
+                              title="Reset to the underlying metadata"
                               disabled={disabled || editingCustomModelId !== null}
                             >
                               Reset
+                            </Button>
+                          )}
+                          {row.removable && (
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              shape="square"
+                              className="text-error"
+                              onClick={() => removeCustomModel(row.view.id)}
+                              aria-label={`Remove ${row.view.displayName}`}
+                              title={`Remove ${row.view.displayName}`}
+                              disabled={disabled || editingCustomModelId !== null}
+                            >
+                              <Icon name="trash" size={14} />
                             </Button>
                           )}
                         </div>
@@ -439,109 +798,13 @@ export function ConnectionModelsEditor({
                   })}
                 </ul>
               )}
-            </Panel>
-
-            <Panel as="section" className="config-fieldset flex flex-col gap-3">
-              <SectionHeader
-                title="Custom models"
-                actions={
-                  definition.allowsCustomModels && editingCustomModelId === null ? (
-                    <Button
-                      size="sm"
-                      onClick={startAddingCustomModel}
-                      disabled={disabled}
-                    >
-                      <Icon name="plus" size={14} />
-                      Add custom model
-                    </Button>
-                  ) : undefined
-                }
-              />
-              <p className="label">
-                Custom metadata is explicit connection configuration; Orchid does not infer it
-                from the model ID.
-              </p>
-
-              {userDefinedModels.length === 0 ? (
-                <p className="py-2 text-sm text-base-content/60">
-                  {definition.allowsCustomModels
-                    ? 'No custom models have been added.'
-                    : 'This provider accepts catalog models only.'}
-                </p>
-              ) : (
-                <ul className="list rounded-box border border-base-300 bg-base-100">
-                  {userDefinedModels.map((model) => (
-                    <li
-                      key={model.id}
-                      className={[
-                        'flex min-w-0 items-start justify-between gap-x-4 gap-y-2',
-                        'rounded-md border-b border-base-300 p-3 !pl-6 transition-colors last:border-b-0',
-                        selectedModelIds.includes(model.id) ? 'bg-primary/10' : 'hover:bg-base-200/80',
-                      ].join(' ')}
-                    >
-                      <label className="min-w-0 flex-1 cursor-pointer">
-                        <input
-                          type="checkbox"
-                          className="sr-only"
-                          checked={selectedModelIds.includes(model.id)}
-                          onChange={() => toggleModel(model.id)}
-                          aria-label={`Use ${model.displayName}`}
-                          disabled={disabled || editingCustomModelId !== null}
-                        />
-                        <div className="min-w-0">
-                          <div className="text-sm font-medium break-words">{model.displayName}</div>
-                          <div className="mt-1 break-all font-mono text-xs text-base-content/60">{model.id}</div>
-                          <div className="mt-2 flex flex-wrap items-center gap-1.5">
-                            <StatusBadge tone="ghost" size="sm">
-                              {modelCapabilityLabel('Input', model.capabilities.inputModalities)}
-                            </StatusBadge>
-                            <StatusBadge tone="ghost" size="sm">
-                              {modelCapabilityLabel('Output', model.capabilities.outputModalities)}
-                            </StatusBadge>
-                            {model.capabilities.tools && <StatusBadge tone="ghost" size="sm">Tools</StatusBadge>}
-                            {model.capabilities.reasoning && <StatusBadge tone="ghost" size="sm">Reasoning</StatusBadge>}
-                          </div>
-                        </div>
-                      </label>
-                      <div className="flex shrink-0 gap-1">
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          shape="square"
-                          onClick={() => startEditingCustomModel(model)}
-                          aria-label={`Edit ${model.displayName}`}
-                          title={`Edit ${model.displayName}`}
-                          disabled={disabled || editingCustomModelId !== null}
-                        >
-                          <Icon name="edit" size={14} />
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          shape="square"
-                          className="text-error"
-                          onClick={() => removeCustomModel(model.id)}
-                          aria-label={`Remove ${model.displayName}`}
-                          title={`Remove ${model.displayName}`}
-                          disabled={disabled || editingCustomModelId !== null}
-                        >
-                          <Icon name="trash" size={14} />
-                        </Button>
-                      </div>
-                    </li>
-                  ))}
-                </ul>
+              {!definition.allowsCustomModels && (
+                <p className="label">This provider accepts catalog models only.</p>
               )}
 
               {editingCustomModelId !== null && (
                 <div className="rounded-box border border-base-300 bg-base-200/40 p-4">
-                  <h3 className="text-sm font-semibold">
-                    {editingCustomModelId === NEW_CUSTOM_MODEL
-                      ? 'Add custom model'
-                      : catalogModelIds.has(editingCustomModelId)
-                        ? 'Customize catalog model'
-                        : 'Edit custom model'}
-                  </h3>
+                  <h3 className="text-sm font-semibold">{editingHeading}</h3>
                   <div className="mt-3 grid gap-3 md:grid-cols-2">
                     <div>
                       <label className="label" htmlFor="connection-model-editor-id">Model ID</label>
@@ -552,7 +815,7 @@ export function ConnectionModelsEditor({
                         value={customForm.id}
                         onChange={(event) => setCustomForm({ ...customForm, id: event.target.value })}
                         placeholder="provider/model-id"
-                        disabled={disabled || catalogModelIds.has(editingCustomModelId)}
+                        disabled={disabled || catalogModelIds.has(editingCustomModelId) || discoveredRowIds.has(editingCustomModelId)}
                         autoFocus
                       />
                     </div>
@@ -695,6 +958,54 @@ export function ConnectionModelsEditor({
                       />
                     </div>
                   )}
+                  <div className="mt-4 rounded-box border border-base-300 bg-base-100/60 p-4">
+                    <div className="flex flex-wrap items-start justify-between gap-2">
+                      <div className="min-w-0">
+                        <h4 className="text-sm font-semibold">Pricing override</h4>
+                        <p className="mt-0.5 text-xs text-base-content/60">
+                          Set field-level rates that win over the catalog, provider, and discovered
+                          pricing rungs for this model. Empty fields keep the underlying rate.
+                        </p>
+                      </div>
+                      {pricingOverrides[editingCustomModelId] && (
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="text-error"
+                          onClick={() => clearPricingOverride(editingCustomModelId)}
+                          disabled={disabled}
+                        >
+                          Clear override
+                        </Button>
+                      )}
+                    </div>
+                    <div className="mt-3 grid gap-3 md:grid-cols-2">
+                      {PRICING_RATE_FIELDS.map((field) => (
+                        <div key={field.key}>
+                          <label
+                            className="label"
+                            htmlFor={`pricing-${field.key}-${editingCustomModelId}`}
+                          >
+                            {field.label}
+                          </label>
+                          <TextInput
+                            id={`pricing-${field.key}-${editingCustomModelId}`}
+                            bordered={false}
+                            className="w-full"
+                            inputMode="decimal"
+                            value={pricingDraft[field.key]}
+                            onChange={(event) => setPricingDraft({ ...pricingDraft, [field.key]: event.target.value })}
+                            placeholder={field.placeholder}
+                            disabled={disabled}
+                          />
+                        </div>
+                      ))}
+                    </div>
+                    <p className="label mt-2">
+                      Token rates are per 1,000,000 tokens; the per-request fee is charged once per
+                      request. Fields pre-fill from the catalog rate card as a starting point.
+                    </p>
+                  </div>
                   <div className="mt-4 flex justify-end gap-2">
                     <Button
                       variant="ghost"
@@ -718,7 +1029,7 @@ export function ConnectionModelsEditor({
 
             {orphanModelIds.length > 0 && (
               <Alert tone="warning" icon="alert">
-                These saved model IDs no longer have catalog or custom metadata: {' '}
+                These saved model IDs no longer have catalog, discovered, or custom metadata: {' '}
                 {orphanModelIds.join(', ')}. Saving preserves them until you remove them.
               </Alert>
             )}

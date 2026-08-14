@@ -7,7 +7,14 @@
 import type { Agent } from '../../shared/types/agent';
 import type { Message } from '../../shared/types/message';
 import type { ReasoningProviderOptions } from '../providers/drivers/types';
-import type { ModelSelection } from '../../shared/types/provider';
+import {
+  DEFAULT_THINKING_POLICY,
+} from '../providers/facets/thinking';
+import type { ThinkingReplayContext } from '../llm/history';
+import type { CacheFacet, ThinkingPolicy } from '../../shared/types/provider-facets';
+import { resolveSubagentTier } from '../providers/facets/tiers';
+import { assembleFacetProviderOptions } from '../providers/facets/turn-options';
+import type { ModelSelection, ProviderProtocol } from '../../shared/types/provider';
 import { streamChat, type StreamEvent } from '../llm/orchestrator';
 import { resolveSubagentEffort } from '../llm/reasoning-effort';
 import { getConfig } from '../config/loader';
@@ -134,12 +141,29 @@ export function createSubagentStreamRunner(): SubagentStreamRunner {
     let modelInstance;
     let providerSnapshot: ProviderAttemptAccountingContext['snapshot'];
     let providerOptions: ReasoningProviderOptions | undefined;
+    let pricingFacet: ProviderAttemptAccountingContext['pricingFacet'];
+    let thinkingPolicy: ThinkingPolicy | undefined;
+    let cacheFacet: CacheFacet | undefined;
+    let cacheTtl: string | undefined;
+    let cacheSessionKey: string | undefined;
+    let tierMechanism: ProviderAttemptAccountingContext['tierMechanism'];
     let accountingStore: ReturnType<typeof getProviderAccountingStore>;
     try {
       accountingStore = getProviderAccountingStore();
-      const execution = await getProviderRuntime().resolveExecution(selection);
+      const tierContext = await getProviderRuntime().resolveTierContext(selection);
+      const effectiveTier = resolveSubagentTier(
+        tierContext.connection, selection.modelId, tierContext.tierMechanism,
+      );
+      const execution = await getProviderRuntime().resolveExecution(
+        selection,
+        effectiveTier !== undefined ? { tier: effectiveTier } : {},
+      );
+      tierMechanism = execution.tierMechanism;
       modelInstance = execution.modelInstance;
       providerSnapshot = execution.snapshot;
+      pricingFacet = execution.pricingFacet;
+      thinkingPolicy = execution.thinkingPolicy;
+      cacheFacet = execution.cacheFacet;
       const effort = resolveSubagentEffort(
         params.agent,
         config,
@@ -150,6 +174,21 @@ export function createSubagentStreamRunner(): SubagentStreamRunner {
       params.onReasoningEffort?.(effort);
       providerOptions =
         effort === undefined ? undefined : execution.buildReasoningOptions?.(effort);
+      const facetOptions = assembleFacetProviderOptions({
+        providerOptions,
+        thinkingPolicy,
+        providerId: providerSnapshot.providerId,
+        tierId: resolveSubagentTier(
+          execution.connection, selection.modelId, execution.tierMechanism,
+        ),
+        tierMechanism: execution.tierMechanism,
+        cacheFacet,
+        cacheTtlSelection: execution.connection.cacheTtl,
+        sessionId,
+      });
+      providerOptions = facetOptions.providerOptions;
+      cacheSessionKey = facetOptions.cacheSessionKey;
+      cacheTtl = facetOptions.cacheTtl;
     } catch (error) {
       yield {
         type: 'error',
@@ -181,6 +220,8 @@ export function createSubagentStreamRunner(): SubagentStreamRunner {
       agentType: params.agent.type,
       agentTier: params.agent.tier,
      attemptIdHolder: { value: null },
+      pricingFacet,
+      tierMechanism,
     };
     try {
       getSubagentAttributionStore().insert({
@@ -237,6 +278,14 @@ export function createSubagentStreamRunner(): SubagentStreamRunner {
         modelInstance,
         accounting,
         providerOptions,
+        thinkingReplay: {
+          policy: thinkingPolicy ?? DEFAULT_THINKING_POLICY,
+          selection: { providerId: providerSnapshot.providerId, modelId: selection.modelId },
+          protocol: providerSnapshot.protocol as ProviderProtocol,
+        } satisfies ThinkingReplayContext,
+        cachePlacement: cacheFacet
+          ? { facet: cacheFacet, ttl: cacheTtl, sessionKey: cacheSessionKey }
+          : undefined,
       });
     } finally {
       releaseProjectMCPManager(runtime);

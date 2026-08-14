@@ -39,10 +39,7 @@ export function buildUpdateTool(
     name: 'todo_update',
     description:
       'Update an existing task owned by the current agent.\n\n' +
-      'Status transitions:\n' +
-      `  OPEN → IN_PROGRESS\n` +
-      `  IN_PROGRESS → DONE\n` +
-      `  DONE → (terminal, no transitions)`,
+      'Status transitions are unrestricted: any status can be set to any status.',
     inputSchema: z.object({
       id: z.string().describe('The ID of the task to update.'),
       title: z.string().optional().describe('New title (optional).'),

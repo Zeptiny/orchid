@@ -6,6 +6,15 @@ import {
   reasoningModelConfigSchema,
   type ProviderDefinition,
 } from '../../../shared/types/provider';
+import {
+  cacheFacetSchema,
+  currencyUnitSchema,
+  priceRateSchema,
+  pricingContextTierSchema,
+  pricingRateFieldsSchema,
+  thinkingPolicySchema,
+  tierMechanismSchema,
+} from '../../../shared/types/provider-facets';
 
 /** The first Orchid-owned, data-only catalog format. */
 export const CATALOG_SCHEMA_VERSION = 1;
@@ -15,10 +24,6 @@ const isoTimestampSchema = z.string().datetime({ offset: true });
 const semanticVersionSchema = z.string().regex(
   /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/,
   'Expected a semantic version such as 1.2.3',
-);
-const decimalStringSchema = z.string().regex(
-  /^(?:0|[1-9]\d*)(?:\.\d+)?$/,
-  'Expected a non-negative decimal string',
 );
 const sha256Schema = z.string().regex(/^sha256:[a-f0-9]{64}$/, 'Expected a sha256 content hash');
 
@@ -46,37 +51,51 @@ export const catalogProvenanceSchema = z.object({
 const modalitySchema = z.enum(['text', 'image', 'audio', 'video', 'pdf', 'embedding']);
 const lifecycleSchema = z.enum(['active', 'preview', 'deprecated', 'disabled', 'retired']);
 
-export const catalogPriceRateSchema = z.object({
-  /** Exact decimal amount in the parent currency. */
-  amount: decimalStringSchema,
-  /** Denominator for the rate, for example 1_000_000 tokens. */
-  per: z.number().int().positive(),
-  unit: z.enum(['tokens', 'requests', 'characters', 'energy']),
+export const catalogPriceRateSchema = priceRateSchema;
+
+/**
+ * Facet kinds a catalog may declare as data. Declaring a kind is gated again
+ * by the trusted policy list; undeclared keys fail the strict schema.
+ */
+export const catalogFacetsSchema = z.object({
+  thinking: thinkingPolicySchema.optional(),
+  tiers: tierMechanismSchema.optional(),
+  cache: cacheFacetSchema.optional(),
 }).strict();
 
+export type CatalogFacets = z.infer<typeof catalogFacetsSchema>;
+export type CatalogFacetKind = keyof CatalogFacets;
+
 export const catalogPricingSchema = z.object({
-  currency: z.string().regex(/^[A-Z]{3}$/, 'Expected an ISO-4217 currency code'),
+  /** Cost-bucketing code: the ISO-4217 code for fiat, the native unit otherwise. */
+  currency: z.string().trim().min(1).max(24),
+  /** Typed unit declaration; required whenever the currency is non-fiat (R8). */
+  currencyUnit: currencyUnitSchema.optional(),
   effectiveAt: isoTimestampSchema,
-  rates: z.object({
-    input: catalogPriceRateSchema.optional(),
-    output: catalogPriceRateSchema.optional(),
-    cacheRead: catalogPriceRateSchema.optional(),
-    cacheWrite: catalogPriceRateSchema.optional(),
-    reasoning: catalogPriceRateSchema.optional(),
-  }).strict(),
-  contextTiers: z.array(z.object({
-    /** The tier begins when context exceeds this many input tokens. */
-    overContextTokens: z.number().int().nonnegative(),
-    rates: z.object({
-      input: catalogPriceRateSchema.optional(),
-      output: catalogPriceRateSchema.optional(),
-      cacheRead: catalogPriceRateSchema.optional(),
-      cacheWrite: catalogPriceRateSchema.optional(),
-      reasoning: catalogPriceRateSchema.optional(),
-    }).strict(),
-  }).strict()).optional(),
+  rates: pricingRateFieldsSchema,
+  contextTiers: z.array(pricingContextTierSchema).optional(),
   provenance: catalogFieldProvenanceSchema,
-}).strict();
+}).strict().superRefine((pricing, ctx) => {
+  const unit = pricing.currencyUnit;
+  if (!unit) {
+    if (!/^[A-Z]{3}$/.test(pricing.currency)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'A non-fiat currency requires a currencyUnit declaration',
+        path: ['currency'],
+      });
+    }
+    return;
+  }
+  const expected = unit.kind === 'fiat' ? unit.code : unit.unit;
+  if (pricing.currency !== expected) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: `Currency '${pricing.currency}' does not match the declared currencyUnit '${expected}'`,
+      path: ['currency'],
+    });
+  }
+});
 
 export const catalogModelSchema = z.object({
   /** Opaque provider model ID. It may legally contain `/`. */
@@ -98,6 +117,7 @@ export const catalogModelSchema = z.object({
   provenance: catalogFieldProvenanceSchema,
   reasoningLevels: reasoningModelConfigSchema.shape.levels.optional(),
   reasoningDefault: reasoningModelConfigSchema.shape.default.optional(),
+  facets: catalogFacetsSchema.optional(),
 }).strict();
 
 export const catalogProviderSchema = z.object({
@@ -109,6 +129,7 @@ export const catalogProviderSchema = z.object({
   allowsCustomModels: z.boolean(),
   lifecycle: lifecycleSchema,
   provenance: catalogFieldProvenanceSchema,
+  facets: catalogFacetsSchema.optional(),
   models: z.array(catalogModelSchema),
 }).strict().superRefine((provider, ctx) => {
   const modelIds = new Set<string>();

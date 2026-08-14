@@ -9,6 +9,7 @@ import {
   requestNextRequestStop,
   shouldStopNextRequest,
 } from '../../src/main/ipc/next-request-stop';
+import { OPENAI_TIER_MECHANISM } from '../../src/main/providers/drivers/native';
 
 function successfulToolResult(toolCallId: string, content: string): Record<string, unknown> {
   const canonical = createCanonicalToolResult('generic', {
@@ -48,6 +49,7 @@ const mocks = vi.hoisted(() => {
   const handlers = new Map<string, (...args: unknown[]) => unknown>();
   const streamResponses: string[] = [];
   const streamEventSequences: Array<Array<Record<string, unknown>>> = [];
+  let modelHistory: Array<Record<string, unknown>> = [];
   const electronWebContents = {
     fromId: vi.fn(() => null),
     getAllWebContents: vi.fn(() => []),
@@ -67,6 +69,7 @@ const mocks = vi.hoisted(() => {
     selection?: { connectionId: string; modelId: string } | null;
     modelLabel?: string;
     reasoningEffortOverride?: string | number | null;
+    tierOverride?: string | null;
   };
   let activeSession: MockSession | null = null;
   const sessionsById = new Map<string, MockSession>();
@@ -157,6 +160,7 @@ const mocks = vi.hoisted(() => {
   const modelInstance = { provider: 'trusted-test-driver' };
   const providerRuntime = {
     resolveLanguageModel: vi.fn(async () => modelInstance),
+    resolveTierContext: vi.fn(async () => ({ connection: {}, tierMechanism: undefined })),
     resolveExecution: vi.fn(async () => ({
       modelInstance,
       connection: {},
@@ -257,6 +261,7 @@ const mocks = vi.hoisted(() => {
       if (activeSession?.id === id) activeSession = updated;
     }),
     getSession: vi.fn((id: string) => sessionsById.get(id) ?? (activeSession?.id === id ? activeSession : null)),
+    getModelHistory: vi.fn(() => modelHistory),
     switchTo: vi.fn((id: string) => {
       const session = sessionsById.get(id) ?? (activeSession?.id === id ? activeSession : null);
       if (session) activeSession = session;
@@ -279,6 +284,8 @@ const mocks = vi.hoisted(() => {
         subagentRecord: null,
         startTime: new Date().toISOString(),
         endTime: null,
+        errorDetail: null,
+        errorTitle: null,
       };
       const updated = {
         ...target,
@@ -373,6 +380,7 @@ const mocks = vi.hoisted(() => {
       activeSession = null;
       sessionsById.clear();
       activeSessionsByWindow.clear();
+      modelHistory = [];
       workspaceBound = true;
       workspaceByWindow.clear();
       sessionManager.getActive.mockClear();
@@ -380,6 +388,7 @@ const mocks = vi.hoisted(() => {
       sessionManager.changeCwd.mockClear();
       sessionManager.changeModel.mockClear();
       sessionManager.getSession.mockClear();
+      sessionManager.getModelHistory.mockClear();
       sessionManager.switchTo.mockClear();
       sessionManager.clearActive.mockClear();
       sessionManager.startChain.mockClear();
@@ -401,6 +410,9 @@ const mocks = vi.hoisted(() => {
     /** Test helper: register a session without selecting it for the window. */
     _putSession: (session: MockSession) => {
       sessionsById.set(session.id, session);
+    },
+    _setModelHistory: (messages: Array<Record<string, unknown>>) => {
+      modelHistory = messages;
     },
   };
 
@@ -536,6 +548,7 @@ const mocks = vi.hoisted(() => {
     }),
     subagentManager: {
       cancelRunning: vi.fn(() => []),
+      discardSession: vi.fn(),
     },
     publishSessionActivity: vi.fn(),
     completeSessionActivity: vi.fn(),
@@ -565,23 +578,27 @@ vi.mock('electron', () => ({
   webContents: mocks.electronWebContents,
 }));
 
-vi.mock('../../src/main/config/loader', () => ({
-  HOME_PERSONALITIES_DIR: '/tmp/orchid-test-personalities',
-  getTierModelSelection: (
-    config: {
-      default_model: unknown;
-      tier_models: Record<string, unknown>;
-    },
-    tier: string,
-  ) => config.tier_models[tier] ?? config.default_model,
-  getConfig: vi.fn(() => ({
-    default_model: null,
-    tier_models: { bloom: null },
-    command_timeout: 30,
-    llm_stream_idle_timeout: 60,
-    llm_stream_retries: 0,
-  })),
-}));
+vi.mock('../../src/main/config/loader', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../src/main/config/loader')>();
+  return {
+    ...actual,
+    HOME_PERSONALITIES_DIR: '/tmp/orchid-test-personalities',
+    getTierModelSelection: (
+      config: {
+        default_model: unknown;
+        tier_models: Record<string, unknown>;
+      },
+      tier: string,
+    ) => config.tier_models[tier] ?? config.default_model,
+    getConfig: vi.fn(() => ({
+      default_model: null,
+      tier_models: { bloom: null },
+      command_timeout: 30,
+      llm_stream_idle_timeout: 60,
+      llm_stream_retries: 0,
+    })),
+  };
+});
 
 vi.mock('../../src/main/tools', () => ({
   toolRegistry: mocks.toolRegistry,
@@ -866,6 +883,95 @@ describe('chat IPC driver streaming', () => {
 
     expect(mocks.subagentManager.cancelRunning).not.toHaveBeenCalled();
     expect(mocks.backgroundStore.terminateSession).not.toHaveBeenCalled();
+  });
+
+  it('keeps prior model history out of terminal renderer events', async () => {
+    const sessionId = '89898989-8989-4989-8989-898989898989';
+    const selection = {
+      connectionId: '11111111-1111-4111-8111-111111111111',
+      modelId: 'vendor/path/model',
+    };
+    mocks.sessionManager._setActive({
+      ...makeSession(sessionId),
+      selection,
+      model: selection.modelId,
+      modelLabel: selection.modelId,
+    });
+    mocks.sessionManager._setModelHistory([{
+      id: 'old-history-message',
+      role: MessageRole.USER,
+      content: 'A very old request',
+      type: MessageType.TEXT,
+      tool_calls: null,
+      tool_call_id: null,
+      name: null,
+      thinking: null,
+      timestamp: '2026-01-01T00:00:00.000Z',
+      usage: null,
+      hidden: false,
+      tool_result: null,
+    }]);
+    mocks.streamResponses.push('Current answer');
+
+    const send = vi.fn();
+    const chatSend = mocks.handlers.get(IPC_CHANNELS.CHAT_SEND)!;
+    await chatSend({ sender: { id: 612, send } }, { message: 'Current request' });
+    await waitForDoneCount(send, 1);
+
+    const done = doneEvents(send).at(-1)?.[1] as {
+      messages: Array<Record<string, unknown>>;
+    };
+    expect(done.messages).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: 'old-history-message' }),
+    ]));
+    expect(done.messages).toEqual(
+      mocks.sessionManager.persistTurn.mock.calls.at(-1)?.[0]?.messages,
+    );
+    expect(done.messages).toEqual(expect.arrayContaining([
+      expect.objectContaining({ role: MessageRole.USER, content: 'Current request' }),
+      expect.objectContaining({ role: MessageRole.ASSISTANT, content: 'Current answer' }),
+    ]));
+  });
+
+  it('fails closed when complete model history cannot be loaded and permits retry', async () => {
+    const sessionId = '78787878-7878-4787-8787-787878787878';
+    const selection = {
+      connectionId: '11111111-1111-4111-8111-111111111111',
+      modelId: 'vendor/path/model',
+    };
+    mocks.sessionManager._setActive({
+      ...makeSession(sessionId),
+      selection,
+      model: selection.modelId,
+      modelLabel: selection.modelId,
+    });
+    mocks.sessionManager.getModelHistory
+      .mockImplementationOnce(() => {
+        throw new Error('database temporarily unavailable');
+      })
+      .mockReturnValueOnce([]);
+
+    const send = vi.fn();
+    const chatSend = mocks.handlers.get(IPC_CHANNELS.CHAT_SEND)!;
+    const failed = await chatSend(
+      { sender: { id: 613, send } },
+      { message: 'Must retain context' },
+    );
+    expect(failed).toEqual(expect.objectContaining({
+      status: 'error',
+      kind: 'history_load_failed',
+      error: expect.stringContaining('database temporarily unavailable'),
+    }));
+    expect(mocks.sessionManager.startChain).not.toHaveBeenCalled();
+    expect(mocks.providerRuntime.resolveTierContext).not.toHaveBeenCalled();
+
+    mocks.streamResponses.push('Safe retry');
+    const retried = await chatSend(
+      { sender: { id: 613, send } },
+      { message: 'Must retain context' },
+    );
+    expect(retried).toEqual(expect.objectContaining({ status: 'started', sessionId }));
+    await waitForDoneCount(send, 1);
   });
 
   it('visible main-turn abort persists interruption and resets the renderer', async () => {
@@ -1535,7 +1641,7 @@ describe('chat IPC provider gates', () => {
 
     expect(result).toMatchObject({ status: 'started' });
     await waitForDoneCount(send, 1);
-    expect(mocks.providerRuntime.resolveExecution).toHaveBeenCalledWith(typedSelection);
+    expect(mocks.providerRuntime.resolveExecution).toHaveBeenCalledWith(typedSelection, {});
     expect(mocks.streamChat).toHaveBeenCalledWith(expect.objectContaining({
       modelInstance: mocks.modelInstance,
       sessionId: 'dddddddd-dddd-4ddd-8ddd-dddddddddddd',
@@ -1592,6 +1698,68 @@ describe('chat IPC provider gates', () => {
     expect(buildReasoningOptions).toHaveBeenCalledWith('high');
     expect(mocks.streamChat).toHaveBeenCalledWith(expect.objectContaining({
       providerOptions: { openai: { reasoningEffort: 'high' } },
+    }));
+  });
+
+  it('merges a session tier override into providerOptions and the frozen snapshot (R19/R21/R22)', async () => {
+    const sessionId = 'f1f1f1f1-f1f1-4f1f-8f1f-f1f1f1f1f1f1';
+    const selection = {
+      connectionId: '11111111-1111-4111-8111-111111111111',
+      modelId: 'vendor/path/model',
+    };
+    mocks.sessionManager._setActive({
+      ...makeSession(sessionId),
+      model: selection.modelId,
+      selection,
+      modelLabel: selection.modelId,
+      tierOverride: 'flex',
+    });
+    mocks.providerRuntime.resolveTierContext.mockResolvedValueOnce({
+      connection: { tierSelections: { 'vendor/path/model': 'fast' } },
+      tierMechanism: OPENAI_TIER_MECHANISM,
+    } as never);
+    mocks.providerRuntime.resolveExecution.mockResolvedValueOnce({
+      modelInstance: mocks.modelInstance,
+      connection: { tierSelections: { 'vendor/path/model': 'fast' } },
+      model: { id: 'vendor/path/model', capabilities: { reasoning: false } },
+      snapshot: {
+        providerId: 'openai',
+        providerDisplayName: 'OpenAI',
+        connectionId: '11111111-1111-4111-8111-111111111111',
+        connectionName: 'Work',
+        modelId: 'vendor/path/model',
+        protocol: 'openai-compatible',
+        modelSource: 'catalog',
+        catalogVersion: 1,
+        catalogSource: 'bundled',
+        catalogObservedAt: null,
+        pricing: null,
+        fieldProvenance: {},
+        statusObservation: null,
+        tier: { mechanism: 'request-parameter', requestedTier: 'flex' },
+      },
+      tierMechanism: OPENAI_TIER_MECHANISM,
+    } as never);
+    mocks.streamChat.mockImplementationOnce(async function* () {
+      yield { type: 'content', text: 'Tiered reply' };
+      yield { type: 'finish', finishReason: 'stop' };
+    });
+
+    const send = vi.fn();
+    const chatSend = mocks.handlers.get(IPC_CHANNELS.CHAT_SEND)!;
+    await chatSend({ sender: { id: 909, send } }, { message: 'Tiered request' });
+    await waitForDoneCount(send, 1);
+
+    // The session override 'flex' wins over the connection selection 'fast' (R21).
+    expect(mocks.providerRuntime.resolveExecution).toHaveBeenCalledWith(selection, { tier: 'flex' });
+    // The request-parameter mechanism rides serviceTier into the merged providerOptions (R19).
+    expect(mocks.streamChat).toHaveBeenCalledWith(expect.objectContaining({
+      providerOptions: { openai: { serviceTier: 'flex' } },
+      accounting: expect.objectContaining({
+        snapshot: expect.objectContaining({
+          tier: { mechanism: 'request-parameter', requestedTier: 'flex' },
+        }),
+      }),
     }));
   });
 
@@ -1682,12 +1850,20 @@ describe('chat IPC provider gates', () => {
       id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
       name: 'Investigate Session Naming',
     });
-    expect(channelEvents(send, IPC_CHANNELS.SESSION_UPDATED).at(-1)?.[1]).toMatchObject({
-      session: { id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', activeChainId: null },
+    const sourceUpdate = channelEvents(send, IPC_CHANNELS.SESSION_UPDATED).at(-1)?.[1];
+    const peerUpdate = channelEvents(sameSession.send, IPC_CHANNELS.SESSION_UPDATED).at(-1)?.[1];
+    expect(sourceUpdate).toMatchObject({
+      sessionId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      activeChainId: null,
+      chain: { id: 'chain-1', status: 'completed' },
     });
-    expect(channelEvents(sameSession.send, IPC_CHANNELS.SESSION_UPDATED).at(-1)?.[1]).toMatchObject({
-      session: { id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', activeChainId: null },
+    expect(peerUpdate).toMatchObject({
+      sessionId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      activeChainId: null,
+      chain: { id: 'chain-1', status: 'completed' },
     });
+    expect(sourceUpdate).not.toHaveProperty('session');
+    expect(sourceUpdate).not.toHaveProperty('subagentChains');
     expect(channelEvents(sameSession.send, IPC_CHANNELS.SESSION_RENAMED).at(-1)?.[1]).toEqual({
       id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
       name: 'Investigate Session Naming',
@@ -1753,6 +1929,7 @@ describe('chat IPC provider gates', () => {
     // Turn stays in flight past the deadline and never yields assistant text.
     mocks.streamChat.mockImplementationOnce(async function* () {
       await new Promise(() => {});
+      yield { type: 'finish', finishReason: 'stop' };
     });
     const send = vi.fn();
     const source = { id: 910, send };
@@ -1889,6 +2066,7 @@ describe('chat IPC provider gates', () => {
     });
     mocks.streamChat.mockImplementationOnce(async function* () {
       await new Promise(() => {});
+      yield { type: 'finish', finishReason: 'stop' };
     });
     const send = vi.fn();
     const source = { id: 913, send };
@@ -1918,6 +2096,49 @@ describe('chat IPC provider gates', () => {
       id: 'cdcdcdcd-cdcd-4cdc-8cdc-cdcdcdcdcdcd',
       name: 'Investigate Session Naming',
     });
+  });
+
+  it('discards a deleted live turn without persistence, terminal events, or auto-naming', async () => {
+    const sessionId = 'dededede-dede-4ede-8ede-dededededede';
+    const selection = {
+      connectionId: '11111111-1111-4111-8111-111111111111',
+      modelId: 'vendor/path/model',
+    };
+    mocks.sessionManager._setActive({
+      ...makeSession(sessionId),
+      selection,
+      modelLabel: selection.modelId,
+    });
+
+    let releaseStream!: () => void;
+    const streamGate = new Promise<void>((resolve) => { releaseStream = resolve; });
+    mocks.streamChat.mockImplementationOnce(async function* () {
+      yield { type: 'content', text: 'partial deletion tail' };
+      await streamGate;
+      yield { type: 'finish', finishReason: 'stop' };
+    });
+    const send = vi.fn();
+    const source = { id: 915, send };
+    mocks.sessionManager._setActiveForWindow('915', mocks.sessionManager.getActive()!);
+    mocks.electronWebContents.getAllWebContents.mockReturnValue([source]);
+    const chatSend = mocks.handlers.get(IPC_CHANNELS.CHAT_SEND)!;
+
+    await chatSend({ sender: source }, { message: 'Delete this live turn' });
+    await waitForChannelCount(send, IPC_CHANNELS.CHAT_CHUNK, 1);
+    mocks.sessionManager.persistTurn.mockClear();
+    mocks.aiGenerateText.mockClear();
+    send.mockClear();
+
+    expect(chatIpc.discardDeletedSessionRuntime(sessionId)).toBe(true);
+    releaseStream();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(mocks.backgroundStore.terminateSession).toHaveBeenCalledWith(sessionId);
+    expect(mocks.subagentManager.discardSession).toHaveBeenCalledWith(sessionId);
+    expect(mocks.sessionManager.persistTurn).not.toHaveBeenCalled();
+    expect(mocks.aiGenerateText).not.toHaveBeenCalled();
+    expect(channelEvents(send, IPC_CHANNELS.CHAT_DONE)).toEqual([]);
+    expect(channelEvents(send, IPC_CHANNELS.CHAT_STATE)).toEqual([]);
   });
 });
 

@@ -15,6 +15,7 @@ import type {
   PermissionSetSessionModeMessage,
   ProviderModelOption,
   SessionReasoningConfigResult,
+  SessionServiceTierConfigResult,
 } from '../../shared/types/ipc';
 import type { PermissionMode } from '../../shared/types/permission';
 import { useElapsedSeconds, type InterruptState } from '../hooks/useChat';
@@ -27,6 +28,7 @@ import { Keycaps } from './Keycaps';
 import { ModelPicker } from './ModelPicker';
 import { PermissionSelector } from './PermissionSelector';
 import { ReasoningSelector, shouldShowReasoningSelector } from './ReasoningSelector';
+import { ServiceTierSelector, shouldShowServiceTierSelector } from './ServiceTierSelector';
 import { Button } from './ui/Button';
 import { Spinner } from './ui/Spinner';
 import { StatusBadge } from './ui/StatusBadge';
@@ -99,6 +101,9 @@ interface FooterProps {
   modelDetails?: Readonly<Record<string, ProviderModelOption>>;
   commandContext?: CommandContext;
   sessionId?: string | null;
+  reasoningEffortOverride?: string | number | null;
+  serviceTierOverride?: string | null;
+  permissionMode?: PermissionMode | null;
 }
 
 export const Footer = memo(function Footer({
@@ -115,6 +120,9 @@ export const Footer = memo(function Footer({
   modelDetails,
   commandContext,
   sessionId,
+  reasoningEffortOverride = null,
+  serviceTierOverride = null,
+  permissionMode = null,
 }: FooterProps) {
   const confirming = interruptState && interruptState !== 'idle';
   const elapsedSeconds = useElapsedSeconds(
@@ -124,8 +132,16 @@ export const Footer = memo(function Footer({
   const [contextOpen, setContextOpen] = useState(false);
   const contextMenuId = useId();
   const [reasoningConfig, setReasoningConfig] = useState<SessionReasoningConfigResult | null>(null);
-  const [sessionPermissionMode, setSessionPermissionMode] = useState<PermissionMode | null>(null);
+  const [serviceTierConfig, setServiceTierConfig] = useState<SessionServiceTierConfigResult | null>(null);
+  const [sessionPermissionMode, setSessionPermissionMode] = useState<PermissionMode | null>(permissionMode);
   const permissionModeCoordinator = useRef(new PermissionModeCoordinator());
+  const sessionIdRef = useRef(sessionId ?? null);
+  const reasoningOverrideRef = useRef(reasoningEffortOverride);
+  const serviceTierOverrideRef = useRef(serviceTierOverride);
+  sessionIdRef.current = sessionId ?? null;
+  reasoningOverrideRef.current = reasoningEffortOverride;
+  serviceTierOverrideRef.current = serviceTierOverride;
+  const isDraft = sessionId == null;
 
   const usedContextTokens = contextUsedTokens(usage);
   const contextPercent = getContextPercent(usage, maxContext);
@@ -167,10 +183,18 @@ export const Footer = memo(function Footer({
       setReasoningConfig(null);
       return;
     }
+    const selection = model && modelDetails?.[model]?.selection ? modelDetails[model].selection : null;
     session
-      .getReasoningConfig()
+      .getReasoningConfig(selection ? { selection } : {})
       .then((config) => {
-        if (!cancelled) setReasoningConfig(config);
+        if (!cancelled) {
+          setReasoningConfig({
+            ...config,
+            override: sessionIdRef.current === null
+              ? config.override
+              : reasoningOverrideRef.current,
+          });
+        }
       })
       .catch(() => {
         if (!cancelled) setReasoningConfig(null);
@@ -178,11 +202,64 @@ export const Footer = memo(function Footer({
     return () => {
       cancelled = true;
     };
-  }, [model, sessionId]);
+  }, [isDraft, model, modelDetails]);
+
+  useEffect(() => {
+    if (isDraft) return;
+    setReasoningConfig((previous) => previous
+      ? { ...previous, override: reasoningEffortOverride }
+      : previous);
+  }, [isDraft, reasoningEffortOverride, sessionId]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const session = window.orchid?.session;
+    if (!session?.getServiceTierConfig) {
+      setServiceTierConfig(null);
+      return;
+    }
+    const selection = model && modelDetails?.[model]?.selection ? modelDetails[model].selection : null;
+    session
+      .getServiceTierConfig(selection ? { selection } : {})
+      .then((config) => {
+        if (!cancelled) {
+          const override = sessionIdRef.current === null
+            ? config.override
+            : serviceTierOverrideRef.current;
+          setServiceTierConfig({
+            ...config,
+            override,
+            effective: override ?? config.selected,
+          });
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setServiceTierConfig(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [isDraft, model, modelDetails]);
+
+  useEffect(() => {
+    if (isDraft) return;
+    setServiceTierConfig((previous) => previous
+      ? {
+          ...previous,
+          override: serviceTierOverride,
+          effective: serviceTierOverride ?? previous.selected,
+        }
+      : previous);
+  }, [isDraft, serviceTierOverride, sessionId]);
 
   useEffect(() => {
     const permission = window.orchid?.permission;
     const coordinator = permissionModeCoordinator.current;
+    if (sessionId != null) {
+      coordinator.invalidate();
+      setSessionPermissionMode(permissionMode);
+      return () => coordinator.invalidate();
+    }
     if (!permission?.getSessionMode) {
       coordinator.invalidate();
       setSessionPermissionMode(null);
@@ -194,7 +271,7 @@ export const Footer = memo(function Footer({
       setSessionPermissionMode,
     );
     return () => coordinator.invalidate();
-  }, [sessionId]);
+  }, [permissionMode, sessionId]);
 
   const badgeTone =
     contextPercent != null && contextPercent >= 85
@@ -228,6 +305,22 @@ export const Footer = memo(function Footer({
       try {
         await window.orchid?.session?.setReasoningEffort({ effort: next });
         setReasoningConfig((prev) => (prev ? { ...prev, override: next } : prev));
+      } catch {
+        // Non-fatal — selector keeps the last good value
+      }
+    },
+    [],
+  );
+
+  const handleServiceTierChange = useCallback(
+    async (next: string | null) => {
+      try {
+        await window.orchid?.session?.setServiceTier({ tier: next });
+        setServiceTierConfig((prev) =>
+          prev
+            ? { ...prev, override: next, effective: next ?? prev.selected ?? null }
+            : prev,
+        );
       } catch {
         // Non-fatal — selector keeps the last good value
       }
@@ -322,6 +415,13 @@ export const Footer = memo(function Footer({
             value={reasoningConfig.override}
             defaultValue={reasoningConfig.default}
             onChange={(next) => void handleReasoningChange(next)}
+            disabled={isStreaming || interruptState === 'confirmAgent'}
+          />
+        )}
+        {serviceTierConfig && shouldShowServiceTierSelector(serviceTierConfig) && (
+          <ServiceTierSelector
+            config={serviceTierConfig}
+            onChange={(next) => void handleServiceTierChange(next)}
             disabled={isStreaming || interruptState === 'confirmAgent'}
           />
         )}

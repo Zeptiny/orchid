@@ -7,6 +7,7 @@ import { getSessionManager, resolveWindowWorkspace } from '../../session/singlet
 import { inspectProjectDirectory } from '../../project/path';
 import { getProjectTrustState } from '../../project/trust';
 import { takeDraftReasoningOverride } from '../../session/draft-reasoning';
+import { takeDraftTierOverride } from '../../session/draft-tier';
 import { takeDraftPermissionOverride } from '../../permissions/session-overrides';
 import { workingSetOpenOrFocus } from '../session-working-set';
 import { clearDraftCwd } from '../../project/workspace';
@@ -155,13 +156,21 @@ export function ensureActiveSession(
   if (draftOverride !== undefined) {
     manager.setReasoningEffortOverride(created.id, draftOverride);
   }
+  const draftTier = takeDraftTierOverride(windowId);
+  if (draftTier !== undefined) {
+    manager.setTierOverride(created.id, draftTier);
+  }
   const draftPermission = takeDraftPermissionOverride(windowId);
   if (draftPermission !== undefined) {
     manager.setPermissionMode(created.id, draftPermission);
   }
   const session =
     manager.getSession(created.id) ??
-    { ...created, reasoningEffortOverride: draftOverride ?? created.reasoningEffortOverride };
+    {
+      ...created,
+      reasoningEffortOverride: draftOverride ?? created.reasoningEffortOverride,
+      tierOverride: draftTier ?? created.tierOverride,
+    };
   // Draft was promoted into the new session.
   clearDraftCwd(windowId);
   workingSetOpenOrFocus(session.id, windowId);

@@ -6,7 +6,7 @@
  * terminal authority.
  */
 
-import type { Message, Usage } from '../../shared/types/message';
+import type { Message, ThinkingReplayPayload, Usage } from '../../shared/types/message';
 import { MessageRole, MessageType } from '../../shared/types/message';
 import type { CanonicalToolResult } from '../../shared/types/tool-result';
 
@@ -58,8 +58,12 @@ export function makeAssistantMessage(
   };
 }
 
-/** Create an ASSISTANT thinking/reasoning message. */
-export function makeThinkingMessage(content: string, id: string = newId()): Message {
+/** Create an ASSISTANT thinking/reasoning message, optionally with a replay artifact. */
+export function makeThinkingMessage(
+  content: string,
+  id: string = newId(),
+  payload?: ThinkingReplayPayload,
+): Message {
   return {
     id,
     role: MessageRole.ASSISTANT,
@@ -69,6 +73,7 @@ export function makeThinkingMessage(content: string, id: string = newId()): Mess
     tool_call_id: null,
     name: null,
     thinking: content,
+    ...(payload ? { thinking_payload: payload } : {}),
     timestamp: nowIso(),
     usage: null,
     hidden: false,

@@ -107,8 +107,8 @@ export interface SubagentDeltaBatcherOptions {
  * thinking appends per flush, caps each flush at a global event count and byte
  * budget, and defers (never drops) overflowing non-terminal deltas to the next
  * flush in order. `spawned`/`terminal` are budget-exempt and always flush.
- * Delivers one `SubagentEvent` envelope per eligible session per flush; records
- * ride only the `spawned`/`terminal` deltas the manager already built.
+ * Delivers one `SubagentEvent` envelope per eligible session per flush;
+ * lightweight summaries ride only the `spawned`/`terminal` deltas.
  */
 export function createSubagentDeltaBatcher(
   deliver: (envelope: SubagentEvent) => void,

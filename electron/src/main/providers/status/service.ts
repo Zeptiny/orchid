@@ -6,6 +6,7 @@ import {
   type ProviderStatusErrorKind,
   type ProviderStatusObservation,
 } from './cache';
+import type { ProviderQuota } from '../../../shared/types/provider-facets';
 
 export interface ProviderStatusSource {
   readonly providerId: string;
@@ -14,6 +15,16 @@ export interface ProviderStatusSource {
   readonly ttlMs: number;
   readonly minimumManualRefreshMs: number;
   fetchStatus(): Promise<ProviderStatusObservation>;
+}
+
+/**
+ * A status source whose driver also fetches typed quota (R24). The quota hook
+ * runs alongside the status fetch through the same TTL/refresh path; its result
+ * is stored on the observation's typed `data.quota` key, and its failure only
+ * ever degrades the observation to stale/unavailable (R25).
+ */
+export interface ProviderQuotaStatusSource extends ProviderStatusSource {
+  fetchQuota(): Promise<ProviderQuota>;
 }
 
 export interface StatusRefreshOptions {
@@ -217,6 +228,23 @@ export class ProviderStatusService {
         : unavailableObservation(source, now, diagnostic));
       return { source: 'error', observation };
     }
+  }
+
+  /**
+   * Refresh typed quota for a facet-capable source. The quota fetch and its
+   * result ride the same TTL/manual-minimum/single-flight cache path as status;
+   * a quota failure degrades to the stale/unavailable status observation and
+   * never throws into the caller.
+   */
+  refreshQuota(source: ProviderQuotaStatusSource, options: StatusRefreshOptions = {}): Promise<StatusRefreshResult> {
+    return this.refresh({
+      ...source,
+      fetchStatus: async () => {
+        const observation = await source.fetchStatus();
+        const quota = await source.fetchQuota();
+        return { ...observation, data: { ...observation.data, quota } };
+      },
+    }, options);
   }
 
   private putIfCurrent(

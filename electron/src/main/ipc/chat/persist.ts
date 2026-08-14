@@ -6,7 +6,6 @@ import { MessageRole, MessageType } from '../../../shared/types/message';
 import type { Message, Usage } from '../../../shared/types/message';
 import { ChainStatus } from '../../../shared/types/chain';
 import { IPC_CHANNELS } from '../../../shared/types/ipc';
-import { flattenSessionMessages } from '../../../shared/types/session';
 import { getSessionManager } from '../../session/singleton';
 import { setChatHistory } from '../chat-history';
 import {
@@ -14,7 +13,7 @@ import {
   makeThinkingMessage,
 } from '../../llm/message-factories';
 import { activeAgents, pendingCheckpoints, type ActiveAgent } from './state';
-import { sendSessionEvent, webContentsForWindowId } from './events';
+import { buildSessionUpdatedEvent, sendSessionEvent, webContentsForWindowId } from './events';
 import { textSegmentIdAtOffset } from './snapshot';
 
 export function attachUsageToLatestAssistant(messages: Message[], usage: Usage): boolean {
@@ -32,7 +31,10 @@ export function attachUsageToLatestAssistant(messages: Message[], usage: Usage):
 export function appendLiveTailMessages(
   messages: Message[],
   agent: ActiveAgent,
-  context: Pick<AgentContext, 'response' | 'thinking' | 'usage'> | undefined,
+  context: Pick<
+    AgentContext,
+    'response' | 'thinking' | 'thinkingPayloads' | 'thinkingArtifacts' | 'usage'
+  > | undefined,
   opts?: { placeholderWhenEmpty?: boolean },
 ): void {
   const partialResponse = context?.response ?? '';
@@ -45,8 +47,13 @@ export function appendLiveTailMessages(
       messages.push(makeThinkingMessage(
         segment,
         textSegmentIdAtOffset(agent, 'thinking', agent.thinkingCommittedLength),
+        context?.thinkingPayloads?.[thinking.length],
       ));
     }
+  }
+  const artifacts = context?.thinkingArtifacts ?? [];
+  for (let index = agent.thinkingArtifactsCommitted; index < artifacts.length; index += 1) {
+    messages.push(makeThinkingMessage('', undefined, artifacts[index]));
   }
 
   const remaining = partialResponse.slice(agent.responseCommittedLength);
@@ -81,6 +88,10 @@ export function flushPartialTurnContent(agent: ActiveAgent, context: AgentContex
   if (thinking.length > agent.thinkingCommittedLength) {
     agent.thinkingCommittedLength = thinking.length;
   }
+  const artifacts = context?.thinkingArtifacts ?? [];
+  if (artifacts.length > agent.thinkingArtifactsCommitted) {
+    agent.thinkingArtifactsCommitted = artifacts.length;
+  }
   if (partialResponse.length > agent.responseCommittedLength) {
     agent.responseCommittedLength = partialResponse.length;
   }
@@ -103,7 +114,10 @@ export function turnMessagesFromAgent(agent: ActiveAgent): Message[] {
  */
 export function currentTurnSnapshot(
   agent: ActiveAgent,
-  context: Pick<AgentContext, 'response' | 'thinking' | 'usage'> | undefined,
+  context: Pick<
+    AgentContext,
+    'response' | 'thinking' | 'thinkingPayloads' | 'thinkingArtifacts' | 'usage'
+  > | undefined,
 ): Message[] {
   const snapshot = turnMessagesFromAgent(agent);
   appendLiveTailMessages(snapshot, agent, context);
@@ -136,12 +150,13 @@ export function checkpointActiveTurn(agent: ActiveAgent, context: AgentContext):
         entry?.messages ?? messages,
         sessionId,
       );
-      if (updated) {
+      const update = updated ? buildSessionUpdatedEvent(updated) : null;
+      if (update) {
         sendSessionEvent(
           webContentsForWindowId(active.windowId),
           sessionId,
           IPC_CHANNELS.SESSION_UPDATED,
-          { session: updated },
+          update,
         );
       }
     } catch (err) {
@@ -175,6 +190,8 @@ export function persistTurnConversation(
   agent: Agent,
   selection?: ModelSelection | null,
   webContents?: WebContents,
+  errorDetail?: string | null,
+  errorTitle?: string | null,
 ): void {
   setChatHistory(sessionId, fullHistory);
   try {
@@ -187,9 +204,12 @@ export function persistTurnConversation(
       agentName: agent.name,
       agentType: agent.type,
       agentTier: agent.tier,
+      errorDetail,
+      errorTitle,
     }, sessionId);
-    if (updated && webContents) {
-      sendSessionEvent(webContents, sessionId, IPC_CHANNELS.SESSION_UPDATED, { session: updated });
+    const update = updated ? buildSessionUpdatedEvent(updated, null) : null;
+    if (update && webContents) {
+      sendSessionEvent(webContents, sessionId, IPC_CHANNELS.SESSION_UPDATED, update);
     }
   } catch (err) {
     console.debug('Failed to persist chat chain (non-fatal):', err);
@@ -198,11 +218,5 @@ export function persistTurnConversation(
 
 /** Flatten all session chains — never only the active/last chain. */
 export function historyFromSession(sessionId: string): Message[] {
-  try {
-    const session = getSessionManager().getSession(sessionId);
-    if (!session) return [];
-    return flattenSessionMessages(session);
-  } catch {
-    return [];
-  }
+  return getSessionManager().getModelHistory(sessionId);
 }

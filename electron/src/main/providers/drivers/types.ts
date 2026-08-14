@@ -1,12 +1,22 @@
 import type { LanguageModelV4 } from '@ai-sdk/provider';
 import type { JSONValue } from 'ai';
 import type {
+  DiscoveredProviderModel,
   EffectiveModel,
   ProviderAuthMethod,
   ProviderConnection,
   ProviderDefinition,
   ProviderProtocol,
 } from '../../../shared/types/provider';
+import type {
+  CacheFacet,
+  CurrencyUnit,
+  PricingRateFields,
+  ProviderModelRateCard,
+  ProviderQuota,
+  ThinkingPolicy,
+  TierMechanism,
+} from '../../../shared/types/provider-facets';
 
 export type ReasoningProviderOptions = Record<string, Record<string, JSONValue>>;
 
@@ -22,6 +32,21 @@ export interface DriverModelRequest {
   readonly credential: DriverCredential;
   /** Present only for generic drivers after URL validation. */
   readonly endpoint?: string;
+  /**
+   * Effective service tier id (session override → connection selection),
+   * resolved by the caller through the tier facet. Variant-mechanism drivers
+   * map it to a model id; parameter-mechanism drivers receive options (R19).
+   */
+  readonly tier?: string;
+}
+
+/** Discovery requests resolve no model: the hook enumerates what exists. */
+export interface DriverDiscoveryRequest {
+  readonly connection: ProviderConnection;
+  readonly provider: ProviderDefinition;
+  readonly credential: DriverCredential;
+  /** Present only for generic drivers after URL validation. */
+  readonly endpoint?: string;
 }
 
 /**
@@ -34,9 +59,76 @@ export interface ProviderEmbeddingTarget {
   readonly apiKey: string | undefined;
 }
 
+/** Catalog base rates handed to a dynamic pricing hook, keyed by model id. */
+export interface DriverPricingFetchContext {
+  /**
+   * Signed-catalog rate fields per model, for drivers whose live pricing is
+   * published relative to list rates (for example a subscription multiplier).
+   */
+  readonly catalogRates?: Readonly<Record<string, PricingRateFields>>;
+}
+
+/** Typed cost evidence a driver extracts from one provider response (R4). */
+export interface DriverCostEvidenceInput {
+  /** Allowlisted response headers with lowercased names. */
+  readonly headers: Readonly<Record<string, string>>;
+  /** Raw provider usage payload exactly as reported by the adapter. */
+  readonly rawUsage: unknown;
+  /** Finish-part provider metadata (served tier, response id) when streamed (R22). */
+  readonly finishMetadata?: Readonly<Record<string, unknown>>;
+}
+
+export interface DriverCostEvidence {
+  readonly reportedCostAmount?: string;
+  readonly reportedCurrency?: string;
+  readonly accountingMethod?: 'energy' | 'token';
+  readonly energyRateUsdPerKwh?: string;
+  readonly currency?: string;
+  readonly energyKwhConsumed?: string;
+  readonly energyKwhCharged?: string;
+  readonly pricingMultiplier?: string;
+  /** Provider-keyed typed detail persisted with the attempt evidence. */
+  readonly providerEvidence?: Readonly<Record<string, unknown>>;
+}
+
+/** Pricing metadata: native billing unit plus optional dynamic-rate/evidence hooks. */
+export interface DriverPricingFacet {
+  /** Native billing unit for non-fiat providers (R8); fiat providers omit this. */
+  readonly currencyUnit?: CurrencyUnit;
+  /** Dynamic rates refresh in the background on a declared cadence (R7). */
+  readonly dynamic?: {
+    readonly refreshIntervalSeconds: number;
+    readonly fetchRates: (
+      request: DriverModelRequest,
+      context: DriverPricingFetchContext,
+    ) => Promise<readonly ProviderModelRateCard[]>;
+  };
+  /** Extract typed cost evidence from a provider response (R4). */
+  readonly costEvidence?: (input: DriverCostEvidenceInput) => DriverCostEvidence | undefined;
+}
+
+/** Quota requests resolve no model: the hook reads account-wide state (R24). */
+export interface DriverQuotaRequest {
+  readonly connection: ProviderConnection;
+  readonly provider: ProviderDefinition;
+  readonly credential: DriverCredential;
+}
+
+/** Typed quota/subscription state in provider-native units (R24). */
+export interface DriverQuotaFacet {
+  readonly fetchQuota: (request: DriverQuotaRequest) => Promise<ProviderQuota>;
+}
+
+/** Live model discovery from the provider's models endpoint (R26). */
+export interface DriverDiscoveryFacet {
+  readonly fetchModels: (request: DriverDiscoveryRequest) => Promise<readonly DiscoveredProviderModel[]>;
+}
+
 /**
  * Trusted driver code owns credentials, request construction, and API origins.
  * Remote catalog data selects only the declared ID/protocol/capability data.
+ * Every capability facet is optional: a driver implements only the facets it
+ * supports, and each facet exposes typed metadata (R1, R2, R4).
  */
 export interface ProviderDriver {
   readonly id: string;
@@ -50,4 +142,16 @@ export interface ProviderDriver {
   createEmbeddingTarget?(request: DriverModelRequest): Promise<ProviderEmbeddingTarget>;
   /** Translate a reasoning effort value into provider-native providerOptions. */
   buildReasoningOptions?(effort: string | number, model: EffectiveModel): ReasoningProviderOptions | undefined;
+  /** Thinking exposure/replay policy for a model; absent means no policy (R15). */
+  readonly thinkingPolicy?: (model: EffectiveModel) => ThinkingPolicy | undefined;
+  /** Service-tier mechanism: request parameter or model-name variants (R19). */
+  readonly tierMechanism?: TierMechanism;
+  /** Pricing metadata and optional dynamic-rate hook (R7, R8, R9). */
+  readonly pricingFacet?: DriverPricingFacet;
+  /** Prompt-cache capability: placement mode, routing key, TTL options (R10–R12). */
+  readonly cacheFacet?: CacheFacet;
+  /** Typed quota hook; informational only, never gates routing or sends (R25). */
+  readonly quotaFacet?: DriverQuotaFacet;
+  /** Live model discovery hook; invoked on demand, never polled (R26). */
+  readonly discoveryFacet?: DriverDiscoveryFacet;
 }

@@ -1,11 +1,15 @@
 /** Session-affine subagent snapshot/live state for the inspector and view. */
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import type { Usage } from '../../shared/types/message';
-import type { SubagentLiveProjection, SubagentRecord, SubagentStatus } from '../../shared/types/subagent';
+import type {
+  SubagentLiveProjection,
+  SubagentRecord,
+  SubagentStatus,
+  SubagentSummary,
+} from '../../shared/types/subagent';
 import {
   deriveSubagentUsageSummary,
   EMPTY_SUBAGENT_USAGE_SUMMARY,
-  sumSubagentUsage,
   type SubagentUsageSummary,
 } from '../../shared/usage';
 import {
@@ -17,7 +21,6 @@ import {
   failSubagentSnapshot,
   groupSubagents,
   isSubagentSnapshotAffine,
-  replaceSubagentRecords,
   resolveSubagentSelection,
   seedSubagentSnapshot,
   type SubagentStreamState,
@@ -26,7 +29,14 @@ import {
 export type SubagentListState =
   | { status: 'loading' }
   | { status: 'empty' }
-  | { status: 'ready'; subagents: readonly SubagentRecord[] }
+  | { status: 'ready'; subagents: readonly SubagentSummary[] }
+  | { status: 'error'; error: string };
+
+export type SubagentTranscriptState =
+  | { status: 'idle' }
+  | { status: 'loading' }
+  | { status: 'ready'; record: SubagentRecord }
+  | { status: 'unavailable' }
   | { status: 'error'; error: string };
 
 export interface SubagentDetail {
@@ -37,11 +47,11 @@ export interface SubagentDetail {
 
 export interface UseSubagentsReturn {
   state: SubagentListState;
-  subagents: readonly SubagentRecord[];
+  subagents: readonly SubagentSummary[];
   groups: {
-    queued: readonly SubagentRecord[];
-    running: readonly SubagentRecord[];
-    ended: readonly SubagentRecord[];
+    queued: readonly SubagentSummary[];
+    running: readonly SubagentSummary[];
+    ended: readonly SubagentSummary[];
   };
   totalUsage: Usage | null;
   usageByParentChain: ReadonlyMap<number, Usage>;
@@ -54,10 +64,11 @@ export interface UseSubagentsReturn {
   refresh: () => Promise<void>;
   retry: () => Promise<void>;
   isRetrying: boolean;
-  applyFromSession: (subagents: readonly SubagentRecord[]) => void;
   selectedId: string | null;
   select: (id: string | null) => void;
   getDetail: (id: string) => SubagentDetail | null;
+  transcript: SubagentTranscriptState;
+  retryTranscript: () => Promise<void>;
   live: ReadonlyMap<string, SubagentLiveProjection>;
   getLive: (id: string) => SubagentLiveProjection | null;
 }
@@ -77,9 +88,9 @@ function formatAgentRole(value: string): string {
     .replace(/\b\w/g, (letter) => letter.toUpperCase());
 }
 
-function displayAgentType(record: SubagentRecord): string {
+function displayAgentType(record: SubagentSummary): string {
   const persistedType = record.agent_type.trim();
-  const chainRole = record.chain.agentName?.trim() ?? '';
+  const chainRole = record.agentRole.trim();
   const role = persistedType && persistedType !== 'subagent'
     ? persistedType
     : chainRole && chainRole !== 'general'
@@ -89,7 +100,7 @@ function displayAgentType(record: SubagentRecord): string {
 }
 
 export function buildSubagentDetail(
-  record: SubagentRecord,
+  record: SubagentSummary,
   now: number,
   live: SubagentLiveProjection | null = null,
 ): SubagentDetail {
@@ -104,8 +115,8 @@ export function buildSubagentDetail(
     id: record.id, name: record.agent_name || 'Subagent', type: displayAgentType(record),
     tier: record.agent_tier || 'bloom', state, task: record.task || '',
     elapsed: formatElapsed(Math.max(0, end - start)), isRunning: running,
-    result: record.result, error: record.error,
-    usage: live?.usage ?? sumSubagentUsage(record),
+    result: live?.result ?? null, error: live?.error ?? null,
+    usage: live?.usage ?? record.usage,
   };
 }
 
@@ -123,7 +134,9 @@ export function useSubagents(activeSessionId: string | null): UseSubagentsReturn
   const [requestedId, setRequestedId] = useState<string | null>(null);
   const [tick, setTick] = useState(0);
   const [isRetrying, setIsRetrying] = useState(false);
+  const [transcript, setTranscript] = useState<SubagentTranscriptState>({ status: 'idle' });
   const requestRef = useRef(0);
+  const transcriptRequestRef = useRef(0);
   const requestedRef = useRef<string | null>(null);
   const selectedSessionRef = useRef<string | null>(null);
   const hydrationBufferBytesRef = useRef(DEFAULT_HYDRATION_BUFFER_BYTES);
@@ -244,10 +257,6 @@ export function useSubagents(activeSessionId: string | null): UseSubagentsReturn
     await hydrate(activeRef.current, true);
   }, [commit, hydrate]);
 
-  const applyFromSession = useCallback((records: readonly SubagentRecord[]) => {
-    commit(replaceSubagentRecords(streamRef.current, records));
-  }, [commit]);
-
   const select = useCallback((id: string | null) => {
     setRequestedId(id);
     setSelectedId((previous) => previous === id ? null : id);
@@ -255,6 +264,57 @@ export function useSubagents(activeSessionId: string | null): UseSubagentsReturn
   }, []);
 
   const subagents = current.records;
+  const selectedSummary = selectedId
+    ? subagents.find((record) => record.id === selectedId) ?? null
+    : null;
+
+  const loadTranscript = useCallback(async (sessionId: string, subagentId: string): Promise<void> => {
+    const request = ++transcriptRequestRef.current;
+    if (!window.orchid?.subagents?.detail) {
+      setTranscript({ status: 'error', error: 'Subagent transcript is unavailable' });
+      return;
+    }
+    setTranscript({ status: 'loading' });
+    try {
+      const result = await window.orchid.subagents.detail({ sessionId, subagentId });
+      if (
+        request !== transcriptRequestRef.current ||
+        activeRef.current !== result.sessionId ||
+        result.subagentId !== subagentId
+      ) return;
+      setTranscript(result.record
+        ? { status: 'ready', record: result.record }
+        : { status: 'unavailable' });
+    } catch (error) {
+      if (request === transcriptRequestRef.current && activeRef.current === sessionId) {
+        setTranscript({
+          status: 'error',
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!activeSessionId || !selectedId || !selectedSummary) {
+      transcriptRequestRef.current += 1;
+      setTranscript({ status: 'idle' });
+      return;
+    }
+    void loadTranscript(activeSessionId, selectedId);
+  }, [
+    activeSessionId,
+    loadTranscript,
+    selectedId,
+    selectedSummary?.end_time,
+    selectedSummary?.status,
+  ]);
+
+  const retryTranscript = useCallback(async () => {
+    if (!activeRef.current || !selectedId) return;
+    await loadTranscript(activeRef.current, selectedId);
+  }, [loadTranscript, selectedId]);
+
   const state = listState(current);
   const groups = useMemo(() => groupSubagents(subagents), [subagents]);
   const usageSummaryRef = useRef(EMPTY_SUBAGENT_USAGE_SUMMARY);
@@ -275,6 +335,6 @@ export function useSubagents(activeSessionId: string | null): UseSubagentsReturn
   const getLive = useCallback((id: string) => current.live.get(id) ?? null, [current.live]);
   return {
     state, subagents, groups, totalUsage, usageByParentChain, usageSummary, refresh, retry, isRetrying,
-    applyFromSession, selectedId, select, getDetail, live: current.live, getLive,
+    selectedId, select, getDetail, transcript, retryTranscript, live: current.live, getLive,
   };
 }

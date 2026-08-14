@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "catalogVersion": 1,
-  "issuedAt": "2026-07-13T22:49:29.519Z",
+  "catalogVersion": 2,
+  "issuedAt": "2026-08-12T23:25:21.000Z",
   "expiresAt": "2027-01-01T00:00:00.000Z",
   "compatibleApp": {
     "minimum": "0.1.0"
@@ -9,8 +9,8 @@
   "provenance": {
     "source": "models.dev",
     "sourceUrl": "https://models.dev/api.json",
-    "capturedAt": "2026-07-13T22:49:29.519Z",
-    "contentHash": "sha256:e79e3f1b9f62a01d9f74f785aa749caf5e712b74d406bc117bb8136b027dd9e4"
+    "capturedAt": "2026-08-12T23:25:21.000Z",
+    "contentHash": "sha256:aeb0ae23586f2b6dbc874747e42246539a8b6c36d2b9fe21ddce065a75ae514d"
   },
   "providers": [
     {
@@ -27,7 +27,7 @@
       "lifecycle": "active",
       "provenance": {
         "source": "models.dev",
-        "observedAt": "2026-07-13T22:49:29.519Z"
+        "observedAt": "2026-08-12T23:25:21.000Z"
       },
       "models": [
         {
@@ -48,10 +48,10 @@
             "contextTokens": 16385,
             "outputTokens": 4096
           },
-          "lifecycle": "active",
+          "lifecycle": "deprecated",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "effectiveAt": "2026-08-12T23:25:21.000Z",
             "rates": {
               "input": {
                 "amount": "0.5",
@@ -71,12 +71,12 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-13T22:49:29.519Z"
+              "observedAt": "2026-08-12T23:25:21.000Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-13T22:49:29.519Z"
+            "observedAt": "2026-08-12T23:25:21.000Z"
           }
         },
         {
@@ -97,10 +97,10 @@
             "contextTokens": 8192,
             "outputTokens": 8192
           },
-          "lifecycle": "active",
+          "lifecycle": "deprecated",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "effectiveAt": "2026-08-12T23:25:21.000Z",
             "rates": {
               "input": {
                 "amount": "30",
@@ -115,12 +115,12 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-13T22:49:29.519Z"
+              "observedAt": "2026-08-12T23:25:21.000Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-13T22:49:29.519Z"
+            "observedAt": "2026-08-12T23:25:21.000Z"
           }
         },
         {
@@ -142,10 +142,10 @@
             "contextTokens": 128000,
             "outputTokens": 4096
           },
-          "lifecycle": "active",
+          "lifecycle": "deprecated",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "effectiveAt": "2026-08-12T23:25:21.000Z",
             "rates": {
               "input": {
                 "amount": "10",
@@ -160,12 +160,12 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-13T22:49:29.519Z"
+              "observedAt": "2026-08-12T23:25:21.000Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-13T22:49:29.519Z"
+            "observedAt": "2026-08-12T23:25:21.000Z"
           }
         },
         {
@@ -191,7 +191,7 @@
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "effectiveAt": "2026-08-12T23:25:21.000Z",
             "rates": {
               "input": {
                 "amount": "2",
@@ -211,12 +211,12 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-13T22:49:29.519Z"
+              "observedAt": "2026-08-12T23:25:21.000Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-13T22:49:29.519Z"
+            "observedAt": "2026-08-12T23:25:21.000Z"
           }
         },
         {
@@ -242,7 +242,7 @@
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "effectiveAt": "2026-08-12T23:25:21.000Z",
             "rates": {
               "input": {
                 "amount": "0.4",
@@ -262,12 +262,12 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-13T22:49:29.519Z"
+              "observedAt": "2026-08-12T23:25:21.000Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-13T22:49:29.519Z"
+            "observedAt": "2026-08-12T23:25:21.000Z"
           }
         },
         {
@@ -289,10 +289,10 @@
             "contextTokens": 1047576,
             "outputTokens": 32768
           },
-          "lifecycle": "active",
+          "lifecycle": "deprecated",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "effectiveAt": "2026-08-12T23:25:21.000Z",
             "rates": {
               "input": {
                 "amount": "0.1",
@@ -312,12 +312,12 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-13T22:49:29.519Z"
+              "observedAt": "2026-08-12T23:25:21.000Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-13T22:49:29.519Z"
+            "observedAt": "2026-08-12T23:25:21.000Z"
           }
         },
         {
@@ -343,7 +343,7 @@
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "effectiveAt": "2026-08-12T23:25:21.000Z",
             "rates": {
               "input": {
                 "amount": "2.5",
@@ -363,12 +363,12 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-13T22:49:29.519Z"
+              "observedAt": "2026-08-12T23:25:21.000Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-13T22:49:29.519Z"
+            "observedAt": "2026-08-12T23:25:21.000Z"
           }
         },
         {
@@ -390,10 +390,10 @@
             "contextTokens": 128000,
             "outputTokens": 4096
           },
-          "lifecycle": "active",
+          "lifecycle": "deprecated",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "effectiveAt": "2026-08-12T23:25:21.000Z",
             "rates": {
               "input": {
                 "amount": "5",
@@ -408,12 +408,12 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-13T22:49:29.519Z"
+              "observedAt": "2026-08-12T23:25:21.000Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-13T22:49:29.519Z"
+            "observedAt": "2026-08-12T23:25:21.000Z"
           }
         },
         {
@@ -438,7 +438,7 @@
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "effectiveAt": "2026-08-12T23:25:21.000Z",
             "rates": {
               "input": {
                 "amount": "2.5",
@@ -458,12 +458,12 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-13T22:49:29.519Z"
+              "observedAt": "2026-08-12T23:25:21.000Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-13T22:49:29.519Z"
+            "observedAt": "2026-08-12T23:25:21.000Z"
           }
         },
         {
@@ -488,7 +488,7 @@
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "effectiveAt": "2026-08-12T23:25:21.000Z",
             "rates": {
               "input": {
                 "amount": "2.5",
@@ -508,12 +508,12 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-13T22:49:29.519Z"
+              "observedAt": "2026-08-12T23:25:21.000Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-13T22:49:29.519Z"
+            "observedAt": "2026-08-12T23:25:21.000Z"
           }
         },
         {
@@ -539,7 +539,7 @@
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "effectiveAt": "2026-08-12T23:25:21.000Z",
             "rates": {
               "input": {
                 "amount": "0.15",
@@ -559,12 +559,12 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-13T22:49:29.519Z"
+              "observedAt": "2026-08-12T23:25:21.000Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-13T22:49:29.519Z"
+            "observedAt": "2026-08-12T23:25:21.000Z"
           }
         },
         {
@@ -582,6 +582,13 @@
             "tools": true,
             "reasoning": true
           },
+          "reasoningLevels": [
+            "minimal",
+            "low",
+            "medium",
+            "high"
+          ],
+          "reasoningDefault": "medium",
           "limits": {
             "contextTokens": 400000,
             "outputTokens": 128000
@@ -589,7 +596,7 @@
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "effectiveAt": "2026-08-12T23:25:21.000Z",
             "rates": {
               "input": {
                 "amount": "1.25",
@@ -609,112 +616,12 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-13T22:49:29.519Z"
+              "observedAt": "2026-08-12T23:25:21.000Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-13T22:49:29.519Z"
-          }
-        },
-        {
-          "id": "gpt-5-chat-latest",
-          "displayName": "GPT-5 Chat (latest)",
-          "protocol": "openai-compatible",
-          "capabilities": {
-            "inputModalities": [
-              "text",
-              "image"
-            ],
-            "outputModalities": [
-              "text"
-            ],
-            "tools": false,
-            "reasoning": true
-          },
-          "limits": {
-            "contextTokens": 400000,
-            "outputTokens": 128000
-          },
-          "lifecycle": "active",
-          "pricing": {
-            "currency": "USD",
-            "effectiveAt": "2026-07-13T22:49:29.519Z",
-            "rates": {
-              "input": {
-                "amount": "1.25",
-                "per": 1000000,
-                "unit": "tokens"
-              },
-              "output": {
-                "amount": "10",
-                "per": 1000000,
-                "unit": "tokens"
-              },
-              "cacheRead": {
-                "amount": "0.125",
-                "per": 1000000,
-                "unit": "tokens"
-              }
-            },
-            "provenance": {
-              "source": "models.dev",
-              "observedAt": "2026-07-13T22:49:29.519Z"
-            }
-          },
-          "provenance": {
-            "source": "models.dev",
-            "observedAt": "2026-07-13T22:49:29.519Z"
-          }
-        },
-        {
-          "id": "gpt-5-codex",
-          "displayName": "GPT-5-Codex",
-          "protocol": "openai-compatible",
-          "capabilities": {
-            "inputModalities": [
-              "text",
-              "image"
-            ],
-            "outputModalities": [
-              "text"
-            ],
-            "tools": true,
-            "reasoning": true
-          },
-          "limits": {
-            "contextTokens": 400000,
-            "outputTokens": 128000
-          },
-          "lifecycle": "active",
-          "pricing": {
-            "currency": "USD",
-            "effectiveAt": "2026-07-13T22:49:29.519Z",
-            "rates": {
-              "input": {
-                "amount": "1.25",
-                "per": 1000000,
-                "unit": "tokens"
-              },
-              "output": {
-                "amount": "10",
-                "per": 1000000,
-                "unit": "tokens"
-              },
-              "cacheRead": {
-                "amount": "0.125",
-                "per": 1000000,
-                "unit": "tokens"
-              }
-            },
-            "provenance": {
-              "source": "models.dev",
-              "observedAt": "2026-07-13T22:49:29.519Z"
-            }
-          },
-          "provenance": {
-            "source": "models.dev",
-            "observedAt": "2026-07-13T22:49:29.519Z"
+            "observedAt": "2026-08-12T23:25:21.000Z"
           }
         },
         {
@@ -732,6 +639,13 @@
             "tools": true,
             "reasoning": true
           },
+          "reasoningLevels": [
+            "minimal",
+            "low",
+            "medium",
+            "high"
+          ],
+          "reasoningDefault": "medium",
           "limits": {
             "contextTokens": 400000,
             "outputTokens": 128000
@@ -739,7 +653,7 @@
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "effectiveAt": "2026-08-12T23:25:21.000Z",
             "rates": {
               "input": {
                 "amount": "0.25",
@@ -759,12 +673,12 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-13T22:49:29.519Z"
+              "observedAt": "2026-08-12T23:25:21.000Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-13T22:49:29.519Z"
+            "observedAt": "2026-08-12T23:25:21.000Z"
           }
         },
         {
@@ -782,6 +696,13 @@
             "tools": true,
             "reasoning": true
           },
+          "reasoningLevels": [
+            "minimal",
+            "low",
+            "medium",
+            "high"
+          ],
+          "reasoningDefault": "medium",
           "limits": {
             "contextTokens": 400000,
             "outputTokens": 128000
@@ -789,7 +710,7 @@
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "effectiveAt": "2026-08-12T23:25:21.000Z",
             "rates": {
               "input": {
                 "amount": "0.05",
@@ -809,12 +730,12 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-13T22:49:29.519Z"
+              "observedAt": "2026-08-12T23:25:21.000Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-13T22:49:29.519Z"
+            "observedAt": "2026-08-12T23:25:21.000Z"
           }
         },
         {
@@ -832,6 +753,10 @@
             "tools": true,
             "reasoning": true
           },
+          "reasoningLevels": [
+            "high"
+          ],
+          "reasoningDefault": "high",
           "limits": {
             "contextTokens": 400000,
             "outputTokens": 272000
@@ -839,7 +764,7 @@
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "effectiveAt": "2026-08-12T23:25:21.000Z",
             "rates": {
               "input": {
                 "amount": "15",
@@ -854,12 +779,12 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-13T22:49:29.519Z"
+              "observedAt": "2026-08-12T23:25:21.000Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-13T22:49:29.519Z"
+            "observedAt": "2026-08-12T23:25:21.000Z"
           }
         },
         {
@@ -877,6 +802,13 @@
             "tools": true,
             "reasoning": true
           },
+          "reasoningLevels": [
+            "none",
+            "low",
+            "medium",
+            "high"
+          ],
+          "reasoningDefault": "medium",
           "limits": {
             "contextTokens": 400000,
             "outputTokens": 128000
@@ -884,7 +816,7 @@
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "effectiveAt": "2026-08-12T23:25:21.000Z",
             "rates": {
               "input": {
                 "amount": "1.25",
@@ -904,212 +836,12 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-13T22:49:29.519Z"
+              "observedAt": "2026-08-12T23:25:21.000Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-13T22:49:29.519Z"
-          }
-        },
-        {
-          "id": "gpt-5.1-chat-latest",
-          "displayName": "GPT-5.1 Chat",
-          "protocol": "openai-compatible",
-          "capabilities": {
-            "inputModalities": [
-              "text",
-              "image"
-            ],
-            "outputModalities": [
-              "text"
-            ],
-            "tools": true,
-            "reasoning": true
-          },
-          "limits": {
-            "contextTokens": 128000,
-            "outputTokens": 16384
-          },
-          "lifecycle": "active",
-          "pricing": {
-            "currency": "USD",
-            "effectiveAt": "2026-07-13T22:49:29.519Z",
-            "rates": {
-              "input": {
-                "amount": "1.25",
-                "per": 1000000,
-                "unit": "tokens"
-              },
-              "output": {
-                "amount": "10",
-                "per": 1000000,
-                "unit": "tokens"
-              },
-              "cacheRead": {
-                "amount": "0.125",
-                "per": 1000000,
-                "unit": "tokens"
-              }
-            },
-            "provenance": {
-              "source": "models.dev",
-              "observedAt": "2026-07-13T22:49:29.519Z"
-            }
-          },
-          "provenance": {
-            "source": "models.dev",
-            "observedAt": "2026-07-13T22:49:29.519Z"
-          }
-        },
-        {
-          "id": "gpt-5.1-codex",
-          "displayName": "GPT-5.1 Codex",
-          "protocol": "openai-compatible",
-          "capabilities": {
-            "inputModalities": [
-              "text",
-              "image"
-            ],
-            "outputModalities": [
-              "text"
-            ],
-            "tools": true,
-            "reasoning": true
-          },
-          "limits": {
-            "contextTokens": 400000,
-            "outputTokens": 128000
-          },
-          "lifecycle": "active",
-          "pricing": {
-            "currency": "USD",
-            "effectiveAt": "2026-07-13T22:49:29.519Z",
-            "rates": {
-              "input": {
-                "amount": "1.25",
-                "per": 1000000,
-                "unit": "tokens"
-              },
-              "output": {
-                "amount": "10",
-                "per": 1000000,
-                "unit": "tokens"
-              },
-              "cacheRead": {
-                "amount": "0.125",
-                "per": 1000000,
-                "unit": "tokens"
-              }
-            },
-            "provenance": {
-              "source": "models.dev",
-              "observedAt": "2026-07-13T22:49:29.519Z"
-            }
-          },
-          "provenance": {
-            "source": "models.dev",
-            "observedAt": "2026-07-13T22:49:29.519Z"
-          }
-        },
-        {
-          "id": "gpt-5.1-codex-max",
-          "displayName": "GPT-5.1 Codex Max",
-          "protocol": "openai-compatible",
-          "capabilities": {
-            "inputModalities": [
-              "text",
-              "image"
-            ],
-            "outputModalities": [
-              "text"
-            ],
-            "tools": true,
-            "reasoning": true
-          },
-          "limits": {
-            "contextTokens": 400000,
-            "outputTokens": 128000
-          },
-          "lifecycle": "active",
-          "pricing": {
-            "currency": "USD",
-            "effectiveAt": "2026-07-13T22:49:29.519Z",
-            "rates": {
-              "input": {
-                "amount": "1.25",
-                "per": 1000000,
-                "unit": "tokens"
-              },
-              "output": {
-                "amount": "10",
-                "per": 1000000,
-                "unit": "tokens"
-              },
-              "cacheRead": {
-                "amount": "0.125",
-                "per": 1000000,
-                "unit": "tokens"
-              }
-            },
-            "provenance": {
-              "source": "models.dev",
-              "observedAt": "2026-07-13T22:49:29.519Z"
-            }
-          },
-          "provenance": {
-            "source": "models.dev",
-            "observedAt": "2026-07-13T22:49:29.519Z"
-          }
-        },
-        {
-          "id": "gpt-5.1-codex-mini",
-          "displayName": "GPT-5.1 Codex mini",
-          "protocol": "openai-compatible",
-          "capabilities": {
-            "inputModalities": [
-              "text",
-              "image"
-            ],
-            "outputModalities": [
-              "text"
-            ],
-            "tools": true,
-            "reasoning": true
-          },
-          "limits": {
-            "contextTokens": 400000,
-            "outputTokens": 128000
-          },
-          "lifecycle": "active",
-          "pricing": {
-            "currency": "USD",
-            "effectiveAt": "2026-07-13T22:49:29.519Z",
-            "rates": {
-              "input": {
-                "amount": "0.25",
-                "per": 1000000,
-                "unit": "tokens"
-              },
-              "output": {
-                "amount": "2",
-                "per": 1000000,
-                "unit": "tokens"
-              },
-              "cacheRead": {
-                "amount": "0.025",
-                "per": 1000000,
-                "unit": "tokens"
-              }
-            },
-            "provenance": {
-              "source": "models.dev",
-              "observedAt": "2026-07-13T22:49:29.519Z"
-            }
-          },
-          "provenance": {
-            "source": "models.dev",
-            "observedAt": "2026-07-13T22:49:29.519Z"
+            "observedAt": "2026-08-12T23:25:21.000Z"
           }
         },
         {
@@ -1127,6 +859,14 @@
             "tools": true,
             "reasoning": true
           },
+          "reasoningLevels": [
+            "none",
+            "low",
+            "medium",
+            "high",
+            "xhigh"
+          ],
+          "reasoningDefault": "medium",
           "limits": {
             "contextTokens": 400000,
             "outputTokens": 128000
@@ -1134,7 +874,7 @@
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "effectiveAt": "2026-08-12T23:25:21.000Z",
             "rates": {
               "input": {
                 "amount": "1.75",
@@ -1154,12 +894,12 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-13T22:49:29.519Z"
+              "observedAt": "2026-08-12T23:25:21.000Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-13T22:49:29.519Z"
+            "observedAt": "2026-08-12T23:25:21.000Z"
           }
         },
         {
@@ -1177,6 +917,10 @@
             "tools": true,
             "reasoning": true
           },
+          "reasoningLevels": [
+            "medium"
+          ],
+          "reasoningDefault": "medium",
           "limits": {
             "contextTokens": 128000,
             "outputTokens": 16384
@@ -1184,7 +928,7 @@
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "effectiveAt": "2026-08-12T23:25:21.000Z",
             "rates": {
               "input": {
                 "amount": "1.75",
@@ -1204,63 +948,12 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-13T22:49:29.519Z"
+              "observedAt": "2026-08-12T23:25:21.000Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-13T22:49:29.519Z"
-          }
-        },
-        {
-          "id": "gpt-5.2-codex",
-          "displayName": "GPT-5.2 Codex",
-          "protocol": "openai-compatible",
-          "capabilities": {
-            "inputModalities": [
-              "text",
-              "image",
-              "pdf"
-            ],
-            "outputModalities": [
-              "text"
-            ],
-            "tools": true,
-            "reasoning": true
-          },
-          "limits": {
-            "contextTokens": 400000,
-            "outputTokens": 128000
-          },
-          "lifecycle": "active",
-          "pricing": {
-            "currency": "USD",
-            "effectiveAt": "2026-07-13T22:49:29.519Z",
-            "rates": {
-              "input": {
-                "amount": "1.75",
-                "per": 1000000,
-                "unit": "tokens"
-              },
-              "output": {
-                "amount": "14",
-                "per": 1000000,
-                "unit": "tokens"
-              },
-              "cacheRead": {
-                "amount": "0.175",
-                "per": 1000000,
-                "unit": "tokens"
-              }
-            },
-            "provenance": {
-              "source": "models.dev",
-              "observedAt": "2026-07-13T22:49:29.519Z"
-            }
-          },
-          "provenance": {
-            "source": "models.dev",
-            "observedAt": "2026-07-13T22:49:29.519Z"
+            "observedAt": "2026-08-12T23:25:21.000Z"
           }
         },
         {
@@ -1278,6 +971,12 @@
             "tools": true,
             "reasoning": true
           },
+          "reasoningLevels": [
+            "medium",
+            "high",
+            "xhigh"
+          ],
+          "reasoningDefault": "medium",
           "limits": {
             "contextTokens": 400000,
             "outputTokens": 128000
@@ -1285,7 +984,7 @@
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "effectiveAt": "2026-08-12T23:25:21.000Z",
             "rates": {
               "input": {
                 "amount": "21",
@@ -1300,12 +999,12 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-13T22:49:29.519Z"
+              "observedAt": "2026-08-12T23:25:21.000Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-13T22:49:29.519Z"
+            "observedAt": "2026-08-12T23:25:21.000Z"
           }
         },
         {
@@ -1330,7 +1029,7 @@
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "effectiveAt": "2026-08-12T23:25:21.000Z",
             "rates": {
               "input": {
                 "amount": "1.75",
@@ -1350,12 +1049,12 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-13T22:49:29.519Z"
+              "observedAt": "2026-08-12T23:25:21.000Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-13T22:49:29.519Z"
+            "observedAt": "2026-08-12T23:25:21.000Z"
           }
         },
         {
@@ -1374,6 +1073,14 @@
             "tools": true,
             "reasoning": true
           },
+          "reasoningLevels": [
+            "none",
+            "low",
+            "medium",
+            "high",
+            "xhigh"
+          ],
+          "reasoningDefault": "medium",
           "limits": {
             "contextTokens": 400000,
             "outputTokens": 128000
@@ -1381,7 +1088,7 @@
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "effectiveAt": "2026-08-12T23:25:21.000Z",
             "rates": {
               "input": {
                 "amount": "1.75",
@@ -1401,12 +1108,12 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-13T22:49:29.519Z"
+              "observedAt": "2026-08-12T23:25:21.000Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-13T22:49:29.519Z"
+            "observedAt": "2026-08-12T23:25:21.000Z"
           }
         },
         {
@@ -1425,6 +1132,14 @@
             "tools": true,
             "reasoning": true
           },
+          "reasoningLevels": [
+            "none",
+            "low",
+            "medium",
+            "high",
+            "xhigh"
+          ],
+          "reasoningDefault": "medium",
           "limits": {
             "contextTokens": 128000,
             "outputTokens": 32000
@@ -1432,7 +1147,7 @@
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "effectiveAt": "2026-08-12T23:25:21.000Z",
             "rates": {
               "input": {
                 "amount": "1.75",
@@ -1452,12 +1167,12 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-13T22:49:29.519Z"
+              "observedAt": "2026-08-12T23:25:21.000Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-13T22:49:29.519Z"
+            "observedAt": "2026-08-12T23:25:21.000Z"
           }
         },
         {
@@ -1476,6 +1191,14 @@
             "tools": true,
             "reasoning": true
           },
+          "reasoningLevels": [
+            "none",
+            "low",
+            "medium",
+            "high",
+            "xhigh"
+          ],
+          "reasoningDefault": "medium",
           "limits": {
             "contextTokens": 1050000,
             "outputTokens": 128000
@@ -1483,7 +1206,7 @@
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "effectiveAt": "2026-08-12T23:25:21.000Z",
             "rates": {
               "input": {
                 "amount": "2.5",
@@ -1503,12 +1226,12 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-13T22:49:29.519Z"
+              "observedAt": "2026-08-12T23:25:21.000Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-13T22:49:29.519Z"
+            "observedAt": "2026-08-12T23:25:21.000Z"
           }
         },
         {
@@ -1526,6 +1249,14 @@
             "tools": true,
             "reasoning": true
           },
+          "reasoningLevels": [
+            "none",
+            "low",
+            "medium",
+            "high",
+            "xhigh"
+          ],
+          "reasoningDefault": "medium",
           "limits": {
             "contextTokens": 400000,
             "outputTokens": 128000
@@ -1533,7 +1264,7 @@
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "effectiveAt": "2026-08-12T23:25:21.000Z",
             "rates": {
               "input": {
                 "amount": "0.75",
@@ -1553,12 +1284,12 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-13T22:49:29.519Z"
+              "observedAt": "2026-08-12T23:25:21.000Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-13T22:49:29.519Z"
+            "observedAt": "2026-08-12T23:25:21.000Z"
           }
         },
         {
@@ -1576,6 +1307,14 @@
             "tools": true,
             "reasoning": true
           },
+          "reasoningLevels": [
+            "none",
+            "low",
+            "medium",
+            "high",
+            "xhigh"
+          ],
+          "reasoningDefault": "medium",
           "limits": {
             "contextTokens": 400000,
             "outputTokens": 128000
@@ -1583,7 +1322,7 @@
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "effectiveAt": "2026-08-12T23:25:21.000Z",
             "rates": {
               "input": {
                 "amount": "0.2",
@@ -1603,12 +1342,12 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-13T22:49:29.519Z"
+              "observedAt": "2026-08-12T23:25:21.000Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-13T22:49:29.519Z"
+            "observedAt": "2026-08-12T23:25:21.000Z"
           }
         },
         {
@@ -1626,6 +1365,12 @@
             "tools": true,
             "reasoning": true
           },
+          "reasoningLevels": [
+            "medium",
+            "high",
+            "xhigh"
+          ],
+          "reasoningDefault": "medium",
           "limits": {
             "contextTokens": 1050000,
             "outputTokens": 128000
@@ -1633,7 +1378,7 @@
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "effectiveAt": "2026-08-12T23:25:21.000Z",
             "rates": {
               "input": {
                 "amount": "30",
@@ -1648,12 +1393,12 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-13T22:49:29.519Z"
+              "observedAt": "2026-08-12T23:25:21.000Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-13T22:49:29.519Z"
+            "observedAt": "2026-08-12T23:25:21.000Z"
           }
         },
         {
@@ -1672,6 +1417,14 @@
             "tools": true,
             "reasoning": true
           },
+          "reasoningLevels": [
+            "none",
+            "low",
+            "medium",
+            "high",
+            "xhigh"
+          ],
+          "reasoningDefault": "medium",
           "limits": {
             "contextTokens": 1050000,
             "outputTokens": 128000
@@ -1679,7 +1432,7 @@
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "effectiveAt": "2026-08-12T23:25:21.000Z",
             "rates": {
               "input": {
                 "amount": "5",
@@ -1699,12 +1452,12 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-13T22:49:29.519Z"
+              "observedAt": "2026-08-12T23:25:21.000Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-13T22:49:29.519Z"
+            "observedAt": "2026-08-12T23:25:21.000Z"
           }
         },
         {
@@ -1723,6 +1476,12 @@
             "tools": true,
             "reasoning": true
           },
+          "reasoningLevels": [
+            "medium",
+            "high",
+            "xhigh"
+          ],
+          "reasoningDefault": "medium",
           "limits": {
             "contextTokens": 1050000,
             "outputTokens": 128000
@@ -1730,7 +1489,7 @@
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "effectiveAt": "2026-08-12T23:25:21.000Z",
             "rates": {
               "input": {
                 "amount": "30",
@@ -1745,12 +1504,12 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-13T22:49:29.519Z"
+              "observedAt": "2026-08-12T23:25:21.000Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-13T22:49:29.519Z"
+            "observedAt": "2026-08-12T23:25:21.000Z"
           }
         },
         {
@@ -1769,6 +1528,15 @@
             "tools": true,
             "reasoning": true
           },
+          "reasoningLevels": [
+            "none",
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
+          ],
+          "reasoningDefault": "medium",
           "limits": {
             "contextTokens": 1050000,
             "outputTokens": 128000
@@ -1776,7 +1544,7 @@
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "effectiveAt": "2026-08-12T23:25:21.000Z",
             "rates": {
               "input": {
                 "amount": "5",
@@ -1801,12 +1569,12 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-13T22:49:29.519Z"
+              "observedAt": "2026-08-12T23:25:21.000Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-13T22:49:29.519Z"
+            "observedAt": "2026-08-12T23:25:21.000Z"
           }
         },
         {
@@ -1825,6 +1593,15 @@
             "tools": true,
             "reasoning": true
           },
+          "reasoningLevels": [
+            "none",
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
+          ],
+          "reasoningDefault": "medium",
           "limits": {
             "contextTokens": 1050000,
             "outputTokens": 128000
@@ -1832,37 +1609,37 @@
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "effectiveAt": "2026-08-12T23:25:21.000Z",
             "rates": {
               "input": {
-                "amount": "1",
+                "amount": "0.2",
                 "per": 1000000,
                 "unit": "tokens"
               },
               "output": {
-                "amount": "6",
+                "amount": "1.2",
                 "per": 1000000,
                 "unit": "tokens"
               },
               "cacheRead": {
-                "amount": "0.1",
+                "amount": "0.02",
                 "per": 1000000,
                 "unit": "tokens"
               },
               "cacheWrite": {
-                "amount": "1.25",
+                "amount": "0.25",
                 "per": 1000000,
                 "unit": "tokens"
               }
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-13T22:49:29.519Z"
+              "observedAt": "2026-08-12T23:25:21.000Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-13T22:49:29.519Z"
+            "observedAt": "2026-08-12T23:25:21.000Z"
           }
         },
         {
@@ -1881,6 +1658,15 @@
             "tools": true,
             "reasoning": true
           },
+          "reasoningLevels": [
+            "none",
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
+          ],
+          "reasoningDefault": "medium",
           "limits": {
             "contextTokens": 1050000,
             "outputTokens": 128000
@@ -1888,7 +1674,7 @@
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "effectiveAt": "2026-08-12T23:25:21.000Z",
             "rates": {
               "input": {
                 "amount": "5",
@@ -1913,12 +1699,12 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-13T22:49:29.519Z"
+              "observedAt": "2026-08-12T23:25:21.000Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-13T22:49:29.519Z"
+            "observedAt": "2026-08-12T23:25:21.000Z"
           }
         },
         {
@@ -1937,6 +1723,15 @@
             "tools": true,
             "reasoning": true
           },
+          "reasoningLevels": [
+            "none",
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
+          ],
+          "reasoningDefault": "medium",
           "limits": {
             "contextTokens": 1050000,
             "outputTokens": 128000
@@ -1944,37 +1739,37 @@
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "effectiveAt": "2026-08-12T23:25:21.000Z",
             "rates": {
               "input": {
-                "amount": "2.5",
+                "amount": "2",
                 "per": 1000000,
                 "unit": "tokens"
               },
               "output": {
-                "amount": "15",
+                "amount": "12",
                 "per": 1000000,
                 "unit": "tokens"
               },
               "cacheRead": {
-                "amount": "0.25",
+                "amount": "0.2",
                 "per": 1000000,
                 "unit": "tokens"
               },
               "cacheWrite": {
-                "amount": "3.125",
+                "amount": "2.5",
                 "per": 1000000,
                 "unit": "tokens"
               }
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-13T22:49:29.519Z"
+              "observedAt": "2026-08-12T23:25:21.000Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-13T22:49:29.519Z"
+            "observedAt": "2026-08-12T23:25:21.000Z"
           }
         },
         {
@@ -1993,14 +1788,20 @@
             "tools": true,
             "reasoning": true
           },
+          "reasoningLevels": [
+            "low",
+            "medium",
+            "high"
+          ],
+          "reasoningDefault": "medium",
           "limits": {
             "contextTokens": 200000,
             "outputTokens": 100000
           },
-          "lifecycle": "active",
+          "lifecycle": "deprecated",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "effectiveAt": "2026-08-12T23:25:21.000Z",
             "rates": {
               "input": {
                 "amount": "15",
@@ -2020,12 +1821,12 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-13T22:49:29.519Z"
+              "observedAt": "2026-08-12T23:25:21.000Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-13T22:49:29.519Z"
+            "observedAt": "2026-08-12T23:25:21.000Z"
           }
         },
         {
@@ -2043,14 +1844,20 @@
             "tools": true,
             "reasoning": true
           },
+          "reasoningLevels": [
+            "low",
+            "medium",
+            "high"
+          ],
+          "reasoningDefault": "medium",
           "limits": {
             "contextTokens": 200000,
             "outputTokens": 100000
           },
-          "lifecycle": "active",
+          "lifecycle": "deprecated",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "effectiveAt": "2026-08-12T23:25:21.000Z",
             "rates": {
               "input": {
                 "amount": "150",
@@ -2065,12 +1872,12 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-13T22:49:29.519Z"
+              "observedAt": "2026-08-12T23:25:21.000Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-13T22:49:29.519Z"
+            "observedAt": "2026-08-12T23:25:21.000Z"
           }
         },
         {
@@ -2089,6 +1896,12 @@
             "tools": true,
             "reasoning": true
           },
+          "reasoningLevels": [
+            "low",
+            "medium",
+            "high"
+          ],
+          "reasoningDefault": "medium",
           "limits": {
             "contextTokens": 200000,
             "outputTokens": 100000
@@ -2096,7 +1909,7 @@
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "effectiveAt": "2026-08-12T23:25:21.000Z",
             "rates": {
               "input": {
                 "amount": "2",
@@ -2116,62 +1929,12 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-13T22:49:29.519Z"
+              "observedAt": "2026-08-12T23:25:21.000Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-13T22:49:29.519Z"
-          }
-        },
-        {
-          "id": "o3-deep-research",
-          "displayName": "o3-deep-research",
-          "protocol": "openai-compatible",
-          "capabilities": {
-            "inputModalities": [
-              "text",
-              "image"
-            ],
-            "outputModalities": [
-              "text"
-            ],
-            "tools": true,
-            "reasoning": true
-          },
-          "limits": {
-            "contextTokens": 200000,
-            "outputTokens": 100000
-          },
-          "lifecycle": "active",
-          "pricing": {
-            "currency": "USD",
-            "effectiveAt": "2026-07-13T22:49:29.519Z",
-            "rates": {
-              "input": {
-                "amount": "10",
-                "per": 1000000,
-                "unit": "tokens"
-              },
-              "output": {
-                "amount": "40",
-                "per": 1000000,
-                "unit": "tokens"
-              },
-              "cacheRead": {
-                "amount": "2.5",
-                "per": 1000000,
-                "unit": "tokens"
-              }
-            },
-            "provenance": {
-              "source": "models.dev",
-              "observedAt": "2026-07-13T22:49:29.519Z"
-            }
-          },
-          "provenance": {
-            "source": "models.dev",
-            "observedAt": "2026-07-13T22:49:29.519Z"
+            "observedAt": "2026-08-12T23:25:21.000Z"
           }
         },
         {
@@ -2188,14 +1951,20 @@
             "tools": true,
             "reasoning": true
           },
+          "reasoningLevels": [
+            "low",
+            "medium",
+            "high"
+          ],
+          "reasoningDefault": "medium",
           "limits": {
             "contextTokens": 200000,
             "outputTokens": 100000
           },
-          "lifecycle": "active",
+          "lifecycle": "deprecated",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "effectiveAt": "2026-08-12T23:25:21.000Z",
             "rates": {
               "input": {
                 "amount": "1.1",
@@ -2215,12 +1984,12 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-13T22:49:29.519Z"
+              "observedAt": "2026-08-12T23:25:21.000Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-13T22:49:29.519Z"
+            "observedAt": "2026-08-12T23:25:21.000Z"
           }
         },
         {
@@ -2238,6 +2007,12 @@
             "tools": true,
             "reasoning": true
           },
+          "reasoningLevels": [
+            "low",
+            "medium",
+            "high"
+          ],
+          "reasoningDefault": "medium",
           "limits": {
             "contextTokens": 200000,
             "outputTokens": 100000
@@ -2245,7 +2020,7 @@
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "effectiveAt": "2026-08-12T23:25:21.000Z",
             "rates": {
               "input": {
                 "amount": "20",
@@ -2260,12 +2035,12 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-13T22:49:29.519Z"
+              "observedAt": "2026-08-12T23:25:21.000Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-13T22:49:29.519Z"
+            "observedAt": "2026-08-12T23:25:21.000Z"
           }
         },
         {
@@ -2283,14 +2058,20 @@
             "tools": true,
             "reasoning": true
           },
+          "reasoningLevels": [
+            "low",
+            "medium",
+            "high"
+          ],
+          "reasoningDefault": "medium",
           "limits": {
             "contextTokens": 200000,
             "outputTokens": 100000
           },
-          "lifecycle": "active",
+          "lifecycle": "deprecated",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "effectiveAt": "2026-08-12T23:25:21.000Z",
             "rates": {
               "input": {
                 "amount": "1.1",
@@ -2310,62 +2091,12 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-13T22:49:29.519Z"
+              "observedAt": "2026-08-12T23:25:21.000Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-13T22:49:29.519Z"
-          }
-        },
-        {
-          "id": "o4-mini-deep-research",
-          "displayName": "o4-mini-deep-research",
-          "protocol": "openai-compatible",
-          "capabilities": {
-            "inputModalities": [
-              "text",
-              "image"
-            ],
-            "outputModalities": [
-              "text"
-            ],
-            "tools": true,
-            "reasoning": true
-          },
-          "limits": {
-            "contextTokens": 200000,
-            "outputTokens": 100000
-          },
-          "lifecycle": "active",
-          "pricing": {
-            "currency": "USD",
-            "effectiveAt": "2026-07-13T22:49:29.519Z",
-            "rates": {
-              "input": {
-                "amount": "2",
-                "per": 1000000,
-                "unit": "tokens"
-              },
-              "output": {
-                "amount": "8",
-                "per": 1000000,
-                "unit": "tokens"
-              },
-              "cacheRead": {
-                "amount": "0.5",
-                "per": 1000000,
-                "unit": "tokens"
-              }
-            },
-            "provenance": {
-              "source": "models.dev",
-              "observedAt": "2026-07-13T22:49:29.519Z"
-            }
-          },
-          "provenance": {
-            "source": "models.dev",
-            "observedAt": "2026-07-13T22:49:29.519Z"
+            "observedAt": "2026-08-12T23:25:21.000Z"
           }
         },
         {
@@ -2377,7 +2108,7 @@
               "text"
             ],
             "outputModalities": [
-              "embedding"
+              "text"
             ],
             "tools": false,
             "reasoning": false
@@ -2389,7 +2120,7 @@
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "effectiveAt": "2026-08-12T23:25:21.000Z",
             "rates": {
               "input": {
                 "amount": "0.13",
@@ -2404,12 +2135,12 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-13T22:49:29.519Z"
+              "observedAt": "2026-08-12T23:25:21.000Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-13T22:49:29.519Z"
+            "observedAt": "2026-08-12T23:25:21.000Z"
           }
         },
         {
@@ -2421,7 +2152,7 @@
               "text"
             ],
             "outputModalities": [
-              "embedding"
+              "text"
             ],
             "tools": false,
             "reasoning": false
@@ -2433,7 +2164,7 @@
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "effectiveAt": "2026-08-12T23:25:21.000Z",
             "rates": {
               "input": {
                 "amount": "0.02",
@@ -2448,12 +2179,12 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-13T22:49:29.519Z"
+              "observedAt": "2026-08-12T23:25:21.000Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-13T22:49:29.519Z"
+            "observedAt": "2026-08-12T23:25:21.000Z"
           }
         },
         {
@@ -2465,7 +2196,7 @@
               "text"
             ],
             "outputModalities": [
-              "embedding"
+              "text"
             ],
             "tools": false,
             "reasoning": false
@@ -2477,7 +2208,7 @@
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "effectiveAt": "2026-08-12T23:25:21.000Z",
             "rates": {
               "input": {
                 "amount": "0.1",
@@ -2492,12 +2223,12 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-13T22:49:29.519Z"
+              "observedAt": "2026-08-12T23:25:21.000Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-13T22:49:29.519Z"
+            "observedAt": "2026-08-12T23:25:21.000Z"
           }
         }
       ]
@@ -2516,7 +2247,7 @@
       "lifecycle": "active",
       "provenance": {
         "source": "models.dev",
-        "observedAt": "2026-07-13T22:49:29.519Z"
+        "observedAt": "2026-08-12T23:25:21.000Z"
       },
       "models": [
         {
@@ -2535,6 +2266,14 @@
             "tools": true,
             "reasoning": true
           },
+          "reasoningLevels": [
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
+          ],
+          "reasoningDefault": "medium",
           "limits": {
             "contextTokens": 1000000,
             "outputTokens": 128000
@@ -2542,7 +2281,7 @@
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "effectiveAt": "2026-08-12T23:25:21.000Z",
             "rates": {
               "input": {
                 "amount": "10",
@@ -2567,12 +2306,12 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-13T22:49:29.519Z"
+              "observedAt": "2026-08-12T23:25:21.000Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-13T22:49:29.519Z"
+            "observedAt": "2026-08-12T23:25:21.000Z"
           }
         },
         {
@@ -2598,7 +2337,7 @@
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "effectiveAt": "2026-08-12T23:25:21.000Z",
             "rates": {
               "input": {
                 "amount": "1",
@@ -2623,12 +2362,12 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-13T22:49:29.519Z"
+              "observedAt": "2026-08-12T23:25:21.000Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-13T22:49:29.519Z"
+            "observedAt": "2026-08-12T23:25:21.000Z"
           }
         },
         {
@@ -2654,7 +2393,7 @@
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "effectiveAt": "2026-08-12T23:25:21.000Z",
             "rates": {
               "input": {
                 "amount": "1",
@@ -2679,124 +2418,12 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-13T22:49:29.519Z"
+              "observedAt": "2026-08-12T23:25:21.000Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-13T22:49:29.519Z"
-          }
-        },
-        {
-          "id": "claude-opus-4-1",
-          "displayName": "Claude Opus 4.1 (latest)",
-          "protocol": "anthropic-messages",
-          "capabilities": {
-            "inputModalities": [
-              "text",
-              "image",
-              "pdf"
-            ],
-            "outputModalities": [
-              "text"
-            ],
-            "tools": true,
-            "reasoning": true
-          },
-          "limits": {
-            "contextTokens": 200000,
-            "outputTokens": 32000
-          },
-          "lifecycle": "deprecated",
-          "pricing": {
-            "currency": "USD",
-            "effectiveAt": "2026-07-13T22:49:29.519Z",
-            "rates": {
-              "input": {
-                "amount": "15",
-                "per": 1000000,
-                "unit": "tokens"
-              },
-              "output": {
-                "amount": "75",
-                "per": 1000000,
-                "unit": "tokens"
-              },
-              "cacheRead": {
-                "amount": "1.5",
-                "per": 1000000,
-                "unit": "tokens"
-              },
-              "cacheWrite": {
-                "amount": "18.75",
-                "per": 1000000,
-                "unit": "tokens"
-              }
-            },
-            "provenance": {
-              "source": "models.dev",
-              "observedAt": "2026-07-13T22:49:29.519Z"
-            }
-          },
-          "provenance": {
-            "source": "models.dev",
-            "observedAt": "2026-07-13T22:49:29.519Z"
-          }
-        },
-        {
-          "id": "claude-opus-4-1-20250805",
-          "displayName": "Claude Opus 4.1",
-          "protocol": "anthropic-messages",
-          "capabilities": {
-            "inputModalities": [
-              "text",
-              "image",
-              "pdf"
-            ],
-            "outputModalities": [
-              "text"
-            ],
-            "tools": true,
-            "reasoning": true
-          },
-          "limits": {
-            "contextTokens": 200000,
-            "outputTokens": 32000
-          },
-          "lifecycle": "deprecated",
-          "pricing": {
-            "currency": "USD",
-            "effectiveAt": "2026-07-13T22:49:29.519Z",
-            "rates": {
-              "input": {
-                "amount": "15",
-                "per": 1000000,
-                "unit": "tokens"
-              },
-              "output": {
-                "amount": "75",
-                "per": 1000000,
-                "unit": "tokens"
-              },
-              "cacheRead": {
-                "amount": "1.5",
-                "per": 1000000,
-                "unit": "tokens"
-              },
-              "cacheWrite": {
-                "amount": "18.75",
-                "per": 1000000,
-                "unit": "tokens"
-              }
-            },
-            "provenance": {
-              "source": "models.dev",
-              "observedAt": "2026-07-13T22:49:29.519Z"
-            }
-          },
-          "provenance": {
-            "source": "models.dev",
-            "observedAt": "2026-07-13T22:49:29.519Z"
+            "observedAt": "2026-08-12T23:25:21.000Z"
           }
         },
         {
@@ -2815,6 +2442,12 @@
             "tools": true,
             "reasoning": true
           },
+          "reasoningLevels": [
+            "low",
+            "medium",
+            "high"
+          ],
+          "reasoningDefault": "medium",
           "limits": {
             "contextTokens": 200000,
             "outputTokens": 64000
@@ -2822,7 +2455,7 @@
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "effectiveAt": "2026-08-12T23:25:21.000Z",
             "rates": {
               "input": {
                 "amount": "5",
@@ -2847,12 +2480,12 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-13T22:49:29.519Z"
+              "observedAt": "2026-08-12T23:25:21.000Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-13T22:49:29.519Z"
+            "observedAt": "2026-08-12T23:25:21.000Z"
           }
         },
         {
@@ -2871,6 +2504,12 @@
             "tools": true,
             "reasoning": true
           },
+          "reasoningLevels": [
+            "low",
+            "medium",
+            "high"
+          ],
+          "reasoningDefault": "medium",
           "limits": {
             "contextTokens": 200000,
             "outputTokens": 64000
@@ -2878,7 +2517,7 @@
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "effectiveAt": "2026-08-12T23:25:21.000Z",
             "rates": {
               "input": {
                 "amount": "5",
@@ -2903,12 +2542,12 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-13T22:49:29.519Z"
+              "observedAt": "2026-08-12T23:25:21.000Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-13T22:49:29.519Z"
+            "observedAt": "2026-08-12T23:25:21.000Z"
           }
         },
         {
@@ -2927,6 +2566,13 @@
             "tools": true,
             "reasoning": true
           },
+          "reasoningLevels": [
+            "low",
+            "medium",
+            "high",
+            "max"
+          ],
+          "reasoningDefault": "medium",
           "limits": {
             "contextTokens": 1000000,
             "outputTokens": 128000
@@ -2934,7 +2580,7 @@
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "effectiveAt": "2026-08-12T23:25:21.000Z",
             "rates": {
               "input": {
                 "amount": "5",
@@ -2959,12 +2605,12 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-13T22:49:29.519Z"
+              "observedAt": "2026-08-12T23:25:21.000Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-13T22:49:29.519Z"
+            "observedAt": "2026-08-12T23:25:21.000Z"
           }
         },
         {
@@ -2983,6 +2629,14 @@
             "tools": true,
             "reasoning": true
           },
+          "reasoningLevels": [
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
+          ],
+          "reasoningDefault": "medium",
           "limits": {
             "contextTokens": 1000000,
             "outputTokens": 128000
@@ -2990,7 +2644,7 @@
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "effectiveAt": "2026-08-12T23:25:21.000Z",
             "rates": {
               "input": {
                 "amount": "5",
@@ -3015,12 +2669,12 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-13T22:49:29.519Z"
+              "observedAt": "2026-08-12T23:25:21.000Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-13T22:49:29.519Z"
+            "observedAt": "2026-08-12T23:25:21.000Z"
           }
         },
         {
@@ -3039,6 +2693,14 @@
             "tools": true,
             "reasoning": true
           },
+          "reasoningLevels": [
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
+          ],
+          "reasoningDefault": "medium",
           "limits": {
             "contextTokens": 1000000,
             "outputTokens": 128000
@@ -3046,7 +2708,7 @@
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "effectiveAt": "2026-08-12T23:25:21.000Z",
             "rates": {
               "input": {
                 "amount": "5",
@@ -3071,12 +2733,76 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-13T22:49:29.519Z"
+              "observedAt": "2026-08-12T23:25:21.000Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-13T22:49:29.519Z"
+            "observedAt": "2026-08-12T23:25:21.000Z"
+          }
+        },
+        {
+          "id": "claude-opus-5",
+          "displayName": "Claude Opus 5",
+          "protocol": "anthropic-messages",
+          "capabilities": {
+            "inputModalities": [
+              "text",
+              "image",
+              "pdf"
+            ],
+            "outputModalities": [
+              "text"
+            ],
+            "tools": true,
+            "reasoning": true
+          },
+          "reasoningLevels": [
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
+          ],
+          "reasoningDefault": "medium",
+          "limits": {
+            "contextTokens": 1000000,
+            "outputTokens": 128000
+          },
+          "lifecycle": "active",
+          "pricing": {
+            "currency": "USD",
+            "effectiveAt": "2026-08-12T23:25:21.000Z",
+            "rates": {
+              "input": {
+                "amount": "5",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "output": {
+                "amount": "25",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "cacheRead": {
+                "amount": "0.5",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "cacheWrite": {
+                "amount": "6.25",
+                "per": 1000000,
+                "unit": "tokens"
+              }
+            },
+            "provenance": {
+              "source": "models.dev",
+              "observedAt": "2026-08-12T23:25:21.000Z"
+            }
+          },
+          "provenance": {
+            "source": "models.dev",
+            "observedAt": "2026-08-12T23:25:21.000Z"
           }
         },
         {
@@ -3102,7 +2828,7 @@
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "effectiveAt": "2026-08-12T23:25:21.000Z",
             "rates": {
               "input": {
                 "amount": "3",
@@ -3127,12 +2853,12 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-13T22:49:29.519Z"
+              "observedAt": "2026-08-12T23:25:21.000Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-13T22:49:29.519Z"
+            "observedAt": "2026-08-12T23:25:21.000Z"
           }
         },
         {
@@ -3158,7 +2884,7 @@
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "effectiveAt": "2026-08-12T23:25:21.000Z",
             "rates": {
               "input": {
                 "amount": "3",
@@ -3183,12 +2909,12 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-13T22:49:29.519Z"
+              "observedAt": "2026-08-12T23:25:21.000Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-13T22:49:29.519Z"
+            "observedAt": "2026-08-12T23:25:21.000Z"
           }
         },
         {
@@ -3207,6 +2933,13 @@
             "tools": true,
             "reasoning": true
           },
+          "reasoningLevels": [
+            "low",
+            "medium",
+            "high",
+            "max"
+          ],
+          "reasoningDefault": "medium",
           "limits": {
             "contextTokens": 1000000,
             "outputTokens": 128000
@@ -3214,7 +2947,7 @@
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "effectiveAt": "2026-08-12T23:25:21.000Z",
             "rates": {
               "input": {
                 "amount": "3",
@@ -3239,12 +2972,12 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-13T22:49:29.519Z"
+              "observedAt": "2026-08-12T23:25:21.000Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-13T22:49:29.519Z"
+            "observedAt": "2026-08-12T23:25:21.000Z"
           }
         },
         {
@@ -3263,6 +2996,14 @@
             "tools": true,
             "reasoning": true
           },
+          "reasoningLevels": [
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
+          ],
+          "reasoningDefault": "medium",
           "limits": {
             "contextTokens": 1000000,
             "outputTokens": 128000
@@ -3270,7 +3011,7 @@
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "effectiveAt": "2026-08-12T23:25:21.000Z",
             "rates": {
               "input": {
                 "amount": "2",
@@ -3295,12 +3036,12 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-13T22:49:29.519Z"
+              "observedAt": "2026-08-12T23:25:21.000Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-13T22:49:29.519Z"
+            "observedAt": "2026-08-12T23:25:21.000Z"
           }
         }
       ]
@@ -3319,108 +3060,52 @@
       "lifecycle": "active",
       "provenance": {
         "source": "models.dev",
-        "observedAt": "2026-07-13T22:49:29.519Z"
+        "observedAt": "2026-08-12T23:25:21.000Z"
       },
       "models": [
         {
-          "id": "gemini-2.0-flash",
-          "displayName": "Gemini 2.0 Flash",
+          "id": "gemini-2.5-computer-use-preview-10-2025",
+          "displayName": "Gemini 2.5 Computer Use Preview 10-2025",
           "protocol": "google-generative-ai",
           "capabilities": {
             "inputModalities": [
               "text",
-              "image",
-              "audio",
-              "video",
-              "pdf"
+              "image"
             ],
             "outputModalities": [
               "text"
             ],
             "tools": true,
-            "reasoning": false
+            "reasoning": true
           },
           "limits": {
-            "contextTokens": 1048576,
-            "outputTokens": 8192
+            "contextTokens": 131072,
+            "outputTokens": 65536
           },
-          "lifecycle": "deprecated",
+          "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "effectiveAt": "2026-08-12T23:25:21.000Z",
             "rates": {
               "input": {
-                "amount": "0.1",
+                "amount": "1.25",
                 "per": 1000000,
                 "unit": "tokens"
               },
               "output": {
-                "amount": "0.4",
-                "per": 1000000,
-                "unit": "tokens"
-              },
-              "cacheRead": {
-                "amount": "0.025",
+                "amount": "10",
                 "per": 1000000,
                 "unit": "tokens"
               }
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-13T22:49:29.519Z"
+              "observedAt": "2026-08-12T23:25:21.000Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-13T22:49:29.519Z"
-          }
-        },
-        {
-          "id": "gemini-2.0-flash-lite",
-          "displayName": "Gemini 2.0 Flash-Lite",
-          "protocol": "google-generative-ai",
-          "capabilities": {
-            "inputModalities": [
-              "text",
-              "image",
-              "audio",
-              "video",
-              "pdf"
-            ],
-            "outputModalities": [
-              "text"
-            ],
-            "tools": true,
-            "reasoning": false
-          },
-          "limits": {
-            "contextTokens": 1048576,
-            "outputTokens": 8192
-          },
-          "lifecycle": "deprecated",
-          "pricing": {
-            "currency": "USD",
-            "effectiveAt": "2026-07-13T22:49:29.519Z",
-            "rates": {
-              "input": {
-                "amount": "0.075",
-                "per": 1000000,
-                "unit": "tokens"
-              },
-              "output": {
-                "amount": "0.3",
-                "per": 1000000,
-                "unit": "tokens"
-              }
-            },
-            "provenance": {
-              "source": "models.dev",
-              "observedAt": "2026-07-13T22:49:29.519Z"
-            }
-          },
-          "provenance": {
-            "source": "models.dev",
-            "observedAt": "2026-07-13T22:49:29.519Z"
+            "observedAt": "2026-08-12T23:25:21.000Z"
           }
         },
         {
@@ -3448,7 +3133,7 @@
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "effectiveAt": "2026-08-12T23:25:21.000Z",
             "rates": {
               "input": {
                 "amount": "0.3",
@@ -3468,12 +3153,12 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-13T22:49:29.519Z"
+              "observedAt": "2026-08-12T23:25:21.000Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-13T22:49:29.519Z"
+            "observedAt": "2026-08-12T23:25:21.000Z"
           }
         },
         {
@@ -3501,7 +3186,7 @@
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "effectiveAt": "2026-08-12T23:25:21.000Z",
             "rates": {
               "input": {
                 "amount": "0.1",
@@ -3521,12 +3206,12 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-13T22:49:29.519Z"
+              "observedAt": "2026-08-12T23:25:21.000Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-13T22:49:29.519Z"
+            "observedAt": "2026-08-12T23:25:21.000Z"
           }
         },
         {
@@ -3554,7 +3239,7 @@
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "effectiveAt": "2026-08-12T23:25:21.000Z",
             "rates": {
               "input": {
                 "amount": "1.25",
@@ -3574,12 +3259,12 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-13T22:49:29.519Z"
+              "observedAt": "2026-08-12T23:25:21.000Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-13T22:49:29.519Z"
+            "observedAt": "2026-08-12T23:25:21.000Z"
           }
         },
         {
@@ -3600,6 +3285,13 @@
             "tools": true,
             "reasoning": true
           },
+          "reasoningLevels": [
+            "minimal",
+            "low",
+            "medium",
+            "high"
+          ],
+          "reasoningDefault": "medium",
           "limits": {
             "contextTokens": 1048576,
             "outputTokens": 65536
@@ -3607,7 +3299,7 @@
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "effectiveAt": "2026-08-12T23:25:21.000Z",
             "rates": {
               "input": {
                 "amount": "0.5",
@@ -3627,65 +3319,12 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-13T22:49:29.519Z"
+              "observedAt": "2026-08-12T23:25:21.000Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-13T22:49:29.519Z"
-          }
-        },
-        {
-          "id": "gemini-3-pro-preview",
-          "displayName": "Gemini 3 Pro Preview",
-          "protocol": "google-generative-ai",
-          "capabilities": {
-            "inputModalities": [
-              "text",
-              "image",
-              "video",
-              "audio",
-              "pdf"
-            ],
-            "outputModalities": [
-              "text"
-            ],
-            "tools": true,
-            "reasoning": true
-          },
-          "limits": {
-            "contextTokens": 1048576,
-            "outputTokens": 65536
-          },
-          "lifecycle": "deprecated",
-          "pricing": {
-            "currency": "USD",
-            "effectiveAt": "2026-07-13T22:49:29.519Z",
-            "rates": {
-              "input": {
-                "amount": "2",
-                "per": 1000000,
-                "unit": "tokens"
-              },
-              "output": {
-                "amount": "12",
-                "per": 1000000,
-                "unit": "tokens"
-              },
-              "cacheRead": {
-                "amount": "0.2",
-                "per": 1000000,
-                "unit": "tokens"
-              }
-            },
-            "provenance": {
-              "source": "models.dev",
-              "observedAt": "2026-07-13T22:49:29.519Z"
-            }
-          },
-          "provenance": {
-            "source": "models.dev",
-            "observedAt": "2026-07-13T22:49:29.519Z"
+            "observedAt": "2026-08-12T23:25:21.000Z"
           }
         },
         {
@@ -3706,6 +3345,13 @@
             "tools": true,
             "reasoning": true
           },
+          "reasoningLevels": [
+            "minimal",
+            "low",
+            "medium",
+            "high"
+          ],
+          "reasoningDefault": "medium",
           "limits": {
             "contextTokens": 1048576,
             "outputTokens": 65536
@@ -3713,7 +3359,7 @@
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "effectiveAt": "2026-08-12T23:25:21.000Z",
             "rates": {
               "input": {
                 "amount": "0.25",
@@ -3733,12 +3379,12 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-13T22:49:29.519Z"
+              "observedAt": "2026-08-12T23:25:21.000Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-13T22:49:29.519Z"
+            "observedAt": "2026-08-12T23:25:21.000Z"
           }
         },
         {
@@ -3759,6 +3405,13 @@
             "tools": true,
             "reasoning": true
           },
+          "reasoningLevels": [
+            "minimal",
+            "low",
+            "medium",
+            "high"
+          ],
+          "reasoningDefault": "medium",
           "limits": {
             "contextTokens": 1048576,
             "outputTokens": 65536
@@ -3766,7 +3419,7 @@
           "lifecycle": "deprecated",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "effectiveAt": "2026-08-12T23:25:21.000Z",
             "rates": {
               "input": {
                 "amount": "0.25",
@@ -3786,12 +3439,12 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-13T22:49:29.519Z"
+              "observedAt": "2026-08-12T23:25:21.000Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-13T22:49:29.519Z"
+            "observedAt": "2026-08-12T23:25:21.000Z"
           }
         },
         {
@@ -3812,6 +3465,12 @@
             "tools": true,
             "reasoning": true
           },
+          "reasoningLevels": [
+            "low",
+            "medium",
+            "high"
+          ],
+          "reasoningDefault": "medium",
           "limits": {
             "contextTokens": 1048576,
             "outputTokens": 65536
@@ -3819,7 +3478,7 @@
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "effectiveAt": "2026-08-12T23:25:21.000Z",
             "rates": {
               "input": {
                 "amount": "2",
@@ -3839,12 +3498,12 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-13T22:49:29.519Z"
+              "observedAt": "2026-08-12T23:25:21.000Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-13T22:49:29.519Z"
+            "observedAt": "2026-08-12T23:25:21.000Z"
           }
         },
         {
@@ -3865,6 +3524,12 @@
             "tools": true,
             "reasoning": true
           },
+          "reasoningLevels": [
+            "low",
+            "medium",
+            "high"
+          ],
+          "reasoningDefault": "medium",
           "limits": {
             "contextTokens": 1048576,
             "outputTokens": 65536
@@ -3872,7 +3537,7 @@
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "effectiveAt": "2026-08-12T23:25:21.000Z",
             "rates": {
               "input": {
                 "amount": "2",
@@ -3892,12 +3557,12 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-13T22:49:29.519Z"
+              "observedAt": "2026-08-12T23:25:21.000Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-13T22:49:29.519Z"
+            "observedAt": "2026-08-12T23:25:21.000Z"
           }
         },
         {
@@ -3918,6 +3583,13 @@
             "tools": true,
             "reasoning": true
           },
+          "reasoningLevels": [
+            "minimal",
+            "low",
+            "medium",
+            "high"
+          ],
+          "reasoningDefault": "medium",
           "limits": {
             "contextTokens": 1048576,
             "outputTokens": 65536
@@ -3925,7 +3597,7 @@
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "effectiveAt": "2026-08-12T23:25:21.000Z",
             "rates": {
               "input": {
                 "amount": "1.5",
@@ -3945,12 +3617,132 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-13T22:49:29.519Z"
+              "observedAt": "2026-08-12T23:25:21.000Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-13T22:49:29.519Z"
+            "observedAt": "2026-08-12T23:25:21.000Z"
+          }
+        },
+        {
+          "id": "gemini-3.5-flash-lite",
+          "displayName": "Gemini 3.5 Flash Lite",
+          "protocol": "google-generative-ai",
+          "capabilities": {
+            "inputModalities": [
+              "text",
+              "image",
+              "video",
+              "audio",
+              "pdf"
+            ],
+            "outputModalities": [
+              "text"
+            ],
+            "tools": true,
+            "reasoning": true
+          },
+          "reasoningLevels": [
+            "minimal",
+            "low",
+            "medium",
+            "high"
+          ],
+          "reasoningDefault": "medium",
+          "limits": {
+            "contextTokens": 1048576,
+            "outputTokens": 65536
+          },
+          "lifecycle": "active",
+          "pricing": {
+            "currency": "USD",
+            "effectiveAt": "2026-08-12T23:25:21.000Z",
+            "rates": {
+              "input": {
+                "amount": "0.3",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "output": {
+                "amount": "2.5",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "cacheRead": {
+                "amount": "0.03",
+                "per": 1000000,
+                "unit": "tokens"
+              }
+            },
+            "provenance": {
+              "source": "models.dev",
+              "observedAt": "2026-08-12T23:25:21.000Z"
+            }
+          },
+          "provenance": {
+            "source": "models.dev",
+            "observedAt": "2026-08-12T23:25:21.000Z"
+          }
+        },
+        {
+          "id": "gemini-3.6-flash",
+          "displayName": "Gemini 3.6 Flash",
+          "protocol": "google-generative-ai",
+          "capabilities": {
+            "inputModalities": [
+              "text",
+              "image",
+              "video",
+              "audio",
+              "pdf"
+            ],
+            "outputModalities": [
+              "text"
+            ],
+            "tools": true,
+            "reasoning": true
+          },
+          "reasoningLevels": [
+            "minimal",
+            "low",
+            "medium",
+            "high"
+          ],
+          "reasoningDefault": "medium",
+          "limits": {
+            "contextTokens": 1048576,
+            "outputTokens": 65536
+          },
+          "lifecycle": "active",
+          "pricing": {
+            "currency": "USD",
+            "effectiveAt": "2026-08-12T23:25:21.000Z",
+            "rates": {
+              "input": {
+                "amount": "1.5",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "output": {
+                "amount": "7.5",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "cacheRead": {
+                "amount": "0.15",
+                "per": 1000000,
+                "unit": "tokens"
+              }
+            },
+            "provenance": {
+              "source": "models.dev",
+              "observedAt": "2026-08-12T23:25:21.000Z"
+            }
+          },
+          "provenance": {
+            "source": "models.dev",
+            "observedAt": "2026-08-12T23:25:21.000Z"
           }
         },
         {
@@ -3962,7 +3754,7 @@
               "text"
             ],
             "outputModalities": [
-              "embedding"
+              "text"
             ],
             "tools": false,
             "reasoning": false
@@ -3974,7 +3766,7 @@
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "effectiveAt": "2026-08-12T23:25:21.000Z",
             "rates": {
               "input": {
                 "amount": "0.15",
@@ -3989,12 +3781,60 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-13T22:49:29.519Z"
+              "observedAt": "2026-08-12T23:25:21.000Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-13T22:49:29.519Z"
+            "observedAt": "2026-08-12T23:25:21.000Z"
+          }
+        },
+        {
+          "id": "gemini-embedding-2",
+          "displayName": "Gemini Embedding 2",
+          "protocol": "google-generative-ai",
+          "capabilities": {
+            "inputModalities": [
+              "text",
+              "image",
+              "audio",
+              "video",
+              "pdf"
+            ],
+            "outputModalities": [
+              "text"
+            ],
+            "tools": false,
+            "reasoning": false
+          },
+          "limits": {
+            "contextTokens": 8192,
+            "outputTokens": 1
+          },
+          "lifecycle": "active",
+          "pricing": {
+            "currency": "USD",
+            "effectiveAt": "2026-08-12T23:25:21.000Z",
+            "rates": {
+              "input": {
+                "amount": "0.2",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "output": {
+                "amount": "0",
+                "per": 1000000,
+                "unit": "tokens"
+              }
+            },
+            "provenance": {
+              "source": "models.dev",
+              "observedAt": "2026-08-12T23:25:21.000Z"
+            }
+          },
+          "provenance": {
+            "source": "models.dev",
+            "observedAt": "2026-08-12T23:25:21.000Z"
           }
         },
         {
@@ -4005,8 +3845,8 @@
             "inputModalities": [
               "text",
               "image",
-              "audio",
               "video",
+              "audio",
               "pdf"
             ],
             "outputModalities": [
@@ -4015,6 +3855,13 @@
             "tools": true,
             "reasoning": true
           },
+          "reasoningLevels": [
+            "minimal",
+            "low",
+            "medium",
+            "high"
+          ],
+          "reasoningDefault": "medium",
           "limits": {
             "contextTokens": 1048576,
             "outputTokens": 65536
@@ -4022,32 +3869,32 @@
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "effectiveAt": "2026-08-12T23:25:21.000Z",
             "rates": {
               "input": {
-                "amount": "0.3",
+                "amount": "1.5",
                 "per": 1000000,
                 "unit": "tokens"
               },
               "output": {
-                "amount": "2.5",
+                "amount": "9",
                 "per": 1000000,
                 "unit": "tokens"
               },
               "cacheRead": {
-                "amount": "0.075",
+                "amount": "0.15",
                 "per": 1000000,
                 "unit": "tokens"
               }
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-13T22:49:29.519Z"
+              "observedAt": "2026-08-12T23:25:21.000Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-13T22:49:29.519Z"
+            "observedAt": "2026-08-12T23:25:21.000Z"
           }
         },
         {
@@ -4058,8 +3905,8 @@
             "inputModalities": [
               "text",
               "image",
-              "audio",
               "video",
+              "audio",
               "pdf"
             ],
             "outputModalities": [
@@ -4068,6 +3915,13 @@
             "tools": true,
             "reasoning": true
           },
+          "reasoningLevels": [
+            "minimal",
+            "low",
+            "medium",
+            "high"
+          ],
+          "reasoningDefault": "medium",
           "limits": {
             "contextTokens": 1048576,
             "outputTokens": 65536
@@ -4075,15 +3929,15 @@
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "effectiveAt": "2026-08-12T23:25:21.000Z",
             "rates": {
               "input": {
-                "amount": "0.1",
+                "amount": "0.25",
                 "per": 1000000,
                 "unit": "tokens"
               },
               "output": {
-                "amount": "0.4",
+                "amount": "1.5",
                 "per": 1000000,
                 "unit": "tokens"
               },
@@ -4095,12 +3949,59 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-13T22:49:29.519Z"
+              "observedAt": "2026-08-12T23:25:21.000Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-13T22:49:29.519Z"
+            "observedAt": "2026-08-12T23:25:21.000Z"
+          }
+        },
+        {
+          "id": "gemini-robotics-er-1.6-preview",
+          "displayName": "Gemini Robotics-ER 1.6 Preview",
+          "protocol": "google-generative-ai",
+          "capabilities": {
+            "inputModalities": [
+              "text",
+              "image",
+              "video",
+              "audio"
+            ],
+            "outputModalities": [
+              "text"
+            ],
+            "tools": true,
+            "reasoning": true
+          },
+          "limits": {
+            "contextTokens": 131072,
+            "outputTokens": 65536
+          },
+          "lifecycle": "active",
+          "pricing": {
+            "currency": "USD",
+            "effectiveAt": "2026-08-12T23:25:21.000Z",
+            "rates": {
+              "input": {
+                "amount": "1",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "output": {
+                "amount": "5",
+                "per": 1000000,
+                "unit": "tokens"
+              }
+            },
+            "provenance": {
+              "source": "models.dev",
+              "observedAt": "2026-08-12T23:25:21.000Z"
+            }
+          },
+          "provenance": {
+            "source": "models.dev",
+            "observedAt": "2026-08-12T23:25:21.000Z"
           }
         },
         {
@@ -4125,16 +4026,16 @@
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "effectiveAt": "2026-08-12T23:25:21.000Z",
             "rates": {},
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-13T22:49:29.519Z"
+              "observedAt": "2026-08-12T23:25:21.000Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-13T22:49:29.519Z"
+            "observedAt": "2026-08-12T23:25:21.000Z"
           }
         },
         {
@@ -4159,16 +4060,16 @@
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "effectiveAt": "2026-08-12T23:25:21.000Z",
             "rates": {},
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-13T22:49:29.519Z"
+              "observedAt": "2026-08-12T23:25:21.000Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-13T22:49:29.519Z"
+            "observedAt": "2026-08-12T23:25:21.000Z"
           }
         }
       ]
@@ -4187,7 +4088,7 @@
       "lifecycle": "active",
       "provenance": {
         "source": "models.dev",
-        "observedAt": "2026-07-13T22:49:29.519Z"
+        "observedAt": "2026-08-12T23:25:21.000Z"
       },
       "models": [
         {
@@ -4213,7 +4114,7 @@
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "effectiveAt": "2026-08-12T23:25:21.000Z",
             "rates": {
               "input": {
                 "amount": "1.25",
@@ -4233,12 +4134,12 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-13T22:49:29.519Z"
+              "observedAt": "2026-08-12T23:25:21.000Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-13T22:49:29.519Z"
+            "observedAt": "2026-08-12T23:25:21.000Z"
           }
         },
         {
@@ -4264,7 +4165,7 @@
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "effectiveAt": "2026-08-12T23:25:21.000Z",
             "rates": {
               "input": {
                 "amount": "1.25",
@@ -4284,12 +4185,12 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-13T22:49:29.519Z"
+              "observedAt": "2026-08-12T23:25:21.000Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-13T22:49:29.519Z"
+            "observedAt": "2026-08-12T23:25:21.000Z"
           }
         },
         {
@@ -4308,6 +4209,13 @@
             "tools": false,
             "reasoning": true
           },
+          "reasoningLevels": [
+            "low",
+            "medium",
+            "high",
+            "xhigh"
+          ],
+          "reasoningDefault": "medium",
           "limits": {
             "contextTokens": 1000000,
             "outputTokens": 30000
@@ -4315,7 +4223,7 @@
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "effectiveAt": "2026-08-12T23:25:21.000Z",
             "rates": {
               "input": {
                 "amount": "1.25",
@@ -4335,12 +4243,12 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-13T22:49:29.519Z"
+              "observedAt": "2026-08-12T23:25:21.000Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-13T22:49:29.519Z"
+            "observedAt": "2026-08-12T23:25:21.000Z"
           }
         },
         {
@@ -4359,6 +4267,13 @@
             "tools": true,
             "reasoning": true
           },
+          "reasoningLevels": [
+            "none",
+            "low",
+            "medium",
+            "high"
+          ],
+          "reasoningDefault": "medium",
           "limits": {
             "contextTokens": 1000000,
             "outputTokens": 30000
@@ -4366,7 +4281,7 @@
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "effectiveAt": "2026-08-12T23:25:21.000Z",
             "rates": {
               "input": {
                 "amount": "1.25",
@@ -4386,12 +4301,12 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-13T22:49:29.519Z"
+              "observedAt": "2026-08-12T23:25:21.000Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-13T22:49:29.519Z"
+            "observedAt": "2026-08-12T23:25:21.000Z"
           }
         },
         {
@@ -4410,6 +4325,12 @@
             "tools": true,
             "reasoning": true
           },
+          "reasoningLevels": [
+            "low",
+            "medium",
+            "high"
+          ],
+          "reasoningDefault": "medium",
           "limits": {
             "contextTokens": 500000,
             "outputTokens": 500000
@@ -4417,7 +4338,65 @@
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "effectiveAt": "2026-08-12T23:25:21.000Z",
+            "rates": {
+              "input": {
+                "amount": "2",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "output": {
+                "amount": "6",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "cacheRead": {
+                "amount": "0.3",
+                "per": 1000000,
+                "unit": "tokens"
+              }
+            },
+            "provenance": {
+              "source": "models.dev",
+              "observedAt": "2026-08-12T23:25:21.000Z"
+            }
+          },
+          "provenance": {
+            "source": "models.dev",
+            "observedAt": "2026-08-12T23:25:21.000Z"
+          }
+        },
+        {
+          "id": "grok-4.6",
+          "displayName": "Grok 4.6",
+          "protocol": "xai",
+          "capabilities": {
+            "inputModalities": [
+              "text",
+              "image",
+              "pdf"
+            ],
+            "outputModalities": [
+              "text"
+            ],
+            "tools": true,
+            "reasoning": true
+          },
+          "reasoningLevels": [
+            "low",
+            "medium",
+            "high",
+            "xhigh"
+          ],
+          "reasoningDefault": "medium",
+          "limits": {
+            "contextTokens": 500000,
+            "outputTokens": 500000
+          },
+          "lifecycle": "active",
+          "pricing": {
+            "currency": "USD",
+            "effectiveAt": "2026-08-12T23:25:21.000Z",
             "rates": {
               "input": {
                 "amount": "2",
@@ -4437,12 +4416,12 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-13T22:49:29.519Z"
+              "observedAt": "2026-08-12T23:25:21.000Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-13T22:49:29.519Z"
+            "observedAt": "2026-08-12T23:25:21.000Z"
           }
         },
         {
@@ -4468,7 +4447,7 @@
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "effectiveAt": "2026-08-12T23:25:21.000Z",
             "rates": {
               "input": {
                 "amount": "1",
@@ -4488,12 +4467,12 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-13T22:49:29.519Z"
+              "observedAt": "2026-08-12T23:25:21.000Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-13T22:49:29.519Z"
+            "observedAt": "2026-08-12T23:25:21.000Z"
           }
         }
       ]
@@ -4512,12 +4491,12 @@
       "lifecycle": "active",
       "provenance": {
         "source": "models.dev",
-        "observedAt": "2026-07-13T22:49:29.519Z"
+        "observedAt": "2026-08-12T23:25:21.000Z"
       },
       "models": [
         {
           "id": "deepseek-v4-flash",
-          "displayName": "DeepSeek V4 Flash",
+          "displayName": "DeepSeek V4 Flash (2x usage)",
           "protocol": "openai-compatible",
           "capabilities": {
             "inputModalities": [
@@ -4529,6 +4508,12 @@
             "tools": true,
             "reasoning": true
           },
+          "reasoningLevels": [
+            "low",
+            "high",
+            "max"
+          ],
+          "reasoningDefault": "high",
           "limits": {
             "contextTokens": 1000000,
             "outputTokens": 384000
@@ -4536,37 +4521,37 @@
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "effectiveAt": "2026-08-12T23:25:21.000Z",
             "rates": {
               "input": {
+                "amount": "0.07",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "output": {
                 "amount": "0.14",
                 "per": 1000000,
                 "unit": "tokens"
               },
-              "output": {
-                "amount": "0.28",
-                "per": 1000000,
-                "unit": "tokens"
-              },
               "cacheRead": {
-                "amount": "0.0028",
+                "amount": "0.0014",
                 "per": 1000000,
                 "unit": "tokens"
               }
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-13T22:49:29.519Z"
+              "observedAt": "2026-08-12T23:25:21.000Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-13T22:49:29.519Z"
+            "observedAt": "2026-08-12T23:25:21.000Z"
           }
         },
         {
           "id": "deepseek-v4-pro",
-          "displayName": "DeepSeek V4 Pro",
+          "displayName": "DeepSeek V4 Pro (New)",
           "protocol": "openai-compatible",
           "capabilities": {
             "inputModalities": [
@@ -4578,6 +4563,11 @@
             "tools": true,
             "reasoning": true
           },
+          "reasoningLevels": [
+            "high",
+            "max"
+          ],
+          "reasoningDefault": "max",
           "limits": {
             "contextTokens": 1000000,
             "outputTokens": 384000
@@ -4585,32 +4575,32 @@
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "effectiveAt": "2026-08-12T23:25:21.000Z",
             "rates": {
               "input": {
-                "amount": "1.74",
+                "amount": "0.435",
                 "per": 1000000,
                 "unit": "tokens"
               },
               "output": {
-                "amount": "3.48",
+                "amount": "0.87",
                 "per": 1000000,
                 "unit": "tokens"
               },
               "cacheRead": {
-                "amount": "0.0145",
+                "amount": "0.003625",
                 "per": 1000000,
                 "unit": "tokens"
               }
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-13T22:49:29.519Z"
+              "observedAt": "2026-08-12T23:25:21.000Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-13T22:49:29.519Z"
+            "observedAt": "2026-08-12T23:25:21.000Z"
           }
         },
         {
@@ -4634,7 +4624,7 @@
           "lifecycle": "deprecated",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "effectiveAt": "2026-08-12T23:25:21.000Z",
             "rates": {
               "input": {
                 "amount": "1",
@@ -4654,12 +4644,12 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-13T22:49:29.519Z"
+              "observedAt": "2026-08-12T23:25:21.000Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-13T22:49:29.519Z"
+            "observedAt": "2026-08-12T23:25:21.000Z"
           }
         },
         {
@@ -4683,7 +4673,7 @@
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "effectiveAt": "2026-08-12T23:25:21.000Z",
             "rates": {
               "input": {
                 "amount": "1.4",
@@ -4703,12 +4693,12 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-13T22:49:29.519Z"
+              "observedAt": "2026-08-12T23:25:21.000Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-13T22:49:29.519Z"
+            "observedAt": "2026-08-12T23:25:21.000Z"
           }
         },
         {
@@ -4725,6 +4715,11 @@
             "tools": true,
             "reasoning": true
           },
+          "reasoningLevels": [
+            "high",
+            "max"
+          ],
+          "reasoningDefault": "max",
           "limits": {
             "contextTokens": 1000000,
             "outputTokens": 131072
@@ -4732,7 +4727,7 @@
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "effectiveAt": "2026-08-12T23:25:21.000Z",
             "rates": {
               "input": {
                 "amount": "1.4",
@@ -4752,12 +4747,188 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-13T22:49:29.519Z"
+              "observedAt": "2026-08-12T23:25:21.000Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-13T22:49:29.519Z"
+            "observedAt": "2026-08-12T23:25:21.000Z"
+          }
+        },
+        {
+          "id": "gpt-5.6-luna",
+          "displayName": "GPT-5.6 Luna (2x usage)",
+          "protocol": "openai-compatible",
+          "capabilities": {
+            "inputModalities": [
+              "text",
+              "image",
+              "pdf"
+            ],
+            "outputModalities": [
+              "text"
+            ],
+            "tools": true,
+            "reasoning": true
+          },
+          "reasoningLevels": [
+            "none",
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
+          ],
+          "reasoningDefault": "medium",
+          "limits": {
+            "contextTokens": 1050000,
+            "outputTokens": 128000
+          },
+          "lifecycle": "active",
+          "pricing": {
+            "currency": "USD",
+            "effectiveAt": "2026-08-12T23:25:21.000Z",
+            "rates": {
+              "input": {
+                "amount": "0.1",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "output": {
+                "amount": "0.6",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "cacheRead": {
+                "amount": "0.01",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "cacheWrite": {
+                "amount": "0.125",
+                "per": 1000000,
+                "unit": "tokens"
+              }
+            },
+            "provenance": {
+              "source": "models.dev",
+              "observedAt": "2026-08-12T23:25:21.000Z"
+            }
+          },
+          "provenance": {
+            "source": "models.dev",
+            "observedAt": "2026-08-12T23:25:21.000Z"
+          }
+        },
+        {
+          "id": "grok-4.5",
+          "displayName": "Grok 4.5",
+          "protocol": "openai-compatible",
+          "capabilities": {
+            "inputModalities": [
+              "text",
+              "image"
+            ],
+            "outputModalities": [
+              "text"
+            ],
+            "tools": true,
+            "reasoning": true
+          },
+          "reasoningLevels": [
+            "low",
+            "medium",
+            "high"
+          ],
+          "reasoningDefault": "medium",
+          "limits": {
+            "contextTokens": 500000,
+            "outputTokens": 500000
+          },
+          "lifecycle": "active",
+          "pricing": {
+            "currency": "USD",
+            "effectiveAt": "2026-08-12T23:25:21.000Z",
+            "rates": {
+              "input": {
+                "amount": "2",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "output": {
+                "amount": "6",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "cacheRead": {
+                "amount": "0.5",
+                "per": 1000000,
+                "unit": "tokens"
+              }
+            },
+            "provenance": {
+              "source": "models.dev",
+              "observedAt": "2026-08-12T23:25:21.000Z"
+            }
+          },
+          "provenance": {
+            "source": "models.dev",
+            "observedAt": "2026-08-12T23:25:21.000Z"
+          }
+        },
+        {
+          "id": "hy3",
+          "displayName": "Hy3",
+          "protocol": "openai-compatible",
+          "capabilities": {
+            "inputModalities": [
+              "text"
+            ],
+            "outputModalities": [
+              "text"
+            ],
+            "tools": true,
+            "reasoning": true
+          },
+          "reasoningLevels": [
+            "none",
+            "low",
+            "high"
+          ],
+          "reasoningDefault": "low",
+          "limits": {
+            "contextTokens": 256000,
+            "outputTokens": 64000
+          },
+          "lifecycle": "active",
+          "pricing": {
+            "currency": "USD",
+            "effectiveAt": "2026-08-12T23:25:21.000Z",
+            "rates": {
+              "input": {
+                "amount": "0.14",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "output": {
+                "amount": "0.58",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "cacheRead": {
+                "amount": "0.035",
+                "per": 1000000,
+                "unit": "tokens"
+              }
+            },
+            "provenance": {
+              "source": "models.dev",
+              "observedAt": "2026-08-12T23:25:21.000Z"
+            }
+          },
+          "provenance": {
+            "source": "models.dev",
+            "observedAt": "2026-08-12T23:25:21.000Z"
           }
         },
         {
@@ -4783,7 +4954,7 @@
           "lifecycle": "deprecated",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "effectiveAt": "2026-08-12T23:25:21.000Z",
             "rates": {
               "input": {
                 "amount": "0.6",
@@ -4803,12 +4974,12 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-13T22:49:29.519Z"
+              "observedAt": "2026-08-12T23:25:21.000Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-13T22:49:29.519Z"
+            "observedAt": "2026-08-12T23:25:21.000Z"
           }
         },
         {
@@ -4834,7 +5005,7 @@
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "effectiveAt": "2026-08-12T23:25:21.000Z",
             "rates": {
               "input": {
                 "amount": "0.95",
@@ -4854,12 +5025,12 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-13T22:49:29.519Z"
+              "observedAt": "2026-08-12T23:25:21.000Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-13T22:49:29.519Z"
+            "observedAt": "2026-08-12T23:25:21.000Z"
           }
         },
         {
@@ -4885,7 +5056,7 @@
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "effectiveAt": "2026-08-12T23:25:21.000Z",
             "rates": {
               "input": {
                 "amount": "0.95",
@@ -4905,12 +5076,67 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-13T22:49:29.519Z"
+              "observedAt": "2026-08-12T23:25:21.000Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-13T22:49:29.519Z"
+            "observedAt": "2026-08-12T23:25:21.000Z"
+          }
+        },
+        {
+          "id": "kimi-k3",
+          "displayName": "Kimi K3",
+          "protocol": "openai-compatible",
+          "capabilities": {
+            "inputModalities": [
+              "text",
+              "image",
+              "video"
+            ],
+            "outputModalities": [
+              "text"
+            ],
+            "tools": true,
+            "reasoning": true
+          },
+          "reasoningLevels": [
+            "max"
+          ],
+          "reasoningDefault": "max",
+          "limits": {
+            "contextTokens": 1048576,
+            "outputTokens": 131072
+          },
+          "lifecycle": "active",
+          "pricing": {
+            "currency": "USD",
+            "effectiveAt": "2026-08-12T23:25:21.000Z",
+            "rates": {
+              "input": {
+                "amount": "3",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "output": {
+                "amount": "15",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "cacheRead": {
+                "amount": "0.3",
+                "per": 1000000,
+                "unit": "tokens"
+              }
+            },
+            "provenance": {
+              "source": "models.dev",
+              "observedAt": "2026-08-12T23:25:21.000Z"
+            }
+          },
+          "provenance": {
+            "source": "models.dev",
+            "observedAt": "2026-08-12T23:25:21.000Z"
           }
         },
         {
@@ -4937,7 +5163,7 @@
           "lifecycle": "deprecated",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "effectiveAt": "2026-08-12T23:25:21.000Z",
             "rates": {
               "input": {
                 "amount": "0.4",
@@ -4957,12 +5183,12 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-13T22:49:29.519Z"
+              "observedAt": "2026-08-12T23:25:21.000Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-13T22:49:29.519Z"
+            "observedAt": "2026-08-12T23:25:21.000Z"
           }
         },
         {
@@ -4986,7 +5212,7 @@
           "lifecycle": "deprecated",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "effectiveAt": "2026-08-12T23:25:21.000Z",
             "rates": {
               "input": {
                 "amount": "1",
@@ -5006,12 +5232,12 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-13T22:49:29.519Z"
+              "observedAt": "2026-08-12T23:25:21.000Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-13T22:49:29.519Z"
+            "observedAt": "2026-08-12T23:25:21.000Z"
           }
         },
         {
@@ -5038,7 +5264,7 @@
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "effectiveAt": "2026-08-12T23:25:21.000Z",
             "rates": {
               "input": {
                 "amount": "0.14",
@@ -5058,12 +5284,12 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-13T22:49:29.519Z"
+              "observedAt": "2026-08-12T23:25:21.000Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-13T22:49:29.519Z"
+            "observedAt": "2026-08-12T23:25:21.000Z"
           }
         },
         {
@@ -5087,32 +5313,32 @@
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "effectiveAt": "2026-08-12T23:25:21.000Z",
             "rates": {
               "input": {
-                "amount": "1.74",
+                "amount": "0.435",
                 "per": 1000000,
                 "unit": "tokens"
               },
               "output": {
-                "amount": "3.48",
+                "amount": "0.87",
                 "per": 1000000,
                 "unit": "tokens"
               },
               "cacheRead": {
-                "amount": "0.0145",
+                "amount": "0.003625",
                 "per": 1000000,
                 "unit": "tokens"
               }
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-13T22:49:29.519Z"
+              "observedAt": "2026-08-12T23:25:21.000Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-13T22:49:29.519Z"
+            "observedAt": "2026-08-12T23:25:21.000Z"
           }
         },
         {
@@ -5136,7 +5362,7 @@
           "lifecycle": "deprecated",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "effectiveAt": "2026-08-12T23:25:21.000Z",
             "rates": {
               "input": {
                 "amount": "0.3",
@@ -5156,12 +5382,12 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-13T22:49:29.519Z"
+              "observedAt": "2026-08-12T23:25:21.000Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-13T22:49:29.519Z"
+            "observedAt": "2026-08-12T23:25:21.000Z"
           }
         },
         {
@@ -5185,7 +5411,7 @@
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "effectiveAt": "2026-08-12T23:25:21.000Z",
             "rates": {
               "input": {
                 "amount": "0.3",
@@ -5205,12 +5431,12 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-13T22:49:29.519Z"
+              "observedAt": "2026-08-12T23:25:21.000Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-13T22:49:29.519Z"
+            "observedAt": "2026-08-12T23:25:21.000Z"
           }
         },
         {
@@ -5236,7 +5462,7 @@
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "effectiveAt": "2026-08-12T23:25:21.000Z",
             "rates": {
               "input": {
                 "amount": "0.3",
@@ -5256,12 +5482,12 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-13T22:49:29.519Z"
+              "observedAt": "2026-08-12T23:25:21.000Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-13T22:49:29.519Z"
+            "observedAt": "2026-08-12T23:25:21.000Z"
           }
         },
         {
@@ -5287,7 +5513,7 @@
           "lifecycle": "deprecated",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "effectiveAt": "2026-08-12T23:25:21.000Z",
             "rates": {
               "input": {
                 "amount": "0.2",
@@ -5312,12 +5538,12 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-13T22:49:29.519Z"
+              "observedAt": "2026-08-12T23:25:21.000Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-13T22:49:29.519Z"
+            "observedAt": "2026-08-12T23:25:21.000Z"
           }
         },
         {
@@ -5343,7 +5569,7 @@
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "effectiveAt": "2026-08-12T23:25:21.000Z",
             "rates": {
               "input": {
                 "amount": "0.5",
@@ -5368,12 +5594,12 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-13T22:49:29.519Z"
+              "observedAt": "2026-08-12T23:25:21.000Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-13T22:49:29.519Z"
+            "observedAt": "2026-08-12T23:25:21.000Z"
           }
         },
         {
@@ -5397,7 +5623,7 @@
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "effectiveAt": "2026-08-12T23:25:21.000Z",
             "rates": {
               "input": {
                 "amount": "2.5",
@@ -5422,12 +5648,12 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-13T22:49:29.519Z"
+              "observedAt": "2026-08-12T23:25:21.000Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-13T22:49:29.519Z"
+            "observedAt": "2026-08-12T23:25:21.000Z"
           }
         },
         {
@@ -5453,7 +5679,7 @@
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "effectiveAt": "2026-08-12T23:25:21.000Z",
             "rates": {
               "input": {
                 "amount": "0.4",
@@ -5478,12 +5704,68 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-13T22:49:29.519Z"
+              "observedAt": "2026-08-12T23:25:21.000Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-13T22:49:29.519Z"
+            "observedAt": "2026-08-12T23:25:21.000Z"
+          }
+        },
+        {
+          "id": "qwen3.8-max",
+          "displayName": "Qwen3.8 Max",
+          "protocol": "openai-compatible",
+          "capabilities": {
+            "inputModalities": [
+              "text",
+              "image",
+              "video"
+            ],
+            "outputModalities": [
+              "text"
+            ],
+            "tools": true,
+            "reasoning": true
+          },
+          "limits": {
+            "contextTokens": 1000000,
+            "outputTokens": 131072
+          },
+          "lifecycle": "active",
+          "pricing": {
+            "currency": "USD",
+            "effectiveAt": "2026-08-12T23:25:21.000Z",
+            "rates": {
+              "input": {
+                "amount": "2",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "output": {
+                "amount": "6",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "cacheRead": {
+                "amount": "0.25",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "cacheWrite": {
+                "amount": "2.5",
+                "per": 1000000,
+                "unit": "tokens"
+              }
+            },
+            "provenance": {
+              "source": "models.dev",
+              "observedAt": "2026-08-12T23:25:21.000Z"
+            }
+          },
+          "provenance": {
+            "source": "models.dev",
+            "observedAt": "2026-08-12T23:25:21.000Z"
           }
         }
       ]
@@ -5502,7 +5784,7 @@
       "lifecycle": "active",
       "provenance": {
         "source": "models.dev",
-        "observedAt": "2026-07-13T22:49:29.519Z"
+        "observedAt": "2026-08-12T23:25:21.000Z"
       },
       "models": [
         {
@@ -5528,7 +5810,7 @@
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "effectiveAt": "2026-08-12T23:25:21.000Z",
             "rates": {
               "input": {
                 "amount": "0.11",
@@ -5543,12 +5825,12 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-13T22:49:29.519Z"
+              "observedAt": "2026-08-12T23:25:21.000Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-13T22:49:29.519Z"
+            "observedAt": "2026-08-12T23:25:21.000Z"
           }
         },
         {
@@ -5574,7 +5856,7 @@
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "effectiveAt": "2026-08-12T23:25:21.000Z",
             "rates": {
               "input": {
                 "amount": "0.28",
@@ -5594,12 +5876,12 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-13T22:49:29.519Z"
+              "observedAt": "2026-08-12T23:25:21.000Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-13T22:49:29.519Z"
+            "observedAt": "2026-08-12T23:25:21.000Z"
           }
         },
         {
@@ -5624,7 +5906,7 @@
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "effectiveAt": "2026-08-12T23:25:21.000Z",
             "rates": {
               "input": {
                 "amount": "0.7",
@@ -5644,12 +5926,12 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-13T22:49:29.519Z"
+              "observedAt": "2026-08-12T23:25:21.000Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-13T22:49:29.519Z"
+            "observedAt": "2026-08-12T23:25:21.000Z"
           }
         },
         {
@@ -5666,6 +5948,11 @@
             "tools": true,
             "reasoning": true
           },
+          "reasoningLevels": [
+            "high",
+            "max"
+          ],
+          "reasoningDefault": "max",
           "limits": {
             "contextTokens": 524288,
             "outputTokens": 524288
@@ -5673,7 +5960,7 @@
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "effectiveAt": "2026-08-12T23:25:21.000Z",
             "rates": {
               "input": {
                 "amount": "0.9",
@@ -5693,12 +5980,12 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-13T22:49:29.519Z"
+              "observedAt": "2026-08-12T23:25:21.000Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-13T22:49:29.519Z"
+            "observedAt": "2026-08-12T23:25:21.000Z"
           }
         }
       ]
@@ -5717,9 +6004,113 @@
       "lifecycle": "active",
       "provenance": {
         "source": "models.dev",
-        "observedAt": "2026-07-13T22:49:29.519Z"
+        "observedAt": "2026-08-12T23:25:21.000Z"
       },
       "models": [
+        {
+          "id": "deepseek-v4-flash",
+          "displayName": "DeepSeek V4 Flash",
+          "protocol": "openai-compatible",
+          "capabilities": {
+            "inputModalities": [
+              "text"
+            ],
+            "outputModalities": [
+              "text"
+            ],
+            "tools": true,
+            "reasoning": true
+          },
+          "reasoningLevels": [
+            "high",
+            "max"
+          ],
+          "reasoningDefault": "max",
+          "limits": {
+            "contextTokens": 1048560,
+            "outputTokens": 65536
+          },
+          "lifecycle": "active",
+          "pricing": {
+            "currency": "USD",
+            "effectiveAt": "2026-08-12T23:25:21.000Z",
+            "rates": {
+              "input": {
+                "amount": "0.104",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "output": {
+                "amount": "0.207",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "cacheRead": {
+                "amount": "0.026",
+                "per": 1000000,
+                "unit": "tokens"
+              }
+            },
+            "provenance": {
+              "source": "models.dev",
+              "observedAt": "2026-08-12T23:25:21.000Z"
+            }
+          },
+          "provenance": {
+            "source": "models.dev",
+            "observedAt": "2026-08-12T23:25:21.000Z"
+          }
+        },
+        {
+          "id": "gemma-4-31b",
+          "displayName": "Gemma 4 31B",
+          "protocol": "openai-compatible",
+          "capabilities": {
+            "inputModalities": [
+              "text",
+              "image"
+            ],
+            "outputModalities": [
+              "text"
+            ],
+            "tools": true,
+            "reasoning": true
+          },
+          "limits": {
+            "contextTokens": 262128,
+            "outputTokens": 16384
+          },
+          "lifecycle": "active",
+          "pricing": {
+            "currency": "USD",
+            "effectiveAt": "2026-08-12T23:25:21.000Z",
+            "rates": {
+              "input": {
+                "amount": "0.144",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "output": {
+                "amount": "0.42",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "cacheRead": {
+                "amount": "0.036",
+                "per": 1000000,
+                "unit": "tokens"
+              }
+            },
+            "provenance": {
+              "source": "models.dev",
+              "observedAt": "2026-08-12T23:25:21.000Z"
+            }
+          },
+          "provenance": {
+            "source": "models.dev",
+            "observedAt": "2026-08-12T23:25:21.000Z"
+          }
+        },
         {
           "id": "glm-5.2",
           "displayName": "GLM 5.2",
@@ -5734,6 +6125,16 @@
             "tools": true,
             "reasoning": true
           },
+          "reasoningLevels": [
+            "none",
+            "minimal",
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
+          ],
+          "reasoningDefault": "medium",
           "limits": {
             "contextTokens": 1048560,
             "outputTokens": 1048560
@@ -5741,7 +6142,7 @@
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "effectiveAt": "2026-08-12T23:25:21.000Z",
             "rates": {
               "input": {
                 "amount": "1.45",
@@ -5761,12 +6162,12 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-13T22:49:29.519Z"
+              "observedAt": "2026-08-12T23:25:21.000Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-13T22:49:29.519Z"
+            "observedAt": "2026-08-12T23:25:21.000Z"
           }
         },
         {
@@ -5790,7 +6191,7 @@
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "effectiveAt": "2026-08-12T23:25:21.000Z",
             "rates": {
               "input": {
                 "amount": "1.45",
@@ -5810,12 +6211,12 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-13T22:49:29.519Z"
+              "observedAt": "2026-08-12T23:25:21.000Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-13T22:49:29.519Z"
+            "observedAt": "2026-08-12T23:25:21.000Z"
           }
         },
         {
@@ -5832,6 +6233,16 @@
             "tools": true,
             "reasoning": true
           },
+          "reasoningLevels": [
+            "none",
+            "minimal",
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
+          ],
+          "reasoningDefault": "medium",
           "limits": {
             "contextTokens": 1048560,
             "outputTokens": 1048560
@@ -5839,7 +6250,7 @@
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "effectiveAt": "2026-08-12T23:25:21.000Z",
             "rates": {
               "input": {
                 "amount": "0.725",
@@ -5859,12 +6270,12 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-13T22:49:29.519Z"
+              "observedAt": "2026-08-12T23:25:21.000Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-13T22:49:29.519Z"
+            "observedAt": "2026-08-12T23:25:21.000Z"
           }
         },
         {
@@ -5881,6 +6292,16 @@
             "tools": true,
             "reasoning": true
           },
+          "reasoningLevels": [
+            "none",
+            "minimal",
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
+          ],
+          "reasoningDefault": "medium",
           "limits": {
             "contextTokens": 199984,
             "outputTokens": 199984
@@ -5888,7 +6309,7 @@
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "effectiveAt": "2026-08-12T23:25:21.000Z",
             "rates": {
               "input": {
                 "amount": "1.45",
@@ -5908,12 +6329,12 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-13T22:49:29.519Z"
+              "observedAt": "2026-08-12T23:25:21.000Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-13T22:49:29.519Z"
+            "observedAt": "2026-08-12T23:25:21.000Z"
           }
         },
         {
@@ -5937,7 +6358,7 @@
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "effectiveAt": "2026-08-12T23:25:21.000Z",
             "rates": {
               "input": {
                 "amount": "1.45",
@@ -5957,12 +6378,12 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-13T22:49:29.519Z"
+              "observedAt": "2026-08-12T23:25:21.000Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-13T22:49:29.519Z"
+            "observedAt": "2026-08-12T23:25:21.000Z"
           }
         },
         {
@@ -5986,7 +6407,7 @@
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "effectiveAt": "2026-08-12T23:25:21.000Z",
             "rates": {
               "input": {
                 "amount": "0.725",
@@ -6006,12 +6427,12 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-13T22:49:29.519Z"
+              "observedAt": "2026-08-12T23:25:21.000Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-13T22:49:29.519Z"
+            "observedAt": "2026-08-12T23:25:21.000Z"
           }
         },
         {
@@ -6028,6 +6449,16 @@
             "tools": true,
             "reasoning": true
           },
+          "reasoningLevels": [
+            "none",
+            "minimal",
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
+          ],
+          "reasoningDefault": "medium",
           "limits": {
             "contextTokens": 199984,
             "outputTokens": 199984
@@ -6035,7 +6466,7 @@
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "effectiveAt": "2026-08-12T23:25:21.000Z",
             "rates": {
               "input": {
                 "amount": "0.725",
@@ -6055,12 +6486,12 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-13T22:49:29.519Z"
+              "observedAt": "2026-08-12T23:25:21.000Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-13T22:49:29.519Z"
+            "observedAt": "2026-08-12T23:25:21.000Z"
           }
         },
         {
@@ -6085,7 +6516,7 @@
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "effectiveAt": "2026-08-12T23:25:21.000Z",
             "rates": {
               "input": {
                 "amount": "0.52",
@@ -6105,12 +6536,12 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-13T22:49:29.519Z"
+              "observedAt": "2026-08-12T23:25:21.000Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-13T22:49:29.519Z"
+            "observedAt": "2026-08-12T23:25:21.000Z"
           }
         },
         {
@@ -6135,7 +6566,7 @@
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "effectiveAt": "2026-08-12T23:25:21.000Z",
             "rates": {
               "input": {
                 "amount": "0.69",
@@ -6155,12 +6586,12 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-13T22:49:29.519Z"
+              "observedAt": "2026-08-12T23:25:21.000Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-13T22:49:29.519Z"
+            "observedAt": "2026-08-12T23:25:21.000Z"
           }
         },
         {
@@ -6185,7 +6616,7 @@
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "effectiveAt": "2026-08-12T23:25:21.000Z",
             "rates": {
               "input": {
                 "amount": "0.345",
@@ -6205,12 +6636,12 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-13T22:49:29.519Z"
+              "observedAt": "2026-08-12T23:25:21.000Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-13T22:49:29.519Z"
+            "observedAt": "2026-08-12T23:25:21.000Z"
           }
         },
         {
@@ -6235,7 +6666,7 @@
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "effectiveAt": "2026-08-12T23:25:21.000Z",
             "rates": {
               "input": {
                 "amount": "0.475",
@@ -6255,12 +6686,118 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-13T22:49:29.519Z"
+              "observedAt": "2026-08-12T23:25:21.000Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-13T22:49:29.519Z"
+            "observedAt": "2026-08-12T23:25:21.000Z"
+          }
+        },
+        {
+          "id": "kimi-k3",
+          "displayName": "Kimi K3",
+          "protocol": "openai-compatible",
+          "capabilities": {
+            "inputModalities": [
+              "text",
+              "image"
+            ],
+            "outputModalities": [
+              "text"
+            ],
+            "tools": true,
+            "reasoning": true
+          },
+          "reasoningLevels": [
+            "low",
+            "high",
+            "max"
+          ],
+          "reasoningDefault": "high",
+          "limits": {
+            "contextTokens": 1048560,
+            "outputTokens": 1048560
+          },
+          "lifecycle": "active",
+          "pricing": {
+            "currency": "USD",
+            "effectiveAt": "2026-08-12T23:25:21.000Z",
+            "rates": {
+              "input": {
+                "amount": "3",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "output": {
+                "amount": "15",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "cacheRead": {
+                "amount": "0.3",
+                "per": 1000000,
+                "unit": "tokens"
+              }
+            },
+            "provenance": {
+              "source": "models.dev",
+              "observedAt": "2026-08-12T23:25:21.000Z"
+            }
+          },
+          "provenance": {
+            "source": "models.dev",
+            "observedAt": "2026-08-12T23:25:21.000Z"
+          }
+        },
+        {
+          "id": "kimi-k3-fast",
+          "displayName": "Kimi K3 Fast",
+          "protocol": "openai-compatible",
+          "capabilities": {
+            "inputModalities": [
+              "text",
+              "image"
+            ],
+            "outputModalities": [
+              "text"
+            ],
+            "tools": true,
+            "reasoning": false
+          },
+          "limits": {
+            "contextTokens": 1048560,
+            "outputTokens": 1048560
+          },
+          "lifecycle": "active",
+          "pricing": {
+            "currency": "USD",
+            "effectiveAt": "2026-08-12T23:25:21.000Z",
+            "rates": {
+              "input": {
+                "amount": "3",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "output": {
+                "amount": "15",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "cacheRead": {
+                "amount": "0.3",
+                "per": 1000000,
+                "unit": "tokens"
+              }
+            },
+            "provenance": {
+              "source": "models.dev",
+              "observedAt": "2026-08-12T23:25:21.000Z"
+            }
+          },
+          "provenance": {
+            "source": "models.dev",
+            "observedAt": "2026-08-12T23:25:21.000Z"
           }
         },
         {
@@ -6285,7 +6822,7 @@
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "effectiveAt": "2026-08-12T23:25:21.000Z",
             "rates": {
               "input": {
                 "amount": "0.52",
@@ -6305,12 +6842,12 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-13T22:49:29.519Z"
+              "observedAt": "2026-08-12T23:25:21.000Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-13T22:49:29.519Z"
+            "observedAt": "2026-08-12T23:25:21.000Z"
           }
         },
         {
@@ -6335,7 +6872,7 @@
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "effectiveAt": "2026-08-12T23:25:21.000Z",
             "rates": {
               "input": {
                 "amount": "0.69",
@@ -6355,12 +6892,12 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-13T22:49:29.519Z"
+              "observedAt": "2026-08-12T23:25:21.000Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-13T22:49:29.519Z"
+            "observedAt": "2026-08-12T23:25:21.000Z"
           }
         },
         {
@@ -6385,7 +6922,7 @@
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "effectiveAt": "2026-08-12T23:25:21.000Z",
             "rates": {
               "input": {
                 "amount": "0.95",
@@ -6405,12 +6942,12 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-13T22:49:29.519Z"
+              "observedAt": "2026-08-12T23:25:21.000Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-13T22:49:29.519Z"
+            "observedAt": "2026-08-12T23:25:21.000Z"
           }
         },
         {
@@ -6434,7 +6971,7 @@
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "effectiveAt": "2026-08-12T23:25:21.000Z",
             "rates": {
               "input": {
                 "amount": "0.69",
@@ -6454,12 +6991,12 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-13T22:49:29.519Z"
+              "observedAt": "2026-08-12T23:25:21.000Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-13T22:49:29.519Z"
+            "observedAt": "2026-08-12T23:25:21.000Z"
           }
         },
         {
@@ -6484,7 +7021,7 @@
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "effectiveAt": "2026-08-12T23:25:21.000Z",
             "rates": {
               "input": {
                 "amount": "0.29",
@@ -6504,12 +7041,12 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-13T22:49:29.519Z"
+              "observedAt": "2026-08-12T23:25:21.000Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-13T22:49:29.519Z"
+            "observedAt": "2026-08-12T23:25:21.000Z"
           }
         },
         {
@@ -6533,7 +7070,7 @@
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "effectiveAt": "2026-08-12T23:25:21.000Z",
             "rates": {
               "input": {
                 "amount": "0.69",
@@ -6553,12 +7090,12 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-13T22:49:29.519Z"
+              "observedAt": "2026-08-12T23:25:21.000Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-13T22:49:29.519Z"
+            "observedAt": "2026-08-12T23:25:21.000Z"
           }
         },
         {
@@ -6583,7 +7120,7 @@
           "lifecycle": "active",
           "pricing": {
             "currency": "USD",
-            "effectiveAt": "2026-07-13T22:49:29.519Z",
+            "effectiveAt": "2026-08-12T23:25:21.000Z",
             "rates": {
               "input": {
                 "amount": "0.29",
@@ -6603,12 +7140,213 @@
             },
             "provenance": {
               "source": "models.dev",
-              "observedAt": "2026-07-13T22:49:29.519Z"
+              "observedAt": "2026-08-12T23:25:21.000Z"
             }
           },
           "provenance": {
             "source": "models.dev",
-            "observedAt": "2026-07-13T22:49:29.519Z"
+            "observedAt": "2026-08-12T23:25:21.000Z"
+          }
+        }
+      ]
+    },
+    {
+      "id": "meta",
+      "displayName": "Meta",
+      "supportedAuthMethods": [
+        "api-key",
+        "environment"
+      ],
+      "supportedProtocols": [
+        "openai-responses"
+      ],
+      "allowsCustomModels": true,
+      "lifecycle": "active",
+      "provenance": {
+        "source": "models.dev",
+        "observedAt": "2026-08-12T23:25:21.000Z"
+      },
+      "models": [
+        {
+          "id": "muse-spark-1.1",
+          "displayName": "Muse Spark 1.1",
+          "protocol": "openai-responses",
+          "capabilities": {
+            "inputModalities": [
+              "text",
+              "image",
+              "pdf",
+              "video"
+            ],
+            "outputModalities": [
+              "text"
+            ],
+            "tools": true,
+            "reasoning": true
+          },
+          "reasoningLevels": [
+            "minimal",
+            "low",
+            "medium",
+            "high",
+            "xhigh"
+          ],
+          "reasoningDefault": "medium",
+          "limits": {
+            "contextTokens": 1000000,
+            "outputTokens": 32000
+          },
+          "lifecycle": "active",
+          "pricing": {
+            "currency": "USD",
+            "effectiveAt": "2026-08-12T23:25:21.000Z",
+            "rates": {
+              "input": {
+                "amount": "1.25",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "output": {
+                "amount": "4.25",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "cacheRead": {
+                "amount": "0.15",
+                "per": 1000000,
+                "unit": "tokens"
+              }
+            },
+            "provenance": {
+              "source": "models.dev",
+              "observedAt": "2026-08-12T23:25:21.000Z"
+            }
+          },
+          "provenance": {
+            "source": "models.dev",
+            "observedAt": "2026-08-12T23:25:21.000Z"
+          }
+        },
+        {
+          "id": "muse-spark-1.2",
+          "displayName": "Muse Spark 1.2",
+          "protocol": "openai-responses",
+          "capabilities": {
+            "inputModalities": [
+              "text",
+              "image",
+              "video",
+              "pdf",
+              "audio"
+            ],
+            "outputModalities": [
+              "text"
+            ],
+            "tools": true,
+            "reasoning": true
+          },
+          "reasoningLevels": [
+            "minimal",
+            "low",
+            "medium",
+            "high",
+            "xhigh"
+          ],
+          "reasoningDefault": "medium",
+          "limits": {
+            "contextTokens": 1048576,
+            "outputTokens": 131072
+          },
+          "lifecycle": "active",
+          "pricing": {
+            "currency": "USD",
+            "effectiveAt": "2026-08-12T23:25:21.000Z",
+            "rates": {
+              "input": {
+                "amount": "1.25",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "output": {
+                "amount": "4.25",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "cacheRead": {
+                "amount": "0.15",
+                "per": 1000000,
+                "unit": "tokens"
+              }
+            },
+            "provenance": {
+              "source": "models.dev",
+              "observedAt": "2026-08-12T23:25:21.000Z"
+            }
+          },
+          "provenance": {
+            "source": "models.dev",
+            "observedAt": "2026-08-12T23:25:21.000Z"
+          }
+        },
+        {
+          "id": "muse-spark-1.2-contributor",
+          "displayName": "Muse Spark 1.2 Contributor",
+          "protocol": "openai-responses",
+          "capabilities": {
+            "inputModalities": [
+              "text",
+              "image",
+              "video",
+              "pdf",
+              "audio"
+            ],
+            "outputModalities": [
+              "text"
+            ],
+            "tools": true,
+            "reasoning": true
+          },
+          "reasoningLevels": [
+            "minimal",
+            "low",
+            "medium",
+            "high",
+            "xhigh"
+          ],
+          "reasoningDefault": "medium",
+          "limits": {
+            "contextTokens": 1048576,
+            "outputTokens": 131072
+          },
+          "lifecycle": "active",
+          "pricing": {
+            "currency": "USD",
+            "effectiveAt": "2026-08-12T23:25:21.000Z",
+            "rates": {
+              "input": {
+                "amount": "0.1",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "output": {
+                "amount": "0.2",
+                "per": 1000000,
+                "unit": "tokens"
+              },
+              "cacheRead": {
+                "amount": "0.002",
+                "per": 1000000,
+                "unit": "tokens"
+              }
+            },
+            "provenance": {
+              "source": "models.dev",
+              "observedAt": "2026-08-12T23:25:21.000Z"
+            }
+          },
+          "provenance": {
+            "source": "models.dev",
+            "observedAt": "2026-08-12T23:25:21.000Z"
           }
         }
       ]
@@ -6628,7 +7366,7 @@
       "lifecycle": "active",
       "provenance": {
         "source": "catalog",
-        "observedAt": "2026-07-13T22:49:29.519Z"
+        "observedAt": "2026-08-12T23:25:21.000Z"
       },
       "models": []
     },
@@ -6647,7 +7385,7 @@
       "lifecycle": "active",
       "provenance": {
         "source": "catalog",
-        "observedAt": "2026-07-13T22:49:29.519Z"
+        "observedAt": "2026-08-12T23:25:21.000Z"
       },
       "models": []
     }

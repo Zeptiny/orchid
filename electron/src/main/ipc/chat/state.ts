@@ -10,6 +10,7 @@ import type {
   ChatStreamSegmentSnapshot,
   ChatToolCallSnapshot,
 } from '../../../shared/types/ipc';
+import type { ThinkingReplayContext } from '../../llm/history';
 import type { ProjectRuntime } from '../../project/runtime';
 
 export type ActiveAgent = {
@@ -42,9 +43,13 @@ export type ActiveAgent = {
   responseCommittedLength: number;
   /** Length of context.thinking already snapshotted into turnMessages. */
   thinkingCommittedLength: number;
+  /** Count of context.thinkingArtifacts already flushed into turnMessages. */
+  thinkingArtifactsCommitted: number;
   agent: Agent;
   /** Connection-scoped selection frozen for this turn's chain/storage. */
   selection: ModelSelection;
+  /** Current model's thinking policy + identity; freezes replay per turn. */
+  thinkingReplay?: ThinkingReplayContext;
   agentCancelled: boolean;
   finalized: boolean;
   /** Monotonic generation for this window; stale agents must not emit IPC. */

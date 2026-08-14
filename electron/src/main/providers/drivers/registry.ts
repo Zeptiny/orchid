@@ -8,6 +8,7 @@ import { createNativeProviderDrivers } from './native';
 import { createCompatibleProviderDrivers, validateGenericEndpoint } from './compatible';
 import { createOpenCodeGoProviderDriver } from './opencode-go';
 import { createLilacProviderDriver } from './lilac';
+import { createMetaProviderDriver } from './meta';
 import { createNeuralwattProviderDriver } from './neuralwatt';
 import { ProviderResolutionError } from '../../llm/middleware/error-classification';
 
@@ -92,6 +93,7 @@ export function createDefaultProviderDriverRegistry(): ProviderDriverRegistry {
     ...createCompatibleProviderDrivers(),
     createOpenCodeGoProviderDriver(),
     createLilacProviderDriver(),
+    createMetaProviderDriver(),
     createNeuralwattProviderDriver(),
   ]);
 }

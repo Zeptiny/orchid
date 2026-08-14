@@ -22,7 +22,7 @@ import {
 } from './middleware/provider-quirks';
 import {
   escapeXmlAttribute,
-  escapeXmlText,
+  xmlText,
   finalizeToolExecutionResult,
   genericAgentProjector,
   renderRetrieval,
@@ -663,31 +663,33 @@ function ensureProjectionRecovery(
 }
 
 /**
- * Insert an XML fragment immediately before the final `</tool_result>` closing
- * tag of a well-formed envelope. When the content is not a well-formed envelope
- * (missing opening or closing tag), wrap it in a fallback envelope instead.
- * Shared by retrieval recovery and AGENTS.md read-path injection.
+ * Append an XML fragment after a well-formed `</tool_result>` envelope.
+ *
+ * Projection content is raw data (element content may contain strings that look
+ * like closing tags), so searching for a closing tag is unreliable and
+ * inserting inside the envelope cannot be done mechanically. Appending after
+ * the envelope keeps the injection deterministic: the envelope stays
+ * well-formed and the fragment becomes a sibling block in the same tool-result
+ * message. When the content is not a well-formed envelope (missing opening or
+ * closing tag), wrap it in a fallback envelope instead. Shared by retrieval
+ * recovery and AGENTS.md read/write-path injection.
  */
-function insertXmlBeforeClosingTag(
+function appendXmlBlock(
   content: string,
   xml: string,
   toolName: string,
 ): string {
-  const closingTag = '</tool_result>';
-  const closingIndex = content.lastIndexOf(closingTag);
-  const startsWithEnvelope = content.startsWith('<tool_result');
-  const hasClosingTag = closingIndex >= 0;
-  if (startsWithEnvelope && hasClosingTag) {
-    return content.slice(0, closingIndex).trimEnd() + '\n' +
-      xml + '\n' + content.slice(closingIndex);
+  const trimmed = content.trimEnd();
+  if (trimmed.endsWith('</tool_result>')) {
+    return trimmed + '\n' + xml;
   }
+  const startsWithEnvelope = content.startsWith('<tool_result');
   console.warn('[tool-dispatch] Projection content is not a well-formed tool_result envelope; wrapping in fallback envelope', {
     toolName,
     startsWithEnvelope,
-    hasClosingTag,
   });
   return '<tool_result name="' + escapeXmlAttribute(toolName) + '" status="partial">\n' +
-    '<payload>' + escapeXmlText(content) + '</payload>\n' +
+    '<payload>' + xmlText(trimmed) + '</payload>\n' +
     xml + '\n</tool_result>';
 }
 
@@ -696,7 +698,7 @@ function appendXmlRetrieval(
   retrieval: ToolResultRetrieval,
   toolName: string,
 ): string {
-  return insertXmlBeforeClosingTag(content, renderRetrieval(retrieval), toolName);
+  return appendXmlBlock(content, renderRetrieval(retrieval), toolName);
 }
 
 function maybeOffloadAgentProjection(
@@ -809,7 +811,7 @@ function maybeInjectAgentsMd(
     );
     if (injection === null) return execution;
 
-    const content = insertXmlBeforeClosingTag(
+    const content = appendXmlBlock(
       execution.agentProjection.content,
       injection.xml,
       request.name,
@@ -928,7 +930,7 @@ function maybeEnforceAgentsMdOnWrite(
     }
     if (xml === '') return execution;
 
-    const content = insertXmlBeforeClosingTag(
+    const content = appendXmlBlock(
       execution.agentProjection.content,
       xml,
       request.name,
@@ -1008,7 +1010,7 @@ function maybeOffloadToolOutputDetailed(
       `and was truncated because no active session is available for cache ` +
       `storage. Use the tool again with narrower scope (offset/limit) to ` +
       `inspect the full result.</warning>\n` +
-      `<payload>${escapeXmlText(truncated)}</payload>\n` +
+      `<payload>${xmlText(truncated)}</payload>\n` +
       `</tool_result>`
     ) };
   }
@@ -1038,7 +1040,7 @@ function maybeOffloadToolOutputDetailed(
     return { content: (
       `<tool_result name="${escapeXmlAttribute(toolName)}" status="partial" length="${content.length}" file="${escapedPath}">\n` +
       `<warning>Output exceeded ${inlineThreshold} characters and ` +
-      `was written to ${escapeXmlText(filePath)}. Use read (with offset/limit) or grep to inspect ` +
+      `was written to ${xmlText(filePath)}. Use read (with offset/limit) or grep to inspect ` +
       `it.</warning>\n` +
       `<retrieve tool="read" path="${escapedPath}" />\n` +
       `</tool_result>`
@@ -1050,9 +1052,9 @@ function maybeOffloadToolOutputDetailed(
     return { content: (
       `<tool_result name="${escapeXmlAttribute(toolName)}" status="partial" length="${content.length}">\n` +
       `<warning>Output exceeded ${inlineThreshold} characters ` +
-      `and cache write failed (${escapeXmlText(err instanceof Error ? err.message : String(err))}). Truncated below; re-run the tool with ` +
+      `and cache write failed (${xmlText(err instanceof Error ? err.message : String(err))}). Truncated below; re-run the tool with ` +
       `narrower scope to inspect the full result.</warning>\n` +
-      `<payload>${escapeXmlText(truncated)}</payload>\n` +
+      `<payload>${xmlText(truncated)}</payload>\n` +
       `</tool_result>`
     ) };
   }

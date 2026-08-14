@@ -34,6 +34,14 @@ import {
   getContext,
 } from '../../src/main/providers/accounting/analytics-queries';
 import { _clearDbCache } from '../../src/main/session/storage';
+import type { ConnectionStore } from '../../src/main/providers/connection-store';
+import type { ProviderStatusObservation } from '../../src/main/providers/status/cache';
+import type { ProviderStatusService } from '../../src/main/providers/status/service';
+import {
+  resetProviderRuntimeContext,
+  setProviderConnectionStore,
+  setProviderStatusService,
+} from '../../src/main/providers/runtime-context';
 
 // ─── Shared state ─────────────────────────────────────────────────────────────
 
@@ -245,6 +253,7 @@ afterEach(() => {
   resetToolAttemptStore();
   resetContextSnapshotStore();
   resetSubagentAttributionStore();
+  resetProviderRuntimeContext();
   _clearDbCache();
   fs.rmSync(tempDir, { recursive: true, force: true });
 });
@@ -459,6 +468,71 @@ describe('analytics-queries', () => {
         { providerId: 'anthropic', cost: '31' },
         { providerId: 'openai', cost: '5' },
       ]);
+    });
+  });
+
+  // ── Quota overview (connection gating) ─────────────────────────────────────
+
+  describe('quotaByProvider connection gating', () => {
+    function quotaObservation(providerId: string, connectionId?: string): ProviderStatusObservation {
+      return {
+        providerId,
+        ...(connectionId ? { connectionId } : {}),
+        observedAt: '2026-07-12T10:00:00.000Z',
+        providerUpdatedAt: null,
+        availability: 'available',
+        stale: false,
+        data: {
+          quota: {
+            observedAt: '2026-07-12T10:00:00.000Z',
+            balances: [{ label: 'Credits remaining', amount: '12.5', unit: 'USD' }],
+            subscription: null,
+            allowances: [{ label: 'API key', state: 'available' }],
+          },
+        },
+      };
+    }
+
+    function fakeStatusService(observations: readonly ProviderStatusObservation[]): ProviderStatusService {
+      return { list: () => observations } as unknown as ProviderStatusService;
+    }
+
+    function fakeConnectionStore(providerIds: readonly string[]): ConnectionStore {
+      return { listProviderIdsSync: () => new Set(providerIds) } as unknown as ConnectionStore;
+    }
+
+    it('hides cached quota for providers with no configured connection', () => {
+      setProviderStatusService(fakeStatusService([
+        quotaObservation('lilac'),
+        quotaObservation('neuralwatt', 'conn-1'),
+      ]));
+      setProviderConnectionStore(fakeConnectionStore(['neuralwatt']));
+
+      const result = getOverview();
+      expect(result.quotaByProvider).toHaveLength(1);
+      expect(result.quotaByProvider[0].providerId).toBe('neuralwatt');
+      expect(result.quotaByProvider[0].connectionId).toBe('conn-1');
+    });
+
+    it('shows no quota cards when no connections are configured', () => {
+      setProviderStatusService(fakeStatusService([
+        quotaObservation('lilac'),
+        quotaObservation('neuralwatt', 'conn-1'),
+      ]));
+      setProviderConnectionStore(fakeConnectionStore([]));
+
+      const result = getOverview();
+      expect(result.quotaByProvider).toHaveLength(0);
+    });
+
+    it('shows a provider-wide observation when a connection exists for that provider', () => {
+      setProviderStatusService(fakeStatusService([quotaObservation('lilac')]));
+      setProviderConnectionStore(fakeConnectionStore(['lilac']));
+
+      const result = getOverview();
+      expect(result.quotaByProvider).toHaveLength(1);
+      expect(result.quotaByProvider[0].providerId).toBe('lilac');
+      expect(result.quotaByProvider[0].connectionId).toBeNull();
     });
   });
 
@@ -742,6 +816,103 @@ describe('analytics-queries', () => {
       expect(completed.completedAt).not.toBeNull();
       expect(pending.completedAt).toBeNull();
       expect(detail.summary.lastAttempt).toBe(completed.completedAt);
+    });
+  });
+
+  // ── Native units (R8 / AE7) ─────────────────────────────────────────────────
+
+  describe('native-unit accounting', () => {
+    const NEURALWATT_CONNECTION_ID = '33333333-3333-4333-8333-333333333333';
+
+    function neuralwattSnapshot(): FrozenProviderRequestSnapshot {
+      return {
+        providerId: 'neuralwatt',
+        providerDisplayName: 'Neuralwatt',
+        connectionId: NEURALWATT_CONNECTION_ID,
+        connectionName: 'NW',
+        modelId: 'nw-glm',
+        protocol: 'openai-compatible',
+        modelSource: 'catalog',
+        catalogVersion: 1,
+        catalogSource: 'bundled',
+        catalogObservedAt: '2026-07-12T00:00:00.000Z',
+        fieldProvenance: {},
+        statusObservation: null,
+        pricing: {
+          currency: 'kWh',
+          currencyUnit: { kind: 'non-fiat', unit: 'kWh', displayName: 'kilowatt-hour' },
+          effectiveAt: '2026-07-12T00:00:00.000Z',
+          rates: { energy: { amount: '0.05', per: 1, unit: 'energy' } },
+          inclusion: { cacheRead: 'unknown', cacheWrite: 'unknown', reasoning: 'unknown' },
+          provenance: {},
+        },
+      };
+    }
+
+    it('keeps kWh and USD cost buckets separate without merging or conversion', () => {
+      seedProviderAttempt({
+        attemptId: 'att-usd', sessionId: 'sess-1', chainId: null, turnId: 'turn-1',
+        outcome: 'succeeded', usage: { inputTokens: 1000, outputTokens: 500 },
+        cost: calculatedCost('2', 'USD'),
+      });
+      providerStore.insertPending({
+        attemptId: 'att-kwh', sessionId: 'sess-1', chainId: null, turnId: 'turn-2',
+        sdkCallId: 'sdk-att-kwh', snapshot: neuralwattSnapshot(),
+        agentScope: null, agentName: null, agentTier: null, agentType: null,
+      });
+      providerStore.finalize('att-kwh', {
+        outcome: 'succeeded',
+        usage: {
+          inputTokens: 800, outputTokens: 200,
+          energyKwhConsumed: '0.4', energyKwhCharged: '0.26', pricingMultiplier: '0.65',
+        },
+        providerEvidence: {},
+        cost: { state: 'calculated', source: 'energy-formula', currency: 'kWh', amount: '0.013' },
+      });
+
+      const overview = getOverview();
+      const buckets = new Map(overview.stats.totalCost.map((c) => [c.currency, c.amount]));
+      expect(buckets.get('USD')).toBe('2');
+      expect(buckets.get('kWh')).toBe('0.013');
+      // AE7: two distinct buckets, never merged into one.
+      expect(overview.stats.totalCost).toHaveLength(2);
+    });
+
+    it('retains native-unit evidence (consumed/charged/multiplier) on the attempt detail', () => {
+      providerStore.insertPending({
+        attemptId: 'att-kwh', sessionId: 'sess-1', chainId: null, turnId: 'turn-2',
+        sdkCallId: 'sdk-att-kwh', snapshot: neuralwattSnapshot(),
+        agentScope: null, agentName: null, agentTier: null, agentType: null,
+      });
+      providerStore.finalize('att-kwh', {
+        outcome: 'succeeded',
+        usage: {
+          inputTokens: 800, outputTokens: 200,
+          energyKwhConsumed: '0.4', energyKwhCharged: '0.26', pricingMultiplier: '0.65',
+        },
+        providerEvidence: {},
+        cost: { state: 'calculated', source: 'energy-formula', currency: 'kWh', amount: '0.013' },
+      });
+
+      const detail = getSessionDetail('sess-1');
+      const attempt = detail.attempts.find((a) => a.attemptId === 'att-kwh')!;
+      expect(attempt.currency).toBe('kWh');
+      expect(attempt.energyKwhConsumed).toBe('0.4');
+      expect(attempt.energyKwhCharged).toBe('0.26');
+      expect(attempt.pricingMultiplier).toBe('0.65');
+    });
+
+    it('renders no energy evidence for a token-only attempt', () => {
+      seedProviderAttempt({
+        attemptId: 'att-usd', sessionId: 'sess-1', chainId: null, turnId: 'turn-1',
+        outcome: 'succeeded', usage: { inputTokens: 1000, outputTokens: 500 },
+        cost: calculatedCost('2', 'USD'),
+      });
+      const detail = getSessionDetail('sess-1');
+      const attempt = detail.attempts.find((a) => a.attemptId === 'att-usd')!;
+      expect(attempt.energyKwhConsumed).toBeNull();
+      expect(attempt.energyKwhCharged).toBeNull();
+      expect(attempt.pricingMultiplier).toBeNull();
     });
   });
 

@@ -1,4 +1,5 @@
 import { useMemo, useState, type ReactNode } from 'react';
+import type { QuotaOverviewEntry } from '../../../shared/types/analytics';
 
 export function formatTokenCount(n: number): string {
   if (n === 0) return '0';
@@ -20,6 +21,17 @@ export function formatCostAmount(amount: string | null, currency: string | null)
   if (!Number.isFinite(n)) return '—';
   const formatted = n.toFixed(4);
   return currency ? `${currency} ${formatted}` : formatted;
+}
+
+/**
+ * Format a native-unit amount (e.g. kWh) with its own unit label. Non-fiat
+ * units are never converted or merged into a fiat bucket (R8/AE7).
+ */
+export function formatNativeAmount(amount: string | null, unit: string): string {
+  if (amount === null) return '—';
+  const n = Number(amount);
+  if (!Number.isFinite(n)) return '—';
+  return `${n.toFixed(4)} ${unit}`;
 }
 
 export function formatDuration(ms: number | null): string {
@@ -289,5 +301,106 @@ export function SortableTable<T>({
         </div>
       )}
     </div>
+  );
+}
+
+function allowanceTone(state: string): 'success' | 'warning' | 'error' | 'neutral' {
+  switch (state) {
+    case 'available': return 'success';
+    case 'limited': return 'warning';
+    case 'blocked': return 'error';
+    default: return 'neutral';
+  }
+}
+
+function subscriptionTone(state: string): 'success' | 'warning' | 'error' | 'neutral' {
+  switch (state) {
+    case 'active': return 'success';
+    case 'trialing': return 'success';
+    case 'past-due': return 'warning';
+    case 'cancelled': return 'error';
+    case 'expired': return 'error';
+    default: return 'neutral';
+  }
+}
+
+/**
+ * Quota state panel (R24). Balances, subscription, and allowances render in
+ * provider-native units and are informational only — a blocked allowance is
+ * shown as data, never as a reason a send is prevented (R25/AE6).
+ */
+export function QuotaPanel({ entries }: { readonly entries: readonly QuotaOverviewEntry[] }) {
+  if (entries.length === 0) return null;
+  return (
+    <ChartCard title="Provider Quota &amp; Subscription">
+      <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
+        {entries.map((entry) => (
+          <div
+            key={`${entry.providerId}${entry.connectionId ?? ''}`}
+            className="rounded-lg border border-base-300 bg-base-100/50 p-3"
+          >
+            <div className="mb-2 flex items-center justify-between gap-2">
+              <span className="text-sm font-semibold text-base-content">{entry.providerId}</span>
+              {entry.stale && (
+                <span className="rounded bg-base-300 px-1.5 py-0.5 text-xs font-medium uppercase tracking-wide text-base-content/60">
+                  stale
+                </span>
+              )}
+            </div>
+            {entry.balances.length > 0 && (
+              <dl className="grid grid-cols-2 gap-x-3 gap-y-1.5 text-sm">
+                {entry.balances.map((balance) => (
+                  <div key={balance.label}>
+                    <dt className="text-xs text-base-content/60">{balance.label}</dt>
+                    <dd className="font-medium text-base-content">
+                      {formatNativeAmount(balance.amount, balance.unit)}
+                    </dd>
+                  </div>
+                ))}
+              </dl>
+            )}
+            {entry.subscription && (
+              <div className="mt-2 flex items-center gap-2 text-sm">
+                <span
+                  className={`inline-block h-2 w-2 rounded-full ${
+                    subscriptionTone(entry.subscription.state) === 'success'
+                      ? 'bg-success'
+                      : subscriptionTone(entry.subscription.state) === 'warning'
+                        ? 'bg-warning'
+                        : subscriptionTone(entry.subscription.state) === 'error'
+                          ? 'bg-error'
+                          : 'bg-base-300'
+                  }`}
+                />
+                <span className="text-base-content/80">
+                  {entry.subscription.displayName ?? 'Subscription'} · {entry.subscription.state}
+                </span>
+              </div>
+            )}
+            {entry.allowances.length > 0 && (
+              <div className="mt-2 flex flex-wrap gap-1.5">
+                {entry.allowances.map((allowance) => (
+                  <span
+                    key={allowance.label}
+                    title={allowance.detail ?? undefined}
+                    className={`inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-xs font-medium ${
+                      allowanceTone(allowance.state) === 'success'
+                        ? 'bg-success/15 text-success'
+                        : allowanceTone(allowance.state) === 'warning'
+                          ? 'bg-warning/15 text-warning'
+                          : allowanceTone(allowance.state) === 'error'
+                            ? 'bg-error/15 text-error'
+                            : 'bg-base-300 text-base-content/70'
+                    }`}
+                  >
+                    {allowance.label}: {allowance.state}
+                  </span>
+                ))}
+              </div>
+            )}
+          </div>
+        ))}
+      </div>
+    </ChartCard>
   );
 }

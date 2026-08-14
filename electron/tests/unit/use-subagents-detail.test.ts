@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Usage } from '../../src/shared/types/message';
-import type { SubagentLiveProjection, SubagentRecord } from '../../src/shared/types/subagent';
+import type { SubagentLiveProjection, SubagentSummary } from '../../src/shared/types/subagent';
 import { buildSubagentDetail } from '../../src/renderer/hooks/useSubagents';
 
 const durableUsage: Usage = {
@@ -19,23 +19,20 @@ const liveUsage: Usage = {
   reasoning_tokens: 0,
 };
 
-function record(status: SubagentRecord['status']): SubagentRecord {
+function record(status: SubagentSummary['status']): SubagentSummary {
   return {
     id: 'subagent-1',
     agent_name: 'Explore codebase',
     agent_type: 'explorer',
     agent_tier: 'bloom',
+    agentRole: 'explorer',
     task: 'Inspect the project',
     status,
     chain_id: 'chain-1',
     start_time: '2026-01-01T00:00:00.000Z',
     end_time: status === 'completed' ? '2026-01-01T00:00:05.000Z' : null,
-    result: null,
-    error: null,
     parentChainIndex: null,
-    chain: {
-      messages: [{ usage: durableUsage }],
-    } as SubagentRecord['chain'],
+    usage: durableUsage,
   };
 }
 

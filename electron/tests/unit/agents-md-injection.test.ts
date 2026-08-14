@@ -296,7 +296,7 @@ describe('buildAgentsMdInjection', () => {
     expect(injection!.xml).not.toContain('root instructions (changed)');
   });
 
-  it('escapes XML metacharacters in rendered content', () => {
+  it('renders AGENTS.md content as raw data without escaping', () => {
     write('pkg/AGENTS.md', '<script> & "quotes" >');
     write('pkg/x.ts', 'code');
 
@@ -309,9 +309,9 @@ describe('buildAgentsMdInjection', () => {
     );
 
     expect(injection).not.toBeNull();
-    expect(injection!.xml).toContain('&lt;script&gt;');
-    expect(injection!.xml).toContain('&amp;');
-    expect(injection!.xml).not.toContain('<script>');
+    expect(injection!.xml).toContain('<script> & "quotes" >');
+    expect(injection!.xml).not.toContain('&lt;script&gt;');
+    expect(injection!.xml).not.toContain('&amp;');
   });
 });
 
@@ -371,9 +371,9 @@ describe('dispatch-level read-path injection', () => {
       expect(first.canonical.status).toBe('complete');
       expect(first.agentProjection.content).toContain('<agents_md');
       expect(first.agentProjection.content).toContain('nested dispatch rules');
-      // The block is inserted inside the tool_result envelope, before the close.
-      expect(first.agentProjection.content.indexOf('<agents_md')).toBeLessThan(
-        first.agentProjection.content.lastIndexOf('</tool_result>'),
+      // The block is appended after the tool_result envelope as a sibling.
+      expect(first.agentProjection.content.lastIndexOf('</tool_result>')).toBeLessThan(
+        first.agentProjection.content.indexOf('<agents_md'),
       );
       // Injection marked the entry seen, so a second read does not re-inject.
       expect(store.size).toBe(1);
