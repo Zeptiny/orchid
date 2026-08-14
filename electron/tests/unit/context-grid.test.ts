@@ -230,6 +230,93 @@ describe('context grid breakdown', () => {
     expect(categories.response).toBe(70);
   });
 
+  it('estimates reasoning from visible thinking when the provider reports zero', () => {
+    // Some models (e.g. GLM) stream visible thinking text but report
+    // reasoning_tokens = 0. The live view counts that thinking via streaming
+    // chars; once the chain finishes the persisted zero must not collapse the
+    // category to 0 — fall back to the character-ratio estimate instead.
+    const thinkingText = 'x'.repeat(24_513);
+    const usage = {
+      prompt_tokens: 96_743,
+      completion_tokens: 3_480,
+      total_tokens: 100_223,
+      cached_tokens: 0,
+      reasoning_tokens: 0,
+      context: {
+        input_tokens: 96_743,
+        output_tokens: 3_480,
+        used_tokens: 100_223,
+        system_tokens: 8_896,
+        tools_tokens: 10_546,
+        tool_use_tokens: 76_680,
+        user_tokens: 32,
+        assistant_tokens: 4_069,
+        reasoning_tokens: 0,
+      },
+    } as const;
+    const usageMessage = {
+      role: 'assistant',
+      content: 'final answer',
+      type: MessageType.TEXT,
+      thinking: null,
+      hidden: false,
+      usage,
+    } as unknown as Message;
+    const thinkingMessage = {
+      role: 'assistant',
+      content: thinkingText,
+      type: MessageType.THINKING,
+      thinking: thinkingText,
+      hidden: false,
+    } as unknown as Message;
+
+    const categories = computeContextCategories(
+      [thinkingMessage, usageMessage], usage, 200_000,
+    );
+
+    expect(categories.reasoning).toBeGreaterThan(0);
+    expect(categories.reasoning + categories.response).toBe(4_069);
+  });
+
+  it('does not inflate a positive provider reasoning count with the streaming estimate', () => {
+    // While a turn is active the provider-reported count (here 500) is
+    // authoritative. The thinking-char estimate (8000 chars -> 2000 tokens)
+    // must not override it, or the live reasoning figure is overstated.
+    const usage = {
+      prompt_tokens: 1_000,
+      completion_tokens: 600,
+      total_tokens: 1_600,
+      cached_tokens: 0,
+      reasoning_tokens: 500,
+      context: {
+        input_tokens: 1_000,
+        output_tokens: 600,
+        used_tokens: 1_600,
+        system_tokens: 100,
+        tools_tokens: 0,
+        tool_use_tokens: 0,
+        user_tokens: 100,
+        assistant_tokens: 3_000,
+        reasoning_tokens: 500,
+      },
+    } as const;
+
+    const html = renderToStaticMarkup(
+      createElement(ContextLegend, {
+        messages: [],
+        usage,
+        maxContext: 100_000,
+        streamingThinkingChars: 8_000,
+        variant: 'panel',
+      }),
+    );
+
+    const reasoningTokens = html.match(
+      /context-panel-label">Reasoning<\/span>.*?context-panel-tokens">([^<]+)</s,
+    )?.[1];
+    expect(reasoningTokens).toBe('500');
+  });
+
   it('excludes hidden messages from every character bucket', () => {
     const hiddenTool = {
       role: 'assistant',
