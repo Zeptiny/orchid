@@ -15,16 +15,9 @@ Internal backlog for Orchid. User-facing summary lives in the [README known limi
 
 ## General backlog
 
-- Remaining work from `docs/code-review-reports/2026-07-15-electron-simplification-review.md`
 - Verify remote embedding models work correctly
-- Concurrency control for file locking
-- LSP integration
-- SSH / remote connection support
-- Session compaction / compression (summarize or drop older turns so long sessions stay within context limits)
+- LSP integration — no defined servers or features yet, still to be analyzed
 - Investigate if its better to not create new chains with the queued messages
-- Chain snapshoting
-- Better retry / frozen agent handling / long ttft
-- Goal mode
 
 ## Native semantic code graph / AST tool improvements
 
@@ -111,15 +104,3 @@ Internal backlog for Orchid. User-facing summary lives in the [README known limi
 
 - **Do not change this until the design is clearer**
 - Multiple primary agent types (general, plan, etc.) that can be switched mid-conversation
-
-## Subagents
-
-- Side / "BTW" agent (ask a question without interrupting the main flow)
-  - Best UI placement still TBD
-  - Read-only tools only
-  - Multi-turn? Still under consideration
-  - Useful for clarifications without stopping work
-    - e.g. "How does function X interact with system Y?"
-- A tool to view what the agent is currently doing / working
-  - May be summarized?
-  - Maybe only its TODOs are enough?
