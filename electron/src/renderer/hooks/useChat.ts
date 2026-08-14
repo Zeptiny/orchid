@@ -483,10 +483,7 @@ export function useChat(
     // event cannot make them stale before the next animation frame.
     flushStreamFrame();
     dispatchProjection({ type: 'events', actions: [event] });
-    if ('state' in event) {
-      if (event.state === 'idle') isSendingRef.current = false;
-      return;
-    }
+    if ('state' in event) return;
     if (event.type === 'done') {
       setMessages((current) => mergeTerminalTurnMessages(current, event.messages));
       dispatchProjection({ type: 'clear_stream', status: 'idle' });
@@ -499,6 +496,10 @@ export function useChat(
     }
   }, [dispatchProjection, flushStreamFrame]);
   const deliverEvent = useCallback((event: ChatTurnEventAction) => {
+    // Actor idle/interrupted snapshots can straddle the terminal event. They
+    // must not end the renderer turn or claim affinity for the next queued
+    // turn; done/error owns the terminal handoff and authoritative messages.
+    if ('state' in event && (event.state === 'idle' || event.state === 'interrupted')) return;
     if (bufferHydrationEvent(event)) return;
     if (acceptsEvent(event)) applyLiveEvent(event);
   }, [acceptsEvent, applyLiveEvent, bufferHydrationEvent]);
