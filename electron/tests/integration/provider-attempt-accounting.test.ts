@@ -146,6 +146,44 @@ describe('provider attempt accounting middleware', () => {
     expect(ledger.listAttempts('session-1')[0].usage?.reasoningTokens).toBe(40);
   });
 
+  it('estimates reasoning when the provider reports zero but streamed visible thinking', async () => {
+    // Some models stream visible reasoning yet report reasoningTokens = 0. A zero
+    // is not authoritative — otherwise the ledger (and Analytics) would record no
+    // reasoning at all. Fall back to the character estimate; cost still derives
+    // from the provider-reported usage only.
+    const ledger = store();
+    const middleware = createAttemptAccountingMiddleware({
+      store: ledger, sessionId: 'session-1', chainId: 'chain-1', turnId: 'turn-1', snapshot: snapshot(),
+    });
+    const wrapStream = middleware.wrapStream! as unknown as (input: Record<string, unknown>) => Promise<{ stream: ReadableStream<unknown> }>;
+    const result = await wrapStream({
+      doStream: async () => ({
+        response: { headers: {} },
+        stream: new ReadableStream({
+          start(controller) {
+            controller.enqueue({ type: 'reasoning-delta', id: '0', delta: 'r'.repeat(300) });
+            controller.enqueue({ type: 'text-delta', id: '0', delta: 't'.repeat(100) });
+            controller.enqueue({
+              type: 'finish', finishReason: 'stop',
+              usage: {
+                inputTokens: { total: 1000, noCache: 1000, cacheRead: undefined, cacheWrite: undefined },
+                outputTokens: { total: 100, text: undefined, reasoning: 0 },
+              },
+            });
+            controller.close();
+          },
+        }),
+      }),
+      doGenerate: async () => { throw new Error('not used'); },
+      params: {}, model: {},
+    });
+    await consume(result.stream);
+
+    const attempt = ledger.listAttempts('session-1')[0];
+    expect(attempt.usage?.reasoningTokens).toBe(75);
+    expect(attempt).toMatchObject({ costState: 'calculated', costAmount: '0.0075' });
+  });
+
   it('estimates reasoning tokens for non-streaming generation from content parts', async () => {
     const ledger = store();
     const middleware = createAttemptAccountingMiddleware({

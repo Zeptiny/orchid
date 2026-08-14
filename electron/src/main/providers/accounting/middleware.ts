@@ -95,7 +95,11 @@ function withEstimatedReasoning(
   chars: ReasoningChars,
   outputTokens: number | undefined,
 ): NormalizedProviderUsage | null {
-  if (!usage || usage.reasoningTokens !== undefined) return usage;
+  if (!usage) return usage;
+  // A positive provider-reported count is authoritative. A zero or missing count
+  // falls back to the character estimate: models can stream visible reasoning yet
+  // report reasoningTokens = 0, which would otherwise record no reasoning at all.
+  if (typeof usage.reasoningTokens === 'number' && usage.reasoningTokens > 0) return usage;
   const estimated = estimateReasoningTokens(chars, outputTokens);
   return estimated === undefined ? usage : { ...usage, reasoningTokens: estimated };
 }
