@@ -54,6 +54,18 @@ function textDelta(sequence: number): Record<string, unknown> {
   };
 }
 
+function statusChanged(sequence: number, status: string): Record<string, unknown> {
+  return {
+    sessionId: SESSION_ID,
+    subagentId: 'sub-1',
+    runId: 'run-1',
+    sequence,
+    sessionRevision: sequence,
+    type: 'status_changed',
+    status,
+  };
+}
+
 function terminalEvent(sequence: number): Record<string, unknown> {
   return {
     sessionId: SESSION_ID,
@@ -199,6 +211,27 @@ describe('preload SUBAGENTS_EVENT validation', () => {
 
     expect(received).toHaveLength(1);
     expect(received[0]?.events).toHaveLength(2);
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it('delivers status_changed events (queued→running) instead of dropping them', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+    emit({
+      sessionId: SESSION_ID,
+      events: [statusChanged(1, 'queued'), statusChanged(2, 'running')],
+    });
+
+    expect(received).toHaveLength(1);
+    expect(received[0]?.events.map((event) => event.type)).toEqual([
+      'status_changed',
+      'status_changed',
+    ]);
+    expect(
+      received[0]?.events.map((event) =>
+        event.type === 'status_changed' ? event.status : null,
+      ),
+    ).toEqual(['queued', 'running']);
     expect(warn).not.toHaveBeenCalled();
   });
 

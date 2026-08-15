@@ -1,7 +1,10 @@
 /**
  * MCPServersTab — list, edit, delete, and add MCP servers.
  *
- * Each server has: command (or url), args, env.
+ * Each server uses exactly one transport:
+ * - stdio: command + args + env (spawns a child process)
+ * - http:  url + headers (connects to a remote endpoint)
+ *
  * Changes to MCP servers trigger a restart prompt.
  */
 import { useState, useCallback } from 'react';
@@ -16,12 +19,16 @@ import { TextInput } from '../ui/TextInput';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
+type TransportType = 'stdio' | 'http';
+
 export interface MCPServerEntry {
   id: string;
+  transport: TransportType;
   command?: string;
   url?: string;
   args: string[];
   env: Record<string, string>;
+  headers: Record<string, string>;
 }
 
 export interface MCPServersTabProps {
@@ -31,10 +38,13 @@ export interface MCPServersTabProps {
 
 interface EditingServer {
   id: string;
+  transport: TransportType;
   command: string;
   url: string;
   argsText: string; // space-separated or JSON array
   envText: string; // KEY=VALUE per line
+  authToken: string;
+  headers: Record<string, string>; // non-auth headers, preserved across edits
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -42,21 +52,37 @@ interface EditingServer {
 function parseServer(id: string, data: Record<string, unknown>): MCPServerEntry {
   const args = data.args;
   const env = data.env;
+  const headers = data.headers;
+  const transport: TransportType = data.url ? 'http' : 'stdio';
   return {
     id,
+    transport,
     command: data.command as string | undefined,
     url: data.url as string | undefined,
     args: Array.isArray(args) ? (args as string[]) : [],
     env: env && typeof env === 'object' ? (env as Record<string, string>) : {},
+    headers:
+      headers && typeof headers === 'object'
+        ? (headers as Record<string, string>)
+        : {},
   };
 }
 
 function serverToDict(s: MCPServerEntry): Record<string, unknown> {
   const dict: Record<string, unknown> = {};
-  if (s.command) dict.command = s.command;
-  if (s.url) dict.url = s.url;
-  if (s.args.length > 0) dict.args = s.args;
-  if (Object.keys(s.env).length > 0) dict.env = s.env;
+  if (s.transport === 'http') {
+    if (s.url) dict.url = s.url;
+    if (Object.keys(s.headers).length > 0) dict.headers = s.headers;
+  } else {
+    if (s.command) dict.command = s.command;
+    if (s.args.length > 0) dict.args = s.args;
+    if (Object.keys(s.env).length > 0) dict.env = s.env;
+    const nonAuthHeaders: Record<string, string> = {};
+    for (const [k, v] of Object.entries(s.headers)) {
+      if (k !== 'Authorization') nonAuthHeaders[k] = v;
+    }
+    if (Object.keys(nonAuthHeaders).length > 0) dict.headers = nonAuthHeaders;
+  }
   return dict;
 }
 
@@ -87,6 +113,19 @@ function parseEnvText(text: string): Record<string, string> {
   return env;
 }
 
+function extractAuthToken(headers: Record<string, string>): string {
+  const auth = headers['Authorization'] ?? '';
+  return auth.startsWith('Bearer ') ? auth.slice('Bearer '.length) : auth;
+}
+
+function withoutAuth(headers: Record<string, string>): Record<string, string> {
+  const rest: Record<string, string> = {};
+  for (const [k, v] of Object.entries(headers)) {
+    if (k !== 'Authorization') rest[k] = v;
+  }
+  return rest;
+}
+
 // ── Component ────────────────────────────────────────────────────────────────
 
 export function MCPServersTab({ mcpServers, onChange }: MCPServersTabProps) {
@@ -102,12 +141,15 @@ export function MCPServersTab({ mcpServers, onChange }: MCPServersTabProps) {
     setEditingId(s.id);
     setEditForm({
       id: s.id,
+      transport: s.transport,
       command: s.command ?? '',
       url: s.url ?? '',
       argsText: s.args.join(' '),
       envText: Object.entries(s.env)
         .map(([k, v]) => `${k}=${v}`)
         .join('\n'),
+      authToken: extractAuthToken(s.headers),
+      headers: withoutAuth(s.headers),
     });
     setIsAdding(false);
   }, []);
@@ -123,11 +165,23 @@ export function MCPServersTab({ mcpServers, onChange }: MCPServersTabProps) {
 
     const server: MCPServerEntry = {
       id: editForm.id,
+      transport: editForm.transport,
       args: parseArgsText(editForm.argsText),
       env: parseEnvText(editForm.envText),
+      headers: { ...editForm.headers },
     };
-    if (editForm.command) server.command = editForm.command;
-    if (editForm.url) server.url = editForm.url;
+
+    if (editForm.transport === 'stdio') {
+      if (editForm.command) server.command = editForm.command;
+    } else {
+      if (editForm.url) server.url = editForm.url;
+      if (editForm.authToken) {
+        server.headers = {
+          ...editForm.headers,
+          Authorization: `Bearer ${editForm.authToken}`,
+        };
+      }
+    }
 
     const updated = { ...mcpServers };
     if (editingId !== editForm.id && editingId in updated) {
@@ -154,10 +208,13 @@ export function MCPServersTab({ mcpServers, onChange }: MCPServersTabProps) {
     setEditingId(null);
     setEditForm({
       id: '',
+      transport: 'stdio',
       command: '',
       url: '',
       argsText: '',
       envText: '',
+      authToken: '',
+      headers: {},
     });
     setIsAdding(true);
   }, []);
@@ -166,6 +223,44 @@ export function MCPServersTab({ mcpServers, onChange }: MCPServersTabProps) {
     <div className="flex flex-col gap-4">
       {title && <div className="config-card-title text-primary font-semibold">{title}</div>}
       <div className="config-form-grid">
+        <FormField label="Transport" className="config-field config-form-grid-full">
+          <div
+            className="flex gap-1 rounded-box border border-base-300 bg-base-200/60 p-0.5 w-fit"
+            role="group"
+            aria-label="MCP server transport"
+          >
+            <Button
+              type="button"
+              size="xs"
+              variant={form.transport === 'stdio' ? 'primary' : 'ghost'}
+              className={[
+                'h-7 min-h-7 border-0 shadow-none font-medium',
+                form.transport === 'stdio'
+                  ? ''
+                  : 'bg-transparent text-base-content/70 hover:bg-base-300/60',
+              ].join(' ')}
+              aria-pressed={form.transport === 'stdio'}
+              onClick={() => setEditForm({ ...form, transport: 'stdio' })}
+            >
+              Command (stdio)
+            </Button>
+            <Button
+              type="button"
+              size="xs"
+              variant={form.transport === 'http' ? 'primary' : 'ghost'}
+              className={[
+                'h-7 min-h-7 border-0 shadow-none font-medium',
+                form.transport === 'http'
+                  ? ''
+                  : 'bg-transparent text-base-content/70 hover:bg-base-300/60',
+              ].join(' ')}
+              aria-pressed={form.transport === 'http'}
+              onClick={() => setEditForm({ ...form, transport: 'http' })}
+            >
+              URL (HTTP)
+            </Button>
+          </div>
+        </FormField>
         <FormField label="Server ID" htmlFor="mcp-server-id" className="config-field">
           <TextInput
             id="mcp-server-id"
@@ -177,57 +272,81 @@ export function MCPServersTab({ mcpServers, onChange }: MCPServersTabProps) {
             placeholder="my-mcp-server"
           />
         </FormField>
-        <FormField label="Command" htmlFor="mcp-server-command" className="config-field">
-          <TextInput
-            id="mcp-server-command"
-            type="text"
-            value={form.command}
-            onChange={(e) => setEditForm({ ...form, command: e.target.value })}
-            bordered
-            className="w-full"
-            placeholder="npx"
-          />
-        </FormField>
-        <FormField label="URL (for SSE servers)" htmlFor="mcp-server-url" className="config-field">
-          <TextInput
-            id="mcp-server-url"
-            type="text"
-            value={form.url}
-            onChange={(e) => setEditForm({ ...form, url: e.target.value })}
-            bordered
-            className="w-full"
-            placeholder="http://localhost:3000"
-          />
-        </FormField>
-        <FormField
-          label="Arguments (space-separated)"
-          htmlFor="mcp-server-args"
-          className="config-field"
-        >
-          <TextInput
-            id="mcp-server-args"
-            type="text"
-            value={form.argsText}
-            onChange={(e) => setEditForm({ ...form, argsText: e.target.value })}
-            bordered
-            className="w-full"
-            placeholder="-y @upstash/context7-mcp"
-          />
-        </FormField>
-        <FormField
-          label="Environment Variables (KEY=VALUE per line)"
-          htmlFor="mcp-server-env"
-          className="config-field config-form-grid-full"
-        >
-          <textarea
-            id="mcp-server-env"
-            value={form.envText}
-            onChange={(e) => setEditForm({ ...form, envText: e.target.value })}
-            className="textarea textarea-bordered w-full"
-            rows={3}
-            placeholder="API_KEY=sk-..."
-          />
-        </FormField>
+        {form.transport === 'stdio' ? (
+          <>
+            <FormField label="Command" htmlFor="mcp-server-command" className="config-field">
+              <TextInput
+                id="mcp-server-command"
+                type="text"
+                value={form.command}
+                onChange={(e) => setEditForm({ ...form, command: e.target.value })}
+                bordered
+                className="w-full"
+                placeholder="npx"
+              />
+            </FormField>
+            <FormField
+              label="Arguments (space-separated)"
+              htmlFor="mcp-server-args"
+              className="config-field"
+            >
+              <TextInput
+                id="mcp-server-args"
+                type="text"
+                value={form.argsText}
+                onChange={(e) => setEditForm({ ...form, argsText: e.target.value })}
+                bordered
+                className="w-full"
+                placeholder="-y @upstash/context7-mcp"
+              />
+            </FormField>
+            <FormField
+              label="Environment Variables (KEY=VALUE per line)"
+              htmlFor="mcp-server-env"
+              className="config-field config-form-grid-full"
+            >
+              <textarea
+                id="mcp-server-env"
+                value={form.envText}
+                onChange={(e) => setEditForm({ ...form, envText: e.target.value })}
+                className="textarea textarea-bordered w-full"
+                rows={3}
+                placeholder="API_KEY=sk-..."
+              />
+            </FormField>
+          </>
+        ) : (
+          <>
+            <FormField label="URL" htmlFor="mcp-server-url" className="config-field">
+              <TextInput
+                id="mcp-server-url"
+                type="text"
+                value={form.url}
+                onChange={(e) => setEditForm({ ...form, url: e.target.value })}
+                bordered
+                className="w-full"
+                placeholder="http://localhost:3000"
+              />
+            </FormField>
+            <FormField
+              label="Auth Token"
+              htmlFor="mcp-server-token"
+              className="config-field"
+              hint="Sent as an Authorization: Bearer header."
+            >
+              <TextInput
+                id="mcp-server-token"
+                type="password"
+                value={form.authToken}
+                onChange={(e) => setEditForm({ ...form, authToken: e.target.value })}
+                bordered
+                className="w-full"
+                placeholder="Bearer token"
+                autoComplete="off"
+              />
+            </FormField>
+          </>
+        )}
       </div>
       <div className="flex justify-end gap-2">
         <Button variant="ghost" size="sm" onClick={cancelEdit} type="button">

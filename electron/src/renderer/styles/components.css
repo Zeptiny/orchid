@@ -511,6 +511,10 @@
     overflow-y: auto;
   }
 
+  .orchid-live-command-cmd {
+    @apply m-0 overflow-x-auto whitespace-pre-wrap border-b border-base-300 px-3 py-1.5 font-mono text-xs opacity-70;
+  }
+
   .orchid-live-command-exit {
     @apply border-t border-base-content/10 px-3 py-1 opacity-60;
     font-size: 1rem;

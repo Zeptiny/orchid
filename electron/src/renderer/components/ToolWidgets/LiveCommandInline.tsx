@@ -86,11 +86,12 @@ export function LiveCommandInline({
   const { output, exitCode, isRunning, isAvailable, interactive, owner, refresh } =
     useLiveCommandOutput(target, sessionId, true, expanded, expectedCreatedAt);
 
-  // Build title: matches Python's _build_title()
+  // Build title: prefer the description, falling back to the raw command —
+  // mirrors commandTitle() in tool-title.ts.
   const title = useMemo(() => {
-    const cmdDisplay = commandText
-      ? `$ ${commandText}`
-      : description || (commandId !== null ? `Command #${commandId}` : 'Command');
+    const cmdDisplay = description
+      || (commandText ? `$ ${commandText}` : null)
+      || (commandId !== null ? `Command #${commandId}` : 'Command');
 
     if (!isAvailable) {
       return `${cmdDisplay} (unavailable)`;
@@ -189,6 +190,9 @@ export function LiveCommandInline({
       </button>
       <CollapsibleRegion open={expanded} id={panelId}>
         <div className="orchid-live-command-body">
+          {commandText && description && description !== commandText && (
+            <pre className="orchid-live-command-cmd">$ {commandText}</pre>
+          )}
           <pre className="orchid-live-command-pre">
             {displayOutput || (!isAvailable
               ? isBackground

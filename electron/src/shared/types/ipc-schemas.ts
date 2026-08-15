@@ -605,6 +605,9 @@ const subagentDeltaBaseSchema = z.object({
 export const subagentSpawnedEventSchema = subagentDeltaBaseSchema.extend({
   type: z.literal('spawned'), record: ipcSubagentSummarySchema, usage: usageSchema.nullable(),
 });
+export const subagentStatusChangedEventSchema = subagentDeltaBaseSchema.extend({
+  type: z.literal('status_changed'), status: subagentStatusSchema,
+});
 export const subagentTextDeltaEventSchema = subagentDeltaBaseSchema.extend({
   type: z.literal('text_delta'), segmentId: z.string(), append: z.string(),
 });
@@ -633,6 +636,7 @@ export const subagentTerminalEventSchema = subagentDeltaBaseSchema.extend({
 });
 export const subagentDeltaEventSchema = z.discriminatedUnion('type', [
   subagentSpawnedEventSchema,
+  subagentStatusChangedEventSchema,
   subagentTextDeltaEventSchema,
   subagentThinkingDeltaEventSchema,
   subagentToolStartEventSchema,

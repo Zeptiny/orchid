@@ -68,16 +68,18 @@ function ResultBody({ block, canonical, sessionId }: { block: ToolBlock; canonic
   }
 }
 
-/** Display label for a running foreground command, derived from its args. */
-function foregroundCommandLabel(block: ToolBlock): string {
+/** Command text and description for a running foreground command, from its args. */
+function foregroundCommandInfo(block: ToolBlock): { command: string; description?: string } {
+  let command = '';
+  let description: string | undefined;
   try {
     const parsed = JSON.parse(block.args) as { command?: unknown; description?: unknown };
-    if (typeof parsed.command === 'string' && parsed.command.trim()) return parsed.command;
-    if (typeof parsed.description === 'string' && parsed.description.trim()) return parsed.description;
+    if (typeof parsed.command === 'string' && parsed.command.trim()) command = parsed.command;
+    if (typeof parsed.description === 'string' && parsed.description.trim()) description = parsed.description;
   } catch {
     // Args can be partial while streaming; fall through to a generic label.
   }
-  return block.toolName || 'command';
+  return { command: command || description || block.toolName || 'command', description };
 }
 
 function lifecycleBadge(block: ToolBlock, canonical: CanonicalToolResult | null, custom?: ReactNode) {
@@ -140,6 +142,7 @@ export function ToolResultShell({
         // Foreground live mirror keyed by the tool call id (block.id). The
         // canonical stdout/stderr result replaces this widget on completion.
         // Stop propagation so the widget's own controls never collapse the shell.
+        const { command, description } = foregroundCommandInfo(block);
         return (
           <div
             onClick={(event) => event.stopPropagation()}
@@ -148,7 +151,8 @@ export function ToolResultShell({
             <LiveCommandInline
               target={{ toolCallId: block.id }}
               sessionId={sessionId}
-              commandText={foregroundCommandLabel(block)}
+              commandText={command}
+              description={description}
             />
           </div>
         );
