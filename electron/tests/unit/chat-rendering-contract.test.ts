@@ -477,7 +477,7 @@ describe('live command gating (process liveness)', () => {
 
     expect(container.querySelector('.orchid-live-command')).toBeTruthy();
     expect(container.querySelector('.orchid-tool-running-hint')).toBeNull();
-    expect(container.querySelector('.orchid-live-command-title')?.textContent).toContain('sleep 30');
+    expect(container.querySelector('.orchid-live-command-title')?.textContent).toContain('wait for it');
     expect(api.snapshot).toHaveBeenCalledTimes(1);
     expect(api.snapshot).toHaveBeenCalledWith(expect.objectContaining({ toolCallId: 'call-fg-1', lastN: 50, sessionId: 'sess-2' }));
   });

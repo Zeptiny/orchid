@@ -134,7 +134,7 @@ export function subagentRecordFromStorageDict(data: unknown): SubagentRecord {
   const parsedStatus = subagentStatusSchema.safeParse(raw.status);
   let status: SubagentStatus = parsedStatus.success
     ? parsedStatus.data
-    : SubagentStatus.COMPLETED;
+    : SubagentStatus.INTERRUPTED;
 
   if (
     status === SubagentStatus.QUEUED

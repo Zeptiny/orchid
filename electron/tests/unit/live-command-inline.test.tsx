@@ -233,4 +233,64 @@ describe('LiveCommandInline', () => {
     expect(pre).toBeTruthy();
     expect(pre?.textContent).toBe('red\nplain\n');
   });
+
+  it('shows the description in the title and the raw command in the body', async () => {
+    installBgCmd({ interactive: false });
+
+    const { container } = render(
+      <LiveCommandInline
+        target={{ commandId: 10 }}
+        sessionId="sess-1"
+        commandText="npm run dev"
+        description="Start the dev server"
+      />,
+    );
+    await flush();
+
+    expand(/Start the dev server \(running\)/);
+
+    const cmd = container.querySelector('.orchid-live-command-cmd');
+    expect(cmd).toBeTruthy();
+    expect(cmd?.textContent).toBe('$ npm run dev');
+  });
+
+  it('omits the body command line when the description matches the command', async () => {
+    installBgCmd({ interactive: false });
+
+    const { container } = render(
+      <LiveCommandInline
+        target={{ commandId: 11 }}
+        sessionId="sess-1"
+        commandText="npm run dev"
+        description="npm run dev"
+      />,
+    );
+    await flush();
+
+    expand(/npm run dev \(running\)/);
+
+    expect(container.querySelector('.orchid-live-command-cmd')).toBeNull();
+  });
+
+  it('foreground path shows description in title and raw command in body', async () => {
+    installBgCmd({ interactive: true });
+
+    const { container } = render(
+      <LiveCommandInline
+        target={{ toolCallId: 'call-desc' }}
+        sessionId="sess-1"
+        commandText="sleep 5"
+        description="Wait five seconds"
+      />,
+    );
+    await flush();
+
+    expand(/Wait five seconds \(running\)/);
+
+    const cmd = container.querySelector('.orchid-live-command-cmd');
+    expect(cmd).toBeTruthy();
+    expect(cmd?.textContent).toBe('$ sleep 5');
+    expect(screen.queryByRole('button', { name: 'Stop' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Send' })).toBeNull();
+  });
 });

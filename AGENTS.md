@@ -34,329 +34,340 @@ The repository-root file `CONCEPTS.md` defines the project's shared domain vocab
 ## Directory Structure
 
 ```
-src/
-├── main/                    # Electron main process
-│   ├── index.ts             # App entry — window creation, lifecycle, shutdown
-│   ├── startup.ts           # Startup snapshot store (phases: starting|ready|degraded|failed)
-│   ├── startup-lifecycle.ts # runStartupLifecycle() — sequential startup steps
-│   ├── agents/              # Agent definitions and subagent orchestration
-│   │   ├── registry.ts      # Load agent definitions (~/.orchid/agents/ + seeded built-ins)
-│   │   ├── defaults/        # Built-in agent definitions (subdirs with marker files)
-│   │   ├── manager.ts       # SubagentManager — spawn/wait/interrupt subagents
-│   │   ├── admission.ts     # Global/per-session admission limits + queue
-│   │   ├── errors.ts        # Subagent error taxonomy
-│   │   ├── types.ts         # Shared subagent types
-│   │   ├── subagent-runner.ts         # Run subagent turns against project runtime
-│   │   ├── subagent-run.ts            # Single run lifecycle
-│   │   ├── subagent-run-assembler.ts  # Assemble run context (prompt, tools, model)
-│   │   ├── subagent-events.ts         # Live event batching knobs
-│   │   ├── subagent-live-projection.ts # Live renderer projection of subagent streams
-│   │   ├── subagent-persistence.ts    # Persist subagent chains (terminal wave batching)
-│   │   ├── subagent-persistence-recovery.ts # Recover chains after crash/restart
-│   │   ├── persist-subagent-chains.ts # Persist subagent chain messages
-│   │   ├── wire-subagents.ts          # Wire subagent lifecycle into manager
-│   │   └── xstate/          # XState machines
-│   │       ├── agent-machine.ts      # Core agent loop (idle→streaming→toolExec→idle)
-│   │       ├── events.ts             # Agent machine event types
-│   │       └── interrupt-machine.ts  # Two-phase Esc cancellation
-│   ├── agents-md/           # AGENTS.md discovery, injection, and write enforcement
-│   │   ├── resolver.ts      # Governing-chain resolver (walk up to workspace root)
-│   │   ├── config.ts        # Defaults + alias normalization
-│   │   ├── inject.ts        # Read-path injection builder
-│   │   └── enforce.ts       # Write-path enforcement evaluator
-│   ├── permissions/         # Tool permission gate + approval flow
-│   │   ├── gate.ts          # checkPermission() — fail-closed pre-handler gate
-│   │   ├── resolver.ts      # Mode resolution: tool-default < project-config < session override
-│   │   ├── evaluator.ts     # `decide-for-me` LLM evaluator (permission-evaluator agent)
-│   │   ├── detection/       # Command risk detection engine
-│   │   │   ├── engine.ts    # Shell-segment analysis, expansion/redirection flags
-│   │   │   ├── packs/filesystem.ts # Destructive/safe filesystem patterns
-│   │   │   └── packs/git.ts # Destructive/safe git patterns
-│   │   ├── approval-store.ts    # Pending approvals, timeouts, owner-window routing
-│   │   ├── session-overrides.ts # Per-session + pre-session draft permission modes
-│   │   └── history.ts       # Recent tool-call history (in-memory, per session+scope)
-│   ├── llm/                 # LLM integration
-│   │   ├── orchestrator.ts  # streamChat() — async generator yielding StreamEvents
-│   │   ├── stream/          # Per-attempt stream plumbing
-│   │   │   ├── events.ts            # StreamEvent union (thinking/content/tool_*/usage/…)
-│   │   │   ├── sdk-event-adapter.ts # Normalize AI SDK parts → StreamEvent
-│   │   │   ├── attempt-controller.ts # Idle watchdog + combined abort signals
-│   │   │   ├── eager-tool-bridge.ts # Feed streamed tool input into EagerToolExecutor
-│   │   │   └── normalized-stream.ts # Unify fullStream/textStream + step-finish drain
-│   │   ├── system-prompt.ts # buildSystemPrompt() — dynamic context injection
-│   │   ├── build-prompt-context.ts # Assemble dynamic per-turn prompt context
-│   │   ├── context-snapshot.ts     # Frozen per-turn context snapshot
-│   │   ├── history.ts       # toApiMessages() — Message[] → AI SDK CoreMessage[]
-│   │   ├── model-messages.ts # toModelMessages() — ApiMessage[] → ModelMessage[]
-│   │   ├── message-factories.ts    # Build AI SDK message objects
-│   │   ├── response-unwrap.ts      # Unwrap provider response shapes
-│   │   ├── reasoning-effort.ts     # Resolve per-turn reasoning effort (session/tier/connection)
-│   │   ├── tool-dispatch.ts # executeToolCall() — permission gate + timeout + output offloading
-│   │   ├── eager-tool-executor.ts # EagerToolExecutor — start tools as their input streams
-│   │   ├── tool-pool.ts     # Tool worker pool singleton (offloadable read-only tools)
-│   │   ├── terminal-result.ts # Canonical error/cancelled tool results without a handler
-│   │   └── middleware/      # AI SDK middleware stack
-│   │       ├── index.ts     # createMiddlewareStack() — retry (+accounting) + throttle
-│   │       ├── retry.ts     # Exponential backoff retry
-│   │       ├── throttle.ts  # Yield rate-limiting
-│   │       ├── provider-quirks.ts  # Tool-output offload thresholds (constants)
-│   │       └── error-classification.ts  # Error types and classification
-│   ├── providers/           # Typed provider connections, drivers, and accounting
-│   │   ├── index.ts         # ProviderRuntime — resolve typed selection + freeze request snapshot
-│   │   ├── resolver.ts      # Resolve {connectionId, modelId} against connections/catalog
-│   │   ├── connection-store.ts # Non-secret connection metadata
-│   │   ├── runtime-context.ts  # Per-request provider runtime context
-│   │   ├── drivers/         # Code-owned origins, auth, protocols, adapters, status parsing
-│   │   │   ├── registry.ts  # Driver registry (origin → driver)
-│   │   │   ├── native.ts    # Specialized provider drivers (owned origins)
-│   │   │   ├── compatible.ts # OpenAI-/Anthropic-compatible custom endpoints
-│   │   │   ├── lilac.ts / neuralwatt.ts / opencode-go.ts # Third-party drivers
-│   │   │   └── types.ts     # Driver interfaces
-│   │   ├── credentials/     # Encrypted vault for API-key secrets (vault.ts)
-│   │   ├── catalog/         # Signed bundled/cached catalog, trust pinning, updater
-│   │   ├── status/          # Provider status cache/service
-│   │   └── accounting/      # SQLite attempt ledger + cost + analytics queries
-│   │       ├── store.ts     # provider_attempts insert/finalize (fail-closed singleton)
-│   │       ├── schema.ts    # Ledger tables (attempts, tool attempts, context snapshots, attribution)
-│   │       ├── cost.ts      # Cost calculation (reported header → token/energy formula)
-│   │       ├── middleware.ts # Attempt accounting middleware (between retry and throttle)
-│   │       ├── tool-attempt-store.ts # Tool invocation telemetry
-│   │       ├── subagent-attribution-store.ts # Subagent chain attribution
-│   │       ├── context-snapshot-store.ts # Per-turn context window snapshots
-│   │       └── analytics-queries.ts # Read-model queries backing the Analytics view
-│   ├── tools/               # Tool registry and built-in tools
-│   │   ├── index.ts         # registerBuiltinTools() — singleton registry setup
-│   │   ├── registry.ts      # ToolRegistry class — register/filter/validate/toJsonSchema
-│   │   ├── types.ts         # ToolDefinition, ToolHandler, RegisteredTool
-│   │   ├── result.ts        # Tool result envelope helpers (AgentProjector)
-│   │   ├── result-retrieval.ts # Retrieve offloaded tool results
-│   │   ├── glob-pattern.ts  # Shared glob matching helper
-│   │   ├── tool-worker.ts   # Worker-thread entry for offloadable tools
-│   │   ├── worker-registry.ts # Registry of tools allowed to run in workers
-│   │   ├── filesystem/      # read, edit, write, read-directory, glob, apply-patch
-│   │   ├── search/          # grep (ripgrep-style)
-│   │   ├── process/         # execute-command, read-output, send-input, terminate
-│   │   │                    # + background-store.ts / foreground-live.ts / head-tail-buffer.ts
-│   │   ├── ast/             # find-symbol-references, get-file-skeleton, get-function,
-│   │   │                    # rename-symbol, replace-symbol, index-tool (+ workers)
-│   │   ├── rag/             # rag-search, rag-index
-│   │   ├── todo/            # create, update, list, delete
-│   │   ├── web/             # fetch
-│   │   ├── skill/           # skill loader
-│   │   ├── mcp/             # MCP resource reader + resource listing
-│   │   ├── ask-question/    # ask_question tool + QuestionStore (agent→user questions)
-│   │   └── subagent/        # delegate, wait, interrupt, answer, close, follow-up, hydrate
-│   ├── ipc/                 # IPC handlers (main process side)
-│   │   ├── index.ts         # registerAllIPC() / unregisterAllIPC()
-│   │   ├── payload-schemas.ts # Zod schemas for IPC payloads
-│   │   ├── chat.ts          # Facade: chat:send/snapshot/stop/cancel/queue_next + bgcmd:*
-│   │   ├── chat/            # Agentic loop internals
-│   │   │   ├── send.ts      # startChatTurn — session single-flight, actors, event flush
-│   │   │   ├── stream.ts    # createProviderStreamFn — freezes runtime snapshot per turn
-│   │   │   ├── events.ts    # Sequenced turn/session event broadcast
-│   │   │   ├── state.ts     # ActiveAgent registry (messages, tool calls, generations)
-│   │   │   ├── snapshot.ts  # Live chat snapshot builder
-│   │   │   ├── persist.ts   # Debounced checkpoints + turn persistence
-│   │   │   ├── abort.ts     # Force-abort / dispose paths
-│   │   │   ├── session.ts   # ensureActiveSession (workspace resolve + trust gate)
-│   │   │   └── title.ts     # Auto-naming via internal session-namer
-│   │   ├── next-request-stop.ts # Stop the next request at the next step boundary
-│   │   ├── chat-history.ts  # chat history helpers
-│   │   ├── config.ts        # config:get, config:save
-│   │   ├── permission.ts    # Approval IPC + session permission mode
-│   │   ├── ask-question.ts  # ask_question IPC (asked/answered/settled)
-│   │   ├── trust.ts         # Trusted-project grant/revoke IPC
-│   │   ├── startup.ts       # Startup snapshot IPC (startup:snapshot/changed/continueDegraded)
-│   │   ├── analytics.ts     # Analytics read-model IPC (analytics:*)
-│   │   ├── session.ts       # session CRUD / workspace bind / trust revocation
-│   │   ├── session-activity.ts # session activity events
-│   │   ├── session-working-set.ts # working-set IPC
-│   │   ├── tool.ts          # tool:execute
-│   │   ├── definitions.ts   # agents/skills/personalities listing
-│   │   ├── subagents.ts     # subagent listing / detail IPC
-│   │   ├── providers.ts     # provider connection CRUD / models / status
-│   │   ├── mcp.ts           # mcp:status
-│   │   ├── rag.ts           # rag:status, rag:index, rag:clear
-│   │   └── ast.ts           # ast:status, ast:index
-│   ├── config/              # Configuration system
-│   │   ├── schema.ts        # Zod schemas — single source of truth for config fields
-│   │   ├── index.ts         # Public config surface
-│   │   ├── loader.ts        # ensureHomeConfig(), ConfigManager — ~/.orchid/ management
-│   │   ├── merge.ts         # Deep merge for project + user configs
-│   │   ├── validation.ts    # Config validation utilities
-│   │   └── write-lock.ts    # Config write serialization
-│   ├── session/             # Session persistence (SQLite)
-│   │   ├── manager.ts       # SessionManager — CRUD, auto-naming
-│   │   ├── db.ts            # ~/.orchid/sessions.db connection (WAL, corruption recovery)
-│   │   ├── schema.ts        # sessions/chains/subagent_chains schema v2
-│   │   ├── storage.ts       # Persistence operations against the session DB
-│   │   ├── singleton.ts     # getSessionManager() + resolveWindowWorkspace
-│   │   ├── draft-reasoning.ts # Pre-session reasoning-effort drafts (per window)
-│   │   ├── activity.ts      # Session activity tracking
-│   │   ├── agents-md-context.ts # Per-session AGENTS.md context tracker (in-memory)
-│   │   └── working-set.ts   # Session working-set (open tabs) tracking
-│   ├── project/             # Workspace binding (session cwd / sticky default)
-│   │   ├── path.ts          # inspect/canonicalize absolute project directories
-│   │   ├── workspace.ts     # draft cwd, sticky default_project_dir, resolveWorkspace*
-│   │   ├── runtime.ts       # ProjectRuntime — config + agents/skills/personalities overlays
-│   │   ├── agents-md.ts     # Root AGENTS.md injection + subagent root seeding
-│   │   ├── personality.ts   # project personality helpers
-│   │   └── trust.ts         # Trusted-project store + fingerprint drift detection
-│   ├── mcp/                 # Model Context Protocol client
-│   │   ├── manager.ts       # MCPManager — start/stop/call/list tools
-│   │   ├── project-registry.ts # Leased per-project managers (trust-gated, lease-counted)
-│   │   ├── schema.ts        # MCPServerConfig types
-│   │   └── transport.ts     # StdioClientTransport wrapper
-│   ├── rag/                 # Retrieval-Augmented Generation
-│   │   ├── chunker.ts       # Text chunking with overlap
-│   │   ├── embedder.ts      # ONNX-based local embedding (fastembed) or API embedder
-│   │   ├── indexer.ts       # File indexing pipeline
-│   │   ├── index-worker.ts  # Worker-thread indexing
-│   │   └── store.ts         # SQLite-backed vector store
-│   ├── ast/                 # Abstract Syntax Tree indexing
-│   │   ├── indexer.ts       # Tree-sitter based code indexing
-│   │   ├── index-worker.ts  # Worker-thread indexing
-│   │   ├── parser.ts        # Tree-sitter parser management
-│   │   ├── queries/         # Tree-sitter query files (.scm, copied by copy-defaults)
-│   │   └── store.ts         # SQLite-backed symbol store
-│   ├── defs/                # Definition file management (agents/skills/personalities)
-│   │   ├── manage.ts        # Create/update/delete definition files
-│   │   ├── paths.ts         # Resolve definition storage paths
-│   │   └── reload.ts        # Reload definitions on change
-│   ├── personality/         # Personality system
-│   │   ├── registry.ts      # loadPersonalities()
-│   │   └── defaults/        # Built-in personalities
-│   ├── skills/              # Skill system
-│   │   ├── registry.ts      # loadSkills() from ~/.orchid/skills/ (built-ins seeded)
-│   │   └── defaults/        # Built-in skills (subdirs with SKILL.md markers)
-│   ├── logging.ts           # FileLogger — ~/.orchid/logs/orchid.log
-│   ├── updater.ts           # Auto-update via electron-updater (events: updater:status_update, updater:progress, updater:error)
-│   └── utils/               # Shared helpers
-│       ├── esm-import.ts    # importESM() — dynamic ESM import for CJS context
-│       ├── sqlite.ts        # Shared SQLite open/WAL/corruption-recovery helper
-│       ├── worker-pool.ts   # Two-lane (main/subagent) worker pool
-│       ├── write-lock.ts    # Generic write-lock helper
-│       ├── seed-defaults.ts # Seed built-in definition subdirs into ~/.orchid/
-│       ├── async.ts / safe-fsync.ts / with-disposable.ts
-├── preload/
-│   └── index.ts             # contextBridge API — window.orchid.* surface
-├── renderer/                # React UI (Vite-bundled)
-│   ├── App.tsx              # Root — startup gate; renders StartupScreen until phase=ready
-│   ├── AppReady.tsx         # Post-startup shell — config load, views, onboarding
-│   ├── main.tsx             # ReactDOM.createRoot entry
-│   ├── index.html           # HTML shell
-│   ├── components/
-│   │   ├── ChatView.tsx     # Main layout — SessionTabBar + LeftSidebar + chat + inspector
-│   │   ├── LeftSidebar.tsx  # Workspace chip, search, project-grouped session list
-│   │   ├── Sidebar.tsx      # Right inspector — Todos, Subagents, Commands, Context, Usage,
-│   │   │                    # Workspace Index, MCP Servers
-│   │   ├── SessionTabBar.tsx # Open-session tab strip (working-set backed)
-│   │   ├── ChatStream.tsx   # Message list with smart auto-scroll
-│   │   ├── InputArea.tsx    # Text input + send button
-│   │   ├── MessageQueue.tsx # Queued follow-up messages (next-request / chain-end)
-│   │   ├── Footer.tsx       # Model name + token usage + elapsed time
-│   │   ├── MessageWidget.tsx # Individual message rendering
-│   │   ├── MarkdownContent.tsx # Markdown rendering
-│   │   ├── CommandPalette.tsx # Cmd+K command palette
-│   │   ├── SlashCommandMenu.tsx # Inline slash-command menu
-│   │   ├── ShortcutsHelp.tsx # Keyboard shortcut reference
-│   │   ├── ContextGrid.tsx  # Context window usage visualization
-│   │   ├── ConfigView.tsx   # Full-screen configuration UI
-│   │   ├── ProjectConfigView.tsx # Project-level config editor (.orchid.json)
-│   │   ├── AnalyticsView.tsx # Usage/cost analytics (tabs: Overview, Sessions,
-│   │   │                    # Models & Providers, Tools, Subagents, Context)
-│   │   ├── StartupScreen.tsx # Startup progress phases/steps
-│   │   ├── ModelPicker.tsx  # Connection/model selection
-│   │   ├── ReasoningSelector.tsx # Per-session reasoning effort picker
-│   │   ├── PermissionApprovalPanel.tsx # Pending tool-approval UI
-│   │   ├── PermissionSelector.tsx # Session permission mode selector
-│   │   ├── AskQuestionOverlay.tsx # Agent ask_question UI
-│   │   ├── TrustProjectDialog.tsx # Trust grant surface-diff report
-│   │   ├── SubagentView.tsx / SubagentTranscript.tsx # Subagent detail views
-│   │   ├── ToolResults/     # Tool result widgets by family (+ registry)
-│   │   ├── ToolWidgets/     # Tool call activity widgets (live command output)
-│   │   ├── ui/              # Typed primitives (Button, TextInput, Select, Tabs, …)
-│   │   ├── Preferences/     # Settings tab panels (used by ConfigView)
-│   │   ├── Providers/       # Connection list/wizard/models/status
-│   │   └── Onboarding/      # First-run setup wizard
-│   ├── hooks/
-│   │   ├── useChat.ts       # Chat state machine (projection, streaming, send/cancel)
-│   │   ├── useSession.ts    # Session CRUD operations
-│   │   ├── useSessionTabs.ts # Working-set backed session tabs
-│   │   ├── useSessionActivity.ts # Session activity state
-│   │   ├── useSubagents.ts  # Subagent list/detail polling
-│   │   ├── useTodos.ts      # Todo list state
-│   │   ├── useProviders.ts  # Provider connections/models state
-│   │   ├── useAnalytics.ts  # Analytics query state + time range
-│   │   ├── useMessageQueue.ts / useQueueAutoFire.ts # Message queue + auto-fire
-│   │   ├── usePermissionApproval.ts # Approval request state
-│   │   ├── useAskQuestion.ts # ask_question state
-│   │   ├── useBackgroundCommands.ts # Background command fleet state
-│   │   ├── useLiveCommandOutput.ts # Foreground/background command output streaming
-│   │   ├── useSmartAutoScroll.ts # Viewport pinning with scroll-away suspension
-│   │   ├── use-responsive-shell.ts # Panel collapse state by width
-│   │   └── useTrustPrompt.ts / useTimeRange.ts
-│   ├── keyboard/            # Shortcut subsystem
-│   │   ├── registry.ts      # SHORTCUTS source of truth + formatting helpers
-│   │   ├── match.ts         # Chord matching (mod/shift/alt, editable-target awareness)
-│   │   ├── types.ts         # KeyChord / ShortcutDef
-│   │   ├── useGlobalShortcuts.ts # Single window keydown dispatcher
-│   │   ├── useFocusTrap.ts  # Modal focus trap (stacked)
-│   │   └── useRovingListIndex.ts # Arrow-key list navigation
-│   ├── commands/
-│   │   └── registry.ts      # Client-side slash commands
-│   ├── themes/              # CSS theme files
-│   │   ├── index.ts         # Theme registry and applyTheme()
-│   │   ├── default.css      # Dark theme (default)
-│   │   ├── light.css
-│   │   ├── bluey.css
-│   │   ├── green-terminal.css
-│   │   ├── solarized-light.css
-│   │   └── windows-xp.css
-│   ├── styles/
-│   │   ├── index.css        # Canonical import order + Tailwind + design tokens
-│   │   ├── primitives.css   # Orchid primitive engine (component roots, theme tokens)
-│   │   ├── components.css   # orchid-* composites (@layer orchid) — base
-│   │   ├── components-chat.css / components-session.css / components-config.css
-│   │   │                    # Surface-area splits of the composite layer
-│   │   ├── shell.css        # App shell geometry
-│   │   ├── motion.css       # Shared motion vocabulary (orchid-* transitions)
-│   │   ├── markdown.css     # Markdown rendering styles
-│   │   ├── exceptions.css   # Scoped style exceptions
-│   │   └── README.md        # Styling contract documentation
-│   └── utils/               # Presentation/state helpers (config drafts, grouping,
-│                            # provider selection, stream building, subagent stream, …)
-└── shared/                  # Shared types between main/preload/renderer
-    ├── types/
-    │   ├── ipc.ts           # IPC channel names, message types, OrchidAPI interface
-    │   ├── ipc-boundary.ts  # Config, Session, Model, MCP types shared across boundary
-    │   ├── ipc-schemas.ts   # Zod schemas for IPC payloads
-    │   ├── message.ts       # Message, Usage, MessageRole, MessageType
-    │   ├── session.ts       # Session, SessionSummary
-    │   ├── chain.ts         # Chain (conversation thread) types
-    │   ├── agent.ts         # Agent definition type
-    │   ├── agent-scope.ts   # Agent scope identity (main vs subagent)
-    │   ├── skill.ts         # Skill definition type
-    │   ├── tool.ts          # ToolCall type
-    │   ├── tool-result.ts   # Canonical tool result envelope types
-    │   ├── tool-result-filesystem.ts / tool-result-apply-patch.ts
-    │   ├── subagent.ts      # Subagent types
-    │   ├── todo.ts          # TodoItem, TodoStatus
-    │   ├── permission.ts    # Permission modes + risk classes
-    │   ├── provider.ts      # ModelSelection + provider connection types
-    │   ├── accounting.ts    # Attempt ledger types
-    │   ├── analytics.ts     # Analytics read-model types
-    │   └── definitions.ts   # Definition (agent/skill/personality) types
-    ├── chat/
-    │   └── turn-projection.ts # Pure reducer: IPC turn events → renderer projection
-    ├── mcp/
-    │   └── recommended-servers.ts # Recommended MCP servers (onboarding opt-in)
-    ├── serialization/
-    │   └── chain-subagent.ts # Chain/subagent serialization helpers
-    ├── commands.ts          # Shared command types + fuzzy-match utilities (definitions live in renderer)
-    ├── usage.ts             # Usage accounting helpers
-    └── utils/
-        └── frontmatter.ts   # YAML frontmatter parser for agent/skill files
+electron/
+├── src/
+│   ├── main/                    # Electron main process
+│   │   ├── index.ts             # App entry — window creation, lifecycle, shutdown
+│   │   ├── startup.ts           # Startup snapshot store (phases: starting|ready|degraded|failed)
+│   │   ├── startup-lifecycle.ts # runStartupLifecycle() — sequential startup steps
+│   │   ├── agents/              # Agent definitions and subagent orchestration
+│   │   │   ├── registry.ts      # Load agent definitions (~/.orchid/agents/ + seeded built-ins)
+│   │   │   ├── defaults/        # Built-in agent definitions (subdirs with marker files)
+│   │   │   ├── manager.ts       # SubagentManager — spawn/wait/interrupt subagents
+│   │   │   ├── admission.ts     # Global/per-session admission limits + queue
+│   │   │   ├── errors.ts        # Subagent error taxonomy
+│   │   │   ├── types.ts         # Shared subagent types
+│   │   │   ├── subagent-runner.ts         # Run subagent turns against project runtime
+│   │   │   ├── subagent-run.ts            # Single run lifecycle
+│   │   │   ├── subagent-run-assembler.ts  # Assemble run context (prompt, tools, model)
+│   │   │   ├── subagent-events.ts         # Live event batching knobs
+│   │   │   ├── subagent-live-projection.ts # Live renderer projection of subagent streams
+│   │   │   ├── subagent-persistence.ts    # Persist subagent chains (terminal wave batching)
+│   │   │   ├── subagent-persistence-recovery.ts # Recover chains after crash/restart
+│   │   │   ├── persist-subagent-chains.ts # Persist subagent chain messages
+│   │   │   ├── wire-subagents.ts          # Wire subagent lifecycle into manager
+│   │   │   └── xstate/          # XState machines
+│   │   │       ├── agent-machine.ts      # Core agent loop (idle→streaming→toolExec→idle)
+│   │   │       ├── events.ts             # Agent machine event types
+│   │   │       └── interrupt-machine.ts  # Two-phase Esc cancellation
+│   │   ├── agents-md/           # AGENTS.md discovery, injection, and write enforcement
+│   │   │   ├── resolver.ts      # Governing-chain resolver (walk up to workspace root)
+│   │   │   ├── config.ts        # Defaults + alias normalization
+│   │   │   ├── inject.ts        # Read-path injection builder
+│   │   │   └── enforce.ts       # Write-path enforcement evaluator
+│   │   ├── permissions/         # Tool permission gate + approval flow
+│   │   │   ├── gate.ts          # checkPermission() — fail-closed pre-handler gate
+│   │   │   ├── resolver.ts      # Mode resolution: tool-default < project-config < session override
+│   │   │   ├── evaluator.ts     # `decide-for-me` LLM evaluator (permission-evaluator agent)
+│   │   │   ├── detection/       # Command risk detection engine
+│   │   │   │   ├── engine.ts    # Shell-segment analysis, expansion/redirection flags
+│   │   │   │   ├── packs/filesystem.ts # Destructive/safe filesystem patterns
+│   │   │   │   └── packs/git.ts # Destructive/safe git patterns
+│   │   │   ├── approval-store.ts    # Pending approvals, timeouts, owner-window routing
+│   │   │   ├── session-overrides.ts # Per-session + pre-session draft permission modes
+│   │   │   └── history.ts       # Recent tool-call history (in-memory, per session+scope)
+│   │   ├── llm/                 # LLM integration
+│   │   │   ├── orchestrator.ts  # streamChat() — async generator yielding StreamEvents
+│   │   │   ├── stream/          # Per-attempt stream plumbing
+│   │   │   │   ├── events.ts            # StreamEvent union (thinking/content/tool_*/usage/…)
+│   │   │   │   ├── sdk-event-adapter.ts # Normalize AI SDK parts → StreamEvent
+│   │   │   │   ├── attempt-controller.ts # Idle watchdog + combined abort signals
+│   │   │   │   ├── eager-tool-bridge.ts # Feed streamed tool input into EagerToolExecutor
+│   │   │   │   └── normalized-stream.ts # Unify fullStream/textStream + step-finish drain
+│   │   │   ├── system-prompt.ts # buildSystemPrompt() — dynamic context injection
+│   │   │   ├── build-prompt-context.ts # Assemble dynamic per-turn prompt context
+│   │   │   ├── context-snapshot.ts     # Frozen per-turn context snapshot
+│   │   │   ├── history.ts       # toApiMessages() — Message[] → AI SDK CoreMessage[]
+│   │   │   ├── model-messages.ts # toModelMessages() — ApiMessage[] → ModelMessage[]
+│   │   │   ├── message-factories.ts    # Build AI SDK message objects
+│   │   │   ├── response-unwrap.ts      # Unwrap provider response shapes
+│   │   │   ├── reasoning-effort.ts     # Resolve per-turn reasoning effort (session/tier/connection)
+│   │   │   ├── tool-dispatch.ts # executeToolCall() — permission gate + timeout + output offloading
+│   │   │   ├── eager-tool-executor.ts # EagerToolExecutor — start tools as their input streams
+│   │   │   ├── tool-pool.ts     # Tool worker pool singleton (offloadable read-only tools)
+│   │   │   ├── terminal-result.ts # Canonical error/cancelled tool results without a handler
+│   │   │   └── middleware/      # AI SDK middleware stack
+│   │   │       ├── index.ts     # createMiddlewareStack() — retry (+accounting) + throttle
+│   │   │       ├── retry.ts     # Exponential backoff retry
+│   │   │       ├── throttle.ts  # Yield rate-limiting
+│   │   │       ├── provider-quirks.ts  # Tool-output offload thresholds (constants)
+│   │   │       └── error-classification.ts  # Error types and classification
+│   │   ├── providers/           # Typed provider connections, drivers, and accounting
+│   │   │   ├── index.ts         # ProviderRuntime — resolve typed selection + freeze request snapshot
+│   │   │   ├── resolver.ts      # Resolve {connectionId, modelId} against connections/catalog
+│   │   │   ├── connection-store.ts # Non-secret connection metadata
+│   │   │   ├── runtime-context.ts  # Per-request provider runtime context
+│   │   │   ├── drivers/         # Code-owned origins, auth, protocols, adapters, status parsing
+│   │   │   │   ├── registry.ts  # Driver registry (origin → driver)
+│   │   │   │   ├── native.ts    # Specialized provider drivers (owned origins)
+│   │   │   │   ├── compatible.ts # OpenAI-/Anthropic-compatible custom endpoints
+│   │   │   │   ├── lilac.ts / neuralwatt.ts / opencode-go.ts # Third-party drivers
+│   │   │   │   └── types.ts     # Driver interfaces
+│   │   │   ├── credentials/     # Encrypted vault for API-key secrets (vault.ts)
+│   │   │   ├── catalog/         # Signed bundled/cached catalog, trust pinning, updater
+│   │   │   ├── status/          # Provider status cache/service
+│   │   │   └── accounting/      # SQLite attempt ledger + cost + analytics queries
+│   │   │       ├── store.ts     # provider_attempts insert/finalize (fail-closed singleton)
+│   │   │       ├── schema.ts    # Ledger tables (attempts, tool attempts, context snapshots, attribution)
+│   │   │       ├── cost.ts      # Cost calculation (reported header → token/energy formula)
+│   │   │       ├── middleware.ts # Attempt accounting middleware (between retry and throttle)
+│   │   │       ├── tool-attempt-store.ts # Tool invocation telemetry
+│   │   │       ├── subagent-attribution-store.ts # Subagent chain attribution
+│   │   │       ├── context-snapshot-store.ts # Per-turn context window snapshots
+│   │   │       └── analytics-queries.ts # Read-model queries backing the Analytics view
+│   │   ├── tools/               # Tool registry and built-in tools
+│   │   │   ├── index.ts         # registerBuiltinTools() — singleton registry setup
+│   │   │   ├── registry.ts      # ToolRegistry class — register/filter/validate/toJsonSchema
+│   │   │   ├── types.ts         # ToolDefinition, ToolHandler, RegisteredTool
+│   │   │   ├── result.ts        # Tool result envelope helpers (AgentProjector)
+│   │   │   ├── result-retrieval.ts # Retrieve offloaded tool results
+│   │   │   ├── glob-pattern.ts  # Shared glob matching helper
+│   │   │   ├── tool-worker.ts   # Worker-thread entry for offloadable tools
+│   │   │   ├── worker-registry.ts # Registry of tools allowed to run in workers
+│   │   │   ├── filesystem/      # read, edit, write, read-directory, glob, apply-patch
+│   │   │   ├── search/          # grep (ripgrep-style)
+│   │   │   ├── process/         # execute-command, read-output, send-input, terminate
+│   │   │   │                    # + background-store.ts / foreground-live.ts / head-tail-buffer.ts
+│   │   │   ├── ast/             # find-symbol-references, get-file-skeleton, get-function,
+│   │   │   │                    # rename-symbol, replace-symbol, index-tool (+ workers)
+│   │   │   ├── rag/             # rag-search, rag-index
+│   │   │   ├── todo/            # create, update, list, delete
+│   │   │   ├── web/             # fetch
+│   │   │   ├── skill/           # skill loader
+│   │   │   ├── mcp/             # MCP resource reader + resource listing
+│   │   │   ├── ask-question/    # ask_question tool + QuestionStore (agent→user questions)
+│   │   │   └── subagent/        # delegate, wait, interrupt, answer, close, follow-up, hydrate
+│   │   ├── ipc/                 # IPC handlers (main process side)
+│   │   │   ├── index.ts         # registerAllIPC() / unregisterAllIPC()
+│   │   │   ├── payload-schemas.ts # Zod schemas for IPC payloads
+│   │   │   ├── chat.ts          # Facade: chat:send/snapshot/stop/cancel/queue_next + bgcmd:*
+│   │   │   ├── chat/            # Agentic loop internals
+│   │   │   │   ├── send.ts      # startChatTurn — session single-flight, actors, event flush
+│   │   │   │   ├── stream.ts    # createProviderStreamFn — freezes runtime snapshot per turn
+│   │   │   │   ├── events.ts    # Sequenced turn/session event broadcast
+│   │   │   │   ├── state.ts     # ActiveAgent registry (messages, tool calls, generations)
+│   │   │   │   ├── snapshot.ts  # Live chat snapshot builder
+│   │   │   │   ├── persist.ts   # Debounced checkpoints + turn persistence
+│   │   │   │   ├── abort.ts     # Force-abort / dispose paths
+│   │   │   │   ├── session.ts   # ensureActiveSession (workspace resolve + trust gate)
+│   │   │   │   └── title.ts     # Auto-naming via internal session-namer
+│   │   │   ├── next-request-stop.ts # Stop the next request at the next step boundary
+│   │   │   ├── chat-history.ts  # chat history helpers
+│   │   │   ├── config.ts        # config:get, config:save
+│   │   │   ├── permission.ts    # Approval IPC + session permission mode
+│   │   │   ├── ask-question.ts  # ask_question IPC (asked/answered/settled)
+│   │   │   ├── trust.ts         # Trusted-project grant/revoke IPC
+│   │   │   ├── startup.ts       # Startup snapshot IPC (startup:snapshot/changed/continueDegraded)
+│   │   │   ├── analytics.ts     # Analytics read-model IPC (analytics:*)
+│   │   │   ├── session.ts       # session CRUD / workspace bind / trust revocation
+│   │   │   ├── session-activity.ts # session activity events
+│   │   │   ├── session-working-set.ts # working-set IPC
+│   │   │   ├── tool.ts          # tool:execute
+│   │   │   ├── definitions.ts   # agents/skills/personalities listing
+│   │   │   ├── subagents.ts     # subagent listing / detail IPC
+│   │   │   ├── providers.ts     # provider connection CRUD / models / status
+│   │   │   ├── mcp.ts           # mcp:status
+│   │   │   ├── rag.ts           # rag:status, rag:index, rag:clear
+│   │   │   └── ast.ts           # ast:status, ast:index
+│   │   ├── config/              # Configuration system
+│   │   │   ├── schema.ts        # Zod schemas — single source of truth for config fields
+│   │   │   ├── index.ts         # Public config surface
+│   │   │   ├── loader.ts        # ensureHomeConfig(), ConfigManager — ~/.orchid/ management
+│   │   │   ├── merge.ts         # Deep merge for project + user configs
+│   │   │   ├── validation.ts    # Config validation utilities
+│   │   │   └── write-lock.ts    # Config write serialization
+│   │   ├── session/             # Session persistence (SQLite)
+│   │   │   ├── manager.ts       # SessionManager — CRUD, auto-naming
+│   │   │   ├── db.ts            # ~/.orchid/sessions.db connection (WAL, corruption recovery)
+│   │   │   ├── schema.ts        # sessions/chains/subagent_chains schema v2
+│   │   │   ├── storage.ts       # Persistence operations against the session DB
+│   │   │   ├── singleton.ts     # getSessionManager() + resolveWindowWorkspace
+│   │   │   ├── draft-reasoning.ts # Pre-session reasoning-effort drafts (per window)
+│   │   │   ├── activity.ts      # Session activity tracking
+│   │   │   ├── agents-md-context.ts # Per-session AGENTS.md context tracker (in-memory)
+│   │   │   └── working-set.ts   # Session working-set (open tabs) tracking
+│   │   ├── project/             # Workspace binding (session cwd / sticky default)
+│   │   │   ├── path.ts          # inspect/canonicalize absolute project directories
+│   │   │   ├── workspace.ts     # draft cwd, sticky default_project_dir, resolveWorkspace*
+│   │   │   ├── runtime.ts       # ProjectRuntime — config + agents/skills/personalities overlays
+│   │   │   ├── agents-md.ts     # Root AGENTS.md injection + subagent root seeding
+│   │   │   ├── personality.ts   # project personality helpers
+│   │   │   └── trust.ts         # Trusted-project store + fingerprint drift detection
+│   │   ├── mcp/                 # Model Context Protocol client
+│   │   │   ├── manager.ts       # MCPManager — start/stop/call/list tools
+│   │   │   ├── project-registry.ts # Leased per-project managers (trust-gated, lease-counted)
+│   │   │   ├── schema.ts        # MCPServerConfig types
+│   │   │   └── transport.ts     # StdioClientTransport wrapper
+│   │   ├── rag/                 # Retrieval-Augmented Generation
+│   │   │   ├── chunker.ts       # Text chunking with overlap
+│   │   │   ├── embedder.ts      # ONNX-based local embedding (fastembed) or API embedder
+│   │   │   ├── indexer.ts       # File indexing pipeline
+│   │   │   ├── index-worker.ts  # Worker-thread indexing
+│   │   │   └── store.ts         # SQLite-backed vector store
+│   │   ├── ast/                 # Abstract Syntax Tree indexing
+│   │   │   ├── indexer.ts       # Tree-sitter based code indexing
+│   │   │   ├── index-worker.ts  # Worker-thread indexing
+│   │   │   ├── parser.ts        # Tree-sitter parser management
+│   │   │   ├── queries/         # Tree-sitter query files (.scm, copied by copy-defaults)
+│   │   │   └── store.ts         # SQLite-backed symbol store
+│   │   ├── defs/                # Definition file management (agents/skills/personalities)
+│   │   │   ├── manage.ts        # Create/update/delete definition files
+│   │   │   ├── paths.ts         # Resolve definition storage paths
+│   │   │   └── reload.ts        # Reload definitions on change
+│   │   ├── personality/         # Personality system
+│   │   │   ├── registry.ts      # loadPersonalities()
+│   │   │   └── defaults/        # Built-in personalities
+│   │   ├── skills/              # Skill system
+│   │   │   ├── registry.ts      # loadSkills() from ~/.orchid/skills/ (built-ins seeded)
+│   │   │   └── defaults/        # Built-in skills (subdirs with SKILL.md markers)
+│   │   ├── logging.ts           # FileLogger — ~/.orchid/logs/orchid.log
+│   │   ├── updater.ts           # Auto-update via electron-updater (events: updater:status_update, updater:progress, updater:error)
+│   │   └── utils/               # Shared helpers
+│   │       ├── esm-import.ts    # importESM() — dynamic ESM import for CJS context
+│   │       ├── sqlite.ts        # Shared SQLite open/WAL/corruption-recovery helper
+│   │       ├── worker-pool.ts   # Two-lane (main/subagent) worker pool
+│   │       ├── write-lock.ts    # Generic write-lock helper
+│   │       ├── seed-defaults.ts # Seed built-in definition subdirs into ~/.orchid/
+│   │       ├── async.ts / safe-fsync.ts / with-disposable.ts
+│   ├── preload/
+│   │   └── index.ts             # contextBridge API — window.orchid.* surface
+│   ├── renderer/                # React UI (Vite-bundled)
+│   │   ├── App.tsx              # Root — startup gate; renders StartupScreen until phase=ready
+│   │   ├── AppReady.tsx         # Post-startup shell — config load, views, onboarding
+│   │   ├── main.tsx             # ReactDOM.createRoot entry
+│   │   ├── index.html           # HTML shell
+│   │   ├── components/
+│   │   │   ├── ChatView.tsx     # Main layout — SessionTabBar + LeftSidebar + chat + inspector
+│   │   │   ├── LeftSidebar.tsx  # Workspace chip, search, project-grouped session list
+│   │   │   ├── Sidebar.tsx      # Right inspector — Todos, Subagents, Commands, Context, Usage,
+│   │   │   │                    # Workspace Index, MCP Servers
+│   │   │   ├── SessionTabBar.tsx # Open-session tab strip (working-set backed)
+│   │   │   ├── ChatStream.tsx   # Message list with smart auto-scroll
+│   │   │   ├── InputArea.tsx    # Text input + send button
+│   │   │   ├── MessageQueue.tsx # Queued follow-up messages (next-request / chain-end)
+│   │   │   ├── Footer.tsx       # Model name + token usage + elapsed time
+│   │   │   ├── MessageWidget.tsx # Individual message rendering
+│   │   │   ├── MarkdownContent.tsx # Markdown rendering
+│   │   │   ├── CommandPalette.tsx # Cmd+K command palette
+│   │   │   ├── SlashCommandMenu.tsx # Inline slash-command menu
+│   │   │   ├── ShortcutsHelp.tsx # Keyboard shortcut reference
+│   │   │   ├── ContextGrid.tsx  # Context window usage visualization
+│   │   │   ├── ConfigView.tsx   # Full-screen configuration UI
+│   │   │   ├── ProjectConfigView.tsx # Project-level config editor (.orchid.json)
+│   │   │   ├── AnalyticsView.tsx # Usage/cost analytics (tabs: Overview, Sessions,
+│   │   │   │                    # Models & Providers, Tools, Subagents, Context)
+│   │   │   ├── StartupScreen.tsx # Startup progress phases/steps
+│   │   │   ├── ModelPicker.tsx  # Connection/model selection
+│   │   │   ├── ReasoningSelector.tsx # Per-session reasoning effort picker
+│   │   │   ├── PermissionApprovalPanel.tsx # Pending tool-approval UI
+│   │   │   ├── PermissionSelector.tsx # Session permission mode selector
+│   │   │   ├── AskQuestionOverlay.tsx # Agent ask_question UI
+│   │   │   ├── TrustProjectDialog.tsx # Trust grant surface-diff report
+│   │   │   ├── SubagentView.tsx / SubagentTranscript.tsx # Subagent detail views
+│   │   │   ├── ToolResults/     # Tool result widgets by family (+ registry)
+│   │   │   ├── ToolWidgets/     # Tool call activity widgets (live command output)
+│   │   │   ├── ui/              # Typed primitives (Button, TextInput, Select, Tabs, …)
+│   │   │   ├── Preferences/     # Settings tab panels (used by ConfigView)
+│   │   │   ├── Providers/       # Connection list/wizard/models/status
+│   │   │   └── Onboarding/      # First-run setup wizard
+│   │   ├── hooks/
+│   │   │   ├── useChat.ts       # Chat state machine (projection, streaming, send/cancel)
+│   │   │   ├── useSession.ts    # Session CRUD operations
+│   │   │   ├── useSessionTabs.ts # Working-set backed session tabs
+│   │   │   ├── useSessionActivity.ts # Session activity state
+│   │   │   ├── useSubagents.ts  # Subagent list/detail polling
+│   │   │   ├── useTodos.ts      # Todo list state
+│   │   │   ├── useProviders.ts  # Provider connections/models state
+│   │   │   ├── useAnalytics.ts  # Analytics query state + time range
+│   │   │   ├── useMessageQueue.ts / useQueueAutoFire.ts # Message queue + auto-fire
+│   │   │   ├── usePermissionApproval.ts # Approval request state
+│   │   │   ├── useAskQuestion.ts # ask_question state
+│   │   │   ├── useBackgroundCommands.ts # Background command fleet state
+│   │   │   ├── useLiveCommandOutput.ts # Foreground/background command output streaming
+│   │   │   ├── useSmartAutoScroll.ts # Viewport pinning with scroll-away suspension
+│   │   │   ├── use-responsive-shell.ts # Panel collapse state by width
+│   │   │   └── useTrustPrompt.ts / useTimeRange.ts
+│   │   ├── keyboard/            # Shortcut subsystem
+│   │   │   ├── registry.ts      # SHORTCUTS source of truth + formatting helpers
+│   │   │   ├── match.ts         # Chord matching (mod/shift/alt, editable-target awareness)
+│   │   │   ├── types.ts         # KeyChord / ShortcutDef
+│   │   │   ├── useGlobalShortcuts.ts # Single window keydown dispatcher
+│   │   │   ├── useFocusTrap.ts  # Modal focus trap (stacked)
+│   │   │   └── useRovingListIndex.ts # Arrow-key list navigation
+│   │   ├── commands/
+│   │   │   └── registry.ts      # Client-side slash commands
+│   │   ├── themes/              # CSS theme files
+│   │   │   ├── index.ts         # Theme registry and applyTheme()
+│   │   │   ├── default.css      # Dark theme (default)
+│   │   │   ├── light.css
+│   │   │   ├── bluey.css
+│   │   │   ├── green-terminal.css
+│   │   │   ├── solarized-light.css
+│   │   │   └── windows-xp.css
+│   │   ├── styles/
+│   │   │   ├── index.css        # Canonical import order + Tailwind + design tokens
+│   │   │   ├── primitives.css   # Orchid primitive engine (component roots, theme tokens)
+│   │   │   ├── components.css   # orchid-* composites (@layer orchid) — base
+│   │   │   ├── components-chat.css / components-session.css / components-config.css
+│   │   │   │                    # Surface-area splits of the composite layer
+│   │   │   ├── shell.css        # App shell geometry
+│   │   │   ├── motion.css       # Shared motion vocabulary (orchid-* transitions)
+│   │   │   ├── markdown.css     # Markdown rendering styles
+│   │   │   ├── exceptions.css   # Scoped style exceptions
+│   │   │   └── README.md        # Styling contract documentation
+│   │   └── utils/               # Presentation/state helpers (config drafts, grouping,
+│   │                            # provider selection, stream building, subagent stream, …)
+│   └── shared/                  # Shared types between main/preload/renderer
+│       ├── types/
+│       │   ├── ipc.ts           # IPC channel names, message types, OrchidAPI interface
+│       │   ├── ipc-boundary.ts  # Config, Session, Model, MCP types shared across boundary
+│       │   ├── ipc-schemas.ts   # Zod schemas for IPC payloads
+│       │   ├── message.ts       # Message, Usage, MessageRole, MessageType
+│       │   ├── session.ts       # Session, SessionSummary
+│       │   ├── chain.ts         # Chain (conversation thread) types
+│       │   ├── agent.ts         # Agent definition type
+│       │   ├── agent-scope.ts   # Agent scope identity (main vs subagent)
+│       │   ├── skill.ts         # Skill definition type
+│       │   ├── tool.ts          # ToolCall type
+│       │   ├── tool-result.ts   # Canonical tool result envelope types
+│       │   ├── tool-result-filesystem.ts / tool-result-apply-patch.ts
+│       │   ├── subagent.ts      # Subagent types
+│       │   ├── todo.ts          # TodoItem, TodoStatus
+│       │   ├── permission.ts    # Permission modes + risk classes
+│       │   ├── provider.ts      # ModelSelection + provider connection types
+│       │   ├── accounting.ts    # Attempt ledger types
+│       │   ├── analytics.ts     # Analytics read-model types
+│       │   └── definitions.ts   # Definition (agent/skill/personality) types
+│       ├── chat/
+│       │   └── turn-projection.ts # Pure reducer: IPC turn events → renderer projection
+│       ├── mcp/
+│       │   └── recommended-servers.ts # Recommended MCP servers (onboarding opt-in)
+│       ├── serialization/
+│       │   └── chain-subagent.ts # Chain/subagent serialization helpers
+│       ├── commands.ts          # Shared command types + fuzzy-match utilities (definitions live in renderer)
+│       ├── usage.ts             # Usage accounting helpers
+│       └── utils/
+│           └── frontmatter.ts   # YAML frontmatter parser for agent/skill files
+├── tests/
+├── scripts/
+├── package.json
+├── tsconfig.json
+├── tsconfig.node.json
+├── tsconfig.migration.json
+├── vite.config.ts
+├── eslint.config.mjs
+├── electron-builder.yml
+└── README.md
 ```
 
 ## Build & Development
@@ -738,6 +749,8 @@ Motion is a shared interaction contract, not local decoration. Use it to explain
 - **Imports**: grouped (external, internal, types) with blank line separators
 
 ## Key Files for Common Tasks
+
+> **Note:** All paths in the table below are relative to the Electron app root (`electron/`). For example, `src/main/...` means `electron/src/main/...`.
 
 | Task | Files |
 |------|-------|

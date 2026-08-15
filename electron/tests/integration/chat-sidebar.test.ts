@@ -443,8 +443,8 @@ describe('Sidebar Commands Section', () => {
     renderCommandsSidebar({
       status: 'ready',
       commands: [
-        makeBgCommand({ command: 'npm run dev' }),
-        makeBgCommand({ id: 2, command: 'pytest -x', scopeName: 'Researcher', agentScopeId: 'sub-9' }),
+        makeBgCommand({ command: 'npm run dev', description: '' }),
+        makeBgCommand({ id: 2, command: 'pytest -x', scopeName: 'Researcher', agentScopeId: 'sub-9', description: '' }),
       ],
     });
     await flushSnapshots();
@@ -493,8 +493,8 @@ describe('Sidebar Commands Section', () => {
     renderCommandsSidebar({
       status: 'ready',
       commands: [
-        makeBgCommand({ id: 1, command: 'npm run dev' }),
-        makeBgCommand({ id: 2, command: 'pytest -x', running: false, exitCode: 0 }),
+        makeBgCommand({ id: 1, command: 'npm run dev', description: '' }),
+        makeBgCommand({ id: 2, command: 'pytest -x', running: false, exitCode: 0, description: '' }),
         makeBgCommand({
           id: 3,
           command: 'cargo build',
@@ -502,6 +502,7 @@ describe('Sidebar Commands Section', () => {
           exitCode: 1,
           scopeName: 'Builder',
           agentScopeId: 'sub-2',
+          description: '',
         }),
       ],
     });

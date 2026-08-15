@@ -213,7 +213,7 @@ function renderInterruptSubagentsPayload(record: Record<string, JsonValue>): str
     .join('\n');
 }
 
-function renderTodoCreatePayload(record: Record<string, JsonValue>): string {
+function renderTodoCreateTask(record: Record<string, JsonValue>): string {
   return '<task id="' + escapeXmlAttribute(record.id) +
     '" status="' + escapeXmlAttribute(record.status) +
     '" owner="' + escapeXmlAttribute(record.owner) + '">' +
@@ -221,7 +221,19 @@ function renderTodoCreatePayload(record: Record<string, JsonValue>): string {
     '</task>';
 }
 
-function renderTodoUpdatePayload(record: Record<string, JsonValue>): string {
+function renderTodoCreatePayload(record: Record<string, JsonValue>): string {
+  if (Array.isArray(record.created)) {
+    const tasks = record.created.filter((task): task is Record<string, JsonValue> =>
+      task !== null && typeof task === 'object' && !Array.isArray(task));
+    if (tasks.length === 0) return '<tasks count="0" />';
+    return '<tasks count="' + tasks.length + '">\n' +
+      tasks.map((task) => renderTodoCreateTask(task)).join('\n') +
+      '\n</tasks>';
+  }
+  return renderTodoCreateTask(record);
+}
+
+function renderTodoUpdateChanges(record: Record<string, JsonValue>): string {
   const changes = record.changes && typeof record.changes === 'object' && !Array.isArray(record.changes)
     ? record.changes as Record<string, JsonValue>
     : {};
@@ -230,6 +242,21 @@ function renderTodoUpdatePayload(record: Record<string, JsonValue>): string {
     (typeof changes.status === 'string' ? xmlTextElement('status', changes.status) : '') +
     (typeof changes.owner === 'string' ? xmlTextElement('owner', changes.owner) : '') +
     '</changes>';
+}
+
+function renderTodoUpdatePayload(record: Record<string, JsonValue>): string {
+  if (Array.isArray(record.updated)) {
+    const updated = record.updated.filter((entry): entry is Record<string, JsonValue> =>
+      entry !== null && typeof entry === 'object' && !Array.isArray(entry));
+    const errors = Array.isArray(record.errors)
+      ? record.errors.filter((entry): entry is string => typeof entry === 'string')
+      : [];
+    const changeBlocks = updated.map((entry) => renderTodoUpdateChanges(entry)).join('\n');
+    const errorBlocks = errors.map((error) => xmlTextElement('error', error)).join('\n');
+    const parts = [changeBlocks, errorBlocks].filter((part) => part !== '');
+    return '<batch count="' + updated.length + '">\n' + parts.join('\n') + '\n</batch>';
+  }
+  return renderTodoUpdateChanges(record);
 }
 
 function renderTodoListPayload(record: Record<string, JsonValue>): string {
