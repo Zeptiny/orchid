@@ -10,7 +10,7 @@ import { RiskClass } from '../../../shared/types/permission';
 import { genericToolResultMetadata } from '../types';
 import { genericBuiltInToolOutcome } from '../result';
 import type { TodoToolResult, NotifyTodoChanged, TodoStoreSource } from './create';
-import { resolveTodoStore } from './create';
+import { resolveTodoStore, TODO_BATCH_MAX_SIZE } from './create';
 import { TodoStatus, type Todo } from '../../../shared/types/todo';
 import {
   isMainAgentScope,
@@ -44,16 +44,16 @@ export function buildUpdateTool(
       'arrays, title/status arrays are matched by index to id arrays.',
     inputSchema: z.object({
       id: z
-        .union([z.string(), z.array(z.string())])
+        .union([z.string(), z.array(z.string()).min(1).max(TODO_BATCH_MAX_SIZE)])
         .describe('The ID of the task to update, or an array of IDs for batch update.'),
       title: z
-        .union([z.string(), z.array(z.string())])
+        .union([z.string(), z.array(z.string()).max(TODO_BATCH_MAX_SIZE)])
         .optional()
         .describe(
           'New title (optional). A single value is applied to every id; an array is matched by index.',
         ),
       status: z
-        .union([todoStatusSchema, z.array(todoStatusSchema)])
+        .union([todoStatusSchema, z.array(todoStatusSchema).max(TODO_BATCH_MAX_SIZE)])
         .optional()
         .describe(
           `New status. Must be one of: ${Object.values(TodoStatus).join(', ')}. ` +
@@ -81,6 +81,22 @@ export function buildUpdateTool(
     const scope = normalizeAgentScopeId(ctx.agentScopeId);
     const todoStore = resolveTodoStore(store, ctx);
     const ids = Array.isArray(id) ? id : [id];
+
+    if (Array.isArray(title) && title.length !== ids.length) {
+      return genericBuiltInToolOutcome(
+        'todo_update',
+        `Error: title array length (${title.length}) must match id array length (${ids.length}).`,
+        'error',
+      );
+    }
+    if (Array.isArray(status) && status.length !== ids.length) {
+      return genericBuiltInToolOutcome(
+        'todo_update',
+        `Error: status array length (${status.length}) must match id array length (${ids.length}).`,
+        'error',
+      );
+    }
+
     const titles = title === undefined ? undefined : Array.isArray(title) ? title : ids.map(() => title);
     const statuses = status === undefined ? undefined : Array.isArray(status) ? status : ids.map(() => status);
 
@@ -122,7 +138,7 @@ export function buildUpdateTool(
       results.push({ task, error: null, changes });
     }
 
-    if (notifyChanged) {
+    if (results.length > 0 && notifyChanged) {
       await notifyChanged(ctx);
     }
 

@@ -24,6 +24,9 @@ export type TodoToolResult = GenericBuiltInToolOutcome;
 /** Callback type for notifying the UI of todo changes. */
 export type NotifyTodoChanged = (ctx: ToolExecutionContext) => void | Promise<void>;
 
+/** Maximum number of items accepted in a single batch todo create/update call. */
+export const TODO_BATCH_MAX_SIZE = 50;
+
 /** Fixed store or a resolver scoped to the explicit tool execution context. */
 export type TodoStoreSource = TodoStore | ((ctx: ToolExecutionContext) => TodoStore);
 
@@ -74,7 +77,7 @@ export function buildCreateTool(
       'for batch creation.',
     inputSchema: z.object({
       title: z
-        .union([z.string(), z.array(z.string())])
+        .union([z.string(), z.array(z.string()).min(1).max(TODO_BATCH_MAX_SIZE)])
         .describe('Task title or array of task titles for batch creation.'),
       subagent_id: z
         .string()
@@ -99,7 +102,7 @@ export function buildCreateTool(
     const todoStore = resolveTodoStore(store, ctx);
     const created = titles.map((t) => todoStore.create(t, owner));
 
-    if (notifyChanged) {
+    if (created.length > 0 && notifyChanged) {
       await notifyChanged(ctx);
     }
 
