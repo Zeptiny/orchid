@@ -124,6 +124,18 @@
       0 4px 12px color-mix(in srgb, var(--btn-primary-bg, var(--color-primary)) 28%, transparent);
   }
 
+  .btn-selected {
+    --btn-bg: var(--btn-primary-bg, var(--color-primary));
+    --btn-bg-hover: var(--btn-primary-hover, var(--color-primary));
+    --btn-fg: var(--btn-primary-text, var(--color-primary-content));
+    --btn-border: transparent;
+    box-shadow: none;
+  }
+
+  .btn-selected:hover:not(:disabled) {
+    border-color: transparent;
+  }
+
   .btn-ghost {
     --btn-bg: transparent;
     --btn-bg-hover: color-mix(in srgb, var(--color-base-content) 6%, transparent);

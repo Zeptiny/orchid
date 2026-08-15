@@ -1,7 +1,14 @@
 import { forwardRef, type ButtonHTMLAttributes, type ReactNode } from 'react';
 import { Icon, type IconName } from '../Icon';
 
-export type ButtonVariant = 'primary' | 'ghost' | 'error' | 'warning' | 'neutral' | 'link';
+export type ButtonVariant =
+  | 'primary'
+  | 'selected'
+  | 'ghost'
+  | 'error'
+  | 'warning'
+  | 'neutral'
+  | 'link';
 export type ButtonSize = 'xs' | 'sm' | 'md' | 'lg';
 export type ButtonShape = 'default' | 'square' | 'circle';
 
@@ -20,6 +27,7 @@ export interface ButtonProps extends Omit<ButtonHTMLAttributes<HTMLButtonElement
 
 const VARIANT_CLASS: Record<ButtonVariant, string> = {
   primary: 'btn-primary',
+  selected: 'btn-selected',
   ghost: 'btn-ghost',
   error: 'btn-error',
   warning: 'btn-warning',

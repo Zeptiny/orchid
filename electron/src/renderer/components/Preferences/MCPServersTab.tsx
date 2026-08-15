@@ -77,11 +77,6 @@ function serverToDict(s: MCPServerEntry): Record<string, unknown> {
     if (s.command) dict.command = s.command;
     if (s.args.length > 0) dict.args = s.args;
     if (Object.keys(s.env).length > 0) dict.env = s.env;
-    const nonAuthHeaders: Record<string, string> = {};
-    for (const [k, v] of Object.entries(s.headers)) {
-      if (k !== 'Authorization') nonAuthHeaders[k] = v;
-    }
-    if (Object.keys(nonAuthHeaders).length > 0) dict.headers = nonAuthHeaders;
   }
   return dict;
 }
@@ -113,15 +108,20 @@ function parseEnvText(text: string): Record<string, string> {
   return env;
 }
 
+function isAuthorizationHeader(key: string): boolean {
+  return key.toLowerCase() === 'authorization';
+}
+
 function extractAuthToken(headers: Record<string, string>): string {
-  const auth = headers['Authorization'] ?? '';
-  return auth.startsWith('Bearer ') ? auth.slice('Bearer '.length) : auth;
+  const auth =
+    Object.entries(headers).find(([key]) => isAuthorizationHeader(key))?.[1] ?? '';
+  return /^bearer /i.test(auth) ? auth.slice('Bearer '.length) : auth;
 }
 
 function withoutAuth(headers: Record<string, string>): Record<string, string> {
   const rest: Record<string, string> = {};
-  for (const [k, v] of Object.entries(headers)) {
-    if (k !== 'Authorization') rest[k] = v;
+  for (const [key, value] of Object.entries(headers)) {
+    if (!isAuthorizationHeader(key)) rest[key] = value;
   }
   return rest;
 }
@@ -232,13 +232,8 @@ export function MCPServersTab({ mcpServers, onChange }: MCPServersTabProps) {
             <Button
               type="button"
               size="xs"
-              variant={form.transport === 'stdio' ? 'primary' : 'ghost'}
-              className={[
-                'h-7 min-h-7 border-0 shadow-none font-medium',
-                form.transport === 'stdio'
-                  ? ''
-                  : 'bg-transparent text-base-content/70 hover:bg-base-300/60',
-              ].join(' ')}
+              variant={form.transport === 'stdio' ? 'selected' : 'ghost'}
+              className="h-7 min-h-7 border-0 font-medium"
               aria-pressed={form.transport === 'stdio'}
               onClick={() => setEditForm({ ...form, transport: 'stdio' })}
             >
@@ -247,13 +242,8 @@ export function MCPServersTab({ mcpServers, onChange }: MCPServersTabProps) {
             <Button
               type="button"
               size="xs"
-              variant={form.transport === 'http' ? 'primary' : 'ghost'}
-              className={[
-                'h-7 min-h-7 border-0 shadow-none font-medium',
-                form.transport === 'http'
-                  ? ''
-                  : 'bg-transparent text-base-content/70 hover:bg-base-300/60',
-              ].join(' ')}
+              variant={form.transport === 'http' ? 'selected' : 'ghost'}
+              className="h-7 min-h-7 border-0 font-medium"
               aria-pressed={form.transport === 'http'}
               onClick={() => setEditForm({ ...form, transport: 'http' })}
             >
