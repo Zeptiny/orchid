@@ -246,7 +246,10 @@ export function buildWaitTool(
     }
 
     const content = formatSubagentRecords(manager, records, subagent_ids);
-    return genericBuiltInToolOutcome('wait_for_subagent', content, 'complete');
+    const anyNonCompleted = [...records.values()].some(
+      (r) => r.state === 'interrupted' || r.state === 'failed',
+    );
+    return genericBuiltInToolOutcome('wait_for_subagent', content, anyNonCompleted ? 'error' : 'complete');
   };
 
   return { definition, handler };

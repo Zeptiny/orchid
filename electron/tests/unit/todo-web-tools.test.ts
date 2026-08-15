@@ -142,6 +142,78 @@ describe('Todo Tools', () => {
     });
   });
 
+  // -- batch operations -------------------------------------------------------
+
+  describe('batch operations', () => {
+    it('todo_create accepts an array of titles and notifies once', async () => {
+      let notifyCount = 0;
+      const { handler } = buildCreateTool(store, () => { notifyCount += 1; });
+      const result = (await callTool(handler, {
+        title: ['First', 'Second', 'Third'],
+      })) as ToolExecutionResult;
+
+      expect(result.canonical.status).toBe('complete');
+      expect(result.agentProjection.content).toContain('count="3"');
+      expect(result.agentProjection.content.match(/<task id="/g)).toHaveLength(3);
+
+      const tasks = store.list();
+      expect(tasks).toHaveLength(3);
+      expect(tasks.map((t) => t.title).sort()).toEqual(['First', 'Second', 'Third']);
+      expect(notifyCount).toBe(1);
+    });
+
+    it('todo_create single string keeps the original single-task shape', async () => {
+      const { handler } = buildCreateTool(store);
+      const result = (await callTool(handler, {
+        title: 'Solo',
+      })) as ToolExecutionResult;
+
+      expect(result.canonical.status).toBe('complete');
+      expect(result.agentProjection.content).toContain('<task id=');
+      expect(result.agentProjection.content).not.toContain('<tasks');
+      expect(store.list()).toHaveLength(1);
+    });
+
+    it('todo_update accepts an array of ids and notifies once', async () => {
+      const createHandler = buildCreateTool(store).handler;
+      const ids: string[] = [];
+      for (const title of ['A', 'B']) {
+        const created = (await callTool(createHandler, { title })) as ToolExecutionResult;
+        ids.push(created.agentProjection.content.match(/<task id="([a-f0-9]{8})"/)![1]);
+      }
+
+      let notifyCount = 0;
+      const updateHandler = buildUpdateTool(store, () => { notifyCount += 1; }).handler;
+      const result = (await callTool(updateHandler, {
+        id: ids,
+        status: TodoStatus.IN_PROGRESS,
+      })) as ToolExecutionResult;
+
+      expect(result.canonical.status).toBe('complete');
+      expect(result.agentProjection.content).toContain('count="2"');
+      for (const id of ids) {
+        expect(store.get(id)!.status).toBe(TodoStatus.IN_PROGRESS);
+      }
+      expect(notifyCount).toBe(1);
+    });
+
+    it('todo_update batch collects per-item errors without failing the whole call', async () => {
+      const createHandler = buildCreateTool(store).handler;
+      const created = (await callTool(createHandler, { title: 'Real' })) as ToolExecutionResult;
+      const realId = created.agentProjection.content.match(/<task id="([a-f0-9]{8})"/)![1];
+
+      const updateHandler = buildUpdateTool(store).handler;
+      const result = (await callTool(updateHandler, {
+        id: [realId, 'does-not-exist'],
+        status: TodoStatus.DONE,
+      })) as ToolExecutionResult;
+
+      expect(result.canonical.status).toBe('complete');
+      expect(result.agentProjection.content).toContain('<error>');
+      expect(store.get(realId)!.status).toBe(TodoStatus.DONE);
+    });
+  });
+
   // -- todo_update ------------------------------------------------------------
 
   describe('todo_update', () => {

@@ -70,9 +70,12 @@ export function buildCreateTool(
     description:
       'Create a new task in the session todo list. Tasks are scoped to the ' +
       'calling agent (main or a specific subagent). Subagents only see and ' +
-      'modify their own tasks.',
+      'modify their own tasks. Accepts a single title or an array of titles ' +
+      'for batch creation.',
     inputSchema: z.object({
-      title: z.string().describe('Task title.'),
+      title: z
+        .union([z.string(), z.array(z.string())])
+        .describe('Task title or array of task titles for batch creation.'),
       subagent_id: z
         .string()
         .optional()
@@ -87,22 +90,37 @@ export function buildCreateTool(
 
   const handler: ToolHandler = async (input: unknown, ctx): Promise<TodoToolResult> => {
     const { title, subagent_id } = input as {
-      title: string;
+      title: string | string[];
       subagent_id?: string;
     };
 
     const owner = resolveCreateOwner(ctx.agentScopeId, subagent_id);
-    const todo = resolveTodoStore(store, ctx).create(title, owner);
+    const titles = Array.isArray(title) ? title : [title];
+    const todoStore = resolveTodoStore(store, ctx);
+    const created = titles.map((t) => todoStore.create(t, owner));
 
     if (notifyChanged) {
       await notifyChanged(ctx);
     }
 
+    if (created.length === 1) {
+      const todo = created[0];
+      return genericBuiltInToolOutcome('todo_create', {
+        id: todo.id,
+        title: todo.title,
+        status: todo.status,
+        owner: todo.subagent_id ?? MAIN_AGENT_SCOPE_ID,
+      }, 'complete');
+    }
+
     return genericBuiltInToolOutcome('todo_create', {
-      id: todo.id,
-      title: todo.title,
-      status: todo.status,
-      owner: todo.subagent_id ?? MAIN_AGENT_SCOPE_ID,
+      created: created.map((todo) => ({
+        id: todo.id,
+        title: todo.title,
+        status: todo.status,
+        owner: todo.subagent_id ?? MAIN_AGENT_SCOPE_ID,
+      })),
+      count: created.length,
     }, 'complete');
   };
 
