@@ -601,8 +601,8 @@ const orchidAPI: OrchidAPI = {
   },
 
   mcp: {
-    status: () =>
-      invoke(IPC_CHANNELS.MCP_STATUS),
+    status: (projectDir?: string | null) =>
+      invoke(IPC_CHANNELS.MCP_STATUS, projectDir != null ? { projectDir } : undefined),
   },
 
   rag: {

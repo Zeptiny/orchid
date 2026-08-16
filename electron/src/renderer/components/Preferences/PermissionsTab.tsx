@@ -310,14 +310,14 @@ export function PermissionsTab({
     const generation = ++mcpFetchGeneration.current;
     try {
       if (window.orchid?.mcp?.status) {
-        const status = await window.orchid.mcp.status();
+        const status = await window.orchid.mcp.status(projectDir);
         if (generation !== mcpFetchGeneration.current) return;
         setFetchedMcpStatus(status);
       }
     } catch {
       // Non-fatal — live MCP tools simply are not enumerated.
     }
-  }, []);
+  }, [projectDir]);
 
   // Re-fetch MCP status when the workspace changes. Clear stale results from
   // the previous project so old tools don't flash before the new fetch lands.

@@ -1461,7 +1461,7 @@ export interface OrchidAPI {
   };
 
   mcp: {
-    status: () => Promise<MCPServerStatus[]>;
+    status: (projectDir?: string | null) => Promise<MCPServerStatus[]>;
   };
 
   rag: {
