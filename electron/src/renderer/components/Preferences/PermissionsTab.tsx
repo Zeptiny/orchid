@@ -322,17 +322,25 @@ export function PermissionsTab({
 
   const mcpStatus = mcpStatusProp ?? fetchedMcpStatus;
 
-  // MCP servers connect in the background after the window opens, so the
-  // first snapshot often lands on "starting". Poll until every server leaves
-  // that state so discovered tools appear.
+  // Continuously poll MCP status when any configured server is still
+  // in the process of connecting or has not yet reported tools. This
+  // catches servers that start asynchronously after the tab mounts.
+  const needsPolling = mcpStatusProp === undefined && (
+    mcpStatus.some((server) => server.status === 'starting') ||
+    Object.keys(config.mcp_servers).some((server) => {
+      const status = mcpStatus.find((s) => s.name === server);
+      // Server configured but not seen in status yet, or connected but no tools
+      return !status || (status.status === 'connected' && status.tools.length === 0);
+    })
+  );
+
   useEffect(() => {
-    if (mcpStatusProp !== undefined) return;
-    if (!mcpStatus.some((server) => server.status === 'starting')) return;
+    if (!needsPolling) return;
     const id = setInterval(() => {
       void refreshMcpStatus();
     }, 1500);
     return () => clearInterval(id);
-  }, [mcpStatus, mcpStatusProp, refreshMcpStatus]);
+  }, [needsPolling, refreshMcpStatus]);
 
   const permissions = config.permissions;
   const overrideCount = Object.keys(permissions).length;

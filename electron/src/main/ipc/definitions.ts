@@ -23,7 +23,9 @@ import {
 import { assertPathUnderOrchidRoots } from '../defs/paths';
 import { reloadDefinitionRegistries } from '../defs/reload';
 import { getProjectTrustState } from '../project/trust';
+import { getProjectRuntimeRegistry } from '../project/runtime';
 import { toolRegistry } from '../tools';
+import { getProjectMCPManager } from '../mcp/project-registry';
 import { resolveBoundProjectPath } from './session';
 
 // ── Schemas ──────────────────────────────────────────────────────────────────
@@ -111,9 +113,20 @@ export function registerDefinitionsIPC(): void {
         ? projectDir
         : null;
     const skills = listManagedSkills(listProjectDir);
-    const availableTools = toolRegistry
-      .listAll()
-      .map((t) => t.definition.name)
+    const builtinTools = toolRegistry.listAll().map((t) => t.definition.name);
+    const mcpTools: string[] = [];
+    if (listProjectDir != null) {
+      try {
+        const runtime = getProjectRuntimeRegistry().get(listProjectDir);
+        const mcpManager = getProjectMCPManager(runtime);
+        for (const { definition } of mcpManager.getTools()) {
+          mcpTools.push(definition.name);
+        }
+      } catch {
+        // Non-fatal: MCP manager unavailable for this project
+      }
+    }
+    const availableTools = Array.from(new Set([...builtinTools, ...mcpTools]))
       .sort((a, b) => a.localeCompare(b));
     // Unique skill names across scopes (prefer name as listed)
     const skillNames = new Set(skills.map((s) => s.name));
