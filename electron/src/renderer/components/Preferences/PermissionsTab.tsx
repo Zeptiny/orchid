@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import type {
   Config,
   MCPServerStatus,
@@ -304,22 +304,26 @@ export function PermissionsTab({
 }: PermissionsTabProps) {
   const effectiveScope = lockedScope ?? scope;
   const [fetchedMcpStatus, setFetchedMcpStatus] = useState<readonly MCPServerStatus[]>([]);
+  const mcpFetchGeneration = useRef(0);
 
   const refreshMcpStatus = useCallback(async () => {
+    const generation = ++mcpFetchGeneration.current;
     try {
       if (window.orchid?.mcp?.status) {
-        setFetchedMcpStatus(await window.orchid.mcp.status());
+        const status = await window.orchid.mcp.status();
+        if (generation !== mcpFetchGeneration.current) return;
+        setFetchedMcpStatus(status);
       }
     } catch {
       // Non-fatal — live MCP tools simply are not enumerated.
     }
   }, []);
 
-  // Re-fetch MCP status when the workspace changes. Without this, switching
-  // projects (or binding a workspace after mount) leaves a stale or empty
-  // snapshot and MCP tools never appear.
+  // Re-fetch MCP status when the workspace changes. Clear stale results from
+  // the previous project so old tools don't flash before the new fetch lands.
   useEffect(() => {
     if (mcpStatusProp !== undefined) return;
+    setFetchedMcpStatus([]);
     void refreshMcpStatus();
   }, [mcpStatusProp, refreshMcpStatus, projectDir]);
 

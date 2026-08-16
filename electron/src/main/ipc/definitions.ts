@@ -120,10 +120,12 @@ export function registerDefinitionsIPC(): void {
     // MCP tools are not registered in the process-global singleton — they
     // belong to per-project managers. Resolve the sender's project so the
     // agent allowed-tools picker can list mcp::server::tool entries.
+    // Guard on listProjectDir so untrusted projects skip MCP discovery
+    // entirely (matching the skills/agents/personalities gate above).
     const mcpToolNames: string[] = [];
-    if (projectDir != null) {
+    if (listProjectDir != null) {
       try {
-        const runtime = getProjectRuntimeRegistry().get(projectDir);
+        const runtime = getProjectRuntimeRegistry().get(listProjectDir);
         const mcpStatus = getProjectMCPManager(runtime).getStatus();
         for (const server of mcpStatus) {
           for (const toolName of server.tools) {
@@ -131,7 +133,7 @@ export function registerDefinitionsIPC(): void {
           }
         }
       } catch {
-        // Project not trusted or MCP not started — no MCP tools to list.
+        // MCP not started or project inaccessible — no MCP tools to list.
       }
     }
 
