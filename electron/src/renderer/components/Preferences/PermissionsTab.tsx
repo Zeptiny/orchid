@@ -315,24 +315,31 @@ export function PermissionsTab({
     }
   }, []);
 
+  // Re-fetch MCP status when the workspace changes. Without this, switching
+  // projects (or binding a workspace after mount) leaves a stale or empty
+  // snapshot and MCP tools never appear.
   useEffect(() => {
     if (mcpStatusProp !== undefined) return;
     void refreshMcpStatus();
-  }, [mcpStatusProp, refreshMcpStatus]);
+  }, [mcpStatusProp, refreshMcpStatus, projectDir]);
 
   const mcpStatus = mcpStatusProp ?? fetchedMcpStatus;
 
-  // MCP servers connect in the background after the window opens, so the
-  // first snapshot often lands on "starting". Poll until every server leaves
-  // that state so discovered tools appear.
+  // Poll while any server is still starting OR when MCP servers are
+  // configured but the status snapshot is empty (untrusted/dormant manager,
+  // slow connect, workspace just bound). This covers the gap where the
+  // initial fetch returns [] before servers have had a chance to connect.
+  const hasConfiguredServers = Object.keys(config.mcp_servers).length > 0;
+  const hasStarting = mcpStatus.some((server) => server.status === 'starting');
+  const needsPolling = mcpStatusProp === undefined && (hasStarting || (hasConfiguredServers && mcpStatus.length === 0));
+
   useEffect(() => {
-    if (mcpStatusProp !== undefined) return;
-    if (!mcpStatus.some((server) => server.status === 'starting')) return;
+    if (!needsPolling) return;
     const id = setInterval(() => {
       void refreshMcpStatus();
     }, 1500);
     return () => clearInterval(id);
-  }, [mcpStatus, mcpStatusProp, refreshMcpStatus]);
+  }, [needsPolling, refreshMcpStatus]);
 
   const permissions = config.permissions;
   const overrideCount = Object.keys(permissions).length;

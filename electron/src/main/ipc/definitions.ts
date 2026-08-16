@@ -22,6 +22,8 @@ import {
 } from '../defs/manage';
 import { assertPathUnderOrchidRoots } from '../defs/paths';
 import { reloadDefinitionRegistries } from '../defs/reload';
+import { getProjectMCPManager } from '../mcp/project-registry';
+import { getProjectRuntimeRegistry } from '../project/runtime';
 import { getProjectTrustState } from '../project/trust';
 import { toolRegistry } from '../tools';
 import { resolveBoundProjectPath } from './session';
@@ -111,10 +113,31 @@ export function registerDefinitionsIPC(): void {
         ? projectDir
         : null;
     const skills = listManagedSkills(listProjectDir);
-    const availableTools = toolRegistry
+    const builtinTools = toolRegistry
       .listAll()
-      .map((t) => t.definition.name)
-      .sort((a, b) => a.localeCompare(b));
+      .map((t) => t.definition.name);
+
+    // MCP tools are not registered in the process-global singleton — they
+    // belong to per-project managers. Resolve the sender's project so the
+    // agent allowed-tools picker can list mcp::server::tool entries.
+    const mcpToolNames: string[] = [];
+    if (projectDir != null) {
+      try {
+        const runtime = getProjectRuntimeRegistry().get(projectDir);
+        const mcpStatus = getProjectMCPManager(runtime).getStatus();
+        for (const server of mcpStatus) {
+          for (const toolName of server.tools) {
+            mcpToolNames.push(`mcp::${server.name}::${toolName}`);
+          }
+        }
+      } catch {
+        // Project not trusted or MCP not started — no MCP tools to list.
+      }
+    }
+
+    const availableTools = [...builtinTools, ...mcpToolNames].sort((a, b) =>
+      a.localeCompare(b),
+    );
     // Unique skill names across scopes (prefer name as listed)
     const skillNames = new Set(skills.map((s) => s.name));
     return {
