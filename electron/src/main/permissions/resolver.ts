@@ -1,4 +1,3 @@
-import fs from 'node:fs';
 import path from 'node:path';
 import {
   RISK_CLASS_DEFAULTS,
@@ -10,6 +9,11 @@ import {
   type PermissionResolution,
 } from '../../shared/types/permission';
 import type { Config, PermissionRule } from '../../shared/types/ipc-boundary';
+import {
+  isPathContainedIn,
+  canonicalizeEffectivePath,
+  canonicalizeExistingPathCached,
+} from '../tools/path-sandbox';
 
 // Re-export the shared source-of-truth constants so existing consumers that
 // import them from the resolver (tool-dispatch.ts, permissions/index.ts) keep
@@ -54,67 +58,11 @@ export function extractPathsFromArgs(
   return paths;
 }
 
-function isPathContainedIn(resolved: string, cwd: string): boolean {
-  return resolved === cwd || resolved.startsWith(cwd + path.sep);
-}
-
-function isMissingPathError(error: unknown): boolean {
-  return (
-    error instanceof Error &&
-    'code' in error &&
-    (error as NodeJS.ErrnoException).code === 'ENOENT'
-  );
-}
-
-function canonicalizeEffectivePath(candidate: string): string | null {
-  let current = path.resolve(candidate);
-  const missingParts: string[] = [];
-
-  while (true) {
-    try {
-      const existingParent = fs.realpathSync.native(current);
-      return path.resolve(existingParent, ...missingParts);
-    } catch (error) {
-      if (!isMissingPathError(error)) return null;
-
-      try {
-        fs.lstatSync(current);
-        return null;
-      } catch (lstatError) {
-        if (!isMissingPathError(lstatError)) return null;
-      }
-
-      const parent = path.dirname(current);
-      if (parent === current) return null;
-      missingParts.unshift(path.basename(current));
-      current = parent;
-    }
-  }
-}
-
-function canonicalizeExistingPath(candidate: string): string | null {
-  try {
-    return fs.realpathSync.native(path.resolve(candidate));
-  } catch {
-    return null;
-  }
-}
-
 // The cwd is frozen per turn, so canonicalizing it on every file-tool call
 // repeats a blocking fs.realpathSync.native on the main-process event loop.
 // Memoize the result in a small bounded cache keyed by the resolved cwd.
 // Per-target symlink resolution (canonicalizeEffectivePath) stays live.
-const canonicalPathCache = new Map<string, string | null>();
-const CANONICAL_CACHE_MAX = 256;
-
-function canonicalizeExistingPathCached(candidate: string): string | null {
-  const key = path.resolve(candidate);
-  if (canonicalPathCache.has(key)) return canonicalPathCache.get(key) ?? null;
-  const result = canonicalizeExistingPath(key);
-  if (canonicalPathCache.size >= CANONICAL_CACHE_MAX) canonicalPathCache.clear();
-  canonicalPathCache.set(key, result);
-  return result;
-}
+// (Imported from ../tools/path-sandbox.)
 
 /** Resolve a file tool's workspace scope ('inside' | 'outside') from its args. */
 export function resolveToolScope(

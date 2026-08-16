@@ -9,7 +9,7 @@ import * as path from 'node:path';
 import { z } from 'zod';
 import type { ToolDefinition, ToolHandler, ToolHandlerOutcome } from '../types';
 import { RiskClass } from '../../../shared/types/permission';
-import { resolveToolPath } from '../types';
+import { assertPathInWorkspace } from '../path-sandbox';
 import {
   renderXmlToolResult,
   xmlText,
@@ -200,10 +200,6 @@ function fileError(
   return { path: filePath, operation, status: 'error', error: { code, message } };
 }
 
-function isPathContainedIn(resolved: string, cwd: string): boolean {
-  return resolved === cwd || resolved.startsWith(cwd + path.sep);
-}
-
 function isAbsolutePatchPath(filePath: string): boolean {
   return path.isAbsolute(filePath) || path.win32.isAbsolute(filePath);
 }
@@ -257,9 +253,16 @@ export const applyPatchHandler: ToolHandler = async (input: unknown, ctx) => {
   let failed = 0;
 
   for (const hunk of parsed.hunks) {
-    const resolved = resolveToolPath(ctx.cwd, hunk.path);
+    if (isAbsolutePatchPath(hunk.path)) {
+      files.push(fileError(hunk.path, hunk.type === 'add' ? 'create' : hunk.type === 'delete' ? 'delete' : 'update', 'path_traversal', `Path '${hunk.path}' escapes the working directory.`));
+      failed++;
+      continue;
+    }
 
-    if (isAbsolutePatchPath(hunk.path) || !isPathContainedIn(resolved, ctx.cwd)) {
+    let resolved: string;
+    try {
+      resolved = assertPathInWorkspace(hunk.path, ctx.cwd);
+    } catch {
       files.push(fileError(hunk.path, hunk.type === 'add' ? 'create' : hunk.type === 'delete' ? 'delete' : 'update', 'path_traversal', `Path '${hunk.path}' escapes the working directory.`));
       failed++;
       continue;
@@ -338,8 +341,11 @@ export const applyPatchHandler: ToolHandler = async (input: unknown, ctx) => {
         const validated = fileChangeDataSchema.parse(data);
 
         if (hunk.movePath) {
-          const moveResolved = resolveToolPath(ctx.cwd, hunk.movePath);
-          if (isAbsolutePatchPath(hunk.movePath) || !isPathContainedIn(moveResolved, ctx.cwd)) {
+          let moveResolved: string;
+          try {
+            if (isAbsolutePatchPath(hunk.movePath)) throw new Error('absolute path');
+            moveResolved = assertPathInWorkspace(hunk.movePath, ctx.cwd);
+          } catch {
             files.push(fileError(hunk.path, 'update', 'path_traversal', `Move path '${hunk.movePath}' escapes the working directory.`));
             failed++;
             continue;

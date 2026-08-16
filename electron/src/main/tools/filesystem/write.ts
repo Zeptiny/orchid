@@ -9,7 +9,7 @@ import * as path from 'node:path';
 import { z } from 'zod';
 import type { ToolDefinition, ToolHandler } from '../types';
 import { RiskClass } from '../../../shared/types/permission';
-import { resolveToolPath } from '../types';
+import { assertPathInWorkspace } from '../path-sandbox';
 import { atomicWrite } from '../ast/utils';
 import {
   fileWriteDataSchema,
@@ -62,7 +62,19 @@ function writeData(filePath: string, operation: FileWriteData['operation'], cont
 
 export const writeHandler: ToolHandler = async (input: unknown, ctx) => {
   const { file_path: rawPath, content } = input as WriteInput;
-  const filePath = resolveToolPath(ctx.cwd, rawPath);
+
+  let filePath: string;
+  try {
+    filePath = assertPathInWorkspace(rawPath, ctx.cwd);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return {
+      status: 'error',
+      data: writeData(rawPath, 'create', content),
+      error: { code: 'path_traversal', message },
+    };
+  }
+
   const operation: FileWriteData['operation'] = fs.existsSync(filePath) ? 'replace' : 'create';
   const data = writeData(filePath, operation, content);
 

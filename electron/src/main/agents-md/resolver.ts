@@ -11,6 +11,11 @@ import fs from 'node:fs';
 import path from 'node:path';
 import type { Config } from '../config/schema';
 import { resolveToolPath } from '../tools/types';
+import {
+  isPathContainedIn,
+  canonicalizeEffectivePath,
+  canonicalizeExistingPathCached,
+} from '../tools/path-sandbox';
 import { effectiveAgentsMdFilenames } from './config';
 
 /** A single governing instruction file discovered during the upward walk. */
@@ -34,76 +39,8 @@ export interface AgentsMdContent {
 }
 
 // ---------------------------------------------------------------------------
-// Path canonicalization + containment (mirrors permissions/resolver.ts)
+// Per-directory instruction-file lookup
 // ---------------------------------------------------------------------------
-
-function isPathContainedIn(resolved: string, cwd: string): boolean {
-  return resolved === cwd || resolved.startsWith(cwd + path.sep);
-}
-
-function isMissingPathError(error: unknown): boolean {
-  return (
-    error instanceof Error &&
-    'code' in error &&
-    (error as NodeJS.ErrnoException).code === 'ENOENT'
-  );
-}
-
-/**
- * Canonicalize a path that may not fully exist yet (e.g. a file about to be
- * created): resolve the nearest existing ancestor with `realpathSync.native`
- * and re-append the missing components. Returns null if nothing resolves.
- */
-function canonicalizeEffectivePath(candidate: string): string | null {
-  let current = path.resolve(candidate);
-  const missingParts: string[] = [];
-
-  while (true) {
-    try {
-      const existingParent = fs.realpathSync.native(current);
-      return path.resolve(existingParent, ...missingParts);
-    } catch (error) {
-      if (!isMissingPathError(error)) return null;
-
-      try {
-        fs.lstatSync(current);
-        return null;
-      } catch (lstatError) {
-        if (!isMissingPathError(lstatError)) return null;
-      }
-
-      const parent = path.dirname(current);
-      if (parent === current) return null;
-      missingParts.unshift(path.basename(current));
-      current = parent;
-    }
-  }
-}
-
-function canonicalizeExistingPath(candidate: string): string | null {
-  try {
-    return fs.realpathSync.native(path.resolve(candidate));
-  } catch {
-    return null;
-  }
-}
-
-// The cwd is frozen per turn, so canonicalizing it on every file-tool call
-// repeats a blocking fs.realpathSync.native on the main-process event loop
-// (amplified N× across an apply_patch's files). Memoize the result in a small
-// bounded cache keyed by the resolved cwd, mirroring permissions/resolver.ts.
-// Per-target symlink resolution (canonicalizeEffectivePath) stays live.
-const canonicalPathCache = new Map<string, string | null>();
-const CANONICAL_CACHE_MAX = 256;
-
-function canonicalizeExistingPathCached(candidate: string): string | null {
-  const key = path.resolve(candidate);
-  if (canonicalPathCache.has(key)) return canonicalPathCache.get(key) ?? null;
-  const result = canonicalizeExistingPath(key);
-  if (canonicalPathCache.size >= CANONICAL_CACHE_MAX) canonicalPathCache.clear();
-  canonicalPathCache.set(key, result);
-  return result;
-}
 
 // ---------------------------------------------------------------------------
 // Per-directory instruction-file lookup
