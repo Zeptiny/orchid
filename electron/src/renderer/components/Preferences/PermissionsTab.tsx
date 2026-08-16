@@ -327,6 +327,20 @@ export function PermissionsTab({
     void refreshMcpStatus();
   }, [mcpStatusProp, refreshMcpStatus, projectDir]);
 
+  useEffect(() => {
+    if (mcpStatusProp !== undefined) return;
+    const unsubTrust = window.orchid?.projectTrust?.onChanged?.(() => {
+      void refreshMcpStatus();
+    });
+    const unsubWorkspace = window.orchid?.session?.onWorkspaceChanged?.(() => {
+      void refreshMcpStatus();
+    });
+    return () => {
+      unsubTrust?.();
+      unsubWorkspace?.();
+    };
+  }, [mcpStatusProp, refreshMcpStatus]);
+
   const mcpStatus = mcpStatusProp ?? fetchedMcpStatus;
 
   // Poll while any server is still starting OR when MCP servers are
@@ -344,6 +358,13 @@ export function PermissionsTab({
     }, 1500);
     return () => clearInterval(id);
   }, [needsPolling, refreshMcpStatus]);
+
+  useEffect(() => {
+    if (mcpStatusProp !== undefined) return;
+    if (hasConfiguredServers && mcpStatus.length === 0) {
+      void refreshMcpStatus();
+    }
+  }, [config.mcp_servers, hasConfiguredServers, mcpStatus.length, mcpStatusProp, refreshMcpStatus]);
 
   const permissions = config.permissions;
   const overrideCount = Object.keys(permissions).length;

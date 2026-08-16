@@ -81,13 +81,7 @@ export class ProjectMCPManagerRegistry {
     this.byProject.set(key, entry);
 
     const servers = projectServers(runtime);
-    // Untrusted projects get a dormant manager: cached so lease holders and
-    // status reads stay safe, but no server process starts. Granting trust
-    // invalidates the entry, so the next get() recreates and starts servers.
-    if (
-      Object.keys(servers).length > 0 &&
-      getProjectTrustState(runtime.projectDir) === 'trusted'
-    ) {
+    if (Object.keys(servers).length > 0) {
       entry.started = true;
       void manager.startAll(servers, {
         perServerTimeout: runtime.config.mcp_per_server_timeout * 1000,

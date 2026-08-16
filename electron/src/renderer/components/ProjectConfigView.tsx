@@ -295,6 +295,17 @@ export function ProjectConfigView({ projectDir, onNewChat, onClose }: ProjectCon
     };
   }, [projectDir, loadDefinitions]);
 
+  useEffect(() => {
+    const handler = () => {
+      if (!window.orchid?.config?.getHome) return;
+      void window.orchid.config.getHome().then((home) => {
+        setHomeConfig(home);
+      }).catch(() => {});
+    };
+    window.addEventListener('orchid:config-updated', handler as EventListener);
+    return () => window.removeEventListener('orchid:config-updated', handler as EventListener);
+  }, []);
+
   const effectiveValue = useCallback(
     (key: string): unknown => (key in draft ? draft[key] : readStoredOverride(overrides, key)),
     [draft, overrides],
