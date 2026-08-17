@@ -82,6 +82,13 @@ export const thinkingReplayPayloadSchema = z.object({
   reasoningTokenCount: z.number().nonnegative().optional(),
 }).strict();
 
+export const compactedMarkerSchema = z.object({
+  rangeStart: z.string().min(1),
+  rangeEnd: z.string().min(1),
+  mode: z.enum(['simple', 'selective']),
+  summarizedCount: z.number().int().nonnegative().optional(),
+}).strict();
+
 /** Durable messages are terminal-history authority, so validate their full shape. */
 const messageSchema = z.object({
   id: z.string().min(1),
@@ -97,6 +104,7 @@ const messageSchema = z.object({
   usage: usageSchema.nullable(),
   hidden: z.boolean(),
   excludeFromModel: z.boolean().optional(),
+  compacted: compactedMarkerSchema.optional(),
   tool_result: canonicalToolResultSchema.nullable(),
 }).strict();
 
