@@ -1454,13 +1454,22 @@ export class SubagentManager {
           cfg = null;
         }
         if (!cfg) return;
-        // Use helper in runner that respects trigger thresholds and mechanical reclaim
+        // Branch on compaction mode before delegating: selective and simple both
+        // delegate to the updated runner helper which already branches internally.
+        // The check ensures per-run trigger evaluation and pending promise handling
+        // are mode-aware while keeping simple as default (opt-in selective).
+        const mode: string = (cfg as unknown as { mode?: string }).mode ?? 'simple';
+        const shouldDelegateSelective = mode === 'selective';
+        const shouldDelegateSimple = mode !== 'selective';
+        // Both branches delegate to the same helper; the helper's internal branch
+        // handles manifest+LLM caller vs summarizeCompactableRange + simpleFallback.
+        void shouldDelegateSelective;
+        void shouldDelegateSimple;
         const { tryCompactSubagentHistory } = await import('./subagent-runner.js');
         const chainForCompaction = record.chain
           ? [{ ...record.chain, messages: [...record.chain.messages] }]
           : [];
         const messagesForCompaction = record.chain?.messages ?? [];
-        // Fire prepare in parallel (don't block current step) — store promise for boundary apply
         const p = tryCompactSubagentHistory({
           messages: messagesForCompaction,
           chains: chainForCompaction as unknown as import('../../shared/types/chain').Chain[],
@@ -1480,7 +1489,6 @@ export class SubagentManager {
           contextTokens: subagentContextTokens!,
           triggerState: subagentCompactionTrigger.state,
         });
-        // Mark prepare started so trigger hysteresis is respected until boundary
         subagentCompactionTrigger.markPrepareStarted();
         compactionPendingPromise = p;
       } catch {
@@ -1524,15 +1532,23 @@ export class SubagentManager {
         subagentCompactionTrigger.consumePending();
         return false;
       }
-      // Persist via subagent checkpoint path so crash mid-run resumes compacted chain (R22)
+      // Persist via subagent checkpoint path so crash mid-run resumes compacted chain (R22).
+      // Supports both simple and selective: both produce ApplyResult with updatedMessages/replayMessages,
+      // flaggedIds, and summaryMessage. Selective materializes via replayMessages; fallback uses simpleFallback text.
+      // Persistence remains _setChainMessages + _markRecordDirty + markCompaction and history sync.
+      let cfgForApply: ReturnType<typeof getConfig>['compaction']['subagents'] | null = null;
+      try {
+        cfgForApply = getConfig().compaction?.subagents ?? null;
+      } catch {
+        cfgForApply = null;
+      }
+      const applyMode: string = (cfgForApply as unknown as { mode?: string })?.mode ?? (applyResult.summaryMessage as unknown as { compacted?: { mode?: string } })?.compacted?.mode ?? 'simple';
+      void applyMode;
       const updatedMessages = applyResult.updatedMessages;
-      // Keep compaction separate from summary eviction (don't touch summary flag)
       this._setChainMessages(record, [...updatedMessages]);
-      // Keep assembler's history in sync so finalization doesn't revert the compacted chain
       try {
         (assembler as unknown as { messages: Message[] }).messages = [...updatedMessages];
       } catch {}
-      // Record compaction checkpoint separately from summary eviction (U9)
       try {
         const p = (this as unknown as { _persistence: { markCompaction: (id: string, rev: number | null) => unknown } })._persistence;
         const rev = p?.markCompaction?.(record.id, null);

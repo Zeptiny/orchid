@@ -79,7 +79,11 @@ import { selectCut, type CutResult } from '../../llm/compaction/select';
 import { mechanicalReclaim } from '../../llm/compaction/reclaim';
 import { summarizeCompactableRange } from '../../llm/compaction/summarize';
 import { buildCompactionApply } from '../../llm/compaction/apply';
-import { CompactionTrigger, estimateNextInputTokens, FALLBACK_TOKENS_PER_CHAR } from '../../llm/compaction/trigger';
+import { CompactionTrigger, FALLBACK_TOKENS_PER_CHAR } from '../../llm/compaction/trigger';
+import { buildManifest } from '../../llm/compaction/selective/manifest';
+import type { Manifest } from '../../llm/compaction/selective/manifest';
+import { createLlmSelectiveCaller, runSelectiveCompaction } from '../../llm/compaction/selective/run';
+import type { SelectiveCompactionResult } from '../../llm/compaction/selective/run';
 import { isContextLengthExceededError } from '../../llm/middleware/error-classification';
 
 export type ChatSendPayload = z.infer<typeof chatSendSchema>;
@@ -90,9 +94,12 @@ const compactionTriggers = new Map<string, CompactionTrigger>();
 const compactionPending = new Map<string, {
   cut: CutResult;
   flaggedIds: string[];
-  promise?: Promise<import('../../llm/compaction/summarize').SummarizeResult | null>;
   estimatedInput: number;
   contextTokens: number;
+  mode: 'simple' | 'selective';
+  promise?: Promise<import('../../llm/compaction/summarize').SummarizeResult | null>;
+  selectivePromise?: Promise<SelectiveCompactionResult>;
+  manifest?: Manifest;
 }>();
 const compactionRetryTried = new Set<string>();
 
@@ -128,6 +135,85 @@ function compactableTokenEstimate(messages: readonly Message[], range: { start: 
   return Math.ceil(chars * tokensPerChar);
 }
 
+// ── Selective persistence helper (minimal between-turns) ─────────────────────
+function persistSelectiveCompaction(
+  sessionId: string,
+  result: Extract<SelectiveCompactionResult, { kind: 'selective' }>,
+  cut: CutResult,
+): boolean {
+  try {
+    const manager = getSessionManager();
+    const existing = manager.getSession(sessionId) ?? manager.load(sessionId);
+    if (!existing) return true;
+    const flaggedSet = new Set(result.flaggedIds);
+    let updatedChains: Chain[] = existing.chains.map((chain) => {
+      let changed = false;
+      const newMessages = chain.messages.map((m) => {
+        if (flaggedSet.has(m.id) && !m.excludeFromModel) {
+          changed = true;
+          return { ...m, excludeFromModel: true };
+        }
+        return m;
+      });
+      return changed ? { ...chain, messages: newMessages } : { ...chain, messages: [...chain.messages] };
+    }) as Chain[];
+    const summaryMessages = result.summaryMessages.length > 0
+      ? result.summaryMessages
+      : (result.summaryMessage ? [result.summaryMessage] : []);
+    if (summaryMessages.length > 0) {
+      const cutIndex = Math.max(0, Math.min(cut.cutIndex, result.replayMessages.length));
+      let insertionIdx = updatedChains.length;
+      try {
+        const idToChainIdx = new Map<string, number>();
+        existing.chains.forEach((ch, idx) => {
+          for (const m of ch.messages) if (!idToChainIdx.has(m.id)) idToChainIdx.set(m.id, idx);
+        });
+        for (let i = cutIndex; i < result.replayMessages.length; i += 1) {
+          const mid = result.replayMessages[i]!.id;
+          const idx = idToChainIdx.get(mid);
+          if (typeof idx === 'number') { insertionIdx = idx; break; }
+        }
+      } catch {}
+      const now = new Date().toISOString();
+      let chainsWithSummaries: Chain[] = [...updatedChains];
+      for (let s = 0; s < summaryMessages.length; s += 1) {
+        const msg = summaryMessages[s]!;
+        const newChain = {
+          id: `selective-${Date.now()}-${s}-${Math.random().toString(36).slice(2, 8)}`,
+          sessionId,
+          messages: [msg] as unknown as readonly Message[],
+          status: ChainStatus.COMPLETED,
+          selection: null,
+          modelLabel: null,
+          agentName: 'compactor',
+          agentType: 'internal' as const,
+          agentTier: 'seed' as const,
+          subagentRecord: null,
+          startTime: now,
+          endTime: now,
+          errorDetail: null,
+          errorTitle: null,
+        } as Chain;
+        chainsWithSummaries = [
+          ...chainsWithSummaries.slice(0, insertionIdx + s),
+          newChain,
+          ...chainsWithSummaries.slice(insertionIdx + s),
+        ];
+      }
+      updatedChains = chainsWithSummaries;
+    }
+    const updatedAt = new Date().toISOString();
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { saveSession } = require('../../session/storage') as typeof import('../../session/storage');
+    const nextSession = { ...existing, chains: updatedChains as typeof existing.chains, updatedAt } as typeof existing;
+    saveSession(nextSession);
+    return true;
+  } catch (err) {
+    console.debug('[compaction] selective chain persist failed (non-fatal):', err);
+    return false;
+  }
+}
+
 async function applyPendingCompactionIfAny(
   sessionId: string,
   messages: Message[],
@@ -138,6 +224,47 @@ async function applyPendingCompactionIfAny(
   compactionPending.delete(sessionId);
   const trigger = getCompactionTrigger(sessionId);
   try {
+    // ── Selective pending ───────────────────────────────────────────────
+    if (pending.mode === 'selective' && pending.selectivePromise) {
+      const result = await pending.selectivePromise;
+      if (result.kind === 'selective') {
+        setChatHistory(sessionId, [...result.replayMessages]);
+        persistSelectiveCompaction(sessionId, result, pending.cut);
+        trigger.onCompactionApplied(pending.estimatedInput);
+        trigger.state.pendingPrepare = false;
+        return { applied: true, updatedMessages: [...result.replayMessages] };
+      }
+      if (result.kind === 'fallback' && result.fallbackText && result.fallbackText.trim()) {
+        const chains = getSessionManager().getSession(sessionId)?.chains ?? [];
+        const applyResult = buildCompactionApply({
+          messages,
+          chains: chains as Chain[],
+          cutResult: pending.cut,
+          summaryText: result.fallbackText,
+          mode: runtime.config.compaction.main.mode,
+          flaggedIds: pending.flaggedIds,
+          sessionId,
+        });
+        if (applyResult.didApply) {
+          const ok = persistCompaction(sessionId, applyResult);
+          if (ok) {
+            setChatHistory(sessionId, [...applyResult.updatedMessages]);
+            trigger.onCompactionApplied(pending.estimatedInput);
+            trigger.state.pendingPrepare = false;
+            return { applied: true, updatedMessages: [...applyResult.updatedMessages] };
+          }
+        }
+        if (result.replayMessages && result.replayMessages.length > 0) {
+          setChatHistory(sessionId, [...result.replayMessages]);
+          trigger.onCompactionApplied(pending.estimatedInput);
+          trigger.state.pendingPrepare = false;
+          return { applied: true, updatedMessages: [...result.replayMessages] };
+        }
+      }
+      trigger.state.pendingPrepare = false;
+      return { applied: false };
+    }
+    // ── Simple pending (existing) ───────────────────────────────────────
     if (pending.promise) {
       const result = await pending.promise;
       if (result && result.text && result.text.trim()) {
@@ -250,6 +377,92 @@ async function tryCompactSynchronously(
       return { didApply: true, updatedMessages: [...applyResult.updatedMessages] };
     }
     if (decision.shouldPrepare) {
+      // ── Selective branch ──────────────────────────────────────────────
+      if (cfg.mode === 'selective') {
+        const slice = messages.slice(cut.compactableRange.start, cut.compactableRange.end);
+        if (slice.length === 0) return { didApply: false };
+        trigger.markPrepareStarted(cut.compactableRange, flaggedIds);
+        const manifest = buildManifest(messages, cut.compactableRange);
+        const selectiveCaller = createLlmSelectiveCaller({
+          config: runtime.config,
+          scope: 'main',
+          fallbackSelection: selection,
+          runtime,
+          accounting: { store: accountingStore, sessionId, chainId, turnId },
+        });
+        const simpleFallback = async () => {
+          const fb = await summarizeCompactableRange({
+            messages: slice,
+            scope: 'main',
+            config: runtime.config,
+            fallbackSelection: selection,
+            accounting: { store: accountingStore, sessionId, chainId, turnId },
+            runtime,
+          });
+          return fb ? { text: fb.text } : null;
+        };
+        let selResult: SelectiveCompactionResult;
+        try {
+          selResult = await runSelectiveCompaction({
+            messages,
+            compactableRange: cut.compactableRange,
+            manifest,
+            selectiveCaller,
+            simpleFallback,
+            maxCorrectionRounds: 3,
+          });
+        } catch (err) {
+          console.debug('[compaction] selective run failed, falling back (non-fatal):', err);
+          trigger.state.pendingPrepare = false;
+          return { didApply: false };
+        }
+        if (selResult.kind === 'selective') {
+          setChatHistory(sessionId, [...selResult.replayMessages]);
+          persistSelectiveCompaction(sessionId, selResult, cut);
+          trigger.onCompactionApplied(estimatedInput);
+          trigger.state.pendingPrepare = false;
+          return { didApply: true, updatedMessages: [...selResult.replayMessages] };
+        }
+        if (selResult.kind === 'fallback' && selResult.fallbackText && selResult.fallbackText.trim()) {
+          const applyResult = buildCompactionApply({
+            messages,
+            chains: chains as Chain[],
+            cutResult: cut,
+            summaryText: selResult.fallbackText,
+            mode: cfg.mode,
+            flaggedIds,
+            sessionId,
+          });
+          if (!applyResult.didApply) {
+            if (selResult.replayMessages && selResult.replayMessages.length > 0) {
+              setChatHistory(sessionId, [...selResult.replayMessages]);
+              trigger.onCompactionApplied(estimatedInput);
+              trigger.state.pendingPrepare = false;
+              return { didApply: true, updatedMessages: [...selResult.replayMessages] };
+            }
+            trigger.state.pendingPrepare = false;
+            return { didApply: false };
+          }
+          const ok = persistCompaction(sessionId, applyResult);
+          if (!ok) {
+            trigger.state.pendingPrepare = false;
+            return { didApply: false };
+          }
+          setChatHistory(sessionId, [...applyResult.updatedMessages]);
+          trigger.onCompactionApplied(estimatedInput);
+          trigger.state.pendingPrepare = false;
+          return { didApply: true, updatedMessages: [...applyResult.updatedMessages] };
+        }
+        if (selResult.kind === 'fallback' && selResult.replayMessages && selResult.replayMessages.length > 0) {
+          setChatHistory(sessionId, [...selResult.replayMessages]);
+          trigger.onCompactionApplied(estimatedInput);
+          trigger.state.pendingPrepare = false;
+          return { didApply: true, updatedMessages: [...selResult.replayMessages] };
+        }
+        trigger.state.pendingPrepare = false;
+        return { didApply: false };
+      }
+      // ── Simple branch (unchanged) ─────────────────────────────────────
       const slice = messages.slice(cut.compactableRange.start, cut.compactableRange.end);
       if (slice.length === 0) return { didApply: false };
       trigger.markPrepareStarted(cut.compactableRange, flaggedIds);
@@ -335,11 +548,48 @@ function handleUsageCompaction(
     });
     if (!decision.shouldPrepare && !decision.shouldApply) return;
     if (decision.shouldApply && !decision.shouldPrepare) {
-      compactionPending.set(sessionId, { cut, flaggedIds, estimatedInput: inputTokens, contextTokens });
+      compactionPending.set(sessionId, { cut, flaggedIds, estimatedInput: inputTokens, contextTokens, mode: cfg.mode });
       trigger.markPrepareStarted(cut.compactableRange, flaggedIds);
       return;
     }
     if (decision.shouldPrepare) {
+      // ── Selective pending branch ──────────────────────────────────────
+      if (cfg.mode === 'selective') {
+        const slice = fullHistory.slice(cut.compactableRange.start, cut.compactableRange.end);
+        if (slice.length === 0) return;
+        trigger.markPrepareStarted(cut.compactableRange, flaggedIds);
+        const manifest = buildManifest(fullHistory, cut.compactableRange);
+        const selectiveCaller = createLlmSelectiveCaller({
+          config: runtime.config,
+          scope: 'main',
+          fallbackSelection: selection,
+          runtime,
+          accounting: { store: accountingStore, sessionId, chainId, turnId },
+        });
+        const simpleFallback = async () => {
+          const fb = await summarizeCompactableRange({
+            messages: slice,
+            scope: 'main',
+            config: runtime.config,
+            fallbackSelection: selection,
+            accounting: { store: accountingStore, sessionId, chainId, turnId },
+            runtime,
+          });
+          return fb ? { text: fb.text } : null;
+        };
+        const selectivePromise = runSelectiveCompaction({
+          messages: fullHistory,
+          compactableRange: cut.compactableRange,
+          manifest,
+          selectiveCaller,
+          simpleFallback,
+          maxCorrectionRounds: 3,
+        });
+        compactionPending.set(sessionId, { cut, flaggedIds, estimatedInput: inputTokens, contextTokens, mode: 'selective', selectivePromise, manifest });
+        selectivePromise.catch((err) => console.debug('[compaction] selective prepare failed (non-fatal):', err));
+        return;
+      }
+      // ── Simple pending branch (unchanged) ─────────────────────────────
       const slice = fullHistory.slice(cut.compactableRange.start, cut.compactableRange.end);
       if (slice.length === 0) return;
       trigger.markPrepareStarted(cut.compactableRange, flaggedIds);
@@ -351,7 +601,7 @@ function handleUsageCompaction(
         accounting: { store: accountingStore, sessionId, chainId, turnId },
         runtime,
       });
-      compactionPending.set(sessionId, { cut, flaggedIds, promise, estimatedInput: inputTokens, contextTokens });
+      compactionPending.set(sessionId, { cut, flaggedIds, promise, estimatedInput: inputTokens, contextTokens, mode: 'simple' });
       // If summarizer resolves to null, next boundary will clear pending without applying
       promise.catch((err) => console.debug('[compaction] prepare failed (non-fatal):', err));
     }

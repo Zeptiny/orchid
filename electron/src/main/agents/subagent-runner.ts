@@ -125,7 +125,6 @@ export async function tryCompactSubagentHistory(params: {
   const { selectCut } = await import('../llm/compaction/select.js');
   const { mechanicalReclaim } = await import('../llm/compaction/reclaim.js');
   const { evaluateTriggerWithReclaim } = await import('../llm/compaction/trigger.js');
-  const { summarizeCompactableRange } = await import('../llm/compaction/summarize.js');
   const { buildCompactionApply } = await import('../llm/compaction/apply.js');
   const { getProviderAccountingStore } = await import('../providers/accounting/store.js');
 
@@ -194,7 +193,130 @@ export async function tryCompactSubagentHistory(params: {
 
   if (!decision.shouldPrepare) return null;
 
-  // Summarizer: task-focused compactor-subagent, subagent-scoped accounting (R18)
+  // Branch on compaction mode: selective uses manifest+LLM caller, simple uses summarizeCompactableRange.
+  // Simple is default (opt-in selective via config.compaction.subagents.mode==='selective').
+  if ((subagentsScope.mode as string) === 'selective') {
+    // Selective path: build manifest, create LLM caller with subagent-scoped accounting, run multi-turn loop with simple fallback.
+    let manifest: import('../llm/compaction/selective/manifest').Manifest | null = null;
+    try {
+      const { buildManifest } = await import('../llm/compaction/selective/manifest.js');
+      manifest = buildManifest(messages as Message[], compactableRange);
+    } catch {
+      return null;
+    }
+    if (!manifest || manifest.entries.length === 0) return null;
+
+    let accountingStore: ReturnType<typeof getProviderAccountingStore> | undefined;
+    try {
+      accountingStore = getProviderAccountingStore();
+    } catch {
+      accountingStore = undefined;
+    }
+
+    const compactableSliceForFallback = messages.slice(compactableRange.start, compactableRange.end) as Message[];
+    const simpleFallback = async (): Promise<{ text: string } | null> => {
+      try {
+        const { summarizeCompactableRange } = await import('../llm/compaction/summarize.js');
+        const res = await summarizeCompactableRange({
+          messages: compactableSliceForFallback,
+          scope: 'subagents',
+          config,
+          fallbackSelection: selection,
+          existingModelSelection: selection,
+          accounting: accountingStore
+            ? { store: accountingStore, sessionId, chainId, turnId }
+            : ({ sessionId, chainId, turnId } as unknown as Parameters<typeof summarizeCompactableRange>[0]['accounting']),
+          subagentId,
+        });
+        if (!res || !res.text?.trim()) return null;
+        return { text: res.text };
+      } catch {
+        return null;
+      }
+    };
+
+    let selectiveCaller: import('../llm/compaction/selective/run').SelectiveCaller | null = null;
+    try {
+      const { createLlmSelectiveCaller } = await import('../llm/compaction/selective/run.js');
+      selectiveCaller = createLlmSelectiveCaller({
+        config,
+        scope: 'subagents',
+        fallbackSelection: selection,
+        subagentId,
+        accounting: accountingStore
+          ? { store: accountingStore, sessionId, chainId, turnId }
+          : ({ sessionId, chainId, turnId } as unknown as Parameters<typeof createLlmSelectiveCaller>[0]['accounting']),
+      });
+    } catch {
+      return null;
+    }
+    if (!selectiveCaller) return null;
+
+    let selectiveResult: import('../llm/compaction/selective/run').SelectiveCompactionResult | null = null;
+    try {
+      const { runSelectiveCompaction } = await import('../llm/compaction/selective/run.js');
+      selectiveResult = await runSelectiveCompaction({
+        messages: messages as Message[],
+        compactableRange,
+        manifest,
+        selectiveCaller,
+        simpleFallback,
+      });
+    } catch {
+      return null;
+    }
+    if (!selectiveResult) return null;
+
+    if (selectiveResult.kind === 'selective') {
+      const mergedFlagged = [...new Set([...(selectiveResult.flaggedIds ?? []), ...flaggedIds])];
+      const updatedMessages = [...selectiveResult.replayMessages] as Message[];
+      const summaryMessage = (selectiveResult.summaryMessage as unknown as Message | null) ?? null;
+      let updatedChains: import('../../shared/types/chain').Chain[];
+      if (chains.length === 0) {
+        updatedChains = [];
+      } else if (chains.length === 1) {
+        updatedChains = [{ ...chains[0]!, messages: [...updatedMessages] }];
+      } else {
+        updatedChains = chains.map((c, idx) => (idx === 0 ? { ...c, messages: [...updatedMessages] } : { ...c, messages: [...c.messages] }));
+      }
+      const compactedMarker = (summaryMessage as unknown as { compacted?: import('../../shared/types/message').CompactedMarker | null })?.compacted ?? null;
+      const didApply = mergedFlagged.length > 0 || summaryMessage !== null || updatedMessages.length !== messages.length;
+      if (!didApply) return null;
+      const applyResult: import('../llm/compaction/apply').ApplyResult = {
+        updatedMessages,
+        updatedChains,
+        summaryMessage,
+        newChain: null,
+        flaggedIds: mergedFlagged,
+        compactedMarker: compactedMarker as import('../../shared/types/message').CompactedMarker | null,
+        didApply: true,
+      };
+      return applyResult;
+    }
+
+    if (selectiveResult.kind === 'fallback') {
+      const fallbackText = selectiveResult.fallbackText;
+      if (!fallbackText || fallbackText.trim().length === 0) return null;
+      try {
+        const applyResult = buildCompactionApply({
+          messages: messages as Message[],
+          chains,
+          cutResult: cut,
+          summaryText: fallbackText,
+          mode: 'simple' as import('../../shared/types/message').CompactionMode,
+          reclaimedIds: flaggedIds,
+          sessionId,
+        });
+        if (!applyResult.didApply) return null;
+        return applyResult;
+      } catch {
+        return null;
+      }
+    }
+    return null;
+  }
+
+  // Simple default behavior (unchanged) — task-focused compactor-subagent, subagent-scoped accounting (R18)
   const compactableSlice = messages.slice(compactableRange.start, compactableRange.end) as Message[];
   if (compactableSlice.length === 0) return null;
 
@@ -205,8 +327,9 @@ export async function tryCompactSubagentHistory(params: {
     accountingStore = undefined;
   }
 
-  let summarizeResult: Awaited<ReturnType<typeof summarizeCompactableRange>> | null;
+  let summarizeResult: Awaited<ReturnType<typeof import('../llm/compaction/summarize.js').summarizeCompactableRange>> | null;
   try {
+    const { summarizeCompactableRange } = await import('../llm/compaction/summarize.js');
     summarizeResult = await summarizeCompactableRange({
       messages: compactableSlice,
       scope: 'subagents',
@@ -215,7 +338,7 @@ export async function tryCompactSubagentHistory(params: {
       existingModelSelection: selection,
       accounting: accountingStore
         ? { store: accountingStore, sessionId, chainId, turnId }
-        : { sessionId, chainId, turnId } as unknown as Parameters<typeof summarizeCompactableRange>[0]['accounting'],
+        : ({ sessionId, chainId, turnId } as unknown as Parameters<typeof summarizeCompactableRange>[0]['accounting']),
       subagentId,
     });
   } catch {
