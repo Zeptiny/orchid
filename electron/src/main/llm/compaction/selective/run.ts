@@ -17,6 +17,99 @@ import { toApiMessages } from '../../history';
 import type { Manifest, SelectiveOp } from './manifest';
 import { buildManifest } from './manifest';
 import { validateSelectiveOps } from './validate';
+import { AgentType } from '../../../../shared/types/agent';
+import type { Agent } from '../../../../shared/types/agent';
+import type { ModelSelection } from '../../../../shared/types/provider';
+import type { Config } from '../../../config/schema';
+import type { ProjectRuntime } from '../../../project/runtime';
+import { getAgent } from '../../../agents/registry';
+import { getTierModelSelection } from '../../../config/loader';
+import { getProviderRuntime } from '../../../providers';
+import { getProviderAccountingStore } from '../../../providers/accounting/store';
+import type { ProviderAccountingStore } from '../../../providers/accounting/store';
+import { createMiddlewareStack } from '../../middleware';
+import type { ProviderAttemptAccountingContext } from '../../../providers/accounting/middleware';
+import { importESM } from '../../../utils/esm-import';
+
+export function buildSelectiveUserPrompt(manifest: Manifest, previousErrors?: readonly string[]): string {
+  const lines = manifest.entries.map((e) => `${e.id} [${e.kind}] ${e.preview}`).join('\n');
+  const header =
+    'You are the selective compactor. You reconstruct the compactable range from a manifest of ID\'d elements.\n' +
+    'Return ONLY a JSON array of operations in order — no markdown, no commentary.\n' +
+    'Op grammar:\n' +
+    '  {"type":"keep","id":"<manifest id>"} — keep the message verbatim\n' +
+    '  {"type":"keep_range","id":"<id>","startLine":1,"endLine":50} — keep only lines startLine-endLine of that message\'s content\n' +
+    '  {"type":"summarize","ids":["<id>", "..."],"text":"..."} — replace the contiguous span ids with one synthetic summary message\n' +
+    'Rules:\n' +
+    '  - Keep every user message verbatim (never summarize). May summarize tool calls/outputs and assistant messages.\n' +
+    '  - Thinking messages: keep verbatim or drop — never summarize into a fake reasoning part (R24).\n' +
+    '  - keep_range only on messages with multi-line content; lines are 1-indexed and will be clamped.\n' +
+    '  - summarize ids must be a contiguous subsequence of manifest order in one op; multiple summarize ops are allowed if spans are disjoint.\n' +
+    '  - Preserve tool_call/result pairing: a call and its result must be both kept or both summarized together in the same summarize op.\n' +
+    '  - Cover every manifest id exactly once across ops.\n';
+  const manifestBlock = `<manifest>\n${lines}\n</manifest>`;
+  const errorBlock = previousErrors && previousErrors.length > 0
+    ? `\n\nPrevious attempt failed validation:\n${previousErrors.map((e) => `- ${e}`).join('\n')}\nFix the errors and return a corrected JSON array.`
+    : '';
+  return `${header}\n${manifestBlock}${errorBlock}`;
+}
+
+export function createLlmSelectiveCaller(params: {
+  config: Config;
+  scope: 'main' | 'subagents';
+  fallbackSelection?: ModelSelection | null;
+  runtime?: ProjectRuntime;
+  agents?: ReadonlyMap<string, Agent>;
+  subagentId?: string;
+  accounting: { store?: ProviderAccountingStore; sessionId: string; chainId: string | null; turnId: string | null };
+  abortSignal?: AbortSignal;
+}): SelectiveCaller {
+  return async ({ manifest, attempt, previousErrors }): Promise<SelectiveOp[]> => {
+    const { config, scope, fallbackSelection, runtime, agents, subagentId, accounting, abortSignal } = params;
+    const compaction = (config as unknown as { compaction?: Config['compaction'] }).compaction;
+    const scopeConfig = compaction ? (scope === 'main' ? compaction.main : compaction.subagents) : undefined;
+    const agentName = scopeConfig?.agent_name ?? (scope === 'main' ? 'compactor' : 'compactor-subagent');
+    let agent: Agent | undefined;
+    if (agents?.has(agentName)) agent = agents.get(agentName);
+    else if (runtime?.agents.has(agentName)) agent = runtime.agents.get(agentName);
+    else agent = getAgent(agentName);
+    if (!agent || agent.type !== AgentType.INTERNAL) throw new Error(`selective compactor agent "${agentName}" unavailable`);
+    let selection: ModelSelection | null = null;
+    if (scopeConfig?.model) selection = scopeConfig.model;
+    else {
+      const tierSel = getTierModelSelection(config, agent.tier);
+      if (tierSel) selection = tierSel;
+      else selection = fallbackSelection ?? null;
+    }
+    if (!selection) throw new Error('no model for selective compactor');
+    const execution = await getProviderRuntime().resolveExecution(selection);
+    const store = accounting.store ?? (() => { try { return getProviderAccountingStore(); } catch { return null; } })();
+    if (!store) throw new Error('accounting store unavailable');
+    const agentScope = scope === 'subagents' ? (subagentId ?? 'subagent') : 'main';
+    const attemptHolder: { value: string | null } = { value: null };
+    const ctx: ProviderAttemptAccountingContext = {
+      store, sessionId: accounting.sessionId, chainId: accounting.chainId, turnId: accounting.turnId,
+      snapshot: execution.snapshot, agentScope, agentName: agent.name, agentType: agent.type, agentTier: agent.tier,
+      pricingFacet: execution.pricingFacet, tierMechanism: execution.tierMechanism, attemptIdHolder: attemptHolder,
+    };
+    const { generateText, wrapLanguageModel } = await importESM<typeof import('ai')>('ai');
+    const model = wrapLanguageModel({ model: execution.modelInstance, middleware: createMiddlewareStack({ retry: { maxRetries: config.llm_stream_retries }, accounting: ctx }) });
+    const timeoutMs = Math.max(1, (config.llm_stream_idle_timeout ?? 30) * 1000);
+    const timeoutSignal = AbortSignal.timeout(timeoutMs);
+    const combinedSignal = abortSignal == null ? timeoutSignal : AbortSignal.any([abortSignal, timeoutSignal]);
+    const userPrompt = buildSelectiveUserPrompt(manifest, previousErrors);
+    const raw = await generateText({ model, instructions: agent.system_prompt + '\n\n[Selective mode] You must output ONLY a JSON array per the user instructions. No prose before or after.', messages: [{ role: 'user', content: userPrompt }], abortSignal: combinedSignal, maxRetries: 0 }) as { text: string };
+    const text = (raw.text ?? '').trim();
+    if (!text) return [];
+    const start = text.indexOf('[');
+    const end = text.lastIndexOf(']');
+    const jsonSlice = start >= 0 && end > start ? text.slice(start, end + 1) : text;
+    const parsed = JSON.parse(jsonSlice);
+    if (!Array.isArray(parsed)) throw new Error('selective LLM returned non-array');
+    const { parseSelectiveOps } = await import('./manifest.js');
+    return (parseSelectiveOps as (s: string) => SelectiveOp[])(JSON.stringify(parsed));
+  };
+}
 
 // ── Types ───────────────────────────────────────────────────────────────────
 
