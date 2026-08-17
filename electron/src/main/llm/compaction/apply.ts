@@ -309,32 +309,92 @@ export function buildCompactionApply(input: ApplyInput): ApplyResult {
     // Simpler for pure result: insert at position that keeps flat updatedMessages order consistent.
     // Determine insertion index as number of chains that are fully before cut.
     const originalFlat = messages;
-    let insertionIdx = finalChains.length; // default append
+    let insertionIdx = finalChains.length;
+    let intraHandled = false;
     if (chains.length > 0) {
-      // O(n) prebuild: id -> chainIdx (avoids O(n*m) nested scan)
       const idToChainIdx = new Map<string, number>();
       chains.forEach((chain, idx) => {
         for (const m of chain.messages) if (!idToChainIdx.has(m.id)) idToChainIdx.set(m.id, idx);
       });
       const firstIndexByChain = new Map<string, number>();
+      const lastIndexByChain = new Map<string, number>();
       for (let i = 0; i < originalFlat.length; i += 1) {
         const msgId = originalFlat[i]!.id;
         const chainIdx = idToChainIdx.get(msgId);
         if (chainIdx !== undefined) {
           const chainId = chains[chainIdx]!.id;
           if (!firstIndexByChain.has(chainId)) firstIndexByChain.set(chainId, i);
+          lastIndexByChain.set(chainId, i);
         }
       }
-      for (let idx = 0; idx < finalChains.length; idx += 1) {
-        const chain = finalChains[idx]!;
-        const firstIdx = firstIndexByChain.get(chain.id) ?? Number.MAX_SAFE_INTEGER;
-        if (firstIdx >= cutIndex) {
-          insertionIdx = idx;
+      let containingIdx: number | null = null;
+      let containingId: string | null = null;
+      for (let idx = 0; idx < chains.length; idx += 1) {
+        const chainId = chains[idx]!.id;
+        const firstIdx = firstIndexByChain.get(chainId);
+        const lastIdx = lastIndexByChain.get(chainId);
+        if (firstIdx !== undefined && lastIdx !== undefined && cutIndex >= firstIdx && cutIndex <= lastIdx + 1) {
+          containingIdx = idx;
+          containingId = chainId;
           break;
         }
       }
+      if (containingIdx !== null && containingId !== null) {
+        const firstIdx = firstIndexByChain.get(containingId)!;
+        if (cutIndex === firstIdx) {
+          const finalIdx = finalChains.findIndex((c) => c.id === containingId);
+          insertionIdx = finalIdx >= 0 ? finalIdx : finalChains.length;
+        } else if (cutIndex > firstIdx) {
+          const finalIdx = finalChains.findIndex((c) => c.id === containingId);
+          if (finalIdx >= 0) {
+            const originalChain = finalChains[finalIdx]!;
+            const cutOffsetInChain = cutIndex - firstIdx;
+            const beforeMessages = originalChain.messages.slice(0, cutOffsetInChain);
+            const afterMessages = originalChain.messages.slice(cutOffsetInChain);
+            if (beforeMessages.length === 0) {
+              finalChains.splice(finalIdx, 1, newChain, { ...originalChain, messages: afterMessages });
+            } else if (afterMessages.length === 0) {
+              finalChains.splice(finalIdx + 1, 0, newChain);
+            } else {
+              const beforeChain: Chain = { ...originalChain, messages: beforeMessages };
+              const afterChain: Chain = {
+                id: randomUUID(),
+                sessionId: originalChain.sessionId,
+                messages: afterMessages,
+                status: originalChain.status,
+                selection: originalChain.selection,
+                modelLabel: originalChain.modelLabel,
+                agentName: originalChain.agentName,
+                agentType: originalChain.agentType,
+                agentTier: originalChain.agentTier,
+                subagentRecord: null,
+                startTime: originalChain.startTime,
+                endTime: originalChain.endTime,
+                errorDetail: originalChain.errorDetail,
+                errorTitle: originalChain.errorTitle,
+              };
+              finalChains.splice(finalIdx, 1, beforeChain, newChain, afterChain);
+            }
+            intraHandled = true;
+          }
+        }
+      } else {
+        insertionIdx = finalChains.length;
+      }
+      if (!intraHandled) {
+        for (let idx = 0; idx < finalChains.length; idx += 1) {
+          const chain = finalChains[idx]!;
+          const firstIdx = firstIndexByChain.get(chain.id) ?? Number.MAX_SAFE_INTEGER;
+          if (firstIdx >= cutIndex) {
+            insertionIdx = idx;
+            break;
+          }
+        }
+        finalChains.splice(insertionIdx, 0, newChain);
+      }
+    } else {
+      finalChains.splice(insertionIdx, 0, newChain);
     }
-    finalChains.splice(insertionIdx, 0, newChain);
   }
 
   return {
