@@ -15,7 +15,10 @@ import { defaults } from '../../src/main/config/schema';
 
 const mocks = vi.hoisted(() => {
   const handlers = new Map<string, (...args: unknown[]) => unknown>();
-  const state = { workspaceCwd: null as string | null };
+  const state = {
+    workspaceCwd: null as string | null,
+    sessionCwds: [] as string[],
+  };
 
   return {
     handlers,
@@ -35,7 +38,6 @@ const mocks = vi.hoisted(() => {
     clearProjectRuntimeRegistry: vi.fn(),
     invalidateAllProjectMCPManagers: vi.fn(),
     canonicalizeProjectDirectory: vi.fn((dir: string) => dir),
-    resolveWindowWorkspace: vi.fn(() => ({ status: 'valid' as const, cwd: state.workspaceCwd })),
   };
 });
 
@@ -96,8 +98,15 @@ vi.mock('../../src/main/project/path', () => ({
   canonicalizeProjectDirectory: mocks.canonicalizeProjectDirectory,
 }));
 
-vi.mock('../../src/main/ipc/session', () => ({
-  resolveWindowWorkspace: mocks.resolveWindowWorkspace,
+vi.mock('../../src/main/session/singleton', () => ({
+  resolveWindowWorkspace: vi.fn(() => (
+    mocks.state.workspaceCwd == null
+      ? { cwd: null, source: 'unbound', status: 'unbound' }
+      : { cwd: mocks.state.workspaceCwd, source: 'session', status: 'valid' }
+  )),
+  getSessionManager: () => ({
+    listSaved: () => mocks.state.sessionCwds.map((cwd) => ({ cwd })),
+  }),
 }));
 
 // ── Import after mocks ──────────────────────────────────────────────────────
@@ -114,10 +123,10 @@ beforeEach(async () => {
   mocks.clearProjectRuntimeRegistry.mockClear();
   mocks.invalidateAllProjectMCPManagers.mockClear();
   mocks.canonicalizeProjectDirectory.mockClear();
-  mocks.resolveWindowWorkspace.mockClear();
 
   projectDir = fs.mkdtempSync(path.join(os.tmpdir(), 'orchid-config-ipc-'));
   mocks.state.workspaceCwd = projectDir;
+  mocks.state.sessionCwds = [];
 
   // Fresh default config state for each test
   configState = defaults() as unknown as Record<string, unknown>;
@@ -132,6 +141,7 @@ beforeEach(async () => {
 afterEach(() => {
   configIpc.unregisterConfigIPC();
   mocks.state.workspaceCwd = null;
+  mocks.state.sessionCwds = [];
   fs.rmSync(projectDir, { recursive: true, force: true });
 });
 
@@ -333,16 +343,31 @@ describe('config:read_project', () => {
     await expect(callReadProject(null)).rejects.toThrow(/non-empty projectDir/);
   });
 
-  it('rejects when the bound workspace is a different project', async () => {
+  it('returns overrides for a session project even when a different workspace is selected', async () => {
     mocks.state.workspaceCwd = '/some/other/workspace';
+    mocks.state.sessionCwds = [projectDir];
+    writeProjectConfig({ theme: 'project-dark' });
 
-    await expect(callReadProject(projectDir)).rejects.toThrow(/selected workspace|without a bound project/i);
+    await expect(callReadProject(projectDir)).resolves.toEqual({
+      projectDir,
+      overrides: { theme: 'project-dark' },
+    });
   });
 
-  it('rejects when no workspace is bound', async () => {
+  it('rejects when the target is neither the selected workspace nor a session project', async () => {
+    mocks.state.workspaceCwd = '/some/other/workspace';
+
+    await expect(callReadProject(projectDir)).rejects.toThrow(
+      /selected workspace or any project with sessions/i,
+    );
+  });
+
+  it('rejects when no workspace is bound and the project has no sessions', async () => {
     mocks.state.workspaceCwd = null;
 
-    await expect(callReadProject(projectDir)).rejects.toThrow(/without a bound project/i);
+    await expect(callReadProject(projectDir)).rejects.toThrow(
+      /selected workspace or any project with sessions/i,
+    );
   });
 });
 
@@ -404,10 +429,22 @@ describe('config:save_project', () => {
     });
   });
 
-  it('rejects a projectDir that does not match the bound workspace', async () => {
+  it('saves to a session project that is not the selected workspace', async () => {
+    mocks.state.workspaceCwd = '/some/other/workspace';
+    mocks.state.sessionCwds = [projectDir];
+
+    await callSaveProject({ theme: 'cross-project' });
+    const write = lastProjectWrite();
+    expect(write.path).toBe(path.join(projectDir, '.orchid.json'));
+    expect(write.data['theme']).toBe('cross-project');
+  });
+
+  it('rejects a projectDir that is neither the selected workspace nor a session project', async () => {
     mocks.state.workspaceCwd = '/some/other/workspace';
 
-    await expect(callSaveProject({ theme: 'x' })).rejects.toThrow(/selected workspace/);
+    await expect(callSaveProject({ theme: 'x' })).rejects.toThrow(
+      /selected workspace or any project with sessions/i,
+    );
     expect(mocks.writtenConfigs).toHaveLength(0);
   });
 });

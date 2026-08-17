@@ -21,6 +21,7 @@ const mocks = vi.hoisted(() => {
     handlers,
     selectedByWebContents,
     projectDirByWebContents: new Map<number, string>(),
+    sessionCwds: [] as string[],
     activeTurnOwnerBySession,
     webContentsById,
     forceAbortMainTurn: vi.fn(),
@@ -48,6 +49,7 @@ const mocks = vi.hoisted(() => {
         // in-memory gate map the permission gate actually reads.
         hydrateSessionPermissionOverride(id, mode as PermissionMode | null);
       }),
+      listSaved: vi.fn(() => mocks.sessionCwds.map((cwd) => ({ cwd }))),
     },
     sessionPermissionModeById,
   };
@@ -142,6 +144,7 @@ describe('permission IPC ownership', () => {
     mocks.activeTurnOwnerBySession.clear();
     mocks.webContentsById.clear();
     mocks.projectDirByWebContents.clear();
+    mocks.sessionCwds = [];
     mocks.forceAbortMainTurn.mockClear();
     approvalStore.cleanupAll();
     _resetConfigSaveChainForTests();
@@ -282,7 +285,7 @@ describe('permission IPC ownership', () => {
       scope: 'project',
       expectedProjectDir: projectDirB,
       updates: { edit: 'allow' },
-    })).toThrow('no longer matches');
+    })).toThrow('does not match the selected workspace');
 
     let release!: () => void;
     const blocker = withConfigSaveLock(() => new Promise<void>((resolve) => {
@@ -303,6 +306,29 @@ describe('permission IPC ownership', () => {
       .toEqual({ permissions: { edit: 'allow' } });
     expect(JSON.parse(fs.readFileSync(path.join(projectDirB, '.orchid.json'), 'utf8')))
       .toEqual({ permissions: {} });
+  });
+
+  it('saves project permissions for a session project that is not the selected workspace', async () => {
+    const viewedProjectDir = path.join(TEST_CONFIG_ROOT, 'viewed-project');
+    const selectedProjectDir = path.join(TEST_CONFIG_ROOT, 'selected-project');
+    fs.mkdirSync(viewedProjectDir, { recursive: true });
+    fs.mkdirSync(selectedProjectDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(viewedProjectDir, '.orchid.json'),
+      JSON.stringify({ permissions: { edit: 'ask' } }),
+    );
+    mocks.projectDirByWebContents.set(10, selectedProjectDir);
+    mocks.sessionCwds = [viewedProjectDir];
+
+    const save = mocks.handlers.get(IPC_CHANNELS.CONFIG_SAVE_PERMISSION_SCOPE)!;
+    await expect(save(eventFrom(10), {
+      scope: 'project',
+      expectedProjectDir: viewedProjectDir,
+      updates: { edit: 'allow' },
+    })).resolves.toEqual({ status: 'saved' });
+
+    expect(JSON.parse(fs.readFileSync(path.join(viewedProjectDir, '.orchid.json'), 'utf8')))
+      .toEqual({ permissions: { edit: 'allow' } });
   });
 
   it('does not follow an attacker-planted predictable temp symlink during project save', async () => {
@@ -357,7 +383,7 @@ describe('permission IPC ownership', () => {
       scope: 'project',
       expectedProjectDir: '/tmp/attacker-selected',
       updates: { edit: 'allow' },
-    })).toThrow('without a bound project');
+    })).toThrow('not a valid project directory');
 
     expect(() => save(eventFrom(10), {
       scope: 'global',
