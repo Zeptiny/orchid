@@ -275,9 +275,12 @@ export function buildHistoryStreamItems(opts: {
     items.push(...chainItems.items);
 
     const chainUsage = sumChainUsage(chain);
-    // Prefer live usage for the active/last chain so CHAT_USAGE events update
-    // the agent: line mid-turn (context radial already uses the same stream).
-    const turnUsage = isLastChain ? liveUsage ?? chainUsage : chainUsage;
+    // Prefer live usage for the active/running chain so CHAT_USAGE events
+    // update the agent: line mid-turn (context radial already uses the same
+    // stream). Terminal chains must read their own durable usage: `liveUsage`
+    // may fall back to the newest persisted usage and must never stamp a
+    // FAILED/INTERRUPTED chain with a previous turn's tokens.
+    const turnUsage = isLastChain && !terminal ? liveUsage ?? chainUsage : chainUsage;
 
     let subUsage: Usage | null = subByParent.get(chainIndex) ?? null;
     if (isLastChain && !subUsage) {

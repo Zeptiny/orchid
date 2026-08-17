@@ -334,7 +334,9 @@ describe('chat rendering contract (U5)', () => {
       expect(src).toMatch(/const historyUsage = status === 'streaming' \? null : usage/);
       expect(src).toMatch(/currentTurnUsage/);
       expect(src).toMatch(/usage:\s*status === 'streaming'\s*\?\s*currentTurnUsage/);
-      expect(builder).toMatch(/isLastChain \? liveUsage \?\? chainUsage/);
+      // Terminal chains must never be stamped with live usage: it can be the
+      // previous turn's persisted fallback (regression for #136 data loss).
+      expect(builder).toMatch(/isLastChain && !terminal \? liveUsage \?\? chainUsage/);
       // Must not gate live usage on idle/error only (regression: mid-stream stuck).
       expect(src).not.toMatch(
         /status === 'idle' \|\| status === 'error' \|\| interrupted\)\s*\?\s*liveUsage/,
