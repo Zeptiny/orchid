@@ -22,6 +22,8 @@ import {
 } from '../defs/manage';
 import { assertPathUnderOrchidRoots } from '../defs/paths';
 import { reloadDefinitionRegistries } from '../defs/reload';
+import { getProjectMCPManager } from '../mcp/project-registry';
+import { getProjectRuntimeRegistry } from '../project/runtime';
 import { getProjectTrustState } from '../project/trust';
 import { toolRegistry } from '../tools';
 import { resolveBoundProjectPath } from './session';
@@ -80,6 +82,31 @@ function projectDirFromEvent(event: Electron.IpcMainInvokeEvent): string | null 
 }
 
 /**
+ * Namespaced MCP tool names (`mcp::server::tool`) for one bound project.
+ *
+ * The builtin-tool singleton never carries MCP tools (they are merged into
+ * per-turn registries), so the allowed-tools picker must source them from the
+ * window's project MCP manager. Untrusted projects hold a dormant manager
+ * with no tools, so this stays trust-safe without an explicit gate. Any
+ * runtime/manager failure must not break definitions listing.
+ */
+function mcpToolNamesForProject(projectDir: string | null): string[] {
+  if (projectDir == null) return [];
+  try {
+    const runtime = getProjectRuntimeRegistry().get(projectDir);
+    return getProjectMCPManager(runtime)
+      .getTools()
+      .map(({ definition }) => definition.name);
+  } catch (error) {
+    console.warn(
+      `Failed to enumerate MCP tools for '${projectDir}' (non-fatal):`,
+      error,
+    );
+    return [];
+  }
+}
+
+/**
  * Validate payload, resolve project dir, run mutation, reload registries.
  * Shared by skill/agent/personality save and delete handlers.
  */
@@ -114,6 +141,7 @@ export function registerDefinitionsIPC(): void {
     const availableTools = toolRegistry
       .listAll()
       .map((t) => t.definition.name)
+      .concat(mcpToolNamesForProject(projectDir))
       .sort((a, b) => a.localeCompare(b));
     // Unique skill names across scopes (prefer name as listed)
     const skillNames = new Set(skills.map((s) => s.name));
