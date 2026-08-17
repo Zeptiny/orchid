@@ -1,9 +1,9 @@
-import type { Config, RAGConfig } from '../../shared/types/ipc-boundary';
+import type { Config, RAGConfig, CompactionConfig } from '../../shared/types/ipc-boundary';
 import type { ConfigPatch, ConfigPatchMap } from '../../shared/types/ipc';
 import type { ModelSelection } from '../../shared/types/provider';
 
 /** Nested ConfigPatch keys that need specialized merge (not scalar assign). */
-type NestedPatchKey = 'rag' | 'agents_md' | 'subagents' | 'tier_models' | 'tier_reasoning_effort' | 'mcp_servers' | 'permissions';
+type NestedPatchKey = 'rag' | 'agents_md' | 'subagents' | 'compaction' | 'tier_models' | 'tier_reasoning_effort' | 'mcp_servers' | 'permissions';
 
 /** Scalar / nullable top-level patch keys applied with simple defined-assign. */
 type ScalarPatchKey = Exclude<keyof ConfigPatch, NestedPatchKey>;
@@ -34,6 +34,28 @@ export function mergeConfigDraft(
   }
   if (updates.subagents !== undefined) {
     next.subagents = { ...(current.subagents ?? {}), ...updates.subagents };
+  }
+  if (updates.compaction !== undefined) {
+    next.compaction = {
+      ...(current.compaction ?? {}),
+      ...updates.compaction,
+      ...(updates.compaction.main !== undefined || current.compaction?.main !== undefined
+        ? {
+            main: {
+              ...(current.compaction?.main ?? {}),
+              ...(updates.compaction.main ?? {}),
+            },
+          }
+        : {}),
+      ...(updates.compaction.subagents !== undefined || current.compaction?.subagents !== undefined
+        ? {
+            subagents: {
+              ...(current.compaction?.subagents ?? {}),
+              ...(updates.compaction.subagents ?? {}),
+            },
+          }
+        : {}),
+    };
   }
   return next;
 }
@@ -104,6 +126,16 @@ export function applyConfigDraft(base: Config, draft: ConfigPatch): Config {
     next.subagents = { ...base.subagents, ...draft.subagents };
   }
 
+  if (draft.compaction !== undefined) {
+    next.compaction = {
+      main: { ...base.compaction.main, ...(draft.compaction.main ?? {}) },
+      subagents: { ...base.compaction.subagents, ...(draft.compaction.subagents ?? {}) },
+    };
+    if (draft.compaction.main === undefined && draft.compaction.subagents === undefined) {
+      next.compaction = { ...base.compaction, ...draft.compaction } as CompactionConfig;
+    }
+  }
+
   if (draft.tier_models !== undefined) {
     next.tier_models = applySelectionMap(base.tier_models, draft.tier_models);
   }
@@ -128,6 +160,7 @@ function isNestedPatchKey(key: keyof ConfigPatch): key is NestedPatchKey {
     key === 'rag' ||
     key === 'agents_md' ||
     key === 'subagents' ||
+    key === 'compaction' ||
     key === 'tier_models' ||
     key === 'tier_reasoning_effort' ||
     key === 'mcp_servers' ||

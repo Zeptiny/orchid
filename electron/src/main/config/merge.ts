@@ -119,6 +119,9 @@ const TOP_LEVEL_OBJECT_KEYS = new Set([
   'mcp_servers',
   'rag',
   'tier_models',
+  'agents_md',
+  'subagents',
+  'compaction',
 ]);
 
 /**

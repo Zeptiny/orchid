@@ -55,6 +55,7 @@ import type {
   RAGConfig,
   AgentsMdConfig,
   SubagentsConfig,
+  CompactionScopeConfig,
   PermissionModeValue,
   PermissionRule,
   StartupSnapshot,
@@ -477,6 +478,10 @@ export type ConfigPatch = {
   };
   agents_md?: Partial<AgentsMdConfig>;
   subagents?: Partial<SubagentsConfig>;
+  compaction?: {
+    main?: Partial<CompactionScopeConfig>;
+    subagents?: Partial<CompactionScopeConfig>;
+  };
   ast_max_file_size?: number;
   mcp_startup_timeout?: number;
   mcp_per_server_timeout?: number;

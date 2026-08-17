@@ -13,6 +13,9 @@ export type {
   AgentsMdConfig,
   AgentsMdEnforcePolicy,
   SubagentsConfig,
+  CompactionConfig,
+  CompactionScopeConfig,
+  CompactionMode,
 } from '../../shared/types/ipc-boundary';
 export { modelSelectionSchema, type ModelSelection } from '../../shared/types/provider';
 
@@ -95,6 +98,29 @@ export const subagentsConfigSchema = z.object({
   prompt_task_max_chars: z.number().int().min(0).max(100_000).default(200),
 });
 
+export const COMPACTION_MODES = ['simple', 'selective'] as const;
+
+export const compactionScopeSchema = z.object({
+  mode: z.enum(COMPACTION_MODES).default('simple'),
+  threshold: z.number().min(0.1).max(0.95).default(0.8),
+  model: modelSelectionSchema.nullable().default(null),
+  agent_name: z.string().trim().min(1).default('compactor'),
+  keep_recent_chains: z.number().int().min(0).max(100).default(3),
+  min_compactable_tokens: z.number().int().min(0).max(1_000_000).default(4000),
+  mechanical_reclaim: z.boolean().default(true),
+  hysteresis_delta: z.number().min(0).max(0.5).default(0.1),
+});
+
+export const compactionSubagentsScopeSchema = compactionScopeSchema.extend({
+  threshold: z.number().min(0.1).max(0.95).default(0.85),
+  agent_name: z.string().trim().min(1).default('compactor-subagent'),
+});
+
+export const compactionConfigSchema = z.object({
+  main: compactionScopeSchema.default({}),
+  subagents: compactionSubagentsScopeSchema.default({}),
+}).default({});
+
 // ---------------------------------------------------------------------------
 // Main config schema
 // ---------------------------------------------------------------------------
@@ -170,6 +196,7 @@ export const configSchema = z
     rag: ragConfigSchema.default({}),
     agents_md: agentsMdConfigSchema.default({}),
     subagents: subagentsConfigSchema.default({}),
+    compaction: compactionConfigSchema,
     ast_max_file_size: z.number().int().positive().default(1_048_576),
     mcp_startup_timeout: z.number().positive().default(60.0),
     mcp_per_server_timeout: z.number().positive().default(10.0),

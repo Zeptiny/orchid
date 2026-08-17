@@ -19,6 +19,8 @@ import { AgentType, AgentTier } from '../../src/shared/types/agent';
 // ── Expected agents (27 total) ─────────────────────────────────────────────
 
 const EXPECTED_AGENTS = [
+  { name: 'compactor', type: 'internal', tier: 'seed' },
+  { name: 'compactor-subagent', type: 'internal', tier: 'seed' },
   { name: 'general', type: 'internal', tier: 'bloom' },
   { name: 'permission-evaluator', type: 'internal', tier: 'seed' },
   { name: 'session-namer', type: 'internal', tier: 'seed' },
@@ -70,13 +72,13 @@ afterEach(() => {
 // ── Tests ───────────────────────────────────────────────────────────────────
 
 describe('Agent Parity', () => {
-  it('all 27 agents load from defaults', () => {
+  it('all 30 agents load from defaults', () => {
     const agents = loadAgents({
       homeDir: path.join(__dirname, '../../src/main/agents/defaults'),
       projectDir: path.join(tmpDir, 'empty-project'),
     });
 
-    expect(agents.size).toBe(28);
+    expect(agents.size).toBe(30);
   });
 
   it('all expected agent names are present', () => {
@@ -179,7 +181,7 @@ describe('Agent Parity', () => {
       tierCounts[agent.tier]++;
     }
 
-    expect(tierCounts.seed).toBe(4);   // explorer, web-fetch, session-namer
+    expect(tierCounts.seed).toBe(6);   // explorer, web-fetch, session-namer, compactor, compactor-subagent, permission-evaluator
     expect(tierCounts.sprout).toBe(2); // web-researcher, learnings-researcher
     expect(tierCounts.bloom).toBe(11); // general, implementer, api-contract, etc.
     expect(tierCounts.crown).toBe(11); // reviewers, adversarial, etc.
@@ -195,7 +197,7 @@ describe('Agent Parity', () => {
     const internalAgents = agents.filter((a) => a.type === AgentType.INTERNAL);
     const subagentAgents = agents.filter((a) => a.type === AgentType.SUBAGENT);
 
-    expect(internalAgents).toHaveLength(4);
+    expect(internalAgents).toHaveLength(6);
     expect(subagentAgents).toHaveLength(24);
   });
 

@@ -168,6 +168,24 @@ export interface SubagentsConfig {
   prompt_task_max_chars: number;
 }
 
+export type CompactionMode = 'simple' | 'selective';
+
+export interface CompactionScopeConfig {
+  mode: CompactionMode;
+  threshold: number;
+  model: ModelSelection | null;
+  agent_name: string;
+  keep_recent_chains: number;
+  min_compactable_tokens: number;
+  mechanical_reclaim: boolean;
+  hysteresis_delta: number;
+}
+
+export interface CompactionConfig {
+  main: CompactionScopeConfig;
+  subagents: CompactionScopeConfig;
+}
+
 export type PermissionModeValue = PermissionMode;
 
 export type PermissionRule =
@@ -200,6 +218,7 @@ export interface Config {
   rag: RAGConfig;
   agents_md: AgentsMdConfig;
   subagents: SubagentsConfig;
+  compaction: CompactionConfig;
   ast_max_file_size: number;
   mcp_startup_timeout: number;
   mcp_per_server_timeout: number;
