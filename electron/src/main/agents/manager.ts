@@ -1556,7 +1556,41 @@ export class SubagentManager {
       } catch {}
       this._markRecordDirty(record);
       subagentCompactionTrigger.consumePending();
-      subagentCompactionTrigger.onCompactionApplied(record.usage?.prompt_tokens ?? 0);
+      // Hysteresis accrual baseline is post-compaction inputTokens, not pre-compaction peak
+      const preInput = record.usage?.prompt_tokens ?? 0;
+      let postCompactionTokens: number | undefined;
+      try {
+        const estChars = (msg: Message): number => {
+          let n = 0;
+          if (msg.content) n += msg.content.length;
+          if (msg.thinking) n += msg.thinking.length;
+          if (msg.tool_calls) n += JSON.stringify(msg.tool_calls).length;
+          if (msg.tool_result) n += JSON.stringify(msg.tool_result).length;
+          if (msg.tool_call_id) n += msg.tool_call_id.length;
+          if (msg.name) n += msg.name.length;
+          return n === 0 ? 1 : n;
+        };
+        let totalPost = 0;
+        for (const m of updatedMessages) totalPost += estChars(m as Message);
+        if (totalPost === 0) totalPost = 1;
+        let tpc: number | undefined = subagentCompactionTrigger.state.tokensPerChar;
+        if (tpc == null && Number.isFinite(preInput) && preInput > 0) {
+          const r = preInput / Math.max(1, totalPost + (applyResult.flaggedIds.length * 200));
+          if (Number.isFinite(r) && r > 0) tpc = Math.max(0.05, Math.min(r, 2));
+        }
+        if (tpc == null) tpc = subagentCompactionTrigger.state.tokensPerChar;
+        if (tpc != null) postCompactionTokens = Math.ceil(totalPost * tpc);
+        else {
+          let totalAll = 0;
+          for (const m of (record.chain?.messages ?? [])) totalAll += estChars(m as Message);
+          if (totalAll > 0 && Number.isFinite(preInput) && preInput > 0) {
+            const r2 = preInput / totalAll;
+            const tpc2 = Math.max(0.05, Math.min(r2, 2));
+            postCompactionTokens = Math.ceil(totalPost * tpc2);
+          }
+        }
+      } catch {}
+      subagentCompactionTrigger.onCompactionApplied(preInput, postCompactionTokens);
       // R17: still over limit after compaction -> partial report degradation
       let cfg: ReturnType<typeof getConfig>['compaction']['subagents'] | null = null;
       try {

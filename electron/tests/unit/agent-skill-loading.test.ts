@@ -210,16 +210,18 @@ describe('getStringArray', () => {
 // ===========================================================================
 
 describe('Agent Loading — Defaults', () => {
-  it('should load all 32 default agents', () => {
+  it('should load all default agents (>=32)', () => {
     const agents = loadAgents({
       homeDir: path.join(__dirname, '../../src/main/agents/defaults'),
       projectDir: path.join(tmpDir, 'empty-project'),
     });
 
-    expect(agents.size).toBe(32);
+    // Pin floor rather than exact count so adding a new agent does not break parity (P3 #27)
+    expect(agents.size).toBeGreaterThanOrEqual(32);
 
     const names = Array.from(agents.keys()).sort();
-    expect(names).toEqual([
+    // Expected roster — must remain present (additions are allowed, removals are breaking)
+    expect(names).toEqual(expect.arrayContaining([
       'adversarial-document-reviewer',
       'adversarial-reviewer',
       'agent-native-reviewer',
@@ -252,7 +254,7 @@ describe('Agent Loading — Defaults', () => {
       'testing-reviewer',
       'web-fetch',
       'web-researcher',
-    ]);
+    ]));
   });
 
   it('should load general agent with correct properties', () => {
@@ -405,7 +407,7 @@ describe('Agent Loading — Defaults', () => {
     ]);
 
     // All others are subagents
-    expect(subagentAgents).toHaveLength(24);
+    expect(subagentAgents.length).toBeGreaterThanOrEqual(24);
   });
 
   it('should list all agents via listAgents()', () => {
@@ -415,7 +417,7 @@ describe('Agent Loading — Defaults', () => {
     });
 
     const agents = listAgents();
-    expect(agents).toHaveLength(32);
+    expect(agents.length).toBeGreaterThanOrEqual(32);
     expect(agents.every((a) => a.name && a.description)).toBe(true);
   });
 });
@@ -679,12 +681,12 @@ describe('Seeding', () => {
     const targetDir = path.join(tmpDir, 'agents-target');
     seedAgentsDir(targetDir);
 
-    // Should have all 32 agent subdirectories
+    // Should have all agent subdirectories (>=32, allow growth)
     const entries = fs.readdirSync(targetDir).filter((e) => {
       const stat = fs.statSync(path.join(targetDir, e));
       return stat.isDirectory();
     });
-    expect(entries.length).toBe(32);
+    expect(entries.length).toBeGreaterThanOrEqual(32);
 
     // Each should have an AGENT.md
     for (const entry of entries) {

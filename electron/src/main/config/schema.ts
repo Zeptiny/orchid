@@ -104,7 +104,7 @@ export const compactionScopeSchema = z.object({
   mode: z.enum(COMPACTION_MODES).default('simple'),
   threshold: z.number().min(0.1).max(0.95).default(0.8),
   model: modelSelectionSchema.nullable().default(null),
-  agent_name: z.string().trim().min(1).default('compactor'),
+  agent_name: z.string().trim().min(1).max(64).regex(/^[a-zA-Z0-9_-]+$/).default('compactor'),
   keep_recent_chains: z.number().int().min(0).max(100).default(3),
   min_compactable_tokens: z.number().int().min(0).max(1_000_000).default(4000),
   mechanical_reclaim: z.boolean().default(true),
@@ -113,7 +113,7 @@ export const compactionScopeSchema = z.object({
 
 export const compactionSubagentsScopeSchema = compactionScopeSchema.extend({
   threshold: z.number().min(0.1).max(0.95).default(0.85),
-  agent_name: z.string().trim().min(1).default('compactor-subagent'),
+  agent_name: z.string().trim().min(1).max(64).regex(/^[a-zA-Z0-9_-]+$/).default('compactor-subagent'),
 });
 
 export const compactionConfigSchema = z.object({

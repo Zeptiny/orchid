@@ -378,14 +378,19 @@ describe('selectCut — summary head not counted', () => {
     ];
     const chainBoundaries = [0, 1];
     const result = selectCut(messages, { keepRecentChains: 2, chainBoundaries });
-    // realChains = 1 => single-only-chain => empty compactable
-    expect(result.compactableRange).toEqual({ start: 0, end: 0 });
-    expect(result.cutIndex).toBe(0);
+    // After P0 #1 fix: single-chain early return removed. With 1 real chain and a
+    // summary head, keep=2 preserves the real chain; compactable is the summary head
+    // itself [0,1) — summary heads are not counted toward keep but are before the cut.
+    // Intra-chain compaction is now allowed; empty compactable only when the single
+    // chain is fully open (openGroupStart at 0 with no completed groups).
+    expect(result.compactableRange).toEqual({ start: 0, end: 1 });
+    expect(result.cutIndex).toBe(1);
+    expect(result.preservedCount).toBe(1);
   });
 });
 
 describe('selectCut — single-only-chain yields empty compactable range', () => {
-  it('returns empty compactable when only one chain exists', () => {
+  it('returns empty compactable when only one chain exists and keep covers it', () => {
     const messages: Message[] = [
       makeUser('u0', 'hello'),
       makeAssistantText('a0', 'world'),
@@ -393,17 +398,66 @@ describe('selectCut — single-only-chain yields empty compactable range', () =>
       makeToolResult('tr0', 'call-1', 'read', 'out'),
     ];
     const result = selectCut(messages, { keepRecentChains: 3, chainBoundaries: [0] });
+    // keep=3 covers the single chain (no open group) => preserved whole history, compactable empty.
+    // With intra-chain compaction enabled, this stays empty because keep covers the chain and
+    // there is no open group to force a cut inside the chain. keep=0 would compact it.
     expect(result.compactableRange).toEqual({ start: 0, end: 0 });
     expect(result.cutIndex).toBe(0);
     expect(result.preservedCount).toBe(1);
     expect(result.preservedRange).toEqual({ start: 0, end: messages.length });
   });
 
-  it('single chain with explicit boundaries length 1 is empty even with keep=0', () => {
+  it('single chain with keep=0 compacts entire history when no open group (intra-chain compaction)', () => {
     const messages: Message[] = [makeUser('u0', 'hello'), makeAssistantText('a0', 'hi')];
     const result = selectCut(messages, { keepRecentChains: 0, chainBoundaries: [0] });
-    expect(result.compactableRange.end).toBe(0);
-    expect(result.cutIndex).toBe(0);
+    // P0 #1: single-chain early return removed, so keep=0 with no open group now yields
+    // compactable [0,n) (preserve nothing). Only a fully open single chain (openGroupStart===0)
+    // yields empty compactable.
+    expect(result.compactableRange).toEqual({ start: 0, end: messages.length });
+    expect(result.cutIndex).toBe(messages.length);
+    expect(result.preservedCount).toBe(0);
+  });
+
+  it('single runaway chain with 3 completed groups + 1 open group compacts to openGroupStart', () => {
+    // R6 intra-chain compaction: 1 chain but tool-group walk allows compacting completed groups before the open group.
+    const messages: Message[] = [
+      makeUser('u0', 'start'),
+      makeToolCallMsg('tc0', 'c0', 'read'),
+      makeToolResult('tr0', 'c0', 'read', 'out0'),
+      makeToolCallMsg('tc1', 'c1', 'read'),
+      makeToolResult('tr1', 'c1', 'read', 'out1'),
+      makeToolCallMsg('tc2', 'c2', 'read'),
+      makeToolResult('tr2', 'c2', 'read', 'out2'),
+      makeToolCallMsg('tc-open', 'c-open', 'grep'),
+    ];
+    const result = selectCut(messages, { keepRecentChains: 0, chainBoundaries: [0] });
+    // Completed intervals: [1,2],[3,4],[5,6], openGroupStart at 7
+    expect(result.openGroupStart).toBe(7);
+    expect(result.cutIndex).toBe(7);
+    expect(result.compactableRange).toEqual({ start: 0, end: 7 });
+    expect(result.preservedRange).toEqual({ start: 7, end: messages.length });
+    expect(isCleanToolGroupBoundary(messages, result.cutIndex)).toBe(true);
+  });
+
+  it('single fully-open chain yields empty compactable (only open group, no completed)', () => {
+    // Fully open means the chain starts with the open call and has no preceding completed content.
+    // With only an open tool call and no user before it, the safe cut is at 0 (empty compactable).
+    const soloOpen: Message[] = [makeToolCallMsg('tc-open', 'open-1', 'read')];
+    const r1 = selectCut(soloOpen, { keepRecentChains: 0, chainBoundaries: [0] });
+    expect(r1.openGroupStart).toBe(0);
+    expect(r1.compactableRange).toEqual({ start: 0, end: 0 });
+    expect(r1.cutIndex).toBe(0);
+
+    // Variant: user followed by open call — user is before the open group and is compactable.
+    // This is still intra-chain compaction: compactable [0,1) (user), preserved [1,2) (open call).
+    const withUser: Message[] = [
+      makeUser('u0', 'hello'),
+      makeToolCallMsg('tc-open', 'open-1', 'read'),
+    ];
+    const r2 = selectCut(withUser, { keepRecentChains: 0, chainBoundaries: [0] });
+    expect(r2.openGroupStart).toBe(1);
+    expect(r2.compactableRange).toEqual({ start: 0, end: 1 });
+    expect(r2.cutIndex).toBe(1);
   });
 
   it('two chains yields non-empty compactable', () => {

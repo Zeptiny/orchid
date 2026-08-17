@@ -311,7 +311,7 @@ export function checkpointCompactionMidTurn(
   // indexes into agent.messages. For compaction the prior history flags live in
   // the durable chains, so here we only need to mirror the active chain's new
   // content for crash recovery.
-  agent.turnMessages = [...checkpointMessages.slice(agent.priorMessageCount - agent.messages.length < 0 ? 0 : 0)];
+  agent.turnMessages = [...checkpointMessages.slice(agent.priorMessageCount)];
   // If checkpointMessages is the full active-chain snapshot, replace directly:
   // the active chain row is exactly checkpointMessages.
   // For the general mid-turn helper we replace turnMessages with the provided

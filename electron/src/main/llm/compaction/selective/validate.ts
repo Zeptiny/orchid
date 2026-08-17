@@ -302,6 +302,26 @@ export function validateSelectiveOps(
     }
   }
 
+  // ── Step F2: user messages must be kept verbatim (R9) ─────────────────────
+  // Summarize covering user ids is rejected — user messages must be kept verbatim.
+  for (const op of opsSorted) {
+    if (op.type !== 'summarize') continue;
+    for (const id of op.ids as readonly string[]) {
+      const entry = manifestById.get(id);
+      if (entry && (entry.kind === 'user' || entry.role === MessageRole.USER)) {
+        errors.push(`user message ${id} must be kept verbatim (R9: summarize covering user ids rejected)`);
+      } else if (!entry) {
+        // Fallback: check message role if entry missing (should not happen after dangling filter)
+        const msg = msgById.get(id);
+        if (msg && msg.role === MessageRole.USER) {
+          if (!errors.some((e) => e.includes(id) && e.includes('must be kept verbatim'))) {
+            errors.push(`user message ${id} must be kept verbatim (R9)`);
+          }
+        }
+      }
+    }
+  }
+
   // ── Step G: every user message present ───────────────────────────────────
   for (const entry of manifest.entries) {
     if (entry.role === MessageRole.USER || entry.kind === 'user') {

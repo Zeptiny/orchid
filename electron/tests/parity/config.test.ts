@@ -304,6 +304,28 @@ const EXPECTED_RAG_FIELDS = [
   },
 ];
 
+const EXPECTED_COMPACTION_MAIN_FIELDS = [
+  { field: 'mode', defaultValue: 'simple' },
+  { field: 'threshold', defaultValue: 0.8 },
+  { field: 'model', defaultValue: null },
+  { field: 'agent_name', defaultValue: 'compactor' },
+  { field: 'keep_recent_chains', defaultValue: 3 },
+  { field: 'min_compactable_tokens', defaultValue: 4000 },
+  { field: 'mechanical_reclaim', defaultValue: true },
+  { field: 'hysteresis_delta', defaultValue: 0.1 },
+];
+
+const EXPECTED_COMPACTION_SUBAGENTS_FIELDS = [
+  { field: 'mode', defaultValue: 'simple' },
+  { field: 'threshold', defaultValue: 0.85 },
+  { field: 'model', defaultValue: null },
+  { field: 'agent_name', defaultValue: 'compactor-subagent' },
+  { field: 'keep_recent_chains', defaultValue: 3 },
+  { field: 'min_compactable_tokens', defaultValue: 4000 },
+  { field: 'mechanical_reclaim', defaultValue: true },
+  { field: 'hysteresis_delta', defaultValue: 0.1 },
+];
+
 // ── Tests ───────────────────────────────────────────────────────────────────
 
 describe('Config Parity', () => {
@@ -455,6 +477,52 @@ describe('Config Parity', () => {
           `Subagents field '${expected.field}' default`,
         ).toBe(expected.defaultValue);
       }
+    });
+
+    it('compaction main scope has correct defaults', () => {
+      const cfg = defaults();
+      for (const expected of EXPECTED_COMPACTION_MAIN_FIELDS) {
+        expect(
+          (cfg.compaction.main as unknown as Record<string, unknown>)[expected.field],
+          `compaction.main.${expected.field} default`,
+        ).toEqual(expected.defaultValue);
+      }
+      // Explicit pin for review-gate assertions
+      expect(cfg.compaction.main.threshold).toBe(0.8);
+      expect(cfg.compaction.main.keep_recent_chains).toBe(3);
+      expect(cfg.compaction.main.min_compactable_tokens).toBe(4000);
+      expect(cfg.compaction.main.hysteresis_delta).toBe(0.1);
+      expect(cfg.compaction.main.mode).toBe('simple');
+      expect(cfg.compaction.main.mechanical_reclaim).toBe(true);
+      expect(cfg.compaction.main.agent_name).toBe('compactor');
+    });
+
+    it('compaction subagents scope has correct defaults', () => {
+      const cfg = defaults();
+      for (const expected of EXPECTED_COMPACTION_SUBAGENTS_FIELDS) {
+        expect(
+          (cfg.compaction.subagents as unknown as Record<string, unknown>)[expected.field],
+          `compaction.subagents.${expected.field} default`,
+        ).toEqual(expected.defaultValue);
+      }
+      // Selective threshold delta is intentional (0.85 vs 0.8)
+      expect(cfg.compaction.subagents.threshold).toBe(0.85);
+      expect(cfg.compaction.subagents.keep_recent_chains).toBe(3);
+      expect(cfg.compaction.subagents.min_compactable_tokens).toBe(4000);
+      expect(cfg.compaction.subagents.hysteresis_delta).toBe(0.1);
+      expect(cfg.compaction.subagents.mode).toBe('simple');
+      expect(cfg.compaction.subagents.mechanical_reclaim).toBe(true);
+      expect(cfg.compaction.subagents.agent_name).toBe('compactor-subagent');
+    });
+
+    it('compaction agent_name rejects bad names (allowlist)', () => {
+      expect(() => configSchema.parse({ compaction: { main: { agent_name: 'bad name!' } } })).toThrow();
+      expect(() => configSchema.parse({ compaction: { main: { agent_name: '' } } })).toThrow();
+      expect(() => configSchema.parse({ compaction: { main: { agent_name: 'a'.repeat(65) } } })).toThrow();
+      expect(() => configSchema.parse({ compaction: { subagents: { agent_name: 'also bad!' } } })).toThrow();
+      // Valid good names pass
+      expect(() => configSchema.parse({ compaction: { main: { agent_name: 'my-compactor_1' } } })).not.toThrow();
+      expect(configSchema.parse({ compaction: { main: { agent_name: 'my-compactor_1' } } }).compaction.main.agent_name).toBe('my-compactor_1');
     });
 
     it('ignored_dirs has 20+ default entries', () => {

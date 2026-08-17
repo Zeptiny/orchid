@@ -311,14 +311,18 @@ export function buildCompactionApply(input: ApplyInput): ApplyResult {
     const originalFlat = messages;
     let insertionIdx = finalChains.length; // default append
     if (chains.length > 0) {
-      // Map chain to its first message index in original flat list
+      // O(n) prebuild: id -> chainIdx (avoids O(n*m) nested scan)
+      const idToChainIdx = new Map<string, number>();
+      chains.forEach((chain, idx) => {
+        for (const m of chain.messages) if (!idToChainIdx.has(m.id)) idToChainIdx.set(m.id, idx);
+      });
       const firstIndexByChain = new Map<string, number>();
       for (let i = 0; i < originalFlat.length; i += 1) {
         const msgId = originalFlat[i]!.id;
-        for (const chain of chains) {
-          if (!firstIndexByChain.has(chain.id) && chain.messages.some((cm) => cm.id === msgId)) {
-            firstIndexByChain.set(chain.id, i);
-          }
+        const chainIdx = idToChainIdx.get(msgId);
+        if (chainIdx !== undefined) {
+          const chainId = chains[chainIdx]!.id;
+          if (!firstIndexByChain.has(chainId)) firstIndexByChain.set(chainId, i);
         }
       }
       for (let idx = 0; idx < finalChains.length; idx += 1) {

@@ -78,13 +78,14 @@ import { triggerSessionAutoName } from './title';
 import { selectCut, type CutResult } from '../../llm/compaction/select';
 import { mechanicalReclaim } from '../../llm/compaction/reclaim';
 import { summarizeCompactableRange } from '../../llm/compaction/summarize';
-import { buildCompactionApply } from '../../llm/compaction/apply';
-import { CompactionTrigger, FALLBACK_TOKENS_PER_CHAR } from '../../llm/compaction/trigger';
+import { buildCompactionApply, CompactionApplyError } from '../../llm/compaction/apply';
+import { CompactionTrigger } from '../../llm/compaction/trigger';
 import { buildManifest } from '../../llm/compaction/selective/manifest';
 import type { Manifest } from '../../llm/compaction/selective/manifest';
 import { createLlmSelectiveCaller, runSelectiveCompaction } from '../../llm/compaction/selective/run';
 import type { SelectiveCompactionResult } from '../../llm/compaction/selective/run';
 import { isContextLengthExceededError } from '../../llm/middleware/error-classification';
+import { onSessionDeleted } from '../../session/manager';
 
 export type ChatSendPayload = z.infer<typeof chatSendSchema>;
 
@@ -102,6 +103,21 @@ const compactionPending = new Map<string, {
   manifest?: Manifest;
 }>();
 const compactionRetryTried = new Set<string>();
+
+export function clearCompactionState(sessionId: string): void {
+  compactionTriggers.delete(sessionId);
+  compactionPending.delete(sessionId);
+  for (const key of [...compactionRetryTried]) {
+    if (key === sessionId || key.startsWith(`${sessionId}:`)) compactionRetryTried.delete(key);
+  }
+}
+
+// Evict compaction Maps when a session is deleted — prevents unbounded growth.
+try {
+  onSessionDeleted((sessionId) => clearCompactionState(sessionId));
+} catch {
+  // manager may be unavailable in unit-test imports
+}
 
 function getCompactionTrigger(sessionId: string): CompactionTrigger {
   let t = compactionTriggers.get(sessionId);
@@ -129,10 +145,36 @@ function totalChars(messages: readonly Message[]): number {
   return s === 0 ? 1 : s;
 }
 
-function compactableTokenEstimate(messages: readonly Message[], range: { start: number; end: number }, tokensPerChar: number): number {
+function compactableTokenEstimate(messages: readonly Message[], range: { start: number; end: number }, tokensPerChar: number | undefined): number {
+  if (tokensPerChar == null || !Number.isFinite(tokensPerChar) || tokensPerChar <= 0) return 0;
   let chars = 0;
   for (let i = range.start; i < range.end; i += 1) chars += estimateMessageChars(messages[i]!);
   return Math.ceil(chars * tokensPerChar);
+}
+
+function deriveTokensPerChar(inputTokens: number, messages: readonly Message[], fallback?: number | null): number | undefined {
+  const chars = totalChars(messages);
+  if (chars <= 0) return fallback ?? undefined;
+  if (Number.isFinite(inputTokens) && inputTokens > 0) {
+    const r = inputTokens / chars;
+    if (Number.isFinite(r) && r > 0) return Math.max(0.05, Math.min(r, 2));
+  }
+  if (typeof fallback === 'number' && Number.isFinite(fallback) && fallback > 0) return fallback;
+  return undefined;
+}
+
+function isPendingCutStillValid(pending: { cut: CutResult; flaggedIds: string[] }, messages: readonly Message[]): boolean {
+  const { start, end } = pending.cut.compactableRange;
+  if (!Number.isFinite(start) || !Number.isFinite(end)) return false;
+  if (start < 0 || end > messages.length || start >= end) return false;
+  if (pending.cut.cutIndex < 0 || pending.cut.cutIndex > messages.length) return false;
+  // If any of the range is already flagged, the cut is stale (already compacted or mutated)
+  for (let i = start; i < end; i += 1) {
+    if (messages[i]?.excludeFromModel) return false;
+  }
+  // Also check flaggedIds still correspond to unflagged messages in current history
+  // If any flaggedId is not found or already flagged, still consider stale if the range itself is already flagged
+  return true;
 }
 
 // ── Selective persistence helper (minimal between-turns) ─────────────────────
@@ -221,6 +263,12 @@ async function applyPendingCompactionIfAny(
 ): Promise<{ applied: boolean; updatedMessages?: Message[] }> {
   const pending = compactionPending.get(sessionId);
   if (!pending) return { applied: false };
+  if (!isPendingCutStillValid(pending, messages)) {
+    compactionPending.delete(sessionId);
+    const t = getCompactionTrigger(sessionId);
+    t.state.pendingPrepare = false;
+    return { applied: false };
+  }
   compactionPending.delete(sessionId);
   const trigger = getCompactionTrigger(sessionId);
   try {
@@ -228,37 +276,65 @@ async function applyPendingCompactionIfAny(
     if (pending.mode === 'selective' && pending.selectivePromise) {
       const result = await pending.selectivePromise;
       if (result.kind === 'selective') {
+        // Atomic: DB first, then memory. Single DB write via persistSelectiveCompaction.
+        const ok = persistSelectiveCompaction(sessionId, result, pending.cut);
+        if (!ok) {
+          trigger.state.pendingPrepare = false;
+          return { applied: false };
+        }
         setChatHistory(sessionId, [...result.replayMessages]);
-        persistSelectiveCompaction(sessionId, result, pending.cut);
-        trigger.onCompactionApplied(pending.estimatedInput);
+        const postTokens = (() => {
+          const tpc = trigger.state.tokensPerChar ?? (totalChars(result.replayMessages) > 0 ? pending.estimatedInput / Math.max(1, totalChars(messages)) : undefined);
+          return tpc ? Math.ceil(totalChars(result.replayMessages) * tpc) : pending.estimatedInput;
+        })();
+        trigger.onCompactionApplied(pending.estimatedInput, postTokens);
         trigger.state.pendingPrepare = false;
         return { applied: true, updatedMessages: [...result.replayMessages] };
       }
       if (result.kind === 'fallback' && result.fallbackText && result.fallbackText.trim()) {
         const chains = getSessionManager().getSession(sessionId)?.chains ?? [];
-        const applyResult = buildCompactionApply({
-          messages,
-          chains: chains as Chain[],
-          cutResult: pending.cut,
-          summaryText: result.fallbackText,
-          mode: runtime.config.compaction.main.mode,
-          flaggedIds: pending.flaggedIds,
-          sessionId,
-        });
+        let applyResult: ReturnType<typeof buildCompactionApply> | null = null;
+        try {
+          applyResult = buildCompactionApply({
+            messages,
+            chains: chains as Chain[],
+            cutResult: pending.cut,
+            summaryText: result.fallbackText,
+            mode: runtime.config.compaction.main.mode,
+            flaggedIds: pending.flaggedIds,
+            sessionId,
+          });
+        } catch (e) {
+          if (e instanceof CompactionApplyError) {
+            trigger.state.pendingPrepare = false;
+            compactionPending.delete(sessionId);
+            return { applied: false };
+          }
+          throw e;
+        }
         if (applyResult.didApply) {
           const ok = persistCompaction(sessionId, applyResult);
           if (ok) {
             setChatHistory(sessionId, [...applyResult.updatedMessages]);
-            trigger.onCompactionApplied(pending.estimatedInput);
+            const tpc = trigger.state.tokensPerChar ?? (totalChars(applyResult.updatedMessages) > 0 ? pending.estimatedInput / Math.max(1, totalChars(messages)) : undefined);
+            const postTokens = tpc ? Math.ceil(totalChars(applyResult.updatedMessages) * tpc) : pending.estimatedInput;
+            trigger.onCompactionApplied(pending.estimatedInput, postTokens);
             trigger.state.pendingPrepare = false;
             return { applied: true, updatedMessages: [...applyResult.updatedMessages] };
           }
         }
         if (result.replayMessages && result.replayMessages.length > 0) {
-          setChatHistory(sessionId, [...result.replayMessages]);
-          trigger.onCompactionApplied(pending.estimatedInput);
+          // Fallback replay without summary — treat as selective success with single DB write via helper if possible
+          const selectiveLike = { kind: 'selective' as const, replayMessages: result.replayMessages, flaggedIds: result.flaggedIds ?? pending.flaggedIds, summaryMessages: [], summaryMessage: result.summaryMessage ?? null } as unknown as Extract<SelectiveCompactionResult, { kind: 'selective' }>;
+          const ok = persistSelectiveCompaction(sessionId, selectiveLike, pending.cut);
+          if (ok) {
+            setChatHistory(sessionId, [...result.replayMessages]);
+            const tpc = trigger.state.tokensPerChar ?? (totalChars(result.replayMessages) > 0 ? pending.estimatedInput / Math.max(1, totalChars(messages)) : undefined);
+            const postTokens = tpc ? Math.ceil(totalChars(result.replayMessages) * tpc) : pending.estimatedInput;
+            trigger.onCompactionApplied(pending.estimatedInput, postTokens);
+          }
           trigger.state.pendingPrepare = false;
-          return { applied: true, updatedMessages: [...result.replayMessages] };
+          return { applied: ok, updatedMessages: ok ? [...result.replayMessages] : undefined };
         }
       }
       trigger.state.pendingPrepare = false;
@@ -269,20 +345,31 @@ async function applyPendingCompactionIfAny(
       const result = await pending.promise;
       if (result && result.text && result.text.trim()) {
         const chains = getSessionManager().getSession(sessionId)?.chains ?? [];
-        const applyResult = buildCompactionApply({
-          messages,
-          chains: chains as Chain[],
-          cutResult: pending.cut,
-          summaryText: result.text,
-          mode: runtime.config.compaction.main.mode,
-          flaggedIds: pending.flaggedIds,
-          sessionId,
-        });
+        let applyResult: ReturnType<typeof buildCompactionApply> | null = null;
+        try {
+          applyResult = buildCompactionApply({
+            messages,
+            chains: chains as Chain[],
+            cutResult: pending.cut,
+            summaryText: result.text,
+            mode: runtime.config.compaction.main.mode,
+            flaggedIds: pending.flaggedIds,
+            sessionId,
+          });
+        } catch (e) {
+          if (e instanceof CompactionApplyError) {
+            trigger.state.pendingPrepare = false;
+            return { applied: false };
+          }
+          throw e;
+        }
         if (applyResult.didApply) {
           const ok = persistCompaction(sessionId, applyResult);
           if (ok) {
             setChatHistory(sessionId, [...applyResult.updatedMessages]);
-            trigger.onCompactionApplied(pending.estimatedInput);
+            const tpc = trigger.state.tokensPerChar ?? (totalChars(applyResult.updatedMessages) > 0 ? pending.estimatedInput / Math.max(1, totalChars(messages)) : undefined);
+            const postTokens = tpc ? Math.ceil(totalChars(applyResult.updatedMessages) * tpc) : pending.estimatedInput;
+            trigger.onCompactionApplied(pending.estimatedInput, postTokens);
             trigger.state.pendingPrepare = false;
             return { applied: true, updatedMessages: [...applyResult.updatedMessages] };
           }
@@ -295,20 +382,31 @@ async function applyPendingCompactionIfAny(
     // Reclaim-only pending
     if (pending.flaggedIds.length > 0) {
       const chains = getSessionManager().getSession(sessionId)?.chains ?? [];
-      const applyResult = buildCompactionApply({
-        messages,
-        chains: chains as Chain[],
-        cutResult: pending.cut,
-        summaryText: null,
-        mode: runtime.config.compaction.main.mode,
-        flaggedIds: pending.flaggedIds,
-        sessionId,
-      });
+      let applyResult: ReturnType<typeof buildCompactionApply> | null = null;
+      try {
+        applyResult = buildCompactionApply({
+          messages,
+          chains: chains as Chain[],
+          cutResult: pending.cut,
+          summaryText: null,
+          mode: runtime.config.compaction.main.mode,
+          flaggedIds: pending.flaggedIds,
+          sessionId,
+        });
+      } catch (e) {
+        if (e instanceof CompactionApplyError) {
+          trigger.state.pendingPrepare = false;
+          return { applied: false };
+        }
+        throw e;
+      }
       if (applyResult.didApply) {
         const ok = persistCompaction(sessionId, applyResult);
         if (ok) {
           setChatHistory(sessionId, [...applyResult.updatedMessages]);
-          trigger.onCompactionApplied(pending.estimatedInput);
+          const tpc = trigger.state.tokensPerChar ?? (totalChars(applyResult.updatedMessages) > 0 ? pending.estimatedInput / Math.max(1, totalChars(messages)) : undefined);
+          const postTokens = tpc ? Math.ceil(totalChars(applyResult.updatedMessages) * tpc) : pending.estimatedInput;
+          trigger.onCompactionApplied(pending.estimatedInput, postTokens);
           return { applied: true, updatedMessages: [...applyResult.updatedMessages] };
         }
       }
@@ -337,19 +435,37 @@ async function tryCompactSynchronously(
   if (!Number.isFinite(contextTokens) || contextTokens <= 0) return { didApply: false };
   if (trigger.state.pendingPrepare) return { didApply: false };
   try {
+    // Single-pass: compute totalChars once, reuse for estimate and trigger ratio
+    const totalCharsValue = totalChars(messages);
+    let tokensPerChar = trigger.state.tokensPerChar;
+    if (tokensPerChar == null && Number.isFinite(trigger.state.lastObservedInputTokens ?? NaN) && totalCharsValue > 0) {
+      const obs = trigger.state.lastObservedInputTokens as number;
+      const r = obs / totalCharsValue;
+      if (Number.isFinite(r) && r > 0) tokensPerChar = Math.max(0.05, Math.min(r, 2));
+    }
+    if (tokensPerChar == null || !Number.isFinite(tokensPerChar) || tokensPerChar <= 0) return { didApply: false };
+    const estimatedInput = Math.ceil(totalCharsValue * tokensPerChar);
+    // Early gate before expensive selectCut/reclaim: only proceed if threshold crossed or hysteresis accrual allows re-fire
+    const ratio = estimatedInput / contextTokens;
+    const hysteresisDelta = cfg.hysteresis_delta ?? 0.1;
+    if (ratio + 1e-9 < cfg.threshold) {
+      const baseline = trigger.state.postCompactionInputTokens;
+      if (!(trigger.state.hysteresisArmed && typeof baseline === 'number' && estimatedInput - baseline >= cfg.min_compactable_tokens)) {
+        return { didApply: false };
+      }
+    }
     const cut = selectCut(messages, { keepRecentChains: cfg.keep_recent_chains });
     if (cut.compactableRange.end <= cut.compactableRange.start) return { didApply: false };
-    const tokensPerChar = trigger.state.tokensPerChar ?? FALLBACK_TOKENS_PER_CHAR;
     const compactableTokens = compactableTokenEstimate(messages, cut.compactableRange, tokensPerChar);
     if (compactableTokens < cfg.min_compactable_tokens) return { didApply: false };
-    const estimatedInput = Math.ceil(totalChars(messages) * tokensPerChar);
+    // Gate reclaim behind threshold: only compute reclaim if we passed the gates above
     const reclaim = mechanicalReclaim(messages, cut.compactableRange);
     const flaggedIds = reclaim.flaggedIds;
     const decision = trigger.evaluateWithReclaim({
       inputTokens: estimatedInput,
       contextTokens,
       threshold: cfg.threshold,
-      hysteresisDelta: cfg.hysteresis_delta,
+      hysteresisDelta,
       compactableTokens,
       minCompactableTokens: cfg.min_compactable_tokens,
       compactableRange: cut.compactableRange,
@@ -360,20 +476,28 @@ async function tryCompactSynchronously(
     if (!decision.shouldPrepare && !decision.shouldApply) return { didApply: false };
     const chains = getSessionManager().getSession(sessionId)?.chains ?? [];
     if (decision.shouldApply && !decision.shouldPrepare) {
-      const applyResult = buildCompactionApply({
-        messages,
-        chains: chains as Chain[],
-        cutResult: cut,
-        summaryText: null,
-        mode: cfg.mode,
-        flaggedIds,
-        sessionId,
-      });
+      let applyResult: ReturnType<typeof buildCompactionApply> | null = null;
+      try {
+        applyResult = buildCompactionApply({
+          messages,
+          chains: chains as Chain[],
+          cutResult: cut,
+          summaryText: null,
+          mode: cfg.mode,
+          flaggedIds,
+          sessionId,
+        });
+      } catch (e) {
+        if (e instanceof CompactionApplyError) return { didApply: false };
+        throw e;
+      }
       if (!applyResult.didApply) return { didApply: false };
       const ok = persistCompaction(sessionId, applyResult);
       if (!ok) return { didApply: false };
       setChatHistory(sessionId, [...applyResult.updatedMessages]);
-      trigger.onCompactionApplied(estimatedInput);
+      const tpc2 = trigger.state.tokensPerChar ?? tokensPerChar;
+      const postTokens = Math.ceil(totalChars(applyResult.updatedMessages) * tpc2);
+      trigger.onCompactionApplied(estimatedInput, postTokens);
       return { didApply: true, updatedMessages: [...applyResult.updatedMessages] };
     }
     if (decision.shouldPrepare) {
@@ -417,28 +541,52 @@ async function tryCompactSynchronously(
           return { didApply: false };
         }
         if (selResult.kind === 'selective') {
+          const ok = persistSelectiveCompaction(sessionId, selResult, cut);
+          if (!ok) {
+            trigger.state.pendingPrepare = false;
+            return { didApply: false };
+          }
           setChatHistory(sessionId, [...selResult.replayMessages]);
-          persistSelectiveCompaction(sessionId, selResult, cut);
-          trigger.onCompactionApplied(estimatedInput);
+          const tpcSel = trigger.state.tokensPerChar ?? tokensPerChar;
+          const postTokensSel = Math.ceil(totalChars(selResult.replayMessages) * tpcSel);
+          trigger.onCompactionApplied(estimatedInput, postTokensSel);
           trigger.state.pendingPrepare = false;
           return { didApply: true, updatedMessages: [...selResult.replayMessages] };
         }
         if (selResult.kind === 'fallback' && selResult.fallbackText && selResult.fallbackText.trim()) {
-          const applyResult = buildCompactionApply({
-            messages,
-            chains: chains as Chain[],
-            cutResult: cut,
-            summaryText: selResult.fallbackText,
-            mode: cfg.mode,
-            flaggedIds,
-            sessionId,
-          });
+          let applyResult: ReturnType<typeof buildCompactionApply> | null = null;
+          try {
+            applyResult = buildCompactionApply({
+              messages,
+              chains: chains as Chain[],
+              cutResult: cut,
+              summaryText: selResult.fallbackText,
+              mode: cfg.mode,
+              flaggedIds,
+              sessionId,
+            });
+          } catch (e) {
+            if (e instanceof CompactionApplyError) {
+              trigger.state.pendingPrepare = false;
+              return { didApply: false };
+            }
+            throw e;
+          }
           if (!applyResult.didApply) {
             if (selResult.replayMessages && selResult.replayMessages.length > 0) {
-              setChatHistory(sessionId, [...selResult.replayMessages]);
-              trigger.onCompactionApplied(estimatedInput);
+              // fallback replay without summary — single DB write via selective helper
+              // If flaggedIds derived from manifest, use those; else use flaggedIds from reclaim
+              const flaggedForLike = (selResult.flaggedIds ?? flaggedIds) as string[];
+              const like2: Extract<SelectiveCompactionResult, { kind: 'selective' }> = { kind: 'selective', replayMessages: selResult.replayMessages!, flaggedIds: flaggedForLike, summaryMessages: [], summaryMessage: selResult.summaryMessage ?? null, correctedOps: [], attempts: selResult.attempts } as unknown as Extract<SelectiveCompactionResult, { kind: 'selective' }>;
+              const ok2 = persistSelectiveCompaction(sessionId, like2, cut);
+              if (ok2) {
+                setChatHistory(sessionId, [...selResult.replayMessages!]);
+                const tpcF = trigger.state.tokensPerChar ?? tokensPerChar;
+                const postF = Math.ceil(totalChars(selResult.replayMessages!) * tpcF);
+                trigger.onCompactionApplied(estimatedInput, postF);
+              }
               trigger.state.pendingPrepare = false;
-              return { didApply: true, updatedMessages: [...selResult.replayMessages] };
+              return { didApply: ok2, updatedMessages: ok2 ? [...selResult.replayMessages!] : undefined };
             }
             trigger.state.pendingPrepare = false;
             return { didApply: false };
@@ -449,13 +597,24 @@ async function tryCompactSynchronously(
             return { didApply: false };
           }
           setChatHistory(sessionId, [...applyResult.updatedMessages]);
-          trigger.onCompactionApplied(estimatedInput);
+          const tpcF2 = trigger.state.tokensPerChar ?? tokensPerChar;
+          const postF2 = Math.ceil(totalChars(applyResult.updatedMessages) * tpcF2);
+          trigger.onCompactionApplied(estimatedInput, postF2);
           trigger.state.pendingPrepare = false;
           return { didApply: true, updatedMessages: [...applyResult.updatedMessages] };
         }
         if (selResult.kind === 'fallback' && selResult.replayMessages && selResult.replayMessages.length > 0) {
+          const flaggedForFallback = (selResult.flaggedIds ?? flaggedIds) as string[];
+          const like3: Extract<SelectiveCompactionResult, { kind: 'selective' }> = { kind: 'selective', replayMessages: selResult.replayMessages, flaggedIds: flaggedForFallback, summaryMessages: [], summaryMessage: selResult.summaryMessage ?? null, correctedOps: [], attempts: selResult.attempts } as unknown as Extract<SelectiveCompactionResult, { kind: 'selective' }>;
+          const ok3 = persistSelectiveCompaction(sessionId, like3, cut);
+          if (!ok3) {
+            trigger.state.pendingPrepare = false;
+            return { didApply: false };
+          }
           setChatHistory(sessionId, [...selResult.replayMessages]);
-          trigger.onCompactionApplied(estimatedInput);
+          const tpcF3 = trigger.state.tokensPerChar ?? tokensPerChar;
+          const postF3 = Math.ceil(totalChars(selResult.replayMessages) * tpcF3);
+          trigger.onCompactionApplied(estimatedInput, postF3);
           trigger.state.pendingPrepare = false;
           return { didApply: true, updatedMessages: [...selResult.replayMessages] };
         }
@@ -478,15 +637,24 @@ async function tryCompactSynchronously(
         trigger.state.pendingPrepare = false;
         return { didApply: false };
       }
-      const applyResult = buildCompactionApply({
-        messages,
-        chains: chains as Chain[],
-        cutResult: cut,
-        summaryText: result.text,
-        mode: cfg.mode,
-        flaggedIds,
-        sessionId,
-      });
+      let applyResult: ReturnType<typeof buildCompactionApply> | null = null;
+      try {
+        applyResult = buildCompactionApply({
+          messages,
+          chains: chains as Chain[],
+          cutResult: cut,
+          summaryText: result.text,
+          mode: cfg.mode,
+          flaggedIds,
+          sessionId,
+        });
+      } catch (e) {
+        if (e instanceof CompactionApplyError) {
+          trigger.state.pendingPrepare = false;
+          return { didApply: false };
+        }
+        throw e;
+      }
       if (!applyResult.didApply) {
         trigger.state.pendingPrepare = false;
         return { didApply: false };
@@ -497,7 +665,9 @@ async function tryCompactSynchronously(
         return { didApply: false };
       }
       setChatHistory(sessionId, [...applyResult.updatedMessages]);
-      trigger.onCompactionApplied(estimatedInput);
+      const tpcSimple = trigger.state.tokensPerChar ?? tokensPerChar;
+      const postSimple = Math.ceil(totalChars(applyResult.updatedMessages) * tpcSimple);
+      trigger.onCompactionApplied(estimatedInput, postSimple);
       trigger.state.pendingPrepare = false;
       return { didApply: true, updatedMessages: [...applyResult.updatedMessages] };
     }
@@ -523,14 +693,34 @@ function handleUsageCompaction(
   const cfg = runtime.config.compaction?.main;
   if (!cfg) return;
   if (!Number.isFinite(contextTokens) || contextTokens <= 0) return;
-  trigger.observeUsage(inputTokens, fullHistory);
+  // Single-pass totalChars reuse + early threshold gate (avoids 4× scans per CHAT_USAGE)
+  const totalCharsValue = totalChars(fullHistory);
+  // Derive calibrated tokensPerChar from provider inputTokens / totalChars (no /4 fallback)
+  let tokensPerChar: number | undefined = trigger.state.tokensPerChar;
+  if (totalCharsValue > 0 && Number.isFinite(inputTokens) && inputTokens > 0) {
+    const r = inputTokens / totalCharsValue;
+    if (Number.isFinite(r) && r > 0) {
+      const clamped = Math.max(0.05, Math.min(r, 2));
+      tokensPerChar = clamped;
+      trigger.state.tokensPerChar = clamped;
+    }
+  }
+  trigger.state.lastObservedInputTokens = inputTokens;
   trigger.onUsage(inputTokens, contextTokens, cfg.threshold, cfg.hysteresis_delta);
   if (trigger.state.pendingPrepare) return;
   if (compactionPending.has(sessionId)) return;
+  // Early gate: if ratio well below threshold and hysteresis accrual not satisfied, skip expensive cut/reclaim
+  const ratio = inputTokens / contextTokens;
+  if (ratio + 1e-9 < cfg.threshold) {
+    const baseline = trigger.state.postCompactionInputTokens;
+    if (!(trigger.state.hysteresisArmed && typeof baseline === 'number' && Number.isFinite(baseline) && inputTokens - baseline >= cfg.min_compactable_tokens)) {
+      return;
+    }
+  }
   try {
     const cut = selectCut(fullHistory, { keepRecentChains: cfg.keep_recent_chains });
     if (cut.compactableRange.end <= cut.compactableRange.start) return;
-    const tokensPerChar = trigger.state.tokensPerChar ?? FALLBACK_TOKENS_PER_CHAR;
+    if (tokensPerChar == null || !Number.isFinite(tokensPerChar) || tokensPerChar <= 0) return;
     const compactableTokens = compactableTokenEstimate(fullHistory, cut.compactableRange, tokensPerChar);
     if (compactableTokens < cfg.min_compactable_tokens) return;
     const reclaim = mechanicalReclaim(fullHistory, cut.compactableRange);

@@ -137,18 +137,35 @@ export async function tryCompactSubagentHistory(params: {
     return null;
   }
   const compactableRange = cut.compactableRange;
-  const compactableTokensApprox = Math.max(0, compactableRange.end - compactableRange.start) * 250; // coarse ~250 tokens/msg floor; trigger uses floor gate
-  // Need at least a coarse estimate; trigger will gate on min_compactable_tokens
-  // Use a tokenEstimator-like char heuristic for the slice when available
-  const slice = messages.slice(compactableRange.start, compactableRange.end);
-  let compactableTokens = 0;
-  for (const m of slice as readonly Message[]) {
-    const c = (m.content?.length ?? 0) + (m.thinking?.length ?? 0) + (m.tool_call_id?.length ?? 0) + (m.name?.length ?? 0);
-    compactableTokens += Math.max(1, Math.ceil(c / 4));
-    if (m.tool_calls) compactableTokens += Math.ceil(JSON.stringify(m.tool_calls).length / 4);
-    if (m.tool_result) compactableTokens += Math.ceil(JSON.stringify(m.tool_result).length / 4);
+  // Derive compactableTokens without /4 fallback: use provider inputTokens / totalChars (same as context-snapshot allocation)
+  function estimateMessageCharsSub(msg: Message): number {
+    let n = 0;
+    if (msg.content) n += msg.content.length;
+    if (msg.thinking) n += msg.thinking.length;
+    if (msg.tool_calls) n += JSON.stringify(msg.tool_calls).length;
+    if (msg.tool_result) n += JSON.stringify(msg.tool_result).length;
+    if (msg.tool_call_id) n += msg.tool_call_id.length;
+    if (msg.name) n += msg.name.length;
+    return n === 0 ? 1 : n;
   }
-  if (compactableTokens === 0) compactableTokens = compactableTokensApprox;
+  let totalCharsAll = 0;
+  for (const m of messages as readonly Message[]) totalCharsAll += estimateMessageCharsSub(m);
+  if (totalCharsAll === 0) totalCharsAll = 1;
+  const tokensPerCharSub = (() => {
+    if (!Number.isFinite(inputTokens) || inputTokens <= 0) return undefined;
+    const r = inputTokens / totalCharsAll;
+    if (!Number.isFinite(r) || r <= 0) return undefined;
+    return Math.max(0.05, Math.min(r, 2));
+  })();
+  if (!tokensPerCharSub) return null;
+  let sliceChars = 0;
+  for (let i = compactableRange.start; i < compactableRange.end; i += 1) {
+    const m = (messages as readonly Message[])[i];
+    if (!m) continue;
+    sliceChars += estimateMessageCharsSub(m);
+  }
+  let compactableTokens = Math.ceil(sliceChars * tokensPerCharSub);
+  if (compactableTokens <= 0) return null;
 
   // Mechanical reclaim pass before summarizer (v1 single rule, R25)
   let flaggedIds: string[] = [];

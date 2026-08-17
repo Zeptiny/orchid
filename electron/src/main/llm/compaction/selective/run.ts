@@ -23,13 +23,13 @@ import type { ModelSelection } from '../../../../shared/types/provider';
 import type { Config } from '../../../config/schema';
 import type { ProjectRuntime } from '../../../project/runtime';
 import { getAgent } from '../../../agents/registry';
-import { getTierModelSelection } from '../../../config/loader';
 import { getProviderRuntime } from '../../../providers';
 import { getProviderAccountingStore } from '../../../providers/accounting/store';
 import type { ProviderAccountingStore } from '../../../providers/accounting/store';
 import { createMiddlewareStack } from '../../middleware';
 import type { ProviderAttemptAccountingContext } from '../../../providers/accounting/middleware';
 import { importESM } from '../../../utils/esm-import';
+import { resolveCompactorModelSelection } from '../summarize';
 
 export function buildSelectiveUserPrompt(manifest: Manifest, previousErrors?: readonly string[]): string {
   const lines = manifest.entries.map((e) => `${e.id} [${e.kind}] ${e.preview}`).join('\n');
@@ -52,21 +52,14 @@ export function createLlmSelectiveCaller(params: {
 }): SelectiveCaller {
   return async ({ manifest, attempt, previousErrors }): Promise<SelectiveOp[]> => {
     const { config, scope, fallbackSelection, runtime, agents, subagentId, accounting, abortSignal } = params;
-    const compaction = (config as unknown as { compaction?: Config['compaction'] }).compaction;
-    const scopeConfig = compaction ? (scope === 'main' ? compaction.main : compaction.subagents) : undefined;
     const agentName = scope === 'main' ? 'compactor-selective' : 'compactor-subagent-selective';
     let agent: Agent | undefined;
     if (agents?.has(agentName)) agent = agents.get(agentName);
     else if (runtime?.agents.has(agentName)) agent = runtime.agents.get(agentName);
     else agent = getAgent(agentName);
     if (!agent || agent.type !== AgentType.INTERNAL) throw new Error(`selective compactor agent "${agentName}" unavailable`);
-    let selection: ModelSelection | null = null;
-    if (scopeConfig?.model) selection = scopeConfig.model;
-    else {
-      const tierSel = getTierModelSelection(config, agent.tier);
-      if (tierSel) selection = tierSel;
-      else selection = fallbackSelection ?? null;
-    }
+    // Shared fallback chain via summarize helper (P2 #24 dedup)
+    const selection = resolveCompactorModelSelection(config, agent, scope, fallbackSelection ?? null);
     if (!selection) throw new Error('no model for selective compactor');
     const execution = await getProviderRuntime().resolveExecution(selection);
     const store = accounting.store ?? (() => { try { return getProviderAccountingStore(); } catch { return null; } })();
@@ -438,15 +431,37 @@ export async function runSelectiveCompaction(
     const fbMsg = makeSummaryMessage(fallbackText, 'simple', {
       start: manifest.entries[0]?.id ?? 'fallback-start',
       end: manifest.entries[manifest.entries.length - 1]?.id ?? 'fallback-end',
-      count: manifest.entries.length,
+      count: manifest.entries.filter((e) => e.kind !== 'user').length || manifest.entries.length,
     });
-    // For fallback, flaggedIds is entire compactable range
-    const flaggedIds = manifest.entries.map((e) => e.id);
-    // Preserve suffix still needed for full replay
+    // For fallback, flaggedIds must NOT include user messages (R9: keep user verbatim).
+    // Filter to non-user only; users are kept via keep ops / replay interleaving.
+    const flaggedIds = manifest.entries.filter((e) => e.kind !== 'user').map((e) => e.id);
+    // Preserve suffix still needed for full replay — build replay correctly interleaved
+    // (users kept verbatim at their manifest positions, single summary at first non-user slot)
+    // so callers do not need to re-insert at a single cut.
     const n = messages.length;
     const end = Math.max(0, Math.min(compactableRange.end, n));
     const preserveSuffix = messages.slice(end);
-    const replayMessages = [fbMsg, ...preserveSuffix];
+    const msgById = new Map<string, Message>(messages.map((m) => [m.id, m]));
+    const replayPrefix: Message[] = [];
+    let summaryInserted = false;
+    for (const entry of manifest.entries) {
+      if (entry.kind === 'user') {
+        const original = msgById.get(entry.id);
+        if (original) replayPrefix.push(original);
+      } else {
+        if (!summaryInserted) {
+          replayPrefix.push(fbMsg);
+          summaryInserted = true;
+        }
+        // non-user originals are flagged, not replayed verbatim
+      }
+    }
+    if (!summaryInserted) {
+      // Edge: range contained only user messages — still insert summary
+      replayPrefix.push(fbMsg);
+    }
+    const replayMessages = [...replayPrefix, ...preserveSuffix];
     return {
       kind: 'fallback',
       reason,

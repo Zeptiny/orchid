@@ -174,13 +174,11 @@ export function shouldTriggerCompaction(opts: {
   if (ratio + 1e-9 < threshold) return false;
 
   // Hysteresis (R13): if armed, suppress unless accrual alternative satisfied
+  // Baseline is post-compaction inputTokens (growth since drop), falling back to lastCompaction for old state.
   if (hysteresisArmed) {
-    // Also allow accrual re-arm: min_compactable_tokens of new content since compaction.
-    // Use postCompactionInputTokens when available (more accurate: growth since drop),
-    // otherwise fall back to lastCompactionInputTokens (pre-compaction peak).
-    const baseline = typeof opts.postCompactionInputTokens === 'number'
+    const baseline = (typeof opts.postCompactionInputTokens === 'number' && Number.isFinite(opts.postCompactionInputTokens)
       ? opts.postCompactionInputTokens
-      : opts.lastCompactionInputTokens;
+      : opts.lastCompactionInputTokens);
     if (typeof baseline === 'number' && Number.isFinite(baseline)) {
       const accrued = inputTokens - baseline;
       if (accrued >= minCompactableTokens) {
@@ -399,10 +397,10 @@ export function evaluateTriggerWithReclaim(params: {
     return { shouldPrepare: false, shouldApply: false, reason: 'below-threshold' };
   }
   if (params.state?.hysteresisArmed) {
-    const baseline = typeof params.state.postCompactionInputTokens === 'number'
+    const baseline = (typeof params.state.postCompactionInputTokens === 'number' && Number.isFinite(params.state.postCompactionInputTokens)
       ? params.state.postCompactionInputTokens
-      : params.state.lastCompactionInputTokens;
-    const accruesEnough = typeof baseline === 'number'
+      : params.state.lastCompactionInputTokens);
+    const accruesEnough = typeof baseline === 'number' && Number.isFinite(baseline)
       ? effectiveInput - baseline >= minCompactableTokens
       : false;
     if (!accruesEnough) {

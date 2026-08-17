@@ -224,10 +224,10 @@ export function analyzeToolGroups(messages: readonly Message[]): ToolGroupAnalys
     if (!msg.content && (!msg.tool_calls || msg.tool_calls.length === 0)) continue;
 
     // Breaking message: previous pending group ends here
-    if (pending && pending.satisfied.size > 0) {
-      // push interval for the satisfied portion of the pending group
-      // lastResultOrig is guaranteed non-null when satisfied>0
-      completedIntervals.push([pending.startOrig, pending.lastResultOrig!]);
+    if (pending && pending.satisfied.size === pending.ids.size && pending.satisfied.size > 0 && pending.lastResultOrig !== null) {
+      // Only a fully satisfied group is completed (R5). Partial groups remain open
+      // and will be handled via openGroupStart so cut snaps before the group.
+      completedIntervals.push([pending.startOrig, pending.lastResultOrig]);
     }
     pending = null;
 
@@ -368,16 +368,12 @@ export function selectCut(
 
   const { completedIntervals, openGroupStart } = analyzeToolGroups(messages);
 
-  // Single-only-chain yields empty (preserve whole history, compactable empty)
-  // If there are 0 or 1 real chains, compactable is always empty regardless of keep
-  if (realChains.length <= 1) {
-    // Even if keep=0, we preserve the single chain
-    // Open group is inside that chain, already preserved
-    // For empty realChains (only summary heads), also empty
+  // Empty realChains (only summary heads) => nothing to compact (preserve guard for 0 case)
+  if (realChains.length === 0) {
     return {
       cutIndex: 0,
       compactableRange: { start: 0, end: 0 },
-      preservedCount: realChains.length,
+      preservedCount: 0,
       openGroupStart,
       preservedRange: { start: 0, end: n },
     };
@@ -401,13 +397,45 @@ export function selectCut(
     return Math.min(...candidates);
   };
 
+  // Single-chain fast-path removed (P0 #1): always run chain-boundary + tool-group walk.
+  // A runaway 900k turn (1 chain, 3 completed groups + 1 open group) must compact to
+  // openGroupStart instead of yielding empty. keep_recent_chains is still honored via
+  // computePreserveStart and then bounded by cutToSafeBoundary (tool-group atomicity).
+  // Empty compactable now only occurs when the single chain is fully open (no completed
+  // intervals and openGroupStart at 0) or when keep covers the whole history and no
+  // tool boundary forces an earlier cut.
+
+  // Prefix-sum char array for budget loop (P2 #25): compute once, O(1) per keep iteration
+  const usePrefixForDefaultEstimator = !opts.tokenEstimator && maxPreserveTokens !== null;
+  let prefixChars: number[] | null = null;
+  let totalChars = 0;
+  if (usePrefixForDefaultEstimator) {
+    prefixChars = new Array(n + 1);
+    prefixChars[0] = 0;
+    for (let i = 0; i < n; i += 1) {
+      const m = messages[i]!;
+      let c = 0;
+      if (m.content) c += m.content.length;
+      if (m.thinking) c += m.thinking.length;
+      if (m.tool_calls) c += JSON.stringify(m.tool_calls).length;
+      if (m.tool_call_id) c += m.tool_call_id.length;
+      if (m.name) c += m.name.length;
+      if (m.tool_result) c += JSON.stringify(m.tool_result).length;
+      if (hasCompactedMarker(m)) c += JSON.stringify((m as unknown as { compacted: unknown }).compacted).length;
+      prefixChars[i + 1] = prefixChars[i]! + c;
+    }
+    totalChars = prefixChars[n]!;
+  }
+
   // Try shrinking keep from initial down to 0 to fit budget, always adjusting to safe boundary
   for (let keep = keepRecentChainsRaw; keep >= 0; keep -= 1) {
     let cutCandidate = computePreserveStart(keep);
-    // If preserve window is empty (keep=0 and no open), cutCandidate == n
-    // That would make compactable = [0,n) which after boundary adjust stays n, but needs tool-boundary adjust
-    // Adjust to safe boundary (never split a tool group)
-    cutCandidate = adjustCutToSafeBoundary(cutCandidate, completedIntervals, openGroupStart, n);
+    // Adjust to safe boundary (never split a tool group). For cross-chain splits where
+    // a USER boundary lands inside a tool group, snap backward to group start so the
+    // entire call/result pair stays together in the preserved window (P1 #6). This
+    // avoids the forward-snap orphan where result is compacted but call is kept.
+    const adjustedCut = adjustCutToSafeBoundary(cutCandidate, completedIntervals, openGroupStart, n);
+    cutCandidate = adjustedCut;
 
     // After adjustment, recompute preservedCount (may have grown to include whole chain before tool group)
     // preservedCount is number of real chains whose start is >= cutCandidate (or chain interval overlapping preserve)
@@ -428,8 +456,15 @@ export function selectCut(
 
     // Budget check: estimate preserve window tokens
     if (maxPreserveTokens !== null) {
-      const preserveSlice = messages.slice(cutCandidate);
-      const preserveTokens = estimator(preserveSlice);
+      let preserveTokens: number;
+      if (usePrefixForDefaultEstimator && prefixChars) {
+        const preservedChars = totalChars - prefixChars[cutCandidate]!;
+        const preservedLen = n - cutCandidate;
+        preserveTokens = Math.max(preservedLen, Math.ceil(preservedChars / 4));
+      } else {
+        const preserveSlice = messages.slice(cutCandidate);
+        preserveTokens = estimator(preserveSlice);
+      }
       if (preserveTokens > maxPreserveTokens) {
         // Budget exceeded — try smaller keep (shrink) unless we're already at minimal (open group only)
         // Minimal is keep=0 -> preserve only open group (or empty if no open)
