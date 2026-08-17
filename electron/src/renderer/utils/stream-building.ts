@@ -610,7 +610,7 @@ export function buildLiveTailItems(opts: {
         if (block) pushTool(block);
         return;
       }
-      if (seg.kind === 'text' && seg.content) {
+      if (seg.kind === 'text' && seg.content.trim()) {
         const stillStreaming =
           liveStreaming && segIndex === lastSegIndex;
         pushMessage(
@@ -632,7 +632,7 @@ export function buildLiveTailItems(opts: {
         );
         return;
       }
-      if (seg.kind === 'thinking' && seg.content) {
+      if (seg.kind === 'thinking' && seg.content.trim()) {
         // Finished as soon as anything follows this segment (tool/text/new thought).
         const stillStreamingThink =
           liveStreaming && segIndex === lastSegIndex;
@@ -663,7 +663,7 @@ export function buildLiveTailItems(opts: {
   for (const block of toolBlocks) {
     pushTool(block);
   }
-  if (streamingContent) {
+  if (streamingContent.trim()) {
     pushMessage(
       {
         id: 'streaming',
