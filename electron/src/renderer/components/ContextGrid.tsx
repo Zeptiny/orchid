@@ -19,7 +19,7 @@ const COLOR_USER = 'var(--context-user)';
 const COLOR_ASSISTANT = 'var(--context-assistant)';
 const COLOR_ASSISTANT_REASONING =
   'color-mix(in srgb, var(--context-assistant) 58%, var(--color-base-100))';
-const COLOR_SUMMARY = 'var(--context-summary, #8b5cf6)';
+const COLOR_SUMMARY = 'var(--context-summary)';
 
 export interface ContextBreakdown {
   free: number;

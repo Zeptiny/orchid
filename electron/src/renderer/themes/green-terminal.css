@@ -146,6 +146,7 @@
   --context-tool: #00b84a;
   --context-user: #00e699;
   --context-assistant: #00ff41;
+  --context-summary: #8b5cf6;
  /* Chart colors — categorical palette + tooltip/axis theming */
  --chart-1: #00ff41;
  --chart-2: #00cc33;
