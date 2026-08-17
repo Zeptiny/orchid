@@ -11,7 +11,7 @@ import type { ProjectRuntime } from '../../project/runtime';
 import type { LanguageModelV4 } from '@ai-sdk/provider';
 import type { ProviderAttemptAccountingContext } from '../../providers/accounting/middleware';
 import type { CacheFacet } from '../../../shared/types/provider-facets';
-import { shouldStopNextRequest } from '../next-request-stop';
+import { shouldStopEarlyForSession } from '../next-request-stop';
 
 export function classifyErrorKind(title: string | null | undefined, detail: string): ChatErrorKind {
   const haystack = `${title ?? ''} ${detail}`.toLowerCase();
@@ -98,7 +98,7 @@ export function createProviderStreamFn(input: {
       projectRuntime: input.runtime,
       agentScopeId: 'main',
       abortSignal,
-      shouldStopEarly: () => shouldStopNextRequest(input.sessionId),
+      shouldStopEarly: () => shouldStopEarlyForSession(input.sessionId),
       modelInstance: input.modelInstance,
       accounting: input.accounting,
       providerOptions: input.providerOptions,

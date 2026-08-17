@@ -44,7 +44,7 @@ import type { Chain } from '../../../shared/types/chain';
 import { MessageType, type Message, type Usage } from '../../../shared/types/message';
 import { getChatHistory, setChatHistory } from '../chat-history';
 import { chatSendSchema } from '../payload-schemas';
-import { clearNextRequestStop } from '../next-request-stop';
+import { clearNextRequestStop, requestCompactionPause, clearCompactionPause, shouldPauseForCompaction } from '../next-request-stop';
 import { completeSessionActivity, publishSessionActivity } from '../session-activity';
 import { disposeActiveAgent, forceAbortSession } from './abort';
 import { emitSessionUpdated, sendChatState, sendTurnEvent } from './events';
@@ -799,6 +799,10 @@ function handleUsageCompaction(
     if (decision.shouldApply && !decision.shouldPrepare) {
       compactionPending.set(sessionId, { cut, flaggedIds, estimatedInput: inputTokens, contextTokens, mode: cfg.mode });
       trigger.markPrepareStarted(cut.compactableRange, flaggedIds);
+      if (!shouldPauseForCompaction(sessionId)) {
+        requestCompactionPause(sessionId);
+        publishSessionActivity(sessionId, { cwd: runtime.projectDir ?? '', state: 'working', phase: 'agent', detail: 'Compacting context — reclaiming duplicates…', canCancel: true });
+      }
       return;
     }
     if (decision.shouldPrepare) {
@@ -836,6 +840,10 @@ function handleUsageCompaction(
         });
         compactionPending.set(sessionId, { cut, flaggedIds, estimatedInput: inputTokens, contextTokens, mode: 'selective', selectivePromise, manifest });
         selectivePromise.catch((err) => console.debug('[compaction] selective prepare failed (non-fatal):', err));
+        if (!shouldPauseForCompaction(sessionId)) {
+          requestCompactionPause(sessionId);
+          publishSessionActivity(sessionId, { cwd: runtime.projectDir ?? '', state: 'working', phase: 'agent', detail: 'Compacting context — summarizing history…', canCancel: true });
+        }
         return;
       }
       // ── Simple pending branch (unchanged) ─────────────────────────────
@@ -853,6 +861,10 @@ function handleUsageCompaction(
       compactionPending.set(sessionId, { cut, flaggedIds, promise, estimatedInput: inputTokens, contextTokens, mode: 'simple' });
       // If summarizer resolves to null, next boundary will clear pending without applying
       promise.catch((err) => console.debug('[compaction] prepare failed (non-fatal):', err));
+      if (!shouldPauseForCompaction(sessionId)) {
+        requestCompactionPause(sessionId);
+        publishSessionActivity(sessionId, { cwd: runtime.projectDir ?? '', state: 'working', phase: 'agent', detail: 'Compacting context — summarizing history…', canCancel: true });
+      }
     }
   } catch (err) {
     console.debug('[compaction] usage trigger failed (non-fatal):', err);
@@ -871,6 +883,7 @@ export async function startChatTurn(
 
   const sessionId = sessionGate.session.id;
   clearNextRequestStop(sessionId);
+  clearCompactionPause(sessionId);
   if (sessionsStarting.has(sessionId)) {
     return { status: 'error', error: 'A turn is already starting for this session.', kind: 'session_busy' };
   }
@@ -1382,6 +1395,54 @@ export async function startChatTurn(
       }
     }
     if (snapshot.value === 'idle' && context.currentInput && !completed && !activeAgent.agentCancelled) {
+      if (shouldPauseForCompaction(sessionId)) {
+        clearCompactionPause(sessionId);
+        const fullHistoryForPause = [...messages, ...turnMessagesFromAgent(activeAgent)];
+        publishSessionActivity(sessionId, { cwd: turnCtx.cwd, state: 'working', phase: 'agent', detail: 'Compacting context — applying summary…', canCancel: true });
+        sendTurnEvent(webContents, activeAgent, IPC_CHANNELS.CHAT_TOOL_CALL_UPDATE, { type: 'tool_call_update', toolCallId: `compaction-${Date.now()}`, toolName: 'compaction', status: 'running', args: JSON.stringify({ phase: 'compacting' }), content: 'Compacting context window…', toolResult: null } as unknown as Record<string, unknown>);
+        (async () => {
+          try {
+            let applied = false;
+            let updated: Message[] | undefined;
+            const pendingRes = await applyPendingCompactionIfAny(sessionId, fullHistoryForPause, runtime);
+            if (pendingRes.applied && pendingRes.updatedMessages) {
+              applied = true;
+              updated = pendingRes.updatedMessages;
+            } else if (contextTokens != null) {
+              const syncRes = await tryCompactSynchronously(sessionId, fullHistoryForPause, runtime, turnSelection, contextTokens, accountingStore!, chainId, turnId);
+              if (syncRes.didApply && syncRes.updatedMessages) {
+                applied = true;
+                updated = syncRes.updatedMessages;
+              }
+            }
+            if (applied && updated) {
+              messages.splice(0, messages.length, ...updated);
+              activeAgent.messages.splice(0, activeAgent.messages.length, ...updated);
+              activeAgent.turnMessages = [];
+              activeAgent.responseCommittedLength = 0;
+              activeAgent.thinkingCommittedLength = 0;
+              activeAgent.thinkingArtifactsCommitted = 0;
+              lastSentLength = 0;
+              lastThinkingLength = 0;
+              lastUsage = null;
+              try {
+                actor.send({ type: 'USER_INPUT', message });
+                publishSessionActivity(sessionId, { cwd: turnCtx.cwd, state: 'working', phase: 'agent', detail: 'Resuming after compaction', canCancel: true });
+                sendTurnEvent(webContents, activeAgent, IPC_CHANNELS.CHAT_TOOL_CALL_UPDATE, { type: 'tool_call_update', toolCallId: `compaction-${Date.now()}`, toolName: 'compaction', status: 'completed', args: '', content: 'Context compacted — resuming', toolResult: { status: 'success', output: 'compacted' } } as unknown as Record<string, unknown>);
+                return;
+              } catch (e) {
+                console.debug('[compaction] mid-turn resume failed:', e);
+              }
+            }
+          } catch (e) {
+            console.debug('[compaction] mid-turn pause handling failed:', e);
+          }
+          clearCompactionPause(sessionId);
+          finalizeTurn({ response: context.response, usage: context.usage ?? null, interrupted: false, sendDone: true });
+          queueMicrotask(() => disposeActiveAgent(sessionId, activeAgent));
+        })();
+        return;
+      }
       finalizeTurn({ response: context.response, usage: context.usage ?? null, interrupted: false, sendDone: true });
       queueMicrotask(() => disposeActiveAgent(sessionId, activeAgent));
     }

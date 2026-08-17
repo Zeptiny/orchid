@@ -31,3 +31,22 @@ export function shouldStopNextRequest(sessionId: string): boolean {
 export function clearNextRequestStop(sessionId: string): void {
   nextRequestStops.delete(sessionId);
 }
+
+/** Sessions whose tool loop should pause for compaction at next step boundary. */
+const compactionPauses = new Set<string>();
+
+export function requestCompactionPause(sessionId: string): void {
+  compactionPauses.add(sessionId);
+}
+
+export function shouldPauseForCompaction(sessionId: string): boolean {
+  return compactionPauses.has(sessionId);
+}
+
+export function clearCompactionPause(sessionId: string): void {
+  compactionPauses.delete(sessionId);
+}
+
+export function shouldStopEarlyForSession(sessionId: string): boolean {
+  return shouldStopNextRequest(sessionId) || shouldPauseForCompaction(sessionId);
+}
