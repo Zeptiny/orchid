@@ -19,6 +19,7 @@ const COLOR_USER = 'var(--context-user)';
 const COLOR_ASSISTANT = 'var(--context-assistant)';
 const COLOR_ASSISTANT_REASONING =
   'color-mix(in srgb, var(--context-assistant) 58%, var(--color-base-100))';
+const COLOR_SUMMARY = 'var(--context-summary, #8b5cf6)';
 
 export interface ContextBreakdown {
   free: number;
@@ -26,6 +27,7 @@ export interface ContextBreakdown {
   tools: number;
   tool_use: number;
   messages: number;
+  summary?: number;
   percentUsed?: number;
 }
 
@@ -43,6 +45,7 @@ interface TokenBreakdown {
   user: number;
   assistantResponse: number;
   assistantReasoning: number;
+  summary: number;
   free: number;
   total: number;
   maxContext: number;
@@ -65,6 +68,7 @@ export interface ContextCategories {
   toolUse: number;
   response: number;
   reasoning: number;
+  summary?: number;
 }
 
 function formatTokens(n: number): string {
@@ -87,6 +91,7 @@ interface MessageChars {
   user: number;
   response: number;
   reasoning: number;
+  summary: number;
 }
 
 function countMessageChars(messages: readonly Message[]): MessageChars {
@@ -95,9 +100,15 @@ function countMessageChars(messages: readonly Message[]): MessageChars {
     user: 0,
     response: 0,
     reasoning: 0,
+    summary: 0,
   };
   for (const message of messages) {
     if (message.hidden) continue;
+    if (message.compacted) {
+      counts.summary += message.content.length;
+      if (message.thinking) counts.summary += message.thinking.length;
+      continue;
+    }
     if (message.type === MessageType.TOOL_CALL || message.type === MessageType.TOOL_RESULT) {
       counts.tools += message.content.length;
     }
@@ -216,6 +227,7 @@ function computeBreakdown(
       }
       assistant = splitAssistantTokens(effectiveAssistantTokens, chars);
     }
+    const summaryTokens = Math.max(0, context.summary_tokens ?? 0);
     return {
       system: context.system_tokens,
       tools: context.tools_tokens,
@@ -223,6 +235,7 @@ function computeBreakdown(
       user: context.user_tokens,
       assistantResponse: assistant.response,
       assistantReasoning: assistant.reasoning,
+      summary: summaryTokens,
       free: mc > 0 ? Math.max(0, mc - effectiveUsedTokens) : 0,
       total: mc > 0 ? mc : effectiveUsedTokens,
       maxContext: mc,
@@ -237,6 +250,7 @@ function computeBreakdown(
       user: 0,
       assistantResponse: 0,
       assistantReasoning: 0,
+      summary: 0,
       free: mc,
       total: mc,
       maxContext: mc,
@@ -252,13 +266,19 @@ function computeBreakdown(
   }
 
   const totalChars = chars.tools + chars.user + chars.response + chars.reasoning;
-  const toolUseTokens = totalChars > 0 ? Math.round((chars.tools / totalChars) * promptTokens) : 0;
-  const userTokens = totalChars > 0 ? Math.round((chars.user / totalChars) * promptTokens) : 0;
+  const summaryChars = chars.summary;
+  const summaryTokens = totalChars + summaryChars > 0
+    ? Math.round((summaryChars / (totalChars + summaryChars)) * promptTokens)
+    : 0;
+  const promptForDistribution = Math.max(0, promptTokens - summaryTokens);
+  const distTotalChars = chars.tools + chars.user + chars.response + chars.reasoning;
+  const toolUseTokens = distTotalChars > 0 ? Math.round((chars.tools / distTotalChars) * promptForDistribution) : 0;
+  const userTokens = distTotalChars > 0 ? Math.round((chars.user / distTotalChars) * promptForDistribution) : 0;
   const assistantTokens = splitByProviderReasoning(
     completionTokens,
     usage.reasoning_tokens,
   ) ?? splitAssistantTokens(completionTokens, chars);
-  const systemTokens = Math.max(0, promptTokens - toolUseTokens - userTokens);
+  const systemTokens = Math.max(0, promptTokens - toolUseTokens - userTokens - summaryTokens);
   const freeTokens = mc > 0
     ? Math.max(0, mc - promptTokens - completionTokens)
     : 0;
@@ -270,6 +290,7 @@ function computeBreakdown(
     user: userTokens,
     assistantResponse: assistantTokens.response,
     assistantReasoning: assistantTokens.reasoning,
+    summary: summaryTokens,
     free: freeTokens,
     total: mc > 0 ? mc : promptTokens + completionTokens,
     maxContext: mc,
@@ -303,6 +324,9 @@ function buildLegendSections(b: TokenBreakdown): LegendSection[] {
         entry('response', COLOR_ASSISTANT, 'Response', b.assistantResponse),
         entry('reasoning', COLOR_ASSISTANT_REASONING, 'Reasoning', b.assistantReasoning),
       ],
+    },
+    {
+      entries: [entry('summary', COLOR_SUMMARY, 'Summary (Compaction)', b.summary)],
     },
     {
       entries: [{
@@ -505,7 +529,8 @@ export function computeContextBreakdown(
   const mb = computeBreakdown(messages, usage, maxContext);
   const percentUsed = contextPercent(usage, maxContext) ?? undefined;
   if (usage?.context) {
-    return {
+    const summaryTokens = usage.context.summary_tokens ?? mb.summary;
+    const base: ContextBreakdown = {
       free: mb.free,
       system: usage.context.system_tokens,
       tools: usage.context.tools_tokens,
@@ -513,8 +538,10 @@ export function computeContextBreakdown(
       messages: usage.context.user_tokens + usage.context.assistant_tokens,
       percentUsed,
     };
+    if (summaryTokens > 0) base.summary = summaryTokens;
+    return base;
   }
-  return {
+  const base: ContextBreakdown = {
     free: mb.free,
     system: mb.system,
     tools: mb.tools,
@@ -522,6 +549,8 @@ export function computeContextBreakdown(
     messages: mb.user + mb.assistantResponse + mb.assistantReasoning,
     percentUsed,
   };
+  if (mb.summary > 0) base.summary = mb.summary;
+  return base;
 }
 
 export function computeContextCategories(
@@ -530,10 +559,16 @@ export function computeContextCategories(
   maxContext?: number | null,
 ): ContextCategories {
   const breakdown = computeBreakdown(messages, usage, maxContext);
-  return {
+  const base: ContextCategories = {
     toolDefinition: breakdown.tools,
     toolUse: breakdown.toolUse,
     response: breakdown.assistantResponse,
     reasoning: breakdown.assistantReasoning,
   };
+  // Include summary only when non-zero to keep legacy test expectations stable;
+  // the legend and bar already filter zero-valued segments.
+  if (breakdown.summary > 0) {
+    (base as { summary: number }).summary = breakdown.summary;
+  }
+  return base;
 }

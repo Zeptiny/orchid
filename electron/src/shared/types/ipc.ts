@@ -277,7 +277,7 @@ export interface ChatDoneEvent extends ChatEventIdentity {
   usage?: Usage | null;
 }
 
-export type ChatErrorKind = 'stream' | 'rate-limit' | 'auth' | 'generic';
+export type ChatErrorKind = 'stream' | 'rate-limit' | 'auth' | 'generic' | 'context_length_exceeded';
 
 export interface ChatErrorEvent extends ChatEventIdentity {
   type: 'error';

@@ -57,3 +57,53 @@ export function isTransientError(error: unknown): boolean {
 
   return false;
 }
+
+// ---------------------------------------------------------------------------
+// Context-window overflow detection (R15)
+// ---------------------------------------------------------------------------
+
+/**
+ * Whether an error indicates the request exceeded the model's context window.
+ *
+ * Covers provider error codes (`context_length_exceeded`), OpenAI-style
+ * `"maximum context length"` messages, and generic `"input too long"` /
+ * `"context window"` overflow phrasing. Used to trigger one
+ * compaction-and-retry before declaring the turn failed.
+ */
+export function isContextLengthExceededError(error: unknown): boolean {
+  const raw = (() => {
+    if (typeof error === 'string') return error;
+    if (error instanceof Error) return `${error.name} ${error.message}`;
+    if (error && typeof error === 'object') {
+      const maybe = error as { message?: unknown; detail?: unknown; title?: unknown; error?: unknown; code?: unknown };
+      const parts: string[] = [];
+      if (typeof maybe.message === 'string') parts.push(maybe.message);
+      if (typeof maybe.detail === 'string') parts.push(maybe.detail);
+      if (typeof maybe.title === 'string') parts.push(maybe.title);
+      if (typeof maybe.error === 'string') parts.push(maybe.error);
+      if (typeof maybe.code === 'string') parts.push(maybe.code);
+      if (parts.length > 0) return parts.join(' ');
+      try {
+        return JSON.stringify(error);
+      } catch {
+        return String(error);
+      }
+    }
+    return String(error ?? '');
+  })();
+  const haystack = raw.toLowerCase();
+  if (haystack.includes('context_length_exceeded')) return true;
+  if (haystack.includes('context length')) return true;
+  if (haystack.includes('maximum context')) return true;
+  if (haystack.includes('context window')) return true;
+  if (haystack.includes('token limit') && haystack.includes('exceeded')) return true;
+  if (haystack.includes('input is too long') || haystack.includes('input too long')) return true;
+  if (haystack.includes('prompt is too long') || haystack.includes('request too large')) return true;
+  return false;
+}
+
+/** Haystack variant for already-joined title+detail strings. */
+export function isContextLengthExceededMessage(haystack: string | null | undefined): boolean {
+  if (!haystack) return false;
+  return isContextLengthExceededError(haystack);
+}

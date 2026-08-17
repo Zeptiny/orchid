@@ -37,6 +37,212 @@ import { getProviderAccountingStore } from '../providers/accounting/store';
 import { getSubagentAttributionStore } from '../providers/accounting/subagent-attribution-store';
 import type { ProviderAttemptAccountingContext } from '../providers/accounting/middleware';
 
+/** Subagent mid-run compaction (U9): partial-report helper for R17. */
+export interface SubagentPartialReportInput {
+  readonly done: string;
+  readonly remaining: string;
+  readonly stoppedAt: string;
+}
+
+/**
+ * Build a structured partial report returned to the parent as a normal tool
+ * result when the run still exceeds the window after compaction (R17).
+ *
+ * The parent sees this as `record.result` inside the wait_for_subagent XML;
+ * it is not a hard failure.
+ */
+export function buildSubagentPartialReport(input: SubagentPartialReportInput): string {
+  const done = input.done?.trim() || '(no completed steps reported)';
+  const remaining = input.remaining?.trim() || '(unknown remaining work)';
+  const stoppedAt = input.stoppedAt?.trim() || 'unknown step';
+  return [
+    '[Subagent partial report — context window limit reached after compaction]',
+    '',
+    'Done:',
+    done,
+    '',
+    'Remaining:',
+    remaining,
+    '',
+    `Stopped at: ${stoppedAt}`,
+    '',
+    'Note: The subagent stopped early because the context window was still exceeded after compaction. This is a partial result returned as a normal tool result to the parent.',
+  ].join('\n');
+}
+
+/**
+ * Resolve a subagent run's own model limits (contextTokens) via the frozen
+ * selection's trusted provider execution (R16). Returns null when the catalog
+ * has no limits or the selection is unusable — caller falls back to no-op.
+ */
+export async function resolveSubagentContextTokens(
+  selection: ModelSelection | null,
+): Promise<number | null> {
+  if (!selection) return null;
+  try {
+    const execution = await getProviderRuntime().resolveExecution(selection);
+    const tokens = execution.model.limits?.contextTokens;
+    return typeof tokens === 'number' && Number.isFinite(tokens) ? tokens : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Shared subagent compaction attempt — uses the same trigger engine as U6 but
+ * with the subagents scope config (R16). The caller supplies the current chain
+ * history, latest provider-reported inputTokens, and resolved contextTokens.
+ *
+ * Returns a compaction ApplyResult when the trigger fired and the summary was
+ * built, or null for no-op (below threshold / floor / hysteresis, or summarizer
+ * unavailable). Reclaim-only (no summary head) is returned as an ApplyResult
+ * with flaggedIds and no summaryMessage, which the caller persists via the
+ * subagent checkpoint path.
+ *
+ * Accounting inside the summarizer already carries subagent scope (R18) when
+ * called with scope='subagents' + subagentId — see summarize.ts.
+ */
+export async function tryCompactSubagentHistory(params: {
+  readonly messages: readonly Message[];
+  readonly chains: readonly import('../../shared/types/chain').Chain[];
+  readonly selection: ModelSelection | null;
+  readonly config: import('../config/schema').Config;
+  readonly sessionId: string;
+  readonly subagentId: string;
+  readonly chainId: string | null;
+  readonly turnId: string | null;
+  readonly inputTokens: number;
+  readonly contextTokens: number;
+  readonly triggerState?: import('../llm/compaction/trigger').TriggerState;
+}): Promise<import('../llm/compaction/apply').ApplyResult | null> {
+  const { messages, chains, selection, config, sessionId, subagentId, chainId, turnId, inputTokens, contextTokens } = params;
+  const subagentsScope = (config as unknown as { compaction?: import('../../shared/types/ipc-boundary').CompactionConfig }).compaction?.subagents;
+  if (!subagentsScope) return null;
+  if (!Number.isFinite(contextTokens) || contextTokens <= 0) return null;
+  if (!Number.isFinite(inputTokens) || inputTokens < 0) return null;
+
+  // Lazy imports to avoid cycle with provider runtime during typecheck
+  const { selectCut } = await import('../llm/compaction/select.js');
+  const { mechanicalReclaim } = await import('../llm/compaction/reclaim.js');
+  const { evaluateTriggerWithReclaim } = await import('../llm/compaction/trigger.js');
+  const { summarizeCompactableRange } = await import('../llm/compaction/summarize.js');
+  const { buildCompactionApply } = await import('../llm/compaction/apply.js');
+  const { getProviderAccountingStore } = await import('../providers/accounting/store.js');
+
+  let cut: ReturnType<typeof selectCut>;
+  try {
+    cut = selectCut(messages as Message[], {
+      keepRecentChains: subagentsScope.keep_recent_chains,
+    });
+  } catch {
+    return null;
+  }
+  const compactableRange = cut.compactableRange;
+  const compactableTokensApprox = Math.max(0, compactableRange.end - compactableRange.start) * 250; // coarse ~250 tokens/msg floor; trigger uses floor gate
+  // Need at least a coarse estimate; trigger will gate on min_compactable_tokens
+  // Use a tokenEstimator-like char heuristic for the slice when available
+  const slice = messages.slice(compactableRange.start, compactableRange.end);
+  let compactableTokens = 0;
+  for (const m of slice as readonly Message[]) {
+    const c = (m.content?.length ?? 0) + (m.thinking?.length ?? 0) + (m.tool_call_id?.length ?? 0) + (m.name?.length ?? 0);
+    compactableTokens += Math.max(1, Math.ceil(c / 4));
+    if (m.tool_calls) compactableTokens += Math.ceil(JSON.stringify(m.tool_calls).length / 4);
+    if (m.tool_result) compactableTokens += Math.ceil(JSON.stringify(m.tool_result).length / 4);
+  }
+  if (compactableTokens === 0) compactableTokens = compactableTokensApprox;
+
+  // Mechanical reclaim pass before summarizer (v1 single rule, R25)
+  let flaggedIds: string[] = [];
+  if (subagentsScope.mechanical_reclaim) {
+    try {
+      const reclaim = mechanicalReclaim(messages as Message[], compactableRange);
+      flaggedIds = [...reclaim.flaggedIds];
+    } catch {
+      // non-fatal
+    }
+  }
+
+  const decision = evaluateTriggerWithReclaim({
+    inputTokens,
+    contextTokens,
+    threshold: subagentsScope.threshold,
+    hysteresisDelta: subagentsScope.hysteresis_delta,
+    compactableTokens,
+    minCompactableTokens: subagentsScope.min_compactable_tokens,
+    compactableRange,
+    messages: messages as Message[],
+    flaggedIds,
+    ...(params.triggerState ? { state: params.triggerState } : {}),
+  });
+
+  // Reclaim-only short-circuit: build apply without summarizer
+  if (decision.shouldApply && !decision.shouldPrepare && flaggedIds.length > 0) {
+    try {
+      const applyResult = buildCompactionApply({
+        messages: messages as Message[],
+        chains,
+        cutResult: cut,
+        summaryText: null,
+        mode: subagentsScope.mode as import('../../shared/types/message').CompactionMode,
+        reclaimedIds: flaggedIds,
+      });
+      return applyResult.didApply ? applyResult : null;
+    } catch {
+      return null;
+    }
+  }
+
+  if (!decision.shouldPrepare) return null;
+
+  // Summarizer: task-focused compactor-subagent, subagent-scoped accounting (R18)
+  const compactableSlice = messages.slice(compactableRange.start, compactableRange.end) as Message[];
+  if (compactableSlice.length === 0) return null;
+
+  let accountingStore: ReturnType<typeof getProviderAccountingStore> | undefined;
+  try {
+    accountingStore = getProviderAccountingStore();
+  } catch {
+    accountingStore = undefined;
+  }
+
+  let summarizeResult: Awaited<ReturnType<typeof summarizeCompactableRange>> | null;
+  try {
+    summarizeResult = await summarizeCompactableRange({
+      messages: compactableSlice,
+      scope: 'subagents',
+      config,
+      fallbackSelection: selection,
+      existingModelSelection: selection,
+      accounting: accountingStore
+        ? { store: accountingStore, sessionId, chainId, turnId }
+        : { sessionId, chainId, turnId } as unknown as Parameters<typeof summarizeCompactableRange>[0]['accounting'],
+      subagentId,
+    });
+  } catch {
+    return null;
+  }
+  if (!summarizeResult || !summarizeResult.text?.trim()) {
+    // Summarizer unavailable — if reclaim had ids, we already handled short-circuit; otherwise no-op
+    return null;
+  }
+
+  try {
+    const applyResult = buildCompactionApply({
+      messages: messages as Message[],
+      chains,
+      cutResult: cut,
+      summaryText: summarizeResult!.text,
+      mode: subagentsScope.mode as import('../../shared/types/message').CompactionMode,
+      reclaimedIds: flaggedIds,
+      sessionId,
+    });
+    if (!applyResult.didApply) return null;
+    return applyResult;
+  } catch {
+    return null;
+  }
+}
+
 /** Delegated workers cannot recursively fan out or control sibling workers. */
 const SUBAGENT_FORBIDDEN_TOOLS = new Set([
   'delegate_to_subagent',

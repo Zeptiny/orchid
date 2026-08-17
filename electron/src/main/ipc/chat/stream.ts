@@ -15,6 +15,14 @@ import { shouldStopNextRequest } from '../next-request-stop';
 
 export function classifyErrorKind(title: string | null | undefined, detail: string): ChatErrorKind {
   const haystack = `${title ?? ''} ${detail}`.toLowerCase();
+  if (
+    haystack.includes('context_length_exceeded') ||
+    haystack.includes('context length') ||
+    haystack.includes('maximum context') ||
+    haystack.includes('context window')
+  ) {
+    return 'context_length_exceeded';
+  }
   if (haystack.includes('rate limit') || haystack.includes('429') || haystack.includes('usage limit')) {
     return 'rate-limit';
   }

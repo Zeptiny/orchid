@@ -729,4 +729,30 @@
     font: 9px/1.2 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
     background: transparent;
   }
+
+  /* ── Compaction display (U10) ─────────────────────────────────────────── */
+  .orchid-compaction-card {
+    @apply self-start w-full max-w-full overflow-hidden;
+    animation: orchid-rise 220ms ease-out;
+  }
+  .orchid-compaction-card .orchid-disclosure-chevron.is-open {
+    transform: rotate(180deg);
+  }
+  .orchid-compaction-reclaim {
+    @apply self-start w-full max-w-full;
+    animation: orchid-rise 180ms ease-out;
+  }
+  .orchid-compaction-stub {
+    border-style: dashed;
+    background: color-mix(in srgb, var(--context-summary, #8b5cf6) 6%, transparent);
+    border-color: color-mix(in srgb, var(--context-summary, #8b5cf6) 30%, transparent);
+  }
+  .orchid-compaction-stub:hover {
+    background: color-mix(in srgb, var(--context-summary, #8b5cf6) 10%, transparent);
+    border-color: color-mix(in srgb, var(--context-summary, #8b5cf6) 45%, transparent);
+  }
+  .orchid-compaction-preview {
+    max-height: 7.5rem;
+    overflow: hidden;
+  }
 }

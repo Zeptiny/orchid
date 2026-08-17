@@ -53,9 +53,24 @@ export type StreamItem =
       key: string;
       chain: Chain;
       chainIndex: number;
+    }
+  | {
+      kind: 'compaction-summary';
+      key: string;
+      message: Message;
+    }
+  | {
+      kind: 'compacted-stub';
+      key: string;
+      messages: readonly Message[];
+      count: number;
     };
 
 export type FooterStreamItem = Extract<StreamItem, { kind: 'footer' }>;
+
+function hasCompactedMarker(message: Message): boolean {
+  return Boolean((message as unknown as { compacted?: unknown }).compacted);
+}
 
 export function shouldRenderChainFooter(input: {
   isActive: boolean;
@@ -193,6 +208,7 @@ export function buildHistoryStreamItems(opts: {
   sessionChains: readonly Chain[];
   interrupted: boolean;
   expandedChainIndexes: ReadonlySet<number>;
+  expandedCompactedKeys?: ReadonlySet<string>;
 }): HistoryBuildResult {
   const {
     toolBlocks,
@@ -202,6 +218,7 @@ export function buildHistoryStreamItems(opts: {
     sessionChains,
     interrupted,
     expandedChainIndexes,
+    expandedCompactedKeys,
   } = opts;
 
   const subByParent = subagentUsage.byParentChain;
@@ -271,6 +288,7 @@ export function buildHistoryStreamItems(opts: {
       liveById,
       emittedToolIds,
       keyPrefix: `c${chainIndex}`,
+      expandedCompactedKeys,
     });
     items.push(...chainItems.items);
 
@@ -300,7 +318,9 @@ export function buildHistoryStreamItems(opts: {
       (it) =>
         it.kind === 'tool' ||
         it.kind === 'tool-group' ||
-        (it.kind === 'message' && it.message.role !== MessageRole.USER),
+        (it.kind === 'message' && it.message.role !== MessageRole.USER) ||
+        it.kind === 'compaction-summary' ||
+        it.kind === 'compacted-stub',
     );
     const hasUser = chain.messages.some(
       (m) => m.role === MessageRole.USER && m.type === MessageType.TEXT,
@@ -353,9 +373,10 @@ function walkMessagesToItems(
     liveById: Map<string, ToolBlock>;
     emittedToolIds: Set<string>;
     keyPrefix: string;
+    expandedCompactedKeys?: ReadonlySet<string>;
   },
 ): { items: StreamItem[]; lastAssistantUsage: Usage | null } {
-  const { liveById, emittedToolIds, keyPrefix } = opts;
+  const { liveById, emittedToolIds, keyPrefix, expandedCompactedKeys } = opts;
   const visible = visibleSource.filter((m) => !m.hidden);
   const resultByCallId = new Map<string, Message>();
   for (const m of visible) {
@@ -368,6 +389,7 @@ function walkMessagesToItems(
   const consumedResults = new Set<string>();
   let lastAssistantUsage: Usage | null = null;
   let msgIdx = 0;
+  let compactedBuffer: Message[] = [];
 
   const keyFor = (msg: Message, kind: string, idx: number) =>
     msg.id && msg.id.length > 0 ? msg.id : `${keyPrefix}-${kind}-${idx}`;
@@ -393,7 +415,80 @@ function walkMessagesToItems(
     });
   };
 
+  const flushCompactedBuffer = () => {
+    if (compactedBuffer.length === 0) return;
+    const firstId = compactedBuffer[0]?.id || `${keyPrefix}-compacted-${msgIdx}`;
+    const stubKey = `compacted-${keyPrefix}-${firstId}`;
+    const isExpanded = expandedCompactedKeys?.has(stubKey) ?? false;
+    if (isExpanded) {
+      // Expand to full fidelity — render each buffered message with normal logic
+      for (const buffered of compactedBuffer) {
+        // Re-enter normal dispatch but without re-buffering
+        if (buffered.type === MessageType.TOOL_CALL) {
+          const callId = buffered.tool_call_id ?? buffered.tool_calls?.[0]?.id ?? buffered.id;
+          const result = resultByCallId.get(callId);
+          if (result && compactedBuffer.includes(result)) {
+            // Paired result also in buffer — will be handled when its turn comes; avoid double
+            // For expanded view, render as tool pair if possible
+            if (!consumedResults.has(callId)) {
+              consumedResults.add(callId);
+              const live = liveById.get(callId);
+              pushTool(live ?? messagePairToToolBlock(buffered, result));
+            }
+          } else {
+            if (result) consumedResults.add(callId);
+            const live = liveById.get(callId);
+            pushTool(live ?? messagePairToToolBlock(buffered, result ?? null));
+          }
+          msgIdx += 1;
+          continue;
+        }
+        if (buffered.type === MessageType.TOOL_RESULT) {
+          const callId = buffered.tool_call_id ?? buffered.id;
+          if (consumedResults.has(callId)) {
+            msgIdx += 1;
+            continue;
+          }
+          const live = liveById.get(callId);
+          pushTool(live ?? resultOnlyToToolBlock(buffered));
+          msgIdx += 1;
+          continue;
+        }
+        if (buffered.type === MessageType.THINKING) {
+          pushMessage(buffered, 'thought', msgIdx++);
+          continue;
+        }
+        pushMessage(buffered, 'other', msgIdx++);
+      }
+    } else {
+      items.push({
+        kind: 'compacted-stub',
+        key: stubKey,
+        messages: [...compactedBuffer],
+        count: compactedBuffer.length,
+      });
+      msgIdx += compactedBuffer.length;
+    }
+    compactedBuffer = [];
+  };
+
   for (const m of visible) {
+    // Compaction summary head — first-class card (R4)
+    if (hasCompactedMarker(m)) {
+      flushCompactedBuffer();
+      items.push({
+        kind: 'compaction-summary',
+        key: keyFor(m, 'compaction', msgIdx++),
+        message: m,
+      });
+      continue;
+    }
+    // Compacted range — display-only collapsed stub (R21), independent of persistence flags
+    if (m.excludeFromModel) {
+      compactedBuffer.push(m);
+      continue;
+    }
+    flushCompactedBuffer();
     if (m.role === MessageRole.USER && m.type === MessageType.TEXT) {
       items.push({
         kind: 'message',
@@ -450,7 +545,7 @@ function walkMessagesToItems(
       msgIdx += 1;
     }
   }
-
+  flushCompactedBuffer();
   return { items, lastAssistantUsage };
 }
 

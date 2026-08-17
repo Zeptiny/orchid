@@ -11,6 +11,7 @@ import { SearchToolResult } from './SearchToolResult';
 import { ApplyPatchToolResult } from './ApplyPatchToolResult';
 import { AskQuestionToolResult } from './AskQuestionToolResult';
 import { LiveCommandInline } from '../ToolWidgets/LiveCommandInline';
+import { GenericToolResult as CompactionFallback } from './GenericToolResult';
 
 export interface ToolResultRendererProps {
   canonical: CanonicalToolResult;
@@ -82,6 +83,15 @@ const ExecuteCommandRenderer: ToolResultRenderer = ({ canonical, sessionId }) =>
   );
 };
 
+const CompactionToolRenderer: ToolResultRenderer = ({ canonical }) => {
+  // Compaction summary is a first-class message (Message.compacted), not a tool result.
+  // This registry entry satisfies the widget registration contract and renders any
+  // tool-shaped compaction payloads via the generic fallback. The primary
+  // compaction UI is CompactionWidget (message-level) rendered from ChatStream
+  // for `compaction-summary` and `compacted-stub` stream items.
+  return <CompactionFallback canonical={canonical} />;
+};
+
 toolRenderers.set('execute_command', ExecuteCommandRenderer);
 toolRenderers.set('edit', FileChangeToolResult);
 toolRenderers.set('write', FileWriteToolResult);
@@ -92,6 +102,7 @@ toolRenderers.set('glob', SearchToolResult);
 toolRenderers.set('grep', SearchToolResult);
 toolRenderers.set('apply_patch', ApplyPatchToolResult);
 toolRenderers.set('ask_question', AskQuestionToolResult);
+toolRenderers.set('compaction', CompactionToolRenderer);
 const builtInToolRenderers = new Map(toolRenderers);
 
 export function registerToolResultRenderer(

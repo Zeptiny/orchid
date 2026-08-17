@@ -40,8 +40,9 @@ import {
 import { acquireProjectMCPManager, releaseProjectMCPManager } from '../../mcp/project-registry';
 import { IPC_CHANNELS } from '../../../shared/types/ipc';
 import { ChainStatus } from '../../../shared/types/chain';
+import type { Chain } from '../../../shared/types/chain';
 import { MessageType, type Message, type Usage } from '../../../shared/types/message';
-import { getChatHistory } from '../chat-history';
+import { getChatHistory, setChatHistory } from '../chat-history';
 import { chatSendSchema } from '../payload-schemas';
 import { clearNextRequestStop } from '../next-request-stop';
 import { completeSessionActivity, publishSessionActivity } from '../session-activity';
@@ -63,6 +64,7 @@ import {
   historyFromSession,
   persistTurnConversation,
   turnMessagesFromAgent,
+  persistCompactionBetweenTurns as persistCompaction,
 } from './persist';
 import {
   appendTextSegment,
@@ -73,8 +75,290 @@ import {
 import { ensureActiveSessionSingleFlight } from './session';
 import { classifyErrorKind, createProviderStreamFn } from './stream';
 import { triggerSessionAutoName } from './title';
+import { selectCut, type CutResult } from '../../llm/compaction/select';
+import { mechanicalReclaim } from '../../llm/compaction/reclaim';
+import { summarizeCompactableRange } from '../../llm/compaction/summarize';
+import { buildCompactionApply } from '../../llm/compaction/apply';
+import { CompactionTrigger, estimateNextInputTokens, FALLBACK_TOKENS_PER_CHAR } from '../../llm/compaction/trigger';
+import { isContextLengthExceededError } from '../../llm/middleware/error-classification';
 
 export type ChatSendPayload = z.infer<typeof chatSendSchema>;
+
+// ── Compaction state per session (U8, R13) ──────────────────────────────────
+
+const compactionTriggers = new Map<string, CompactionTrigger>();
+const compactionPending = new Map<string, {
+  cut: CutResult;
+  flaggedIds: string[];
+  promise?: Promise<import('../../llm/compaction/summarize').SummarizeResult | null>;
+  estimatedInput: number;
+  contextTokens: number;
+}>();
+const compactionRetryTried = new Set<string>();
+
+function getCompactionTrigger(sessionId: string): CompactionTrigger {
+  let t = compactionTriggers.get(sessionId);
+  if (!t) {
+    t = new CompactionTrigger();
+    compactionTriggers.set(sessionId, t);
+  }
+  return t;
+}
+
+function estimateMessageChars(msg: Message): number {
+  let n = 0;
+  if (msg.content) n += msg.content.length;
+  if (msg.thinking) n += msg.thinking.length;
+  if (msg.tool_calls) n += JSON.stringify(msg.tool_calls).length;
+  if (msg.tool_result) n += JSON.stringify(msg.tool_result).length;
+  if (msg.tool_call_id) n += msg.tool_call_id.length;
+  if (msg.name) n += msg.name.length;
+  return n === 0 ? 1 : n;
+}
+
+function totalChars(messages: readonly Message[]): number {
+  let s = 0;
+  for (const m of messages) s += estimateMessageChars(m);
+  return s === 0 ? 1 : s;
+}
+
+function compactableTokenEstimate(messages: readonly Message[], range: { start: number; end: number }, tokensPerChar: number): number {
+  let chars = 0;
+  for (let i = range.start; i < range.end; i += 1) chars += estimateMessageChars(messages[i]!);
+  return Math.ceil(chars * tokensPerChar);
+}
+
+async function applyPendingCompactionIfAny(
+  sessionId: string,
+  messages: Message[],
+  runtime: import('../../project/runtime').ProjectRuntime,
+): Promise<{ applied: boolean; updatedMessages?: Message[] }> {
+  const pending = compactionPending.get(sessionId);
+  if (!pending) return { applied: false };
+  compactionPending.delete(sessionId);
+  const trigger = getCompactionTrigger(sessionId);
+  try {
+    if (pending.promise) {
+      const result = await pending.promise;
+      if (result && result.text && result.text.trim()) {
+        const chains = getSessionManager().getSession(sessionId)?.chains ?? [];
+        const applyResult = buildCompactionApply({
+          messages,
+          chains: chains as Chain[],
+          cutResult: pending.cut,
+          summaryText: result.text,
+          mode: runtime.config.compaction.main.mode,
+          flaggedIds: pending.flaggedIds,
+          sessionId,
+        });
+        if (applyResult.didApply) {
+          const ok = persistCompaction(sessionId, applyResult);
+          if (ok) {
+            setChatHistory(sessionId, [...applyResult.updatedMessages]);
+            trigger.onCompactionApplied(pending.estimatedInput);
+            trigger.state.pendingPrepare = false;
+            return { applied: true, updatedMessages: [...applyResult.updatedMessages] };
+          }
+        }
+      }
+      // Summarizer failed or persist failed — clear pending flag
+      trigger.state.pendingPrepare = false;
+      return { applied: false };
+    }
+    // Reclaim-only pending
+    if (pending.flaggedIds.length > 0) {
+      const chains = getSessionManager().getSession(sessionId)?.chains ?? [];
+      const applyResult = buildCompactionApply({
+        messages,
+        chains: chains as Chain[],
+        cutResult: pending.cut,
+        summaryText: null,
+        mode: runtime.config.compaction.main.mode,
+        flaggedIds: pending.flaggedIds,
+        sessionId,
+      });
+      if (applyResult.didApply) {
+        const ok = persistCompaction(sessionId, applyResult);
+        if (ok) {
+          setChatHistory(sessionId, [...applyResult.updatedMessages]);
+          trigger.onCompactionApplied(pending.estimatedInput);
+          return { applied: true, updatedMessages: [...applyResult.updatedMessages] };
+        }
+      }
+    }
+  } catch (err) {
+    console.debug('[compaction] pending apply failed (non-fatal):', err);
+    const t = getCompactionTrigger(sessionId);
+    t.state.pendingPrepare = false;
+  }
+  return { applied: false };
+}
+
+async function tryCompactSynchronously(
+  sessionId: string,
+  messages: Message[],
+  runtime: import('../../project/runtime').ProjectRuntime,
+  selection: import('../../../shared/types/provider').ModelSelection,
+  contextTokens: number,
+  accountingStore: ReturnType<typeof getProviderAccountingStore>,
+  chainId: string | null,
+  turnId: string,
+): Promise<{ didApply: boolean; updatedMessages?: Message[] }> {
+  const trigger = getCompactionTrigger(sessionId);
+  const cfg = runtime.config.compaction?.main;
+  if (!cfg) return { didApply: false };
+  if (!Number.isFinite(contextTokens) || contextTokens <= 0) return { didApply: false };
+  if (trigger.state.pendingPrepare) return { didApply: false };
+  try {
+    const cut = selectCut(messages, { keepRecentChains: cfg.keep_recent_chains });
+    if (cut.compactableRange.end <= cut.compactableRange.start) return { didApply: false };
+    const tokensPerChar = trigger.state.tokensPerChar ?? FALLBACK_TOKENS_PER_CHAR;
+    const compactableTokens = compactableTokenEstimate(messages, cut.compactableRange, tokensPerChar);
+    if (compactableTokens < cfg.min_compactable_tokens) return { didApply: false };
+    const estimatedInput = Math.ceil(totalChars(messages) * tokensPerChar);
+    const reclaim = mechanicalReclaim(messages, cut.compactableRange);
+    const flaggedIds = reclaim.flaggedIds;
+    const decision = trigger.evaluateWithReclaim({
+      inputTokens: estimatedInput,
+      contextTokens,
+      threshold: cfg.threshold,
+      hysteresisDelta: cfg.hysteresis_delta,
+      compactableTokens,
+      minCompactableTokens: cfg.min_compactable_tokens,
+      compactableRange: cut.compactableRange,
+      messages,
+      flaggedIds,
+      estimatedInputTokens: estimatedInput,
+    });
+    if (!decision.shouldPrepare && !decision.shouldApply) return { didApply: false };
+    const chains = getSessionManager().getSession(sessionId)?.chains ?? [];
+    if (decision.shouldApply && !decision.shouldPrepare) {
+      const applyResult = buildCompactionApply({
+        messages,
+        chains: chains as Chain[],
+        cutResult: cut,
+        summaryText: null,
+        mode: cfg.mode,
+        flaggedIds,
+        sessionId,
+      });
+      if (!applyResult.didApply) return { didApply: false };
+      const ok = persistCompaction(sessionId, applyResult);
+      if (!ok) return { didApply: false };
+      setChatHistory(sessionId, [...applyResult.updatedMessages]);
+      trigger.onCompactionApplied(estimatedInput);
+      return { didApply: true, updatedMessages: [...applyResult.updatedMessages] };
+    }
+    if (decision.shouldPrepare) {
+      const slice = messages.slice(cut.compactableRange.start, cut.compactableRange.end);
+      if (slice.length === 0) return { didApply: false };
+      trigger.markPrepareStarted(cut.compactableRange, flaggedIds);
+      const result = await summarizeCompactableRange({
+        messages: slice,
+        scope: 'main',
+        config: runtime.config,
+        fallbackSelection: selection,
+        accounting: { store: accountingStore, sessionId, chainId, turnId },
+        runtime,
+      });
+      if (!result || !result.text || !result.text.trim()) {
+        trigger.state.pendingPrepare = false;
+        return { didApply: false };
+      }
+      const applyResult = buildCompactionApply({
+        messages,
+        chains: chains as Chain[],
+        cutResult: cut,
+        summaryText: result.text,
+        mode: cfg.mode,
+        flaggedIds,
+        sessionId,
+      });
+      if (!applyResult.didApply) {
+        trigger.state.pendingPrepare = false;
+        return { didApply: false };
+      }
+      const ok = persistCompaction(sessionId, applyResult);
+      if (!ok) {
+        trigger.state.pendingPrepare = false;
+        return { didApply: false };
+      }
+      setChatHistory(sessionId, [...applyResult.updatedMessages]);
+      trigger.onCompactionApplied(estimatedInput);
+      trigger.state.pendingPrepare = false;
+      return { didApply: true, updatedMessages: [...applyResult.updatedMessages] };
+    }
+  } catch (err) {
+    console.debug('[compaction] synchronous compact failed (non-fatal):', err);
+    try { getCompactionTrigger(sessionId).state.pendingPrepare = false; } catch {}
+  }
+  return { didApply: false };
+}
+
+function handleUsageCompaction(
+  sessionId: string,
+  fullHistory: Message[],
+  inputTokens: number,
+  contextTokens: number,
+  runtime: import('../../project/runtime').ProjectRuntime,
+  selection: import('../../../shared/types/provider').ModelSelection,
+  accountingStore: ReturnType<typeof getProviderAccountingStore>,
+  chainId: string | null,
+  turnId: string,
+): void {
+  const trigger = getCompactionTrigger(sessionId);
+  const cfg = runtime.config.compaction?.main;
+  if (!cfg) return;
+  if (!Number.isFinite(contextTokens) || contextTokens <= 0) return;
+  trigger.observeUsage(inputTokens, fullHistory);
+  trigger.onUsage(inputTokens, contextTokens, cfg.threshold, cfg.hysteresis_delta);
+  if (trigger.state.pendingPrepare) return;
+  if (compactionPending.has(sessionId)) return;
+  try {
+    const cut = selectCut(fullHistory, { keepRecentChains: cfg.keep_recent_chains });
+    if (cut.compactableRange.end <= cut.compactableRange.start) return;
+    const tokensPerChar = trigger.state.tokensPerChar ?? FALLBACK_TOKENS_PER_CHAR;
+    const compactableTokens = compactableTokenEstimate(fullHistory, cut.compactableRange, tokensPerChar);
+    if (compactableTokens < cfg.min_compactable_tokens) return;
+    const reclaim = mechanicalReclaim(fullHistory, cut.compactableRange);
+    const flaggedIds = reclaim.flaggedIds;
+    const decision = trigger.evaluateWithReclaim({
+      inputTokens,
+      contextTokens,
+      threshold: cfg.threshold,
+      hysteresisDelta: cfg.hysteresis_delta,
+      compactableTokens,
+      minCompactableTokens: cfg.min_compactable_tokens,
+      compactableRange: cut.compactableRange,
+      messages: fullHistory,
+      flaggedIds,
+    });
+    if (!decision.shouldPrepare && !decision.shouldApply) return;
+    if (decision.shouldApply && !decision.shouldPrepare) {
+      compactionPending.set(sessionId, { cut, flaggedIds, estimatedInput: inputTokens, contextTokens });
+      trigger.markPrepareStarted(cut.compactableRange, flaggedIds);
+      return;
+    }
+    if (decision.shouldPrepare) {
+      const slice = fullHistory.slice(cut.compactableRange.start, cut.compactableRange.end);
+      if (slice.length === 0) return;
+      trigger.markPrepareStarted(cut.compactableRange, flaggedIds);
+      const promise = summarizeCompactableRange({
+        messages: slice,
+        scope: 'main',
+        config: runtime.config,
+        fallbackSelection: selection,
+        accounting: { store: accountingStore, sessionId, chainId, turnId },
+        runtime,
+      });
+      compactionPending.set(sessionId, { cut, flaggedIds, promise, estimatedInput: inputTokens, contextTokens });
+      // If summarizer resolves to null, next boundary will clear pending without applying
+      promise.catch((err) => console.debug('[compaction] prepare failed (non-fatal):', err));
+    }
+  } catch (err) {
+    console.debug('[compaction] usage trigger failed (non-fatal):', err);
+  }
+}
 
 export async function startChatTurn(
   webContents: WebContents,
@@ -149,6 +433,7 @@ export async function startChatTurn(
   let cacheSessionKey: string | undefined;
   let tierMechanism: ProviderAttemptAccountingContext['tierMechanism'];
   let accountingStore: ReturnType<typeof getProviderAccountingStore>;
+  let contextTokens: number | null = null;
   try {
     accountingStore = getProviderAccountingStore();
     // Resolve the effective tier before model construction so the variant
@@ -170,6 +455,7 @@ export async function startChatTurn(
     pricingFacet = execution.pricingFacet;
     thinkingPolicy = execution.thinkingPolicy;
     cacheFacet = execution.cacheFacet;
+    contextTokens = execution.model.limits?.contextTokens ?? null;
     const effort = resolveMainAgentEffort(
       sessionGate.session, execution.connection, turnSelection.modelId,
       execution.model.capabilities?.reasoning === true,
@@ -202,7 +488,7 @@ export async function startChatTurn(
   const agents = [...runtime.agents.values()];
   const userMessage = makeUserMessage(message);
   const priorMessageCount = existingMessages.length;
-  const messages = [...existingMessages, userMessage];
+  let messages: Message[] = [...existingMessages, userMessage];
   const thinkingReplay: ThinkingReplayContext = {
     policy: thinkingPolicy ?? DEFAULT_THINKING_POLICY,
     selection: { providerId: providerSnapshot.providerId, modelId: turnSelection.modelId },
@@ -220,6 +506,28 @@ export async function startChatTurn(
   };
   let turnId: string = crypto.randomUUID();
   let chainId: string | null = null;
+
+  // ── Compaction: apply any pending prepare from previous turn, then
+  // pre-flight synchronous check before the first send (R11,R12). Guard:
+  // never compact while a turn is in flight — we are at the boundary.
+  if (contextTokens != null && contextTokens > 0) {
+    const pendingApplied = await applyPendingCompactionIfAny(sessionId, messages, runtime);
+    if (pendingApplied.applied && pendingApplied.updatedMessages) {
+      messages = pendingApplied.updatedMessages;
+      existingMessages = messages.slice(0, messages.length - 1);
+    }
+    const syncChainProbe = sessionManager.getSession(sessionId)?.chains ?? [];
+    const syncResult = await tryCompactSynchronously(sessionId, messages, runtime, turnSelection, contextTokens, accountingStore!, chainId, turnId);
+    if (syncResult.didApply && syncResult.updatedMessages) {
+      messages = syncResult.updatedMessages;
+      // existingMessages is prefix before userMessage; after compaction the
+      // flat includes summary head + preserved prefix, but userMessage remains last.
+      // Re-derive prior count for turnMessages slicing.
+      existingMessages = messages.slice(0, messages.length - 1);
+    }
+    void syncChainProbe;
+  }
+
   try {
     const chain = sessionManager.startChain({
       selection: turnSelection, modelLabel: turnSelection.modelId, agentName: agent.name,
@@ -302,7 +610,7 @@ export async function startChatTurn(
   const generation = nextAgentGeneration(sessionId);
   const activeAgent: ActiveAgent = {
     sessionId, windowId, turnId, cwd: turnCtx.cwd, startedAt: Date.now(), actor, interruptActor,
-    abortController, messages, priorMessageCount, turnMessages: [], responseCommittedLength: 0,
+    abortController, messages, priorMessageCount: messages.length - 1, turnMessages: [], responseCommittedLength: 0,
     thinkingCommittedLength: 0, thinkingArtifactsCommitted: 0, agent, selection: turnSelection,
     thinkingReplay, agentCancelled: false,
     finalized: false, generation, eventSequence: 0, lastChatState: null, toolCalls: new Map(),
@@ -406,6 +714,13 @@ export async function startChatTurn(
     const turnExtras = [...activeAgent.turnMessages];
     const terminalMessages = turnMessagesFromAgent(activeAgent);
     const fullHistory = [...messages, ...turnExtras];
+    // keep hysteresis calibrated with final usage
+    if (opts.usage && contextTokens != null) {
+      const inputTokens = opts.usage.context?.input_tokens ?? opts.usage.prompt_tokens;
+      const trig = getCompactionTrigger(sessionId);
+      trig.observeUsage(inputTokens, fullHistory);
+      trig.onUsage(inputTokens, contextTokens, runtime.config.compaction.main.threshold, runtime.config.compaction.main.hysteresis_delta);
+    }
     persistTurnConversation(
       sessionId, fullHistory, terminalMessages,
       opts.interrupted ? ChainStatus.INTERRUPTED : ChainStatus.COMPLETED,
@@ -488,6 +803,11 @@ export async function startChatTurn(
       lastUsage = context.usage;
       sendTurnEvent(webContents, activeAgent, IPC_CHANNELS.CHAT_USAGE, { type: 'usage', usage: context.usage });
       checkpointActiveTurn(activeAgent, context);
+      if (contextTokens != null) {
+        const inputTokens = context.usage.context?.input_tokens ?? context.usage.prompt_tokens;
+        const fullHistory = [...messages, ...turnMessagesFromAgent(activeAgent)];
+        handleUsageCompaction(sessionId, fullHistory, inputTokens, contextTokens, runtime, turnSelection, accountingStore!, chainId, turnId);
+      }
     }
     if (context.streamingToolCall) {
       const stc = context.streamingToolCall;
@@ -567,10 +887,63 @@ export async function startChatTurn(
       queueMicrotask(() => disposeActiveAgent(sessionId, activeAgent));
     }
     if (snapshot.value === 'error') {
-      completed = true;
-      activeAgent.finalized = true;
       const detail = context.error ?? 'Unknown error';
       const title = context.errorTitle ?? 'Stream Error';
+      const isOverflow = isContextLengthExceededError(`${title} ${detail}`);
+      const retryKey = `${sessionId}:${turnId}`;
+      if (isOverflow && !compactionRetryTried.has(retryKey) && contextTokens != null) {
+        compactionRetryTried.add(retryKey);
+        // One compaction-and-retry (R15). Compact the prefix (messages) and retry once before declaring failed.
+        const historyForRetry = [...messages];
+        (async () => {
+          try {
+            const retryResult = await tryCompactSynchronously(sessionId, historyForRetry, runtime, turnSelection, contextTokens, accountingStore!, chainId, turnId);
+            if (retryResult.didApply && retryResult.updatedMessages) {
+              messages.splice(0, messages.length, ...retryResult.updatedMessages);
+              activeAgent.messages.splice(0, activeAgent.messages.length, ...retryResult.updatedMessages);
+              activeAgent.turnMessages = [];
+              activeAgent.responseCommittedLength = 0;
+              activeAgent.thinkingCommittedLength = 0;
+              activeAgent.thinkingArtifactsCommitted = 0;
+              lastSentLength = 0;
+              lastThinkingLength = 0;
+              lastUsage = null;
+              try {
+                actor.send({ type: 'USER_INPUT', message });
+                publishSessionActivity(sessionId, {
+                  cwd: turnCtx.cwd, state: 'working', phase: 'agent', detail: 'Retrying after compaction', canCancel: true,
+                });
+                return;
+              } catch (e) {
+                console.debug('[compaction] retry USER_INPUT failed:', e);
+              }
+            }
+          } catch (e) {
+            console.debug('[compaction] overflow retry compaction failed:', e);
+          }
+          completed = true;
+          activeAgent.finalized = true;
+          publishSessionActivity(sessionId, {
+            cwd: turnCtx.cwd, state: 'needs_attention', phase: 'agent', detail: title || detail, canCancel: false,
+          });
+          flushPartialTurnContent(activeAgent, context);
+          const terminalMessages = turnMessagesFromAgent(activeAgent);
+          const fullHistory = [...messages, ...activeAgent.turnMessages];
+          persistTurnConversation(
+            sessionId, fullHistory, terminalMessages, ChainStatus.FAILED,
+            agent, activeAgent.selection, webContents,
+            detail, title,
+          );
+          activeAgent.messages = fullHistory;
+          sendTurnEvent(webContents, activeAgent, IPC_CHANNELS.CHAT_ERROR, {
+            type: 'error', error: detail, messages: terminalMessages, title, kind: classifyErrorKind(title, detail),
+          });
+          queueMicrotask(() => disposeActiveAgent(sessionId, activeAgent));
+        })();
+        return;
+      }
+      completed = true;
+      activeAgent.finalized = true;
       publishSessionActivity(sessionId, {
         cwd: turnCtx.cwd, state: 'needs_attention', phase: 'agent', detail: title || detail, canCancel: false,
       });

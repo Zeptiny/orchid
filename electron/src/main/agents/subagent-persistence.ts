@@ -43,6 +43,8 @@ interface PersistenceState {
   /** A spawn parked in admission has no durable row; resumed queues do. */
   durableEligible: boolean;
   summary: boolean;
+  /** Last revision at which compaction was applied (separate from summary eviction). */
+  lastCompactionRevision: number | null;
 }
 
 /**
@@ -54,6 +56,8 @@ export class SubagentPersistence {
   private readonly records = new Map<string, PersistenceState>();
   private readonly summariesBySession = new Map<string, string[]>();
   private readonly trackedSessionsSet = new Set<string>();
+  /** Compaction checkpoints are tracked separately from summary eviction (U9). */
+  private readonly compactionRevisions = new Map<string, number>();
   private timelineGeneration = 0;
 
   constructor(private readonly getTerminalRetention: () => number) {}
@@ -66,6 +70,7 @@ export class SubagentPersistence {
       confirmedRevision: -1,
       durableEligible: options.admitted,
       summary: false,
+      lastCompactionRevision: null,
     });
   }
 
@@ -79,6 +84,35 @@ export class SubagentPersistence {
     return state.dirtyRevision;
   }
 
+  /**
+   * Record a compaction mutation separately from the summary eviction flag.
+   * Compaction is a normal dirty revision (so checkpoint will persist it), but
+   * we track the compaction revision independently so crash recovery can
+   * distinguish a compacted chain from a summarized/evicted one (U9).
+   */
+  markCompaction(id: string, revision?: number | null): number | null {
+    const state = this.records.get(id);
+    if (!state) return null;
+    const rev = typeof revision === 'number' ? revision : this.markDirty(id);
+    if (rev !== null) {
+      state.lastCompactionRevision = rev;
+      this.compactionRevisions.set(id, rev);
+    }
+    return rev;
+  }
+
+  /** Last compaction revision for a record, if any (separate from summary). */
+  getLastCompactionRevision(id: string): number | null {
+    return this.compactionRevisions.get(id) ?? this.records.get(id)?.lastCompactionRevision ?? null;
+  }
+
+  /** Whether a record has a compaction checkpoint pending. */
+  hasPendingCompaction(id: string): boolean {
+    const state = this.records.get(id);
+    if (!state || state.lastCompactionRevision === null) return false;
+    return state.lastCompactionRevision > state.confirmedRevision;
+  }
+
   /** Admission makes a fresh spawn durable and ends resume-queue state. */
   markAdmitted(id: string): void {
     this.require(id).durableEligible = true;
@@ -89,6 +123,9 @@ export class SubagentPersistence {
     const state = this.require(id);
     state.durableEligible = true;
     state.summary = false;
+    // Compaction revision resets on follow-up — the new run starts fresh but
+    // retains the prior compaction's dirty state for persistence.
+    // Do not clear compactionRevisions; the resumed chain already carries compacted flags.
     this.untrackSummary(state.sessionId, id);
     this.markDirty(id);
   }
@@ -104,7 +141,9 @@ export class SubagentPersistence {
       confirmedRevision: -1,
       durableEligible: true,
       summary: false,
+      lastCompactionRevision: null,
     });
+    this.compactionRevisions.delete(id);
   }
 
   isSummary(id: string): boolean {
@@ -191,6 +230,10 @@ export class SubagentPersistence {
     }
     this.summariesBySession.delete(sessionId);
     this.trackedSessionsSet.delete(sessionId);
+    for (const id of [...this.compactionRevisions.keys()]) {
+      const st = this.records.get(id);
+      if (!st || st.sessionId === sessionId) this.compactionRevisions.delete(id);
+    }
   }
 
   remove(id: string): void {
@@ -198,6 +241,7 @@ export class SubagentPersistence {
     if (!state) return;
     this.untrackSummary(state.sessionId, id);
     this.records.delete(id);
+    this.compactionRevisions.delete(id);
   }
 
   trackedSessions(): string[] {

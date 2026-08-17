@@ -23,6 +23,9 @@ import { addStepUsage, sumMessageUsages } from '../../shared/usage';
 import type { StreamEvent } from '../llm/orchestrator';
 import type { ProjectRuntime } from '../project/runtime';
 import type { SubagentRecord as DomainSubagentRecord } from '../../shared/types/subagent';
+import type { CompactionTrigger as CompactionTriggerType } from '../llm/compaction/trigger';
+import type { ApplyResult } from '../llm/compaction/apply';
+import { getConfig } from '../config/loader';
 import {
   SubagentDeltaEventType,
   SubagentStatus,
@@ -32,7 +35,6 @@ import {
   type SubagentTerminalState,
 } from '../../shared/types/subagent';
 import { makeUserMessage } from '../llm/message-factories';
-import { getConfig } from '../config/loader';
 import { subagentsConfigSchema } from '../config/schema';
 import { AdmissionController, type AdmissionCounters, type SubagentAdmissionLimits } from './admission';
 import { SubagentRunRegistry, type SubagentRun } from './subagent-run';
@@ -68,6 +70,10 @@ import {
 import { getSubagentAttributionStore } from '../providers/accounting/subagent-attribution-store';
 import { getBackgroundStore } from '../tools/process/background-store';
 import { getForegroundLiveRegistry } from '../tools/process/foreground-live';
+
+// U9: subagent mid-run compaction — helpers live in subagent-runner to keep
+// runner/manager from circular deps; manager owns the run loop, runner owns
+// the partial-report helper and limit resolution.
 
 export type { SubagentAdmissionLimits } from './admission';
 export {
@@ -1408,6 +1414,188 @@ export class SubagentManager {
     const priorUsage = record.usage ?? sumMessageUsages(record.chain?.messages ?? []);
     const assembler = new SubagentRunAssembler(record.chain?.messages ?? []);
 
+    // U9: subagent mid-run compaction state — per-run trigger with subagent's
+    // own model limits (R16). Lazy-resolved on first usage event so the run
+    // start is not blocked by an extra provider lookup (avoids breaking
+    // admission-gate tests that assert on synchronous runner invocation).
+    let subagentContextTokens: number | null | undefined = undefined;
+    let subagentCompactionTrigger: CompactionTriggerType | null = null;
+    let compactionPendingPromise: Promise<ApplyResult | null> | null = null;
+    let compactionInitDone = false;
+
+    const ensureCompactionInit = async (): Promise<boolean> => {
+      if (compactionInitDone) return subagentContextTokens !== null && subagentCompactionTrigger !== null;
+      compactionInitDone = true;
+      try {
+        const { resolveSubagentContextTokens } = await import('./subagent-runner.js');
+        const tokens = await resolveSubagentContextTokens(record.selection);
+        subagentContextTokens = tokens;
+        if (tokens !== null) {
+          const { CompactionTrigger } = await import('../llm/compaction/trigger.js');
+          subagentCompactionTrigger = new CompactionTrigger();
+          return true;
+        }
+      } catch {
+        // non-fatal
+      }
+      subagentContextTokens = null;
+      return false;
+    };
+
+    const maybeStartCompactionPrepare = async (inputTokens: number): Promise<void> => {
+      if (compactionPendingPromise) return;
+      const ok = await ensureCompactionInit();
+      if (!ok || !subagentContextTokens || !subagentCompactionTrigger) return;
+      try {
+        let cfg: ReturnType<typeof getConfig>['compaction']['subagents'] | null = null;
+        try {
+          cfg = getConfig().compaction?.subagents ?? null;
+        } catch {
+          cfg = null;
+        }
+        if (!cfg) return;
+        // Use helper in runner that respects trigger thresholds and mechanical reclaim
+        const { tryCompactSubagentHistory } = await import('./subagent-runner.js');
+        const chainForCompaction = record.chain
+          ? [{ ...record.chain, messages: [...record.chain.messages] }]
+          : [];
+        const messagesForCompaction = record.chain?.messages ?? [];
+        // Fire prepare in parallel (don't block current step) — store promise for boundary apply
+        const p = tryCompactSubagentHistory({
+          messages: messagesForCompaction,
+          chains: chainForCompaction as unknown as import('../../shared/types/chain').Chain[],
+          selection: record.selection,
+          config: (() => {
+            try {
+              return getConfig() as unknown as import('../config/schema').Config;
+            } catch {
+              return { compaction: { subagents: cfg } } as unknown as import('../config/schema').Config;
+            }
+          })(),
+          sessionId: record.sessionId ?? 'unknown',
+          subagentId: record.id,
+          chainId: record.chain?.id ?? null,
+          turnId: `${record.id}#${run.generation}`,
+          inputTokens,
+          contextTokens: subagentContextTokens!,
+          triggerState: subagentCompactionTrigger.state,
+        });
+        // Mark prepare started so trigger hysteresis is respected until boundary
+        subagentCompactionTrigger.markPrepareStarted();
+        compactionPendingPromise = p;
+      } catch {
+        // non-fatal
+      }
+    };
+
+    const maybeApplyCompactionAtBoundary = async (stepIndex: number): Promise<boolean> => {
+      if (!compactionPendingPromise) return false;
+      const ok = await ensureCompactionInit();
+      if (!ok || !subagentCompactionTrigger || !subagentContextTokens) return false;
+      const pending = compactionPendingPromise;
+      compactionPendingPromise = null;
+      let applyResult: ApplyResult | null = null;
+      try {
+        applyResult = await pending;
+      } catch {
+        subagentCompactionTrigger.consumePending();
+        return false;
+      }
+      const shouldApply = subagentCompactionTrigger.evaluateApply({
+        inputTokens: record.usage?.prompt_tokens ?? 0,
+        contextTokens: subagentContextTokens,
+        threshold: (() => {
+          try {
+            return getConfig().compaction.subagents.threshold;
+          } catch {
+            return 0.85;
+          }
+        })(),
+        compactableTokens: applyResult?.flaggedIds.length ?? 0,
+        minCompactableTokens: (() => {
+          try {
+            return getConfig().compaction.subagents.min_compactable_tokens;
+          } catch {
+            return 4000;
+          }
+        })(),
+      });
+      if (!applyResult || !shouldApply.shouldApply) {
+        subagentCompactionTrigger.consumePending();
+        return false;
+      }
+      // Persist via subagent checkpoint path so crash mid-run resumes compacted chain (R22)
+      const updatedMessages = applyResult.updatedMessages;
+      // Keep compaction separate from summary eviction (don't touch summary flag)
+      this._setChainMessages(record, [...updatedMessages]);
+      // Keep assembler's history in sync so finalization doesn't revert the compacted chain
+      try {
+        (assembler as unknown as { messages: Message[] }).messages = [...updatedMessages];
+      } catch {}
+      // Record compaction checkpoint separately from summary eviction (U9)
+      try {
+        const p = (this as unknown as { _persistence: { markCompaction: (id: string, rev: number | null) => unknown } })._persistence;
+        const rev = p?.markCompaction?.(record.id, null);
+        void rev;
+      } catch {}
+      this._markRecordDirty(record);
+      subagentCompactionTrigger.consumePending();
+      subagentCompactionTrigger.onCompactionApplied(record.usage?.prompt_tokens ?? 0);
+      // R17: still over limit after compaction -> partial report degradation
+      let cfg: ReturnType<typeof getConfig>['compaction']['subagents'] | null = null;
+      try {
+        cfg = getConfig().compaction.subagents;
+      } catch {
+        cfg = null;
+      }
+      const threshold = cfg?.threshold ?? 0.85;
+      const postTokens = record.usage?.prompt_tokens ?? 0;
+      const stillOver = subagentContextTokens !== null && Number.isFinite(subagentContextTokens) && postTokens / subagentContextTokens >= threshold * 0.98;
+      // If still over and no further compactable range, degrade to partial report
+      if (stillOver && applyResult.flaggedIds.length === 0 && !applyResult.summaryMessage) {
+        try {
+          const { buildSubagentPartialReport } = await import('./subagent-runner.js');
+          const done = (() => {
+            const toolCount = record.chain?.messages.filter((m) => m.type === 'tool_result').length ?? 0;
+            return `${toolCount} tool results recorded`;
+          })();
+          const remaining = record.task?.slice(0, 200) ?? 'remaining steps unknown';
+          const stoppedAt = `step ${stepIndex} (context limit ${subagentContextTokens})`;
+          const partial = buildSubagentPartialReport({ done, remaining, stoppedAt });
+          // Emit as normal tool result to parent (R17) — complete, not fail
+          record.result = partial;
+          // Mark completed with partial; finally block will finalize attribution
+          return true;
+        } catch {
+          // fallback no-op
+        }
+      }
+      // Also handle case where still over but we did compact: check if next cut would be empty
+      if (stillOver) {
+        try {
+          const { selectCut } = await import('../llm/compaction/select.js');
+          let cfg2: ReturnType<typeof getConfig>['compaction']['subagents'] | null = null;
+          try {
+            cfg2 = getConfig().compaction.subagents;
+          } catch {
+            cfg2 = null;
+          }
+          const keep = cfg2?.keep_recent_chains ?? 3;
+          const cut = selectCut(record.chain?.messages ?? [], { keepRecentChains: keep });
+          if (cut.compactableRange.end - cut.compactableRange.start === 0) {
+            const { buildSubagentPartialReport } = await import('./subagent-runner.js');
+            const done = `${record.chain?.messages.filter((m) => m.type === 'tool_result').length ?? 0} tool results`;
+            const partial = buildSubagentPartialReport({ done, remaining: record.task.slice(0, 200), stoppedAt: `step ${stepIndex}` });
+            record.result = partial;
+            return true;
+          }
+        } catch {
+          // ignore
+        }
+      }
+      return false;
+    };
+
     try {
       const stream = runner({
         task: record.task,
@@ -1438,11 +1626,40 @@ export class SubagentManager {
           break;
         }
         if (!this._applyAssemblerEffects(record, run, assembler.accept(event))) return;
+        // U9: subagent mid-run compaction — proactive prepare after usage,
+        // apply at idle step boundary (R12, R16). Same trigger engine as U6
+        // but with subagents scope config.
+        if (event.type === 'usage' && typeof subagentContextTokens === 'number' && subagentCompactionTrigger) {
+          const inputTokens = event.usage.prompt_tokens ?? event.usage.total_tokens ?? 0;
+          (subagentCompactionTrigger as CompactionTriggerType).observeUsage(inputTokens, record.chain?.messages ?? []);
+          (subagentCompactionTrigger as CompactionTriggerType).onUsage(inputTokens, subagentContextTokens, (() => {
+            try {
+              return getConfig().compaction.subagents.threshold;
+            } catch { return 0.85; }
+          })());
+          // Prepare in parallel (non-blocking) if threshold crossed
+          void maybeStartCompactionPrepare(inputTokens);
+        }
+        if (event.type === 'step_finish') {
+          const shouldDegrade = await maybeApplyCompactionAtBoundary(event.stepIndex);
+          if (shouldDegrade) {
+            // Degraded to partial report (R17) — stop run gracefully as completed
+            break;
+          }
+        }
       }
 
       if (!this._runs.isCurrent(run)) return;
       if (abort.signal.aborted || record.state === SubagentState.INTERRUPTED) {
         this._applyAssemblerFinalization(record, run, assembler.interrupt(), priorUsage);
+        return;
+      }
+      // If partial report was set via compaction degradation, complete with it as normal result
+      if (record.result && record.result.includes('[Subagent partial report')) {
+        const partial = record.result;
+        this._applyAssemblerFinalization(record, run, assembler.complete(), priorUsage);
+        // Restore partial report as the completed result (R17)
+        this.markCompleted(record.id, partial);
         return;
       }
       this._applyAssemblerFinalization(record, run, assembler.complete(), priorUsage);

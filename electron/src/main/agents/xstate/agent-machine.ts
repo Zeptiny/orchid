@@ -66,6 +66,10 @@ export interface AgentContext {
   toolUpdateSequence: number;
   /** Error message if in error state. */
   error: string | null;
+  /** Optional compaction step-boundary hook — idle boundary for R16. */
+  onStepBoundary?: (info: { stepIndex: number; finishReason: string }) => void | Promise<void>;
+  /** Last step boundary seen (for diagnostics / partial-report stoppedAt). */
+  lastStepBoundary: { stepIndex: number; finishReason: string } | null;
   /** Short error title for UI banners (auth/rate-limit/timeout/etc). */
   errorTitle: string | null;
   /** Whether the latest turn was interrupted by the user. */
@@ -110,6 +114,8 @@ export interface StreamCallbackInput {
   abortController: AbortController;
   /** Stream function. */
   streamFn: StreamFn;
+  /** Optional compaction step-boundary hook — forwarded from context. */
+  onStepBoundary?: (info: { stepIndex: number; finishReason: string }) => void | Promise<void>;
 }
 
 // ── Stream callback (fromCallback) ──────────────────────────────────────────
@@ -211,7 +217,9 @@ const streamCallback = fromCallback(
             case 'usage':
               sendBack({ type: 'USAGE', usage: event.usage });
               break;
-            // step_finish is informational only
+            case 'step_finish':
+              sendBack({ type: 'STEP_FINISH', stepIndex: event.stepIndex, finishReason: event.finishReason });
+              break;
             default:
               break;
           }
@@ -247,6 +255,7 @@ export const agentMachine = setup({
       streamFn: StreamFn;
       /** Auto-reset timeout for interrupted state (ms). Default: 5000. */
       interruptResetMs?: number;
+      onStepBoundary?: (info: { stepIndex: number; finishReason: string }) => void | Promise<void>;
     },
   },
   actors: {
@@ -277,6 +286,8 @@ export const agentMachine = setup({
     abortController: null,
     streamFn: input.streamFn,
     interruptResetMs: input.interruptResetMs ?? 5000,
+    onStepBoundary: input.onStepBoundary,
+    lastStepBoundary: null,
   }),
   states: {
     idle: {
@@ -305,6 +316,11 @@ export const agentMachine = setup({
             usage: ({ context, event }) => addStepUsage(context.usage, event.usage),
           }),
         },
+        STEP_FINISH: {
+          actions: assign({
+            lastStepBoundary: ({ event }) => ({ stepIndex: (event as unknown as { stepIndex: number }).stepIndex, finishReason: (event as unknown as { finishReason: string }).finishReason }),
+          }),
+        },
       },
     },
 
@@ -317,6 +333,7 @@ export const agentMachine = setup({
           systemPrompt: context.systemPrompt,
           abortController: context.abortController ?? new AbortController(),
           streamFn: context.streamFn,
+          onStepBoundary: context.onStepBoundary,
         }),
       },
       on: {
@@ -421,6 +438,18 @@ export const agentMachine = setup({
             usage: ({ context, event }) => addStepUsage(context.usage, event.usage),
           }),
         },
+        STEP_FINISH: {
+          actions: assign({
+            lastStepBoundary: ({ context, event }) => {
+              const info = { stepIndex: (event as unknown as { stepIndex: number }).stepIndex, finishReason: (event as unknown as { finishReason: string }).finishReason };
+              try {
+                const hook = (context as unknown as { onStepBoundary?: (info: { stepIndex: number; finishReason: string }) => void }).onStepBoundary;
+                if (hook) void Promise.resolve(hook(info)).catch(() => {});
+              } catch {}
+              return info;
+            },
+          }),
+        },
         ERROR: {
           target: 'error',
           actions: assign({
@@ -521,3 +550,10 @@ export const agentMachine = setup({
 // ── Type exports ────────────────────────────────────────────────────────────
 
 export type AgentActor = ActorRefFrom<typeof agentMachine>;
+
+/**
+ * Helper to read last step boundary from context (diagnostics / stoppedAt for partial reports).
+ */
+export function getLastStepBoundary(context: AgentContext): { stepIndex: number; finishReason: string } | null {
+  return context.lastStepBoundary;
+}
