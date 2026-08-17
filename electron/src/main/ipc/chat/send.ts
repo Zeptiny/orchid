@@ -564,7 +564,8 @@ async function tryCompactSynchronously(
     if (decision.shouldPrepare) {
       // ── Selective branch ──────────────────────────────────────────────
       if (cfg.mode === 'selective') {
-        const slice = messages.slice(cut.compactableRange.start, cut.compactableRange.end);
+        const rawSlice = messages.slice(cut.compactableRange.start, cut.compactableRange.end);
+        const slice = rawSlice.filter((m) => !m.excludeFromModel && !m.hidden);
         if (slice.length === 0) return { didApply: false };
         trigger.markPrepareStarted(cut.compactableRange, flaggedIds);
         const manifest = buildManifest(messages, cut.compactableRange);
@@ -683,7 +684,8 @@ async function tryCompactSynchronously(
         return { didApply: false };
       }
       // ── Simple branch (unchanged) ─────────────────────────────────────
-      const slice = messages.slice(cut.compactableRange.start, cut.compactableRange.end);
+      const rawSlice2 = messages.slice(cut.compactableRange.start, cut.compactableRange.end);
+      const slice = rawSlice2.filter((m) => !m.excludeFromModel && !m.hidden);
       if (slice.length === 0) return { didApply: false };
       trigger.markPrepareStarted(cut.compactableRange, flaggedIds);
       const result = await summarizeCompactableRange({
@@ -823,7 +825,8 @@ function handleUsageCompaction(
     if (decision.shouldPrepare) {
       // ── Selective pending branch ──────────────────────────────────────
       if (cfg.mode === 'selective') {
-        const slice = fullHistory.slice(cut.compactableRange.start, cut.compactableRange.end);
+        const rawSlice = fullHistory.slice(cut.compactableRange.start, cut.compactableRange.end);
+        const slice = rawSlice.filter((m) => !m.excludeFromModel && !m.hidden);
         if (slice.length === 0) return;
         trigger.markPrepareStarted(cut.compactableRange, flaggedIds);
         const manifest = buildManifest(fullHistory, cut.compactableRange);
@@ -862,7 +865,8 @@ function handleUsageCompaction(
         return;
       }
       // ── Simple pending branch (unchanged) ─────────────────────────────
-      const slice = fullHistory.slice(cut.compactableRange.start, cut.compactableRange.end);
+      const rawSlice2 = fullHistory.slice(cut.compactableRange.start, cut.compactableRange.end);
+      const slice = rawSlice2.filter((m) => !m.excludeFromModel && !m.hidden);
       if (slice.length === 0) return;
       trigger.markPrepareStarted(cut.compactableRange, flaggedIds);
       const promise = summarizeCompactableRange({

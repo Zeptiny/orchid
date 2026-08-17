@@ -236,7 +236,8 @@ export async function tryCompactSubagentHistory(params: {
       accountingStore = undefined;
     }
 
-    const compactableSliceForFallback = messages.slice(compactableRange.start, compactableRange.end) as Message[];
+    const compactableSliceForFallback = (messages.slice(compactableRange.start, compactableRange.end) as Message[]).filter((m) => !m.excludeFromModel && !m.hidden);
+    if (compactableSliceForFallback.length === 0) return null;
     const simpleFallback = async (): Promise<{ text: string } | null> => {
       try {
         const { summarizeCompactableRange } = await import('../llm/compaction/summarize.js');
@@ -340,7 +341,7 @@ export async function tryCompactSubagentHistory(params: {
   }
 
   // Simple default behavior (unchanged) — task-focused compactor-subagent, subagent-scoped accounting (R18)
-  const compactableSlice = messages.slice(compactableRange.start, compactableRange.end) as Message[];
+  const compactableSlice = (messages.slice(compactableRange.start, compactableRange.end) as Message[]).filter((m) => !m.excludeFromModel && !m.hidden);
   if (compactableSlice.length === 0) return null;
 
   let accountingStore: ReturnType<typeof getProviderAccountingStore> | undefined;

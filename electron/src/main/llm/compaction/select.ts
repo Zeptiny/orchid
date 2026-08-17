@@ -490,8 +490,23 @@ export function selectCut(
     // The spec for U3 says "Exclude summary head (via U2 marker compacted) from preserve count." No explicit exclusion from compactable, but context-snapshot treats summary head as its own bucket.
     // For cut selection, we should treat compactableRange as [0,cut) as contiguous, including summary head if cut beyond it. That's acceptable; U7 persistence will handle summary re-creation? But to mitigate collapse, later logic may avoid re-summarizing summary head? For U3, we just return cut as computed; caller can decide.
     // For test "summary head not counted", we need to ensure keep count excludes summary head.
-    // So compactableRange remains [0,cut)
-    const compactableRange: CompactableRange = { start: 0, end: cutCandidate };
+    // So compactableRange remains [0,cut) in the single-summary case.
+    // To avoid duplicate compaction input when multiple compactions occur, the
+    // already-compacted prefix (hidden / excludeFromModel) must not be re-fed
+    // to the next summarizer — it would duplicate the same user messages that
+    // are already represented inside the prior summary. The previous summary
+    // head itself is *not* skipped here: when the window contains only the
+    // summary, re-compacting it alone (summary-of-summary) is expected, and
+    // when it sits before preserved chains it should be included once so the
+    // next handoff can merge old summary + newly-eligible chains.
+    let compactableStart = 0;
+    while (
+      compactableStart < cutCandidate &&
+      (messages[compactableStart]?.excludeFromModel || messages[compactableStart]?.hidden)
+    ) {
+      compactableStart++;
+    }
+    const compactableRange: CompactableRange = { start: compactableStart, end: cutCandidate };
 
     // Edge: if cutCandidate === 0, compactable empty
     // If cutCandidate === n, compactable is whole history (preserve empty) — but R6 says open group never compacted, so if open exists cutCandidate <= openStart < n, never n when open exists.
@@ -510,9 +525,16 @@ export function selectCut(
   // Fallback (should not reach): return minimal preserve (open group only)
   const fallbackCut = adjustCutToSafeBoundary(openGroupStart ?? n, completedIntervals, openGroupStart, n);
   const fallbackPreservedCount = realChains.filter((c) => c.end > fallbackCut).length;
+  let fallbackStart = 0;
+  while (
+    fallbackStart < fallbackCut &&
+    (messages[fallbackStart]?.excludeFromModel || messages[fallbackStart]?.hidden)
+  ) {
+    fallbackStart++;
+  }
   return {
     cutIndex: fallbackCut,
-    compactableRange: { start: 0, end: fallbackCut },
+    compactableRange: { start: fallbackStart, end: fallbackCut },
     preservedCount: fallbackPreservedCount,
     openGroupStart,
     preservedRange: { start: fallbackCut, end: n },
