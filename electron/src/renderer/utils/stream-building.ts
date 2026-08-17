@@ -96,6 +96,11 @@ export function suppressLiveMessagesAlreadyInHistory(
   liveItems: readonly StreamItem[],
   historyItems: readonly StreamItem[],
 ): StreamItem[] {
+  const historyIds = new Set<string>();
+  for (const item of historyItems) {
+    if (item.kind !== 'message' || !item.message.id) continue;
+    historyIds.add(item.message.id);
+  }
   const remaining = new Map<string, number>();
   for (const item of historyItems) {
     if (item.kind !== 'message') continue;
@@ -103,10 +108,11 @@ export function suppressLiveMessagesAlreadyInHistory(
     if (!key) continue;
     remaining.set(key, (remaining.get(key) ?? 0) + 1);
   }
-  if (remaining.size === 0) return liveItems as StreamItem[];
+  if (historyIds.size === 0 && remaining.size === 0) return liveItems as StreamItem[];
 
   return liveItems.filter((item) => {
     if (item.kind !== 'message') return true;
+    if (item.message.id && historyIds.has(item.message.id)) return false;
     const key = assistantMessageDedupeKey(item.message);
     if (!key) return true;
     const count = remaining.get(key) ?? 0;
