@@ -76,12 +76,16 @@ interface ProjectFieldSpec {
   max?: number;
   step?: number;
   fullWidth?: boolean;
+  hint?: string;
 }
 
 interface ProjectConfigSection {
   title: string;
   fields: ProjectFieldSpec[];
 }
+
+const COMPACTION_HYSTERESIS_HINT =
+  'Hysteresis prevents thrashing. After compaction, usage must drop below threshold - delta (re-arm line) before re-firing. Or, growth of min_compactable_tokens since post-compaction baseline re-arms even while above threshold. 0.1 = 10% buffer. Higher = less frequent.';
 
 const TAB_SECTIONS: Partial<Record<ProjectTab, ProjectConfigSection[]>> = {
   general: [
@@ -180,9 +184,8 @@ const TAB_SECTIONS: Partial<Record<ProjectTab, ProjectConfigSection[]>> = {
         { key: 'compaction.main.threshold', label: 'Threshold (main)', kind: 'number', min: 0.1, max: 0.95, step: 0.05 },
         { key: 'compaction.main.keep_recent_chains', label: 'Keep Recent Chains (main)', kind: 'integer', min: 0, max: 100 },
         { key: 'compaction.main.min_compactable_tokens', label: 'Min Compactable Tokens (main)', kind: 'integer', min: 0 },
-        { key: 'compaction.main.agent_name', label: 'Agent Name (main)', kind: 'text' },
         { key: 'compaction.main.mechanical_reclaim', label: 'Mechanical Reclaim (main)', kind: 'boolean' },
-        { key: 'compaction.main.hysteresis_delta', label: 'Hysteresis Delta (main)', kind: 'number', min: 0, max: 0.5, step: 0.05 },
+        { key: 'compaction.main.hysteresis_delta', label: 'Hysteresis Delta (main)', kind: 'number', min: 0, max: 0.5, step: 0.05, hint: COMPACTION_HYSTERESIS_HINT },
       ],
     },
     {
@@ -192,9 +195,8 @@ const TAB_SECTIONS: Partial<Record<ProjectTab, ProjectConfigSection[]>> = {
         { key: 'compaction.subagents.threshold', label: 'Threshold (subagents)', kind: 'number', min: 0.1, max: 0.95, step: 0.05 },
         { key: 'compaction.subagents.keep_recent_chains', label: 'Keep Recent Chains (subagents)', kind: 'integer', min: 0, max: 100 },
         { key: 'compaction.subagents.min_compactable_tokens', label: 'Min Compactable Tokens (subagents)', kind: 'integer', min: 0 },
-        { key: 'compaction.subagents.agent_name', label: 'Agent Name (subagents)', kind: 'text' },
         { key: 'compaction.subagents.mechanical_reclaim', label: 'Mechanical Reclaim (subagents)', kind: 'boolean' },
-        { key: 'compaction.subagents.hysteresis_delta', label: 'Hysteresis Delta (subagents)', kind: 'number', min: 0, max: 0.5, step: 0.05 },
+        { key: 'compaction.subagents.hysteresis_delta', label: 'Hysteresis Delta (subagents)', kind: 'number', min: 0, max: 0.5, step: 0.05, hint: COMPACTION_HYSTERESIS_HINT },
       ],
     },
   ],
@@ -597,6 +599,7 @@ export function ProjectConfigView({ projectDir, onNewChat, onClose }: ProjectCon
         key={field.key}
         label={field.label}
         htmlFor={inputId}
+        hint={field.hint}
         className={`config-field${field.fullWidth ? ' config-form-grid-full' : ''}`}
       >
         <div className="flex items-center gap-1.5">

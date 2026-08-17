@@ -1,6 +1,10 @@
-import { useCallback } from 'react';
+import { useCallback, useEffect, useMemo } from 'react';
 import type { CompactionConfig, CompactionScopeConfig, CompactionMode } from '../../../shared/types/ipc-boundary';
+import { useProviders } from '../../hooks/useProviders';
 import { parseConfigNumber } from '../../utils/config-draft';
+import { onOrchidEvent } from '../../utils/events';
+import { isTextGenerationModel } from '../../utils/models';
+import { providerModelOptionContextLabel } from '../../utils/provider-selection';
 import { FormField } from '../ui/FormField';
 import { Panel } from '../ui/Panel';
 import { SectionHeader } from '../ui/SectionHeader';
@@ -19,7 +23,27 @@ const SCOPE_LABEL: Record<Scope, string> = {
   subagents: 'Subagents',
 };
 
+const HYSTERESIS_HINT =
+  'Hysteresis prevents thrashing. After compaction, usage must drop below threshold - delta (re-arm line) before re-firing. Or, growth of min_compactable_tokens since post-compaction baseline re-arms even while above threshold. 0.1 = 10% buffer. Higher = less frequent.';
+
 export function CompactionTab({ compaction, onChange }: CompactionTabProps) {
+  const providers = useProviders();
+
+  useEffect(() => {
+    void providers.ensureModelList();
+  }, [providers.ensureModelList]);
+
+  useEffect(() => {
+    return onOrchidEvent('orchid:providers-updated', () => {
+      void providers.refresh().then(() => providers.ensureModelList());
+    });
+  }, [providers.refresh, providers.ensureModelList]);
+
+  const filteredOptions = useMemo(
+    () => (providers.modelOptions ?? []).filter((option) => option.available && isTextGenerationModel(option.model)),
+    [providers.modelOptions],
+  );
+
   const updateField = useCallback(
     <K extends keyof CompactionScopeConfig>(scope: Scope, field: K, value: CompactionScopeConfig[K]) => {
       onChange({
@@ -69,37 +93,34 @@ export function CompactionTab({ compaction, onChange }: CompactionTabProps) {
     [updateField],
   );
 
-  const handleModelConnectionChange = useCallback(
+  const handleModelChange = useCallback(
     (scope: Scope, value: string) => {
-      const currentModelId = compaction[scope].model?.modelId ?? '';
-      const connTrim = value.trim();
-      const modelTrim = currentModelId.trim();
-      if (!connTrim && !modelTrim) {
+      if (!value) {
+        updateField(scope, 'model', null);
+        return;
+      }
+      const idx = value.indexOf(':');
+      if (idx === -1) {
+        updateField(scope, 'model', null);
+        return;
+      }
+      const connectionId = value.slice(0, idx);
+      const modelId = value.slice(idx + 1);
+      if (!connectionId || !modelId) {
         updateField(scope, 'model', null);
       } else {
-        updateField(scope, 'model', { connectionId: connTrim, modelId: modelTrim });
+        updateField(scope, 'model', { connectionId, modelId });
       }
     },
-    [compaction, updateField],
-  );
-
-  const handleModelIdChange = useCallback(
-    (scope: Scope, value: string) => {
-      const currentConnectionId = compaction[scope].model?.connectionId ?? '';
-      const connTrim = currentConnectionId.trim();
-      const modelTrim = value.trim();
-      if (!connTrim && !modelTrim) {
-        updateField(scope, 'model', null);
-      } else {
-        updateField(scope, 'model', { connectionId: connTrim, modelId: modelTrim });
-      }
-    },
-    [compaction, updateField],
+    [updateField],
   );
 
   const renderScope = (scope: Scope) => {
     const cfg = compaction[scope];
     const prefix = `compaction-${scope}`;
+    const modelValue = cfg.model ? `${cfg.model.connectionId}:${cfg.model.modelId}` : '';
+    const filteredKeys = new Set(filteredOptions.map((option) => `${option.selection.connectionId}:${option.selection.modelId}`));
+    const hasCurrent = !cfg.model || filteredKeys.has(modelValue);
     return (
       <Panel as="section" className="config-fieldset flex flex-col gap-3">
         <SectionHeader
@@ -145,23 +166,6 @@ export function CompactionTab({ compaction, onChange }: CompactionTabProps) {
               min={0.1}
               max={0.95}
               step={0.05}
-            />
-          </FormField>
-
-          <FormField
-            label="Agent Name"
-            htmlFor={`${prefix}-agent-name`}
-            hint="Internal agent used to summarize. Must match an internal compactor agent definition."
-            className="config-field"
-          >
-            <TextInput
-              id={`${prefix}-agent-name`}
-              type="text"
-              value={cfg.agent_name}
-              onChange={(e) => updateField(scope, 'agent_name', e.target.value)}
-              bordered
-              className="w-full"
-              placeholder={scope === 'main' ? 'compactor' : 'compactor-subagent'}
             />
           </FormField>
 
@@ -222,7 +226,7 @@ export function CompactionTab({ compaction, onChange }: CompactionTabProps) {
           <FormField
             label="Hysteresis Delta"
             htmlFor={`${prefix}-hysteresis`}
-            hint="Usage must drop this far below threshold before compaction can re-fire (0–0.5). Prevents rapid re-triggering."
+            hint={HYSTERESIS_HINT}
             className="config-field"
           >
             <TextInput
@@ -239,37 +243,34 @@ export function CompactionTab({ compaction, onChange }: CompactionTabProps) {
           </FormField>
 
           <FormField
-            label="Model Connection ID"
-            htmlFor={`${prefix}-model-connection`}
-            hint="Optional compactor model override — connection ID. Leave both model fields empty to clear override and use fallback chain."
+            label="Model"
+            htmlFor={`${prefix}-model`}
+            hint="Optional compactor model override. Inherit uses the fallback chain (tier → current)."
             className="config-field"
           >
-            <TextInput
-              id={`${prefix}-model-connection`}
-              type="text"
-              value={cfg.model?.connectionId ?? ''}
-              onChange={(e) => handleModelConnectionChange(scope, e.target.value)}
+            <Select
+              id={`${prefix}-model`}
+              value={modelValue}
+              onChange={(e) => handleModelChange(scope, e.target.value)}
               bordered
               className="w-full"
-              placeholder="connectionId or empty for fallback"
-            />
-          </FormField>
-
-          <FormField
-            label="Model ID"
-            htmlFor={`${prefix}-model-id`}
-            hint="Optional compactor model override — model ID. Leave both empty for fallback (tier → current)."
-            className="config-field"
-          >
-            <TextInput
-              id={`${prefix}-model-id`}
-              type="text"
-              value={cfg.model?.modelId ?? ''}
-              onChange={(e) => handleModelIdChange(scope, e.target.value)}
-              bordered
-              className="w-full"
-              placeholder="modelId or empty for fallback"
-            />
+            >
+              <option value="">Inherit (fallback chain)</option>
+              {filteredOptions.map((option) => {
+                const key = `${option.selection.connectionId}:${option.selection.modelId}`;
+                const label = `${option.model.displayName} · ${providerModelOptionContextLabel(option)}`;
+                return (
+                  <option key={key} value={key}>
+                    {label}
+                  </option>
+                );
+              })}
+              {!hasCurrent && cfg.model && (
+                <option value={modelValue}>
+                  {`${cfg.model.modelId} · unavailable (${cfg.model.connectionId})`}
+                </option>
+              )}
+            </Select>
           </FormField>
         </div>
       </Panel>
