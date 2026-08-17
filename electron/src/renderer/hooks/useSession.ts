@@ -121,6 +121,7 @@ let draftGeneration = 0;
 let loadGeneration = 0;
 /** Monotonic generation so older session:list responses cannot win. */
 let listRefreshGeneration = 0;
+let pendingSwitchSessionId: string | null = null;
 let bootstrapped = false;
 const listeners = new Set<Listener>();
 const unsubscribers: Array<() => void> = [];
@@ -353,6 +354,7 @@ function ensureBootstrapped(): void {
   if (window.orchid?.session?.onCompaction) {
     unsubscribers.push(
       window.orchid.session.onCompaction((event) => {
+        if (pendingSwitchSessionId != null && pendingSwitchSessionId !== event.sessionId) return;
         if (activeSession?.id !== event.sessionId) return;
         void openShared(event.sessionId);
       }),
@@ -376,6 +378,7 @@ async function loadShared(id: string): Promise<Session | null> {
 
   const generation = ++loadGeneration;
   advanceDraftGeneration();
+  pendingSwitchSessionId = id;
   try {
     const session = await window.orchid.session.load({ id });
     // Drop stale responses when a newer load (or draft) superseded this one.
@@ -389,6 +392,8 @@ async function loadShared(id: string): Promise<Session | null> {
   } catch (err) {
     console.error('Failed to load session:', err);
     return null;
+  } finally {
+    if (pendingSwitchSessionId === id) pendingSwitchSessionId = null;
   }
 }
 
@@ -399,6 +404,7 @@ async function openShared(id: string): Promise<SessionOpenResult | null> {
 
   const generation = ++loadGeneration;
   advanceDraftGeneration();
+  pendingSwitchSessionId = id;
   try {
     const result = await window.orchid.session.open({ id });
     // Drop stale responses when a newer load (or draft) superseded this one.
@@ -415,6 +421,8 @@ async function openShared(id: string): Promise<SessionOpenResult | null> {
   } catch (err) {
     console.error('Failed to open session:', err);
     return null;
+  } finally {
+    if (pendingSwitchSessionId === id) pendingSwitchSessionId = null;
   }
 }
 
@@ -493,11 +501,13 @@ async function createShared(): Promise<Session> {
 async function enterDraftShared(): Promise<void> {
   loadGeneration += 1;
   advanceDraftGeneration();
+  pendingSwitchSessionId = '__draft__';
   if (window.orchid?.session?.clearActive) {
     await window.orchid.session.clearActive();
   }
   setActiveSession(null);
   void getWorkspaceShared();
+  pendingSwitchSessionId = null;
 }
 
 async function pickProjectDirShared(): Promise<WorkspaceInfo | null> {
