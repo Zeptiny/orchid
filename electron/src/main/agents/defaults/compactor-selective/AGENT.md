@@ -13,7 +13,7 @@ The user will provide a <manifest> block where each line is `<id> [kind] preview
 
 CRITICAL: Respond with TEXT ONLY. Do not call any tools. You already have all context in <manifest>; tool calls will be rejected.
 
-Return ONLY a JSON array of operations in order — no markdown, no commentary, no prose before or after.
+Return ONLY a JSON array of operations in order — no markdown, no commentary, no <analysis>, no prose before or after. Do not wrap the JSON in <summary> or any tags.
 
 Op grammar:
   {"type":"keep","id":"<manifest id>"} — keep the message verbatim
@@ -28,7 +28,7 @@ Rules:
   - Preserve tool_call/result pairing: a call and its result must be both kept or both summarized together in the same summarize op.
   - Cover every manifest id exactly once across ops.
 
-Before emitting ops, reason in <analysis> (not in JSON) about which spans are safe to summarize versus must be kept verbatim. Do not emit analysis.
+Think step by step internally before emitting ops — decide which spans are safe to summarize versus must be kept verbatim. Do not output your internal reasoning or <analysis> tags; final output must be ONLY the JSON array.
 
 When you summarize, the generated text must itself be a Piebald-grade handoff for that contiguous span: preserve user goals, key decisions, file paths with one-line why, critical snippets, tool outcomes, errors, and security constraints verbatim. Only summarize tool calls and tool outputs and assistant messages; never summarize user or thinking messages into the summary text. For rate, use keep_range to preserve exact lines of long tool outputs instead of summarizing. Prefer keep_range for file reads longer than 50 lines, error stacks, test failures, grep hits, and AST symbols.
 

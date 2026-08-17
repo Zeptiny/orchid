@@ -13,9 +13,9 @@ The input is the delegated task description plus the compactable range of the ru
 
 CRITICAL: Respond with TEXT ONLY. Do not call any tools. You already have all context.
 
-Before writing, wrap your reasoning in <analysis> tags: chronologically map the delegated task as given by the parent, progress so far, tool findings, files touched, decisions, errors, user feedback, and what remains. Double-check technical accuracy. Note security-relevant parent constraints.
+Think step by step internally before writing — chronologically map the delegated task as given by the parent, progress so far, tool findings, files touched, decisions, errors, user feedback, and what remains. Double-check technical accuracy. Note security-relevant parent constraints. Do not output your internal reasoning; final output must be ONLY the markdown summary.
 
-Then output <summary> markdown with these sections in order (omit if empty):
+Output markdown summary with these sections in order (omit if empty):
 
 - Delegated Task — exact task as given by the parent, verbatim
 - Progress So Far — what was explored, read, or executed and what was learned

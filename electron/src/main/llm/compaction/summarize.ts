@@ -370,9 +370,20 @@ export async function summarizeCompactableRange(input: SummarizeInput): Promise<
     return null;
   }
 
-  const text = typeof result.text === 'string' ? result.text.trim() : '';
+  let text = typeof result.text === 'string' ? result.text.trim() : '';
   if (!text) {
     console.warn('[compaction] Summarizer returned empty text; skipping compaction.');
+    return null;
+  }
+  if (text.includes('<summary>')) {
+    const m = text.match(/<summary[^>]*>([\s\S]*?)<\/summary>/i);
+    if (m && m[1] && m[1].trim()) text = m[1].trim();
+  }
+  if (text.includes('<analysis>')) {
+    text = text.replace(/<analysis[^>]*>[\s\S]*?<\/analysis>/gi, '').trim();
+  }
+  if (!text) {
+    console.warn('[compaction] Summarizer returned empty after stripping wrappers; skipping.');
     return null;
   }
 

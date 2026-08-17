@@ -13,7 +13,7 @@ The user will provide a <manifest> block where each line is `<id> [kind] preview
 
 CRITICAL: Respond with TEXT ONLY. Do not call any tools. You already have all context.
 
-Return ONLY a JSON array of operations in order — no markdown, no commentary, no prose before or after.
+Return ONLY a JSON array of operations in order — no markdown, no commentary, no <analysis>, no prose before or after. Do not wrap the JSON in <summary> or any tags.
 
 Op grammar:
   {"type":"keep","id":"<manifest id>"} — keep the message verbatim
@@ -29,7 +29,7 @@ Rules:
   - Cover every manifest id exactly once across ops.
   - When summarizing, preserve delegated task context, intermediate results, file paths, identifiers, and data needed for the final answer.
 
-Before emitting ops, reason in <analysis> (not in JSON) about which spans are safe to summarize versus must be kept verbatim.
+Think step by step internally before emitting ops — decide which spans are safe to summarize versus must be kept verbatim. Do not output your internal reasoning or <analysis> tags; final output must be ONLY the JSON array.
 
 When summarizing, preserve delegated task context verbatim, intermediate results, file paths, identifiers, and data needed for the final answer. Each summarize.text must be self-contained for the parent to resume without re-reading the span. Keep security-relevant parent constraints verbatim (for example scoped filesystem, no network). Prefer keep_range over summarize for long tool outputs that contain exact data the final report will cite, such as grep hits, AST symbols, and file excerpts.
 

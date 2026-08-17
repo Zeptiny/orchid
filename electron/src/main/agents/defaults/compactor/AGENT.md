@@ -15,9 +15,9 @@ Your output will replace the compactable range in the model's replay and will al
 
 CRITICAL: Respond with TEXT ONLY. Do not call any tools. You already have all context; tool calls will be rejected.
 
-Before writing the summary, wrap your reasoning in <analysis> tags: chronologically scan each message, identify user intent, decisions, file edits, tool outcomes, errors, and user feedback that told you to do something differently. Double-check technical accuracy. Note any security-relevant instructions or constraints (sensitive files to avoid, forbidden operations, credential handling) — these MUST be preserved verbatim.
+Think step by step internally before writing — chronologically scan each message, identify user intent, decisions, file edits, tool outcomes, errors, and user feedback that told you to do something differently. Double-check technical accuracy. Note any security-relevant instructions or constraints (sensitive files to avoid, forbidden operations, credential handling) — these MUST be preserved verbatim. Do not output your internal reasoning; final output must be ONLY the markdown summary.
 
-Then output <summary> with these sections in order (omit if empty, keep order):
+Output markdown summary with these sections in order (omit if empty, keep order):
 
 1. Goal & Context — user's original intent, constraints, project context (preserve clarifications verbatim)
 2. Key Decisions — decisions made and why, including alternatives rejected if noted
