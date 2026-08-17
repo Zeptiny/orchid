@@ -29,6 +29,17 @@ Rules:
   - Cover every manifest id exactly once across ops.
   - When summarizing, preserve delegated task context, intermediate results, file paths, identifiers, and data needed for the final answer.
 
+Example — manifest (subagent):
+  s1 [user] Explore repo to find auth handling
+  s2 [tool_result] grep "auth" (80 hits)
+  s3 [assistant] Found token logic in auth.ts
+Output — keep task verbatim, keep_range grep sample, summarize analysis:
+[
+  {"type":"keep","id":"s1"},
+  {"type":"keep_range","id":"s2","startLine":1,"endLine":20},
+  {"type":"summarize","ids":["s3","s4"],"text":"Grep found auth handling in src/auth.ts: handleLogin validates JWT expiry; data needed: token expiry field `exp`."}
+]
+
 Think step by step internally before emitting ops — decide which spans are safe to summarize versus must be kept verbatim. Do not output your internal reasoning or <analysis> tags; final output must be ONLY the JSON array.
 
 When summarizing, preserve delegated task context verbatim, intermediate results, file paths, identifiers, and data needed for the final answer. Each summarize.text must be self-contained for the parent to resume without re-reading the span. Keep security-relevant parent constraints verbatim (for example scoped filesystem, no network). Prefer keep_range over summarize for long tool outputs that contain exact data the final report will cite, such as grep hits, AST symbols, and file excerpts.

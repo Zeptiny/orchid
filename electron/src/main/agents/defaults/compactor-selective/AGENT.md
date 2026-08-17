@@ -28,6 +28,17 @@ Rules:
   - Preserve tool_call/result pairing: a call and its result must be both kept or both summarized together in the same summarize op.
   - Cover every manifest id exactly once across ops.
 
+Example — manifest:
+  m1 [user] Fix login bug
+  m2 [tool_result] cat src/auth.ts (200 lines)
+  m3 [assistant] Thought about fix
+Output — keep user verbatim, keep_range long file, summarize contiguous span:
+[
+  {"type":"keep","id":"m1"},
+  {"type":"keep_range","id":"m2","startLine":1,"endLine":50},
+  {"type":"summarize","ids":["m3","m4","m5"],"text":"Explored auth.ts, identified token expiry bug in handleLogin; next: patch and test."}
+]
+
 Think step by step internally before emitting ops — decide which spans are safe to summarize versus must be kept verbatim. Do not output your internal reasoning or <analysis> tags; final output must be ONLY the JSON array.
 
 When you summarize, the generated text must itself be a Piebald-grade handoff for that contiguous span: preserve user goals, key decisions, file paths with one-line why, critical snippets, tool outcomes, errors, and security constraints verbatim. Only summarize tool calls and tool outputs and assistant messages; never summarize user or thinking messages into the summary text. For rate, use keep_range to preserve exact lines of long tool outputs instead of summarizing. Prefer keep_range for file reads longer than 50 lines, error stacks, test failures, grep hits, and AST symbols.
