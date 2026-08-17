@@ -27,7 +27,7 @@ const VARIANT_CONTENT_CLASS = {
   card: '',
 } as const;
 
-/** Native, keyboard-accessible disclosure with collapse styling. */
+/** Native, keyboard-accessible disclosure with orchid-disclosure styling. */
 export function Disclosure({
   summary,
   children,
@@ -39,16 +39,16 @@ export function Disclosure({
 }: DisclosureProps) {
   return (
     <details
-      className={`collapse collapse-arrow ${VARIANT_CLASS[variant]} ${className}`.trim().replace(/\s+/g, ' ')}
+      className={`orchid-disclosure orchid-disclosure-arrow ${VARIANT_CLASS[variant]} ${className}`.trim().replace(/\s+/g, ' ')}
       {...props}
     >
       <summary
-        className={`collapse-title min-h-0 ${VARIANT_SUMMARY_CLASS[variant]} ${summaryClassName}`.trim().replace(/\s+/g, ' ')}
+        className={`orchid-disclosure-title min-h-0 ${VARIANT_SUMMARY_CLASS[variant]} ${summaryClassName}`.trim().replace(/\s+/g, ' ')}
       >
         {summary}
       </summary>
       <div
-        className={`collapse-content ${VARIANT_CONTENT_CLASS[variant]} ${contentClassName}`.trim().replace(/\s+/g, ' ')}
+        className={`orchid-disclosure-content ${VARIANT_CONTENT_CLASS[variant]} ${contentClassName}`.trim().replace(/\s+/g, ' ')}
       >
         {children}
       </div>

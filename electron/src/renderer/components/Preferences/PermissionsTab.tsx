@@ -315,9 +315,34 @@ export function PermissionsTab({
     }
   }, []);
 
+  // Fetch on mount and whenever the configured server set changes — saving
+  // MCP server config invalidates the main-process managers, so a refetch
+  // re-creates them and picks up newly added servers.
+  const configuredServerKey = useMemo(
+    () => Object.keys(config.mcp_servers).sort().join(' '),
+    [config.mcp_servers],
+  );
   useEffect(() => {
     if (mcpStatusProp !== undefined) return;
     void refreshMcpStatus();
+  }, [configuredServerKey, mcpStatusProp, refreshMcpStatus]);
+
+  // mcp:status is a pull API with no push channel, so re-fetch on the two
+  // lifecycle events that change what the pull returns: workspace binding
+  // (unbound windows always get []) and trust grants (a dormant manager only
+  // starts servers after trust is granted).
+  useEffect(() => {
+    if (mcpStatusProp !== undefined) return;
+    const refresh = () => {
+      void refreshMcpStatus();
+    };
+    const unsubscribers = [
+      window.orchid?.session?.onWorkspaceChanged?.(refresh),
+      window.orchid?.projectTrust?.onChanged?.(refresh),
+    ];
+    return () => {
+      for (const unsubscribe of unsubscribers) unsubscribe?.();
+    };
   }, [mcpStatusProp, refreshMcpStatus]);
 
   const mcpStatus = mcpStatusProp ?? fetchedMcpStatus;

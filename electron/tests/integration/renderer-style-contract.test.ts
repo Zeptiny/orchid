@@ -42,7 +42,7 @@ export const RESERVED_COMPONENT_ROOTS = [
   'badge',
   'status',
   'loading',
-  'collapse',
+  'orchid-disclosure',
   'modal',
   'tabs',
   'tab',
@@ -132,7 +132,7 @@ const RESERVED_MODIFIER_ROOTS = new Set([
   'radio',
   'toggle',
   'loading',
-  'collapse',
+  'orchid-disclosure',
   'select',
   'textarea',
   'table',
@@ -923,6 +923,27 @@ describe('Renderer style contract', () => {
         }
       }
       expect(hits, `daisyUI-only vars in: ${hits.join(', ')}`).toEqual([]);
+    });
+
+    it('primitive components do not use Tailwind utility class names verbatim', () => {
+      // Tailwind ships utilities whose names collide with legacy daisyUI
+      // component classes. `.collapse { visibility: collapse }` lands in
+      // @layer utilities, so a <details class="collapse"> renders permanently
+      // hidden (issue #123: invisible MCP permission rows).
+      const disclosureSource = fs.readFileSync(
+        path.join(RENDERER_ROOT, 'components/ui/Disclosure.tsx'),
+        'utf8',
+      );
+      const bareUsage = /(?:^|[\s'"`])collapse(?=[\s'"`]|$)/;
+      expect(
+        bareUsage.test(disclosureSource),
+        `Disclosure must not use Tailwind's bare 'collapse' utility class`,
+      ).toBe(false);
+      const primitivesCss = fs.readFileSync(PRIMITIVES_CSS, 'utf8');
+      expect(
+        /(?:^|[{}@,\s])\.collapse\b/.test(stripCssComments(primitivesCss)),
+        'primitives.css must not declare a bare .collapse component root',
+      ).toBe(false);
     });
   });
 

@@ -77,7 +77,9 @@ These component roots still appear in feature JSX and are tracked by the drift s
 
 `styles/primitives.css` is the only stylesheet that may define these roots (or their common modifiers such as `btn-primary`, `btn-ghost`). Reserved roots include:
 
-`btn`, `input`, `select`, `textarea`, `alert`, `badge`, `status`, `loading`, `collapse`, `modal`, `tabs`, `tab`, `steps`, `step`, `dropdown`, `table`, `fieldset`, `card`, `kbd`, `tooltip`, `menu`, `checkbox`, `radio`, `toggle`, `range`, `progress`, `link`, `divider`, `avatar`, `navbar`, `drawer`, `hero`, `footer`, `stat`, `toast`, `file-input`, `label`, `join`, `mask`, `stack`, `skeleton`, `indicator`, `list`, `dock`, `fab`, `validator`
+`btn`, `input`, `select`, `textarea`, `alert`, `badge`, `status`, `loading`, `orchid-disclosure`, `modal`, `tabs`, `tab`, `steps`, `step`, `dropdown`, `table`, `fieldset`, `card`, `kbd`, `tooltip`, `menu`, `checkbox`, `radio`, `toggle`, `range`, `progress`, `link`, `divider`, `avatar`, `navbar`, `drawer`, `hero`, `footer`, `stat`, `toast`, `file-input`, `label`, `join`, `mask`, `stack`, `skeleton`, `indicator`, `list`, `dock`, `fab`, `validator`
+
+Note: the disclosure root is `orchid-disclosure`, not `collapse` — Tailwind ships a bare `collapse` visibility utility (`visibility: collapse`) that takes precedence in `@layer utilities` and would permanently hide any `details.collapse`. Never reintroduce a bare `.collapse` component class.
 
 Product-specific names that only *start* like a reserved root but are not the root itself (for example `.input-area`) are allowed.
 

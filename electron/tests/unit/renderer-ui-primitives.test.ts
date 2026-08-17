@@ -75,7 +75,8 @@ describe('Disclosure', () => {
     );
     expect(html).toContain('<details');
     expect(html).toContain('<summary');
-    expect(html).toContain('collapse collapse-arrow');
+    expect(html).toContain('orchid-disclosure orchid-disclosure-arrow');
+    expect(html).not.toMatch(/<details[^>]*class="[^"]*\bcollapse\b/);
     expect(html).toContain('rounded-none border-y border-base-300');
     expect(html).toContain('Long prompt');
     expect(html).not.toMatch(/<details[^>]*\sopen(?:=|\s|>)/);
