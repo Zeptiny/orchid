@@ -300,6 +300,21 @@ export function persistCompactionBetweenTurns(
           }
         }
       }
+      try {
+        const { webContents: wc2 } = require('electron') as typeof import('electron');
+        const all2 = (wc2?.getAllWebContents?.() ?? []) as unknown as WebContents[];
+        const compactionEvent = { sessionId, updatedAt: nextSession.updatedAt };
+        for (const wc of all2) {
+          try {
+            const active = (manager as unknown as { getActive: (id: string) => unknown }).getActive(String((wc as unknown as { id: number }).id));
+            if ((active as unknown as { id?: string })?.id !== sessionId) continue;
+            if (typeof (wc as unknown as { isDestroyed?: () => boolean }).isDestroyed === 'function' && (wc as unknown as { isDestroyed: () => boolean }).isDestroyed()) continue;
+            (wc as unknown as { send: (ch: string, p: unknown) => void }).send(IPC_CHANNELS.SESSION_COMPACTION, compactionEvent);
+          } catch {
+          }
+        }
+      } catch {
+      }
     } catch {
     }
     return true;

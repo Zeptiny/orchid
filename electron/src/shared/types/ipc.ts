@@ -904,6 +904,11 @@ export interface SessionUpdatedEvent {
   updatedAt: string;
 }
 
+export interface SessionCompactionEvent {
+  sessionId: string;
+  updatedAt: string;
+}
+
 export interface SessionChangeModelMessage {
   id: string;
   selection: ModelSelection | null;
@@ -1407,6 +1412,8 @@ export interface OrchidAPI {
     onCreated: (callback: (event: SessionCreatedEvent) => void) => () => void;
     /** Active session chains/todos mutated mid-chat (multi-chain turn lifecycle). */
     onUpdated: (callback: (event: SessionUpdatedEvent) => void) => () => void;
+    /** Compaction rewrote history — reload the session's chains. */
+    onCompaction: (callback: (event: SessionCompactionEvent) => void) => () => void;
     /** Workspace draft/session/default changed. */
     onWorkspaceChanged: (callback: (event: SessionWorkspaceChangedEvent) => void) => () => void;
     /** Subagent chains persisted — refresh sidebar / chain-footer usage. */
@@ -1602,6 +1609,8 @@ export const IPC_CHANNELS = {
   SESSION_CREATED: 'session:created',
   /** Fired when multi-chain state is updated (start/persist/finish turn). */
   SESSION_UPDATED: 'session:updated',
+  /** Fired when compaction rewrites history (multi-chain + new summary). */
+  SESSION_COMPACTION: 'session:compaction',
   SESSION_CHANGE_MODEL: 'session:change_model',
   /** Resolve current workspace (draft / session / sticky / unbound). */
   SESSION_GET_WORKSPACE: 'session:get_workspace',
@@ -1844,6 +1853,7 @@ export const ALLOWED_EVENT_CHANNELS = [
   IPC_CHANNELS.ASK_QUESTION_SETTLED,
   IPC_CHANNELS.PERMISSION_APPROVAL_REQUESTED,
   IPC_CHANNELS.PERMISSION_APPROVAL_SETTLED,
+  IPC_CHANNELS.SESSION_COMPACTION,
 ] as const satisfies readonly IPCChannel[];
 
 // ── Window type augmentation (renderer-side) ─────────────────────────────────

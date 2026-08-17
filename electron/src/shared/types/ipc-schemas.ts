@@ -249,6 +249,11 @@ export const sessionUpdatedEventSchema = z.object({
   updatedAt: z.string(),
 }).strict();
 
+export const sessionCompactionEventSchema = z.object({
+  sessionId: z.string().min(1),
+  updatedAt: z.string(),
+}).strict();
+
 export const trustStateSchema = z.enum(['trusted', 'untrusted', 'changed']);
 
 export const workspaceInfoSchema = z.object({

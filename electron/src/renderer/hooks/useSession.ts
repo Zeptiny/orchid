@@ -346,6 +346,19 @@ function ensureBootstrapped(): void {
     );
   }
 
+  // Compaction rewrites multiple chains and inserts a summary — reload the
+  // full session so the new summary and collapsed stubs appear immediately
+  // without requiring an exit/re-enter. Uses the existing open path which
+  // already handles generation gating and workspace refresh.
+  if (window.orchid?.session?.onCompaction) {
+    unsubscribers.push(
+      window.orchid.session.onCompaction((event) => {
+        if (activeSession?.id !== event.sessionId) return;
+        void openShared(event.sessionId);
+      }),
+    );
+  }
+
   // Workspace changes (pick / change_cwd / load / clear)
   if (window.orchid?.session?.onWorkspaceChanged) {
     unsubscribers.push(

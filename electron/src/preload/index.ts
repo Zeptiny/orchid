@@ -135,6 +135,7 @@ import {
   sessionRenamedEventSchema,
   sessionCreatedEventSchema,
   sessionUpdatedEventSchema,
+  sessionCompactionEventSchema,
   sessionWorkspaceChangedEventSchema,
   sessionTodosChangedEventSchema,
   sessionActivityChangedEventSchema,
@@ -526,6 +527,9 @@ const orchidAPI: OrchidAPI = {
 
     onUpdated: (callback: (event: SessionUpdatedEvent) => void) =>
       onParsed(IPC_CHANNELS.SESSION_UPDATED, sessionUpdatedEventSchema, callback),
+
+    onCompaction: (callback: (event: import('../shared/types/ipc').SessionCompactionEvent) => void) =>
+      onParsed(IPC_CHANNELS.SESSION_COMPACTION, sessionCompactionEventSchema, callback),
 
     onWorkspaceChanged: (callback: (event: SessionWorkspaceChangedEvent) => void) =>
       onParsed(IPC_CHANNELS.SESSION_WORKSPACE_CHANGED, sessionWorkspaceChangedEventSchema, callback),
