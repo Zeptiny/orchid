@@ -65,6 +65,7 @@ const PROJECT_CONFIG_ALLOWED_KEYS = new Set([
   'mcp_per_server_timeout',
   'mcp_result_max_bytes',
   'rag',
+  'compaction',
   'ignored_dirs',
   'always_expand_tool_groups',
   'theme',
@@ -177,7 +178,7 @@ export function registerConfigIPC(): void {
         filteredUpdates,
       );
       const filtered = Object.fromEntries(
-        Object.entries(merged).filter(([k]) => PROJECT_CONFIG_ALLOWED_KEYS.has(k) || k === 'rag'),
+        Object.entries(merged).filter(([k]) => PROJECT_CONFIG_ALLOWED_KEYS.has(k) || k === 'rag' || k === 'compaction'),
       );
       const validated = configSchema.safeParse(filtered);
       if (!validated.success) {

@@ -39,7 +39,8 @@ type ProjectTab =
   | 'rag'
   | 'skills'
   | 'agents'
-  | 'personalities';
+  | 'personalities'
+  | 'compaction';
 
 interface ProjectTabDef {
   id: ProjectTab;
@@ -52,6 +53,7 @@ const PROJECT_TABS: ProjectTabDef[] = [
   { id: 'mcp', label: 'MCP Servers' },
   { id: 'tiers', label: 'Tier Models' },
   { id: 'rag', label: 'RAG' },
+  { id: 'compaction', label: 'Compaction' },
   { id: 'skills', label: 'Skills' },
   { id: 'agents', label: 'Agents' },
   { id: 'personalities', label: 'Personalities' },
@@ -170,6 +172,32 @@ const TAB_SECTIONS: Partial<Record<ProjectTab, ProjectConfigSection[]>> = {
       ],
     },
   ],
+  compaction: [
+    {
+      title: 'Main Scope',
+      fields: [
+        { key: 'compaction.main.mode', label: 'Mode (main)', kind: 'text' },
+        { key: 'compaction.main.threshold', label: 'Threshold (main)', kind: 'number', min: 0.1, max: 0.95, step: 0.05 },
+        { key: 'compaction.main.keep_recent_chains', label: 'Keep Recent Chains (main)', kind: 'integer', min: 0, max: 100 },
+        { key: 'compaction.main.min_compactable_tokens', label: 'Min Compactable Tokens (main)', kind: 'integer', min: 0 },
+        { key: 'compaction.main.agent_name', label: 'Agent Name (main)', kind: 'text' },
+        { key: 'compaction.main.mechanical_reclaim', label: 'Mechanical Reclaim (main)', kind: 'boolean' },
+        { key: 'compaction.main.hysteresis_delta', label: 'Hysteresis Delta (main)', kind: 'number', min: 0, max: 0.5, step: 0.05 },
+      ],
+    },
+    {
+      title: 'Subagents Scope',
+      fields: [
+        { key: 'compaction.subagents.mode', label: 'Mode (subagents)', kind: 'text' },
+        { key: 'compaction.subagents.threshold', label: 'Threshold (subagents)', kind: 'number', min: 0.1, max: 0.95, step: 0.05 },
+        { key: 'compaction.subagents.keep_recent_chains', label: 'Keep Recent Chains (subagents)', kind: 'integer', min: 0, max: 100 },
+        { key: 'compaction.subagents.min_compactable_tokens', label: 'Min Compactable Tokens (subagents)', kind: 'integer', min: 0 },
+        { key: 'compaction.subagents.agent_name', label: 'Agent Name (subagents)', kind: 'text' },
+        { key: 'compaction.subagents.mechanical_reclaim', label: 'Mechanical Reclaim (subagents)', kind: 'boolean' },
+        { key: 'compaction.subagents.hysteresis_delta', label: 'Hysteresis Delta (subagents)', kind: 'number', min: 0, max: 0.5, step: 0.05 },
+      ],
+    },
+  ],
 };
 
 const ALL_FIELD_KEYS = Object.values(TAB_SECTIONS).flatMap((sections) => (
@@ -181,8 +209,20 @@ export function isPlainRecord(value: unknown): value is Record<string, unknown> 
   return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
 
-/** Read a stored project override by field key, resolving `rag.*` into the nested RAG map. */
+/** Read a stored project override by field key, resolving `rag.*` and `compaction.*` into nested maps. */
 export function readStoredOverride(overrides: Record<string, unknown>, key: string): unknown {
+  if (key === 'compaction') {
+    return overrides['compaction'];
+  }
+  if (key.startsWith('compaction.')) {
+    const parts = key.slice('compaction.'.length).split('.');
+    let cur: unknown = overrides['compaction'];
+    for (const part of parts) {
+      if (!isPlainRecord(cur)) return undefined;
+      cur = (cur as Record<string, unknown>)[part];
+    }
+    return cur;
+  }
   if (key.startsWith('rag.')) {
     const rag = overrides['rag'];
     return isPlainRecord(rag) ? rag[key.slice(4)] : undefined;
@@ -190,9 +230,21 @@ export function readStoredOverride(overrides: Record<string, unknown>, key: stri
   return overrides[key];
 }
 
-/** Read a value from the global (home) config by field key, resolving `rag.*` into the nested RAG map. */
+/** Read a value from the global (home) config by field key, resolving `rag.*` and `compaction.*` into nested maps. */
 export function readGlobalValue(config: Config | null, key: string): unknown {
   if (!config) return undefined;
+  if (key === 'compaction') {
+    return (config as unknown as Record<string, unknown>)['compaction'];
+  }
+  if (key.startsWith('compaction.')) {
+    const parts = key.slice('compaction.'.length).split('.');
+    let cur: unknown = (config as unknown as Record<string, unknown>)['compaction'];
+    for (const part of parts) {
+      if (cur == null || typeof cur !== 'object') return undefined;
+      cur = (cur as Record<string, unknown>)[part];
+    }
+    return cur;
+  }
   if (key.startsWith('rag.')) {
     return config.rag[key.slice(4) as keyof RAGConfig];
   }
@@ -423,13 +475,28 @@ export function ProjectConfigView({ projectDir, onNewChat, onClose }: ProjectCon
     try {
       const updates: Record<string, unknown> = {};
       const ragUpdates: Record<string, unknown> = {};
+      const compactionUpdates: Record<string, Record<string, unknown>> = {};
       for (const [key, value] of Object.entries(draft)) {
         const stored = readStoredOverride(overrides, key);
         if ((value ?? undefined) === (stored ?? undefined)) continue;
         if (key.startsWith('rag.')) ragUpdates[key.slice(4)] = value;
+        else if (key.startsWith('compaction.')) {
+          const remainder = key.slice('compaction.'.length);
+          const parts = remainder.split('.');
+          if (parts.length === 2) {
+            const [scope, field] = parts;
+            if (!compactionUpdates[scope]) compactionUpdates[scope] = {};
+            compactionUpdates[scope][field] = value;
+          } else if (parts.length === 1) {
+            // shallow compaction key (unlikely with current fields) — treat as direct nested key
+            if (!compactionUpdates[parts[0]]) compactionUpdates[parts[0]] = {};
+            // no field, skip; top-level compaction overrides are not field-level
+          }
+        }
         else updates[key] = value;
       }
       if (Object.keys(ragUpdates).length > 0) updates['rag'] = ragUpdates;
+      if (Object.keys(compactionUpdates).length > 0) updates['compaction'] = compactionUpdates;
 
       const permissionUpdates: Record<string, PermissionRule | null> = {};
       for (const [key, value] of Object.entries(permissionDraft)) {
@@ -476,7 +543,8 @@ export function ProjectConfigView({ projectDir, onNewChat, onClose }: ProjectCon
     activeTab === 'general' ||
     activeTab === 'permissions' ||
     activeTab === 'mcp' ||
-    activeTab === 'rag';
+    activeTab === 'rag' ||
+    activeTab === 'compaction';
 
   const renderSelectOptions = (field: ProjectFieldSpec, homeValue: unknown) => {
     if (field.kind === 'theme') {
@@ -597,6 +665,7 @@ export function ProjectConfigView({ projectDir, onNewChat, onClose }: ProjectCon
       case 'general':
       case 'mcp':
       case 'rag':
+      case 'compaction':
         return renderConfigTab(activeTab);
       case 'permissions':
         if (!permissionConfig) {
