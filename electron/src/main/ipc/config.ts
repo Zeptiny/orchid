@@ -23,7 +23,6 @@ import {
   listPersonalityNames,
   loadPersonalities,
 } from '../personality/registry';
-import { canonicalizeProjectDirectory } from '../project/path';
 import { clearProjectRuntimeRegistry } from '../project/runtime';
 import { invalidateAllProjectMCPManagers } from '../mcp/project-registry';
 import {
@@ -31,7 +30,7 @@ import {
   configSaveProjectSchema,
   configReadProjectSchema,
 } from './payload-schemas';
-import { resolveWindowWorkspace } from './session';
+import { resolveAuthorizedProjectDir } from './project-target';
 
 const PROJECT_CONFIG_ALLOWED_KEYS = new Set([
   'command_timeout',
@@ -71,25 +70,6 @@ const PROJECT_CONFIG_ALLOWED_KEYS = new Set([
   'theme',
   'personality',
 ]);
-
-function selectedProjectDir(senderId: number): string | null {
-  const workspace = resolveWindowWorkspace(String(senderId));
-  return workspace.status === 'valid' ? workspace.cwd : null;
-}
-
-function verifyProjectWorkspace(senderId: number, projectDir: string): string {
-  const selected = selectedProjectDir(senderId);
-  const expected = canonicalizeProjectDirectory(projectDir);
-  if (selected == null || expected == null) {
-    throw new Error('Cannot access project config without a bound project.');
-  }
-  if (selected !== expected) {
-    throw new Error('Project config target no longer matches the selected workspace.');
-  }
-  return expected;
-}
-
-
 
 // ── IPC registration ─────────────────────────────────────────────────────────
 
@@ -170,7 +150,7 @@ export function registerConfigIPC(): void {
     if (!parsed.success) {
       throw new Error('config:read_project requires a non-empty projectDir string');
     }
-    const verifiedProjectDir = verifyProjectWorkspace(event.sender.id, parsed.data);
+    const verifiedProjectDir = resolveAuthorizedProjectDir(event.sender.id, parsed.data);
     const configPath = path.join(verifiedProjectDir, PROJECT_CONFIG_NAME);
     const raw = loadJsonSafe(configPath);
     return { projectDir: verifiedProjectDir, overrides: isPlainObject(raw) ? raw : {} };
@@ -180,7 +160,7 @@ export function registerConfigIPC(): void {
     const parsed = configSaveProjectSchema.parse(payload);
     const { projectDir, updates } = parsed;
 
-    const verifiedProjectDir = verifyProjectWorkspace(event.sender.id, projectDir);
+    const verifiedProjectDir = resolveAuthorizedProjectDir(event.sender.id, projectDir);
 
     const filteredUpdates: Record<string, unknown> = {};
     for (const [key, value] of Object.entries(updates)) {

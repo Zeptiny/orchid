@@ -28,7 +28,6 @@ import { isPlainObject } from '../config/merge';
 import { permissionsConfigSchema } from '../config/schema';
 import { withConfigSaveLock } from '../config/write-lock';
 import { invalidateAllProjectMCPManagers } from '../mcp/project-registry';
-import { canonicalizeProjectDirectory } from '../project/path';
 import { clearProjectRuntimeRegistry } from '../project/runtime';
 import {
   approvalStore,
@@ -40,6 +39,7 @@ import {
   webContentsForWindowId,
 } from './chat';
 import { permissionConfigScopeSaveSchema } from './payload-schemas';
+import { resolveAuthorizedProjectDir } from './project-target';
 import { getSessionManager, resolveWindowWorkspace } from '../session/singleton';
 import {
   sessionPermissionOverrides,
@@ -293,15 +293,10 @@ export function registerPermissionIPC(): void {
       const parsed = permissionConfigScopeSaveSchema.parse(payload);
       let verifiedProjectDir: string | null = null;
       if (parsed.scope === 'project') {
-        const selected = selectedProjectDir(event.sender.id);
-        const expected = canonicalizeProjectDirectory(parsed.expectedProjectDir);
-        if (selected == null || expected == null) {
-          throw new Error('Cannot save project permissions without a bound project.');
-        }
-        if (selected !== expected) {
-          throw new Error('Project permission target no longer matches the selected workspace.');
-        }
-        verifiedProjectDir = selected;
+        verifiedProjectDir = resolveAuthorizedProjectDir(
+          event.sender.id,
+          parsed.expectedProjectDir,
+        );
       }
 
       return withConfigSaveLock(async () => {
