@@ -903,19 +903,23 @@
     padding: 1rem;
   }
 
-  /* ── collapse (details) ─────────────────────────────────────────────────── */
+  /* ── disclosure (details) ─────────────────────────────────────────────────
+   * Named orchid-disclosure rather than collapse: Tailwind ships a bare
+   * `.collapse { visibility: collapse }` utility (table-row collapsing) that
+   * lands in @layer utilities and would permanently hide the component.
+   */
 
-  .collapse {
+  .orchid-disclosure {
     position: relative;
     min-width: 0;
     border-radius: var(--radius-field, 0.5rem);
   }
 
-  details.collapse {
+  details.orchid-disclosure {
     overflow: hidden;
   }
 
-  .collapse-title {
+  .orchid-disclosure-title {
     display: flex;
     align-items: center;
     gap: 6px;
@@ -927,15 +931,15 @@
     transition: background-color var(--transition-fast, 150ms ease);
   }
 
-  .collapse-title::-webkit-details-marker {
+  .orchid-disclosure-title::-webkit-details-marker {
     display: none;
   }
 
-  .collapse-title:hover {
+  .orchid-disclosure-title:hover {
     background: color-mix(in srgb, var(--color-base-content) 4%, transparent);
   }
 
-  .collapse-arrow .collapse-title::after {
+  .orchid-disclosure-arrow .orchid-disclosure-title::after {
     content: '';
     flex-shrink: 0;
     width: 7px;
@@ -948,11 +952,11 @@
     transition: transform var(--transition-normal, 200ms ease);
   }
 
-  details.collapse[open] > .collapse-title::after {
+  details.orchid-disclosure[open] > .orchid-disclosure-title::after {
     transform: rotate(225deg);
   }
 
-  .collapse-content {
+  .orchid-disclosure-content {
     padding: 0.25rem 0.75rem 0.75rem;
     animation: orchid-rise 180ms ease-out;
   }
