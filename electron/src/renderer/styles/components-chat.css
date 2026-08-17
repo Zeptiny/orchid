@@ -731,12 +731,21 @@
   }
 
   /* ── Compaction display (U10) ─────────────────────────────────────────── */
-  .orchid-compaction-card {
-    @apply self-start w-full max-w-full overflow-hidden;
-    animation: orchid-rise 220ms ease-out;
+  .orchid-compaction-block > .orchid-tool-block-title {
+    border-left-color: color-mix(in srgb, var(--context-summary) 55%, transparent);
   }
-  .orchid-compaction-card .orchid-disclosure-chevron.is-open {
-    transform: rotate(180deg);
+  .orchid-compaction-block > .orchid-tool-block-title:hover {
+    color: var(--context-summary);
+    background: color-mix(in srgb, var(--context-summary) 6%, transparent);
+  }
+  .orchid-compaction-block .orchid-tool-block-content {
+    border-left-color: color-mix(in srgb, var(--context-summary) 55%, transparent);
+  }
+  .orchid-compaction-block .orchid-tool-block-content:hover {
+    background: color-mix(in srgb, var(--context-summary) 4%, transparent);
+  }
+  .orchid-compaction-content {
+    @apply text-sm leading-snug text-base-content/85;
   }
   .orchid-compaction-reclaim {
     @apply self-start w-full max-w-full;
@@ -751,9 +760,5 @@
   .orchid-compaction-stub:hover {
     background: color-mix(in srgb, var(--compaction-mix, var(--context-summary)) 10%, transparent);
     border-color: color-mix(in srgb, var(--compaction-mix, var(--context-summary)) 45%, transparent);
-  }
-  .orchid-compaction-preview {
-    max-height: 7.5rem;
-    overflow: hidden;
   }
 }
