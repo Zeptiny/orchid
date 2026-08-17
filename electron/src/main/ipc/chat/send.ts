@@ -249,6 +249,39 @@ function persistSelectiveCompaction(
     const { saveSession } = require('../../session/storage') as typeof import('../../session/storage');
     const nextSession = { ...existing, chains: updatedChains as typeof existing.chains, updatedAt } as typeof existing;
     saveSession(nextSession);
+    try {
+      (manager as unknown as { _sessions: Map<string, unknown> })._sessions?.set(sessionId, nextSession);
+    } catch {
+    }
+    try {
+      const { IPC_CHANNELS } = require('../../../shared/types/ipc') as typeof import('../../../shared/types/ipc');
+      const { buildSessionUpdatedEvent } = require('./events') as typeof import('./events');
+      const { webContents } = require('electron') as typeof import('electron');
+      const all = (webContents?.getAllWebContents?.() ?? []) as unknown as Array<{ id: number; send: (ch: string, p: unknown) => void; isDestroyed?: () => boolean }>;
+      const prevIds = new Set(existing.chains.map((c) => c.id));
+      const changedIds = new Set<string>();
+      for (const c of updatedChains) {
+        const prev = existing.chains.find((p) => p.id === c.id);
+        if (!prev || prev.messages.length !== c.messages.length || prev.messages.some((m, i) => m.excludeFromModel !== c.messages[i]?.excludeFromModel)) changedIds.add(c.id);
+      }
+      for (const c of updatedChains) if (!prevIds.has(c.id)) changedIds.add(c.id);
+      for (const chainId of changedIds) {
+        const chain = nextSession.chains.find((c) => c.id === chainId);
+        if (!chain) continue;
+        const event = buildSessionUpdatedEvent(nextSession as unknown as import('../../../shared/types/session').Session, chain.id);
+        if (!event) continue;
+        for (const wc of all) {
+          try {
+            const active = (manager as unknown as { getActive: (id: string) => unknown }).getActive(String(wc.id));
+            if ((active as unknown as { id?: string })?.id !== sessionId) continue;
+            if (typeof wc.isDestroyed === 'function' && wc.isDestroyed()) continue;
+            wc.send(IPC_CHANNELS.SESSION_UPDATED, event);
+          } catch {
+          }
+        }
+      }
+    } catch {
+    }
     return true;
   } catch (err) {
     console.debug('[compaction] selective chain persist failed (non-fatal):', err);
@@ -454,7 +487,20 @@ async function tryCompactSynchronously(
         return { didApply: false };
       }
     }
-    const cut = selectCut(messages, { keepRecentChains: cfg.keep_recent_chains });
+    const calibratedEstimator = (slice: readonly Message[]): number => {
+      let chars = 0;
+      for (const m of slice) {
+        if (m.content) chars += m.content.length;
+        if (m.thinking) chars += m.thinking.length;
+        if (m.tool_calls) chars += JSON.stringify(m.tool_calls).length;
+        if (m.tool_result) chars += JSON.stringify(m.tool_result).length;
+        if (m.tool_call_id) chars += m.tool_call_id.length;
+        if (m.name) chars += m.name.length;
+        if ((m as unknown as { compacted?: unknown }).compacted) chars += JSON.stringify((m as unknown as { compacted: unknown }).compacted).length;
+      }
+      return Math.max(slice.length, Math.ceil(chars * tokensPerChar));
+    };
+    const cut = selectCut(messages, { keepRecentChains: cfg.keep_recent_chains, budget: { contextTokens, threshold: cfg.threshold }, tokenEstimator: calibratedEstimator });
     if (cut.compactableRange.end <= cut.compactableRange.start) return { didApply: false };
     const compactableTokens = compactableTokenEstimate(messages, cut.compactableRange, tokensPerChar);
     if (compactableTokens < cfg.min_compactable_tokens) return { didApply: false };
@@ -718,7 +764,20 @@ function handleUsageCompaction(
     }
   }
   try {
-    const cut = selectCut(fullHistory, { keepRecentChains: cfg.keep_recent_chains });
+    const calibratedEstimator2 = (slice: readonly Message[]): number => {
+      let chars = 0;
+      for (const m of slice) {
+        if (m.content) chars += m.content.length;
+        if (m.thinking) chars += m.thinking.length;
+        if (m.tool_calls) chars += JSON.stringify(m.tool_calls).length;
+        if (m.tool_result) chars += JSON.stringify(m.tool_result).length;
+        if (m.tool_call_id) chars += m.tool_call_id.length;
+        if (m.name) chars += m.name.length;
+        if ((m as unknown as { compacted?: unknown }).compacted) chars += JSON.stringify((m as unknown as { compacted: unknown }).compacted).length;
+      }
+      return Math.max(slice.length, Math.ceil(chars * (tokensPerChar ?? 0.25)));
+    };
+    const cut = selectCut(fullHistory, { keepRecentChains: cfg.keep_recent_chains, budget: { contextTokens, threshold: cfg.threshold }, tokenEstimator: calibratedEstimator2 });
     if (cut.compactableRange.end <= cut.compactableRange.start) return;
     if (tokensPerChar == null || !Number.isFinite(tokensPerChar) || tokensPerChar <= 0) return;
     const compactableTokens = compactableTokenEstimate(fullHistory, cut.compactableRange, tokensPerChar);

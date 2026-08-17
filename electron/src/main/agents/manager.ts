@@ -1631,7 +1631,7 @@ export class SubagentManager {
             cfg2 = null;
           }
           const keep = cfg2?.keep_recent_chains ?? 3;
-          const cut = selectCut(record.chain?.messages ?? [], { keepRecentChains: keep });
+          const cut = selectCut(record.chain?.messages ?? [], { keepRecentChains: keep, budget: { contextTokens: subagentContextTokens ?? 0, threshold: cfg2?.threshold ?? 0.85 } });
           if (cut.compactableRange.end - cut.compactableRange.start === 0) {
             const { buildSubagentPartialReport } = await import('./subagent-runner.js');
             const done = `${record.chain?.messages.filter((m) => m.type === 'tool_result').length ?? 0} tool results`;

@@ -266,22 +266,41 @@ export function persistCompactionBetweenTurns(
       updatedAt,
     };
     saveSession(nextSession);
-    // Refresh manager cache so subsequent historyFromSession sees compacted view.
-    // SessionManager caches sessions by id; re-reading populates it on next ensure.
-    // We directly refresh by reloading through the public load path:
-    // (manager's internal cache is private, so we force a switch-reload by
-    // mutating via a private field access when available, else rely on storage
-    // read-through on next historyFromSession call which uses storageLoadSessionMessages.)
-    // Best-effort: try to bump the cached copy via a lightweight field update if exposed.
     try {
-      // If a test mock manager is in use, it will have its own in-memory state;
-      // storage save succeeded, so consider persisted.
-      if (typeof (manager as unknown as { getSession: unknown }).getSession === 'function') {
-        // Trigger cache refresh by touching the session via load path for next read.
-        // No direct replace API, so we rely on storage read-through.
+      (manager as unknown as { _sessions: Map<string, unknown> })._sessions?.set(sessionId, nextSession);
+    } catch {
+    }
+    try {
+      const updatedIds = new Set(applyResult.updatedChains.map((c) => c.id));
+      const existingIds = new Set(existing.chains.map((c) => c.id));
+      const changedIds = new Set<string>();
+      for (const c of applyResult.updatedChains) {
+        const prev = existing.chains.find((p) => p.id === c.id);
+        if (!prev || prev.messages.length !== c.messages.length || prev.messages.some((m, i) => m.excludeFromModel !== c.messages[i]?.excludeFromModel || m.id !== c.messages[i]?.id)) {
+          changedIds.add(c.id);
+        }
+      }
+      for (const id of updatedIds) if (!existingIds.has(id)) changedIds.add(id);
+      if (changedIds.size > 0) {
+        const { webContents } = require('electron') as typeof import('electron');
+        const all = (webContents?.getAllWebContents?.() ?? []) as unknown as WebContents[];
+        for (const chainId of changedIds) {
+          const chain = nextSession.chains.find((c) => c.id === chainId);
+          if (!chain) continue;
+          const event = buildSessionUpdatedEvent(nextSession as unknown as import('../../../shared/types/session').Session, chain.id);
+          if (!event) continue;
+          for (const wc of all) {
+            try {
+              const active = (manager as unknown as { getActive: (id: string) => unknown }).getActive(String((wc as unknown as { id: number }).id));
+              if ((active as unknown as { id?: string })?.id !== sessionId) continue;
+              if (typeof (wc as unknown as { isDestroyed?: () => boolean }).isDestroyed === 'function' && (wc as unknown as { isDestroyed: () => boolean }).isDestroyed()) continue;
+              (wc as unknown as { send: (ch: string, p: unknown) => void }).send(IPC_CHANNELS.SESSION_UPDATED, event);
+            } catch {
+            }
+          }
+        }
       }
     } catch {
-      // non-fatal
     }
     return true;
   } catch (err) {

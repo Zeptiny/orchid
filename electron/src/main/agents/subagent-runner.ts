@@ -128,16 +128,6 @@ export async function tryCompactSubagentHistory(params: {
   const { buildCompactionApply } = await import('../llm/compaction/apply.js');
   const { getProviderAccountingStore } = await import('../providers/accounting/store.js');
 
-  let cut: ReturnType<typeof selectCut>;
-  try {
-    cut = selectCut(messages as Message[], {
-      keepRecentChains: subagentsScope.keep_recent_chains,
-    });
-  } catch {
-    return null;
-  }
-  const compactableRange = cut.compactableRange;
-  // Derive compactableTokens without /4 fallback: use provider inputTokens / totalChars (same as context-snapshot allocation)
   function estimateMessageCharsSub(msg: Message): number {
     let n = 0;
     if (msg.content) n += msg.content.length;
@@ -158,6 +148,22 @@ export async function tryCompactSubagentHistory(params: {
     return Math.max(0.05, Math.min(r, 2));
   })();
   if (!tokensPerCharSub) return null;
+  let cut: ReturnType<typeof selectCut>;
+  try {
+    const calibratedEstimatorSub = (slice: readonly Message[]): number => {
+      let chars = 0;
+      for (const m of slice) chars += estimateMessageCharsSub(m);
+      return Math.max(slice.length, Math.ceil(chars * tokensPerCharSub));
+    };
+    cut = selectCut(messages as Message[], {
+      keepRecentChains: subagentsScope.keep_recent_chains,
+      budget: { contextTokens, threshold: subagentsScope.threshold },
+      tokenEstimator: calibratedEstimatorSub,
+    });
+  } catch {
+    return null;
+  }
+  const compactableRange = cut.compactableRange;
   let sliceChars = 0;
   for (let i = compactableRange.start; i < compactableRange.end; i += 1) {
     const m = (messages as readonly Message[])[i];
