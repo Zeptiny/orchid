@@ -33,25 +33,11 @@ import { importESM } from '../../../utils/esm-import';
 
 export function buildSelectiveUserPrompt(manifest: Manifest, previousErrors?: readonly string[]): string {
   const lines = manifest.entries.map((e) => `${e.id} [${e.kind}] ${e.preview}`).join('\n');
-  const header =
-    'You are the selective compactor. You reconstruct the compactable range from a manifest of ID\'d elements.\n' +
-    'Return ONLY a JSON array of operations in order — no markdown, no commentary.\n' +
-    'Op grammar:\n' +
-    '  {"type":"keep","id":"<manifest id>"} — keep the message verbatim\n' +
-    '  {"type":"keep_range","id":"<id>","startLine":1,"endLine":50} — keep only lines startLine-endLine of that message\'s content\n' +
-    '  {"type":"summarize","ids":["<id>", "..."],"text":"..."} — replace the contiguous span ids with one synthetic summary message\n' +
-    'Rules:\n' +
-    '  - Keep every user message verbatim (never summarize). May summarize tool calls/outputs and assistant messages.\n' +
-    '  - Thinking messages: keep verbatim or drop — never summarize into a fake reasoning part (R24).\n' +
-    '  - keep_range only on messages with multi-line content; lines are 1-indexed and will be clamped.\n' +
-    '  - summarize ids must be a contiguous subsequence of manifest order in one op; multiple summarize ops are allowed if spans are disjoint.\n' +
-    '  - Preserve tool_call/result pairing: a call and its result must be both kept or both summarized together in the same summarize op.\n' +
-    '  - Cover every manifest id exactly once across ops.\n';
   const manifestBlock = `<manifest>\n${lines}\n</manifest>`;
   const errorBlock = previousErrors && previousErrors.length > 0
     ? `\n\nPrevious attempt failed validation:\n${previousErrors.map((e) => `- ${e}`).join('\n')}\nFix the errors and return a corrected JSON array.`
     : '';
-  return `${header}\n${manifestBlock}${errorBlock}`;
+  return `${manifestBlock}${errorBlock}`;
 }
 
 export function createLlmSelectiveCaller(params: {
@@ -68,7 +54,7 @@ export function createLlmSelectiveCaller(params: {
     const { config, scope, fallbackSelection, runtime, agents, subagentId, accounting, abortSignal } = params;
     const compaction = (config as unknown as { compaction?: Config['compaction'] }).compaction;
     const scopeConfig = compaction ? (scope === 'main' ? compaction.main : compaction.subagents) : undefined;
-    const agentName = scopeConfig?.agent_name ?? (scope === 'main' ? 'compactor' : 'compactor-subagent');
+    const agentName = scope === 'main' ? 'compactor-selective' : 'compactor-subagent-selective';
     let agent: Agent | undefined;
     if (agents?.has(agentName)) agent = agents.get(agentName);
     else if (runtime?.agents.has(agentName)) agent = runtime.agents.get(agentName);
@@ -98,7 +84,7 @@ export function createLlmSelectiveCaller(params: {
     const timeoutSignal = AbortSignal.timeout(timeoutMs);
     const combinedSignal = abortSignal == null ? timeoutSignal : AbortSignal.any([abortSignal, timeoutSignal]);
     const userPrompt = buildSelectiveUserPrompt(manifest, previousErrors);
-    const raw = await generateText({ model, instructions: agent.system_prompt + '\n\n[Selective mode] You must output ONLY a JSON array per the user instructions. No prose before or after.', messages: [{ role: 'user', content: userPrompt }], abortSignal: combinedSignal, maxRetries: 0 }) as { text: string };
+    const raw = await generateText({ model, instructions: agent.system_prompt, messages: [{ role: 'user', content: userPrompt }], abortSignal: combinedSignal, maxRetries: 0 }) as { text: string };
     const text = (raw.text ?? '').trim();
     if (!text) return [];
     const start = text.indexOf('[');

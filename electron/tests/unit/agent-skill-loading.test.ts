@@ -210,13 +210,13 @@ describe('getStringArray', () => {
 // ===========================================================================
 
 describe('Agent Loading — Defaults', () => {
-  it('should load all 30 default agents', () => {
+  it('should load all 32 default agents', () => {
     const agents = loadAgents({
       homeDir: path.join(__dirname, '../../src/main/agents/defaults'),
       projectDir: path.join(tmpDir, 'empty-project'),
     });
 
-    expect(agents.size).toBe(30);
+    expect(agents.size).toBe(32);
 
     const names = Array.from(agents.keys()).sort();
     expect(names).toEqual([
@@ -228,7 +228,9 @@ describe('Agent Loading — Defaults', () => {
       'code-simplicity-reviewer',
       'coherence-reviewer',
       'compactor',
+      'compactor-selective',
       'compactor-subagent',
+      'compactor-subagent-selective',
       'correctness-reviewer',
       'data-integrity-guardian',
       'explorer',
@@ -371,7 +373,7 @@ describe('Agent Loading — Defaults', () => {
     }
 
     // Verify tier distribution matches Python defaults
-    expect(tierCounts.seed).toBe(6); // explorer, web-fetch, session-namer, compactor, compactor-subagent, permission-evaluator
+    expect(tierCounts.seed).toBe(8); // explorer, web-fetch, session-namer, compactor x4, permission-evaluator
     expect(tierCounts.sprout).toBe(2); // web-researcher, learnings-researcher
     expect(tierCounts.bloom).toBe(11); // general, implementer, api-contract, etc.
     expect(tierCounts.crown).toBe(11); // reviewers, adversarial, etc.
@@ -390,10 +392,12 @@ describe('Agent Loading — Defaults', () => {
     );
 
     // Only bundled runtime-only agents are internal
-    expect(internalAgents).toHaveLength(6);
+    expect(internalAgents).toHaveLength(8);
     expect(internalAgents.map((a) => a.name).sort()).toEqual([
       'compactor',
+      'compactor-selective',
       'compactor-subagent',
+      'compactor-subagent-selective',
       'general',
       'permission-evaluator',
       'session-namer',
@@ -411,7 +415,7 @@ describe('Agent Loading — Defaults', () => {
     });
 
     const agents = listAgents();
-    expect(agents).toHaveLength(30);
+    expect(agents).toHaveLength(32);
     expect(agents.every((a) => a.name && a.description)).toBe(true);
   });
 });
@@ -675,12 +679,12 @@ describe('Seeding', () => {
     const targetDir = path.join(tmpDir, 'agents-target');
     seedAgentsDir(targetDir);
 
-    // Should have all 30 agent subdirectories
+    // Should have all 32 agent subdirectories
     const entries = fs.readdirSync(targetDir).filter((e) => {
       const stat = fs.statSync(path.join(targetDir, e));
       return stat.isDirectory();
     });
-    expect(entries.length).toBe(30);
+    expect(entries.length).toBe(32);
 
     // Each should have an AGENT.md
     for (const entry of entries) {
