@@ -8,7 +8,7 @@ import * as fs from 'node:fs';
 import { z } from 'zod';
 import type { ToolDefinition, ToolHandler, ToolHandlerOutcome } from '../types';
 import { RiskClass } from '../../../shared/types/permission';
-import { resolveToolPath } from '../types';
+import { assertPathInWorkspace } from '../path-sandbox';
 import { atomicWrite } from '../ast/utils';
 import { buildStructuredFileChange } from './structured-diff';
 import {
@@ -68,7 +68,14 @@ function errorOutcome(
 
 export const editHandler: ToolHandler = async (input: unknown, ctx) => {
   const { file_path: rawPath, old_string, new_string, replace_all = false } = input as EditInput;
-  const filePath = resolveToolPath(ctx.cwd, rawPath);
+
+  let filePath: string;
+  try {
+    filePath = assertPathInWorkspace(rawPath, ctx.cwd);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return errorOutcome(rawPath, message, 'path_traversal', '');
+  }
 
   let content: string;
   try {

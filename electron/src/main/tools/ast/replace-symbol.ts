@@ -12,7 +12,7 @@ import type { ToolDefinition, ToolHandler } from '../types';
 import { RiskClass } from '../../../shared/types/permission';
 import { genericToolResultMetadata } from '../types';
 import { genericBuiltInToolOutcome } from '../result';
-import { resolveToolPath } from '../types';
+import { assertPathInWorkspace } from '../path-sandbox';
 import { langForExtension, loadQueryFile, parseFile, runQuery } from '../../ast/parser';
 import { atomicWrite, findExtendedRange } from './utils';
 
@@ -53,7 +53,18 @@ export const replaceSymbolDefinition: ToolDefinition = {
 
 export const replaceSymbolHandler: ToolHandler = async (input: unknown, ctx) => {
   const { file_path: rawPath, symbol_name, new_source } = input as ReplaceSymbolInput;
-  const file_path = resolveToolPath(ctx.cwd, rawPath);
+
+  let file_path: string;
+  try {
+    file_path = assertPathInWorkspace(rawPath, ctx.cwd);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return genericBuiltInToolOutcome('replace_symbol', {
+      file: rawPath, symbol: symbol_name, success: false,
+      replacements: 0, error: 'path_traversal',
+      message: msg,
+    }, 'error', 'tool_error', msg);
+  }
 
   try {
     if (!fs.existsSync(file_path)) {

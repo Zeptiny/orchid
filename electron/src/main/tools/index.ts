@@ -334,3 +334,4 @@ export type {
   ToolExecutionContext,
 } from './types';
 export { resolveToolPath } from './types';
+export { assertPathInWorkspace } from './path-sandbox';
