@@ -240,6 +240,8 @@ export function buildHistoryStreamItems(opts: {
   const liveById = new Map(toolBlocks.map((b) => [b.id, b]));
   let activeFooter: FooterStreamItem | null = null;
 
+  const seenCompactedIds = new Set<string>();
+
   const isActiveChain = (chain: Chain, chainIndex: number): boolean => (
     chain.status === ChainStatus.ACTIVE
     || (chainIndex === sessionChains.length - 1 && liveStreaming)
@@ -295,6 +297,7 @@ export function buildHistoryStreamItems(opts: {
       emittedToolIds,
       keyPrefix: `c${chainIndex}`,
       expandedCompactedKeys,
+      seenCompactedIds,
     });
     items.push(...chainItems.items);
 
@@ -380,9 +383,10 @@ function walkMessagesToItems(
     emittedToolIds: Set<string>;
     keyPrefix: string;
     expandedCompactedKeys?: ReadonlySet<string>;
+    seenCompactedIds?: Set<string>;
   },
 ): { items: StreamItem[]; lastAssistantUsage: Usage | null } {
-  const { liveById, emittedToolIds, keyPrefix, expandedCompactedKeys } = opts;
+  const { liveById, emittedToolIds, keyPrefix, expandedCompactedKeys, seenCompactedIds } = opts;
   const visible = visibleSource.filter((m) => !m.hidden);
   const resultByCallId = new Map<string, Message>();
   for (const m of visible) {
@@ -480,6 +484,14 @@ function walkMessagesToItems(
 
   for (const m of visible) {
     if (hasCompactedMarker(m)) {
+      const dupId = m.id;
+      if (dupId && seenCompactedIds?.has(dupId)) {
+        if (m.excludeFromModel) {
+          compactedBuffer.push(m);
+        }
+        continue;
+      }
+      if (dupId) seenCompactedIds?.add(dupId);
       if (m.excludeFromModel) {
         compactedBuffer.push(m);
         continue;

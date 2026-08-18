@@ -116,6 +116,22 @@ export function clearCompactionState(sessionId: string): void {
   }
 }
 
+function completeCompactionWidget(sessionId: string): void {
+  try {
+    const active = activeAgents.get(sessionId);
+    const compactionToolId = `compaction-${sessionId}`;
+    if (active && !active.finalized && active.toolCalls.has(compactionToolId)) {
+      active.toolCalls.delete(compactionToolId);
+      const wc = webContentsForWindowId(active.windowId);
+      if (wc) sendTurnEvent(wc, active, IPC_CHANNELS.CHAT_TOOL_CALL_UPDATE, { type: 'tool_call_update', toolCallId: compactionToolId, toolName: 'compaction', status: 'complete', args: '', content: '', toolResult: { schemaVersion: 1, family: 'generic', status: 'complete', completeness: 'complete', data: { value: '', origin: { kind: 'built-in', name: 'compaction' } } } as unknown as Record<string, unknown> });
+    } else if (!active || active.finalized) {
+      const pending = compactionPending.get(sessionId);
+      if (!pending) return;
+    }
+    clearCompactionPause(sessionId);
+  } catch {}
+}
+
 // Evict compaction Maps when a session is deleted — prevents unbounded growth.
 try {
   onSessionDeleted((sessionId) => clearCompactionState(sessionId));
@@ -332,6 +348,7 @@ async function applyPendingCompactionIfAny(
     compactionPending.delete(sessionId);
     const t = getCompactionTrigger(sessionId);
     t.abortPrepare();
+    completeCompactionWidget(sessionId);
     return { applied: false };
   }
   compactionPending.delete(sessionId);
@@ -345,6 +362,7 @@ async function applyPendingCompactionIfAny(
         const ok = persistSelectiveCompaction(sessionId, result, pending.cut);
         if (!ok) {
           trigger.abortPrepare();
+          completeCompactionWidget(sessionId);
           return { applied: false };
         }
         setChatHistory(sessionId, [...result.replayMessages]);
@@ -354,6 +372,7 @@ async function applyPendingCompactionIfAny(
         })();
         trigger.onCompactionApplied(pending.estimatedInput, postTokens);
         trigger.abortPrepare();
+        completeCompactionWidget(sessionId);
         return { applied: true, updatedMessages: [...result.replayMessages] };
       }
       if (result.kind === 'fallback' && result.fallbackText && result.fallbackText.trim()) {
@@ -372,6 +391,7 @@ async function applyPendingCompactionIfAny(
         } catch (e) {
           if (e instanceof CompactionApplyError) {
             trigger.abortPrepare();
+            completeCompactionWidget(sessionId);
             compactionPending.delete(sessionId);
             return { applied: false };
           }
@@ -385,6 +405,7 @@ async function applyPendingCompactionIfAny(
             const postTokens = tpc ? Math.ceil(totalChars(applyResult.updatedMessages) * tpc) : pending.estimatedInput;
             trigger.onCompactionApplied(pending.estimatedInput, postTokens);
             trigger.abortPrepare();
+            completeCompactionWidget(sessionId);
             return { applied: true, updatedMessages: [...applyResult.updatedMessages] };
           }
         }
@@ -399,10 +420,12 @@ async function applyPendingCompactionIfAny(
             trigger.onCompactionApplied(pending.estimatedInput, postTokens);
           }
           trigger.abortPrepare();
+          completeCompactionWidget(sessionId);
           return { applied: ok, updatedMessages: ok ? [...result.replayMessages] : undefined };
         }
       }
       trigger.abortPrepare();
+      completeCompactionWidget(sessionId);
       return { applied: false };
     }
     // ── Simple pending (existing) ───────────────────────────────────────
@@ -424,6 +447,7 @@ async function applyPendingCompactionIfAny(
         } catch (e) {
           if (e instanceof CompactionApplyError) {
             trigger.abortPrepare();
+            completeCompactionWidget(sessionId);
             return { applied: false };
           }
           throw e;
@@ -436,12 +460,14 @@ async function applyPendingCompactionIfAny(
             const postTokens = tpc ? Math.ceil(totalChars(applyResult.updatedMessages) * tpc) : pending.estimatedInput;
             trigger.onCompactionApplied(pending.estimatedInput, postTokens);
             trigger.abortPrepare();
+            completeCompactionWidget(sessionId);
             return { applied: true, updatedMessages: [...applyResult.updatedMessages] };
           }
         }
       }
       // Summarizer failed or persist failed — clear pending flag
       trigger.abortPrepare();
+      completeCompactionWidget(sessionId);
       return { applied: false };
     }
     // Reclaim-only pending
@@ -461,6 +487,7 @@ async function applyPendingCompactionIfAny(
       } catch (e) {
         if (e instanceof CompactionApplyError) {
           trigger.abortPrepare();
+          completeCompactionWidget(sessionId);
           return { applied: false };
         }
         throw e;
@@ -472,6 +499,7 @@ async function applyPendingCompactionIfAny(
           const tpc = trigger.state.tokensPerChar ?? (totalChars(applyResult.updatedMessages) > 0 ? pending.estimatedInput / Math.max(1, totalChars(messages)) : undefined);
           const postTokens = tpc ? Math.ceil(totalChars(applyResult.updatedMessages) * tpc) : pending.estimatedInput;
           trigger.onCompactionApplied(pending.estimatedInput, postTokens);
+          completeCompactionWidget(sessionId);
           return { applied: true, updatedMessages: [...applyResult.updatedMessages] };
         }
       }
@@ -480,6 +508,7 @@ async function applyPendingCompactionIfAny(
     console.debug('[compaction] pending apply failed (non-fatal):', err);
     const t = getCompactionTrigger(sessionId);
     t.abortPrepare();
+    completeCompactionWidget(sessionId);
   }
   return { applied: false };
 }

@@ -446,6 +446,9 @@ function renderStreamItem(
   sessionId: string | null,
 ): ReactNode {
   if (item.kind === 'tool') {
+    if (item.block.toolName === 'compaction' && item.block.status !== 'running' && item.block.status !== 'generating') {
+      return null;
+    }
     if (item.block.toolName === 'compaction' && (item.block.status === 'running' || item.block.status === 'generating')) {
       let phase: string | undefined;
       let mode: string | undefined;
