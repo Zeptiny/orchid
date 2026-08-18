@@ -1539,6 +1539,7 @@ export async function startChatTurn(
               messages.splice(0, messages.length, ...updated);
               activeAgent.messages.splice(0, activeAgent.messages.length, ...updated);
               activeAgent.turnMessages = [];
+              activeAgent.streamSegments = [];
               activeAgent.responseCommittedLength = 0;
               activeAgent.thinkingCommittedLength = 0;
               activeAgent.thinkingArtifactsCommitted = 0;
