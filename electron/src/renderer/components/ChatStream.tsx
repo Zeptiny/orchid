@@ -454,8 +454,8 @@ function renderStreamItem(
       let mode: string | undefined;
       try {
         const parsed = JSON.parse(item.block.args || '{}');
-        phase = parsed.phase;
-        mode = parsed.mode;
+        phase = typeof parsed.phase === 'string' ? parsed.phase : undefined;
+        mode = typeof parsed.mode === 'string' ? parsed.mode : undefined;
       } catch {}
       return <CompactionRunningWidget key={item.key} status={item.block.status} phase={phase} mode={mode} />;
     }

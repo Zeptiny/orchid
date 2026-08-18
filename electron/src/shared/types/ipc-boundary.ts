@@ -11,6 +11,7 @@
 
 import type { ModelSelection } from './provider';
 import type { PermissionMode } from './permission';
+import { COMPACTION_MODES } from './message';
 
 // ── Startup ─────────────────────────────────────────────────────────────────
 
@@ -168,7 +169,8 @@ export interface SubagentsConfig {
   prompt_task_max_chars: number;
 }
 
-export type CompactionMode = 'simple' | 'selective';
+export { COMPACTION_MODES };
+export type CompactionMode = (typeof COMPACTION_MODES)[number];
 
 export interface CompactionScopeConfig {
   mode: CompactionMode;

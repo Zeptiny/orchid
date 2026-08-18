@@ -188,7 +188,7 @@ export interface CompactedMarker {
 }
 
 function isCompactionMode(value: unknown): value is CompactionMode {
-  return value === 'simple' || value === 'selective';
+  return (COMPACTION_MODES as readonly string[]).includes(value as string);
 }
 
 /** Tolerant parse: unknown shapes degrade to undefined; extra keys ignored. */

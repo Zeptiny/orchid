@@ -256,6 +256,9 @@ export function materializeSelectiveOps(input: {
       const copy = makeRangedCopy(msg, op.startLine, op.endLine);
       replayPrefix.push(copy);
       covered.add(op.id);
+    } else if (op.type === 'drop') {
+      addFlagged(op.id);
+      covered.add(op.id);
     } else {
       // summarize: create one synthetic per op
       const ids = op.ids as readonly string[];
@@ -276,7 +279,8 @@ export function materializeSelectiveOps(input: {
     }
   }
 
-  // Any manifest ids not covered -> flagged (dropped, e.g., thinking dropped)
+  // Any manifest ids not covered -> flagged. With explicit drop ops, this should not happen for valid ops;
+  // retained as fallback for mechanical tolerance but flagged as dropped.
   for (const entry of manifest.entries) {
     if (!covered.has(entry.id)) {
       addFlagged(entry.id);
@@ -363,7 +367,14 @@ export async function runSelectiveCompaction(
     let ops: SelectiveOp[];
     try {
       const result = await input.selectiveCaller({ manifest, messages, attempt, previousErrors });
-      ops = Array.isArray(result) ? result : [];
+      if (!Array.isArray(result) || result.length === 0) {
+        const reason = !Array.isArray(result) ? 'selective caller returned non-array ops' : 'selective caller returned empty ops list';
+        previousErrors = [reason];
+        if (input.onCorrection) input.onCorrection(attempt, previousErrors, []);
+        if (attempt + 1 >= maxRounds) break;
+        continue;
+      }
+      ops = result;
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       previousErrors = [`selective caller failed: ${msg}`];

@@ -520,9 +520,10 @@ describe('Config Parity', () => {
       expect(() => configSchema.parse({ compaction: { main: { agent_name: '' } } })).toThrow();
       expect(() => configSchema.parse({ compaction: { main: { agent_name: 'a'.repeat(65) } } })).toThrow();
       expect(() => configSchema.parse({ compaction: { subagents: { agent_name: 'also bad!' } } })).toThrow();
-      // Valid good names pass
-      expect(() => configSchema.parse({ compaction: { main: { agent_name: 'my-compactor_1' } } })).not.toThrow();
-      expect(configSchema.parse({ compaction: { main: { agent_name: 'my-compactor_1' } } }).compaction.main.agent_name).toBe('my-compactor_1');
+      expect(() => configSchema.parse({ compaction: { main: { agent_name: 'my-compactor_1' } } })).toThrow();
+      expect(() => configSchema.parse({ compaction: { subagents: { agent_name: 'compactor' } } })).toThrow();
+      expect(() => configSchema.parse({ compaction: { main: { agent_name: 'compactor' } } })).not.toThrow();
+      expect(() => configSchema.parse({ compaction: { subagents: { agent_name: 'compactor-subagent' } } })).not.toThrow();
     });
 
     it('ignored_dirs has 20+ default entries', () => {

@@ -244,7 +244,7 @@ export async function tryCompactSubagentHistory(params: {
           existingModelSelection: selection,
           accounting: accountingStore
             ? { store: accountingStore, sessionId, chainId, turnId }
-            : ({ sessionId, chainId, turnId } as unknown as Parameters<typeof summarizeCompactableRange>[0]['accounting']),
+            : { sessionId, chainId, turnId },
           subagentId,
         });
         if (!res || !res.text?.trim()) return null;
@@ -264,7 +264,7 @@ export async function tryCompactSubagentHistory(params: {
         subagentId,
         accounting: accountingStore
           ? { store: accountingStore, sessionId, chainId, turnId }
-          : ({ sessionId, chainId, turnId } as unknown as Parameters<typeof createLlmSelectiveCaller>[0]['accounting']),
+          : { sessionId, chainId, turnId },
       });
     } catch {
       return null;

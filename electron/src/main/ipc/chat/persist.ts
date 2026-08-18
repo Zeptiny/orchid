@@ -146,6 +146,7 @@ function scheduleCheckpoint(
   const existing = pendingCheckpoints.get(sessionId);
   if (existing) {
     existing.messages = messages;
+    existing.guard = guard;
     return;
   }
   const timer = setTimeout(() => {
@@ -153,7 +154,8 @@ function scheduleCheckpoint(
     pendingCheckpoints.delete(sessionId);
     const active = activeAgents.get(sessionId);
     if (!active || active.finalized) return;
-    if (guard && !guard(active)) return;
+    const effectiveGuard = entry?.guard ?? guard;
+    if (effectiveGuard && !effectiveGuard(active)) return;
     try {
       const updated = getSessionManager().updateActiveChainMessages(
         entry?.messages ?? messages,
@@ -172,7 +174,7 @@ function scheduleCheckpoint(
       console.debug('Failed to checkpoint active chat chain (non-fatal):', err);
     }
   }, CHECKPOINT_DEBOUNCE_MS);
-  pendingCheckpoints.set(sessionId, { timer, messages });
+  pendingCheckpoints.set(sessionId, { timer, messages, guard });
 }
 
 /** Persist one bounded main-turn checkpoint, debounced per session. */
@@ -272,56 +274,29 @@ export function persistCompactionBetweenTurns(
       updatedAt,
     };
     saveSession(nextSession);
-    try {
-      (manager as unknown as { _sessions: Map<string, unknown> })._sessions?.set(sessionId, nextSession);
-    } catch {
+    manager.setCachedSession(nextSession as unknown as import('../../../shared/types/session').Session);
+    const updatedIds = new Set(applyResult.updatedChains.map((c) => c.id));
+    const existingIds = new Set(existing.chains.map((c) => c.id));
+    const changedIds = new Set<string>();
+    for (const c of applyResult.updatedChains) {
+      const prev = existing.chains.find((p) => p.id === c.id);
+      if (!prev || prev.messages.length !== c.messages.length || prev.messages.some((m, i) => m.excludeFromModel !== c.messages[i]?.excludeFromModel || m.id !== c.messages[i]?.id)) {
+        changedIds.add(c.id);
+      }
     }
-    try {
-      const updatedIds = new Set(applyResult.updatedChains.map((c) => c.id));
-      const existingIds = new Set(existing.chains.map((c) => c.id));
-      const changedIds = new Set<string>();
-      for (const c of applyResult.updatedChains) {
-        const prev = existing.chains.find((p) => p.id === c.id);
-        if (!prev || prev.messages.length !== c.messages.length || prev.messages.some((m, i) => m.excludeFromModel !== c.messages[i]?.excludeFromModel || m.id !== c.messages[i]?.id)) {
-          changedIds.add(c.id);
-        }
+    for (const id of updatedIds) if (!existingIds.has(id)) changedIds.add(id);
+    if (changedIds.size > 0) {
+      for (const chainId of changedIds) {
+        const chain = nextSession.chains.find((c) => c.id === chainId);
+        if (!chain) continue;
+        const event = buildSessionUpdatedEvent(nextSession as unknown as import('../../../shared/types/session').Session, chain.id);
+        if (!event) continue;
+        sendSessionEvent(null, sessionId, IPC_CHANNELS.SESSION_UPDATED, event);
       }
-      for (const id of updatedIds) if (!existingIds.has(id)) changedIds.add(id);
-      if (changedIds.size > 0) {
-        const { webContents } = require('electron') as typeof import('electron');
-        const all = (webContents?.getAllWebContents?.() ?? []) as unknown as WebContents[];
-        for (const chainId of changedIds) {
-          const chain = nextSession.chains.find((c) => c.id === chainId);
-          if (!chain) continue;
-          const event = buildSessionUpdatedEvent(nextSession as unknown as import('../../../shared/types/session').Session, chain.id);
-          if (!event) continue;
-          for (const wc of all) {
-            try {
-              const active = (manager as unknown as { getActive: (id: string) => unknown }).getActive(String((wc as unknown as { id: number }).id));
-              if ((active as unknown as { id?: string })?.id !== sessionId) continue;
-              if (typeof (wc as unknown as { isDestroyed?: () => boolean }).isDestroyed === 'function' && (wc as unknown as { isDestroyed: () => boolean }).isDestroyed()) continue;
-              (wc as unknown as { send: (ch: string, p: unknown) => void }).send(IPC_CHANNELS.SESSION_UPDATED, event);
-            } catch {
-            }
-          }
-        }
-      }
-      try {
-        const { webContents: wc2 } = require('electron') as typeof import('electron');
-        const all2 = (wc2?.getAllWebContents?.() ?? []) as unknown as WebContents[];
-        const compactionEvent = { sessionId, updatedAt: nextSession.updatedAt };
-        for (const wc of all2) {
-          try {
-            const active = (manager as unknown as { getActive: (id: string) => unknown }).getActive(String((wc as unknown as { id: number }).id));
-            if ((active as unknown as { id?: string })?.id !== sessionId) continue;
-            if (typeof (wc as unknown as { isDestroyed?: () => boolean }).isDestroyed === 'function' && (wc as unknown as { isDestroyed: () => boolean }).isDestroyed()) continue;
-            (wc as unknown as { send: (ch: string, p: unknown) => void }).send(IPC_CHANNELS.SESSION_COMPACTION, compactionEvent);
-          } catch {
-          }
-        }
-      } catch {
-      }
-    } catch {
+    }
+    {
+      const compactionEvent = { sessionId, updatedAt: nextSession.updatedAt };
+      sendSessionEvent(null, sessionId, IPC_CHANNELS.SESSION_COMPACTION, compactionEvent);
     }
     return true;
   } catch (err) {

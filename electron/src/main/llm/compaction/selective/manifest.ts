@@ -71,7 +71,12 @@ export interface SummarizeOp {
   readonly text: string;
 }
 
-export type SelectiveOp = KeepOp | KeepRangeOp | SummarizeOp;
+export interface DropOp {
+  readonly type: 'drop';
+  readonly id: string;
+}
+
+export type SelectiveOp = KeepOp | KeepRangeOp | SummarizeOp | DropOp;
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -216,6 +221,7 @@ function opToJson(op: SelectiveOp): unknown {
   if (op.type === 'keep') return { type: 'keep', id: op.id };
   if (op.type === 'keep_range')
     return { type: 'keep_range', id: op.id, startLine: op.startLine, endLine: op.endLine };
+  if (op.type === 'drop') return { type: 'drop', id: op.id };
   return { type: 'summarize', ids: [...op.ids], text: op.text };
 }
 
@@ -238,6 +244,10 @@ function parseOneOp(raw: unknown): SelectiveOp {
     if (typeof r.startLine !== 'number' || typeof r.endLine !== 'number')
       throw new Error('keep_range requires startLine/endLine');
     return { type: 'keep_range', id: r.id, startLine: Math.floor(r.startLine), endLine: Math.floor(r.endLine) };
+  }
+  if (type === 'drop') {
+    if (typeof r.id !== 'string' || !r.id) throw new Error('drop requires id');
+    return { type: 'drop', id: r.id };
   }
   if (type === 'summarize') {
     if (!Array.isArray(r.ids)) throw new Error('summarize requires ids array');

@@ -325,9 +325,7 @@ function buildLegendSections(b: TokenBreakdown): LegendSection[] {
         entry('reasoning', COLOR_ASSISTANT_REASONING, 'Reasoning', b.assistantReasoning),
       ],
     },
-    {
-      entries: [entry('summary', COLOR_SUMMARY, 'Summary (Compaction)', b.summary)],
-    },
+    ...(b.summary > 0 ? [{ entries: [entry('summary', COLOR_SUMMARY, 'Summary (Compaction)', b.summary)] }] : []),
     {
       entries: [{
         ...entry('free', COLOR_FREE, 'Free', b.free),

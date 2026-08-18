@@ -6,7 +6,7 @@
  */
 import { z } from 'zod';
 import { modelSelectionSchema } from '../../shared/types/provider';
-import { configSchema, permissionRuleSchema } from '../config/schema';
+import { configSchema, permissionRuleSchema, compactionScopeSchema, compactionSubagentsScopeSchema } from '../config/schema';
 
 // ── Chat ─────────────────────────────────────────────────────────────────────
 
@@ -66,6 +66,11 @@ export const askQuestionCancelSchema = z.object({
  */
 const KNOWN_CONFIG_KEYS = new Set(Object.keys(configSchema.shape));
 
+const compactionPartialSchema = z.object({
+  main: compactionScopeSchema.partial().optional(),
+  subagents: compactionSubagentsScopeSchema.partial().optional(),
+}).partial();
+
 /**
  * Accept partial config updates, including `null` tombstones for deleting
  * nested map entries.
@@ -85,6 +90,18 @@ export const configSaveSchema = z.object({
         message: `Unknown config key: "${key}". Known keys: ${[...KNOWN_CONFIG_KEYS].sort().join(', ')}`,
         path: ['updates', key],
       });
+    }
+  }
+  const compactionUpdate = (data.updates as Record<string, unknown>)['compaction'];
+  if (compactionUpdate !== undefined) {
+    const parsed = compactionPartialSchema.safeParse(compactionUpdate);
+    if (!parsed.success) {
+      for (const issue of parsed.error.issues) {
+        ctx.addIssue({
+          ...issue,
+          path: ['updates', 'compaction', ...issue.path],
+        });
+      }
     }
   }
 });

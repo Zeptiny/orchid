@@ -502,12 +502,15 @@ async function enterDraftShared(): Promise<void> {
   loadGeneration += 1;
   advanceDraftGeneration();
   pendingSwitchSessionId = '__draft__';
-  if (window.orchid?.session?.clearActive) {
-    await window.orchid.session.clearActive();
+  try {
+    if (window.orchid?.session?.clearActive) {
+      await window.orchid.session.clearActive();
+    }
+    setActiveSession(null);
+    void getWorkspaceShared();
+  } finally {
+    if (pendingSwitchSessionId === '__draft__') pendingSwitchSessionId = null;
   }
-  setActiveSession(null);
-  void getWorkspaceShared();
-  pendingSwitchSessionId = null;
 }
 
 async function pickProjectDirShared(): Promise<WorkspaceInfo | null> {

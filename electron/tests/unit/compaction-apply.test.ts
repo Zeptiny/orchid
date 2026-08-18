@@ -21,7 +21,6 @@ function makeMessage(overrides: Partial<Message> = {}): Message {
     usage: overrides.usage ?? null,
     hidden: overrides.hidden ?? false,
     excludeFromModel: overrides.excludeFromModel,
-    // @ts-expect-error compacted optional
     compacted: overrides.compacted,
     tool_result: overrides.tool_result ?? null,
   } as Message;

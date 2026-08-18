@@ -84,7 +84,7 @@ export type ChatStatePayload = {
 
 export const activeAgents = new Map<string, ActiveAgent>();
 export const sessionsStarting = new Set<string>();
-export const pendingCheckpoints = new Map<string, { timer: ReturnType<typeof setTimeout>; messages: Message[] }>();
+export const pendingCheckpoints = new Map<string, { timer: ReturnType<typeof setTimeout>; messages: Message[]; guard?: (active: ActiveAgent) => boolean }>();
 /**
  * Sessions with an auto-name LLM attempt in flight. Concurrent triggers
  * (mid-turn deadline vs. turn end vs. interruption) must not each start a

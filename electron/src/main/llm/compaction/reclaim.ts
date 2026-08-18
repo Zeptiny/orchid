@@ -16,6 +16,7 @@ import { createHash } from 'node:crypto';
 import type { Message } from '../../../shared/types/message';
 import { MessageRole, MessageType } from '../../../shared/types/message';
 import type { ToolCall } from '../../../shared/types/tool';
+import { estimateMessageChars } from './message-chars';
 
 // ── Public types ────────────────────────────────────────────────────────────
 
@@ -90,28 +91,6 @@ export function normalizeArgs(argsRaw: string): string {
   }
 }
 
-/**
- * Estimate char weight of one message for proportional token estimation.
- * Mirrors the spirit of context-snapshot's messageChars but stays self-contained
- * and deterministic. Large outputs hash later, but for estimate we use raw lengths.
- */
-function estimateMessageChars(msg: Message): number {
-  let n = 0;
-  if (msg.content) n += msg.content.length;
-  if (msg.thinking) n += msg.thinking.length;
-  if (msg.tool_calls && msg.tool_calls.length > 0) {
-    // serialized tool_calls size approximates tool-use chars
-    n += stableStringify(msg.tool_calls).length;
-  }
-  if (msg.tool_result) {
-    n += stableStringify(msg.tool_result).length;
-  }
-  // tool_call_id + name are small but include for completeness
-  if (msg.tool_call_id) n += msg.tool_call_id.length;
-  if (msg.name) n += msg.name.length;
-  // Floor of 1 avoids zero-weight messages vanishing from denominator
-  return n === 0 ? 1 : n;
-}
 
 // ── Core: mechanical reclaim ──────────────────────────────────────────────
 

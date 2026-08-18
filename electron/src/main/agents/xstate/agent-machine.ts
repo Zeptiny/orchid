@@ -218,6 +218,10 @@ const streamCallback = fromCallback(
               sendBack({ type: 'USAGE', usage: event.usage });
               break;
             case 'step_finish':
+              try {
+                const hook = input.onStepBoundary;
+                if (hook) void Promise.resolve(hook({ stepIndex: event.stepIndex, finishReason: event.finishReason })).catch(() => {});
+              } catch {}
               sendBack({ type: 'STEP_FINISH', stepIndex: event.stepIndex, finishReason: event.finishReason });
               break;
             default:
@@ -440,14 +444,7 @@ export const agentMachine = setup({
         },
         STEP_FINISH: {
           actions: assign({
-            lastStepBoundary: ({ context, event }) => {
-              const info = { stepIndex: event.stepIndex, finishReason: event.finishReason };
-              try {
-                const hook = context.onStepBoundary;
-                if (hook) void Promise.resolve(hook(info)).catch(() => {});
-              } catch {}
-              return info;
-            },
+            lastStepBoundary: ({ event }) => ({ stepIndex: event.stepIndex, finishReason: event.finishReason }),
           }),
         },
         ERROR: {

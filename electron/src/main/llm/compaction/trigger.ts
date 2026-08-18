@@ -23,6 +23,7 @@ import {
   estimateReclaimedTokens,
   isBelowRearmLine,
 } from './reclaim';
+import { estimateMessageChars, totalCharsForMessages } from './message-chars';
 
 // ── Types ───────────────────────────────────────────────────────────────────
 
@@ -59,36 +60,6 @@ export interface TriggerState {
   tokensPerChar?: number;
   /** Greatest inputTokens seen while armed — helps detect drop. */
   peakWhileArmed?: number;
-}
-
-// ── Char estimation (reuses context-snapshot spirit, no tokenizer) ──────────
-
-function stableStringify(value: unknown): string {
-  try {
-    return JSON.stringify(value) ?? String(value);
-  } catch {
-    return String(value);
-  }
-}
-
-function estimateMessageChars(msg: Message): number {
-  let n = 0;
-  if (msg.content) n += msg.content.length;
-  if (msg.thinking) n += msg.thinking.length;
-  if (msg.tool_calls && msg.tool_calls.length > 0) n += stableStringify(msg.tool_calls).length;
-  if (msg.tool_result) n += stableStringify(msg.tool_result).length;
-  if (msg.tool_call_id) n += msg.tool_call_id.length;
-  if (msg.name) n += msg.name.length;
-  if ((msg as unknown as { compacted?: unknown }).compacted) {
-    n += stableStringify((msg as unknown as { compacted: unknown }).compacted).length;
-  }
-  return n === 0 ? 1 : n;
-}
-
-function totalCharsForMessages(messages: readonly Message[]): number {
-  let sum = 0;
-  for (const m of messages) sum += estimateMessageChars(m);
-  return sum === 0 ? 1 : sum;
 }
 
 // ── Pure helpers ────────────────────────────────────────────────────────────

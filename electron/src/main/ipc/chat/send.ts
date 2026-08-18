@@ -20,6 +20,7 @@ import type { ReasoningProviderOptions } from '../../providers/drivers/types';
 import {
   DEFAULT_THINKING_POLICY,
 } from '../../providers/facets/thinking';
+import { estimateMessageChars, totalCharsForMessages } from '../../llm/compaction/message-chars';
 import type { ThinkingReplayContext } from '../../llm/history';
 import type { CacheFacet, ThinkingPolicy } from '../../../shared/types/provider-facets';
 import type { ProviderProtocol } from '../../../shared/types/provider';
@@ -48,7 +49,7 @@ import { chatSendSchema } from '../payload-schemas';
 import { clearNextRequestStop, requestCompactionPause, clearCompactionPause, shouldPauseForCompaction } from '../next-request-stop';
 import { completeSessionActivity, publishSessionActivity } from '../session-activity';
 import { disposeActiveAgent, forceAbortSession } from './abort';
-import { emitSessionUpdated, sendChatState, sendTurnEvent, webContentsForWindowId } from './events';
+import { buildSessionUpdatedEvent, emitSessionUpdated, sendChatState, sendSessionEvent, sendTurnEvent, webContentsForWindowId } from './events';
 import {
   activeAgents,
   canEmitStreamEvents,
@@ -124,9 +125,6 @@ function completeCompactionWidget(sessionId: string): void {
       active.toolCalls.delete(compactionToolId);
       const wc = webContentsForWindowId(active.windowId);
       if (wc) sendTurnEvent(wc, active, IPC_CHANNELS.CHAT_TOOL_CALL_UPDATE, { type: 'tool_call_update', toolCallId: compactionToolId, toolName: 'compaction', status: 'complete', args: '', content: '', toolResult: { schemaVersion: 1, family: 'generic', status: 'complete', completeness: 'complete', data: { value: '', origin: { kind: 'built-in', name: 'compaction' } } } as unknown as Record<string, unknown> });
-    } else if (!active || active.finalized) {
-      const pending = compactionPending.get(sessionId);
-      if (!pending) return;
     }
     clearCompactionPause(sessionId);
   } catch {}
@@ -159,21 +157,8 @@ function dedupeHistoryById(messages: readonly Message[]): Message[] {
   return out;
 }
 
-function estimateMessageChars(msg: Message): number {
-  let n = 0;
-  if (msg.content) n += msg.content.length;
-  if (msg.thinking) n += msg.thinking.length;
-  if (msg.tool_calls) n += JSON.stringify(msg.tool_calls).length;
-  if (msg.tool_result) n += JSON.stringify(msg.tool_result).length;
-  if (msg.tool_call_id) n += msg.tool_call_id.length;
-  if (msg.name) n += msg.name.length;
-  return n === 0 ? 1 : n;
-}
-
 function totalChars(messages: readonly Message[]): number {
-  let s = 0;
-  for (const m of messages) s += estimateMessageChars(m);
-  return s === 0 ? 1 : s;
+  return totalCharsForMessages(messages);
 }
 
 function compactableTokenEstimate(messages: readonly Message[], range: { start: number; end: number }, tokensPerChar: number | undefined): number {
@@ -245,7 +230,18 @@ function persistSelectiveCompaction(
     const summaryMessages = result.summaryMessages.length > 0
       ? result.summaryMessages
       : (result.summaryMessage ? [result.summaryMessage] : []);
-    if (summaryMessages.length > 0) {
+    const existingIdsForInsert = new Set(existing.chains.flatMap((c) => c.messages.map((m) => m.id)));
+    const rangedCopies = result.replayMessages.filter((m) => m.id.includes(':range:') && !existingIdsForInsert.has(m.id));
+    const allNewMessages: Message[] = (() => {
+      const newFromReplay = result.replayMessages.filter((m) => !existingIdsForInsert.has(m.id));
+      if (newFromReplay.length > 0) return newFromReplay as Message[];
+      const combined = [...rangedCopies, ...summaryMessages];
+      const pos = new Map<string, number>();
+      result.replayMessages.forEach((m, idx) => pos.set(m.id, idx));
+      combined.sort((a, b) => (pos.get(a.id) ?? 0) - (pos.get(b.id) ?? 0));
+      return combined as Message[];
+    })();
+    if (allNewMessages.length > 0) {
       let insertionIdx = updatedChains.length;
       try {
         const idToChainIdx = new Map<string, number>();
@@ -264,8 +260,8 @@ function persistSelectiveCompaction(
       } catch {}
       const now = new Date().toISOString();
       let chainsWithSummaries: Chain[] = [...updatedChains];
-      for (let s = 0; s < summaryMessages.length; s += 1) {
-        const msg = summaryMessages[s]!;
+      for (let s = 0; s < allNewMessages.length; s += 1) {
+        const msg = allNewMessages[s]!;
         const newChain = {
           id: `selective-${Date.now()}-${s}-${Math.random().toString(36).slice(2, 8)}`,
           sessionId,
@@ -293,15 +289,8 @@ function persistSelectiveCompaction(
     const updatedAt = new Date().toISOString();
     const nextSession = { ...existing, chains: updatedChains as typeof existing.chains, updatedAt } as typeof existing;
     saveSession(nextSession);
-    try {
-      (manager as unknown as { _sessions: Map<string, unknown> })._sessions?.set(sessionId, nextSession);
-    } catch {
-    }
-    try {
-      const { IPC_CHANNELS } = require('../../../shared/types/ipc') as typeof import('../../../shared/types/ipc');
-      const { buildSessionUpdatedEvent } = require('./events') as typeof import('./events');
-      const { webContents } = require('electron') as typeof import('electron');
-      const all = (webContents?.getAllWebContents?.() ?? []) as unknown as Array<{ id: number; send: (ch: string, p: unknown) => void; isDestroyed?: () => boolean }>;
+    manager.setCachedSession(nextSession as unknown as import('../../../shared/types/session').Session);
+    {
       const prevIds = new Set(existing.chains.map((c) => c.id));
       const changedIds = new Set<string>();
       for (const c of updatedChains) {
@@ -314,32 +303,10 @@ function persistSelectiveCompaction(
         if (!chain) continue;
         const event = buildSessionUpdatedEvent(nextSession as unknown as import('../../../shared/types/session').Session, chain.id);
         if (!event) continue;
-        for (const wc of all) {
-          try {
-            const active = (manager as unknown as { getActive: (id: string) => unknown }).getActive(String(wc.id));
-            if ((active as unknown as { id?: string })?.id !== sessionId) continue;
-            if (typeof wc.isDestroyed === 'function' && wc.isDestroyed()) continue;
-            wc.send(IPC_CHANNELS.SESSION_UPDATED, event);
-          } catch {
-          }
-        }
+        sendSessionEvent(null, sessionId, IPC_CHANNELS.SESSION_UPDATED, event);
       }
-      try {
-        const { webContents: wc2 } = require('electron') as typeof import('electron');
-        const all2 = (wc2?.getAllWebContents?.() ?? []) as unknown as Array<{ id: number; send: (ch: string, p: unknown) => void; isDestroyed?: () => boolean }>;
-        const compactionEvent = { sessionId, updatedAt: nextSession.updatedAt };
-        for (const wc of all2) {
-          try {
-            const active = (manager as unknown as { getActive: (id: string) => unknown }).getActive(String(wc.id));
-            if ((active as unknown as { id?: string })?.id !== sessionId) continue;
-            if (typeof wc.isDestroyed === 'function' && wc.isDestroyed()) continue;
-            wc.send(IPC_CHANNELS.SESSION_COMPACTION, compactionEvent);
-          } catch {
-          }
-        }
-      } catch {
-      }
-    } catch {
+      const compactionEvent = { sessionId, updatedAt: nextSession.updatedAt };
+      sendSessionEvent(null, sessionId, IPC_CHANNELS.SESSION_COMPACTION, compactionEvent);
     }
     return true;
   } catch (err) {
@@ -1590,6 +1557,19 @@ export async function startChatTurn(
             sendTurnEvent(webContents, activeAgent, IPC_CHANNELS.CHAT_TOOL_CALL_UPDATE, { type: 'tool_call_update', toolCallId: compactionToolId, toolName: 'compaction', status: 'complete', args: '', content: '', toolResult: compactionCompleteResult as unknown as Record<string, unknown> });
           }
           clearCompactionPause(sessionId);
+          try {
+            const snap = activeAgent.actor.getSnapshot();
+            const ctxSnap = snap.context as AgentContext;
+            if (snap.value === 'idle' && ctxSnap.currentInput && !activeAgent.finalized && !activeAgent.agentCancelled) {
+              try {
+                activeAgent.actor.send({ type: 'USER_INPUT', message: ctxSnap.currentInput });
+                publishSessionActivity(sessionId, { cwd: turnCtx.cwd, state: 'working', phase: 'agent', detail: 'Resuming after compaction', canCancel: true });
+                return;
+              } catch (e) {
+                console.debug('[compaction] resume after unapplied compaction failed:', e);
+              }
+            }
+          } catch {}
           finalizeTurn({ response: context.response, usage: context.usage ?? null, interrupted: false, sendDone: true });
           queueMicrotask(() => disposeActiveAgent(sessionId, activeAgent));
         })();

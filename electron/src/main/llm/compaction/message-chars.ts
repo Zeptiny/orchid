@@ -13,3 +13,9 @@ export function estimateMessageChars(msg: Message): number {
   }
   return n === 0 ? 1 : n;
 }
+
+export function totalCharsForMessages(messages: readonly Message[]): number {
+  let sum = 0;
+  for (const m of messages) sum += estimateMessageChars(m);
+  return sum === 0 ? 1 : sum;
+}

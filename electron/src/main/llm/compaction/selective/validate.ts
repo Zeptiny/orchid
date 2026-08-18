@@ -33,6 +33,7 @@ function findOpForId(ops: readonly SelectiveOp[], id: string): SelectiveOp | und
   for (const op of ops) {
     if (op.type === 'keep' && op.id === id) return op;
     if (op.type === 'keep_range' && op.id === id) return op;
+    if (op.type === 'drop' && op.id === id) return op;
     if (op.type === 'summarize' && (op.ids as readonly string[]).includes(id)) return op;
   }
   return undefined;
@@ -88,6 +89,12 @@ export function validateSelectiveOps(
     } else if (op.type === 'keep_range') {
       if (!manifestById.has(op.id)) {
         mechanicalCorrections.push(`dangling keep_range id ${op.id} dropped`);
+        continue;
+      }
+      opsAfterDangling.push(op);
+    } else if (op.type === 'drop') {
+      if (!manifestById.has(op.id)) {
+        mechanicalCorrections.push(`dangling drop id ${op.id} dropped`);
         continue;
       }
       opsAfterDangling.push(op);
@@ -161,10 +168,41 @@ export function validateSelectiveOps(
       mechanicalCorrections.push(`keep_range on thinking ${op.id} converted to keep`);
       continue;
     }
+    // Also reject keep_range on user — user messages must be kept verbatim (R9)
+    if (entry && (entry.kind === 'user' || entry.role === MessageRole.USER)) {
+      errors.push(`keep_range on user message ${op.id} is not allowed (R9: user kept verbatim)`);
+      opsAfterClamp.push({ type: 'keep', id: op.id });
+      mechanicalCorrections.push(`keep_range on user ${op.id} converted to keep`);
+      continue;
+    }
+    // Fallback check via message role if entry missing but message is user
+    if (msg && msg.role === MessageRole.USER) {
+      // Already covered by entry, but ensure consistency
+      if (entry && entry.role !== MessageRole.USER && entry.kind !== 'user') {
+        if (!errors.some((e) => e.includes(op.id) && e.includes('keep_range on user'))) {
+          errors.push(`keep_range on user message ${op.id} is not allowed (R9: user kept verbatim)`);
+          opsAfterClamp.push({ type: 'keep', id: op.id });
+          mechanicalCorrections.push(`keep_range on user ${op.id} converted to keep`);
+          continue;
+        }
+      }
+    }
     if (changed) {
       opsAfterClamp.push({ type: 'keep_range', id: op.id, startLine: start, endLine: end });
     } else {
       opsAfterClamp.push(op);
+    }
+  }
+
+  // ── Step B2: drop only for thinking (R24) ───────────────────────────────────
+  for (const op of opsAfterClamp) {
+    if (op.type === 'drop') {
+      const entry = manifestById.get(op.id);
+      const msg = msgById.get(op.id);
+      const isThinking = (entry && entry.type === MessageType.THINKING) || (msg && msg.type === MessageType.THINKING);
+      if (!isThinking) {
+        errors.push(`drop on non-thinking message ${op.id} is not allowed (R24: only thinking may be dropped)`);
+      }
     }
   }
 
@@ -196,7 +234,7 @@ export function validateSelectiveOps(
   const seen = new Set<string>();
   const opsAfterDedup: SelectiveOp[] = [];
   for (const op of opsAfterClamp) {
-    if (op.type === 'keep' || op.type === 'keep_range') {
+    if (op.type === 'keep' || op.type === 'keep_range' || op.type === 'drop') {
       if (seen.has(op.id)) {
         mechanicalCorrections.push(`duplicate id ${op.id} dropped (keeping first occurrence)`);
         continue;
@@ -241,7 +279,7 @@ export function validateSelectiveOps(
   // ── Step E: sort ops to manifest order ────────────────────────────────────
   const opsWithKey = opsAfterDedup.map((op) => {
     let key: number;
-    if (op.type === 'keep' || op.type === 'keep_range') key = manifestPos.get(op.id) ?? 9999;
+    if (op.type === 'keep' || op.type === 'keep_range' || op.type === 'drop') key = manifestPos.get(op.id) ?? 9999;
     else {
       const ids = op.ids as readonly string[];
       key = Math.min(...ids.map((id) => manifestPos.get(id) ?? 9999));
@@ -261,11 +299,11 @@ export function validateSelectiveOps(
   if (needsSort || orderChanged) {
     // Only record if actually out of order
     const beforeKeys = opsAfterDedup.map((op) => {
-      if (op.type === 'keep' || op.type === 'keep_range') return op.id;
+      if (op.type === 'keep' || op.type === 'keep_range' || op.type === 'drop') return op.id;
       return `summarize[${(op.ids as readonly string[]).join(',')}]`;
     });
     const afterKeys = sortedOps.map((op) => {
-      if (op.type === 'keep' || op.type === 'keep_range') return op.id;
+      if (op.type === 'keep' || op.type === 'keep_range' || op.type === 'drop') return op.id;
       return `summarize[${(op.ids as readonly string[]).join(',')}]`;
     });
     if (beforeKeys.join('|') !== afterKeys.join('|')) {

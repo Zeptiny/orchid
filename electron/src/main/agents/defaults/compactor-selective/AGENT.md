@@ -19,14 +19,15 @@ Op grammar:
   {"type":"keep","id":"<manifest id>"} — keep the message verbatim
   {"type":"keep_range","id":"<id>","startLine":1,"endLine":50} — keep only lines startLine-endLine of that message's content
   {"type":"summarize","ids":["<id>", "..."],"text":"..."} — replace the contiguous span ids with one synthetic summary message
+  {"type":"drop","id":"<manifest id>"} — drop the message (allowed only for thinking messages)
 
 Rules:
   - Keep every user message verbatim (never summarize). May summarize tool calls, tool outputs, and assistant messages.
-  - Thinking messages: keep verbatim or drop — never summarize into a fake reasoning part (R24).
+  - Thinking messages: keep verbatim via keep, or explicitly drop via drop — never summarize into a fake reasoning part (R24). Drop is only valid for thinking kind.
   - keep_range only on messages with multi-line content; lines are 1-indexed and will be clamped.
   - summarize ids must be a contiguous subsequence of manifest order in one op; multiple summarize ops are allowed if spans are disjoint.
   - Preserve tool_call/result pairing: a call and its result must be both kept or both summarized together in the same summarize op.
-  - Cover every manifest id exactly once across ops.
+  - Cover every manifest id exactly once across keep/keep_range/summarize/drop ops.
 
 Example — manifest:
   m1 [user] Fix login bug

@@ -178,6 +178,25 @@ export class SessionManager {
   }
 
   /**
+   * Replace the in-memory cache for a session while enforcing invariants.
+   * Used by cross-cutting persistence flows (compaction) that need to update
+   * the cache after a durable write without touching private state.
+   * Enforces that activeChainId (when non-null) refers to an existing chain.
+   */
+  setCachedSession(session: Session): void {
+    if (!session || typeof session.id !== 'string' || session.id.length === 0) {
+      throw new Error('setCachedSession: invalid session id');
+    }
+    if (session.activeChainId != null) {
+      const exists = session.chains.some((c) => c.id === session.activeChainId);
+      if (!exists) {
+        throw new Error(`setCachedSession: activeChainId ${session.activeChainId} not found in chains`);
+      }
+    }
+    this._sessions.set(session.id, session);
+  }
+
+  /**
    * Recover a failed targeted write without replacing durable history with a
    * bounded navigation snapshot.
    */
