@@ -261,6 +261,8 @@ const mocks = vi.hoisted(() => {
       if (activeSession?.id === id) activeSession = updated;
     }),
     getSession: vi.fn((id: string) => sessionsById.get(id) ?? (activeSession?.id === id ? activeSession : null)),
+    load: vi.fn(() => null),
+    setCachedSession: vi.fn(),
     getModelHistory: vi.fn(() => modelHistory),
     switchTo: vi.fn((id: string) => {
       const session = sessionsById.get(id) ?? (activeSession?.id === id ? activeSession : null);
@@ -566,6 +568,8 @@ const mocks = vi.hoisted(() => {
     buildSystemPromptContext,
     mcpManager,
     accountingStore,
+    summarizeCompactableRange: vi.fn(),
+    saveSession: vi.fn(),
     backgroundStore,
   };
 });
@@ -609,6 +613,14 @@ vi.mock('../../src/main/tools', () => ({
 
 vi.mock('../../src/main/llm/orchestrator', () => ({
   streamChat: mocks.streamChat,
+}));
+
+vi.mock('../../src/main/llm/compaction/summarize', () => ({
+  summarizeCompactableRange: mocks.summarizeCompactableRange,
+}));
+
+vi.mock('../../src/main/session/storage', () => ({
+  saveSession: mocks.saveSession,
 }));
 
 vi.mock('../../src/main/llm/middleware', () => ({
@@ -2423,5 +2435,180 @@ describe('chat:queue_next early-stop signaling', () => {
     await waitForDoneCount(send, 1);
 
     expect(shouldStopNextRequest(sessionId)).toBe(false);
+  });
+});
+
+describe('chat compaction mid-turn pause', () => {
+  const selection = {
+    connectionId: '11111111-1111-4111-8111-111111111111',
+    modelId: 'vendor/path/model',
+  };
+
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    mocks.handlers.clear();
+    mocks.streamResponses.length = 0;
+    mocks.streamEventSequences.length = 0;
+    mocks.runtimeRegistry._reset();
+    mocks.sessionManager._reset();
+    mocks.runtimeRegistry._set(mocks.workspace._testProjectDir, {
+      config: {
+        default_model: null,
+        tier_models: { bloom: null },
+        command_timeout: 30,
+        llm_stream_idle_timeout: 60,
+        llm_stream_retries: 0,
+        session_title_max_wait_seconds: 0,
+        max_tool_steps: 100,
+        compaction: {
+          main: {
+            mode: 'simple',
+            threshold: 0.5,
+            model: null,
+            agent_name: 'compactor',
+            keep_recent_chains: 3,
+            min_compactable_tokens: 0,
+            mechanical_reclaim: true,
+            hysteresis_delta: 0.1,
+          },
+          subagents: {
+            mode: 'simple',
+            threshold: 0.85,
+            model: null,
+            agent_name: 'compactor-subagent',
+            keep_recent_chains: 3,
+            min_compactable_tokens: 4000,
+            mechanical_reclaim: true,
+            hysteresis_delta: 0.1,
+          },
+        },
+      },
+    });
+    mocks.providerRuntime.resolveExecution.mockImplementationOnce(async () => ({
+      modelInstance: mocks.modelInstance,
+      connection: {},
+      model: {
+        id: 'vendor/path/model',
+        capabilities: { reasoning: false },
+        limits: { contextTokens: 2000 },
+      },
+      snapshot: {
+        providerId: 'openai',
+        providerDisplayName: 'OpenAI',
+        connectionId: selection.connectionId,
+        connectionName: 'Work',
+        modelId: selection.modelId,
+        protocol: 'openai-compatible',
+        modelSource: 'catalog',
+        catalogVersion: 1,
+        catalogSource: 'bundled',
+        catalogObservedAt: null,
+        pricing: null,
+        fieldProvenance: {},
+        statusObservation: null,
+      },
+    }));
+    chatIpc = await import('../../src/main/ipc/chat');
+    chatIpc.registerChatIPC();
+  });
+
+  afterEach(() => {
+    chatIpc.unregisterChatIPC();
+    mocks.handlers.clear();
+    mocks.sessionManager._reset();
+  });
+
+  function compactionStream() {
+    return async function* () {
+      yield {
+        type: 'tool_call',
+        toolCallId: 'tc-compact-1',
+        toolName: 'read',
+        args: '{"path":"README.md"}',
+      };
+      yield successfulToolResult('tc-compact-1', 'x'.repeat(2000));
+      yield {
+        type: 'tool_call',
+        toolCallId: 'tc-compact-2',
+        toolName: 'read',
+        args: '{"path":"AGENTS.md"}',
+      };
+      yield successfulToolResult('tc-compact-2', 'y'.repeat(2000));
+      yield {
+        type: 'usage',
+        usage: {
+          prompt_tokens: 1800,
+          completion_tokens: 40,
+          total_tokens: 1840,
+          cached_tokens: 0,
+        },
+      };
+      yield { type: 'finish', finishReason: 'stop' };
+    };
+  }
+
+  it('resumes with accumulated turn history when the summary cannot be applied', async () => {
+    const sessionId = 'e0e0e0e0-e0e0-4e0e-8e0e-e0e0e0e0e0e0';
+    mocks.sessionManager._setActive({
+      ...makeSession(sessionId),
+      model: selection.modelId,
+      selection,
+      modelLabel: selection.modelId,
+    });
+    mocks.summarizeCompactableRange.mockResolvedValueOnce(null);
+    mocks.streamChat.mockImplementationOnce(compactionStream());
+
+    const send = vi.fn();
+    const chatSend = mocks.handlers.get(IPC_CHANNELS.CHAT_SEND)!;
+    await chatSend({ sender: { id: 940, send } }, { message: 'Explore with tools' });
+    await waitForDoneCount(send, 1);
+
+    expect(mocks.streamChat).toHaveBeenCalledTimes(2);
+    const resumedMessages = mocks.streamChat.mock.calls[1]![0]!.messages as Array<{
+      role: string;
+      tool_call_id?: string;
+    }>;
+    // The resumed replay must keep the turn's tool progress (the pre-fix code
+    // restarted from the bare turn base, collapsing context usage to the
+    // turn-start baseline with no compaction applied).
+    expect(resumedMessages.filter((m) => m.role === MessageRole.USER)).toHaveLength(1);
+    expect(resumedMessages.filter((m) => m.tool_call_id === 'tc-compact-1')).toHaveLength(2);
+    expect(resumedMessages.filter((m) => m.tool_call_id === 'tc-compact-2')).toHaveLength(2);
+    const compactionUpdates = channelEvents(send, IPC_CHANNELS.CHAT_TOOL_CALL_UPDATE)
+      .map(([, payload]) => payload)
+      .filter((p) => (p as { toolName?: string }).toolName === 'compaction');
+    expect(compactionUpdates.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it('applies the pending summary mid-turn and replays the compacted history', async () => {
+    const sessionId = 'e1e1e1e1-e1e1-4e1e-8e1e-e1e1e1e1e1e1';
+    mocks.sessionManager._setActive({
+      ...makeSession(sessionId),
+      model: selection.modelId,
+      selection,
+      modelLabel: selection.modelId,
+    });
+    mocks.summarizeCompactableRange.mockResolvedValueOnce({
+      text: 'SUMMARY: explored compaction module',
+    });
+    mocks.streamChat.mockImplementationOnce(compactionStream());
+
+    const send = vi.fn();
+    const chatSend = mocks.handlers.get(IPC_CHANNELS.CHAT_SEND)!;
+    await chatSend({ sender: { id: 941, send } }, { message: 'Explore with tools' });
+    await waitForDoneCount(send, 1);
+
+    expect(mocks.streamChat).toHaveBeenCalledTimes(2);
+    const resumedMessages = mocks.streamChat.mock.calls[1]![0]!.messages as Array<{
+      role: string;
+      content?: string;
+      compacted?: unknown;
+      excludeFromModel?: boolean;
+    }>;
+    const summary = resumedMessages.find((m) => m.compacted);
+    expect(summary?.content).toBe('SUMMARY: explored compaction module');
+    // Compacted range messages are excluded from replay but never deleted.
+    expect(resumedMessages.some((m) => m.tool_call_id === 'tc-compact-1' && m.excludeFromModel)).toBe(true);
+    expect(mocks.saveSession).toHaveBeenCalled();
   });
 });

@@ -322,7 +322,13 @@ async function applyPendingCompactionIfAny(
 ): Promise<{ applied: boolean; updatedMessages?: Message[] }> {
   const pending = compactionPending.get(sessionId);
   if (!pending) return { applied: false };
-  if (!isPendingCutStillValid(pending, messages)) {
+  // The pending cut/expectedIds were computed over the deduped history
+  // (handleUsageCompaction dedupes). Mid-turn callers concatenate
+  // [...messages, ...turnMessagesFromAgent()] where the turn base repeats
+  // the triggering user message, so dedupe here or the index-anchored
+  // validation below rejects every mid-turn apply.
+  const history = dedupeHistoryById(messages);
+  if (!isPendingCutStillValid(pending, history)) {
     compactionPending.delete(sessionId);
     const t = getCompactionTrigger(sessionId);
     t.abortPrepare();
@@ -345,7 +351,7 @@ async function applyPendingCompactionIfAny(
         }
         setChatHistory(sessionId, [...result.replayMessages]);
         const postTokens = (() => {
-          const tpc = trigger.state.tokensPerChar ?? (totalChars(result.replayMessages) > 0 ? pending.estimatedInput / Math.max(1, totalChars(messages)) : undefined);
+          const tpc = trigger.state.tokensPerChar ?? (totalChars(result.replayMessages) > 0 ? pending.estimatedInput / Math.max(1, totalChars(history)) : undefined);
           return tpc ? Math.ceil(totalChars(result.replayMessages) * tpc) : pending.estimatedInput;
         })();
         trigger.onCompactionApplied(pending.estimatedInput, postTokens);
@@ -358,7 +364,7 @@ async function applyPendingCompactionIfAny(
         let applyResult: ReturnType<typeof buildCompactionApply> | null = null;
         try {
           applyResult = buildCompactionApply({
-            messages,
+            messages: history,
             chains: chains as Chain[],
             cutResult: pending.cut,
             summaryText: result.fallbackText,
@@ -379,7 +385,7 @@ async function applyPendingCompactionIfAny(
           const ok = persistCompaction(sessionId, applyResult);
           if (ok) {
             setChatHistory(sessionId, [...applyResult.updatedMessages]);
-            const tpc = trigger.state.tokensPerChar ?? (totalChars(applyResult.updatedMessages) > 0 ? pending.estimatedInput / Math.max(1, totalChars(messages)) : undefined);
+            const tpc = trigger.state.tokensPerChar ?? (totalChars(applyResult.updatedMessages) > 0 ? pending.estimatedInput / Math.max(1, totalChars(history)) : undefined);
             const postTokens = tpc ? Math.ceil(totalChars(applyResult.updatedMessages) * tpc) : pending.estimatedInput;
             trigger.onCompactionApplied(pending.estimatedInput, postTokens);
             trigger.abortPrepare();
@@ -393,7 +399,7 @@ async function applyPendingCompactionIfAny(
           const ok = persistSelectiveCompaction(sessionId, selectiveLike, pending.cut);
           if (ok) {
             setChatHistory(sessionId, [...result.replayMessages]);
-            const tpc = trigger.state.tokensPerChar ?? (totalChars(result.replayMessages) > 0 ? pending.estimatedInput / Math.max(1, totalChars(messages)) : undefined);
+            const tpc = trigger.state.tokensPerChar ?? (totalChars(result.replayMessages) > 0 ? pending.estimatedInput / Math.max(1, totalChars(history)) : undefined);
             const postTokens = tpc ? Math.ceil(totalChars(result.replayMessages) * tpc) : pending.estimatedInput;
             trigger.onCompactionApplied(pending.estimatedInput, postTokens);
           }
@@ -414,7 +420,7 @@ async function applyPendingCompactionIfAny(
         let applyResult: ReturnType<typeof buildCompactionApply> | null = null;
         try {
           applyResult = buildCompactionApply({
-            messages,
+            messages: history,
             chains: chains as Chain[],
             cutResult: pending.cut,
             summaryText: result.text,
@@ -434,7 +440,7 @@ async function applyPendingCompactionIfAny(
           const ok = persistCompaction(sessionId, applyResult);
           if (ok) {
             setChatHistory(sessionId, [...applyResult.updatedMessages]);
-            const tpc = trigger.state.tokensPerChar ?? (totalChars(applyResult.updatedMessages) > 0 ? pending.estimatedInput / Math.max(1, totalChars(messages)) : undefined);
+            const tpc = trigger.state.tokensPerChar ?? (totalChars(applyResult.updatedMessages) > 0 ? pending.estimatedInput / Math.max(1, totalChars(history)) : undefined);
             const postTokens = tpc ? Math.ceil(totalChars(applyResult.updatedMessages) * tpc) : pending.estimatedInput;
             trigger.onCompactionApplied(pending.estimatedInput, postTokens);
             trigger.abortPrepare();
@@ -454,7 +460,7 @@ async function applyPendingCompactionIfAny(
       let applyResult: ReturnType<typeof buildCompactionApply> | null = null;
       try {
         applyResult = buildCompactionApply({
-          messages,
+          messages: history,
           chains: chains as Chain[],
           cutResult: pending.cut,
           summaryText: null,
@@ -474,7 +480,7 @@ async function applyPendingCompactionIfAny(
         const ok = persistCompaction(sessionId, applyResult);
         if (ok) {
           setChatHistory(sessionId, [...applyResult.updatedMessages]);
-          const tpc = trigger.state.tokensPerChar ?? (totalChars(applyResult.updatedMessages) > 0 ? pending.estimatedInput / Math.max(1, totalChars(messages)) : undefined);
+          const tpc = trigger.state.tokensPerChar ?? (totalChars(applyResult.updatedMessages) > 0 ? pending.estimatedInput / Math.max(1, totalChars(history)) : undefined);
           const postTokens = tpc ? Math.ceil(totalChars(applyResult.updatedMessages) * tpc) : pending.estimatedInput;
           trigger.onCompactionApplied(pending.estimatedInput, postTokens);
           completeCompactionWidget(sessionId);
@@ -482,6 +488,11 @@ async function applyPendingCompactionIfAny(
         }
       }
     }
+    // Fall-through (reclaim-only that did not apply, or a pending with neither
+    // promise nor flagged ids): clear the prepare so a stuck pendingPrepare
+    // cannot silence every future trigger evaluation for the session.
+    trigger.abortPrepare();
+    completeCompactionWidget(sessionId);
   } catch (err) {
     console.debug('[compaction] pending apply failed (non-fatal):', err);
     const t = getCompactionTrigger(sessionId);
@@ -1517,6 +1528,7 @@ export async function startChatTurn(
             if (applied && updated) {
               messages.splice(0, messages.length, ...updated);
               activeAgent.messages.splice(0, activeAgent.messages.length, ...updated);
+              activeAgent.priorMessageCount = updated.length;
               activeAgent.turnMessages = [];
               activeAgent.streamSegments = [];
               activeAgent.responseCommittedLength = 0;
@@ -1562,6 +1574,22 @@ export async function startChatTurn(
             const ctxSnap = snap.context as AgentContext;
             if (snap.value === 'idle' && ctxSnap.currentInput && !activeAgent.finalized && !activeAgent.agentCancelled) {
               try {
+                // Compaction did not apply: resume from the full accumulated
+                // history (turn base + turn messages), never the bare turn
+                // base — restarting from the turn start silently discards all
+                // in-turn tool progress and makes context usage collapse.
+                const merged = dedupeHistoryById([...messages, ...turnMessagesFromAgent(activeAgent)]);
+                messages.splice(0, messages.length, ...merged);
+                activeAgent.messages.splice(0, activeAgent.messages.length, ...merged);
+                activeAgent.priorMessageCount = merged.length;
+                activeAgent.turnMessages = [];
+                activeAgent.streamSegments = [];
+                activeAgent.responseCommittedLength = 0;
+                activeAgent.thinkingCommittedLength = 0;
+                activeAgent.thinkingArtifactsCommitted = 0;
+                lastSentLength = 0;
+                lastThinkingLength = 0;
+                lastUsage = null;
                 activeAgent.actor.send({ type: 'USER_INPUT', message: ctxSnap.currentInput });
                 publishSessionActivity(sessionId, { cwd: turnCtx.cwd, state: 'working', phase: 'agent', detail: 'Resuming after compaction', canCancel: true });
                 return;
