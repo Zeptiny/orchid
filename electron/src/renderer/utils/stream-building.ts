@@ -402,14 +402,14 @@ function walkMessagesToItems(
   let compactedBuffer: Message[] = [];
 
   const keyFor = (msg: Message, kind: string, idx: number) =>
-    msg.id && msg.id.length > 0 ? msg.id : `${keyPrefix}-${kind}-${idx}`;
+    msg.id && msg.id.length > 0 ? `${keyPrefix}-${kind}-${msg.id}-${idx}` : `${keyPrefix}-${kind}-${idx}`;
 
   const pushTool = (block: ToolBlock) => {
     if (emittedToolIds.has(block.id)) return;
     emittedToolIds.add(block.id);
     items.push({
       kind: 'tool',
-      key: block.id || `${keyPrefix}-tool-${emittedToolIds.size}`,
+      key: block.id ? `${keyPrefix}-tool-${block.id}-${emittedToolIds.size}` : `${keyPrefix}-tool-${emittedToolIds.size}`,
       block,
     });
   };
@@ -428,7 +428,7 @@ function walkMessagesToItems(
   const flushCompactedBuffer = () => {
     if (compactedBuffer.length === 0) return;
     const firstId = compactedBuffer[0]?.id || `${keyPrefix}-compacted-${msgIdx}`;
-    const stubKey = `compacted-${keyPrefix}-${firstId}`;
+    const stubKey = `compacted-${keyPrefix}-${msgIdx}-${firstId}`;
     const isExpanded = expandedCompactedKeys?.has(stubKey) ?? false;
     if (isExpanded) {
       // Expand to full fidelity — render each buffered message with normal logic
@@ -603,7 +603,7 @@ export function buildLiveTailItems(opts: {
   const pushMessage = (msg: Message, isStreaming: boolean) => {
     items.push({
       kind: 'message',
-      key: isStreaming ? (msg.id || 'streaming') : msg.id,
+      key: isStreaming ? (msg.id ? `live-${msg.id}-streaming` : 'streaming') : `live-${msg.id}-${items.length}`,
       message: msg,
       isStreaming,
     });
