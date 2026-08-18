@@ -31,6 +31,7 @@ export interface InsertContextSnapshotInput {
   readonly toolUseTokens: number;
   readonly userTokens: number;
   readonly assistantTokens: number;
+  readonly summaryTokens?: number;
 }
 
 type ContextSnapshotRow = {
@@ -49,6 +50,7 @@ type ContextSnapshotRow = {
   tool_use_tokens: number;
   user_tokens: number;
   assistant_tokens: number;
+  summary_tokens: number;
 };
 
 function rowToRecord(row: ContextSnapshotRow): ContextSnapshotRecord {
@@ -68,6 +70,7 @@ function rowToRecord(row: ContextSnapshotRow): ContextSnapshotRecord {
     toolUseTokens: row.tool_use_tokens,
     userTokens: row.user_tokens,
     assistantTokens: row.assistant_tokens,
+    summaryTokens: row.summary_tokens ?? 0,
   };
 }
 
@@ -97,8 +100,8 @@ export class ContextSnapshotStore {
       INSERT INTO context_snapshots (
         snapshot_id, session_id, chain_id, turn_id, provider_attempt_id,
         agent_scope, captured_at, input_tokens, output_tokens, used_tokens,
-        system_tokens, tools_tokens, tool_use_tokens, user_tokens, assistant_tokens
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        system_tokens, tools_tokens, tool_use_tokens, user_tokens, assistant_tokens, summary_tokens
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       snapshotId,
       input.sessionId,
@@ -115,6 +118,7 @@ export class ContextSnapshotStore {
       input.toolUseTokens,
       input.userTokens,
       input.assistantTokens,
+      input.summaryTokens ?? 0,
     );
     return snapshotId;
   }

@@ -165,16 +165,12 @@ export function buildCompactionApply(input: ApplyInput): ApplyResult {
   const isEmptyRange = start >= end;
   const hasSummaryText = typeof summaryText === 'string' && summaryText.trim().length > 0;
 
-  // Validate: if non-empty range, ensure not already flagged — caller can pre-validate,
-  // but we surface a descriptive throw rather than silently double-flagging.
+  // Already-flagged validation is asymmetric: reclaim overlap is expected (mechanical
+  // flags may already be excluded) and is tolerated, while summary compaction
+  // requires the whole range to be unflagged. Only the summary path throws.
   if (!isEmptyRange) {
     const { valid, alreadyFlaggedIds } = validateCompactableRangeNotFlagged(messages, cutResult);
     if (!valid && hasSummaryText) {
-      // For reclaim-only we tolerate already-flagged ids overlapping the range,
-      // because reclaim flags are subsets. But for summary compaction the whole
-      // range should be unflagged; surface error.
-      // Allow callers to bypass by not passing summaryText; for now we only warn for reclaim.
-      // Throw for summary case so tests can assert crash-safety precondition.
       throw new CompactionApplyError(
         `compactable range already flagged: ${alreadyFlaggedIds.join(', ')}`,
       );
@@ -256,21 +252,11 @@ export function buildCompactionApply(input: ApplyInput): ApplyResult {
   const updatedChains: Chain[] = chains.map((chain) => {
     let changed = false;
     const newMessages = chain.messages.map((m) => {
+      if (!flaggedSet.has(m.id) || m.excludeFromModel) return m;
       const updated = idToUpdated.get(m.id);
-      if (updated && updated !== m) {
-        // Either flagged or same content but different reference due to excludeFromModel change
-        // Compare excludeFromModel flag
-        if (updated.excludeFromModel !== m.excludeFromModel) {
-          changed = true;
-          return updated;
-        }
-        // Also propagate if original was within flagged range but we flagged via id; updated has flag
-        if (flaggedSet.has(m.id) && !m.excludeFromModel) {
-          changed = true;
-          return updated;
-        }
-      }
-      return m;
+      if (!updated) return m;
+      changed = true;
+      return updated;
     });
     if (!changed) {
       // Return clone with shallow copy of messages to guarantee not-mutated invariant
@@ -452,7 +438,7 @@ export interface BetweenTurnsPersistOptions {
  * Stub-friendly: when no DB is available, invokes onPersist or delegates to
  * sessionManager atomicWriter; the pure build already produced the new chains.
  */
-export async function persistCompactionBetweenTurns(
+export async function persistCompactionThroughWriter(
   sessionId: string,
   applyResult: ApplyResult,
   opts: BetweenTurnsPersistOptions = {},
@@ -482,6 +468,9 @@ export async function persistCompactionBetweenTurns(
     flaggedCount: applyResult.flaggedIds.length,
   };
 }
+
+/** @deprecated Use persistCompactionThroughWriter — kept for backward compat with tests. */
+export const persistCompactionBetweenTurns = persistCompactionThroughWriter;
 
 /**
  * Mid-turn (active-chain) persistence — rides the existing checkpointActiveTurn debounce.

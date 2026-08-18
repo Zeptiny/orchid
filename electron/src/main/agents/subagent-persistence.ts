@@ -56,8 +56,6 @@ export class SubagentPersistence {
   private readonly records = new Map<string, PersistenceState>();
   private readonly summariesBySession = new Map<string, string[]>();
   private readonly trackedSessionsSet = new Set<string>();
-  /** Compaction checkpoints are tracked separately from summary eviction (U9). */
-  private readonly compactionRevisions = new Map<string, number>();
   private timelineGeneration = 0;
 
   constructor(private readonly getTerminalRetention: () => number) {}
@@ -96,14 +94,13 @@ export class SubagentPersistence {
     const rev = typeof revision === 'number' ? revision : this.markDirty(id);
     if (rev !== null) {
       state.lastCompactionRevision = rev;
-      this.compactionRevisions.set(id, rev);
     }
     return rev;
   }
 
   /** Last compaction revision for a record, if any (separate from summary). */
   getLastCompactionRevision(id: string): number | null {
-    return this.compactionRevisions.get(id) ?? this.records.get(id)?.lastCompactionRevision ?? null;
+    return this.records.get(id)?.lastCompactionRevision ?? null;
   }
 
   /** Whether a record has a compaction checkpoint pending. */
@@ -123,9 +120,7 @@ export class SubagentPersistence {
     const state = this.require(id);
     state.durableEligible = true;
     state.summary = false;
-    // Compaction revision resets on follow-up — the new run starts fresh but
-    // retains the prior compaction's dirty state for persistence.
-    // Do not clear compactionRevisions; the resumed chain already carries compacted flags.
+    // The follow-up keeps the prior compaction revision: the resumed chain already carries compacted flags, so checkpoint must not treat compaction as new work.
     this.untrackSummary(state.sessionId, id);
     this.markDirty(id);
   }
@@ -143,7 +138,6 @@ export class SubagentPersistence {
       summary: false,
       lastCompactionRevision: null,
     });
-    this.compactionRevisions.delete(id);
   }
 
   isSummary(id: string): boolean {
@@ -230,10 +224,6 @@ export class SubagentPersistence {
     }
     this.summariesBySession.delete(sessionId);
     this.trackedSessionsSet.delete(sessionId);
-    for (const id of [...this.compactionRevisions.keys()]) {
-      const st = this.records.get(id);
-      if (!st || st.sessionId === sessionId) this.compactionRevisions.delete(id);
-    }
   }
 
   remove(id: string): void {
@@ -241,7 +231,6 @@ export class SubagentPersistence {
     if (!state) return;
     this.untrackSummary(state.sessionId, id);
     this.records.delete(id);
-    this.compactionRevisions.delete(id);
   }
 
   trackedSessions(): string[] {

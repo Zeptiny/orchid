@@ -18,6 +18,7 @@
 
 import type { Message } from '../../../shared/types/message';
 import { MessageType, MessageRole } from '../../../shared/types/message';
+import { estimateMessageChars } from './message-chars';
 
 // ── Public types ────────────────────────────────────────────────────────────
 
@@ -301,16 +302,7 @@ function adjustCutToSafeBoundary(
 
 function defaultEstimateTokens(messages: readonly Message[]): number {
   let chars = 0;
-  for (const m of messages) {
-    if (m.content) chars += m.content.length;
-    if (m.thinking) chars += m.thinking.length;
-    if (m.tool_calls) chars += JSON.stringify(m.tool_calls).length;
-    if (m.tool_call_id) chars += m.tool_call_id.length;
-    if (m.name) chars += m.name.length;
-    if (m.tool_result) chars += JSON.stringify(m.tool_result).length;
-    // compacted marker small
-    if (hasCompactedMarker(m)) chars += JSON.stringify((m as unknown as { compacted: unknown }).compacted).length;
-  }
+  for (const m of messages) chars += estimateMessageChars(m);
   // Rough 4 chars per token, at least 1 per message
   return Math.max(messages.length, Math.ceil(chars / 4));
 }
@@ -414,15 +406,7 @@ export function selectCut(
     prefixChars[0] = 0;
     for (let i = 0; i < n; i += 1) {
       const m = messages[i]!;
-      let c = 0;
-      if (m.content) c += m.content.length;
-      if (m.thinking) c += m.thinking.length;
-      if (m.tool_calls) c += JSON.stringify(m.tool_calls).length;
-      if (m.tool_call_id) c += m.tool_call_id.length;
-      if (m.name) c += m.name.length;
-      if (m.tool_result) c += JSON.stringify(m.tool_result).length;
-      if (hasCompactedMarker(m)) c += JSON.stringify((m as unknown as { compacted: unknown }).compacted).length;
-      prefixChars[i + 1] = prefixChars[i]! + c;
+      prefixChars[i + 1] = prefixChars[i]! + estimateMessageChars(m);
     }
     totalChars = prefixChars[n]!;
   }
@@ -437,21 +421,11 @@ export function selectCut(
     const adjustedCut = adjustCutToSafeBoundary(cutCandidate, completedIntervals, openGroupStart, n);
     cutCandidate = adjustedCut;
 
-    // After adjustment, recompute preservedCount (may have grown to include whole chain before tool group)
-    // preservedCount is number of real chains whose start is >= cutCandidate (or chain interval overlapping preserve)
-    // Simpler: count real chains where chain.start >= cutCandidate or chain.end > cutCandidate (partially overlapping due to adjust)
     let preservedCount: number;
     if (cutCandidate <= 0) {
       preservedCount = realChains.length;
     } else {
-      preservedCount = realChains.filter((c) => c.end > cutCandidate || c.start >= cutCandidate).length;
-      // More precise: chain is preserved if any of its messages are in [cutCandidate, n)
-      // That's c.end > cutCandidate && c.start < n (always). So filter c.end > cutCandidate
-      // But if adjust moved cut earlier than chain start, that chain still counts.
-      // So count chains with c.end > cutCandidate
       preservedCount = realChains.filter((c) => c.end > cutCandidate).length;
-      // However if keep was 0 and open group inside a chain, that chain counts even though keep=0
-      // So this derived count may differ from keep; expose actual.
     }
 
     // Budget check: estimate preserve window tokens
@@ -475,30 +449,8 @@ export function selectCut(
       }
     }
 
-    // Found a keep that fits (or no budget)
-    // Compute compactableRange: contiguous [0, cutCandidate)
-    // But if cutCandidate is inside summary head? Summary head at 0..summaryEnd, and cutCandidate may be after summary head or at 0.
-    // Compactable is everything before cut, but we should ensure summary head is not considered compactable again?
-    // Replayable history after compaction excludes old compacted range; summary head is at 0 and is not excludeFromModel.
-    // For next compaction, compactable should be [0,cutCandidate) but if messages[0] is summary head, should we exclude it from compactable?
-    // The plan says: preserve window measured excluding summary head; compactable = all replayable history before cut.
-    // So summary head is part of history before cut if cut > 0. But should it be re-compacted?
-    // If we include it, compactableRange would include summary head, leading to summary-of-summary.
-    // To avoid that, we could exclude summary head from compactable on next pass by ensuring compactableRange starts after summary head if summary present?
-    // However plan says "The summary sits before the preserved chains; if it counted toward the window it would shrink the preserve count" — implies summary head is before preserved window, and compactable is old history before summary head? Actually after first compaction, old history is flagged excluded, so replayable history is [summaryHead, preservedChains, open]. The old compacted range is not in replayable, so not considered.
-    // For next compaction, compactable should be [summaryHeadEnd, cut) or [0,cut) including summary? The summary head is replayable and could be re-summarized, but risk is summary-of-summary collapse.
-    // The spec for U3 says "Exclude summary head (via U2 marker compacted) from preserve count." No explicit exclusion from compactable, but context-snapshot treats summary head as its own bucket.
-    // For cut selection, we should treat compactableRange as [0,cut) as contiguous, including summary head if cut beyond it. That's acceptable; U7 persistence will handle summary re-creation? But to mitigate collapse, later logic may avoid re-summarizing summary head? For U3, we just return cut as computed; caller can decide.
-    // For test "summary head not counted", we need to ensure keep count excludes summary head.
-    // So compactableRange remains [0,cut) in the single-summary case.
-    // To avoid duplicate compaction input when multiple compactions occur, the
-    // already-compacted prefix (hidden / excludeFromModel) must not be re-fed
-    // to the next summarizer — it would duplicate the same user messages that
-    // are already represented inside the prior summary. The previous summary
-    // head itself is *not* skipped here: when the window contains only the
-    // summary, re-compacting it alone (summary-of-summary) is expected, and
-    // when it sits before preserved chains it should be included once so the
-    // next handoff can merge old summary + newly-eligible chains.
+    // compactableRange is [0, cutCandidate) after skipping the already-excluded prefix;
+    // the summary head stays in the range so it can be re-summarized with new chains.
     let compactableStart = 0;
     while (
       compactableStart < cutCandidate &&

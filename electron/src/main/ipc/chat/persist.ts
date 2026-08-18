@@ -15,6 +15,7 @@ import {
 import { activeAgents, pendingCheckpoints, type ActiveAgent } from './state';
 import { buildSessionUpdatedEvent, sendSessionEvent, webContentsForWindowId } from './events';
 import { textSegmentIdAtOffset } from './snapshot';
+import { saveSession } from '../../session/storage';
 
 // ── Compaction persistence (U7) ─────────────────────────────────────────────
 // Re-export pure build for convenience; integration helpers below ride the
@@ -137,10 +138,11 @@ function checkpointMessagesFromAgent(agent: ActiveAgent, context: AgentContext):
 
 const CHECKPOINT_DEBOUNCE_MS = 300;
 
-/** Persist one bounded main-turn checkpoint, debounced per session. */
-export function checkpointActiveTurn(agent: ActiveAgent, context: AgentContext): void {
-  const sessionId = agent.sessionId;
-  const messages = checkpointMessagesFromAgent(agent, context);
+function scheduleCheckpoint(
+  sessionId: string,
+  messages: Message[],
+  guard?: (active: ActiveAgent) => boolean,
+): void {
   const existing = pendingCheckpoints.get(sessionId);
   if (existing) {
     existing.messages = messages;
@@ -151,6 +153,7 @@ export function checkpointActiveTurn(agent: ActiveAgent, context: AgentContext):
     pendingCheckpoints.delete(sessionId);
     const active = activeAgents.get(sessionId);
     if (!active || active.finalized) return;
+    if (guard && !guard(active)) return;
     try {
       const updated = getSessionManager().updateActiveChainMessages(
         entry?.messages ?? messages,
@@ -170,6 +173,13 @@ export function checkpointActiveTurn(agent: ActiveAgent, context: AgentContext):
     }
   }, CHECKPOINT_DEBOUNCE_MS);
   pendingCheckpoints.set(sessionId, { timer, messages });
+}
+
+/** Persist one bounded main-turn checkpoint, debounced per session. */
+export function checkpointActiveTurn(agent: ActiveAgent, context: AgentContext): void {
+  const sessionId = agent.sessionId;
+  const messages = checkpointMessagesFromAgent(agent, context);
+  scheduleCheckpoint(sessionId, messages);
 }
 
 /** Cancel any pending debounced checkpoint for a session. */
@@ -256,10 +266,6 @@ export function persistCompactionBetweenTurns(
     // for storage ordinal consistency we keep the array as-is: saveSession will
     // persist ordinals in array order, so replay order matches updatedMessages.
     const updatedAt = new Date().toISOString();
-    // Lazy import to avoid circular during typecheck when apply.ts imports persist
-    // helpers — saveSession is side-effect free for type paths.
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const { saveSession } = require('../../session/storage') as typeof import('../../session/storage');
     const nextSession = {
       ...existing,
       chains: applyResult.updatedChains as typeof existing.chains,
@@ -346,45 +352,8 @@ export function checkpointCompactionMidTurn(
   // the durable chains, so here we only need to mirror the active chain's new
   // content for crash recovery.
   agent.turnMessages = [...checkpointMessages.slice(agent.priorMessageCount)];
-  // If checkpointMessages is the full active-chain snapshot, replace directly:
-  // the active chain row is exactly checkpointMessages.
-  // For the general mid-turn helper we replace turnMessages with the provided
-  // slice that corresponds to the active chain's messages after compaction.
-  // The pendingCheckpoints debounce will persist it; callers may also flush
-  // immediately via updateActiveChainMessages for deterministic tests.
   const sessionId = agent.sessionId;
-  const existing = pendingCheckpoints.get(sessionId);
-  if (existing) {
-    existing.messages = [...checkpointMessages];
-    return;
-  }
-  // Enqueue a debounced checkpoint with the compacted payload. Reuse the same
-  // timer machinery as checkpointActiveTurn but with a compacted origin.
-  const timer = setTimeout(() => {
-    const entry = pendingCheckpoints.get(sessionId);
-    pendingCheckpoints.delete(sessionId);
-    const active = activeAgents.get(sessionId);
-    if (!active || active.finalized) return;
-    if (active !== agent) return;
-    try {
-      const updated = getSessionManager().updateActiveChainMessages(
-        entry?.messages ?? [...checkpointMessages],
-        sessionId,
-      );
-      const update = updated ? buildSessionUpdatedEvent(updated) : null;
-      if (update) {
-        sendSessionEvent(
-          webContentsForWindowId(active.windowId),
-          sessionId,
-          IPC_CHANNELS.SESSION_UPDATED,
-          update,
-        );
-      }
-    } catch (err) {
-      console.debug('Failed to checkpoint compaction mid-turn (non-fatal):', err);
-    }
-  }, CHECKPOINT_DEBOUNCE_MS);
-  pendingCheckpoints.set(sessionId, { timer, messages: [...checkpointMessages] });
+  scheduleCheckpoint(sessionId, [...checkpointMessages], (active) => active === agent);
 }
 
 /** Flush any pending compaction checkpoint immediately (for tests / turn boundary). */

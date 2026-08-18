@@ -15,7 +15,7 @@ import { MessageRole, MessageType } from '../../../../shared/types/message';
 import { reconcileOrphanToolResults } from '../../../../shared/types/chain';
 import { toApiMessages } from '../../history';
 import type { Manifest, SelectiveOp } from './manifest';
-import { buildManifest } from './manifest';
+import { buildManifest, parseSelectiveOps } from './manifest';
 import { validateSelectiveOps } from './validate';
 import { AgentType } from '../../../../shared/types/agent';
 import type { Agent } from '../../../../shared/types/agent';
@@ -83,10 +83,7 @@ export function createLlmSelectiveCaller(params: {
     const start = text.indexOf('[');
     const end = text.lastIndexOf(']');
     const jsonSlice = start >= 0 && end > start ? text.slice(start, end + 1) : text;
-    const parsed = JSON.parse(jsonSlice);
-    if (!Array.isArray(parsed)) throw new Error('selective LLM returned non-array');
-    const { parseSelectiveOps } = await import('./manifest.js');
-    return (parseSelectiveOps as (s: string) => SelectiveOp[])(JSON.stringify(parsed));
+    return parseSelectiveOps(jsonSlice);
   };
 }
 
@@ -338,10 +335,9 @@ export function passesReplayInvariant(messages: readonly Message[]): { ok: boole
     for (const m of reconciled) {
       if (m.role === MessageRole.TOOL && m.tool_call_id) resultIds.add(m.tool_call_id);
     }
-    // If there are callIds without matching resultIds, toApiMessages would have dropped the call's tool_calls
-    // We can detect by checking if any assistant message still has tool_calls that were pruned
-    // For invariant, we just ensure no tool result without call remains (reconciled already dropped those)
-    // So we consider ok if we reach here
+    for (const id of callIds) {
+      if (!resultIds.has(id)) return { ok: false, reason: `tool_call ${id} missing matching tool result` };
+    }
     void api;
     return { ok: true };
   } catch (e) {
@@ -502,7 +498,7 @@ export async function runCompactionByMode(input: {
       // No selective caller provided → fallback to simple
       const fb = input.simpleFallback ? await input.simpleFallback() : null;
       const text = fb?.text ?? null;
-      if (text) return { kind: 'fallback', reason: 'no selectiveCaller', fallbackText: text, attempts: 0, summaryMessage: makeSummaryMessage(text, 'simple'), flaggedIds: [], replayMessages: [] } as SelectiveCompactionFallback;
+      if (text) return { kind: 'fallback', reason: 'no selectiveCaller', fallbackText: text, attempts: 0, summaryMessage: makeSummaryMessage(text, 'simple') } as SelectiveCompactionFallback;
       return { kind: 'fallback', reason: 'no selectiveCaller and no simple fallback', fallbackText: null, attempts: 0 };
     }
     return runSelectiveCompaction({

@@ -356,5 +356,6 @@ export interface ContextResult {
     readonly toolUseTokens: number;
     readonly userTokens: number;
     readonly assistantTokens: number;
+    readonly summaryTokens: number;
   };
 }

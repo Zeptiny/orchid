@@ -36,6 +36,11 @@ import { getProviderRuntime } from '../providers';
 import { getProviderAccountingStore } from '../providers/accounting/store';
 import { getSubagentAttributionStore } from '../providers/accounting/subagent-attribution-store';
 import type { ProviderAttemptAccountingContext } from '../providers/accounting/middleware';
+import type { Config } from '../config/schema';
+import type { Chain } from '../../shared/types/chain';
+import type { ApplyResult } from '../llm/compaction/apply';
+import type { TriggerState } from '../llm/compaction/trigger';
+import { estimateMessageChars } from '../llm/compaction/message-chars';
 
 /** Subagent mid-run compaction (U9): partial-report helper for R17. */
 export interface SubagentPartialReportInput {
@@ -104,19 +109,19 @@ export async function resolveSubagentContextTokens(
  */
 export async function tryCompactSubagentHistory(params: {
   readonly messages: readonly Message[];
-  readonly chains: readonly import('../../shared/types/chain').Chain[];
+  readonly chains: readonly Chain[];
   readonly selection: ModelSelection | null;
-  readonly config: import('../config/schema').Config;
+  readonly config: Config;
   readonly sessionId: string;
   readonly subagentId: string;
   readonly chainId: string | null;
   readonly turnId: string | null;
   readonly inputTokens: number;
   readonly contextTokens: number;
-  readonly triggerState?: import('../llm/compaction/trigger').TriggerState;
-}): Promise<import('../llm/compaction/apply').ApplyResult | null> {
+  readonly triggerState?: TriggerState;
+}): Promise<ApplyResult | null> {
   const { messages, chains, selection, config, sessionId, subagentId, chainId, turnId, inputTokens, contextTokens } = params;
-  const subagentsScope = (config as unknown as { compaction?: import('../../shared/types/ipc-boundary').CompactionConfig }).compaction?.subagents;
+  const subagentsScope = config.compaction?.subagents;
   if (!subagentsScope) return null;
   if (!Number.isFinite(contextTokens) || contextTokens <= 0) return null;
   if (!Number.isFinite(inputTokens) || inputTokens < 0) return null;
@@ -128,18 +133,8 @@ export async function tryCompactSubagentHistory(params: {
   const { buildCompactionApply } = await import('../llm/compaction/apply.js');
   const { getProviderAccountingStore } = await import('../providers/accounting/store.js');
 
-  function estimateMessageCharsSub(msg: Message): number {
-    let n = 0;
-    if (msg.content) n += msg.content.length;
-    if (msg.thinking) n += msg.thinking.length;
-    if (msg.tool_calls) n += JSON.stringify(msg.tool_calls).length;
-    if (msg.tool_result) n += JSON.stringify(msg.tool_result).length;
-    if (msg.tool_call_id) n += msg.tool_call_id.length;
-    if (msg.name) n += msg.name.length;
-    return n === 0 ? 1 : n;
-  }
   let totalCharsAll = 0;
-  for (const m of messages as readonly Message[]) totalCharsAll += estimateMessageCharsSub(m);
+  for (const m of messages) totalCharsAll += estimateMessageChars(m);
   if (totalCharsAll === 0) totalCharsAll = 1;
   const tokensPerCharSub = (() => {
     if (!Number.isFinite(inputTokens) || inputTokens <= 0) return undefined;
@@ -152,7 +147,7 @@ export async function tryCompactSubagentHistory(params: {
   try {
     const calibratedEstimatorSub = (slice: readonly Message[]): number => {
       let chars = 0;
-      for (const m of slice) chars += estimateMessageCharsSub(m);
+      for (const m of slice) chars += estimateMessageChars(m);
       return Math.max(slice.length, Math.ceil(chars * tokensPerCharSub));
     };
     cut = selectCut(messages as Message[], {
@@ -168,9 +163,9 @@ export async function tryCompactSubagentHistory(params: {
   for (let i = compactableRange.start; i < compactableRange.end; i += 1) {
     const m = (messages as readonly Message[])[i];
     if (!m) continue;
-    sliceChars += estimateMessageCharsSub(m);
+    sliceChars += estimateMessageChars(m);
   }
-  let compactableTokens = Math.ceil(sliceChars * tokensPerCharSub);
+  const compactableTokens = Math.ceil(sliceChars * tokensPerCharSub);
   if (compactableTokens <= 0) return null;
 
   // Mechanical reclaim pass before summarizer (v1 single rule, R25)
@@ -295,13 +290,18 @@ export async function tryCompactSubagentHistory(params: {
       const mergedFlagged = [...new Set([...(selectiveResult.flaggedIds ?? []), ...flaggedIds])];
       const updatedMessages = [...selectiveResult.replayMessages] as Message[];
       const summaryMessage = (selectiveResult.summaryMessage as unknown as Message | null) ?? null;
-      let updatedChains: import('../../shared/types/chain').Chain[];
+      const flaggedSet = new Set(mergedFlagged);
+      let updatedChains: Chain[];
       if (chains.length === 0) {
         updatedChains = [];
       } else if (chains.length === 1) {
         updatedChains = [{ ...chains[0]!, messages: [...updatedMessages] }];
       } else {
-        updatedChains = chains.map((c, idx) => (idx === 0 ? { ...c, messages: [...updatedMessages] } : { ...c, messages: [...c.messages] }));
+        updatedChains = chains.map((c, idx) =>
+          idx === 0
+            ? { ...c, messages: [...updatedMessages] }
+            : { ...c, messages: c.messages.map((m) => (flaggedSet.has(m.id) ? { ...m, excludeFromModel: true } : m)) },
+        );
       }
       const compactedMarker = (summaryMessage as unknown as { compacted?: import('../../shared/types/message').CompactedMarker | null })?.compacted ?? null;
       const didApply = mergedFlagged.length > 0 || summaryMessage !== null || updatedMessages.length !== messages.length;
@@ -332,6 +332,16 @@ export async function tryCompactSubagentHistory(params: {
           sessionId,
         });
         if (!applyResult.didApply) return null;
+        const userIds = new Set(messages.filter((m) => m.role === 'user').map((m) => m.id));
+        const filteredFlagged = applyResult.flaggedIds.filter((id) => !userIds.has(id));
+        if (filteredFlagged.length !== applyResult.flaggedIds.length) {
+          const filteredMessages = applyResult.updatedMessages.map((m) => (userIds.has(m.id) && m.excludeFromModel ? { ...m, excludeFromModel: false } : m));
+          const filteredChains = applyResult.updatedChains.map((c) => ({
+            ...c,
+            messages: c.messages.map((m) => (userIds.has(m.id) && m.excludeFromModel ? { ...m, excludeFromModel: false } : m)),
+          }));
+          return { ...applyResult, flaggedIds: filteredFlagged, updatedMessages: filteredMessages, updatedChains: filteredChains };
+        }
         return applyResult;
       } catch {
         return null;

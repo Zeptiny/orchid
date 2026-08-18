@@ -233,16 +233,7 @@ export function validateSelectiveOps(
       if (sorted.length !== op.ids.length || orderChanged) {
         opsAfterDedup.push({ type: 'summarize', ids: sorted, text: op.text });
       } else {
-        // keep original sorted if identical
-        if (sorted.length !== unique.length || sorted.some((v, i) => v !== unique[i])) {
-          opsAfterDedup.push({ type: 'summarize', ids: sorted, text: op.text });
-        } else {
-          opsAfterDedup.push(op.type === 'summarize' && sorted !== (op.ids as unknown) ? { type: 'summarize', ids: sorted, text: op.text } : op);
-          // Simplify: ensure corrected has sorted
-          if (orderChanged) {
-            opsAfterDedup[opsAfterDedup.length - 1] = { type: 'summarize', ids: sorted, text: op.text };
-          }
-        }
+        opsAfterDedup.push(op);
       }
     }
   }
@@ -284,12 +275,26 @@ export function validateSelectiveOps(
   const opsSorted = needsSort ? sortedOps : opsAfterDedup;
 
   // ── Step F: summarized spans contiguous ────────────────────────────────────
+  const coveredPositions = new Set<number>();
+  for (const op of opsSorted) {
+    const ids = op.type === 'summarize' ? (op.ids as readonly string[]) : [op.id];
+    for (const id of ids) {
+      const pos = manifestPos.get(id);
+      if (pos !== undefined) coveredPositions.add(pos);
+    }
+  }
   for (const op of opsSorted) {
     if (op.type !== 'summarize') continue;
     const ids = op.ids as readonly string[];
     const positions = ids.map((id) => manifestPos.get(id) ?? -1).sort((a, b) => a - b);
     for (let i = 1; i < positions.length; i += 1) {
-      if (positions[i] !== positions[i - 1]! + 1) {
+      let gapViolates = false;
+      for (let p = positions[i - 1]! + 1; p < positions[i]!; p += 1) {
+        if (coveredPositions.has(p)) { gapViolates = true; break; }
+        const entry = manifest.entries[p];
+        if (!entry || entry.type !== MessageType.THINKING) { gapViolates = true; break; }
+      }
+      if (gapViolates) {
         errors.push(
           `summarize span not contiguous: ids ${ids.join(',')} map to positions ${positions.join(',')} (gap at ${positions[i - 1]}→${positions[i]})`,
         );

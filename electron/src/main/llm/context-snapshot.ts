@@ -1,6 +1,7 @@
 import type { ModelMessage, Tool } from 'ai';
 import { zodToJsonSchema } from 'zod-to-json-schema';
 import type { ContextSnapshot } from '../../shared/types/message';
+import { COMPACTION_MODES } from '../../shared/types/message';
 
 interface ContextSnapshotInput {
   systemPrompt: string;
@@ -60,7 +61,7 @@ function isCompactedMarker(value: unknown): boolean {
     raw.rangeStart.length > 0 &&
     typeof raw.rangeEnd === 'string' &&
     raw.rangeEnd.length > 0 &&
-    (raw.mode === 'simple' || raw.mode === 'selective')
+    (COMPACTION_MODES as readonly string[]).includes(raw.mode as string)
   );
 }
 

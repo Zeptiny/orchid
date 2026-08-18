@@ -82,7 +82,10 @@ export function isContextLengthExceededError(error: unknown): boolean {
       if (typeof maybe.title === 'string') parts.push(maybe.title);
       if (typeof maybe.error === 'string') parts.push(maybe.error);
       if (typeof maybe.code === 'string') parts.push(maybe.code);
-      if (parts.length > 0) return parts.join(' ');
+      if (parts.length > 0) {
+        try { parts.push(JSON.stringify(error)); } catch { parts.push(String(error)); }
+        return parts.join(' ');
+      }
       try {
         return JSON.stringify(error);
       } catch {

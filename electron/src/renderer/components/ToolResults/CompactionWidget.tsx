@@ -111,12 +111,8 @@ function CompactionSummaryCard({ message }: { message: Message }) {
       const t = (message.usage.prompt_tokens ?? 0) + (message.usage.completion_tokens ?? 0);
       if (t > 0) return `~${t.toLocaleString()} tokens`;
     }
-    if (summarizedCount != null && summarizedCount > 0) {
-      const est = Math.round((content.length / 4));
-      return `~${est.toLocaleString()} tokens`;
-    }
     return null;
-  }, [message.usage, summarizedCount, content.length]);
+  }, [message.usage]);
 
   const body = useMemo(() => {
     if (!expanded && !hasExpanded) return null;

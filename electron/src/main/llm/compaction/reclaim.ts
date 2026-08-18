@@ -141,7 +141,7 @@ export function mechanicalReclaim(
 
   // Build tool_call_id -> { name, args } map from entire history (so a result
   // can find its call even if the call is outside the compactable slice).
-  const callMap = new Map<string, { name: string; args: string }>();
+  const callMap = new Map<string, { name: string; args: string | undefined }>();
   for (const msg of messages) {
     if (msg.type === MessageType.TOOL_CALL && msg.tool_calls) {
       for (const tc of msg.tool_calls as readonly ToolCall[]) {
@@ -161,8 +161,8 @@ export function mechanicalReclaim(
       msg.name &&
       !callMap.has(msg.tool_call_id)
     ) {
-      // No args available on that path; leave args as '' (caller's args string unknown)
-      callMap.set(msg.tool_call_id, { name: msg.name, args: '' });
+      // No args available on that path — leave args undefined so dedup is skipped (avoid false merges).
+      callMap.set(msg.tool_call_id, { name: msg.name, args: undefined });
     }
   }
 
@@ -179,10 +179,12 @@ export function mechanicalReclaim(
     if (!msg.tool_call_id) continue;
 
     const entry = callMap.get(msg.tool_call_id);
+    // Skip dedup when args are unavailable — distinct calls with same output would otherwise share key.
+    if (!entry || entry.args === undefined) continue;
     const toolName = msg.name ?? entry?.name ?? '';
     // Without a tool name we cannot meaningfully group (avoid false merges)
     // but still allow empty-name grouping if all empties match exactly.
-    const rawArgs = entry?.args ?? '';
+    const rawArgs = entry.args;
     const normalizedArgs = normalizeArgs(rawArgs);
 
     // Output basis: content + canonical tool_result payload

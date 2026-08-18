@@ -749,10 +749,12 @@
   }
   .orchid-compaction-reclaim {
     @apply self-start w-full max-w-full;
+
     animation: orchid-rise 180ms ease-out;
   }
   .orchid-compaction-stub {
     --compaction-mix: var(--context-summary);
+
     border-style: dashed;
     background: color-mix(in srgb, var(--compaction-mix) 6%, transparent);
     border-color: color-mix(in srgb, var(--compaction-mix) 30%, transparent);

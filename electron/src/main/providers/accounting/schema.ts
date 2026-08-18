@@ -89,7 +89,8 @@ CREATE TABLE IF NOT EXISTS context_snapshots (
   tools_tokens INTEGER NOT NULL DEFAULT 0,
   tool_use_tokens INTEGER NOT NULL DEFAULT 0,
   user_tokens INTEGER NOT NULL DEFAULT 0,
-  assistant_tokens INTEGER NOT NULL DEFAULT 0
+  assistant_tokens INTEGER NOT NULL DEFAULT 0,
+  summary_tokens INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE INDEX IF NOT EXISTS idx_context_snapshots_session ON context_snapshots(session_id, captured_at);
@@ -145,6 +146,9 @@ export function applyAccountingSchemaMigrations(db: SqliteDatabase): void {
     const existingSnapshots = new Set(snapshotColumns.map((c) => c.name));
     if (!existingSnapshots.has('agent_scope')) {
       db.prepare('ALTER TABLE context_snapshots ADD COLUMN agent_scope TEXT').run();
+    }
+    if (!existingSnapshots.has('summary_tokens')) {
+      db.prepare('ALTER TABLE context_snapshots ADD COLUMN summary_tokens INTEGER NOT NULL DEFAULT 0').run();
     }
     // Created here (not in the schema SQL) so it never references the column
     // before the ALTER above exists on legacy databases.

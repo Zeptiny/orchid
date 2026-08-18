@@ -37,7 +37,7 @@ Output — keep task verbatim, keep_range grep sample, summarize analysis:
 [
   {"type":"keep","id":"s1"},
   {"type":"keep_range","id":"s2","startLine":1,"endLine":20},
-  {"type":"summarize","ids":["s3","s4"],"text":"Grep found auth handling in src/auth.ts: handleLogin validates JWT expiry; data needed: token expiry field `exp`."}
+  {"type":"summarize","ids":["s3"],"text":"Grep found auth handling in src/auth.ts: handleLogin validates JWT expiry; data needed: token expiry field `exp`."}
 ]
 
 Think step by step internally before emitting ops — decide which spans are safe to summarize versus must be kept verbatim. Do not output your internal reasoning or <analysis> tags; final output must be ONLY the JSON array.

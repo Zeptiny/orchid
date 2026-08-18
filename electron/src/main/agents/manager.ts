@@ -26,6 +26,7 @@ import type { SubagentRecord as DomainSubagentRecord } from '../../shared/types/
 import type { CompactionTrigger as CompactionTriggerType } from '../llm/compaction/trigger';
 import type { ApplyResult } from '../llm/compaction/apply';
 import { getConfig } from '../config/loader';
+import { estimateMessageChars } from '../llm/compaction/message-chars';
 import {
   SubagentDeltaEventType,
   SubagentStatus,
@@ -1422,6 +1423,7 @@ export class SubagentManager {
     let subagentCompactionTrigger: CompactionTriggerType | null = null;
     let compactionPendingPromise: Promise<ApplyResult | null> | null = null;
     let compactionInitDone = false;
+    let cachedSubagentCfg: any = null;
 
     const ensureCompactionInit = async (): Promise<boolean> => {
       if (compactionInitDone) return subagentContextTokens !== null && subagentCompactionTrigger !== null;
@@ -1433,6 +1435,11 @@ export class SubagentManager {
         if (tokens !== null) {
           const { CompactionTrigger } = await import('../llm/compaction/trigger.js');
           subagentCompactionTrigger = new CompactionTrigger();
+          try {
+            cachedSubagentCfg = getConfig().compaction?.subagents ?? null;
+          } catch {
+            cachedSubagentCfg = null;
+          }
           return true;
         }
       } catch {
@@ -1447,11 +1454,14 @@ export class SubagentManager {
       const ok = await ensureCompactionInit();
       if (!ok || !subagentContextTokens || !subagentCompactionTrigger) return;
       try {
-        let cfg: ReturnType<typeof getConfig>['compaction']['subagents'] | null = null;
-        try {
-          cfg = getConfig().compaction?.subagents ?? null;
-        } catch {
-          cfg = null;
+        let cfg: any | null = cachedSubagentCfg;
+        if (!cfg) {
+          try {
+            cfg = getConfig().compaction?.subagents ?? null;
+            cachedSubagentCfg = cfg;
+          } catch {
+            cfg = null;
+          }
         }
         if (!cfg) return;
         // Branch on compaction mode before delegating: selective and simple both
@@ -1512,21 +1522,34 @@ export class SubagentManager {
       const shouldApply = subagentCompactionTrigger.evaluateApply({
         inputTokens: record.usage?.prompt_tokens ?? 0,
         contextTokens: subagentContextTokens,
-        threshold: (() => {
+        threshold: cachedSubagentCfg?.threshold ?? (() => { try { return getConfig().compaction.subagents.threshold; } catch { return 0.85; } })(),
+        compactableTokens: (() => {
           try {
-            return getConfig().compaction.subagents.threshold;
+            const flagged = applyResult?.flaggedIds ?? [];
+            if (flagged.length === 0) return 0;
+            const byId = new Map((record.chain?.messages ?? []).map((m: Message) => [m.id, m] as const));
+            let flaggedChars = 0;
+            for (const id of flagged) {
+              const m = byId.get(id);
+              if (m) flaggedChars += estimateMessageChars(m as Message);
+            }
+            if (flaggedChars === 0) flaggedChars = flagged.length * 200;
+            let tpc: number | undefined = subagentCompactionTrigger.state.tokensPerChar;
+            if (tpc == null) {
+              const pre = record.usage?.prompt_tokens;
+              if (typeof pre === 'number' && Number.isFinite(pre) && pre > 0) {
+                const totalAll = (record.chain?.messages ?? []).reduce((acc: number, mm: Message) => acc + estimateMessageChars(mm as Message), 0) || 1;
+                const r = pre / totalAll;
+                if (Number.isFinite(r) && r > 0) tpc = Math.max(0.05, Math.min(r, 2));
+              }
+            }
+            if (tpc == null) tpc = 0.25;
+            return Math.ceil(flaggedChars * tpc);
           } catch {
-            return 0.85;
+            return applyResult?.flaggedIds.length ?? 0;
           }
         })(),
-        compactableTokens: applyResult?.flaggedIds.length ?? 0,
-        minCompactableTokens: (() => {
-          try {
-            return getConfig().compaction.subagents.min_compactable_tokens;
-          } catch {
-            return 4000;
-          }
-        })(),
+        minCompactableTokens: cachedSubagentCfg?.min_compactable_tokens ?? (() => { try { return getConfig().compaction.subagents.min_compactable_tokens; } catch { return 4000; } })(),
       });
       if (!applyResult || !shouldApply.shouldApply) {
         subagentCompactionTrigger.consumePending();
@@ -1536,14 +1559,6 @@ export class SubagentManager {
       // Supports both simple and selective: both produce ApplyResult with updatedMessages/replayMessages,
       // flaggedIds, and summaryMessage. Selective materializes via replayMessages; fallback uses simpleFallback text.
       // Persistence remains _setChainMessages + _markRecordDirty + markCompaction and history sync.
-      let cfgForApply: ReturnType<typeof getConfig>['compaction']['subagents'] | null = null;
-      try {
-        cfgForApply = getConfig().compaction?.subagents ?? null;
-      } catch {
-        cfgForApply = null;
-      }
-      const applyMode: string = (cfgForApply as unknown as { mode?: string })?.mode ?? (applyResult.summaryMessage as unknown as { compacted?: { mode?: string } })?.compacted?.mode ?? 'simple';
-      void applyMode;
       const updatedMessages = applyResult.updatedMessages;
       this._setChainMessages(record, [...updatedMessages]);
       try {
@@ -1560,18 +1575,8 @@ export class SubagentManager {
       const preInput = record.usage?.prompt_tokens ?? 0;
       let postCompactionTokens: number | undefined;
       try {
-        const estChars = (msg: Message): number => {
-          let n = 0;
-          if (msg.content) n += msg.content.length;
-          if (msg.thinking) n += msg.thinking.length;
-          if (msg.tool_calls) n += JSON.stringify(msg.tool_calls).length;
-          if (msg.tool_result) n += JSON.stringify(msg.tool_result).length;
-          if (msg.tool_call_id) n += msg.tool_call_id.length;
-          if (msg.name) n += msg.name.length;
-          return n === 0 ? 1 : n;
-        };
         let totalPost = 0;
-        for (const m of updatedMessages) totalPost += estChars(m as Message);
+        for (const m of updatedMessages) totalPost += estimateMessageChars(m as Message);
         if (totalPost === 0) totalPost = 1;
         let tpc: number | undefined = subagentCompactionTrigger.state.tokensPerChar;
         if (tpc == null && Number.isFinite(preInput) && preInput > 0) {
@@ -1582,7 +1587,7 @@ export class SubagentManager {
         if (tpc != null) postCompactionTokens = Math.ceil(totalPost * tpc);
         else {
           let totalAll = 0;
-          for (const m of (record.chain?.messages ?? [])) totalAll += estChars(m as Message);
+          for (const m of (record.chain?.messages ?? [])) totalAll += estimateMessageChars(m as Message);
           if (totalAll > 0 && Number.isFinite(preInput) && preInput > 0) {
             const r2 = preInput / totalAll;
             const tpc2 = Math.max(0.05, Math.min(r2, 2));
@@ -1592,14 +1597,16 @@ export class SubagentManager {
       } catch {}
       subagentCompactionTrigger.onCompactionApplied(preInput, postCompactionTokens);
       // R17: still over limit after compaction -> partial report degradation
-      let cfg: ReturnType<typeof getConfig>['compaction']['subagents'] | null = null;
-      try {
-        cfg = getConfig().compaction.subagents;
-      } catch {
-        cfg = null;
+      let cfg: any | null = cachedSubagentCfg;
+      if (!cfg) {
+        try {
+          cfg = getConfig().compaction.subagents;
+        } catch {
+          cfg = null;
+        }
       }
       const threshold = cfg?.threshold ?? 0.85;
-      const postTokens = record.usage?.prompt_tokens ?? 0;
+      const postTokens = postCompactionTokens ?? record.usage?.prompt_tokens ?? 0;
       const stillOver = subagentContextTokens !== null && Number.isFinite(subagentContextTokens) && postTokens / subagentContextTokens >= threshold * 0.98;
       // If still over and no further compactable range, degrade to partial report
       if (stillOver && applyResult.flaggedIds.length === 0 && !applyResult.summaryMessage) {
@@ -1624,11 +1631,13 @@ export class SubagentManager {
       if (stillOver) {
         try {
           const { selectCut } = await import('../llm/compaction/select.js');
-          let cfg2: ReturnType<typeof getConfig>['compaction']['subagents'] | null = null;
-          try {
-            cfg2 = getConfig().compaction.subagents;
-          } catch {
-            cfg2 = null;
+          let cfg2: any | null = cachedSubagentCfg;
+          if (!cfg2) {
+            try {
+              cfg2 = getConfig().compaction.subagents;
+            } catch {
+              cfg2 = null;
+            }
           }
           const keep = cfg2?.keep_recent_chains ?? 3;
           const cut = selectCut(record.chain?.messages ?? [], { keepRecentChains: keep, budget: { contextTokens: subagentContextTokens ?? 0, threshold: cfg2?.threshold ?? 0.85 } });
@@ -1679,10 +1688,12 @@ export class SubagentManager {
         // U9: subagent mid-run compaction — proactive prepare after usage,
         // apply at idle step boundary (R12, R16). Same trigger engine as U6
         // but with subagents scope config.
-        if (event.type === 'usage' && typeof subagentContextTokens === 'number' && subagentCompactionTrigger) {
+        if (event.type === 'usage') {
+          const ready = await ensureCompactionInit();
+          if (!ready || typeof subagentContextTokens !== 'number' || !subagentCompactionTrigger) continue;
           const inputTokens = event.usage.prompt_tokens ?? event.usage.total_tokens ?? 0;
           (subagentCompactionTrigger as CompactionTriggerType).observeUsage(inputTokens, record.chain?.messages ?? []);
-          (subagentCompactionTrigger as CompactionTriggerType).onUsage(inputTokens, subagentContextTokens, (() => {
+          (subagentCompactionTrigger as CompactionTriggerType).onUsage(inputTokens, subagentContextTokens, cachedSubagentCfg?.threshold ?? (() => {
             try {
               return getConfig().compaction.subagents.threshold;
             } catch { return 0.85; }
@@ -1705,11 +1716,10 @@ export class SubagentManager {
         return;
       }
       // If partial report was set via compaction degradation, complete with it as normal result
-      if (record.result && record.result.includes('[Subagent partial report')) {
+      if (record.result?.includes('[Subagent partial report')) {
         const partial = record.result;
-        this._applyAssemblerFinalization(record, run, assembler.complete(), priorUsage);
-        // Restore partial report as the completed result (R17)
-        this.markCompleted(record.id, partial);
+        const finalization = assembler.complete();
+        this._applyAssemblerFinalization(record, run, { ...finalization, result: partial }, priorUsage);
         return;
       }
       this._applyAssemblerFinalization(record, run, assembler.complete(), priorUsage);

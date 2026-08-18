@@ -1041,11 +1041,12 @@ export function getContext(sessionId?: string, timeRange?: AnalyticsTimeRange, c
       COALESCE(AVG(tools_tokens), 0) as tools_tokens,
       COALESCE(AVG(tool_use_tokens), 0) as tool_use_tokens,
       COALESCE(AVG(user_tokens), 0) as user_tokens,
-      COALESCE(AVG(assistant_tokens), 0) as assistant_tokens
+      COALESCE(AVG(assistant_tokens), 0) as assistant_tokens,
+      COALESCE(AVG(summary_tokens), 0) as summary_tokens
     FROM context_snapshots ${where}
   `).get(...params) as {
     total: number; used_tokens: number; system_tokens: number; tools_tokens: number;
-    tool_use_tokens: number; user_tokens: number; assistant_tokens: number;
+    tool_use_tokens: number; user_tokens: number; assistant_tokens: number; summary_tokens: number;
   };
 
   const topSessionRows = db.prepare(`
@@ -1197,6 +1198,7 @@ export function getContext(sessionId?: string, timeRange?: AnalyticsTimeRange, c
       toolUseTokens: Math.round(aggregate.tool_use_tokens),
       userTokens: Math.round(aggregate.user_tokens),
       assistantTokens: Math.round(aggregate.assistant_tokens),
+      summaryTokens: Math.round(aggregate.summary_tokens),
     },
   };
 }

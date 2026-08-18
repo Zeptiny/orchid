@@ -26,6 +26,7 @@ import type { ProviderProtocol } from '../../../shared/types/provider';
 import { resolveMainAgentTier } from '../../providers/facets/tiers';
 import { assembleFacetProviderOptions } from '../../providers/facets/turn-options';
 import { getSessionManager } from '../../session/singleton';
+import { saveSession } from '../../session/storage';
 import { getBuiltinToolRegistryForRuntime, getSubagentManager } from '../../tools';
 import type { ToolExecutionContext } from '../../tools/types';
 import { awaitSessionSubagentHydration } from '../../tools/subagent/hydrate';
@@ -97,6 +98,7 @@ const compactionTriggers = new Map<string, CompactionTrigger>();
 const compactionPending = new Map<string, {
   cut: CutResult;
   flaggedIds: string[];
+  expectedIds?: string[];
   estimatedInput: number;
   contextTokens: number;
   mode: 'simple' | 'selective';
@@ -165,7 +167,7 @@ function deriveTokensPerChar(inputTokens: number, messages: readonly Message[], 
   return undefined;
 }
 
-function isPendingCutStillValid(pending: { cut: CutResult; flaggedIds: string[] }, messages: readonly Message[]): boolean {
+function isPendingCutStillValid(pending: { cut: CutResult; flaggedIds: string[]; expectedIds?: string[] }, messages: readonly Message[]): boolean {
   const { start, end } = pending.cut.compactableRange;
   if (!Number.isFinite(start) || !Number.isFinite(end)) return false;
   if (start < 0 || end > messages.length || start >= end) return false;
@@ -180,6 +182,12 @@ function isPendingCutStillValid(pending: { cut: CutResult; flaggedIds: string[] 
       const msg = idToMsg.get(id);
       if (!msg) return false;
       if (msg.excludeFromModel) return false;
+    }
+  }
+  if (pending.expectedIds) {
+    if (pending.expectedIds.length !== end - start) return false;
+    for (let i = 0; i < pending.expectedIds.length; i += 1) {
+      if (messages[start + i]?.id !== pending.expectedIds[i]) return false;
     }
   }
   return true;
@@ -256,8 +264,6 @@ function persistSelectiveCompaction(
       updatedChains = chainsWithSummaries;
     }
     const updatedAt = new Date().toISOString();
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const { saveSession } = require('../../session/storage') as typeof import('../../session/storage');
     const nextSession = { ...existing, chains: updatedChains as typeof existing.chains, updatedAt } as typeof existing;
     saveSession(nextSession);
     try {
@@ -325,7 +331,7 @@ async function applyPendingCompactionIfAny(
   if (!isPendingCutStillValid(pending, messages)) {
     compactionPending.delete(sessionId);
     const t = getCompactionTrigger(sessionId);
-    t.state.pendingPrepare = false;
+    t.abortPrepare();
     return { applied: false };
   }
   compactionPending.delete(sessionId);
@@ -338,7 +344,7 @@ async function applyPendingCompactionIfAny(
         // Atomic: DB first, then memory. Single DB write via persistSelectiveCompaction.
         const ok = persistSelectiveCompaction(sessionId, result, pending.cut);
         if (!ok) {
-          trigger.state.pendingPrepare = false;
+          trigger.abortPrepare();
           return { applied: false };
         }
         setChatHistory(sessionId, [...result.replayMessages]);
@@ -347,7 +353,7 @@ async function applyPendingCompactionIfAny(
           return tpc ? Math.ceil(totalChars(result.replayMessages) * tpc) : pending.estimatedInput;
         })();
         trigger.onCompactionApplied(pending.estimatedInput, postTokens);
-        trigger.state.pendingPrepare = false;
+        trigger.abortPrepare();
         return { applied: true, updatedMessages: [...result.replayMessages] };
       }
       if (result.kind === 'fallback' && result.fallbackText && result.fallbackText.trim()) {
@@ -365,7 +371,7 @@ async function applyPendingCompactionIfAny(
           });
         } catch (e) {
           if (e instanceof CompactionApplyError) {
-            trigger.state.pendingPrepare = false;
+            trigger.abortPrepare();
             compactionPending.delete(sessionId);
             return { applied: false };
           }
@@ -378,7 +384,7 @@ async function applyPendingCompactionIfAny(
             const tpc = trigger.state.tokensPerChar ?? (totalChars(applyResult.updatedMessages) > 0 ? pending.estimatedInput / Math.max(1, totalChars(messages)) : undefined);
             const postTokens = tpc ? Math.ceil(totalChars(applyResult.updatedMessages) * tpc) : pending.estimatedInput;
             trigger.onCompactionApplied(pending.estimatedInput, postTokens);
-            trigger.state.pendingPrepare = false;
+            trigger.abortPrepare();
             return { applied: true, updatedMessages: [...applyResult.updatedMessages] };
           }
         }
@@ -392,11 +398,11 @@ async function applyPendingCompactionIfAny(
             const postTokens = tpc ? Math.ceil(totalChars(result.replayMessages) * tpc) : pending.estimatedInput;
             trigger.onCompactionApplied(pending.estimatedInput, postTokens);
           }
-          trigger.state.pendingPrepare = false;
+          trigger.abortPrepare();
           return { applied: ok, updatedMessages: ok ? [...result.replayMessages] : undefined };
         }
       }
-      trigger.state.pendingPrepare = false;
+      trigger.abortPrepare();
       return { applied: false };
     }
     // ── Simple pending (existing) ───────────────────────────────────────
@@ -417,7 +423,7 @@ async function applyPendingCompactionIfAny(
           });
         } catch (e) {
           if (e instanceof CompactionApplyError) {
-            trigger.state.pendingPrepare = false;
+            trigger.abortPrepare();
             return { applied: false };
           }
           throw e;
@@ -429,13 +435,13 @@ async function applyPendingCompactionIfAny(
             const tpc = trigger.state.tokensPerChar ?? (totalChars(applyResult.updatedMessages) > 0 ? pending.estimatedInput / Math.max(1, totalChars(messages)) : undefined);
             const postTokens = tpc ? Math.ceil(totalChars(applyResult.updatedMessages) * tpc) : pending.estimatedInput;
             trigger.onCompactionApplied(pending.estimatedInput, postTokens);
-            trigger.state.pendingPrepare = false;
+            trigger.abortPrepare();
             return { applied: true, updatedMessages: [...applyResult.updatedMessages] };
           }
         }
       }
       // Summarizer failed or persist failed — clear pending flag
-      trigger.state.pendingPrepare = false;
+      trigger.abortPrepare();
       return { applied: false };
     }
     // Reclaim-only pending
@@ -454,7 +460,7 @@ async function applyPendingCompactionIfAny(
         });
       } catch (e) {
         if (e instanceof CompactionApplyError) {
-          trigger.state.pendingPrepare = false;
+          trigger.abortPrepare();
           return { applied: false };
         }
         throw e;
@@ -473,7 +479,7 @@ async function applyPendingCompactionIfAny(
   } catch (err) {
     console.debug('[compaction] pending apply failed (non-fatal):', err);
     const t = getCompactionTrigger(sessionId);
-    t.state.pendingPrepare = false;
+    t.abortPrepare();
   }
   return { applied: false };
 }
@@ -613,20 +619,20 @@ async function tryCompactSynchronously(
           });
         } catch (err) {
           console.debug('[compaction] selective run failed, falling back (non-fatal):', err);
-          trigger.state.pendingPrepare = false;
+          trigger.abortPrepare();
           return { didApply: false };
         }
         if (selResult.kind === 'selective') {
           const ok = persistSelectiveCompaction(sessionId, selResult, cut);
           if (!ok) {
-            trigger.state.pendingPrepare = false;
+            trigger.abortPrepare();
             return { didApply: false };
           }
           setChatHistory(sessionId, [...selResult.replayMessages]);
           const tpcSel = trigger.state.tokensPerChar ?? tokensPerChar;
           const postTokensSel = Math.ceil(totalChars(selResult.replayMessages) * tpcSel);
           trigger.onCompactionApplied(estimatedInput, postTokensSel);
-          trigger.state.pendingPrepare = false;
+          trigger.abortPrepare();
           return { didApply: true, updatedMessages: [...selResult.replayMessages] };
         }
         if (selResult.kind === 'fallback' && selResult.fallbackText && selResult.fallbackText.trim()) {
@@ -643,7 +649,7 @@ async function tryCompactSynchronously(
             });
           } catch (e) {
             if (e instanceof CompactionApplyError) {
-              trigger.state.pendingPrepare = false;
+              trigger.abortPrepare();
               return { didApply: false };
             }
             throw e;
@@ -661,22 +667,22 @@ async function tryCompactSynchronously(
                 const postF = Math.ceil(totalChars(selResult.replayMessages!) * tpcF);
                 trigger.onCompactionApplied(estimatedInput, postF);
               }
-              trigger.state.pendingPrepare = false;
+              trigger.abortPrepare();
               return { didApply: ok2, updatedMessages: ok2 ? [...selResult.replayMessages!] : undefined };
             }
-            trigger.state.pendingPrepare = false;
+            trigger.abortPrepare();
             return { didApply: false };
           }
           const ok = persistCompaction(sessionId, applyResult);
           if (!ok) {
-            trigger.state.pendingPrepare = false;
+            trigger.abortPrepare();
             return { didApply: false };
           }
           setChatHistory(sessionId, [...applyResult.updatedMessages]);
           const tpcF2 = trigger.state.tokensPerChar ?? tokensPerChar;
           const postF2 = Math.ceil(totalChars(applyResult.updatedMessages) * tpcF2);
           trigger.onCompactionApplied(estimatedInput, postF2);
-          trigger.state.pendingPrepare = false;
+          trigger.abortPrepare();
           return { didApply: true, updatedMessages: [...applyResult.updatedMessages] };
         }
         if (selResult.kind === 'fallback' && selResult.replayMessages && selResult.replayMessages.length > 0) {
@@ -684,17 +690,17 @@ async function tryCompactSynchronously(
           const like3: Extract<SelectiveCompactionResult, { kind: 'selective' }> = { kind: 'selective', replayMessages: selResult.replayMessages, flaggedIds: flaggedForFallback, summaryMessages: [], summaryMessage: selResult.summaryMessage ?? null, correctedOps: [], attempts: selResult.attempts } as unknown as Extract<SelectiveCompactionResult, { kind: 'selective' }>;
           const ok3 = persistSelectiveCompaction(sessionId, like3, cut);
           if (!ok3) {
-            trigger.state.pendingPrepare = false;
+            trigger.abortPrepare();
             return { didApply: false };
           }
           setChatHistory(sessionId, [...selResult.replayMessages]);
           const tpcF3 = trigger.state.tokensPerChar ?? tokensPerChar;
           const postF3 = Math.ceil(totalChars(selResult.replayMessages) * tpcF3);
           trigger.onCompactionApplied(estimatedInput, postF3);
-          trigger.state.pendingPrepare = false;
+          trigger.abortPrepare();
           return { didApply: true, updatedMessages: [...selResult.replayMessages] };
         }
-        trigger.state.pendingPrepare = false;
+        trigger.abortPrepare();
         return { didApply: false };
       }
       // ── Simple branch (unchanged) ─────────────────────────────────────
@@ -711,7 +717,7 @@ async function tryCompactSynchronously(
         runtime,
       });
       if (!result || !result.text || !result.text.trim()) {
-        trigger.state.pendingPrepare = false;
+        trigger.abortPrepare();
         return { didApply: false };
       }
       let applyResult: ReturnType<typeof buildCompactionApply> | null = null;
@@ -727,30 +733,30 @@ async function tryCompactSynchronously(
         });
       } catch (e) {
         if (e instanceof CompactionApplyError) {
-          trigger.state.pendingPrepare = false;
+          trigger.abortPrepare();
           return { didApply: false };
         }
         throw e;
       }
       if (!applyResult.didApply) {
-        trigger.state.pendingPrepare = false;
+        trigger.abortPrepare();
         return { didApply: false };
       }
       const ok = persistCompaction(sessionId, applyResult);
       if (!ok) {
-        trigger.state.pendingPrepare = false;
+        trigger.abortPrepare();
         return { didApply: false };
       }
       setChatHistory(sessionId, [...applyResult.updatedMessages]);
       const tpcSimple = trigger.state.tokensPerChar ?? tokensPerChar;
       const postSimple = Math.ceil(totalChars(applyResult.updatedMessages) * tpcSimple);
       trigger.onCompactionApplied(estimatedInput, postSimple);
-      trigger.state.pendingPrepare = false;
+      trigger.abortPrepare();
       return { didApply: true, updatedMessages: [...applyResult.updatedMessages] };
     }
   } catch (err) {
     console.debug('[compaction] synchronous compact failed (non-fatal):', err);
-    try { getCompactionTrigger(sessionId).state.pendingPrepare = false; } catch {}
+    try { getCompactionTrigger(sessionId).abortPrepare(); } catch {}
   }
   return { didApply: false };
 }
@@ -832,7 +838,8 @@ function handleUsageCompaction(
     });
     if (!decision.shouldPrepare && !decision.shouldApply) return;
     if (decision.shouldApply && !decision.shouldPrepare) {
-      compactionPending.set(sessionId, { cut, flaggedIds, estimatedInput: inputTokens, contextTokens: effectiveContextTokens, mode: cfg.mode });
+      const expectedIds = fullHistory.slice(cut.compactableRange.start, cut.compactableRange.end).map((m) => m.id);
+      compactionPending.set(sessionId, { cut, flaggedIds, expectedIds, estimatedInput: inputTokens, contextTokens: effectiveContextTokens, mode: cfg.mode });
       trigger.markPrepareStarted(cut.compactableRange, flaggedIds);
       try {
         const active = activeAgents.get(sessionId);
@@ -884,7 +891,8 @@ function handleUsageCompaction(
           simpleFallback,
           maxCorrectionRounds: 3,
         });
-        compactionPending.set(sessionId, { cut, flaggedIds, estimatedInput: inputTokens, contextTokens: effectiveContextTokens, mode: 'selective', selectivePromise, manifest });
+        const expectedIdsForSelective = fullHistory.slice(cut.compactableRange.start, cut.compactableRange.end).map((m) => m.id);
+        compactionPending.set(sessionId, { cut, flaggedIds, expectedIds: expectedIdsForSelective, estimatedInput: inputTokens, contextTokens: effectiveContextTokens, mode: 'selective', selectivePromise, manifest });
         selectivePromise.catch((err) => {
           console.debug('[compaction] selective prepare failed (non-fatal):', err);
           try {
@@ -927,7 +935,8 @@ function handleUsageCompaction(
         accounting: { store: accountingStore, sessionId, chainId, turnId },
         runtime,
       });
-      compactionPending.set(sessionId, { cut, flaggedIds, promise, estimatedInput: inputTokens, contextTokens: effectiveContextTokens, mode: 'simple' });
+      const expectedIdsForSimple = fullHistory.slice(cut.compactableRange.start, cut.compactableRange.end).map((m) => m.id);
+      compactionPending.set(sessionId, { cut, flaggedIds, expectedIds: expectedIdsForSimple, promise, estimatedInput: inputTokens, contextTokens: effectiveContextTokens, mode: 'simple' });
       promise.catch((err) => {
         console.debug('[compaction] prepare failed (non-fatal):', err);
         try {
@@ -1116,13 +1125,11 @@ export async function startChatTurn(
       messages = pendingApplied.updatedMessages;
       existingMessages = messages.slice(0, messages.length - 1);
     }
-    const syncChainProbe = sessionManager.getSession(sessionId)?.chains ?? [];
     const syncResult = await tryCompactSynchronously(sessionId, messages, runtime, turnSelection, effectiveContextTokens, accountingStore!, chainId, turnId);
     if (syncResult.didApply && syncResult.updatedMessages) {
       messages = syncResult.updatedMessages;
       existingMessages = messages.slice(0, messages.length - 1);
     }
-    void syncChainProbe;
   }
 
   try {
@@ -1196,6 +1203,7 @@ export async function startChatTurn(
   let lastSentLength = 0;
   let lastThinkingLength = 0;
   let completed = false;
+  let overflowRetryInFlight = false;
   let subscription: { unsubscribe: () => void } | null = null;
   let interruptSubscription: { unsubscribe: () => void } | null = null;
   let lastUsage: Usage | null = null;
@@ -1342,6 +1350,7 @@ export async function startChatTurn(
       fallbackSelection: activeAgent.selection,
       accounting: { store: accountingStore, sessionId, chainId, turnId },
     });
+    compactionRetryTried.delete(`${sessionId}:${turnId}`);
   };
 
   interruptSubscription = interruptActor.subscribe((interruptSnapshot) => {
@@ -1553,33 +1562,36 @@ export async function startChatTurn(
       const isOverflow = isContextLengthExceededError(`${title} ${detail}`);
       const retryKey = `${sessionId}:${turnId}`;
       if (isOverflow && !compactionRetryTried.has(retryKey) && contextTokens != null) {
+        if (overflowRetryInFlight) return;
         compactionRetryTried.add(retryKey);
+        overflowRetryInFlight = true;
         // One compaction-and-retry (R15). Compact the prefix (messages) and retry once before declaring failed.
         const historyForRetry = [...messages];
         (async () => {
           try {
-            const retryResult = await tryCompactSynchronously(sessionId, historyForRetry, runtime, turnSelection, contextTokens, accountingStore!, chainId, turnId);
-            if (retryResult.didApply && retryResult.updatedMessages) {
-              messages.splice(0, messages.length, ...retryResult.updatedMessages);
-              activeAgent.messages.splice(0, activeAgent.messages.length, ...retryResult.updatedMessages);
-              activeAgent.turnMessages = [];
-              activeAgent.responseCommittedLength = 0;
-              activeAgent.thinkingCommittedLength = 0;
-              activeAgent.thinkingArtifactsCommitted = 0;
-              lastSentLength = 0;
-              lastThinkingLength = 0;
-              lastUsage = null;
-              try {
-                actor.send({ type: 'USER_INPUT', message });
-                publishSessionActivity(sessionId, {
-                  cwd: turnCtx.cwd, state: 'working', phase: 'agent', detail: 'Retrying after compaction', canCancel: true,
-                });
-                return;
-              } catch (e) {
-                console.debug('[compaction] retry USER_INPUT failed:', e);
+            try {
+              const retryResult = await tryCompactSynchronously(sessionId, historyForRetry, runtime, turnSelection, contextTokens, accountingStore!, chainId, turnId);
+              if (retryResult.didApply && retryResult.updatedMessages) {
+                messages.splice(0, messages.length, ...retryResult.updatedMessages);
+                activeAgent.messages.splice(0, activeAgent.messages.length, ...retryResult.updatedMessages);
+                activeAgent.turnMessages = [];
+                activeAgent.responseCommittedLength = 0;
+                activeAgent.thinkingCommittedLength = 0;
+                activeAgent.thinkingArtifactsCommitted = 0;
+                lastSentLength = 0;
+                lastThinkingLength = 0;
+                lastUsage = null;
+                try {
+                  actor.send({ type: 'USER_INPUT', message });
+                  publishSessionActivity(sessionId, {
+                    cwd: turnCtx.cwd, state: 'working', phase: 'agent', detail: 'Retrying after compaction', canCancel: true,
+                  });
+                  return;
+                } catch (e) {
+                  console.debug('[compaction] retry USER_INPUT failed:', e);
+                }
               }
-            }
-          } catch (e) {
+            } catch (e) {
             console.debug('[compaction] overflow retry compaction failed:', e);
           }
           completed = true;
@@ -1600,9 +1612,14 @@ export async function startChatTurn(
             type: 'error', error: detail, messages: terminalMessages, title, kind: classifyErrorKind(title, detail),
           });
           queueMicrotask(() => disposeActiveAgent(sessionId, activeAgent));
+          compactionRetryTried.delete(retryKey);
+          } finally {
+            overflowRetryInFlight = false;
+          }
         })();
         return;
       }
+      if (overflowRetryInFlight) return;
       completed = true;
       activeAgent.finalized = true;
       publishSessionActivity(sessionId, {
@@ -1621,6 +1638,7 @@ export async function startChatTurn(
         type: 'error', error: detail, messages: terminalMessages, title, kind: classifyErrorKind(title, detail),
       });
       queueMicrotask(() => disposeActiveAgent(sessionId, activeAgent));
+      compactionRetryTried.delete(retryKey);
     }
   });
   try {

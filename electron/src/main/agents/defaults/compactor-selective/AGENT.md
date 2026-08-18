@@ -36,7 +36,7 @@ Output — keep user verbatim, keep_range long file, summarize contiguous span:
 [
   {"type":"keep","id":"m1"},
   {"type":"keep_range","id":"m2","startLine":1,"endLine":50},
-  {"type":"summarize","ids":["m3","m4","m5"],"text":"Explored auth.ts, identified token expiry bug in handleLogin; next: patch and test."}
+  {"type":"summarize","ids":["m3"],"text":"Explored auth.ts, identified token expiry bug in handleLogin; next: patch and test."}
 ]
 
 Think step by step internally before emitting ops — decide which spans are safe to summarize versus must be kept verbatim. Do not output your internal reasoning or <analysis> tags; final output must be ONLY the JSON array.

@@ -318,7 +318,7 @@ export const agentMachine = setup({
         },
         STEP_FINISH: {
           actions: assign({
-            lastStepBoundary: ({ event }) => ({ stepIndex: (event as unknown as { stepIndex: number }).stepIndex, finishReason: (event as unknown as { finishReason: string }).finishReason }),
+            lastStepBoundary: ({ event }) => ({ stepIndex: event.stepIndex, finishReason: event.finishReason }),
           }),
         },
       },
@@ -441,9 +441,9 @@ export const agentMachine = setup({
         STEP_FINISH: {
           actions: assign({
             lastStepBoundary: ({ context, event }) => {
-              const info = { stepIndex: (event as unknown as { stepIndex: number }).stepIndex, finishReason: (event as unknown as { finishReason: string }).finishReason };
+              const info = { stepIndex: event.stepIndex, finishReason: event.finishReason };
               try {
-                const hook = (context as unknown as { onStepBoundary?: (info: { stepIndex: number; finishReason: string }) => void }).onStepBoundary;
+                const hook = context.onStepBoundary;
                 if (hook) void Promise.resolve(hook(info)).catch(() => {});
               } catch {}
               return info;

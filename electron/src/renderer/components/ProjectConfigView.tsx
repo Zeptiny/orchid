@@ -66,7 +66,8 @@ type ProjectFieldKind =
   | 'string-list'
   | 'boolean'
   | 'theme'
-  | 'personality';
+  | 'personality'
+  | 'select';
 
 interface ProjectFieldSpec {
   key: string;
@@ -77,6 +78,7 @@ interface ProjectFieldSpec {
   step?: number;
   fullWidth?: boolean;
   hint?: string;
+  options?: string[];
 }
 
 interface ProjectConfigSection {
@@ -180,7 +182,7 @@ const TAB_SECTIONS: Partial<Record<ProjectTab, ProjectConfigSection[]>> = {
     {
       title: 'Main Scope',
       fields: [
-        { key: 'compaction.main.mode', label: 'Mode (main)', kind: 'text' },
+        { key: 'compaction.main.mode', label: 'Mode (main)', kind: 'select', options: ['simple', 'selective'] },
         { key: 'compaction.main.threshold', label: 'Threshold (main)', kind: 'number', min: 0.1, max: 0.95, step: 0.05 },
         { key: 'compaction.main.keep_recent_chains', label: 'Keep Recent Chains (main)', kind: 'integer', min: 0, max: 100 },
         { key: 'compaction.main.min_compactable_tokens', label: 'Min Compactable Tokens (main)', kind: 'integer', min: 0 },
@@ -191,7 +193,7 @@ const TAB_SECTIONS: Partial<Record<ProjectTab, ProjectConfigSection[]>> = {
     {
       title: 'Subagents Scope',
       fields: [
-        { key: 'compaction.subagents.mode', label: 'Mode (subagents)', kind: 'text' },
+        { key: 'compaction.subagents.mode', label: 'Mode (subagents)', kind: 'select', options: ['simple', 'selective'] },
         { key: 'compaction.subagents.threshold', label: 'Threshold (subagents)', kind: 'number', min: 0.1, max: 0.95, step: 0.05 },
         { key: 'compaction.subagents.keep_recent_chains', label: 'Keep Recent Chains (subagents)', kind: 'integer', min: 0, max: 100 },
         { key: 'compaction.subagents.min_compactable_tokens', label: 'Min Compactable Tokens (subagents)', kind: 'integer', min: 0 },
@@ -415,6 +417,7 @@ export function ProjectConfigView({ projectDir, onNewChat, onClose }: ProjectCon
         case 'text':
         case 'theme':
         case 'personality':
+        case 'select':
           return { ...previous, [field.key]: trimmed };
         case 'boolean':
           return { ...previous, [field.key]: trimmed === 'true' };
@@ -549,6 +552,20 @@ export function ProjectConfigView({ projectDir, onNewChat, onClose }: ProjectCon
     activeTab === 'compaction';
 
   const renderSelectOptions = (field: ProjectFieldSpec, homeValue: unknown) => {
+    if (field.kind === 'select') {
+      const opts = field.options ?? [];
+      const homeLabel = toPlaceholder(homeValue);
+      return (
+        <>
+          <option value="">{homeLabel ? `Inherit global (${homeLabel})` : 'Inherit global'}</option>
+          {opts.map((opt) => (
+            <option key={opt} value={opt}>
+              {opt}
+            </option>
+          ))}
+        </>
+      );
+    }
     if (field.kind === 'theme') {
       const homeLabel =
         typeof homeValue === 'string' && homeValue in THEMES
@@ -593,7 +610,10 @@ export function ProjectConfigView({ projectDir, onNewChat, onClose }: ProjectCon
     const homeValue = readGlobalValue(homeConfig, field.key);
     const inputId = fieldInputId(field.key);
     const isSelect =
-      field.kind === 'boolean' || field.kind === 'theme' || field.kind === 'personality';
+      field.kind === 'boolean' ||
+      field.kind === 'theme' ||
+      field.kind === 'personality' ||
+      field.kind === 'select';
     return (
       <FormField
         key={field.key}

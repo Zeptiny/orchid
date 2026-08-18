@@ -338,16 +338,8 @@ export function shouldApplyAtBoundary(
   if (params.compactableTokens < params.minCompactableTokens) {
     return { shouldApply: false, reason: 'below-floor-at-boundary' };
   }
-  const hysteresisDelta = params.hysteresisDelta ?? 0.1;
-  // At boundary we still gate on hysteresis & threshold — if usage fell back below threshold
-  // while the prepare was in-flight, we should not apply a stale compaction.
-  const hysteresisArmed = false; // pending prepare was started when hysteresis allowed; do not re-gate hysteresis at apply
-  void hysteresisDelta;
-  void hysteresisArmed;
-  // For apply, hysteresis is not re-checked beyond the fact a prepare was already armed.
-  // Only threshold/floor matter; but we keep a lenient check: if ratio is below re-arm line, still apply
-  // because the prepare already captured range. The spec says apply at boundary awaits the promise and runs apply.
-  // So we treat any pending prepare with valid range as apply-able, unless floor violated.
+  // Boundary apply depends only on pendingPrepare and floor; hysteresis/threshold
+  // was already gated when the prepare started, so a stale prepare still applies.
   return { shouldApply: true, reason: 'boundary-apply' };
 }
 
@@ -560,6 +552,13 @@ export class CompactionTrigger {
     this.state.pendingPrepare = true;
     if (range) this.state.pendingRange = range;
     if (flaggedIds) this.state.pendingFlaggedIds = [...flaggedIds];
+  }
+
+  /** Abort/clear a pending prepare without applying. */
+  abortPrepare(): void {
+    this.state.pendingPrepare = false;
+    this.state.pendingRange = undefined;
+    this.state.pendingFlaggedIds = undefined;
   }
 
   /** Whether apply should run at the next safe boundary. */
