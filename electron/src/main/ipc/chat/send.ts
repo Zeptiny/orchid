@@ -817,9 +817,6 @@ function handleUsageCompaction(
   if (!cfg) return;
   const history = dedupeHistoryById(fullHistory);
   const effectiveContextTokens = Number.isFinite(contextTokens) && contextTokens > 0 ? contextTokens : FALLBACK_CONTEXT_TOKENS;
-  if (history.slice(-20).some((m) => (m as unknown as { compacted?: unknown }).compacted)) {
-    return;
-  }
   // Single-pass totalChars reuse + early threshold gate (avoids 4× scans per CHAT_USAGE)
   const totalCharsValue = totalChars(history);
   // Derive calibrated tokensPerChar from provider inputTokens / totalChars (no /4 fallback)
