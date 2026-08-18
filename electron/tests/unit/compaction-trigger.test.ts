@@ -7,7 +7,6 @@ import {
   computeTokensPerChar,
   estimateNextInputTokens,
   evaluateTriggerWithReclaim,
-  FALLBACK_TOKENS_PER_CHAR,
   shouldApplyAtBoundary,
   shouldTriggerCompaction,
   updateTriggerStateOnUsage,
@@ -180,10 +179,10 @@ describe('shouldTriggerCompaction — floor, threshold, hysteresis', () => {
 // ── estimateNextInputTokens ─────────────────────────────────────────────────
 
 describe('estimateNextInputTokens — calibrated char estimator', () => {
-  it('uses fallback 0.25 when no ratio', () => {
+  it('returns only the reported base when no calibrated ratio exists (hard rule: no chars/4 estimation)', () => {
     const pending = [makeMsg('u1', 'hello world')]; // 11 chars
     const est = estimateNextInputTokens(8000, pending, undefined);
-    expect(est).toBe(8000 + Math.ceil(11 * FALLBACK_TOKENS_PER_CHAR));
+    expect(est).toBe(8000);
   });
 
   it('scales by provided tokensPerChar', () => {
@@ -206,13 +205,13 @@ describe('estimateNextInputTokens — calibrated char estimator', () => {
     expect(ratio).toBeCloseTo(50 / 200, 5);
   });
 
-  it('estimate pre-flight: lastReported 0.75*c+ pending tail crosses threshold early', () => {
+  it('estimate pre-flight: lastReported 0.75*c + calibrated pending tail crosses threshold early', () => {
     const contextTokens = 10_000;
     const threshold = 0.8;
     const lastReported = 7500; // 0.75 below
-    // Create pending that via fallback adds 800 tokens => estimate 8300 crosses
-    const pending = [makeMsg('u-next', 'x'.repeat(3200))]; // 3200*0.25=800
-    const est = estimateNextInputTokens(lastReported, pending, undefined);
+    // Calibrated ratio 0.25: pending tail adds 800 tokens → estimate 8300 crosses
+    const pending = [makeMsg('u-next', 'x'.repeat(3200))];
+    const est = estimateNextInputTokens(lastReported, pending, 0.25);
     expect(est / contextTokens).toBeGreaterThanOrEqual(threshold);
     expect(lastReported / contextTokens).toBeLessThan(threshold);
   });

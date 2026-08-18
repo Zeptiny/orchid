@@ -1630,7 +1630,7 @@ export class SubagentManager {
       // Also handle case where still over but we did compact: check if next cut would be empty
       if (stillOver) {
         try {
-          const { selectCut } = await import('../llm/compaction/select.js');
+          const { selectCut, resolvePreservePercent } = await import('../llm/compaction/select.js');
           let cfg2: any | null = cachedSubagentCfg;
           if (!cfg2) {
             try {
@@ -1639,8 +1639,22 @@ export class SubagentManager {
               cfg2 = null;
             }
           }
-          const keep = cfg2?.keep_recent_chains ?? 3;
-          const cut = selectCut(record.chain?.messages ?? [], { keepRecentChains: keep, budget: { contextTokens: subagentContextTokens ?? 0, threshold: cfg2?.threshold ?? 0.85 } });
+          // Calibrate from the run's reported usage; without it the emptiness
+          // check is skipped (hard rule: no heuristic token estimates).
+          const retryMessages = record.chain?.messages ?? [];
+          let totalAll2 = 0;
+          for (const m of retryMessages) totalAll2 += estimateMessageChars(m as Message);
+          const preInput2: number | undefined = record.usage?.prompt_tokens;
+          if (!(totalAll2 > 0 && typeof preInput2 === 'number' && Number.isFinite(preInput2) && preInput2 > 0)) return false;
+          const tpc3 = Math.max(0.05, Math.min(preInput2 / totalAll2, 2));
+          const cut = selectCut(retryMessages as Message[], {
+            preserveTokens: Math.floor(resolvePreservePercent(cfg2 ?? { threshold: 0.85, preserve_percent: 0.25 }) * (subagentContextTokens ?? 0)),
+            tokenEstimator: (slice: readonly Message[]): number => {
+              let chars = 0;
+              for (const m of slice) chars += estimateMessageChars(m);
+              return Math.max(slice.length, Math.ceil(chars * tpc3));
+            },
+          });
           if (cut.compactableRange.end - cut.compactableRange.start === 0) {
             const { buildSubagentPartialReport } = await import('./subagent-runner.js');
             const done = `${record.chain?.messages.filter((m) => m.type === 'tool_result').length ?? 0} tool results`;

@@ -177,7 +177,7 @@ export interface CompactionScopeConfig {
   threshold: number;
   model: ModelSelection | null;
   agent_name: string;
-  keep_recent_chains: number;
+  preserve_percent: number;
   min_compactable_tokens: number;
   mechanical_reclaim: boolean;
   hysteresis_delta: number;

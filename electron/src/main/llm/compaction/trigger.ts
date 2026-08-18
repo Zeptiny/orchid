@@ -78,12 +78,11 @@ export function computeTokensPerChar(
   return Math.max(0.05, Math.min(ratio, 2));
 }
 
-/** Default fallback when no calibrated ratio is available: chars/4 heuristic (0.25 tokens per char). */
-export const FALLBACK_TOKENS_PER_CHAR = 0.25;
-
 /**
- * Advisory pre-flight estimate: lastReported + char-estimated tail scaled by
- * observed tokens-per-char (or fallback). Never uses a tokenizer.
+ * Advisory pre-flight estimate: lastReported + char-estimated tail scaled by a
+ * CALIBRATED tokens-per-char ratio. Never uses a heuristic ratio — when no
+ * calibration exists the pending tail is not estimated and only the reported
+ * base is returned (hard rule: no chars/4 estimation, ever).
  */
 export function estimateNextInputTokens(
   lastReportedInputTokens: number | undefined | null,
@@ -94,12 +93,12 @@ export function estimateNextInputTokens(
     ? Math.max(0, lastReportedInputTokens)
     : 0;
   if (!pendingMessages || pendingMessages.length === 0) return base;
-  const ratio = typeof tokensPerChar === 'number' && Number.isFinite(tokensPerChar) && tokensPerChar > 0
-    ? tokensPerChar
-    : FALLBACK_TOKENS_PER_CHAR;
+  if (typeof tokensPerChar !== 'number' || !Number.isFinite(tokensPerChar) || tokensPerChar <= 0) {
+    return base;
+  }
   let chars = 0;
   for (const m of pendingMessages) chars += estimateMessageChars(m);
-  const pendingTokens = Math.ceil(chars * ratio);
+  const pendingTokens = Math.ceil(chars * tokensPerChar);
   return base + pendingTokens;
 }
 

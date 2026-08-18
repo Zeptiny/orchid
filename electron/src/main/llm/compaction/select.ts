@@ -3,12 +3,15 @@
  *
  * Requirements R5,R6:
  * - Never leaves a dangling tool_calls block or orphaned tool_result (R5).
- * - Preserve window is last keep_recent_chains completed real chains + always the
- *   trailing open tool group (R6). Summary head (via U2 compacted marker) does
- *   not count toward keep_recent_chains.
- * - Best-effort budget: if preserve window alone exceeds threshold, shrink keep
- *   down to minimum of open group.
- * - Single-only-chain yields empty compactable range.
+ * - Preserve window is a verbatim token-budget suffix (preserve_percent ×
+ *   context window, or an absolute preserveTokens), walked from the newest
+ *   message backward. The trailing open tool group is always preserved (R6).
+ * - Chain boundaries are opportunitically respected (the walk naturally stops
+ *   wherever the budget runs out); a single oversized turn no longer forces an
+ *   empty preserved window. Summary heads (compacted marker) are re-summarized,
+ *   never preserved.
+ * - Floor: the most recent complete tool group survives verbatim even when it
+ *   alone exceeds the budget (best-effort, bounded by one group).
  *
  * Patterns followed:
  * - Tool-group atomicity in reconcileOrphanToolResults (chain.ts)
@@ -42,6 +45,8 @@ export interface CutResult {
 export interface SelectCutBudget {
   readonly contextTokens?: number;
   readonly threshold?: number;
+  /** Fraction of contextTokens preserved verbatim (e.g. 0.25). */
+  readonly preservePercent?: number;
   /** Direct token ceiling; overrides contextTokens*threshold when present. */
   readonly maxPreserveTokens?: number;
   /** Provider-reported inputTokens to scale char estimate; optional. */
@@ -49,7 +54,10 @@ export interface SelectCutBudget {
 }
 
 export interface SelectCutOptions {
-  readonly keepRecentChains: number;
+  /** Absolute token budget for the verbatim preserved suffix. Preferred form. */
+  readonly preserveTokens?: number;
+  /** Fraction of contextTokens preserved verbatim; alternative to preserveTokens. */
+  readonly preservePercent?: number;
   /** Sorted ascending indices where each chain starts (0 should be first). If omitted, inferred from USER role. */
   readonly chainBoundaries?: readonly number[];
   /** Budget for shrinking preserve window. If omitted, no shrinking. */
@@ -307,14 +315,47 @@ function defaultEstimateTokens(messages: readonly Message[]): number {
   return Math.max(messages.length, Math.ceil(chars / 4));
 }
 
-function resolveMaxPreserveTokens(opts: SelectCutOptions): number | null {
-  if (typeof opts.maxPreserveTokens === 'number') return opts.maxPreserveTokens;
-  if (opts.budget?.maxPreserveTokens !== undefined) return opts.budget.maxPreserveTokens;
-  // threshold * contextTokens
-  const threshold = opts.threshold ?? opts.budget?.threshold;
+function resolvePreserveTokens(opts: SelectCutOptions): number | null {
+  if (typeof opts.preserveTokens === 'number' && Number.isFinite(opts.preserveTokens)) return opts.preserveTokens;
+  if (typeof opts.maxPreserveTokens === 'number' && Number.isFinite(opts.maxPreserveTokens)) return opts.maxPreserveTokens;
+  if (opts.budget?.maxPreserveTokens !== undefined && Number.isFinite(opts.budget.maxPreserveTokens)) return opts.budget.maxPreserveTokens;
+  const percent = opts.preservePercent ?? opts.budget?.preservePercent;
   const contextTokens = opts.contextTokens ?? opts.budget?.contextTokens;
-  if (typeof threshold === 'number' && typeof contextTokens === 'number' && Number.isFinite(threshold) && Number.isFinite(contextTokens)) {
-    return Math.floor(threshold * contextTokens);
+  if (typeof percent === 'number' && Number.isFinite(percent) && typeof contextTokens === 'number' && Number.isFinite(contextTokens) && contextTokens > 0) {
+    return Math.max(0, Math.floor(percent * contextTokens));
+  }
+  // Legacy threshold-derived budget (no preserve knob): threshold * contextTokens
+  const threshold = opts.threshold ?? opts.budget?.threshold;
+  if (typeof threshold === 'number' && Number.isFinite(threshold) && typeof contextTokens === 'number' && Number.isFinite(contextTokens) && contextTokens > 0) {
+    return Math.max(0, Math.floor(threshold * contextTokens));
+  }
+  return null;
+}
+
+/**
+ * Effective preserve fraction with the hysteresis guard: a preserved window at
+ * or above the re-arm line (threshold - delta) would keep the trigger armed
+ * forever, so cap preserve_percent below it. Floor keeps a sane minimum.
+ */
+export function resolvePreservePercent(scope: {
+  readonly threshold: number;
+  readonly hysteresis_delta?: number;
+  readonly preserve_percent: number;
+}): number {
+  const cap = scope.threshold - (scope.hysteresis_delta ?? 0.1) - 0.05;
+  return Math.max(0.05, Math.min(scope.preserve_percent, cap));
+}
+
+/** Start index of the trailing tool group (open if present, else last completed group ending at n-1). */
+function trailingGroupFloor(
+  completedIntervals: ReadonlyArray<readonly [number, number]>,
+  openGroupStart: number | null,
+  n: number,
+): number | null {
+  if (openGroupStart !== null) return openGroupStart;
+  for (let i = completedIntervals.length - 1; i >= 0; i -= 1) {
+    const [start, end] = completedIntervals[i]!;
+    if (end >= n - 1) return start;
   }
   return null;
 }
@@ -326,7 +367,6 @@ export function selectCut(
   opts: SelectCutOptions,
 ): CutResult {
   const n = messages.length;
-  const keepRecentChainsRaw = Math.max(0, Math.floor(opts.keepRecentChains));
 
   if (n === 0) {
     return {
@@ -371,125 +411,69 @@ export function selectCut(
     };
   }
 
-  const maxPreserveTokens = resolveMaxPreserveTokens(opts);
+  const preserveBudget = resolvePreserveTokens(opts);
   const estimator = opts.tokenEstimator ?? defaultEstimateTokens;
 
-  // Helper to compute preserve start for a given keep
-  const computePreserveStart = (keep: number): number => {
-    const k = Math.max(0, Math.min(keep, realChains.length));
-    let preserveFromChains: number | null = null;
-    if (k > 0) {
-      const slice = realChains.slice(-k);
-      preserveFromChains = slice[0]!.start;
-    }
-    const candidates: number[] = [];
-    if (preserveFromChains !== null) candidates.push(preserveFromChains);
-    if (openGroupStart !== null) candidates.push(openGroupStart);
-    if (candidates.length === 0) return n; // preserve nothing (all compactable)
-    return Math.min(...candidates);
-  };
-
-  // Single-chain fast-path removed (P0 #1): always run chain-boundary + tool-group walk.
-  // A runaway 900k turn (1 chain, 3 completed groups + 1 open group) must compact to
-  // openGroupStart instead of yielding empty. keep_recent_chains is still honored via
-  // computePreserveStart and then bounded by cutToSafeBoundary (tool-group atomicity).
-  // Empty compactable now only occurs when the single chain is fully open (no completed
-  // intervals and openGroupStart at 0) or when keep covers the whole history and no
-  // tool boundary forces an earlier cut.
-
-  // Prefix-sum char array for budget loop (P2 #25): compute once, O(1) per keep iteration
-  const usePrefixForDefaultEstimator = !opts.tokenEstimator && maxPreserveTokens !== null;
-  let prefixChars: number[] | null = null;
-  let totalChars = 0;
-  if (usePrefixForDefaultEstimator) {
-    prefixChars = new Array(n + 1);
-    prefixChars[0] = 0;
-    for (let i = 0; i < n; i += 1) {
-      const m = messages[i]!;
-      prefixChars[i + 1] = prefixChars[i]! + estimateMessageChars(m);
-    }
-    totalChars = prefixChars[n]!;
-  }
-
-  // Try shrinking keep from initial down to 0 to fit budget, always adjusting to safe boundary
-  for (let keep = keepRecentChainsRaw; keep >= 0; keep -= 1) {
-    let cutCandidate = computePreserveStart(keep);
-    // Adjust to safe boundary (never split a tool group). For cross-chain splits where
-    // a USER boundary lands inside a tool group, snap backward to group start so the
-    // entire call/result pair stays together in the preserved window (P1 #6). This
-    // avoids the forward-snap orphan where result is compacted but call is kept.
-    const adjustedCut = adjustCutToSafeBoundary(cutCandidate, completedIntervals, openGroupStart, n);
-    cutCandidate = adjustedCut;
-
-    let preservedCount: number;
-    if (cutCandidate <= 0) {
-      preservedCount = realChains.length;
-    } else {
-      preservedCount = realChains.filter((c) => c.end > cutCandidate).length;
-    }
-
-    // Budget check: estimate preserve window tokens
-    if (maxPreserveTokens !== null) {
-      let preserveTokens: number;
-      if (usePrefixForDefaultEstimator && prefixChars) {
-        const preservedChars = totalChars - prefixChars[cutCandidate]!;
-        const preservedLen = n - cutCandidate;
-        preserveTokens = Math.max(preservedLen, Math.ceil(preservedChars / 4));
-      } else {
-        const preserveSlice = messages.slice(cutCandidate);
-        preserveTokens = estimator(preserveSlice);
-      }
-      if (preserveTokens > maxPreserveTokens) {
-        // Budget exceeded — try smaller keep (shrink) unless we're already at minimal (open group only)
-        // Minimal is keep=0 -> preserve only open group (or empty if no open)
-        // If even minimal still exceeds and keep>0, continue shrinking
-        // If keep === 0 and still exceeds, we cannot shrink further — return minimal anyway (best-effort)
-        if (keep > 0) continue;
-        // keep === 0 is minimal, return it even if over budget (floor)
-      }
-    }
-
-    // compactableRange is [0, cutCandidate) after skipping the already-excluded prefix;
-    // the summary head stays in the range so it can be re-summarized with new chains.
-    let compactableStart = 0;
-    while (
-      compactableStart < cutCandidate &&
-      (messages[compactableStart]?.excludeFromModel || messages[compactableStart]?.hidden)
-    ) {
-      compactableStart++;
-    }
-    const compactableRange: CompactableRange = { start: compactableStart, end: cutCandidate };
-
-    // Edge: if cutCandidate === 0, compactable empty
-    // If cutCandidate === n, compactable is whole history (preserve empty) — but R6 says open group never compacted, so if open exists cutCandidate <= openStart < n, never n when open exists.
-
-    // For single-chain we already returned. For multi-chain, if cutCandidate === n and keep=0 and no open, compactable is all. That's allowed when budget forces compact all? But R6 preserve window is never compacted, but keep=0 means preserve window is empty (except open). So compacting all but open is okay.
-
+  // No preserve budget → nothing is compactable (preserve everything).
+  if (preserveBudget === null) {
     return {
-      cutIndex: cutCandidate,
-      compactableRange,
-      preservedCount,
+      cutIndex: 0,
+      compactableRange: { start: 0, end: 0 },
+      preservedCount: realChains.length,
       openGroupStart,
-      preservedRange: { start: cutCandidate, end: n },
+      preservedRange: { start: 0, end: n },
     };
   }
 
-  // Fallback (should not reach): return minimal preserve (open group only)
-  const fallbackCut = adjustCutToSafeBoundary(openGroupStart ?? n, completedIntervals, openGroupStart, n);
-  const fallbackPreservedCount = realChains.filter((c) => c.end > fallbackCut).length;
-  let fallbackStart = 0;
-  while (
-    fallbackStart < fallbackCut &&
-    (messages[fallbackStart]?.excludeFromModel || messages[fallbackStart]?.hidden)
-  ) {
-    fallbackStart++;
+  // Token-walk the newest suffix: accumulate per-message estimates from the
+  // end until the preserve budget is exceeded. The cut lands at the largest
+  // suffix that fits, regardless of chain boundaries — a single oversized
+  // turn no longer forces an empty preserved window.
+  const floorCut = trailingGroupFloor(completedIntervals, openGroupStart, n);
+  let tokenCut = 0;
+  let acc = 0;
+  for (let i = n - 1; i >= 0; i -= 1) {
+    acc += estimator([messages[i]!]);
+    if (acc > preserveBudget) {
+      tokenCut = i + 1;
+      break;
+    }
+    tokenCut = i;
   }
+
+  // Floor: the trailing open (or most recent completed) tool group is always
+  // preserved verbatim — best-effort over budget, bounded by one group.
+  if (floorCut !== null && tokenCut > floorCut) tokenCut = floorCut;
+
+  // Adjust to safe boundary (never split a tool group). Snapping backward may
+  // exceed the budget slightly; forward snaps are never needed because the
+  // walk already stops outside groups that fit.
+  let cutCandidate = adjustCutToSafeBoundary(tokenCut, completedIntervals, openGroupStart, n);
+  if (floorCut !== null && cutCandidate > floorCut) cutCandidate = floorCut;
+
+  let preservedCount: number;
+  if (cutCandidate <= 0) {
+    preservedCount = realChains.length;
+  } else {
+    preservedCount = realChains.filter((c) => c.end > cutCandidate).length;
+  }
+
+  // compactableRange is [0, cutCandidate) after skipping the already-excluded prefix;
+  // the summary head stays in the range so it can be re-summarized with new chains.
+  let compactableStart = 0;
+  while (
+    compactableStart < cutCandidate &&
+    (messages[compactableStart]?.excludeFromModel || messages[compactableStart]?.hidden)
+  ) {
+    compactableStart++;
+  }
+
   return {
-    cutIndex: fallbackCut,
-    compactableRange: { start: fallbackStart, end: fallbackCut },
-    preservedCount: fallbackPreservedCount,
+    cutIndex: cutCandidate,
+    compactableRange: { start: compactableStart, end: cutCandidate },
+    preservedCount,
     openGroupStart,
-    preservedRange: { start: fallbackCut, end: n },
+    preservedRange: { start: cutCandidate, end: n },
   };
 }
 

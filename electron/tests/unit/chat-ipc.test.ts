@@ -2466,7 +2466,7 @@ describe('chat compaction mid-turn pause', () => {
             threshold: 0.5,
             model: null,
             agent_name: 'compactor',
-            keep_recent_chains: 3,
+            preserve_percent: 0.25,
             min_compactable_tokens: 0,
             mechanical_reclaim: true,
             hysteresis_delta: 0.1,
@@ -2476,7 +2476,7 @@ describe('chat compaction mid-turn pause', () => {
             threshold: 0.85,
             model: null,
             agent_name: 'compactor-subagent',
-            keep_recent_chains: 3,
+            preserve_percent: 0.25,
             min_compactable_tokens: 4000,
             mechanical_reclaim: true,
             hysteresis_delta: 0.1,
@@ -2609,6 +2609,283 @@ describe('chat compaction mid-turn pause', () => {
     expect(summary?.content).toBe('SUMMARY: explored compaction module');
     // Compacted range messages are excluded from replay but never deleted.
     expect(resumedMessages.some((m) => m.tool_call_id === 'tc-compact-1' && m.excludeFromModel)).toBe(true);
+    expect(mocks.saveSession).toHaveBeenCalled();
+  });
+});
+
+describe('chat compaction disabled without a model context limit', () => {
+  const selection = {
+    connectionId: '11111111-1111-4111-8111-111111111111',
+    modelId: 'vendor/path/model',
+  };
+
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    mocks.handlers.clear();
+    mocks.streamResponses.length = 0;
+    mocks.streamEventSequences.length = 0;
+    mocks.runtimeRegistry._reset();
+    mocks.sessionManager._reset();
+    mocks.runtimeRegistry._set(mocks.workspace._testProjectDir, {
+      config: {
+        default_model: null,
+        tier_models: { bloom: null },
+        command_timeout: 30,
+        llm_stream_idle_timeout: 60,
+        llm_stream_retries: 0,
+        session_title_max_wait_seconds: 0,
+        max_tool_steps: 100,
+        compaction: {
+          main: {
+            mode: 'simple',
+            threshold: 0.5,
+            model: null,
+            agent_name: 'compactor',
+            preserve_percent: 0.25,
+            min_compactable_tokens: 0,
+            mechanical_reclaim: true,
+            hysteresis_delta: 0.1,
+          },
+          subagents: {
+            mode: 'simple',
+            threshold: 0.85,
+            model: null,
+            agent_name: 'compactor-subagent',
+            preserve_percent: 0.25,
+            min_compactable_tokens: 4000,
+            mechanical_reclaim: true,
+            hysteresis_delta: 0.1,
+          },
+        },
+      },
+    });
+    // Default resolveExecution mock returns no model.limits → contextTokens null.
+    chatIpc = await import('../../src/main/ipc/chat');
+    chatIpc.registerChatIPC();
+  });
+
+  afterEach(() => {
+    chatIpc.unregisterChatIPC();
+    mocks.handlers.clear();
+    mocks.sessionManager._reset();
+  });
+
+  function hugeHistoryStream() {
+    return async function* () {
+      yield {
+        type: 'tool_call',
+        toolCallId: 'tc-nolimit-1',
+        toolName: 'read',
+        args: '{"path":"README.md"}',
+      };
+      yield successfulToolResult('tc-nolimit-1', 'x'.repeat(500_000));
+      yield {
+        type: 'usage',
+        usage: {
+          prompt_tokens: 120_000,
+          completion_tokens: 40,
+          total_tokens: 120_040,
+          cached_tokens: 0,
+        },
+      };
+      yield { type: 'finish', finishReason: 'stop' };
+    };
+  }
+
+  it('never compacts on send when the model has no configured context window', async () => {
+    const sessionId = 'e2e2e2e2-e2e2-4e2e-8e2e-e2e2e2e2e2e2';
+    mocks.sessionManager._setActive({
+      ...makeSession(sessionId),
+      model: selection.modelId,
+      selection,
+      modelLabel: selection.modelId,
+    });
+    mocks.streamChat.mockImplementationOnce(hugeHistoryStream());
+
+    const send = vi.fn();
+    const chatSend = mocks.handlers.get(IPC_CHANNELS.CHAT_SEND)!;
+    await chatSend({ sender: { id: 950, send } }, { message: 'Explore with tools' });
+    await waitForDoneCount(send, 1);
+
+    await chatSend({ sender: { id: 950, send } }, { message: 'Follow up' });
+    await waitForDoneCount(send, 2);
+
+    // The pre-fix send-time path substituted an assumed 128k window for the
+    // null limit and compacted this history; compaction must stay disabled.
+    expect(mocks.summarizeCompactableRange).not.toHaveBeenCalled();
+    expect(mocks.streamChat).toHaveBeenCalledTimes(2);
+    const secondMessages = mocks.streamChat.mock.calls[1]![0]!.messages as Array<{
+      content?: string;
+      compacted?: unknown;
+      excludeFromModel?: boolean;
+    }>;
+    expect(secondMessages.some((m) => m.compacted)).toBe(false);
+    expect(secondMessages.some((m) => m.excludeFromModel)).toBe(false);
+    // The oversized tool result is replayed verbatim — no reclaim offload.
+    expect(secondMessages.some((m) => typeof m.content === 'string' && m.content.length > 400_000)).toBe(true);
+  });
+});
+
+describe('chat compaction send-time calibration', () => {
+  const selection = {
+    connectionId: '11111111-1111-4111-8111-111111111111',
+    modelId: 'vendor/path/model',
+  };
+
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    mocks.handlers.clear();
+    mocks.streamResponses.length = 0;
+    mocks.streamEventSequences.length = 0;
+    mocks.runtimeRegistry._reset();
+    mocks.sessionManager._reset();
+    mocks.runtimeRegistry._set(mocks.workspace._testProjectDir, {
+      config: {
+        default_model: null,
+        tier_models: { bloom: null },
+        command_timeout: 30,
+        llm_stream_idle_timeout: 60,
+        llm_stream_retries: 0,
+        session_title_max_wait_seconds: 0,
+        max_tool_steps: 100,
+        compaction: {
+          main: {
+            mode: 'simple',
+            threshold: 0.5,
+            model: null,
+            agent_name: 'compactor',
+            preserve_percent: 0.25,
+            min_compactable_tokens: 0,
+            mechanical_reclaim: true,
+            hysteresis_delta: 0.1,
+          },
+          subagents: {
+            mode: 'simple',
+            threshold: 0.85,
+            model: null,
+            agent_name: 'compactor-subagent',
+            preserve_percent: 0.25,
+            min_compactable_tokens: 4000,
+            mechanical_reclaim: true,
+            hysteresis_delta: 0.1,
+          },
+        },
+      },
+    });
+    mocks.providerRuntime.resolveExecution.mockImplementationOnce(async () => ({
+      modelInstance: mocks.modelInstance,
+      connection: {},
+      model: {
+        id: 'vendor/path/model',
+        capabilities: { reasoning: false },
+        limits: { contextTokens: 2000 },
+      },
+      snapshot: {
+        providerId: 'openai',
+        providerDisplayName: 'OpenAI',
+        connectionId: selection.connectionId,
+        connectionName: 'Work',
+        modelId: selection.modelId,
+        protocol: 'openai-compatible',
+        modelSource: 'catalog',
+        catalogVersion: 1,
+        catalogSource: 'bundled',
+        catalogObservedAt: null,
+        pricing: null,
+        fieldProvenance: {},
+        statusObservation: null,
+      },
+    }));
+    chatIpc = await import('../../src/main/ipc/chat');
+    chatIpc.registerChatIPC();
+  });
+
+  afterEach(() => {
+    chatIpc.unregisterChatIPC();
+    mocks.handlers.clear();
+    mocks.sessionManager._reset();
+  });
+
+  function textOnlyStream() {
+    return async function* () {
+      yield { type: 'text', data: 'ok' };
+      yield { type: 'finish', finishReason: 'stop' };
+    };
+  }
+
+  it('skips send-time compaction when uncalibrated, even over threshold (hard rule: no chars/4)', async () => {
+    const sessionId = 'e3e3e3e3-e3e3-4e3e-8e3e-e3e3e3e3e3e3';
+    mocks.sessionManager._setActive({
+      ...makeSession(sessionId),
+      model: selection.modelId,
+      selection,
+      modelLabel: selection.modelId,
+    });
+    // Large prior history, but NO usage observation anywhere: no context
+    // snapshots (store unavailable in tests) and no chain message usages.
+    mocks.sessionManager._setModelHistory([
+      { id: 'u-old', role: 'user', content: 'x'.repeat(4000), type: 'text' },
+    ]);
+    mocks.streamChat.mockImplementationOnce(textOnlyStream());
+
+    const send = vi.fn();
+    const chatSend = mocks.handlers.get(IPC_CHANNELS.CHAT_SEND)!;
+    await chatSend({ sender: { id: 960, send } }, { message: 'Follow up' });
+    await waitForDoneCount(send, 1);
+
+    // chars/4 would estimate ~1000 tokens = threshold(0.5) × 2000 and fire;
+    // the hard rule keeps the estimate unknown and skips proactive compaction.
+    expect(mocks.summarizeCompactableRange).not.toHaveBeenCalled();
+    expect(mocks.streamChat).toHaveBeenCalledTimes(1);
+    const sentMessages = mocks.streamChat.mock.calls[0]![0]!.messages as Array<{
+      content?: string;
+      compacted?: unknown;
+    }>;
+    expect(sentMessages.some((m) => m.compacted)).toBe(false);
+    expect(sentMessages.some((m) => m.content === 'x'.repeat(4000))).toBe(true);
+  });
+
+  it('hydrates calibration from persisted chain usage and compacts within the preserve budget', async () => {
+    const sessionId = 'e4e4e4e4-e4e4-4e4e-8e4e-e4e4e4e4e4e4';
+    mocks.sessionManager._setActive({
+      ...makeSession(sessionId),
+      model: selection.modelId,
+      selection,
+      modelLabel: selection.modelId,
+      chains: [
+        {
+          id: 'chain-old',
+          messages: [
+            { id: 'u-old', role: 'user', content: 'x'.repeat(4000), type: 'text', usage: { prompt_tokens: 1500 } },
+          ],
+        },
+      ] as never,
+    });
+    mocks.sessionManager._setModelHistory([
+      { id: 'u-old', role: 'user', content: 'x'.repeat(4000), type: 'text' },
+    ]);
+    mocks.summarizeCompactableRange.mockResolvedValueOnce({ text: 'SUMMARY: prior turn' });
+    mocks.streamChat.mockImplementationOnce(textOnlyStream());
+
+    const send = vi.fn();
+    const chatSend = mocks.handlers.get(IPC_CHANNELS.CHAT_SEND)!;
+    await chatSend({ sender: { id: 961, send } }, { message: 'Follow up' });
+    await waitForDoneCount(send, 1);
+
+    // Hydrated lastObserved=1500 → ratio ≈ 0.37 → estimate 1500 = 0.75 of the
+    // 2000 window ≥ 0.5 threshold → fires with preserve budget 500 tokens.
+    expect(mocks.summarizeCompactableRange).toHaveBeenCalledTimes(1);
+    expect(mocks.streamChat).toHaveBeenCalledTimes(1);
+    const sentMessages = mocks.streamChat.mock.calls[0]![0]!.messages as Array<{
+      content?: string;
+      compacted?: unknown;
+      excludeFromModel?: boolean;
+    }>;
+    const summary = sentMessages.find((m) => m.compacted);
+    expect(summary?.content).toBe('SUMMARY: prior turn');
+    // The oversized prior message is excluded from replay but never deleted.
+    const oldMessage = sentMessages.find((m) => m.content === 'x'.repeat(4000));
+    expect(oldMessage?.excludeFromModel).toBe(true);
     expect(mocks.saveSession).toHaveBeenCalled();
   });
 });

@@ -130,6 +130,15 @@ export class ContextSnapshotStore {
     return rows.map(rowToRecord);
   }
 
+  /** Latest main-agent input tokens for a session, or null when none recorded. */
+  latestMainInputTokens(sessionId: string): number | null {
+    const row = this.connection().prepare(
+      'SELECT input_tokens FROM context_snapshots WHERE session_id = ? AND (agent_scope IS NULL OR agent_scope = \'main\') ORDER BY captured_at DESC LIMIT 1',
+    ).get(sessionId) as { input_tokens: number } | undefined;
+    if (!row || !Number.isFinite(row.input_tokens) || row.input_tokens <= 0) return null;
+    return row.input_tokens;
+  }
+
   listAll(limit = 1000, startDate?: string, endDate?: string): readonly ContextSnapshotRecord[] {
     const conditions: string[] = [];
     const params: unknown[] = [];

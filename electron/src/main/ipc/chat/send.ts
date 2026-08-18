@@ -77,7 +77,7 @@ import {
 import { ensureActiveSessionSingleFlight } from './session';
 import { classifyErrorKind, createProviderStreamFn } from './stream';
 import { triggerSessionAutoName } from './title';
-import { selectCut, type CutResult } from '../../llm/compaction/select';
+import { selectCut, resolvePreservePercent, type CutResult } from '../../llm/compaction/select';
 import { mechanicalReclaim } from '../../llm/compaction/reclaim';
 import { summarizeCompactableRange } from '../../llm/compaction/summarize';
 import { buildCompactionApply, CompactionApplyError } from '../../llm/compaction/apply';
@@ -92,8 +92,6 @@ import { onSessionDeleted } from '../../session/manager';
 export type ChatSendPayload = z.infer<typeof chatSendSchema>;
 
 // ── Compaction state per session (U8, R13) ──────────────────────────────────
-
-const FALLBACK_CONTEXT_TOKENS = 128_000;
 
 const compactionTriggers = new Map<string, CompactionTrigger>();
 const compactionPending = new Map<string, {
@@ -112,6 +110,7 @@ const compactionRetryTried = new Set<string>();
 export function clearCompactionState(sessionId: string): void {
   compactionTriggers.delete(sessionId);
   compactionPending.delete(sessionId);
+  triggerCalibrationHydrated.delete(sessionId);
   for (const key of [...compactionRetryTried]) {
     if (key === sessionId || key.startsWith(`${sessionId}:`)) compactionRetryTried.delete(key);
   }
@@ -144,6 +143,56 @@ function getCompactionTrigger(sessionId: string): CompactionTrigger {
     compactionTriggers.set(sessionId, t);
   }
   return t;
+}
+
+// Sessions whose trigger calibration was already seeded from persistence.
+const triggerCalibrationHydrated = new Set<string>();
+
+/**
+ * Seed an uncalibrated trigger from persisted observations so calibration
+ * survives restarts: the accounting DB keeps per-step context snapshots with
+ * provider-reported input_tokens; the session chains' message usages are a
+ * secondary source. Sets lastObservedInputTokens only — the tokens-per-char
+ * ratio is derived against the live history where it is consumed.
+ */
+async function hydrateTriggerCalibration(sessionId: string): Promise<void> {
+  if (triggerCalibrationHydrated.has(sessionId)) return;
+  const trigger = getCompactionTrigger(sessionId);
+  if (trigger.state.tokensPerChar != null) {
+    triggerCalibrationHydrated.add(sessionId);
+    return;
+  }
+  triggerCalibrationHydrated.add(sessionId);
+  let observed: number | null = null;
+  try {
+    // Lazy import: keeps the chat module-load graph free of the accounting
+    // store chain (its config/loader dependency conflicts with test mocks).
+    const { getContextSnapshotStore } = await import('../../providers/accounting/context-snapshot-store.js');
+    observed = getContextSnapshotStore().latestMainInputTokens(sessionId);
+  } catch {
+    // store unavailable (not initialized / test env) — fall through
+  }
+  if (observed == null) {
+    try {
+      const chains = getSessionManager().getSession(sessionId)?.chains ?? [];
+      for (let i = chains.length - 1; i >= 0 && observed == null; i -= 1) {
+        const msgs = chains[i]?.messages ?? [];
+        for (let j = msgs.length - 1; j >= 0; j -= 1) {
+          const usage = msgs[j]!.usage;
+          const input = usage?.context?.input_tokens ?? usage?.prompt_tokens;
+          if (typeof input === 'number' && Number.isFinite(input) && input > 0) {
+            observed = input;
+            break;
+          }
+        }
+      }
+    } catch {
+      // non-fatal — skip
+    }
+  }
+  if (observed != null) {
+    trigger.state.lastObservedInputTokens = observed;
+  }
 }
 
 function dedupeHistoryById(messages: readonly Message[]): Message[] {
@@ -507,7 +556,7 @@ async function tryCompactSynchronously(
   messages: Message[],
   runtime: import('../../project/runtime').ProjectRuntime,
   selection: import('../../../shared/types/provider').ModelSelection,
-  contextTokens: number,
+  contextTokens: number | null,
   accountingStore: ReturnType<typeof getProviderAccountingStore>,
   chainId: string | null,
   turnId: string,
@@ -515,7 +564,11 @@ async function tryCompactSynchronously(
   const trigger = getCompactionTrigger(sessionId);
   const cfg = runtime.config.compaction?.main;
   if (!cfg) return { didApply: false };
-  if (!Number.isFinite(contextTokens) || contextTokens <= 0) return { didApply: false };
+  // Models without a configured context window never compact proactively:
+  // fabricating an assumed window here diverged from the mid-turn usage path,
+  // which is disabled when the limit is unknown.
+  if (contextTokens == null || !Number.isFinite(contextTokens) || contextTokens <= 0) return { didApply: false };
+  const windowTokens: number = contextTokens;
   if (trigger.state.pendingPrepare) return { didApply: false };
   try {
     // Single-pass: compute totalChars once, reuse for estimate and trigger ratio
@@ -526,14 +579,19 @@ async function tryCompactSynchronously(
       const r = obs / totalCharsValue;
       if (Number.isFinite(r) && r > 0) tokensPerChar = Math.max(0.05, Math.min(r, 2));
     }
+    // Hard rule: never estimate with a heuristic chars/4 ratio. Without a
+    // calibrated tokens-per-char (provider usage or hydrated observation) the
+    // input estimate is unknown and proactive send-time compaction is skipped.
+    // The overflow-retry path and mid-turn usage events remain as backstops,
+    // and the first observed usage calibrates all future estimates.
     if (tokensPerChar == null || !Number.isFinite(tokensPerChar) || tokensPerChar <= 0) {
-      tokensPerChar = 0.25;
+      return { didApply: false };
     }
     const estimatedInput = Math.ceil(totalCharsValue * tokensPerChar);
     // Early gate before expensive selectCut/reclaim: only proceed if threshold crossed or hysteresis accrual allows re-fire
-    const ratio = estimatedInput / contextTokens;
+    const ratio = estimatedInput / windowTokens;
     const hysteresisDelta = cfg.hysteresis_delta ?? 0.1;
-    const isOverWindow = estimatedInput >= contextTokens;
+    const isOverWindow = estimatedInput >= windowTokens;
     if (ratio + 1e-9 < cfg.threshold && !isOverWindow) {
       const baseline = trigger.state.postCompactionInputTokens;
       if (!(trigger.state.hysteresisArmed && typeof baseline === 'number' && estimatedInput - baseline >= cfg.min_compactable_tokens)) {
@@ -553,7 +611,10 @@ async function tryCompactSynchronously(
       }
       return Math.max(slice.length, Math.ceil(chars * tokensPerChar));
     };
-    const cut = selectCut(messages, { keepRecentChains: cfg.keep_recent_chains, budget: { contextTokens, threshold: cfg.threshold }, tokenEstimator: calibratedEstimator });
+    const cut = selectCut(messages, {
+      preserveTokens: Math.floor(resolvePreservePercent(cfg) * windowTokens),
+      tokenEstimator: calibratedEstimator,
+    });
     if (cut.compactableRange.end <= cut.compactableRange.start) return { didApply: false };
     const compactableTokens = compactableTokenEstimate(messages, cut.compactableRange, tokensPerChar);
     if (compactableTokens < cfg.min_compactable_tokens) return { didApply: false };
@@ -793,8 +854,10 @@ function handleUsageCompaction(
   const trigger = getCompactionTrigger(sessionId);
   const cfg = runtime.config.compaction?.main;
   if (!cfg) return;
+  // Unknown context window → compaction is disabled, mirroring the send-time path.
+  if (!Number.isFinite(contextTokens) || contextTokens <= 0) return;
   const history = dedupeHistoryById(fullHistory);
-  const effectiveContextTokens = Number.isFinite(contextTokens) && contextTokens > 0 ? contextTokens : FALLBACK_CONTEXT_TOKENS;
+  const effectiveContextTokens = contextTokens;
   // Single-pass totalChars reuse + early threshold gate (avoids 4× scans per CHAT_USAGE)
   const totalCharsValue = totalChars(history);
   // Derive calibrated tokensPerChar from provider inputTokens / totalChars (no /4 fallback)
@@ -811,6 +874,11 @@ function handleUsageCompaction(
   trigger.onUsage(inputTokens, effectiveContextTokens, cfg.threshold, cfg.hysteresis_delta);
   if (trigger.state.pendingPrepare) return;
   if (compactionPending.has(sessionId)) return;
+  // Calibrate-or-skip: this path always receives provider-reported inputTokens,
+  // so a missing calibration means the usage payload was unusable — skip
+  // rather than estimate.
+  if (tokensPerChar == null || !Number.isFinite(tokensPerChar) || tokensPerChar <= 0) return;
+  const calibratedRatio = tokensPerChar;
   const isOverWindow = inputTokens >= effectiveContextTokens;
   if (!isOverWindow) {
     const ratio = inputTokens / effectiveContextTokens;
@@ -833,9 +901,12 @@ function handleUsageCompaction(
         if (m.name) chars += m.name.length;
         if ((m as unknown as { compacted?: unknown }).compacted) chars += JSON.stringify((m as unknown as { compacted: unknown }).compacted).length;
       }
-      return Math.max(slice.length, Math.ceil(chars * (tokensPerChar ?? 0.25)));
+      return Math.max(slice.length, Math.ceil(chars * calibratedRatio));
     };
-    const cut = selectCut(history, { keepRecentChains: cfg.keep_recent_chains, budget: { contextTokens: effectiveContextTokens, threshold: cfg.threshold }, tokenEstimator: calibratedEstimator2 });
+    const cut = selectCut(history, {
+      preserveTokens: Math.floor(resolvePreservePercent(cfg) * effectiveContextTokens),
+      tokenEstimator: calibratedEstimator2,
+    });
     if (cut.compactableRange.end <= cut.compactableRange.start) return;
     if (tokensPerChar == null || !Number.isFinite(tokensPerChar) || tokensPerChar <= 0) {
       tokensPerChar = 0.25;
@@ -1138,13 +1209,13 @@ export async function startChatTurn(
   let chainId: string | null = null;
 
   {
-    const effectiveContextTokens = contextTokens != null && contextTokens > 0 ? contextTokens : FALLBACK_CONTEXT_TOKENS;
+    await hydrateTriggerCalibration(sessionId);
     const pendingApplied = await applyPendingCompactionIfAny(sessionId, messages, runtime);
     if (pendingApplied.applied && pendingApplied.updatedMessages) {
       messages = pendingApplied.updatedMessages;
       existingMessages = messages.slice(0, messages.length - 1);
     }
-    const syncResult = await tryCompactSynchronously(sessionId, messages, runtime, turnSelection, effectiveContextTokens, accountingStore!, chainId, turnId);
+    const syncResult = await tryCompactSynchronously(sessionId, messages, runtime, turnSelection, contextTokens, accountingStore!, chainId, turnId);
     if (syncResult.didApply && syncResult.updatedMessages) {
       messages = syncResult.updatedMessages;
       existingMessages = messages.slice(0, messages.length - 1);
@@ -1620,6 +1691,13 @@ export async function startChatTurn(
         (async () => {
           try {
             try {
+              // A context-length error proves input >= contextTokens — record
+              // that measured lower bound so the retry's token estimate is
+              // grounded in observation instead of a heuristic ratio.
+              const retryTrigger = getCompactionTrigger(sessionId);
+              if (retryTrigger.state.tokensPerChar == null) {
+                retryTrigger.state.lastObservedInputTokens = contextTokens;
+              }
               const retryResult = await tryCompactSynchronously(sessionId, historyForRetry, runtime, turnSelection, contextTokens, accountingStore!, chainId, turnId);
               if (retryResult.didApply && retryResult.updatedMessages) {
                 messages.splice(0, messages.length, ...retryResult.updatedMessages);

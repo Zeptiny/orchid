@@ -127,7 +127,7 @@ export async function tryCompactSubagentHistory(params: {
   if (!Number.isFinite(inputTokens) || inputTokens < 0) return null;
 
   // Lazy imports to avoid cycle with provider runtime during typecheck
-  const { selectCut } = await import('../llm/compaction/select.js');
+  const { selectCut, resolvePreservePercent } = await import('../llm/compaction/select.js');
   const { mechanicalReclaim } = await import('../llm/compaction/reclaim.js');
   const { evaluateTriggerWithReclaim } = await import('../llm/compaction/trigger.js');
   const { buildCompactionApply } = await import('../llm/compaction/apply.js');
@@ -151,8 +151,7 @@ export async function tryCompactSubagentHistory(params: {
       return Math.max(slice.length, Math.ceil(chars * tokensPerCharSub));
     };
     cut = selectCut(messages as Message[], {
-      keepRecentChains: subagentsScope.keep_recent_chains,
-      budget: { contextTokens, threshold: subagentsScope.threshold },
+      preserveTokens: Math.floor(resolvePreservePercent(subagentsScope) * contextTokens),
       tokenEstimator: calibratedEstimatorSub,
     });
   } catch {

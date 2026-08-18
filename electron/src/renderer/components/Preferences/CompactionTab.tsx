@@ -70,7 +70,7 @@ export function CompactionTab({ compaction, onChange }: CompactionTabProps) {
       // Enforce upper bounds per schema
       if (field === 'threshold' && num > 0.95) return;
       if (field === 'hysteresis_delta' && num > 0.5) return;
-      if (field === 'keep_recent_chains' && num > 100) return;
+      if (field === 'preserve_percent' && num > 0.9) return;
       if (field === 'min_compactable_tokens' && num > 1_000_000) return;
       updateField(scope, field, num as CompactionScopeConfig[typeof field]);
     },
@@ -170,20 +170,21 @@ export function CompactionTab({ compaction, onChange }: CompactionTabProps) {
           </FormField>
 
           <FormField
-            label="Keep Recent Chains"
-            htmlFor={`${prefix}-keep-recent`}
-            hint="Preserve window — recent completed chains kept verbatim and never compacted."
+            label="Preserve Percent"
+            htmlFor={`${prefix}-preserve-percent`}
+            hint="Fraction of the context window kept verbatim (never compacted). The newest messages fill this budget from the end; everything older is summarized. 0.25 = keep the most recent 25%."
             className="config-field"
           >
             <TextInput
-              id={`${prefix}-keep-recent`}
+              id={`${prefix}-preserve-percent`}
               type="number"
-              value={cfg.keep_recent_chains}
-              onChange={(e) => handleNumberChange(scope, 'keep_recent_chains', e.target.value, 0, { integer: true })}
+              value={cfg.preserve_percent}
+              onChange={(e) => handleNumberChange(scope, 'preserve_percent', e.target.value, 0.05)}
               bordered
               className="w-full"
-              min={0}
-              max={100}
+              min={0.05}
+              max={0.9}
+              step={0.05}
             />
           </FormField>
 

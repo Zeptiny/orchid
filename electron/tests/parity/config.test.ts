@@ -309,7 +309,7 @@ const EXPECTED_COMPACTION_MAIN_FIELDS = [
   { field: 'threshold', defaultValue: 0.8 },
   { field: 'model', defaultValue: null },
   { field: 'agent_name', defaultValue: 'compactor' },
-  { field: 'keep_recent_chains', defaultValue: 3 },
+  { field: 'preserve_percent', defaultValue: 0.25 },
   { field: 'min_compactable_tokens', defaultValue: 4000 },
   { field: 'mechanical_reclaim', defaultValue: true },
   { field: 'hysteresis_delta', defaultValue: 0.1 },
@@ -320,7 +320,7 @@ const EXPECTED_COMPACTION_SUBAGENTS_FIELDS = [
   { field: 'threshold', defaultValue: 0.85 },
   { field: 'model', defaultValue: null },
   { field: 'agent_name', defaultValue: 'compactor-subagent' },
-  { field: 'keep_recent_chains', defaultValue: 3 },
+  { field: 'preserve_percent', defaultValue: 0.25 },
   { field: 'min_compactable_tokens', defaultValue: 4000 },
   { field: 'mechanical_reclaim', defaultValue: true },
   { field: 'hysteresis_delta', defaultValue: 0.1 },
@@ -489,7 +489,7 @@ describe('Config Parity', () => {
       }
       // Explicit pin for review-gate assertions
       expect(cfg.compaction.main.threshold).toBe(0.8);
-      expect(cfg.compaction.main.keep_recent_chains).toBe(3);
+      expect(cfg.compaction.main.preserve_percent).toBe(0.25);
       expect(cfg.compaction.main.min_compactable_tokens).toBe(4000);
       expect(cfg.compaction.main.hysteresis_delta).toBe(0.1);
       expect(cfg.compaction.main.mode).toBe('simple');
@@ -507,7 +507,7 @@ describe('Config Parity', () => {
       }
       // Selective threshold delta is intentional (0.85 vs 0.8)
       expect(cfg.compaction.subagents.threshold).toBe(0.85);
-      expect(cfg.compaction.subagents.keep_recent_chains).toBe(3);
+      expect(cfg.compaction.subagents.preserve_percent).toBe(0.25);
       expect(cfg.compaction.subagents.min_compactable_tokens).toBe(4000);
       expect(cfg.compaction.subagents.hysteresis_delta).toBe(0.1);
       expect(cfg.compaction.subagents.mode).toBe('simple');

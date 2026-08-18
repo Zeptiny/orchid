@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { Message } from '../../src/shared/types/message';
 import { MessageRole, MessageType } from '../../src/shared/types/message';
-import { selectCut, analyzeToolGroups, isCleanToolGroupBoundary } from '../../src/main/llm/compaction/select';
+import { selectCut, analyzeToolGroups, isCleanToolGroupBoundary, resolvePreservePercent } from '../../src/main/llm/compaction/select';
 import type { ToolCall } from '../../src/shared/types/tool';
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
@@ -46,23 +46,6 @@ function makeToolCallMsg(id: string, callId: string, name: string, args = '{}', 
   });
 }
 
-function makeParallelToolCallsMsg(id: string, calls: Array<{ callId: string; name: string; args?: string }>): Message {
-  const tcs: ToolCall[] = calls.map((c) => ({
-    id: c.callId,
-    type: 'function',
-    function: { name: c.name, arguments: c.args ?? '{}' },
-  }));
-  return makeMessage({
-    id,
-    role: MessageRole.ASSISTANT,
-    content: '',
-    type: MessageType.TOOL_CALL,
-    tool_calls: tcs,
-    tool_call_id: calls[0]?.callId ?? null,
-    name: calls[0]?.name ?? null,
-  });
-}
-
 function makeToolResult(id: string, callId: string, name: string, content: string): Message {
   return makeMessage({
     id,
@@ -85,219 +68,134 @@ function makeSummaryHead(id: string, content = 'summary handoff'): Message {
   });
 }
 
-// Build a history of N chains, each chain is: user -> assistant text -> maybe tool group
-function buildChainMessages(chainCount: number, opts?: { withSummaryHead?: boolean }): { messages: Message[]; chainBoundaries: number[] } {
-  const messages: Message[] = [];
-  const boundaries: number[] = [];
-  let idx = 0;
-  if (opts?.withSummaryHead) {
-    messages.push(makeSummaryHead(`summary-${idx++}`));
-    boundaries.push(0);
+/** N text messages of exactly `chars` chars each (default estimator: ceil(chars/4) tokens each). */
+function uniformMessages(count: number, chars: number): Message[] {
+  const out: Message[] = [];
+  for (let i = 0; i < count; i += 1) {
+    out.push(i % 2 === 0
+      ? makeUser(`u-${i}`, 'x'.repeat(chars))
+      : makeAssistantText(`a-${i}`, 'x'.repeat(chars)));
   }
-  for (let c = 0; c < chainCount; c += 1) {
-    boundaries.push(messages.length);
-    messages.push(makeUser(`u-${c}`, `user turn ${c}`));
-    messages.push(makeAssistantText(`a-${c}`, `assistant reply ${c}`));
-    // Add a tool group on even chains to exercise tool atomicity inside chain
-    if (c % 2 === 0) {
-      const callId = `tc-${c}`;
-      messages.push(makeToolCallMsg(`tcmsg-${c}`, callId, 'read', JSON.stringify({ path: `file${c}.txt` })));
-      messages.push(makeToolResult(`tr-${c}`, callId, 'read', `content ${c}`));
-    }
-  }
-  return { messages, chainBoundaries: boundaries };
+  return out;
 }
 
 // ── Tests ───────────────────────────────────────────────────────────────────
 
-describe('selectCut — cut never splits a tool_call/result group (R5)', () => {
-  it('does not cut inside a completed tool group', () => {
-    // History: chain0 [user, assistant, tool_call(tc-1)], chain1 [tool_result, user...]
-    // But chain boundary after tool_call, so tool group spans the chain boundary.
-    // The cut honoring preserve-N=1 would be at chain1 start (between call and result) — must snap earlier.
+describe('selectCut — suffix token walk (preserve budget)', () => {
+  it('fills the preserve budget from the newest message backward', () => {
+    // 6 messages × 25 tokens (100 chars each); budget 80 → suffix of 3 messages (75 tokens)
+    const messages = uniformMessages(6, 100);
+    const result = selectCut(messages, { preserveTokens: 80, chainBoundaries: [0] });
+    expect(result.cutIndex).toBe(3);
+    expect(result.preservedRange).toEqual({ start: 3, end: 6 });
+    expect(result.compactableRange).toEqual({ start: 0, end: 3 });
+  });
+
+  it('returns empty compactable when the whole history fits the budget', () => {
+    const messages = uniformMessages(4, 100);
+    const result = selectCut(messages, { preserveTokens: 1000, chainBoundaries: [0] });
+    expect(result.cutIndex).toBe(0);
+    expect(result.compactableRange).toEqual({ start: 0, end: 0 });
+  });
+
+  it('cuts inside a single oversized chain instead of compacting the whole turn', () => {
+    // Regression for the keep→0 tail loss: one huge turn + a tiny follow-up.
+    // Old chain-count semantics compacted the ENTIRE oversized turn; the suffix
+    // walk must preserve the most recent ~budget of it verbatim.
+    const messages: Message[] = [
+      makeUser('u0', 'huge exploration turn'),
+      makeToolCallMsg('tc0', 'c0', 'read'),
+      makeToolResult('tr0', 'c0', 'read', 'x'.repeat(200)),
+      makeToolCallMsg('tc1', 'c1', 'read'),
+      makeToolResult('tr1', 'c1', 'read', 'x'.repeat(200)),
+      makeToolCallMsg('tc2', 'c2', 'read'),
+      makeToolResult('tr2', 'c2', 'read', 'x'.repeat(200)),
+      makeUser('u1', 'follow up'),
+    ];
+    // Budget sized to keep roughly the last group + follow-up.
+    const result = selectCut(messages, { preserveTokens: 120, chainBoundaries: [0, 7] });
+    expect(result.cutIndex).toBeGreaterThan(0);
+    expect(result.cutIndex).toBeLessThan(7); // inside the oversized chain, not at its start
+    expect(result.preservedRange.end).toBe(messages.length);
+    expect(result.preservedRange).not.toEqual({ start: 7, end: messages.length }); // more than just the follow-up survives
+    expect(isCleanToolGroupBoundary(messages, result.cutIndex)).toBe(true);
+  });
+
+  it('resolves preserve budget from preservePercent × contextTokens', () => {
+    // 0.25 × 400 = 100 tokens; 5 × 25-token messages → 5th message exceeds, cut at 1
+    const messages = uniformMessages(5, 100);
+    const result = selectCut(messages, { preservePercent: 0.25, budget: { contextTokens: 400 }, chainBoundaries: [0] });
+    expect(result.cutIndex).toBe(1);
+  });
+
+  it('resolves legacy threshold-derived budget when no preserve knob is set', () => {
+    // threshold 0.5 × 400 = 200 tokens; 10 × 25-token messages → cut at 2
+    const messages = uniformMessages(10, 100);
+    const result = selectCut(messages, { budget: { contextTokens: 400, threshold: 0.5 }, chainBoundaries: [0] });
+    expect(result.cutIndex).toBe(2);
+  });
+
+  it('honors maxPreserveTokens alias', () => {
+    const messages = uniformMessages(4, 100);
+    const result = selectCut(messages, { maxPreserveTokens: 30, chainBoundaries: [0] });
+    expect(result.cutIndex).toBe(3); // one message (25 tokens) fits
+  });
+
+  it('returns empty compactable when no budget is provided', () => {
+    const messages = uniformMessages(4, 100);
+    const result = selectCut(messages, { chainBoundaries: [0] });
+    expect(result.cutIndex).toBe(0);
+    expect(result.compactableRange).toEqual({ start: 0, end: 0 });
+    expect(result.preservedCount).toBe(1); // explicit [0] boundary → single chain preserved
+  });
+
+  it('uses the custom tokenEstimator when provided', () => {
+    const messages = uniformMessages(4, 100);
+    const estimator = (msgs: readonly Message[]) => msgs.length * 10;
+    const result = selectCut(messages, { preserveTokens: 15, tokenEstimator: estimator, chainBoundaries: [0] });
+    // One message = 10 tokens; two = 20 > 15 → single-message suffix.
+    expect(result.preservedRange.end - result.preservedRange.start).toBe(1);
+  });
+});
+
+describe('selectCut — tool-group atomicity (R5)', () => {
+  it('never cuts inside a completed tool group', () => {
     const messages: Message[] = [
       makeUser('u0', 'turn 0'),
       makeAssistantText('a0', 'reply 0'),
       makeToolCallMsg('tcmsg-0', 'call-1', 'read'),
-      // chain boundary here would split group
       makeToolResult('tr-1', 'call-1', 'read', 'file content'),
       makeUser('u1', 'turn 1'),
       makeAssistantText('a1', 'reply 1'),
     ];
-    // Two chains: chain0 = [u0,a0,tcmsg-0], chain1 = [tr-1,u1,a1]
-    const chainBoundaries = [0, 3];
-    const result = selectCut(messages, { keepRecentChains: 1, chainBoundaries });
-    // Preserve last 1 chain => ideal cut at 3, but that splits tool group [2,3]
-    // So cut must be at 2 (before the call) rather than 3
-    expect(result.cutIndex).toBe(2);
-    expect(result.compactableRange).toEqual({ start: 0, end: 2 });
+    // Tiny budget → the walk stops before the trailing turn; the trailing
+    // group [2,3] is compacted whole (call and result together) and the cut
+    // is a clean boundary.
+    const result = selectCut(messages, { preserveTokens: 5, chainBoundaries: [0, 4] });
     expect(isCleanToolGroupBoundary(messages, result.cutIndex)).toBe(true);
-    // Verify compactable does not end inside group
-    expect(isCleanToolGroupBoundary(messages, 3)).toBe(false);
+    expect(result.cutIndex).toBe(4);
+    expect(result.compactableRange).toEqual({ start: 0, end: 4 });
   });
 
-  it('preserves trailing open tool group entirely (no result yet)', () => {
+  it('cross-chain splits snap backward so call/result pairs stay together', () => {
     const messages: Message[] = [
       makeUser('u0', 'turn 0'),
       makeAssistantText('a0', 'reply 0'),
+      makeToolCallMsg('tcmsg-0', 'call-1', 'read'),
+      makeToolResult('tr-1', 'call-1', 'read', 'file content'),
       makeUser('u1', 'turn 1'),
-      makeToolCallMsg('tcmsg-1', 'open-1', 'grep', '{"pattern":"foo"}'),
-      // No tool result — open group at tail
+      makeAssistantText('a1', 'reply 1'),
     ];
-    const chainBoundaries = [0, 2];
-    const result = selectCut(messages, { keepRecentChains: 1, chainBoundaries });
-    expect(result.openGroupStart).toBe(3);
-    // Cut must be <= openGroupStart
-    expect(result.cutIndex).toBeLessThanOrEqual(3);
-    // Preserve window includes open group
-    expect(result.preservedRange.start).toBeLessThanOrEqual(3);
-    expect(result.preservedRange.end).toBe(messages.length);
-    // Compactable must not include open call
-    expect(result.compactableRange.end).toBeLessThanOrEqual(3);
-  });
-
-  it('coalesced consecutive tool calls are treated as one atomic group', () => {
-    const messages: Message[] = [
-      makeUser('u0', 'initial'),
-      makeParallelToolCallsMsg('tc-combined-should-be-split-but-coalesced', [
-        { callId: 'c1', name: 'read' },
-      ]),
-      // hidden intermediate that history coalesces over
-      makeMessage({ id: 'err', role: MessageRole.ASSISTANT, content: 'hidden error', type: MessageType.ERROR, hidden: true }),
-      makeToolCallMsg('tc2', 'c2', 'grep'),
-      makeToolResult('tr1', 'c1', 'read', 'file a'),
-      makeToolResult('tr2', 'c2', 'grep', 'results'),
-      makeUser('u1', 'next turn'),
-      makeAssistantText('a1', 'done'),
-    ];
-    // This history has coalesced group starting at index1 (tc c1) through hidden error at 2 to tc c2 at 3, results at 4,5
-    // So completed interval should be [1,5]
-    const analysis = analyzeToolGroups(messages);
-    expect(analysis.completedIntervals).toEqual(expect.arrayContaining([[1, 5]]));
-    // Any cut inside [1,5] should be considered unclean
-    expect(isCleanToolGroupBoundary(messages, 2)).toBe(false);
-    expect(isCleanToolGroupBoundary(messages, 4)).toBe(false);
-    expect(isCleanToolGroupBoundary(messages, 1)).toBe(true);
-    expect(isCleanToolGroupBoundary(messages, 6)).toBe(true);
-
-    // selectCut with keep=1 should not cut inside coalesced group
-    const chainBoundaries = [0, 6];
-    const result = selectCut(messages, { keepRecentChains: 1, chainBoundaries });
-    // preserve last chain [6,8) => cut at 6 which is after group, safe
+    // Budget 20 lands the raw walk at index 3 — inside group [2,3] — so the
+    // cut must snap back to the group start (2).
+    const result = selectCut(messages, { preserveTokens: 20, chainBoundaries: [0, 3] });
     expect(isCleanToolGroupBoundary(messages, result.cutIndex)).toBe(true);
-  });
-
-  it('cut inside a tool group is auto-snapped to group start', () => {
-    const messages: Message[] = [
-      makeUser('u0', 'a'),
-      makeToolCallMsg('tc0', 'c-a', 'read'),
-      makeToolResult('tr0', 'c-a', 'read', 'out a'),
-      makeUser('u1', 'b'),
-      makeToolCallMsg('tc1', 'c-b', 'read'),
-      makeToolResult('tr1', 'c-b', 'read', 'out b'),
-      makeUser('u2', 'c'),
-      makeToolCallMsg('tc2', 'c-c', 'read'),
-      makeToolResult('tr2', 'c-c', 'read', 'out c'),
-    ];
-    // Chain per user: boundaries [0,3,6]
-    // Tool groups: [1,2], [4,5], [7,8]
-    // keep 1 would like cut at 6, which is user message, safe (not inside group)
-    const r1 = selectCut(messages, { keepRecentChains: 1, chainBoundaries: [0, 3, 6] });
-    expect(r1.cutIndex).toBe(6);
-    expect(isCleanToolGroupBoundary(messages, r1.cutIndex)).toBe(true);
-
-    // Artificially request a cut that would be at 5 (inside group [4,5]) by setting keep=1 but crafting boundaries at 5
-    // Simulate by providing boundaries that force inside: boundaries [0,3,5] where chain1 starts at 5 = tool result, splitting group [4,5]
-    const r2 = selectCut(messages, { keepRecentChains: 1, chainBoundaries: [0, 3, 5] });
-    // Ideal cut 5 is inside group [4,5], should snap to 4
-    expect(r2.cutIndex).toBe(4);
-    expect(isCleanToolGroupBoundary(messages, r2.cutIndex)).toBe(true);
+    expect(result.cutIndex).toBe(2);
   });
 });
 
-describe('selectCut — preserve-N honored (R6)', () => {
-  it('honors keep_recent_chains over multiple chains', () => {
-    const { messages, chainBoundaries } = buildChainMessages(5);
-    // 5 chains, keep 2 => preserve last 2 chains
-    const result = selectCut(messages, { keepRecentChains: 2, chainBoundaries });
-    expect(result.preservedCount).toBe(2);
-    // Preserved range should start at chain 3 (index 3)
-    const expectedStart = chainBoundaries[chainBoundaries.length - 2]!;
-    expect(result.cutIndex).toBe(expectedStart);
-    expect(result.compactableRange.end).toBe(expectedStart);
-    expect(result.openGroupStart).toBeNull(); // all groups completed
-  });
-
-  it('keep=0 preserves only open group (or nothing if no open)', () => {
-    const { messages, chainBoundaries } = buildChainMessages(3);
-    const resultNoOpen = selectCut(messages, { keepRecentChains: 0, chainBoundaries });
-    expect(resultNoOpen.openGroupStart).toBeNull();
-    expect(resultNoOpen.cutIndex).toBe(messages.length);
-    expect(resultNoOpen.compactableRange).toEqual({ start: 0, end: messages.length });
-    expect(resultNoOpen.preservedCount).toBe(0);
-
-    // With open group, keep=0 still preserves open group
-    const withOpen: Message[] = [
-      makeUser('u0', 'a'),
-      makeAssistantText('a0', 'reply'),
-      makeUser('u1', 'b'),
-      makeToolCallMsg('tc-open', 'call-open', 'read'),
-    ];
-    const boundaries2 = [0, 2];
-    const resultOpen = selectCut(withOpen, { keepRecentChains: 0, chainBoundaries: boundaries2 });
-    expect(resultOpen.openGroupStart).toBe(3);
-    expect(resultOpen.cutIndex).toBe(3);
-    expect(resultOpen.compactableRange).toEqual({ start: 0, end: 3 });
-  });
-
-  it('preserve window always includes trailing open group even when keep counts chains', () => {
-    const messages: Message[] = [
-      makeUser('u0', 'turn0'),
-      makeAssistantText('a0', 'reply0'),
-      makeUser('u1', 'turn1'),
-      makeAssistantText('a1', 'reply1'),
-      makeUser('u2', 'turn2'),
-      makeToolCallMsg('tc-open', 'open-call', 'execute'),
-      // open group at tail, no result
-    ];
-    const chainBoundaries = [0, 2, 4];
-    // keep 1 would preserve last chain [4,6) which starts at 4, includes open call at 5 => already includes open
-    const r1 = selectCut(messages, { keepRecentChains: 1, chainBoundaries });
-    expect(r1.openGroupStart).toBe(5);
-    expect(r1.cutIndex).toBe(4);
-    expect(r1.preservedRange.start).toBe(4);
-    // keep 2 would preserve [2,6) also includes open
-    const r2 = selectCut(messages, { keepRecentChains: 2, chainBoundaries });
-    expect(r2.cutIndex).toBe(2);
-  });
-});
-
-describe('selectCut — preserve window shrinks under budget pressure to floor of open group', () => {
-  it('shrinks keep count when preserve window exceeds budget', () => {
-    // 4 chains with sizeable content; keep=3 would be large, but budget small
-    const { messages, chainBoundaries } = buildChainMessages(4);
-    // Make messages large to trigger budget
-    const largeMessages = messages.map((m) => makeMessage({ ...m, content: m.content + ' x'.repeat(200) }));
-
-    const keep3NoBudget = selectCut(largeMessages, { keepRecentChains: 3, chainBoundaries });
-    expect(keep3NoBudget.preservedCount).toBe(3);
-    expect(keep3NoBudget.cutIndex).toBe(chainBoundaries[1]);
-
-    // Now with tight budget: maxPreserveTokens tiny, should shrink
-    const tight = selectCut(largeMessages, {
-      keepRecentChains: 3,
-      chainBoundaries,
-      maxPreserveTokens: 50, // very small, forces shrink
-    });
-    // Should have shrunk to fewer than 3
-    expect(tight.preservedCount).toBeLessThan(3);
-    // Still no open group, minimal is 0 chains when budget tiny
-    expect(tight.preservedCount).toBeGreaterThanOrEqual(0);
-    // Cut moved earlier? Actually shrinking reduces preserve window, so cut moves right (later)
-    expect(tight.cutIndex).toBeGreaterThan(keep3NoBudget.cutIndex);
-  });
-
-  it('shrinks to floor of open group and never compacts the open group', () => {
+describe('selectCut — floors (R6)', () => {
+  it('always preserves the trailing open group even under a tiny budget', () => {
     const messages: Message[] = [
       makeUser('u0', 'turn0'),
       makeAssistantText('a0', 'x'.repeat(500)),
@@ -305,119 +203,33 @@ describe('selectCut — preserve window shrinks under budget pressure to floor o
       makeAssistantText('a1', 'x'.repeat(500)),
       makeUser('u2', 'turn2'),
       makeToolCallMsg('tc-open', 'open-id', 'read', JSON.stringify({ path: 'a' })),
-      // open at tail, no result
     ];
-    const chainBoundaries = [0, 2, 4];
-    // keep 2 would want to preserve 2 chains [2,6) huge, but budget tiny
-    const result = selectCut(messages, {
-      keepRecentChains: 2,
-      chainBoundaries,
-      maxPreserveTokens: 10, // forces shrink to open group only
-    });
+    const result = selectCut(messages, { preserveTokens: 1, chainBoundaries: [0, 2, 4] });
     expect(result.openGroupStart).toBe(5);
-    expect(result.cutIndex).toBe(5);
-    expect(result.preservedCount).toBe(1); // the last chain that contains the open group still counted, but shrunk from 2 to 1
-    // Ensure open group not compacted
+    expect(result.cutIndex).toBeLessThanOrEqual(5);
     expect(result.compactableRange.end).toBeLessThanOrEqual(5);
+    expect(result.preservedRange.start).toBeLessThanOrEqual(5);
+    expect(result.preservedRange.end).toBe(messages.length);
   });
 
-  it('supports budget via contextTokens * threshold', () => {
-    const { messages, chainBoundaries } = buildChainMessages(3);
-    const large = messages.map((m) => makeMessage({ ...m, content: m.content + ' x'.repeat(300) }));
-
-    const withBudget = selectCut(large, {
-      keepRecentChains: 3,
-      chainBoundaries,
-      budget: { contextTokens: 100, threshold: 0.5 }, // max 50 tokens
-    });
-    // Should have shrunk
-    expect(withBudget.preservedCount).toBeLessThan(3);
-  });
-
-  it('uses custom tokenEstimator when provided', () => {
-    const { messages, chainBoundaries } = buildChainMessages(3);
-    // Custom estimator counts messages, not chars
-    const estimator = (msgs: readonly Message[]) => msgs.length * 10;
-    const result = selectCut(messages, {
-      keepRecentChains: 3,
-      chainBoundaries,
-      maxPreserveTokens: 15, // allow only ~1 message
-      tokenEstimator: estimator,
-    });
-    expect(result.preservedCount).toBeLessThan(3);
-    // With estimator, preserve slice length *10 must be <=15, so at most 1 message preserved
-    expect(result.preservedRange.end - result.preservedRange.start).toBeLessThanOrEqual(2);
-  });
-});
-
-describe('selectCut — summary head not counted', () => {
-  it('excludes summary head from preserve count', () => {
-    const { messages, chainBoundaries } = buildChainMessages(4, { withSummaryHead: true });
-    // messages: [summaryHead, chain0, chain1, chain2, chain3]
-    // chainBoundaries includes summary head as first chain [0,1)
-    // realChains = 4 (excluding summary)
-    const result = selectCut(messages, { keepRecentChains: 2, chainBoundaries });
-    // Should preserve last 2 real chains, not counting summary
-    expect(result.preservedCount).toBe(2);
-    // Preserved start should be at chain 2 (third real chain), not counting summary
-    // chainBoundaries: [0,1,3,6,9] approx depending on tool groups; preserve last 2 => start at boundaries[3] (chain2)
-    const realStart = chainBoundaries[chainBoundaries.length - 2]!;
-    expect(result.cutIndex).toBe(realStart);
-    // Summary head at 0 is compactable (or stays), but not counted as preserved
-    expect(result.compactableRange.start).toBe(0);
-    expect(messages[0]!.compacted).toBeDefined();
-  });
-
-  it('single summary head plus one real chain still counts as single chain (empty compactable still holds)', () => {
+  it('preserves the most recent completed group verbatim when it alone exceeds the budget', () => {
     const messages: Message[] = [
-      makeSummaryHead('summ', 'prev summary'),
-      makeUser('u0', 'hello'),
-      makeAssistantText('a0', 'hi'),
+      makeUser('u0', 'start'),
+      makeToolCallMsg('tc0', 'c0', 'read'),
+      makeToolResult('tr0', 'c0', 'read', 'out0'),
+      makeUser('u1', 'next'),
+      makeToolCallMsg('tc1', 'c1', 'read'),
+      makeToolResult('tr1', 'c1', 'read', 'x'.repeat(400)),
     ];
-    const chainBoundaries = [0, 1];
-    const result = selectCut(messages, { keepRecentChains: 2, chainBoundaries });
-    // After P0 #1 fix: single-chain early return removed. With 1 real chain and a
-    // summary head, keep=2 preserves the real chain; compactable is the summary head
-    // itself [0,1) — summary heads are not counted toward keep but are before the cut.
-    // Intra-chain compaction is now allowed; empty compactable only when the single
-    // chain is fully open (openGroupStart at 0 with no completed groups).
-    expect(result.compactableRange).toEqual({ start: 0, end: 1 });
-    expect(result.cutIndex).toBe(1);
-    expect(result.preservedCount).toBe(1);
-  });
-});
-
-describe('selectCut — single-only-chain yields empty compactable range', () => {
-  it('returns empty compactable when only one chain exists and keep covers it', () => {
-    const messages: Message[] = [
-      makeUser('u0', 'hello'),
-      makeAssistantText('a0', 'world'),
-      makeToolCallMsg('tc0', 'call-1', 'read'),
-      makeToolResult('tr0', 'call-1', 'read', 'out'),
-    ];
-    const result = selectCut(messages, { keepRecentChains: 3, chainBoundaries: [0] });
-    // keep=3 covers the single chain (no open group) => preserved whole history, compactable empty.
-    // With intra-chain compaction enabled, this stays empty because keep covers the chain and
-    // there is no open group to force a cut inside the chain. keep=0 would compact it.
-    expect(result.compactableRange).toEqual({ start: 0, end: 0 });
-    expect(result.cutIndex).toBe(0);
-    expect(result.preservedCount).toBe(1);
-    expect(result.preservedRange).toEqual({ start: 0, end: messages.length });
+    // Budget 50 — the trailing result alone is ~100 tokens. The last complete
+    // exchange must still survive verbatim (best-effort over budget).
+    const result = selectCut(messages, { preserveTokens: 50, chainBoundaries: [0, 3] });
+    expect(result.cutIndex).toBe(4); // group [4,5] preserved whole
+    expect(result.compactableRange).toEqual({ start: 0, end: 4 });
+    expect(messages.slice(result.cutIndex).some((m) => m.tool_call_id === 'c1')).toBe(true);
   });
 
-  it('single chain with keep=0 compacts entire history when no open group (intra-chain compaction)', () => {
-    const messages: Message[] = [makeUser('u0', 'hello'), makeAssistantText('a0', 'hi')];
-    const result = selectCut(messages, { keepRecentChains: 0, chainBoundaries: [0] });
-    // P0 #1: single-chain early return removed, so keep=0 with no open group now yields
-    // compactable [0,n) (preserve nothing). Only a fully open single chain (openGroupStart===0)
-    // yields empty compactable.
-    expect(result.compactableRange).toEqual({ start: 0, end: messages.length });
-    expect(result.cutIndex).toBe(messages.length);
-    expect(result.preservedCount).toBe(0);
-  });
-
-  it('single runaway chain with 3 completed groups + 1 open group compacts to openGroupStart', () => {
-    // R6 intra-chain compaction: 1 chain but tool-group walk allows compacting completed groups before the open group.
+  it('single runaway chain with completed groups + open group cuts to the open group', () => {
     const messages: Message[] = [
       makeUser('u0', 'start'),
       makeToolCallMsg('tc0', 'c0', 'read'),
@@ -428,65 +240,82 @@ describe('selectCut — single-only-chain yields empty compactable range', () =>
       makeToolResult('tr2', 'c2', 'read', 'out2'),
       makeToolCallMsg('tc-open', 'c-open', 'grep'),
     ];
-    const result = selectCut(messages, { keepRecentChains: 0, chainBoundaries: [0] });
-    // Completed intervals: [1,2],[3,4],[5,6], openGroupStart at 7
+    const result = selectCut(messages, { preserveTokens: 1, chainBoundaries: [0] });
     expect(result.openGroupStart).toBe(7);
     expect(result.cutIndex).toBe(7);
     expect(result.compactableRange).toEqual({ start: 0, end: 7 });
     expect(result.preservedRange).toEqual({ start: 7, end: messages.length });
     expect(isCleanToolGroupBoundary(messages, result.cutIndex)).toBe(true);
   });
-
-  it('single fully-open chain yields empty compactable (only open group, no completed)', () => {
-    // Fully open means the chain starts with the open call and has no preceding completed content.
-    // With only an open tool call and no user before it, the safe cut is at 0 (empty compactable).
-    const soloOpen: Message[] = [makeToolCallMsg('tc-open', 'open-1', 'read')];
-    const r1 = selectCut(soloOpen, { keepRecentChains: 0, chainBoundaries: [0] });
-    expect(r1.openGroupStart).toBe(0);
-    expect(r1.compactableRange).toEqual({ start: 0, end: 0 });
-    expect(r1.cutIndex).toBe(0);
-
-    // Variant: user followed by open call — user is before the open group and is compactable.
-    // This is still intra-chain compaction: compactable [0,1) (user), preserved [1,2) (open call).
-    const withUser: Message[] = [
-      makeUser('u0', 'hello'),
-      makeToolCallMsg('tc-open', 'open-1', 'read'),
-    ];
-    const r2 = selectCut(withUser, { keepRecentChains: 0, chainBoundaries: [0] });
-    expect(r2.openGroupStart).toBe(1);
-    expect(r2.compactableRange).toEqual({ start: 0, end: 1 });
-    expect(r2.cutIndex).toBe(1);
-  });
-
-  it('two chains yields non-empty compactable', () => {
-    const { messages, chainBoundaries } = buildChainMessages(2);
-    const result = selectCut(messages, { keepRecentChains: 1, chainBoundaries });
-    expect(result.compactableRange.end).toBeGreaterThan(0);
-    expect(result.compactableRange.start).toBe(0);
-    expect(result.preservedCount).toBe(1);
-  });
 });
 
-describe('selectCut — infer chain boundaries when not provided', () => {
-  it('infers boundaries from USER messages', () => {
+describe('selectCut — summary heads', () => {
+  it('summary head is re-summarized (compactable), never preserved or counted', () => {
     const messages: Message[] = [
-      makeUser('u0', 'a'),
-      makeAssistantText('a0', 'reply a'),
-      makeUser('u1', 'b'),
-      makeAssistantText('a1', 'reply b'),
-      makeUser('u2', 'c'),
-      makeAssistantText('a2', 'reply c'),
+      makeSummaryHead('summ', 'prev summary'),
+      makeUser('u0', 'x'.repeat(100)),
+      makeAssistantText('a0', 'x'.repeat(100)),
+      makeUser('u1', 'y'.repeat(100)),
+      makeAssistantText('a1', 'y'.repeat(100)),
     ];
-    const result = selectCut(messages, { keepRecentChains: 1 });
-    // Without boundaries, should infer 3 chains and preserve last 1 => cut at u2 (index 4)
-    expect(result.preservedCount).toBe(1);
-    expect(result.cutIndex).toBe(4);
+    // Budget 60: walk keeps a1+u1 (50); adding a0 → 75 > 60 → cut at 3.
+    const result = selectCut(messages, { preserveTokens: 60, chainBoundaries: [0, 1, 3] });
+    expect(result.cutIndex).toBe(3);
+    expect(result.compactableRange).toEqual({ start: 0, end: 3 });
+    expect(result.compactableRange.end > 0).toBe(true);
+    expect(messages[0]!.compacted).toBeDefined();
+    expect(result.preservedCount).toBe(1); // only the last real chain
+  });
+
+  it('summary head plus tiny real chain with a generous budget keeps everything', () => {
+    const messages: Message[] = [
+      makeSummaryHead('summ', 'prev summary'),
+      makeUser('u0', 'hello'),
+      makeAssistantText('a0', 'hi'),
+    ];
+    const result = selectCut(messages, { preserveTokens: 500, chainBoundaries: [0, 1] });
+    expect(result.cutIndex).toBe(0);
+    expect(result.compactableRange).toEqual({ start: 0, end: 0 });
+  });
+
+  it('only summary heads → nothing to compact', () => {
+    const messages: Message[] = [makeSummaryHead('summ', 'only summary')];
+    const result = selectCut(messages, { preserveTokens: 50, chainBoundaries: [0] });
+    expect(result.compactableRange).toEqual({ start: 0, end: 0 });
   });
 });
 
-describe('selectCut — edge cases', () => {
+describe('selectCut — chain accounting', () => {
+  it('infers boundaries from USER messages when not provided', () => {
+    const messages: Message[] = [
+      makeUser('u0', 'x'.repeat(100)),
+      makeAssistantText('a0', 'x'.repeat(100)),
+      makeUser('u1', 'x'.repeat(100)),
+      makeAssistantText('a1', 'x'.repeat(100)),
+      makeUser('u2', 'x'.repeat(100)),
+      makeAssistantText('a2', 'x'.repeat(100)),
+    ];
+    // 25 tokens/message; budget 60 → keeps [4,6) (50 tokens), adding the
+    // third-newest message exceeds → cut at 4, i.e. the u2 chain start.
+    const result = selectCut(messages, { preserveTokens: 60 });
+    expect(result.cutIndex).toBe(4);
+    expect(result.preservedCount).toBe(1); // chain starting at u2 only
+  });
+
+  it('skips hidden/excluded prefix when reporting the compactable range', () => {
+    const messages: Message[] = [
+      makeMessage({ id: 'h1', role: MessageRole.ASSISTANT, content: 'x'.repeat(100), hidden: true }),
+      makeUser('u0', 'x'.repeat(100)),
+      makeAssistantText('a0', 'x'.repeat(100)),
+    ];
+    const result = selectCut(messages, { preserveTokens: 30, chainBoundaries: [0] });
+    // Walk: a0 25, u0 50 > 30 → cut 2; compactable prefix skips the hidden message.
+    expect(result.cutIndex).toBe(2);
+    expect(result.compactableRange).toEqual({ start: 1, end: 2 });
+  });
+
   it('handles empty history', () => {
-    const result = selectCut([], { keepRecentChains: 3 });
+    const result = selectCut([], { preserveTokens: 100 });
     expect(result).toEqual({
       cutIndex: 0,
       compactableRange: { start: 0, end: 0 },
@@ -495,15 +324,24 @@ describe('selectCut — edge cases', () => {
       preservedRange: { start: 0, end: 0 },
     });
   });
+});
 
-  it('handles all-hidden or excluded messages', () => {
-    const messages: Message[] = [
-      makeMessage({ id: 'h1', role: MessageRole.ASSISTANT, content: 'hidden', hidden: true }),
-      makeMessage({ id: 'h2', role: MessageRole.TOOL, content: 'hidden tool', hidden: true, tool_call_id: 'x' }),
-    ];
-    const result = selectCut(messages, { keepRecentChains: 1, chainBoundaries: [0] });
-    // Single chain even though hidden, still empty compactable per single-chain rule? realChains count is 1 (chain with hidden msgs still counts as chain)
-    expect(result.compactableRange).toEqual({ start: 0, end: 0 });
+describe('resolvePreservePercent — hysteresis guard', () => {
+  it('keeps configured percent when below the re-arm cap', () => {
+    expect(resolvePreservePercent({ threshold: 0.8, hysteresis_delta: 0.1, preserve_percent: 0.25 })).toBe(0.25);
+  });
+
+  it('caps preserve percent below the re-arm line', () => {
+    // 0.8 - 0.1 - 0.05 = 0.65
+    expect(resolvePreservePercent({ threshold: 0.8, hysteresis_delta: 0.1, preserve_percent: 0.9 })).toBe(0.65);
+  });
+
+  it('floors at 0.05 when the cap collapses', () => {
+    expect(resolvePreservePercent({ threshold: 0.3, hysteresis_delta: 0.2, preserve_percent: 0.5 })).toBe(0.05);
+  });
+
+  it('defaults hysteresis delta to 0.1', () => {
+    expect(resolvePreservePercent({ threshold: 0.5, preserve_percent: 0.9 })).toBeCloseTo(0.35, 10);
   });
 });
 
@@ -520,5 +358,19 @@ describe('isCleanToolGroupBoundary', () => {
     expect(isCleanToolGroupBoundary(messages, 1)).toBe(true); // before call
     expect(isCleanToolGroupBoundary(messages, 2)).toBe(false); // inside [1,2]
     expect(isCleanToolGroupBoundary(messages, 3)).toBe(true); // after group
+  });
+});
+
+describe('analyzeToolGroups — unchanged primitives', () => {
+  it('finds completed intervals and the open group', () => {
+    const messages: Message[] = [
+      makeUser('u0', 'a'),
+      makeToolCallMsg('tc0', 'c1', 'read'),
+      makeToolResult('tr0', 'c1', 'read', 'out'),
+      makeToolCallMsg('tc1', 'c2', 'read'),
+    ];
+    const { completedIntervals, openGroupStart } = analyzeToolGroups(messages);
+    expect(completedIntervals).toEqual([[1, 2]]);
+    expect(openGroupStart).toBe(3);
   });
 });
