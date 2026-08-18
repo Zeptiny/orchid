@@ -364,6 +364,33 @@ const mocks = vi.hoisted(() => {
       if (activeSession?.id === updated.id) activeSession = updated;
       return updated;
     }),
+    /**
+     * Minimal mirror of SessionManager.applyCompaction (durable targeted
+     * compaction write): reports the post-write chain layout without touching
+     * the mock session rows — strict flag/anchor behavior is covered by
+     * session-compaction-persistence.test.ts against real storage.
+     */
+    applyCompaction: vi.fn((
+      sessionId: string,
+      payload: {
+        flaggedMessageIds?: readonly string[];
+        summaryChain?: { id: string } | null;
+      },
+    ) => {
+      const target = sessionsById.get(sessionId) ?? null;
+      if (!target) {
+        throw new Error(`applyCompaction: session ${sessionId} not found in durable rows`);
+      }
+      return {
+        chainIds: [
+          ...target.chains.map((chain: { id: string }) => chain.id),
+          ...(payload.summaryChain ? [payload.summaryChain.id] : []),
+        ],
+        flaggedChainIds: [],
+        summaryChainId: payload.summaryChain?.id ?? null,
+        splitTailChainId: null,
+      };
+    }),
     autoNameActive: vi.fn(async () => activeSession),
     autoName: vi.fn(async (
       _sessionId: string,
@@ -396,6 +423,7 @@ const mocks = vi.hoisted(() => {
       sessionManager.startChain.mockClear();
       sessionManager.updateActiveChainMessages.mockClear();
       sessionManager.persistTurn.mockClear();
+      sessionManager.applyCompaction.mockClear();
       sessionManager.setReasoningEffortOverride.mockClear();
       sessionManager.setPermissionMode.mockClear();
       sessionManager.autoNameActive.mockClear();
@@ -617,6 +645,18 @@ vi.mock('../../src/main/llm/orchestrator', () => ({
 
 vi.mock('../../src/main/llm/compaction/summarize', () => ({
   summarizeCompactableRange: mocks.summarizeCompactableRange,
+  // run.ts's selective caller resolves its model through this helper; mirror
+  // the real fallback chain (scope model → tier selection → turn selection).
+  resolveCompactorModelSelection: (
+    config: { compaction?: { main?: { model?: unknown }; subagents?: { model?: unknown } }; tier_models?: Record<string, unknown>; default_model?: unknown },
+    agent: { tier: string },
+    scope: 'main' | 'subagents',
+    fallbackSelection: unknown,
+  ) => {
+    const scopeConfig = scope === 'main' ? config.compaction?.main : config.compaction?.subagents;
+    if (scopeConfig?.model) return scopeConfig.model;
+    return config.tier_models?.[agent.tier] ?? config.default_model ?? fallbackSelection ?? null;
+  },
 }));
 
 vi.mock('../../src/main/session/storage', () => ({
@@ -2333,7 +2373,11 @@ describe('chat:send draft single-flight (M-P1-013)', () => {
       connectionId: '11111111-1111-4111-8111-111111111111',
       modelId: 'vendor/path/model',
     };
-    mocks.streamChat.mockImplementation(async function* () {
+    // mockImplementationOnce (not mockImplementation): vi.clearAllMocks()
+    // clears calls but NOT implementations, so a persistent implementation here
+    // would shadow the harness default that serves later tests'
+    // streamResponses/streamEventSequences queues.
+    mocks.streamChat.mockImplementationOnce(async function* () {
       yield { type: 'content', text: 'ok' };
       await new Promise((r) => setTimeout(r, 30));
       yield { type: 'finish', finishReason: 'stop' };
@@ -2609,7 +2653,332 @@ describe('chat compaction mid-turn pause', () => {
     expect(summary?.content).toBe('SUMMARY: explored compaction module');
     // Compacted range messages are excluded from replay but never deleted.
     expect(resumedMessages.some((m) => m.tool_call_id === 'tc-compact-1' && m.excludeFromModel)).toBe(true);
-    expect(mocks.saveSession).toHaveBeenCalled();
+    // The durable targeted path is taken (never saveSession-from-view).
+    expect(mocks.sessionManager.applyCompaction).toHaveBeenCalledWith(
+      sessionId,
+      expect.objectContaining({
+        flaggedMessageIds: expect.arrayContaining([expect.any(String)]),
+        summaryChain: expect.objectContaining({ id: expect.any(String) }),
+      }),
+    );
+    expect(mocks.saveSession).not.toHaveBeenCalled();
+  });
+
+  it('persists the full turn (user message + pre-pause + post-resume content) into the durable active chain (P1 #3)', async () => {
+    const sessionId = 'e1e1e1e1-e1e1-4e1e-8e1e-e1e1e1e1e1f2';
+    mocks.sessionManager._setActive({
+      ...makeSession(sessionId),
+      model: selection.modelId,
+      selection,
+      modelLabel: selection.modelId,
+    });
+    mocks.summarizeCompactableRange.mockResolvedValueOnce({
+      text: 'SUMMARY: explored compaction module',
+    });
+    // The resumed (second) stream call reads from streamResponses.
+    mocks.streamResponses.push('Resumed answer');
+    mocks.streamChat.mockImplementationOnce(compactionStream());
+
+    const send = vi.fn();
+    const chatSend = mocks.handlers.get(IPC_CHANNELS.CHAT_SEND)!;
+    await chatSend({ sender: { id: 942, send } }, { message: 'Explore with tools' });
+    await waitForDoneCount(send, 1);
+
+    expect(mocks.streamChat).toHaveBeenCalledTimes(2);
+    const persisted = mocks.sessionManager.persistTurn.mock.calls.at(-1)?.[0] as {
+      messages: Array<Record<string, unknown>>;
+      status?: string;
+    };
+    expect(persisted.status).toBe('completed');
+    // The durable active chain keeps the FULL turn: the user message, the
+    // pre-pause tool progress, and the post-resume assistant content. The
+    // pre-fix code rebased priorMessageCount to the replay length, so
+    // persistTurn replaced the chain with ONLY the post-resume slice —
+    // deleting the user message and the pre-pause turn content.
+    expect(persisted.messages).toEqual(expect.arrayContaining([
+      expect.objectContaining({ role: MessageRole.USER, content: 'Explore with tools' }),
+      expect.objectContaining({ type: MessageType.TOOL_CALL, tool_call_id: 'tc-compact-1' }),
+      expect.objectContaining({ role: MessageRole.ASSISTANT, content: 'Resumed answer' }),
+    ]));
+    // Simple-mode compaction legitimately flags range messages (replacement,
+    // never deletion) — including this turn's user message, which the summary
+    // head now stands in for on the model side. The durability guarantee under
+    // test is that it stays in the transcript, visible, not dropped.
+    const persistedUser = persisted.messages.find(
+      (m) => m.role === MessageRole.USER && m.content === 'Explore with tools',
+    )!;
+    expect(persistedUser.hidden).toBe(false);
+    expect(persisted.messages.some((m) => m.compacted)).toBe(true);
+    const done = doneEvents(send).at(-1)?.[1] as { messages: Array<Record<string, unknown>> };
+    expect(done.messages).toEqual(persisted.messages);
+  });
+
+  it('retries exactly once with compacted messages on a context-length error, then fails terminally (P1 #14)', async () => {
+    const sessionId = 'e6e6e6e6-e6e6-4e6e-8e6e-e6e6e6e6e6e6';
+    mocks.sessionManager._setActive({
+      ...makeSession(sessionId),
+      model: selection.modelId,
+      selection,
+      modelLabel: selection.modelId,
+    });
+    mocks.summarizeCompactableRange.mockResolvedValueOnce({ text: 'SUMMARY: retry compaction' });
+    // First attempt: provider reports a context-window overflow.
+    mocks.streamChat.mockImplementationOnce(async function* () {
+      yield {
+        type: 'error',
+        title: 'Stream Error',
+        detail: 'This model maximum context length is 2000 tokens; your input is too long',
+      };
+    });
+    // Retry attempt: overflow again — must terminate FAILED without a third call.
+    mocks.streamEventSequences.push([
+      {
+        type: 'error',
+        title: 'Stream Error',
+        detail: 'context_length_exceeded: input still too long after compaction',
+      },
+    ]);
+
+    const send = vi.fn();
+    const chatSend = mocks.handlers.get(IPC_CHANNELS.CHAT_SEND)!;
+    await chatSend({ sender: { id: 943, send } }, { message: 'x'.repeat(4000) });
+    await waitForChannelCount(send, IPC_CHANNELS.CHAT_ERROR, 1);
+
+    // Exactly one retry (two streamChat calls) — never a third attempt.
+    expect(mocks.streamChat).toHaveBeenCalledTimes(2);
+    const retryMessages = mocks.streamChat.mock.calls[1]![0]!.messages as Array<{
+      content?: string;
+      compacted?: unknown;
+      excludeFromModel?: boolean;
+    }>;
+    // The retry request carries the compacted base: a summary head plus the
+    // flagged original (excluded from the model, never deleted).
+    const summary = retryMessages.find((m) => m.compacted);
+    expect(summary?.content).toBe('SUMMARY: retry compaction');
+    expect(retryMessages.some((m) => m.content === 'x'.repeat(4000) && m.excludeFromModel)).toBe(true);
+
+    const failed = mocks.sessionManager.persistTurn.mock.calls.at(-1)?.[0] as {
+      messages: Array<Record<string, unknown>>;
+      status?: string;
+    };
+    expect(failed.status).toBe('failed');
+    // The failed turn keeps the full compacted turn (user message anchored at
+    // the retry base, not only the post-retry tail).
+    expect(failed.messages).toEqual(expect.arrayContaining([
+      expect.objectContaining({ role: MessageRole.USER, content: 'x'.repeat(4000) }),
+      expect.objectContaining({ content: 'SUMMARY: retry compaction' }),
+    ]));
+    const error = channelEvents(send, IPC_CHANNELS.CHAT_ERROR).at(-1)?.[1] as {
+      kind?: string;
+      messages: Array<Record<string, unknown>>;
+    };
+    expect(error.kind).toBe('context_length_exceeded');
+    expect(error.messages).toEqual(failed.messages);
+    expect(mocks.sessionManager.applyCompaction).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('chat compaction selective pending (P1 #5)', () => {
+  const selection = {
+    connectionId: '11111111-1111-4111-8111-111111111111',
+    modelId: 'vendor/path/model',
+  };
+  const compactorSelectiveAgent = {
+    name: 'compactor-selective',
+    type: 'internal' as const,
+    tier: 'seed' as const,
+    description: 'Selective compactor',
+    system_prompt: 'Return the selective ops JSON array.',
+    allowed_tools: [],
+    allowed_skills: [],
+  } satisfies Agent;
+
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    mocks.handlers.clear();
+    mocks.streamResponses.length = 0;
+    mocks.streamEventSequences.length = 0;
+    mocks.runtimeRegistry._reset();
+    mocks.sessionManager._reset();
+    // Clear any once-implementations leaked from earlier suites so the
+    // selective caller mock below is the only override in play.
+    mocks.aiGenerateText.mockReset();
+    mocks.aiGenerateText.mockImplementation(async () => ({ text: 'Investigate Session Naming' }));
+    mocks.runtimeRegistry._set(mocks.workspace._testProjectDir, {
+      config: {
+        default_model: null,
+        tier_models: { bloom: null },
+        command_timeout: 30,
+        llm_stream_idle_timeout: 60,
+        llm_stream_retries: 0,
+        session_title_max_wait_seconds: 0,
+        max_tool_steps: 100,
+        compaction: {
+          main: {
+            mode: 'selective',
+            threshold: 0.5,
+            model: null,
+            agent_name: 'compactor',
+            preserve_percent: 0.25,
+            min_compactable_tokens: 0,
+            mechanical_reclaim: true,
+            hysteresis_delta: 0.1,
+          },
+          subagents: {
+            mode: 'simple',
+            threshold: 0.85,
+            model: null,
+            agent_name: 'compactor-subagent',
+            preserve_percent: 0.25,
+            min_compactable_tokens: 4000,
+            mechanical_reclaim: true,
+            hysteresis_delta: 0.1,
+          },
+        },
+      },
+      agents: new Map<string, Agent>([
+        ['general', mocks.generalAgent],
+        ['session-namer', mocks.sessionNamerAgent],
+        ['compactor-selective', compactorSelectiveAgent],
+      ]),
+    });
+    mocks.providerRuntime.resolveExecution.mockImplementationOnce(async () => ({
+      modelInstance: mocks.modelInstance,
+      connection: {},
+      model: {
+        id: 'vendor/path/model',
+        capabilities: { reasoning: false },
+        limits: { contextTokens: 2000 },
+      },
+      snapshot: {
+        providerId: 'openai',
+        providerDisplayName: 'OpenAI',
+        connectionId: selection.connectionId,
+        connectionName: 'Work',
+        modelId: selection.modelId,
+        protocol: 'openai-compatible',
+        modelSource: 'catalog',
+        catalogVersion: 1,
+        catalogSource: 'bundled',
+        catalogObservedAt: null,
+        pricing: null,
+        fieldProvenance: {},
+        statusObservation: null,
+      },
+    }));
+    chatIpc = await import('../../src/main/ipc/chat');
+    chatIpc.registerChatIPC();
+  });
+
+  afterEach(() => {
+    chatIpc.unregisterChatIPC();
+    mocks.handlers.clear();
+    mocks.sessionManager._reset();
+  });
+
+  it('re-anchors the prepare-time selective replay so the next turn reaches the model intact', async () => {
+    const sessionId = 'e7e7e7e7-e7e7-4e7e-8e7e-e7e7e7e7e7e7';
+    // No `usage` on the fixture messages: a persisted usage would hydrate the
+    // trigger calibration and fire compaction SYNCHRONOUSLY at turn-1 send,
+    // which is the send-time path — not the pending this test exercises. The
+    // mid-turn usage event below is what prepares the selective pending.
+    mocks.sessionManager._setActive({
+      ...makeSession(sessionId),
+      model: selection.modelId,
+      selection,
+      modelLabel: selection.modelId,
+      chains: [
+        {
+          id: 'chain-old',
+          messages: [
+            { id: 'u-old', role: 'user', content: 'x'.repeat(4000), type: 'text' },
+            { id: 'a-old', role: 'assistant', content: 'y'.repeat(4000), type: 'text' },
+          ],
+        } as never,
+      ] as never,
+    });
+    mocks.sessionManager._setModelHistory([
+      { id: 'u-old', role: 'user', content: 'x'.repeat(4000), type: 'text' },
+      { id: 'a-old', role: 'assistant', content: 'y'.repeat(4000), type: 'text' },
+    ]);
+    // The selective compactor keeps the user message verbatim and summarizes
+    // the assistant reply — ops derived from the manifest in the prompt.
+    mocks.aiGenerateText.mockImplementationOnce(async ({ messages }: { messages: Array<{ content: string }> }) => {
+      const prompt = String(messages[0]?.content ?? '');
+      const ids = [...prompt.matchAll(/^(\S+) \[/gm)].map((m) => m[1]!);
+      return {
+        text: JSON.stringify([
+          ...ids.filter((id) => id.startsWith('u-')).map((id) => ({ type: 'keep', id })),
+          { type: 'summarize', ids: ids.filter((id) => !id.startsWith('u-')), text: 'SUMMARY: selective over old turn' },
+        ]),
+      };
+    });
+    // Turn 1: the usage event prepares a selective pending; the provider error
+    // ends the turn before the pause can apply, so the pending survives to the
+    // next send (between-turns consumption).
+    mocks.streamChat.mockImplementationOnce(async function* () {
+      yield {
+        type: 'usage',
+        usage: { prompt_tokens: 1500, completion_tokens: 10, total_tokens: 1510, cached_tokens: 0 },
+      };
+      yield { type: 'error', title: 'Stream Error', detail: 'Provider disconnected' };
+    });
+    // Turn 2's stream reads from streamResponses.
+    mocks.streamResponses.push('Follow-up answer');
+
+    const send = vi.fn();
+    const chatSend = mocks.handlers.get(IPC_CHANNELS.CHAT_SEND)!;
+    await chatSend({ sender: { id: 944, send } }, { message: 'First request' });
+    await waitForChannelCount(send, IPC_CHANNELS.CHAT_ERROR, 1);
+    await chatSend({ sender: { id: 944, send } }, { message: 'Follow up' });
+    await waitForDoneCount(send, 1);
+
+    // Turn 2's model request: the selective prefix (kept user message +
+    // synthetic summary) re-anchored onto the CURRENT history — the new user
+    // message and the previous turn's user message both reach the model. The
+    // pre-fix code spliced the prepare-time replay wholesale, so the new user
+    // message never reached the model and existingMessages stripped the
+    // previous user message instead.
+    const secondMessages = mocks.streamChat.mock.calls[1]![0]!.messages as Array<{
+      id?: string;
+      content?: string;
+      compacted?: unknown;
+    }>;
+    expect(secondMessages.some((m) => m.role === MessageRole.USER && m.content === 'Follow up')).toBe(true);
+    expect(secondMessages.some((m) => m.role === MessageRole.USER && m.content === 'First request')).toBe(true);
+    expect(secondMessages.some((m) => m.compacted && m.content === 'SUMMARY: selective over old turn')).toBe(true);
+    expect(secondMessages.some((m) => m.id === 'u-old')).toBe(true);
+    // The summarized original is flagged durable-side and dropped from replay.
+    expect(secondMessages.some((m) => m.id === 'a-old')).toBe(false);
+
+    // Durable targeted write: the summarized original is flagged, the summary
+    // row inserted before the preserved window — never saveSession-from-view.
+    expect(mocks.sessionManager.applyCompaction).toHaveBeenCalledTimes(1);
+    expect(mocks.sessionManager.applyCompaction).toHaveBeenCalledWith(
+      sessionId,
+      expect.objectContaining({
+        flaggedMessageIds: ['a-old'],
+        // Unification #11b: synthesized compactor chains use one id scheme —
+        // randomUUID() — for both scopes (the main path previously synthesized
+        // `selective-${Date.now()}-…` ids here).
+        summaryChain: expect.objectContaining({
+          id: expect.stringMatching(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/),
+        }),
+        insertBeforeMessageId: expect.any(String),
+      }),
+    );
+    expect(mocks.saveSession).not.toHaveBeenCalled();
+
+    // The turn-2 durable active chain keeps the full turn.
+    const persisted = mocks.sessionManager.persistTurn.mock.calls.at(-1)?.[0] as {
+      messages: Array<Record<string, unknown>>;
+      status?: string;
+    };
+    expect(persisted.status).toBe('completed');
+    expect(persisted.messages).toEqual(expect.arrayContaining([
+      expect.objectContaining({ role: MessageRole.USER, content: 'Follow up' }),
+      expect.objectContaining({ role: MessageRole.ASSISTANT, content: 'Follow-up answer' }),
+    ]));
   });
 });
 
@@ -2886,6 +3255,14 @@ describe('chat compaction send-time calibration', () => {
     // The oversized prior message is excluded from replay but never deleted.
     const oldMessage = sentMessages.find((m) => m.content === 'x'.repeat(4000));
     expect(oldMessage?.excludeFromModel).toBe(true);
-    expect(mocks.saveSession).toHaveBeenCalled();
+    // The durable targeted path is taken (never saveSession-from-view).
+    expect(mocks.sessionManager.applyCompaction).toHaveBeenCalledWith(
+      sessionId,
+      expect.objectContaining({
+        flaggedMessageIds: expect.arrayContaining(['u-old']),
+        summaryChain: expect.objectContaining({ id: expect.any(String) }),
+      }),
+    );
+    expect(mocks.saveSession).not.toHaveBeenCalled();
   });
 });

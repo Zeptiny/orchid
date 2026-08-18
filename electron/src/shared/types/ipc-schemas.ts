@@ -18,6 +18,7 @@ import {
   terminalToolResultStatusSchema,
   toolExecutionResultSchema,
 } from './tool-result';
+import type { ChatErrorKind } from './ipc';
 
 // ── Startup ─────────────────────────────────────────────────────────────────
 
@@ -174,12 +175,33 @@ export const chatDoneEventSchema = chatEventIdentitySchema.extend({
   usage: usageSchema.nullable().optional(),
 });
 
+/**
+ * Chat error kinds allowed across the preload boundary. Mirrors the
+ * `ChatErrorKind` union in ./ipc; the exhaustiveness guard below makes the
+ * mirror a compile-time obligation — adding a union member without updating
+ * this list fails typecheck, so a newly classified kind can never again be
+ * silently dropped by the inbound `chat:error` validation.
+ */
+export const CHAT_ERROR_KINDS = [
+  'stream',
+  'rate-limit',
+  'auth',
+  'generic',
+  'context_length_exceeded',
+] as const satisfies readonly ChatErrorKind[];
+
+type _ChatErrorKindExhaustive = Exclude<ChatErrorKind, (typeof CHAT_ERROR_KINDS)[number]> extends never
+  ? true
+  : never;
+const _chatErrorKindExhaustive: _ChatErrorKindExhaustive = true;
+void _chatErrorKindExhaustive;
+
 export const chatErrorEventSchema = chatEventIdentitySchema.extend({
   type: z.literal('error'),
   error: z.string(),
   messages: z.array(messageSchema),
   title: z.string().optional(),
-  kind: z.enum(['stream', 'rate-limit', 'auth', 'generic']).optional(),
+  kind: z.enum(CHAT_ERROR_KINDS).optional(),
 });
 
 export const chatUsageEventSchema = chatEventIdentitySchema.extend({

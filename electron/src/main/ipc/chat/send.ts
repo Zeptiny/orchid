@@ -4,6 +4,12 @@
  * `chat.ts` validates the untrusted payload and delegates here. Keeping the
  * actor lifecycle in this module prevents IPC registration from also owning
  * projection, persistence, and resource cleanup policies.
+ *
+ * The main-session compaction engine (trigger/pending state, prepare/apply
+ * orchestration, selective persistence) lives in `./compaction`; this module
+ * only calls into it at the turn's compaction seams: turn-start pending
+ * consumption, send-time synchronous compaction, mid-turn usage events, the
+ * compaction pause/resume boundary, and the overflow retry.
  */
 import type { LanguageModelV4 } from '@ai-sdk/provider';
 import type { WebContents } from 'electron';
@@ -20,14 +26,12 @@ import type { ReasoningProviderOptions } from '../../providers/drivers/types';
 import {
   DEFAULT_THINKING_POLICY,
 } from '../../providers/facets/thinking';
-import { estimateMessageChars, totalCharsForMessages } from '../../llm/compaction/message-chars';
 import type { ThinkingReplayContext } from '../../llm/history';
 import type { CacheFacet, ThinkingPolicy } from '../../../shared/types/provider-facets';
 import type { ProviderProtocol } from '../../../shared/types/provider';
 import { resolveMainAgentTier } from '../../providers/facets/tiers';
 import { assembleFacetProviderOptions } from '../../providers/facets/turn-options';
 import { getSessionManager } from '../../session/singleton';
-import { saveSession } from '../../session/storage';
 import { getBuiltinToolRegistryForRuntime, getSubagentManager } from '../../tools';
 import type { ToolExecutionContext } from '../../tools/types';
 import { awaitSessionSubagentHydration } from '../../tools/subagent/hydrate';
@@ -42,14 +46,13 @@ import {
 import { acquireProjectMCPManager, releaseProjectMCPManager } from '../../mcp/project-registry';
 import { IPC_CHANNELS } from '../../../shared/types/ipc';
 import { ChainStatus } from '../../../shared/types/chain';
-import type { Chain } from '../../../shared/types/chain';
 import { MessageType, type Message, type Usage } from '../../../shared/types/message';
 import { getChatHistory, setChatHistory } from '../chat-history';
 import { chatSendSchema } from '../payload-schemas';
-import { clearNextRequestStop, requestCompactionPause, clearCompactionPause, shouldPauseForCompaction } from '../next-request-stop';
+import { clearNextRequestStop, clearCompactionPause, shouldPauseForCompaction } from '../next-request-stop';
 import { completeSessionActivity, publishSessionActivity } from '../session-activity';
 import { disposeActiveAgent, forceAbortSession } from './abort';
-import { buildSessionUpdatedEvent, emitSessionUpdated, sendChatState, sendSessionEvent, sendTurnEvent, webContentsForWindowId } from './events';
+import { emitSessionUpdated, sendChatState, sendTurnEvent } from './events';
 import {
   activeAgents,
   canEmitStreamEvents,
@@ -66,7 +69,6 @@ import {
   historyFromSession,
   persistTurnConversation,
   turnMessagesFromAgent,
-  persistCompactionBetweenTurns as persistCompaction,
 } from './persist';
 import {
   appendTextSegment,
@@ -77,988 +79,20 @@ import {
 import { ensureActiveSessionSingleFlight } from './session';
 import { classifyErrorKind, createProviderStreamFn } from './stream';
 import { triggerSessionAutoName } from './title';
-import { selectCut, resolvePreservePercent, type CutResult } from '../../llm/compaction/select';
-import { mechanicalReclaim } from '../../llm/compaction/reclaim';
-import { summarizeCompactableRange } from '../../llm/compaction/summarize';
-import { buildCompactionApply, CompactionApplyError } from '../../llm/compaction/apply';
-import { CompactionTrigger } from '../../llm/compaction/trigger';
-import { buildManifest } from '../../llm/compaction/selective/manifest';
-import type { Manifest } from '../../llm/compaction/selective/manifest';
-import { createLlmSelectiveCaller, runSelectiveCompaction } from '../../llm/compaction/selective/run';
-import type { SelectiveCompactionResult } from '../../llm/compaction/selective/run';
 import { isContextLengthExceededError } from '../../llm/middleware/error-classification';
-import { onSessionDeleted } from '../../session/manager';
+import {
+  applyPendingCompactionIfAny,
+  clearCompactionRetryTried,
+  dedupeHistoryById,
+  getCompactionTrigger,
+  handleUsageCompaction,
+  hasTriedCompactionRetry,
+  hydrateTriggerCalibration,
+  markCompactionRetryTried,
+  tryCompactSynchronously,
+} from './compaction';
 
 export type ChatSendPayload = z.infer<typeof chatSendSchema>;
-
-// ── Compaction state per session (U8, R13) ──────────────────────────────────
-
-const compactionTriggers = new Map<string, CompactionTrigger>();
-const compactionPending = new Map<string, {
-  cut: CutResult;
-  flaggedIds: string[];
-  expectedIds?: string[];
-  estimatedInput: number;
-  contextTokens: number;
-  mode: 'simple' | 'selective';
-  promise?: Promise<import('../../llm/compaction/summarize').SummarizeResult | null>;
-  selectivePromise?: Promise<SelectiveCompactionResult>;
-  manifest?: Manifest;
-}>();
-const compactionRetryTried = new Set<string>();
-
-export function clearCompactionState(sessionId: string): void {
-  compactionTriggers.delete(sessionId);
-  compactionPending.delete(sessionId);
-  triggerCalibrationHydrated.delete(sessionId);
-  for (const key of [...compactionRetryTried]) {
-    if (key === sessionId || key.startsWith(`${sessionId}:`)) compactionRetryTried.delete(key);
-  }
-}
-
-function completeCompactionWidget(sessionId: string): void {
-  try {
-    const active = activeAgents.get(sessionId);
-    const compactionToolId = `compaction-${sessionId}`;
-    if (active && !active.finalized && active.toolCalls.has(compactionToolId)) {
-      active.toolCalls.delete(compactionToolId);
-      const wc = webContentsForWindowId(active.windowId);
-      if (wc) sendTurnEvent(wc, active, IPC_CHANNELS.CHAT_TOOL_CALL_UPDATE, { type: 'tool_call_update', toolCallId: compactionToolId, toolName: 'compaction', status: 'complete', args: '', content: '', toolResult: { schemaVersion: 1, family: 'generic', status: 'complete', completeness: 'complete', data: { value: '', origin: { kind: 'built-in', name: 'compaction' } } } as unknown as Record<string, unknown> });
-    }
-    clearCompactionPause(sessionId);
-  } catch {}
-}
-
-// Evict compaction Maps when a session is deleted — prevents unbounded growth.
-try {
-  onSessionDeleted((sessionId) => clearCompactionState(sessionId));
-} catch {
-  // manager may be unavailable in unit-test imports
-}
-
-function getCompactionTrigger(sessionId: string): CompactionTrigger {
-  let t = compactionTriggers.get(sessionId);
-  if (!t) {
-    t = new CompactionTrigger();
-    compactionTriggers.set(sessionId, t);
-  }
-  return t;
-}
-
-// Sessions whose trigger calibration was already seeded from persistence.
-const triggerCalibrationHydrated = new Set<string>();
-
-/**
- * Seed an uncalibrated trigger from persisted observations so calibration
- * survives restarts: the accounting DB keeps per-step context snapshots with
- * provider-reported input_tokens; the session chains' message usages are a
- * secondary source. Sets lastObservedInputTokens only — the tokens-per-char
- * ratio is derived against the live history where it is consumed.
- */
-async function hydrateTriggerCalibration(sessionId: string): Promise<void> {
-  if (triggerCalibrationHydrated.has(sessionId)) return;
-  const trigger = getCompactionTrigger(sessionId);
-  if (trigger.state.tokensPerChar != null) {
-    triggerCalibrationHydrated.add(sessionId);
-    return;
-  }
-  triggerCalibrationHydrated.add(sessionId);
-  let observed: number | null = null;
-  try {
-    // Lazy import: keeps the chat module-load graph free of the accounting
-    // store chain (its config/loader dependency conflicts with test mocks).
-    const { getContextSnapshotStore } = await import('../../providers/accounting/context-snapshot-store.js');
-    observed = getContextSnapshotStore().latestMainInputTokens(sessionId);
-  } catch {
-    // store unavailable (not initialized / test env) — fall through
-  }
-  if (observed == null) {
-    try {
-      const chains = getSessionManager().getSession(sessionId)?.chains ?? [];
-      for (let i = chains.length - 1; i >= 0 && observed == null; i -= 1) {
-        const msgs = chains[i]?.messages ?? [];
-        for (let j = msgs.length - 1; j >= 0; j -= 1) {
-          const usage = msgs[j]!.usage;
-          const input = usage?.context?.input_tokens ?? usage?.prompt_tokens;
-          if (typeof input === 'number' && Number.isFinite(input) && input > 0) {
-            observed = input;
-            break;
-          }
-        }
-      }
-    } catch {
-      // non-fatal — skip
-    }
-  }
-  if (observed != null) {
-    trigger.state.lastObservedInputTokens = observed;
-  }
-}
-
-function dedupeHistoryById(messages: readonly Message[]): Message[] {
-  const seen = new Set<string>();
-  const out: Message[] = [];
-  for (const m of messages) {
-    if (m.id && seen.has(m.id)) continue;
-    if (m.id) seen.add(m.id);
-    out.push(m);
-  }
-  return out;
-}
-
-function totalChars(messages: readonly Message[]): number {
-  return totalCharsForMessages(messages);
-}
-
-function compactableTokenEstimate(messages: readonly Message[], range: { start: number; end: number }, tokensPerChar: number | undefined): number {
-  if (tokensPerChar == null || !Number.isFinite(tokensPerChar) || tokensPerChar <= 0) return 0;
-  let chars = 0;
-  for (let i = range.start; i < range.end; i += 1) chars += estimateMessageChars(messages[i]!);
-  return Math.ceil(chars * tokensPerChar);
-}
-
-function deriveTokensPerChar(inputTokens: number, messages: readonly Message[], fallback?: number | null): number | undefined {
-  const chars = totalChars(messages);
-  if (chars <= 0) return fallback ?? undefined;
-  if (Number.isFinite(inputTokens) && inputTokens > 0) {
-    const r = inputTokens / chars;
-    if (Number.isFinite(r) && r > 0) return Math.max(0.05, Math.min(r, 2));
-  }
-  if (typeof fallback === 'number' && Number.isFinite(fallback) && fallback > 0) return fallback;
-  return undefined;
-}
-
-function isPendingCutStillValid(pending: { cut: CutResult; flaggedIds: string[]; expectedIds?: string[] }, messages: readonly Message[]): boolean {
-  const { start, end } = pending.cut.compactableRange;
-  if (!Number.isFinite(start) || !Number.isFinite(end)) return false;
-  if (start < 0 || end > messages.length || start >= end) return false;
-  if (pending.cut.cutIndex < 0 || pending.cut.cutIndex > messages.length) return false;
-  for (let i = start; i < end; i += 1) {
-    if (messages[i]?.excludeFromModel) return false;
-  }
-  if (pending.flaggedIds.length > 0) {
-    const idToMsg = new Map<string, Message>();
-    for (const m of messages) idToMsg.set(m.id, m);
-    for (const id of pending.flaggedIds) {
-      const msg = idToMsg.get(id);
-      if (!msg) return false;
-      if (msg.excludeFromModel) return false;
-    }
-  }
-  if (pending.expectedIds) {
-    if (pending.expectedIds.length !== end - start) return false;
-    for (let i = 0; i < pending.expectedIds.length; i += 1) {
-      if (messages[start + i]?.id !== pending.expectedIds[i]) return false;
-    }
-  }
-  return true;
-}
-
-// ── Selective persistence helper (minimal between-turns) ─────────────────────
-function persistSelectiveCompaction(
-  sessionId: string,
-  result: Extract<SelectiveCompactionResult, { kind: 'selective' }>,
-  cut: CutResult,
-): boolean {
-  try {
-    const manager = getSessionManager();
-    const existing = manager.getSession(sessionId) ?? manager.load(sessionId);
-    if (!existing) return true;
-    const flaggedSet = new Set(result.flaggedIds);
-    let updatedChains: Chain[] = existing.chains.map((chain) => {
-      let changed = false;
-      const newMessages = chain.messages.map((m) => {
-        if (flaggedSet.has(m.id) && !m.excludeFromModel) {
-          changed = true;
-          return { ...m, excludeFromModel: true };
-        }
-        return m;
-      });
-      return changed ? { ...chain, messages: newMessages } : { ...chain, messages: [...chain.messages] };
-    }) as Chain[];
-    const summaryMessages = result.summaryMessages.length > 0
-      ? result.summaryMessages
-      : (result.summaryMessage ? [result.summaryMessage] : []);
-    const existingIdsForInsert = new Set(existing.chains.flatMap((c) => c.messages.map((m) => m.id)));
-    const rangedCopies = result.replayMessages.filter((m) => m.id.includes(':range:') && !existingIdsForInsert.has(m.id));
-    const allNewMessages: Message[] = (() => {
-      const newFromReplay = result.replayMessages.filter((m) => !existingIdsForInsert.has(m.id));
-      if (newFromReplay.length > 0) return newFromReplay as Message[];
-      const combined = [...rangedCopies, ...summaryMessages];
-      const pos = new Map<string, number>();
-      result.replayMessages.forEach((m, idx) => pos.set(m.id, idx));
-      combined.sort((a, b) => (pos.get(a.id) ?? 0) - (pos.get(b.id) ?? 0));
-      return combined as Message[];
-    })();
-    if (allNewMessages.length > 0) {
-      let insertionIdx = updatedChains.length;
-      try {
-        const idToChainIdx = new Map<string, number>();
-        existing.chains.forEach((ch, idx) => {
-          for (const m of ch.messages) if (!idToChainIdx.has(m.id)) idToChainIdx.set(m.id, idx);
-        });
-        const flatOriginal: Message[] = existing.chains.flatMap((c) => c.messages as unknown as Message[]);
-        const preserveStart = cut.compactableRange.end;
-        if (preserveStart < flatOriginal.length) {
-          const preserveId = flatOriginal[preserveStart]!.id;
-          const idx = idToChainIdx.get(preserveId);
-          if (typeof idx === 'number') insertionIdx = idx;
-        } else {
-          insertionIdx = updatedChains.length;
-        }
-      } catch {}
-      const now = new Date().toISOString();
-      let chainsWithSummaries: Chain[] = [...updatedChains];
-      for (let s = 0; s < allNewMessages.length; s += 1) {
-        const msg = allNewMessages[s]!;
-        const newChain = {
-          id: `selective-${Date.now()}-${s}-${Math.random().toString(36).slice(2, 8)}`,
-          sessionId,
-          messages: [msg] as unknown as readonly Message[],
-          status: ChainStatus.COMPLETED,
-          selection: null,
-          modelLabel: null,
-          agentName: 'compactor',
-          agentType: 'internal' as const,
-          agentTier: 'seed' as const,
-          subagentRecord: null,
-          startTime: now,
-          endTime: now,
-          errorDetail: null,
-          errorTitle: null,
-        } as Chain;
-        chainsWithSummaries = [
-          ...chainsWithSummaries.slice(0, insertionIdx + s),
-          newChain,
-          ...chainsWithSummaries.slice(insertionIdx + s),
-        ];
-      }
-      updatedChains = chainsWithSummaries;
-    }
-    const updatedAt = new Date().toISOString();
-    const nextSession = { ...existing, chains: updatedChains as typeof existing.chains, updatedAt } as typeof existing;
-    saveSession(nextSession);
-    manager.setCachedSession(nextSession as unknown as import('../../../shared/types/session').Session);
-    {
-      const prevIds = new Set(existing.chains.map((c) => c.id));
-      const changedIds = new Set<string>();
-      for (const c of updatedChains) {
-        const prev = existing.chains.find((p) => p.id === c.id);
-        if (!prev || prev.messages.length !== c.messages.length || prev.messages.some((m, i) => m.excludeFromModel !== c.messages[i]?.excludeFromModel)) changedIds.add(c.id);
-      }
-      for (const c of updatedChains) if (!prevIds.has(c.id)) changedIds.add(c.id);
-      for (const chainId of changedIds) {
-        const chain = nextSession.chains.find((c) => c.id === chainId);
-        if (!chain) continue;
-        const event = buildSessionUpdatedEvent(nextSession as unknown as import('../../../shared/types/session').Session, chain.id);
-        if (!event) continue;
-        sendSessionEvent(null, sessionId, IPC_CHANNELS.SESSION_UPDATED, event);
-      }
-      const compactionEvent = { sessionId, updatedAt: nextSession.updatedAt };
-      sendSessionEvent(null, sessionId, IPC_CHANNELS.SESSION_COMPACTION, compactionEvent);
-    }
-    return true;
-  } catch (err) {
-    console.debug('[compaction] selective chain persist failed (non-fatal):', err);
-    return false;
-  }
-}
-
-async function applyPendingCompactionIfAny(
-  sessionId: string,
-  messages: Message[],
-  runtime: import('../../project/runtime').ProjectRuntime,
-): Promise<{ applied: boolean; updatedMessages?: Message[] }> {
-  const pending = compactionPending.get(sessionId);
-  if (!pending) return { applied: false };
-  // The pending cut/expectedIds were computed over the deduped history
-  // (handleUsageCompaction dedupes). Mid-turn callers concatenate
-  // [...messages, ...turnMessagesFromAgent()] where the turn base repeats
-  // the triggering user message, so dedupe here or the index-anchored
-  // validation below rejects every mid-turn apply.
-  const history = dedupeHistoryById(messages);
-  if (!isPendingCutStillValid(pending, history)) {
-    compactionPending.delete(sessionId);
-    const t = getCompactionTrigger(sessionId);
-    t.abortPrepare();
-    completeCompactionWidget(sessionId);
-    return { applied: false };
-  }
-  compactionPending.delete(sessionId);
-  const trigger = getCompactionTrigger(sessionId);
-  try {
-    // ── Selective pending ───────────────────────────────────────────────
-    if (pending.mode === 'selective' && pending.selectivePromise) {
-      const result = await pending.selectivePromise;
-      if (result.kind === 'selective') {
-        // Atomic: DB first, then memory. Single DB write via persistSelectiveCompaction.
-        const ok = persistSelectiveCompaction(sessionId, result, pending.cut);
-        if (!ok) {
-          trigger.abortPrepare();
-          completeCompactionWidget(sessionId);
-          return { applied: false };
-        }
-        setChatHistory(sessionId, [...result.replayMessages]);
-        const postTokens = (() => {
-          const tpc = trigger.state.tokensPerChar ?? (totalChars(result.replayMessages) > 0 ? pending.estimatedInput / Math.max(1, totalChars(history)) : undefined);
-          return tpc ? Math.ceil(totalChars(result.replayMessages) * tpc) : pending.estimatedInput;
-        })();
-        trigger.onCompactionApplied(pending.estimatedInput, postTokens);
-        trigger.abortPrepare();
-        completeCompactionWidget(sessionId);
-        return { applied: true, updatedMessages: [...result.replayMessages] };
-      }
-      if (result.kind === 'fallback' && result.fallbackText && result.fallbackText.trim()) {
-        const chains = getSessionManager().getSession(sessionId)?.chains ?? [];
-        let applyResult: ReturnType<typeof buildCompactionApply> | null = null;
-        try {
-          applyResult = buildCompactionApply({
-            messages: history,
-            chains: chains as Chain[],
-            cutResult: pending.cut,
-            summaryText: result.fallbackText,
-            mode: runtime.config.compaction.main.mode,
-            flaggedIds: pending.flaggedIds,
-            sessionId,
-          });
-        } catch (e) {
-          if (e instanceof CompactionApplyError) {
-            trigger.abortPrepare();
-            completeCompactionWidget(sessionId);
-            compactionPending.delete(sessionId);
-            return { applied: false };
-          }
-          throw e;
-        }
-        if (applyResult.didApply) {
-          const ok = persistCompaction(sessionId, applyResult);
-          if (ok) {
-            setChatHistory(sessionId, [...applyResult.updatedMessages]);
-            const tpc = trigger.state.tokensPerChar ?? (totalChars(applyResult.updatedMessages) > 0 ? pending.estimatedInput / Math.max(1, totalChars(history)) : undefined);
-            const postTokens = tpc ? Math.ceil(totalChars(applyResult.updatedMessages) * tpc) : pending.estimatedInput;
-            trigger.onCompactionApplied(pending.estimatedInput, postTokens);
-            trigger.abortPrepare();
-            completeCompactionWidget(sessionId);
-            return { applied: true, updatedMessages: [...applyResult.updatedMessages] };
-          }
-        }
-        if (result.replayMessages && result.replayMessages.length > 0) {
-          // Fallback replay without summary — treat as selective success with single DB write via helper if possible
-          const selectiveLike = { kind: 'selective' as const, replayMessages: result.replayMessages, flaggedIds: result.flaggedIds ?? pending.flaggedIds, summaryMessages: [], summaryMessage: result.summaryMessage ?? null } as unknown as Extract<SelectiveCompactionResult, { kind: 'selective' }>;
-          const ok = persistSelectiveCompaction(sessionId, selectiveLike, pending.cut);
-          if (ok) {
-            setChatHistory(sessionId, [...result.replayMessages]);
-            const tpc = trigger.state.tokensPerChar ?? (totalChars(result.replayMessages) > 0 ? pending.estimatedInput / Math.max(1, totalChars(history)) : undefined);
-            const postTokens = tpc ? Math.ceil(totalChars(result.replayMessages) * tpc) : pending.estimatedInput;
-            trigger.onCompactionApplied(pending.estimatedInput, postTokens);
-          }
-          trigger.abortPrepare();
-          completeCompactionWidget(sessionId);
-          return { applied: ok, updatedMessages: ok ? [...result.replayMessages] : undefined };
-        }
-      }
-      trigger.abortPrepare();
-      completeCompactionWidget(sessionId);
-      return { applied: false };
-    }
-    // ── Simple pending (existing) ───────────────────────────────────────
-    if (pending.promise) {
-      const result = await pending.promise;
-      if (result && result.text && result.text.trim()) {
-        const chains = getSessionManager().getSession(sessionId)?.chains ?? [];
-        let applyResult: ReturnType<typeof buildCompactionApply> | null = null;
-        try {
-          applyResult = buildCompactionApply({
-            messages: history,
-            chains: chains as Chain[],
-            cutResult: pending.cut,
-            summaryText: result.text,
-            mode: runtime.config.compaction.main.mode,
-            flaggedIds: pending.flaggedIds,
-            sessionId,
-          });
-        } catch (e) {
-          if (e instanceof CompactionApplyError) {
-            trigger.abortPrepare();
-            completeCompactionWidget(sessionId);
-            return { applied: false };
-          }
-          throw e;
-        }
-        if (applyResult.didApply) {
-          const ok = persistCompaction(sessionId, applyResult);
-          if (ok) {
-            setChatHistory(sessionId, [...applyResult.updatedMessages]);
-            const tpc = trigger.state.tokensPerChar ?? (totalChars(applyResult.updatedMessages) > 0 ? pending.estimatedInput / Math.max(1, totalChars(history)) : undefined);
-            const postTokens = tpc ? Math.ceil(totalChars(applyResult.updatedMessages) * tpc) : pending.estimatedInput;
-            trigger.onCompactionApplied(pending.estimatedInput, postTokens);
-            trigger.abortPrepare();
-            completeCompactionWidget(sessionId);
-            return { applied: true, updatedMessages: [...applyResult.updatedMessages] };
-          }
-        }
-      }
-      // Summarizer failed or persist failed — clear pending flag
-      trigger.abortPrepare();
-      completeCompactionWidget(sessionId);
-      return { applied: false };
-    }
-    // Reclaim-only pending
-    if (pending.flaggedIds.length > 0) {
-      const chains = getSessionManager().getSession(sessionId)?.chains ?? [];
-      let applyResult: ReturnType<typeof buildCompactionApply> | null = null;
-      try {
-        applyResult = buildCompactionApply({
-          messages: history,
-          chains: chains as Chain[],
-          cutResult: pending.cut,
-          summaryText: null,
-          mode: runtime.config.compaction.main.mode,
-          flaggedIds: pending.flaggedIds,
-          sessionId,
-        });
-      } catch (e) {
-        if (e instanceof CompactionApplyError) {
-          trigger.abortPrepare();
-          completeCompactionWidget(sessionId);
-          return { applied: false };
-        }
-        throw e;
-      }
-      if (applyResult.didApply) {
-        const ok = persistCompaction(sessionId, applyResult);
-        if (ok) {
-          setChatHistory(sessionId, [...applyResult.updatedMessages]);
-          const tpc = trigger.state.tokensPerChar ?? (totalChars(applyResult.updatedMessages) > 0 ? pending.estimatedInput / Math.max(1, totalChars(history)) : undefined);
-          const postTokens = tpc ? Math.ceil(totalChars(applyResult.updatedMessages) * tpc) : pending.estimatedInput;
-          trigger.onCompactionApplied(pending.estimatedInput, postTokens);
-          completeCompactionWidget(sessionId);
-          return { applied: true, updatedMessages: [...applyResult.updatedMessages] };
-        }
-      }
-    }
-    // Fall-through (reclaim-only that did not apply, or a pending with neither
-    // promise nor flagged ids): clear the prepare so a stuck pendingPrepare
-    // cannot silence every future trigger evaluation for the session.
-    trigger.abortPrepare();
-    completeCompactionWidget(sessionId);
-  } catch (err) {
-    console.debug('[compaction] pending apply failed (non-fatal):', err);
-    const t = getCompactionTrigger(sessionId);
-    t.abortPrepare();
-    completeCompactionWidget(sessionId);
-  }
-  return { applied: false };
-}
-
-async function tryCompactSynchronously(
-  sessionId: string,
-  messages: Message[],
-  runtime: import('../../project/runtime').ProjectRuntime,
-  selection: import('../../../shared/types/provider').ModelSelection,
-  contextTokens: number | null,
-  accountingStore: ReturnType<typeof getProviderAccountingStore>,
-  chainId: string | null,
-  turnId: string,
-): Promise<{ didApply: boolean; updatedMessages?: Message[] }> {
-  const trigger = getCompactionTrigger(sessionId);
-  const cfg = runtime.config.compaction?.main;
-  if (!cfg) return { didApply: false };
-  // Models without a configured context window never compact proactively:
-  // fabricating an assumed window here diverged from the mid-turn usage path,
-  // which is disabled when the limit is unknown.
-  if (contextTokens == null || !Number.isFinite(contextTokens) || contextTokens <= 0) return { didApply: false };
-  const windowTokens: number = contextTokens;
-  if (trigger.state.pendingPrepare) return { didApply: false };
-  try {
-    // Single-pass: compute totalChars once, reuse for estimate and trigger ratio
-    const totalCharsValue = totalChars(messages);
-    let tokensPerChar = trigger.state.tokensPerChar;
-    if (tokensPerChar == null && Number.isFinite(trigger.state.lastObservedInputTokens ?? NaN) && totalCharsValue > 0) {
-      const obs = trigger.state.lastObservedInputTokens as number;
-      const r = obs / totalCharsValue;
-      if (Number.isFinite(r) && r > 0) tokensPerChar = Math.max(0.05, Math.min(r, 2));
-    }
-    // Hard rule: never estimate with a heuristic chars/4 ratio. Without a
-    // calibrated tokens-per-char (provider usage or hydrated observation) the
-    // input estimate is unknown and proactive send-time compaction is skipped.
-    // The overflow-retry path and mid-turn usage events remain as backstops,
-    // and the first observed usage calibrates all future estimates.
-    if (tokensPerChar == null || !Number.isFinite(tokensPerChar) || tokensPerChar <= 0) {
-      return { didApply: false };
-    }
-    const estimatedInput = Math.ceil(totalCharsValue * tokensPerChar);
-    // Early gate before expensive selectCut/reclaim: only proceed if threshold crossed or hysteresis accrual allows re-fire
-    const ratio = estimatedInput / windowTokens;
-    const hysteresisDelta = cfg.hysteresis_delta ?? 0.1;
-    const isOverWindow = estimatedInput >= windowTokens;
-    if (ratio + 1e-9 < cfg.threshold && !isOverWindow) {
-      const baseline = trigger.state.postCompactionInputTokens;
-      if (!(trigger.state.hysteresisArmed && typeof baseline === 'number' && estimatedInput - baseline >= cfg.min_compactable_tokens)) {
-        return { didApply: false };
-      }
-    }
-    const calibratedEstimator = (slice: readonly Message[]): number => {
-      let chars = 0;
-      for (const m of slice) {
-        if (m.content) chars += m.content.length;
-        if (m.thinking) chars += m.thinking.length;
-        if (m.tool_calls) chars += JSON.stringify(m.tool_calls).length;
-        if (m.tool_result) chars += JSON.stringify(m.tool_result).length;
-        if (m.tool_call_id) chars += m.tool_call_id.length;
-        if (m.name) chars += m.name.length;
-        if ((m as unknown as { compacted?: unknown }).compacted) chars += JSON.stringify((m as unknown as { compacted: unknown }).compacted).length;
-      }
-      return Math.max(slice.length, Math.ceil(chars * tokensPerChar));
-    };
-    const cut = selectCut(messages, {
-      preserveTokens: Math.floor(resolvePreservePercent(cfg) * windowTokens),
-      tokenEstimator: calibratedEstimator,
-    });
-    if (cut.compactableRange.end <= cut.compactableRange.start) return { didApply: false };
-    const compactableTokens = compactableTokenEstimate(messages, cut.compactableRange, tokensPerChar);
-    if (compactableTokens < cfg.min_compactable_tokens) return { didApply: false };
-    // Gate reclaim behind threshold: only compute reclaim if we passed the gates above
-    const reclaim = mechanicalReclaim(messages, cut.compactableRange);
-    const flaggedIds = reclaim.flaggedIds;
-    const decision = trigger.evaluateWithReclaim({
-      inputTokens: estimatedInput,
-      contextTokens,
-      threshold: cfg.threshold,
-      hysteresisDelta,
-      compactableTokens,
-      minCompactableTokens: cfg.min_compactable_tokens,
-      compactableRange: cut.compactableRange,
-      messages,
-      flaggedIds,
-      estimatedInputTokens: estimatedInput,
-    });
-    if (!decision.shouldPrepare && !decision.shouldApply) return { didApply: false };
-    const chains = getSessionManager().getSession(sessionId)?.chains ?? [];
-    if (decision.shouldApply && !decision.shouldPrepare) {
-      let applyResult: ReturnType<typeof buildCompactionApply> | null = null;
-      try {
-        applyResult = buildCompactionApply({
-          messages,
-          chains: chains as Chain[],
-          cutResult: cut,
-          summaryText: null,
-          mode: cfg.mode,
-          flaggedIds,
-          sessionId,
-        });
-      } catch (e) {
-        if (e instanceof CompactionApplyError) return { didApply: false };
-        throw e;
-      }
-      if (!applyResult.didApply) return { didApply: false };
-      const ok = persistCompaction(sessionId, applyResult);
-      if (!ok) return { didApply: false };
-      setChatHistory(sessionId, [...applyResult.updatedMessages]);
-      const tpc2 = trigger.state.tokensPerChar ?? tokensPerChar;
-      const postTokens = Math.ceil(totalChars(applyResult.updatedMessages) * tpc2);
-      trigger.onCompactionApplied(estimatedInput, postTokens);
-      return { didApply: true, updatedMessages: [...applyResult.updatedMessages] };
-    }
-    if (decision.shouldPrepare) {
-      // ── Selective branch ──────────────────────────────────────────────
-      if (cfg.mode === 'selective') {
-        const rawSlice = messages.slice(cut.compactableRange.start, cut.compactableRange.end);
-        const slice = rawSlice.filter((m) => !m.excludeFromModel && !m.hidden);
-        if (slice.length === 0) return { didApply: false };
-        trigger.markPrepareStarted(cut.compactableRange, flaggedIds);
-        const manifest = buildManifest(messages, cut.compactableRange);
-        const selectiveCaller = createLlmSelectiveCaller({
-          config: runtime.config,
-          scope: 'main',
-          fallbackSelection: selection,
-          runtime,
-          accounting: { store: accountingStore, sessionId, chainId, turnId },
-        });
-        const simpleFallback = async () => {
-          const fb = await summarizeCompactableRange({
-            messages: slice,
-            scope: 'main',
-            config: runtime.config,
-            fallbackSelection: selection,
-            accounting: { store: accountingStore, sessionId, chainId, turnId },
-            runtime,
-          });
-          return fb ? { text: fb.text } : null;
-        };
-        let selResult: SelectiveCompactionResult;
-        try {
-          selResult = await runSelectiveCompaction({
-            messages,
-            compactableRange: cut.compactableRange,
-            manifest,
-            selectiveCaller,
-            simpleFallback,
-            maxCorrectionRounds: 3,
-          });
-        } catch (err) {
-          console.debug('[compaction] selective run failed, falling back (non-fatal):', err);
-          trigger.abortPrepare();
-          return { didApply: false };
-        }
-        if (selResult.kind === 'selective') {
-          const ok = persistSelectiveCompaction(sessionId, selResult, cut);
-          if (!ok) {
-            trigger.abortPrepare();
-            return { didApply: false };
-          }
-          setChatHistory(sessionId, [...selResult.replayMessages]);
-          const tpcSel = trigger.state.tokensPerChar ?? tokensPerChar;
-          const postTokensSel = Math.ceil(totalChars(selResult.replayMessages) * tpcSel);
-          trigger.onCompactionApplied(estimatedInput, postTokensSel);
-          trigger.abortPrepare();
-          return { didApply: true, updatedMessages: [...selResult.replayMessages] };
-        }
-        if (selResult.kind === 'fallback' && selResult.fallbackText && selResult.fallbackText.trim()) {
-          let applyResult: ReturnType<typeof buildCompactionApply> | null = null;
-          try {
-            applyResult = buildCompactionApply({
-              messages,
-              chains: chains as Chain[],
-              cutResult: cut,
-              summaryText: selResult.fallbackText,
-              mode: cfg.mode,
-              flaggedIds,
-              sessionId,
-            });
-          } catch (e) {
-            if (e instanceof CompactionApplyError) {
-              trigger.abortPrepare();
-              return { didApply: false };
-            }
-            throw e;
-          }
-          if (!applyResult.didApply) {
-            if (selResult.replayMessages && selResult.replayMessages.length > 0) {
-              // fallback replay without summary — single DB write via selective helper
-              // If flaggedIds derived from manifest, use those; else use flaggedIds from reclaim
-              const flaggedForLike = (selResult.flaggedIds ?? flaggedIds) as string[];
-              const like2: Extract<SelectiveCompactionResult, { kind: 'selective' }> = { kind: 'selective', replayMessages: selResult.replayMessages!, flaggedIds: flaggedForLike, summaryMessages: [], summaryMessage: selResult.summaryMessage ?? null, correctedOps: [], attempts: selResult.attempts } as unknown as Extract<SelectiveCompactionResult, { kind: 'selective' }>;
-              const ok2 = persistSelectiveCompaction(sessionId, like2, cut);
-              if (ok2) {
-                setChatHistory(sessionId, [...selResult.replayMessages!]);
-                const tpcF = trigger.state.tokensPerChar ?? tokensPerChar;
-                const postF = Math.ceil(totalChars(selResult.replayMessages!) * tpcF);
-                trigger.onCompactionApplied(estimatedInput, postF);
-              }
-              trigger.abortPrepare();
-              return { didApply: ok2, updatedMessages: ok2 ? [...selResult.replayMessages!] : undefined };
-            }
-            trigger.abortPrepare();
-            return { didApply: false };
-          }
-          const ok = persistCompaction(sessionId, applyResult);
-          if (!ok) {
-            trigger.abortPrepare();
-            return { didApply: false };
-          }
-          setChatHistory(sessionId, [...applyResult.updatedMessages]);
-          const tpcF2 = trigger.state.tokensPerChar ?? tokensPerChar;
-          const postF2 = Math.ceil(totalChars(applyResult.updatedMessages) * tpcF2);
-          trigger.onCompactionApplied(estimatedInput, postF2);
-          trigger.abortPrepare();
-          return { didApply: true, updatedMessages: [...applyResult.updatedMessages] };
-        }
-        if (selResult.kind === 'fallback' && selResult.replayMessages && selResult.replayMessages.length > 0) {
-          const flaggedForFallback = (selResult.flaggedIds ?? flaggedIds) as string[];
-          const like3: Extract<SelectiveCompactionResult, { kind: 'selective' }> = { kind: 'selective', replayMessages: selResult.replayMessages, flaggedIds: flaggedForFallback, summaryMessages: [], summaryMessage: selResult.summaryMessage ?? null, correctedOps: [], attempts: selResult.attempts } as unknown as Extract<SelectiveCompactionResult, { kind: 'selective' }>;
-          const ok3 = persistSelectiveCompaction(sessionId, like3, cut);
-          if (!ok3) {
-            trigger.abortPrepare();
-            return { didApply: false };
-          }
-          setChatHistory(sessionId, [...selResult.replayMessages]);
-          const tpcF3 = trigger.state.tokensPerChar ?? tokensPerChar;
-          const postF3 = Math.ceil(totalChars(selResult.replayMessages) * tpcF3);
-          trigger.onCompactionApplied(estimatedInput, postF3);
-          trigger.abortPrepare();
-          return { didApply: true, updatedMessages: [...selResult.replayMessages] };
-        }
-        trigger.abortPrepare();
-        return { didApply: false };
-      }
-      // ── Simple branch (unchanged) ─────────────────────────────────────
-      const rawSlice2 = messages.slice(cut.compactableRange.start, cut.compactableRange.end);
-      const slice = rawSlice2.filter((m) => !m.excludeFromModel && !m.hidden);
-      if (slice.length === 0) return { didApply: false };
-      trigger.markPrepareStarted(cut.compactableRange, flaggedIds);
-      const result = await summarizeCompactableRange({
-        messages: slice,
-        scope: 'main',
-        config: runtime.config,
-        fallbackSelection: selection,
-        accounting: { store: accountingStore, sessionId, chainId, turnId },
-        runtime,
-      });
-      if (!result || !result.text || !result.text.trim()) {
-        trigger.abortPrepare();
-        return { didApply: false };
-      }
-      let applyResult: ReturnType<typeof buildCompactionApply> | null = null;
-      try {
-        applyResult = buildCompactionApply({
-          messages,
-          chains: chains as Chain[],
-          cutResult: cut,
-          summaryText: result.text,
-          mode: cfg.mode,
-          flaggedIds,
-          sessionId,
-        });
-      } catch (e) {
-        if (e instanceof CompactionApplyError) {
-          trigger.abortPrepare();
-          return { didApply: false };
-        }
-        throw e;
-      }
-      if (!applyResult.didApply) {
-        trigger.abortPrepare();
-        return { didApply: false };
-      }
-      const ok = persistCompaction(sessionId, applyResult);
-      if (!ok) {
-        trigger.abortPrepare();
-        return { didApply: false };
-      }
-      setChatHistory(sessionId, [...applyResult.updatedMessages]);
-      const tpcSimple = trigger.state.tokensPerChar ?? tokensPerChar;
-      const postSimple = Math.ceil(totalChars(applyResult.updatedMessages) * tpcSimple);
-      trigger.onCompactionApplied(estimatedInput, postSimple);
-      trigger.abortPrepare();
-      return { didApply: true, updatedMessages: [...applyResult.updatedMessages] };
-    }
-  } catch (err) {
-    console.debug('[compaction] synchronous compact failed (non-fatal):', err);
-    try { getCompactionTrigger(sessionId).abortPrepare(); } catch {}
-  }
-  return { didApply: false };
-}
-
-function handleUsageCompaction(
-  sessionId: string,
-  fullHistory: Message[],
-  inputTokens: number,
-  contextTokens: number,
-  runtime: import('../../project/runtime').ProjectRuntime,
-  selection: import('../../../shared/types/provider').ModelSelection,
-  accountingStore: ReturnType<typeof getProviderAccountingStore>,
-  chainId: string | null,
-  turnId: string,
-): void {
-  const trigger = getCompactionTrigger(sessionId);
-  const cfg = runtime.config.compaction?.main;
-  if (!cfg) return;
-  // Unknown context window → compaction is disabled, mirroring the send-time path.
-  if (!Number.isFinite(contextTokens) || contextTokens <= 0) return;
-  const history = dedupeHistoryById(fullHistory);
-  const effectiveContextTokens = contextTokens;
-  // Single-pass totalChars reuse + early threshold gate (avoids 4× scans per CHAT_USAGE)
-  const totalCharsValue = totalChars(history);
-  // Derive calibrated tokensPerChar from provider inputTokens / totalChars (no /4 fallback)
-  let tokensPerChar: number | undefined = trigger.state.tokensPerChar;
-  if (totalCharsValue > 0 && Number.isFinite(inputTokens) && inputTokens > 0) {
-    const r = inputTokens / totalCharsValue;
-    if (Number.isFinite(r) && r > 0) {
-      const clamped = Math.max(0.05, Math.min(r, 2));
-      tokensPerChar = clamped;
-      trigger.state.tokensPerChar = clamped;
-    }
-  }
-  trigger.state.lastObservedInputTokens = inputTokens;
-  trigger.onUsage(inputTokens, effectiveContextTokens, cfg.threshold, cfg.hysteresis_delta);
-  if (trigger.state.pendingPrepare) return;
-  if (compactionPending.has(sessionId)) return;
-  // Calibrate-or-skip: this path always receives provider-reported inputTokens,
-  // so a missing calibration means the usage payload was unusable — skip
-  // rather than estimate.
-  if (tokensPerChar == null || !Number.isFinite(tokensPerChar) || tokensPerChar <= 0) return;
-  const calibratedRatio = tokensPerChar;
-  const isOverWindow = inputTokens >= effectiveContextTokens;
-  if (!isOverWindow) {
-    const ratio = inputTokens / effectiveContextTokens;
-    if (ratio + 1e-9 < cfg.threshold) {
-      const baseline = trigger.state.postCompactionInputTokens;
-      if (!(trigger.state.hysteresisArmed && typeof baseline === 'number' && Number.isFinite(baseline) && inputTokens - baseline >= cfg.min_compactable_tokens)) {
-        return;
-      }
-    }
-  }
-  try {
-    const calibratedEstimator2 = (slice: readonly Message[]): number => {
-      let chars = 0;
-      for (const m of slice) {
-        if (m.content) chars += m.content.length;
-        if (m.thinking) chars += m.thinking.length;
-        if (m.tool_calls) chars += JSON.stringify(m.tool_calls).length;
-        if (m.tool_result) chars += JSON.stringify(m.tool_result).length;
-        if (m.tool_call_id) chars += m.tool_call_id.length;
-        if (m.name) chars += m.name.length;
-        if ((m as unknown as { compacted?: unknown }).compacted) chars += JSON.stringify((m as unknown as { compacted: unknown }).compacted).length;
-      }
-      return Math.max(slice.length, Math.ceil(chars * calibratedRatio));
-    };
-    const cut = selectCut(history, {
-      preserveTokens: Math.floor(resolvePreservePercent(cfg) * effectiveContextTokens),
-      tokenEstimator: calibratedEstimator2,
-    });
-    if (cut.compactableRange.end <= cut.compactableRange.start) return;
-    if (tokensPerChar == null || !Number.isFinite(tokensPerChar) || tokensPerChar <= 0) {
-      tokensPerChar = 0.25;
-    }
-    const compactableTokens = compactableTokenEstimate(history, cut.compactableRange, tokensPerChar);
-    if (compactableTokens < cfg.min_compactable_tokens) return;
-    const reclaim = mechanicalReclaim(history, cut.compactableRange);
-    const flaggedIds = reclaim.flaggedIds;
-    const decision = trigger.evaluateWithReclaim({
-      inputTokens,
-      contextTokens: effectiveContextTokens,
-      threshold: cfg.threshold,
-      hysteresisDelta: cfg.hysteresis_delta,
-      compactableTokens,
-      minCompactableTokens: cfg.min_compactable_tokens,
-      compactableRange: cut.compactableRange,
-      messages: history,
-      flaggedIds,
-    });
-    if (!decision.shouldPrepare && !decision.shouldApply) return;
-    if (decision.shouldApply && !decision.shouldPrepare) {
-      const expectedIds = history.slice(cut.compactableRange.start, cut.compactableRange.end).map((m) => m.id);
-      compactionPending.set(sessionId, { cut, flaggedIds, expectedIds, estimatedInput: inputTokens, contextTokens: effectiveContextTokens, mode: cfg.mode });
-      trigger.markPrepareStarted(cut.compactableRange, flaggedIds);
-      try {
-        const active = activeAgents.get(sessionId);
-        if (active && !active.finalized) {
-          const compactionToolId = `compaction-${sessionId}`;
-          ensureToolSnapshot(active, compactionToolId, 'compaction');
-          updateToolSnapshot(active, compactionToolId, 'compaction', { status: 'running', args: JSON.stringify({ phase: 'reclaiming', mode: cfg.mode }), content: null, toolResult: null, finishedAt: null });
-          const wc = webContentsForWindowId(active.windowId);
-          if (wc) sendTurnEvent(wc, active, IPC_CHANNELS.CHAT_TOOL_CALL_UPDATE, { type: 'tool_call_update', toolCallId: compactionToolId, toolName: 'compaction', status: 'running', args: JSON.stringify({ phase: 'reclaiming', mode: cfg.mode }) });
-        }
-      } catch {}
-      if (!shouldPauseForCompaction(sessionId)) {
-        requestCompactionPause(sessionId);
-        publishSessionActivity(sessionId, { cwd: runtime.projectDir ?? '', state: 'working', phase: 'agent', detail: 'Compacting context — reclaiming duplicates…', canCancel: true });
-      }
-      return;
-    }
-    if (decision.shouldPrepare) {
-      // ── Selective pending branch ──────────────────────────────────────
-      if (cfg.mode === 'selective') {
-        const rawSlice = history.slice(cut.compactableRange.start, cut.compactableRange.end);
-        const slice = rawSlice.filter((m) => !m.excludeFromModel && !m.hidden);
-        if (slice.length === 0) return;
-        trigger.markPrepareStarted(cut.compactableRange, flaggedIds);
-        const manifest = buildManifest(history, cut.compactableRange);
-        const selectiveCaller = createLlmSelectiveCaller({
-          config: runtime.config,
-          scope: 'main',
-          fallbackSelection: selection,
-          runtime,
-          accounting: { store: accountingStore, sessionId, chainId, turnId },
-        });
-        const simpleFallback = async () => {
-          const fb = await summarizeCompactableRange({
-            messages: slice,
-            scope: 'main',
-            config: runtime.config,
-            fallbackSelection: selection,
-            accounting: { store: accountingStore, sessionId, chainId, turnId },
-            runtime,
-          });
-          return fb ? { text: fb.text } : null;
-        };
-        const selectivePromise = runSelectiveCompaction({
-          messages: history,
-          compactableRange: cut.compactableRange,
-          manifest,
-          selectiveCaller,
-          simpleFallback,
-          maxCorrectionRounds: 3,
-        });
-        const expectedIdsForSelective = history.slice(cut.compactableRange.start, cut.compactableRange.end).map((m) => m.id);
-        compactionPending.set(sessionId, { cut, flaggedIds, expectedIds: expectedIdsForSelective, estimatedInput: inputTokens, contextTokens: effectiveContextTokens, mode: 'selective', selectivePromise, manifest });
-        selectivePromise.catch((err) => {
-          console.debug('[compaction] selective prepare failed (non-fatal):', err);
-          try {
-            const active = activeAgents.get(sessionId);
-            if (active && !active.finalized) {
-              const compactionToolId = `compaction-${sessionId}`;
-              const wc = webContentsForWindowId(active.windowId);
-              const result = { schemaVersion: 1 as const, family: 'generic' as const, status: 'complete' as const, completeness: 'complete' as const, data: { value: '', origin: { kind: 'built-in' as const, name: 'compaction' } } };
-              updateToolSnapshot(active, compactionToolId, 'compaction', { status: 'complete', args: '', content: '', toolResult: result as unknown as never, finishedAt: new Date().toISOString() });
-              if (wc) sendTurnEvent(wc, active, IPC_CHANNELS.CHAT_TOOL_CALL_UPDATE, { type: 'tool_call_update', toolCallId: compactionToolId, toolName: 'compaction', status: 'complete', args: '', content: '', toolResult: result as unknown as Record<string, unknown> });
-            }
-          } catch {}
-        });
-        try {
-          const active = activeAgents.get(sessionId);
-          if (active && !active.finalized) {
-            const compactionToolId = `compaction-${sessionId}`;
-            ensureToolSnapshot(active, compactionToolId, 'compaction');
-            updateToolSnapshot(active, compactionToolId, 'compaction', { status: 'running', args: JSON.stringify({ phase: 'summarizing', mode: 'selective' }), content: null, toolResult: null, finishedAt: null });
-            const wc = webContentsForWindowId(active.windowId);
-            if (wc) sendTurnEvent(wc, active, IPC_CHANNELS.CHAT_TOOL_CALL_UPDATE, { type: 'tool_call_update', toolCallId: compactionToolId, toolName: 'compaction', status: 'running', args: JSON.stringify({ phase: 'summarizing', mode: 'selective' }) });
-          }
-        } catch {}
-        if (!shouldPauseForCompaction(sessionId)) {
-          requestCompactionPause(sessionId);
-          publishSessionActivity(sessionId, { cwd: runtime.projectDir ?? '', state: 'working', phase: 'agent', detail: 'Compacting context — summarizing history…', canCancel: true });
-        }
-        return;
-      }
-      // ── Simple pending branch (unchanged) ─────────────────────────────
-      const rawSlice2 = history.slice(cut.compactableRange.start, cut.compactableRange.end);
-      const slice = rawSlice2.filter((m) => !m.excludeFromModel && !m.hidden);
-      if (slice.length === 0) return;
-      trigger.markPrepareStarted(cut.compactableRange, flaggedIds);
-      const promise = summarizeCompactableRange({
-        messages: slice,
-        scope: 'main',
-        config: runtime.config,
-        fallbackSelection: selection,
-        accounting: { store: accountingStore, sessionId, chainId, turnId },
-        runtime,
-      });
-      const expectedIdsForSimple = history.slice(cut.compactableRange.start, cut.compactableRange.end).map((m) => m.id);
-      compactionPending.set(sessionId, { cut, flaggedIds, expectedIds: expectedIdsForSimple, promise, estimatedInput: inputTokens, contextTokens: effectiveContextTokens, mode: 'simple' });
-      promise.catch((err) => {
-        console.debug('[compaction] prepare failed (non-fatal):', err);
-        try {
-          const active = activeAgents.get(sessionId);
-          if (active && !active.finalized) {
-            const compactionToolId = `compaction-${sessionId}`;
-            const wc = webContentsForWindowId(active.windowId);
-            const result = { schemaVersion: 1 as const, family: 'generic' as const, status: 'complete' as const, completeness: 'complete' as const, data: { value: '', origin: { kind: 'built-in' as const, name: 'compaction' } } };
-            updateToolSnapshot(active, compactionToolId, 'compaction', { status: 'complete', args: '', content: '', toolResult: result as unknown as never, finishedAt: new Date().toISOString() });
-            if (wc) sendTurnEvent(wc, active, IPC_CHANNELS.CHAT_TOOL_CALL_UPDATE, { type: 'tool_call_update', toolCallId: compactionToolId, toolName: 'compaction', status: 'complete', args: '', content: '', toolResult: result as unknown as Record<string, unknown> });
-          }
-        } catch {}
-      });
-      try {
-        const active = activeAgents.get(sessionId);
-        if (active && !active.finalized) {
-          const compactionToolId = `compaction-${sessionId}`;
-          ensureToolSnapshot(active, compactionToolId, 'compaction');
-          updateToolSnapshot(active, compactionToolId, 'compaction', { status: 'running', args: JSON.stringify({ phase: 'summarizing', mode: 'simple' }), content: null, toolResult: null, finishedAt: null });
-          const wc = webContentsForWindowId(active.windowId);
-          if (wc) sendTurnEvent(wc, active, IPC_CHANNELS.CHAT_TOOL_CALL_UPDATE, { type: 'tool_call_update', toolCallId: compactionToolId, toolName: 'compaction', status: 'running', args: JSON.stringify({ phase: 'summarizing', mode: 'simple' }) });
-        }
-      } catch {}
-      if (!shouldPauseForCompaction(sessionId)) {
-        requestCompactionPause(sessionId);
-        publishSessionActivity(sessionId, { cwd: runtime.projectDir ?? '', state: 'working', phase: 'agent', detail: 'Compacting context — summarizing history…', canCancel: true });
-      }
-    }
-  } catch (err) {
-    console.debug('[compaction] usage trigger failed (non-fatal):', err);
-  }
-}
 
 export async function startChatTurn(
   webContents: WebContents,
@@ -1212,8 +246,17 @@ export async function startChatTurn(
     await hydrateTriggerCalibration(sessionId);
     const pendingApplied = await applyPendingCompactionIfAny(sessionId, messages, runtime);
     if (pendingApplied.applied && pendingApplied.updatedMessages) {
-      messages = pendingApplied.updatedMessages;
-      existingMessages = messages.slice(0, messages.length - 1);
+      const updated = pendingApplied.updatedMessages;
+      // Defensive: the applied replay must carry the just-appended user message
+      // into the model request — if a stale prepare-time snapshot lost it,
+      // re-append rather than silently dropping the turn (P1 #5).
+      if (!updated.some((m) => m.id === userMessage.id)) {
+        updated.push(userMessage);
+        setChatHistory(sessionId, [...updated]);
+      }
+      messages = updated;
+      const userIndex = updated.findIndex((m) => m.id === userMessage.id);
+      existingMessages = userIndex >= 0 ? updated.slice(0, userIndex) : updated.slice(0, -1);
     }
     const syncResult = await tryCompactSynchronously(sessionId, messages, runtime, turnSelection, contextTokens, accountingStore!, chainId, turnId);
     if (syncResult.didApply && syncResult.updatedMessages) {
@@ -1303,9 +346,17 @@ export async function startChatTurn(
   let lastToolUpdateSequence = 0;
   let lastActivityKey = 'streaming:agent:Generating response';
   const generation = nextAgentGeneration(sessionId);
+  // Anchor the durable turn slice at the turn's user message (same invariant as
+  // the mid-turn resume paths): priorMessageCount must index the user message
+  // inside `messages` so turnMessagesFromAgent yields the FULL turn, never only
+  // a post-compaction tail.
+  const turnUserIndex = (() => {
+    const index = messages.findIndex((m) => m.id === userMessage.id);
+    return index >= 0 ? index : messages.length - 1;
+  })();
   const activeAgent: ActiveAgent = {
     sessionId, windowId, turnId, cwd: turnCtx.cwd, startedAt: Date.now(), actor, interruptActor,
-    abortController, messages, priorMessageCount: messages.length - 1, turnMessages: [], responseCommittedLength: 0,
+    abortController, messages, priorMessageCount: turnUserIndex, turnMessages: [], responseCommittedLength: 0,
     thinkingCommittedLength: 0, thinkingArtifactsCommitted: 0, agent, selection: turnSelection,
     thinkingReplay, agentCancelled: false,
     finalized: false, generation, eventSequence: 0, lastChatState: null, toolCalls: new Map(),
@@ -1440,7 +491,7 @@ export async function startChatTurn(
       fallbackSelection: activeAgent.selection,
       accounting: { store: accountingStore, sessionId, chainId, turnId },
     });
-    compactionRetryTried.delete(`${sessionId}:${turnId}`);
+    clearCompactionRetryTried(sessionId, turnId);
   };
 
   interruptSubscription = interruptActor.subscribe((interruptSnapshot) => {
@@ -1597,9 +648,22 @@ export async function startChatTurn(
               updated = pendingRes.updatedMessages;
             }
             if (applied && updated) {
+              // Anchor the durable turn slice at the turn's user message inside
+              // the compacted replay: priorMessageCount must index the user
+              // message (which stays in the replay even when the compaction
+              // flagged it), so the finalized persistTurn REPLACES the active
+              // chain with the FULL turn — never only the post-resume tail
+              // (P1 #3).
+              const turnAnchorIndex = updated.findIndex((m) => m.id === userMessage.id);
+              if (turnAnchorIndex < 0) {
+                // Defensive: a compaction result that lost the turn's user
+                // message must never truncate the durable turn — re-append it.
+                updated.push(userMessage);
+              }
+              const resumedPriorMessageCount = turnAnchorIndex >= 0 ? turnAnchorIndex : updated.length - 1;
               messages.splice(0, messages.length, ...updated);
               activeAgent.messages.splice(0, activeAgent.messages.length, ...updated);
-              activeAgent.priorMessageCount = updated.length;
+              activeAgent.priorMessageCount = resumedPriorMessageCount;
               activeAgent.turnMessages = [];
               activeAgent.streamSegments = [];
               activeAgent.responseCommittedLength = 0;
@@ -1650,9 +714,17 @@ export async function startChatTurn(
                 // base — restarting from the turn start silently discards all
                 // in-turn tool progress and makes context usage collapse.
                 const merged = dedupeHistoryById([...messages, ...turnMessagesFromAgent(activeAgent)]);
+                // Same invariant as the applied path: anchor the turn slice at
+                // the user message so the durable active chain keeps the full
+                // turn (P1 #3).
+                const mergedAnchorIndex = merged.findIndex((m) => m.id === userMessage.id);
+                if (mergedAnchorIndex < 0) {
+                  merged.push(userMessage);
+                }
+                const mergedPriorMessageCount = mergedAnchorIndex >= 0 ? mergedAnchorIndex : merged.length - 1;
                 messages.splice(0, messages.length, ...merged);
                 activeAgent.messages.splice(0, activeAgent.messages.length, ...merged);
-                activeAgent.priorMessageCount = merged.length;
+                activeAgent.priorMessageCount = mergedPriorMessageCount;
                 activeAgent.turnMessages = [];
                 activeAgent.streamSegments = [];
                 activeAgent.responseCommittedLength = 0;
@@ -1681,10 +753,9 @@ export async function startChatTurn(
       const detail = context.error ?? 'Unknown error';
       const title = context.errorTitle ?? 'Stream Error';
       const isOverflow = isContextLengthExceededError(`${title} ${detail}`);
-      const retryKey = `${sessionId}:${turnId}`;
-      if (isOverflow && !compactionRetryTried.has(retryKey) && contextTokens != null) {
+      if (isOverflow && !hasTriedCompactionRetry(sessionId, turnId) && contextTokens != null) {
         if (overflowRetryInFlight) return;
-        compactionRetryTried.add(retryKey);
+        markCompactionRetryTried(sessionId, turnId);
         overflowRetryInFlight = true;
         // One compaction-and-retry (R15). Compact the prefix (messages) and retry once before declaring failed.
         const historyForRetry = [...messages];
@@ -1702,6 +773,15 @@ export async function startChatTurn(
               if (retryResult.didApply && retryResult.updatedMessages) {
                 messages.splice(0, messages.length, ...retryResult.updatedMessages);
                 activeAgent.messages.splice(0, activeAgent.messages.length, ...retryResult.updatedMessages);
+                // The compacted retry base is [compacted prior history…, user
+                // message]: anchor the durable turn slice at the user message
+                // (the last element of the compacted base+user layout) so a
+                // later finalize REPLACES the active chain with the full turn,
+                // never only the post-retry tail (same invariant as P1 #3).
+                const retryAnchorIndex = retryResult.updatedMessages.findIndex((m) => m.id === userMessage.id);
+                activeAgent.priorMessageCount = retryAnchorIndex >= 0
+                  ? retryAnchorIndex
+                  : retryResult.updatedMessages.length - 1;
                 activeAgent.turnMessages = [];
                 activeAgent.responseCommittedLength = 0;
                 activeAgent.thinkingCommittedLength = 0;
@@ -1740,7 +820,7 @@ export async function startChatTurn(
             type: 'error', error: detail, messages: terminalMessages, title, kind: classifyErrorKind(title, detail),
           });
           queueMicrotask(() => disposeActiveAgent(sessionId, activeAgent));
-          compactionRetryTried.delete(retryKey);
+          clearCompactionRetryTried(sessionId, turnId);
           } finally {
             overflowRetryInFlight = false;
           }
@@ -1766,7 +846,7 @@ export async function startChatTurn(
         type: 'error', error: detail, messages: terminalMessages, title, kind: classifyErrorKind(title, detail),
       });
       queueMicrotask(() => disposeActiveAgent(sessionId, activeAgent));
-      compactionRetryTried.delete(retryKey);
+      clearCompactionRetryTried(sessionId, turnId);
     }
   });
   try {

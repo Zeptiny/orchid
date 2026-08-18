@@ -54,10 +54,13 @@ import {
   updateChain as storageUpdateChain,
   updateSessionFields as storageUpdateSessionFields,
   upsertSubagentRecords as storageUpsertSubagentRecords,
+  applyCompactionPersistence as storageApplyCompactionPersistence,
   type SessionFieldsUpdate,
   type SessionHistoryPage,
   type StorageOptions,
   type SessionSummary,
+  type CompactionPersistencePayload,
+  type CompactionPersistenceResult,
 } from './storage';
 
 // ---------------------------------------------------------------------------
@@ -197,6 +200,24 @@ export class SessionManager {
   }
 
   /**
+   * Targeted, single-transaction compaction write (P0 data-safety path).
+   *
+   * Flags and the summary head are applied directly against durable chain
+   * rows; chains not touched by the compaction and every `subagent_chains`
+   * row are left exactly as they are. Unlike a wholesale saveSession, this
+   * never sources content from the (possibly partial) in-memory view, so it
+   * cannot truncate pre-window history for sessions that exceed the view
+   * budget. Throws loudly on integrity failures; callers must not fall back
+   * to a full save from a view when it fails.
+   */
+  applyCompaction(
+    sessionId: string,
+    payload: CompactionPersistencePayload,
+  ): CompactionPersistenceResult {
+    return storageApplyCompactionPersistence(sessionId, payload, this._storageOpts);
+  }
+
+  /**
    * Recover a failed targeted write without replacing durable history with a
    * bounded navigation snapshot.
    */
@@ -207,6 +228,14 @@ export class SessionManager {
   ): void {
     const durable = storageLoadSessionForReplacement(session.id, this._storageOpts);
     if (!durable) {
+      // A wholesale save from a partially loaded view would silently truncate
+      // every pre-window chain to its recent page — refuse that loudly rather
+      // than recreating the session from incomplete content.
+      if (session.chains.some((chain) => chain.messagesLoaded === false)) {
+        throw new Error(
+          `saveFullSessionFallback: refusing to recreate session ${session.id} from a partially loaded view (would truncate durable history)`,
+        );
+      }
       storageSaveSession(session, this._storageOpts);
       return;
     }

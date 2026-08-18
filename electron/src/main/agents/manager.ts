@@ -1576,7 +1576,10 @@ export class SubagentManager {
       let postCompactionTokens: number | undefined;
       try {
         let totalPost = 0;
-        for (const m of updatedMessages) totalPost += estimateMessageChars(m as Message);
+        for (const m of updatedMessages) {
+          if ((m as Message).excludeFromModel === true) continue;
+          totalPost += estimateMessageChars(m as Message);
+        }
         if (totalPost === 0) totalPost = 1;
         let tpc: number | undefined = subagentCompactionTrigger.state.tokensPerChar;
         if (tpc == null && Number.isFinite(preInput) && preInput > 0) {

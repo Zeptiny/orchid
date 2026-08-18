@@ -8,10 +8,20 @@ import {
   suppressLiveMessagesAlreadyInHistory,
   type StreamItem,
 } from '../../src/renderer/utils/stream-building';
-import { MessageRole, MessageType, type Message, type Usage } from '../../src/shared/types/message';
+import {
+  MessageRole,
+  MessageType,
+  type CompactedMarker,
+  type Message,
+  type Usage,
+} from '../../src/shared/types/message';
 import { ChainStatus, type Chain } from '../../src/shared/types/chain';
 import type { ToolBlock } from '../../src/renderer/hooks/useChat';
 import { EMPTY_SUBAGENT_USAGE_SUMMARY } from '../../src/shared/usage';
+import {
+  CANONICAL_TOOL_RESULT_VERSION,
+  type CanonicalToolResult,
+} from '../../src/shared/types/tool-result';
 
 function msg(overrides: Partial<Message> & { id: string }): Message {
   return {
@@ -79,6 +89,97 @@ function messageItem(id: string, message: Message, isStreaming?: boolean): Strea
 
 function toolItem(block: ToolBlock): StreamItem {
   return { kind: 'tool', key: block.id, block };
+}
+
+/** Chain body without the per-chain footer, so ordering assertions stay focused. */
+function bodyItems(items: readonly StreamItem[]): StreamItem[] {
+  return items.filter((it) => it.kind !== 'footer');
+}
+
+// ── Compaction fixtures ──────────────────────────────────────────────────────
+
+function compactionMarker(overrides: Partial<CompactedMarker> = {}): CompactedMarker {
+  return {
+    rangeStart: 'range-start-message-id',
+    rangeEnd: 'range-end-message-id',
+    mode: 'simple',
+    ...overrides,
+  };
+}
+
+/** Compaction summary head — replayed to the model, rendered first-class. */
+function summaryHead(id: string, content: string, overrides: Partial<Message> = {}): Message {
+  return msg({ id, content, compacted: compactionMarker(), ...overrides });
+}
+
+/** Display-only message kept visible in history but excluded from the model. */
+function excludedText(id: string, content: string, overrides: Partial<Message> = {}): Message {
+  return msg({ id, content, excludeFromModel: true, ...overrides });
+}
+
+function excludedThinking(id: string, content: string): Message {
+  return msg({
+    id,
+    content,
+    type: MessageType.THINKING,
+    thinking: content,
+    excludeFromModel: true,
+  });
+}
+
+function toolCallMsg(
+  id: string,
+  callId: string,
+  toolName: string,
+  overrides: Partial<Message> = {},
+): Message {
+  return msg({
+    id,
+    type: MessageType.TOOL_CALL,
+    content: '',
+    tool_calls: [{
+      id: callId,
+      type: 'function',
+      function: { name: toolName, arguments: '{"path":"a.ts"}' },
+    }],
+    ...overrides,
+  });
+}
+
+function toolResultMsg(
+  id: string,
+  callId: string,
+  overrides: Partial<Message> = {},
+): Message {
+  return msg({
+    id,
+    role: MessageRole.TOOL,
+    type: MessageType.TOOL_RESULT,
+    content: 'tool output body',
+    tool_call_id: callId,
+    name: 'read',
+    ...overrides,
+  });
+}
+
+function canonicalResult(status: 'complete' | 'error' = 'complete'): CanonicalToolResult {
+  if (status === 'error') {
+    return {
+      schemaVersion: CANONICAL_TOOL_RESULT_VERSION,
+      family: 'generic',
+      data: { value: 'ok' },
+      status,
+      completeness: 'complete',
+      error: { code: 'E_TOOL', message: 'boom' },
+    };
+  }
+  return {
+    schemaVersion: CANONICAL_TOOL_RESULT_VERSION,
+    family: 'generic',
+    data: { value: 'ok' },
+    status,
+    completeness: 'complete',
+  };
 }
 
 describe('shouldRenderChainFooter', () => {
@@ -546,5 +647,480 @@ describe('buildLiveTailItems', () => {
     });
     expect(result).toHaveLength(1);
     expect(result[0]?.kind).toBe('tool');
+  });
+
+  it('keys live text by segment id and position, not by timestamp', () => {
+    const segments = [
+      { kind: 'text' as const, id: 'seg-1', content: 'first' },
+      { kind: 'tool' as const, toolCallId: 'tc-9' },
+      { kind: 'text' as const, id: 'seg-2', content: 'second' },
+    ];
+    const result = buildLiveTailItems({
+      toolBlocks: [toolBlock('tc-9', 'read', 'running')],
+      streamSegments: segments,
+      streamingContent: '',
+      status: 'streaming',
+      emittedToolIds: new Set(),
+    });
+    expect(result.map((it) => it.key)).toEqual([
+      'live-seg-1-0',
+      'tc-9',
+      'live-seg-2-streaming',
+    ]);
+  });
+
+  it('keeps live tail keys stable across rebuilds of identical segments', () => {
+    const segments = [
+      { kind: 'text' as const, id: 'seg-a', content: 'hello' },
+      { kind: 'thinking' as const, id: 'seg-b', content: 'reasoning' },
+    ];
+    const build = () => buildLiveTailItems({
+      toolBlocks: [],
+      streamSegments: segments,
+      streamingContent: '',
+      status: 'streaming',
+      emittedToolIds: new Set(),
+    });
+    const first = build();
+    const second = build();
+    expect(second.map((it) => it.key)).toEqual(['live-seg-a-0', 'live-seg-b-streaming']);
+    expect(second.map((it) => it.key)).toEqual(first.map((it) => it.key));
+  });
+});
+
+// ── Compaction projection ────────────────────────────────────────────────────
+
+describe('buildHistoryStreamItems — compaction projection', () => {
+  const opts = {
+    messages: [] as Message[],
+    toolBlocks: [] as ToolBlock[],
+    status: 'idle' as const,
+    liveUsage: null as Usage | null,
+    subagentUsage: EMPTY_SUBAGENT_USAGE_SUMMARY,
+    interrupted: false,
+    expandedChainIndexes: new Set<number>(),
+  };
+
+  it('renders a summary head followed by one collapsed stub for the excluded range', () => {
+    const messages = [
+      summaryHead('sum-1', 'Earlier work summarized.'),
+      excludedText('m1', 'old assistant turn'),
+      excludedText('m2', 'old tool output'),
+    ];
+    const result = buildHistoryStreamItems({
+      ...opts,
+      sessionChains: [chain({ id: 'c1', messages })],
+    });
+
+    const body = bodyItems(result.items);
+    expect(body.map((it) => it.kind)).toEqual(['compaction-summary', 'compacted-stub']);
+    if (body[0]?.kind !== 'compaction-summary') throw new Error('expected compaction-summary');
+    expect(body[0].key).toBe('c0-compaction-sum-1-0');
+    expect(body[0].message.content).toBe('Earlier work summarized.');
+    if (body[1]?.kind !== 'compacted-stub') throw new Error('expected compacted-stub');
+    expect(body[1].key).toBe('compacted-c0-1-m1');
+    expect(body[1].count).toBe(2);
+    expect(body[1].messages.map((m) => m.id)).toEqual(['m1', 'm2']);
+  });
+
+  it('flushes the stub before the next non-excluded message so order is preserved', () => {
+    const messages = [excludedText('m1', 'old turn'), userMsg('u1', 'next question')];
+    const result = buildHistoryStreamItems({
+      ...opts,
+      sessionChains: [chain({ id: 'c1', messages })],
+    });
+
+    const body = bodyItems(result.items);
+    expect(body.map((it) => it.kind)).toEqual(['compacted-stub', 'message']);
+    if (body[0]?.kind !== 'compacted-stub') throw new Error('expected compacted-stub');
+    expect(body[0].count).toBe(1);
+    if (body[1]?.kind !== 'message') throw new Error('expected message');
+    expect(body[1].message.role).toBe(MessageRole.USER);
+    expect(body[1].message.content).toBe('next question');
+  });
+
+  it('splits excluded runs into separate stubs at each summary head', () => {
+    const messages = [
+      excludedText('m1', 'pre-summary turn'),
+      summaryHead('sum-1', 'Summary A.'),
+      excludedText('m2', 'post-summary turn'),
+    ];
+    const result = buildHistoryStreamItems({
+      ...opts,
+      sessionChains: [chain({ id: 'c1', messages })],
+    });
+
+    const body = bodyItems(result.items);
+    expect(body.map((it) => it.kind)).toEqual([
+      'compacted-stub',
+      'compaction-summary',
+      'compacted-stub',
+    ]);
+    if (body[0]?.kind !== 'compacted-stub' || body[2]?.kind !== 'compacted-stub') {
+      throw new Error('expected compacted stubs');
+    }
+    expect(body[0].messages.map((m) => m.id)).toEqual(['m1']);
+    expect(body[2].messages.map((m) => m.id)).toEqual(['m2']);
+  });
+
+  it('drops hidden messages from the compacted stub', () => {
+    const messages = [
+      excludedText('m1', 'visible old turn'),
+      msg({ id: 'm2', content: 'hidden old turn', hidden: true, excludeFromModel: true }),
+    ];
+    const result = buildHistoryStreamItems({
+      ...opts,
+      sessionChains: [chain({ id: 'c1', messages })],
+    });
+
+    const stub = bodyItems(result.items).find((it) => it.kind === 'compacted-stub');
+    if (stub?.kind !== 'compacted-stub') throw new Error('expected compacted-stub');
+    expect(stub.count).toBe(1);
+    expect(stub.messages.map((m) => m.id)).toEqual(['m1']);
+  });
+
+  it('expands a stub into thought / tool-pair / text items when its key is expanded', () => {
+    const toolResult = canonicalResult('complete');
+    const messages = [
+      summaryHead('sum-1', 'Summary.'),
+      excludedThinking('th1', 'old reasoning'),
+      toolCallMsg('call-1', 'tc-1', 'read', { excludeFromModel: true }),
+      toolResultMsg('res-1', 'tc-1', { tool_result: toolResult, excludeFromModel: true }),
+      excludedText('m-text', 'old assistant answer'),
+    ];
+    const sessionChains = [chain({ id: 'c1', messages })];
+
+    // First build collapsed to learn the stub key (mirrors the click flow).
+    const collapsed = buildHistoryStreamItems({ ...opts, sessionChains });
+    const stub = collapsed.items.find((it) => it.kind === 'compacted-stub');
+    if (stub?.kind !== 'compacted-stub') throw new Error('expected compacted-stub');
+    expect(stub.count).toBe(4);
+
+    const expanded = buildHistoryStreamItems({
+      ...opts,
+      sessionChains,
+      expandedCompactedKeys: new Set([stub.key]),
+    });
+
+    const body = bodyItems(expanded.items);
+    expect(body.map((it) => it.kind)).toEqual([
+      'compaction-summary',
+      'message',
+      'tool',
+      'message',
+    ]);
+    expect(body.some((it) => it.kind === 'compacted-stub')).toBe(false);
+
+    const thought = body[1];
+    if (thought?.kind !== 'message') throw new Error('expected message');
+    expect(thought.message.id).toBe('th1');
+    expect(thought.message.type).toBe(MessageType.THINKING);
+
+    // The buffered call+result pair is reconstructed as a single tool block.
+    const tool = body[2];
+    if (tool?.kind !== 'tool') throw new Error('expected tool');
+    expect(tool.block.id).toBe('tc-1');
+    expect(tool.block.toolName).toBe('read');
+    expect(tool.block.status).toBe('complete');
+    expect(tool.block.args).toBe('{"path":"a.ts"}');
+    expect(tool.block.agentProjection).toBe('tool output body');
+    expect(tool.block.toolResult).toBe(toolResult);
+    expect(expanded.emittedToolIds.has('tc-1')).toBe(true);
+
+    const text = body[3];
+    if (text?.kind !== 'message') throw new Error('expected message');
+    expect(text.message.content).toBe('old assistant answer');
+  });
+
+  it('expands an unpaired buffered result into a result-only tool block', () => {
+    const messages = [
+      summaryHead('sum-1', 'Summary.'),
+      toolResultMsg('res-x', 'tc-x', {
+        name: 'grep',
+        content: 'grep output',
+        tool_result: canonicalResult(),
+        excludeFromModel: true,
+      }),
+    ];
+    const sessionChains = [chain({ id: 'c1', messages })];
+
+    const collapsed = buildHistoryStreamItems({ ...opts, sessionChains });
+    const stub = collapsed.items.find((it) => it.kind === 'compacted-stub');
+    if (stub?.kind !== 'compacted-stub') throw new Error('expected compacted-stub');
+
+    const expanded = buildHistoryStreamItems({
+      ...opts,
+      sessionChains,
+      expandedCompactedKeys: new Set([stub.key]),
+    });
+
+    const tools = expanded.items.filter((it) => it.kind === 'tool');
+    expect(tools).toHaveLength(1);
+    if (tools[0]?.kind !== 'tool') throw new Error('expected tool');
+    expect(tools[0].block.id).toBe('tc-x');
+    expect(tools[0].block.toolName).toBe('grep');
+    expect(tools[0].block.agentProjection).toBe('grep output');
+    expect(tools[0].block.toolResult?.status).toBe('complete');
+  });
+
+  it('prefers a live tool block over the persisted pair when expanding', () => {
+    const messages = [
+      summaryHead('sum-1', 'Summary.'),
+      toolCallMsg('call-1', 'tc-1', 'read', { excludeFromModel: true }),
+      toolResultMsg('res-1', 'tc-1', { excludeFromModel: true }),
+    ];
+    const sessionChains = [chain({ id: 'c1', messages })];
+    const live = toolBlock('tc-1', 'read', 'running');
+
+    const collapsed = buildHistoryStreamItems({ ...opts, sessionChains });
+    const stub = collapsed.items.find((it) => it.kind === 'compacted-stub');
+    if (stub?.kind !== 'compacted-stub') throw new Error('expected compacted-stub');
+
+    const expanded = buildHistoryStreamItems({
+      ...opts,
+      sessionChains,
+      toolBlocks: [live],
+      expandedCompactedKeys: new Set([stub.key]),
+    });
+
+    const tools = expanded.items.filter((it) => it.kind === 'tool');
+    expect(tools).toHaveLength(1);
+    if (tools[0]?.kind !== 'tool') throw new Error('expected tool');
+    expect(tools[0].block).toBe(live);
+  });
+
+  it('counts compaction items as chain body so a compaction-only chain keeps its footer', () => {
+    // Note: `hasBody` cannot be isolated end-to-end — every non-ACTIVE chain
+    // status is terminal, which already forces a footer. This pins that a chain
+    // whose only body is compaction items still emits one.
+    const messages = [summaryHead('sum-1', 'Summary.'), excludedText('m1', 'old turn')];
+    const result = buildHistoryStreamItems({
+      ...opts,
+      sessionChains: [chain({ id: 'compaction-only', messages })],
+    });
+
+    expect(result.items.some((it) => it.kind === 'compaction-summary')).toBe(true);
+    expect(result.items.some((it) => it.kind === 'compacted-stub')).toBe(true);
+    expect(result.items.filter((it) => it.kind === 'message')).toHaveLength(0);
+    expect(result.items.filter((it) => it.kind === 'footer')).toHaveLength(1);
+  });
+
+  it('returns the footer as activeFooter for an active compaction-only chain', () => {
+    const messages = [summaryHead('sum-1', 'Summary.'), excludedText('m1', 'old turn')];
+    const result = buildHistoryStreamItems({
+      ...opts,
+      sessionChains: [chain({ id: 'active-compaction', status: ChainStatus.ACTIVE, messages })],
+    });
+
+    expect(result.activeFooter).not.toBeNull();
+    expect(result.items.filter((it) => it.kind === 'footer')).toHaveLength(0);
+  });
+});
+
+describe('buildHistoryStreamItems — summary head dedupe across chains', () => {
+  const opts = {
+    messages: [] as Message[],
+    toolBlocks: [] as ToolBlock[],
+    status: 'idle' as const,
+    liveUsage: null as Usage | null,
+    subagentUsage: EMPTY_SUBAGENT_USAGE_SUMMARY,
+    interrupted: false,
+    expandedChainIndexes: new Set<number>(),
+  };
+
+  it('renders a summary head repeated in two chains only once', () => {
+    const shared = summaryHead('sum-1', 'Same summary head.');
+    const result = buildHistoryStreamItems({
+      ...opts,
+      sessionChains: [
+        chain({ id: 'c1', messages: [shared, excludedText('m1', 'old turn')] }),
+        chain({ id: 'c2', messages: [shared, userMsg('u2', 'follow-up')] }),
+      ],
+    });
+
+    const summaries = result.items.filter((it) => it.kind === 'compaction-summary');
+    expect(summaries).toHaveLength(1);
+    if (summaries[0]?.kind !== 'compaction-summary') throw new Error('expected summary');
+    expect(summaries[0].message.id).toBe('sum-1');
+
+    // Chain 2 renders only its own user turn — no duplicate summary.
+    const users = result.items.filter(
+      (it) => it.kind === 'message' && it.message.role === MessageRole.USER,
+    );
+    expect(users).toHaveLength(1);
+  });
+
+  it('buffers a duplicated excluded summary head into the stub instead of dropping it', () => {
+    const result = buildHistoryStreamItems({
+      ...opts,
+      sessionChains: [
+        chain({ id: 'c1', messages: [summaryHead('sum-1', 'Summary head.')] }),
+        chain({
+          id: 'c2',
+          messages: [
+            summaryHead('sum-1', 'Summary head.', { excludeFromModel: true }),
+            excludedText('m1', 'old turn'),
+          ],
+        }),
+      ],
+    });
+
+    expect(result.items.filter((it) => it.kind === 'compaction-summary')).toHaveLength(1);
+    const stub = bodyItems(result.items).filter((it) => it.kind === 'compacted-stub');
+    expect(stub).toHaveLength(1);
+    if (stub[0]?.kind !== 'compacted-stub') throw new Error('expected compacted-stub');
+    expect(stub[0].messages.map((m) => m.id)).toEqual(['sum-1', 'm1']);
+    expect(stub[0].count).toBe(2);
+  });
+
+  it('renders distinct summary heads once per chain', () => {
+    const result = buildHistoryStreamItems({
+      ...opts,
+      sessionChains: [
+        chain({ id: 'c1', messages: [summaryHead('sum-a', 'Summary A.')] }),
+        chain({ id: 'c2', messages: [summaryHead('sum-b', 'Summary B.')] }),
+      ],
+    });
+
+    const summaries = result.items.filter((it) => it.kind === 'compaction-summary');
+    expect(summaries.map((it) => (it.kind === 'compaction-summary' ? it.message.id : null)))
+      .toEqual(['sum-a', 'sum-b']);
+  });
+});
+
+describe('suppressLiveMessagesAlreadyInHistory — exact-id suppression', () => {
+  it('drops a live message whose id is already committed, even when content differs', () => {
+    const live = [messageItem('msg-9', assistantText('msg-9', 'partial stream text'))];
+    const history = [messageItem('msg-9', assistantText('msg-9', 'committed final text'))];
+    expect(suppressLiveMessagesAlreadyInHistory(live, history)).toEqual([]);
+  });
+
+  it('does not let an id match consume the content-multiset budget', () => {
+    const live = [
+      messageItem('h1', assistantText('h1', 'streaming variant')),
+      messageItem('l2', assistantText('l2', 'alpha')),
+    ];
+    const history = [messageItem('h1', assistantText('h1', 'alpha'))];
+    expect(suppressLiveMessagesAlreadyInHistory(live, history)).toEqual([]);
+  });
+
+  it('keeps the live array identity when history contributes no dedupe keys', () => {
+    const live: StreamItem[] = [
+      toolItem(toolBlock('t1', 'read')),
+      messageItem('seg-1', assistantText('seg-1', 'live')),
+    ];
+    const history = [toolItem(toolBlock('t2', 'read'))];
+    expect(suppressLiveMessagesAlreadyInHistory(live, history)).toBe(live);
+  });
+
+  it('ignores compaction items in history — they neither id- nor content-suppress live text', () => {
+    const content = 'Summary: earlier work.';
+    const history: StreamItem[] = [
+      { kind: 'compaction-summary', key: 'k1', message: summaryHead('sum-1', content) },
+      { kind: 'compacted-stub', key: 'k2', messages: [excludedText('m1', content)], count: 1 },
+    ];
+    const live = [messageItem('live-1', assistantText('live-1', content))];
+    expect(suppressLiveMessagesAlreadyInHistory(live, history)).toEqual(live);
+  });
+});
+
+describe('stream item React keys', () => {
+  const opts = {
+    messages: [] as Message[],
+    toolBlocks: [] as ToolBlock[],
+    status: 'idle' as const,
+    liveUsage: null as Usage | null,
+    subagentUsage: EMPTY_SUBAGENT_USAGE_SUMMARY,
+    interrupted: false,
+    expandedChainIndexes: new Set<number>(),
+  };
+
+  const mixedChain = chain({
+    id: 'c1',
+    messages: [
+      userMsg('u1', 'hi'),
+      thinkingMsg('th1', 'hmm'),
+      toolCallMsg('call-1', 'tc-1', 'read'),
+      toolResultMsg('res-1', 'tc-1'),
+      assistantText('a1', 'done'),
+    ],
+  });
+
+  it('formats history message keys as prefix-kind-id-index and tool keys as prefix-tool-id-size', () => {
+    const result = buildHistoryStreamItems({ ...opts, sessionChains: [mixedChain] });
+    expect(bodyItems(result.items).map((it) => it.key)).toEqual([
+      'c0-user-u1-0',
+      'c0-thought-th1-1',
+      'c0-tool-tc-1-1',
+      'c0-asst-a1-4',
+    ]);
+  });
+
+  it('produces identical keys across rebuilds of the same history', () => {
+    const build = () => buildHistoryStreamItems({
+      ...opts,
+      sessionChains: [mixedChain],
+      expandedChainIndexes: new Set<number>(),
+      expandedCompactedKeys: new Set<string>(),
+    });
+    const first = build();
+    const second = build();
+    expect(second.items.map((it) => it.key)).toEqual(first.items.map((it) => it.key));
+    expect(second.items.map((it) => it.key)).toEqual([
+      'c0-user-u1-0',
+      'c0-thought-th1-1',
+      'c0-tool-tc-1-1',
+      'c0-asst-a1-4',
+      'footer-chain-c1',
+    ]);
+  });
+
+  it('keeps earlier chain keys stable when a later chain is appended', () => {
+    const solo = buildHistoryStreamItems({
+      ...opts,
+      sessionChains: [mixedChain],
+    });
+    const withSecond = buildHistoryStreamItems({
+      ...opts,
+      sessionChains: [mixedChain, chain({ id: 'c2', messages: [userMsg('u2', 'again')] })],
+    });
+
+    const soloKeys = bodyItems(solo.items).map((it) => it.key);
+    expect(soloKeys).toEqual([
+      'c0-user-u1-0',
+      'c0-thought-th1-1',
+      'c0-tool-tc-1-1',
+      'c0-asst-a1-4',
+    ]);
+    expect(bodyItems(withSecond.items).map((it) => it.key).slice(0, soloKeys.length))
+      .toEqual(soloKeys);
+    expect(bodyItems(withSecond.items).map((it) => it.key).slice(-1)).toEqual(['c1-user-u2-0']);
+  });
+
+  it('keys compaction items with chain-scoped, expansion-stable keys', () => {
+    const messages = [
+      summaryHead('sum-1', 'Summary.'),
+      excludedText('m1', 'old turn'),
+      userMsg('u1', 'next'),
+    ];
+    const sessionChains = [chain({ id: 'c1', messages })];
+    const collapsed = buildHistoryStreamItems({ ...opts, sessionChains });
+    expect(bodyItems(collapsed.items).map((it) => it.key)).toEqual([
+      'c0-compaction-sum-1-0',
+      'compacted-c0-1-m1',
+      'c0-user-u1-2',
+    ]);
+
+    const stubKey = 'compacted-c0-1-m1';
+    const expanded = buildHistoryStreamItems({
+      ...opts,
+      sessionChains,
+      expandedCompactedKeys: new Set([stubKey]),
+    });
+    // The summary and later items keep their keys; only the stub is replaced.
+    const expandedKeys = bodyItems(expanded.items).map((it) => it.key);
+    expect(expandedKeys[0]).toBe('c0-compaction-sum-1-0');
+    expect(expandedKeys[2]).toBe('c0-user-u1-2');
+    expect(expandedKeys).toHaveLength(3);
   });
 });

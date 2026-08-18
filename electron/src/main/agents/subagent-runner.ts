@@ -38,9 +38,12 @@ import { getSubagentAttributionStore } from '../providers/accounting/subagent-at
 import type { ProviderAttemptAccountingContext } from '../providers/accounting/middleware';
 import type { Config } from '../config/schema';
 import type { Chain } from '../../shared/types/chain';
-import type { ApplyResult } from '../llm/compaction/apply';
+import { buildCompactionApply, type ApplyResult } from '../llm/compaction/apply';
 import type { TriggerState } from '../llm/compaction/trigger';
+import type { CompactionAttemptOutcome } from '../llm/compaction/run-attempt';
 import { estimateMessageChars } from '../llm/compaction/message-chars';
+import type { CutResult } from '../llm/compaction/select';
+import type { SelectiveCompactionResult } from '../llm/compaction/selective/run';
 
 /** Subagent mid-run compaction (U9): partial-report helper for R17. */
 export interface SubagentPartialReportInput {
@@ -94,6 +97,94 @@ export async function resolveSubagentContextTokens(
 }
 
 /**
+ * Materialize a SUCCESSFUL selective-compaction run for a subagent chain (R3).
+ *
+ * The selective loop decides which messages leave the MODEL view; persistence
+ * must never delete them from the transcript. Adopting the materialized
+ * replay (`replayMessages`) wholesale would hard-delete every summarized
+ * original — inside summarize/drop/keep_range spans they exist only as
+ * `flaggedIds`, never in the replay. Instead this routes the result through
+ * buildCompactionApply (the same never-delete helper the simple and fallback
+ * paths use): every original message is kept, the covered ids
+ * (summarized/dropped/ranged-kept + mechanical reclaim) get
+ * excludeFromModel:true, and one summary head carrying the compacted marker
+ * (mode 'selective') is inserted at the cut.
+ *
+ * buildCompactionApply flags the ENTIRE compactable range, so afterwards this
+ * settles the flags: ids the selective pass kept verbatim become visible
+ * again, and user messages are never flagged (R9 — the same protection the
+ * fallback path applies). Pre-existing flags outside the covered range are
+ * left untouched.
+ */
+export function buildSelectiveSubagentApply(params: {
+  readonly messages: readonly Message[];
+  readonly chains: readonly Chain[];
+  readonly cutResult: CutResult;
+  readonly selectiveResult: Extract<SelectiveCompactionResult, { kind: 'selective' }>;
+  /** Mechanical-reclaim ids from this run's pre-pass; merged with the selective flags. */
+  readonly reclaimedIds?: readonly string[];
+  readonly sessionId?: string;
+}): ApplyResult | null {
+  const { messages, chains, cutResult, selectiveResult } = params;
+
+  // R9: user messages are never excluded from the model view.
+  const userIds = new Set(messages.filter((m) => m.role === 'user').map((m) => m.id));
+  const mergedFlagged = [...new Set([...selectiveResult.flaggedIds, ...(params.reclaimedIds ?? [])])]
+    .filter((id) => !userIds.has(id));
+
+  // Compose the per-op summaries into one summary head — the same plain-text
+  // shape the simple path passes to buildCompactionApply.
+  const summaryParts = selectiveResult.summaryMessages.length > 0
+    ? selectiveResult.summaryMessages.map((m) => m.content)
+    : (selectiveResult.summaryMessage ? [selectiveResult.summaryMessage.content] : []);
+  const summaryText = summaryParts.join('\n\n---\n\n').trim();
+  if (mergedFlagged.length === 0 && summaryText.length === 0) return null;
+
+  let applyResult: ApplyResult;
+  try {
+    applyResult = buildCompactionApply({
+      messages: [...messages],
+      chains,
+      cutResult,
+      summaryText: summaryText.length > 0 ? summaryText : null,
+      mode: 'selective',
+      reclaimedIds: mergedFlagged,
+      sessionId: params.sessionId,
+    });
+  } catch {
+    // e.g. range already flagged by an earlier compaction — mirror the simple
+    // path's failure mode (no-op) rather than risk the transcript.
+    return null;
+  }
+  if (!applyResult.didApply) return null;
+
+  // Settle flags: reset excludeFromModel on covered ids that selective kept
+  // verbatim (and on user messages) so the model view matches the selective
+  // decision while the transcript keeps every original.
+  const n = messages.length;
+  const start = Math.max(0, Math.min(cutResult.compactableRange.start, n));
+  const end = Math.max(start, Math.min(cutResult.compactableRange.end, n));
+  const coveredIds = new Set<string>(mergedFlagged);
+  for (let i = start; i < end; i += 1) {
+    const m = messages[i];
+    if (m) coveredIds.add(m.id);
+  }
+  const flaggedSet = new Set(mergedFlagged);
+  const settle = (m: Message): Message => {
+    if (userIds.has(m.id)) return m.excludeFromModel ? { ...m, excludeFromModel: false } : m;
+    if (flaggedSet.has(m.id)) return m.excludeFromModel ? m : { ...m, excludeFromModel: true };
+    if (coveredIds.has(m.id) && m.excludeFromModel) return { ...m, excludeFromModel: false };
+    return m;
+  };
+  return {
+    ...applyResult,
+    updatedMessages: applyResult.updatedMessages.map(settle),
+    updatedChains: applyResult.updatedChains.map((c) => ({ ...c, messages: c.messages.map(settle) })),
+    flaggedIds: mergedFlagged,
+  };
+}
+
+/**
  * Shared subagent compaction attempt — uses the same trigger engine as U6 but
  * with the subagents scope config (R16). The caller supplies the current chain
  * history, latest provider-reported inputTokens, and resolved contextTokens.
@@ -130,7 +221,6 @@ export async function tryCompactSubagentHistory(params: {
   const { selectCut, resolvePreservePercent } = await import('../llm/compaction/select.js');
   const { mechanicalReclaim } = await import('../llm/compaction/reclaim.js');
   const { evaluateTriggerWithReclaim } = await import('../llm/compaction/trigger.js');
-  const { buildCompactionApply } = await import('../llm/compaction/apply.js');
   const { getProviderAccountingStore } = await import('../providers/accounting/store.js');
 
   let totalCharsAll = 0;
@@ -213,15 +303,13 @@ export async function tryCompactSubagentHistory(params: {
   // Branch on compaction mode: selective uses manifest+LLM caller, simple uses summarizeCompactableRange.
   // Simple is default (opt-in selective via config.compaction.subagents.mode==='selective').
   if ((subagentsScope.mode as string) === 'selective') {
-    // Selective path: build manifest, create LLM caller with subagent-scoped accounting, run multi-turn loop with simple fallback.
-    let manifest: import('../llm/compaction/selective/manifest').Manifest | null = null;
-    try {
-      const { buildManifest } = await import('../llm/compaction/selective/manifest.js');
-      manifest = buildManifest(messages as Message[], compactableRange);
-    } catch {
-      return null;
-    }
-    if (!manifest || manifest.entries.length === 0) return null;
+    // Shared selective runner (#11): slice → manifest → LLM caller →
+    // multi-turn loop with simple fallback, with subagent-scoped accounting
+    // and the R9 never-flag-user invariant applied to the result. The runner
+    // module is imported lazily like the other compaction leaves to keep this
+    // module's load graph free of the provider runtime chain.
+    const compactableSliceForFallback = (messages.slice(compactableRange.start, compactableRange.end) as Message[]).filter((m) => !m.excludeFromModel && !m.hidden);
+    if (compactableSliceForFallback.length === 0) return null;
 
     let accountingStore: ReturnType<typeof getProviderAccountingStore> | undefined;
     try {
@@ -230,97 +318,39 @@ export async function tryCompactSubagentHistory(params: {
       accountingStore = undefined;
     }
 
-    const compactableSliceForFallback = (messages.slice(compactableRange.start, compactableRange.end) as Message[]).filter((m) => !m.excludeFromModel && !m.hidden);
-    if (compactableSliceForFallback.length === 0) return null;
-    const simpleFallback = async (): Promise<{ text: string } | null> => {
-      try {
-        const { summarizeCompactableRange } = await import('../llm/compaction/summarize.js');
-        const res = await summarizeCompactableRange({
-          messages: compactableSliceForFallback,
-          scope: 'subagents',
-          config,
+    let attempt: CompactionAttemptOutcome;
+    try {
+      const { runCompactionAttempt, unflagUserMessagesInApply } = await import('../llm/compaction/run-attempt.js');
+      attempt = await runCompactionAttempt({
+        messages: messages as Message[],
+        cut,
+        scope: 'subagents',
+        config,
+        deps: {
           fallbackSelection: selection,
-          existingModelSelection: selection,
+          subagentId,
           accounting: accountingStore
             ? { store: accountingStore, sessionId, chainId, turnId }
             : { sessionId, chainId, turnId },
-          subagentId,
+        },
+      });
+      if (attempt.kind === 'ran' && attempt.result.kind === 'selective') {
+        // R3: never delete the transcript. Preserve every original message
+        // (excludeFromModel flags + one compacted-marker summary head at the
+        // cut) instead of hard-replacing the chain with the materialized
+        // replay, whose summarized originals exist only as flagged ids.
+        return buildSelectiveSubagentApply({
+          messages: messages as Message[],
+          chains,
+          cutResult: cut,
+          selectiveResult: attempt.result,
+          reclaimedIds: flaggedIds,
+          sessionId,
         });
-        if (!res || !res.text?.trim()) return null;
-        return { text: res.text };
-      } catch {
-        return null;
       }
-    };
-
-    let selectiveCaller: import('../llm/compaction/selective/run').SelectiveCaller | null = null;
-    try {
-      const { createLlmSelectiveCaller } = await import('../llm/compaction/selective/run.js');
-      selectiveCaller = createLlmSelectiveCaller({
-        config,
-        scope: 'subagents',
-        fallbackSelection: selection,
-        subagentId,
-        accounting: accountingStore
-          ? { store: accountingStore, sessionId, chainId, turnId }
-          : { sessionId, chainId, turnId },
-      });
-    } catch {
-      return null;
-    }
-    if (!selectiveCaller) return null;
-
-    let selectiveResult: import('../llm/compaction/selective/run').SelectiveCompactionResult | null = null;
-    try {
-      const { runSelectiveCompaction } = await import('../llm/compaction/selective/run.js');
-      selectiveResult = await runSelectiveCompaction({
-        messages: messages as Message[],
-        compactableRange,
-        manifest,
-        selectiveCaller,
-        simpleFallback,
-      });
-    } catch {
-      return null;
-    }
-    if (!selectiveResult) return null;
-
-    if (selectiveResult.kind === 'selective') {
-      const mergedFlagged = [...new Set([...(selectiveResult.flaggedIds ?? []), ...flaggedIds])];
-      const updatedMessages = [...selectiveResult.replayMessages] as Message[];
-      const summaryMessage = (selectiveResult.summaryMessage as unknown as Message | null) ?? null;
-      const flaggedSet = new Set(mergedFlagged);
-      let updatedChains: Chain[];
-      if (chains.length === 0) {
-        updatedChains = [];
-      } else if (chains.length === 1) {
-        updatedChains = [{ ...chains[0]!, messages: [...updatedMessages] }];
-      } else {
-        updatedChains = chains.map((c, idx) =>
-          idx === 0
-            ? { ...c, messages: [...updatedMessages] }
-            : { ...c, messages: c.messages.map((m) => (flaggedSet.has(m.id) ? { ...m, excludeFromModel: true } : m)) },
-        );
-      }
-      const compactedMarker = (summaryMessage as unknown as { compacted?: import('../../shared/types/message').CompactedMarker | null })?.compacted ?? null;
-      const didApply = mergedFlagged.length > 0 || summaryMessage !== null || updatedMessages.length !== messages.length;
-      if (!didApply) return null;
-      const applyResult: import('../llm/compaction/apply').ApplyResult = {
-        updatedMessages,
-        updatedChains,
-        summaryMessage,
-        newChain: null,
-        flaggedIds: mergedFlagged,
-        compactedMarker: compactedMarker as import('../../shared/types/message').CompactedMarker | null,
-        didApply: true,
-      };
-      return applyResult;
-    }
-
-    if (selectiveResult.kind === 'fallback') {
-      const fallbackText = selectiveResult.fallbackText;
-      if (!fallbackText || fallbackText.trim().length === 0) return null;
-      try {
+      if (attempt.kind === 'ran' && attempt.result.kind === 'fallback') {
+        const fallbackText = attempt.result.fallbackText;
+        if (!fallbackText || fallbackText.trim().length === 0) return null;
         const applyResult = buildCompactionApply({
           messages: messages as Message[],
           chains,
@@ -331,22 +361,15 @@ export async function tryCompactSubagentHistory(params: {
           sessionId,
         });
         if (!applyResult.didApply) return null;
-        const userIds = new Set(messages.filter((m) => m.role === 'user').map((m) => m.id));
-        const filteredFlagged = applyResult.flaggedIds.filter((id) => !userIds.has(id));
-        if (filteredFlagged.length !== applyResult.flaggedIds.length) {
-          const filteredMessages = applyResult.updatedMessages.map((m) => (userIds.has(m.id) && m.excludeFromModel ? { ...m, excludeFromModel: false } : m));
-          const filteredChains = applyResult.updatedChains.map((c) => ({
-            ...c,
-            messages: c.messages.map((m) => (userIds.has(m.id) && m.excludeFromModel ? { ...m, excludeFromModel: false } : m)),
-          }));
-          return { ...applyResult, flaggedIds: filteredFlagged, updatedMessages: filteredMessages, updatedChains: filteredChains };
-        }
-        return applyResult;
-      } catch {
-        return null;
+        // R9: user messages are never excluded from the model view — shared
+        // helper (#11a), previously inlined here (and now applied by the main
+        // scope's selective fallback too).
+        return unflagUserMessagesInApply(applyResult, messages as Message[]);
       }
+      return null;
+    } catch {
+      return null;
     }
-    return null;
   }
 
   // Simple default behavior (unchanged) — task-focused compactor-subagent, subagent-scoped accounting (R18)

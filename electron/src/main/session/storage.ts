@@ -5,6 +5,7 @@
  * Cache directories: ~/.orchid/cache/tool-output/<session_id>/
  *                    ~/.orchid/cache/web-fetch/<session_id>/
  */
+import { randomUUID } from 'node:crypto';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
@@ -1806,6 +1807,228 @@ export function updateChain(
       if (updateChainRow(db, chain) === 0) return false;
       db.prepare('UPDATE sessions SET updated_at = ? WHERE id = ?').run(updatedAt, chain.sessionId);
       return true;
+    });
+    return txn();
+  });
+}
+
+// ---------------------------------------------------------------------------
+// applyCompactionPersistence — targeted compaction write
+// ---------------------------------------------------------------------------
+
+/** Input for the targeted, single-transaction compaction write. */
+export interface CompactionPersistencePayload {
+  /** Recency timestamp written onto the session row with the compaction. */
+  readonly updatedAt: string;
+  /**
+   * Message ids to flag with `excludeFromModel` in their owning durable
+   * chains. Every id must resolve against durable chain rows; an unknown id
+   * aborts the whole write so a compaction can never persist a partial flag
+   * set. Partial in-memory chain views are never consulted — each affected
+   * chain's FULL durable `messages_json` is the write source.
+   */
+  readonly flaggedMessageIds: readonly string[];
+  /**
+   * Summary-head chain row to insert verbatim (R20: the summary is its own
+   * COMPLETED chain); null for reclaim-only compaction.
+   */
+  readonly summaryChain: Chain | null;
+  /**
+   * Durable message id the summary must precede in replay order — the first
+   * preserved-window message after the cut. When the id sits mid-chain, that
+   * chain is split around the insertion: pre-boundary messages stay on the
+   * original row (original id) and the suffix moves to a new row placed after
+   * the summary. Null (with a summary) appends the summary after the last
+   * durable chain.
+   */
+  readonly insertBeforeMessageId: string | null;
+  /**
+   * Identity/metadata for the split suffix row. When omitted, the suffix row
+   * is synthesized from the split chain (fresh id, cloned metadata).
+   */
+  readonly splitTailChain?: Chain | null;
+}
+
+/** Durable layout outcome of a successful compaction write. */
+export interface CompactionPersistenceResult {
+  /** Final durable chain ids in replay (ordinal) order after the write. */
+  readonly chainIds: readonly string[];
+  /** Durable chain ids whose rows received `excludeFromModel` flags. */
+  readonly flaggedChainIds: readonly string[];
+  /** Inserted summary-head chain id (null for reclaim-only compaction). */
+  readonly summaryChainId: string | null;
+  /** Split suffix row id (null when the insertion did not split a chain). */
+  readonly splitTailChainId: string | null;
+}
+
+/**
+ * Persist a compaction as one targeted SQLite transaction.
+ *
+ * Effects, all-or-nothing:
+ * - For every chain owning a flagged message id: re-read that chain's FULL
+ *   durable `messages_json`, set `excludeFromModel` on the matching ids, and
+ *   update the row in place. Only those flags change.
+ * - Insert the summary-head chain at the correct ordinal, bumping later
+ *   ordinals so reload order is: flagged prefix chains → summary head →
+ *   preserved window → later chains. A boundary inside a chain splits that
+ *   chain around the insertion.
+ * - Never deletes or rewrites any chain not touched by the compaction and
+ *   never touches `subagent_chains` (a wholesale saveSession from a bounded
+ *   view would permanently truncate pre-window history and wipe durable
+ *   subagent rows — both P0 data-loss hazards).
+ *
+ * Throws (rolling the transaction back) when the session is unknown, a
+ * flagged id has no durable owner, a chain blob is unreadable, or the summary
+ * anchor message cannot be found. Callers must never fall back to a full save
+ * from an in-memory view when this fails.
+ */
+export function applyCompactionPersistence(
+  sessionId: string,
+  payload: CompactionPersistencePayload,
+  opts?: StorageOptions,
+): CompactionPersistenceResult {
+  if (!isValidSessionId(sessionId)) {
+    throw new Error(`applyCompactionPersistence: refusing unsafe session id ${sessionId}`);
+  }
+  const { dbPath } = resolveOptions(opts);
+  return withCorruptionRecovery(dbPath, (db) => {
+    const txn = db.transaction((): CompactionPersistenceResult => {
+      if (!db.prepare('SELECT 1 FROM sessions WHERE id = ?').get(sessionId)) {
+        throw new Error(`applyCompactionPersistence: session ${sessionId} not found in durable rows`);
+      }
+
+      // Durable chain content is the only trusted write source. Partial
+      // in-memory chains (loadSessionView budgets) are never read here.
+      const entries = (
+        db.prepare('SELECT * FROM chains WHERE session_id = ? ORDER BY ordinal').all(sessionId) as ChainRow[]
+      ).map((row) => {
+        const messages = tryDeserializeMessages(row.messages_json ?? '[]', false);
+        if (!messages) {
+          throw new Error(
+            `applyCompactionPersistence: chain ${row.id} has unreadable messages (session ${sessionId})`,
+          );
+        }
+        return { row, messages };
+      });
+
+      // Resolve every flagged id against durable chains before writing.
+      const flagsByChain = new Map<string, Set<string>>();
+      for (const messageId of new Set(payload.flaggedMessageIds)) {
+        const owners = entries.filter((entry) =>
+          entry.messages.some((message) => message.id === messageId),
+        );
+        if (owners.length === 0) {
+          throw new Error(
+            `applyCompactionPersistence: flagged message ${messageId} not found in durable chains (session ${sessionId})`,
+          );
+        }
+        for (const owner of owners) {
+          let ids = flagsByChain.get(owner.row.id);
+          if (!ids) {
+            ids = new Set<string>();
+            flagsByChain.set(owner.row.id, ids);
+          }
+          ids.add(messageId);
+        }
+      }
+
+      // Resolve the summary insertion anchor before mutating anything.
+      let anchorEntry: (typeof entries)[number] | null = null;
+      let anchorIndex = -1;
+      if (payload.summaryChain && payload.insertBeforeMessageId != null) {
+        for (const entry of entries) {
+          const index = entry.messages.findIndex(
+            (message) => message.id === payload.insertBeforeMessageId,
+          );
+          if (index >= 0) {
+            anchorEntry = entry;
+            anchorIndex = index;
+            break;
+          }
+        }
+        if (!anchorEntry) {
+          throw new Error(
+            `applyCompactionPersistence: summary anchor message ${payload.insertBeforeMessageId} not found (session ${sessionId})`,
+          );
+        }
+      }
+
+      const chainIds = entries.map((entry) => entry.row.id);
+
+      // 1. In-place flag writes: full durable messages, only flags change.
+      for (const [chainId, ids] of flagsByChain) {
+        const entry = entries.find((candidate) => candidate.row.id === chainId)!;
+        entry.messages = entry.messages.map((message) =>
+          ids.has(message.id) && !message.excludeFromModel
+            ? { ...message, excludeFromModel: true }
+            : message,
+        );
+        updateChainRow(db, { ...chainFromRow(entry.row), messages: entry.messages });
+      }
+
+      // 2. Summary-head insertion. Untouched chains keep their rows (and
+      //    ordinals below the insertion point) exactly as they are.
+      let summaryChainId: string | null = null;
+      let splitTailChainId: string | null = null;
+      const summaryChain = payload.summaryChain;
+      if (summaryChain) {
+        const summary: Chain = { ...summaryChain, sessionId };
+        const insertChain = db.prepare(INSERT_CHAIN_SQL);
+        if (!anchorEntry) {
+          // Append after the last durable chain.
+          const ordinal = db
+            .prepare('SELECT COALESCE(MAX(ordinal), -1) + 1 FROM chains WHERE session_id = ?')
+            .pluck()
+            .get(sessionId) as number;
+          insertChainRow(db, insertChain, summary, ordinal);
+          chainIds.push(summary.id);
+        } else if (anchorIndex === 0) {
+          // Boundary at a chain start: summary takes the anchor's ordinal,
+          // the anchor and every later chain shift up by one.
+          const ordinal = anchorEntry.row.ordinal;
+          db.prepare(
+            'UPDATE chains SET ordinal = ordinal + 1 WHERE session_id = ? AND ordinal >= ?',
+          ).run(sessionId, ordinal);
+          insertChainRow(db, insertChain, summary, ordinal);
+          chainIds.splice(chainIds.indexOf(anchorEntry.row.id), 0, summary.id);
+        } else {
+          // Boundary inside a chain: split it around the insertion so replay
+          // order is prefix → summary → preserved suffix.
+          const ordinal = anchorEntry.row.ordinal;
+          db.prepare(
+            'UPDATE chains SET ordinal = ordinal + 2 WHERE session_id = ? AND ordinal > ?',
+          ).run(sessionId, ordinal);
+          const head = anchorEntry.messages.slice(0, anchorIndex);
+          const tail = anchorEntry.messages.slice(anchorIndex);
+          updateChainRow(db, { ...chainFromRow(anchorEntry.row), messages: head });
+          const tailChain: Chain = payload.splitTailChain
+            ? { ...payload.splitTailChain, sessionId, messages: tail }
+            : {
+                ...chainFromRow(anchorEntry.row),
+                id: randomUUID(),
+                subagentRecord: null,
+                messages: tail,
+              };
+          insertChainRow(db, insertChain, summary, ordinal + 1);
+          insertChainRow(db, insertChain, tailChain, ordinal + 2);
+          chainIds.splice(chainIds.indexOf(anchorEntry.row.id) + 1, 0, summary.id, tailChain.id);
+          splitTailChainId = tailChain.id;
+        }
+        summaryChainId = summary.id;
+      }
+
+      // 3. Recency bump (mirrors saveSession's updated_at write).
+      db.prepare('UPDATE sessions SET updated_at = ? WHERE id = ?').run(
+        payload.updatedAt,
+        sessionId,
+      );
+
+      return {
+        chainIds,
+        flaggedChainIds: [...flagsByChain.keys()],
+        summaryChainId,
+        splitTailChainId,
+      };
     });
     return txn();
   });

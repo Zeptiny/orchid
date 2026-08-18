@@ -93,13 +93,6 @@ export interface UsageEvent {
   usage: Usage;
 }
 
-/** LLM stream completed one agentic step (idle step boundary for compaction R16). */
-export interface StepFinishEvent {
-  type: 'STEP_FINISH';
-  stepIndex: number;
-  finishReason: string;
-}
-
 // ── Interrupt events ────────────────────────────────────────────────────────
 
 /** User presses Esc — first press transitions to CONFIRM_AGENT. */
@@ -127,8 +120,7 @@ export type AgentEvent =
   | StreamEndEvent
   | CancelEvent
   | ErrorEvent
-  | UsageEvent
-  | StepFinishEvent;
+  | UsageEvent;
 
 /** All events the interrupt machine can receive. */
 export type InterruptMachineEvent =

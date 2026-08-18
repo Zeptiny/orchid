@@ -11,20 +11,17 @@
  * Approach:
  * - Pure build: buildCompactionApply() produces flagged replay state + summary head
  *   with compacted marker {rangeStart, rangeEnd, mode, summarizedCount}.
- * - Persistence wrappers ride existing paths:
- *   between-turns → single atomic DB transaction (summary head as COMPLETED chain + flagged chains)
- *   mid-turn      → checkpointActiveTurn debounce so crash resumes compacted chain
- *   reclaim-only  → flags without summary head, same atomic path
+ * - Persistence is owned by the caller (ipc/chat/persist.ts): it takes the
+ *   ApplyResult and writes flagged chains + the summary-head chain as one
+ *   crash-safe transaction (crash before → old history, crash after → compacted).
  *
  * Never mutate older chains in place: callers receive new chain objects; storage
- * transaction replaces rows atomically. If DB integration is unavailable, the pure
- * build plus a stub persistence wrapper is sufficient for U8/U9 to call with a
- * mocked session manager.
+ * transaction replaces rows atomically.
  */
 
 import { randomUUID } from 'node:crypto';
 import type { Message, CompactedMarker, CompactionMode } from '../../../shared/types/message';
-import { MessageRole, MessageType } from '../../../shared/types/message';
+import { MessageRole, MessageType, compactedMarkerFromUnknown } from '../../../shared/types/message';
 import type { Chain } from '../../../shared/types/chain';
 import { ChainStatus } from '../../../shared/types/chain';
 import type { CutResult } from './select';
@@ -76,36 +73,33 @@ export class CompactionApplyError extends Error {
 }
 
 /**
- * Whether the compactable range already contains flagged (excludeFromModel) messages.
- * Used to prevent double-flagging / no-op re-compaction over same range.
+ * Whether the compactable range already contains a compaction summary head
+ * (a message carrying a valid `compacted` marker) that is NOT being superseded.
+ *
+ * A head DEEPER than the range start would be summarized together with its own
+ * covered span — true double-compaction — and stays the one fatal precondition
+ * for the summary path. A head at index === start is being SUPERSEDED: select.ts
+ * deliberately lands compactableStart ON the previous summary head so a
+ * re-compaction can re-summarize it under the new head; it is flagged like any
+ * other range message and replaced by the new head.
+ *
+ * Pre-flagged (excludeFromModel) messages inside the range are NOT failures:
+ * cancelled tool results (flagged at creation) and prior mechanical-reclaim
+ * flags are already excluded from the model, so buildCompactionApply tolerates
+ * them and skips them when applying flags instead of double-processing.
  */
-export function validateCompactableRangeNotFlagged(
+export function validateCompactableRangeNotSummarized(
   messages: readonly Message[],
   cutResult: CutResult,
-): { valid: boolean; alreadyFlaggedIds: string[] } {
+): { valid: boolean; summaryHeadIds: string[] } {
   const start = Math.max(0, Math.min(cutResult.compactableRange.start, messages.length));
   const end = Math.max(start, Math.min(cutResult.compactableRange.end, messages.length));
-  const alreadyFlaggedIds: string[] = [];
+  const summaryHeadIds: string[] = [];
   for (let i = start; i < end; i += 1) {
     const m = messages[i]!;
-    if (m.excludeFromModel) alreadyFlaggedIds.push(m.id);
+    if (i > start && compactedMarkerFromUnknown(m.compacted)) summaryHeadIds.push(m.id);
   }
-  return { valid: alreadyFlaggedIds.length === 0, alreadyFlaggedIds };
-}
-
-/**
- * Strict variant: throw if compactable range is already partially flagged.
- */
-export function assertCompactableRangeNotFlagged(
-  messages: readonly Message[],
-  cutResult: CutResult,
-): void {
-  const { valid, alreadyFlaggedIds } = validateCompactableRangeNotFlagged(messages, cutResult);
-  if (!valid) {
-    throw new CompactionApplyError(
-      `compactable range [${cutResult.compactableRange.start},${cutResult.compactableRange.end}) already contains flagged messages: ${alreadyFlaggedIds.join(', ')}`,
-    );
-  }
+  return { valid: summaryHeadIds.length === 0, summaryHeadIds };
 }
 
 // ── Summary head ────────────────────────────────────────────────────────────
@@ -165,14 +159,20 @@ export function buildCompactionApply(input: ApplyInput): ApplyResult {
   const isEmptyRange = start >= end;
   const hasSummaryText = typeof summaryText === 'string' && summaryText.trim().length > 0;
 
-  // Already-flagged validation is asymmetric: reclaim overlap is expected (mechanical
-  // flags may already be excluded) and is tolerated, while summary compaction
-  // requires the whole range to be unflagged. Only the summary path throws.
-  if (!isEmptyRange) {
-    const { valid, alreadyFlaggedIds } = validateCompactableRangeNotFlagged(messages, cutResult);
-    if (!valid && hasSummaryText) {
+  // Double-compaction guard (summary path only): a range that already contains
+  // a summary head (compacted marker) DEEPER than its start would summarize a
+  // summary and is fatal. A head at index === start is being superseded —
+  // select.ts lands compactableStart ON the old head so re-compaction
+  // re-summarizes it — so it is allowed and flagged like other range messages.
+  // Pre-flagged (excludeFromModel) messages inside the range are tolerated:
+  // cancelled tool results and prior mechanical-reclaim flags are already
+  // excluded from the model, so they are skipped by the flagging pass below
+  // instead of double-processed. The reclaim-only path never throws.
+  if (!isEmptyRange && hasSummaryText) {
+    const { valid, summaryHeadIds } = validateCompactableRangeNotSummarized(messages, cutResult);
+    if (!valid) {
       throw new CompactionApplyError(
-        `compactable range already flagged: ${alreadyFlaggedIds.join(', ')}`,
+        `compactable range [${start},${end}) already contains a summary head: ${summaryHeadIds.join(', ')}`,
       );
     }
   }
@@ -184,7 +184,8 @@ export function buildCompactionApply(input: ApplyInput): ApplyResult {
     const rangeIds: string[] = [];
     for (let i = start; i < end; i += 1) {
       const m = messages[i]!;
-      // Skip already excluded — not needed but ensures idempotence
+      // Already excluded (cancelled results, prior reclaims) — tolerated as-is;
+      // it keeps its existing flag and is never double-processed.
       if (m.excludeFromModel) continue;
       if (m.hidden) continue;
       rangeIds.push(m.id);
@@ -342,11 +343,15 @@ export function buildCompactionApply(input: ApplyInput): ApplyResult {
             } else if (afterMessages.length === 0) {
               finalChains.splice(finalIdx + 1, 0, newChain);
             } else {
-              const beforeChain: Chain = { ...originalChain, messages: beforeMessages };
-              const afterChain: Chain = {
+              // Split id assignment: the PRESERVED after-half keeps the ORIGINAL
+              // chain id so external references (session.activeChainId, subagent
+              // record.chain) keep pointing at the live, continuing half. The
+              // flagged prefix half is frozen history and takes a fresh id —
+              // nothing external references it.
+              const prefixChain: Chain = {
                 id: randomUUID(),
                 sessionId: originalChain.sessionId,
-                messages: afterMessages,
+                messages: beforeMessages,
                 status: originalChain.status,
                 selection: originalChain.selection,
                 modelLabel: originalChain.modelLabel,
@@ -359,7 +364,10 @@ export function buildCompactionApply(input: ApplyInput): ApplyResult {
                 errorDetail: originalChain.errorDetail,
                 errorTitle: originalChain.errorTitle,
               };
-              finalChains.splice(finalIdx, 1, beforeChain, newChain, afterChain);
+              const afterChain: Chain = { ...originalChain, messages: afterMessages };
+              // Replay order: flagged prefix (new id) → summary head → preserved
+              // after-half (original id).
+              finalChains.splice(finalIdx, 1, prefixChain, newChain, afterChain);
             }
             intraHandled = true;
           }
@@ -392,209 +400,4 @@ export function buildCompactionApply(input: ApplyInput): ApplyResult {
     compactedMarker,
     didApply: true,
   };
-}
-
-// ── Persistence wrappers (stub-friendly) ────────────────────────────────────
-
-export interface CompactionPersistResult {
-  readonly sessionId: string;
-  readonly appliedChainIds: string[];
-  readonly newChainId: string | null;
-  readonly flaggedCount: number;
-}
-
-/**
- * Options for between-turn atomic persistence.
- *
- * Provide either a sessionManager (in-memory mock or real) or a direct
- * storage transaction hook. For tests, a minimal in-memory manager suffices.
- */
-export interface BetweenTurnsPersistOptions {
-  /** In-memory or real session manager with getSession/save access. */
-  sessionManager?: {
-    getSession?(sessionId: string): { id: string; chains: Chain[] } | null;
-    getModelHistory?(sessionId: string): Message[];
-    ensureSession?(sessionId: string): { id: string; chains: Chain[] } | null;
-  };
-  /**
-   * Optional atomic writer that must update flagged chains and insert newChain
-   * in a single transaction. When provided, it is preferred over individual calls.
-   */
-  atomicWriter?: (
-    sessionId: string,
-    updatedChains: Chain[],
-    newChain: Chain | null,
-  ) => boolean | Promise<boolean>;
-  /** Direct storage injection for integration tests — called after pure build. */
-  onPersist?: (result: ApplyResult) => void | Promise<void>;
-}
-
-/**
- * Persist a compaction between turns atomically (single transaction).
- *
- * Crash before apply → old history (caller hasn't called this yet).
- * Crash after → compacted history (transaction committed).
- *
- * Stub-friendly: when no DB is available, invokes onPersist or delegates to
- * sessionManager atomicWriter; the pure build already produced the new chains.
- */
-export async function persistCompactionThroughWriter(
-  sessionId: string,
-  applyResult: ApplyResult,
-  opts: BetweenTurnsPersistOptions = {},
-): Promise<CompactionPersistResult> {
-  if (!applyResult.didApply) {
-    return { sessionId, appliedChainIds: [], newChainId: null, flaggedCount: 0 };
-  }
-
-  if (opts.atomicWriter) {
-    const ok = await opts.atomicWriter(sessionId, applyResult.updatedChains, applyResult.newChain);
-    if (!ok) throw new CompactionApplyError('atomic compaction write failed');
-  } else if (opts.onPersist) {
-    await opts.onPersist(applyResult);
-  } else if (opts.sessionManager) {
-    // Best-effort mock update: if manager exposes chains, verify we can locate session.
-    // No throw when manager is a stub without persistence — still report success for pure path.
-    if (typeof opts.sessionManager.getSession === 'function') {
-      const sess = opts.sessionManager.getSession(sessionId);
-      if (!sess) throw new CompactionApplyError(`session ${sessionId} not found for compaction persist`);
-    }
-  }
-
-  return {
-    sessionId,
-    appliedChainIds: applyResult.updatedChains.map((c) => c.id),
-    newChainId: applyResult.newChain?.id ?? null,
-    flaggedCount: applyResult.flaggedIds.length,
-  };
-}
-
-/** @deprecated Use persistCompactionThroughWriter — kept for backward compat with tests. */
-export const persistCompactionBetweenTurns = persistCompactionThroughWriter;
-
-/**
- * Mid-turn (active-chain) persistence — rides the existing checkpointActiveTurn debounce.
- *
- * The returned checkpointMessages can be fed to SessionManager.updateActiveChainMessages
- * or to checkpointActiveTurn(activeAgent, context) so a crash resumes the compacted chain.
- *
- * This helper is intentionally side-effect free; the caller decides how to checkpoint
- * (direct update for tests, debounced checkpoint for production).
- */
-export interface MidTurnPersistInput {
-  readonly sessionId: string;
-  readonly activeChainId: string | null;
-  readonly priorMessageCount: number;
-  /** Current active chain messages before compaction (for reconstruction). */
-  readonly activeChainMessages: readonly Message[];
-  /** Full prior history (flattened, before this turn's user message). Not used directly but kept for completeness. */
-  readonly priorMessages?: readonly Message[];
-}
-
-export interface MidTurnCompactionResult {
-  /** Messages that should replace the active chain row (debounced checkpoint). */
-  readonly checkpointMessages: Message[];
-  /** Full updated flat replay (for historyFromSession parity checks). */
-  readonly updatedFlatMessages: Message[];
-  readonly summaryMessage: Message | null;
-  readonly newChain: Chain | null;
-  readonly flaggedIds: string[];
-}
-
-/**
- * Build the mid-turn checkpoint payload after a pure apply.
- *
- * Mid-turn compaction compacts an in-flight turn's active chain content.
- * The flagged range is still applied to the flat history, but persistence
- * targets only the ACTIVE chain row (via checkpointActiveTurn). Summary head
- * is still its own chain when present — but for mid-turn the summary is
- * conceptually part of the active chain's next checkpoint? U7 says: ride
- * existing checkpointActiveTurn debounce so crash resumes compacted chain.
- * For integration tests we expose both the newChain (summary head) and the
- * checkpointMessages.
- */
-export function buildMidTurnCheckpoint(
-  input: ApplyInput,
-  applyResult: ApplyResult,
-  mid: MidTurnPersistInput,
-): MidTurnCompactionResult {
-  // For mid-turn, the active chain's messages are a suffix of the flat history:
-  // flat = priorMessages (n) + activeChainMessages (m)
-  // Cut is over flat; flagged portion may span prior chains + active chain suffix.
-  // Checkpoint must contain only the active chain's slice after compaction,
-  // plus the summary head if it falls inside the active window? But summary
-  // head is defined to sit before the preserved window, which includes the
-  // open tool group (tail of active chain). So summary head typically sits
-  // before active chain content, not inside it — unless active chain is large
-  // and compaction spills into it. For simplicity we keep summary head as its
-  // own chain even for mid-turn, and checkpointMessages is the active chain's
-  // slice of updatedMessages after priorMessageCount.
-  const priorCount = mid.priorMessageCount;
-  // updatedMessages includes summary head inserted at cutIndex; slice tail for active checkpoint.
-  // Determine where active window starts in updatedMessages: it may have shifted by +1 if summary inserted before it.
-  const summaryInserted = applyResult.summaryMessage ? 1 : 0;
-  const cutIndex = input.cutResult.cutIndex;
-  // Active window in original flat starts at priorCount.
-  // After compaction, active window start in updated flat:
-  // if cutIndex <= priorCount, summary insertion is before active window so active start shifts by summaryInserted.
-  // if cutIndex > priorCount, insertion is inside active window.
-  let activeStartInUpdated: number;
-  if (summaryInserted === 0) {
-    activeStartInUpdated = priorCount;
-  } else if (cutIndex <= priorCount) {
-    activeStartInUpdated = priorCount + summaryInserted;
-  } else {
-    // Insertion inside active window — active window still starts at priorCount, but includes summary at offset
-    activeStartInUpdated = priorCount;
-  }
-
-  // Build checkpoint messages as the slice of updatedMessages that belongs to the active chain
-  // plus the summary head when it was inserted inside the active window? It's already in updatedMessages slice.
-  const checkpointMessages = applyResult.updatedMessages.slice(activeStartInUpdated);
-
-  // For the case where summary was inserted before active window, the summary is not part of active checkpoint
-  // — it's a separate COMPLETED chain (newChain). That's correct: mid-turn compaction still creates a new
-  // COMPLETED chain for the summary head, and the active chain row holds only the preserved tail.
-  // Crash recovery loads both: summary chain + interrupted active chain.
-
-  return {
-    checkpointMessages,
-    updatedFlatMessages: applyResult.updatedMessages,
-    summaryMessage: applyResult.summaryMessage,
-    newChain: applyResult.newChain,
-    flaggedIds: applyResult.flaggedIds,
-  };
-}
-
-/**
- * Reclaim-only helper — pure flag apply without summary head.
- * Provided for symmetry with U5; callers may just call buildCompactionApply with null summaryText,
- * but this alias clarifies intent.
- */
-export function buildReclaimOnlyApply(
-  messages: readonly Message[],
-  chains: readonly Chain[],
-  cutResult: CutResult,
-  reclaimedIds: readonly string[],
-): ApplyResult {
-  return buildCompactionApply({
-    messages,
-    chains,
-    cutResult,
-    summaryText: null,
-    mode: 'simple',
-    reclaimedIds,
-  });
-}
-
-/**
- * Convenience: check whether a given apply would actually reclaim anything
- * (used by trigger engine to decide skip).
- */
-export function hasReclaimableFlags(input: ApplyInput): boolean {
-  const start = input.cutResult.compactableRange.start;
-  const end = input.cutResult.compactableRange.end;
-  if (start >= end) return false;
-  const ids = new Set([...(input.flaggedIds ?? []), ...(input.reclaimedIds ?? [])]);
-  return ids.size > 0;
 }

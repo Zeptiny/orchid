@@ -1,9 +1,9 @@
-import { describe, expect, it, beforeEach, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import { randomUUID } from 'node:crypto';
 import type { Message } from '../../src/shared/types/message';
 import { MessageRole, MessageType } from '../../src/shared/types/message';
 import { ChainStatus, type Chain } from '../../src/shared/types/chain';
-import { buildCompactionApply, validateCompactableRangeNotFlagged, buildMidTurnCheckpoint, buildReclaimOnlyApply, CompactionApplyError } from '../../src/main/llm/compaction/apply';
+import { buildCompactionApply, validateCompactableRangeNotSummarized, CompactionApplyError } from '../../src/main/llm/compaction/apply';
 import type { CutResult } from '../../src/main/llm/compaction/select';
 
 // Reuse MessageType / Role helpers
@@ -88,7 +88,7 @@ describe('compaction apply — pure build', () => {
     const cut = makeCut(messages, 1, chainBoundaries); // preserve last chain, compact first 3
     const summaryText = '### Handoff summary\n- Goal: implement feature X\n- Files: a.txt, b.txt\n- Remaining: tests';
 
-    const result = buildCompactionApply({ messages, chains, cutResult: cut, summaryText, mode: 'simple' });
+    const result = buildCompactionApply({ messages, chains, cutResult: cut, summaryText, mode: 'simple', sessionId });
 
     // flags + marker correct
     expect(result.flaggedIds.length).toBe(cut.compactableRange.end - cut.compactableRange.start);
@@ -149,15 +149,6 @@ describe('compaction apply — pure build', () => {
     for (const m of result.updatedMessages) expect(m.compacted).toBeUndefined();
   });
 
-  it('buildReclaimOnlyApply helper aliases reclaim path', () => {
-    const { chains, messages, chainBoundaries } = buildSession(3);
-    const cut = makeCut(messages, 1, chainBoundaries);
-    const reclaimedIds = [messages[0]!.id];
-    const result = buildReclaimOnlyApply(messages, chains, cut, reclaimedIds);
-    expect(result.newChain).toBeNull();
-    expect(result.flaggedIds).toContain(reclaimedIds[0]);
-  });
-
   it('never mutates input messages or chains in place', () => {
     const { chains, messages, chainBoundaries } = buildSession(2);
     const cut = makeCut(messages, 1, chainBoundaries);
@@ -171,24 +162,6 @@ describe('compaction apply — pure build', () => {
     expect(result.updatedChains[0]).not.toBe(chains[0]);
   });
 
-  it('validates compactable range is not already flagged', () => {
-    const { chains, messages, chainBoundaries } = buildSession(3);
-    const cut = makeCut(messages, 1, chainBoundaries);
-    // Flag one message inside compactable range beforehand
-    const flaggedMessages = messages.map((m, idx) => idx === 0 ? { ...m, excludeFromModel: true } : m);
-    const { valid, alreadyFlaggedIds } = validateCompactableRangeNotFlagged(flaggedMessages, cut);
-    expect(valid).toBe(false);
-    expect(alreadyFlaggedIds).toContain(flaggedMessages[0]!.id);
-    expect(() => buildCompactionApply({ messages: flaggedMessages, chains, cutResult: cut, summaryText: 'summary', mode: 'simple' })).toThrow(CompactionApplyError);
-  });
-
-  it('validateCompactableRangeNotFlagged passes when clean', () => {
-    const { messages, chainBoundaries } = buildSession(3);
-    const cut = makeCut(messages, 1, chainBoundaries);
-    const { valid } = validateCompactableRangeNotFlagged(messages, cut);
-    expect(valid).toBe(true);
-  });
-
   it('empty compactable range yields no-op (no flags, no summary head)', () => {
     const { chains, messages } = buildSession(1);
     const cut: CutResult = { cutIndex: 0, compactableRange: { start: 0, end: 0 }, preservedCount: 1, openGroupStart: null, preservedRange: { start: 0, end: messages.length } };
@@ -197,6 +170,212 @@ describe('compaction apply — pure build', () => {
     expect(result.newChain).toBeNull();
     expect(result.summaryMessage).toBeNull();
     expect(result.updatedMessages).toEqual(messages);
+  });
+});
+
+describe('compaction apply — pre-flagged inner messages are tolerated (FIX #4)', () => {
+  it('apply succeeds over a range containing an inner flagged (cancelled-result) message; it stays flagged and a summary head is produced', () => {
+    const { sessionId, chains, messages, chainBoundaries } = buildSession(3);
+    // Cancelled tool result: flagged at creation (send.ts), persisted into the chain.
+    // Sits INSIDE the compactable range [0,4) — not part of a contiguous prefix.
+    const cancelledIdx = 2;
+    const cancelled: Message = {
+      ...messages[cancelledIdx]!,
+      role: MessageRole.TOOL,
+      type: MessageType.TOOL_RESULT,
+      tool_call_id: 'call-cancelled',
+      excludeFromModel: true,
+    };
+    messages[cancelledIdx] = cancelled;
+    chains[1] = { ...chains[1]!, messages: [cancelled, messages[3]!] };
+
+    const cut = makeCut(messages, 1, chainBoundaries); // range [0,4), cutIndex 4
+
+    // Not fatal: pre-flagged messages are treated as already-excluded
+    const { valid } = validateCompactableRangeNotSummarized(messages, cut);
+    expect(valid).toBe(true);
+
+    const result = buildCompactionApply({
+      messages,
+      chains,
+      cutResult: cut,
+      summaryText: 'summary over partially flagged range',
+      mode: 'simple',
+      sessionId,
+    });
+
+    expect(result.didApply).toBe(true);
+    expect(result.summaryMessage).not.toBeNull();
+    expect(result.newChain).not.toBeNull();
+
+    // The cancelled message is skipped (already flagged, no double-processing)
+    expect(result.flaggedIds).not.toContain(cancelled.id);
+    expect(result.flaggedIds).toEqual(expect.arrayContaining([messages[0]!.id, messages[1]!.id, messages[3]!.id]));
+    // It keeps its existing flag in the flat replay and inside its chain
+    expect(result.updatedMessages.find((m) => m.id === cancelled.id)!.excludeFromModel).toBe(true);
+    const cancelledChain = result.updatedChains.find((c) => c.messages.some((m) => m.id === cancelled.id))!;
+    expect(cancelledChain.messages.find((m) => m.id === cancelled.id)!.excludeFromModel).toBe(true);
+
+    // All four range messages end up excluded; summary head lands at cutIndex
+    expect(result.updatedMessages.filter((m) => m.excludeFromModel)).toHaveLength(4);
+    const summaryIdx = result.updatedMessages.findIndex((m) => m.id === result.summaryMessage!.id);
+    expect(summaryIdx).toBe(cut.cutIndex);
+    // Preserved window after the summary stays replayable
+    for (const m of result.updatedMessages.slice(summaryIdx + 1)) {
+      expect(m.excludeFromModel).not.toBe(true);
+    }
+    // Marker anchors span the whole range, flagged-or-not
+    expect(result.summaryMessage!.compacted!.rangeStart).toBe(messages[0]!.id);
+    expect(result.summaryMessage!.compacted!.rangeEnd).toBe(messages[3]!.id);
+  });
+
+  it('allows a compacted summary head AT the range start (superseded head) and flags it like other range messages (P1 #5)', () => {
+    const { sessionId, chains, messages, chainBoundaries } = buildSession(3);
+    // A prior compaction's summary head sits at index 0 === compactableRange.start:
+    // select.ts deliberately lands compactableStart ON the old head so a
+    // re-compaction re-summarizes it under the new head.
+    const priorSummary: Message = {
+      ...makeMessage({ id: 'prior-summary-head', role: MessageRole.ASSISTANT, content: 'earlier handoff summary' }),
+      compacted: { rangeStart: 'older-start', rangeEnd: 'older-end', mode: 'simple' },
+    };
+    messages[0] = priorSummary;
+    chains[0] = { ...chains[0]!, messages: [priorSummary, messages[1]!] };
+
+    const cut = makeCut(messages, 1, chainBoundaries); // range [0,4), head at index 0 === start
+
+    const { valid, summaryHeadIds } = validateCompactableRangeNotSummarized(messages, cut);
+    expect(valid).toBe(true);
+    expect(summaryHeadIds).toEqual([]);
+
+    const result = buildCompactionApply({
+      messages,
+      chains,
+      cutResult: cut,
+      summaryText: 'superseding summary',
+      mode: 'simple',
+      sessionId,
+    });
+
+    expect(result.didApply).toBe(true);
+    expect(result.summaryMessage).not.toBeNull();
+    // The superseded head is flagged like every other range message…
+    expect(result.flaggedIds).toContain(priorSummary.id);
+    expect(result.updatedMessages.find((m) => m.id === priorSummary.id)!.excludeFromModel).toBe(true);
+    // …and the NEW head replaces it at the cut, unflagged and replayable.
+    const newHeadIdx = result.updatedMessages.findIndex((m) => m.id === result.summaryMessage!.id);
+    expect(newHeadIdx).toBe(cut.cutIndex);
+    expect(result.summaryMessage!.excludeFromModel).toBe(false);
+    for (const m of result.updatedMessages.slice(newHeadIdx + 1)) {
+      expect(m.excludeFromModel).not.toBe(true);
+    }
+  });
+
+  it('still throws CompactionApplyError when the range contains a compacted summary head (double compaction)', () => {
+    const { chains, messages, chainBoundaries } = buildSession(3);
+    // A prior compaction's summary head now inside the compactable range
+    const priorSummary: Message = {
+      ...makeMessage({ id: 'prior-summary-head', role: MessageRole.ASSISTANT, content: 'earlier handoff summary' }),
+      compacted: { rangeStart: 'older-start', rangeEnd: 'older-end', mode: 'simple' },
+    };
+    messages[2] = priorSummary;
+    chains[1] = { ...chains[1]!, messages: [priorSummary, messages[3]!] };
+
+    const cut = makeCut(messages, 1, chainBoundaries); // range [0,4)
+
+    const { valid, summaryHeadIds } = validateCompactableRangeNotSummarized(messages, cut);
+    expect(valid).toBe(false);
+    expect(summaryHeadIds).toContain(priorSummary.id);
+
+    expect(() =>
+      buildCompactionApply({ messages, chains, cutResult: cut, summaryText: 'second summary', mode: 'simple' }),
+    ).toThrow(CompactionApplyError);
+  });
+
+  it('reclaim-only path never throws over a flagged or summarized range (unchanged behavior)', () => {
+    const { chains, messages, chainBoundaries } = buildSession(3);
+    const flagged: Message = { ...messages[2]!, excludeFromModel: true };
+    messages[2] = flagged;
+    chains[1] = { ...chains[1]!, messages: [flagged, messages[3]!] };
+    const cut = makeCut(messages, 1, chainBoundaries);
+
+    const result = buildCompactionApply({
+      messages,
+      chains,
+      cutResult: cut,
+      summaryText: null,
+      mode: 'simple',
+      reclaimedIds: [messages[0]!.id],
+    });
+    expect(result.didApply).toBe(true);
+    expect(result.newChain).toBeNull();
+    expect(result.summaryMessage).toBeNull();
+    expect(result.updatedMessages.find((m) => m.id === messages[0]!.id)!.excludeFromModel).toBe(true);
+  });
+
+  it('validateCompactableRangeNotSummarized passes when the range is clean', () => {
+    const { messages, chainBoundaries } = buildSession(3);
+    const cut = makeCut(messages, 1, chainBoundaries);
+    const { valid, summaryHeadIds } = validateCompactableRangeNotSummarized(messages, cut);
+    expect(valid).toBe(true);
+    expect(summaryHeadIds).toEqual([]);
+  });
+});
+
+describe('compaction apply — intra-chain split keeps the original id on the preserved half (FIX #7)', () => {
+  it('after-half retains the original chain id; flagged prefix gets a fresh id; summary head sits between them', () => {
+    const { sessionId, chains, messages } = buildSession(3);
+    // Make the split chain the session's ACTIVE chain (external activeChainId points at it)
+    const originalId = chains[1]!.id;
+    const activeSplitChain = { ...chains[1]!, status: ChainStatus.ACTIVE as const };
+    const allChains = [chains[0]!, activeSplitChain, chains[2]!];
+    // Cut strictly inside chain 1 (flat messages idx 2..3): [u-0,a-0,u-1) | [a-1,u-2,a-2]
+    const cut: CutResult = {
+      cutIndex: 3,
+      compactableRange: { start: 0, end: 3 },
+      preservedCount: 2,
+      openGroupStart: null,
+      preservedRange: { start: 3, end: messages.length },
+    };
+
+    const result = buildCompactionApply({
+      messages,
+      chains: allChains,
+      cutResult: cut,
+      summaryText: 'split summary',
+      mode: 'simple',
+      sessionId,
+    });
+
+    // The preserved after-half keeps the ORIGINAL id — exactly one chain has it
+    const afterHalf = result.updatedChains.find((c) => c.id === originalId);
+    expect(afterHalf).toBeDefined();
+    expect(result.updatedChains.filter((c) => c.id === originalId)).toHaveLength(1);
+    expect(afterHalf!.messages.map((m) => m.id)).toEqual([messages[3]!.id]);
+    expect(afterHalf!.messages.every((m) => !m.excludeFromModel)).toBe(true);
+    expect(afterHalf!.status).toBe(ChainStatus.ACTIVE); // status preserved on continuing half
+
+    // The flagged prefix half gets a NEW id (frozen history)
+    const prefixHalf = result.updatedChains.find(
+      (c) => c.id !== originalId && c.messages.some((m) => m.id === messages[2]!.id),
+    );
+    expect(prefixHalf).toBeDefined();
+    expect(prefixHalf!.id).not.toBe(originalId);
+    expect(prefixHalf!.messages.map((m) => m.id)).toEqual([messages[2]!.id]);
+    expect(prefixHalf!.messages[0]!.excludeFromModel).toBe(true);
+    expect(prefixHalf!.status).toBe(ChainStatus.ACTIVE); // statuses preserved on both halves
+
+    // Replay order in updatedChains: prefix (new id) → summary head → after-half (original id)
+    const prefixIdx = result.updatedChains.indexOf(prefixHalf!);
+    const summaryChainIdx = result.updatedChains.findIndex((c) => c.id === result.newChain!.id);
+    const afterIdx = result.updatedChains.indexOf(afterHalf!);
+    expect(summaryChainIdx).toBe(prefixIdx + 1);
+    expect(afterIdx).toBe(summaryChainIdx + 1);
+
+    // Flat replay: flagged range, summary head at cutIndex, then preserved tail
+    const summaryIdx = result.updatedMessages.findIndex((m) => m.id === result.summaryMessage!.id);
+    expect(summaryIdx).toBe(cut.cutIndex);
+    expect(result.updatedMessages.slice(0, summaryIdx).every((m) => m.excludeFromModel)).toBe(true);
+    expect(result.updatedMessages.slice(summaryIdx + 1).every((m) => !m.excludeFromModel)).toBe(true);
   });
 });
 
@@ -241,72 +420,60 @@ describe('compaction apply — crash before/after (R22)', () => {
   });
 });
 
-describe('compaction apply — mid-turn compaction survives simulated crash', () => {
-  it('mid-turn checkpoint contains compacted flags + summary head is separate chain', () => {
+describe('compaction apply — mid-turn (active chain) outputs', () => {
+  it('summary head is its own chain; preserved active tail stays unflagged and keeps its id', () => {
     const sessionId = randomUUID();
     // Simulate flat history: 4 chains (8 messages), prior = first 6 messages (3 chains), active = last 2 messages (chain 3)
     const { chains, messages } = buildSession(4, sessionId);
     // Make active chain ACTIVE
     const activeChain = { ...chains[3]!, status: ChainStatus.ACTIVE as const };
-    const priorChains = chains.slice(0, 3);
-    const allChains = [...priorChains, activeChain];
-    const priorMessageCount = 6; // first 3 chains *2
+    const allChains = [...chains.slice(0, 3), activeChain];
     const cut = { cutIndex: 4, compactableRange: { start: 0, end: 4 }, preservedCount: 1, openGroupStart: null, preservedRange: { start: 4, end: messages.length } } satisfies CutResult;
 
-    const summaryText = 'mid-turn summary';
-    const applyResult = buildCompactionApply({ messages, chains: allChains, cutResult: cut, summaryText, mode: 'simple', sessionId });
+    const result = buildCompactionApply({ messages, chains: allChains, cutResult: cut, summaryText: 'mid-turn summary', mode: 'simple', sessionId });
 
-    // Build mid-turn checkpoint payload
-    const mid = buildMidTurnCheckpoint(
-      { messages, chains: allChains, cutResult: cut, summaryText, mode: 'simple', sessionId },
-      applyResult,
-      { sessionId, activeChainId: activeChain.id, priorMessageCount, activeChainMessages: activeChain.messages },
-    );
+    // Summary head is its own chain (not inside the active chain)
+    expect(result.summaryMessage).not.toBeNull();
+    expect(result.newChain).not.toBeNull();
+    expect(result.newChain!.messages[0]!.compacted).toBeDefined();
 
-    // Summary head is its own chain (not inside active checkpoint)
-    expect(mid.summaryMessage).not.toBeNull();
-    expect(mid.newChain).not.toBeNull();
-    expect(mid.newChain!.messages[0]!.compacted).toBeDefined();
+    // Flat replay: 4 flagged + summary head at cut + 4 preserved (unflagged)
+    expect(result.updatedMessages).toHaveLength(messages.length + 1);
+    const summaryIdx = result.updatedMessages.findIndex((m) => m.id === result.summaryMessage!.id);
+    expect(summaryIdx).toBe(cut.cutIndex);
+    expect(result.updatedMessages.slice(0, summaryIdx).every((m) => m.excludeFromModel)).toBe(true);
+    expect(result.updatedMessages.slice(summaryIdx + 1).every((m) => !m.excludeFromModel)).toBe(true);
 
-    // Checkpoint messages are the preserved tail after compaction (active chain slice)
-    // In this setup cut=4, priorCount=6, so cut <= priorCount, summary inserted before active window,
-    // so checkpoint should be the active chain's messages (preserved, not flagged)
-    expect(mid.checkpointMessages.length).toBe(activeChain.messages.length);
-    expect(mid.checkpointMessages.every((m) => !m.excludeFromModel)).toBe(true);
+    // The ACTIVE chain keeps its id and holds the preserved (unflagged) tail —
+    // resumed-turn writes keep landing in the live chain
+    const activeAfter = result.updatedChains.find((c) => c.id === activeChain.id);
+    expect(activeAfter).toBeDefined();
+    expect(activeAfter!.messages).toHaveLength(activeChain.messages.length);
+    expect(activeAfter!.messages.every((m) => !m.excludeFromModel)).toBe(true);
+    expect(activeAfter!.status).toBe(ChainStatus.ACTIVE);
 
-    // Simulate crash: durable state after checkpoint would be prior chains flagged + summary chain + checkpoint active chain
-    // Verify that flagged messages exist in updatedFlatMessages
-    const flaggedInFlat = mid.updatedFlatMessages.filter((m) => m.excludeFromModel);
-    expect(flaggedInFlat.length).toBe(cut.compactableRange.end - cut.compactableRange.start);
-
-    // Simulate that after crash, reloading session returns compacted view: flagged + summary + preserved
-    const flatIds = mid.updatedFlatMessages.map((m) => m.id);
-    expect(flatIds).toContain(mid.summaryMessage!.id);
-    // The summary's compacted marker records correct range
-    expect(mid.summaryMessage!.compacted!.rangeStart).toBe(messages[cut.compactableRange.start]!.id);
-    expect(mid.summaryMessage!.compacted!.rangeEnd).toBe(messages[cut.compactableRange.end - 1]!.id);
+    // The summary's compacted marker records the correct range
+    expect(result.summaryMessage!.compacted!.rangeStart).toBe(messages[cut.compactableRange.start]!.id);
+    expect(result.summaryMessage!.compacted!.rangeEnd).toBe(messages[cut.compactableRange.end - 1]!.id);
   });
 
-  it('mid-turn reclaim-only checkpoint flags only reclaim ids', () => {
+  it('mid-turn reclaim-only flags only reclaim ids and creates no summary chain', () => {
     const sessionId = randomUUID();
     const { chains, messages } = buildSession(3, sessionId);
     const activeChain = { ...chains[2]!, status: ChainStatus.ACTIVE as const };
     const allChains = [...chains.slice(0, 2), activeChain];
-    const priorMessageCount = 4;
     const cut = { cutIndex: 2, compactableRange: { start: 0, end: 2 }, preservedCount: 1, openGroupStart: null, preservedRange: { start: 2, end: messages.length } } satisfies CutResult;
     const reclaimedIds = [messages[0]!.id];
 
-    const applyResult = buildCompactionApply({ messages, chains: allChains, cutResult: cut, summaryText: null, mode: 'simple', reclaimedIds, sessionId });
-    const mid = buildMidTurnCheckpoint(
-      { messages, chains: allChains, cutResult: cut, summaryText: null, mode: 'simple', reclaimedIds, sessionId },
-      applyResult,
-      { sessionId, activeChainId: activeChain.id, priorMessageCount, activeChainMessages: activeChain.messages },
-    );
+    const result = buildCompactionApply({ messages, chains: allChains, cutResult: cut, summaryText: null, mode: 'simple', reclaimedIds, sessionId });
 
-    expect(mid.summaryMessage).toBeNull();
-    expect(mid.newChain).toBeNull();
-    expect(mid.flaggedIds).toContain(reclaimedIds[0]);
-    expect(mid.updatedFlatMessages.find((m) => m.id === reclaimedIds[0])!.excludeFromModel).toBe(true);
+    expect(result.summaryMessage).toBeNull();
+    expect(result.newChain).toBeNull();
+    expect(result.flaggedIds).toContain(reclaimedIds[0]);
+    expect(result.updatedMessages.find((m) => m.id === reclaimedIds[0])!.excludeFromModel).toBe(true);
+    // Active chain keeps its id, unflagged
+    const activeAfter = result.updatedChains.find((c) => c.id === activeChain.id);
+    expect(activeAfter!.messages.every((m) => !m.excludeFromModel)).toBe(true);
   });
 });
 
@@ -347,33 +514,31 @@ describe('compaction apply — flags + marker correct', () => {
   });
 });
 
-describe('compaction apply — integration with mocked session manager', () => {
-  it('atomic persist mock: before persists old, after persists compacted', async () => {
+describe('compaction apply — persisted-shape outputs (pure build)', () => {
+  it('produces flagged chains plus a summary chain ready for one atomic write', () => {
     const { chains, messages, chainBoundaries, sessionId } = buildSession(4);
     const cut = makeCut(messages, 1, chainBoundaries);
-    const summaryText = 'integrated summary';
-    const applyResult = buildCompactionApply({ messages, chains, cutResult: cut, summaryText, mode: 'simple', sessionId });
+    const applyResult = buildCompactionApply({ messages, chains, cutResult: cut, summaryText: 'integrated summary', mode: 'simple', sessionId });
 
-    // Mock manager holds chains
-    let persistedChains: Chain[] = [...chains];
-    const mockManager = {
-      getSession: (id: string) => (id === sessionId ? { id: sessionId, chains: persistedChains } : null),
-    };
-    const { persistCompactionBetweenTurns } = await import('../../src/main/llm/compaction/apply');
-    // Before persist, mock still old
-    expect(persistedChains.length).toBe(chains.length);
-    // Simulate atomicWriter that updates persistedChains atomically
-    const atomicWriter = async (sid: string, updatedChains: Chain[], newChain: Chain | null) => {
-      expect(sid).toBe(sessionId);
-      persistedChains = updatedChains;
-      return true;
-    };
-    await persistCompactionBetweenTurns(sessionId, applyResult, { sessionManager: mockManager, atomicWriter });
-    expect(persistedChains.length).toBe(chains.length + 1);
-    expect(persistedChains.some((c) => c.id === applyResult.newChain!.id)).toBe(true);
-    // Flagged
+    // One extra chain (the summary head); every original chain id survives exactly once
+    expect(applyResult.updatedChains).toHaveLength(chains.length + 1);
+    expect(applyResult.updatedChains.some((c) => c.id === applyResult.newChain!.id)).toBe(true);
+    for (const c of chains) {
+      expect(applyResult.updatedChains.filter((x) => x.id === c.id)).toHaveLength(1);
+    }
+
+    // Flagged message is flagged inside its (cloned) chain
     const flaggedId = messages[0]!.id;
-    const flaggedChain = persistedChains.find((c) => c.messages.some((m) => m.id === flaggedId))!;
+    const flaggedChain = applyResult.updatedChains.find((c) => c.messages.some((m) => m.id === flaggedId))!;
     expect(flaggedChain.messages.find((m) => m.id === flaggedId)!.excludeFromModel).toBe(true);
+
+    // Preserved chain keeps its id and stays replayable
+    const preserved = applyResult.updatedChains.find((c) => c.id === chains[3]!.id)!;
+    expect(preserved.messages.every((m) => !m.excludeFromModel)).toBe(true);
+
+    // Flat replay: summary head lands between the flagged range and the preserved window
+    const summaryIdx = applyResult.updatedMessages.findIndex((m) => m.id === applyResult.summaryMessage!.id);
+    expect(summaryIdx).toBe(cut.cutIndex);
+    expect(applyResult.updatedMessages.slice(0, summaryIdx).every((m) => m.excludeFromModel)).toBe(true);
   });
 });
