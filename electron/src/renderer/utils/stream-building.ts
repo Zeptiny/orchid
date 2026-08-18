@@ -479,8 +479,11 @@ function walkMessagesToItems(
   };
 
   for (const m of visible) {
-    // Compaction summary head — first-class card (R4)
     if (hasCompactedMarker(m)) {
+      if (m.excludeFromModel) {
+        compactedBuffer.push(m);
+        continue;
+      }
       flushCompactedBuffer();
       items.push({
         kind: 'compaction-summary',
@@ -489,7 +492,6 @@ function walkMessagesToItems(
       });
       continue;
     }
-    // Compacted range — display-only collapsed stub (R21), independent of persistence flags
     if (m.excludeFromModel) {
       compactedBuffer.push(m);
       continue;

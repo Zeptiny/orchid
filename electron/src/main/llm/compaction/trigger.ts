@@ -173,6 +173,10 @@ export function shouldTriggerCompaction(opts: {
   const ratio = inputTokens / contextTokens;
   if (ratio + 1e-9 < threshold) return false;
 
+  if (inputTokens >= contextTokens) {
+    return true;
+  }
+
   // Hysteresis (R13): if armed, suppress unless accrual alternative satisfied
   // Baseline is post-compaction inputTokens (growth since drop), falling back to lastCompaction for old state.
   if (hysteresisArmed) {
@@ -395,6 +399,36 @@ export function evaluateTriggerWithReclaim(params: {
   const ratio = effectiveInput / contextTokens;
   if (!Number.isFinite(contextTokens) || contextTokens <= 0 || ratio + 1e-9 < threshold) {
     return { shouldPrepare: false, shouldApply: false, reason: 'below-threshold' };
+  }
+  const isOverWindow = effectiveInput >= contextTokens || inputTokens >= contextTokens;
+  if (isOverWindow) {
+    const postReclaim = estimatePostReclaimInputTokens(inputTokens, messages, flaggedIds);
+    const belowRearm = isBelowRearmLine(postReclaim, contextTokens, threshold, hysteresisDelta);
+    const estimatedPostReclaim = flaggedIds.length > 0 && typeof params.estimatedInputTokens === 'number'
+      ? Math.max(0, params.estimatedInputTokens - estimateReclaimedTokens(inputTokens, messages, flaggedIds))
+      : postReclaim;
+    const estimatedBelowRearm = typeof params.estimatedInputTokens === 'number'
+      ? isBelowRearmLine(estimatedPostReclaim, contextTokens, threshold, hysteresisDelta)
+      : belowRearm;
+    const reclaimedForDecision = flaggedIds.length > 0 ? flaggedIds.slice() : undefined;
+    if (flaggedIds.length > 0 && (belowRearm || estimatedBelowRearm)) {
+      return {
+        shouldPrepare: false,
+        shouldApply: true,
+        reason: 'reclaim-short-circuit',
+        ...(compactableRange ? { compactableRange } : {}),
+        ...(reclaimedForDecision ? { flaggedIds: [...reclaimedForDecision] } : {}),
+        estimatedInputTokens: effectiveInput,
+      };
+    }
+    return {
+      shouldPrepare: true,
+      shouldApply: false,
+      reason: 'prepare',
+      ...(compactableRange ? { compactableRange } : {}),
+      ...(reclaimedForDecision ? { flaggedIds: [...reclaimedForDecision] } : {}),
+      estimatedInputTokens: effectiveInput,
+    };
   }
   if (params.state?.hysteresisArmed) {
     const baseline = (typeof params.state.postCompactionInputTokens === 'number' && Number.isFinite(params.state.postCompactionInputTokens)

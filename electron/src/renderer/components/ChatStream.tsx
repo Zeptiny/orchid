@@ -37,7 +37,7 @@ import { Button } from './ui/Button';
 import orchidIcon from '../assets/orchid-icon.svg';
 import { useSmartAutoScroll } from '../hooks/useSmartAutoScroll';
 import { shouldAutoScroll } from '../hooks/useSmartAutoScroll';
-import { CompactionWidget, CompactedRangeStub } from './ToolResults/CompactionWidget';
+import { CompactionRunningWidget, CompactionWidget, CompactedRangeStub } from './ToolResults/CompactionWidget';
 
 export { AUTO_SCROLL_THRESHOLD_PX, isUserScrolledAwayFromBottom, shouldAutoScroll } from '../hooks/useSmartAutoScroll';
 export { CHAIN_COLLAPSE_THRESHOLD, shouldRenderChainFooter, suppressLiveMessagesAlreadyInHistory } from '../utils/stream-building';
@@ -446,6 +446,16 @@ function renderStreamItem(
   sessionId: string | null,
 ): ReactNode {
   if (item.kind === 'tool') {
+    if (item.block.toolName === 'compaction' && (item.block.status === 'running' || item.block.status === 'generating')) {
+      let phase: string | undefined;
+      let mode: string | undefined;
+      try {
+        const parsed = JSON.parse(item.block.args || '{}');
+        phase = parsed.phase;
+        mode = parsed.mode;
+      } catch {}
+      return <CompactionRunningWidget key={item.key} status={item.block.status} phase={phase} mode={mode} />;
+    }
     return <ToolCallBlock key={item.key} block={item.block} subagents={subagents} sessionId={sessionId} />;
   }
   if (item.kind === 'tool-group') {

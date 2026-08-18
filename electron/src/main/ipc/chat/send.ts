@@ -47,7 +47,7 @@ import { chatSendSchema } from '../payload-schemas';
 import { clearNextRequestStop, requestCompactionPause, clearCompactionPause, shouldPauseForCompaction } from '../next-request-stop';
 import { completeSessionActivity, publishSessionActivity } from '../session-activity';
 import { disposeActiveAgent, forceAbortSession } from './abort';
-import { emitSessionUpdated, sendChatState, sendTurnEvent } from './events';
+import { emitSessionUpdated, sendChatState, sendTurnEvent, webContentsForWindowId } from './events';
 import {
   activeAgents,
   canEmitStreamEvents,
@@ -90,6 +90,8 @@ import { onSessionDeleted } from '../../session/manager';
 export type ChatSendPayload = z.infer<typeof chatSendSchema>;
 
 // ── Compaction state per session (U8, R13) ──────────────────────────────────
+
+const FALLBACK_CONTEXT_TOKENS = 128_000;
 
 const compactionTriggers = new Map<string, CompactionTrigger>();
 const compactionPending = new Map<string, {
@@ -168,12 +170,18 @@ function isPendingCutStillValid(pending: { cut: CutResult; flaggedIds: string[] 
   if (!Number.isFinite(start) || !Number.isFinite(end)) return false;
   if (start < 0 || end > messages.length || start >= end) return false;
   if (pending.cut.cutIndex < 0 || pending.cut.cutIndex > messages.length) return false;
-  // If any of the range is already flagged, the cut is stale (already compacted or mutated)
   for (let i = start; i < end; i += 1) {
     if (messages[i]?.excludeFromModel) return false;
   }
-  // Also check flaggedIds still correspond to unflagged messages in current history
-  // If any flaggedId is not found or already flagged, still consider stale if the range itself is already flagged
+  if (pending.flaggedIds.length > 0) {
+    const idToMsg = new Map<string, Message>();
+    for (const m of messages) idToMsg.set(m.id, m);
+    for (const id of pending.flaggedIds) {
+      const msg = idToMsg.get(id);
+      if (!msg) return false;
+      if (msg.excludeFromModel) return false;
+    }
+  }
   return true;
 }
 
@@ -203,17 +211,20 @@ function persistSelectiveCompaction(
       ? result.summaryMessages
       : (result.summaryMessage ? [result.summaryMessage] : []);
     if (summaryMessages.length > 0) {
-      const cutIndex = Math.max(0, Math.min(cut.cutIndex, result.replayMessages.length));
       let insertionIdx = updatedChains.length;
       try {
         const idToChainIdx = new Map<string, number>();
         existing.chains.forEach((ch, idx) => {
           for (const m of ch.messages) if (!idToChainIdx.has(m.id)) idToChainIdx.set(m.id, idx);
         });
-        for (let i = cutIndex; i < result.replayMessages.length; i += 1) {
-          const mid = result.replayMessages[i]!.id;
-          const idx = idToChainIdx.get(mid);
-          if (typeof idx === 'number') { insertionIdx = idx; break; }
+        const flatOriginal: Message[] = existing.chains.flatMap((c) => c.messages as unknown as Message[]);
+        const preserveStart = cut.compactableRange.end;
+        if (preserveStart < flatOriginal.length) {
+          const preserveId = flatOriginal[preserveStart]!.id;
+          const idx = idToChainIdx.get(preserveId);
+          if (typeof idx === 'number') insertionIdx = idx;
+        } else {
+          insertionIdx = updatedChains.length;
         }
       } catch {}
       const now = new Date().toISOString();
@@ -491,12 +502,15 @@ async function tryCompactSynchronously(
       const r = obs / totalCharsValue;
       if (Number.isFinite(r) && r > 0) tokensPerChar = Math.max(0.05, Math.min(r, 2));
     }
-    if (tokensPerChar == null || !Number.isFinite(tokensPerChar) || tokensPerChar <= 0) return { didApply: false };
+    if (tokensPerChar == null || !Number.isFinite(tokensPerChar) || tokensPerChar <= 0) {
+      tokensPerChar = 0.25;
+    }
     const estimatedInput = Math.ceil(totalCharsValue * tokensPerChar);
     // Early gate before expensive selectCut/reclaim: only proceed if threshold crossed or hysteresis accrual allows re-fire
     const ratio = estimatedInput / contextTokens;
     const hysteresisDelta = cfg.hysteresis_delta ?? 0.1;
-    if (ratio + 1e-9 < cfg.threshold) {
+    const isOverWindow = estimatedInput >= contextTokens;
+    if (ratio + 1e-9 < cfg.threshold && !isOverWindow) {
       const baseline = trigger.state.postCompactionInputTokens;
       if (!(trigger.state.hysteresisArmed && typeof baseline === 'number' && estimatedInput - baseline >= cfg.min_compactable_tokens)) {
         return { didApply: false };
@@ -755,7 +769,7 @@ function handleUsageCompaction(
   const trigger = getCompactionTrigger(sessionId);
   const cfg = runtime.config.compaction?.main;
   if (!cfg) return;
-  if (!Number.isFinite(contextTokens) || contextTokens <= 0) return;
+  const effectiveContextTokens = Number.isFinite(contextTokens) && contextTokens > 0 ? contextTokens : FALLBACK_CONTEXT_TOKENS;
   // Single-pass totalChars reuse + early threshold gate (avoids 4× scans per CHAT_USAGE)
   const totalCharsValue = totalChars(fullHistory);
   // Derive calibrated tokensPerChar from provider inputTokens / totalChars (no /4 fallback)
@@ -769,15 +783,17 @@ function handleUsageCompaction(
     }
   }
   trigger.state.lastObservedInputTokens = inputTokens;
-  trigger.onUsage(inputTokens, contextTokens, cfg.threshold, cfg.hysteresis_delta);
+  trigger.onUsage(inputTokens, effectiveContextTokens, cfg.threshold, cfg.hysteresis_delta);
   if (trigger.state.pendingPrepare) return;
   if (compactionPending.has(sessionId)) return;
-  // Early gate: if ratio well below threshold and hysteresis accrual not satisfied, skip expensive cut/reclaim
-  const ratio = inputTokens / contextTokens;
-  if (ratio + 1e-9 < cfg.threshold) {
-    const baseline = trigger.state.postCompactionInputTokens;
-    if (!(trigger.state.hysteresisArmed && typeof baseline === 'number' && Number.isFinite(baseline) && inputTokens - baseline >= cfg.min_compactable_tokens)) {
-      return;
+  const isOverWindow = inputTokens >= effectiveContextTokens;
+  if (!isOverWindow) {
+    const ratio = inputTokens / effectiveContextTokens;
+    if (ratio + 1e-9 < cfg.threshold) {
+      const baseline = trigger.state.postCompactionInputTokens;
+      if (!(trigger.state.hysteresisArmed && typeof baseline === 'number' && Number.isFinite(baseline) && inputTokens - baseline >= cfg.min_compactable_tokens)) {
+        return;
+      }
     }
   }
   try {
@@ -794,16 +810,18 @@ function handleUsageCompaction(
       }
       return Math.max(slice.length, Math.ceil(chars * (tokensPerChar ?? 0.25)));
     };
-    const cut = selectCut(fullHistory, { keepRecentChains: cfg.keep_recent_chains, budget: { contextTokens, threshold: cfg.threshold }, tokenEstimator: calibratedEstimator2 });
+    const cut = selectCut(fullHistory, { keepRecentChains: cfg.keep_recent_chains, budget: { contextTokens: effectiveContextTokens, threshold: cfg.threshold }, tokenEstimator: calibratedEstimator2 });
     if (cut.compactableRange.end <= cut.compactableRange.start) return;
-    if (tokensPerChar == null || !Number.isFinite(tokensPerChar) || tokensPerChar <= 0) return;
+    if (tokensPerChar == null || !Number.isFinite(tokensPerChar) || tokensPerChar <= 0) {
+      tokensPerChar = 0.25;
+    }
     const compactableTokens = compactableTokenEstimate(fullHistory, cut.compactableRange, tokensPerChar);
     if (compactableTokens < cfg.min_compactable_tokens) return;
     const reclaim = mechanicalReclaim(fullHistory, cut.compactableRange);
     const flaggedIds = reclaim.flaggedIds;
     const decision = trigger.evaluateWithReclaim({
       inputTokens,
-      contextTokens,
+      contextTokens: effectiveContextTokens,
       threshold: cfg.threshold,
       hysteresisDelta: cfg.hysteresis_delta,
       compactableTokens,
@@ -814,8 +832,18 @@ function handleUsageCompaction(
     });
     if (!decision.shouldPrepare && !decision.shouldApply) return;
     if (decision.shouldApply && !decision.shouldPrepare) {
-      compactionPending.set(sessionId, { cut, flaggedIds, estimatedInput: inputTokens, contextTokens, mode: cfg.mode });
+      compactionPending.set(sessionId, { cut, flaggedIds, estimatedInput: inputTokens, contextTokens: effectiveContextTokens, mode: cfg.mode });
       trigger.markPrepareStarted(cut.compactableRange, flaggedIds);
+      try {
+        const active = activeAgents.get(sessionId);
+        if (active && !active.finalized) {
+          const compactionToolId = `compaction-${sessionId}`;
+          ensureToolSnapshot(active, compactionToolId, 'compaction');
+          updateToolSnapshot(active, compactionToolId, 'compaction', { status: 'running', args: JSON.stringify({ phase: 'reclaiming', mode: cfg.mode }), content: null, toolResult: null, finishedAt: null });
+          const wc = webContentsForWindowId(active.windowId);
+          if (wc) sendTurnEvent(wc, active, IPC_CHANNELS.CHAT_TOOL_CALL_UPDATE, { type: 'tool_call_update', toolCallId: compactionToolId, toolName: 'compaction', status: 'running', args: JSON.stringify({ phase: 'reclaiming', mode: cfg.mode }) });
+        }
+      } catch {}
       if (!shouldPauseForCompaction(sessionId)) {
         requestCompactionPause(sessionId);
         publishSessionActivity(sessionId, { cwd: runtime.projectDir ?? '', state: 'working', phase: 'agent', detail: 'Compacting context — reclaiming duplicates…', canCancel: true });
@@ -856,8 +884,30 @@ function handleUsageCompaction(
           simpleFallback,
           maxCorrectionRounds: 3,
         });
-        compactionPending.set(sessionId, { cut, flaggedIds, estimatedInput: inputTokens, contextTokens, mode: 'selective', selectivePromise, manifest });
-        selectivePromise.catch((err) => console.debug('[compaction] selective prepare failed (non-fatal):', err));
+        compactionPending.set(sessionId, { cut, flaggedIds, estimatedInput: inputTokens, contextTokens: effectiveContextTokens, mode: 'selective', selectivePromise, manifest });
+        selectivePromise.catch((err) => {
+          console.debug('[compaction] selective prepare failed (non-fatal):', err);
+          try {
+            const active = activeAgents.get(sessionId);
+            if (active && !active.finalized) {
+              const compactionToolId = `compaction-${sessionId}`;
+              const wc = webContentsForWindowId(active.windowId);
+              const result = { schemaVersion: 1 as const, family: 'generic' as const, status: 'complete' as const, completeness: 'complete' as const, data: { value: '', origin: { kind: 'built-in' as const, name: 'compaction' } } };
+              updateToolSnapshot(active, compactionToolId, 'compaction', { status: 'complete', args: '', content: '', toolResult: result as unknown as never, finishedAt: new Date().toISOString() });
+              if (wc) sendTurnEvent(wc, active, IPC_CHANNELS.CHAT_TOOL_CALL_UPDATE, { type: 'tool_call_update', toolCallId: compactionToolId, toolName: 'compaction', status: 'complete', args: '', content: '', toolResult: result as unknown as Record<string, unknown> });
+            }
+          } catch {}
+        });
+        try {
+          const active = activeAgents.get(sessionId);
+          if (active && !active.finalized) {
+            const compactionToolId = `compaction-${sessionId}`;
+            ensureToolSnapshot(active, compactionToolId, 'compaction');
+            updateToolSnapshot(active, compactionToolId, 'compaction', { status: 'running', args: JSON.stringify({ phase: 'summarizing', mode: 'selective' }), content: null, toolResult: null, finishedAt: null });
+            const wc = webContentsForWindowId(active.windowId);
+            if (wc) sendTurnEvent(wc, active, IPC_CHANNELS.CHAT_TOOL_CALL_UPDATE, { type: 'tool_call_update', toolCallId: compactionToolId, toolName: 'compaction', status: 'running', args: JSON.stringify({ phase: 'summarizing', mode: 'selective' }) });
+          }
+        } catch {}
         if (!shouldPauseForCompaction(sessionId)) {
           requestCompactionPause(sessionId);
           publishSessionActivity(sessionId, { cwd: runtime.projectDir ?? '', state: 'working', phase: 'agent', detail: 'Compacting context — summarizing history…', canCancel: true });
@@ -877,9 +927,30 @@ function handleUsageCompaction(
         accounting: { store: accountingStore, sessionId, chainId, turnId },
         runtime,
       });
-      compactionPending.set(sessionId, { cut, flaggedIds, promise, estimatedInput: inputTokens, contextTokens, mode: 'simple' });
-      // If summarizer resolves to null, next boundary will clear pending without applying
-      promise.catch((err) => console.debug('[compaction] prepare failed (non-fatal):', err));
+      compactionPending.set(sessionId, { cut, flaggedIds, promise, estimatedInput: inputTokens, contextTokens: effectiveContextTokens, mode: 'simple' });
+      promise.catch((err) => {
+        console.debug('[compaction] prepare failed (non-fatal):', err);
+        try {
+          const active = activeAgents.get(sessionId);
+          if (active && !active.finalized) {
+            const compactionToolId = `compaction-${sessionId}`;
+            const wc = webContentsForWindowId(active.windowId);
+            const result = { schemaVersion: 1 as const, family: 'generic' as const, status: 'complete' as const, completeness: 'complete' as const, data: { value: '', origin: { kind: 'built-in' as const, name: 'compaction' } } };
+            updateToolSnapshot(active, compactionToolId, 'compaction', { status: 'complete', args: '', content: '', toolResult: result as unknown as never, finishedAt: new Date().toISOString() });
+            if (wc) sendTurnEvent(wc, active, IPC_CHANNELS.CHAT_TOOL_CALL_UPDATE, { type: 'tool_call_update', toolCallId: compactionToolId, toolName: 'compaction', status: 'complete', args: '', content: '', toolResult: result as unknown as Record<string, unknown> });
+          }
+        } catch {}
+      });
+      try {
+        const active = activeAgents.get(sessionId);
+        if (active && !active.finalized) {
+          const compactionToolId = `compaction-${sessionId}`;
+          ensureToolSnapshot(active, compactionToolId, 'compaction');
+          updateToolSnapshot(active, compactionToolId, 'compaction', { status: 'running', args: JSON.stringify({ phase: 'summarizing', mode: 'simple' }), content: null, toolResult: null, finishedAt: null });
+          const wc = webContentsForWindowId(active.windowId);
+          if (wc) sendTurnEvent(wc, active, IPC_CHANNELS.CHAT_TOOL_CALL_UPDATE, { type: 'tool_call_update', toolCallId: compactionToolId, toolName: 'compaction', status: 'running', args: JSON.stringify({ phase: 'summarizing', mode: 'simple' }) });
+        }
+      } catch {}
       if (!shouldPauseForCompaction(sessionId)) {
         requestCompactionPause(sessionId);
         publishSessionActivity(sessionId, { cwd: runtime.projectDir ?? '', state: 'working', phase: 'agent', detail: 'Compacting context — summarizing history…', canCancel: true });
@@ -1038,22 +1109,17 @@ export async function startChatTurn(
   let turnId: string = crypto.randomUUID();
   let chainId: string | null = null;
 
-  // ── Compaction: apply any pending prepare from previous turn, then
-  // pre-flight synchronous check before the first send (R11,R12). Guard:
-  // never compact while a turn is in flight — we are at the boundary.
-  if (contextTokens != null && contextTokens > 0) {
+  {
+    const effectiveContextTokens = contextTokens != null && contextTokens > 0 ? contextTokens : FALLBACK_CONTEXT_TOKENS;
     const pendingApplied = await applyPendingCompactionIfAny(sessionId, messages, runtime);
     if (pendingApplied.applied && pendingApplied.updatedMessages) {
       messages = pendingApplied.updatedMessages;
       existingMessages = messages.slice(0, messages.length - 1);
     }
     const syncChainProbe = sessionManager.getSession(sessionId)?.chains ?? [];
-    const syncResult = await tryCompactSynchronously(sessionId, messages, runtime, turnSelection, contextTokens, accountingStore!, chainId, turnId);
+    const syncResult = await tryCompactSynchronously(sessionId, messages, runtime, turnSelection, effectiveContextTokens, accountingStore!, chainId, turnId);
     if (syncResult.didApply && syncResult.updatedMessages) {
       messages = syncResult.updatedMessages;
-      // existingMessages is prefix before userMessage; after compaction the
-      // flat includes summary head + preserved prefix, but userMessage remains last.
-      // Re-derive prior count for turnMessages slicing.
       existingMessages = messages.slice(0, messages.length - 1);
     }
     void syncChainProbe;
@@ -1418,7 +1484,10 @@ export async function startChatTurn(
         clearCompactionPause(sessionId);
         const fullHistoryForPause = [...messages, ...turnMessagesFromAgent(activeAgent)];
         publishSessionActivity(sessionId, { cwd: turnCtx.cwd, state: 'working', phase: 'agent', detail: 'Compacting context — applying summary…', canCancel: true });
-        sendTurnEvent(webContents, activeAgent, IPC_CHANNELS.CHAT_TOOL_CALL_UPDATE, { type: 'tool_call_update', toolCallId: `compaction-${Date.now()}`, toolName: 'compaction', status: 'running', args: JSON.stringify({ phase: 'compacting' }), content: 'Compacting context window…', toolResult: null } as unknown as Record<string, unknown>);
+        const compactionToolId = `compaction-${sessionId}`;
+        ensureToolSnapshot(activeAgent, compactionToolId, 'compaction');
+        updateToolSnapshot(activeAgent, compactionToolId, 'compaction', { status: 'running', args: JSON.stringify({ phase: 'compacting' }), content: null, toolResult: null, finishedAt: null });
+        sendTurnEvent(webContents, activeAgent, IPC_CHANNELS.CHAT_TOOL_CALL_UPDATE, { type: 'tool_call_update', toolCallId: compactionToolId, toolName: 'compaction', status: 'running', args: JSON.stringify({ phase: 'compacting' }) });
         (async () => {
           try {
             let applied = false;
@@ -1427,12 +1496,6 @@ export async function startChatTurn(
             if (pendingRes.applied && pendingRes.updatedMessages) {
               applied = true;
               updated = pendingRes.updatedMessages;
-            } else if (contextTokens != null) {
-              const syncRes = await tryCompactSynchronously(sessionId, fullHistoryForPause, runtime, turnSelection, contextTokens, accountingStore!, chainId, turnId);
-              if (syncRes.didApply && syncRes.updatedMessages) {
-                applied = true;
-                updated = syncRes.updatedMessages;
-              }
             }
             if (applied && updated) {
               messages.splice(0, messages.length, ...updated);
@@ -1447,7 +1510,15 @@ export async function startChatTurn(
               try {
                 actor.send({ type: 'USER_INPUT', message });
                 publishSessionActivity(sessionId, { cwd: turnCtx.cwd, state: 'working', phase: 'agent', detail: 'Resuming after compaction', canCancel: true });
-                sendTurnEvent(webContents, activeAgent, IPC_CHANNELS.CHAT_TOOL_CALL_UPDATE, { type: 'tool_call_update', toolCallId: `compaction-${Date.now()}`, toolName: 'compaction', status: 'completed', args: '', content: 'Context compacted — resuming', toolResult: { status: 'success', output: 'compacted' } } as unknown as Record<string, unknown>);
+                const compactionCompleteResult = {
+                  schemaVersion: 1 as const,
+                  family: 'generic' as const,
+                  status: 'complete' as const,
+                  completeness: 'complete' as const,
+                  data: { value: 'Context compacted — resuming', origin: { kind: 'built-in' as const, name: 'compaction' } },
+                };
+                updateToolSnapshot(activeAgent, compactionToolId, 'compaction', { status: 'complete', args: '', content: 'Context compacted — resuming', toolResult: compactionCompleteResult as unknown as typeof activeAgent.toolCalls extends Map<string, infer V> ? V extends { toolResult: infer R } ? R : never : never, finishedAt: new Date().toISOString() });
+                sendTurnEvent(webContents, activeAgent, IPC_CHANNELS.CHAT_TOOL_CALL_UPDATE, { type: 'tool_call_update', toolCallId: compactionToolId, toolName: 'compaction', status: 'complete', args: '', content: 'Context compacted — resuming', toolResult: compactionCompleteResult as unknown as Record<string, unknown> });
                 return;
               } catch (e) {
                 console.debug('[compaction] mid-turn resume failed:', e);
@@ -1455,6 +1526,17 @@ export async function startChatTurn(
             }
           } catch (e) {
             console.debug('[compaction] mid-turn pause handling failed:', e);
+          }
+          {
+            const compactionCompleteResult = {
+              schemaVersion: 1 as const,
+              family: 'generic' as const,
+              status: 'complete' as const,
+              completeness: 'complete' as const,
+              data: { value: '', origin: { kind: 'built-in' as const, name: 'compaction' } },
+            };
+            updateToolSnapshot(activeAgent, compactionToolId, 'compaction', { status: 'complete', args: '', content: '', toolResult: compactionCompleteResult as unknown as never, finishedAt: new Date().toISOString() });
+            sendTurnEvent(webContents, activeAgent, IPC_CHANNELS.CHAT_TOOL_CALL_UPDATE, { type: 'tool_call_update', toolCallId: compactionToolId, toolName: 'compaction', status: 'complete', args: '', content: '', toolResult: compactionCompleteResult as unknown as Record<string, unknown> });
           }
           clearCompactionPause(sessionId);
           finalizeTurn({ response: context.response, usage: context.usage ?? null, interrupted: false, sendDone: true });

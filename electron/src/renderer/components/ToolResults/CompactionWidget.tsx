@@ -4,9 +4,40 @@ import { MarkdownContent } from '../MarkdownContent';
 import { Icon } from '../Icon';
 import { StatusBadge } from '../ui/StatusBadge';
 import { CollapsibleRegion } from '../ui/CollapsibleRegion';
+import { Spinner } from '../ui/Spinner';
 
 export interface CompactionWidgetProps {
   message: Message;
+}
+
+export interface CompactionRunningWidgetProps {
+  status: 'running' | 'generating';
+  phase?: string;
+  mode?: string;
+}
+
+export function CompactionRunningWidget({ status: _status, phase, mode }: CompactionRunningWidgetProps) {
+  const label = phase === 'reclaiming' ? 'Reclaiming duplicate outputs…' : 'Compacting context…';
+  const detail = phase === 'summarizing' ? 'Summarizing history' : phase === 'reclaiming' ? 'Removing duplicates' : 'Preparing compaction';
+  return (
+    <div className="orchid-tool-block orchid-compaction-block is-running" data-compaction="running" data-tool-result-status="running" aria-live="polite" aria-busy="true">
+      <div className="orchid-tool-block-title min-w-0">
+        <span className="orchid-tool-block-title-left min-w-0">
+          <span className="orchid-tool-lifecycle-icon shrink-0">
+            <Spinner size="xs" />
+          </span>
+          <span className="orchid-tool-block-title-text min-w-0 truncate">{label}</span>
+        </span>
+        <span className="orchid-tool-block-title-right shrink-0">
+          {mode && <StatusBadge tone="info" size="xs">{mode}</StatusBadge>}
+          <StatusBadge tone="warning" size="xs">running</StatusBadge>
+        </span>
+      </div>
+      <div className="orchid-tool-block-content orchid-compaction-content min-w-0 text-xs text-base-content/60">
+        {detail} — the summary will appear when ready.
+      </div>
+    </div>
+  );
 }
 
 function formatRange(marker: NonNullable<Message['compacted']>): string {
