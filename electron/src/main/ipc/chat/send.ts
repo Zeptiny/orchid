@@ -148,6 +148,17 @@ function getCompactionTrigger(sessionId: string): CompactionTrigger {
   return t;
 }
 
+function dedupeHistoryById(messages: readonly Message[]): Message[] {
+  const seen = new Set<string>();
+  const out: Message[] = [];
+  for (const m of messages) {
+    if (m.id && seen.has(m.id)) continue;
+    if (m.id) seen.add(m.id);
+    out.push(m);
+  }
+  return out;
+}
+
 function estimateMessageChars(msg: Message): number {
   let n = 0;
   if (msg.content) n += msg.content.length;
@@ -804,9 +815,13 @@ function handleUsageCompaction(
   const trigger = getCompactionTrigger(sessionId);
   const cfg = runtime.config.compaction?.main;
   if (!cfg) return;
+  const history = dedupeHistoryById(fullHistory);
   const effectiveContextTokens = Number.isFinite(contextTokens) && contextTokens > 0 ? contextTokens : FALLBACK_CONTEXT_TOKENS;
+  if (history.slice(-20).some((m) => (m as unknown as { compacted?: unknown }).compacted)) {
+    return;
+  }
   // Single-pass totalChars reuse + early threshold gate (avoids 4× scans per CHAT_USAGE)
-  const totalCharsValue = totalChars(fullHistory);
+  const totalCharsValue = totalChars(history);
   // Derive calibrated tokensPerChar from provider inputTokens / totalChars (no /4 fallback)
   let tokensPerChar: number | undefined = trigger.state.tokensPerChar;
   if (totalCharsValue > 0 && Number.isFinite(inputTokens) && inputTokens > 0) {
@@ -845,14 +860,14 @@ function handleUsageCompaction(
       }
       return Math.max(slice.length, Math.ceil(chars * (tokensPerChar ?? 0.25)));
     };
-    const cut = selectCut(fullHistory, { keepRecentChains: cfg.keep_recent_chains, budget: { contextTokens: effectiveContextTokens, threshold: cfg.threshold }, tokenEstimator: calibratedEstimator2 });
+    const cut = selectCut(history, { keepRecentChains: cfg.keep_recent_chains, budget: { contextTokens: effectiveContextTokens, threshold: cfg.threshold }, tokenEstimator: calibratedEstimator2 });
     if (cut.compactableRange.end <= cut.compactableRange.start) return;
     if (tokensPerChar == null || !Number.isFinite(tokensPerChar) || tokensPerChar <= 0) {
       tokensPerChar = 0.25;
     }
-    const compactableTokens = compactableTokenEstimate(fullHistory, cut.compactableRange, tokensPerChar);
+    const compactableTokens = compactableTokenEstimate(history, cut.compactableRange, tokensPerChar);
     if (compactableTokens < cfg.min_compactable_tokens) return;
-    const reclaim = mechanicalReclaim(fullHistory, cut.compactableRange);
+    const reclaim = mechanicalReclaim(history, cut.compactableRange);
     const flaggedIds = reclaim.flaggedIds;
     const decision = trigger.evaluateWithReclaim({
       inputTokens,
@@ -862,12 +877,12 @@ function handleUsageCompaction(
       compactableTokens,
       minCompactableTokens: cfg.min_compactable_tokens,
       compactableRange: cut.compactableRange,
-      messages: fullHistory,
+      messages: history,
       flaggedIds,
     });
     if (!decision.shouldPrepare && !decision.shouldApply) return;
     if (decision.shouldApply && !decision.shouldPrepare) {
-      const expectedIds = fullHistory.slice(cut.compactableRange.start, cut.compactableRange.end).map((m) => m.id);
+      const expectedIds = history.slice(cut.compactableRange.start, cut.compactableRange.end).map((m) => m.id);
       compactionPending.set(sessionId, { cut, flaggedIds, expectedIds, estimatedInput: inputTokens, contextTokens: effectiveContextTokens, mode: cfg.mode });
       trigger.markPrepareStarted(cut.compactableRange, flaggedIds);
       try {
@@ -889,11 +904,11 @@ function handleUsageCompaction(
     if (decision.shouldPrepare) {
       // ── Selective pending branch ──────────────────────────────────────
       if (cfg.mode === 'selective') {
-        const rawSlice = fullHistory.slice(cut.compactableRange.start, cut.compactableRange.end);
+        const rawSlice = history.slice(cut.compactableRange.start, cut.compactableRange.end);
         const slice = rawSlice.filter((m) => !m.excludeFromModel && !m.hidden);
         if (slice.length === 0) return;
         trigger.markPrepareStarted(cut.compactableRange, flaggedIds);
-        const manifest = buildManifest(fullHistory, cut.compactableRange);
+        const manifest = buildManifest(history, cut.compactableRange);
         const selectiveCaller = createLlmSelectiveCaller({
           config: runtime.config,
           scope: 'main',
@@ -913,14 +928,14 @@ function handleUsageCompaction(
           return fb ? { text: fb.text } : null;
         };
         const selectivePromise = runSelectiveCompaction({
-          messages: fullHistory,
+          messages: history,
           compactableRange: cut.compactableRange,
           manifest,
           selectiveCaller,
           simpleFallback,
           maxCorrectionRounds: 3,
         });
-        const expectedIdsForSelective = fullHistory.slice(cut.compactableRange.start, cut.compactableRange.end).map((m) => m.id);
+        const expectedIdsForSelective = history.slice(cut.compactableRange.start, cut.compactableRange.end).map((m) => m.id);
         compactionPending.set(sessionId, { cut, flaggedIds, expectedIds: expectedIdsForSelective, estimatedInput: inputTokens, contextTokens: effectiveContextTokens, mode: 'selective', selectivePromise, manifest });
         selectivePromise.catch((err) => {
           console.debug('[compaction] selective prepare failed (non-fatal):', err);
@@ -952,7 +967,7 @@ function handleUsageCompaction(
         return;
       }
       // ── Simple pending branch (unchanged) ─────────────────────────────
-      const rawSlice2 = fullHistory.slice(cut.compactableRange.start, cut.compactableRange.end);
+      const rawSlice2 = history.slice(cut.compactableRange.start, cut.compactableRange.end);
       const slice = rawSlice2.filter((m) => !m.excludeFromModel && !m.hidden);
       if (slice.length === 0) return;
       trigger.markPrepareStarted(cut.compactableRange, flaggedIds);
@@ -964,7 +979,7 @@ function handleUsageCompaction(
         accounting: { store: accountingStore, sessionId, chainId, turnId },
         runtime,
       });
-      const expectedIdsForSimple = fullHistory.slice(cut.compactableRange.start, cut.compactableRange.end).map((m) => m.id);
+      const expectedIdsForSimple = history.slice(cut.compactableRange.start, cut.compactableRange.end).map((m) => m.id);
       compactionPending.set(sessionId, { cut, flaggedIds, expectedIds: expectedIdsForSimple, promise, estimatedInput: inputTokens, contextTokens: effectiveContextTokens, mode: 'simple' });
       promise.catch((err) => {
         console.debug('[compaction] prepare failed (non-fatal):', err);
