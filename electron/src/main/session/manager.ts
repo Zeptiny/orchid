@@ -887,7 +887,7 @@ export class SessionManager {
       errorDetail: errorDetail ?? null,
       errorTitle: errorTitle ?? null,
     };
-    const chains = session.chains.map((c) =>
+    let chains = session.chains.map((c) =>
       c.id === chain.id ? chain : c,
     );
 
@@ -904,7 +904,7 @@ export class SessionManager {
       updated.todoStore,
       this._storageOpts,
     );
-    if (!persisted) {
+    if (!persisted.ok) {
       const restored = storageRestoreMissingChain(
         chain,
         now,
@@ -912,6 +912,12 @@ export class SessionManager {
         this._storageOpts,
       );
       if (!restored) this.saveFullSessionFallback(updated, [chain]);
+    } else if (persisted.retiredChainIds.length > 0) {
+      // Mirror the durable retire in the cache: finalized chain subsumed the
+      // split-tail rows, so they must not linger in the in-memory view.
+      const retired = new Set(persisted.retiredChainIds);
+      chains = chains.filter((c) => !retired.has(c.id));
+      updated.chains = chains;
     }
     this.replaceSession(updated);
     return updated;

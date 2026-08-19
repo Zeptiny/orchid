@@ -1006,18 +1006,26 @@ export function appendActiveChain(
 /**
  * Atomically persist a terminal chain snapshot and clear the session's active
  * chain pointer. Returns false if the chain row is missing.
+ *
+ * Finalize is the convergence point for the at-rest invariant "one turn = one
+ * chain row": the finished chain now holds the full turn, so any split-tail
+ * row a mid-turn compaction left behind (its content subsumed by this write)
+ * is retired in the same transaction instead of lingering as an orphan.
  */
 export function finishChain(
   chain: Chain,
   updatedAt: string,
   todoStore: TodoStoreData,
   opts?: StorageOptions,
-): boolean {
-  if (!isValidSessionId(chain.sessionId)) return false;
+): { ok: boolean; retiredChainIds: readonly string[] } {
+  if (!isValidSessionId(chain.sessionId)) return { ok: false, retiredChainIds: [] };
   const { dbPath } = resolveOptions(opts);
   return withCorruptionRecovery(dbPath, (db) => {
     const txn = db.transaction(() => {
-      if (updateChainRow(db, chain) === 0) return false;
+      if (updateChainRow(db, chain) === 0) {
+        return { ok: false, retiredChainIds: [] as string[] };
+      }
+      const retiredChainIds = deleteSupersededChains(db, chain.sessionId, chain.id);
       db.prepare(
         `UPDATE sessions
          SET active_chain_id = NULL, todo_store_json = ?, updated_at = ?
@@ -1027,10 +1035,90 @@ export function finishChain(
         updatedAt,
         chain.sessionId,
       );
-      return true;
+      return { ok: true, retiredChainIds };
     });
     return txn();
   });
+}
+
+/**
+ * Delete superseded chain rows — rows whose message-id set is fully contained
+ * in another chain of the same session (the split-tail orphans a mid-turn
+ * compaction's durable split creates once the owning turn finalizes into its
+ * head row). The chain being finalized now is always kept; the session's
+ * active-chain pointer is honored when supplied.
+ *
+ * Safety properties:
+ * - Empty or unreadable rows are never deleted (an empty id set is not a match).
+ * - Fresh-id chains (turns start with a new user message, summary heads carry a
+ *   new summary id) can never be subsets, so legitimate chains are immune.
+ * - Deleting the LATER duplicate matches replay semantics: history assembly
+ *   dedupes by id keeping first occurrence, so the deleted rows were already
+ *   invisible to the model.
+ */
+function deleteSupersededChains(
+  db: SqliteDatabase,
+  sessionId: string,
+  finalizedChainId: string | null,
+  activeChainId?: string | null,
+): string[] {
+  const rows = db.prepare(
+    'SELECT id, messages_json FROM chains WHERE session_id = ? ORDER BY ordinal',
+  ).all(sessionId) as Array<{ id: string; messages_json: string | null }>;
+  if (rows.length < 2) return [];
+
+  const idSets = new Map<string, Set<string>>();
+  for (const row of rows) {
+    let ids: Set<string> | null = null;
+    try {
+      const parsed: unknown = JSON.parse(row.messages_json ?? '[]');
+      if (Array.isArray(parsed)) {
+        ids = new Set<string>();
+        for (const message of parsed) {
+          if (message && typeof message === 'object' && typeof (message as { id?: unknown }).id === 'string') {
+            ids.add((message as { id: string }).id);
+          }
+        }
+      }
+    } catch {
+      ids = null;
+    }
+    if (ids) idSets.set(row.id, ids);
+  }
+
+  const superseded: string[] = [];
+  for (let candidateIndex = 0; candidateIndex < rows.length; candidateIndex += 1) {
+    const candidate = rows[candidateIndex]!;
+    if (candidate.id === finalizedChainId || candidate.id === activeChainId) continue;
+    const candidateIds = idSets.get(candidate.id);
+    if (!candidateIds || candidateIds.size === 0) continue;
+    for (let ownerIndex = 0; ownerIndex < candidateIndex; ownerIndex += 1) {
+      const ownerIds = idSets.get(rows[ownerIndex]!.id);
+      if (!ownerIds || ownerIds.size < candidateIds.size) continue;
+      let contained = true;
+      for (const id of candidateIds) {
+        if (!ownerIds.has(id)) {
+          contained = false;
+          break;
+        }
+      }
+      if (contained) {
+        superseded.push(candidate.id);
+        break;
+      }
+    }
+  }
+
+  for (const id of superseded) {
+    db.prepare('DELETE FROM chain_message_offsets WHERE chain_id = ?').run(id);
+    db.prepare('DELETE FROM chains WHERE id = ? AND session_id = ?').run(id, sessionId);
+  }
+  if (superseded.length > 0) {
+    console.debug(
+      `[session] retired ${superseded.length} superseded chain row(s) (session ${sessionId})`,
+    );
+  }
+  return superseded;
 }
 
 /**
@@ -1439,6 +1527,17 @@ function loadSessionInternal(
         );
 
         row = db.prepare('SELECT * FROM sessions WHERE id = ?').get(sessionId) as SessionRow;
+        chainRows = selectChainRows(db, sessionId, loadFullSession);
+      }
+
+      // Heal superseded chain rows (split-tail orphans from a mid-turn
+      // compaction whose turn never finalized — crash or restart — plus
+      // sessions already carrying the damage). Recovery above already made
+      // every chain terminal, so the active-pointer exclusion only protects
+      // a pointer that survived it.
+      const activePointer = (row as SessionRow).active_chain_id ?? null;
+      const healed = deleteSupersededChains(db, sessionId, null, activePointer);
+      if (healed.length > 0) {
         chainRows = selectChainRows(db, sessionId, loadFullSession);
       }
 

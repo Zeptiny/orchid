@@ -28,6 +28,7 @@ import {
   loadSubagentRecords,
   upsertSubagentRecords,
   applyCompactionPersistence,
+  finishChain,
   _clearDbCache,
 } from '../../src/main/session/storage';
 import { openSqliteDb } from '../../src/main/utils/sqlite';
@@ -568,5 +569,199 @@ describe('persistCompactionBetweenTurns (durable path over partial view)', () =>
     expect(ok).toBe(true);
     const full = loadSessionForReplacement(sessionId, storageOpts)!;
     expect(flatIds(full)).toEqual(idRange('m', 300, 0));
+  });
+});
+
+// ===========================================================================
+// Superseded chain reconcile — split-tail retirement (stale active row fix)
+// ===========================================================================
+//
+// A mid-turn compaction whose cut lands inside the active chain's row splits
+// that row durably: head (flagged prefix) → summary → tail (preserved window,
+// cloned metadata — including the ACTIVE status). The turn then finalizes into
+// the HEAD row (persistTurn rewrites it with the full turn), leaving the tail
+// row orphaned: no writer targets it, no finalizer closes it, and its message
+// ids duplicate the head's. Reproduced from session "Refining Unity
+// Compaction Code" (tail at ordinal 2 duplicating messages 43-46, cloned
+// start_time, status=active forever).
+//
+// Invariant restored: at rest, one turn = one chain row. Finalize retires the
+// subsumed tail in the same transaction; loads heal crash orphans and
+// already-damaged sessions.
+
+describe('superseded chain reconcile (split-tail retirement)', () => {
+  function chainRowsFor(sessionId: string): Array<{ id: string; status: string }> {
+    const db = openSqliteDb(storageOpts.dbPath!);
+    try {
+      return db
+        .prepare('SELECT id, status FROM chains WHERE session_id = ? ORDER BY ordinal')
+        .all(sessionId) as Array<{ id: string; status: string }>;
+    } finally {
+      db.close();
+    }
+  }
+
+  function offsetsFor(chainId: string): number {
+    const db = openSqliteDb(storageOpts.dbPath!);
+    try {
+      return (db
+        .prepare('SELECT COUNT(*) AS n FROM chain_message_offsets WHERE chain_id = ?')
+        .get(chainId) as { n: number }).n;
+    } finally {
+      db.close();
+    }
+  }
+
+  /**
+   * The Unity-session shape. After the mid-turn split (head → summary → tail),
+   * the resumed turn finalizes into the HEAD row with the FULL turn — which
+   * includes the summary message in-position (chain0[42]) and the tail's
+   * content. Both the standalone summary row and the tail row are therefore
+   * subsumed duplicates of the finalized head.
+   */
+  function seedSplitTailSession(sessionId: string, tailStatus = ChainStatus.ACTIVE): Session {
+    const summaryMessage = {
+      ...makeMessage('summary-head', { role: MessageRole.ASSISTANT, content: 'SUMMARY: mid-turn handoff' }),
+      compacted: { rangeStart: 'm-0000', rangeEnd: 'm-0041', mode: 'simple' as const, summarizedCount: 42 },
+    };
+    const head = makeChain(sessionId, 'chain-head', [
+      ...messages('m', 42, 0).map((message) => ({ ...message, excludeFromModel: true })),
+      summaryMessage,
+      ...messages('m', 47, 43),
+    ]);
+    const summary = makeChain(sessionId, 'chain-summary', [summaryMessage]);
+    const tail = { ...makeChain(sessionId, 'chain-tail', messages('m', 4, 43)), status: tailStatus };
+    const session = makeSession(sessionId, [head, summary, tail]);
+    saveSession(session, storageOpts);
+    return session;
+  }
+
+  it('finishChain retires every subsumed row (tail + absorbed summary) in the same transaction', () => {
+    const sessionId = 'cafe0100-0100-4100-8100-000000000100';
+    const session = seedSplitTailSession(sessionId);
+    const head = { ...session.chains[0]!, status: ChainStatus.ACTIVE };
+
+    const result = finishChain(
+      { ...head, status: ChainStatus.COMPLETED },
+      '2026-01-02T00:00:00.000Z',
+      { tasks: [] },
+      storageOpts,
+    );
+
+    expect(result.ok).toBe(true);
+    expect([...result.retiredChainIds]).toEqual(['chain-summary', 'chain-tail']);
+    // Durable rows: the head alone survives, holding the full turn.
+    expect(chainRowsFor(sessionId).map((row) => row.id)).toEqual(['chain-head']);
+    expect(offsetsFor('chain-tail')).toBe(0);
+    expect(offsetsFor('chain-head')).toBe(90);
+    // Replay: 90 unique ids in order — the summary message survives in-position.
+    const full = loadSessionForReplacement(sessionId, storageOpts)!;
+    const ids = flatIds(full);
+    expect(ids).toHaveLength(90);
+    expect(new Set(ids).size).toBe(90);
+    expect(ids[42]).toBe('summary-head');
+    expect(full.chains[0]!.messages[42]!.compacted).toMatchObject({ mode: 'simple' });
+  });
+
+  it('finishChain leaves sibling chains alone when nothing is subsumed', () => {
+    const sessionId = 'cafe0101-0101-4101-8101-000000000101';
+    const chainA = makeChain(sessionId, 'chain-a', messages('m', 30, 0));
+    const chainB = makeChain(sessionId, 'chain-b', messages('m', 30, 30));
+    saveSession(makeSession(sessionId, [chainA, chainB]), storageOpts);
+
+    const result = finishChain(
+      { ...chainA, status: ChainStatus.COMPLETED },
+      '2026-01-02T00:00:00.000Z',
+      { tasks: [] },
+      storageOpts,
+    );
+
+    expect(result.ok).toBe(true);
+    expect(result.retiredChainIds).toEqual([]);
+    expect(chainRowsFor(sessionId).map((row) => row.id)).toEqual(['chain-a', 'chain-b']);
+  });
+
+  it('load heals an orphaned split tail (crash between apply and finalize)', () => {
+    const sessionId = 'cafe0102-0102-4102-8102-000000000102';
+    seedSplitTailSession(sessionId);
+
+    const view = loadSessionView(sessionId, storageOpts)!;
+
+    expect(view.chains.map((chain) => chain.id)).toEqual(['chain-head']);
+    expect(chainRowsFor(sessionId).map((row) => row.id)).toEqual(['chain-head']);
+    const ids = flatIds(view);
+    expect(new Set(ids).size).toBe(ids.length);
+    // No chain is left claiming to be an in-flight turn.
+    expect(view.chains.every((chain) => chain.status !== ChainStatus.ACTIVE)).toBe(true);
+  });
+
+  it('between-turns summary chains (not absorbed by a turn row) survive loads', () => {
+    const sessionId = 'cafe0106-0106-4106-8106-000000000106';
+    // Normal between-turns layout: the summary message exists ONLY in its own
+    // chain — no turn row contains it, so it must never be reconciled away.
+    const chainA = makeChain(sessionId, 'chain-a', messages('m', 30, 0));
+    const summary = makeSummaryChain(sessionId, 'chain-summary', 'summary-head', 'SUMMARY: between turns');
+    const chainB = makeChain(sessionId, 'chain-b', messages('m', 30, 30));
+    saveSession(makeSession(sessionId, [chainA, summary, chainB]), storageOpts);
+
+    const view = loadSessionView(sessionId, storageOpts)!;
+
+    expect(view.chains.map((chain) => chain.id)).toEqual(['chain-a', 'chain-summary', 'chain-b']);
+    expect(flatIds(view)).toEqual([...idRange('m', 30, 0), 'summary-head', ...idRange('m', 30, 30)]);
+  });
+
+  it('identical duplicate chains keep the earliest row only — never both, never neither', () => {
+    const sessionId = 'cafe0103-0103-4103-8103-000000000103';
+    const dupA = makeChain(sessionId, 'chain-dup-a', messages('m', 5, 0));
+    const dupB = makeChain(sessionId, 'chain-dup-b', messages('m', 5, 0));
+    saveSession(makeSession(sessionId, [dupA, dupB]), storageOpts);
+
+    const view = loadSessionView(sessionId, storageOpts)!;
+
+    expect(view.chains.map((chain) => chain.id)).toEqual(['chain-dup-a']);
+  });
+
+  it('never deletes the chain referenced by active_chain_id at load', () => {
+    const sessionId = 'cafe0104-0104-4104-8104-000000000104';
+    const session = seedSplitTailSession(sessionId, ChainStatus.COMPLETED);
+    const db = openSqliteDb(storageOpts.dbPath!);
+    try {
+      db.prepare('UPDATE sessions SET active_chain_id = ? WHERE id = ?').run('chain-tail', sessionId);
+    } finally {
+      db.close();
+    }
+    void session;
+
+    const view = loadSessionView(sessionId, storageOpts)!;
+
+    // The pointer protects the tail even though the head subsumes it; the
+    // absorbed summary row is still retired (nothing references it).
+    expect(view.chains.map((chain) => chain.id)).toEqual(['chain-head', 'chain-tail']);
+    expect(view.activeChainId).toBe('chain-tail');
+  });
+
+  it('SessionManager.finishActiveChain mirrors the durable retire in the cached session', () => {
+    const sessionId = 'cafe0105-0105-4105-8105-000000000105';
+    const manager = new SessionManager({ storage: storageOpts });
+    const session = seedSplitTailSession(sessionId);
+    const head = session.chains[0]!;
+    // Cache the post-compaction in-memory shape (tail still present, head active).
+    manager.setCachedSession({
+      ...session,
+      chains: [
+        { ...head, status: ChainStatus.ACTIVE },
+        session.chains[1]!,
+        { ...session.chains[2]!, status: ChainStatus.ACTIVE },
+      ],
+      activeChainId: head.id,
+    });
+
+    const updated = manager.finishActiveChain(ChainStatus.COMPLETED, sessionId);
+
+    expect(updated!.chains.map((chain) => chain.id)).toEqual(['chain-head']);
+    expect(updated!.activeChainId).toBeNull();
+    expect(chainRowsFor(sessionId).map((row) => row.id)).toEqual(['chain-head']);
+    expect(manager.getSession(sessionId)!.chains.map((chain) => chain.id))
+      .toEqual(['chain-head']);
   });
 });
