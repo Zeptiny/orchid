@@ -215,6 +215,36 @@ export async function evaluateCompactorWindowFit(input: {
 }
 
 // ---------------------------------------------------------------------------
+// Handoff substance guard
+// ---------------------------------------------------------------------------
+
+/**
+ * Minimum characters a handoff summary must carry to be applied.
+ *
+ * Compaction only fires when the compactable range clears
+ * `min_compactable_tokens` (thousands of tokens by default), so a faithful
+ * handoff is never near this floor. Degenerate outputs — a model that spends
+ * its whole output budget inside a stripped `<analysis>` block and ends with
+ * `...`, or a truncation tail — must be refused, not applied: a summary head
+ * with no substance silently removes the range (including its user messages)
+ * from the model view and the next step loses the task.
+ */
+export const MIN_HANDOFF_SUMMARY_CHARS = 200;
+
+/**
+ * Whether extracted summarizer text carries enough substance to replace a
+ * compactable range in the model view. Pure so every compaction seam (simple
+ * summarizer, selective fallback) can share the exact same rule.
+ */
+export function isSubstantiveHandoffText(text: string): boolean {
+  const collapsed = text.replace(/\s+/g, ' ').trim();
+  if (collapsed.length < MIN_HANDOFF_SUMMARY_CHARS) return false;
+  // Punctuation shells (ellipses, dashes, markdown fences) carry no handoff.
+  const alphanumeric = collapsed.replace(/[^\p{L}\p{N}]/gu, '');
+  return alphanumeric.length >= Math.floor(MIN_HANDOFF_SUMMARY_CHARS / 4);
+}
+
+// ---------------------------------------------------------------------------
 // Core: summarizeCompactableRange
 // ---------------------------------------------------------------------------
 
@@ -415,6 +445,13 @@ export async function summarizeCompactableRange(input: SummarizeInput): Promise<
   }
   if (!text) {
     console.warn('[compaction] Summarizer returned empty after stripping wrappers; skipping.');
+    return null;
+  }
+  if (!isSubstantiveHandoffText(text)) {
+    console.warn(
+      `[compaction] Summarizer output is not substantive (${text.trim().length} chars after wrapper extraction); ` +
+      'refusing to apply a degenerate handoff — skipping compaction.',
+    );
     return null;
   }
 

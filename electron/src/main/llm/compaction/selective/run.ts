@@ -29,7 +29,7 @@ import type { ProviderAccountingStore } from '../../../providers/accounting/stor
 import { createMiddlewareStack } from '../../middleware';
 import type { ProviderAttemptAccountingContext } from '../../../providers/accounting/middleware';
 import { importESM } from '../../../utils/esm-import';
-import { resolveCompactorModelSelection } from '../summarize';
+import { isSubstantiveHandoffText, resolveCompactorModelSelection } from '../summarize';
 
 export function buildSelectiveUserPrompt(manifest: Manifest, previousErrors?: readonly string[]): string {
   const lines = manifest.entries.map((e) => `${e.id} [${e.kind}] ${e.preview}`).join('\n');
@@ -465,7 +465,9 @@ export async function runSelectiveCompaction(
   if (input.simpleFallback) {
     try {
       const fb = await input.simpleFallback();
-      if (fb && typeof fb.text === 'string' && fb.text.trim().length > 0) {
+      // Same substance rule as the simple path: a degenerate fallback text
+      // (e.g. a stripped reasoning tail) must not replace the range.
+      if (fb && typeof fb.text === 'string' && isSubstantiveHandoffText(fb.text)) {
         fallbackText = fb.text.trim();
       }
     } catch (e) {
@@ -549,8 +551,10 @@ export async function runCompactionByMode(input: {
       // No selective caller provided → fallback to simple
       const fb = input.simpleFallback ? await input.simpleFallback() : null;
       const text = fb?.text ?? null;
-      if (text) return { kind: 'fallback', reason: 'no selectiveCaller', fallbackText: text, attempts: 0, summaryMessage: makeSummaryMessage(text, 'simple') } as SelectiveCompactionFallback;
-      return { kind: 'fallback', reason: 'no selectiveCaller and no simple fallback', fallbackText: null, attempts: 0 };
+      if (text && isSubstantiveHandoffText(text)) {
+        return { kind: 'fallback', reason: 'no selectiveCaller', fallbackText: text, attempts: 0, summaryMessage: makeSummaryMessage(text, 'simple') } as SelectiveCompactionFallback;
+      }
+      return { kind: 'fallback', reason: 'no selectiveCaller and no substantive simple fallback', fallbackText: null, attempts: 0 };
     }
     return runSelectiveCompaction({
       messages: input.messages,

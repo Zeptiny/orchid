@@ -385,18 +385,36 @@ describe('U14 runSelectiveCompaction loop', () => {
   it('fallback to simple after cap exhausted', async () => {
     const msgs = [makeUser('u1','q'), makeAssistant('a1','a')];
     const range = { start: 0, end: 2 };
+    const fallbackText = 'Fallback handoff summary: the exploration covered the compaction trigger engine, the select/apply pipeline, and the summarizer invocation; remaining work is the IPC wiring, renderer widgets, and subagent integration.';
     const result = await runSelectiveCompaction({
       messages: msgs,
       compactableRange: range,
       maxCorrectionRounds: 2,
       selectiveCaller: async () => [{ type: 'keep', id: 'a1' }], // always missing u1
-      simpleFallback: () => ({ text: 'simple fallback summary' }),
+      simpleFallback: () => ({ text: fallbackText }),
     });
     expect(result.kind).toBe('fallback');
     if (result.kind === 'fallback') {
-      expect(result.fallbackText).toBe('simple fallback summary');
+      expect(result.fallbackText).toBe(fallbackText);
       expect(result.reason).toContain('failed after');
-      expect(result.replayMessages?.some(r => r.content === 'simple fallback summary')).toBe(true);
+      expect(result.replayMessages?.some(r => r.content === fallbackText)).toBe(true);
+    }
+  });
+
+  it('rejects a degenerate fallback text instead of applying it as the handoff', async () => {
+    const msgs = [makeUser('u1','q'), makeAssistant('a1','a')];
+    const range = { start: 0, end: 2 };
+    const result = await runSelectiveCompaction({
+      messages: msgs,
+      compactableRange: range,
+      maxCorrectionRounds: 1,
+      selectiveCaller: async () => [{ type: 'keep', id: 'a1' }], // always missing u1
+      simpleFallback: () => ({ text: '...' }),
+    });
+    expect(result.kind).toBe('fallback');
+    if (result.kind === 'fallback') {
+      expect(result.fallbackText).toBeNull();
+      expect(result.replayMessages).toBeUndefined();
     }
   });
 
