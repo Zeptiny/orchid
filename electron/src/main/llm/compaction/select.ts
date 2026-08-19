@@ -160,6 +160,16 @@ export function inferChainBoundaries(messages: readonly Message[]): number[] {
     if (msg.role === MessageRole.USER) {
       // Avoid duplicate when 0 is already USER
       if (boundaries[boundaries.length - 1] !== i) boundaries.push(i);
+      continue;
+    }
+    // A compacted summary head is its own chain (R20), and the content that
+    // accrued after it is real history. Without these boundaries a single
+    // long turn (one USER message) whose mid-turn compaction planted a head
+    // looks like one summary-only chain → realChains empty → re-compaction
+    // deadlocks with an empty compactable range even far over the window.
+    if (hasCompactedMarker(msg)) {
+      if (boundaries[boundaries.length - 1] !== i) boundaries.push(i);
+      if (i + 1 < messages.length && boundaries[boundaries.length - 1] !== i + 1) boundaries.push(i + 1);
     }
   }
   return boundaries;

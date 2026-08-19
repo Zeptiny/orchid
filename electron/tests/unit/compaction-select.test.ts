@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { Message } from '../../src/shared/types/message';
 import { MessageRole, MessageType } from '../../src/shared/types/message';
-import { selectCut, analyzeToolGroups, isCleanToolGroupBoundary, resolvePreservePercent } from '../../src/main/llm/compaction/select';
+import { selectCut, analyzeToolGroups, isCleanToolGroupBoundary, resolvePreservePercent, inferChainBoundaries } from '../../src/main/llm/compaction/select';
 import type { ToolCall } from '../../src/shared/types/tool';
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
@@ -282,6 +282,44 @@ describe('selectCut — summary heads', () => {
     const messages: Message[] = [makeSummaryHead('summ', 'only summary')];
     const result = selectCut(messages, { preserveTokens: 50, chainBoundaries: [0] });
     expect(result.compactableRange).toEqual({ start: 0, end: 0 });
+  });
+
+  // Regression: session "Refining Unity Compaction Code" — one user message,
+  // a long single turn, one mid-turn compaction applied (prefix flagged, head
+  // planted mid-history), usage far over the window. The inferred-boundaries
+  // path saw one summary-only chain → realChains empty → compactable range
+  // {0,0} forever, so no second compaction ever fired.
+  it('mid-turn summary head does not empty realChains in a single-turn history (re-compaction regression)', () => {
+    const messages: Message[] = [
+      // 0: the turn's user message — flagged by the first compaction
+      makeUser('u0', 'x'.repeat(1000)),
+      // 1..5: flagged pre-compaction turn content
+      makeToolCallMsg('tc0', 'c1', 'read'),
+      makeToolResult('tr0', 'c1', 'read', 'x'.repeat(1000)),
+      makeToolCallMsg('tc1', 'c2', 'read'),
+      makeToolResult('tr1', 'c2', 'read', 'x'.repeat(1000)),
+      makeAssistantText('a0', 'x'.repeat(1000)),
+    ].map((m) => ({ ...m, excludeFromModel: true }));
+    // 6: summary head (unflagged — it replays)
+    messages.push(makeSummaryHead('summ', 'compaction handoff'));
+    // 7..12: post-compaction accrual, same turn (no new user message)
+    messages.push(makeToolCallMsg('tc2', 'c3', 'read'));
+    messages.push(makeToolResult('tr2', 'c3', 'read', 'x'.repeat(1000)));
+    messages.push(makeToolCallMsg('tc3', 'c4', 'read'));
+    messages.push(makeToolResult('tr3', 'c4', 'read', 'x'.repeat(1000)));
+    messages.push(makeToolCallMsg('tc4', 'c5', 'read'));
+    messages.push(makeToolResult('tr4', 'c5', 'read', 'x'.repeat(1000)));
+
+    // Inferred boundaries must split: [pre-head real) [head) [post-head real)
+    expect(inferChainBoundaries(messages)).toEqual([0, 6, 7]);
+
+    // Small preserve budget: the trailing tool group is preserved; everything
+    // before it is compactable and the range must START ON the head (index 6)
+    // so it is re-summarized, not skipped.
+    const result = selectCut(messages, { preserveTokens: 60 });
+    expect(result.compactableRange.end).toBeGreaterThan(result.compactableRange.start);
+    expect(result.compactableRange.start).toBe(6);
+    expect(result.cutIndex).toBeGreaterThanOrEqual(7);
   });
 });
 

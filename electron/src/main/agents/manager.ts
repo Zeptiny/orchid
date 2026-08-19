@@ -1658,7 +1658,13 @@ export class SubagentManager {
               return Math.max(slice.length, Math.ceil(chars * tpc3));
             },
           });
-          if (cut.compactableRange.end - cut.compactableRange.start === 0) {
+          // Exhaustion test: with chain inference splitting summary heads into
+          // their own chains, the range may still contain the previous head
+          // (re-summarizable by design). A range whose only unflagged content
+          // is summary heads cannot make progress — degrading beats looping.
+          const rangeMessages = (retryMessages as Message[]).slice(cut.compactableRange.start, cut.compactableRange.end);
+          const netNew = rangeMessages.filter((m) => !m.excludeFromModel && !m.hidden && !(m as Message & { compacted?: unknown }).compacted);
+          if (netNew.length === 0) {
             const { buildSubagentPartialReport } = await import('./subagent-runner.js');
             const done = `${record.chain?.messages.filter((m) => m.type === 'tool_result').length ?? 0} tool results`;
             const partial = buildSubagentPartialReport({ done, remaining: record.task.slice(0, 200), stoppedAt: `step ${stepIndex}` });
