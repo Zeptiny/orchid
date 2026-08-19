@@ -13,7 +13,7 @@
 
 import type { Message } from '../../../../shared/types/message';
 import { MessageType, MessageRole } from '../../../../shared/types/message';
-import type { Manifest, SelectiveOp, KeepOp, KeepRangeOp, SummarizeOp } from './manifest';
+import type { Manifest, SelectiveOp, SummarizeOp } from './manifest';
 
 export interface ValidateResult {
   readonly valid: boolean;

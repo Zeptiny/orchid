@@ -26,6 +26,7 @@ import type { SubagentRecord as DomainSubagentRecord } from '../../shared/types/
 import type { CompactionTrigger as CompactionTriggerType } from '../llm/compaction/trigger';
 import type { ApplyResult } from '../llm/compaction/apply';
 import { getConfig } from '../config/loader';
+import type { CompactionScopeConfig } from '../../shared/types/ipc-boundary';
 import { estimateMessageChars } from '../llm/compaction/message-chars';
 import {
   SubagentDeltaEventType,
@@ -1423,7 +1424,7 @@ export class SubagentManager {
     let subagentCompactionTrigger: CompactionTriggerType | null = null;
     let compactionPendingPromise: Promise<ApplyResult | null> | null = null;
     let compactionInitDone = false;
-    let cachedSubagentCfg: any = null;
+    let cachedSubagentCfg: CompactionScopeConfig | null = null;
 
     const ensureCompactionInit = async (): Promise<boolean> => {
       if (compactionInitDone) return subagentContextTokens !== null && subagentCompactionTrigger !== null;
@@ -1454,7 +1455,7 @@ export class SubagentManager {
       const ok = await ensureCompactionInit();
       if (!ok || !subagentContextTokens || !subagentCompactionTrigger) return;
       try {
-        let cfg: any | null = cachedSubagentCfg;
+        let cfg: CompactionScopeConfig | null = cachedSubagentCfg;
         if (!cfg) {
           try {
             cfg = getConfig().compaction?.subagents ?? null;
@@ -1468,7 +1469,7 @@ export class SubagentManager {
         // delegate to the updated runner helper which already branches internally.
         // The check ensures per-run trigger evaluation and pending promise handling
         // are mode-aware while keeping simple as default (opt-in selective).
-        const mode: string = (cfg as unknown as { mode?: string }).mode ?? 'simple';
+        const mode: string = cfg.mode ?? 'simple';
         const shouldDelegateSelective = mode === 'selective';
         const shouldDelegateSimple = mode !== 'selective';
         // Both branches delegate to the same helper; the helper's internal branch
@@ -1563,12 +1564,16 @@ export class SubagentManager {
       this._setChainMessages(record, [...updatedMessages]);
       try {
         (assembler as unknown as { messages: Message[] }).messages = [...updatedMessages];
-      } catch {}
+      } catch {
+        // assembler field poke is best-effort
+      }
       try {
         const p = (this as unknown as { _persistence: { markCompaction: (id: string, rev: number | null) => unknown } })._persistence;
         const rev = p?.markCompaction?.(record.id, null);
         void rev;
-      } catch {}
+      } catch {
+        // compaction persistence marker is best-effort
+      }
       this._markRecordDirty(record);
       subagentCompactionTrigger.consumePending();
       // Hysteresis accrual baseline is post-compaction inputTokens, not pre-compaction peak
@@ -1597,10 +1602,12 @@ export class SubagentManager {
             postCompactionTokens = Math.ceil(totalPost * tpc2);
           }
         }
-      } catch {}
+      } catch {
+        // token calibration is best-effort
+      }
       subagentCompactionTrigger.onCompactionApplied(preInput, postCompactionTokens);
       // R17: still over limit after compaction -> partial report degradation
-      let cfg: any | null = cachedSubagentCfg;
+      let cfg: CompactionScopeConfig | null = cachedSubagentCfg;
       if (!cfg) {
         try {
           cfg = getConfig().compaction.subagents;
@@ -1634,7 +1641,7 @@ export class SubagentManager {
       if (stillOver) {
         try {
           const { selectCut, resolvePreservePercent } = await import('../llm/compaction/select.js');
-          let cfg2: any | null = cachedSubagentCfg;
+          let cfg2: CompactionScopeConfig | null = cachedSubagentCfg;
           if (!cfg2) {
             try {
               cfg2 = getConfig().compaction.subagents;
@@ -1716,7 +1723,7 @@ export class SubagentManager {
           if (!ready || typeof subagentContextTokens !== 'number' || !subagentCompactionTrigger) continue;
           const inputTokens = event.usage.prompt_tokens ?? event.usage.total_tokens ?? 0;
           (subagentCompactionTrigger as CompactionTriggerType).observeUsage(inputTokens, record.chain?.messages ?? []);
-          (subagentCompactionTrigger as CompactionTriggerType).onUsage(inputTokens, subagentContextTokens, cachedSubagentCfg?.threshold ?? (() => {
+          (subagentCompactionTrigger as CompactionTriggerType).onUsage(inputTokens, subagentContextTokens, (cachedSubagentCfg as CompactionScopeConfig | null)?.threshold ?? (() => {
             try {
               return getConfig().compaction.subagents.threshold;
             } catch { return 0.85; }

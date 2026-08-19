@@ -56,7 +56,7 @@ export function CompactionRunningWidget({ status, phase, mode, streamText, estim
             <span>{detail} — streaming</span>
             <span className="text-base-content/40">{sizeLabel}</span>
           </div>
-          <pre className="orchid-compaction-stream-tail m-0 max-h-28 overflow-hidden whitespace-pre-wrap break-words font-mono text-[11px] leading-relaxed text-base-content/55">
+          <pre className="orchid-compaction-stream-tail m-0 max-h-28 overflow-hidden whitespace-pre-wrap break-words font-mono text-xs leading-relaxed text-base-content/55">
             {streamTail(streamText!)}
           </pre>
         </div>

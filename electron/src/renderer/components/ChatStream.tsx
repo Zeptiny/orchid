@@ -456,7 +456,9 @@ function renderStreamItem(
         const parsed = JSON.parse(item.block.args || '{}');
         phase = typeof parsed.phase === 'string' ? parsed.phase : undefined;
         mode = typeof parsed.mode === 'string' ? parsed.mode : undefined;
-      } catch {}
+      } catch {
+        // args are advisory display metadata only
+      }
       return (
         <CompactionRunningWidget
           key={item.key}

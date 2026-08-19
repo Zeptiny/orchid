@@ -1229,8 +1229,8 @@ export function ChatView({ isVisible = true, bootstrapConfig = null, onNotify, a
         >
         <DeferredSurface isVisible={chatSurfaceVisible}>
           <ChatStream
-            key={session.activeSession?.id ?? 'draft'}
             isVisible={chatSurfaceVisible}
+            key={session.activeSession?.id ?? 'draft'}
             messages={chat.messages}
             streamingContent={chat.streamingContent}
             toolBlocks={chat.toolBlocks}

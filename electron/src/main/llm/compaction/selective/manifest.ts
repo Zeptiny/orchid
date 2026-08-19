@@ -92,7 +92,7 @@ function toManifestKind(msg: Message): ManifestKind {
 }
 
 function previewFromMessage(msg: Message): string {
-  let raw = '';
+  let raw: string;
   if (msg.tool_calls && msg.tool_calls.length > 0) {
     const calls = (msg.tool_calls as readonly ToolCall[])
       .map((tc) => `${tc.function.name}(${truncateArgs(tc.function.arguments)}) [id=${tc.id}]`)

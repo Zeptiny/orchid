@@ -744,7 +744,9 @@ export async function startChatTurn(
                 console.debug('[compaction] resume after unapplied compaction failed:', e);
               }
             }
-          } catch {}
+          } catch {
+            // resume-after-compaction is best-effort; fall through to finalize
+          }
           finalizeTurn({ response: context.response, usage: context.usage ?? null, interrupted: false, sendDone: true });
           queueMicrotask(() => disposeActiveAgent(sessionId, activeAgent));
         })();

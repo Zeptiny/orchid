@@ -56,7 +56,7 @@ export function createLlmSelectiveCaller(params: {
    */
   onTextDelta?: (accumulatedText: string) => void;
 }): SelectiveCaller {
-  return async ({ manifest, attempt, previousErrors }): Promise<SelectiveOp[]> => {
+  return async ({ manifest, attempt: _attempt, previousErrors }): Promise<SelectiveOp[]> => {
     const { config, scope, fallbackSelection, runtime, agents, subagentId, accounting, abortSignal, onTextDelta } = params;
     const agentName = scope === 'main' ? 'compactor-selective' : 'compactor-subagent-selective';
     let agent: Agent | undefined;
@@ -401,7 +401,6 @@ export async function runSelectiveCompaction(
   const openToolCallIds = trailingOpenToolCallIds(messages);
   const maxRounds = Math.max(1, Math.min(input.maxCorrectionRounds ?? 3, 5));
   let previousErrors: string[] | undefined = undefined;
-  let lastCorrectedOps: SelectiveOp[] | undefined = undefined;
   let attempts = 0;
 
   for (let attempt = 0; attempt < maxRounds; attempt += 1) {
@@ -427,7 +426,6 @@ export async function runSelectiveCompaction(
     }
 
     const validation = validateSelectiveOps(ops, manifest, messages);
-    lastCorrectedOps = validation.correctedOps;
 
     if (input.onCorrection && (validation.errors.length > 0 || validation.mechanicalCorrections.length > 0)) {
       input.onCorrection(attempt, validation.errors, validation.mechanicalCorrections);
