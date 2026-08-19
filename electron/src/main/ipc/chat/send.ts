@@ -47,6 +47,7 @@ import { acquireProjectMCPManager, releaseProjectMCPManager } from '../../mcp/pr
 import { IPC_CHANNELS } from '../../../shared/types/ipc';
 import { ChainStatus } from '../../../shared/types/chain';
 import { MessageType, type Message, type Usage } from '../../../shared/types/message';
+import type { CanonicalToolResult } from '../../../shared/types/tool-result';
 import { getChatHistory, setChatHistory } from '../chat-history';
 import { chatSendSchema } from '../payload-schemas';
 import { clearNextRequestStop, clearCompactionPause, shouldPauseForCompaction } from '../next-request-stop';
@@ -94,6 +95,17 @@ import {
 } from './compaction';
 
 export type ChatSendPayload = z.infer<typeof chatSendSchema>;
+
+/** Terminal compaction-widget tool result — typed for snapshot + event use. */
+function makeCompactionCompleteResult(value: string): CanonicalToolResult {
+  return {
+    schemaVersion: 1,
+    family: 'generic',
+    status: 'complete',
+    completeness: 'complete',
+    data: { value, origin: { kind: 'built-in', name: 'compaction' } },
+  };
+}
 
 export async function startChatTurn(
   webContents: WebContents,
@@ -223,7 +235,6 @@ export async function startChatTurn(
 
   const agents = [...runtime.agents.values()];
   const userMessage = makeUserMessage(message);
-  const priorMessageCount = existingMessages.length;
   let messages: Message[] = [...existingMessages, userMessage];
   const thinkingReplay: ThinkingReplayContext = {
     policy: thinkingPolicy ?? DEFAULT_THINKING_POLICY,
@@ -243,6 +254,21 @@ export async function startChatTurn(
   let turnId: string = crypto.randomUUID();
   let chainId: string | null = null;
 
+  // Finalize the chain/turn identity BEFORE any compaction attempt runs, so
+  // every compactor LLM attempt is attributed to the active chain and turn
+  // rather than to a pre-chain placeholder id.
+  try {
+    const chain = sessionManager.startChain({
+      selection: turnSelection, modelLabel: turnSelection.modelId, agentName: agent.name,
+      agentType: agent.type, agentTier: agent.tier, messages: [userMessage],
+    }, sessionId);
+    chainId = chain?.id ?? null;
+    turnId = chain?.id ?? turnId;
+    emitSessionUpdated(webContents, sessionId);
+  } catch (error) {
+    console.debug('startChain failed (non-fatal):', error);
+  }
+
   {
     await hydrateTriggerCalibration(sessionId);
     const pendingApplied = await applyPendingCompactionIfAny(sessionId, messages, runtime);
@@ -256,26 +282,11 @@ export async function startChatTurn(
         setChatHistory(sessionId, [...updated]);
       }
       messages = updated;
-      const userIndex = updated.findIndex((m) => m.id === userMessage.id);
-      existingMessages = userIndex >= 0 ? updated.slice(0, userIndex) : updated.slice(0, -1);
     }
     const syncResult = await tryCompactSynchronously(sessionId, messages, runtime, turnSelection, contextTokens, accountingStore!, chainId, turnId);
     if (syncResult.didApply && syncResult.updatedMessages) {
       messages = syncResult.updatedMessages;
-      existingMessages = messages.slice(0, messages.length - 1);
     }
-  }
-
-  try {
-    const chain = sessionManager.startChain({
-      selection: turnSelection, modelLabel: turnSelection.modelId, agentName: agent.name,
-      agentType: agent.type, agentTier: agent.tier, messages: [userMessage],
-    }, sessionId);
-    chainId = chain?.id ?? null;
-    turnId = chain?.id ?? turnId;
-    emitSessionUpdated(webContents, sessionId);
-  } catch (error) {
-    console.debug('startChain failed (non-fatal):', error);
   }
 
   const abortController = new AbortController();
@@ -676,15 +687,9 @@ export async function startChatTurn(
               try {
                 actor.send({ type: 'USER_INPUT', message });
                 publishSessionActivity(sessionId, { cwd: turnCtx.cwd, state: 'working', phase: 'agent', detail: 'Resuming after compaction', canCancel: true });
-                const compactionCompleteResult = {
-                  schemaVersion: 1 as const,
-                  family: 'generic' as const,
-                  status: 'complete' as const,
-                  completeness: 'complete' as const,
-                  data: { value: 'Context compacted — resuming', origin: { kind: 'built-in' as const, name: 'compaction' } },
-                };
-                updateToolSnapshot(activeAgent, compactionToolId, 'compaction', { status: 'complete', args: '', content: 'Context compacted — resuming', toolResult: compactionCompleteResult as unknown as typeof activeAgent.toolCalls extends Map<string, infer V> ? V extends { toolResult: infer R } ? R : never : never, finishedAt: new Date().toISOString() });
-                sendTurnEvent(webContents, activeAgent, IPC_CHANNELS.CHAT_TOOL_CALL_UPDATE, { type: 'tool_call_update', toolCallId: compactionToolId, toolName: 'compaction', status: 'complete', args: '', content: 'Context compacted — resuming', toolResult: compactionCompleteResult as unknown as Record<string, unknown> });
+                const compactionCompleteResult = makeCompactionCompleteResult('Context compacted — resuming');
+                updateToolSnapshot(activeAgent, compactionToolId, 'compaction', { status: 'complete', args: '', content: 'Context compacted — resuming', toolResult: compactionCompleteResult, finishedAt: new Date().toISOString() });
+                sendTurnEvent(webContents, activeAgent, IPC_CHANNELS.CHAT_TOOL_CALL_UPDATE, { type: 'tool_call_update', toolCallId: compactionToolId, toolName: 'compaction', status: 'complete', args: '', content: 'Context compacted — resuming', toolResult: compactionCompleteResult });
                 // Terminal compaction widgets are display-only; drop the entry
                 // so a later compaction in the same turn cannot inherit its id.
                 activeAgent.toolCalls.delete(compactionToolId);
@@ -697,15 +702,9 @@ export async function startChatTurn(
             console.debug('[compaction] mid-turn pause handling failed:', e);
           }
           {
-            const compactionCompleteResult = {
-              schemaVersion: 1 as const,
-              family: 'generic' as const,
-              status: 'complete' as const,
-              completeness: 'complete' as const,
-              data: { value: '', origin: { kind: 'built-in' as const, name: 'compaction' } },
-            };
-            updateToolSnapshot(activeAgent, compactionToolId, 'compaction', { status: 'complete', args: '', content: '', toolResult: compactionCompleteResult as unknown as never, finishedAt: new Date().toISOString() });
-            sendTurnEvent(webContents, activeAgent, IPC_CHANNELS.CHAT_TOOL_CALL_UPDATE, { type: 'tool_call_update', toolCallId: compactionToolId, toolName: 'compaction', status: 'complete', args: '', content: '', toolResult: compactionCompleteResult as unknown as Record<string, unknown> });
+            const compactionCompleteResult = makeCompactionCompleteResult('');
+            updateToolSnapshot(activeAgent, compactionToolId, 'compaction', { status: 'complete', args: '', content: '', toolResult: compactionCompleteResult, finishedAt: new Date().toISOString() });
+            sendTurnEvent(webContents, activeAgent, IPC_CHANNELS.CHAT_TOOL_CALL_UPDATE, { type: 'tool_call_update', toolCallId: compactionToolId, toolName: 'compaction', status: 'complete', args: '', content: '', toolResult: compactionCompleteResult });
             activeAgent.toolCalls.delete(compactionToolId);
           }
           clearCompactionPause(sessionId);

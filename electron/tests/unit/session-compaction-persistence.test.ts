@@ -723,14 +723,13 @@ describe('superseded chain reconcile (split-tail retirement)', () => {
 
   it('never deletes the chain referenced by active_chain_id at load', () => {
     const sessionId = 'cafe0104-0104-4104-8104-000000000104';
-    const session = seedSplitTailSession(sessionId, ChainStatus.COMPLETED);
+    seedSplitTailSession(sessionId, ChainStatus.COMPLETED);
     const db = openSqliteDb(storageOpts.dbPath!);
     try {
       db.prepare('UPDATE sessions SET active_chain_id = ? WHERE id = ?').run('chain-tail', sessionId);
     } finally {
       db.close();
     }
-    void session;
 
     const view = loadSessionView(sessionId, storageOpts)!;
 

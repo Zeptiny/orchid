@@ -87,8 +87,13 @@ export const COMMANDS: (Command & { execute: (ctx: CommandContext) => Promise<vo
         return;
       }
       if (trimmed === currentName) return;
-      await ctx.onRenameSession(sessionId, trimmed);
-      ctx.onNotify(`Session renamed to “${trimmed}”.`, 'info');
+      try {
+        await ctx.onRenameSession(sessionId, trimmed);
+        ctx.onNotify(`Session renamed to “${trimmed}”.`, 'info');
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        ctx.onNotify(`Rename failed: ${message}`, 'error');
+      }
     },
   },
   {

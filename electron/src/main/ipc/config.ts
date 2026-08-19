@@ -178,7 +178,7 @@ export function registerConfigIPC(): void {
         filteredUpdates,
       );
       const filtered = Object.fromEntries(
-        Object.entries(merged).filter(([k]) => PROJECT_CONFIG_ALLOWED_KEYS.has(k) || k === 'rag' || k === 'compaction'),
+        Object.entries(merged).filter(([k]) => PROJECT_CONFIG_ALLOWED_KEYS.has(k)),
       );
       const validated = configSchema.safeParse(filtered);
       if (!validated.success) {

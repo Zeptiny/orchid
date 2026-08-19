@@ -658,25 +658,27 @@ vi.mock('../../src/main/llm/orchestrator', () => ({
   streamChat: mocks.streamChat,
 }));
 
-vi.mock('../../src/main/llm/compaction/summarize', () => ({
-  summarizeCompactableRange: mocks.summarizeCompactableRange,
-  // run.ts's selective caller resolves its model through this helper; mirror
-  // the real fallback chain (scope model → tier selection → turn selection).
-  resolveCompactorModelSelection: (
-    config: { compaction?: { main?: { model?: unknown }; subagents?: { model?: unknown } }; tier_models?: Record<string, unknown>; default_model?: unknown },
-    agent: { tier: string },
-    scope: 'main' | 'subagents',
-    fallbackSelection: unknown,
-  ) => {
-    const scopeConfig = scope === 'main' ? config.compaction?.main : config.compaction?.subagents;
-    if (scopeConfig?.model) return scopeConfig.model;
-    return config.tier_models?.[agent.tier] ?? config.default_model ?? fallbackSelection ?? null;
-  },
-}));
+vi.mock('../../src/main/llm/compaction/summarize', async (importOriginal) => {
+  // Partial-module mock: keep every real export (resolveCompactorModelSelection
+  // uses the real fallback chain via the mocked config/loader) and override
+  // only the summarizer call itself.
+  const actual = await importOriginal<typeof import('../../src/main/llm/compaction/summarize')>();
+  return {
+    ...actual,
+    summarizeCompactableRange: mocks.summarizeCompactableRange,
+  };
+});
 
-vi.mock('../../src/main/session/storage', () => ({
-  saveSession: mocks.saveSession,
-}));
+vi.mock('../../src/main/session/storage', async (importOriginal) => {
+  // Partial-module mock: override only saveSession; every other storage
+  // export (loadSession, applyCompactionPersistence, …) stays real so
+  // session/manager dependencies resolve their actual implementations.
+  const actual = await importOriginal<typeof import('../../src/main/session/storage')>();
+  return {
+    ...actual,
+    saveSession: mocks.saveSession,
+  };
+});
 
 vi.mock('../../src/main/llm/middleware', () => ({
   createMiddlewareStack: mocks.createMiddlewareStack,

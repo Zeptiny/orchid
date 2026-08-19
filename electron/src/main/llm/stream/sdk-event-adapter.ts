@@ -89,11 +89,14 @@ function withCompactedMarkers(
   let patched: (ModelMessage & { compacted?: unknown })[] | null = null;
   const limit = Math.min(requestMessages.length, coreMessages.length);
   for (let index = 0; index < limit; index += 1) {
-    const marker = coreMessages[index]?.compacted;
-    if (!marker) continue;
+    const core = coreMessages[index];
     const target = requestMessages[index] as (ModelMessage & { compacted?: unknown }) | undefined;
-    if (!target || target.role !== coreMessages[index]!.role) break;
-    if (target.compacted) continue;
+    // Roles must line up before any marker is considered — including for
+    // unmarked entries — so a divergence always stops the merge and later
+    // markers can never be copied onto mismatched request messages.
+    if (!target || target.role !== core?.role) break;
+    const marker = core?.compacted;
+    if (!marker || target.compacted) continue;
     if (!patched) patched = [...requestMessages] as (ModelMessage & { compacted?: unknown })[];
     patched[index] = { ...target, compacted: marker };
   }

@@ -137,11 +137,12 @@ describe('shouldTriggerCompaction — floor, threshold, hysteresis', () => {
   });
 
   it('accrual alternative re-arms even while hysteresis armed', () => {
-    // After compaction at 8000, now 12k (4000 accrued) => accrual re-arm
+    // After compaction at 8000, now 12k of a 15k window (4000 accrued, still
+    // above the 0.8 threshold but below the window) => accrual re-arm
     expect(
       shouldTriggerCompaction({
         inputTokens: 12_000,
-        contextTokens: 10_000,
+        contextTokens: 15_000,
         threshold: 0.8,
         hysteresisArmed: true,
         compactableTokens: 5000,

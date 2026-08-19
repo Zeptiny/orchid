@@ -67,9 +67,9 @@ export const askQuestionCancelSchema = z.object({
 const KNOWN_CONFIG_KEYS = new Set(Object.keys(configSchema.shape));
 
 const compactionPartialSchema = z.object({
-  main: compactionScopeSchema.partial().optional(),
-  subagents: compactionSubagentsScopeSchema.partial().optional(),
-}).partial();
+  main: compactionScopeSchema.partial().strict().optional(),
+  subagents: compactionSubagentsScopeSchema.partial().strict().optional(),
+}).partial().strict();
 
 /**
  * Accept partial config updates, including `null` tombstones for deleting

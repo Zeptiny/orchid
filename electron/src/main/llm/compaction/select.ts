@@ -435,20 +435,28 @@ export function selectCut(
     };
   }
 
-  // Token-walk the newest suffix: accumulate per-message estimates from the
-  // end until the preserve budget is exceeded. The cut lands at the largest
-  // suffix that fits, regardless of chain boundaries — a single oversized
-  // turn no longer forces an empty preserved window.
+  // Token-walk the newest suffix: find the largest suffix whose SLICE estimate
+  // fits the preserve budget — the estimator receives the whole slice per its
+  // contract, never one message at a time (per-call minimums and ceilings must
+  // apply once per slice, not per message). Slice estimates are monotone in
+  // suffix length, so a binary search over the cut index needs only O(log n)
+  // estimator invocations even for estimators with per-call overhead. The cut
+  // lands at the largest suffix that fits, regardless of chain boundaries — a
+  // single oversized turn no longer forces an empty preserved window.
   const floorCut = trailingGroupFloor(completedIntervals, openGroupStart, n);
-  let tokenCut = 0;
-  let acc = 0;
-  for (let i = n - 1; i >= 0; i -= 1) {
-    acc += estimator([messages[i]!]);
-    if (acc > preserveBudget) {
-      tokenCut = i + 1;
-      break;
+  let tokenCut: number;
+  {
+    let lo = 0;
+    let hi = n; // the empty suffix always fits
+    while (lo < hi) {
+      const mid = Math.floor((lo + hi) / 2);
+      if (estimator(messages.slice(mid)) > preserveBudget) {
+        lo = mid + 1;
+      } else {
+        hi = mid;
+      }
     }
-    tokenCut = i;
+    tokenCut = hi;
   }
 
   // Floor: the trailing open (or most recent completed) tool group is always

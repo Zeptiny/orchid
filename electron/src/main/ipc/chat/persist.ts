@@ -290,12 +290,7 @@ export interface CompactionDurablePersistInput {
 export function persistCompactionDurable(
   input: CompactionDurablePersistInput,
 ): CompactionPersistenceResult {
-  const manager = getSessionManager() as {
-    applyCompaction?: (sessionId: string, payload: unknown) => CompactionPersistenceResult;
-  };
-  if (typeof manager.applyCompaction !== 'function') {
-    throw new Error('persistCompactionDurable: session manager has no durable compaction path');
-  }
+  const manager = getSessionManager();
   return manager.applyCompaction(input.sessionId, {
     updatedAt: input.updatedAt ?? new Date().toISOString(),
     flaggedMessageIds: input.flaggedMessageIds,
@@ -510,7 +505,7 @@ export function persistCompactionBetweenTurns(
     publishCompactedSession(manager, sessionId, existing, cacheChains, updatedAt);
     return true;
   } catch (err) {
-    console.debug('Failed to persist compaction between turns (non-fatal):', err);
+    console.error('Failed to persist compaction between turns (non-fatal):', err);
     return false;
   }
 }
@@ -531,12 +526,11 @@ export function checkpointCompactionMidTurn(
   agent: ActiveAgent,
   checkpointMessages: readonly Message[],
 ): void {
-  // Replace the agent's turnMessages tail with the compacted checkpoint slice.
-  // turnMessages holds tool/assistant messages for this turn only; priorMessageCount
-  // indexes into agent.messages. For compaction the prior history flags live in
-  // the durable chains, so here we only need to mirror the active chain's new
-  // content for crash recovery.
-  agent.turnMessages = [...checkpointMessages.slice(agent.priorMessageCount)];
+  // Replace the agent's turnMessages with the compacted checkpoint slice.
+  // turnMessages and checkpointMessages are both active-chain message lists —
+  // the same index space — so the slice is assigned wholesale. (Do NOT slice by
+  // priorMessageCount: that counter indexes agent.messages, a different array.)
+  agent.turnMessages = [...checkpointMessages];
   const sessionId = agent.sessionId;
   scheduleCheckpoint(sessionId, [...checkpointMessages], (active) => active === agent);
 }

@@ -238,6 +238,33 @@ describe('U13 validator', () => {
     expect(res.valid).toBe(false);
     expect(res.errors.some(e => e.includes('split'))).toBe(true);
   });
+
+  it('same manifest id in multiple ops -> exact-once coverage error', () => {
+    const msgs = [makeUser('u1','q'), makeAssistant('a1','answer'), makeAssistant('a2','more')];
+    const manifest = buildManifest(msgs, { start: 0, end: 3 });
+    const ops: SelectiveOp[] = [
+      { type: 'keep', id: 'u1' },
+      { type: 'keep', id: 'a1' },
+      { type: 'summarize', ids: ['a1', 'a2'], text: 'summary' },
+    ];
+    const res = validateSelectiveOps(ops, manifest, msgs);
+    expect(res.valid).toBe(false);
+    expect(res.errors.some(e => e.includes('a1') && e.includes('exact-once'))).toBe(true);
+    // First occurrence wins in the corrected list so mechanical steps stay sane.
+    expect(res.correctedOps.filter((o) => o.type === 'keep' && o.id === 'a1')).toHaveLength(1);
+  });
+
+  it('drop on a non-thinking message -> rejected (R24)', () => {
+    const msgs = [makeUser('u1','q'), makeAssistant('a1','answer')];
+    const manifest = buildManifest(msgs, { start: 0, end: 2 });
+    const ops: SelectiveOp[] = [
+      { type: 'keep', id: 'u1' },
+      { type: 'drop', id: 'a1' },
+    ];
+    const res = validateSelectiveOps(ops, manifest, msgs);
+    expect(res.valid).toBe(false);
+    expect(res.errors.some(e => e.includes('a1') && e.includes('drop on non-thinking'))).toBe(true);
+  });
 });
 
 // ── U14 materialization and loop ────────────────────────────────────────────

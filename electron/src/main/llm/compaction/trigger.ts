@@ -362,8 +362,12 @@ export function evaluateTriggerWithReclaim(params: {
   if (!Number.isFinite(contextTokens) || contextTokens <= 0 || ratio + 1e-9 < threshold) {
     return { shouldPrepare: false, shouldApply: false, reason: 'below-threshold' };
   }
-  const isOverWindow = effectiveInput >= contextTokens || inputTokens >= contextTokens;
-  if (isOverWindow) {
+
+  // Shared reclaim evaluation + decision shaping (R25): computes the
+  // post-reclaim estimate (reported and advisory-estimate variants) and emits
+  // the reclaim-short-circuit or prepare decision. Used by both the
+  // over-window fast path and the below-window path after hysteresis.
+  const reclaimDecision = (): TriggerDecision => {
     const postReclaim = estimatePostReclaimInputTokens(inputTokens, messages, flaggedIds);
     const belowRearm = isBelowRearmLine(postReclaim, contextTokens, threshold, hysteresisDelta);
     const estimatedPostReclaim = flaggedIds.length > 0 && typeof params.estimatedInputTokens === 'number'
@@ -373,6 +377,7 @@ export function evaluateTriggerWithReclaim(params: {
       ? isBelowRearmLine(estimatedPostReclaim, contextTokens, threshold, hysteresisDelta)
       : belowRearm;
     const reclaimedForDecision = flaggedIds.length > 0 ? flaggedIds.slice() : undefined;
+    // If reclaim alone drops usage below re-arm, do reclaim-only apply (no summarizer call)
     if (flaggedIds.length > 0 && (belowRearm || estimatedBelowRearm)) {
       return {
         shouldPrepare: false,
@@ -383,6 +388,7 @@ export function evaluateTriggerWithReclaim(params: {
         estimatedInputTokens: effectiveInput,
       };
     }
+    // Otherwise, start prepare (summarizer) — apply deferred to boundary
     return {
       shouldPrepare: true,
       shouldApply: false,
@@ -391,6 +397,11 @@ export function evaluateTriggerWithReclaim(params: {
       ...(reclaimedForDecision ? { flaggedIds: [...reclaimedForDecision] } : {}),
       estimatedInputTokens: effectiveInput,
     };
+  };
+
+  const isOverWindow = effectiveInput >= contextTokens || inputTokens >= contextTokens;
+  if (isOverWindow) {
+    return reclaimDecision();
   }
   if (params.state?.hysteresisArmed) {
     const baseline = (typeof params.state.postCompactionInputTokens === 'number' && Number.isFinite(params.state.postCompactionInputTokens)
@@ -404,42 +415,7 @@ export function evaluateTriggerWithReclaim(params: {
     }
   }
 
-  // Reclaim short-circuit (R25): if post-reclaim falls below re-arm line, skip summarizer
-  // isBelowRearmLine guards tiny epsilon; use reclaim estimate.
-  const postReclaim = estimatePostReclaimInputTokens(inputTokens, messages, flaggedIds);
-  // Also compute direct re-arm check for the post-reclaim value
-  const belowRearm = isBelowRearmLine(postReclaim, contextTokens, threshold, hysteresisDelta);
-  // For advisory estimate path, check estimate's post as well if estimate differs
-  const estimatedPostReclaim = flaggedIds.length > 0 && typeof params.estimatedInputTokens === 'number'
-    ? Math.max(0, params.estimatedInputTokens - estimateReclaimedTokens(inputTokens, messages, flaggedIds))
-    : postReclaim;
-  const estimatedBelowRearm = typeof params.estimatedInputTokens === 'number'
-    ? isBelowRearmLine(estimatedPostReclaim, contextTokens, threshold, hysteresisDelta)
-    : belowRearm;
-
-  const reclaimedForDecision = flaggedIds.length > 0 ? flaggedIds.slice() : undefined;
-
-  // If reclaim alone drops usage below re-arm, do reclaim-only apply (no summarizer call)
-  if (flaggedIds.length > 0 && (belowRearm || estimatedBelowRearm)) {
-    return {
-      shouldPrepare: false,
-      shouldApply: true,
-      reason: 'reclaim-short-circuit',
-      ...(compactableRange ? { compactableRange } : {}),
-      ...(reclaimedForDecision ? { flaggedIds: [...reclaimedForDecision] } : {}),
-      estimatedInputTokens: effectiveInput,
-    };
-  }
-
-  // Otherwise, start prepare (summarizer) — apply deferred to boundary
-  return {
-    shouldPrepare: true,
-    shouldApply: false,
-    reason: 'prepare',
-    ...(compactableRange ? { compactableRange } : {}),
-    ...(reclaimedForDecision ? { flaggedIds: [...reclaimedForDecision] } : {}),
-    estimatedInputTokens: effectiveInput,
-  };
+  return reclaimDecision();
 }
 
 // ── Stateful trigger engine class ───────────────────────────────────────────

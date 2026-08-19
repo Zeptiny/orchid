@@ -129,13 +129,15 @@ function completeCompactionWidget(sessionId: string): void {
       if (wc) sendTurnEvent(wc, active, IPC_CHANNELS.CHAT_TOOL_CALL_UPDATE, { type: 'tool_call_update', toolCallId: compactionToolId, toolName: 'compaction', status: 'complete', args: '', content: '', toolResult: { schemaVersion: 1, family: 'generic', status: 'complete', completeness: 'complete', data: { value: '', origin: { kind: 'built-in', name: 'compaction' } } } as unknown as Record<string, unknown> });
     }
     clearCompactionPause(sessionId);
-  } catch {} finally {
+  } catch {
+    // widget completion is best-effort; the id must still be released below
+  } finally {
     releaseCompactionWidgetToolId(sessionId);
   }
 }
 
 /** Minimum interval between compaction live-progress emissions (IPC flood guard). */
-const COMPACTION_STREAM_EMIT_INTERVAL_MS = 100;
+export const COMPACTION_STREAM_EMIT_INTERVAL_MS = 100;
 
 /**
  * Throttled live-progress emitter for the compaction widget: forwards the
@@ -314,6 +316,29 @@ function compactableTokenEstimate(messages: readonly Message[], range: { start: 
   let chars = 0;
   for (let i = range.start; i < range.end; i += 1) chars += estimateMessageChars(messages[i]!);
   return Math.ceil(chars * tokensPerChar);
+}
+
+/**
+ * Calibrated slice estimator shared by the send-time and usage-event paths.
+ * Counts the seven message fields directly — empty messages contribute zero
+ * characters — then applies the slice-level minimum of one token per message.
+ * Deliberately NOT estimateMessageChars: its per-message floor would
+ * overestimate slices made of empty messages.
+ */
+function createCalibratedEstimator(tokensPerChar: number): (slice: readonly Message[]) => number {
+  return (slice: readonly Message[]): number => {
+    let chars = 0;
+    for (const m of slice) {
+      if (m.content) chars += m.content.length;
+      if (m.thinking) chars += m.thinking.length;
+      if (m.tool_calls) chars += JSON.stringify(m.tool_calls).length;
+      if (m.tool_result) chars += JSON.stringify(m.tool_result).length;
+      if (m.tool_call_id) chars += m.tool_call_id.length;
+      if (m.name) chars += m.name.length;
+      if ((m as unknown as { compacted?: unknown }).compacted) chars += JSON.stringify((m as unknown as { compacted: unknown }).compacted).length;
+    }
+    return Math.max(slice.length, Math.ceil(chars * tokensPerChar));
+  };
 }
 
 function isPendingCutStillValid(pending: { cut: CutResult; flaggedIds: string[]; expectedIds?: string[] }, messages: readonly Message[]): boolean {
@@ -754,19 +779,7 @@ export async function tryCompactSynchronously(
         return { didApply: false };
       }
     }
-    const calibratedEstimator = (slice: readonly Message[]): number => {
-      let chars = 0;
-      for (const m of slice) {
-        if (m.content) chars += m.content.length;
-        if (m.thinking) chars += m.thinking.length;
-        if (m.tool_calls) chars += JSON.stringify(m.tool_calls).length;
-        if (m.tool_result) chars += JSON.stringify(m.tool_result).length;
-        if (m.tool_call_id) chars += m.tool_call_id.length;
-        if (m.name) chars += m.name.length;
-        if ((m as unknown as { compacted?: unknown }).compacted) chars += JSON.stringify((m as unknown as { compacted: unknown }).compacted).length;
-      }
-      return Math.max(slice.length, Math.ceil(chars * tokensPerChar));
-    };
+    const calibratedEstimator = createCalibratedEstimator(tokensPerChar);
     const cut = selectCut(messages, {
       preserveTokens: Math.floor(resolvePreservePercent(cfg) * windowTokens),
       tokenEstimator: calibratedEstimator,
@@ -984,7 +997,9 @@ export async function tryCompactSynchronously(
     }
   } catch (err) {
     console.debug('[compaction] synchronous compact failed (non-fatal):', err);
-    try { getCompactionTrigger(sessionId).abortPrepare(); } catch {}
+    try { getCompactionTrigger(sessionId).abortPrepare(); } catch {
+      // abort cleanup is best-effort after a failed compact
+    }
   }
   return { didApply: false };
 }
@@ -1039,27 +1054,12 @@ export function handleUsageCompaction(
     }
   }
   try {
-    const calibratedEstimator2 = (slice: readonly Message[]): number => {
-      let chars = 0;
-      for (const m of slice) {
-        if (m.content) chars += m.content.length;
-        if (m.thinking) chars += m.thinking.length;
-        if (m.tool_calls) chars += JSON.stringify(m.tool_calls).length;
-        if (m.tool_result) chars += JSON.stringify(m.tool_result).length;
-        if (m.tool_call_id) chars += m.tool_call_id.length;
-        if (m.name) chars += m.name.length;
-        if ((m as unknown as { compacted?: unknown }).compacted) chars += JSON.stringify((m as unknown as { compacted: unknown }).compacted).length;
-      }
-      return Math.max(slice.length, Math.ceil(chars * calibratedRatio));
-    };
+    const calibratedEstimator2 = createCalibratedEstimator(calibratedRatio);
     const cut = selectCut(history, {
       preserveTokens: Math.floor(resolvePreservePercent(cfg) * effectiveContextTokens),
       tokenEstimator: calibratedEstimator2,
     });
     if (cut.compactableRange.end <= cut.compactableRange.start) return;
-    if (tokensPerChar == null || !Number.isFinite(tokensPerChar) || tokensPerChar <= 0) {
-      tokensPerChar = 0.25;
-    }
     const compactableTokens = compactableTokenEstimate(history, cut.compactableRange, tokensPerChar);
     if (compactableTokens < cfg.min_compactable_tokens) return;
     const reclaim = mechanicalReclaim(history, cut.compactableRange);
@@ -1089,7 +1089,9 @@ export function handleUsageCompaction(
           const wc = webContentsForWindowId(active.windowId);
           if (wc) sendTurnEvent(wc, active, IPC_CHANNELS.CHAT_TOOL_CALL_UPDATE, { type: 'tool_call_update', toolCallId: compactionToolId, toolName: 'compaction', status: 'running', args: JSON.stringify({ phase: 'reclaiming', mode: cfg.mode }) });
         }
-      } catch {}
+      } catch {
+        // widget snapshot updates are best-effort
+      }
       if (!shouldPauseForCompaction(sessionId)) {
         requestCompactionPause(sessionId);
         publishSessionActivity(sessionId, { cwd: runtime.projectDir ?? '', state: 'working', phase: 'agent', detail: 'Compacting context — reclaiming duplicates…', canCancel: true });
@@ -1128,7 +1130,9 @@ export function handleUsageCompaction(
               updateToolSnapshot(active, compactionToolId, 'compaction', { status: 'complete', args: '', content: '', toolResult: result as unknown as never, finishedAt: new Date().toISOString() });
               if (wc) sendTurnEvent(wc, active, IPC_CHANNELS.CHAT_TOOL_CALL_UPDATE, { type: 'tool_call_update', toolCallId: compactionToolId, toolName: 'compaction', status: 'complete', args: '', content: '', toolResult: result as unknown as Record<string, unknown> });
             }
-          } catch {}
+          } catch {
+            // widget completion is best-effort on prepare failure
+          }
         });
         try {
           const active = activeAgents.get(sessionId);
@@ -1139,7 +1143,9 @@ export function handleUsageCompaction(
             const wc = webContentsForWindowId(active.windowId);
             if (wc) sendTurnEvent(wc, active, IPC_CHANNELS.CHAT_TOOL_CALL_UPDATE, { type: 'tool_call_update', toolCallId: compactionToolId, toolName: 'compaction', status: 'running', args: JSON.stringify({ phase: 'summarizing', mode: 'selective' }) });
           }
-        } catch {}
+        } catch {
+          // widget snapshot updates are best-effort
+        }
         if (!shouldPauseForCompaction(sessionId)) {
           requestCompactionPause(sessionId);
           publishSessionActivity(sessionId, { cwd: runtime.projectDir ?? '', state: 'working', phase: 'agent', detail: 'Compacting context — summarizing history…', canCancel: true });
@@ -1173,7 +1179,9 @@ export function handleUsageCompaction(
             updateToolSnapshot(active, compactionToolId, 'compaction', { status: 'complete', args: '', content: '', toolResult: result as unknown as never, finishedAt: new Date().toISOString() });
             if (wc) sendTurnEvent(wc, active, IPC_CHANNELS.CHAT_TOOL_CALL_UPDATE, { type: 'tool_call_update', toolCallId: compactionToolId, toolName: 'compaction', status: 'complete', args: '', content: '', toolResult: result as unknown as Record<string, unknown> });
           }
-        } catch {}
+        } catch {
+          // widget completion is best-effort on prepare failure
+        }
       });
       try {
         const active = activeAgents.get(sessionId);
@@ -1184,7 +1192,9 @@ export function handleUsageCompaction(
           const wc = webContentsForWindowId(active.windowId);
           if (wc) sendTurnEvent(wc, active, IPC_CHANNELS.CHAT_TOOL_CALL_UPDATE, { type: 'tool_call_update', toolCallId: compactionToolId, toolName: 'compaction', status: 'running', args: JSON.stringify({ phase: 'summarizing', mode: 'simple' }) });
         }
-      } catch {}
+      } catch {
+        // widget snapshot updates are best-effort
+      }
       if (!shouldPauseForCompaction(sessionId)) {
         requestCompactionPause(sessionId);
         publishSessionActivity(sessionId, { cwd: runtime.projectDir ?? '', state: 'working', phase: 'agent', detail: 'Compacting context — summarizing history…', canCancel: true });

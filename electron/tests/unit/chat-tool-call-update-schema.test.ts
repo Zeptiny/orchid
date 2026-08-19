@@ -77,4 +77,16 @@ describe('chatToolCallUpdateEventSchema', () => {
     });
     expect(parsed.success).toBe(false);
   });
+
+  it('accepts a terminal update whose outer status and toolResult.status both read complete', () => {
+    const parsed = chatToolCallUpdateEventSchema.safeParse({
+      ...identity,
+      type: 'tool_call_update',
+      toolCallId: 'tool-1',
+      status: 'complete',
+      content: 'ok',
+      toolResult: terminalResult,
+    });
+    expect(parsed.success).toBe(true);
+  });
 });

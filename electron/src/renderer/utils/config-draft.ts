@@ -230,7 +230,7 @@ function applyRecordMap<V>(
 export function parseConfigNumber(
   value: string,
   min: number,
-  options?: { integer?: boolean },
+  options?: { integer?: boolean; max?: number },
 ): number | null {
   const trimmed = value.trim();
   if (trimmed === '') return null;
@@ -239,9 +239,11 @@ export function parseConfigNumber(
     if (!/^-?\d+$/.test(trimmed)) return null;
     const num = Number(trimmed);
     if (!Number.isInteger(num) || num < min) return null;
+    if (options.max !== undefined && num > options.max) return null;
     return num;
   }
   const num = Number.parseFloat(trimmed);
   if (Number.isNaN(num) || num < min) return null;
+  if (options?.max !== undefined && num > options.max) return null;
   return num;
 }

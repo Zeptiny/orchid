@@ -175,18 +175,6 @@ export function validateSelectiveOps(
       mechanicalCorrections.push(`keep_range on user ${op.id} converted to keep`);
       continue;
     }
-    // Fallback check via message role if entry missing but message is user
-    if (msg && msg.role === MessageRole.USER) {
-      // Already covered by entry, but ensure consistency
-      if (entry && entry.role !== MessageRole.USER && entry.kind !== 'user') {
-        if (!errors.some((e) => e.includes(op.id) && e.includes('keep_range on user'))) {
-          errors.push(`keep_range on user message ${op.id} is not allowed (R9: user kept verbatim)`);
-          opsAfterClamp.push({ type: 'keep', id: op.id });
-          mechanicalCorrections.push(`keep_range on user ${op.id} converted to keep`);
-          continue;
-        }
-      }
-    }
     if (changed) {
       opsAfterClamp.push({ type: 'keep_range', id: op.id, startLine: start, endLine: end });
     } else {
@@ -230,13 +218,17 @@ export function validateSelectiveOps(
   }
 
   // ── Step D: deduplicate ids across ops & handle duplicates ────────────────
-  // Ensure each manifest id appears in at most one op
+  // Ensure each manifest id appears in at most one op. Cross-op duplicates are
+  // a SEMANTIC error (exact-once coverage): two different treatments for one
+  // message are ambiguous, so the op list is rejected for re-prompting rather
+  // than silently resolved first-wins. The corrected list still keeps the
+  // first occurrence so downstream mechanical steps stay well-formed.
   const seen = new Set<string>();
   const opsAfterDedup: SelectiveOp[] = [];
   for (const op of opsAfterClamp) {
     if (op.type === 'keep' || op.type === 'keep_range' || op.type === 'drop') {
       if (seen.has(op.id)) {
-        mechanicalCorrections.push(`duplicate id ${op.id} dropped (keeping first occurrence)`);
+        errors.push(`duplicate id ${op.id} across ops violates exact-once coverage (first occurrence kept)`);
         continue;
       }
       seen.add(op.id);
@@ -252,7 +244,7 @@ export function validateSelectiveOps(
         }
         dupInOp.add(id);
         if (seen.has(id)) {
-          mechanicalCorrections.push(`duplicate id ${id} across ops dropped from later summarize`);
+          errors.push(`duplicate id ${id} across ops violates exact-once coverage (first occurrence kept)`);
           continue;
         }
         seen.add(id);
@@ -313,8 +305,13 @@ export function validateSelectiveOps(
   const opsSorted = needsSort ? sortedOps : opsAfterDedup;
 
   // ── Step F: summarized spans contiguous ────────────────────────────────────
+  // Drop ops do not count as coverage: a dropped thinking entry inside a span
+  // gap is removed entirely (R24), so summarizing across it stays contiguous.
+  // Kept or summarized entries in a gap DO break contiguity — the summary would
+  // skip material that survives in replay.
   const coveredPositions = new Set<number>();
   for (const op of opsSorted) {
+    if (op.type === 'drop') continue;
     const ids = op.type === 'summarize' ? (op.ids as readonly string[]) : [op.id];
     for (const id of ids) {
       const pos = manifestPos.get(id);

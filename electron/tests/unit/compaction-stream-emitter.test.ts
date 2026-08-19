@@ -69,6 +69,7 @@ vi.mock('../../src/main/ipc/chat/persist', () => ({
 // Real snapshot helpers run against the mocked activeAgents map.
 import {
   clearCompactionState,
+  COMPACTION_STREAM_EMIT_INTERVAL_MS,
   compactionWidgetToolId,
   createCompactionStreamEmitter,
   getCompactionTrigger,
@@ -133,7 +134,7 @@ describe('createCompactionStreamEmitter', () => {
     );
 
     // Trailing flush carries the latest accumulated text.
-    vi.advanceTimersByTime(150);
+    vi.advanceTimersByTime(COMPACTION_STREAM_EMIT_INTERVAL_MS + 1);
     expect(sendTurnEvent).toHaveBeenCalledTimes(2);
     expect(sendTurnEvent).toHaveBeenLastCalledWith(
       expect.anything(),
@@ -165,7 +166,7 @@ describe('createCompactionStreamEmitter', () => {
     // Without calibration the estimate is null — never a heuristic ratio.
     (getCompactionTrigger(SESSION_ID) as unknown as { state: Record<string, unknown> }).state.tokensPerChar = undefined;
     emit('Summary text');
-    vi.advanceTimersByTime(150);
+    vi.advanceTimersByTime(COMPACTION_STREAM_EMIT_INTERVAL_MS + 1);
     expect(sendTurnEvent).toHaveBeenLastCalledWith(
       expect.anything(),
       active,
@@ -182,7 +183,8 @@ describe('createCompactionStreamEmitter', () => {
     updateToolSnapshot(active, TOOL_ID, 'compaction', { status: 'running', args: '{"phase":"summarizing"}' });
 
     const emit = createCompactionStreamEmitter(SESSION_ID);
-    emit('streamed so far'); // schedules a trailing flush
+    emit('streamed so far'); // first emit flushes immediately
+    emit('streamed so far, continued'); // schedules the pending trailing flush
 
     // Mid-turn resume path completes the snapshot WITHOUT deleting it.
     updateToolSnapshot(active, TOOL_ID, 'compaction', {
@@ -193,7 +195,7 @@ describe('createCompactionStreamEmitter', () => {
     });
     sendTurnEvent.mockClear();
 
-    vi.advanceTimersByTime(150);
+    vi.advanceTimersByTime(COMPACTION_STREAM_EMIT_INTERVAL_MS + 1);
     expect(active.toolCalls.get(TOOL_ID)).toMatchObject({ status: 'complete' });
     expect(sendTurnEvent).not.toHaveBeenCalledWith(
       expect.anything(),
@@ -204,7 +206,7 @@ describe('createCompactionStreamEmitter', () => {
 
     // Later deltas after completion are also ignored.
     emit('more text after completion');
-    vi.advanceTimersByTime(150);
+    vi.advanceTimersByTime(COMPACTION_STREAM_EMIT_INTERVAL_MS + 1);
     expect(active.toolCalls.get(TOOL_ID)).toMatchObject({ status: 'complete' });
   });
 
@@ -216,13 +218,14 @@ describe('createCompactionStreamEmitter', () => {
     updateToolSnapshot(active, TOOL_ID, 'compaction', { status: 'running', args: '{}' });
 
     const emit = createCompactionStreamEmitter(SESSION_ID);
-    emit('partial');
+    emit('partial'); // first emit flushes immediately
+    emit('partial, continued'); // schedules the pending trailing flush
 
     // completeCompactionWidget tears the entry down.
     active.toolCalls.delete(TOOL_ID);
     sendTurnEvent.mockClear();
 
-    vi.advanceTimersByTime(150);
+    vi.advanceTimersByTime(COMPACTION_STREAM_EMIT_INTERVAL_MS + 1);
     expect(active.toolCalls.has(TOOL_ID)).toBe(false);
     expect(sendTurnEvent).not.toHaveBeenCalledWith(
       expect.anything(),
@@ -240,6 +243,8 @@ describe('createCompactionStreamEmitter', () => {
     updateToolSnapshot(active, FIRST_ID, 'compaction', { status: 'running', args: '{}' });
 
     const emit = createCompactionStreamEmitter(SESSION_ID);
+    emit('first compaction output'); // immediate flush onto FIRST_ID
+    emit('first compaction output, continued'); // pending trailing flush bound to FIRST_ID
     active.toolCalls.delete(FIRST_ID); // first compaction completes + releases
     try {
       clearCompactionState(SESSION_ID);
@@ -252,7 +257,7 @@ describe('createCompactionStreamEmitter', () => {
 
     // A trailing flush from the FIRST emitter must not touch the second widget.
     sendTurnEvent.mockClear();
-    vi.advanceTimersByTime(150);
+    vi.advanceTimersByTime(COMPACTION_STREAM_EMIT_INTERVAL_MS + 1);
     expect(active.toolCalls.get(SECOND_ID)).toMatchObject({ status: 'running', content: null });
     expect(sendTurnEvent).not.toHaveBeenCalledWith(
       expect.anything(),
@@ -265,7 +270,7 @@ describe('createCompactionStreamEmitter', () => {
   it('ignores deltas for a session with no active agent', () => {
     const emit = createCompactionStreamEmitter('missing');
     emit('text');
-    vi.advanceTimersByTime(150);
+    vi.advanceTimersByTime(COMPACTION_STREAM_EMIT_INTERVAL_MS + 1);
     expect(sendTurnEvent).not.toHaveBeenCalled();
   });
 });

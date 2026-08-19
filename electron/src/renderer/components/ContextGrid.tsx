@@ -218,15 +218,31 @@ function computeBreakdown(
     const streamingDelta = Math.max(0, streamingTokens - providerDelta);
     const effectiveAssistantTokens = context.assistant_tokens + streamingDelta;
     const effectiveUsedTokens = context.used_tokens + streamingDelta;
+    // Summary tokens: provider-reported when present, otherwise estimated from
+    // the summary heads' char share. The estimate is RESERVED from
+    // input_tokens — a missing summary_tokens means the snapshot counted the
+    // summary head's cost inside the other buckets — so the partition (and the
+    // ContextStackedBar built from it) never exceeds used_tokens.
+    const summaryReported = Math.max(0, context.summary_tokens ?? 0);
+    const estimatedSummaryTokens = summaryReported > 0
+      ? 0
+      : estimateSummaryTokensFromChars(messages, context.input_tokens);
+    const summaryTokens = summaryReported + estimatedSummaryTokens;
+    const inputFloor = Math.max(0, context.input_tokens);
+    const summaryReserve = estimatedSummaryTokens > 0 && inputFloor > 0
+      ? Math.max(0, (inputFloor - estimatedSummaryTokens) / inputFloor)
+      : 1;
+    const reserve = (value: number): number => Math.round(Math.max(0, value) * summaryReserve);
+    const scaledAssistantTokens = reserve(effectiveAssistantTokens);
     const windowReasoning = persistedReasoning + liveOrStreaming;
     let assistant: { response: number; reasoning: number };
     if (windowReasoning > 0) {
       const reasoning = Math.min(
-        Math.max(0, effectiveAssistantTokens),
+        Math.max(0, scaledAssistantTokens),
         Math.max(0, windowReasoning),
       );
       assistant = {
-        response: Math.max(0, effectiveAssistantTokens - reasoning),
+        response: Math.max(0, scaledAssistantTokens - reasoning),
         reasoning,
       };
     } else {
@@ -240,16 +256,13 @@ function computeBreakdown(
       if (streamingThinkingChars && streamingThinkingChars > 0) {
         chars.reasoning += streamingThinkingChars;
       }
-      assistant = splitAssistantTokens(effectiveAssistantTokens, chars);
+      assistant = splitAssistantTokens(scaledAssistantTokens, chars);
     }
-    const summaryTokens = Math.max(0, context.summary_tokens ?? 0) > 0
-      ? Math.max(0, context.summary_tokens ?? 0)
-      : estimateSummaryTokensFromChars(messages, context.input_tokens);
     return {
-      system: context.system_tokens,
-      tools: context.tools_tokens,
-      toolUse: context.tool_use_tokens,
-      user: context.user_tokens,
+      system: reserve(context.system_tokens),
+      tools: reserve(context.tools_tokens),
+      toolUse: reserve(context.tool_use_tokens),
+      user: reserve(context.user_tokens),
       assistantResponse: assistant.response,
       assistantReasoning: assistant.reasoning,
       summary: summaryTokens,

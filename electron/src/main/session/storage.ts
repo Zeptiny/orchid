@@ -605,14 +605,8 @@ function deserializeTodoStore(json: string): TodoStoreData {
   }
 }
 
-function chainFromRow(
-  row: ChainRow,
-  view?: {
-    messages: Message[];
-    startIndex: number;
-    summary: ChainViewSummary;
-  },
-): Chain {
+/** Chain row metadata without messages — for updates that supply messages separately. */
+function chainMetadataFromRow(row: ChainRow): Omit<Chain, 'messages'> {
   let subagentRecord: SubagentRecord | null = null;
   if (row.subagent_record_json) {
     try {
@@ -625,7 +619,6 @@ function chainFromRow(
   return {
     id: row.id,
     sessionId: row.session_id,
-    messages: view?.messages ?? deserializeMessages(row.messages_json ?? '[]'),
     status: parseChainStatus(row.status),
     selection: deserializeSelection(row.selection_json),
     modelLabel: row.model_label,
@@ -637,6 +630,20 @@ function chainFromRow(
     endTime: row.end_time,
     errorDetail: row.error_detail ?? null,
     errorTitle: row.error_title ?? null,
+  };
+}
+
+function chainFromRow(
+  row: ChainRow,
+  view?: {
+    messages: Message[];
+    startIndex: number;
+    summary: ChainViewSummary;
+  },
+): Chain {
+  return {
+    ...chainMetadataFromRow(row),
+    messages: view?.messages ?? deserializeMessages(row.messages_json ?? '[]'),
     ...(view
       ? {
           messagesLoaded: view.startIndex === 0,
@@ -2062,7 +2069,7 @@ export function applyCompactionPersistence(
             ? { ...message, excludeFromModel: true }
             : message,
         );
-        updateChainRow(db, { ...chainFromRow(entry.row), messages: entry.messages });
+        updateChainRow(db, { ...chainMetadataFromRow(entry.row), messages: entry.messages });
       }
 
       // 2. Summary-head insertion. Untouched chains keep their rows (and
@@ -2099,11 +2106,11 @@ export function applyCompactionPersistence(
           ).run(sessionId, ordinal);
           const head = anchorEntry.messages.slice(0, anchorIndex);
           const tail = anchorEntry.messages.slice(anchorIndex);
-          updateChainRow(db, { ...chainFromRow(anchorEntry.row), messages: head });
+          updateChainRow(db, { ...chainMetadataFromRow(anchorEntry.row), messages: head });
           const tailChain: Chain = payload.splitTailChain
             ? { ...payload.splitTailChain, sessionId, messages: tail }
             : {
-                ...chainFromRow(anchorEntry.row),
+                ...chainMetadataFromRow(anchorEntry.row),
                 id: randomUUID(),
                 subagentRecord: null,
                 messages: tail,

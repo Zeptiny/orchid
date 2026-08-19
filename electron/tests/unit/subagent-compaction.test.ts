@@ -214,10 +214,24 @@ function duplicateSteps(count: number): StreamEvent[] {
   return events;
 }
 
-type ScriptItem = StreamEvent | { readonly sleepMs: number } | { readonly probe: () => void };
+type ScriptItem =
+  | StreamEvent
+  | { readonly sleepMs: number }
+  | { readonly probe: () => void }
+  | { readonly until: () => boolean; readonly label?: string };
 
-/** Macrotask settle so the fire-and-forget prepare (`void maybeStart…`) completes. */
+/**
+ * Bounded settle for fire-and-forget prepares that produce NO observable
+ * (e.g. a below-threshold decision that never calls the summarizer). Every
+ * wait with a real observable uses `until` instead.
+ */
 const SETTLE: ScriptItem = { sleepMs: 40 };
+
+/** Wait until the summarizer prepare has actually started (implies the run's pending promise is registered). */
+const summarizerStarted: ScriptItem = {
+  until: () => mocks.summarize.mock.calls.length >= 1,
+  label: 'summarizer prepare to start',
+};
 
 function scriptedRunner(script: readonly ScriptItem[]) {
   return async function* (): AsyncGenerator<StreamEvent> {
@@ -228,6 +242,16 @@ function scriptedRunner(script: readonly ScriptItem[]) {
       }
       if ('probe' in item) {
         item.probe();
+        continue;
+      }
+      if ('until' in item) {
+        const deadline = Date.now() + 4000;
+        while (!item.until()) {
+          if (Date.now() > deadline) {
+            throw new Error(`scriptedRunner timed out waiting for ${item.label ?? 'condition'}`);
+          }
+          await new Promise((resolve) => setTimeout(resolve, 5));
+        }
         continue;
       }
       yield item;
@@ -272,9 +296,8 @@ describe('SubagentManager mid-run compaction (U9): arm', () => {
   it('starts the compactor prepare when a usage event crosses the subagent threshold', async () => {
     const manager = managerWith([
       ...steps(10),
-      SETTLE,
       usageEvent(600),
-      SETTLE,
+      summarizerStarted,
       { type: 'finish', finishReason: 'stop' },
     ]);
     const record = spawnCompactionSubagent(manager);
@@ -313,8 +336,9 @@ describe('SubagentManager mid-run compaction (U9): arm', () => {
   it('does not arm below the threshold', async () => {
     const manager = managerWith([
       ...steps(10),
-      SETTLE,
       usageEvent(300),
+      // No observable exists for a below-threshold decision (the summarizer is
+      // never called) — bounded settle only.
       SETTLE,
       { type: 'finish', finishReason: 'stop' },
     ]);
@@ -335,11 +359,11 @@ describe('SubagentManager mid-run compaction (U9): apply at boundary', () => {
     mocks.summarize.mockResolvedValue({ text: summaryText, usage: null });
     const manager = managerWith([
       ...steps(10),
-      SETTLE,
       usageEvent(600),
-      SETTLE,
+      summarizerStarted,
+      // The boundary handler awaits the pending prepare before the loop pulls
+      // the next event, so no settle is needed after step_finish.
       { type: 'step_finish', stepIndex: 0, finishReason: 'stop' },
-      SETTLE,
       { type: 'finish', finishReason: 'stop' },
     ]);
     const record = spawnCompactionSubagent(manager);
@@ -382,12 +406,12 @@ describe('SubagentManager mid-run compaction (U9): apply at boundary', () => {
     let callsAfterReArm = -1;
     const manager = managerWith([
       ...steps(10),
-      SETTLE,
       usageEvent(600),
-      SETTLE,
+      summarizerStarted,
       { type: 'step_finish', stepIndex: 0, finishReason: 'stop' }, // apply #1
-      SETTLE,
       usageEvent(450),
+      // The re-opened prepare resolves to a no-op and never calls the
+      // summarizer — no observable, bounded settle only.
       SETTLE,
       { probe: () => { callsAfterReArm = mocks.summarize.mock.calls.length; } },
       { type: 'step_finish', stepIndex: 1, finishReason: 'stop' }, // consumes the no-op pending
@@ -429,9 +453,8 @@ describe('SubagentManager mid-run compaction (U9): degrade to partial report', (
     mocks.summarize.mockResolvedValue({ text: `Summary: ${'s'.repeat(1500)}`, usage: null });
     const manager = managerWith([
       ...steps(5),
-      SETTLE,
       usageEvent(900),
-      SETTLE,
+      summarizerStarted,
       { type: 'step_finish', stepIndex: 0, finishReason: 'stop' },
       { type: 'finish', finishReason: 'stop' }, // unreachable: the run breaks at the boundary
     ]);
@@ -478,18 +501,19 @@ describe('SubagentManager mid-run compaction (U9): degrade to partial report', (
     mocks.summarize.mockResolvedValue({ text: `Summary: ${'s'.repeat(6000)}`, usage: null });
     const manager = managerWith([
       ...duplicateSteps(10),
-      SETTLE,
       usageEvent(550),
+      // The reclaim-only prepare flags duplicates without calling the
+      // summarizer — no observable, bounded settle only.
       SETTLE,
       { type: 'step_finish', stepIndex: 0, finishReason: 'stop' }, // reclaim-only apply
-      SETTLE,
       usageEvent(560), // accrual past the post-compaction baseline re-arms the trigger
-      SETTLE,
+      summarizerStarted,
       { type: 'step_finish', stepIndex: 1, finishReason: 'stop' }, // summarizer apply → degrade
       { type: 'finish', finishReason: 'stop' }, // unreachable: the run breaks at the boundary
     ]);
-    const record = spawnCompactionSubagent(manager, 'session-two-applies');
+    // Install the spy BEFORE spawning so every markCompaction call is captured.
     const markCompaction = vi.spyOn(persistenceOf(manager), 'markCompaction');
+    const record = spawnCompactionSubagent(manager, 'session-two-applies');
     await manager.getRunPromise(record.id);
 
     // Both boundaries applied: reclaim-only first (no summarizer call), then
@@ -531,8 +555,8 @@ describe('SubagentManager mid-run compaction (U9): disabled / failing compactor'
     mocks.resolveExecution.mockResolvedValue({ model: {} });
     const manager = managerWith([
       ...steps(10),
-      SETTLE,
       usageEvent(600),
+      // Null-limits path never starts a prepare — no observable, bounded settle only.
       SETTLE,
       { type: 'step_finish', stepIndex: 0, finishReason: 'stop' },
       { type: 'finish', finishReason: 'stop' },
@@ -556,11 +580,10 @@ describe('SubagentManager mid-run compaction (U9): disabled / failing compactor'
     mocks.summarize.mockRejectedValue(new Error('compactor provider down'));
     const manager = managerWith([
       ...steps(10),
-      SETTLE,
       usageEvent(600),
-      SETTLE,
+      // The rejected call still counts — mock.calls grows on invocation.
+      summarizerStarted,
       { type: 'step_finish', stepIndex: 0, finishReason: 'stop' },
-      SETTLE,
       { type: 'finish', finishReason: 'stop' },
     ]);
     const record = spawnCompactionSubagent(manager);

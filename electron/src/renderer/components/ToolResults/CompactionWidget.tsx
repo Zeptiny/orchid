@@ -27,7 +27,7 @@ function streamTail(text: string): string {
   return lines.slice(-STREAM_TAIL_LINES).join('\n');
 }
 
-export function CompactionRunningWidget({ status: _status, phase, mode, streamText, estimatedTokens }: CompactionRunningWidgetProps) {
+export function CompactionRunningWidget({ status, phase, mode, streamText, estimatedTokens }: CompactionRunningWidgetProps) {
   const label = phase === 'reclaiming' ? 'Reclaiming duplicate outputs…' : 'Compacting context…';
   const detail = phase === 'summarizing' ? 'Summarizing history' : phase === 'reclaiming' ? 'Removing duplicates' : 'Preparing compaction';
   const hasStream = typeof streamText === 'string' && streamText.length > 0;
@@ -47,7 +47,7 @@ export function CompactionRunningWidget({ status: _status, phase, mode, streamTe
         </span>
         <span className="orchid-tool-block-title-right shrink-0">
           {mode && <StatusBadge tone="info" size="xs">{mode}</StatusBadge>}
-          <StatusBadge tone="warning" size="xs">running</StatusBadge>
+          <StatusBadge tone="warning" size="xs">{status}</StatusBadge>
         </span>
       </div>
       {hasStream ? (
@@ -227,7 +227,7 @@ export function CompactedRangeStub({
       type="button"
       className="orchid-collapsed-chain orchid-compaction-stub"
       onClick={onExpand}
-      aria-label={`Expand compacted ${count} messages`}
+      aria-label={`Expand compacted ${count} ${count === 1 ? 'message' : 'messages'}`}
     >
       <Icon name="layers" size={14} />
       <span>

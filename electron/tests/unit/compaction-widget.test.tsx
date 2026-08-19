@@ -320,8 +320,7 @@ describe('CompactedRangeStub — collapsed stub affordance', () => {
 
   it('uses singular copy for a single compacted message', () => {
     render(<CompactedRangeStub count={1} onExpand={() => undefined} />);
-    // Note: the aria-label does not pluralize — only the visible copy does.
-    expect(screen.getByRole('button', { name: 'Expand compacted 1 messages' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Expand compacted 1 message' })).toBeTruthy();
     expect(screen.getByText(/Compacted 1 message — hidden from model/)).toBeTruthy();
   });
 });

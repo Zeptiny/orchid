@@ -429,7 +429,10 @@ export function ProjectConfigView({ projectDir, onNewChat, onClose }: ProjectCon
           const num = parseConfigNumber(
             trimmed,
             field.min ?? 0,
-            field.kind === 'integer' ? { integer: true } : undefined,
+            {
+              ...(field.kind === 'integer' ? { integer: true } : {}),
+              ...(field.max !== undefined ? { max: field.max } : {}),
+            },
           );
           if (num === null) return previous;
           return { ...previous, [field.key]: num };

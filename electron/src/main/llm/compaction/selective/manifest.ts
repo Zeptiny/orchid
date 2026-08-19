@@ -136,6 +136,10 @@ export function buildManifest(
   let idx = 0;
   for (let i = start; i < end; i += 1) {
     const msg = messages[i]!;
+    // Model-visible slice only — same filter as compactableModelSlice. Excluded
+    // (cancelled results, prior reclaims) and hidden messages are never offered
+    // to the compactor, so no op can keep them back into replayMessages.
+    if (msg.excludeFromModel || msg.hidden) continue;
     const kind = toManifestKind(msg);
     const preview = previewFromMessage(msg);
     const entry: ManifestEntry = {
@@ -168,7 +172,6 @@ export function buildManifest(
  * Also returns a map from tool_call_id (result's tool_call_id) → call message id for convenience.
  */
 export function buildToolCallIdToEntryMap(
-  messages: readonly Message[],
   manifest: Manifest,
 ): ReadonlyMap<string, string> {
   const map = new Map<string, string>();
@@ -179,8 +182,9 @@ export function buildToolCallIdToEntryMap(
       }
     }
   }
-  // Also consider messages outside manifest? For completeness include all messages mapping
-  // but manifest entries are primary.
+  // Manifest entries are the primary (and only) mapping source: excluded or
+  // hidden call messages are never compactable, so no extra message-derived
+  // mappings are needed here.
   return map;
 }
 

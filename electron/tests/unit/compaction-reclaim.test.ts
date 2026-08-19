@@ -347,6 +347,7 @@ describe('re-arm estimation — below-re-arm skips summarizer', () => {
     // To make the below-re-arm case deterministically true, inflate input near limit
     // and craft flagged set that reclaims >20% (since hysteresis is 0.1 * 10k = 1000)
     // With large dup, reclaimed proportion ~ large/total ~ 5000 / ~10000 ≈ 0.5 → 4500 reclaimed → post 4500 < 7000
+    // With our sizes: input 9000, large dup ~ half the chars, reclaimed ≈ 4500, post ~4500 → 0.45 < 0.7 re-arm → skip
     const shouldSkip = shouldSkipSummarizerAfterReclaim({
       inputTokens,
       contextTokens,
@@ -354,10 +355,7 @@ describe('re-arm estimation — below-re-arm skips summarizer', () => {
       messages: history,
       flaggedIds,
     });
-    // With our sizes: input 9000, large dup ~ half the chars, reclaimed ≈ 4500, post ~4500 → below 7000 → should skip
-    // Allow tolerance: if our char estimate differs slightly, we assert skip or not but must be consistent with math.
-    const expectedSkip = post / contextTokens < threshold - 0.1;
-    expect(shouldSkip).toBe(expectedSkip);
+    expect(shouldSkip).toBe(true);
     // Additionally craft an explicit case where we force a skip:
     const forceHistory: Message[] = [
       makeUserMessage('u1', 'x'.repeat(100)),
@@ -402,55 +400,33 @@ describe('re-arm estimation — below-re-arm skips summarizer', () => {
   });
 
   it('shouldSkip respects custom hysteresis delta', () => {
+    // Post-reclaim ratio lands between the 0.5 (wide delta) and 0.7 (default
+    // delta) re-arm lines: the default delta skips, the wide delta does not.
     const history: Message[] = [
-      makeUserMessage('u1', 'x'.repeat(1000)),
+      makeUserMessage('u1', 'x'.repeat(6200)),
       makeToolCall('c1', 'read', { path: 'a.txt' }, 'tc1'),
-      makeToolResult('c1', 'read', 'x'.repeat(1000), 'r1'),
+      makeToolResult('c1', 'read', 'z'.repeat(1000), 'r1'),
       makeToolCall('c2', 'read', { path: 'a.txt' }, 'tc2'),
-      makeToolResult('c2', 'read', 'x'.repeat(1000), 'r2'),
+      makeToolResult('c2', 'read', 'z'.repeat(1000), 'r2'),
     ];
     const { flaggedIds } = mechanicalReclaim(history, { start: 0, end: history.length });
-    // Default delta 0.1: re-arm 0.7. With custom delta 0.3: re-arm 0.5.
-    // Post ~4500/10000=0.45 => below 0.5 but above? Actually below both, so both true.
-    // Need a case where post is between 0.5 and 0.7.
-    // Use input 6500, post ~3250 ~0.325 => below both.
-    // Use more precise: make a small reclaim case.
-    const smallHistory = history;
-    const inputTokens = 7500;
-    const contextTokens = 10_000;
-    // post after small reclaim (50% chars -> ~3750) => below both.
-    // For a differentiator, use history with tiny reclaim: need ~1000 reclaim from 7500 -> post 6500 -> 0.65
-    // 0.65 < 0.7 true, 0.65 < 0.5 false.
-    const tinyHistory: Message[] = [
-      makeUserMessage('u1', 'x'.repeat(5000)),
-      makeToolCall('c1', 'read', { path: 'a.txt' }, 'tc1'),
-      makeToolResult('c1', 'read', 'tiny', 'r1'),
-      makeToolCall('c2', 'read', { path: 'a.txt' }, 'tc2'),
-      makeToolResult('c2', 'read', 'tiny', 'r2'),
-    ];
-    const tf = mechanicalReclaim(tinyHistory, { start: 0, end: tinyHistory.length });
     const skipDefault = shouldSkipSummarizerAfterReclaim({
       inputTokens: 7500,
       contextTokens: 10_000,
       threshold: 0.8,
       hysteresisDelta: 0.1,
-      messages: tinyHistory,
-      flaggedIds: tf.flaggedIds,
+      messages: history,
+      flaggedIds,
     });
     const skipWide = shouldSkipSummarizerAfterReclaim({
       inputTokens: 7500,
       contextTokens: 10_000,
       threshold: 0.8,
       hysteresisDelta: 0.3,
-      messages: tinyHistory,
-      flaggedIds: tf.flaggedIds,
+      messages: history,
+      flaggedIds,
     });
-    // With tiny reclaim post ~ 7500 - small (~few hundred) ≈ 7300 -> 0.73
-    // 0.73 <0.7 false, <0.5 false -> both false
-    expect(skipDefault).toBe(false);
+    expect(skipDefault).toBe(true);
     expect(skipWide).toBe(false);
-    // sanity: delta is respected param (no crash)
-    void smallHistory;
-    void flaggedIds;
   });
 });

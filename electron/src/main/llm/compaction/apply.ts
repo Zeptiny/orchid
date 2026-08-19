@@ -188,6 +188,11 @@ export function stampCompactionMetrics(
   return {
     ...applyResult,
     updatedMessages: applyResult.updatedMessages.map(replace),
+    updatedChains: applyResult.updatedChains.map((chain) =>
+      chain.messages.some((m) => m.id === stamped.id)
+        ? { ...chain, messages: chain.messages.map(replace) }
+        : chain,
+    ),
     newChain: { ...newChain, messages: newChain.messages.map(replace) },
     summaryMessage: stamped,
     compactedMarker: marker,

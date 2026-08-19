@@ -223,7 +223,7 @@ describe('ChatTurnProjection', () => {
       event({ ...identity(2), type: 'tool_call_update', toolCallId: 'compaction-s1-1', toolName: 'compaction', status: 'running', args: '{"phase":"summarizing"}' }, TOOL_STARTED_AT),
       event({ ...identity(3), type: 'tool_call_update', toolCallId: 'compaction-s1-1', status: 'generating', content: 'sum' }, TOOL_STARTED_AT),
       event({ ...identity(4), type: 'tool_call_update', toolCallId: 'compaction-s1-1', toolName: 'compaction', status: 'complete', content: '', toolResult: { schemaVersion: 1, family: 'generic', status: 'complete', completeness: 'complete', data: { value: '', origin: { kind: 'built-in', name: 'compaction' } } } }, TOOL_FINISHED_AT),
-      event({ ...identity(5), type: 'tool_call_update', toolCallId: 'tool-1', toolName: 'read', status: 'completed', args: '{}', content: '<ok/>', toolResult: { schemaVersion: 1, family: 'generic', status: 'complete', completeness: 'complete', data: { value: 'ok', origin: { kind: 'built-in', name: 'read' } } } }, TOOL_FINISHED_AT),
+      event({ ...identity(5), type: 'tool_call_update', toolCallId: 'tool-1', toolName: 'read', status: 'complete', args: '{}', content: '<ok/>', toolResult: { schemaVersion: 1, family: 'generic', status: 'complete', completeness: 'complete', data: { value: 'ok', origin: { kind: 'built-in', name: 'read' } } } }, TOOL_FINISHED_AT),
     ]);
 
     // The terminal compaction entry AND its segment are gone; the read tool stays.

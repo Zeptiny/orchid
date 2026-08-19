@@ -162,11 +162,6 @@ export type SelectiveCompactionResult = SelectiveCompactionSuccess | SelectiveCo
 
 // ── Materialization ─────────────────────────────────────────────────────────
 
-function lineCount(content: string): number {
-  if (content.length === 0) return 0;
-  return content.split('\n').length;
-}
-
 function truncateRange(content: string, startLine: number, endLine: number): { truncated: string; total: number } {
   const lines = content.split('\n');
   const total = lines.length;
@@ -339,7 +334,10 @@ export function materializeSelectiveOps(input: {
 
 // ── Replay invariant check ──────────────────────────────────────────────────
 
-export function passesReplayInvariant(messages: readonly Message[]): { ok: boolean; reason?: string } {
+export function passesReplayInvariant(
+  messages: readonly Message[],
+  openToolCallIds?: ReadonlySet<string>,
+): { ok: boolean; reason?: string } {
   try {
     // Use reconcileOrphanToolResults + toApiMessages survival check
     const reconciled = reconcileOrphanToolResults([...messages] as Message[]);
@@ -359,6 +357,9 @@ export function passesReplayInvariant(messages: readonly Message[]): { ok: boole
       if (m.role === MessageRole.TOOL && m.tool_call_id) resultIds.add(m.tool_call_id);
     }
     for (const id of callIds) {
+      // Pending calls in the preserved trailing open group (mid-turn compaction
+      // while a tool is still executing) legitimately have no result yet.
+      if (openToolCallIds?.has(id)) continue;
       if (!resultIds.has(id)) return { ok: false, reason: `tool_call ${id} missing matching tool result` };
     }
     void api;
@@ -366,6 +367,27 @@ export function passesReplayInvariant(messages: readonly Message[]): { ok: boole
   } catch (e) {
     return { ok: false, reason: e instanceof Error ? e.message : String(e) };
   }
+}
+
+/**
+ * Tool-call ids in the input history that have no matching result anywhere —
+ * necessarily the preserved trailing open group, since the compactable prefix
+ * is cut at tool-group boundaries and its calls are all answered.
+ */
+function trailingOpenToolCallIds(messages: readonly Message[]): Set<string> {
+  const resultIds = new Set<string>();
+  for (const m of messages) {
+    if (m.role === MessageRole.TOOL && m.tool_call_id) resultIds.add(m.tool_call_id);
+  }
+  const openIds = new Set<string>();
+  for (const m of messages) {
+    if (m.tool_calls) {
+      for (const tc of m.tool_calls as readonly { id: string }[]) {
+        if (tc.id && !resultIds.has(tc.id)) openIds.add(tc.id);
+      }
+    }
+  }
+  return openIds;
 }
 
 // ── Multi-turn loop ─────────────────────────────────────────────────────────
@@ -376,6 +398,7 @@ export async function runSelectiveCompaction(
   const messages = input.messages;
   const compactableRange = input.compactableRange;
   const manifest = input.manifest ?? buildManifest(messages, compactableRange);
+  const openToolCallIds = trailingOpenToolCallIds(messages);
   const maxRounds = Math.max(1, Math.min(input.maxCorrectionRounds ?? 3, 5));
   let previousErrors: string[] | undefined = undefined;
   let lastCorrectedOps: SelectiveOp[] | undefined = undefined;
@@ -413,7 +436,7 @@ export async function runSelectiveCompaction(
     if (validation.valid) {
       // Materialize and check invariant
       const materialized = materializeSelectiveOps({ manifest, messages, ops: validation.correctedOps });
-      const invariant = passesReplayInvariant(materialized.replayMessages);
+      const invariant = passesReplayInvariant(materialized.replayMessages, openToolCallIds);
       if (!invariant.ok) {
         previousErrors = [`replay invariant violated: ${invariant.reason}`];
         if (attempt + 1 >= maxRounds) break;

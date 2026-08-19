@@ -162,17 +162,7 @@ function toolResultMsg(
   });
 }
 
-function canonicalResult(status: 'complete' | 'error' = 'complete'): CanonicalToolResult {
-  if (status === 'error') {
-    return {
-      schemaVersion: CANONICAL_TOOL_RESULT_VERSION,
-      family: 'generic',
-      data: { value: 'ok' },
-      status,
-      completeness: 'complete',
-      error: { code: 'E_TOOL', message: 'boom' },
-    };
-  }
+function canonicalResult(status: 'complete' = 'complete'): CanonicalToolResult {
   return {
     schemaVersion: CANONICAL_TOOL_RESULT_VERSION,
     family: 'generic',

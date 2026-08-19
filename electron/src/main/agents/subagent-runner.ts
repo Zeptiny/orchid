@@ -113,8 +113,9 @@ export async function resolveSubagentContextTokens(
  * buildCompactionApply flags the ENTIRE compactable range, so afterwards this
  * settles the flags: ids the selective pass kept verbatim become visible
  * again, and user messages are never flagged (R9 — the same protection the
- * fallback path applies). Pre-existing flags outside the covered range are
- * left untouched.
+ * fallback path applies). Pre-existing flags outside the covered range apply
+ * only to non-user messages — a user message inside `userIds` is always
+ * unflagged; other pre-existing flags outside the range are left untouched.
  */
 export function buildSelectiveSubagentApply(params: {
   readonly messages: readonly Message[];
@@ -300,6 +301,14 @@ export async function tryCompactSubagentHistory(params: {
 
   if (!decision.shouldPrepare) return null;
 
+  // Ledger for both compaction modes — resolved once before the mode branch.
+  let accountingStore: ReturnType<typeof getProviderAccountingStore> | undefined;
+  try {
+    accountingStore = getProviderAccountingStore();
+  } catch {
+    accountingStore = undefined;
+  }
+
   // Branch on compaction mode: selective uses manifest+LLM caller, simple uses summarizeCompactableRange.
   // Simple is default (opt-in selective via config.compaction.subagents.mode==='selective').
   if ((subagentsScope.mode as string) === 'selective') {
@@ -310,13 +319,6 @@ export async function tryCompactSubagentHistory(params: {
     // module's load graph free of the provider runtime chain.
     const compactableSliceForFallback = (messages.slice(compactableRange.start, compactableRange.end) as Message[]).filter((m) => !m.excludeFromModel && !m.hidden);
     if (compactableSliceForFallback.length === 0) return null;
-
-    let accountingStore: ReturnType<typeof getProviderAccountingStore> | undefined;
-    try {
-      accountingStore = getProviderAccountingStore();
-    } catch {
-      accountingStore = undefined;
-    }
 
     let attempt: CompactionAttemptOutcome;
     try {
@@ -375,13 +377,6 @@ export async function tryCompactSubagentHistory(params: {
   // Simple default behavior (unchanged) — task-focused compactor-subagent, subagent-scoped accounting (R18)
   const compactableSlice = (messages.slice(compactableRange.start, compactableRange.end) as Message[]).filter((m) => !m.excludeFromModel && !m.hidden);
   if (compactableSlice.length === 0) return null;
-
-  let accountingStore: ReturnType<typeof getProviderAccountingStore> | undefined;
-  try {
-    accountingStore = getProviderAccountingStore();
-  } catch {
-    accountingStore = undefined;
-  }
 
   let summarizeResult: Awaited<ReturnType<typeof import('../llm/compaction/summarize.js').summarizeCompactableRange>> | null;
   try {

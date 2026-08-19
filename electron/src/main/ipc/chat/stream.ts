@@ -12,33 +12,32 @@ import type { LanguageModelV4 } from '@ai-sdk/provider';
 import type { ProviderAttemptAccountingContext } from '../../providers/accounting/middleware';
 import type { CacheFacet } from '../../../shared/types/provider-facets';
 import { shouldStopEarlyForSession } from '../next-request-stop';
+import { isContextLengthExceededMessage } from '../../llm/middleware/error-classification';
 
 export function classifyErrorKind(title: string | null | undefined, detail: string): ChatErrorKind {
-  const haystack = `${title ?? ''} ${detail}`.toLowerCase();
-  if (
-    haystack.includes('context_length_exceeded') ||
-    haystack.includes('context length') ||
-    haystack.includes('maximum context') ||
-    haystack.includes('context window')
-  ) {
+  const haystack = `${title ?? ''} ${detail}`;
+  // Shared overflow predicate — stays aligned with the middleware's
+  // isContextLengthExceededError (which drives the compaction-retry decision).
+  if (isContextLengthExceededMessage(haystack)) {
     return 'context_length_exceeded';
   }
-  if (haystack.includes('rate limit') || haystack.includes('429') || haystack.includes('usage limit')) {
+  const lower = haystack.toLowerCase();
+  if (lower.includes('rate limit') || lower.includes('429') || lower.includes('usage limit')) {
     return 'rate-limit';
   }
   if (
-    haystack.includes('auth') ||
-    haystack.includes('401') ||
-    haystack.includes('403') ||
-    haystack.includes('api key')
+    lower.includes('auth') ||
+    lower.includes('401') ||
+    lower.includes('403') ||
+    lower.includes('api key')
   ) {
     return 'auth';
   }
   if (
-    haystack.includes('timeout') ||
-    haystack.includes('timed out') ||
-    haystack.includes('network') ||
-    haystack.includes('connection')
+    lower.includes('timeout') ||
+    lower.includes('timed out') ||
+    lower.includes('network') ||
+    lower.includes('connection')
   ) {
     return 'stream';
   }
