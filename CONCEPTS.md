@@ -84,6 +84,16 @@ Shared domain vocabulary for the orchid project. This file defines terms used ac
 - **Service Tier Mechanism** — Provider tiering expressed either as a request parameter (e.g. OpenRouter `service_tier`) or model-name variants (e.g. Neuralwatt `-flex`/`-fast`/`-short`). Variant tiers are grouped under one base model entry with no duplicate rows; selection is per-model with session override.
 - **Unified Model Listing** — The single per-connection model list that treats catalog, live-discovered, and user-custom models identically (enable/disable, pricing override, reasoning levels, tier selection), distinguished only by a provenance badge.
 
+## Context Compaction
+
+- **Context Compaction** — Replacing old conversation history in the model's view with a summary so the context window is freed, while the full transcript stays visible to the user. Compaction replaces history by exclusion, never by deletion.
+- **Compactable Range** — The leading slice of a conversation eligible for compaction, ending at a cut point chosen so tool calls and their results are never split.
+- **Preserved Window** — The verbatim suffix after the cut that compaction leaves untouched, sized as a fraction of the context window.
+- **Summary Head** — The synthetic assistant message, carrying a compacted marker, that stands in for a summarized range in the model view; it is its own chain and may itself be re-summarized by a later compaction.
+- **Model Exclusion** — A per-message flag that keeps a message in the transcript while removing it from the model view; cancelled tool results and compacted originals carry it. Selective mode never applies it to user messages.
+- **Chain Split** — When a compaction cut lands inside one chain, the chain divides into a flagged prefix, the summary head, and a continuing suffix. Non-obvious rule: which half keeps the chain's original identity differs by path — the in-memory apply keeps it on the continuing suffix, the durable write keeps it on the flagged prefix — and both directions are pinned by contract tests.
+- **Mechanical Reclaim** — The deterministic pre-pass that flags exact-duplicate tool outputs (same tool, normalized args, and output) without any LLM call; when it alone drops usage below the re-arm line, the summarizer is skipped.
+
 ## Trusted Projects
 
 - **Trust State** — The posture of a bound project directory: `trusted` (granted and fingerprint-current, or a bare project auto-trusted), `untrusted` (has a project surface with no grant), or `changed` (previously trusted but the surface fingerprint drifted).
