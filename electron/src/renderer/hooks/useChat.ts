@@ -190,6 +190,13 @@ export interface UseChatReturn extends ChatState {
   beginSessionSwitch: (sessionId: string | null) => void;
   /** Apply a snapshot after the caller has committed a session selection. */
   hydrateSnapshot: (snapshot: ChatSessionSnapshot | null) => void;
+  /**
+   * Drop the live tail (segments, tools, streaming text) after a compaction
+   * rewrote the durable chains: flagged content must not keep rendering below
+   * the compacted stub, and preserved content re-renders from the reloaded
+   * chains. Keeps turn identity, status, and the sequence watermark.
+   */
+  resetLiveTail: () => void;
   /** True while a session switch is in flight (affinity rebound, not yet hydrated). */
   isSwitchingSession: boolean;
 }
@@ -864,6 +871,13 @@ export function useChat(
     dispatchProjection({ type: 'clear_error' });
   }, [dispatchProjection]);
 
+  const resetLiveTail = useCallback(() => {
+    // Flush queued deltas first so the sequence watermark covers them and a
+    // late replay cannot re-append pre-compaction content after the reset.
+    flushStreamFrame();
+    dispatchProjection({ type: 'reset_tail' });
+  }, [dispatchProjection, flushStreamFrame]);
+
   return {
     messages,
     status,
@@ -887,6 +901,7 @@ export function useChat(
     beginSessionSwitch,
     hydrateSnapshot,
     clearError,
+    resetLiveTail,
     setMessages: replaceMessages,
     isSwitchingSession,
   };

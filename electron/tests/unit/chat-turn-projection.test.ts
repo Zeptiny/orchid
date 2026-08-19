@@ -405,4 +405,51 @@ describe('ChatTurnProjection', () => {
 
     expect(applyChatTurnEvents(seedChatTurnProjection(snapshotAtThree), actions.slice(3))).toEqual(direct);
   });
+
+  describe('reset_tail (compaction rewrote the durable chains)', () => {
+    it('drops every pre-compaction tail fact but keeps identity, watermark, and lifecycle', () => {
+      const streamed = applyChatTurnEvents(seedChatTurnProjection(liveSnapshot()), [
+        event({ ...identity(1), type: 'thinking', data: 'plan', segmentId: 'think-1' }, TOOL_STARTED_AT),
+        event({ ...identity(2), type: 'tool_call_start', toolCallId: 'tool-1', toolName: 'read' }, TOOL_STARTED_AT),
+        event({ ...identity(3), type: 'tool_call_update', toolCallId: 'tool-1', toolName: 'read', status: 'completed', content: 'file' }, TOOL_FINISHED_AT),
+        event({ ...identity(4), type: 'chunk', data: 'partial answer', segmentId: 'text-1' }, TOOL_FINISHED_AT),
+        event({ ...identity(5), type: 'usage', usage: usage(9) }, TOOL_FINISHED_AT),
+      ]);
+
+      const reset = reduceChatTurnProjection(streamed, { type: 'reset_tail' });
+
+      expect(reset).toMatchObject({
+        sessionId: SESSION_ID,
+        turnId: TURN_ID,
+        sequence: 5,
+        status: 'streaming',
+        response: '',
+        thinking: '',
+        usage: usage(9),
+        cwd: '/workspace',
+        startedAt: STARTED_AT,
+      });
+      expect(reset?.streamSegments).toEqual([]);
+      expect(reset?.toolCalls).toEqual([]);
+    });
+
+    it('keeps the sequence watermark so pre-compaction replays stay rejected after the reset', () => {
+      const streamed = applyChatTurnEvents(seedChatTurnProjection(liveSnapshot()), [
+        event({ ...identity(1), type: 'tool_call_start', toolCallId: 'tool-1', toolName: 'read' }, TOOL_STARTED_AT),
+        event({ ...identity(2), type: 'chunk', data: 'text', segmentId: 'text-1' }, TOOL_STARTED_AT),
+      ]);
+      const reset = reduceChatTurnProjection(streamed, { type: 'reset_tail' })!;
+
+      expect(applyChatTurnEvent(reset, event({ ...identity(2), type: 'chunk', data: 'stale', segmentId: 'text-1' }, TOOL_FINISHED_AT))).toBe(reset);
+      const resumed = applyChatTurnEvent(
+        reset,
+        event({ ...identity(3), type: 'tool_call_start', toolCallId: 'tool-post', toolName: 'grep' }, TOOL_FINISHED_AT),
+      );
+      expect(resumed?.toolCalls.map((tool) => tool.toolCallId)).toEqual(['tool-post']);
+    });
+
+    it('is a no-op without a projection', () => {
+      expect(reduceChatTurnProjection(null, { type: 'reset_tail' })).toBeNull();
+    });
+  });
 });

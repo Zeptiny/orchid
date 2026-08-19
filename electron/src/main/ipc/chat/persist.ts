@@ -436,15 +436,20 @@ export function publishCompactedSession(
       changedIds.add(chain.id);
     }
   }
+  // SESSION_COMPACTION goes out FIRST: the renderer reloads on it and holds
+  // back append-only chain updates for that window. The per-chain events that
+  // follow carry the compaction's split chains (flagged prefix + summary head
+  // under FRESH ids); delivered first, they would append at the tail and order
+  // the compacted stub + summary after the preserved window.
+  sendSessionEvent(null, sessionId, IPC_CHANNELS.SESSION_COMPACTION, {
+    sessionId,
+    updatedAt: nextSession.updatedAt,
+  });
   for (const chainId of changedIds) {
     const event = buildSessionUpdatedEvent(nextSession, chainId);
     if (!event) continue;
     sendSessionEvent(null, sessionId, IPC_CHANNELS.SESSION_UPDATED, event);
   }
-  sendSessionEvent(null, sessionId, IPC_CHANNELS.SESSION_COMPACTION, {
-    sessionId,
-    updatedAt: nextSession.updatedAt,
-  });
 }
 
 /**

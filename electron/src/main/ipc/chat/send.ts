@@ -689,8 +689,13 @@ export async function startChatTurn(
               // post-resume tail (P1 #3).
               resetTurnForCompactionResume(updated);
               // The applied path also drops the pre-pause stream segments (the
-              // overflow-retry path below intentionally keeps them).
+              // overflow-retry path below intentionally keeps them). Tool
+              // snapshots go with them: every pre-compaction tool is either
+              // flagged (collapsed into the compacted stub) or preserved
+              // (committed to chains), so the live snapshot and any later
+              // hydration must not resurrect them into the live tail.
               activeAgent.streamSegments = [];
+              activeAgent.toolCalls.clear();
               try {
                 actor.send({ type: 'USER_INPUT', message });
                 publishSessionActivity(sessionId, { cwd: turnCtx.cwd, state: 'working', phase: 'agent', detail: 'Resuming after compaction', canCancel: true });

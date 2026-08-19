@@ -375,6 +375,23 @@ export function ChatView({ isVisible = true, bootstrapConfig = null, onNotify, a
     return () => { cancelled = true; };
   }, [paletteOpen]);
 
+  // Compaction rewrites the durable chains while the live tail still holds
+  // every pre-compaction segment/tool. Without a reset those re-render below
+  // the compacted stub + summary (flagged content un-hidden, duplicated, and
+  // after the turn ends stranded below the chain footer) until the session is
+  // re-entered. Reset as soon as the rewrite lands; preserved content
+  // re-renders from the chains the compaction reload brings in.
+  const activeSessionIdRef = useRef(session.activeSession?.id ?? null);
+  activeSessionIdRef.current = session.activeSession?.id ?? null;
+  useEffect(() => {
+    const unsubscribe = window.orchid?.session?.onCompaction?.((event) => {
+      if (event.sessionId && event.sessionId === activeSessionIdRef.current) {
+        chat.resetLiveTail();
+      }
+    });
+    return () => unsubscribe?.();
+  }, [chat.resetLiveTail]);
+
   const applySessionMessages = useCallback(
     (loadedSession: Session | null) => {
       if (!loadedSession) {

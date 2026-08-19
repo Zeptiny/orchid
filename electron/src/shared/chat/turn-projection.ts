@@ -99,6 +99,19 @@ export type ChatTurnProjectionAction =
   | { type: 'clear_error' }
   | { type: 'local_error'; error: string; status?: ChatSnapshotState }
   | {
+      /**
+       * Drop the in-flight tail (segments, tools, response, thinking) without
+       * touching turn identity, status, sequence watermark, or terminal facts.
+       *
+       * Compaction rewrites the durable chains mid-flight: every pre-compaction
+       * segment is either flagged (collapsed into the compacted stub — must not
+       * render live) or preserved (committed to chains — renders from history).
+       * Both cases re-rendered from the stale tail below the stub/summary until
+       * the session was re-entered; this reset hands rendering back to history.
+       */
+      type: 'reset_tail';
+    }
+  | {
     type: 'interrupt';
     interruptState: ChatSnapshot['interruptState'];
     status?: ChatSnapshotState;
@@ -149,6 +162,15 @@ export function reduceChatTurnProjection(
       const base = projection ?? beginChatTurnProjection(first.sessionId, null);
       return applyChatTurnEvents(base, action.actions);
     }
+    case 'reset_tail':
+      if (!projection) return projection;
+      return {
+        ...projection,
+        response: '',
+        thinking: '',
+        streamSegments: [],
+        toolCalls: [],
+      };
     case 'clear_stream':
       if (!projection) return projection;
       return {

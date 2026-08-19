@@ -473,6 +473,16 @@ function walkMessagesToItems(
         pushMessage(buffered, 'other', msgIdx++);
       }
     } else {
+      // Claim the buffered tool ids even while collapsed: a stale live tail
+      // (or idle leftover tool blocks after CHAT_DONE) must not re-render
+      // compacted-away tools below the stub — the collapsed range owns them.
+      for (const buffered of compactedBuffer) {
+        if (buffered.type === MessageType.TOOL_CALL) {
+          emittedToolIds.add(buffered.tool_call_id ?? buffered.tool_calls?.[0]?.id ?? buffered.id);
+        } else if (buffered.type === MessageType.TOOL_RESULT) {
+          emittedToolIds.add(buffered.tool_call_id ?? buffered.id);
+        }
+      }
       items.push({
         kind: 'compacted-stub',
         key: stubKey,

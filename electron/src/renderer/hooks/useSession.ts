@@ -122,6 +122,15 @@ let loadGeneration = 0;
 /** Monotonic generation so older session:list responses cannot win. */
 let listRefreshGeneration = 0;
 let pendingSwitchSessionId: string | null = null;
+/**
+ * Sessions whose compaction reload is in flight. A compaction splits chains
+ * (flagged prefix + summary head get FRESH ids), and the incremental
+ * SESSION_UPDATED handler can only append unknown ids at the tail — which
+ * would place the compacted stub + summary after the preserved window until
+ * the reload lands. Append-only updates are held back for that window; the
+ * reload commits every chain at its durable ordinal.
+ */
+const compactionReloads = new Set<string>();
 let bootstrapped = false;
 const listeners = new Set<Listener>();
 const unsubscribers: Array<() => void> = [];
@@ -333,12 +342,23 @@ function ensureBootstrapped(): void {
           // a session after New Chat/draft (prev === null) from a late event.
           if (prev?.id !== event.sessionId) return prev;
           const chainIndex = prev.chains.findIndex((chain) => chain.id === event.chain.id);
-          const chains = chainIndex < 0
-            ? [...prev.chains, event.chain]
-            : prev.chains.map((chain, index) => index === chainIndex ? event.chain : chain);
+          if (chainIndex < 0) {
+            // Unknown chain ids arriving while a compaction reload is in
+            // flight are the compaction's split prefix/summary chains —
+            // appending them mid-reload orders the compacted stub + summary
+            // after the preserved window. The reload places every chain at
+            // its durable ordinal instead.
+            if (compactionReloads.has(event.sessionId)) return prev;
+            return {
+              ...prev,
+              chains: [...prev.chains, event.chain],
+              activeChainId: event.activeChainId,
+              updatedAt: event.updatedAt,
+            };
+          }
           return {
             ...prev,
-            chains,
+            chains: prev.chains.map((chain, index) => index === chainIndex ? event.chain : chain),
             activeChainId: event.activeChainId,
             updatedAt: event.updatedAt,
           };
@@ -356,7 +376,10 @@ function ensureBootstrapped(): void {
       window.orchid.session.onCompaction((event) => {
         if (pendingSwitchSessionId != null && pendingSwitchSessionId !== event.sessionId) return;
         if (activeSession?.id !== event.sessionId) return;
-        void openShared(event.sessionId);
+        compactionReloads.add(event.sessionId);
+        void openShared(event.sessionId).finally(() => {
+          compactionReloads.delete(event.sessionId);
+        });
       }),
     );
   }

@@ -879,6 +879,36 @@ describe('buildHistoryStreamItems — compaction projection', () => {
     expect(tools[0].block).toBe(live);
   });
 
+  it('claims compacted tool ids while collapsed so a stale live tail cannot re-render them', () => {
+    const messages = [
+      summaryHead('sum-1', 'Summary.'),
+      toolCallMsg('call-1', 'tc-1', 'read', { excludeFromModel: true }),
+      toolResultMsg('res-1', 'tc-1', { excludeFromModel: true }),
+      assistantText('m-kept', 'preserved answer'),
+    ];
+    const sessionChains = [chain({ id: 'c1', messages })];
+    // Compaction rewrote the chains mid-turn, but the live projection still
+    // holds the pre-compaction read tool.
+    const stale = toolBlock('tc-1', 'read', 'completed');
+
+    const history = buildHistoryStreamItems({ ...opts, sessionChains });
+    expect(history.emittedToolIds.has('tc-1')).toBe(true);
+
+    const liveTail = buildLiveTailItems({
+      toolBlocks: [stale],
+      streamSegments: [{ kind: 'tool', toolCallId: 'tc-1' }],
+      streamingContent: '',
+      status: 'streaming',
+      emittedToolIds: history.emittedToolIds,
+    });
+    expect(liveTail).toEqual([]);
+
+    // After CHAT_DONE the same block must not be appended below the chain
+    // footer by the idle leftover-tools path either.
+    const idle = buildHistoryStreamItems({ ...opts, sessionChains, toolBlocks: [stale] });
+    expect(bodyItems(idle.items).some((it) => it.kind === 'tool')).toBe(false);
+  });
+
   it('counts compaction items as chain body so a compaction-only chain keeps its footer', () => {
     // Note: `hasBody` cannot be isolated end-to-end — every non-ACTIVE chain
     // status is terminal, which already forces a footer. This pins that a chain
