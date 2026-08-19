@@ -107,7 +107,7 @@ import {
 import {
   buildSubagentPartialReport,
   resolveSubagentContextTokens,
-} from '../../src/main/agents/subagent-runner';
+} from '../../src/main/agents/subagent-compaction';
 
 // ── Fixtures ─────────────────────────────────────────────────────────────────
 

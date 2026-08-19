@@ -72,10 +72,15 @@ import {
 import { getSubagentAttributionStore } from '../providers/accounting/subagent-attribution-store';
 import { getBackgroundStore } from '../tools/process/background-store';
 import { getForegroundLiveRegistry } from '../tools/process/foreground-live';
+import {
+  buildSubagentPartialReport,
+  resolveSubagentContextTokens,
+  tryCompactSubagentHistory,
+} from './subagent-compaction';
 
-// U9: subagent mid-run compaction — helpers live in subagent-runner to keep
-// runner/manager from circular deps; manager owns the run loop, runner owns
-// the partial-report helper and limit resolution.
+// U9: subagent mid-run compaction — helpers live in subagent-compaction.ts so
+// this module never imports subagent-runner (which pulls in the tool registry
+// and would form a runtime cycle manager -> runner -> tools -> manager).
 
 export type { SubagentAdmissionLimits } from './admission';
 export {
@@ -1437,7 +1442,6 @@ export class SubagentManager {
       if (compactionInitDone) return subagentContextTokens !== null && subagentCompactionTrigger !== null;
       compactionInitDone = true;
       try {
-        const { resolveSubagentContextTokens } = await import('./subagent-runner.js');
         const tokens = await resolveSubagentContextTokens(record.selection);
         subagentContextTokens = tokens;
         if (tokens !== null) {
@@ -1489,7 +1493,6 @@ export class SubagentManager {
           // handles manifest+LLM caller vs summarizeCompactableRange + simpleFallback.
           void shouldDelegateSelective;
           void shouldDelegateSimple;
-          const { tryCompactSubagentHistory } = await import('./subagent-runner.js');
           const chainForCompaction = record.chain
             ? [{ ...record.chain, messages: [...record.chain.messages] }]
             : [];
@@ -1670,7 +1673,6 @@ export class SubagentManager {
           const rangeMessages = (retryMessages as Message[]).slice(cut.compactableRange.start, cut.compactableRange.end);
           const netNew = rangeMessages.filter((m) => !m.excludeFromModel && !m.hidden && !(m as Message & { compacted?: unknown }).compacted);
           if (netNew.length === 0) {
-            const { buildSubagentPartialReport } = await import('./subagent-runner.js');
             const done = `${record.chain?.messages.filter((m) => m.type === 'tool_result').length ?? 0} tool results`;
             const partial = buildSubagentPartialReport({ done, remaining: record.task.slice(0, 200), stoppedAt: `step ${stepIndex}` });
             record.result = partial;

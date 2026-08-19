@@ -74,7 +74,7 @@ vi.mock('../../src/main/llm/message-factories', () => ({
   makeUserMessage: (content: string) => ({ role: 'user', content }),
 }));
 
-import { buildSelectiveSubagentApply } from '../../src/main/agents/subagent-runner';
+import { buildSelectiveSubagentApply } from '../../src/main/agents/subagent-compaction';
 import type { SelectiveCompactionResult } from '../../src/main/llm/compaction/selective/run';
 
 // ── Fixture helpers ─────────────────────────────────────────────────────────
