@@ -59,7 +59,15 @@ export function ensureToolSnapshot(
     finishedAt: null,
   };
   active.toolCalls.set(toolCallId, next);
-  active.streamSegments.push({ kind: 'tool', toolCallId });
+  // A previous widget for the same id may have been torn down
+  // (completeCompactionWidget deletes the tool call but not its segment), so
+  // dedupe — a second segment would render the widget twice / shift ordering.
+  const hasSegment = active.streamSegments.some(
+    (segment) => segment.kind === 'tool' && segment.toolCallId === toolCallId,
+  );
+  if (!hasSegment) {
+    active.streamSegments.push({ kind: 'tool', toolCallId });
+  }
   return next;
 }
 

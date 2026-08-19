@@ -56,6 +56,11 @@ export interface CompactionAttemptDeps {
    * starts — the main scope marks its trigger prepare here.
    */
   readonly onPrepared?: () => void;
+  /**
+   * Live progress observer for the compactor's LLM output — selective ops
+   * (raw JSON) in selective mode, summary text on the simple fallback.
+   */
+  readonly onTextDelta?: (accumulatedText: string) => void;
 }
 
 export interface CompactionAttemptInput {
@@ -152,6 +157,7 @@ export async function runCompactionAttempt(
     ...(deps.runtime ? { runtime: deps.runtime } : {}),
     ...(deps.subagentId !== undefined ? { subagentId: deps.subagentId } : {}),
     accounting: deps.accounting,
+    ...(deps.onTextDelta ? { onTextDelta: deps.onTextDelta } : {}),
   });
   const simpleFallback: SimpleFallback = async () => {
     const result = await summarizeCompactableRange({
@@ -163,6 +169,7 @@ export async function runCompactionAttempt(
       accounting: deps.accounting,
       ...(deps.runtime ? { runtime: deps.runtime } : {}),
       ...(deps.subagentId !== undefined ? { subagentId: deps.subagentId } : {}),
+      ...(deps.onTextDelta ? { onTextDelta: deps.onTextDelta } : {}),
     });
     if (!result || !result.text || !result.text.trim()) return null;
     return { text: result.text };

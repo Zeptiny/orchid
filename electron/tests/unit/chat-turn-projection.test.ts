@@ -198,6 +198,24 @@ describe('ChatTurnProjection', () => {
     })]);
   });
 
+  it('merges generating updates as live streaming content without finalizing the tool', () => {
+    const projected = applyChatTurnEvents(seedChatTurnProjection(liveSnapshot()), [
+      event({ ...identity(1), type: 'tool_call_update', toolCallId: 'compaction-s1', toolName: 'compaction', status: 'running', args: '{"phase":"summarizing","mode":"simple"}' }, TOOL_STARTED_AT),
+      event({ ...identity(2), type: 'tool_call_update', toolCallId: 'compaction-s1', status: 'generating', content: '## Handoff\nEar' }, TOOL_STARTED_AT),
+      event({ ...identity(3), type: 'tool_call_update', toolCallId: 'compaction-s1', status: 'generating', content: '## Handoff\nEarlier work.' }, TOOL_FINISHED_AT),
+    ]);
+
+    expect(projected.toolCalls).toEqual([expect.objectContaining({
+      toolCallId: 'compaction-s1',
+      toolName: 'compaction',
+      status: 'generating',
+      args: '{"phase":"summarizing","mode":"simple"}',
+      content: '## Handoff\nEarlier work.',
+      finishedAt: null,
+      toolResult: null,
+    })]);
+  });
+
   it('preserves classified terminal error facts', () => {
     const projected = applyChatTurnEvent(
       seedChatTurnProjection(liveSnapshot()),

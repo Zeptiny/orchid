@@ -4,6 +4,7 @@ import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   CompactedRangeStub,
+  CompactionRunningWidget,
   CompactionWidget,
   ReclaimStub,
 } from '../../src/renderer/components/ToolResults/CompactionWidget';
@@ -109,6 +110,63 @@ describe('CompactionWidget — summary rendering', () => {
     const plain = { ...summaryMessage('Real assistant text'), compacted: undefined };
     const { container } = render(<CompactionWidget message={plain} />);
     expect(container.innerHTML).toBe('');
+  });
+});
+
+// ── Running widget — live streaming tail ─────────────────────────────────────
+
+describe('CompactionRunningWidget — streaming tail', () => {
+  it('shows the placeholder copy before any stream text arrives', () => {
+    render(
+      <CompactionRunningWidget status="running" phase="summarizing" mode="simple" />,
+    );
+
+    expect(screen.getByText(/the summary will appear when ready\./)).toBeTruthy();
+    expect(screen.queryByText(/streaming/)).toBeNull();
+  });
+
+  it('renders the tail of the streamed summary text with a char count', () => {
+    const streamText = ['## Handoff', ...Array.from({ length: 12 }, (_, i) => `context line ${i + 1}.`)].join('\n');
+    render(
+      <CompactionRunningWidget
+        status="generating"
+        phase="summarizing"
+        mode="simple"
+        streamText={streamText}
+      />,
+    );
+
+    const tail = screen.getByText(/streaming/).closest('[data-compaction-stream="tail"]');
+    expect(tail).not.toBeNull();
+    expect(tail?.textContent).toContain(`${streamText.length.toLocaleString()} chars`);
+    // Only the last few lines are shown — the header line is clipped.
+    expect(tail?.textContent).not.toContain('## Handoff');
+    expect(tail?.textContent).toContain('context line 12.');
+  });
+
+  it('renders raw selective ops JSON as-is while streaming', () => {
+    const opsJson = '[{"type":"keep","id":"m1"},{"type":"drop","id":"m2"}]';
+    render(
+      <CompactionRunningWidget
+        status="generating"
+        phase="summarizing"
+        mode="selective"
+        streamText={opsJson}
+      />,
+    );
+
+    const tail = screen.getByText(/streaming/).closest('[data-compaction-stream="tail"]');
+    expect(tail?.textContent).toContain('"type":"keep"');
+    expect(screen.getByText('selective')).toBeTruthy();
+  });
+
+  it('falls back to placeholder copy for empty stream text', () => {
+    render(
+      <CompactionRunningWidget status="generating" phase="summarizing" streamText="" />,
+    );
+
+    expect(screen.getByText(/the summary will appear when ready\./)).toBeTruthy();
+    expect(screen.queryByText(/streaming/)).toBeNull();
   });
 });
 

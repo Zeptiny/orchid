@@ -311,9 +311,9 @@ export interface ChatToolCallUpdateEvent extends ChatEventIdentity {
   type: 'tool_call_update';
   toolCallId: string;
   toolName?: string;
-  status: 'running' | TerminalToolResultStatus;
+  status: 'generating' | 'running' | TerminalToolResultStatus;
   args?: string;
-  /** Exact finalized agent projection; required for terminal updates. */
+  /** Live preview while generating; exact finalized agent projection for terminal updates. */
   content?: string;
   /** Canonical terminal authority; required for terminal updates. */
   toolResult?: CanonicalToolResult;

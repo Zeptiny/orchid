@@ -53,6 +53,12 @@ export interface SummarizeInput {
   subagentId?: string;
   /** Optional abort signal for the LLM call. */
   abortSignal?: AbortSignal;
+  /**
+   * Live progress observer — invoked with the accumulated text as the
+   * summarizer streams. Best-effort: observer errors are swallowed so they can
+   * never fail the compaction attempt.
+   */
+  onTextDelta?: (accumulatedText: string) => void;
 }
 
 export interface SummarizeUsage {
@@ -226,6 +232,7 @@ export async function evaluateCompactorWindowFit(input: {
  */
 export async function summarizeCompactableRange(input: SummarizeInput): Promise<SummarizeResult | null> {
   const { messages, scope, config, runtime, agents, subagentId, abortSignal } = input;
+  const onTextDelta = input.onTextDelta;
   const fallbackSelection = input.fallbackSelection ?? input.existingModelSelection ?? null;
   const accounting = input.accounting;
   if (!accounting) {
@@ -326,7 +333,7 @@ export async function summarizeCompactableRange(input: SummarizeInput): Promise<
   };
 
   // 6. Build model with retry + accounting middleware (accounting sits inside retry, per middleware/index.ts)
-  const { generateText, wrapLanguageModel } = await importESM<typeof import('ai')>('ai');
+  const { streamText, wrapLanguageModel } = await importESM<typeof import('ai')>('ai');
   const model = wrapLanguageModel({
     model: execution.modelInstance,
     middleware: createMiddlewareStack({
@@ -353,10 +360,13 @@ export async function summarizeCompactableRange(input: SummarizeInput): Promise<
   const combinedSignal =
     abortSignal == null ? timeoutSignal : AbortSignal.any([abortSignal, timeoutSignal]);
 
-  // 9. LLM call — instructions carry the agent's system_prompt (internal-agent pattern)
-  let result: { text: string; usage?: unknown };
+  // 9. LLM call — instructions carry the agent's system_prompt (internal-agent pattern).
+  //    Streamed so onTextDelta can surface live progress; consumption of
+  //    textStream plus awaiting usage reproduces generateText's semantics.
+  let text = '';
+  let usageRaw: unknown;
   try {
-    const raw = await generateText({
+    const stream = streamText({
       model,
       instructions: agent.system_prompt,
       messages: [{ role: 'user', content: userPrompt }],
@@ -364,14 +374,24 @@ export async function summarizeCompactableRange(input: SummarizeInput): Promise<
       // Orchid's accounting-aware retry middleware owns retries.
       maxRetries: 0,
     });
-    result = raw as { text: string; usage?: unknown };
+    for await (const delta of stream.textStream) {
+      text += delta;
+      if (onTextDelta) {
+        try {
+          onTextDelta(text);
+        } catch {
+          // Progress observation is best-effort.
+        }
+      }
+    }
+    usageRaw = await stream.usage;
   } catch (error) {
     console.warn('[compaction] Summarizer LLM call failed:', error instanceof Error ? error.message : error);
     return null;
   }
+  const result = { text, usage: usageRaw };
 
-  let text = typeof result.text === 'string' ? result.text.trim() : '';
-  if (!text) {
+  if (!text.trim()) {
     console.warn('[compaction] Summarizer returned empty text; skipping compaction.');
     return null;
   }

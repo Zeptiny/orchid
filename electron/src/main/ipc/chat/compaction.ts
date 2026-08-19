@@ -103,6 +103,57 @@ function completeCompactionWidget(sessionId: string): void {
   } catch {}
 }
 
+/** Minimum interval between compaction live-progress emissions (IPC flood guard). */
+const COMPACTION_STREAM_EMIT_INTERVAL_MS = 100;
+
+/**
+ * Throttled live-progress emitter for the compaction widget: forwards the
+ * compactor's accumulated LLM output as tool_call_update events with status
+ * 'generating'. No-ops when the session has no active agent or the widget was
+ * never created (e.g. send-time compaction before the stream starts), so it is
+ * safe to pass unconditionally as onTextDelta. A trailing flush guarantees the
+ * final accumulated text always lands even when deltas arrive in bursts.
+ */
+export function createCompactionStreamEmitter(sessionId: string): (accumulatedText: string) => void {
+  let lastEmitAt = 0;
+  let trailingTimer: ReturnType<typeof setTimeout> | null = null;
+  let latest = '';
+  const flush = (): void => {
+    trailingTimer = null;
+    lastEmitAt = Date.now();
+    const active = activeAgents.get(sessionId);
+    if (!active || active.finalized) return;
+    const compactionToolId = `compaction-${sessionId}`;
+    const current = active.toolCalls.get(compactionToolId);
+    // Lifecycle guard: never resurrect a widget that already reached a
+    // terminal state (the mid-turn resume path completes the snapshot without
+    // deleting it) or was torn down — a trailing throttled flush landing after
+    // the terminal update would otherwise flip it back to 'generating' forever.
+    if (!current || (current.status !== 'generating' && current.status !== 'running')) return;
+    updateToolSnapshot(active, compactionToolId, 'compaction', { status: 'generating', content: latest });
+    const wc = webContentsForWindowId(active.windowId);
+    if (wc) {
+      sendTurnEvent(wc, active, IPC_CHANNELS.CHAT_TOOL_CALL_UPDATE, {
+        type: 'tool_call_update',
+        toolCallId: compactionToolId,
+        toolName: 'compaction',
+        status: 'generating',
+        content: latest,
+      });
+    }
+  };
+  return (accumulatedText: string): void => {
+    latest = accumulatedText;
+    if (trailingTimer) return;
+    const remaining = COMPACTION_STREAM_EMIT_INTERVAL_MS - (Date.now() - lastEmitAt);
+    if (remaining <= 0) {
+      flush();
+      return;
+    }
+    trailingTimer = setTimeout(flush, remaining);
+  };
+}
+
 // Evict compaction Maps when a session is deleted — prevents unbounded growth.
 try {
   onSessionDeleted((sessionId) => clearCompactionState(sessionId));
@@ -706,6 +757,7 @@ export async function tryCompactSynchronously(
               runtime,
               accounting: { store: accountingStore, sessionId, chainId, turnId },
               onPrepared: () => trigger.markPrepareStarted(cut.compactableRange, flaggedIds),
+              onTextDelta: createCompactionStreamEmitter(sessionId),
             },
             maxCorrectionRounds: 3,
           });
@@ -812,6 +864,7 @@ export async function tryCompactSynchronously(
         fallbackSelection: selection,
         accounting: { store: accountingStore, sessionId, chainId, turnId },
         runtime,
+        onTextDelta: createCompactionStreamEmitter(sessionId),
       });
       if (!result || !result.text || !result.text.trim()) {
         trigger.abortPrepare();
@@ -980,6 +1033,7 @@ export function handleUsageCompaction(
             runtime,
             accounting: { store: accountingStore, sessionId, chainId, turnId },
             onPrepared: () => trigger.markPrepareStarted(cut.compactableRange, flaggedIds),
+            onTextDelta: createCompactionStreamEmitter(sessionId),
           },
           maxCorrectionRounds: 3,
         });
@@ -1026,6 +1080,7 @@ export function handleUsageCompaction(
         fallbackSelection: selection,
         accounting: { store: accountingStore, sessionId, chainId, turnId },
         runtime,
+        onTextDelta: createCompactionStreamEmitter(sessionId),
       });
       const expectedIdsForSimple = history.slice(cut.compactableRange.start, cut.compactableRange.end).map((m) => m.id);
       compactionPending.set(sessionId, { cut, flaggedIds, expectedIds: expectedIdsForSimple, promise, estimatedInput: inputTokens, contextTokens: effectiveContextTokens, mode: 'simple' });

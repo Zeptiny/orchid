@@ -457,7 +457,15 @@ function renderStreamItem(
         phase = typeof parsed.phase === 'string' ? parsed.phase : undefined;
         mode = typeof parsed.mode === 'string' ? parsed.mode : undefined;
       } catch {}
-      return <CompactionRunningWidget key={item.key} status={item.block.status} phase={phase} mode={mode} />;
+      return (
+        <CompactionRunningWidget
+          key={item.key}
+          status={item.block.status}
+          phase={phase}
+          mode={mode}
+          streamText={item.block.agentProjection}
+        />
+      );
     }
     return <ToolCallBlock key={item.key} block={item.block} subagents={subagents} sessionId={sessionId} />;
   }

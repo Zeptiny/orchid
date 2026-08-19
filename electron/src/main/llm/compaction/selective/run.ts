@@ -49,9 +49,15 @@ export function createLlmSelectiveCaller(params: {
   subagentId?: string;
   accounting: { store?: ProviderAccountingStore; sessionId: string; chainId: string | null; turnId: string | null };
   abortSignal?: AbortSignal;
+  /**
+   * Live progress observer — invoked with the accumulated raw model output
+   * (the JSON ops text) as it streams, once per correction attempt.
+   * Best-effort: observer errors never fail the attempt.
+   */
+  onTextDelta?: (accumulatedText: string) => void;
 }): SelectiveCaller {
   return async ({ manifest, attempt, previousErrors }): Promise<SelectiveOp[]> => {
-    const { config, scope, fallbackSelection, runtime, agents, subagentId, accounting, abortSignal } = params;
+    const { config, scope, fallbackSelection, runtime, agents, subagentId, accounting, abortSignal, onTextDelta } = params;
     const agentName = scope === 'main' ? 'compactor-selective' : 'compactor-subagent-selective';
     let agent: Agent | undefined;
     if (agents?.has(agentName)) agent = agents.get(agentName);
@@ -71,14 +77,27 @@ export function createLlmSelectiveCaller(params: {
       snapshot: execution.snapshot, agentScope, agentName: agent.name, agentType: agent.type, agentTier: agent.tier,
       pricingFacet: execution.pricingFacet, tierMechanism: execution.tierMechanism, attemptIdHolder: attemptHolder,
     };
-    const { generateText, wrapLanguageModel } = await importESM<typeof import('ai')>('ai');
+    const { streamText, wrapLanguageModel } = await importESM<typeof import('ai')>('ai');
     const model = wrapLanguageModel({ model: execution.modelInstance, middleware: createMiddlewareStack({ retry: { maxRetries: config.llm_stream_retries }, accounting: ctx }) });
     const timeoutMs = Math.max(1, (config.llm_stream_idle_timeout ?? 30) * 1000);
     const timeoutSignal = AbortSignal.timeout(timeoutMs);
     const combinedSignal = abortSignal == null ? timeoutSignal : AbortSignal.any([abortSignal, timeoutSignal]);
     const userPrompt = buildSelectiveUserPrompt(manifest, previousErrors);
-    const raw = await generateText({ model, instructions: agent.system_prompt, messages: [{ role: 'user', content: userPrompt }], abortSignal: combinedSignal, maxRetries: 0 }) as { text: string };
-    const text = (raw.text ?? '').trim();
+    // Streamed so onTextDelta can surface the raw ops text as it arrives;
+    // draining textStream reproduces generateText's semantics.
+    const stream = streamText({ model, instructions: agent.system_prompt, messages: [{ role: 'user', content: userPrompt }], abortSignal: combinedSignal, maxRetries: 0 });
+    let text = '';
+    for await (const delta of stream.textStream) {
+      text += delta;
+      if (onTextDelta) {
+        try {
+          onTextDelta(text);
+        } catch {
+          // Progress observation is best-effort.
+        }
+      }
+    }
+    text = text.trim();
     if (!text) return [];
     const start = text.indexOf('[');
     const end = text.lastIndexOf(']');

@@ -270,7 +270,7 @@ export function applyChatTurnEvent(
       }));
     case 'tool_call_update':
       return updateTool(next, action.toolCallId, action.toolName, action.occurredAt, (tool) => {
-        const terminal = action.status !== 'running';
+        const terminal = action.status !== 'running' && action.status !== 'generating';
         const alreadyTerminal = tool.status !== 'generating' && tool.status !== 'running';
         const status = alreadyTerminal && action.status === 'running' ? tool.status : action.status;
         return {

@@ -14,11 +14,21 @@ export interface CompactionRunningWidgetProps {
   status: 'running' | 'generating';
   phase?: string;
   mode?: string;
+  /** Live compactor output tail — summary text (simple) or raw ops JSON (selective). */
+  streamText?: string | null;
 }
 
-export function CompactionRunningWidget({ status: _status, phase, mode }: CompactionRunningWidgetProps) {
+const STREAM_TAIL_LINES = 4;
+
+function streamTail(text: string): string {
+  const lines = text.replace(/\s+$/, '').split('\n');
+  return lines.slice(-STREAM_TAIL_LINES).join('\n');
+}
+
+export function CompactionRunningWidget({ status: _status, phase, mode, streamText }: CompactionRunningWidgetProps) {
   const label = phase === 'reclaiming' ? 'Reclaiming duplicate outputs…' : 'Compacting context…';
   const detail = phase === 'summarizing' ? 'Summarizing history' : phase === 'reclaiming' ? 'Removing duplicates' : 'Preparing compaction';
+  const hasStream = typeof streamText === 'string' && streamText.length > 0;
   return (
     <div className="orchid-tool-block orchid-compaction-block is-running" data-compaction="running" data-tool-result-status="running" aria-live="polite" aria-busy="true">
       <div className="orchid-tool-block-title min-w-0">
@@ -33,9 +43,21 @@ export function CompactionRunningWidget({ status: _status, phase, mode }: Compac
           <StatusBadge tone="warning" size="xs">running</StatusBadge>
         </span>
       </div>
-      <div className="orchid-tool-block-content orchid-compaction-content min-w-0 text-xs text-base-content/60">
-        {detail} — the summary will appear when ready.
-      </div>
+      {hasStream ? (
+        <div className="orchid-tool-block-content orchid-compaction-content min-w-0" data-compaction-stream="tail">
+          <div className="mb-1 flex items-center gap-2 text-xs text-base-content/60">
+            <span>{detail} — streaming</span>
+            <span className="text-base-content/40">{streamText!.length.toLocaleString()} chars</span>
+          </div>
+          <pre className="orchid-compaction-stream-tail m-0 max-h-28 overflow-hidden whitespace-pre-wrap break-words font-mono text-[11px] leading-relaxed text-base-content/55">
+            {streamTail(streamText!)}
+          </pre>
+        </div>
+      ) : (
+        <div className="orchid-tool-block-content orchid-compaction-content min-w-0 text-xs text-base-content/60">
+          {detail} — the summary will appear when ready.
+        </div>
+      )}
     </div>
   );
 }

@@ -229,6 +229,11 @@ const chatToolCallUpdateBaseSchema = chatEventIdentitySchema.extend({
 });
 export const chatToolCallUpdateEventSchema = z.discriminatedUnion('status', [
   chatToolCallUpdateBaseSchema.extend({
+    status: z.literal('generating'),
+    content: z.string().optional(),
+    toolResult: z.never().optional(),
+  }),
+  chatToolCallUpdateBaseSchema.extend({
     status: z.literal('running'),
     content: z.never().optional(),
     toolResult: z.never().optional(),
@@ -239,8 +244,9 @@ export const chatToolCallUpdateEventSchema = z.discriminatedUnion('status', [
     toolResult: canonicalToolResultSchema,
   }),
 ]).superRefine((value, ctx) => {
+  const isLifecycle = value.status === 'generating' || value.status === 'running';
   if (
-    value.status !== 'running' &&
+    !isLifecycle &&
     value.status !== value.toolResult.status
   ) {
     ctx.addIssue({

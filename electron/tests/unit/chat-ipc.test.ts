@@ -183,6 +183,20 @@ const mocks = vi.hoisted(() => {
     })),
   };
   const aiGenerateText = vi.fn(async () => ({ text: 'Investigate Session Naming' }));
+  // streamText adapter for the compaction paths: delegates to aiGenerateText so
+  // mockImplementationOnce handlers keep working, exposing the result through a
+  // single-chunk textStream + resolved usage (matches the consumption shape in
+  // summarize.ts / selective/run.ts).
+  const aiStreamText = vi.fn((args: Record<string, unknown>) => {
+    const ready = aiGenerateText(args) as Promise<{ text?: string }>;
+    return {
+      textStream: (async function* () {
+        const result = await ready;
+        yield typeof result?.text === 'string' ? result.text : '';
+      })(),
+      usage: ready.then(() => ({})),
+    };
+  });
   const wrappedTitleModel = { provider: 'wrapped-title-model' };
   const aiWrapLanguageModel = vi.fn(() => wrappedTitleModel);
   const createMiddlewareStack = vi.fn(() => []);
@@ -590,6 +604,7 @@ const mocks = vi.hoisted(() => {
     modelInstance,
     providerRuntime,
     aiGenerateText,
+    aiStreamText,
     aiWrapLanguageModel,
     wrappedTitleModel,
     createMiddlewareStack,
@@ -672,6 +687,7 @@ vi.mock('../../src/main/utils/esm-import', () => ({
     if (specifier === 'ai') {
       return {
         generateText: mocks.aiGenerateText,
+        streamText: mocks.aiStreamText,
         wrapLanguageModel: mocks.aiWrapLanguageModel,
       };
     }
