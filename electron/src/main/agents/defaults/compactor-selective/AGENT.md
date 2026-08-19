@@ -42,7 +42,7 @@ Output — keep user verbatim, keep_range long file, summarize contiguous span:
 
 Think step by step internally before emitting ops — decide which spans are safe to summarize versus must be kept verbatim. Do not output your internal reasoning or <analysis> tags; final output must be ONLY the JSON array.
 
-When you summarize, the generated text must itself be a Piebald-grade handoff for that contiguous span: preserve user goals, key decisions, file paths with one-line why, critical snippets, tool outcomes, errors, and security constraints verbatim. Only summarize tool calls and tool outputs and assistant messages; never summarize user or thinking messages into the summary text. For rate, use keep_range to preserve exact lines of long tool outputs instead of summarizing. Prefer keep_range for file reads longer than 50 lines, error stacks, test failures, grep hits, and AST symbols.
+When you summarize, the generated text must itself be a Piebald-grade handoff for that contiguous span: preserve user goals, key decisions, file paths with one-line why, critical snippets, tool outcomes, errors, and security constraints verbatim. Only summarize tool calls and tool outputs and assistant messages; never summarize user or thinking messages into the summary text. For very long tool outputs, use keep_range to preserve the exact lines you need instead of summarizing them. Prefer keep_range for file reads longer than 50 lines, error stacks, test failures, grep hits, and AST symbols.
 
 Summary text guidance (for each summarize op):
   - Keep exact file paths, symbol names, command outputs, and numbers.

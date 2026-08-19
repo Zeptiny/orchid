@@ -308,4 +308,20 @@ describe('buildSelectiveSubagentApply (R3: replacement never deletion)', () => {
     expect(result!.updatedMessages.find((m) => m.id === 'a1')?.excludeFromModel).toBe(true);
     expect(result!.updatedMessages.find((m) => m.id === 'u2')?.excludeFromModel).not.toBe(true);
   });
+
+  it('preserves a pre-existing exclusion inside the compactable range when this run did not flag it', () => {
+    const messages = baseMessages();
+    messages[2] = { ...messages[2]!, excludeFromModel: true }; // tc1 excluded by an earlier compaction
+    const selective = selectiveSuccess({ flaggedIds: ['a1'], summaryParts: ['Summarized.'] });
+
+    const result = buildSelectiveSubagentApply({
+      messages, chains: [makeChain('chain-1', messages)], cutResult: CUT, selectiveResult: selective,
+    });
+
+    expect(result).not.toBeNull();
+    // In-range but not re-flagged by this run: the earlier exclusion survives.
+    expect(result!.updatedMessages.find((m) => m.id === 'tc1')?.excludeFromModel).toBe(true);
+    expect(result!.updatedMessages.find((m) => m.id === 'a1')?.excludeFromModel).toBe(true);
+    expect(result!.updatedMessages.find((m) => m.id === 'tr1')?.excludeFromModel).not.toBe(true);
+  });
 });

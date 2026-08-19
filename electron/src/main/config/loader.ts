@@ -133,6 +133,9 @@ export function atomicWriteJson(
 // Core loading
 // ---------------------------------------------------------------------------
 
+/** Emits the keep_recent_chains deprecation warning at most once per process. */
+let warnedKeepRecentChains = false;
+
 /**
  * Load and merge all config layers, apply env overrides, validate.
  *
@@ -160,6 +163,18 @@ export function loadConfig(options?: LoadConfigOptions | string): Config {
   const merged = mergeLayers(mergedDict, home, project);
 
   applyEnvOverrides(merged);
+
+  // Deprecation warning for compaction.keep_recent_chains, emitted here (once
+  // per process) from the load path instead of inside the Zod transform so the
+  // schema stays a pure value transform.
+  if (!warnedKeepRecentChains) {
+    const compaction = (merged as { compaction?: { main?: Record<string, unknown>; subagents?: Record<string, unknown> } }).compaction;
+    const hasDeprecated = compaction?.main?.keep_recent_chains !== undefined || compaction?.subagents?.keep_recent_chains !== undefined;
+    if (hasDeprecated) {
+      warnedKeepRecentChains = true;
+      console.warn('[config] compaction.keep_recent_chains is deprecated and ignored — use preserve_percent (fraction of the context window preserved verbatim, default 0.25)');
+    }
+  }
 
   return configSchema.parse(merged);
 }

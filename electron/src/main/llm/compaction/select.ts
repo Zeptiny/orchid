@@ -20,7 +20,7 @@
  */
 
 import type { Message } from '../../../shared/types/message';
-import { MessageType, MessageRole } from '../../../shared/types/message';
+import { compactedMarkerFromUnknown, MessageType, MessageRole } from '../../../shared/types/message';
 import { estimateMessageChars } from './message-chars';
 
 // ── Public types ────────────────────────────────────────────────────────────
@@ -92,8 +92,14 @@ function isReplayableToolCallMessage(message: Message): boolean {
   );
 }
 
+/**
+ * Structural marker validation via the shared parser (compactedMarkerFromUnknown):
+ * a malformed `compacted` value (boolean, string, partial object) is NOT a
+ * summary head. Must stay identical to the check in llm/context-snapshot.ts —
+ * both modules validate through the same shared helper.
+ */
 function hasCompactedMarker(message: Message): boolean {
-  return Boolean((message as Message & { compacted?: unknown }).compacted);
+  return compactedMarkerFromUnknown((message as Message & { compacted?: unknown }).compacted) !== undefined;
 }
 
 // ── Coalescing (mirrors history.ts coalesceConsecutiveToolCallMessages) ────

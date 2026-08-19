@@ -159,7 +159,10 @@ function scheduleCheckpoint(
     pendingCheckpoints.delete(sessionId);
     const active = activeAgents.get(sessionId);
     if (!active || active.finalized) return;
-    const effectiveGuard = entry?.guard ?? guard;
+    // The entry (if any) was refreshed on every reschedule, so its guard is
+    // the LATEST one — falling back to this closure's guard would resurrect
+    // the FIRST schedule's stale guard when the latest schedule passed none.
+    const effectiveGuard = entry ? entry.guard : guard;
     if (effectiveGuard && !effectiveGuard(active)) return;
     try {
       const updated = getSessionManager().updateActiveChainMessages(
@@ -364,7 +367,7 @@ function resolveSplitTailChain(
  * replay is maintained separately), with the summary head (and any apply-side
  * split tail) spliced in at its durable position.
  */
-function buildCompactedCacheChains(
+export function buildCompactedCacheChains(
   viewChains: readonly Chain[],
   applyResult: CompactionApplyResultLike,
   durable: CompactionPersistenceResult,
@@ -410,7 +413,7 @@ function buildCompactedCacheChains(
 }
 
 /** Cache the compacted session and emit SESSION_UPDATED / SESSION_COMPACTION. */
-function publishCompactedSession(
+export function publishCompactedSession(
   manager: ReturnType<typeof getSessionManager>,
   sessionId: string,
   existing: Session,

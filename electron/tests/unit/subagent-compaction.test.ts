@@ -220,18 +220,23 @@ type ScriptItem =
   | { readonly probe: () => void }
   | { readonly until: () => boolean; readonly label?: string };
 
-/**
- * Bounded settle for fire-and-forget prepares that produce NO observable
- * (e.g. a below-threshold decision that never calls the summarizer). Every
- * wait with a real observable uses `until` instead.
- */
-const SETTLE: ScriptItem = { sleepMs: 40 };
-
 /** Wait until the summarizer prepare has actually started (implies the run's pending promise is registered). */
 const summarizerStarted: ScriptItem = {
   until: () => mocks.summarize.mock.calls.length >= 1,
   label: 'summarizer prepare to start',
 };
+
+/**
+ * Wait until the manager's fire-and-forget compaction prepare evaluation #n
+ * has settled (it either registered its pending promise or decided not to
+ * start one). Scripts using this reference the manager itself, so build them
+ * after construction (inline `new SubagentManager()` + setRunner) instead of
+ * via managerWith.
+ */
+const prepareEvaluated = (manager: SubagentManager, count: number): ScriptItem => ({
+  until: () => manager.compactionPreparesEvaluated() >= count,
+  label: `compaction prepare evaluation #${count}`,
+});
 
 function scriptedRunner(script: readonly ScriptItem[]) {
   return async function* (): AsyncGenerator<StreamEvent> {
@@ -278,7 +283,11 @@ function summarizeCalls(): Array<Record<string, unknown>> {
 
 /** The manager's private persistence collaborator (compaction revision bookkeeping). */
 function persistenceOf(manager: SubagentManager): SubagentPersistence {
-  return (manager as unknown as { _persistence: SubagentPersistence })._persistence;
+  const persistence = (manager as unknown as { _persistence?: SubagentPersistence })._persistence;
+  if (!persistence) {
+    throw new Error('SubagentManager._persistence is unavailable — the private collaborator was renamed or not initialized; update persistenceOf() in subagent-compaction.test.ts');
+  }
+  return persistence;
 }
 
 beforeEach(() => {
@@ -334,14 +343,17 @@ describe('SubagentManager mid-run compaction (U9): arm', () => {
   });
 
   it('does not arm below the threshold', async () => {
-    const manager = managerWith([
+    // The script observes the manager itself (prepareEvaluated), so construct
+    // it inline instead of via managerWith.
+    const manager = new SubagentManager();
+    manager.setRunner(scriptedRunner([
       ...steps(10),
       usageEvent(300),
-      // No observable exists for a below-threshold decision (the summarizer is
-      // never called) — bounded settle only.
-      SETTLE,
+      // The below-threshold decision never calls the summarizer — wait for
+      // the prepare evaluation itself to settle instead.
+      prepareEvaluated(manager, 1),
       { type: 'finish', finishReason: 'stop' },
-    ]);
+    ]));
     const record = spawnCompactionSubagent(manager);
     await manager.getRunPromise(record.id);
 
@@ -404,19 +416,23 @@ describe('SubagentManager mid-run compaction (U9): apply at boundary', () => {
 
   it('re-arms hysteresis from the post-compaction model view; a re-attempt within the run no-ops on the summary-marked chain', async () => {
     let callsAfterReArm = -1;
-    const manager = managerWith([
+    // The script observes the manager itself (prepareEvaluated), so construct
+    // it inline instead of via managerWith.
+    const manager = new SubagentManager();
+    manager.setRunner(scriptedRunner([
       ...steps(10),
       usageEvent(600),
       summarizerStarted,
       { type: 'step_finish', stepIndex: 0, finishReason: 'stop' }, // apply #1
       usageEvent(450),
       // The re-opened prepare resolves to a no-op and never calls the
-      // summarizer — no observable, bounded settle only.
-      SETTLE,
+      // summarizer — wait for its evaluation (#2: the first settled after the
+      // initial usage event) instead of a bounded settle.
+      prepareEvaluated(manager, 2),
       { probe: () => { callsAfterReArm = mocks.summarize.mock.calls.length; } },
       { type: 'step_finish', stepIndex: 1, finishReason: 'stop' }, // consumes the no-op pending
       { type: 'finish', finishReason: 'stop' },
-    ]);
+    ]));
     const record = spawnCompactionSubagent(manager);
     await manager.getRunPromise(record.id);
 
@@ -499,18 +515,22 @@ describe('SubagentManager mid-run compaction (U9): degrade to partial report', (
     // partial report, run COMPLETED.
     mocks.config = compactionConfig({ preserve_percent: 0.15, mechanical_reclaim: true });
     mocks.summarize.mockResolvedValue({ text: `Summary: ${'s'.repeat(6000)}`, usage: null });
-    const manager = managerWith([
+    // The script observes the manager itself (prepareEvaluated), so construct
+    // it inline instead of via managerWith.
+    const manager = new SubagentManager();
+    manager.setRunner(scriptedRunner([
       ...duplicateSteps(10),
       usageEvent(550),
       // The reclaim-only prepare flags duplicates without calling the
-      // summarizer — no observable, bounded settle only.
-      SETTLE,
+      // summarizer — wait for its evaluation to settle instead of a bounded
+      // settle.
+      prepareEvaluated(manager, 1),
       { type: 'step_finish', stepIndex: 0, finishReason: 'stop' }, // reclaim-only apply
       usageEvent(560), // accrual past the post-compaction baseline re-arms the trigger
       summarizerStarted,
       { type: 'step_finish', stepIndex: 1, finishReason: 'stop' }, // summarizer apply → degrade
       { type: 'finish', finishReason: 'stop' }, // unreachable: the run breaks at the boundary
-    ]);
+    ]));
     // Install the spy BEFORE spawning so every markCompaction call is captured.
     const markCompaction = vi.spyOn(persistenceOf(manager), 'markCompaction');
     const record = spawnCompactionSubagent(manager, 'session-two-applies');
@@ -556,8 +576,10 @@ describe('SubagentManager mid-run compaction (U9): disabled / failing compactor'
     const manager = managerWith([
       ...steps(10),
       usageEvent(600),
-      // Null-limits path never starts a prepare — no observable, bounded settle only.
-      SETTLE,
+      // No wait needed: the null-limits usage handler returns early after
+      // ensureCompactionInit resolves false (maybeStartCompactionPrepare is
+      // never invoked), and the loop is sequential — the boundary below
+      // deterministically sees no pending prepare.
       { type: 'step_finish', stepIndex: 0, finishReason: 'stop' },
       { type: 'finish', finishReason: 'stop' },
     ]);

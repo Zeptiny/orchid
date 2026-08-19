@@ -106,14 +106,10 @@ export const compactionScopeSchema = z.object({
   model: modelSelectionSchema.nullable().default(null),
   agent_name: z.literal('compactor').default('compactor'),
   preserve_percent: z.number().min(0.05).max(0.9).default(0.25),
-  // Deprecated: replaced by preserve_percent. Parsed (accepted) but ignored; a
-  // warning is emitted at load time so users know to migrate.
-  keep_recent_chains: z.number().int().min(0).max(100).optional().transform((value) => {
-    if (value !== undefined) {
-      console.warn('[config] compaction.keep_recent_chains is deprecated and ignored — use preserve_percent (fraction of the context window preserved verbatim, default 0.25)');
-    }
-    return undefined;
-  }),
+  // Deprecated: replaced by preserve_percent. Parsed (accepted) but ignored.
+  // The transform is pure (schema only); the deprecation warning is emitted
+  // from the config load path (loader.ts loadConfig) so users know to migrate.
+  keep_recent_chains: z.number().int().min(0).max(100).optional().transform(() => undefined),
   min_compactable_tokens: z.number().int().min(0).max(1_000_000).default(4000),
   mechanical_reclaim: z.boolean().default(true),
   hysteresis_delta: z.number().min(0).max(0.5).default(0.1),

@@ -248,7 +248,9 @@ describe('createCompactionStreamEmitter', () => {
     active.toolCalls.delete(FIRST_ID); // first compaction completes + releases
     try {
       clearCompactionState(SESSION_ID);
-    } catch {}
+    } catch {
+      // module state unavailable in isolated imports — ignore
+    }
 
     const SECOND_ID = compactionWidgetToolId(SESSION_ID);
     expect(SECOND_ID).not.toBe(FIRST_ID);
@@ -303,7 +305,9 @@ describe('compactionWidgetToolId', () => {
 
     try {
       clearCompactionState(SESSION_ID);
-    } catch {}
+    } catch {
+      // module state unavailable in isolated imports — ignore
+    }
     const second = compactionWidgetToolId(SESSION_ID);
     expect(second).not.toBe(first);
     expect(second.startsWith(`compaction-${SESSION_ID}-`)).toBe(true);

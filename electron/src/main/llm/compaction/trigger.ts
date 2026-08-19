@@ -58,8 +58,6 @@ export interface TriggerState {
   pendingFlaggedIds?: string[];
   /** Calibrated tokens-per-char from the last snapshot (inputTokens/totalChars). */
   tokensPerChar?: number;
-  /** Greatest inputTokens seen while armed — helps detect drop. */
-  peakWhileArmed?: number;
 }
 
 // ── Pure helpers ────────────────────────────────────────────────────────────
@@ -115,13 +113,11 @@ export function shouldTriggerCompaction(opts: {
   readonly inputTokens: number;
   readonly contextTokens: number;
   readonly threshold: number;
-  readonly hysteresisDelta?: number;
   readonly hysteresisArmed?: boolean;
   readonly compactableTokens: number;
   readonly minCompactableTokens: number;
   readonly lastCompactionInputTokens?: number;
   readonly postCompactionInputTokens?: number;
-  readonly compactableRange?: CompactableRange;
 }): boolean {
   const {
     inputTokens,
@@ -197,14 +193,10 @@ export function updateTriggerStateOnUsage(
   hysteresisDelta = 0.1,
 ): TriggerState {
   const nextArmed = nextHysteresisArmed(state.hysteresisArmed, inputTokens, contextTokens, threshold, hysteresisDelta);
-  const peak = state.hysteresisArmed
-    ? Math.max(state.peakWhileArmed ?? inputTokens, inputTokens)
-    : undefined;
   return {
     ...state,
     hysteresisArmed: nextArmed,
     lastObservedInputTokens: inputTokens,
-    ...(nextArmed ? { peakWhileArmed: peak } : { peakWhileArmed: undefined }),
   };
 }
 
@@ -221,7 +213,6 @@ export function markCompactionApplied(
     pendingPrepare: false,
     pendingRange: undefined,
     pendingFlaggedIds: undefined,
-    peakWhileArmed: compactionInputTokens,
   };
 }
 
@@ -235,6 +226,7 @@ export function canStartPrepare(
     readonly estimatedInputTokens?: number;
     readonly contextTokens: number;
     readonly threshold: number;
+    /** Accepted for caller-shape parity (evaluatePrepare passes it through); intentionally not read — the drop-check uses state.hysteresisArmed. */
     readonly hysteresisDelta?: number;
     readonly compactableTokens: number;
     readonly minCompactableTokens: number;
@@ -250,7 +242,6 @@ export function canStartPrepare(
   if (params.compactableTokens < params.minCompactableTokens) {
     return { shouldPrepare: false, reason: 'below-floor' };
   }
-  const hysteresisDelta = params.hysteresisDelta ?? 0.1;
   // If hysteresis armed, only accrual can override — delegate to shouldTrigger threshold logic
   const inputForThreshold = typeof params.estimatedInputTokens === 'number' ? params.estimatedInputTokens : params.inputTokens;
   if (typeof inputForThreshold !== 'number' || !Number.isFinite(inputForThreshold)) {
@@ -263,7 +254,6 @@ export function canStartPrepare(
     inputTokens: inputForThreshold,
     contextTokens: params.contextTokens,
     threshold: params.threshold,
-    hysteresisDelta,
     hysteresisArmed,
     compactableTokens: params.compactableTokens,
     minCompactableTokens: params.minCompactableTokens,
@@ -286,7 +276,16 @@ export function canStartPrepare(
   return { shouldPrepare: true, reason: 'crossed-threshold' };
 }
 
-/** Whether the compaction should apply (mutate replay) at the safe boundary (R12). */
+/**
+ * Whether the compaction should apply (mutate replay) at the safe boundary (R12).
+ *
+ * `threshold`, `hysteresisDelta`, `compactableRange`,
+ * `lastCompactionInputTokens`, and `postCompactionInputTokens` are accepted
+ * for caller-shape parity (tests and manager.ts callers pass them) but are
+ * intentionally ignored: the boundary apply depends only on `pendingPrepare`
+ * and the compactable floor, since threshold/hysteresis were already gated
+ * when the prepare started — a stale prepare still applies.
+ */
 export function shouldApplyAtBoundary(
   state: TriggerState,
   params: {
@@ -433,7 +432,6 @@ export class CompactionTrigger {
       pendingRange: initial?.pendingRange,
       pendingFlaggedIds: initial?.pendingFlaggedIds,
       tokensPerChar: initial?.tokensPerChar,
-      peakWhileArmed: initial?.peakWhileArmed,
     };
   }
 

@@ -432,12 +432,14 @@ function walkMessagesToItems(
     const isExpanded = expandedCompactedKeys?.has(stubKey) ?? false;
     if (isExpanded) {
       // Expand to full fidelity — render each buffered message with normal logic
+      // Identity set for membership checks (matches includes' === semantics).
+      const bufferedMessages = new Set(compactedBuffer);
       for (const buffered of compactedBuffer) {
         // Re-enter normal dispatch but without re-buffering
         if (buffered.type === MessageType.TOOL_CALL) {
           const callId = buffered.tool_call_id ?? buffered.tool_calls?.[0]?.id ?? buffered.id;
           const result = resultByCallId.get(callId);
-          if (result && compactedBuffer.includes(result)) {
+          if (result && bufferedMessages.has(result)) {
             // Paired result also in buffer — will be handled when its turn comes; avoid double
             // For expanded view, render as tool pair if possible
             if (!consumedResults.has(callId)) {

@@ -327,6 +327,8 @@ export class SubagentManager {
   private _runs = new SubagentRunRegistry();
   private _lifecycle = new SubagentLifecycle();
   private _persistence = new SubagentPersistence(getTerminalRetention);
+  /** Test-observable counter — see compactionPreparesEvaluated(). */
+  private _compactionPreparesEvaluated = 0;
 
   /**
    * Configure the stream runner. When set, spawn() starts a background run.
@@ -901,6 +903,11 @@ export class SubagentManager {
     return this._runs.isSettling(subagentId);
   }
 
+  /** Test-observable: number of fire-and-forget compaction prepare evaluations that settled (registered a pending or decided not to). */
+  compactionPreparesEvaluated(): number {
+    return this._compactionPreparesEvaluated;
+  }
+
   /**
    * Store a runtime-only pending question and unblock waiters.
    *
@@ -1443,67 +1450,77 @@ export class SubagentManager {
           }
           return true;
         }
-      } catch {
+      } catch (e) {
         // non-fatal
+        console.debug('[subagent-compaction] compaction init failed:', e);
       }
       subagentContextTokens = null;
       return false;
     };
 
+    // Fire-and-forget compaction prepare. The whole body sits in a try/finally
+    // so EVERY settled evaluation — registered a pending, decided not to, or
+    // threw — increments the test-observable counter (see
+    // compactionPreparesEvaluated); tests await it instead of fixed sleeps.
     const maybeStartCompactionPrepare = async (inputTokens: number): Promise<void> => {
-      if (compactionPendingPromise) return;
-      const ok = await ensureCompactionInit();
-      if (!ok || !subagentContextTokens || !subagentCompactionTrigger) return;
       try {
-        let cfg: CompactionScopeConfig | null = cachedSubagentCfg;
-        if (!cfg) {
-          try {
-            cfg = getConfig().compaction?.subagents ?? null;
-            cachedSubagentCfg = cfg;
-          } catch {
-            cfg = null;
-          }
-        }
-        if (!cfg) return;
-        // Branch on compaction mode before delegating: selective and simple both
-        // delegate to the updated runner helper which already branches internally.
-        // The check ensures per-run trigger evaluation and pending promise handling
-        // are mode-aware while keeping simple as default (opt-in selective).
-        const mode: string = cfg.mode ?? 'simple';
-        const shouldDelegateSelective = mode === 'selective';
-        const shouldDelegateSimple = mode !== 'selective';
-        // Both branches delegate to the same helper; the helper's internal branch
-        // handles manifest+LLM caller vs summarizeCompactableRange + simpleFallback.
-        void shouldDelegateSelective;
-        void shouldDelegateSimple;
-        const { tryCompactSubagentHistory } = await import('./subagent-runner.js');
-        const chainForCompaction = record.chain
-          ? [{ ...record.chain, messages: [...record.chain.messages] }]
-          : [];
-        const messagesForCompaction = record.chain?.messages ?? [];
-        const p = tryCompactSubagentHistory({
-          messages: messagesForCompaction,
-          chains: chainForCompaction as unknown as import('../../shared/types/chain').Chain[],
-          selection: record.selection,
-          config: (() => {
+        if (compactionPendingPromise) return;
+        const ok = await ensureCompactionInit();
+        if (!ok || !subagentContextTokens || !subagentCompactionTrigger) return;
+        try {
+          let cfg: CompactionScopeConfig | null = cachedSubagentCfg;
+          if (!cfg) {
             try {
-              return getConfig() as unknown as import('../config/schema').Config;
+              cfg = getConfig().compaction?.subagents ?? null;
+              cachedSubagentCfg = cfg;
             } catch {
-              return { compaction: { subagents: cfg } } as unknown as import('../config/schema').Config;
+              cfg = null;
             }
-          })(),
-          sessionId: record.sessionId ?? 'unknown',
-          subagentId: record.id,
-          chainId: record.chain?.id ?? null,
-          turnId: `${record.id}#${run.generation}`,
-          inputTokens,
-          contextTokens: subagentContextTokens!,
-          triggerState: subagentCompactionTrigger.state,
-        });
-        subagentCompactionTrigger.markPrepareStarted();
-        compactionPendingPromise = p;
-      } catch {
-        // non-fatal
+          }
+          if (!cfg) return;
+          // Branch on compaction mode before delegating: selective and simple both
+          // delegate to the updated runner helper which already branches internally.
+          // The check ensures per-run trigger evaluation and pending promise handling
+          // are mode-aware while keeping simple as default (opt-in selective).
+          const mode: string = cfg.mode ?? 'simple';
+          const shouldDelegateSelective = mode === 'selective';
+          const shouldDelegateSimple = mode !== 'selective';
+          // Both branches delegate to the same helper; the helper's internal branch
+          // handles manifest+LLM caller vs summarizeCompactableRange + simpleFallback.
+          void shouldDelegateSelective;
+          void shouldDelegateSimple;
+          const { tryCompactSubagentHistory } = await import('./subagent-runner.js');
+          const chainForCompaction = record.chain
+            ? [{ ...record.chain, messages: [...record.chain.messages] }]
+            : [];
+          const messagesForCompaction = record.chain?.messages ?? [];
+          const p = tryCompactSubagentHistory({
+            messages: messagesForCompaction,
+            chains: chainForCompaction as unknown as import('../../shared/types/chain').Chain[],
+            selection: record.selection,
+            config: (() => {
+              try {
+                return getConfig() as unknown as import('../config/schema').Config;
+              } catch {
+                return { compaction: { subagents: cfg } } as unknown as import('../config/schema').Config;
+              }
+            })(),
+            sessionId: record.sessionId ?? 'unknown',
+            subagentId: record.id,
+            chainId: record.chain?.id ?? null,
+            turnId: `${record.id}#${run.generation}`,
+            inputTokens,
+            contextTokens: subagentContextTokens!,
+            triggerState: subagentCompactionTrigger.state,
+          });
+          subagentCompactionTrigger.markPrepareStarted();
+          compactionPendingPromise = p;
+        } catch (e) {
+          // non-fatal
+          console.debug('[subagent-compaction] prepare start failed:', e);
+        }
+      } finally {
+        this._compactionPreparesEvaluated += 1;
       }
     };
 
@@ -1618,25 +1635,6 @@ export class SubagentManager {
       const threshold = cfg?.threshold ?? 0.85;
       const postTokens = postCompactionTokens ?? record.usage?.prompt_tokens ?? 0;
       const stillOver = subagentContextTokens !== null && Number.isFinite(subagentContextTokens) && postTokens / subagentContextTokens >= threshold * 0.98;
-      // If still over and no further compactable range, degrade to partial report
-      if (stillOver && applyResult.flaggedIds.length === 0 && !applyResult.summaryMessage) {
-        try {
-          const { buildSubagentPartialReport } = await import('./subagent-runner.js');
-          const done = (() => {
-            const toolCount = record.chain?.messages.filter((m) => m.type === 'tool_result').length ?? 0;
-            return `${toolCount} tool results recorded`;
-          })();
-          const remaining = record.task?.slice(0, 200) ?? 'remaining steps unknown';
-          const stoppedAt = `step ${stepIndex} (context limit ${subagentContextTokens})`;
-          const partial = buildSubagentPartialReport({ done, remaining, stoppedAt });
-          // Emit as normal tool result to parent (R17) — complete, not fail
-          record.result = partial;
-          // Mark completed with partial; finally block will finalize attribution
-          return true;
-        } catch {
-          // fallback no-op
-        }
-      }
       // Also handle case where still over but we did compact: check if next cut would be empty
       if (stillOver) {
         try {

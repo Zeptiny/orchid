@@ -189,12 +189,15 @@ const mocks = vi.hoisted(() => {
   // summarize.ts / selective/run.ts).
   const aiStreamText = vi.fn((args: Record<string, unknown>) => {
     const ready = aiGenerateText(args) as Promise<{ text?: string }>;
+    // Zero-valued usage on both fulfilment and rejection so a failing
+    // aiGenerateText never surfaces as an unhandled rejection.
+    const zeroUsage = { inputTokens: 0, outputTokens: 0, totalTokens: 0 };
     return {
       textStream: (async function* () {
         const result = await ready;
         yield typeof result?.text === 'string' ? result.text : '';
       })(),
-      usage: ready.then(() => ({})),
+      usage: ready.then(() => zeroUsage, () => zeroUsage),
     };
   });
   const wrappedTitleModel = { provider: 'wrapped-title-model' };
@@ -431,6 +434,8 @@ const mocks = vi.hoisted(() => {
       sessionManager.changeCwd.mockClear();
       sessionManager.changeModel.mockClear();
       sessionManager.getSession.mockClear();
+      sessionManager.load.mockClear();
+      sessionManager.setCachedSession.mockClear();
       sessionManager.getModelHistory.mockClear();
       sessionManager.switchTo.mockClear();
       sessionManager.clearActive.mockClear();

@@ -204,6 +204,29 @@ describe('isContextLengthExceededError (overflow detection, P1 #14)', () => {
     });
   });
 
+  describe('AI SDK provider diagnostics (responseBody/data/cause)', () => {
+    it('matches overflow text in responseBody with a generic message', () => {
+      const error = Object.assign(new Error('API call failed'), {
+        responseBody: '{"error": {"message": "This model supports a maximum context length of 100000 tokens"}}',
+      });
+      expect(isContextLengthExceededError(error)).toBe(true);
+    });
+
+    it('matches overflow text in the parsed data payload', () => {
+      const error = Object.assign(new Error('API call failed'), {
+        data: { error: { message: 'your input is too long' } },
+      });
+      expect(isContextLengthExceededError(error)).toBe(true);
+    });
+
+    it('matches overflow text in the cause chain', () => {
+      const error = Object.assign(new Error('API call failed'), {
+        cause: new Error('prompt is too long: 500000 tokens > 200000'),
+      });
+      expect(isContextLengthExceededError(error)).toBe(true);
+    });
+  });
+
   describe('false-positive controls', () => {
     it('rejects rate-limit text that mentions context or tokens', () => {
       expect(isContextLengthExceededError('rate limit reached after 1000 tokens, context is large')).toBe(false);

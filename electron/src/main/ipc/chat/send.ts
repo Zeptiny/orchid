@@ -641,6 +641,28 @@ export async function startChatTurn(
         }
       }
     }
+    // Post-compaction resume reset: re-anchor the durable turn slice at the
+    // turn's user message inside the compacted/remerged history (P1 #3) and
+    // clear every per-turn accumulation so the replay restarts clean.
+    const resetTurnForCompactionResume = (nextMessages: Message[]): void => {
+      const anchorIndex = nextMessages.findIndex((m) => m.id === userMessage.id);
+      if (anchorIndex < 0) {
+        // Defensive: a history that lost the turn's user message must never
+        // truncate the durable turn — re-append it.
+        nextMessages.push(userMessage);
+      }
+      const priorMessageCount = anchorIndex >= 0 ? anchorIndex : nextMessages.length - 1;
+      messages.splice(0, messages.length, ...nextMessages);
+      activeAgent.messages.splice(0, activeAgent.messages.length, ...nextMessages);
+      activeAgent.priorMessageCount = priorMessageCount;
+      activeAgent.turnMessages = [];
+      activeAgent.responseCommittedLength = 0;
+      activeAgent.thinkingCommittedLength = 0;
+      activeAgent.thinkingArtifactsCommitted = 0;
+      lastSentLength = 0;
+      lastThinkingLength = 0;
+      lastUsage = null;
+    };
     if (snapshot.value === 'idle' && context.currentInput && !completed && !activeAgent.agentCancelled) {
       if (shouldPauseForCompaction(sessionId)) {
         clearCompactionPause(sessionId);
@@ -660,30 +682,15 @@ export async function startChatTurn(
               updated = pendingRes.updatedMessages;
             }
             if (applied && updated) {
-              // Anchor the durable turn slice at the turn's user message inside
-              // the compacted replay: priorMessageCount must index the user
-              // message (which stays in the replay even when the compaction
-              // flagged it), so the finalized persistTurn REPLACES the active
-              // chain with the FULL turn — never only the post-resume tail
-              // (P1 #3).
-              const turnAnchorIndex = updated.findIndex((m) => m.id === userMessage.id);
-              if (turnAnchorIndex < 0) {
-                // Defensive: a compaction result that lost the turn's user
-                // message must never truncate the durable turn — re-append it.
-                updated.push(userMessage);
-              }
-              const resumedPriorMessageCount = turnAnchorIndex >= 0 ? turnAnchorIndex : updated.length - 1;
-              messages.splice(0, messages.length, ...updated);
-              activeAgent.messages.splice(0, activeAgent.messages.length, ...updated);
-              activeAgent.priorMessageCount = resumedPriorMessageCount;
-              activeAgent.turnMessages = [];
+              // The user message stays in the compacted replay even when the
+              // compaction flagged it, so the reset anchors the durable turn
+              // slice inside `updated` — the finalized persistTurn REPLACES
+              // the active chain with the FULL turn, never only the
+              // post-resume tail (P1 #3).
+              resetTurnForCompactionResume(updated);
+              // The applied path also drops the pre-pause stream segments (the
+              // overflow-retry path below intentionally keeps them).
               activeAgent.streamSegments = [];
-              activeAgent.responseCommittedLength = 0;
-              activeAgent.thinkingCommittedLength = 0;
-              activeAgent.thinkingArtifactsCommitted = 0;
-              lastSentLength = 0;
-              lastThinkingLength = 0;
-              lastUsage = null;
               try {
                 actor.send({ type: 'USER_INPUT', message });
                 publishSessionActivity(sessionId, { cwd: turnCtx.cwd, state: 'working', phase: 'agent', detail: 'Resuming after compaction', canCancel: true });
@@ -718,25 +725,8 @@ export async function startChatTurn(
                 // base — restarting from the turn start silently discards all
                 // in-turn tool progress and makes context usage collapse.
                 const merged = dedupeHistoryById([...messages, ...turnMessagesFromAgent(activeAgent)]);
-                // Same invariant as the applied path: anchor the turn slice at
-                // the user message so the durable active chain keeps the full
-                // turn (P1 #3).
-                const mergedAnchorIndex = merged.findIndex((m) => m.id === userMessage.id);
-                if (mergedAnchorIndex < 0) {
-                  merged.push(userMessage);
-                }
-                const mergedPriorMessageCount = mergedAnchorIndex >= 0 ? mergedAnchorIndex : merged.length - 1;
-                messages.splice(0, messages.length, ...merged);
-                activeAgent.messages.splice(0, activeAgent.messages.length, ...merged);
-                activeAgent.priorMessageCount = mergedPriorMessageCount;
-                activeAgent.turnMessages = [];
+                resetTurnForCompactionResume(merged);
                 activeAgent.streamSegments = [];
-                activeAgent.responseCommittedLength = 0;
-                activeAgent.thinkingCommittedLength = 0;
-                activeAgent.thinkingArtifactsCommitted = 0;
-                lastSentLength = 0;
-                lastThinkingLength = 0;
-                lastUsage = null;
                 activeAgent.actor.send({ type: 'USER_INPUT', message: ctxSnap.currentInput });
                 publishSessionActivity(sessionId, { cwd: turnCtx.cwd, state: 'working', phase: 'agent', detail: 'Resuming after compaction', canCancel: true });
                 return;
@@ -777,24 +767,13 @@ export async function startChatTurn(
               }
               const retryResult = await tryCompactSynchronously(sessionId, historyForRetry, runtime, turnSelection, contextTokens, accountingStore!, chainId, turnId);
               if (retryResult.didApply && retryResult.updatedMessages) {
-                messages.splice(0, messages.length, ...retryResult.updatedMessages);
-                activeAgent.messages.splice(0, activeAgent.messages.length, ...retryResult.updatedMessages);
                 // The compacted retry base is [compacted prior history…, user
-                // message]: anchor the durable turn slice at the user message
-                // (the last element of the compacted base+user layout) so a
-                // later finalize REPLACES the active chain with the full turn,
-                // never only the post-retry tail (same invariant as P1 #3).
-                const retryAnchorIndex = retryResult.updatedMessages.findIndex((m) => m.id === userMessage.id);
-                activeAgent.priorMessageCount = retryAnchorIndex >= 0
-                  ? retryAnchorIndex
-                  : retryResult.updatedMessages.length - 1;
-                activeAgent.turnMessages = [];
-                activeAgent.responseCommittedLength = 0;
-                activeAgent.thinkingCommittedLength = 0;
-                activeAgent.thinkingArtifactsCommitted = 0;
-                lastSentLength = 0;
-                lastThinkingLength = 0;
-                lastUsage = null;
+                // message] — the reset anchors the durable turn slice at that
+                // user message so a later finalize REPLACES the active chain
+                // with the full turn, never only the post-retry tail (same
+                // invariant as P1 #3). streamSegments is intentionally NOT
+                // cleared on the retry path.
+                resetTurnForCompactionResume(retryResult.updatedMessages);
                 try {
                   actor.send({ type: 'USER_INPUT', message });
                   publishSessionActivity(sessionId, {

@@ -56,7 +56,7 @@ export function createLlmSelectiveCaller(params: {
    */
   onTextDelta?: (accumulatedText: string) => void;
 }): SelectiveCaller {
-  return async ({ manifest, attempt: _attempt, previousErrors }): Promise<SelectiveOp[]> => {
+  return async ({ manifest, previousErrors }): Promise<SelectiveOp[]> => {
     const { config, scope, fallbackSelection, runtime, agents, subagentId, accounting, abortSignal, onTextDelta } = params;
     const agentName = scope === 'main' ? 'compactor-selective' : 'compactor-subagent-selective';
     let agent: Agent | undefined;

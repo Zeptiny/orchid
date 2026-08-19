@@ -301,9 +301,8 @@ function computeBreakdown(
     ? Math.round((summaryChars / (totalChars + summaryChars)) * promptTokens)
     : 0;
   const promptForDistribution = Math.max(0, promptTokens - summaryTokens);
-  const distTotalChars = chars.tools + chars.user + chars.response + chars.reasoning;
-  const toolUseTokens = distTotalChars > 0 ? Math.round((chars.tools / distTotalChars) * promptForDistribution) : 0;
-  const userTokens = distTotalChars > 0 ? Math.round((chars.user / distTotalChars) * promptForDistribution) : 0;
+  const toolUseTokens = totalChars > 0 ? Math.round((chars.tools / totalChars) * promptForDistribution) : 0;
+  const userTokens = totalChars > 0 ? Math.round((chars.user / totalChars) * promptForDistribution) : 0;
   const assistantTokens = splitByProviderReasoning(
     completionTokens,
     usage.reasoning_tokens,
@@ -597,8 +596,6 @@ export function computeContextCategories(
   };
   // Include summary only when non-zero to keep legacy test expectations stable;
   // the legend and bar already filter zero-valued segments.
-  if (breakdown.summary > 0) {
-    (base as { summary: number }).summary = breakdown.summary;
-  }
+  if (breakdown.summary > 0) base.summary = breakdown.summary;
   return base;
 }

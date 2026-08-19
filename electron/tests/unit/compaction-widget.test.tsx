@@ -102,7 +102,7 @@ describe('CompactionWidget — summary rendering', () => {
     expect(screen.getByText(/agent compactor/)).toBeTruthy();
     expect(screen.getAllByText(/~105,577 tokens freed/).length).toBeGreaterThan(0);
 
-    fireEvent.click(screen.getByTitle('Click to collapse'));
+    fireEvent.click(toggle);
     expect(toggle.getAttribute('aria-expanded')).toBe('false');
   });
 
@@ -264,25 +264,26 @@ describe('CompactionWidget — reclaim-only classification', () => {
     expect(screen.queryByText('Compaction summary')).toBeNull();
   });
 
-  it('classifies short reclaim-worded notes as reclaim-only', () => {
+  it('classifies a reclaim-worded note as reclaim-only when summarizedCount is 0', () => {
     render(
       <CompactionWidget
         message={summaryMessage('Reclaim applied to duplicate outputs.', {
-          compacted: marker({ summarizedCount: undefined }),
+          compacted: marker({ summarizedCount: 0 }),
         })}
       />,
     );
 
-    expect(screen.getByText(/Reclaimed duplicate tool outputs/).closest('[data-compaction="reclaim"]'))
-      .not.toBeNull();
+    expect(
+      screen.getByText(/Reclaimed 0 duplicate tool outputs/).closest('[data-compaction="reclaim"]'),
+    ).not.toBeNull();
     expect(screen.queryByText('Compaction summary')).toBeNull();
   });
 
-  it('keeps a short note without reclaim wording as a full summary card', () => {
+  it('keeps a reclaim-worded note with summarized messages as a full summary card', () => {
     render(
       <CompactionWidget
-        message={summaryMessage('Short handoff note.', {
-          compacted: marker({ summarizedCount: undefined }),
+        message={summaryMessage('Reclaim applied to duplicate outputs.', {
+          compacted: marker({ summarizedCount: 12 }),
         })}
       />,
     );
@@ -292,9 +293,8 @@ describe('CompactionWidget — reclaim-only classification', () => {
     expect(screen.queryByText(/duplicate tool outputs/)).toBeNull();
   });
 
-  it('keeps a long reclaim-worded summary as a full summary card', () => {
+  it('keeps a substantive reclaim-worded summary as a full summary card', () => {
     const longBody = `Reclaim context: ${'detailed handoff. '.repeat(20)}`;
-    expect(longBody.length).toBeGreaterThan(200);
     render(<CompactionWidget message={summaryMessage(longBody)} />);
 
     expect(screen.getByText('Compaction summary').closest('[data-compaction="summary"]'))

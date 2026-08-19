@@ -2017,22 +2017,34 @@ export function applyCompactionPersistence(
         return { row, messages };
       });
 
-      // Resolve every flagged id against durable chains before writing.
+      // Resolve every flagged id against durable chains before writing. Build
+      // the message-id → owning-chain-ids index once instead of re-scanning
+      // every chain for every flagged id (quadratic in flagged ids × chains).
+      const chainIdsByMessageId = new Map<string, string[]>();
+      for (const entry of entries) {
+        for (const message of entry.messages) {
+          let owners = chainIdsByMessageId.get(message.id);
+          if (!owners) {
+            owners = [];
+            chainIdsByMessageId.set(message.id, owners);
+          }
+          owners.push(entry.row.id);
+        }
+      }
       const flagsByChain = new Map<string, Set<string>>();
       for (const messageId of new Set(payload.flaggedMessageIds)) {
-        const owners = entries.filter((entry) =>
-          entry.messages.some((message) => message.id === messageId),
-        );
-        if (owners.length === 0) {
+        const owners = chainIdsByMessageId.get(messageId);
+        if (!owners || owners.length === 0) {
           throw new Error(
             `applyCompactionPersistence: flagged message ${messageId} not found in durable chains (session ${sessionId})`,
           );
         }
-        for (const owner of owners) {
-          let ids = flagsByChain.get(owner.row.id);
+        // A message mirrored across several chains flags every owner.
+        for (const chainId of owners) {
+          let ids = flagsByChain.get(chainId);
           if (!ids) {
             ids = new Set<string>();
-            flagsByChain.set(owner.row.id, ids);
+            flagsByChain.set(chainId, ids);
           }
           ids.add(messageId);
         }
@@ -2107,14 +2119,23 @@ export function applyCompactionPersistence(
           const head = anchorEntry.messages.slice(0, anchorIndex);
           const tail = anchorEntry.messages.slice(anchorIndex);
           updateChainRow(db, { ...chainMetadataFromRow(anchorEntry.row), messages: head });
-          const tailChain: Chain = payload.splitTailChain
-            ? { ...payload.splitTailChain, sessionId, messages: tail }
+          // The durable split keeps the ORIGINAL chain id (and any ACTIVE
+          // status plus the session's active_chain_id pointer) on the head —
+          // the turn finalizes into that row. The tail is replay-only history
+          // that the finalize subsumes (see deleteSupersededChains), so it
+          // must never claim ACTIVE regardless of what the payload carried.
+          const tailBase = payload.splitTailChain
+            ? { ...payload.splitTailChain, sessionId }
             : {
                 ...chainMetadataFromRow(anchorEntry.row),
                 id: randomUUID(),
                 subagentRecord: null,
-                messages: tail,
               };
+          const tailChain: Chain = {
+            ...tailBase,
+            messages: tail,
+            status: ChainStatus.COMPLETED,
+          };
           insertChainRow(db, insertChain, summary, ordinal + 1);
           insertChainRow(db, insertChain, tailChain, ordinal + 2);
           chainIds.splice(chainIds.indexOf(anchorEntry.row.id) + 1, 0, summary.id, tailChain.id);

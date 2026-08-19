@@ -43,14 +43,16 @@ import {
 } from '../../llm/compaction/run-attempt';
 import type { SelectiveCompactionResult } from '../../llm/compaction/selective/run';
 import { activeAgents } from './state';
-import { buildSessionUpdatedEvent, sendSessionEvent, sendTurnEvent, webContentsForWindowId } from './events';
+import { sendTurnEvent, webContentsForWindowId } from './events';
 import {
   ensureToolSnapshot,
   updateToolSnapshot,
 } from './snapshot';
 import {
+  buildCompactedCacheChains,
   persistCompactionBetweenTurns as persistCompaction,
   persistCompactionDurable,
+  publishCompactedSession,
 } from './persist';
 
 // ── Compaction state per session (U8, R13) ──────────────────────────────────
@@ -386,7 +388,10 @@ function persistSelectiveCompaction(
   try {
     const manager = getSessionManager();
     const existing = manager.getSession(sessionId) ?? manager.load(sessionId);
-    if (!existing) return true;
+    // No loadable session means nothing durable to write against — report
+    // failure (aligned with persistCompactionBetweenTurns) so the caller
+    // treats the compaction as not-applied instead of silently dropping it.
+    if (!existing) return false;
     const flaggedSet = new Set(result.flaggedIds);
     const updatedAt = new Date().toISOString();
     // New replay rows produced by the selective run (synthetic summaries +
@@ -435,58 +440,20 @@ function persistSelectiveCompaction(
     // Refresh the in-memory cache: flags applied wherever the view holds the
     // messages, summary chain spliced in at its durable position. Partial
     // arrays are fine — model replay history is maintained separately via
-    // setChatHistory.
-    const flaggedChains = existing.chains.map((chain) => {
-      if (!chain.messages.some((m) => flaggedSet.has(m.id) && !m.excludeFromModel)) return chain;
-      return {
-        ...chain,
-        messages: chain.messages.map((m) =>
-          flaggedSet.has(m.id) && !m.excludeFromModel ? { ...m, excludeFromModel: true } : m,
-        ),
-      };
-    });
-    let cacheChains: Chain[] = [...flaggedChains] as Chain[];
-    if (summaryChain && durable.summaryChainId === summaryChain.id) {
-      const order = new Map(durable.chainIds.map((id, index) => [id, index] as const));
-      const summaryPosition = order.get(summaryChain.id);
-      if (summaryPosition === undefined) {
-        cacheChains = [...flaggedChains, summaryChain] as Chain[];
-      } else {
-        let insertAt = flaggedChains.length;
-        for (let index = 0; index < flaggedChains.length; index += 1) {
-          const position = order.get(flaggedChains[index]!.id);
-          if (position !== undefined && position > summaryPosition) {
-            insertAt = index;
-            break;
-          }
-        }
-        cacheChains = [
-          ...flaggedChains.slice(0, insertAt),
-          summaryChain,
-          ...flaggedChains.slice(insertAt),
-        ] as Chain[];
-      }
-    }
-    const nextSession = { ...existing, chains: cacheChains as typeof existing.chains, updatedAt } as typeof existing;
-    manager.setCachedSession(nextSession as unknown as import('../../../shared/types/session').Session);
-    {
-      const prevIds = new Set(existing.chains.map((c) => c.id));
-      const changedIds = new Set<string>();
-      for (const c of cacheChains) {
-        const prev = existing.chains.find((p) => p.id === c.id);
-        if (!prev || prev.messages.length !== c.messages.length || prev.messages.some((m, i) => m.excludeFromModel !== c.messages[i]?.excludeFromModel)) changedIds.add(c.id);
-      }
-      for (const c of cacheChains) if (!prevIds.has(c.id)) changedIds.add(c.id);
-      for (const chainId of changedIds) {
-        const chain = nextSession.chains.find((c) => c.id === chainId);
-        if (!chain) continue;
-        const event = buildSessionUpdatedEvent(nextSession as unknown as import('../../../shared/types/session').Session, chain.id);
-        if (!event) continue;
-        sendSessionEvent(null, sessionId, IPC_CHANNELS.SESSION_UPDATED, event);
-      }
-      const compactionEvent = { sessionId, updatedAt: nextSession.updatedAt };
-      sendSessionEvent(null, sessionId, IPC_CHANNELS.SESSION_COMPACTION, compactionEvent);
-    }
+    // setChatHistory. Same shared cache/publish helpers as the simple
+    // between-turns path in persist.ts.
+    const cacheChains = buildCompactedCacheChains(
+      existing.chains,
+      // Minimal apply-like surface: the cache builder only reads `newChain`
+      // (the summary head) — flags and insertion anchor were computed above.
+      { updatedChains: existing.chains, newChain: summaryChain, didApply: true },
+      durable,
+      [...flaggedSet],
+      // No apply-side split tail: the selective path positions the summary
+      // via insertBeforeMessageId, never by re-id'ing a chain suffix.
+      null,
+    );
+    publishCompactedSession(manager, sessionId, existing, cacheChains, updatedAt);
     return true;
   } catch (err) {
     console.debug('[compaction] selective chain persist failed (non-fatal):', err);
@@ -598,7 +565,6 @@ export async function applyPendingCompactionIfAny(
           if (e instanceof CompactionApplyError) {
             trigger.abortPrepare();
             completeCompactionWidget(sessionId);
-            compactionPending.delete(sessionId);
             return { applied: false };
           }
           throw e;

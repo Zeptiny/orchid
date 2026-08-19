@@ -113,9 +113,10 @@ export async function resolveSubagentContextTokens(
  * buildCompactionApply flags the ENTIRE compactable range, so afterwards this
  * settles the flags: ids the selective pass kept verbatim become visible
  * again, and user messages are never flagged (R9 — the same protection the
- * fallback path applies). Pre-existing flags outside the covered range apply
- * only to non-user messages — a user message inside `userIds` is always
- * unflagged; other pre-existing flags outside the range are left untouched.
+ * fallback path applies). Pre-existing flags from EARLIER compactions survive
+ * everywhere except user messages — those messages are already out of the
+ * model view and un-flagging them would resurrect summarized content. Inside
+ * the covered range they beat the un-flag rule; outside it they are untouched.
  */
 export function buildSelectiveSubagentApply(params: {
   readonly messages: readonly Message[];
@@ -166,14 +167,23 @@ export function buildSelectiveSubagentApply(params: {
   const start = Math.max(0, Math.min(cutResult.compactableRange.start, n));
   const end = Math.max(start, Math.min(cutResult.compactableRange.end, n));
   const coveredIds = new Set<string>(mergedFlagged);
+  // Messages already excludeFromModel BEFORE this compaction (flagged by an
+  // earlier one) — settle must keep them excluded; see the settle rule below.
+  const preExcludedIds = new Set<string>();
   for (let i = start; i < end; i += 1) {
     const m = messages[i];
-    if (m) coveredIds.add(m.id);
+    if (!m) continue;
+    coveredIds.add(m.id);
+    if (m.excludeFromModel) preExcludedIds.add(m.id);
   }
   const flaggedSet = new Set(mergedFlagged);
   const settle = (m: Message): Message => {
     if (userIds.has(m.id)) return m.excludeFromModel ? { ...m, excludeFromModel: false } : m;
     if (flaggedSet.has(m.id)) return m.excludeFromModel ? m : { ...m, excludeFromModel: true };
+    // Pre-existing exclusions from EARLIER compactions survive: the message is
+    // already out of the model view, and un-flagging it here would resurrect
+    // content a previous summary replaced.
+    if (preExcludedIds.has(m.id)) return m;
     if (coveredIds.has(m.id) && m.excludeFromModel) return { ...m, excludeFromModel: false };
     return m;
   };
@@ -309,6 +319,12 @@ export async function tryCompactSubagentHistory(params: {
     accountingStore = undefined;
   }
 
+  // Compactable slice shared by both modes: in-range messages that are still
+  // model-visible (not excludeFromModel) and not hidden. Both mode branches
+  // no-op when the range has nothing left to compact.
+  const takeCompactableSlice = (): Message[] =>
+    (messages.slice(compactableRange.start, compactableRange.end) as Message[]).filter((m) => !m.excludeFromModel && !m.hidden);
+
   // Branch on compaction mode: selective uses manifest+LLM caller, simple uses summarizeCompactableRange.
   // Simple is default (opt-in selective via config.compaction.subagents.mode==='selective').
   if ((subagentsScope.mode as string) === 'selective') {
@@ -317,8 +333,8 @@ export async function tryCompactSubagentHistory(params: {
     // and the R9 never-flag-user invariant applied to the result. The runner
     // module is imported lazily like the other compaction leaves to keep this
     // module's load graph free of the provider runtime chain.
-    const compactableSliceForFallback = (messages.slice(compactableRange.start, compactableRange.end) as Message[]).filter((m) => !m.excludeFromModel && !m.hidden);
-    if (compactableSliceForFallback.length === 0) return null;
+    const compactableSlice = takeCompactableSlice();
+    if (compactableSlice.length === 0) return null;
 
     let attempt: CompactionAttemptOutcome;
     try {
@@ -375,7 +391,7 @@ export async function tryCompactSubagentHistory(params: {
   }
 
   // Simple default behavior (unchanged) — task-focused compactor-subagent, subagent-scoped accounting (R18)
-  const compactableSlice = (messages.slice(compactableRange.start, compactableRange.end) as Message[]).filter((m) => !m.excludeFromModel && !m.hidden);
+  const compactableSlice = takeCompactableSlice();
   if (compactableSlice.length === 0) return null;
 
   let summarizeResult: Awaited<ReturnType<typeof import('../llm/compaction/summarize.js').summarizeCompactableRange>> | null;
@@ -389,7 +405,7 @@ export async function tryCompactSubagentHistory(params: {
       existingModelSelection: selection,
       accounting: accountingStore
         ? { store: accountingStore, sessionId, chainId, turnId }
-        : ({ sessionId, chainId, turnId } as unknown as Parameters<typeof summarizeCompactableRange>[0]['accounting']),
+        : { sessionId, chainId, turnId },
       subagentId,
     });
   } catch {

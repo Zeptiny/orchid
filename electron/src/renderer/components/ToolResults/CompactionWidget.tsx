@@ -78,13 +78,11 @@ function formatRange(marker: NonNullable<Message['compacted']>): string {
 function isReclaimOnly(message: Message): boolean {
   const marker = message.compacted;
   if (!marker) return false;
+  // Reclaim-only output carries no summarized content: either an empty body
+  // or an explicit summarizedCount of 0. Anything else is a full summary head.
   const content = message.content?.trim() ?? '';
-  // Reclaim-only has no summary text or summarizedCount 0 with very short content
   if (content.length === 0) return true;
-  if (marker.summarizedCount === 0 && content.length < 80) return true;
-  // Heuristic: content that looks like reclaim note
-  if (/reclaim/i.test(content) && content.length < 200) return true;
-  return false;
+  return marker.summarizedCount === 0;
 }
 
 /**

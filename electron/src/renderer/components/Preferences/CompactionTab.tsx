@@ -67,12 +67,13 @@ export function CompactionTab({ compaction, onChange }: CompactionTabProps) {
     ) => {
       const num = parseConfigNumber(value, min, opts);
       if (num === null) return;
-      // Enforce upper bounds per schema
-      if (field === 'threshold' && num > 0.95) return;
-      if (field === 'hysteresis_delta' && num > 0.5) return;
-      if (field === 'preserve_percent' && num > 0.9) return;
-      if (field === 'min_compactable_tokens' && num > 1_000_000) return;
-      updateField(scope, field, num as CompactionScopeConfig[typeof field]);
+      // Clamp values to the schema maximum instead of rejecting the edit
+      let clamped = num;
+      if (field === 'threshold') clamped = Math.min(clamped, 0.95);
+      if (field === 'hysteresis_delta') clamped = Math.min(clamped, 0.5);
+      if (field === 'preserve_percent') clamped = Math.min(clamped, 0.9);
+      if (field === 'min_compactable_tokens') clamped = Math.min(clamped, 1_000_000);
+      updateField(scope, field, clamped as CompactionScopeConfig[typeof field]);
     },
     [updateField],
   );

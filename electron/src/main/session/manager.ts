@@ -887,37 +887,41 @@ export class SessionManager {
       errorDetail: errorDetail ?? null,
       errorTitle: errorTitle ?? null,
     };
+
+    // Snapshot the todo store once — it feeds both the durable finish write
+    // and the in-memory replacement without re-reading.
+    const todoStore = this.getTodoStore(session.id).toData();
+    const persisted = storageFinishChain(chain, now, todoStore, this._storageOpts);
+
+    // Compute the final chain list BEFORE building `updated`: the finished
+    // chain replaces its cached twin, then — only on a successful durable
+    // finish — the retire mirror drops subsumed rows. `updated` is built once
+    // from this list and never mutated afterwards.
     let chains = session.chains.map((c) =>
       c.id === chain.id ? chain : c,
     );
+    if (persisted.ok && persisted.retiredChainIds.length > 0) {
+      // Mirror the durable retire in the cache: finalized chain subsumed the
+      // split-tail rows, so they must not linger in the in-memory view.
+      const retired = new Set(persisted.retiredChainIds);
+      chains = chains.filter((c) => !retired.has(c.id));
+    }
 
     const updated = {
       ...session,
       chains,
       activeChainId: null,
-      todoStore: this.getTodoStore(session.id).toData(),
+      todoStore,
       updatedAt: now,
     };
-    const persisted = storageFinishChain(
-      chain,
-      now,
-      updated.todoStore,
-      this._storageOpts,
-    );
     if (!persisted.ok) {
       const restored = storageRestoreMissingChain(
         chain,
         now,
-        updated.todoStore,
+        todoStore,
         this._storageOpts,
       );
       if (!restored) this.saveFullSessionFallback(updated, [chain]);
-    } else if (persisted.retiredChainIds.length > 0) {
-      // Mirror the durable retire in the cache: finalized chain subsumed the
-      // split-tail rows, so they must not linger in the in-memory view.
-      const retired = new Set(persisted.retiredChainIds);
-      chains = chains.filter((c) => !retired.has(c.id));
-      updated.chains = chains;
     }
     this.replaceSession(updated);
     return updated;

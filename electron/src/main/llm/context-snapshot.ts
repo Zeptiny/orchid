@@ -1,7 +1,7 @@
 import type { ModelMessage, Tool } from 'ai';
 import { zodToJsonSchema } from 'zod-to-json-schema';
 import type { ContextSnapshot } from '../../shared/types/message';
-import { COMPACTION_MODES } from '../../shared/types/message';
+import { compactedMarkerFromUnknown } from '../../shared/types/message';
 
 interface ContextSnapshotInput {
   systemPrompt: string;
@@ -53,20 +53,14 @@ function toolDefinitionsLength(tools: Record<string, Tool>): number {
   return definitions.length > 0 ? serializedLength(definitions) : 0;
 }
 
-function isCompactedMarker(value: unknown): boolean {
-  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
-  const raw = value as Record<string, unknown>;
-  return (
-    typeof raw.rangeStart === 'string' &&
-    raw.rangeStart.length > 0 &&
-    typeof raw.rangeEnd === 'string' &&
-    raw.rangeEnd.length > 0 &&
-    (COMPACTION_MODES as readonly string[]).includes(raw.mode as string)
-  );
-}
-
+/**
+ * Structural marker validation via the shared parser (compactedMarkerFromUnknown):
+ * a malformed `compacted` value (boolean, string, partial object) is NOT a
+ * summary head. Must stay identical to the check in compaction/select.ts —
+ * both modules validate through the same shared helper.
+ */
 function hasCompactedMarker(message: Record<string, unknown>): boolean {
-  return 'compacted' in message && isCompactedMarker(message.compacted);
+  return 'compacted' in message && compactedMarkerFromUnknown(message.compacted) !== undefined;
 }
 
 function messageChars(
