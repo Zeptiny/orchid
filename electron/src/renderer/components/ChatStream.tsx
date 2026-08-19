@@ -464,6 +464,7 @@ function renderStreamItem(
           phase={phase}
           mode={mode}
           streamText={item.block.agentProjection}
+          estimatedTokens={item.block.estimatedTokens}
         />
       );
     }

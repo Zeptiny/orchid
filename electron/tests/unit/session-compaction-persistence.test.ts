@@ -34,7 +34,7 @@ import {
 import { openSqliteDb } from '../../src/main/utils/sqlite';
 import { SessionManager } from '../../src/main/session/manager';
 import { buildCompactionApply } from '../../src/main/llm/compaction/apply';
-import { persistCompactionBetweenTurns } from '../../src/main/ipc/chat/persist';
+import { persistCompactionBetweenTurns, attachUsageToLatestAssistant } from '../../src/main/ipc/chat/persist';
 
 const holders = vi.hoisted(() => ({
   sessionManager: null as unknown,
@@ -763,5 +763,50 @@ describe('superseded chain reconcile (split-tail retirement)', () => {
     expect(chainRowsFor(sessionId).map((row) => row.id)).toEqual(['chain-head']);
     expect(manager.getSession(sessionId)!.chains.map((chain) => chain.id))
       .toEqual(['chain-head']);
+  });
+});
+
+describe('attachUsageToLatestAssistant — compaction summary guard', () => {
+  it('never stamps a later step usage onto a compaction summary head', () => {
+    const summaryMarker = {
+      rangeStart: 'start-id',
+      rangeEnd: 'end-id',
+      mode: 'simple' as const,
+      summarizedCount: 43,
+    };
+    const summaryHead = makeMessage('summary-head', {
+      role: MessageRole.ASSISTANT,
+      type: MessageType.TEXT,
+      content: '# Handoff Summary',
+      compacted: summaryMarker,
+    });
+    const user = makeMessage('user-1', { role: MessageRole.USER });
+    const realAssistant = makeMessage('assistant-1', {
+      role: MessageRole.ASSISTANT,
+      type: MessageType.TEXT,
+      content: 'Real work.',
+    });
+    const usage = {
+      prompt_tokens: 105577,
+      completion_tokens: 895,
+      total_tokens: 106472,
+      cached_tokens: 0,
+    };
+
+    // Summary head is the LAST assistant text message — usage must skip it.
+    const withSummaryLast = [user, realAssistant, summaryHead];
+    expect(attachUsageToLatestAssistant(withSummaryLast, usage)).toBe(true);
+    expect(summaryHead.usage).toBeNull();
+    expect(withSummaryLast[1]!.usage).toEqual(usage);
+
+    // Without a summary head the latest assistant still receives it.
+    const plain = makeMessage('assistant-2', {
+      role: MessageRole.ASSISTANT,
+      type: MessageType.TEXT,
+      content: 'Later work.',
+    });
+    const withoutSummary = [user, realAssistant, plain];
+    expect(attachUsageToLatestAssistant(withoutSummary, usage)).toBe(true);
+    expect(withoutSummary[2]!.usage).toEqual(usage);
   });
 });

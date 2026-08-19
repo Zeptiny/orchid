@@ -88,7 +88,7 @@ describe('CompactionWidget — summary rendering', () => {
       <CompactionWidget
         message={summaryMessage(
           '## Handoff\nEarlier work: built the parser.',
-          { usage: usageTotal(1234) },
+          { compacted: marker({ tokensFreed: 105577 }) },
         )}
       />,
     );
@@ -100,7 +100,7 @@ describe('CompactionWidget — summary rendering', () => {
     expect(screen.getByText('Earlier work: built the parser.')).toBeTruthy();
     expect(screen.getByText(/range start-me…end-mess/)).toBeTruthy();
     expect(screen.getByText(/agent compactor/)).toBeTruthy();
-    expect(screen.getAllByText(/tokens freed/).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/~105,577 tokens freed/).length).toBeGreaterThan(0);
 
     fireEvent.click(screen.getByTitle('Click to collapse'));
     expect(toggle.getAttribute('aria-expanded')).toBe('false');
@@ -110,6 +110,38 @@ describe('CompactionWidget — summary rendering', () => {
     const plain = { ...summaryMessage('Real assistant text'), compacted: undefined };
     const { container } = render(<CompactionWidget message={plain} />);
     expect(container.innerHTML).toBe('');
+  });
+
+  it('never derives freed tokens from a stamped main-model usage (regression)', () => {
+    render(
+      <CompactionWidget
+        message={summaryMessage('## Handoff\nEarlier work.', {
+          usage: usageTotal(105577),
+          compacted: marker(),
+        })}
+      />,
+    );
+
+    // A usage stamped onto the summary head by a later step is NOT a freed
+    // metric; without marker metrics nothing is claimed.
+    expect(screen.queryByText(/tokens freed/)).toBeNull();
+  });
+
+  it('shows the compactor cost attribution when the marker carries it', () => {
+    render(
+      <CompactionWidget
+        message={summaryMessage('## Handoff', {
+          compacted: marker({
+            tokensFreed: 9000,
+            compactorTokens: { inputTokens: 5841, outputTokens: 895 },
+          }),
+        })}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: /Compaction summary/ }));
+    expect(screen.getByText(/compactor 5,841 in \/ 895 out/)).toBeTruthy();
+    expect(screen.getAllByText(/~9,000 tokens freed/).length).toBeGreaterThan(0);
   });
 });
 
@@ -142,6 +174,39 @@ describe('CompactionRunningWidget — streaming tail', () => {
     // Only the last few lines are shown — the header line is clipped.
     expect(tail?.textContent).not.toContain('## Handoff');
     expect(tail?.textContent).toContain('context line 12.');
+  });
+
+  it('shows the calibrated token estimate in place of the char count', () => {
+    const streamText = ['## Handoff', ...Array.from({ length: 12 }, (_, i) => `context line ${i + 1}.`)].join('\n');
+    render(
+      <CompactionRunningWidget
+        status="generating"
+        phase="summarizing"
+        mode="simple"
+        streamText={streamText}
+        estimatedTokens={1461}
+      />,
+    );
+
+    const tail = screen.getByText(/streaming/).closest('[data-compaction-stream="tail"]');
+    expect(tail?.textContent).toContain('~1,461 tokens');
+    expect(tail?.textContent).not.toContain('chars');
+  });
+
+  it('falls back to the char count when no calibration exists', () => {
+    const streamText = 'partial summary';
+    render(
+      <CompactionRunningWidget
+        status="generating"
+        phase="summarizing"
+        mode="simple"
+        streamText={streamText}
+        estimatedTokens={null}
+      />,
+    );
+
+    const tail = screen.getByText(/streaming/).closest('[data-compaction-stream="tail"]');
+    expect(tail?.textContent).toContain(`${streamText.length.toLocaleString()} chars`);
   });
 
   it('renders raw selective ops JSON as-is while streaming', () => {

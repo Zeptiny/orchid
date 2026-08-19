@@ -403,4 +403,110 @@ describe('context grid breakdown', () => {
 
     expect(contentReads).toBe(1);
   });
+
+  it('falls back to a char-derived summary category when summary_tokens is unreported', () => {
+    const messages = [
+      {
+        role: 'user',
+        content: 'x'.repeat(100),
+        type: MessageType.TEXT,
+        thinking: null,
+        hidden: false,
+      },
+      {
+        role: 'assistant',
+        content: 'y'.repeat(100),
+        type: MessageType.TEXT,
+        thinking: null,
+        hidden: false,
+        compacted: { rangeStart: 'a', rangeEnd: 'b', mode: 'simple' as const },
+      },
+    ] as unknown as Message[];
+
+    const breakdown = computeContextBreakdown(
+      messages,
+      {
+        prompt_tokens: 1_000,
+        completion_tokens: 100,
+        total_tokens: 1_100,
+        cached_tokens: 0,
+        context: {
+          input_tokens: 1_000,
+          output_tokens: 100,
+          used_tokens: 1_100,
+          system_tokens: 100,
+          tools_tokens: 100,
+          tool_use_tokens: 100,
+          user_tokens: 350,
+          assistant_tokens: 350,
+        },
+      },
+      2_000,
+    );
+
+    // 100 summary chars of 200 total → half of the input tokens.
+    expect(breakdown.summary).toBe(500);
+
+    const html = renderToStaticMarkup(
+      createElement(ContextLegend, {
+        messages,
+        usage: {
+          prompt_tokens: 1_000,
+          completion_tokens: 100,
+          total_tokens: 1_100,
+          cached_tokens: 0,
+          context: {
+            input_tokens: 1_000,
+            output_tokens: 100,
+            used_tokens: 1_100,
+            system_tokens: 100,
+            tools_tokens: 100,
+            tool_use_tokens: 100,
+            user_tokens: 350,
+            assistant_tokens: 350,
+          },
+        },
+        maxContext: 2_000,
+        variant: 'panel',
+      }),
+    );
+    expect(html).toContain('Summary (Compaction)');
+  });
+
+  it('prefers the provider-reported summary_tokens over the char fallback', () => {
+    const messages = [
+      {
+        role: 'assistant',
+        content: 'y'.repeat(100),
+        type: MessageType.TEXT,
+        thinking: null,
+        hidden: false,
+        compacted: { rangeStart: 'a', rangeEnd: 'b', mode: 'simple' as const },
+      },
+    ] as unknown as Message[];
+
+    const breakdown = computeContextBreakdown(
+      messages,
+      {
+        prompt_tokens: 1_000,
+        completion_tokens: 0,
+        total_tokens: 1_000,
+        cached_tokens: 0,
+        context: {
+          input_tokens: 1_000,
+          output_tokens: 0,
+          used_tokens: 1_000,
+          system_tokens: 100,
+          tools_tokens: 100,
+          tool_use_tokens: 100,
+          user_tokens: 350,
+          assistant_tokens: 300,
+          summary_tokens: 50,
+        },
+      },
+      2_000,
+    );
+
+    expect(breakdown.summary).toBe(50);
+  });
 });

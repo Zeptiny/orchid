@@ -185,6 +185,17 @@ export interface CompactedMarker {
   readonly mode: CompactionMode;
   /** Number of original messages summarized, if known. */
   readonly summarizedCount?: number;
+  /**
+   * Estimated main-context tokens reclaimed by this compaction
+   * (calibrated pre-compaction input minus calibrated post-compaction input).
+   * Absent on legacy heads and when no calibrated estimate existed.
+   */
+  readonly tokensFreed?: number;
+  /** Compactor LLM cost attribution, when the summarizer reported usage. */
+  readonly compactorTokens?: {
+    readonly inputTokens: number;
+    readonly outputTokens: number;
+  };
 }
 
 function isCompactionMode(value: unknown): value is CompactionMode {
@@ -204,7 +215,7 @@ export function compactedMarkerFromUnknown(value: unknown): CompactedMarker | un
   ) {
     return undefined;
   }
-  const marker: CompactedMarker = {
+  let marker: CompactedMarker = {
     rangeStart: raw.rangeStart,
     rangeEnd: raw.rangeEnd,
     mode: raw.mode,
@@ -214,7 +225,28 @@ export function compactedMarkerFromUnknown(value: unknown): CompactedMarker | un
     Number.isFinite(raw.summarizedCount) &&
     raw.summarizedCount >= 0
   ) {
-    return { ...marker, summarizedCount: Math.floor(raw.summarizedCount) };
+    marker = { ...marker, summarizedCount: Math.floor(raw.summarizedCount) };
+  }
+  if (
+    typeof raw.tokensFreed === 'number' &&
+    Number.isFinite(raw.tokensFreed) &&
+    raw.tokensFreed >= 0
+  ) {
+    marker = { ...marker, tokensFreed: Math.floor(raw.tokensFreed) };
+  }
+  const compactor = raw.compactorTokens as Record<string, unknown> | undefined;
+  if (
+    typeof compactor === 'object' && compactor !== null &&
+    typeof compactor.inputTokens === 'number' && Number.isFinite(compactor.inputTokens) && compactor.inputTokens >= 0 &&
+    typeof compactor.outputTokens === 'number' && Number.isFinite(compactor.outputTokens) && compactor.outputTokens >= 0
+  ) {
+    marker = {
+      ...marker,
+      compactorTokens: {
+        inputTokens: Math.floor(compactor.inputTokens),
+        outputTokens: Math.floor(compactor.outputTokens),
+      },
+    };
   }
   return marker;
 }
@@ -301,6 +333,12 @@ export interface ApiMessage {
     type: 'function';
     function: { name: string; arguments: string };
   }>;
+  /**
+   * Compaction summary-head marker (R23). Carried through the replay pipeline
+   * so the per-step context snapshot can bucket summary tokens (R19); it is a
+   * display/attribution annotation only and never sent to providers as data.
+   */
+  compacted?: CompactedMarker;
 }
 
 // ── Serialization ───────────────────────────────────────────────────────────
@@ -315,6 +353,9 @@ export function messageToApiFormat(msg: Message): ApiMessage {
 
   const api: ApiMessage = { role: msg.role, content };
 
+  if (msg.compacted) {
+    api.compacted = msg.compacted;
+  }
   if (msg.tool_call_id) {
     api.tool_call_id = msg.tool_call_id;
   }

@@ -28,6 +28,10 @@ export function attachUsageToLatestAssistant(messages: Message[], usage: Usage):
   for (let index = messages.length - 1; index >= 0; index--) {
     const message = messages[index];
     if (message?.role === MessageRole.ASSISTANT && message.type === MessageType.TEXT) {
+      // Compaction summary heads are synthetic handoff records, not model
+      // output. A later step's usage must never be attributed to one (it
+      // would render as a bogus "tokens freed" figure) — keep searching.
+      if (message.compacted) continue;
       messages[index] = { ...message, usage };
       return true;
     }

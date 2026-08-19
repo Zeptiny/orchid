@@ -164,6 +164,21 @@ function sumPersistedReasoning(messages: readonly Message[]): number {
   return total;
 }
 
+/**
+ * Char-ratio fallback for the summary category when the provider-reported
+ * `summary_tokens` is zero/absent while summary heads exist in the view.
+ * Mirrors the prompt-token distribution used by the non-context branch.
+ */
+function estimateSummaryTokensFromChars(
+  messages: readonly Message[],
+  inputTokens: number,
+): number {
+  const chars = countMessageChars(messages);
+  const totalChars = chars.tools + chars.user + chars.response + chars.reasoning + chars.summary;
+  if (chars.summary <= 0 || totalChars <= 0 || inputTokens <= 0) return 0;
+  return Math.round((chars.summary / totalChars) * inputTokens);
+}
+
 function isPersistedUsageRef(
   messages: readonly Message[],
   usage: Usage | null,
@@ -227,7 +242,9 @@ function computeBreakdown(
       }
       assistant = splitAssistantTokens(effectiveAssistantTokens, chars);
     }
-    const summaryTokens = Math.max(0, context.summary_tokens ?? 0);
+    const summaryTokens = Math.max(0, context.summary_tokens ?? 0) > 0
+      ? Math.max(0, context.summary_tokens ?? 0)
+      : estimateSummaryTokensFromChars(messages, context.input_tokens);
     return {
       system: context.system_tokens,
       tools: context.tools_tokens,
@@ -527,7 +544,9 @@ export function computeContextBreakdown(
   const mb = computeBreakdown(messages, usage, maxContext);
   const percentUsed = contextPercent(usage, maxContext) ?? undefined;
   if (usage?.context) {
-    const summaryTokens = usage.context.summary_tokens ?? mb.summary;
+    const summaryTokens = (usage.context.summary_tokens ?? 0) > 0
+      ? usage.context.summary_tokens!
+      : mb.summary;
     const base: ContextBreakdown = {
       free: mb.free,
       system: usage.context.system_tokens,

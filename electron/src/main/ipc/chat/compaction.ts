@@ -32,7 +32,7 @@ import { estimateMessageChars, totalCharsForMessages } from '../../llm/compactio
 import { selectCut, resolvePreservePercent, type CutResult } from '../../llm/compaction/select';
 import { mechanicalReclaim } from '../../llm/compaction/reclaim';
 import { summarizeCompactableRange, type SummarizeResult } from '../../llm/compaction/summarize';
-import { buildCompactionApply, CompactionApplyError } from '../../llm/compaction/apply';
+import { buildCompactionApply, CompactionApplyError, stampCompactionMetrics, type ApplyResult } from '../../llm/compaction/apply';
 import { CompactionTrigger } from '../../llm/compaction/trigger';
 import {
   compactableModelSlice,
@@ -68,10 +68,39 @@ const compactionPending = new Map<string, {
 }>();
 const compactionRetryTried = new Set<string>();
 
+// ── Compaction widget identity ──────────────────────────────────────────────
+
+/** Tool-call ids of the sessions' CURRENT compaction widget (one per session). */
+const compactionWidgetIds = new Map<string, string>();
+let compactionWidgetCounter = 0;
+
+/**
+ * Tool-call id for the session's current compaction widget.
+ *
+ * One id per in-flight compaction, NOT one per session: renderer projections
+ * upsert by id at the entry's original position, so reusing a session-stable
+ * id would pin a later compaction's running widget above everything streamed
+ * since the previous one. The id is held until the widget completes (or the
+ * session's compaction state is cleared); the next compaction mints a fresh
+ * id that appends at the tail.
+ */
+export function compactionWidgetToolId(sessionId: string): string {
+  const existing = compactionWidgetIds.get(sessionId);
+  if (existing) return existing;
+  const id = `compaction-${sessionId}-${(compactionWidgetCounter += 1)}`;
+  compactionWidgetIds.set(sessionId, id);
+  return id;
+}
+
+function releaseCompactionWidgetToolId(sessionId: string): void {
+  compactionWidgetIds.delete(sessionId);
+}
+
 export function clearCompactionState(sessionId: string): void {
   compactionTriggers.delete(sessionId);
   compactionPending.delete(sessionId);
   triggerCalibrationHydrated.delete(sessionId);
+  releaseCompactionWidgetToolId(sessionId);
   for (const key of [...compactionRetryTried]) {
     if (key === sessionId || key.startsWith(`${sessionId}:`)) compactionRetryTried.delete(key);
   }
@@ -93,14 +122,16 @@ export function clearCompactionRetryTried(sessionId: string, turnId: string): vo
 function completeCompactionWidget(sessionId: string): void {
   try {
     const active = activeAgents.get(sessionId);
-    const compactionToolId = `compaction-${sessionId}`;
+    const compactionToolId = compactionWidgetToolId(sessionId);
     if (active && !active.finalized && active.toolCalls.has(compactionToolId)) {
       active.toolCalls.delete(compactionToolId);
       const wc = webContentsForWindowId(active.windowId);
       if (wc) sendTurnEvent(wc, active, IPC_CHANNELS.CHAT_TOOL_CALL_UPDATE, { type: 'tool_call_update', toolCallId: compactionToolId, toolName: 'compaction', status: 'complete', args: '', content: '', toolResult: { schemaVersion: 1, family: 'generic', status: 'complete', completeness: 'complete', data: { value: '', origin: { kind: 'built-in', name: 'compaction' } } } as unknown as Record<string, unknown> });
     }
     clearCompactionPause(sessionId);
-  } catch {}
+  } catch {} finally {
+    releaseCompactionWidgetToolId(sessionId);
+  }
 }
 
 /** Minimum interval between compaction live-progress emissions (IPC flood guard). */
@@ -115,6 +146,10 @@ const COMPACTION_STREAM_EMIT_INTERVAL_MS = 100;
  * final accumulated text always lands even when deltas arrive in bursts.
  */
 export function createCompactionStreamEmitter(sessionId: string): (accumulatedText: string) => void {
+  // Bind to the widget id minted for THIS compaction: a trailing flush must
+  // never target a later compaction's widget after this one completes and
+  // releases its id.
+  const compactionToolId = compactionWidgetToolId(sessionId);
   let lastEmitAt = 0;
   let trailingTimer: ReturnType<typeof setTimeout> | null = null;
   let latest = '';
@@ -123,14 +158,24 @@ export function createCompactionStreamEmitter(sessionId: string): (accumulatedTe
     lastEmitAt = Date.now();
     const active = activeAgents.get(sessionId);
     if (!active || active.finalized) return;
-    const compactionToolId = `compaction-${sessionId}`;
     const current = active.toolCalls.get(compactionToolId);
     // Lifecycle guard: never resurrect a widget that already reached a
     // terminal state (the mid-turn resume path completes the snapshot without
     // deleting it) or was torn down — a trailing throttled flush landing after
     // the terminal update would otherwise flip it back to 'generating' forever.
     if (!current || (current.status !== 'generating' && current.status !== 'running')) return;
-    updateToolSnapshot(active, compactionToolId, 'compaction', { status: 'generating', content: latest });
+    // Calibrated char→token estimate for the streamed tail. Null when no
+    // calibration exists yet — never a heuristic ratio.
+    let estimatedTokens: number | null = null;
+    try {
+      const tpc = getCompactionTrigger(sessionId).state.tokensPerChar;
+      if (typeof tpc === 'number' && Number.isFinite(tpc) && tpc > 0) {
+        estimatedTokens = Math.ceil(latest.length * tpc);
+      }
+    } catch {
+      // trigger unavailable (test env) — char count remains the display
+    }
+    updateToolSnapshot(active, compactionToolId, 'compaction', { status: 'generating', content: latest, estimatedTokens });
     const wc = webContentsForWindowId(active.windowId);
     if (wc) {
       sendTurnEvent(wc, active, IPC_CHANNELS.CHAT_TOOL_CALL_UPDATE, {
@@ -139,6 +184,7 @@ export function createCompactionStreamEmitter(sessionId: string): (accumulatedTe
         toolName: 'compaction',
         status: 'generating',
         content: latest,
+        estimatedTokens,
       });
     }
   };
@@ -233,6 +279,34 @@ export function dedupeHistoryById(messages: readonly Message[]): Message[] {
 
 function totalChars(messages: readonly Message[]): number {
   return totalCharsForMessages(messages);
+}
+
+/**
+ * Record the compaction outcome on the summary head's marker: the calibrated
+ * tokens-freed estimate (pre minus post), plus the compactor LLM's own cost
+ * when the summarizer reported usage. Reclaim-only results (no summary head)
+ * pass through unchanged.
+ */
+function stampApplyMetrics(
+  applyResult: ApplyResult,
+  estimatedInput: number,
+  postTokens: number,
+  compactorUsage?: { inputTokens?: number; outputTokens?: number } | null,
+): ApplyResult {
+  const tokensFreed =
+    Number.isFinite(estimatedInput) && Number.isFinite(postTokens)
+      ? Math.max(0, Math.floor(estimatedInput - postTokens))
+      : undefined;
+  const compactorTokens =
+    compactorUsage &&
+    typeof compactorUsage.inputTokens === 'number' && Number.isFinite(compactorUsage.inputTokens) &&
+    typeof compactorUsage.outputTokens === 'number' && Number.isFinite(compactorUsage.outputTokens)
+      ? { inputTokens: Math.floor(compactorUsage.inputTokens), outputTokens: Math.floor(compactorUsage.outputTokens) }
+      : undefined;
+  return stampCompactionMetrics(applyResult, {
+    ...(tokensFreed != null && tokensFreed > 0 ? { tokensFreed } : {}),
+    ...(compactorTokens ? { compactorTokens } : {}),
+  });
 }
 
 function compactableTokenEstimate(messages: readonly Message[], range: { start: number; end: number }, tokensPerChar: number | undefined): number {
@@ -508,11 +582,12 @@ export async function applyPendingCompactionIfAny(
           // Unified R9 (#11a): the selective fallback never flags user
           // messages — the same protection the subagent scope applies.
           applyResult = unflagUserMessagesInApply(applyResult, history);
+          const tpc = trigger.state.tokensPerChar ?? (totalChars(applyResult.updatedMessages) > 0 ? pending.estimatedInput / Math.max(1, totalChars(history)) : undefined);
+          const postTokens = tpc ? Math.ceil(totalChars(applyResult.updatedMessages) * tpc) : pending.estimatedInput;
+          applyResult = stampApplyMetrics(applyResult, pending.estimatedInput, postTokens);
           const ok = persistCompaction(sessionId, applyResult);
           if (ok) {
             setChatHistory(sessionId, [...applyResult.updatedMessages]);
-            const tpc = trigger.state.tokensPerChar ?? (totalChars(applyResult.updatedMessages) > 0 ? pending.estimatedInput / Math.max(1, totalChars(history)) : undefined);
-            const postTokens = tpc ? Math.ceil(totalChars(applyResult.updatedMessages) * tpc) : pending.estimatedInput;
             trigger.onCompactionApplied(pending.estimatedInput, postTokens);
             trigger.abortPrepare();
             completeCompactionWidget(sessionId);
@@ -566,11 +641,12 @@ export async function applyPendingCompactionIfAny(
           throw e;
         }
         if (applyResult.didApply) {
+          const tpc = trigger.state.tokensPerChar ?? (totalChars(applyResult.updatedMessages) > 0 ? pending.estimatedInput / Math.max(1, totalChars(history)) : undefined);
+          const postTokens = tpc ? Math.ceil(totalChars(applyResult.updatedMessages) * tpc) : pending.estimatedInput;
+          applyResult = stampApplyMetrics(applyResult, pending.estimatedInput, postTokens, result.usage);
           const ok = persistCompaction(sessionId, applyResult);
           if (ok) {
             setChatHistory(sessionId, [...applyResult.updatedMessages]);
-            const tpc = trigger.state.tokensPerChar ?? (totalChars(applyResult.updatedMessages) > 0 ? pending.estimatedInput / Math.max(1, totalChars(history)) : undefined);
-            const postTokens = tpc ? Math.ceil(totalChars(applyResult.updatedMessages) * tpc) : pending.estimatedInput;
             trigger.onCompactionApplied(pending.estimatedInput, postTokens);
             trigger.abortPrepare();
             completeCompactionWidget(sessionId);
@@ -822,14 +898,15 @@ export async function tryCompactSynchronously(
           // Unified R9 (#11a): the selective fallback never flags user
           // messages — the same protection the subagent scope applies.
           applyResult = unflagUserMessagesInApply(applyResult, messages);
+          const tpcF2 = trigger.state.tokensPerChar ?? tokensPerChar;
+          const postF2 = Math.ceil(totalChars(applyResult.updatedMessages) * tpcF2);
+          applyResult = stampApplyMetrics(applyResult, estimatedInput, postF2);
           const ok = persistCompaction(sessionId, applyResult);
           if (!ok) {
             trigger.abortPrepare();
             return { didApply: false };
           }
           setChatHistory(sessionId, [...applyResult.updatedMessages]);
-          const tpcF2 = trigger.state.tokensPerChar ?? tokensPerChar;
-          const postF2 = Math.ceil(totalChars(applyResult.updatedMessages) * tpcF2);
           trigger.onCompactionApplied(estimatedInput, postF2);
           trigger.abortPrepare();
           return { didApply: true, updatedMessages: [...applyResult.updatedMessages] };
@@ -892,14 +969,15 @@ export async function tryCompactSynchronously(
         trigger.abortPrepare();
         return { didApply: false };
       }
+      const tpcSimple = trigger.state.tokensPerChar ?? tokensPerChar;
+      const postSimple = Math.ceil(totalChars(applyResult.updatedMessages) * tpcSimple);
+      applyResult = stampApplyMetrics(applyResult, estimatedInput, postSimple, result.usage);
       const ok = persistCompaction(sessionId, applyResult);
       if (!ok) {
         trigger.abortPrepare();
         return { didApply: false };
       }
       setChatHistory(sessionId, [...applyResult.updatedMessages]);
-      const tpcSimple = trigger.state.tokensPerChar ?? tokensPerChar;
-      const postSimple = Math.ceil(totalChars(applyResult.updatedMessages) * tpcSimple);
       trigger.onCompactionApplied(estimatedInput, postSimple);
       trigger.abortPrepare();
       return { didApply: true, updatedMessages: [...applyResult.updatedMessages] };
@@ -1005,7 +1083,7 @@ export function handleUsageCompaction(
       try {
         const active = activeAgents.get(sessionId);
         if (active && !active.finalized) {
-          const compactionToolId = `compaction-${sessionId}`;
+          const compactionToolId = compactionWidgetToolId(sessionId);
           ensureToolSnapshot(active, compactionToolId, 'compaction');
           updateToolSnapshot(active, compactionToolId, 'compaction', { status: 'running', args: JSON.stringify({ phase: 'reclaiming', mode: cfg.mode }), content: null, toolResult: null, finishedAt: null });
           const wc = webContentsForWindowId(active.windowId);
@@ -1044,7 +1122,7 @@ export function handleUsageCompaction(
           try {
             const active = activeAgents.get(sessionId);
             if (active && !active.finalized) {
-              const compactionToolId = `compaction-${sessionId}`;
+              const compactionToolId = compactionWidgetToolId(sessionId);
               const wc = webContentsForWindowId(active.windowId);
               const result = { schemaVersion: 1 as const, family: 'generic' as const, status: 'complete' as const, completeness: 'complete' as const, data: { value: '', origin: { kind: 'built-in' as const, name: 'compaction' } } };
               updateToolSnapshot(active, compactionToolId, 'compaction', { status: 'complete', args: '', content: '', toolResult: result as unknown as never, finishedAt: new Date().toISOString() });
@@ -1055,7 +1133,7 @@ export function handleUsageCompaction(
         try {
           const active = activeAgents.get(sessionId);
           if (active && !active.finalized) {
-            const compactionToolId = `compaction-${sessionId}`;
+            const compactionToolId = compactionWidgetToolId(sessionId);
             ensureToolSnapshot(active, compactionToolId, 'compaction');
             updateToolSnapshot(active, compactionToolId, 'compaction', { status: 'running', args: JSON.stringify({ phase: 'summarizing', mode: 'selective' }), content: null, toolResult: null, finishedAt: null });
             const wc = webContentsForWindowId(active.windowId);
@@ -1089,7 +1167,7 @@ export function handleUsageCompaction(
         try {
           const active = activeAgents.get(sessionId);
           if (active && !active.finalized) {
-            const compactionToolId = `compaction-${sessionId}`;
+            const compactionToolId = compactionWidgetToolId(sessionId);
             const wc = webContentsForWindowId(active.windowId);
             const result = { schemaVersion: 1 as const, family: 'generic' as const, status: 'complete' as const, completeness: 'complete' as const, data: { value: '', origin: { kind: 'built-in' as const, name: 'compaction' } } };
             updateToolSnapshot(active, compactionToolId, 'compaction', { status: 'complete', args: '', content: '', toolResult: result as unknown as never, finishedAt: new Date().toISOString() });
@@ -1100,7 +1178,7 @@ export function handleUsageCompaction(
       try {
         const active = activeAgents.get(sessionId);
         if (active && !active.finalized) {
-          const compactionToolId = `compaction-${sessionId}`;
+          const compactionToolId = compactionWidgetToolId(sessionId);
           ensureToolSnapshot(active, compactionToolId, 'compaction');
           updateToolSnapshot(active, compactionToolId, 'compaction', { status: 'running', args: JSON.stringify({ phase: 'summarizing', mode: 'simple' }), content: null, toolResult: null, finishedAt: null });
           const wc = webContentsForWindowId(active.windowId);

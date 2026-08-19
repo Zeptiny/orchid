@@ -149,6 +149,12 @@ export interface ChatToolCallSnapshot {
   toolResult: CanonicalToolResult | null;
   startedAt: string;
   finishedAt: string | null;
+  /**
+   * Calibrated token estimate for the streamed `content` while generating
+   * (ceil(chars × tokensPerChar)). Absent when no calibration exists —
+   * consumers must fall back to the char count, never a heuristic ratio.
+   */
+  estimatedTokens?: number | null;
 }
 
 export type ChatStreamSegmentSnapshot =
@@ -317,6 +323,8 @@ export interface ChatToolCallUpdateEvent extends ChatEventIdentity {
   content?: string;
   /** Canonical terminal authority; required for terminal updates. */
   toolResult?: CanonicalToolResult;
+  /** Calibrated token estimate of `content` while generating (see ChatToolCallSnapshot). */
+  estimatedTokens?: number | null;
 }
 
 // ── Background Command API ────────────────────────────────────────────────

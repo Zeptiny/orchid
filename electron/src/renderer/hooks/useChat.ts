@@ -72,6 +72,8 @@ export interface ToolBlock {
   toolResult: CanonicalToolResult | null;
   startedAt: string;
   finishedAt: string | null;
+  /** Calibrated token estimate of `agentProjection` while generating; null when unknown. */
+  estimatedTokens?: number | null;
 }
 
 /** Preserve canonical facts while adapting a main-process live snapshot. */
@@ -86,6 +88,7 @@ export function chatToolSnapshotToBlock(tool: ChatToolCallSnapshot | ChatTurnToo
     toolResult: tool.toolResult,
     startedAt: tool.startedAt,
     finishedAt: tool.finishedAt,
+    estimatedTokens: tool.estimatedTokens ?? null,
   };
 }
 

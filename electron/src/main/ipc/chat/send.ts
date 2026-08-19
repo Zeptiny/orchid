@@ -83,6 +83,7 @@ import { isContextLengthExceededError } from '../../llm/middleware/error-classif
 import {
   applyPendingCompactionIfAny,
   clearCompactionRetryTried,
+  compactionWidgetToolId,
   dedupeHistoryById,
   getCompactionTrigger,
   handleUsageCompaction,
@@ -634,7 +635,7 @@ export async function startChatTurn(
         clearCompactionPause(sessionId);
         const fullHistoryForPause = [...messages, ...turnMessagesFromAgent(activeAgent)];
         publishSessionActivity(sessionId, { cwd: turnCtx.cwd, state: 'working', phase: 'agent', detail: 'Compacting context — applying summary…', canCancel: true });
-        const compactionToolId = `compaction-${sessionId}`;
+        const compactionToolId = compactionWidgetToolId(sessionId);
         ensureToolSnapshot(activeAgent, compactionToolId, 'compaction');
         updateToolSnapshot(activeAgent, compactionToolId, 'compaction', { status: 'running', args: JSON.stringify({ phase: 'compacting' }), content: null, toolResult: null, finishedAt: null });
         sendTurnEvent(webContents, activeAgent, IPC_CHANNELS.CHAT_TOOL_CALL_UPDATE, { type: 'tool_call_update', toolCallId: compactionToolId, toolName: 'compaction', status: 'running', args: JSON.stringify({ phase: 'compacting' }) });
@@ -684,6 +685,9 @@ export async function startChatTurn(
                 };
                 updateToolSnapshot(activeAgent, compactionToolId, 'compaction', { status: 'complete', args: '', content: 'Context compacted — resuming', toolResult: compactionCompleteResult as unknown as typeof activeAgent.toolCalls extends Map<string, infer V> ? V extends { toolResult: infer R } ? R : never : never, finishedAt: new Date().toISOString() });
                 sendTurnEvent(webContents, activeAgent, IPC_CHANNELS.CHAT_TOOL_CALL_UPDATE, { type: 'tool_call_update', toolCallId: compactionToolId, toolName: 'compaction', status: 'complete', args: '', content: 'Context compacted — resuming', toolResult: compactionCompleteResult as unknown as Record<string, unknown> });
+                // Terminal compaction widgets are display-only; drop the entry
+                // so a later compaction in the same turn cannot inherit its id.
+                activeAgent.toolCalls.delete(compactionToolId);
                 return;
               } catch (e) {
                 console.debug('[compaction] mid-turn resume failed:', e);
@@ -702,6 +706,7 @@ export async function startChatTurn(
             };
             updateToolSnapshot(activeAgent, compactionToolId, 'compaction', { status: 'complete', args: '', content: '', toolResult: compactionCompleteResult as unknown as never, finishedAt: new Date().toISOString() });
             sendTurnEvent(webContents, activeAgent, IPC_CHANNELS.CHAT_TOOL_CALL_UPDATE, { type: 'tool_call_update', toolCallId: compactionToolId, toolName: 'compaction', status: 'complete', args: '', content: '', toolResult: compactionCompleteResult as unknown as Record<string, unknown> });
+            activeAgent.toolCalls.delete(compactionToolId);
           }
           clearCompactionPause(sessionId);
           try {

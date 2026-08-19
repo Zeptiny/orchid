@@ -115,6 +115,45 @@ describe('SdkEventAdapter', () => {
     expect(bridge.flushActiveInput).toHaveBeenCalledTimes(2);
   });
 
+  it('restores compaction summary markers the SDK echo dropped (R19)', () => {
+    const marker = { rangeStart: 'a', rangeEnd: 'b', mode: 'simple' as const };
+    const attempt = { armIdleTimer: vi.fn(), markDeliveredOutput: vi.fn() } as unknown as Pick<StreamAttemptController, 'armIdleTimer' | 'markDeliveredOutput'>;
+    const buildUsage = vi.fn((): Usage => ({
+      prompt_tokens: 0,
+      completion_tokens: 0,
+      total_tokens: 0,
+      cached_tokens: 0,
+    }));
+    const coreMessages = [
+      { role: 'user', content: 'q' },
+      { role: 'assistant', content: 'handoff', compacted: marker },
+    ] as unknown as readonly ModelMessage[];
+    const adapter = new SdkEventAdapter({
+      coreMessages,
+      resolveToolName: (toolName) => toolName,
+      attempt,
+      eagerBridge: { flushActiveInput: vi.fn(), drainEagerStarts: vi.fn(function* () {}), drainEvents: vi.fn(function* () {}) } as unknown as EagerToolBridge,
+      buildUsage,
+    });
+
+    // SDK rebuilt the prefix without the marker and appended a step response.
+    const echo = [
+      { role: 'user', content: 'q' },
+      { role: 'assistant', content: 'handoff' },
+      { role: 'assistant', content: 'new step text' },
+    ] as unknown as ModelMessage[];
+
+    adapt(adapter, { type: 'start-step', request: { messages: echo } });
+    adapt(adapter, { type: 'finish-step', usage: { inputTokens: 5 } });
+
+    const passed = buildUsage.mock.calls[0]?.[1] as Array<{ compacted?: unknown }>;
+    expect(passed).toHaveLength(3);
+    expect(passed[1]?.compacted).toEqual(marker);
+    // Untouched entries stay by reference; the appended step response is not annotated.
+    expect(passed[0]).toBe(echo[0]);
+    expect(passed[2]?.compacted).toBeUndefined();
+  });
+
   it('passes per-step output chars to buildUsage and resets them each step', () => {
     const { adapter, buildUsage } = createAdapter();
 

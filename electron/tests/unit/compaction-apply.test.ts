@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto';
 import type { Message } from '../../src/shared/types/message';
 import { MessageRole, MessageType } from '../../src/shared/types/message';
 import { ChainStatus, type Chain } from '../../src/shared/types/chain';
-import { buildCompactionApply, validateCompactableRangeNotSummarized, CompactionApplyError } from '../../src/main/llm/compaction/apply';
+import { buildCompactionApply, validateCompactableRangeNotSummarized, CompactionApplyError, stampCompactionMetrics } from '../../src/main/llm/compaction/apply';
 import type { CutResult } from '../../src/main/llm/compaction/select';
 
 // Reuse MessageType / Role helpers
@@ -540,5 +540,57 @@ describe('compaction apply — persisted-shape outputs (pure build)', () => {
     const summaryIdx = applyResult.updatedMessages.findIndex((m) => m.id === applyResult.summaryMessage!.id);
     expect(summaryIdx).toBe(cut.cutIndex);
     expect(applyResult.updatedMessages.slice(0, summaryIdx).every((m) => m.excludeFromModel)).toBe(true);
+  });
+});
+
+describe('stampCompactionMetrics', () => {
+  function buildApplied() {
+    const { chains, messages, chainBoundaries, sessionId } = buildSession(3);
+    const cut = makeCut(messages, 1, chainBoundaries);
+    return buildCompactionApply({
+      messages,
+      chains,
+      cutResult: cut,
+      summaryText: 'handoff summary',
+      mode: 'simple',
+      sessionId,
+    });
+  }
+
+  it('stamps tokensFreed and compactorTokens on every summary-head reference', () => {
+    const applied = buildApplied();
+    const stamped = stampCompactionMetrics(applied, {
+      tokensFreed: 42_500,
+      compactorTokens: { inputTokens: 5_800, outputTokens: 895 },
+    });
+
+    expect(stamped).not.toBe(applied);
+    expect(stamped.summaryMessage?.compacted?.tokensFreed).toBe(42_500);
+    expect(stamped.summaryMessage?.compacted?.compactorTokens).toEqual({
+      inputTokens: 5_800,
+      outputTokens: 895,
+    });
+    // updatedMessages and newChain hold the SAME stamped instance
+    const inFlat = stamped.updatedMessages.find((m) => m.id === stamped.summaryMessage!.id);
+    expect(inFlat).toBe(stamped.summaryMessage);
+    expect(stamped.newChain!.messages[0]).toBe(stamped.summaryMessage);
+    // Base marker fields survive
+    expect(stamped.summaryMessage?.compacted?.mode).toBe('simple');
+    expect(stamped.compactedMarker?.tokensFreed).toBe(42_500);
+  });
+
+  it('clamps negative tokensFreed to zero and floors fractions', () => {
+    const stamped = stampCompactionMetrics(buildApplied(), { tokensFreed: -10.7 });
+    expect(stamped.summaryMessage?.compacted?.tokensFreed).toBe(0);
+    const floored = stampCompactionMetrics(buildApplied(), { tokensFreed: 12.9 });
+    expect(floored.summaryMessage?.compacted?.tokensFreed).toBe(12);
+  });
+
+  it('passes through unchanged without metrics or without a summary head', () => {
+    const applied = buildApplied();
+    expect(stampCompactionMetrics(applied, {})).toBe(applied);
+    expect(
+      stampCompactionMetrics({ ...applied, summaryMessage: null, newChain: null }, { tokensFreed: 10 }),
+    ).toEqual({ ...applied, summaryMessage: null, newChain: null });
   });
 });

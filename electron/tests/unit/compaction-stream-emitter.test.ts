@@ -53,7 +53,7 @@ vi.mock('../../src/main/llm/compaction/apply', () => ({
   CompactionApplyError: class CompactionApplyError extends Error {},
 }));
 vi.mock('../../src/main/llm/compaction/trigger', () => ({
-  CompactionTrigger: class CompactionTrigger {},
+  CompactionTrigger: class CompactionTrigger { state: Record<string, unknown> = {}; },
 }));
 vi.mock('../../src/main/llm/compaction/run-attempt', () => ({
   compactableModelSlice: vi.fn(),
@@ -67,11 +67,15 @@ vi.mock('../../src/main/ipc/chat/persist', () => ({
 }));
 
 // Real snapshot helpers run against the mocked activeAgents map.
-import { createCompactionStreamEmitter } from '../../src/main/ipc/chat/compaction';
+import {
+  clearCompactionState,
+  compactionWidgetToolId,
+  createCompactionStreamEmitter,
+  getCompactionTrigger,
+} from '../../src/main/ipc/chat/compaction';
 import { ensureToolSnapshot, updateToolSnapshot } from '../../src/main/ipc/chat/snapshot';
 
 const SESSION_ID = 's1';
-const TOOL_ID = `compaction-${SESSION_ID}`;
 
 function makeActive(): ActiveAgent {
   return {
@@ -83,10 +87,10 @@ function makeActive(): ActiveAgent {
   } as unknown as ActiveAgent;
 }
 
-function generatingPayload(content: string) {
+function generatingPayload(toolCallId: string, content: string) {
   return expect.objectContaining({
     type: 'tool_call_update',
-    toolCallId: TOOL_ID,
+    toolCallId,
     toolName: 'compaction',
     status: 'generating',
     content,
@@ -97,6 +101,11 @@ beforeEach(() => {
   vi.useFakeTimers();
   activeAgents.clear();
   sendTurnEvent.mockClear();
+  try {
+    clearCompactionState(SESSION_ID);
+  } catch {
+    // module state unavailable in isolated imports — ignore
+  }
 });
 
 afterEach(() => {
@@ -105,6 +114,7 @@ afterEach(() => {
 
 describe('createCompactionStreamEmitter', () => {
   it('emits throttled generating updates with the accumulated text', () => {
+    const TOOL_ID = compactionWidgetToolId(SESSION_ID);
     const active = makeActive();
     activeAgents.set(SESSION_ID, active);
     ensureToolSnapshot(active, TOOL_ID, 'compaction');
@@ -119,7 +129,7 @@ describe('createCompactionStreamEmitter', () => {
       expect.anything(),
       active,
       'chat:tool_call_update',
-      generatingPayload('Sum'),
+      generatingPayload(TOOL_ID, 'Sum'),
     );
 
     // Trailing flush carries the latest accumulated text.
@@ -129,12 +139,43 @@ describe('createCompactionStreamEmitter', () => {
       expect.anything(),
       active,
       'chat:tool_call_update',
-      generatingPayload('Summary text'),
+      generatingPayload(TOOL_ID, 'Summary text'),
     );
     expect(active.toolCalls.get(TOOL_ID)).toMatchObject({ status: 'generating', content: 'Summary text' });
   });
 
+  it('includes the calibrated token estimate with each generating update', () => {
+    const TOOL_ID = compactionWidgetToolId(SESSION_ID);
+    const active = makeActive();
+    activeAgents.set(SESSION_ID, active);
+    ensureToolSnapshot(active, TOOL_ID, 'compaction');
+    updateToolSnapshot(active, TOOL_ID, 'compaction', { status: 'running', args: '{"phase":"summarizing"}' });
+    (getCompactionTrigger(SESSION_ID) as unknown as { state: Record<string, unknown> }).state.tokensPerChar = 0.25;
+
+    const emit = createCompactionStreamEmitter(SESSION_ID);
+    emit('Sum'); // 3 chars × 0.25 = 0.75 → ceil 1
+    expect(sendTurnEvent).toHaveBeenCalledWith(
+      expect.anything(),
+      active,
+      'chat:tool_call_update',
+      expect.objectContaining({ toolCallId: TOOL_ID, status: 'generating', estimatedTokens: 1 }),
+    );
+    expect(active.toolCalls.get(TOOL_ID)).toMatchObject({ estimatedTokens: 1 });
+
+    // Without calibration the estimate is null — never a heuristic ratio.
+    (getCompactionTrigger(SESSION_ID) as unknown as { state: Record<string, unknown> }).state.tokensPerChar = undefined;
+    emit('Summary text');
+    vi.advanceTimersByTime(150);
+    expect(sendTurnEvent).toHaveBeenLastCalledWith(
+      expect.anything(),
+      active,
+      'chat:tool_call_update',
+      expect.objectContaining({ toolCallId: TOOL_ID, status: 'generating', estimatedTokens: null }),
+    );
+  });
+
   it('never flips a completed widget back to generating (trailing flush after terminal)', () => {
+    const TOOL_ID = compactionWidgetToolId(SESSION_ID);
     const active = makeActive();
     activeAgents.set(SESSION_ID, active);
     ensureToolSnapshot(active, TOOL_ID, 'compaction');
@@ -158,7 +199,7 @@ describe('createCompactionStreamEmitter', () => {
       expect.anything(),
       expect.anything(),
       expect.anything(),
-      generatingPayload(expect.any(String)),
+      generatingPayload(TOOL_ID, expect.any(String)),
     );
 
     // Later deltas after completion are also ignored.
@@ -168,6 +209,7 @@ describe('createCompactionStreamEmitter', () => {
   });
 
   it('does not resurrect a deleted widget snapshot', () => {
+    const TOOL_ID = compactionWidgetToolId(SESSION_ID);
     const active = makeActive();
     activeAgents.set(SESSION_ID, active);
     ensureToolSnapshot(active, TOOL_ID, 'compaction');
@@ -186,7 +228,37 @@ describe('createCompactionStreamEmitter', () => {
       expect.anything(),
       expect.anything(),
       expect.anything(),
-      generatingPayload(expect.any(String)),
+      generatingPayload(TOOL_ID, expect.any(String)),
+    );
+  });
+
+  it('binds to the widget id minted at emitter creation, not the current one', () => {
+    const FIRST_ID = compactionWidgetToolId(SESSION_ID);
+    const active = makeActive();
+    activeAgents.set(SESSION_ID, active);
+    ensureToolSnapshot(active, FIRST_ID, 'compaction');
+    updateToolSnapshot(active, FIRST_ID, 'compaction', { status: 'running', args: '{}' });
+
+    const emit = createCompactionStreamEmitter(SESSION_ID);
+    active.toolCalls.delete(FIRST_ID); // first compaction completes + releases
+    try {
+      clearCompactionState(SESSION_ID);
+    } catch {}
+
+    const SECOND_ID = compactionWidgetToolId(SESSION_ID);
+    expect(SECOND_ID).not.toBe(FIRST_ID);
+    ensureToolSnapshot(active, SECOND_ID, 'compaction');
+    updateToolSnapshot(active, SECOND_ID, 'compaction', { status: 'running', args: '{}' });
+
+    // A trailing flush from the FIRST emitter must not touch the second widget.
+    sendTurnEvent.mockClear();
+    vi.advanceTimersByTime(150);
+    expect(active.toolCalls.get(SECOND_ID)).toMatchObject({ status: 'running', content: null });
+    expect(sendTurnEvent).not.toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      expect.anything(),
+      generatingPayload(SECOND_ID, expect.any(String)),
     );
   });
 
@@ -200,6 +272,7 @@ describe('createCompactionStreamEmitter', () => {
 
 describe('ensureToolSnapshot segment dedupe', () => {
   it('does not push a second tool segment when the snapshot is re-created after teardown', () => {
+    const TOOL_ID = compactionWidgetToolId(SESSION_ID);
     const active = makeActive();
     activeAgents.set(SESSION_ID, active);
 
@@ -215,5 +288,19 @@ describe('ensureToolSnapshot segment dedupe', () => {
     expect(
       active.streamSegments.filter((s) => s.kind === 'tool' && s.toolCallId === TOOL_ID),
     ).toHaveLength(1);
+  });
+});
+
+describe('compactionWidgetToolId', () => {
+  it('mints one id per compaction, not per session', () => {
+    const first = compactionWidgetToolId(SESSION_ID);
+    expect(compactionWidgetToolId(SESSION_ID)).toBe(first);
+
+    try {
+      clearCompactionState(SESSION_ID);
+    } catch {}
+    const second = compactionWidgetToolId(SESSION_ID);
+    expect(second).not.toBe(first);
+    expect(second.startsWith(`compaction-${SESSION_ID}-`)).toBe(true);
   });
 });

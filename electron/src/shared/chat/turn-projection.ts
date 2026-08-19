@@ -193,6 +193,18 @@ export function reduceChatTurnProjection(
 
 /** Copy a main-process live snapshot exactly into the renderer-neutral shape. */
 export function seedChatTurnProjection(snapshot: ChatSnapshot): ChatTurnProjection {
+  // Terminal compaction widgets are display-only; a snapshot that still holds
+  // one (e.g. mid-turn resume) must not seed it back into the timeline — a
+  // later compaction would upsert onto it at this stale position.
+  const terminalCompactionIds = new Set(
+    snapshot.toolCalls
+      .filter(
+        (tool) =>
+          tool.toolName === 'compaction' &&
+          tool.status !== 'generating' && tool.status !== 'running',
+      )
+      .map((tool) => tool.toolCallId),
+  );
   return {
     sessionId: snapshot.sessionId,
     turnId: snapshot.turnId,
@@ -200,8 +212,15 @@ export function seedChatTurnProjection(snapshot: ChatSnapshot): ChatTurnProjecti
     status: snapshot.state,
     response: snapshot.response,
     thinking: snapshot.thinking,
-    streamSegments: snapshot.streamSegments.map(copySegment),
-    toolCalls: snapshot.toolCalls.map((tool) => ({ ...tool })),
+    streamSegments: snapshot.streamSegments
+      .filter(
+        (segment) =>
+          !(segment.kind === 'tool' && terminalCompactionIds.has(segment.toolCallId)),
+      )
+      .map(copySegment),
+    toolCalls: snapshot.toolCalls
+      .filter((tool) => !terminalCompactionIds.has(tool.toolCallId))
+      .map((tool) => ({ ...tool })),
     usage: snapshot.usage,
     error: snapshot.error,
     interruptState: snapshot.interruptState,
@@ -209,6 +228,25 @@ export function seedChatTurnProjection(snapshot: ChatSnapshot): ChatTurnProjecti
     startedAt: snapshot.startedAt,
     interrupted: snapshot.interrupted,
     terminal: null,
+  };
+}
+
+/** Remove one tool entry and its segment from the live projection. */
+function pruneToolEntry(
+  projection: ChatTurnProjection,
+  toolCallId: string,
+): ChatTurnProjection {
+  const hadTool = projection.toolCalls.some((tool) => tool.toolCallId === toolCallId);
+  const hadSegment = projection.streamSegments.some(
+    (segment) => segment.kind === 'tool' && segment.toolCallId === toolCallId,
+  );
+  if (!hadTool && !hadSegment) return projection;
+  return {
+    ...projection,
+    toolCalls: projection.toolCalls.filter((tool) => tool.toolCallId !== toolCallId),
+    streamSegments: projection.streamSegments.filter(
+      (segment) => !(segment.kind === 'tool' && segment.toolCallId === toolCallId),
+    ),
   };
 }
 
@@ -268,7 +306,20 @@ export function applyChatTurnEvent(
       return updateTool(next, action.toolCallId, undefined, action.occurredAt, (tool) => ({
         partialArgs: tool.partialArgs + action.argsDelta,
       }));
-    case 'tool_call_update':
+    case 'tool_call_update': {
+      // Synthetic compaction widgets render nothing once terminal. Dropping the
+      // entry (and its segment) frees the fixed id so a later compaction in the
+      // same projection appends at the tail instead of resurrecting this
+      // position above everything streamed since.
+      if (
+        action.status !== 'running' && action.status !== 'generating' &&
+        (action.toolName === 'compaction' ||
+          projection.toolCalls.some(
+            (tool) => tool.toolCallId === action.toolCallId && tool.toolName === 'compaction',
+          ))
+      ) {
+        return pruneToolEntry(next, action.toolCallId);
+      }
       return updateTool(next, action.toolCallId, action.toolName, action.occurredAt, (tool) => {
         const terminal = action.status !== 'running' && action.status !== 'generating';
         const alreadyTerminal = tool.status !== 'generating' && tool.status !== 'running';
@@ -278,9 +329,13 @@ export function applyChatTurnEvent(
           args: action.args ?? (terminal && !tool.args ? tool.partialArgs : tool.args),
           content: action.content ?? tool.content,
           toolResult: action.toolResult ?? tool.toolResult,
+          ...(action.estimatedTokens !== undefined
+            ? { estimatedTokens: action.estimatedTokens }
+            : {}),
           finishedAt: terminal ? tool.finishedAt ?? action.occurredAt : tool.finishedAt,
         };
       });
+    }
     case 'done': {
       const interrupted = action.interrupted ?? next.interrupted;
       const usage = action.usage ?? next.usage;

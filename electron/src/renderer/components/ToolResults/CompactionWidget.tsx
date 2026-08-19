@@ -16,6 +16,8 @@ export interface CompactionRunningWidgetProps {
   mode?: string;
   /** Live compactor output tail — summary text (simple) or raw ops JSON (selective). */
   streamText?: string | null;
+  /** Calibrated token estimate of `streamText`; null when no calibration exists. */
+  estimatedTokens?: number | null;
 }
 
 const STREAM_TAIL_LINES = 4;
@@ -25,10 +27,15 @@ function streamTail(text: string): string {
   return lines.slice(-STREAM_TAIL_LINES).join('\n');
 }
 
-export function CompactionRunningWidget({ status: _status, phase, mode, streamText }: CompactionRunningWidgetProps) {
+export function CompactionRunningWidget({ status: _status, phase, mode, streamText, estimatedTokens }: CompactionRunningWidgetProps) {
   const label = phase === 'reclaiming' ? 'Reclaiming duplicate outputs…' : 'Compacting context…';
   const detail = phase === 'summarizing' ? 'Summarizing history' : phase === 'reclaiming' ? 'Removing duplicates' : 'Preparing compaction';
   const hasStream = typeof streamText === 'string' && streamText.length > 0;
+  const sizeLabel = !hasStream
+    ? ''
+    : typeof estimatedTokens === 'number' && estimatedTokens >= 0
+      ? `~${estimatedTokens.toLocaleString()} tokens`
+      : `${streamText!.length.toLocaleString()} chars`;
   return (
     <div className="orchid-tool-block orchid-compaction-block is-running" data-compaction="running" data-tool-result-status="running" aria-live="polite" aria-busy="true">
       <div className="orchid-tool-block-title min-w-0">
@@ -47,7 +54,7 @@ export function CompactionRunningWidget({ status: _status, phase, mode, streamTe
         <div className="orchid-tool-block-content orchid-compaction-content min-w-0" data-compaction-stream="tail">
           <div className="mb-1 flex items-center gap-2 text-xs text-base-content/60">
             <span>{detail} — streaming</span>
-            <span className="text-base-content/40">{streamText!.length.toLocaleString()} chars</span>
+            <span className="text-base-content/40">{sizeLabel}</span>
           </div>
           <pre className="orchid-compaction-stream-tail m-0 max-h-28 overflow-hidden whitespace-pre-wrap break-words font-mono text-[11px] leading-relaxed text-base-content/55">
             {streamTail(streamText!)}
@@ -128,13 +135,12 @@ function CompactionSummaryCard({ message }: { message: Message }) {
     if (expanded) setHasExpanded(true);
   }, [expanded]);
 
-  const tokensFreed = useMemo(() => {
-    if (message.usage?.prompt_tokens || message.usage?.completion_tokens) {
-      const t = (message.usage.prompt_tokens ?? 0) + (message.usage.completion_tokens ?? 0);
-      if (t > 0) return `~${t.toLocaleString()} tokens`;
-    }
-    return null;
-  }, [message.usage]);
+  const tokensFreed = marker.tokensFreed != null && marker.tokensFreed > 0
+    ? `~${marker.tokensFreed.toLocaleString()} tokens freed`
+    : null;
+  const compactorTokens = marker.compactorTokens
+    ? `compactor ${marker.compactorTokens.inputTokens.toLocaleString()} in / ${marker.compactorTokens.outputTokens.toLocaleString()} out`
+    : null;
 
   const body = useMemo(() => {
     if (!expanded && !hasExpanded) return null;
@@ -167,7 +173,7 @@ function CompactionSummaryCard({ message }: { message: Message }) {
               {summarizedCount} messages
             </StatusBadge>
           )}
-          {tokensFreed && <span className="hidden text-xs text-base-content/60 sm:inline">{tokensFreed} freed</span>}
+          {tokensFreed && <span className="hidden text-xs text-base-content/60 sm:inline">{tokensFreed}</span>}
           <Icon name="chevronDown" size={12} className={`orchid-disclosure-chevron ${expanded ? 'is-open' : ''}`} />
         </span>
       </button>
@@ -187,7 +193,13 @@ function CompactionSummaryCard({ message }: { message: Message }) {
               <Icon name="cpu" size={10} className="opacity-60" />
               agent compactor
             </span>
-            {tokensFreed && <span className="sm:hidden">{tokensFreed} freed</span>}
+            {compactorTokens && (
+              <span className="inline-flex items-center gap-1">
+                <Icon name="cpu" size={10} className="opacity-60" />
+                {compactorTokens}
+              </span>
+            )}
+            {tokensFreed && <span className="sm:hidden">{tokensFreed}</span>}
           </div>
           {body}
           <span id={announcementId} className="sr-only" role="status" aria-live="polite">

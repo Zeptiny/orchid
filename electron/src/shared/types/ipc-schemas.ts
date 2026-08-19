@@ -88,6 +88,11 @@ export const compactedMarkerSchema = z.object({
   rangeEnd: z.string().min(1),
   mode: z.enum(['simple', 'selective']),
   summarizedCount: z.number().int().nonnegative().optional(),
+  tokensFreed: z.number().int().nonnegative().optional(),
+  compactorTokens: z.object({
+    inputTokens: z.number().nonnegative(),
+    outputTokens: z.number().nonnegative(),
+  }).optional(),
 }).strict();
 
 /** Durable messages are terminal-history authority, so validate their full shape. */
@@ -226,6 +231,7 @@ const chatToolCallUpdateBaseSchema = chatEventIdentitySchema.extend({
   toolCallId: z.string().min(1),
   toolName: z.string().optional(),
   args: z.string().optional(),
+  estimatedTokens: z.number().int().nonnegative().nullable().optional(),
 });
 export const chatToolCallUpdateEventSchema = z.discriminatedUnion('status', [
   chatToolCallUpdateBaseSchema.extend({

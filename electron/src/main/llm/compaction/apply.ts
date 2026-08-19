@@ -146,6 +146,54 @@ export function makeSummaryHeadMessage(params: {
   };
 }
 
+// ── Metrics stamping ────────────────────────────────────────────────────────
+
+/** Compaction outcome metrics recorded on the summary head's marker. */
+export interface CompactionMetrics {
+  /** Estimated main-context tokens reclaimed (calibrated pre minus post). */
+  readonly tokensFreed?: number;
+  /** Compactor LLM cost attribution, when the summarizer reported usage. */
+  readonly compactorTokens?: {
+    readonly inputTokens: number;
+    readonly outputTokens: number;
+  };
+}
+
+/**
+ * Stamp compaction metrics onto the summary head of an apply result.
+ *
+ * Pure: returns a new ApplyResult whose summary head — and every array that
+ * holds it (updatedMessages, newChain.messages) — carries `tokensFreed` /
+ * `compactorTokens` on its compacted marker. Reclaim-only results (no summary
+ * head) and metric-free inputs pass through unchanged. Callers compute the
+ * calibrated pre/post estimates; this transform only records them.
+ */
+export function stampCompactionMetrics(
+  applyResult: ApplyResult,
+  metrics: CompactionMetrics,
+): ApplyResult {
+  const { summaryMessage, newChain } = applyResult;
+  if (!summaryMessage || !newChain || !summaryMessage.compacted) return applyResult;
+  if (metrics.tokensFreed == null && metrics.compactorTokens == null) return applyResult;
+
+  const marker: CompactedMarker = {
+    ...summaryMessage.compacted,
+    ...(metrics.tokensFreed != null
+      ? { tokensFreed: Math.max(0, Math.floor(metrics.tokensFreed)) }
+      : {}),
+    ...(metrics.compactorTokens ? { compactorTokens: metrics.compactorTokens } : {}),
+  };
+  const stamped: Message = { ...summaryMessage, compacted: marker };
+  const replace = (m: Message): Message => (m.id === stamped.id ? stamped : m);
+  return {
+    ...applyResult,
+    updatedMessages: applyResult.updatedMessages.map(replace),
+    newChain: { ...newChain, messages: newChain.messages.map(replace) },
+    summaryMessage: stamped,
+    compactedMarker: marker,
+  };
+}
+
 // ── Pure transform ──────────────────────────────────────────────────────────
 
 export function buildCompactionApply(input: ApplyInput): ApplyResult {
