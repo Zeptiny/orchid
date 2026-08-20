@@ -14,6 +14,11 @@
  * via `llm/compaction/run-attempt.ts` (#11); unified behavior there:
  *  - selective mode (including its fallback) never flags user messages (R9);
  *  - synthesized compactor chains use one id scheme: randomUUID().
+ *
+ * The gate sequence itself (calibrate → threshold/hysteresis → cut → reclaim →
+ * evaluate) lives in `llm/compaction/pipeline.ts` (R34); this module is the
+ * main-scope adapter — it owns trigger mutation, persistence, widget emission,
+ * and the pause registry on top of the pipeline's decisions.
  */
 import { randomUUID } from 'node:crypto';
 import type { WebContents } from 'electron';
@@ -31,9 +36,14 @@ import { onSessionDeleted } from '../../session/manager';
 import { setChatHistory } from '../chat-history';
 import { requestCompactionPause, clearCompactionPause, shouldPauseForCompaction } from '../next-request-stop';
 import { publishSessionActivity } from '../session-activity';
-import { estimateMessageChars, totalCharsForMessages } from '../../llm/compaction/message-chars';
-import { selectCut, resolvePreservePercent, resolveUserExemptIds, type CutResult } from '../../llm/compaction/select';
-import { mechanicalReclaim } from '../../llm/compaction/reclaim';
+import { totalCharsForMessages } from '../../llm/compaction/message-chars';
+import type { CutResult } from '../../llm/compaction/select';
+import {
+  acquireCompactionSlot,
+  computeMessageCharCache,
+  deriveTokensPerChar,
+  runCompactionGate,
+} from '../../llm/compaction/pipeline';
 import { summarizeCompactableRange, type SummarizeResult } from '../../llm/compaction/summarize';
 import { buildCompactionApply, CompactionApplyError, stampCompactionMetrics, type ApplyResult } from '../../llm/compaction/apply';
 import { CompactionTrigger } from '../../llm/compaction/trigger';
@@ -323,36 +333,6 @@ function stampApplyMetrics(
     ...(tokensFreed != null && tokensFreed > 0 ? { tokensFreed } : {}),
     ...(compactorTokens ? { compactorTokens } : {}),
   });
-}
-
-function compactableTokenEstimate(messages: readonly Message[], range: { start: number; end: number }, tokensPerChar: number | undefined): number {
-  if (tokensPerChar == null || !Number.isFinite(tokensPerChar) || tokensPerChar <= 0) return 0;
-  let chars = 0;
-  for (let i = range.start; i < range.end; i += 1) chars += estimateMessageChars(messages[i]!);
-  return Math.ceil(chars * tokensPerChar);
-}
-
-/**
- * Calibrated slice estimator shared by the send-time and usage-event paths.
- * Counts the seven message fields directly — empty messages contribute zero
- * characters — then applies the slice-level minimum of one token per message.
- * Deliberately NOT estimateMessageChars: its per-message floor would
- * overestimate slices made of empty messages.
- */
-function createCalibratedEstimator(tokensPerChar: number): (slice: readonly Message[]) => number {
-  return (slice: readonly Message[]): number => {
-    let chars = 0;
-    for (const m of slice) {
-      if (m.content) chars += m.content.length;
-      if (m.thinking) chars += m.thinking.length;
-      if (m.tool_calls) chars += JSON.stringify(m.tool_calls).length;
-      if (m.tool_result) chars += JSON.stringify(m.tool_result).length;
-      if (m.tool_call_id) chars += m.tool_call_id.length;
-      if (m.name) chars += m.name.length;
-      if ((m as unknown as { compacted?: unknown }).compacted) chars += JSON.stringify((m as unknown as { compacted: unknown }).compacted).length;
-    }
-    return Math.max(slice.length, Math.ceil(chars * tokensPerChar));
-  };
 }
 
 function isPendingCutStillValid(pending: { cut: CutResult; flaggedIds: string[]; expectedIds?: string[] }, messages: readonly Message[]): boolean {
@@ -735,67 +715,21 @@ export async function tryCompactSynchronously(
   // fabricating an assumed window here diverged from the mid-turn usage path,
   // which is disabled when the limit is unknown.
   if (contextTokens == null || !Number.isFinite(contextTokens) || contextTokens <= 0) return { didApply: false };
-  const windowTokens: number = contextTokens;
   if (trigger.state.pendingPrepare) return { didApply: false };
   try {
-    // Single-pass: compute totalChars once, reuse for estimate and trigger ratio
-    const totalCharsValue = totalChars(messages);
-    let tokensPerChar = trigger.state.tokensPerChar;
-    if (tokensPerChar == null && Number.isFinite(trigger.state.lastObservedInputTokens ?? NaN) && totalCharsValue > 0) {
-      const obs = trigger.state.lastObservedInputTokens as number;
-      const r = obs / totalCharsValue;
-      if (Number.isFinite(r) && r > 0) tokensPerChar = Math.max(0.05, Math.min(r, 2));
-    }
-    // Hard rule: never estimate with a heuristic chars/4 ratio. Without a
-    // calibrated tokens-per-char (provider usage or hydrated observation) the
-    // input estimate is unknown and proactive send-time compaction is skipped.
-    // The overflow-retry path and mid-turn usage events remain as backstops,
-    // and the first observed usage calibrates all future estimates.
-    if (tokensPerChar == null || !Number.isFinite(tokensPerChar) || tokensPerChar <= 0) {
-      return { didApply: false };
-    }
-    const estimatedInput = Math.ceil(totalCharsValue * tokensPerChar);
-    // Early gate before expensive selectCut/reclaim: only proceed if threshold crossed or hysteresis accrual allows re-fire
-    const ratio = estimatedInput / windowTokens;
-    const hysteresisDelta = cfg.hysteresis_delta ?? 0.1;
-    const isOverWindow = estimatedInput >= windowTokens;
-    if (ratio + 1e-9 < cfg.threshold && !isOverWindow) {
-      const baseline = trigger.state.postCompactionInputTokens;
-      if (!(trigger.state.hysteresisArmed && typeof baseline === 'number' && estimatedInput - baseline >= cfg.min_compactable_tokens)) {
-        return { didApply: false };
-      }
-    }
-    const calibratedEstimator = createCalibratedEstimator(tokensPerChar);
-    const exemptIds = resolveUserExemptIds(messages, {
-      keepLast: cfg.keep_last_user_messages ?? null,
-      pinFirst: cfg.pin_first_user_message,
-    });
-    const cut = selectCut(messages, {
-      preserveTokens: Math.floor(resolvePreservePercent(cfg) * windowTokens),
-      tokenEstimator: calibratedEstimator,
-      exemptIds,
-    });
-    if (cut.compactableRange.end <= cut.compactableRange.start) return { didApply: false };
-    const compactableTokens = compactableTokenEstimate(messages, cut.compactableRange, tokensPerChar);
-    if (compactableTokens < cfg.min_compactable_tokens) return { didApply: false };
-    // Gate reclaim behind threshold: only compute reclaim if we passed the gates above
-    const reclaim = mechanicalReclaim(messages, cut.compactableRange);
-    const flaggedIds = reclaim.flaggedIds;
-    const decision = trigger.evaluateWithReclaim({
-      inputTokens: estimatedInput,
-      contextTokens,
-      threshold: cfg.threshold,
-      hysteresisDelta,
-      compactableTokens,
-      minCompactableTokens: cfg.min_compactable_tokens,
-      compactableRange: cut.compactableRange,
+    const decision = runCompactionGate({
       messages,
-      flaggedIds,
-      estimatedInputTokens: estimatedInput,
+      config: cfg,
+      scope: 'main',
+      inputTokens: null,
+      contextTokens,
+      tokensPerChar: trigger.state.tokensPerChar ?? null,
+      triggerState: trigger.state,
     });
-    if (!decision.shouldPrepare && !decision.shouldApply) return { didApply: false };
+    if (decision.kind === 'no-op') return { didApply: false };
+    const { cut, flaggedIds, estimatedInput, tokensPerChar } = decision;
     const chains = getSessionManager().getSession(sessionId)?.chains ?? [];
-    if (decision.shouldApply && !decision.shouldPrepare) {
+    if (decision.kind === 'reclaim-only') {
       let applyResult: ReturnType<typeof buildCompactionApply> | null = null;
       try {
         applyResult = buildCompactionApply({
@@ -820,12 +754,13 @@ export async function tryCompactSynchronously(
       trigger.onCompactionApplied(estimatedInput, postTokens);
       return { didApply: true, updatedMessages: [...applyResult.updatedMessages] };
     }
-    if (decision.shouldPrepare) {
+    if (decision.kind === 'prepare') {
       // ── Selective branch ──────────────────────────────────────────────
       if (cfg.mode === 'selective') {
         const slice = compactableModelSlice(messages, cut.compactableRange);
         if (slice.length === 0) return { didApply: false };
         let attempt: CompactionAttemptOutcome;
+        const release = await acquireCompactionSlot(runtime.config.compaction?.max_concurrent_compactors);
         try {
           attempt = await runCompactionAttempt({
             messages,
@@ -845,6 +780,8 @@ export async function tryCompactSynchronously(
           console.debug('[compaction] selective run failed, falling back (non-fatal):', err);
           trigger.abortPrepare();
           return { didApply: false };
+        } finally {
+          release();
         }
         if (attempt.kind === 'noop') return { didApply: false };
         const selResult = attempt.result;
@@ -938,15 +875,21 @@ export async function tryCompactSynchronously(
       const slice = rawSlice2.filter((m) => !m.excludeFromModel && !m.hidden);
       if (slice.length === 0) return { didApply: false };
       trigger.markPrepareStarted(cut.compactableRange, flaggedIds);
-      const result = await summarizeCompactableRange({
-        messages: slice,
-        scope: 'main',
-        config: runtime.config,
-        fallbackSelection: selection,
-        accounting: { store: accountingStore, sessionId, chainId, turnId },
-        runtime,
-        onTextDelta: createCompactionStreamEmitter(sessionId),
-      });
+      const release = await acquireCompactionSlot(runtime.config.compaction?.max_concurrent_compactors);
+      let result: SummarizeResult | null;
+      try {
+        result = await summarizeCompactableRange({
+          messages: slice,
+          scope: 'main',
+          config: runtime.config,
+          fallbackSelection: selection,
+          accounting: { store: accountingStore, sessionId, chainId, turnId },
+          runtime,
+          onTextDelta: createCompactionStreamEmitter(sessionId),
+        });
+      } finally {
+        release();
+      }
       if (!result || !result.text || !result.text.trim()) {
         trigger.abortPrepare();
         return { didApply: false };
@@ -1013,68 +956,34 @@ export function handleUsageCompaction(
   if (!Number.isFinite(contextTokens) || contextTokens <= 0) return;
   const history = dedupeHistoryById(fullHistory);
   const effectiveContextTokens = contextTokens;
-  // Single-pass totalChars reuse + early threshold gate (avoids 4× scans per CHAT_USAGE)
-  const totalCharsValue = totalChars(history);
+  const charCache = computeMessageCharCache(history);
   // Derive calibrated tokensPerChar from provider inputTokens / totalChars (no /4 fallback)
   let tokensPerChar: number | undefined = trigger.state.tokensPerChar;
-  if (totalCharsValue > 0 && Number.isFinite(inputTokens) && inputTokens > 0) {
-    const r = inputTokens / totalCharsValue;
-    if (Number.isFinite(r) && r > 0) {
-      const clamped = Math.max(0.05, Math.min(r, 2));
-      tokensPerChar = clamped;
-      trigger.state.tokensPerChar = clamped;
-    }
+  const derived = deriveTokensPerChar(inputTokens, charCache.total);
+  if (derived != null) {
+    tokensPerChar = derived;
+    trigger.state.tokensPerChar = derived;
   }
   trigger.state.lastObservedInputTokens = inputTokens;
   trigger.onUsage(inputTokens, effectiveContextTokens, cfg.threshold, cfg.hysteresis_delta);
   if (trigger.state.pendingPrepare) return;
   if (compactionPending.has(sessionId)) return;
-  // Calibrate-or-skip: this path always receives provider-reported inputTokens,
-  // so a missing calibration means the usage payload was unusable — skip
-  // rather than estimate.
-  if (tokensPerChar == null || !Number.isFinite(tokensPerChar) || tokensPerChar <= 0) return;
-  const calibratedRatio = tokensPerChar;
-  const isOverWindow = inputTokens >= effectiveContextTokens;
-  if (!isOverWindow) {
-    const ratio = inputTokens / effectiveContextTokens;
-    if (ratio + 1e-9 < cfg.threshold) {
-      const baseline = trigger.state.postCompactionInputTokens;
-      if (!(trigger.state.hysteresisArmed && typeof baseline === 'number' && Number.isFinite(baseline) && inputTokens - baseline >= cfg.min_compactable_tokens)) {
-        return;
-      }
-    }
-  }
   try {
-    const calibratedEstimator2 = createCalibratedEstimator(calibratedRatio);
-    const exemptIds2 = resolveUserExemptIds(history, {
-      keepLast: cfg.keep_last_user_messages ?? null,
-      pinFirst: cfg.pin_first_user_message,
-    });
-    const cut = selectCut(history, {
-      preserveTokens: Math.floor(resolvePreservePercent(cfg) * effectiveContextTokens),
-      tokenEstimator: calibratedEstimator2,
-      exemptIds: exemptIds2,
-    });
-    if (cut.compactableRange.end <= cut.compactableRange.start) return;
-    const compactableTokens = compactableTokenEstimate(history, cut.compactableRange, tokensPerChar);
-    if (compactableTokens < cfg.min_compactable_tokens) return;
-    const reclaim = mechanicalReclaim(history, cut.compactableRange);
-    const flaggedIds = reclaim.flaggedIds;
-    const decision = trigger.evaluateWithReclaim({
+    const decision = runCompactionGate({
+      messages: history,
+      config: cfg,
+      scope: 'main',
       inputTokens,
       contextTokens: effectiveContextTokens,
-      threshold: cfg.threshold,
-      hysteresisDelta: cfg.hysteresis_delta,
-      compactableTokens,
-      minCompactableTokens: cfg.min_compactable_tokens,
-      compactableRange: cut.compactableRange,
-      messages: history,
-      flaggedIds,
+      tokensPerChar: tokensPerChar ?? null,
+      triggerState: trigger.state,
+      charCache,
     });
-    if (!decision.shouldPrepare && !decision.shouldApply) return;
-    if (decision.shouldApply && !decision.shouldPrepare) {
+    if (decision.kind === 'no-op') return;
+    const { cut, flaggedIds } = decision;
+    if (decision.kind === 'reclaim-only') {
       const expectedIds = history.slice(cut.compactableRange.start, cut.compactableRange.end).map((m) => m.id);
-      compactionPending.set(sessionId, { cut, flaggedIds, expectedIds, estimatedInput: inputTokens, contextTokens: effectiveContextTokens, mode: cfg.mode });
+      compactionPending.set(sessionId, { cut, flaggedIds, expectedIds, estimatedInput: decision.estimatedInput, contextTokens: effectiveContextTokens, mode: cfg.mode });
       trigger.markPrepareStarted(cut.compactableRange, flaggedIds);
       try {
         emitCompactionProgress(sessionId, 'preparing', 'Reclaiming duplicates', { mode: cfg.mode });
@@ -1087,27 +996,34 @@ export function handleUsageCompaction(
       }
       return;
     }
-    if (decision.shouldPrepare) {
+    if (decision.kind === 'prepare') {
       // ── Selective pending branch ──────────────────────────────────────
       if (cfg.mode === 'selective') {
         const slice = compactableModelSlice(history, cut.compactableRange);
         if (slice.length === 0) return;
-        const selectivePromise = runCompactionAttempt({
-          messages: history,
-          cut,
-          scope: 'main',
-          config: runtime.config,
-          deps: {
-            fallbackSelection: selection,
-            runtime,
-            accounting: { store: accountingStore, sessionId, chainId, turnId },
-            onPrepared: () => trigger.markPrepareStarted(cut.compactableRange, flaggedIds),
-            onTextDelta: createCompactionStreamEmitter(sessionId),
-          },
-          maxCorrectionRounds: 3,
-        });
+        const selectivePromise = (async () => {
+          const release = await acquireCompactionSlot(runtime.config.compaction?.max_concurrent_compactors);
+          try {
+            return await runCompactionAttempt({
+              messages: history,
+              cut,
+              scope: 'main',
+              config: runtime.config,
+              deps: {
+                fallbackSelection: selection,
+                runtime,
+                accounting: { store: accountingStore, sessionId, chainId, turnId },
+                onPrepared: () => trigger.markPrepareStarted(cut.compactableRange, flaggedIds),
+                onTextDelta: createCompactionStreamEmitter(sessionId),
+              },
+              maxCorrectionRounds: 3,
+            });
+          } finally {
+            release();
+          }
+        })();
         const expectedIdsForSelective = history.slice(cut.compactableRange.start, cut.compactableRange.end).map((m) => m.id);
-        compactionPending.set(sessionId, { cut, flaggedIds, expectedIds: expectedIdsForSelective, estimatedInput: inputTokens, contextTokens: effectiveContextTokens, mode: 'selective', selectivePromise });
+        compactionPending.set(sessionId, { cut, flaggedIds, expectedIds: expectedIdsForSelective, estimatedInput: decision.estimatedInput, contextTokens: effectiveContextTokens, mode: 'selective', selectivePromise });
         selectivePromise.catch((err) => {
           console.debug('[compaction] selective prepare failed (non-fatal):', err);
           try {
@@ -1132,17 +1048,24 @@ export function handleUsageCompaction(
       const slice = rawSlice2.filter((m) => !m.excludeFromModel && !m.hidden);
       if (slice.length === 0) return;
       trigger.markPrepareStarted(cut.compactableRange, flaggedIds);
-      const promise = summarizeCompactableRange({
-        messages: slice,
-        scope: 'main',
-        config: runtime.config,
-        fallbackSelection: selection,
-        accounting: { store: accountingStore, sessionId, chainId, turnId },
-        runtime,
-        onTextDelta: createCompactionStreamEmitter(sessionId),
-      });
+      const promise = (async () => {
+        const release = await acquireCompactionSlot(runtime.config.compaction?.max_concurrent_compactors);
+        try {
+          return await summarizeCompactableRange({
+            messages: slice,
+            scope: 'main',
+            config: runtime.config,
+            fallbackSelection: selection,
+            accounting: { store: accountingStore, sessionId, chainId, turnId },
+            runtime,
+            onTextDelta: createCompactionStreamEmitter(sessionId),
+          });
+        } finally {
+          release();
+        }
+      })();
       const expectedIdsForSimple = history.slice(cut.compactableRange.start, cut.compactableRange.end).map((m) => m.id);
-      compactionPending.set(sessionId, { cut, flaggedIds, expectedIds: expectedIdsForSimple, promise, estimatedInput: inputTokens, contextTokens: effectiveContextTokens, mode: 'simple' });
+      compactionPending.set(sessionId, { cut, flaggedIds, expectedIds: expectedIdsForSimple, promise, estimatedInput: decision.estimatedInput, contextTokens: effectiveContextTokens, mode: 'simple' });
       promise.catch((err) => {
         console.debug('[compaction] prepare failed (non-fatal):', err);
         try {

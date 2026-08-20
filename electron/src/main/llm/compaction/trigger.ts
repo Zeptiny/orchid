@@ -18,6 +18,7 @@
  */
 
 import type { Message } from '../../../shared/types/message';
+import type { CompactableRange } from './select';
 import {
   estimatePostReclaimInputTokens,
   estimateReclaimedTokens,
@@ -27,10 +28,7 @@ import { estimateMessageChars, totalCharsForMessages } from './message-chars';
 
 // ── Types ───────────────────────────────────────────────────────────────────
 
-export interface CompactableRange {
-  readonly start: number;
-  readonly end: number;
-}
+export type { CompactableRange } from './select';
 
 export interface TriggerDecision {
   readonly shouldPrepare: boolean;

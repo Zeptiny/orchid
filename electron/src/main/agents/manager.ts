@@ -30,7 +30,8 @@ import type {
 } from '../session/storage';
 import { getConfig } from '../config/loader';
 import type { CompactionScopeConfig } from '../../shared/types/ipc-boundary';
-import { estimateMessageChars } from '../llm/compaction/message-chars';
+import { estimateMessageChars, totalCharsForMessages } from '../llm/compaction/message-chars';
+import { charsForMessageIds, deriveTokensPerChar } from '../llm/compaction/pipeline';
 import {
   SubagentDeltaEventType,
   SubagentStatus,
@@ -89,6 +90,20 @@ import {
 
 /** Minimum interval between subagent compaction live-progress emissions (IPC flood guard). */
 const SUBAGENT_COMPACTION_EMIT_INTERVAL_MS = 100;
+
+/**
+ * Newest observed provider input-token count carried on a chain's messages,
+ * or null when none carry usage. Calibration hydration source for the subagent
+ * spawn/resume gate (R29 fire point 1) — a real observation, never a heuristic.
+ */
+function latestObservedInputTokens(messages: readonly Message[]): number | null {
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    const usage = messages[i]?.usage;
+    const input = usage?.context?.input_tokens ?? usage?.prompt_tokens;
+    if (typeof input === 'number' && Number.isFinite(input) && input > 0) return input;
+  }
+  return null;
+}
 
 export type { SubagentAdmissionLimits } from './admission';
 export {
@@ -1612,6 +1627,7 @@ export class SubagentManager {
         emitSubagentCompactionProgress({ phase: 'complete' });
         return false;
       }
+      const chainMessages = record.chain?.messages ?? [];
       const shouldApply = subagentCompactionTrigger.evaluateApply({
         inputTokens: record.usage?.prompt_tokens ?? 0,
         contextTokens: subagentContextTokens,
@@ -1620,23 +1636,12 @@ export class SubagentManager {
           try {
             const flagged = applyResult?.flaggedIds ?? [];
             if (flagged.length === 0) return 0;
-            const byId = new Map((record.chain?.messages ?? []).map((m: Message) => [m.id, m] as const));
-            let flaggedChars = 0;
-            for (const id of flagged) {
-              const m = byId.get(id);
-              if (m) flaggedChars += estimateMessageChars(m as Message);
-            }
+            let flaggedChars = charsForMessageIds(chainMessages, flagged);
             if (flaggedChars === 0) flaggedChars = flagged.length * 200;
-            let tpc: number | undefined = subagentCompactionTrigger.state.tokensPerChar;
-            if (tpc == null) {
-              const pre = record.usage?.prompt_tokens;
-              if (typeof pre === 'number' && Number.isFinite(pre) && pre > 0) {
-                const totalAll = (record.chain?.messages ?? []).reduce((acc: number, mm: Message) => acc + estimateMessageChars(mm as Message), 0) || 1;
-                const r = pre / totalAll;
-                if (Number.isFinite(r) && r > 0) tpc = Math.max(0.05, Math.min(r, 2));
-              }
-            }
-            if (tpc == null) tpc = 0.25;
+            const tpc =
+              subagentCompactionTrigger.state.tokensPerChar ??
+              deriveTokensPerChar(record.usage?.prompt_tokens ?? null, totalCharsForMessages(chainMessages)) ??
+              0.25;
             return Math.ceil(flaggedChars * tpc);
           } catch {
             return applyResult?.flaggedIds.length ?? 0;
@@ -1734,7 +1739,8 @@ export class SubagentManager {
       // Also handle case where still over but we did compact: check if next cut would be empty
       if (stillOver) {
         try {
-          const { selectCut, resolvePreservePercent, resolveUserExemptIds } = await import('../llm/compaction/select.js');
+          // Lazy import like the other compaction leaves (module-graph rule).
+          const { calibratedCut, deriveTokensPerChar: deriveTpc } = await import('../llm/compaction/pipeline.js');
           let cfg2: CompactionScopeConfig | null = cachedSubagentCfg;
           if (!cfg2) {
             try {
@@ -1745,33 +1751,22 @@ export class SubagentManager {
           }
           // Calibrate from the run's reported usage; without it the emptiness
           // check is skipped (hard rule: no heuristic token estimates).
-          const retryMessages = record.chain?.messages ?? [];
-          let totalAll2 = 0;
-          for (const m of retryMessages) totalAll2 += estimateMessageChars(m as Message);
-          const preInput2: number | undefined = record.usage?.prompt_tokens;
-          if (!(totalAll2 > 0 && typeof preInput2 === 'number' && Number.isFinite(preInput2) && preInput2 > 0)) return false;
-          const tpc3 = Math.max(0.05, Math.min(preInput2 / totalAll2, 2));
-          // R31/R32: thread exempt user-message ids so the exhaustion check's
+          const retryMessages = (record.chain?.messages ?? []) as Message[];
+          const tpc3 = deriveTpc(record.usage?.prompt_tokens ?? null, totalCharsForMessages(retryMessages));
+          if (tpc3 == null) return false;
+          // R31/R32: exempt user ids thread through so the exhaustion check's
           // compactable range matches the real compaction range.
-          const exemptIdsRetry = resolveUserExemptIds(retryMessages as Message[], {
-            keepLast: cfg2?.keep_last_user_messages ?? null,
-            pinFirst: cfg2?.pin_first_user_message ?? true,
-          });
-          const cut = selectCut(retryMessages as Message[], {
-            preserveTokens: Math.floor(resolvePreservePercent(cfg2 ?? { threshold: 0.85, preserve_percent: 0.25 }) * (subagentContextTokens ?? 0)),
-            tokenEstimator: (slice: readonly Message[]): number => {
-              let chars = 0;
-              for (const m of slice) chars += estimateMessageChars(m);
-              return Math.max(slice.length, Math.ceil(chars * tpc3));
-            },
-            exemptIds: exemptIdsRetry,
+          const cut = calibratedCut(retryMessages, {
+            config: cfg2 ?? { threshold: 0.85, preserve_percent: 0.25 },
+            contextTokens: subagentContextTokens ?? 0,
+            tokensPerChar: tpc3,
           });
           // Exhaustion test: with chain inference splitting summary heads into
           // their own chains, the range may still contain the previous head
           // (re-summarizable by design). A range whose only unflagged content
           // is summary heads cannot make progress — degrading beats looping.
-          const rangeMessages = (retryMessages as Message[]).slice(cut.compactableRange.start, cut.compactableRange.end);
-          const netNew = rangeMessages.filter((m) => !m.excludeFromModel && !m.hidden && !(m as Message & { compacted?: unknown }).compacted);
+          const rangeMessages = retryMessages.slice(cut.compactableRange.start, cut.compactableRange.end);
+          const netNew = rangeMessages.filter((m) => !m.excludeFromModel && !m.hidden && !m.compacted);
           if (netNew.length === 0) {
             const done = `${record.chain?.messages.filter((m) => m.type === 'tool_result').length ?? 0} tool results`;
             const partial = buildSubagentPartialReport({ done, remaining: record.task.slice(0, 200), stoppedAt: `step ${stepIndex}` });
@@ -1784,6 +1779,47 @@ export class SubagentManager {
       }
       return false;
     };
+
+    // R29 fire point 1: spawn/resume estimate gate, run once before the run's
+    // first stream starts. Calibrate-or-skip is a hard rule — a fresh run has
+    // no observed usage and no-ops; a resumed run seeds calibration from the
+    // chain's persisted message usages (the subagent twin of the main scope's
+    // hydrateTriggerCalibration) and can compact before the first request.
+    const maybeStartSpawnTimeCompaction = async (): Promise<void> => {
+      try {
+        const history = (record.chain?.messages ?? []) as Message[];
+        if (history.length === 0) return;
+        if (compactionPendingPromise) return;
+        const ok = await ensureCompactionInit();
+        if (!ok || !subagentContextTokens || !subagentCompactionTrigger) return;
+        const { runCompactionGate } = await import('../llm/compaction/pipeline.js');
+        // Hydrate calibration from the newest chain-message usage — the same
+        // secondary source the main scope's hydrateTriggerCalibration reads.
+        // `record.usage` is deliberately not used: on a resumed record it is
+        // null (the follow-up transition resets it) and on a restored one it is
+        // a summed aggregate across steps, not one request's observed input.
+        const observed = latestObservedInputTokens(history);
+        if (observed != null) {
+          subagentCompactionTrigger.observeUsage(observed, history);
+        }
+        const decision = runCompactionGate({
+          messages: history,
+          config: cachedSubagentCfg ?? getConfig().compaction.subagents,
+          scope: 'subagents',
+          inputTokens: subagentCompactionTrigger.state.lastObservedInputTokens ?? null,
+          contextTokens: subagentContextTokens,
+          tokensPerChar: subagentCompactionTrigger.state.tokensPerChar ?? null,
+          triggerState: subagentCompactionTrigger.state,
+        });
+        if (decision.kind === 'prepare') {
+          await maybeStartCompactionPrepare(decision.estimatedInput);
+        }
+      } catch (e) {
+        // non-fatal — the usage-event prepare and overflow retry remain as backstops
+        console.debug('[subagent-compaction] spawn-time gate failed:', e);
+      }
+    };
+    void maybeStartSpawnTimeCompaction();
 
     try {
       const stream = runner({

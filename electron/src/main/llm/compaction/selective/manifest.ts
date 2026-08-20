@@ -12,15 +12,13 @@
 import type { Message } from '../../../../shared/types/message';
 import { MessageType, MessageRole } from '../../../../shared/types/message';
 import type { ToolCall } from '../../../../shared/types/tool';
+import type { CompactableRange } from '../select';
 
 // ── Manifest types ──────────────────────────────────────────────────────────
 
 export const PREVIEW_MAX_LENGTH = 120;
 
-export interface CompactableRange {
-  readonly start: number;
-  readonly end: number;
-}
+export type { CompactableRange } from '../select';
 
 export type ManifestKind =
   | 'user'

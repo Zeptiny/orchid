@@ -14,7 +14,10 @@ import type { Chain } from '../../shared/types/chain';
 import { buildCompactionApply, type ApplyResult } from '../llm/compaction/apply';
 import type { TriggerState } from '../llm/compaction/trigger';
 import type { CompactionAttemptOutcome } from '../llm/compaction/run-attempt';
-import { estimateMessageChars } from '../llm/compaction/message-chars';
+import {
+  acquireCompactionSlot,
+  runCompactionGate,
+} from '../llm/compaction/pipeline';
 import type { CutResult } from '../llm/compaction/select';
 import type { SelectiveCompactionResult } from '../llm/compaction/selective/run';
 import { getProviderRuntime } from '../providers';
@@ -222,79 +225,35 @@ export async function tryCompactSubagentHistory(params: {
   if (!Number.isFinite(contextTokens) || contextTokens <= 0) return null;
   if (!Number.isFinite(inputTokens) || inputTokens < 0) return null;
 
-  // Lazy imports to avoid cycle with provider runtime during typecheck
-  const { selectCut, resolvePreservePercent, resolveUserExemptIds } = await import('../llm/compaction/select.js');
-  const { mechanicalReclaim } = await import('../llm/compaction/reclaim.js');
-  const { evaluateTriggerWithReclaim } = await import('../llm/compaction/trigger.js');
+  // Lazy import: keeps this module's load graph free of the accounting store
+  // chain (config/loader conflicts with test mocks) — see the AGENTS.md
+  // dynamic-import rule for anything touching config/accounting from agents/.
   const { getProviderAccountingStore } = await import('../providers/accounting/store.js');
 
-  let totalCharsAll = 0;
-  for (const m of messages) totalCharsAll += estimateMessageChars(m);
-  if (totalCharsAll === 0) totalCharsAll = 1;
-  const tokensPerCharSub = (() => {
-    if (!Number.isFinite(inputTokens) || inputTokens <= 0) return undefined;
-    const r = inputTokens / totalCharsAll;
-    if (!Number.isFinite(r) || r <= 0) return undefined;
-    return Math.max(0.05, Math.min(r, 2));
-  })();
-  if (!tokensPerCharSub) return null;
-  // R31/R32: subagent scope pins ALL user messages (null default). Exempt ids
-  // never enter the compactable range and don't consume the preserve budget.
-  const exemptIdsSub = resolveUserExemptIds(messages as Message[], {
-    keepLast: subagentsScope.keep_last_user_messages ?? null,
-    pinFirst: subagentsScope.pin_first_user_message,
-  });
-  let cut: ReturnType<typeof selectCut>;
+  // Shared gate pipeline (R34): calibrate → threshold/hysteresis → cut with
+  // exempt user ids → mechanical reclaim → evaluate. The subagent adapter owns
+  // everything around it (progress hooks, mode branch, apply).
+  let gate;
   try {
-    const calibratedEstimatorSub = (slice: readonly Message[]): number => {
-      let chars = 0;
-      for (const m of slice) chars += estimateMessageChars(m);
-      return Math.max(slice.length, Math.ceil(chars * tokensPerCharSub));
-    };
-    cut = selectCut(messages as Message[], {
-      preserveTokens: Math.floor(resolvePreservePercent(subagentsScope) * contextTokens),
-      tokenEstimator: calibratedEstimatorSub,
-      exemptIds: exemptIdsSub,
+    gate = runCompactionGate({
+      messages: messages as Message[],
+      config: subagentsScope,
+      scope: 'subagents',
+      inputTokens,
+      contextTokens,
+      tokensPerChar: null,
+      ...(params.triggerState ? { triggerState: params.triggerState } : {}),
     });
   } catch {
     return null;
   }
+  if (gate.kind === 'no-op') return null;
+  const cut: CutResult = gate.cut;
+  const flaggedIds: string[] = gate.flaggedIds;
   const compactableRange = cut.compactableRange;
-  let sliceChars = 0;
-  for (let i = compactableRange.start; i < compactableRange.end; i += 1) {
-    const m = (messages as readonly Message[])[i];
-    if (!m) continue;
-    sliceChars += estimateMessageChars(m);
-  }
-  const compactableTokens = Math.ceil(sliceChars * tokensPerCharSub);
-  if (compactableTokens <= 0) return null;
-
-  // Mechanical reclaim pass before summarizer (v1 single rule, R25)
-  let flaggedIds: string[] = [];
-  if (subagentsScope.mechanical_reclaim) {
-    try {
-      const reclaim = mechanicalReclaim(messages as Message[], compactableRange);
-      flaggedIds = [...reclaim.flaggedIds];
-    } catch {
-      // non-fatal
-    }
-  }
-
-  const decision = evaluateTriggerWithReclaim({
-    inputTokens,
-    contextTokens,
-    threshold: subagentsScope.threshold,
-    hysteresisDelta: subagentsScope.hysteresis_delta,
-    compactableTokens,
-    minCompactableTokens: subagentsScope.min_compactable_tokens,
-    compactableRange,
-    messages: messages as Message[],
-    flaggedIds,
-    ...(params.triggerState ? { state: params.triggerState } : {}),
-  });
 
   // Reclaim-only short-circuit: build apply without summarizer
-  if (decision.shouldApply && !decision.shouldPrepare && flaggedIds.length > 0) {
+  if (gate.kind === 'reclaim-only') {
     params.onProgress?.({ phase: 'preparing', detail: 'Reclaiming duplicates', mode: subagentsScope.mode as CompactionMode });
     try {
       const applyResult = buildCompactionApply({
@@ -310,8 +269,6 @@ export async function tryCompactSubagentHistory(params: {
       return null;
     }
   }
-
-  if (!decision.shouldPrepare) return null;
 
   // Ledger for both compaction modes — resolved once before the mode branch.
   let accountingStore: ReturnType<typeof getProviderAccountingStore> | undefined;
@@ -342,20 +299,25 @@ export async function tryCompactSubagentHistory(params: {
     try {
       const { runCompactionAttempt, unflagUserMessagesInApply } = await import('../llm/compaction/run-attempt.js');
       params.onProgress?.({ phase: 'preparing', detail: 'Summarizing history', mode: 'selective' });
-      attempt = await runCompactionAttempt({
-        messages: messages as Message[],
-        cut,
-        scope: 'subagents',
-        config,
-        deps: {
-          fallbackSelection: selection,
-          subagentId,
-          accounting: accountingStore
-            ? { store: accountingStore, sessionId, chainId, turnId }
-            : { sessionId, chainId, turnId },
-          ...(params.onTextDelta ? { onTextDelta: params.onTextDelta } : {}),
-        },
-      });
+      const release = await acquireCompactionSlot(config.compaction?.max_concurrent_compactors);
+      try {
+        attempt = await runCompactionAttempt({
+          messages: messages as Message[],
+          cut,
+          scope: 'subagents',
+          config,
+          deps: {
+            fallbackSelection: selection,
+            subagentId,
+            accounting: accountingStore
+              ? { store: accountingStore, sessionId, chainId, turnId }
+              : { sessionId, chainId, turnId },
+            ...(params.onTextDelta ? { onTextDelta: params.onTextDelta } : {}),
+          },
+        });
+      } finally {
+        release();
+      }
       if (attempt.kind === 'ran' && attempt.result.kind === 'selective') {
         // R3: never delete the transcript. Preserve every original message
         // (excludeFromModel flags + one compacted-marker summary head at the
@@ -402,18 +364,23 @@ export async function tryCompactSubagentHistory(params: {
   try {
     const { summarizeCompactableRange } = await import('../llm/compaction/summarize.js');
     params.onProgress?.({ phase: 'preparing', detail: 'Summarizing history', mode: subagentsScope.mode as CompactionMode });
-    summarizeResult = await summarizeCompactableRange({
-      messages: compactableSlice,
-      scope: 'subagents',
-      config,
-      fallbackSelection: selection,
-      existingModelSelection: selection,
-      accounting: accountingStore
-        ? { store: accountingStore, sessionId, chainId, turnId }
-        : { sessionId, chainId, turnId },
-      subagentId,
-      ...(params.onTextDelta ? { onTextDelta: params.onTextDelta } : {}),
-    });
+    const release = await acquireCompactionSlot(config.compaction?.max_concurrent_compactors);
+    try {
+      summarizeResult = await summarizeCompactableRange({
+        messages: compactableSlice,
+        scope: 'subagents',
+        config,
+        fallbackSelection: selection,
+        existingModelSelection: selection,
+        accounting: accountingStore
+          ? { store: accountingStore, sessionId, chainId, turnId }
+          : { sessionId, chainId, turnId },
+        subagentId,
+        ...(params.onTextDelta ? { onTextDelta: params.onTextDelta } : {}),
+      });
+    } finally {
+      release();
+    }
   } catch {
     return null;
   }

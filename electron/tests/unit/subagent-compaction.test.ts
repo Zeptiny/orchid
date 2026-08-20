@@ -582,8 +582,80 @@ describe('SubagentManager mid-run compaction (U9): degrade to partial report', (
   });
 });
 
-// ── Disabled compaction and compactor failure ────────────────────────────────
+// ── SPAWN/RESUME GATE (R29 fire point 1) ─────────────────────────────────────
 
+describe('SubagentManager compaction: spawn/resume estimate gate', () => {
+  it('starts a prepare before the first usage event on a resumed run with hydrated calibration', async () => {
+    // Run 1 accumulates chain messages and an over-threshold usage event, but
+    // crosses no step boundary — the pending prepare never applies and the run
+    // completes. The trailing text commit stamps the observed usage onto the
+    // chain, which is what the resume hydrates calibration from.
+    const manager = new SubagentManager();
+    manager.setRunner(scriptedRunner([
+      ...steps(6),
+      usageEvent(600),
+      summarizerStarted,
+      { type: 'content', text: 'Wrapping up the exploration.' },
+      { type: 'finish', finishReason: 'stop' },
+    ]));
+    const record = spawnCompactionSubagent(manager);
+    await manager.getRunPromise(record.id);
+
+    expect(record.state).toBe(SubagentState.COMPLETED);
+    // Run 1's usage-event prepare (the mid-run fire point).
+    expect(mocks.summarize).toHaveBeenCalledTimes(1);
+
+    // Run 2 (resume): the chain's stamped usage hydrates the fresh per-run
+    // trigger, so the spawn-time gate can calibrate and fire. The script emits
+    // NO usage events — the summarizer call can only come from the spawn gate.
+    mocks.summarize.mockClear();
+    manager.setRunner(scriptedRunner([
+      summarizerStarted,
+      { type: 'finish', finishReason: 'stop' },
+    ]));
+    manager.followUp(record.id, 'Continue from where you stopped.');
+    await manager.getRunPromise(record.id);
+
+    expect(record.state).toBe(SubagentState.COMPLETED);
+    expect(mocks.summarize).toHaveBeenCalledTimes(1);
+    const call = summarizeCalls()[0]!;
+    expect(call['scope']).toBe('subagents');
+    expect(call['subagentId']).toBe(record.id);
+  });
+
+  it('no-ops the spawn-time gate without calibration (calibrate-or-skip hard rule)', async () => {
+    // Run 1 grows the chain without ever emitting a usage event, so the record
+    // carries no observed input tokens into the resume.
+    const manager = new SubagentManager();
+    manager.setRunner(scriptedRunner([
+      ...steps(6),
+      { type: 'finish', finishReason: 'stop' },
+    ]));
+    const record = spawnCompactionSubagent(manager);
+    await manager.getRunPromise(record.id);
+
+    expect(record.state).toBe(SubagentState.COMPLETED);
+    expect(record.usage).toBeNull();
+
+    // The resumed chain is far past what a heuristic ratio would flag, but no
+    // calibrated tokens-per-char exists — the gate must no-op rather than
+    // estimate. The sleep lets the fire-and-forget gate settle before the run
+    // completes and the assertion reads it.
+    manager.setRunner(scriptedRunner([
+      ...steps(2),
+      { sleepMs: 80 },
+      { type: 'finish', finishReason: 'stop' },
+    ]));
+    manager.followUp(record.id, 'Continue.');
+    await manager.getRunPromise(record.id);
+
+    expect(record.state).toBe(SubagentState.COMPLETED);
+    expect(mocks.summarize).not.toHaveBeenCalled();
+    expect((record.chain?.messages ?? []).some((m) => m.compacted)).toBe(false);
+  });
+});
+
+// ── Disabled compaction and compactor failure ────────────────────────────────
 describe('SubagentManager mid-run compaction (U9): disabled / failing compactor', () => {
   it('skips compaction without crashing when the model has no context limits (null path)', async () => {
     mocks.resolveExecution.mockResolvedValue({ model: {} });

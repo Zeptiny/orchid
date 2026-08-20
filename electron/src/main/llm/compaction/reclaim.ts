@@ -17,13 +17,11 @@ import type { Message } from '../../../shared/types/message';
 import { MessageRole, MessageType } from '../../../shared/types/message';
 import type { ToolCall } from '../../../shared/types/tool';
 import { estimateMessageChars } from './message-chars';
+import type { CompactableRange } from './select';
 
 // ── Public types ────────────────────────────────────────────────────────────
 
-export interface CompactableRange {
-  readonly start: number;
-  readonly end: number;
-}
+export type { CompactableRange } from './select';
 
 export interface MechanicalReclaimResult {
   /** Message ids within the range that should be flagged excludeFromModel. Sorted ascending by original index. */
