@@ -190,11 +190,6 @@ export interface CompactionScopeConfig {
 export interface CompactionConfig {
   main: CompactionScopeConfig;
   subagents: CompactionScopeConfig;
-  /**
-   * Compactor LLM calls allowed in flight at once across both scopes
-   * (prepare phase only; gates are never queued). Default 2, bounded 1–8.
-   */
-  max_concurrent_compactors: number;
 }
 
 export type PermissionModeValue = PermissionMode;

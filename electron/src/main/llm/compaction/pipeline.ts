@@ -8,11 +8,6 @@
  * for subagents) own everything the gate deliberately does not: summarizer
  * execution, trigger-state mutation, persistence, and widget routing.
  *
- * Concurrency (KTD "Compactor concurrency cap"): `acquireCompactionSlot`
- * bounds the number of compactor LLM calls in flight at once so N subagents
- * crossing the threshold together cannot stampede the provider. The cap wraps
- * the prepare phase only — gates are pure and never queued.
- *
  * Serialization economy (review #47): `computeMessageCharCache` measures each
  * message exactly once per evaluation; the total, the compactable-range
  * estimate, and the preserve-window walk estimator all read the cache instead
@@ -316,81 +311,4 @@ export function runCompactionGate(input: CompactionGateInput): CompactionGateDec
     return { kind: 'reclaim-only', reason: decision.reason, cut, flaggedIds, compactableTokens, estimatedInput, tokensPerChar };
   }
   return { kind: 'no-op', reason: decision.reason, tokensPerChar };
-}
-
-// ── Compactor concurrency cap ────────────────────────────────────────────────
-
-/** Default number of concurrent compactor LLM calls (`compaction.max_concurrent_compactors`). */
-export const DEFAULT_MAX_CONCURRENT_COMPACTORS = 2;
-
-/** Upper bound the config schema accepts for `max_concurrent_compactors`. */
-export const MAX_CONCURRENT_COMPACTORS_LIMIT = 8;
-
-/** Releases one acquired compactor slot. Idempotent. */
-export type CompactionSlotRelease = () => void;
-
-/**
- * Counting semaphore over compactor LLM calls. Permits hand over directly to
- * the longest-waiting acquirer on release (FIFO), and raising the limit
- * drains waiters that now fit.
- */
-class CompactorSlotSemaphore {
-  private _limit = DEFAULT_MAX_CONCURRENT_COMPACTORS;
-  private _active = 0;
-  private _waiters: Array<() => void> = [];
-
-  setLimit(limit: number): void {
-    if (typeof limit !== 'number' || !Number.isFinite(limit)) return;
-    this._limit = Math.max(1, Math.min(Math.floor(limit), MAX_CONCURRENT_COMPACTORS_LIMIT));
-    this._drain();
-  }
-
-  acquire(): Promise<void> {
-    if (this._active < this._limit) {
-      this._active += 1;
-      return Promise.resolve();
-    }
-    return new Promise<void>((resolve) => {
-      this._waiters.push(resolve);
-    });
-  }
-
-  release(): void {
-    if (this._active <= 0) return;
-    this._active -= 1;
-    // Hand the freed permit to a waiter only while capacity remains — the
-    // limit may have been lowered below the active count while this slot was
-    // held, and the excess waiters must stay queued (re-checked AFTER the
-    // decrement; a pre-check would admit over-capacity).
-    if (this._active < this._limit) this._drain();
-  }
-
-  private _drain(): void {
-    while (this._active < this._limit && this._waiters.length > 0) {
-      const next = this._waiters.shift();
-      this._active += 1;
-      next?.();
-    }
-  }
-}
-
-const compactorSlots = new CompactorSlotSemaphore();
-
-/**
- * Acquire one compactor slot before awaiting a compactor LLM call (the prepare
- * phase — simple summarizer or selective run). Callers pass their config's
- * `compaction.max_concurrent_compactors` so the cap follows configuration
- * without this module importing the config store. The returned release
- * function is idempotent, so fire-and-forget prepares can release in a
- * `finally` without double-counting.
- */
-export async function acquireCompactionSlot(limit?: number): Promise<CompactionSlotRelease> {
-  if (typeof limit === 'number') compactorSlots.setLimit(limit);
-  await compactorSlots.acquire();
-  let released = false;
-  return () => {
-    if (released) return;
-    released = true;
-    compactorSlots.release();
-  };
 }

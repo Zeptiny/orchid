@@ -99,7 +99,7 @@ electron/
 │   │   │   ├── tool-pool.ts     # Tool worker pool singleton (offloadable read-only tools)
 │   │   │   ├── terminal-result.ts # Canonical error/cancelled tool results without a handler
 │   │   │   ├── compaction/      # Session/subagent compaction engine (shared by both scopes)
-│   │   │   │   ├── pipeline.ts  # Scope-parameterized gate pipeline + compactor semaphore
+│   │   │   │   ├── pipeline.ts  # Scope-parameterized gate pipeline
 │   │   │   │   ├── pending-store.ts # Scope-keyed pending compactions + re-validation
 │   │   │   │   ├── apply.ts     # buildCompactionApply/buildSelectiveCompactionApply (never-delete settle)
 │   │   │   │   ├── message-chars.ts # Char estimation shared by gates/estimates

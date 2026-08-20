@@ -131,9 +131,6 @@ export function applyConfigDraft(base: Config, draft: ConfigPatch): Config {
       ...base.compaction,
       main: { ...base.compaction.main, ...(draft.compaction.main ?? {}) },
       subagents: { ...base.compaction.subagents, ...(draft.compaction.subagents ?? {}) },
-      ...(draft.compaction.max_concurrent_compactors !== undefined
-        ? { max_concurrent_compactors: draft.compaction.max_concurrent_compactors }
-        : {}),
     };
     if (draft.compaction.main === undefined && draft.compaction.subagents === undefined) {
       next.compaction = { ...base.compaction, ...draft.compaction } as CompactionConfig;

@@ -69,9 +69,6 @@ const KNOWN_CONFIG_KEYS = new Set(Object.keys(configSchema.shape));
 const compactionPartialSchema = z.object({
   main: compactionScopeSchema.partial().strict().optional(),
   subagents: compactionSubagentsScopeSchema.partial().strict().optional(),
-  // Parent-level cap (lives on compactionConfigSchema, not a scope object);
-  // mirrors its config constraint so a full Compaction settings save parses.
-  max_concurrent_compactors: z.number().int().min(1).max(8).optional(),
 }).partial().strict();
 
 /**

@@ -28,10 +28,7 @@ import type { Chain } from '../../shared/types/chain';
 import { buildCompactionApply, buildSelectiveCompactionApply, type ApplyResult } from '../llm/compaction/apply';
 import type { TriggerState } from '../llm/compaction/trigger';
 import type { CompactionPendingEntry } from '../llm/compaction/pending-store';
-import {
-  acquireCompactionSlot,
-  runCompactionGate,
-} from '../llm/compaction/pipeline';
+import { runCompactionGate } from '../llm/compaction/pipeline';
 import type { CutResult } from '../llm/compaction/select';
 import type { SelectiveCompactionResult } from '../llm/compaction/selective/run';
 import { getProviderRuntime } from '../providers';
@@ -295,27 +292,20 @@ export async function prepareSubagentCompaction(params: {
     try {
       const { runCompactionAttempt } = await import('../llm/compaction/run-attempt.js');
       params.onProgress?.({ phase: 'preparing', detail: 'Summarizing history', mode: 'selective' });
-      const selectivePromise = (async () => {
-        const release = await acquireCompactionSlot(config.compaction?.max_concurrent_compactors);
-        try {
-          return await runCompactionAttempt({
-            messages: messages as Message[],
-            cut,
-            scope: 'subagents',
-            config,
-            deps: {
-              fallbackSelection: selection,
-              subagentId,
-              accounting: accountingStore
-                ? { store: accountingStore, sessionId, chainId, turnId }
-                : { sessionId, chainId, turnId },
-              ...(params.onTextDelta ? { onTextDelta: params.onTextDelta } : {}),
-            },
-          });
-        } finally {
-          release();
-        }
-      })();
+      const selectivePromise = runCompactionAttempt({
+        messages: messages as Message[],
+        cut,
+        scope: 'subagents',
+        config,
+        deps: {
+          fallbackSelection: selection,
+          subagentId,
+          accounting: accountingStore
+            ? { store: accountingStore, sessionId, chainId, turnId }
+            : { sessionId, chainId, turnId },
+          ...(params.onTextDelta ? { onTextDelta: params.onTextDelta } : {}),
+        },
+      });
       return {
         cut,
         flaggedIds,
@@ -337,25 +327,18 @@ export async function prepareSubagentCompaction(params: {
   try {
     const { summarizeCompactableRange } = await import('../llm/compaction/summarize.js');
     params.onProgress?.({ phase: 'preparing', detail: 'Summarizing history', mode: subagentsScope.mode as CompactionMode });
-    const promise = (async () => {
-      const release = await acquireCompactionSlot(config.compaction?.max_concurrent_compactors);
-      try {
-        return await summarizeCompactableRange({
-          messages: compactableSlice,
-          scope: 'subagents',
-          config,
-          fallbackSelection: selection,
-          existingModelSelection: selection,
-          accounting: accountingStore
-            ? { store: accountingStore, sessionId, chainId, turnId }
-            : { sessionId, chainId, turnId },
-          subagentId,
-          ...(params.onTextDelta ? { onTextDelta: params.onTextDelta } : {}),
-        });
-      } finally {
-        release();
-      }
-    })();
+    const promise = summarizeCompactableRange({
+      messages: compactableSlice,
+      scope: 'subagents',
+      config,
+      fallbackSelection: selection,
+      existingModelSelection: selection,
+      accounting: accountingStore
+        ? { store: accountingStore, sessionId, chainId, turnId }
+        : { sessionId, chainId, turnId },
+      subagentId,
+      ...(params.onTextDelta ? { onTextDelta: params.onTextDelta } : {}),
+    });
     return {
       cut,
       flaggedIds,

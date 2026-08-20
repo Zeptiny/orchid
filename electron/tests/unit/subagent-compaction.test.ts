@@ -1191,9 +1191,9 @@ describe('SubagentManager compaction widget lifecycle (B): interrupt mid-prepare
     const after = events.slice(terminalIndex + 1);
     expect(after.filter((e) => e.type === SubagentDeltaEventType.COMPACTION_PROGRESS)).toEqual([]);
     expect(record.state).toBe(SubagentState.INTERRUPTED);
-    // Release the parked compactor so its prepare's semaphore permit is not
-    // leaked into later tests (the pending was already discarded by the run's
-    // teardown, so the late resolution has no further effect).
+    // Resolve the parked compactor so the test leaves no pending promise
+    // behind (the pending was already discarded by the run's teardown, so the
+    // late resolution has no further effect).
     releaseCompactor({ text: 'late summary', usage: null });
     await new Promise((resolve) => setTimeout(resolve, 0));
   });

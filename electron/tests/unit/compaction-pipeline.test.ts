@@ -1,6 +1,6 @@
 /**
- * Scope-parameterized compaction gate pipeline (R34) and compactor concurrency
- * cap — unit coverage for `llm/compaction/pipeline.ts`.
+ * Scope-parameterized compaction gate pipeline (R34) — unit coverage for
+ * `llm/compaction/pipeline.ts`.
  *
  * Pins:
  *  - scope parity: identical inputs produce identical gate decisions under the
@@ -9,8 +9,6 @@
  *  - serialization economy (review #47): one `estimateMessageChars` call per
  *    message per evaluation — the total, range estimate, and preserve-window
  *    walk all read the same single pass;
- *  - the semaphore caps concurrent compactor prepares (default 2), queues the
- *    rest FIFO, and never queues the gate itself.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Message } from '../../src/shared/types/message';
@@ -32,14 +30,11 @@ vi.mock('../../src/main/llm/compaction/message-chars', async (importOriginal) =>
 });
 
 import {
-  DEFAULT_MAX_CONCURRENT_COMPACTORS,
-  acquireCompactionSlot,
   calibratedCut,
   clampTokensPerChar,
   computeMessageCharCache,
   deriveTokensPerChar,
   runCompactionGate,
-  type CompactionGateDecision,
   type CompactableRange,
   type MessageCharCache,
 } from '../../src/main/llm/compaction/pipeline';
@@ -231,118 +226,5 @@ describe('calibratedCut', () => {
     const rangeIds = messages.slice(cut.compactableRange.start, cut.compactableRange.end).map((m) => m.id);
     expect(exempt.size).toBe(6);
     expect(rangeIds).not.toContain('u-0');
-  });
-});
-
-// ── Compactor concurrency cap ────────────────────────────────────────────────
-
-/** Fresh module registry per test so the shared semaphore starts unheld. */
-async function freshSlots() {
-  vi.resetModules();
-  return import('../../src/main/llm/compaction/pipeline');
-}
-
-const tick = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0));
-
-describe('acquireCompactionSlot — compactor concurrency cap', () => {
-  it('admits at most two concurrent prepares by default and queues the third', async () => {
-    const { acquireCompactionSlot: acquire, DEFAULT_MAX_CONCURRENT_COMPACTORS } = await freshSlots();
-    expect(DEFAULT_MAX_CONCURRENT_COMPACTORS).toBe(2);
-    const release1 = await acquire();
-    const release2 = await acquire();
-    let thirdAcquired = false;
-    const third = acquire().then(() => { thirdAcquired = true; });
-    await tick();
-    expect(thirdAcquired).toBe(false);
-    release1();
-    await third;
-    expect(thirdAcquired).toBe(true);
-    release2();
-  });
-
-  it('hands released slots to waiters in FIFO order', async () => {
-    const { acquireCompactionSlot: acquire } = await freshSlots();
-    const release1 = await acquire();
-    const release2 = await acquire();
-    const order: number[] = [];
-    const third = acquire().then(() => order.push(3));
-    const fourth = acquire().then(() => order.push(4));
-    await tick();
-    expect(order).toEqual([]);
-    release1();
-    await third;
-    expect(order).toEqual([3]);
-    release2();
-    await fourth;
-    expect(order).toEqual([3, 4]);
-  });
-
-  it('honors a configured limit below the default', async () => {
-    const { acquireCompactionSlot: acquire } = await freshSlots();
-    const release1 = await acquire(1);
-    let secondAcquired = false;
-    const second = acquire().then(() => { secondAcquired = true; });
-    await tick();
-    expect(secondAcquired).toBe(false);
-    release1();
-    await second;
-    expect(secondAcquired).toBe(true);
-  });
-
-  it('treats release as idempotent so a released slot is never double-counted', async () => {
-    const { acquireCompactionSlot: acquire } = await freshSlots();
-    const release1 = await acquire();
-    const release2 = await acquire();
-    // A double release must count once: without the guard both slots would be
-    // free and a FOURTH prepare could run concurrently with two others.
-    release1();
-    release1();
-    let thirdAcquired = false;
-    let fourthAcquired = false;
-    const third = acquire().then(() => { thirdAcquired = true; });
-    const fourth = acquire().then(() => { fourthAcquired = true; });
-    await tick();
-    expect(thirdAcquired).toBe(true);
-    expect(fourthAcquired).toBe(false);
-    release2();
-    await fourth;
-    expect(fourthAcquired).toBe(true);
-  });
-
-  it('keeps excess waiters queued when the limit is lowered below the active count', async () => {
-    const { acquireCompactionSlot: acquire } = await freshSlots();
-    const release1 = await acquire();
-    const release2 = await acquire();
-    // Lower the limit to 1 while both permits are held; the lowering acquire
-    // itself queues as a waiter.
-    let loweredAcquired = false;
-    const lowered = acquire(1).then(() => { loweredAcquired = true; });
-    let secondAcquired = false;
-    const second = acquire().then(() => { secondAcquired = true; });
-    await tick();
-    expect(loweredAcquired).toBe(false);
-    expect(secondAcquired).toBe(false);
-    // First release: active 2→1, but the limit is 1 — NO waiter may proceed.
-    release1();
-    await tick();
-    expect(loweredAcquired).toBe(false);
-    expect(secondAcquired).toBe(false);
-    // Second release frees the only permit: exactly ONE waiter proceeds and
-    // the other stays queued.
-    release2();
-    await lowered;
-    expect(loweredAcquired).toBe(true);
-    await tick();
-    expect(secondAcquired).toBe(false);
-  });
-
-  it('never queues the gate — decisions stay synchronous while every slot is held', async () => {
-    const { acquireCompactionSlot: acquire, runCompactionGate: gate } = await freshSlots();
-    const release1 = await acquire();
-    const release2 = await acquire();
-    const decision: CompactionGateDecision = gate(gateInput());
-    expect(decision.kind).toBe('prepare');
-    release1();
-    release2();
   });
 });

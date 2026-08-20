@@ -52,7 +52,6 @@ import {
   setCompactionPending,
 } from '../../llm/compaction/pending-store';
 import {
-  acquireCompactionSlot,
   computeMessageCharCache,
   deriveTokensPerChar,
   runCompactionGate,
@@ -766,7 +765,6 @@ export async function tryCompactSynchronously(
         const slice = compactableModelSlice(messages, cut.compactableRange);
         if (slice.length === 0) return { didApply: false };
         let attempt: CompactionAttemptOutcome;
-        const release = await acquireCompactionSlot(runtime.config.compaction?.max_concurrent_compactors);
         try {
           attempt = await runCompactionAttempt({
             messages,
@@ -786,8 +784,6 @@ export async function tryCompactSynchronously(
           console.debug('[compaction] selective run failed, falling back (non-fatal):', err);
           trigger.abortPrepare();
           return { didApply: false };
-        } finally {
-          release();
         }
         if (attempt.kind === 'noop') return { didApply: false };
         const selResult = attempt.result;
@@ -897,21 +893,15 @@ export async function tryCompactSynchronously(
       const slice = rawSlice2.filter((m) => !m.excludeFromModel && !m.hidden);
       if (slice.length === 0) return { didApply: false };
       trigger.markPrepareStarted(cut.compactableRange, flaggedIds);
-      const release = await acquireCompactionSlot(runtime.config.compaction?.max_concurrent_compactors);
-      let result: SummarizeResult | null;
-      try {
-        result = await summarizeCompactableRange({
-          messages: slice,
-          scope: 'main',
-          config: runtime.config,
-          fallbackSelection: selection,
-          accounting: { store: accountingStore, sessionId, chainId, turnId },
-          runtime,
-          onTextDelta: createCompactionStreamEmitter(sessionId),
-        });
-      } finally {
-        release();
-      }
+      const result: SummarizeResult | null = await summarizeCompactableRange({
+        messages: slice,
+        scope: 'main',
+        config: runtime.config,
+        fallbackSelection: selection,
+        accounting: { store: accountingStore, sessionId, chainId, turnId },
+        runtime,
+        onTextDelta: createCompactionStreamEmitter(sessionId),
+      });
       if (!result || !result.text || !result.text.trim()) {
         trigger.abortPrepare();
         return { didApply: false };
@@ -1023,27 +1013,20 @@ export function handleUsageCompaction(
       if (cfg.mode === 'selective') {
         const slice = compactableModelSlice(history, cut.compactableRange);
         if (slice.length === 0) return;
-        const selectivePromise = (async () => {
-          const release = await acquireCompactionSlot(runtime.config.compaction?.max_concurrent_compactors);
-          try {
-            return await runCompactionAttempt({
-              messages: history,
-              cut,
-              scope: 'main',
-              config: runtime.config,
-              deps: {
-                fallbackSelection: selection,
-                runtime,
-                accounting: { store: accountingStore, sessionId, chainId, turnId },
-                onPrepared: () => trigger.markPrepareStarted(cut.compactableRange, flaggedIds),
-                onTextDelta: createCompactionStreamEmitter(sessionId),
-              },
-              maxCorrectionRounds: 3,
-            });
-          } finally {
-            release();
-          }
-        })();
+        const selectivePromise = runCompactionAttempt({
+          messages: history,
+          cut,
+          scope: 'main',
+          config: runtime.config,
+          deps: {
+            fallbackSelection: selection,
+            runtime,
+            accounting: { store: accountingStore, sessionId, chainId, turnId },
+            onPrepared: () => trigger.markPrepareStarted(cut.compactableRange, flaggedIds),
+            onTextDelta: createCompactionStreamEmitter(sessionId),
+          },
+          maxCorrectionRounds: 3,
+        });
         const expectedIdsForSelective = history.slice(cut.compactableRange.start, cut.compactableRange.end).map((m) => m.id);
         setCompactionPending(sessionId, MAIN_AGENT_SCOPE_ID, { cut, flaggedIds, expectedIds: expectedIdsForSelective, estimatedInput: decision.estimatedInput, contextTokens: effectiveContextTokens, mode: 'selective', selectivePromise });
         selectivePromise.catch((err) => {
@@ -1070,22 +1053,15 @@ export function handleUsageCompaction(
       const slice = rawSlice2.filter((m) => !m.excludeFromModel && !m.hidden);
       if (slice.length === 0) return;
       trigger.markPrepareStarted(cut.compactableRange, flaggedIds);
-      const promise = (async () => {
-        const release = await acquireCompactionSlot(runtime.config.compaction?.max_concurrent_compactors);
-        try {
-          return await summarizeCompactableRange({
-            messages: slice,
-            scope: 'main',
-            config: runtime.config,
-            fallbackSelection: selection,
-            accounting: { store: accountingStore, sessionId, chainId, turnId },
-            runtime,
-            onTextDelta: createCompactionStreamEmitter(sessionId),
-          });
-        } finally {
-          release();
-        }
-      })();
+      const promise = summarizeCompactableRange({
+        messages: slice,
+        scope: 'main',
+        config: runtime.config,
+        fallbackSelection: selection,
+        accounting: { store: accountingStore, sessionId, chainId, turnId },
+        runtime,
+        onTextDelta: createCompactionStreamEmitter(sessionId),
+      });
       const expectedIdsForSimple = history.slice(cut.compactableRange.start, cut.compactableRange.end).map((m) => m.id);
       setCompactionPending(sessionId, MAIN_AGENT_SCOPE_ID, { cut, flaggedIds, expectedIds: expectedIdsForSimple, promise, estimatedInput: decision.estimatedInput, contextTokens: effectiveContextTokens, mode: 'simple' });
       promise.catch((err) => {

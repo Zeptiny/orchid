@@ -134,10 +134,9 @@ export const compactionSubagentsScopeSchema = compactionScopeSchema
 export const compactionConfigSchema = z.object({
   main: compactionScopeSchema.default({}),
   subagents: compactionSubagentsScopeSchema.default({}),
-  // KTD "Compactor concurrency cap": bounds concurrent compactor LLM calls
-  // across both scopes so N subagents crossing the threshold together cannot
-  // stampede the provider. Gates are never queued — only the prepare phase is.
-  max_concurrent_compactors: z.number().int().min(1).max(8).default(2),
+  // Removed: was the compactor concurrency cap. Parsed (accepted) but ignored
+  // so previously-saved configs keep loading.
+  max_concurrent_compactors: z.number().int().min(1).max(8).optional().transform(() => undefined),
 }).default({});
 
 // ---------------------------------------------------------------------------

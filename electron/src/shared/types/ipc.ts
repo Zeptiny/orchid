@@ -492,8 +492,6 @@ export type ConfigPatch = {
   compaction?: {
     main?: Partial<CompactionScopeConfig>;
     subagents?: Partial<CompactionScopeConfig>;
-    /** Compactor LLM concurrency cap across both scopes (1–8, default 2). */
-    max_concurrent_compactors?: number;
   };
   ast_max_file_size?: number;
   mcp_startup_timeout?: number;
