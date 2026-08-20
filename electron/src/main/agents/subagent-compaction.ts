@@ -22,6 +22,7 @@
  * slice, the pause-gate interface, and the pause/overflow outcome unions.
  */
 import type { CompactionMode, Message, Usage } from '../../shared/types/message';
+import { SUMMARY_SECTION_SEPARATOR } from '../../shared/types/message';
 import type { ModelSelection } from '../../shared/types/provider';
 import type { Config } from '../config/schema';
 import type { Chain } from '../../shared/types/chain';
@@ -212,7 +213,7 @@ function composeSelectiveSummaryText(
   const summaryParts = selectiveResult.summaryMessages.length > 0
     ? selectiveResult.summaryMessages.map((m) => m.content)
     : (selectiveResult.summaryMessage ? [selectiveResult.summaryMessage.content] : []);
-  const summaryText = summaryParts.join('\n\n---\n\n').trim();
+  const summaryText = summaryParts.join(SUMMARY_SECTION_SEPARATOR).trim();
   return summaryText.length > 0 ? summaryText : null;
 }
 

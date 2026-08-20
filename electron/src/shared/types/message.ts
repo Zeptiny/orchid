@@ -198,6 +198,14 @@ export interface CompactedMarker {
   };
 }
 
+/**
+ * Separator between summary sections when one logical compaction carries
+ * several (coalesced per-op summaries, or stacked legacy heads rendered as
+ * one widget). Shared so persisted summary text and renderer re-composition
+ * can never diverge.
+ */
+export const SUMMARY_SECTION_SEPARATOR = '\n\n---\n\n';
+
 function isCompactionMode(value: unknown): value is CompactionMode {
   return (COMPACTION_MODES as readonly string[]).includes(value as string);
 }

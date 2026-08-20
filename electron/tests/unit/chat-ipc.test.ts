@@ -3027,6 +3027,120 @@ describe('chat compaction selective pending (P1 #5)', () => {
       expect.objectContaining({ role: MessageRole.ASSISTANT, content: 'Follow-up answer' }),
     ]));
   });
+
+  it('mid-turn selective apply keeps flagged originals + inline head in the durable turn row (review #54)', async () => {
+    const sessionId = 'e5e5e5e5-e5e5-4e5e-8e5e-e5e5e5e5e5e5';
+    mocks.sessionManager._setActive({
+      ...makeSession(sessionId),
+      model: selection.modelId,
+      selection,
+      modelLabel: selection.modelId,
+    });
+    // Selective ops from the manifest: keep user + thinking verbatim,
+    // summarize every other span in one op.
+    mocks.aiGenerateText.mockImplementationOnce(async ({ messages }: { messages: Array<{ content: string }> }) => {
+      const prompt = String(messages[0]?.content ?? '');
+      const entries = [...prompt.matchAll(/^(\S+) \[([\w-]+)\]/gm)].map((m) => ({
+        id: m[1]!,
+        kind: m[2]!,
+      }));
+      return {
+        text: JSON.stringify([
+          ...entries.filter((e) => e.kind === 'user' || e.kind === 'thinking')
+            .map((e) => ({ type: 'keep', id: e.id })),
+          {
+            type: 'summarize',
+            ids: entries.filter((e) => e.kind !== 'user' && e.kind !== 'thinking').map((e) => e.id),
+            text: 'SUMMARY: selective mid-turn handoff',
+          },
+        ]),
+      };
+    });
+    // First stream: two tool groups + usage over threshold → selective pending
+    // prepares; the turn pauses, applies, and resumes. The resume is
+    // deliberately SLOW (450ms): the 300ms checkpoint debounce scheduled by
+    // the triggering usage event fires mid-resume — post-apply — which is
+    // exactly the stale-capture race window (review #55).
+    mocks.streamChat.mockImplementationOnce(async function* () {
+      yield {
+        type: 'tool_call',
+        toolCallId: 'tc-sel-1',
+        toolName: 'read',
+        args: '{"path":"README.md"}',
+      };
+      yield successfulToolResult('tc-sel-1', 'x'.repeat(2000));
+      yield {
+        type: 'tool_call',
+        toolCallId: 'tc-sel-2',
+        toolName: 'read',
+        args: '{"path":"AGENTS.md"}',
+      };
+      yield successfulToolResult('tc-sel-2', 'y'.repeat(2000));
+      yield {
+        type: 'usage',
+        usage: { prompt_tokens: 1800, completion_tokens: 40, total_tokens: 1840, cached_tokens: 0 },
+      };
+      yield { type: 'finish', finishReason: 'stop' };
+    });
+    mocks.streamChat.mockImplementationOnce(async function* () {
+      await new Promise((resolve) => setTimeout(resolve, 450));
+      yield { type: 'content', text: 'Resumed answer' };
+      yield { type: 'finish', finishReason: 'stop' };
+    });
+
+    const send = vi.fn();
+    const chatSend = mocks.handlers.get(IPC_CHANNELS.CHAT_SEND)!;
+    await chatSend({ sender: { id: 945, send } }, { message: 'Explore with tools' });
+    await waitForDoneCount(send, 1);
+
+    expect(mocks.streamChat).toHaveBeenCalledTimes(2);
+    expect(mocks.sessionManager.applyCompaction).toHaveBeenCalledTimes(1);
+
+    // The resumed model view is the reanchored REPLAY: the head reaches the
+    // model, the flagged original does not.
+    const resumedMessages = mocks.streamChat.mock.calls[1]![0]!.messages as Array<{
+      content?: string;
+      compacted?: unknown;
+      excludeFromModel?: boolean;
+      tool_call_id?: string;
+    }>;
+    expect(resumedMessages.some((m) => m.compacted && m.content === 'SUMMARY: selective mid-turn handoff')).toBe(true);
+    expect(resumedMessages.some((m) => m.tool_call_id === 'tc-sel-1' && m.excludeFromModel)).toBe(false);
+
+    // The durable turn row (finalize rewrite input) is TRANSCRIPT-complete:
+    // user message unflagged, the flagged ORIGINAL tool pair preserved with
+    // excludeFromModel, the inline summary head, and the post-resume content.
+    // The pre-fix code rewrote the row from the model-view replay and
+    // durably erased the flagged originals + head (review #54).
+    const persisted = mocks.sessionManager.persistTurn.mock.calls.at(-1)?.[0] as {
+      messages: Array<Record<string, unknown>>;
+      status?: string;
+    };
+    expect(persisted.status).toBe('completed');
+    const persistedUser = persisted.messages.find(
+      (m) => m.role === MessageRole.USER && m.content === 'Explore with tools',
+    )!;
+    expect(persistedUser.excludeFromModel).not.toBe(true);
+    expect(persisted.messages.some((m) => m.tool_call_id === 'tc-sel-1' && m.excludeFromModel === true)).toBe(true);
+    expect(persisted.messages.some((m) => m.compacted && (m as { content?: string }).content === 'SUMMARY: selective mid-turn handoff')).toBe(true);
+    expect(persisted.messages.some((m) => m.role === MessageRole.ASSISTANT && m.content === 'Resumed answer')).toBe(true);
+
+    // Stale-checkpoint race (review #55): a checkpoint scheduled by the same
+    // usage event that triggered the compaction fires after the apply — its
+    // write must reflect the compacted transcript (re-derived at fire time),
+    // never the pre-compaction snapshot captured at schedule time.
+    const applyOrder = mocks.sessionManager.applyCompaction.mock.invocationCallOrder[0]!;
+    const updateMock = mocks.sessionManager.updateActiveChainMessages;
+    updateMock.mock.calls.forEach((call, index) => {
+      if (updateMock.mock.invocationCallOrder[index]! > applyOrder) {
+        const written = call[0] as Array<{
+          tool_call_id?: string;
+          excludeFromModel?: boolean;
+        }>;
+        expect(written.some((m) => m.tool_call_id === 'tc-sel-1' && m.excludeFromModel === true)).toBe(true);
+      }
+    });
+  });
 });
 
 describe('chat compaction disabled without a model context limit', () => {

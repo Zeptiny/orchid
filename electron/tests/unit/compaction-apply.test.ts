@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto';
 import type { Message } from '../../src/shared/types/message';
 import { MessageRole, MessageType } from '../../src/shared/types/message';
 import { ChainStatus, type Chain } from '../../src/shared/types/chain';
-import { buildCompactionApply, validateCompactableRangeNotSummarized, CompactionApplyError, stampCompactionMetrics } from '../../src/main/llm/compaction/apply';
+import { buildCompactionApply, stampCompactionMetrics } from '../../src/main/llm/compaction/apply';
 import type { CutResult } from '../../src/main/llm/compaction/select';
 
 // Reuse MessageType / Role helpers
@@ -200,10 +200,6 @@ describe('compaction apply — pre-flagged inner messages are tolerated (FIX #4)
 
     const cut = makeCut(messages, 1, chainBoundaries); // range [0,4), cutIndex 4
 
-    // Not fatal: pre-flagged messages are treated as already-excluded
-    const { valid } = validateCompactableRangeNotSummarized(messages, cut);
-    expect(valid).toBe(true);
-
     const result = buildCompactionApply({
       messages,
       chains,
@@ -255,10 +251,6 @@ describe('compaction apply — pre-flagged inner messages are tolerated (FIX #4)
 
     const cut = makeCut(messages, 1, chainBoundaries); // range [0,4), head at index 0 === start
 
-    const { valid, summaryHeadIds } = validateCompactableRangeNotSummarized(messages, cut);
-    expect(valid).toBe(true);
-    expect(summaryHeadIds).toEqual([]);
-
     const result = buildCompactionApply({
       messages,
       chains,
@@ -282,25 +274,43 @@ describe('compaction apply — pre-flagged inner messages are tolerated (FIX #4)
     }
   });
 
-  it('still throws CompactionApplyError when the range contains a compacted summary head (double compaction)', () => {
+  it('supersedes compacted summary heads DEEPER in the range too — flagged and replaced, never fatal (review #53 regression)', () => {
     const { chains, messages, chainBoundaries } = buildSession(3);
-    // A prior compaction's summary head now inside the compactable range
+    // Stacked selective heads inside the compactable range — the shape a
+    // selective compaction leaves behind. The new compaction must be able to
+    // supersede ALL of them (flag + replace), not refuse to apply.
     const priorSummary: Message = {
       ...makeMessage({ id: 'prior-summary-head', role: MessageRole.ASSISTANT, content: 'earlier handoff summary' }),
       compacted: { rangeStart: 'older-start', rangeEnd: 'older-end', mode: 'simple' },
     };
+    const secondHead: Message = {
+      ...makeMessage({ id: 'second-summary-head', role: MessageRole.ASSISTANT, content: 'second handoff summary' }),
+      compacted: { rangeStart: 'older-start-2', rangeEnd: 'older-end-2', mode: 'selective' },
+    };
     messages[2] = priorSummary;
-    chains[1] = { ...chains[1]!, messages: [priorSummary, messages[3]!] };
+    messages[3] = secondHead;
+    chains[1] = { ...chains[1]!, messages: [priorSummary, secondHead] };
 
     const cut = makeCut(messages, 1, chainBoundaries); // range [0,4)
 
-    const { valid, summaryHeadIds } = validateCompactableRangeNotSummarized(messages, cut);
-    expect(valid).toBe(false);
-    expect(summaryHeadIds).toContain(priorSummary.id);
+    const result = buildCompactionApply({
+      messages,
+      chains,
+      cutResult: cut,
+      summaryText: 'superseding summary',
+      mode: 'selective',
+    });
 
-    expect(() =>
-      buildCompactionApply({ messages, chains, cutResult: cut, summaryText: 'second summary', mode: 'simple' }),
-    ).toThrow(CompactionApplyError);
+    expect(result.didApply).toBe(true);
+    expect(result.summaryMessage).not.toBeNull();
+    // BOTH stacked heads are superseded: flagged like other range messages.
+    expect(result.flaggedIds).toContain(priorSummary.id);
+    expect(result.flaggedIds).toContain(secondHead.id);
+    expect(result.updatedMessages.find((m) => m.id === priorSummary.id)!.excludeFromModel).toBe(true);
+    expect(result.updatedMessages.find((m) => m.id === secondHead.id)!.excludeFromModel).toBe(true);
+    // The NEW head is the only replayable summary in the model view.
+    const replayableHeads = result.updatedMessages.filter((m) => m.compacted && !m.excludeFromModel);
+    expect(replayableHeads.map((m) => m.id)).toEqual([result.summaryMessage!.id]);
   });
 
   it('reclaim-only path never throws over a flagged or summarized range (unchanged behavior)', () => {
@@ -325,13 +335,6 @@ describe('compaction apply — pre-flagged inner messages are tolerated (FIX #4)
     expect(result.updatedMessages.find((m) => m.id === messages[1]!.id)!.excludeFromModel).toBe(true);
   });
 
-  it('validateCompactableRangeNotSummarized passes when the range is clean', () => {
-    const { messages, chainBoundaries } = buildSession(3);
-    const cut = makeCut(messages, 1, chainBoundaries);
-    const { valid, summaryHeadIds } = validateCompactableRangeNotSummarized(messages, cut);
-    expect(valid).toBe(true);
-    expect(summaryHeadIds).toEqual([]);
-  });
 });
 
 describe('compaction apply — intra-chain split keeps the original id on the preserved half (FIX #7)', () => {

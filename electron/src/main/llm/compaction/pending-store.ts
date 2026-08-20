@@ -13,7 +13,7 @@
  * both `ipc/chat/compaction.ts` (main adapter) and `agents/subagent-compaction.ts`
  * (subagent adapter) can import it without crossing module-graph boundaries.
  */
-import { compactedMarkerFromUnknown, type Message } from '../../../shared/types/message';
+import type { Message } from '../../../shared/types/message';
 import { normalizeAgentScopeId, type AgentScopeId } from '../../../shared/types/agent-scope';
 import type { CutResult } from './select';
 import type { SummarizeResult } from './summarize';
@@ -55,12 +55,20 @@ export function dedupeHistoryById(messages: readonly Message[]): Message[] {
  * about to be applied over (R37, shared by both scopes).
  *
  * Index-anchored: the compactable range must land inside the history, every
- * expected id must still sit at its prepare-time position, no flagged id may
- * have vanished or been flagged by someone else, and no compacted summary
- * head may sit deeper than the range start (a head AT the start is being
- * superseded by design). Pre-flagged messages inside the range are tolerated
- * — cancelled tool results and prior mechanical-reclaim flags are already
- * excluded from the model and `buildCompactionApply` skips them.
+ * expected id must still sit at its prepare-time position, and no flagged id
+ * may have vanished or been flagged by someone else. Pre-flagged messages
+ * inside the range are tolerated — cancelled tool results, prior
+ * mechanical-reclaim flags, and superseded compacted summary heads are
+ * already excluded from the model (or are re-summarizable by design) and
+ * `buildCompactionApply` skips them.
+ *
+ * Compacted summary heads inside the range are valid at ANY depth: select.ts
+ * treats heads as re-summarizable chain boundaries, and selective mode
+ * materializes one synthetic per summarize op — a re-compaction range
+ * legitimately contains several stacked heads that the new compaction
+ * supersedes. A head inserted AFTER the prepare would shift the expected ids
+ * and is rejected by the index anchoring, so no marker-specific check is
+ * needed.
  */
 export function isPendingCutStillValid(
   pending: Pick<CompactionPendingEntry, 'cut' | 'flaggedIds' | 'expectedIds'>,
@@ -70,15 +78,10 @@ export function isPendingCutStillValid(
   if (!Number.isFinite(start) || !Number.isFinite(end)) return false;
   if (start < 0 || end > messages.length || start >= end) return false;
   if (pending.cut.cutIndex < 0 || pending.cut.cutIndex > messages.length) return false;
-  for (let i = start; i < end; i += 1) {
-    const message = messages[i];
-    if (!message) continue;
-    // A compacted summary head DEEPER than the range start would summarize a
-    // summary — invalidate. A head at index === start is being superseded
-    // (select.ts lands compactableStart ON the old head so re-compaction can
-    // re-summarize it), so it is allowed.
-    if (i > start && compactedMarkerFromUnknown(message.compacted)) return false;
-  }
+  // Fail closed without expected ids: with the marker-depth check removed the
+  // id anchoring is the ONLY staleness protection, so a pending that did not
+  // capture its expected ids cannot be proven still-valid and must discard.
+  if (!pending.expectedIds || pending.expectedIds.length === 0) return false;
   if (pending.flaggedIds.length > 0) {
     const idToMsg = new Map<string, Message>();
     for (const m of messages) idToMsg.set(m.id, m);
@@ -96,7 +99,6 @@ export function isPendingCutStillValid(
   }
   return true;
 }
-
 function key(sessionId: string, agentScopeId: AgentScopeId | null): string {
   return `${sessionId}\u0000${normalizeAgentScopeId(agentScopeId)}`;
 }

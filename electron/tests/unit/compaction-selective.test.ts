@@ -332,6 +332,41 @@ describe('U14 materialization', () => {
     expect(m.flaggedIds).toContain('th1');
     expect(m.replayMessages.some(r => r.id === 'th1')).toBe(false);
   });
+
+  it('coalesces MULTIPLE summarize ops into ONE synthetic summary head (review #53)', () => {
+    const msgs = [
+      makeUser('u1', 'q'),
+      makeAssistant('a1', 'first work'),
+      makeThinking('th1', 'reasoning one'),
+      makeAssistant('a2', 'second work'),
+      makeThinking('th2', 'reasoning two'),
+      makeUser('u2', 'preserve'),
+    ];
+    const manifest = buildManifest(msgs, { start: 0, end: 5 });
+    const ops: SelectiveOp[] = [
+      { type: 'keep', id: 'u1' },
+      { type: 'summarize', ids: ['a1', 'th1'], text: 'Section one summary.' },
+      { type: 'summarize', ids: ['a2', 'th2'], text: 'Section two summary.' },
+    ];
+    const m = materializeSelectiveOps({ manifest, messages: msgs, ops });
+
+    // ONE synthetic summary message in the replay — not one per op.
+    const heads = m.replayMessages.filter((r) => r.compacted);
+    expect(heads).toHaveLength(1);
+    expect(m.summaryMessages).toHaveLength(1);
+    expect(m.summaryMessage?.id).toBe(heads[0]!.id);
+    // Combined sections joined with a separator.
+    expect(heads[0]!.content).toBe('Section one summary.\n\n---\n\nSection two summary.');
+    // Marker anchors span all summarized ids with the total count.
+    expect(heads[0]!.compacted?.rangeStart).toBe('a1');
+    expect(heads[0]!.compacted?.rangeEnd).toBe('th2');
+    expect(heads[0]!.compacted?.summarizedCount).toBe(4);
+    // Positioned at the FIRST summarize op's slot — after the kept user head.
+    expect(m.replayMessages.map((r) => r.id)).toEqual(['u1', heads[0]!.id, 'u2']);
+    // All summarized originals flagged exactly once.
+    expect(m.flaggedIds).toEqual(expect.arrayContaining(['a1', 'th1', 'a2', 'th2']));
+    expect(m.flaggedIds).toHaveLength(4);
+  });
 });
 
 // ── U7/R35: unified never-delete selective apply ────────────────────────────

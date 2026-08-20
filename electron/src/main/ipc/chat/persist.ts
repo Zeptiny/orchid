@@ -113,9 +113,13 @@ export function flushPartialTurnContent(agent: ActiveAgent, context: AgentContex
  * Build turn-local messages for multi-chain storage:
  * current user message (+ any pre-turn messages after priorMessageCount) +
  * tool/assistant messages produced during the turn.
+ *
+ * Durable writes prefer `transcriptBase` — the transcript-complete turn slice
+ * kept after a mid-turn compaction swapped `messages` to the model-view replay
+ * (which drops flagged originals and superseded heads).
  */
 export function turnMessagesFromAgent(agent: ActiveAgent): Message[] {
-  const turnBase = agent.messages.slice(agent.priorMessageCount);
+  const turnBase = agent.transcriptBase ?? agent.messages.slice(agent.priorMessageCount);
   return [...turnBase, ...agent.turnMessages];
 }
 
@@ -143,14 +147,25 @@ function checkpointMessagesFromAgent(agent: ActiveAgent, context: AgentContext):
 
 const CHECKPOINT_DEBOUNCE_MS = 300;
 
+/**
+ * Schedule one debounced checkpoint write for a session's active turn.
+ *
+ * The snapshot is RE-DERIVED at fire time from the live agent, never captured
+ * at schedule time: a checkpoint scheduled by the same usage event that
+ * triggers a compaction fires after the pause-apply, and a schedule-time
+ * snapshot would be the stale pre-compaction slice — wholesale-replacing the
+ * active chain row and erasing the just-written flags and inline summary head
+ * (review #55). Fire-time derivation always reflects the current
+ * transcriptBase/turnMessages.
+ */
 function scheduleCheckpoint(
   sessionId: string,
-  messages: Message[],
+  snapshot: () => Message[],
   guard?: (active: ActiveAgent) => boolean,
 ): void {
   const existing = pendingCheckpoints.get(sessionId);
   if (existing) {
-    existing.messages = messages;
+    existing.snapshot = snapshot;
     existing.guard = guard;
     return;
   }
@@ -166,7 +181,7 @@ function scheduleCheckpoint(
     if (effectiveGuard && !effectiveGuard(active)) return;
     try {
       const updated = getSessionManager().updateActiveChainMessages(
-        entry?.messages ?? messages,
+        (entry ?? { snapshot }).snapshot(),
         sessionId,
       );
       const update = updated ? buildSessionUpdatedEvent(updated) : null;
@@ -182,14 +197,13 @@ function scheduleCheckpoint(
       console.debug('Failed to checkpoint active chat chain (non-fatal):', err);
     }
   }, CHECKPOINT_DEBOUNCE_MS);
-  pendingCheckpoints.set(sessionId, { timer, messages, guard });
+  pendingCheckpoints.set(sessionId, { timer, snapshot, guard });
 }
 
 /** Persist one bounded main-turn checkpoint, debounced per session. */
 export function checkpointActiveTurn(agent: ActiveAgent, context: AgentContext): void {
   const sessionId = agent.sessionId;
-  const messages = checkpointMessagesFromAgent(agent, context);
-  scheduleCheckpoint(sessionId, messages);
+  scheduleCheckpoint(sessionId, () => checkpointMessagesFromAgent(agent, context));
 }
 
 /** Cancel any pending debounced checkpoint for a session. */
@@ -475,7 +489,7 @@ export function checkpointCompactionMidTurn(
   // priorMessageCount: that counter indexes agent.messages, a different array.)
   agent.turnMessages = [...checkpointMessages];
   const sessionId = agent.sessionId;
-  scheduleCheckpoint(sessionId, [...checkpointMessages], (active) => active === agent);
+  scheduleCheckpoint(sessionId, () => [...checkpointMessages], (active) => active === agent);
 }
 
 /** Flush any pending compaction checkpoint immediately (for tests / turn boundary). */
@@ -487,7 +501,7 @@ export function flushCompactionCheckpoint(sessionId: string): boolean {
   const active = activeAgents.get(sessionId);
   if (!active || active.finalized) return false;
   try {
-    const updated = getSessionManager().updateActiveChainMessages(pending.messages, sessionId);
+    const updated = getSessionManager().updateActiveChainMessages(pending.snapshot(), sessionId);
     const update = updated ? buildSessionUpdatedEvent(updated) : null;
     if (update) {
       sendSessionEvent(

@@ -12,10 +12,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ActiveAgent } from '../../src/main/ipc/chat/state';
 import type { ChatStreamSegmentSnapshot } from '../../src/shared/types/ipc';
 
-const { activeAgents, sendTurnEvent, webContentsForWindowId } = vi.hoisted(() => ({
+const { activeAgents, sendTurnEvent, webContentsForWindowId, selectCutMock, compactableModelSliceMock, runCompactionAttemptMock } = vi.hoisted(() => ({
   activeAgents: new Map<string, unknown>(),
   sendTurnEvent: vi.fn(),
   webContentsForWindowId: vi.fn(() => ({})),
+  selectCutMock: vi.fn(),
+  compactableModelSliceMock: vi.fn(),
+  runCompactionAttemptMock: vi.fn(),
 }));
 
 vi.mock('../../src/main/ipc/chat/state', () => ({ activeAgents }));
@@ -39,27 +42,53 @@ vi.mock('../../src/main/ipc/next-request-stop', () => ({
 }));
 vi.mock('../../src/main/ipc/session-activity', () => ({ publishSessionActivity: vi.fn() }));
 vi.mock('../../src/main/llm/compaction/select', () => ({
-  selectCut: vi.fn(),
+  selectCut: selectCutMock,
   resolvePreservePercent: vi.fn(() => 0.25),
   resolveUserExemptIds: vi.fn(() => new Set()),
 }));
-vi.mock('../../src/main/llm/compaction/reclaim', () => ({
-  mechanicalReclaim: vi.fn(() => ({ flaggedIds: [] })),
-}));
+vi.mock('../../src/main/llm/compaction/reclaim', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../src/main/llm/compaction/reclaim')>();
+  return {
+    ...actual,
+    mechanicalReclaim: vi.fn(() => ({ flaggedIds: [] })),
+  };
+});
 vi.mock('../../src/main/llm/compaction/summarize', () => ({
   summarizeCompactableRange: vi.fn(),
 }));
 vi.mock('../../src/main/llm/compaction/apply', () => ({
   buildCompactionApply: vi.fn(),
   buildSelectiveCompactionApply: vi.fn(() => null),
-  CompactionApplyError: class CompactionApplyError extends Error {},
 }));
-vi.mock('../../src/main/llm/compaction/trigger', () => ({
-  CompactionTrigger: class CompactionTrigger { state: Record<string, unknown> = {}; },
-}));
+vi.mock('../../src/main/llm/compaction/trigger', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../src/main/llm/compaction/trigger')>();
+  return {
+    ...actual,
+    CompactionTrigger: class CompactionTrigger {
+      state: Record<string, unknown> = {};
+      onUsage(): void {}
+      onCompactionApplied(): void {
+        this.state.hysteresisArmed = true;
+      }
+      onApplyFailed(): void {
+        this.state.lastApplyFailureAt = Date.now();
+      }
+      inApplyBackoff(): boolean {
+        const at = this.state.lastApplyFailureAt as number | undefined;
+        return typeof at === 'number' && Date.now() - at < 30_000;
+      }
+      markPrepareStarted(): void {
+        this.state.pendingPrepare = true;
+      }
+      abortPrepare(): void {
+        this.state.pendingPrepare = false;
+      }
+    },
+  };
+});
 vi.mock('../../src/main/llm/compaction/run-attempt', () => ({
-  compactableModelSlice: vi.fn(),
-  runCompactionAttempt: vi.fn(),
+  compactableModelSlice: compactableModelSliceMock,
+  runCompactionAttempt: runCompactionAttemptMock,
 }));
 vi.mock('../../src/main/ipc/chat/persist', () => ({
   persistCompactionBetweenTurns: vi.fn(),
@@ -72,7 +101,9 @@ import {
   createCompactionStreamEmitter,
   emitCompactionProgress,
   getCompactionTrigger,
+  handleUsageCompaction,
 } from '../../src/main/ipc/chat/compaction';
+import { deleteCompactionPending } from '../../src/main/llm/compaction/pending-store';
 import { IPC_CHANNELS } from '../../src/shared/types/ipc';
 
 const SESSION_ID = 's1';
@@ -324,5 +355,80 @@ describe('createCompactionStreamEmitter', () => {
     emit('text');
     vi.advanceTimersByTime(COMPACTION_STREAM_EMIT_INTERVAL_MS + 1);
     expect(sendTurnEvent).not.toHaveBeenCalled();
+  });
+});
+
+describe('usage fire-point guards (review #53 — orphaned-run cascade)', () => {
+  const CUT = {
+    cutIndex: 2,
+    compactableRange: { start: 0, end: 2 },
+    preservedCount: 1,
+    openGroupStart: null,
+    preservedRange: { start: 2, end: 4 },
+  };
+  const history = [
+    { id: 'm1', role: 'user', content: 'explore the compaction system and explain the details', type: 'text' },
+    { id: 'm2', role: 'assistant', content: 'reading files and summarizing the implementation now', type: 'text' },
+    { id: 'm3', role: 'assistant', content: 'more content after the cut window', type: 'text' },
+    { id: 'm4', role: 'assistant', content: 'even more content', type: 'text' },
+  ] as never[];
+  const runtime = {
+    config: {
+      compaction: {
+        main: {
+          mode: 'selective',
+          threshold: 0.5,
+          hysteresis_delta: 0.1,
+          preserve_percent: 0.25,
+          min_compactable_tokens: 1,
+          mechanical_reclaim: true,
+          keep_last_user_messages: 10,
+          pin_first_user_message: true,
+        },
+      },
+    },
+    projectDir: '',
+  } as never;
+
+  function fireUsage(inputTokens: number): void {
+    handleUsageCompaction(SESSION_ID, history as never, inputTokens, 10_000, runtime, {} as never, {} as never, null, 'turn-1');
+  }
+
+  beforeEach(() => {
+    selectCutMock.mockReset().mockReturnValue(CUT);
+    compactableModelSliceMock.mockReset().mockReturnValue([history[0]]);
+    runCompactionAttemptMock.mockReset();
+  });
+
+  it('suppresses re-prepare while a selective run is still in flight, then re-arms once it settles', async () => {
+    let settleRun: (value: unknown) => void = () => undefined;
+    runCompactionAttemptMock.mockImplementation(
+      () => new Promise((resolve) => { settleRun = resolve; }),
+    );
+
+    fireUsage(9_000); // over threshold → prepare starts the (mocked) selective run
+    expect(runCompactionAttemptMock).toHaveBeenCalledTimes(1);
+
+    // Simulate the apply consuming the pending and discarding it early — the
+    // orphan cascade entry point. The next usage event must NOT start a new
+    // compactor run while the old one is still streaming.
+    deleteCompactionPending(SESSION_ID, null);
+    fireUsage(9_500);
+    expect(runCompactionAttemptMock).toHaveBeenCalledTimes(1);
+
+    // Once the run settles, the guard releases and a new fire may prepare.
+    settleRun({ kind: 'noop', reason: 'empty-slice' });
+    await Promise.resolve();
+    await Promise.resolve();
+    fireUsage(9_600);
+    expect(runCompactionAttemptMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('suppresses re-prepare during the apply-failure backoff window', () => {
+    getCompactionTrigger(SESSION_ID).onApplyFailed();
+    runCompactionAttemptMock.mockImplementation(() => new Promise(() => undefined));
+
+    fireUsage(9_000);
+    expect(runCompactionAttemptMock).not.toHaveBeenCalled();
   });
 });

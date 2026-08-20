@@ -366,6 +366,19 @@ export async function startChatTurn(
     sessionTitleTimer: null, runtime, chainId,
     releaseResources,
   };
+  const setTurnBase = (nextMessages: Message[], transcriptOverride?: readonly Message[]): void => {
+    messages.splice(0, messages.length, ...nextMessages);
+    activeAgent.messages.splice(0, activeAgent.messages.length, ...nextMessages);
+    // The durable turn slice follows the transcript source: the compaction
+    // resume's model-view replay must never become the durable row (it drops
+    // flagged originals + superseded heads), so checkpoints and the finalize
+    // rewrite read the transcript-complete override when one exists.
+    const transcriptSource = transcriptOverride ?? nextMessages;
+    const tAnchor = transcriptSource.findIndex((m) => m.id === userMessage.id);
+    activeAgent.transcriptBase = tAnchor >= 0
+      ? [...transcriptSource.slice(tAnchor)]
+      : [...transcriptSource];
+  };
   activeAgents.set(sessionId, activeAgent);
   sessionsStarting.delete(sessionId);
 
@@ -630,24 +643,25 @@ export async function startChatTurn(
         }
       }
     }
-    // Post-compaction resume reset: re-anchor the durable turn slice at the
-    // turn's user message inside the compacted/remerged history (P1 #3) and
-    // clear every per-turn accumulation so the replay restarts clean. The
-    // durable row holds the whole turn (compaction inserts summary heads
-    // INLINE and only flags the prefix — never splits rows), so the
-    // user-anchored full-turn rewrite preserves the flagged prefix and the
-    // heads in place.
-    const resetTurnForCompactionResume = (nextMessages: Message[]): void => {
+    /**
+     * Re-anchor the durable turn slice at the turn's user message inside the
+     * compacted/remerged history (P1 #3) and clear every per-turn accumulation
+     * so the replay restarts clean. The durable row holds the whole turn
+     * (compaction inserts summary heads INLINE and only flags the prefix —
+     * never splits rows), so the user-anchored full-turn rewrite preserves the
+     * flagged prefix and the heads in place. `transcriptOverride` carries the
+     * transcript-complete view for selective applies whose model-view replay
+     * omits flagged originals (review #54).
+     */
+    const resetTurnForCompactionResume = (nextMessages: Message[], transcriptOverride?: readonly Message[]): void => {
       const anchorIndex = nextMessages.findIndex((m) => m.id === userMessage.id);
       if (anchorIndex < 0) {
         // Defensive: a history that lost the turn's user message must never
         // truncate the durable turn — re-append it.
         nextMessages.push(userMessage);
       }
-      const priorMessageCount = anchorIndex >= 0 ? anchorIndex : nextMessages.length - 1;
-      messages.splice(0, messages.length, ...nextMessages);
-      activeAgent.messages.splice(0, activeAgent.messages.length, ...nextMessages);
-      activeAgent.priorMessageCount = priorMessageCount;
+      setTurnBase(nextMessages, transcriptOverride);
+      activeAgent.priorMessageCount = anchorIndex >= 0 ? anchorIndex : nextMessages.length - 1;
       activeAgent.turnMessages = [];
       activeAgent.responseCommittedLength = 0;
       activeAgent.thinkingCommittedLength = 0;
@@ -676,8 +690,10 @@ export async function startChatTurn(
               // anchors the durable turn slice at the user message so the
               // finalized persistTurn REPLACES the active chain with the FULL
               // turn (user + flagged prefix + summary head + window + new
-              // content), never only the post-resume tail (P1 #3).
-              resetTurnForCompactionResume(updated);
+              // content), never only the post-resume tail (P1 #3). The
+              // transcript override keeps the durable row complete when the
+              // model-view replay dropped flagged originals (selective).
+              resetTurnForCompactionResume(updated, pendingRes.transcriptMessages);
               // The applied path also drops the pre-pause stream segments (the
               // overflow-retry path below intentionally keeps them). Tool
               // snapshots go with them: every pre-compaction tool is either
@@ -758,8 +774,9 @@ export async function startChatTurn(
                 // the user message so a later finalize REPLACES the active
                 // chain with the full turn, never only the post-retry tail
                 // (same invariant as P1 #3). streamSegments is intentionally
-                // NOT cleared on the retry path.
-                resetTurnForCompactionResume(retryResult.updatedMessages);
+                // NOT cleared on the retry path. The transcript override keeps
+                // the durable row complete for selective applies (review #54).
+                resetTurnForCompactionResume(retryResult.updatedMessages, retryResult.transcriptMessages);
                 try {
                   actor.send({ type: 'USER_INPUT', message });
                   publishSessionActivity(sessionId, {

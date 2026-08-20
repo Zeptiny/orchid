@@ -751,12 +751,15 @@ describe('SubagentManager compaction pause gate (U5)', () => {
     // A message inserted before the range shifts every index — discard.
     const shifted = [base[0]!, { ...base[1]!, id: 'inserted' }, ...base.slice(1)];
     expect(isPendingCutStillValid(pending, shifted)).toBe(false);
-    // A compacted summary head deeper than the range start would summarize a
-    // summary — discard.
+    // Compacted summary heads ANYWHERE in the range are valid at apply time
+    // (review #53): select.ts treats heads as re-summarizable, selective mode
+    // materializes several stacked heads per run, and a re-compaction
+    // supersedes them. A head inserted after the prepare shifts the expected
+    // ids and is caught by the index anchoring instead.
     const withHead = base.map((m, i) =>
       i === 2 ? { ...m, compacted: { rangeStart: 'a1', rangeEnd: 'a2', mode: 'simple' } } : m,
     );
-    expect(isPendingCutStillValid(pending, withHead)).toBe(false);
+    expect(isPendingCutStillValid(pending, withHead)).toBe(true);
   });
 });
 

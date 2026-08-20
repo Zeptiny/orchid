@@ -65,6 +65,16 @@ Because the row is never split, the mid-turn resume keeps its original user-mess
 
 **3. Renderer merges compacted runs across chain boundaries** (`renderer/utils/stream-building.ts`). The compacted-run buffer is shared state threaded through every chain walk (`ChainWalkState`), flushed only when a visible item renders — message, summary, footer, collapsed-stub, or end of build. Superseded summary heads are flagged like range messages, so they coalesce into the adjacent run's single stub. A chain contributing only a user message plus a compacted run (legacy split-prefix shape) drops no footer, and cross-chain message-id dedupe collapses stale mirrored rows.
 
+> Update (2026-08-20): coalescing now extends one layer up — CONSECUTIVE
+> non-flagged summary heads merge into ONE `compaction-summary` widget item
+> (`CompactionWidget` takes `messages[]`, sums counts/tokens, joins sections
+> with the shared `SUMMARY_SECTION_SEPARATOR`), because older selective runs
+> persisted one synthetic head per summarize op (the stacked-heads deadlock in
+> `logic-errors/selective-compaction-stacked-summary-heads-rejected.md`).
+> New runs persist one coalesced head; the renderer coalescing covers legacy
+> sessions. A flagged (superseded) head still breaks the run and joins the
+> compacted stub; heads separated by ordinary content stay separate widgets.
+
 **4. Containment on visible ids** (`deleteSupersededChains`): superseded-row detection compares the candidate's VISIBLE id set against the owner's full id set, so hidden usage-carrier extras no longer protect duplicate rows.
 
 ## Why This Works

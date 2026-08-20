@@ -11,6 +11,7 @@
 
 import { randomUUID } from 'node:crypto';
 import type { Message, CompactedMarker } from '../../../../shared/types/message';
+import { SUMMARY_SECTION_SEPARATOR } from '../../../../shared/types/message';
 import { MessageRole, MessageType } from '../../../../shared/types/message';
 import { reconcileOrphanToolResults } from '../../../../shared/types/chain';
 import { toApiMessages } from '../../history';
@@ -133,9 +134,9 @@ export type SimpleFallback = () => Promise<{ text: string } | null> | { text: st
 export interface MaterializeResult {
   readonly replayMessages: Message[];
   readonly flaggedIds: string[];
-  /** Summary messages (one per summarize op) */
+  /** Coalesced summary head(s) — exactly one when any summarize op ran. */
   readonly summaryMessages: Message[];
-  /** For compatibility with simple path: first summary or combined */
+  /** The coalesced summary head, or null when the run only kept/dropped/ranged. */
   readonly summaryMessage: Message | null;
   /** Compacted marker for persistence (if needed) */
   readonly compactedMarker?: CompactedMarker;
@@ -220,8 +221,11 @@ function makeRangedCopy(original: Message, startLine: number, endLine: number): 
  * Pure transform: materialize ops into a replay list.
  *
  * Kept messages verbatim, ranged keeps as content-truncated copies (annotated),
- * summarized spans as one synthetic message with originals flagged.
- * Originals in summarized/ranged ranges are added to flaggedIds.
+ * and ALL summarize ops coalesced into ONE synthetic summary message inserted
+ * at the first summarize op's position (one compaction = one summary head —
+ * review #53: per-op synthetics stacked heads that blocked re-compaction and
+ * rendered as multiple summary widgets). Originals in summarized/ranged ranges
+ * are added to flaggedIds.
  *
  * Full replay = materialized compactable prefix + preserve suffix (verbatim).
  */
@@ -256,6 +260,14 @@ export function materializeSelectiveOps(input: {
     }
   };
 
+  // Coalesced summarize collection: sections + anchors, spliced at the FIRST
+  // summarize op's position once the walk completes.
+  const summarySections: string[] = [];
+  let summaryFirstId: string | null = null;
+  let summaryLastId: string | null = null;
+  let summaryCount = 0;
+  let summaryInsertAt = -1;
+
   // Ops are expected sorted to manifest order (validate does this)
   for (const op of ops) {
     if (op.type === 'keep') {
@@ -274,22 +286,17 @@ export function materializeSelectiveOps(input: {
       addFlagged(op.id);
       covered.add(op.id);
     } else {
-      // summarize: create one synthetic per op
+      // summarize: flag the originals, buffer one section of the coalesced head
       const ids = op.ids as readonly string[];
       for (const id of ids) {
         addFlagged(id);
         covered.add(id);
       }
-      // Determine range anchors for marker
-      const firstId = ids[0] ?? 'unknown';
-      const lastId = ids[ids.length - 1] ?? 'unknown';
-      const syn = makeSummaryMessage(op.text || '(empty summary)', 'selective', {
-        start: firstId,
-        end: lastId,
-        count: ids.length,
-      });
-      summaryMessages.push(syn);
-      replayPrefix.push(syn);
+      if (summaryInsertAt < 0) summaryInsertAt = replayPrefix.length;
+      summarySections.push(op.text || '(empty summary)');
+      summaryFirstId ??= ids[0] ?? 'unknown';
+      summaryLastId = ids[ids.length - 1] ?? summaryLastId ?? 'unknown';
+      summaryCount += ids.length;
     }
   }
 
@@ -307,22 +314,21 @@ export function materializeSelectiveOps(input: {
     preserveSuffix.push(messages[i]!);
   }
 
+  // Materialize the ONE coalesced summary head at the first summarize position
+  let summaryMessage: Message | null = null;
+  if (summarySections.length > 0) {
+    summaryMessage = makeSummaryMessage(summarySections.join(SUMMARY_SECTION_SEPARATOR), 'selective', {
+      start: summaryFirstId ?? 'unknown',
+      end: summaryLastId ?? 'unknown',
+      count: summaryCount,
+    });
+    summaryMessages.push(summaryMessage);
+    const insertAt = summaryInsertAt >= 0 ? summaryInsertAt : replayPrefix.length;
+    replayPrefix.splice(insertAt, 0, summaryMessage);
+  }
+
   // Full replay list
   const replayMessages: Message[] = [...replayPrefix, ...preserveSuffix];
-
-  // Primary summaryMessage for compatibility: first synthetic or combined if multiple
-  let summaryMessage: Message | null = null;
-  if (summaryMessages.length === 1) {
-    summaryMessage = summaryMessages[0]!;
-  } else if (summaryMessages.length > 1) {
-    const combined = summaryMessages.map((m) => m.content).join('\n\n---\n\n');
-    summaryMessage = makeSummaryMessage(combined, 'selective', {
-      start: manifest.entries[0]?.id ?? 'unknown',
-      end: manifest.entries[manifest.entries.length - 1]?.id ?? 'unknown',
-      count: flaggedIds.length,
-    });
-    // Note: summaryMessages remain as separate, but summaryMessage is combined for fallback compat
-  }
 
   return {
     replayMessages,

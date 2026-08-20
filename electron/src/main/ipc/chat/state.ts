@@ -37,8 +37,19 @@ export type ActiveAgent = {
    * Turn-local chain messages = messages.slice(priorMessageCount) + turnMessages.
    */
   priorMessageCount: number;
-  /** Messages produced during this turn (tool calls/results + assistant). */
+  /**
+   * Messages produced during this turn (tool calls/results + assistant).
+   */
   turnMessages: Message[];
+  /**
+   * Transcript-complete turn slice (from this turn's user message) used by
+   * durable writes (checkpoints, finalize, abort). Set after a mid-turn
+   * compaction rewrote `messages` to the model-view replay: the replay drops
+   * flagged originals and superseded heads, so deriving the durable row from
+   * it would durably erase them (review #54). Absent → derive from
+   * `messages.slice(priorMessageCount)` as before.
+   */
+  transcriptBase?: Message[];
   /** Length of context.response already snapshotted into turnMessages as text. */
   responseCommittedLength: number;
   /** Length of context.thinking already snapshotted into turnMessages. */
@@ -84,7 +95,7 @@ export type ChatStatePayload = {
 
 export const activeAgents = new Map<string, ActiveAgent>();
 export const sessionsStarting = new Set<string>();
-export const pendingCheckpoints = new Map<string, { timer: ReturnType<typeof setTimeout>; messages: Message[]; guard?: (active: ActiveAgent) => boolean }>();
+export const pendingCheckpoints = new Map<string, { timer: ReturnType<typeof setTimeout>; snapshot: () => Message[]; guard?: (active: ActiveAgent) => boolean }>();
 /**
  * Sessions with an auto-name LLM attempt in flight. Concurrent triggers
  * (mid-turn deadline vs. turn end vs. interruption) must not each start a

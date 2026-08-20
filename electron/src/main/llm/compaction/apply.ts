@@ -27,7 +27,7 @@
 
 import { randomUUID } from 'node:crypto';
 import type { Message, CompactedMarker, CompactionMode } from '../../../shared/types/message';
-import { MessageRole, MessageType, compactedMarkerFromUnknown } from '../../../shared/types/message';
+import { MessageRole, MessageType } from '../../../shared/types/message';
 import type { Chain } from '../../../shared/types/chain';
 import { ChainStatus } from '../../../shared/types/chain';
 import type { CutResult } from './select';
@@ -78,43 +78,6 @@ export interface ApplyResult {
 }
 
 // ── Validation ──────────────────────────────────────────────────────────────
-
-export class CompactionApplyError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = 'CompactionApplyError';
-  }
-}
-
-/**
- * Whether the compactable range already contains a compaction summary head
- * (a message carrying a valid `compacted` marker) that is NOT being superseded.
- *
- * A head DEEPER than the range start would be summarized together with its own
- * covered span — true double-compaction — and stays the one fatal precondition
- * for the summary path. A head at index === start is being SUPERSEDED: select.ts
- * deliberately lands compactableStart ON the previous summary head so a
- * re-compaction can re-summarize it under the new head; it is flagged like any
- * other range message and replaced by the new head.
- *
- * Pre-flagged (excludeFromModel) messages inside the range are NOT failures:
- * cancelled tool results (flagged at creation) and prior mechanical-reclaim
- * flags are already excluded from the model, so buildCompactionApply tolerates
- * them and skips them when applying flags instead of double-processing.
- */
-export function validateCompactableRangeNotSummarized(
-  messages: readonly Message[],
-  cutResult: CutResult,
-): { valid: boolean; summaryHeadIds: string[] } {
-  const start = Math.max(0, Math.min(cutResult.compactableRange.start, messages.length));
-  const end = Math.max(start, Math.min(cutResult.compactableRange.end, messages.length));
-  const summaryHeadIds: string[] = [];
-  for (let i = start; i < end; i += 1) {
-    const m = messages[i]!;
-    if (i > start && compactedMarkerFromUnknown(m.compacted)) summaryHeadIds.push(m.id);
-  }
-  return { valid: summaryHeadIds.length === 0, summaryHeadIds };
-}
 
 // ── Summary head ────────────────────────────────────────────────────────────
 
@@ -240,23 +203,16 @@ export function buildCompactionApply(input: ApplyInput): ApplyResult {
   const isEmptyRange = start >= end;
   const hasSummaryText = typeof summaryText === 'string' && summaryText.trim().length > 0;
 
-  // Double-compaction guard (summary path only): a range that already contains
-  // a summary head (compacted marker) DEEPER than its start would summarize a
-  // summary and is fatal. A head at index === start is being superseded —
-  // select.ts lands compactableStart ON the old head so re-compaction
-  // re-summarizes it — so it is allowed and flagged like other range messages.
-  // Pre-flagged (excludeFromModel) messages inside the range are tolerated:
+  // Double-compaction note: compacted summary heads inside the range at ANY
+  // depth are superseded, not fatal — select.ts treats heads as
+  // re-summarizable chain boundaries (never preserved), and selective mode
+  // materializes one synthetic head per summarize op, so a re-compaction
+  // range legitimately contains several stacked heads. They are flagged like
+  // every other range message and replaced by the new head. Pre-flagged
+  // (excludeFromModel) messages inside the range are also tolerated:
   // cancelled tool results and prior mechanical-reclaim flags are already
   // excluded from the model, so they are skipped by the flagging pass below
-  // instead of double-processed. The reclaim-only path never throws.
-  if (!isEmptyRange && hasSummaryText) {
-    const { valid, summaryHeadIds } = validateCompactableRangeNotSummarized(messages, cutResult);
-    if (!valid) {
-      throw new CompactionApplyError(
-        `compactable range [${start},${end}) already contains a summary head: ${summaryHeadIds.join(', ')}`,
-      );
-    }
-  }
+  // instead of double-processed.
 
   // Determine final flagged ids.
   let finalFlaggedIds: string[];
@@ -560,8 +516,7 @@ export interface SelectiveCompactionApplyInput {
  * The main scope consumes the settled `flaggedIds` for its durable
  * replay-replacement write; the subagent scope consumes the full ApplyResult
  * (flags + summary head over its chain). Returns null when there is nothing
- * to apply (no flags and no summary text) or the underlying apply refuses
- * (e.g. the range is already summarized) — callers treat that as a no-op.
+ * to apply (no flags and no summary text) — callers treat that as a no-op.
  */
 export function buildSelectiveCompactionApply(
   input: SelectiveCompactionApplyInput,
@@ -575,23 +530,16 @@ export function buildSelectiveCompactionApply(
   const summaryText = typeof input.summaryText === 'string' ? input.summaryText.trim() : '';
   if (mergedFlagged.length === 0 && summaryText.length === 0) return null;
 
-  let applyResult: ApplyResult;
-  try {
-    applyResult = buildCompactionApply({
-      messages: [...messages],
-      chains,
-      cutResult,
-      summaryText: summaryText.length > 0 ? summaryText : null,
-      mode: 'selective',
-      reclaimedIds: mergedFlagged,
-      sessionId: input.sessionId,
-      ...(input.exemptIds ? { exemptIds: input.exemptIds } : {}),
-    });
-  } catch {
-    // e.g. range already flagged by an earlier compaction — mirror the simple
-    // path's failure mode (no-op) rather than risk the transcript.
-    return null;
-  }
+  const applyResult = buildCompactionApply({
+    messages: [...messages],
+    chains,
+    cutResult,
+    summaryText: summaryText.length > 0 ? summaryText : null,
+    mode: 'selective',
+    reclaimedIds: mergedFlagged,
+    sessionId: input.sessionId,
+    ...(input.exemptIds ? { exemptIds: input.exemptIds } : {}),
+  });
   if (!applyResult.didApply) return null;
 
   // Settle flags: reset excludeFromModel on covered ids that selective kept

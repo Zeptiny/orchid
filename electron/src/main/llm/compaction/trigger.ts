@@ -56,7 +56,12 @@ export interface TriggerState {
   pendingFlaggedIds?: string[];
   /** Calibrated tokens-per-char from the last snapshot (inputTokens/totalChars). */
   tokensPerChar?: number;
+  /** Epoch-ms of the last FAILED pending apply (invalidated cut, persist failure). */
+  lastApplyFailureAt?: number;
 }
+
+/** Default cooldown before the usage-event fire point may re-prepare after a failed apply. */
+export const APPLY_FAILURE_BACKOFF_MS = 30_000;
 
 // ── Pure helpers ────────────────────────────────────────────────────────────
 
@@ -211,7 +216,41 @@ export function markCompactionApplied(
     pendingPrepare: false,
     pendingRange: undefined,
     pendingFlaggedIds: undefined,
+    // A successful apply proves the pipeline works — clear any stale
+    // failure cooldown so it cannot suppress a legitimate re-fire.
+    lastApplyFailureAt: undefined,
   };
+}
+
+/**
+ * Record a failed pending apply (invalidated cut, unusable result, persist
+ * failure). Clears any pending bookkeeping and stamps the failure time so the
+ * usage-event fire point backs off instead of re-preparing on every step —
+ * the failure cascade that orphaned compactor LLM runs while usage stayed
+ * over the threshold.
+ */
+export function markApplyFailed(state: TriggerState, nowMs: number): TriggerState {
+  return {
+    ...state,
+    lastApplyFailureAt: nowMs,
+    pendingPrepare: false,
+    pendingRange: undefined,
+    pendingFlaggedIds: undefined,
+  };
+}
+
+/**
+ * Whether the usage-event fire point is still inside the post-failure backoff
+ * window. Pure time check — callers pass Date.now().
+ */
+export function isInApplyBackoff(
+  state: TriggerState,
+  nowMs: number,
+  windowMs: number = APPLY_FAILURE_BACKOFF_MS,
+): boolean {
+  const at = state.lastApplyFailureAt;
+  if (typeof at !== 'number' || !Number.isFinite(at) || at <= 0) return false;
+  return nowMs - at < windowMs;
 }
 
 // ── Prepare / Apply split (R12, R25) ───────────────────────────────────────
@@ -430,6 +469,7 @@ export class CompactionTrigger {
       pendingRange: initial?.pendingRange,
       pendingFlaggedIds: initial?.pendingFlaggedIds,
       tokensPerChar: initial?.tokensPerChar,
+      lastApplyFailureAt: initial?.lastApplyFailureAt,
     };
   }
 
@@ -455,6 +495,16 @@ export class CompactionTrigger {
   /** Arm hysteresis after a compaction completes at inputTokens, optionally with postCompaction value. */
   onCompactionApplied(compactionInputTokens: number, postCompactionInputTokens?: number): void {
     this.state = markCompactionApplied(this.state, compactionInputTokens, postCompactionInputTokens);
+  }
+
+  /** Record a failed pending apply and start the re-prepare backoff window. */
+  onApplyFailed(nowMs: number = Date.now()): void {
+    this.state = markApplyFailed(this.state, nowMs);
+  }
+
+  /** Whether the usage-event fire point is still inside the apply-failure backoff. */
+  inApplyBackoff(nowMs: number = Date.now(), windowMs: number = APPLY_FAILURE_BACKOFF_MS): boolean {
+    return isInApplyBackoff(this.state, nowMs, windowMs);
   }
 
   /** Convenience: evaluate whether a prepare should start (advisory estimate or confirmed usage). */

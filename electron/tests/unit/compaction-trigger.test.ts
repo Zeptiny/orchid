@@ -2,11 +2,14 @@ import { describe, expect, it } from 'vitest';
 import type { Message } from '../../src/shared/types/message';
 import { MessageRole, MessageType } from '../../src/shared/types/message';
 import {
+  APPLY_FAILURE_BACKOFF_MS,
   CompactionTrigger,
   canStartPrepare,
   computeTokensPerChar,
   estimateNextInputTokens,
   evaluateTriggerWithReclaim,
+  isInApplyBackoff,
+  markApplyFailed,
   shouldApplyAtBoundary,
   shouldTriggerCompaction,
   updateTriggerStateOnUsage,
@@ -16,6 +19,43 @@ import {
 import { mechanicalReclaim } from '../../src/main/llm/compaction/reclaim';
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
+
+describe('apply-failure backoff (review #53)', () => {
+  it('markApplyFailed stamps the failure time and clears pending bookkeeping', () => {
+    const state = markApplyFailed(
+      { hysteresisArmed: false, pendingPrepare: true, pendingRange: { start: 0, end: 4 }, pendingFlaggedIds: ['a'] },
+      1_000,
+    );
+    expect(state.lastApplyFailureAt).toBe(1_000);
+    expect(state.pendingPrepare).toBe(false);
+    expect(state.pendingRange).toBeUndefined();
+    expect(state.pendingFlaggedIds).toBeUndefined();
+  });
+
+  it('isInApplyBackoff gates only inside the window', () => {
+    const state = markApplyFailed({ hysteresisArmed: false, pendingPrepare: false }, 1_000);
+    expect(isInApplyBackoff(state, 1_000 + 1)).toBe(true);
+    expect(isInApplyBackoff(state, 1_000 + APPLY_FAILURE_BACKOFF_MS - 1)).toBe(true);
+    expect(isInApplyBackoff(state, 1_000 + APPLY_FAILURE_BACKOFF_MS)).toBe(false);
+    // Custom window
+    expect(isInApplyBackoff(state, 1_000 + 599, 600)).toBe(true);
+    expect(isInApplyBackoff(state, 1_000 + 600, 600)).toBe(false);
+  });
+
+  it('no failure recorded → never in backoff', () => {
+    expect(isInApplyBackoff({ hysteresisArmed: false, pendingPrepare: false }, Date.now())).toBe(false);
+  });
+
+  it('the class wrapper arms backoff via onApplyFailed and expires', () => {
+    const t = new CompactionTrigger();
+    expect(t.inApplyBackoff(5_000)).toBe(false);
+    t.state.pendingPrepare = true;
+    t.onApplyFailed(10_000);
+    expect(t.state.pendingPrepare).toBe(false);
+    expect(t.inApplyBackoff(10_000 + 100)).toBe(true);
+    expect(t.inApplyBackoff(10_000 + APPLY_FAILURE_BACKOFF_MS)).toBe(false);
+  });
+});
 
 function makeMsg(id: string, content: string, role: MessageRole = MessageRole.USER): Message {
   return {

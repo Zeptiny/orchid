@@ -60,7 +60,6 @@ import { summarizeCompactableRange, type SummarizeResult } from '../../llm/compa
 import {
   buildCompactionApply,
   buildSelectiveCompactionApply,
-  CompactionApplyError,
   stampCompactionMetrics,
   type ApplyResult,
 } from '../../llm/compaction/apply';
@@ -82,6 +81,29 @@ import {
 
 const compactionTriggers = new Map<string, CompactionTrigger>();
 const compactionRetryTried = new Set<string>();
+
+/**
+ * Unsettled main-scope selective runs per session. A selective prepare is
+ * fire-and-forget at the usage fire point — the apply awaits the same promise
+ * at the pause boundary. When an apply discards a pending early (invalidated
+ * cut) the underlying LLM run keeps going; without this guard the next usage
+ * event starts ANOTHER compactor run while the orphan still streams (the
+ * every-step cascade observed in review #53).
+ */
+const selectiveRunsInFlight = new Map<string, Promise<unknown>>();
+
+function isSelectiveRunInFlight(sessionId: string): boolean {
+  return selectiveRunsInFlight.has(sessionId);
+}
+
+function trackSelectiveRun(sessionId: string, run: Promise<unknown>): void {
+  selectiveRunsInFlight.set(sessionId, run);
+  void run.finally(() => {
+    if (selectiveRunsInFlight.get(sessionId) === run) selectiveRunsInFlight.delete(sessionId);
+  }).catch(() => {
+    // rejection handled by the prepare/apply sites' own catch
+  });
+}
 
 // ── Compaction widget progress emission ───────────────────────────────────
 
@@ -155,6 +177,7 @@ export function clearCompactionState(sessionId: string): void {
   clearCompactionPendingsForSession(sessionId);
   clearCompactionPausesForSession(sessionId);
   triggerCalibrationHydrated.delete(sessionId);
+  selectiveRunsInFlight.delete(sessionId);
   compactionProgressEpochs.set(sessionId, (compactionProgressEpochs.get(sessionId) ?? 0) + 1);
   for (const key of [...compactionRetryTried]) {
     if (key === sessionId || key.startsWith(`${sessionId}:`)) compactionRetryTried.delete(key);
@@ -365,6 +388,20 @@ interface SelectivePersistInput {
   readonly exemptIds?: ReadonlySet<string> | readonly string[];
 }
 
+/** Outcome of persistSelectiveCompaction. */
+interface SelectivePersistOutcome {
+  readonly ok: boolean;
+  /**
+   * Transcript-complete flat view of what the durable write produced — the
+   * settled history (flagged originals preserved) with the new summary rows
+   * spliced INLINE at the same anchor storage used. Mid-turn callers hand
+   * this to the turn as its durable base so checkpoints and the finalize
+   * rewrite never replace the active row with the model-view replay (which
+   * drops flagged originals and superseded heads — review #54).
+   */
+  readonly transcriptMessages?: Message[];
+}
+
 /**
  * Persist a successful selective compaction as one targeted durable
  * transaction (R20): settled flags + the run's new replay rows inserted
@@ -374,14 +411,14 @@ interface SelectivePersistInput {
  * excludes from its model view for identical inputs; this helper owns only
  * main's write shape (targeted transaction, cache refresh, re-anchoring).
  */
-function persistSelectiveCompaction(sessionId: string, input: SelectivePersistInput): boolean {
+function persistSelectiveCompaction(sessionId: string, input: SelectivePersistInput): SelectivePersistOutcome {
   try {
     const manager = getSessionManager();
     const existing = manager.getSession(sessionId) ?? manager.load(sessionId);
     // No loadable session means nothing durable to write against — report
     // failure (aligned with persistCompactionBetweenTurns) so the caller
     // treats the compaction as not-applied instead of silently dropping it.
-    if (!existing) return false;
+    if (!existing) return { ok: false };
     // R35: one never-delete selective-settle for both scopes. summaryText is
     // null here — main persists the replay rows as the summary chain below
     // rather than one composed summary head; the builder contributes the
@@ -447,10 +484,25 @@ function persistSelectiveCompaction(sessionId: string, input: SelectivePersistIn
     if (durable) {
       publishCompactedSession(manager, sessionId, existing, updatedAt);
     }
-    return true;
+    // Transcript view mirroring the durable write (storage inlines the
+    // summary rows into the anchor chain at the anchor index): settled flat
+    // history + the fresh replay rows at the same position.
+    let transcriptMessages: Message[] = [...(settled?.updatedMessages ?? [...input.messages])];
+    if (newReplayMessages.length > 0) {
+      const anchorIndex = insertBeforeMessageId != null
+        ? transcriptMessages.findIndex((m) => m.id === insertBeforeMessageId)
+        : -1;
+      const insertAt = anchorIndex >= 0 ? anchorIndex : transcriptMessages.length;
+      transcriptMessages = [
+        ...transcriptMessages.slice(0, insertAt),
+        ...newReplayMessages,
+        ...transcriptMessages.slice(insertAt),
+      ];
+    }
+    return { ok: true, transcriptMessages };
   } catch (err) {
     console.debug('[compaction] selective chain persist failed (non-fatal):', err);
-    return false;
+    return { ok: false };
   }
 }
 
@@ -520,7 +572,7 @@ export async function applyPendingCompactionIfAny(
   sessionId: string,
   messages: Message[],
   runtime: ProjectRuntime,
-): Promise<{ applied: boolean; updatedMessages?: Message[] }> {
+): Promise<{ applied: boolean; updatedMessages?: Message[]; transcriptMessages?: Message[] }> {
   const pending = takeCompactionPending(sessionId, MAIN_AGENT_SCOPE_ID);
   if (!pending) return { applied: false };
   // The pending cut/expectedIds were computed over the deduped history
@@ -530,9 +582,11 @@ export async function applyPendingCompactionIfAny(
   // validation below rejects every mid-turn apply.
   const history = dedupeHistoryById(messages);
   if (!isPendingCutStillValid(pending, history)) {
-    const t = getCompactionTrigger(sessionId);
-    t.abortPrepare();
-    completeCompactionWidget(sessionId);
+    failPendingApply(
+      sessionId,
+      getCompactionTrigger(sessionId),
+      `pending cut invalidated before apply (range [${pending.cut.compactableRange.start},${pending.cut.compactableRange.end}) no longer matches live history) — discarding prepared compaction`,
+    );
     return { applied: false };
   }
   const trigger = getCompactionTrigger(sessionId);
@@ -546,14 +600,13 @@ export async function applyPendingCompactionIfAny(
     if (pending.mode === 'selective' && pending.selectivePromise) {
       const outcome = await pending.selectivePromise;
       if (outcome.kind !== 'ran') {
-        trigger.abortPrepare();
-        completeCompactionWidget(sessionId);
+        failPendingApply(sessionId, trigger, `selective run produced no applicable result (${outcome.reason}) — skipping apply`);
         return { applied: false };
       }
       const result = outcome.result;
       if (result.kind === 'selective') {
         // Atomic: DB first, then memory. Single DB write via persistSelectiveCompaction.
-        const ok = persistSelectiveCompaction(sessionId, buildSelectivePersistInput({
+        const persistRes = persistSelectiveCompaction(sessionId, buildSelectivePersistInput({
           messages: history,
           flaggedIds: result.flaggedIds,
           reclaimedIds: pending.flaggedIds,
@@ -561,9 +614,8 @@ export async function applyPendingCompactionIfAny(
           replayMessages: result.replayMessages,
           cut: pending.cut,
         }));
-        if (!ok) {
-          trigger.abortPrepare();
-          completeCompactionWidget(sessionId);
+        if (!persistRes.ok) {
+          failPendingApply(sessionId, trigger, 'selective persist failed — compaction not applied');
           return { applied: false };
         }
         // Re-anchor at apply time: the prepare-time replay never saw messages
@@ -579,30 +631,24 @@ export async function applyPendingCompactionIfAny(
         trigger.onCompactionApplied(pending.estimatedInput, postTokens);
         trigger.abortPrepare();
         completeCompactionWidget(sessionId);
-        return { applied: true, updatedMessages: [...reanchored] };
+        return {
+          applied: true,
+          updatedMessages: [...reanchored],
+          ...(persistRes.transcriptMessages ? { transcriptMessages: [...persistRes.transcriptMessages] } : {}),
+        };
       }
       if (result.kind === 'fallback' && result.fallbackText && result.fallbackText.trim()) {
         const chains = getSessionManager().getSession(sessionId)?.chains ?? [];
-        let applyResult: ReturnType<typeof buildCompactionApply> | null = null;
-        try {
-          applyResult = buildCompactionApply({
-            messages: history,
-            chains: chains as Chain[],
-            cutResult: pending.cut,
-            summaryText: result.fallbackText,
-            mode: runtime.config.compaction.main.mode,
-            flaggedIds: pending.flaggedIds,
-            ...(exemptIds ? { exemptIds } : {}),
-            sessionId,
-          });
-        } catch (e) {
-          if (e instanceof CompactionApplyError) {
-            trigger.abortPrepare();
-            completeCompactionWidget(sessionId);
-            return { applied: false };
-          }
-          throw e;
-        }
+        let applyResult = buildCompactionApply({
+          messages: history,
+          chains: chains as Chain[],
+          cutResult: pending.cut,
+          summaryText: result.fallbackText,
+          mode: runtime.config.compaction.main.mode,
+          flaggedIds: pending.flaggedIds,
+          ...(exemptIds ? { exemptIds } : {}),
+          sessionId,
+        });
         if (applyResult.didApply) {
           // R31: the scoped settle inside buildCompactionApply already keeps
           // exempt user ids out of the flagged set in every mode — no
@@ -624,7 +670,7 @@ export async function applyPendingCompactionIfAny(
           // (flags from the shared never-delete settle, replay rows as the
           // summary chain), then the same apply-time re-anchoring as the
           // selective-success branch (P1 #5).
-          const ok = persistSelectiveCompaction(sessionId, buildSelectivePersistInput({
+          const persistRes = persistSelectiveCompaction(sessionId, buildSelectivePersistInput({
             messages: history,
             flaggedIds: result.flaggedIds ?? pending.flaggedIds,
             reclaimedIds: pending.flaggedIds,
@@ -633,20 +679,25 @@ export async function applyPendingCompactionIfAny(
             cut: pending.cut,
           }));
           let reanchored: Message[] | undefined;
-          if (ok) {
+          if (persistRes.ok) {
             reanchored = reanchorSelectiveReplay(result.replayMessages, history, pending.cut.cutIndex, pending.cut.compactableRange.start);
             setChatHistory(sessionId, [...reanchored]);
             const tpc = trigger.state.tokensPerChar ?? (totalChars(reanchored) > 0 ? pending.estimatedInput / Math.max(1, totalChars(history)) : undefined);
             const postTokens = tpc ? Math.ceil(totalChars(reanchored) * tpc) : pending.estimatedInput;
             trigger.onCompactionApplied(pending.estimatedInput, postTokens);
+          } else {
+            trigger.onApplyFailed();
           }
           trigger.abortPrepare();
           completeCompactionWidget(sessionId);
-          return { applied: ok, updatedMessages: reanchored ? [...reanchored] : undefined };
+          return {
+            applied: persistRes.ok,
+            updatedMessages: reanchored ? [...reanchored] : undefined,
+            ...(persistRes.ok && persistRes.transcriptMessages ? { transcriptMessages: [...persistRes.transcriptMessages] } : {}),
+          };
         }
       }
-      trigger.abortPrepare();
-      completeCompactionWidget(sessionId);
+      failPendingApply(sessionId, trigger, 'selective run produced no applicable result — discarding pending');
       return { applied: false };
     }
     // ── Simple pending (existing) ───────────────────────────────────────
@@ -654,26 +705,16 @@ export async function applyPendingCompactionIfAny(
       const result = await pending.promise;
       if (result && result.text && result.text.trim()) {
         const chains = getSessionManager().getSession(sessionId)?.chains ?? [];
-        let applyResult: ReturnType<typeof buildCompactionApply> | null = null;
-        try {
-          applyResult = buildCompactionApply({
-            messages: history,
-            chains: chains as Chain[],
-            cutResult: pending.cut,
-            summaryText: result.text,
-            mode: runtime.config.compaction.main.mode,
-            flaggedIds: pending.flaggedIds,
-            ...(exemptIds ? { exemptIds } : {}),
-            sessionId,
-          });
-        } catch (e) {
-          if (e instanceof CompactionApplyError) {
-            trigger.abortPrepare();
-            completeCompactionWidget(sessionId);
-            return { applied: false };
-          }
-          throw e;
-        }
+        let applyResult = buildCompactionApply({
+          messages: history,
+          chains: chains as Chain[],
+          cutResult: pending.cut,
+          summaryText: result.text,
+          mode: runtime.config.compaction.main.mode,
+          flaggedIds: pending.flaggedIds,
+          ...(exemptIds ? { exemptIds } : {}),
+          sessionId,
+        });
         if (applyResult.didApply) {
           const tpc = trigger.state.tokensPerChar ?? (totalChars(applyResult.updatedMessages) > 0 ? pending.estimatedInput / Math.max(1, totalChars(history)) : undefined);
           const postTokens = tpc ? Math.ceil(totalChars(applyResult.updatedMessages) * tpc) : pending.estimatedInput;
@@ -689,33 +730,22 @@ export async function applyPendingCompactionIfAny(
         }
       }
       // Summarizer failed or persist failed — clear pending flag
-      trigger.abortPrepare();
-      completeCompactionWidget(sessionId);
+      failPendingApply(sessionId, trigger, 'simple summarizer failed or persist failed — clearing pending');
       return { applied: false };
     }
     // Reclaim-only pending
     if (pending.flaggedIds.length > 0) {
       const chains = getSessionManager().getSession(sessionId)?.chains ?? [];
-      let applyResult: ReturnType<typeof buildCompactionApply> | null = null;
-      try {
-        applyResult = buildCompactionApply({
-          messages: history,
-          chains: chains as Chain[],
-          cutResult: pending.cut,
-          summaryText: null,
-          mode: runtime.config.compaction.main.mode,
-          flaggedIds: pending.flaggedIds,
-          ...(exemptIds ? { exemptIds } : {}),
-          sessionId,
-        });
-      } catch (e) {
-        if (e instanceof CompactionApplyError) {
-          trigger.abortPrepare();
-          completeCompactionWidget(sessionId);
-          return { applied: false };
-        }
-        throw e;
-      }
+      const applyResult = buildCompactionApply({
+        messages: history,
+        chains: chains as Chain[],
+        cutResult: pending.cut,
+        summaryText: null,
+        mode: runtime.config.compaction.main.mode,
+        flaggedIds: pending.flaggedIds,
+        ...(exemptIds ? { exemptIds } : {}),
+        sessionId,
+      });
       if (applyResult.didApply) {
         const ok = persistCompaction(sessionId, applyResult);
         if (ok) {
@@ -731,13 +761,9 @@ export async function applyPendingCompactionIfAny(
     // Fall-through (reclaim-only that did not apply, or a pending with neither
     // promise nor flagged ids): clear the prepare so a stuck pendingPrepare
     // cannot silence every future trigger evaluation for the session.
-    trigger.abortPrepare();
-    completeCompactionWidget(sessionId);
+    failPendingApply(sessionId, trigger, 'pending produced no applicable compaction — clearing prepare');
   } catch (err) {
-    console.debug('[compaction] pending apply failed (non-fatal):', err);
-    const t = getCompactionTrigger(sessionId);
-    t.abortPrepare();
-    completeCompactionWidget(sessionId);
+    failPendingApply(sessionId, getCompactionTrigger(sessionId), `pending apply failed (non-fatal): ${String(err)}`);
   }
   return { applied: false };
 }
@@ -751,7 +777,7 @@ export async function tryCompactSynchronously(
   accountingStore: ProviderAccountingStore,
   chainId: string | null,
   turnId: string,
-): Promise<{ didApply: boolean; updatedMessages?: Message[] }> {
+): Promise<{ didApply: boolean; updatedMessages?: Message[]; transcriptMessages?: Message[] }> {
   const trigger = getCompactionTrigger(sessionId);
   const cfg = runtime.config.compaction?.main;
   if (!cfg) return { didApply: false };
@@ -760,6 +786,11 @@ export async function tryCompactSynchronously(
   // which is disabled when the limit is unknown.
   if (contextTokens == null || !Number.isFinite(contextTokens) || contextTokens <= 0) return { didApply: false };
   if (trigger.state.pendingPrepare) return { didApply: false };
+  // A selective run orphaned by a discarded pending may still be streaming;
+  // starting another here would duplicate the compactor LLM call. The backoff
+  // is deliberately NOT consulted here — the overflow-retry caller treats
+  // compaction as an emergency recovery path and must bypass the cooldown.
+  if (isSelectiveRunInFlight(sessionId)) return { didApply: false };
   // One exempt set per attempt: the gate's selectCut, the selective runner,
   // and every apply below consume the same resolved set.
   const exemptIds = mainExemptIds(messages, cfg);
@@ -778,22 +809,16 @@ export async function tryCompactSynchronously(
     const { cut, flaggedIds, estimatedInput, tokensPerChar } = decision;
     const chains = getSessionManager().getSession(sessionId)?.chains ?? [];
     if (decision.kind === 'reclaim-only') {
-      let applyResult: ReturnType<typeof buildCompactionApply> | null = null;
-      try {
-        applyResult = buildCompactionApply({
-          messages,
-          chains: chains as Chain[],
-          cutResult: cut,
-          summaryText: null,
-          mode: cfg.mode,
-          flaggedIds,
-          exemptIds,
-          sessionId,
-        });
-      } catch (e) {
-        if (e instanceof CompactionApplyError) return { didApply: false };
-        throw e;
-      }
+      const applyResult = buildCompactionApply({
+        messages,
+        chains: chains as Chain[],
+        cutResult: cut,
+        summaryText: null,
+        mode: cfg.mode,
+        flaggedIds,
+        exemptIds,
+        sessionId,
+      });
       if (!applyResult.didApply) return { didApply: false };
       const ok = persistCompaction(sessionId, applyResult);
       if (!ok) return { didApply: false };
@@ -833,7 +858,7 @@ export async function tryCompactSynchronously(
         if (attempt.kind === 'noop') return { didApply: false };
         const selResult = attempt.result;
         if (selResult.kind === 'selective') {
-          const ok = persistSelectiveCompaction(sessionId, buildSelectivePersistInput({
+          const persistRes = persistSelectiveCompaction(sessionId, buildSelectivePersistInput({
             messages,
             flaggedIds: selResult.flaggedIds,
             reclaimedIds: flaggedIds,
@@ -841,7 +866,7 @@ export async function tryCompactSynchronously(
             replayMessages: selResult.replayMessages,
             cut,
           }));
-          if (!ok) {
+          if (!persistRes.ok) {
             trigger.abortPrepare();
             return { didApply: false };
           }
@@ -850,35 +875,30 @@ export async function tryCompactSynchronously(
           const postTokensSel = Math.ceil(totalChars(selResult.replayMessages) * tpcSel);
           trigger.onCompactionApplied(estimatedInput, postTokensSel);
           trigger.abortPrepare();
-          return { didApply: true, updatedMessages: [...selResult.replayMessages] };
+          return {
+            didApply: true,
+            updatedMessages: [...selResult.replayMessages],
+            ...(persistRes.transcriptMessages ? { transcriptMessages: [...persistRes.transcriptMessages] } : {}),
+          };
         }
         if (selResult.kind === 'fallback' && selResult.fallbackText && selResult.fallbackText.trim()) {
-          let applyResult: ReturnType<typeof buildCompactionApply> | null = null;
-          try {
-            applyResult = buildCompactionApply({
-              messages,
-              chains: chains as Chain[],
-              cutResult: cut,
-              summaryText: selResult.fallbackText,
-              mode: cfg.mode,
-              flaggedIds,
-              exemptIds,
-              sessionId,
-            });
-          } catch (e) {
-            if (e instanceof CompactionApplyError) {
-              trigger.abortPrepare();
-              return { didApply: false };
-            }
-            throw e;
-          }
+          let applyResult = buildCompactionApply({
+            messages,
+            chains: chains as Chain[],
+            cutResult: cut,
+            summaryText: selResult.fallbackText,
+            mode: cfg.mode,
+            flaggedIds,
+            exemptIds,
+            sessionId,
+          });
           if (!applyResult.didApply) {
             if (selResult.replayMessages && selResult.replayMessages.length > 0) {
               // Fallback replay without a usable summary — same targeted
               // selective write (flags from the shared never-delete settle,
               // replay rows as the summary chain). If flaggedIds were derived
               // from the manifest they lead; the gate's reclaim flags merge.
-              const ok2 = persistSelectiveCompaction(sessionId, buildSelectivePersistInput({
+              const persistRes2 = persistSelectiveCompaction(sessionId, buildSelectivePersistInput({
                 messages,
                 flaggedIds: selResult.flaggedIds ?? flaggedIds,
                 reclaimedIds: flaggedIds,
@@ -886,14 +906,18 @@ export async function tryCompactSynchronously(
                 replayMessages: selResult.replayMessages!,
                 cut,
               }));
-              if (ok2) {
+              if (persistRes2.ok) {
                 setChatHistory(sessionId, [...selResult.replayMessages!]);
                 const tpcF = trigger.state.tokensPerChar ?? tokensPerChar;
                 const postF = Math.ceil(totalChars(selResult.replayMessages!) * tpcF);
                 trigger.onCompactionApplied(estimatedInput, postF);
               }
               trigger.abortPrepare();
-              return { didApply: ok2, updatedMessages: ok2 ? [...selResult.replayMessages!] : undefined };
+              return {
+                didApply: persistRes2.ok,
+                updatedMessages: persistRes2.ok ? [...selResult.replayMessages!] : undefined,
+                ...(persistRes2.ok && persistRes2.transcriptMessages ? { transcriptMessages: [...persistRes2.transcriptMessages] } : {}),
+              };
             }
             trigger.abortPrepare();
             return { didApply: false };
@@ -915,7 +939,7 @@ export async function tryCompactSynchronously(
           return { didApply: true, updatedMessages: [...applyResult.updatedMessages] };
         }
         if (selResult.kind === 'fallback' && selResult.replayMessages && selResult.replayMessages.length > 0) {
-          const ok3 = persistSelectiveCompaction(sessionId, buildSelectivePersistInput({
+          const persistRes3 = persistSelectiveCompaction(sessionId, buildSelectivePersistInput({
             messages,
             flaggedIds: selResult.flaggedIds ?? flaggedIds,
             reclaimedIds: flaggedIds,
@@ -923,7 +947,7 @@ export async function tryCompactSynchronously(
             replayMessages: selResult.replayMessages,
             cut,
           }));
-          if (!ok3) {
+          if (!persistRes3.ok) {
             trigger.abortPrepare();
             return { didApply: false };
           }
@@ -932,7 +956,11 @@ export async function tryCompactSynchronously(
           const postF3 = Math.ceil(totalChars(selResult.replayMessages) * tpcF3);
           trigger.onCompactionApplied(estimatedInput, postF3);
           trigger.abortPrepare();
-          return { didApply: true, updatedMessages: [...selResult.replayMessages] };
+          return {
+            didApply: true,
+            updatedMessages: [...selResult.replayMessages],
+            ...(persistRes3.transcriptMessages ? { transcriptMessages: [...persistRes3.transcriptMessages] } : {}),
+          };
         }
         trigger.abortPrepare();
         return { didApply: false };
@@ -955,25 +983,16 @@ export async function tryCompactSynchronously(
         trigger.abortPrepare();
         return { didApply: false };
       }
-      let applyResult: ReturnType<typeof buildCompactionApply> | null = null;
-      try {
-        applyResult = buildCompactionApply({
-          messages,
-          chains: chains as Chain[],
-          cutResult: cut,
-          summaryText: result.text,
-          mode: cfg.mode,
-          flaggedIds,
-          exemptIds,
-          sessionId,
-        });
-      } catch (e) {
-        if (e instanceof CompactionApplyError) {
-          trigger.abortPrepare();
-          return { didApply: false };
-        }
-        throw e;
-      }
+      let applyResult = buildCompactionApply({
+        messages,
+        chains: chains as Chain[],
+        cutResult: cut,
+        summaryText: result.text,
+        mode: cfg.mode,
+        flaggedIds,
+        exemptIds,
+        sessionId,
+      });
       if (!applyResult.didApply) {
         trigger.abortPrepare();
         return { didApply: false };
@@ -1035,6 +1054,24 @@ function settlePrepareRejection(sessionId: string, label: string, err: unknown):
   completeCompactionWidget(sessionId);
 }
 
+/**
+ * Uniform terminal handling for a pending apply that cannot be applied
+ * (invalidated cut, unusable result, persist failure): warn, clear the
+ * prepare, arm the re-prepare backoff, and settle the widget. Every discard
+ * site routes through here so a failed apply always arms the cooldown that
+ * stops the fire-and-forget compactor from re-preparing on every usage step.
+ */
+function failPendingApply(
+  sessionId: string,
+  trigger: ReturnType<typeof getCompactionTrigger>,
+  reason: string,
+): void {
+  console.warn(`[compaction] ${reason}`);
+  trigger.abortPrepare();
+  trigger.onApplyFailed();
+  completeCompactionWidget(sessionId);
+}
+
 export function handleUsageCompaction(
   sessionId: string,
   fullHistory: Message[],
@@ -1065,6 +1102,11 @@ export function handleUsageCompaction(
   trigger.onUsage(inputTokens, effectiveContextTokens, cfg.threshold, cfg.hysteresis_delta);
   if (trigger.state.pendingPrepare) return;
   if (getCompactionPending(sessionId, MAIN_AGENT_SCOPE_ID)) return;
+  // Post-failure backoff: a discarded/unusable prepare arms a cooldown so the
+  // fire point stops re-preparing on every step while a compactor run may
+  // still be orphaned in-flight.
+  if (trigger.inApplyBackoff()) return;
+  if (isSelectiveRunInFlight(sessionId)) return;
   // Prepare-time exempt resolution (one set per attempt): the gate's
   // selectCut and the selective runner consume the same resolved set; the
   // later apply re-resolves from the config current at apply time.
@@ -1110,6 +1152,7 @@ export function handleUsageCompaction(
           },
           maxCorrectionRounds: 3,
         });
+        trackSelectiveRun(sessionId, selectivePromise);
         const expectedIdsForSelective = history.slice(cut.compactableRange.start, cut.compactableRange.end).map((m) => m.id);
         setCompactionPending(sessionId, MAIN_AGENT_SCOPE_ID, { cut, flaggedIds, expectedIds: expectedIdsForSelective, estimatedInput: decision.estimatedInput, contextTokens: effectiveContextTokens, mode: 'selective', selectivePromise });
         selectivePromise.catch((err) => settlePrepareRejection(sessionId, 'selective prepare', err));

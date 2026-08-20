@@ -63,6 +63,13 @@ permanently silencing the trigger for the session.
    keeps its in-turn progress instead of restarting from the turn baseline.
 3. Reclaim-only fall-through clears the prepare (`abortPrepare` +
    `completeCompactionWidget`) so a failed apply cannot disable future fires.
+   Update (2026-08-20): "re-arm on failure" without a cooldown turned out to
+   be exploitable — a *persistent* apply failure re-fires a fresh compactor
+   LLM run on every usage step (the orphan cascade documented in
+   selective-compaction-stacked-summary-heads-rejected.md in this directory).
+   Discards now also arm a 30s apply-failure backoff and new prepares are
+   blocked while a prior selective run is still unsettled. Re-arm means
+   "retry later", never "retry on every event".
 4. `priorMessageCount` is kept coherent after both resume paths.
 
 ## Diagnosis tricks
