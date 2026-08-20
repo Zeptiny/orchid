@@ -73,6 +73,29 @@ export type SubagentOverflowOutcome =
   | 'aborted';
 
 /**
+ * Race a compaction await against a run's abort signal: resolves null when
+ * the signal fires first, so an interrupt during a pause apply or a
+ * synchronous overflow compaction (R30) exits the restart loop as a clean
+ * abort instead of observing a late result. Rejections resolve null as well
+ * — compaction is best-effort and must never surface as an unhandled one.
+ */
+export function raceAbortDuring<T>(promise: Promise<T>, signal: AbortSignal): Promise<T | null> {
+  if (signal.aborted) return Promise.resolve(null);
+  return new Promise<T | null>((resolve) => {
+    let settled = false;
+    const settle = (value: T | null): void => {
+      if (settled) return;
+      settled = true;
+      signal.removeEventListener('abort', onAbort);
+      resolve(value);
+    };
+    const onAbort = (): void => settle(null);
+    signal.addEventListener('abort', onAbort, { once: true });
+    promise.then((value) => settle(value), () => settle(null));
+  });
+}
+
+/**
  * Compaction pause gate for one subagent run, keyed by the run's
  * (sessionId, agentScopeId) scope (R28). The runner binds `shouldPause` into
  * the orchestrator's early-stop predicate; when the stream stops at a step

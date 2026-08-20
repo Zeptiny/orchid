@@ -43,9 +43,9 @@ import { appendRootAgentsMd, seedSubagentRootAgentsMd } from '../project/agents-
 import type {
   SubagentCompactionPauseController,
   SubagentHistoryBox,
-  SubagentPauseApplyOutcome,
   SubagentStreamRunner,
 } from './manager';
+import { raceAbortDuring } from './subagent-compaction';
 import { makeUserMessage } from '../llm/message-factories';
 import { buildSystemPromptContext } from '../llm/build-prompt-context';
 import {
@@ -89,28 +89,6 @@ function resolveParentSessionCwdFallback(sessionId?: string): string | null {
     // Session manager may be unavailable in tests
   }
   return null;
-}
-
-/**
- * Race a compaction promise against the run's abort signal: resolves null
- * when the signal fires first, so an interrupt during the synchronous
- * overflow compaction (R30) exits the restart loop as a clean abort instead
- * of observing a late result.
- */
-function raceAbortDuring<T>(promise: Promise<T>, signal: AbortSignal): Promise<T | null> {
-  if (signal.aborted) return Promise.resolve(null);
-  return new Promise<T | null>((resolve) => {
-    let settled = false;
-    const settle = (value: T | null): void => {
-      if (settled) return;
-      settled = true;
-      signal.removeEventListener('abort', onAbort);
-      resolve(value);
-    };
-    const onAbort = (): void => settle(null);
-    signal.addEventListener('abort', onAbort, { once: true });
-    promise.then((value) => settle(value), () => settle(null));
-  });
 }
 
 /**
@@ -409,25 +387,13 @@ export function createSubagentStreamRunner(): SubagentStreamRunner {
         // (or a summarizer wait) breaks out of the restart loop cleanly. A
         // REJECTED apply is logged and treated as 'skipped' — restarting the
         // segment with the existing history — never a silent run end.
-        const outcome = await new Promise<SubagentPauseApplyOutcome | null>((resolve) => {
-          if (params.abortSignal.aborted) {
-            resolve(null);
-            return;
-          }
-          let settled = false;
-          const settle = (value: SubagentPauseApplyOutcome | null): void => {
-            if (settled) return;
-            settled = true;
-            params.abortSignal.removeEventListener('abort', onAbort);
-            resolve(value);
-          };
-          const onAbort = (): void => settle(null);
-          params.abortSignal.addEventListener('abort', onAbort, { once: true });
-          pause.applyAtPause().then(settle, (error) => {
+        const outcome = await raceAbortDuring(
+          pause.applyAtPause().catch((error: unknown) => {
             console.debug('[subagent-compaction] pause apply failed (non-fatal):', error);
-            settle('skipped');
-          });
-        });
+            return 'skipped' as const;
+          }),
+          params.abortSignal,
+        );
         if (params.abortSignal.aborted || outcome == null || outcome === 'aborted' || outcome === 'degraded') {
           return;
         }

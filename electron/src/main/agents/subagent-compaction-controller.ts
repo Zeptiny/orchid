@@ -27,7 +27,7 @@ import { getConfig } from '../config/loader';
 import type { Config } from '../config/schema';
 import type { ApplyResult } from '../llm/compaction/apply';
 import { estimateMessageChars, totalCharsForMessages } from '../llm/compaction/message-chars';
-import { charsForMessageIds, deriveTokensPerChar } from '../llm/compaction/pipeline';
+import { calibratedCut, charsForMessageIds, deriveTokensPerChar, runCompactionGate } from '../llm/compaction/pipeline';
 import { resolveUserExemptIds } from '../llm/compaction/select';
 import {
   dedupeHistoryById,
@@ -50,6 +50,7 @@ import {
   applySubagentPendingCompaction,
   buildSubagentPartialReport,
   prepareSubagentCompaction,
+  raceAbortDuring,
   resolveSubagentContextTokens,
   type SubagentCompactionPauseController,
   type SubagentCompactionProgress,
@@ -134,6 +135,8 @@ export class SubagentCompactionController {
   private _trigger: CompactionTrigger | null = null;
   private _initDone = false;
   private _cachedCfg: CompactionScopeConfig | null = null;
+  /** Run-captured process config from the last successful scope-config load. */
+  private _cachedLiveCfg: Config | null = null;
   private _lastStepIndex = 0;
   private _lastProgressEmitAt = 0;
   private _progressTimer: ReturnType<typeof setTimeout> | null = null;
@@ -221,13 +224,42 @@ export class SubagentCompactionController {
   private _scopeConfig(): CompactionScopeConfig | null {
     if (this._cachedCfg) return this._cachedCfg;
     try {
-      const cfg = getConfig().compaction?.subagents ?? null;
+      const live = getConfig();
+      const cfg = live.compaction?.subagents ?? null;
       this._cachedCfg = cfg;
+      this._cachedLiveCfg = live;
       return cfg;
     } catch (e) {
       console.debug('[subagent-compaction] scope config unavailable:', e);
       return null;
     }
+  }
+
+  /**
+   * The process config the prepare path hands the compactor chain (agent and
+   * model resolution, retry and idle-timeout knobs). Live when the config
+   * loads; when a mid-run reload fails, the run-captured config stands in — a
+   * real `Config` whose tier/model lookups stay valid, never a fabricated
+   * partial whose missing fields would silently disable the compactor.
+   */
+  private _liveConfig(): Config {
+    try {
+      return getConfig();
+    } catch {
+      const captured = this._cachedLiveCfg;
+      if (captured) return captured;
+      throw new Error('[subagent-compaction] no loadable config for the compactor');
+    }
+  }
+
+  /** Subagent scope fire threshold; the schema default when the config is unavailable. */
+  private _threshold(): number {
+    return this._scopeConfig()?.threshold ?? 0.85;
+  }
+
+  /** Subagent scope compactable-token floor; the schema default when the config is unavailable. */
+  private _minCompactableTokens(): number {
+    return this._scopeConfig()?.min_compactable_tokens ?? 4000;
   }
 
   /**
@@ -287,7 +319,7 @@ export class SubagentCompactionController {
       const prepared = await prepareSubagentCompaction({
         messages: (record.chain?.messages ?? []) as Message[],
         selection: record.selection,
-        config: this._liveConfig(cfg),
+        config: this._liveConfig(),
         sessionId: this.sessionKey,
         subagentId: record.id,
         chainId: record.chain?.id ?? null,
@@ -329,18 +361,6 @@ export class SubagentCompactionController {
     } finally {
       this._prepareInFlight = false;
       this._deps.onPrepareEvaluated();
-    }
-  }
-
-  /**
-   * The live process config when loadable, else the minimal shape carrying
-   * the cached subagents scope — the prepare path reads both.
-   */
-  private _liveConfig(cfg: CompactionScopeConfig): Config {
-    try {
-      return getConfig() as unknown as Config;
-    } catch {
-      return { compaction: { subagents: cfg } } as unknown as Config;
     }
   }
 
@@ -414,25 +434,22 @@ export class SubagentCompactionController {
     }
     // Hysteresis accrual baseline is post-compaction inputTokens, not pre-compaction peak
     const preInput = record.usage?.prompt_tokens ?? 0;
-    const postCompactionTokens = this._pausePathBaselineTokens(applyResult, preInput);
+    const postCompactionTokens = this._postCompactionBaselineTokens(applyResult, preInput);
     this._trigger?.onCompactionApplied(preInput, postCompactionTokens);
     this._emitProgress({ phase: 'complete', detail: 'Context compacted — resuming' });
     // R17: still over limit after compaction -> partial report degradation
-    const cfg = this._scopeConfig();
-    const threshold = cfg?.threshold ?? 0.85;
+    const threshold = this._threshold();
     const postTokens = postCompactionTokens ?? record.usage?.prompt_tokens ?? 0;
     const stillOver = this._contextTokens !== null && Number.isFinite(this._contextTokens)
       && postTokens / this._contextTokens >= threshold * 0.98;
     // Also handle case where still over but we did compact: check if next cut would be empty
     if (stillOver) {
       try {
-        // Lazy import like the other compaction leaves (module-graph rule).
-        const { calibratedCut, deriveTokensPerChar: deriveTpc } = await import('../llm/compaction/pipeline.js');
         const cfg2 = this._scopeConfig();
         // Calibrate from the run's reported usage; without it the emptiness
         // check is skipped (hard rule: no heuristic token estimates).
         const retryMessages = (record.chain?.messages ?? []) as Message[];
-        const tpc3 = deriveTpc(record.usage?.prompt_tokens ?? null, totalCharsForMessages(retryMessages));
+        const tpc3 = deriveTokensPerChar(record.usage?.prompt_tokens ?? null, totalCharsForMessages(retryMessages));
         if (tpc3 == null) return 'applied';
         // R31/R32: exempt user ids thread through so the exhaustion check's
         // compactable range matches the real compaction range.
@@ -507,7 +524,7 @@ export class SubagentCompactionController {
       pending = await prepareSubagentCompaction({
         messages: liveHistory,
         selection: record.selection,
-        config: this._liveConfig(cfg),
+        config: this._liveConfig(),
         sessionId: this.sessionKey,
         subagentId: record.id,
         chainId: record.chain?.id ?? null,
@@ -571,20 +588,7 @@ export class SubagentCompactionController {
     // Arm hysteresis from the post-compaction model view so the retried
     // stream's usage events re-evaluate against the new baseline.
     const preInput = record.usage?.prompt_tokens ?? 0;
-    let postCompactionTokens: number | undefined;
-    try {
-      let totalPost = 0;
-      for (const m of applyResult.updatedMessages) {
-        if ((m as Message).excludeFromModel === true) continue;
-        totalPost += estimateMessageChars(m as Message);
-      }
-      if (totalPost === 0) totalPost = 1;
-      const tpc = this._trigger.state.tokensPerChar
-        ?? deriveTokensPerChar(preInput, totalCharsForMessages(record.chain?.messages ?? []));
-      if (tpc != null) postCompactionTokens = Math.ceil(totalPost * tpc);
-    } catch {
-      // token calibration is best-effort
-    }
+    const postCompactionTokens = this._postCompactionBaselineTokens(applyResult, preInput);
     this._trigger.onCompactionApplied(preInput, postCompactionTokens);
     this._emitProgress({ phase: 'complete', detail: 'Context compacted — retrying' });
     return 'applied';
@@ -610,20 +614,7 @@ export class SubagentCompactionController {
           pinFirst: scopeCfg.pin_first_user_message ?? true,
         })
       : undefined;
-    return new Promise<ApplyResult | null>((resolve) => {
-      if (abortSignal.aborted) {
-        resolve(null);
-        return;
-      }
-      let settled = false;
-      const settle = (value: ApplyResult | null): void => {
-        if (settled) return;
-        settled = true;
-        abortSignal.removeEventListener('abort', onAbort);
-        resolve(value);
-      };
-      const onAbort = (): void => settle(null);
-      abortSignal.addEventListener('abort', onAbort, { once: true });
+    return raceAbortDuring(
       applySubagentPendingCompaction({
         pending,
         messages: [...liveHistory],
@@ -632,56 +623,50 @@ export class SubagentCompactionController {
             ...(record.chain ?? this._deps.emptyChain()),
             messages: [...liveHistory],
           },
-        ] as unknown as import('../../shared/types/chain').Chain[],
+        ],
         sessionId: this.sessionKey,
         ...(exemptIds ? { exemptIds } : {}),
-      }).then(settle, () => settle(null));
-    });
+      }),
+      abortSignal,
+    );
   }
 
   /**
    * The trigger's apply gate: estimates the compactable tokens the apply
    * would reclaim (calibrated from this run's usage) and asks the trigger
    * whether the compaction is worth applying.
+   *
+   * Calibrate-or-skip governs arming, not the boundary: main's apply path
+   * (ipc/chat/compaction.ts) never re-checks a token estimate, so when this
+   * run offers no calibrated ratio — or the flagged ids measure no chars in
+   * the record chain — there is no sanctioned estimate to judge against and
+   * the prepared apply goes through rather than tripping the boundary floor
+   * with an invented one. An empty flagged set never applies (nothing to
+   * reclaim), mirroring main's reclaim-only arm.
    */
   private _evaluateApply(applyResult: ApplyResult | null): boolean {
     const { record } = this._deps;
     if (!this._trigger || this._contextTokens == null) return false;
+    const flagged = applyResult?.flaggedIds ?? [];
+    if (flagged.length === 0) return false;
     const chainMessages = record.chain?.messages ?? [];
-    const cfg = this._scopeConfig();
-    return this._trigger.evaluateApply({
-      inputTokens: record.usage?.prompt_tokens ?? 0,
-      contextTokens: this._contextTokens,
-      threshold: cfg?.threshold ?? (() => {
-        try {
-          return getConfig().compaction.subagents.threshold;
-        } catch {
-          return 0.85;
-        }
-      })(),
-      compactableTokens: (() => {
-        try {
-          const flagged = applyResult?.flaggedIds ?? [];
-          if (flagged.length === 0) return 0;
-          let flaggedChars = charsForMessageIds(chainMessages, flagged);
-          if (flaggedChars === 0) flaggedChars = flagged.length * 200;
-          const tpc =
-            this._trigger.state.tokensPerChar ??
-            deriveTokensPerChar(record.usage?.prompt_tokens ?? null, totalCharsForMessages(chainMessages)) ??
-            0.25;
-          return Math.ceil(flaggedChars * tpc);
-        } catch {
-          return applyResult?.flaggedIds.length ?? 0;
-        }
-      })(),
-      minCompactableTokens: cfg?.min_compactable_tokens ?? (() => {
-        try {
-          return getConfig().compaction.subagents.min_compactable_tokens;
-        } catch {
-          return 4000;
-        }
-      })(),
-    }).shouldApply;
+    try {
+      const tpc = this._trigger.state.tokensPerChar
+        ?? deriveTokensPerChar(record.usage?.prompt_tokens ?? null, totalCharsForMessages(chainMessages));
+      if (tpc == null) return true;
+      const flaggedChars = charsForMessageIds(chainMessages, flagged);
+      if (flaggedChars === 0) return true;
+      return this._trigger.evaluateApply({
+        inputTokens: record.usage?.prompt_tokens ?? 0,
+        contextTokens: this._contextTokens,
+        threshold: this._threshold(),
+        compactableTokens: Math.ceil(flaggedChars * tpc),
+        minCompactableTokens: this._minCompactableTokens(),
+      }).shouldApply;
+    } catch {
+      // best-effort estimate — treat as nothing usable rather than applying blind
+      return false;
+    }
   }
 
   /**
@@ -745,41 +730,28 @@ export class SubagentCompactionController {
   }
 
   /**
-   * Post-compaction model-view token estimate for the pause path's hysteresis
-   * baseline: calibrated tokens-per-char when available, else derived from
-   * this run's reported usage over the post-compaction view (then the whole
-   * chain). Best-effort — null when nothing calibrates.
+   * Post-compaction model-view token estimate for the hysteresis baseline:
+   * the apply's model-visible chars scaled by the calibrated tokens-per-char —
+   * the trigger's own ratio, else one derived from this run's reported usage
+   * over the whole chain. Best-effort — undefined when nothing calibrates
+   * (calibrate-or-skip; never a heuristic ratio).
    */
-  private _pausePathBaselineTokens(applyResult: ApplyResult, preInput: number): number | undefined {
+  private _postCompactionBaselineTokens(applyResult: ApplyResult, preInput: number): number | undefined {
     const { record } = this._deps;
-    let postCompactionTokens: number | undefined;
     try {
       let totalPost = 0;
       for (const m of applyResult.updatedMessages) {
-        if ((m as Message).excludeFromModel === true) continue;
-        totalPost += estimateMessageChars(m as Message);
+        if (m.excludeFromModel === true) continue;
+        totalPost += estimateMessageChars(m);
       }
       if (totalPost === 0) totalPost = 1;
-      let tpc: number | undefined = this._trigger?.state.tokensPerChar;
-      if (tpc == null && Number.isFinite(preInput) && preInput > 0) {
-        const r = preInput / Math.max(1, totalPost + (applyResult.flaggedIds.length * 200));
-        if (Number.isFinite(r) && r > 0) tpc = Math.max(0.05, Math.min(r, 2));
-      }
-      if (tpc == null) tpc = this._trigger?.state.tokensPerChar;
-      if (tpc != null) postCompactionTokens = Math.ceil(totalPost * tpc);
-      else {
-        let totalAll = 0;
-        for (const m of (record.chain?.messages ?? [])) totalAll += estimateMessageChars(m as Message);
-        if (totalAll > 0 && Number.isFinite(preInput) && preInput > 0) {
-          const r2 = preInput / totalAll;
-          const tpc2 = Math.max(0.05, Math.min(r2, 2));
-          postCompactionTokens = Math.ceil(totalPost * tpc2);
-        }
-      }
+      const tpc = this._trigger?.state.tokensPerChar
+        ?? deriveTokensPerChar(preInput, totalCharsForMessages(record.chain?.messages ?? []));
+      return tpc != null ? Math.ceil(totalPost * tpc) : undefined;
     } catch {
       // token calibration is best-effort
+      return undefined;
     }
-    return postCompactionTokens;
   }
 
   /**
@@ -807,17 +779,7 @@ export class SubagentCompactionController {
     const ready = await this._ensureInit();
     if (!ready || this._contextTokens == null || !this._trigger) return;
     this._trigger.observeUsage(inputTokens, this._deps.record.chain?.messages ?? []);
-    this._trigger.onUsage(
-      inputTokens,
-      this._contextTokens,
-      this._scopeConfig()?.threshold ?? (() => {
-        try {
-          return getConfig().compaction.subagents.threshold;
-        } catch {
-          return 0.85;
-        }
-      })(),
-    );
+    this._trigger.onUsage(inputTokens, this._contextTokens, this._threshold());
     // Prepare in parallel (non-blocking) if threshold crossed
     void this._maybePrepare(inputTokens);
   }
@@ -846,7 +808,6 @@ export class SubagentCompactionController {
         if (getCompactionPending(this.sessionKey, record.id)) return;
         const ok = await this._ensureInit();
         if (!ok || this._contextTokens == null || !this._trigger) return;
-        const { runCompactionGate } = await import('../llm/compaction/pipeline.js');
         // Hydrate calibration from the newest chain-message usage — the same
         // secondary source the main scope's hydrateTriggerCalibration reads.
         // `record.usage` is deliberately not used: on a resumed record it is

@@ -609,6 +609,9 @@ Defined in `src/main/config/schema.ts` — single source of truth (strict schema
 | `tool_worker_pool_main_agent_reserved` | 1 | Worker slots reserved for main-agent tools so background subagents cannot starve the visible agent; configured 0 floors to 1, pool clamps to `[0, tool_worker_pool_size - 1]` |
 | `theme` | `default` | UI theme name |
 | `personality` | `default` | Agent personality preset |
+| `compaction.main.keep_last_user_messages` | `10` | Last K user messages kept in the model view across compaction |
+| `compaction.subagents.keep_last_user_messages` | `null` | Subagent variant; `null` = ALL user messages stay pinned in the model view |
+| `compaction.main.pin_first_user_message` / `compaction.subagents.pin_first_user_message` | `true` | The first user message is always pinned through compaction |
 | `rag.chunk_size` | 2000 | RAG chunk size |
 | `rag.chunk_overlap` | 200 | RAG overlap |
 | `rag.top_k` | 5 | RAG result count |
@@ -688,6 +691,7 @@ Defined in `src/main/config/schema.ts` — single source of truth (strict schema
 - **No barrel imports** for deeply nested modules — prefer direct imports
 - **Zod validation** at all IPC boundaries (preload → main)
 - **ESM dynamic imports** in main process: `importESM()` wrapper for `ai` package (ESM-only in CJS context)
+- **Dynamic imports from `agents/`**: modules under `src/main/agents/` must `await import(...)` — never import statically — the compaction/accounting leaves they invoke at call time: `llm/compaction/summarize`, `llm/compaction/run-attempt`, `llm/compaction/trigger`, and `providers/accounting/*`. The store/provider chains capture `config/loader` state (e.g. `HOME_CONFIG_DIR`) at module scope, which defeats the `vi.mock('config/loader')` seams unit tests rely on — the pitfall documented in `docs/solutions/design-flaws/compaction-null-window-chars4-and-chain-preserve.md`. `getConfig()` itself is safe to import statically; it is the provider/accounting graphs that must stay lazy.
 
 ### React
 - **Functional components** only (no class components)
