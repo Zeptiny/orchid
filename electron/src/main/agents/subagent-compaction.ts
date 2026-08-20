@@ -18,10 +18,10 @@
  * history, never a prepare-time snapshot).
  *
  * This module also owns the compaction contracts shared by the manager, the
- * controller, and the runner: the mutable history box, the pause-gate
- * interface, and the pause/overflow outcome unions.
+ * controller, and the runner: the mutable history box, the compaction record
+ * slice, the pause-gate interface, and the pause/overflow outcome unions.
  */
-import type { CompactionMode, Message } from '../../shared/types/message';
+import type { CompactionMode, Message, Usage } from '../../shared/types/message';
 import type { ModelSelection } from '../../shared/types/provider';
 import type { Config } from '../config/schema';
 import type { Chain } from '../../shared/types/chain';
@@ -123,6 +123,31 @@ export interface SubagentCompactionPauseController {
   readonly compactForOverflow?: (params: { readonly alreadyRetried: boolean }) => Promise<SubagentOverflowOutcome>;
   /** Interrupt path: clear the scoped gate and discard any pending prepare. */
   readonly discard: () => void;
+}
+
+/**
+ * Structural slice of a subagent run's record consumed by the per-run
+ * compaction controller: identity and session scope, the frozen model
+ * selection, the live chain view, the latest aggregate usage, the task text,
+ * and the result slot the partial-report degradation (R17) writes. The manager
+ * hands its full runtime record — structural typing keeps that call site
+ * manager-owned — while other hosts only need this shape.
+ */
+export interface CompactionRunRecord {
+  /** Subagent identifier; also the scoped pending-store and pause-registry key. */
+  readonly id: string;
+  /** Owning session id; null = the run is unscoped (memory-only persistence). */
+  readonly sessionId: string | null;
+  /** Frozen connection-scoped model selection for the compactor fallback. */
+  readonly selection: ModelSelection | null;
+  /** Live chain view — read for messages/ids, swapped via the setChainMessages sink. */
+  readonly chain: Chain | null;
+  /** Latest aggregate usage; `prompt_tokens` drives token calibration. */
+  readonly usage: Usage | null;
+  /** Task description; sliced into the partial report's `remaining` section. */
+  readonly task: string;
+  /** Result text — written by the partial-report degradation (R17). */
+  result: string | null;
 }
 
 /** Subagent mid-run compaction (U9): partial-report helper for R17. */

@@ -13,12 +13,12 @@
  *  - the terminal still-over partial-report degradation (R17).
  *
  * The manager constructs it with narrow sinks (record chain swap, persistence
- * transaction, live-projection emitter, assembler rebaser) so the run loop
- * itself keeps no compaction logic. Nothing here may import from ../tools or
- * ./manager at runtime — the SubagentRecord type below is a type-only import
- * (erased at compile time); value dependencies arrive via constructor
- * injection. This keeps the manager -> runner -> tools cycle-free module
- * graph documented in subagent-compaction.ts intact.
+ * transaction, live-projection emitter, assembler rebaser) and the structural
+ * `CompactionRunRecord` slice of its runtime record, so the run loop itself
+ * keeps no compaction logic. Nothing here may import from ../tools or
+ * ./manager — value dependencies arrive via constructor injection. This keeps
+ * the manager -> runner -> tools cycle-free module graph documented in
+ * subagent-compaction.ts intact.
  */
 import type { Chain } from '../../shared/types/chain';
 import type { Message } from '../../shared/types/message';
@@ -45,13 +45,13 @@ import {
   requestCompactionPause,
   shouldPauseForCompaction,
 } from '../ipc/next-request-stop';
-import type { SubagentRecord } from './manager';
 import {
   applySubagentPendingCompaction,
   buildSubagentPartialReport,
   prepareSubagentCompaction,
   raceAbortDuring,
   resolveSubagentContextTokens,
+  type CompactionRunRecord,
   type SubagentCompactionPauseController,
   type SubagentCompactionProgress,
   type SubagentHistoryBox,
@@ -74,8 +74,8 @@ interface AssemblerAccess {
  * the controller never reaches back into the manager.
  */
 export interface SubagentCompactionControllerDeps {
-  /** The run's runtime record; read live (chain/usage) and mutated on degradation (result). */
-  readonly record: SubagentRecord;
+  /** The run's record (CompactionRunRecord contract); read live (chain/usage) and mutated on degradation (result). */
+  readonly record: CompactionRunRecord;
   /** The run generation, for per-run turn attribution (`record.id#generation`). */
   readonly runGeneration: number;
   /** The run's abort signal — races every compaction await so interrupts abort cleanly. */

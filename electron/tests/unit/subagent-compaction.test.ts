@@ -37,6 +37,7 @@ import { defaults } from '../../src/main/config/schema';
 import { createCanonicalToolResult } from '../../src/shared/types/tool-result';
 import { ChainStatus } from '../../src/shared/types/chain';
 import type { SubagentPersistence } from '../../src/main/agents/subagent-persistence';
+import type { SubagentCompactionPayload } from '../../src/main/session/storage';
 
 // ── Module mocks ─────────────────────────────────────────────────────────────
 // The manager only needs config + provider mocks; subagent-runner (dynamically
@@ -537,6 +538,76 @@ describe('SubagentManager mid-run compaction (U9): apply at boundary', () => {
     const chain = record.chain?.messages ?? [];
     expect(chain.filter((m) => m.compacted)).toHaveLength(1);
     expect(record.result).not.toContain('[Subagent partial report');
+  });
+});
+
+// ── Durable sink (R36): the compaction write leaves the manager via the sink ─
+
+describe('SubagentManager mid-run compaction (U9): durable sink', () => {
+  it('routes the pause-boundary apply through the injected compaction sink with the targeted-write payload', async () => {
+    // The default sink resolves the session singleton via a lazy require that
+    // cannot load under Vitest — injecting a recording sink makes the durable
+    // path manager-level testable and pins the payload shape the storage
+    // transaction consumes.
+    const summaryText = `Summary: ${'s'.repeat(300)}`;
+    mocks.summarize.mockResolvedValue({ text: summaryText, usage: null });
+    const durableCalls: Array<{
+      sessionId: string;
+      subagentId: string;
+      payload: SubagentCompactionPayload;
+    }> = [];
+    const manager = new SubagentManager({
+      compactionSink: (sessionId, subagentId, payload) => {
+        durableCalls.push({ sessionId, subagentId, payload });
+        return null;
+      },
+    });
+    let liveIdsBeforeApply: string[] = [];
+    manager.setRunner(scriptedRunner([
+      ...steps(10),
+      usageEvent(600),
+      summarizerStarted,
+      { type: 'step_finish', stepIndex: 0, finishReason: 'stop' },
+      {
+        probe: () => {
+          liveIdsBeforeApply = (record.chain?.messages ?? []).map((m) => m.id);
+        },
+      },
+      { pauseGate: true },
+      { type: 'finish', finishReason: 'stop' },
+    ]));
+    const record = spawnCompactionSubagent(manager, 'session-durable-sink');
+    await manager.getRunPromise(record.id);
+
+    expect(record.state).toBe(SubagentState.COMPLETED);
+    expect(durableCalls).toHaveLength(1);
+    const durable = durableCalls[0]!;
+    expect(durable.sessionId).toBe('session-durable-sink');
+    expect(durable.subagentId).toBe(record.id);
+
+    const payload = durable.payload;
+    // liveMessages: the apply-time live transcript the flagged ids and the
+    // summary anchor were computed over.
+    expect(payload.liveMessages?.map((m) => m.id)).toEqual(liveIdsBeforeApply);
+
+    const chain = record.chain?.messages ?? [];
+    const summaryIdx = chain.findIndex((m) => m.compacted);
+    expect(summaryIdx).toBeGreaterThan(0);
+    // summaryMessage: exactly the summary head the apply inserted into the chain.
+    expect(payload.summaryMessage?.id).toBe(chain[summaryIdx]!.id);
+    // insertBeforeMessageId: the first preserved-window message after the cut.
+    expect(payload.insertBeforeMessageId).toBe(chain[summaryIdx + 1]?.id ?? null);
+    // flaggedMessageIds: the covered prefix, never the exempt task head, and
+    // exactly the ids the chain flags with excludeFromModel.
+    expect(payload.flaggedMessageIds.length).toBeGreaterThan(0);
+    expect(new Set(payload.flaggedMessageIds).size).toBe(payload.flaggedMessageIds.length);
+    expect(payload.flaggedMessageIds).not.toContain(liveIdsBeforeApply[0]);
+    expect(new Set(payload.flaggedMessageIds)).toEqual(
+      new Set(chain.filter((m) => m.excludeFromModel === true).map((m) => m.id)),
+    );
+
+    // The durable write is checkpointable like the real sink's (R36).
+    expect(persistenceOf(manager).getLastCompactionRevision(record.id)).not.toBeNull();
   });
 });
 

@@ -378,6 +378,22 @@ export interface SubagentCheckpointCandidate {
 // ── SubagentManager ─────────────────────────────────────────────────────────
 
 /**
+ * Optional SubagentManager construction overrides.
+ *
+ * An injected `compactionSink` bypasses the default lazy session-singleton
+ * resolution (whose `require` cannot resolve the TS loader under Vitest), so
+ * composition roots and manager-level tests can exercise the durable
+ * compaction write path directly.
+ */
+export interface SubagentManagerOptions {
+  /**
+   * Durable subagent-chain compaction sink (R36). Omitted → the default lazy
+   * session-singleton resolution; `null` → memory-only compaction persistence.
+   */
+  readonly compactionSink?: SubagentCompactionSink | null;
+}
+
+/**
  * SubagentManager — manages the lifecycle of subagent runs.
  *
  * Spawn subagents, wait for their completion, cancel them, and query
@@ -393,12 +409,16 @@ export class SubagentManager {
   private _admission = new AdmissionController();
   private _runs = new SubagentRunRegistry();
   private _lifecycle = new SubagentLifecycle();
-  private _persistence = new SubagentPersistence(
-    getTerminalRetention,
-    createSubagentCompactionSink(),
-  );
+  private readonly _persistence: SubagentPersistence;
   /** Test-observable counter — see compactionPreparesEvaluated(). */
   private _compactionPreparesEvaluated = 0;
+
+  constructor(options: SubagentManagerOptions = {}) {
+    this._persistence = new SubagentPersistence(
+      getTerminalRetention,
+      options.compactionSink === undefined ? createSubagentCompactionSink() : options.compactionSink,
+    );
+  }
 
   /**
    * Configure the stream runner. When set, spawn() starts a background run.
