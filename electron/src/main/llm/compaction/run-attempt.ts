@@ -13,13 +13,14 @@
  * durable writes stay at the call sites.
  *
  * Unified behavior (intentional, #11):
- *  - R9: selective mode — including its fallback — NEVER flags user messages.
- *    The runner filters user ids out of the result's `flaggedIds`. The
- *    apply-side settle (never-flag-user for every mode) is owned by
- *    `buildCompactionApply`'s universal settle (U1/R31), and the selective
- *    never-delete apply by `buildSelectiveCompactionApply` (U7/R35) — the
- *    old per-mode un-flag helpers were removed once both covered their call
- *    sites.
+ *  - R9: selective mode — including its fallback — never flags EXEMPT user
+ *    messages. The runner filters the resolved exempt set
+ *    (`resolveUserExemptIds` output, threaded via `exemptIds`; omitted →
+ *    every user message, the backcompat default) out of the result's
+ *    `flaggedIds`. The apply-side settle is owned by `buildCompactionApply` /
+ *    `buildSelectiveCompactionApply` (U1/R31, scoped via their `exemptIds`) —
+ *    the old per-mode un-flag helpers were removed once both covered their
+ *    call sites.
  */
 
 import type { Message } from '../../../shared/types/message';
@@ -71,6 +72,12 @@ export interface CompactionAttemptInput {
   readonly config: Config;
   readonly deps: CompactionAttemptDeps;
   readonly maxCorrectionRounds?: number;
+  /**
+   * Scoped exempt user ids (`resolveUserExemptIds` output): R9 filters only
+   * these user ids out of the result's flaggedIds. Omitted → every user
+   * message is filtered (backcompat default).
+   */
+  readonly exemptIds?: ReadonlySet<string> | readonly string[];
 }
 
 export type CompactionAttemptOutcome =
@@ -87,27 +94,38 @@ export function compactableModelSlice(
     .filter((m) => !m.excludeFromModel && !m.hidden);
 }
 
-/** R9: ids of user messages, which selective mode never excludes from the model view. */
-function userIdsIn(messages: readonly Message[]): Set<string> {
-  return new Set(messages.filter((m) => m.role === MessageRole.USER).map((m) => m.id));
+/** R9: ids of EXEMPT user messages, which selective mode never excludes from the model view. */
+function exemptUserIdsIn(
+  messages: readonly Message[],
+  exemptIds?: ReadonlySet<string> | readonly string[],
+): Set<string> {
+  const exempt = exemptIds ? (exemptIds instanceof Set ? exemptIds : new Set(exemptIds)) : null;
+  const userIds = new Set<string>();
+  for (const m of messages) {
+    if (m.role !== MessageRole.USER) continue;
+    if (!exempt || exempt.has(m.id)) userIds.add(m.id);
+  }
+  return userIds;
 }
 
-/** R9: drop user-message ids from a flagged set (selective mode, including its fallback). */
+/** R9: drop exempt-user ids from a flagged set (selective mode, including its fallback). */
 function filterUserFlaggedIds(
   messages: readonly Message[],
   flaggedIds: readonly string[],
+  exemptIds?: ReadonlySet<string> | readonly string[],
 ): string[] {
-  const userIds = userIdsIn(messages);
+  const userIds = exemptUserIdsIn(messages, exemptIds);
   return flaggedIds.filter((id) => !userIds.has(id));
 }
 
-/** Apply the R9 never-flag-user invariant to a selective run result in place of the caller. */
+/** Apply the R9 never-flag-exempt-user invariant to a selective run result in place of the caller. */
 function applyR9ToResult(
   messages: readonly Message[],
   result: SelectiveCompactionResult,
+  exemptIds?: ReadonlySet<string> | readonly string[],
 ): SelectiveCompactionResult {
   if (result.flaggedIds && result.flaggedIds.length > 0) {
-    return { ...result, flaggedIds: filterUserFlaggedIds(messages, result.flaggedIds) };
+    return { ...result, flaggedIds: filterUserFlaggedIds(messages, result.flaggedIds, exemptIds) };
   }
   return result;
 }
@@ -159,5 +177,5 @@ export async function runCompactionAttempt(
     simpleFallback,
     ...(input.maxCorrectionRounds !== undefined ? { maxCorrectionRounds: input.maxCorrectionRounds } : {}),
   });
-  return { kind: 'ran', result: applyR9ToResult(messages, result) };
+  return { kind: 'ran', result: applyR9ToResult(messages, result, input.exemptIds) };
 }

@@ -28,6 +28,7 @@ import type { Config } from '../config/schema';
 import type { ApplyResult } from '../llm/compaction/apply';
 import { estimateMessageChars, totalCharsForMessages } from '../llm/compaction/message-chars';
 import { charsForMessageIds, deriveTokensPerChar } from '../llm/compaction/pipeline';
+import { resolveUserExemptIds } from '../llm/compaction/select';
 import {
   dedupeHistoryById,
   deleteCompactionPending,
@@ -599,6 +600,16 @@ export class SubagentCompactionController {
     liveHistory: readonly Message[],
   ): Promise<ApplyResult | null> {
     const { record, abortSignal } = this._deps;
+    // Apply-time exempt resolution from the CURRENT scope config over the
+    // live history (config may change between prepare and apply — re-resolving
+    // here keeps the settle aligned with what is currently configured).
+    const scopeCfg = this._scopeConfig();
+    const exemptIds = scopeCfg
+      ? resolveUserExemptIds(liveHistory, {
+          keepLast: scopeCfg.keep_last_user_messages ?? null,
+          pinFirst: scopeCfg.pin_first_user_message ?? true,
+        })
+      : undefined;
     return new Promise<ApplyResult | null>((resolve) => {
       if (abortSignal.aborted) {
         resolve(null);
@@ -623,6 +634,7 @@ export class SubagentCompactionController {
           },
         ] as unknown as import('../../shared/types/chain').Chain[],
         sessionId: this.sessionKey,
+        ...(exemptIds ? { exemptIds } : {}),
       }).then(settle, () => settle(null));
     });
   }

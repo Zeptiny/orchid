@@ -503,6 +503,68 @@ describe('buildSelectiveCompactionApply — shared never-delete selective settle
     });
     expect(settled).toBeNull();
   });
+
+  it('scoped exempt set: exempt user id never flagged; non-exempt user id flaggable', () => {
+    const messages = [
+      makeUser('u1', 'explore the repo'),
+      makeUser('u3', 'clarify the goal'),
+      makeAssistant('a1', 'I will read the config files.'),
+    ];
+    const scopedCut: CutResult = {
+      cutIndex: 3,
+      compactableRange: { start: 0, end: 3 },
+      preservedCount: 0,
+      openGroupStart: null,
+      preservedRange: { start: 3, end: 3 },
+    };
+    const settled = buildSelectiveCompactionApply({
+      messages,
+      chains: [makeChainFor(messages)],
+      cutResult: scopedCut,
+      flaggedIds: ['u1', 'u3', 'a1'],
+      summaryText: 'Summarized.',
+      sessionId: 'session-main',
+      exemptIds: new Set(['u1']),
+    });
+
+    expect(settled).not.toBeNull();
+    expect([...settled!.flaggedIds].sort()).toEqual(['a1', 'u3']);
+    expect(settled!.updatedMessages.find((m) => m.id === 'u1')!.excludeFromModel).not.toBe(true);
+    expect(settled!.updatedMessages.find((m) => m.id === 'u3')!.excludeFromModel).toBe(true);
+    expect(settled!.updatedMessages.find((m) => m.id === 'a1')!.excludeFromModel).toBe(true);
+  });
+
+  it('scoped exempt set restores a pre-flagged exempt user message', () => {
+    const messages = [
+      makeUser('u1', 'explore the repo'),
+      makeUser('u3', 'clarify the goal'),
+      makeAssistant('a1', 'I will read the config files.'),
+    ];
+    // u1 flagged by a prior (now superseded) selective run.
+    messages[0] = { ...messages[0]!, excludeFromModel: true };
+    const scopedCut: CutResult = {
+      cutIndex: 3,
+      compactableRange: { start: 0, end: 3 },
+      preservedCount: 0,
+      openGroupStart: null,
+      preservedRange: { start: 3, end: 3 },
+    };
+
+    const settled = buildSelectiveCompactionApply({
+      messages,
+      chains: [makeChainFor(messages)],
+      cutResult: scopedCut,
+      flaggedIds: ['u3', 'a1'],
+      summaryText: 'Summarized.',
+      sessionId: 'session-main',
+      exemptIds: new Set(['u1']),
+    });
+
+    expect(settled).not.toBeNull();
+    expect(settled!.flaggedIds).toEqual(['u3', 'a1']);
+    expect(settled!.updatedMessages.find((m) => m.id === 'u1')!.excludeFromModel).not.toBe(true);
+    expect(settled!.updatedMessages.find((m) => m.id === 'u3')!.excludeFromModel).toBe(true);
+  });
 });
 
 describe('U14 runSelectiveCompaction loop', () => {

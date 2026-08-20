@@ -572,6 +572,91 @@ describe('compaction apply — persisted-shape outputs (pure build)', () => {
   });
 });
 
+describe('compaction apply — scoped user settle (exemptIds)', () => {
+  /** Three user turns; compactable range [0,4), preserved window [4,6). */
+  function scopedMessages(): Message[] {
+    return [
+      makeUser('u0', 'first user turn'),
+      makeAssistant('a0', 'first reply'),
+      makeUser('u1', 'second user turn'),
+      makeAssistant('a1', 'second reply'),
+      makeUser('u2', 'third user turn'),
+      makeAssistant('a2', 'third reply'),
+    ];
+  }
+  const scopedCut: CutResult = {
+    cutIndex: 4,
+    compactableRange: { start: 0, end: 4 },
+    preservedCount: 1,
+    openGroupStart: null,
+    preservedRange: { start: 4, end: 6 },
+  };
+
+  it('without exemptIds every user message stays protected (backcompat pin)', () => {
+    const messages = scopedMessages();
+    const result = buildCompactionApply({
+      messages,
+      chains: [makeChain('chain-1', 'session-1', messages)],
+      cutResult: scopedCut,
+      summaryText: 'summary',
+      mode: 'simple',
+    });
+    expect(result.flaggedIds).toEqual(['a0', 'a1']);
+    for (const id of ['u0', 'u1', 'u2']) {
+      expect(result.updatedMessages.find((m) => m.id === id)!.excludeFromModel).not.toBe(true);
+    }
+  });
+
+  it('exempt user id is never flagged; non-exempt in-range user id is flagged (single representation)', () => {
+    const messages = scopedMessages();
+    const result = buildCompactionApply({
+      messages,
+      chains: [makeChain('chain-1', 'session-1', messages)],
+      cutResult: scopedCut,
+      summaryText: 'summary',
+      mode: 'simple',
+      exemptIds: ['u1'],
+    });
+    // u0 (non-exempt, in range) leaves the model view — its only surviving
+    // representation is the summary head, never a verbatim double-representation.
+    expect(result.flaggedIds).toEqual(['u0', 'a0', 'a1']);
+    expect(result.updatedMessages.find((m) => m.id === 'u0')!.excludeFromModel).toBe(true);
+    expect(result.updatedMessages.find((m) => m.id === 'u1')!.excludeFromModel).not.toBe(true);
+    expect(result.updatedMessages.find((m) => m.id === 'u2')!.excludeFromModel).not.toBe(true);
+    const summaryIdx = result.updatedMessages.findIndex((m) => m.id === result.summaryMessage!.id);
+    expect(summaryIdx).toBe(scopedCut.cutIndex);
+  });
+
+  it('restores a pre-flagged exempt user message (defense-in-depth settle)', () => {
+    const messages = scopedMessages();
+    // u1 flagged by a prior (now superseded) selective run; u0 pre-excluded too.
+    messages[2] = { ...messages[2]!, excludeFromModel: true };
+    const result = buildCompactionApply({
+      messages,
+      chains: [makeChain('chain-1', 'session-1', messages)],
+      cutResult: scopedCut,
+      summaryText: 'summary',
+      mode: 'simple',
+      exemptIds: new Set(['u1']),
+    });
+    expect(result.flaggedIds).not.toContain('u1');
+    expect(result.updatedMessages.find((m) => m.id === 'u1')!.excludeFromModel).not.toBe(true);
+    // A non-exempt user message follows normal semantics: a pre-existing
+    // exclusion is tolerated (never resurrected), exactly like any other
+    // already-excluded range message.
+    messages[0] = { ...messages[0]!, excludeFromModel: true };
+    const nonExempt = buildCompactionApply({
+      messages,
+      chains: [makeChain('chain-1', 'session-1', messages)],
+      cutResult: scopedCut,
+      summaryText: 'summary',
+      mode: 'simple',
+      exemptIds: new Set(['u1']),
+    });
+    expect(nonExempt.updatedMessages.find((m) => m.id === 'u0')!.excludeFromModel).toBe(true);
+  });
+});
+
 describe('stampCompactionMetrics', () => {
   function buildApplied() {
     const { chains, messages, chainBoundaries, sessionId } = buildSession(3);

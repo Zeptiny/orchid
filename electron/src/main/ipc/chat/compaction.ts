@@ -42,7 +42,7 @@ import {
 } from '../next-request-stop';
 import { publishSessionActivity } from '../session-activity';
 import { totalCharsForMessages } from '../../llm/compaction/message-chars';
-import type { CutResult } from '../../llm/compaction/select';
+import { resolveUserExemptIds, type CutResult } from '../../llm/compaction/select';
 import {
   clearCompactionPendingsForSession,
   dedupeHistoryById,
@@ -305,6 +305,24 @@ function totalChars(messages: readonly Message[]): number {
 }
 
 /**
+ * Resolve the main scope's exempt user ids from its CURRENT config over the
+ * given history — one set per attempt, threaded into the gate's selectCut AND
+ * every apply builder so the cut math and the settle cannot diverge.
+ */
+function mainExemptIds(
+  messages: readonly Message[],
+  cfg: {
+    readonly keep_last_user_messages?: number | null;
+    readonly pin_first_user_message?: boolean;
+  },
+): Set<string> {
+  return resolveUserExemptIds(messages, {
+    keepLast: cfg.keep_last_user_messages ?? null,
+    pinFirst: cfg.pin_first_user_message ?? true,
+  });
+}
+
+/**
  * Record the compaction outcome on the summary head's marker: the calibrated
  * tokens-freed estimate (pre minus post), plus the compactor LLM's own cost
  * when the summarizer reported usage. Reclaim-only results (no summary head)
@@ -354,6 +372,8 @@ function persistSelectiveCompaction(
     /** The run's materialized replay (synthetic summaries + ranged copies + kept). */
     readonly replayMessages: readonly Message[];
     readonly cut: CutResult;
+    /** Apply-time exempt user ids; the scoped settle keeps them in the model view. */
+    readonly exemptIds?: ReadonlySet<string> | readonly string[];
   },
 ): boolean {
   try {
@@ -373,6 +393,7 @@ function persistSelectiveCompaction(
       cutResult: input.cut,
       flaggedIds: input.flaggedIds,
       ...(input.reclaimedIds ? { reclaimedIds: input.reclaimedIds } : {}),
+      ...(input.exemptIds ? { exemptIds: input.exemptIds } : {}),
       summaryText: null,
       sessionId,
     });
@@ -507,6 +528,11 @@ export async function applyPendingCompactionIfAny(
   }
   deleteCompactionPending(sessionId, MAIN_AGENT_SCOPE_ID);
   const trigger = getCompactionTrigger(sessionId);
+  // Apply-time exempt resolution from the CURRENT config (config may change
+  // between prepare and apply): one set per apply, threaded into every
+  // builder below so the cut math and the settle cannot diverge.
+  const mainCfg = runtime.config.compaction?.main;
+  const exemptIds = mainCfg ? mainExemptIds(history, mainCfg) : undefined;
   try {
     // ── Selective pending ───────────────────────────────────────────────
     if (pending.mode === 'selective' && pending.selectivePromise) {
@@ -523,6 +549,7 @@ export async function applyPendingCompactionIfAny(
           messages: history,
           flaggedIds: result.flaggedIds,
           ...(pending.flaggedIds.length > 0 ? { reclaimedIds: pending.flaggedIds } : {}),
+          ...(exemptIds ? { exemptIds } : {}),
           replayMessages: result.replayMessages,
           cut: pending.cut,
         });
@@ -557,6 +584,7 @@ export async function applyPendingCompactionIfAny(
             summaryText: result.fallbackText,
             mode: runtime.config.compaction.main.mode,
             flaggedIds: pending.flaggedIds,
+            ...(exemptIds ? { exemptIds } : {}),
             sessionId,
           });
         } catch (e) {
@@ -568,8 +596,8 @@ export async function applyPendingCompactionIfAny(
           throw e;
         }
         if (applyResult.didApply) {
-          // R31: the universal settle inside buildCompactionApply already
-          // keeps user messages out of the flagged set in every mode — no
+          // R31: the scoped settle inside buildCompactionApply already keeps
+          // exempt user ids out of the flagged set in every mode — no
           // scope-specific un-flag pass is needed here.
           const tpc = trigger.state.tokensPerChar ?? (totalChars(applyResult.updatedMessages) > 0 ? pending.estimatedInput / Math.max(1, totalChars(history)) : undefined);
           const postTokens = tpc ? Math.ceil(totalChars(applyResult.updatedMessages) * tpc) : pending.estimatedInput;
@@ -592,6 +620,7 @@ export async function applyPendingCompactionIfAny(
             messages: history,
             flaggedIds: result.flaggedIds ?? pending.flaggedIds,
             ...(pending.flaggedIds.length > 0 ? { reclaimedIds: pending.flaggedIds } : {}),
+            ...(exemptIds ? { exemptIds } : {}),
             replayMessages: result.replayMessages,
             cut: pending.cut,
           });
@@ -626,6 +655,7 @@ export async function applyPendingCompactionIfAny(
             summaryText: result.text,
             mode: runtime.config.compaction.main.mode,
             flaggedIds: pending.flaggedIds,
+            ...(exemptIds ? { exemptIds } : {}),
             sessionId,
           });
         } catch (e) {
@@ -667,6 +697,7 @@ export async function applyPendingCompactionIfAny(
           summaryText: null,
           mode: runtime.config.compaction.main.mode,
           flaggedIds: pending.flaggedIds,
+          ...(exemptIds ? { exemptIds } : {}),
           sessionId,
         });
       } catch (e) {
@@ -721,6 +752,9 @@ export async function tryCompactSynchronously(
   // which is disabled when the limit is unknown.
   if (contextTokens == null || !Number.isFinite(contextTokens) || contextTokens <= 0) return { didApply: false };
   if (trigger.state.pendingPrepare) return { didApply: false };
+  // One exempt set per attempt: the gate's selectCut, the selective runner,
+  // and every apply below consume the same resolved set.
+  const exemptIds = mainExemptIds(messages, cfg);
   try {
     const decision = runCompactionGate({
       messages,
@@ -730,6 +764,7 @@ export async function tryCompactSynchronously(
       contextTokens,
       tokensPerChar: trigger.state.tokensPerChar ?? null,
       triggerState: trigger.state,
+      exemptIds,
     });
     if (decision.kind === 'no-op') return { didApply: false };
     const { cut, flaggedIds, estimatedInput, tokensPerChar } = decision;
@@ -744,6 +779,7 @@ export async function tryCompactSynchronously(
           summaryText: null,
           mode: cfg.mode,
           flaggedIds,
+          exemptIds,
           sessionId,
         });
       } catch (e) {
@@ -771,6 +807,7 @@ export async function tryCompactSynchronously(
             cut,
             scope: 'main',
             config: runtime.config,
+            exemptIds,
             deps: {
               fallbackSelection: selection,
               runtime,
@@ -792,6 +829,7 @@ export async function tryCompactSynchronously(
             messages,
             flaggedIds: selResult.flaggedIds,
             ...(flaggedIds.length > 0 ? { reclaimedIds: flaggedIds } : {}),
+            exemptIds,
             replayMessages: selResult.replayMessages,
             cut,
           });
@@ -816,6 +854,7 @@ export async function tryCompactSynchronously(
               summaryText: selResult.fallbackText,
               mode: cfg.mode,
               flaggedIds,
+              exemptIds,
               sessionId,
             });
           } catch (e) {
@@ -835,6 +874,7 @@ export async function tryCompactSynchronously(
                 messages,
                 flaggedIds: selResult.flaggedIds ?? flaggedIds,
                 ...(flaggedIds.length > 0 ? { reclaimedIds: flaggedIds } : {}),
+                exemptIds,
                 replayMessages: selResult.replayMessages!,
                 cut,
               });
@@ -850,8 +890,8 @@ export async function tryCompactSynchronously(
             trigger.abortPrepare();
             return { didApply: false };
           }
-          // R31: the universal settle inside buildCompactionApply already
-          // keeps user messages out of the flagged set in every mode — no
+          // R31: the scoped settle inside buildCompactionApply already keeps
+          // exempt user ids out of the flagged set in every mode — no
           // scope-specific un-flag pass is needed here.
           const tpcF2 = trigger.state.tokensPerChar ?? tokensPerChar;
           const postF2 = Math.ceil(totalChars(applyResult.updatedMessages) * tpcF2);
@@ -871,6 +911,7 @@ export async function tryCompactSynchronously(
             messages,
             flaggedIds: selResult.flaggedIds ?? flaggedIds,
             ...(flaggedIds.length > 0 ? { reclaimedIds: flaggedIds } : {}),
+            exemptIds,
             replayMessages: selResult.replayMessages,
             cut,
           });
@@ -915,6 +956,7 @@ export async function tryCompactSynchronously(
           summaryText: result.text,
           mode: cfg.mode,
           flaggedIds,
+          exemptIds,
           sessionId,
         });
       } catch (e) {
@@ -980,6 +1022,10 @@ export function handleUsageCompaction(
   trigger.onUsage(inputTokens, effectiveContextTokens, cfg.threshold, cfg.hysteresis_delta);
   if (trigger.state.pendingPrepare) return;
   if (getCompactionPending(sessionId, MAIN_AGENT_SCOPE_ID)) return;
+  // Prepare-time exempt resolution (one set per attempt): the gate's
+  // selectCut and the selective runner consume the same resolved set; the
+  // later apply re-resolves from the config current at apply time.
+  const exemptIds = mainExemptIds(history, cfg);
   try {
     const decision = runCompactionGate({
       messages: history,
@@ -990,6 +1036,7 @@ export function handleUsageCompaction(
       tokensPerChar: tokensPerChar ?? null,
       triggerState: trigger.state,
       charCache,
+      exemptIds,
     });
     if (decision.kind === 'no-op') return;
     const { cut, flaggedIds } = decision;
@@ -1018,6 +1065,7 @@ export function handleUsageCompaction(
           cut,
           scope: 'main',
           config: runtime.config,
+          exemptIds,
           deps: {
             fallbackSelection: selection,
             runtime,

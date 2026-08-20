@@ -173,6 +173,7 @@ function subagentSelectiveApply(params: {
   readonly cutResult: CutResult;
   readonly selectiveResult: SelectiveSuccess;
   readonly reclaimedIds?: readonly string[];
+  readonly exemptIds?: ReadonlySet<string> | readonly string[];
   readonly sessionId?: string;
 }) {
   const { selectiveResult } = params;
@@ -187,6 +188,7 @@ function subagentSelectiveApply(params: {
     flaggedIds: selectiveResult.flaggedIds,
     summaryText: summaryText.length > 0 ? summaryText : null,
     ...(params.reclaimedIds ? { reclaimedIds: params.reclaimedIds } : {}),
+    ...(params.exemptIds ? { exemptIds: params.exemptIds } : {}),
     ...(params.sessionId ? { sessionId: params.sessionId } : {}),
   });
 }
@@ -433,5 +435,87 @@ describe('buildSelectiveCompactionApply — subagent scope (R3: replacement neve
     // excludes from the model view: one shared computation, two consumers.
     expect(mainFlags!.flaggedIds).toEqual(subagentApply!.flaggedIds);
     expect([...mainFlags!.flaggedIds].sort()).toEqual(['a1', 'tc1', 'tr1']);
+  });
+
+  it('scoped exempt set: exempt user id never in flaggedIds; non-exempt user id can be', () => {
+    // Task head (u1) + one answer-exchange question (u3) inside the range:
+    // keep_last=1 + pin_first=false exempts only the newest user message.
+    const messages = [
+      makeUser('u1', 'explore the repo'),
+      makeUser('u3', 'answer-exchange question'),
+      makeAssistant('a1', 'I will read the config files.'),
+      makeUser('u4', 'newest user message'),
+    ];
+    const scopedCut: CutResult = {
+      cutIndex: 3,
+      compactableRange: { start: 0, end: 3 },
+      preservedCount: 1,
+      openGroupStart: null,
+      preservedRange: { start: 3, end: 4 },
+    };
+    const selective = selectiveSuccess({
+      flaggedIds: ['u1', 'u3', 'a1'],
+      summaryParts: ['Summarized exchange.'],
+    });
+
+    const result = subagentSelectiveApply({
+      messages,
+      chains: [makeChain('chain-1', messages)],
+      cutResult: scopedCut,
+      selectiveResult: selective,
+      exemptIds: new Set(['u4']),
+      sessionId: 'session-sub',
+    });
+
+    expect(result).not.toBeNull();
+    expect([...result!.flaggedIds].sort()).toEqual(['a1', 'u1', 'u3']);
+    expect(result!.updatedMessages.find((m) => m.id === 'u4')!.excludeFromModel).not.toBe(true);
+    expect(result!.updatedMessages.find((m) => m.id === 'u1')!.excludeFromModel).toBe(true);
+    expect(result!.updatedMessages.find((m) => m.id === 'u3')!.excludeFromModel).toBe(true);
+  });
+
+  it('applySubagentPendingCompaction threads the scoped exempt set for a selective pending', async () => {
+    const messages = [
+      makeUser('u1', 'explore the repo'),
+      makeUser('u3', 'answer-exchange question'),
+      makeAssistant('a1', 'I will read the config files.'),
+      makeUser('u4', 'newest user message'),
+    ];
+    const scopedCut: CutResult = {
+      cutIndex: 3,
+      compactableRange: { start: 0, end: 3 },
+      preservedCount: 1,
+      openGroupStart: null,
+      preservedRange: { start: 3, end: 4 },
+    };
+    // keep_last=1 + pin_first=true: task head (u1) and the newest user (u4)
+    // are exempt — the selective pass's attempt to drop u1 is settled away.
+    const selective = selectiveSuccess({
+      flaggedIds: ['u1', 'u3', 'a1'],
+      summaryParts: ['Summarized exchange.'],
+    });
+    const pending: CompactionPendingEntry = {
+      cut: scopedCut,
+      flaggedIds: [],
+      expectedIds: ['u1', 'u3', 'a1'],
+      estimatedInput: 800,
+      contextTokens: 1000,
+      mode: 'selective',
+      selectivePromise: Promise.resolve({ kind: 'ran' as const, result: selective }),
+    };
+
+    const routed = await applySubagentPendingCompaction({
+      pending,
+      messages,
+      chains: [makeChain('chain-1', messages)],
+      sessionId: 'session-sub',
+      exemptIds: new Set(['u1', 'u4']),
+    });
+
+    expect(routed).not.toBeNull();
+    expect([...routed!.flaggedIds].sort()).toEqual(['a1', 'u3']);
+    expect(routed!.updatedMessages.find((m) => m.id === 'u1')!.excludeFromModel).not.toBe(true);
+    expect(routed!.updatedMessages.find((m) => m.id === 'u3')!.excludeFromModel).toBe(true);
+    expect(routed!.updatedMessages.find((m) => m.id === 'u4')!.excludeFromModel).not.toBe(true);
   });
 });

@@ -110,6 +110,7 @@ import {
   type SubagentCompactionPauseController,
 } from '../../src/main/agents/manager';
 import {
+  applySubagentPendingCompaction,
   buildSubagentPartialReport,
   resolveSubagentContextTokens,
 } from '../../src/main/agents/subagent-compaction';
@@ -119,6 +120,9 @@ import {
   setCompactionPending,
   type CompactionPendingEntry,
 } from '../../src/main/llm/compaction/pending-store';
+import { resolveUserExemptIds, type CutResult } from '../../src/main/llm/compaction/select';
+import type { ApplyResult } from '../../src/main/llm/compaction/apply';
+import type { SelectiveCompactionResult } from '../../src/main/llm/compaction/selective/run';
 import { shouldPauseForCompaction } from '../../src/main/ipc/next-request-stop';
 import {
   SubagentDeltaEventType,
@@ -1298,5 +1302,231 @@ describe('SubagentCompactionController prepare in-flight latch (C9)', () => {
     });
     controller.discard();
     expect(getCompactionPending(LATCH_SESSION, LATCH_SUB)).toBeUndefined();
+  });
+});
+
+// ── Scoped user settle (R31/R33): keep_last_user_messages as a real knob ────
+
+describe('Subagent compaction scoped user settle (keep_last_user_messages)', () => {
+  const SCOPED_SESSION = 'session-scoped-settle';
+  const SCOPED_SUB = 'sub-scoped-settle';
+
+  /** Task head + two answer-exchange turns; compactable range [0,5), preserved [5,6). */
+  function exchangeMessages(): Message[] {
+    return [
+      { id: 'u-task', role: 'user', content: TASK, type: 'text' },
+      { id: 'a-1', role: 'assistant', content: 'working on the task', type: 'text' },
+      { id: 'u-q1', role: 'user', content: 'answer-exchange question 1', type: 'text' },
+      { id: 'a-2', role: 'assistant', content: 'answer 1', type: 'text' },
+      { id: 'u-q2', role: 'user', content: 'answer-exchange question 2', type: 'text' },
+      { id: 'a-3', role: 'assistant', content: 'answer 2', type: 'text' },
+    ] as unknown as Message[];
+  }
+  const EXCHANGE_CUT: CutResult = {
+    cutIndex: 5,
+    compactableRange: { start: 0, end: 5 },
+    preservedCount: 1,
+    openGroupStart: null,
+    preservedRange: { start: 5, end: 6 },
+  };
+
+  function exchangeChain(messages: Message[]): Chain {
+    return {
+      id: 'chain-scoped',
+      sessionId: SCOPED_SESSION,
+      messages,
+      status: ChainStatus.ACTIVE,
+      selection: SELECTION,
+      modelLabel: 'test-model',
+      agentName: 'explorer',
+      agentType: 'subagent',
+      agentTier: 'bloom',
+      subagentRecord: null,
+      startTime: new Date().toISOString(),
+      endTime: null,
+      errorDetail: null,
+      errorTitle: null,
+    } as unknown as Chain;
+  }
+
+  function simplePending(): CompactionPendingEntry {
+    return {
+      cut: EXCHANGE_CUT,
+      flaggedIds: [],
+      expectedIds: ['u-task', 'a-1', 'u-q1', 'a-2', 'u-q2'],
+      estimatedInput: 800,
+      contextTokens: CONTEXT_TOKENS,
+      mode: 'simple',
+      promise: Promise.resolve({ text: `Summary: ${'s'.repeat(300)}`, usage: null }),
+    };
+  }
+
+  function selectivePending(flaggedIds: string[]): CompactionPendingEntry {
+    const summaryMessage = {
+      id: 'summary-part',
+      role: 'assistant',
+      content: 'Summarized exchange.',
+      type: 'text',
+      compacted: { rangeStart: 'u-task', rangeEnd: 'u-q2', mode: 'selective' },
+    } as unknown as Message;
+    const result: SelectiveCompactionResult = {
+      kind: 'selective',
+      replayMessages: [],
+      flaggedIds,
+      summaryMessages: [summaryMessage],
+      summaryMessage,
+      correctedOps: [],
+      attempts: 1,
+    };
+    return {
+      cut: EXCHANGE_CUT,
+      flaggedIds: [],
+      expectedIds: ['u-task', 'a-1', 'u-q1', 'a-2', 'u-q2'],
+      estimatedInput: 800,
+      contextTokens: CONTEXT_TOKENS,
+      mode: 'selective',
+      selectivePromise: Promise.resolve({ kind: 'ran' as const, result }),
+    };
+  }
+
+  it('keep_last=null (default) pins every user message through the simple apply', async () => {
+    const messages = exchangeMessages();
+    const exempt = resolveUserExemptIds(messages, { keepLast: null, pinFirst: true });
+    const apply = await applySubagentPendingCompaction({
+      pending: simplePending(),
+      messages,
+      chains: [exchangeChain(messages)],
+      sessionId: SCOPED_SESSION,
+      exemptIds: exempt,
+    });
+    expect(apply).not.toBeNull();
+    expect(apply!.flaggedIds).toEqual(['a-1', 'a-2']);
+    for (const id of ['u-task', 'u-q1', 'u-q2']) {
+      expect(apply!.updatedMessages.find((m) => m.id === id)!.excludeFromModel).not.toBe(true);
+    }
+  });
+
+  it('keep_last=1 + pin_first=true protects the task head; older answer exchanges are flagged', async () => {
+    const messages = exchangeMessages();
+    const exempt = resolveUserExemptIds(messages, { keepLast: 1, pinFirst: true });
+    expect(exempt.has('u-task')).toBe(true);
+    expect(exempt.has('u-q2')).toBe(true);
+    const apply = await applySubagentPendingCompaction({
+      pending: simplePending(),
+      messages,
+      chains: [exchangeChain(messages)],
+      sessionId: SCOPED_SESSION,
+      exemptIds: exempt,
+    });
+    expect(apply).not.toBeNull();
+    expect([...apply!.flaggedIds].sort()).toEqual(['a-1', 'a-2', 'u-q1']);
+    expect(apply!.updatedMessages.find((m) => m.id === 'u-task')!.excludeFromModel).not.toBe(true);
+    expect(apply!.updatedMessages.find((m) => m.id === 'u-q1')!.excludeFromModel).toBe(true);
+  });
+
+  it('keep_last=1 + pin_first=false can flag the task head and older user messages', async () => {
+    const messages = exchangeMessages();
+    const exempt = resolveUserExemptIds(messages, { keepLast: 1, pinFirst: false });
+    expect(exempt.has('u-q2')).toBe(true);
+    expect(exempt.has('u-task')).toBe(false);
+    const apply = await applySubagentPendingCompaction({
+      pending: simplePending(),
+      messages,
+      chains: [exchangeChain(messages)],
+      sessionId: SCOPED_SESSION,
+      exemptIds: exempt,
+    });
+    expect(apply).not.toBeNull();
+    expect([...apply!.flaggedIds].sort()).toEqual(['a-1', 'a-2', 'u-q1', 'u-task']);
+    expect(apply!.updatedMessages.find((m) => m.id === 'u-task')!.excludeFromModel).toBe(true);
+    expect(apply!.updatedMessages.find((m) => m.id === 'u-q2')!.excludeFromModel).not.toBe(true);
+  });
+
+  it('selective mode respects the scoped exempt set (task head protected, old exchange flagged)', async () => {
+    const messages = exchangeMessages();
+    const exempt = resolveUserExemptIds(messages, { keepLast: 1, pinFirst: true });
+    const apply = await applySubagentPendingCompaction({
+      pending: selectivePending(['u-task', 'u-q1', 'a-1']),
+      messages,
+      chains: [exchangeChain(messages)],
+      sessionId: SCOPED_SESSION,
+      exemptIds: exempt,
+    });
+    expect(apply).not.toBeNull();
+    expect([...apply!.flaggedIds].sort()).toEqual(['a-1', 'u-q1']);
+    expect(apply!.updatedMessages.find((m) => m.id === 'u-task')!.excludeFromModel).not.toBe(true);
+    expect(apply!.updatedMessages.find((m) => m.id === 'u-q1')!.excludeFromModel).toBe(true);
+  });
+
+  it('the controller re-resolves the exempt set from the CURRENT config at apply time', async () => {
+    const messages = exchangeMessages();
+    const chain = exchangeChain(messages);
+    const usage: Usage = {
+      prompt_tokens: 700,
+      completion_tokens: 10,
+      total_tokens: 710,
+      cached_tokens: 0,
+    };
+    const record = {
+      id: SCOPED_SUB,
+      agent: testAgent,
+      state: SubagentState.RUNNING,
+      label: 'scoped settle probe',
+      task: TASK,
+      result: null,
+      error: null,
+      startTime: Date.now(),
+      queuedAt: null,
+      startedAt: Date.now(),
+      endTime: null,
+      chain,
+      usage,
+      selection: SELECTION,
+      parentChainIndex: null,
+      sessionId: SCOPED_SESSION,
+      closed: false,
+    } as unknown as RuntimeSubagentRecord;
+    const makeController = () => new SubagentCompactionController({
+      record,
+      runGeneration: 1,
+      abortSignal: new AbortController().signal,
+      historyBox: { messages: [...messages] },
+      assembler: new SubagentRunAssembler(messages),
+      emitProgress: () => undefined,
+      setChainMessages: () => undefined,
+      applySubagentCompaction: () => undefined,
+      markCompaction: () => undefined,
+      markRecordDirty: () => undefined,
+      emptyChain: () => chain,
+      onPrepareEvaluated: () => undefined,
+    });
+    const raceApply = (controller: SubagentCompactionController): Promise<ApplyResult | null> =>
+      (controller as unknown as {
+        _raceAbortableApply: (
+          this: SubagentCompactionController,
+          pending: CompactionPendingEntry,
+          liveHistory: readonly Message[],
+        ) => Promise<ApplyResult | null>;
+      })._raceAbortableApply.call(controller, simplePending(), messages);
+
+    // Default config (keep_last=null): the controller resolves an all-users
+    // set — the task head survives even with pin_first disabled.
+    mocks.config = compactionConfig({ pin_first_user_message: false });
+    const defaultCfgController = makeController();
+    await (defaultCfgController as unknown as { _ensureInit: () => Promise<boolean> })._ensureInit();
+    const pinned = await raceApply(defaultCfgController);
+    expect(pinned!.flaggedIds).toEqual(['a-1', 'a-2']);
+    expect(pinned!.updatedMessages.find((m) => m.id === 'u-task')!.excludeFromModel).not.toBe(true);
+    defaultCfgController.discard();
+
+    // keep_last=1 + pin_first=false: the apply-time set no longer covers the
+    // task head, so it leaves the model view with the summarized prefix.
+    mocks.config = compactionConfig({ keep_last_user_messages: 1, pin_first_user_message: false });
+    const scopedCfgController = makeController();
+    await (scopedCfgController as unknown as { _ensureInit: () => Promise<boolean> })._ensureInit();
+    const scoped = await raceApply(scopedCfgController);
+    expect(scoped!.flaggedIds).toContain('u-task');
+    expect(scoped!.updatedMessages.find((m) => m.id === 'u-task')!.excludeFromModel).toBe(true);
+    scopedCfgController.discard();
   });
 });

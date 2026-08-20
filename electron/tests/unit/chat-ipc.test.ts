@@ -3317,3 +3317,157 @@ describe('chat compaction send-time calibration', () => {
     expect(mocks.saveSession).not.toHaveBeenCalled();
   });
 });
+
+describe('chat compaction scoped user settle (keep_last_user_messages)', () => {
+  const selection = {
+    connectionId: '11111111-1111-4111-8111-111111111111',
+    modelId: 'vendor/path/model',
+  };
+
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    mocks.handlers.clear();
+    mocks.streamResponses.length = 0;
+    mocks.streamEventSequences.length = 0;
+    mocks.runtimeRegistry._reset();
+    mocks.sessionManager._reset();
+    mocks.runtimeRegistry._set(mocks.workspace._testProjectDir, {
+      config: {
+        default_model: null,
+        tier_models: { bloom: null },
+        command_timeout: 30,
+        llm_stream_idle_timeout: 60,
+        llm_stream_retries: 0,
+        session_title_max_wait_seconds: 0,
+        max_tool_steps: 100,
+        compaction: {
+          main: {
+            mode: 'simple',
+            threshold: 0.5,
+            model: null,
+            agent_name: 'compactor',
+            preserve_percent: 0.25,
+            min_compactable_tokens: 0,
+            mechanical_reclaim: true,
+            hysteresis_delta: 0.1,
+            keep_last_user_messages: 10,
+            pin_first_user_message: false,
+          },
+          subagents: {
+            mode: 'simple',
+            threshold: 0.85,
+            model: null,
+            agent_name: 'compactor-subagent',
+            preserve_percent: 0.25,
+            min_compactable_tokens: 4000,
+            mechanical_reclaim: true,
+            hysteresis_delta: 0.1,
+          },
+        },
+      },
+    });
+    mocks.providerRuntime.resolveExecution.mockImplementationOnce(async () => ({
+      modelInstance: mocks.modelInstance,
+      connection: {},
+      model: {
+        id: 'vendor/path/model',
+        capabilities: { reasoning: false },
+        limits: { contextTokens: 2000 },
+      },
+      snapshot: {
+        providerId: 'openai',
+        providerDisplayName: 'OpenAI',
+        connectionId: selection.connectionId,
+        connectionName: 'Work',
+        modelId: selection.modelId,
+        protocol: 'openai-compatible',
+        modelSource: 'catalog',
+        catalogVersion: 1,
+        catalogSource: 'bundled',
+        catalogObservedAt: null,
+        pricing: null,
+        fieldProvenance: {},
+        statusObservation: null,
+      },
+    }));
+    chatIpc = await import('../../src/main/ipc/chat');
+    chatIpc.registerChatIPC();
+  });
+
+  afterEach(() => {
+    chatIpc.unregisterChatIPC();
+    mocks.handlers.clear();
+    mocks.sessionManager._reset();
+  });
+
+  function textOnlyStream() {
+    return async function* () {
+      yield { type: 'text', data: 'ok' };
+      yield { type: 'finish', finishReason: 'stop' };
+    };
+  }
+
+  it('flags the 11th-oldest user message (keep_last=10): out of the model view, carried only by the summary', async () => {
+    const sessionId = 'e5e5e5e5-e5e5-4e5e-8e5e-e5e5e5e5e5e5';
+    // Ten user/assistant fixture turns; the sent follow-up makes eleven user
+    // messages. keep_last=10 + pin_first=false → only the ten newest users
+    // are exempt, so u-0 can leave the model view for the first time.
+    const fixtureMessages: Array<Record<string, unknown>> = [];
+    for (let i = 0; i < 10; i += 1) {
+      fixtureMessages.push({ id: `u-${i}`, role: 'user', content: 'u'.repeat(200), type: 'text' });
+      fixtureMessages.push({ id: `a-${i}`, role: 'assistant', content: 'a'.repeat(400), type: 'text' });
+    }
+    fixtureMessages.at(-1)!.usage = { prompt_tokens: 3000 };
+    mocks.sessionManager._setActive({
+      ...makeSession(sessionId),
+      model: selection.modelId,
+      selection,
+      modelLabel: selection.modelId,
+      chains: [{ id: 'chain-old', messages: fixtureMessages } as never] as never,
+    });
+    mocks.sessionManager._setModelHistory(fixtureMessages);
+    mocks.summarizeCompactableRange.mockResolvedValueOnce({ text: 'SUMMARY: scoped settle over eleven user turns' });
+    mocks.streamChat.mockImplementationOnce(textOnlyStream());
+
+    const send = vi.fn();
+    const chatSend = mocks.handlers.get(IPC_CHANNELS.CHAT_SEND)!;
+    await chatSend({ sender: { id: 970, send } }, { message: 'Follow up' });
+    await waitForDoneCount(send, 1);
+
+    // The send-time compaction fired and the summarizer covered the oldest
+    // user message — its only surviving representation is the summary head.
+    expect(mocks.summarizeCompactableRange).toHaveBeenCalledTimes(1);
+    const slice = mocks.summarizeCompactableRange.mock.calls[0]![0]!.messages as Array<{ id?: string }>;
+    expect(slice.some((m) => m.id === 'u-0')).toBe(true);
+
+    expect(mocks.streamChat).toHaveBeenCalledTimes(1);
+    const sentMessages = mocks.streamChat.mock.calls[0]![0]!.messages as Array<{
+      id?: string;
+      role?: string;
+      content?: string;
+      excludeFromModel?: boolean;
+      compacted?: unknown;
+    }>;
+    // Single representation: u-0 stays in the transcript but leaves the model
+    // view — no verbatim + summary double representation.
+    expect(sentMessages.find((m) => m.id === 'u-0')!.excludeFromModel).toBe(true);
+    // The ten newest user messages (plus the turn's own) survive verbatim.
+    for (let i = 1; i < 10; i += 1) {
+      expect(sentMessages.find((m) => m.id === `u-${i}`)!.excludeFromModel).not.toBe(true);
+    }
+    expect(sentMessages.some((m) => m.role === MessageRole.USER && m.content === 'Follow up' && !m.excludeFromModel)).toBe(true);
+    expect(sentMessages.some((m) => m.compacted && m.content === 'SUMMARY: scoped settle over eleven user turns')).toBe(true);
+
+    // Durable flags: u-0 and the in-range assistants flagged; exempt users not.
+    expect(mocks.sessionManager.applyCompaction).toHaveBeenCalledTimes(1);
+    const flaggedMessageIds = (mocks.sessionManager.applyCompaction.mock.calls[0]![1] as {
+      flaggedMessageIds: string[];
+    }).flaggedMessageIds;
+    expect(flaggedMessageIds).toContain('u-0');
+    expect(flaggedMessageIds).toContain('a-0');
+    for (let i = 1; i < 10; i += 1) {
+      expect(flaggedMessageIds).not.toContain(`u-${i}`);
+    }
+    expect(mocks.saveSession).not.toHaveBeenCalled();
+  });
+});

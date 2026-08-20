@@ -379,16 +379,16 @@ export function resolvePreservePercent(scope: {
  * R31/R32/R33: compute the set of user-message ids that compaction must keep
  * in the model view. The result threads through `selectCut` as `exemptIds`
  * (selection-side: the compactable range's leading edge skips them and they
- * never consume the preserve budget) and through `buildCompactionApply`
- * (apply-side: universal un-flag settle, which also covers mid-range ids).
+ * never consume the preserve budget) and through `buildCompactionApply` /
+ * `buildSelectiveCompactionApply` / `runCompactionAttempt` as `exemptIds`
+ * (apply-side: the scoped un-flag settle, which also covers mid-range ids).
  *
  * Rules:
- * - `keepLast === null` → ALL user messages are exempt (subagent hard
- *   guarantee, R32).
- * - `keepLast` (number) → the last K user messages are exempt (main scope,
- *   R33).
+ * - `keepLast === null` → ALL user messages are exempt (subagent safe
+ *   default).
+ * - `keepLast` (number) → the last K user messages are exempt.
  * - `pinFirst` → the FIRST user message in history is always exempt
- *   regardless of `keepLast` (R33).
+ *   regardless of `keepLast`.
  *
  * Hidden/excluded user messages are still counted for positional resolution
  * (a hidden user message occupies a slot in the "last K") but their ids are

@@ -7,9 +7,12 @@
  * Replacement via excludeFromModel never deletion (R3).
  * Summary head is its own chain (R20, R23).
  * Crash before apply leaves old history, crash after leaves compacted (R22).
- * User messages are never excluded from the model view in any mode (R31) —
- * the universal settle in buildCompactionApply filters user ids from the
- * flagged set and un-flags any pre-existing user-message flag.
+ * Exempt user messages are never excluded from the model view in any mode
+ * (R31/R33) — the scoped settle in buildCompactionApply filters the resolved
+ * exempt set (exemptIds) from the flagged set and un-flags any pre-existing
+ * flag on an exempt user message. User ids OUTSIDE the set follow normal
+ * compaction semantics (flaggable, summarizable); without exemptIds every
+ * user message is protected (backcompat).
  *
  * Approach:
  * - Pure build: buildCompactionApply() produces flagged replay state + summary head
@@ -47,6 +50,14 @@ export interface ApplyInput {
   readonly reclaimedIds?: readonly string[];
   /** Session id for the new chain; falls back to chains[0].sessionId when omitted. */
   readonly sessionId?: string;
+  /**
+   * Scoped exempt user ids (`resolveUserExemptIds` output): user ids in the
+   * set are never flagged and a pre-existing flag on them is reset by the
+   * settle (defense-in-depth); user ids NOT in the set follow normal
+   * compaction semantics (flaggable, summarizable). Omitted → every user
+   * message is protected (backcompat default).
+   */
+  readonly exemptIds?: ReadonlySet<string> | readonly string[];
 }
 
 export interface ApplyResult {
@@ -204,6 +215,20 @@ export function stampCompactionMetrics(
 
 // ── Pure transform ──────────────────────────────────────────────────────────
 
+/** Settle-scope helper: user messages whose id is in the given exempt set; every user message when no set is provided. */
+function scopedExemptUserIds(
+  messages: readonly Message[],
+  exemptIds?: ReadonlySet<string> | readonly string[],
+): Set<string> {
+  const exempt = exemptIds ? (exemptIds instanceof Set ? exemptIds : new Set(exemptIds)) : null;
+  const scoped = new Set<string>();
+  for (const m of messages) {
+    if (m.role !== MessageRole.USER) continue;
+    if (!exempt || exempt.has(m.id)) scoped.add(m.id);
+  }
+  return scoped;
+}
+
 export function buildCompactionApply(input: ApplyInput): ApplyResult {
   const { messages, chains, cutResult, summaryText, mode } = input;
   const n = messages.length;
@@ -256,18 +281,15 @@ export function buildCompactionApply(input: ApplyInput): ApplyResult {
     // In reclaim-only we do not implicitly flag the whole range — only duplicates.
   }
 
-  // R31 universal settle: user messages are never excluded from the model view
-  // in ANY mode (simple or selective). Filter user ids out of the flagged set
-  // so they survive verbatim in the replay. This generalizes the R9 protection
-  // that previously lived only in the selective path (filterUserFlaggedIds /
-  // unflagUserMessagesInApply); simple mode now gets it too. The
-  // never-flagged-user invariant is owned by the engine, not the call sites.
-  const userIds = new Set<string>();
-  for (const m of messages) {
-    if (m.role === MessageRole.USER) userIds.add(m.id);
-  }
-  if (userIds.size > 0) {
-    finalFlaggedIds = finalFlaggedIds.filter((id) => !userIds.has(id));
+  // Scoped settle: user ids in the resolved exempt set are never excluded
+  // from the model view in ANY mode (simple or selective) — filter them out
+  // of the flagged set so they survive verbatim in the replay. User ids
+  // OUTSIDE the set follow normal compaction semantics (flaggable,
+  // summarizable). Without exemptIds every user message is exempt, preserving
+  // the pre-scoping universal settle (R31 backcompat).
+  const exemptUserIds = scopedExemptUserIds(messages, input.exemptIds);
+  if (exemptUserIds.size > 0) {
+    finalFlaggedIds = finalFlaggedIds.filter((id) => !exemptUserIds.has(id));
   }
 
   // If nothing to do, return passthrough (no summary, no flags)
@@ -289,10 +311,10 @@ export function buildCompactionApply(input: ApplyInput): ApplyResult {
   const flaggedSet = new Set(finalFlaggedIds);
   const flaggedMessages: Message[] = messages.map((m) => {
     if (flaggedSet.has(m.id)) return { ...m, excludeFromModel: true };
-    // R31 universal settle: un-flag any pre-existing user-message flag so user
-    // messages never leave the model view, even when a prior (now superseded)
-    // selective run flagged them.
-    if (userIds.size > 0 && userIds.has(m.id) && m.excludeFromModel) {
+    // Scoped settle: un-flag any pre-existing flag on an exempt user message
+    // so it never leaves the model view, even when a prior (now superseded)
+    // selective run flagged it.
+    if (exemptUserIds.size > 0 && exemptUserIds.has(m.id) && m.excludeFromModel) {
       return { ...m, excludeFromModel: false };
     }
     return m;
@@ -500,6 +522,12 @@ export interface SelectiveCompactionApplyInput {
   readonly reclaimedIds?: readonly string[];
   /** Session id for the summary-head chain; falls back to chains[0].sessionId when omitted. */
   readonly sessionId?: string;
+  /**
+   * Scoped exempt user ids (`resolveUserExemptIds` output): never flagged and
+   * un-flagged by the settle; user ids outside the set are flaggable.
+   * Omitted → every user message is protected (backcompat default).
+   */
+  readonly exemptIds?: ReadonlySet<string> | readonly string[];
 }
 
 /**
@@ -518,8 +546,10 @@ export interface SelectiveCompactionApplyInput {
  *
  * Canonical settle rules (the stricter subagent semantics, shared by both
  * scopes):
- *  - user messages are never flagged and pre-existing user flags are reset
- *    (R9/R31 — owned by buildCompactionApply's universal settle);
+ *  - EXEMPT user messages (the resolved exempt set, `exemptIds`) are never
+ *    flagged and pre-existing flags on them are reset (R9/R31/R33 — owned by
+ *    buildCompactionApply's scoped settle); user ids outside the set are
+ *    flaggable like any other covered id;
  *  - pre-existing flags from EARLIER compactions survive inside the covered
  *    range — those messages are already out of the model view and un-flagging
  *    them would resurrect summarized content;
@@ -538,9 +568,9 @@ export function buildSelectiveCompactionApply(
 ): ApplyResult | null {
   const { messages, chains, cutResult } = input;
 
-  const userIds = new Set(messages.filter((m) => m.role === MessageRole.USER).map((m) => m.id));
+  const exemptUserIds = scopedExemptUserIds(messages, input.exemptIds);
   const mergedFlagged = [...new Set([...input.flaggedIds, ...(input.reclaimedIds ?? [])])]
-    .filter((id) => !userIds.has(id));
+    .filter((id) => !exemptUserIds.has(id));
 
   const summaryText = typeof input.summaryText === 'string' ? input.summaryText.trim() : '';
   if (mergedFlagged.length === 0 && summaryText.length === 0) return null;
@@ -555,6 +585,7 @@ export function buildSelectiveCompactionApply(
       mode: 'selective',
       reclaimedIds: mergedFlagged,
       sessionId: input.sessionId,
+      ...(input.exemptIds ? { exemptIds: input.exemptIds } : {}),
     });
   } catch {
     // e.g. range already flagged by an earlier compaction — mirror the simple
@@ -564,8 +595,8 @@ export function buildSelectiveCompactionApply(
   if (!applyResult.didApply) return null;
 
   // Settle flags: reset excludeFromModel on covered ids that selective kept
-  // verbatim (and on user messages) so the model view matches the selective
-  // decision while the transcript keeps every original.
+  // verbatim (and on exempt user messages) so the model view matches the
+  // selective decision while the transcript keeps every original.
   const n = messages.length;
   const start = Math.max(0, Math.min(cutResult.compactableRange.start, n));
   const end = Math.max(start, Math.min(cutResult.compactableRange.end, n));
@@ -581,7 +612,7 @@ export function buildSelectiveCompactionApply(
   }
   const flaggedSet = new Set(mergedFlagged);
   const settle = (m: Message): Message => {
-    if (userIds.has(m.id)) return m.excludeFromModel ? { ...m, excludeFromModel: false } : m;
+    if (exemptUserIds.has(m.id)) return m.excludeFromModel ? { ...m, excludeFromModel: false } : m;
     if (flaggedSet.has(m.id)) return m.excludeFromModel ? m : { ...m, excludeFromModel: true };
     // Pre-existing exclusions from EARLIER compactions survive: the message is
     // already out of the model view, and un-flagging it here would resurrect

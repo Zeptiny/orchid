@@ -29,7 +29,7 @@ import { buildCompactionApply, buildSelectiveCompactionApply, type ApplyResult }
 import type { TriggerState } from '../llm/compaction/trigger';
 import type { CompactionPendingEntry } from '../llm/compaction/pending-store';
 import { runCompactionGate } from '../llm/compaction/pipeline';
-import type { CutResult } from '../llm/compaction/select';
+import { resolveUserExemptIds, type CutResult } from '../llm/compaction/select';
 import type { SelectiveCompactionResult } from '../llm/compaction/selective/run';
 import { getProviderRuntime } from '../providers';
 
@@ -221,6 +221,15 @@ export async function prepareSubagentCompaction(params: {
   if (!Number.isFinite(contextTokens) || contextTokens <= 0) return null;
   if (!Number.isFinite(inputTokens) || inputTokens < 0) return null;
 
+  // Scoped exempt set: resolved ONCE per attempt from the current scope
+  // config and threaded into the gate's selectCut and the selective runner,
+  // so the cut math and every settle agree on which user messages are pinned
+  // (keep_last_user_messages=null pins ALL — the subagent safe default).
+  const exemptIds = resolveUserExemptIds(messages as Message[], {
+    keepLast: subagentsScope.keep_last_user_messages ?? null,
+    pinFirst: subagentsScope.pin_first_user_message ?? true,
+  });
+
   // Lazy import: keeps this module's load graph free of the accounting store
   // chain (config/loader conflicts with test mocks) — see the AGENTS.md
   // dynamic-import rule for anything touching config/accounting from agents/.
@@ -238,6 +247,7 @@ export async function prepareSubagentCompaction(params: {
       inputTokens,
       contextTokens,
       tokensPerChar: null,
+      exemptIds,
       ...(params.triggerState ? { triggerState: params.triggerState } : {}),
     });
   } catch {
@@ -297,6 +307,7 @@ export async function prepareSubagentCompaction(params: {
         cut,
         scope: 'subagents',
         config,
+        exemptIds,
         deps: {
           fallbackSelection: selection,
           subagentId,
@@ -362,8 +373,11 @@ export async function prepareSubagentCompaction(params: {
  * preserved — the subagent twin of main's `reanchorSelectiveReplay` contract.
  * Selective success routes through the shared never-delete builder
  * `buildSelectiveCompactionApply` (R3/R35: originals never deleted); the
- * fallback and simple paths route through `buildCompactionApply`, whose
- * universal settle already owns the R31 never-flag-user invariant.
+ * fallback and simple paths route through `buildCompactionApply`. Every
+ * builder receives the caller's `exemptIds` (apply-time exempt user ids
+ * resolved from the CURRENT scope config — config may change between prepare
+ * and apply), whose scoped settle owns the R31/R33 exempt-user protection;
+ * omitted → every user message is protected (backcompat default).
  *
  * Returns the apply result, or null when the compactor produced nothing
  * usable (failed, empty text, or an apply-time precondition failure) — the
@@ -374,6 +388,12 @@ export async function applySubagentPendingCompaction(params: {
   readonly messages: readonly Message[];
   readonly chains: readonly Chain[];
   readonly sessionId: string;
+  /**
+   * Apply-time exempt user ids, resolved by the caller from the CURRENT
+   * scope config over the live history. Omitted → every user message is
+   * protected (backcompat default).
+   */
+  readonly exemptIds?: ReadonlySet<string> | readonly string[];
 }): Promise<ApplyResult | null> {
   const { pending, messages, chains, sessionId } = params;
   try {
@@ -395,6 +415,7 @@ export async function applySubagentPendingCompaction(params: {
           flaggedIds: outcome.result.flaggedIds,
           summaryText: composeSelectiveSummaryText(outcome.result),
           reclaimedIds: pending.flaggedIds,
+          ...(params.exemptIds ? { exemptIds: params.exemptIds } : {}),
           sessionId,
         });
       }
@@ -408,10 +429,11 @@ export async function applySubagentPendingCompaction(params: {
           summaryText: fallbackText,
           mode: 'simple' as import('../../shared/types/message').CompactionMode,
           reclaimedIds: pending.flaggedIds,
+          ...(params.exemptIds ? { exemptIds: params.exemptIds } : {}),
           sessionId,
         });
-        // R31: user messages are never excluded from the model view — the
-        // universal settle inside buildCompactionApply owns the invariant in
+        // R31: exempt user messages are never excluded from the model view —
+        // the scoped settle inside buildCompactionApply owns the invariant in
         // every mode (U1), so no scope-specific un-flag pass is needed here.
         return applyResult.didApply ? applyResult : null;
       }
@@ -429,6 +451,7 @@ export async function applySubagentPendingCompaction(params: {
         summaryText: result.text,
         mode: pending.mode as import('../../shared/types/message').CompactionMode,
         reclaimedIds: pending.flaggedIds,
+        ...(params.exemptIds ? { exemptIds: params.exemptIds } : {}),
         sessionId,
       });
       return applyResult.didApply ? applyResult : null;
@@ -442,6 +465,7 @@ export async function applySubagentPendingCompaction(params: {
       summaryText: null,
       mode: pending.mode as import('../../shared/types/message').CompactionMode,
       reclaimedIds: pending.flaggedIds,
+      ...(params.exemptIds ? { exemptIds: params.exemptIds } : {}),
       sessionId,
     });
     return applyResult.didApply ? applyResult : null;
