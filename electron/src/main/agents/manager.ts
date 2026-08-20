@@ -24,6 +24,7 @@ import type { StreamEvent } from '../llm/orchestrator';
 import type { ProjectRuntime } from '../project/runtime';
 import type { SubagentRecord as DomainSubagentRecord } from '../../shared/types/subagent';
 import { getConfig } from '../config/loader';
+import type { SubagentCompactionPayload, SubagentCompactionResult } from '../session/storage';
 import { clearCompactionPendingsForSession } from '../llm/compaction/pending-store';
 import { clearCompactionPausesForSession } from '../ipc/next-request-stop';
 import {
@@ -251,20 +252,40 @@ function getTerminalRetention(): number {
  * Lazily requires the session singleton so the agents module does not pull
  * the session module graph (which imports `config/loader`) at load time,
  * mirroring the dynamic-import pattern documented for accounting stores.
- * Returns null when the session manager lacks the method (e.g. test mocks)
- * so the in-memory compaction path still proceeds without a DB write.
+ * Only ENVIRONMENT unavailability (the require fails, no session manager, or
+ * the method is missing — e.g. test mocks) is swallowed as a null return
+ * with a debug log; genuine write failures propagate to the controller,
+ * which treats the apply as failed (integrity throws are the write's
+ * loud-corruption contract and must never be silenced here).
  */
 function createSubagentCompactionSink(): SubagentCompactionSink | null {
-  return (sessionId, subagentId, payload) => {
+  /** Resolve the session manager's targeted-write method; null = environment-unavailable. */
+  const resolveApply = (): ((
+    sessionId: string,
+    subagentId: string,
+    payload: SubagentCompactionPayload,
+  ) => SubagentCompactionResult) | null => {
     try {
       // eslint-disable-next-line @typescript-eslint/no-require-imports
       const mod = require('../session/singleton');
       const manager = mod.getSessionManager();
-      if (typeof manager.applySubagentCompaction !== 'function') return null;
-      return manager.applySubagentCompaction(sessionId, subagentId, payload);
-    } catch {
+      if (typeof manager.applySubagentCompaction !== 'function') {
+        console.debug('[subagent-compaction] compaction sink unavailable: session manager lacks applySubagentCompaction');
+        return null;
+      }
+      return manager.applySubagentCompaction.bind(manager);
+    } catch (e) {
+      console.debug('[subagent-compaction] compaction sink unavailable (non-fatal):', e);
       return null;
     }
+  };
+  return (sessionId, subagentId, payload) => {
+    const apply = resolveApply();
+    if (!apply) return null;
+    // The durable write itself is OUTSIDE the availability guard: its
+    // integrity failures (unknown flagged id / unknown anchor / missing row)
+    // propagate so the controller can fail the apply cleanly.
+    return apply(sessionId, subagentId, payload);
   };
 }
 

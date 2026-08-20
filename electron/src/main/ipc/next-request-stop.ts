@@ -105,19 +105,3 @@ export function shouldStopEarlyForSession(sessionId: string): boolean {
     shouldPauseForCompaction(sessionId, MAIN_AGENT_SCOPE_ID)
   );
 }
-
-/**
- * Whether an agent scope's stream should stop early at the next step
- * boundary. Next-request stops belong to the main chain only; subagent scopes
- * pause exclusively for their own compaction. This is the scope-general form
- * of {@link shouldStopEarlyForSession} that the subagent runner binds into
- * `stopWhen`.
- */
-export function shouldStopEarlyForScope(
-  sessionId: string,
-  agentScopeId: AgentScopeId | null,
-): boolean {
-  const scope = normalizeAgentScopeId(agentScopeId);
-  if (scope === MAIN_AGENT_SCOPE_ID) return shouldStopEarlyForSession(sessionId);
-  return shouldPauseForCompaction(sessionId, scope);
-}

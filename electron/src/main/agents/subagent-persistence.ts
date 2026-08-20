@@ -124,10 +124,15 @@ export class SubagentPersistence {
    * `subagent_chains` transaction against the session DB) and then marks the
    * compaction revision so crash recovery distinguishes a compacted chain
    * from a summarized/evicted one. Returns null when no sink is configured
-   * (unit tests without DB access) or the record is unknown — callers should
-   * still update the in-memory record regardless. The compaction revision is
-   * marked even without a sink so the in-memory bookkeeping stays consistent
-   * (the checkpoint path will persist the record on the next flush).
+   * (unit tests without DB access), the record is unknown, or the sink
+   * reports an environment-unavailable session manager — no durable write
+   * happened in any of those cases, so callers should still update the
+   * in-memory record and the compaction revision is marked to keep the
+   * bookkeeping consistent (the checkpoint path will persist the record on
+   * the next flush). When the sink THROWS (a genuine write failure — the
+   * storage layer's integrity errors abort the transaction), the error
+   * propagates and markCompaction is skipped by construction: a failed write
+   * must never be labeled a compaction checkpoint.
    */
   applySubagentCompaction(
     id: string,
@@ -138,6 +143,8 @@ export class SubagentPersistence {
     if (!state) return null;
     let result: SubagentCompactionResult | null = null;
     if (this.compactionSink) {
+      // Deliberately unguarded: a throw skips the markCompaction below (the
+      // caller treats the compaction as failed).
       result = this.compactionSink(sessionId, id, payload);
     }
     this.markCompaction(id);

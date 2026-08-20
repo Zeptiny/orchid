@@ -300,6 +300,36 @@ describe('provider configuration boundary (U1)', () => {
 
 });
 
+describe('config:save compaction patch boundary', () => {
+  it('accepts the parent-level max_concurrent_compactors knob and persists it', async () => {
+    // The Compaction settings panel always sends the parent-level cap next to
+    // the scope objects; the partial schema must accept both in one patch.
+    await expect(callSave({
+      compaction: {
+        main: { threshold: 0.9 },
+        max_concurrent_compactors: 4,
+      },
+    })).resolves.toEqual({ status: 'saved' });
+
+    const finalWrite = mocks.writtenConfigs[mocks.writtenConfigs.length - 1] as {
+      compaction: Record<string, unknown>;
+    };
+    expect(finalWrite.compaction).toMatchObject({
+      max_concurrent_compactors: 4,
+      main: expect.objectContaining({ threshold: 0.9 }),
+    });
+  });
+
+  it('rejects a max_concurrent_compactors outside the config schema range without writing', async () => {
+    await expect(callSave({
+      compaction: { max_concurrent_compactors: 9 },
+    })).rejects.toThrow(/Invalid config:save payload/);
+
+    expect(mocks.writtenConfigs).toHaveLength(0);
+    expect(mocks.getConfigCalls).toBe(0);
+  });
+});
+
 describe('config:read_project', () => {
   it('returns empty overrides when the project config file is missing', async () => {
     await expect(callReadProject(projectDir)).resolves.toEqual({

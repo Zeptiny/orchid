@@ -320,6 +320,21 @@ export function createSubagentStreamRunner(): SubagentStreamRunner {
       let overflowRetryTried = false;
       while (!params.abortSignal.aborted) {
         let restartForOverflowRetry = false;
+        // Natural-finish guard inputs (C7): the wrapped early-stop predicate
+        // records that the pause was armed during THIS segment, and the
+        // segment's finish reason tells whether the multi-step loop ended at
+        // a tool boundary (the SDK reports the stopping step's own reason —
+        // 'tool-calls' means a boundary stop: our early-stop predicate or the
+        // step limit) or the model ended its response naturally.
+        let segmentPauseRequested = false;
+        let segmentFinishedNaturally = false;
+        const shouldStopEarly = pause
+          ? (): boolean => {
+            const pauseNow = pause.shouldPause();
+            if (pauseNow) segmentPauseRequested = true;
+            return pauseNow;
+          }
+          : undefined;
         for await (const event of streamChat({
           messages: [...historyBox.messages],
           agent: agentForRun,
@@ -335,7 +350,7 @@ export function createSubagentStreamRunner(): SubagentStreamRunner {
           abortSignal: params.abortSignal,
           // Scoped compaction pause (R28): the multi-step loop stops cleanly
           // at the next step boundary while the pause is armed.
-          ...(pause ? { shouldStopEarly: () => pause.shouldPause() } : {}),
+          ...(shouldStopEarly ? { shouldStopEarly } : {}),
           modelInstance,
           accounting,
           providerOptions,
@@ -371,10 +386,19 @@ export function createSubagentStreamRunner(): SubagentStreamRunner {
             }
             if (outcome === 'degraded') return;
           }
+          if (event.type === 'finish') {
+            segmentFinishedNaturally = event.finishReason !== 'tool-calls';
+          }
           yield event;
         }
         if (restartForOverflowRetry) continue;
         if (!pause || params.abortSignal.aborted || !pause.shouldPause()) break;
+        // Natural-finish guard (main's `context.currentInput && !completed`
+        // twin): a stream that ended on its own — the pause armed late in the
+        // final step, or only after the segment already finished — must not
+        // consume a compaction boundary that never happened. Break instead of
+        // restarting; the pending dies with discard() at run end.
+        if (!segmentPauseRequested || segmentFinishedNaturally) break;
         // The stream stopped at a step boundary with the pause armed — consume
         // it (re-validate + apply + swap the box) and restart with whatever
         // history the controller left in the box. 'applied' and 'skipped' both
@@ -382,7 +406,9 @@ export function createSubagentStreamRunner(): SubagentStreamRunner {
         // history when the summary cannot be applied); 'degraded' (partial
         // report set) and 'aborted' end the run without another segment.
         // The await races the abort signal so an interrupt during the pause
-        // (or a summarizer wait) breaks out of the restart loop cleanly.
+        // (or a summarizer wait) breaks out of the restart loop cleanly. A
+        // REJECTED apply is logged and treated as 'skipped' — restarting the
+        // segment with the existing history — never a silent run end.
         const outcome = await new Promise<SubagentPauseApplyOutcome | null>((resolve) => {
           if (params.abortSignal.aborted) {
             resolve(null);
@@ -397,7 +423,10 @@ export function createSubagentStreamRunner(): SubagentStreamRunner {
           };
           const onAbort = (): void => settle(null);
           params.abortSignal.addEventListener('abort', onAbort, { once: true });
-          pause.applyAtPause().then(settle, () => settle(null));
+          pause.applyAtPause().then(settle, (error) => {
+            console.debug('[subagent-compaction] pause apply failed (non-fatal):', error);
+            settle('skipped');
+          });
         });
         if (params.abortSignal.aborted || outcome == null || outcome === 'aborted' || outcome === 'degraded') {
           return;

@@ -100,7 +100,15 @@ electron/
 │   │   │   ├── terminal-result.ts # Canonical error/cancelled tool results without a handler
 │   │   │   ├── compaction/      # Session/subagent compaction engine (shared by both scopes)
 │   │   │   │   ├── pipeline.ts  # Scope-parameterized gate pipeline + compactor semaphore
-│   │   │   │   └── pending-store.ts # Scope-keyed pending compactions + re-validation
+│   │   │   │   ├── pending-store.ts # Scope-keyed pending compactions + re-validation
+│   │   │   │   ├── apply.ts     # buildCompactionApply/buildSelectiveCompactionApply (never-delete settle)
+│   │   │   │   ├── message-chars.ts # Char estimation shared by gates/estimates
+│   │   │   │   ├── reclaim.ts   # Mechanical reclaim estimates + re-arm line
+│   │   │   │   ├── run-attempt.ts # Selective run orchestration (shared by both scopes)
+│   │   │   │   ├── select.ts    # Cut selection (compactable range, preserved window)
+│   │   │   │   ├── summarize.ts # Simple-mode summarizer LLM call
+│   │   │   │   ├── trigger.ts   # Threshold/hysteresis/floor + prepare/apply trigger engine
+│   │   │   │   └── selective/   # Selective mode (manifest, run loop, validation)
 │   │   │   └── middleware/      # AI SDK middleware stack
 │   │   │       ├── index.ts     # createMiddlewareStack() — retry (+accounting) + throttle
 │   │   │       ├── retry.ts     # Exponential backoff retry
@@ -352,6 +360,7 @@ electron/
 │       │   ├── provider.ts      # ModelSelection + provider connection types
 │       │   ├── accounting.ts    # Attempt ledger types
 │       │   ├── analytics.ts     # Analytics read-model types
+│       │   ├── compaction-progress.ts # Compaction widget progress event types
 │       │   └── definitions.ts   # Definition (agent/skill/personality) types
 │       ├── chat/
 │       │   └── turn-projection.ts # Pure reducer: IPC turn events → renderer projection

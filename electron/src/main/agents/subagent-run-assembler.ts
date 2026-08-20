@@ -194,9 +194,13 @@ export class SubagentRunAssembler {
    * transcript so far. The pause boundary (compaction apply) needs the
    * accumulated history INCLUDING the current step's trailing text, which the
    * regular commit path only flushes on the next tool call or finalization.
+   * Like complete()/interrupt()/fail(), the boundary commit stamps the
+   * accumulated usage onto the trailing text message — a pause boundary that
+   * dropped the usage stamp would lose it permanently (the next segment's
+   * commit sees a fresh commit cursor).
    */
   snapshotTranscript(): Message[] {
-    this.commitThrough(this.segments.length);
+    this.commitThrough(this.segments.length, this.accumulatedUsage);
     return [...this.messages];
   }
 

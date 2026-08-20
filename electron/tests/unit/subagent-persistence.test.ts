@@ -9,7 +9,7 @@ import { ChainStatus } from '../../src/shared/types/chain';
 import type { SubagentRecord } from '../../src/shared/types/subagent';
 import { SubagentStatus } from '../../src/shared/types/subagent';
 import { SubagentPersistence } from '../../src/main/agents/subagent-persistence';
-import type { StorageOptions } from '../../src/main/session/storage';
+import type { StorageOptions, SubagentCompactionPayload, SubagentCompactionResult } from '../../src/main/session/storage';
 import {
   saveSession,
   upsertSubagentRecords,
@@ -18,12 +18,30 @@ import {
   _clearDbCache,
 } from '../../src/main/session/storage';
 import { openSqliteDb } from '../../src/main/utils/sqlite';
+import { SubagentCompactionController } from '../../src/main/agents/subagent-compaction-controller';
+import { SubagentRunAssembler } from '../../src/main/agents/subagent-run-assembler';
+import type { SubagentRecord as RuntimeSubagentRecord } from '../../src/main/agents/manager';
+import {
+  getCompactionPending,
+  setCompactionPending,
+} from '../../src/main/llm/compaction/pending-store';
+import { shouldPauseForCompaction } from '../../src/main/ipc/next-request-stop';
+import type { CompactionTrigger } from '../../src/main/llm/compaction/trigger';
 
 vi.mock('electron', () => ({
   webContents: {
     getAllWebContents: () => [],
     fromId: () => null,
   },
+}));
+
+// The compaction controller resolves the subagent's context window through the
+// provider runtime (R16); the integration tests below stub it with a generous
+// window so the pause-boundary apply can run without a catalog.
+vi.mock('../../src/main/providers', () => ({
+  getProviderRuntime: () => ({
+    resolveExecution: async () => ({ model: { limits: { contextTokens: 100_000 } } }),
+  }),
 }));
 
 const T0 = '2026-01-01T00:00:00.000Z';
@@ -600,5 +618,230 @@ describe('applySubagentCompactionPersistence crash-atomicity (R36)', () => {
     expect(chain.slice(0, 30).every((m) => m.excludeFromModel)).toBe(true);
     expect(chain.slice(31, 61).every((m) => m.excludeFromModel)).toBe(true);
     expect(chain.slice(62).every((m) => !m.excludeFromModel)).toBe(true);
+  });
+});
+
+// ===========================================================================
+// Durable-write integration (R36/A): controller → SubagentPersistence → storage
+// ===========================================================================
+//
+// Wires the real sink path end-to-end: the per-run compaction controller's
+// pause-boundary apply persists through SubagentPersistence into the targeted
+// `subagent_chains` transaction (temp DB), with the durable row deliberately
+// lagging the live transcript by one message — the debounced-checkpoint window
+// in which flagged ids / the summary anchor are computed over the LIVE view.
+
+describe('SubagentCompactionController durable-write integration (R36)', () => {
+  const SESSION_ID = 'cafe3001-3001-4301-8301-000000000001';
+  const SUB_ID = 'sub-controller-1';
+  const CONTEXT_TOKENS = 100_000;
+
+  function bulkyDurableMessages(): Message[] {
+    return [
+      makeMessage('m-0000', { role: MessageRole.USER, content: 'Map the authentication flow.' }),
+      ...Array.from({ length: 18 }, (_, i) => makeMessage(`m-${String(i + 1).padStart(4, '0')}`, {
+        role: MessageRole.ASSISTANT,
+        content: 'y'.repeat(300),
+      })),
+    ];
+  }
+
+  function seedSessionWithDurableRow(durable: Message[]): void {
+    saveSession({
+      id: SESSION_ID,
+      name: 'Controller Integration Session',
+      selection: null,
+      modelLabel: null,
+      cwd: null,
+      chains: [],
+      activeChainId: null,
+      createdAt: T0,
+      updatedAt: T0,
+      subagentChains: [],
+      todoStore: { tasks: [] },
+      reasoningEffortOverride: null,
+      tierOverride: null,
+      permissionMode: null,
+    }, storageOpts);
+    upsertSubagentRecords(
+      SESSION_ID,
+      [makeSubagentRecord(SESSION_ID, SUB_ID, durable)],
+      T0,
+      storageOpts,
+    );
+  }
+
+  interface ControllerHarness {
+    readonly controller: SubagentCompactionController;
+    readonly record: RuntimeSubagentRecord;
+    readonly historyBox: { messages: Message[] };
+    readonly assembler: SubagentRunAssembler;
+    readonly persistence: SubagentPersistence;
+    readonly progress: Array<{ phase: string; detail?: string }>;
+    readonly dirtyCount: () => number;
+  }
+
+  /**
+   * Build the controller over a live transcript that is one message ahead of
+   * the durable row (the checkpoint-lag window), wired to a persistence whose
+   * sink is the supplied writer (the real storage transaction, or a failing
+   * one for the failure-injection variant).
+   */
+  function harness(
+    durable: Message[],
+    live: Message[],
+    sink: (sessionId: string, subagentId: string, payload: SubagentCompactionPayload) => SubagentCompactionResult,
+  ): ControllerHarness {
+    const persistence = new SubagentPersistence(() => 5, sink);
+    const record = {
+      id: SUB_ID,
+      agent: {
+        name: 'explorer', type: 'subagent', tier: 'bloom', description: '',
+        system_prompt: '', allowed_tools: [], allowed_skills: [],
+      },
+      state: 'running',
+      label: 'compaction probe',
+      task: 'Map the authentication flow.',
+      result: null,
+      error: null,
+      startTime: Date.now(),
+      queuedAt: null,
+      startedAt: Date.now(),
+      endTime: null,
+      chain: makeChain(SESSION_ID, `chain-${SUB_ID}`, live),
+      usage: { prompt_tokens: 10_000, completion_tokens: 100, total_tokens: 10_100, cached_tokens: 0 },
+      selection: { connectionId: '5cd0d624-57cd-4bdb-8d75-932be0b60c36', modelId: 'test-model' },
+      parentChainIndex: null,
+      sessionId: SESSION_ID,
+      closed: false,
+    } as unknown as RuntimeSubagentRecord;
+    const assembler = new SubagentRunAssembler(live);
+    const historyBox = { messages: [...live] };
+    const progress: Array<{ phase: string; detail?: string }> = [];
+    let dirty = 0;
+    const controller = new SubagentCompactionController({
+      record,
+      runGeneration: 1,
+      abortSignal: new AbortController().signal,
+      historyBox,
+      assembler,
+      emitProgress: (p) => {
+        progress.push({ phase: p.phase, ...(p.detail !== undefined ? { detail: p.detail } : {}) });
+      },
+      setChainMessages: (messages) => {
+        record.chain = { ...record.chain!, messages: [...messages] };
+      },
+      applySubagentCompaction: (sessionId, payload) => {
+        persistence.applySubagentCompaction(SUB_ID, sessionId, payload);
+      },
+      markCompaction: () => { persistence.markCompaction(SUB_ID, null); },
+      markRecordDirty: () => { dirty += 1; },
+      emptyChain: () => makeChain(SESSION_ID, `chain-${SUB_ID}`, []),
+      onPrepareEvaluated: () => undefined,
+    });
+    persistence.register(SUB_ID, SESSION_ID, { admitted: true });
+    return { controller, record, historyBox, assembler, persistence, progress, dirtyCount: () => dirty };
+  }
+
+  /** The REAL sink: the targeted transaction against the temp session DB. */
+  function storageSink(
+    sessionId: string,
+    subagentId: string,
+    payload: SubagentCompactionPayload,
+  ): SubagentCompactionResult {
+    return applySubagentCompactionPersistence(sessionId, subagentId, payload, storageOpts);
+  }
+
+  /** Register the pending + trigger pendingPrepare the real prepare path arms. */
+  async function armPending(h: ControllerHarness): Promise<void> {
+    // Initialize the controller (context-window lookup via the mocked runtime).
+    await (h.controller as unknown as { _ensureInit: () => Promise<boolean> })._ensureInit();
+    const trigger = (h.controller as unknown as { _trigger: CompactionTrigger })._trigger;
+    const cut = {
+      cutIndex: 19,
+      compactableRange: { start: 1, end: 19 },
+      preservedCount: 1,
+      openGroupStart: null,
+      preservedRange: { start: 19, end: 20 },
+    };
+    trigger.markPrepareStarted(cut.compactableRange, idRange('m', 18, 1));
+    setCompactionPending(SESSION_ID, SUB_ID, {
+      cut,
+      flaggedIds: idRange('m', 18, 1),
+      expectedIds: idRange('m', 18, 1),
+      estimatedInput: 10_000,
+      contextTokens: CONTEXT_TOKENS,
+      mode: 'simple' as const,
+      promise: Promise.resolve({ text: 'SUMMARY: durable compaction integration', usage: null }),
+    });
+  }
+
+  it('applies at the pause boundary with the durable row lagging the live history (reconciled write + memory swap)', async () => {
+    const durable = bulkyDurableMessages();
+    // One live-only trailing message: the checkpoint flush has not written it
+    // yet, and the summary anchor IS this message (computed over the live view).
+    const live = [...durable, makeMessage('m-0019', { role: MessageRole.ASSISTANT, content: 'tail output' })];
+    seedSessionWithDurableRow(durable);
+    const h = harness(durable, live, storageSink);
+    await armPending(h);
+
+    const outcome = await h.controller.pauseController.applyAtPause();
+
+    expect(outcome).toBe('applied');
+    // Durable row: lag reconciled (m-0019 appended), prefix flagged, exactly
+    // one summary head inserted BEFORE the live-only anchor, task head intact.
+    const chain = loadSubagentRecord(SESSION_ID, SUB_ID, storageOpts)!.chain.messages;
+    expect(chain).toHaveLength(21);
+    expect(chain[0]!.id).toBe('m-0000');
+    expect(chain[0]!.excludeFromModel).not.toBe(true);
+    expect(chain.slice(1, 19).every((m) => m.excludeFromModel === true)).toBe(true);
+    expect(chain[19]!.compacted).toMatchObject({ mode: 'simple', summarizedCount: 18 });
+    expect(chain[20]!.id).toBe('m-0019');
+    expect(chain[20]!.excludeFromModel).not.toBe(true);
+
+    // Memory follows the durable write (DB-first-then-memory): record chain,
+    // assembler base, and the history box all carry the compacted view.
+    expect(h.record.chain!.messages).toHaveLength(21);
+    expect(h.record.chain!.messages.some((m) => m.compacted)).toBe(true);
+    expect(h.historyBox.messages).toHaveLength(21);
+    expect(h.assembler.snapshotTranscript()).toHaveLength(21);
+    expect(h.persistence.getLastCompactionRevision(SUB_ID)).not.toBeNull();
+    expect(h.dirtyCount()).toBeGreaterThan(0);
+
+    // The pending was consumed and the scoped pause cleared — the run continues.
+    expect(getCompactionPending(SESSION_ID, SUB_ID)).toBeUndefined();
+    expect(shouldPauseForCompaction(SESSION_ID, SUB_ID)).toBe(false);
+    expect(h.progress.at(-1)).toEqual({ phase: 'complete', detail: 'Context compacted — resuming' });
+  });
+
+  it('treats the apply as failed when the durable write throws: no memory swap, pending cleared, run continues (skipped)', async () => {
+    const durable = bulkyDurableMessages();
+    const live = [...durable, makeMessage('m-0019', { role: MessageRole.ASSISTANT, content: 'tail output' })];
+    seedSessionWithDurableRow(durable);
+    const h = harness(durable, live, () => {
+      throw new Error('injected durable write failure');
+    });
+    await armPending(h);
+
+    const outcome = await h.controller.pauseController.applyAtPause();
+
+    // The failed apply maps onto the skip arm: the run continues with the
+    // accumulated (un-compacted) history instead of ending silently.
+    expect(outcome).toBe('skipped');
+    // No memory swap: the record chain, assembler, and box stay un-compacted
+    // (the box carries the accumulated live history for the restart).
+    expect(h.record.chain!.messages).toHaveLength(20);
+    expect(h.record.chain!.messages.some((m) => m.compacted)).toBe(false);
+    expect(h.record.chain!.messages.some((m) => m.excludeFromModel)).toBe(false);
+    expect(h.historyBox.messages.map((m) => m.id)).toEqual(live.map((m) => m.id));
+    expect(h.assembler.snapshotTranscript()).toHaveLength(20);
+    // markCompaction skipped when the sink fails — the compaction never landed.
+    expect(h.persistence.getLastCompactionRevision(SUB_ID)).toBeNull();
+    expect(h.dirtyCount()).toBe(0);
+    // Pending consumed (taken at the boundary) and pause cleared — no stuck trigger.
+    expect(getCompactionPending(SESSION_ID, SUB_ID)).toBeUndefined();
+    expect(shouldPauseForCompaction(SESSION_ID, SUB_ID)).toBe(false);
+    // Widget completed with empty detail, main's failed-apply shape.
+    expect(h.progress.at(-1)).toEqual({ phase: 'complete' });
   });
 });

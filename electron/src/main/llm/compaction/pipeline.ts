@@ -357,12 +357,12 @@ class CompactorSlotSemaphore {
 
   release(): void {
     if (this._active <= 0) return;
-    const next = this._waiters.shift();
-    if (next) {
-      next();
-      return;
-    }
     this._active -= 1;
+    // Hand the freed permit to a waiter only while capacity remains — the
+    // limit may have been lowered below the active count while this slot was
+    // held, and the excess waiters must stay queued (re-checked AFTER the
+    // decrement; a pre-check would admit over-capacity).
+    if (this._active < this._limit) this._drain();
   }
 
   private _drain(): void {

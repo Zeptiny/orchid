@@ -86,7 +86,12 @@ export interface SubagentCompactionControllerDeps {
   readonly emitProgress: (progress: SubagentCompactionProgress) => void;
   /** Swap the record's chain messages in memory (manager owns the record). */
   readonly setChainMessages: (messages: Message[]) => void;
-  /** Perform the targeted subagent-chain compaction transaction (R36). */
+  /**
+   * Perform the targeted subagent-chain compaction transaction (R36). A
+   * genuine write failure throws (propagated by the persistence sink) — the
+   * controller logs it and fails the apply; a null return from environment
+   * unavailability proceeds in memory.
+   */
   readonly applySubagentCompaction: (sessionId: string, payload: SubagentCompactionPayload) => void;
   /** Record a compaction mutation when no session owns the record (no durable write). */
   readonly markCompaction: () => void;
@@ -131,6 +136,16 @@ export class SubagentCompactionController {
   private _lastStepIndex = 0;
   private _lastProgressEmitAt = 0;
   private _progressTimer: ReturnType<typeof setTimeout> | null = null;
+  /**
+   * Terminal widget epoch: bumped on every terminal progress emission
+   * (`complete`/`failed`) and in `discard()`. The `_onTextDelta` trailing
+   * flush captures the epoch at schedule time and no-ops when it changed, so
+   * a stale throttled tail from an already-finished compaction can never flip
+   * the widget back to a running phase (main's compaction epoch pattern).
+   */
+  private _terminalEpoch = 0;
+  /** Synchronous in-flight latch for the prepare fire points (see `_maybePrepare`). */
+  private _prepareInFlight = false;
 
   constructor(deps: SubagentCompactionControllerDeps) {
     this._deps = deps;
@@ -154,10 +169,15 @@ export class SubagentCompactionController {
 
   /**
    * R27: route widget progress through the live projection keyed by agent
-   * scope. Failures are display-only and never break the compaction.
+   * scope. Failures are display-only and never break the compaction. Terminal
+   * phases (`complete`/`failed`) bump the terminal epoch so the throttled
+   * stream tail in `_onTextDelta` goes permanently silent afterwards.
    */
   private _emitProgress(progress: SubagentCompactionProgress): void {
     try {
+      if (progress.phase === 'complete' || progress.phase === 'failed') {
+        this._terminalEpoch += 1;
+      }
       this._deps.emitProgress(progress);
     } catch {
       // projection entry may be gone (run removed) — display-only
@@ -167,11 +187,16 @@ export class SubagentCompactionController {
   /**
    * Time-gated streaming tail for the widget: forwards the compactor's
    * accumulated LLM output as `compacting` progress with a calibrated token
-   * estimate, throttled to the emission interval.
+   * estimate, throttled to the emission interval. The scheduled flush binds
+   * the terminal epoch at schedule time and no-ops once a terminal phase (or
+   * discard) has been emitted — a trailing `compacting` event after the
+   * widget completed would resurrect it (review B).
    */
   private _onTextDelta(accumulatedText: string): void {
+    const epochAtSchedule = this._terminalEpoch;
     const emit = (): void => {
       this._progressTimer = null;
+      if (this._terminalEpoch !== epochAtSchedule) return;
       this._lastProgressEmitAt = Date.now();
       const tpc = this._trigger?.state.tokensPerChar;
       this._emitProgress({
@@ -198,7 +223,8 @@ export class SubagentCompactionController {
       const cfg = getConfig().compaction?.subagents ?? null;
       this._cachedCfg = cfg;
       return cfg;
-    } catch {
+    } catch (e) {
+      console.debug('[subagent-compaction] scope config unavailable:', e);
       return null;
     }
   }
@@ -237,13 +263,24 @@ export class SubagentCompactionController {
    * sits in a try/finally so EVERY settled evaluation — registered a
    * pending, decided not to, or threw — increments the test-observable
    * counter (see onPrepareEvaluated); tests await it instead of fixed sleeps.
+   *
+   * In-flight latch: a synchronous flag is set BEFORE the first await (after
+   * the pending-store check) and cleared in the finally (and in discard()).
+   * The pending-store check alone cannot dedupe the fire points — two
+   * concurrent evaluations (spawn gate + usage event) both pass it before
+   * either registers, double-firing the compactor; the latch check and set
+   * are one synchronous block, so exactly one evaluation can be in flight
+   * between its pending-check and its registration.
    */
   private async _maybePrepare(inputTokens: number): Promise<void> {
     try {
       const { record } = this._deps;
+      if (this._prepareInFlight) return;
       if (getCompactionPending(this.sessionKey, record.id)) return;
+      this._prepareInFlight = true;
       const ok = await this._ensureInit();
       if (!ok || this._contextTokens == null || !this._trigger) return;
+      if (this._deps.abortSignal.aborted) return;
       const cfg = this._scopeConfig();
       if (!cfg) return;
       const prepared = await prepareSubagentCompaction({
@@ -261,14 +298,27 @@ export class SubagentCompactionController {
         onTextDelta: (text) => this._onTextDelta(text),
       });
       if (!prepared) return;
+      // The run was interrupted while the prepare awaited (init/config/compactor
+      // scheduling): never register a pending or arm the pause for a dead run.
+      if (this._deps.abortSignal.aborted) {
+        // The compactor promise has no observer now — never surface as an
+        // unhandled rejection.
+        prepared.promise?.catch(() => undefined);
+        prepared.selectivePromise?.catch(() => undefined);
+        return;
+      }
       this._trigger.markPrepareStarted(prepared.cut.compactableRange, prepared.flaggedIds);
       setCompactionPending(this.sessionKey, record.id, prepared);
       // The compactor promise is consumed at the pause boundary; until
       // then a rejection (compactor provider down) has no observer —
       // attach a no-op catch so it can never surface as an unhandled
       // rejection. The apply awaits the same promise and handles it.
-      prepared.promise?.catch(() => undefined);
-      prepared.selectivePromise?.catch(() => undefined);
+      prepared.promise?.catch((reason) => {
+        console.debug('[subagent-compaction] compactor promise rejected before the pause apply (non-fatal):', reason);
+      });
+      prepared.selectivePromise?.catch((reason) => {
+        console.debug('[subagent-compaction] selective compactor promise rejected before the pause apply (non-fatal):', reason);
+      });
       if (!shouldPauseForCompaction(this.sessionKey, record.id)) {
         requestCompactionPause(this.sessionKey, record.id);
       }
@@ -276,6 +326,7 @@ export class SubagentCompactionController {
       // non-fatal
       console.debug('[subagent-compaction] prepare start failed:', e);
     } finally {
+      this._prepareInFlight = false;
       this._deps.onPrepareEvaluated();
     }
   }
@@ -349,11 +400,17 @@ export class SubagentCompactionController {
       return 'skipped';
     }
     // Persist via the transactional subagent compaction path so crash
-    // mid-run resumes the compacted chain (R36), applied BEFORE the run
-    // resumes. Memory follows: the record chain, the assembler base (via
+    // mid-run resumes the compacted chain (R36) — durable write FIRST, memory
+    // follows only on success: the record chain, the assembler base (via
     // rebase — never a field poke), and the history box the restarted
     // stream replays.
-    this._commitApply(applyResult);
+    if (!this._commitApply(applyResult, liveHistory)) {
+      // Failed durable apply: restart the segment with the accumulated
+      // (un-compacted) history — main's resume-after-unapplied-compaction
+      // semantics. The pending and pause gate were already cleared above.
+      historyBox.messages = [...liveHistory];
+      return 'skipped';
+    }
     // Hysteresis accrual baseline is post-compaction inputTokens, not pre-compaction peak
     const preInput = record.usage?.prompt_tokens ?? 0;
     const postCompactionTokens = this._pausePathBaselineTokens(applyResult, preInput);
@@ -392,8 +449,10 @@ export class SubagentCompactionController {
         if (netNew.length === 0) {
           return this._degradeToPartialReport();
         }
-      } catch {
-        // ignore
+      } catch (e) {
+        // non-fatal — the exhaustion check is advisory; without it the apply
+        // simply completes without the degradation.
+        console.debug('[subagent-compaction] post-compaction exhaustion check failed (non-fatal):', e);
       }
     }
     return 'applied';
@@ -498,10 +557,16 @@ export class SubagentCompactionController {
       return this._degradeToPartialReport();
     }
     // Persist via the transactional subagent compaction path so crash
-    // mid-retry resumes the compacted chain (R36), then memory follows:
-    // record chain, assembler base (rebase — never a field poke), and the
-    // history box the retried stream replays.
-    this._commitApply(applyResult);
+    // mid-retry resumes the compacted chain (R36) — durable write FIRST, then
+    // memory on success: record chain, assembler base (rebase — never a
+    // field poke), and the history box the retried stream replays.
+    if (!this._commitApply(applyResult, liveHistory)) {
+      // Failed durable apply: the dead segment cannot simply restart with
+      // unchanged history (it would overflow again), so this is the
+      // degradation arm, mirroring the nothing-usable arm above.
+      historyBox.messages = [...liveHistory];
+      return this._degradeToPartialReport();
+    }
     // Arm hysteresis from the post-compaction model view so the retried
     // stream's usage events re-evaluate against the new baseline.
     const preInput = record.usage?.prompt_tokens ?? 0;
@@ -608,45 +673,63 @@ export class SubagentCompactionController {
   }
 
   /**
-   * Commit an accepted apply: memory first (record chain, assembler rebase,
-   * history box), then the transactional durable write (R36) applied BEFORE
-   * the run resumes, then the record revision bump and the trigger's pending
-   * consumption. Baseline re-arm and the completion widget event stay with
-   * the calling fire point (their shape differs per path).
+   * Commit an accepted apply: the transactional durable write (R36) FIRST,
+   * and only on success the memory swaps (record chain, assembler rebase,
+   * history box) followed by the record revision bump and the trigger's
+   * pending consumption — main's documented DB-first-then-memory ordering
+   * (see ipc/chat/compaction.ts applyPendingCompactionIfAny). On a genuine
+   * durable-write failure the apply is treated as failed: no memory swap,
+   * the pending is consumed so the trigger is not stuck, and the widget
+   * completes with empty detail; the caller maps the `false` return onto its
+   * failure arm (pause path: restart un-compacted; overflow path: degrade).
+   * Baseline re-arm and the success-path widget event stay with the calling
+   * fire point (their shape differs per path).
+   *
+   * `liveHistory` is forwarded to the durable write so the storage layer can
+   * reconcile the debounced-checkpoint lag (the flagged ids and the summary
+   * anchor are computed over this live transcript, not the durable row).
    */
-  private _commitApply(applyResult: ApplyResult): void {
+  private _commitApply(applyResult: ApplyResult, liveHistory: readonly Message[]): boolean {
     const { record, historyBox, assembler } = this._deps;
     const updatedMessages = applyResult.updatedMessages;
-    this._deps.setChainMessages([...updatedMessages]);
-    assembler.rebase(updatedMessages);
-    historyBox.messages = [...updatedMessages];
+    const sessionId = record.sessionId ?? undefined;
+    let insertBeforeMessageId: string | null = null;
+    if (applyResult.summaryMessage) {
+      const summaryIdx = updatedMessages.findIndex(
+        (m) => m.id === applyResult.summaryMessage!.id,
+      );
+      if (summaryIdx >= 0 && summaryIdx + 1 < updatedMessages.length) {
+        insertBeforeMessageId = updatedMessages[summaryIdx + 1]!.id;
+      }
+    }
+    const payload: SubagentCompactionPayload = {
+      updatedAt: new Date().toISOString(),
+      flaggedMessageIds: applyResult.flaggedIds,
+      summaryMessage: applyResult.summaryMessage,
+      insertBeforeMessageId,
+      liveMessages: [...liveHistory],
+    };
     try {
-      const sessionId = record.sessionId ?? undefined;
       if (sessionId) {
-        let insertBeforeMessageId: string | null = null;
-        if (applyResult.summaryMessage) {
-          const summaryIdx = updatedMessages.findIndex(
-            (m) => m.id === applyResult.summaryMessage!.id,
-          );
-          if (summaryIdx >= 0 && summaryIdx + 1 < updatedMessages.length) {
-            insertBeforeMessageId = updatedMessages[summaryIdx + 1]!.id;
-          }
-        }
-        const payload: SubagentCompactionPayload = {
-          updatedAt: new Date().toISOString(),
-          flaggedMessageIds: applyResult.flaggedIds,
-          summaryMessage: applyResult.summaryMessage,
-          insertBeforeMessageId,
-        };
         this._deps.applySubagentCompaction(sessionId, payload);
       } else {
         this._deps.markCompaction();
       }
-    } catch {
-      // compaction persistence marker is best-effort
+    } catch (e) {
+      // Genuine durable-write failure (integrity throws from the storage
+      // layer): fail the apply — no memory swap, pending consumed, widget
+      // completed with empty detail (main's failed-apply path).
+      console.debug('[subagent-compaction] durable compaction write failed (non-fatal):', e);
+      try { this._trigger?.consumePending(); } catch { /* trigger may be unresolved */ }
+      this._emitProgress({ phase: 'complete' });
+      return false;
     }
+    this._deps.setChainMessages([...updatedMessages]);
+    assembler.rebase(updatedMessages);
+    historyBox.messages = [...updatedMessages];
     this._deps.markRecordDirty();
     this._trigger?.consumePending();
+    return true;
   }
 
   /**
@@ -738,7 +821,9 @@ export class SubagentCompactionController {
    * no observed usage and no-ops; a resumed run seeds calibration from the
    * chain's persisted message usages (the subagent twin of the main scope's
    * hydrateTriggerCalibration) and can compact before the first request.
-   * Fire-and-forget: the gate never blocks the first stream.
+   * Fire-and-forget: the gate never blocks the first stream. Concurrent
+   * dedupe with the usage-event fire point is owned by `_maybePrepare`'s
+   * in-flight latch (this gate's own awaits never invoke the compactor).
    */
   startSpawnTimeGate(): void {
     void (async () => {
@@ -781,9 +866,18 @@ export class SubagentCompactionController {
   /**
    * Interrupt or natural-end teardown: clear this run's scoped compaction
    * gate and drop any pending it never consumed — the per-run trigger dies
-   * with the run, and the next run re-prepares via its own gates.
+   * with the run, and the next run re-prepares via its own gates. Also bumps
+   * the terminal widget epoch (silences any in-flight trailing progress
+   * flush), cancels that timer, and releases the prepare in-flight latch so
+   * a late fire point parked at an await cannot resurrect run state.
    */
   discard(): void {
+    this._terminalEpoch += 1;
+    if (this._progressTimer) {
+      clearTimeout(this._progressTimer);
+      this._progressTimer = null;
+    }
+    this._prepareInFlight = false;
     clearCompactionPause(this.sessionKey, this._deps.record.id);
     deleteCompactionPending(this.sessionKey, this._deps.record.id);
     try { this._trigger?.consumePending(); } catch { /* trigger may be unresolved */ }

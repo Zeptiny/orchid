@@ -462,7 +462,8 @@ export async function applySubagentPendingCompaction(params: {
       sessionId,
     });
     return applyResult.didApply ? applyResult : null;
-  } catch {
+  } catch (e) {
+    console.debug('[subagent-compaction] pending apply failed (non-fatal):', e);
     return null;
   }
 }

@@ -213,4 +213,19 @@ describe('SubagentLiveProjectionStore', () => {
     store.start({ subagentId: 'subagent-1', sessionId: 'session-1', state: 'running', runId: 'run-2' });
     expect(store.get('subagent-1')?.compactionProgress).toBeNull();
   });
+
+  it('skips compaction progress for a run without a session binding', () => {
+    const store = new SubagentLiveProjectionStore();
+    store.start({ subagentId: 'subagent-1', sessionId: null, state: 'running', runId: 'run-1' });
+    const events: Array<{ type: string }> = [];
+    store.setOnDelta((event) => events.push(event as { type: string }));
+
+    // The delta wire schema validates sessionId as a UUID, so an empty-string
+    // fallback would be dropped at the preload boundary.
+    store.emitCompactionProgress('subagent-1', { phase: 'preparing' });
+
+    expect(events).toHaveLength(0);
+    expect(store.get('subagent-1')?.compactionProgress).toBeNull();
+    expect(store.get('subagent-1')?.sequence).toBe(0);
+  });
 });

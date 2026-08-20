@@ -129,7 +129,6 @@ export const compactionSubagentsScopeSchema = compactionScopeSchema
     // R32 hard guarantee: every user message stays in model view for a
     // subagent run's entire lifetime. null = ALL (no tail cap).
     keep_last_user_messages: z.number().int().min(1).max(1000).nullable().default(null),
-    pin_first_user_message: z.boolean().default(true),
   });
 
 export const compactionConfigSchema = z.object({

@@ -622,6 +622,16 @@ export const subagentLiveProjectionSchema = z.object({
   state: subagentStatusSchema,
   segments: z.array(subagentLiveSegmentSchema), toolCalls: z.array(subagentToolSchema),
   usage: usageSchema.nullable(), result: z.string().nullable(), error: z.string().nullable(),
+  // Latest compaction progress retained for the renderer (terminal phases stay
+  // until the next compaction or run reset clears them). Identity fields ride
+  // along as unknown keys; only the progress payload is validated.
+  compactionProgress: z.object({
+    phase: z.enum(['preparing', 'compacting', 'complete', 'failed']),
+    detail: z.string().optional(),
+    mode: z.enum(['simple', 'selective']).optional(),
+    streamText: z.string().nullable().optional(),
+    estimatedTokens: z.number().int().nonnegative().nullable().optional(),
+  }).nullable(),
 });
 export const ipcSubagentRecordSchema = z.object({
   id: z.string(), agent_name: z.string(), agent_type: z.string(), agent_tier: z.string(),
@@ -691,6 +701,14 @@ export const subagentTerminalEventSchema = subagentDeltaBaseSchema.extend({
   type: z.literal('terminal'), record: ipcSubagentSummarySchema,
   state: z.enum(['completed', 'failed', 'interrupted']), usage: usageSchema.nullable(),
 });
+export const subagentCompactionProgressEventSchema = subagentDeltaBaseSchema.extend({
+  type: z.literal('compaction_progress'),
+  phase: z.enum(['preparing', 'compacting', 'complete', 'failed']),
+  detail: z.string().optional(),
+  mode: z.enum(['simple', 'selective']).optional(),
+  streamText: z.string().nullable().optional(),
+  estimatedTokens: z.number().int().nonnegative().nullable().optional(),
+});
 export const subagentDeltaEventSchema = z.discriminatedUnion('type', [
   subagentSpawnedEventSchema,
   subagentStatusChangedEventSchema,
@@ -701,6 +719,7 @@ export const subagentDeltaEventSchema = z.discriminatedUnion('type', [
   subagentToolResultEventSchema,
   subagentUsageEventSchema,
   subagentTerminalEventSchema,
+  subagentCompactionProgressEventSchema,
 ]);
 /** Batched SUBAGENTS_EVENT payload — the unit of IPC delivery. */
 export const subagentEventSchema = z.object({

@@ -309,6 +309,33 @@ describe('acquireCompactionSlot — compactor concurrency cap', () => {
     expect(fourthAcquired).toBe(true);
   });
 
+  it('keeps excess waiters queued when the limit is lowered below the active count', async () => {
+    const { acquireCompactionSlot: acquire } = await freshSlots();
+    const release1 = await acquire();
+    const release2 = await acquire();
+    // Lower the limit to 1 while both permits are held; the lowering acquire
+    // itself queues as a waiter.
+    let loweredAcquired = false;
+    const lowered = acquire(1).then(() => { loweredAcquired = true; });
+    let secondAcquired = false;
+    const second = acquire().then(() => { secondAcquired = true; });
+    await tick();
+    expect(loweredAcquired).toBe(false);
+    expect(secondAcquired).toBe(false);
+    // First release: active 2→1, but the limit is 1 — NO waiter may proceed.
+    release1();
+    await tick();
+    expect(loweredAcquired).toBe(false);
+    expect(secondAcquired).toBe(false);
+    // Second release frees the only permit: exactly ONE waiter proceeds and
+    // the other stays queued.
+    release2();
+    await lowered;
+    expect(loweredAcquired).toBe(true);
+    await tick();
+    expect(secondAcquired).toBe(false);
+  });
+
   it('never queues the gate — decisions stay synchronous while every slot is held', async () => {
     const { acquireCompactionSlot: acquire, runCompactionGate: gate } = await freshSlots();
     const release1 = await acquire();

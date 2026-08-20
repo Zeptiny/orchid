@@ -125,6 +125,11 @@ import {
   type SubagentCompactionProgressEvent,
   type SubagentDeltaEvent,
 } from '../../src/shared/types/subagent';
+import { SubagentCompactionController } from '../../src/main/agents/subagent-compaction-controller';
+import { SubagentRunAssembler } from '../../src/main/agents/subagent-run-assembler';
+import type { SubagentRecord as RuntimeSubagentRecord } from '../../src/main/agents/manager';
+import type { Chain } from '../../src/shared/types/chain';
+import type { Usage } from '../../src/shared/types/message';
 
 // ── Fixtures ─────────────────────────────────────────────────────────────────
 
@@ -1135,5 +1140,163 @@ describe('buildSubagentPartialReport', () => {
     expect(report).toContain('Done:\n(no completed steps reported)');
     expect(report).toContain('Remaining:\n(unknown remaining work)');
     expect(report).toContain('Stopped at: unknown step');
+  });
+});
+
+// ── Widget lifecycle (B): terminal epoch guards the trailing stream tail ────
+
+describe('SubagentManager compaction widget lifecycle (B): interrupt mid-prepare', () => {
+  it('emits no non-terminal compaction_progress after the terminal projection event', async () => {
+    // The compactor streams partial summary text (arming the throttled
+    // trailing flush) and parks; the user interrupts mid-prepare. The terminal
+    // projection event settles the widget — a trailing 'compacting' flush
+    // firing after it must be suppressed (the controller's terminal epoch +
+    // discard() timer cleanup).
+    let releaseCompactor!: (value: { text: string; usage: null }) => void;
+    mocks.summarize.mockImplementation(async (params: { onTextDelta?: (text: string) => void }) => {
+      params.onTextDelta?.('partial summary text');
+      // Second delta within the throttle interval schedules the trailing timer.
+      params.onTextDelta?.('partial summary text with more content');
+      return new Promise((resolve) => { releaseCompactor = resolve; });
+    });
+    const manager = new SubagentManager();
+    const events: SubagentDeltaEvent[] = [];
+    manager.setOnDelta((event) => { events.push(event); });
+    manager.setRunner(scriptedRunner([
+      ...steps(5),
+      usageEvent(600),
+      // Keep the run alive long enough for the interrupt to land mid-prepare.
+      { sleepMs: 60 },
+      { type: 'finish', finishReason: 'stop' },
+    ]));
+    const record = spawnCompactionSubagent(manager, 'session-epoch');
+    await vi.waitFor(() => expect(mocks.summarize).toHaveBeenCalledTimes(1));
+    manager.cancelOne(record.id);
+    await manager.getRunPromise(record.id);
+
+    // Wait past the throttle interval so a leaked trailing timer would have
+    // fired by now.
+    await new Promise((resolve) => setTimeout(resolve, 150));
+
+    const terminalIndex = events.map((e) => e.type).lastIndexOf(SubagentDeltaEventType.TERMINAL);
+    expect(terminalIndex).toBeGreaterThanOrEqual(0);
+    // The immediate first delta landed before the terminal event (the widget
+    // did stream while compacting)...
+    const compactingBeforeTerminal = events
+      .slice(0, terminalIndex)
+      .filter((e) => e.type === SubagentDeltaEventType.COMPACTION_PROGRESS)
+      .some((e) => (e as SubagentCompactionProgressEvent).phase === 'compacting');
+    expect(compactingBeforeTerminal).toBe(true);
+    // ...and NOTHING non-terminal follows the terminal projection event.
+    const after = events.slice(terminalIndex + 1);
+    expect(after.filter((e) => e.type === SubagentDeltaEventType.COMPACTION_PROGRESS)).toEqual([]);
+    expect(record.state).toBe(SubagentState.INTERRUPTED);
+    // Release the parked compactor so its prepare's semaphore permit is not
+    // leaked into later tests (the pending was already discarded by the run's
+    // teardown, so the late resolution has no further effect).
+    releaseCompactor({ text: 'late summary', usage: null });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
+});
+
+// ── Prepare in-flight latch (C9): one compactor per concurrent fire points ──
+
+describe('SubagentCompactionController prepare in-flight latch (C9)', () => {
+  const LATCH_SESSION = 'session-latch';
+  const LATCH_SUB = 'sub-latch-1';
+
+  /** Runtime record with a compactable chain and a calibrated usage stamp. */
+  function latchRecord(chain: Chain): RuntimeSubagentRecord {
+    const usage: Usage = {
+      prompt_tokens: 700,
+      completion_tokens: 10,
+      total_tokens: 710,
+      cached_tokens: 0,
+    };
+    return {
+      id: LATCH_SUB,
+      agent: testAgent,
+      state: SubagentState.RUNNING,
+      label: 'latch probe',
+      task: TASK,
+      result: null,
+      error: null,
+      startTime: Date.now(),
+      queuedAt: null,
+      startedAt: Date.now(),
+      endTime: null,
+      chain,
+      usage,
+      selection: SELECTION,
+      parentChainIndex: null,
+      sessionId: LATCH_SESSION,
+      closed: false,
+    } as unknown as RuntimeSubagentRecord;
+  }
+
+  it('runs exactly one compactor when the spawn-gate and usage-event prepares overlap', async () => {
+    const messages = [
+      { id: 'task-head', role: 'user', content: TASK, type: 'text' },
+      { id: 'a-1', role: 'assistant', content: 'x'.repeat(400), type: 'text' },
+      { id: 'a-2', role: 'assistant', content: 'y'.repeat(400), type: 'text' },
+    ] as unknown as Message[];
+    const chain: Chain = {
+      id: 'chain-latch',
+      sessionId: LATCH_SESSION,
+      messages,
+      status: ChainStatus.ACTIVE,
+      selection: SELECTION,
+      modelLabel: 'test-model',
+      agentName: 'explorer',
+      agentType: 'subagent',
+      agentTier: 'bloom',
+      subagentRecord: null,
+      startTime: new Date().toISOString(),
+      endTime: null,
+      errorDetail: null,
+      errorTitle: null,
+    } as unknown as Chain;
+    const record = latchRecord(chain);
+    const evaluated = vi.fn();
+    const controller = new SubagentCompactionController({
+      record,
+      runGeneration: 1,
+      abortSignal: new AbortController().signal,
+      historyBox: { messages: [...messages] },
+      assembler: new SubagentRunAssembler(messages),
+      emitProgress: () => undefined,
+      setChainMessages: () => undefined,
+      applySubagentCompaction: () => undefined,
+      markCompaction: () => undefined,
+      markRecordDirty: () => undefined,
+      emptyChain: () => chain,
+      onPrepareEvaluated: evaluated,
+    });
+    // Initialize the controller first (context-window lookup) so both racing
+    // fire points see init done — isolating the latch from the init race.
+    await (controller as unknown as { _ensureInit: () => Promise<boolean> })._ensureInit();
+    // Both fire points funnel into _maybePrepare; drive it directly so the
+    // overlap is deterministic: the first call's synchronous prefix passes the
+    // pending-check and sets the latch BEFORE its first await, so the second
+    // (the usage event racing the spawn gate) must skip instead of
+    // double-firing the compactor.
+    const maybePrepare = (inputTokens: number): Promise<void> =>
+      (controller as unknown as {
+        _maybePrepare: (this: SubagentCompactionController, inputTokens: number) => Promise<void>;
+      })._maybePrepare.call(controller, inputTokens);
+    const spawnGatePrepare = maybePrepare(700);
+    const usageEventPrepare = maybePrepare(800);
+    await spawnGatePrepare;
+    await usageEventPrepare;
+
+    expect(evaluated).toHaveBeenCalledTimes(2);
+    // Exactly ONE compactor invocation registered the pending.
+    expect(mocks.summarize).toHaveBeenCalledTimes(1);
+    expect(mocks.summarize.mock.calls[0]![0] as Record<string, unknown>).toMatchObject({
+      scope: 'subagents',
+      subagentId: LATCH_SUB,
+    });
+    controller.discard();
+    expect(getCompactionPending(LATCH_SESSION, LATCH_SUB)).toBeUndefined();
   });
 });

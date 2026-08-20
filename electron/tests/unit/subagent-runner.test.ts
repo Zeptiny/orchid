@@ -434,6 +434,7 @@ describe('createSubagentStreamRunner compaction pause gate (U5)', () => {
     outcome?: SubagentPauseApplyOutcome;
     onApply?: () => void | Promise<void>;
     neverResolves?: boolean;
+    rejects?: boolean;
   }): SubagentCompactionPauseController {
     return {
       shouldPause: () => shouldPauseForCompaction(PAUSE_SESSION, PAUSE_SCOPE),
@@ -446,6 +447,9 @@ describe('createSubagentStreamRunner compaction pause gate (U5)', () => {
         // pause still armed and spin.
         clearCompactionPause(PAUSE_SESSION, PAUSE_SCOPE);
         await opts?.onApply?.();
+        if (opts?.rejects) {
+          throw new Error('pause apply exploded');
+        }
         return opts?.outcome ?? 'applied';
       },
       discard: () => {
@@ -456,6 +460,22 @@ describe('createSubagentStreamRunner compaction pause gate (U5)', () => {
 
   function boxWith(messages: Message[]): { messages: Message[] } {
     return { messages };
+  }
+
+  /**
+   * SDK-shaped early-stop segment (the natural-finish guard's input): the
+   * multi-step loop evaluates the runner-bound `shouldStopEarly` predicate at
+   * a step boundary and, when it returns true, ends the segment with that
+   * boundary's own finish reason ('tool-calls') — never a natural model stop.
+   */
+  function earlyStopSegment(text: string) {
+    return async function* (params: {
+      shouldStopEarly?: () => boolean;
+    }): AsyncGenerator<StreamEvent> {
+      yield { type: 'content', text };
+      params.shouldStopEarly?.();
+      yield { type: 'finish', finishReason: 'tool-calls' };
+    };
   }
 
   beforeEach(() => {
@@ -520,10 +540,7 @@ describe('createSubagentStreamRunner compaction pause gate (U5)', () => {
     // Pause is already armed when the run starts; the first segment ends at
     // the (mocked) step boundary, the apply swaps the box, the restart reads it.
     requestCompactionPause(PAUSE_SESSION, PAUSE_SCOPE);
-    mocks.streamChat.mockImplementationOnce(async function* () {
-      yield { type: 'content', text: 'segment one' };
-      yield { type: 'finish', finishReason: 'stop' };
-    });
+    mocks.streamChat.mockImplementationOnce(earlyStopSegment('segment one'));
     mocks.streamChat.mockImplementationOnce(async function* () {
       yield { type: 'content', text: 'segment two' };
       yield { type: 'finish', finishReason: 'stop' };
@@ -551,7 +568,7 @@ describe('createSubagentStreamRunner compaction pause gate (U5)', () => {
     // Events from BOTH segments flow through the single runner generator.
     expect(events).toEqual([
       { type: 'content', text: 'segment one' },
-      { type: 'finish', finishReason: 'stop' },
+      { type: 'finish', finishReason: 'tool-calls' },
       { type: 'content', text: 'segment two' },
       { type: 'finish', finishReason: 'stop' },
     ]);
@@ -568,10 +585,7 @@ describe('createSubagentStreamRunner compaction pause gate (U5)', () => {
   it('restarts with the accumulated history when the apply is skipped (summary unusable)', async () => {
     const box = boxWith([{ id: 'task-head', role: 'user', content: 'Map the repo' } as unknown as Message]);
     requestCompactionPause(PAUSE_SESSION, PAUSE_SCOPE);
-    mocks.streamChat.mockImplementationOnce(async function* () {
-      yield { type: 'content', text: 'first try' };
-      yield { type: 'finish', finishReason: 'stop' };
-    });
+    mocks.streamChat.mockImplementationOnce(earlyStopSegment('first try'));
     mocks.streamChat.mockImplementationOnce(async function* () {
       yield { type: 'content', text: 'resumed un-compacted' };
       yield { type: 'finish', finishReason: 'stop' };
@@ -606,10 +620,7 @@ describe('createSubagentStreamRunner compaction pause gate (U5)', () => {
 
   it('ends the run after a degraded pause (partial report) without restarting', async () => {
     requestCompactionPause(PAUSE_SESSION, PAUSE_SCOPE);
-    mocks.streamChat.mockImplementationOnce(async function* () {
-      yield { type: 'content', text: 'over the window' };
-      yield { type: 'finish', finishReason: 'stop' };
-    });
+    mocks.streamChat.mockImplementationOnce(earlyStopSegment('over the window'));
     const box = boxWith([{ id: 'task-head', role: 'user', content: 'Map the repo' } as unknown as Message]);
     const controller = manualPauseController({ outcome: 'degraded' });
 
@@ -635,10 +646,7 @@ describe('createSubagentStreamRunner compaction pause gate (U5)', () => {
 
   it('interrupts cleanly during the pause: abort breaks the wait, no restart, no events after', async () => {
     requestCompactionPause(PAUSE_SESSION, PAUSE_SCOPE);
-    mocks.streamChat.mockImplementationOnce(async function* () {
-      yield { type: 'content', text: 'before the pause' };
-      yield { type: 'finish', finishReason: 'stop' };
-    });
+    mocks.streamChat.mockImplementationOnce(earlyStopSegment('before the pause'));
     const box = boxWith([{ id: 'task-head', role: 'user', content: 'Map the repo' } as unknown as Message]);
     const controller = manualPauseController({ neverResolves: true });
 
@@ -663,16 +671,14 @@ describe('createSubagentStreamRunner compaction pause gate (U5)', () => {
     expect(mocks.streamChat).toHaveBeenCalledTimes(1);
     expect(events).toEqual([
       { type: 'content', text: 'before the pause' },
-      { type: 'finish', finishReason: 'stop' },
+      { type: 'finish', finishReason: 'tool-calls' },
     ]);
     expect(mocks.releaseProjectMCPManager).toHaveBeenCalledTimes(1);
   });
 
   it('aborts during the summarizer wait without consuming a late apply result', async () => {
     requestCompactionPause(PAUSE_SESSION, PAUSE_SCOPE);
-    mocks.streamChat.mockImplementationOnce(async function* () {
-      yield { type: 'finish', finishReason: 'stop' };
-    });
+    mocks.streamChat.mockImplementationOnce(earlyStopSegment('step output'));
     const box = boxWith([{ id: 'task-head', role: 'user', content: 'Map the repo' } as unknown as Message]);
     let resolveApply: ((value: SubagentPauseApplyOutcome) => void) | null = null;
     let applyInvoked = false;
@@ -713,6 +719,87 @@ describe('createSubagentStreamRunner compaction pause gate (U5)', () => {
     // The aborted restart loop exits before the late apply can trigger a
     // second provider call.
     expect(mocks.streamChat).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not restart when the pause arms but the stream finishes naturally (no early stop)', async () => {
+    // The prepare completes right as the model ends its response: the pause
+    // is armed DURING the final (tool-less) step, so the SDK never evaluates
+    // the early-stop predicate again and the segment ends with the model's
+    // own finish reason. Main's `currentInput && !completed` twin: the run
+    // must complete once — the pending dies with discard() at run end.
+    const box = boxWith([{ id: 'task-head', role: 'user', content: 'Map the repo' } as unknown as Message]);
+    mocks.streamChat.mockImplementationOnce(async function* () {
+      yield { type: 'content', text: 'natural end' };
+      // The pause arms only after the model's final step — no boundary stop.
+      requestCompactionPause(PAUSE_SESSION, PAUSE_SCOPE);
+      yield { type: 'finish', finishReason: 'stop' };
+    });
+    const controller = manualPauseController({
+      onApply: () => {
+        throw new Error('applyAtPause must not run after a natural finish');
+      },
+    });
+
+    const events = await collect(createSubagentStreamRunner()({
+      task: 'Map the repo',
+      historyBox: box,
+      agent,
+      selection,
+      abortSignal: abortController.signal,
+      agentScopeId: PAUSE_SCOPE,
+      sessionId: PAUSE_SESSION,
+      cwd: '/tmp/project',
+      projectRuntime: runtime(),
+      compaction: controller,
+    }));
+
+    expect(mocks.streamChat).toHaveBeenCalledTimes(1);
+    expect(events).toEqual([
+      { type: 'content', text: 'natural end' },
+      { type: 'finish', finishReason: 'stop' },
+    ]);
+    // The pause stays armed for discard() at run end (the manual controller
+    // does not auto-clear); nothing consumed it mid-run.
+    expect(shouldPauseForCompaction(PAUSE_SESSION, PAUSE_SCOPE)).toBe(true);
+    clearCompactionPause(PAUSE_SESSION, PAUSE_SCOPE);
+  });
+
+  it('restarts the segment (treated as skipped) when applyAtPause rejects', async () => {
+    // A non-abort rejection from the pause controller must never silently end
+    // the run as completed: it is logged and treated as 'skipped', so the
+    // stream restarts with the existing history and completes normally.
+    requestCompactionPause(PAUSE_SESSION, PAUSE_SCOPE);
+    mocks.streamChat.mockImplementationOnce(earlyStopSegment('before the failing apply'));
+    mocks.streamChat.mockImplementationOnce(async function* () {
+      yield { type: 'content', text: 'restarted after rejection' };
+      yield { type: 'finish', finishReason: 'stop' };
+    });
+    const box = boxWith([{ id: 'task-head', role: 'user', content: 'Map the repo' } as unknown as Message]);
+    const controller = manualPauseController({ rejects: true });
+
+    const events = await collect(createSubagentStreamRunner()({
+      task: 'Map the repo',
+      historyBox: box,
+      agent,
+      selection,
+      abortSignal: abortController.signal,
+      agentScopeId: PAUSE_SCOPE,
+      sessionId: PAUSE_SESSION,
+      cwd: '/tmp/project',
+      projectRuntime: runtime(),
+      compaction: controller,
+    }));
+
+    expect(mocks.streamChat).toHaveBeenCalledTimes(2);
+    expect(events).toEqual([
+      { type: 'content', text: 'before the failing apply' },
+      { type: 'finish', finishReason: 'tool-calls' },
+      { type: 'content', text: 'restarted after rejection' },
+      { type: 'finish', finishReason: 'stop' },
+    ]);
+    const restartedMessages = (mocks.streamChat.mock.calls[1]![0] as { messages: Message[] }).messages;
+    expect(restartedMessages.map((m) => m.id)).toEqual(['task-head']);
+    expect(mocks.releaseProjectMCPManager).toHaveBeenCalledTimes(1);
   });
 });
 

@@ -2242,6 +2242,16 @@ export interface SubagentCompactionPayload {
    * summary after the last durable message.
    */
   readonly insertBeforeMessageId: string | null;
+  /**
+   * Authoritative live transcript for the run, supplied by the caller because
+   * the flagged ids and the summary anchor are computed over it while the
+   * durable `record_json` can lag the debounced checkpoint flush. Messages the
+   * durable row lacks (the un-flushed live tail) are appended inside the
+   * transaction BEFORE flag/anchor resolution, so a lagging row cannot make
+   * the write throw spuriously. Ids unknown to BOTH views still abort the
+   * write — the integrity throws stay intact for genuinely corrupt payloads.
+   */
+  readonly liveMessages?: readonly Message[];
 }
 
 /** Durable outcome of a successful subagent-chain compaction write. */
@@ -2318,7 +2328,18 @@ export function applySubagentCompactionPersistence(
         );
       }
 
-      const messages = record.chain.messages;
+      let messages = record.chain.messages;
+      // Checkpoint-lag reconciliation: append the live tail the durable row
+      // has not received yet (the flagged ids / anchor were computed over the
+      // LIVE transcript). Append-only — durable messages are never reordered
+      // or dropped by this pass.
+      if (payload.liveMessages && payload.liveMessages.length > 0) {
+        const durableIds = new Set(messages.map((m) => m.id));
+        const missingLive = payload.liveMessages.filter((m) => !durableIds.has(m.id));
+        if (missingLive.length > 0) {
+          messages = [...messages, ...missingLive];
+        }
+      }
 
       // Resolve every flagged id against the durable chain before writing.
       const messageIdSet = new Set(messages.map((m) => m.id));

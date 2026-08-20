@@ -212,13 +212,18 @@ export class SubagentLiveProjectionStore {
     progress: Omit<SubagentCompactionProgressEvent, keyof SubagentDeltaEventBase | 'type'>,
   ): void {
     const entry = this.requireEntry(subagentId);
+    // The delta wire schema requires a UUID sessionId; a run without a session
+    // binding cannot carry a parseable compaction event, so skip rather than
+    // emit one the preload boundary would drop.
+    const sessionId = entry.projection.sessionId;
+    if (!sessionId) return;
     entry.projection.compactionProgress = {
       type: SubagentDeltaEventType.COMPACTION_PROGRESS,
-      sessionId: entry.projection.sessionId ?? '',
+      sessionId,
       subagentId: entry.projection.subagentId,
       runId: entry.projection.runId,
       sequence: entry.projection.sequence + 1,
-      sessionRevision: this.getSessionRevision(entry.projection.sessionId ?? '') + 1,
+      sessionRevision: this.getSessionRevision(sessionId) + 1,
       ...progress,
     } as SubagentCompactionProgressEvent;
     this.advance(entry);
