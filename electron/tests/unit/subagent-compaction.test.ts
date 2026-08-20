@@ -102,6 +102,9 @@ vi.mock('../../src/main/tools', () => ({
 
 vi.mock('../../src/main/llm/compaction/summarize', () => ({
   summarizeCompactableRange: mocks.summarize,
+  // Bridge context is optional compactor orientation — null keeps these
+  // fixtures bridge-free (the real builder is covered in compaction-prompt.test.ts).
+  buildCompactionBridgeContext: vi.fn(() => null),
 }));
 
 import {

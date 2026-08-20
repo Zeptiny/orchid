@@ -2830,6 +2830,13 @@ describe('chat compaction selective pending (P1 #5)', () => {
     connectionId: '11111111-1111-4111-8111-111111111111',
     modelId: 'vendor/path/model',
   };
+  // Substantive handoff texts (>= MIN_HANDOFF_SUMMARY_CHARS with real words) —
+  // the selective validator rejects degenerate activity-log texts for spans
+  // covering >= 1000 chars of source content.
+  const SELECTIVE_OLD_TURN_SUMMARY =
+    'SUMMARY: selective over old turn — the summarized assistant reply carried the findings, exact file paths, and decisions needed to continue; the next step flows into the preserved follow-up window without re-reading the old turn.';
+  const SELECTIVE_MID_TURN_SUMMARY =
+    'SUMMARY: selective mid-turn findings handoff — the summarized tool group preserved exact file paths, outcomes, and errors for the resumed stream; the next step continues the in-flight turn directly from the preserved window and open tool group.';
   const compactorSelectiveAgent = {
     name: 'compactor-selective',
     type: 'internal' as const,
@@ -2949,14 +2956,16 @@ describe('chat compaction selective pending (P1 #5)', () => {
       { id: 'a-old', role: 'assistant', content: 'y'.repeat(4000), type: 'text' },
     ]);
     // The selective compactor keeps the user message verbatim and summarizes
-    // the assistant reply — ops derived from the manifest in the prompt.
+    // the assistant reply — ops derived from the manifest in the prompt. The
+    // summary text is a substantive handoff (the validator rejects activity
+    // logs for spans with >= 1000 chars of source).
     mocks.aiGenerateText.mockImplementationOnce(async ({ messages }: { messages: Array<{ content: string }> }) => {
       const prompt = String(messages[0]?.content ?? '');
       const ids = [...prompt.matchAll(/^(\S+) \[/gm)].map((m) => m[1]!);
       return {
         text: JSON.stringify([
           ...ids.filter((id) => id.startsWith('u-')).map((id) => ({ type: 'keep', id })),
-          { type: 'summarize', ids: ids.filter((id) => !id.startsWith('u-')), text: 'SUMMARY: selective over old turn' },
+          { type: 'summarize', ids: ids.filter((id) => !id.startsWith('u-')), text: SELECTIVE_OLD_TURN_SUMMARY },
         ]),
       };
     });
@@ -2993,7 +3002,7 @@ describe('chat compaction selective pending (P1 #5)', () => {
     }>;
     expect(secondMessages.some((m) => m.role === MessageRole.USER && m.content === 'Follow up')).toBe(true);
     expect(secondMessages.some((m) => m.role === MessageRole.USER && m.content === 'First request')).toBe(true);
-    expect(secondMessages.some((m) => m.compacted && m.content === 'SUMMARY: selective over old turn')).toBe(true);
+    expect(secondMessages.some((m) => m.compacted && m.content === SELECTIVE_OLD_TURN_SUMMARY)).toBe(true);
     expect(secondMessages.some((m) => m.id === 'u-old')).toBe(true);
     // The summarized original is flagged durable-side and dropped from replay.
     expect(secondMessages.some((m) => m.id === 'a-old')).toBe(false);
@@ -3051,7 +3060,7 @@ describe('chat compaction selective pending (P1 #5)', () => {
           {
             type: 'summarize',
             ids: entries.filter((e) => e.kind !== 'user' && e.kind !== 'thinking').map((e) => e.id),
-            text: 'SUMMARY: selective mid-turn handoff',
+            text: SELECTIVE_MID_TURN_SUMMARY,
           },
         ]),
       };
@@ -3104,7 +3113,7 @@ describe('chat compaction selective pending (P1 #5)', () => {
       excludeFromModel?: boolean;
       tool_call_id?: string;
     }>;
-    expect(resumedMessages.some((m) => m.compacted && m.content === 'SUMMARY: selective mid-turn handoff')).toBe(true);
+    expect(resumedMessages.some((m) => m.compacted && m.content === SELECTIVE_MID_TURN_SUMMARY)).toBe(true);
     expect(resumedMessages.some((m) => m.tool_call_id === 'tc-sel-1' && m.excludeFromModel)).toBe(false);
 
     // The durable turn row (finalize rewrite input) is TRANSCRIPT-complete:
@@ -3122,7 +3131,7 @@ describe('chat compaction selective pending (P1 #5)', () => {
     )!;
     expect(persistedUser.excludeFromModel).not.toBe(true);
     expect(persisted.messages.some((m) => m.tool_call_id === 'tc-sel-1' && m.excludeFromModel === true)).toBe(true);
-    expect(persisted.messages.some((m) => m.compacted && (m as { content?: string }).content === 'SUMMARY: selective mid-turn handoff')).toBe(true);
+    expect(persisted.messages.some((m) => m.compacted && (m as { content?: string }).content === SELECTIVE_MID_TURN_SUMMARY)).toBe(true);
     expect(persisted.messages.some((m) => m.role === MessageRole.ASSISTANT && m.content === 'Resumed answer')).toBe(true);
 
     // Stale-checkpoint race (review #55): a checkpoint scheduled by the same

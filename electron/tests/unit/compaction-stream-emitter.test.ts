@@ -55,6 +55,7 @@ vi.mock('../../src/main/llm/compaction/reclaim', async (importOriginal) => {
 });
 vi.mock('../../src/main/llm/compaction/summarize', () => ({
   summarizeCompactableRange: vi.fn(),
+  buildCompactionBridgeContext: vi.fn(() => null),
 }));
 vi.mock('../../src/main/llm/compaction/apply', () => ({
   buildCompactionApply: vi.fn(),

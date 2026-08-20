@@ -33,7 +33,7 @@ import type { CutResult } from './select';
 import { buildManifest } from './selective/manifest';
 import { createLlmSelectiveCaller, runSelectiveCompaction } from './selective/run';
 import type { SelectiveCompactionResult, SimpleFallback } from './selective/run';
-import { summarizeCompactableRange } from './summarize';
+import { buildCompactionBridgeContext, summarizeCompactableRange } from './summarize';
 
 /** Ledger + identity context the selective/summarizer attempts attribute to. */
 export interface CompactionAttemptAccounting {
@@ -144,6 +144,10 @@ export async function runCompactionAttempt(
   if (slice.length === 0) return { kind: 'noop', reason: 'empty-slice' };
   const manifest = buildManifest(messages, cut.compactableRange);
   if (manifest.entries.length === 0) return { kind: 'noop', reason: 'empty-manifest' };
+  // Bridge context (trailing preserve-window excerpt) shared by the selective
+  // caller and the simple fallback so the handoff is oriented toward what the
+  // next turn already has instead of restating it.
+  const bridgeContext = buildCompactionBridgeContext(messages, cut.compactableRange);
   const selectiveCaller = createLlmSelectiveCaller({
     config,
     scope,
@@ -152,6 +156,7 @@ export async function runCompactionAttempt(
     ...(deps.subagentId !== undefined ? { subagentId: deps.subagentId } : {}),
     accounting: deps.accounting,
     ...(deps.onTextDelta ? { onTextDelta: deps.onTextDelta } : {}),
+    ...(bridgeContext ? { bridgeContext } : {}),
   });
   const simpleFallback: SimpleFallback = async () => {
     const result = await summarizeCompactableRange({
@@ -164,6 +169,7 @@ export async function runCompactionAttempt(
       ...(deps.runtime ? { runtime: deps.runtime } : {}),
       ...(deps.subagentId !== undefined ? { subagentId: deps.subagentId } : {}),
       ...(deps.onTextDelta ? { onTextDelta: deps.onTextDelta } : {}),
+      ...(bridgeContext ? { bridgeContext } : {}),
     });
     if (!result || !result.text || !result.text.trim()) return null;
     return { text: result.text };

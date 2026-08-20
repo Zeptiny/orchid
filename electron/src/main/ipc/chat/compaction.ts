@@ -56,7 +56,7 @@ import {
   deriveTokensPerChar,
   runCompactionGate,
 } from '../../llm/compaction/pipeline';
-import { summarizeCompactableRange, type SummarizeResult } from '../../llm/compaction/summarize';
+import { summarizeCompactableRange, buildCompactionBridgeContext, type SummarizeResult } from '../../llm/compaction/summarize';
 import {
   buildCompactionApply,
   buildSelectiveCompactionApply,
@@ -970,6 +970,7 @@ export async function tryCompactSynchronously(
       const slice = rawSlice2.filter((m) => !m.excludeFromModel && !m.hidden);
       if (slice.length === 0) return { didApply: false };
       trigger.markPrepareStarted(cut.compactableRange, flaggedIds);
+      const simpleBridge = buildCompactionBridgeContext(messages, cut.compactableRange);
       const result: SummarizeResult | null = await summarizeCompactableRange({
         messages: slice,
         scope: 'main',
@@ -978,6 +979,7 @@ export async function tryCompactSynchronously(
         accounting: { store: accountingStore, sessionId, chainId, turnId },
         runtime,
         onTextDelta: createCompactionStreamEmitter(sessionId),
+        ...(simpleBridge ? { bridgeContext: simpleBridge } : {}),
       });
       if (!result || !result.text || !result.text.trim()) {
         trigger.abortPrepare();
@@ -1164,6 +1166,7 @@ export function handleUsageCompaction(
       const slice = rawSlice2.filter((m) => !m.excludeFromModel && !m.hidden);
       if (slice.length === 0) return;
       trigger.markPrepareStarted(cut.compactableRange, flaggedIds);
+      const simpleBridge = buildCompactionBridgeContext(history, cut.compactableRange);
       const promise = summarizeCompactableRange({
         messages: slice,
         scope: 'main',
@@ -1172,6 +1175,7 @@ export function handleUsageCompaction(
         accounting: { store: accountingStore, sessionId, chainId, turnId },
         runtime,
         onTextDelta: createCompactionStreamEmitter(sessionId),
+        ...(simpleBridge ? { bridgeContext: simpleBridge } : {}),
       });
       const expectedIdsForSimple = history.slice(cut.compactableRange.start, cut.compactableRange.end).map((m) => m.id);
       setCompactionPending(sessionId, MAIN_AGENT_SCOPE_ID, { cut, flaggedIds, expectedIds: expectedIdsForSimple, promise, estimatedInput: decision.estimatedInput, contextTokens: effectiveContextTokens, mode: 'simple' });

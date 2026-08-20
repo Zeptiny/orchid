@@ -14,6 +14,17 @@
 import type { Message } from '../../../../shared/types/message';
 import { MessageType, MessageRole } from '../../../../shared/types/message';
 import type { Manifest, SelectiveOp, SummarizeOp } from './manifest';
+import { isSubstantiveHandoffText } from '../message-chars';
+
+/**
+ * Minimum source chars a summarize span must cover before its text is held
+ * to the full handoff-substance rule (isSubstantiveHandoffText). Spans that
+ * replace substantial content must carry a real handoff — a one-line
+ * activity log ("assistant read some files") silently destroys findings the
+ * continuation needs. Tiny spans keep the non-empty rule only: forcing 200+
+ * chars out of a 50-char span wastes correction rounds for nothing.
+ */
+export const SUBSTANTIVE_SPAN_MIN_SOURCE_CHARS = 1000;
 
 export interface ValidateResult {
   readonly valid: boolean;
@@ -336,9 +347,21 @@ export function validateSelectiveOps(
         break;
       }
     }
-    // Also check text non-empty?
+    // Also check text non-empty / substantive
     if (!op.text || op.text.trim().length === 0) {
       errors.push(`summarize op for ids ${ids.join(',')} has empty text`);
+    } else {
+      const spanSourceChars = ids.reduce(
+        (sum, id) => sum + (msgById.get(id)?.content?.length ?? 0),
+        0,
+      );
+      if (spanSourceChars >= SUBSTANTIVE_SPAN_MIN_SOURCE_CHARS && !isSubstantiveHandoffText(op.text)) {
+        errors.push(
+          `summarize op for ids ${ids.join(',')} replaces ${spanSourceChars} chars of source content but its text is not a substantive handoff ` +
+          `(${op.text.trim().length} chars) — rewrite it as a continuation handoff carrying goals, decisions, exact file paths, key findings, errors, and the next step, ` +
+          `not an activity log`,
+        );
+      }
     }
   }
 

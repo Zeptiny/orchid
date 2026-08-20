@@ -268,6 +268,60 @@ describe('U13 validator', () => {
     expect(res.valid).toBe(false);
     expect(res.errors.some(e => e.includes('a1') && e.includes('drop on non-thinking'))).toBe(true);
   });
+
+  it('substantive span summarized with an activity log -> rejected for re-prompt', () => {
+    const bigContent = 'f'.repeat(1500); // >= SUBSTANTIVE_SPAN_MIN_SOURCE_CHARS
+    const msgs: Message[] = [
+      makeUser('u1','q'),
+      makeToolCallMsg('tc1','c1','read'),
+      makeToolResult('tr1','c1','read', bigContent),
+    ];
+    const manifest = buildManifest(msgs, { start: 0, end: 3 });
+    const ops: SelectiveOp[] = [
+      { type: 'keep', id: 'u1' },
+      { type: 'summarize', ids: ['tc1','tr1'], text: 'Assistant read a file.' },
+    ];
+    const res = validateSelectiveOps(ops, manifest, msgs);
+    expect(res.valid).toBe(false);
+    expect(res.errors.some(e => e.includes('not a substantive handoff'))).toBe(true);
+  });
+
+  it('substantive span with a real handoff text passes', () => {
+    const bigContent = 'f'.repeat(1500);
+    const handoff = [
+      '**Goal:** fix the login bug from u1.',
+      '**Key Findings:** read returned the trigger engine layout; the expiry bug is the units mismatch between exp (seconds) and Date.now() (milliseconds).',
+      '**Files:** src/auth.ts — handleLogin compares exp against Date.now() at line 42.',
+      '**Next Step:** patch the comparison and add a regression test.',
+    ].join('\n');
+    const msgs: Message[] = [
+      makeUser('u1','q'),
+      makeToolCallMsg('tc1','c1','read'),
+      makeToolResult('tr1','c1','read', bigContent),
+    ];
+    const manifest = buildManifest(msgs, { start: 0, end: 3 });
+    const ops: SelectiveOp[] = [
+      { type: 'keep', id: 'u1' },
+      { type: 'summarize', ids: ['tc1','tr1'], text: handoff },
+    ];
+    const res = validateSelectiveOps(ops, manifest, msgs);
+    expect(res.valid).toBe(true);
+    expect(res.errors).toHaveLength(0);
+  });
+
+  it('tiny span keeps the non-empty rule only (no substance floor)', () => {
+    const msgs: Message[] = [
+      makeUser('u1','q'),
+      makeAssistant('a1','short note'),
+    ];
+    const manifest = buildManifest(msgs, { start: 0, end: 2 });
+    const ops: SelectiveOp[] = [
+      { type: 'keep', id: 'u1' },
+      { type: 'summarize', ids: ['a1'], text: 'brief' },
+    ];
+    const res = validateSelectiveOps(ops, manifest, msgs);
+    expect(res.valid).toBe(true);
+  });
 });
 
 // ── U14 materialization and loop ────────────────────────────────────────────

@@ -133,7 +133,14 @@ function perTurnSectionCaller(): (input: { manifest: ReturnType<typeof buildMani
     let pending: string[] = [];
     const flush = () => {
       if (pending.length === 0) return;
-      ops.push({ type: 'summarize', ids: [...pending], text: `Section for ${pending.length} messages.` });
+      // Substantive handoff-shaped text (the new validator rejects activity
+      // logs for spans with >= 1000 chars of source — the fixture must model
+      // the contract, not the old degenerate output).
+      ops.push({
+        type: 'summarize',
+        ids: [...pending],
+        text: `Section for ${pending.length} messages: explored the compaction engine files and recorded the trigger, select, and apply findings needed to continue; exact file paths, key decisions, and errors are preserved in this handoff; next step is applying the remaining compaction pipeline stages.`,
+      });
       pending = [];
     };
     for (const entry of manifest.entries) {

@@ -385,8 +385,9 @@ export async function prepareSubagentCompaction(params: {
   if (compactableSlice.length === 0) return null;
 
   try {
-    const { summarizeCompactableRange } = await import('../llm/compaction/summarize.js');
+    const { summarizeCompactableRange, buildCompactionBridgeContext } = await import('../llm/compaction/summarize.js');
     params.onProgress?.({ phase: 'preparing', detail: 'Summarizing history', mode: subagentsScope.mode as CompactionMode });
+    const bridgeContext = buildCompactionBridgeContext(messages, compactableRange);
     const promise = summarizeCompactableRange({
       messages: compactableSlice,
       scope: 'subagents',
@@ -398,6 +399,7 @@ export async function prepareSubagentCompaction(params: {
         : { sessionId, chainId, turnId },
       subagentId,
       ...(params.onTextDelta ? { onTextDelta: params.onTextDelta } : {}),
+      ...(bridgeContext ? { bridgeContext } : {}),
     });
     return {
       cut,
