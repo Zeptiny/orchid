@@ -1132,6 +1132,44 @@ describe('buildHistoryStreamItems — compacted runs merge across chain boundari
     );
     expect(thoughts).toHaveLength(1);
   });
+
+  it('renders a superseded summary head inside an expanded run as the compaction widget, not an agent bubble', () => {
+    const sessionChains = [
+      chain({
+        id: 'run',
+        messages: [
+          excludedText('m1', 'old turn'),
+          summaryHead('head-1', 'Superseded summary.', { excludeFromModel: true }),
+          excludedText('m2', 'later old turn'),
+        ],
+      }),
+      chain({ id: 'c2', messages: [userMsg('u1', 'next')] }),
+    ];
+
+    const collapsed = buildHistoryStreamItems({ ...opts, sessionChains });
+    const stub = collapsed.items.find((it) => it.kind === 'compacted-stub');
+    if (stub?.kind !== 'compacted-stub') throw new Error('expected compacted-stub');
+
+    const expanded = buildHistoryStreamItems({
+      ...opts,
+      sessionChains,
+      expandedCompactedKeys: new Set([stub.key]),
+    });
+
+    const body = bodyItems(expanded.items);
+    // The flagged head stays a compaction-summary item (CompactionWidget)
+    // between the two ordinary compacted messages.
+    expect(body.map((it) => it.kind)).toEqual([
+      'message',
+      'compaction-summary',
+      'message',
+      'message',
+    ]);
+    const summary = body[1];
+    if (summary?.kind !== 'compaction-summary') throw new Error('expected compaction-summary');
+    expect(summary.message.id).toBe('head-1');
+    expect(summary.message.excludeFromModel).toBe(true);
+  });
 });
 
 describe('suppressLiveMessagesAlreadyInHistory — exact-id suppression', () => {

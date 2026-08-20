@@ -553,7 +553,8 @@ function flushCompactedBuffer(
   };
 
   if (isExpanded) {
-    // Expand to full fidelity — render each buffered message with normal logic.
+    // Expand to full fidelity — render each buffered message with normal
+    // dispatch, deferred so every item lands in buffer order.
     const bufferedIds = new Set(buffer.map((m) => m.id));
     for (const buffered of buffer) {
       if (buffered.type === MessageType.TOOL_CALL) {
@@ -582,6 +583,19 @@ function flushCompactedBuffer(
       }
       if (buffered.type === MessageType.THINKING) {
         pushMessage(buffered, 'thought');
+        counter.value += 1;
+        continue;
+      }
+      // A flagged summary head (superseded by a later compaction) keeps the
+      // compaction-summary widget even inside an expanded run — it stays
+      // visually distinct from agent-authored messages instead of rendering
+      // as an indistinguishable "other" bubble.
+      if (hasCompactedMarker(buffered)) {
+        state.items.push({
+          kind: 'compaction-summary',
+          key: keyFor(buffered, 'compaction'),
+          message: buffered,
+        });
         counter.value += 1;
         continue;
       }
