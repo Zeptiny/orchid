@@ -109,8 +109,8 @@ afterEach(() => {
 // ─── Command Registry ────────────────────────────────────────────────────────
 
 describe('Command Registry', () => {
-  it('all 12 commands are registered', () => {
-    expect(COMMANDS).toHaveLength(12);
+  it('all 13 commands are registered', () => {
+    expect(COMMANDS).toHaveLength(13);
   });
 
   it('all command names are defined', () => {

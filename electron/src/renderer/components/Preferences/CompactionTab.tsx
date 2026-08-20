@@ -201,7 +201,7 @@ export function CompactionTab({ compaction, onChange }: CompactionTabProps) {
           <FormField
             label="Preserve Percent"
             htmlFor={`${prefix}-preserve-percent`}
-            hint="Fraction of the context window kept verbatim (never compacted). The newest messages fill this budget from the end; everything older is summarized. 0.25 = keep the most recent 25%."
+            hint="Fraction of the CURRENT context usage kept verbatim (never compacted), clamped to the context window. The newest messages fill this budget from the end; everything older is summarized. 0.25 = keep the most recent 25% of what is in use."
             className="config-field"
           >
             <TextInput

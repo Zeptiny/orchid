@@ -220,6 +220,7 @@ export function acceptChatEvent(
   affinity: ChatEventAffinity,
   event: { sessionId: string; turnId: string; sequence: number },
   isSending: boolean,
+  rebindTurnWhenIdle = false,
 ): boolean {
   if (affinity.selectedSessionId && event.sessionId !== affinity.selectedSessionId) return false;
   if (!affinity.selectedSessionId && affinity.streamSessionId && event.sessionId !== affinity.streamSessionId) return false;
@@ -227,7 +228,16 @@ export function acceptChatEvent(
     if (!isSending) return false;
     affinity.streamSessionId = event.sessionId;
   }
-  if (affinity.streamTurnId && affinity.streamTurnId !== event.turnId) return false;
+  if (affinity.streamTurnId && affinity.streamTurnId !== event.turnId) {
+    // A manual /compact emits progress outside any turn with its own synthetic
+    // turnId. While the renderer holds no live stream the mismatch rebinds
+    // (with a fresh sequence watermark); while streaming, a mismatched turnId
+    // is a foreign or stale event and stays rejected.
+    if (!(rebindTurnWhenIdle && !isSending)) return false;
+    affinity.streamTurnId = event.turnId;
+    affinity.lastSequence = event.sequence;
+    return true;
+  }
   if (affinity.streamTurnId === event.turnId && event.sequence <= affinity.lastSequence) return false;
   affinity.streamTurnId = event.turnId;
   affinity.lastSequence = event.sequence;
@@ -464,8 +474,13 @@ export function useChat(
     }
   }, [activeSessionId, isSwitchingSession]);
 
-  const acceptsEvent = useCallback((event: Pick<ChatTurnEventAction, 'sessionId' | 'turnId' | 'sequence'>) =>
-    acceptChatEvent(affinityRef.current.value, event, isSendingRef.current), []);
+  const acceptsEvent = useCallback(
+    (
+      event: Pick<ChatTurnEventAction, 'sessionId' | 'turnId' | 'sequence'>,
+      opts?: { readonly rebindTurnWhenIdle?: boolean },
+    ) => acceptChatEvent(affinityRef.current.value, event, isSendingRef.current, opts?.rebindTurnWhenIdle),
+    [],
+  );
   const cancelStreamFrame = useCallback(() => {
     if (streamFrameIdRef.current == null) return;
     window.cancelAnimationFrame(streamFrameIdRef.current);
@@ -514,13 +529,13 @@ export function useChat(
       isSendingRef.current = false;
     }
   }, [dispatchProjection, flushStreamFrame]);
-  const deliverEvent = useCallback((event: ChatTurnEventAction) => {
+  const deliverEvent = useCallback((event: ChatTurnEventAction, opts?: { readonly rebindTurnWhenIdle?: boolean }) => {
     // Actor idle/interrupted snapshots can straddle the terminal event. They
     // must not end the renderer turn or claim affinity for the next queued
     // turn; done/error owns the terminal handoff and authoritative messages.
     if ('state' in event && (event.state === 'idle' || event.state === 'interrupted')) return;
     if (bufferHydrationEvent(event)) return;
-    if (acceptsEvent(event)) applyLiveEvent(event);
+    if (acceptsEvent(event, opts)) applyLiveEvent(event);
   }, [acceptsEvent, applyLiveEvent, bufferHydrationEvent]);
 
   // Subscribe to IPC events
@@ -546,7 +561,10 @@ export function useChat(
     const unsubToolStart = window.orchid.chat.onToolCallStart?.((event: ChatToolCallStartEvent) => deliverEvent(normalize(event))) ?? (() => {});
     const unsubToolDelta = window.orchid.chat.onToolCallDelta?.((event: ChatToolCallDeltaEvent) => queueFrameEvent(normalize(event))) ?? (() => {});
     const unsubToolUpdate = window.orchid.chat.onToolCallUpdate?.((event: ChatToolCallUpdateEvent) => deliverEvent(normalize(event))) ?? (() => {});
-    const unsubCompactionProgress = window.orchid.chat.onCompactionProgress?.((event: CompactionProgressEvent) => deliverEvent(normalize(event))) ?? (() => {});
+    // Manual /compact runs outside any turn with a synthetic turnId — the
+    // rebind flag lets idle compaction progress rebind turn affinity instead
+    // of being rejected as a foreign turn.
+    const unsubCompactionProgress = window.orchid.chat.onCompactionProgress?.((event: CompactionProgressEvent) => deliverEvent(normalize(event), { rebindTurnWhenIdle: true })) ?? (() => {});
 
     return () => {
       cancelStreamFrame();

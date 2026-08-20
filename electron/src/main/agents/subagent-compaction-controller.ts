@@ -457,6 +457,9 @@ export class SubagentCompactionController {
           config: cfg2 ?? { threshold: 0.85, preserve_percent: 0.25 },
           contextTokens: this._contextTokens ?? 0,
           tokensPerChar: tpc3,
+          // Preserve scales against current usage — post-compaction input is
+          // the best available estimate for the retried stream's context.
+          currentInputTokens: postTokens > 0 ? postTokens : null,
         });
         // Exhaustion test: with chain inference splitting summary heads into
         // their own chains, the range may still contain the previous head

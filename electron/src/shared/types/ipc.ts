@@ -1134,6 +1134,18 @@ export type ChatSendResult =
       error: string;
     };
 
+/** Result of chat:compact — a user-initiated `/compact` on an idle session. */
+export type ChatCompactResult =
+  | { status: 'compacted'; sessionId: string }
+  | { status: 'busy'; sessionId: string }
+  | {
+      status: 'nothing_to_compact';
+      sessionId: string;
+      /** Gate reason ('empty-compactable-range', 'uncalibrated', …). */
+      detail?: string;
+    }
+  | { status: 'error'; error: string };
+
 // ── Updater API ──────────────────────────────────────────────────────────────
 
 /** Detailed download progress emitted on updater:progress. */
@@ -1303,6 +1315,8 @@ export interface OrchidAPI {
     queueNext: (request: ChatQueueNextRequest) => Promise<void>;
     /** Immediately stop exactly one session without staged Esc confirmation. */
     stop: (message: ChatStopMessage) => Promise<{ status: string }>;
+    /** User-initiated compaction (/compact) on an idle session. */
+    compact: (message?: ChatCancelMessage) => Promise<ChatCompactResult>;
     /** Read coherent persisted history and in-flight state without changing selection. */
     snapshot: (message?: ChatSnapshotMessage) => Promise<ChatSessionSnapshot | null>;
     onChunk: (callback: (event: ChatChunkEvent) => void) => () => void;
@@ -1573,6 +1587,7 @@ export const IPC_CHANNELS = {
   CHAT_TOOL_CALL_DELTA: 'chat:tool_call_delta',
   CHAT_TOOL_CALL_UPDATE: 'chat:tool_call_update',
   CHAT_COMPACTION_PROGRESS: 'chat:compaction_progress',
+  CHAT_COMPACT: 'chat:compact',
 
   SUBAGENTS_SNAPSHOT: 'subagents:snapshot',
   SUBAGENTS_DETAIL: 'subagents:detail',
@@ -1747,6 +1762,7 @@ export const ALLOWED_INVOKE_CHANNELS = [
   IPC_CHANNELS.CHAT_QUEUE_NEXT,
   IPC_CHANNELS.CHAT_STOP,
   IPC_CHANNELS.CHAT_SNAPSHOT,
+  IPC_CHANNELS.CHAT_COMPACT,
   IPC_CHANNELS.SUBAGENTS_SNAPSHOT,
   IPC_CHANNELS.SUBAGENTS_DETAIL,
   IPC_CHANNELS.CONFIG_GET,

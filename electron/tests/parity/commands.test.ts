@@ -7,7 +7,7 @@
 import { describe, it, expect } from 'vitest';
 import { COMMANDS } from '../../src/renderer/commands/registry';
 
-// ── Expected commands (12 total) ───────────────────────────────────────────
+// ── Expected commands (13 total) ───────────────────────────────────────────
 
 const EXPECTED_COMMANDS = [
   { name: '/new', category: 'commands' },
@@ -22,13 +22,14 @@ const EXPECTED_COMMANDS = [
   { name: '/rag index', category: 'commands' },
   { name: '/ast index', category: 'commands' },
   { name: '/rag clear', category: 'commands' },
+  { name: '/compact', category: 'commands' },
 ];
 
 // ── Tests ───────────────────────────────────────────────────────────────────
 
 describe('Command Parity', () => {
-  it('all 12 commands are registered', () => {
-    expect(COMMANDS).toHaveLength(12);
+  it('all 13 commands are registered', () => {
+    expect(COMMANDS).toHaveLength(13);
   });
 
   it('all expected command names are present', () => {

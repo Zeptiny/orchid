@@ -9,11 +9,13 @@ import {
 import { getForegroundLiveRegistry } from '../tools/process/foreground-live';
 import { SEND_INPUT_MAX_TEXT_LENGTH } from '../tools/process/send-input';
 import { getSessionManager } from '../session/singleton';
-import { IPC_CHANNELS, type ChatSessionSnapshot } from '../../shared/types/ipc';
+import { IPC_CHANNELS, type ChatSessionSnapshot, type ChatCompactResult } from '../../shared/types/ipc';
 import { ChainStatus, lastChainError } from '../../shared/types/chain';
 import { flattenSessionMessages } from '../../shared/types/session';
+import { getProjectTrustState } from '../project/trust';
+import { getProjectRuntimeRegistry } from '../project/runtime';
 import { clearAllChatHistory } from './chat-history';
-import { chatCancelSchema, chatQueueNextSchema, chatSendSchema, chatSnapshotSchema, chatStopSchema } from './payload-schemas';
+import { chatCancelSchema, chatCompactSchema, chatQueueNextSchema, chatSendSchema, chatSnapshotSchema, chatStopSchema } from './payload-schemas';
 import { requestNextRequestStop } from './next-request-stop';
 import { completeSessionActivity } from './session-activity';
 import {
@@ -32,6 +34,7 @@ import {
   forceStopSession,
 } from './chat/abort';
 import { startChatTurn } from './chat/send';
+import { compactSessionNow } from './chat/compaction';
 import { triggerInterruptedTurnAutoName } from './chat/title';
 import type { AgentContext } from '../agents/xstate/agent-machine';
 
@@ -162,6 +165,30 @@ export function registerChatIPC(): void {
     const parsed = chatQueueNextSchema.safeParse(payload ?? {});
     if (!parsed.success) throw new Error(`Invalid chat:queue_next payload: ${parsed.error.message}`);
     requestNextRequestStop(parsed.data.sessionId);
+  });
+
+  ipcMain.handle(IPC_CHANNELS.CHAT_COMPACT, async (event, payload: unknown): Promise<ChatCompactResult> => {
+    const parsed = chatCompactSchema.safeParse(payload ?? {});
+    if (!parsed.success) throw new Error(`Invalid chat:compact payload: ${parsed.error.message}`);
+    const windowId = String(event.sender.id);
+    const sessionId = parsed.data.sessionId ?? getSessionManager().getActive(windowId)?.id;
+    if (!sessionId) {
+      return { status: 'nothing_to_compact', sessionId: '', detail: 'No active session to compact.' };
+    }
+    const session = getSessionManager().getSession(sessionId);
+    if (!session) {
+      return { status: 'nothing_to_compact', sessionId, detail: 'Session not found.' };
+    }
+    const boundCwd = session.cwd?.trim();
+    if (!boundCwd || getProjectTrustState(boundCwd) !== 'trusted') {
+      return { status: 'nothing_to_compact', sessionId, detail: 'The project folder for this session is not trusted.' };
+    }
+    const runtime = getProjectRuntimeRegistry().get(boundCwd);
+    const selection = session.selection ?? runtime.config.default_model;
+    if (!selection) {
+      return { status: 'nothing_to_compact', sessionId, detail: 'A provider connection and model are required before compacting.' };
+    }
+    return compactSessionNow(sessionId, runtime, selection);
   });
 
   ipcMain.handle(IPC_CHANNELS.CHAT_CANCEL, async (event, payload: unknown) => {

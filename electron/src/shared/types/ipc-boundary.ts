@@ -441,6 +441,8 @@ export interface CommandContext {
   onIndexAST: () => Promise<void>;
   /** Clear RAG index. */
   onClearRAG: () => Promise<void>;
+  /** Compact the active session's context (user-initiated /compact). */
+  onCompact: () => Promise<void>;
   /** Show a notification message. */
   onNotify: (message: string, severity?: 'info' | 'warning' | 'error') => void;
   /** Close the command palette. */

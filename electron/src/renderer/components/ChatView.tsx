@@ -995,6 +995,25 @@ export function ChatView({ isVisible = true, bootstrapConfig = null, onNotify, a
     }
   }, [refreshIndex]);
 
+  // /compact — user-initiated compaction of the active session. Main refuses
+  // while a turn is streaming; the status maps to a toast and the renderer
+  // reloads the session on SESSION_COMPACTION like an automatic compaction.
+  const handleCompact = useCallback(async () => {
+    if (!window.orchid?.chat?.compact) {
+      throw new Error('Compaction IPC is not available');
+    }
+    const result = await window.orchid.chat.compact();
+    if (result.status === 'compacted') {
+      notify('Context compacted.', 'info');
+    } else if (result.status === 'busy') {
+      notify('Session is busy — compact after the current turn finishes.', 'warning');
+    } else if (result.status === 'nothing_to_compact') {
+      notify(result.detail ? `Nothing to compact (${result.detail}).` : 'Nothing to compact.', 'info');
+    } else if (result.status === 'error') {
+      throw new Error(result.error);
+    }
+  }, [notify]);
+
   useInspectorHydration({
     enabled: sidebarOpen,
     workspaceKey: workspaceCwd,
@@ -1064,6 +1083,7 @@ export function ChatView({ isVisible = true, bootstrapConfig = null, onNotify, a
     onPickProjectDir: handlePickProjectDir,
     onIndexRAG: handleIndexRAG,
     onIndexAST: handleIndexAST,
+    onCompact: handleCompact,
     onClearRAG: async () => {
       try {
         if (window.orchid?.rag?.clear) {
@@ -1089,6 +1109,7 @@ export function ChatView({ isVisible = true, bootstrapConfig = null, onNotify, a
     handlePickProjectDir,
     handleIndexRAG,
     handleIndexAST,
+    handleCompact,
     refreshIndex,
     notify,
   ]);

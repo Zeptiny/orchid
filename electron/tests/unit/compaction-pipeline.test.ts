@@ -34,6 +34,7 @@ import {
   clampTokensPerChar,
   computeMessageCharCache,
   deriveTokensPerChar,
+  preserveBaseTokens,
   runCompactionGate,
   type CompactableRange,
   type MessageCharCache,
@@ -191,6 +192,130 @@ describe('deriveTokensPerChar / clampTokensPerChar', () => {
 
   it('floors the char-cache total so tiny histories never divide by zero', () => {
     expect(computeMessageCharCache([])).toEqual({ chars: [], total: 1 });
+  });
+});
+
+// ── Preserve base (current usage, clamped to the window) ─────────────────────
+
+describe('preserveBaseTokens', () => {
+  it('scales the preserve base to current usage and clamps at the window', () => {
+    expect(preserveBaseTokens(4_000, 10_000)).toBe(4_000);
+    expect(preserveBaseTokens(12_000, 10_000)).toBe(10_000);
+  });
+
+  it('falls back to the window when no usable current estimate exists', () => {
+    expect(preserveBaseTokens(null, 10_000)).toBe(10_000);
+    expect(preserveBaseTokens(0, 10_000)).toBe(10_000);
+    expect(preserveBaseTokens(Number.NaN, 10_000)).toBe(10_000);
+    expect(preserveBaseTokens(undefined, 10_000)).toBe(10_000);
+  });
+});
+
+describe('runCompactionGate — preserve budget scales with current usage', () => {
+  it('compacts more when current usage is below the window', () => {
+    // Same history, fixed calibration; only the observed input differs. Both
+    // sit above the 0.5 threshold, so both prepare — but the 6k observation
+    // shrinks the preserve budget (0.25 × 6k < 0.25 × 10k), leaving a larger
+    // compactable range than the 10k observation.
+    const atWindow = runCompactionGate(gateInput({ inputTokens: 10_000, tokensPerChar: 0.2 }));
+    const belowWindow = runCompactionGate(gateInput({ inputTokens: 6_000, tokensPerChar: 0.2 }));
+    expect(atWindow.kind).toBe('prepare');
+    expect(belowWindow.kind).toBe('prepare');
+    if (atWindow.kind === 'no-op' || belowWindow.kind === 'no-op') throw new Error('expected action decisions');
+    expect(belowWindow.cut.compactableRange.end).toBeGreaterThanOrEqual(atWindow.cut.compactableRange.end);
+    expect(belowWindow.compactableTokens).toBeGreaterThan(atWindow.compactableTokens);
+  });
+
+  it('keeps the window base when the estimate is over-window (overflow clamp)', () => {
+    // Fixed calibration so only the preserve base varies with the observation.
+    const atWindow = runCompactionGate(gateInput({ inputTokens: 10_000, tokensPerChar: 0.2 }));
+    const overWindow = runCompactionGate(gateInput({ inputTokens: 25_000, tokensPerChar: 0.2 }));
+    if (atWindow.kind === 'no-op' || overWindow.kind === 'no-op') throw new Error('expected action decisions');
+    expect(overWindow.cut.cutIndex).toBe(atWindow.cut.cutIndex);
+    expect(overWindow.cut.compactableRange).toEqual(atWindow.cut.compactableRange);
+  });
+});
+
+// ── Manual mode (/compact) ───────────────────────────────────────────────────
+
+describe('runCompactionGate — manual mode', () => {
+  it('bypasses the threshold gate entirely', () => {
+    const below = runCompactionGate(gateInput({ inputTokens: 1_000 }));
+    expect(below).toMatchObject({ kind: 'no-op', reason: 'below-threshold' });
+    const manual = runCompactionGate(gateInput({ inputTokens: 1_000, manual: true }));
+    expect(manual).toMatchObject({ kind: 'prepare', reason: 'manual' });
+  });
+
+  it('bypasses armed hysteresis without accrual', () => {
+    const armed: TriggerState = {
+      hysteresisArmed: true,
+      pendingPrepare: false,
+      postCompactionInputTokens: 7_950,
+    };
+    expect(runCompactionGate(gateInput({ triggerState: armed }))).toMatchObject({ kind: 'no-op', reason: 'hysteresis-armed' });
+    expect(runCompactionGate(gateInput({ triggerState: armed, manual: true }))).toMatchObject({ kind: 'prepare', reason: 'manual' });
+  });
+
+  it('ignores the min_compactable_tokens floor', () => {
+    // Small history + low floor-failing range: auto no-ops below-floor, manual prepares.
+    const smallHistory = [
+      makeMsg('u-0', 'request 0', MessageRole.USER),
+      makeMsg('a-0', 'y'.repeat(4_000), MessageRole.ASSISTANT),
+      makeMsg('u-1', 'request 1', MessageRole.USER),
+      makeMsg('a-1', 'y'.repeat(4_000), MessageRole.ASSISTANT),
+    ];
+    const config = { ...scopeConfig('compactor'), min_compactable_tokens: 1_000_000 };
+    expect(runCompactionGate(gateInput({ messages: smallHistory, config }))).toMatchObject({ kind: 'no-op', reason: 'below-floor' });
+    expect(runCompactionGate(gateInput({ messages: smallHistory, config, manual: true }))).toMatchObject({ kind: 'prepare', reason: 'manual' });
+  });
+
+  it('never takes the reclaim short-circuit — reclaim flags merge into a prepare', () => {
+    const toolCall = (id: string, callId: string): Message => ({
+      ...makeMsg(id, 'do it', MessageRole.ASSISTANT),
+      type: MessageType.TOOL_CALL,
+      tool_calls: [{ id: callId, type: 'function', function: { name: 'read', arguments: '{"file_path":"a"}' } }],
+    });
+    const toolResult = (id: string, callId: string): Message => ({
+      ...makeMsg(id, 'duplicate output', MessageRole.TOOL),
+      type: MessageType.TOOL_RESULT,
+      tool_call_id: callId,
+      name: 'read',
+    });
+    const messages = [
+      makeMsg('u-0', 'request 0', MessageRole.USER),
+      toolCall('a-0', 'tc-1'),
+      toolResult('t-1', 'tc-1'),
+      makeMsg('a-1', 'y'.repeat(8_000), MessageRole.ASSISTANT),
+      toolCall('a-2', 'tc-2'),
+      toolResult('t-2', 'tc-2'),
+      makeMsg('u-1', 'request 1', MessageRole.USER),
+      makeMsg('a-3', 'y'.repeat(8_000), MessageRole.ASSISTANT),
+    ];
+    const config = { ...scopeConfig('compactor'), mechanical_reclaim: true };
+    const auto = runCompactionGate(gateInput({ messages, config }));
+    expect(auto.kind).toBe('prepare');
+    if (auto.kind !== 'prepare') throw new Error('expected prepare');
+    const manual = runCompactionGate(gateInput({ messages, config, manual: true }));
+    expect(manual).toMatchObject({ kind: 'prepare', reason: 'manual' });
+    if (manual.kind !== 'prepare') throw new Error('expected prepare');
+    // Both carry the reclaim flags; manual just never downgrades to reclaim-only.
+    expect(manual.flaggedIds).toContain('t-1');
+    expect(manual.flaggedIds).toEqual(auto.flaggedIds);
+  });
+
+  it('still respects the uncalibrated gate and the empty-range guard', () => {
+    expect(runCompactionGate(gateInput({ inputTokens: null, manual: true }))).toMatchObject({ kind: 'no-op', reason: 'uncalibrated' });
+    const singleChain = [makeMsg('u-0', 'request 0', MessageRole.USER), makeMsg('a-0', 'y'.repeat(10), MessageRole.ASSISTANT)];
+    expect(runCompactionGate(gateInput({ messages: singleChain, manual: true }))).toMatchObject({ kind: 'no-op', reason: 'empty-compactable-range' });
+  });
+
+  it('still respects exempt user-message pinning', () => {
+    const config = { ...scopeConfig('compactor'), keep_last_user_messages: 1 };
+    const decision = runCompactionGate(gateInput({ config, manual: true }));
+    expect(decision.kind).toBe('prepare');
+    if (decision.kind === 'no-op') throw new Error('expected an action decision');
+    const rangeIds = bulkyHistory().slice(decision.cut.compactableRange.start, decision.cut.compactableRange.end).map((m) => m.id);
+    expect(rangeIds).not.toContain('u-5');
   });
 });
 

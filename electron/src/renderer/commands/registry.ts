@@ -215,6 +215,21 @@ export const COMMANDS: (Command & { execute: (ctx: CommandContext) => Promise<vo
       ctx.onClose();
     },
   },
+  {
+    name: '/compact',
+    description: 'Compact the current session context',
+    category: 'commands',
+    execute: async (ctx) => {
+      ctx.onClose();
+      try {
+        const result = await ctx.onCompact();
+        void result;
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        ctx.onNotify(`Compaction failed: ${msg}`, 'error');
+      }
+    },
+  },
 ];
 
 // ── Sub-picker data builders ─────────────────────────────────────────────────

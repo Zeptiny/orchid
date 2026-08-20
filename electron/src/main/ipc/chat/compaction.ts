@@ -26,14 +26,16 @@ import type { ModelSelection } from '../../../shared/types/provider';
 import { ChainStatus } from '../../../shared/types/chain';
 import type { Chain } from '../../../shared/types/chain';
 import type { Message } from '../../../shared/types/message';
-import { IPC_CHANNELS } from '../../../shared/types/ipc';
+import { IPC_CHANNELS, type ChatCompactResult } from '../../../shared/types/ipc';
 import { MAIN_AGENT_SCOPE_ID } from '../../../shared/types/agent-scope';
 import type { CompactionProgressEvent, CompactionProgressPhase } from '../../../shared/types/compaction-progress';
 import type { ProjectRuntime } from '../../project/runtime';
 import type { ProviderAccountingStore } from '../../providers/accounting/store';
+import { getProviderRuntime } from '../../providers';
+import { getProviderAccountingStore } from '../../providers/accounting/store';
 import { getSessionManager } from '../../session/singleton';
 import { onSessionDeleted } from '../../session/manager';
-import { setChatHistory } from '../chat-history';
+import { getChatHistory, setChatHistory } from '../chat-history';
 import {
   clearCompactionPause,
   clearCompactionPausesForSession,
@@ -69,9 +71,10 @@ import {
   runCompactionAttempt,
   type CompactionAttemptOutcome,
 } from '../../llm/compaction/run-attempt';
-import { activeAgents } from './state';
-import { sendTurnEvent, webContentsForWindowId } from './events';
+import { activeAgents, sessionsStarting } from './state';
+import { sendSessionEvent, sendTurnEvent, webContentsForWindowId } from './events';
 import {
+  historyFromSession,
   persistCompactionBetweenTurns as persistCompaction,
   persistCompactionDurable,
   publishCompactedSession,
@@ -119,6 +122,33 @@ function trackSelectiveRun(sessionId: string, run: Promise<unknown>): void {
 const compactionProgressEpochs = new Map<string, number>();
 
 /**
+ * Per-session synthetic event identity for idle compactions (manual
+ * `/compact`): stable turnId for the compaction's lifecycle plus a monotonic
+ * sequence, minted lazily and dropped on the terminal phase so the next idle
+ * compaction starts a fresh stream.
+ */
+const idleCompactionEventIds = new Map<string, { turnId: string; sequence: number }>();
+
+function idleCompactionIdentity(
+  sessionId: string,
+  terminal: boolean,
+): { sessionId: string; turnId: string; sequence: number } | null {
+  // A turn is starting (chat:send's send-time sync compaction window) — a
+  // synthetic turnId here would poison the renderer's turn affinity before
+  // the real turn's first event arrives and the whole turn would be dropped.
+  if (sessionsStarting.has(sessionId)) return null;
+  let entry = idleCompactionEventIds.get(sessionId);
+  if (!entry) {
+    entry = { turnId: randomUUID(), sequence: 0 };
+    idleCompactionEventIds.set(sessionId, entry);
+  }
+  entry.sequence += 1;
+  const identity = { sessionId, turnId: entry.turnId, sequence: entry.sequence };
+  if (terminal) idleCompactionEventIds.delete(sessionId);
+  return identity;
+}
+
+/**
  * Emit a typed compaction-progress event through the sequenced turn-event
  * broadcast. Replaces the synthetic `'compaction'` tool-call channel (review
  * #37): no JSON-stringified state, no `toolName` interception, no fake
@@ -128,6 +158,12 @@ const compactionProgressEpochs = new Map<string, number>();
  * `options.webContents` lets turn-lifecycle call sites deliver on their own
  * sender (the same window the turn events stream to); without it the active
  * agent's window is resolved from the electron registry.
+ *
+ * Idle sessions (manual `/compact` — no ActiveAgent owns a turn identity)
+ * emit through a per-session synthetic identity via `sendSessionEvent`, so
+ * the widget lifecycle works outside any turn. Silent only while a turn is
+ * starting: the send-time synchronous compaction must not mint a synthetic
+ * turnId the renderer could bind to before the real turn's first event.
  */
 export function emitCompactionProgress(
   sessionId: string,
@@ -140,10 +176,6 @@ export function emitCompactionProgress(
     estimatedTokens?: number | null;
   },
 ): void {
-  const active = activeAgents.get(sessionId);
-  if (!active || active.finalized) return;
-  const wc = options?.webContents ?? webContentsForWindowId(active.windowId);
-  if (!wc) return;
   if (phase === 'complete' || phase === 'failed') {
     compactionProgressEpochs.set(sessionId, (compactionProgressEpochs.get(sessionId) ?? 0) + 1);
   }
@@ -156,7 +188,16 @@ export function emitCompactionProgress(
     ...(options?.streamText !== undefined ? { streamText: options.streamText } : {}),
     ...(options?.estimatedTokens !== undefined ? { estimatedTokens: options.estimatedTokens } : {}),
   };
-  sendTurnEvent(wc, active, IPC_CHANNELS.CHAT_COMPACTION_PROGRESS, payload);
+  const active = activeAgents.get(sessionId);
+  if (active && !active.finalized) {
+    const wc = options?.webContents ?? webContentsForWindowId(active.windowId);
+    if (!wc) return;
+    sendTurnEvent(wc, active, IPC_CHANNELS.CHAT_COMPACTION_PROGRESS, payload);
+    return;
+  }
+  const identity = idleCompactionIdentity(sessionId, phase === 'complete' || phase === 'failed');
+  if (!identity) return;
+  sendSessionEvent(null, sessionId, IPC_CHANNELS.CHAT_COMPACTION_PROGRESS, { ...identity, ...payload });
 }
 
 /**
@@ -178,6 +219,7 @@ export function clearCompactionState(sessionId: string): void {
   clearCompactionPausesForSession(sessionId);
   triggerCalibrationHydrated.delete(sessionId);
   selectiveRunsInFlight.delete(sessionId);
+  idleCompactionEventIds.delete(sessionId);
   compactionProgressEpochs.set(sessionId, (compactionProgressEpochs.get(sessionId) ?? 0) + 1);
   for (const key of [...compactionRetryTried]) {
     if (key === sessionId || key.startsWith(`${sessionId}:`)) compactionRetryTried.delete(key);
@@ -203,8 +245,9 @@ export const COMPACTION_STREAM_EMIT_INTERVAL_MS = 100;
 /**
  * Throttled live-progress emitter for the compaction widget: forwards the
  * compactor's accumulated LLM output as `compaction_progress` events with
- * phase `'compacting'`. No-ops when the session has no active agent, so it is
- * safe to pass unconditionally as `onTextDelta`. A trailing flush guarantees
+ * phase `'compacting'`. Routes through `emitCompactionProgress`, so idle
+ * sessions (manual `/compact`) get the widget too; safe to pass
+ * unconditionally as `onTextDelta`. A trailing flush guarantees
  * the final accumulated text always lands even when deltas arrive in bursts.
  * Bound to the compaction epoch at creation: once this compaction reaches a
  * terminal phase (or the session's compaction state is cleared and a later
@@ -220,8 +263,6 @@ export function createCompactionStreamEmitter(sessionId: string): (accumulatedTe
     trailingTimer = null;
     lastEmitAt = Date.now();
     if ((compactionProgressEpochs.get(sessionId) ?? 0) !== boundEpoch) return;
-    const active = activeAgents.get(sessionId);
-    if (!active || active.finalized) return;
     let estimatedTokens: number | null = null;
     try {
       const tpc = getCompactionTrigger(sessionId).state.tokensPerChar;
@@ -231,16 +272,10 @@ export function createCompactionStreamEmitter(sessionId: string): (accumulatedTe
     } catch {
       // trigger unavailable (test env) — char count remains the display
     }
-    const wc = webContentsForWindowId(active.windowId);
-    if (wc) {
-      sendTurnEvent(wc, active, IPC_CHANNELS.CHAT_COMPACTION_PROGRESS, {
-        type: 'compaction_progress',
-        agentScopeId: MAIN_AGENT_SCOPE_ID,
-        phase: 'compacting',
-        streamText: latest,
-        estimatedTokens,
-      });
-    }
+    emitCompactionProgress(sessionId, 'compacting', undefined, {
+      streamText: latest,
+      estimatedTokens,
+    });
   };
   return (accumulatedText: string): void => {
     latest = accumulatedText;
@@ -777,20 +812,22 @@ export async function tryCompactSynchronously(
   accountingStore: ProviderAccountingStore,
   chainId: string | null,
   turnId: string,
-): Promise<{ didApply: boolean; updatedMessages?: Message[]; transcriptMessages?: Message[] }> {
+  opts?: { manual?: boolean },
+): Promise<{ didApply: boolean; updatedMessages?: Message[]; transcriptMessages?: Message[]; reason?: string }> {
   const trigger = getCompactionTrigger(sessionId);
   const cfg = runtime.config.compaction?.main;
-  if (!cfg) return { didApply: false };
+  if (!cfg) return { didApply: false, reason: 'compaction-disabled' };
   // Models without a configured context window never compact proactively:
   // fabricating an assumed window here diverged from the mid-turn usage path,
-  // which is disabled when the limit is unknown.
-  if (contextTokens == null || !Number.isFinite(contextTokens) || contextTokens <= 0) return { didApply: false };
-  if (trigger.state.pendingPrepare) return { didApply: false };
+  // which is disabled when the limit is unknown. Manual compaction shares the
+  // rule — without a window there is no preserve budget to compute.
+  if (contextTokens == null || !Number.isFinite(contextTokens) || contextTokens <= 0) return { didApply: false, reason: 'no-context-window' };
+  if (trigger.state.pendingPrepare) return { didApply: false, reason: 'prepare-in-flight' };
   // A selective run orphaned by a discarded pending may still be streaming;
   // starting another here would duplicate the compactor LLM call. The backoff
   // is deliberately NOT consulted here — the overflow-retry caller treats
   // compaction as an emergency recovery path and must bypass the cooldown.
-  if (isSelectiveRunInFlight(sessionId)) return { didApply: false };
+  if (isSelectiveRunInFlight(sessionId)) return { didApply: false, reason: 'selective-in-flight' };
   // One exempt set per attempt: the gate's selectCut, the selective runner,
   // and every apply below consume the same resolved set.
   const exemptIds = mainExemptIds(messages, cfg);
@@ -804,8 +841,9 @@ export async function tryCompactSynchronously(
       tokensPerChar: trigger.state.tokensPerChar ?? null,
       triggerState: trigger.state,
       exemptIds,
+      ...(opts?.manual ? { manual: true } : {}),
     });
-    if (decision.kind === 'no-op') return { didApply: false };
+    if (decision.kind === 'no-op') return { didApply: false, reason: decision.reason };
     const { cut, flaggedIds, estimatedInput, tokensPerChar } = decision;
     const chains = getSessionManager().getSession(sessionId)?.chains ?? [];
     if (decision.kind === 'reclaim-only') {
@@ -1185,4 +1223,95 @@ export function handleUsageCompaction(
   } catch (err) {
     console.debug('[compaction] usage trigger failed (non-fatal):', err);
   }
+}
+
+// ── Manual compaction (/compact) ─────────────────────────────────────────────
+
+/**
+ * User-initiated compaction on an idle session (`/compact`). Assembles the
+ * inputs `startChatTurn` normally owns (history, runtime, selection, context
+ * window, compactor attribution), consumes any pending a prior turn left
+ * behind, then runs the synchronous compaction with the manual gate profile:
+ * threshold/hysteresis and `min_compactable_tokens` are bypassed, the reclaim
+ * short-circuit never answers, and calibrate-or-skip still applies.
+ *
+ * Refuses with `busy` while a turn is streaming or starting — the mid-turn
+ * pause machinery owns compaction during a live turn. Post-apply broadcasts
+ * ride the existing SESSION_COMPACTION / SESSION_UPDATED events the durable
+ * persist path emits, so an idle renderer reloads without extra plumbing.
+ */
+export async function compactSessionNow(
+  sessionId: string,
+  runtime: ProjectRuntime,
+  selection: ModelSelection,
+): Promise<ChatCompactResult> {
+  const active = activeAgents.get(sessionId);
+  if ((active && !active.finalized) || sessionsStarting.has(sessionId)) {
+    return { status: 'busy', sessionId };
+  }
+  if (!runtime.config.compaction?.main) {
+    return { status: 'nothing_to_compact', sessionId, detail: 'Compaction is disabled for this project.' };
+  }
+  await hydrateTriggerCalibration(sessionId);
+  let messages: Message[];
+  try {
+    messages = getChatHistory(sessionId) ?? historyFromSession(sessionId);
+  } catch (error) {
+    return {
+      status: 'error',
+      error: `Could not load conversation history: ${error instanceof Error ? error.message : String(error)}`,
+    };
+  }
+  // A pending left behind by an interrupted turn IS the requested compaction
+  // half-prepared — consume and apply it before starting a fresh prepare.
+  const pendingApplied = await applyPendingCompactionIfAny(sessionId, messages, runtime);
+  if (pendingApplied.applied) return { status: 'compacted', sessionId };
+  if (pendingApplied.updatedMessages) messages = pendingApplied.updatedMessages;
+
+  let contextTokens: number | null;
+  try {
+    const execution = await getProviderRuntime().resolveExecution(selection);
+    contextTokens = execution.model.limits?.contextTokens ?? null;
+  } catch (error) {
+    return {
+      status: 'error',
+      error: `Provider unavailable for compaction: ${error instanceof Error ? error.message : String(error)}`,
+    };
+  }
+  let accountingStore: ProviderAccountingStore;
+  try {
+    accountingStore = getProviderAccountingStore();
+  } catch (error) {
+    return {
+      status: 'error',
+      error: `Accounting store unavailable: ${error instanceof Error ? error.message : String(error)}`,
+    };
+  }
+  // Attribute the compactor LLM attempt to the session's latest chain when one
+  // exists; otherwise it lands chain-less like other out-of-turn work.
+  let chainId: string | null = null;
+  try {
+    const chains = getSessionManager().getSession(sessionId)?.chains ?? [];
+    chainId = chains.length > 0 ? chains[chains.length - 1]!.id : null;
+  } catch {
+    // attribution is best-effort
+  }
+  // Widget feedback on the idle session: preparing opens the compaction
+  // widget; every non-applying exit below emits the terminal phase so the
+  // widget can never stay stuck on 'preparing' (tryCompact's success
+  // branches emit 'complete' themselves via completeCompactionWidget).
+  emitCompactionProgress(sessionId, 'preparing', 'Compacting context', {
+    mode: runtime.config.compaction.main.mode,
+  });
+  const result = await tryCompactSynchronously(
+    sessionId, messages, runtime, selection, contextTokens, accountingStore, chainId, randomUUID(),
+    { manual: true },
+  );
+  if (result.didApply) return { status: 'compacted', sessionId };
+  emitCompactionProgress(
+    sessionId,
+    'failed',
+    result.reason ? `Compaction skipped — ${result.reason}` : 'Compaction produced no change',
+  );
+  return { status: 'nothing_to_compact', sessionId, ...(result.reason ? { detail: result.reason } : {}) };
 }

@@ -12,20 +12,22 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ActiveAgent } from '../../src/main/ipc/chat/state';
 import type { ChatStreamSegmentSnapshot } from '../../src/shared/types/ipc';
 
-const { activeAgents, sendTurnEvent, webContentsForWindowId, selectCutMock, compactableModelSliceMock, runCompactionAttemptMock } = vi.hoisted(() => ({
+const { activeAgents, sessionsStarting, sendTurnEvent, sendSessionEvent, webContentsForWindowId, selectCutMock, compactableModelSliceMock, runCompactionAttemptMock } = vi.hoisted(() => ({
   activeAgents: new Map<string, unknown>(),
+  sessionsStarting: new Set<string>(),
   sendTurnEvent: vi.fn(),
+  sendSessionEvent: vi.fn(),
   webContentsForWindowId: vi.fn(() => ({})),
   selectCutMock: vi.fn(),
   compactableModelSliceMock: vi.fn(),
   runCompactionAttemptMock: vi.fn(),
 }));
 
-vi.mock('../../src/main/ipc/chat/state', () => ({ activeAgents }));
+vi.mock('../../src/main/ipc/chat/state', () => ({ activeAgents, sessionsStarting }));
 vi.mock('../../src/main/ipc/chat/events', () => ({
   sendTurnEvent,
+  sendSessionEvent,
   webContentsForWindowId,
-  sendSessionEvent: vi.fn(),
   buildSessionUpdatedEvent: vi.fn(),
   canSend: vi.fn(() => true),
 }));
@@ -132,7 +134,9 @@ function compactingPayload(overrides: Record<string, unknown> = {}) {
 beforeEach(() => {
   vi.useFakeTimers();
   activeAgents.clear();
+  sessionsStarting.clear();
   sendTurnEvent.mockClear();
+  sendSessionEvent.mockClear();
   webContentsForWindowId.mockClear();
   webContentsForWindowId.mockReturnValue({});
   try {
@@ -195,10 +199,44 @@ describe('emitCompactionProgress', () => {
     expect(payload).not.toHaveProperty('toolResult');
   });
 
-  it('no-ops without an active agent, a finalized agent, or a target window', () => {
-    emitCompactionProgress(SESSION_ID, 'preparing');
-    expect(sendTurnEvent).not.toHaveBeenCalled();
+  it('emits through a synthetic idle identity when no active agent exists (manual /compact)', () => {
+    emitCompactionProgress(SESSION_ID, 'preparing', 'Compacting context');
+    emitCompactionProgress(SESSION_ID, 'compacting', 'Applying summary');
+    emitCompactionProgress(SESSION_ID, 'complete');
 
+    expect(sendTurnEvent).not.toHaveBeenCalled();
+    expect(sendSessionEvent).toHaveBeenCalledTimes(3);
+    const first = sendSessionEvent.mock.calls[0]!;
+    const second = sendSessionEvent.mock.calls[1]!;
+    const terminal = sendSessionEvent.mock.calls[2]!;
+    for (const call of [first, second, terminal]) {
+      expect(call[0]).toBeNull();
+      expect(call[1]).toBe(SESSION_ID);
+      expect(call[2]).toBe(IPC_CHANNELS.CHAT_COMPACTION_PROGRESS);
+    }
+    // One stable synthetic turnId with a monotonic sequence across the lifecycle.
+    expect((first[3] as Record<string, unknown>).turnId).toBe((second[3] as Record<string, unknown>).turnId);
+    expect((terminal[3] as Record<string, unknown>).turnId).toBe((first[3] as Record<string, unknown>).turnId);
+    expect((first[3] as Record<string, unknown>).sequence).toBe(1);
+    expect((second[3] as Record<string, unknown>).sequence).toBe(2);
+    expect((terminal[3] as Record<string, unknown>).sequence).toBe(3);
+
+    // Terminal drops the identity: the next idle compaction mints a fresh one.
+    emitCompactionProgress(SESSION_ID, 'preparing');
+    const afterTerminal = sendSessionEvent.mock.calls[3]!;
+    expect((afterTerminal[3] as Record<string, unknown>).turnId).not.toBe((first[3] as Record<string, unknown>).turnId);
+    expect((afterTerminal[3] as Record<string, unknown>).sequence).toBe(1);
+  });
+
+  it('stays silent without an active agent while a turn is starting (send-time sync compaction)', () => {
+    sessionsStarting.add(SESSION_ID);
+    emitCompactionProgress(SESSION_ID, 'preparing');
+    emitCompactionProgress(SESSION_ID, 'complete');
+    expect(sendTurnEvent).not.toHaveBeenCalled();
+    expect(sendSessionEvent).not.toHaveBeenCalled();
+  });
+
+  it('no-ops for a finalized agent or a missing target window', () => {
     activeAgents.set(SESSION_ID, makeActive({ finalized: true }));
     emitCompactionProgress(SESSION_ID, 'preparing');
     expect(sendTurnEvent).not.toHaveBeenCalled();
@@ -351,11 +389,25 @@ describe('createCompactionStreamEmitter', () => {
     expect(sendTurnEvent).not.toHaveBeenCalled();
   });
 
-  it('ignores deltas for a session with no active agent', () => {
+  it('delivers idle-session deltas through the synthetic identity (manual /compact widget)', () => {
     const emit = createCompactionStreamEmitter('missing');
     emit('text');
     vi.advanceTimersByTime(COMPACTION_STREAM_EMIT_INTERVAL_MS + 1);
     expect(sendTurnEvent).not.toHaveBeenCalled();
+    expect(sendSessionEvent).toHaveBeenCalledTimes(1);
+    expect(sendSessionEvent).toHaveBeenLastCalledWith(
+      null,
+      'missing',
+      IPC_CHANNELS.CHAT_COMPACTION_PROGRESS,
+      compactingPayload({ streamText: 'text', estimatedTokens: null }),
+    );
+
+    // Deltas stay silent while a turn is starting — the send-time sync
+    // compaction window must not mint a synthetic turnId.
+    sessionsStarting.add('missing');
+    emit('more text');
+    vi.advanceTimersByTime(COMPACTION_STREAM_EMIT_INTERVAL_MS + 1);
+    expect(sendSessionEvent).toHaveBeenCalledTimes(1);
   });
 });
 

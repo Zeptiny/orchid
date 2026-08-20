@@ -131,6 +131,26 @@ export interface CompactionCutConfig {
 }
 
 /**
+ * Preserve-budget base for one evaluation: `preserve_percent` scales against
+ * CURRENT usage, not the model window — clamped at the window so an
+ * over-window estimate cannot inflate the base. Falls back to the window when
+ * no current estimate exists (the pre-usage behavior).
+ */
+export function preserveBaseTokens(
+  currentInputTokens: number | null | undefined,
+  contextTokens: number,
+): number {
+  if (
+    typeof currentInputTokens === 'number'
+    && Number.isFinite(currentInputTokens)
+    && currentInputTokens > 0
+  ) {
+    return Math.min(currentInputTokens, contextTokens);
+  }
+  return contextTokens;
+}
+
+/**
  * Cut selection with a calibrated estimator and the R31/R32/R33 exempt user
  * ids resolved from config — the shared math for fire points that need a cut
  * without the threshold gate (the overflow-retry exhaustion check).
@@ -141,6 +161,8 @@ export function calibratedCut(
     readonly config: CompactionCutConfig;
     readonly contextTokens: number;
     readonly tokensPerChar: number;
+    /** Current estimated/observed input tokens; preserve scales against this. */
+    readonly currentInputTokens?: number | null;
   },
 ): CutResult {
   const tokensPerChar = clampTokensPerChar(opts.tokensPerChar);
@@ -148,7 +170,9 @@ export function calibratedCut(
   const charsByMessage = new Map<Message, number>();
   for (let i = 0; i < messages.length; i += 1) charsByMessage.set(messages[i]!, cache.chars[i]!);
   return selectCut(messages, {
-    preserveTokens: Math.floor(resolvePreservePercent(opts.config) * opts.contextTokens),
+    preserveTokens: Math.floor(
+      resolvePreservePercent(opts.config) * preserveBaseTokens(opts.currentInputTokens, opts.contextTokens),
+    ),
     tokenEstimator: cachedCharEstimator(charsByMessage, tokensPerChar),
     exemptIds: resolveUserExemptIds(messages, {
       keepLast: opts.config.keep_last_user_messages ?? null,
@@ -179,6 +203,14 @@ export interface CompactionGateInput {
   readonly contextTokens: number;
   /** Trigger state the hysteresis/pending gates read. Never mutated here. */
   readonly triggerState?: TriggerState;
+  /**
+   * Explicit user request (`/compact`): bypasses the threshold/hysteresis gate
+   * and the `min_compactable_tokens` floor, and never takes the reclaim
+   * short-circuit (the user asked for a compaction, so a summarizer/selective
+   * run always prepares; reclaim flags still merge into the apply). The
+   * uncalibrated gate, the empty-range check, and exempt ids still apply.
+   */
+  readonly manual?: boolean;
   /** Pre-resolved exempt user ids; defaults to `resolveUserExemptIds` from config. */
   readonly exemptIds?: ReadonlySet<string>;
   /** Pre-computed char cache; defaults to a fresh single pass over `messages`. */
@@ -247,7 +279,7 @@ export function runCompactionGate(input: CompactionGateInput): CompactionGateDec
       : null;
   const estimatedInput = observed ?? Math.ceil(cache.total * tokensPerChar);
 
-  if (estimatedInput < contextTokens) {
+  if (!input.manual && estimatedInput < contextTokens) {
     const ratio = estimatedInput / contextTokens;
     if (ratio + 1e-9 < config.threshold) {
       const baseline = state.postCompactionInputTokens;
@@ -271,7 +303,9 @@ export function runCompactionGate(input: CompactionGateInput): CompactionGateDec
   const charsByMessage = new Map<Message, number>();
   for (let i = 0; i < messages.length; i += 1) charsByMessage.set(messages[i]!, cache.chars[i]!);
   const cut = selectCut(messages, {
-    preserveTokens: Math.floor(resolvePreservePercent(config) * contextTokens),
+    preserveTokens: Math.floor(
+      resolvePreservePercent(config) * preserveBaseTokens(estimatedInput, contextTokens),
+    ),
     tokenEstimator: cachedCharEstimator(charsByMessage, tokensPerChar),
     exemptIds,
   });
@@ -282,13 +316,21 @@ export function runCompactionGate(input: CompactionGateInput): CompactionGateDec
   let rangeChars = 0;
   for (let i = range.start; i < range.end; i += 1) rangeChars += cache.chars[i] ?? 0;
   const compactableTokens = Math.ceil(rangeChars * tokensPerChar);
-  if (compactableTokens < config.min_compactable_tokens) {
+  if (!input.manual && compactableTokens < config.min_compactable_tokens) {
     return { kind: 'no-op', reason: 'below-floor', tokensPerChar };
   }
 
   let flaggedIds: string[] = [];
   if (config.mechanical_reclaim) {
     flaggedIds = mechanicalReclaim(messages, range).flaggedIds;
+  }
+
+  // Manual requests skip the trigger evaluation entirely: threshold and
+  // hysteresis were user-supplied intent, the floor does not apply, and the
+  // reclaim short-circuit must not answer a compaction request with flags
+  // alone. Reclaim flags computed above still merge into the apply.
+  if (input.manual) {
+    return { kind: 'prepare', reason: 'manual', cut, flaggedIds, compactableTokens, estimatedInput, tokensPerChar };
   }
 
   const decision = evaluateTriggerWithReclaim({
