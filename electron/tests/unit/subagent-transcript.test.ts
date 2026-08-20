@@ -237,7 +237,24 @@ describe('SubagentTranscript pure rendering contract (U4)', () => {
     const summary = items[0];
     if (summary?.kind !== 'compaction-summary') throw new Error('expected compaction-summary');
     expect(summary.key).toBe('sum-1');
-    expect(summary.message.compacted?.summarizedCount).toBe(10);
+    expect(summary.messages[0]!.compacted?.summarizedCount).toBe(10);
+  });
+
+  it('coalesces consecutive stacked summary heads into ONE compaction-summary item', () => {
+    const items = buildSubagentTranscriptItems(record([
+      message({ id: 'sum-1', content: 'Section one.', compacted: {
+        mode: 'selective', rangeStart: 'm0', rangeEnd: 'm1', summarizedCount: 2,
+      } }),
+      message({ id: 'sum-2', content: 'Section two.', compacted: {
+        mode: 'selective', rangeStart: 'm2', rangeEnd: 'm3', summarizedCount: 2,
+      } }),
+      message({ id: 'after', content: 'resumed work' }),
+    ]), null);
+
+    expect(items.map((item) => item.kind)).toEqual(['compaction-summary', 'message']);
+    const summary = items[0];
+    if (summary?.kind !== 'compaction-summary') throw new Error('expected compaction-summary');
+    expect(summary.messages.map((m) => m.id)).toEqual(['sum-1', 'sum-2']);
   });
 
   it('renders both compaction widgets through the shared CompactionWidget components', () => {

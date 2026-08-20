@@ -713,7 +713,7 @@ describe('buildHistoryStreamItems — compaction projection', () => {
     expect(body.map((it) => it.kind)).toEqual(['compaction-summary', 'compacted-stub']);
     if (body[0]?.kind !== 'compaction-summary') throw new Error('expected compaction-summary');
     expect(body[0].key).toBe('c0-compaction-sum-1-0');
-    expect(body[0].message.content).toBe('Earlier work summarized.');
+    expect(body[0].messages.map((m) => m.content)).toEqual(['Earlier work summarized.']);
     if (body[1]?.kind !== 'compacted-stub') throw new Error('expected compacted-stub');
     expect(body[1].key).toBe('compacted-stub-m1');
     expect(body[1].count).toBe(2);
@@ -734,6 +734,360 @@ describe('buildHistoryStreamItems — compaction projection', () => {
     if (body[1]?.kind !== 'message') throw new Error('expected message');
     expect(body[1].message.role).toBe(MessageRole.USER);
     expect(body[1].message.content).toBe('next question');
+  });
+
+  it('absorbs interleaved kept thinking into ONE compacted run (review #54 — one compaction, one stub)', () => {
+    // The durable shape a selective compaction leaves in the turn row: kept
+    // thinking between summarized tool spans. One logical compaction must
+    // render as ONE stub, not one stub per flagged span.
+    const messages = [
+      userMsg('u1', 'explore the compaction system'),
+      excludedText('m-a1', 'flagged assistant note'),
+      msg({ id: 'th-mid', content: 'kept reasoning between spans', type: MessageType.THINKING }),
+      toolCallMsg('tc-1', 'call-1', 'read', { excludeFromModel: true }),
+      toolResultMsg('tr-1', 'call-1', { excludeFromModel: true }),
+      msg({ id: 'th-tail', content: 'kept reasoning before the head', type: MessageType.THINKING }),
+      summaryHead('sum-1', 'Compaction summary.'),
+      assistantText('kept-1', 'preserved answer'),
+    ];
+    const result = buildHistoryStreamItems({
+      ...opts,
+      sessionChains: [chain({ id: 'c1', messages })],
+    });
+
+    const body = bodyItems(result.items);
+    // user → ONE stub (leading flagged span + interleaved AND trailing kept
+    // thinking absorbed) → summary head → preserved answer.
+    expect(body.map((it) => it.kind)).toEqual([
+      'message',
+      'compacted-stub',
+      'compaction-summary',
+      'message',
+    ]);
+    const stub = body[1];
+    if (stub?.kind !== 'compacted-stub') throw new Error('expected compacted-stub');
+    // Count reports only messages hidden from the model — the absorbed kept
+    // thinking stays model-visible and must not inflate the stub copy.
+    expect(stub.count).toBe(3);
+    expect(stub.messages.map((m) => m.id)).toEqual(['m-a1', 'th-mid', 'tc-1', 'tr-1', 'th-tail']);
+  });
+
+  it('absorbs LEADING kept thinking when flagged content opens the run right after it (review #55)', () => {
+    // The live shape the user reported: stray "Thought Ns" widgets stacked
+    // between the user message and the "Compacted N messages" stub.
+    const messages = [
+      userMsg('u1', 'explore the compaction system'),
+      msg({ id: 'th-1', content: 'planning the exploration', type: MessageType.THINKING }),
+      msg({ id: 'th-2', content: 'reading files now', type: MessageType.THINKING }),
+      msg({ id: 'th-3', content: 'summarizing findings', type: MessageType.THINKING }),
+      toolCallMsg('tc-1', 'call-1', 'read', { excludeFromModel: true }),
+      toolResultMsg('tr-1', 'call-1', { excludeFromModel: true }),
+      summaryHead('sum-1', 'Compaction summary.'),
+    ];
+    const result = buildHistoryStreamItems({
+      ...opts,
+      sessionChains: [chain({ id: 'c1', messages })],
+    });
+
+    const body = bodyItems(result.items);
+    expect(body.map((it) => it.kind)).toEqual(['message', 'compacted-stub', 'compaction-summary']);
+    const stub = body[1];
+    if (stub?.kind !== 'compacted-stub') throw new Error('expected compacted-stub');
+    expect(stub.messages.map((m) => m.id)).toEqual(['th-1', 'th-2', 'th-3', 'tc-1', 'tr-1']);
+    expect(stub.count).toBe(2);
+  });
+
+  it('absorbs interleaved kept ASSISTANT TEXT between flagged spans into the run', () => {
+    const messages = [
+      userMsg('u1', 'explore'),
+      toolCallMsg('tc-1', 'call-1', 'read', { excludeFromModel: true }),
+      toolResultMsg('tr-1', 'call-1', { excludeFromModel: true }),
+      assistantText('n-1', 'Now let me read apply.ts, message-chars.ts, and reclaim.ts.'),
+      toolCallMsg('tc-2', 'call-2', 'read', { excludeFromModel: true }),
+      toolResultMsg('tr-2', 'call-2', { excludeFromModel: true }),
+      summaryHead('sum-1', 'Compaction summary.'),
+    ];
+    const result = buildHistoryStreamItems({
+      ...opts,
+      sessionChains: [chain({ id: 'c1', messages })],
+    });
+
+    const body = bodyItems(result.items);
+    expect(body.map((it) => it.kind)).toEqual(['message', 'compacted-stub', 'compaction-summary']);
+    const stub = body[1];
+    if (stub?.kind !== 'compacted-stub') throw new Error('expected compacted-stub');
+    expect(stub.messages.map((m) => m.id)).toEqual(['tc-1', 'tr-1', 'n-1', 'tc-2', 'tr-2']);
+    expect(stub.count).toBe(4);
+  });
+
+  it('absorbs kept TOOL PAIRS between flagged spans into ONE stub (strictly one widget)', () => {
+    // The shape the user reported: selective kept a tool pair verbatim
+    // between summarized spans, and the old pairwise absorption rules left
+    // one stub per flagged span ("Compacted 4 / 12 / 4").
+    const messages = [
+      userMsg('u1', 'explore the compaction system'),
+      toolCallMsg('tc-a', 'call-a', 'read', { excludeFromModel: true }),
+      toolResultMsg('tr-a', 'call-a', { excludeFromModel: true }),
+      toolCallMsg('tc-k', 'call-k', 'grep', {}),
+      toolResultMsg('tr-k', 'call-k', {}),
+      msg({ id: 'th-mid', content: 'kept reasoning between spans', type: MessageType.THINKING }),
+      toolCallMsg('tc-b', 'call-b', 'read', { excludeFromModel: true }),
+      toolResultMsg('tr-b', 'call-b', { excludeFromModel: true }),
+      summaryHead('sum-1', 'Compaction summary.'),
+      assistantText('kept-1', 'preserved answer'),
+    ];
+    const result = buildHistoryStreamItems({
+      ...opts,
+      sessionChains: [chain({ id: 'c1', messages })],
+    });
+
+    const body = bodyItems(result.items);
+    expect(body.map((it) => it.kind)).toEqual([
+      'message',
+      'compacted-stub',
+      'compaction-summary',
+      'message',
+    ]);
+    const stub = body[1];
+    if (stub?.kind !== 'compacted-stub') throw new Error('expected compacted-stub');
+    expect(stub.messages.map((m) => m.id)).toEqual([
+      'tc-a', 'tr-a', 'tc-k', 'tr-k', 'th-mid', 'tc-b', 'tr-b',
+    ]);
+    // Count stays honest: only the flagged messages, never the kept strays.
+    expect(stub.count).toBe(4);
+  });
+
+  it('absorbs kept user strays inside the range when the live head closes the run', () => {
+    // Long-session shape: an old (non-exempt) user message kept verbatim
+    // inside the compactable range. The head ahead proves the strays belong
+    // to this one compaction — strictly one stub.
+    const messages = [
+      excludedText('m1', 'old assistant turn'),
+      userMsg('u-old', 'an old user turn inside the range'),
+      excludedText('m2', 'another old turn'),
+      summaryHead('sum-1', 'Compaction summary.'),
+      assistantText('kept-1', 'preserved answer'),
+    ];
+    const result = buildHistoryStreamItems({
+      ...opts,
+      sessionChains: [chain({ id: 'c1', messages })],
+    });
+
+    const body = bodyItems(result.items);
+    expect(body.map((it) => it.kind)).toEqual(['compacted-stub', 'compaction-summary', 'message']);
+    const stub = body[0];
+    if (stub?.kind !== 'compacted-stub') throw new Error('expected compacted-stub');
+    expect(stub.messages.map((m) => m.id)).toEqual(['m1', 'u-old', 'm2']);
+    expect(stub.count).toBe(2);
+  });
+
+  it('bounds HEADLESS reclaim-only runs at the next kept user message', () => {
+    // Reclaim-only flags carry no summary head; without the user-stop the
+    // open run would swallow every later message into one stub.
+    const messages = [
+      excludedText('m1', 'reclaimed duplicate output'),
+      assistantText('n-1', 'kept note'),
+      userMsg('u2', 'next question'),
+      assistantText('kept-2', 'preserved answer'),
+    ];
+    const result = buildHistoryStreamItems({
+      ...opts,
+      sessionChains: [chain({ id: 'c1', messages })],
+    });
+
+    const body = bodyItems(result.items);
+    expect(body.map((it) => it.kind)).toEqual(['compacted-stub', 'message', 'message', 'message']);
+    const stub = body[0];
+    if (stub?.kind !== 'compacted-stub') throw new Error('expected compacted-stub');
+    expect(stub.messages.map((m) => m.id)).toEqual(['m1']);
+    expect(stub.count).toBe(1);
+  });
+
+  it('absorbs trailing kept strays of one chain when the live head sits in a LATER chain', () => {
+    // Storage splits compactions across chains: flagged originals stay in
+    // their turn row, the summary head lives in the compactor's own chain.
+    // The walk must keep the run open across the boundary.
+    const result = buildHistoryStreamItems({
+      ...opts,
+      sessionChains: [
+        chain({
+          id: 'turn-row',
+          messages: [
+            userMsg('u1', 'explore'),
+            excludedText('m1', 'flagged original'),
+            msg({ id: 'th-tail', content: 'kept reasoning before the head', type: MessageType.THINKING }),
+          ],
+        }),
+        chain({ id: 'summary-row', messages: [summaryHead('sum-1', 'Compaction summary.')] }),
+        chain({ id: 'tail', messages: [assistantText('kept-1', 'preserved answer')] }),
+      ],
+    });
+
+    const body = bodyItems(result.items);
+    expect(body.map((it) => it.kind)).toEqual([
+      'message',
+      'compacted-stub',
+      'compaction-summary',
+      'message',
+    ]);
+    const stub = body[1];
+    if (stub?.kind !== 'compacted-stub') throw new Error('expected compacted-stub');
+    expect(stub.messages.map((m) => m.id)).toEqual(['m1', 'th-tail']);
+    expect(stub.count).toBe(1);
+  });
+
+  it('renders a thinking stretch whose run never opens (no flagged content ahead)', () => {
+    const messages = [
+      userMsg('u1', 'explore'),
+      msg({ id: 'th-1', content: 'planning', type: MessageType.THINKING }),
+      assistantText('a-1', 'answer without any compaction'),
+    ];
+    const result = buildHistoryStreamItems({
+      ...opts,
+      sessionChains: [chain({ id: 'c1', messages })],
+    });
+    expect(bodyItems(result.items).map((it) => it.kind)).toEqual(['message', 'message', 'message']);
+  });
+
+  it('expands an absorbed run with the interleaved kept thinking at full fidelity', () => {
+    const messages = [
+      userMsg('u1', 'explore'),
+      excludedText('m-a1', 'flagged note'),
+      msg({ id: 'th-mid', content: 'kept reasoning between spans', type: MessageType.THINKING }),
+      toolCallMsg('tc-1', 'call-1', 'read', { excludeFromModel: true }),
+      toolResultMsg('tr-1', 'call-1', { excludeFromModel: true }),
+      summaryHead('sum-1', 'Compaction summary.'),
+    ];
+    const sessionChains = [chain({ id: 'c1', messages })];
+
+    const collapsed = buildHistoryStreamItems({ ...opts, sessionChains });
+    const stub = collapsed.items.find((it) => it.kind === 'compacted-stub');
+    if (stub?.kind !== 'compacted-stub') throw new Error('expected compacted-stub');
+    expect(stub.count).toBe(3);
+
+    const expanded = buildHistoryStreamItems({
+      ...opts,
+      sessionChains,
+      expandedCompactedKeys: new Set([stub.key]),
+    });
+    expect(expanded.items.some((it) => it.kind === 'compacted-stub')).toBe(false);
+    const thoughts = expanded.items.filter(
+      (it) => it.kind === 'message' && it.message.type === MessageType.THINKING,
+    );
+    expect(thoughts.map((it) => (it.kind === 'message' ? it.message.id : null)))
+      .toEqual(['th-mid']);
+    const tools = expanded.items.filter((it) => it.kind === 'tool');
+    expect(tools).toHaveLength(1);
+  });
+
+  it('does NOT absorb thinking when real content separates the flagged spans', () => {
+    const messages = [
+      userMsg('u1', 'explore'),
+      excludedText('m-a1', 'flagged note'),
+      msg({ id: 'th-mid', content: 'reasoning', type: MessageType.THINKING }),
+      userMsg('u2', 'a follow-up between spans'),
+      excludedText('m-a2', 'later flagged note'),
+      assistantText('kept-1', 'answer'),
+    ];
+    const result = buildHistoryStreamItems({
+      ...opts,
+      sessionChains: [chain({ id: 'c1', messages })],
+    });
+
+    const body = bodyItems(result.items);
+    // The user message between spans closes the run: two stubs, and the
+    // thinking renders on its own before the user message.
+    expect(body.map((it) => it.kind)).toEqual([
+      'message',
+      'compacted-stub',
+      'message',
+      'message',
+      'compacted-stub',
+      'message',
+    ]);
+    if (body[1]?.kind !== 'compacted-stub' || body[4]?.kind !== 'compacted-stub') {
+      throw new Error('expected compacted stubs');
+    }
+    expect(body[1].messages.map((m) => m.id)).toEqual(['m-a1']);
+    expect(body[1].count).toBe(1);
+    expect(body[4].messages.map((m) => m.id)).toEqual(['m-a2']);
+  });
+
+  it('coalesces CONSECUTIVE stacked summary heads into ONE widget item (review #53)', () => {
+    // The shape older selective runs persisted: several per-op synthetic heads
+    // back-to-back, followed by the flagged originals. One logical compaction
+    // must render as ONE summary widget + the expandable originals stub.
+    const messages = [
+      userMsg('u1', 'explore the compaction system'),
+      summaryHead('sum-1', 'Summary section one.'),
+      summaryHead('sum-2', 'Summary section two.'),
+      summaryHead('sum-3', 'Summary section three.'),
+      excludedText('m1', 'original assistant turn'),
+      excludedText('m2', 'original tool output'),
+      assistantText('kept-1', 'preserved answer'),
+    ];
+    const result = buildHistoryStreamItems({
+      ...opts,
+      sessionChains: [chain({ id: 'c1', messages })],
+    });
+
+    const body = bodyItems(result.items);
+    expect(body.map((it) => it.kind)).toEqual([
+      'message',
+      'compaction-summary',
+      'compacted-stub',
+      'message',
+    ]);
+    const summary = body[1];
+    if (summary?.kind !== 'compaction-summary') throw new Error('expected compaction-summary');
+    expect(summary.messages.map((m) => m.id)).toEqual(['sum-1', 'sum-2', 'sum-3']);
+    if (body[2]?.kind !== 'compacted-stub') throw new Error('expected compacted-stub');
+    expect(body[2].messages.map((m) => m.id)).toEqual(['m1', 'm2']);
+  });
+
+  it('keeps heads separated by non-head content as SEPARATE widgets (only consecutive heads coalesce)', () => {
+    const messages = [
+      userMsg('u1', 'first question'),
+      summaryHead('sum-1', 'First compaction summary.'),
+      assistantText('kept-1', 'assistant answer between compactions'),
+      summaryHead('sum-2', 'Second compaction summary.'),
+      excludedText('m1', 'flagged original'),
+    ];
+    const result = buildHistoryStreamItems({
+      ...opts,
+      sessionChains: [chain({ id: 'c1', messages })],
+    });
+
+    const summaries = bodyItems(result.items).filter((it) => it.kind === 'compaction-summary');
+    expect(summaries).toHaveLength(2);
+    if (summaries[0]?.kind !== 'compaction-summary' || summaries[1]?.kind !== 'compaction-summary') {
+      throw new Error('expected compaction-summaries');
+    }
+    expect(summaries[0].messages.map((m) => m.id)).toEqual(['sum-1']);
+    expect(summaries[1].messages.map((m) => m.id)).toEqual(['sum-2']);
+  });
+
+  it('breaks the head run at a flagged (superseded) head — it joins the compacted stub instead', () => {
+    const messages = [
+      userMsg('u1', 'first question'),
+      summaryHead('sum-live', 'Current compaction summary.'),
+      summaryHead('sum-old', 'Superseded summary.', { excludeFromModel: true }),
+      excludedText('m1', 'flagged original'),
+      assistantText('kept-1', 'preserved answer'),
+    ];
+    const result = buildHistoryStreamItems({
+      ...opts,
+      sessionChains: [chain({ id: 'c1', messages })],
+    });
+
+    const body = bodyItems(result.items);
+    const summaries = body.filter((it) => it.kind === 'compaction-summary');
+    expect(summaries).toHaveLength(1);
+    if (summaries[0]?.kind !== 'compaction-summary') throw new Error('expected compaction-summary');
+    expect(summaries[0].messages.map((m) => m.id)).toEqual(['sum-live']);
+    const stub = body.find((it) => it.kind === 'compacted-stub');
+    if (stub?.kind !== 'compacted-stub') throw new Error('expected compacted-stub');
+    expect(stub.messages.map((m) => m.id)).toEqual(['sum-old', 'm1']);
   });
 
   it('splits excluded runs into separate stubs at each summary head', () => {
@@ -968,7 +1322,7 @@ describe('buildHistoryStreamItems — summary head dedupe across chains', () => 
     const summaries = result.items.filter((it) => it.kind === 'compaction-summary');
     expect(summaries).toHaveLength(1);
     if (summaries[0]?.kind !== 'compaction-summary') throw new Error('expected summary');
-    expect(summaries[0].message.id).toBe('sum-1');
+    expect(summaries[0].messages.map((m) => m.id)).toEqual(['sum-1']);
 
     // Chain 2 renders only its own user turn — no duplicate summary.
     const users = result.items.filter(
@@ -1011,7 +1365,7 @@ describe('buildHistoryStreamItems — summary head dedupe across chains', () => 
     });
 
     const summaries = result.items.filter((it) => it.kind === 'compaction-summary');
-    expect(summaries.map((it) => (it.kind === 'compaction-summary' ? it.message.id : null)))
+    expect(summaries.map((it) => (it.kind === 'compaction-summary' ? it.messages[0]!.id : null)))
       .toEqual(['sum-a', 'sum-b']);
   });
 });
@@ -1167,8 +1521,8 @@ describe('buildHistoryStreamItems — compacted runs merge across chain boundari
     ]);
     const summary = body[1];
     if (summary?.kind !== 'compaction-summary') throw new Error('expected compaction-summary');
-    expect(summary.message.id).toBe('head-1');
-    expect(summary.message.excludeFromModel).toBe(true);
+    expect(summary.messages.map((m) => m.id)).toEqual(['head-1']);
+    expect(summary.messages[0]!.excludeFromModel).toBe(true);
   });
 });
 
@@ -1383,7 +1737,7 @@ describe('compactionProgressToWidgetItem — live widget from the scoped event',
 
     const summary = bodyItems(result.items).find((it) => it.kind === 'compaction-summary');
     if (summary?.kind !== 'compaction-summary') throw new Error('expected compaction-summary');
-    expect(summary.message.compacted).toBeDefined();
+    expect(summary.messages[0]!.compacted).toBeDefined();
     expect(compactionProgressToWidgetItem('main', null)).toBeNull();
   });
 });

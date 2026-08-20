@@ -23,7 +23,7 @@ export type SubagentTranscriptItem =
   | { kind: 'tool'; key: string; block: ToolBlock }
   | { kind: 'tool-group'; key: string; children: ActivityChild[] }
   | { kind: 'compaction-progress'; key: string; item: CompactionProgressWidgetItem }
-  | { kind: 'compaction-summary'; key: string; message: Message };
+  | { kind: 'compaction-summary'; key: string; messages: readonly Message[] };
 
 export function isVisibleSubagentMessage(message: Message): boolean {
   return !message.hidden && message.role !== MessageRole.SYSTEM;
@@ -117,7 +117,8 @@ export function buildSubagentTranscriptItems(
     if (message.content.trim()) items.push({ kind: 'message', key: message.id, message });
   };
 
-  for (const message of messages) {
+  for (let mi = 0; mi < messages.length; mi += 1) {
+    const message = messages[mi]!;
     if (message.type === MessageType.TOOL_CALL) {
       const toolId = message.tool_call_id ?? message.tool_calls?.[0]?.id ?? message.id;
       const result = results.get(toolId) ?? null;
@@ -132,8 +133,20 @@ export function buildSubagentTranscriptItems(
       }
     } else if (hasCompactedMarker(message)) {
       // Replay (R27): the persisted compacted marker is the terminal compaction
-      // widget — no live events are needed after a snapshot reload.
-      items.push({ kind: 'compaction-summary', key: message.id, message });
+      // widget — no live events are needed after a snapshot reload. Consecutive
+      // heads coalesce into one widget (one logical compaction); flagged
+      // (superseded) heads break the run so they render inside the compacted
+      // range, mirroring the chat stream's projection.
+      const headRun: Message[] = [message];
+      while (
+        mi + 1 < messages.length &&
+        hasCompactedMarker(messages[mi + 1]!) &&
+        !messages[mi + 1]!.excludeFromModel
+      ) {
+        mi += 1;
+        headRun.push(messages[mi]!);
+      }
+      items.push({ kind: 'compaction-summary', key: message.id, messages: headRun });
     } else if (message.type === MessageType.TEXT || message.type === MessageType.THINKING) {
       pushMessage(message);
     }
@@ -229,7 +242,7 @@ export function SubagentTranscript({ record, live = null, selectedId = null }: S
               />
             );
           }
-          if (item.kind === 'compaction-summary') return <CompactionWidget key={item.key} message={item.message} />;
+          if (item.kind === 'compaction-summary') return <CompactionWidget key={item.key} messages={item.messages} />;
           return <MessageWidget key={item.key} message={item.message} isStreaming={item.isStreaming} />;
         })}
         {record.error || record.status === 'interrupted' || record.status === 'failed' ? (

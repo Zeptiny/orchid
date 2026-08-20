@@ -63,7 +63,7 @@ describe('CompactionWidget — summary rendering', () => {
   it('renders a collapsed disclosure row with mode and summarized-count badges', () => {
     render(
       <CompactionWidget
-        message={summaryMessage('## Handoff\nEarlier work: built the parser.')}
+        messages={[summaryMessage('## Handoff\nEarlier work: built the parser.')]}
       />,
     );
 
@@ -86,10 +86,10 @@ describe('CompactionWidget — summary rendering', () => {
   it('expands to reveal the handoff markdown and collapses again', () => {
     render(
       <CompactionWidget
-        message={summaryMessage(
+        messages={[summaryMessage(
           '## Handoff\nEarlier work: built the parser.',
           { compacted: marker({ tokensFreed: 105577 }) },
-        )}
+        )]}
       />,
     );
 
@@ -108,17 +108,17 @@ describe('CompactionWidget — summary rendering', () => {
 
   it('renders nothing for a message without a compaction marker', () => {
     const plain = { ...summaryMessage('Real assistant text'), compacted: undefined };
-    const { container } = render(<CompactionWidget message={plain} />);
+    const { container } = render(<CompactionWidget messages={[plain]} />);
     expect(container.innerHTML).toBe('');
   });
 
   it('never derives freed tokens from a stamped main-model usage (regression)', () => {
     render(
       <CompactionWidget
-        message={summaryMessage('## Handoff\nEarlier work.', {
+        messages={[summaryMessage('## Handoff\nEarlier work.', {
           usage: usageTotal(105577),
           compacted: marker(),
-        })}
+        })]}
       />,
     );
 
@@ -130,12 +130,12 @@ describe('CompactionWidget — summary rendering', () => {
   it('shows the compactor cost attribution when the marker carries it', () => {
     render(
       <CompactionWidget
-        message={summaryMessage('## Handoff', {
+        messages={[summaryMessage('## Handoff', {
           compacted: marker({
             tokensFreed: 9000,
             compactorTokens: { inputTokens: 5841, outputTokens: 895 },
           }),
-        })}
+        })]}
       />,
     );
 
@@ -239,7 +239,7 @@ describe('CompactionRunningWidget — streaming tail', () => {
 
 describe('CompactionWidget — reclaim-only classification', () => {
   it('renders the lighter reclaim note when the summary body is empty', () => {
-    render(<CompactionWidget message={summaryMessage('')} />);
+    render(<CompactionWidget messages={[summaryMessage('')]} />);
 
     const note = screen
       .getByText(/Reclaimed 12 duplicate tool outputs/)
@@ -252,9 +252,9 @@ describe('CompactionWidget — reclaim-only classification', () => {
   it('classifies a zero-count short note as reclaim-only', () => {
     render(
       <CompactionWidget
-        message={summaryMessage('Nothing further to summarize.', {
+        messages={[summaryMessage('Nothing further to summarize.', {
           compacted: marker({ summarizedCount: 0 }),
-        })}
+        })]}
       />,
     );
 
@@ -267,9 +267,9 @@ describe('CompactionWidget — reclaim-only classification', () => {
   it('classifies a reclaim-worded note as reclaim-only when summarizedCount is 0', () => {
     render(
       <CompactionWidget
-        message={summaryMessage('Reclaim applied to duplicate outputs.', {
+        messages={[summaryMessage('Reclaim applied to duplicate outputs.', {
           compacted: marker({ summarizedCount: 0 }),
-        })}
+        })]}
       />,
     );
 
@@ -282,9 +282,9 @@ describe('CompactionWidget — reclaim-only classification', () => {
   it('keeps a reclaim-worded note with summarized messages as a full summary card', () => {
     render(
       <CompactionWidget
-        message={summaryMessage('Reclaim applied to duplicate outputs.', {
+        messages={[summaryMessage('Reclaim applied to duplicate outputs.', {
           compacted: marker({ summarizedCount: 12 }),
-        })}
+        })]}
       />,
     );
 
@@ -295,10 +295,61 @@ describe('CompactionWidget — reclaim-only classification', () => {
 
   it('keeps a substantive reclaim-worded summary as a full summary card', () => {
     const longBody = `Reclaim context: ${'detailed handoff. '.repeat(20)}`;
-    render(<CompactionWidget message={summaryMessage(longBody)} />);
+    render(<CompactionWidget messages={[summaryMessage(longBody)]} />);
 
     expect(screen.getByText('Compaction summary').closest('[data-compaction="summary"]'))
       .not.toBeNull();
+  });
+});
+
+describe('CompactionWidget — coalesced stacked heads', () => {
+  it('renders stacked heads as ONE card with combined counts, sections, and freed tokens', () => {
+    const heads = [
+      summaryMessage('Section one: parser work.', {
+        id: 'sum-1',
+        compacted: marker({ summarizedCount: 2, tokensFreed: 5000 }),
+      }),
+      summaryMessage('Section two: renderer work.', {
+        id: 'sum-2',
+        compacted: marker({ mode: 'selective', summarizedCount: 7, tokensFreed: 3000 }),
+      }),
+      summaryMessage('Section three: tests.', {
+        id: 'sum-3',
+        compacted: marker({ summarizedCount: 3, tokensFreed: 1000 }),
+      }),
+    ];
+    render(<CompactionWidget messages={heads} />);
+
+    // ONE collapsed disclosure row — not three cards.
+    const cards = screen.getAllByText('Compaction summary');
+    expect(cards).toHaveLength(1);
+    const card = cards[0]!.closest('[data-compaction="summary"]');
+    expect(card).not.toBeNull();
+
+    // Combined counts and sections badge.
+    expect(screen.getByText('12 messages')).toBeTruthy();
+    expect(screen.getByText('3 sections')).toBeTruthy();
+    // Mode comes from the first head.
+    expect(screen.getByText('simple')).toBeTruthy();
+
+    // Expanding reveals every section's body, separated.
+    fireEvent.click(screen.getByRole('button', { name: /Compaction summary/ }));
+    expect(screen.getByText('Section one: parser work.')).toBeTruthy();
+    expect(screen.getByText('Section two: renderer work.')).toBeTruthy();
+    expect(screen.getByText('Section three: tests.')).toBeTruthy();
+    expect(screen.getAllByText(/~9,000 tokens freed/).length).toBeGreaterThan(0);
+  });
+
+  it('renders mixed runs as a full summary card when any head is substantive', () => {
+    const heads = [
+      summaryMessage('', { id: 'sum-empty', compacted: marker({ summarizedCount: 0 }) }),
+      summaryMessage('Real handoff content.', { id: 'sum-real', compacted: marker({ summarizedCount: 4 }) }),
+    ];
+    render(<CompactionWidget messages={heads} />);
+
+    expect(screen.getByText('Compaction summary').closest('[data-compaction="summary"]'))
+      .not.toBeNull();
+    expect(screen.getByText('4 messages')).toBeTruthy();
   });
 });
 

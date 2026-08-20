@@ -482,7 +482,7 @@ function renderStreamItem(
     );
   }
   if (item.kind === 'compaction-summary') {
-    return <CompactionWidget key={item.key} message={item.message} />;
+    return <CompactionWidget key={item.key} messages={item.messages} />;
   }
   if (item.kind === 'compacted-stub') {
     return <CompactedRangeStub key={item.key} count={item.count} onExpand={() => onExpandCompacted(item.key)} />;

@@ -117,7 +117,8 @@ export type StreamItem =
   | {
       kind: 'compaction-summary';
       key: string;
-      message: Message;
+      /** All summary heads in the coalesced run (one per compaction, or stacked per-op synthetics from older sessions). */
+      messages: readonly Message[];
     }
   | {
       kind: 'compacted-stub';
@@ -328,6 +329,31 @@ export function buildHistoryStreamItems(opts: {
     chain.status === ChainStatus.ACTIVE
     || (chainIndex === sessionChains.length - 1 && liveStreaming)
   );
+  // Strict one-widget runs: an open compacted run keeps absorbing kept
+  // strays — tool pairs, thinking, and kept user messages inside the range
+  // included — until the LIVE summary head that closes it, which often sits
+  // in a LATER chain (the compactor's summary chain). Precompute the walked
+  // chains' global visible-message layout plus a suffix-OR of live heads so
+  // the walk can tell "the run's head is ahead" from headless reclaim-only
+  // flags (whose absorption must stay bounded by the next user message).
+  const walkedGlobalStarts: number[] = [];
+  const liveHeadFlag: boolean[] = [];
+  for (let chainIndex = 0; chainIndex < sessionChains.length; chainIndex += 1) {
+    const walkedChain = sessionChains[chainIndex]!;
+    const collapsed = chainIndex < collapseCount
+      && !expandedChainIndexes.has(chainIndex)
+      && !isActiveChain(walkedChain, chainIndex);
+    if (collapsed) continue;
+    walkedGlobalStarts[chainIndex] = liveHeadFlag.length;
+    for (const m of walkedChain.messages) {
+      if (m.hidden) continue;
+      liveHeadFlag.push(hasCompactedMarker(m) && !m.excludeFromModel);
+    }
+  }
+  const liveHeadAhead: boolean[] = new Array<boolean>(liveHeadFlag.length + 1).fill(false);
+  for (let i = liveHeadFlag.length - 1; i >= 0; i -= 1) {
+    liveHeadAhead[i] = liveHeadFlag[i] === true || liveHeadAhead[i + 1] === true;
+  }
   const globalHistoryGapChainIndex = sessionChains.findLastIndex((chain, chainIndex) => {
     const collapsed = chainIndex < collapseCount
       && !expandedChainIndexes.has(chainIndex)
@@ -381,6 +407,8 @@ export function buildHistoryStreamItems(opts: {
       emittedToolIds,
       keyPrefix: `c${chainIndex}`,
       expandedCompactedKeys,
+      globalStart: walkedGlobalStarts[chainIndex] ?? 0,
+      liveHeadAhead,
     }, walkState);
     // Contributed items BEFORE any boundary flush: a chain whose whole
     // message set is one compacted run contributes no body of its own.
@@ -554,9 +582,11 @@ function flushCompactedBuffer(
 
   if (isExpanded) {
     // Expand to full fidelity — render each buffered message with normal
-    // dispatch, deferred so every item lands in buffer order.
+    // dispatch, deferred so every item lands in buffer order. Consecutive
+    // summary heads still coalesce into one widget.
     const bufferedIds = new Set(buffer.map((m) => m.id));
-    for (const buffered of buffer) {
+    for (let bi = 0; bi < buffer.length; bi += 1) {
+      const buffered = buffer[bi]!;
       if (buffered.type === MessageType.TOOL_CALL) {
         const callId = buffered.tool_call_id ?? buffered.tool_calls?.[0]?.id ?? buffered.id;
         const result = state.resultByCallId.get(callId);
@@ -586,17 +616,24 @@ function flushCompactedBuffer(
         counter.value += 1;
         continue;
       }
-      // A flagged summary head (superseded by a later compaction) keeps the
-      // compaction-summary widget even inside an expanded run — it stays
+      // Flagged summary heads (superseded by a later compaction) keep the
+      // compaction-summary widget even inside an expanded run — they stay
       // visually distinct from agent-authored messages instead of rendering
-      // as an indistinguishable "other" bubble.
+      // as an indistinguishable "other" bubble. Consecutive heads coalesce.
       if (hasCompactedMarker(buffered)) {
+        const headRun: Message[] = [buffered];
+        while (bi + 1 < buffer.length) {
+          const next = buffer[bi + 1]!;
+          if (!hasCompactedMarker(next)) break;
+          headRun.push(next);
+          bi += 1;
+        }
         state.items.push({
           kind: 'compaction-summary',
           key: keyFor(buffered, 'compaction'),
-          message: buffered,
+          messages: headRun,
         });
-        counter.value += 1;
+        counter.value += headRun.length;
         continue;
       }
       pushMessage(buffered, 'other');
@@ -613,11 +650,18 @@ function flushCompactedBuffer(
         emittedToolIds.add(buffered.tool_call_id ?? buffered.id);
       }
     }
+    // Count only messages actually hidden from the model: kept thinking
+    // absorbed between flagged spans stays model-visible, so the stub's
+    // "Compacted N messages — hidden from model" copy must not count it.
+    const flaggedCount = buffer.reduce(
+      (n, m) => n + (m.excludeFromModel || m.hidden ? 1 : 0),
+      0,
+    );
     state.items.push({
       kind: 'compacted-stub',
       key: stubKey,
       messages: buffer,
-      count: buffer.length,
+      count: Math.max(1, flaggedCount),
     });
     counter.value += buffer.length;
   }
@@ -640,10 +684,15 @@ function walkMessagesToItems(
     emittedToolIds: Set<string>;
     keyPrefix: string;
     expandedCompactedKeys?: ReadonlySet<string>;
+    /** Global visible-message offset of this chain's first visible message (walked chains only). */
+    globalStart?: number;
+    /** Suffix-OR over walked visible messages: [g] = a live (unflagged) summary head exists at ≥ g. */
+    liveHeadAhead?: readonly boolean[];
   },
   state: ChainWalkState,
 ): boolean {
   const { liveById, emittedToolIds, keyPrefix, expandedCompactedKeys } = opts;
+  const globalStart = opts.globalStart ?? 0;
   const visible = visibleSource.filter((m) => !m.hidden);
   for (const m of visible) {
     if (m.type === MessageType.TOOL_RESULT && m.tool_call_id) {
@@ -679,7 +728,51 @@ function walkMessagesToItems(
   const flush = () =>
     flushCompactedBuffer(state, { liveById, emittedToolIds, keyPrefix, expandedCompactedKeys, counter });
 
-  for (const m of visible) {
+  /**
+   * First non-thinking visible message at or after `from` — the message that
+   * decides whether a thinking stretch belongs to an (opening or open)
+   * compacted run (review #55): selective compaction keeps reasoning — and
+   * sometimes assistant text — verbatim between/around summarized spans, and
+   * those strays fragment one logical compaction into several widgets.
+   */
+  const firstNonThinkingVisible = (from: number): Message | undefined => {
+    for (let k = from; k < visible.length; k += 1) {
+      const v = visible[k]!;
+      if (v.type === MessageType.THINKING) continue;
+      return v;
+    }
+    return undefined;
+  };
+  /** Whether a live (unflagged) summary head exists at or after global visible index `g`. */
+  const liveHeadAtOrAfter = (g: number): boolean =>
+    opts.liveHeadAhead != null && g >= 0 && g < opts.liveHeadAhead.length
+      ? opts.liveHeadAhead[g] === true
+      : false;
+
+  const isUserText = (v: Message): boolean =>
+    v.role === MessageRole.USER && v.type === MessageType.TEXT;
+
+  /**
+   * Whether the open run continues past visible[from] (strictly one widget
+   * per compaction): a flagged message, a superseded head, or the LIVE head
+   * that closes the run appears ahead — possibly in a later chain (the
+   * compactor's summary chain), which the global suffix-OR covers. When the
+   * run's live head exists ahead, kept user messages inside the range are
+   * strays of the same compaction and do not stop the scan; without one
+   * (headless reclaim-only flags) the next kept user message bounds the run.
+   */
+  const runContinuesFrom = (from: number): boolean => {
+    for (let k = from; k < visible.length; k += 1) {
+      const v = visible[k]!;
+      if (v.excludeFromModel === true) return true;
+      if (hasCompactedMarker(v)) return true;
+      if (isUserText(v) && !liveHeadAtOrAfter(globalStart + k)) return false;
+    }
+    return liveHeadAtOrAfter(globalStart + from);
+  };
+
+  for (let i = 0; i < visible.length; i += 1) {
+    const m = visible[i]!;
     if (m.id && state.seenMessageIds.has(m.id)) continue;
     if (m.id) state.seenMessageIds.add(m.id);
     if (hasCompactedMarker(m)) {
@@ -688,16 +781,56 @@ function walkMessagesToItems(
         compactedAny = true;
         continue;
       }
+      // Coalesce CONSECUTIVE summary heads into one widget — one logical
+      // compaction may leave stacked heads (per-op synthetics from older
+      // selective runs, multiple compactions in one turn). Heads separated
+      // by other content stay separate widgets.
+      const headRun: Message[] = [m];
+      let j = i + 1;
+      while (j < visible.length) {
+        const next = visible[j]!;
+        if (!hasCompactedMarker(next) || next.excludeFromModel) break;
+        if (next.id && state.seenMessageIds.has(next.id)) break;
+        if (next.id) state.seenMessageIds.add(next.id);
+        headRun.push(next);
+        j += 1;
+      }
       flush();
       state.items.push({
         kind: 'compaction-summary',
         key: keyFor(m, 'compaction'),
-        message: m,
+        messages: headRun,
       });
-      counter.value += 1;
+      counter.value += headRun.length;
+      // j is the next non-head index; step back so the header increment
+      // resumes the walk exactly there.
+      i = j - 1;
       continue;
     }
     if (m.excludeFromModel) {
+      state.compactedBuffer.push(m);
+      compactedAny = true;
+      continue;
+    }
+    // Open-run absorption (strictly one widget per compaction): once a run
+    // is open, ANY kept message between its flagged content and the live
+    // head — thinking, assistant text, tool pairs, kept user strays inside
+    // the range — joins the run while it continues. Checked BEFORE the
+    // flush so the run stays open; the collapsed stub counts only flagged
+    // messages and the expanded stub re-renders strays at full fidelity.
+    if (state.compactedBuffer.length > 0 && runContinuesFrom(i + 1)) {
+      state.compactedBuffer.push(m);
+      compactedAny = true;
+      continue;
+    }
+    // LEADING kept thinking (no open run yet) absorbs only when flagged
+    // content follows before any other visible message; a lone thinking
+    // stretch before real content still renders normally.
+    if (
+      m.type === MessageType.THINKING
+      && state.compactedBuffer.length === 0
+      && firstNonThinkingVisible(i + 1)?.excludeFromModel === true
+    ) {
       state.compactedBuffer.push(m);
       compactedAny = true;
       continue;

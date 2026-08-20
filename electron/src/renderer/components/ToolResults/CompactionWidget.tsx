@@ -1,5 +1,6 @@
 import { useEffect, useId, useMemo, useState } from 'react';
 import type { Message } from '../../../shared/types/message';
+import { SUMMARY_SECTION_SEPARATOR } from '../../../shared/types/message';
 import { MarkdownContent } from '../MarkdownContent';
 import { Icon } from '../Icon';
 import { StatusBadge } from '../ui/StatusBadge';
@@ -7,7 +8,12 @@ import { CollapsibleRegion } from '../ui/CollapsibleRegion';
 import { Spinner } from '../ui/Spinner';
 
 export interface CompactionWidgetProps {
-  message: Message;
+  /**
+   * All summary heads in one coalesced compaction run — a single head for
+   * current runs, or several stacked heads persisted by older selective
+   * compactions (per-op synthetics). Content/metrics combine into one card.
+   */
+  messages: readonly Message[];
 }
 
 export interface CompactionRunningWidgetProps {
@@ -75,7 +81,7 @@ function formatRange(marker: NonNullable<Message['compacted']>): string {
   return `${start}…${end}`;
 }
 
-function isReclaimOnly(message: Message): boolean {
+function isReclaimOnlyMessage(message: Message): boolean {
   const marker = message.compacted;
   if (!marker) return false;
   // Reclaim-only output carries no summarized content: either an empty body
@@ -85,6 +91,52 @@ function isReclaimOnly(message: Message): boolean {
   return marker.summarizedCount === 0;
 }
 
+/** Combined view over a coalesced run of summary heads. */
+interface CoalescedSummary {
+  readonly content: string;
+  readonly mode: string | null;
+  readonly summarizedCount: number | null;
+  readonly tokensFreed: number;
+  readonly compactorTokens: { inputTokens: number; outputTokens: number } | null;
+  readonly reclaimOnly: boolean;
+}
+
+function coalesceSummaries(messages: readonly Message[]): CoalescedSummary {
+  let summarizedTotal = 0;
+  let hasCount = false;
+  let tokensFreed = 0;
+  let compactorIn = 0;
+  let compactorOut = 0;
+  let hasCompactor = false;
+  let reclaimOnly = true;
+  const contents: string[] = [];
+  for (const message of messages) {
+    if (!message.compacted) continue;
+    if (message.content?.trim()) contents.push(message.content);
+    if (typeof message.compacted.summarizedCount === 'number') {
+      summarizedTotal += message.compacted.summarizedCount;
+      hasCount = true;
+    }
+    if (typeof message.compacted.tokensFreed === 'number') {
+      tokensFreed += message.compacted.tokensFreed;
+    }
+    if (message.compacted.compactorTokens) {
+      compactorIn += message.compacted.compactorTokens.inputTokens;
+      compactorOut += message.compacted.compactorTokens.outputTokens;
+      hasCompactor = true;
+    }
+    if (!isReclaimOnlyMessage(message)) reclaimOnly = false;
+  }
+  return {
+    content: contents.join(SUMMARY_SECTION_SEPARATOR),
+    mode: messages[0]?.compacted?.mode ?? null,
+    summarizedCount: hasCount ? summarizedTotal : null,
+    tokensFreed,
+    compactorTokens: hasCompactor ? { inputTokens: compactorIn, outputTokens: compactorOut } : null,
+    reclaimOnly,
+  };
+}
+
 /**
  * Compaction summary head — first-class message for the compacted window.
  * Collapsed state matches the tool call widget: a single disclosure row
@@ -92,52 +144,49 @@ function isReclaimOnly(message: Message): boolean {
  * markdown — no duplicated preview slice. Reclaim-only renders as a
  * lighter note.
  */
-export function CompactionWidget({ message }: CompactionWidgetProps) {
-  const marker = message.compacted;
-  if (!marker) return null;
+export function CompactionWidget({ messages }: CompactionWidgetProps) {
+  if (messages.length === 0 || !messages.some((m) => m.compacted)) return null;
+  const combined = coalesceSummaries(messages);
 
-  const reclaimOnly = isReclaimOnly(message);
-  const content = message.content ?? '';
-  const summarizedCount = marker.summarizedCount;
-  const mode = marker.mode;
-
-  if (reclaimOnly) {
+  if (combined.reclaimOnly) {
     return (
       <div className="orchid-compaction-reclaim flex items-center gap-2 rounded-md border border-base-300/60 bg-base-200/40 px-3 py-2 text-xs text-base-content/70" data-compaction="reclaim">
         <Icon name="layers" size={12} className="shrink-0 opacity-60" />
         <span className="min-w-0">
-          Reclaimed {summarizedCount != null ? `${summarizedCount} ` : ''}duplicate tool outputs
-          {content ? ` — ${content.slice(0, 120)}` : ''}
+          Reclaimed {combined.summarizedCount != null ? `${combined.summarizedCount} ` : ''}duplicate tool outputs
+          {combined.content ? ` — ${combined.content.slice(0, 120)}` : ''}
         </span>
-        <StatusBadge tone="neutral" size="xs" outline>
-          {mode}
-        </StatusBadge>
+        {combined.mode && (
+          <StatusBadge tone="neutral" size="xs" outline>
+            {combined.mode}
+          </StatusBadge>
+        )}
       </div>
     );
   }
 
-  return <CompactionSummaryCard message={message} />;
+  return <CompactionSummaryCard messages={messages} combined={combined} />;
 }
 
-function CompactionSummaryCard({ message }: { message: Message }) {
-  const marker = message.compacted!;
-  const content = message.content ?? '';
+function CompactionSummaryCard({ messages, combined }: { messages: readonly Message[]; combined: CoalescedSummary }) {
   const [expanded, setExpanded] = useState(false);
   const [hasExpanded, setHasExpanded] = useState(false);
   const panelId = useId();
   const announcementId = useId();
-  const summarizedCount = marker.summarizedCount;
-  const mode = marker.mode;
+  const content = combined.content;
+  const summarizedCount = combined.summarizedCount;
+  const mode = combined.mode;
+  const summaryCount = messages.filter((m) => m.compacted).length;
 
   useEffect(() => {
     if (expanded) setHasExpanded(true);
   }, [expanded]);
 
-  const tokensFreed = marker.tokensFreed != null && marker.tokensFreed > 0
-    ? `~${marker.tokensFreed.toLocaleString()} tokens freed`
+  const tokensFreed = combined.tokensFreed > 0
+    ? `~${combined.tokensFreed.toLocaleString()} tokens freed`
     : null;
-  const compactorTokens = marker.compactorTokens
-    ? `compactor ${marker.compactorTokens.inputTokens.toLocaleString()} in / ${marker.compactorTokens.outputTokens.toLocaleString()} out`
+  const compactorTokens = combined.compactorTokens
+    ? `compactor ${combined.compactorTokens.inputTokens.toLocaleString()} in / ${combined.compactorTokens.outputTokens.toLocaleString()} out`
     : null;
 
   const body = useMemo(() => {
@@ -148,6 +197,7 @@ function CompactionSummaryCard({ message }: { message: Message }) {
 
   const toggle = () => setExpanded((v) => !v);
   const collapse = () => setExpanded(false);
+  const primaryMarker = messages.find((m) => m.compacted)?.compacted ?? null;
 
   return (
     <div className="orchid-tool-block orchid-compaction-block" data-compaction="summary" data-tool-result-status="complete">
@@ -165,10 +215,15 @@ function CompactionSummaryCard({ message }: { message: Message }) {
           <span className="orchid-tool-block-title-text min-w-0 truncate">Compaction summary</span>
         </span>
         <span className="orchid-tool-block-title-right shrink-0">
-          <StatusBadge tone="info" size="xs">{mode}</StatusBadge>
+          {mode && <StatusBadge tone="info" size="xs">{mode}</StatusBadge>}
           {summarizedCount != null && (
             <StatusBadge tone="neutral" size="xs" outline>
               {summarizedCount} messages
+            </StatusBadge>
+          )}
+          {summaryCount > 1 && (
+            <StatusBadge tone="neutral" size="xs" outline>
+              {summaryCount} sections
             </StatusBadge>
           )}
           {tokensFreed && <span className="hidden text-xs text-base-content/60 sm:inline">{tokensFreed}</span>}
@@ -183,10 +238,12 @@ function CompactionSummaryCard({ message }: { message: Message }) {
           title="Click to collapse"
         >
           <div className="mb-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-base-content/60">
-            <span className="inline-flex items-center gap-1">
-              <Icon name="gitBranch" size={10} className="opacity-60" />
-              range {formatRange(marker)}
-            </span>
+            {primaryMarker && (
+              <span className="inline-flex items-center gap-1">
+                <Icon name="gitBranch" size={10} className="opacity-60" />
+                range {formatRange(primaryMarker)}
+              </span>
+            )}
             <span className="inline-flex items-center gap-1">
               <Icon name="cpu" size={10} className="opacity-60" />
               agent compactor
