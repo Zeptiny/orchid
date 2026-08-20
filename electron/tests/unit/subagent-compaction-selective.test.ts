@@ -4,10 +4,11 @@
  * The selective branch must NEVER delete original messages from the subagent
  * chain: summarized/dropped/ranged-kept originals stay in the transcript with
  * excludeFromModel:true, a compacted-marker summary head is inserted at the
- * cut, and user messages are never flagged (R9).
+ * cut, and user messages are never flagged (R9/R31).
  *
- * Tested through buildSelectiveSubagentApply — the pure seam
- * applySubagentPendingCompaction routes selective success through.
+ * Tested through buildSelectiveCompactionApply — the shared never-delete
+ * selective-settle builder (R35) applySubagentPendingCompaction routes
+ * selective success through, shared verbatim with the main scope.
  */
 import { describe, expect, it, vi } from 'vitest';
 import type { Message } from '../../src/shared/types/message';
@@ -74,8 +75,10 @@ vi.mock('../../src/main/llm/message-factories', () => ({
   makeUserMessage: (content: string) => ({ role: 'user', content }),
 }));
 
-import { buildSelectiveSubagentApply } from '../../src/main/agents/subagent-compaction';
+import { buildSelectiveCompactionApply } from '../../src/main/llm/compaction/apply';
+import { applySubagentPendingCompaction } from '../../src/main/agents/subagent-compaction';
 import type { SelectiveCompactionResult } from '../../src/main/llm/compaction/selective/run';
+import type { CompactionPendingEntry } from '../../src/main/llm/compaction/pending-store';
 
 // ── Fixture helpers ─────────────────────────────────────────────────────────
 
@@ -158,6 +161,36 @@ function selectiveSuccess(input: {
   };
 }
 
+/**
+ * The subagent scope's route into the shared builder (R35): compose the
+ * selective run's per-op summaries into one summary-head text, merge the
+ * gate's reclaim ids, and settle — exactly what applySubagentPendingCompaction
+ * does for a selective pending.
+ */
+function subagentSelectiveApply(params: {
+  readonly messages: readonly Message[];
+  readonly chains: readonly Chain[];
+  readonly cutResult: CutResult;
+  readonly selectiveResult: SelectiveSuccess;
+  readonly reclaimedIds?: readonly string[];
+  readonly sessionId?: string;
+}) {
+  const { selectiveResult } = params;
+  const summaryParts = selectiveResult.summaryMessages.length > 0
+    ? selectiveResult.summaryMessages.map((m) => m.content)
+    : (selectiveResult.summaryMessage ? [selectiveResult.summaryMessage.content] : []);
+  const summaryText = summaryParts.join('\n\n---\n\n').trim();
+  return buildSelectiveCompactionApply({
+    messages: params.messages,
+    chains: params.chains,
+    cutResult: params.cutResult,
+    flaggedIds: selectiveResult.flaggedIds,
+    summaryText: summaryText.length > 0 ? summaryText : null,
+    ...(params.reclaimedIds ? { reclaimedIds: params.reclaimedIds } : {}),
+    ...(params.sessionId ? { sessionId: params.sessionId } : {}),
+  });
+}
+
 /** Chain of 6: compactable range [0,4), preserved window [4,6). */
 const CUT: CutResult = {
   cutIndex: 4,
@@ -179,7 +212,7 @@ function baseMessages(): Message[] {
 
 // ── Tests ───────────────────────────────────────────────────────────────────
 
-describe('buildSelectiveSubagentApply (R3: replacement never deletion)', () => {
+describe('buildSelectiveCompactionApply — subagent scope (R3: replacement never deletion)', () => {
   it('keeps every original message, flags only covered ids, inserts a compacted summary head at the cut', () => {
     const messages = baseMessages();
     const chains = [makeChain('chain-1', messages)];
@@ -188,7 +221,7 @@ describe('buildSelectiveSubagentApply (R3: replacement never deletion)', () => {
       summaryParts: ['Summarized exploration work.'],
     });
 
-    const result = buildSelectiveSubagentApply({
+    const result = subagentSelectiveApply({
       messages, chains, cutResult: CUT, selectiveResult: selective, sessionId: 'session-sub',
     });
 
@@ -248,7 +281,7 @@ describe('buildSelectiveSubagentApply (R3: replacement never deletion)', () => {
       summaryParts: ['Summarized.'],
     });
 
-    const result = buildSelectiveSubagentApply({
+    const result = subagentSelectiveApply({
       messages, chains: [makeChain('chain-1', messages)], cutResult: CUT, selectiveResult: selective,
     });
 
@@ -264,7 +297,7 @@ describe('buildSelectiveSubagentApply (R3: replacement never deletion)', () => {
     const messages = baseMessages();
     const selective = selectiveSuccess({ flaggedIds: ['a1', 'tr1'] });
 
-    const result = buildSelectiveSubagentApply({
+    const result = subagentSelectiveApply({
       messages, chains: [makeChain('chain-1', messages)], cutResult: CUT, selectiveResult: selective,
     });
 
@@ -286,7 +319,7 @@ describe('buildSelectiveSubagentApply (R3: replacement never deletion)', () => {
     const messages = baseMessages();
     const selective = selectiveSuccess({ flaggedIds: [] });
 
-    const result = buildSelectiveSubagentApply({
+    const result = subagentSelectiveApply({
       messages, chains: [makeChain('chain-1', messages)], cutResult: CUT, selectiveResult: selective,
     });
 
@@ -298,7 +331,7 @@ describe('buildSelectiveSubagentApply (R3: replacement never deletion)', () => {
     messages[4] = { ...messages[4]!, excludeFromModel: true }; // a2 flagged earlier
     const selective = selectiveSuccess({ flaggedIds: ['a1'], summaryParts: ['Summarized.'] });
 
-    const result = buildSelectiveSubagentApply({
+    const result = subagentSelectiveApply({
       messages, chains: [makeChain('chain-1', messages)], cutResult: CUT, selectiveResult: selective,
     });
 
@@ -314,7 +347,7 @@ describe('buildSelectiveSubagentApply (R3: replacement never deletion)', () => {
     messages[2] = { ...messages[2]!, excludeFromModel: true }; // tc1 excluded by an earlier compaction
     const selective = selectiveSuccess({ flaggedIds: ['a1'], summaryParts: ['Summarized.'] });
 
-    const result = buildSelectiveSubagentApply({
+    const result = subagentSelectiveApply({
       messages, chains: [makeChain('chain-1', messages)], cutResult: CUT, selectiveResult: selective,
     });
 
@@ -323,5 +356,82 @@ describe('buildSelectiveSubagentApply (R3: replacement never deletion)', () => {
     expect(result!.updatedMessages.find((m) => m.id === 'tc1')?.excludeFromModel).toBe(true);
     expect(result!.updatedMessages.find((m) => m.id === 'a1')?.excludeFromModel).toBe(true);
     expect(result!.updatedMessages.find((m) => m.id === 'tr1')?.excludeFromModel).not.toBe(true);
+  });
+
+  it('applySubagentPendingCompaction routes selective success through the shared builder (R35)', async () => {
+    const messages = baseMessages();
+    const chains = [makeChain('chain-1', messages)];
+    const selective = selectiveSuccess({
+      flaggedIds: ['a1', 'tc1', 'tr1'],
+      summaryParts: ['Summarized exploration work.'],
+    });
+    const expected = subagentSelectiveApply({
+      messages, chains, cutResult: CUT, selectiveResult: selective, reclaimedIds: [], sessionId: 'session-sub',
+    });
+    expect(expected).not.toBeNull();
+
+    const pending: CompactionPendingEntry = {
+      cut: CUT,
+      flaggedIds: [],
+      expectedIds: ['u1', 'a1', 'tc1', 'tr1'],
+      estimatedInput: 800,
+      contextTokens: 1000,
+      mode: 'selective',
+      selectivePromise: Promise.resolve({ kind: 'ran' as const, result: selective }),
+    };
+
+    const routed = await applySubagentPendingCompaction({
+      pending,
+      messages,
+      chains,
+      sessionId: 'session-sub',
+    });
+
+    // The runtime route (pause boundary / overflow retry) produces exactly the
+    // shared builder's apply — one never-delete selective-settle for the scope.
+    // (Summary-head ids are generated per invocation; compare positions and
+    // flags instead of raw ids.)
+    const shape = (apply: NonNullable<ReturnType<typeof subagentSelectiveApply>>) => {
+      const headId = apply.summaryMessage?.id ?? null;
+      return apply.updatedMessages.map((m) => [
+        headId != null && m.id === headId ? '<head>' : m.id,
+        m.excludeFromModel,
+      ]);
+    };
+    expect(routed).not.toBeNull();
+    expect(routed!.flaggedIds).toEqual(expected!.flaggedIds);
+    expect(shape(routed!)).toEqual(shape(expected!));
+    expect(routed!.summaryMessage?.content).toBe(expected!.summaryMessage?.content);
+  });
+
+  it('identical inputs produce identical applies across scopes (R35): main flag computation = subagent settle', () => {
+    const messages = baseMessages();
+    const chains = [makeChain('chain-1', messages)];
+    const selective = selectiveSuccess({
+      flaggedIds: ['a1', 'tc1', 'tr1'],
+      summaryParts: ['Summarized exploration work.'],
+    });
+
+    // Subagent scope: full never-delete apply (flags + summary head).
+    const subagentApply = subagentSelectiveApply({
+      messages, chains, cutResult: CUT, selectiveResult: selective, sessionId: 'session-sub',
+    });
+    // Main scope: the same builder invoked the way persistSelectiveCompaction
+    // does — replay-only (null summary text) — for the settled durable flags.
+    const mainFlags = buildSelectiveCompactionApply({
+      messages,
+      chains,
+      cutResult: CUT,
+      flaggedIds: selective.flaggedIds,
+      summaryText: null,
+      sessionId: 'session-sub',
+    });
+
+    expect(subagentApply).not.toBeNull();
+    expect(mainFlags).not.toBeNull();
+    // The ids main writes durably are exactly the ids the subagent apply
+    // excludes from the model view: one shared computation, two consumers.
+    expect(mainFlags!.flaggedIds).toEqual(subagentApply!.flaggedIds);
+    expect([...mainFlags!.flaggedIds].sort()).toEqual(['a1', 'tc1', 'tr1']);
   });
 });

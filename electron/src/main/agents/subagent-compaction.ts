@@ -1,11 +1,12 @@
 /**
  * Subagent mid-run compaction (U9/U5) — helpers shared by SubagentManager's run
- * loop and the stream runner.
+ * loop, the per-run compaction controller, and the stream runner.
  *
  * These live in a dedicated module (not subagent-runner.ts) so the manager can
  * import them statically without forming a runtime dependency cycle:
  * manager -> subagent-runner -> tools/index -> manager. Nothing here may
- * import from ../tools or ./manager at runtime.
+ * import from ../tools or ./manager at runtime (type-only imports are fine —
+ * they are erased at compile time).
  *
  * The compaction choreography mirrors the main scope's split (R28/R37):
  * `prepareSubagentCompaction` runs the shared gate pipeline and starts the
@@ -15,12 +16,16 @@
  * shared `isPendingCutStillValid` — so messages appended between prepare and
  * apply are preserved by construction (the apply is built over apply-time
  * history, never a prepare-time snapshot).
+ *
+ * This module also owns the compaction contracts shared by the manager, the
+ * controller, and the runner: the mutable history box, the pause-gate
+ * interface, and the pause/overflow outcome unions.
  */
 import type { CompactionMode, Message } from '../../shared/types/message';
 import type { ModelSelection } from '../../shared/types/provider';
 import type { Config } from '../config/schema';
 import type { Chain } from '../../shared/types/chain';
-import { buildCompactionApply, type ApplyResult } from '../llm/compaction/apply';
+import { buildCompactionApply, buildSelectiveCompactionApply, type ApplyResult } from '../llm/compaction/apply';
 import type { TriggerState } from '../llm/compaction/trigger';
 import type { CompactionPendingEntry } from '../llm/compaction/pending-store';
 import {
@@ -30,6 +35,75 @@ import {
 import type { CutResult } from '../llm/compaction/select';
 import type { SelectiveCompactionResult } from '../llm/compaction/selective/run';
 import { getProviderRuntime } from '../providers';
+
+// ── Shared compaction contracts (U5/U6) ──────────────────────────────────────
+
+/**
+ * Mutable history handoff shared between the manager and a run's stream
+ * (U5). The runner reads `messages` for each stream segment; a compaction
+ * apply at a pause boundary swaps the contents so the restarted stream
+ * replays the compacted history. Replaces the runner's frozen spawn-time
+ * history snapshot.
+ */
+export interface SubagentHistoryBox {
+  messages: Message[];
+}
+
+/** Outcome of consuming a compaction pause at a step boundary. */
+export type SubagentPauseApplyOutcome =
+  /** Compaction applied; restart with the compacted history in the box. */
+  | 'applied'
+  /** No pending / discarded / failed apply; restart with the accumulated history. */
+  | 'skipped'
+  /** Post-compaction model view still over the window with nothing left — the partial report (R17) is set and the run must stop. */
+  | 'degraded'
+  /** Abort/interrupt while consuming the pause — stop without restarting. */
+  | 'aborted';
+
+/**
+ * Outcome of the reactive overflow fire point (R29 fire point 3 / R30): a
+ * classified `context_length_exceeded` stream error asks the compaction
+ * controller to recover the run before it degrades or fails.
+ */
+export type SubagentOverflowOutcome =
+  /** Compaction applied and the history box swapped — retry the stream once. */
+  | 'applied'
+  /** Retry budget spent or nothing left to compact — the partial report (R17) is set on record.result and the run must end normally. */
+  | 'degraded'
+  /** Compaction disabled or unavailable (no context limits / no scope config) — the stream error propagates unchanged. */
+  | 'unavailable'
+  /** Abort raced in during the overflow compaction — stop without a retry. */
+  | 'aborted';
+
+/**
+ * Compaction pause gate for one subagent run, keyed by the run's
+ * (sessionId, agentScopeId) scope (R28). The runner binds `shouldPause` into
+ * the orchestrator's early-stop predicate; when the stream stops at a step
+ * boundary with the pause set, it awaits `applyAtPause` (re-validate against
+ * live history, apply, swap the history box) and restarts the stream.
+ * `compactForOverflow` is the reactive fire point (R29 fire point 3 / R30):
+ * the runner routes a classified context-overflow error event to it instead of
+ * letting it fail the run. `discard` is the interrupt path: clear the gate +
+ * drop any pending.
+ */
+export interface SubagentCompactionPauseController {
+  /** Whether this run's scope should pause for compaction at the next step boundary. */
+  readonly shouldPause: () => boolean;
+  /** Consume the pause at a step boundary: validate, apply, swap the history box. */
+  readonly applyAtPause: () => Promise<SubagentPauseApplyOutcome>;
+  /**
+   * Compact synchronously for a context_length_exceeded stream error (prepare
+   * + immediate apply — the stream is already dead, so the fire-and-forget
+   * pause path cannot help) and report whether the run should retry the
+   * stream once, degrade to the partial report, or let the error propagate.
+   * `alreadyRetried` marks the post-retry terminal call — the controller
+   * degrades instead of compacting again (one retry per run, mirroring main's
+   * hasTriedCompactionRetry guard).
+   */
+  readonly compactForOverflow?: (params: { readonly alreadyRetried: boolean }) => Promise<SubagentOverflowOutcome>;
+  /** Interrupt path: clear the scoped gate and discard any pending prepare. */
+  readonly discard: () => void;
+}
 
 /** Subagent mid-run compaction (U9): partial-report helper for R17. */
 export interface SubagentPartialReportInput {
@@ -83,102 +157,18 @@ export async function resolveSubagentContextTokens(
 }
 
 /**
- * Materialize a SUCCESSFUL selective-compaction run for a subagent chain (R3).
- *
- * The selective loop decides which messages leave the MODEL view; persistence
- * must never delete them from the transcript. Adopting the materialized
- * replay (`replayMessages`) wholesale would hard-delete every summarized
- * original — inside summarize/drop/keep_range spans they exist only as
- * `flaggedIds`, never in the replay. Instead this routes the result through
- * buildCompactionApply (the same never-delete helper the simple and fallback
- * paths use): every original message is kept, the covered ids
- * (summarized/dropped/ranged-kept + mechanical reclaim) get
- * excludeFromModel:true, and one summary head carrying the compacted marker
- * (mode 'selective') is inserted at the cut.
- *
- * buildCompactionApply flags the ENTIRE compactable range, so afterwards this
- * settles the flags: ids the selective pass kept verbatim become visible
- * again, and user messages are never flagged (R9 — the same protection the
- * fallback path applies). Pre-existing flags from EARLIER compactions survive
- * everywhere except user messages — those messages are already out of the
- * model view and un-flagging them would resurrect summarized content. Inside
- * the covered range they beat the un-flag rule; outside it they are untouched.
+ * Compose a selective run's per-op summaries into the single summary-head
+ * text the shared never-delete builder carries (plain parts joined by a
+ * divider); null when the run produced no summaries (pure drop/ranged-keep).
  */
-export function buildSelectiveSubagentApply(params: {
-  readonly messages: readonly Message[];
-  readonly chains: readonly Chain[];
-  readonly cutResult: CutResult;
-  readonly selectiveResult: Extract<SelectiveCompactionResult, { kind: 'selective' }>;
-  /** Mechanical-reclaim ids from this run's pre-pass; merged with the selective flags. */
-  readonly reclaimedIds?: readonly string[];
-  readonly sessionId?: string;
-}): ApplyResult | null {
-  const { messages, chains, cutResult, selectiveResult } = params;
-
-  // R9: user messages are never excluded from the model view.
-  const userIds = new Set(messages.filter((m) => m.role === 'user').map((m) => m.id));
-  const mergedFlagged = [...new Set([...selectiveResult.flaggedIds, ...(params.reclaimedIds ?? [])])]
-    .filter((id) => !userIds.has(id));
-
-  // Compose the per-op summaries into one summary head — the same plain-text
-  // shape the simple path passes to buildCompactionApply.
+function composeSelectiveSummaryText(
+  selectiveResult: Extract<SelectiveCompactionResult, { kind: 'selective' }>,
+): string | null {
   const summaryParts = selectiveResult.summaryMessages.length > 0
     ? selectiveResult.summaryMessages.map((m) => m.content)
     : (selectiveResult.summaryMessage ? [selectiveResult.summaryMessage.content] : []);
   const summaryText = summaryParts.join('\n\n---\n\n').trim();
-  if (mergedFlagged.length === 0 && summaryText.length === 0) return null;
-
-  let applyResult: ApplyResult;
-  try {
-    applyResult = buildCompactionApply({
-      messages: [...messages],
-      chains,
-      cutResult,
-      summaryText: summaryText.length > 0 ? summaryText : null,
-      mode: 'selective',
-      reclaimedIds: mergedFlagged,
-      sessionId: params.sessionId,
-    });
-  } catch {
-    // e.g. range already flagged by an earlier compaction — mirror the simple
-    // path's failure mode (no-op) rather than risk the transcript.
-    return null;
-  }
-  if (!applyResult.didApply) return null;
-
-  // Settle flags: reset excludeFromModel on covered ids that selective kept
-  // verbatim (and on user messages) so the model view matches the selective
-  // decision while the transcript keeps every original.
-  const n = messages.length;
-  const start = Math.max(0, Math.min(cutResult.compactableRange.start, n));
-  const end = Math.max(start, Math.min(cutResult.compactableRange.end, n));
-  const coveredIds = new Set<string>(mergedFlagged);
-  // Messages already excludeFromModel BEFORE this compaction (flagged by an
-  // earlier one) — settle must keep them excluded; see the settle rule below.
-  const preExcludedIds = new Set<string>();
-  for (let i = start; i < end; i += 1) {
-    const m = messages[i];
-    if (!m) continue;
-    coveredIds.add(m.id);
-    if (m.excludeFromModel) preExcludedIds.add(m.id);
-  }
-  const flaggedSet = new Set(mergedFlagged);
-  const settle = (m: Message): Message => {
-    if (userIds.has(m.id)) return m.excludeFromModel ? { ...m, excludeFromModel: false } : m;
-    if (flaggedSet.has(m.id)) return m.excludeFromModel ? m : { ...m, excludeFromModel: true };
-    // Pre-existing exclusions from EARLIER compactions survive: the message is
-    // already out of the model view, and un-flagging it here would resurrect
-    // content a previous summary replaced.
-    if (preExcludedIds.has(m.id)) return m;
-    if (coveredIds.has(m.id) && m.excludeFromModel) return { ...m, excludeFromModel: false };
-    return m;
-  };
-  return {
-    ...applyResult,
-    updatedMessages: applyResult.updatedMessages.map(settle),
-    updatedChains: applyResult.updatedChains.map((c) => ({ ...c, messages: c.messages.map(settle) })),
-    flaggedIds: mergedFlagged,
-  };
+  return summaryText.length > 0 ? summaryText : null;
 }
 
 /**
@@ -387,9 +377,10 @@ export async function prepareSubagentCompaction(params: {
  * the LIVE chain history the caller supplies (never the prepare-time
  * snapshot), so every message appended between prepare and apply is
  * preserved — the subagent twin of main's `reanchorSelectiveReplay` contract.
- * Selective success routes through `buildSelectiveSubagentApply` (R3:
- * originals never deleted); the fallback and simple paths route through
- * `buildCompactionApply` with the R9 never-flag-user settle.
+ * Selective success routes through the shared never-delete builder
+ * `buildSelectiveCompactionApply` (R3/R35: originals never deleted); the
+ * fallback and simple paths route through `buildCompactionApply`, whose
+ * universal settle already owns the R31 never-flag-user invariant.
  *
  * Returns the apply result, or null when the compactor produced nothing
  * usable (failed, empty text, or an apply-time precondition failure) — the
@@ -412,11 +403,14 @@ export async function applySubagentPendingCompaction(params: {
         // (excludeFromModel flags + one compacted-marker summary head at the
         // cut) instead of hard-replacing the chain with the materialized
         // replay, whose summarized originals exist only as flagged ids.
-        return buildSelectiveSubagentApply({
+        // R35: the same shared builder computes the main scope's selective
+        // flags — one never-delete selective-settle for both scopes.
+        return buildSelectiveCompactionApply({
           messages: messages as Message[],
           chains,
           cutResult: pending.cut,
-          selectiveResult: outcome.result,
+          flaggedIds: outcome.result.flaggedIds,
+          summaryText: composeSelectiveSummaryText(outcome.result),
           reclaimedIds: pending.flaggedIds,
           sessionId,
         });
@@ -433,12 +427,10 @@ export async function applySubagentPendingCompaction(params: {
           reclaimedIds: pending.flaggedIds,
           sessionId,
         });
-        if (!applyResult.didApply) return null;
-        // R9: user messages are never excluded from the model view — shared
-        // helper (#11a), previously inlined here (and now applied by the main
-        // scope's selective fallback too).
-        const { unflagUserMessagesInApply } = await import('../llm/compaction/run-attempt.js');
-        return unflagUserMessagesInApply(applyResult, messages as Message[]);
+        // R31: user messages are never excluded from the model view — the
+        // universal settle inside buildCompactionApply owns the invariant in
+        // every mode (U1), so no scope-specific un-flag pass is needed here.
+        return applyResult.didApply ? applyResult : null;
       }
       return null;
     }

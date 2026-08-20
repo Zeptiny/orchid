@@ -58,16 +58,19 @@ import {
   runCompactionGate,
 } from '../../llm/compaction/pipeline';
 import { summarizeCompactableRange, type SummarizeResult } from '../../llm/compaction/summarize';
-import { buildCompactionApply, CompactionApplyError, stampCompactionMetrics, type ApplyResult } from '../../llm/compaction/apply';
+import {
+  buildCompactionApply,
+  buildSelectiveCompactionApply,
+  CompactionApplyError,
+  stampCompactionMetrics,
+  type ApplyResult,
+} from '../../llm/compaction/apply';
 import { CompactionTrigger } from '../../llm/compaction/trigger';
 import {
   compactableModelSlice,
-  filterUserFlaggedIds,
   runCompactionAttempt,
-  unflagUserMessagesInApply,
   type CompactionAttemptOutcome,
 } from '../../llm/compaction/run-attempt';
-import type { SelectiveCompactionResult } from '../../llm/compaction/selective/run';
 import { activeAgents } from './state';
 import { sendTurnEvent, webContentsForWindowId } from './events';
 import {
@@ -331,10 +334,28 @@ function stampApplyMetrics(
 }
 
 // ── Selective persistence helper (minimal between-turns) ─────────────────────
+/**
+ * Persist a successful selective compaction as one targeted durable
+ * transaction (R20): settled flags + the run's new replay rows inserted
+ * before the preserved window. The flag/settle computation is delegated to
+ * the shared never-delete builder `buildSelectiveCompactionApply` (R35) so
+ * the main scope's durable flags are exactly the ids the subagent scope
+ * excludes from its model view for identical inputs; this helper owns only
+ * main's write shape (targeted transaction, cache refresh, re-anchoring).
+ */
 function persistSelectiveCompaction(
   sessionId: string,
-  result: Extract<SelectiveCompactionResult, { kind: 'selective' }>,
-  cut: CutResult,
+  input: {
+    /** Flat history the selective/fallback pass ran over (settled-flag base). */
+    readonly messages: readonly Message[];
+    /** Ids the selective/fallback result removed from the model view (pre-settle). */
+    readonly flaggedIds: readonly string[];
+    /** Mechanical-reclaim ids from the gate; merged into the settled flags. */
+    readonly reclaimedIds?: readonly string[];
+    /** The run's materialized replay (synthetic summaries + ranged copies + kept). */
+    readonly replayMessages: readonly Message[];
+    readonly cut: CutResult;
+  },
 ): boolean {
   try {
     const manager = getSessionManager();
@@ -343,12 +364,25 @@ function persistSelectiveCompaction(
     // failure (aligned with persistCompactionBetweenTurns) so the caller
     // treats the compaction as not-applied instead of silently dropping it.
     if (!existing) return false;
-    const flaggedSet = new Set(result.flaggedIds);
+    // R35: one never-delete selective-settle for both scopes. summaryText is
+    // null here — main persists the replay rows as the summary chain below
+    // rather than one composed summary head; the builder contributes the
+    // settled flag set (user-filtered, reclaim-merged, deduped).
+    const settled = buildSelectiveCompactionApply({
+      messages: input.messages,
+      chains: existing.chains as unknown as Chain[],
+      cutResult: input.cut,
+      flaggedIds: input.flaggedIds,
+      ...(input.reclaimedIds ? { reclaimedIds: input.reclaimedIds } : {}),
+      summaryText: null,
+      sessionId,
+    });
+    const flaggedSet = new Set(settled?.flaggedIds ?? []);
     const updatedAt = new Date().toISOString();
     // New replay rows produced by the selective run (synthetic summaries +
     // ranged copies) — every replay id that is not already durable.
     const existingIds = new Set(existing.chains.flatMap((c) => c.messages.map((m) => m.id)));
-    const newReplayMessages = result.replayMessages.filter((m) => !existingIds.has(m.id)) as Message[];
+    const newReplayMessages = input.replayMessages.filter((m) => !existingIds.has(m.id)) as Message[];
     // One durable summary-head row (R20) holding the new replay material in
     // replay order, inserted before the preserved window. Unified id scheme
     // (#11): randomUUID() — one scheme for synthesized compactor chains across
@@ -373,7 +407,7 @@ function persistSelectiveCompaction(
       } as Chain;
     }
     const flatOriginal: Message[] = existing.chains.flatMap((c) => c.messages as unknown as Message[]);
-    const preserveStart = cut.compactableRange.end;
+    const preserveStart = input.cut.compactableRange.end;
     const insertBeforeMessageId = preserveStart < flatOriginal.length
       ? flatOriginal[preserveStart]!.id
       : null;
@@ -486,7 +520,13 @@ export async function applyPendingCompactionIfAny(
       const result = outcome.result;
       if (result.kind === 'selective') {
         // Atomic: DB first, then memory. Single DB write via persistSelectiveCompaction.
-        const ok = persistSelectiveCompaction(sessionId, result, pending.cut);
+        const ok = persistSelectiveCompaction(sessionId, {
+          messages: history,
+          flaggedIds: result.flaggedIds,
+          ...(pending.flaggedIds.length > 0 ? { reclaimedIds: pending.flaggedIds } : {}),
+          replayMessages: result.replayMessages,
+          cut: pending.cut,
+        });
         if (!ok) {
           trigger.abortPrepare();
           completeCompactionWidget(sessionId);
@@ -529,9 +569,9 @@ export async function applyPendingCompactionIfAny(
           throw e;
         }
         if (applyResult.didApply) {
-          // Unified R9 (#11a): the selective fallback never flags user
-          // messages — the same protection the subagent scope applies.
-          applyResult = unflagUserMessagesInApply(applyResult, history);
+          // R31: the universal settle inside buildCompactionApply already
+          // keeps user messages out of the flagged set in every mode — no
+          // scope-specific un-flag pass is needed here.
           const tpc = trigger.state.tokensPerChar ?? (totalChars(applyResult.updatedMessages) > 0 ? pending.estimatedInput / Math.max(1, totalChars(history)) : undefined);
           const postTokens = tpc ? Math.ceil(totalChars(applyResult.updatedMessages) * tpc) : pending.estimatedInput;
           applyResult = stampApplyMetrics(applyResult, pending.estimatedInput, postTokens);
@@ -545,12 +585,19 @@ export async function applyPendingCompactionIfAny(
           }
         }
         if (result.replayMessages && result.replayMessages.length > 0) {
-          // Fallback replay without summary — treat as selective success with single DB write via helper if possible
-          const selectiveLike = { kind: 'selective' as const, replayMessages: result.replayMessages, flaggedIds: filterUserFlaggedIds(history, result.flaggedIds ?? pending.flaggedIds), summaryMessages: [], summaryMessage: result.summaryMessage ?? null } as unknown as Extract<SelectiveCompactionResult, { kind: 'selective' }>;
-          const ok = persistSelectiveCompaction(sessionId, selectiveLike, pending.cut);
+          // Fallback replay without summary — same targeted selective write
+          // (flags from the shared never-delete settle, replay rows as the
+          // summary chain), then the same apply-time re-anchoring as the
+          // selective-success branch (P1 #5).
+          const ok = persistSelectiveCompaction(sessionId, {
+            messages: history,
+            flaggedIds: result.flaggedIds ?? pending.flaggedIds,
+            ...(pending.flaggedIds.length > 0 ? { reclaimedIds: pending.flaggedIds } : {}),
+            replayMessages: result.replayMessages,
+            cut: pending.cut,
+          });
           let reanchored: Message[] | undefined;
           if (ok) {
-            // Same apply-time re-anchoring as the selective-success branch (P1 #5).
             reanchored = reanchorSelectiveReplay(result.replayMessages, history, pending.cut.cutIndex, pending.cut.compactableRange.start);
             setChatHistory(sessionId, [...reanchored]);
             const tpc = trigger.state.tokensPerChar ?? (totalChars(reanchored) > 0 ? pending.estimatedInput / Math.max(1, totalChars(history)) : undefined);
@@ -745,7 +792,13 @@ export async function tryCompactSynchronously(
         if (attempt.kind === 'noop') return { didApply: false };
         const selResult = attempt.result;
         if (selResult.kind === 'selective') {
-          const ok = persistSelectiveCompaction(sessionId, selResult, cut);
+          const ok = persistSelectiveCompaction(sessionId, {
+            messages,
+            flaggedIds: selResult.flaggedIds,
+            ...(flaggedIds.length > 0 ? { reclaimedIds: flaggedIds } : {}),
+            replayMessages: selResult.replayMessages,
+            cut,
+          });
           if (!ok) {
             trigger.abortPrepare();
             return { didApply: false };
@@ -778,11 +831,17 @@ export async function tryCompactSynchronously(
           }
           if (!applyResult.didApply) {
             if (selResult.replayMessages && selResult.replayMessages.length > 0) {
-              // fallback replay without summary — single DB write via selective helper
-              // If flaggedIds derived from manifest, use those; else use flaggedIds from reclaim
-              const flaggedForLike = filterUserFlaggedIds(messages, (selResult.flaggedIds ?? flaggedIds) as string[]);
-              const like2: Extract<SelectiveCompactionResult, { kind: 'selective' }> = { kind: 'selective', replayMessages: selResult.replayMessages!, flaggedIds: flaggedForLike, summaryMessages: [], summaryMessage: selResult.summaryMessage ?? null, correctedOps: [], attempts: selResult.attempts } as unknown as Extract<SelectiveCompactionResult, { kind: 'selective' }>;
-              const ok2 = persistSelectiveCompaction(sessionId, like2, cut);
+              // Fallback replay without a usable summary — same targeted
+              // selective write (flags from the shared never-delete settle,
+              // replay rows as the summary chain). If flaggedIds were derived
+              // from the manifest they lead; the gate's reclaim flags merge.
+              const ok2 = persistSelectiveCompaction(sessionId, {
+                messages,
+                flaggedIds: selResult.flaggedIds ?? flaggedIds,
+                ...(flaggedIds.length > 0 ? { reclaimedIds: flaggedIds } : {}),
+                replayMessages: selResult.replayMessages!,
+                cut,
+              });
               if (ok2) {
                 setChatHistory(sessionId, [...selResult.replayMessages!]);
                 const tpcF = trigger.state.tokensPerChar ?? tokensPerChar;
@@ -795,9 +854,9 @@ export async function tryCompactSynchronously(
             trigger.abortPrepare();
             return { didApply: false };
           }
-          // Unified R9 (#11a): the selective fallback never flags user
-          // messages — the same protection the subagent scope applies.
-          applyResult = unflagUserMessagesInApply(applyResult, messages);
+          // R31: the universal settle inside buildCompactionApply already
+          // keeps user messages out of the flagged set in every mode — no
+          // scope-specific un-flag pass is needed here.
           const tpcF2 = trigger.state.tokensPerChar ?? tokensPerChar;
           const postF2 = Math.ceil(totalChars(applyResult.updatedMessages) * tpcF2);
           applyResult = stampApplyMetrics(applyResult, estimatedInput, postF2);
@@ -812,9 +871,13 @@ export async function tryCompactSynchronously(
           return { didApply: true, updatedMessages: [...applyResult.updatedMessages] };
         }
         if (selResult.kind === 'fallback' && selResult.replayMessages && selResult.replayMessages.length > 0) {
-          const flaggedForFallback = filterUserFlaggedIds(messages, (selResult.flaggedIds ?? flaggedIds) as string[]);
-          const like3: Extract<SelectiveCompactionResult, { kind: 'selective' }> = { kind: 'selective', replayMessages: selResult.replayMessages, flaggedIds: flaggedForFallback, summaryMessages: [], summaryMessage: selResult.summaryMessage ?? null, correctedOps: [], attempts: selResult.attempts } as unknown as Extract<SelectiveCompactionResult, { kind: 'selective' }>;
-          const ok3 = persistSelectiveCompaction(sessionId, like3, cut);
+          const ok3 = persistSelectiveCompaction(sessionId, {
+            messages,
+            flaggedIds: selResult.flaggedIds ?? flaggedIds,
+            ...(flaggedIds.length > 0 ? { reclaimedIds: flaggedIds } : {}),
+            replayMessages: selResult.replayMessages,
+            cut,
+          });
           if (!ok3) {
             trigger.abortPrepare();
             return { didApply: false };

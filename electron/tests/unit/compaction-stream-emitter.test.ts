@@ -51,6 +51,7 @@ vi.mock('../../src/main/llm/compaction/summarize', () => ({
 }));
 vi.mock('../../src/main/llm/compaction/apply', () => ({
   buildCompactionApply: vi.fn(),
+  buildSelectiveCompactionApply: vi.fn(() => null),
   CompactionApplyError: class CompactionApplyError extends Error {},
 }));
 vi.mock('../../src/main/llm/compaction/trigger', () => ({
@@ -58,9 +59,7 @@ vi.mock('../../src/main/llm/compaction/trigger', () => ({
 }));
 vi.mock('../../src/main/llm/compaction/run-attempt', () => ({
   compactableModelSlice: vi.fn(),
-  filterUserFlaggedIds: vi.fn(),
   runCompactionAttempt: vi.fn(),
-  unflagUserMessagesInApply: vi.fn(),
 }));
 vi.mock('../../src/main/ipc/chat/persist', () => ({
   persistCompactionBetweenTurns: vi.fn(),

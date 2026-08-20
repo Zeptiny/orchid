@@ -47,6 +47,8 @@ electron/
 │   │   │   ├── admission.ts     # Global/per-session admission limits + queue
 │   │   │   ├── errors.ts        # Subagent error taxonomy
 │   │   │   ├── types.ts         # Shared subagent types
+│   │   │   ├── subagent-compaction.ts     # Subagent compaction prepare/apply + pause contracts
+│   │   │   ├── subagent-compaction-controller.ts # Per-run compaction controller (gates, pause, overflow retry)
 │   │   │   ├── subagent-runner.ts         # Run subagent turns against project runtime
 │   │   │   ├── subagent-run.ts            # Single run lifecycle
 │   │   │   ├── subagent-run-assembler.ts  # Assemble run context (prompt, tools, model)
@@ -96,6 +98,9 @@ electron/
 │   │   │   ├── eager-tool-executor.ts # EagerToolExecutor — start tools as their input streams
 │   │   │   ├── tool-pool.ts     # Tool worker pool singleton (offloadable read-only tools)
 │   │   │   ├── terminal-result.ts # Canonical error/cancelled tool results without a handler
+│   │   │   ├── compaction/      # Session/subagent compaction engine (shared by both scopes)
+│   │   │   │   ├── pipeline.ts  # Scope-parameterized gate pipeline + compactor semaphore
+│   │   │   │   └── pending-store.ts # Scope-keyed pending compactions + re-validation
 │   │   │   └── middleware/      # AI SDK middleware stack
 │   │   │       ├── index.ts     # createMiddlewareStack() — retry (+accounting) + throttle
 │   │   │       ├── retry.ts     # Exponential backoff retry

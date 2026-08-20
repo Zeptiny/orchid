@@ -5,6 +5,9 @@ import type { ToolCall } from '../../src/shared/types/tool';
 import { buildManifest, parseSelectiveOps, selectiveOpsToJson, PREVIEW_MAX_LENGTH } from '../../src/main/llm/compaction/selective/manifest';
 import { validateSelectiveOps } from '../../src/main/llm/compaction/selective/validate';
 import { materializeSelectiveOps, runSelectiveCompaction, passesReplayInvariant } from '../../src/main/llm/compaction/selective/run';
+import { buildSelectiveCompactionApply } from '../../src/main/llm/compaction/apply';
+import type { CutResult } from '../../src/main/llm/compaction/select';
+import type { Chain } from '../../src/shared/types/chain';
 import type { SelectiveOp } from '../../src/main/llm/compaction/selective/manifest';
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
@@ -328,6 +331,177 @@ describe('U14 materialization', () => {
     const m = materializeSelectiveOps({ manifest, messages: msgs, ops });
     expect(m.flaggedIds).toContain('th1');
     expect(m.replayMessages.some(r => r.id === 'th1')).toBe(false);
+  });
+});
+
+// ── U7/R35: unified never-delete selective apply ────────────────────────────
+
+describe('buildSelectiveCompactionApply — shared never-delete selective settle (R35)', () => {
+  /** Chain of 6: compactable range [0,4), preserved window [4,6). */
+  const CUT: CutResult = {
+    cutIndex: 4,
+    compactableRange: { start: 0, end: 4 },
+    preservedCount: 1,
+    openGroupStart: null,
+    preservedRange: { start: 4, end: 6 },
+  };
+  function baseMessages(): Message[] {
+    return [
+      makeUser('u1', 'explore the repo'),
+      makeAssistant('a1', 'I will read the config files.'),
+      makeToolCallMsg('tc1', 'call-1', 'read_file'),
+      makeToolResult('tr1', 'call-1', 'read_file', 'file contents'),
+      makeAssistant('a2', 'done reading'),
+      makeUser('u2', 'follow up'),
+    ];
+  }
+  function makeChainFor(messages: readonly Message[]): Chain {
+    return {
+      id: 'chain-main',
+      sessionId: 'session-main',
+      messages: [...messages],
+      status: 'active',
+      selection: null,
+      modelLabel: null,
+      agentName: 'general',
+      agentType: 'subagent',
+      agentTier: 'bloom',
+      subagentRecord: null,
+      startTime: new Date().toISOString(),
+      endTime: null,
+      errorDetail: null,
+      errorTitle: null,
+    } as Chain;
+  }
+
+  it('main-scope invocation (replay-only, null summaryText) settles flags without deleting originals', () => {
+    const messages = baseMessages();
+    const chains = [makeChainFor(messages)];
+
+    // The way persistSelectiveCompaction invokes the builder: replay-only
+    // (main persists the replay rows itself), flags from the selective run.
+    const settled = buildSelectiveCompactionApply({
+      messages,
+      chains,
+      cutResult: CUT,
+      flaggedIds: ['a1', 'tc1', 'tr1'],
+      summaryText: null,
+      sessionId: 'session-main',
+    });
+
+    expect(settled).not.toBeNull();
+    expect(settled!.didApply).toBe(true);
+    // Replay-only shape: flags without a summary head.
+    expect(settled!.summaryMessage).toBeNull();
+    expect(settled!.newChain).toBeNull();
+    expect(settled!.compactedMarker).toBeNull();
+    // Never-delete: every original survives untouched by the flag pass.
+    expect(settled!.updatedMessages.map((m) => m.id)).toEqual(messages.map((m) => m.id));
+    expect(settled!.flaggedIds).toEqual(['a1', 'tc1', 'tr1']);
+    for (const id of ['a1', 'tc1', 'tr1']) {
+      expect(settled!.updatedMessages.find((m) => m.id === id)!.excludeFromModel).toBe(true);
+    }
+  });
+
+  it('never flags user messages in any invocation shape and resets pre-existing user flags (R31)', () => {
+    const messages = baseMessages();
+    // u1 pre-flagged by a hypothetical earlier (superseded) selective run.
+    messages[0] = { ...messages[0]!, excludeFromModel: true };
+    const chains = [makeChainFor(messages)];
+
+    for (const summaryText of ['Summarized work.', null]) {
+      const settled = buildSelectiveCompactionApply({
+        messages,
+        chains,
+        cutResult: CUT,
+        flaggedIds: ['u1', 'a1'],
+        summaryText,
+        sessionId: 'session-main',
+      });
+      expect(settled, `summaryText=${summaryText}`).not.toBeNull();
+      expect(settled!.flaggedIds).toEqual(['a1']);
+      const u1 = settled!.updatedMessages.find((m) => m.id === 'u1')!;
+      expect(u1.excludeFromModel).not.toBe(true);
+      expect(settled!.updatedMessages.find((m) => m.id === 'a1')!.excludeFromModel).toBe(true);
+    }
+  });
+
+  it('pre-excluded ids stay excluded inside the range and settle resets kept-verbatim ids', () => {
+    const messages = baseMessages();
+    // tc1 excluded by an EARLIER compaction (pre-existing flag, in range).
+    messages[2] = { ...messages[2]!, excludeFromModel: true };
+    const chains = [makeChainFor(messages)];
+
+    const settled = buildSelectiveCompactionApply({
+      messages,
+      chains,
+      cutResult: CUT,
+      // The selective pass kept tr1 verbatim and summarized a1; buildCompactionApply
+      // would flag the whole range, so settle must reset tr1 and keep tc1 excluded.
+      flaggedIds: ['a1'],
+      summaryText: 'Summarized.',
+      sessionId: 'session-main',
+    });
+
+    expect(settled).not.toBeNull();
+    expect(settled!.updatedMessages.find((m) => m.id === 'tc1')!.excludeFromModel).toBe(true);
+    expect(settled!.updatedMessages.find((m) => m.id === 'a1')!.excludeFromModel).toBe(true);
+    expect(settled!.updatedMessages.find((m) => m.id === 'tr1')!.excludeFromModel).not.toBe(true);
+    expect(settled!.updatedMessages.find((m) => m.id === 'u1')!.excludeFromModel).not.toBe(true);
+  });
+
+  it('identical inputs produce identical applies across scopes (R35)', () => {
+    const messages = baseMessages();
+    const chains = [makeChainFor(messages)];
+
+    const subagentShape = buildSelectiveCompactionApply({
+      messages,
+      chains,
+      cutResult: CUT,
+      flaggedIds: ['a1', 'tc1', 'tr1'],
+      summaryText: 'Summarized exploration work.',
+      sessionId: 'session-x',
+    });
+    const subagentShapeAgain = buildSelectiveCompactionApply({
+      messages,
+      chains,
+      cutResult: CUT,
+      flaggedIds: ['a1', 'tc1', 'tr1'],
+      summaryText: 'Summarized exploration work.',
+      sessionId: 'session-x',
+    });
+    // One builder, two scopes: the apply (and the settled flag set the main
+    // scope persists) is a pure function of the inputs — never of the scope.
+    // (Summary-head ids are generated per invocation; normalize them.)
+    const shape = (apply: NonNullable<ReturnType<typeof buildSelectiveCompactionApply>>) => {
+      const headId = apply.summaryMessage?.id ?? null;
+      return apply.updatedMessages.map((m) => [headId != null && m.id === headId ? '<head>' : m.id, m.excludeFromModel]);
+    };
+    expect(subagentShapeAgain!.flaggedIds).toEqual(subagentShape!.flaggedIds);
+    expect(shape(subagentShapeAgain!)).toEqual(shape(subagentShape!));
+    expect(subagentShape!.flaggedIds).toEqual(['a1', 'tc1', 'tr1']);
+    // Reclaim ids merge into the same settled set for both scopes.
+    const withReclaim = buildSelectiveCompactionApply({
+      messages,
+      chains,
+      cutResult: CUT,
+      flaggedIds: ['a1'],
+      reclaimedIds: ['tr1', 'tr1'],
+      summaryText: null,
+    });
+    expect([...withReclaim!.flaggedIds].sort()).toEqual(['a1', 'tr1']);
+  });
+
+  it('returns null (no-op) when the selective pass kept everything', () => {
+    const messages = baseMessages();
+    const settled = buildSelectiveCompactionApply({
+      messages,
+      chains: [makeChainFor(messages)],
+      cutResult: CUT,
+      flaggedIds: [],
+      summaryText: null,
+    });
+    expect(settled).toBeNull();
   });
 });
 

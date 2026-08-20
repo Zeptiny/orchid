@@ -14,11 +14,12 @@
  *
  * Unified behavior (intentional, #11):
  *  - R9: selective mode — including its fallback — NEVER flags user messages.
- *    The runner filters user ids out of the result's `flaggedIds`, and
- *    `unflagUserMessagesInApply` settles buildCompactionApply output on the
- *    fallback path. Simple-mode replacement semantics (which may flag user
- *    messages inside the compactable range) are unchanged and remain owned by
- *    the simple-mode call sites.
+ *    The runner filters user ids out of the result's `flaggedIds`. The
+ *    apply-side settle (never-flag-user for every mode) is owned by
+ *    `buildCompactionApply`'s universal settle (U1/R31), and the selective
+ *    never-delete apply by `buildSelectiveCompactionApply` (U7/R35) — the
+ *    old per-mode un-flag helpers were removed once both covered their call
+ *    sites.
  */
 
 import type { Message } from '../../../shared/types/message';
@@ -27,7 +28,6 @@ import type { ModelSelection } from '../../../shared/types/provider';
 import type { Config } from '../../config/schema';
 import type { ProjectRuntime } from '../../project/runtime';
 import type { ProviderAccountingStore } from '../../providers/accounting/store';
-import type { ApplyResult } from './apply';
 import type { CutResult } from './select';
 import { buildManifest } from './selective/manifest';
 import { createLlmSelectiveCaller, runSelectiveCompaction } from './selective/run';
@@ -93,36 +93,12 @@ function userIdsIn(messages: readonly Message[]): Set<string> {
 }
 
 /** R9: drop user-message ids from a flagged set (selective mode, including its fallback). */
-export function filterUserFlaggedIds(
+function filterUserFlaggedIds(
   messages: readonly Message[],
   flaggedIds: readonly string[],
 ): string[] {
   const userIds = userIdsIn(messages);
   return flaggedIds.filter((id) => !userIds.has(id));
-}
-
-/**
- * R9: settle a buildCompactionApply result so user messages are never flagged.
- *
- * Used on the selective fallback path (the apply was built as a replacement
- * over the whole compactable range); identical to the protection the subagent
- * path has always applied — now shared by every selective-mode scope.
- */
-export function unflagUserMessagesInApply(
-  applyResult: ApplyResult,
-  messages: readonly Message[],
-): ApplyResult {
-  const userIds = userIdsIn(messages);
-  const filteredFlagged = applyResult.flaggedIds.filter((id) => !userIds.has(id));
-  if (filteredFlagged.length === applyResult.flaggedIds.length) return applyResult;
-  const unflag = (m: Message): Message =>
-    userIds.has(m.id) && m.excludeFromModel ? { ...m, excludeFromModel: false } : m;
-  return {
-    ...applyResult,
-    flaggedIds: filteredFlagged,
-    updatedMessages: applyResult.updatedMessages.map(unflag),
-    updatedChains: applyResult.updatedChains.map((c) => ({ ...c, messages: c.messages.map(unflag) })),
-  };
 }
 
 /** Apply the R9 never-flag-user invariant to a selective run result in place of the caller. */

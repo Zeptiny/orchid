@@ -478,3 +478,122 @@ export function buildCompactionApply(input: ApplyInput): ApplyResult {
     didApply: true,
   };
 }
+
+// ── Selective never-delete apply (R35) ───────────────────────────────────────
+
+/** Input for {@link buildSelectiveCompactionApply}. */
+export interface SelectiveCompactionApplyInput {
+  /** Flat conversation the selective pass ran over (chronological). */
+  readonly messages: readonly Message[];
+  /** Ordered chains (chronological, ordinal ascending). */
+  readonly chains: readonly Chain[];
+  /** Cut the selective pass ran against. */
+  readonly cutResult: CutResult;
+  /** Ids the selective pass removed from the model view (summarized/dropped/ranged-kept originals). */
+  readonly flaggedIds: readonly string[];
+  /**
+   * Composed per-op summaries carried as the summary head's text; null/empty
+   * builds a replay-only apply (flags without a summary head).
+   */
+  readonly summaryText?: string | null;
+  /** Mechanical-reclaim ids from this run's gate; merged with the selective flags. */
+  readonly reclaimedIds?: readonly string[];
+  /** Session id for the summary-head chain; falls back to chains[0].sessionId when omitted. */
+  readonly sessionId?: string;
+}
+
+/**
+ * Materialize a successful selective-compaction run without deleting anything
+ * from the transcript (R3) — the one never-delete selective-settle builder
+ * shared by the main and subagent scopes (R35).
+ *
+ * The selective loop decides which messages leave the MODEL view; persistence
+ * must never delete them. Adopting the materialized replay wholesale would
+ * hard-delete every summarized original — inside summarize/drop/keep_range
+ * spans they exist only as flagged ids, never in the replay. Instead this
+ * routes the decision through {@link buildCompactionApply}: every original
+ * message is kept, the covered ids get excludeFromModel:true, and one summary
+ * head carrying the compacted marker (mode 'selective') is inserted at the cut
+ * (or no head at all when summaryText is null — the replay-only shape).
+ *
+ * Canonical settle rules (the stricter subagent semantics, shared by both
+ * scopes):
+ *  - user messages are never flagged and pre-existing user flags are reset
+ *    (R9/R31 — owned by buildCompactionApply's universal settle);
+ *  - pre-existing flags from EARLIER compactions survive inside the covered
+ *    range — those messages are already out of the model view and un-flagging
+ *    them would resurrect summarized content;
+ *  - ids the selective pass kept verbatim are reset to model-visible so the
+ *    model view matches the selective decision while the transcript keeps
+ *    every original.
+ *
+ * The main scope consumes the settled `flaggedIds` for its durable
+ * replay-replacement write; the subagent scope consumes the full ApplyResult
+ * (flags + summary head over its chain). Returns null when there is nothing
+ * to apply (no flags and no summary text) or the underlying apply refuses
+ * (e.g. the range is already summarized) — callers treat that as a no-op.
+ */
+export function buildSelectiveCompactionApply(
+  input: SelectiveCompactionApplyInput,
+): ApplyResult | null {
+  const { messages, chains, cutResult } = input;
+
+  const userIds = new Set(messages.filter((m) => m.role === MessageRole.USER).map((m) => m.id));
+  const mergedFlagged = [...new Set([...input.flaggedIds, ...(input.reclaimedIds ?? [])])]
+    .filter((id) => !userIds.has(id));
+
+  const summaryText = typeof input.summaryText === 'string' ? input.summaryText.trim() : '';
+  if (mergedFlagged.length === 0 && summaryText.length === 0) return null;
+
+  let applyResult: ApplyResult;
+  try {
+    applyResult = buildCompactionApply({
+      messages: [...messages],
+      chains,
+      cutResult,
+      summaryText: summaryText.length > 0 ? summaryText : null,
+      mode: 'selective',
+      reclaimedIds: mergedFlagged,
+      sessionId: input.sessionId,
+    });
+  } catch {
+    // e.g. range already flagged by an earlier compaction — mirror the simple
+    // path's failure mode (no-op) rather than risk the transcript.
+    return null;
+  }
+  if (!applyResult.didApply) return null;
+
+  // Settle flags: reset excludeFromModel on covered ids that selective kept
+  // verbatim (and on user messages) so the model view matches the selective
+  // decision while the transcript keeps every original.
+  const n = messages.length;
+  const start = Math.max(0, Math.min(cutResult.compactableRange.start, n));
+  const end = Math.max(start, Math.min(cutResult.compactableRange.end, n));
+  const coveredIds = new Set<string>(mergedFlagged);
+  // Messages already excludeFromModel BEFORE this compaction (flagged by an
+  // earlier one) — settle must keep them excluded; see the settle rule below.
+  const preExcludedIds = new Set<string>();
+  for (let i = start; i < end; i += 1) {
+    const m = messages[i];
+    if (!m) continue;
+    coveredIds.add(m.id);
+    if (m.excludeFromModel) preExcludedIds.add(m.id);
+  }
+  const flaggedSet = new Set(mergedFlagged);
+  const settle = (m: Message): Message => {
+    if (userIds.has(m.id)) return m.excludeFromModel ? { ...m, excludeFromModel: false } : m;
+    if (flaggedSet.has(m.id)) return m.excludeFromModel ? m : { ...m, excludeFromModel: true };
+    // Pre-existing exclusions from EARLIER compactions survive: the message is
+    // already out of the model view, and un-flagging it here would resurrect
+    // content a previous summary replaced.
+    if (preExcludedIds.has(m.id)) return m;
+    if (coveredIds.has(m.id) && m.excludeFromModel) return { ...m, excludeFromModel: false };
+    return m;
+  };
+  return {
+    ...applyResult,
+    updatedMessages: applyResult.updatedMessages.map(settle),
+    updatedChains: applyResult.updatedChains.map((c) => ({ ...c, messages: c.messages.map(settle) })),
+    flaggedIds: mergedFlagged,
+  };
+}
