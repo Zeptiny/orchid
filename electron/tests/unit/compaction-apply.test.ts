@@ -90,8 +90,14 @@ describe('compaction apply — pure build', () => {
 
     const result = buildCompactionApply({ messages, chains, cutResult: cut, summaryText, mode: 'simple', sessionId });
 
-    // flags + marker correct
-    expect(result.flaggedIds.length).toBe(cut.compactableRange.end - cut.compactableRange.start);
+    // R31: user messages are never flagged — only non-user range messages are.
+    const rangeUserIds = messages
+      .slice(cut.compactableRange.start, cut.compactableRange.end)
+      .filter((m) => m.role === MessageRole.USER)
+      .map((m) => m.id);
+    const expectedFlagged = (cut.compactableRange.end - cut.compactableRange.start) - rangeUserIds.length;
+    expect(result.flaggedIds.length).toBe(expectedFlagged);
+    expect(result.flaggedIds).not.toContainEqual(expect.arrayContaining(rangeUserIds));
     expect(result.updatedMessages.length).toBe(messages.length + 1); // + summary head
     const flaggedInFlat = result.updatedMessages.filter((m) => m.excludeFromModel);
     expect(flaggedInFlat.length).toBe(result.flaggedIds.length);
@@ -118,7 +124,9 @@ describe('compaction apply — pure build', () => {
     expect(result.updatedChains.some((c) => c.id === result.newChain!.id)).toBe(true);
     // input chains not mutated
     expect(chains[0]!.messages[0]!.excludeFromModel).not.toBe(true);
-    expect(result.updatedChains[0]!.messages[0]!.excludeFromModel).toBe(true);
+    // R31: user messages in the range stay un-flagged; non-user are flagged
+    expect(result.updatedChains[0]!.messages[0]!.excludeFromModel).not.toBe(true); // u-0 user
+    expect(result.updatedChains[0]!.messages[1]!.excludeFromModel).toBe(true); // a-0 assistant
 
     // summary sits before preserved window in flat replay
     const summaryIdx = result.updatedMessages.findIndex((m) => m.id === result.summaryMessage!.id);
@@ -133,18 +141,19 @@ describe('compaction apply — pure build', () => {
   it('reclaim-only apply persists without summary head (flags without marker)', () => {
     const { chains, messages, chainBoundaries } = buildSession(3);
     const cut = makeCut(messages, 1, chainBoundaries);
-    const reclaimedIds = [messages[0]!.id, messages[1]!.id]; // pretend two duplicates
+    const reclaimedIds = [messages[0]!.id, messages[1]!.id]; // u-0 (user), a-0 (assistant)
 
     const result = buildCompactionApply({ messages, chains, cutResult: cut, summaryText: null, mode: 'simple', reclaimedIds });
 
     expect(result.summaryMessage).toBeNull();
     expect(result.newChain).toBeNull();
-    expect(result.flaggedIds).toEqual(expect.arrayContaining(reclaimedIds));
+    // R31: user messages are never flagged — only a-0 survives the settle.
+    expect(result.flaggedIds).toEqual(['a-0']);
     expect(result.updatedMessages.length).toBe(messages.length); // no insertion
     expect(result.updatedChains.length).toBe(chains.length); // no new chain
-    for (const id of reclaimedIds) {
-      expect(result.updatedMessages.find((m) => m.id === id)!.excludeFromModel).toBe(true);
-    }
+    // R31: user message u-0 is NOT flagged (stays in model view); a-0 is.
+    expect(result.updatedMessages.find((m) => m.id === 'u-0')!.excludeFromModel).not.toBe(true);
+    expect(result.updatedMessages.find((m) => m.id === 'a-0')!.excludeFromModel).toBe(true);
     // No compacted marker anywhere
     for (const m of result.updatedMessages) expect(m.compacted).toBeUndefined();
   });
@@ -210,14 +219,17 @@ describe('compaction apply — pre-flagged inner messages are tolerated (FIX #4)
 
     // The cancelled message is skipped (already flagged, no double-processing)
     expect(result.flaggedIds).not.toContain(cancelled.id);
-    expect(result.flaggedIds).toEqual(expect.arrayContaining([messages[0]!.id, messages[1]!.id, messages[3]!.id]));
+    // R31: user messages are never flagged — u-0 is excluded from flaggedIds.
+    // The flagged set contains the non-user range messages (a-0, a-1).
+    expect(result.flaggedIds).toEqual(expect.arrayContaining([messages[1]!.id, messages[3]!.id]));
+    expect(result.flaggedIds).not.toContain(messages[0]!.id); // u-0 user
     // It keeps its existing flag in the flat replay and inside its chain
     expect(result.updatedMessages.find((m) => m.id === cancelled.id)!.excludeFromModel).toBe(true);
     const cancelledChain = result.updatedChains.find((c) => c.messages.some((m) => m.id === cancelled.id))!;
     expect(cancelledChain.messages.find((m) => m.id === cancelled.id)!.excludeFromModel).toBe(true);
 
-    // All four range messages end up excluded; summary head lands at cutIndex
-    expect(result.updatedMessages.filter((m) => m.excludeFromModel)).toHaveLength(4);
+    // R31: user message u-0 stays un-flagged; cancelled + a-0 + a-1 are flagged (3)
+    expect(result.updatedMessages.filter((m) => m.excludeFromModel)).toHaveLength(3);
     const summaryIdx = result.updatedMessages.findIndex((m) => m.id === result.summaryMessage!.id);
     expect(summaryIdx).toBe(cut.cutIndex);
     // Preserved window after the summary stays replayable
@@ -304,12 +316,13 @@ describe('compaction apply — pre-flagged inner messages are tolerated (FIX #4)
       cutResult: cut,
       summaryText: null,
       mode: 'simple',
-      reclaimedIds: [messages[0]!.id],
+      // R31: use a non-user id (a-0) so reclaim actually flags something.
+      reclaimedIds: [messages[1]!.id],
     });
     expect(result.didApply).toBe(true);
     expect(result.newChain).toBeNull();
     expect(result.summaryMessage).toBeNull();
-    expect(result.updatedMessages.find((m) => m.id === messages[0]!.id)!.excludeFromModel).toBe(true);
+    expect(result.updatedMessages.find((m) => m.id === messages[1]!.id)!.excludeFromModel).toBe(true);
   });
 
   it('validateCompactableRangeNotSummarized passes when the range is clean', () => {
@@ -354,14 +367,15 @@ describe('compaction apply — intra-chain split keeps the original id on the pr
     expect(afterHalf!.messages.every((m) => !m.excludeFromModel)).toBe(true);
     expect(afterHalf!.status).toBe(ChainStatus.ACTIVE); // status preserved on continuing half
 
-    // The flagged prefix half gets a NEW id (frozen history)
+    // The flagged prefix half gets a NEW id (frozen history). R31: messages[2]
+    // is u-1 (a user message) — it stays un-flagged in the prefix half.
     const prefixHalf = result.updatedChains.find(
       (c) => c.id !== originalId && c.messages.some((m) => m.id === messages[2]!.id),
     );
     expect(prefixHalf).toBeDefined();
     expect(prefixHalf!.id).not.toBe(originalId);
     expect(prefixHalf!.messages.map((m) => m.id)).toEqual([messages[2]!.id]);
-    expect(prefixHalf!.messages[0]!.excludeFromModel).toBe(true);
+    expect(prefixHalf!.messages[0]!.excludeFromModel).not.toBe(true); // R31: user un-flagged
     expect(prefixHalf!.status).toBe(ChainStatus.ACTIVE); // statuses preserved on both halves
 
     // Replay order in updatedChains: prefix (new id) → summary head → after-half (original id)
@@ -371,10 +385,10 @@ describe('compaction apply — intra-chain split keeps the original id on the pr
     expect(summaryChainIdx).toBe(prefixIdx + 1);
     expect(afterIdx).toBe(summaryChainIdx + 1);
 
-    // Flat replay: flagged range, summary head at cutIndex, then preserved tail
+    // Flat replay: summary head at cutIndex; non-user range messages flagged,
+    // user messages un-flagged (R31), preserved tail un-flagged.
     const summaryIdx = result.updatedMessages.findIndex((m) => m.id === result.summaryMessage!.id);
     expect(summaryIdx).toBe(cut.cutIndex);
-    expect(result.updatedMessages.slice(0, summaryIdx).every((m) => m.excludeFromModel)).toBe(true);
     expect(result.updatedMessages.slice(summaryIdx + 1).every((m) => !m.excludeFromModel)).toBe(true);
   });
 });
@@ -398,8 +412,14 @@ describe('compaction apply — crash before/after (R22)', () => {
     // Simulate persist atomically (mock session manager)
     const persistedChains = applyResult.updatedChains;
     const persistedMessages = applyResult.updatedMessages;
-    // Crash after: persisted state is compacted
-    expect(persistedMessages.filter((m) => m.excludeFromModel).length).toBe(cut.compactableRange.end - cut.compactableRange.start);
+    // Crash after: persisted state is compacted — R31: non-user range messages
+    // are flagged, user range messages stay un-flagged in the model view.
+    const rangeMessages = messages.slice(cut.compactableRange.start, cut.compactableRange.end);
+    const nonUserRange = rangeMessages.filter((m) => m.role !== MessageRole.USER);
+    const userRange = rangeMessages.filter((m) => m.role === MessageRole.USER);
+    expect(persistedMessages.filter((m) => m.excludeFromModel)).toHaveLength(nonUserRange.length);
+    expect(nonUserRange.every((m) => persistedMessages.find((x) => x.id === m.id)!.excludeFromModel)).toBe(true);
+    expect(userRange.every((m) => !persistedMessages.find((x) => x.id === m.id)!.excludeFromModel)).toBe(true);
     expect(persistedChains.some((c) => c.id === applyResult.newChain!.id)).toBe(true);
     // Summary head is its own chain, not merged into old
     const summaryChain = persistedChains.find((c) => c.id === applyResult.newChain!.id)!;
@@ -410,7 +430,9 @@ describe('compaction apply — crash before/after (R22)', () => {
   it('reclaim-only crash semantics same (flags atomically)', () => {
     const { chains, messages, chainBoundaries } = buildSession(3);
     const cut = makeCut(messages, 1, chainBoundaries);
-    const reclaimedIds = [messages[0]!.id];
+    // R31: reclaim a non-user id (a-0) — user ids are settled out of the
+    // flagged set and could never flip to flagged.
+    const reclaimedIds = [messages[1]!.id];
     const result = buildCompactionApply({ messages, chains, cutResult: cut, summaryText: null, mode: 'simple', reclaimedIds });
     // Before persist: nothing flagged
     expect(messages.find((m) => m.id === reclaimedIds[0])!.excludeFromModel).not.toBe(true);
@@ -437,11 +459,14 @@ describe('compaction apply — mid-turn (active chain) outputs', () => {
     expect(result.newChain).not.toBeNull();
     expect(result.newChain!.messages[0]!.compacted).toBeDefined();
 
-    // Flat replay: 4 flagged + summary head at cut + 4 preserved (unflagged)
+    // Flat replay: non-user range messages flagged, user range messages
+    // un-flagged (R31), summary head at cut, preserved tail unflagged
     expect(result.updatedMessages).toHaveLength(messages.length + 1);
     const summaryIdx = result.updatedMessages.findIndex((m) => m.id === result.summaryMessage!.id);
     expect(summaryIdx).toBe(cut.cutIndex);
-    expect(result.updatedMessages.slice(0, summaryIdx).every((m) => m.excludeFromModel)).toBe(true);
+    const preSummary = result.updatedMessages.slice(0, summaryIdx);
+    expect(preSummary.filter((m) => m.role !== MessageRole.USER).every((m) => m.excludeFromModel)).toBe(true);
+    expect(preSummary.filter((m) => m.role === MessageRole.USER).every((m) => !m.excludeFromModel)).toBe(true);
     expect(result.updatedMessages.slice(summaryIdx + 1).every((m) => !m.excludeFromModel)).toBe(true);
 
     // The ACTIVE chain keeps its id and holds the preserved (unflagged) tail —
@@ -463,7 +488,8 @@ describe('compaction apply — mid-turn (active chain) outputs', () => {
     const activeChain = { ...chains[2]!, status: ChainStatus.ACTIVE as const };
     const allChains = [...chains.slice(0, 2), activeChain];
     const cut = { cutIndex: 2, compactableRange: { start: 0, end: 2 }, preservedCount: 1, openGroupStart: null, preservedRange: { start: 2, end: messages.length } } satisfies CutResult;
-    const reclaimedIds = [messages[0]!.id];
+    // R31: reclaim a non-user id (a-0) — user ids never enter the flagged set.
+    const reclaimedIds = [messages[1]!.id];
 
     const result = buildCompactionApply({ messages, chains: allChains, cutResult: cut, summaryText: null, mode: 'simple', reclaimedIds, sessionId });
 
@@ -527,8 +553,9 @@ describe('compaction apply — persisted-shape outputs (pure build)', () => {
       expect(applyResult.updatedChains.filter((x) => x.id === c.id)).toHaveLength(1);
     }
 
-    // Flagged message is flagged inside its (cloned) chain
-    const flaggedId = messages[0]!.id;
+    // Flagged message is flagged inside its (cloned) chain — R31: use a
+    // non-user id (a-0); user range messages stay un-flagged.
+    const flaggedId = messages[1]!.id;
     const flaggedChain = applyResult.updatedChains.find((c) => c.messages.some((m) => m.id === flaggedId))!;
     expect(flaggedChain.messages.find((m) => m.id === flaggedId)!.excludeFromModel).toBe(true);
 
@@ -539,7 +566,9 @@ describe('compaction apply — persisted-shape outputs (pure build)', () => {
     // Flat replay: summary head lands between the flagged range and the preserved window
     const summaryIdx = applyResult.updatedMessages.findIndex((m) => m.id === applyResult.summaryMessage!.id);
     expect(summaryIdx).toBe(cut.cutIndex);
-    expect(applyResult.updatedMessages.slice(0, summaryIdx).every((m) => m.excludeFromModel)).toBe(true);
+    const preSummary = applyResult.updatedMessages.slice(0, summaryIdx);
+    expect(preSummary.filter((m) => m.role !== MessageRole.USER).every((m) => m.excludeFromModel)).toBe(true);
+    expect(preSummary.filter((m) => m.role === MessageRole.USER).every((m) => !m.excludeFromModel)).toBe(true);
   });
 });
 

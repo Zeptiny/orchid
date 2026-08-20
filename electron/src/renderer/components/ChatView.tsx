@@ -1270,6 +1270,7 @@ export function ChatView({ isVisible = true, bootstrapConfig = null, onNotify, a
             interrupted={chat.interrupted}
             alwaysExpandToolGroups={alwaysExpandToolGroups}
             onLoadHistoryPage={handleLoadHistoryPage}
+            compactionProgress={chat.compactionProgress}
           />
         </DeferredSurface>
         <MessageQueue

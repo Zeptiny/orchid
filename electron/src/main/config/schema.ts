@@ -113,12 +113,24 @@ export const compactionScopeSchema = z.object({
   min_compactable_tokens: z.number().int().min(0).max(1_000_000).default(4000),
   mechanical_reclaim: z.boolean().default(true),
   hysteresis_delta: z.number().min(0).max(0.5).default(0.1),
+  // R31/R33: the last K user messages stay in the model view across compaction
+  // (never flagged). null disables tail pinning for the main scope. The
+  // subagent scope overrides this to null (= ALL user messages pinned, R32).
+  keep_last_user_messages: z.number().int().min(1).max(1000).nullable().default(10),
+  // R33: pin the session's FIRST user message so the opening intent survives
+  // every compaction cycle. Harmless under the subagent all-pin default.
+  pin_first_user_message: z.boolean().default(true),
 });
 
-export const compactionSubagentsScopeSchema = compactionScopeSchema.extend({
-  threshold: z.number().min(0.1).max(0.95).default(0.85),
-  agent_name: z.literal('compactor-subagent').default('compactor-subagent'),
-});
+export const compactionSubagentsScopeSchema = compactionScopeSchema
+  .extend({
+    threshold: z.number().min(0.1).max(0.95).default(0.85),
+    agent_name: z.literal('compactor-subagent').default('compactor-subagent'),
+    // R32 hard guarantee: every user message stays in model view for a
+    // subagent run's entire lifetime. null = ALL (no tail cap).
+    keep_last_user_messages: z.number().int().min(1).max(1000).nullable().default(null),
+    pin_first_user_message: z.boolean().default(true),
+  });
 
 export const compactionConfigSchema = z.object({
   main: compactionScopeSchema.default({}),

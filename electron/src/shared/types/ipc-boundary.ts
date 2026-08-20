@@ -181,6 +181,10 @@ export interface CompactionScopeConfig {
   min_compactable_tokens: number;
   mechanical_reclaim: boolean;
   hysteresis_delta: number;
+  /** R31/R33: last K user messages kept in model view; null = all (subagent default). */
+  keep_last_user_messages: number | null;
+  /** R33: pin the session's first user message across every compaction cycle. */
+  pin_first_user_message: boolean;
 }
 
 export interface CompactionConfig {

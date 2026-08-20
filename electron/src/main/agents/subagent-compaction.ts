@@ -7,7 +7,7 @@
  * manager -> subagent-runner -> tools/index -> manager. Nothing here may
  * import from ../tools or ./manager at runtime.
  */
-import type { Message } from '../../shared/types/message';
+import type { CompactionMode, Message } from '../../shared/types/message';
 import type { ModelSelection } from '../../shared/types/provider';
 import type { Config } from '../config/schema';
 import type { Chain } from '../../shared/types/chain';
@@ -170,6 +170,19 @@ export function buildSelectiveSubagentApply(params: {
 }
 
 /**
+ * Live progress payload for the subagent compaction widget (R27). Mirrors the
+ * main-scope `CompactionProgressEvent` fields; routed by the caller through
+ * the subagent live projection keyed by agent scope.
+ */
+export interface SubagentCompactionProgress {
+  readonly phase: 'preparing' | 'compacting' | 'complete' | 'failed';
+  readonly detail?: string;
+  readonly mode?: CompactionMode;
+  readonly streamText?: string | null;
+  readonly estimatedTokens?: number | null;
+}
+
+/**
  * Shared subagent compaction attempt — uses the same trigger engine as U6 but
  * with the subagents scope config (R16). The caller supplies the current chain
  * history, latest provider-reported inputTokens, and resolved contextTokens.
@@ -182,6 +195,11 @@ export function buildSelectiveSubagentApply(params: {
  *
  * Accounting inside the summarizer already carries subagent scope (R18) when
  * called with scope='subagents' + subagentId — see summarize.ts.
+ *
+ * `onProgress` fires at the widget lifecycle points (reclaim/summarize
+ * prepares); `onTextDelta` forwards the compactor's accumulated LLM output so
+ * the caller can surface a streaming tail. Both are optional display hooks —
+ * compaction proceeds identically without them.
  */
 export async function tryCompactSubagentHistory(params: {
   readonly messages: readonly Message[];
@@ -195,6 +213,8 @@ export async function tryCompactSubagentHistory(params: {
   readonly inputTokens: number;
   readonly contextTokens: number;
   readonly triggerState?: TriggerState;
+  readonly onProgress?: (progress: SubagentCompactionProgress) => void;
+  readonly onTextDelta?: (accumulatedText: string) => void;
 }): Promise<ApplyResult | null> {
   const { messages, chains, selection, config, sessionId, subagentId, chainId, turnId, inputTokens, contextTokens } = params;
   const subagentsScope = config.compaction?.subagents;
@@ -203,7 +223,7 @@ export async function tryCompactSubagentHistory(params: {
   if (!Number.isFinite(inputTokens) || inputTokens < 0) return null;
 
   // Lazy imports to avoid cycle with provider runtime during typecheck
-  const { selectCut, resolvePreservePercent } = await import('../llm/compaction/select.js');
+  const { selectCut, resolvePreservePercent, resolveUserExemptIds } = await import('../llm/compaction/select.js');
   const { mechanicalReclaim } = await import('../llm/compaction/reclaim.js');
   const { evaluateTriggerWithReclaim } = await import('../llm/compaction/trigger.js');
   const { getProviderAccountingStore } = await import('../providers/accounting/store.js');
@@ -218,6 +238,12 @@ export async function tryCompactSubagentHistory(params: {
     return Math.max(0.05, Math.min(r, 2));
   })();
   if (!tokensPerCharSub) return null;
+  // R31/R32: subagent scope pins ALL user messages (null default). Exempt ids
+  // never enter the compactable range and don't consume the preserve budget.
+  const exemptIdsSub = resolveUserExemptIds(messages as Message[], {
+    keepLast: subagentsScope.keep_last_user_messages ?? null,
+    pinFirst: subagentsScope.pin_first_user_message,
+  });
   let cut: ReturnType<typeof selectCut>;
   try {
     const calibratedEstimatorSub = (slice: readonly Message[]): number => {
@@ -228,6 +254,7 @@ export async function tryCompactSubagentHistory(params: {
     cut = selectCut(messages as Message[], {
       preserveTokens: Math.floor(resolvePreservePercent(subagentsScope) * contextTokens),
       tokenEstimator: calibratedEstimatorSub,
+      exemptIds: exemptIdsSub,
     });
   } catch {
     return null;
@@ -268,6 +295,7 @@ export async function tryCompactSubagentHistory(params: {
 
   // Reclaim-only short-circuit: build apply without summarizer
   if (decision.shouldApply && !decision.shouldPrepare && flaggedIds.length > 0) {
+    params.onProgress?.({ phase: 'preparing', detail: 'Reclaiming duplicates', mode: subagentsScope.mode as CompactionMode });
     try {
       const applyResult = buildCompactionApply({
         messages: messages as Message[],
@@ -313,6 +341,7 @@ export async function tryCompactSubagentHistory(params: {
     let attempt: CompactionAttemptOutcome;
     try {
       const { runCompactionAttempt, unflagUserMessagesInApply } = await import('../llm/compaction/run-attempt.js');
+      params.onProgress?.({ phase: 'preparing', detail: 'Summarizing history', mode: 'selective' });
       attempt = await runCompactionAttempt({
         messages: messages as Message[],
         cut,
@@ -324,6 +353,7 @@ export async function tryCompactSubagentHistory(params: {
           accounting: accountingStore
             ? { store: accountingStore, sessionId, chainId, turnId }
             : { sessionId, chainId, turnId },
+          ...(params.onTextDelta ? { onTextDelta: params.onTextDelta } : {}),
         },
       });
       if (attempt.kind === 'ran' && attempt.result.kind === 'selective') {
@@ -371,6 +401,7 @@ export async function tryCompactSubagentHistory(params: {
   let summarizeResult: Awaited<ReturnType<typeof import('../llm/compaction/summarize.js').summarizeCompactableRange>> | null;
   try {
     const { summarizeCompactableRange } = await import('../llm/compaction/summarize.js');
+    params.onProgress?.({ phase: 'preparing', detail: 'Summarizing history', mode: subagentsScope.mode as CompactionMode });
     summarizeResult = await summarizeCompactableRange({
       messages: compactableSlice,
       scope: 'subagents',
@@ -381,6 +412,7 @@ export async function tryCompactSubagentHistory(params: {
         ? { store: accountingStore, sessionId, chainId, turnId }
         : { sessionId, chainId, turnId },
       subagentId,
+      ...(params.onTextDelta ? { onTextDelta: params.onTextDelta } : {}),
     });
   } catch {
     return null;

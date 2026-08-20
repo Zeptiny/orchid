@@ -2215,6 +2215,190 @@ export function upsertSubagentRecords(
 }
 
 // ---------------------------------------------------------------------------
+// applySubagentCompactionPersistence — targeted subagent-chain compaction write
+// ---------------------------------------------------------------------------
+
+/** Input for the targeted, single-transaction subagent-chain compaction write. */
+export interface SubagentCompactionPayload {
+  /** Recency timestamp written onto the owning session row with the compaction. */
+  readonly updatedAt: string;
+  /**
+   * Message ids to flag with `excludeFromModel` inside the subagent's durable
+   * chain. Every id must resolve against the durable chain messages; an
+   * unknown id aborts the whole write so a compaction can never persist a
+   * partial flag set. The durable `record_json` (not an in-memory snapshot)
+   * is the write source.
+   */
+  readonly flaggedMessageIds: readonly string[];
+  /**
+   * Summary-head message carrying the `compacted` marker to insert into the
+   * chain's messages at the cut position (R20: the summary is its own message
+   * in the chain). Null for reclaim-only compaction.
+   */
+  readonly summaryMessage: Message | null;
+  /**
+   * Durable message id the summary must precede in replay order — the first
+   * preserved-window message after the cut. Null (with a summary) appends the
+   * summary after the last durable message.
+   */
+  readonly insertBeforeMessageId: string | null;
+}
+
+/** Durable outcome of a successful subagent-chain compaction write. */
+export interface SubagentCompactionResult {
+  /** Total serialized `record_json` UTF-8 bytes written (diagnostics). */
+  readonly bytes: number;
+  /** Whether a summary head message was inserted. */
+  readonly summaryInserted: boolean;
+  /** Number of messages that received `excludeFromModel` flips. */
+  readonly flaggedCount: number;
+}
+
+/**
+ * Persist a subagent-chain compaction as one targeted SQLite transaction.
+ *
+ * Mirrors `applyCompactionPersistence` over the `subagent_chains` table
+ * instead of the `chains` table: a subagent's chain lives embedded inside the
+ * `record_json` column, not as separate chain rows. Effects, all-or-nothing:
+ *
+ * - Re-reads the durable `record_json` for the given subagent, deserializes
+ *   the chain, sets `excludeFromModel` on every flagged message id, and inserts
+ *   the summary-head message at the cut position. The chain keeps its original
+ *   id — the summary is a message within the chain, not a separate row (no
+ *   chain-split id handling is needed because the subagent's chain is a single
+ *   row inside the record, not a multi-row layout with ordinals).
+ * - Re-serializes the record and updates the `record_json` (and `summary_json`)
+ *   column in place. Sibling subagent rows and every `chains` row are never
+ *   touched.
+ *
+ * Throws (rolling the transaction back) when the session or subagent row is
+ * unknown, a flagged id has no durable owner, or the record blob is
+ * unreadable. Callers must never fall back to a full save from an in-memory
+ * view when this fails.
+ */
+export function applySubagentCompactionPersistence(
+  sessionId: string,
+  subagentId: string,
+  payload: SubagentCompactionPayload,
+  opts?: StorageOptions,
+): SubagentCompactionResult {
+  if (!isValidSessionId(sessionId)) {
+    throw new Error(
+      `applySubagentCompactionPersistence: refusing unsafe session id ${sessionId}`,
+    );
+  }
+  const { dbPath } = resolveOptions(opts);
+  return withCorruptionRecovery(dbPath, (db) => {
+    const txn = db.transaction((): SubagentCompactionResult => {
+      if (
+        !db.prepare('SELECT 1 FROM sessions WHERE id = ?').get(sessionId)
+      ) {
+        throw new Error(
+          `applySubagentCompactionPersistence: session ${sessionId} not found in durable rows`,
+        );
+      }
+
+      const row = db
+        .prepare(
+          'SELECT record_json FROM subagent_chains WHERE session_id = ? AND subagent_id = ?',
+        )
+        .get(sessionId, subagentId) as { record_json: string } | undefined;
+      if (!row) {
+        throw new Error(
+          `applySubagentCompactionPersistence: subagent ${subagentId} not found in durable rows (session ${sessionId})`,
+        );
+      }
+
+      let record: SubagentRecord;
+      try {
+        record = subagentRecordFromStorageDict(JSON.parse(row.record_json));
+      } catch {
+        throw new Error(
+          `applySubagentCompactionPersistence: subagent ${subagentId} has unreadable record (session ${sessionId})`,
+        );
+      }
+
+      const messages = record.chain.messages;
+
+      // Resolve every flagged id against the durable chain before writing.
+      const messageIdSet = new Set(messages.map((m) => m.id));
+      const flaggedSet = new Set(payload.flaggedMessageIds);
+      for (const id of flaggedSet) {
+        if (!messageIdSet.has(id)) {
+          throw new Error(
+            `applySubagentCompactionPersistence: flagged message ${id} not found in durable chain (subagent ${subagentId}, session ${sessionId})`,
+          );
+        }
+      }
+
+      // Resolve the summary insertion anchor before mutating anything.
+      let anchorIndex = -1;
+      if (payload.summaryMessage && payload.insertBeforeMessageId != null) {
+        anchorIndex = messages.findIndex(
+          (m) => m.id === payload.insertBeforeMessageId,
+        );
+        if (anchorIndex < 0) {
+          throw new Error(
+            `applySubagentCompactionPersistence: summary anchor message ${payload.insertBeforeMessageId} not found (subagent ${subagentId}, session ${sessionId})`,
+          );
+        }
+      }
+
+      // 1. In-place flag writes: only flags change, originals preserved (R3).
+      let updatedMessages = messages.map((m) =>
+        flaggedSet.has(m.id) && !m.excludeFromModel
+          ? { ...m, excludeFromModel: true }
+          : m,
+      );
+
+      // 2. Summary-head insertion at the cut position (R20).
+      let summaryInserted = false;
+      if (payload.summaryMessage) {
+        const summary = payload.summaryMessage;
+        if (anchorIndex < 0) {
+          updatedMessages = [...updatedMessages, summary];
+        } else {
+          updatedMessages = [
+            ...updatedMessages.slice(0, anchorIndex),
+            summary,
+            ...updatedMessages.slice(anchorIndex),
+          ];
+        }
+        summaryInserted = true;
+      }
+
+      // 3. Re-serialize and update the durable row + session recency.
+      const updatedRecord: SubagentRecord = {
+        ...record,
+        chain: { ...record.chain, messages: updatedMessages },
+      };
+      const json = serializeSubagentRecord(updatedRecord);
+      const bytes = Buffer.byteLength(json, 'utf8');
+      db.prepare(
+        `UPDATE subagent_chains SET record_json = ?, summary_json = ?
+         WHERE session_id = ? AND subagent_id = ?`,
+      ).run(
+        json,
+        serializeSubagentSummary(updatedRecord),
+        sessionId,
+        subagentId,
+      );
+      db.prepare('UPDATE sessions SET updated_at = ? WHERE id = ?').run(
+        payload.updatedAt,
+        sessionId,
+      );
+
+      return {
+        bytes,
+        summaryInserted,
+        flaggedCount: flaggedSet.size,
+      };
+    });
+    return txn();
+  });
+}
+
+// ---------------------------------------------------------------------------
 // deleteSession
 // ---------------------------------------------------------------------------
 

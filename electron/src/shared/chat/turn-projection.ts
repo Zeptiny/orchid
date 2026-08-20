@@ -6,6 +6,8 @@
  * Message records (that remains the main-process persistence boundary).
  */
 import type { Usage } from '../types/message';
+import type { CompactionProgressEvent } from '../types/compaction-progress';
+import { MAIN_AGENT_SCOPE_ID, normalizeAgentScopeId } from '../types/agent-scope';
 import type {
   ChatChunkEvent,
   ChatDoneEvent,
@@ -32,7 +34,8 @@ export type ChatTurnEvent =
   | ChatUsageEvent
   | ChatToolCallStartEvent
   | ChatToolCallDeltaEvent
-  | ChatToolCallUpdateEvent;
+  | ChatToolCallUpdateEvent
+  | CompactionProgressEvent;
 
 /**
  * Event metadata belongs to the local dispatch, not to the IPC schema. In
@@ -63,6 +66,21 @@ export type ChatTurnToolSnapshot = Omit<ChatToolCallSnapshot, 'status'> & {
   status: ChatToolCallSnapshot['status'] | 'failed';
 };
 
+/**
+ * Live compaction widget state derived from `CompactionProgressEvent`s.
+ * On snapshot replay, the widget is derived from the persisted `compacted`
+ * summary-head marker instead (see stream-building.ts).
+ */
+export interface ChatTurnCompactionProgress {
+  readonly phase: CompactionProgressEvent['phase'];
+  readonly mode?: CompactionProgressEvent['mode'];
+  readonly detail?: string;
+  readonly streamText?: string | null;
+  readonly estimatedTokens?: number | null;
+  /** Monotonic sequence of the last progress event applied. */
+  readonly sequence: number;
+}
+
 /** Renderer-neutral, in-flight view reconstructed from ordered turn events. */
 export interface ChatTurnProjection {
   sessionId: string;
@@ -83,6 +101,13 @@ export interface ChatTurnProjection {
   interrupted: boolean;
   /** Terminal facts are retained independently of later state notifications. */
   terminal: ChatTurnTerminalFact | null;
+  /**
+   * Live compaction widget for the main scope (`agentScopeId === 'main'`),
+   * null when no compaction is in progress. Terminal phases (`complete`/
+   * `failed`) are retained briefly so the widget can render a final state
+   * before the turn resumes.
+   */
+  compactionProgress: ChatTurnCompactionProgress | null;
 }
 
 /**
@@ -141,6 +166,7 @@ export function beginChatTurnProjection(sessionId: string, startedAt: number | n
     startedAt,
     interrupted: false,
     terminal: null,
+    compactionProgress: null,
   };
 }
 
@@ -170,6 +196,7 @@ export function reduceChatTurnProjection(
         thinking: '',
         streamSegments: [],
         toolCalls: [],
+        compactionProgress: null,
       };
     case 'clear_stream':
       if (!projection) return projection;
@@ -180,6 +207,7 @@ export function reduceChatTurnProjection(
         thinking: '',
         streamSegments: [],
         startedAt: null,
+        compactionProgress: null,
       };
     case 'clear_error':
       return projection
@@ -215,18 +243,6 @@ export function reduceChatTurnProjection(
 
 /** Copy a main-process live snapshot exactly into the renderer-neutral shape. */
 export function seedChatTurnProjection(snapshot: ChatSnapshot): ChatTurnProjection {
-  // Terminal compaction widgets are display-only; a snapshot that still holds
-  // one (e.g. mid-turn resume) must not seed it back into the timeline — a
-  // later compaction would upsert onto it at this stale position.
-  const terminalCompactionIds = new Set(
-    snapshot.toolCalls
-      .filter(
-        (tool) =>
-          tool.toolName === 'compaction' &&
-          tool.status !== 'generating' && tool.status !== 'running',
-      )
-      .map((tool) => tool.toolCallId),
-  );
   return {
     sessionId: snapshot.sessionId,
     turnId: snapshot.turnId,
@@ -234,15 +250,8 @@ export function seedChatTurnProjection(snapshot: ChatSnapshot): ChatTurnProjecti
     status: snapshot.state,
     response: snapshot.response,
     thinking: snapshot.thinking,
-    streamSegments: snapshot.streamSegments
-      .filter(
-        (segment) =>
-          !(segment.kind === 'tool' && terminalCompactionIds.has(segment.toolCallId)),
-      )
-      .map(copySegment),
-    toolCalls: snapshot.toolCalls
-      .filter((tool) => !terminalCompactionIds.has(tool.toolCallId))
-      .map((tool) => ({ ...tool })),
+    streamSegments: snapshot.streamSegments.map(copySegment),
+    toolCalls: snapshot.toolCalls.map((tool) => ({ ...tool })),
     usage: snapshot.usage,
     error: snapshot.error,
     interruptState: snapshot.interruptState,
@@ -250,25 +259,7 @@ export function seedChatTurnProjection(snapshot: ChatSnapshot): ChatTurnProjecti
     startedAt: snapshot.startedAt,
     interrupted: snapshot.interrupted,
     terminal: null,
-  };
-}
-
-/** Remove one tool entry and its segment from the live projection. */
-function pruneToolEntry(
-  projection: ChatTurnProjection,
-  toolCallId: string,
-): ChatTurnProjection {
-  const hadTool = projection.toolCalls.some((tool) => tool.toolCallId === toolCallId);
-  const hadSegment = projection.streamSegments.some(
-    (segment) => segment.kind === 'tool' && segment.toolCallId === toolCallId,
-  );
-  if (!hadTool && !hadSegment) return projection;
-  return {
-    ...projection,
-    toolCalls: projection.toolCalls.filter((tool) => tool.toolCallId !== toolCallId),
-    streamSegments: projection.streamSegments.filter(
-      (segment) => !(segment.kind === 'tool' && segment.toolCallId === toolCallId),
-    ),
+    compactionProgress: null,
   };
 }
 
@@ -328,20 +319,7 @@ export function applyChatTurnEvent(
       return updateTool(next, action.toolCallId, undefined, action.occurredAt, (tool) => ({
         partialArgs: tool.partialArgs + action.argsDelta,
       }));
-    case 'tool_call_update': {
-      // Synthetic compaction widgets render nothing once terminal. Dropping the
-      // entry (and its segment) frees the fixed id so a later compaction in the
-      // same projection appends at the tail instead of resurrecting this
-      // position above everything streamed since.
-      if (
-        action.status !== 'running' && action.status !== 'generating' &&
-        (action.toolName === 'compaction' ||
-          projection.toolCalls.some(
-            (tool) => tool.toolCallId === action.toolCallId && tool.toolName === 'compaction',
-          ))
-      ) {
-        return pruneToolEntry(next, action.toolCallId);
-      }
+    case 'tool_call_update':
       return updateTool(next, action.toolCallId, action.toolName, action.occurredAt, (tool) => {
         const terminal = action.status !== 'running' && action.status !== 'generating';
         const alreadyTerminal = tool.status !== 'generating' && tool.status !== 'running';
@@ -357,7 +335,18 @@ export function applyChatTurnEvent(
           finishedAt: terminal ? tool.finishedAt ?? action.occurredAt : tool.finishedAt,
         };
       });
-    }
+    case 'compaction_progress':
+      // The main-turn projection only renders the main scope's widget —
+      // subagent compactions ride their own live-projection stream.
+      if (normalizeAgentScopeId(action.agentScopeId) !== MAIN_AGENT_SCOPE_ID) return next;
+      return { ...next, compactionProgress: {
+        phase: action.phase,
+        ...(action.mode !== undefined ? { mode: action.mode } : {}),
+        ...(action.detail !== undefined ? { detail: action.detail } : {}),
+        ...(action.streamText !== undefined ? { streamText: action.streamText } : {}),
+        ...(action.estimatedTokens !== undefined ? { estimatedTokens: action.estimatedTokens } : {}),
+        sequence: action.sequence,
+      } };
     case 'done': {
       const interrupted = action.interrupted ?? next.interrupted;
       const usage = action.usage ?? next.usage;

@@ -25,6 +25,9 @@ import type { ProjectRuntime } from '../project/runtime';
 import type { SubagentRecord as DomainSubagentRecord } from '../../shared/types/subagent';
 import type { CompactionTrigger as CompactionTriggerType } from '../llm/compaction/trigger';
 import type { ApplyResult } from '../llm/compaction/apply';
+import type {
+  SubagentCompactionPayload,
+} from '../session/storage';
 import { getConfig } from '../config/loader';
 import type { CompactionScopeConfig } from '../../shared/types/ipc-boundary';
 import { estimateMessageChars } from '../llm/compaction/message-chars';
@@ -59,6 +62,7 @@ import {
 import {
   SubagentPersistence,
   type SubagentPersistenceCandidate,
+  type SubagentCompactionSink,
 } from './subagent-persistence';
 import {
   SubagentWaitTimeoutError,
@@ -76,11 +80,15 @@ import {
   buildSubagentPartialReport,
   resolveSubagentContextTokens,
   tryCompactSubagentHistory,
+  type SubagentCompactionProgress,
 } from './subagent-compaction';
 
 // U9: subagent mid-run compaction — helpers live in subagent-compaction.ts so
 // this module never imports subagent-runner (which pulls in the tool registry
 // and would form a runtime cycle manager -> runner -> tools -> manager).
+
+/** Minimum interval between subagent compaction live-progress emissions (IPC flood guard). */
+const SUBAGENT_COMPACTION_EMIT_INTERVAL_MS = 100;
 
 export type { SubagentAdmissionLimits } from './admission';
 export {
@@ -227,6 +235,30 @@ function getTerminalRetention(): number {
   }
 }
 
+/**
+ * Compaction sink for `SubagentPersistence` — performs the targeted
+ * subagent-chain compaction transaction via the session singleton (R36).
+ *
+ * Lazily requires the session singleton so the agents module does not pull
+ * the session module graph (which imports `config/loader`) at load time,
+ * mirroring the dynamic-import pattern documented for accounting stores.
+ * Returns null when the session manager lacks the method (e.g. test mocks)
+ * so the in-memory compaction path still proceeds without a DB write.
+ */
+function createSubagentCompactionSink(): SubagentCompactionSink | null {
+  return (sessionId, subagentId, payload) => {
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const mod = require('../session/singleton');
+      const manager = mod.getSessionManager();
+      if (typeof manager.applySubagentCompaction !== 'function') return null;
+      return manager.applySubagentCompaction(sessionId, subagentId, payload);
+    } catch {
+      return null;
+    }
+  };
+}
+
 // ── SubagentRecord ──────────────────────────────────────────────────────────
 
 export interface SubagentRecord {
@@ -331,7 +363,10 @@ export class SubagentManager {
   private _admission = new AdmissionController();
   private _runs = new SubagentRunRegistry();
   private _lifecycle = new SubagentLifecycle();
-  private _persistence = new SubagentPersistence(getTerminalRetention);
+  private _persistence = new SubagentPersistence(
+    getTerminalRetention,
+    createSubagentCompactionSink(),
+  );
   /** Test-observable counter — see compactionPreparesEvaluated(). */
   private _compactionPreparesEvaluated = 0;
 
@@ -1438,6 +1473,40 @@ export class SubagentManager {
     let compactionInitDone = false;
     let cachedSubagentCfg: CompactionScopeConfig | null = null;
 
+    // R27: subagent compaction widget — route progress through the live
+    // projection keyed by agent scope. Stream tails are time-gated the same
+    // way the main scope's emitter is; terminal phases clear the widget.
+    let lastCompactionProgressEmitAt = 0;
+    let compactionProgressTimer: ReturnType<typeof setTimeout> | null = null;
+    const emitSubagentCompactionProgress = (progress: SubagentCompactionProgress): void => {
+      try {
+        this._liveProjection.emitCompactionProgress(record.id, progress);
+      } catch {
+        // projection entry may be gone (run removed) — display-only
+      }
+    };
+    const onCompactionTextDelta = (accumulatedText: string): void => {
+      const emit = (): void => {
+        compactionProgressTimer = null;
+        lastCompactionProgressEmitAt = Date.now();
+        const tpc = subagentCompactionTrigger?.state.tokensPerChar;
+        emitSubagentCompactionProgress({
+          phase: 'compacting',
+          streamText: accumulatedText,
+          ...(typeof tpc === 'number' && Number.isFinite(tpc) && tpc > 0
+            ? { estimatedTokens: Math.ceil(accumulatedText.length * tpc) }
+            : {}),
+        });
+      };
+      if (compactionProgressTimer) return;
+      const remaining = SUBAGENT_COMPACTION_EMIT_INTERVAL_MS - (Date.now() - lastCompactionProgressEmitAt);
+      if (remaining <= 0) {
+        emit();
+        return;
+      }
+      compactionProgressTimer = setTimeout(emit, remaining);
+    };
+
     const ensureCompactionInit = async (): Promise<boolean> => {
       if (compactionInitDone) return subagentContextTokens !== null && subagentCompactionTrigger !== null;
       compactionInitDone = true;
@@ -1515,6 +1584,8 @@ export class SubagentManager {
             inputTokens,
             contextTokens: subagentContextTokens!,
             triggerState: subagentCompactionTrigger.state,
+            onProgress: emitSubagentCompactionProgress,
+            onTextDelta: onCompactionTextDelta,
           });
           subagentCompactionTrigger.markPrepareStarted();
           compactionPendingPromise = p;
@@ -1538,6 +1609,7 @@ export class SubagentManager {
         applyResult = await pending;
       } catch {
         subagentCompactionTrigger.consumePending();
+        emitSubagentCompactionProgress({ phase: 'complete' });
         return false;
       }
       const shouldApply = subagentCompactionTrigger.evaluateApply({
@@ -1574,12 +1646,14 @@ export class SubagentManager {
       });
       if (!applyResult || !shouldApply.shouldApply) {
         subagentCompactionTrigger.consumePending();
+        emitSubagentCompactionProgress({ phase: 'complete' });
         return false;
       }
-      // Persist via subagent checkpoint path so crash mid-run resumes compacted chain (R22).
-      // Supports both simple and selective: both produce ApplyResult with updatedMessages/replayMessages,
-      // flaggedIds, and summaryMessage. Selective materializes via replayMessages; fallback uses simpleFallback text.
-      // Persistence remains _setChainMessages + _markRecordDirty + markCompaction and history sync.
+      // Persist via the transactional subagent compaction path so crash
+      // mid-run resumes the compacted chain (R36). The in-memory update
+      // (_setChainMessages) stays — memory must be updated too; the DB write
+      // is the single-transaction path. The assembler field poke is kept as
+      // an in-memory concern (U5 will replace it with a mutable handoff).
       const updatedMessages = applyResult.updatedMessages;
       this._setChainMessages(record, [...updatedMessages]);
       try {
@@ -1588,9 +1662,27 @@ export class SubagentManager {
         // assembler field poke is best-effort
       }
       try {
-        const p = (this as unknown as { _persistence: { markCompaction: (id: string, rev: number | null) => unknown } })._persistence;
-        const rev = p?.markCompaction?.(record.id, null);
-        void rev;
+        const sessionId = record.sessionId ?? undefined;
+        if (sessionId) {
+          let insertBeforeMessageId: string | null = null;
+          if (applyResult.summaryMessage) {
+            const summaryIdx = updatedMessages.findIndex(
+              (m) => m.id === applyResult.summaryMessage!.id,
+            );
+            if (summaryIdx >= 0 && summaryIdx + 1 < updatedMessages.length) {
+              insertBeforeMessageId = updatedMessages[summaryIdx + 1]!.id;
+            }
+          }
+          const payload: SubagentCompactionPayload = {
+            updatedAt: new Date().toISOString(),
+            flaggedMessageIds: applyResult.flaggedIds,
+            summaryMessage: applyResult.summaryMessage,
+            insertBeforeMessageId,
+          };
+          this._persistence.applySubagentCompaction(record.id, sessionId, payload);
+        } else {
+          this._persistence.markCompaction(record.id, null);
+        }
       } catch {
         // compaction persistence marker is best-effort
       }
@@ -1626,6 +1718,7 @@ export class SubagentManager {
         // token calibration is best-effort
       }
       subagentCompactionTrigger.onCompactionApplied(preInput, postCompactionTokens);
+      emitSubagentCompactionProgress({ phase: 'complete', detail: 'Context compacted — resuming' });
       // R17: still over limit after compaction -> partial report degradation
       let cfg: CompactionScopeConfig | null = cachedSubagentCfg;
       if (!cfg) {
@@ -1641,7 +1734,7 @@ export class SubagentManager {
       // Also handle case where still over but we did compact: check if next cut would be empty
       if (stillOver) {
         try {
-          const { selectCut, resolvePreservePercent } = await import('../llm/compaction/select.js');
+          const { selectCut, resolvePreservePercent, resolveUserExemptIds } = await import('../llm/compaction/select.js');
           let cfg2: CompactionScopeConfig | null = cachedSubagentCfg;
           if (!cfg2) {
             try {
@@ -1658,6 +1751,12 @@ export class SubagentManager {
           const preInput2: number | undefined = record.usage?.prompt_tokens;
           if (!(totalAll2 > 0 && typeof preInput2 === 'number' && Number.isFinite(preInput2) && preInput2 > 0)) return false;
           const tpc3 = Math.max(0.05, Math.min(preInput2 / totalAll2, 2));
+          // R31/R32: thread exempt user-message ids so the exhaustion check's
+          // compactable range matches the real compaction range.
+          const exemptIdsRetry = resolveUserExemptIds(retryMessages as Message[], {
+            keepLast: cfg2?.keep_last_user_messages ?? null,
+            pinFirst: cfg2?.pin_first_user_message ?? true,
+          });
           const cut = selectCut(retryMessages as Message[], {
             preserveTokens: Math.floor(resolvePreservePercent(cfg2 ?? { threshold: 0.85, preserve_percent: 0.25 }) * (subagentContextTokens ?? 0)),
             tokenEstimator: (slice: readonly Message[]): number => {
@@ -1665,6 +1764,7 @@ export class SubagentManager {
               for (const m of slice) chars += estimateMessageChars(m);
               return Math.max(slice.length, Math.ceil(chars * tpc3));
             },
+            exemptIds: exemptIdsRetry,
           });
           // Exhaustion test: with chain inference splitting summary heads into
           // their own chains, the range may still contain the previous head

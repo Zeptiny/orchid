@@ -7,6 +7,9 @@
  * Replacement via excludeFromModel never deletion (R3).
  * Summary head is its own chain (R20, R23).
  * Crash before apply leaves old history, crash after leaves compacted (R22).
+ * User messages are never excluded from the model view in any mode (R31) —
+ * the universal settle in buildCompactionApply filters user ids from the
+ * flagged set and un-flags any pre-existing user-message flag.
  *
  * Approach:
  * - Pure build: buildCompactionApply() produces flagged replay state + summary head
@@ -253,6 +256,20 @@ export function buildCompactionApply(input: ApplyInput): ApplyResult {
     // In reclaim-only we do not implicitly flag the whole range — only duplicates.
   }
 
+  // R31 universal settle: user messages are never excluded from the model view
+  // in ANY mode (simple or selective). Filter user ids out of the flagged set
+  // so they survive verbatim in the replay. This generalizes the R9 protection
+  // that previously lived only in the selective path (filterUserFlaggedIds /
+  // unflagUserMessagesInApply); simple mode now gets it too. The
+  // never-flagged-user invariant is owned by the engine, not the call sites.
+  const userIds = new Set<string>();
+  for (const m of messages) {
+    if (m.role === MessageRole.USER) userIds.add(m.id);
+  }
+  if (userIds.size > 0) {
+    finalFlaggedIds = finalFlaggedIds.filter((id) => !userIds.has(id));
+  }
+
   // If nothing to do, return passthrough (no summary, no flags)
   const nothingToFlag = finalFlaggedIds.length === 0;
   const shouldInsertSummary = hasSummaryText && !isEmptyRange;
@@ -270,9 +287,16 @@ export function buildCompactionApply(input: ApplyInput): ApplyResult {
   }
 
   const flaggedSet = new Set(finalFlaggedIds);
-  const flaggedMessages: Message[] = messages.map((m) =>
-    flaggedSet.has(m.id) ? { ...m, excludeFromModel: true } : m,
-  );
+  const flaggedMessages: Message[] = messages.map((m) => {
+    if (flaggedSet.has(m.id)) return { ...m, excludeFromModel: true };
+    // R31 universal settle: un-flag any pre-existing user-message flag so user
+    // messages never leave the model view, even when a prior (now superseded)
+    // selective run flagged them.
+    if (userIds.size > 0 && userIds.has(m.id) && m.excludeFromModel) {
+      return { ...m, excludeFromModel: false };
+    }
+    return m;
+  });
 
   let summaryMessage: Message | null = null;
   let compactedMarker: CompactedMarker | null = null;

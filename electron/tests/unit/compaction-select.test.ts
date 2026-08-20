@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { Message } from '../../src/shared/types/message';
 import { MessageRole, MessageType } from '../../src/shared/types/message';
-import { selectCut, analyzeToolGroups, isCleanToolGroupBoundary, resolvePreservePercent, inferChainBoundaries } from '../../src/main/llm/compaction/select';
+import { selectCut, analyzeToolGroups, isCleanToolGroupBoundary, resolvePreservePercent, resolveUserExemptIds, inferChainBoundaries } from '../../src/main/llm/compaction/select';
 import type { ToolCall } from '../../src/shared/types/tool';
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
@@ -410,5 +410,119 @@ describe('analyzeToolGroups — unchanged primitives', () => {
     const { completedIntervals, openGroupStart } = analyzeToolGroups(messages);
     expect(completedIntervals).toEqual([[1, 2]]);
     expect(openGroupStart).toBe(3);
+  });
+});
+
+// ── R31: exempt ids (pinned user messages) ──────────────────────────────────
+
+describe('selectCut — exempt ids (R31: pinned user messages)', () => {
+  it('excludes exempt ids from the compactable range', () => {
+    // 6 messages × 25 tokens each; budget 50 → suffix of 2 (50 tokens).
+    // u0 (index 0) is exempt (pinned first user). Without exemption the cut
+    // would land at 4 (suffix [4,6)). With u0 exempt, the cut is unaffected
+    // (u0 sits before it) but the range's leading edge skips u0 — it never
+    // enters the compactable range and is never flagged downstream.
+    const messages = uniformMessages(6, 100);
+    const exempt = new Set(['u-0']);
+    const result = selectCut(messages, { preserveTokens: 50, chainBoundaries: [0], exemptIds: exempt });
+    expect(result.cutIndex).toBe(4);
+    expect(result.compactableRange).toEqual({ start: 1, end: 4 });
+  });
+
+  it('exempt ids in the suffix do not consume the preserve budget', () => {
+    // 4 messages × 25 tokens each; budget 25 → suffix of 1 (25 tokens).
+    // u-2 (index 2, a user message) is exempt. The suffix [3,4) fits 25 tokens.
+    // If u-2 consumed budget, the suffix containing it would exceed — but u-2
+    // is at index 2, not in [3,4). Instead make u-3 (index 3) exempt: the
+    // suffix [3,4) contains u-3 which is exempt, so the budget for the
+    // non-exempt content is 0 → cut could go further back. With u-3 exempt,
+    // the suffix [3,4) has 0 non-exempt tokens → the walk keeps more.
+    const messages = uniformMessages(4, 100); // u-0, a-1, u-2, a-3
+    const exempt = new Set(['u-2']); // exempt user at index 2
+    const result = selectCut(messages, { preserveTokens: 25, chainBoundaries: [0], exemptIds: exempt });
+    // u-2 is exempt. The suffix walk filters u-2 from the estimate. With
+    // budget 25: suffix [2,4) = {u-2(exempt), a-3} → non-exempt estimate 25 →
+    // fits. So cut lands at 2 (or earlier if a-1 also fits). a-1 alone = 25
+    // → [1,4) non-exempt = {a-1, a-3} = 50 > 25. So cut = 2.
+    expect(result.cutIndex).toBe(2);
+    // u-2 (exempt) is in the preserved window, not the compactable range.
+    expect(result.preservedRange).toEqual({ start: 2, end: 4 });
+    expect(result.compactableRange).toEqual({ start: 0, end: 2 });
+  });
+
+  it('extends the cut back across budget-free exempt ids in the suffix', () => {
+    // 4 messages × 25 tokens; budget 50. u-2 (index 2) is exempt.
+    // Without exemption the suffix walk stops at 2 ([2,4) = 50 tokens) and
+    // u-2 costs budget. With u-2 budget-free the suffix [1,4) estimates only
+    // {a-1, a-3} = 50 ≤ 50 → the walk extends back past u-2, landing it in
+    // the preserved window (never in the compactable range).
+    const messages = uniformMessages(4, 100); // u-0, a-1, u-2, a-3
+    const exempt = new Set(['u-2']);
+    const result = selectCut(messages, { preserveTokens: 50, chainBoundaries: [0], exemptIds: exempt });
+    expect(result.cutIndex).toBe(1);
+    expect(result.compactableRange).toEqual({ start: 0, end: 1 });
+  });
+
+  it('resolveUserExemptIds pins the last K user messages', () => {
+    const messages: Message[] = [
+      makeUser('u0', 'turn0'),
+      makeAssistantText('a0', 'reply0'),
+      makeUser('u1', 'turn1'),
+      makeAssistantText('a1', 'reply1'),
+      makeUser('u2', 'turn2'),
+      makeAssistantText('a2', 'reply2'),
+    ];
+    const exempt = resolveUserExemptIds(messages, { keepLast: 2, pinFirst: false });
+    expect(exempt.has('u0')).toBe(false);
+    expect(exempt.has('u1')).toBe(true);
+    expect(exempt.has('u2')).toBe(true);
+  });
+
+  it('resolveUserExemptIds pins the first user message when pinFirst is true', () => {
+    const messages: Message[] = [
+      makeUser('u0', 'turn0'),
+      makeAssistantText('a0', 'reply0'),
+      makeUser('u1', 'turn1'),
+      makeAssistantText('a1', 'reply1'),
+    ];
+    const exempt = resolveUserExemptIds(messages, { keepLast: 1, pinFirst: true });
+    // keepLast=1 → u1; pinFirst → u0. Both pinned.
+    expect(exempt.has('u0')).toBe(true);
+    expect(exempt.has('u1')).toBe(true);
+  });
+
+  it('resolveUserExemptIds with null keepLast pins ALL user messages (subagent R32)', () => {
+    const messages: Message[] = [
+      makeUser('u0', 'task head'),
+      makeAssistantText('a0', 'reply0'),
+      makeUser('u1', 'follow up'),
+      makeAssistantText('a1', 'reply1'),
+    ];
+    const exempt = resolveUserExemptIds(messages, { keepLast: null, pinFirst: true });
+    expect(exempt.has('u0')).toBe(true);
+    expect(exempt.has('u1')).toBe(true);
+    expect(exempt.size).toBe(2);
+  });
+
+  it('subagent scope (all user messages exempt) keeps user messages out of the compactable range', () => {
+    // Simulate a subagent chain: task head (user) + tool-heavy turn.
+    // With ALL user messages exempt, the task head never enters the
+    // compactable range even under a tiny budget.
+    const messages: Message[] = [
+      makeUser('u0', 'task head'), // exempt
+      makeToolCallMsg('tc0', 'c0', 'read'),
+      makeToolResult('tr0', 'c0', 'read', 'x'.repeat(400)),
+      makeToolCallMsg('tc1', 'c1', 'read'),
+      makeToolResult('tr1', 'c1', 'read', 'x'.repeat(400)),
+    ];
+    const exempt = resolveUserExemptIds(messages, { keepLast: null, pinFirst: true });
+    const result = selectCut(messages, { preserveTokens: 1, chainBoundaries: [0], exemptIds: exempt });
+    // u0 is exempt: the range's leading edge skips index 0 entirely, and the
+    // trailing tool group floors the cut at its start (nothing fits a
+    // 1-token budget, so only the group floor keeps a preserved window).
+    expect(result.compactableRange).toEqual({ start: 1, end: 3 });
+    expect(result.preservedRange).toEqual({ start: 3, end: 5 });
+    // u0's index (0) is never inside the compactable range.
+    expect(result.compactableRange.start).toBeGreaterThan(0);
   });
 });

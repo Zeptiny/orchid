@@ -103,10 +103,11 @@ describe('ChatTurnProjection', () => {
       interrupted: true,
     });
 
-    const { terminal, status, ...projection } = seedChatTurnProjection(snapshot);
+    const { terminal, status, compactionProgress, ...projection } = seedChatTurnProjection(snapshot);
 
     expect({ ...projection, state: status }).toEqual(snapshot);
     expect(terminal).toBeNull();
+    expect(compactionProgress).toBeNull();
     expect('messages' in projection).toBe(false);
   });
 
@@ -198,51 +199,65 @@ describe('ChatTurnProjection', () => {
     })]);
   });
 
-  it('merges generating updates as live streaming content without finalizing the tool', () => {
+  it('applies compaction progress events to the live widget state without touching tools', () => {
     const projected = applyChatTurnEvents(seedChatTurnProjection(liveSnapshot()), [
-      event({ ...identity(1), type: 'tool_call_update', toolCallId: 'compaction-s1', toolName: 'compaction', status: 'running', args: '{"phase":"summarizing","mode":"simple"}' }, TOOL_STARTED_AT),
-      event({ ...identity(2), type: 'tool_call_update', toolCallId: 'compaction-s1', status: 'generating', content: '## Handoff\nEar' }, TOOL_STARTED_AT),
-      event({ ...identity(3), type: 'tool_call_update', toolCallId: 'compaction-s1', status: 'generating', content: '## Handoff\nEarlier work.' }, TOOL_FINISHED_AT),
+      event({ ...identity(1), type: 'tool_call_start', toolCallId: 'tool-1', toolName: 'read' }, TOOL_STARTED_AT),
+      event({ ...identity(2), type: 'compaction_progress', agentScopeId: 'main', phase: 'preparing', detail: 'Summarizing history', mode: 'simple' }, TOOL_STARTED_AT),
+      event({ ...identity(3), type: 'compaction_progress', agentScopeId: 'main', phase: 'compacting', streamText: '## Handoff\nEar' }, TOOL_STARTED_AT),
+      event({ ...identity(4), type: 'compaction_progress', agentScopeId: 'main', phase: 'compacting', streamText: '## Handoff\nEarlier work.' }, TOOL_FINISHED_AT),
     ]);
 
-    expect(projected.toolCalls).toEqual([expect.objectContaining({
-      toolCallId: 'compaction-s1',
-      toolName: 'compaction',
-      status: 'generating',
-      args: '{"phase":"summarizing","mode":"simple"}',
-      content: '## Handoff\nEarlier work.',
-      finishedAt: null,
-      toolResult: null,
-    })]);
+    expect(projected.compactionProgress).toEqual({
+      phase: 'compacting',
+      streamText: '## Handoff\nEarlier work.',
+      sequence: 4,
+    });
+    // The compaction widget is not a tool call: the timeline keeps only real tools.
+    expect(projected.toolCalls.map((tool) => tool.toolCallId)).toEqual(['tool-1']);
+    expect(projected.streamSegments).toEqual([{ kind: 'tool', toolCallId: 'tool-1' }]);
   });
 
-  it('drops a terminal compaction widget and frees its id for a later compaction', () => {
+  it('retains the terminal compaction phase; a later compaction replaces it', () => {
     const initial = seedChatTurnProjection(liveSnapshot());
     const withFirst = applyChatTurnEvents(initial, [
       event({ ...identity(1), type: 'tool_call_start', toolCallId: 'tool-1', toolName: 'read' }, TOOL_STARTED_AT),
-      event({ ...identity(2), type: 'tool_call_update', toolCallId: 'compaction-s1-1', toolName: 'compaction', status: 'running', args: '{"phase":"summarizing"}' }, TOOL_STARTED_AT),
-      event({ ...identity(3), type: 'tool_call_update', toolCallId: 'compaction-s1-1', status: 'generating', content: 'sum' }, TOOL_STARTED_AT),
-      event({ ...identity(4), type: 'tool_call_update', toolCallId: 'compaction-s1-1', toolName: 'compaction', status: 'complete', content: '', toolResult: { schemaVersion: 1, family: 'generic', status: 'complete', completeness: 'complete', data: { value: '', origin: { kind: 'built-in', name: 'compaction' } } } }, TOOL_FINISHED_AT),
-      event({ ...identity(5), type: 'tool_call_update', toolCallId: 'tool-1', toolName: 'read', status: 'complete', args: '{}', content: '<ok/>', toolResult: { schemaVersion: 1, family: 'generic', status: 'complete', completeness: 'complete', data: { value: 'ok', origin: { kind: 'built-in', name: 'read' } } } }, TOOL_FINISHED_AT),
+      event({ ...identity(2), type: 'compaction_progress', agentScopeId: 'main', phase: 'compacting', streamText: 'sum' }, TOOL_STARTED_AT),
+      event({ ...identity(3), type: 'compaction_progress', agentScopeId: 'main', phase: 'complete', detail: 'Context compacted — resuming' }, TOOL_FINISHED_AT),
     ]);
 
-    // The terminal compaction entry AND its segment are gone; the read tool stays.
+    expect(withFirst.compactionProgress).toMatchObject({
+      phase: 'complete',
+      detail: 'Context compacted — resuming',
+      sequence: 3,
+    });
     expect(withFirst.toolCalls.map((tool) => tool.toolCallId)).toEqual(['tool-1']);
     expect(withFirst.streamSegments).toEqual([{ kind: 'tool', toolCallId: 'tool-1' }]);
 
-    // A second compaction mints a fresh id and appends at the tail.
+    // A second compaction overwrites the retained terminal phase.
     const withSecond = applyChatTurnEvent(
       withFirst,
-      event({ ...identity(6), type: 'tool_call_update', toolCallId: 'compaction-s1-2', toolName: 'compaction', status: 'running', args: '{"phase":"summarizing"}' }, TOOL_FINISHED_AT),
+      event({ ...identity(4), type: 'compaction_progress', agentScopeId: 'main', phase: 'preparing', mode: 'selective' }, TOOL_FINISHED_AT),
     );
-    expect(withSecond.toolCalls.map((tool) => tool.toolCallId)).toEqual(['tool-1', 'compaction-s1-2']);
-    expect(withSecond.streamSegments).toEqual([
-      { kind: 'tool', toolCallId: 'tool-1' },
-      { kind: 'tool', toolCallId: 'compaction-s1-2' },
-    ]);
+    expect(withSecond.compactionProgress).toEqual({
+      phase: 'preparing',
+      mode: 'selective',
+      sequence: 4,
+    });
   });
 
-  it('seeds a snapshot without its terminal compaction entries', () => {
+  it('ignores compaction progress events scoped to a subagent', () => {
+    const initial = seedChatTurnProjection(liveSnapshot());
+    const projected = applyChatTurnEvent(
+      initial,
+      event({ ...identity(1), type: 'compaction_progress', agentScopeId: 'subagent-9', phase: 'compacting', streamText: 'sum' }, TOOL_STARTED_AT),
+    );
+
+    expect(projected.compactionProgress).toBeNull();
+    expect(projected.toolCalls).toEqual(initial.toolCalls);
+    expect(projected.streamSegments).toEqual(initial.streamSegments);
+  });
+
+  it('seeds a snapshot with verbatim tool entries and no live compaction progress', () => {
     const seeded = seedChatTurnProjection(liveSnapshot({
       toolCalls: [
         {
@@ -256,35 +271,26 @@ describe('ChatTurnProjection', () => {
           startedAt: TOOL_STARTED_AT,
           finishedAt: null,
         },
-        {
-          toolCallId: 'compaction-s1-1',
-          toolName: 'compaction',
-          status: 'complete',
-          partialArgs: '',
-          args: '',
-          content: '',
-          toolResult: null,
-          startedAt: TOOL_STARTED_AT,
-          finishedAt: TOOL_FINISHED_AT,
-        },
       ],
       streamSegments: [
         { kind: 'tool', toolCallId: 'read-1' },
-        { kind: 'tool', toolCallId: 'compaction-s1-1' },
       ],
     }));
 
+    // Replay never resurrects a live widget: the persisted `compacted` marker
+    // renders the terminal state via stream building, not the live projection.
     expect(seeded.toolCalls.map((tool) => tool.toolCallId)).toEqual(['read-1']);
     expect(seeded.streamSegments).toEqual([{ kind: 'tool', toolCallId: 'read-1' }]);
+    expect(seeded.compactionProgress).toBeNull();
   });
 
-  it('carries the calibrated estimate through generating updates', () => {
+  it('carries the calibrated estimate through compacting events', () => {
     const projected = applyChatTurnEvents(seedChatTurnProjection(liveSnapshot()), [
-      event({ ...identity(1), type: 'tool_call_update', toolCallId: 'compaction-s1-1', toolName: 'compaction', status: 'running', args: '{}' }, TOOL_STARTED_AT),
-      event({ ...identity(2), type: 'tool_call_update', toolCallId: 'compaction-s1-1', status: 'generating', content: 'sum', estimatedTokens: 1461 }, TOOL_STARTED_AT),
+      event({ ...identity(1), type: 'compaction_progress', agentScopeId: 'main', phase: 'preparing' }, TOOL_STARTED_AT),
+      event({ ...identity(2), type: 'compaction_progress', agentScopeId: 'main', phase: 'compacting', streamText: 'sum', estimatedTokens: 1461 }, TOOL_STARTED_AT),
     ]);
 
-    expect(projected.toolCalls[0]).toMatchObject({ estimatedTokens: 1461 });
+    expect(projected.compactionProgress).toMatchObject({ estimatedTokens: 1461 });
   });
 
   it('preserves classified terminal error facts', () => {

@@ -6,6 +6,19 @@
  * flags. The manager remains responsible for mutating/disposing the actual
  * records when an effect is returned from this collaborator.
  */
+import type {
+  SubagentCompactionPayload,
+  SubagentCompactionResult,
+} from '../session/storage';
+
+/** Callback that performs the durable subagent-chain compaction write (R36). */
+export interface SubagentCompactionSink {
+  (
+    sessionId: string,
+    subagentId: string,
+    payload: SubagentCompactionPayload,
+  ): SubagentCompactionResult | null;
+}
 
 export interface SubagentPersistenceCandidate {
   readonly id: string;
@@ -57,8 +70,14 @@ export class SubagentPersistence {
   private readonly summariesBySession = new Map<string, string[]>();
   private readonly trackedSessionsSet = new Set<string>();
   private timelineGeneration = 0;
+  private readonly compactionSink: SubagentCompactionSink | null;
 
-  constructor(private readonly getTerminalRetention: () => number) {}
+  constructor(
+    private readonly getTerminalRetention: () => number,
+    compactionSink: SubagentCompactionSink | null = null,
+  ) {
+    this.compactionSink = compactionSink;
+  }
 
   register(id: string, sessionId: string | null, options: { admitted: boolean }): void {
     this.records.set(id, {
@@ -96,6 +115,33 @@ export class SubagentPersistence {
       state.lastCompactionRevision = rev;
     }
     return rev;
+  }
+
+  /**
+   * Apply a subagent-chain compaction as one atomic durable write (R36).
+   *
+   * Calls the injected compaction sink (which performs the targeted
+   * `subagent_chains` transaction against the session DB) and then marks the
+   * compaction revision so crash recovery distinguishes a compacted chain
+   * from a summarized/evicted one. Returns null when no sink is configured
+   * (unit tests without DB access) or the record is unknown — callers should
+   * still update the in-memory record regardless. The compaction revision is
+   * marked even without a sink so the in-memory bookkeeping stays consistent
+   * (the checkpoint path will persist the record on the next flush).
+   */
+  applySubagentCompaction(
+    id: string,
+    sessionId: string,
+    payload: SubagentCompactionPayload,
+  ): SubagentCompactionResult | null {
+    const state = this.records.get(id);
+    if (!state) return null;
+    let result: SubagentCompactionResult | null = null;
+    if (this.compactionSink) {
+      result = this.compactionSink(sessionId, id, payload);
+    }
+    this.markCompaction(id);
+    return result;
   }
 
   /** Last compaction revision for a record, if any (separate from summary). */

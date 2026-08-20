@@ -11,6 +11,7 @@
 import { useRef, useEffect, useCallback, useState, useMemo, type ReactNode } from 'react';
 import type { Chain } from '../../shared/types/chain';
 import type { Message, Usage } from '../../shared/types/message';
+import type { ChatTurnCompactionProgress } from '../../shared/chat/turn-projection';
 import { EMPTY_SUBAGENT_USAGE_SUMMARY, type SubagentUsageSummary } from '../../shared/usage';
 import {
   useElapsedSeconds,
@@ -38,6 +39,8 @@ import orchidIcon from '../assets/orchid-icon.svg';
 import { useSmartAutoScroll } from '../hooks/useSmartAutoScroll';
 import { shouldAutoScroll } from '../hooks/useSmartAutoScroll';
 import { CompactionRunningWidget, CompactionWidget, CompactedRangeStub } from './ToolResults/CompactionWidget';
+import { compactionProgressToWidgetItem } from '../utils/stream-building';
+import { MAIN_AGENT_SCOPE_ID } from '../../shared/types/agent-scope';
 
 export { AUTO_SCROLL_THRESHOLD_PX, isUserScrolledAwayFromBottom, shouldAutoScroll } from '../hooks/useSmartAutoScroll';
 export { CHAIN_COLLAPSE_THRESHOLD, shouldRenderChainFooter, suppressLiveMessagesAlreadyInHistory } from '../utils/stream-building';
@@ -102,6 +105,8 @@ interface ChatStreamProps {
   alwaysExpandToolGroups?: boolean;
   /** Hydrate the next older bounded page for a chain. */
   onLoadHistoryPage?: (chainIndex: number) => Promise<unknown> | void;
+  /** Live compaction progress for the main scope; null when no compaction is active. */
+  compactionProgress?: ChatTurnCompactionProgress | null;
 }
 
 /**
@@ -132,6 +137,7 @@ export function ChatStream({
   interrupted,
   alwaysExpandToolGroups = false,
   onLoadHistoryPage,
+  compactionProgress = null,
 }: ChatStreamProps) {
   const {
     containerRef,
@@ -349,6 +355,21 @@ export function ChatStream({
     [historyNodes, liveTailNodes, activeFooterNode],
   );
 
+  const compactionWidgetNode = useMemo(() => {
+    const item = compactionProgressToWidgetItem(MAIN_AGENT_SCOPE_ID, compactionProgress);
+    if (!item) return null;
+    return (
+      <CompactionRunningWidget
+        key={item.key}
+        status={item.status}
+        phase={item.phase}
+        mode={item.mode}
+        streamText={item.streamText ?? null}
+        estimatedTokens={item.estimatedTokens ?? null}
+      />
+    );
+  }, [compactionProgress]);
+
   const hasPagedSessionHistory = sessionChains.some(
     (chain) => (chain.messageCount ?? chain.messages.length) > 0,
   );
@@ -410,6 +431,7 @@ export function ChatStream({
             final nodes flat lets React retain shared segment/footer keys across
             the live→committed swap instead of replaying entrance animation. */}
         {streamNodes}
+        {compactionWidgetNode}
         {error && (
           <div className="orchid-error-slot">
             <ErrorBanner
@@ -446,28 +468,6 @@ function renderStreamItem(
   sessionId: string | null,
 ): ReactNode {
   if (item.kind === 'tool') {
-    if (item.block.toolName === 'compaction') {
-      if (item.block.status !== 'running' && item.block.status !== 'generating') return null;
-      let phase: string | undefined;
-      let mode: string | undefined;
-      try {
-        const parsed = JSON.parse(item.block.args || '{}');
-        phase = typeof parsed.phase === 'string' ? parsed.phase : undefined;
-        mode = typeof parsed.mode === 'string' ? parsed.mode : undefined;
-      } catch {
-        // args are advisory display metadata only
-      }
-      return (
-        <CompactionRunningWidget
-          key={item.key}
-          status={item.block.status}
-          phase={phase}
-          mode={mode}
-          streamText={item.block.agentProjection}
-          estimatedTokens={item.block.estimatedTokens}
-        />
-      );
-    }
     return <ToolCallBlock key={item.key} block={item.block} subagents={subagents} sessionId={sessionId} />;
   }
   if (item.kind === 'tool-group') {

@@ -16,11 +16,14 @@
  *  - synthesized compactor chains use one id scheme: randomUUID().
  */
 import { randomUUID } from 'node:crypto';
+import type { WebContents } from 'electron';
 import type { ModelSelection } from '../../../shared/types/provider';
 import { ChainStatus } from '../../../shared/types/chain';
 import type { Chain } from '../../../shared/types/chain';
 import { compactedMarkerFromUnknown, type Message } from '../../../shared/types/message';
 import { IPC_CHANNELS } from '../../../shared/types/ipc';
+import { MAIN_AGENT_SCOPE_ID } from '../../../shared/types/agent-scope';
+import type { CompactionProgressEvent, CompactionProgressPhase } from '../../../shared/types/compaction-progress';
 import type { ProjectRuntime } from '../../project/runtime';
 import type { ProviderAccountingStore } from '../../providers/accounting/store';
 import { getSessionManager } from '../../session/singleton';
@@ -29,7 +32,7 @@ import { setChatHistory } from '../chat-history';
 import { requestCompactionPause, clearCompactionPause, shouldPauseForCompaction } from '../next-request-stop';
 import { publishSessionActivity } from '../session-activity';
 import { estimateMessageChars, totalCharsForMessages } from '../../llm/compaction/message-chars';
-import { selectCut, resolvePreservePercent, type CutResult } from '../../llm/compaction/select';
+import { selectCut, resolvePreservePercent, resolveUserExemptIds, type CutResult } from '../../llm/compaction/select';
 import { mechanicalReclaim } from '../../llm/compaction/reclaim';
 import { summarizeCompactableRange, type SummarizeResult } from '../../llm/compaction/summarize';
 import { buildCompactionApply, CompactionApplyError, stampCompactionMetrics, type ApplyResult } from '../../llm/compaction/apply';
@@ -44,10 +47,6 @@ import {
 import type { SelectiveCompactionResult } from '../../llm/compaction/selective/run';
 import { activeAgents } from './state';
 import { sendTurnEvent, webContentsForWindowId } from './events';
-import {
-  ensureToolSnapshot,
-  updateToolSnapshot,
-} from './snapshot';
 import {
   buildCompactedCacheChains,
   persistCompactionBetweenTurns as persistCompaction,
@@ -70,39 +69,78 @@ const compactionPending = new Map<string, {
 }>();
 const compactionRetryTried = new Set<string>();
 
-// ── Compaction widget identity ──────────────────────────────────────────────
-
-/** Tool-call ids of the sessions' CURRENT compaction widget (one per session). */
-const compactionWidgetIds = new Map<string, string>();
-let compactionWidgetCounter = 0;
+// ── Compaction widget progress emission ───────────────────────────────────
 
 /**
- * Tool-call id for the session's current compaction widget.
- *
- * One id per in-flight compaction, NOT one per session: renderer projections
- * upsert by id at the entry's original position, so reusing a session-stable
- * id would pin a later compaction's running widget above everything streamed
- * since the previous one. The id is held until the widget completes (or the
- * session's compaction state is cleared); the next compaction mints a fresh
- * id that appends at the tail.
+ * Per-session compaction epoch: bumped on every terminal progress event
+ * (`complete`/`failed`). Emitters bind the epoch at creation so a trailing
+ * throttled flush from an already-finished compaction can never flip the
+ * widget back to a running phase (the regression behind the old
+ * `compactionWidgetToolId` machinery). Entries stay monotonic for the
+ * process lifetime — session ids are unique, so the map is bounded by the
+ * number of sessions ever compacted in this run.
  */
-export function compactionWidgetToolId(sessionId: string): string {
-  const existing = compactionWidgetIds.get(sessionId);
-  if (existing) return existing;
-  const id = `compaction-${sessionId}-${(compactionWidgetCounter += 1)}`;
-  compactionWidgetIds.set(sessionId, id);
-  return id;
+const compactionProgressEpochs = new Map<string, number>();
+
+/**
+ * Emit a typed compaction-progress event through the sequenced turn-event
+ * broadcast. Replaces the synthetic `'compaction'` tool-call channel (review
+ * #37): no JSON-stringified state, no `toolName` interception, no fake
+ * tool-result. The renderer derives widget lifecycle from this event live and
+ * from the persisted `compacted` marker on replay.
+ *
+ * `options.webContents` lets turn-lifecycle call sites deliver on their own
+ * sender (the same window the turn events stream to); without it the active
+ * agent's window is resolved from the electron registry.
+ */
+export function emitCompactionProgress(
+  sessionId: string,
+  phase: CompactionProgressPhase,
+  detail?: string,
+  options?: {
+    webContents?: WebContents;
+    mode?: CompactionProgressEvent['mode'];
+    streamText?: string | null;
+    estimatedTokens?: number | null;
+  },
+): void {
+  const active = activeAgents.get(sessionId);
+  if (!active || active.finalized) return;
+  const wc = options?.webContents ?? webContentsForWindowId(active.windowId);
+  if (!wc) return;
+  if (phase === 'complete' || phase === 'failed') {
+    compactionProgressEpochs.set(sessionId, (compactionProgressEpochs.get(sessionId) ?? 0) + 1);
+  }
+  const payload: Record<string, unknown> = {
+    type: 'compaction_progress',
+    agentScopeId: MAIN_AGENT_SCOPE_ID,
+    phase,
+    ...(detail !== undefined ? { detail } : {}),
+    ...(options?.mode !== undefined ? { mode: options.mode } : {}),
+    ...(options?.streamText !== undefined ? { streamText: options.streamText } : {}),
+    ...(options?.estimatedTokens !== undefined ? { estimatedTokens: options.estimatedTokens } : {}),
+  };
+  sendTurnEvent(wc, active, IPC_CHANNELS.CHAT_COMPACTION_PROGRESS, payload);
 }
 
-function releaseCompactionWidgetToolId(sessionId: string): void {
-  compactionWidgetIds.delete(sessionId);
+/**
+ * Complete the compaction widget by emitting a terminal progress event.
+ * Replaces the old `completeCompactionWidget` — no synthetic tool-result needed.
+ */
+function completeCompactionWidget(sessionId: string, detail?: string): void {
+  try {
+    emitCompactionProgress(sessionId, 'complete', detail);
+    clearCompactionPause(sessionId);
+  } catch {
+    // widget completion is best-effort
+  }
 }
 
 export function clearCompactionState(sessionId: string): void {
   compactionTriggers.delete(sessionId);
   compactionPending.delete(sessionId);
   triggerCalibrationHydrated.delete(sessionId);
-  releaseCompactionWidgetToolId(sessionId);
+  compactionProgressEpochs.set(sessionId, (compactionProgressEpochs.get(sessionId) ?? 0) + 1);
   for (const key of [...compactionRetryTried]) {
     if (key === sessionId || key.startsWith(`${sessionId}:`)) compactionRetryTried.delete(key);
   }
@@ -121,55 +159,31 @@ export function clearCompactionRetryTried(sessionId: string, turnId: string): vo
   compactionRetryTried.delete(`${sessionId}:${turnId}`);
 }
 
-function completeCompactionWidget(sessionId: string): void {
-  try {
-    const active = activeAgents.get(sessionId);
-    const compactionToolId = compactionWidgetToolId(sessionId);
-    if (active && !active.finalized && active.toolCalls.has(compactionToolId)) {
-      active.toolCalls.delete(compactionToolId);
-      const wc = webContentsForWindowId(active.windowId);
-      if (wc) sendTurnEvent(wc, active, IPC_CHANNELS.CHAT_TOOL_CALL_UPDATE, { type: 'tool_call_update', toolCallId: compactionToolId, toolName: 'compaction', status: 'complete', args: '', content: '', toolResult: { schemaVersion: 1, family: 'generic', status: 'complete', completeness: 'complete', data: { value: '', origin: { kind: 'built-in', name: 'compaction' } } } as unknown as Record<string, unknown> });
-    }
-    clearCompactionPause(sessionId);
-  } catch {
-    // widget completion is best-effort; the id must still be released below
-  } finally {
-    releaseCompactionWidgetToolId(sessionId);
-  }
-}
-
 /** Minimum interval between compaction live-progress emissions (IPC flood guard). */
 export const COMPACTION_STREAM_EMIT_INTERVAL_MS = 100;
 
 /**
  * Throttled live-progress emitter for the compaction widget: forwards the
- * compactor's accumulated LLM output as tool_call_update events with status
- * 'generating'. No-ops when the session has no active agent or the widget was
- * never created (e.g. send-time compaction before the stream starts), so it is
- * safe to pass unconditionally as onTextDelta. A trailing flush guarantees the
- * final accumulated text always lands even when deltas arrive in bursts.
+ * compactor's accumulated LLM output as `compaction_progress` events with
+ * phase `'compacting'`. No-ops when the session has no active agent, so it is
+ * safe to pass unconditionally as `onTextDelta`. A trailing flush guarantees
+ * the final accumulated text always lands even when deltas arrive in bursts.
+ * Bound to the compaction epoch at creation: once this compaction reaches a
+ * terminal phase (or the session's compaction state is cleared and a later
+ * compaction starts), this emitter goes permanently silent so its stale tail
+ * can never resurrect the widget.
  */
 export function createCompactionStreamEmitter(sessionId: string): (accumulatedText: string) => void {
-  // Bind to the widget id minted for THIS compaction: a trailing flush must
-  // never target a later compaction's widget after this one completes and
-  // releases its id.
-  const compactionToolId = compactionWidgetToolId(sessionId);
+  const boundEpoch = compactionProgressEpochs.get(sessionId) ?? 0;
   let lastEmitAt = 0;
   let trailingTimer: ReturnType<typeof setTimeout> | null = null;
   let latest = '';
   const flush = (): void => {
     trailingTimer = null;
     lastEmitAt = Date.now();
+    if ((compactionProgressEpochs.get(sessionId) ?? 0) !== boundEpoch) return;
     const active = activeAgents.get(sessionId);
     if (!active || active.finalized) return;
-    const current = active.toolCalls.get(compactionToolId);
-    // Lifecycle guard: never resurrect a widget that already reached a
-    // terminal state (the mid-turn resume path completes the snapshot without
-    // deleting it) or was torn down — a trailing throttled flush landing after
-    // the terminal update would otherwise flip it back to 'generating' forever.
-    if (!current || (current.status !== 'generating' && current.status !== 'running')) return;
-    // Calibrated char→token estimate for the streamed tail. Null when no
-    // calibration exists yet — never a heuristic ratio.
     let estimatedTokens: number | null = null;
     try {
       const tpc = getCompactionTrigger(sessionId).state.tokensPerChar;
@@ -179,15 +193,13 @@ export function createCompactionStreamEmitter(sessionId: string): (accumulatedTe
     } catch {
       // trigger unavailable (test env) — char count remains the display
     }
-    updateToolSnapshot(active, compactionToolId, 'compaction', { status: 'generating', content: latest, estimatedTokens });
     const wc = webContentsForWindowId(active.windowId);
     if (wc) {
-      sendTurnEvent(wc, active, IPC_CHANNELS.CHAT_TOOL_CALL_UPDATE, {
-        type: 'tool_call_update',
-        toolCallId: compactionToolId,
-        toolName: 'compaction',
-        status: 'generating',
-        content: latest,
+      sendTurnEvent(wc, active, IPC_CHANNELS.CHAT_COMPACTION_PROGRESS, {
+        type: 'compaction_progress',
+        agentScopeId: MAIN_AGENT_SCOPE_ID,
+        phase: 'compacting',
+        streamText: latest,
         estimatedTokens,
       });
     }
@@ -476,6 +488,7 @@ function reanchorSelectiveReplay(
   replayMessages: readonly Message[],
   applyTimeHistory: readonly Message[],
   cutIndex: number,
+  rangeStart = 0,
 ): Message[] {
   const clampedCut = Math.max(0, Math.min(cutIndex, applyTimeHistory.length));
   const boundaryId = applyTimeHistory[clampedCut]?.id;
@@ -490,7 +503,14 @@ function reanchorSelectiveReplay(
   }
   const prefix = replayMessages.slice(0, prefixEnd);
   const suffix = applyTimeHistory.slice(clampedCut);
-  return dedupeHistoryById([...prefix, ...suffix]);
+  // R31: visible messages below the compactable range start (pinned user
+  // messages the range skips) never enter the manifest, so the replay carries
+  // neither their ops nor a preserve copy — re-attach them from the apply-time
+  // history or they would silently leave the model view.
+  const exemptPrefix = applyTimeHistory
+    .slice(0, Math.max(0, rangeStart))
+    .filter((m) => !m.excludeFromModel && !m.hidden);
+  return dedupeHistoryById([...exemptPrefix, ...prefix, ...suffix]);
 }
 
 export async function applyPendingCompactionIfAny(
@@ -537,7 +557,7 @@ export async function applyPendingCompactionIfAny(
         // appended after the prepare (e.g. the NEXT turn's user message), so
         // only its compactable prefix is reused — the preserved suffix is
         // re-derived from the current history (P1 #5).
-        const reanchored = reanchorSelectiveReplay(result.replayMessages, history, pending.cut.cutIndex);
+        const reanchored = reanchorSelectiveReplay(result.replayMessages, history, pending.cut.cutIndex, pending.cut.compactableRange.start);
         setChatHistory(sessionId, [...reanchored]);
         const postTokens = (() => {
           const tpc = trigger.state.tokensPerChar ?? (totalChars(reanchored) > 0 ? pending.estimatedInput / Math.max(1, totalChars(history)) : undefined);
@@ -592,7 +612,7 @@ export async function applyPendingCompactionIfAny(
           let reanchored: Message[] | undefined;
           if (ok) {
             // Same apply-time re-anchoring as the selective-success branch (P1 #5).
-            reanchored = reanchorSelectiveReplay(result.replayMessages, history, pending.cut.cutIndex);
+            reanchored = reanchorSelectiveReplay(result.replayMessages, history, pending.cut.cutIndex, pending.cut.compactableRange.start);
             setChatHistory(sessionId, [...reanchored]);
             const tpc = trigger.state.tokensPerChar ?? (totalChars(reanchored) > 0 ? pending.estimatedInput / Math.max(1, totalChars(history)) : undefined);
             const postTokens = tpc ? Math.ceil(totalChars(reanchored) * tpc) : pending.estimatedInput;
@@ -746,9 +766,14 @@ export async function tryCompactSynchronously(
       }
     }
     const calibratedEstimator = createCalibratedEstimator(tokensPerChar);
+    const exemptIds = resolveUserExemptIds(messages, {
+      keepLast: cfg.keep_last_user_messages ?? null,
+      pinFirst: cfg.pin_first_user_message,
+    });
     const cut = selectCut(messages, {
       preserveTokens: Math.floor(resolvePreservePercent(cfg) * windowTokens),
       tokenEstimator: calibratedEstimator,
+      exemptIds,
     });
     if (cut.compactableRange.end <= cut.compactableRange.start) return { didApply: false };
     const compactableTokens = compactableTokenEstimate(messages, cut.compactableRange, tokensPerChar);
@@ -1021,9 +1046,14 @@ export function handleUsageCompaction(
   }
   try {
     const calibratedEstimator2 = createCalibratedEstimator(calibratedRatio);
+    const exemptIds2 = resolveUserExemptIds(history, {
+      keepLast: cfg.keep_last_user_messages ?? null,
+      pinFirst: cfg.pin_first_user_message,
+    });
     const cut = selectCut(history, {
       preserveTokens: Math.floor(resolvePreservePercent(cfg) * effectiveContextTokens),
       tokenEstimator: calibratedEstimator2,
+      exemptIds: exemptIds2,
     });
     if (cut.compactableRange.end <= cut.compactableRange.start) return;
     const compactableTokens = compactableTokenEstimate(history, cut.compactableRange, tokensPerChar);
@@ -1047,16 +1077,9 @@ export function handleUsageCompaction(
       compactionPending.set(sessionId, { cut, flaggedIds, expectedIds, estimatedInput: inputTokens, contextTokens: effectiveContextTokens, mode: cfg.mode });
       trigger.markPrepareStarted(cut.compactableRange, flaggedIds);
       try {
-        const active = activeAgents.get(sessionId);
-        if (active && !active.finalized) {
-          const compactionToolId = compactionWidgetToolId(sessionId);
-          ensureToolSnapshot(active, compactionToolId, 'compaction');
-          updateToolSnapshot(active, compactionToolId, 'compaction', { status: 'running', args: JSON.stringify({ phase: 'reclaiming', mode: cfg.mode }), content: null, toolResult: null, finishedAt: null });
-          const wc = webContentsForWindowId(active.windowId);
-          if (wc) sendTurnEvent(wc, active, IPC_CHANNELS.CHAT_TOOL_CALL_UPDATE, { type: 'tool_call_update', toolCallId: compactionToolId, toolName: 'compaction', status: 'running', args: JSON.stringify({ phase: 'reclaiming', mode: cfg.mode }) });
-        }
+        emitCompactionProgress(sessionId, 'preparing', 'Reclaiming duplicates', { mode: cfg.mode });
       } catch {
-        // widget snapshot updates are best-effort
+        // widget progress is best-effort
       }
       if (!shouldPauseForCompaction(sessionId)) {
         requestCompactionPause(sessionId);
@@ -1088,29 +1111,15 @@ export function handleUsageCompaction(
         selectivePromise.catch((err) => {
           console.debug('[compaction] selective prepare failed (non-fatal):', err);
           try {
-            const active = activeAgents.get(sessionId);
-            if (active && !active.finalized) {
-              const compactionToolId = compactionWidgetToolId(sessionId);
-              const wc = webContentsForWindowId(active.windowId);
-              const result = { schemaVersion: 1 as const, family: 'generic' as const, status: 'complete' as const, completeness: 'complete' as const, data: { value: '', origin: { kind: 'built-in' as const, name: 'compaction' } } };
-              updateToolSnapshot(active, compactionToolId, 'compaction', { status: 'complete', args: '', content: '', toolResult: result as unknown as never, finishedAt: new Date().toISOString() });
-              if (wc) sendTurnEvent(wc, active, IPC_CHANNELS.CHAT_TOOL_CALL_UPDATE, { type: 'tool_call_update', toolCallId: compactionToolId, toolName: 'compaction', status: 'complete', args: '', content: '', toolResult: result as unknown as Record<string, unknown> });
-            }
+            completeCompactionWidget(sessionId);
           } catch {
             // widget completion is best-effort on prepare failure
           }
         });
         try {
-          const active = activeAgents.get(sessionId);
-          if (active && !active.finalized) {
-            const compactionToolId = compactionWidgetToolId(sessionId);
-            ensureToolSnapshot(active, compactionToolId, 'compaction');
-            updateToolSnapshot(active, compactionToolId, 'compaction', { status: 'running', args: JSON.stringify({ phase: 'summarizing', mode: 'selective' }), content: null, toolResult: null, finishedAt: null });
-            const wc = webContentsForWindowId(active.windowId);
-            if (wc) sendTurnEvent(wc, active, IPC_CHANNELS.CHAT_TOOL_CALL_UPDATE, { type: 'tool_call_update', toolCallId: compactionToolId, toolName: 'compaction', status: 'running', args: JSON.stringify({ phase: 'summarizing', mode: 'selective' }) });
-          }
+          emitCompactionProgress(sessionId, 'preparing', 'Summarizing history', { mode: 'selective' });
         } catch {
-          // widget snapshot updates are best-effort
+          // widget progress is best-effort
         }
         if (!shouldPauseForCompaction(sessionId)) {
           requestCompactionPause(sessionId);
@@ -1137,29 +1146,15 @@ export function handleUsageCompaction(
       promise.catch((err) => {
         console.debug('[compaction] prepare failed (non-fatal):', err);
         try {
-          const active = activeAgents.get(sessionId);
-          if (active && !active.finalized) {
-            const compactionToolId = compactionWidgetToolId(sessionId);
-            const wc = webContentsForWindowId(active.windowId);
-            const result = { schemaVersion: 1 as const, family: 'generic' as const, status: 'complete' as const, completeness: 'complete' as const, data: { value: '', origin: { kind: 'built-in' as const, name: 'compaction' } } };
-            updateToolSnapshot(active, compactionToolId, 'compaction', { status: 'complete', args: '', content: '', toolResult: result as unknown as never, finishedAt: new Date().toISOString() });
-            if (wc) sendTurnEvent(wc, active, IPC_CHANNELS.CHAT_TOOL_CALL_UPDATE, { type: 'tool_call_update', toolCallId: compactionToolId, toolName: 'compaction', status: 'complete', args: '', content: '', toolResult: result as unknown as Record<string, unknown> });
-          }
+          completeCompactionWidget(sessionId);
         } catch {
           // widget completion is best-effort on prepare failure
         }
       });
       try {
-        const active = activeAgents.get(sessionId);
-        if (active && !active.finalized) {
-          const compactionToolId = compactionWidgetToolId(sessionId);
-          ensureToolSnapshot(active, compactionToolId, 'compaction');
-          updateToolSnapshot(active, compactionToolId, 'compaction', { status: 'running', args: JSON.stringify({ phase: 'summarizing', mode: 'simple' }), content: null, toolResult: null, finishedAt: null });
-          const wc = webContentsForWindowId(active.windowId);
-          if (wc) sendTurnEvent(wc, active, IPC_CHANNELS.CHAT_TOOL_CALL_UPDATE, { type: 'tool_call_update', toolCallId: compactionToolId, toolName: 'compaction', status: 'running', args: JSON.stringify({ phase: 'summarizing', mode: 'simple' }) });
-        }
+        emitCompactionProgress(sessionId, 'preparing', 'Summarizing history', { mode: 'simple' });
       } catch {
-        // widget snapshot updates are best-effort
+        // widget progress is best-effort
       }
       if (!shouldPauseForCompaction(sessionId)) {
         requestCompactionPause(sessionId);

@@ -111,6 +111,7 @@ import type {
   TrustedProjectEntry,
   StartupSnapshot,
   StartupContinueDegradedResult,
+  CompactionProgressEvent,
 } from '../shared/types/ipc';
 import type {
   OverviewResult,
@@ -132,6 +133,7 @@ import {
   chatToolCallStartEventSchema,
   chatToolCallDeltaEventSchema,
   chatToolCallUpdateEventSchema,
+  compactionProgressEventSchema,
   sessionRenamedEventSchema,
   sessionCreatedEventSchema,
   sessionUpdatedEventSchema,
@@ -371,6 +373,9 @@ const orchidAPI: OrchidAPI = {
 
     onToolCallUpdate: (callback: (event: ChatToolCallUpdateEvent) => void) =>
       onParsed(IPC_CHANNELS.CHAT_TOOL_CALL_UPDATE, chatToolCallUpdateEventSchema, callback),
+
+    onCompactionProgress: (callback: (event: CompactionProgressEvent) => void) =>
+      onParsed(IPC_CHANNELS.CHAT_COMPACTION_PROGRESS, compactionProgressEventSchema, callback),
   },
 
   config: {

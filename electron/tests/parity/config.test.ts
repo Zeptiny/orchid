@@ -313,6 +313,8 @@ const EXPECTED_COMPACTION_MAIN_FIELDS = [
   { field: 'min_compactable_tokens', defaultValue: 4000 },
   { field: 'mechanical_reclaim', defaultValue: true },
   { field: 'hysteresis_delta', defaultValue: 0.1 },
+  { field: 'keep_last_user_messages', defaultValue: 10 },
+  { field: 'pin_first_user_message', defaultValue: true },
 ];
 
 const EXPECTED_COMPACTION_SUBAGENTS_FIELDS = [
@@ -324,6 +326,8 @@ const EXPECTED_COMPACTION_SUBAGENTS_FIELDS = [
   { field: 'min_compactable_tokens', defaultValue: 4000 },
   { field: 'mechanical_reclaim', defaultValue: true },
   { field: 'hysteresis_delta', defaultValue: 0.1 },
+  { field: 'keep_last_user_messages', defaultValue: null },
+  { field: 'pin_first_user_message', defaultValue: true },
 ];
 
 // ── Tests ───────────────────────────────────────────────────────────────────
@@ -495,6 +499,8 @@ describe('Config Parity', () => {
       expect(cfg.compaction.main.mode).toBe('simple');
       expect(cfg.compaction.main.mechanical_reclaim).toBe(true);
       expect(cfg.compaction.main.agent_name).toBe('compactor');
+      expect(cfg.compaction.main.keep_last_user_messages).toBe(10);
+      expect(cfg.compaction.main.pin_first_user_message).toBe(true);
     });
 
     it('compaction subagents scope has correct defaults', () => {
@@ -513,6 +519,9 @@ describe('Config Parity', () => {
       expect(cfg.compaction.subagents.mode).toBe('simple');
       expect(cfg.compaction.subagents.mechanical_reclaim).toBe(true);
       expect(cfg.compaction.subagents.agent_name).toBe('compactor-subagent');
+      // R32: subagent scope pins ALL user messages by default (null = all)
+      expect(cfg.compaction.subagents.keep_last_user_messages).toBeNull();
+      expect(cfg.compaction.subagents.pin_first_user_message).toBe(true);
     });
 
     it('compaction agent_name rejects bad names (allowlist)', () => {

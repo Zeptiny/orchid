@@ -27,6 +27,7 @@ import type {
   ChatSnapshot,
   ChatSessionSnapshot,
   ChatStreamSegmentSnapshot,
+  CompactionProgressEvent,
 } from '../../shared/types/ipc';
 import {
   addUsage,
@@ -37,6 +38,7 @@ import {
 import type { CanonicalToolResult } from '../../shared/types/tool-result';
 import {
   reduceChatTurnProjection,
+  type ChatTurnCompactionProgress,
   type ChatTurnEventAction,
   type ChatTurnProjection,
   type ChatTurnProjectionAction,
@@ -138,6 +140,12 @@ export interface ChatState {
   cumulativeUsage: Usage;
   /** Active workspace cwd (session → draft → sticky); empty when unbound. */
   cwd: string;
+  /**
+   * Live main-scope compaction progress from `compaction_progress` turn
+   * events; null when no compaction is in flight. Replay derives the terminal
+   * widget from the persisted `compacted` marker instead.
+   */
+  compactionProgress: ChatTurnCompactionProgress | null;
 }
 
 export interface ChatSendOptions {
@@ -435,6 +443,7 @@ export function useChat(
   const error = projection?.terminal?.type === 'error' && projection.terminal.title && !projection.terminal.error.startsWith(projection.terminal.title)
     ? `${projection.terminal.title}: ${projection.terminal.error}`
     : projection?.error ?? null;
+  const compactionProgress = projection?.compactionProgress ?? null;
   const cumulativeUsage = useCumulativeUsage(
     messages,
     currentTurnUsage,
@@ -537,6 +546,7 @@ export function useChat(
     const unsubToolStart = window.orchid.chat.onToolCallStart?.((event: ChatToolCallStartEvent) => deliverEvent(normalize(event))) ?? (() => {});
     const unsubToolDelta = window.orchid.chat.onToolCallDelta?.((event: ChatToolCallDeltaEvent) => queueFrameEvent(normalize(event))) ?? (() => {});
     const unsubToolUpdate = window.orchid.chat.onToolCallUpdate?.((event: ChatToolCallUpdateEvent) => deliverEvent(normalize(event))) ?? (() => {});
+    const unsubCompactionProgress = window.orchid.chat.onCompactionProgress?.((event: CompactionProgressEvent) => deliverEvent(normalize(event))) ?? (() => {});
 
     return () => {
       cancelStreamFrame();
@@ -549,6 +559,7 @@ export function useChat(
       unsubToolStart();
       unsubToolDelta();
       unsubToolUpdate();
+      unsubCompactionProgress();
     };
   }, [
     cancelStreamFrame,
@@ -894,6 +905,7 @@ export function useChat(
     interruptState,
     interrupted,
     cwd,
+    compactionProgress,
     send,
     cancel,
     stop,

@@ -10,6 +10,7 @@
 import type { Session } from './session';
 import type { Chain } from './chain';
 import type { Message, Usage } from './message';
+import type { CompactionProgressEvent } from './compaction-progress';
 import type {
   CanonicalToolResult,
   TerminalToolResultStatus,
@@ -97,6 +98,8 @@ export type {
   UpdaterState,
   UpdateStatus,
 } from './ipc-boundary';
+
+export type { CompactionProgressEvent, CompactionProgressPhase } from './compaction-progress';
 
 // ── Chat API ─────────────────────────────────────────────────────────────────
 
@@ -1311,6 +1314,7 @@ export interface OrchidAPI {
     onToolCallStart: (callback: (event: ChatToolCallStartEvent) => void) => () => void;
     onToolCallDelta: (callback: (event: ChatToolCallDeltaEvent) => void) => () => void;
     onToolCallUpdate: (callback: (event: ChatToolCallUpdateEvent) => void) => () => void;
+    onCompactionProgress: (callback: (event: CompactionProgressEvent) => void) => () => void;
   };
 
   config: {
@@ -1568,6 +1572,7 @@ export const IPC_CHANNELS = {
   CHAT_TOOL_CALL_START: 'chat:tool_call_start',
   CHAT_TOOL_CALL_DELTA: 'chat:tool_call_delta',
   CHAT_TOOL_CALL_UPDATE: 'chat:tool_call_update',
+  CHAT_COMPACTION_PROGRESS: 'chat:compaction_progress',
 
   SUBAGENTS_SNAPSHOT: 'subagents:snapshot',
   SUBAGENTS_DETAIL: 'subagents:detail',
@@ -1843,6 +1848,7 @@ export const ALLOWED_EVENT_CHANNELS = [
   IPC_CHANNELS.CHAT_TOOL_CALL_START,
   IPC_CHANNELS.CHAT_TOOL_CALL_DELTA,
   IPC_CHANNELS.CHAT_TOOL_CALL_UPDATE,
+  IPC_CHANNELS.CHAT_COMPACTION_PROGRESS,
   IPC_CHANNELS.SUBAGENTS_EVENT,
   IPC_CHANNELS.SESSION_DELETED,
   IPC_CHANNELS.SESSION_RENAMED,

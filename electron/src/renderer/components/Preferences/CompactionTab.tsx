@@ -73,7 +73,28 @@ export function CompactionTab({ compaction, onChange }: CompactionTabProps) {
       if (field === 'hysteresis_delta') clamped = Math.min(clamped, 0.5);
       if (field === 'preserve_percent') clamped = Math.min(clamped, 0.9);
       if (field === 'min_compactable_tokens') clamped = Math.min(clamped, 1_000_000);
+      if (field === 'keep_last_user_messages') clamped = Math.min(clamped, 1000);
       updateField(scope, field, clamped as CompactionScopeConfig[typeof field]);
+    },
+    [updateField],
+  );
+
+  const handleNullableNumberChange = useCallback(
+    (
+      scope: Scope,
+      field: 'keep_last_user_messages',
+      value: string,
+      min: number,
+      opts?: { integer?: boolean; max?: number },
+    ) => {
+      const trimmed = value.trim();
+      if (trimmed === '') {
+        updateField(scope, field, null);
+        return;
+      }
+      const num = parseConfigNumber(trimmed, min, opts);
+      if (num === null) return;
+      updateField(scope, field, num);
     },
     [updateField],
   );
@@ -90,6 +111,13 @@ export function CompactionTab({ compaction, onChange }: CompactionTabProps) {
   const handleMechanicalReclaimChange = useCallback(
     (scope: Scope, value: string) => {
       updateField(scope, 'mechanical_reclaim', value === 'enabled');
+    },
+    [updateField],
+  );
+
+  const handlePinFirstUserMessageChange = useCallback(
+    (scope: Scope, value: string) => {
+      updateField(scope, 'pin_first_user_message', value === 'enabled');
     },
     [updateField],
   );
@@ -242,6 +270,44 @@ export function CompactionTab({ compaction, onChange }: CompactionTabProps) {
               max={0.5}
               step={0.05}
             />
+          </FormField>
+
+          <FormField
+            label="Keep Last User Messages"
+            htmlFor={`${prefix}-keep-last-user`}
+            hint="Number of most-recent user messages kept in the model view across compaction. Empty = all (subagent default). Main default 10."
+            className="config-field"
+          >
+            <TextInput
+              id={`${prefix}-keep-last-user`}
+              type="number"
+              value={cfg.keep_last_user_messages ?? ''}
+              onChange={(e) => handleNullableNumberChange(scope, 'keep_last_user_messages', e.target.value, 1, { integer: true, max: 1000 })}
+              bordered
+              className="w-full"
+              min={1}
+              max={1000}
+              step={1}
+              placeholder={scope === 'subagents' ? 'all' : ''}
+            />
+          </FormField>
+
+          <FormField
+            label="Pin First User Message"
+            htmlFor={`${prefix}-pin-first-user`}
+            hint="When enabled, the session's first user message always stays in the model view (never summarized away)."
+            className="config-field"
+          >
+            <Select
+              id={`${prefix}-pin-first-user`}
+              value={cfg.pin_first_user_message ? 'enabled' : 'disabled'}
+              onChange={(e) => handlePinFirstUserMessageChange(scope, e.target.value)}
+              bordered
+              className="w-full"
+            >
+              <option value="enabled">Enabled</option>
+              <option value="disabled">Disabled</option>
+            </Select>
           </FormField>
 
           <FormField

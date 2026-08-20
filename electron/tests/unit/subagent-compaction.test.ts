@@ -328,14 +328,17 @@ describe('SubagentManager mid-run compaction (U9): arm', () => {
     });
 
     // The compactor received the compactable range: a non-empty contiguous
-    // PREFIX of the live chain (the preserve window stays verbatim at the tail).
+    // run of the live chain starting right after the delegated task head —
+    // R31/R32 exempt user messages never enter the compactable range — while
+    // the preserve window stays verbatim at the tail.
     const slice = call['messages'] as Message[];
     const chainIds = (record.chain?.messages ?? []).map((m) => m.id);
     const sliceIds = slice.map((m) => m.id);
     expect(sliceIds.length).toBeGreaterThan(0);
     expect(sliceIds.length).toBeLessThan(chainIds.length);
-    expect(chainIds.slice(0, sliceIds.length)).toEqual(sliceIds);
+    expect(chainIds.slice(1, 1 + sliceIds.length)).toEqual(sliceIds);
     expect(sliceIds).not.toContain(chainIds.at(-1));
+    expect(sliceIds).not.toContain(chainIds[0]);
 
     // No boundary was crossed in this run: the pending prepare never applied.
     expect((record.chain?.messages ?? []).some((m) => m.compacted)).toBe(false);
@@ -386,9 +389,10 @@ describe('SubagentManager mid-run compaction (U9): apply at boundary', () => {
 
     // Compacted transcript shape: every original survives, exactly one summary
     // head is inserted at the cut, and the covered prefix leaves the model view.
-    // (Simple mode — the default — flags the whole compactable range including
-    // the seeding user turn; the R9 never-flag-user protection is the selective
-    // path's, see subagent-compaction-selective.test.ts.)
+    // R31/R32: the subagent's delegated task head (first user message) is NEVER
+    // flagged — it stays in the model view for the run's entire lifetime. The
+    // universal settle in buildCompactionApply un-flags user messages in any
+    // mode, so the task head survives verbatim alongside the summary head.
     const chain = record.chain?.messages ?? [];
     expect(chain.filter((m) => m.compacted)).toHaveLength(1);
     const summary = chain.find((m) => m.compacted)!;
@@ -399,7 +403,12 @@ describe('SubagentManager mid-run compaction (U9): apply at boundary', () => {
     // Originals preserved: chain length = originals + 1 summary head, no ids lost.
     const originalIds = new Set(chain.filter((m) => !m.compacted).map((m) => m.id));
     expect(chain).toHaveLength(originalIds.size + 1);
-    expect(chain.slice(0, cut).every((m) => m.excludeFromModel === true)).toBe(true);
+    // R31: user messages (the task head) are never excluded from the model view.
+    const userMessages = chain.filter((m) => m.role === 'user');
+    expect(userMessages.length).toBeGreaterThan(0);
+    expect(userMessages.every((m) => m.excludeFromModel !== true)).toBe(true);
+    // Non-user messages in the compacted prefix are flagged; the preserved tail
+    // after the summary head stays unflagged.
     expect(chain.slice(cut + 1).every((m) => m.excludeFromModel !== true)).toBe(true);
 
     // Persistence: compaction is a checkpointable mutation (crash resume, R22).
@@ -494,10 +503,15 @@ describe('SubagentManager mid-run compaction (U9): degrade to partial report', (
     expect(result).toContain('partial result returned as a normal tool result to the parent');
 
     // The compacted chain is still persisted underneath (flags + summary head).
+    // R31/R32: the task head (user message) is never flagged — it survives in
+    // the model view. Non-user messages in the prefix are flagged.
     const chain = record.chain?.messages ?? [];
     expect(chain.filter((m) => m.compacted)).toHaveLength(1);
     const cut = chain.findIndex((m) => m.compacted);
-    expect(chain.slice(0, cut).every((m) => m.excludeFromModel === true)).toBe(true);
+    const userMessages = chain.filter((m) => m.role === 'user');
+    expect(userMessages.length).toBeGreaterThan(0);
+    expect(userMessages.every((m) => m.excludeFromModel !== true)).toBe(true);
+    expect(chain.slice(cut + 1).every((m) => m.excludeFromModel !== true)).toBe(true);
     expect(record.chain?.status).toBe(ChainStatus.COMPLETED);
 
     // Parent-visible: the domain record (what wait_for_subagent surfaces)

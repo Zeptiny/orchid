@@ -9,6 +9,7 @@
 import { z } from 'zod';
 import type { Chain } from './chain';
 import type { Usage } from './message';
+import type { CompactionMode } from './message';
 import { sumMessageUsages } from '../usage';
 import type {
   CanonicalToolResult,
@@ -60,6 +61,7 @@ export interface SubagentLiveProjection {
   readonly usage: Usage | null;
   readonly result: string | null;
   readonly error: string | null;
+  readonly compactionProgress: SubagentCompactionProgressEvent | null;
 }
 
 // ── Live delta events ───────────────────────────────────────────────────────
@@ -79,6 +81,7 @@ export const SubagentDeltaEventType = {
   TOOL_RESULT: 'tool_result',
   USAGE: 'usage',
   TERMINAL: 'terminal',
+  COMPACTION_PROGRESS: 'compaction_progress',
 } as const;
 
 export type SubagentDeltaEventType = (typeof SubagentDeltaEventType)[keyof typeof SubagentDeltaEventType];
@@ -192,6 +195,20 @@ export interface SubagentTerminalEvent extends SubagentDeltaEventBase {
   readonly usage: Usage | null;
 }
 
+/**
+ * Compaction progress for a subagent run. Mirrors the main-scope
+ * `CompactionProgressEvent` but rides the subagent delta stream. On snapshot
+ * replay the widget is derived from the persisted `compacted` marker.
+ */
+export interface SubagentCompactionProgressEvent extends SubagentDeltaEventBase {
+  readonly type: typeof SubagentDeltaEventType.COMPACTION_PROGRESS;
+  readonly phase: 'preparing' | 'compacting' | 'complete' | 'failed';
+  readonly detail?: string;
+  readonly mode?: CompactionMode;
+  readonly streamText?: string | null;
+  readonly estimatedTokens?: number | null;
+}
+
 /** Typed incremental subagent live update; the unit of the live protocol. */
 export type SubagentDeltaEvent =
   | SubagentSpawnedEvent
@@ -202,7 +219,8 @@ export type SubagentDeltaEvent =
   | SubagentToolArgsDeltaEvent
   | SubagentToolResultEvent
   | SubagentUsageEvent
-  | SubagentTerminalEvent;
+  | SubagentTerminalEvent
+  | SubagentCompactionProgressEvent;
 
 // ── SubagentRecord ──────────────────────────────────────────────────────────
 
@@ -328,6 +346,11 @@ export function estimateDeltaBytes(event: SubagentDeltaEvent): number {
       bytes += event.status.length;
       break;
     case 'usage':
+      break;
+    case 'compaction_progress':
+      bytes += event.phase.length
+        + (event.detail?.length ?? 0)
+        + (event.streamText?.length ?? 0);
       break;
   }
   return bytes;

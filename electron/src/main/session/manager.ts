@@ -55,12 +55,15 @@ import {
   updateSessionFields as storageUpdateSessionFields,
   upsertSubagentRecords as storageUpsertSubagentRecords,
   applyCompactionPersistence as storageApplyCompactionPersistence,
+  applySubagentCompactionPersistence as storageApplySubagentCompactionPersistence,
   type SessionFieldsUpdate,
   type SessionHistoryPage,
   type StorageOptions,
   type SessionSummary,
   type CompactionPersistencePayload,
   type CompactionPersistenceResult,
+  type SubagentCompactionPayload,
+  type SubagentCompactionResult,
 } from './storage';
 
 // ---------------------------------------------------------------------------
@@ -215,6 +218,28 @@ export class SessionManager {
     payload: CompactionPersistencePayload,
   ): CompactionPersistenceResult {
     return storageApplyCompactionPersistence(sessionId, payload, this._storageOpts);
+  }
+
+  /**
+   * Targeted, single-transaction subagent-chain compaction write (R36).
+   *
+   * Mirrors `applyCompaction` over the `subagent_chains` table: flags and the
+   * summary head are applied directly against the durable `record_json` for the
+   * given subagent. Sibling subagent rows and every `chains` row are left
+   * exactly as they are. Throws loudly on integrity failures; callers must not
+   * fall back to a full save from a view when it fails.
+   */
+  applySubagentCompaction(
+    sessionId: string,
+    subagentId: string,
+    payload: SubagentCompactionPayload,
+  ): SubagentCompactionResult {
+    return storageApplySubagentCompactionPersistence(
+      sessionId,
+      subagentId,
+      payload,
+      this._storageOpts,
+    );
   }
 
   /**

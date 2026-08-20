@@ -11,18 +11,26 @@ import type { ToolBlock } from '../hooks/useChat';
 import { useSmartAutoScroll } from '../hooks/useSmartAutoScroll';
 import { foldActivityRuns, isActiveToolStatus, isGroupableTool } from '../utils/tool-grouping';
 import { MessageWidget } from './MessageWidget';
-import type { ActivityChild } from '../utils/stream-building';
+import type { ActivityChild, CompactionProgressWidgetItem } from '../utils/stream-building';
+import { compactionProgressToWidgetItem } from '../utils/stream-building';
 import { ToolActivityGroup } from './ToolActivityGroup';
 import { ToolCallBlock } from './ToolCallBlock';
+import { CompactionRunningWidget, CompactionWidget } from './ToolResults/CompactionWidget';
 import { Button } from './ui/Button';
 
 export type SubagentTranscriptItem =
   | { kind: 'message'; key: string; message: Message; isStreaming?: boolean }
   | { kind: 'tool'; key: string; block: ToolBlock }
-  | { kind: 'tool-group'; key: string; children: ActivityChild[] };
+  | { kind: 'tool-group'; key: string; children: ActivityChild[] }
+  | { kind: 'compaction-progress'; key: string; item: CompactionProgressWidgetItem }
+  | { kind: 'compaction-summary'; key: string; message: Message };
 
 export function isVisibleSubagentMessage(message: Message): boolean {
   return !message.hidden && message.role !== MessageRole.SYSTEM;
+}
+
+function hasCompactedMarker(message: Message): boolean {
+  return Boolean((message as unknown as { compacted?: unknown }).compacted);
 }
 
 function snapshotToToolBlock(snapshot: SubagentToolSnapshot): ToolBlock {
@@ -122,6 +130,10 @@ export function buildSubagentTranscriptItems(
         committedToolIds.add(toolId);
         items.push({ kind: 'tool', key: toolId, block: resultToToolBlock(message) });
       }
+    } else if (hasCompactedMarker(message)) {
+      // Replay (R27): the persisted compacted marker is the terminal compaction
+      // widget — no live events are needed after a snapshot reload.
+      items.push({ kind: 'compaction-summary', key: message.id, message });
     } else if (message.type === MessageType.TEXT || message.type === MessageType.THINKING) {
       pushMessage(message);
     }
@@ -147,7 +159,12 @@ export function buildSubagentTranscriptItems(
     }
   }
 
-  return foldTranscriptActivityGroups(items);
+  const folded = foldTranscriptActivityGroups(items);
+  const compactionItem = compactionProgressToWidgetItem(record.id, live?.compactionProgress ?? null);
+  if (compactionItem) {
+    folded.push({ kind: 'compaction-progress', key: compactionItem.key, item: compactionItem });
+  }
+  return folded;
 }
 
 function foldTranscriptActivityGroups(items: readonly SubagentTranscriptItem[]): SubagentTranscriptItem[] {
@@ -200,6 +217,19 @@ export function SubagentTranscript({ record, live = null, selectedId = null }: S
         {items.map((item) => {
           if (item.kind === 'tool') return <ToolCallBlock key={item.key} block={item.block} sessionId={sessionId} />;
           if (item.kind === 'tool-group') return <ToolActivityGroup key={item.key} items={item.children} sessionId={sessionId} />;
+          if (item.kind === 'compaction-progress') {
+            return (
+              <CompactionRunningWidget
+                key={item.key}
+                status={item.item.status}
+                phase={item.item.phase}
+                mode={item.item.mode}
+                streamText={item.item.streamText ?? null}
+                estimatedTokens={item.item.estimatedTokens ?? null}
+              />
+            );
+          }
+          if (item.kind === 'compaction-summary') return <CompactionWidget key={item.key} message={item.message} />;
           return <MessageWidget key={item.key} message={item.message} isStreaming={item.isStreaming} />;
         })}
         {record.error || record.status === 'interrupted' || record.status === 'failed' ? (

@@ -451,10 +451,19 @@ describe('applyCompactionPersistence (targeted durable write)', () => {
 // ===========================================================================
 
 describe('persistCompactionBetweenTurns (durable path over partial view)', () => {
+  /**
+   * R31: buildCompactionApply's universal settle never flags user messages,
+   * and this block verifies durable flagging of out-of-view pre-window
+   * history — so its seeds use non-user (assistant) messages.
+   */
+  function durableMessages(prefix: string, count: number, from = 0): Message[] {
+    return messages(prefix, count, from).map((message) => ({ ...message, role: MessageRole.ASSISTANT }));
+  }
+
   function seedOverBudgetSession(sessionId: string): void {
     saveSession(makeSession(sessionId, [
-      makeChain(sessionId, 'chain-a', messages('m', 200, 0)),
-      makeChain(sessionId, 'chain-b', messages('m', 100, 200)),
+      makeChain(sessionId, 'chain-a', durableMessages('m', 200, 0)),
+      makeChain(sessionId, 'chain-b', durableMessages('m', 100, 200)),
     ]), storageOpts);
     upsertSubagentRecords(
       sessionId,

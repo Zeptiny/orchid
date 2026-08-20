@@ -263,6 +263,16 @@ export const chatToolCallUpdateEventSchema = z.discriminatedUnion('status', [
   }
 });
 
+export const compactionProgressEventSchema = chatEventIdentitySchema.extend({
+  type: z.literal('compaction_progress'),
+  agentScopeId: z.string().nullable(),
+  phase: z.enum(['preparing', 'compacting', 'complete', 'failed']),
+  detail: z.string().optional(),
+  mode: z.enum(['simple', 'selective']).optional(),
+  streamText: z.string().nullable().optional(),
+  estimatedTokens: z.number().int().nonnegative().nullable().optional(),
+}).strict();
+
 // ── Session / workspace events ───────────────────────────────────────────────
 
 /** Session objects are large; validate identity fields only. */

@@ -3,6 +3,7 @@ import {
   CHAIN_COLLAPSE_THRESHOLD,
   buildHistoryStreamItems,
   buildLiveTailItems,
+  compactionProgressToWidgetItem,
   foldStreamActivityGroups,
   shouldRenderChainFooter,
   suppressLiveMessagesAlreadyInHistory,
@@ -1142,5 +1143,84 @@ describe('stream item React keys', () => {
     expect(expandedKeys[0]).toBe('c0-compaction-sum-1-0');
     expect(expandedKeys[2]).toBe('c0-user-u1-2');
     expect(expandedKeys).toHaveLength(3);
+  });
+});
+
+describe('compactionProgressToWidgetItem — live widget from the scoped event', () => {
+  it('builds the widget item for the main scope with a stable key', () => {
+    const item = compactionProgressToWidgetItem('main', {
+      phase: 'compacting',
+      mode: 'simple',
+      detail: 'Summarizing history',
+      streamText: 'SUMMARY partial',
+      estimatedTokens: 12,
+    });
+    expect(item).toEqual({
+      kind: 'compaction-progress',
+      key: 'compaction-main',
+      status: 'generating',
+      phase: 'compacting',
+      mode: 'simple',
+      detail: 'Summarizing history',
+      streamText: 'SUMMARY partial',
+      estimatedTokens: 12,
+    });
+  });
+
+  it('builds the widget item for a subagent scope keyed by the subagent id', () => {
+    const item = compactionProgressToWidgetItem('subagent-42', {
+      phase: 'preparing',
+      mode: 'selective',
+    });
+    expect(item).toEqual({
+      kind: 'compaction-progress',
+      key: 'compaction-subagent-42',
+      status: 'running',
+      phase: 'preparing',
+      mode: 'selective',
+    });
+  });
+
+  it('keeps the key stable across phases of one compaction', () => {
+    const preparing = compactionProgressToWidgetItem('main', { phase: 'preparing' });
+    const compacting = compactionProgressToWidgetItem('main', {
+      phase: 'compacting',
+      streamText: 'tail',
+    });
+    expect(preparing?.key).toBe('compaction-main');
+    expect(compacting?.key).toBe('compaction-main');
+    expect(preparing?.status).toBe('running');
+    expect(compacting?.status).toBe('generating');
+  });
+
+  it('produces no item for terminal phases or absent progress', () => {
+    expect(compactionProgressToWidgetItem('main', { phase: 'complete' })).toBeNull();
+    expect(compactionProgressToWidgetItem('main', { phase: 'failed' })).toBeNull();
+    expect(compactionProgressToWidgetItem('main', null)).toBeNull();
+    expect(compactionProgressToWidgetItem('main', undefined)).toBeNull();
+  });
+
+  it('replay derives widget completion from the persisted compacted marker, not live events', () => {
+    // A compacted-then-reloaded session renders the summary head from the
+    // marker with NO live progress input — the widget's terminal state
+    // survives a snapshot replay in both scopes.
+    const result = buildHistoryStreamItems({
+      messages: [],
+      toolBlocks: [],
+      status: 'idle',
+      liveUsage: null,
+      subagentUsage: EMPTY_SUBAGENT_USAGE_SUMMARY,
+      interrupted: false,
+      expandedChainIndexes: new Set<number>(),
+      sessionChains: [chain({
+        id: 'c1',
+        messages: [summaryHead('sum-1', 'Handoff summary.'), userMsg('u1', 'next')],
+      })],
+    });
+
+    const summary = bodyItems(result.items).find((it) => it.kind === 'compaction-summary');
+    if (summary?.kind !== 'compaction-summary') throw new Error('expected compaction-summary');
+    expect(summary.message.compacted).toBeDefined();
+    expect(compactionProgressToWidgetItem('main', null)).toBeNull();
   });
 });

@@ -35,6 +35,7 @@ const record = (messages: Message[]): SubagentRecord => ({
 const live = (segments: SubagentLiveProjection['segments']): SubagentLiveProjection => ({
   sessionId: 'session-1', subagentId: 'sub-1', runId: 'run-1', sequence: 3,
   state: 'running', segments, toolCalls: [], usage: null, result: null, error: null,
+  compactionProgress: null,
 });
 
 const transcriptSource = fs.readFileSync(
@@ -171,5 +172,78 @@ describe('SubagentTranscript pure rendering contract (U4)', () => {
     expect(button).toBeGreaterThan(scrollClose);
     expect(transcriptSource).toContain('Jump to latest');
     expect(transcriptSource).toContain('pointer-events-auto');
+  });
+
+  it('renders the live compaction widget from the subagent live projection (R27)', () => {
+    const projection = live([{ kind: 'text', id: 'live-1', content: 'working' }]);
+    projection.compactionProgress = {
+      type: 'compaction_progress',
+      sessionId: 'session-1',
+      subagentId: 'sub-1',
+      runId: 'run-1',
+      sequence: 4,
+      sessionRevision: 4,
+      phase: 'compacting',
+      mode: 'simple',
+      streamText: 'SUMMARY partial',
+      estimatedTokens: 12,
+    };
+
+    const items = buildSubagentTranscriptItems(
+      record([message({ id: 'a', content: 'before' })]),
+      projection,
+    );
+
+    const widget = items.find((item) => item.kind === 'compaction-progress');
+    if (widget?.kind !== 'compaction-progress') throw new Error('expected compaction-progress');
+    expect(widget.key).toBe('compaction-sub-1');
+    expect(widget.item).toMatchObject({
+      status: 'generating',
+      phase: 'compacting',
+      mode: 'simple',
+      streamText: 'SUMMARY partial',
+      estimatedTokens: 12,
+    });
+    // The live widget rides at the tail, after the durable and live content.
+    expect(items.at(-1)?.kind).toBe('compaction-progress');
+  });
+
+  it('drops the live compaction widget once the phase is terminal', () => {
+    const projection = live([]);
+    projection.compactionProgress = {
+      type: 'compaction_progress',
+      sessionId: 'session-1',
+      subagentId: 'sub-1',
+      runId: 'run-1',
+      sequence: 5,
+      sessionRevision: 5,
+      phase: 'complete',
+      detail: 'Context compacted — resuming',
+    };
+
+    const items = buildSubagentTranscriptItems(record([]), projection);
+    expect(items.some((item) => item.kind === 'compaction-progress')).toBe(false);
+  });
+
+  it('renders the compaction summary card from the persisted compacted marker on replay (R27)', () => {
+    const items = buildSubagentTranscriptItems(record([
+      message({ id: 'sum-1', content: 'Handoff summary.', compacted: {
+        mode: 'simple', rangeStart: 'm0', rangeEnd: 'm9', summarizedCount: 10,
+      } }),
+      message({ id: 'after', content: 'resumed work' }),
+    ]), null);
+
+    expect(items.map((item) => item.kind)).toEqual(['compaction-summary', 'message']);
+    const summary = items[0];
+    if (summary?.kind !== 'compaction-summary') throw new Error('expected compaction-summary');
+    expect(summary.key).toBe('sum-1');
+    expect(summary.message.compacted?.summarizedCount).toBe(10);
+  });
+
+  it('renders both compaction widgets through the shared CompactionWidget components', () => {
+    expect(transcriptSource).toContain('CompactionRunningWidget');
+    expect(transcriptSource).toContain('CompactionWidget');
+    expect(transcriptSource).toContain("item.kind === 'compaction-progress'");
+    expect(transcriptSource).toContain("item.kind === 'compaction-summary'");
   });
 });

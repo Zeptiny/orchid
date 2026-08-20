@@ -2641,10 +2641,11 @@ describe('chat compaction mid-turn pause', () => {
     expect(resumedMessages.filter((m) => m.role === MessageRole.USER)).toHaveLength(1);
     expect(resumedMessages.filter((m) => m.tool_call_id === 'tc-compact-1')).toHaveLength(2);
     expect(resumedMessages.filter((m) => m.tool_call_id === 'tc-compact-2')).toHaveLength(2);
-    const compactionUpdates = channelEvents(send, IPC_CHANNELS.CHAT_TOOL_CALL_UPDATE)
-      .map(([, payload]) => payload)
-      .filter((p) => (p as { toolName?: string }).toolName === 'compaction');
-    expect(compactionUpdates.length).toBeGreaterThanOrEqual(2);
+    const compactionEvents = channelEvents(send, IPC_CHANNELS.CHAT_COMPACTION_PROGRESS)
+      .map(([, payload]) => payload);
+    expect(compactionEvents.length).toBeGreaterThanOrEqual(2);
+    expect(compactionEvents[0]).toMatchObject({ phase: 'compacting', agentScopeId: 'main' });
+    expect(compactionEvents.at(-1)).toMatchObject({ phase: 'complete', agentScopeId: 'main' });
   });
 
   it('applies the pending summary mid-turn and replays the compacted history', async () => {
@@ -2723,14 +2724,15 @@ describe('chat compaction mid-turn pause', () => {
       expect.objectContaining({ type: MessageType.TOOL_CALL, tool_call_id: 'tc-compact-1' }),
       expect.objectContaining({ role: MessageRole.ASSISTANT, content: 'Resumed answer' }),
     ]));
-    // Simple-mode compaction legitimately flags range messages (replacement,
-    // never deletion) — including this turn's user message, which the summary
-    // head now stands in for on the model side. The durability guarantee under
-    // test is that it stays in the transcript, visible, not dropped.
+    // R31: simple-mode compaction never excludes user messages from the model
+    // replay (universal settle). The user message stays in the transcript,
+    // visible, and NOT flagged — the summary head stands in for the compacted
+    // non-user range, but the user intent survives verbatim.
     const persistedUser = persisted.messages.find(
       (m) => m.role === MessageRole.USER && m.content === 'Explore with tools',
     )!;
     expect(persistedUser.hidden).toBe(false);
+    expect(persistedUser.excludeFromModel).not.toBe(true);
     expect(persisted.messages.some((m) => m.compacted)).toBe(true);
     const done = doneEvents(send).at(-1)?.[1] as { messages: Array<Record<string, unknown>> };
     expect(done.messages).toEqual(persisted.messages);
@@ -2738,12 +2740,25 @@ describe('chat compaction mid-turn pause', () => {
 
   it('retries exactly once with compacted messages on a context-length error, then fails terminally (P1 #14)', async () => {
     const sessionId = 'e6e6e6e6-e6e6-4e6e-8e6e-e6e6e6e6e6e6';
+    // R31: a user message alone is never compactable (pinned) — the retry
+    // path needs compactable assistant history to summarize.
     mocks.sessionManager._setActive({
       ...makeSession(sessionId),
       model: selection.modelId,
       selection,
       modelLabel: selection.modelId,
+      chains: [
+        {
+          id: 'chain-old',
+          messages: [
+            { id: 'a-old', role: 'assistant', content: 'y'.repeat(4000), type: 'text' },
+          ],
+        } as never,
+      ] as never,
     });
+    mocks.sessionManager._setModelHistory([
+      { id: 'a-old', role: 'assistant', content: 'y'.repeat(4000), type: 'text' },
+    ]);
     mocks.summarizeCompactableRange.mockResolvedValueOnce({ text: 'SUMMARY: retry compaction' });
     // First attempt: provider reports a context-window overflow.
     mocks.streamChat.mockImplementationOnce(async function* () {
@@ -2774,23 +2789,26 @@ describe('chat compaction mid-turn pause', () => {
       compacted?: unknown;
       excludeFromModel?: boolean;
     }>;
-    // The retry request carries the compacted base: a summary head plus the
-    // flagged original (excluded from the model, never deleted).
+    // The retry request carries the compacted base: a summary head, the
+    // flagged assistant original (excluded from the model, never deleted), and
+    // the turn's user message — R31's universal settle keeps the user message
+    // in the model view, unflagged.
     const summary = retryMessages.find((m) => m.compacted);
     expect(summary?.content).toBe('SUMMARY: retry compaction');
-    expect(retryMessages.some((m) => m.content === 'x'.repeat(4000) && m.excludeFromModel)).toBe(true);
+    expect(retryMessages.some((m) => m.content === 'y'.repeat(4000) && m.excludeFromModel)).toBe(true);
+    expect(retryMessages.some((m) => m.content === 'x'.repeat(4000) && !m.excludeFromModel)).toBe(true);
 
     const failed = mocks.sessionManager.persistTurn.mock.calls.at(-1)?.[0] as {
       messages: Array<Record<string, unknown>>;
       status?: string;
     };
     expect(failed.status).toBe('failed');
-    // The failed turn keeps the full compacted turn (user message anchored at
-    // the retry base, not only the post-retry tail).
-    expect(failed.messages).toEqual(expect.arrayContaining([
-      expect.objectContaining({ role: MessageRole.USER, content: 'x'.repeat(4000) }),
-      expect.objectContaining({ content: 'SUMMARY: retry compaction' }),
-    ]));
+    // The failed turn anchors at the user message — R31 keeps it unflagged in
+    // the model view. The compacted base (flagged assistant original + summary
+    // head) lives in its own durable chains via the targeted applyCompaction
+    // write, never inside the turn slice.
+    expect(failed.messages.some((m) => m.role === MessageRole.USER && m.content === 'x'.repeat(4000) && !m.excludeFromModel)).toBe(true);
+    expect(failed.messages.some((m) => (m as { compacted?: unknown }).compacted)).toBe(false);
     const error = channelEvents(send, IPC_CHANNELS.CHAT_ERROR).at(-1)?.[1] as {
       kind?: string;
       messages: Array<Record<string, unknown>>;
@@ -3248,13 +3266,17 @@ describe('chat compaction send-time calibration', () => {
         {
           id: 'chain-old',
           messages: [
+            // R31: the pinned user message survives every compaction verbatim;
+            // the oversized assistant reply is the compactable range.
             { id: 'u-old', role: 'user', content: 'x'.repeat(4000), type: 'text', usage: { prompt_tokens: 1500 } },
+            { id: 'a-old', role: 'assistant', content: 'y'.repeat(4000), type: 'text' },
           ],
         },
       ] as never,
     });
     mocks.sessionManager._setModelHistory([
       { id: 'u-old', role: 'user', content: 'x'.repeat(4000), type: 'text' },
+      { id: 'a-old', role: 'assistant', content: 'y'.repeat(4000), type: 'text' },
     ]);
     mocks.summarizeCompactableRange.mockResolvedValueOnce({ text: 'SUMMARY: prior turn' });
     mocks.streamChat.mockImplementationOnce(textOnlyStream());
@@ -3275,14 +3297,20 @@ describe('chat compaction send-time calibration', () => {
     }>;
     const summary = sentMessages.find((m) => m.compacted);
     expect(summary?.content).toBe('SUMMARY: prior turn');
-    // The oversized prior message is excluded from replay but never deleted.
+    // R31: the oversized prior message is a user message, so it stays in the
+    // model view verbatim — never flagged, never deleted. The summary head
+    // stands in for the compacted range, not for the user's intent.
     const oldMessage = sentMessages.find((m) => m.content === 'x'.repeat(4000));
-    expect(oldMessage?.excludeFromModel).toBe(true);
-    // The durable targeted path is taken (never saveSession-from-view).
+    expect(oldMessage).toBeDefined();
+    expect(oldMessage?.excludeFromModel).not.toBe(true);
+    // The summarized assistant original is excluded from replay, never deleted.
+    expect(sentMessages.some((m) => m.content === 'y'.repeat(4000) && m.excludeFromModel)).toBe(true);
+    // The durable targeted path is taken (never saveSession-from-view). R31's
+    // universal settle filters user ids from the flagged set.
     expect(mocks.sessionManager.applyCompaction).toHaveBeenCalledWith(
       sessionId,
       expect.objectContaining({
-        flaggedMessageIds: expect.arrayContaining(['u-old']),
+        flaggedMessageIds: ['a-old'],
         summaryChain: expect.objectContaining({ id: expect.any(String) }),
       }),
     );

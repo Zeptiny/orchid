@@ -5,8 +5,9 @@ import {
   isTerminalChainStatus,
   sumChainUsage,
 } from '../../shared/types/chain';
-import type { Message, Usage } from '../../shared/types/message';
+import type { CompactionMode, Message, Usage } from '../../shared/types/message';
 import { MessageRole, MessageType } from '../../shared/types/message';
+import type { CompactionProgressPhase } from '../../shared/types/compaction-progress';
 import type { SubagentUsageSummary } from '../../shared/usage';
 import {
   type ChatStatus,
@@ -25,6 +26,65 @@ export type ActivityChild =
 
 /** Maximum fully-mounted chains; older ones collapse to stubs. */
 export const CHAIN_COLLAPSE_THRESHOLD = 20;
+
+/** React key prefix for live compaction widgets, shared by both scopes. */
+export const COMPACTION_WIDGET_KEY_PREFIX = 'compaction-';
+
+/**
+ * Structural input shared by both compaction-progress sources: the main
+ * scope's turn-projection state and the subagent live-projection event.
+ */
+export interface CompactionProgressInput {
+  readonly phase: CompactionProgressPhase;
+  readonly mode?: CompactionMode;
+  readonly detail?: string;
+  readonly streamText?: string | null;
+  readonly estimatedTokens?: number | null;
+}
+
+/**
+ * Live compaction widget item derived from a compaction-progress event.
+ * Terminal phases (`complete`/`failed`) produce no item — the widget's final
+ * state is carried by the persisted `compacted` marker on replay, rendered as
+ * a `compaction-summary` item instead.
+ */
+export interface CompactionProgressWidgetItem {
+  readonly kind: 'compaction-progress';
+  readonly key: string;
+  readonly status: 'running' | 'generating';
+  readonly phase: CompactionProgressPhase;
+  readonly mode?: CompactionMode;
+  readonly detail?: string;
+  readonly streamText?: string | null;
+  readonly estimatedTokens?: number | null;
+}
+
+/**
+ * Build the live compaction widget item for one agent scope. `scopeId` is the
+ * `agentScopeId` the event carried (`'main'` or a subagent id); the React key
+ * is `compaction-${scopeId}` — one live widget per scope at a time, so a
+ * second compaction in the same view replaces the node instead of stacking.
+ * Returns null for terminal phases and absent progress.
+ */
+export function compactionProgressToWidgetItem(
+  scopeId: string,
+  progress: CompactionProgressInput | null | undefined,
+): CompactionProgressWidgetItem | null {
+  if (!progress) return null;
+  if (progress.phase === 'complete' || progress.phase === 'failed') return null;
+  return {
+    kind: 'compaction-progress',
+    key: `${COMPACTION_WIDGET_KEY_PREFIX}${scopeId}`,
+    status: progress.phase === 'preparing' ? 'running' : 'generating',
+    phase: progress.phase,
+    ...(progress.mode !== undefined ? { mode: progress.mode } : {}),
+    ...(progress.detail !== undefined ? { detail: progress.detail } : {}),
+    ...(progress.streamText !== undefined ? { streamText: progress.streamText } : {}),
+    ...(progress.estimatedTokens !== undefined
+      ? { estimatedTokens: progress.estimatedTokens }
+      : {}),
+  };
+}
 
 export type StreamItem =
   | { kind: 'message'; key: string; message: Message; isStreaming?: boolean }

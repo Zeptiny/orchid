@@ -188,6 +188,8 @@ const TAB_SECTIONS: Partial<Record<ProjectTab, ProjectConfigSection[]>> = {
         { key: 'compaction.main.min_compactable_tokens', label: 'Min Compactable Tokens (main)', kind: 'integer', min: 0, max: 1_000_000 },
         { key: 'compaction.main.mechanical_reclaim', label: 'Mechanical Reclaim (main)', kind: 'boolean' },
         { key: 'compaction.main.hysteresis_delta', label: 'Hysteresis Delta (main)', kind: 'number', min: 0, max: 0.5, step: 0.05, hint: COMPACTION_HYSTERESIS_HINT },
+        { key: 'compaction.main.keep_last_user_messages', label: 'Keep Last User Messages (main)', kind: 'integer', min: 1, max: 1000, hint: 'Empty = all user messages pinned.' },
+        { key: 'compaction.main.pin_first_user_message', label: 'Pin First User Message (main)', kind: 'boolean' },
       ],
     },
     {
@@ -199,6 +201,8 @@ const TAB_SECTIONS: Partial<Record<ProjectTab, ProjectConfigSection[]>> = {
         { key: 'compaction.subagents.min_compactable_tokens', label: 'Min Compactable Tokens (subagents)', kind: 'integer', min: 0, max: 1_000_000 },
         { key: 'compaction.subagents.mechanical_reclaim', label: 'Mechanical Reclaim (subagents)', kind: 'boolean' },
         { key: 'compaction.subagents.hysteresis_delta', label: 'Hysteresis Delta (subagents)', kind: 'number', min: 0, max: 0.5, step: 0.05, hint: COMPACTION_HYSTERESIS_HINT },
+        { key: 'compaction.subagents.keep_last_user_messages', label: 'Keep Last User Messages (subagents)', kind: 'integer', min: 1, max: 1000, hint: 'Empty = all user messages pinned (R32).' },
+        { key: 'compaction.subagents.pin_first_user_message', label: 'Pin First User Message (subagents)', kind: 'boolean' },
       ],
     },
   ],

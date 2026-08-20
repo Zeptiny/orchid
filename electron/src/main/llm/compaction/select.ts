@@ -23,6 +23,9 @@ import type { Message } from '../../../shared/types/message';
 import { compactedMarkerFromUnknown, MessageType, MessageRole } from '../../../shared/types/message';
 import { estimateMessageChars } from './message-chars';
 
+/** Shared empty set sentinel so `exemptIds` omission allocates nothing. */
+const emptySet: Set<string> = new Set();
+
 // ── Public types ────────────────────────────────────────────────────────────
 
 export interface CompactableRange {
@@ -69,6 +72,16 @@ export interface SelectCutOptions {
   /** Direct chars estimator override (rare). */
   readonly contextTokens?: number;
   readonly threshold?: number;
+  /**
+   * R31: message ids exempt from compaction removal. Exempt ids do NOT count
+   * against the preserve budget (the walk's estimate filters them out), the
+   * compactable range's leading edge skips them, and they may sit anywhere in
+   * the preserved window tail. Mid-range exempt ids can still fall inside the
+   * compactable range positionally — the apply-side universal settle
+   * guarantees they are never flagged. Typically the pinned user-message set
+   * from `resolveUserExemptIds`.
+   */
+  readonly exemptIds?: ReadonlySet<string> | readonly string[];
 }
 
 // ── Helpers: history-like predicates ───────────────────────────────────────
@@ -362,6 +375,49 @@ export function resolvePreservePercent(scope: {
   return Math.max(0.05, Math.min(scope.preserve_percent, cap));
 }
 
+/**
+ * R31/R32/R33: compute the set of user-message ids that compaction must keep
+ * in the model view. The result threads through `selectCut` as `exemptIds`
+ * (selection-side: the compactable range's leading edge skips them and they
+ * never consume the preserve budget) and through `buildCompactionApply`
+ * (apply-side: universal un-flag settle, which also covers mid-range ids).
+ *
+ * Rules:
+ * - `keepLast === null` → ALL user messages are exempt (subagent hard
+ *   guarantee, R32).
+ * - `keepLast` (number) → the last K user messages are exempt (main scope,
+ *   R33).
+ * - `pinFirst` → the FIRST user message in history is always exempt
+ *   regardless of `keepLast` (R33).
+ *
+ * Hidden/excluded user messages are still counted for positional resolution
+ * (a hidden user message occupies a slot in the "last K") but their ids are
+ * included — the caller decides via `exemptIds` which is the authoritative
+ * set; exempted-but-hidden messages are a no-op downstream.
+ */
+export function resolveUserExemptIds(
+  messages: readonly Message[],
+  opts: { keepLast: number | null; pinFirst: boolean },
+): Set<string> {
+  const exempt = new Set<string>();
+  const userIds: string[] = [];
+  for (const m of messages) {
+    if (m.role === MessageRole.USER) userIds.push(m.id);
+  }
+  if (opts.pinFirst && userIds.length > 0) {
+    exempt.add(userIds[0]!);
+  }
+  if (opts.keepLast === null) {
+    for (const id of userIds) exempt.add(id);
+  } else if (opts.keepLast > 0) {
+    const start = Math.max(0, userIds.length - opts.keepLast);
+    for (let i = start; i < userIds.length; i += 1) {
+      exempt.add(userIds[i]!);
+    }
+  }
+  return exempt;
+}
+
 /** Start index of the trailing tool group (open if present, else last completed group ending at n-1). */
 function trailingGroupFloor(
   completedIntervals: ReadonlyArray<readonly [number, number]>,
@@ -430,6 +486,12 @@ export function selectCut(
   const preserveBudget = resolvePreserveTokens(opts);
   const estimator = opts.tokenEstimator ?? defaultEstimateTokens;
 
+  // R31: exempt ids (pinned user messages) never enter the compactable range
+  // and never count against the preserve budget. Normalized to a Set once.
+  const exemptSet: Set<string> = opts.exemptIds
+    ? (opts.exemptIds instanceof Set ? opts.exemptIds : new Set(opts.exemptIds))
+    : emptySet;
+
   // No preserve budget → nothing is compactable (preserve everything).
   if (preserveBudget === null) {
     return {
@@ -449,6 +511,17 @@ export function selectCut(
   // estimator invocations even for estimators with per-call overhead. The cut
   // lands at the largest suffix that fits, regardless of chain boundaries — a
   // single oversized turn no longer forces an empty preserved window.
+  //
+  // R31: exempt ids do not consume the preserve budget — the estimator
+  // receives the slice with exempt ids filtered out, so the walk budgets only
+  // the non-exempt (compactable-eligible) content. The cut index still refers
+  // to the original array. An exempt id the walk lands ON is already the first
+  // preserved message — the cut stays put (never snapped forward past it).
+  const sliceForEstimate = (start: number): Message[] => {
+    const slice = messages.slice(start);
+    if (exemptSet.size === 0) return slice;
+    return slice.filter((m) => !exemptSet.has(m.id));
+  };
   const floorCut = trailingGroupFloor(completedIntervals, openGroupStart, n);
   let tokenCut: number;
   {
@@ -456,7 +529,7 @@ export function selectCut(
     let hi = n; // the empty suffix always fits
     while (lo < hi) {
       const mid = Math.floor((lo + hi) / 2);
-      if (estimator(messages.slice(mid)) > preserveBudget) {
+      if (estimator(sliceForEstimate(mid)) > preserveBudget) {
         lo = mid + 1;
       } else {
         hi = mid;
@@ -482,12 +555,16 @@ export function selectCut(
     preservedCount = realChains.filter((c) => c.end > cutCandidate).length;
   }
 
-  // compactableRange is [0, cutCandidate) after skipping the already-excluded prefix;
-  // the summary head stays in the range so it can be re-summarized with new chains.
+  // compactableRange is [0, cutCandidate) after skipping the leading messages
+  // that can never be compacted away — already-excluded/hidden ones and R31
+  // exempt ids (the pinned task head / first user message). The summary head
+  // stays in the range so it can be re-summarized with new chains.
   let compactableStart = 0;
   while (
     compactableStart < cutCandidate &&
-    (messages[compactableStart]?.excludeFromModel || messages[compactableStart]?.hidden)
+    (messages[compactableStart]?.excludeFromModel ||
+      messages[compactableStart]?.hidden ||
+      exemptSet.has(messages[compactableStart]!.id))
   ) {
     compactableStart++;
   }
