@@ -59,6 +59,7 @@ import {
   canEmitStreamEvents,
   isCurrentAgent,
   nextAgentGeneration,
+  sessionOperationGateTail,
   sessionsStarting,
   type ActiveAgent,
 } from './state';
@@ -111,6 +112,18 @@ export async function startChatTurn(
   clearCompactionPause(sessionId, MAIN_AGENT_SCOPE_ID);
   if (sessionsStarting.has(sessionId)) {
     return { status: 'error', error: 'A turn is already starting for this session.', kind: 'session_busy' };
+  }
+  // A manual compaction (/compact) may still be persisting on this idle
+  // session — its entry busy check ran before this send claimed the
+  // turn-start slot. Wait the operation gate out (no yield when nothing is
+  // gated), then re-check: another send may have claimed the slot while we
+  // waited.
+  const operationGate = sessionOperationGateTail(sessionId);
+  if (operationGate) {
+    await operationGate;
+    if (sessionsStarting.has(sessionId)) {
+      return { status: 'error', error: 'A turn is already starting for this session.', kind: 'session_busy' };
+    }
   }
   sessionsStarting.add(sessionId);
   const existing = activeAgents.get(sessionId);

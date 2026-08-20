@@ -71,7 +71,7 @@ import {
   runCompactionAttempt,
   type CompactionAttemptOutcome,
 } from '../../llm/compaction/run-attempt';
-import { activeAgents, sessionsStarting } from './state';
+import { activeAgents, runWithSessionOperationGate, sessionsStarting } from './state';
 import { sendSessionEvent, sendTurnEvent, webContentsForWindowId } from './events';
 import {
   historyFromSession,
@@ -1240,7 +1240,19 @@ export function handleUsageCompaction(
  * ride the existing SESSION_COMPACTION / SESSION_UPDATED events the durable
  * persist path emits, so an idle renderer reloads without extra plumbing.
  */
-export async function compactSessionNow(
+export function compactSessionNow(
+  sessionId: string,
+  runtime: ProjectRuntime,
+  selection: ModelSelection,
+): Promise<ChatCompactResult> {
+  // Hold the per-session operation gate across the whole compaction — busy
+  // check through compaction persistence and the terminal widget event — so a
+  // chat turn cannot start on a half-compacted history: startChatTurn waits
+  // the gate out before claiming its turn-start slot.
+  return runWithSessionOperationGate(sessionId, () => compactIdleSession(sessionId, runtime, selection));
+}
+
+async function compactIdleSession(
   sessionId: string,
   runtime: ProjectRuntime,
   selection: ModelSelection,
@@ -1297,9 +1309,10 @@ export async function compactSessionNow(
     // attribution is best-effort
   }
   // Widget feedback on the idle session: preparing opens the compaction
-  // widget; every non-applying exit below emits the terminal phase so the
-  // widget can never stay stuck on 'preparing' (tryCompact's success
-  // branches emit 'complete' themselves via completeCompactionWidget).
+  // widget; the pending-consumption apply and the success path below emit the
+  // terminal 'complete' phase themselves (completeCompactionWidget), and every
+  // other exit emits 'failed' so the widget can never stay stuck on
+  // 'preparing'/'compacting' and the idle event identity is cleared.
   emitCompactionProgress(sessionId, 'preparing', 'Compacting context', {
     mode: runtime.config.compaction.main.mode,
   });
@@ -1307,7 +1320,10 @@ export async function compactSessionNow(
     sessionId, messages, runtime, selection, contextTokens, accountingStore, chainId, randomUUID(),
     { manual: true },
   );
-  if (result.didApply) return { status: 'compacted', sessionId };
+  if (result.didApply) {
+    completeCompactionWidget(sessionId);
+    return { status: 'compacted', sessionId };
+  }
   emitCompactionProgress(
     sessionId,
     'failed',

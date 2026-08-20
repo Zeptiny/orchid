@@ -129,6 +129,40 @@ export function nextAgentGeneration(sessionId: string): number {
   return gen;
 }
 
+/**
+ * Per-session operation gate serializing manual compaction (`/compact`)
+ * against turn starts. A manual compaction runs its whole body — busy check
+ * through compaction persistence and the terminal widget event — under the
+ * gate; `startChatTurn` waits out an in-flight gate before claiming the
+ * turn-start slot. The opposite direction is covered by the compaction entry
+ * busy check (activeAgents/sessionsStarting). Entries self-clean: the map
+ * holds only the unsettled tail of the per-session chain.
+ */
+const sessionOperationGates = new Map<string, Promise<void>>();
+
+/** Run `operation` after any in-flight gated operation for this session. */
+export function runWithSessionOperationGate<T>(
+  sessionId: string,
+  operation: () => Promise<T>,
+): Promise<T> {
+  const previous = sessionOperationGates.get(sessionId) ?? Promise.resolve();
+  const run = previous.then(operation, operation);
+  const tail = run.then(
+    () => {},
+    () => {},
+  );
+  sessionOperationGates.set(sessionId, tail);
+  void tail.then(() => {
+    if (sessionOperationGates.get(sessionId) === tail) sessionOperationGates.delete(sessionId);
+  });
+  return run;
+}
+
+/** The unsettled gated operation for this session, if any (never rejects). */
+export function sessionOperationGateTail(sessionId: string): Promise<void> | null {
+  return sessionOperationGates.get(sessionId) ?? null;
+}
+
 /** Whether a session still has a cancellable main-agent turn. */
 export function hasLiveMainTurn(sessionId: string): boolean {
   const active = activeAgents.get(sessionId);

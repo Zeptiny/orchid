@@ -408,6 +408,7 @@ export function unregisterChatIPC(): void {
   ipcMain.removeHandler(IPC_CHANNELS.CHAT_QUEUE_NEXT);
   ipcMain.removeHandler(IPC_CHANNELS.CHAT_STOP);
   ipcMain.removeHandler(IPC_CHANNELS.CHAT_SNAPSHOT);
+  ipcMain.removeHandler(IPC_CHANNELS.CHAT_COMPACT);
   ipcMain.removeHandler(IPC_CHANNELS.BG_CMD_SNAPSHOT);
   ipcMain.removeHandler(IPC_CHANNELS.BG_CMD_LIST);
   ipcMain.removeHandler(IPC_CHANNELS.BG_CMD_SEND_INPUT);
