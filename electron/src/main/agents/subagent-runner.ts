@@ -3,9 +3,17 @@
  *
  * Used by SubagentManager when a runner is configured (production).
  * Tests leave the runner unset so spawn/markCompleted stay manual.
+ *
+ * Mid-run compaction (U5): the run's history is a mutable box shared with the
+ * manager's compaction controller. The orchestrator's early-stop predicate is
+ * wired to the scoped pause registry; when the stream stops at a step boundary
+ * with the pause armed, the runner awaits the pause controller's apply
+ * (re-validate against live history, apply, swap the box) and RESTARTS the
+ * stream with the box's (possibly compacted) history — the generator host of
+ * main's idle-intercept resume. An abort or interrupt at any point breaks out
+ * of the restart loop cleanly with no further events.
  */
 import type { Agent } from '../../shared/types/agent';
-import type { Message } from '../../shared/types/message';
 import type { ReasoningProviderOptions } from '../providers/drivers/types';
 import {
   DEFAULT_THINKING_POLICY,
@@ -24,7 +32,12 @@ import {
   type ProjectRuntime,
 } from '../project/runtime';
 import { appendRootAgentsMd, seedSubagentRootAgentsMd } from '../project/agents-md';
-import type { SubagentStreamRunner } from './manager';
+import type {
+  SubagentCompactionPauseController,
+  SubagentHistoryBox,
+  SubagentPauseApplyOutcome,
+  SubagentStreamRunner,
+} from './manager';
 import { makeUserMessage } from '../llm/message-factories';
 import { buildSystemPromptContext } from '../llm/build-prompt-context';
 import {
@@ -78,8 +91,8 @@ function resolveParentSessionCwdFallback(sessionId?: string): string | null {
 export function createSubagentStreamRunner(): SubagentStreamRunner {
   return async function* subagentStream(params: {
     task: string;
-    /** Full chain to replay for a resumed run; absent = spawn path. */
-    history?: Message[];
+    /** Mutable history handoff for the run; absent = spawn path (task only). */
+    historyBox?: SubagentHistoryBox;
     agent: Agent;
     selection: ModelSelection | null;
     abortSignal: AbortSignal;
@@ -97,6 +110,8 @@ export function createSubagentStreamRunner(): SubagentStreamRunner {
     projectRuntime?: ProjectRuntime;
     /** Reports the resolved reasoning effort once the provider execution is known. */
     onReasoningEffort?: (effort: string | number | undefined) => void;
+    /** Compaction pause gate for this run's scope (U5); absent = never pauses. */
+    compaction?: SubagentCompactionPauseController;
   }): AsyncGenerator<StreamEvent> {
     const sessionId = params.sessionId;
     if (!sessionId) {
@@ -261,32 +276,71 @@ export function createSubagentStreamRunner(): SubagentStreamRunner {
       } catch (err) {
         console.debug('root AGENTS.md injection failed (non-fatal):', err);
       }
-      yield* streamChat({
-        // A resumed run replays its full chain; a spawn sends just the task.
-        messages: params.history ?? [makeUserMessage(params.task)],
-        agent: agentForRun,
-        systemPrompt: fullPrompt,
-        context,
-        config,
-        registry,
-        mcpManager,
-        sessionId,
-        windowId: params.windowId,
-        projectRuntime: runtime,
-        agentScopeId: params.agentScopeId,
-        abortSignal: params.abortSignal,
-        modelInstance,
-        accounting,
-        providerOptions,
-        thinkingReplay: {
-          policy: thinkingPolicy ?? DEFAULT_THINKING_POLICY,
-          selection: { providerId: providerSnapshot.providerId, modelId: selection.modelId },
-          protocol: providerSnapshot.protocol as ProviderProtocol,
-        } satisfies ThinkingReplayContext,
-        cachePlacement: cacheFacet
-          ? { facet: cacheFacet, ttl: cacheTtl, sessionKey: cacheSessionKey }
-          : undefined,
-      });
+      // U5: the run's history is a mutable handoff. Every stream segment reads
+      // the box's CURRENT contents, so a compaction apply that swaps it between
+      // segments makes the next provider call replay the compacted history.
+      // Without a box (spawn without one) the run replays just the task.
+      const historyBox: SubagentHistoryBox =
+        params.historyBox ?? { messages: [makeUserMessage(params.task)] };
+      const pause = params.compaction;
+      while (!params.abortSignal.aborted) {
+        yield* streamChat({
+          messages: [...historyBox.messages],
+          agent: agentForRun,
+          systemPrompt: fullPrompt,
+          context,
+          config,
+          registry,
+          mcpManager,
+          sessionId,
+          windowId: params.windowId,
+          projectRuntime: runtime,
+          agentScopeId: params.agentScopeId,
+          abortSignal: params.abortSignal,
+          // Scoped compaction pause (R28): the multi-step loop stops cleanly
+          // at the next step boundary while the pause is armed.
+          ...(pause ? { shouldStopEarly: () => pause.shouldPause() } : {}),
+          modelInstance,
+          accounting,
+          providerOptions,
+          thinkingReplay: {
+            policy: thinkingPolicy ?? DEFAULT_THINKING_POLICY,
+            selection: { providerId: providerSnapshot.providerId, modelId: selection.modelId },
+            protocol: providerSnapshot.protocol as ProviderProtocol,
+          } satisfies ThinkingReplayContext,
+          cachePlacement: cacheFacet
+            ? { facet: cacheFacet, ttl: cacheTtl, sessionKey: cacheSessionKey }
+            : undefined,
+        });
+        if (!pause || params.abortSignal.aborted || !pause.shouldPause()) break;
+        // The stream stopped at a step boundary with the pause armed — consume
+        // it (re-validate + apply + swap the box) and restart with whatever
+        // history the controller left in the box. 'applied' and 'skipped' both
+        // resume the loop (main's semantics: resume with the accumulated
+        // history when the summary cannot be applied); 'degraded' (partial
+        // report set) and 'aborted' end the run without another segment.
+        // The await races the abort signal so an interrupt during the pause
+        // (or a summarizer wait) breaks out of the restart loop cleanly.
+        const outcome = await new Promise<SubagentPauseApplyOutcome | null>((resolve) => {
+          if (params.abortSignal.aborted) {
+            resolve(null);
+            return;
+          }
+          let settled = false;
+          const settle = (value: SubagentPauseApplyOutcome | null): void => {
+            if (settled) return;
+            settled = true;
+            params.abortSignal.removeEventListener('abort', onAbort);
+            resolve(value);
+          };
+          const onAbort = (): void => settle(null);
+          params.abortSignal.addEventListener('abort', onAbort, { once: true });
+          pause.applyAtPause().then(settle, () => settle(null));
+        });
+        if (params.abortSignal.aborted || outcome == null || outcome === 'aborted' || outcome === 'degraded') {
+          return;
+        }
+      }
     } finally {
       releaseProjectMCPManager(runtime);
     }

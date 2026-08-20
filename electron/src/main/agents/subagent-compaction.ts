@@ -1,11 +1,20 @@
 /**
- * Subagent mid-run compaction (U9) — helpers shared by SubagentManager's run
+ * Subagent mid-run compaction (U9/U5) — helpers shared by SubagentManager's run
  * loop and the stream runner.
  *
  * These live in a dedicated module (not subagent-runner.ts) so the manager can
  * import them statically without forming a runtime dependency cycle:
  * manager -> subagent-runner -> tools/index -> manager. Nothing here may
  * import from ../tools or ./manager at runtime.
+ *
+ * The compaction choreography mirrors the main scope's split (R28/R37):
+ * `prepareSubagentCompaction` runs the shared gate pipeline and starts the
+ * compactor (summarizer or selective run) at prepare time, registering a
+ * scoped pending entry; `applySubagentPendingCompaction` consumes that entry
+ * at the pause boundary against the LIVE chain history — re-validated by the
+ * shared `isPendingCutStillValid` — so messages appended between prepare and
+ * apply are preserved by construction (the apply is built over apply-time
+ * history, never a prepare-time snapshot).
  */
 import type { CompactionMode, Message } from '../../shared/types/message';
 import type { ModelSelection } from '../../shared/types/provider';
@@ -13,7 +22,7 @@ import type { Config } from '../config/schema';
 import type { Chain } from '../../shared/types/chain';
 import { buildCompactionApply, type ApplyResult } from '../llm/compaction/apply';
 import type { TriggerState } from '../llm/compaction/trigger';
-import type { CompactionAttemptOutcome } from '../llm/compaction/run-attempt';
+import type { CompactionPendingEntry } from '../llm/compaction/pending-store';
 import {
   acquireCompactionSlot,
   runCompactionGate,
@@ -186,15 +195,16 @@ export interface SubagentCompactionProgress {
 }
 
 /**
- * Shared subagent compaction attempt — uses the same trigger engine as U6 but
- * with the subagents scope config (R16). The caller supplies the current chain
- * history, latest provider-reported inputTokens, and resolved contextTokens.
+ * Prepare a subagent compaction (R29 fire point 2): run the shared gate
+ * pipeline and start the compactor, WITHOUT applying anything. Returns a
+ * pending entry the caller registers in the scoped pending store; the cut,
+ * flagged ids, and expected ids are captured at prepare time so the apply at
+ * the pause boundary can re-validate them against the live history (R37).
  *
- * Returns a compaction ApplyResult when the trigger fired and the summary was
- * built, or null for no-op (below threshold / floor / hysteresis, or summarizer
- * unavailable). Reclaim-only (no summary head) is returned as an ApplyResult
- * with flaggedIds and no summaryMessage, which the caller persists via the
- * subagent checkpoint path.
+ * Reclaim-only decisions return an entry with no compactor promise — the
+ * flags are built at apply time over the live history. Returns null when the
+ * gate decides no-op (below threshold / floor / hysteresis, uncalibrated, or
+ * nothing left to compact).
  *
  * Accounting inside the summarizer already carries subagent scope (R18) when
  * called with scope='subagents' + subagentId — see summarize.ts.
@@ -204,9 +214,8 @@ export interface SubagentCompactionProgress {
  * the caller can surface a streaming tail. Both are optional display hooks —
  * compaction proceeds identically without them.
  */
-export async function tryCompactSubagentHistory(params: {
+export async function prepareSubagentCompaction(params: {
   readonly messages: readonly Message[];
-  readonly chains: readonly Chain[];
   readonly selection: ModelSelection | null;
   readonly config: Config;
   readonly sessionId: string;
@@ -218,8 +227,8 @@ export async function tryCompactSubagentHistory(params: {
   readonly triggerState?: TriggerState;
   readonly onProgress?: (progress: SubagentCompactionProgress) => void;
   readonly onTextDelta?: (accumulatedText: string) => void;
-}): Promise<ApplyResult | null> {
-  const { messages, chains, selection, config, sessionId, subagentId, chainId, turnId, inputTokens, contextTokens } = params;
+}): Promise<CompactionPendingEntry | null> {
+  const { messages, selection, config, sessionId, subagentId, chainId, turnId, inputTokens, contextTokens } = params;
   const subagentsScope = config.compaction?.subagents;
   if (!subagentsScope) return null;
   if (!Number.isFinite(contextTokens) || contextTokens <= 0) return null;
@@ -251,23 +260,22 @@ export async function tryCompactSubagentHistory(params: {
   const cut: CutResult = gate.cut;
   const flaggedIds: string[] = gate.flaggedIds;
   const compactableRange = cut.compactableRange;
+  const expectedIds = (messages as Message[])
+    .slice(compactableRange.start, compactableRange.end)
+    .map((m) => m.id);
 
-  // Reclaim-only short-circuit: build apply without summarizer
+  // Reclaim-only short-circuit: no compactor call; flags are built at apply
+  // time over the live history.
   if (gate.kind === 'reclaim-only') {
     params.onProgress?.({ phase: 'preparing', detail: 'Reclaiming duplicates', mode: subagentsScope.mode as CompactionMode });
-    try {
-      const applyResult = buildCompactionApply({
-        messages: messages as Message[],
-        chains,
-        cutResult: cut,
-        summaryText: null,
-        mode: subagentsScope.mode as import('../../shared/types/message').CompactionMode,
-        reclaimedIds: flaggedIds,
-      });
-      return applyResult.didApply ? applyResult : null;
-    } catch {
-      return null;
-    }
+    return {
+      cut,
+      flaggedIds,
+      expectedIds,
+      estimatedInput: gate.estimatedInput,
+      contextTokens,
+      mode: subagentsScope.mode === 'selective' ? 'selective' : 'simple',
+    };
   }
 
   // Ledger for both compaction modes — resolved once before the mode branch.
@@ -288,37 +296,118 @@ export async function tryCompactSubagentHistory(params: {
   // Simple is default (opt-in selective via config.compaction.subagents.mode==='selective').
   if ((subagentsScope.mode as string) === 'selective') {
     // Shared selective runner (#11): slice → manifest → LLM caller →
-    // multi-turn loop with simple fallback, with subagent-scoped accounting
-    // and the R9 never-flag-user invariant applied to the result. The runner
-    // module is imported lazily like the other compaction leaves to keep this
-    // module's load graph free of the provider runtime chain.
+    // multi-turn loop with simple fallback, with subagent-scoped accounting.
+    // The runner module is imported lazily like the other compaction leaves to
+    // keep this module's load graph free of the provider runtime chain.
     const compactableSlice = takeCompactableSlice();
     if (compactableSlice.length === 0) return null;
 
-    let attempt: CompactionAttemptOutcome;
     try {
-      const { runCompactionAttempt, unflagUserMessagesInApply } = await import('../llm/compaction/run-attempt.js');
+      const { runCompactionAttempt } = await import('../llm/compaction/run-attempt.js');
       params.onProgress?.({ phase: 'preparing', detail: 'Summarizing history', mode: 'selective' });
+      const selectivePromise = (async () => {
+        const release = await acquireCompactionSlot(config.compaction?.max_concurrent_compactors);
+        try {
+          return await runCompactionAttempt({
+            messages: messages as Message[],
+            cut,
+            scope: 'subagents',
+            config,
+            deps: {
+              fallbackSelection: selection,
+              subagentId,
+              accounting: accountingStore
+                ? { store: accountingStore, sessionId, chainId, turnId }
+                : { sessionId, chainId, turnId },
+              ...(params.onTextDelta ? { onTextDelta: params.onTextDelta } : {}),
+            },
+          });
+        } finally {
+          release();
+        }
+      })();
+      return {
+        cut,
+        flaggedIds,
+        expectedIds,
+        estimatedInput: gate.estimatedInput,
+        contextTokens,
+        mode: 'selective',
+        selectivePromise,
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  // Simple default behavior — task-focused compactor-subagent, subagent-scoped accounting (R18)
+  const compactableSlice = takeCompactableSlice();
+  if (compactableSlice.length === 0) return null;
+
+  try {
+    const { summarizeCompactableRange } = await import('../llm/compaction/summarize.js');
+    params.onProgress?.({ phase: 'preparing', detail: 'Summarizing history', mode: subagentsScope.mode as CompactionMode });
+    const promise = (async () => {
       const release = await acquireCompactionSlot(config.compaction?.max_concurrent_compactors);
       try {
-        attempt = await runCompactionAttempt({
-          messages: messages as Message[],
-          cut,
+        return await summarizeCompactableRange({
+          messages: compactableSlice,
           scope: 'subagents',
           config,
-          deps: {
-            fallbackSelection: selection,
-            subagentId,
-            accounting: accountingStore
-              ? { store: accountingStore, sessionId, chainId, turnId }
-              : { sessionId, chainId, turnId },
-            ...(params.onTextDelta ? { onTextDelta: params.onTextDelta } : {}),
-          },
+          fallbackSelection: selection,
+          existingModelSelection: selection,
+          accounting: accountingStore
+            ? { store: accountingStore, sessionId, chainId, turnId }
+            : { sessionId, chainId, turnId },
+          subagentId,
+          ...(params.onTextDelta ? { onTextDelta: params.onTextDelta } : {}),
         });
       } finally {
         release();
       }
-      if (attempt.kind === 'ran' && attempt.result.kind === 'selective') {
+    })();
+    return {
+      cut,
+      flaggedIds,
+      expectedIds,
+      estimatedInput: gate.estimatedInput,
+      contextTokens,
+      mode: 'simple',
+      promise,
+    };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Apply a prepared subagent compaction at the pause boundary (R28/R37).
+ *
+ * Awaits the compactor outcome prepared earlier, then builds the apply over
+ * the LIVE chain history the caller supplies (never the prepare-time
+ * snapshot), so every message appended between prepare and apply is
+ * preserved — the subagent twin of main's `reanchorSelectiveReplay` contract.
+ * Selective success routes through `buildSelectiveSubagentApply` (R3:
+ * originals never deleted); the fallback and simple paths route through
+ * `buildCompactionApply` with the R9 never-flag-user settle.
+ *
+ * Returns the apply result, or null when the compactor produced nothing
+ * usable (failed, empty text, or an apply-time precondition failure) — the
+ * caller then discards the pending without touching the chain.
+ */
+export async function applySubagentPendingCompaction(params: {
+  readonly pending: CompactionPendingEntry;
+  readonly messages: readonly Message[];
+  readonly chains: readonly Chain[];
+  readonly sessionId: string;
+}): Promise<ApplyResult | null> {
+  const { pending, messages, chains, sessionId } = params;
+  try {
+    // ── Selective pending ───────────────────────────────────────────────
+    if (pending.selectivePromise) {
+      const outcome = await pending.selectivePromise;
+      if (outcome.kind !== 'ran') return null;
+      if (outcome.result.kind === 'selective') {
         // R3: never delete the transcript. Preserve every original message
         // (excludeFromModel flags + one compacted-marker summary head at the
         // cut) instead of hard-replacing the chain with the materialized
@@ -326,81 +415,61 @@ export async function tryCompactSubagentHistory(params: {
         return buildSelectiveSubagentApply({
           messages: messages as Message[],
           chains,
-          cutResult: cut,
-          selectiveResult: attempt.result,
-          reclaimedIds: flaggedIds,
+          cutResult: pending.cut,
+          selectiveResult: outcome.result,
+          reclaimedIds: pending.flaggedIds,
           sessionId,
         });
       }
-      if (attempt.kind === 'ran' && attempt.result.kind === 'fallback') {
-        const fallbackText = attempt.result.fallbackText;
+      if (outcome.result.kind === 'fallback') {
+        const fallbackText = outcome.result.fallbackText;
         if (!fallbackText || fallbackText.trim().length === 0) return null;
         const applyResult = buildCompactionApply({
           messages: messages as Message[],
           chains,
-          cutResult: cut,
+          cutResult: pending.cut,
           summaryText: fallbackText,
           mode: 'simple' as import('../../shared/types/message').CompactionMode,
-          reclaimedIds: flaggedIds,
+          reclaimedIds: pending.flaggedIds,
           sessionId,
         });
         if (!applyResult.didApply) return null;
         // R9: user messages are never excluded from the model view — shared
         // helper (#11a), previously inlined here (and now applied by the main
         // scope's selective fallback too).
+        const { unflagUserMessagesInApply } = await import('../llm/compaction/run-attempt.js');
         return unflagUserMessagesInApply(applyResult, messages as Message[]);
       }
       return null;
-    } catch {
-      return null;
     }
-  }
 
-  // Simple default behavior (unchanged) — task-focused compactor-subagent, subagent-scoped accounting (R18)
-  const compactableSlice = takeCompactableSlice();
-  if (compactableSlice.length === 0) return null;
-
-  let summarizeResult: Awaited<ReturnType<typeof import('../llm/compaction/summarize.js').summarizeCompactableRange>> | null;
-  try {
-    const { summarizeCompactableRange } = await import('../llm/compaction/summarize.js');
-    params.onProgress?.({ phase: 'preparing', detail: 'Summarizing history', mode: subagentsScope.mode as CompactionMode });
-    const release = await acquireCompactionSlot(config.compaction?.max_concurrent_compactors);
-    try {
-      summarizeResult = await summarizeCompactableRange({
-        messages: compactableSlice,
-        scope: 'subagents',
-        config,
-        fallbackSelection: selection,
-        existingModelSelection: selection,
-        accounting: accountingStore
-          ? { store: accountingStore, sessionId, chainId, turnId }
-          : { sessionId, chainId, turnId },
-        subagentId,
-        ...(params.onTextDelta ? { onTextDelta: params.onTextDelta } : {}),
+    // ── Simple pending ──────────────────────────────────────────────────
+    if (pending.promise) {
+      const result = await pending.promise;
+      if (!result || !result.text || !result.text.trim()) return null;
+      const applyResult = buildCompactionApply({
+        messages: messages as Message[],
+        chains,
+        cutResult: pending.cut,
+        summaryText: result.text,
+        mode: pending.mode as import('../../shared/types/message').CompactionMode,
+        reclaimedIds: pending.flaggedIds,
+        sessionId,
       });
-    } finally {
-      release();
+      return applyResult.didApply ? applyResult : null;
     }
-  } catch {
-    return null;
-  }
-  if (!summarizeResult || !summarizeResult.text?.trim()) {
-    // Summarizer unavailable — if reclaim had ids, we already handled short-circuit; otherwise no-op
-    return null;
-  }
 
-  try {
+    // ── Reclaim-only pending ────────────────────────────────────────────
     const applyResult = buildCompactionApply({
       messages: messages as Message[],
       chains,
-      cutResult: cut,
-      summaryText: summarizeResult!.text,
-      mode: subagentsScope.mode as import('../../shared/types/message').CompactionMode,
-      reclaimedIds: flaggedIds,
+      cutResult: pending.cut,
+      summaryText: null,
+      mode: pending.mode as import('../../shared/types/message').CompactionMode,
+      reclaimedIds: pending.flaggedIds,
       sessionId,
     });
-    if (!applyResult.didApply) return null;
-    return applyResult;
+    return applyResult.didApply ? applyResult : null;
   } catch {
     return null;
   }

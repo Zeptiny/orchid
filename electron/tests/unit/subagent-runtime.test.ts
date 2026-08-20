@@ -2260,11 +2260,11 @@ describe('SubagentManager follow-up resume (U4)', () => {
     expect(turnIds[0]).not.toBe(turnIds[1]);
   });
 
-  it('passes the full chain as history to the runner on a resume', async () => {
+  it('passes the full chain as the history box to the runner on a resume', async () => {
     const gates: Array<() => void> = [];
     const histories: Array<Message[] | undefined> = [];
     manager.setRunner(async function* (params): AsyncGenerator<StreamEvent> {
-      histories.push(params.history);
+      histories.push(params.historyBox?.messages);
       await new Promise<void>((resolve) => { gates.push(resolve); });
       yield { type: 'finish', finishReason: 'stop' };
     });

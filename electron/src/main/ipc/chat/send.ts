@@ -50,6 +50,7 @@ import { MessageType, type Message, type Usage } from '../../../shared/types/mes
 import { getChatHistory, setChatHistory } from '../chat-history';
 import { chatSendSchema } from '../payload-schemas';
 import { clearNextRequestStop, clearCompactionPause, shouldPauseForCompaction } from '../next-request-stop';
+import { MAIN_AGENT_SCOPE_ID } from '../../../shared/types/agent-scope';
 import { completeSessionActivity, publishSessionActivity } from '../session-activity';
 import { disposeActiveAgent, forceAbortSession } from './abort';
 import { emitSessionUpdated, sendChatState, sendTurnEvent } from './events';
@@ -107,7 +108,7 @@ export async function startChatTurn(
 
   const sessionId = sessionGate.session.id;
   clearNextRequestStop(sessionId);
-  clearCompactionPause(sessionId);
+  clearCompactionPause(sessionId, MAIN_AGENT_SCOPE_ID);
   if (sessionsStarting.has(sessionId)) {
     return { status: 'error', error: 'A turn is already starting for this session.', kind: 'session_busy' };
   }
@@ -652,8 +653,8 @@ export async function startChatTurn(
       lastUsage = null;
     };
     if (snapshot.value === 'idle' && context.currentInput && !completed && !activeAgent.agentCancelled) {
-      if (shouldPauseForCompaction(sessionId)) {
-        clearCompactionPause(sessionId);
+      if (shouldPauseForCompaction(sessionId, MAIN_AGENT_SCOPE_ID)) {
+        clearCompactionPause(sessionId, MAIN_AGENT_SCOPE_ID);
         const fullHistoryForPause = [...messages, ...turnMessagesFromAgent(activeAgent)];
         publishSessionActivity(sessionId, { cwd: turnCtx.cwd, state: 'working', phase: 'agent', detail: 'Compacting context — applying summary…', canCancel: true });
         emitCompactionProgress(sessionId, 'compacting', 'Applying summary', { webContents });
@@ -696,7 +697,7 @@ export async function startChatTurn(
           {
             emitCompactionProgress(sessionId, 'complete', undefined, { webContents });
           }
-          clearCompactionPause(sessionId);
+          clearCompactionPause(sessionId, MAIN_AGENT_SCOPE_ID);
           try {
             const snap = activeAgent.actor.getSnapshot();
             const ctxSnap = snap.context as AgentContext;

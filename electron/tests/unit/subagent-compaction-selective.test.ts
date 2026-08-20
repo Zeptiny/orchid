@@ -7,7 +7,7 @@
  * cut, and user messages are never flagged (R9).
  *
  * Tested through buildSelectiveSubagentApply — the pure seam
- * tryCompactSubagentHistory routes selective success through.
+ * applySubagentPendingCompaction routes selective success through.
  */
 import { describe, expect, it, vi } from 'vitest';
 import type { Message } from '../../src/shared/types/message';

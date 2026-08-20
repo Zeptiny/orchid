@@ -25,7 +25,7 @@ import type { WebContents } from 'electron';
 import type { ModelSelection } from '../../../shared/types/provider';
 import { ChainStatus } from '../../../shared/types/chain';
 import type { Chain } from '../../../shared/types/chain';
-import { compactedMarkerFromUnknown, type Message } from '../../../shared/types/message';
+import type { Message } from '../../../shared/types/message';
 import { IPC_CHANNELS } from '../../../shared/types/ipc';
 import { MAIN_AGENT_SCOPE_ID } from '../../../shared/types/agent-scope';
 import type { CompactionProgressEvent, CompactionProgressPhase } from '../../../shared/types/compaction-progress';
@@ -34,10 +34,23 @@ import type { ProviderAccountingStore } from '../../providers/accounting/store';
 import { getSessionManager } from '../../session/singleton';
 import { onSessionDeleted } from '../../session/manager';
 import { setChatHistory } from '../chat-history';
-import { requestCompactionPause, clearCompactionPause, shouldPauseForCompaction } from '../next-request-stop';
+import {
+  clearCompactionPause,
+  clearCompactionPausesForSession,
+  requestCompactionPause,
+  shouldPauseForCompaction,
+} from '../next-request-stop';
 import { publishSessionActivity } from '../session-activity';
 import { totalCharsForMessages } from '../../llm/compaction/message-chars';
 import type { CutResult } from '../../llm/compaction/select';
+import {
+  clearCompactionPendingsForSession,
+  dedupeHistoryById,
+  deleteCompactionPending,
+  getCompactionPending,
+  isPendingCutStillValid,
+  setCompactionPending,
+} from '../../llm/compaction/pending-store';
 import {
   acquireCompactionSlot,
   computeMessageCharCache,
@@ -67,16 +80,6 @@ import {
 // ── Compaction state per session (U8, R13) ──────────────────────────────────
 
 const compactionTriggers = new Map<string, CompactionTrigger>();
-const compactionPending = new Map<string, {
-  cut: CutResult;
-  flaggedIds: string[];
-  expectedIds?: string[];
-  estimatedInput: number;
-  contextTokens: number;
-  mode: 'simple' | 'selective';
-  promise?: Promise<SummarizeResult | null>;
-  selectivePromise?: Promise<CompactionAttemptOutcome>;
-}>();
 const compactionRetryTried = new Set<string>();
 
 // ── Compaction widget progress emission ───────────────────────────────────
@@ -140,7 +143,7 @@ export function emitCompactionProgress(
 function completeCompactionWidget(sessionId: string, detail?: string): void {
   try {
     emitCompactionProgress(sessionId, 'complete', detail);
-    clearCompactionPause(sessionId);
+    clearCompactionPause(sessionId, MAIN_AGENT_SCOPE_ID);
   } catch {
     // widget completion is best-effort
   }
@@ -148,7 +151,8 @@ function completeCompactionWidget(sessionId: string, detail?: string): void {
 
 export function clearCompactionState(sessionId: string): void {
   compactionTriggers.delete(sessionId);
-  compactionPending.delete(sessionId);
+  clearCompactionPendingsForSession(sessionId);
+  clearCompactionPausesForSession(sessionId);
   triggerCalibrationHydrated.delete(sessionId);
   compactionProgressEpochs.set(sessionId, (compactionProgressEpochs.get(sessionId) ?? 0) + 1);
   for (const key of [...compactionRetryTried]) {
@@ -292,16 +296,7 @@ export async function hydrateTriggerCalibration(sessionId: string): Promise<void
   }
 }
 
-export function dedupeHistoryById(messages: readonly Message[]): Message[] {
-  const seen = new Set<string>();
-  const out: Message[] = [];
-  for (const m of messages) {
-    if (m.id && seen.has(m.id)) continue;
-    if (m.id) seen.add(m.id);
-    out.push(m);
-  }
-  return out;
-}
+export { dedupeHistoryById };
 
 function totalChars(messages: readonly Message[]): number {
   return totalCharsForMessages(messages);
@@ -333,42 +328,6 @@ function stampApplyMetrics(
     ...(tokensFreed != null && tokensFreed > 0 ? { tokensFreed } : {}),
     ...(compactorTokens ? { compactorTokens } : {}),
   });
-}
-
-function isPendingCutStillValid(pending: { cut: CutResult; flaggedIds: string[]; expectedIds?: string[] }, messages: readonly Message[]): boolean {
-  const { start, end } = pending.cut.compactableRange;
-  if (!Number.isFinite(start) || !Number.isFinite(end)) return false;
-  if (start < 0 || end > messages.length || start >= end) return false;
-  if (pending.cut.cutIndex < 0 || pending.cut.cutIndex > messages.length) return false;
-  for (let i = start; i < end; i += 1) {
-    const message = messages[i];
-    if (!message) continue;
-    // Mirrors apply.ts's tolerance: pre-flagged (excludeFromModel) messages in
-    // range are fine — cancelled tool results and prior mechanical-reclaim
-    // flags are already excluded from the model and buildCompactionApply skips
-    // them instead of double-processing.
-    // A compacted summary head DEEPER than the range start would summarize a
-    // summary — invalidate. A head at index === start is being superseded
-    // (select.ts lands compactableStart ON the old head so re-compaction can
-    // re-summarize it), so it is allowed.
-    if (i > start && compactedMarkerFromUnknown(message.compacted)) return false;
-  }
-  if (pending.flaggedIds.length > 0) {
-    const idToMsg = new Map<string, Message>();
-    for (const m of messages) idToMsg.set(m.id, m);
-    for (const id of pending.flaggedIds) {
-      const msg = idToMsg.get(id);
-      if (!msg) return false;
-      if (msg.excludeFromModel) return false;
-    }
-  }
-  if (pending.expectedIds) {
-    if (pending.expectedIds.length !== end - start) return false;
-    for (let i = 0; i < pending.expectedIds.length; i += 1) {
-      if (messages[start + i]?.id !== pending.expectedIds[i]) return false;
-    }
-  }
-  return true;
 }
 
 // ── Selective persistence helper (minimal between-turns) ─────────────────────
@@ -498,7 +457,7 @@ export async function applyPendingCompactionIfAny(
   messages: Message[],
   runtime: ProjectRuntime,
 ): Promise<{ applied: boolean; updatedMessages?: Message[] }> {
-  const pending = compactionPending.get(sessionId);
+  const pending = getCompactionPending(sessionId, MAIN_AGENT_SCOPE_ID);
   if (!pending) return { applied: false };
   // The pending cut/expectedIds were computed over the deduped history
   // (handleUsageCompaction dedupes). Mid-turn callers concatenate
@@ -507,13 +466,13 @@ export async function applyPendingCompactionIfAny(
   // validation below rejects every mid-turn apply.
   const history = dedupeHistoryById(messages);
   if (!isPendingCutStillValid(pending, history)) {
-    compactionPending.delete(sessionId);
+    deleteCompactionPending(sessionId, MAIN_AGENT_SCOPE_ID);
     const t = getCompactionTrigger(sessionId);
     t.abortPrepare();
     completeCompactionWidget(sessionId);
     return { applied: false };
   }
-  compactionPending.delete(sessionId);
+  deleteCompactionPending(sessionId, MAIN_AGENT_SCOPE_ID);
   const trigger = getCompactionTrigger(sessionId);
   try {
     // ── Selective pending ───────────────────────────────────────────────
@@ -967,7 +926,7 @@ export function handleUsageCompaction(
   trigger.state.lastObservedInputTokens = inputTokens;
   trigger.onUsage(inputTokens, effectiveContextTokens, cfg.threshold, cfg.hysteresis_delta);
   if (trigger.state.pendingPrepare) return;
-  if (compactionPending.has(sessionId)) return;
+  if (getCompactionPending(sessionId, MAIN_AGENT_SCOPE_ID)) return;
   try {
     const decision = runCompactionGate({
       messages: history,
@@ -983,15 +942,15 @@ export function handleUsageCompaction(
     const { cut, flaggedIds } = decision;
     if (decision.kind === 'reclaim-only') {
       const expectedIds = history.slice(cut.compactableRange.start, cut.compactableRange.end).map((m) => m.id);
-      compactionPending.set(sessionId, { cut, flaggedIds, expectedIds, estimatedInput: decision.estimatedInput, contextTokens: effectiveContextTokens, mode: cfg.mode });
+      setCompactionPending(sessionId, MAIN_AGENT_SCOPE_ID, { cut, flaggedIds, expectedIds, estimatedInput: decision.estimatedInput, contextTokens: effectiveContextTokens, mode: cfg.mode });
       trigger.markPrepareStarted(cut.compactableRange, flaggedIds);
       try {
         emitCompactionProgress(sessionId, 'preparing', 'Reclaiming duplicates', { mode: cfg.mode });
       } catch {
         // widget progress is best-effort
       }
-      if (!shouldPauseForCompaction(sessionId)) {
-        requestCompactionPause(sessionId);
+      if (!shouldPauseForCompaction(sessionId, MAIN_AGENT_SCOPE_ID)) {
+        requestCompactionPause(sessionId, MAIN_AGENT_SCOPE_ID);
         publishSessionActivity(sessionId, { cwd: runtime.projectDir ?? '', state: 'working', phase: 'agent', detail: 'Compacting context — reclaiming duplicates…', canCancel: true });
       }
       return;
@@ -1023,7 +982,7 @@ export function handleUsageCompaction(
           }
         })();
         const expectedIdsForSelective = history.slice(cut.compactableRange.start, cut.compactableRange.end).map((m) => m.id);
-        compactionPending.set(sessionId, { cut, flaggedIds, expectedIds: expectedIdsForSelective, estimatedInput: decision.estimatedInput, contextTokens: effectiveContextTokens, mode: 'selective', selectivePromise });
+        setCompactionPending(sessionId, MAIN_AGENT_SCOPE_ID, { cut, flaggedIds, expectedIds: expectedIdsForSelective, estimatedInput: decision.estimatedInput, contextTokens: effectiveContextTokens, mode: 'selective', selectivePromise });
         selectivePromise.catch((err) => {
           console.debug('[compaction] selective prepare failed (non-fatal):', err);
           try {
@@ -1037,8 +996,8 @@ export function handleUsageCompaction(
         } catch {
           // widget progress is best-effort
         }
-        if (!shouldPauseForCompaction(sessionId)) {
-          requestCompactionPause(sessionId);
+        if (!shouldPauseForCompaction(sessionId, MAIN_AGENT_SCOPE_ID)) {
+          requestCompactionPause(sessionId, MAIN_AGENT_SCOPE_ID);
           publishSessionActivity(sessionId, { cwd: runtime.projectDir ?? '', state: 'working', phase: 'agent', detail: 'Compacting context — summarizing history…', canCancel: true });
         }
         return;
@@ -1065,7 +1024,7 @@ export function handleUsageCompaction(
         }
       })();
       const expectedIdsForSimple = history.slice(cut.compactableRange.start, cut.compactableRange.end).map((m) => m.id);
-      compactionPending.set(sessionId, { cut, flaggedIds, expectedIds: expectedIdsForSimple, promise, estimatedInput: decision.estimatedInput, contextTokens: effectiveContextTokens, mode: 'simple' });
+      setCompactionPending(sessionId, MAIN_AGENT_SCOPE_ID, { cut, flaggedIds, expectedIds: expectedIdsForSimple, promise, estimatedInput: decision.estimatedInput, contextTokens: effectiveContextTokens, mode: 'simple' });
       promise.catch((err) => {
         console.debug('[compaction] prepare failed (non-fatal):', err);
         try {
@@ -1079,8 +1038,8 @@ export function handleUsageCompaction(
       } catch {
         // widget progress is best-effort
       }
-      if (!shouldPauseForCompaction(sessionId)) {
-        requestCompactionPause(sessionId);
+      if (!shouldPauseForCompaction(sessionId, MAIN_AGENT_SCOPE_ID)) {
+        requestCompactionPause(sessionId, MAIN_AGENT_SCOPE_ID);
         publishSessionActivity(sessionId, { cwd: runtime.projectDir ?? '', state: 'working', phase: 'agent', detail: 'Compacting context — summarizing history…', canCancel: true });
       }
     }

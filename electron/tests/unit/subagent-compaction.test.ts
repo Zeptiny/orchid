@@ -1,13 +1,16 @@
 /**
- * Subagent mid-run compaction orchestration (U9) — manager-level coverage.
+ * Subagent mid-run compaction orchestration (U9/U5) — manager-level coverage.
  *
  * Covers the run-loop plumbing in SubagentManager._startRun:
  *  - ARM:      usage event over threshold → prepare starts (compactor caller
- *              invoked with the compactable range), pending armed.
- *  - APPLY:    step_finish boundary applies the pending compaction through
- *              _setChainMessages (originals preserved: excludeFromModel flags +
- *              one summary head at the cut), markCompaction revision bumped,
- *              trigger re-armed with a post-compaction baseline.
+ *              invoked with the compactable range), a scoped pending is
+ *              registered and the scoped pause is armed.
+ *  - APPLY:    the pause gate consumes the pending at the step boundary —
+ *              re-validated against the live chain history (R37), applied
+ *              over it (originals preserved: excludeFromModel flags + one
+ *              summary head at the cut), markCompaction revision bumped,
+ *              trigger re-armed with a post-compaction baseline, and the
+ *              stream restarted with the compacted history (R28).
  *  - DEGRADE:  still over the window after an apply with no compactable range
  *              left → run COMPLETES (not fails) with buildSubagentPartialReport
  *              content in record.result (R17) — including the two-apply
@@ -21,7 +24,8 @@
  *
  * Harness follows subagent-runtime.test.ts (manager construction, scripted
  * stream runners) and subagent-compaction-selective.test.ts (module mocks for
- * subagent-runner's static graph).
+ * subagent-runner's static graph). The scripted runners drive the pause gate
+ * via the compaction controller the manager hands to the production runner.
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import type { Agent } from '../../src/shared/types/agent';
@@ -103,11 +107,23 @@ import {
   SubagentManager,
   SubagentState,
   runtimeToDomain,
+  type SubagentCompactionPauseController,
 } from '../../src/main/agents/manager';
 import {
   buildSubagentPartialReport,
   resolveSubagentContextTokens,
 } from '../../src/main/agents/subagent-compaction';
+import {
+  getCompactionPending,
+  isPendingCutStillValid,
+  setCompactionPending,
+  type CompactionPendingEntry,
+} from '../../src/main/llm/compaction/pending-store';
+import {
+  SubagentDeltaEventType,
+  type SubagentCompactionProgressEvent,
+  type SubagentDeltaEvent,
+} from '../../src/shared/types/subagent';
 
 // ── Fixtures ─────────────────────────────────────────────────────────────────
 
@@ -218,7 +234,14 @@ type ScriptItem =
   | StreamEvent
   | { readonly sleepMs: number }
   | { readonly probe: () => void }
-  | { readonly until: () => boolean; readonly label?: string };
+  | { readonly until: () => boolean; readonly label?: string }
+  /**
+   * Pause-gate choreography (U5): wait until this run's scoped compaction
+   * pause is armed, then consume it the way the production runner does at a
+   * step boundary (await the controller's apply). A 'degraded' outcome stops
+   * the script — the run ends at the boundary, exactly like the real runner.
+   */
+  | { readonly pauseGate: true };
 
 /** Wait until the summarizer prepare has actually started (implies the run's pending promise is registered). */
 const summarizerStarted: ScriptItem = {
@@ -239,7 +262,9 @@ const prepareEvaluated = (manager: SubagentManager, count: number): ScriptItem =
 });
 
 function scriptedRunner(script: readonly ScriptItem[]) {
-  return async function* (): AsyncGenerator<StreamEvent> {
+  return async function* (params: {
+    compaction?: SubagentCompactionPauseController;
+  }): AsyncGenerator<StreamEvent> {
     for (const item of script) {
       if ('sleepMs' in item) {
         await new Promise((resolve) => setTimeout(resolve, item.sleepMs));
@@ -257,6 +282,22 @@ function scriptedRunner(script: readonly ScriptItem[]) {
           }
           await new Promise((resolve) => setTimeout(resolve, 5));
         }
+        continue;
+      }
+      if ('pauseGate' in item) {
+        const gate = params.compaction;
+        if (!gate) {
+          throw new Error('scriptedRunner pauseGate requires the compaction pause controller');
+        }
+        const deadline = Date.now() + 4000;
+        while (!gate.shouldPause()) {
+          if (Date.now() > deadline) {
+            throw new Error('scriptedRunner timed out waiting for the compaction pause to arm');
+          }
+          await new Promise((resolve) => setTimeout(resolve, 5));
+        }
+        const outcome = await gate.applyAtPause();
+        if (outcome === 'degraded' || outcome === 'aborted') return;
         continue;
       }
       yield item;
@@ -376,9 +417,11 @@ describe('SubagentManager mid-run compaction (U9): apply at boundary', () => {
       ...steps(10),
       usageEvent(600),
       summarizerStarted,
-      // The boundary handler awaits the pending prepare before the loop pulls
-      // the next event, so no settle is needed after step_finish.
+      // The pause-gate choreography (U5): the stream stops at the step
+      // boundary once the scoped pause arms; the runner awaits the
+      // controller's apply before the next segment.
       { type: 'step_finish', stepIndex: 0, finishReason: 'stop' },
+      { pauseGate: true },
       { type: 'finish', finishReason: 'stop' },
     ]);
     const record = spawnCompactionSubagent(manager);
@@ -432,22 +475,23 @@ describe('SubagentManager mid-run compaction (U9): apply at boundary', () => {
       ...steps(10),
       usageEvent(600),
       summarizerStarted,
-      { type: 'step_finish', stepIndex: 0, finishReason: 'stop' }, // apply #1
+      { type: 'step_finish', stepIndex: 0, finishReason: 'stop' },
+      { pauseGate: true }, // apply #1 at the pause boundary
       usageEvent(450),
       // The re-opened prepare resolves to a no-op and never calls the
       // summarizer — wait for its evaluation (#2: the first settled after the
       // initial usage event) instead of a bounded settle.
       prepareEvaluated(manager, 2),
       { probe: () => { callsAfterReArm = mocks.summarize.mock.calls.length; } },
-      { type: 'step_finish', stepIndex: 1, finishReason: 'stop' }, // consumes the no-op pending
+      { type: 'step_finish', stepIndex: 1, finishReason: 'stop' },
       { type: 'finish', finishReason: 'stop' },
     ]));
     const record = spawnCompactionSubagent(manager);
     await manager.getRunPromise(record.id);
 
     // Post-compaction baseline (current behavior — sibling fix): the estimate
-    // in maybeApplyCompactionAtBoundary EXCLUDES excludeFromModel originals, so
-    // the accrual baseline is the post-compaction model view (summary head +
+    // in the pause-boundary apply EXCLUDES excludeFromModel originals, so the
+    // accrual baseline is the post-compaction model view (summary head +
     // preserved tail ≈ 300 tokens here), NOT the pre-compaction input (600).
     // A 450 usage event (above the 400 re-arm line, 150 tokens of accrual past
     // the baseline) therefore re-opens the prepare gate. Under the older
@@ -457,8 +501,8 @@ describe('SubagentManager mid-run compaction (U9): apply at boundary', () => {
     // chain boundaries from USER messages, and a subagent run has exactly one
     // user turn — once the chain contains a compacted marker the whole chain
     // counts as summarized (realChains = []) and the compactable range comes
-    // back empty. The pending resolves null and the boundary consumes it as a
-    // no-op — the run is never wedged and never double-compacts.
+    // back empty. The gate no-ops before registering a pending — the run is
+    // never wedged and never double-compacts.
     expect(callsAfterReArm).toBe(1);
     expect(record.state).toBe(SubagentState.COMPLETED);
     expect(mocks.summarize).toHaveBeenCalledTimes(1);
@@ -468,20 +512,170 @@ describe('SubagentManager mid-run compaction (U9): apply at boundary', () => {
   });
 });
 
+// ── PAUSE GATE (U5): re-validation, re-anchor, widget lifecycle ─────────────
+
+describe('SubagentManager compaction pause gate (U5)', () => {
+  it('discards the pending when the live history diverges from the prepare-time cut (R37)', async () => {
+    // The pending's expected ids are captured at prepare time; if the chain
+    // history mutates in a way that invalidates the cut (here simulated by a
+    // stale expected-ids anchor, e.g. messages inserted inside the range),
+    // the pause-boundary apply must discard the pending — never compact
+    // against a cut that no longer matches the live history.
+    const manager = new SubagentManager();
+    let recordId = '';
+    manager.setRunner(scriptedRunner([
+      ...steps(10),
+      usageEvent(600),
+      summarizerStarted,
+      {
+        probe: () => {
+          const pending = getCompactionPending('session-compaction', recordId);
+          expect(pending).toBeDefined();
+          setCompactionPending('session-compaction', recordId, {
+            ...pending!,
+            expectedIds: ['shifted-away-from-the-live-range'],
+          } as CompactionPendingEntry);
+        },
+      },
+      { type: 'step_finish', stepIndex: 0, finishReason: 'stop' },
+      { pauseGate: true },
+      { type: 'finish', finishReason: 'stop' },
+    ]));
+    const record = spawnCompactionSubagent(manager);
+    recordId = record.id;
+    await manager.getRunPromise(record.id);
+
+    expect(record.state).toBe(SubagentState.COMPLETED);
+    expect(record.error).toBeNull();
+    expect(mocks.summarize).toHaveBeenCalledTimes(1);
+    // Discarded, not applied: the chain stays un-compacted and no compaction
+    // checkpoint was persisted.
+    const chain = record.chain?.messages ?? [];
+    expect(chain.some((m) => m.compacted)).toBe(false);
+    expect(chain.some((m) => m.excludeFromModel)).toBe(false);
+    expect(persistenceOf(manager).getLastCompactionRevision(record.id)).toBeNull();
+    // The restart after the skip kept the run's progress.
+    expect(record.result).toContain('Step 0');
+  });
+
+  it('re-anchors the apply onto the live history: the post-prepare suffix survives un-flagged (R37)', async () => {
+    const summaryText = `Summary: ${'s'.repeat(300)}`;
+    mocks.summarize.mockResolvedValue({ text: summaryText, usage: null });
+    let suffixIds: string[] = [];
+    const manager = managerWith([
+      ...steps(6),
+      usageEvent(600), // prepare runs over this chain
+      summarizerStarted,
+      // Two more steps appended between prepare and apply (unique ids — a
+      // re-used tool-call id would collide with the pre-prepare steps).
+      ...stepEvents(6),
+      ...stepEvents(7),
+      {
+        probe: () => {
+          suffixIds = (record.chain?.messages ?? []).slice(-6).map((m) => m.id);
+        },
+      },
+      { type: 'step_finish', stepIndex: 0, finishReason: 'stop' },
+      { pauseGate: true },
+      { type: 'finish', finishReason: 'stop' },
+    ]);
+    const record = spawnCompactionSubagent(manager);
+    await manager.getRunPromise(record.id);
+
+    expect(record.state).toBe(SubagentState.COMPLETED);
+    const chain = record.chain?.messages ?? [];
+    expect(chain.filter((m) => m.compacted)).toHaveLength(1);
+    const cut = chain.findIndex((m) => m.compacted);
+    // The apply is built over the APPLY-time history, so every message
+    // appended after the prepare lands in the preserved suffix — verbatim and
+    // un-flagged, never silently dropped by a prepare-time snapshot.
+    expect(suffixIds).toHaveLength(6);
+    for (const id of suffixIds) {
+      const message = chain.find((m) => m.id === id);
+      expect(message, `post-prepare message ${id} must survive`).toBeDefined();
+      expect(message!.excludeFromModel).not.toBe(true);
+      expect(chain.indexOf(message!)).toBeGreaterThan(cut);
+    }
+    // R31/R32: the delegated task head stays in the model view.
+    expect(chain[0]?.excludeFromModel).not.toBe(true);
+    expect(persistenceOf(manager).getLastCompactionRevision(record.id)).not.toBeNull();
+  });
+
+  it('emits preparing → compacting → complete widget events for a paused compaction', async () => {
+    const manager = new SubagentManager();
+    const phases: string[] = [];
+    manager.setOnDelta((event: SubagentDeltaEvent) => {
+      if (event.type === SubagentDeltaEventType.COMPACTION_PROGRESS) {
+        phases.push((event as SubagentCompactionProgressEvent).phase);
+      }
+    });
+    manager.setRunner(scriptedRunner([
+      ...steps(10),
+      usageEvent(600),
+      summarizerStarted,
+      { type: 'step_finish', stepIndex: 0, finishReason: 'stop' },
+      { pauseGate: true },
+      { type: 'finish', finishReason: 'stop' },
+    ]));
+    const record = spawnCompactionSubagent(manager);
+    await manager.getRunPromise(record.id);
+
+    expect(record.state).toBe(SubagentState.COMPLETED);
+    expect(phases.length).toBeGreaterThanOrEqual(3);
+    expect(phases[0]).toBe('preparing');
+    expect(phases).toContain('compacting');
+    expect(phases.at(-1)).toBe('complete');
+    expect(phases.indexOf('preparing')).toBeLessThan(phases.indexOf('compacting'));
+    expect(phases.lastIndexOf('compacting')).toBeLessThan(phases.lastIndexOf('complete'));
+  });
+
+  it('validates pendings index-anchored: range shifts invalidate, tail appends stay valid (R37)', () => {
+    const base = [
+      { id: 'u0', role: 'user', content: 'task' },
+      { id: 'a1', role: 'assistant', content: 'one' },
+      { id: 'a2', role: 'assistant', content: 'two' },
+      { id: 'a3', role: 'assistant', content: 'three' },
+    ].map((m) => ({ ...m, type: 'text' })) as unknown as Message[];
+    const cut = {
+      cutIndex: 3,
+      compactableRange: { start: 1, end: 3 },
+      preservedCount: 1,
+      openGroupStart: null,
+      preservedRange: { start: 3, end: 4 },
+    };
+    const pending = { cut, flaggedIds: [] as string[], expectedIds: ['a1', 'a2'] };
+
+    expect(isPendingCutStillValid(pending, base)).toBe(true);
+    // Messages appended at the tail keep the range anchored — the apply
+    // re-anchors onto the longer live history instead of discarding.
+    expect(isPendingCutStillValid(pending, [...base, { ...base[3]!, id: 'a4' }])).toBe(true);
+    // A message inserted before the range shifts every index — discard.
+    const shifted = [base[0]!, { ...base[1]!, id: 'inserted' }, ...base.slice(1)];
+    expect(isPendingCutStillValid(pending, shifted)).toBe(false);
+    // A compacted summary head deeper than the range start would summarize a
+    // summary — discard.
+    const withHead = base.map((m, i) =>
+      i === 2 ? { ...m, compacted: { rangeStart: 'a1', rangeEnd: 'a2', mode: 'simple' } } : m,
+    );
+    expect(isPendingCutStillValid(pending, withHead)).toBe(false);
+  });
+});
+
 // ── DEGRADE (R17): still over the window after compaction ────────────────────
 
 describe('SubagentManager mid-run compaction (U9): degrade to partial report', () => {
   it('completes (does not fail) with a partial report when the post-compaction model view still exceeds the window', async () => {
     // A large summary head keeps the post-compaction model view over the
     // threshold, and the compacted chain (single user turn + summary marker)
-    // has no further compactable range → R17 degradation at the boundary.
+    // has no further compactable range → R17 degradation at the pause boundary.
     mocks.summarize.mockResolvedValue({ text: `Summary: ${'s'.repeat(1500)}`, usage: null });
     const manager = managerWith([
       ...steps(5),
       usageEvent(900),
       summarizerStarted,
       { type: 'step_finish', stepIndex: 0, finishReason: 'stop' },
-      { type: 'finish', finishReason: 'stop' }, // unreachable: the run breaks at the boundary
+      { pauseGate: true }, // degrades: the run ends at the pause boundary
+      { type: 'finish', finishReason: 'stop' }, // unreachable: the run ends at the boundary
     ]);
     const record = spawnCompactionSubagent(manager);
     await manager.getRunPromise(record.id);
@@ -537,13 +731,16 @@ describe('SubagentManager mid-run compaction (U9): degrade to partial report', (
       usageEvent(550),
       // The reclaim-only prepare flags duplicates without calling the
       // summarizer — wait for its evaluation to settle instead of a bounded
-      // settle.
+      // settle. The pending registers before the evaluation settles, so the
+      // pause is already armed when the gate item below runs.
       prepareEvaluated(manager, 1),
-      { type: 'step_finish', stepIndex: 0, finishReason: 'stop' }, // reclaim-only apply
+      { type: 'step_finish', stepIndex: 0, finishReason: 'stop' },
+      { pauseGate: true }, // reclaim-only apply at the pause boundary
       usageEvent(560), // accrual past the post-compaction baseline re-arms the trigger
       summarizerStarted,
-      { type: 'step_finish', stepIndex: 1, finishReason: 'stop' }, // summarizer apply → degrade
-      { type: 'finish', finishReason: 'stop' }, // unreachable: the run breaks at the boundary
+      { type: 'step_finish', stepIndex: 1, finishReason: 'stop' },
+      { pauseGate: true }, // summarizer apply → degrade at the pause boundary
+      { type: 'finish', finishReason: 'stop' }, // unreachable: the run ends at the boundary
     ]));
     // Install the spy BEFORE spawning so every markCompaction call is captured.
     const markCompaction = vi.spyOn(persistenceOf(manager), 'markCompaction');
@@ -680,11 +877,10 @@ describe('SubagentManager mid-run compaction (U9): disabled / failing compactor'
   });
 
   it('continues the run un-compacted when the compactor fails mid-run', async () => {
-    // The summarizer (LLM caller) rejects. tryCompactSubagentHistory contains
-    // the failure and resolves null, so the boundary consumes the pending as a
-    // no-op and the run finishes normally. (The manager's own rejected-pending
-    // catch is additionally defensive — tryCompactSubagentHistory never rejects
-    // through public seams, so the compactor failure is the reachable path.)
+    // The summarizer (LLM caller) rejects. applySubagentPendingCompaction
+    // contains the failure and resolves null, so the pause-boundary apply
+    // returns 'skipped', the stream restarts with the accumulated history,
+    // and the run finishes normally un-compacted.
     mocks.summarize.mockRejectedValue(new Error('compactor provider down'));
     const manager = managerWith([
       ...steps(10),
@@ -692,6 +888,7 @@ describe('SubagentManager mid-run compaction (U9): disabled / failing compactor'
       // The rejected call still counts — mock.calls grows on invocation.
       summarizerStarted,
       { type: 'step_finish', stepIndex: 0, finishReason: 'stop' },
+      { pauseGate: true }, // consumes the rejected pending as a skip + restart
       { type: 'finish', finishReason: 'stop' },
     ]);
     const record = spawnCompactionSubagent(manager);

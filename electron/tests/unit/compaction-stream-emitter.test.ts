@@ -34,6 +34,7 @@ vi.mock('../../src/main/ipc/chat-history', () => ({ setChatHistory: vi.fn() }));
 vi.mock('../../src/main/ipc/next-request-stop', () => ({
   requestCompactionPause: vi.fn(),
   clearCompactionPause: vi.fn(),
+  clearCompactionPausesForSession: vi.fn(),
   shouldPauseForCompaction: vi.fn(() => false),
 }));
 vi.mock('../../src/main/ipc/session-activity', () => ({ publishSessionActivity: vi.fn() }));

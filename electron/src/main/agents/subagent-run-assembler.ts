@@ -189,6 +189,26 @@ export class SubagentRunAssembler {
     return this.finalization('failed', null, error);
   }
 
+  /**
+   * Commit every pending text/thinking segment and return the full run
+   * transcript so far. The pause boundary (compaction apply) needs the
+   * accumulated history INCLUDING the current step's trailing text, which the
+   * regular commit path only flushes on the next tool call or finalization.
+   */
+  snapshotTranscript(): Message[] {
+    this.commitThrough(this.segments.length);
+    return [...this.messages];
+  }
+
+  /**
+   * Replace the accumulated transcript base with a compacted history. Used by
+   * the compaction apply at the pause boundary so the finalization never
+   * resurrects un-flagged originals or duplicates the summary head.
+   */
+  rebase(messages: readonly Message[]): void {
+    this.messages.splice(0, this.messages.length, ...messages);
+  }
+
   private appendText(kind: 'text' | 'thinking', append: string): SubagentRunProjectionEffect {
     const last = this.segments.at(-1);
     if (last?.kind === kind) {

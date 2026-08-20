@@ -33,6 +33,21 @@ import type { CompactionScopeConfig } from '../../shared/types/ipc-boundary';
 import { estimateMessageChars, totalCharsForMessages } from '../llm/compaction/message-chars';
 import { charsForMessageIds, deriveTokensPerChar } from '../llm/compaction/pipeline';
 import {
+  clearCompactionPendingsForSession,
+  dedupeHistoryById,
+  deleteCompactionPending,
+  getCompactionPending,
+  isPendingCutStillValid,
+  setCompactionPending,
+  takeCompactionPending,
+} from '../llm/compaction/pending-store';
+import {
+  clearCompactionPause,
+  clearCompactionPausesForSession,
+  requestCompactionPause,
+  shouldPauseForCompaction,
+} from '../ipc/next-request-stop';
+import {
   SubagentDeltaEventType,
   SubagentStatus,
   summarizeSubagentRecord,
@@ -78,9 +93,10 @@ import { getSubagentAttributionStore } from '../providers/accounting/subagent-at
 import { getBackgroundStore } from '../tools/process/background-store';
 import { getForegroundLiveRegistry } from '../tools/process/foreground-live';
 import {
+  applySubagentPendingCompaction,
   buildSubagentPartialReport,
+  prepareSubagentCompaction,
   resolveSubagentContextTokens,
-  tryCompactSubagentHistory,
   type SubagentCompactionProgress,
 } from './subagent-compaction';
 
@@ -149,11 +165,54 @@ function getSubagentConfigDefaults(): ReturnType<typeof subagentsConfigSchema.pa
 
 // ── Stream runner ───────────────────────────────────────────────────────────
 
+/**
+ * Mutable history handoff shared between the manager and a run's stream
+ * (U5). The runner reads `messages` for each stream segment; a compaction
+ * apply at a pause boundary swaps the contents so the restarted stream
+ * replays the compacted history. Replaces the runner's frozen spawn-time
+ * history snapshot.
+ */
+export interface SubagentHistoryBox {
+  messages: Message[];
+}
+
+/** Outcome of consuming a compaction pause at a step boundary. */
+export type SubagentPauseApplyOutcome =
+  /** Compaction applied; restart with the compacted history in the box. */
+  | 'applied'
+  /** No pending / discarded / failed apply; restart with the accumulated history. */
+  | 'skipped'
+  /** Post-compaction model view still over the window with nothing left — the partial report (R17) is set and the run must stop. */
+  | 'degraded'
+  /** Abort/interrupt while consuming the pause — stop without restarting. */
+  | 'aborted';
+
+/**
+ * Compaction pause gate for one subagent run, keyed by the run's
+ * (sessionId, agentScopeId) scope (R28). The runner binds `shouldPause` into
+ * the orchestrator's early-stop predicate; when the stream stops at a step
+ * boundary with the pause set, it awaits `applyAtPause` (re-validate against
+ * live history, apply, swap the history box) and restarts the stream.
+ * `discard` is the interrupt path: clear the gate + drop any pending.
+ */
+export interface SubagentCompactionPauseController {
+  /** Whether this run's scope should pause for compaction at the next step boundary. */
+  readonly shouldPause: () => boolean;
+  /** Consume the pause at a step boundary: validate, apply, swap the history box. */
+  readonly applyAtPause: () => Promise<SubagentPauseApplyOutcome>;
+  /** Interrupt path: clear the scoped gate and discard any pending prepare. */
+  readonly discard: () => void;
+}
+
 /** Production stream driver (wired from subagent-runner.ts). */
 export type SubagentStreamRunner = (params: {
   task: string;
-  /** Full chain to replay for a resumed run; absent = spawn path. */
-  history?: Message[];
+  /**
+   * Mutable history handoff for the run (U5): the initial chain to replay on
+   * a resumed run (absent/empty = spawn path sends just the task) and the box
+   * a mid-run compaction apply swaps before the stream restarts.
+   */
+  historyBox?: SubagentHistoryBox;
   agent: Agent;
   selection: ModelSelection | null;
   abortSignal: AbortSignal;
@@ -171,6 +230,8 @@ export type SubagentStreamRunner = (params: {
   projectRuntime?: ProjectRuntime;
   /** Reports the resolved reasoning effort once the provider execution is known. */
   onReasoningEffort?: (effort: string | number | undefined) => void;
+  /** Compaction pause gate for this run's scope (U5); absent = run never pauses. */
+  compaction?: SubagentCompactionPauseController;
 }) => AsyncGenerator<StreamEvent>;
 
 export type SubagentChangeListener = (records: readonly SubagentRecord[]) => void;
@@ -1169,6 +1230,8 @@ export class SubagentManager {
     this._admission.filterQueue((id) => this._subagents.has(id));
     this._persistence.clearSession(sessionId);
     this._liveProjection.clearSessionRevision(sessionId);
+    clearCompactionPendingsForSession(sessionId);
+    clearCompactionPausesForSession(sessionId);
     this._notify();
   }
 
@@ -1195,6 +1258,8 @@ export class SubagentManager {
     this._admission.filterQueue((id) => this._subagents.has(id));
     this._persistence.clearSession(sessionId);
     this._liveProjection.clearSessionRevision(sessionId);
+    clearCompactionPendingsForSession(sessionId);
+    clearCompactionPausesForSession(sessionId);
     if (records.length > 0) {
       this._admitFromQueue();
       this._notify();
@@ -1478,13 +1543,20 @@ export class SubagentManager {
     const priorUsage = record.usage ?? sumMessageUsages(record.chain?.messages ?? []);
     const assembler = new SubagentRunAssembler(record.chain?.messages ?? []);
 
-    // U9: subagent mid-run compaction state — per-run trigger with subagent's
-    // own model limits (R16). Lazy-resolved on first usage event so the run
-    // start is not blocked by an extra provider lookup (avoids breaking
-    // admission-gate tests that assert on synchronous runner invocation).
+    // U5: the runner's history is a mutable handoff — the compaction apply at
+    // a pause boundary swaps its contents and the restarted stream replays it.
+    const historyBox: SubagentHistoryBox = { messages: [...(record.chain?.messages ?? [])] };
+    const sessionKey = record.sessionId ?? 'unknown';
+    let lastStepIndex = 0;
+
+    // U9/U5: subagent mid-run compaction state — per-run trigger with the
+    // subagent's own model limits (R16), plus a scoped pending entry in the
+    // shared store keyed (sessionId, record.id). Lazy-resolved on first usage
+    // event so the run start is not blocked by an extra provider lookup
+    // (avoids breaking admission-gate tests that assert on synchronous runner
+    // invocation).
     let subagentContextTokens: number | null | undefined = undefined;
     let subagentCompactionTrigger: CompactionTriggerType | null = null;
-    let compactionPendingPromise: Promise<ApplyResult | null> | null = null;
     let compactionInitDone = false;
     let cachedSubagentCfg: CompactionScopeConfig | null = null;
 
@@ -1546,13 +1618,17 @@ export class SubagentManager {
       return false;
     };
 
-    // Fire-and-forget compaction prepare. The whole body sits in a try/finally
-    // so EVERY settled evaluation — registered a pending, decided not to, or
-    // threw — increments the test-observable counter (see
-    // compactionPreparesEvaluated); tests await it instead of fixed sleeps.
+    // Fire-and-forget compaction prepare (R29 fire point 2). Registers a
+    // scoped pending entry and requests the scoped pause so the run's tool
+    // loop stops at the next step boundary (R28) — main's
+    // handleUsageCompaction choreography on the subagent host. The whole body
+    // sits in a try/finally so EVERY settled evaluation — registered a
+    // pending, decided not to, or threw — increments the test-observable
+    // counter (see compactionPreparesEvaluated); tests await it instead of
+    // fixed sleeps.
     const maybeStartCompactionPrepare = async (inputTokens: number): Promise<void> => {
       try {
-        if (compactionPendingPromise) return;
+        if (getCompactionPending(sessionKey, record.id)) return;
         const ok = await ensureCompactionInit();
         if (!ok || !subagentContextTokens || !subagentCompactionTrigger) return;
         try {
@@ -1566,24 +1642,9 @@ export class SubagentManager {
             }
           }
           if (!cfg) return;
-          // Branch on compaction mode before delegating: selective and simple both
-          // delegate to the updated runner helper which already branches internally.
-          // The check ensures per-run trigger evaluation and pending promise handling
-          // are mode-aware while keeping simple as default (opt-in selective).
-          const mode: string = cfg.mode ?? 'simple';
-          const shouldDelegateSelective = mode === 'selective';
-          const shouldDelegateSimple = mode !== 'selective';
-          // Both branches delegate to the same helper; the helper's internal branch
-          // handles manifest+LLM caller vs summarizeCompactableRange + simpleFallback.
-          void shouldDelegateSelective;
-          void shouldDelegateSimple;
-          const chainForCompaction = record.chain
-            ? [{ ...record.chain, messages: [...record.chain.messages] }]
-            : [];
-          const messagesForCompaction = record.chain?.messages ?? [];
-          const p = tryCompactSubagentHistory({
+          const messagesForCompaction = (record.chain?.messages ?? []) as Message[];
+          const prepared = await prepareSubagentCompaction({
             messages: messagesForCompaction,
-            chains: chainForCompaction as unknown as import('../../shared/types/chain').Chain[],
             selection: record.selection,
             config: (() => {
               try {
@@ -1592,7 +1653,7 @@ export class SubagentManager {
                 return { compaction: { subagents: cfg } } as unknown as import('../config/schema').Config;
               }
             })(),
-            sessionId: record.sessionId ?? 'unknown',
+            sessionId: sessionKey,
             subagentId: record.id,
             chainId: record.chain?.id ?? null,
             turnId: `${record.id}#${run.generation}`,
@@ -1602,8 +1663,18 @@ export class SubagentManager {
             onProgress: emitSubagentCompactionProgress,
             onTextDelta: onCompactionTextDelta,
           });
-          subagentCompactionTrigger.markPrepareStarted();
-          compactionPendingPromise = p;
+          if (!prepared) return;
+          subagentCompactionTrigger.markPrepareStarted(prepared.cut.compactableRange, prepared.flaggedIds);
+          setCompactionPending(sessionKey, record.id, prepared);
+          // The compactor promise is consumed at the pause boundary; until
+          // then a rejection (compactor provider down) has no observer —
+          // attach a no-op catch so it can never surface as an unhandled
+          // rejection. The apply awaits the same promise and handles it.
+          prepared.promise?.catch(() => undefined);
+          prepared.selectivePromise?.catch(() => undefined);
+          if (!shouldPauseForCompaction(sessionKey, record.id)) {
+            requestCompactionPause(sessionKey, record.id);
+          }
         } catch (e) {
           // non-fatal
           console.debug('[subagent-compaction] prepare start failed:', e);
@@ -1613,19 +1684,71 @@ export class SubagentManager {
       }
     };
 
-    const maybeApplyCompactionAtBoundary = async (stepIndex: number): Promise<boolean> => {
-      if (!compactionPendingPromise) return false;
+    // U5: consume the scoped compaction pause at a step boundary (R28) — the
+    // subagent twin of main's idle-intercept apply in send.ts. Re-validates the
+    // pending cut against the LIVE chain history (R37), applies over that live
+    // history (so the post-prepare suffix survives — the re-anchor contract),
+    // persists via the transactional subagent path (R36), swaps the history box
+    // the runner restart reads, and runs the terminal still-over/partial-report
+    // degradation (R17). Always clears the scoped pause gate first so exactly
+    // one apply runs per pause cycle.
+    const applyPendingAtPause = async (): Promise<SubagentPauseApplyOutcome> => {
+      const pending = takeCompactionPending(sessionKey, record.id);
+      clearCompactionPause(sessionKey, record.id);
+      if (!pending) {
+        historyBox.messages = assembler.snapshotTranscript();
+        return 'skipped';
+      }
+      if (abort.signal.aborted) {
+        try { subagentCompactionTrigger?.consumePending(); } catch { /* trigger may be unresolved */ }
+        emitSubagentCompactionProgress({ phase: 'complete' });
+        return 'aborted';
+      }
       const ok = await ensureCompactionInit();
-      if (!ok || !subagentCompactionTrigger || !subagentContextTokens) return false;
-      const pending = compactionPendingPromise;
-      compactionPendingPromise = null;
-      let applyResult: ApplyResult | null = null;
-      try {
-        applyResult = await pending;
-      } catch {
+      if (!ok || !subagentCompactionTrigger || !subagentContextTokens) {
+        try { subagentCompactionTrigger?.consumePending(); } catch { /* trigger may be unresolved */ }
+        emitSubagentCompactionProgress({ phase: 'complete' });
+        historyBox.messages = assembler.snapshotTranscript();
+        return 'skipped';
+      }
+      emitSubagentCompactionProgress({ phase: 'compacting', detail: 'Applying summary', mode: pending.mode });
+      // R37: the pending's cut/expected ids were captured at prepare time —
+      // re-validate against the live chain history (everything the run has
+      // accumulated, including the current step's trailing text) before apply.
+      const liveHistory = dedupeHistoryById(assembler.snapshotTranscript());
+      if (!isPendingCutStillValid(pending, liveHistory)) {
         subagentCompactionTrigger.consumePending();
         emitSubagentCompactionProgress({ phase: 'complete' });
-        return false;
+        historyBox.messages = [...liveHistory];
+        return 'skipped';
+      }
+      // Race the compactor wait against the run's abort signal so an interrupt
+      // during the pause aborts cleanly (the subagent twin of review #33).
+      const applyResult = await new Promise<ApplyResult | null>((resolve) => {
+        if (abort.signal.aborted) {
+          resolve(null);
+          return;
+        }
+        let settled = false;
+        const settle = (value: ApplyResult | null): void => {
+          if (settled) return;
+          settled = true;
+          abort.signal.removeEventListener('abort', onAbort);
+          resolve(value);
+        };
+        const onAbort = (): void => settle(null);
+        abort.signal.addEventListener('abort', onAbort, { once: true });
+        applySubagentPendingCompaction({
+          pending,
+          messages: liveHistory,
+          chains: [{ ...(record.chain ?? makeEmptyChain(sessionKey, record.selection, record.agent)), messages: [...liveHistory] }] as unknown as import('../../shared/types/chain').Chain[],
+          sessionId: sessionKey,
+        }).then(settle, () => settle(null));
+      });
+      if (abort.signal.aborted) {
+        subagentCompactionTrigger.consumePending();
+        emitSubagentCompactionProgress({ phase: 'complete' });
+        return 'aborted';
       }
       const chainMessages = record.chain?.messages ?? [];
       const shouldApply = subagentCompactionTrigger.evaluateApply({
@@ -1652,20 +1775,18 @@ export class SubagentManager {
       if (!applyResult || !shouldApply.shouldApply) {
         subagentCompactionTrigger.consumePending();
         emitSubagentCompactionProgress({ phase: 'complete' });
-        return false;
+        historyBox.messages = [...liveHistory];
+        return 'skipped';
       }
       // Persist via the transactional subagent compaction path so crash
-      // mid-run resumes the compacted chain (R36). The in-memory update
-      // (_setChainMessages) stays — memory must be updated too; the DB write
-      // is the single-transaction path. The assembler field poke is kept as
-      // an in-memory concern (U5 will replace it with a mutable handoff).
+      // mid-run resumes the compacted chain (R36), applied BEFORE the run
+      // resumes. Memory follows: the record chain, the assembler base (via
+      // rebase — never a field poke), and the history box the restarted
+      // stream replays.
       const updatedMessages = applyResult.updatedMessages;
       this._setChainMessages(record, [...updatedMessages]);
-      try {
-        (assembler as unknown as { messages: Message[] }).messages = [...updatedMessages];
-      } catch {
-        // assembler field poke is best-effort
-      }
+      assembler.rebase(updatedMessages);
+      historyBox.messages = [...updatedMessages];
       try {
         const sessionId = record.sessionId ?? undefined;
         if (sessionId) {
@@ -1753,7 +1874,7 @@ export class SubagentManager {
           // check is skipped (hard rule: no heuristic token estimates).
           const retryMessages = (record.chain?.messages ?? []) as Message[];
           const tpc3 = deriveTpc(record.usage?.prompt_tokens ?? null, totalCharsForMessages(retryMessages));
-          if (tpc3 == null) return false;
+          if (tpc3 == null) return 'applied';
           // R31/R32: exempt user ids thread through so the exhaustion check's
           // compactable range matches the real compaction range.
           const cut = calibratedCut(retryMessages, {
@@ -1769,15 +1890,31 @@ export class SubagentManager {
           const netNew = rangeMessages.filter((m) => !m.excludeFromModel && !m.hidden && !m.compacted);
           if (netNew.length === 0) {
             const done = `${record.chain?.messages.filter((m) => m.type === 'tool_result').length ?? 0} tool results`;
-            const partial = buildSubagentPartialReport({ done, remaining: record.task.slice(0, 200), stoppedAt: `step ${stepIndex}` });
+            const partial = buildSubagentPartialReport({ done, remaining: record.task.slice(0, 200), stoppedAt: `step ${lastStepIndex}` });
             record.result = partial;
-            return true;
+            return 'degraded';
           }
         } catch {
           // ignore
         }
       }
-      return false;
+      return 'applied';
+    };
+
+    /**
+     * Compaction pause gate handed to the runner (U5). `shouldPause` feeds the
+     * orchestrator's early-stop predicate for this run's scope;
+     * `applyAtPause` is awaited at the stream's step boundary; `discard` is
+     * the interrupt path (clear gate + drop pending, never apply).
+     */
+    const pauseController: SubagentCompactionPauseController = {
+      shouldPause: () => shouldPauseForCompaction(sessionKey, record.id),
+      applyAtPause: applyPendingAtPause,
+      discard: () => {
+        clearCompactionPause(sessionKey, record.id);
+        deleteCompactionPending(sessionKey, record.id);
+        try { subagentCompactionTrigger?.consumePending(); } catch { /* trigger may be unresolved */ }
+      },
     };
 
     // R29 fire point 1: spawn/resume estimate gate, run once before the run's
@@ -1789,7 +1926,7 @@ export class SubagentManager {
       try {
         const history = (record.chain?.messages ?? []) as Message[];
         if (history.length === 0) return;
-        if (compactionPendingPromise) return;
+        if (getCompactionPending(sessionKey, record.id)) return;
         const ok = await ensureCompactionInit();
         if (!ok || !subagentContextTokens || !subagentCompactionTrigger) return;
         const { runCompactionGate } = await import('../llm/compaction/pipeline.js');
@@ -1824,9 +1961,11 @@ export class SubagentManager {
     try {
       const stream = runner({
         task: record.task,
-        // Replay the full chain on a resume; a mutable snapshot keeps the
-        // runner's history independent of the assembler's message accumulator.
-        history: [...(record.chain?.messages ?? [])],
+        // Mutable history handoff (U5): the runner replays the box's messages
+        // for every stream segment; a compaction apply at a pause boundary
+        // swaps its contents so the restarted stream reads the compacted
+        // history.
+        historyBox,
         agent: record.agent,
         selection: record.selection,
         abortSignal: abort.signal,
@@ -1843,6 +1982,7 @@ export class SubagentManager {
           if (!this._runs.isCurrent(run)) return;
           record.reasoningEffort = effort;
         },
+        compaction: pauseController,
       });
 
       for await (const event of stream) {
@@ -1851,9 +1991,9 @@ export class SubagentManager {
           break;
         }
         if (!this._applyAssemblerEffects(record, run, assembler.accept(event))) return;
-        // U9: subagent mid-run compaction — proactive prepare after usage,
-        // apply at idle step boundary (R12, R16). Same trigger engine as U6
-        // but with subagents scope config.
+        // U9/U5: subagent mid-run compaction — proactive prepare after usage
+        // (R29 fire point 2) arms the scoped pause; the runner consumes it at
+        // the next step boundary (R28) via the pause controller.
         if (event.type === 'usage') {
           const ready = await ensureCompactionInit();
           if (!ready || typeof subagentContextTokens !== 'number' || !subagentCompactionTrigger) continue;
@@ -1868,11 +2008,7 @@ export class SubagentManager {
           void maybeStartCompactionPrepare(inputTokens);
         }
         if (event.type === 'step_finish') {
-          const shouldDegrade = await maybeApplyCompactionAtBoundary(event.stepIndex);
-          if (shouldDegrade) {
-            // Degraded to partial report (R17) — stop run gracefully as completed
-            break;
-          }
+          lastStepIndex = event.stepIndex;
         }
       }
 
@@ -1899,6 +2035,11 @@ export class SubagentManager {
       this._applyAssemblerFinalization(record, run, assembler.fail(message), priorUsage);
     } finally {
       if (this._runs.isCurrent(run)) {
+        // Interrupt or natural end: clear this run's scoped compaction gate
+        // and drop any pending it never consumed — the per-run trigger dies
+        // with the run, and the next run re-prepares via its own gates. A
+        // superseded generation (!isCurrent) keeps its replacement's state.
+        pauseController.discard();
         if (record.state === SubagentState.INTERRUPTED) {
           this._finishLive(record, SubagentState.INTERRUPTED);
         }

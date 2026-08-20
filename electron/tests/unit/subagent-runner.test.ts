@@ -117,6 +117,15 @@ vi.mock('../../src/main/llm/message-factories', () => ({
 }));
 
 import { createSubagentStreamRunner } from '../../src/main/agents/subagent-runner';
+import type {
+  SubagentCompactionPauseController,
+  SubagentPauseApplyOutcome,
+} from '../../src/main/agents/manager';
+import {
+  clearCompactionPause,
+  requestCompactionPause,
+  shouldPauseForCompaction,
+} from '../../src/main/ipc/next-request-stop';
 
 const agent: Agent = {
   name: 'worker',
@@ -311,7 +320,7 @@ describe('createSubagentStreamRunner', () => {
     }));
   });
 
-  it('replays the provided history to streamChat on a resumed run (U5)', async () => {
+  it('replays the provided history box to streamChat on a resumed run (U5)', async () => {
     const history = [
       { role: 'user', content: 'first task' },
       { role: 'assistant', content: 'first answer' },
@@ -320,7 +329,7 @@ describe('createSubagentStreamRunner', () => {
 
     await collect(createSubagentStreamRunner()({
       task: 'follow up',
-      history,
+      historyBox: { messages: history },
       agent,
       selection,
       abortSignal: new AbortController().signal,
@@ -408,5 +417,300 @@ describe('createSubagentStreamRunner', () => {
         snapshot: expect.objectContaining({ tier: tieredSnapshot.tier }),
       }),
     }));
+  });
+});
+
+// ── Compaction pause gate (U5: R28 — mid-run pause and resume) ───────────────
+
+describe('createSubagentStreamRunner compaction pause gate (U5)', () => {
+  const PAUSE_SESSION = 'session-runner-pause';
+  const PAUSE_SCOPE = 'scope-runner-pause';
+
+  let abortController: AbortController;
+
+  /** Manual pause controller bound to the real scoped pause registry. */
+  function manualPauseController(opts?: {
+    outcome?: SubagentPauseApplyOutcome;
+    onApply?: () => void | Promise<void>;
+    neverResolves?: boolean;
+  }): SubagentCompactionPauseController {
+    return {
+      shouldPause: () => shouldPauseForCompaction(PAUSE_SESSION, PAUSE_SCOPE),
+      applyAtPause: async () => {
+        if (opts?.neverResolves) {
+          return new Promise<SubagentPauseApplyOutcome>(() => undefined);
+        }
+        // The production controller always clears the scoped gate when it
+        // consumes the pause — mirror that or the restart loop would see the
+        // pause still armed and spin.
+        clearCompactionPause(PAUSE_SESSION, PAUSE_SCOPE);
+        await opts?.onApply?.();
+        return opts?.outcome ?? 'applied';
+      },
+      discard: () => {
+        clearCompactionPause(PAUSE_SESSION, PAUSE_SCOPE);
+      },
+    };
+  }
+
+  function boxWith(messages: Message[]): { messages: Message[] } {
+    return { messages };
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.getConfig.mockReturnValue({ default_project_dir: null });
+    mocks.acquireProjectMCPManager.mockReturnValue(mocks.mcpManager);
+    mocks.getBuiltinToolRegistryForRuntime.mockReturnValue(mocks.toolRegistry);
+    clearCompactionPause(PAUSE_SESSION, PAUSE_SCOPE);
+    abortController = new AbortController();
+  });
+
+  it('binds the scoped pause predicate into streamChat only for this run\'s scope', async () => {
+    requestCompactionPause(PAUSE_SESSION, PAUSE_SCOPE);
+    const controller = manualPauseController({ neverResolves: true });
+
+    const runPromise = collect(createSubagentStreamRunner()({
+      task: 'Inspect the project',
+      agent,
+      selection,
+      abortSignal: abortController.signal,
+      agentScopeId: PAUSE_SCOPE,
+      sessionId: PAUSE_SESSION,
+      cwd: '/tmp/project',
+      projectRuntime: runtime(),
+      compaction: controller,
+    }));
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    abortController.abort();
+    await runPromise;
+
+    const call = mocks.streamChat.mock.calls.at(-1)![0] as { shouldStopEarly?: () => boolean };
+    expect(typeof call.shouldStopEarly).toBe('function');
+    expect(call.shouldStopEarly!()).toBe(true);
+    // The pause is scoped: the main scope and other subagent scopes stay clear.
+    expect(shouldPauseForCompaction(PAUSE_SESSION, 'main')).toBe(false);
+    expect(shouldPauseForCompaction(PAUSE_SESSION, 'other-scope')).toBe(false);
+    clearCompactionPause(PAUSE_SESSION, PAUSE_SCOPE);
+  });
+
+  it('does not pass an early-stop predicate when no compaction controller is supplied', async () => {
+    await collect(createSubagentStreamRunner()({
+      task: 'Inspect the project',
+      agent,
+      selection,
+      abortSignal: new AbortController().signal,
+      agentScopeId: 'scope-no-pause',
+      sessionId: 'session-no-pause',
+      cwd: '/tmp/project',
+      projectRuntime: runtime(),
+    }));
+
+    const call = mocks.streamChat.mock.calls.at(-1)![0] as { shouldStopEarly?: () => boolean };
+    expect(call.shouldStopEarly).toBeUndefined();
+  });
+
+  it('restarts the stream with the compacted history after a pause apply (in-run progress preserved)', async () => {
+    const taskHead = { id: 'task-head', role: 'user', content: 'Map the repo' } as unknown as Message;
+    const suffix = { id: 'tool-result-1', role: 'tool', content: 'file contents' } as unknown as Message;
+    const summary = { id: 'summary-head', role: 'assistant', content: 'SUMMARY', compacted: { mode: 'simple' } } as unknown as Message;
+    const box = boxWith([taskHead, { id: 'old-a', role: 'assistant', content: 'stale prefix' } as unknown as Message, suffix]);
+
+    // Pause is already armed when the run starts; the first segment ends at
+    // the (mocked) step boundary, the apply swaps the box, the restart reads it.
+    requestCompactionPause(PAUSE_SESSION, PAUSE_SCOPE);
+    mocks.streamChat.mockImplementationOnce(async function* () {
+      yield { type: 'content', text: 'segment one' };
+      yield { type: 'finish', finishReason: 'stop' };
+    });
+    mocks.streamChat.mockImplementationOnce(async function* () {
+      yield { type: 'content', text: 'segment two' };
+      yield { type: 'finish', finishReason: 'stop' };
+    });
+    const controller = manualPauseController({
+      onApply: () => {
+        box.messages = [taskHead, summary, suffix];
+      },
+    });
+
+    const events = await collect(createSubagentStreamRunner()({
+      task: 'Map the repo',
+      historyBox: box,
+      agent,
+      selection,
+      abortSignal: abortController.signal,
+      agentScopeId: PAUSE_SCOPE,
+      sessionId: PAUSE_SESSION,
+      cwd: '/tmp/project',
+      projectRuntime: runtime(),
+      compaction: controller,
+    }));
+
+    expect(mocks.streamChat).toHaveBeenCalledTimes(2);
+    // Events from BOTH segments flow through the single runner generator.
+    expect(events).toEqual([
+      { type: 'content', text: 'segment one' },
+      { type: 'finish', finishReason: 'stop' },
+      { type: 'content', text: 'segment two' },
+      { type: 'finish', finishReason: 'stop' },
+    ]);
+    const restartedMessages = (mocks.streamChat.mock.calls[1]![0] as { messages: Message[] }).messages;
+    // Mirror of main's resetTurnForCompactionResume: the restart replays the
+    // compacted history with the task head, the summary head, and ALL in-run
+    // progress — never the bare task message.
+    expect(restartedMessages.map((m) => m.id)).toEqual(['task-head', 'summary-head', 'tool-result-1']);
+    // The pause was consumed; no third segment.
+    expect(shouldPauseForCompaction(PAUSE_SESSION, PAUSE_SCOPE)).toBe(false);
+    expect(mocks.releaseProjectMCPManager).toHaveBeenCalledTimes(1);
+  });
+
+  it('restarts with the accumulated history when the apply is skipped (summary unusable)', async () => {
+    const box = boxWith([{ id: 'task-head', role: 'user', content: 'Map the repo' } as unknown as Message]);
+    requestCompactionPause(PAUSE_SESSION, PAUSE_SCOPE);
+    mocks.streamChat.mockImplementationOnce(async function* () {
+      yield { type: 'content', text: 'first try' };
+      yield { type: 'finish', finishReason: 'stop' };
+    });
+    mocks.streamChat.mockImplementationOnce(async function* () {
+      yield { type: 'content', text: 'resumed un-compacted' };
+      yield { type: 'finish', finishReason: 'stop' };
+    });
+    const controller = manualPauseController({
+      outcome: 'skipped',
+      onApply: () => {
+        box.messages = [
+          { id: 'task-head', role: 'user', content: 'Map the repo' } as unknown as Message,
+          { id: 'accumulated', role: 'assistant', content: 'progress' } as unknown as Message,
+        ];
+      },
+    });
+
+    await collect(createSubagentStreamRunner()({
+      task: 'Map the repo',
+      historyBox: box,
+      agent,
+      selection,
+      abortSignal: abortController.signal,
+      agentScopeId: PAUSE_SCOPE,
+      sessionId: PAUSE_SESSION,
+      cwd: '/tmp/project',
+      projectRuntime: runtime(),
+      compaction: controller,
+    }));
+
+    expect(mocks.streamChat).toHaveBeenCalledTimes(2);
+    const resumedMessages = (mocks.streamChat.mock.calls[1]![0] as { messages: Message[] }).messages;
+    expect(resumedMessages.map((m) => m.id)).toEqual(['task-head', 'accumulated']);
+  });
+
+  it('ends the run after a degraded pause (partial report) without restarting', async () => {
+    requestCompactionPause(PAUSE_SESSION, PAUSE_SCOPE);
+    mocks.streamChat.mockImplementationOnce(async function* () {
+      yield { type: 'content', text: 'over the window' };
+      yield { type: 'finish', finishReason: 'stop' };
+    });
+    const box = boxWith([{ id: 'task-head', role: 'user', content: 'Map the repo' } as unknown as Message]);
+    const controller = manualPauseController({ outcome: 'degraded' });
+
+    const events = await collect(createSubagentStreamRunner()({
+      task: 'Map the repo',
+      historyBox: box,
+      agent,
+      selection,
+      abortSignal: abortController.signal,
+      agentScopeId: PAUSE_SCOPE,
+      sessionId: PAUSE_SESSION,
+      cwd: '/tmp/project',
+      projectRuntime: runtime(),
+      compaction: controller,
+    }));
+
+    expect(mocks.streamChat).toHaveBeenCalledTimes(1);
+    expect(events.map((event) => (event as { text?: string }).text ?? event.type)).toEqual([
+      'over the window',
+      'finish',
+    ]);
+  });
+
+  it('interrupts cleanly during the pause: abort breaks the wait, no restart, no events after', async () => {
+    requestCompactionPause(PAUSE_SESSION, PAUSE_SCOPE);
+    mocks.streamChat.mockImplementationOnce(async function* () {
+      yield { type: 'content', text: 'before the pause' };
+      yield { type: 'finish', finishReason: 'stop' };
+    });
+    const box = boxWith([{ id: 'task-head', role: 'user', content: 'Map the repo' } as unknown as Message]);
+    const controller = manualPauseController({ neverResolves: true });
+
+    const runPromise = collect(createSubagentStreamRunner()({
+      task: 'Map the repo',
+      historyBox: box,
+      agent,
+      selection,
+      abortSignal: abortController.signal,
+      agentScopeId: PAUSE_SCOPE,
+      sessionId: PAUSE_SESSION,
+      cwd: '/tmp/project',
+      projectRuntime: runtime(),
+      compaction: controller,
+    }));
+    // Wait until the runner is parked in the pause apply, then interrupt.
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(mocks.streamChat).toHaveBeenCalledTimes(1);
+    abortController.abort();
+    const events = await runPromise;
+
+    expect(mocks.streamChat).toHaveBeenCalledTimes(1);
+    expect(events).toEqual([
+      { type: 'content', text: 'before the pause' },
+      { type: 'finish', finishReason: 'stop' },
+    ]);
+    expect(mocks.releaseProjectMCPManager).toHaveBeenCalledTimes(1);
+  });
+
+  it('aborts during the summarizer wait without consuming a late apply result', async () => {
+    requestCompactionPause(PAUSE_SESSION, PAUSE_SCOPE);
+    mocks.streamChat.mockImplementationOnce(async function* () {
+      yield { type: 'finish', finishReason: 'stop' };
+    });
+    const box = boxWith([{ id: 'task-head', role: 'user', content: 'Map the repo' } as unknown as Message]);
+    let resolveApply: ((value: SubagentPauseApplyOutcome) => void) | null = null;
+    let applyInvoked = false;
+    const controller: SubagentCompactionPauseController = {
+      shouldPause: () => shouldPauseForCompaction(PAUSE_SESSION, PAUSE_SCOPE),
+      applyAtPause: () => {
+        applyInvoked = true;
+        // Simulates the summarizer wait: the apply stays pending until the
+        // test resolves it — after the abort already fired.
+        return new Promise<SubagentPauseApplyOutcome>((resolve) => {
+          resolveApply = resolve;
+        });
+      },
+      discard: () => {
+        clearCompactionPause(PAUSE_SESSION, PAUSE_SCOPE);
+      },
+    };
+
+    const runPromise = collect(createSubagentStreamRunner()({
+      task: 'Map the repo',
+      historyBox: box,
+      agent,
+      selection,
+      abortSignal: abortController.signal,
+      agentScopeId: PAUSE_SCOPE,
+      sessionId: PAUSE_SESSION,
+      cwd: '/tmp/project',
+      projectRuntime: runtime(),
+      compaction: controller,
+    }));
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(applyInvoked).toBe(true);
+    abortController.abort();
+    await runPromise;
+    resolveApply?.('applied');
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    // The aborted restart loop exits before the late apply can trigger a
+    // second provider call.
+    expect(mocks.streamChat).toHaveBeenCalledTimes(1);
   });
 });
