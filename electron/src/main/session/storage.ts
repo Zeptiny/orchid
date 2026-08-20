@@ -5,7 +5,6 @@
  * Cache directories: ~/.orchid/cache/tool-output/<session_id>/
  *                    ~/.orchid/cache/web-fetch/<session_id>/
  */
-import { randomUUID } from 'node:crypto';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
@@ -1015,9 +1014,11 @@ export function appendActiveChain(
  * chain pointer. Returns false if the chain row is missing.
  *
  * Finalize is the convergence point for the at-rest invariant "one turn = one
- * chain row": the finished chain now holds the full turn, so any split-tail
- * row a mid-turn compaction left behind (its content subsumed by this write)
- * is retired in the same transaction instead of lingering as an orphan.
+ * chain row": the finished chain (the continuing suffix row a mid-turn
+ * compaction kept the original id on) now holds the full turn, so any split
+ * prefix row and absorbed summary row the compaction left behind (their
+ * content subsumed by this write) is retired in the same transaction instead
+ * of lingering as an orphan.
  */
 export function finishChain(
   chain: Chain,
@@ -1050,15 +1051,19 @@ export function finishChain(
 
 /**
  * Delete superseded chain rows — rows whose message-id set is fully contained
- * in another chain of the same session (the split-tail orphans a mid-turn
+ * in another chain of the same session (the split-prefix orphans a mid-turn
  * compaction's durable split creates once the owning turn finalizes into its
- * head row). The chain being finalized now is always kept; the session's
+ * continuing row). The chain being finalized now is always kept; the session's
  * active-chain pointer is honored when supplied.
  *
  * Safety properties:
  * - Empty or unreadable rows are never deleted (an empty id set is not a match).
  * - Fresh-id chains (turns start with a new user message, summary heads carry a
  *   new summary id) can never be subsets, so legitimate chains are immune.
+ * - Containment is judged on VISIBLE ids: hidden extras (usage carriers
+ *   duplicated into stale split rows) must not protect a row whose whole
+ *   visible content an earlier row already holds. Owner containment uses the
+ *   full id set.
  * - Deleting the LATER duplicate matches replay semantics: history assembly
  *   dedupes by id keeping first occurrence, so the deleted rows were already
  *   invisible to the model.
@@ -1075,29 +1080,38 @@ function deleteSupersededChains(
   if (rows.length < 2) return [];
 
   const idSets = new Map<string, Set<string>>();
+  const visibleIdSets = new Map<string, Set<string>>();
   for (const row of rows) {
     let ids: Set<string> | null = null;
+    let visibleIds: Set<string> | null = null;
     try {
       const parsed: unknown = JSON.parse(row.messages_json ?? '[]');
       if (Array.isArray(parsed)) {
         ids = new Set<string>();
+        visibleIds = new Set<string>();
         for (const message of parsed) {
           if (message && typeof message === 'object' && typeof (message as { id?: unknown }).id === 'string') {
-            ids.add((message as { id: string }).id);
+            const id = (message as { id: string }).id;
+            ids.add(id);
+            if (!(message as { hidden?: unknown }).hidden) visibleIds.add(id);
           }
         }
       }
     } catch {
       ids = null;
+      visibleIds = null;
     }
-    if (ids) idSets.set(row.id, ids);
+    if (ids && visibleIds) {
+      idSets.set(row.id, ids);
+      visibleIdSets.set(row.id, visibleIds);
+    }
   }
 
   const superseded: string[] = [];
   for (let candidateIndex = 0; candidateIndex < rows.length; candidateIndex += 1) {
     const candidate = rows[candidateIndex]!;
     if (candidate.id === finalizedChainId || candidate.id === activeChainId) continue;
-    const candidateIds = idSets.get(candidate.id);
+    const candidateIds = visibleIdSets.get(candidate.id);
     if (!candidateIds || candidateIds.size === 0) continue;
     for (let ownerIndex = 0; ownerIndex < candidateIndex; ownerIndex += 1) {
       const ownerIds = idSets.get(rows[ownerIndex]!.id);
@@ -1537,11 +1551,13 @@ function loadSessionInternal(
         chainRows = selectChainRows(db, sessionId, loadFullSession);
       }
 
-      // Heal superseded chain rows (split-tail orphans from a mid-turn
-      // compaction whose turn never finalized — crash or restart — plus
+      // Heal superseded chain rows (duplicate split rows from mid-turn
+      // compactions whose turn never finalized — crash or restart — plus
       // sessions already carrying the damage). Recovery above already made
       // every chain terminal, so the active-pointer exclusion only protects
-      // a pointer that survived it.
+      // a pointer that survived it. A LIVE compaction split (fresh-id
+      // prefix + summary + continuing suffix) is never a subset relation
+      // and always survives the heal.
       const activePointer = (row as SessionRow).active_chain_id ?? null;
       const healed = deleteSupersededChains(db, sessionId, null, activePointer);
       if (healed.length > 0) {
@@ -1663,6 +1679,18 @@ export function loadSessionForReplacement(
 /** Load the navigation payload without selecting or parsing subagent record_json. */
 export function loadSessionView(sessionId: string, opts?: StorageOptions): Session | null {
   return loadSessionInternal(sessionId, false, opts);
+}
+
+/**
+ * Bounded renderer view WITHOUT process-restart recovery.
+ *
+ * Live-cache refresh after a compaction durable write: a mid-turn ACTIVE
+ * continuing row must keep its status and the session's active-chain pointer
+ * (recovery would flip it to INTERRUPTED and strand the live turn's
+ * checkpoint writes).
+ */
+export function loadSessionViewUnrecovered(sessionId: string, opts?: StorageOptions): Session | null {
+  return loadSessionInternal(sessionId, false, opts, false);
 }
 
 /** Load the next older bounded page for one chain in a renderer session view. */
@@ -1941,18 +1969,11 @@ export interface CompactionPersistencePayload {
   readonly summaryChain: Chain | null;
   /**
    * Durable message id the summary must precede in replay order — the first
-   * preserved-window message after the cut. When the id sits mid-chain, that
-   * chain is split around the insertion: pre-boundary messages stay on the
-   * original row (original id) and the suffix moves to a new row placed after
-   * the summary. Null (with a summary) appends the summary after the last
-   * durable chain.
+   * preserved-window message after the cut. The summary chain's messages are
+   * inserted INLINE into the owning chain at that position. Null (with a
+   * summary) appends the summary after the last durable chain.
    */
   readonly insertBeforeMessageId: string | null;
-  /**
-   * Identity/metadata for the split suffix row. When omitted, the suffix row
-   * is synthesized from the split chain (fresh id, cloned metadata).
-   */
-  readonly splitTailChain?: Chain | null;
 }
 
 /** Durable layout outcome of a successful compaction write. */
@@ -1963,8 +1984,6 @@ export interface CompactionPersistenceResult {
   readonly flaggedChainIds: readonly string[];
   /** Inserted summary-head chain id (null for reclaim-only compaction). */
   readonly summaryChainId: string | null;
-  /** Split suffix row id (null when the insertion did not split a chain). */
-  readonly splitTailChainId: string | null;
 }
 
 /**
@@ -1974,10 +1993,8 @@ export interface CompactionPersistenceResult {
  * - For every chain owning a flagged message id: re-read that chain's FULL
  *   durable `messages_json`, set `excludeFromModel` on the matching ids, and
  *   update the row in place. Only those flags change.
- * - Insert the summary-head chain at the correct ordinal, bumping later
- *   ordinals so reload order is: flagged prefix chains → summary head →
- *   preserved window → later chains. A boundary inside a chain splits that
- *   chain around the insertion.
+ * - Insert the summary head INLINE into the owning anchor chain (same shape
+ *   as the subagent scope): flags + one message, no row restructuring.
  * - Never deletes or rewrites any chain not touched by the compaction and
  *   never touches `subagent_chains` (a wholesale saveSession from a bounded
  *   view would permanently truncate pre-window history and wipe durable
@@ -2084,62 +2101,36 @@ export function applyCompactionPersistence(
         updateChainRow(db, { ...chainMetadataFromRow(entry.row), messages: entry.messages });
       }
 
-      // 2. Summary-head insertion. Untouched chains keep their rows (and
-      //    ordinals below the insertion point) exactly as they are.
+      // 2. Summary-head insertion (R20): when the anchor names a durable
+      //    message, the summary chain's messages are inserted INLINE into the
+      //    owning chain at the anchor index — the same shape the subagent
+      //    scope persists. One turn stays one chain row: no split duplicates
+      //    for the finalize retire, no extra rows consuming the bounded
+      //    renderer view budget (which starves the turn's user message in its
+      //    oldest row), and no chain-count explosion past the renderer's
+      //    collapse threshold. Untouched chains keep their rows and ordinals
+      //    exactly as they are.
       let summaryChainId: string | null = null;
-      let splitTailChainId: string | null = null;
       const summaryChain = payload.summaryChain;
       if (summaryChain) {
         const summary: Chain = { ...summaryChain, sessionId };
-        const insertChain = db.prepare(INSERT_CHAIN_SQL);
         if (!anchorEntry) {
-          // Append after the last durable chain.
+          // Append after the last durable chain (no anchor chain to inline into).
+          const insertChain = db.prepare(INSERT_CHAIN_SQL);
           const ordinal = db
             .prepare('SELECT COALESCE(MAX(ordinal), -1) + 1 FROM chains WHERE session_id = ?')
             .pluck()
             .get(sessionId) as number;
           insertChainRow(db, insertChain, summary, ordinal);
           chainIds.push(summary.id);
-        } else if (anchorIndex === 0) {
-          // Boundary at a chain start: summary takes the anchor's ordinal,
-          // the anchor and every later chain shift up by one.
-          const ordinal = anchorEntry.row.ordinal;
-          db.prepare(
-            'UPDATE chains SET ordinal = ordinal + 1 WHERE session_id = ? AND ordinal >= ?',
-          ).run(sessionId, ordinal);
-          insertChainRow(db, insertChain, summary, ordinal);
-          chainIds.splice(chainIds.indexOf(anchorEntry.row.id), 0, summary.id);
         } else {
-          // Boundary inside a chain: split it around the insertion so replay
-          // order is prefix → summary → preserved suffix.
-          const ordinal = anchorEntry.row.ordinal;
-          db.prepare(
-            'UPDATE chains SET ordinal = ordinal + 2 WHERE session_id = ? AND ordinal > ?',
-          ).run(sessionId, ordinal);
-          const head = anchorEntry.messages.slice(0, anchorIndex);
-          const tail = anchorEntry.messages.slice(anchorIndex);
-          updateChainRow(db, { ...chainMetadataFromRow(anchorEntry.row), messages: head });
-          // The durable split keeps the ORIGINAL chain id (and any ACTIVE
-          // status plus the session's active_chain_id pointer) on the head —
-          // the turn finalizes into that row. The tail is replay-only history
-          // that the finalize subsumes (see deleteSupersededChains), so it
-          // must never claim ACTIVE regardless of what the payload carried.
-          const tailBase = payload.splitTailChain
-            ? { ...payload.splitTailChain, sessionId }
-            : {
-                ...chainMetadataFromRow(anchorEntry.row),
-                id: randomUUID(),
-                subagentRecord: null,
-              };
-          const tailChain: Chain = {
-            ...tailBase,
-            messages: tail,
-            status: ChainStatus.COMPLETED,
-          };
-          insertChainRow(db, insertChain, summary, ordinal + 1);
-          insertChainRow(db, insertChain, tailChain, ordinal + 2);
-          chainIds.splice(chainIds.indexOf(anchorEntry.row.id) + 1, 0, summary.id, tailChain.id);
-          splitTailChainId = tailChain.id;
+          const withSummary: Message[] = [
+            ...anchorEntry.messages.slice(0, anchorIndex),
+            ...summary.messages,
+            ...anchorEntry.messages.slice(anchorIndex),
+          ];
+          updateChainRow(db, { ...chainMetadataFromRow(anchorEntry.row), messages: withSummary });
+          anchorEntry.messages = withSummary;
         }
         summaryChainId = summary.id;
       }
@@ -2154,7 +2145,6 @@ export function applyCompactionPersistence(
         chainIds,
         flaggedChainIds: [...flagsByChain.keys()],
         summaryChainId,
-        splitTailChainId,
       };
     });
     return txn();

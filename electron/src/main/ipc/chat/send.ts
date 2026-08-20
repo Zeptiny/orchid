@@ -632,7 +632,11 @@ export async function startChatTurn(
     }
     // Post-compaction resume reset: re-anchor the durable turn slice at the
     // turn's user message inside the compacted/remerged history (P1 #3) and
-    // clear every per-turn accumulation so the replay restarts clean.
+    // clear every per-turn accumulation so the replay restarts clean. The
+    // durable row holds the whole turn (compaction inserts summary heads
+    // INLINE and only flags the prefix — never splits rows), so the
+    // user-anchored full-turn rewrite preserves the flagged prefix and the
+    // heads in place.
     const resetTurnForCompactionResume = (nextMessages: Message[]): void => {
       const anchorIndex = nextMessages.findIndex((m) => m.id === userMessage.id);
       if (anchorIndex < 0) {
@@ -668,11 +672,11 @@ export async function startChatTurn(
               updated = pendingRes.updatedMessages;
             }
             if (applied && updated) {
-              // The user message stays in the compacted replay even when the
-              // compaction flagged it, so the reset anchors the durable turn
-              // slice inside `updated` — the finalized persistTurn REPLACES
-              // the active chain with the FULL turn, never only the
-              // post-resume tail (P1 #3).
+              // The compacted replay keeps the full model history; the reset
+              // anchors the durable turn slice at the user message so the
+              // finalized persistTurn REPLACES the active chain with the FULL
+              // turn (user + flagged prefix + summary head + window + new
+              // content), never only the post-resume tail (P1 #3).
               resetTurnForCompactionResume(updated);
               // The applied path also drops the pre-pause stream segments (the
               // overflow-retry path below intentionally keeps them). Tool
@@ -750,12 +754,11 @@ export async function startChatTurn(
               }
               const retryResult = await tryCompactSynchronously(sessionId, historyForRetry, runtime, turnSelection, contextTokens, accountingStore!, chainId, turnId);
               if (retryResult.didApply && retryResult.updatedMessages) {
-                // The compacted retry base is [compacted prior history…, user
-                // message] — the reset anchors the durable turn slice at that
-                // user message so a later finalize REPLACES the active chain
-                // with the full turn, never only the post-retry tail (same
-                // invariant as P1 #3). streamSegments is intentionally NOT
-                // cleared on the retry path.
+                // The compacted retry base anchors the durable turn slice at
+                // the user message so a later finalize REPLACES the active
+                // chain with the full turn, never only the post-retry tail
+                // (same invariant as P1 #3). streamSegments is intentionally
+                // NOT cleared on the retry path.
                 resetTurnForCompactionResume(retryResult.updatedMessages);
                 try {
                   actor.send({ type: 'USER_INPUT', message });

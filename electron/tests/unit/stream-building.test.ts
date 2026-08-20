@@ -186,21 +186,27 @@ describe('shouldRenderChainFooter', () => {
     ).toBe(true);
   });
 
-  it('returns true when isTerminal', () => {
+  it('returns false when isTerminal alone — a body-less chain drops no stray footer', () => {
     expect(
       shouldRenderChainFooter({ isActive: false, isTerminal: true, hasBody: false, hasUser: false }),
+    ).toBe(false);
+  });
+
+  it('returns true when isTerminal with a body', () => {
+    expect(
+      shouldRenderChainFooter({ isActive: false, isTerminal: true, hasBody: true, hasUser: false }),
+    ).toBe(true);
+  });
+
+  it('returns true when isTerminal with a user turn', () => {
+    expect(
+      shouldRenderChainFooter({ isActive: false, isTerminal: true, hasBody: false, hasUser: true }),
     ).toBe(true);
   });
 
   it('returns true when hasBody', () => {
     expect(
       shouldRenderChainFooter({ isActive: false, isTerminal: false, hasBody: true, hasUser: false }),
-    ).toBe(true);
-  });
-
-  it('returns true when hasUser', () => {
-    expect(
-      shouldRenderChainFooter({ isActive: false, isTerminal: false, hasBody: false, hasUser: true }),
     ).toBe(true);
   });
 });
@@ -709,7 +715,7 @@ describe('buildHistoryStreamItems — compaction projection', () => {
     expect(body[0].key).toBe('c0-compaction-sum-1-0');
     expect(body[0].message.content).toBe('Earlier work summarized.');
     if (body[1]?.kind !== 'compacted-stub') throw new Error('expected compacted-stub');
-    expect(body[1].key).toBe('compacted-c0-1-m1');
+    expect(body[1].key).toBe('compacted-stub-m1');
     expect(body[1].count).toBe(2);
     expect(body[1].messages.map((m) => m.id)).toEqual(['m1', 'm2']);
   });
@@ -971,7 +977,7 @@ describe('buildHistoryStreamItems — summary head dedupe across chains', () => 
     expect(users).toHaveLength(1);
   });
 
-  it('buffers a duplicated excluded summary head into the stub instead of dropping it', () => {
+  it('skips a duplicated excluded summary head already rendered by an earlier chain', () => {
     const result = buildHistoryStreamItems({
       ...opts,
       sessionChains: [
@@ -990,8 +996,9 @@ describe('buildHistoryStreamItems — summary head dedupe across chains', () => 
     const stub = bodyItems(result.items).filter((it) => it.kind === 'compacted-stub');
     expect(stub).toHaveLength(1);
     if (stub[0]?.kind !== 'compacted-stub') throw new Error('expected compacted-stub');
-    expect(stub[0].messages.map((m) => m.id)).toEqual(['sum-1', 'm1']);
-    expect(stub[0].count).toBe(2);
+    // The mirrored head id is deduped — only the genuinely new message counts.
+    expect(stub[0].messages.map((m) => m.id)).toEqual(['m1']);
+    expect(stub[0].count).toBe(1);
   });
 
   it('renders distinct summary heads once per chain', () => {
@@ -1006,6 +1013,124 @@ describe('buildHistoryStreamItems — summary head dedupe across chains', () => 
     const summaries = result.items.filter((it) => it.kind === 'compaction-summary');
     expect(summaries.map((it) => (it.kind === 'compaction-summary' ? it.message.id : null)))
       .toEqual(['sum-a', 'sum-b']);
+  });
+});
+
+describe('buildHistoryStreamItems — compacted runs merge across chain boundaries', () => {
+  const opts = {
+    messages: [] as Message[],
+    toolBlocks: [] as ToolBlock[],
+    status: 'idle' as const,
+    liveUsage: null as Usage | null,
+    subagentUsage: EMPTY_SUBAGENT_USAGE_SUMMARY,
+    interrupted: false,
+    expandedChainIndexes: new Set<number>(),
+  };
+
+  /**
+   * Live mid-turn layout after a re-compaction (storage split rows): a
+   * flagged prefix row, a superseded-head summary row whose single message
+   * was flagged by the newer compaction, the current summary row, and the
+   * continuing tail. Buffering per chain renders the superseded head as its
+   * own "Compacted 1 message" stub; the shared buffer must merge it into the
+   * adjacent range.
+   */
+  it('merges a flagged prefix row and a superseded-head row into ONE stub', () => {
+    const result = buildHistoryStreamItems({
+      ...opts,
+      sessionChains: [
+        chain({
+          id: 'prefix',
+          messages: [userMsg('u1', 'explore'), excludedText('m1', 'old turn'), excludedText('m2', 'old tool')],
+        }),
+        chain({
+          id: 'superseded-head',
+          messages: [summaryHead('head-1', 'Superseded summary.', { excludeFromModel: true })],
+        }),
+        chain({ id: 'summary-2', messages: [summaryHead('sum-2', 'Current summary.')] }),
+        chain({ id: 'tail', messages: [assistantText('kept-1', 'preserved answer')] }),
+      ],
+    });
+
+    const stubs = bodyItems(result.items).filter((it) => it.kind === 'compacted-stub');
+    expect(stubs).toHaveLength(1);
+    if (stubs[0]?.kind !== 'compacted-stub') throw new Error('expected compacted-stub');
+    expect(stubs[0].count).toBe(3);
+    expect(stubs[0].messages.map((m) => m.id)).toEqual(['m1', 'm2', 'head-1']);
+
+    // The prefix row (user + compacted run only) and the superseded-head row
+    // drop no footers — nothing sits between the merged stub and the summary.
+    expect(result.items.map((it) => it.kind)).toEqual([
+      'message',
+      'compacted-stub',
+      'compaction-summary',
+      'footer',
+      'message',
+      'footer',
+    ]);
+  });
+
+  it('carries an open run through an all-flagged chain and dedupes ids mirrored across rows', () => {
+    const result = buildHistoryStreamItems({
+      ...opts,
+      sessionChains: [
+        chain({ id: 'c0', messages: [excludedText('m1', 'old turn')] }),
+        // Stale split mirror: m1 duplicated + one more flagged message.
+        chain({ id: 'mirror', messages: [excludedText('m1', 'old turn'), excludedText('m2', 'old tool')] }),
+        chain({ id: 'c2', messages: [userMsg('u2', 'next question')] }),
+      ],
+    });
+
+    expect(bodyItems(result.items).map((it) => it.kind)).toEqual([
+      'compacted-stub',
+      'message',
+    ]);
+    const stub = bodyItems(result.items)[0];
+    if (stub?.kind !== 'compacted-stub') throw new Error('expected compacted-stub');
+    expect(stub.count).toBe(2);
+    expect(stub.messages.map((m) => m.id)).toEqual(['m1', 'm2']);
+    // Neither flagged-only chain renders a footer.
+    expect(result.items.filter((it) => it.kind === 'footer')).toHaveLength(1);
+  });
+
+  it('expands a merged cross-chain stub to full fidelity', () => {
+    const sessionChains = [
+      chain({ id: 'prefix', messages: [excludedThinking('th1', 'old reasoning')] }),
+      chain({
+        id: 'mirror-head',
+        messages: [
+          summaryHead('head-1', 'Superseded summary.', { excludeFromModel: true }),
+          toolCallMsg('call-1', 'tc-1', 'read', { excludeFromModel: true }),
+        ],
+      }),
+      chain({ id: 'res-row', messages: [toolResultMsg('res-1', 'tc-1', { excludeFromModel: true })] }),
+      chain({ id: 'c3', messages: [userMsg('u1', 'next')] }),
+    ];
+
+    const collapsed = buildHistoryStreamItems({ ...opts, sessionChains });
+    const stub = collapsed.items.find((it) => it.kind === 'compacted-stub');
+    if (stub?.kind !== 'compacted-stub') throw new Error('expected compacted-stub');
+    expect(stub.count).toBe(4);
+
+    const expanded = buildHistoryStreamItems({
+      ...opts,
+      sessionChains,
+      expandedCompactedKeys: new Set([stub.key]),
+    });
+
+    expect(expanded.items.some((it) => it.kind === 'compacted-stub')).toBe(false);
+    // The tool pair is reconstructed even though its call and result sat in
+    // DIFFERENT chains of the merged run.
+    const tools = expanded.items.filter((it) => it.kind === 'tool');
+    expect(tools).toHaveLength(1);
+    if (tools[0]?.kind !== 'tool') throw new Error('expected tool');
+    expect(tools[0].block.id).toBe('tc-1');
+    expect(tools[0].block.toolName).toBe('read');
+    expect(tools[0].block.agentProjection).toBe('tool output body');
+    const thoughts = expanded.items.filter(
+      (it) => it.kind === 'message' && it.message.type === MessageType.THINKING,
+    );
+    expect(thoughts).toHaveLength(1);
   });
 });
 
@@ -1128,11 +1253,11 @@ describe('stream item React keys', () => {
     const collapsed = buildHistoryStreamItems({ ...opts, sessionChains });
     expect(bodyItems(collapsed.items).map((it) => it.key)).toEqual([
       'c0-compaction-sum-1-0',
-      'compacted-c0-1-m1',
+      'compacted-stub-m1',
       'c0-user-u1-2',
     ]);
 
-    const stubKey = 'compacted-c0-1-m1';
+    const stubKey = 'compacted-stub-m1';
     const expanded = buildHistoryStreamItems({
       ...opts,
       sessionChains,

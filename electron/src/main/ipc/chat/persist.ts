@@ -275,8 +275,6 @@ export interface CompactionDurablePersistInput {
    * summary must precede. Null appends the summary after the last chain.
    */
   readonly insertBeforeMessageId: string | null;
-  /** Apply-side split tail row identity, when the apply already split a chain. */
-  readonly splitTailChain?: Chain | null;
   readonly updatedAt?: string;
 }
 
@@ -299,7 +297,6 @@ export function persistCompactionDurable(
     flaggedMessageIds: input.flaggedMessageIds,
     summaryChain: input.summaryChain,
     insertBeforeMessageId: input.insertBeforeMessageId,
-    ...(input.splitTailChain !== undefined ? { splitTailChain: input.splitTailChain } : {}),
   });
 }
 
@@ -345,85 +342,30 @@ function resolveSummaryInsertionAnchor(
   return next?.messages[0]?.id ?? null;
 }
 
-function resolveSplitTailChain(
-  applyResult: CompactionApplyResultLike,
-  viewChains: readonly Chain[],
-): Chain | null {
-  const newChain = applyResult.newChain;
-  if (!newChain) return null;
-  const index = applyResult.updatedChains.findIndex((chain) => chain.id === newChain.id);
-  const next = index >= 0 ? applyResult.updatedChains[index + 1] : undefined;
-  // A pure apply splits a chain by re-id'ing its suffix; that fresh id never
-  // appears in the pre-compaction chain list.
-  if (next && !viewChains.some((chain) => chain.id === next.id)) {
-    return next;
-  }
-  return null;
-}
-
 /**
- * Build the post-compaction in-memory view: previous view chains with flags
- * applied to whatever messages they hold (partial arrays are fine — durable
- * replay is maintained separately), with the summary head (and any apply-side
- * split tail) spliced in at its durable position.
+ * Refresh the cached session from durable rows after a compaction write and
+ * emit SESSION_COMPACTION / SESSION_UPDATED.
+ *
+ * The durable write restructured the chain layout (flags + summary head +
+ * splits). The cache is refreshed from storage — unrecovered, so a live
+ * ACTIVE continuing row keeps its status and pointer — because the
+ * renderer's compaction reload (session:open) reuses this cache: serving the
+ * pre-split view would mis-order it (summary above the turn's user message,
+ * user message vanishing on the next checkpoint update).
  */
-export function buildCompactedCacheChains(
-  viewChains: readonly Chain[],
-  applyResult: CompactionApplyResultLike,
-  durable: CompactionPersistenceResult,
-  flaggedMessageIds: readonly string[],
-  splitTailChain: Chain | null,
-): Chain[] {
-  const flaggedSet = new Set(flaggedMessageIds);
-  const flagged = viewChains.map((chain) => {
-    if (!chain.messages.some((m) => flaggedSet.has(m.id) && !m.excludeFromModel)) {
-      return chain;
-    }
-    return {
-      ...chain,
-      messages: chain.messages.map((message) =>
-        flaggedSet.has(message.id) && !message.excludeFromModel
-          ? { ...message, excludeFromModel: true }
-          : message,
-      ),
-    };
-  });
-
-  const summaryChain = applyResult.newChain;
-  const summaryChainId = durable.summaryChainId;
-  if (!summaryChain || !summaryChainId) return flagged;
-
-  const order = new Map(durable.chainIds.map((id, index) => [id, index] as const));
-  const summaryPosition = order.get(summaryChainId);
-  if (summaryPosition === undefined) return [...flagged, summaryChain];
-
-  let insertAt = flagged.length;
-  for (let index = 0; index < flagged.length; index += 1) {
-    const position = order.get(flagged[index]!.id);
-    if (position !== undefined && position > summaryPosition) {
-      insertAt = index;
-      break;
-    }
-  }
-  const additions: Chain[] = [summaryChain];
-  if (splitTailChain && durable.splitTailChainId === splitTailChain.id) {
-    additions.push(splitTailChain);
-  }
-  return [...flagged.slice(0, insertAt), ...additions, ...flagged.slice(insertAt)];
-}
-
-/** Cache the compacted session and emit SESSION_UPDATED / SESSION_COMPACTION. */
 export function publishCompactedSession(
   manager: ReturnType<typeof getSessionManager>,
   sessionId: string,
   existing: Session,
-  cacheChains: readonly Chain[],
   updatedAt: string,
 ): void {
-  const nextSession: Session = { ...existing, chains: cacheChains, updatedAt };
-  manager.setCachedSession(nextSession);
+  const nextSession = manager.refreshCachedSessionFromStorage(sessionId);
+  if (!nextSession) {
+    console.debug('[compaction] cache refresh after durable write failed (non-fatal)');
+    return;
+  }
   const changedIds = new Set<string>();
-  for (const chain of cacheChains) {
+  for (const chain of nextSession.chains) {
     const prev = existing.chains.find((candidate) => candidate.id === chain.id);
     if (
       !prev
@@ -438,12 +380,12 @@ export function publishCompactedSession(
   }
   // SESSION_COMPACTION goes out FIRST: the renderer reloads on it and holds
   // back append-only chain updates for that window. The per-chain events that
-  // follow carry the compaction's split chains (flagged prefix + summary head
-  // under FRESH ids); delivered first, they would append at the tail and order
-  // the compacted stub + summary after the preserved window.
+  // follow carry the compaction's split rows; delivered first, they would
+  // append at the tail and order the compacted stub + summary after the
+  // preserved window.
   sendSessionEvent(null, sessionId, IPC_CHANNELS.SESSION_COMPACTION, {
     sessionId,
-    updatedAt: nextSession.updatedAt,
+    updatedAt,
   });
   for (const chainId of changedIds) {
     const event = buildSessionUpdatedEvent(nextSession, chainId);
@@ -488,7 +430,6 @@ export function persistCompactionBetweenTurns(
       ?? summaryChain?.messages[0]
       ?? null;
     const insertBeforeMessageId = resolveSummaryInsertionAnchor(applyResult, summaryMessage);
-    const splitTailChain = resolveSplitTailChain(applyResult, existing.chains);
     const flaggedMessageIds = resolveFlaggedMessageIds(applyResult, existing.chains);
 
     // Single targeted durable transaction. persistCompactionDurable throws
@@ -500,17 +441,11 @@ export function persistCompactionBetweenTurns(
       flaggedMessageIds,
       summaryChain,
       insertBeforeMessageId,
-      splitTailChain,
       updatedAt,
     });
-    const cacheChains = buildCompactedCacheChains(
-      existing.chains,
-      applyResult,
-      durable,
-      flaggedMessageIds,
-      splitTailChain,
-    );
-    publishCompactedSession(manager, sessionId, existing, cacheChains, updatedAt);
+    if (durable) {
+      publishCompactedSession(manager, sessionId, existing, updatedAt);
+    }
     return true;
   } catch (err) {
     console.error('Failed to persist compaction between turns (non-fatal):', err);

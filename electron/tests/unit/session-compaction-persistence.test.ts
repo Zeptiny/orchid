@@ -225,10 +225,11 @@ describe('applyCompactionPersistence (targeted durable write)', () => {
     }, storageOpts);
 
     const full = loadSessionForReplacement(sessionId, storageOpts)!;
-    // (c) reload order: flagged prefix chains → summary head → preserved window.
+    // (c) reload order: the summary head sits INLINE at the start of chain-b
+    // (the anchor chain) — flagged prefix chains → summary head → preserved
+    // window. No extra chain rows.
     expect(full.chains.map((chain) => chain.id)).toEqual([
       'chain-a',
-      'chain-summary',
       'chain-b',
       'chain-c',
     ]);
@@ -242,14 +243,17 @@ describe('applyCompactionPersistence (targeted durable write)', () => {
     for (const message of full.chains[0]!.messages) {
       expect(message.excludeFromModel).toBe(true);
     }
-    for (const chain of full.chains.slice(1)) {
+    const summaryMessage = full.chains[1]!.messages[0]!;
+    expect(summaryMessage.content).toBe('SUMMARY: durable compaction');
+    expect(summaryMessage.compacted).toMatchObject({ mode: 'simple', summarizedCount: 100 });
+    for (const message of full.chains[1]!.messages.slice(1)) {
+      expect(message.excludeFromModel).toBe(false);
+    }
+    for (const chain of full.chains.slice(2)) {
       for (const message of chain.messages) {
         expect(message.excludeFromModel).toBe(false);
       }
     }
-    const summaryMessage = full.chains[1]!.messages[0]!;
-    expect(summaryMessage.content).toBe('SUMMARY: durable compaction');
-    expect(summaryMessage.compacted).toMatchObject({ mode: 'simple', summarizedCount: 100 });
   });
 
   it('(b) never touches durable subagent_chains rows or untouched chain rows', () => {
@@ -273,7 +277,6 @@ describe('applyCompactionPersistence (targeted durable write)', () => {
       flaggedMessageIds: idRange('m', 45, 0),
       summaryChain: summary,
       insertBeforeMessageId: 'm-0045',
-      splitTailChain: makeChain(sessionId, 'chain-a-tail', []),
     }, storageOpts);
 
     // Untouched sibling chain is byte-identical.
@@ -291,15 +294,15 @@ describe('applyCompactionPersistence (targeted durable write)', () => {
     ]);
   });
 
-  it('(c) splits the chain spanning the cut so reload order is prefix → summary → preserved suffix (synthesized tail when none supplied)', () => {
+  it('(c) inserts the summary INLINE into the chain spanning the cut — no split rows', () => {
     const sessionId = 'cafe0003-0003-4003-8003-000000000003';
     const chainA = makeChain(sessionId, 'chain-a', messages('m', 100, 0));
     const chainB = makeChain(sessionId, 'chain-b', messages('m', 150, 100));
     const chainC = makeChain(sessionId, 'chain-c', messages('m', 50, 250));
     saveSession(makeSession(sessionId, [chainA, chainB, chainC]), storageOpts);
 
-    // Boundary m-0180 sits at index 80 inside chain-b → split.
-    const summary = makeSummaryChain(sessionId, 'chain-summary', 'summary-head', 'SUMMARY: split');
+    // Boundary m-0180 sits at index 80 inside chain-b → inline insertion.
+    const summary = makeSummaryChain(sessionId, 'chain-summary', 'summary-head', 'SUMMARY: inline');
     applyCompactionPersistence(sessionId, {
       updatedAt: '2026-01-02T00:00:00.000Z',
       flaggedMessageIds: idRange('m', 180, 0),
@@ -308,57 +311,138 @@ describe('applyCompactionPersistence (targeted durable write)', () => {
     }, storageOpts);
 
     const full = loadSessionForReplacement(sessionId, storageOpts)!;
-    const [prefix, head, summaryChainRow, tail, later] = full.chains;
-    // Original id stays with the pre-boundary head; the tail gets a fresh id.
-    expect(prefix!.id).toBe('chain-a');
-    expect(head!.id).toBe('chain-b');
-    expect(summaryChainRow!.id).toBe('chain-summary');
-    expect(tail!.id).not.toBe('chain-b');
-    expect(later!.id).toBe('chain-c');
-    expect(full.chains.map((chain) => chain.id)).toEqual([
-      'chain-a',
-      'chain-b',
-      'chain-summary',
-      tail!.id,
-      'chain-c',
-    ]);
+    // One turn stays one chain row — no split rows, no ordinal changes.
+    expect(full.chains.map((chain) => chain.id)).toEqual(['chain-a', 'chain-b', 'chain-c']);
     expect(flatIds(full)).toEqual([
       ...idRange('m', 180, 0),
       'summary-head',
       ...idRange('m', 120, 180),
     ]);
-    expect(prefix!.messages.every((message) => message.excludeFromModel)).toBe(true);
-    expect(head!.messages.every((message) => message.excludeFromModel)).toBe(true);
-    expect(tail!.messages.every((message) => !message.excludeFromModel)).toBe(true);
-    // The synthesized tail clones the split chain's metadata.
-    expect(tail!.agentName).toBe('general');
-    expect(tail!.status).toBe(ChainStatus.COMPLETED);
+    const chainARow = full.chains[0]!;
+    const chainBRow = full.chains[1]!;
+    expect(chainARow.messages.every((message) => message.excludeFromModel)).toBe(true);
+    const headMessage = chainBRow.messages[80]!;
+    expect(headMessage.id).toBe('summary-head');
+    expect(headMessage.compacted).toMatchObject({ mode: 'simple' });
+    expect(chainBRow.messages.slice(0, 80).every((message) => message.excludeFromModel)).toBe(true);
+    expect(chainBRow.messages.slice(81).every((message) => !message.excludeFromModel)).toBe(true);
   });
 
-  it('(c2) uses the caller-supplied split tail identity when provided', () => {
+  it('(c2) an ACTIVE chain compacted mid-turn keeps ACTIVE + the session pointer, summary inline', () => {
     const sessionId = 'cafe0004-0004-4004-8004-000000000004';
+    const activeChain = {
+      ...makeChain(sessionId, 'chain-b', messages('m', 100, 100)),
+      status: ChainStatus.ACTIVE,
+      endTime: null,
+    };
     saveSession(makeSession(sessionId, [
       makeChain(sessionId, 'chain-a', messages('m', 100, 0)),
-      makeChain(sessionId, 'chain-b', messages('m', 100, 100)),
+      activeChain,
     ]), storageOpts);
+    // Point the session at the active row the way startChain does.
+    const db = openSqliteDb(storageOpts.dbPath!);
+    try {
+      db.prepare('UPDATE sessions SET active_chain_id = ? WHERE id = ?').run('chain-b', sessionId);
+    } finally {
+      db.close();
+    }
 
-    const summary = makeSummaryChain(sessionId, 'chain-summary', 'summary-head', 'SUMMARY: tail identity');
+    const summary = makeSummaryChain(sessionId, 'chain-summary', 'summary-head', 'SUMMARY: active inline');
     applyCompactionPersistence(sessionId, {
       updatedAt: '2026-01-02T00:00:00.000Z',
-      flaggedMessageIds: idRange('m', 100, 0),
+      flaggedMessageIds: idRange('m', 150, 0),
       summaryChain: summary,
       insertBeforeMessageId: 'm-0150',
-      splitTailChain: makeChain(sessionId, 'apply-after-chain', []),
     }, storageOpts);
 
     const full = loadSessionForReplacement(sessionId, storageOpts)!;
-    expect(full.chains.map((chain) => chain.id)).toEqual([
-      'chain-a',
-      'chain-b',
-      'chain-summary',
-      'apply-after-chain',
+    expect(full.chains.map((chain) => chain.id)).toEqual(['chain-a', 'chain-b']);
+    // The turn row stays the live row: ACTIVE status preserved and the
+    // session's active-chain pointer still resolves to it.
+    const turnRow = full.chains[1]!;
+    expect(turnRow.status).toBe(ChainStatus.ACTIVE);
+    expect(full.activeChainId).toBe('chain-b');
+    // Inline summary at the cut: 50 flagged, head, 50 preserved.
+    expect(turnRow.messages.map((message) => message.id)).toEqual([
+      ...idRange('m', 50, 100),
+      'summary-head',
+      ...idRange('m', 50, 150),
     ]);
-    expect(full.chains[3]!.messages.map((message) => message.id)).toEqual(idRange('m', 50, 150));
+    expect(turnRow.messages.slice(0, 50).every((message) => message.excludeFromModel)).toBe(true);
+    expect(turnRow.messages[50]!.compacted).toMatchObject({ mode: 'simple' });
+    expect(turnRow.messages.slice(51).every((message) => !message.excludeFromModel)).toBe(true);
+  });
+
+  it('(c3) re-compaction grows the SAME row — every id exactly once, user message first', () => {
+    const sessionId = 'cafe000a-000a-400a-800a-00000000010a';
+    // The live mid-turn shape: one ACTIVE chain holding the whole turn
+    // (user + assistant work).
+    const user = makeMessage('u-0000', { role: MessageRole.USER, content: 'explore' });
+    const work = messages('m', 10, 0).map((message) => ({ ...message, role: MessageRole.ASSISTANT }));
+    const active = {
+      ...makeChain(sessionId, 'chain-turn', [user, ...work]),
+      status: ChainStatus.ACTIVE,
+      endTime: null,
+    };
+    saveSession(makeSession(sessionId, [active]), storageOpts);
+    const db = openSqliteDb(storageOpts.dbPath!);
+    try {
+      db.prepare('UPDATE sessions SET active_chain_id = ? WHERE id = ?').run('chain-turn', sessionId);
+    } finally {
+      db.close();
+    }
+
+    // Compaction 1: cut at m-0005 (inside the turn). Prefix flagged, head1 inline.
+    applyCompactionPersistence(sessionId, {
+      updatedAt: '2026-01-02T00:00:00.000Z',
+      flaggedMessageIds: idRange('m', 5, 0),
+      summaryChain: makeSummaryChain(sessionId, 'chain-summary-1', 'head-1', 'SUMMARY: one'),
+      insertBeforeMessageId: 'm-0005',
+    }, storageOpts);
+    // The turn resumes; the checkpoint writes the FULL turn (model history +
+    // new content m-0010..m-0011) into the same row — heads included.
+    const manager = new SessionManager({ storage: storageOpts });
+    const afterOne = loadSessionForReplacement(sessionId, storageOpts)!;
+    manager.setCachedSession({ ...makeSession(sessionId, afterOne.chains), activeChainId: 'chain-turn' });
+    manager.updateActiveChainMessages(
+      [
+        ...afterOne.chains[0]!.messages,
+        ...messages('m', 2, 10).map((message) => ({ ...message, role: MessageRole.ASSISTANT })),
+      ],
+      sessionId,
+    );
+    // Compaction 2: cut at m-0009 — supersedes head1 (flagged) and inserts
+    // head2 inline.
+    applyCompactionPersistence(sessionId, {
+      updatedAt: '2026-01-02T00:01:00.000Z',
+      flaggedMessageIds: [...idRange('m', 4, 5), 'head-1'],
+      summaryChain: makeSummaryChain(sessionId, 'chain-summary-2', 'head-2', 'SUMMARY: two'),
+      insertBeforeMessageId: 'm-0009',
+    }, storageOpts);
+
+    const full = loadSessionForReplacement(sessionId, storageOpts)!;
+    // Still ONE chain row, still the live turn row.
+    expect(full.chains.map((chain) => chain.id)).toEqual(['chain-turn']);
+    const row = full.chains[0]!;
+    expect(row.status).toBe(ChainStatus.ACTIVE);
+    expect(full.activeChainId).toBe('chain-turn');
+    // Replay order: user, flagged prefix, superseded head1 (flagged), flagged
+    // mid-range, current head2, preserved window + new content.
+    expect(row.messages.map((message) => message.id)).toEqual([
+      'u-0000',
+      ...idRange('m', 5, 0),
+      'head-1',
+      ...idRange('m', 4, 5),
+      'head-2',
+      ...idRange('m', 1, 9),
+      ...idRange('m', 2, 10),
+    ]);
+    expect(row.messages[0]!.excludeFromModel).toBe(false);
+    expect(row.messages.find((message) => message.id === 'head-1')!.excludeFromModel).toBe(true);
+    expect(row.messages.find((message) => message.id === 'head-2')!.excludeFromModel).toBe(false);
+    // Every original id appears exactly once — no duplication ladder.
+    const allIds = row.messages.map((message) => message.id);
+    expect(new Set(allIds).size).toBe(allIds.length);
   });
 
   it('flags without a summary head (reclaim-only) and keeps the chain layout unchanged', () => {
@@ -534,15 +618,18 @@ describe('persistCompactionBetweenTurns (durable path over partial view)', () =>
     expect(loadSubagentRecords(sessionId, undefined, storageOpts).map((record) => record.id))
       .toEqual(['durable-sub-1']);
 
-    // In-memory cache: summary + split tail spliced in, flags visible where
-    // the view held messages.
+    // In-memory cache: refreshed from durable rows — the summary sits INLINE
+    // in chain-a at the cut (chain-a keeps its id and row; flags visible on
+    // the prefix it holds in the bounded view).
     const cached = manager.getSession(sessionId)!;
     const cachedIds = cached.chains.map((chain) => chain.id);
-    expect(cachedIds).toContain(applyResult.newChain!.id);
     expect(cachedIds).toContain('chain-a');
     expect(cachedIds).toContain('chain-b');
-    const cachedFirst = cached.chains[0]!;
-    expect(cachedFirst.messages.some((message) => message.excludeFromModel)).toBe(true);
+    expect(cachedIds).not.toContain(applyResult.newChain!.id);
+    const cachedChainA = cached.chains.find((chain) => chain.id === 'chain-a')!;
+    const inlineHead = cachedChainA.messages.find((message) => message.compacted);
+    expect(inlineHead).toBeDefined();
+    expect(inlineHead!.id).toBe(applyResult.summaryMessage!.id);
   });
 
   it('returns false without durable writes when the compaction references unknown durable ids', () => {
@@ -670,6 +757,29 @@ describe('superseded chain reconcile (split-tail retirement)', () => {
     expect(new Set(ids).size).toBe(90);
     expect(ids[42]).toBe('summary-head');
     expect(full.chains[0]!.messages[42]!.compacted).toMatchObject({ mode: 'simple' });
+  });
+
+  it('retires a stale duplicate row whose only extra content is a hidden usage carrier', () => {
+    const sessionId = 'cafe0107-0107-4107-8107-000000000107';
+    // Shape reproduced from session "Analyze Compaction System Implementation":
+    // a stray split row duplicating two visible tool ids plus one hidden
+    // usage-carrier message that kept it outside strict id containment.
+    const head = makeChain(sessionId, 'chain-head', [
+      ...messages('m', 46, 0),
+      makeMessage('hidden-extra', { role: MessageRole.ASSISTANT, hidden: true }),
+    ]);
+    const stray = makeChain(sessionId, 'chain-stray', [
+      makeMessage('m-0043'),
+      makeMessage('m-0044'),
+      makeMessage('stray-hidden', { role: MessageRole.ASSISTANT, hidden: true }),
+    ]);
+    saveSession(makeSession(sessionId, [head, stray]), storageOpts);
+
+    const view = loadSessionView(sessionId, storageOpts)!;
+
+    // Visible content is fully contained in chain-head — the hidden extra
+    // must not protect the duplicate row.
+    expect(view.chains.map((chain) => chain.id)).toEqual(['chain-head']);
   });
 
   it('finishChain leaves sibling chains alone when nothing is subsumed', () => {

@@ -280,6 +280,14 @@ const mocks = vi.hoisted(() => {
     getSession: vi.fn((id: string) => sessionsById.get(id) ?? (activeSession?.id === id ? activeSession : null)),
     load: vi.fn(() => null),
     setCachedSession: vi.fn(),
+    /**
+     * Mirror of SessionManager.refreshCachedSessionFromStorage: the mock's
+     * "storage" is the sessionsById map, so the refresh returns the cached
+     * row (the mock does not model durable compaction splits — those are
+     * covered by session-compaction-persistence.test.ts).
+     */
+    refreshCachedSessionFromStorage: vi.fn((sessionId: string) =>
+      sessionsById.get(sessionId) ?? null),
     getModelHistory: vi.fn(() => modelHistory),
     switchTo: vi.fn((id: string) => {
       const session = sessionsById.get(id) ?? (activeSession?.id === id ? activeSession : null);
@@ -405,7 +413,6 @@ const mocks = vi.hoisted(() => {
         ],
         flaggedChainIds: [],
         summaryChainId: payload.summaryChain?.id ?? null,
-        splitTailChainId: null,
       };
     }),
     autoNameActive: vi.fn(async () => activeSession),
@@ -2715,10 +2722,9 @@ describe('chat compaction mid-turn pause', () => {
     };
     expect(persisted.status).toBe('completed');
     // The durable active chain keeps the FULL turn: the user message, the
-    // pre-pause tool progress, and the post-resume assistant content. The
-    // pre-fix code rebased priorMessageCount to the replay length, so
-    // persistTurn replaced the chain with ONLY the post-resume slice —
-    // deleting the user message and the pre-pause turn content.
+    // pre-pause tool progress, the inline summary head, and the post-resume
+    // assistant content (compaction inserts heads INLINE and only flags the
+    // prefix — one turn stays one chain row).
     expect(persisted.messages).toEqual(expect.arrayContaining([
       expect.objectContaining({ role: MessageRole.USER, content: 'Explore with tools' }),
       expect.objectContaining({ type: MessageType.TOOL_CALL, tool_call_id: 'tc-compact-1' }),

@@ -3,6 +3,7 @@ title: "Compaction chain-split id assignment is deliberately asymmetric and cont
 category: convention
 module: "llm/compaction"
 date: 2026-08-19
+last_updated: 2026-08-20
 problem_type: convention
 component: assistant
 severity: low
@@ -21,6 +22,8 @@ applies_when:
 ---
 
 # Compaction chain-split id assignment is deliberately asymmetric and contract-pinned
+
+> **SUPERSEDED (2026-08-20):** The durable chain-split this doc describes was **removed**. `applyCompactionPersistence` now inserts summary heads INLINE into the anchor chain — no prefix/summary/suffix rows, no `splitTailChain`, no `resolveSplitTailChain` — restoring one-turn-one-chain-row (see `docs/solutions/ui-bugs/mid-turn-compaction-inline-summary-heads.md`). The pure-apply split in `buildCompactionApply` still exists in-memory. This doc's *meta-lesson* survives but carries a counterexample: the "pinned contract tests = decline the finding" rule was later disproven as an absolute — the pinned split layout was itself the root cause of a transcript-corruption bug, and the tests had to be rewritten with the fix. Verify a pinned invariant against the system's other invariants (e.g. one-chain-row-per-turn) before letting it veto a finding.
 
 ## Context
 

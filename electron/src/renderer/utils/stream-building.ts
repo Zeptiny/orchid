@@ -138,7 +138,13 @@ export function shouldRenderChainFooter(input: {
   hasBody: boolean;
   hasUser: boolean;
 }): boolean {
-  return input.isActive || input.isTerminal || input.hasBody || input.hasUser;
+  // Active chains always footer (live turn). A terminal chain footers only
+  // when it contributed renderable content or a user turn — a chain whose
+  // whole message set is one compacted run (superseded summary rows, split
+  // prefixes) must not drop a stray footer between the merged stub and the
+  // next chain.
+  if (input.isActive) return true;
+  return (input.isTerminal || input.hasBody) && (input.hasBody || input.hasUser);
 }
 
 /**
@@ -300,7 +306,23 @@ export function buildHistoryStreamItems(opts: {
   const liveById = new Map(toolBlocks.map((b) => [b.id, b]));
   let activeFooter: FooterStreamItem | null = null;
 
-  const seenCompactedIds = new Set<string>();
+  const walkState: ChainWalkState = {
+    items,
+    compactedBuffer: [],
+    resultByCallId: new Map(),
+    consumedResults: new Set(),
+    seenMessageIds: new Set(),
+  };
+  /** Flush the open compacted run at a chain boundary (before footers/stubs). */
+  const boundaryFlush = (keyPrefix: string): void => {
+    flushCompactedBuffer(walkState, {
+      liveById,
+      emittedToolIds,
+      keyPrefix,
+      expandedCompactedKeys,
+      counter: { value: 0 },
+    });
+  };
 
   const isActiveChain = (chain: Chain, chainIndex: number): boolean => (
     chain.status === ChainStatus.ACTIVE
@@ -339,6 +361,7 @@ export function buildHistoryStreamItems(opts: {
       !expandedChainIndexes.has(chainIndex) &&
       !isActive
     ) {
+      boundaryFlush(`c${chainIndex}`);
       items.push({
         kind: 'collapsed-stub',
         key: `stub-${chain.id || chainIndex}`,
@@ -351,15 +374,17 @@ export function buildHistoryStreamItems(opts: {
     // Authoritative storage for each chain body — avoids flat-messages length
     // desync after FAILED/INTERRUPTED when the renderer lags or only partially commits.
     // Live tools/text for the active turn still render via buildLiveTailItems.
-    const chainItems = walkMessagesToItems(chain.messages, {
+    const startLen = items.length;
+    const compactedAny = walkMessagesToItems(chain.messages, {
       toolBlocks,
       liveById,
       emittedToolIds,
       keyPrefix: `c${chainIndex}`,
       expandedCompactedKeys,
-      seenCompactedIds,
-    });
-    items.push(...chainItems.items);
+    }, walkState);
+    // Contributed items BEFORE any boundary flush: a chain whose whole
+    // message set is one compacted run contributes no body of its own.
+    const contributed = items.slice(startLen);
 
     const chainUsage = sumChainUsage(chain);
     // Prefer live usage for the active/running chain so CHAT_USAGE events
@@ -383,7 +408,7 @@ export function buildHistoryStreamItems(opts: {
           ? chainElapsedSeconds(chain)
           : undefined;
 
-    const hasBody = chainItems.items.some(
+    const hasBody = contributed.some(
       (it) =>
         it.kind === 'tool' ||
         it.kind === 'tool-group' ||
@@ -394,8 +419,20 @@ export function buildHistoryStreamItems(opts: {
     const hasUser = chain.messages.some(
       (m) => m.role === MessageRole.USER && m.type === MessageType.TEXT,
     ) || Boolean(chain.preview);
+    // A chain whose only contributions are a user message plus a compacted
+    // run is the frozen prefix row of a mid-turn split — skipping its footer
+    // keeps the run open so it merges with the next chain (the continuing
+    // row's footer covers the whole turn).
+    const compactedOnlyPrefix = !hasBody && compactedAny;
     // Every visible chain gets a footer, including the running/active chain.
-    if (shouldRenderChainFooter({ isActive, isTerminal: terminal, hasBody, hasUser })) {
+    if (
+      !compactedOnlyPrefix &&
+      shouldRenderChainFooter({ isActive, isTerminal: terminal, hasBody, hasUser })
+    ) {
+      // A footer is a visible item: flush the open compacted run so the
+      // stub renders ABOVE it. When no footer renders here, the run stays
+      // open and merges into the next chain's walk.
+      boundaryFlush(`c${chainIndex}`);
       const footer: FooterStreamItem = {
         kind: 'footer',
         key: `footer-chain-${chain.id || chainIndex}`,
@@ -417,6 +454,11 @@ export function buildHistoryStreamItems(opts: {
     }
   }
 
+  // Final boundary: a trailing compacted run flushes before idle leftover
+  // tools so it never renders below them (or below the deferred active
+  // footer, which renders after the live tail).
+  boundaryFlush('tail');
+
   // Idle leftover live tool blocks not already emitted.
   if (!liveStreaming && toolBlocks.length > 0) {
     for (const block of toolBlocks) {
@@ -434,7 +476,148 @@ export function buildHistoryStreamItems(opts: {
   return { items, emittedToolIds, activeFooter };
 }
 
-/** Walk a message slice into stream items (multi-chain + shared helpers). */
+/**
+ * Cross-chain state threaded through every chain walk in one history build.
+ *
+ * A compaction splits durable chain rows around its summary head, and a
+ * later compaction supersedes earlier heads — so one logical compacted run
+ * can be spread across several sibling chains (flagged prefix row,
+ * superseded-head summary rows, …). Buffering inside a single chain walk
+ * flushes each fragment as its own stub ("Compacted 1 message"); the shared
+ * accumulator lets the run carry across chain boundaries and collapse into
+ * ONE stub, matching the post-finalize reloaded layout.
+ */
+interface ChainWalkState {
+  /** Flat item sink shared by every walk (history order). */
+  readonly items: StreamItem[];
+  /** Open trailing compacted run — carried across chain boundaries. */
+  compactedBuffer: Message[];
+  /** tool_call_id → result message, seeded from every walked chain. */
+  readonly resultByCallId: Map<string, Message>;
+  /** tool_call_ids already rendered as paired tool items. */
+  readonly consumedResults: Set<string>;
+  /**
+   * Message ids already handled by any walk. Durable split rows mirror the
+   * same ids across chains (checkpoint rewrites the continuing row with the
+   * full turn); replay semantics keep the first occurrence only.
+   */
+  readonly seenMessageIds: Set<string>;
+}
+
+/**
+ * Flush the open compacted run into items — either as one collapsed stub or,
+ * when expanded, by re-rendering each buffered message at full fidelity.
+ * Callable at any chain boundary; a no-op when nothing is buffered.
+ */
+function flushCompactedBuffer(
+  state: ChainWalkState,
+  opts: {
+    liveById: Map<string, ToolBlock>;
+    emittedToolIds: Set<string>;
+    keyPrefix: string;
+    expandedCompactedKeys?: ReadonlySet<string>;
+    /** Walk-local key counter mutated by emitted items so keys stay unique. */
+    counter: { value: number };
+  },
+): void {
+  if (state.compactedBuffer.length === 0) return;
+  const { liveById, emittedToolIds, keyPrefix, expandedCompactedKeys, counter } = opts;
+  // Rows mirrored across chains (stale split duplicates) collapse by id.
+  const seenIds = new Set<string>();
+  const buffer = state.compactedBuffer.filter((m) =>
+    seenIds.has(m.id) ? false : (seenIds.add(m.id), true),
+  );
+  const firstId = buffer[0]?.id || `${keyPrefix}-compacted-${counter.value}`;
+  const stubKey = `compacted-stub-${firstId}`;
+  const isExpanded = expandedCompactedKeys?.has(stubKey) ?? false;
+
+  const keyFor = (msg: Message, kind: string): string =>
+    msg.id && msg.id.length > 0
+      ? `${keyPrefix}-${kind}-${msg.id}-${counter.value}`
+      : `${keyPrefix}-${kind}-${counter.value}`;
+
+  const pushTool = (block: ToolBlock): void => {
+    if (emittedToolIds.has(block.id)) return;
+    emittedToolIds.add(block.id);
+    state.items.push({
+      kind: 'tool',
+      key: block.id
+        ? `${keyPrefix}-tool-${block.id}-${emittedToolIds.size}`
+        : `${keyPrefix}-tool-${emittedToolIds.size}`,
+      block,
+    });
+  };
+
+  const pushMessage = (msg: Message, kind: string): void => {
+    state.items.push({ kind: 'message', key: keyFor(msg, kind), message: msg });
+  };
+
+  if (isExpanded) {
+    // Expand to full fidelity — render each buffered message with normal logic.
+    const bufferedIds = new Set(buffer.map((m) => m.id));
+    for (const buffered of buffer) {
+      if (buffered.type === MessageType.TOOL_CALL) {
+        const callId = buffered.tool_call_id ?? buffered.tool_calls?.[0]?.id ?? buffered.id;
+        const result = state.resultByCallId.get(callId);
+        if (result && bufferedIds.has(result.id)) {
+          // Paired result also in buffer — render as one tool pair.
+          if (!state.consumedResults.has(callId)) {
+            state.consumedResults.add(callId);
+            pushTool(liveById.get(callId) ?? messagePairToToolBlock(buffered, result));
+          }
+        } else {
+          if (result) state.consumedResults.add(callId);
+          pushTool(liveById.get(callId) ?? messagePairToToolBlock(buffered, result ?? null));
+        }
+        counter.value += 1;
+        continue;
+      }
+      if (buffered.type === MessageType.TOOL_RESULT) {
+        const callId = buffered.tool_call_id ?? buffered.id;
+        if (!state.consumedResults.has(callId)) {
+          pushTool(liveById.get(callId) ?? resultOnlyToToolBlock(buffered));
+        }
+        counter.value += 1;
+        continue;
+      }
+      if (buffered.type === MessageType.THINKING) {
+        pushMessage(buffered, 'thought');
+        counter.value += 1;
+        continue;
+      }
+      pushMessage(buffered, 'other');
+      counter.value += 1;
+    }
+  } else {
+    // Claim the buffered tool ids even while collapsed: a stale live tail
+    // (or idle leftover tool blocks after CHAT_DONE) must not re-render
+    // compacted-away tools below the stub — the collapsed range owns them.
+    for (const buffered of buffer) {
+      if (buffered.type === MessageType.TOOL_CALL) {
+        emittedToolIds.add(buffered.tool_call_id ?? buffered.tool_calls?.[0]?.id ?? buffered.id);
+      } else if (buffered.type === MessageType.TOOL_RESULT) {
+        emittedToolIds.add(buffered.tool_call_id ?? buffered.id);
+      }
+    }
+    state.items.push({
+      kind: 'compacted-stub',
+      key: stubKey,
+      messages: buffer,
+      count: buffer.length,
+    });
+    counter.value += buffer.length;
+  }
+  state.compactedBuffer = [];
+}
+
+/**
+ * Walk a message slice into stream items, appending into the shared state.
+ * An open compacted run at the end of the slice is deliberately left in the
+ * buffer so the next chain's walk (or the build boundary) can merge it.
+ * Returns whether the walk buffered any compacted content (a chain whose
+ * only contributions are a user message plus a compacted run is the frozen
+ * prefix row of a mid-turn split — its footer would split the run).
+ */
 function walkMessagesToItems(
   visibleSource: readonly Message[],
   opts: {
@@ -443,202 +626,131 @@ function walkMessagesToItems(
     emittedToolIds: Set<string>;
     keyPrefix: string;
     expandedCompactedKeys?: ReadonlySet<string>;
-    seenCompactedIds?: Set<string>;
   },
-): { items: StreamItem[]; lastAssistantUsage: Usage | null } {
-  const { liveById, emittedToolIds, keyPrefix, expandedCompactedKeys, seenCompactedIds } = opts;
+  state: ChainWalkState,
+): boolean {
+  const { liveById, emittedToolIds, keyPrefix, expandedCompactedKeys } = opts;
   const visible = visibleSource.filter((m) => !m.hidden);
-  const resultByCallId = new Map<string, Message>();
   for (const m of visible) {
     if (m.type === MessageType.TOOL_RESULT && m.tool_call_id) {
-      resultByCallId.set(m.tool_call_id, m);
+      state.resultByCallId.set(m.tool_call_id, m);
     }
   }
 
-  const items: StreamItem[] = [];
-  const consumedResults = new Set<string>();
-  let lastAssistantUsage: Usage | null = null;
-  let msgIdx = 0;
-  let compactedBuffer: Message[] = [];
-
-  const keyFor = (msg: Message, kind: string, idx: number) =>
-    msg.id && msg.id.length > 0 ? `${keyPrefix}-${kind}-${msg.id}-${idx}` : `${keyPrefix}-${kind}-${idx}`;
+  let compactedAny = false;
+  const counter = { value: 0 };
+  const keyFor = (msg: Message, kind: string): string =>
+    msg.id && msg.id.length > 0
+      ? `${keyPrefix}-${kind}-${msg.id}-${counter.value}`
+      : `${keyPrefix}-${kind}-${counter.value}`;
 
   const pushTool = (block: ToolBlock) => {
     if (emittedToolIds.has(block.id)) return;
     emittedToolIds.add(block.id);
-    items.push({
+    state.items.push({
       kind: 'tool',
       key: block.id ? `${keyPrefix}-tool-${block.id}-${emittedToolIds.size}` : `${keyPrefix}-tool-${emittedToolIds.size}`,
       block,
     });
   };
 
-  const pushMessage = (msg: Message, kind: string, idx: number) => {
-    if (msg.role === MessageRole.ASSISTANT && msg.type === MessageType.TEXT && msg.usage) {
-      lastAssistantUsage = msg.usage;
-    }
-    items.push({
+  const pushMessage = (msg: Message, kind: string) => {
+    state.items.push({
       kind: 'message',
-      key: keyFor(msg, kind, idx),
+      key: keyFor(msg, kind),
       message: msg,
     });
   };
 
-  const flushCompactedBuffer = () => {
-    if (compactedBuffer.length === 0) return;
-    const firstId = compactedBuffer[0]?.id || `${keyPrefix}-compacted-${msgIdx}`;
-    const stubKey = `compacted-${keyPrefix}-${msgIdx}-${firstId}`;
-    const isExpanded = expandedCompactedKeys?.has(stubKey) ?? false;
-    if (isExpanded) {
-      // Expand to full fidelity — render each buffered message with normal logic
-      // Identity set for membership checks (matches includes' === semantics).
-      const bufferedMessages = new Set(compactedBuffer);
-      for (const buffered of compactedBuffer) {
-        // Re-enter normal dispatch but without re-buffering
-        if (buffered.type === MessageType.TOOL_CALL) {
-          const callId = buffered.tool_call_id ?? buffered.tool_calls?.[0]?.id ?? buffered.id;
-          const result = resultByCallId.get(callId);
-          if (result && bufferedMessages.has(result)) {
-            // Paired result also in buffer — will be handled when its turn comes; avoid double
-            // For expanded view, render as tool pair if possible
-            if (!consumedResults.has(callId)) {
-              consumedResults.add(callId);
-              const live = liveById.get(callId);
-              pushTool(live ?? messagePairToToolBlock(buffered, result));
-            }
-          } else {
-            if (result) consumedResults.add(callId);
-            const live = liveById.get(callId);
-            pushTool(live ?? messagePairToToolBlock(buffered, result ?? null));
-          }
-          msgIdx += 1;
-          continue;
-        }
-        if (buffered.type === MessageType.TOOL_RESULT) {
-          const callId = buffered.tool_call_id ?? buffered.id;
-          if (consumedResults.has(callId)) {
-            msgIdx += 1;
-            continue;
-          }
-          const live = liveById.get(callId);
-          pushTool(live ?? resultOnlyToToolBlock(buffered));
-          msgIdx += 1;
-          continue;
-        }
-        if (buffered.type === MessageType.THINKING) {
-          pushMessage(buffered, 'thought', msgIdx++);
-          continue;
-        }
-        pushMessage(buffered, 'other', msgIdx++);
-      }
-    } else {
-      // Claim the buffered tool ids even while collapsed: a stale live tail
-      // (or idle leftover tool blocks after CHAT_DONE) must not re-render
-      // compacted-away tools below the stub — the collapsed range owns them.
-      for (const buffered of compactedBuffer) {
-        if (buffered.type === MessageType.TOOL_CALL) {
-          emittedToolIds.add(buffered.tool_call_id ?? buffered.tool_calls?.[0]?.id ?? buffered.id);
-        } else if (buffered.type === MessageType.TOOL_RESULT) {
-          emittedToolIds.add(buffered.tool_call_id ?? buffered.id);
-        }
-      }
-      items.push({
-        kind: 'compacted-stub',
-        key: stubKey,
-        messages: [...compactedBuffer],
-        count: compactedBuffer.length,
-      });
-      msgIdx += compactedBuffer.length;
-    }
-    compactedBuffer = [];
-  };
+  const flush = () =>
+    flushCompactedBuffer(state, { liveById, emittedToolIds, keyPrefix, expandedCompactedKeys, counter });
 
   for (const m of visible) {
+    if (m.id && state.seenMessageIds.has(m.id)) continue;
+    if (m.id) state.seenMessageIds.add(m.id);
     if (hasCompactedMarker(m)) {
-      const dupId = m.id;
-      if (dupId && seenCompactedIds?.has(dupId)) {
-        if (m.excludeFromModel) {
-          compactedBuffer.push(m);
-        }
-        continue;
-      }
-      if (dupId) seenCompactedIds?.add(dupId);
       if (m.excludeFromModel) {
-        compactedBuffer.push(m);
+        state.compactedBuffer.push(m);
+        compactedAny = true;
         continue;
       }
-      flushCompactedBuffer();
-      items.push({
+      flush();
+      state.items.push({
         kind: 'compaction-summary',
-        key: keyFor(m, 'compaction', msgIdx++),
+        key: keyFor(m, 'compaction'),
         message: m,
       });
+      counter.value += 1;
       continue;
     }
     if (m.excludeFromModel) {
-      compactedBuffer.push(m);
+      state.compactedBuffer.push(m);
+      compactedAny = true;
       continue;
     }
-    flushCompactedBuffer();
+    flush();
     if (m.role === MessageRole.USER && m.type === MessageType.TEXT) {
-      items.push({
+      state.items.push({
         kind: 'message',
-        key: keyFor(m, 'user', msgIdx++),
+        key: keyFor(m, 'user'),
         message: m,
       });
+      counter.value += 1;
       continue;
     }
 
     if (m.type === MessageType.THINKING) {
-      pushMessage(m, 'thought', msgIdx++);
+      pushMessage(m, 'thought');
+      counter.value += 1;
       continue;
     }
 
     if (m.type === MessageType.TOOL_CALL) {
       const callId = m.tool_call_id ?? m.tool_calls?.[0]?.id ?? m.id;
-      const result = resultByCallId.get(callId);
-      if (result) consumedResults.add(callId);
+      const result = state.resultByCallId.get(callId);
+      if (result) state.consumedResults.add(callId);
       const live = liveById.get(callId);
       pushTool(live ?? messagePairToToolBlock(m, result ?? null));
-      msgIdx += 1;
+      counter.value += 1;
       continue;
     }
 
     if (m.type === MessageType.TOOL_RESULT) {
       const callId = m.tool_call_id ?? m.id;
-      if (consumedResults.has(callId)) {
-        msgIdx += 1;
+      if (state.consumedResults.has(callId)) {
+        counter.value += 1;
         continue;
       }
       const live = liveById.get(callId);
       pushTool(live ?? resultOnlyToToolBlock(m));
-      msgIdx += 1;
+      counter.value += 1;
       continue;
     }
 
     if (m.role === MessageRole.ASSISTANT && m.type === MessageType.TEXT) {
       if (!m.content?.trim()) {
-        msgIdx += 1;
+        counter.value += 1;
         continue;
       }
-      pushMessage(m, 'asst', msgIdx++);
+      pushMessage(m, 'asst');
+      counter.value += 1;
       continue;
     }
 
     if (m.type === MessageType.ERROR || m.role === MessageRole.SYSTEM) {
-      pushMessage(m, 'other', msgIdx++);
+      pushMessage(m, 'other');
+      counter.value += 1;
       continue;
     }
 
     if (m.content?.trim()) {
-      pushMessage(m, 'other', msgIdx++);
+      pushMessage(m, 'other');
+      counter.value += 1;
     } else {
-      msgIdx += 1;
+      counter.value += 1;
     }
   }
-  flushCompactedBuffer();
-  return { items, lastAssistantUsage };
+  return compactedAny;
 }
 
 /**

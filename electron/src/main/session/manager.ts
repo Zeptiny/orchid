@@ -43,6 +43,7 @@ import {
   loadSession as storageLoadSession,
   loadSessionForReplacement as storageLoadSessionForReplacement,
   loadSessionView as storageLoadSessionView,
+  loadSessionViewUnrecovered as storageLoadSessionViewUnrecovered,
   loadSessionHistoryPage as storageLoadSessionHistoryPage,
   loadSessionMessages as storageLoadSessionMessages,
   loadSubagentRecord as storageLoadSubagentRecord,
@@ -200,6 +201,41 @@ export class SessionManager {
       }
     }
     this._sessions.set(session.id, session);
+  }
+
+  /**
+   * Refresh the cached session from durable rows WITHOUT restart recovery.
+   *
+   * A compaction durable write restructures the chain rows (flags + summary
+   * head + splits). Serving the pre-split cached view afterwards mis-orders
+   * the renderer — the summary spliced above the turn's user message, the
+   * next checkpoint update deleting the user message from view, superseded
+   * heads rendering as count-1 stubs — because session:open reuses this
+   * cache for the compaction reload. The refreshed cache matches exactly what
+   * a renderer reload reads from storage. Non-chain session fields keep their
+   * cached (live) values.
+   */
+  refreshCachedSessionFromStorage(sessionId: string): Session | null {
+    const reloaded = storageLoadSessionViewUnrecovered(sessionId, this._storageOpts);
+    if (!reloaded) return null;
+    const existing = this._sessions.get(sessionId);
+    const merged: Session = existing
+      ? {
+          ...reloaded,
+          name: existing.name,
+          selection: existing.selection,
+          modelLabel: existing.modelLabel,
+          cwd: existing.cwd,
+          todoStore: existing.todoStore,
+          subagentChains: existing.subagentChains,
+          reasoningEffortOverride: existing.reasoningEffortOverride,
+          tierOverride: existing.tierOverride,
+          permissionMode: existing.permissionMode,
+          createdAt: existing.createdAt,
+        }
+      : reloaded;
+    this._sessions.set(sessionId, merged);
+    return merged;
   }
 
   /**

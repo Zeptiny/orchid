@@ -89,10 +89,14 @@ Shared domain vocabulary for the orchid project. This file defines terms used ac
 - **Context Compaction** — Replacing old conversation history in the model's view with a summary so the context window is freed, while the full transcript stays visible to the user. Compaction replaces history by exclusion, never by deletion.
 - **Compactable Range** — The leading slice of a conversation eligible for compaction, ending at a cut point chosen so tool calls and their results are never split.
 - **Preserved Window** — The verbatim suffix after the cut that compaction leaves untouched, sized as a fraction of the context window.
-- **Summary Head** — The synthetic assistant message, carrying a compacted marker, that stands in for a summarized range in the model view; it is its own chain and may itself be re-summarized by a later compaction.
+- **Summary Head** — The synthetic assistant message, carrying a compacted marker, that stands in for a summarized range in the model view; it may itself be re-summarized by a later compaction. It lives inline inside the owning chain at the cut position (both scopes) — never as its own chain row — so a turn's chain stays a single row across any number of compactions.
 - **Model Exclusion** — A per-message flag that keeps a message in the transcript while removing it from the model view; cancelled tool results and compacted originals carry it. Selective mode never applies it to user messages.
-- **Chain Split** — When a compaction cut lands inside one chain, the chain divides into a flagged prefix, the summary head, and a continuing suffix. Non-obvious rule: which half keeps the chain's original identity differs by path — the in-memory apply keeps it on the continuing suffix, the durable write keeps it on the flagged prefix — and both directions are pinned by contract tests.
+- **Compacted Run** — A maximal run of consecutive model-excluded messages rendered collapsed as one "Compacted N messages" disclosure stub. Runs may span chain boundaries (split/mirrored durable rows); the run — not the chain — is the renderer's grouping unit.
 - **Mechanical Reclaim** — The deterministic pre-pass that flags exact-duplicate tool outputs (same tool, normalized args, and output) without any LLM call; when it alone drops usage below the re-arm line, the summarizer is skipped.
+
+### Retired: Chain Split
+
+The earlier design where a compaction cut inside a chain divided it into a flagged prefix row, a summary-head row, and a continuing row. Removed after it corrupted live transcripts: multi-row turns starved the bounded renderer view and compounded into duplicate "ladder" rows under mid-turn resume. "Chain split" now refers only to legacy sessions carrying that layout.
 
 ## Trusted Projects
 

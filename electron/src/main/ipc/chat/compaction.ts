@@ -73,7 +73,6 @@ import {
 import { activeAgents } from './state';
 import { sendTurnEvent, webContentsForWindowId } from './events';
 import {
-  buildCompactedCacheChains,
   persistCompactionBetweenTurns as persistCompaction,
   persistCompactionDurable,
   publishCompactedSession,
@@ -442,23 +441,12 @@ function persistSelectiveCompaction(sessionId: string, input: SelectivePersistIn
       insertBeforeMessageId,
       updatedAt,
     });
-    // Refresh the in-memory cache: flags applied wherever the view holds the
-    // messages, summary chain spliced in at its durable position. Partial
-    // arrays are fine — model replay history is maintained separately via
-    // setChatHistory. Same shared cache/publish helpers as the simple
-    // between-turns path in persist.ts.
-    const cacheChains = buildCompactedCacheChains(
-      existing.chains,
-      // Minimal apply-like surface: the cache builder only reads `newChain`
-      // (the summary head) — flags and insertion anchor were computed above.
-      { updatedChains: existing.chains, newChain: summaryChain, didApply: true },
-      durable,
-      [...flaggedSet],
-      // No apply-side split tail: the selective path positions the summary
-      // via insertBeforeMessageId, never by re-id'ing a chain suffix.
-      null,
-    );
-    publishCompactedSession(manager, sessionId, existing, cacheChains, updatedAt);
+    // Refresh the in-memory cache from durable rows so the renderer's
+    // compaction reload sees the true post-write chain layout. Model replay
+    // history is maintained separately via setChatHistory.
+    if (durable) {
+      publishCompactedSession(manager, sessionId, existing, updatedAt);
+    }
     return true;
   } catch (err) {
     console.debug('[compaction] selective chain persist failed (non-fatal):', err);
