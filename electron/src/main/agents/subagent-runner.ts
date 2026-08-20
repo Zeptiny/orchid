@@ -12,6 +12,13 @@
  * stream with the box's (possibly compacted) history — the generator host of
  * main's idle-intercept resume. An abort or interrupt at any point breaks out
  * of the restart loop cleanly with no further events.
+ *
+ * Overflow retry (U6, R30): a classified context_length_exceeded error event
+ * is intercepted before it can fail the run and routed to the controller's
+ * synchronous compaction — one compact-and-retry per run (mirroring main's
+ * hasTriedCompactionRetry guard), then the structured partial report (R17)
+ * replaces hard failure. The error propagates unchanged only when compaction
+ * is unavailable.
  */
 import type { Agent } from '../../shared/types/agent';
 import type { ReasoningProviderOptions } from '../providers/drivers/types';
@@ -24,6 +31,7 @@ import { resolveSubagentTier } from '../providers/facets/tiers';
 import { assembleFacetProviderOptions } from '../providers/facets/turn-options';
 import type { ModelSelection, ProviderProtocol } from '../../shared/types/provider';
 import { streamChat, type StreamEvent } from '../llm/orchestrator';
+import { isContextLengthExceededMessage } from '../llm/middleware/error-classification';
 import { resolveSubagentEffort } from '../llm/reasoning-effort';
 import { getConfig } from '../config/loader';
 import { getSessionManager } from '../session/singleton';
@@ -81,6 +89,28 @@ function resolveParentSessionCwdFallback(sessionId?: string): string | null {
     // Session manager may be unavailable in tests
   }
   return null;
+}
+
+/**
+ * Race a compaction promise against the run's abort signal: resolves null
+ * when the signal fires first, so an interrupt during the synchronous
+ * overflow compaction (R30) exits the restart loop as a clean abort instead
+ * of observing a late result.
+ */
+function raceAbortDuring<T>(promise: Promise<T>, signal: AbortSignal): Promise<T | null> {
+  if (signal.aborted) return Promise.resolve(null);
+  return new Promise<T | null>((resolve) => {
+    let settled = false;
+    const settle = (value: T | null): void => {
+      if (settled) return;
+      settled = true;
+      signal.removeEventListener('abort', onAbort);
+      resolve(value);
+    };
+    const onAbort = (): void => settle(null);
+    signal.addEventListener('abort', onAbort, { once: true });
+    promise.then((value) => settle(value), () => settle(null));
+  });
 }
 
 /**
@@ -283,8 +313,14 @@ export function createSubagentStreamRunner(): SubagentStreamRunner {
       const historyBox: SubagentHistoryBox =
         params.historyBox ?? { messages: [makeUserMessage(params.task)] };
       const pause = params.compaction;
+      // R30: one compact-and-retry per run — the runner-side twin of main's
+      // hasTriedCompactionRetry guard. The runner owns the flag because it
+      // owns the restart loop; the controller reads it via `alreadyRetried`
+      // and degrades to the partial report instead of compacting again.
+      let overflowRetryTried = false;
       while (!params.abortSignal.aborted) {
-        yield* streamChat({
+        let restartForOverflowRetry = false;
+        for await (const event of streamChat({
           messages: [...historyBox.messages],
           agent: agentForRun,
           systemPrompt: fullPrompt,
@@ -311,7 +347,33 @@ export function createSubagentStreamRunner(): SubagentStreamRunner {
           cachePlacement: cacheFacet
             ? { facet: cacheFacet, ttl: cacheTtl, sessionKey: cacheSessionKey }
             : undefined,
-        });
+        })) {
+          // R29 fire point 3: intercept a classified context-overflow error
+          // BEFORE it reaches the run loop (the assembler fails the run on
+          // error events) and hand it to the compaction controller. The dead
+          // segment's error event is swallowed on every recovery outcome
+          // except 'unavailable', where it propagates exactly as before.
+          if (
+            event.type === 'error' &&
+            pause?.compactForOverflow != null &&
+            !params.abortSignal.aborted &&
+            isContextLengthExceededMessage(`${event.title} ${event.detail}`)
+          ) {
+            const outcome = await raceAbortDuring(
+              pause.compactForOverflow({ alreadyRetried: overflowRetryTried }),
+              params.abortSignal,
+            );
+            if (params.abortSignal.aborted || outcome === 'aborted') return;
+            if (outcome === 'applied') {
+              overflowRetryTried = true;
+              restartForOverflowRetry = true;
+              break;
+            }
+            if (outcome === 'degraded') return;
+          }
+          yield event;
+        }
+        if (restartForOverflowRetry) continue;
         if (!pause || params.abortSignal.aborted || !pause.shouldPause()) break;
         // The stream stopped at a step boundary with the pause armed — consume
         // it (re-validate + apply + swap the box) and restart with whatever

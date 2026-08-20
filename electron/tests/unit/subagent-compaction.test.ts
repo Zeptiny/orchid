@@ -119,6 +119,7 @@ import {
   setCompactionPending,
   type CompactionPendingEntry,
 } from '../../src/main/llm/compaction/pending-store';
+import { shouldPauseForCompaction } from '../../src/main/ipc/next-request-stop';
 import {
   SubagentDeltaEventType,
   type SubagentCompactionProgressEvent,
@@ -241,7 +242,16 @@ type ScriptItem =
    * step boundary (await the controller's apply). A 'degraded' outcome stops
    * the script — the run ends at the boundary, exactly like the real runner.
    */
-  | { readonly pauseGate: true };
+  | { readonly pauseGate: true }
+  /**
+   * Overflow-retry choreography (U6): invoke the controller's reactive
+   * overflow entry exactly as the production runner does when streamChat
+   * yields a classified context_length_exceeded error — `true` marks the
+   * post-retry (alreadyRetried) terminal call. A 'degraded' or 'aborted'
+   * outcome stops the script, mirroring the real runner; 'unavailable'
+   * leaves the error to propagate, so the script must yield it next.
+   */
+  | { readonly overflowGate: boolean };
 
 /** Wait until the summarizer prepare has actually started (implies the run's pending promise is registered). */
 const summarizerStarted: ScriptItem = {
@@ -297,6 +307,15 @@ function scriptedRunner(script: readonly ScriptItem[]) {
           await new Promise((resolve) => setTimeout(resolve, 5));
         }
         const outcome = await gate.applyAtPause();
+        if (outcome === 'degraded' || outcome === 'aborted') return;
+        continue;
+      }
+      if ('overflowGate' in item) {
+        const gate = params.compaction?.compactForOverflow;
+        if (!gate) {
+          throw new Error('scriptedRunner overflowGate requires the compaction overflow controller');
+        }
+        const outcome = await gate({ alreadyRetried: item.overflowGate });
         if (outcome === 'degraded' || outcome === 'aborted') return;
         continue;
       }
@@ -776,6 +795,162 @@ describe('SubagentManager mid-run compaction (U9): degrade to partial report', (
     const domain = runtimeToDomain(record);
     expect(domain.status).toBe('completed');
     expect(domain.result).toBe(result);
+  });
+});
+
+// ── OVERFLOW RETRY (U6: R30 / R29 fire point 3) ──────────────────────────────
+
+describe('SubagentManager compaction: overflow retry (U6)', () => {
+  it('compacts synchronously on a mid-run overflow and the run completes on the retry', async () => {
+    // No usage events anywhere: the only way the gate can calibrate is the
+    // measured lower bound the overflow itself records (input >= window) —
+    // this test pins that calibration, not just the plumbing.
+    const summaryText = `Summary: ${'s'.repeat(300)}`;
+    mocks.summarize.mockResolvedValue({ text: summaryText, usage: null });
+    const phases: string[] = [];
+    const manager = new SubagentManager();
+    manager.setOnDelta((event: SubagentDeltaEvent) => {
+      if (event.type === SubagentDeltaEventType.COMPACTION_PROGRESS) {
+        phases.push((event as SubagentCompactionProgressEvent).phase);
+      }
+    });
+    manager.setRunner(scriptedRunner([
+      ...steps(10),
+      { overflowGate: false }, // provider overflow → synchronous compact → retry
+      { type: 'step_finish', stepIndex: 0, finishReason: 'stop' },
+      { type: 'content', text: 'Recovered after compaction.' },
+      { type: 'finish', finishReason: 'stop' },
+    ]));
+    const record = spawnCompactionSubagent(manager);
+    await manager.getRunPromise(record.id);
+
+    expect(record.state).toBe(SubagentState.COMPLETED);
+    expect(record.error).toBeNull();
+    expect(mocks.summarize).toHaveBeenCalledTimes(1);
+    const call = summarizeCalls()[0]!;
+    expect(call['scope']).toBe('subagents');
+    expect(call['subagentId']).toBe(record.id);
+
+    // Compacted transcript shape: one summary head, originals preserved, the
+    // task head and the post-retry progress never flagged (R31/R32).
+    const chain = record.chain?.messages ?? [];
+    expect(chain.filter((m) => m.compacted)).toHaveLength(1);
+    const cut = chain.findIndex((m) => m.compacted);
+    const userMessages = chain.filter((m) => m.role === 'user');
+    expect(userMessages.length).toBeGreaterThan(0);
+    expect(userMessages.every((m) => m.excludeFromModel !== true)).toBe(true);
+    expect(chain.slice(cut + 1).every((m) => m.excludeFromModel !== true)).toBe(true);
+
+    // The run completed with the retried stream's result — no error surfaced,
+    // no partial report, and the compaction checkpoint persisted (R36).
+    expect(record.result).toContain('Recovered after compaction.');
+    expect(record.result).not.toContain('[Subagent partial report');
+    expect(persistenceOf(manager).getLastCompactionRevision(record.id)).not.toBeNull();
+    // Widget lifecycle via the existing onProgress path.
+    expect(phases).toContain('preparing');
+    expect(phases).toContain('compacting');
+    expect(phases.at(-1)).toBe('complete');
+  });
+
+  it('degrades to the partial report when the retried stream still overflows (exactly one compaction)', async () => {
+    const summaryText = `Summary: ${'s'.repeat(300)}`;
+    mocks.summarize.mockResolvedValue({ text: summaryText, usage: null });
+    const manager = managerWith([
+      ...steps(5),
+      { overflowGate: false }, // first overflow → compact → retry ('applied')
+      { type: 'step_finish', stepIndex: 2, finishReason: 'stop' },
+      { type: 'content', text: 'still over the window' },
+      { overflowGate: true }, // retried stream overflowed again → degraded
+      { type: 'finish', finishReason: 'stop' }, // unreachable: the run ends
+    ]);
+    const record = spawnCompactionSubagent(manager);
+    await manager.getRunPromise(record.id);
+
+    // The retry budget is one per run: exactly one compaction ran.
+    expect(mocks.summarize).toHaveBeenCalledTimes(1);
+    // Degradation completes the run normally with the structured partial
+    // report (R17) — done/remaining/stoppedAt, not a failure.
+    expect(record.state).toBe(SubagentState.COMPLETED);
+    expect(record.error).toBeNull();
+    const result = record.result ?? '';
+    expect(result).toContain('[Subagent partial report');
+    expect(result).toContain('Done:');
+    expect(result).toContain('5 tool results');
+    expect(result).toContain('Remaining:');
+    expect(result).toContain(TASK);
+    expect(result).toContain('Stopped at: step 2');
+    // The first compaction's flags + summary head are still persisted under
+    // the degraded result.
+    expect((record.chain?.messages ?? []).filter((m) => m.compacted)).toHaveLength(1);
+    expect(record.chain?.status).toBe(ChainStatus.COMPLETED);
+    const domain = runtimeToDomain(record);
+    expect(domain.status).toBe('completed');
+    expect(domain.result).toBe(result);
+  });
+
+  it('degrades without a retry when the gate finds nothing left to compact (empty cut)', async () => {
+    // A floor no real range can clear makes the gate no-op: nothing is
+    // compactable, so the partial report is the terminal fallback and no
+    // compaction-retry loop can start.
+    mocks.config = compactionConfig({ min_compactable_tokens: 1_000_000 });
+    const manager = managerWith([
+      ...steps(3),
+      { overflowGate: false }, // gate no-op → degraded immediately
+      { type: 'finish', finishReason: 'stop' }, // unreachable
+    ]);
+    const record = spawnCompactionSubagent(manager);
+    await manager.getRunPromise(record.id);
+
+    expect(record.state).toBe(SubagentState.COMPLETED);
+    expect(mocks.summarize).not.toHaveBeenCalled();
+    expect((record.chain?.messages ?? []).some((m) => m.compacted)).toBe(false);
+    expect((record.chain?.messages ?? []).some((m) => m.excludeFromModel)).toBe(false);
+    const result = record.result ?? '';
+    expect(result).toContain('[Subagent partial report');
+    expect(result).toContain('3 tool results');
+    expect(result).toContain(TASK);
+  });
+
+  it('aborts cleanly when interrupted during the overflow compaction (no partial report, no stuck state)', async () => {
+    // The summarizer never resolves: the compaction stays in flight until the
+    // run's abort signal races it out.
+    mocks.summarize.mockImplementation(() => new Promise(() => undefined));
+    const manager = managerWith([
+      ...steps(5),
+      { overflowGate: false }, // parks inside the compaction
+    ]);
+    const record = spawnCompactionSubagent(manager);
+    await vi.waitFor(() => expect(mocks.summarize).toHaveBeenCalledTimes(1));
+    manager.cancelOne(record.id);
+    await manager.getRunPromise(record.id);
+
+    expect(record.state).toBe(SubagentState.INTERRUPTED);
+    // Clean abort: no partial report was set and no compaction applied.
+    expect(record.result).not.toContain('[Subagent partial report');
+    expect((record.chain?.messages ?? []).some((m) => m.compacted)).toBe(false);
+    // No stuck state: the scoped pending and pause gate are both clear.
+    expect(getCompactionPending('session-compaction', record.id)).toBeUndefined();
+    expect(shouldPauseForCompaction('session-compaction', record.id)).toBe(false);
+  });
+
+  it('propagates the overflow error unchanged when the model has no context limits', async () => {
+    mocks.resolveExecution.mockResolvedValue({ model: {} });
+    const overflowDetail =
+      "This model's maximum context length is 4096 tokens. However, your messages resulted in 5000 tokens.";
+    const manager = managerWith([
+      ...steps(3),
+      { overflowGate: false }, // compaction unavailable → error propagates
+      { type: 'error', title: 'Provider Error', detail: overflowDetail },
+    ]);
+    const record = spawnCompactionSubagent(manager);
+    await manager.getRunPromise(record.id);
+
+    // Pre-U6 behavior: no context window → no compaction → the run fails with
+    // the provider's overflow error.
+    expect(record.state).toBe(SubagentState.FAILED);
+    expect(record.error).toContain('maximum context length');
+    expect(mocks.summarize).not.toHaveBeenCalled();
+    expect((record.chain?.messages ?? []).some((m) => m.compacted)).toBe(false);
   });
 });
 

@@ -40,6 +40,7 @@ import {
   isPendingCutStillValid,
   setCompactionPending,
   takeCompactionPending,
+  type CompactionPendingEntry,
 } from '../llm/compaction/pending-store';
 import {
   clearCompactionPause,
@@ -188,18 +189,46 @@ export type SubagentPauseApplyOutcome =
   | 'aborted';
 
 /**
+ * Outcome of the reactive overflow fire point (R29 fire point 3 / R30): a
+ * classified `context_length_exceeded` stream error asks the compaction
+ * controller to recover the run before it degrades or fails.
+ */
+export type SubagentOverflowOutcome =
+  /** Compaction applied and the history box swapped — retry the stream once. */
+  | 'applied'
+  /** Retry budget spent or nothing left to compact — the partial report (R17) is set on record.result and the run must end normally. */
+  | 'degraded'
+  /** Compaction disabled or unavailable (no context limits / no scope config) — the stream error propagates unchanged. */
+  | 'unavailable'
+  /** Abort raced in during the overflow compaction — stop without a retry. */
+  | 'aborted';
+
+/**
  * Compaction pause gate for one subagent run, keyed by the run's
  * (sessionId, agentScopeId) scope (R28). The runner binds `shouldPause` into
  * the orchestrator's early-stop predicate; when the stream stops at a step
  * boundary with the pause set, it awaits `applyAtPause` (re-validate against
  * live history, apply, swap the history box) and restarts the stream.
- * `discard` is the interrupt path: clear the gate + drop any pending.
+ * `compactForOverflow` is the reactive fire point (R29 fire point 3 / R30):
+ * the runner routes a classified context-overflow error event to it instead of
+ * letting it fail the run. `discard` is the interrupt path: clear the gate +
+ * drop any pending.
  */
 export interface SubagentCompactionPauseController {
   /** Whether this run's scope should pause for compaction at the next step boundary. */
   readonly shouldPause: () => boolean;
   /** Consume the pause at a step boundary: validate, apply, swap the history box. */
   readonly applyAtPause: () => Promise<SubagentPauseApplyOutcome>;
+  /**
+   * Compact synchronously for a context_length_exceeded stream error (prepare
+   * + immediate apply — the stream is already dead, so the fire-and-forget
+   * pause path cannot help) and report whether the run should retry the
+   * stream once, degrade to the partial report, or let the error propagate.
+   * `alreadyRetried` marks the post-retry terminal call — the controller
+   * degrades instead of compacting again (one retry per run, mirroring main's
+   * hasTriedCompactionRetry guard).
+   */
+  readonly compactForOverflow?: (params: { readonly alreadyRetried: boolean }) => Promise<SubagentOverflowOutcome>;
   /** Interrupt path: clear the scoped gate and discard any pending prepare. */
   readonly discard: () => void;
 }
@@ -1901,15 +1930,234 @@ export class SubagentManager {
       return 'applied';
     };
 
+    // R29 fire point 3 / R30: reactive overflow retry — the subagent twin of
+    // main's overflow-retry site in ipc/chat/send.ts. A classified
+    // context_length_exceeded error is terminal for the stream segment but not
+    // for the run: record the window as a measured lower bound (the overflow
+    // proves input >= window; calibrate-or-skip never fabricates an estimate),
+    // compact SYNCHRONOUSLY (prepare + immediate apply — the stream is already
+    // dead, so the fire-and-forget pause path cannot help), persist via the
+    // transactional subagent sink (R36), swap the history box, and tell the
+    // runner to restart the stream once. When the retry budget is spent
+    // (alreadyRetried), the gate no-ops (nothing left to compact), or the
+    // apply produces nothing usable, the run degrades to the structured
+    // partial report (R17) and completes normally. Compaction-disabled or
+    // unavailable runs return 'unavailable' and the original error propagates.
+    const compactForOverflow = async (params: {
+      readonly alreadyRetried: boolean;
+    }): Promise<SubagentOverflowOutcome> => {
+      const degradeToPartialReport = (): 'degraded' => {
+        const done = `${record.chain?.messages.filter((m) => m.type === 'tool_result').length ?? 0} tool results`;
+        record.result = buildSubagentPartialReport({
+          done,
+          remaining: record.task.slice(0, 200),
+          stoppedAt: `step ${lastStepIndex}`,
+        });
+        return 'degraded';
+      };
+      if (abort.signal.aborted) return 'aborted';
+      if (params.alreadyRetried) return degradeToPartialReport();
+      let cfg: CompactionScopeConfig | null = cachedSubagentCfg;
+      if (!cfg) {
+        try {
+          cfg = getConfig().compaction?.subagents ?? null;
+          cachedSubagentCfg = cfg;
+        } catch {
+          cfg = null;
+        }
+      }
+      if (!cfg) return 'unavailable';
+      const ready = await ensureCompactionInit();
+      if (abort.signal.aborted) return 'aborted';
+      if (!ready || subagentContextTokens == null || !subagentCompactionTrigger) return 'unavailable';
+      // Consume any pending the proactive fire points already prepared (its
+      // compactor may already be running) and clear the scoped pause gate: the
+      // retry segment must not stop at the next boundary for a compaction this
+      // path applies itself.
+      let pending: CompactionPendingEntry | null | undefined = takeCompactionPending(sessionKey, record.id);
+      clearCompactionPause(sessionKey, record.id);
+      const liveHistory = dedupeHistoryById(assembler.snapshotTranscript());
+      if (pending && !isPendingCutStillValid(pending, liveHistory)) {
+        try { subagentCompactionTrigger.abortPrepare(); } catch { /* trigger may be unresolved */ }
+        pending = undefined;
+      }
+      if (!pending) {
+        // Measured lower bound: the failed request proves input >= the window,
+        // which calibrates the gate when no usage observation exists yet and
+        // doubles as this fire point's observed inputTokens (over-window, so
+        // the threshold gate cannot block the recovery it exists for).
+        if (subagentCompactionTrigger.state.tokensPerChar == null) {
+          subagentCompactionTrigger.state.lastObservedInputTokens = subagentContextTokens;
+        }
+        pending = await prepareSubagentCompaction({
+          messages: liveHistory,
+          selection: record.selection,
+          config: (() => {
+            try {
+              return getConfig() as unknown as import('../config/schema').Config;
+            } catch {
+              return { compaction: { subagents: cfg! } } as unknown as import('../config/schema').Config;
+            }
+          })(),
+          sessionId: sessionKey,
+          subagentId: record.id,
+          chainId: record.chain?.id ?? null,
+          turnId: `${record.id}#${run.generation}`,
+          inputTokens: subagentContextTokens,
+          contextTokens: subagentContextTokens,
+          triggerState: subagentCompactionTrigger.state,
+          onProgress: emitSubagentCompactionProgress,
+          onTextDelta: onCompactionTextDelta,
+        });
+        if (abort.signal.aborted) {
+          pending?.promise?.catch(() => undefined);
+          pending?.selectivePromise?.catch(() => undefined);
+          try { subagentCompactionTrigger.abortPrepare(); } catch { /* trigger may be unresolved */ }
+          emitSubagentCompactionProgress({ phase: 'complete' });
+          return 'aborted';
+        }
+        if (!pending) {
+          // Gate no-op: nothing left to compact (empty cut / below floor) —
+          // the partial report is the terminal fallback.
+          try { subagentCompactionTrigger.abortPrepare(); } catch { /* trigger may be unresolved */ }
+          emitSubagentCompactionProgress({ phase: 'complete' });
+          return degradeToPartialReport();
+        }
+        subagentCompactionTrigger.markPrepareStarted(pending.cut.compactableRange, pending.flaggedIds);
+        // The compactor promise is consumed by the apply below; a rejection
+        // before that has no observer — never surface as an unhandled one.
+        pending.promise?.catch(() => undefined);
+        pending.selectivePromise?.catch(() => undefined);
+      }
+      emitSubagentCompactionProgress({ phase: 'compacting', detail: 'Applying summary', mode: pending.mode });
+      // Race the apply against the run's abort signal so an interrupt during
+      // the overflow recovery breaks out cleanly (review #33 semantics).
+      const applyResult = await new Promise<ApplyResult | null>((resolve) => {
+        if (abort.signal.aborted) {
+          resolve(null);
+          return;
+        }
+        let settled = false;
+        const settle = (value: ApplyResult | null): void => {
+          if (settled) return;
+          settled = true;
+          abort.signal.removeEventListener('abort', onAbort);
+          resolve(value);
+        };
+        const onAbort = (): void => settle(null);
+        abort.signal.addEventListener('abort', onAbort, { once: true });
+        applySubagentPendingCompaction({
+          pending,
+          messages: liveHistory,
+          chains: [{ ...(record.chain ?? makeEmptyChain(sessionKey, record.selection, record.agent)), messages: [...liveHistory] }] as unknown as import('../../shared/types/chain').Chain[],
+          sessionId: sessionKey,
+        }).then(settle, () => settle(null));
+      });
+      if (abort.signal.aborted) {
+        try { subagentCompactionTrigger.consumePending(); } catch { /* trigger may be unresolved */ }
+        emitSubagentCompactionProgress({ phase: 'complete' });
+        return 'aborted';
+      }
+      const chainMessages = record.chain?.messages ?? [];
+      const shouldApply = subagentCompactionTrigger.evaluateApply({
+        inputTokens: record.usage?.prompt_tokens ?? 0,
+        contextTokens: subagentContextTokens,
+        threshold: cfg.threshold,
+        compactableTokens: (() => {
+          try {
+            const flagged = applyResult?.flaggedIds ?? [];
+            if (flagged.length === 0) return 0;
+            let flaggedChars = charsForMessageIds(chainMessages, flagged);
+            if (flaggedChars === 0) flaggedChars = flagged.length * 200;
+            const tpc =
+              subagentCompactionTrigger.state.tokensPerChar ??
+              deriveTokensPerChar(record.usage?.prompt_tokens ?? null, totalCharsForMessages(chainMessages)) ??
+              0.25;
+            return Math.ceil(flaggedChars * tpc);
+          } catch {
+            return applyResult?.flaggedIds.length ?? 0;
+          }
+        })(),
+        minCompactableTokens: cfg.min_compactable_tokens,
+      });
+      if (!applyResult || !shouldApply.shouldApply) {
+        // Nothing usable came out of the compactor — restarting the dead
+        // stream with unchanged history would only overflow again, so this is
+        // the degradation arm, not a skip.
+        try { subagentCompactionTrigger.consumePending(); } catch { /* trigger may be unresolved */ }
+        emitSubagentCompactionProgress({ phase: 'complete' });
+        historyBox.messages = [...liveHistory];
+        return degradeToPartialReport();
+      }
+      // Persist via the transactional subagent compaction path so crash
+      // mid-retry resumes the compacted chain (R36), then memory follows:
+      // record chain, assembler base (rebase — never a field poke), and the
+      // history box the retried stream replays.
+      const updatedMessages = applyResult.updatedMessages;
+      this._setChainMessages(record, [...updatedMessages]);
+      assembler.rebase(updatedMessages);
+      historyBox.messages = [...updatedMessages];
+      try {
+        const sessionId = record.sessionId ?? undefined;
+        if (sessionId) {
+          let insertBeforeMessageId: string | null = null;
+          if (applyResult.summaryMessage) {
+            const summaryIdx = updatedMessages.findIndex(
+              (m) => m.id === applyResult.summaryMessage!.id,
+            );
+            if (summaryIdx >= 0 && summaryIdx + 1 < updatedMessages.length) {
+              insertBeforeMessageId = updatedMessages[summaryIdx + 1]!.id;
+            }
+          }
+          const payload: SubagentCompactionPayload = {
+            updatedAt: new Date().toISOString(),
+            flaggedMessageIds: applyResult.flaggedIds,
+            summaryMessage: applyResult.summaryMessage,
+            insertBeforeMessageId,
+          };
+          this._persistence.applySubagentCompaction(record.id, sessionId, payload);
+        } else {
+          this._persistence.markCompaction(record.id, null);
+        }
+      } catch {
+        // compaction persistence marker is best-effort
+      }
+      this._markRecordDirty(record);
+      subagentCompactionTrigger.consumePending();
+      // Arm hysteresis from the post-compaction model view so the retried
+      // stream's usage events re-evaluate against the new baseline.
+      const preInput = record.usage?.prompt_tokens ?? 0;
+      let postCompactionTokens: number | undefined;
+      try {
+        let totalPost = 0;
+        for (const m of updatedMessages) {
+          if ((m as Message).excludeFromModel === true) continue;
+          totalPost += estimateMessageChars(m as Message);
+        }
+        if (totalPost === 0) totalPost = 1;
+        const tpc = subagentCompactionTrigger.state.tokensPerChar
+          ?? deriveTokensPerChar(preInput, totalCharsForMessages(record.chain?.messages ?? []));
+        if (tpc != null) postCompactionTokens = Math.ceil(totalPost * tpc);
+      } catch {
+        // token calibration is best-effort
+      }
+      subagentCompactionTrigger.onCompactionApplied(preInput, postCompactionTokens);
+      emitSubagentCompactionProgress({ phase: 'complete', detail: 'Context compacted — retrying' });
+      return 'applied';
+    };
+
     /**
      * Compaction pause gate handed to the runner (U5). `shouldPause` feeds the
      * orchestrator's early-stop predicate for this run's scope;
      * `applyAtPause` is awaited at the stream's step boundary; `discard` is
      * the interrupt path (clear gate + drop pending, never apply).
+     * `compactForOverflow` (U6) is the reactive fire point the runner routes
+     * classified context-overflow error events to.
      */
     const pauseController: SubagentCompactionPauseController = {
       shouldPause: () => shouldPauseForCompaction(sessionKey, record.id),
       applyAtPause: applyPendingAtPause,
+      compactForOverflow,
       discard: () => {
         clearCompactionPause(sessionKey, record.id);
         deleteCompactionPending(sessionKey, record.id);

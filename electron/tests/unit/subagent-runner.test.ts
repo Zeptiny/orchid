@@ -119,6 +119,7 @@ vi.mock('../../src/main/llm/message-factories', () => ({
 import { createSubagentStreamRunner } from '../../src/main/agents/subagent-runner';
 import type {
   SubagentCompactionPauseController,
+  SubagentOverflowOutcome,
   SubagentPauseApplyOutcome,
 } from '../../src/main/agents/manager';
 import {
@@ -712,5 +713,242 @@ describe('createSubagentStreamRunner compaction pause gate (U5)', () => {
     // The aborted restart loop exits before the late apply can trigger a
     // second provider call.
     expect(mocks.streamChat).toHaveBeenCalledTimes(1);
+  });
+});
+
+// ── Overflow retry (U6: R30 — R29 fire point 3) ──────────────────────────────
+
+describe('createSubagentStreamRunner overflow retry (U6)', () => {
+  const OVERFLOW_SESSION = 'session-runner-overflow';
+  const OVERFLOW_SCOPE = 'scope-runner-overflow';
+
+  let abortController: AbortController;
+
+  /** Provider-shaped context-overflow error, as classifyStreamError yields it. */
+  function overflowErrorEvent(): StreamEvent {
+    return {
+      type: 'error',
+      title: 'Provider Error',
+      detail:
+        "This model's maximum context length is 4096 tokens. However, your messages resulted in 5000 tokens.",
+    };
+  }
+
+  function boxWith(messages: Message[]): { messages: Message[] } {
+    return { messages };
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.getConfig.mockReturnValue({ default_project_dir: null });
+    mocks.acquireProjectMCPManager.mockReturnValue(mocks.mcpManager);
+    mocks.getBuiltinToolRegistryForRuntime.mockReturnValue(mocks.toolRegistry);
+    clearCompactionPause(OVERFLOW_SESSION, OVERFLOW_SCOPE);
+    abortController = new AbortController();
+  });
+
+  it('intercepts an overflow error, compacts, swaps the box, and retries the stream once', async () => {
+    const taskHead = { id: 'task-head', role: 'user', content: 'Map the repo' } as unknown as Message;
+    const summary = { id: 'summary-head', role: 'assistant', content: 'SUMMARY', compacted: { mode: 'simple' } } as unknown as Message;
+    const box = boxWith([
+      taskHead,
+      { id: 'bulky-prefix', role: 'assistant', content: 'x'.repeat(5000) } as unknown as Message,
+    ]);
+    const compactForOverflow = vi.fn(async () => {
+      box.messages = [taskHead, summary];
+      return 'applied' as SubagentOverflowOutcome;
+    });
+    const controller: SubagentCompactionPauseController = {
+      shouldPause: () => false,
+      applyAtPause: async () => 'skipped',
+      compactForOverflow,
+      discard: () => undefined,
+    };
+    mocks.streamChat.mockImplementationOnce(async function* () {
+      yield overflowErrorEvent();
+    });
+    mocks.streamChat.mockImplementationOnce(async function* () {
+      yield { type: 'content', text: 'recovered after compaction' };
+      yield { type: 'finish', finishReason: 'stop' };
+    });
+
+    const events = await collect(createSubagentStreamRunner()({
+      task: 'Map the repo',
+      historyBox: box,
+      agent,
+      selection,
+      abortSignal: abortController.signal,
+      agentScopeId: OVERFLOW_SCOPE,
+      sessionId: OVERFLOW_SESSION,
+      cwd: '/tmp/project',
+      projectRuntime: runtime(),
+      compaction: controller,
+    }));
+
+    expect(compactForOverflow).toHaveBeenCalledTimes(1);
+    expect(compactForOverflow).toHaveBeenCalledWith({ alreadyRetried: false });
+    expect(mocks.streamChat).toHaveBeenCalledTimes(2);
+    // The dead segment's error event never reaches the run loop; the retry's
+    // events flow through the single runner generator.
+    expect(events).toEqual([
+      { type: 'content', text: 'recovered after compaction' },
+      { type: 'finish', finishReason: 'stop' },
+    ]);
+    // The retry replays the history the compaction swapped into the box.
+    const retriedMessages = (mocks.streamChat.mock.calls[1]![0] as { messages: Message[] }).messages;
+    expect(retriedMessages.map((m) => m.id)).toEqual(['task-head', 'summary-head']);
+    expect(mocks.releaseProjectMCPManager).toHaveBeenCalledTimes(1);
+  });
+
+  it('ends the run after the second overflow (guard: exactly one compaction-retry per run)', async () => {
+    const outcomes: SubagentOverflowOutcome[] = ['applied', 'degraded'];
+    const compactForOverflow = vi.fn(async () => outcomes.shift() ?? 'degraded');
+    const controller: SubagentCompactionPauseController = {
+      shouldPause: () => false,
+      applyAtPause: async () => 'skipped',
+      compactForOverflow,
+      discard: () => undefined,
+    };
+    mocks.streamChat.mockImplementationOnce(async function* () {
+      yield { type: 'content', text: 'before the overflow' };
+      yield overflowErrorEvent();
+    });
+    mocks.streamChat.mockImplementationOnce(async function* () {
+      yield overflowErrorEvent();
+    });
+
+    const events = await collect(createSubagentStreamRunner()({
+      task: 'Map the repo',
+      historyBox: boxWith([{ id: 'task-head', role: 'user', content: 'Map the repo' } as unknown as Message]),
+      agent,
+      selection,
+      abortSignal: abortController.signal,
+      agentScopeId: OVERFLOW_SCOPE,
+      sessionId: OVERFLOW_SESSION,
+      cwd: '/tmp/project',
+      projectRuntime: runtime(),
+      compaction: controller,
+    }));
+
+    // Exactly one compaction-retry: the second overflow is the terminal
+    // (alreadyRetried) call and degrades instead of restarting.
+    expect(compactForOverflow).toHaveBeenCalledTimes(2);
+    expect(compactForOverflow).toHaveBeenNthCalledWith(1, { alreadyRetried: false });
+    expect(compactForOverflow).toHaveBeenNthCalledWith(2, { alreadyRetried: true });
+    expect(mocks.streamChat).toHaveBeenCalledTimes(2);
+    // 'degraded' ends the run with the partial report on record.result — no
+    // error event ever leaks to the run loop.
+    expect(events).toEqual([{ type: 'content', text: 'before the overflow' }]);
+  });
+
+  it('aborts cleanly when interrupted during the overflow compaction (no retry, no leaked events)', async () => {
+    let resolveCompact: ((value: SubagentOverflowOutcome) => void) | null = null;
+    let compactInvoked = false;
+    const controller: SubagentCompactionPauseController = {
+      shouldPause: () => false,
+      applyAtPause: async () => 'skipped',
+      compactForOverflow: () => {
+        compactInvoked = true;
+        // Simulates the summarizer wait: the compaction stays pending until
+        // the test resolves it — after the abort already fired.
+        return new Promise<SubagentOverflowOutcome>((resolve) => {
+          resolveCompact = resolve;
+        });
+      },
+      discard: () => undefined,
+    };
+    mocks.streamChat.mockImplementationOnce(async function* () {
+      yield overflowErrorEvent();
+    });
+
+    const runPromise = collect(createSubagentStreamRunner()({
+      task: 'Map the repo',
+      historyBox: boxWith([{ id: 'task-head', role: 'user', content: 'Map the repo' } as unknown as Message]),
+      agent,
+      selection,
+      abortSignal: abortController.signal,
+      agentScopeId: OVERFLOW_SCOPE,
+      sessionId: OVERFLOW_SESSION,
+      cwd: '/tmp/project',
+      projectRuntime: runtime(),
+      compaction: controller,
+    }));
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(compactInvoked).toBe(true);
+    abortController.abort();
+    const events = await runPromise;
+    resolveCompact?.('applied');
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    // Interrupted retry = clean abort: no leaked error event, no second
+    // provider call from the late compaction result.
+    expect(events).toEqual([]);
+    expect(mocks.streamChat).toHaveBeenCalledTimes(1);
+    expect(mocks.releaseProjectMCPManager).toHaveBeenCalledTimes(1);
+  });
+
+  it('propagates the overflow error unchanged when compaction is unavailable', async () => {
+    const compactForOverflow = vi.fn(async () => 'unavailable' as SubagentOverflowOutcome);
+    const controller: SubagentCompactionPauseController = {
+      shouldPause: () => false,
+      applyAtPause: async () => 'skipped',
+      compactForOverflow,
+      discard: () => undefined,
+    };
+    mocks.streamChat.mockImplementationOnce(async function* () {
+      yield overflowErrorEvent();
+    });
+
+    const events = await collect(createSubagentStreamRunner()({
+      task: 'Map the repo',
+      historyBox: boxWith([{ id: 'task-head', role: 'user', content: 'Map the repo' } as unknown as Message]),
+      agent,
+      selection,
+      abortSignal: abortController.signal,
+      agentScopeId: OVERFLOW_SCOPE,
+      sessionId: OVERFLOW_SESSION,
+      cwd: '/tmp/project',
+      projectRuntime: runtime(),
+      compaction: controller,
+    }));
+
+    expect(compactForOverflow).toHaveBeenCalledTimes(1);
+    expect(mocks.streamChat).toHaveBeenCalledTimes(1);
+    expect(events).toEqual([overflowErrorEvent()]);
+  });
+
+  it('does not route non-overflow stream errors through the overflow recovery', async () => {
+    const compactForOverflow = vi.fn(async () => 'applied' as SubagentOverflowOutcome);
+    const controller: SubagentCompactionPauseController = {
+      shouldPause: () => false,
+      applyAtPause: async () => 'skipped',
+      compactForOverflow,
+      discard: () => undefined,
+    };
+    const idleTimeout = {
+      type: 'error',
+      title: 'Stream idle timeout',
+      detail: 'No LLM data received for 60s',
+    } as const;
+    mocks.streamChat.mockImplementationOnce(async function* () {
+      yield idleTimeout;
+    });
+
+    const events = await collect(createSubagentStreamRunner()({
+      task: 'Map the repo',
+      historyBox: boxWith([{ id: 'task-head', role: 'user', content: 'Map the repo' } as unknown as Message]),
+      agent,
+      selection,
+      abortSignal: abortController.signal,
+      agentScopeId: OVERFLOW_SCOPE,
+      sessionId: OVERFLOW_SESSION,
+      cwd: '/tmp/project',
+      projectRuntime: runtime(),
+      compaction: controller,
+    }));
+
+    expect(compactForOverflow).not.toHaveBeenCalled();
+    expect(mocks.streamChat).toHaveBeenCalledTimes(1);
+    expect(events).toEqual([idleTimeout]);
   });
 });
