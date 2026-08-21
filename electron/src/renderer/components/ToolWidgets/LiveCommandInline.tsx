@@ -45,6 +45,12 @@ interface LiveCommandInlineProps {
    * unrelated live process.
    */
   expectedCreatedAt?: number;
+  /**
+   * Headerless mode for embedding inside a tool-result shell: the shell's
+   * disclosure owns expand/collapse, so the widget renders its body only —
+   * no bordered card, no second toggle header (issue #160).
+   */
+  embedded?: boolean;
 }
 
 // ── Constants ────────────────────────────────────────────────────────────────
@@ -67,6 +73,7 @@ export function LiveCommandInline({
   commandText,
   description,
   expectedCreatedAt,
+  embedded = false,
 }: LiveCommandInlineProps) {
   const [expanded, setExpanded] = useState(false);
   const [inputValue, setInputValue] = useState('');
@@ -82,9 +89,10 @@ export function LiveCommandInline({
   }, []);
 
   // Keep lifecycle status current while collapsed, but refresh the output tail
-  // only while the command body is visible.
+  // only while the command body is visible. Embedded widgets mount only when
+  // the enclosing shell expands, so their body is always visible.
   const { output, exitCode, isRunning, isAvailable, interactive, owner, refresh } =
-    useLiveCommandOutput(target, sessionId, true, expanded, expectedCreatedAt);
+    useLiveCommandOutput(target, sessionId, true, embedded || expanded, expectedCreatedAt);
 
   // Build title: prefer the description, falling back to the raw command —
   // mirrors commandTitle() in tool-title.ts.
@@ -167,6 +175,70 @@ export function LiveCommandInline({
     refresh();
   }, [commandId, sessionId, refresh]);
 
+  const bodyContent = (
+    <>
+      {commandText && description && description !== commandText && (
+        <pre className="orchid-live-command-cmd">$ {commandText}</pre>
+      )}
+      <pre className="orchid-live-command-pre">
+        {displayOutput || (!isAvailable
+          ? isBackground
+            ? '(background command is no longer available)'
+            : '(command output is no longer available)'
+          : isRunning ? '(waiting for output...)' : '(no output)')}
+      </pre>
+      {!isRunning && exitCode !== null && (
+        <div className="orchid-live-command-exit">
+          Process exited with code {exitCode}
+        </div>
+      )}
+      {isBackground && (showInput || showStop || showRelease) && (
+        <div className="orchid-live-command-controls">
+          {showInput ? (
+            <form
+              className="orchid-live-command-input-row"
+              onSubmit={(event) => void handleSendInput(event)}
+            >
+              <TextInput
+                size="xs"
+                className="orchid-live-command-input"
+                value={inputValue}
+                placeholder="Send a line of input"
+                aria-label={`Send input to ${commandText || 'command'}`}
+                aria-describedby={inputHint ? hintId : undefined}
+                onChange={(event) => setInputValue(event.target.value)}
+              />
+              <Button type="submit" size="xs" variant="primary">
+                Send
+              </Button>
+            </form>
+          ) : (
+            <span className="flex-1" aria-hidden="true" />
+          )}
+          {showRelease && (
+            <Button size="xs" variant="ghost" onClick={() => void handleRelease()}>
+              Release
+            </Button>
+          )}
+          {showStop && (
+            <Button size="xs" variant="error" onClick={() => void handleStop()}>
+              Stop
+            </Button>
+          )}
+        </div>
+      )}
+      {inputHint && (
+        <div id={hintId} className="orchid-live-command-hint" role="status" aria-live="polite">{inputHint}</div>
+      )}
+    </>
+  );
+
+  // Embedded: the enclosing tool-result shell owns the disclosure header, so
+  // render only the body — never a second toggle (issue #160).
+  if (embedded) {
+    return <div className="orchid-live-command-embedded">{bodyContent}</div>;
+  }
+
   return (
     <div className="orchid-live-command">
       <button
@@ -190,59 +262,7 @@ export function LiveCommandInline({
       </button>
       <CollapsibleRegion open={expanded} id={panelId}>
         <div className="orchid-live-command-body">
-          {commandText && description && description !== commandText && (
-            <pre className="orchid-live-command-cmd">$ {commandText}</pre>
-          )}
-          <pre className="orchid-live-command-pre">
-            {displayOutput || (!isAvailable
-              ? isBackground
-                ? '(background command is no longer available)'
-                : '(command output is no longer available)'
-              : isRunning ? '(waiting for output...)' : '(no output)')}
-          </pre>
-          {!isRunning && exitCode !== null && (
-            <div className="orchid-live-command-exit">
-              Process exited with code {exitCode}
-            </div>
-          )}
-          {isBackground && (showInput || showStop || showRelease) && (
-            <div className="orchid-live-command-controls">
-              {showInput ? (
-                <form
-                  className="orchid-live-command-input-row"
-                  onSubmit={(event) => void handleSendInput(event)}
-                >
-                  <TextInput
-                    size="xs"
-                    className="orchid-live-command-input"
-                    value={inputValue}
-                    placeholder="Send a line of input"
-                    aria-label={`Send input to ${commandText || 'command'}`}
-                    aria-describedby={inputHint ? hintId : undefined}
-                    onChange={(event) => setInputValue(event.target.value)}
-                  />
-                  <Button type="submit" size="xs" variant="primary">
-                    Send
-                  </Button>
-                </form>
-              ) : (
-                <span className="flex-1" aria-hidden="true" />
-              )}
-              {showRelease && (
-                <Button size="xs" variant="ghost" onClick={() => void handleRelease()}>
-                  Release
-                </Button>
-              )}
-              {showStop && (
-                <Button size="xs" variant="error" onClick={() => void handleStop()}>
-                  Stop
-                </Button>
-              )}
-            </div>
-          )}
-          {inputHint && (
-            <div id={hintId} className="orchid-live-command-hint" role="status" aria-live="polite">{inputHint}</div>
-          )}
+          {bodyContent}
         </div>
       </CollapsibleRegion>
     </div>

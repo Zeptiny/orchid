@@ -137,7 +137,7 @@ describe('SubagentTranscript live-command session wiring', () => {
       await Promise.resolve();
     });
 
-    expect(container.querySelector('.orchid-live-command')).toBeTruthy();
+    expect(container.querySelector('.orchid-live-command-embedded')).toBeTruthy();
     expect(snapshot).toHaveBeenCalledWith(
       expect.objectContaining({ commandId: 42, sessionId: 'session-1' }),
     );

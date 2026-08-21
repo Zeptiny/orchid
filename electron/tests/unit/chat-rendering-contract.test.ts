@@ -455,9 +455,11 @@ describe('live command gating (process liveness)', () => {
     expandShell(container);
     await flush();
 
-    expect(container.querySelector('.orchid-live-command')).toBeTruthy();
+    expect(container.querySelector('.orchid-live-command-embedded')).toBeTruthy();
     expect(container.querySelector('.orchid-tool-running-hint')).toBeNull();
-    expect(api.snapshot).toHaveBeenCalledWith({ commandId: 42, lastN: 50, sessionId: 'sess-1', includeTail: false });
+    // Embedded widgets mount only while the shell is expanded, so the tail is
+    // requested alongside the status poll.
+    expect(api.snapshot).toHaveBeenCalledWith({ commandId: 42, lastN: 50, sessionId: 'sess-1', includeTail: true });
   });
 
   it('renders a foreground live widget keyed by the tool call id while running', async () => {
@@ -477,9 +479,13 @@ describe('live command gating (process liveness)', () => {
     expandShell(container);
     await flush();
 
-    expect(container.querySelector('.orchid-live-command')).toBeTruthy();
+    // Embedded (issue #160): no second toggle header — the shell title carries
+    // the description and the widget renders its body only.
+    expect(container.querySelector('.orchid-live-command-embedded')).toBeTruthy();
+    expect(container.querySelector('.orchid-live-command-title')).toBeNull();
+    expect(container.querySelector('.orchid-tool-block-title')?.textContent).toContain('wait for it');
+    expect(container.querySelector('.orchid-tool-block-title')?.textContent).not.toContain('sleep 30');
     expect(container.querySelector('.orchid-tool-running-hint')).toBeNull();
-    expect(container.querySelector('.orchid-live-command-title')?.textContent).toContain('wait for it');
     expect(api.snapshot).toHaveBeenCalledTimes(1);
     expect(api.snapshot).toHaveBeenCalledWith(expect.objectContaining({ toolCallId: 'call-fg-1', lastN: 50, sessionId: 'sess-2' }));
   });
@@ -509,6 +515,7 @@ describe('live command gating (process liveness)', () => {
 
     expect(container.querySelector('[data-result-family="generic"]')).toBeTruthy();
     expect(container.querySelector('.orchid-live-command')).toBeNull();
+    expect(container.querySelector('.orchid-live-command-embedded')).toBeNull();
     expect(api.snapshot).not.toHaveBeenCalled();
   });
 
@@ -530,9 +537,10 @@ describe('live command gating (process liveness)', () => {
 
     expect(container.querySelector('.orchid-tool-running-hint')?.textContent).toContain('Running');
     expect(container.querySelector('.orchid-live-command')).toBeNull();
+    expect(container.querySelector('.orchid-live-command-embedded')).toBeNull();
   });
 
-  it('does not collapse the shell when toggling the live widget itself', async () => {
+  it('does not collapse the shell when clicking inside the embedded live widget', async () => {
     installBgCmd();
     const { container } = render(
       createElement(ToolCallBlock, { block: backgroundResultBlock('bg-stop-prop'), sessionId: 'sess-5' }),
@@ -543,12 +551,11 @@ describe('live command gating (process liveness)', () => {
     const shellTitle = container.querySelector('.orchid-tool-block-title') as HTMLElement;
     expect(shellTitle.getAttribute('aria-expanded')).toBe('true');
 
-    const widgetTitle = container.querySelector('.orchid-live-command-title') as HTMLElement;
-    fireEvent.click(widgetTitle);
+    const widgetBody = container.querySelector('.orchid-live-command-embedded') as HTMLElement;
+    fireEvent.click(widgetBody);
     await flush();
 
-    // The widget toggled its own disclosure open; the outer shell stayed open.
-    expect(widgetTitle.getAttribute('aria-expanded')).toBe('true');
+    // The click inside the widget never collapsed the outer shell.
     expect(
       container.querySelector('.orchid-tool-block-title')?.getAttribute('aria-expanded'),
     ).toBe('true');
@@ -573,7 +580,7 @@ describe('live command gating (process liveness)', () => {
     expandShell(container);
     await flush();
 
-    expect(container.querySelector('.orchid-live-command')).toBeTruthy();
+    expect(container.querySelector('.orchid-live-command-embedded')).toBeTruthy();
     expect(container.querySelector('.orchid-tool-running-hint')).toBeNull();
     const callsAfterMount = api.snapshot.mock.calls.length;
     expect(callsAfterMount).toBeGreaterThanOrEqual(1);
@@ -606,7 +613,7 @@ describe('live command gating (process liveness)', () => {
     });
 
     // Live widget unmounted, canonical result rendered instead.
-    expect(container.querySelector('.orchid-live-command')).toBeNull();
+    expect(container.querySelector('.orchid-live-command-embedded')).toBeNull();
     expect(container.querySelector('[data-result-family="generic"]')).toBeTruthy();
     // Generic canonical value is rendered as the tool stdout.
     expect(container.textContent).toContain('PASS 2/2 tests');

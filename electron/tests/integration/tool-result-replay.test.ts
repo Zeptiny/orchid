@@ -163,15 +163,15 @@ describe('background command replay gating', () => {
       await Promise.resolve();
     });
 
-    expect(container.querySelector('.orchid-live-command')).toBeTruthy();
+    expect(container.querySelector('.orchid-live-command-embedded')).toBeTruthy();
     expect(snapshot).toHaveBeenCalledTimes(1);
     expect(snapshot).toHaveBeenCalledWith(expect.objectContaining({
       commandId: 7,
       lastN: 50,
       sessionId: 'sess-replay',
     }));
-    // The exited snapshot freezes the widget and surfaces the exit code.
-    expect(container.querySelector('.orchid-live-command-title')?.textContent).toContain('exit 3');
+    // The exited snapshot freezes the embedded widget and surfaces the exit code.
+    expect(container.textContent).toContain('Process exited with code 3');
 
     // No further polling once the process reports terminal.
     await act(async () => {

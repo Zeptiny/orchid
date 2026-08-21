@@ -64,8 +64,9 @@ const ExecuteCommandRenderer: ToolResultRenderer = ({ canonical, sessionId }) =>
   }
   // Liveness follows the process, not the tool call: a replayed background
   // result still renders the live widget, which freezes once the first
-  // snapshot reports the command exited or unavailable. Stop propagation so
-  // the widget's own controls never collapse the enclosing tool shell.
+  // snapshot reports the command exited or unavailable. Embedded: the tool
+  // shell's disclosure is the only expand/collapse control. Stop propagation
+  // so the widget's own controls never collapse the enclosing tool shell.
   return (
     <div
       onClick={(event) => event.stopPropagation()}
@@ -77,6 +78,7 @@ const ExecuteCommandRenderer: ToolResultRenderer = ({ canonical, sessionId }) =>
         commandText={bg.data.command}
         description={bg.data.description}
         expectedCreatedAt={bg.data.createdAt}
+        embedded
       />
     </div>
   );

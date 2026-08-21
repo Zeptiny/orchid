@@ -504,6 +504,12 @@
     @apply border-t border-base-300;
   }
 
+  /* Embedded live command inside a tool-result shell: no card chrome and no
+     top border — the shell's own border and disclosure own the framing. */
+  .orchid-live-command-embedded {
+    @apply my-1 overflow-hidden rounded-md;
+  }
+
   .orchid-live-command-pre {
     @apply m-0 overflow-x-auto whitespace-pre-wrap p-3 font-mono bg-base-300;
     font-size: 1rem;
