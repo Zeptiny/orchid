@@ -10,6 +10,34 @@ export function formatTokenCount(n: number): string {
   return String(n);
 }
 
+/**
+ * Stacked-token netting: provider-reported inputTokens includes cache-read and
+ * outputTokens includes reasoning, so stacked charts display the net values.
+ */
+export function netInputTokens(inputTokens: number, cacheReadTokens: number): number {
+  return Math.max(0, inputTokens - cacheReadTokens);
+}
+
+export function netOutputTokens(outputTokens: number, reasoningTokens: number): number {
+  return Math.max(0, outputTokens - reasoningTokens);
+}
+
+export function tokenStackTooltipRows(
+  inputTokens: number,
+  cacheReadTokens: number,
+  outputTokens: number,
+  reasoningTokens: number,
+): ReadonlyArray<{ name: string; value: number }> {
+  return [
+    { name: 'Input (net of cache)', value: netInputTokens(inputTokens, cacheReadTokens) },
+    { name: 'Cache Read', value: cacheReadTokens },
+    { name: 'Output (net of reasoning)', value: netOutputTokens(outputTokens, reasoningTokens) },
+    { name: 'Reasoning', value: reasoningTokens },
+    { name: 'Input (raw)', value: inputTokens },
+    { name: 'Output (raw)', value: outputTokens },
+  ];
+}
+
 export function formatCost(currencies: ReadonlyArray<{ currency: string; amount: string }>): string {
   if (currencies.length === 0) return '—';
   return currencies.map((c) => formatCostAmount(c.amount, c.currency)).join(', ');
@@ -38,6 +66,15 @@ export function formatDuration(ms: number | null): string {
   if (ms === null || ms <= 0) return '—';
   if (ms < 1000) return `${Math.round(ms)}ms`;
   return `${(ms / 1000).toFixed(1)}s`;
+}
+
+export function formatTps(tps: number | null): string {
+  if (tps === null) return '—';
+  return `${tps.toFixed(1)} tok/s`;
+}
+
+export function formatTtft(ms: number | null): string {
+  return formatDuration(ms);
 }
 
 export function formatBytes(bytes: number | null): string {
@@ -168,6 +205,7 @@ interface SortableTableColumn<T> {
   key: string;
   label: string;
   sortable?: boolean;
+  initialDir?: 'asc' | 'desc';
   sortValue?: (row: T) => string | number;
   render: (row: T) => ReactNode;
 }
@@ -194,7 +232,9 @@ export function SortableTable<T>({
     [columns],
   );
   const [sortKey, setSortKey] = useState<string | null>(firstSortableKey);
-  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc');
+  const [sortDir, setSortDir] = useState<'asc' | 'desc'>(
+    () => columns.find((c) => c.key === firstSortableKey)?.initialDir ?? 'asc',
+  );
   const [page, setPage] = useState(0);
 
   const handleSort = (key: string) => {
@@ -202,7 +242,7 @@ export function SortableTable<T>({
       setSortDir((prev) => (prev === 'asc' ? 'desc' : 'asc'));
     } else {
       setSortKey(key);
-      setSortDir('asc');
+      setSortDir(columns.find((c) => c.key === key)?.initialDir ?? 'asc');
     }
     setPage(0);
   };
