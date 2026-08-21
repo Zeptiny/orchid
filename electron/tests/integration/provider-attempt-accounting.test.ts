@@ -534,6 +534,61 @@ describe('provider attempt accounting middleware', () => {
     ledger.close();
   });
 
+  it('records the generic usage-body cost report through the compatible driver facet', async () => {
+    const ledger = store();
+    const { createCompatibleProviderDrivers } = await import('../../src/main/providers/drivers/compatible');
+    const facet = createCompatibleProviderDrivers()[0].pricingFacet;
+    const genericSnapshot = snapshot();
+    genericSnapshot.providerId = 'generic-openai-compatible';
+    genericSnapshot.protocol = 'openai-compatible';
+    const middleware = createAttemptAccountingMiddleware({
+      store: ledger, sessionId: 'session-1', chainId: 'chain-1', turnId: 'turn-1',
+      snapshot: genericSnapshot,
+      pricingFacet: facet,
+    });
+    const wrapStream = middleware.wrapStream! as unknown as (input: Record<string, unknown>) => Promise<{ stream: ReadableStream<unknown> }>;
+    const result = await wrapStream({
+      doStream: async () => ({
+        response: { headers: {} },
+        stream: new ReadableStream({
+          start(controller) {
+            controller.enqueue({
+              type: 'finish', finishReason: 'stop',
+              usage: {
+                inputTokens: { total: 15, noCache: 15, cacheRead: undefined, cacheWrite: undefined },
+                outputTokens: { total: 16, text: 16, reasoning: undefined },
+                raw: {
+                  prompt_tokens: 15,
+                  completion_tokens: 16,
+                  cost: 0.0000914,
+                  cost_details: { upstream_inference_cost: 0.0000914 },
+                },
+              },
+            });
+            controller.close();
+          },
+        }),
+      }),
+      doGenerate: async () => { throw new Error('not used'); },
+      params: {}, model: {},
+    });
+    await consume(result.stream);
+
+    expect(ledger.listAttempts('session-1')[0]).toMatchObject({
+      outcome: 'succeeded',
+      costState: 'reported',
+      costSource: 'provider-reported',
+      costAmount: '0.0000914',
+      providerEvidence: {
+        'generic-openai-compatible': {
+          reportedUsageCostUsd: '0.0000914',
+          costDetails: { upstream_inference_cost: 0.0000914 },
+        },
+      },
+    });
+    ledger.close();
+  });
+
   it('captures the provider-reported service tier for parameter mechanisms (R22)', async () => {
     const ledger = store();
     const tiered = snapshot();
