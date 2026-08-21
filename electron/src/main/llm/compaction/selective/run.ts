@@ -19,7 +19,7 @@ import type { Manifest, SelectiveOp } from './manifest';
 import { buildManifest, parseSelectiveOps } from './manifest';
 import { validateSelectiveOps } from './validate';
 import { scopedExemptUserIds } from './validate';
-import { selectiveTranscriptLine } from './transcript';
+import { SELECTIVE_TRANSCRIPT_SEPARATOR, selectiveTranscriptLine } from './transcript';
 import { AgentType } from '../../../../shared/types/agent';
 import type { Agent } from '../../../../shared/types/agent';
 import type { ModelSelection } from '../../../../shared/types/provider';
@@ -75,7 +75,7 @@ function formatSelectiveConversation(
     if (msg.excludeFromModel || msg.hidden) continue;
     parts.push(selectiveTranscriptLine(msg));
   }
-  return parts.join('\n\n');
+  return parts.join(SELECTIVE_TRANSCRIPT_SEPARATOR);
 }
 
 export function buildSelectiveUserPrompt(input: SelectiveUserPromptInput): string {

@@ -16,7 +16,7 @@ import type { Message } from '../../../../shared/types/message';
 import { MessageType, MessageRole } from '../../../../shared/types/message';
 import type { Manifest, SelectiveOp, SummarizeOp } from './manifest';
 import { isSubstantiveHandoffText } from '../message-chars';
-import { selectiveTranscriptChars } from './transcript';
+import { SELECTIVE_TRANSCRIPT_SEPARATOR, selectiveTranscriptChars } from './transcript';
 
 /**
  * Minimum source chars a summarize span must cover before its text is held
@@ -387,10 +387,12 @@ export function validateSelectiveOps(
       // Measure the serialized transcript fields the compactor reads for the
       // span (content, tool names/arguments, tool_call_id, thinking) — content
       // alone under-counts spans of small tool calls under the substance floor.
+      // formatSelectiveConversation joins the selected entries with "\n\n"
+      // separators (none before the first entry), so the separators count too.
       const spanSourceChars = ids.reduce((sum, id) => {
         const msg = msgById.get(id);
         return sum + (msg ? selectiveTranscriptChars(msg) : 0);
-      }, 0);
+      }, 0) + SELECTIVE_TRANSCRIPT_SEPARATOR.length * Math.max(0, ids.length - 1);
       if (spanSourceChars >= SUBSTANTIVE_SPAN_MIN_SOURCE_CHARS && !isSubstantiveHandoffText(op.text)) {
         errors.push(
           `summarize op for ids ${ids.join(',')} replaces ${spanSourceChars} chars of source content but its text is not a substantive handoff ` +

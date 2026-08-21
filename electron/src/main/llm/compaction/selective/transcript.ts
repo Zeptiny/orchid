@@ -13,6 +13,9 @@
 import type { Message } from '../../../../shared/types/message';
 import { escapeXml } from '../summarize';
 
+/** Separator `formatSelectiveConversation` joins transcript lines with. */
+export const SELECTIVE_TRANSCRIPT_SEPARATOR = '\n\n';
+
 /** Header for one transcript entry (`[id=… role (type)]`). */
 function transcriptHeader(msg: Message): string {
   const typeSuffix = msg.type !== 'text' ? ` (${msg.type})` : '';

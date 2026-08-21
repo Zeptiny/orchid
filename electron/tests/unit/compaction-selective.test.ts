@@ -3,7 +3,8 @@ import type { Message } from '../../src/shared/types/message';
 import { MessageRole, MessageType, SUMMARY_SECTION_SEPARATOR } from '../../src/shared/types/message';
 import type { ToolCall } from '../../src/shared/types/tool';
 import { buildManifest, parseSelectiveOps, selectiveOpsToJson, PREVIEW_MAX_LENGTH } from '../../src/main/llm/compaction/selective/manifest';
-import { validateSelectiveOps } from '../../src/main/llm/compaction/selective/validate';
+import { validateSelectiveOps, SUBSTANTIVE_SPAN_MIN_SOURCE_CHARS } from '../../src/main/llm/compaction/selective/validate';
+import { selectiveTranscriptChars } from '../../src/main/llm/compaction/selective/transcript';
 import { materializeSelectiveOps, runSelectiveCompaction, passesReplayInvariant } from '../../src/main/llm/compaction/selective/run';
 import { buildSelectiveCompactionApply } from '../../src/main/llm/compaction/apply';
 import type { CutResult } from '../../src/main/llm/compaction/select';
@@ -343,6 +344,48 @@ describe('U13 validator', () => {
     const res = validateSelectiveOps(ops, manifest, msgs);
     expect(res.valid).toBe(false);
     expect(res.errors.some(e => e.includes('not a substantive handoff'))).toBe(true);
+  });
+
+  it('span size counts the "\\n\\n" separators between entries — separators alone can cross the substance floor', () => {
+    // formatSelectiveConversation joins the selected entries with "\n\n"
+    // (none before the first entry). Size a two-message span whose line chars
+    // sum to 999 — under the 1000-char floor without separators, over it once
+    // the single 2-char separator counts — and one at 997 (999 with the
+    // separator, still under), so the separators alone decide whether the
+    // handoff-substance rule applies.
+    // Header overhead per id (a 1-char body, minus that char; an empty body
+    // would trim the header's trailing space and undercount by one).
+    const overheadA1 = selectiveTranscriptChars(makeAssistant('a1', 'x')) - 1;
+    const overheadA2 = selectiveTranscriptChars(makeAssistant('a2', 'x')) - 1;
+    const activityLog = 'Assistant did some work.';
+    function spanOf(totalLineChars: number): { msgs: Message[]; ops: SelectiveOp[] } {
+      const contentChars = totalLineChars - overheadA1 - overheadA2;
+      const first = Math.ceil(contentChars / 2);
+      const msgs: Message[] = [
+        makeUser('u1', 'q'),
+        makeAssistant('a1', 'x'.repeat(first)),
+        makeAssistant('a2', 'x'.repeat(contentChars - first)),
+      ];
+      return {
+        msgs,
+        ops: [
+          { type: 'keep', id: 'u1' },
+          { type: 'summarize', ids: ['a1', 'a2'], text: activityLog },
+        ],
+      };
+    }
+
+    const atFloor = spanOf(SUBSTANTIVE_SPAN_MIN_SOURCE_CHARS - 1); // 999 + 2 separators = 1001 ≥ floor
+    const manifest = buildManifest(atFloor.msgs, { start: 0, end: atFloor.msgs.length });
+    const rejected = validateSelectiveOps(atFloor.ops, manifest, atFloor.msgs);
+    expect(rejected.valid).toBe(false);
+    expect(rejected.errors.some(e => e.includes('not a substantive handoff'))).toBe(true);
+
+    const belowFloor = spanOf(SUBSTANTIVE_SPAN_MIN_SOURCE_CHARS - 3); // 997 + 2 = 999 < floor
+    const manifest2 = buildManifest(belowFloor.msgs, { start: 0, end: belowFloor.msgs.length });
+    const accepted = validateSelectiveOps(belowFloor.ops, manifest2, belowFloor.msgs);
+    expect(accepted.valid).toBe(true);
+    expect(accepted.errors).toHaveLength(0);
   });
 
   it('scoped exemptIds: non-exempt user ids may be summarized; exempt ids must be kept verbatim (F11/R31)', () => {
