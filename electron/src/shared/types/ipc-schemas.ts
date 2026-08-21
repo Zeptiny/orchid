@@ -616,6 +616,28 @@ const subagentToolSchema = z.object({
     ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['status'], message: 'Snapshot status must match canonical result status' });
   }
 });
+/**
+ * Shared identity base for the subagent delta events. Declared here — ahead of
+ * `subagentLiveProjectionSchema` — because the projection embeds the FULL
+ * compaction-progress event (see `subagentCompactionProgressEventSchema`
+ * directly below), and a direct reference from the projection schema would hit
+ * the const TDZ if the event schema stayed in the delta section further down.
+ */
+const subagentDeltaBaseSchema = z.object({
+  sessionId: z.string().uuid(),
+  subagentId: z.string(),
+  runId: z.string(),
+  sequence: z.number().int().nonnegative(),
+  sessionRevision: z.number().int().nonnegative(),
+});
+export const subagentCompactionProgressEventSchema = subagentDeltaBaseSchema.extend({
+  type: z.literal('compaction_progress'),
+  phase: z.enum(['preparing', 'compacting', 'complete', 'failed']),
+  detail: z.string().optional(),
+  mode: z.enum(['simple', 'selective']).optional(),
+  streamText: z.string().nullable().optional(),
+  estimatedTokens: z.number().int().nonnegative().nullable().optional(),
+});
 export const subagentLiveProjectionSchema = z.object({
   sessionId: z.string().nullable(), subagentId: z.string(), runId: z.string(),
   sequence: z.number().int().nonnegative(),
@@ -623,15 +645,11 @@ export const subagentLiveProjectionSchema = z.object({
   segments: z.array(subagentLiveSegmentSchema), toolCalls: z.array(subagentToolSchema),
   usage: usageSchema.nullable(), result: z.string().nullable(), error: z.string().nullable(),
   // Latest compaction progress retained for the renderer (terminal phases stay
-  // until the next compaction or run reset clears them). Identity fields ride
-  // along as unknown keys; only the progress payload is validated.
-  compactionProgress: z.object({
-    phase: z.enum(['preparing', 'compacting', 'complete', 'failed']),
-    detail: z.string().optional(),
-    mode: z.enum(['simple', 'selective']).optional(),
-    streamText: z.string().nullable().optional(),
-    estimatedTokens: z.number().int().nonnegative().nullable().optional(),
-  }).nullable(),
+  // until the next compaction or run reset clears them). The projection stores
+  // the FULL delta event — emitCompactionProgress assigns type/sessionId/
+  // subagentId/runId/sequence/sessionRevision around the progress payload — so
+  // the wire reuses the event schema instead of re-validating payload fields.
+  compactionProgress: subagentCompactionProgressEventSchema.nullable(),
 });
 export const ipcSubagentRecordSchema = z.object({
   id: z.string(), agent_name: z.string(), agent_type: z.string(), agent_tier: z.string(),
@@ -662,13 +680,10 @@ export const subagentDetailResultSchema = z.object({
 
 // ── Subagent live delta events ───────────────────────────────────────────────
 
-const subagentDeltaBaseSchema = z.object({
-  sessionId: z.string().uuid(),
-  subagentId: z.string(),
-  runId: z.string(),
-  sequence: z.number().int().nonnegative(),
-  sessionRevision: z.number().int().nonnegative(),
-});
+// `subagentDeltaBaseSchema` and `subagentCompactionProgressEventSchema` are
+// declared further up (ahead of `subagentLiveProjectionSchema`, which embeds
+// the compaction event schema); the rest of the delta taxonomy extends the
+// same base here.
 export const subagentSpawnedEventSchema = subagentDeltaBaseSchema.extend({
   type: z.literal('spawned'), record: ipcSubagentSummarySchema, usage: usageSchema.nullable(),
 });
@@ -700,14 +715,6 @@ export const subagentUsageEventSchema = subagentDeltaBaseSchema.extend({
 export const subagentTerminalEventSchema = subagentDeltaBaseSchema.extend({
   type: z.literal('terminal'), record: ipcSubagentSummarySchema,
   state: z.enum(['completed', 'failed', 'interrupted']), usage: usageSchema.nullable(),
-});
-export const subagentCompactionProgressEventSchema = subagentDeltaBaseSchema.extend({
-  type: z.literal('compaction_progress'),
-  phase: z.enum(['preparing', 'compacting', 'complete', 'failed']),
-  detail: z.string().optional(),
-  mode: z.enum(['simple', 'selective']).optional(),
-  streamText: z.string().nullable().optional(),
-  estimatedTokens: z.number().int().nonnegative().nullable().optional(),
 });
 export const subagentDeltaEventSchema = z.discriminatedUnion('type', [
   subagentSpawnedEventSchema,

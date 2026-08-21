@@ -134,6 +134,8 @@ export class SubagentCompactionController {
   private _contextTokens: number | null | undefined = undefined;
   private _trigger: CompactionTrigger | null = null;
   private _initDone = false;
+  /** Memoized in-flight `_attemptInit` (see `_ensureInit`); null once settled. */
+  private _initPromise: Promise<boolean> | null = null;
   private _cachedCfg: CompactionScopeConfig | null = null;
   /** Run-captured process config from the last successful scope-config load. */
   private _cachedLiveCfg: Config | null = null;
@@ -267,10 +269,26 @@ export class SubagentCompactionController {
    * frozen selection's trusted provider execution (R16) and arm the per-run
    * trigger. Returns false (permanently, once tried) when the limits are
    * unavailable — the run start is never blocked by the provider lookup.
+   *
+   * The in-flight attempt is memoized so CONCURRENT fire points — the
+   * spawn/resume gate and a usage event can overlap before either settles —
+   * await the same result instead of each racing the init and one of them
+   * observing half-initialized state (context tokens resolved, trigger not
+   * yet armed).
    */
-  private async _ensureInit(): Promise<boolean> {
-    if (this._initDone) return this._contextTokens !== null && this._trigger !== null;
-    this._initDone = true;
+  private _ensureInit(): Promise<boolean> {
+    if (this._initDone) return Promise.resolve(this._contextTokens !== null && this._trigger !== null);
+    // One shared attempt: the first caller runs it, every concurrent caller
+    // awaits the same promise, and `_initDone` latches only once it settles —
+    // nobody can slip past the guard into a second attempt.
+    this._initPromise ??= this._attemptInit().finally(() => {
+      this._initDone = true;
+      this._initPromise = null;
+    });
+    return this._initPromise;
+  }
+
+  private async _attemptInit(): Promise<boolean> {
     try {
       const tokens = await resolveSubagentContextTokens(this._deps.record.selection);
       this._contextTokens = tokens;
@@ -524,20 +542,33 @@ export class SubagentCompactionController {
       if (this._trigger.state.tokensPerChar == null) {
         this._trigger.state.lastObservedInputTokens = this._contextTokens;
       }
-      pending = await prepareSubagentCompaction({
-        messages: liveHistory,
-        selection: record.selection,
-        config: this._liveConfig(),
-        sessionId: this.sessionKey,
-        subagentId: record.id,
-        chainId: record.chain?.id ?? null,
-        turnId: this.turnId,
-        inputTokens: this._contextTokens,
-        contextTokens: this._contextTokens,
-        triggerState: this._trigger.state,
-        onProgress: (progress) => this._emitProgress(progress),
-        onTextDelta: (text) => this._onTextDelta(text),
-      });
+      try {
+        pending = await prepareSubagentCompaction({
+          messages: liveHistory,
+          selection: record.selection,
+          config: this._liveConfig(),
+          sessionId: this.sessionKey,
+          subagentId: record.id,
+          chainId: record.chain?.id ?? null,
+          turnId: this.turnId,
+          inputTokens: this._contextTokens,
+          contextTokens: this._contextTokens,
+          triggerState: this._trigger.state,
+          onProgress: (progress) => this._emitProgress(progress),
+          onTextDelta: (text) => this._onTextDelta(text),
+        });
+      } catch (e) {
+        // Config/preparation failure (e.g. no loadable config for the
+        // compactor): the dead segment cannot simply restart with unchanged
+        // history (it would overflow again), so mirror the nothing-usable arm
+        // below and degrade to the partial report instead of rejecting — a
+        // rejected overflow gate would be swallowed into a silent early end
+        // by the runner's abort race, losing the structured report (R17).
+        console.debug('[subagent-compaction] overflow prepare failed (non-fatal):', e);
+        try { this._trigger.abortPrepare(); } catch { /* trigger may be unresolved */ }
+        this._emitProgress({ phase: 'complete' });
+        return this._degradeToPartialReport();
+      }
       if (abortSignal.aborted) {
         pending?.promise?.catch(() => undefined);
         pending?.selectivePromise?.catch(() => undefined);
@@ -705,6 +736,7 @@ export class SubagentCompactionController {
     const payload: SubagentCompactionPayload = {
       updatedAt: new Date().toISOString(),
       flaggedMessageIds: applyResult.flaggedIds,
+      clearedMessageIds: applyResult.unflaggedIds,
       summaryMessage: applyResult.summaryMessage,
       insertBeforeMessageId,
       liveMessages: [...liveHistory],
@@ -837,6 +869,23 @@ export class SubagentCompactionController {
         console.debug('[subagent-compaction] spawn-time gate failed:', e);
       }
     })();
+  }
+
+  /**
+   * Superseded-run teardown: the manager's run-loop finally calls `discard()`
+   * only for the CURRENT generation — a superseded run's scoped pause and
+   * pending state belong to its replacement. But this generation's controller
+   * can still own a scheduled progress timer (a throttled `compacting` flush
+   * in `_onTextDelta`), so stop it locally and advance the terminal epoch so
+   * no stale emission can fire for a run the manager already replaced.
+   * Deliberately local-only: no pause/pending mutation, no trigger touch.
+   */
+  silenceProgress(): void {
+    this._terminalEpoch += 1;
+    if (this._progressTimer) {
+      clearTimeout(this._progressTimer);
+      this._progressTimer = null;
+    }
   }
 
   /**

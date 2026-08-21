@@ -1625,6 +1625,13 @@ export class SubagentManager {
           this._runs.remove(record.id);
           this._liveProjection.remove(record.id);
         }
+      } else {
+        // Superseded run: the scoped pause/pending state belongs to the
+        // replacement generation (discard above explains why it must NOT run
+        // here), but this generation's controller can still own a scheduled
+        // compaction progress timer — stop it and advance the terminal epoch
+        // so no stale throttled emission fires after the run was replaced.
+        compaction.silenceProgress();
       }
     }
   }

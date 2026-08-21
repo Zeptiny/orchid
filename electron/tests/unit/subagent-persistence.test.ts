@@ -22,10 +22,11 @@ import { SubagentCompactionController } from '../../src/main/agents/subagent-com
 import { SubagentRunAssembler } from '../../src/main/agents/subagent-run-assembler';
 import type { SubagentRecord as RuntimeSubagentRecord } from '../../src/main/agents/manager';
 import {
+  deleteCompactionPending,
   getCompactionPending,
   setCompactionPending,
 } from '../../src/main/llm/compaction/pending-store';
-import { shouldPauseForCompaction } from '../../src/main/ipc/next-request-stop';
+import { clearCompactionPause, shouldPauseForCompaction } from '../../src/main/ipc/next-request-stop';
 import type { CompactionTrigger } from '../../src/main/llm/compaction/trigger';
 
 vi.mock('electron', () => ({
@@ -45,6 +46,14 @@ vi.mock('../../src/main/providers', () => ({
 }));
 
 const T0 = '2026-01-01T00:00:00.000Z';
+
+/**
+ * Session/subagent scope the controller-integration describe registers
+ * module-global compaction state under (pending entry + scoped pause). Module
+ * level so the file-wide afterEach can clear it alongside the DB cache.
+ */
+const SESSION_ID = 'cafe3001-3001-4301-8301-000000000001';
+const SUB_ID = 'sub-controller-1';
 
 let tmpDir: string;
 let storageOpts: StorageOptions;
@@ -146,6 +155,11 @@ beforeEach(() => {
 
 afterEach(() => {
   _clearDbCache();
+  // The controller-integration tests register process-wide compaction state
+  // (scoped pending entry + pause flag) keyed by SESSION_ID/SUB_ID — clear
+  // it like the DB cache so a failed assertion cannot leak into later tests.
+  deleteCompactionPending(SESSION_ID, SUB_ID);
+  clearCompactionPause(SESSION_ID, SUB_ID);
   fs.rmSync(tmpDir, { recursive: true, force: true });
 });
 
@@ -632,8 +646,6 @@ describe('applySubagentCompactionPersistence crash-atomicity (R36)', () => {
 // in which flagged ids / the summary anchor are computed over the LIVE view.
 
 describe('SubagentCompactionController durable-write integration (R36)', () => {
-  const SESSION_ID = 'cafe3001-3001-4301-8301-000000000001';
-  const SUB_ID = 'sub-controller-1';
   const CONTEXT_TOKENS = 100_000;
 
   function bulkyDurableMessages(): Message[] {

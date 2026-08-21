@@ -185,6 +185,10 @@ export class SubagentLiveProjectionStore {
     if (patch.usage !== undefined) live.usage = patch.usage;
     if (patch.result !== undefined) live.result = patch.result;
     if (patch.error !== undefined) live.error = patch.error;
+    // Compaction progress copies like every other field: an explicit null
+    // clears a retained terminal phase, an omitted key preserves the last
+    // event (the same undefined-vs-null contract as usage/result/error).
+    if (patch.compactionProgress !== undefined) live.compactionProgress = patch.compactionProgress;
     if (patch.segments !== undefined) {
       live.segments.length = 0;
       live.segments.push(...patch.segments.map((segment) => ({ ...segment })));

@@ -433,12 +433,19 @@ describe('createSubagentStreamRunner compaction pause gate (U5)', () => {
   function manualPauseController(opts?: {
     outcome?: SubagentPauseApplyOutcome;
     onApply?: () => void | Promise<void>;
+    /**
+     * Fired synchronously at applyAtPause entry (before the never-resolving
+     * branch) so tests can handshake on "the runner reached the pause apply"
+     * deterministically instead of sleeping a fixed delay.
+     */
+    onApplyEntered?: () => void;
     neverResolves?: boolean;
     rejects?: boolean;
   }): SubagentCompactionPauseController {
     return {
       shouldPause: () => shouldPauseForCompaction(PAUSE_SESSION, PAUSE_SCOPE),
       applyAtPause: async () => {
+        opts?.onApplyEntered?.();
         if (opts?.neverResolves) {
           return new Promise<SubagentPauseApplyOutcome>(() => undefined);
         }
@@ -490,6 +497,18 @@ describe('createSubagentStreamRunner compaction pause gate (U5)', () => {
   it('binds the scoped pause predicate into streamChat only for this run\'s scope', async () => {
     requestCompactionPause(PAUSE_SESSION, PAUSE_SCOPE);
     const controller = manualPauseController({ neverResolves: true });
+    // Handshake instead of a fixed sleep: resolve the moment the runner
+    // invokes streamChat, so the assertions (and the abort below) land once
+    // the segment has deterministically started.
+    let signalStreamStarted!: () => void;
+    const streamStarted = new Promise<void>((resolve) => {
+      signalStreamStarted = resolve;
+    });
+    mocks.streamChat.mockImplementationOnce(async function* () {
+      signalStreamStarted();
+      yield { type: 'content', text: 'delegated result' };
+      yield { type: 'finish', finishReason: 'stop' };
+    });
 
     const runPromise = collect(createSubagentStreamRunner()({
       task: 'Inspect the project',
@@ -502,7 +521,7 @@ describe('createSubagentStreamRunner compaction pause gate (U5)', () => {
       projectRuntime: runtime(),
       compaction: controller,
     }));
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await streamStarted;
     abortController.abort();
     await runPromise;
 
@@ -648,7 +667,16 @@ describe('createSubagentStreamRunner compaction pause gate (U5)', () => {
     requestCompactionPause(PAUSE_SESSION, PAUSE_SCOPE);
     mocks.streamChat.mockImplementationOnce(earlyStopSegment('before the pause'));
     const box = boxWith([{ id: 'task-head', role: 'user', content: 'Map the repo' } as unknown as Message]);
-    const controller = manualPauseController({ neverResolves: true });
+    // Handshake: resolves at applyAtPause entry, deterministically parking
+    // the runner inside the pause before the interrupt below fires.
+    let signalApplyEntered!: () => void;
+    const applyEntered = new Promise<void>((resolve) => {
+      signalApplyEntered = resolve;
+    });
+    const controller = manualPauseController({
+      neverResolves: true,
+      onApplyEntered: () => signalApplyEntered(),
+    });
 
     const runPromise = collect(createSubagentStreamRunner()({
       task: 'Map the repo',
@@ -663,7 +691,7 @@ describe('createSubagentStreamRunner compaction pause gate (U5)', () => {
       compaction: controller,
     }));
     // Wait until the runner is parked in the pause apply, then interrupt.
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await applyEntered;
     expect(mocks.streamChat).toHaveBeenCalledTimes(1);
     abortController.abort();
     const events = await runPromise;
@@ -682,10 +710,17 @@ describe('createSubagentStreamRunner compaction pause gate (U5)', () => {
     const box = boxWith([{ id: 'task-head', role: 'user', content: 'Map the repo' } as unknown as Message]);
     let resolveApply: ((value: SubagentPauseApplyOutcome) => void) | null = null;
     let applyInvoked = false;
+    // Handshake: resolves the moment applyAtPause is entered so the abort
+    // below lands while the apply wait is still pending — no fixed sleep.
+    let signalApplyEntered!: () => void;
+    const applyEntered = new Promise<void>((resolve) => {
+      signalApplyEntered = resolve;
+    });
     const controller: SubagentCompactionPauseController = {
       shouldPause: () => shouldPauseForCompaction(PAUSE_SESSION, PAUSE_SCOPE),
       applyAtPause: () => {
         applyInvoked = true;
+        signalApplyEntered();
         // Simulates the summarizer wait: the apply stays pending until the
         // test resolves it — after the abort already fired.
         return new Promise<SubagentPauseApplyOutcome>((resolve) => {
@@ -709,12 +744,15 @@ describe('createSubagentStreamRunner compaction pause gate (U5)', () => {
       projectRuntime: runtime(),
       compaction: controller,
     }));
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await applyEntered;
     expect(applyInvoked).toBe(true);
     abortController.abort();
     await runPromise;
     resolveApply?.('applied');
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    // The late apply can only propagate through promise microtasks; one
+    // macrotask turn (setImmediate runs after the microtask queue drains)
+    // deterministically captures any bogus restart instead of a fixed sleep.
+    await new Promise((resolve) => setImmediate(resolve));
 
     // The aborted restart loop exits before the late apply can trigger a
     // second provider call.
@@ -931,11 +969,18 @@ describe('createSubagentStreamRunner overflow retry (U6)', () => {
   it('aborts cleanly when interrupted during the overflow compaction (no retry, no leaked events)', async () => {
     let resolveCompact: ((value: SubagentOverflowOutcome) => void) | null = null;
     let compactInvoked = false;
+    // Handshake: resolves the moment compactForOverflow is entered so the
+    // abort below lands while the compaction wait is pending — no fixed sleep.
+    let signalCompactEntered!: () => void;
+    const compactEntered = new Promise<void>((resolve) => {
+      signalCompactEntered = resolve;
+    });
     const controller: SubagentCompactionPauseController = {
       shouldPause: () => false,
       applyAtPause: async () => 'skipped',
       compactForOverflow: () => {
         compactInvoked = true;
+        signalCompactEntered();
         // Simulates the summarizer wait: the compaction stays pending until
         // the test resolves it — after the abort already fired.
         return new Promise<SubagentOverflowOutcome>((resolve) => {
@@ -960,12 +1005,15 @@ describe('createSubagentStreamRunner overflow retry (U6)', () => {
       projectRuntime: runtime(),
       compaction: controller,
     }));
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await compactEntered;
     expect(compactInvoked).toBe(true);
     abortController.abort();
     const events = await runPromise;
     resolveCompact?.('applied');
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    // The late compaction outcome can only propagate through promise
+    // microtasks; one macrotask turn deterministically captures any bogus
+    // second provider call instead of a fixed sleep.
+    await new Promise((resolve) => setImmediate(resolve));
 
     // Interrupted retry = clean abort: no leaked error event, no second
     // provider call from the late compaction result.
