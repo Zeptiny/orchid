@@ -23,6 +23,7 @@ const analyticsParamsSchema = z.object({
 
 const sessionsParamsSchema = z.object({
   limit: z.number().int().positive().max(10000).optional(),
+  offset: z.number().int().nonnegative().max(1_000_000).optional(),
   timeRange: timeRangeSchema,
 }).optional();
 
@@ -53,9 +54,10 @@ export function registerAnalyticsIPC(): void {
     const parsed = sessionsParamsSchema.safeParse(payload);
     if (!parsed.success) throw new Error('Invalid analytics:sessions payload');
     const limit = parsed.data?.limit;
+    const offset = parsed.data?.offset;
     const timeRange = parsed.data?.timeRange as AnalyticsTimeRange | undefined;
     try {
-      return getSessions(limit, timeRange);
+      return getSessions(limit, timeRange, offset);
     } catch (error) {
       console.error('[analytics] Sessions query failed', { error });
       throw new Error(`Analytics sessions query failed: ${error instanceof Error ? error.message : String(error)}`, { cause: error });

@@ -52,12 +52,50 @@ type DecimalTotal = { amount: Decimal; count: number };
 export interface AnalyticsQueryContext {
   /** Connection to accounting.db. Defaults to the main-process singleton. */
   db?: SqliteDatabase;
-  /** Resolve session names for the top-N session ids. Defaults to `getSessionNames`. */
+  /**
+   * Resolve session names for the top-N session ids. Defaults to live
+   * sessions.db names with a tombstone fallback for deleted sessions (see
+   * {@link resolveSessionNamesWithFallback}).
+   */
   resolveSessionNames?: (sessionIds: readonly string[]) => Map<string, string>;
 }
 
 function getDb(ctx?: AnalyticsQueryContext): SqliteDatabase {
   return ctx?.db ?? getProviderAccountingStore().getDatabase();
+}
+
+/**
+ * Resolve session names with a tombstone fallback.
+ *
+ * Live sessions.db rows win: a session that still exists keeps its current
+ * (possibly renamed) name. Ids not found there fall back to the
+ * `session_names` tombstone table inside the given accounting db — the
+ * ledger outlives the session, and the tombstone written at deletion time
+ * preserves the last-known name for analytics. Both lookups are fail-soft
+ * (sessions.db unavailable, tombstone table missing, locked db → skip).
+ */
+function resolveSessionNamesWithFallback(
+  db: SqliteDatabase,
+  sessionIds: readonly string[],
+): Map<string, string> {
+  const names = new Map<string, string>();
+  try {
+    for (const [id, name] of getSessionNames(sessionIds)) {
+      names.set(id, name);
+    }
+  } catch { /* session DB unavailable */ }
+  const missing = sessionIds.filter((id) => !names.has(id));
+  if (missing.length === 0) return names;
+  try {
+    const placeholders = missing.map(() => '?').join(', ');
+    const rows = db.prepare(
+      `SELECT session_id, name FROM session_names WHERE session_id IN (${placeholders})`,
+    ).all(...missing) as Array<{ session_id: string; name: string }>;
+    for (const row of rows) {
+      names.set(row.session_id, row.name);
+    }
+  } catch { /* tombstone table missing or db locked — skip */ }
+  return names;
 }
 
 /**
@@ -243,6 +281,100 @@ function whereClause(existingConditions: string[], dateClause: string): string {
   return all.length > 0 ? `WHERE ${all.join(' AND ')}` : '';
 }
 
+// ── First-token latency (TTFT) / token throughput (TPS) ──────────────────────
+
+/** Raw latency sample per attempt: started → first token, and the generation window after it. */
+type LatencyRow = {
+  model_id: string;
+  provider_id: string;
+  connection_id: string;
+  started_at: string;
+  first_token_at: string;
+  completed_at: string;
+  output_tokens: number | null;
+};
+
+type LatencySamples = {
+  ttftMs: number[];
+  outputTokens: number;
+  generationSeconds: number;
+};
+
+function emptyLatencySamples(): LatencySamples {
+  return { ttftMs: [], outputTokens: 0, generationSeconds: 0 };
+}
+
+/** Nearest-rank percentile over an ascending-sorted array; null when empty. */
+function percentile(sorted: readonly number[], p: number): number | null {
+  if (sorted.length === 0) return null;
+  const rank = Math.min(sorted.length, Math.max(1, Math.ceil((p / 100) * sorted.length)));
+  return sorted[rank - 1];
+}
+
+/**
+ * Stream attempts that stamped a first token — per-attempt timestamps must be
+ * reduced in JS, not GROUP_CONCAT (see iterateRows). Same date filter as the
+ * caller's other queries.
+ */
+function iterateLatencyRows(
+  db: SqliteDatabase,
+  dateFilter: { clause: string; params: string[] },
+): IterableIterator<LatencyRow> {
+  return iterateRows<LatencyRow>(db, `
+    SELECT model_id, provider_id, connection_id, started_at, first_token_at, completed_at,
+      json_extract(usage_json, '$.outputTokens') as output_tokens
+    FROM provider_attempts
+    ${whereClause(['first_token_at IS NOT NULL', 'completed_at IS NOT NULL'], dateFilter.clause)}
+  `, dateFilter.params);
+}
+
+function recordLatencySample(
+  samples: LatencySamples,
+  row: LatencyRow,
+): void {
+  const ttftMs = new Date(row.first_token_at).getTime() - new Date(row.started_at).getTime();
+  const generationMs = new Date(row.completed_at).getTime() - new Date(row.first_token_at).getTime();
+  samples.ttftMs.push(ttftMs);
+  // Rows without a positive generation window or a known token count still
+  // contribute TTFT but cannot rate tokens.
+  if (generationMs > 0 && row.output_tokens !== null) {
+    samples.outputTokens += row.output_tokens;
+    samples.generationSeconds += generationMs / 1000;
+  }
+}
+
+/** Get-or-create a per-key sample bucket (mirrors nestedCurrencyMap). */
+function latencySamplesFor(map: Map<string, LatencySamples>, key: string): LatencySamples {
+  const samples = map.get(key) ?? emptyLatencySamples();
+  map.set(key, samples);
+  return samples;
+}
+
+/**
+ * TTFT distribution plus token-weighted throughput. TPS is total output tokens
+ * over total generation seconds (not an average of per-attempt rates).
+ */
+function summarizeLatency(samples: LatencySamples | undefined): {
+  avgTtftMs: number | null;
+  p50TtftMs: number | null;
+  p95TtftMs: number | null;
+  avgTokensPerSecond: number | null;
+} {
+  if (!samples || samples.ttftMs.length === 0) {
+    return { avgTtftMs: null, p50TtftMs: null, p95TtftMs: null, avgTokensPerSecond: null };
+  }
+  const sorted = [...samples.ttftMs].sort((a, b) => a - b);
+  const sum = sorted.reduce((total, value) => total + value, 0);
+  return {
+    avgTtftMs: Math.round(sum / sorted.length),
+    p50TtftMs: percentile(sorted, 50),
+    p95TtftMs: percentile(sorted, 95),
+    avgTokensPerSecond: samples.generationSeconds > 0
+      ? Math.round((samples.outputTokens / samples.generationSeconds) * 10) / 10
+      : null,
+  };
+}
+
 export function getOverview(timeRange?: AnalyticsTimeRange): OverviewResult {
   const db = getDb();
   const dateFilter = buildDateFilter(timeRange);
@@ -383,6 +515,13 @@ export function getOverview(timeRange?: AnalyticsTimeRange): OverviewResult {
   `).all(...dateFilter.params) as Array<{ agent_tier: string; count: number }>;
   const agentTierDistribution = tierRows.map((r) => ({ tier: r.agent_tier, count: r.count }));
 
+  // Overall (ungrouped) TTFT/TPS from attempts that stamped a first token.
+  const overallLatency = emptyLatencySamples();
+  for (const row of iterateLatencyRows(db, dateFilter)) {
+    recordLatencySample(overallLatency, row);
+  }
+  const latency = summarizeLatency(overallLatency);
+
   return {
     stats: {
       totalCost,
@@ -399,6 +538,8 @@ export function getOverview(timeRange?: AnalyticsTimeRange): OverviewResult {
       knownUsageCount: stats.known_usage,
       unknownUsageCount: stats.unknown_usage,
       totalSessions: stats.sessions,
+      avgTtftMs: latency.avgTtftMs,
+      avgTokensPerSecond: latency.avgTokensPerSecond,
     },
     spendOverTime,
     tokenUsageOverTime,
@@ -411,8 +552,13 @@ export function getOverview(timeRange?: AnalyticsTimeRange): OverviewResult {
   };
 }
 
-export function getSessions(limit = DEFAULT_LIMIT, timeRange?: AnalyticsTimeRange): SessionsResult {
-  const db = getDb();
+export function getSessions(
+  limit = DEFAULT_LIMIT,
+  timeRange?: AnalyticsTimeRange,
+  offset = 0,
+  ctx?: AnalyticsQueryContext,
+): SessionsResult {
+  const db = getDb(ctx);
   const dateFilter = buildDateFilter(timeRange);
 
   const sessions = db.prepare(`
@@ -427,8 +573,8 @@ export function getSessions(limit = DEFAULT_LIMIT, timeRange?: AnalyticsTimeRang
       COALESCE(SUM(json_extract(usage_json, '$.outputTokens')), 0) as output_tokens,
       COALESCE(SUM(json_extract(usage_json, '$.cacheReadTokens')), 0) as cache_read_tokens,
       GROUP_CONCAT(DISTINCT model_id) as models
-    FROM provider_attempts ${whereClause([], dateFilter.clause)} GROUP BY session_id ORDER BY first_attempt DESC LIMIT ?
-  `).all(...dateFilter.params, limit) as Array<{
+    FROM provider_attempts ${whereClause([], dateFilter.clause)} GROUP BY session_id ORDER BY first_attempt DESC LIMIT ? OFFSET ?
+  `).all(...dateFilter.params, limit, offset) as Array<{
     session_id: string; attempts: number; succeeded: number; failed: number; interrupted: number;
     first_attempt: string; last_attempt: string | null;
     input_tokens: number; output_tokens: number; cache_read_tokens: number;
@@ -453,10 +599,12 @@ export function getSessions(limit = DEFAULT_LIMIT, timeRange?: AnalyticsTimeRang
   }
 
   const sessionIds = sessions.map((s) => s.session_id);
+  const resolveNames = ctx?.resolveSessionNames
+    ?? ((ids: readonly string[]) => resolveSessionNamesWithFallback(db, ids));
   let nameMap = new Map<string, string>();
   try {
-    nameMap = getSessionNames(sessionIds);
-  } catch { /* session DB unavailable */ }
+    nameMap = resolveNames(sessionIds);
+  } catch { /* session name resolution failed */ }
 
   const results = sessions.map((s) => ({
     sessionId: s.session_id,
@@ -479,7 +627,13 @@ export function getSessions(limit = DEFAULT_LIMIT, timeRange?: AnalyticsTimeRang
     SELECT COUNT(DISTINCT session_id) as count
     FROM provider_attempts ${whereClause([], dateFilter.clause)}
   `).get(...dateFilter.params) as { count: number };
-  return { sessions: results, totalSessions: total.count, truncated: total.count > results.length };
+  // totalSessions counts every distinct session under the date filter (not
+  // just this page), so truncated reflects rows beyond offset + this page.
+  return {
+    sessions: results,
+    totalSessions: total.count,
+    truncated: total.count > offset + results.length,
+  };
 }
 
 export function getSessionDetail(sessionId: string, timeRange?: AnalyticsTimeRange): SessionDetailResult {
@@ -487,14 +641,14 @@ export function getSessionDetail(sessionId: string, timeRange?: AnalyticsTimeRan
   const dateFilter = buildDateFilter(timeRange);
   const rows = db.prepare(`
     SELECT attempt_id, chain_id, turn_id, provider_id, model_id, connection_id, outcome,
-      cost_state, cost_amount, currency, usage_json, started_at, completed_at,
+      cost_state, cost_amount, currency, usage_json, started_at, completed_at, first_token_at,
       agent_scope, agent_name, agent_tier, error, snapshot_json
     FROM provider_attempts ${whereClause(['session_id = ?'], dateFilter.clause)} ORDER BY started_at ASC
   `).all(sessionId, ...dateFilter.params) as Array<{
     attempt_id: string; chain_id: string | null; turn_id: string | null;
     provider_id: string; model_id: string; connection_id: string; outcome: string;
     cost_state: string; cost_amount: string | null; currency: string | null; usage_json: string | null;
-    started_at: string; completed_at: string | null;
+    started_at: string; completed_at: string | null; first_token_at: string | null;
     agent_scope: string | null; agent_name: string | null; agent_tier: string | null;
     error: string | null; snapshot_json: string;
   }>;
@@ -521,6 +675,14 @@ export function getSessionDetail(sessionId: string, timeRange?: AnalyticsTimeRan
     else if (r.outcome === 'failed') failed++;
     else if (r.outcome === 'interrupted') interrupted++;
 
+    const firstTokenMs = r.first_token_at ? new Date(r.first_token_at).getTime() : null;
+    const ttftMs = firstTokenMs !== null
+      ? firstTokenMs - new Date(r.started_at).getTime()
+      : null;
+    const generationMs = firstTokenMs !== null && r.completed_at
+      ? new Date(r.completed_at).getTime() - firstTokenMs
+      : 0;
+
     return {
       attemptId: r.attempt_id,
       chainId: r.chain_id,
@@ -545,6 +707,12 @@ export function getSessionDetail(sessionId: string, timeRange?: AnalyticsTimeRan
       startedAt: r.started_at,
       completedAt: r.completed_at,
       latencyMs: r.completed_at ? new Date(r.completed_at).getTime() - new Date(r.started_at).getTime() : null,
+      firstTokenAt: r.first_token_at,
+      ttftMs,
+      // Generation window must be positive to rate tokens.
+      tokensPerSecond: generationMs > 0
+        ? Math.round((u.outputTokens / (generationMs / 1000)) * 10) / 10
+        : null,
       agentScope: r.agent_scope,
       agentName: r.agent_name,
       agentTier: r.agent_tier,
@@ -659,9 +827,9 @@ export function getSessionDetail(sessionId: string, timeRange?: AnalyticsTimeRan
 
   let sessionName: string | null = null;
   try {
-    const nameMap = getSessionNames([sessionId]);
+    const nameMap = resolveSessionNamesWithFallback(db, [sessionId]);
     sessionName = nameMap.get(sessionId) ?? null;
-  } catch { /* session DB unavailable */ }
+  } catch { /* session name resolution failed */ }
 
   return {
     sessionId,
@@ -753,6 +921,14 @@ export function getModels(timeRange?: AnalyticsTimeRange): ModelsResult {
     bumpCurrencyTotal(totalCostMap, row.currency, amount);
   }
 
+  // Stream first-token latency rows — same grouping as the cost maps.
+  const modelLatencyMap = new Map<string, LatencySamples>();
+  const connectionLatencyMap = new Map<string, LatencySamples>();
+  for (const row of iterateLatencyRows(db, dateFilter)) {
+    recordLatencySample(latencySamplesFor(modelLatencyMap, `${row.model_id}\0${row.provider_id}\0${row.connection_id}`), row);
+    recordLatencySample(latencySamplesFor(connectionLatencyMap, row.connection_id), row);
+  }
+
   const models = modelRows.map((m) => ({
     modelId: m.model_id,
     modelDisplayName: parseSnapshotModelDisplayName(m.snapshot_json),
@@ -771,6 +947,7 @@ export function getModels(timeRange?: AnalyticsTimeRange): ModelsResult {
     interrupted: m.interrupted,
     firstUsed: m.first_used,
     lastUsed: m.last_used,
+    ...summarizeLatency(modelLatencyMap.get(`${m.model_id}\0${m.provider_id}\0${m.connection_id}`)),
   }));
 
   const connections: ConnectionBreakdown[] = connectionRows.map((c) => ({
@@ -788,6 +965,7 @@ export function getModels(timeRange?: AnalyticsTimeRange): ModelsResult {
     modelCount: c.model_count,
     firstUsed: c.first_used,
     lastUsed: c.last_used,
+    ...summarizeLatency(connectionLatencyMap.get(c.connection_id)),
   }));
 
   // Stream raw cost rows for the time series and aggregate per
@@ -1059,7 +1237,9 @@ export function getContext(sessionId?: string, timeRange?: AnalyticsTimeRange, c
 
   let nameMap = new Map<string, string>();
   try {
-    nameMap = (ctx.resolveSessionNames ?? getSessionNames)(topSessionRows.map((r) => r.session_id));
+    const resolveNames = ctx.resolveSessionNames
+      ?? ((ids: readonly string[]) => resolveSessionNamesWithFallback(db, ids));
+    nameMap = resolveNames(topSessionRows.map((r) => r.session_id));
   } catch (error) {
     console.warn('[analytics] Session name lookup failed', { error });
   }

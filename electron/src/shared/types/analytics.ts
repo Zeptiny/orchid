@@ -23,6 +23,10 @@ export interface OverviewStats {
   readonly knownUsageCount: number;
   readonly unknownUsageCount: number;
   readonly totalSessions: number;
+  /** Mean first-token latency across attempts that stamped one; null when none. */
+  readonly avgTtftMs: number | null;
+  /** Total output tokens over total generation seconds; null when no samples. */
+  readonly avgTokensPerSecond: number | null;
 }
 
 export interface CurrencyTotal {
@@ -110,6 +114,12 @@ export interface AttemptDetail {
   readonly startedAt: string;
   readonly completedAt: string | null;
   readonly latencyMs: number | null;
+  /** First streamed content delta timestamp; null for non-streamed attempts. */
+  readonly firstTokenAt: string | null;
+  /** first_token_at − started_at. */
+  readonly ttftMs: number | null;
+  /** Total output tokens over the generation window (completed − first token). */
+  readonly tokensPerSecond: number | null;
   readonly agentScope: string | null;
   readonly agentName: string | null;
   readonly agentTier: string | null;
@@ -202,6 +212,12 @@ export interface ModelBreakdown {
   readonly interrupted: number;
   readonly firstUsed: string | null;
   readonly lastUsed: string | null;
+  /** TTFT distribution (avg / nearest-rank p50 / p95) in ms; null without samples. */
+  readonly avgTtftMs: number | null;
+  readonly p50TtftMs: number | null;
+  readonly p95TtftMs: number | null;
+  /** Total output tokens over total generation seconds; null without samples. */
+  readonly avgTokensPerSecond: number | null;
 }
 
 export interface ProviderBreakdown {
@@ -232,6 +248,12 @@ export interface ConnectionBreakdown {
   readonly modelCount: number;
   readonly firstUsed: string | null;
   readonly lastUsed: string | null;
+  /** TTFT distribution (avg / nearest-rank p50 / p95) in ms; null without samples. */
+  readonly avgTtftMs: number | null;
+  readonly p50TtftMs: number | null;
+  readonly p95TtftMs: number | null;
+  /** Total output tokens over total generation seconds; null without samples. */
+  readonly avgTokensPerSecond: number | null;
 }
 
 export interface ToolBreakdown {

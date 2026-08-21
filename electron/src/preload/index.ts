@@ -719,7 +719,7 @@ const orchidAPI: OrchidAPI = {
     overview: (params?: { readonly timeRange?: AnalyticsTimeRange }) =>
       invoke<OverviewResult>(IPC_CHANNELS.ANALYTICS_OVERVIEW, params),
 
-    sessions: (params?: { readonly limit?: number; readonly timeRange?: AnalyticsTimeRange }) =>
+    sessions: (params?: { readonly limit?: number; readonly offset?: number; readonly timeRange?: AnalyticsTimeRange }) =>
       invoke<SessionsResult>(IPC_CHANNELS.ANALYTICS_SESSIONS, params),
 
     sessionDetail: (params: { readonly sessionId: string; readonly timeRange?: AnalyticsTimeRange }) =>

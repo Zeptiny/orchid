@@ -293,6 +293,18 @@ export class ProviderAccountingStore {
     return result.changes === 1;
   }
 
+  /**
+   * Stamp the first streamed content token (TTFT anchor). The IS NULL guard
+   * keeps it idempotent — only the first observed delta wins.
+   */
+  markFirstToken(attemptId: string): void {
+    this.connection().prepare(`
+      UPDATE provider_attempts
+      SET first_token_at = ?
+      WHERE attempt_id = ? AND first_token_at IS NULL
+    `).run(this.now().toISOString(), attemptId);
+  }
+
   /** Mark process-crash leftovers interrupted once, without mutating completed rows. */
   recoverPending(): number {
     const result = this.connection().prepare(`
@@ -331,6 +343,29 @@ export class ProviderAccountingStore {
       ? this.connection().prepare('SELECT * FROM provider_attempts ORDER BY started_at, attempt_id').all()
       : this.connection().prepare('SELECT * FROM provider_attempts WHERE session_id = ? ORDER BY started_at, attempt_id').all(sessionId);
     return (rows as AttemptRow[]).map(rowToRecord);
+  }
+
+  /**
+   * Persist a session's last-known name when the session is deleted, so
+   * analytics queries (whose rows outlive the session) keep a readable name.
+   * Best-effort by contract: callers must not fail a session deletion when
+   * accounting is unavailable.
+   */
+  upsertSessionNameTombstone(sessionId: string, name: string): void {
+    this.connection().prepare(`
+      INSERT OR REPLACE INTO session_names (session_id, name, deleted_at)
+      VALUES (?, ?, ?)
+    `).run(sessionId, name, this.now().toISOString());
+  }
+
+  /** Look up tombstoned session names for the given ids. Empty map for empty input. */
+  getSessionNameTombstones(sessionIds: readonly string[]): Map<string, string> {
+    if (sessionIds.length === 0) return new Map();
+    const placeholders = sessionIds.map(() => '?').join(', ');
+    const rows = this.connection().prepare(
+      `SELECT session_id, name FROM session_names WHERE session_id IN (${placeholders})`,
+    ).all(...sessionIds) as Array<{ session_id: string; name: string }>;
+    return new Map(rows.map((row) => [row.session_id, row.name]));
   }
 
   getDatabase(): SqliteDatabase {

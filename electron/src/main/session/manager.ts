@@ -28,6 +28,7 @@ import { ChainStatus, type Chain } from '../../shared/types/chain';
 import type { SubagentRecord, SubagentSummary } from '../../shared/types/subagent';
 import type { PermissionMode } from '../../shared/types/permission';
 import { normalizeAgentScopeId } from '../../shared/types/agent-scope';
+import { getProviderAccountingStore } from '../providers/accounting/store';
 import {
   canonicalizeProjectDirectory,
   inspectProjectDirectory,
@@ -51,6 +52,7 @@ import {
   loadSubagentSummaries as storageLoadSubagentSummaries,
   listSubagentRecordIds as storageListSubagentRecordIds,
   deleteSession as storageDeleteSession,
+  getSessionNames as storageGetSessionNames,
   listSavedSessions as storageListSavedSessions,
   updateChain as storageUpdateChain,
   updateSessionFields as storageUpdateSessionFields,
@@ -552,6 +554,11 @@ export class SessionManager {
    * Matches Python SessionManager.delete().
    */
   delete(id: string): boolean {
+    // Tombstone the session's name before the sessions.db row goes away so
+    // analytics (whose ledger rows outlive the session) keeps a readable
+    // name. Best-effort: a missing name or an unavailable accounting store
+    // must never block deletion.
+    this.tombstoneSessionName(id);
     const result = storageDeleteSession(id, this._storageOpts);
     this._sessions.delete(id);
     this._todoStores.delete(id);
@@ -564,6 +571,26 @@ export class SessionManager {
     }
     notifySessionDeleted(id);
     return result;
+  }
+
+  /**
+   * Resolve the session's current name (live cache first, then sessions.db)
+   * and write it to the accounting ledger's tombstone table. No-op when no
+   * non-empty name can be resolved or when accounting is unavailable.
+   */
+  private tombstoneSessionName(id: string): void {
+    let name: string | null = this._sessions.get(id)?.name ?? null;
+    if (!name) {
+      try {
+        name = storageGetSessionNames([id], this._storageOpts).get(id) ?? null;
+      } catch { /* sessions.db unavailable — nothing to tombstone */ }
+    }
+    if (!name) return;
+    try {
+      getProviderAccountingStore().upsertSessionNameTombstone(id, name);
+    } catch (error) {
+      console.warn(`[session] Failed to tombstone session name for ${id}:`, error);
+    }
   }
 
   /**

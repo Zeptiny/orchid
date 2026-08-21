@@ -5,13 +5,15 @@
  * main-thread execution whenever the worker is unavailable (script missing,
  * native module ABI mismatch, worker crash, pool circuit open). Session names
  * are resolved here — sessions.db is owned by the main process and is never
- * opened inside the worker.
+ * opened inside the worker. Names for deleted sessions fall back to the
+ * accounting ledger's session-name tombstones.
  */
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { WorkerPool } from '../../utils/worker-pool';
 import { getContext } from './analytics-queries';
 import { getSessionNames } from '../../session/storage';
+import { getProviderAccountingStore } from './store';
 import type { ContextQueryWorkerResult } from './analytics-worker';
 import type { AnalyticsTimeRange, ContextResult } from '../../../shared/types/analytics';
 
@@ -93,6 +95,18 @@ function patchSessionNames(envelope: ContextQueryWorkerResult): ContextResult {
       nameMap = getSessionNames(envelope.sessionIds);
     } catch (error) {
       console.warn('[analytics] Session name lookup failed', { error });
+    }
+    // Deleted sessions keep their last-known name from the accounting ledger's
+    // tombstone table (live sessions.db rows above always win).
+    const missing = envelope.sessionIds.filter((id) => !nameMap.has(id));
+    if (missing.length > 0) {
+      try {
+        for (const [id, name] of getProviderAccountingStore().getSessionNameTombstones(missing)) {
+          nameMap.set(id, name);
+        }
+      } catch (error) {
+        console.warn('[analytics] Session name tombstone lookup failed', { error });
+      }
     }
   }
   return {

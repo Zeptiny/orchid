@@ -79,6 +79,55 @@ describe('provider attempt accounting middleware', () => {
     });
   });
 
+  it('stamps first_token_at on the first streamed content delta only', async () => {
+    const ledger = store();
+    const usage = {
+      inputTokens: { total: 10, noCache: 10, cacheRead: undefined, cacheWrite: undefined },
+      outputTokens: { total: 5, text: 5, reasoning: undefined },
+    };
+    const runStream = async (sessionId: string, parts: unknown[]): Promise<void> => {
+      const middleware = createAttemptAccountingMiddleware({
+        store: ledger, sessionId, chainId: 'chain-1', turnId: 'turn-1', snapshot: snapshot(),
+      });
+      const wrapStream = middleware.wrapStream! as unknown as (input: Record<string, unknown>) => Promise<{ stream: ReadableStream<unknown> }>;
+      const result = await wrapStream({
+        doStream: async () => ({
+          response: { headers: {} },
+          stream: new ReadableStream({
+            start(controller) {
+              for (const part of parts) controller.enqueue(part);
+              controller.close();
+            },
+          }),
+        }),
+        doGenerate: async () => { throw new Error('not used'); },
+        params: {}, model: {},
+      });
+      await consume(result.stream);
+    };
+    const firstTokenAt = (sessionId: string): string | null => (ledger.getDatabase()
+      .prepare('SELECT first_token_at FROM provider_attempts WHERE session_id = ?')
+      .get(sessionId) as { first_token_at: string | null }).first_token_at;
+
+    // Metadata/raw/finish parts never count; the text-delta is the first token.
+    await runStream('session-deltas', [
+      { type: 'stream-start', warnings: [] },
+      { type: 'response-metadata', id: '0', timestamp: '2026-07-12T10:00:00.000Z', modelId: 'claude-test' },
+      { type: 'raw', rawValue: { chunk: {} } },
+      { type: 'text-delta', id: '0', delta: 'first' },
+      { type: 'reasoning-delta', id: '0', delta: 'later' },
+      { type: 'finish', finishReason: 'stop', usage },
+    ]);
+    expect(firstTokenAt('session-deltas')).not.toBeNull();
+
+    // A finish-only stream produced no content token, so no stamp is written.
+    await runStream('session-finish-only', [
+      { type: 'finish', finishReason: 'stop', usage },
+    ]);
+    expect(firstTokenAt('session-finish-only')).toBeNull();
+    ledger.close();
+  });
+
   it('estimates reasoning tokens from output characters when the provider does not report them', async () => {
     const ledger = store();
     const middleware = createAttemptAccountingMiddleware({

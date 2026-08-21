@@ -130,4 +130,19 @@ describe('runContextQuery', () => {
     expect(workerResult.topSessions[0].maxUsedTokens).toBe(1500);
     expect(workerResult.avgBreakdown).toEqual(direct.avgBreakdown);
   });
+
+  it('resolves deleted-session names from accounting tombstones (worker or inline path)', async () => {
+    snapshotStore.insert({
+      sessionId: 'sess-deleted', chainId: null, turnId: 'turn-1', providerAttemptId: null,
+      inputTokens: 1000, outputTokens: 500, usedTokens: 1500,
+      systemTokens: 200, toolsTokens: 100, toolUseTokens: 50,
+      userTokens: 600, assistantTokens: 400,
+    });
+    providerStore.upsertSessionNameTombstone('sess-deleted', 'Old Name');
+
+    const result = await runContextQuery();
+    expect(result.topSessions).toHaveLength(1);
+    expect(result.topSessions[0].sessionId).toBe('sess-deleted');
+    expect(result.topSessions[0].sessionName).toBe('Old Name');
+  });
 });

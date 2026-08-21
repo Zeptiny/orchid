@@ -121,6 +121,24 @@ describe('ProviderAccountingStore', () => {
     store.close();
   });
 
+  it('stamps first_token_at once per attempt (IS NULL guard keeps it idempotent)', () => {
+    const store = createStore();
+    store.insertPending({ attemptId: 'ttft-1', sessionId: 'session-1', chainId: null, turnId: null, sdkCallId: null, snapshot: snapshot() });
+    store.markFirstToken('ttft-1');
+    const stamped = (store.getDatabase()
+      .prepare('SELECT first_token_at FROM provider_attempts WHERE attempt_id = ?')
+      .get('ttft-1') as { first_token_at: string | null }).first_token_at;
+    expect(stamped).not.toBeNull();
+
+    // A late duplicate call must not overwrite the original stamp.
+    store.markFirstToken('ttft-1');
+    const again = (store.getDatabase()
+      .prepare('SELECT first_token_at FROM provider_attempts WHERE attempt_id = ?')
+      .get('ttft-1') as { first_token_at: string | null }).first_token_at;
+    expect(again).toBe(stamped);
+    store.close();
+  });
+
   it('marks abandoned pending rows interrupted exactly once on restart recovery', () => {
     const store = createStore();
     store.insertPending({ attemptId: 'pending-1', sessionId: 'session-1', chainId: null, turnId: null, sdkCallId: null, snapshot: snapshot() });

@@ -2,6 +2,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import Database from 'better-sqlite3';
 import type { FrozenProviderRequestSnapshot, NormalizedProviderUsage } from '../../src/shared/types/accounting';
 import type { AttemptCostResolution } from '../../src/main/providers/accounting/cost';
 import {
@@ -34,6 +35,7 @@ import {
   getContext,
 } from '../../src/main/providers/accounting/analytics-queries';
 import { _clearDbCache } from '../../src/main/session/storage';
+import { applyAccountingSchemaMigrations } from '../../src/main/providers/accounting/schema';
 import type { ConnectionStore } from '../../src/main/providers/connection-store';
 import type { ProviderStatusObservation } from '../../src/main/providers/status/cache';
 import type { ProviderStatusService } from '../../src/main/providers/status/service';
@@ -170,6 +172,42 @@ function seedProviderAttempt(opts: {
   });
 }
 
+/**
+ * Seed a streamed attempt with explicit TTFT/generation spans. Each store call
+ * advances the shared clock by 1s, so the helper tops the clock up between
+ * insertPending → markFirstToken → finalize to hit the requested spans exactly.
+ */
+function seedStreamedAttempt(opts: {
+  attemptId: string;
+  sessionId: string;
+  ttftMs: number;
+  generationMs: number;
+  outputTokens: number;
+  snapshot?: FrozenProviderRequestSnapshot;
+}): void {
+  providerStore.insertPending({
+    attemptId: opts.attemptId,
+    sessionId: opts.sessionId,
+    chainId: null,
+    turnId: null,
+    sdkCallId: `sdk-${opts.attemptId}`,
+    snapshot: opts.snapshot ?? anthropicSnapshot(),
+    agentScope: null,
+    agentName: null,
+    agentTier: null,
+    agentType: null,
+  });
+  clockMs += opts.ttftMs - 1000;
+  providerStore.markFirstToken(opts.attemptId);
+  clockMs += opts.generationMs - 1000;
+  providerStore.finalize(opts.attemptId, {
+    outcome: 'succeeded',
+    usage: { inputTokens: 100, outputTokens: opts.outputTokens },
+    providerEvidence: {},
+    cost: calculatedCost('1'),
+  });
+}
+
 function seedToolAttempt(opts: {
   toolAttemptId: string;
   sessionId: string;
@@ -272,6 +310,8 @@ describe('analytics-queries', () => {
       expect(overview.stats.totalCost).toHaveLength(0);
       expect(overview.stats.unknownCostCount).toBe(0);
       expect(overview.stats.totalSessions).toBe(0);
+      expect(overview.stats.avgTtftMs).toBeNull();
+      expect(overview.stats.avgTokensPerSecond).toBeNull();
       expect(overview.spendOverTime).toHaveLength(0);
       expect(overview.spendByModel).toHaveLength(0);
       expect(overview.spendByProvider).toHaveLength(0);
@@ -471,6 +511,25 @@ describe('analytics-queries', () => {
     });
   });
 
+    it('reports overall average TTFT and token throughput across all attempts', () => {
+      seedStreamedAttempt({
+        attemptId: 'att-fast', sessionId: 'sess-1', ttftMs: 1000, generationMs: 1000, outputTokens: 500,
+      });
+      seedStreamedAttempt({
+        attemptId: 'att-slow', sessionId: 'sess-2', ttftMs: 3000, generationMs: 3000, outputTokens: 300,
+      });
+      // Non-streamed attempt: excluded from latency aggregation entirely.
+      seedProviderAttempt({
+        attemptId: 'att-batch', sessionId: 'sess-1', chainId: null, turnId: 'turn-1',
+        outcome: 'succeeded', usage: { inputTokens: 10, outputTokens: 999 },
+        cost: calculatedCost('1'),
+      });
+
+      const result = getOverview();
+      expect(result.stats.avgTtftMs).toBe(2000); // (1000 + 3000) / 2
+      expect(result.stats.avgTokensPerSecond).toBe(200); // (500 + 300) / (1 + 3) seconds
+    });
+
   // ── Quota overview (connection gating) ─────────────────────────────────────
 
   describe('quotaByProvider connection gating', () => {
@@ -602,6 +661,54 @@ describe('analytics-queries', () => {
       expect(limited.sessions).toHaveLength(1);
       expect(limited.totalSessions).toBe(2);
       expect(limited.truncated).toBe(true);
+    });
+
+    it('falls back to the session-name tombstone for deleted sessions', () => {
+      seedProviderAttempt({
+        attemptId: 'att-1', sessionId: 'sess-deleted', chainId: null, turnId: 'turn-1',
+        outcome: 'succeeded',
+        usage: { inputTokens: 10, outputTokens: 5 },
+        cost: calculatedCost('1'),
+      });
+      providerStore.upsertSessionNameTombstone('sess-deleted', 'Old Name');
+
+      const sessions = getSessions();
+      expect(sessions.sessions).toHaveLength(1);
+      expect(sessions.sessions[0].sessionId).toBe('sess-deleted');
+      // sessions.db has no live row for this id → the tombstone name surfaces.
+      expect(sessions.sessions[0].sessionName).toBe('Old Name');
+
+      const detail = getSessionDetail('sess-deleted');
+      expect(detail.sessionName).toBe('Old Name');
+    });
+
+    it('pages results with an offset while totalSessions counts every session', () => {
+      // The shared clock advances per store call, so sess-a..sess-c get
+      // strictly increasing first_attempt values (page order: c, b, a).
+      for (const sessionId of ['sess-a', 'sess-b', 'sess-c']) {
+        seedProviderAttempt({
+          attemptId: `att-${sessionId}`, sessionId, chainId: null, turnId: 'turn-1',
+          outcome: 'succeeded',
+          usage: { inputTokens: 1, outputTokens: 1 },
+          cost: calculatedCost('1'),
+        });
+      }
+
+      const page1 = getSessions(2, undefined, 0);
+      expect(page1.sessions).toHaveLength(2);
+      expect(page1.totalSessions).toBe(3);
+      expect(page1.truncated).toBe(true);
+
+      const page2 = getSessions(2, undefined, 2);
+      expect(page2.sessions).toHaveLength(1);
+      expect(page2.totalSessions).toBe(3);
+      expect(page2.truncated).toBe(false);
+
+      // Pages are disjoint and stable under the first_attempt DESC ordering.
+      const page1Ids = page1.sessions.map((s) => s.sessionId);
+      const page2Ids = page2.sessions.map((s) => s.sessionId);
+      expect(page1Ids.some((id) => page2Ids.includes(id))).toBe(false);
+      expect([...page1Ids, ...page2Ids].sort()).toEqual(['sess-a', 'sess-b', 'sess-c']);
     });
   });
 
@@ -817,6 +924,30 @@ describe('analytics-queries', () => {
       expect(pending.completedAt).toBeNull();
       expect(detail.summary.lastAttempt).toBe(completed.completedAt);
     });
+
+    it('computes per-attempt ttftMs and tokensPerSecond from the first-token stamp', () => {
+      seedStreamedAttempt({
+        attemptId: 'att-streamed', sessionId: 'sess-1', ttftMs: 1000, generationMs: 1000, outputTokens: 500,
+      });
+      // Non-streamed attempt: no first-token stamp → null latency fields.
+      seedProviderAttempt({
+        attemptId: 'att-batch', sessionId: 'sess-1', chainId: null, turnId: 'turn-2',
+        outcome: 'succeeded', usage: { inputTokens: 100, outputTokens: 500 },
+        cost: calculatedCost('1'),
+      });
+
+      const detail = getSessionDetail('sess-1');
+
+      const streamed = detail.attempts.find((a) => a.attemptId === 'att-streamed')!;
+      expect(streamed.firstTokenAt).not.toBeNull();
+      expect(streamed.ttftMs).toBe(1000);
+      expect(streamed.tokensPerSecond).toBe(500); // 500 tokens over a 1s generation window
+
+      const batch = detail.attempts.find((a) => a.attemptId === 'att-batch')!;
+      expect(batch.firstTokenAt).toBeNull();
+      expect(batch.ttftMs).toBeNull();
+      expect(batch.tokensPerSecond).toBeNull();
+    });
   });
 
   // ── Native units (R8 / AE7) ─────────────────────────────────────────────────
@@ -962,6 +1093,11 @@ describe('analytics-queries', () => {
       expect(claude.inputTokens).toBe(1500);
       expect(claude.outputTokens).toBe(500);
       expect(claude.totalCost).toEqual([{ currency: 'USD', amount: '1', recordCount: 1 }]);
+      // Attempts without a first-token stamp yield null latency fields.
+      expect(claude.avgTtftMs).toBeNull();
+      expect(claude.p50TtftMs).toBeNull();
+      expect(claude.p95TtftMs).toBeNull();
+      expect(claude.avgTokensPerSecond).toBeNull();
 
       const gpt = result.models.find((m) => m.modelId === 'gpt-test')!;
       expect(gpt.providerId).toBe('openai');
@@ -987,6 +1123,8 @@ describe('analytics-queries', () => {
       expect(anthropicConn.totalInputTokens).toBe(1500);
       expect(anthropicConn.totalOutputTokens).toBe(500);
       expect(anthropicConn.totalCost).toEqual([{ currency: 'USD', amount: '1', recordCount: 1 }]);
+      expect(anthropicConn.avgTtftMs).toBeNull();
+      expect(anthropicConn.avgTokensPerSecond).toBeNull();
 
       const openaiConn = result.connections.find((c) => c.connectionId === OPENAI_CONNECTION_ID)!;
       expect(openaiConn.connectionName).toBe('Personal');
@@ -1036,6 +1174,61 @@ describe('analytics-queries', () => {
         connectionId: ANTHROPIC_CONNECTION_ID,
         currency: 'EUR',
       }));
+    });
+
+    it('aggregates TTFT percentiles and token throughput per model and connection', () => {
+      // TTFT samples 1000/2000/3000 → avg 2000, p50 2000 (nearest-rank), p95 3000.
+      seedStreamedAttempt({
+        attemptId: 'att-1', sessionId: 'sess-1', ttftMs: 1000, generationMs: 1000, outputTokens: 500,
+      });
+      seedStreamedAttempt({
+        attemptId: 'att-2', sessionId: 'sess-1', ttftMs: 2000, generationMs: 1000, outputTokens: 500,
+      });
+      seedStreamedAttempt({
+        attemptId: 'att-3', sessionId: 'sess-1', ttftMs: 3000, generationMs: 3000, outputTokens: 300,
+      });
+      // Non-streamed attempt: excluded from latency aggregation entirely.
+      seedProviderAttempt({
+        attemptId: 'att-4', sessionId: 'sess-1', chainId: null, turnId: 'turn-4',
+        outcome: 'succeeded', usage: { inputTokens: 10, outputTokens: 999 },
+        cost: calculatedCost('1'),
+      });
+
+      const result = getModels();
+
+      const claude = result.models.find((m) => m.modelId === 'claude-test')!;
+      expect(claude.avgTtftMs).toBe(2000);
+      expect(claude.p50TtftMs).toBe(2000);
+      expect(claude.p95TtftMs).toBe(3000);
+      // Token-weighted: (500 + 500 + 300) tokens / (1 + 1 + 3) seconds.
+      expect(claude.avgTokensPerSecond).toBe(260);
+
+      const anthropicConn = result.connections.find((c) => c.connectionId === ANTHROPIC_CONNECTION_ID)!;
+      expect(anthropicConn.avgTtftMs).toBe(2000);
+      expect(anthropicConn.p50TtftMs).toBe(2000);
+      expect(anthropicConn.p95TtftMs).toBe(3000);
+      expect(anthropicConn.avgTokensPerSecond).toBe(260);
+    });
+
+    it('reports null throughput when no attempt has a positive generation window', () => {
+      // first_token_at is stamped after completed_at by direct SQL, so the
+      // generation window is negative — TTFT still aggregates, TPS stays null.
+      seedProviderAttempt({
+        attemptId: 'att-inverted', sessionId: 'sess-1', chainId: null, turnId: 'turn-1',
+        outcome: 'succeeded', usage: { inputTokens: 100, outputTokens: 500 },
+        cost: calculatedCost('1'),
+      });
+      const raw = providerStore.getDatabase();
+      raw.prepare(`
+        UPDATE provider_attempts SET first_token_at = ?
+        WHERE attempt_id = 'att-inverted'
+      `).run('2999-01-01T00:00:00.000Z');
+
+      const result = getModels();
+      const claude = result.models.find((m) => m.modelId === 'claude-test')!;
+      expect(claude.avgTtftMs).not.toBeNull();
+      expect(claude.p50TtftMs).not.toBeNull();
+      expect(claude.avgTokensPerSecond).toBeNull();
     });
   });
 
@@ -1480,6 +1673,64 @@ describe('analytics-queries', () => {
       // Attribution lookup misses degrade to null names.
       expect(result.topSubagents[0].agentName).toBeNull();
       expect(result.topSubagents[0].agentTier).toBeNull();
+    });
+  });
+
+  // ── Legacy schema migration ────────────────────────────────────────────────
+
+  describe('provider_attempts first_token_at migration', () => {
+    it('adds first_token_at to a legacy v4 table without touching existing rows', () => {
+      const legacyPath = path.join(tempDir, 'legacy-v4.db');
+      const legacy = new Database(legacyPath);
+      legacy.prepare(`
+        CREATE TABLE provider_attempts (
+          attempt_id TEXT PRIMARY KEY,
+          session_id TEXT NOT NULL,
+          chain_id TEXT,
+          turn_id TEXT,
+          sdk_call_id TEXT,
+          provider_id TEXT NOT NULL,
+          connection_id TEXT NOT NULL,
+          model_id TEXT NOT NULL,
+          protocol TEXT NOT NULL,
+          snapshot_json TEXT NOT NULL,
+          outcome TEXT NOT NULL,
+          started_at TEXT NOT NULL,
+          completed_at TEXT,
+          usage_json TEXT,
+          provider_evidence_json TEXT NOT NULL DEFAULT '{}',
+          cost_state TEXT NOT NULL,
+          cost_source TEXT NOT NULL,
+          cost_rung TEXT,
+          currency TEXT,
+          cost_amount TEXT,
+          error TEXT,
+          agent_scope TEXT,
+          agent_name TEXT,
+          agent_tier TEXT,
+          agent_type TEXT
+        )
+      `).run();
+      legacy.prepare(`
+        INSERT INTO provider_attempts (
+          attempt_id, session_id, provider_id, connection_id, model_id, protocol,
+          snapshot_json, outcome, started_at, cost_state, cost_source
+        ) VALUES ('legacy-row', 'session-1', 'anthropic', '11111111-1111-4111-8111-111111111111',
+          'claude-test', 'anthropic-messages', ?, 'succeeded', '2026-07-12T00:00:00.000Z', 'calculated', 'token-formula')
+      `).run(JSON.stringify(anthropicSnapshot()));
+      legacy.close();
+
+      const db = new Database(legacyPath);
+      applyAccountingSchemaMigrations(db);
+      const columns = (db.prepare('PRAGMA table_info(provider_attempts)').all() as Array<{ name: string }>)
+        .map((column) => column.name);
+      expect(columns).toContain('first_token_at');
+      const row = db.prepare('SELECT attempt_id, first_token_at FROM provider_attempts').get() as {
+        attempt_id: string;
+        first_token_at: string | null;
+      };
+      expect(row).toEqual({ attempt_id: 'legacy-row', first_token_at: null });
+      db.close();
     });
   });
 });

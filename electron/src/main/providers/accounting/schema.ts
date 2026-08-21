@@ -1,7 +1,7 @@
 import type { SqliteDatabase } from '../../utils/sqlite';
 
 /** SQLite schema version for append-only provider attempt records. */
-export const ACCOUNTING_SCHEMA_VERSION = 4;
+export const ACCOUNTING_SCHEMA_VERSION = 6;
 
 export const ACCOUNTING_SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS schema_meta (
@@ -23,6 +23,7 @@ CREATE TABLE IF NOT EXISTS provider_attempts (
   outcome TEXT NOT NULL CHECK (outcome IN ('pending', 'succeeded', 'failed', 'interrupted')),
   started_at TEXT NOT NULL,
   completed_at TEXT,
+  first_token_at TEXT,
   usage_json TEXT,
   provider_evidence_json TEXT NOT NULL DEFAULT '{}',
   cost_state TEXT NOT NULL CHECK (cost_state IN ('reported', 'calculated', 'unknown')),
@@ -118,6 +119,15 @@ CREATE INDEX IF NOT EXISTS idx_subagent_attribution_session ON subagent_attribut
 CREATE INDEX IF NOT EXISTS idx_subagent_attribution_chain ON subagent_attribution(chain_id);
 CREATE INDEX IF NOT EXISTS idx_subagent_attribution_agent_name ON subagent_attribution(agent_name);
 CREATE INDEX IF NOT EXISTS idx_subagent_attribution_status ON subagent_attribution(status);
+
+-- Session-name tombstones: written when a session is deleted so analytics
+-- rows (which outlive the session) keep a readable name. Live sessions.db
+-- rows always take precedence over these at query time.
+CREATE TABLE IF NOT EXISTS session_names (
+  session_id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  deleted_at TEXT NOT NULL
+);
 `;
 
 /**
@@ -134,7 +144,7 @@ export function applyAccountingSchemaMigrations(db: SqliteDatabase): void {
   if (tables.has('provider_attempts')) {
     const attemptColumns = db.prepare('PRAGMA table_info(provider_attempts)').all() as Array<{ name: string }>;
     const existingAttempts = new Set(attemptColumns.map((c) => c.name));
-    for (const col of ['agent_scope', 'agent_name', 'agent_tier', 'agent_type', 'cost_rung']) {
+    for (const col of ['agent_scope', 'agent_name', 'agent_tier', 'agent_type', 'cost_rung', 'first_token_at']) {
       if (!existingAttempts.has(col)) {
         db.prepare(`ALTER TABLE provider_attempts ADD COLUMN ${col} TEXT`).run();
       }

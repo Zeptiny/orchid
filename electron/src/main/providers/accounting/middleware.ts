@@ -264,6 +264,7 @@ export function createAttemptAccountingMiddleware(
       }
 
       let finalized = false;
+      let firstTokenMarked = false;
       const chars = emptyOutputChars();
       const finalize = (outcome: 'succeeded' | 'failed' | 'interrupted', part?: LanguageModelV4StreamPart, error?: unknown) => {
         if (finalized) return;
@@ -298,6 +299,22 @@ export function createAttemptAccountingMiddleware(
               return;
             }
             trackStreamChars(chars, next.value);
+            // TTFT anchor: the first streamed content delta (metadata, raw
+            // passthrough and finish parts do not count). Non-fatal — latency
+            // analytics must never break the stream.
+            if (
+              !firstTokenMarked
+              && (next.value.type === 'text-delta'
+                || next.value.type === 'reasoning-delta'
+                || next.value.type === 'tool-input-delta')
+            ) {
+              firstTokenMarked = true;
+              try {
+                context.store.markFirstToken(attemptId);
+              } catch {
+                // Ignored: the attempt still finalizes normally.
+              }
+            }
             if (next.value.type === 'finish') finalize('succeeded', next.value);
             if (next.value.type === 'error') {
               finalize(params.abortSignal?.aborted ? 'interrupted' : 'failed', next.value, next.value.error);
