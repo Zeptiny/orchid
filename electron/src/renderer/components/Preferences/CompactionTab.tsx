@@ -73,7 +73,6 @@ export function CompactionTab({ compaction, onChange }: CompactionTabProps) {
       if (field === 'hysteresis_delta') clamped = Math.min(clamped, 0.5);
       if (field === 'preserve_percent') clamped = Math.min(clamped, 0.9);
       if (field === 'min_compactable_tokens') clamped = Math.min(clamped, 1_000_000);
-      if (field === 'keep_last_user_messages') clamped = Math.min(clamped, 1000);
       updateField(scope, field, clamped as CompactionScopeConfig[typeof field]);
     },
     [updateField],
@@ -92,9 +91,11 @@ export function CompactionTab({ compaction, onChange }: CompactionTabProps) {
         updateField(scope, field, null);
         return;
       }
-      const num = parseConfigNumber(trimmed, min, opts);
+      // Parse without `max` so above-max edits clamp to the schema maximum
+      // instead of being rejected; empty stays null (all), invalid stays put.
+      const num = parseConfigNumber(trimmed, min, { integer: opts?.integer });
       if (num === null) return;
-      updateField(scope, field, num);
+      updateField(scope, field, opts?.max !== undefined ? Math.min(num, opts.max) : num);
     },
     [updateField],
   );

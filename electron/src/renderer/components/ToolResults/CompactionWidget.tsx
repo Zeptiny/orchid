@@ -1,6 +1,7 @@
 import { useEffect, useId, useMemo, useState } from 'react';
-import type { Message } from '../../../shared/types/message';
+import type { CompactionMode, Message } from '../../../shared/types/message';
 import { SUMMARY_SECTION_SEPARATOR } from '../../../shared/types/message';
+import type { CompactionProgressPhase } from '../../../shared/types/compaction-progress';
 import { MarkdownContent } from '../MarkdownContent';
 import { Icon } from '../Icon';
 import { StatusBadge } from '../ui/StatusBadge';
@@ -18,8 +19,11 @@ export interface CompactionWidgetProps {
 
 export interface CompactionRunningWidgetProps {
   status: 'running' | 'generating';
-  phase?: string;
-  mode?: string;
+  /** Lifecycle phase; both live phases (`preparing`/`compacting`) share one presentation. */
+  phase?: CompactionProgressPhase;
+  mode?: CompactionMode;
+  /** Human-readable phase detail from the progress event (e.g. "Summarizing history"). */
+  detail?: string;
   /** Live compactor output tail — summary text (simple) or raw ops JSON (selective). */
   streamText?: string | null;
   /** Calibrated token estimate of `streamText`; null when no calibration exists. */
@@ -33,9 +37,11 @@ function streamTail(text: string): string {
   return lines.slice(-STREAM_TAIL_LINES).join('\n');
 }
 
-export function CompactionRunningWidget({ status, phase, mode, streamText, estimatedTokens }: CompactionRunningWidgetProps) {
-  const label = phase === 'reclaiming' ? 'Reclaiming duplicate outputs…' : 'Compacting context…';
-  const detail = phase === 'summarizing' ? 'Summarizing history' : phase === 'reclaiming' ? 'Removing duplicates' : 'Preparing compaction';
+export function CompactionRunningWidget({ status, phase, mode, detail, streamText, estimatedTokens }: CompactionRunningWidgetProps) {
+  // Both live phases share one presentation; the event's `detail` (e.g.
+  // "Summarizing history", "Reclaiming duplicates") differentiates the run.
+  const label = 'Compacting context…';
+  const detailLabel = detail ?? 'Preparing compaction';
   const hasStream = typeof streamText === 'string' && streamText.length > 0;
   const sizeLabel = !hasStream
     ? ''
@@ -43,7 +49,7 @@ export function CompactionRunningWidget({ status, phase, mode, streamText, estim
       ? `~${estimatedTokens.toLocaleString()} tokens`
       : `${streamText!.length.toLocaleString()} chars`;
   return (
-    <div className="orchid-tool-block orchid-compaction-block is-running" data-compaction="running" data-tool-result-status="running" aria-live="polite" aria-busy="true">
+    <div className="orchid-tool-block orchid-compaction-block is-running" data-compaction="running" data-compaction-phase={phase} data-tool-result-status="running" aria-live="polite" aria-busy="true">
       <div className="orchid-tool-block-title min-w-0">
         <span className="orchid-tool-block-title-left min-w-0">
           <span className="orchid-tool-lifecycle-icon shrink-0">
@@ -59,7 +65,7 @@ export function CompactionRunningWidget({ status, phase, mode, streamText, estim
       {hasStream ? (
         <div className="orchid-tool-block-content orchid-compaction-content min-w-0" data-compaction-stream="tail">
           <div className="mb-1 flex items-center gap-2 text-xs text-base-content/60">
-            <span>{detail} — streaming</span>
+            <span>{detailLabel} — streaming</span>
             <span className="text-base-content/40">{sizeLabel}</span>
           </div>
           <pre className="orchid-compaction-stream-tail m-0 max-h-28 overflow-hidden whitespace-pre-wrap break-words font-mono text-xs leading-relaxed text-base-content/55">
@@ -68,7 +74,7 @@ export function CompactionRunningWidget({ status, phase, mode, streamText, estim
         </div>
       ) : (
         <div className="orchid-tool-block-content orchid-compaction-content min-w-0 text-xs text-base-content/60">
-          {detail} — the summary will appear when ready.
+          {detailLabel} — the summary will appear when ready.
         </div>
       )}
     </div>
@@ -129,7 +135,9 @@ function coalesceSummaries(messages: readonly Message[]): CoalescedSummary {
   }
   return {
     content: contents.join(SUMMARY_SECTION_SEPARATOR),
-    mode: messages[0]?.compacted?.mode ?? null,
+    // Same selection rule as the primary marker below: the FIRST message
+    // carrying a compaction marker (messages[0] may not be one).
+    mode: messages.find((m) => m.compacted)?.compacted?.mode ?? null,
     summarizedCount: hasCount ? summarizedTotal : null,
     tokensFreed,
     compactorTokens: hasCompactor ? { inputTokens: compactorIn, outputTokens: compactorOut } : null,

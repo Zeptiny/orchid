@@ -364,6 +364,7 @@ export function ChatStream({
         status={item.status}
         phase={item.phase}
         mode={item.mode}
+        detail={item.detail}
         streamText={item.streamText ?? null}
         estimatedTokens={item.estimatedTokens ?? null}
       />

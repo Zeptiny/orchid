@@ -30,7 +30,7 @@ export function isVisibleSubagentMessage(message: Message): boolean {
 }
 
 function hasCompactedMarker(message: Message): boolean {
-  return Boolean((message as unknown as { compacted?: unknown }).compacted);
+  return message.compacted != null;
 }
 
 function snapshotToToolBlock(snapshot: SubagentToolSnapshot): ToolBlock {
@@ -237,6 +237,7 @@ export function SubagentTranscript({ record, live = null, selectedId = null }: S
                 status={item.item.status}
                 phase={item.item.phase}
                 mode={item.item.mode}
+                detail={item.item.detail}
                 streamText={item.item.streamText ?? null}
                 estimatedTokens={item.item.estimatedTokens ?? null}
               />

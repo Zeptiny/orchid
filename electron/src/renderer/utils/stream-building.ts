@@ -130,7 +130,7 @@ export type StreamItem =
 export type FooterStreamItem = Extract<StreamItem, { kind: 'footer' }>;
 
 function hasCompactedMarker(message: Message): boolean {
-  return Boolean((message as unknown as { compacted?: unknown }).compacted);
+  return message.compacted != null;
 }
 
 export function shouldRenderChainFooter(input: {
@@ -728,21 +728,6 @@ function walkMessagesToItems(
   const flush = () =>
     flushCompactedBuffer(state, { liveById, emittedToolIds, keyPrefix, expandedCompactedKeys, counter });
 
-  /**
-   * First non-thinking visible message at or after `from` — the message that
-   * decides whether a thinking stretch belongs to an (opening or open)
-   * compacted run (review #55): selective compaction keeps reasoning — and
-   * sometimes assistant text — verbatim between/around summarized spans, and
-   * those strays fragment one logical compaction into several widgets.
-   */
-  const firstNonThinkingVisible = (from: number): Message | undefined => {
-    for (let k = from; k < visible.length; k += 1) {
-      const v = visible[k]!;
-      if (v.type === MessageType.THINKING) continue;
-      return v;
-    }
-    return undefined;
-  };
   /** Whether a live (unflagged) summary head exists at or after global visible index `g`. */
   const liveHeadAtOrAfter = (g: number): boolean =>
     opts.liveHeadAhead != null && g >= 0 && g < opts.liveHeadAhead.length
@@ -752,6 +737,42 @@ function walkMessagesToItems(
   const isUserText = (v: Message): boolean =>
     v.role === MessageRole.USER && v.type === MessageType.TEXT;
 
+  // Suffix indexes over this chain's visible slice, computed once per walk so
+  // the per-message open-run lookahead answers in O(1) instead of rescanning
+  // the tail for every buffered message (O(n²) on compaction-heavy chains).
+  // NONE marks "no such message at or after this index".
+  const NONE = -1;
+  /** [k] = first index ≥ k whose message is flagged (hidden from model) or a summary head. */
+  const flaggedOrHeadAtOrAfter: number[] = new Array<number>(visible.length + 1).fill(NONE);
+  /** [k] = first index ≥ k holding a kept user message no live head covers (the run bound). */
+  const boundUserAtOrAfter: number[] = new Array<number>(visible.length + 1).fill(NONE);
+  /** [k] = first index ≥ k whose message is not thinking. */
+  const nonThinkingAtOrAfter: number[] = new Array<number>(visible.length + 1).fill(NONE);
+  for (let k = visible.length - 1; k >= 0; k -= 1) {
+    const v = visible[k]!;
+    flaggedOrHeadAtOrAfter[k] = v.excludeFromModel === true || hasCompactedMarker(v)
+      ? k
+      : flaggedOrHeadAtOrAfter[k + 1];
+    boundUserAtOrAfter[k] = isUserText(v) && !liveHeadAtOrAfter(globalStart + k)
+      ? k
+      : boundUserAtOrAfter[k + 1];
+    nonThinkingAtOrAfter[k] = v.type === MessageType.THINKING
+      ? nonThinkingAtOrAfter[k + 1]
+      : k;
+  }
+
+  /**
+   * First non-thinking visible message at or after `from` — the message that
+   * decides whether a thinking stretch belongs to an (opening or open)
+   * compacted run (review #55): selective compaction keeps reasoning — and
+   * sometimes assistant text — verbatim between/around summarized spans, and
+   * those strays fragment one logical compaction into several widgets.
+   */
+  const firstNonThinkingVisible = (from: number): Message | undefined => {
+    const k = from <= visible.length ? nonThinkingAtOrAfter[from] : NONE;
+    return k === NONE ? undefined : visible[k]!;
+  };
+
   /**
    * Whether the open run continues past visible[from] (strictly one widget
    * per compaction): a flagged message, a superseded head, or the LIVE head
@@ -760,14 +781,16 @@ function walkMessagesToItems(
    * run's live head exists ahead, kept user messages inside the range are
    * strays of the same compaction and do not stop the scan; without one
    * (headless reclaim-only flags) the next kept user message bounds the run.
+   * O(1) via the suffix indexes: the run continues when the next flagged-or-
+   * head message precedes the next bounding user message (an index that is
+   * both resolves as flagged-or-head, matching the original scan order).
    */
   const runContinuesFrom = (from: number): boolean => {
-    for (let k = from; k < visible.length; k += 1) {
-      const v = visible[k]!;
-      if (v.excludeFromModel === true) return true;
-      if (hasCompactedMarker(v)) return true;
-      if (isUserText(v) && !liveHeadAtOrAfter(globalStart + k)) return false;
-    }
+    if (from >= visible.length) return liveHeadAtOrAfter(globalStart + from);
+    const flaggedOrHead = flaggedOrHeadAtOrAfter[from];
+    const boundUser = boundUserAtOrAfter[from];
+    if (flaggedOrHead !== NONE && (boundUser === NONE || flaggedOrHead <= boundUser)) return true;
+    if (boundUser !== NONE) return false;
     return liveHeadAtOrAfter(globalStart + from);
   };
 

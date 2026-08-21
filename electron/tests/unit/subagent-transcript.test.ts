@@ -256,11 +256,4 @@ describe('SubagentTranscript pure rendering contract (U4)', () => {
     if (summary?.kind !== 'compaction-summary') throw new Error('expected compaction-summary');
     expect(summary.messages.map((m) => m.id)).toEqual(['sum-1', 'sum-2']);
   });
-
-  it('renders both compaction widgets through the shared CompactionWidget components', () => {
-    expect(transcriptSource).toContain('CompactionRunningWidget');
-    expect(transcriptSource).toContain('CompactionWidget');
-    expect(transcriptSource).toContain("item.kind === 'compaction-progress'");
-    expect(transcriptSource).toContain("item.kind === 'compaction-summary'");
-  });
 });

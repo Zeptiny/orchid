@@ -1,4 +1,4 @@
-import type { Config, RAGConfig, CompactionConfig } from '../../shared/types/ipc-boundary';
+import type { Config, RAGConfig } from '../../shared/types/ipc-boundary';
 import type { ConfigPatch, ConfigPatchMap } from '../../shared/types/ipc';
 import type { ModelSelection } from '../../shared/types/provider';
 
@@ -129,12 +129,10 @@ export function applyConfigDraft(base: Config, draft: ConfigPatch): Config {
   if (draft.compaction !== undefined) {
     next.compaction = {
       ...base.compaction,
+      ...draft.compaction,
       main: { ...base.compaction.main, ...(draft.compaction.main ?? {}) },
       subagents: { ...base.compaction.subagents, ...(draft.compaction.subagents ?? {}) },
     };
-    if (draft.compaction.main === undefined && draft.compaction.subagents === undefined) {
-      next.compaction = { ...base.compaction, ...draft.compaction } as CompactionConfig;
-    }
   }
 
   if (draft.tier_models !== undefined) {

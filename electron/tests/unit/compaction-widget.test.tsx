@@ -150,7 +150,7 @@ describe('CompactionWidget — summary rendering', () => {
 describe('CompactionRunningWidget — streaming tail', () => {
   it('shows the placeholder copy before any stream text arrives', () => {
     render(
-      <CompactionRunningWidget status="running" phase="summarizing" mode="simple" />,
+      <CompactionRunningWidget status="running" phase="compacting" mode="simple" />,
     );
 
     expect(screen.getByText(/the summary will appear when ready\./)).toBeTruthy();
@@ -162,7 +162,7 @@ describe('CompactionRunningWidget — streaming tail', () => {
     render(
       <CompactionRunningWidget
         status="generating"
-        phase="summarizing"
+        phase="compacting"
         mode="simple"
         streamText={streamText}
       />,
@@ -181,7 +181,7 @@ describe('CompactionRunningWidget — streaming tail', () => {
     render(
       <CompactionRunningWidget
         status="generating"
-        phase="summarizing"
+        phase="compacting"
         mode="simple"
         streamText={streamText}
         estimatedTokens={1461}
@@ -198,7 +198,7 @@ describe('CompactionRunningWidget — streaming tail', () => {
     render(
       <CompactionRunningWidget
         status="generating"
-        phase="summarizing"
+        phase="compacting"
         mode="simple"
         streamText={streamText}
         estimatedTokens={null}
@@ -214,7 +214,7 @@ describe('CompactionRunningWidget — streaming tail', () => {
     render(
       <CompactionRunningWidget
         status="generating"
-        phase="summarizing"
+        phase="compacting"
         mode="selective"
         streamText={opsJson}
       />,
@@ -227,7 +227,7 @@ describe('CompactionRunningWidget — streaming tail', () => {
 
   it('falls back to placeholder copy for empty stream text', () => {
     render(
-      <CompactionRunningWidget status="generating" phase="summarizing" streamText="" />,
+      <CompactionRunningWidget status="generating" phase="compacting" streamText="" />,
     );
 
     expect(screen.getByText(/the summary will appear when ready\./)).toBeTruthy();
