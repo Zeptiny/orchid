@@ -530,7 +530,7 @@ describe('applyCompactionPersistence (targeted durable write)', () => {
     expect(full.chains.filter((chain) => chain.id === 'chain-summary')).toHaveLength(1);
   });
 
-  it('(e) clears settle-cleared ids in the same transaction; unknown cleared ids abort the write', () => {
+  it('(e) clears settle-cleared ids in the same transaction; unknown cleared ids are skipped idempotently', () => {
     const sessionId = 'cafe000d-000d-400d-800d-00000000000d';
     // m-0005 is a pre-flagged exempt user message (flagged by a prior, now
     // superseded selective run) — the settle clears it while the compaction
@@ -568,17 +568,21 @@ describe('applyCompactionPersistence (targeted durable write)', () => {
         .not.toBe(true);
     }
 
-    // A cleared id with no durable owner is an integrity failure (mirrors the
-    // flagged-id throw) and leaves the rows untouched.
-    const jsonBeforeFailedWrite = readChainJson('chain-a');
-    expect(() => applyCompactionPersistence(sessionId, {
+    // A cleared id with no durable owner is idempotent: the settle computes
+    // the clear set over the live history, which can lead the debounced
+    // checkpoint flush (the subagent scope reconciles the same lag via its
+    // liveMessages tail append), and there is no durable row that could
+    // resurrect a stale flag — so the write succeeds and leaves chain
+    // content unchanged. Flagged ids stay fail-closed (test (d) above).
+    const jsonBeforeWrite = readChainJson('chain-a');
+    applyCompactionPersistence(sessionId, {
       updatedAt: T0,
       flaggedMessageIds: [],
       clearedMessageIds: ['not-a-durable-message'],
       summaryChain: null,
       insertBeforeMessageId: null,
-    }, storageOpts)).toThrow(/not-a-durable-message/);
-    expect(readChainJson('chain-a')).toBe(jsonBeforeFailedWrite);
+    }, storageOpts);
+    expect(readChainJson('chain-a')).toBe(jsonBeforeWrite);
   });
 });
 

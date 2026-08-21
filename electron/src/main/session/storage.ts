@@ -1958,10 +1958,13 @@ export interface CompactionPersistencePayload {
   readonly flaggedMessageIds: readonly string[];
   /**
    * Message ids whose `excludeFromModel` flag the settle CLEARED (scoped
-   * exempt users, selective covered-kept resets). Resolved exactly like the
-   * flagged ids — against durable rows, fail-closed — and cleared in the SAME
-   * transaction as the flag writes, so the durable rows can never keep a
-   * stale true flag that resurrects on reload.
+   * exempt users, selective covered-kept resets). Cleared in the SAME
+   * transaction as the flag writes so the durable rows can never keep a
+   * stale true flag that resurrects on reload. A cleared id with no durable
+   * owner is IDEMPOTENT (skipped): the settle computes the clear set over the
+   * live history, which can lead the debounced checkpoint flush — there is no
+   * durable row to resurrect a stale flag from. Unlike `flaggedMessageIds`,
+   * a missing cleared id never aborts the write.
    */
   readonly clearedMessageIds?: readonly string[];
   /**
@@ -2074,18 +2077,18 @@ export function applyCompactionPersistence(
         }
       }
 
-      // Cleared flags resolve exactly like flagged ids (same owner index,
-      // same fail-closed integrity throw) — a cleared id that misses its
-      // durable owner aborts the whole write rather than half-settling.
+      // Cleared ids resolve against the same owner index, but a cleared id
+      // with no durable owner is IDEMPOTENT — there is no durable row that
+      // could resurrect a stale true flag, so it is skipped rather than
+      // aborting the write. The settle computes the clear set over the LIVE
+      // history, which can lead the debounced checkpoint flush (the subagent
+      // scope reconciles the same lag via its liveMessages tail append);
+      // failing the whole transaction over a benign clear would lose the
+      // compaction's flags and summary head. Flagged ids stay fail-closed —
+      // a partial flag set must never persist.
       const clearsByChain = new Map<string, Set<string>>();
       for (const messageId of new Set(payload.clearedMessageIds ?? [])) {
-        const owners = chainIdsByMessageId.get(messageId);
-        if (!owners || owners.length === 0) {
-          throw new Error(
-            `applyCompactionPersistence: cleared message ${messageId} not found in durable chains (session ${sessionId})`,
-          );
-        }
-        for (const chainId of owners) {
+        for (const chainId of chainIdsByMessageId.get(messageId) ?? []) {
           let ids = clearsByChain.get(chainId);
           if (!ids) {
             ids = new Set<string>();

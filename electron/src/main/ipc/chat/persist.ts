@@ -287,7 +287,10 @@ export interface CompactionDurablePersistInput {
   /**
    * Message ids whose `excludeFromModel` flag the settle CLEARED — storage
    * clears them in the SAME transaction as the flag writes so the durable
-   * rows cannot keep a stale true flag that resurrects on reload.
+   * rows cannot keep a stale true flag that resurrects on reload. Ids with
+   * no durable owner are skipped idempotently (the settle runs over the live
+   * history, which can lead the checkpoint flush), unlike flagged ids, which
+   * stay fail-closed.
    */
   readonly clearedMessageIds?: readonly string[];
   /** Summary-head chain row to insert; null for reclaim-only compaction. */
