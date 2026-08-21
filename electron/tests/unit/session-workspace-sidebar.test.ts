@@ -301,7 +301,6 @@ describe('project delete', () => {
 
   function renderWithDelete(onProjectDelete: (project: {
     label: string;
-    path: string | null;
     sessionIds: readonly string[];
   }) => void) {
     return render(
@@ -346,6 +345,32 @@ describe('project delete', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Delete project sessions' }));
     expect(deleted).toHaveLength(1);
     expect([...deleted[0]!].sort()).toEqual(['a1', 'a2']);
+  });
+
+  it('uses singular copy for a one-session group', () => {
+    const deleted: Array<readonly string[]> = [];
+    render(
+      createElement(LeftSidebar, {
+        isCollapsed: false,
+        onToggle: () => {},
+        sessionListState: { status: 'ready', sessions: [deleteSessions[2]!] },
+        activeSessionId: null,
+        onSessionSelect: () => {},
+        onSessionCreate: () => {},
+        onSessionDelete: () => {},
+        onRefreshSessions: () => {},
+        onOpenSettings: () => {},
+        onProjectDelete: (project) => {
+          deleted.push(project.sessionIds);
+        },
+      }),
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Delete all sessions in beta' }));
+    expect(screen.getByText(/Delete 1 session in beta\?/)).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Delete project sessions' }));
+    expect(deleted).toHaveLength(1);
+    expect([...deleted[0]!]).toEqual(['b1']);
   });
 
   it('does not render delete controls without a handler', () => {

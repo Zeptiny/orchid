@@ -216,6 +216,82 @@ describe('useTrustPrompt', () => {
     expect(result.current.busy).toBe(false);
   });
 
+  // ── openFor outcome callbacks ────────────────────────────────────────────
+
+  it('reports "opened" once the dialog actually opens', async () => {
+    installTrustBridge({ getState: 'untrusted' });
+    const onOutcome = vi.fn();
+    const { result } = renderHook(() => useTrustPrompt());
+
+    act(() => {
+      result.current.openFor('/proj', { onOutcome });
+    });
+
+    await waitFor(() => expect(result.current.pending).not.toBeNull());
+    expect(onOutcome).toHaveBeenCalledTimes(1);
+    expect(onOutcome).toHaveBeenCalledWith('opened');
+  });
+
+  it('reports "already-trusted" without opening the dialog', async () => {
+    installTrustBridge({ getState: 'trusted' });
+    const onOutcome = vi.fn();
+    const { result } = renderHook(() => useTrustPrompt());
+
+    act(() => {
+      result.current.openFor('/proj', { onOutcome });
+    });
+
+    await waitFor(() => expect(onOutcome).toHaveBeenCalledWith('already-trusted'));
+    expect(result.current.pending).toBeNull();
+    expect(onOutcome).toHaveBeenCalledTimes(1);
+  });
+
+  it('reports "lookup-failed" when the trust lookup rejects', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    installTrustBridge({ getImpl: () => Promise.reject(new Error('ipc down')) });
+    const onOutcome = vi.fn();
+    const { result } = renderHook(() => useTrustPrompt());
+
+    act(() => {
+      result.current.openFor('/proj', { onOutcome });
+    });
+
+    await waitFor(() => expect(onOutcome).toHaveBeenCalledWith('lookup-failed'));
+    expect(result.current.pending).toBeNull();
+    expect(result.current.error).not.toBeNull();
+    expect(onOutcome).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not fire an outcome for a lookup superseded by a newer openFor', async () => {
+    let resolveFirst: ((info: ProjectTrustInfo) => void) | null = null;
+    const getImpl = vi.fn((message: { cwd: string }) => {
+      if (message.cwd === '/stale') {
+        return new Promise<ProjectTrustInfo>((resolve) => {
+          resolveFirst = resolve;
+        });
+      }
+      return Promise.resolve({ ...trustInfo('untrusted'), projectDir: message.cwd });
+    });
+    installTrustBridge({ getImpl });
+    const staleOutcome = vi.fn();
+    const freshOutcome = vi.fn();
+    const { result } = renderHook(() => useTrustPrompt());
+
+    act(() => {
+      result.current.openFor('/stale', { onOutcome: staleOutcome });
+      result.current.openFor('/fresh', { onOutcome: freshOutcome });
+    });
+    await waitFor(() => expect(freshOutcome).toHaveBeenCalledWith('opened'));
+
+    // The stale lookup resolves late; its outcome must stay silent so the
+    // fresh request owns the surface (and any parked state on it).
+    await act(async () => {
+      resolveFirst?.({ ...trustInfo('untrusted'), projectDir: '/stale' });
+    });
+    expect(staleOutcome).not.toHaveBeenCalled();
+    expect(result.current.pending?.cwd).toBe('/fresh');
+  });
+
   it('clears the error on the next openFor start and on decline', async () => {
     vi.spyOn(console, 'error').mockImplementation(() => {});
     let failLookup = true;

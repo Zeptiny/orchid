@@ -120,4 +120,12 @@ describe('connection wizard protocol picker', () => {
     // The definition's first protocol stays the default selection.
     expect(select.value).toBe('openai-responses');
   });
+
+  it('omits the protocol panel in edit mode even for multi-protocol providers', () => {
+    renderWizard({ existingConnection: CONNECTION });
+
+    expect(screen.queryByLabelText('Connection protocol')).toBeNull();
+    expect(screen.queryByText('Protocol')).toBeNull();
+    expect(screen.queryByText(/Protocol is fixed after creation/)).toBeNull();
+  });
 });

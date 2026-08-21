@@ -24,6 +24,7 @@ import {
   filterSessionsByQuery,
   groupSessionsByProject,
   normalizeWorkspaceKey,
+  type ProjectDeleteTarget,
   previewProjectSessions,
   PROJECT_SESSION_PREVIEW_LIMIT,
   truncatePathDisplay,
@@ -75,15 +76,10 @@ interface LeftSidebarProps {
   /** Start a new draft explicitly bound to one visible project group. */
   onProjectSessionCreate?: (projectDir: string) => void;
   /**
-   * Delete every session in a project group. Receives the group label,
-   * canonical path (null for "Other / Unknown"), and all session ids — the
-   * group itself is derived and disappears once empty.
+   * Delete every session in a project group. Receives the group label and all
+   * session ids — the group itself is derived and disappears once empty.
    */
-  onProjectDelete?: (project: {
-    label: string;
-    path: string | null;
-    sessionIds: readonly string[];
-  }) => void | Promise<unknown>;
+  onProjectDelete?: (project: ProjectDeleteTarget) => void | Promise<unknown>;
   /** A project pick starts a draft instead of moving the selected session. */
   projectPickerCreatesDraft?: boolean;
   /** Global work across every project/window. Optional for ConfigView reuse. */
@@ -436,7 +432,10 @@ function UnboundEmptyState({
 
 // ── Always-visible project groups ───────────────────────────────────────────
 
-// Collapsed project groups persist across restarts via localStorage.
+// Collapsed project groups persist across restarts via localStorage. The set
+// lives in a module-level store shared by every mounted ProjectSessionList
+// (ChatView stays mounted under Config/Analytics overlays, which render their
+// own sidebars) so two instances can never clobber each other's writes.
 const COLLAPSED_PROJECTS_KEY = 'orchid-sidebar-collapsed-projects';
 
 function loadCollapsedProjects(): Set<string> {
@@ -460,6 +459,20 @@ function saveCollapsedProjects(keys: ReadonlySet<string>): void {
   }
 }
 
+const collapsedProjectsStoreListeners = new Set<(next: ReadonlySet<string>) => void>();
+const collapsedProjectsStore = {
+  current: loadCollapsedProjects(),
+  subscribe(listener: (next: ReadonlySet<string>) => void): () => void {
+    collapsedProjectsStoreListeners.add(listener);
+    return () => collapsedProjectsStoreListeners.delete(listener);
+  },
+  update(next: Set<string>): void {
+    collapsedProjectsStore.current = next;
+    saveCollapsedProjects(next);
+    for (const listener of collapsedProjectsStoreListeners) listener(next);
+  },
+};
+
 interface ProjectSessionListProps {
   state: SessionListState;
   projectGroups: Array<{
@@ -481,11 +494,7 @@ interface ProjectSessionListProps {
   isUnbound: boolean;
   onPickProjectDir?: () => void;
   onProjectSessionCreate?: (projectDir: string) => void;
-  onProjectDelete?: (project: {
-    label: string;
-    path: string | null;
-    sessionIds: readonly string[];
-  }) => void | Promise<unknown>;
+  onProjectDelete?: (project: ProjectDeleteTarget) => void | Promise<unknown>;
   isSearching: boolean;
 }
 
@@ -513,22 +522,20 @@ function ProjectSessionList({
   const [expandedProjects, setExpandedProjects] = useState<Set<string>>(
     () => new Set(),
   );
-  const [collapsedProjects, setCollapsedProjects] = useState<Set<string>>(
-    loadCollapsedProjects,
-  );
   const [deleteConfirmKey, setDeleteConfirmKey] = useState<string | null>(null);
+  const [collapsedProjects, setCollapsedProjects] = useState<ReadonlySet<string>>(
+    () => collapsedProjectsStore.current,
+  );
+  useEffect(
+    () => collapsedProjectsStore.subscribe(setCollapsedProjects),
+    [],
+  );
   const toggleCollapsed = useCallback((key: string) => {
-    setCollapsedProjects((previous) => {
-      const next = new Set(previous);
-      if (next.has(key)) next.delete(key);
-      else next.add(key);
-      return next;
-    });
+    const next = new Set(collapsedProjectsStore.current);
+    if (next.has(key)) next.delete(key);
+    else next.add(key);
+    collapsedProjectsStore.update(next);
   }, []);
-  // Write through so the collapsed set survives app restarts.
-  useEffect(() => {
-    saveCollapsedProjects(collapsedProjects);
-  }, [collapsedProjects]);
   const activityBySession = useMemo(
     () => new Map(activities.map((activity) => [activity.sessionId, activity])),
     [activities],
@@ -627,7 +634,14 @@ function ProjectSessionList({
       : projectOnlySelection
         ? `${listId}-project-${selectedProjectKey}`
         : undefined;
+  const deleteConfirmProject = deleteConfirmKey == null
+    ? null
+    : projectGroups.find((group) => group.key === deleteConfirmKey) ?? null;
   const handleKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
+    // Portaled overlays (delete-confirm dialog) still bubble through the React
+    // tree to this handler; keys typed inside them must not drive the listbox.
+    if (deleteConfirmProject != null) return;
+    if (!listRef.current?.contains(event.target as Node)) return;
     onListKeyDown(event);
     if (event.defaultPrevented) return;
     const current = flatSessions[activeIndex];
@@ -642,9 +656,6 @@ function ProjectSessionList({
   };
 
   let sessionIndex = 0;
-  const deleteConfirmProject = deleteConfirmKey == null
-    ? null
-    : projectGroups.find((group) => group.key === deleteConfirmKey) ?? null;
   return (
     <div
       ref={listRef}
@@ -848,7 +859,6 @@ function ProjectSessionList({
                   setDeleteConfirmKey(null);
                   void onProjectDelete?.({
                     label: target.label,
-                    path: target.path,
                     sessionIds: target.sessions.map((session) => session.id),
                   });
                 }}

@@ -103,6 +103,14 @@ export interface ProjectActivityCounts {
 /** Number of recent sessions visible before a project group is expanded. */
 export const PROJECT_SESSION_PREVIEW_LIMIT = 5;
 
+/** Payload for deleting every session in a project group. */
+export interface ProjectDeleteTarget {
+  /** Group display label, for confirm copy and failure summaries. */
+  label: string;
+  /** Every session id in the group — deletion set for the caller's loop. */
+  sessionIds: readonly string[];
+}
+
 /**
  * Return the newest project sessions for a compact sidebar group, or every
  * session after the user explicitly expands that project.

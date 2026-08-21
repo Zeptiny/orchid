@@ -1,4 +1,5 @@
 import type { SessionActivity } from '../../shared/types/ipc-boundary';
+import { compareSessionActivity } from '../../shared/utils/session-activity-order';
 import { sessionActivityPresentation } from './session-activity-presentation';
 
 export type SessionActivityMap = ReadonlyMap<string, SessionActivity>;
@@ -66,35 +67,15 @@ export function reconcileSessionActivitySnapshot(
   return next;
 }
 
-/** Visible activities ordered by urgency and turn-start stability. */
+/**
+ * Visible activities in the one shared ordering (`compareSessionActivity`),
+ * also used by `SessionActivityStore.list()`: state urgency first, then
+ * turn-start stability for active rows, unread-first, and recency.
+ */
 export function orderedSessionActivities(
   current: SessionActivityMap,
 ): SessionActivity[] {
-  const priority: Record<SessionActivity['state'], number> = {
-    needs_attention: 0,
-    working: 1,
-    waiting: 2,
-    idle: 3,
-  };
-  // Unknown turn starts sort last, not oldest, within the working/waiting bucket.
-  const startedAtSortValue = (activity: SessionActivity): number =>
-    activity.startedAt ?? Number.POSITIVE_INFINITY;
   return [...current.values()]
     .filter((activity) => sessionActivityPresentation(activity).visible)
-    .sort((a, b) => {
-      const statePriority = priority[a.state] - priority[b.state];
-      if (statePriority !== 0) return statePriority;
-      if (a.state === 'working' || a.state === 'waiting') {
-        // Mirror SessionActivityStore.list(): active rows order by turn start
-        // so streamed detail bumps never reshuffle them between snapshot and
-        // broadcast. Oldest start first; equal or unknown starts fall through
-        // to recency.
-        const aStart = startedAtSortValue(a);
-        const bStart = startedAtSortValue(b);
-        if (aStart !== bStart) return aStart - bStart;
-      } else if (a.unread !== b.unread) {
-        return a.unread ? -1 : 1;
-      }
-      return b.updatedAt - a.updatedAt;
-    });
+    .sort(compareSessionActivity);
 }

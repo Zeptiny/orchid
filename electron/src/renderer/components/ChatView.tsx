@@ -12,7 +12,7 @@ import {
   useRef,
   useState,
 } from 'react';
-import { useChat, type UntrustedProjectSendFailure } from '../hooks/useChat';
+import { useChat } from '../hooks/useChat';
 import { useSession } from '../hooks/useSession';
 import { useBackgroundCommands } from '../hooks/useBackgroundCommands';
 import { useInspectorHydration } from '../hooks/useInspectorHydration';
@@ -26,6 +26,7 @@ import { useMessageQueue } from '../hooks/useMessageQueue';
 import { useQueueAutoFire } from '../hooks/useQueueAutoFire';
 import { useResponsiveShell } from '../hooks/use-responsive-shell';
 import { useTrustPrompt } from '../hooks/useTrustPrompt';
+import { useTrustSendReplay, type UseTrustSendReplayReturn } from '../hooks/useTrustSendReplay';
 import {
   providerModelOptionDisplayName,
   providerModelOptionKey,
@@ -188,42 +189,26 @@ export function ChatView({ isVisible = true, bootstrapConfig = null, onNotify, a
 
   // Trusted-projects prompt: explicit interactions (bind result, send failure,
   // badge click) call openFor; granting re-resolves workspace + gated services.
-  // A send that failed the trust gate is stashed here so granting replays it
-  // (issue #148) and declining restores it to the composer instead of losing it.
-  const pendingTrustSendRef = useRef<UntrustedProjectSendFailure | null>(null);
-  /** Late-bound handleSend for the grant replay; handleSend is defined below. */
-  const handleSendRef = useRef<((message: string) => Promise<boolean>) | null>(null);
-  /** One-shot composer draft restore (trust decline). */
-  const [restoreDraft, setRestoreDraft] = useState<{ text: string } | null>(null);
-  const handleRestoreDraftConsumed = useCallback(() => setRestoreDraft(null), []);
-  const draftRestore = useMemo(
-    () => (restoreDraft ? { text: restoreDraft.text, consumed: handleRestoreDraftConsumed } : null),
-    [restoreDraft, handleRestoreDraftConsumed],
-  );
+  // useTrustSendReplay owns the #148 stash/replay/restore flow for gated sends
+  // (the ref bridges onGranted to the hook declared just below it).
+  const trustSendRef = useRef<UseTrustSendReplayReturn | null>(null);
   const trustPrompt = useTrustPrompt({
     onGranted: () => {
       void session.getWorkspace();
       void refreshMCP();
       void refreshIndex();
-      // Replay the trust-gated send. Clear first so a replay that fails again
-      // re-stashes fresh instead of double-firing the stash.
-      const pending = pendingTrustSendRef.current;
-      if (!pending) return;
-      pendingTrustSendRef.current = null;
-      // Superseded: another session owns the view now (the dialog is modal, so
-      // this only happens through programmatic session switches). Drop the
-      // stash silently rather than firing the message into an unrelated
-      // session — the sidebar selected another session deliberately.
-      if ((pending.options.sessionId ?? null) !== (session.activeSession?.id ?? null)) {
-        return;
-      }
-      void handleSendRef.current?.(pending.message)?.then((sent) => {
-        // Replay was gated (provider/workspace changed mid-dialog): put the
-        // message back in the composer instead of dropping it.
-        if (!sent) setRestoreDraft({ text: pending.message });
-      });
+      // Replay the trust-gated send (if any).
+      trustSendRef.current?.onGranted();
     },
   });
+  const trustSend = useTrustSendReplay({
+    openFor: trustPrompt.openFor,
+    decline: trustPrompt.decline,
+    restoreBatch: messageQueue.restoreBatch,
+    cwd: workspaceCwd,
+    activeSessionId: session.activeSession?.id ?? null,
+  });
+  trustSendRef.current = trustSend;
 
   const sessionUsage = useMemo(() => {
     const usages = session.activeSession?.chains.map(sumChainUsage) ?? [];
@@ -245,13 +230,7 @@ export function ChatView({ isVisible = true, bootstrapConfig = null, onNotify, a
   const chat = useChat(session.activeSession?.id ?? null, {
     persistedSessionUsage: sessionUsage.total,
     latestPersistedUsage: sessionUsage.latest,
-    onUntrustedProject: (failure) => {
-      const cwd = session.workspace?.cwd ?? session.activeSession?.cwd;
-      if (!cwd) return;
-      // Stash the failed send so grant/decline can replay or restore it.
-      pendingTrustSendRef.current = failure;
-      trustPrompt.openFor(cwd);
-    },
+    onUntrustedProject: trustSend.onUntrustedProject,
   });
 
   useEffect(() => {
@@ -686,16 +665,20 @@ export function ChatView({ isVisible = true, bootstrapConfig = null, onNotify, a
         messageQueue.clearQueue();
       }
       let failures = 0;
+      let lastError: unknown = null;
       for (const id of project.sessionIds) {
         try {
           await session.deleteSession(id);
-        } catch {
+        } catch (err) {
           failures += 1;
+          lastError = err;
+          console.error(`Project delete failed for session ${id}:`, err);
         }
       }
       if (failures > 0) {
+        const reason = lastError instanceof Error ? ` (${lastError.message})` : '';
         notify(
-          `Deleted ${project.sessionIds.length - failures} of ${project.sessionIds.length} sessions in ${project.label}; ${failures} failed.`,
+          `Deleted ${project.sessionIds.length - failures} of ${project.sessionIds.length} sessions in ${project.label}; ${failures} failed${reason}.`,
           'error',
         );
       }
@@ -874,7 +857,7 @@ export function ChatView({ isVisible = true, bootstrapConfig = null, onNotify, a
   );
 
   // Late-bind handleSend for the trust-grant replay (declared above via ref).
-  handleSendRef.current = handleSend;
+  trustSend.sendRef.current = handleSend;
 
   const handleRetry = useCallback(async () => {
     // Re-send the last user message after an error
@@ -902,7 +885,7 @@ export function ChatView({ isVisible = true, bootstrapConfig = null, onNotify, a
   useQueueAutoFire(
     chat.status,
     messageQueue.consumeNext,
-    messageQueue.restoreBatch,
+    trustSend.restoreQueueBatch,
     messageQueue.editingId,
     handleSend,
   );
@@ -951,14 +934,6 @@ export function ChatView({ isVisible = true, bootstrapConfig = null, onNotify, a
   const handleOpenProviders = useCallback(() => {
     emitOrchidEvent('orchid:open-settings', { tab: 'providers' });
   }, []);
-  // Declining trust (button, Escape, backdrop click) restores the gated
-  // message to the composer instead of losing it.
-  const handleTrustDecline = useCallback(() => {
-    const pending = pendingTrustSendRef.current;
-    pendingTrustSendRef.current = null;
-    if (pending) setRestoreDraft({ text: pending.message });
-    trustPrompt.decline();
-  }, [trustPrompt.decline]);
   const handleFocusSectionConsumed = useCallback(() => {
     setInspectorFocusSection(null);
   }, []);
@@ -1397,7 +1372,7 @@ export function ChatView({ isVisible = true, bootstrapConfig = null, onNotify, a
           onOpenProviders={handleOpenProviders}
           onPickProjectDir={handlePickProjectDirClick}
           isViewActive={!isVisible || contentMode === 'subagents'}
-          draftRestore={draftRestore}
+          draftRestore={trustSend.draftRestore}
         />
         <DeferredSurface isVisible={isVisible}>
           <Footer
@@ -1497,7 +1472,7 @@ export function ChatView({ isVisible = true, bootstrapConfig = null, onNotify, a
         busy={trustPrompt.busy}
         error={trustPrompt.error}
         onGrant={() => void trustPrompt.grant()}
-        onDecline={handleTrustDecline}
+        onDecline={trustSend.onDecline}
       />
     </div>
   );

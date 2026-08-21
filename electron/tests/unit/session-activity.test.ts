@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import { SessionActivityStore } from '../../src/main/session/activity';
+import { orderedSessionActivities } from '../../src/renderer/utils/session-activity-state';
+import type {
+  SessionActivity,
+  SessionExecutionState,
+} from '../../src/shared/types/ipc-boundary';
 
 describe('SessionActivityStore', () => {
   it('tracks independent execution state and unread completion per session', () => {
@@ -140,5 +145,114 @@ describe('SessionActivityStore', () => {
       'idle-stale-unread',
       'idle-fresh-seen',
     ]);
+  });
+
+  it('orders needs_attention rows unread-first before recency', () => {
+    const store = new SessionActivityStore();
+    // The unread row is older, so pure recency would place it second.
+    store.update('attention-stale-unread', {
+      state: 'needs_attention', unread: true,
+    }, 100);
+    store.update('attention-fresh-seen', { state: 'needs_attention' }, 900);
+
+    expect(store.list().map((item) => item.sessionId)).toEqual([
+      'attention-stale-unread',
+      'attention-fresh-seen',
+    ]);
+  });
+});
+
+describe('session activity ordering parity', () => {
+  it('orders identical fixtures identically through list() and orderedSessionActivities()', () => {
+    const store = new SessionActivityStore();
+    // Insertion order deliberately differs from display order, and no two
+    // visible rows tie under the comparator, so each surface's output is
+    // fully determined by the shared comparator rather than sort stability.
+    const fixtures: Array<
+      Partial<SessionActivity> & {
+        sessionId: string;
+        state: SessionExecutionState;
+        updatedAt: number;
+      }
+    > = [
+      { sessionId: 'idle-invisible', state: 'idle', updatedAt: 950 },
+      {
+        sessionId: 'bg-only-fresh', state: 'idle',
+        updatedAt: 900, backgroundProcessCount: 2,
+      },
+      { sessionId: 'idle-stale-unread', state: 'idle', updatedAt: 100, unread: true },
+      { sessionId: 'idle-fresh-unread', state: 'idle', updatedAt: 500, unread: true },
+      {
+        sessionId: 'waiting-newest-start', state: 'waiting',
+        startedAt: 400, updatedAt: 400,
+      },
+      {
+        sessionId: 'waiting-oldest-start', state: 'waiting',
+        startedAt: 200, updatedAt: 600,
+      },
+      {
+        sessionId: 'working-equal-start-a', state: 'working',
+        startedAt: 250, updatedAt: 300,
+      },
+      {
+        sessionId: 'working-equal-start-b', state: 'working',
+        startedAt: 250, updatedAt: 800,
+      },
+      {
+        sessionId: 'working-unknown-start', state: 'working',
+        startedAt: null, updatedAt: 700,
+      },
+      {
+        sessionId: 'working-newest-start', state: 'working',
+        startedAt: 300, updatedAt: 500,
+      },
+      {
+        sessionId: 'working-oldest-start', state: 'working',
+        startedAt: 100, updatedAt: 100,
+      },
+      {
+        sessionId: 'attention-stale-unread', state: 'needs_attention',
+        updatedAt: 100, unread: true,
+      },
+      { sessionId: 'attention-fresh-seen', state: 'needs_attention', updatedAt: 900 },
+    ];
+
+    for (const fixture of fixtures) {
+      store.update(fixture.sessionId, {
+        state: fixture.state,
+        startedAt: fixture.startedAt ?? null,
+        unread: fixture.unread ?? false,
+        backgroundProcessCount: fixture.backgroundProcessCount ?? 0,
+      }, fixture.updatedAt);
+    }
+
+    // Feed the exact stored objects through the renderer projection so both
+    // surfaces see identical activity records.
+    const rendererState = new Map(
+      fixtures.map((fixture) => {
+        const stored = store.get(fixture.sessionId);
+        if (!stored) throw new Error(`missing stored activity: ${fixture.sessionId}`);
+        return [stored.sessionId, stored];
+      }),
+    );
+
+    const storeOrder = store.list().map((item) => item.sessionId);
+    // Both surfaces drop the invisible idle row and apply the same comparator.
+    expect(storeOrder).toEqual([
+      'attention-stale-unread',
+      'attention-fresh-seen',
+      'working-oldest-start',
+      'working-equal-start-b',
+      'working-equal-start-a',
+      'working-newest-start',
+      'working-unknown-start',
+      'waiting-oldest-start',
+      'waiting-newest-start',
+      'idle-fresh-unread',
+      'idle-stale-unread',
+      'bg-only-fresh',
+    ]);
+    expect(orderedSessionActivities(rendererState).map((item) => item.sessionId))
+      .toEqual(storeOrder);
   });
 });
