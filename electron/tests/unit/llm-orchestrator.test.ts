@@ -2371,14 +2371,16 @@ describe('streamChat', () => {
         ));
         return {
           fullStream: {
-            async *[Symbol.asyncIterator]() {
-              await new Promise<void>((_resolve, reject) => {
-                params.abortSignal.addEventListener(
-                  'abort',
-                  () => reject(new DOMException('Aborted', 'AbortError')),
-                  { once: true },
-                );
-              });
+            [Symbol.asyncIterator]() {
+              return {
+                next: () => new Promise<never>((_resolve, reject) => {
+                  params.abortSignal.addEventListener(
+                    'abort',
+                    () => reject(new DOMException('Aborted', 'AbortError')),
+                    { once: true },
+                  );
+                }),
+              };
             },
           },
           textStream: createAsyncIterable<string>([]),
