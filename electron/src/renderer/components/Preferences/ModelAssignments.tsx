@@ -97,7 +97,7 @@ export function ModelAssignments({
     [options],
   );
 
-  /** Human label for a selection, falling back to its raw ids. */
+  // Human label for a selection, falling back to its raw ids.
   const selectionLabel = (selection: ModelSelection | null | undefined): string => {
     if (!selection) return '';
     return optionLabels[selectionKey(selection)]

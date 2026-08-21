@@ -531,6 +531,28 @@ describe('config:save_project', () => {
     await expect(callSaveProject({ personality: 42 })).rejects.toThrow(/Invalid project config/);
   });
 
+  it('rejects a newly invalid update when the project file already has an invalid key', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      // New violation at a path the file did not already fail.
+      writeProjectConfig({ default_model: 'not-a-selection' });
+      await expect(callSaveProject({ personality: 42 })).rejects.toThrow(
+        /Invalid project config/,
+      );
+
+      // Changed value at the already-invalid path.
+      writeProjectConfig({ command_timeout: 0 });
+      await expect(callSaveProject({ command_timeout: -5 })).rejects.toThrow(
+        /Invalid project config/,
+      );
+    } finally {
+      warn.mockRestore();
+    }
+
+    expect(mocks.writtenConfigs).toHaveLength(0);
+    expect(warn).not.toHaveBeenCalled();
+  });
+
   it('rejects schema-violating values without writing', async () => {
     await expect(callSaveProject({ command_timeout: -5 })).rejects.toThrow(
       /Invalid project config/,

@@ -137,7 +137,7 @@ function withoutAuth(headers: Record<string, string>): Record<string, string> {
 
 // ── Component ────────────────────────────────────────────────────────────────
 
-/** Build the edit form state for one server entry (shared by edit/override/add). */
+// Build the edit form state for one server entry (shared by edit/override/add).
 function toEditForm(s: MCPServerEntry): EditingServer {
   return {
     id: s.id,
@@ -240,7 +240,7 @@ export function MCPServersTab({
     setIsAdding(true);
   }, []);
 
-  /** Seed the add-editor with an inherited entry to create a project override. */
+  // Seed the add-editor with an inherited entry to create a project override.
   const startOverride = useCallback((s: MCPServerEntry) => {
     setEditingId(null);
     setEditForm(toEditForm(s));

@@ -52,22 +52,25 @@ function coerceSelection(value: unknown): ModelSelection | null {
   return null;
 }
 
-/**
- * Explicit-null tier entries ("mask the home tier, use the default model")
- * are a file-level state the project UI does not model — the picker is
- * inherit-or-selection. Treat them as absent so a save through this view
- * normalizes them away instead of mislabeling them "Inherit global".
- */
+// Explicit-null tier entries mask the home assignment ("use the default
+// model") — a file-level state the inherit-or-selection picker cannot
+// express. Preserve them as-is so a later save through this view keeps the
+// exact tier map instead of silently deleting the mask. Invalid non-null
+// entries still normalize away.
 function selectionRecord(value: unknown): Record<string, ModelSelection | null> {
   const out: Record<string, ModelSelection | null> = {};
   for (const [key, entry] of Object.entries(plainRecord(value))) {
+    if (entry === null) {
+      out[key] = null;
+      continue;
+    }
     const selection = coerceSelection(entry);
     if (selection !== null) out[key] = selection;
   }
   return out;
 }
 
-/** Null efforts are runtime-equivalent to absent for our two-state UI; drop. */
+// Null efforts are runtime-equivalent to absent for our two-state UI; drop.
 function effortRecord(value: unknown): Record<string, string | number | null> {
   const out: Record<string, string | number | null> = {};
   for (const [key, entry] of Object.entries(plainRecord(value))) {

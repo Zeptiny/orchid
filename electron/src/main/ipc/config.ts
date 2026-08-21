@@ -6,6 +6,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { ipcMain } from 'electron';
+import type { ZodError, ZodIssue } from 'zod';
 import { IPC_CHANNELS } from '../../shared/types/ipc';
 import {
   getConfig,
@@ -101,6 +102,43 @@ function loadJsonSafe(filePath: string): unknown {
   } catch {
     return null;
   }
+}
+
+function issuePathKey(path: readonly PropertyKey[]): string {
+  return path.map(String).join('.');
+}
+
+function valueAtPath(source: unknown, path: readonly PropertyKey[]): unknown {
+  let current: unknown = source;
+  for (const key of path) {
+    if (current === null || typeof current !== 'object') return undefined;
+    current = (current as Record<string, unknown>)[key as string];
+  }
+  return current;
+}
+
+function unchangedValue(before: unknown, after: unknown): boolean {
+  return before === after || JSON.stringify(before) === JSON.stringify(after);
+}
+
+/**
+ * Validation issues this update introduced: errors at paths the prior file did
+ * not already fail, or a changed value at a previously-invalid path.
+ */
+function introducedIssues(
+  mergedError: ZodError,
+  priorError: ZodError,
+  priorRaw: Record<string, unknown>,
+  mergedRaw: Record<string, unknown>,
+): ZodIssue[] {
+  const priorPaths = new Set(priorError.issues.map((issue) => issuePathKey(issue.path)));
+  return mergedError.issues.filter((issue) => {
+    if (!priorPaths.has(issuePathKey(issue.path))) return true;
+    return !unchangedValue(
+      valueAtPath(priorRaw, issue.path),
+      valueAtPath(mergedRaw, issue.path),
+    );
+  });
 }
 
 export function registerConfigIPC(): void {
@@ -243,14 +281,29 @@ export function registerConfigIPC(): void {
       if (!validated.success) {
         // A hand-edited project file can already violate the schema under a
         // key that is now allow-listed. Rejecting would block every unrelated
-        // save behind that pre-existing damage, so when the file was already
-        // invalid before this update, warn and write anyway (the invalid
-        // value is preserved as-is either way).
+        // save behind that pre-existing damage, so only invalid values this
+        // update leaves untouched are preserved with a warning (they are kept
+        // as-is either way); violations this save introduces still reject.
         const prior = configSchema.safeParse(
           isPlainObject(current) ? current : {},
         );
         if (prior.success) {
           throw new Error(`Invalid project config: ${validated.error.message}`);
+        }
+        const introduced = introducedIssues(
+          validated.error,
+          prior.error,
+          isPlainObject(current) ? current : {},
+          merged,
+        );
+        if (introduced.length > 0) {
+          const paths = introduced
+            .map((issue) => issuePathKey(issue.path) || '<root>')
+            .join(', ');
+          throw new Error(
+            `Invalid project config: this save introduces new violations ` +
+              `(${paths}): ${validated.error.message}`,
+          );
         }
         console.warn(
           `[config] project config of '${verifiedProjectDir}' was already invalid ` +

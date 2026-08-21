@@ -258,7 +258,7 @@ export const configSchema = z
      * conversation history. 0 disables the deadline entirely; naming then
      * only happens when a turn completes or is interrupted.
      */
-    session_title_max_wait_seconds: z.number().min(0).default(15),
+    session_title_max_wait_seconds: z.number().min(0).max(3600).default(15),
     /**
      * Max multi-step tool-loop iterations per stream (AI SDK stopWhen).
      */

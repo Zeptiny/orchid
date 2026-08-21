@@ -7,6 +7,9 @@ import {
   ProjectConfigView,
 } from '../../src/renderer/components/ProjectConfigView';
 import {
+  readTierOverrides,
+} from '../../src/renderer/components/Preferences/ProjectTierModelsTab';
+import {
   fieldInputId,
   isPlainRecord,
   readGlobalValue,
@@ -29,6 +32,8 @@ const MOCK_CONFIG = {
   read_line_limit: 1000,
   grep_max_results: 100,
   directory_tree_depth: 2,
+  tool_worker_pool_size: 2,
+  tool_worker_pool_main_agent_reserved: 1,
   theme: 'default',
   personality: 'default',
   agents_md: {
@@ -50,13 +55,53 @@ const MOCK_CONFIG = {
     embedding_batch_size: 16,
     embedding_api_timeout: 30,
     embedding_api_retries: 3,
+    model_download_inactivity_timeout: 30,
+    model_download_total_timeout: 900,
     embedding_api_model: null,
+  },
+  subagents: {
+    event_max_per_flush: 200,
+    event_byte_budget_kb: 64,
+    usage_event_interval_ms: 1000,
+    hydration_buffer_kb: 256,
+    terminal_wave_ms: 250,
+    max_active_global: 8,
+    max_active_per_session: 4,
+    max_queued: 32,
+    terminal_retention: 25,
+    prompt_recent_terminal: 5,
+    prompt_task_max_chars: 200,
+  },
+  compaction: {
+    main: {
+      mode: 'simple',
+      threshold: 0.8,
+      model: null,
+      agent_name: 'compactor',
+      preserve_percent: 0.25,
+      min_compactable_tokens: 4000,
+      mechanical_reclaim: true,
+      hysteresis_delta: 0.1,
+      keep_last_user_messages: 10,
+      pin_first_user_message: true,
+    },
+    subagents: {
+      mode: 'simple',
+      threshold: 0.85,
+      model: null,
+      agent_name: 'compactor-subagent',
+      preserve_percent: 0.25,
+      min_compactable_tokens: 4000,
+      mechanical_reclaim: true,
+      hysteresis_delta: 0.1,
+      keep_last_user_messages: null,
+      pin_first_user_message: true,
+    },
   },
   ast_max_file_size: 1048576,
   mcp_startup_timeout: 60,
   mcp_per_server_timeout: 10,
   mcp_servers: {},
-  providers: {},
   llm_stream_idle_timeout: 300,
   llm_stream_retries: 3,
   background_command_idle_timeout: 900,
@@ -724,6 +769,20 @@ describe('ProjectConfigView helpers', () => {
   it('readStoredOverride returns undefined for rag keys when rag is not a record', () => {
     expect(readStoredOverride({ rag: [1] }, 'rag.chunk_size')).toBeUndefined();
     expect(readStoredOverride({ rag: 'bad' }, 'rag.chunk_size')).toBeUndefined();
+  });
+
+  it('readTierOverrides preserves explicit-null tier masks and drops invalid entries', () => {
+    const overrides = readTierOverrides({
+      tier_models: {
+        seed: null,
+        sprout: { connectionId: 'conn-a', modelId: 'model-b' },
+        bloom: 'not-a-selection',
+      },
+    });
+    expect(overrides.tierModels).toEqual({
+      seed: null,
+      sprout: { connectionId: 'conn-a', modelId: 'model-b' },
+    });
   });
 
   it('readGlobalValue reads top-level and nested rag values from config', () => {
