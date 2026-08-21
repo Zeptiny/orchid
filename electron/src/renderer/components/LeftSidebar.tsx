@@ -24,12 +24,14 @@ import {
   filterSessionsByQuery,
   groupSessionsByProject,
   normalizeWorkspaceKey,
+  type ProjectDeleteTarget,
   previewProjectSessions,
   PROJECT_SESSION_PREVIEW_LIMIT,
   truncatePathDisplay,
 } from '../utils/session-workspace';
 import { Icon } from './Icon';
 import { Button } from './ui/Button';
+import { DialogSurface } from './ui/DialogSurface';
 import { IconButton } from './ui/IconButton';
 import { SectionHeader } from './ui/SectionHeader';
 import { StateMessage } from './ui/StateMessage';
@@ -73,6 +75,11 @@ interface LeftSidebarProps {
   onPickProjectDir?: () => void;
   /** Start a new draft explicitly bound to one visible project group. */
   onProjectSessionCreate?: (projectDir: string) => void;
+  /**
+   * Delete every session in a project group. Receives the group label and all
+   * session ids — the group itself is derived and disappears once empty.
+   */
+  onProjectDelete?: (project: ProjectDeleteTarget) => void | Promise<unknown>;
   /** A project pick starts a draft instead of moving the selected session. */
   projectPickerCreatesDraft?: boolean;
   /** Global work across every project/window. Optional for ConfigView reuse. */
@@ -113,6 +120,7 @@ export const LeftSidebar = memo(function LeftSidebar({
   onProjectSelect,
   onPickProjectDir,
   onProjectSessionCreate,
+  onProjectDelete,
   projectPickerCreatesDraft = false,
   activities = [],
   onStopSession,
@@ -277,6 +285,7 @@ export const LeftSidebar = memo(function LeftSidebar({
             isUnbound={isUnbound}
             onPickProjectDir={onPickProjectDir}
             onProjectSessionCreate={onProjectSessionCreate}
+            onProjectDelete={onProjectDelete}
             isSearching={query.trim().length > 0}
           />
         )}
@@ -423,6 +432,47 @@ function UnboundEmptyState({
 
 // ── Always-visible project groups ───────────────────────────────────────────
 
+// Collapsed project groups persist across restarts via localStorage. The set
+// lives in a module-level store shared by every mounted ProjectSessionList
+// (ChatView stays mounted under Config/Analytics overlays, which render their
+// own sidebars) so two instances can never clobber each other's writes.
+const COLLAPSED_PROJECTS_KEY = 'orchid-sidebar-collapsed-projects';
+
+function loadCollapsedProjects(): Set<string> {
+  try {
+    const stored = localStorage.getItem(COLLAPSED_PROJECTS_KEY);
+    const parsed = stored ? JSON.parse(stored) : null;
+    if (Array.isArray(parsed)) {
+      return new Set(parsed.filter((key): key is string => typeof key === 'string'));
+    }
+  } catch {
+    // Missing or corrupted storage — start with nothing collapsed.
+  }
+  return new Set();
+}
+
+function saveCollapsedProjects(keys: ReadonlySet<string>): void {
+  try {
+    localStorage.setItem(COLLAPSED_PROJECTS_KEY, JSON.stringify([...keys]));
+  } catch {
+    // Non-fatal
+  }
+}
+
+const collapsedProjectsStoreListeners = new Set<(next: ReadonlySet<string>) => void>();
+const collapsedProjectsStore = {
+  current: loadCollapsedProjects(),
+  subscribe(listener: (next: ReadonlySet<string>) => void): () => void {
+    collapsedProjectsStoreListeners.add(listener);
+    return () => collapsedProjectsStoreListeners.delete(listener);
+  },
+  update(next: Set<string>): void {
+    collapsedProjectsStore.current = next;
+    saveCollapsedProjects(next);
+    for (const listener of collapsedProjectsStoreListeners) listener(next);
+  },
+};
+
 interface ProjectSessionListProps {
   state: SessionListState;
   projectGroups: Array<{
@@ -444,6 +494,7 @@ interface ProjectSessionListProps {
   isUnbound: boolean;
   onPickProjectDir?: () => void;
   onProjectSessionCreate?: (projectDir: string) => void;
+  onProjectDelete?: (project: ProjectDeleteTarget) => void | Promise<unknown>;
   isSearching: boolean;
 }
 
@@ -463,6 +514,7 @@ function ProjectSessionList({
   isUnbound,
   onPickProjectDir,
   onProjectSessionCreate,
+  onProjectDelete,
   isSearching,
 }: ProjectSessionListProps) {
   const listId = useId();
@@ -470,9 +522,20 @@ function ProjectSessionList({
   const [expandedProjects, setExpandedProjects] = useState<Set<string>>(
     () => new Set(),
   );
-  const [collapsedProjects, setCollapsedProjects] = useState<Set<string>>(
-    () => new Set(),
+  const [deleteConfirmKey, setDeleteConfirmKey] = useState<string | null>(null);
+  const [collapsedProjects, setCollapsedProjects] = useState<ReadonlySet<string>>(
+    () => collapsedProjectsStore.current,
   );
+  useEffect(
+    () => collapsedProjectsStore.subscribe(setCollapsedProjects),
+    [],
+  );
+  const toggleCollapsed = useCallback((key: string) => {
+    const next = new Set(collapsedProjectsStore.current);
+    if (next.has(key)) next.delete(key);
+    else next.add(key);
+    collapsedProjectsStore.update(next);
+  }, []);
   const activityBySession = useMemo(
     () => new Map(activities.map((activity) => [activity.sessionId, activity])),
     [activities],
@@ -571,7 +634,14 @@ function ProjectSessionList({
       : projectOnlySelection
         ? `${listId}-project-${selectedProjectKey}`
         : undefined;
+  const deleteConfirmProject = deleteConfirmKey == null
+    ? null
+    : projectGroups.find((group) => group.key === deleteConfirmKey) ?? null;
   const handleKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
+    // Portaled overlays (delete-confirm dialog) still bubble through the React
+    // tree to this handler; keys typed inside them must not drive the listbox.
+    if (deleteConfirmProject != null) return;
+    if (!listRef.current?.contains(event.target as Node)) return;
     onListKeyDown(event);
     if (event.defaultPrevented) return;
     const current = flatSessions[activeIndex];
@@ -631,12 +701,7 @@ function ProjectSessionList({
                     onProjectSelect(project.path);
                     return;
                   }
-                  setCollapsedProjects((previous) => {
-                    const next = new Set(previous);
-                    if (next.has(project.key)) next.delete(project.key);
-                    else next.add(project.key);
-                    return next;
-                  });
+                  toggleCollapsed(project.key);
                 }}
                 aria-expanded={!project.isCollapsed}
                 aria-controls={`${listId}-sessions-${project.key}`}
@@ -652,12 +717,7 @@ function ProjectSessionList({
                   role="presentation"
                   onClick={(event) => {
                     event.stopPropagation();
-                    setCollapsedProjects((previous) => {
-                      const next = new Set(previous);
-                      if (next.has(project.key)) next.delete(project.key);
-                      else next.add(project.key);
-                      return next;
-                    });
+                    toggleCollapsed(project.key);
                   }}
                 >
                   <Icon
@@ -689,6 +749,19 @@ function ProjectSessionList({
                 >
                   <Icon name="plus" size={13} />
                 </Button>
+              )}
+              {onProjectDelete && (
+                <IconButton
+                  label={`Delete all sessions in ${project.label}`}
+                  icon="trash"
+                  size="xs"
+                  iconSize={13}
+                  className="session-project-delete"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    setDeleteConfirmKey(project.key);
+                  }}
+                />
               )}
             </div>
             <div
@@ -748,6 +821,54 @@ function ProjectSessionList({
           </div>
         );
       })}
+
+      <DialogSurface
+        isOpen={deleteConfirmProject != null}
+        onClose={() => setDeleteConfirmKey(null)}
+        labelledBy={`${listId}-project-delete-title`}
+        describedBy={`${listId}-project-delete-desc`}
+        variant="modal"
+      >
+        {deleteConfirmProject && (
+          <div className="flex flex-col gap-3">
+            <h2
+              id={`${listId}-project-delete-title`}
+              className="text-lg font-semibold"
+            >
+              Delete {deleteConfirmProject.sessions.length} session
+              {deleteConfirmProject.sessions.length === 1 ? '' : 's'} in{' '}
+              {deleteConfirmProject.label}?
+            </h2>
+            <p
+              id={`${listId}-project-delete-desc`}
+              className="text-sm text-base-content/70"
+            >
+              Every session in this project is permanently deleted, including
+              history, todos, and subagent chains. Running sessions are stopped
+              first.
+            </p>
+            <div className="flex justify-end gap-2">
+              <Button size="sm" onClick={() => setDeleteConfirmKey(null)}>
+                Cancel
+              </Button>
+              <Button
+                variant="error"
+                size="sm"
+                onClick={() => {
+                  const target = deleteConfirmProject;
+                  setDeleteConfirmKey(null);
+                  void onProjectDelete?.({
+                    label: target.label,
+                    sessionIds: target.sessions.map((session) => session.id),
+                  });
+                }}
+              >
+                Delete project sessions
+              </Button>
+            </div>
+          </div>
+        )}
+      </DialogSurface>
     </div>
   );
 }

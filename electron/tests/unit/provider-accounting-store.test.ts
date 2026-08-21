@@ -31,9 +31,9 @@ function snapshot(): FrozenProviderRequestSnapshot {
   };
 }
 
-function createStore() {
+function createStore(now?: () => Date) {
   tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'orchid-accounting-'));
-  return new ProviderAccountingStore({ dbPath: path.join(tempDir, 'accounting.db') });
+  return new ProviderAccountingStore({ dbPath: path.join(tempDir, 'accounting.db'), ...(now ? { now } : {}) });
 }
 
 describe('ProviderAccountingStore', () => {
@@ -119,6 +119,80 @@ describe('ProviderAccountingStore', () => {
     ]);
     expect(totals.currencies.every((row) => !('unknownCount' in row))).toBe(true);
     store.close();
+  });
+
+  it('stamps first_token_at once per attempt (IS NULL guard keeps it idempotent)', () => {
+    let clockMs = Date.parse('2026-07-12T10:00:00.000Z');
+    const store = createStore(() => new Date(clockMs));
+    store.insertPending({ attemptId: 'ttft-1', sessionId: 'session-1', chainId: null, turnId: null, sdkCallId: null, snapshot: snapshot() });
+    store.markFirstToken('ttft-1');
+    const stamped = (store.getDatabase()
+      .prepare('SELECT first_token_at FROM provider_attempts WHERE attempt_id = ?')
+      .get('ttft-1') as { first_token_at: string | null }).first_token_at;
+    expect(stamped).not.toBeNull();
+
+    // A late duplicate call at a later clock time must not overwrite the
+    // original stamp — the guard is the IS NULL clause, not clock granularity.
+    clockMs += 5000;
+    store.markFirstToken('ttft-1');
+    const again = (store.getDatabase()
+      .prepare('SELECT first_token_at FROM provider_attempts WHERE attempt_id = ?')
+      .get('ttft-1') as { first_token_at: string | null }).first_token_at;
+    expect(again).toBe(stamped);
+    store.close();
+  });
+
+  it('markFirstTokenAt writes the given timestamp and never lets a later stamp overwrite it', () => {
+    let clockMs = Date.parse('2026-07-12T11:00:00.000Z');
+    const store = createStore(() => new Date(clockMs));
+    store.insertPending({ attemptId: 'ttft-at-1', sessionId: 'session-1', chainId: null, turnId: null, sdkCallId: null, snapshot: snapshot() });
+
+    // The delta observes the clock; the deferred write persists that instant.
+    const eventAt = '2026-07-12T10:59:59.500Z';
+    store.markFirstTokenAt('ttft-at-1', eventAt);
+    const stamped = (store.getDatabase()
+      .prepare('SELECT first_token_at FROM provider_attempts WHERE attempt_id = ?')
+      .get('ttft-at-1') as { first_token_at: string | null }).first_token_at;
+    expect(stamped).toBe(eventAt);
+
+    // A later duplicate stamp with a later explicit timestamp must not
+    // overwrite the original — the guard is the IS NULL clause.
+    clockMs += 5000;
+    store.markFirstTokenAt('ttft-at-1', new Date(clockMs).toISOString());
+    const again = (store.getDatabase()
+      .prepare('SELECT first_token_at FROM provider_attempts WHERE attempt_id = ?')
+      .get('ttft-at-1') as { first_token_at: string | null }).first_token_at;
+    expect(again).toBe(eventAt);
+    store.close();
+  });
+
+  it('clearSessionNameTombstones removes every tombstone and reports the change count', () => {
+    const store = createStore();
+    store.upsertSessionNameTombstone('session-a', 'Alpha');
+    store.upsertSessionNameTombstone('session-b', 'Beta');
+    expect(store.getSessionNameTombstones(['session-a', 'session-b']).size).toBe(2);
+
+    expect(store.clearSessionNameTombstones()).toBe(2);
+    expect(store.getSessionNameTombstones(['session-a', 'session-b'])).toEqual(new Map());
+    // An already-empty table clears as a no-op.
+    expect(store.clearSessionNameTombstones()).toBe(0);
+    store.close();
+  });
+
+  it('never regresses a recorded schema_version when an older binary reopens the ledger', () => {
+    const store = createStore();
+    store.getDatabase().prepare(
+      "UPDATE schema_meta SET value = '99' WHERE key = 'schema_version'",
+    ).run();
+    store.close();
+
+    // A new open with the compiled-in version must not downgrade 99.
+    const reopened = new ProviderAccountingStore({ dbPath: path.join(tempDir!, 'accounting.db') });
+    const version = reopened.getDatabase()
+      .prepare("SELECT value FROM schema_meta WHERE key = 'schema_version'")
+      .get() as { value: string };
+    expect(Number(version.value)).toBeGreaterThanOrEqual(99);
+    reopened.close();
   });
 
   it('marks abandoned pending rows interrupted exactly once on restart recovery', () => {

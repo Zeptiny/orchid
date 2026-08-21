@@ -84,6 +84,24 @@ Shared domain vocabulary for the orchid project. This file defines terms used ac
 - **Service Tier Mechanism** — Provider tiering expressed either as a request parameter (e.g. OpenRouter `service_tier`) or model-name variants (e.g. Neuralwatt `-flex`/`-fast`/`-short`). Variant tiers are grouped under one base model entry with no duplicate rows; selection is per-model with session override.
 - **Unified Model Listing** — The single per-connection model list that treats catalog, live-discovered, and user-custom models identically (enable/disable, pricing override, reasoning levels, tier selection), distinguished only by a provenance badge.
 
+## Context Compaction
+
+- **Context Compaction** — Replacing old conversation history in the model's view with a summary so the context window is freed, while the full transcript stays visible to the user. Compaction replaces history by exclusion, never by deletion.
+- **Compactable Range** — The leading slice of a conversation eligible for compaction, ending at a cut point chosen so tool calls and their results are never split.
+- **Preserved Window** — The verbatim suffix after the cut that compaction leaves untouched, sized as a fraction of the context window.
+- **Summary Head** — The synthetic assistant message, carrying a compacted marker, that stands in for a summarized range in the model view. It lives inline inside the owning chain at the cut position (both scopes) — never as its own chain row — so a turn's chain stays a single row across any number of compactions.
+- **Pending Compaction** — A compaction prepared (cut captured, compactor LLM started) but not yet applied; registered at the prepare-time fire point and re-validated against the live history at the apply boundary. Its staleness protection is the prepare-time expected-id sequence — the range must still hold the same message ids at the same positions.
+- **Fire Point** — Any of the places compaction can be triggered: the send-time gate, the mid-turn usage event, and the overflow retry. The usage fire point is fire-and-forget (the compactor runs while the turn pauses); the overflow retry is an emergency path that bypasses cooldowns.
+- **Apply-Failure Backoff** — The cooldown armed whenever a pending compaction is discarded without applying, so the usage fire point stops re-preparing on every step while an earlier compactor run may still be in flight. A successful apply clears it.
+- **Model Exclusion** — A per-message flag that keeps a message in the transcript while removing it from the model view; cancelled tool results and compacted originals carry it. Selective mode never applies it to user messages.
+- **Compacted Run** — A maximal run of consecutive model-excluded messages rendered collapsed as one "Compacted N messages" disclosure stub. Runs may span chain boundaries (split/mirrored durable rows); the run — not the chain — is the renderer's grouping unit. Kept thinking — leading, interleaved, or trailing before the head — and interleaved kept assistant text join the run, so one compaction renders as one stub; the count reports only messages actually hidden from the model, and expansion shows everything at full fidelity.
+- **Re-summarization Rule** — One logical compaction persists exactly ONE summary head, and a later compactable range may contain prior heads at any depth: they are superseded (flagged and replaced by the new head), never treated as an error. Rejecting a range for containing summary heads deadlocks all later compactions.
+- **Mechanical Reclaim** — The deterministic pre-pass that flags exact-duplicate tool outputs (same tool, normalized args, and output) without any LLM call; when it alone drops usage below the re-arm line, the summarizer is skipped.
+
+### Retired: Chain Split
+
+The earlier design where a compaction cut inside a chain divided it into a flagged prefix row, a summary-head row, and a continuing row. Removed after it corrupted live transcripts: multi-row turns starved the bounded renderer view and compounded into duplicate "ladder" rows under mid-turn resume. "Chain split" now refers only to legacy sessions carrying that layout.
+
 ## Trusted Projects
 
 - **Trust State** — The posture of a bound project directory: `trusted` (granted and fingerprint-current, or a bare project auto-trusted), `untrusted` (has a project surface with no grant), or `changed` (previously trusted but the surface fingerprint drifted).

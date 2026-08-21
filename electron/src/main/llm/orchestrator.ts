@@ -315,6 +315,7 @@ export async function* streamChat(params: StreamChatParams): AsyncGenerator<Stre
               toolUseTokens: stepUsage.context.tool_use_tokens,
               userTokens: stepUsage.context.user_tokens,
               assistantTokens: stepUsage.context.assistant_tokens,
+              summaryTokens: stepUsage.context.summary_tokens ?? 0,
             });
           } catch (error) {
             console.warn('[orchestrator] Context snapshot insert failed', { error });

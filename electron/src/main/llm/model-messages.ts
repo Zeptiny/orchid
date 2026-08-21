@@ -98,7 +98,15 @@ export function toModelMessages(
           : contentArray.length > 0
             ? contentArray
             : '';
-      modelMessages.push({ role: MessageRole.ASSISTANT, content });
+      // Compaction summary heads keep their marker through replay so the
+      // per-step context snapshot can bucket summary tokens (R19). The marker
+      // is an annotation read by the snapshot builder only — never serialized
+      // into a provider request.
+      modelMessages.push({
+        role: MessageRole.ASSISTANT,
+        content,
+        ...(message.compacted ? { compacted: message.compacted } : {}),
+      } as ModelMessage);
       continue;
     }
 

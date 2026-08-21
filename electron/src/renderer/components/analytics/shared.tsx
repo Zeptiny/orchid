@@ -10,6 +10,34 @@ export function formatTokenCount(n: number): string {
   return String(n);
 }
 
+/**
+ * Stacked-token netting: provider-reported inputTokens includes cache-read and
+ * outputTokens includes reasoning, so stacked charts display the net values.
+ */
+export function netInputTokens(inputTokens: number, cacheReadTokens: number): number {
+  return Math.max(0, inputTokens - cacheReadTokens);
+}
+
+export function netOutputTokens(outputTokens: number, reasoningTokens: number): number {
+  return Math.max(0, outputTokens - reasoningTokens);
+}
+
+export function tokenStackTooltipRows(
+  inputTokens: number,
+  cacheReadTokens: number,
+  outputTokens: number,
+  reasoningTokens: number,
+): ReadonlyArray<{ name: string; value: number }> {
+  return [
+    { name: 'Input (net of cache)', value: netInputTokens(inputTokens, cacheReadTokens) },
+    { name: 'Cache Read', value: cacheReadTokens },
+    { name: 'Output (net of reasoning)', value: netOutputTokens(outputTokens, reasoningTokens) },
+    { name: 'Reasoning', value: reasoningTokens },
+    { name: 'Input (raw)', value: inputTokens },
+    { name: 'Output (raw)', value: outputTokens },
+  ];
+}
+
 export function formatCost(currencies: ReadonlyArray<{ currency: string; amount: string }>): string {
   if (currencies.length === 0) return '—';
   return currencies.map((c) => formatCostAmount(c.amount, c.currency)).join(', ');
@@ -21,6 +49,14 @@ export function formatCostAmount(amount: string | null, currency: string | null)
   if (!Number.isFinite(n)) return '—';
   const formatted = n.toFixed(4);
   return currency ? `${currency} ${formatted}` : formatted;
+}
+
+/** Sort key for multi-currency cost columns: the largest amount across
+ *  currencies, floored at zero so empty/negative inputs never lead.
+ *  Non-finite amounts are excluded (mirrors formatCostAmount) so malformed
+ *  rows can never make the key NaN. */
+export function maxCostAmount(totalCost: ReadonlyArray<{ currency: string; amount: string }>): number {
+  return Math.max(...totalCost.map((c) => Number(c.amount)).filter(Number.isFinite), 0);
 }
 
 /**
@@ -38,6 +74,17 @@ export function formatDuration(ms: number | null): string {
   if (ms === null || ms <= 0) return '—';
   if (ms < 1000) return `${Math.round(ms)}ms`;
   return `${(ms / 1000).toFixed(1)}s`;
+}
+
+/** Format a tokens-per-second rate; null (no latency samples) renders as an em dash. */
+export function formatTps(tps: number | null): string {
+  if (tps === null) return '—';
+  return `${tps.toFixed(1)} tok/s`;
+}
+
+/** Format a time-to-first-token duration (same scale rules as {@link formatDuration}). */
+export function formatTtft(ms: number | null): string {
+  return formatDuration(ms);
 }
 
 export function formatBytes(bytes: number | null): string {
@@ -61,6 +108,13 @@ export function formatDate(iso: string | null): string {
   const hh = String(d.getUTCHours()).padStart(2, '0');
   const min = String(d.getUTCMinutes()).padStart(2, '0');
   return `${yyyy}-${mm}-${dd} ${hh}:${min} UTC`;
+}
+
+/** Sort key for ISO date columns: null/unparseable → 0. For equal-format
+ *  ISO-8601 strings, epoch-ms ordering matches lexicographic ordering. */
+export function dateSortValue(iso: string | null): number {
+  const ms = Date.parse(iso ?? '');
+  return Number.isNaN(ms) ? 0 : ms;
 }
 
 export function truncateId(id: string, len = 8): string {
@@ -168,9 +222,12 @@ interface SortableTableColumn<T> {
   key: string;
   label: string;
   sortable?: boolean;
+  initialDir?: 'asc' | 'desc';
   sortValue?: (row: T) => string | number;
   render: (row: T) => ReactNode;
 }
+
+export type Column<T> = SortableTableColumn<T>;
 
 interface SortableTableProps<T> {
   columns: ReadonlyArray<SortableTableColumn<T>>;
@@ -194,7 +251,9 @@ export function SortableTable<T>({
     [columns],
   );
   const [sortKey, setSortKey] = useState<string | null>(firstSortableKey);
-  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc');
+  const [sortDir, setSortDir] = useState<'asc' | 'desc'>(
+    () => columns.find((c) => c.key === firstSortableKey)?.initialDir ?? 'asc',
+  );
   const [page, setPage] = useState(0);
 
   const handleSort = (key: string) => {
@@ -202,7 +261,7 @@ export function SortableTable<T>({
       setSortDir((prev) => (prev === 'asc' ? 'desc' : 'asc'));
     } else {
       setSortKey(key);
-      setSortDir('asc');
+      setSortDir(columns.find((c) => c.key === key)?.initialDir ?? 'asc');
     }
     setPage(0);
   };
@@ -277,29 +336,51 @@ export function SortableTable<T>({
         </table>
       </div>
       {pageSize && sortedRows.length > pageSize && (
-        <div className="flex items-center justify-between px-1 py-2 text-xs text-base-content/50">
-          <span>
-            {clampedPage * pageSize + 1}–{Math.min((clampedPage + 1) * pageSize, sortedRows.length)} of {sortedRows.length}
-          </span>
-          <div className="flex gap-1">
-            <button
-              className="rounded px-2 py-1 hover:bg-base-200 disabled:opacity-30"
-              onClick={() => setPage((p) => Math.max(0, p - 1))}
-              disabled={clampedPage === 0}
-            >
-              ← Prev
-            </button>
-            <span className="px-2 py-1">Page {clampedPage + 1}/{totalPages}</span>
-            <button
-              className="rounded px-2 py-1 hover:bg-base-200 disabled:opacity-30"
-              onClick={() => setPage((p) => Math.min(totalPages - 1, p + 1))}
-              disabled={clampedPage >= totalPages - 1}
-            >
-              Next →
-            </button>
-          </div>
-        </div>
+        <TablePager
+          page={clampedPage}
+          totalPages={totalPages}
+          totalItems={sortedRows.length}
+          pageSize={pageSize}
+          onPageChange={setPage}
+        />
       )}
+    </div>
+  );
+}
+
+interface TablePagerProps {
+  /** Zero-based current page. */
+  page: number;
+  totalPages: number;
+  totalItems: number;
+  pageSize: number;
+  onPageChange: (page: number) => void;
+}
+
+/** Shared pager for paged analytics tables: range label + Prev/Next controls. */
+export function TablePager({ page, totalPages, totalItems, pageSize, onPageChange }: TablePagerProps) {
+  return (
+    <div className="flex items-center justify-between px-1 py-2 text-xs text-base-content/50">
+      <span>
+        {page * pageSize + 1}–{Math.min((page + 1) * pageSize, totalItems)} of {totalItems}
+      </span>
+      <div className="flex gap-1">
+        <button
+          className="rounded px-2 py-1 hover:bg-base-200 disabled:opacity-30"
+          onClick={() => onPageChange(Math.max(0, page - 1))}
+          disabled={page === 0}
+        >
+          ← Prev
+        </button>
+        <span className="px-2 py-1">Page {page + 1}/{totalPages}</span>
+        <button
+          className="rounded px-2 py-1 hover:bg-base-200 disabled:opacity-30"
+          onClick={() => onPageChange(Math.min(totalPages - 1, page + 1))}
+          disabled={page >= totalPages - 1}
+        >
+          Next →
+        </button>
+      </div>
     </div>
   );
 }

@@ -79,6 +79,147 @@ describe('provider attempt accounting middleware', () => {
     });
   });
 
+  it('stamps first_token_at on the first streamed content delta only', async () => {
+    const ledger = store();
+    const usage = {
+      inputTokens: { total: 10, noCache: 10, cacheRead: undefined, cacheWrite: undefined },
+      outputTokens: { total: 5, text: 5, reasoning: undefined },
+    };
+    const runStream = async (sessionId: string, parts: unknown[]): Promise<void> => {
+      const middleware = createAttemptAccountingMiddleware({
+        store: ledger, sessionId, chainId: 'chain-1', turnId: 'turn-1', snapshot: snapshot(),
+      });
+      const wrapStream = middleware.wrapStream! as unknown as (input: Record<string, unknown>) => Promise<{ stream: ReadableStream<unknown> }>;
+      const result = await wrapStream({
+        doStream: async () => ({
+          response: { headers: {} },
+          stream: new ReadableStream({
+            start(controller) {
+              for (const part of parts) controller.enqueue(part);
+              controller.close();
+            },
+          }),
+        }),
+        doGenerate: async () => { throw new Error('not used'); },
+        params: {}, model: {},
+      });
+      await consume(result.stream);
+    };
+    const firstTokenAt = (sessionId: string): string | null => (ledger.getDatabase()
+      .prepare('SELECT first_token_at FROM provider_attempts WHERE session_id = ?')
+      .get(sessionId) as { first_token_at: string | null }).first_token_at;
+
+    // Metadata/raw/finish parts never count; the text-delta is the first token.
+    await runStream('session-deltas', [
+      { type: 'stream-start', warnings: [] },
+      { type: 'response-metadata', id: '0', timestamp: '2026-07-12T10:00:00.000Z', modelId: 'claude-test' },
+      { type: 'raw', rawValue: { chunk: {} } },
+      { type: 'text-delta', id: '0', delta: 'first' },
+      { type: 'reasoning-delta', id: '0', delta: 'later' },
+      { type: 'finish', finishReason: 'stop', usage },
+    ]);
+    expect(firstTokenAt('session-deltas')).not.toBeNull();
+
+    // A finish-only stream produced no content token, so no stamp is written.
+    await runStream('session-finish-only', [
+      { type: 'finish', finishReason: 'stop', usage },
+    ]);
+    expect(firstTokenAt('session-finish-only')).toBeNull();
+
+    // Metadata/raw parts alone never stamp — only content deltas do.
+    await runStream('session-non-content', [
+      { type: 'stream-start', warnings: [] },
+      { type: 'response-metadata', id: '0', timestamp: '2026-07-12T10:00:00.000Z', modelId: 'claude-test' },
+      { type: 'raw', rawValue: { chunk: {} } },
+      { type: 'finish', finishReason: 'stop', usage },
+    ]);
+    expect(firstTokenAt('session-non-content')).toBeNull();
+
+    // Reasoning and tool-input deltas count as first tokens too.
+    await runStream('session-reasoning-first', [
+      { type: 'reasoning-delta', id: '0', delta: 'think' },
+      { type: 'finish', finishReason: 'stop', usage },
+    ]);
+    expect(firstTokenAt('session-reasoning-first')).not.toBeNull();
+    await runStream('session-tool-input-first', [
+      { type: 'tool-input-delta', id: '0', toolName: 'read', delta: '{"f' },
+      { type: 'finish', finishReason: 'stop', usage },
+    ]);
+    expect(firstTokenAt('session-tool-input-first')).not.toBeNull();
+    ledger.close();
+  });
+
+  it('keeps the first-token stamp when the stream errors after content', async () => {
+    const ledger = store();
+    const middleware = createAttemptAccountingMiddleware({
+      store: ledger, sessionId: 'session-err', chainId: 'chain-1', turnId: 'turn-1', snapshot: snapshot(),
+    });
+    const wrapStream = middleware.wrapStream! as unknown as (input: Record<string, unknown>) => Promise<{ stream: ReadableStream<unknown> }>;
+    const result = await wrapStream({
+      doStream: async () => ({
+        response: { headers: {} },
+        stream: new ReadableStream({
+          start(controller) {
+            controller.enqueue({ type: 'text-delta', id: '0', delta: 'partial' });
+            controller.enqueue({ type: 'error', error: new Error('boom') });
+            controller.close();
+          },
+        }),
+      }),
+      doGenerate: async () => { throw new Error('not used'); },
+      params: {}, model: {},
+    });
+    await consume(result.stream);
+    // The durable write is deferred to a microtask; flush before asserting.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const row = ledger.getDatabase()
+      .prepare('SELECT outcome, first_token_at FROM provider_attempts WHERE session_id = ?')
+      .get('session-err') as { outcome: string; first_token_at: string | null };
+    expect(row.outcome).toBe('failed');
+    expect(row.first_token_at).not.toBeNull();
+    ledger.close();
+  });
+
+  it('records the delta-time timestamp even when the stream errors immediately after content', async () => {
+    const ledger = store();
+    const middleware = createAttemptAccountingMiddleware({
+      store: ledger, sessionId: 'session-err-immediate', chainId: 'chain-1', turnId: 'turn-1', snapshot: snapshot(),
+    });
+    const wrapStream = middleware.wrapStream! as unknown as (input: Record<string, unknown>) => Promise<{ stream: ReadableStream<unknown> }>;
+    const before = Date.now();
+    const result = await wrapStream({
+      doStream: async () => ({
+        response: { headers: {} },
+        stream: new ReadableStream({
+          start(controller) {
+            controller.enqueue({ type: 'text-delta', id: '0', delta: 'partial' });
+            controller.enqueue({ type: 'error', error: new Error('boom') });
+            controller.close();
+          },
+        }),
+      }),
+      doGenerate: async () => { throw new Error('not used'); },
+      params: {}, model: {},
+    });
+    await consume(result.stream);
+    // The durable write is deferred to a microtask; flush before asserting.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const after = Date.now();
+
+    const row = ledger.getDatabase()
+      .prepare('SELECT outcome, first_token_at FROM provider_attempts WHERE session_id = ?')
+      .get('session-err-immediate') as { outcome: string; first_token_at: string | null };
+    expect(row.outcome).toBe('failed');
+    // TTFT accuracy: the timestamp is captured at the delta, not at the (later)
+    // deferred write — it must sit inside the wall-clock window of the run.
+    expect(row.first_token_at).not.toBeNull();
+    const stampedMs = Date.parse(row.first_token_at!);
+    expect(stampedMs).toBeGreaterThanOrEqual(before);
+    expect(stampedMs).toBeLessThanOrEqual(after);
+    ledger.close();
+  });
+
   it('estimates reasoning tokens from output characters when the provider does not report them', async () => {
     const ledger = store();
     const middleware = createAttemptAccountingMiddleware({
@@ -389,6 +530,61 @@ describe('provider attempt accounting middleware', () => {
     expect(attempt).toMatchObject({ outcome: 'succeeded', costState: 'calculated', costAmount: '0.00095' });
     expect(attempt.providerEvidence.servedTier).toMatchObject({
       tier: 'flex', servedModelId: 'glm-5.2-flex', baseModelId: 'glm-5.2', requestedTier: 'flex',
+    });
+    ledger.close();
+  });
+
+  it('records the generic usage-body cost report through the compatible driver facet', async () => {
+    const ledger = store();
+    const { createCompatibleProviderDrivers } = await import('../../src/main/providers/drivers/compatible');
+    const facet = createCompatibleProviderDrivers()[0].pricingFacet;
+    const genericSnapshot = snapshot();
+    genericSnapshot.providerId = 'generic-openai-compatible';
+    genericSnapshot.protocol = 'openai-compatible';
+    const middleware = createAttemptAccountingMiddleware({
+      store: ledger, sessionId: 'session-1', chainId: 'chain-1', turnId: 'turn-1',
+      snapshot: genericSnapshot,
+      pricingFacet: facet,
+    });
+    const wrapStream = middleware.wrapStream! as unknown as (input: Record<string, unknown>) => Promise<{ stream: ReadableStream<unknown> }>;
+    const result = await wrapStream({
+      doStream: async () => ({
+        response: { headers: {} },
+        stream: new ReadableStream({
+          start(controller) {
+            controller.enqueue({
+              type: 'finish', finishReason: 'stop',
+              usage: {
+                inputTokens: { total: 15, noCache: 15, cacheRead: undefined, cacheWrite: undefined },
+                outputTokens: { total: 16, text: 16, reasoning: undefined },
+                raw: {
+                  prompt_tokens: 15,
+                  completion_tokens: 16,
+                  cost: 0.0000914,
+                  cost_details: { upstream_inference_cost: 0.0000914 },
+                },
+              },
+            });
+            controller.close();
+          },
+        }),
+      }),
+      doGenerate: async () => { throw new Error('not used'); },
+      params: {}, model: {},
+    });
+    await consume(result.stream);
+
+    expect(ledger.listAttempts('session-1')[0]).toMatchObject({
+      outcome: 'succeeded',
+      costState: 'reported',
+      costSource: 'provider-reported',
+      costAmount: '0.0000914',
+      providerEvidence: {
+        'generic-openai-compatible': {
+          reportedUsageCostUsd: '0.0000914',
+          costDetails: { upstream_inference_cost: 0.0000914 },
+        },
+      },
     });
     ledger.close();
   });

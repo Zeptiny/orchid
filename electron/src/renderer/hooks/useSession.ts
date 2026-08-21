@@ -121,6 +121,16 @@ let draftGeneration = 0;
 let loadGeneration = 0;
 /** Monotonic generation so older session:list responses cannot win. */
 let listRefreshGeneration = 0;
+let pendingSwitchSessionId: string | null = null;
+/**
+ * Sessions whose compaction reload is in flight. A compaction splits chains
+ * (flagged prefix + summary head get FRESH ids), and the incremental
+ * SESSION_UPDATED handler can only append unknown ids at the tail — which
+ * would place the compacted stub + summary after the preserved window until
+ * the reload lands. Append-only updates are held back for that window; the
+ * reload commits every chain at its durable ordinal.
+ */
+const compactionReloads = new Set<string>();
 let bootstrapped = false;
 const listeners = new Set<Listener>();
 const unsubscribers: Array<() => void> = [];
@@ -332,15 +342,43 @@ function ensureBootstrapped(): void {
           // a session after New Chat/draft (prev === null) from a late event.
           if (prev?.id !== event.sessionId) return prev;
           const chainIndex = prev.chains.findIndex((chain) => chain.id === event.chain.id);
-          const chains = chainIndex < 0
-            ? [...prev.chains, event.chain]
-            : prev.chains.map((chain, index) => index === chainIndex ? event.chain : chain);
+          if (chainIndex < 0) {
+            // Unknown chain ids arriving while a compaction reload is in
+            // flight are the compaction's split prefix/summary chains —
+            // appending them mid-reload orders the compacted stub + summary
+            // after the preserved window. The reload places every chain at
+            // its durable ordinal instead.
+            if (compactionReloads.has(event.sessionId)) return prev;
+            return {
+              ...prev,
+              chains: [...prev.chains, event.chain],
+              activeChainId: event.activeChainId,
+              updatedAt: event.updatedAt,
+            };
+          }
           return {
             ...prev,
-            chains,
+            chains: prev.chains.map((chain, index) => index === chainIndex ? event.chain : chain),
             activeChainId: event.activeChainId,
             updatedAt: event.updatedAt,
           };
+        });
+      }),
+    );
+  }
+
+  // Compaction rewrites multiple chains and inserts a summary — reload the
+  // full session so the new summary and collapsed stubs appear immediately
+  // without requiring an exit/re-enter. Uses the existing open path which
+  // already handles generation gating and workspace refresh.
+  if (window.orchid?.session?.onCompaction) {
+    unsubscribers.push(
+      window.orchid.session.onCompaction((event) => {
+        if (pendingSwitchSessionId != null && pendingSwitchSessionId !== event.sessionId) return;
+        if (activeSession?.id !== event.sessionId) return;
+        compactionReloads.add(event.sessionId);
+        void openShared(event.sessionId).finally(() => {
+          compactionReloads.delete(event.sessionId);
         });
       }),
     );
@@ -363,6 +401,7 @@ async function loadShared(id: string): Promise<Session | null> {
 
   const generation = ++loadGeneration;
   advanceDraftGeneration();
+  pendingSwitchSessionId = id;
   try {
     const session = await window.orchid.session.load({ id });
     // Drop stale responses when a newer load (or draft) superseded this one.
@@ -376,6 +415,8 @@ async function loadShared(id: string): Promise<Session | null> {
   } catch (err) {
     console.error('Failed to load session:', err);
     return null;
+  } finally {
+    if (pendingSwitchSessionId === id) pendingSwitchSessionId = null;
   }
 }
 
@@ -386,6 +427,7 @@ async function openShared(id: string): Promise<SessionOpenResult | null> {
 
   const generation = ++loadGeneration;
   advanceDraftGeneration();
+  pendingSwitchSessionId = id;
   try {
     const result = await window.orchid.session.open({ id });
     // Drop stale responses when a newer load (or draft) superseded this one.
@@ -402,6 +444,8 @@ async function openShared(id: string): Promise<SessionOpenResult | null> {
   } catch (err) {
     console.error('Failed to open session:', err);
     return null;
+  } finally {
+    if (pendingSwitchSessionId === id) pendingSwitchSessionId = null;
   }
 }
 
@@ -480,11 +524,16 @@ async function createShared(): Promise<Session> {
 async function enterDraftShared(): Promise<void> {
   loadGeneration += 1;
   advanceDraftGeneration();
-  if (window.orchid?.session?.clearActive) {
-    await window.orchid.session.clearActive();
+  pendingSwitchSessionId = '__draft__';
+  try {
+    if (window.orchid?.session?.clearActive) {
+      await window.orchid.session.clearActive();
+    }
+    setActiveSession(null);
+    void getWorkspaceShared();
+  } finally {
+    if (pendingSwitchSessionId === '__draft__') pendingSwitchSessionId = null;
   }
-  setActiveSession(null);
-  void getWorkspaceShared();
 }
 
 async function pickProjectDirShared(): Promise<WorkspaceInfo | null> {

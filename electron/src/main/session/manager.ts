@@ -28,6 +28,7 @@ import { ChainStatus, type Chain } from '../../shared/types/chain';
 import type { SubagentRecord, SubagentSummary } from '../../shared/types/subagent';
 import type { PermissionMode } from '../../shared/types/permission';
 import { normalizeAgentScopeId } from '../../shared/types/agent-scope';
+import { getProviderAccountingStore } from '../providers/accounting/store';
 import {
   canonicalizeProjectDirectory,
   inspectProjectDirectory,
@@ -43,6 +44,7 @@ import {
   loadSession as storageLoadSession,
   loadSessionForReplacement as storageLoadSessionForReplacement,
   loadSessionView as storageLoadSessionView,
+  loadSessionViewUnrecovered as storageLoadSessionViewUnrecovered,
   loadSessionHistoryPage as storageLoadSessionHistoryPage,
   loadSessionMessages as storageLoadSessionMessages,
   loadSubagentRecord as storageLoadSubagentRecord,
@@ -50,14 +52,21 @@ import {
   loadSubagentSummaries as storageLoadSubagentSummaries,
   listSubagentRecordIds as storageListSubagentRecordIds,
   deleteSession as storageDeleteSession,
+  getSessionNames as storageGetSessionNames,
   listSavedSessions as storageListSavedSessions,
   updateChain as storageUpdateChain,
   updateSessionFields as storageUpdateSessionFields,
   upsertSubagentRecords as storageUpsertSubagentRecords,
+  applyCompactionPersistence as storageApplyCompactionPersistence,
+  applySubagentCompactionPersistence as storageApplySubagentCompactionPersistence,
   type SessionFieldsUpdate,
   type SessionHistoryPage,
   type StorageOptions,
   type SessionSummary,
+  type CompactionPersistencePayload,
+  type CompactionPersistenceResult,
+  type SubagentCompactionPayload,
+  type SubagentCompactionResult,
 } from './storage';
 
 // ---------------------------------------------------------------------------
@@ -178,6 +187,100 @@ export class SessionManager {
   }
 
   /**
+   * Replace the in-memory cache for a session while enforcing invariants.
+   * Used by cross-cutting persistence flows (compaction) that need to update
+   * the cache after a durable write without touching private state.
+   * Enforces that activeChainId (when non-null) refers to an existing chain.
+   */
+  setCachedSession(session: Session): void {
+    if (!session || typeof session.id !== 'string' || session.id.length === 0) {
+      throw new Error('setCachedSession: invalid session id');
+    }
+    if (session.activeChainId != null) {
+      const exists = session.chains.some((c) => c.id === session.activeChainId);
+      if (!exists) {
+        throw new Error(`setCachedSession: activeChainId ${session.activeChainId} not found in chains`);
+      }
+    }
+    this._sessions.set(session.id, session);
+  }
+
+  /**
+   * Refresh the cached session from durable rows WITHOUT restart recovery.
+   *
+   * A compaction durable write restructures the chain rows (flags + summary
+   * head + splits). Serving the pre-split cached view afterwards mis-orders
+   * the renderer — the summary spliced above the turn's user message, the
+   * next checkpoint update deleting the user message from view, superseded
+   * heads rendering as count-1 stubs — because session:open reuses this
+   * cache for the compaction reload. The refreshed cache matches exactly what
+   * a renderer reload reads from storage. Non-chain session fields keep their
+   * cached (live) values.
+   */
+  refreshCachedSessionFromStorage(sessionId: string): Session | null {
+    const reloaded = storageLoadSessionViewUnrecovered(sessionId, this._storageOpts);
+    if (!reloaded) return null;
+    const existing = this._sessions.get(sessionId);
+    const merged: Session = existing
+      ? {
+          ...reloaded,
+          name: existing.name,
+          selection: existing.selection,
+          modelLabel: existing.modelLabel,
+          cwd: existing.cwd,
+          todoStore: existing.todoStore,
+          subagentChains: existing.subagentChains,
+          reasoningEffortOverride: existing.reasoningEffortOverride,
+          tierOverride: existing.tierOverride,
+          permissionMode: existing.permissionMode,
+          createdAt: existing.createdAt,
+        }
+      : reloaded;
+    this._sessions.set(sessionId, merged);
+    return merged;
+  }
+
+  /**
+   * Targeted, single-transaction compaction write (P0 data-safety path).
+   *
+   * Flags and the summary head are applied directly against durable chain
+   * rows; chains not touched by the compaction and every `subagent_chains`
+   * row are left exactly as they are. Unlike a wholesale saveSession, this
+   * never sources content from the (possibly partial) in-memory view, so it
+   * cannot truncate pre-window history for sessions that exceed the view
+   * budget. Throws loudly on integrity failures; callers must not fall back
+   * to a full save from a view when it fails.
+   */
+  applyCompaction(
+    sessionId: string,
+    payload: CompactionPersistencePayload,
+  ): CompactionPersistenceResult {
+    return storageApplyCompactionPersistence(sessionId, payload, this._storageOpts);
+  }
+
+  /**
+   * Targeted, single-transaction subagent-chain compaction write (R36).
+   *
+   * Mirrors `applyCompaction` over the `subagent_chains` table: flags and the
+   * summary head are applied directly against the durable `record_json` for the
+   * given subagent. Sibling subagent rows and every `chains` row are left
+   * exactly as they are. Throws loudly on integrity failures; callers must not
+   * fall back to a full save from a view when it fails.
+   */
+  applySubagentCompaction(
+    sessionId: string,
+    subagentId: string,
+    payload: SubagentCompactionPayload,
+  ): SubagentCompactionResult {
+    return storageApplySubagentCompactionPersistence(
+      sessionId,
+      subagentId,
+      payload,
+      this._storageOpts,
+    );
+  }
+
+  /**
    * Recover a failed targeted write without replacing durable history with a
    * bounded navigation snapshot.
    */
@@ -188,6 +291,14 @@ export class SessionManager {
   ): void {
     const durable = storageLoadSessionForReplacement(session.id, this._storageOpts);
     if (!durable) {
+      // A wholesale save from a partially loaded view would silently truncate
+      // every pre-window chain to its recent page — refuse that loudly rather
+      // than recreating the session from incomplete content.
+      if (session.chains.some((chain) => chain.messagesLoaded === false)) {
+        throw new Error(
+          `saveFullSessionFallback: refusing to recreate session ${session.id} from a partially loaded view (would truncate durable history)`,
+        );
+      }
       storageSaveSession(session, this._storageOpts);
       return;
     }
@@ -443,6 +554,11 @@ export class SessionManager {
    * Matches Python SessionManager.delete().
    */
   delete(id: string): boolean {
+    // Tombstone the session's name before the sessions.db row goes away so
+    // analytics (whose ledger rows outlive the session) keeps a readable
+    // name. Best-effort: a missing name or an unavailable accounting store
+    // must never block deletion.
+    this.tombstoneSessionName(id);
     const result = storageDeleteSession(id, this._storageOpts);
     this._sessions.delete(id);
     this._todoStores.delete(id);
@@ -455,6 +571,26 @@ export class SessionManager {
     }
     notifySessionDeleted(id);
     return result;
+  }
+
+  /**
+   * Resolve the session's current name (live cache first, then sessions.db)
+   * and write it to the accounting ledger's tombstone table. No-op when no
+   * non-empty name can be resolved or when accounting is unavailable.
+   */
+  private tombstoneSessionName(id: string): void {
+    let name: string | null = this._sessions.get(id)?.name ?? null;
+    if (!name) {
+      try {
+        name = storageGetSessionNames([id], this._storageOpts).get(id) ?? null;
+      } catch { /* sessions.db unavailable — nothing to tombstone */ }
+    }
+    if (!name) return;
+    try {
+      getProviderAccountingStore().upsertSessionNameTombstone(id, name);
+    } catch (error) {
+      console.warn(`[session] Failed to tombstone session name for ${id}:`, error);
+    }
   }
 
   /**
@@ -839,28 +975,38 @@ export class SessionManager {
       errorDetail: errorDetail ?? null,
       errorTitle: errorTitle ?? null,
     };
-    const chains = session.chains.map((c) =>
+
+    // Snapshot the todo store once — it feeds both the durable finish write
+    // and the in-memory replacement without re-reading.
+    const todoStore = this.getTodoStore(session.id).toData();
+    const persisted = storageFinishChain(chain, now, todoStore, this._storageOpts);
+
+    // Compute the final chain list BEFORE building `updated`: the finished
+    // chain replaces its cached twin, then — only on a successful durable
+    // finish — the retire mirror drops subsumed rows. `updated` is built once
+    // from this list and never mutated afterwards.
+    let chains = session.chains.map((c) =>
       c.id === chain.id ? chain : c,
     );
+    if (persisted.ok && persisted.retiredChainIds.length > 0) {
+      // Mirror the durable retire in the cache: finalized chain subsumed the
+      // split-tail rows, so they must not linger in the in-memory view.
+      const retired = new Set(persisted.retiredChainIds);
+      chains = chains.filter((c) => !retired.has(c.id));
+    }
 
     const updated = {
       ...session,
       chains,
       activeChainId: null,
-      todoStore: this.getTodoStore(session.id).toData(),
+      todoStore,
       updatedAt: now,
     };
-    const persisted = storageFinishChain(
-      chain,
-      now,
-      updated.todoStore,
-      this._storageOpts,
-    );
-    if (!persisted) {
+    if (!persisted.ok) {
       const restored = storageRestoreMissingChain(
         chain,
         now,
-        updated.todoStore,
+        todoStore,
         this._storageOpts,
       );
       if (!restored) this.saveFullSessionFallback(updated, [chain]);

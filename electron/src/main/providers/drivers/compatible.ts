@@ -12,7 +12,7 @@ import {
   OPENAI_RESPONSES_THINKING_POLICY,
 } from '../facets/thinking';
 import { fetchModelsEndpoint, modelsListEntries } from './models-endpoint';
-import type { DriverCredential, ProviderDriver, ReasoningProviderOptions } from './types';
+import type { DriverCostEvidence, DriverCredential, DriverPricingFacet, ProviderDriver, ReasoningProviderOptions } from './types';
 
 export interface GenericEndpoint {
   readonly endpoint: string;
@@ -111,6 +111,80 @@ function apiKeyForEmbedding(credential: DriverCredential): string | undefined {
   return undefined;
 }
 
+export interface GenericUsageCostEvidence {
+  /** Usage-body request charge in USD; U7 gives this precedence over formulae. */
+  readonly reportedCostUsd: string | undefined;
+  /** Informational per-field cost breakdown when the gateway provides one. */
+  readonly costDetails: Readonly<Record<string, unknown>> | undefined;
+}
+
+function decimalText(value: unknown): string | undefined {
+  if (typeof value === 'number') {
+    return Number.isFinite(value) && value >= 0 ? String(value) : undefined;
+  }
+  if (typeof value !== 'string') return undefined;
+  const trimmed = value.trim();
+  return /^(?:0|[1-9]\d*)(?:\.\d+)?$/.test(trimmed) ? trimmed : undefined;
+}
+
+function record(value: unknown): Record<string, unknown> | undefined {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : undefined;
+}
+
+/** HTTP header names are case-insensitive; the middleware lowercases but the facet contract does not guarantee it. */
+function headerValue(headers: Readonly<Record<string, string>>, name: string): string | undefined {
+  const direct = headers[name];
+  if (direct !== undefined) return direct;
+  for (const [key, value] of Object.entries(headers)) {
+    if (key.toLowerCase() === name) return value;
+  }
+  return undefined;
+}
+
+/**
+ * Extract the de-facto usage-body cost convention shared by OpenAI-compatible
+ * gateways (OpenRouter, Surplus Intelligence, Requesty, …): `usage.cost` (or
+ * the `cost_usd` variant), denominated in USD. The `x-request-cost-usd`
+ * header remains the fallback so a facet extraction never clobbers
+ * header-derived evidence. Undocumented shapes stay undefined so accounting
+ * records unknown rather than a guess.
+ */
+export function extractGenericUsageCostEvidence(
+  headers: Readonly<Record<string, string>>,
+  rawUsage: unknown,
+): GenericUsageCostEvidence {
+  const usage = record(rawUsage);
+  const bodyCost = decimalText(usage?.cost) ?? decimalText(usage?.cost_usd);
+  const headerCost = decimalText(headerValue(headers, 'x-request-cost-usd'));
+  const costDetails = record(usage?.cost_details);
+  return {
+    reportedCostUsd: bodyCost ?? headerCost,
+    // Clone so the ledger sanitizer never sees the same object twice (the raw
+    // usage graph is persisted separately as providerEvidence.rawUsage).
+    costDetails: costDetails ? { ...costDetails } : undefined,
+  };
+}
+
+function genericUsageCostPricingFacet(): DriverPricingFacet {
+  return {
+    costEvidence: ({ headers, rawUsage }): DriverCostEvidence => {
+      const generic = extractGenericUsageCostEvidence(headers, rawUsage);
+      return {
+        ...(generic.reportedCostUsd ? {
+          reportedCostAmount: generic.reportedCostUsd,
+          reportedCurrency: 'USD',
+        } : {}),
+        providerEvidence: {
+          ...(generic.reportedCostUsd ? { reportedUsageCostUsd: generic.reportedCostUsd } : {}),
+          ...(generic.costDetails ? { costDetails: generic.costDetails } : {}),
+        },
+      };
+    },
+  };
+}
+
 /**
  * A user-configured OpenAI-compatible endpoint is treated as ids-only:
  * nothing beyond the id is trusted from an unverified shape (R27).
@@ -179,6 +253,7 @@ export function createCompatibleProviderDrivers(options: {
       // default plain-text policy.
       thinkingPolicy: (model: EffectiveModel): ThinkingPolicy | undefined =>
         model.protocol === 'openai-responses' ? OPENAI_RESPONSES_THINKING_POLICY : undefined,
+      pricingFacet: genericUsageCostPricingFacet(),
       discoveryFacet: {
         fetchModels: async ({ connection, credential, endpoint }) => {
           if (!endpoint) throw new Error('Generic OpenAI-compatible connection requires an endpoint');
@@ -208,6 +283,7 @@ export function createCompatibleProviderDrivers(options: {
         });
       },
       thinkingPolicy: (): ThinkingPolicy => ANTHROPIC_THINKING_POLICY,
+      pricingFacet: genericUsageCostPricingFacet(),
     },
   ];
 }

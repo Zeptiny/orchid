@@ -30,6 +30,11 @@ import {
 } from '../../src/main/session/storage';
 import { openSqliteDb } from '../../src/main/utils/sqlite';
 import { onSessionDeleted, SessionManager } from '../../src/main/session/manager';
+import {
+  getProviderAccountingStore,
+  initializeProviderAccountingStore,
+  resetProviderAccountingStore,
+} from '../../src/main/providers/accounting/store';
 import { sessionPermissionOverrides } from '../../src/main/permissions/session-overrides';
 import { createCanonicalToolResult } from '../../src/shared/types/tool-result';
 
@@ -3379,5 +3384,41 @@ describe('tierOverride updateSessionFields round-trip', () => {
 
     const loaded = loadSession(sid, storageOpts)!;
     expect(loaded.tierOverride).toBe('flex');
+  });
+});
+
+// ===========================================================================
+// SessionManager.delete — session-name tombstones in the accounting ledger
+// ===========================================================================
+
+describe('SessionManager.delete session-name tombstones', () => {
+  beforeEach(() => {
+    initializeProviderAccountingStore({ dbPath: path.join(tmpDir, 'accounting.db') });
+  });
+
+  afterEach(() => {
+    resetProviderAccountingStore();
+  });
+
+  it('tombstones the renamed name when the session is deleted', () => {
+    const manager = new SessionManager({ storage: storageOpts });
+    const session = manager.create(DEFAULT_SELECTION);
+    manager.rename(session.id, 'Renamed Before Delete');
+
+    expect(manager.delete(session.id)).toBe(true);
+
+    // The tombstone is written before the sessions.db row goes away, with the
+    // name resolved at delete time (live cache → sessions.db).
+    const tombstones = getProviderAccountingStore().getSessionNameTombstones([session.id]);
+    expect(tombstones.get(session.id)).toBe('Renamed Before Delete');
+  });
+
+  it('writes no tombstone for an id that was never a session', () => {
+    const manager = new SessionManager({ storage: storageOpts });
+    const neverExisted = randomUUID();
+
+    expect(manager.delete(neverExisted)).toBe(false);
+
+    expect(getProviderAccountingStore().getSessionNameTombstones([neverExisted])).toEqual(new Map());
   });
 });

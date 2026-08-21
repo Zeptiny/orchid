@@ -197,6 +197,7 @@ export interface ContextSnapshotRecord {
   readonly toolUseTokens: number;
   readonly userTokens: number;
   readonly assistantTokens: number;
+  readonly summaryTokens: number;
 }
 
 // ── Subagent attribution telemetry ──────────────────────────────────────────

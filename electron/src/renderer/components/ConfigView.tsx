@@ -98,6 +98,9 @@ const AgentsMdTab = lazyWithPreload(() => import('./Preferences/AgentsMdTab').th
 const TrustedProjectsTab = lazyWithPreload(() => import('./Preferences/TrustedProjectsTab').then((module) => ({
   default: module.TrustedProjectsTab,
 })));
+const CompactionTab = lazyWithPreload(() => import('./Preferences/CompactionTab').then((module) => ({
+  default: module.CompactionTab,
+})));
 
 type TabId =
   | 'general'
@@ -109,6 +112,7 @@ type TabId =
   | 'rag'
   | 'agents-md'
   | 'subagents'
+  | 'compaction'
   | 'skills'
   | 'agents'
   | 'personalities';
@@ -123,6 +127,7 @@ const TAB_COMPONENTS = {
   rag: RAGTab,
   'agents-md': AgentsMdTab,
   subagents: SubagentsTab,
+  compaction: CompactionTab,
   skills: SkillsTab,
   agents: AgentsTab,
   personalities: PersonalitiesTab,
@@ -143,6 +148,7 @@ const TABS: TabDef[] = [
   { id: 'rag', label: 'RAG' },
   { id: 'agents-md', label: 'AGENTS.md' },
   { id: 'subagents', label: 'Subagents' },
+  { id: 'compaction', label: 'Compaction' },
   { id: 'skills', label: 'Skills' },
   { id: 'agents', label: 'Agents' },
   { id: 'personalities', label: 'Personalities' },
@@ -962,6 +968,13 @@ function renderTab(
         <SubagentsTab
           subagents={config.subagents}
           onChange={(subagents) => updateDraft({ subagents })}
+        />
+      );
+    case 'compaction':
+      return (
+        <CompactionTab
+          compaction={config.compaction}
+          onChange={(compaction) => updateDraft({ compaction })}
         />
       );
     case 'skills':

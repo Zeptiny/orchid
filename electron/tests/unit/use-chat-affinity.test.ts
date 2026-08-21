@@ -130,6 +130,32 @@ describe('useChat event affinity', () => {
     expect(acceptChatEvent(state, { sessionId: 'session-a', turnId: 'turn-a', sequence: 1 }, false)).toBe(false);
   });
 
+  it('rejects a foreign turnId without the idle-rebind flag (default event policy)', () => {
+    const state = affinity('session-a');
+    state.streamTurnId = 'turn-a';
+    state.lastSequence = 5;
+    expect(acceptChatEvent(state, { sessionId: 'session-a', turnId: 'manual-1', sequence: 1 }, false)).toBe(false);
+  });
+
+  it('rebinds to a manual compaction turnId when idle, with a fresh sequence watermark', () => {
+    const state = affinity('session-a');
+    state.streamTurnId = 'turn-a';
+    state.lastSequence = 50;
+
+    // Idle: the manual /compact synthetic turn rebinds even at a lower sequence.
+    expect(acceptChatEvent(state, { sessionId: 'session-a', turnId: 'manual-1', sequence: 1 }, false, true)).toBe(true);
+    expect(state.streamTurnId).toBe('manual-1');
+    expect(state.lastSequence).toBe(1);
+    expect(acceptChatEvent(state, { sessionId: 'session-a', turnId: 'manual-1', sequence: 2 }, false, true)).toBe(true);
+    expect(acceptChatEvent(state, { sessionId: 'session-a', turnId: 'manual-1', sequence: 2 }, false, true)).toBe(false);
+
+    // While streaming, the mismatched turnId stays foreign even with the flag.
+    const streaming = affinity('session-a');
+    streaming.streamTurnId = 'turn-live';
+    streaming.lastSequence = 3;
+    expect(acceptChatEvent(streaming, { sessionId: 'session-a', turnId: 'manual-1', sequence: 1 }, true, true)).toBe(false);
+  });
+
   it('binds draft events only while a send is in progress', () => {
     const idleDraft = affinity(null);
     expect(acceptChatEvent(idleDraft, { sessionId: 'session-a', turnId: 'turn-a', sequence: 1 }, false)).toBe(false);

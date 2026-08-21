@@ -18,6 +18,7 @@ import {
   terminalToolResultStatusSchema,
   toolExecutionResultSchema,
 } from './tool-result';
+import type { ChatErrorKind } from './ipc';
 
 // ── Startup ─────────────────────────────────────────────────────────────────
 
@@ -82,6 +83,18 @@ export const thinkingReplayPayloadSchema = z.object({
   reasoningTokenCount: z.number().nonnegative().optional(),
 }).strict();
 
+export const compactedMarkerSchema = z.object({
+  rangeStart: z.string().min(1),
+  rangeEnd: z.string().min(1),
+  mode: z.enum(['simple', 'selective']),
+  summarizedCount: z.number().int().nonnegative().optional(),
+  tokensFreed: z.number().int().nonnegative().optional(),
+  compactorTokens: z.object({
+    inputTokens: z.number().nonnegative(),
+    outputTokens: z.number().nonnegative(),
+  }).optional(),
+}).strict();
+
 /** Durable messages are terminal-history authority, so validate their full shape. */
 const messageSchema = z.object({
   id: z.string().min(1),
@@ -97,6 +110,7 @@ const messageSchema = z.object({
   usage: usageSchema.nullable(),
   hidden: z.boolean(),
   excludeFromModel: z.boolean().optional(),
+  compacted: compactedMarkerSchema.optional(),
   tool_result: canonicalToolResultSchema.nullable(),
 }).strict();
 
@@ -166,12 +180,33 @@ export const chatDoneEventSchema = chatEventIdentitySchema.extend({
   usage: usageSchema.nullable().optional(),
 });
 
+/**
+ * Chat error kinds allowed across the preload boundary. Mirrors the
+ * `ChatErrorKind` union in ./ipc; the exhaustiveness guard below makes the
+ * mirror a compile-time obligation — adding a union member without updating
+ * this list fails typecheck, so a newly classified kind can never again be
+ * silently dropped by the inbound `chat:error` validation.
+ */
+export const CHAT_ERROR_KINDS = [
+  'stream',
+  'rate-limit',
+  'auth',
+  'generic',
+  'context_length_exceeded',
+] as const satisfies readonly ChatErrorKind[];
+
+type _ChatErrorKindExhaustive = Exclude<ChatErrorKind, (typeof CHAT_ERROR_KINDS)[number]> extends never
+  ? true
+  : never;
+const _chatErrorKindExhaustive: _ChatErrorKindExhaustive = true;
+void _chatErrorKindExhaustive;
+
 export const chatErrorEventSchema = chatEventIdentitySchema.extend({
   type: z.literal('error'),
   error: z.string(),
   messages: z.array(messageSchema),
   title: z.string().optional(),
-  kind: z.enum(['stream', 'rate-limit', 'auth', 'generic']).optional(),
+  kind: z.enum(CHAT_ERROR_KINDS).optional(),
 });
 
 export const chatUsageEventSchema = chatEventIdentitySchema.extend({
@@ -196,8 +231,14 @@ const chatToolCallUpdateBaseSchema = chatEventIdentitySchema.extend({
   toolCallId: z.string().min(1),
   toolName: z.string().optional(),
   args: z.string().optional(),
+  estimatedTokens: z.number().int().nonnegative().nullable().optional(),
 });
 export const chatToolCallUpdateEventSchema = z.discriminatedUnion('status', [
+  chatToolCallUpdateBaseSchema.extend({
+    status: z.literal('generating'),
+    content: z.string().optional(),
+    toolResult: z.never().optional(),
+  }),
   chatToolCallUpdateBaseSchema.extend({
     status: z.literal('running'),
     content: z.never().optional(),
@@ -209,8 +250,9 @@ export const chatToolCallUpdateEventSchema = z.discriminatedUnion('status', [
     toolResult: canonicalToolResultSchema,
   }),
 ]).superRefine((value, ctx) => {
+  const isLifecycle = value.status === 'generating' || value.status === 'running';
   if (
-    value.status !== 'running' &&
+    !isLifecycle &&
     value.status !== value.toolResult.status
   ) {
     ctx.addIssue({
@@ -220,6 +262,16 @@ export const chatToolCallUpdateEventSchema = z.discriminatedUnion('status', [
     });
   }
 });
+
+export const compactionProgressEventSchema = chatEventIdentitySchema.extend({
+  type: z.literal('compaction_progress'),
+  agentScopeId: z.string().nullable(),
+  phase: z.enum(['preparing', 'compacting', 'complete', 'failed']),
+  detail: z.string().optional(),
+  mode: z.enum(['simple', 'selective']).optional(),
+  streamText: z.string().nullable().optional(),
+  estimatedTokens: z.number().int().nonnegative().nullable().optional(),
+}).strict();
 
 // ── Session / workspace events ───────────────────────────────────────────────
 
@@ -247,6 +299,11 @@ export const sessionUpdatedEventSchema = z.object({
   chain: ipcChainEnvelopeSchema,
   activeChainId: z.string().nullable(),
   updatedAt: z.string(),
+}).strict();
+
+export const sessionCompactionEventSchema = z.object({
+  sessionId: z.string().min(1),
+  updatedAt: z.string().datetime({ offset: true }),
 }).strict();
 
 export const trustStateSchema = z.enum(['trusted', 'untrusted', 'changed']);
@@ -559,12 +616,40 @@ const subagentToolSchema = z.object({
     ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['status'], message: 'Snapshot status must match canonical result status' });
   }
 });
+/**
+ * Shared identity base for the subagent delta events. Declared here — ahead of
+ * `subagentLiveProjectionSchema` — because the projection embeds the FULL
+ * compaction-progress event (see `subagentCompactionProgressEventSchema`
+ * directly below), and a direct reference from the projection schema would hit
+ * the const TDZ if the event schema stayed in the delta section further down.
+ */
+const subagentDeltaBaseSchema = z.object({
+  sessionId: z.string().uuid(),
+  subagentId: z.string(),
+  runId: z.string(),
+  sequence: z.number().int().nonnegative(),
+  sessionRevision: z.number().int().nonnegative(),
+});
+export const subagentCompactionProgressEventSchema = subagentDeltaBaseSchema.extend({
+  type: z.literal('compaction_progress'),
+  phase: z.enum(['preparing', 'compacting', 'complete', 'failed']),
+  detail: z.string().optional(),
+  mode: z.enum(['simple', 'selective']).optional(),
+  streamText: z.string().nullable().optional(),
+  estimatedTokens: z.number().int().nonnegative().nullable().optional(),
+});
 export const subagentLiveProjectionSchema = z.object({
   sessionId: z.string().nullable(), subagentId: z.string(), runId: z.string(),
   sequence: z.number().int().nonnegative(),
   state: subagentStatusSchema,
   segments: z.array(subagentLiveSegmentSchema), toolCalls: z.array(subagentToolSchema),
   usage: usageSchema.nullable(), result: z.string().nullable(), error: z.string().nullable(),
+  // Latest compaction progress retained for the renderer (terminal phases stay
+  // until the next compaction or run reset clears them). The projection stores
+  // the FULL delta event — emitCompactionProgress assigns type/sessionId/
+  // subagentId/runId/sequence/sessionRevision around the progress payload — so
+  // the wire reuses the event schema instead of re-validating payload fields.
+  compactionProgress: subagentCompactionProgressEventSchema.nullable(),
 });
 export const ipcSubagentRecordSchema = z.object({
   id: z.string(), agent_name: z.string(), agent_type: z.string(), agent_tier: z.string(),
@@ -595,13 +680,10 @@ export const subagentDetailResultSchema = z.object({
 
 // ── Subagent live delta events ───────────────────────────────────────────────
 
-const subagentDeltaBaseSchema = z.object({
-  sessionId: z.string().uuid(),
-  subagentId: z.string(),
-  runId: z.string(),
-  sequence: z.number().int().nonnegative(),
-  sessionRevision: z.number().int().nonnegative(),
-});
+// `subagentDeltaBaseSchema` and `subagentCompactionProgressEventSchema` are
+// declared further up (ahead of `subagentLiveProjectionSchema`, which embeds
+// the compaction event schema); the rest of the delta taxonomy extends the
+// same base here.
 export const subagentSpawnedEventSchema = subagentDeltaBaseSchema.extend({
   type: z.literal('spawned'), record: ipcSubagentSummarySchema, usage: usageSchema.nullable(),
 });
@@ -644,6 +726,7 @@ export const subagentDeltaEventSchema = z.discriminatedUnion('type', [
   subagentToolResultEventSchema,
   subagentUsageEventSchema,
   subagentTerminalEventSchema,
+  subagentCompactionProgressEventSchema,
 ]);
 /** Batched SUBAGENTS_EVENT payload — the unit of IPC delivery. */
 export const subagentEventSchema = z.object({

@@ -264,6 +264,7 @@ export function createAttemptAccountingMiddleware(
       }
 
       let finalized = false;
+      let firstTokenMarked = false;
       const chars = emptyOutputChars();
       const finalize = (outcome: 'succeeded' | 'failed' | 'interrupted', part?: LanguageModelV4StreamPart, error?: unknown) => {
         if (finalized) return;
@@ -298,6 +299,35 @@ export function createAttemptAccountingMiddleware(
               return;
             }
             trackStreamChars(chars, next.value);
+            // TTFT anchor: the first streamed content delta (metadata, raw
+            // passthrough and finish parts do not count). Non-fatal — latency
+            // analytics must never break the stream.
+            if (
+              !firstTokenMarked
+              && (next.value.type === 'text-delta'
+                || next.value.type === 'reasoning-delta'
+                || next.value.type === 'tool-input-delta')
+            ) {
+              firstTokenMarked = true;
+              // TTFT anchor: capture the clock at the delta, but defer the
+              // durable write to a microtask — a synchronous better-sqlite3
+              // UPDATE on the token hot path can busy-wait up to busy_timeout
+              // under write contention and stall the whole stream. Single
+              // flight per attempt via the once-flag. The write may land after
+              // finalize() (which never touches first_token_at — the IS NULL
+              // guard still holds), and a stamp on a failed/interrupted row is
+              // still correct: a token WAS delivered.
+              const at = new Date().toISOString();
+              queueMicrotask(() => {
+                try {
+                  context.store.markFirstTokenAt(attemptId, at);
+                } catch (error) {
+                  // Non-fatal, but a persistent failure would silently null all
+                  // TTFT/TPS analytics — leave a diagnostic trail.
+                  console.warn('[accounting] markFirstToken failed', { error });
+                }
+              });
+            }
             if (next.value.type === 'finish') finalize('succeeded', next.value);
             if (next.value.type === 'error') {
               finalize(params.abortSignal?.aborted ? 'interrupted' : 'failed', next.value, next.value.error);

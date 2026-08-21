@@ -1,12 +1,32 @@
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import { useAnalytics } from '../../hooks/useAnalytics';
-import type { AnalyticsTimeRange } from '../../../shared/types/analytics';
-import { StatCard, ChartCard, formatTokenCount, truncateId } from './shared';
-import { CHART_PALETTE, GRID_STROKE, axisTickProps, tokenTooltipProps } from './shared';
+import type {
+  AnalyticsTimeRange,
+  ContextCompactionEvent,
+  ContextJumpEvent,
+  ContextResult,
+  ContextSessionDetailPoint,
+  ContextSessionDetailResult,
+  ContextSessionPickerEntry,
+} from '../../../shared/types/analytics';
+import { CONTEXT_DETAIL_MAX_POINTS } from '../../../shared/types/analytics';
+import {
+  StatCard,
+  ChartCard,
+  SortableTable,
+  type Column,
+  formatTokenCount,
+  truncateId,
+  CHART_PALETTE,
+  GRID_STROKE,
+  axisTickProps,
+  tokenTooltipProps,
+} from './shared';
 import { Button } from '../ui/Button';
+import { Select } from '../ui/Select';
 import { StateMessage } from '../ui/StateMessage';
 import {
-  LineChart, Line, BarChart, Bar,
+  LineChart, Line, BarChart, Bar, ReferenceDot, ReferenceLine, Brush,
   XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend,
 } from 'recharts';
 
@@ -62,11 +82,323 @@ export function downsamplePoints(points: ReadonlyArray<ContextPoint>, max: numbe
   return sampled;
 }
 
+const COMPACTION_STROKE = 'var(--color-warning)';
+
+const SEGMENT_KEYS = ['system', 'tools', 'toolUse', 'user', 'assistant', 'summary'] as const;
+type SegmentKey = (typeof SEGMENT_KEYS)[number];
+
+const SEGMENT_LABELS: Record<SegmentKey, string> = {
+  system: 'System',
+  tools: 'Tools',
+  toolUse: 'Tool Use',
+  user: 'User',
+  assistant: 'Assistant',
+  summary: 'Summary',
+};
+
+function segmentTokens(point: ContextSessionDetailPoint, key: SegmentKey): number {
+  return point[`${key}Tokens`];
+}
+
+function formatDelta(n: number): string {
+  return n > 0 ? `+${formatTokenCount(n)}` : formatTokenCount(n);
+}
+
+function deltaTone(n: number): string {
+  if (n > 0) return 'text-warning';
+  if (n < 0) return 'text-success';
+  return 'text-base-content/50';
+}
+
+function SegmentDelta({ value }: { value: number }) {
+  return <span className={`ml-1 text-xs ${deltaTone(value)}`}>({formatDelta(value)})</span>;
+}
+
+const jumpColumns: ReadonlyArray<Column<ContextJumpEvent>> = [
+  {
+    key: 'when',
+    label: 'When',
+    sortable: true,
+    initialDir: 'desc',
+    sortValue: (event) => event.at,
+    render: (event) => formatTimestamp(event.at),
+  },
+  {
+    key: 'delta',
+    label: 'Δ Tokens',
+    sortable: true,
+    initialDir: 'desc',
+    sortValue: (event) => event.deltaTokens,
+    render: (event) => <span className={deltaTone(event.deltaTokens)}>{formatDelta(event.deltaTokens)}</span>,
+  },
+  {
+    key: 'fromTo',
+    label: 'From → To',
+    sortable: true,
+    initialDir: 'desc',
+    sortValue: (event) => event.toTokens,
+    render: (event) => `${formatTokenCount(event.fromTokens)} → ${formatTokenCount(event.toTokens)}`,
+  },
+  ...SEGMENT_KEYS.map((key): Column<ContextJumpEvent> => ({
+    key,
+    label: SEGMENT_LABELS[key],
+    sortable: true,
+    initialDir: 'desc',
+    sortValue: (event) => event.segmentDeltas[key],
+    render: (event) => formatDelta(event.segmentDeltas[key]),
+  })),
+];
+
+const compactionColumns: ReadonlyArray<Column<ContextCompactionEvent>> = [
+  {
+    key: 'when',
+    label: 'When',
+    sortable: true,
+    initialDir: 'desc',
+    sortValue: (event) => event.at,
+    render: (event) => formatTimestamp(event.at),
+  },
+  {
+    key: 'agent',
+    label: 'Agent',
+    sortable: true,
+    sortValue: (event) => event.agentName,
+    render: (event) => event.agentName,
+  },
+  {
+    key: 'input',
+    label: 'Tokens In',
+    sortable: true,
+    initialDir: 'desc',
+    sortValue: (event) => event.inputTokens ?? -1,
+    render: (event) => (event.inputTokens === null ? '—' : formatTokenCount(event.inputTokens)),
+  },
+  {
+    key: 'output',
+    label: 'Tokens Out',
+    sortable: true,
+    initialDir: 'desc',
+    sortValue: (event) => event.outputTokens ?? -1,
+    render: (event) => (event.outputTokens === null ? '—' : formatTokenCount(event.outputTokens)),
+  },
+];
+
+function ContextSessionDrilldown({ detail }: { detail: ContextSessionDetailResult }) {
+  const [selectedAt, setSelectedAt] = useState<string | null>(null);
+
+  const jumpEvents = useMemo(
+    () => detail.events.filter((event): event is ContextJumpEvent => event.type === 'jump'),
+    [detail],
+  );
+  const compactionEvents = useMemo(
+    () => detail.events.filter((event): event is ContextCompactionEvent => event.type === 'compaction'),
+    [detail],
+  );
+
+  const compactionMarkers = useMemo(() => {
+    if (detail.series.length === 0) return [] as string[];
+    const markers: string[] = [];
+    for (const event of compactionEvents) {
+      const at = detail.series.find((point) => point.capturedAt >= event.at)?.capturedAt
+        ?? detail.series[detail.series.length - 1].capturedAt;
+      if (!markers.includes(at)) markers.push(at);
+    }
+    return markers;
+  }, [detail, compactionEvents]);
+
+  const selectedSnapshot = useMemo(() => {
+    if (selectedAt === null) return null;
+    const index = detail.series.findIndex((point) => point.capturedAt === selectedAt);
+    if (index === -1) return null;
+    return { point: detail.series[index], prev: index > 0 ? detail.series[index - 1] : null };
+  }, [detail, selectedAt]);
+
+  const snapshotRows = useMemo(() => {
+    if (selectedSnapshot === null) return [];
+    const { point, prev } = selectedSnapshot;
+    return [
+      { label: 'Used', value: point.usedTokens, delta: prev ? point.usedTokens - prev.usedTokens : null },
+      ...SEGMENT_KEYS.map((key) => ({
+        label: SEGMENT_LABELS[key],
+        value: segmentTokens(point, key),
+        delta: prev ? segmentTokens(point, key) - segmentTokens(prev, key) : null,
+      })),
+    ];
+  }, [selectedSnapshot]);
+
+  const peakUsedTokens = detail.series.length > 0
+    ? Math.max(...detail.series.map((point) => point.usedTokens))
+    : null;
+  const largestJump = jumpEvents.reduce<ContextJumpEvent | null>(
+    (best, event) => (best === null || event.deltaTokens > best.deltaTokens ? event : best),
+    null,
+  );
+
+  return (
+    <>
+      <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+        <StatCard
+          label="Snapshots"
+          value={detail.series.length}
+          subtext={detail.truncated ? `capped at newest ${CONTEXT_DETAIL_MAX_POINTS}` : undefined}
+        />
+        <StatCard label="Peak Used Tokens" value={peakUsedTokens === null ? '—' : formatTokenCount(peakUsedTokens)} />
+        <StatCard
+          label="Largest Jump"
+          value={largestJump === null ? '—' : formatDelta(largestJump.deltaTokens)}
+          subtext={largestJump === null ? undefined : formatTimestamp(largestJump.at)}
+        />
+        <StatCard label="Compactions" value={compactionEvents.length} />
+      </div>
+
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+        <ChartCard
+          title="Context Growth"
+          className="lg:col-span-2"
+          empty={detail.series.length === 0}
+          emptyMessage="No context snapshots recorded"
+        >
+          {detail.truncated && (
+            <div className="mb-2 text-xs text-base-content/50">(showing newest {detail.series.length} snapshots)</div>
+          )}
+          {compactionMarkers.length > 0 && (
+            <div className="mb-2 text-xs text-warning">⚠ compaction</div>
+          )}
+          <ResponsiveContainer width="100%" height={320}>
+            <LineChart data={detail.series}>
+              <CartesianGrid strokeDasharray="3 3" stroke={GRID_STROKE} />
+              <XAxis dataKey="capturedAt" tick={axisTickProps} tickFormatter={(value) => formatTimestamp(String(value))} />
+              <YAxis tick={axisTickProps} tickFormatter={(value) => formatTokenCount(Number(value))} />
+              <Tooltip {...tokenTooltipProps} labelFormatter={(label) => formatTimestamp(String(label))} />
+              {compactionMarkers.map((at) => (
+                <ReferenceLine key={at} x={at} stroke={COMPACTION_STROKE} strokeDasharray="4 4" />
+              ))}
+              {selectedSnapshot !== null && (
+                <ReferenceDot
+                  x={selectedSnapshot.point.capturedAt}
+                  y={selectedSnapshot.point.usedTokens}
+                  r={4}
+                  fill={CHART_PALETTE[0]}
+                  stroke={CHART_PALETTE[0]}
+                />
+              )}
+              <Line
+                type="monotone"
+                dataKey="usedTokens"
+                name="Used Tokens"
+                stroke={CHART_PALETTE[0]}
+                strokeWidth={2}
+                dot={false}
+                isAnimationActive={false}
+              />
+              <Brush
+                dataKey="capturedAt"
+                height={20}
+                travellerWidth={8}
+                stroke={GRID_STROKE}
+                fill="transparent"
+                tickFormatter={(value) => formatTimestamp(String(value))}
+              />
+            </LineChart>
+          </ResponsiveContainer>
+        </ChartCard>
+
+        <ChartCard
+          title="Context Jumps"
+          className="lg:col-span-2"
+          empty={detail.series.length === 0}
+          emptyMessage="No context snapshots recorded"
+        >
+          <SortableTable
+            columns={jumpColumns}
+            rows={jumpEvents}
+            rowKey={(event) => event.at}
+            onRowClick={(event) => setSelectedAt((prev) => (prev === event.at ? null : event.at))}
+            emptyMessage="No context jumps recorded"
+          />
+        </ChartCard>
+
+        {selectedSnapshot !== null && (
+          <ChartCard title="Snapshot Detail">
+            <div className="mb-3 text-xs text-base-content/60">
+              {formatTimestamp(selectedSnapshot.point.capturedAt)}
+            </div>
+            <dl className="grid grid-cols-1 gap-1.5 sm:grid-cols-2">
+              {snapshotRows.map((row) => (
+                <div key={row.label} className="flex items-baseline justify-between gap-3">
+                  <dt className="text-xs text-base-content/60">{row.label}</dt>
+                  <dd className="font-medium text-base-content">
+                    {formatTokenCount(row.value)}
+                    {row.delta !== null && <SegmentDelta value={row.delta} />}
+                  </dd>
+                </div>
+              ))}
+            </dl>
+            <div className="mt-3 space-y-1 text-xs text-base-content/60">
+              <div title={selectedSnapshot.point.turnId ?? undefined}>
+                turn: {selectedSnapshot.point.turnId === null ? '—' : truncateId(selectedSnapshot.point.turnId)}
+              </div>
+              <div title={selectedSnapshot.point.providerAttemptId ?? undefined}>
+                attempt: {selectedSnapshot.point.providerAttemptId === null
+                  ? '—'
+                  : truncateId(selectedSnapshot.point.providerAttemptId)}
+              </div>
+            </div>
+          </ChartCard>
+        )}
+
+        <ChartCard title="Compactions" empty={compactionEvents.length === 0} emptyMessage="No compactions recorded">
+          <SortableTable
+            columns={compactionColumns}
+            rows={compactionEvents}
+            rowKey={(event) => `${event.at}:${event.agentName}`}
+            emptyMessage="No compactions recorded"
+          />
+        </ChartCard>
+      </div>
+    </>
+  );
+}
+
 export function ContextTab({ timeRange }: { timeRange: AnalyticsTimeRange }) {
+  const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
+
   const { data, loading, error, refresh } = useAnalytics(
     () => window.orchid.analytics.context({ timeRange }),
     [timeRange],
   );
+
+  // Session picker is its own query so switching drill-down sessions does not
+  // recompute it; it already covers every main-agent session in range.
+  const pickerQuery = useAnalytics(
+    () => window.orchid.analytics.contextSessions({ timeRange }),
+    [timeRange],
+  );
+
+  const detailQuery = useAnalytics(
+    () => (selectedSessionId === null
+      ? Promise.resolve(null)
+      : window.orchid.analytics.contextSessionDetail({ sessionId: selectedSessionId, timeRange })),
+    [selectedSessionId, timeRange],
+  );
+
+  const detail = detailQuery.data !== null && detailQuery.data.sessionId === selectedSessionId
+    ? detailQuery.data
+    : null;
+
+  const pickerOptions = useMemo<readonly ContextSessionPickerEntry[]>(() => {
+    const base = pickerQuery.data?.sessions ?? [];
+    // Keep the select from showing blank while the picker loads for a session
+    // that is already selected (e.g. restored from the growth chart).
+    if (selectedSessionId !== null && !base.some((entry) => entry.sessionId === selectedSessionId)) {
+      return [{ sessionId: selectedSessionId, sessionName: null, snapshotCount: 0, maxUsedTokens: 0 }, ...base];
+    }
+    return base;
+  }, [pickerQuery.data, selectedSessionId]);
+
+  const handleSelectSession = (sessionId: string) => {
+    setSelectedSessionId(sessionId === '' ? null : sessionId);
+  };
 
   const growthData = useMemo(() => {
     if (!data) return [];
@@ -100,17 +432,75 @@ export function ContextTab({ timeRange }: { timeRange: AnalyticsTimeRange }) {
     Assistant: data.avgBreakdown.assistantTokens,
   }] : [], [data]);
 
-  if (loading) return <StateMessage kind="loading" title="Loading Context…" />;
-  if (error) return <div className="p-8 text-error">Error: {error}</div>;
-  if (!data) return null;
+  // Aggregate-view guards: with a session selected the drill-down renders from
+  // its own query — an aggregate refetch must not unmount it.
+  if (selectedSessionId === null) {
+    if (loading) return <StateMessage kind="loading" title="Loading Context…" />;
+    if (error) return <div className="p-8 text-error">Error: {error}</div>;
+    if (!data) return null;
+  }
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between gap-3">
         <h2 className="text-lg font-semibold text-base-content">Context</h2>
-        <Button variant="ghost" size="xs" onClick={refresh}>↻ Refresh</Button>
+        <div className="flex items-center gap-2">
+          <Select
+            size="sm"
+            className="max-w-72"
+            aria-label="Session"
+            value={selectedSessionId ?? ''}
+            onChange={(event) => handleSelectSession(event.target.value)}
+          >
+            <option value="">All sessions (aggregate)</option>
+            {pickerOptions.map((entry) => (
+              <option key={entry.sessionId} value={entry.sessionId}>
+                {sessionLabel(entry.sessionName, entry.sessionId)} ({formatTokenCount(entry.maxUsedTokens)})
+              </option>
+            ))}
+          </Select>
+          <Button
+            variant="ghost"
+            size="xs"
+            onClick={() => {
+              refresh();
+              pickerQuery.refresh();
+              detailQuery.refresh();
+            }}
+          >
+            ↻ Refresh
+          </Button>
+        </div>
       </div>
 
+      {selectedSessionId !== null ? (
+        detailQuery.error !== null ? (
+          <div className="p-8 text-error">Error: {detailQuery.error}</div>
+        ) : detailQuery.loading || detail === null ? (
+          <StateMessage kind="loading" title="Loading Session Context…" />
+        ) : (
+          <ContextSessionDrilldown key={detail.sessionId} detail={detail} />
+        )
+      ) : data !== null ? (
+        <AggregateContextView
+          data={data}
+          growthData={growthData}
+          breakdownData={breakdownData}
+          onSelectSession={handleSelectSession}
+        />
+      ) : null}
+    </div>
+  );
+}
+
+function AggregateContextView({ data, growthData, breakdownData, onSelectSession }: {
+  data: ContextResult;
+  growthData: ReadonlyArray<Record<string, string | number>>;
+  breakdownData: ReadonlyArray<Record<string, string | number>>;
+  onSelectSession: (sessionId: string) => void;
+}) {
+  return (
+    <>
       <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
         <StatCard label="Total Snapshots" value={data.totalSnapshots} />
         <StatCard label="Avg Used Tokens" value={formatTokenCount(data.avgBreakdown.usedTokens)} />
@@ -199,8 +589,17 @@ export function ContextTab({ timeRange }: { timeRange: AnalyticsTimeRange }) {
             </thead>
             <tbody>
               {data.topSessions.map((series) => (
-                <tr key={series.sessionId} className="border-b border-base-300/50">
-                  <td className="px-3 py-2 text-base-content/90">{sessionLabel(series.sessionName, series.sessionId)}</td>
+                <tr key={series.sessionId} className="border-b border-base-300/50 hover:bg-base-200">
+                  <td className="px-3 py-2 text-base-content/90">
+                    <button
+                      type="button"
+                      title="Drill into session"
+                      className="cursor-pointer text-left"
+                      onClick={() => onSelectSession(series.sessionId)}
+                    >
+                      {sessionLabel(series.sessionName, series.sessionId)}
+                    </button>
+                  </td>
                   <td className="px-3 py-2 text-right text-base-content/90">{formatTokenCount(series.maxUsedTokens)}</td>
                 </tr>
               ))}
@@ -208,6 +607,6 @@ export function ContextTab({ timeRange }: { timeRange: AnalyticsTimeRange }) {
           </table>
         </ChartCard>
       </div>
-    </div>
+    </>
   );
 }

@@ -12,6 +12,8 @@ import type {
   ProviderConnectionUpdateMessage,
   ProviderConnectionView,
   ProviderDefinitionView,
+  ProviderDraftDiscoveryMessage,
+  ProviderDraftDiscoveryResult,
   ProviderDiscoverModelsResult,
   ProviderModelListMessage,
   ProviderModelOption,
@@ -69,6 +71,10 @@ export interface ConnectionWizardProps {
   readonly onDiscoverModels?: (
     message: ProviderConnectionIdMessage,
   ) => Promise<ProviderDiscoverModelsResult>;
+  /** Draft live discovery while the connection does not exist yet (#138). */
+  readonly onDiscoverDraftModels?: (
+    message: ProviderDraftDiscoveryMessage,
+  ) => Promise<ProviderDraftDiscoveryResult>;
   /** Unified per-connection listing used by the models editor in edit mode. */
   readonly onListModels?: (
     message: ProviderModelListMessage,
@@ -105,6 +111,26 @@ function describeError(error: unknown): string {
 }
 
 /**
+ * Identifies the draft inputs a preview was fetched against; a preview whose
+ * key no longer matches the form is inert (#138).
+ */
+function draftFetchKey(input: {
+  readonly providerId: string | undefined;
+  readonly protocol: ProviderProtocol;
+  readonly authMethod: ProviderAuthMethod;
+  readonly endpoint: string;
+  readonly allowInsecureHttp: boolean;
+}): string {
+  return [
+    input.providerId ?? '',
+    input.protocol,
+    input.authMethod,
+    input.endpoint,
+    input.allowInsecureHttp ? '1' : '0',
+  ].join('|');
+}
+
+/**
  * A keyboard-first modal that creates or edits one complete connection.
  * It intentionally does not offer credential-handle editing.
  */
@@ -119,6 +145,7 @@ export function ConnectionWizard({
   onSubmitApiKey,
   onValidate,
   onDiscoverModels,
+  onDiscoverDraftModels,
   onListModels,
   onComplete,
 }: ConnectionWizardProps) {
@@ -145,6 +172,11 @@ export function ConnectionWizard({
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [unifiedModels, setUnifiedModels] = useState<readonly ProviderModelOption[] | null>(null);
+  const [preview, setPreview] = useState<{
+    readonly key: string;
+    readonly models: readonly ProviderModelView[];
+    readonly discoveredAt: string | null;
+  } | null>(null);
   const [discovering, setDiscovering] = useState(false);
 
   const availableDefinitions = useMemo(
@@ -179,6 +211,15 @@ export function ConnectionWizard({
       || endpointChanged
   );
   const metadataLocked = submitting || (pendingConnection !== null && !existingConnection);
+  const activeDraftKey = draftFetchKey({
+    providerId: selectedDefinition?.id,
+    protocol,
+    authMethod,
+    endpoint: supportsCustomEndpoint ? endpoint.trim() : '',
+    allowInsecureHttp: supportsCustomEndpoint && allowInsecureHttp,
+  });
+  /** Live preview rows for exactly the current draft inputs, else null (#138). */
+  const activePreview = !existingConnection && preview?.key === activeDraftKey ? preview : null;
 
   const resetForDefinition = useCallback((definition: ProviderDefinitionView | undefined) => {
     const nextProtocol = defaultProtocol(definition);
@@ -197,6 +238,7 @@ export function ConnectionWizard({
     setEnvironmentVariable('');
     setApiKey('');
     setPendingConnection(null);
+    setPreview(null);
     setFeedback(null);
     setError(null);
   }, []);
@@ -251,19 +293,67 @@ export function ConnectionWizard({
     };
   }, [isOpen, existingConnection, onListModels]);
 
-  const discoverModels = useCallback(async (): Promise<ProviderDiscoverModelsResult> => {
-    if (!existingConnection || !onDiscoverModels) {
-      throw new Error('Live model discovery is unavailable for this connection.');
+  const discoverModels = useCallback(async (): Promise<{ message: string | null }> => {
+    if (existingConnection && onDiscoverModels) {
+      setDiscovering(true);
+      try {
+        const result = await onDiscoverModels({ connectionId: existingConnection.id });
+        if (result.status === 'ok') await refreshUnifiedModels(existingConnection.id);
+        return result;
+      } finally {
+        setDiscovering(false);
+      }
     }
-    setDiscovering(true);
-    try {
-      const result = await onDiscoverModels({ connectionId: existingConnection.id });
-      if (result.status === 'ok') await refreshUnifiedModels(existingConnection.id);
-      return result;
-    } finally {
-      setDiscovering(false);
+    if (!existingConnection && onDiscoverDraftModels && selectedDefinition) {
+      if (authMethod === 'environment' && !environmentVariable.trim()) {
+        throw new Error('Enter the environment variable that holds the provider credential before fetching models.');
+      }
+      const fetchKey = draftFetchKey({
+        providerId: selectedDefinition.id,
+        protocol,
+        authMethod,
+        endpoint: supportsCustomEndpoint ? endpoint.trim() : '',
+        allowInsecureHttp: supportsCustomEndpoint && allowInsecureHttp,
+      });
+      setDiscovering(true);
+      try {
+        const result: ProviderDraftDiscoveryResult = await onDiscoverDraftModels({
+          providerId: selectedDefinition.id,
+          protocol,
+          authMethod,
+          ...(supportsCustomEndpoint && endpoint.trim()
+            ? { endpoint: endpoint.trim(), allowInsecureHttp }
+            : {}),
+          ...(authMethod === 'environment' && environmentVariable.trim()
+            ? { environmentVariable: environmentVariable.trim() }
+            : {}),
+          ...(authMethod === 'api-key' && apiKey.trim() ? { apiKey: apiKey.trim() } : {}),
+        });
+        // A fetch that outlives its inputs (provider/protocol/auth/endpoint
+        // changed mid-flight) is stored but stays inert via the key gate.
+        if (result.status === 'ok') {
+          setPreview({ key: fetchKey, models: result.models, discoveredAt: result.discoveredAt });
+        }
+        return result;
+      } finally {
+        setDiscovering(false);
+      }
     }
-  }, [existingConnection, onDiscoverModels, refreshUnifiedModels]);
+    throw new Error('Live model discovery is unavailable for this connection.');
+  }, [
+    allowInsecureHttp,
+    apiKey,
+    authMethod,
+    endpoint,
+    environmentVariable,
+    existingConnection,
+    onDiscoverDraftModels,
+    onDiscoverModels,
+    protocol,
+    refreshUnifiedModels,
+    selectedDefinition,
+    supportsCustomEndpoint,
+  ]);
 
   useEffect(() => {
     if (!isOpen) {
@@ -324,6 +414,7 @@ export function ConnectionWizard({
     setProtocol(nextProtocol);
     setConnectionModelIds(defaultModelIds(selectedDefinition ?? undefined, nextProtocol));
     setConnectionCustomModels([]);
+    setPreview(null);
     setModelsEditing(false);
     setError(null);
   };
@@ -589,7 +680,7 @@ export function ConnectionWizard({
                 </FormField>
               </Panel>
 
-              {!existingConnection && (
+              {!existingConnection && (selectedDefinition?.supportedProtocols ?? []).length > 1 && (
                 <Panel as="section" className="config-fieldset flex flex-col gap-3">
                   <SectionHeader title="Protocol" />
                   <label className="label" htmlFor="provider-wizard-protocol">
@@ -749,11 +840,18 @@ export function ConnectionWizard({
                   reasoningConfig={reasoningConfig}
                   disabled={metadataLocked}
                   unifiedModels={existingConnection ? unifiedModels : null}
+                  previewModels={activePreview?.models ?? null}
+                  previewDiscoveredAt={activePreview?.discoveredAt ?? null}
                   discoveryAvailable={Boolean(
-                    existingConnection && selectedDefinition.supportsDiscovery && onDiscoverModels,
+                    selectedDefinition.supportsDiscovery
+                      && (existingConnection ? onDiscoverModels : onDiscoverDraftModels),
                   )}
                   discovering={discovering}
-                  onDiscoverModels={existingConnection && onDiscoverModels ? discoverModels : undefined}
+                  onDiscoverModels={
+                    (existingConnection && onDiscoverModels) || (!existingConnection && onDiscoverDraftModels)
+                      ? discoverModels
+                      : undefined
+                  }
                   onSelectedModelIdsChange={setConnectionModelIds}
                   onCustomModelsChange={setConnectionCustomModels}
                   onReasoningConfigChange={setReasoningConfig}

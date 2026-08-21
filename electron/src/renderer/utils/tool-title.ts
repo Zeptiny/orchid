@@ -265,15 +265,15 @@ function commandTitle(
   description: string | null,
   command: string | null,
 ): ToolTitle {
+  // The title shows the description (or the command when no description
+  // exists); the full command stays available inside the expanded widget body
+  // instead of being appended to a running title (issue #160).
   const display = description || (command ? `$ ${command}` : null);
-  const commandDetail = command && description && description !== command ? `$ ${command}` : null;
 
   if (status === 'generating' || status === 'running') {
     const verb = status === 'generating' ? 'Preparing to run' : 'Running';
     if (!display) return compose(strong(`${verb} command`));
-    return commandDetail
-      ? compose(strong(`${verb} ${display}`), text(' · '), code(commandDetail))
-      : labeled(verb, display);
+    return labeled(verb, display);
   }
 
   if (status === 'failed') {

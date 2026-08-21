@@ -7,7 +7,7 @@ import {
 } from '../llm/message-factories';
 
 import type { Message, Usage } from '../../shared/types/message';
-import { MessageType } from '../../shared/types/message';
+import { MessageRole, MessageType } from '../../shared/types/message';
 import type { ThinkingReplayPayload } from '../../shared/types/message';
 import type { CanonicalToolResult, TerminalToolResultStatus } from '../../shared/types/tool-result';
 import type { StreamEvent } from '../llm/orchestrator';
@@ -100,14 +100,26 @@ export class SubagentRunAssembler {
   private readonly newId: () => string;
   private readonly now: () => string;
   private committedSegmentCount = 0;
+  /** Initial base length — messages at or after this index were created by this run. */
+  private readonly baseMessageCount: number;
   private responseText = '';
   private resultText = '';
   private stepText = '';
   private lastStepResult = '';
   private accumulatedUsage: Usage | null = null;
+  /**
+   * Usage not yet stamped onto any transcript message. `accumulatedUsage`
+   * stays cumulative for the whole run (usage effects and finalization.usage
+   * report it), while this twin tracks only the portion no commit has carried
+   * into a message yet. Pause-boundary commits consume it, so the
+   * finalization commit can never stamp cumulative usage that an earlier
+   * boundary already stamped — per-message usage sums must not double-count.
+   */
+  private unstampedUsage: Usage | null = null;
 
   constructor(initialMessages: readonly Message[], options: SubagentRunAssemblerOptions = {}) {
     this.messages = [...initialMessages];
+    this.baseMessageCount = this.messages.length;
     this.newId = options.newId ?? (() => crypto.randomUUID());
     this.now = options.now ?? (() => new Date().toISOString());
   }
@@ -143,6 +155,7 @@ export class SubagentRunAssembler {
       }
       case 'usage': {
         this.accumulatedUsage = addStepUsage(this.accumulatedUsage, event.usage);
+        this.unstampedUsage = addStepUsage(this.unstampedUsage, event.usage);
         return this.accumulatedUsage ? [{ type: 'usage', usage: this.accumulatedUsage }] : [];
       }
       case 'tool_call_start':
@@ -170,7 +183,7 @@ export class SubagentRunAssembler {
   }
 
   complete(): SubagentRunFinalization {
-    this.commitThrough(this.segments.length, this.accumulatedUsage);
+    this.commitTail();
     const finalStepText = this.stepText.trim() ? this.stepText : this.lastStepResult;
     return this.finalization(
       'completed',
@@ -180,13 +193,39 @@ export class SubagentRunAssembler {
   }
 
   interrupt(): SubagentRunFinalization {
-    this.commitThrough(this.segments.length, this.accumulatedUsage);
+    this.commitTail();
     return this.finalization('interrupted', this.resultText || this.responseText || null, null);
   }
 
   fail(error: string): SubagentRunFinalization {
-    this.commitThrough(this.segments.length, this.accumulatedUsage);
+    this.commitTail();
     return this.finalization('failed', null, error);
+  }
+
+  /**
+   * Commit every pending text/thinking segment and return the full run
+   * transcript so far. The pause boundary (compaction apply) needs the
+   * accumulated history INCLUDING the current step's trailing text, which the
+   * regular commit path only flushes on the next tool call or finalization.
+   * Like the finalization paths, the boundary commit stamps the accumulated
+   * usage onto the trailing text message — a pause boundary that dropped the
+   * usage stamp would lose it permanently (the next segment's commit sees a
+   * fresh commit cursor) — and CONSUMES it, so the eventual finalization
+   * stamps only the usage that arrived after the boundary (never the same
+   * cumulative usage twice; see `unstampedUsage`).
+   */
+  snapshotTranscript(): Message[] {
+    this.commitTail();
+    return [...this.messages];
+  }
+
+  /**
+   * Replace the accumulated transcript base with a compacted history. Used by
+   * the compaction apply at the pause boundary so the finalization never
+   * resurrects un-flagged originals or duplicates the summary head.
+   */
+  rebase(messages: readonly Message[]): void {
+    this.messages.splice(0, this.messages.length, ...messages);
   }
 
   private appendText(kind: 'text' | 'thinking', append: string): SubagentRunProjectionEffect {
@@ -270,20 +309,49 @@ export class SubagentRunAssembler {
     };
   }
 
-  private commitThrough(endIndex: number, usage: Usage | null = null): void {
+  /**
+   * Commit the remaining uncommitted segments with only the usage no earlier
+   * boundary commit already stamped, and consume it once it actually lands on
+   * a text message. A commit whose range holds no stampable text leaves the
+   * usage unconsumed so a later commit can still carry it — but the tail IS
+   * the last commit, so residual usage falls back to the latest assistant
+   * text this run created (e.g. text → tool call → usage → finish, where the
+   * tool-call commit stamped nothing because the usage had not arrived yet)
+   * instead of being lost outright. Stamps are additive (`addStepUsage`) so a
+   * message already stamped at a pause boundary keeps its earlier usage.
+   */
+  private commitTail(): void {
+    if (this.commitThrough(this.segments.length, this.unstampedUsage)) {
+      this.unstampedUsage = null;
+      return;
+    }
+    if (!this.unstampedUsage) return;
+    for (let index = this.messages.length - 1; index >= this.baseMessageCount; index -= 1) {
+      const message = this.messages[index]!;
+      if (message.type !== MessageType.TEXT || message.role !== MessageRole.ASSISTANT) continue;
+      this.messages[index] = { ...message, usage: addStepUsage(message.usage, this.unstampedUsage) };
+      this.unstampedUsage = null;
+      return;
+    }
+  }
+
+  private commitThrough(endIndex: number, usage: Usage | null = null): boolean {
     const lastTextIndex = this.segments
       .slice(this.committedSegmentCount, endIndex)
       .map((segment, index) => ({ segment, index: this.committedSegmentCount + index }))
       .filter(({ segment }) => segment.kind === 'text')
       .at(-1)?.index;
+    let stampedUsage = false;
     for (let index = this.committedSegmentCount; index < endIndex; index += 1) {
       const segment = this.segments[index];
       if (segment.kind === 'text' && segment.content.trim()) {
+        const stamp = usage && index === lastTextIndex ? usage : null;
         this.messages.push(makeAssistantMessage(
           segment.content,
-          usage && index === lastTextIndex ? usage : null,
+          stamp,
           segment.id,
         ));
+        if (stamp) stampedUsage = true;
       } else if (segment.kind === 'thinking' && segment.content.trim()) {
         this.messages.push(makeThinkingMessage(
           segment.content,
@@ -293,6 +361,7 @@ export class SubagentRunAssembler {
       }
     }
     this.committedSegmentCount = Math.max(this.committedSegmentCount, endIndex);
+    return stampedUsage;
   }
 
   private finalization(

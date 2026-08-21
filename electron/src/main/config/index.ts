@@ -5,10 +5,22 @@
 export {
   configSchema,
   ragConfigSchema,
+  agentsMdConfigSchema,
+  subagentsConfigSchema,
+  compactionScopeSchema,
+  compactionSubagentsScopeSchema,
+  compactionConfigSchema,
+  COMPACTION_MODES,
   defaults,
   parsePartial,
   type Config,
   type RAGConfig,
+  type AgentsMdConfig,
+  type AgentsMdEnforcePolicy,
+  type SubagentsConfig,
+  type CompactionConfig,
+  type CompactionScopeConfig,
+  type CompactionMode,
   type ConfigDeepPartialInput,
 } from './schema';
 

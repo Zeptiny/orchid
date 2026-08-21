@@ -10,6 +10,7 @@ import { makeAssistantMessage, makeThinkingMessage } from '../llm/message-factor
 import type { Chain } from '../../shared/types/chain';
 import {
   SubagentDeltaEventType,
+  type SubagentCompactionProgressEvent,
   type SubagentDeltaEvent,
   type SubagentDeltaEventBase,
   type SubagentLiveProjection,
@@ -27,7 +28,9 @@ type MutableLiveProjection = {
     ? SubagentLiveSegment[]
     : K extends 'toolCalls'
       ? MutableToolSnapshot[]
-      : SubagentLiveProjection[K];
+      : K extends 'compactionProgress'
+        ? SubagentCompactionProgressEvent | null
+        : SubagentLiveProjection[K];
 };
 
 type DistributiveOmit<T, K extends PropertyKey> = T extends unknown ? Omit<T, K> : never;
@@ -111,6 +114,7 @@ export class SubagentLiveProjectionStore {
         usage: null,
         result: null,
         error: null,
+        compactionProgress: null,
       },
       committedSegmentCount: 0,
       terminalEmitted: params.terminalEmitted === true,
@@ -181,6 +185,10 @@ export class SubagentLiveProjectionStore {
     if (patch.usage !== undefined) live.usage = patch.usage;
     if (patch.result !== undefined) live.result = patch.result;
     if (patch.error !== undefined) live.error = patch.error;
+    // Compaction progress copies like every other field: an explicit null
+    // clears a retained terminal phase, an omitted key preserves the last
+    // event (the same undefined-vs-null contract as usage/result/error).
+    if (patch.compactionProgress !== undefined) live.compactionProgress = patch.compactionProgress;
     if (patch.segments !== undefined) {
       live.segments.length = 0;
       live.segments.push(...patch.segments.map((segment) => ({ ...segment })));
@@ -195,6 +203,38 @@ export class SubagentLiveProjectionStore {
   /** Publish a manager-originated status/spawn delta with current stream identity. */
   emit(subagentId: string, delta: SubagentDeltaPayload): void {
     this.emitEntry(this.requireEntry(subagentId), delta);
+  }
+
+  /**
+   * Emit a compaction progress event for a subagent run. The projection stores
+   * the latest progress so the renderer can render the CompactionWidget from
+   * the live projection. Terminal phases (`complete`/`failed`) are retained
+   * until the next compaction or run reset clears them.
+   */
+  emitCompactionProgress(
+    subagentId: string,
+    progress: Omit<SubagentCompactionProgressEvent, keyof SubagentDeltaEventBase | 'type'>,
+  ): void {
+    const entry = this.requireEntry(subagentId);
+    // The delta wire schema requires a UUID sessionId; a run without a session
+    // binding cannot carry a parseable compaction event, so skip rather than
+    // emit one the preload boundary would drop.
+    const sessionId = entry.projection.sessionId;
+    if (!sessionId) return;
+    entry.projection.compactionProgress = {
+      type: SubagentDeltaEventType.COMPACTION_PROGRESS,
+      sessionId,
+      subagentId: entry.projection.subagentId,
+      runId: entry.projection.runId,
+      sequence: entry.projection.sequence + 1,
+      sessionRevision: this.getSessionRevision(sessionId) + 1,
+      ...progress,
+    } as SubagentCompactionProgressEvent;
+    this.advance(entry);
+    this.emitEntry(entry, {
+      type: SubagentDeltaEventType.COMPACTION_PROGRESS,
+      ...progress,
+    });
   }
 
   /**
@@ -385,6 +425,7 @@ export class SubagentLiveProjectionStore {
     if (!entry) return;
     entry.projection.segments.length = 0;
     entry.projection.toolCalls.length = 0;
+    entry.projection.compactionProgress = null;
     entry.committedSegmentCount = 0;
   }
 
@@ -412,6 +453,7 @@ export class SubagentLiveProjectionStore {
     entry.projection.usage = params.usage;
     entry.projection.segments.length = 0;
     entry.projection.toolCalls.length = 0;
+    entry.projection.compactionProgress = null;
     entry.committedSegmentCount = 0;
     this.advance(entry);
     this.emitEntry(entry, {
@@ -462,6 +504,7 @@ export function cloneLiveProjection(projection: SubagentLiveProjection): Subagen
     ...projection,
     segments: projection.segments.map((segment) => ({ ...segment })),
     toolCalls: projection.toolCalls.map((tool) => ({ ...tool })),
+    compactionProgress: projection.compactionProgress,
   };
 }
 

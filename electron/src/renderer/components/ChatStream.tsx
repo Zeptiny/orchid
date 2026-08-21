@@ -11,6 +11,7 @@
 import { useRef, useEffect, useCallback, useState, useMemo, type ReactNode } from 'react';
 import type { Chain } from '../../shared/types/chain';
 import type { Message, Usage } from '../../shared/types/message';
+import type { ChatTurnCompactionProgress } from '../../shared/chat/turn-projection';
 import { EMPTY_SUBAGENT_USAGE_SUMMARY, type SubagentUsageSummary } from '../../shared/usage';
 import {
   useElapsedSeconds,
@@ -37,6 +38,9 @@ import { Button } from './ui/Button';
 import orchidIcon from '../assets/orchid-icon.svg';
 import { useSmartAutoScroll } from '../hooks/useSmartAutoScroll';
 import { shouldAutoScroll } from '../hooks/useSmartAutoScroll';
+import { CompactionRunningWidget, CompactionWidget, CompactedRangeStub } from './ToolResults/CompactionWidget';
+import { compactionProgressToWidgetItem } from '../utils/stream-building';
+import { MAIN_AGENT_SCOPE_ID } from '../../shared/types/agent-scope';
 
 export { AUTO_SCROLL_THRESHOLD_PX, isUserScrolledAwayFromBottom, shouldAutoScroll } from '../hooks/useSmartAutoScroll';
 export { CHAIN_COLLAPSE_THRESHOLD, shouldRenderChainFooter, suppressLiveMessagesAlreadyInHistory } from '../utils/stream-building';
@@ -101,6 +105,8 @@ interface ChatStreamProps {
   alwaysExpandToolGroups?: boolean;
   /** Hydrate the next older bounded page for a chain. */
   onLoadHistoryPage?: (chainIndex: number) => Promise<unknown> | void;
+  /** Live compaction progress for the main scope; null when no compaction is active. */
+  compactionProgress?: ChatTurnCompactionProgress | null;
 }
 
 /**
@@ -131,6 +137,7 @@ export function ChatStream({
   interrupted,
   alwaysExpandToolGroups = false,
   onLoadHistoryPage,
+  compactionProgress = null,
 }: ChatStreamProps) {
   const {
     containerRef,
@@ -144,6 +151,10 @@ export function ChatStream({
   });
   /** Chain indexes the user expanded from a collapsed stub. */
   const [expandedChainIndexes, setExpandedChainIndexes] = useState<Set<number>>(
+    () => new Set(),
+  );
+  /** Compacted-range stubs the user expanded — display-only, independent of persistence flags. */
+  const [expandedCompactedKeys, setExpandedCompactedKeys] = useState<Set<string>>(
     () => new Set(),
   );
   const [loadingHistoryChainIds, setLoadingHistoryChainIds] = useState<Set<string>>(
@@ -183,6 +194,15 @@ export function ChatStream({
     }
   }, [sessionChains, onLoadHistoryPage, loadingHistoryChainIds]);
 
+  const expandCompacted = useCallback((key: string) => {
+    setExpandedCompactedKeys((prev) => {
+      if (prev.has(key)) return prev;
+      const next = new Set(prev);
+      next.add(key);
+      return next;
+    });
+  }, []);
+
   // When a new stream starts, pin to bottom only if the user was already near
   // the bottom. Do not force-scroll readers who scrolled away mid-history.
   const prevStatusRef = useRef(status);
@@ -199,6 +219,7 @@ export function ChatStream({
   // Reset scroll-away + expanded stubs only when the session is replaced.
   useEffect(() => {
     setExpandedChainIndexes(new Set());
+    setExpandedCompactedKeys(new Set());
     setLoadingHistoryChainIds(new Set());
   }, [sessionId]);
 
@@ -220,6 +241,7 @@ export function ChatStream({
         sessionChains,
         interrupted: Boolean(interrupted),
         expandedChainIndexes,
+        expandedCompactedKeys,
       }),
     [
       messages,
@@ -230,6 +252,7 @@ export function ChatStream({
       sessionChains,
       interrupted,
       expandedChainIndexes,
+      expandedCompactedKeys,
     ],
   );
 
@@ -269,12 +292,13 @@ export function ChatStream({
         item,
         alwaysExpandToolGroups,
         expandChain,
+        expandCompacted,
         loadingHistoryChainIds,
         subagents,
         sessionId,
       ),
     ),
-    [historyItems, alwaysExpandToolGroups, expandChain, loadingHistoryChainIds, subagents, sessionId],
+    [historyItems, alwaysExpandToolGroups, expandChain, expandCompacted, loadingHistoryChainIds, subagents, sessionId],
   );
   const liveTailNodes = useMemo(
     () => liveGroupedItems.map((item) =>
@@ -282,12 +306,13 @@ export function ChatStream({
         item,
         alwaysExpandToolGroups,
         expandChain,
+        expandCompacted,
         loadingHistoryChainIds,
         subagents,
         sessionId,
       ),
     ),
-    [liveGroupedItems, alwaysExpandToolGroups, expandChain, loadingHistoryChainIds, subagents, sessionId],
+    [liveGroupedItems, alwaysExpandToolGroups, expandChain, expandCompacted, loadingHistoryChainIds, subagents, sessionId],
   );
   const activeFooterNode = useMemo(() => {
     if (!history.activeFooter) return null;
@@ -305,6 +330,7 @@ export function ChatStream({
       },
       alwaysExpandToolGroups,
       expandChain,
+      expandCompacted,
       loadingHistoryChainIds,
       subagents,
       sessionId,
@@ -317,6 +343,7 @@ export function ChatStream({
     liveElapsedSeconds,
     alwaysExpandToolGroups,
     expandChain,
+    expandCompacted,
     loadingHistoryChainIds,
     subagents,
     sessionId,
@@ -327,6 +354,22 @@ export function ChatStream({
       : [...historyNodes, ...liveTailNodes],
     [historyNodes, liveTailNodes, activeFooterNode],
   );
+
+  const compactionWidgetNode = useMemo(() => {
+    const item = compactionProgressToWidgetItem(MAIN_AGENT_SCOPE_ID, compactionProgress);
+    if (!item) return null;
+    return (
+      <CompactionRunningWidget
+        key={item.key}
+        status={item.status}
+        phase={item.phase}
+        mode={item.mode}
+        detail={item.detail}
+        streamText={item.streamText ?? null}
+        estimatedTokens={item.estimatedTokens ?? null}
+      />
+    );
+  }, [compactionProgress]);
 
   const hasPagedSessionHistory = sessionChains.some(
     (chain) => (chain.messageCount ?? chain.messages.length) > 0,
@@ -389,6 +432,7 @@ export function ChatStream({
             final nodes flat lets React retain shared segment/footer keys across
             the live→committed swap instead of replaying entrance animation. */}
         {streamNodes}
+        {compactionWidgetNode}
         {error && (
           <div className="orchid-error-slot">
             <ErrorBanner
@@ -419,6 +463,7 @@ function renderStreamItem(
   item: StreamItem,
   alwaysExpandToolGroups: boolean,
   onExpandChain: (chainIndex: number) => void,
+  onExpandCompacted: (key: string) => void,
   loadingHistoryChainIds: ReadonlySet<string>,
   subagents: readonly SubagentTitleRecord[],
   sessionId: string | null,
@@ -436,6 +481,12 @@ function renderStreamItem(
         sessionId={sessionId}
       />
     );
+  }
+  if (item.kind === 'compaction-summary') {
+    return <CompactionWidget key={item.key} messages={item.messages} />;
+  }
+  if (item.kind === 'compacted-stub') {
+    return <CompactedRangeStub key={item.key} count={item.count} onExpand={() => onExpandCompacted(item.key)} />;
   }
   if (item.kind === 'collapsed-stub' || item.kind === 'history-gap') {
     return (

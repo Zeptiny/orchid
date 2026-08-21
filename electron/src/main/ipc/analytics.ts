@@ -3,14 +3,13 @@ import { IPC_CHANNELS } from '../../shared/types/ipc';
 import { z } from 'zod';
 import type { AnalyticsTimeRange } from '../../shared/types/analytics';
 import {
-  getOverview,
   getSessions,
   getSessionDetail,
   getModels,
   getTools,
   getSubagents,
 } from '../providers/accounting/analytics-queries';
-import { runContextQuery } from '../providers/accounting/analytics-query-runner';
+import { runAnalyticsQuery } from '../providers/accounting/analytics-query-runner';
 
 const timeRangeSchema = z.object({
   startDate: z.string().optional(),
@@ -23,6 +22,7 @@ const analyticsParamsSchema = z.object({
 
 const sessionsParamsSchema = z.object({
   limit: z.number().int().positive().max(10000).optional(),
+  offset: z.number().int().nonnegative().max(1_000_000).optional(),
   timeRange: timeRangeSchema,
 }).optional();
 
@@ -30,6 +30,29 @@ const sessionDetailParamsSchema = z.object({
   sessionId: z.string().uuid(),
   timeRange: timeRangeSchema,
 });
+
+const modelDetailParamsSchema = z.object({
+  modelId: z.string().min(1),
+  providerId: z.string().min(1),
+  connectionId: z.string().uuid(),
+  timeRange: timeRangeSchema,
+});
+
+const subagentDetailParamsSchema = z.object({
+  agentName: z.string().min(1),
+  agentType: z.string().min(1),
+  agentTier: z.string().min(1),
+  timeRange: timeRangeSchema,
+});
+
+const contextSessionDetailParamsSchema = z.object({
+  sessionId: z.string().uuid(),
+  timeRange: timeRangeSchema,
+});
+
+const contextSessionsParamsSchema = z.object({
+  timeRange: timeRangeSchema,
+}).optional();
 
 const contextParamsSchema = z.object({
   sessionId: z.string().uuid().optional(),
@@ -42,7 +65,7 @@ export function registerAnalyticsIPC(): void {
     if (!parsed.success) throw new Error('Invalid analytics:overview payload');
     const timeRange = parsed.data?.timeRange as AnalyticsTimeRange | undefined;
     try {
-      return getOverview(timeRange);
+      return await runAnalyticsQuery('overview', { timeRange });
     } catch (error) {
       console.error('[analytics] Overview query failed', { error });
       throw new Error(`Analytics overview query failed: ${error instanceof Error ? error.message : String(error)}`, { cause: error });
@@ -53,9 +76,10 @@ export function registerAnalyticsIPC(): void {
     const parsed = sessionsParamsSchema.safeParse(payload);
     if (!parsed.success) throw new Error('Invalid analytics:sessions payload');
     const limit = parsed.data?.limit;
+    const offset = parsed.data?.offset;
     const timeRange = parsed.data?.timeRange as AnalyticsTimeRange | undefined;
     try {
-      return getSessions(limit, timeRange);
+      return getSessions(limit, timeRange, offset);
     } catch (error) {
       console.error('[analytics] Sessions query failed', { error });
       throw new Error(`Analytics sessions query failed: ${error instanceof Error ? error.message : String(error)}`, { cause: error });
@@ -85,6 +109,24 @@ export function registerAnalyticsIPC(): void {
     }
   });
 
+  ipcMain.handle(IPC_CHANNELS.ANALYTICS_MODEL_DETAIL, async (_event, payload: unknown) => {
+    const parsed = modelDetailParamsSchema.safeParse(payload);
+    if (!parsed.success) throw new Error('Invalid analytics:model_detail payload');
+    try {
+      return await runAnalyticsQuery('model_detail', {
+        modelDetail: {
+          modelId: parsed.data.modelId,
+          providerId: parsed.data.providerId,
+          connectionId: parsed.data.connectionId,
+        },
+        timeRange: parsed.data.timeRange as AnalyticsTimeRange | undefined,
+      });
+    } catch (error) {
+      console.error('[analytics] Model detail query failed', { error });
+      throw new Error(`Analytics model detail query failed: ${error instanceof Error ? error.message : String(error)}`, { cause: error });
+    }
+  });
+
   ipcMain.handle(IPC_CHANNELS.ANALYTICS_TOOLS, async (_event, payload?: unknown) => {
     const parsed = analyticsParamsSchema.safeParse(payload);
     if (!parsed.success) throw new Error('Invalid analytics:tools payload');
@@ -109,16 +151,61 @@ export function registerAnalyticsIPC(): void {
     }
   });
 
+  ipcMain.handle(IPC_CHANNELS.ANALYTICS_SUBAGENT_DETAIL, async (_event, payload: unknown) => {
+    const parsed = subagentDetailParamsSchema.safeParse(payload);
+    if (!parsed.success) throw new Error('Invalid analytics:subagent_detail payload');
+    try {
+      return await runAnalyticsQuery('subagent_detail', {
+        subagentDetail: {
+          agentName: parsed.data.agentName,
+          agentType: parsed.data.agentType,
+          agentTier: parsed.data.agentTier,
+        },
+        timeRange: parsed.data.timeRange as AnalyticsTimeRange | undefined,
+      });
+    } catch (error) {
+      console.error('[analytics] Subagent detail query failed', { error });
+      throw new Error(`Analytics subagent detail query failed: ${error instanceof Error ? error.message : String(error)}`, { cause: error });
+    }
+  });
+
   ipcMain.handle(IPC_CHANNELS.ANALYTICS_CONTEXT, async (_event, payload?: unknown) => {
     const parsed = contextParamsSchema.safeParse(payload);
     if (!parsed.success) throw new Error('Invalid analytics:context payload');
     const sessionId = parsed.data?.sessionId;
     const timeRange = parsed.data?.timeRange as AnalyticsTimeRange | undefined;
     try {
-      return await runContextQuery(sessionId, timeRange);
+      return await runAnalyticsQuery('context', { sessionId, timeRange });
     } catch (error) {
       console.error('[analytics] Context query failed', { error });
       throw new Error(`Analytics context query failed: ${error instanceof Error ? error.message : String(error)}`, { cause: error });
+    }
+  });
+
+  ipcMain.handle(IPC_CHANNELS.ANALYTICS_CONTEXT_SESSION_DETAIL, async (_event, payload: unknown) => {
+    const parsed = contextSessionDetailParamsSchema.safeParse(payload);
+    if (!parsed.success) throw new Error('Invalid analytics:context_session_detail payload');
+    try {
+      return await runAnalyticsQuery('context_session_detail', {
+        sessionId: parsed.data.sessionId,
+        timeRange: parsed.data.timeRange as AnalyticsTimeRange | undefined,
+      });
+    } catch (error) {
+      console.error('[analytics] Context session detail query failed', { error });
+      throw new Error(`Analytics context session detail query failed: ${error instanceof Error ? error.message : String(error)}`, { cause: error });
+    }
+  });
+
+  ipcMain.handle(IPC_CHANNELS.ANALYTICS_CONTEXT_SESSIONS, async (_event, payload?: unknown) => {
+    const parsed = contextSessionsParamsSchema.safeParse(payload);
+    if (!parsed.success) throw new Error('Invalid analytics:context_sessions payload');
+    try {
+      return await runAnalyticsQuery('context_sessions', {
+        timeRange: parsed.data?.timeRange as AnalyticsTimeRange | undefined,
+      });
+    } catch (error) {
+      console.error('[analytics] Context sessions query failed', { error });
+      throw new Error(`Analytics context sessions query failed: ${error instanceof Error ? error.message : String(error)}`, { cause: error });
     }
   });
 }
@@ -128,7 +215,11 @@ export function unregisterAnalyticsIPC(): void {
   ipcMain.removeHandler(IPC_CHANNELS.ANALYTICS_SESSIONS);
   ipcMain.removeHandler(IPC_CHANNELS.ANALYTICS_SESSION_DETAIL);
   ipcMain.removeHandler(IPC_CHANNELS.ANALYTICS_MODELS);
+  ipcMain.removeHandler(IPC_CHANNELS.ANALYTICS_MODEL_DETAIL);
   ipcMain.removeHandler(IPC_CHANNELS.ANALYTICS_TOOLS);
   ipcMain.removeHandler(IPC_CHANNELS.ANALYTICS_SUBAGENTS);
+  ipcMain.removeHandler(IPC_CHANNELS.ANALYTICS_SUBAGENT_DETAIL);
   ipcMain.removeHandler(IPC_CHANNELS.ANALYTICS_CONTEXT);
+  ipcMain.removeHandler(IPC_CHANNELS.ANALYTICS_CONTEXT_SESSION_DETAIL);
+  ipcMain.removeHandler(IPC_CHANNELS.ANALYTICS_CONTEXT_SESSIONS);
 }

@@ -3,19 +3,13 @@ import type {
   SessionActivityPhase,
   SessionExecutionState,
 } from '../../shared/types/ipc-boundary';
+import { compareSessionActivity } from '../../shared/utils/session-activity-order';
 
 export type SessionActivityUpdate = Partial<
   Omit<SessionActivity, 'sessionId' | 'updatedAt'>
 > & {
   state?: SessionExecutionState;
   phase?: SessionActivityPhase;
-};
-
-const PRIORITY: Record<SessionExecutionState, number> = {
-  needs_attention: 0,
-  working: 1,
-  waiting: 2,
-  idle: 3,
 };
 
 function emptyActivity(sessionId: string, now: number): SessionActivity {
@@ -91,14 +85,7 @@ export class SessionActivityStore {
         activity.unread ||
         activity.backgroundProcessCount > 0,
       )
-      .sort((a, b) => {
-        const priority = PRIORITY[a.state] - PRIORITY[b.state];
-        if (priority !== 0) return priority;
-        if (a.state === 'idle' && b.state === 'idle') {
-          if (a.unread !== b.unread) return a.unread ? -1 : 1;
-        }
-        return b.updatedAt - a.updatedAt;
-      });
+      .sort(compareSessionActivity);
   }
 
   clear(): void {

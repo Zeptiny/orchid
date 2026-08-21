@@ -37,8 +37,19 @@ export type ActiveAgent = {
    * Turn-local chain messages = messages.slice(priorMessageCount) + turnMessages.
    */
   priorMessageCount: number;
-  /** Messages produced during this turn (tool calls/results + assistant). */
+  /**
+   * Messages produced during this turn (tool calls/results + assistant).
+   */
   turnMessages: Message[];
+  /**
+   * Transcript-complete turn slice (from this turn's user message) used by
+   * durable writes (checkpoints, finalize, abort). Set after a mid-turn
+   * compaction rewrote `messages` to the model-view replay: the replay drops
+   * flagged originals and superseded heads, so deriving the durable row from
+   * it would durably erase them (review #54). Absent → derive from
+   * `messages.slice(priorMessageCount)` as before.
+   */
+  transcriptBase?: Message[];
   /** Length of context.response already snapshotted into turnMessages as text. */
   responseCommittedLength: number;
   /** Length of context.thinking already snapshotted into turnMessages. */
@@ -84,7 +95,7 @@ export type ChatStatePayload = {
 
 export const activeAgents = new Map<string, ActiveAgent>();
 export const sessionsStarting = new Set<string>();
-export const pendingCheckpoints = new Map<string, { timer: ReturnType<typeof setTimeout>; messages: Message[] }>();
+export const pendingCheckpoints = new Map<string, { timer: ReturnType<typeof setTimeout>; snapshot: () => Message[]; guard?: (active: ActiveAgent) => boolean }>();
 /**
  * Sessions with an auto-name LLM attempt in flight. Concurrent triggers
  * (mid-turn deadline vs. turn end vs. interruption) must not each start a
@@ -118,10 +129,81 @@ export function nextAgentGeneration(sessionId: string): number {
   return gen;
 }
 
+/**
+ * Per-session operation gate serializing manual compaction (`/compact`)
+ * against turn starts. A manual compaction runs its whole body — busy check
+ * through compaction persistence and the terminal widget event — under the
+ * gate; `startChatTurn` waits out an in-flight gate before claiming the
+ * turn-start slot. The opposite direction is covered by the compaction entry
+ * busy check (activeAgents/sessionsStarting). Entries self-clean: the map
+ * holds only the unsettled tail of the per-session chain.
+ */
+const sessionOperationGates = new Map<string, Promise<void>>();
+
+/** Run `operation` after any in-flight gated operation for this session. */
+export function runWithSessionOperationGate<T>(
+  sessionId: string,
+  operation: () => Promise<T>,
+): Promise<T> {
+  const previous = sessionOperationGates.get(sessionId) ?? Promise.resolve();
+  const run = previous.then(operation, operation);
+  const tail = run.then(
+    () => {},
+    () => {},
+  );
+  sessionOperationGates.set(sessionId, tail);
+  void tail.then(() => {
+    if (sessionOperationGates.get(sessionId) === tail) sessionOperationGates.delete(sessionId);
+  });
+  return run;
+}
+
+/** The unsettled gated operation for this session, if any (never rejects). */
+export function sessionOperationGateTail(sessionId: string): Promise<void> | null {
+  return sessionOperationGates.get(sessionId) ?? null;
+}
+
 /** Whether a session still has a cancellable main-agent turn. */
 export function hasLiveMainTurn(sessionId: string): boolean {
   const active = activeAgents.get(sessionId);
   return active != null && !active.agentCancelled && !active.finalized;
+}
+
+/**
+ * Staged subagent-only Esc confirmation (the third interrupt layer without a
+ * live main-agent turn). After the main agent is cancelled and its ActiveAgent
+ * disposed, session-owned subagents may still run; the first Esc stages this
+ * confirmation and the next one cancels them. The stage expires after the same
+ * window the interrupt machine uses, so a late Esc re-stages the confirmation
+ * instead of firing the destructive cancel.
+ */
+const SUBAGENT_CANCEL_CONFIRM_WINDOW_MS = 5000;
+
+const subagentCancelConfirms = new Map<string, { resetTimer: ReturnType<typeof setTimeout> }>();
+
+/** Stage (or re-stage) the subagent-cancel confirmation window for a session. */
+export function stageSubagentCancelConfirm(sessionId: string): void {
+  clearSubagentCancelConfirm(sessionId);
+  const resetTimer = setTimeout(() => {
+    subagentCancelConfirms.delete(sessionId);
+  }, SUBAGENT_CANCEL_CONFIRM_WINDOW_MS);
+  subagentCancelConfirms.set(sessionId, { resetTimer });
+}
+
+/** Consume a staged confirmation; false when none is within its window. */
+export function consumeSubagentCancelConfirm(sessionId: string): boolean {
+  const entry = subagentCancelConfirms.get(sessionId);
+  if (!entry) return false;
+  clearSubagentCancelConfirm(sessionId);
+  return true;
+}
+
+/** Drop a staged confirmation (new turn start, no running subagents, …). */
+export function clearSubagentCancelConfirm(sessionId: string): void {
+  const entry = subagentCancelConfirms.get(sessionId);
+  if (!entry) return;
+  clearTimeout(entry.resetTimer);
+  subagentCancelConfirms.delete(sessionId);
 }
 
 /**

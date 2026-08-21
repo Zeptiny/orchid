@@ -22,7 +22,7 @@ describe('tool widget titles', () => {
     expect(toolTitleText(title)).toBe('Preparing to run $ npm test -- --run tests/integration/renderer-style-contract.test.ts');
   });
 
-  it('shows the description and full command while execute_command is running', () => {
+  it('shows only the description while execute_command is running (command lives in the widget body)', () => {
     const title = buildToolTitle({
       toolName: 'execute_command',
       status: 'running',
@@ -33,9 +33,7 @@ describe('tool widget titles', () => {
       partialArgs: '',
     });
 
-    expect(toolTitleText(title)).toBe(
-      'Running renderer tests · $ npm test -- --run tests/integration/renderer-style-contract.test.ts',
-    );
+    expect(toolTitleText(title)).toBe('Running renderer tests');
   });
 
   it('uses the assigned subagent names for wait_for_subagent', () => {

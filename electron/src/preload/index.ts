@@ -23,6 +23,7 @@ import type {
   ChatCancelMessage,
   ChatQueueNextRequest,
   ChatStopMessage,
+  ChatCompactResult,
   ChatSnapshotMessage,
   ChatChunkEvent,
   ChatThinkingEvent,
@@ -43,6 +44,7 @@ import type {
   ProviderConnectionIdMessage,
   ProviderDisconnectMessage,
   ProviderDeleteConnectionMessage,
+  ProviderDraftDiscoveryMessage,
   ProviderModelListMessage,
   ProviderStatusRefreshMessage,
   SessionLoadMessage,
@@ -111,15 +113,20 @@ import type {
   TrustedProjectEntry,
   StartupSnapshot,
   StartupContinueDegradedResult,
+  CompactionProgressEvent,
 } from '../shared/types/ipc';
 import type {
   OverviewResult,
   SessionsResult,
   SessionDetailResult,
   ModelsResult,
+  ModelDetailResult,
   ToolsResult,
   SubagentsResult,
+  SubagentAnalyticsDetailResult,
   ContextResult,
+  ContextSessionDetailResult,
+  ContextSessionsResult,
   AnalyticsTimeRange,
 } from '../shared/types/analytics';
 import {
@@ -132,9 +139,11 @@ import {
   chatToolCallStartEventSchema,
   chatToolCallDeltaEventSchema,
   chatToolCallUpdateEventSchema,
+  compactionProgressEventSchema,
   sessionRenamedEventSchema,
   sessionCreatedEventSchema,
   sessionUpdatedEventSchema,
+  sessionCompactionEventSchema,
   sessionWorkspaceChangedEventSchema,
   sessionTodosChangedEventSchema,
   sessionActivityChangedEventSchema,
@@ -341,6 +350,9 @@ const orchidAPI: OrchidAPI = {
     stop: (message: ChatStopMessage) =>
       invoke(IPC_CHANNELS.CHAT_STOP, message),
 
+    compact: (message?: ChatCancelMessage) =>
+      invoke<ChatCompactResult>(IPC_CHANNELS.CHAT_COMPACT, message ?? {}),
+
     snapshot: (message?: ChatSnapshotMessage) =>
       invoke(IPC_CHANNELS.CHAT_SNAPSHOT, message ?? {}),
 
@@ -370,6 +382,9 @@ const orchidAPI: OrchidAPI = {
 
     onToolCallUpdate: (callback: (event: ChatToolCallUpdateEvent) => void) =>
       onParsed(IPC_CHANNELS.CHAT_TOOL_CALL_UPDATE, chatToolCallUpdateEventSchema, callback),
+
+    onCompactionProgress: (callback: (event: CompactionProgressEvent) => void) =>
+      onParsed(IPC_CHANNELS.CHAT_COMPACTION_PROGRESS, compactionProgressEventSchema, callback),
   },
 
   config: {
@@ -431,6 +446,9 @@ const orchidAPI: OrchidAPI = {
 
     discoverModels: (message: ProviderConnectionIdMessage) =>
       invoke(IPC_CHANNELS.PROVIDERS_DISCOVER_MODELS, message),
+
+    discoverDraftModels: (message: ProviderDraftDiscoveryMessage) =>
+      invoke(IPC_CHANNELS.PROVIDERS_DISCOVER_DRAFT_MODELS, message),
 
     refreshStatus: (message: ProviderStatusRefreshMessage) =>
       invoke(IPC_CHANNELS.PROVIDERS_STATUS_REFRESH, message),
@@ -526,6 +544,9 @@ const orchidAPI: OrchidAPI = {
 
     onUpdated: (callback: (event: SessionUpdatedEvent) => void) =>
       onParsed(IPC_CHANNELS.SESSION_UPDATED, sessionUpdatedEventSchema, callback),
+
+    onCompaction: (callback: (event: import('../shared/types/ipc').SessionCompactionEvent) => void) =>
+      onParsed(IPC_CHANNELS.SESSION_COMPACTION, sessionCompactionEventSchema, callback),
 
     onWorkspaceChanged: (callback: (event: SessionWorkspaceChangedEvent) => void) =>
       onParsed(IPC_CHANNELS.SESSION_WORKSPACE_CHANGED, sessionWorkspaceChangedEventSchema, callback),
@@ -706,7 +727,7 @@ const orchidAPI: OrchidAPI = {
     overview: (params?: { readonly timeRange?: AnalyticsTimeRange }) =>
       invoke<OverviewResult>(IPC_CHANNELS.ANALYTICS_OVERVIEW, params),
 
-    sessions: (params?: { readonly limit?: number; readonly timeRange?: AnalyticsTimeRange }) =>
+    sessions: (params?: { readonly limit?: number; readonly offset?: number; readonly timeRange?: AnalyticsTimeRange }) =>
       invoke<SessionsResult>(IPC_CHANNELS.ANALYTICS_SESSIONS, params),
 
     sessionDetail: (params: { readonly sessionId: string; readonly timeRange?: AnalyticsTimeRange }) =>
@@ -715,14 +736,26 @@ const orchidAPI: OrchidAPI = {
     models: (params?: { readonly timeRange?: AnalyticsTimeRange }) =>
       invoke<ModelsResult>(IPC_CHANNELS.ANALYTICS_MODELS, params),
 
+    modelDetail: (params: { readonly modelId: string; readonly providerId: string; readonly connectionId: string; readonly timeRange?: AnalyticsTimeRange }) =>
+      invoke<ModelDetailResult>(IPC_CHANNELS.ANALYTICS_MODEL_DETAIL, params),
+
     tools: (params?: { readonly timeRange?: AnalyticsTimeRange }) =>
       invoke<ToolsResult>(IPC_CHANNELS.ANALYTICS_TOOLS, params),
 
     subagents: (params?: { readonly timeRange?: AnalyticsTimeRange }) =>
       invoke<SubagentsResult>(IPC_CHANNELS.ANALYTICS_SUBAGENTS, params),
 
+    subagentDetail: (params: { readonly agentName: string; readonly agentType: string; readonly agentTier: string; readonly timeRange?: AnalyticsTimeRange }) =>
+      invoke<SubagentAnalyticsDetailResult>(IPC_CHANNELS.ANALYTICS_SUBAGENT_DETAIL, params),
+
     context: (params?: { readonly sessionId?: string; readonly timeRange?: AnalyticsTimeRange }) =>
       invoke<ContextResult>(IPC_CHANNELS.ANALYTICS_CONTEXT, params),
+
+    contextSessionDetail: (params: { readonly sessionId: string; readonly timeRange?: AnalyticsTimeRange }) =>
+      invoke<ContextSessionDetailResult>(IPC_CHANNELS.ANALYTICS_CONTEXT_SESSION_DETAIL, params),
+
+    contextSessions: (params?: { readonly timeRange?: AnalyticsTimeRange }) =>
+      invoke<ContextSessionsResult>(IPC_CHANNELS.ANALYTICS_CONTEXT_SESSIONS, params),
   },
 };
 

@@ -4,6 +4,12 @@
  * `chat.ts` validates the untrusted payload and delegates here. Keeping the
  * actor lifecycle in this module prevents IPC registration from also owning
  * projection, persistence, and resource cleanup policies.
+ *
+ * The main-session compaction engine (trigger/pending state, prepare/apply
+ * orchestration, selective persistence) lives in `./compaction`; this module
+ * only calls into it at the turn's compaction seams: turn-start pending
+ * consumption, send-time synchronous compaction, mid-turn usage events, the
+ * compaction pause/resume boundary, and the overflow retry.
  */
 import type { LanguageModelV4 } from '@ai-sdk/provider';
 import type { WebContents } from 'electron';
@@ -41,17 +47,20 @@ import { acquireProjectMCPManager, releaseProjectMCPManager } from '../../mcp/pr
 import { IPC_CHANNELS } from '../../../shared/types/ipc';
 import { ChainStatus } from '../../../shared/types/chain';
 import { MessageType, type Message, type Usage } from '../../../shared/types/message';
-import { getChatHistory } from '../chat-history';
+import { getChatHistory, setChatHistory } from '../chat-history';
 import { chatSendSchema } from '../payload-schemas';
-import { clearNextRequestStop } from '../next-request-stop';
+import { clearNextRequestStop, clearCompactionPause, shouldPauseForCompaction } from '../next-request-stop';
+import { MAIN_AGENT_SCOPE_ID } from '../../../shared/types/agent-scope';
 import { completeSessionActivity, publishSessionActivity } from '../session-activity';
 import { disposeActiveAgent, forceAbortSession } from './abort';
 import { emitSessionUpdated, sendChatState, sendTurnEvent } from './events';
 import {
   activeAgents,
   canEmitStreamEvents,
+  clearSubagentCancelConfirm,
   isCurrentAgent,
   nextAgentGeneration,
+  sessionOperationGateTail,
   sessionsStarting,
   type ActiveAgent,
 } from './state';
@@ -73,6 +82,19 @@ import {
 import { ensureActiveSessionSingleFlight } from './session';
 import { classifyErrorKind, createProviderStreamFn } from './stream';
 import { triggerSessionAutoName } from './title';
+import { isContextLengthExceededError } from '../../llm/middleware/error-classification';
+import {
+  applyPendingCompactionIfAny,
+  clearCompactionRetryTried,
+  dedupeHistoryById,
+  emitCompactionProgress,
+  getCompactionTrigger,
+  handleUsageCompaction,
+  hasTriedCompactionRetry,
+  hydrateTriggerCalibration,
+  markCompactionRetryTried,
+  tryCompactSynchronously,
+} from './compaction';
 
 export type ChatSendPayload = z.infer<typeof chatSendSchema>;
 
@@ -88,8 +110,21 @@ export async function startChatTurn(
 
   const sessionId = sessionGate.session.id;
   clearNextRequestStop(sessionId);
+  clearCompactionPause(sessionId, MAIN_AGENT_SCOPE_ID);
   if (sessionsStarting.has(sessionId)) {
     return { status: 'error', error: 'A turn is already starting for this session.', kind: 'session_busy' };
+  }
+  // A manual compaction (/compact) may still be persisting on this idle
+  // session — its entry busy check ran before this send claimed the
+  // turn-start slot. Wait the operation gate out (no yield when nothing is
+  // gated), then re-check: another send may have claimed the slot while we
+  // waited.
+  const operationGate = sessionOperationGateTail(sessionId);
+  if (operationGate) {
+    await operationGate;
+    if (sessionsStarting.has(sessionId)) {
+      return { status: 'error', error: 'A turn is already starting for this session.', kind: 'session_busy' };
+    }
   }
   sessionsStarting.add(sessionId);
   const existing = activeAgents.get(sessionId);
@@ -149,6 +184,7 @@ export async function startChatTurn(
   let cacheSessionKey: string | undefined;
   let tierMechanism: ProviderAttemptAccountingContext['tierMechanism'];
   let accountingStore: ReturnType<typeof getProviderAccountingStore>;
+  let contextTokens: number | null = null;
   try {
     accountingStore = getProviderAccountingStore();
     // Resolve the effective tier before model construction so the variant
@@ -170,6 +206,7 @@ export async function startChatTurn(
     pricingFacet = execution.pricingFacet;
     thinkingPolicy = execution.thinkingPolicy;
     cacheFacet = execution.cacheFacet;
+    contextTokens = execution.model.limits?.contextTokens ?? null;
     const effort = resolveMainAgentEffort(
       sessionGate.session, execution.connection, turnSelection.modelId,
       execution.model.capabilities?.reasoning === true,
@@ -201,8 +238,7 @@ export async function startChatTurn(
 
   const agents = [...runtime.agents.values()];
   const userMessage = makeUserMessage(message);
-  const priorMessageCount = existingMessages.length;
-  const messages = [...existingMessages, userMessage];
+  let messages: Message[] = [...existingMessages, userMessage];
   const thinkingReplay: ThinkingReplayContext = {
     policy: thinkingPolicy ?? DEFAULT_THINKING_POLICY,
     selection: { providerId: providerSnapshot.providerId, modelId: turnSelection.modelId },
@@ -220,6 +256,10 @@ export async function startChatTurn(
   };
   let turnId: string = crypto.randomUUID();
   let chainId: string | null = null;
+
+  // Finalize the chain/turn identity BEFORE any compaction attempt runs, so
+  // every compactor LLM attempt is attributed to the active chain and turn
+  // rather than to a pre-chain placeholder id.
   try {
     const chain = sessionManager.startChain({
       selection: turnSelection, modelLabel: turnSelection.modelId, agentName: agent.name,
@@ -230,6 +270,26 @@ export async function startChatTurn(
     emitSessionUpdated(webContents, sessionId);
   } catch (error) {
     console.debug('startChain failed (non-fatal):', error);
+  }
+
+  {
+    await hydrateTriggerCalibration(sessionId);
+    const pendingApplied = await applyPendingCompactionIfAny(sessionId, messages, runtime);
+    if (pendingApplied.applied && pendingApplied.updatedMessages) {
+      const updated = pendingApplied.updatedMessages;
+      // Defensive: the applied replay must carry the just-appended user message
+      // into the model request — if a stale prepare-time snapshot lost it,
+      // re-append rather than silently dropping the turn (P1 #5).
+      if (!updated.some((m) => m.id === userMessage.id)) {
+        updated.push(userMessage);
+        setChatHistory(sessionId, [...updated]);
+      }
+      messages = updated;
+    }
+    const syncResult = await tryCompactSynchronously(sessionId, messages, runtime, turnSelection, contextTokens, accountingStore!, chainId, turnId);
+    if (syncResult.didApply && syncResult.updatedMessages) {
+      messages = syncResult.updatedMessages;
+    }
   }
 
   const abortController = new AbortController();
@@ -291,6 +351,7 @@ export async function startChatTurn(
   let lastSentLength = 0;
   let lastThinkingLength = 0;
   let completed = false;
+  let overflowRetryInFlight = false;
   let subscription: { unsubscribe: () => void } | null = null;
   let interruptSubscription: { unsubscribe: () => void } | null = null;
   let lastUsage: Usage | null = null;
@@ -300,9 +361,17 @@ export async function startChatTurn(
   let lastToolUpdateSequence = 0;
   let lastActivityKey = 'streaming:agent:Generating response';
   const generation = nextAgentGeneration(sessionId);
+  // Anchor the durable turn slice at the turn's user message (same invariant as
+  // the mid-turn resume paths): priorMessageCount must index the user message
+  // inside `messages` so turnMessagesFromAgent yields the FULL turn, never only
+  // a post-compaction tail.
+  const turnUserIndex = (() => {
+    const index = messages.findIndex((m) => m.id === userMessage.id);
+    return index >= 0 ? index : messages.length - 1;
+  })();
   const activeAgent: ActiveAgent = {
     sessionId, windowId, turnId, cwd: turnCtx.cwd, startedAt: Date.now(), actor, interruptActor,
-    abortController, messages, priorMessageCount, turnMessages: [], responseCommittedLength: 0,
+    abortController, messages, priorMessageCount: turnUserIndex, turnMessages: [], responseCommittedLength: 0,
     thinkingCommittedLength: 0, thinkingArtifactsCommitted: 0, agent, selection: turnSelection,
     thinkingReplay, agentCancelled: false,
     finalized: false, generation, eventSequence: 0, lastChatState: null, toolCalls: new Map(),
@@ -311,8 +380,24 @@ export async function startChatTurn(
     sessionTitleTimer: null, runtime, chainId,
     releaseResources,
   };
+  const setTurnBase = (nextMessages: Message[], transcriptOverride?: readonly Message[]): void => {
+    messages.splice(0, messages.length, ...nextMessages);
+    activeAgent.messages.splice(0, activeAgent.messages.length, ...nextMessages);
+    // The durable turn slice follows the transcript source: the compaction
+    // resume's model-view replay must never become the durable row (it drops
+    // flagged originals + superseded heads), so checkpoints and the finalize
+    // rewrite read the transcript-complete override when one exists.
+    const transcriptSource = transcriptOverride ?? nextMessages;
+    const tAnchor = transcriptSource.findIndex((m) => m.id === userMessage.id);
+    activeAgent.transcriptBase = tAnchor >= 0
+      ? [...transcriptSource.slice(tAnchor)]
+      : [...transcriptSource];
+  };
   activeAgents.set(sessionId, activeAgent);
   sessionsStarting.delete(sessionId);
+  // A live main-agent turn owns the Esc phases again; drop any staged
+  // standalone subagent-cancel confirmation from a previously disposed turn.
+  clearSubagentCancelConfirm(sessionId);
 
   // A long-running first turn must not leave the session unnamed forever:
   // after the configured wait, name from the current in-flight history even
@@ -406,6 +491,13 @@ export async function startChatTurn(
     const turnExtras = [...activeAgent.turnMessages];
     const terminalMessages = turnMessagesFromAgent(activeAgent);
     const fullHistory = [...messages, ...turnExtras];
+    // keep hysteresis calibrated with final usage
+    if (opts.usage && contextTokens != null) {
+      const inputTokens = opts.usage.context?.input_tokens ?? opts.usage.prompt_tokens;
+      const trig = getCompactionTrigger(sessionId);
+      trig.observeUsage(inputTokens, fullHistory);
+      trig.onUsage(inputTokens, contextTokens, runtime.config.compaction.main.threshold, runtime.config.compaction.main.hysteresis_delta);
+    }
     persistTurnConversation(
       sessionId, fullHistory, terminalMessages,
       opts.interrupted ? ChainStatus.INTERRUPTED : ChainStatus.COMPLETED,
@@ -430,6 +522,7 @@ export async function startChatTurn(
       fallbackSelection: activeAgent.selection,
       accounting: { store: accountingStore, sessionId, chainId, turnId },
     });
+    clearCompactionRetryTried(sessionId, turnId);
   };
 
   interruptSubscription = interruptActor.subscribe((interruptSnapshot) => {
@@ -488,6 +581,11 @@ export async function startChatTurn(
       lastUsage = context.usage;
       sendTurnEvent(webContents, activeAgent, IPC_CHANNELS.CHAT_USAGE, { type: 'usage', usage: context.usage });
       checkpointActiveTurn(activeAgent, context);
+      if (contextTokens != null) {
+        const inputTokens = context.usage.context?.input_tokens ?? context.usage.prompt_tokens;
+        const fullHistory = [...messages, ...turnMessagesFromAgent(activeAgent)];
+        handleUsageCompaction(sessionId, fullHistory, inputTokens, contextTokens, runtime, turnSelection, accountingStore!, chainId, turnId);
+      }
     }
     if (context.streamingToolCall) {
       const stc = context.streamingToolCall;
@@ -562,15 +660,181 @@ export async function startChatTurn(
         }
       }
     }
+    /**
+     * Re-anchor the durable turn slice at the turn's user message inside the
+     * compacted/remerged history (P1 #3) and clear every per-turn accumulation
+     * so the replay restarts clean. The durable row holds the whole turn
+     * (compaction inserts summary heads INLINE and only flags the prefix —
+     * never splits rows), so the user-anchored full-turn rewrite preserves the
+     * flagged prefix and the heads in place. `transcriptOverride` carries the
+     * transcript-complete view for selective applies whose model-view replay
+     * omits flagged originals (review #54).
+     */
+    const resetTurnForCompactionResume = (nextMessages: Message[], transcriptOverride?: readonly Message[]): void => {
+      const anchorIndex = nextMessages.findIndex((m) => m.id === userMessage.id);
+      if (anchorIndex < 0) {
+        // Defensive: a history that lost the turn's user message must never
+        // truncate the durable turn — re-append it.
+        nextMessages.push(userMessage);
+      }
+      setTurnBase(nextMessages, transcriptOverride);
+      activeAgent.priorMessageCount = anchorIndex >= 0 ? anchorIndex : nextMessages.length - 1;
+      activeAgent.turnMessages = [];
+      activeAgent.responseCommittedLength = 0;
+      activeAgent.thinkingCommittedLength = 0;
+      activeAgent.thinkingArtifactsCommitted = 0;
+      lastSentLength = 0;
+      lastThinkingLength = 0;
+      lastUsage = null;
+    };
     if (snapshot.value === 'idle' && context.currentInput && !completed && !activeAgent.agentCancelled) {
+      if (shouldPauseForCompaction(sessionId, MAIN_AGENT_SCOPE_ID)) {
+        clearCompactionPause(sessionId, MAIN_AGENT_SCOPE_ID);
+        const fullHistoryForPause = [...messages, ...turnMessagesFromAgent(activeAgent)];
+        publishSessionActivity(sessionId, { cwd: turnCtx.cwd, state: 'working', phase: 'agent', detail: 'Compacting context — applying summary…', canCancel: true });
+        emitCompactionProgress(sessionId, 'compacting', 'Applying summary', { webContents });
+        (async () => {
+          try {
+            let applied = false;
+            let updated: Message[] | undefined;
+            const pendingRes = await applyPendingCompactionIfAny(sessionId, fullHistoryForPause, runtime);
+            if (pendingRes.applied && pendingRes.updatedMessages) {
+              applied = true;
+              updated = pendingRes.updatedMessages;
+            }
+            if (applied && updated) {
+              // The compacted replay keeps the full model history; the reset
+              // anchors the durable turn slice at the user message so the
+              // finalized persistTurn REPLACES the active chain with the FULL
+              // turn (user + flagged prefix + summary head + window + new
+              // content), never only the post-resume tail (P1 #3). The
+              // transcript override keeps the durable row complete when the
+              // model-view replay dropped flagged originals (selective).
+              resetTurnForCompactionResume(updated, pendingRes.transcriptMessages);
+              // The applied path also drops the pre-pause stream segments (the
+              // overflow-retry path below intentionally keeps them). Tool
+              // snapshots go with them: every pre-compaction tool is either
+              // flagged (collapsed into the compacted stub) or preserved
+              // (committed to chains), so the live snapshot and any later
+              // hydration must not resurrect them into the live tail.
+              activeAgent.streamSegments = [];
+              activeAgent.toolCalls.clear();
+              try {
+                actor.send({ type: 'USER_INPUT', message });
+                publishSessionActivity(sessionId, { cwd: turnCtx.cwd, state: 'working', phase: 'agent', detail: 'Resuming after compaction', canCancel: true });
+                emitCompactionProgress(sessionId, 'complete', 'Context compacted — resuming', { webContents });
+                return;
+              } catch (e) {
+                console.debug('[compaction] mid-turn resume failed:', e);
+              }
+            }
+          } catch (e) {
+            console.debug('[compaction] mid-turn pause handling failed:', e);
+          }
+          {
+            emitCompactionProgress(sessionId, 'complete', undefined, { webContents });
+          }
+          clearCompactionPause(sessionId, MAIN_AGENT_SCOPE_ID);
+          try {
+            const snap = activeAgent.actor.getSnapshot();
+            const ctxSnap = snap.context as AgentContext;
+            if (snap.value === 'idle' && ctxSnap.currentInput && !activeAgent.finalized && !activeAgent.agentCancelled) {
+              try {
+                // Compaction did not apply: resume from the full accumulated
+                // history (turn base + turn messages), never the bare turn
+                // base — restarting from the turn start silently discards all
+                // in-turn tool progress and makes context usage collapse.
+                const merged = dedupeHistoryById([...messages, ...turnMessagesFromAgent(activeAgent)]);
+                resetTurnForCompactionResume(merged);
+                activeAgent.streamSegments = [];
+                activeAgent.actor.send({ type: 'USER_INPUT', message: ctxSnap.currentInput });
+                publishSessionActivity(sessionId, { cwd: turnCtx.cwd, state: 'working', phase: 'agent', detail: 'Resuming after compaction', canCancel: true });
+                return;
+              } catch (e) {
+                console.debug('[compaction] resume after unapplied compaction failed:', e);
+              }
+            }
+          } catch {
+            // resume-after-compaction is best-effort; fall through to finalize
+          }
+          finalizeTurn({ response: context.response, usage: context.usage ?? null, interrupted: false, sendDone: true });
+          queueMicrotask(() => disposeActiveAgent(sessionId, activeAgent));
+        })();
+        return;
+      }
       finalizeTurn({ response: context.response, usage: context.usage ?? null, interrupted: false, sendDone: true });
       queueMicrotask(() => disposeActiveAgent(sessionId, activeAgent));
     }
     if (snapshot.value === 'error') {
-      completed = true;
-      activeAgent.finalized = true;
       const detail = context.error ?? 'Unknown error';
       const title = context.errorTitle ?? 'Stream Error';
+      const isOverflow = isContextLengthExceededError(`${title} ${detail}`);
+      if (isOverflow && !hasTriedCompactionRetry(sessionId, turnId) && contextTokens != null) {
+        if (overflowRetryInFlight) return;
+        markCompactionRetryTried(sessionId, turnId);
+        overflowRetryInFlight = true;
+        // One compaction-and-retry (R15). Compact the prefix (messages) and retry once before declaring failed.
+        const historyForRetry = [...messages];
+        (async () => {
+          try {
+            try {
+              // A context-length error proves input >= contextTokens — record
+              // that measured lower bound so the retry's token estimate is
+              // grounded in observation instead of a heuristic ratio.
+              const retryTrigger = getCompactionTrigger(sessionId);
+              if (retryTrigger.state.tokensPerChar == null) {
+                retryTrigger.state.lastObservedInputTokens = contextTokens;
+              }
+              const retryResult = await tryCompactSynchronously(sessionId, historyForRetry, runtime, turnSelection, contextTokens, accountingStore!, chainId, turnId);
+              if (retryResult.didApply && retryResult.updatedMessages) {
+                // The compacted retry base anchors the durable turn slice at
+                // the user message so a later finalize REPLACES the active
+                // chain with the full turn, never only the post-retry tail
+                // (same invariant as P1 #3). streamSegments is intentionally
+                // NOT cleared on the retry path. The transcript override keeps
+                // the durable row complete for selective applies (review #54).
+                resetTurnForCompactionResume(retryResult.updatedMessages, retryResult.transcriptMessages);
+                try {
+                  actor.send({ type: 'USER_INPUT', message });
+                  publishSessionActivity(sessionId, {
+                    cwd: turnCtx.cwd, state: 'working', phase: 'agent', detail: 'Retrying after compaction', canCancel: true,
+                  });
+                  return;
+                } catch (e) {
+                  console.debug('[compaction] retry USER_INPUT failed:', e);
+                }
+              }
+            } catch (e) {
+            console.debug('[compaction] overflow retry compaction failed:', e);
+          }
+          completed = true;
+          activeAgent.finalized = true;
+          publishSessionActivity(sessionId, {
+            cwd: turnCtx.cwd, state: 'needs_attention', phase: 'agent', detail: title || detail, canCancel: false,
+          });
+          flushPartialTurnContent(activeAgent, context);
+          const terminalMessages = turnMessagesFromAgent(activeAgent);
+          const fullHistory = [...messages, ...activeAgent.turnMessages];
+          persistTurnConversation(
+            sessionId, fullHistory, terminalMessages, ChainStatus.FAILED,
+            agent, activeAgent.selection, webContents,
+            detail, title,
+          );
+          activeAgent.messages = fullHistory;
+          sendTurnEvent(webContents, activeAgent, IPC_CHANNELS.CHAT_ERROR, {
+            type: 'error', error: detail, messages: terminalMessages, title, kind: classifyErrorKind(title, detail),
+          });
+          queueMicrotask(() => disposeActiveAgent(sessionId, activeAgent));
+          clearCompactionRetryTried(sessionId, turnId);
+          } finally {
+            overflowRetryInFlight = false;
+          }
+        })();
+        return;
+      }
+      if (overflowRetryInFlight) return;
+      completed = true;
+      activeAgent.finalized = true;
       publishSessionActivity(sessionId, {
         cwd: turnCtx.cwd, state: 'needs_attention', phase: 'agent', detail: title || detail, canCancel: false,
       });
@@ -587,6 +851,7 @@ export async function startChatTurn(
         type: 'error', error: detail, messages: terminalMessages, title, kind: classifyErrorKind(title, detail),
       });
       queueMicrotask(() => disposeActiveAgent(sessionId, activeAgent));
+      clearCompactionRetryTried(sessionId, turnId);
     }
   });
   try {

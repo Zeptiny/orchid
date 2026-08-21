@@ -87,8 +87,13 @@ export const COMMANDS: (Command & { execute: (ctx: CommandContext) => Promise<vo
         return;
       }
       if (trimmed === currentName) return;
-      await ctx.onRenameSession(sessionId, trimmed);
-      ctx.onNotify(`Session renamed to “${trimmed}”.`, 'info');
+      try {
+        await ctx.onRenameSession(sessionId, trimmed);
+        ctx.onNotify(`Session renamed to “${trimmed}”.`, 'info');
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        ctx.onNotify(`Rename failed: ${message}`, 'error');
+      }
     },
   },
   {
@@ -208,6 +213,21 @@ export const COMMANDS: (Command & { execute: (ctx: CommandContext) => Promise<vo
       await ctx.onClearRAG();
       ctx.onNotify('RAG index cleared.', 'info');
       ctx.onClose();
+    },
+  },
+  {
+    name: '/compact',
+    description: 'Compact the current session context',
+    category: 'commands',
+    execute: async (ctx) => {
+      ctx.onClose();
+      try {
+        const result = await ctx.onCompact();
+        void result;
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        ctx.onNotify(`Compaction failed: ${msg}`, 'error');
+      }
     },
   },
 ];

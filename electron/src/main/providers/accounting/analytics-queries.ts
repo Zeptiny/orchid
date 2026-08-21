@@ -1,8 +1,12 @@
+/**
+ * Analytics read-model queries — the aggregate views backing the Analytics
+ * UI: overview, sessions, session detail, models, tools, subagents, and the
+ * context overview. Heavy drill-downs live in `analytics-detail-queries.ts`
+ * and shared plumbing in `analytics-query-shared.ts`; both stay re-exported
+ * below so this module remains the single import surface for the analytics
+ * worker, the query runner, IPC handlers, and tests.
+ */
 import Decimal from 'decimal.js';
-import type { SqliteDatabase } from '../../utils/sqlite';
-import {
-  getProviderAccountingStore,
-} from './store';
 import {
   getSubagentAttributionStore,
 } from './subagent-attribution-store';
@@ -17,7 +21,6 @@ import type {
   ContextResult,
   ContextSessionSeries,
   ContextSubagentSeries,
-  CurrencyTotal,
   TimeSeriesPoint,
   CostTimeSeriesPoint,
   ModelCostTimeSeriesPoint,
@@ -28,132 +31,60 @@ import type {
 import type { SubagentAttributionRecord } from '../../../shared/types/accounting';
 import type { QuotaOverviewEntry } from '../../../shared/types/analytics';
 import { providerQuotaSchema } from '../../../shared/types/provider-facets';
-import { getSessionNames } from '../../session/storage';
 import { getProviderConnectionStore, getProviderStatusService } from '../runtime-context';
+import {
+  ATTEMPT_RUN_WINDOW_JOIN,
+  RUN_USAGE_JOIN,
+  subagentRunUsage,
+  subagentRunWindows,
+} from './analytics-detail-queries';
+import {
+  COST_ROW_CONDITIONS,
+  DEFAULT_LIMIT,
+  type AnalyticsQueryContext,
+  type AttemptDetailRow,
+  type DecimalTotal,
+  type LatencySamples,
+  bumpCurrencyTotal,
+  buildDateFilter,
+  emptyLatencySamples,
+  getDb,
+  iterateLatencyRows,
+  iterateRows,
+  latencySamplesFor,
+  nestedCurrencyMap,
+  parseCostAmount,
+  parseSnapshotConnectionName,
+  parseSnapshotModelDisplayName,
+  parseSnapshotProviderName,
+  parseUsage,
+  recordLatencySample,
+  resolveSessionNamesWithFallback,
+  sessionNameResolver,
+  sumCosts,
+  summarizeLatency,
+  toAttemptDetail,
+  toCurrencyTotals,
+  whereClause,
+} from './analytics-query-shared';
 
-const DEFAULT_LIMIT = 1000;
+// ── Re-exports (stable import surface for worker / runner / IPC / tests) ──────
+
+export {
+  getContextSessionDetail,
+  getContextSessionList,
+  getModelDetail,
+  getSubagentDetail,
+} from './analytics-detail-queries';
+export {
+  resolveSessionNamesWithFallback,
+  resolveTombstoneNames,
+} from './analytics-query-shared';
+export type { AnalyticsQueryContext } from './analytics-query-shared';
+
 const CONTEXT_TOP_SESSIONS = 5;
 const CONTEXT_TOP_SUBAGENTS = 5;
 const CONTEXT_MAX_POINTS_PER_SERIES = 500;
-
-const COST_ROW_CONDITIONS = [
-  "cost_state IN ('reported','calculated')",
-  'currency IS NOT NULL',
-  'cost_amount IS NOT NULL',
-];
-
-type DecimalTotal = { amount: Decimal; count: number };
-
-/**
- * Dependency injection seam for query execution. Lets the worker thread run
- * analytics queries against its own SQLite connection and defer session-name
- * resolution to the main process (sessions.db stays main-process-owned).
- */
-export interface AnalyticsQueryContext {
-  /** Connection to accounting.db. Defaults to the main-process singleton. */
-  db?: SqliteDatabase;
-  /** Resolve session names for the top-N session ids. Defaults to `getSessionNames`. */
-  resolveSessionNames?: (sessionIds: readonly string[]) => Map<string, string>;
-}
-
-function getDb(ctx?: AnalyticsQueryContext): SqliteDatabase {
-  return ctx?.db ?? getProviderAccountingStore().getDatabase();
-}
-
-/**
- * Stream raw rows from a prepared statement. Cost aggregation must never use
- * GROUP_CONCAT: SQLite silently truncates the concatenated string for large
- * groups, corrupting totals. Rows are accumulated into Decimal sums in JS.
- */
-function iterateRows<T>(db: SqliteDatabase, sql: string, params: ReadonlyArray<string | number>): IterableIterator<T> {
-  return db.prepare(sql).iterate(...params) as IterableIterator<T>;
-}
-
-function parseCostAmount(costAmount: string): Decimal | null {
-  try {
-    return new Decimal(costAmount);
-  } catch {
-    return null;
-  }
-}
-
-function bumpCurrencyTotal(map: Map<string, DecimalTotal>, key: string, amount: Decimal | null): void {
-  const entry = map.get(key) ?? { amount: new Decimal(0), count: 0 };
-  entry.count++;
-  if (amount) entry.amount = entry.amount.add(amount);
-  map.set(key, entry);
-}
-
-function nestedCurrencyMap(
-  map: Map<string, Map<string, DecimalTotal>>,
-  key: string,
-): Map<string, DecimalTotal> {
-  const inner = map.get(key) ?? new Map<string, DecimalTotal>();
-  map.set(key, inner);
-  return inner;
-}
-
-function toCurrencyTotals(map: Map<string, DecimalTotal> | undefined): CurrencyTotal[] {
-  if (!map) return [];
-  return [...map.entries()]
-    .map(([currency, entry]) => ({ currency, amount: entry.amount.toFixed(), recordCount: entry.count }))
-    .sort((a, b) => a.currency.localeCompare(b.currency));
-}
-
-function parseUsage(usageJson: string | null): {
-  inputTokens: number;
-  outputTokens: number;
-  cacheReadTokens: number;
-  cacheWriteTokens: number;
-  reasoningTokens: number;
-  energyKwhConsumed: string | null;
-  energyKwhCharged: string | null;
-  pricingMultiplier: string | null;
-} {
-  if (!usageJson) return {
-    inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, reasoningTokens: 0,
-    energyKwhConsumed: null, energyKwhCharged: null, pricingMultiplier: null,
-  };
-  try {
-    const u = JSON.parse(usageJson) as Record<string, unknown>;
-    return {
-      inputTokens: typeof u.inputTokens === 'number' ? u.inputTokens : 0,
-      outputTokens: typeof u.outputTokens === 'number' ? u.outputTokens : 0,
-      cacheReadTokens: typeof u.cacheReadTokens === 'number' ? u.cacheReadTokens : 0,
-      cacheWriteTokens: typeof u.cacheWriteTokens === 'number' ? u.cacheWriteTokens : 0,
-      reasoningTokens: typeof u.reasoningTokens === 'number' ? u.reasoningTokens : 0,
-      energyKwhConsumed: typeof u.energyKwhConsumed === 'string' ? u.energyKwhConsumed : null,
-      energyKwhCharged: typeof u.energyKwhCharged === 'string' ? u.energyKwhCharged : null,
-      pricingMultiplier: typeof u.pricingMultiplier === 'string' ? u.pricingMultiplier : null,
-    };
-  } catch {
-    return {
-      inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, reasoningTokens: 0,
-      energyKwhConsumed: null, energyKwhCharged: null, pricingMultiplier: null,
-    };
-  }
-}
-
-function parseSnapshotConnectionName(snapshotJson: string): string | null {
-  try {
-    const s = JSON.parse(snapshotJson) as Record<string, unknown>;
-    return typeof s.connectionName === 'string' ? s.connectionName : null;
-  } catch { return null; }
-}
-
-function parseSnapshotProviderName(snapshotJson: string): string | null {
-  try {
-    const s = JSON.parse(snapshotJson) as Record<string, unknown>;
-    return typeof s.providerDisplayName === 'string' ? s.providerDisplayName : null;
-  } catch { return null; }
-}
-
-function parseSnapshotModelDisplayName(snapshotJson: string): string | null {
-  try {
-    const s = JSON.parse(snapshotJson) as Record<string, unknown>;
-    return typeof s.modelDisplayName === 'string' ? s.modelDisplayName : null;
-  } catch { return null; }
-}
 
 /**
  * Read the latest typed quota observations from the status cache (R24). These
@@ -166,7 +97,7 @@ function parseSnapshotModelDisplayName(snapshotJson: string): string | null {
  * and persisted cache entries would surface quota for providers with no
  * connection — information that is irrelevant to the user.
  */
-function getQuotaOverview(): QuotaOverviewEntry[] {
+export function getQuotaOverview(): QuotaOverviewEntry[] {
   try {
     const status = getProviderStatusService();
     const connectedProviders = getProviderConnectionStore().listProviderIdsSync();
@@ -202,49 +133,11 @@ function getQuotaOverview(): QuotaOverviewEntry[] {
   }
 }
 
-function sumCosts(rows: Array<{ currency: string | null; cost_amount: string | null; cost_state: string }>): {
-  currencies: CurrencyTotal[];
-  unknownCount: number;
-} {
-  const sums = new Map<string, DecimalTotal>();
-  let unknownCount = 0;
-  for (const row of rows) {
-    if (row.cost_state !== 'reported' && row.cost_state !== 'calculated') { unknownCount++; continue; }
-    if (!row.currency || !row.cost_amount) { unknownCount++; continue; }
-    const amount = parseCostAmount(row.cost_amount);
-    if (!amount) { unknownCount++; continue; }
-    const entry = sums.get(row.currency) ?? { amount: new Decimal(0), count: 0 };
-    entry.amount = entry.amount.add(amount);
-    entry.count++;
-    sums.set(row.currency, entry);
-  }
-  return { currencies: toCurrencyTotals(sums), unknownCount };
-}
-
-function buildDateFilter(timeRange: AnalyticsTimeRange | undefined, column = 'started_at'): {
-  clause: string;
-  params: string[];
-} {
-  const conditions: string[] = [];
-  const params: string[] = [];
-  if (timeRange?.startDate) {
-    conditions.push(`${column} >= ?`);
-    params.push(timeRange.startDate);
-  }
-  if (timeRange?.endDate) {
-    conditions.push(`${column} <= ?`);
-    params.push(timeRange.endDate);
-  }
-  return { clause: conditions.join(' AND '), params };
-}
-
-function whereClause(existingConditions: string[], dateClause: string): string {
-  const all = [...existingConditions, dateClause].filter(Boolean);
-  return all.length > 0 ? `WHERE ${all.join(' AND ')}` : '';
-}
-
-export function getOverview(timeRange?: AnalyticsTimeRange): OverviewResult {
-  const db = getDb();
+export function getOverview(
+  timeRange?: AnalyticsTimeRange,
+  ctx?: AnalyticsQueryContext,
+): OverviewResult {
+  const db = getDb(ctx);
   const dateFilter = buildDateFilter(timeRange);
 
   const stats = db.prepare(`
@@ -383,6 +276,13 @@ export function getOverview(timeRange?: AnalyticsTimeRange): OverviewResult {
   `).all(...dateFilter.params) as Array<{ agent_tier: string; count: number }>;
   const agentTierDistribution = tierRows.map((r) => ({ tier: r.agent_tier, count: r.count }));
 
+  // Overall (ungrouped) TTFT/TPS from attempts that stamped a first token.
+  const overallLatency = emptyLatencySamples();
+  for (const row of iterateLatencyRows(db, dateFilter)) {
+    recordLatencySample(overallLatency, row);
+  }
+  const latency = summarizeLatency(overallLatency);
+
   return {
     stats: {
       totalCost,
@@ -399,6 +299,8 @@ export function getOverview(timeRange?: AnalyticsTimeRange): OverviewResult {
       knownUsageCount: stats.known_usage,
       unknownUsageCount: stats.unknown_usage,
       totalSessions: stats.sessions,
+      avgTtftMs: latency.avgTtftMs,
+      avgTokensPerSecond: latency.avgTokensPerSecond,
     },
     spendOverTime,
     tokenUsageOverTime,
@@ -411,8 +313,13 @@ export function getOverview(timeRange?: AnalyticsTimeRange): OverviewResult {
   };
 }
 
-export function getSessions(limit = DEFAULT_LIMIT, timeRange?: AnalyticsTimeRange): SessionsResult {
-  const db = getDb();
+export function getSessions(
+  limit = DEFAULT_LIMIT,
+  timeRange?: AnalyticsTimeRange,
+  offset = 0,
+  ctx?: AnalyticsQueryContext,
+): SessionsResult {
+  const db = getDb(ctx);
   const dateFilter = buildDateFilter(timeRange);
 
   const sessions = db.prepare(`
@@ -427,36 +334,49 @@ export function getSessions(limit = DEFAULT_LIMIT, timeRange?: AnalyticsTimeRang
       COALESCE(SUM(json_extract(usage_json, '$.outputTokens')), 0) as output_tokens,
       COALESCE(SUM(json_extract(usage_json, '$.cacheReadTokens')), 0) as cache_read_tokens,
       GROUP_CONCAT(DISTINCT model_id) as models
-    FROM provider_attempts ${whereClause([], dateFilter.clause)} GROUP BY session_id ORDER BY first_attempt DESC LIMIT ?
-  `).all(...dateFilter.params, limit) as Array<{
+    FROM provider_attempts ${whereClause([], dateFilter.clause)} GROUP BY session_id ORDER BY first_attempt DESC LIMIT ? OFFSET ?
+  `).all(...dateFilter.params, limit, offset) as Array<{
     session_id: string; attempts: number; succeeded: number; failed: number; interrupted: number;
     first_attempt: string; last_attempt: string | null;
     input_tokens: number; output_tokens: number; cache_read_tokens: number;
     models: string | null;
   }>;
 
-  const subagentRows = db.prepare(`
-    SELECT session_id, COUNT(*) as count FROM subagent_attribution ${whereClause([], buildDateFilter(timeRange).clause)} GROUP BY session_id
-  `).all(...buildDateFilter(timeRange).params) as Array<{ session_id: string; count: number }>;
-  const subagentMap = new Map<string, number>();
-  for (const r of subagentRows) {
-    subagentMap.set(r.session_id, r.count);
-  }
-
-  const costMap = new Map<string, Map<string, DecimalTotal>>();
-  for (const row of iterateRows<{ session_id: string; currency: string; cost_amount: string }>(db, `
-    SELECT session_id, currency, cost_amount
-    FROM provider_attempts
-    ${whereClause(COST_ROW_CONDITIONS, dateFilter.clause)}
-  `, dateFilter.params)) {
-    bumpCurrencyTotal(nestedCurrencyMap(costMap, row.session_id), row.currency, parseCostAmount(row.cost_amount));
-  }
-
   const sessionIds = sessions.map((s) => s.session_id);
+
+  // Subagent counts and cost rows are scoped to this page's session ids so a
+  // page fetch never scans the whole ledger. Batched IN(...) clauses (one per
+  // 500 ids) stay below the SQLite bound-variable limit even at the max page
+  // size — same cap as the session-name resolver.
+  const SESSION_AGGREGATE_BATCH = 500;
+  const subagentMap = new Map<string, number>();
+  const costMap = new Map<string, Map<string, DecimalTotal>>();
+  for (let i = 0; i < sessionIds.length; i += SESSION_AGGREGATE_BATCH) {
+    const batch = sessionIds.slice(i, i + SESSION_AGGREGATE_BATCH);
+    const inClause = `session_id IN (${batch.map(() => '?').join(', ')})`;
+
+    const subagentRows = db.prepare(`
+      SELECT session_id, COUNT(*) as count FROM subagent_attribution
+      ${whereClause([inClause], dateFilter.clause)} GROUP BY session_id
+    `).all(...batch, ...dateFilter.params) as Array<{ session_id: string; count: number }>;
+    for (const r of subagentRows) {
+      subagentMap.set(r.session_id, r.count);
+    }
+
+    for (const row of iterateRows<{ session_id: string; currency: string; cost_amount: string }>(db, `
+      SELECT session_id, currency, cost_amount
+      FROM provider_attempts
+      ${whereClause([inClause, ...COST_ROW_CONDITIONS], dateFilter.clause)}
+    `, [...batch, ...dateFilter.params])) {
+      bumpCurrencyTotal(nestedCurrencyMap(costMap, row.session_id), row.currency, parseCostAmount(row.cost_amount));
+    }
+  }
+
+  const resolveNames = sessionNameResolver(ctx, db);
   let nameMap = new Map<string, string>();
   try {
-    nameMap = getSessionNames(sessionIds);
-  } catch { /* session DB unavailable */ }
+    nameMap = resolveNames(sessionIds);
+  } catch { /* session name resolution failed */ }
 
   const results = sessions.map((s) => ({
     sessionId: s.session_id,
@@ -479,7 +399,13 @@ export function getSessions(limit = DEFAULT_LIMIT, timeRange?: AnalyticsTimeRang
     SELECT COUNT(DISTINCT session_id) as count
     FROM provider_attempts ${whereClause([], dateFilter.clause)}
   `).get(...dateFilter.params) as { count: number };
-  return { sessions: results, totalSessions: total.count, truncated: total.count > results.length };
+  // totalSessions counts every distinct session under the date filter (not
+  // just this page), so truncated reflects rows beyond offset + this page.
+  return {
+    sessions: results,
+    totalSessions: total.count,
+    truncated: total.count > offset + results.length,
+  };
 }
 
 export function getSessionDetail(sessionId: string, timeRange?: AnalyticsTimeRange): SessionDetailResult {
@@ -487,17 +413,10 @@ export function getSessionDetail(sessionId: string, timeRange?: AnalyticsTimeRan
   const dateFilter = buildDateFilter(timeRange);
   const rows = db.prepare(`
     SELECT attempt_id, chain_id, turn_id, provider_id, model_id, connection_id, outcome,
-      cost_state, cost_amount, currency, usage_json, started_at, completed_at,
+      cost_state, cost_amount, currency, usage_json, started_at, completed_at, first_token_at,
       agent_scope, agent_name, agent_tier, error, snapshot_json
     FROM provider_attempts ${whereClause(['session_id = ?'], dateFilter.clause)} ORDER BY started_at ASC
-  `).all(sessionId, ...dateFilter.params) as Array<{
-    attempt_id: string; chain_id: string | null; turn_id: string | null;
-    provider_id: string; model_id: string; connection_id: string; outcome: string;
-    cost_state: string; cost_amount: string | null; currency: string | null; usage_json: string | null;
-    started_at: string; completed_at: string | null;
-    agent_scope: string | null; agent_name: string | null; agent_tier: string | null;
-    error: string | null; snapshot_json: string;
-  }>;
+  `).all(sessionId, ...dateFilter.params) as AttemptDetailRow[];
 
   const parsedRows = rows.map((r) => ({ row: r, usage: parseUsage(r.usage_json) }));
 
@@ -521,35 +440,7 @@ export function getSessionDetail(sessionId: string, timeRange?: AnalyticsTimeRan
     else if (r.outcome === 'failed') failed++;
     else if (r.outcome === 'interrupted') interrupted++;
 
-    return {
-      attemptId: r.attempt_id,
-      chainId: r.chain_id,
-      turnId: r.turn_id,
-      providerId: r.provider_id,
-      modelId: r.model_id,
-      modelDisplayName: parseSnapshotModelDisplayName(r.snapshot_json),
-      connectionId: r.connection_id,
-      connectionName: parseSnapshotConnectionName(r.snapshot_json),
-      outcome: r.outcome,
-      costState: r.cost_state,
-      costAmount: r.cost_amount,
-      currency: r.currency,
-      inputTokens: u.inputTokens ?? null,
-      outputTokens: u.outputTokens ?? null,
-      cacheReadTokens: u.cacheReadTokens ?? null,
-      cacheWriteTokens: u.cacheWriteTokens ?? null,
-      reasoningTokens: u.reasoningTokens ?? null,
-      energyKwhConsumed: u.energyKwhConsumed,
-      energyKwhCharged: u.energyKwhCharged,
-      pricingMultiplier: u.pricingMultiplier,
-      startedAt: r.started_at,
-      completedAt: r.completed_at,
-      latencyMs: r.completed_at ? new Date(r.completed_at).getTime() - new Date(r.started_at).getTime() : null,
-      agentScope: r.agent_scope,
-      agentName: r.agent_name,
-      agentTier: r.agent_tier,
-      error: r.error,
-    };
+    return toAttemptDetail(r, u);
   });
 
   const chainMap = new Map<string, {
@@ -659,9 +550,9 @@ export function getSessionDetail(sessionId: string, timeRange?: AnalyticsTimeRan
 
   let sessionName: string | null = null;
   try {
-    const nameMap = getSessionNames([sessionId]);
+    const nameMap = resolveSessionNamesWithFallback(db, [sessionId]);
     sessionName = nameMap.get(sessionId) ?? null;
-  } catch { /* session DB unavailable */ }
+  } catch { /* session name resolution failed */ }
 
   return {
     sessionId,
@@ -753,6 +644,14 @@ export function getModels(timeRange?: AnalyticsTimeRange): ModelsResult {
     bumpCurrencyTotal(totalCostMap, row.currency, amount);
   }
 
+  // Stream first-token latency rows — same grouping as the cost maps.
+  const modelLatencyMap = new Map<string, LatencySamples>();
+  const connectionLatencyMap = new Map<string, LatencySamples>();
+  for (const row of iterateLatencyRows(db, dateFilter)) {
+    recordLatencySample(latencySamplesFor(modelLatencyMap, `${row.model_id}\0${row.provider_id}\0${row.connection_id}`), row);
+    recordLatencySample(latencySamplesFor(connectionLatencyMap, row.connection_id), row);
+  }
+
   const models = modelRows.map((m) => ({
     modelId: m.model_id,
     modelDisplayName: parseSnapshotModelDisplayName(m.snapshot_json),
@@ -771,6 +670,7 @@ export function getModels(timeRange?: AnalyticsTimeRange): ModelsResult {
     interrupted: m.interrupted,
     firstUsed: m.first_used,
     lastUsed: m.last_used,
+    ...summarizeLatency(modelLatencyMap.get(`${m.model_id}\0${m.provider_id}\0${m.connection_id}`)),
   }));
 
   const connections: ConnectionBreakdown[] = connectionRows.map((c) => ({
@@ -788,6 +688,7 @@ export function getModels(timeRange?: AnalyticsTimeRange): ModelsResult {
     modelCount: c.model_count,
     firstUsed: c.first_used,
     lastUsed: c.last_used,
+    ...summarizeLatency(connectionLatencyMap.get(c.connection_id)),
   }));
 
   // Stream raw cost rows for the time series and aggregate per
@@ -860,6 +761,7 @@ export function getModels(timeRange?: AnalyticsTimeRange): ModelsResult {
 
   return { totalCost, models, connections, costPerModelOverTime, costPerConnectionOverTime };
 }
+
 export function getTools(timeRange?: AnalyticsTimeRange): ToolsResult {
   const db = getDb();
   const dateFilter = buildDateFilter(timeRange);
@@ -921,6 +823,7 @@ export function getTools(timeRange?: AnalyticsTimeRange): ToolsResult {
     outcomeDistribution,
   };
 }
+
 export function getSubagents(timeRange?: AnalyticsTimeRange): SubagentsResult {
   const db = getDb();
   const dateFilter = buildDateFilter(timeRange);
@@ -928,24 +831,19 @@ export function getSubagents(timeRange?: AnalyticsTimeRange): SubagentsResult {
   const filteredAttempts = `SELECT * FROM provider_attempts ${whereClause([], dateFilter.clause)}`;
   const summaryRows = db.prepare(`
     WITH filtered_sa AS (${filteredSubagents}),
-    chain_usage AS (
-      SELECT chain_id,
-        COALESCE(SUM(json_extract(usage_json, '$.inputTokens')), 0) as input_tokens,
-        COALESCE(SUM(json_extract(usage_json, '$.outputTokens')), 0) as output_tokens,
-        COUNT(*) as attempts
-      FROM (${filteredAttempts}) WHERE chain_id IS NOT NULL GROUP BY chain_id
-    )
+    ${subagentRunWindows('filtered_sa')},
+    ${subagentRunUsage(filteredAttempts)}
     SELECT sa.agent_name, sa.agent_type, sa.agent_tier,
       GROUP_CONCAT(DISTINCT sa.model_id) as models,
       COUNT(*) as invocations,
-      COALESCE(SUM(cu.input_tokens), 0) as input_tokens,
-      COALESCE(SUM(cu.output_tokens), 0) as output_tokens,
-      COALESCE(SUM(cu.attempts), 0) as attempts,
+      COALESCE(SUM(ru.input_tokens), 0) as input_tokens,
+      COALESCE(SUM(ru.output_tokens), 0) as output_tokens,
+      COALESCE(SUM(ru.attempts), 0) as attempts,
       COALESCE(SUM(CASE WHEN sa.status = 'completed' THEN 1 ELSE 0 END), 0) as completed,
       COALESCE(SUM(CASE WHEN sa.status = 'failed' THEN 1 ELSE 0 END), 0) as failed,
       COALESCE(SUM(CASE WHEN sa.status = 'interrupted' THEN 1 ELSE 0 END), 0) as interrupted,
       AVG(CASE WHEN sa.completed_at IS NOT NULL THEN (julianday(sa.completed_at) - julianday(sa.started_at)) * 86400000 END) as avg_duration_ms
-    FROM filtered_sa sa LEFT JOIN chain_usage cu ON cu.chain_id = sa.chain_id
+    FROM filtered_sa sa JOIN run_usage ru ON ${RUN_USAGE_JOIN}
     GROUP BY sa.agent_name, sa.agent_type, sa.agent_tier
     ORDER BY invocations DESC, sa.agent_name
   `).all(...dateFilter.params, ...dateFilter.params) as Array<{
@@ -960,9 +858,9 @@ export function getSubagents(timeRange?: AnalyticsTimeRange): SubagentsResult {
   for (const row of iterateRows<{
     agent_name: string; agent_type: string; agent_tier: string; currency: string; cost_amount: string;
   }>(db, `
-    WITH filtered_sa AS (${filteredSubagents})
-    SELECT sa.agent_name, sa.agent_type, sa.agent_tier, pa.currency, pa.cost_amount
-    FROM filtered_sa sa JOIN (${filteredAttempts}) pa ON pa.chain_id = sa.chain_id
+    WITH filtered_sa AS (${filteredSubagents}), ${subagentRunWindows('filtered_sa')}
+    SELECT rw.agent_name, rw.agent_type, rw.agent_tier, pa.currency, pa.cost_amount
+    FROM run_windows rw JOIN (${filteredAttempts}) pa ON ${ATTEMPT_RUN_WINDOW_JOIN}
     WHERE pa.cost_state IN ('reported','calculated') AND pa.currency IS NOT NULL AND pa.cost_amount IS NOT NULL
   `, [...dateFilter.params, ...dateFilter.params])) {
     const amount = parseCostAmount(row.cost_amount);
@@ -1026,6 +924,7 @@ export function getSubagents(timeRange?: AnalyticsTimeRange): SubagentsResult {
     invocationsOverTime: invocationsOverTime.map((row) => ({ date: row.date, count: row.count })),
   };
 }
+
 export function getContext(sessionId?: string, timeRange?: AnalyticsTimeRange, ctx: AnalyticsQueryContext = {}): ContextResult {
   const db = getDb(ctx);
   const dateFilter = buildDateFilter(timeRange, 'captured_at');
@@ -1041,11 +940,12 @@ export function getContext(sessionId?: string, timeRange?: AnalyticsTimeRange, c
       COALESCE(AVG(tools_tokens), 0) as tools_tokens,
       COALESCE(AVG(tool_use_tokens), 0) as tool_use_tokens,
       COALESCE(AVG(user_tokens), 0) as user_tokens,
-      COALESCE(AVG(assistant_tokens), 0) as assistant_tokens
+      COALESCE(AVG(assistant_tokens), 0) as assistant_tokens,
+      COALESCE(AVG(summary_tokens), 0) as summary_tokens
     FROM context_snapshots ${where}
   `).get(...params) as {
     total: number; used_tokens: number; system_tokens: number; tools_tokens: number;
-    tool_use_tokens: number; user_tokens: number; assistant_tokens: number;
+    tool_use_tokens: number; user_tokens: number; assistant_tokens: number; summary_tokens: number;
   };
 
   const topSessionRows = db.prepare(`
@@ -1058,7 +958,8 @@ export function getContext(sessionId?: string, timeRange?: AnalyticsTimeRange, c
 
   let nameMap = new Map<string, string>();
   try {
-    nameMap = (ctx.resolveSessionNames ?? getSessionNames)(topSessionRows.map((r) => r.session_id));
+    const resolveNames = sessionNameResolver(ctx, db);
+    nameMap = resolveNames(topSessionRows.map((r) => r.session_id));
   } catch (error) {
     console.warn('[analytics] Session name lookup failed', { error });
   }
@@ -1197,6 +1098,7 @@ export function getContext(sessionId?: string, timeRange?: AnalyticsTimeRange, c
       toolUseTokens: Math.round(aggregate.tool_use_tokens),
       userTokens: Math.round(aggregate.user_tokens),
       assistantTokens: Math.round(aggregate.assistant_tokens),
+      summaryTokens: Math.round(aggregate.summary_tokens),
     },
   };
 }

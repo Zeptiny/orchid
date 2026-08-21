@@ -144,6 +144,7 @@ describe('subagent IPC boundary', () => {
     const projection = {
       sessionId: session, subagentId: 'subagent-1', runId: uuid, sequence: 3,
       state: 'running', segments: [], usage: null, result: null, error: null,
+      compactionProgress: null,
       toolCalls: [{
         toolCallId: 'tool-cancelled',
         toolName: 'read',
@@ -583,6 +584,7 @@ describe('subagent delta event protocol (U1)', () => {
       case SubagentDeltaEventType.TOOL_ARGS_DELTA: return `tool_args:${event.toolCallId}+${event.append}`;
       case SubagentDeltaEventType.TOOL_RESULT: return `tool_result:${event.toolCallId}:${event.status}`;
       case SubagentDeltaEventType.USAGE: return `usage:${event.usage.total_tokens}`;
+      case SubagentDeltaEventType.COMPACTION_PROGRESS: return `compaction:${event.phase}`;
       case SubagentDeltaEventType.TERMINAL: return `terminal:${event.state}`;
       default: {
         const exhaustive: never = event;
@@ -606,7 +608,8 @@ describe('subagent delta event protocol (U1)', () => {
       toolResult: canonical, finishedAt: new Date(1).toISOString(), sequence: 6,
     },
     { ...base, type: 'usage', usage, sequence: 7 },
-    { ...base, type: 'terminal', record: summary('subagent-1', 'completed'), state: 'completed', usage, sequence: 8 },
+    { ...base, type: 'compaction_progress', phase: 'preparing', detail: 'Summarizing history', mode: 'simple', sequence: 8 },
+    { ...base, type: 'terminal', record: summary('subagent-1', 'completed'), state: 'completed', usage, sequence: 9 },
   ];
 
   it('covers every delta variant in an exhaustive switch and validates each against the wire schema', () => {
@@ -618,6 +621,7 @@ describe('subagent delta event protocol (U1)', () => {
       'tool_args:call-1+{"path":',
       'tool_result:call-1:complete',
       'usage:3',
+      'compaction:preparing',
       'terminal:completed',
     ]);
     for (const delta of deltas) {
@@ -649,6 +653,58 @@ describe('subagent delta event protocol (U1)', () => {
 
   it('rejects an unknown delta type discriminant', () => {
     expect(subagentDeltaEventSchema.safeParse({ ...base, type: 'exploded' }).success).toBe(false);
+  });
+
+  it('parses a compaction_progress delta and preserves its optional progress fields', () => {
+    const event = {
+      ...base,
+      type: 'compaction_progress',
+      phase: 'compacting',
+      detail: 'Summarizing history',
+      mode: 'selective',
+      streamText: 'SUMMARY partial',
+      estimatedTokens: 12,
+    };
+    expect(subagentDeltaEventSchema.parse(event)).toMatchObject({
+      phase: 'compacting',
+      detail: 'Summarizing history',
+      mode: 'selective',
+      streamText: 'SUMMARY partial',
+      estimatedTokens: 12,
+    });
+    // The base schema's UUID requirement is what the emitter's skip-without-
+    // session guard exists for: '' would be dropped at the preload boundary.
+    expect(subagentDeltaEventSchema.safeParse({ ...event, sessionId: '' }).success).toBe(false);
+    expect(subagentDeltaEventSchema.safeParse({ ...event, phase: 'exploded' }).success).toBe(false);
+  });
+
+  it('round-trips a live projection carrying compactionProgress through the snapshot schema', () => {
+    const snapshot = {
+      sessionId: session,
+      sessionRevision: 2,
+      records: [],
+      live: [{
+        sessionId: session, subagentId: 'subagent-1', runId: uuid, sequence: 3,
+        state: 'running', segments: [], toolCalls: [], usage: null, result: null, error: null,
+        compactionProgress: {
+          type: 'compaction_progress',
+          sessionId: session, subagentId: 'subagent-1', runId: uuid,
+          sequence: 3, sessionRevision: 2,
+          phase: 'compacting',
+          detail: 'Summarizing history',
+          mode: 'selective',
+          streamText: 'SUMMARY partial',
+          estimatedTokens: 12,
+        },
+      }],
+    };
+    expect(subagentSnapshotSchema.parse(snapshot).live[0]?.compactionProgress).toMatchObject({
+      phase: 'compacting',
+      detail: 'Summarizing history',
+      mode: 'selective',
+      streamText: 'SUMMARY partial',
+      estimatedTokens: 12,
+    });
   });
 
   it('accepts a snapshot carrying sessionRevision and rejects missing or negative revisions', () => {
@@ -694,6 +750,7 @@ describe('subagent delta event protocol (U1)', () => {
       live: [{
         sessionId: session, subagentId: 'subagent-queued', runId: uuid, sequence: 0,
         state: 'queued', segments: [], toolCalls: [], usage: null, result: null, error: null,
+        compactionProgress: null,
       }],
     };
     expect(subagentSnapshotSchema.safeParse(snapshot).success).toBe(true);

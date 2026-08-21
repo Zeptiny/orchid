@@ -204,6 +204,32 @@ describe('schema & defaults', () => {
     expect(partial).toHaveProperty('default_model', WORK_MODEL_SELECTION);
   });
 
+  it('drops the removed compaction.max_concurrent_compactors key instead of keeping it undefined', () => {
+    // Previously-saved configs still supply the removed key; parsing must
+    // accept it but remove it from the result entirely — an undefined-valued
+    // surviving key is not "removed" (own-property presence, not JSON luck).
+    const parsed = configSchema.parse({ compaction: { max_concurrent_compactors: 4 } });
+    expect(Object.hasOwn(parsed.compaction, 'max_concurrent_compactors')).toBe(false);
+    expect('max_concurrent_compactors' in parsed.compaction).toBe(false);
+
+    const partial = parsePartial({ compaction: { max_concurrent_compactors: 4 } });
+    expect(Object.hasOwn(partial.compaction!, 'max_concurrent_compactors')).toBe(false);
+  });
+
+  it('drops the deprecated compaction.keep_recent_chains key from both scopes instead of keeping it undefined', () => {
+    // Same contract as max_concurrent_compactors: the deprecated scope key is
+    // accepted for backcompat (validation still runs) but must be ABSENT —
+    // not undefined-valued — from every parsed scope.
+    const parsed = configSchema.parse({
+      compaction: { main: { keep_recent_chains: 5 }, subagents: { keep_recent_chains: 3 } },
+    });
+    expect(Object.hasOwn(parsed.compaction.main, 'keep_recent_chains')).toBe(false);
+    expect(Object.hasOwn(parsed.compaction.subagents, 'keep_recent_chains')).toBe(false);
+
+    const partial = parsePartial({ compaction: { main: { keep_recent_chains: 5 } } });
+    expect(Object.hasOwn(partial.compaction!.main!, 'keep_recent_chains')).toBe(false);
+  });
+
   it('accepts default_project_dir null and an absolute string', () => {
     const withNull = configSchema.parse({ default_project_dir: null });
     expect(withNull.default_project_dir).toBeNull();

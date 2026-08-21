@@ -6,6 +6,8 @@ import { z } from 'zod';
 import type { Config } from '../../shared/types/ipc-boundary';
 import { PERMISSION_MODE_VALUES } from '../../shared/types/permission';
 import { modelSelectionSchema } from '../../shared/types/provider';
+import { COMPACTION_MODES } from '../../shared/types/message';
+export { COMPACTION_MODES };
 
 export type {
   Config,
@@ -13,6 +15,9 @@ export type {
   AgentsMdConfig,
   AgentsMdEnforcePolicy,
   SubagentsConfig,
+  CompactionConfig,
+  CompactionScopeConfig,
+  CompactionMode,
 } from '../../shared/types/ipc-boundary';
 export { modelSelectionSchema, type ModelSelection } from '../../shared/types/provider';
 
@@ -95,6 +100,66 @@ export const subagentsConfigSchema = z.object({
   prompt_task_max_chars: z.number().int().min(0).max(100_000).default(200),
 });
 
+export const compactionScopeSchema = z.object({
+  mode: z.enum(COMPACTION_MODES).default('simple'),
+  threshold: z.number().min(0.1).max(0.95).default(0.8),
+  model: modelSelectionSchema.nullable().default(null),
+  agent_name: z.literal('compactor').default('compactor'),
+  preserve_percent: z.number().min(0.05).max(0.9).default(0.25),
+  // Deprecated: replaced by preserve_percent. Parsed (accepted) but ignored,
+  // then dropped from the parsed scope entirely — never an undefined-valued
+  // key (the object-level strip in compactionConfigSchema owns the delete so
+  // this schema stays a plain ZodObject for extend/partial consumers).
+  // The deprecation warning is emitted from the config load path
+  // (loader.ts loadConfig) so users know to migrate.
+  keep_recent_chains: z.number().int().min(0).max(100).optional(),
+  min_compactable_tokens: z.number().int().min(0).max(1_000_000).default(4000),
+  mechanical_reclaim: z.boolean().default(true),
+  hysteresis_delta: z.number().min(0).max(0.5).default(0.1),
+  // R31/R33: the last K user messages stay in the model view across compaction
+  // (never flagged). null disables tail pinning for the main scope. The
+  // subagent scope overrides this to null (= ALL user messages pinned, R32).
+  keep_last_user_messages: z.number().int().min(1).max(1000).nullable().default(10),
+  // R33: pin the session's FIRST user message so the opening intent survives
+  // every compaction cycle. Harmless under the subagent all-pin default.
+  pin_first_user_message: z.boolean().default(true),
+});
+
+export const compactionSubagentsScopeSchema = compactionScopeSchema
+  .extend({
+    threshold: z.number().min(0.1).max(0.95).default(0.85),
+    agent_name: z.literal('compactor-subagent').default('compactor-subagent'),
+    // R32 hard guarantee: every user message stays in model view for a
+    // subagent run's entire lifetime. null = ALL (no tail cap).
+    keep_last_user_messages: z.number().int().min(1).max(1000).nullable().default(null),
+  });
+
+/**
+ * Strip the deprecated `keep_recent_chains` key from a parsed scope. Applied
+ * at the compactionConfigSchema field level (both scopes) because the base
+ * scope schemas must remain plain ZodObjects — `compactionSubagentsScopeSchema`
+ * extends this schema and the IPC boundary calls `.partial().strict()` on both.
+ */
+function stripDeprecatedScopeKeys<T extends { keep_recent_chains?: number }>(parsed: T): T {
+  delete parsed.keep_recent_chains;
+  return parsed;
+}
+
+export const compactionConfigSchema = z
+  .object({
+    main: compactionScopeSchema.transform(stripDeprecatedScopeKeys).default({}),
+    subagents: compactionSubagentsScopeSchema.transform(stripDeprecatedScopeKeys).default({}),
+    // Removed: was the compactor concurrency cap. Parsed (accepted) so
+    // previously-saved configs keep loading, then dropped from the parsed
+    // result entirely — never left behind as an undefined-valued key.
+    max_concurrent_compactors: z.number().int().min(1).max(8).optional(),
+  })
+  .transform((parsed) => {
+    delete parsed.max_concurrent_compactors;
+    return parsed;
+  })
+  .default({});
+
 // ---------------------------------------------------------------------------
 // Main config schema
 // ---------------------------------------------------------------------------
@@ -170,6 +235,7 @@ export const configSchema = z
     rag: ragConfigSchema.default({}),
     agents_md: agentsMdConfigSchema.default({}),
     subagents: subagentsConfigSchema.default({}),
+    compaction: compactionConfigSchema,
     ast_max_file_size: z.number().int().positive().default(1_048_576),
     mcp_startup_timeout: z.number().positive().default(60.0),
     mcp_per_server_timeout: z.number().positive().default(10.0),

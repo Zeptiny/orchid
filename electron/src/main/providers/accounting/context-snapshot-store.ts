@@ -31,6 +31,7 @@ export interface InsertContextSnapshotInput {
   readonly toolUseTokens: number;
   readonly userTokens: number;
   readonly assistantTokens: number;
+  readonly summaryTokens?: number;
 }
 
 type ContextSnapshotRow = {
@@ -49,6 +50,7 @@ type ContextSnapshotRow = {
   tool_use_tokens: number;
   user_tokens: number;
   assistant_tokens: number;
+  summary_tokens: number;
 };
 
 function rowToRecord(row: ContextSnapshotRow): ContextSnapshotRecord {
@@ -68,6 +70,7 @@ function rowToRecord(row: ContextSnapshotRow): ContextSnapshotRecord {
     toolUseTokens: row.tool_use_tokens,
     userTokens: row.user_tokens,
     assistantTokens: row.assistant_tokens,
+    summaryTokens: row.summary_tokens ?? 0,
   };
 }
 
@@ -97,8 +100,8 @@ export class ContextSnapshotStore {
       INSERT INTO context_snapshots (
         snapshot_id, session_id, chain_id, turn_id, provider_attempt_id,
         agent_scope, captured_at, input_tokens, output_tokens, used_tokens,
-        system_tokens, tools_tokens, tool_use_tokens, user_tokens, assistant_tokens
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        system_tokens, tools_tokens, tool_use_tokens, user_tokens, assistant_tokens, summary_tokens
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       snapshotId,
       input.sessionId,
@@ -115,6 +118,7 @@ export class ContextSnapshotStore {
       input.toolUseTokens,
       input.userTokens,
       input.assistantTokens,
+      input.summaryTokens ?? 0,
     );
     return snapshotId;
   }
@@ -124,6 +128,15 @@ export class ContextSnapshotStore {
       'SELECT * FROM context_snapshots WHERE session_id = ? ORDER BY captured_at ASC LIMIT ?',
     ).all(sessionId, limit) as ContextSnapshotRow[];
     return rows.map(rowToRecord);
+  }
+
+  /** Latest main-agent input tokens for a session, or null when none recorded. */
+  latestMainInputTokens(sessionId: string): number | null {
+    const row = this.connection().prepare(
+      'SELECT input_tokens FROM context_snapshots WHERE session_id = ? AND (agent_scope IS NULL OR agent_scope = \'main\') ORDER BY captured_at DESC, rowid DESC LIMIT 1',
+    ).get(sessionId) as { input_tokens: number } | undefined;
+    if (!row || !Number.isFinite(row.input_tokens) || row.input_tokens <= 0) return null;
+    return row.input_tokens;
   }
 
   listAll(limit = 1000, startDate?: string, endDate?: string): readonly ContextSnapshotRecord[] {

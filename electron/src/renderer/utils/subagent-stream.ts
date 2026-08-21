@@ -1,6 +1,7 @@
 import type { SubagentEvent, SubagentSnapshot } from '../../shared/types/ipc';
 import type { Usage } from '../../shared/types/message';
 import type {
+  SubagentCompactionProgressEvent,
   SubagentDeltaEvent,
   SubagentLiveProjection,
   SubagentLiveSegment,
@@ -167,6 +168,7 @@ interface LiveDraft {
   usage: Usage | null;
   result: string | null;
   error: string | null;
+  compactionProgress: SubagentCompactionProgressEvent | null;
 }
 
 function draftFromProjection(projection: SubagentLiveProjection): LiveDraft {
@@ -181,6 +183,7 @@ function draftFromProjection(projection: SubagentLiveProjection): LiveDraft {
     usage: projection.usage,
     result: projection.result,
     error: projection.error,
+    compactionProgress: projection.compactionProgress,
   };
 }
 
@@ -199,6 +202,7 @@ function draftFromSpawn(event: SubagentSpawnedEvent): LiveDraft {
     usage: event.usage,
     result: null,
     error: null,
+    compactionProgress: null,
   };
 }
 
@@ -264,6 +268,9 @@ function applyDeltaToDraft(draft: LiveDraft, event: ContentDelta): void {
     }
     case 'usage':
       draft.usage = event.usage;
+      break;
+    case 'compaction_progress':
+      draft.compactionProgress = event;
       break;
   }
 }

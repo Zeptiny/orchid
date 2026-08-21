@@ -1,6 +1,7 @@
 import type { ModelMessage, Tool } from 'ai';
 import { zodToJsonSchema } from 'zod-to-json-schema';
 import type { ContextSnapshot } from '../../shared/types/message';
+import { compactedMarkerFromUnknown } from '../../shared/types/message';
 
 interface ContextSnapshotInput {
   systemPrompt: string;
@@ -23,6 +24,7 @@ interface ContextChars {
   toolUse: number;
   user: number;
   assistant: number;
+  summary: number;
 }
 
 function serializedLength(value: unknown): number {
@@ -51,10 +53,38 @@ function toolDefinitionsLength(tools: Record<string, Tool>): number {
   return definitions.length > 0 ? serializedLength(definitions) : 0;
 }
 
-function messageChars(messages: readonly ModelMessage[]): Omit<ContextChars, 'system' | 'tools'> {
-  const chars = { toolUse: 0, user: 0, assistant: 0 };
+/**
+ * Structural marker validation via the shared parser (compactedMarkerFromUnknown):
+ * a malformed `compacted` value (boolean, string, partial object) is NOT a
+ * summary head. Must stay identical to the check in compaction/select.ts —
+ * both modules validate through the same shared helper.
+ */
+function hasCompactedMarker(message: Record<string, unknown>): boolean {
+  return 'compacted' in message && compactedMarkerFromUnknown(message.compacted) !== undefined;
+}
+
+function messageChars(
+  messages: readonly (ModelMessage & { compacted?: unknown })[],
+): Omit<ContextChars, 'system' | 'tools'> {
+  const chars = { toolUse: 0, user: 0, assistant: 0, summary: 0 };
 
   for (const message of messages) {
+    // Summary-head messages (R23) carry the compacted marker and must be
+    // bucketed into `summary` instead of `assistant` so the snapshot
+    // exposes `summary_tokens` (R19) without inflating assistant counts.
+    if (hasCompactedMarker(message as unknown as Record<string, unknown>)) {
+      if (typeof message.content === 'string') {
+        chars.summary += message.content.length;
+      } else if (Array.isArray(message.content)) {
+        for (const part of message.content) {
+          chars.summary += serializedLength(part);
+        }
+      } else {
+        chars.summary += serializedLength(message.content);
+      }
+      continue;
+    }
+
     if (message.role === 'tool') {
       chars.toolUse += serializedLength(message.content);
       continue;
@@ -85,7 +115,7 @@ function allocateInputTokens(chars: ContextChars, inputTokens: number): ContextC
   const totalChars = entries.reduce((sum, [, count]) => sum + count, 0);
 
   if (totalChars <= 0) {
-    return { system: inputTokens, tools: 0, toolUse: 0, user: 0, assistant: 0 };
+    return { system: inputTokens, tools: 0, toolUse: 0, user: 0, assistant: 0, summary: 0 };
   }
 
   const allocated: ContextChars = {
@@ -94,6 +124,7 @@ function allocateInputTokens(chars: ContextChars, inputTokens: number): ContextC
     toolUse: 0,
     user: 0,
     assistant: 0,
+    summary: 0,
   };
   for (const [key, count] of entries) {
     allocated[key] = Math.floor((count / totalChars) * inputTokens);
@@ -121,7 +152,11 @@ export function createContextSnapshotBuilder(
   }: DynamicContextSnapshotInput): ContextSnapshot => {
     const input = Math.max(0, inputTokens ?? 0);
     const output = Math.max(0, outputTokens ?? 0);
-    const messageCounts = messageChars(messages);
+    // Allow Message-shaped objects (with `compacted`) to flow through the
+    // ModelMessage-typed input without a cast at every call-site.
+    const messageCounts = messageChars(
+      messages as unknown as (ModelMessage & { compacted?: unknown })[],
+    );
     const allocated = allocateInputTokens(
       {
         system: systemChars,
@@ -150,6 +185,7 @@ export function createContextSnapshotBuilder(
       tool_use_tokens: allocated.toolUse,
       user_tokens: allocated.user,
       assistant_tokens: assistantTokens,
+      summary_tokens: allocated.summary,
       ...(reasoningTokens === undefined ? {} : { reasoning_tokens: reasoning }),
     };
   };

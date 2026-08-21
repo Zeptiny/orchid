@@ -141,6 +141,7 @@ export function ToolResultShell({
       if (block.toolName === 'execute_command') {
         // Foreground live mirror keyed by the tool call id (block.id). The
         // canonical stdout/stderr result replaces this widget on completion.
+        // Embedded: the shell's disclosure is the only expand/collapse control.
         // Stop propagation so the widget's own controls never collapse the shell.
         const { command, description } = foregroundCommandInfo(block);
         return (
@@ -153,6 +154,7 @@ export function ToolResultShell({
               sessionId={sessionId}
               commandText={command}
               description={description}
+              embedded
             />
           </div>
         );

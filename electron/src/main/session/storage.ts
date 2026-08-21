@@ -604,14 +604,8 @@ function deserializeTodoStore(json: string): TodoStoreData {
   }
 }
 
-function chainFromRow(
-  row: ChainRow,
-  view?: {
-    messages: Message[];
-    startIndex: number;
-    summary: ChainViewSummary;
-  },
-): Chain {
+/** Chain row metadata without messages — for updates that supply messages separately. */
+function chainMetadataFromRow(row: ChainRow): Omit<Chain, 'messages'> {
   let subagentRecord: SubagentRecord | null = null;
   if (row.subagent_record_json) {
     try {
@@ -624,7 +618,6 @@ function chainFromRow(
   return {
     id: row.id,
     sessionId: row.session_id,
-    messages: view?.messages ?? deserializeMessages(row.messages_json ?? '[]'),
     status: parseChainStatus(row.status),
     selection: deserializeSelection(row.selection_json),
     modelLabel: row.model_label,
@@ -636,6 +629,20 @@ function chainFromRow(
     endTime: row.end_time,
     errorDetail: row.error_detail ?? null,
     errorTitle: row.error_title ?? null,
+  };
+}
+
+function chainFromRow(
+  row: ChainRow,
+  view?: {
+    messages: Message[];
+    startIndex: number;
+    summary: ChainViewSummary;
+  },
+): Chain {
+  return {
+    ...chainMetadataFromRow(row),
+    messages: view?.messages ?? deserializeMessages(row.messages_json ?? '[]'),
     ...(view
       ? {
           messagesLoaded: view.startIndex === 0,
@@ -1005,18 +1012,28 @@ export function appendActiveChain(
 /**
  * Atomically persist a terminal chain snapshot and clear the session's active
  * chain pointer. Returns false if the chain row is missing.
+ *
+ * Finalize is the convergence point for the at-rest invariant "one turn = one
+ * chain row": the finished chain (the continuing suffix row a mid-turn
+ * compaction kept the original id on) now holds the full turn, so any split
+ * prefix row and absorbed summary row the compaction left behind (their
+ * content subsumed by this write) is retired in the same transaction instead
+ * of lingering as an orphan.
  */
 export function finishChain(
   chain: Chain,
   updatedAt: string,
   todoStore: TodoStoreData,
   opts?: StorageOptions,
-): boolean {
-  if (!isValidSessionId(chain.sessionId)) return false;
+): { ok: boolean; retiredChainIds: readonly string[] } {
+  if (!isValidSessionId(chain.sessionId)) return { ok: false, retiredChainIds: [] };
   const { dbPath } = resolveOptions(opts);
   return withCorruptionRecovery(dbPath, (db) => {
     const txn = db.transaction(() => {
-      if (updateChainRow(db, chain) === 0) return false;
+      if (updateChainRow(db, chain) === 0) {
+        return { ok: false, retiredChainIds: [] as string[] };
+      }
+      const retiredChainIds = deleteSupersededChains(db, chain.sessionId, chain.id);
       db.prepare(
         `UPDATE sessions
          SET active_chain_id = NULL, todo_store_json = ?, updated_at = ?
@@ -1026,10 +1043,97 @@ export function finishChain(
         updatedAt,
         chain.sessionId,
       );
-      return true;
+      return { ok: true, retiredChainIds };
     });
     return txn();
   });
+}
+
+/**
+ * Delete superseded chain rows — rows whose message-id set is fully contained
+ * in another chain of the same session (the split-prefix orphans a mid-turn
+ * compaction's durable split creates once the owning turn finalizes into its
+ * continuing row). The chain being finalized now is always kept; the session's
+ * active-chain pointer is honored when supplied.
+ *
+ * Safety properties:
+ * - Empty or unreadable rows are never deleted (an empty id set is not a match).
+ * - Fresh-id chains (turns start with a new user message, summary heads carry a
+ *   new summary id) can never be subsets, so legitimate chains are immune.
+ * - Containment is judged on the FULL id set (visible + hidden) of BOTH rows:
+ *   duplicated hidden extras (usage carriers mirrored into stale split rows)
+ *   do not protect a row the owner fully subsumes, but a row carrying hidden
+ *   content the owner LACKS is preserved — retiring it would silently drop
+ *   that usage evidence (nothing else holds it).
+ * - Deleting the LATER duplicate matches replay semantics: history assembly
+ *   dedupes by id keeping first occurrence, so the deleted rows were already
+ *   invisible to the model.
+ */
+function deleteSupersededChains(
+  db: SqliteDatabase,
+  sessionId: string,
+  finalizedChainId: string | null,
+  activeChainId?: string | null,
+): string[] {
+  const rows = db.prepare(
+    'SELECT id, messages_json FROM chains WHERE session_id = ? ORDER BY ordinal',
+  ).all(sessionId) as Array<{ id: string; messages_json: string | null }>;
+  if (rows.length < 2) return [];
+
+  const idSets = new Map<string, Set<string>>();
+  for (const row of rows) {
+    let ids: Set<string> | null = null;
+    try {
+      const parsed: unknown = JSON.parse(row.messages_json ?? '[]');
+      if (Array.isArray(parsed)) {
+        ids = new Set<string>();
+        for (const message of parsed) {
+          if (message && typeof message === 'object' && typeof (message as { id?: unknown }).id === 'string') {
+            ids.add((message as { id: string }).id);
+          }
+        }
+      }
+    } catch {
+      ids = null;
+    }
+    if (ids) {
+      idSets.set(row.id, ids);
+    }
+  }
+
+  const superseded: string[] = [];
+  for (let candidateIndex = 0; candidateIndex < rows.length; candidateIndex += 1) {
+    const candidate = rows[candidateIndex]!;
+    if (candidate.id === finalizedChainId || candidate.id === activeChainId) continue;
+    const candidateIds = idSets.get(candidate.id);
+    if (!candidateIds || candidateIds.size === 0) continue;
+    for (let ownerIndex = 0; ownerIndex < candidateIndex; ownerIndex += 1) {
+      const ownerIds = idSets.get(rows[ownerIndex]!.id);
+      if (!ownerIds || ownerIds.size < candidateIds.size) continue;
+      let contained = true;
+      for (const id of candidateIds) {
+        if (!ownerIds.has(id)) {
+          contained = false;
+          break;
+        }
+      }
+      if (contained) {
+        superseded.push(candidate.id);
+        break;
+      }
+    }
+  }
+
+  for (const id of superseded) {
+    db.prepare('DELETE FROM chain_message_offsets WHERE chain_id = ?').run(id);
+    db.prepare('DELETE FROM chains WHERE id = ? AND session_id = ?').run(id, sessionId);
+  }
+  if (superseded.length > 0) {
+    console.debug(
+      `[session] retired ${superseded.length} superseded chain row(s) (session ${sessionId})`,
+    );
+  }
+  return superseded;
 }
 
 /**
@@ -1441,6 +1545,19 @@ function loadSessionInternal(
         chainRows = selectChainRows(db, sessionId, loadFullSession);
       }
 
+      // Heal superseded chain rows (duplicate split rows from mid-turn
+      // compactions whose turn never finalized — crash or restart — plus
+      // sessions already carrying the damage). Recovery above already made
+      // every chain terminal, so the active-pointer exclusion only protects
+      // a pointer that survived it. A LIVE compaction split (fresh-id
+      // prefix + summary + continuing suffix) is never a subset relation
+      // and always survives the heal.
+      const activePointer = (row as SessionRow).active_chain_id ?? null;
+      const healed = deleteSupersededChains(db, sessionId, null, activePointer);
+      if (healed.length > 0) {
+        chainRows = selectChainRows(db, sessionId, loadFullSession);
+      }
+
       const chains: Chain[] = [];
       if (loadFullSession) {
         for (const cr of chainRows) {
@@ -1556,6 +1673,18 @@ export function loadSessionForReplacement(
 /** Load the navigation payload without selecting or parsing subagent record_json. */
 export function loadSessionView(sessionId: string, opts?: StorageOptions): Session | null {
   return loadSessionInternal(sessionId, false, opts);
+}
+
+/**
+ * Bounded renderer view WITHOUT process-restart recovery.
+ *
+ * Live-cache refresh after a compaction durable write: a mid-turn ACTIVE
+ * continuing row must keep its status and the session's active-chain pointer
+ * (recovery would flip it to INTERRUPTED and strand the live turn's
+ * checkpoint writes).
+ */
+export function loadSessionViewUnrecovered(sessionId: string, opts?: StorageOptions): Session | null {
+  return loadSessionInternal(sessionId, false, opts, false);
 }
 
 /** Load the next older bounded page for one chain in a renderer session view. */
@@ -1812,6 +1941,262 @@ export function updateChain(
 }
 
 // ---------------------------------------------------------------------------
+// applyCompactionPersistence — targeted compaction write
+// ---------------------------------------------------------------------------
+
+/** Input for the targeted, single-transaction compaction write. */
+export interface CompactionPersistencePayload {
+  /** Recency timestamp written onto the session row with the compaction. */
+  readonly updatedAt: string;
+  /**
+   * Message ids to flag with `excludeFromModel` in their owning durable
+   * chains. Every id must resolve against durable chain rows; an unknown id
+   * aborts the whole write so a compaction can never persist a partial flag
+   * set. Partial in-memory chain views are never consulted — each affected
+   * chain's FULL durable `messages_json` is the write source.
+   */
+  readonly flaggedMessageIds: readonly string[];
+  /**
+   * Message ids whose `excludeFromModel` flag the settle CLEARED (scoped
+   * exempt users, selective covered-kept resets). Cleared in the SAME
+   * transaction as the flag writes so the durable rows can never keep a
+   * stale true flag that resurrects on reload. A cleared id with no durable
+   * owner is IDEMPOTENT (skipped): the settle computes the clear set over the
+   * live history, which can lead the debounced checkpoint flush — there is no
+   * durable row to resurrect a stale flag from. Unlike `flaggedMessageIds`,
+   * a missing cleared id never aborts the write.
+   */
+  readonly clearedMessageIds?: readonly string[];
+  /**
+   * Summary-head chain row to insert verbatim (R20: the summary is its own
+   * COMPLETED chain); null for reclaim-only compaction.
+   */
+  readonly summaryChain: Chain | null;
+  /**
+   * Durable message id the summary must precede in replay order — the first
+   * preserved-window message after the cut. The summary chain's messages are
+   * inserted INLINE into the owning chain at that position. Null (with a
+   * summary) appends the summary after the last durable chain.
+   */
+  readonly insertBeforeMessageId: string | null;
+}
+
+/** Durable layout outcome of a successful compaction write. */
+export interface CompactionPersistenceResult {
+  /** Final durable chain ids in replay (ordinal) order after the write. */
+  readonly chainIds: readonly string[];
+  /** Durable chain ids whose rows received `excludeFromModel` flags. */
+  readonly flaggedChainIds: readonly string[];
+  /**
+   * Inserted summary-head chain id — set only when the summary became its own
+   * durable row (append path). Null for reclaim-only compaction AND for
+   * INLINE insertion (the summary lives inside the owning chain row; no row
+   * carries the summary chain's id).
+   */
+  readonly summaryChainId: string | null;
+}
+
+/**
+ * Persist a compaction as one targeted SQLite transaction.
+ *
+ * Effects, all-or-nothing:
+ * - For every chain owning a flagged message id: re-read that chain's FULL
+ *   durable `messages_json`, set `excludeFromModel` on the matching ids, and
+ *   update the row in place. Only those flags change.
+ * - Insert the summary head INLINE into the owning anchor chain (same shape
+ *   as the subagent scope): flags + one message, no row restructuring.
+ * - Never deletes or rewrites any chain not touched by the compaction and
+ *   never touches `subagent_chains` (a wholesale saveSession from a bounded
+ *   view would permanently truncate pre-window history and wipe durable
+ *   subagent rows — both P0 data-loss hazards).
+ *
+ * Throws (rolling the transaction back) when the session is unknown, a
+ * flagged id has no durable owner, a chain blob is unreadable, or the summary
+ * anchor message cannot be found. Callers must never fall back to a full save
+ * from an in-memory view when this fails.
+ */
+export function applyCompactionPersistence(
+  sessionId: string,
+  payload: CompactionPersistencePayload,
+  opts?: StorageOptions,
+): CompactionPersistenceResult {
+  if (!isValidSessionId(sessionId)) {
+    throw new Error(`applyCompactionPersistence: refusing unsafe session id ${sessionId}`);
+  }
+  const { dbPath } = resolveOptions(opts);
+  return withCorruptionRecovery(dbPath, (db) => {
+    const txn = db.transaction((): CompactionPersistenceResult => {
+      if (!db.prepare('SELECT 1 FROM sessions WHERE id = ?').get(sessionId)) {
+        throw new Error(`applyCompactionPersistence: session ${sessionId} not found in durable rows`);
+      }
+
+      // Durable chain content is the only trusted write source. Partial
+      // in-memory chains (loadSessionView budgets) are never read here.
+      const entries = (
+        db.prepare('SELECT * FROM chains WHERE session_id = ? ORDER BY ordinal').all(sessionId) as ChainRow[]
+      ).map((row) => {
+        const messages = tryDeserializeMessages(row.messages_json ?? '[]', false);
+        if (!messages) {
+          throw new Error(
+            `applyCompactionPersistence: chain ${row.id} has unreadable messages (session ${sessionId})`,
+          );
+        }
+        return { row, messages };
+      });
+
+      // Resolve every flagged id against durable chains before writing. Build
+      // the message-id → owning-chain-ids index once instead of re-scanning
+      // every chain for every flagged id (quadratic in flagged ids × chains).
+      const chainIdsByMessageId = new Map<string, string[]>();
+      for (const entry of entries) {
+        for (const message of entry.messages) {
+          let owners = chainIdsByMessageId.get(message.id);
+          if (!owners) {
+            owners = [];
+            chainIdsByMessageId.set(message.id, owners);
+          }
+          owners.push(entry.row.id);
+        }
+      }
+      const flagsByChain = new Map<string, Set<string>>();
+      for (const messageId of new Set(payload.flaggedMessageIds)) {
+        const owners = chainIdsByMessageId.get(messageId);
+        if (!owners || owners.length === 0) {
+          throw new Error(
+            `applyCompactionPersistence: flagged message ${messageId} not found in durable chains (session ${sessionId})`,
+          );
+        }
+        // A message mirrored across several chains flags every owner.
+        for (const chainId of owners) {
+          let ids = flagsByChain.get(chainId);
+          if (!ids) {
+            ids = new Set<string>();
+            flagsByChain.set(chainId, ids);
+          }
+          ids.add(messageId);
+        }
+      }
+
+      // Cleared ids resolve against the same owner index, but a cleared id
+      // with no durable owner is IDEMPOTENT — there is no durable row that
+      // could resurrect a stale true flag, so it is skipped rather than
+      // aborting the write. The settle computes the clear set over the LIVE
+      // history, which can lead the debounced checkpoint flush (the subagent
+      // scope reconciles the same lag via its liveMessages tail append);
+      // failing the whole transaction over a benign clear would lose the
+      // compaction's flags and summary head. Flagged ids stay fail-closed —
+      // a partial flag set must never persist.
+      const clearsByChain = new Map<string, Set<string>>();
+      for (const messageId of new Set(payload.clearedMessageIds ?? [])) {
+        for (const chainId of chainIdsByMessageId.get(messageId) ?? []) {
+          let ids = clearsByChain.get(chainId);
+          if (!ids) {
+            ids = new Set<string>();
+            clearsByChain.set(chainId, ids);
+          }
+          ids.add(messageId);
+        }
+      }
+
+      // Resolve the summary insertion anchor before mutating anything.
+      let anchorEntry: (typeof entries)[number] | null = null;
+      let anchorIndex = -1;
+      if (payload.summaryChain && payload.insertBeforeMessageId != null) {
+        for (const entry of entries) {
+          const index = entry.messages.findIndex(
+            (message) => message.id === payload.insertBeforeMessageId,
+          );
+          if (index >= 0) {
+            anchorEntry = entry;
+            anchorIndex = index;
+            break;
+          }
+        }
+        if (!anchorEntry) {
+          throw new Error(
+            `applyCompactionPersistence: summary anchor message ${payload.insertBeforeMessageId} not found (session ${sessionId})`,
+          );
+        }
+      }
+
+      const chainIds = entries.map((entry) => entry.row.id);
+
+      // 1. In-place flag writes: full durable messages, only flags change —
+      //    sets and clears in the SAME transaction, so an in-memory-only
+      //    clear can never leave a stale true flag on the durable row.
+      const touchedChainIds = new Set([...flagsByChain.keys(), ...clearsByChain.keys()]);
+      for (const chainId of touchedChainIds) {
+        const setIds = flagsByChain.get(chainId);
+        const clearIds = clearsByChain.get(chainId);
+        const entry = entries.find((candidate) => candidate.row.id === chainId)!;
+        entry.messages = entry.messages.map((message) => {
+          // A set wins if an id were somehow both (the settle guarantees
+          // flagged and cleared ids are disjoint).
+          if (setIds?.has(message.id) && !message.excludeFromModel) {
+            return { ...message, excludeFromModel: true };
+          }
+          if (clearIds?.has(message.id) && message.excludeFromModel) {
+            return { ...message, excludeFromModel: false };
+          }
+          return message;
+        });
+        updateChainRow(db, { ...chainMetadataFromRow(entry.row), messages: entry.messages });
+      }
+
+      // 2. Summary-head insertion (R20): when the anchor names a durable
+      //    message, the summary chain's messages are inserted INLINE into the
+      //    owning chain at the anchor index — the same shape the subagent
+      //    scope persists. One turn stays one chain row: no split duplicates
+      //    for the finalize retire, no extra rows consuming the bounded
+      //    renderer view budget (which starves the turn's user message in its
+      //    oldest row), and no chain-count explosion past the renderer's
+      //    collapse threshold. Untouched chains keep their rows and ordinals
+      //    exactly as they are.
+      let summaryChainId: string | null = null;
+      const summaryChain = payload.summaryChain;
+      if (summaryChain) {
+        const summary: Chain = { ...summaryChain, sessionId };
+        if (!anchorEntry) {
+          // Append after the last durable chain (no anchor chain to inline into).
+          // This is the ONLY branch that creates a durable row carrying the
+          // summary chain's id — the inline branch below leaves summaryChainId
+          // null (no row with summary.id exists to reference).
+          const insertChain = db.prepare(INSERT_CHAIN_SQL);
+          const ordinal = db
+            .prepare('SELECT COALESCE(MAX(ordinal), -1) + 1 FROM chains WHERE session_id = ?')
+            .pluck()
+            .get(sessionId) as number;
+          insertChainRow(db, insertChain, summary, ordinal);
+          chainIds.push(summary.id);
+          summaryChainId = summary.id;
+        } else {
+          const withSummary: Message[] = [
+            ...anchorEntry.messages.slice(0, anchorIndex),
+            ...summary.messages,
+            ...anchorEntry.messages.slice(anchorIndex),
+          ];
+          updateChainRow(db, { ...chainMetadataFromRow(anchorEntry.row), messages: withSummary });
+          anchorEntry.messages = withSummary;
+        }
+      }
+
+      // 3. Recency bump (mirrors saveSession's updated_at write).
+      db.prepare('UPDATE sessions SET updated_at = ? WHERE id = ?').run(
+        payload.updatedAt,
+        sessionId,
+      );
+
+      return {
+        chainIds,
+        flaggedChainIds: [...flagsByChain.keys()],
+        summaryChainId,
+      };
+    });
+    return txn();
+  });
+}
+
+// ---------------------------------------------------------------------------
 // upsertSubagentRecords — targeted dirty-record write
 // ---------------------------------------------------------------------------
 
@@ -1859,6 +2244,237 @@ export function upsertSubagentRecords(
         upsert.run(sessionId, record.id, json, serializeSubagentSummary(record));
       }
       return { bytes };
+    });
+    return txn();
+  });
+}
+
+// ---------------------------------------------------------------------------
+// applySubagentCompactionPersistence — targeted subagent-chain compaction write
+// ---------------------------------------------------------------------------
+
+/** Input for the targeted, single-transaction subagent-chain compaction write. */
+export interface SubagentCompactionPayload {
+  /** Recency timestamp written onto the owning session row with the compaction. */
+  readonly updatedAt: string;
+  /**
+   * Message ids to flag with `excludeFromModel` inside the subagent's durable
+   * chain. Every id must resolve against the durable chain messages; an
+   * unknown id aborts the whole write so a compaction can never persist a
+   * partial flag set. The durable `record_json` (not an in-memory snapshot)
+   * is the write source.
+   */
+  readonly flaggedMessageIds: readonly string[];
+  /**
+   * Message ids whose `excludeFromModel` flag the settle CLEARED (scoped
+   * exempt users, selective covered-kept resets). Resolved exactly like the
+   * flagged ids and cleared in the SAME transaction, mirroring the
+   * `applyCompactionPersistence` behavior over `subagent_chains`.
+   */
+  readonly clearedMessageIds?: readonly string[];
+  /**
+   * Summary-head message carrying the `compacted` marker to insert into the
+   * chain's messages at the cut position (R20: the summary is its own message
+   * in the chain). Null for reclaim-only compaction.
+   */
+  readonly summaryMessage: Message | null;
+  /**
+   * Durable message id the summary must precede in replay order — the first
+   * preserved-window message after the cut. Null (with a summary) appends the
+   * summary after the last durable message.
+   */
+  readonly insertBeforeMessageId: string | null;
+  /**
+   * Authoritative live transcript for the run, supplied by the caller because
+   * the flagged ids and the summary anchor are computed over it while the
+   * durable `record_json` can lag the debounced checkpoint flush. Messages the
+   * durable row lacks (the un-flushed live tail) are appended inside the
+   * transaction BEFORE flag/anchor resolution, so a lagging row cannot make
+   * the write throw spuriously. Ids unknown to BOTH views still abort the
+   * write — the integrity throws stay intact for genuinely corrupt payloads.
+   */
+  readonly liveMessages?: readonly Message[];
+}
+
+/** Durable outcome of a successful subagent-chain compaction write. */
+export interface SubagentCompactionResult {
+  /** Total serialized `record_json` UTF-8 bytes written (diagnostics). */
+  readonly bytes: number;
+  /** Whether a summary head message was inserted. */
+  readonly summaryInserted: boolean;
+  /** Number of messages that received `excludeFromModel` flips. */
+  readonly flaggedCount: number;
+}
+
+/**
+ * Persist a subagent-chain compaction as one targeted SQLite transaction.
+ *
+ * Mirrors `applyCompactionPersistence` over the `subagent_chains` table
+ * instead of the `chains` table: a subagent's chain lives embedded inside the
+ * `record_json` column, not as separate chain rows. Effects, all-or-nothing:
+ *
+ * - Re-reads the durable `record_json` for the given subagent, deserializes
+ *   the chain, sets `excludeFromModel` on every flagged message id, and inserts
+ *   the summary-head message at the cut position. The chain keeps its original
+ *   id — the summary is a message within the chain, not a separate row (no
+ *   chain-split id handling is needed because the subagent's chain is a single
+ *   row inside the record, not a multi-row layout with ordinals).
+ * - Re-serializes the record and updates the `record_json` (and `summary_json`)
+ *   column in place. Sibling subagent rows and every `chains` row are never
+ *   touched.
+ *
+ * Throws (rolling the transaction back) when the session or subagent row is
+ * unknown, a flagged id has no durable owner, or the record blob is
+ * unreadable. Callers must never fall back to a full save from an in-memory
+ * view when this fails.
+ */
+export function applySubagentCompactionPersistence(
+  sessionId: string,
+  subagentId: string,
+  payload: SubagentCompactionPayload,
+  opts?: StorageOptions,
+): SubagentCompactionResult {
+  if (!isValidSessionId(sessionId)) {
+    throw new Error(
+      `applySubagentCompactionPersistence: refusing unsafe session id ${sessionId}`,
+    );
+  }
+  const { dbPath } = resolveOptions(opts);
+  return withCorruptionRecovery(dbPath, (db) => {
+    const txn = db.transaction((): SubagentCompactionResult => {
+      if (
+        !db.prepare('SELECT 1 FROM sessions WHERE id = ?').get(sessionId)
+      ) {
+        throw new Error(
+          `applySubagentCompactionPersistence: session ${sessionId} not found in durable rows`,
+        );
+      }
+
+      const row = db
+        .prepare(
+          'SELECT record_json FROM subagent_chains WHERE session_id = ? AND subagent_id = ?',
+        )
+        .get(sessionId, subagentId) as { record_json: string } | undefined;
+      if (!row) {
+        throw new Error(
+          `applySubagentCompactionPersistence: subagent ${subagentId} not found in durable rows (session ${sessionId})`,
+        );
+      }
+
+      let record: SubagentRecord;
+      try {
+        record = subagentRecordFromStorageDict(JSON.parse(row.record_json));
+      } catch {
+        throw new Error(
+          `applySubagentCompactionPersistence: subagent ${subagentId} has unreadable record (session ${sessionId})`,
+        );
+      }
+
+      let messages = record.chain.messages;
+      // Checkpoint-lag reconciliation: append the live tail the durable row
+      // has not received yet (the flagged ids / anchor were computed over the
+      // LIVE transcript). Append-only — durable messages are never reordered
+      // or dropped by this pass.
+      if (payload.liveMessages && payload.liveMessages.length > 0) {
+        const durableIds = new Set(messages.map((m) => m.id));
+        const missingLive = payload.liveMessages.filter((m) => !durableIds.has(m.id));
+        if (missingLive.length > 0) {
+          messages = [...messages, ...missingLive];
+        }
+      }
+
+      // Resolve every flagged id against the durable chain before writing.
+      const messageIdSet = new Set(messages.map((m) => m.id));
+      const flaggedSet = new Set(payload.flaggedMessageIds);
+      for (const id of flaggedSet) {
+        if (!messageIdSet.has(id)) {
+          throw new Error(
+            `applySubagentCompactionPersistence: flagged message ${id} not found in durable chain (subagent ${subagentId}, session ${sessionId})`,
+          );
+        }
+      }
+
+      // Cleared ids resolve with the same fail-closed integrity throw — a
+      // clear that misses its durable message aborts the whole write.
+      const clearedSet = new Set(payload.clearedMessageIds ?? []);
+      for (const id of clearedSet) {
+        if (!messageIdSet.has(id)) {
+          throw new Error(
+            `applySubagentCompactionPersistence: cleared message ${id} not found in durable chain (subagent ${subagentId}, session ${sessionId})`,
+          );
+        }
+      }
+
+      // Resolve the summary insertion anchor before mutating anything.
+      let anchorIndex = -1;
+      if (payload.summaryMessage && payload.insertBeforeMessageId != null) {
+        anchorIndex = messages.findIndex(
+          (m) => m.id === payload.insertBeforeMessageId,
+        );
+        if (anchorIndex < 0) {
+          throw new Error(
+            `applySubagentCompactionPersistence: summary anchor message ${payload.insertBeforeMessageId} not found (subagent ${subagentId}, session ${sessionId})`,
+          );
+        }
+      }
+
+      // 1. In-place flag writes: only flags change, originals preserved (R3).
+      //    Sets and clears land in the SAME message pass so a cleared flag can
+      //    never leave a stale true flag on the durable record.
+      let updatedMessages = messages.map((m) => {
+        // A set wins if an id were somehow both (the settle guarantees the
+        // flagged and cleared ids are disjoint).
+        if (flaggedSet.has(m.id) && !m.excludeFromModel) {
+          return { ...m, excludeFromModel: true };
+        }
+        if (clearedSet.has(m.id) && m.excludeFromModel) {
+          return { ...m, excludeFromModel: false };
+        }
+        return m;
+      });
+
+      // 2. Summary-head insertion at the cut position (R20).
+      let summaryInserted = false;
+      if (payload.summaryMessage) {
+        const summary = payload.summaryMessage;
+        if (anchorIndex < 0) {
+          updatedMessages = [...updatedMessages, summary];
+        } else {
+          updatedMessages = [
+            ...updatedMessages.slice(0, anchorIndex),
+            summary,
+            ...updatedMessages.slice(anchorIndex),
+          ];
+        }
+        summaryInserted = true;
+      }
+
+      // 3. Re-serialize and update the durable row + session recency.
+      const updatedRecord: SubagentRecord = {
+        ...record,
+        chain: { ...record.chain, messages: updatedMessages },
+      };
+      const json = serializeSubagentRecord(updatedRecord);
+      const bytes = Buffer.byteLength(json, 'utf8');
+      db.prepare(
+        `UPDATE subagent_chains SET record_json = ?, summary_json = ?
+         WHERE session_id = ? AND subagent_id = ?`,
+      ).run(
+        json,
+        serializeSubagentSummary(updatedRecord),
+        sessionId,
+        subagentId,
+      );
+      db.prepare('UPDATE sessions SET updated_at = ? WHERE id = ?').run(
+        payload.updatedAt,
+        sessionId,
+      );
+
+      return {
+        bytes,
+        summaryInserted,
+        flaggedCount: flaggedSet.size,
+      };
     });
     return txn();
   });

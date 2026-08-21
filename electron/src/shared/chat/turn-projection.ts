@@ -6,6 +6,8 @@
  * Message records (that remains the main-process persistence boundary).
  */
 import type { Usage } from '../types/message';
+import type { CompactionProgressEvent } from '../types/compaction-progress';
+import { MAIN_AGENT_SCOPE_ID, normalizeAgentScopeId } from '../types/agent-scope';
 import type {
   ChatChunkEvent,
   ChatDoneEvent,
@@ -32,7 +34,8 @@ export type ChatTurnEvent =
   | ChatUsageEvent
   | ChatToolCallStartEvent
   | ChatToolCallDeltaEvent
-  | ChatToolCallUpdateEvent;
+  | ChatToolCallUpdateEvent
+  | CompactionProgressEvent;
 
 /**
  * Event metadata belongs to the local dispatch, not to the IPC schema. In
@@ -63,6 +66,21 @@ export type ChatTurnToolSnapshot = Omit<ChatToolCallSnapshot, 'status'> & {
   status: ChatToolCallSnapshot['status'] | 'failed';
 };
 
+/**
+ * Live compaction widget state derived from `CompactionProgressEvent`s.
+ * On snapshot replay, the widget is derived from the persisted `compacted`
+ * summary-head marker instead (see stream-building.ts).
+ */
+export interface ChatTurnCompactionProgress {
+  readonly phase: CompactionProgressEvent['phase'];
+  readonly mode?: CompactionProgressEvent['mode'];
+  readonly detail?: string;
+  readonly streamText?: string | null;
+  readonly estimatedTokens?: number | null;
+  /** Monotonic sequence of the last progress event applied. */
+  readonly sequence: number;
+}
+
 /** Renderer-neutral, in-flight view reconstructed from ordered turn events. */
 export interface ChatTurnProjection {
   sessionId: string;
@@ -83,6 +101,13 @@ export interface ChatTurnProjection {
   interrupted: boolean;
   /** Terminal facts are retained independently of later state notifications. */
   terminal: ChatTurnTerminalFact | null;
+  /**
+   * Live compaction widget for the main scope (`agentScopeId === 'main'`),
+   * null when no compaction is in progress. Terminal phases (`complete`/
+   * `failed`) are retained briefly so the widget can render a final state
+   * before the turn resumes.
+   */
+  compactionProgress: ChatTurnCompactionProgress | null;
 }
 
 /**
@@ -98,6 +123,19 @@ export type ChatTurnProjectionAction =
   | { type: 'clear_stream'; status?: ChatSnapshotState }
   | { type: 'clear_error' }
   | { type: 'local_error'; error: string; status?: ChatSnapshotState }
+  | {
+      /**
+       * Drop the in-flight tail (segments, tools, response, thinking) without
+       * touching turn identity, status, sequence watermark, or terminal facts.
+       *
+       * Compaction rewrites the durable chains mid-flight: every pre-compaction
+       * segment is either flagged (collapsed into the compacted stub — must not
+       * render live) or preserved (committed to chains — renders from history).
+       * Both cases re-rendered from the stale tail below the stub/summary until
+       * the session was re-entered; this reset hands rendering back to history.
+       */
+      type: 'reset_tail';
+    }
   | {
     type: 'interrupt';
     interruptState: ChatSnapshot['interruptState'];
@@ -128,6 +166,7 @@ export function beginChatTurnProjection(sessionId: string, startedAt: number | n
     startedAt,
     interrupted: false,
     terminal: null,
+    compactionProgress: null,
   };
 }
 
@@ -149,6 +188,16 @@ export function reduceChatTurnProjection(
       const base = projection ?? beginChatTurnProjection(first.sessionId, null);
       return applyChatTurnEvents(base, action.actions);
     }
+    case 'reset_tail':
+      if (!projection) return projection;
+      return {
+        ...projection,
+        response: '',
+        thinking: '',
+        streamSegments: [],
+        toolCalls: [],
+        compactionProgress: null,
+      };
     case 'clear_stream':
       if (!projection) return projection;
       return {
@@ -158,6 +207,7 @@ export function reduceChatTurnProjection(
         thinking: '',
         streamSegments: [],
         startedAt: null,
+        compactionProgress: null,
       };
     case 'clear_error':
       return projection
@@ -209,6 +259,7 @@ export function seedChatTurnProjection(snapshot: ChatSnapshot): ChatTurnProjecti
     startedAt: snapshot.startedAt,
     interrupted: snapshot.interrupted,
     terminal: null,
+    compactionProgress: null,
   };
 }
 
@@ -270,7 +321,7 @@ export function applyChatTurnEvent(
       }));
     case 'tool_call_update':
       return updateTool(next, action.toolCallId, action.toolName, action.occurredAt, (tool) => {
-        const terminal = action.status !== 'running';
+        const terminal = action.status !== 'running' && action.status !== 'generating';
         const alreadyTerminal = tool.status !== 'generating' && tool.status !== 'running';
         const status = alreadyTerminal && action.status === 'running' ? tool.status : action.status;
         return {
@@ -278,9 +329,24 @@ export function applyChatTurnEvent(
           args: action.args ?? (terminal && !tool.args ? tool.partialArgs : tool.args),
           content: action.content ?? tool.content,
           toolResult: action.toolResult ?? tool.toolResult,
+          ...(action.estimatedTokens !== undefined
+            ? { estimatedTokens: action.estimatedTokens }
+            : {}),
           finishedAt: terminal ? tool.finishedAt ?? action.occurredAt : tool.finishedAt,
         };
       });
+    case 'compaction_progress':
+      // The main-turn projection only renders the main scope's widget —
+      // subagent compactions ride their own live-projection stream.
+      if (normalizeAgentScopeId(action.agentScopeId) !== MAIN_AGENT_SCOPE_ID) return next;
+      return { ...next, compactionProgress: {
+        phase: action.phase,
+        ...(action.mode !== undefined ? { mode: action.mode } : {}),
+        ...(action.detail !== undefined ? { detail: action.detail } : {}),
+        ...(action.streamText !== undefined ? { streamText: action.streamText } : {}),
+        ...(action.estimatedTokens !== undefined ? { estimatedTokens: action.estimatedTokens } : {}),
+        sequence: action.sequence,
+      } };
     case 'done': {
       const interrupted = action.interrupted ?? next.interrupted;
       const usage = action.usage ?? next.usage;

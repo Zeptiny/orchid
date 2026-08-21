@@ -1,7 +1,29 @@
 import { describe, expect, it } from 'vitest';
 import { classifyErrorKind } from '../../src/main/ipc/chat/stream';
+import {
+  isContextLengthExceededError,
+  isContextLengthExceededMessage,
+} from '../../src/main/llm/middleware/error-classification';
 
 describe('classifyErrorKind', () => {
+  describe('context_length_exceeded', () => {
+    it('matches the provider error code in the detail', () => {
+      expect(classifyErrorKind(null, 'provider returned context_length_exceeded')).toBe('context_length_exceeded');
+    });
+
+    it('matches "context window" phrasing regardless of case', () => {
+      expect(classifyErrorKind('Context Window Exceeded', 'request too large')).toBe('context_length_exceeded');
+    });
+
+    it('matches "maximum context" phrasing', () => {
+      expect(classifyErrorKind(null, 'This model supports a maximum context length of 200000 tokens')).toBe('context_length_exceeded');
+    });
+
+    it('takes precedence over rate-limit when both match', () => {
+      expect(classifyErrorKind(null, '429 while the context window overflowed')).toBe('context_length_exceeded');
+    });
+  });
+
   describe('rate-limit', () => {
     it('matches "rate limit" in the detail', () => {
       expect(classifyErrorKind(null, 'Too many requests: rate limit exceeded')).toBe('rate-limit');
@@ -128,6 +150,146 @@ describe('classifyErrorKind', () => {
 
     it('prefers rate-limit over stream when both match', () => {
       expect(classifyErrorKind(null, 'usage limit hit after network timeout')).toBe('rate-limit');
+    });
+  });
+});
+
+describe('isContextLengthExceededError (overflow detection, P1 #14)', () => {
+  describe('accepted phrasings', () => {
+    it('matches the provider error code', () => {
+      expect(isContextLengthExceededError('context_length_exceeded')).toBe(true);
+    });
+
+    it('matches "context length" phrasing', () => {
+      expect(isContextLengthExceededError('This model maximum context length is 8192 tokens')).toBe(true);
+    });
+
+    it('matches "maximum context" phrasing', () => {
+      expect(isContextLengthExceededError('maximum context of 200000 tokens exceeded by request')).toBe(true);
+    });
+
+    it('matches "context window" phrasing', () => {
+      expect(isContextLengthExceededError('request exceeds the context window')).toBe(true);
+    });
+
+    it('matches "token limit" together with "exceeded"', () => {
+      expect(isContextLengthExceededError('token limit exceeded for this request')).toBe(true);
+    });
+
+    it('matches "input is too long"', () => {
+      expect(isContextLengthExceededError('the input is too long: 100000 tokens > 8192')).toBe(true);
+    });
+
+    it('matches "input too long"', () => {
+      expect(isContextLengthExceededError('input too long for model')).toBe(true);
+    });
+
+    it('matches "prompt is too long"', () => {
+      expect(isContextLengthExceededError('prompt is too long: 9000 tokens > 8000 maximum')).toBe(true);
+    });
+
+    it('matches "request too large"', () => {
+      expect(isContextLengthExceededError('request too large')).toBe(true);
+    });
+
+    it('matches regardless of case', () => {
+      expect(isContextLengthExceededError('CONTEXT WINDOW EXCEEDED')).toBe(true);
+      expect(isContextLengthExceededError('Maximum Context Length')).toBe(true);
+    });
+
+    it('matches a keyword split across Error name and message', () => {
+      const error = new Error('window exceeded');
+      error.name = 'Context';
+      expect(isContextLengthExceededError(error)).toBe(true);
+    });
+  });
+
+  describe('AI SDK provider diagnostics (responseBody/data/cause)', () => {
+    it('matches overflow text in responseBody with a generic message', () => {
+      const error = Object.assign(new Error('API call failed'), {
+        responseBody: '{"error": {"message": "This model supports a maximum context length of 100000 tokens"}}',
+      });
+      expect(isContextLengthExceededError(error)).toBe(true);
+    });
+
+    it('matches overflow text in the parsed data payload', () => {
+      const error = Object.assign(new Error('API call failed'), {
+        data: { error: { message: 'your input is too long' } },
+      });
+      expect(isContextLengthExceededError(error)).toBe(true);
+    });
+
+    it('matches overflow text in the cause chain', () => {
+      const error = Object.assign(new Error('API call failed'), {
+        cause: new Error('prompt is too long: 500000 tokens > 200000'),
+      });
+      expect(isContextLengthExceededError(error)).toBe(true);
+    });
+  });
+
+  describe('false-positive controls', () => {
+    it('rejects rate-limit text that mentions context or tokens', () => {
+      expect(isContextLengthExceededError('rate limit reached after 1000 tokens, context is large')).toBe(false);
+      expect(isContextLengthExceededError('429 too many requests')).toBe(false);
+    });
+
+    it('rejects "token limit" without "exceeded"', () => {
+      expect(isContextLengthExceededError('token limit reached')).toBe(false);
+      expect(isContextLengthExceededError('raised the token limit for this org')).toBe(false);
+    });
+
+    it('rejects generic provider errors', () => {
+      expect(isContextLengthExceededError('internal server error')).toBe(false);
+      expect(isContextLengthExceededError('model returned an invalid response shape')).toBe(false);
+    });
+
+    it('rejects auth and network text', () => {
+      expect(isContextLengthExceededError('connection reset by peer')).toBe(false);
+      expect(isContextLengthExceededError('authentication failed')).toBe(false);
+    });
+
+    it('rejects other "exceeded" errors that are not context-related', () => {
+      expect(isContextLengthExceededError('maximum recursion depth exceeded')).toBe(false);
+      expect(isContextLengthExceededError('quota exceeded for this account')).toBe(false);
+    });
+
+    it('rejects empty and nullish input', () => {
+      expect(isContextLengthExceededError('')).toBe(false);
+      expect(isContextLengthExceededError(null)).toBe(false);
+      expect(isContextLengthExceededError(undefined)).toBe(false);
+    });
+
+    it('rejects non-string primitives', () => {
+      expect(isContextLengthExceededError(429)).toBe(false);
+      expect(isContextLengthExceededError(8192)).toBe(false);
+    });
+  });
+
+  describe('non-string inputs', () => {
+    it('matches an Error instance carrying overflow text', () => {
+      expect(isContextLengthExceededError(new Error('context window overflow'))).toBe(true);
+    });
+
+    it('matches provider error objects with a code field', () => {
+      expect(isContextLengthExceededError({ code: 'context_length_exceeded' })).toBe(true);
+    });
+
+    it('matches objects carrying overflow text in message/detail/title/error fields', () => {
+      expect(isContextLengthExceededError({ message: 'input too long' })).toBe(true);
+      expect(isContextLengthExceededError({ detail: 'prompt is too long' })).toBe(true);
+      expect(isContextLengthExceededError({ title: 'Context Window Exceeded' })).toBe(true);
+      expect(isContextLengthExceededError({ error: 'request too large' })).toBe(true);
+    });
+
+    it('rejects plain objects without overflow fields', () => {
+      expect(isContextLengthExceededError({ status: 429, message: 'slow down' })).toBe(false);
+    });
+
+    it('isContextLengthExceededMessage wraps the same detection for joined strings', () => {
+      expect(isContextLengthExceededMessage('Stream Error maximum context length is 2000 tokens')).toBe(true);
+      expect(isContextLengthExceededMessage('Stream Error provider disconnected')).toBe(false);
+      expect(isContextLengthExceededMessage(null)).toBe(false);
+      expect(isContextLengthExceededMessage(undefined)).toBe(false);
     });
   });
 });

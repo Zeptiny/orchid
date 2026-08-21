@@ -304,6 +304,32 @@ const EXPECTED_RAG_FIELDS = [
   },
 ];
 
+const EXPECTED_COMPACTION_MAIN_FIELDS = [
+  { field: 'mode', defaultValue: 'simple' },
+  { field: 'threshold', defaultValue: 0.8 },
+  { field: 'model', defaultValue: null },
+  { field: 'agent_name', defaultValue: 'compactor' },
+  { field: 'preserve_percent', defaultValue: 0.25 },
+  { field: 'min_compactable_tokens', defaultValue: 4000 },
+  { field: 'mechanical_reclaim', defaultValue: true },
+  { field: 'hysteresis_delta', defaultValue: 0.1 },
+  { field: 'keep_last_user_messages', defaultValue: 10 },
+  { field: 'pin_first_user_message', defaultValue: true },
+];
+
+const EXPECTED_COMPACTION_SUBAGENTS_FIELDS = [
+  { field: 'mode', defaultValue: 'simple' },
+  { field: 'threshold', defaultValue: 0.85 },
+  { field: 'model', defaultValue: null },
+  { field: 'agent_name', defaultValue: 'compactor-subagent' },
+  { field: 'preserve_percent', defaultValue: 0.25 },
+  { field: 'min_compactable_tokens', defaultValue: 4000 },
+  { field: 'mechanical_reclaim', defaultValue: true },
+  { field: 'hysteresis_delta', defaultValue: 0.1 },
+  { field: 'keep_last_user_messages', defaultValue: null },
+  { field: 'pin_first_user_message', defaultValue: true },
+];
+
 // ── Tests ───────────────────────────────────────────────────────────────────
 
 describe('Config Parity', () => {
@@ -390,11 +416,11 @@ describe('Config Parity', () => {
       expect(cfg.subagents).toHaveProperty('prompt_task_max_chars');
     });
 
-    it('top-level field count matches expected (47 top-level + 12 rag + 7 agents_md + 11 subagents nested fields)', () => {
+    it('top-level field count matches expected (48 top-level + 12 rag + 7 agents_md + 11 subagents nested fields)', () => {
       const cfg = defaults();
       // Top-level keys count
       const topLevelKeys = Object.keys(cfg);
-      expect(topLevelKeys).toHaveLength(47); // 47 top-level fields (rag, agents_md, subagents are nested)
+      expect(topLevelKeys).toHaveLength(48); // 48 top-level fields (rag, agents_md, subagents, compaction are nested)
 
       // RAG nested keys count
       const ragKeys = Object.keys(cfg.rag);
@@ -455,6 +481,58 @@ describe('Config Parity', () => {
           `Subagents field '${expected.field}' default`,
         ).toBe(expected.defaultValue);
       }
+    });
+
+    it('compaction main scope has correct defaults', () => {
+      const cfg = defaults();
+      for (const expected of EXPECTED_COMPACTION_MAIN_FIELDS) {
+        expect(
+          (cfg.compaction.main as unknown as Record<string, unknown>)[expected.field],
+          `compaction.main.${expected.field} default`,
+        ).toEqual(expected.defaultValue);
+      }
+      // Explicit pin for review-gate assertions
+      expect(cfg.compaction.main.threshold).toBe(0.8);
+      expect(cfg.compaction.main.preserve_percent).toBe(0.25);
+      expect(cfg.compaction.main.min_compactable_tokens).toBe(4000);
+      expect(cfg.compaction.main.hysteresis_delta).toBe(0.1);
+      expect(cfg.compaction.main.mode).toBe('simple');
+      expect(cfg.compaction.main.mechanical_reclaim).toBe(true);
+      expect(cfg.compaction.main.agent_name).toBe('compactor');
+      expect(cfg.compaction.main.keep_last_user_messages).toBe(10);
+      expect(cfg.compaction.main.pin_first_user_message).toBe(true);
+    });
+
+    it('compaction subagents scope has correct defaults', () => {
+      const cfg = defaults();
+      for (const expected of EXPECTED_COMPACTION_SUBAGENTS_FIELDS) {
+        expect(
+          (cfg.compaction.subagents as unknown as Record<string, unknown>)[expected.field],
+          `compaction.subagents.${expected.field} default`,
+        ).toEqual(expected.defaultValue);
+      }
+      // Selective threshold delta is intentional (0.85 vs 0.8)
+      expect(cfg.compaction.subagents.threshold).toBe(0.85);
+      expect(cfg.compaction.subagents.preserve_percent).toBe(0.25);
+      expect(cfg.compaction.subagents.min_compactable_tokens).toBe(4000);
+      expect(cfg.compaction.subagents.hysteresis_delta).toBe(0.1);
+      expect(cfg.compaction.subagents.mode).toBe('simple');
+      expect(cfg.compaction.subagents.mechanical_reclaim).toBe(true);
+      expect(cfg.compaction.subagents.agent_name).toBe('compactor-subagent');
+      // R32: subagent scope pins ALL user messages by default (null = all)
+      expect(cfg.compaction.subagents.keep_last_user_messages).toBeNull();
+      expect(cfg.compaction.subagents.pin_first_user_message).toBe(true);
+    });
+
+    it('compaction agent_name rejects bad names (allowlist)', () => {
+      expect(() => configSchema.parse({ compaction: { main: { agent_name: 'bad name!' } } })).toThrow();
+      expect(() => configSchema.parse({ compaction: { main: { agent_name: '' } } })).toThrow();
+      expect(() => configSchema.parse({ compaction: { main: { agent_name: 'a'.repeat(65) } } })).toThrow();
+      expect(() => configSchema.parse({ compaction: { subagents: { agent_name: 'also bad!' } } })).toThrow();
+      expect(() => configSchema.parse({ compaction: { main: { agent_name: 'my-compactor_1' } } })).toThrow();
+      expect(() => configSchema.parse({ compaction: { subagents: { agent_name: 'compactor' } } })).toThrow();
+      expect(() => configSchema.parse({ compaction: { main: { agent_name: 'compactor' } } })).not.toThrow();
+      expect(() => configSchema.parse({ compaction: { subagents: { agent_name: 'compactor-subagent' } } })).not.toThrow();
     });
 
     it('ignored_dirs has 20+ default entries', () => {

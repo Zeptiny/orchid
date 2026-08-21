@@ -11,6 +11,7 @@
 
 import type { ModelSelection } from './provider';
 import type { PermissionMode } from './permission';
+import { COMPACTION_MODES } from './message';
 
 // ── Startup ─────────────────────────────────────────────────────────────────
 
@@ -168,6 +169,29 @@ export interface SubagentsConfig {
   prompt_task_max_chars: number;
 }
 
+export { COMPACTION_MODES };
+export type CompactionMode = (typeof COMPACTION_MODES)[number];
+
+export interface CompactionScopeConfig {
+  mode: CompactionMode;
+  threshold: number;
+  model: ModelSelection | null;
+  agent_name: string;
+  preserve_percent: number;
+  min_compactable_tokens: number;
+  mechanical_reclaim: boolean;
+  hysteresis_delta: number;
+  /** R31/R33: last K user messages kept in model view; null = all (subagent default). */
+  keep_last_user_messages: number | null;
+  /** R33: pin the session's first user message across every compaction cycle. */
+  pin_first_user_message: boolean;
+}
+
+export interface CompactionConfig {
+  main: CompactionScopeConfig;
+  subagents: CompactionScopeConfig;
+}
+
 export type PermissionModeValue = PermissionMode;
 
 export type PermissionRule =
@@ -200,6 +224,7 @@ export interface Config {
   rag: RAGConfig;
   agents_md: AgentsMdConfig;
   subagents: SubagentsConfig;
+  compaction: CompactionConfig;
   ast_max_file_size: number;
   mcp_startup_timeout: number;
   mcp_per_server_timeout: number;
@@ -416,6 +441,8 @@ export interface CommandContext {
   onIndexAST: () => Promise<void>;
   /** Clear RAG index. */
   onClearRAG: () => Promise<void>;
+  /** Compact the active session's context (user-initiated /compact). */
+  onCompact: () => Promise<void>;
   /** Show a notification message. */
   onNotify: (message: string, severity?: 'info' | 'warning' | 'error') => void;
   /** Close the command palette. */

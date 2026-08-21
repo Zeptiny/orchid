@@ -2,6 +2,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import Database from 'better-sqlite3';
 import type { FrozenProviderRequestSnapshot, NormalizedProviderUsage } from '../../src/shared/types/accounting';
 import type { AttemptCostResolution } from '../../src/main/providers/accounting/cost';
 import {
@@ -29,11 +30,16 @@ import {
   getSessions,
   getSessionDetail,
   getModels,
+  getModelDetail,
   getTools,
   getSubagents,
+  getSubagentDetail,
   getContext,
+  getContextSessionDetail,
+  getContextSessionList,
 } from '../../src/main/providers/accounting/analytics-queries';
 import { _clearDbCache } from '../../src/main/session/storage';
+import { applyAccountingSchemaMigrations } from '../../src/main/providers/accounting/schema';
 import type { ConnectionStore } from '../../src/main/providers/connection-store';
 import type { ProviderStatusObservation } from '../../src/main/providers/status/cache';
 import type { ProviderStatusService } from '../../src/main/providers/status/service';
@@ -54,9 +60,11 @@ let attributionStore: SubagentAttributionStore;
 let clockMs: number;
 
 /** Clock that advances 1 second on each call so started_at ≠ completed_at. */
+const CLOCK_STEP_MS = 1000;
+
 function clock(): Date {
   const d = new Date(clockMs);
-  clockMs += 1000;
+  clockMs += CLOCK_STEP_MS;
   return d;
 }
 
@@ -170,6 +178,51 @@ function seedProviderAttempt(opts: {
   });
 }
 
+/**
+ * Seed a streamed attempt with explicit TTFT/generation spans. Each store call
+ * advances the shared clock by 1s, so the helper tops the clock up between
+ * insertPending → markFirstToken → finalize to hit the requested spans exactly.
+ * `outcome` defaults to 'succeeded'; pass 'interrupted' to reproduce the
+ * crash-recovered shape (first token stamped, sentinel completed_at).
+ */
+function seedStreamedAttempt(opts: {
+  attemptId: string;
+  sessionId: string;
+  /** Defaults to null (main chain); pass a chainId to seed a subagent-chain attempt. */
+  chainId?: string | null;
+  ttftMs: number;
+  generationMs: number;
+  outputTokens: number;
+  outcome?: 'succeeded' | 'failed' | 'interrupted';
+  snapshot?: FrozenProviderRequestSnapshot;
+}): void {
+  // Spans below the clock step would move the clock backwards and seed
+  // garbage timestamps — fail the test instead of skewing every assertion.
+  expect(opts.ttftMs).toBeGreaterThanOrEqual(CLOCK_STEP_MS);
+  expect(opts.generationMs).toBeGreaterThanOrEqual(CLOCK_STEP_MS);
+  providerStore.insertPending({
+    attemptId: opts.attemptId,
+    sessionId: opts.sessionId,
+    chainId: opts.chainId ?? null,
+    turnId: null,
+    sdkCallId: `sdk-${opts.attemptId}`,
+    snapshot: opts.snapshot ?? anthropicSnapshot(),
+    agentScope: null,
+    agentName: null,
+    agentTier: null,
+    agentType: null,
+  });
+  clockMs += opts.ttftMs - 1000;
+  providerStore.markFirstToken(opts.attemptId);
+  clockMs += opts.generationMs - 1000;
+  providerStore.finalize(opts.attemptId, {
+    outcome: opts.outcome ?? 'succeeded',
+    usage: { inputTokens: 100, outputTokens: opts.outputTokens },
+    providerEvidence: {},
+    cost: calculatedCost('1'),
+  });
+}
+
 function seedToolAttempt(opts: {
   toolAttemptId: string;
   sessionId: string;
@@ -272,6 +325,8 @@ describe('analytics-queries', () => {
       expect(overview.stats.totalCost).toHaveLength(0);
       expect(overview.stats.unknownCostCount).toBe(0);
       expect(overview.stats.totalSessions).toBe(0);
+      expect(overview.stats.avgTtftMs).toBeNull();
+      expect(overview.stats.avgTokensPerSecond).toBeNull();
       expect(overview.spendOverTime).toHaveLength(0);
       expect(overview.spendByModel).toHaveLength(0);
       expect(overview.spendByProvider).toHaveLength(0);
@@ -471,6 +526,25 @@ describe('analytics-queries', () => {
     });
   });
 
+    it('reports overall average TTFT and token throughput across all attempts', () => {
+      seedStreamedAttempt({
+        attemptId: 'att-fast', sessionId: 'sess-1', ttftMs: 1000, generationMs: 1000, outputTokens: 500,
+      });
+      seedStreamedAttempt({
+        attemptId: 'att-slow', sessionId: 'sess-2', ttftMs: 3000, generationMs: 3000, outputTokens: 300,
+      });
+      // Non-streamed attempt: excluded from latency aggregation entirely.
+      seedProviderAttempt({
+        attemptId: 'att-batch', sessionId: 'sess-1', chainId: null, turnId: 'turn-1',
+        outcome: 'succeeded', usage: { inputTokens: 10, outputTokens: 999 },
+        cost: calculatedCost('1'),
+      });
+
+      const result = getOverview();
+      expect(result.stats.avgTtftMs).toBe(2000); // (1000 + 3000) / 2
+      expect(result.stats.avgTokensPerSecond).toBe(200); // (500 + 300) / (1 + 3) seconds
+    });
+
   // ── Quota overview (connection gating) ─────────────────────────────────────
 
   describe('quotaByProvider connection gating', () => {
@@ -602,6 +676,54 @@ describe('analytics-queries', () => {
       expect(limited.sessions).toHaveLength(1);
       expect(limited.totalSessions).toBe(2);
       expect(limited.truncated).toBe(true);
+    });
+
+    it('falls back to the session-name tombstone for deleted sessions', () => {
+      seedProviderAttempt({
+        attemptId: 'att-1', sessionId: 'sess-deleted', chainId: null, turnId: 'turn-1',
+        outcome: 'succeeded',
+        usage: { inputTokens: 10, outputTokens: 5 },
+        cost: calculatedCost('1'),
+      });
+      providerStore.upsertSessionNameTombstone('sess-deleted', 'Old Name');
+
+      const sessions = getSessions();
+      expect(sessions.sessions).toHaveLength(1);
+      expect(sessions.sessions[0].sessionId).toBe('sess-deleted');
+      // sessions.db has no live row for this id → the tombstone name surfaces.
+      expect(sessions.sessions[0].sessionName).toBe('Old Name');
+
+      const detail = getSessionDetail('sess-deleted');
+      expect(detail.sessionName).toBe('Old Name');
+    });
+
+    it('pages results with an offset while totalSessions counts every session', () => {
+      // The shared clock advances per store call, so sess-a..sess-c get
+      // strictly increasing first_attempt values (page order: c, b, a).
+      for (const sessionId of ['sess-a', 'sess-b', 'sess-c']) {
+        seedProviderAttempt({
+          attemptId: `att-${sessionId}`, sessionId, chainId: null, turnId: 'turn-1',
+          outcome: 'succeeded',
+          usage: { inputTokens: 1, outputTokens: 1 },
+          cost: calculatedCost('1'),
+        });
+      }
+
+      const page1 = getSessions(2, undefined, 0);
+      expect(page1.sessions).toHaveLength(2);
+      expect(page1.totalSessions).toBe(3);
+      expect(page1.truncated).toBe(true);
+
+      const page2 = getSessions(2, undefined, 2);
+      expect(page2.sessions).toHaveLength(1);
+      expect(page2.totalSessions).toBe(3);
+      expect(page2.truncated).toBe(false);
+
+      // Pages are disjoint and stable under the first_attempt DESC ordering.
+      const page1Ids = page1.sessions.map((s) => s.sessionId);
+      const page2Ids = page2.sessions.map((s) => s.sessionId);
+      expect(page1Ids.some((id) => page2Ids.includes(id))).toBe(false);
+      expect([...page1Ids, ...page2Ids].sort()).toEqual(['sess-a', 'sess-b', 'sess-c']);
     });
   });
 
@@ -817,6 +939,30 @@ describe('analytics-queries', () => {
       expect(pending.completedAt).toBeNull();
       expect(detail.summary.lastAttempt).toBe(completed.completedAt);
     });
+
+    it('computes per-attempt ttftMs and tokensPerSecond from the first-token stamp', () => {
+      seedStreamedAttempt({
+        attemptId: 'att-streamed', sessionId: 'sess-1', ttftMs: 1000, generationMs: 1000, outputTokens: 500,
+      });
+      // Non-streamed attempt: no first-token stamp → null latency fields.
+      seedProviderAttempt({
+        attemptId: 'att-batch', sessionId: 'sess-1', chainId: null, turnId: 'turn-2',
+        outcome: 'succeeded', usage: { inputTokens: 100, outputTokens: 500 },
+        cost: calculatedCost('1'),
+      });
+
+      const detail = getSessionDetail('sess-1');
+
+      const streamed = detail.attempts.find((a) => a.attemptId === 'att-streamed')!;
+      expect(streamed.firstTokenAt).not.toBeNull();
+      expect(streamed.ttftMs).toBe(1000);
+      expect(streamed.tokensPerSecond).toBe(500); // 500 tokens over a 1s generation window
+
+      const batch = detail.attempts.find((a) => a.attemptId === 'att-batch')!;
+      expect(batch.firstTokenAt).toBeNull();
+      expect(batch.ttftMs).toBeNull();
+      expect(batch.tokensPerSecond).toBeNull();
+    });
   });
 
   // ── Native units (R8 / AE7) ─────────────────────────────────────────────────
@@ -962,6 +1108,11 @@ describe('analytics-queries', () => {
       expect(claude.inputTokens).toBe(1500);
       expect(claude.outputTokens).toBe(500);
       expect(claude.totalCost).toEqual([{ currency: 'USD', amount: '1', recordCount: 1 }]);
+      // Attempts without a first-token stamp yield null latency fields.
+      expect(claude.avgTtftMs).toBeNull();
+      expect(claude.p50TtftMs).toBeNull();
+      expect(claude.p95TtftMs).toBeNull();
+      expect(claude.avgTokensPerSecond).toBeNull();
 
       const gpt = result.models.find((m) => m.modelId === 'gpt-test')!;
       expect(gpt.providerId).toBe('openai');
@@ -987,6 +1138,8 @@ describe('analytics-queries', () => {
       expect(anthropicConn.totalInputTokens).toBe(1500);
       expect(anthropicConn.totalOutputTokens).toBe(500);
       expect(anthropicConn.totalCost).toEqual([{ currency: 'USD', amount: '1', recordCount: 1 }]);
+      expect(anthropicConn.avgTtftMs).toBeNull();
+      expect(anthropicConn.avgTokensPerSecond).toBeNull();
 
       const openaiConn = result.connections.find((c) => c.connectionId === OPENAI_CONNECTION_ID)!;
       expect(openaiConn.connectionName).toBe('Personal');
@@ -1036,6 +1189,120 @@ describe('analytics-queries', () => {
         connectionId: ANTHROPIC_CONNECTION_ID,
         currency: 'EUR',
       }));
+    });
+
+    it('aggregates TTFT percentiles and token throughput per model and connection', () => {
+      // TTFT samples 1000/2000/3000 → avg 2000, p50 2000 (nearest-rank), p95 3000.
+      seedStreamedAttempt({
+        attemptId: 'att-1', sessionId: 'sess-1', ttftMs: 1000, generationMs: 1000, outputTokens: 500,
+      });
+      seedStreamedAttempt({
+        attemptId: 'att-2', sessionId: 'sess-1', ttftMs: 2000, generationMs: 1000, outputTokens: 500,
+      });
+      seedStreamedAttempt({
+        attemptId: 'att-3', sessionId: 'sess-1', ttftMs: 3000, generationMs: 3000, outputTokens: 300,
+      });
+      // Non-streamed attempt: excluded from latency aggregation entirely.
+      seedProviderAttempt({
+        attemptId: 'att-4', sessionId: 'sess-1', chainId: null, turnId: 'turn-4',
+        outcome: 'succeeded', usage: { inputTokens: 10, outputTokens: 999 },
+        cost: calculatedCost('1'),
+      });
+
+      const result = getModels();
+
+      const claude = result.models.find((m) => m.modelId === 'claude-test')!;
+      expect(claude.avgTtftMs).toBe(2000);
+      expect(claude.p50TtftMs).toBe(2000);
+      expect(claude.p95TtftMs).toBe(3000);
+      // Token-weighted: (500 + 500 + 300) tokens / (1 + 1 + 3) seconds.
+      expect(claude.avgTokensPerSecond).toBe(260);
+
+      const anthropicConn = result.connections.find((c) => c.connectionId === ANTHROPIC_CONNECTION_ID)!;
+      expect(anthropicConn.avgTtftMs).toBe(2000);
+      expect(anthropicConn.p50TtftMs).toBe(2000);
+      expect(anthropicConn.p95TtftMs).toBe(3000);
+      expect(anthropicConn.avgTokensPerSecond).toBe(260);
+    });
+
+    it('reports null throughput when no attempt has a positive generation window', () => {
+      // first_token_at is stamped after completed_at by direct SQL, so the
+      // generation window is negative — TTFT still aggregates, TPS stays null.
+      seedProviderAttempt({
+        attemptId: 'att-inverted', sessionId: 'sess-1', chainId: null, turnId: 'turn-1',
+        outcome: 'succeeded', usage: { inputTokens: 100, outputTokens: 500 },
+        cost: calculatedCost('1'),
+      });
+      const raw = providerStore.getDatabase();
+      raw.prepare(`
+        UPDATE provider_attempts SET first_token_at = ?
+        WHERE attempt_id = 'att-inverted'
+      `).run('2999-01-01T00:00:00.000Z');
+
+      const result = getModels();
+      const claude = result.models.find((m) => m.modelId === 'claude-test')!;
+      expect(claude.avgTtftMs).not.toBeNull();
+      expect(claude.p50TtftMs).not.toBeNull();
+      expect(claude.avgTokensPerSecond).toBeNull();
+    });
+
+    it('excludes non-succeeded attempts from the TPS ratio while still counting their TTFT (#159)', () => {
+      // Crash-recovered shape: first token WAS delivered, but completed_at is
+      // a recovery-time sentinel stamped hours later (see store.recoverPending
+      // / interruptPendingForConnection), so its huge generation window would
+      // massively dilute the token-weighted rate.
+      seedStreamedAttempt({
+        attemptId: 'att-interrupted', sessionId: 'sess-1',
+        ttftMs: 2000, generationMs: 3_600_000, outputTokens: 100_000,
+        outcome: 'interrupted',
+      });
+
+      const only = getModels();
+      const claudeOnly = only.models.find((m) => m.modelId === 'claude-test')!;
+      // TTFT still counts the interrupted sample — a token was delivered.
+      expect(claudeOnly.avgTtftMs).toBe(2000);
+      // No succeeded sample left → the ratio reports null instead of a
+      // diluted value built from the sentinel window.
+      expect(claudeOnly.avgTokensPerSecond).toBeNull();
+
+      // Mixed with a succeeded attempt: the ratio uses only its tokens/window.
+      seedStreamedAttempt({
+        attemptId: 'att-succeeded', sessionId: 'sess-1',
+        ttftMs: 4000, generationMs: 2000, outputTokens: 600,
+      });
+
+      const mixed = getModels();
+      const claudeMixed = mixed.models.find((m) => m.modelId === 'claude-test')!;
+      // Both TTFT samples aggregate: (2000 + 4000) / 2.
+      expect(claudeMixed.avgTtftMs).toBe(3000);
+      // 600 tokens over the succeeded 2s window — the interrupted attempt's
+      // 100_000 tokens / 3600s are excluded (they would drag it to ~28.0).
+      expect(claudeMixed.avgTokensPerSecond).toBe(300);
+
+      // The overview's overall ratio flows through the same gate.
+      const overview = getOverview();
+      expect(overview.stats.avgTtftMs).toBe(3000);
+      expect(overview.stats.avgTokensPerSecond).toBe(300);
+    });
+
+    it('drops clock-skewed negative TTFT samples from aggregates but reports them per attempt', () => {
+      // Backward clock step: started_at pushed past first_token_at.
+      seedStreamedAttempt({
+        attemptId: 'att-skew', sessionId: 'sess-skew', ttftMs: 1000, generationMs: 1000, outputTokens: 100,
+        snapshot: anthropicSnapshot('skew-model'),
+      });
+      providerStore.getDatabase().prepare(
+        "UPDATE provider_attempts SET started_at = datetime(started_at, '+10 seconds') WHERE attempt_id = ?",
+      ).run('att-skew');
+
+      const detail = getSessionDetail('sess-skew');
+      expect(detail.attempts[0].ttftMs).toBeLessThan(0);
+
+      const result = getModels();
+      const skew = result.models.find((m) => m.modelId === 'skew-model')!;
+      expect(skew.avgTtftMs).toBeNull();
+      expect(skew.p50TtftMs).toBeNull();
+      expect(skew.p95TtftMs).toBeNull();
     });
   });
 
@@ -1480,6 +1747,468 @@ describe('analytics-queries', () => {
       // Attribution lookup misses degrade to null names.
       expect(result.topSubagents[0].agentName).toBeNull();
       expect(result.topSubagents[0].agentTier).toBeNull();
+    });
+  });
+
+  // ── getModelDetail ──────────────────────────────────────────────────────────
+
+  describe('getModelDetail', () => {
+    it('aggregates the triple with latency, histogram, series, tombstone-named top sessions, and recent attempts', () => {
+      // Streamed attempt on the triple (ttft 1000ms, generation 1000ms).
+      seedStreamedAttempt({
+        attemptId: 'att-streamed', sessionId: 'sess-detail',
+        ttftMs: 1000, generationMs: 1000, outputTokens: 500,
+      });
+      // Non-streamed attempt on the same triple from a (later deleted) session.
+      seedProviderAttempt({
+        attemptId: 'att-batch', sessionId: 'sess-deleted', chainId: null, turnId: 'turn-1',
+        outcome: 'succeeded',
+        usage: { inputTokens: 2000, outputTokens: 1000, cacheReadTokens: 500, reasoningTokens: 200 },
+        cost: calculatedCost('2'),
+      });
+      providerStore.upsertSessionNameTombstone('sess-deleted', 'Old Name');
+      // Different (model, provider, connection) triple — must be excluded.
+      seedProviderAttempt({
+        attemptId: 'att-other', sessionId: 'sess-detail', chainId: null, turnId: 'turn-2',
+        outcome: 'succeeded', usage: { inputTokens: 1, outputTokens: 1 },
+        cost: calculatedCost('1'), snapshot: openaiSnapshot(),
+      });
+
+      const result = getModelDetail({
+        modelId: 'claude-test', providerId: 'anthropic', connectionId: ANTHROPIC_CONNECTION_ID,
+      });
+
+      expect(result.modelId).toBe('claude-test');
+      expect(result.providerId).toBe('anthropic');
+      expect(result.connectionId).toBe(ANTHROPIC_CONNECTION_ID);
+
+      // Stats — the other triple's attempt is excluded everywhere.
+      expect(result.stats.attempts).toBe(2);
+      expect(result.stats.succeeded).toBe(2);
+      expect(result.stats.failed).toBe(0);
+      expect(result.stats.interrupted).toBe(0);
+      expect(result.stats.inputTokens).toBe(2100); // 100 (streamed) + 2000
+      expect(result.stats.outputTokens).toBe(1500); // 500 + 1000
+      expect(result.stats.cacheReadTokens).toBe(500);
+      expect(result.stats.cacheWriteTokens).toBe(0);
+      expect(result.stats.reasoningTokens).toBe(200);
+      expect(result.stats.totalCost).toEqual([{ currency: 'USD', amount: '3', recordCount: 2 }]);
+      expect(result.stats.firstUsed).not.toBeNull();
+      expect(result.stats.lastUsed).not.toBeNull();
+
+      // Latency over the single streamed attempt.
+      expect(result.stats.avgTtftMs).toBe(1000);
+      expect(result.stats.p50TtftMs).toBe(1000);
+      expect(result.stats.p95TtftMs).toBe(1000);
+      expect(result.stats.avgTokensPerSecond).toBe(500); // 500 tokens over a 1s window
+
+      // Histogram — 1000ms lands in the 1000 bucket; only non-empty buckets.
+      expect(result.ttftHistogram).toEqual([{ bucketMs: 1000, count: 1 }]);
+
+      // Daily TTFT percentiles — only days with samples.
+      expect(result.ttftOverTime).toEqual([
+        { date: '2026-07-12', medianTtftMs: 1000, p95TtftMs: 1000, attempts: 1 },
+      ]);
+
+      // Stacked net tokens — net values strip cache reads / reasoning.
+      expect(result.tokensOverTime).toEqual([{
+        date: '2026-07-12',
+        netInputTokens: 1600, // 2100 - 500
+        cacheReadTokens: 500,
+        netOutputTokens: 1300, // 1500 - 200
+        reasoningTokens: 200,
+      }]);
+
+      expect(result.costOverTime).toEqual([{ date: '2026-07-12', currency: 'USD', cost: '3' }]);
+
+      // Top sessions — tie on attempts broken by session_id ASC; deleted
+      // session keeps its tombstone name.
+      expect(result.topSessions.map((s) => s.sessionId)).toEqual(['sess-deleted', 'sess-detail']);
+      expect(result.topSessions[0].sessionName).toBe('Old Name');
+      expect(result.topSessions[1].sessionName).toBeNull();
+      expect(result.topSessions[0].totalCost).toEqual([{ currency: 'USD', amount: '2', recordCount: 1 }]);
+
+      // Recent attempts — newest first, AttemptDetail shape preserved.
+      expect(result.recentAttempts).toHaveLength(2);
+      expect(result.recentAttempts[0].attemptId).toBe('att-batch');
+      const streamed = result.recentAttempts.find((a) => a.attemptId === 'att-streamed')!;
+      expect(streamed.firstTokenAt).not.toBeNull();
+      expect(streamed.ttftMs).toBe(1000);
+      expect(streamed.tokensPerSecond).toBe(500);
+    });
+
+    it('returns zeros and empty arrays for an unknown triple', () => {
+      const result = getModelDetail({
+        modelId: 'nope', providerId: 'nope', connectionId: ANTHROPIC_CONNECTION_ID,
+      });
+
+      expect(result.stats.attempts).toBe(0);
+      expect(result.stats.inputTokens).toBe(0);
+      expect(result.stats.totalCost).toHaveLength(0);
+      expect(result.stats.firstUsed).toBeNull();
+      expect(result.stats.lastUsed).toBeNull();
+      expect(result.stats.avgTtftMs).toBeNull();
+      expect(result.stats.avgTokensPerSecond).toBeNull();
+      expect(result.ttftHistogram).toHaveLength(0);
+      expect(result.ttftOverTime).toHaveLength(0);
+      expect(result.tokensOverTime).toHaveLength(0);
+      expect(result.costOverTime).toHaveLength(0);
+      expect(result.topSessions).toHaveLength(0);
+      expect(result.recentAttempts).toHaveLength(0);
+    });
+  });
+
+  // ── getSubagentDetail ───────────────────────────────────────────────────────
+
+  describe('getSubagentDetail', () => {
+    it('returns invocation rows with chain-joined aggregates, a summary, and models used', () => {
+      seedSubagentAttribution({
+        subagentId: 'sub-1', sessionId: 'sess-1', chainId: 'chain-1',
+        agentName: 'researcher', agentType: 'worker', agentTier: 'sprout',
+        modelId: 'claude-test', connectionId: ANTHROPIC_CONNECTION_ID,
+        status: 'completed',
+      });
+      seedProviderAttempt({
+        attemptId: 'att-1', sessionId: 'sess-1', chainId: 'chain-1', turnId: 'turn-1',
+        outcome: 'succeeded', usage: { inputTokens: 1000, outputTokens: 500 },
+        cost: calculatedCost('1'), agentTier: 'sprout', agentName: 'researcher', agentScope: 'subagent',
+      });
+      seedProviderAttempt({
+        attemptId: 'att-2', sessionId: 'sess-1', chainId: 'chain-1', turnId: 'turn-2',
+        outcome: 'succeeded', usage: { inputTokens: 2000, outputTokens: 1000 },
+        cost: calculatedCost('2'), agentTier: 'sprout', agentName: 'researcher', agentScope: 'subagent',
+      });
+      // Same name/type but a different tier — excluded from the triple.
+      seedSubagentAttribution({
+        subagentId: 'sub-2', sessionId: 'sess-1', chainId: 'chain-2',
+        agentName: 'researcher', agentType: 'worker', agentTier: 'bloom',
+        modelId: 'claude-test', connectionId: ANTHROPIC_CONNECTION_ID,
+        status: 'failed',
+      });
+
+      const result = getSubagentDetail({ agentName: 'researcher', agentType: 'worker', agentTier: 'sprout' });
+
+      expect(result.agentName).toBe('researcher');
+      expect(result.agentType).toBe('worker');
+      expect(result.agentTier).toBe('sprout');
+      expect(result.truncated).toBe(false);
+
+      // Invocation row — newest first, with the chain's attempts joined in.
+      expect(result.invocations).toHaveLength(1);
+      const inv = result.invocations[0];
+      expect(inv.subagentId).toBe('sub-1');
+      expect(inv.sessionId).toBe('sess-1');
+      expect(inv.sessionName).toBeNull();
+      expect(inv.chainId).toBe('chain-1');
+      expect(inv.modelId).toBe('claude-test');
+      expect(inv.status).toBe('completed');
+      expect(inv.completedAt).not.toBeNull();
+      expect(inv.durationMs).toBe(1000);
+      expect(inv.attempts).toBe(2);
+      expect(inv.inputTokens).toBe(3000);
+      expect(inv.outputTokens).toBe(1500);
+      expect(inv.totalCost).toEqual([{ currency: 'USD', amount: '3', recordCount: 2 }]);
+
+      // Summary over every matching attribution (not just the capped page).
+      expect(result.summary.invocations).toBe(1);
+      expect(result.summary.completed).toBe(1);
+      expect(result.summary.failed).toBe(0);
+      expect(result.summary.interrupted).toBe(0);
+      expect(result.summary.attempts).toBe(2);
+      expect(result.summary.inputTokens).toBe(3000);
+      expect(result.summary.outputTokens).toBe(1500);
+      expect(result.summary.totalCost).toEqual([{ currency: 'USD', amount: '3', recordCount: 2 }]);
+      expect(result.summary.avgDurationMs).toBe(1000);
+      // No first-token stamps on the joined attempts → null latency fields.
+      expect(result.summary.avgTtftMs).toBeNull();
+      expect(result.summary.p50TtftMs).toBeNull();
+      expect(result.summary.p95TtftMs).toBeNull();
+      expect(result.summary.avgTokensPerSecond).toBeNull();
+
+      expect(result.modelsUsed).toEqual([{
+        modelId: 'claude-test',
+        attempts: 2,
+        inputTokens: 3000,
+        outputTokens: 1500,
+        totalCost: [{ currency: 'USD', amount: '3', recordCount: 2 }],
+      }]);
+      expect(result.invocationsOverTime).toEqual([{ date: '2026-07-12', count: 1 }]);
+    });
+
+    it('returns zeros for an unknown triple without error', () => {
+      const result = getSubagentDetail({ agentName: 'nope', agentType: 'worker', agentTier: 'bloom' });
+      expect(result.invocations).toHaveLength(0);
+      expect(result.truncated).toBe(false);
+      expect(result.summary.invocations).toBe(0);
+      expect(result.summary.attempts).toBe(0);
+      expect(result.summary.avgTtftMs).toBeNull();
+      expect(result.modelsUsed).toHaveLength(0);
+      expect(result.invocationsOverTime).toHaveLength(0);
+    });
+
+    it('attributes follow-up runs sharing one chain once each — no multiplication', () => {
+      // Follow-up semantics: the same subagent re-runs on the SAME chain while
+      // each run inserts its own attribution row (subagent-runner does exactly
+      // this). Attempts must be attributed to the run whose window contains
+      // them, never counted once per attribution row.
+      const seedRun = () => seedSubagentAttribution({
+        subagentId: 'sub-f', sessionId: 'sess-f', chainId: 'chain-f',
+        agentName: 'impl', agentType: 'worker', agentTier: 'bloom',
+        modelId: 'claude-test', connectionId: ANTHROPIC_CONNECTION_ID,
+        status: 'completed',
+      });
+      seedRun();
+      seedProviderAttempt({
+        attemptId: 'f-a', sessionId: 'sess-f', chainId: 'chain-f', turnId: null,
+        outcome: 'succeeded', usage: { inputTokens: 100, outputTokens: 50 },
+        cost: calculatedCost('1'), agentName: 'impl', agentTier: 'bloom', agentScope: 'sub-f',
+      });
+      seedRun();
+      seedProviderAttempt({
+        attemptId: 'f-b', sessionId: 'sess-f', chainId: 'chain-f', turnId: null,
+        outcome: 'succeeded', usage: { inputTokens: 200, outputTokens: 80 },
+        cost: calculatedCost('2'), agentName: 'impl', agentTier: 'bloom', agentScope: 'sub-f',
+      });
+
+      const result = getSubagentDetail({ agentName: 'impl', agentType: 'worker', agentTier: 'bloom' });
+      expect(result.summary.invocations).toBe(2);
+      expect(result.summary.attempts).toBe(2);
+      expect(result.summary.inputTokens).toBe(300);
+      expect(result.summary.outputTokens).toBe(130);
+      expect(result.summary.totalCost).toEqual([{ currency: 'USD', amount: '3', recordCount: 2 }]);
+
+      // Per-run window attribution: newest row owns the follow-up attempt.
+      expect(result.invocations).toHaveLength(2);
+      const [newest, oldest] = result.invocations;
+      expect(newest.attempts).toBe(1);
+      expect(newest.inputTokens).toBe(200);
+      expect(newest.totalCost).toEqual([{ currency: 'USD', amount: '2', recordCount: 1 }]);
+      expect(oldest.attempts).toBe(1);
+      expect(oldest.inputTokens).toBe(100);
+      expect(oldest.totalCost).toEqual([{ currency: 'USD', amount: '1', recordCount: 1 }]);
+
+      // The overview list must not multiply either.
+      const overview = getSubagents();
+      const row = overview.summaries.find((s) => s.agentName === 'impl');
+      expect(row).toBeDefined();
+      expect(row!.invocations).toBe(2);
+      expect(row!.attempts).toBe(2);
+      expect(row!.inputTokens).toBe(300);
+    });
+  });
+
+  describe('getSubagentDetail latency and invocation cap', () => {
+    it('joins first-token-stamped chain attempts into positive summary latency', () => {
+      // Attribution first (run window starts at its started_at), then a streamed
+      // attempt on that chain: ttft 1000ms, generation 1000ms, 500 output tokens.
+      seedSubagentAttribution({
+        subagentId: 'sub-lat', sessionId: 'sess-lat', chainId: 'chain-lat',
+        agentName: 'latency-agent', agentType: 'worker', agentTier: 'sprout',
+        modelId: 'claude-test', connectionId: ANTHROPIC_CONNECTION_ID,
+        status: 'completed',
+      });
+      seedStreamedAttempt({
+        attemptId: 'att-lat', sessionId: 'sess-lat', chainId: 'chain-lat',
+        ttftMs: 1000, generationMs: 1000, outputTokens: 500,
+      });
+
+      const result = getSubagentDetail({ agentName: 'latency-agent', agentType: 'worker', agentTier: 'sprout' });
+
+      expect(result.truncated).toBe(false);
+      expect(result.summary.avgTtftMs).toBe(1000);
+      expect(result.summary.p50TtftMs).toBe(1000);
+      expect(result.summary.p95TtftMs).toBe(1000);
+      // Token-weighted: 500 tokens over a 1s generation window.
+      expect(result.summary.avgTokensPerSecond).toBe(500);
+      expect(result.invocations).toHaveLength(1);
+      expect(result.invocations[0].attempts).toBe(1);
+    });
+
+    it('caps invocation rows at 500 while the summary counts every attribution', () => {
+      // One (agentName, agentType, agentTier) triple, 501 distinct subagent
+      // runs with no attempts on their chains. Each insert advances the shared
+      // clock by 1s per store call — that is fine for the join.
+      for (let i = 0; i < 501; i++) {
+        seedSubagentAttribution({
+          subagentId: `cap-sub-${i}`, sessionId: 'sess-cap', chainId: `cap-chain-${i}`,
+          agentName: 'cap-agent', agentType: 'worker', agentTier: 'sprout',
+          modelId: 'claude-test', connectionId: ANTHROPIC_CONNECTION_ID,
+          status: 'completed',
+        });
+      }
+
+      const result = getSubagentDetail({ agentName: 'cap-agent', agentType: 'worker', agentTier: 'sprout' });
+
+      expect(result.truncated).toBe(true);
+      expect(result.invocations).toHaveLength(500);
+      expect(result.summary.invocations).toBe(501);
+    });
+  });
+
+  // ── getContextSessionDetail ─────────────────────────────────────────────────
+
+  describe('getContextSessionDetail', () => {
+    it('returns the picker, the full main-agent series, compaction events, and largest jumps with segment deltas', () => {
+      // Session Z main-agent snapshots. Segment deltas always sum to the
+      // used_tokens delta so the jump attribution is verifiable.
+      snapshotStore.insert({
+        sessionId: 'sess-z', chainId: null, turnId: 'turn-1', providerAttemptId: null,
+        inputTokens: 0, outputTokens: 0, usedTokens: 1000,
+        systemTokens: 100, toolsTokens: 50, toolUseTokens: 10, userTokens: 500,
+        assistantTokens: 300, summaryTokens: 40,
+      });
+      snapshotStore.insert({
+        sessionId: 'sess-z', chainId: null, turnId: 'turn-2', providerAttemptId: null,
+        inputTokens: 0, outputTokens: 0, usedTokens: 1220,
+        systemTokens: 100, toolsTokens: 50, toolUseTokens: 20, userTokens: 600,
+        assistantTokens: 400, summaryTokens: 50,
+      });
+      snapshotStore.insert({
+        sessionId: 'sess-z', chainId: null, turnId: 'turn-3', providerAttemptId: null,
+        inputTokens: 0, outputTokens: 0, usedTokens: 1420,
+        systemTokens: 100, toolsTokens: 60, toolUseTokens: 30, userTokens: 700,
+        assistantTokens: 500, summaryTokens: 40,
+      });
+      snapshotStore.insert({
+        sessionId: 'sess-z', chainId: null, turnId: 'turn-4', providerAttemptId: null,
+        inputTokens: 0, outputTokens: 0, usedTokens: 5020,
+        systemTokens: 100, toolsTokens: 60, toolUseTokens: 3030, userTokens: 900,
+        assistantTokens: 800, summaryTokens: 140,
+      });
+      // Subagent snapshot for the same session — excluded from the main series.
+      snapshotStore.insert({
+        sessionId: 'sess-z', chainId: 'chain-sub', turnId: 'turn-5', providerAttemptId: null,
+        agentScope: 'sub-a',
+        inputTokens: 0, outputTokens: 0, usedTokens: 9999,
+        systemTokens: 0, toolsTokens: 0, toolUseTokens: 0, userTokens: 0, assistantTokens: 0,
+      });
+      // Another session for the picker ordering.
+      snapshotStore.insert({
+        sessionId: 'sess-other', chainId: null, turnId: 'turn-1', providerAttemptId: null,
+        inputTokens: 0, outputTokens: 0, usedTokens: 800,
+        systemTokens: 0, toolsTokens: 0, toolUseTokens: 0, userTokens: 0, assistantTokens: 0,
+      });
+      // Compaction run for session Z, recorded as a compactor attempt.
+      seedProviderAttempt({
+        attemptId: 'att-compactor', sessionId: 'sess-z', chainId: null, turnId: 'turn-c',
+        outcome: 'succeeded',
+        usage: { inputTokens: 5000, outputTokens: 500 },
+        cost: calculatedCost('1'),
+        agentName: 'compactor-selective',
+      });
+
+      const result = getContextSessionDetail({ sessionId: 'sess-z' });
+
+      expect(result.sessionId).toBe('sess-z');
+      expect(result.sessionName).toBeNull();
+      expect(result.truncated).toBe(false);
+
+      // Full-fidelity main-agent series — subagent snapshot excluded.
+      expect(result.series.map((p) => p.usedTokens)).toEqual([1000, 1220, 1420, 5020]);
+      expect(result.series[0].turnId).toBe('turn-1');
+      expect(result.series[0].summaryTokens).toBe(40);
+      expect(result.series[0].capturedAt.localeCompare(result.series[1].capturedAt)).toBeLessThan(0);
+
+      // Picker lives in its own query — every main-agent session in range,
+      // ordered by max used tokens.
+      const picker = getContextSessionList();
+      expect(picker.sessions.map((s) => s.sessionId)).toEqual(['sess-z', 'sess-other']);
+      expect(picker.sessions[0].snapshotCount).toBe(4);
+      expect(picker.sessions[0].maxUsedTokens).toBe(5020);
+      expect(picker.sessions[1].snapshotCount).toBe(1);
+
+      // Events — 3 jumps + 1 compaction, interleaved chronologically.
+      expect(result.events).toHaveLength(4);
+      const compaction = result.events.find((e) => e.type === 'compaction')!;
+      expect(compaction).toMatchObject({
+        type: 'compaction',
+        agentName: 'compactor-selective',
+        inputTokens: 5000,
+        outputTokens: 500,
+      });
+      // The compactor attempt was seeded last → its event sorts last.
+      const startedAt = (providerStore.getDatabase().prepare(
+        'SELECT started_at FROM provider_attempts WHERE attempt_id = ?',
+      ).get('att-compactor') as { started_at: string }).started_at;
+      expect(compaction.at).toBe(startedAt);
+      expect(result.events[result.events.length - 1].at).toBe(startedAt);
+
+      // Largest jump — the turn-3 → turn-4 toolUse spike.
+      const jumps = result.events.filter((e) => e.type === 'jump');
+      expect(jumps.map((j) => (j.type === 'jump' ? j.deltaTokens : 0))).toEqual([220, 200, 3600]);
+      const biggest = jumps.reduce((a, b) => ((b.type === 'jump' ? b.deltaTokens : 0) > (a.type === 'jump' ? a.deltaTokens : 0) ? b : a));
+      expect(biggest).toEqual({
+        type: 'jump',
+        at: result.series[3].capturedAt,
+        deltaTokens: 3600,
+        fromTokens: 1420,
+        toTokens: 5020,
+        segmentDeltas: {
+          system: 0,
+          tools: 0,
+          toolUse: 3000,
+          user: 200,
+          assistant: 300,
+          summary: 100,
+        },
+      });
+    });
+  });
+
+  // ── Legacy schema migration ────────────────────────────────────────────────
+  describe('provider_attempts first_token_at migration', () => {
+    it('adds first_token_at to a legacy v4 table without touching existing rows', () => {
+      const legacyPath = path.join(tempDir, 'legacy-v4.db');
+      const legacy = new Database(legacyPath);
+      legacy.prepare(`
+        CREATE TABLE provider_attempts (
+          attempt_id TEXT PRIMARY KEY,
+          session_id TEXT NOT NULL,
+          chain_id TEXT,
+          turn_id TEXT,
+          sdk_call_id TEXT,
+          provider_id TEXT NOT NULL,
+          connection_id TEXT NOT NULL,
+          model_id TEXT NOT NULL,
+          protocol TEXT NOT NULL,
+          snapshot_json TEXT NOT NULL,
+          outcome TEXT NOT NULL,
+          started_at TEXT NOT NULL,
+          completed_at TEXT,
+          usage_json TEXT,
+          provider_evidence_json TEXT NOT NULL DEFAULT '{}',
+          cost_state TEXT NOT NULL,
+          cost_source TEXT NOT NULL,
+          cost_rung TEXT,
+          currency TEXT,
+          cost_amount TEXT,
+          error TEXT,
+          agent_scope TEXT,
+          agent_name TEXT,
+          agent_tier TEXT,
+          agent_type TEXT
+        )
+      `).run();
+      legacy.prepare(`
+        INSERT INTO provider_attempts (
+          attempt_id, session_id, provider_id, connection_id, model_id, protocol,
+          snapshot_json, outcome, started_at, cost_state, cost_source
+        ) VALUES ('legacy-row', 'session-1', 'anthropic', '11111111-1111-4111-8111-111111111111',
+          'claude-test', 'anthropic-messages', ?, 'succeeded', '2026-07-12T00:00:00.000Z', 'calculated', 'token-formula')
+      `).run(JSON.stringify(anthropicSnapshot()));
+      legacy.close();
+
+      const db = new Database(legacyPath);
+      applyAccountingSchemaMigrations(db);
+      const columns = (db.prepare('PRAGMA table_info(provider_attempts)').all() as Array<{ name: string }>)
+        .map((column) => column.name);
+      expect(columns).toContain('first_token_at');
+      const row = db.prepare('SELECT attempt_id, first_token_at FROM provider_attempts').get() as {
+        attempt_id: string;
+        first_token_at: string | null;
+      };
+      expect(row).toEqual({ attempt_id: 'legacy-row', first_token_at: null });
+      db.close();
     });
   });
 });

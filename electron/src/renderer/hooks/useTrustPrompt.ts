@@ -31,6 +31,22 @@ export interface UseTrustPromptOptions {
   onGranted?: (cwd: string) => void;
 }
 
+/** How an `openFor` attempt resolved once its lookup settled. */
+export type TrustPromptOpenOutcome =
+  | 'opened'
+  | 'already-trusted'
+  | 'lookup-failed';
+
+export interface TrustPromptOpenCallbacks {
+  /**
+   * Called exactly once per attempt that was not superseded by a newer
+   * `openFor`. `'opened'` means a dialog will resolve the flow; the other
+   * outcomes mean no dialog is showing, so callers that parked state on the
+   * attempt (e.g. a stashed gated send) must resolve it themselves.
+   */
+  onOutcome?: (outcome: TrustPromptOpenOutcome) => void;
+}
+
 export interface UseTrustPromptReturn {
   /** Open dialog state, or null when no prompt is showing. */
   pending: TrustPromptPending | null;
@@ -39,7 +55,7 @@ export interface UseTrustPromptReturn {
   /** Short user-facing message for the latest trust failure; null when none. */
   error: string | null;
   /** Resolve trust for a directory and open the dialog when not trusted. */
-  openFor: (cwd: string) => void;
+  openFor: (cwd: string, callbacks?: TrustPromptOpenCallbacks) => void;
   /** Persist trust for the pending directory, close, then run onGranted. */
   grant: () => Promise<void>;
   /** Close without granting; the workspace stays bound-untrusted. */
@@ -69,25 +85,33 @@ export function useTrustPrompt(options: UseTrustPromptOptions = {}): UseTrustPro
   const onGrantedRef = useRef(options.onGranted);
   onGrantedRef.current = options.onGranted;
 
-  const openFor = useCallback((cwd: string) => {
+  const openFor = useCallback((cwd: string, callbacks?: TrustPromptOpenCallbacks) => {
     setError(null);
     const trimmed = cwd.trim();
     if (!trimmed) return;
-    if (!window.orchid?.projectTrust?.get) return;
+    if (!window.orchid?.projectTrust?.get) {
+      callbacks?.onOutcome?.('lookup-failed');
+      return;
+    }
     const generation = ++openGenerationRef.current;
     window.orchid.projectTrust
       .get({ cwd: trimmed })
       .then((info) => {
-        // A newer request superseded this one, or trust is already granted.
+        // A newer request superseded this one; its outcome owns the surface.
         if (generation !== openGenerationRef.current) return;
-        if (info.state === 'trusted') return;
+        if (info.state === 'trusted') {
+          callbacks?.onOutcome?.('already-trusted');
+          return;
+        }
         setPending({ cwd: trimmed, info });
+        callbacks?.onOutcome?.('opened');
       })
       .catch((err) => {
         console.error('Failed to resolve project trust:', err);
         // A newer request superseded this one; its outcome owns the surface.
         if (generation !== openGenerationRef.current) return;
         setError(LOOKUP_ERROR_MESSAGE);
+        callbacks?.onOutcome?.('lookup-failed');
       });
   }, []);
 

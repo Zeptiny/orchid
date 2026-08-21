@@ -356,6 +356,31 @@ describe('applyConfigDraft', () => {
     expect(next.tier_reasoning_effort.bloom).toBe('low');
     expect(next.tier_reasoning_effort.sprout).toBe('medium');
   });
+
+  it('merges compaction scope patches field-by-field and keeps sibling scopes', () => {
+    const base = defaults();
+    const next = applyConfigDraft(base, {
+      compaction: { subagents: { keep_last_user_messages: 5 } },
+    });
+    expect(next.compaction.subagents.keep_last_user_messages).toBe(5);
+    expect(next.compaction.subagents.mode).toBe(base.compaction.subagents.mode);
+    expect(next.compaction.main).toEqual(base.compaction.main);
+  });
+
+  it('keeps top-level compaction patch fields when a scope patch rides along', () => {
+    const base = defaults();
+    // Mixed patch: today's patch type only carries main/subagents, but the
+    // merge must not drop other top-level patch fields (e.g. a future
+    // `enabled`) just because a scope merge happens in the same apply.
+    const draft = {
+      compaction: { enabled: true, main: { threshold: 0.9 } },
+    } as unknown as ConfigPatch;
+    const next = applyConfigDraft(base, draft);
+    expect(next.compaction.main.threshold).toBe(0.9);
+    expect(next.compaction.main.mode).toBe(base.compaction.main.mode);
+    expect(next.compaction.subagents).toEqual(base.compaction.subagents);
+    expect((next.compaction as unknown as Record<string, unknown>).enabled).toBe(true);
+  });
 });
 
 describe('GeneralTab / RAGTab zero-value source contracts', () => {

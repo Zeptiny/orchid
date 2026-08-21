@@ -137,4 +137,95 @@ describe('SubagentLiveProjectionStore', () => {
       args: '{"path":"README.md"}',
     });
   });
+
+  it('projects compaction progress into the subagent stream keyed by subagent id (R27)', () => {
+    const store = new SubagentLiveProjectionStore();
+    store.start({ subagentId: 'subagent-1', sessionId: 'session-1', state: 'running', runId: 'run-1' });
+    store.start({ subagentId: 'subagent-2', sessionId: 'session-1', state: 'running', runId: 'run-9' });
+    const events: Array<{ type: string; subagentId: string; sequence: number }> = [];
+    store.setOnDelta((event) => events.push(event as { type: string; subagentId: string; sequence: number }));
+
+    store.emitCompactionProgress('subagent-1', {
+      phase: 'preparing',
+      detail: 'Summarizing history',
+      mode: 'simple',
+    });
+    store.emitCompactionProgress('subagent-1', {
+      phase: 'compacting',
+      streamText: 'SUMMARY partial',
+      estimatedTokens: 12,
+    });
+    store.emitCompactionProgress('subagent-2', { phase: 'preparing', mode: 'selective' });
+
+    expect(events).toHaveLength(3);
+    expect(events[0]).toMatchObject({
+      type: 'compaction_progress',
+      subagentId: 'subagent-1',
+      sessionId: 'session-1',
+      phase: 'preparing',
+      detail: 'Summarizing history',
+      mode: 'simple',
+    });
+    expect(events[1]).toMatchObject({
+      type: 'compaction_progress',
+      subagentId: 'subagent-1',
+      phase: 'compacting',
+      streamText: 'SUMMARY partial',
+      estimatedTokens: 12,
+    });
+    expect(events[2]).toMatchObject({
+      type: 'compaction_progress',
+      subagentId: 'subagent-2',
+      phase: 'preparing',
+      mode: 'selective',
+    });
+    expect(events[0]!.sequence).toBeLessThan(events[1]!.sequence);
+
+    // The latest progress is retained on the projection for the renderer.
+    expect(store.get('subagent-1')?.compactionProgress).toMatchObject({
+      type: 'compaction_progress',
+      phase: 'compacting',
+      streamText: 'SUMMARY partial',
+    });
+    expect(store.get('subagent-2')?.compactionProgress).toMatchObject({
+      type: 'compaction_progress',
+      phase: 'preparing',
+      mode: 'selective',
+    });
+  });
+
+  it('retains a terminal compaction phase until the next run or clear resets it', () => {
+    const store = new SubagentLiveProjectionStore();
+    store.start({ subagentId: 'subagent-1', sessionId: 'session-1', state: 'running', runId: 'run-1' });
+    const events: Array<{ type: string; phase?: string }> = [];
+    store.setOnDelta((event) => events.push(event as { type: string; phase?: string }));
+
+    store.emitCompactionProgress('subagent-1', { phase: 'complete', detail: 'Context compacted — resuming' });
+    expect(store.get('subagent-1')?.compactionProgress).toMatchObject({
+      phase: 'complete',
+      detail: 'Context compacted — resuming',
+    });
+
+    store.clearLiveTail('subagent-1');
+    expect(store.get('subagent-1')?.compactionProgress).toBeNull();
+
+    store.emitCompactionProgress('subagent-1', { phase: 'preparing' });
+    store.start({ subagentId: 'subagent-1', sessionId: 'session-1', state: 'running', runId: 'run-2' });
+    expect(store.get('subagent-1')?.compactionProgress).toBeNull();
+  });
+
+  it('skips compaction progress for a run without a session binding', () => {
+    const store = new SubagentLiveProjectionStore();
+    store.start({ subagentId: 'subagent-1', sessionId: null, state: 'running', runId: 'run-1' });
+    const events: Array<{ type: string }> = [];
+    store.setOnDelta((event) => events.push(event as { type: string }));
+
+    // The delta wire schema validates sessionId as a UUID, so an empty-string
+    // fallback would be dropped at the preload boundary.
+    store.emitCompactionProgress('subagent-1', { phase: 'preparing' });
+
+    expect(events).toHaveLength(0);
+    expect(store.get('subagent-1')?.compactionProgress).toBeNull();
+    expect(store.get('subagent-1')?.sequence).toBe(0);
+  });
 });

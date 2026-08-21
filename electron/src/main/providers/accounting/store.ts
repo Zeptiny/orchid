@@ -293,6 +293,27 @@ export class ProviderAccountingStore {
     return result.changes === 1;
   }
 
+  /**
+   * Stamp the first streamed content token (TTFT anchor). The IS NULL guard
+   * keeps it idempotent — only the first observed delta wins.
+   */
+  markFirstToken(attemptId: string): void {
+    this.markFirstTokenAt(attemptId, this.now().toISOString());
+  }
+
+  /**
+   * markFirstToken with a caller-captured timestamp: the stream observes the
+   * delta-time clock, the durable write may land later (deferred off the token
+   * hot path) without regressing TTFT accuracy.
+   */
+  markFirstTokenAt(attemptId: string, at: string): void {
+    this.connection().prepare(`
+      UPDATE provider_attempts
+      SET first_token_at = ?
+      WHERE attempt_id = ? AND first_token_at IS NULL
+    `).run(at, attemptId);
+  }
+
   /** Mark process-crash leftovers interrupted once, without mutating completed rows. */
   recoverPending(): number {
     const result = this.connection().prepare(`
@@ -331,6 +352,38 @@ export class ProviderAccountingStore {
       ? this.connection().prepare('SELECT * FROM provider_attempts ORDER BY started_at, attempt_id').all()
       : this.connection().prepare('SELECT * FROM provider_attempts WHERE session_id = ? ORDER BY started_at, attempt_id').all(sessionId);
     return (rows as AttemptRow[]).map(rowToRecord);
+  }
+
+  /**
+   * Persist a session's last-known name when the session is deleted, so
+   * analytics queries (whose rows outlive the session) keep a readable name.
+   * Best-effort by contract: callers must not fail a session deletion when
+   * accounting is unavailable.
+   */
+  upsertSessionNameTombstone(sessionId: string, name: string): void {
+    this.connection().prepare(`
+      INSERT OR REPLACE INTO session_names (session_id, name, deleted_at)
+      VALUES (?, ?, ?)
+    `).run(sessionId, name, this.now().toISOString());
+  }
+
+  /** Look up tombstoned session names for the given ids. Empty map for empty input. */
+  getSessionNameTombstones(sessionIds: readonly string[]): Map<string, string> {
+    if (sessionIds.length === 0) return new Map();
+    const placeholders = sessionIds.map(() => '?').join(', ');
+    const rows = this.connection().prepare(
+      `SELECT session_id, name FROM session_names WHERE session_id IN (${placeholders})`,
+    ).all(...sessionIds) as Array<{ session_id: string; name: string }>;
+    return new Map(rows.map((row) => [row.session_id, row.name]));
+  }
+
+  /**
+   * Delete every session-name tombstone. This is the clearing primitive a
+   * future "clear analytics" flow calls — tombstones otherwise persist
+   * indefinitely by design.
+   */
+  clearSessionNameTombstones(): number {
+    return this.connection().prepare('DELETE FROM session_names').run().changes;
   }
 
   getDatabase(): SqliteDatabase {
@@ -391,8 +444,13 @@ export class ProviderAccountingStore {
     }
     db.pragma('foreign_keys = ON');
     applyAccountingSchemaMigrations(db);
-    db.prepare('INSERT OR REPLACE INTO schema_meta (key, value) VALUES (?, ?)')
-      .run('schema_version', String(ACCOUNTING_SCHEMA_VERSION));
+    // Monotonic upsert: an older binary opening a newer-schema db must not
+    // regress the recorded version (migrations are presence-checked, but the
+    // recorded version stays the diagnostic source of truth).
+    db.prepare(`
+      INSERT INTO schema_meta (key, value) VALUES (?, ?)
+      ON CONFLICT(key) DO UPDATE SET value = CAST(MAX(CAST(value AS INTEGER), CAST(excluded.value AS INTEGER)) AS TEXT)
+    `).run('schema_version', String(ACCOUNTING_SCHEMA_VERSION));
     this.db = db;
     return db;
   }

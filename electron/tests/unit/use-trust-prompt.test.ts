@@ -216,6 +216,82 @@ describe('useTrustPrompt', () => {
     expect(result.current.busy).toBe(false);
   });
 
+  // ── openFor outcome callbacks ────────────────────────────────────────────
+
+  it('reports "opened" once the dialog actually opens', async () => {
+    installTrustBridge({ getState: 'untrusted' });
+    const onOutcome = vi.fn();
+    const { result } = renderHook(() => useTrustPrompt());
+
+    act(() => {
+      result.current.openFor('/proj', { onOutcome });
+    });
+
+    await waitFor(() => expect(result.current.pending).not.toBeNull());
+    expect(onOutcome).toHaveBeenCalledTimes(1);
+    expect(onOutcome).toHaveBeenCalledWith('opened');
+  });
+
+  it('reports "already-trusted" without opening the dialog', async () => {
+    installTrustBridge({ getState: 'trusted' });
+    const onOutcome = vi.fn();
+    const { result } = renderHook(() => useTrustPrompt());
+
+    act(() => {
+      result.current.openFor('/proj', { onOutcome });
+    });
+
+    await waitFor(() => expect(onOutcome).toHaveBeenCalledWith('already-trusted'));
+    expect(result.current.pending).toBeNull();
+    expect(onOutcome).toHaveBeenCalledTimes(1);
+  });
+
+  it('reports "lookup-failed" when the trust lookup rejects', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    installTrustBridge({ getImpl: () => Promise.reject(new Error('ipc down')) });
+    const onOutcome = vi.fn();
+    const { result } = renderHook(() => useTrustPrompt());
+
+    act(() => {
+      result.current.openFor('/proj', { onOutcome });
+    });
+
+    await waitFor(() => expect(onOutcome).toHaveBeenCalledWith('lookup-failed'));
+    expect(result.current.pending).toBeNull();
+    expect(result.current.error).not.toBeNull();
+    expect(onOutcome).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not fire an outcome for a lookup superseded by a newer openFor', async () => {
+    let resolveFirst: ((info: ProjectTrustInfo) => void) | null = null;
+    const getImpl = vi.fn((message: { cwd: string }) => {
+      if (message.cwd === '/stale') {
+        return new Promise<ProjectTrustInfo>((resolve) => {
+          resolveFirst = resolve;
+        });
+      }
+      return Promise.resolve({ ...trustInfo('untrusted'), projectDir: message.cwd });
+    });
+    installTrustBridge({ getImpl });
+    const staleOutcome = vi.fn();
+    const freshOutcome = vi.fn();
+    const { result } = renderHook(() => useTrustPrompt());
+
+    act(() => {
+      result.current.openFor('/stale', { onOutcome: staleOutcome });
+      result.current.openFor('/fresh', { onOutcome: freshOutcome });
+    });
+    await waitFor(() => expect(freshOutcome).toHaveBeenCalledWith('opened'));
+
+    // The stale lookup resolves late; its outcome must stay silent so the
+    // fresh request owns the surface (and any parked state on it).
+    await act(async () => {
+      resolveFirst?.({ ...trustInfo('untrusted'), projectDir: '/stale' });
+    });
+    expect(staleOutcome).not.toHaveBeenCalled();
+    expect(result.current.pending?.cwd).toBe('/fresh');
+  });
+
   it('clears the error on the next openFor start and on decline', async () => {
     vi.spyOn(console, 'error').mockImplementation(() => {});
     let failLookup = true;
@@ -306,10 +382,50 @@ describe('useChat untrusted_project mapping', () => {
     expect(send).toHaveBeenCalledTimes(1);
     expect(started).toBe(false);
     expect(onUntrustedProject).toHaveBeenCalledTimes(1);
+    // The failed send context (trimmed message + options) travels with the
+    // callback so the mount point can stash and replay it after a grant.
+    expect(onUntrustedProject).toHaveBeenCalledWith({ message: 'hello', options: {} });
     // No raw error bubble; the optimistic user message was dropped.
     expect(result.current.error).toBeNull();
     expect(result.current.status).toBe('idle');
     expect(result.current.messages).toHaveLength(0);
+  });
+
+  it('hands onUntrustedProject the trimmed message and the original options object', async () => {
+    const { send } = installChatBridge(UNTRUSTED_RESULT);
+    const onUntrustedProject = vi.fn();
+    const { result } = renderHook(() => useChat('session-a', { onUntrustedProject }));
+    const options = { sessionId: 'session-a', model: { connectionId: 'c1', modelId: 'm1' } };
+
+    await act(async () => {
+      await result.current.send('  stash me  ', options);
+    });
+
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(onUntrustedProject).toHaveBeenCalledTimes(1);
+    const payload = onUntrustedProject.mock.calls[0]?.[0];
+    expect(payload.message).toBe('stash me');
+    // Same object identity — the stash must replay the exact original options.
+    expect(payload.options).toBe(options);
+  });
+
+  it('does not invoke onUntrustedProject when the send starts a turn', async () => {
+    const { send } = installChatBridge({
+      status: 'started',
+      sessionId: 'session-a',
+      turnId: 'turn-1',
+    });
+    const onUntrustedProject = vi.fn();
+    const { result } = renderHook(() => useChat('session-a', { onUntrustedProject }));
+
+    let started = false;
+    await act(async () => {
+      started = await result.current.send('hello');
+    });
+
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(started).toBe(true);
+    expect(onUntrustedProject).not.toHaveBeenCalled();
   });
 
   it('keeps the generic error behavior when no callback is provided', async () => {

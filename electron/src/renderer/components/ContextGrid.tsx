@@ -19,6 +19,7 @@ const COLOR_USER = 'var(--context-user)';
 const COLOR_ASSISTANT = 'var(--context-assistant)';
 const COLOR_ASSISTANT_REASONING =
   'color-mix(in srgb, var(--context-assistant) 58%, var(--color-base-100))';
+const COLOR_SUMMARY = 'var(--context-summary)';
 
 export interface ContextBreakdown {
   free: number;
@@ -26,6 +27,7 @@ export interface ContextBreakdown {
   tools: number;
   tool_use: number;
   messages: number;
+  summary?: number;
   percentUsed?: number;
 }
 
@@ -43,6 +45,7 @@ interface TokenBreakdown {
   user: number;
   assistantResponse: number;
   assistantReasoning: number;
+  summary: number;
   free: number;
   total: number;
   maxContext: number;
@@ -65,6 +68,7 @@ export interface ContextCategories {
   toolUse: number;
   response: number;
   reasoning: number;
+  summary?: number;
 }
 
 function formatTokens(n: number): string {
@@ -87,6 +91,7 @@ interface MessageChars {
   user: number;
   response: number;
   reasoning: number;
+  summary: number;
 }
 
 function countMessageChars(messages: readonly Message[]): MessageChars {
@@ -95,9 +100,15 @@ function countMessageChars(messages: readonly Message[]): MessageChars {
     user: 0,
     response: 0,
     reasoning: 0,
+    summary: 0,
   };
   for (const message of messages) {
     if (message.hidden) continue;
+    if (message.compacted) {
+      counts.summary += message.content.length;
+      if (message.thinking) counts.summary += message.thinking.length;
+      continue;
+    }
     if (message.type === MessageType.TOOL_CALL || message.type === MessageType.TOOL_RESULT) {
       counts.tools += message.content.length;
     }
@@ -153,6 +164,21 @@ function sumPersistedReasoning(messages: readonly Message[]): number {
   return total;
 }
 
+/**
+ * Char-ratio fallback for the summary category when the provider-reported
+ * `summary_tokens` is zero/absent while summary heads exist in the view.
+ * Mirrors the prompt-token distribution used by the non-context branch.
+ */
+function estimateSummaryTokensFromChars(
+  messages: readonly Message[],
+  inputTokens: number,
+): number {
+  const chars = countMessageChars(messages);
+  const totalChars = chars.tools + chars.user + chars.response + chars.reasoning + chars.summary;
+  if (chars.summary <= 0 || totalChars <= 0 || inputTokens <= 0) return 0;
+  return Math.round((chars.summary / totalChars) * inputTokens);
+}
+
 function isPersistedUsageRef(
   messages: readonly Message[],
   usage: Usage | null,
@@ -192,15 +218,31 @@ function computeBreakdown(
     const streamingDelta = Math.max(0, streamingTokens - providerDelta);
     const effectiveAssistantTokens = context.assistant_tokens + streamingDelta;
     const effectiveUsedTokens = context.used_tokens + streamingDelta;
+    // Summary tokens: provider-reported when present, otherwise estimated from
+    // the summary heads' char share. The estimate is RESERVED from
+    // input_tokens — a missing summary_tokens means the snapshot counted the
+    // summary head's cost inside the other buckets — so the partition (and the
+    // ContextStackedBar built from it) never exceeds used_tokens.
+    const summaryReported = Math.max(0, context.summary_tokens ?? 0);
+    const estimatedSummaryTokens = summaryReported > 0
+      ? 0
+      : estimateSummaryTokensFromChars(messages, context.input_tokens);
+    const summaryTokens = summaryReported + estimatedSummaryTokens;
+    const inputFloor = Math.max(0, context.input_tokens);
+    const summaryReserve = estimatedSummaryTokens > 0 && inputFloor > 0
+      ? Math.max(0, (inputFloor - estimatedSummaryTokens) / inputFloor)
+      : 1;
+    const reserve = (value: number): number => Math.round(Math.max(0, value) * summaryReserve);
+    const scaledAssistantTokens = reserve(effectiveAssistantTokens);
     const windowReasoning = persistedReasoning + liveOrStreaming;
     let assistant: { response: number; reasoning: number };
     if (windowReasoning > 0) {
       const reasoning = Math.min(
-        Math.max(0, effectiveAssistantTokens),
+        Math.max(0, scaledAssistantTokens),
         Math.max(0, windowReasoning),
       );
       assistant = {
-        response: Math.max(0, effectiveAssistantTokens - reasoning),
+        response: Math.max(0, scaledAssistantTokens - reasoning),
         reasoning,
       };
     } else {
@@ -214,15 +256,16 @@ function computeBreakdown(
       if (streamingThinkingChars && streamingThinkingChars > 0) {
         chars.reasoning += streamingThinkingChars;
       }
-      assistant = splitAssistantTokens(effectiveAssistantTokens, chars);
+      assistant = splitAssistantTokens(scaledAssistantTokens, chars);
     }
     return {
-      system: context.system_tokens,
-      tools: context.tools_tokens,
-      toolUse: context.tool_use_tokens,
-      user: context.user_tokens,
+      system: reserve(context.system_tokens),
+      tools: reserve(context.tools_tokens),
+      toolUse: reserve(context.tool_use_tokens),
+      user: reserve(context.user_tokens),
       assistantResponse: assistant.response,
       assistantReasoning: assistant.reasoning,
+      summary: summaryTokens,
       free: mc > 0 ? Math.max(0, mc - effectiveUsedTokens) : 0,
       total: mc > 0 ? mc : effectiveUsedTokens,
       maxContext: mc,
@@ -237,6 +280,7 @@ function computeBreakdown(
       user: 0,
       assistantResponse: 0,
       assistantReasoning: 0,
+      summary: 0,
       free: mc,
       total: mc,
       maxContext: mc,
@@ -252,13 +296,18 @@ function computeBreakdown(
   }
 
   const totalChars = chars.tools + chars.user + chars.response + chars.reasoning;
-  const toolUseTokens = totalChars > 0 ? Math.round((chars.tools / totalChars) * promptTokens) : 0;
-  const userTokens = totalChars > 0 ? Math.round((chars.user / totalChars) * promptTokens) : 0;
+  const summaryChars = chars.summary;
+  const summaryTokens = totalChars + summaryChars > 0
+    ? Math.round((summaryChars / (totalChars + summaryChars)) * promptTokens)
+    : 0;
+  const promptForDistribution = Math.max(0, promptTokens - summaryTokens);
+  const toolUseTokens = totalChars > 0 ? Math.round((chars.tools / totalChars) * promptForDistribution) : 0;
+  const userTokens = totalChars > 0 ? Math.round((chars.user / totalChars) * promptForDistribution) : 0;
   const assistantTokens = splitByProviderReasoning(
     completionTokens,
     usage.reasoning_tokens,
   ) ?? splitAssistantTokens(completionTokens, chars);
-  const systemTokens = Math.max(0, promptTokens - toolUseTokens - userTokens);
+  const systemTokens = Math.max(0, promptTokens - toolUseTokens - userTokens - summaryTokens);
   const freeTokens = mc > 0
     ? Math.max(0, mc - promptTokens - completionTokens)
     : 0;
@@ -270,6 +319,7 @@ function computeBreakdown(
     user: userTokens,
     assistantResponse: assistantTokens.response,
     assistantReasoning: assistantTokens.reasoning,
+    summary: summaryTokens,
     free: freeTokens,
     total: mc > 0 ? mc : promptTokens + completionTokens,
     maxContext: mc,
@@ -304,6 +354,7 @@ function buildLegendSections(b: TokenBreakdown): LegendSection[] {
         entry('reasoning', COLOR_ASSISTANT_REASONING, 'Reasoning', b.assistantReasoning),
       ],
     },
+    ...(b.summary > 0 ? [{ entries: [entry('summary', COLOR_SUMMARY, 'Summary (Compaction)', b.summary)] }] : []),
     {
       entries: [{
         ...entry('free', COLOR_FREE, 'Free', b.free),
@@ -505,7 +556,10 @@ export function computeContextBreakdown(
   const mb = computeBreakdown(messages, usage, maxContext);
   const percentUsed = contextPercent(usage, maxContext) ?? undefined;
   if (usage?.context) {
-    return {
+    const summaryTokens = (usage.context.summary_tokens ?? 0) > 0
+      ? usage.context.summary_tokens!
+      : mb.summary;
+    const base: ContextBreakdown = {
       free: mb.free,
       system: usage.context.system_tokens,
       tools: usage.context.tools_tokens,
@@ -513,8 +567,10 @@ export function computeContextBreakdown(
       messages: usage.context.user_tokens + usage.context.assistant_tokens,
       percentUsed,
     };
+    if (summaryTokens > 0) base.summary = summaryTokens;
+    return base;
   }
-  return {
+  const base: ContextBreakdown = {
     free: mb.free,
     system: mb.system,
     tools: mb.tools,
@@ -522,6 +578,8 @@ export function computeContextBreakdown(
     messages: mb.user + mb.assistantResponse + mb.assistantReasoning,
     percentUsed,
   };
+  if (mb.summary > 0) base.summary = mb.summary;
+  return base;
 }
 
 export function computeContextCategories(
@@ -530,10 +588,14 @@ export function computeContextCategories(
   maxContext?: number | null,
 ): ContextCategories {
   const breakdown = computeBreakdown(messages, usage, maxContext);
-  return {
+  const base: ContextCategories = {
     toolDefinition: breakdown.tools,
     toolUse: breakdown.toolUse,
     response: breakdown.assistantResponse,
     reasoning: breakdown.assistantReasoning,
   };
+  // Include summary only when non-zero to keep legacy test expectations stable;
+  // the legend and bar already filter zero-valued segments.
+  if (breakdown.summary > 0) base.summary = breakdown.summary;
+  return base;
 }

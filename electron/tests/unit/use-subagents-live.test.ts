@@ -45,6 +45,7 @@ function projection(overrides: Partial<SubagentLiveProjection> & { subagentId: s
   return {
     sessionId: sessionA, runId: 'run-1', sequence: 0, state: 'running',
     segments: [], toolCalls: [], usage: null, result: null, error: null,
+    compactionProgress: null,
     ...overrides,
   };
 }
@@ -204,6 +205,35 @@ describe('subagent delta application', () => {
     const mismatchedTerminal = { ...terminal('one', 'run-1', record('other', 'completed'), 4), subagentId: 'one' };
     expect(applyDeltaBatch(state, batch([mismatchedTerminal]))).toBe(state);
     expect(state.records[0].status).toBe('running');
+  });
+
+  it('applies compaction progress deltas onto the owning subagent draft (R27)', () => {
+    let state = seeded(sessionA, 0);
+    state = applyDeltaBatch(state, batch([spawned('one', 'run-1', record('one', 'pending'))]));
+    state = applyDeltaBatch(state, batch([textDelta(1, 'working')]));
+    expect(state.live.get('one')?.compactionProgress).toBeNull();
+
+    state = applyDeltaBatch(state, batch([
+      { ...deltaBase(), sequence: 2, type: 'compaction_progress', phase: 'preparing', detail: 'Summarizing history', mode: 'simple' } as SubagentDeltaEvent,
+    ]));
+    expect(state.live.get('one')?.compactionProgress).toMatchObject({
+      type: 'compaction_progress',
+      phase: 'preparing',
+      detail: 'Summarizing history',
+      mode: 'simple',
+      sequence: 2,
+    });
+
+    state = applyDeltaBatch(state, batch([
+      { ...deltaBase(), sequence: 3, type: 'compaction_progress', phase: 'compacting', streamText: 'SUMMARY partial', estimatedTokens: 12 } as SubagentDeltaEvent,
+    ]));
+    expect(state.live.get('one')?.compactionProgress).toMatchObject({
+      phase: 'compacting',
+      streamText: 'SUMMARY partial',
+      estimatedTokens: 12,
+      sequence: 3,
+    });
+    expect(state.highWater.get('one')).toBe(3);
   });
 
   it('keeps records referentially stable across 100 text deltas; changes on spawned and terminal only', () => {

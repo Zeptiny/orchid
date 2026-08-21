@@ -193,6 +193,8 @@ describe('provider onboarding and disconnected UX', () => {
 
     expect(wizard).toContain('{!existingConnection && (');
     expect(wizard).toContain('Connection protocol');
+    // The picker appears only when the definition actually offers a protocol choice.
+    expect(wizard).toContain('(selectedDefinition?.supportedProtocols ?? []).length > 1');
     expect(wizard).not.toContain('Initial model');
     expect(wizard).toContain('Edit connection');
     expect(wizard).toContain('Save changes');

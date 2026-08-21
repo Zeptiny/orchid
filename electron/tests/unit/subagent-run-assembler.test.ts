@@ -90,8 +90,7 @@ describe('SubagentRunAssembler', () => {
     ]);
   });
 
-  it('uses the latest text-producing step as the final result', () => {
-    const run = assembler();
+  it('uses the latest text-producing step as the final result', () => {    const run = assembler();
 
     run.accept({ type: 'content', text: 'Draft answer.' });
     run.accept({ type: 'step_finish', stepIndex: 0, finishReason: 'tool-calls' });
@@ -132,5 +131,41 @@ describe('SubagentRunAssembler', () => {
     ]);
     expect(failedFinalization.error).toBe('provider failed');
     expect(failedFinalization.usage).toEqual(usage(5, 7));
+  });
+
+  it('stamps trailing usage onto the run’s latest assistant text when the tail holds no uncommitted text', () => {
+    const run = assembler();
+    run.accept({ type: 'content', text: 'Working. ' });
+    run.accept({ type: 'tool_call', toolCallId: 'tool-1', toolName: 'grep', args: '{}' });
+    run.accept(toolResult('tool-1', 'one match'));
+    run.accept({ type: 'usage', usage: usage(11, 4) });
+    run.accept({ type: 'finish', finishReason: 'stop' });
+
+    const finalization = run.complete();
+
+    // The tool-call commit already flushed the text segment BEFORE the usage
+    // arrived, so the tail commit has no stampable text — the residual usage
+    // must land on that text message instead of being lost.
+    const text = finalization.messages.find((message) => message.type === MessageType.TEXT)!;
+    expect(text.usage).toEqual(usage(11, 4));
+    expect(finalization.usage).toEqual(usage(11, 4));
+  });
+
+  it('adds residual tail usage onto a pause-boundary stamp instead of double-counting or losing it', () => {
+    const run = assembler();
+    run.accept({ type: 'content', text: 'Working. ' });
+    run.accept({ type: 'usage', usage: usage(10, 2) });
+    // Pause-boundary commit stamps and consumes the first usage chunk.
+    expect(run.snapshotTranscript().find((message) => message.type === MessageType.TEXT)!.usage)
+      .toEqual(usage(10, 2));
+    run.accept({ type: 'tool_call', toolCallId: 'tool-1', toolName: 'grep', args: '{}' });
+    run.accept({ type: 'usage', usage: usage(30, 5) });
+    run.accept({ type: 'finish', finishReason: 'stop' });
+
+    const finalization = run.complete();
+
+    const text = finalization.messages.find((message) => message.type === MessageType.TEXT)!;
+    expect(text.usage).toEqual(usage(40, 7));
+    expect(finalization.usage).toEqual(usage(40, 7));
   });
 });

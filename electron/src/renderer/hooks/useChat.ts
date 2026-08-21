@@ -27,6 +27,7 @@ import type {
   ChatSnapshot,
   ChatSessionSnapshot,
   ChatStreamSegmentSnapshot,
+  CompactionProgressEvent,
 } from '../../shared/types/ipc';
 import {
   addUsage,
@@ -37,6 +38,7 @@ import {
 import type { CanonicalToolResult } from '../../shared/types/tool-result';
 import {
   reduceChatTurnProjection,
+  type ChatTurnCompactionProgress,
   type ChatTurnEventAction,
   type ChatTurnProjection,
   type ChatTurnProjectionAction,
@@ -72,6 +74,8 @@ export interface ToolBlock {
   toolResult: CanonicalToolResult | null;
   startedAt: string;
   finishedAt: string | null;
+  /** Calibrated token estimate of `agentProjection` while generating; null when unknown. */
+  estimatedTokens?: number | null;
 }
 
 /** Preserve canonical facts while adapting a main-process live snapshot. */
@@ -86,6 +90,7 @@ export function chatToolSnapshotToBlock(tool: ChatToolCallSnapshot | ChatTurnToo
     toolResult: tool.toolResult,
     startedAt: tool.startedAt,
     finishedAt: tool.finishedAt,
+    estimatedTokens: tool.estimatedTokens ?? null,
   };
 }
 
@@ -135,6 +140,12 @@ export interface ChatState {
   cumulativeUsage: Usage;
   /** Active workspace cwd (session → draft → sticky); empty when unbound. */
   cwd: string;
+  /**
+   * Live main-scope compaction progress from `compaction_progress` turn
+   * events; null when no compaction is in flight. Replay derives the terminal
+   * widget from the persisted `compacted` marker instead.
+   */
+  compactionProgress: ChatTurnCompactionProgress | null;
 }
 
 export interface ChatSendOptions {
@@ -146,13 +157,26 @@ export interface ChatSendOptions {
   draftGeneration?: number;
 }
 
+/**
+ * Failed-send context for an `untrusted_project` gate rejection. The mount
+ * point stashes it so the message can be replayed after a trust grant or
+ * restored into the composer when the user declines.
+ */
+export interface UntrustedProjectSendFailure {
+  /** Trimmed message that the trust gate rejected. */
+  message: string;
+  /** Original send options (session/model/draft generation). */
+  options: ChatSendOptions;
+}
+
 export interface UseChatOptions {
   /**
    * Invoked when chat:send fails with `untrusted_project`. When present the
    * structured failure opens the trust dialog instead of pushing a raw error
-   * bubble; when absent the generic error behavior is kept.
+   * bubble; when absent the generic error behavior is kept. Receives the
+   * failed send context so the mount point can stash and replay it.
    */
-  onUntrustedProject?: () => void;
+  onUntrustedProject?: (payload: UntrustedProjectSendFailure) => void;
   /** Durable session total derived from chain summaries, including unloaded pages. */
   persistedSessionUsage?: Usage | null;
   /** Newest durable turn usage, including its context snapshot when available. */
@@ -187,6 +211,13 @@ export interface UseChatReturn extends ChatState {
   beginSessionSwitch: (sessionId: string | null) => void;
   /** Apply a snapshot after the caller has committed a session selection. */
   hydrateSnapshot: (snapshot: ChatSessionSnapshot | null) => void;
+  /**
+   * Drop the live tail (segments, tools, streaming text) after a compaction
+   * rewrote the durable chains: flagged content must not keep rendering below
+   * the compacted stub, and preserved content re-renders from the reloaded
+   * chains. Keeps turn identity, status, and the sequence watermark.
+   */
+  resetLiveTail: () => void;
   /** True while a session switch is in flight (affinity rebound, not yet hydrated). */
   isSwitchingSession: boolean;
 }
@@ -202,6 +233,7 @@ export function acceptChatEvent(
   affinity: ChatEventAffinity,
   event: { sessionId: string; turnId: string; sequence: number },
   isSending: boolean,
+  rebindTurnWhenIdle = false,
 ): boolean {
   if (affinity.selectedSessionId && event.sessionId !== affinity.selectedSessionId) return false;
   if (!affinity.selectedSessionId && affinity.streamSessionId && event.sessionId !== affinity.streamSessionId) return false;
@@ -209,7 +241,16 @@ export function acceptChatEvent(
     if (!isSending) return false;
     affinity.streamSessionId = event.sessionId;
   }
-  if (affinity.streamTurnId && affinity.streamTurnId !== event.turnId) return false;
+  if (affinity.streamTurnId && affinity.streamTurnId !== event.turnId) {
+    // A manual /compact emits progress outside any turn with its own synthetic
+    // turnId. While the renderer holds no live stream the mismatch rebinds
+    // (with a fresh sequence watermark); while streaming, a mismatched turnId
+    // is a foreign or stale event and stays rejected.
+    if (!(rebindTurnWhenIdle && !isSending)) return false;
+    affinity.streamTurnId = event.turnId;
+    affinity.lastSequence = event.sequence;
+    return true;
+  }
   if (affinity.streamTurnId === event.turnId && event.sequence <= affinity.lastSequence) return false;
   affinity.streamTurnId = event.turnId;
   affinity.lastSequence = event.sequence;
@@ -296,6 +337,17 @@ export function consumePendingCancel(state: CancelQueueState): boolean {
   }
   state.pending = false;
   return true;
+}
+
+/**
+ * Release the cancel mutex and drop any Esc staged while the last IPC was in
+ * flight. The subagent-cancel confirmation is the destructive terminal layer:
+ * it must always require one deliberate fresh keypress instead of draining a
+ * rapid double-Esc (issue #145).
+ */
+export function discardPendingCancel(state: CancelQueueState): void {
+  state.pending = false;
+  state.inFlight = false;
 }
 
 export function resetCancelQueue(state: CancelQueueState): void {
@@ -389,7 +441,7 @@ export function useChat(
   const [messages, setMessages] = useState<Message[]>([]);
   // Ref-mirror the optional callback so `send` keeps a stable identity and a
   // new closure from the caller never rebuilds every streaming token.
-  const onUntrustedProjectRef = useRef<(() => void) | undefined>(options.onUntrustedProject);
+  const onUntrustedProjectRef = useRef<((payload: UntrustedProjectSendFailure) => void) | undefined>(options.onUntrustedProject);
   onUntrustedProjectRef.current = options.onUntrustedProject;
   const [projectionState, dispatchProjectionState] = useReducer(reduceProjectionState, { projection: null, revision: 0 });
   const [isSwitchingSession, setIsSwitchingSession] = useState(false);
@@ -425,6 +477,7 @@ export function useChat(
   const error = projection?.terminal?.type === 'error' && projection.terminal.title && !projection.terminal.error.startsWith(projection.terminal.title)
     ? `${projection.terminal.title}: ${projection.terminal.error}`
     : projection?.error ?? null;
+  const compactionProgress = projection?.compactionProgress ?? null;
   const cumulativeUsage = useCumulativeUsage(
     messages,
     currentTurnUsage,
@@ -445,8 +498,13 @@ export function useChat(
     }
   }, [activeSessionId, isSwitchingSession]);
 
-  const acceptsEvent = useCallback((event: Pick<ChatTurnEventAction, 'sessionId' | 'turnId' | 'sequence'>) =>
-    acceptChatEvent(affinityRef.current.value, event, isSendingRef.current), []);
+  const acceptsEvent = useCallback(
+    (
+      event: Pick<ChatTurnEventAction, 'sessionId' | 'turnId' | 'sequence'>,
+      opts?: { readonly rebindTurnWhenIdle?: boolean },
+    ) => acceptChatEvent(affinityRef.current.value, event, isSendingRef.current, opts?.rebindTurnWhenIdle),
+    [],
+  );
   const cancelStreamFrame = useCallback(() => {
     if (streamFrameIdRef.current == null) return;
     window.cancelAnimationFrame(streamFrameIdRef.current);
@@ -495,13 +553,13 @@ export function useChat(
       isSendingRef.current = false;
     }
   }, [dispatchProjection, flushStreamFrame]);
-  const deliverEvent = useCallback((event: ChatTurnEventAction) => {
+  const deliverEvent = useCallback((event: ChatTurnEventAction, opts?: { readonly rebindTurnWhenIdle?: boolean }) => {
     // Actor idle/interrupted snapshots can straddle the terminal event. They
     // must not end the renderer turn or claim affinity for the next queued
     // turn; done/error owns the terminal handoff and authoritative messages.
     if ('state' in event && (event.state === 'idle' || event.state === 'interrupted')) return;
     if (bufferHydrationEvent(event)) return;
-    if (acceptsEvent(event)) applyLiveEvent(event);
+    if (acceptsEvent(event, opts)) applyLiveEvent(event);
   }, [acceptsEvent, applyLiveEvent, bufferHydrationEvent]);
 
   // Subscribe to IPC events
@@ -527,6 +585,10 @@ export function useChat(
     const unsubToolStart = window.orchid.chat.onToolCallStart?.((event: ChatToolCallStartEvent) => deliverEvent(normalize(event))) ?? (() => {});
     const unsubToolDelta = window.orchid.chat.onToolCallDelta?.((event: ChatToolCallDeltaEvent) => queueFrameEvent(normalize(event))) ?? (() => {});
     const unsubToolUpdate = window.orchid.chat.onToolCallUpdate?.((event: ChatToolCallUpdateEvent) => deliverEvent(normalize(event))) ?? (() => {});
+    // Manual /compact runs outside any turn with a synthetic turnId — the
+    // rebind flag lets idle compaction progress rebind turn affinity instead
+    // of being rejected as a foreign turn.
+    const unsubCompactionProgress = window.orchid.chat.onCompactionProgress?.((event: CompactionProgressEvent) => deliverEvent(normalize(event), { rebindTurnWhenIdle: true })) ?? (() => {});
 
     return () => {
       cancelStreamFrame();
@@ -539,6 +601,7 @@ export function useChat(
       unsubToolStart();
       unsubToolDelta();
       unsubToolUpdate();
+      unsubCompactionProgress();
     };
   }, [
     cancelStreamFrame,
@@ -615,7 +678,7 @@ export function useChat(
           if (result.kind === 'untrusted_project' && onUntrustedProjectRef.current) {
             dispatchProjection({ type: 'clear_stream', status: 'idle' });
             setMessages((prev) => dropOptimisticUserMessageIfLast(prev, userMessage.id));
-            onUntrustedProjectRef.current();
+            onUntrustedProjectRef.current({ message: trimmed, options: options ?? {} });
             return false;
           }
           dispatchProjection({ type: 'clear_stream', status: 'error' });
@@ -680,13 +743,15 @@ export function useChat(
     try {
       let runCancelPhase = true;
       while (runCancelPhase) {
+        let cancelStatus: string | undefined;
         try {
           const affinity = affinityRef.current.value;
           const sessionId = affinity.selectedSessionId ?? affinity.streamSessionId;
           const result = await window.orchid.chat.cancel(
             sessionId ? { sessionId } : undefined,
           );
-          const status = result && (result as { status: string }).status;
+          cancelStatus = result && (result as { status: string }).status;
+          const status = cancelStatus;
 
           // First Esc only shows confirmAgent hint
           if (status === 'confirming') {
@@ -731,7 +796,14 @@ export function useChat(
           // Ignore cancel errors — still release / drain the queue below.
         }
 
-        runCancelPhase = consumePendingCancel(cancelQueueRef.current);
+        if (cancelStatus === 'confirming_subagents') {
+          // Layer 3 is destructive: drop Esc presses staged during the last
+          // RTT so cancelling subagents needs a deliberate fresh keypress.
+          discardPendingCancel(cancelQueueRef.current);
+          runCancelPhase = false;
+        } else {
+          runCancelPhase = consumePendingCancel(cancelQueueRef.current);
+        }
       }
     } catch {
       // Unexpected throw outside the per-IPC try — never leave the mutex stuck.
@@ -861,6 +933,13 @@ export function useChat(
     dispatchProjection({ type: 'clear_error' });
   }, [dispatchProjection]);
 
+  const resetLiveTail = useCallback(() => {
+    // Flush queued deltas first so the sequence watermark covers them and a
+    // late replay cannot re-append pre-compaction content after the reset.
+    flushStreamFrame();
+    dispatchProjection({ type: 'reset_tail' });
+  }, [dispatchProjection, flushStreamFrame]);
+
   return {
     messages,
     status,
@@ -877,6 +956,7 @@ export function useChat(
     interruptState,
     interrupted,
     cwd,
+    compactionProgress,
     send,
     cancel,
     stop,
@@ -884,6 +964,7 @@ export function useChat(
     beginSessionSwitch,
     hydrateSnapshot,
     clearError,
+    resetLiveTail,
     setMessages: replaceMessages,
     isSwitchingSession,
   };

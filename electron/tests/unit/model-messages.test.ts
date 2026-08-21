@@ -114,4 +114,21 @@ describe('toModelMessages', () => {
       { role: 'user', content: 'Kept.' },
     ])).toEqual([{ role: 'user', content: 'Kept.' }]);
   });
+
+  it('carries the compaction summary marker onto assistant messages (R19)', () => {
+    const marker = {
+      rangeStart: 'start-id',
+      rangeEnd: 'end-id',
+      mode: 'simple' as const,
+      summarizedCount: 12,
+    };
+    const messages = toModelMessages([
+      assistant({ content: '# Handoff summary', compacted: marker }),
+      assistant({ content: 'plain reply' }),
+    ]) as Array<{ role: string; content: unknown; compacted?: unknown }>;
+
+    expect(messages).toHaveLength(2);
+    expect(messages[0]?.compacted).toEqual(marker);
+    expect(messages[1]?.compacted).toBeUndefined();
+  });
 });

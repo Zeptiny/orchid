@@ -23,6 +23,10 @@ export interface OverviewStats {
   readonly knownUsageCount: number;
   readonly unknownUsageCount: number;
   readonly totalSessions: number;
+  /** Mean first-token latency across attempts that stamped one; null when none. */
+  readonly avgTtftMs: number | null;
+  /** Total output tokens over total generation seconds; null when no samples. */
+  readonly avgTokensPerSecond: number | null;
 }
 
 export interface CurrencyTotal {
@@ -78,8 +82,21 @@ export interface SessionSummary {
 export interface SessionsResult {
   readonly sessions: readonly SessionSummary[];
   readonly totalSessions: number;
+  /** Offset-aware pagination flag: more pages exist past `offset + sessions.length`. */
   readonly truncated: boolean;
 }
+
+// Detail-view caps shared by main-process queries and renderer copy/chart
+// logic — single source so UI text never drifts from the query limits.
+
+/** Max snapshots in a context drill-down series (newest kept). */
+export const CONTEXT_DETAIL_MAX_POINTS = 2000;
+/** Max invocation rows in the subagent explorer detail. */
+export const SUBAGENT_DETAIL_MAX_INVOCATIONS = 500;
+/** TTFT histogram bucket width, ms. */
+export const TTFT_BUCKET_MS = 50;
+/** TTFT histogram overflow cap, ms — larger samples lump into this bucket. */
+export const TTFT_BUCKET_MAX_MS = 5000;
 
 export interface AttemptDetail {
   readonly attemptId: string;
@@ -110,6 +127,12 @@ export interface AttemptDetail {
   readonly startedAt: string;
   readonly completedAt: string | null;
   readonly latencyMs: number | null;
+  /** First streamed content delta timestamp; null for non-streamed attempts. */
+  readonly firstTokenAt: string | null;
+  /** first_token_at − started_at. */
+  readonly ttftMs: number | null;
+  /** Total output tokens over the generation window (completed − first token). */
+  readonly tokensPerSecond: number | null;
   readonly agentScope: string | null;
   readonly agentName: string | null;
   readonly agentTier: string | null;
@@ -202,6 +225,12 @@ export interface ModelBreakdown {
   readonly interrupted: number;
   readonly firstUsed: string | null;
   readonly lastUsed: string | null;
+  /** TTFT distribution (avg / nearest-rank p50 / p95) in ms; null without samples. */
+  readonly avgTtftMs: number | null;
+  readonly p50TtftMs: number | null;
+  readonly p95TtftMs: number | null;
+  /** Total output tokens over total generation seconds; null without samples. */
+  readonly avgTokensPerSecond: number | null;
 }
 
 export interface ProviderBreakdown {
@@ -232,6 +261,12 @@ export interface ConnectionBreakdown {
   readonly modelCount: number;
   readonly firstUsed: string | null;
   readonly lastUsed: string | null;
+  /** TTFT distribution (avg / nearest-rank p50 / p95) in ms; null without samples. */
+  readonly avgTtftMs: number | null;
+  readonly p50TtftMs: number | null;
+  readonly p95TtftMs: number | null;
+  /** Total output tokens over total generation seconds; null without samples. */
+  readonly avgTokensPerSecond: number | null;
 }
 
 export interface ToolBreakdown {
@@ -356,5 +391,214 @@ export interface ContextResult {
     readonly toolUseTokens: number;
     readonly userTokens: number;
     readonly assistantTokens: number;
+    readonly summaryTokens: number;
   };
+}
+
+// ── Model detail (Models & Providers drill-down) ─────────────────────────────
+
+/** Aggregates for one (model_id, provider_id, connection_id) triple. */
+export interface ModelDetailStats {
+  readonly attempts: number;
+  readonly succeeded: number;
+  readonly failed: number;
+  readonly interrupted: number;
+  readonly inputTokens: number;
+  readonly outputTokens: number;
+  readonly cacheReadTokens: number;
+  readonly cacheWriteTokens: number;
+  readonly reasoningTokens: number;
+  readonly totalCost: readonly CurrencyTotal[];
+  readonly firstUsed: string | null;
+  readonly lastUsed: string | null;
+  /** TTFT distribution (avg / nearest-rank p50 / p95) in ms; null without samples. */
+  readonly avgTtftMs: number | null;
+  readonly p50TtftMs: number | null;
+  readonly p95TtftMs: number | null;
+  /** Total output tokens over total generation seconds; null without samples. */
+  readonly avgTokensPerSecond: number | null;
+}
+
+/**
+ * TTFT histogram bucket: floor(ttft / 50) * 50, capped at 5000 (overflow is
+ * lumped into the 5000 bucket). Only non-empty buckets are returned, ordered
+ * by bucketMs ascending.
+ */
+export interface TtftHistogramBucket {
+  readonly bucketMs: number;
+  readonly count: number;
+}
+
+/** Daily nearest-rank TTFT percentiles; only days with latency samples. */
+export interface TtftOverTimePoint {
+  readonly date: string;
+  readonly medianTtftMs: number;
+  readonly p95TtftMs: number;
+  /** Attempts that stamped a first token on this day. */
+  readonly attempts: number;
+}
+
+/**
+ * Daily stacked token series. netInput strips cache reads, netOutput strips
+ * reasoning tokens, so the four values stack to the day's gross usage.
+ */
+export interface ModelTokensOverTimePoint {
+  readonly date: string;
+  readonly netInputTokens: number;
+  readonly cacheReadTokens: number;
+  readonly netOutputTokens: number;
+  readonly reasoningTokens: number;
+}
+
+export interface ModelTopSession {
+  readonly sessionId: string;
+  readonly sessionName: string | null;
+  readonly attempts: number;
+  readonly inputTokens: number;
+  readonly outputTokens: number;
+  readonly totalCost: readonly CurrencyTotal[];
+}
+
+export interface ModelDetailResult {
+  readonly modelId: string;
+  readonly providerId: string;
+  readonly connectionId: string;
+  readonly stats: ModelDetailStats;
+  readonly ttftHistogram: readonly TtftHistogramBucket[];
+  readonly ttftOverTime: readonly TtftOverTimePoint[];
+  readonly tokensOverTime: readonly ModelTokensOverTimePoint[];
+  readonly costOverTime: readonly CostTimeSeriesPoint[];
+  readonly topSessions: readonly ModelTopSession[];
+  readonly recentAttempts: readonly AttemptDetail[];
+}
+
+// ── Subagent detail (Subagents drill-down) ───────────────────────────────────
+
+/** One attribution row with its chain's attempts joined in. */
+export interface SubagentInvocation {
+  readonly subagentId: string;
+  readonly sessionId: string;
+  readonly sessionName: string | null;
+  readonly chainId: string;
+  readonly modelId: string;
+  readonly status: string;
+  readonly startedAt: string;
+  readonly completedAt: string | null;
+  readonly durationMs: number | null;
+  readonly attempts: number;
+  readonly inputTokens: number;
+  readonly outputTokens: number;
+  readonly totalCost: readonly CurrencyTotal[];
+}
+
+export interface SubagentDetailSummary {
+  readonly invocations: number;
+  readonly completed: number;
+  readonly failed: number;
+  readonly interrupted: number;
+  readonly attempts: number;
+  readonly inputTokens: number;
+  readonly outputTokens: number;
+  readonly totalCost: readonly CurrencyTotal[];
+  readonly avgDurationMs: number | null;
+  /** Latency over the joined chain attempts; null without first-token samples. */
+  readonly avgTtftMs: number | null;
+  readonly p50TtftMs: number | null;
+  readonly p95TtftMs: number | null;
+  readonly avgTokensPerSecond: number | null;
+}
+
+export interface SubagentModelUsage {
+  readonly modelId: string;
+  readonly attempts: number;
+  readonly inputTokens: number;
+  readonly outputTokens: number;
+  readonly totalCost: readonly CurrencyTotal[];
+}
+
+/**
+ * Subagent explorer drill-down result. Named `SubagentAnalyticsDetailResult`
+ * to avoid colliding with the live-subagent `SubagentDetailResult` in ipc.ts.
+ */
+export interface SubagentAnalyticsDetailResult {
+  readonly agentName: string;
+  readonly agentType: string;
+  readonly agentTier: string;
+  readonly invocations: readonly SubagentInvocation[];
+  /** True when the invocation list was capped (newest 500 kept). */
+  readonly truncated: boolean;
+  readonly summary: SubagentDetailSummary;
+  readonly modelsUsed: readonly SubagentModelUsage[];
+  readonly invocationsOverTime: ReadonlyArray<{ readonly date: string; readonly count: number }>;
+}
+
+// ── Context session detail (Context drill-down) ──────────────────────────────
+
+/** Picker entry: every distinct main-agent session with snapshots in range. */
+export interface ContextSessionPickerEntry {
+  readonly sessionId: string;
+  readonly sessionName: string | null;
+  readonly snapshotCount: number;
+  readonly maxUsedTokens: number;
+}
+
+/**
+ * Context session picker result. A standalone query so the picker is computed
+ * once per time range instead of being re-derived on every drill-down switch.
+ */
+export interface ContextSessionsResult {
+  readonly sessions: readonly ContextSessionPickerEntry[];
+}
+
+/** Full-fidelity main-agent snapshot point (no stride sampling). */
+export interface ContextSessionDetailPoint {
+  readonly capturedAt: string;
+  readonly usedTokens: number;
+  readonly systemTokens: number;
+  readonly toolsTokens: number;
+  readonly toolUseTokens: number;
+  readonly userTokens: number;
+  readonly assistantTokens: number;
+  readonly summaryTokens: number;
+  readonly turnId: string | null;
+  readonly providerAttemptId: string | null;
+}
+
+/** Compaction run (compactor / compactor-selective attempt) for the session. */
+export interface ContextCompactionEvent {
+  readonly type: 'compaction';
+  readonly at: string;
+  readonly agentName: string;
+  readonly inputTokens: number | null;
+  readonly outputTokens: number | null;
+}
+
+/** One of the largest positive used_tokens deltas between consecutive snapshots. */
+export interface ContextJumpEvent {
+  readonly type: 'jump';
+  /** capturedAt of the later of the two consecutive points. */
+  readonly at: string;
+  readonly deltaTokens: number;
+  readonly fromTokens: number;
+  readonly toTokens: number;
+  readonly segmentDeltas: {
+    readonly system: number;
+    readonly tools: number;
+    readonly toolUse: number;
+    readonly user: number;
+    readonly assistant: number;
+    readonly summary: number;
+  };
+}
+
+/** Timeline events interleaved by time for the drill-down view. */
+export type ContextEvent = ContextCompactionEvent | ContextJumpEvent;
+
+export interface ContextSessionDetailResult {
+  readonly sessionId: string;
+  readonly sessionName: string | null;
+  readonly series: readonly ContextSessionDetailPoint[];
+  /** True when the series was capped at the 2000 most recent snapshots. */
+  readonly truncated: boolean;
+  readonly events: readonly ContextEvent[];
 }

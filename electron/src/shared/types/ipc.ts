@@ -10,6 +10,7 @@
 import type { Session } from './session';
 import type { Chain } from './chain';
 import type { Message, Usage } from './message';
+import type { CompactionProgressEvent } from './compaction-progress';
 import type {
   CanonicalToolResult,
   TerminalToolResultStatus,
@@ -55,6 +56,7 @@ import type {
   RAGConfig,
   AgentsMdConfig,
   SubagentsConfig,
+  CompactionScopeConfig,
   PermissionModeValue,
   PermissionRule,
   StartupSnapshot,
@@ -96,6 +98,8 @@ export type {
   UpdaterState,
   UpdateStatus,
 } from './ipc-boundary';
+
+export type { CompactionProgressEvent, CompactionProgressPhase } from './compaction-progress';
 
 // ── Chat API ─────────────────────────────────────────────────────────────────
 
@@ -148,6 +152,12 @@ export interface ChatToolCallSnapshot {
   toolResult: CanonicalToolResult | null;
   startedAt: string;
   finishedAt: string | null;
+  /**
+   * Calibrated token estimate for the streamed `content` while generating
+   * (ceil(chars × tokensPerChar)). Absent when no calibration exists —
+   * consumers must fall back to the char count, never a heuristic ratio.
+   */
+  estimatedTokens?: number | null;
 }
 
 export type ChatStreamSegmentSnapshot =
@@ -276,7 +286,7 @@ export interface ChatDoneEvent extends ChatEventIdentity {
   usage?: Usage | null;
 }
 
-export type ChatErrorKind = 'stream' | 'rate-limit' | 'auth' | 'generic';
+export type ChatErrorKind = 'stream' | 'rate-limit' | 'auth' | 'generic' | 'context_length_exceeded';
 
 export interface ChatErrorEvent extends ChatEventIdentity {
   type: 'error';
@@ -310,12 +320,14 @@ export interface ChatToolCallUpdateEvent extends ChatEventIdentity {
   type: 'tool_call_update';
   toolCallId: string;
   toolName?: string;
-  status: 'running' | TerminalToolResultStatus;
+  status: 'generating' | 'running' | TerminalToolResultStatus;
   args?: string;
-  /** Exact finalized agent projection; required for terminal updates. */
+  /** Live preview while generating; exact finalized agent projection for terminal updates. */
   content?: string;
   /** Canonical terminal authority; required for terminal updates. */
   toolResult?: CanonicalToolResult;
+  /** Calibrated token estimate of `content` while generating (see ChatToolCallSnapshot). */
+  estimatedTokens?: number | null;
 }
 
 // ── Background Command API ────────────────────────────────────────────────
@@ -477,6 +489,10 @@ export type ConfigPatch = {
   };
   agents_md?: Partial<AgentsMdConfig>;
   subagents?: Partial<SubagentsConfig>;
+  compaction?: {
+    main?: Partial<CompactionScopeConfig>;
+    subagents?: Partial<CompactionScopeConfig>;
+  };
   ast_max_file_size?: number;
   mcp_startup_timeout?: number;
   mcp_per_server_timeout?: number;
@@ -771,6 +787,32 @@ export interface ProviderDiscoverModelsResult {
   message: string | null;
 }
 
+/**
+ * Draft live-discovery request for a connection that does not exist yet (#138).
+ * The one-shot `apiKey` is used only for this fetch and is never persisted or
+ * echoed back.
+ */
+export interface ProviderDraftDiscoveryMessage {
+  readonly providerId: string;
+  readonly protocol: ProviderProtocol;
+  readonly authMethod: ProviderAuthMethod;
+  readonly endpoint?: string | null;
+  readonly allowInsecureHttp?: boolean;
+  readonly environmentVariable?: string;
+  readonly apiKey?: string;
+}
+
+/** Result of one draft live-discovery fetch; nothing is persisted (#138). */
+export interface ProviderDraftDiscoveryResult {
+  readonly status: 'ok' | 'unsupported' | 'no-credential' | 'failed';
+  /** Renderer-ready provider rows for the wizard models editor. */
+  readonly models: readonly ProviderModelView[];
+  /** When the live endpoint published this snapshot; null unless status is ok. */
+  readonly discoveredAt: string | null;
+  /** Redacted, user-presentable detail; null when nothing needs surfacing. */
+  readonly message: string | null;
+}
+
 export interface ProviderMutationResult {
   connection: ProviderConnectionView;
   message: string | null;
@@ -896,6 +938,11 @@ export interface SessionUpdatedEvent {
   sessionId: string;
   chain: Chain;
   activeChainId: string | null;
+  updatedAt: string;
+}
+
+export interface SessionCompactionEvent {
+  sessionId: string;
   updatedAt: string;
 }
 
@@ -1113,6 +1160,18 @@ export type ChatSendResult =
       error: string;
     };
 
+/** Result of chat:compact — a user-initiated `/compact` on an idle session. */
+export type ChatCompactResult =
+  | { status: 'compacted'; sessionId: string }
+  | { status: 'busy'; sessionId: string }
+  | {
+      status: 'nothing_to_compact';
+      sessionId: string;
+      /** Gate reason ('empty-compactable-range', 'uncalibrated', …). */
+      detail?: string;
+    }
+  | { status: 'error'; error: string };
+
 // ── Updater API ──────────────────────────────────────────────────────────────
 
 /** Detailed download progress emitted on updater:progress. */
@@ -1282,6 +1341,8 @@ export interface OrchidAPI {
     queueNext: (request: ChatQueueNextRequest) => Promise<void>;
     /** Immediately stop exactly one session without staged Esc confirmation. */
     stop: (message: ChatStopMessage) => Promise<{ status: string }>;
+    /** User-initiated compaction (/compact) on an idle session. */
+    compact: (message?: ChatCancelMessage) => Promise<ChatCompactResult>;
     /** Read coherent persisted history and in-flight state without changing selection. */
     snapshot: (message?: ChatSnapshotMessage) => Promise<ChatSessionSnapshot | null>;
     onChunk: (callback: (event: ChatChunkEvent) => void) => () => void;
@@ -1293,6 +1354,7 @@ export interface OrchidAPI {
     onToolCallStart: (callback: (event: ChatToolCallStartEvent) => void) => () => void;
     onToolCallDelta: (callback: (event: ChatToolCallDeltaEvent) => void) => () => void;
     onToolCallUpdate: (callback: (event: ChatToolCallUpdateEvent) => void) => () => void;
+    onCompactionProgress: (callback: (event: CompactionProgressEvent) => void) => () => void;
   };
 
   config: {
@@ -1332,6 +1394,10 @@ export interface OrchidAPI {
     modelList: (message?: ProviderModelListMessage) => Promise<readonly ProviderModelOption[]>;
     /** One explicit live model discovery fetch for a connection; never polled (R26). */
     discoverModels: (message: ProviderConnectionIdMessage) => Promise<ProviderDiscoverModelsResult>;
+    /** Draft live-discovery fetch for a connection that does not exist yet (#138). */
+    discoverDraftModels: (
+      message: ProviderDraftDiscoveryMessage,
+    ) => Promise<ProviderDraftDiscoveryResult>;
     /** Refresh informational status only; it never changes connection health. */
     refreshStatus: (message: ProviderStatusRefreshMessage) => Promise<ProviderStatusView | null>;
     /**
@@ -1402,6 +1468,8 @@ export interface OrchidAPI {
     onCreated: (callback: (event: SessionCreatedEvent) => void) => () => void;
     /** Active session chains/todos mutated mid-chat (multi-chain turn lifecycle). */
     onUpdated: (callback: (event: SessionUpdatedEvent) => void) => () => void;
+    /** Compaction rewrote history — reload the session's chains. */
+    onCompaction: (callback: (event: SessionCompactionEvent) => void) => () => void;
     /** Workspace draft/session/default changed. */
     onWorkspaceChanged: (callback: (event: SessionWorkspaceChangedEvent) => void) => () => void;
     /** Subagent chains persisted — refresh sidebar / chain-footer usage. */
@@ -1516,12 +1584,16 @@ export interface OrchidAPI {
  
   analytics: {
      overview: (params?: { readonly timeRange?: import('./analytics').AnalyticsTimeRange }) => Promise<import('./analytics').OverviewResult>;
-     sessions: (params?: { readonly limit?: number; readonly timeRange?: import('./analytics').AnalyticsTimeRange }) => Promise<import('./analytics').SessionsResult>;
+     sessions: (params?: { readonly limit?: number; readonly offset?: number; readonly timeRange?: import('./analytics').AnalyticsTimeRange }) => Promise<import('./analytics').SessionsResult>;
      sessionDetail: (params: { readonly sessionId: string; readonly timeRange?: import('./analytics').AnalyticsTimeRange }) => Promise<import('./analytics').SessionDetailResult>;
      models: (params?: { readonly timeRange?: import('./analytics').AnalyticsTimeRange }) => Promise<import('./analytics').ModelsResult>;
+     modelDetail: (params: { readonly modelId: string; readonly providerId: string; readonly connectionId: string; readonly timeRange?: import('./analytics').AnalyticsTimeRange }) => Promise<import('./analytics').ModelDetailResult>;
      tools: (params?: { readonly timeRange?: import('./analytics').AnalyticsTimeRange }) => Promise<import('./analytics').ToolsResult>;
      subagents: (params?: { readonly timeRange?: import('./analytics').AnalyticsTimeRange }) => Promise<import('./analytics').SubagentsResult>;
+     subagentDetail: (params: { readonly agentName: string; readonly agentType: string; readonly agentTier: string; readonly timeRange?: import('./analytics').AnalyticsTimeRange }) => Promise<import('./analytics').SubagentAnalyticsDetailResult>;
      context: (params?: { readonly sessionId?: string; readonly timeRange?: import('./analytics').AnalyticsTimeRange }) => Promise<import('./analytics').ContextResult>;
+     contextSessionDetail: (params: { readonly sessionId: string; readonly timeRange?: import('./analytics').AnalyticsTimeRange }) => Promise<import('./analytics').ContextSessionDetailResult>;
+      contextSessions: (params?: { readonly timeRange?: import('./analytics').AnalyticsTimeRange }) => Promise<import('./analytics').ContextSessionsResult>;
    };
 }
 
@@ -1548,6 +1620,8 @@ export const IPC_CHANNELS = {
   CHAT_TOOL_CALL_START: 'chat:tool_call_start',
   CHAT_TOOL_CALL_DELTA: 'chat:tool_call_delta',
   CHAT_TOOL_CALL_UPDATE: 'chat:tool_call_update',
+  CHAT_COMPACTION_PROGRESS: 'chat:compaction_progress',
+  CHAT_COMPACT: 'chat:compact',
 
   SUBAGENTS_SNAPSHOT: 'subagents:snapshot',
   SUBAGENTS_DETAIL: 'subagents:detail',
@@ -1576,6 +1650,7 @@ export const IPC_CHANNELS = {
   PROVIDERS_DELETE: 'providers:delete',
   PROVIDERS_MODEL_LIST: 'providers:model_list',
   PROVIDERS_DISCOVER_MODELS: 'providers:discover_models',
+  PROVIDERS_DISCOVER_DRAFT_MODELS: 'providers:discover_draft_models',
   PROVIDERS_STATUS_REFRESH: 'providers:status_refresh',
   PROVIDERS_QUOTA_REFRESH: 'providers:quota_refresh',
 
@@ -1597,6 +1672,8 @@ export const IPC_CHANNELS = {
   SESSION_CREATED: 'session:created',
   /** Fired when multi-chain state is updated (start/persist/finish turn). */
   SESSION_UPDATED: 'session:updated',
+  /** Fired when compaction rewrites history (multi-chain + new summary). */
+  SESSION_COMPACTION: 'session:compaction',
   SESSION_CHANGE_MODEL: 'session:change_model',
   /** Resolve current workspace (draft / session / sticky / unbound). */
   SESSION_GET_WORKSPACE: 'session:get_workspace',
@@ -1703,9 +1780,13 @@ export const IPC_CHANNELS = {
   ANALYTICS_SESSIONS: 'analytics:sessions',
   ANALYTICS_SESSION_DETAIL: 'analytics:session_detail',
   ANALYTICS_MODELS: 'analytics:models',
+  ANALYTICS_MODEL_DETAIL: 'analytics:model_detail',
   ANALYTICS_TOOLS: 'analytics:tools',
   ANALYTICS_SUBAGENTS: 'analytics:subagents',
+  ANALYTICS_SUBAGENT_DETAIL: 'analytics:subagent_detail',
   ANALYTICS_CONTEXT: 'analytics:context',
+  ANALYTICS_CONTEXT_SESSION_DETAIL: 'analytics:context_session_detail',
+  ANALYTICS_CONTEXT_SESSIONS: 'analytics:context_sessions',
 } as const;
 
 export type IPCChannel = (typeof IPC_CHANNELS)[keyof typeof IPC_CHANNELS];
@@ -1720,6 +1801,7 @@ export const ALLOWED_INVOKE_CHANNELS = [
   IPC_CHANNELS.CHAT_QUEUE_NEXT,
   IPC_CHANNELS.CHAT_STOP,
   IPC_CHANNELS.CHAT_SNAPSHOT,
+  IPC_CHANNELS.CHAT_COMPACT,
   IPC_CHANNELS.SUBAGENTS_SNAPSHOT,
   IPC_CHANNELS.SUBAGENTS_DETAIL,
   IPC_CHANNELS.CONFIG_GET,
@@ -1741,6 +1823,7 @@ export const ALLOWED_INVOKE_CHANNELS = [
   IPC_CHANNELS.PROVIDERS_DELETE,
   IPC_CHANNELS.PROVIDERS_MODEL_LIST,
   IPC_CHANNELS.PROVIDERS_DISCOVER_MODELS,
+  IPC_CHANNELS.PROVIDERS_DISCOVER_DRAFT_MODELS,
   IPC_CHANNELS.PROVIDERS_STATUS_REFRESH,
   IPC_CHANNELS.PROVIDERS_QUOTA_REFRESH,
   IPC_CHANNELS.SESSION_LIST,
@@ -1803,9 +1886,13 @@ export const ALLOWED_INVOKE_CHANNELS = [
   IPC_CHANNELS.ANALYTICS_SESSIONS,
   IPC_CHANNELS.ANALYTICS_SESSION_DETAIL,
   IPC_CHANNELS.ANALYTICS_MODELS,
+  IPC_CHANNELS.ANALYTICS_MODEL_DETAIL,
   IPC_CHANNELS.ANALYTICS_TOOLS,
   IPC_CHANNELS.ANALYTICS_SUBAGENTS,
+  IPC_CHANNELS.ANALYTICS_SUBAGENT_DETAIL,
   IPC_CHANNELS.ANALYTICS_CONTEXT,
+  IPC_CHANNELS.ANALYTICS_CONTEXT_SESSION_DETAIL,
+  IPC_CHANNELS.ANALYTICS_CONTEXT_SESSIONS,
 ] as const satisfies readonly IPCChannel[];
 
 // ── Allowed event channels (preload security gate) ───────────────────────────
@@ -1821,6 +1908,7 @@ export const ALLOWED_EVENT_CHANNELS = [
   IPC_CHANNELS.CHAT_TOOL_CALL_START,
   IPC_CHANNELS.CHAT_TOOL_CALL_DELTA,
   IPC_CHANNELS.CHAT_TOOL_CALL_UPDATE,
+  IPC_CHANNELS.CHAT_COMPACTION_PROGRESS,
   IPC_CHANNELS.SUBAGENTS_EVENT,
   IPC_CHANNELS.SESSION_DELETED,
   IPC_CHANNELS.SESSION_RENAMED,
@@ -1839,6 +1927,7 @@ export const ALLOWED_EVENT_CHANNELS = [
   IPC_CHANNELS.ASK_QUESTION_SETTLED,
   IPC_CHANNELS.PERMISSION_APPROVAL_REQUESTED,
   IPC_CHANNELS.PERMISSION_APPROVAL_SETTLED,
+  IPC_CHANNELS.SESSION_COMPACTION,
 ] as const satisfies readonly IPCChannel[];
 
 // ── Window type augmentation (renderer-side) ─────────────────────────────────

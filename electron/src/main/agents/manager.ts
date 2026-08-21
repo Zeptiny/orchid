@@ -23,6 +23,10 @@ import { addStepUsage, sumMessageUsages } from '../../shared/usage';
 import type { StreamEvent } from '../llm/orchestrator';
 import type { ProjectRuntime } from '../project/runtime';
 import type { SubagentRecord as DomainSubagentRecord } from '../../shared/types/subagent';
+import { getConfig } from '../config/loader';
+import type { SubagentCompactionPayload, SubagentCompactionResult } from '../session/storage';
+import { clearCompactionPendingsForSession } from '../llm/compaction/pending-store';
+import { clearCompactionPausesForSession } from '../ipc/next-request-stop';
 import {
   SubagentDeltaEventType,
   SubagentStatus,
@@ -32,7 +36,6 @@ import {
   type SubagentTerminalState,
 } from '../../shared/types/subagent';
 import { makeUserMessage } from '../llm/message-factories';
-import { getConfig } from '../config/loader';
 import { subagentsConfigSchema } from '../config/schema';
 import { AdmissionController, type AdmissionCounters, type SubagentAdmissionLimits } from './admission';
 import { SubagentRunRegistry, type SubagentRun } from './subagent-run';
@@ -55,7 +58,13 @@ import {
 import {
   SubagentPersistence,
   type SubagentPersistenceCandidate,
+  type SubagentCompactionSink,
 } from './subagent-persistence';
+import { SubagentCompactionController } from './subagent-compaction-controller';
+import type {
+  SubagentCompactionPauseController,
+  SubagentHistoryBox,
+} from './subagent-compaction';
 import {
   SubagentWaitTimeoutError,
   SubagentQueueFullError,
@@ -68,6 +77,19 @@ import {
 import { getSubagentAttributionStore } from '../providers/accounting/subagent-attribution-store';
 import { getBackgroundStore } from '../tools/process/background-store';
 import { getForegroundLiveRegistry } from '../tools/process/foreground-live';
+
+// U9/U7: subagent mid-run compaction — the per-run compaction state machine
+// lives in subagent-compaction-controller.ts (constructed per run below); the
+// pure prepare/apply helpers live in subagent-compaction.ts. Neither module
+// is subagent-runner (which pulls in the tool registry and would form a
+// runtime cycle manager -> runner -> tools -> manager).
+
+export type {
+  SubagentCompactionPauseController,
+  SubagentHistoryBox,
+  SubagentOverflowOutcome,
+  SubagentPauseApplyOutcome,
+} from './subagent-compaction';
 
 export type { SubagentAdmissionLimits } from './admission';
 export {
@@ -113,11 +135,18 @@ function getSubagentConfigDefaults(): ReturnType<typeof subagentsConfigSchema.pa
 
 // ── Stream runner ───────────────────────────────────────────────────────────
 
+// The compaction contracts the runner consumes (history box, pause gate,
+// outcome unions) are defined in subagent-compaction.ts and re-exported above.
+
 /** Production stream driver (wired from subagent-runner.ts). */
 export type SubagentStreamRunner = (params: {
   task: string;
-  /** Full chain to replay for a resumed run; absent = spawn path. */
-  history?: Message[];
+  /**
+   * Mutable history handoff for the run (U5): the initial chain to replay on
+   * a resumed run (absent/empty = spawn path sends just the task) and the box
+   * a mid-run compaction apply swaps before the stream restarts.
+   */
+  historyBox?: SubagentHistoryBox;
   agent: Agent;
   selection: ModelSelection | null;
   abortSignal: AbortSignal;
@@ -135,6 +164,8 @@ export type SubagentStreamRunner = (params: {
   projectRuntime?: ProjectRuntime;
   /** Reports the resolved reasoning effort once the provider execution is known. */
   onReasoningEffort?: (effort: string | number | undefined) => void;
+  /** Compaction pause gate for this run's scope (U5); absent = run never pauses. */
+  compaction?: SubagentCompactionPauseController;
 }) => AsyncGenerator<StreamEvent>;
 
 export type SubagentChangeListener = (records: readonly SubagentRecord[]) => void;
@@ -212,6 +243,50 @@ function getTerminalRetention(): number {
   } catch {
     return getSubagentConfigDefaults().terminal_retention;
   }
+}
+
+/**
+ * Compaction sink for `SubagentPersistence` — performs the targeted
+ * subagent-chain compaction transaction via the session singleton (R36).
+ *
+ * Lazily requires the session singleton so the agents module does not pull
+ * the session module graph (which imports `config/loader`) at load time,
+ * mirroring the dynamic-import pattern documented for accounting stores.
+ * Only ENVIRONMENT unavailability (the require fails, no session manager, or
+ * the method is missing — e.g. test mocks) is swallowed as a null return
+ * with a debug log; genuine write failures propagate to the controller,
+ * which treats the apply as failed (integrity throws are the write's
+ * loud-corruption contract and must never be silenced here).
+ */
+function createSubagentCompactionSink(): SubagentCompactionSink | null {
+  /** Resolve the session manager's targeted-write method; null = environment-unavailable. */
+  const resolveApply = (): ((
+    sessionId: string,
+    subagentId: string,
+    payload: SubagentCompactionPayload,
+  ) => SubagentCompactionResult) | null => {
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const mod = require('../session/singleton');
+      const manager = mod.getSessionManager();
+      if (typeof manager.applySubagentCompaction !== 'function') {
+        console.debug('[subagent-compaction] compaction sink unavailable: session manager lacks applySubagentCompaction');
+        return null;
+      }
+      return manager.applySubagentCompaction.bind(manager);
+    } catch (e) {
+      console.debug('[subagent-compaction] compaction sink unavailable (non-fatal):', e);
+      return null;
+    }
+  };
+  return (sessionId, subagentId, payload) => {
+    const apply = resolveApply();
+    if (!apply) return null;
+    // The durable write itself is OUTSIDE the availability guard: its
+    // integrity failures (unknown flagged id / unknown anchor / missing row)
+    // propagate so the controller can fail the apply cleanly.
+    return apply(sessionId, subagentId, payload);
+  };
 }
 
 // ── SubagentRecord ──────────────────────────────────────────────────────────
@@ -303,6 +378,22 @@ export interface SubagentCheckpointCandidate {
 // ── SubagentManager ─────────────────────────────────────────────────────────
 
 /**
+ * Optional SubagentManager construction overrides.
+ *
+ * An injected `compactionSink` bypasses the default lazy session-singleton
+ * resolution (whose `require` cannot resolve the TS loader under Vitest), so
+ * composition roots and manager-level tests can exercise the durable
+ * compaction write path directly.
+ */
+export interface SubagentManagerOptions {
+  /**
+   * Durable subagent-chain compaction sink (R36). Omitted → the default lazy
+   * session-singleton resolution; `null` → memory-only compaction persistence.
+   */
+  readonly compactionSink?: SubagentCompactionSink | null;
+}
+
+/**
  * SubagentManager — manages the lifecycle of subagent runs.
  *
  * Spawn subagents, wait for their completion, cancel them, and query
@@ -318,7 +409,16 @@ export class SubagentManager {
   private _admission = new AdmissionController();
   private _runs = new SubagentRunRegistry();
   private _lifecycle = new SubagentLifecycle();
-  private _persistence = new SubagentPersistence(getTerminalRetention);
+  private readonly _persistence: SubagentPersistence;
+  /** Test-observable counter — see compactionPreparesEvaluated(). */
+  private _compactionPreparesEvaluated = 0;
+
+  constructor(options: SubagentManagerOptions = {}) {
+    this._persistence = new SubagentPersistence(
+      getTerminalRetention,
+      options.compactionSink === undefined ? createSubagentCompactionSink() : options.compactionSink,
+    );
+  }
 
   /**
    * Configure the stream runner. When set, spawn() starts a background run.
@@ -893,6 +993,11 @@ export class SubagentManager {
     return this._runs.isSettling(subagentId);
   }
 
+  /** Test-observable: number of fire-and-forget compaction prepare evaluations that settled (registered a pending or decided not to). */
+  compactionPreparesEvaluated(): number {
+    return this._compactionPreparesEvaluated;
+  }
+
   /**
    * Store a runtime-only pending question and unblock waiters.
    *
@@ -1099,6 +1204,8 @@ export class SubagentManager {
     this._admission.filterQueue((id) => this._subagents.has(id));
     this._persistence.clearSession(sessionId);
     this._liveProjection.clearSessionRevision(sessionId);
+    clearCompactionPendingsForSession(sessionId);
+    clearCompactionPausesForSession(sessionId);
     this._notify();
   }
 
@@ -1125,6 +1232,8 @@ export class SubagentManager {
     this._admission.filterQueue((id) => this._subagents.has(id));
     this._persistence.clearSession(sessionId);
     this._liveProjection.clearSessionRevision(sessionId);
+    clearCompactionPendingsForSession(sessionId);
+    clearCompactionPausesForSession(sessionId);
     if (records.length > 0) {
       this._admitFromQueue();
       this._notify();
@@ -1408,12 +1517,42 @@ export class SubagentManager {
     const priorUsage = record.usage ?? sumMessageUsages(record.chain?.messages ?? []);
     const assembler = new SubagentRunAssembler(record.chain?.messages ?? []);
 
+    // U5/U7: the runner's history is a mutable handoff the compaction
+    // controller swaps at pause boundaries; every compaction concern for this
+    // run (per-run trigger with the subagent's own model limits, the three
+    // fire points, the pause gate, the overflow retry) lives on the per-run
+    // SubagentCompactionController — the run loop below only wires its hooks.
+    const historyBox: SubagentHistoryBox = { messages: [...(record.chain?.messages ?? [])] };
+    const compaction = new SubagentCompactionController({
+      record,
+      runGeneration: run.generation,
+      abortSignal: abort.signal,
+      historyBox,
+      assembler,
+      emitProgress: (progress) => this._liveProjection.emitCompactionProgress(record.id, progress),
+      setChainMessages: (messages) => this._setChainMessages(record, messages),
+      applySubagentCompaction: (sessionId, payload) => {
+        this._persistence.applySubagentCompaction(record.id, sessionId, payload);
+      },
+      markCompaction: () => {
+        this._persistence.markCompaction(record.id, null);
+      },
+      markRecordDirty: () => this._markRecordDirty(record),
+      emptyChain: () => makeEmptyChain(record.sessionId ?? 'unknown', record.selection, record.agent),
+      onPrepareEvaluated: () => {
+        this._compactionPreparesEvaluated += 1;
+      },
+    });
+    compaction.startSpawnTimeGate();
+
     try {
       const stream = runner({
         task: record.task,
-        // Replay the full chain on a resume; a mutable snapshot keeps the
-        // runner's history independent of the assembler's message accumulator.
-        history: [...(record.chain?.messages ?? [])],
+        // Mutable history handoff (U5): the runner replays the box's messages
+        // for every stream segment; a compaction apply at a pause boundary
+        // swaps its contents so the restarted stream reads the compacted
+        // history.
+        historyBox,
         agent: record.agent,
         selection: record.selection,
         abortSignal: abort.signal,
@@ -1430,6 +1569,7 @@ export class SubagentManager {
           if (!this._runs.isCurrent(run)) return;
           record.reasoningEffort = effort;
         },
+        compaction: compaction.pauseController,
       });
 
       for await (const event of stream) {
@@ -1438,11 +1578,27 @@ export class SubagentManager {
           break;
         }
         if (!this._applyAssemblerEffects(record, run, assembler.accept(event))) return;
+        // U9/U5: subagent mid-run compaction — proactive prepare after usage
+        // (R29 fire point 2) arms the scoped pause; the runner consumes it at
+        // the next step boundary (R28) via the pause controller.
+        if (event.type === 'usage') {
+          await compaction.onUsageEvent(event.usage.prompt_tokens ?? event.usage.total_tokens ?? 0);
+        }
+        if (event.type === 'step_finish') {
+          compaction.onStepFinish(event.stepIndex);
+        }
       }
 
       if (!this._runs.isCurrent(run)) return;
       if (abort.signal.aborted || record.state === SubagentState.INTERRUPTED) {
         this._applyAssemblerFinalization(record, run, assembler.interrupt(), priorUsage);
+        return;
+      }
+      // If partial report was set via compaction degradation, complete with it as normal result
+      if (record.result?.includes('[Subagent partial report')) {
+        const partial = record.result;
+        const finalization = assembler.complete();
+        this._applyAssemblerFinalization(record, run, { ...finalization, result: partial }, priorUsage);
         return;
       }
       this._applyAssemblerFinalization(record, run, assembler.complete(), priorUsage);
@@ -1456,6 +1612,11 @@ export class SubagentManager {
       this._applyAssemblerFinalization(record, run, assembler.fail(message), priorUsage);
     } finally {
       if (this._runs.isCurrent(run)) {
+        // Interrupt or natural end: clear this run's scoped compaction gate
+        // and drop any pending it never consumed — the per-run trigger dies
+        // with the run, and the next run re-prepares via its own gates. A
+        // superseded generation (!isCurrent) keeps its replacement's state.
+        compaction.discard();
         if (record.state === SubagentState.INTERRUPTED) {
           this._finishLive(record, SubagentState.INTERRUPTED);
         }
@@ -1464,6 +1625,13 @@ export class SubagentManager {
           this._runs.remove(record.id);
           this._liveProjection.remove(record.id);
         }
+      } else {
+        // Superseded run: the scoped pause/pending state belongs to the
+        // replacement generation (discard above explains why it must NOT run
+        // here), but this generation's controller can still own a scheduled
+        // compaction progress timer — stop it and advance the terminal epoch
+        // so no stale throttled emission fires after the run was replaced.
+        compaction.silenceProgress();
       }
     }
   }

@@ -39,7 +39,8 @@ type ProjectTab =
   | 'rag'
   | 'skills'
   | 'agents'
-  | 'personalities';
+  | 'personalities'
+  | 'compaction';
 
 interface ProjectTabDef {
   id: ProjectTab;
@@ -52,6 +53,7 @@ const PROJECT_TABS: ProjectTabDef[] = [
   { id: 'mcp', label: 'MCP Servers' },
   { id: 'tiers', label: 'Tier Models' },
   { id: 'rag', label: 'RAG' },
+  { id: 'compaction', label: 'Compaction' },
   { id: 'skills', label: 'Skills' },
   { id: 'agents', label: 'Agents' },
   { id: 'personalities', label: 'Personalities' },
@@ -64,7 +66,8 @@ type ProjectFieldKind =
   | 'string-list'
   | 'boolean'
   | 'theme'
-  | 'personality';
+  | 'personality'
+  | 'select';
 
 interface ProjectFieldSpec {
   key: string;
@@ -74,12 +77,17 @@ interface ProjectFieldSpec {
   max?: number;
   step?: number;
   fullWidth?: boolean;
+  hint?: string;
+  options?: string[];
 }
 
 interface ProjectConfigSection {
   title: string;
   fields: ProjectFieldSpec[];
 }
+
+const COMPACTION_HYSTERESIS_HINT =
+  'Hysteresis prevents thrashing. After compaction, usage must drop below threshold - delta (re-arm line) before re-firing. Or, growth of min_compactable_tokens since post-compaction baseline re-arms even while above threshold. 0.1 = 10% buffer. Higher = less frequent.';
 
 const TAB_SECTIONS: Partial<Record<ProjectTab, ProjectConfigSection[]>> = {
   general: [
@@ -170,6 +178,34 @@ const TAB_SECTIONS: Partial<Record<ProjectTab, ProjectConfigSection[]>> = {
       ],
     },
   ],
+  compaction: [
+    {
+      title: 'Main Scope',
+      fields: [
+        { key: 'compaction.main.mode', label: 'Mode (main)', kind: 'select', options: ['simple', 'selective'] },
+        { key: 'compaction.main.threshold', label: 'Threshold (main)', kind: 'number', min: 0.1, max: 0.95, step: 0.05 },
+        { key: 'compaction.main.preserve_percent', label: 'Preserve Percent (main)', kind: 'number', min: 0.05, max: 0.9, step: 0.05, hint: 'Fraction of current context usage kept verbatim (clamped to the window).' },
+        { key: 'compaction.main.min_compactable_tokens', label: 'Min Compactable Tokens (main)', kind: 'integer', min: 0, max: 1_000_000 },
+        { key: 'compaction.main.mechanical_reclaim', label: 'Mechanical Reclaim (main)', kind: 'boolean' },
+        { key: 'compaction.main.hysteresis_delta', label: 'Hysteresis Delta (main)', kind: 'number', min: 0, max: 0.5, step: 0.05, hint: COMPACTION_HYSTERESIS_HINT },
+        { key: 'compaction.main.keep_last_user_messages', label: 'Keep Last User Messages (main)', kind: 'integer', min: 1, max: 1000, hint: 'Empty = all user messages pinned.' },
+        { key: 'compaction.main.pin_first_user_message', label: 'Pin First User Message (main)', kind: 'boolean' },
+      ],
+    },
+    {
+      title: 'Subagents Scope',
+      fields: [
+        { key: 'compaction.subagents.mode', label: 'Mode (subagents)', kind: 'select', options: ['simple', 'selective'] },
+        { key: 'compaction.subagents.threshold', label: 'Threshold (subagents)', kind: 'number', min: 0.1, max: 0.95, step: 0.05 },
+        { key: 'compaction.subagents.preserve_percent', label: 'Preserve Percent (subagents)', kind: 'number', min: 0.05, max: 0.9, step: 0.05, hint: 'Fraction of current context usage kept verbatim (clamped to the window).' },
+        { key: 'compaction.subagents.min_compactable_tokens', label: 'Min Compactable Tokens (subagents)', kind: 'integer', min: 0, max: 1_000_000 },
+        { key: 'compaction.subagents.mechanical_reclaim', label: 'Mechanical Reclaim (subagents)', kind: 'boolean' },
+        { key: 'compaction.subagents.hysteresis_delta', label: 'Hysteresis Delta (subagents)', kind: 'number', min: 0, max: 0.5, step: 0.05, hint: COMPACTION_HYSTERESIS_HINT },
+        { key: 'compaction.subagents.keep_last_user_messages', label: 'Keep Last User Messages (subagents)', kind: 'integer', min: 1, max: 1000, hint: 'Empty = all user messages pinned (R32).' },
+        { key: 'compaction.subagents.pin_first_user_message', label: 'Pin First User Message (subagents)', kind: 'boolean' },
+      ],
+    },
+  ],
 };
 
 const ALL_FIELD_KEYS = Object.values(TAB_SECTIONS).flatMap((sections) => (
@@ -181,8 +217,20 @@ export function isPlainRecord(value: unknown): value is Record<string, unknown> 
   return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
 
-/** Read a stored project override by field key, resolving `rag.*` into the nested RAG map. */
+/** Read a stored project override by field key, resolving `rag.*` and `compaction.*` into nested maps. */
 export function readStoredOverride(overrides: Record<string, unknown>, key: string): unknown {
+  if (key === 'compaction') {
+    return overrides['compaction'];
+  }
+  if (key.startsWith('compaction.')) {
+    const parts = key.slice('compaction.'.length).split('.');
+    let cur: unknown = overrides['compaction'];
+    for (const part of parts) {
+      if (!isPlainRecord(cur)) return undefined;
+      cur = (cur as Record<string, unknown>)[part];
+    }
+    return cur;
+  }
   if (key.startsWith('rag.')) {
     const rag = overrides['rag'];
     return isPlainRecord(rag) ? rag[key.slice(4)] : undefined;
@@ -190,9 +238,21 @@ export function readStoredOverride(overrides: Record<string, unknown>, key: stri
   return overrides[key];
 }
 
-/** Read a value from the global (home) config by field key, resolving `rag.*` into the nested RAG map. */
+/** Read a value from the global (home) config by field key, resolving `rag.*` and `compaction.*` into nested maps. */
 export function readGlobalValue(config: Config | null, key: string): unknown {
   if (!config) return undefined;
+  if (key === 'compaction') {
+    return (config as unknown as Record<string, unknown>)['compaction'];
+  }
+  if (key.startsWith('compaction.')) {
+    const parts = key.slice('compaction.'.length).split('.');
+    let cur: unknown = (config as unknown as Record<string, unknown>)['compaction'];
+    for (const part of parts) {
+      if (cur == null || typeof cur !== 'object') return undefined;
+      cur = (cur as Record<string, unknown>)[part];
+    }
+    return cur;
+  }
   if (key.startsWith('rag.')) {
     return config.rag[key.slice(4) as keyof RAGConfig];
   }
@@ -361,6 +421,7 @@ export function ProjectConfigView({ projectDir, onNewChat, onClose }: ProjectCon
         case 'text':
         case 'theme':
         case 'personality':
+        case 'select':
           return { ...previous, [field.key]: trimmed };
         case 'boolean':
           return { ...previous, [field.key]: trimmed === 'true' };
@@ -372,7 +433,10 @@ export function ProjectConfigView({ projectDir, onNewChat, onClose }: ProjectCon
           const num = parseConfigNumber(
             trimmed,
             field.min ?? 0,
-            field.kind === 'integer' ? { integer: true } : undefined,
+            {
+              ...(field.kind === 'integer' ? { integer: true } : {}),
+              ...(field.max !== undefined ? { max: field.max } : {}),
+            },
           );
           if (num === null) return previous;
           return { ...previous, [field.key]: num };
@@ -423,13 +487,28 @@ export function ProjectConfigView({ projectDir, onNewChat, onClose }: ProjectCon
     try {
       const updates: Record<string, unknown> = {};
       const ragUpdates: Record<string, unknown> = {};
+      const compactionUpdates: Record<string, Record<string, unknown>> = {};
       for (const [key, value] of Object.entries(draft)) {
         const stored = readStoredOverride(overrides, key);
         if ((value ?? undefined) === (stored ?? undefined)) continue;
         if (key.startsWith('rag.')) ragUpdates[key.slice(4)] = value;
+        else if (key.startsWith('compaction.')) {
+          const remainder = key.slice('compaction.'.length);
+          const parts = remainder.split('.');
+          if (parts.length === 2) {
+            const [scope, field] = parts;
+            if (!compactionUpdates[scope]) compactionUpdates[scope] = {};
+            compactionUpdates[scope][field] = value;
+          } else if (parts.length === 1) {
+            // shallow compaction key (unlikely with current fields) — treat as direct nested key
+            if (!compactionUpdates[parts[0]]) compactionUpdates[parts[0]] = {};
+            // no field, skip; top-level compaction overrides are not field-level
+          }
+        }
         else updates[key] = value;
       }
       if (Object.keys(ragUpdates).length > 0) updates['rag'] = ragUpdates;
+      if (Object.keys(compactionUpdates).length > 0) updates['compaction'] = compactionUpdates;
 
       const permissionUpdates: Record<string, PermissionRule | null> = {};
       for (const [key, value] of Object.entries(permissionDraft)) {
@@ -476,9 +555,24 @@ export function ProjectConfigView({ projectDir, onNewChat, onClose }: ProjectCon
     activeTab === 'general' ||
     activeTab === 'permissions' ||
     activeTab === 'mcp' ||
-    activeTab === 'rag';
+    activeTab === 'rag' ||
+    activeTab === 'compaction';
 
   const renderSelectOptions = (field: ProjectFieldSpec, homeValue: unknown) => {
+    if (field.kind === 'select') {
+      const opts = field.options ?? [];
+      const homeLabel = toPlaceholder(homeValue);
+      return (
+        <>
+          <option value="">{homeLabel ? `Inherit global (${homeLabel})` : 'Inherit global'}</option>
+          {opts.map((opt) => (
+            <option key={opt} value={opt}>
+              {opt}
+            </option>
+          ))}
+        </>
+      );
+    }
     if (field.kind === 'theme') {
       const homeLabel =
         typeof homeValue === 'string' && homeValue in THEMES
@@ -523,12 +617,16 @@ export function ProjectConfigView({ projectDir, onNewChat, onClose }: ProjectCon
     const homeValue = readGlobalValue(homeConfig, field.key);
     const inputId = fieldInputId(field.key);
     const isSelect =
-      field.kind === 'boolean' || field.kind === 'theme' || field.kind === 'personality';
+      field.kind === 'boolean' ||
+      field.kind === 'theme' ||
+      field.kind === 'personality' ||
+      field.kind === 'select';
     return (
       <FormField
         key={field.key}
         label={field.label}
         htmlFor={inputId}
+        hint={field.hint}
         className={`config-field${field.fullWidth ? ' config-form-grid-full' : ''}`}
       >
         <div className="flex items-center gap-1.5">
@@ -597,6 +695,7 @@ export function ProjectConfigView({ projectDir, onNewChat, onClose }: ProjectCon
       case 'general':
       case 'mcp':
       case 'rag':
+      case 'compaction':
         return renderConfigTab(activeTab);
       case 'permissions':
         if (!permissionConfig) {

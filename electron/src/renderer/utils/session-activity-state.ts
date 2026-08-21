@@ -1,4 +1,5 @@
 import type { SessionActivity } from '../../shared/types/ipc-boundary';
+import { compareSessionActivity } from '../../shared/utils/session-activity-order';
 import { sessionActivityPresentation } from './session-activity-presentation';
 
 export type SessionActivityMap = ReadonlyMap<string, SessionActivity>;
@@ -66,22 +67,15 @@ export function reconcileSessionActivitySnapshot(
   return next;
 }
 
-/** Visible activities ordered by urgency and recency. */
+/**
+ * Visible activities in the one shared ordering (`compareSessionActivity`),
+ * also used by `SessionActivityStore.list()`: state urgency first, then
+ * turn-start stability for active rows, unread-first, and recency.
+ */
 export function orderedSessionActivities(
   current: SessionActivityMap,
 ): SessionActivity[] {
-  const priority: Record<SessionActivity['state'], number> = {
-    needs_attention: 0,
-    working: 1,
-    waiting: 2,
-    idle: 3,
-  };
   return [...current.values()]
     .filter((activity) => sessionActivityPresentation(activity).visible)
-    .sort((a, b) => {
-      const statePriority = priority[a.state] - priority[b.state];
-      if (statePriority !== 0) return statePriority;
-      if (a.unread !== b.unread) return a.unread ? -1 : 1;
-      return b.updatedAt - a.updatedAt;
-    });
+    .sort(compareSessionActivity);
 }

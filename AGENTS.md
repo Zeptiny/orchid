@@ -47,6 +47,8 @@ electron/
 │   │   │   ├── admission.ts     # Global/per-session admission limits + queue
 │   │   │   ├── errors.ts        # Subagent error taxonomy
 │   │   │   ├── types.ts         # Shared subagent types
+│   │   │   ├── subagent-compaction.ts     # Subagent compaction prepare/apply + pause contracts
+│   │   │   ├── subagent-compaction-controller.ts # Per-run compaction controller (gates, pause, overflow retry)
 │   │   │   ├── subagent-runner.ts         # Run subagent turns against project runtime
 │   │   │   ├── subagent-run.ts            # Single run lifecycle
 │   │   │   ├── subagent-run-assembler.ts  # Assemble run context (prompt, tools, model)
@@ -96,6 +98,17 @@ electron/
 │   │   │   ├── eager-tool-executor.ts # EagerToolExecutor — start tools as their input streams
 │   │   │   ├── tool-pool.ts     # Tool worker pool singleton (offloadable read-only tools)
 │   │   │   ├── terminal-result.ts # Canonical error/cancelled tool results without a handler
+│   │   │   ├── compaction/      # Session/subagent compaction engine (shared by both scopes)
+│   │   │   │   ├── pipeline.ts  # Scope-parameterized gate pipeline
+│   │   │   │   ├── pending-store.ts # Scope-keyed pending compactions + re-validation
+│   │   │   │   ├── apply.ts     # buildCompactionApply/buildSelectiveCompactionApply (never-delete settle)
+│   │   │   │   ├── message-chars.ts # Char estimation shared by gates/estimates
+│   │   │   │   ├── reclaim.ts   # Mechanical reclaim estimates + re-arm line
+│   │   │   │   ├── run-attempt.ts # Selective run orchestration (shared by both scopes)
+│   │   │   │   ├── select.ts    # Cut selection (compactable range, preserved window)
+│   │   │   │   ├── summarize.ts # Simple-mode summarizer LLM call
+│   │   │   │   ├── trigger.ts   # Threshold/hysteresis/floor + prepare/apply trigger engine
+│   │   │   │   └── selective/   # Selective mode (manifest, run loop, validation)
 │   │   │   └── middleware/      # AI SDK middleware stack
 │   │   │       ├── index.ts     # createMiddlewareStack() — retry (+accounting) + throttle
 │   │   │       ├── retry.ts     # Exponential backoff retry
@@ -118,13 +131,17 @@ electron/
 │   │   │   ├── status/          # Provider status cache/service
 │   │   │   └── accounting/      # SQLite attempt ledger + cost + analytics queries
 │   │   │       ├── store.ts     # provider_attempts insert/finalize (fail-closed singleton)
-│   │   │       ├── schema.ts    # Ledger tables (attempts, tool attempts, context snapshots, attribution)
+│   │   │       ├── schema.ts    # Ledger tables (attempts, tool attempts, context snapshots, attribution, session-name tombstones)
 │   │   │       ├── cost.ts      # Cost calculation (reported header → token/energy formula)
 │   │   │       ├── middleware.ts # Attempt accounting middleware (between retry and throttle)
 │   │   │       ├── tool-attempt-store.ts # Tool invocation telemetry
 │   │   │       ├── subagent-attribution-store.ts # Subagent chain attribution
 │   │   │       ├── context-snapshot-store.ts # Per-turn context window snapshots
-│   │   │       └── analytics-queries.ts # Read-model queries backing the Analytics view
+│   │   │       ├── analytics-queries.ts # Aggregate read-model queries + detail-query re-exports
+│   │   │       ├── analytics-detail-queries.ts # Model/subagent/context drill-down queries
+│   │   │       ├── analytics-query-shared.ts # Shared plumbing: filters, Decimal/cost, latency, name resolution
+│   │   │       ├── analytics-query-runner.ts # Worker-pool dispatch with inline fallback
+│   │   │       └── analytics-worker.ts # Worker thread running queries off the main process
 │   │   ├── tools/               # Tool registry and built-in tools
 │   │   │   ├── index.ts         # registerBuiltinTools() — singleton registry setup
 │   │   │   ├── registry.ts      # ToolRegistry class — register/filter/validate/toJsonSchema
@@ -159,6 +176,7 @@ electron/
 │   │   │   │   ├── snapshot.ts  # Live chat snapshot builder
 │   │   │   │   ├── persist.ts   # Debounced checkpoints + turn persistence
 │   │   │   │   ├── abort.ts     # Force-abort / dispose paths
+│   │   │   │   ├── compaction.ts # Main-session compaction engine — trigger/pending/retry state, send-time + mid-turn compaction seams
 │   │   │   │   ├── session.ts   # ensureActiveSession (workspace resolve + trust gate)
 │   │   │   │   └── title.ts     # Auto-naming via internal session-namer
 │   │   │   ├── next-request-stop.ts # Stop the next request at the next step boundary
@@ -296,6 +314,7 @@ electron/
 │   │   │   ├── useLiveCommandOutput.ts # Foreground/background command output streaming
 │   │   │   ├── useSmartAutoScroll.ts # Viewport pinning with scroll-away suspension
 │   │   │   ├── use-responsive-shell.ts # Panel collapse state by width
+│   │   │   ├── useTrustSendReplay.ts # Trust-gated send stash + grant replay / decline restore
 │   │   │   └── useTrustPrompt.ts / useTimeRange.ts
 │   │   ├── keyboard/            # Shortcut subsystem
 │   │   │   ├── registry.ts      # SHORTCUTS source of truth + formatting helpers
@@ -347,6 +366,7 @@ electron/
 │       │   ├── provider.ts      # ModelSelection + provider connection types
 │       │   ├── accounting.ts    # Attempt ledger types
 │       │   ├── analytics.ts     # Analytics read-model types
+│       │   ├── compaction-progress.ts # Compaction widget progress event types
 │       │   └── definitions.ts   # Definition (agent/skill/personality) types
 │       ├── chat/
 │       │   └── turn-projection.ts # Pure reducer: IPC turn events → renderer projection
@@ -357,7 +377,8 @@ electron/
 │       ├── commands.ts          # Shared command types + fuzzy-match utilities (definitions live in renderer)
 │       ├── usage.ts             # Usage accounting helpers
 │       └── utils/
-│           └── frontmatter.ts   # YAML frontmatter parser for agent/skill files
+│           ├── frontmatter.ts   # YAML frontmatter parser for agent/skill files
+│           └── session-activity-order.ts # Shared session-activity comparator (IPC snapshot / live broadcast order parity)
 ├── tests/
 ├── scripts/
 ├── package.json
@@ -548,7 +569,7 @@ Applied via `wrapLanguageModel()`:
 ### Accounting & Analytics
 - **Ledger** (`providers/accounting/`): SQLite `~/.orchid/accounting.db` — `provider_attempts`, `tool_attempts`, `context_snapshots`, `subagent_attribution`. Each attempt freezes a `FrozenProviderRequestSnapshot` (provider/connection/model/pricing) and records outcome (`pending|succeeded|failed|interrupted`) + normalized usage; `insertPending()` before I/O, idempotent `finalize()`, crash recovery for pendings.
 - **Cost** (`cost.ts`): prefers the `x-request-cost-usd` response header (`provider-reported`), else token/energy formulas from frozen pricing (`Decimal.js`); `unknown` when ambiguous. Billing estimates never influence recorded cost.
-- **Analytics IPC** (`ipc/analytics.ts`): `analytics:overview`, `analytics:sessions`, `analytics:session_detail`, `analytics:models`, `analytics:tools`, `analytics:subagents`, `analytics:context` — all accept an optional Zod-validated `{startDate?, endDate?}` time range; queries in `analytics-queries.ts`.
+- **Analytics IPC** (`ipc/analytics.ts`): `analytics:overview`, `analytics:sessions`, `analytics:session_detail`, `analytics:models`, `analytics:tools`, `analytics:subagents`, `analytics:context`, `analytics:model_detail`, `analytics:subagent_detail`, `analytics:context_session_detail`, `analytics:context_sessions` — all accept an optional Zod-validated `{startDate?, endDate?}` time range; queries in `analytics-queries.ts` (sessions also accepts `limit`/`offset` for pagination).
 - **Renderer**: `AnalyticsView.tsx` with tabs Overview (totals + time series + breakdowns), Sessions (per-session aggregates + detail), Models & Providers, Tools (invocations/durations/offload rate), Subagents (by name/type/tier), Context (token breakdown + top sessions). `TimeRangeSelector` provides preset + custom ranges (`useTimeRange`).
 
 ### RAG Pipeline
@@ -595,6 +616,9 @@ Defined in `src/main/config/schema.ts` — single source of truth (strict schema
 | `tool_worker_pool_main_agent_reserved` | 1 | Worker slots reserved for main-agent tools so background subagents cannot starve the visible agent; configured 0 floors to 1, pool clamps to `[0, tool_worker_pool_size - 1]` |
 | `theme` | `default` | UI theme name |
 | `personality` | `default` | Agent personality preset |
+| `compaction.main.keep_last_user_messages` | `10` | Last K user messages kept in the model view across compaction |
+| `compaction.subagents.keep_last_user_messages` | `null` | Subagent variant; `null` = ALL user messages stay pinned in the model view |
+| `compaction.main.pin_first_user_message` / `compaction.subagents.pin_first_user_message` | `true` | The first user message is always pinned through compaction |
 | `rag.chunk_size` | 2000 | RAG chunk size |
 | `rag.chunk_overlap` | 200 | RAG overlap |
 | `rag.top_k` | 5 | RAG result count |
@@ -674,6 +698,7 @@ Defined in `src/main/config/schema.ts` — single source of truth (strict schema
 - **No barrel imports** for deeply nested modules — prefer direct imports
 - **Zod validation** at all IPC boundaries (preload → main)
 - **ESM dynamic imports** in main process: `importESM()` wrapper for `ai` package (ESM-only in CJS context)
+- **Dynamic imports from `agents/`**: modules under `src/main/agents/` must `await import(...)` — never import statically — the compaction/accounting leaves they invoke at call time: `llm/compaction/summarize`, `llm/compaction/run-attempt`, `llm/compaction/trigger`, and `providers/accounting/*`. The store/provider chains capture `config/loader` state (e.g. `HOME_CONFIG_DIR`) at module scope, which defeats the `vi.mock('config/loader')` seams unit tests rely on — the pitfall documented in `docs/solutions/design-flaws/compaction-null-window-chars4-and-chain-preserve.md`. `getConfig()` itself is safe to import statically; it is the provider/accounting graphs that must stay lazy.
 
 ### React
 - **Functional components** only (no class components)

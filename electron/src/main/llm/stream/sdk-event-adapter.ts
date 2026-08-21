@@ -72,6 +72,37 @@ export interface SdkEventAdapterOptions {
   ) => Usage;
 }
 
+/**
+ * Re-attach compaction summary markers onto a step request's messages.
+ *
+ * The step request echoes the orchestrator's core messages, but the SDK may
+ * copy/rebuild them — dropping the `compacted` annotation the context
+ * snapshot needs to bucket summary tokens (R19). A request's leading entries
+ * correspond 1:1 to the core messages (the SDK only appends step responses),
+ * so markers are restored positionally while roles still line up; the merge
+ * stops at the first divergence and is a no-op when markers already survived.
+ */
+function withCompactedMarkers(
+  requestMessages: readonly ModelMessage[],
+  coreMessages: readonly (ModelMessage & { compacted?: unknown })[],
+): readonly ModelMessage[] {
+  let patched: (ModelMessage & { compacted?: unknown })[] | null = null;
+  const limit = Math.min(requestMessages.length, coreMessages.length);
+  for (let index = 0; index < limit; index += 1) {
+    const core = coreMessages[index];
+    const target = requestMessages[index] as (ModelMessage & { compacted?: unknown }) | undefined;
+    // Roles must line up before any marker is considered — including for
+    // unmarked entries — so a divergence always stops the merge and later
+    // markers can never be copied onto mismatched request messages.
+    if (!target || target.role !== core?.role) break;
+    const marker = core?.compacted;
+    if (!marker || target.compacted) continue;
+    if (!patched) patched = [...requestMessages] as (ModelMessage & { compacted?: unknown })[];
+    patched[index] = { ...target, compacted: marker };
+  }
+  return patched ?? requestMessages;
+}
+
 interface PendingReasoningSequence {
   text: string;
   payload: ThinkingReplayPayload | undefined;
@@ -97,7 +128,12 @@ export class SdkEventAdapter {
     switch (String(part.type ?? '')) {
       case 'start-step': {
         const request = part.request as { messages?: readonly ModelMessage[] } | undefined;
-        this.currentStepMessages = request?.messages ?? this.options.coreMessages;
+        this.currentStepMessages = request?.messages
+          ? withCompactedMarkers(
+              request.messages,
+              this.options.coreMessages as readonly (ModelMessage & { compacted?: unknown })[],
+            )
+          : this.options.coreMessages;
         this.reasoningParts.clear();
         this.stepChars = emptyReasoningChars();
         break;

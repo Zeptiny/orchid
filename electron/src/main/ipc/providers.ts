@@ -492,7 +492,8 @@ interface StaticConnectionCheck {
   readonly orphanedModelIds: readonly string[];
 }
 
-function requireStaticConnectionSupport(
+/** Shared static gate for persisted and draft connections alike. */
+export function requireStaticConnectionSupport(
   connection: ProviderConnection,
   current = services(),
 ): StaticConnectionCheck {
@@ -708,12 +709,16 @@ async function stopProviderConnectionTurns(
 
 // ── Live model discovery ────────────────────────────────────────────────────
 
-/** Resolve the request credential for one discovery fetch; undefined when unusable. */
+/**
+ * Resolve the request credential for one discovery fetch. `none`-auth
+ * connections fetch unauthenticated (local compatible endpoints commonly serve
+ * /models without auth); undefined means no usable credential right now.
+ */
 export async function discoveryCredential(
   connection: ProviderConnection,
   current: ProviderIPCServices,
 ): Promise<DriverCredential | undefined> {
-  if (connection.authMethod === 'none') return undefined;
+  if (connection.authMethod === 'none') return { kind: 'none' };
   if (connection.credential.kind === 'environment') {
     const apiKey = process.env[connection.credential.variable];
     return apiKey ? { kind: 'api-key', apiKey } : undefined;

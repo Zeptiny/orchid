@@ -26,6 +26,7 @@ import { useMessageQueue } from '../hooks/useMessageQueue';
 import { useQueueAutoFire } from '../hooks/useQueueAutoFire';
 import { useResponsiveShell } from '../hooks/use-responsive-shell';
 import { useTrustPrompt } from '../hooks/useTrustPrompt';
+import { useTrustSendReplay, type UseTrustSendReplayReturn } from '../hooks/useTrustSendReplay';
 import {
   providerModelOptionDisplayName,
   providerModelOptionKey,
@@ -90,6 +91,15 @@ export function ChatView({ isVisible = true, bootstrapConfig = null, onNotify, a
   const workspaceCwdRef = useRef(workspaceCwd);
   workspaceCwdRef.current = workspaceCwd;
   const subagents = useSubagents(session.activeSession?.id ?? null);
+  /**
+   * Esc keeps the third interrupt layer reachable while the session owns
+   * queued/running subagents, even when no main-agent turn is live (#145).
+   * Memoized on the group arrays' contents so the composer prop stays stable.
+   */
+  const hasRunningSubagents = useMemo(
+    () => subagents.groups.running.length > 0 || subagents.groups.queued.length > 0,
+    [subagents.groups.running, subagents.groups.queued],
+  );
   const todos = useTodos(
     session.activeSession?.id ?? null,
     session.activeSession?.todoStore.tasks ?? null,
@@ -188,13 +198,26 @@ export function ChatView({ isVisible = true, bootstrapConfig = null, onNotify, a
 
   // Trusted-projects prompt: explicit interactions (bind result, send failure,
   // badge click) call openFor; granting re-resolves workspace + gated services.
+  // useTrustSendReplay owns the #148 stash/replay/restore flow for gated sends
+  // (the ref bridges onGranted to the hook declared just below it).
+  const trustSendRef = useRef<UseTrustSendReplayReturn | null>(null);
   const trustPrompt = useTrustPrompt({
     onGranted: () => {
       void session.getWorkspace();
       void refreshMCP();
       void refreshIndex();
+      // Replay the trust-gated send (if any).
+      trustSendRef.current?.onGranted();
     },
   });
+  const trustSend = useTrustSendReplay({
+    openFor: trustPrompt.openFor,
+    decline: trustPrompt.decline,
+    restoreBatch: messageQueue.restoreBatch,
+    cwd: workspaceCwd,
+    activeSessionId: session.activeSession?.id ?? null,
+  });
+  trustSendRef.current = trustSend;
 
   const sessionUsage = useMemo(() => {
     const usages = session.activeSession?.chains.map(sumChainUsage) ?? [];
@@ -216,10 +239,7 @@ export function ChatView({ isVisible = true, bootstrapConfig = null, onNotify, a
   const chat = useChat(session.activeSession?.id ?? null, {
     persistedSessionUsage: sessionUsage.total,
     latestPersistedUsage: sessionUsage.latest,
-    onUntrustedProject: () => {
-      const cwd = session.workspace?.cwd ?? session.activeSession?.cwd;
-      if (cwd) trustPrompt.openFor(cwd);
-    },
+    onUntrustedProject: trustSend.onUntrustedProject,
   });
 
   useEffect(() => {
@@ -374,6 +394,23 @@ export function ChatView({ isVisible = true, bootstrapConfig = null, onNotify, a
     }
     return () => { cancelled = true; };
   }, [paletteOpen]);
+
+  // Compaction rewrites the durable chains while the live tail still holds
+  // every pre-compaction segment/tool. Without a reset those re-render below
+  // the compacted stub + summary (flagged content un-hidden, duplicated, and
+  // after the turn ends stranded below the chain footer) until the session is
+  // re-entered. Reset as soon as the rewrite lands; preserved content
+  // re-renders from the chains the compaction reload brings in.
+  const activeSessionIdRef = useRef(session.activeSession?.id ?? null);
+  activeSessionIdRef.current = session.activeSession?.id ?? null;
+  useEffect(() => {
+    const unsubscribe = window.orchid?.session?.onCompaction?.((event) => {
+      if (event.sessionId && event.sessionId === activeSessionIdRef.current) {
+        chat.resetLiveTail();
+      }
+    });
+    return () => unsubscribe?.();
+  }, [chat.resetLiveTail]);
 
   const applySessionMessages = useCallback(
     (loadedSession: Session | null) => {
@@ -628,6 +665,36 @@ export function ChatView({ isVisible = true, bootstrapConfig = null, onNotify, a
     [session, messageQueue.clearQueue],
   );
 
+  // Project delete removes every session in the group. Sequential so each
+  // delete's working-set snapshot reflects the previous one; one failure must
+  // not abort the rest.
+  const handleProjectDelete = useCallback(
+    async (project: { label: string; sessionIds: readonly string[] }) => {
+      if (project.sessionIds.includes(session.activeSession?.id ?? '')) {
+        messageQueue.clearQueue();
+      }
+      let failures = 0;
+      let lastError: unknown = null;
+      for (const id of project.sessionIds) {
+        try {
+          await session.deleteSession(id);
+        } catch (err) {
+          failures += 1;
+          lastError = err;
+          console.error(`Project delete failed for session ${id}:`, err);
+        }
+      }
+      if (failures > 0) {
+        const reason = lastError instanceof Error ? ` (${lastError.message})` : '';
+        notify(
+          `Deleted ${project.sessionIds.length - failures} of ${project.sessionIds.length} sessions in ${project.label}; ${failures} failed${reason}.`,
+          'error',
+        );
+      }
+    },
+    [session, messageQueue.clearQueue, notify],
+  );
+
   const handleSessionRename = useCallback(
     async (id: string, name: string) => {
       try {
@@ -798,6 +865,9 @@ export function ChatView({ isVisible = true, bootstrapConfig = null, onNotify, a
     ],
   );
 
+  // Late-bind handleSend for the trust-grant replay (declared above via ref).
+  trustSend.sendRef.current = handleSend;
+
   const handleRetry = useCallback(async () => {
     // Re-send the last user message after an error
     const lastUser = [...chat.messages]
@@ -824,7 +894,7 @@ export function ChatView({ isVisible = true, bootstrapConfig = null, onNotify, a
   useQueueAutoFire(
     chat.status,
     messageQueue.consumeNext,
-    messageQueue.restoreBatch,
+    trustSend.restoreQueueBatch,
     messageQueue.editingId,
     handleSend,
   );
@@ -978,6 +1048,25 @@ export function ChatView({ isVisible = true, bootstrapConfig = null, onNotify, a
     }
   }, [refreshIndex]);
 
+  // /compact — user-initiated compaction of the active session. Main refuses
+  // while a turn is streaming; the status maps to a toast and the renderer
+  // reloads the session on SESSION_COMPACTION like an automatic compaction.
+  const handleCompact = useCallback(async () => {
+    if (!window.orchid?.chat?.compact) {
+      throw new Error('Compaction IPC is not available');
+    }
+    const result = await window.orchid.chat.compact();
+    if (result.status === 'compacted') {
+      notify('Context compacted.', 'info');
+    } else if (result.status === 'busy') {
+      notify('Session is busy — compact after the current turn finishes.', 'warning');
+    } else if (result.status === 'nothing_to_compact') {
+      notify(result.detail ? `Nothing to compact (${result.detail}).` : 'Nothing to compact.', 'info');
+    } else if (result.status === 'error') {
+      throw new Error(result.error);
+    }
+  }, [notify]);
+
   useInspectorHydration({
     enabled: sidebarOpen,
     workspaceKey: workspaceCwd,
@@ -1047,6 +1136,7 @@ export function ChatView({ isVisible = true, bootstrapConfig = null, onNotify, a
     onPickProjectDir: handlePickProjectDir,
     onIndexRAG: handleIndexRAG,
     onIndexAST: handleIndexAST,
+    onCompact: handleCompact,
     onClearRAG: async () => {
       try {
         if (window.orchid?.rag?.clear) {
@@ -1072,6 +1162,7 @@ export function ChatView({ isVisible = true, bootstrapConfig = null, onNotify, a
     handlePickProjectDir,
     handleIndexRAG,
     handleIndexAST,
+    handleCompact,
     refreshIndex,
     notify,
   ]);
@@ -1118,6 +1209,7 @@ export function ChatView({ isVisible = true, bootstrapConfig = null, onNotify, a
         onSessionCreate={handleSessionCreateClick}
         onProjectSessionCreate={handleProjectSessionCreateClick}
         onProjectSelect={handleProjectSelect}
+        onProjectDelete={handleProjectDelete}
         onSessionDelete={handleSessionDelete}
         onSessionDeleteError={handleSessionDeleteError}
         deletingSessionIds={session.pendingDeleteIds}
@@ -1230,6 +1322,7 @@ export function ChatView({ isVisible = true, bootstrapConfig = null, onNotify, a
         <DeferredSurface isVisible={chatSurfaceVisible}>
           <ChatStream
             isVisible={chatSurfaceVisible}
+            key={session.activeSession?.id ?? 'draft'}
             messages={chat.messages}
             streamingContent={chat.streamingContent}
             toolBlocks={chat.toolBlocks}
@@ -1252,6 +1345,7 @@ export function ChatView({ isVisible = true, bootstrapConfig = null, onNotify, a
             interrupted={chat.interrupted}
             alwaysExpandToolGroups={alwaysExpandToolGroups}
             onLoadHistoryPage={handleLoadHistoryPage}
+            compactionProgress={chat.compactionProgress}
           />
         </DeferredSurface>
         <MessageQueue
@@ -1287,6 +1381,8 @@ export function ChatView({ isVisible = true, bootstrapConfig = null, onNotify, a
           onOpenProviders={handleOpenProviders}
           onPickProjectDir={handlePickProjectDirClick}
           isViewActive={!isVisible || contentMode === 'subagents'}
+          hasRunningSubagents={hasRunningSubagents}
+          draftRestore={trustSend.draftRestore}
         />
         <DeferredSurface isVisible={isVisible}>
           <Footer
@@ -1386,7 +1482,7 @@ export function ChatView({ isVisible = true, bootstrapConfig = null, onNotify, a
         busy={trustPrompt.busy}
         error={trustPrompt.error}
         onGrant={() => void trustPrompt.grant()}
-        onDecline={trustPrompt.decline}
+        onDecline={trustSend.onDecline}
       />
     </div>
   );

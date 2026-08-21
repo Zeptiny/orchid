@@ -1,0 +1,928 @@
+/**
+ * Per-run subagent compaction controller (U7) — owns everything compaction
+ * that previously lived as closures inside SubagentManager._startRun.
+ *
+ * One controller per run generation carries:
+ *  - the per-run trigger with the subagent's own model limits (R16), lazily
+ *    resolved so the run start is not blocked by an extra provider lookup;
+ *  - the three fire points: spawn/resume estimate gate (R29 #1), usage-event
+ *    prepare (R29 #2), and the reactive overflow retry (R29 #3 / R30);
+ *  - the pause-gate choreography (R28/R37): re-validate the pending cut
+ *    against the live history, apply over it, persist transactionally (R36),
+ *    swap the history box the runner restarts from;
+ *  - the terminal still-over partial-report degradation (R17).
+ *
+ * The manager constructs it with narrow sinks (record chain swap, persistence
+ * transaction, live-projection emitter, assembler rebaser) and the structural
+ * `CompactionRunRecord` slice of its runtime record, so the run loop itself
+ * keeps no compaction logic. Nothing here may import from ../tools or
+ * ./manager — value dependencies arrive via constructor injection. This keeps
+ * the manager -> runner -> tools cycle-free module graph documented in
+ * subagent-compaction.ts intact.
+ */
+import type { Chain } from '../../shared/types/chain';
+import type { Message } from '../../shared/types/message';
+import type { CompactionScopeConfig } from '../../shared/types/ipc-boundary';
+import { getConfig } from '../config/loader';
+import type { Config } from '../config/schema';
+import type { ApplyResult } from '../llm/compaction/apply';
+import { estimateMessageChars, totalCharsForMessages } from '../llm/compaction/message-chars';
+import { calibratedCut, charsForMessageIds, deriveTokensPerChar, runCompactionGate } from '../llm/compaction/pipeline';
+import { resolveUserExemptIds } from '../llm/compaction/select';
+import {
+  dedupeHistoryById,
+  deleteCompactionPending,
+  getCompactionPending,
+  isPendingCutStillValid,
+  setCompactionPending,
+  takeCompactionPending,
+  type CompactionPendingEntry,
+} from '../llm/compaction/pending-store';
+import type { CompactionTrigger } from '../llm/compaction/trigger';
+import type { SubagentCompactionPayload } from '../session/storage';
+import {
+  clearCompactionPause,
+  requestCompactionPause,
+  shouldPauseForCompaction,
+} from '../ipc/next-request-stop';
+import {
+  applySubagentPendingCompaction,
+  buildSubagentPartialReport,
+  prepareSubagentCompaction,
+  raceAbortDuring,
+  resolveSubagentContextTokens,
+  type CompactionRunRecord,
+  type SubagentCompactionPauseController,
+  type SubagentCompactionProgress,
+  type SubagentHistoryBox,
+  type SubagentOverflowOutcome,
+  type SubagentPauseApplyOutcome,
+} from './subagent-compaction';
+
+/** Minimum interval between subagent compaction live-progress emissions (IPC flood guard). */
+const SUBAGENT_COMPACTION_EMIT_INTERVAL_MS = 100;
+
+/** Narrow assembler surface the controller needs (snapshot + rebase, U5). */
+interface AssemblerAccess {
+  snapshotTranscript(): Message[];
+  rebase(messages: readonly Message[]): void;
+}
+
+/**
+ * Narrow constructor dependencies injected by SubagentManager — every
+ * manager-owned effect the controller must perform lands here as a sink, so
+ * the controller never reaches back into the manager.
+ */
+export interface SubagentCompactionControllerDeps {
+  /** The run's record (CompactionRunRecord contract); read live (chain/usage) and mutated on degradation (result). */
+  readonly record: CompactionRunRecord;
+  /** The run generation, for per-run turn attribution (`record.id#generation`). */
+  readonly runGeneration: number;
+  /** The run's abort signal — races every compaction await so interrupts abort cleanly. */
+  readonly abortSignal: AbortSignal;
+  /** Mutable history handoff the runner replays and the apply swaps (U5). */
+  readonly historyBox: SubagentHistoryBox;
+  /** Run assembler: live transcript snapshots + post-apply rebases. */
+  readonly assembler: AssemblerAccess;
+  /** Live-projection emitter for the compaction widget (R27); display-only. */
+  readonly emitProgress: (progress: SubagentCompactionProgress) => void;
+  /** Swap the record's chain messages in memory (manager owns the record). */
+  readonly setChainMessages: (messages: Message[]) => void;
+  /**
+   * Perform the targeted subagent-chain compaction transaction (R36). A
+   * genuine write failure throws (propagated by the persistence sink) — the
+   * controller logs it and fails the apply; a null return from environment
+   * unavailability proceeds in memory.
+   */
+  readonly applySubagentCompaction: (sessionId: string, payload: SubagentCompactionPayload) => void;
+  /** Record a compaction mutation when no session owns the record (no durable write). */
+  readonly markCompaction: () => void;
+  /** Mark the record dirty and bump its manager-owned revision. */
+  readonly markRecordDirty: () => void;
+  /** Empty chain factory for applies on records without a chain yet. */
+  readonly emptyChain: () => Chain;
+  /** Fired whenever a fire-and-forget prepare evaluation settles (test-observable counter). */
+  readonly onPrepareEvaluated: () => void;
+}
+
+/**
+ * Newest observed provider input-token count carried on a chain's messages,
+ * or null when none carry usage. Calibration hydration source for the subagent
+ * spawn/resume gate (R29 fire point 1) — a real observation, never a heuristic.
+ */
+function latestObservedInputTokens(messages: readonly Message[]): number | null {
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    const usage = messages[i]?.usage;
+    const input = usage?.context?.input_tokens ?? usage?.prompt_tokens;
+    if (typeof input === 'number' && Number.isFinite(input) && input > 0) return input;
+  }
+  return null;
+}
+
+/**
+ * Compaction controller for exactly one subagent run generation (U7).
+ *
+ * Public surface: the `pauseController` gate handed to the stream runner, the
+ * run-loop event hooks (`onUsageEvent`, `onStepFinish`), the spawn/resume
+ * gate starter, and the teardown `discard`. All compaction state (trigger,
+ * cached scope config, context-window limits) dies with the run.
+ */
+export class SubagentCompactionController {
+  readonly pauseController: SubagentCompactionPauseController;
+
+  private readonly _deps: SubagentCompactionControllerDeps;
+  private _contextTokens: number | null | undefined = undefined;
+  private _trigger: CompactionTrigger | null = null;
+  private _initDone = false;
+  /** Memoized in-flight `_attemptInit` (see `_ensureInit`); null once settled. */
+  private _initPromise: Promise<boolean> | null = null;
+  private _cachedCfg: CompactionScopeConfig | null = null;
+  /** Run-captured process config from the last successful scope-config load. */
+  private _cachedLiveCfg: Config | null = null;
+  private _lastStepIndex = 0;
+  private _lastProgressEmitAt = 0;
+  private _progressTimer: ReturnType<typeof setTimeout> | null = null;
+  /**
+   * Terminal widget epoch: bumped on every terminal progress emission
+   * (`complete`/`failed`) and in `discard()`. The `_onTextDelta` trailing
+   * flush captures the epoch at schedule time and no-ops when it changed, so
+   * a stale throttled tail from an already-finished compaction can never flip
+   * the widget back to a running phase (main's compaction epoch pattern).
+   */
+  private _terminalEpoch = 0;
+  /**
+   * Persistent silence latch: set by `silenceProgress()` (supersession) and
+   * `discard()` (interrupt/natural end). The epoch check only suppresses
+   * flushes scheduled BEFORE its bump — a still-streaming superseded compactor
+   * can schedule NEW trailing flushes (capturing the already-bumped epoch) or
+   * call `onProgress` directly, so both emission paths gate on this latch.
+   */
+  private _silenced = false;
+  /** Synchronous in-flight latch for the prepare fire points (see `_maybePrepare`). */
+  private _prepareInFlight = false;
+
+  constructor(deps: SubagentCompactionControllerDeps) {
+    this._deps = deps;
+    this.pauseController = {
+      shouldPause: () => shouldPauseForCompaction(this.sessionKey, this._deps.record.id),
+      applyAtPause: () => this._applyPendingAtPause(),
+      compactForOverflow: (params) => this._compactForOverflow(params),
+      discard: () => this.discard(),
+    };
+  }
+
+  /** Scope key for the pending store and pause registry. */
+  private get sessionKey(): string {
+    return this._deps.record.sessionId ?? 'unknown';
+  }
+
+  /** Per-run turn id for provider accounting attribution. */
+  private get turnId(): string {
+    return `${this._deps.record.id}#${this._deps.runGeneration}`;
+  }
+
+  /**
+   * R27: route widget progress through the live projection keyed by agent
+   * scope. Failures are display-only and never break the compaction. Terminal
+   * phases (`complete`/`failed`) bump the terminal epoch so the throttled
+   * stream tail in `_onTextDelta` goes permanently silent afterwards, and the
+   * silence latch drops every emission after supersession/discard.
+   */
+  private _emitProgress(progress: SubagentCompactionProgress): void {
+    if (this._silenced) return;
+    try {
+      if (progress.phase === 'complete' || progress.phase === 'failed') {
+        this._terminalEpoch += 1;
+      }
+      this._deps.emitProgress(progress);
+    } catch {
+      // projection entry may be gone (run removed) — display-only
+    }
+  }
+
+  /**
+   * Time-gated streaming tail for the widget: forwards the compactor's
+   * accumulated LLM output as `compacting` progress with a calibrated token
+   * estimate, throttled to the emission interval. The scheduled flush binds
+   * the terminal epoch at schedule time and no-ops once a terminal phase (or
+   * discard) has been emitted — a trailing `compacting` event after the
+   * widget completed would resurrect it (review B). Once the run is
+   * superseded/discarded the silence latch stops new schedules outright.
+   */
+  private _onTextDelta(accumulatedText: string): void {
+    if (this._silenced) return;
+    const epochAtSchedule = this._terminalEpoch;
+    const emit = (): void => {
+      this._progressTimer = null;
+      if (this._terminalEpoch !== epochAtSchedule) return;
+      this._lastProgressEmitAt = Date.now();
+      const tpc = this._trigger?.state.tokensPerChar;
+      this._emitProgress({
+        phase: 'compacting',
+        streamText: accumulatedText,
+        ...(typeof tpc === 'number' && Number.isFinite(tpc) && tpc > 0
+          ? { estimatedTokens: Math.ceil(accumulatedText.length * tpc) }
+          : {}),
+      });
+    };
+    if (this._progressTimer) return;
+    const remaining = SUBAGENT_COMPACTION_EMIT_INTERVAL_MS - (Date.now() - this._lastProgressEmitAt);
+    if (remaining <= 0) {
+      emit();
+      return;
+    }
+    this._progressTimer = setTimeout(emit, remaining);
+  }
+
+  /** Cached `compaction.subagents` scope config; refetched while unset, null when the config is unavailable. */
+  private _scopeConfig(): CompactionScopeConfig | null {
+    if (this._cachedCfg) return this._cachedCfg;
+    try {
+      const live = getConfig();
+      const cfg = live.compaction?.subagents ?? null;
+      this._cachedCfg = cfg;
+      this._cachedLiveCfg = live;
+      return cfg;
+    } catch (e) {
+      console.debug('[subagent-compaction] scope config unavailable:', e);
+      return null;
+    }
+  }
+
+  /**
+   * The process config the prepare path hands the compactor chain (agent and
+   * model resolution, retry and idle-timeout knobs). Live when the config
+   * loads; when a mid-run reload fails, the run-captured config stands in — a
+   * real `Config` whose tier/model lookups stay valid, never a fabricated
+   * partial whose missing fields would silently disable the compactor.
+   */
+  private _liveConfig(): Config {
+    try {
+      return getConfig();
+    } catch {
+      const captured = this._cachedLiveCfg;
+      if (captured) return captured;
+      throw new Error('[subagent-compaction] no loadable config for the compactor');
+    }
+  }
+
+  /** Subagent scope fire threshold; the schema default when the config is unavailable. */
+  private _threshold(): number {
+    return this._scopeConfig()?.threshold ?? 0.85;
+  }
+
+  /** Subagent scope compactable-token floor; the schema default when the config is unavailable. */
+  private _minCompactableTokens(): number {
+    return this._scopeConfig()?.min_compactable_tokens ?? 4000;
+  }
+
+  /**
+   * Lazy compaction init: resolve the subagent's own model limits via the
+   * frozen selection's trusted provider execution (R16) and arm the per-run
+   * trigger. Returns false (permanently, once tried) when the limits are
+   * unavailable — the run start is never blocked by the provider lookup.
+   *
+   * The in-flight attempt is memoized so CONCURRENT fire points — the
+   * spawn/resume gate and a usage event can overlap before either settles —
+   * await the same result instead of each racing the init and one of them
+   * observing half-initialized state (context tokens resolved, trigger not
+   * yet armed).
+   */
+  private _ensureInit(): Promise<boolean> {
+    if (this._initDone) return Promise.resolve(this._contextTokens !== null && this._trigger !== null);
+    // One shared attempt: the first caller runs it, every concurrent caller
+    // awaits the same promise, and `_initDone` latches only once it settles —
+    // nobody can slip past the guard into a second attempt.
+    this._initPromise ??= this._attemptInit().finally(() => {
+      this._initDone = true;
+      this._initPromise = null;
+    });
+    return this._initPromise;
+  }
+
+  private async _attemptInit(): Promise<boolean> {
+    try {
+      const tokens = await resolveSubagentContextTokens(this._deps.record.selection);
+      this._contextTokens = tokens;
+      if (tokens !== null) {
+        const { CompactionTrigger } = await import('../llm/compaction/trigger.js');
+        this._trigger = new CompactionTrigger();
+        this._scopeConfig();
+        return true;
+      }
+    } catch (e) {
+      // non-fatal
+      console.debug('[subagent-compaction] compaction init failed:', e);
+    }
+    this._contextTokens = null;
+    return false;
+  }
+
+  /**
+   * Fire-and-forget compaction prepare (R29 fire point 2). Registers a
+   * scoped pending entry and requests the scoped pause so the run's tool
+   * loop stops at the next step boundary (R28) — main's
+   * handleUsageCompaction choreography on the subagent host. The whole body
+   * sits in a try/finally so EVERY settled evaluation — registered a
+   * pending, decided not to, or threw — increments the test-observable
+   * counter (see onPrepareEvaluated); tests await it instead of fixed sleeps.
+   *
+   * In-flight latch: a synchronous flag is set BEFORE the first await (after
+   * the pending-store check) and cleared in the finally (and in discard()).
+   * The pending-store check alone cannot dedupe the fire points — two
+   * concurrent evaluations (spawn gate + usage event) both pass it before
+   * either registers, double-firing the compactor; the latch check and set
+   * are one synchronous block, so exactly one evaluation can be in flight
+   * between its pending-check and its registration.
+   */
+  private async _maybePrepare(inputTokens: number): Promise<void> {
+    try {
+      const { record } = this._deps;
+      if (this._prepareInFlight) return;
+      if (getCompactionPending(this.sessionKey, record.id)) return;
+      this._prepareInFlight = true;
+      const ok = await this._ensureInit();
+      if (!ok || this._contextTokens == null || !this._trigger) return;
+      if (this._deps.abortSignal.aborted) return;
+      const cfg = this._scopeConfig();
+      if (!cfg) return;
+      const prepared = await prepareSubagentCompaction({
+        messages: (record.chain?.messages ?? []) as Message[],
+        selection: record.selection,
+        config: this._liveConfig(),
+        sessionId: this.sessionKey,
+        subagentId: record.id,
+        chainId: record.chain?.id ?? null,
+        turnId: this.turnId,
+        inputTokens,
+        contextTokens: this._contextTokens,
+        triggerState: this._trigger.state,
+        onProgress: (progress) => this._emitProgress(progress),
+        onTextDelta: (text) => this._onTextDelta(text),
+      });
+      if (!prepared) return;
+      // The run was interrupted while the prepare awaited (init/config/compactor
+      // scheduling): never register a pending or arm the pause for a dead run.
+      if (this._deps.abortSignal.aborted) {
+        // The compactor promise has no observer now — never surface as an
+        // unhandled rejection.
+        prepared.promise?.catch(() => undefined);
+        prepared.selectivePromise?.catch(() => undefined);
+        return;
+      }
+      this._trigger.markPrepareStarted(prepared.cut.compactableRange, prepared.flaggedIds);
+      setCompactionPending(this.sessionKey, record.id, prepared);
+      // The compactor promise is consumed at the pause boundary; until
+      // then a rejection (compactor provider down) has no observer —
+      // attach a no-op catch so it can never surface as an unhandled
+      // rejection. The apply awaits the same promise and handles it.
+      prepared.promise?.catch((reason) => {
+        console.debug('[subagent-compaction] compactor promise rejected before the pause apply (non-fatal):', reason);
+      });
+      prepared.selectivePromise?.catch((reason) => {
+        console.debug('[subagent-compaction] selective compactor promise rejected before the pause apply (non-fatal):', reason);
+      });
+      if (!shouldPauseForCompaction(this.sessionKey, record.id)) {
+        requestCompactionPause(this.sessionKey, record.id);
+      }
+    } catch (e) {
+      // non-fatal
+      console.debug('[subagent-compaction] prepare start failed:', e);
+    } finally {
+      this._prepareInFlight = false;
+      this._deps.onPrepareEvaluated();
+    }
+  }
+
+  /**
+   * U5: consume the scoped compaction pause at a step boundary (R28) — the
+   * subagent twin of main's idle-intercept apply in send.ts. Re-validates the
+   * pending cut against the LIVE chain history (R37), applies over that live
+   * history (so the post-prepare suffix survives — the re-anchor contract),
+   * persists via the transactional subagent path (R36), swaps the history box
+   * the runner restart reads, and runs the terminal still-over/partial-report
+   * degradation (R17). Always clears the scoped pause gate first so exactly
+   * one apply runs per pause cycle.
+   */
+  private async _applyPendingAtPause(): Promise<SubagentPauseApplyOutcome> {
+    const { record, abortSignal, historyBox, assembler } = this._deps;
+    const pending = takeCompactionPending(this.sessionKey, record.id);
+    clearCompactionPause(this.sessionKey, record.id);
+    if (!pending) {
+      historyBox.messages = assembler.snapshotTranscript();
+      return 'skipped';
+    }
+    if (abortSignal.aborted) {
+      try { this._trigger?.consumePending(); } catch { /* trigger may be unresolved */ }
+      this._emitProgress({ phase: 'complete' });
+      return 'aborted';
+    }
+    const ok = await this._ensureInit();
+    if (!ok || !this._trigger || this._contextTokens == null) {
+      try { this._trigger?.consumePending(); } catch { /* trigger may be unresolved */ }
+      this._emitProgress({ phase: 'complete' });
+      historyBox.messages = assembler.snapshotTranscript();
+      return 'skipped';
+    }
+    this._emitProgress({ phase: 'compacting', detail: 'Applying summary', mode: pending.mode });
+    // R37: the pending's cut/expected ids were captured at prepare time —
+    // re-validate against the live chain history (everything the run has
+    // accumulated, including the current step's trailing text) before apply.
+    const liveHistory = dedupeHistoryById(assembler.snapshotTranscript());
+    if (!isPendingCutStillValid(pending, liveHistory)) {
+      this._trigger.consumePending();
+      this._emitProgress({ phase: 'complete' });
+      historyBox.messages = [...liveHistory];
+      return 'skipped';
+    }
+    // Race the compactor wait against the run's abort signal so an interrupt
+    // during the pause aborts cleanly (the subagent twin of review #33).
+    const applyResult = await this._raceAbortableApply(pending, liveHistory);
+    if (abortSignal.aborted) {
+      this._trigger.consumePending();
+      this._emitProgress({ phase: 'complete' });
+      return 'aborted';
+    }
+    const shouldApply = this._evaluateApply(applyResult);
+    if (!applyResult || !shouldApply) {
+      this._trigger.consumePending();
+      this._emitProgress({ phase: 'complete' });
+      historyBox.messages = [...liveHistory];
+      return 'skipped';
+    }
+    // Persist via the transactional subagent compaction path so crash
+    // mid-run resumes the compacted chain (R36) — durable write FIRST, memory
+    // follows only on success: the record chain, the assembler base (via
+    // rebase — never a field poke), and the history box the restarted
+    // stream replays.
+    if (!this._commitApply(applyResult, liveHistory)) {
+      // Failed durable apply: restart the segment with the accumulated
+      // (un-compacted) history — main's resume-after-unapplied-compaction
+      // semantics. The pending and pause gate were already cleared above.
+      historyBox.messages = [...liveHistory];
+      return 'skipped';
+    }
+    // Hysteresis accrual baseline is post-compaction inputTokens, not pre-compaction peak
+    const preInput = record.usage?.prompt_tokens ?? 0;
+    const postCompactionTokens = this._postCompactionBaselineTokens(applyResult, preInput);
+    this._trigger?.onCompactionApplied(preInput, postCompactionTokens);
+    this._emitProgress({ phase: 'complete', detail: 'Context compacted — resuming' });
+    // R17: still over limit after compaction -> partial report degradation
+    const threshold = this._threshold();
+    const postTokens = postCompactionTokens ?? record.usage?.prompt_tokens ?? 0;
+    const stillOver = this._contextTokens !== null && Number.isFinite(this._contextTokens)
+      && postTokens / this._contextTokens >= threshold * 0.98;
+    // Also handle case where still over but we did compact: check if next cut would be empty
+    if (stillOver) {
+      try {
+        const cfg2 = this._scopeConfig();
+        // Calibrate from the run's reported usage; without it the emptiness
+        // check is skipped (hard rule: no heuristic token estimates).
+        const retryMessages = (record.chain?.messages ?? []) as Message[];
+        const tpc3 = deriveTokensPerChar(record.usage?.prompt_tokens ?? null, totalCharsForMessages(retryMessages));
+        if (tpc3 == null) return 'applied';
+        // R31/R32: exempt user ids thread through so the exhaustion check's
+        // compactable range matches the real compaction range.
+        const cut = calibratedCut(retryMessages, {
+          config: cfg2 ?? { threshold: 0.85, preserve_percent: 0.25 },
+          contextTokens: this._contextTokens ?? 0,
+          tokensPerChar: tpc3,
+          // Preserve scales against current usage — post-compaction input is
+          // the best available estimate for the retried stream's context.
+          currentInputTokens: postTokens > 0 ? postTokens : null,
+        });
+        // Exhaustion test: with chain inference splitting summary heads into
+        // their own chains, the range may still contain the previous head
+        // (re-summarizable by design). A range whose only unflagged content
+        // is summary heads cannot make progress — degrading beats looping.
+        const rangeMessages = retryMessages.slice(cut.compactableRange.start, cut.compactableRange.end);
+        const netNew = rangeMessages.filter((m) => !m.excludeFromModel && !m.hidden && !m.compacted);
+        if (netNew.length === 0) {
+          return this._degradeToPartialReport();
+        }
+      } catch (e) {
+        // non-fatal — the exhaustion check is advisory; without it the apply
+        // simply completes without the degradation.
+        console.debug('[subagent-compaction] post-compaction exhaustion check failed (non-fatal):', e);
+      }
+    }
+    return 'applied';
+  }
+
+  /**
+   * R29 fire point 3 / R30: reactive overflow retry — the subagent twin of
+   * main's overflow-retry site in ipc/chat/send.ts. A classified
+   * context_length_exceeded error is terminal for the stream segment but not
+   * for the run: record the window as a measured lower bound (the overflow
+   * proves input >= window; calibrate-or-skip never fabricates an estimate),
+   * compact SYNCHRONOUSLY (prepare + immediate apply — the stream is already
+   * dead, so the fire-and-forget pause path cannot help), persist via the
+   * transactional subagent sink (R36), swap the history box, and tell the
+   * runner to restart the stream once. When the retry budget is spent
+   * (alreadyRetried), the gate no-ops (nothing left to compact), or the
+   * apply produces nothing usable, the run degrades to the structured
+   * partial report (R17) and completes normally. Compaction-disabled or
+   * unavailable runs return 'unavailable' and the original error propagates.
+   */
+  private async _compactForOverflow(params: {
+    readonly alreadyRetried: boolean;
+  }): Promise<SubagentOverflowOutcome> {
+    const { record, abortSignal, historyBox, assembler } = this._deps;
+    if (abortSignal.aborted) return 'aborted';
+    if (params.alreadyRetried) return this._degradeToPartialReport();
+    const cfg = this._scopeConfig();
+    if (!cfg) return 'unavailable';
+    const ready = await this._ensureInit();
+    if (abortSignal.aborted) return 'aborted';
+    if (!ready || this._contextTokens == null || !this._trigger) return 'unavailable';
+    // Consume any pending the proactive fire points already prepared (its
+    // compactor may already be running) and clear the scoped pause gate: the
+    // retry segment must not stop at the next boundary for a compaction this
+    // path applies itself.
+    let pending: CompactionPendingEntry | null | undefined = takeCompactionPending(this.sessionKey, record.id);
+    clearCompactionPause(this.sessionKey, record.id);
+    const liveHistory = dedupeHistoryById(assembler.snapshotTranscript());
+    if (pending && !isPendingCutStillValid(pending, liveHistory)) {
+      try { this._trigger.abortPrepare(); } catch { /* trigger may be unresolved */ }
+      pending = undefined;
+    }
+    if (!pending) {
+      // Measured lower bound: the failed request proves input >= the window,
+      // which calibrates the gate when no usage observation exists yet and
+      // doubles as this fire point's observed inputTokens (over-window, so
+      // the threshold gate cannot block the recovery it exists for).
+      if (this._trigger.state.tokensPerChar == null) {
+        this._trigger.state.lastObservedInputTokens = this._contextTokens;
+      }
+      try {
+        pending = await prepareSubagentCompaction({
+          messages: liveHistory,
+          selection: record.selection,
+          config: this._liveConfig(),
+          sessionId: this.sessionKey,
+          subagentId: record.id,
+          chainId: record.chain?.id ?? null,
+          turnId: this.turnId,
+          inputTokens: this._contextTokens,
+          contextTokens: this._contextTokens,
+          triggerState: this._trigger.state,
+          onProgress: (progress) => this._emitProgress(progress),
+          onTextDelta: (text) => this._onTextDelta(text),
+        });
+      } catch (e) {
+        // Config/preparation failure (e.g. no loadable config for the
+        // compactor): the dead segment cannot simply restart with unchanged
+        // history (it would overflow again), so mirror the nothing-usable arm
+        // below and degrade to the partial report instead of rejecting — a
+        // rejected overflow gate would be swallowed into a silent early end
+        // by the runner's abort race, losing the structured report (R17).
+        console.debug('[subagent-compaction] overflow prepare failed (non-fatal):', e);
+        try { this._trigger.abortPrepare(); } catch { /* trigger may be unresolved */ }
+        this._emitProgress({ phase: 'complete' });
+        return this._degradeToPartialReport();
+      }
+      if (abortSignal.aborted) {
+        pending?.promise?.catch(() => undefined);
+        pending?.selectivePromise?.catch(() => undefined);
+        try { this._trigger.abortPrepare(); } catch { /* trigger may be unresolved */ }
+        this._emitProgress({ phase: 'complete' });
+        return 'aborted';
+      }
+      if (!pending) {
+        // Gate no-op: nothing left to compact (empty cut / below floor) —
+        // the partial report is the terminal fallback.
+        try { this._trigger.abortPrepare(); } catch { /* trigger may be unresolved */ }
+        this._emitProgress({ phase: 'complete' });
+        return this._degradeToPartialReport();
+      }
+      this._trigger.markPrepareStarted(pending.cut.compactableRange, pending.flaggedIds);
+      // The compactor promise is consumed by the apply below; a rejection
+      // before that has no observer — never surface as an unhandled one.
+      pending.promise?.catch(() => undefined);
+      pending.selectivePromise?.catch(() => undefined);
+    }
+    this._emitProgress({ phase: 'compacting', detail: 'Applying summary', mode: pending.mode });
+    // Race the apply against the run's abort signal so an interrupt during
+    // the overflow recovery breaks out cleanly (review #33 semantics).
+    const applyResult = await this._raceAbortableApply(pending, liveHistory);
+    if (abortSignal.aborted) {
+      try { this._trigger.consumePending(); } catch { /* trigger may be unresolved */ }
+      this._emitProgress({ phase: 'complete' });
+      return 'aborted';
+    }
+    const shouldApply = this._evaluateApply(applyResult);
+    if (!applyResult || !shouldApply) {
+      // Nothing usable came out of the compactor — restarting the dead
+      // stream with unchanged history would only overflow again, so this is
+      // the degradation arm, not a skip.
+      try { this._trigger.consumePending(); } catch { /* trigger may be unresolved */ }
+      this._emitProgress({ phase: 'complete' });
+      historyBox.messages = [...liveHistory];
+      return this._degradeToPartialReport();
+    }
+    // Persist via the transactional subagent compaction path so crash
+    // mid-retry resumes the compacted chain (R36) — durable write FIRST, then
+    // memory on success: record chain, assembler base (rebase — never a
+    // field poke), and the history box the retried stream replays.
+    if (!this._commitApply(applyResult, liveHistory)) {
+      // Failed durable apply: the dead segment cannot simply restart with
+      // unchanged history (it would overflow again), so this is the
+      // degradation arm, mirroring the nothing-usable arm above.
+      historyBox.messages = [...liveHistory];
+      return this._degradeToPartialReport();
+    }
+    // Arm hysteresis from the post-compaction model view so the retried
+    // stream's usage events re-evaluate against the new baseline.
+    const preInput = record.usage?.prompt_tokens ?? 0;
+    const postCompactionTokens = this._postCompactionBaselineTokens(applyResult, preInput);
+    this._trigger.onCompactionApplied(preInput, postCompactionTokens);
+    this._emitProgress({ phase: 'complete', detail: 'Context compacted — retrying' });
+    return 'applied';
+  }
+
+  /**
+   * Race an apply await against the run's abort signal: resolves null when
+   * the signal fires first, so an interrupt during the compaction aborts
+   * cleanly instead of observing a late result.
+   */
+  private _raceAbortableApply(
+    pending: CompactionPendingEntry,
+    liveHistory: readonly Message[],
+  ): Promise<ApplyResult | null> {
+    const { record, abortSignal } = this._deps;
+    // Apply-time exempt resolution from the CURRENT scope config over the
+    // live history (config may change between prepare and apply — re-resolving
+    // here keeps the settle aligned with what is currently configured).
+    const scopeCfg = this._scopeConfig();
+    const exemptIds = scopeCfg
+      ? resolveUserExemptIds(liveHistory, {
+          keepLast: scopeCfg.keep_last_user_messages ?? null,
+          pinFirst: scopeCfg.pin_first_user_message ?? true,
+        })
+      : undefined;
+    return raceAbortDuring(
+      applySubagentPendingCompaction({
+        pending,
+        messages: [...liveHistory],
+        chains: [
+          {
+            ...(record.chain ?? this._deps.emptyChain()),
+            messages: [...liveHistory],
+          },
+        ],
+        sessionId: this.sessionKey,
+        ...(exemptIds ? { exemptIds } : {}),
+      }),
+      abortSignal,
+    );
+  }
+
+  /**
+   * The trigger's apply gate: estimates the compactable tokens the apply
+   * would reclaim (calibrated from this run's usage) and asks the trigger
+   * whether the compaction is worth applying.
+   *
+   * Calibrate-or-skip governs arming, not the boundary: main's apply path
+   * (ipc/chat/compaction.ts) never re-checks a token estimate, so when this
+   * run offers no calibrated ratio — or the flagged ids measure no chars in
+   * the record chain — there is no sanctioned estimate to judge against and
+   * the prepared apply goes through rather than tripping the boundary floor
+   * with an invented one. An empty flagged set never applies (nothing to
+   * reclaim), mirroring main's reclaim-only arm.
+   */
+  private _evaluateApply(applyResult: ApplyResult | null): boolean {
+    const { record } = this._deps;
+    if (!this._trigger || this._contextTokens == null) return false;
+    const flagged = applyResult?.flaggedIds ?? [];
+    if (flagged.length === 0) return false;
+    const chainMessages = record.chain?.messages ?? [];
+    try {
+      const tpc = this._trigger.state.tokensPerChar
+        ?? deriveTokensPerChar(record.usage?.prompt_tokens ?? null, totalCharsForMessages(chainMessages));
+      if (tpc == null) return true;
+      const flaggedChars = charsForMessageIds(chainMessages, flagged);
+      if (flaggedChars === 0) return true;
+      return this._trigger.evaluateApply({
+        inputTokens: record.usage?.prompt_tokens ?? 0,
+        contextTokens: this._contextTokens,
+        threshold: this._threshold(),
+        compactableTokens: Math.ceil(flaggedChars * tpc),
+        minCompactableTokens: this._minCompactableTokens(),
+      }).shouldApply;
+    } catch {
+      // best-effort estimate — treat as nothing usable rather than applying blind
+      return false;
+    }
+  }
+
+  /**
+   * Commit an accepted apply: the transactional durable write (R36) FIRST,
+   * and only on success the memory swaps (record chain, assembler rebase,
+   * history box) followed by the record revision bump and the trigger's
+   * pending consumption — main's documented DB-first-then-memory ordering
+   * (see ipc/chat/compaction.ts applyPendingCompactionIfAny). On a genuine
+   * durable-write failure the apply is treated as failed: no memory swap,
+   * the pending is consumed so the trigger is not stuck, and the widget
+   * completes with empty detail; the caller maps the `false` return onto its
+   * failure arm (pause path: restart un-compacted; overflow path: degrade).
+   * Baseline re-arm and the success-path widget event stay with the calling
+   * fire point (their shape differs per path).
+   *
+   * `liveHistory` is forwarded to the durable write so the storage layer can
+   * reconcile the debounced-checkpoint lag (the flagged ids and the summary
+   * anchor are computed over this live transcript, not the durable row).
+   */
+  private _commitApply(applyResult: ApplyResult, liveHistory: readonly Message[]): boolean {
+    const { record, historyBox, assembler } = this._deps;
+    const updatedMessages = applyResult.updatedMessages;
+    const sessionId = record.sessionId ?? undefined;
+    let insertBeforeMessageId: string | null = null;
+    if (applyResult.summaryMessage) {
+      const summaryIdx = updatedMessages.findIndex(
+        (m) => m.id === applyResult.summaryMessage!.id,
+      );
+      if (summaryIdx >= 0 && summaryIdx + 1 < updatedMessages.length) {
+        insertBeforeMessageId = updatedMessages[summaryIdx + 1]!.id;
+      }
+    }
+    const payload: SubagentCompactionPayload = {
+      updatedAt: new Date().toISOString(),
+      flaggedMessageIds: applyResult.flaggedIds,
+      clearedMessageIds: applyResult.unflaggedIds,
+      summaryMessage: applyResult.summaryMessage,
+      insertBeforeMessageId,
+      liveMessages: [...liveHistory],
+    };
+    try {
+      if (sessionId) {
+        this._deps.applySubagentCompaction(sessionId, payload);
+      } else {
+        this._deps.markCompaction();
+      }
+    } catch (e) {
+      // Genuine durable-write failure (integrity throws from the storage
+      // layer): fail the apply — no memory swap, pending consumed, widget
+      // completed with empty detail (main's failed-apply path).
+      console.debug('[subagent-compaction] durable compaction write failed (non-fatal):', e);
+      try { this._trigger?.consumePending(); } catch { /* trigger may be unresolved */ }
+      this._emitProgress({ phase: 'complete' });
+      return false;
+    }
+    this._deps.setChainMessages([...updatedMessages]);
+    assembler.rebase(updatedMessages);
+    historyBox.messages = [...updatedMessages];
+    this._deps.markRecordDirty();
+    this._trigger?.consumePending();
+    return true;
+  }
+
+  /**
+   * Post-compaction model-view token estimate for the hysteresis baseline:
+   * the apply's model-visible chars scaled by the calibrated tokens-per-char —
+   * the trigger's own ratio, else one derived from this run's reported usage
+   * over the whole chain. Best-effort — undefined when nothing calibrates
+   * (calibrate-or-skip; never a heuristic ratio).
+   */
+  private _postCompactionBaselineTokens(applyResult: ApplyResult, preInput: number): number | undefined {
+    const { record } = this._deps;
+    try {
+      let totalPost = 0;
+      for (const m of applyResult.updatedMessages) {
+        if (m.excludeFromModel === true) continue;
+        totalPost += estimateMessageChars(m);
+      }
+      if (totalPost === 0) totalPost = 1;
+      const tpc = this._trigger?.state.tokensPerChar
+        ?? deriveTokensPerChar(preInput, totalCharsForMessages(record.chain?.messages ?? []));
+      return tpc != null ? Math.ceil(totalPost * tpc) : undefined;
+    } catch {
+      // token calibration is best-effort
+      return undefined;
+    }
+  }
+
+  /**
+   * R17: terminal degradation — the run COMPLETES (never fails) with a
+   * structured partial report as its normal result, carrying done/remaining/
+   * stopped-at for the parent.
+   */
+  private _degradeToPartialReport(): 'degraded' {
+    const { record } = this._deps;
+    const done = `${record.chain?.messages.filter((m) => m.type === 'tool_result').length ?? 0} tool results`;
+    record.result = buildSubagentPartialReport({
+      done,
+      remaining: record.task.slice(0, 200),
+      stoppedAt: `step ${this._lastStepIndex}`,
+    });
+    return 'degraded';
+  }
+
+  /**
+   * R29 fire point 2 hook: observe a usage event, feed the trigger, and
+   * (when the threshold is crossed) start the fire-and-forget prepare in
+   * parallel with the run.
+   */
+  async onUsageEvent(inputTokens: number): Promise<void> {
+    const ready = await this._ensureInit();
+    if (!ready || this._contextTokens == null || !this._trigger) return;
+    this._trigger.observeUsage(inputTokens, this._deps.record.chain?.messages ?? []);
+    this._trigger.onUsage(inputTokens, this._contextTokens, this._threshold());
+    // Prepare in parallel (non-blocking) if threshold crossed
+    void this._maybePrepare(inputTokens);
+  }
+
+  /** Track the run's step index for the partial report's `stoppedAt` (R17). */
+  onStepFinish(stepIndex: number): void {
+    this._lastStepIndex = stepIndex;
+  }
+
+  /**
+   * R29 fire point 1: spawn/resume estimate gate, run once before the run's
+   * first stream starts. Calibrate-or-skip is a hard rule — a fresh run has
+   * no observed usage and no-ops; a resumed run seeds calibration from the
+   * chain's persisted message usages (the subagent twin of the main scope's
+   * hydrateTriggerCalibration) and can compact before the first request.
+   * Fire-and-forget: the gate never blocks the first stream. Concurrent
+   * dedupe with the usage-event fire point is owned by `_maybePrepare`'s
+   * in-flight latch (this gate's own awaits never invoke the compactor).
+   */
+  startSpawnTimeGate(): void {
+    void (async () => {
+      try {
+        const { record } = this._deps;
+        const history = (record.chain?.messages ?? []) as Message[];
+        if (history.length === 0) return;
+        if (getCompactionPending(this.sessionKey, record.id)) return;
+        const ok = await this._ensureInit();
+        if (!ok || this._contextTokens == null || !this._trigger) return;
+        // Hydrate calibration from the newest chain-message usage — the same
+        // secondary source the main scope's hydrateTriggerCalibration reads.
+        // `record.usage` is deliberately not used: on a resumed record it is
+        // null (the follow-up transition resets it) and on a restored one it is
+        // a summed aggregate across steps, not one request's observed input.
+        const observed = latestObservedInputTokens(history);
+        if (observed != null) {
+          this._trigger.observeUsage(observed, history);
+        }
+        const decision = runCompactionGate({
+          messages: history,
+          config: this._scopeConfig() ?? getConfig().compaction.subagents,
+          scope: 'subagents',
+          inputTokens: this._trigger.state.lastObservedInputTokens ?? null,
+          contextTokens: this._contextTokens,
+          tokensPerChar: this._trigger.state.tokensPerChar ?? null,
+          triggerState: this._trigger.state,
+        });
+        if (decision.kind === 'prepare') {
+          await this._maybePrepare(decision.estimatedInput);
+        }
+      } catch (e) {
+        // non-fatal — the usage-event prepare and overflow retry remain as backstops
+        console.debug('[subagent-compaction] spawn-time gate failed:', e);
+      }
+    })();
+  }
+
+  /**
+   * Superseded-run teardown: the manager's run-loop finally calls `discard()`
+   * only for the CURRENT generation — a superseded run's scoped pause and
+   * pending state belong to its replacement. But this generation's controller
+   * can still own a scheduled progress timer (a throttled `compacting` flush
+   * in `_onTextDelta`) and a possibly still-streaming compactor whose
+   * callbacks can schedule NEW flushes or emit terminal progress after the
+   * replacement, so cancel the timer, advance the terminal epoch, and latch
+   * permanent silence — no stale emission can fire for a run the manager
+   * already replaced. Deliberately local-only: no pause/pending mutation, no
+   * trigger touch.
+   */
+  silenceProgress(): void {
+    this._silenced = true;
+    this._terminalEpoch += 1;
+    if (this._progressTimer) {
+      clearTimeout(this._progressTimer);
+      this._progressTimer = null;
+    }
+  }
+
+  /**
+   * Interrupt or natural-end teardown: clear this run's scoped compaction
+   * gate and drop any pending it never consumed — the per-run trigger dies
+   * with the run, and the next run re-prepares via its own gates. Also bumps
+   * the terminal widget epoch, cancels that timer, latches permanent
+   * progress silence (any in-flight or later compactor callback), and
+   * releases the prepare in-flight latch so a late fire point parked at an
+   * await cannot resurrect run state.
+   */
+  discard(): void {
+    this._silenced = true;
+    this._terminalEpoch += 1;
+    if (this._progressTimer) {
+      clearTimeout(this._progressTimer);
+      this._progressTimer = null;
+    }
+    this._prepareInFlight = false;
+    clearCompactionPause(this.sessionKey, this._deps.record.id);
+    deleteCompactionPending(this.sessionKey, this._deps.record.id);
+    try { this._trigger?.consumePending(); } catch { /* trigger may be unresolved */ }
+  }
+}

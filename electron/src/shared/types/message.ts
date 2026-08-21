@@ -148,6 +148,8 @@ export interface ContextSnapshot {
   readonly tool_use_tokens: number;
   readonly user_tokens: number;
   readonly assistant_tokens: number;
+  /** Compaction summary category (R19). Zero when no summary head is in the replay. */
+  readonly summary_tokens?: number;
   /** Provider-reported reasoning tokens included in `assistant_tokens`. */
   readonly reasoning_tokens?: number;
 }
@@ -161,8 +163,101 @@ export const contextSnapshotSchema = z.object({
   tool_use_tokens: z.number().nonnegative(),
   user_tokens: z.number().nonnegative(),
   assistant_tokens: z.number().nonnegative(),
+  summary_tokens: z.number().nonnegative().optional(),
   reasoning_tokens: z.number().nonnegative().optional(),
 });
+
+// ── Compaction marker (R23) ─────────────────────────────────────────────────
+
+export const COMPACTION_MODES = ['simple', 'selective'] as const;
+
+export type CompactionMode = (typeof COMPACTION_MODES)[number];
+
+/**
+ * Marker attached to the summary head message produced by compaction.
+ * Records the covered range and mode so later compactions and the renderer
+ * can distinguish it from real content. Persists via MessageStorageDict
+ * under the `compacted` key (same snake_case would be `compacted`).
+ */
+export interface CompactedMarker {
+  readonly rangeStart: string;
+  readonly rangeEnd: string;
+  readonly mode: CompactionMode;
+  /** Number of original messages summarized, if known. */
+  readonly summarizedCount?: number;
+  /**
+   * Estimated main-context tokens reclaimed by this compaction
+   * (calibrated pre-compaction input minus calibrated post-compaction input).
+   * Absent on legacy heads and when no calibrated estimate existed.
+   */
+  readonly tokensFreed?: number;
+  /** Compactor LLM cost attribution, when the summarizer reported usage. */
+  readonly compactorTokens?: {
+    readonly inputTokens: number;
+    readonly outputTokens: number;
+  };
+}
+
+/**
+ * Separator between summary sections when one logical compaction carries
+ * several (coalesced per-op summaries, or stacked legacy heads rendered as
+ * one widget). Shared so persisted summary text and renderer re-composition
+ * can never diverge.
+ */
+export const SUMMARY_SECTION_SEPARATOR = '\n\n---\n\n';
+
+function isCompactionMode(value: unknown): value is CompactionMode {
+  return (COMPACTION_MODES as readonly string[]).includes(value as string);
+}
+
+/** Tolerant parse: unknown shapes degrade to undefined; extra keys ignored. */
+export function compactedMarkerFromUnknown(value: unknown): CompactedMarker | undefined {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    return undefined;
+  }
+  const raw = value as Record<string, unknown>;
+  if (
+    typeof raw.rangeStart !== 'string' || raw.rangeStart.length === 0 ||
+    typeof raw.rangeEnd !== 'string' || raw.rangeEnd.length === 0 ||
+    !isCompactionMode(raw.mode)
+  ) {
+    return undefined;
+  }
+  let marker: CompactedMarker = {
+    rangeStart: raw.rangeStart,
+    rangeEnd: raw.rangeEnd,
+    mode: raw.mode,
+  };
+  if (
+    typeof raw.summarizedCount === 'number' &&
+    Number.isFinite(raw.summarizedCount) &&
+    raw.summarizedCount >= 0
+  ) {
+    marker = { ...marker, summarizedCount: Math.floor(raw.summarizedCount) };
+  }
+  if (
+    typeof raw.tokensFreed === 'number' &&
+    Number.isFinite(raw.tokensFreed) &&
+    raw.tokensFreed >= 0
+  ) {
+    marker = { ...marker, tokensFreed: Math.floor(raw.tokensFreed) };
+  }
+  const compactor = raw.compactorTokens as Record<string, unknown> | undefined;
+  if (
+    typeof compactor === 'object' && compactor !== null &&
+    typeof compactor.inputTokens === 'number' && Number.isFinite(compactor.inputTokens) && compactor.inputTokens >= 0 &&
+    typeof compactor.outputTokens === 'number' && Number.isFinite(compactor.outputTokens) && compactor.outputTokens >= 0
+  ) {
+    marker = {
+      ...marker,
+      compactorTokens: {
+        inputTokens: Math.floor(compactor.inputTokens),
+        outputTokens: Math.floor(compactor.outputTokens),
+      },
+    };
+  }
+  return marker;
+}
 
 // ── Message ─────────────────────────────────────────────────────────────────
 
@@ -182,6 +277,8 @@ export interface Message {
   readonly hidden: boolean;
   /** Persisted display message that must not be replayed to the model. */
   readonly excludeFromModel?: boolean;
+  /** Compaction summary head marker (R23); absent for real content. */
+  readonly compacted?: CompactedMarker;
   /** Canonical terminal facts for TOOL_RESULT messages; null for other messages. */
   readonly tool_result: CanonicalToolResult | null;
 }
@@ -209,6 +306,8 @@ export interface MessageStorageDict {
   hidden?: boolean;
   /** Keep the message visible in history while excluding it from model context. */
   exclude_from_model?: boolean;
+  /** Compaction marker; same key as the domain field (no snake_case transform). */
+  compacted?: CompactedMarker;
   /** Explicit tool failure; only meaningful for tool_result messages. */
   is_error?: boolean;
   /** Canonical terminal facts for TOOL_RESULT records. */
@@ -242,6 +341,12 @@ export interface ApiMessage {
     type: 'function';
     function: { name: string; arguments: string };
   }>;
+  /**
+   * Compaction summary-head marker (R23). Carried through the replay pipeline
+   * so the per-step context snapshot can bucket summary tokens (R19); it is a
+   * display/attribution annotation only and never sent to providers as data.
+   */
+  compacted?: CompactedMarker;
 }
 
 // ── Serialization ───────────────────────────────────────────────────────────
@@ -256,6 +361,9 @@ export function messageToApiFormat(msg: Message): ApiMessage {
 
   const api: ApiMessage = { role: msg.role, content };
 
+  if (msg.compacted) {
+    api.compacted = msg.compacted;
+  }
   if (msg.tool_call_id) {
     api.tool_call_id = msg.tool_call_id;
   }
@@ -319,6 +427,9 @@ export function messageToStorageDict(msg: Message): MessageStorageDict {
   }
   if (msg.excludeFromModel) {
     d.exclude_from_model = true;
+  }
+  if (msg.compacted) {
+    d.compacted = msg.compacted;
   }
   if (msg.tool_result?.status === 'error') {
     d.is_error = true;
@@ -385,6 +496,7 @@ export function messageFromStorageDict(data: unknown): Message {
     ? parsedToolResult.data as CanonicalToolResult
     : null;
   const thinkingPayload = thinkingReplayPayloadFromUnknown(raw.thinking_payload);
+  const compacted = compactedMarkerFromUnknown(raw.compacted);
 
   return {
     id,
@@ -400,6 +512,7 @@ export function messageFromStorageDict(data: unknown): Message {
     usage,
     hidden: raw.hidden === true,
     excludeFromModel: raw.exclude_from_model === true,
+    ...(compacted ? { compacted } : {}),
     tool_result: toolResult,
   };
 }
