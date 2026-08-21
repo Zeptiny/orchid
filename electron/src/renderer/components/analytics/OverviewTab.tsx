@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useAnalytics } from '../../hooks/useAnalytics';
 import type { AnalyticsTimeRange, TimeSeriesPoint } from '../../../shared/types/analytics';
-import { StatCard, ChartCard, QuotaPanel, formatTokenCount, formatCost, formatCostAmount, formatPercent, CHART_PALETTE, GRID_STROKE, axisTickProps, tooltipProps, TokenUsageTooltip } from './shared';
+import { StatCard, ChartCard, QuotaPanel, formatTokenCount, formatCost, formatCostAmount, formatPercent, formatTps, formatTtft, netInputTokens, netOutputTokens, tokenStackTooltipRows, CHART_PALETTE, GRID_STROKE, axisTickProps, tooltipProps, TokenUsageTooltip } from './shared';
 import { Button } from '../ui/Button';
 import {
   LineChart, Line, BarChart, Bar, PieChart, Pie, Cell,
@@ -46,7 +46,7 @@ function collapseSpendTopN<T extends { cost: string; currency: string }, R>(
   return [...top, ...others];
 }
 
-type TokenUsagePoint = TimeSeriesPoint & { netInput: number; cacheRead: number; output: number };
+type TokenUsagePoint = TimeSeriesPoint & { netInput: number; cacheRead: number; netOutput: number };
 
 export function OverviewTab({ timeRange }: { timeRange: AnalyticsTimeRange }) {
   const { data, loading, error, refresh } = useAnalytics(
@@ -84,9 +84,9 @@ export function OverviewTab({ timeRange }: { timeRange: AnalyticsTimeRange }) {
     .map(([date, costs]) => ({ date, ...costs }));
   const tokenUsage = data.tokenUsageOverTime.map((point) => ({
     ...point,
-    netInput: Math.max(0, point.inputTokens - point.cacheReadTokens),
+    netInput: netInputTokens(point.inputTokens, point.cacheReadTokens),
     cacheRead: point.cacheReadTokens,
-    output: point.outputTokens,
+    netOutput: netOutputTokens(point.outputTokens, point.reasoningTokens),
   }));
   const spendByModel = collapseSpendTopN(
     data.spendByModel,
@@ -127,6 +127,8 @@ export function OverviewTab({ timeRange }: { timeRange: AnalyticsTimeRange }) {
         <StatCard label="Avg Tokens/Session" value={avgTokensPerSession} />
         <StatCard label="Cache Hit Rate" value={cacheHitRate} subtext={`${formatTokenCount(stats.totalCacheReadTokens)} cache-read`} />
         <StatCard label="Error Rate" value={errorRate} />
+        <StatCard label="Avg TTFT" value={formatTtft(stats.avgTtftMs)} />
+        <StatCard label="Avg Speed" value={formatTps(stats.avgTokensPerSecond)} />
       </div>
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
@@ -171,20 +173,17 @@ export function OverviewTab({ timeRange }: { timeRange: AnalyticsTimeRange }) {
                     active={props.active}
                     label={String(props.label ?? point.date)}
                     rows={[
-                      { name: 'Input', value: point.inputTokens },
-                      { name: 'Output', value: point.outputTokens },
-                      { name: 'Cache Read', value: point.cacheReadTokens },
+                      ...tokenStackTooltipRows(point.inputTokens, point.cacheReadTokens, point.outputTokens, point.reasoningTokens),
                       { name: 'Cache Write', value: point.cacheWriteTokens },
-                      { name: 'Reasoning', value: point.reasoningTokens },
                     ]}
                   />
                 );
               }}
               />
               <Legend />
-              <Bar dataKey="netInput" name="Input (net)" stackId="a" fill={CHART_PALETTE[0]} />
+              <Bar dataKey="netInput" name="Input (net of cache)" stackId="a" fill={CHART_PALETTE[0]} />
               <Bar dataKey="cacheRead" name="Cache Read" stackId="a" fill={CHART_PALETTE[2]} />
-              <Bar dataKey="output" name="Output" stackId="a" fill={CHART_PALETTE[1]} />
+              <Bar dataKey="netOutput" name="Output (net of reasoning)" stackId="a" fill={CHART_PALETTE[1]} />
             </BarChart>
           </ResponsiveContainer>
         </ChartCard>
