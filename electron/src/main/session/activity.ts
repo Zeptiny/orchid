@@ -18,6 +18,11 @@ const PRIORITY: Record<SessionExecutionState, number> = {
   idle: 3,
 };
 
+/** Unknown turn starts sort last, not oldest, within the working/waiting bucket. */
+function startedAtSortValue(activity: SessionActivity): number {
+  return activity.startedAt ?? Number.POSITIVE_INFINITY;
+}
+
 function emptyActivity(sessionId: string, now: number): SessionActivity {
   return {
     sessionId,
@@ -94,8 +99,16 @@ export class SessionActivityStore {
       .sort((a, b) => {
         const priority = PRIORITY[a.state] - PRIORITY[b.state];
         if (priority !== 0) return priority;
-        if (a.state === 'idle' && b.state === 'idle') {
-          if (a.unread !== b.unread) return a.unread ? -1 : 1;
+        if (a.state === 'working' || a.state === 'waiting') {
+          // Detail updates bump `updatedAt` on every streamed event; order by
+          // turn start so active rows hold their position for the whole turn.
+          // Oldest start first: longest-running work keeps the bucket top and
+          // newly started work enters below it instead of displacing rows.
+          const aStart = startedAtSortValue(a);
+          const bStart = startedAtSortValue(b);
+          if (aStart !== bStart) return aStart - bStart;
+        } else if (a.unread !== b.unread) {
+          return a.unread ? -1 : 1;
         }
         return b.updatedAt - a.updatedAt;
       });

@@ -157,13 +157,26 @@ export interface ChatSendOptions {
   draftGeneration?: number;
 }
 
+/**
+ * Failed-send context for an `untrusted_project` gate rejection. The mount
+ * point stashes it so the message can be replayed after a trust grant or
+ * restored into the composer when the user declines.
+ */
+export interface UntrustedProjectSendFailure {
+  /** Trimmed message that the trust gate rejected. */
+  message: string;
+  /** Original send options (session/model/draft generation). */
+  options: ChatSendOptions;
+}
+
 export interface UseChatOptions {
   /**
    * Invoked when chat:send fails with `untrusted_project`. When present the
    * structured failure opens the trust dialog instead of pushing a raw error
-   * bubble; when absent the generic error behavior is kept.
+   * bubble; when absent the generic error behavior is kept. Receives the
+   * failed send context so the mount point can stash and replay it.
    */
-  onUntrustedProject?: () => void;
+  onUntrustedProject?: (payload: UntrustedProjectSendFailure) => void;
   /** Durable session total derived from chain summaries, including unloaded pages. */
   persistedSessionUsage?: Usage | null;
   /** Newest durable turn usage, including its context snapshot when available. */
@@ -417,7 +430,7 @@ export function useChat(
   const [messages, setMessages] = useState<Message[]>([]);
   // Ref-mirror the optional callback so `send` keeps a stable identity and a
   // new closure from the caller never rebuilds every streaming token.
-  const onUntrustedProjectRef = useRef<(() => void) | undefined>(options.onUntrustedProject);
+  const onUntrustedProjectRef = useRef<((payload: UntrustedProjectSendFailure) => void) | undefined>(options.onUntrustedProject);
   onUntrustedProjectRef.current = options.onUntrustedProject;
   const [projectionState, dispatchProjectionState] = useReducer(reduceProjectionState, { projection: null, revision: 0 });
   const [isSwitchingSession, setIsSwitchingSession] = useState(false);
@@ -654,7 +667,7 @@ export function useChat(
           if (result.kind === 'untrusted_project' && onUntrustedProjectRef.current) {
             dispatchProjection({ type: 'clear_stream', status: 'idle' });
             setMessages((prev) => dropOptimisticUserMessageIfLast(prev, userMessage.id));
-            onUntrustedProjectRef.current();
+            onUntrustedProjectRef.current({ message: trimmed, options: options ?? {} });
             return false;
           }
           dispatchProjection({ type: 'clear_stream', status: 'error' });

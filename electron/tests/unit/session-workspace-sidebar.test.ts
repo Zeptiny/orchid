@@ -1,8 +1,12 @@
+// @vitest-environment jsdom
 /**
  * Project-scoped session sidebar helpers — U6.
  */
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { createElement } from 'react';
+import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import type { SessionActivity, SessionSummary } from '../../src/shared/types/ipc-boundary';
+import { LeftSidebar } from '../../src/renderer/components/LeftSidebar';
 import {
   normalizeWorkspaceKey,
   pathsEqual,
@@ -210,5 +214,154 @@ describe('truncatePathDisplay', () => {
     const out = truncatePathDisplay(long, 20);
     expect(out.startsWith('…/')).toBe(true);
     expect(out.length).toBeLessThanOrEqual(20);
+  });
+});
+
+// ── Collapsed-project persistence (issue #163) ───────────────────────────────
+
+describe('collapsed project persistence', () => {
+  const storageKey = 'orchid-sidebar-collapsed-projects';
+
+  function renderSidebar(sessions: SessionSummary[]) {
+    return render(
+      createElement(LeftSidebar, {
+        isCollapsed: false,
+        onToggle: () => {},
+        sessionListState: { status: 'ready', sessions },
+        activeSessionId: null,
+        onSessionSelect: () => {},
+        onSessionCreate: () => {},
+        onSessionDelete: () => {},
+        onRefreshSessions: () => {},
+        onOpenSettings: () => {},
+      }),
+    );
+  }
+
+  function projectToggle(label: string): HTMLElement {
+    return screen.getByRole('button', { name: new RegExp(label) });
+  }
+
+  const sessions = [
+    summary({ id: 'a1', name: 'Alpha chat', cwd: '/proj/alpha', updatedAt: 2 }),
+    summary({ id: 'b1', name: 'Beta chat', cwd: '/proj/beta', updatedAt: 1 }),
+  ];
+
+  beforeEach(() => {
+    localStorage.clear();
+  });
+
+  afterEach(() => {
+    cleanup();
+    localStorage.clear();
+  });
+
+  it('keeps a collapsed group collapsed across a remount (restart)', () => {
+    renderSidebar(sessions);
+    expect(projectToggle('alpha').getAttribute('aria-expanded')).toBe('true');
+    expect(projectToggle('beta').getAttribute('aria-expanded')).toBe('true');
+
+    fireEvent.click(projectToggle('alpha'));
+    expect(projectToggle('alpha').getAttribute('aria-expanded')).toBe('false');
+    expect(screen.queryByText('Alpha chat')).toBeNull();
+    expect(localStorage.getItem(storageKey)).toBe(JSON.stringify(['/proj/alpha']));
+
+    // Unmount + remount simulates an app restart: state rehydrates from storage.
+    cleanup();
+    renderSidebar(sessions);
+    expect(projectToggle('alpha').getAttribute('aria-expanded')).toBe('false');
+    expect(screen.queryByText('Alpha chat')).toBeNull();
+    expect(projectToggle('beta').getAttribute('aria-expanded')).toBe('true');
+    expect(screen.getByText('Beta chat')).toBeTruthy();
+
+    // The restored group can still be expanded again (write-through updates).
+    fireEvent.click(projectToggle('alpha'));
+    expect(projectToggle('alpha').getAttribute('aria-expanded')).toBe('true');
+    expect(screen.getByText('Alpha chat')).toBeTruthy();
+    expect(localStorage.getItem(storageKey)).toBe(JSON.stringify([]));
+  });
+
+  it('starts fully expanded when storage is missing or corrupted', () => {
+    localStorage.setItem(storageKey, '{not-json');
+    renderSidebar(sessions);
+    expect(projectToggle('alpha').getAttribute('aria-expanded')).toBe('true');
+    expect(projectToggle('beta').getAttribute('aria-expanded')).toBe('true');
+    expect(screen.getByText('Alpha chat')).toBeTruthy();
+  });
+});
+
+// ── Project delete (issue #158) ──────────────────────────────────────────────
+
+describe('project delete', () => {
+  const deleteSessions = [
+    summary({ id: 'a1', name: 'Alpha one', cwd: '/proj/alpha', updatedAt: 2 }),
+    summary({ id: 'a2', name: 'Alpha two', cwd: '/proj/alpha', updatedAt: 1 }),
+    summary({ id: 'b1', name: 'Beta chat', cwd: '/proj/beta', updatedAt: 3 }),
+  ];
+
+  function renderWithDelete(onProjectDelete: (project: {
+    label: string;
+    path: string | null;
+    sessionIds: readonly string[];
+  }) => void) {
+    return render(
+      createElement(LeftSidebar, {
+        isCollapsed: false,
+        onToggle: () => {},
+        sessionListState: { status: 'ready', sessions: deleteSessions },
+        activeSessionId: null,
+        onSessionSelect: () => {},
+        onSessionCreate: () => {},
+        onSessionDelete: () => {},
+        onRefreshSessions: () => {},
+        onOpenSettings: () => {},
+        onProjectDelete,
+      }),
+    );
+  }
+
+  beforeEach(() => {
+    localStorage.clear();
+  });
+
+  afterEach(() => {
+    cleanup();
+    localStorage.clear();
+  });
+
+  it('confirms and reports every session id in the group', () => {
+    const deleted: Array<readonly string[]> = [];
+    renderWithDelete((project) => {
+      deleted.push(project.sessionIds);
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Delete all sessions in alpha' }));
+    expect(screen.getByText(/Delete 2 sessions in alpha\?/)).toBeTruthy();
+
+    // Cancel first — nothing deleted.
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(deleted).toHaveLength(0);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Delete all sessions in alpha' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Delete project sessions' }));
+    expect(deleted).toHaveLength(1);
+    expect([...deleted[0]!].sort()).toEqual(['a1', 'a2']);
+  });
+
+  it('does not render delete controls without a handler', () => {
+    render(
+      createElement(LeftSidebar, {
+        isCollapsed: false,
+        onToggle: () => {},
+        sessionListState: { status: 'ready', sessions: deleteSessions },
+        activeSessionId: null,
+        onSessionSelect: () => {},
+        onSessionCreate: () => {},
+        onSessionDelete: () => {},
+        onRefreshSessions: () => {},
+        onOpenSettings: () => {},
+      }),
+    );
+    expect(screen.queryByRole('button', { name: 'Delete all sessions in alpha' })).toBeNull();
   });
 });

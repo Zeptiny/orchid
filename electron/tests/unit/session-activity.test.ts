@@ -93,4 +93,52 @@ describe('SessionActivityStore', () => {
     expect(first.updatedAt).toBe(100);
     expect(second.updatedAt).toBe(101);
   });
+
+  it('keeps two working sessions in stable order while one streams detail updates', () => {
+    const store = new SessionActivityStore();
+    const earlier = '11111111-1111-4111-8111-111111111111';
+    const later = '22222222-2222-4222-8222-222222222222';
+    store.update(earlier, { state: 'working', startedAt: 100 }, 100);
+    store.update(later, { state: 'working', startedAt: 200 }, 200);
+
+    for (let now = 300; now <= 900; now += 100) {
+      store.update(later, { detail: `Streaming detail ${now}` }, now);
+      expect(store.list().map((item) => item.sessionId)).toEqual([earlier, later]);
+    }
+  });
+
+  it('orders working and waiting rows by oldest turn start with unknown starts last', () => {
+    const store = new SessionActivityStore();
+    store.update('working-newest-start', { state: 'working', startedAt: 300 }, 500);
+    store.update('working-oldest-start', { state: 'working', startedAt: 100 }, 100);
+    store.update('working-unknown-start', { state: 'working', startedAt: null }, 700);
+    store.update('waiting-newest-start', { state: 'waiting', startedAt: 400 }, 400);
+    store.update('waiting-oldest-start', { state: 'waiting', startedAt: 200 }, 600);
+
+    // Oldest-start-first is a deliberate queue-position choice: the row that
+    // has been running longest keeps the top of its bucket, and newly started
+    // work enters below instead of displacing rows mid-turn.
+    expect(store.list().map((item) => item.sessionId)).toEqual([
+      'working-oldest-start',
+      'working-newest-start',
+      'working-unknown-start',
+      'waiting-oldest-start',
+      'waiting-newest-start',
+    ]);
+  });
+
+  it('keeps idle rows ordered unread-first then by recency', () => {
+    const store = new SessionActivityStore();
+    store.update('idle-stale-unread', { state: 'idle', unread: true }, 100);
+    store.update('idle-fresh-seen', {
+      state: 'idle', unread: false, backgroundProcessCount: 1,
+    }, 900);
+    store.update('idle-fresh-unread', { state: 'idle', unread: true }, 500);
+
+    expect(store.list().map((item) => item.sessionId)).toEqual([
+      'idle-fresh-unread',
+      'idle-stale-unread',
+      'idle-fresh-seen',
+    ]);
+  });
 });

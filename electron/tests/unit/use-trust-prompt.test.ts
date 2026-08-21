@@ -306,10 +306,50 @@ describe('useChat untrusted_project mapping', () => {
     expect(send).toHaveBeenCalledTimes(1);
     expect(started).toBe(false);
     expect(onUntrustedProject).toHaveBeenCalledTimes(1);
+    // The failed send context (trimmed message + options) travels with the
+    // callback so the mount point can stash and replay it after a grant.
+    expect(onUntrustedProject).toHaveBeenCalledWith({ message: 'hello', options: {} });
     // No raw error bubble; the optimistic user message was dropped.
     expect(result.current.error).toBeNull();
     expect(result.current.status).toBe('idle');
     expect(result.current.messages).toHaveLength(0);
+  });
+
+  it('hands onUntrustedProject the trimmed message and the original options object', async () => {
+    const { send } = installChatBridge(UNTRUSTED_RESULT);
+    const onUntrustedProject = vi.fn();
+    const { result } = renderHook(() => useChat('session-a', { onUntrustedProject }));
+    const options = { sessionId: 'session-a', model: { connectionId: 'c1', modelId: 'm1' } };
+
+    await act(async () => {
+      await result.current.send('  stash me  ', options);
+    });
+
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(onUntrustedProject).toHaveBeenCalledTimes(1);
+    const payload = onUntrustedProject.mock.calls[0]?.[0];
+    expect(payload.message).toBe('stash me');
+    // Same object identity — the stash must replay the exact original options.
+    expect(payload.options).toBe(options);
+  });
+
+  it('does not invoke onUntrustedProject when the send starts a turn', async () => {
+    const { send } = installChatBridge({
+      status: 'started',
+      sessionId: 'session-a',
+      turnId: 'turn-1',
+    });
+    const onUntrustedProject = vi.fn();
+    const { result } = renderHook(() => useChat('session-a', { onUntrustedProject }));
+
+    let started = false;
+    await act(async () => {
+      started = await result.current.send('hello');
+    });
+
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(started).toBe(true);
+    expect(onUntrustedProject).not.toHaveBeenCalled();
   });
 
   it('keeps the generic error behavior when no callback is provided', async () => {

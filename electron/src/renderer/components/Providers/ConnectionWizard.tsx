@@ -589,7 +589,7 @@ export function ConnectionWizard({
                 </FormField>
               </Panel>
 
-              {!existingConnection && (
+              {!existingConnection && (selectedDefinition?.supportedProtocols ?? []).length > 1 && (
                 <Panel as="section" className="config-fieldset flex flex-col gap-3">
                   <SectionHeader title="Protocol" />
                   <label className="label" htmlFor="provider-wizard-protocol">

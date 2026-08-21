@@ -12,7 +12,7 @@ import {
   useRef,
   useState,
 } from 'react';
-import { useChat } from '../hooks/useChat';
+import { useChat, type UntrustedProjectSendFailure } from '../hooks/useChat';
 import { useSession } from '../hooks/useSession';
 import { useBackgroundCommands } from '../hooks/useBackgroundCommands';
 import { useInspectorHydration } from '../hooks/useInspectorHydration';
@@ -188,11 +188,40 @@ export function ChatView({ isVisible = true, bootstrapConfig = null, onNotify, a
 
   // Trusted-projects prompt: explicit interactions (bind result, send failure,
   // badge click) call openFor; granting re-resolves workspace + gated services.
+  // A send that failed the trust gate is stashed here so granting replays it
+  // (issue #148) and declining restores it to the composer instead of losing it.
+  const pendingTrustSendRef = useRef<UntrustedProjectSendFailure | null>(null);
+  /** Late-bound handleSend for the grant replay; handleSend is defined below. */
+  const handleSendRef = useRef<((message: string) => Promise<boolean>) | null>(null);
+  /** One-shot composer draft restore (trust decline). */
+  const [restoreDraft, setRestoreDraft] = useState<{ text: string } | null>(null);
+  const handleRestoreDraftConsumed = useCallback(() => setRestoreDraft(null), []);
+  const draftRestore = useMemo(
+    () => (restoreDraft ? { text: restoreDraft.text, consumed: handleRestoreDraftConsumed } : null),
+    [restoreDraft, handleRestoreDraftConsumed],
+  );
   const trustPrompt = useTrustPrompt({
     onGranted: () => {
       void session.getWorkspace();
       void refreshMCP();
       void refreshIndex();
+      // Replay the trust-gated send. Clear first so a replay that fails again
+      // re-stashes fresh instead of double-firing the stash.
+      const pending = pendingTrustSendRef.current;
+      if (!pending) return;
+      pendingTrustSendRef.current = null;
+      // Superseded: another session owns the view now (the dialog is modal, so
+      // this only happens through programmatic session switches). Drop the
+      // stash silently rather than firing the message into an unrelated
+      // session — the sidebar selected another session deliberately.
+      if ((pending.options.sessionId ?? null) !== (session.activeSession?.id ?? null)) {
+        return;
+      }
+      void handleSendRef.current?.(pending.message)?.then((sent) => {
+        // Replay was gated (provider/workspace changed mid-dialog): put the
+        // message back in the composer instead of dropping it.
+        if (!sent) setRestoreDraft({ text: pending.message });
+      });
     },
   });
 
@@ -216,9 +245,12 @@ export function ChatView({ isVisible = true, bootstrapConfig = null, onNotify, a
   const chat = useChat(session.activeSession?.id ?? null, {
     persistedSessionUsage: sessionUsage.total,
     latestPersistedUsage: sessionUsage.latest,
-    onUntrustedProject: () => {
+    onUntrustedProject: (failure) => {
       const cwd = session.workspace?.cwd ?? session.activeSession?.cwd;
-      if (cwd) trustPrompt.openFor(cwd);
+      if (!cwd) return;
+      // Stash the failed send so grant/decline can replay or restore it.
+      pendingTrustSendRef.current = failure;
+      trustPrompt.openFor(cwd);
     },
   });
 
@@ -645,6 +677,32 @@ export function ChatView({ isVisible = true, bootstrapConfig = null, onNotify, a
     [session, messageQueue.clearQueue],
   );
 
+  // Project delete removes every session in the group. Sequential so each
+  // delete's working-set snapshot reflects the previous one; one failure must
+  // not abort the rest.
+  const handleProjectDelete = useCallback(
+    async (project: { label: string; sessionIds: readonly string[] }) => {
+      if (project.sessionIds.includes(session.activeSession?.id ?? '')) {
+        messageQueue.clearQueue();
+      }
+      let failures = 0;
+      for (const id of project.sessionIds) {
+        try {
+          await session.deleteSession(id);
+        } catch {
+          failures += 1;
+        }
+      }
+      if (failures > 0) {
+        notify(
+          `Deleted ${project.sessionIds.length - failures} of ${project.sessionIds.length} sessions in ${project.label}; ${failures} failed.`,
+          'error',
+        );
+      }
+    },
+    [session, messageQueue.clearQueue, notify],
+  );
+
   const handleSessionRename = useCallback(
     async (id: string, name: string) => {
       try {
@@ -815,6 +873,9 @@ export function ChatView({ isVisible = true, bootstrapConfig = null, onNotify, a
     ],
   );
 
+  // Late-bind handleSend for the trust-grant replay (declared above via ref).
+  handleSendRef.current = handleSend;
+
   const handleRetry = useCallback(async () => {
     // Re-send the last user message after an error
     const lastUser = [...chat.messages]
@@ -890,6 +951,14 @@ export function ChatView({ isVisible = true, bootstrapConfig = null, onNotify, a
   const handleOpenProviders = useCallback(() => {
     emitOrchidEvent('orchid:open-settings', { tab: 'providers' });
   }, []);
+  // Declining trust (button, Escape, backdrop click) restores the gated
+  // message to the composer instead of losing it.
+  const handleTrustDecline = useCallback(() => {
+    const pending = pendingTrustSendRef.current;
+    pendingTrustSendRef.current = null;
+    if (pending) setRestoreDraft({ text: pending.message });
+    trustPrompt.decline();
+  }, [trustPrompt.decline]);
   const handleFocusSectionConsumed = useCallback(() => {
     setInspectorFocusSection(null);
   }, []);
@@ -1156,6 +1225,7 @@ export function ChatView({ isVisible = true, bootstrapConfig = null, onNotify, a
         onSessionCreate={handleSessionCreateClick}
         onProjectSessionCreate={handleProjectSessionCreateClick}
         onProjectSelect={handleProjectSelect}
+        onProjectDelete={handleProjectDelete}
         onSessionDelete={handleSessionDelete}
         onSessionDeleteError={handleSessionDeleteError}
         deletingSessionIds={session.pendingDeleteIds}
@@ -1327,6 +1397,7 @@ export function ChatView({ isVisible = true, bootstrapConfig = null, onNotify, a
           onOpenProviders={handleOpenProviders}
           onPickProjectDir={handlePickProjectDirClick}
           isViewActive={!isVisible || contentMode === 'subagents'}
+          draftRestore={draftRestore}
         />
         <DeferredSurface isVisible={isVisible}>
           <Footer
@@ -1426,7 +1497,7 @@ export function ChatView({ isVisible = true, bootstrapConfig = null, onNotify, a
         busy={trustPrompt.busy}
         error={trustPrompt.error}
         onGrant={() => void trustPrompt.grant()}
-        onDecline={trustPrompt.decline}
+        onDecline={handleTrustDecline}
       />
     </div>
   );

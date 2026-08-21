@@ -65,6 +65,12 @@ interface InputAreaProps {
   onOpenProviders?: () => void;
   /** ChatView keeps this subtree mounted while the Subagent View owns focus. */
   isViewActive?: boolean;
+  /**
+   * One-shot composer text restore (e.g. a trust-gated send the user
+   * declined). The text replaces the input once; `consumed()` reports back so
+   * the owner drops the restore and cannot fire it twice.
+   */
+  draftRestore?: { text: string; consumed: () => void } | null;
 }
 
 type SubPicker = '/theme' | '/personality' | '/model' | '/sessions' | null;
@@ -110,6 +116,7 @@ export const InputArea = memo(function InputArea({
   modelSelected = true,
   onOpenProviders,
   isViewActive = false,
+  draftRestore = null,
 }: InputAreaProps) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   /** Blocks rapid double-Enter before parent status re-renders to streaming. */
@@ -384,6 +391,14 @@ export const InputArea = memo(function InputArea({
   useEffect(() => {
     resizeTextarea();
   }, [input, resizeTextarea]);
+
+  // One-shot draft restore: apply the stashed text, then tell the owner it
+  // landed so the same restore cannot re-fire on later re-renders.
+  useEffect(() => {
+    if (!draftRestore) return;
+    setInput(draftRestore.text);
+    draftRestore.consumed();
+  }, [draftRestore]);
 
   // Cancel pending rAF on unmount
   useEffect(() => {

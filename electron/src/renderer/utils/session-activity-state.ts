@@ -66,7 +66,7 @@ export function reconcileSessionActivitySnapshot(
   return next;
 }
 
-/** Visible activities ordered by urgency and recency. */
+/** Visible activities ordered by urgency and turn-start stability. */
 export function orderedSessionActivities(
   current: SessionActivityMap,
 ): SessionActivity[] {
@@ -76,12 +76,25 @@ export function orderedSessionActivities(
     waiting: 2,
     idle: 3,
   };
+  // Unknown turn starts sort last, not oldest, within the working/waiting bucket.
+  const startedAtSortValue = (activity: SessionActivity): number =>
+    activity.startedAt ?? Number.POSITIVE_INFINITY;
   return [...current.values()]
     .filter((activity) => sessionActivityPresentation(activity).visible)
     .sort((a, b) => {
       const statePriority = priority[a.state] - priority[b.state];
       if (statePriority !== 0) return statePriority;
-      if (a.unread !== b.unread) return a.unread ? -1 : 1;
+      if (a.state === 'working' || a.state === 'waiting') {
+        // Mirror SessionActivityStore.list(): active rows order by turn start
+        // so streamed detail bumps never reshuffle them between snapshot and
+        // broadcast. Oldest start first; equal or unknown starts fall through
+        // to recency.
+        const aStart = startedAtSortValue(a);
+        const bStart = startedAtSortValue(b);
+        if (aStart !== bStart) return aStart - bStart;
+      } else if (a.unread !== b.unread) {
+        return a.unread ? -1 : 1;
+      }
       return b.updatedAt - a.updatedAt;
     });
 }
