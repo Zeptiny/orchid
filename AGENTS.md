@@ -176,6 +176,7 @@ electron/
 │   │   │   │   ├── snapshot.ts  # Live chat snapshot builder
 │   │   │   │   ├── persist.ts   # Debounced checkpoints + turn persistence
 │   │   │   │   ├── abort.ts     # Force-abort / dispose paths
+│   │   │   │   ├── compaction.ts # Main-session compaction engine — trigger/pending/retry state, send-time + mid-turn compaction seams
 │   │   │   │   ├── session.ts   # ensureActiveSession (workspace resolve + trust gate)
 │   │   │   │   └── title.ts     # Auto-naming via internal session-namer
 │   │   │   ├── next-request-stop.ts # Stop the next request at the next step boundary
@@ -313,6 +314,7 @@ electron/
 │   │   │   ├── useLiveCommandOutput.ts # Foreground/background command output streaming
 │   │   │   ├── useSmartAutoScroll.ts # Viewport pinning with scroll-away suspension
 │   │   │   ├── use-responsive-shell.ts # Panel collapse state by width
+│   │   │   ├── useTrustSendReplay.ts # Trust-gated send stash + grant replay / decline restore
 │   │   │   └── useTrustPrompt.ts / useTimeRange.ts
 │   │   ├── keyboard/            # Shortcut subsystem
 │   │   │   ├── registry.ts      # SHORTCUTS source of truth + formatting helpers
@@ -375,7 +377,8 @@ electron/
 │       ├── commands.ts          # Shared command types + fuzzy-match utilities (definitions live in renderer)
 │       ├── usage.ts             # Usage accounting helpers
 │       └── utils/
-│           └── frontmatter.ts   # YAML frontmatter parser for agent/skill files
+│           ├── frontmatter.ts   # YAML frontmatter parser for agent/skill files
+│           └── session-activity-order.ts # Shared session-activity comparator (IPC snapshot / live broadcast order parity)
 ├── tests/
 ├── scripts/
 ├── package.json

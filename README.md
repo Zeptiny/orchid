@@ -42,6 +42,7 @@ Most coding assistants stop at “generate code in the editor.” Orchid aims hi
 | Real project awareness | Filesystem, shell, grep, AST symbols, and local semantic search (RAG) |
 | Structured workflows | Built-in skills for brainstorm, plan, implement, review, commit/PR, and compound |
 | Specialists, not one mega-prompt | A main agent that can delegate to focused subagents (explorer, implementer, reviewers, …) |
+| Long chats that stay in context | Automatic compaction summarizes or trims old turns; `/compact` on demand |
 | Your models, your keys | Bring API keys or env-based credentials; credentials stay out of the renderer |
 | Local-first extras | Optional local embeddings, project indexes, and MCP for external tools |
 
@@ -71,6 +72,9 @@ Reusable workflows guide multi-step work, including:
 
 ### Sessions & workspace
 Bind a project directory per session, keep history on disk (`~/.orchid/sessions.db`, SQLite), switch sessions, and track usage/cost attribution per connection.
+
+### Context compaction
+Long conversations stay within context limits. Compaction triggers automatically at a configurable threshold (or manually via `/compact`), summarizes or selectively trims old turns while preserving recent user messages, and can even pause an overflowing subagent run mid-flight, compact, and resume it. Compacted runs stay visible with a live compaction widget; behavior is tunable in **Settings → Compaction**.
 
 ### Personalities & themes
 Change agent tone (default, zen, pirate, socrates, …) and pick a UI theme (dark default, solarized light, bluey, green terminal, Windows XP nostalgia).
@@ -116,7 +120,7 @@ That compiles the main process, starts the Vite renderer on `localhost:5173`, an
 
 1. Complete (or skip) the onboarding wizard
 2. Open **Settings → Providers** (or finish provider setup in onboarding)
-3. Add a connection, submit credentials, validate, and pick a default model
+3. Add a connection — credentials are validated and models are discovered live as you type, so you can search and pick a default model before saving
 4. Bind a project folder (session working directory)
 5. Ask Orchid to explore, plan, or implement something small
 
@@ -163,7 +167,7 @@ Model identity is always `{ connectionId, modelId }` — two accounts for the sa
 | Cancel stream / close modal | `Escape` |
 | Toggle inspector | `Cmd+B` / `Ctrl+B` |
 
-Useful palette commands: `/new`, `/sessions`, `/model`, `/theme`, `/personality`, `/settings`, `/rag index`, `/ast index`.
+Useful palette commands: `/new`, `/sessions`, `/model`, `/theme`, `/personality`, `/settings`, `/compact`, `/rag index`, `/ast index`.
 
 Config lives in `~/.orchid/config.json` with optional project overrides in `.orchid.json`. Prefer the in-app **Settings** UI for day-to-day changes.
 
@@ -213,7 +217,6 @@ Orchid is an early preview. Expect rough edges. Highlights that matter when tryi
 
 ### Missing product surface
 - **No public installers** or auto-update channel yet — run or package from source
-- **No session compaction / compression** — long chats are not summarized or trimmed to stay within context limits
 - No LSP or SSH/remote workspaces
 
 Full engineering backlog: [`TODO.md`](TODO.md).
@@ -226,6 +229,7 @@ Full engineering backlog: [`TODO.md`](TODO.md).
 |------|--------|
 | Core agent loop + tools | Working — actively iterated |
 | Multi-provider connections | Working for key drivers |
+| Session & subagent context compaction | Working — new; defaults still being tuned |
 | Onboarding + settings | Working |
 | Packaging (AppImage/deb/dmg/nsis) | Works locally; no public release channel yet |
 | Polish, edge cases, some workflows | In progress |
