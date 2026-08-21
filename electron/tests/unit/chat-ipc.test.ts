@@ -517,6 +517,7 @@ const mocks = vi.hoisted(() => {
   const backgroundStore = {
     entries: backgroundEntries,
     terminateSession: vi.fn(),
+    terminateScope: vi.fn(),
     snapshot: vi.fn((commandId: number, _lastN?: number) => {
       const entry = backgroundEntries.get(commandId);
       if (!entry) return undefined;
@@ -561,6 +562,7 @@ const mocks = vi.hoisted(() => {
     _reset: () => {
       backgroundEntries.clear();
       backgroundStore.terminateSession.mockClear();
+      backgroundStore.terminateScope.mockClear();
       backgroundStore.snapshot.mockClear();
       backgroundStore.snapshotVisible.mockClear();
       backgroundStore.snapshotForSession.mockClear();
@@ -605,6 +607,7 @@ const mocks = vi.hoisted(() => {
     subagentManager: {
       cancelRunning: vi.fn(() => []),
       discardSession: vi.fn(),
+      getStates: vi.fn((): Array<{ id: string; state: string }> => []),
     },
     publishSessionActivity: vi.fn(),
     completeSessionActivity: vi.fn(),
@@ -2377,6 +2380,122 @@ describe('chat IPC teardown and bgcmd bounds', () => {
       command: '',
       agentScopeId: 'subagent-xyz',
     });
+  });
+});
+
+describe('chat:cancel interrupt layers (issue #145)', () => {
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    mocks.handlers.clear();
+    mocks.streamResponses.length = 0;
+    mocks.streamEventSequences.length = 0;
+    mocks.subagentManager.cancelRunning.mockClear();
+    mocks.subagentManager.getStates.mockClear();
+    mocks.subagentManager.getStates.mockReturnValue([]);
+    mocks.runtimeRegistry._reset();
+    mocks.electronWebContents.fromId.mockReset();
+    mocks.electronWebContents.fromId.mockReturnValue(null);
+    mocks.electronWebContents.getAllWebContents.mockReset();
+    mocks.electronWebContents.getAllWebContents.mockReturnValue([]);
+    mocks.sessionManager._reset();
+
+    chatIpc = await import('../../src/main/ipc/chat');
+    chatIpc.registerChatIPC();
+  });
+
+  afterEach(() => {
+    chatIpc.unregisterChatIPC();
+    mocks.handlers.clear();
+    mocks.streamResponses.length = 0;
+    mocks.streamEventSequences.length = 0;
+    mocks.sessionManager._reset();
+  });
+
+  it('second Esc terminates only main-scoped processes and leaves subagents running', async () => {
+    const sessionId = 'efefefef-efef-4efe-8efe-efefefefefef';
+    const selection = {
+      connectionId: '11111111-1111-4111-8111-111111111111',
+      modelId: 'vendor/path/model',
+    };
+    mocks.sessionManager._setActive({
+      ...makeSession(sessionId),
+      selection,
+      modelLabel: selection.modelId,
+    });
+    let releaseStream!: () => void;
+    const streamGate = new Promise<void>((resolve) => { releaseStream = resolve; });
+    mocks.streamChat.mockImplementationOnce(async function* () {
+      yield { type: 'content', text: 'subagents keep working' };
+      await streamGate;
+      yield { type: 'finish', finishReason: 'stop' };
+    });
+    const send = vi.fn();
+    const source = { id: 916, send };
+    mocks.sessionManager._setActiveForWindow('916', mocks.sessionManager.getActive()!);
+    mocks.electronWebContents.getAllWebContents.mockReturnValue([source]);
+    const chatSend = mocks.handlers.get(IPC_CHANNELS.CHAT_SEND)!;
+    const chatCancel = mocks.handlers.get(IPC_CHANNELS.CHAT_CANCEL)!;
+
+    await chatSend({ sender: source }, { message: 'Run the crew' });
+    await waitForChannelCount(send, IPC_CHANNELS.CHAT_CHUNK, 1);
+
+    expect(await chatCancel({ sender: source }, { sessionId })).toMatchObject({ status: 'confirming' });
+    expect(await chatCancel({ sender: source }, { sessionId })).toMatchObject({ status: 'confirming_subagents' });
+
+    expect(mocks.backgroundStore.terminateScope).toHaveBeenCalledWith(sessionId, 'main');
+    expect(mocks.backgroundStore.terminateSession).not.toHaveBeenCalled();
+    expect(mocks.subagentManager.cancelRunning).not.toHaveBeenCalled();
+
+    releaseStream();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  });
+
+  it('keeps the subagent-cancel layer reachable after the main turn is gone', async () => {
+    const sessionId = 'fdfdfdfd-fdfd-4fdf-8fdf-fdfdfdfdfdfd';
+    const selection = {
+      connectionId: '11111111-1111-4111-8111-111111111111',
+      modelId: 'vendor/path/model',
+    };
+    mocks.sessionManager._setActive({
+      ...makeSession(sessionId),
+      selection,
+      modelLabel: selection.modelId,
+    });
+    mocks.streamResponses.push('turn finished');
+    const send = vi.fn();
+    const source = { id: 917, send };
+    mocks.sessionManager._setActiveForWindow('917', mocks.sessionManager.getActive()!);
+    mocks.electronWebContents.getAllWebContents.mockReturnValue([source]);
+    const chatSend = mocks.handlers.get(IPC_CHANNELS.CHAT_SEND)!;
+    const chatCancel = mocks.handlers.get(IPC_CHANNELS.CHAT_CANCEL)!;
+
+    await chatSend({ sender: source }, { message: 'Delegate everything' });
+    await waitForChannelCount(send, IPC_CHANNELS.CHAT_DONE, 1);
+    // Let the finalize microtask dispose the ActiveAgent (post-interrupt-reset
+    // state: no live main turn, subagents still running).
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    mocks.subagentManager.getStates.mockReturnValue([
+      { id: 'subagent-1', state: 'running' },
+    ]);
+    mocks.subagentManager.cancelRunning.mockReturnValue(['subagent-1']);
+    expect(await chatCancel({ sender: source }, { sessionId })).toMatchObject({ status: 'confirming_subagents' });
+    expect(mocks.subagentManager.cancelRunning).not.toHaveBeenCalled();
+
+    expect(await chatCancel({ sender: source }, { sessionId })).toMatchObject({ status: 'cancelled' });
+    expect(mocks.subagentManager.cancelRunning).toHaveBeenCalledWith(sessionId);
+    expect(mocks.backgroundStore.terminateSession).toHaveBeenCalledWith(sessionId);
+    expect(mocks.completeSessionActivity).toHaveBeenCalled();
+  });
+
+  it('returns no_active_stream when no main turn and no running subagents exist', async () => {
+    const sessionId = 'd1d1d1d1-d1d1-4d1d-8d1d-d1d1d1d1d1d1';
+    mocks.sessionManager._setActive(makeSession(sessionId));
+    const chatCancel = mocks.handlers.get(IPC_CHANNELS.CHAT_CANCEL)!;
+
+    expect(await chatCancel({ sender: { id: 918, send: vi.fn() } }, { sessionId }))
+      .toMatchObject({ status: 'no_active_stream' });
+    expect(mocks.subagentManager.cancelRunning).not.toHaveBeenCalled();
   });
 });
 

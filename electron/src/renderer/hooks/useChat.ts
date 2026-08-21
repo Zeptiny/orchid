@@ -339,6 +339,17 @@ export function consumePendingCancel(state: CancelQueueState): boolean {
   return true;
 }
 
+/**
+ * Release the cancel mutex and drop any Esc staged while the last IPC was in
+ * flight. The subagent-cancel confirmation is the destructive terminal layer:
+ * it must always require one deliberate fresh keypress instead of draining a
+ * rapid double-Esc (issue #145).
+ */
+export function discardPendingCancel(state: CancelQueueState): void {
+  state.pending = false;
+  state.inFlight = false;
+}
+
 export function resetCancelQueue(state: CancelQueueState): void {
   state.inFlight = false;
   state.pending = false;
@@ -732,13 +743,15 @@ export function useChat(
     try {
       let runCancelPhase = true;
       while (runCancelPhase) {
+        let cancelStatus: string | undefined;
         try {
           const affinity = affinityRef.current.value;
           const sessionId = affinity.selectedSessionId ?? affinity.streamSessionId;
           const result = await window.orchid.chat.cancel(
             sessionId ? { sessionId } : undefined,
           );
-          const status = result && (result as { status: string }).status;
+          cancelStatus = result && (result as { status: string }).status;
+          const status = cancelStatus;
 
           // First Esc only shows confirmAgent hint
           if (status === 'confirming') {
@@ -783,7 +796,14 @@ export function useChat(
           // Ignore cancel errors — still release / drain the queue below.
         }
 
-        runCancelPhase = consumePendingCancel(cancelQueueRef.current);
+        if (cancelStatus === 'confirming_subagents') {
+          // Layer 3 is destructive: drop Esc presses staged during the last
+          // RTT so cancelling subagents needs a deliberate fresh keypress.
+          discardPendingCancel(cancelQueueRef.current);
+          runCancelPhase = false;
+        } else {
+          runCancelPhase = consumePendingCancel(cancelQueueRef.current);
+        }
       }
     } catch {
       // Unexpected throw outside the per-IPC try — never leave the mutex stuck.

@@ -170,6 +170,43 @@ export function hasLiveMainTurn(sessionId: string): boolean {
 }
 
 /**
+ * Staged subagent-only Esc confirmation (the third interrupt layer without a
+ * live main-agent turn). After the main agent is cancelled and its ActiveAgent
+ * disposed, session-owned subagents may still run; the first Esc stages this
+ * confirmation and the next one cancels them. The stage expires after the same
+ * window the interrupt machine uses, so a late Esc re-stages the confirmation
+ * instead of firing the destructive cancel.
+ */
+const SUBAGENT_CANCEL_CONFIRM_WINDOW_MS = 5000;
+
+const subagentCancelConfirms = new Map<string, { resetTimer: ReturnType<typeof setTimeout> }>();
+
+/** Stage (or re-stage) the subagent-cancel confirmation window for a session. */
+export function stageSubagentCancelConfirm(sessionId: string): void {
+  clearSubagentCancelConfirm(sessionId);
+  const resetTimer = setTimeout(() => {
+    subagentCancelConfirms.delete(sessionId);
+  }, SUBAGENT_CANCEL_CONFIRM_WINDOW_MS);
+  subagentCancelConfirms.set(sessionId, { resetTimer });
+}
+
+/** Consume a staged confirmation; false when none is within its window. */
+export function consumeSubagentCancelConfirm(sessionId: string): boolean {
+  const entry = subagentCancelConfirms.get(sessionId);
+  if (!entry) return false;
+  clearSubagentCancelConfirm(sessionId);
+  return true;
+}
+
+/** Drop a staged confirmation (new turn start, no running subagents, …). */
+export function clearSubagentCancelConfirm(sessionId: string): void {
+  const entry = subagentCancelConfirms.get(sessionId);
+  if (!entry) return;
+  clearTimeout(entry.resetTimer);
+  subagentCancelConfirms.delete(sessionId);
+}
+
+/**
  * Whether this agent may still stream IPC to the renderer.
  * Drops events from cancelled, finalized, replaced, or generation-stale agents.
  */

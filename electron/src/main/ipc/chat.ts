@@ -12,6 +12,8 @@ import { getSessionManager } from '../session/singleton';
 import { IPC_CHANNELS, type ChatSessionSnapshot, type ChatCompactResult } from '../../shared/types/ipc';
 import { ChainStatus, lastChainError } from '../../shared/types/chain';
 import { flattenSessionMessages } from '../../shared/types/session';
+import { MAIN_AGENT_SCOPE_ID } from '../../shared/types/agent-scope';
+import { isTerminalSubagentState } from '../agents/types';
 import { getProjectTrustState } from '../project/trust';
 import { getProjectRuntimeRegistry } from '../project/runtime';
 import { clearAllChatHistory } from './chat-history';
@@ -21,8 +23,11 @@ import { completeSessionActivity } from './session-activity';
 import {
   activeAgents,
   agentGenerations,
+  clearSubagentCancelConfirm,
+  consumeSubagentCancelConfirm,
   draftEnsureByWindow,
   sessionsStarting,
+  stageSubagentCancelConfirm,
 } from './chat/state';
 import { sendChatState, sendTurnEvent, webContentsForWindowId } from './chat/events';
 import { snapshotForAgent } from './chat/snapshot';
@@ -191,6 +196,49 @@ export function registerChatIPC(): void {
     return compactSessionNow(sessionId, runtime, selection);
   });
 
+  function sessionHasActiveSubagents(sessionId: string): boolean {
+    try {
+      return getSubagentManager()
+        .getStates(sessionId)
+        .some((record) => !isTerminalSubagentState(record.state));
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Third interrupt layer with no live main-agent turn: the main agent was
+   * cancelled (its ActiveAgent disposed after the interrupt reset window), but
+   * session-owned subagents still run. The first Esc stages the confirmation;
+   * the next Esc within the window cancels the subagents and their
+   * session-owned processes. After the window the next Esc re-stages,
+   * mirroring the interrupt machine's auto-reset. Keeps layer 3 reachable for
+   * as long as subagents run (issue #145).
+   */
+  function handleSubagentOnlyCancel(
+    sessionId: string,
+    windowId: string,
+  ): { status: string } {
+    if (!sessionHasActiveSubagents(sessionId)) {
+      clearSubagentCancelConfirm(sessionId);
+      return { status: 'no_active_stream' };
+    }
+    if (!consumeSubagentCancelConfirm(sessionId)) {
+      stageSubagentCancelConfirm(sessionId);
+      return { status: 'confirming_subagents' };
+    }
+    getBackgroundStore().terminateSession(sessionId);
+    getForegroundLiveRegistry().dropSession(sessionId);
+    const cancelled = getSubagentManager().cancelRunning(sessionId);
+    if (cancelled.length > 0) {
+      completeSessionActivity(
+        sessionId,
+        getSessionManager().getActive(windowId)?.id !== sessionId,
+      );
+    }
+    return { status: 'cancelled' };
+  }
+
   ipcMain.handle(IPC_CHANNELS.CHAT_CANCEL, async (event, payload: unknown) => {
     const webContents: WebContents = event.sender;
     const windowId = String(webContents.id);
@@ -199,7 +247,7 @@ export function registerChatIPC(): void {
     const sessionId = parsed.data.sessionId ?? getSessionManager().getActive(windowId)?.id;
     if (!sessionId) return { status: 'no_active_stream' };
     const existing = activeAgents.get(sessionId);
-    if (!existing) return { status: 'no_active_stream' };
+    if (!existing) return handleSubagentOnlyCancel(sessionId, windowId);
     const streamWebContents = webContentsForWindowId(existing.windowId) ?? webContents;
     const interruptState = existing.interruptActor.getSnapshot().value as
       | 'idle'
@@ -210,8 +258,12 @@ export function registerChatIPC(): void {
       return { status: 'confirming' };
     }
     if (interruptState === 'confirmAgent') {
-      getBackgroundStore().terminateSession(sessionId);
-      getForegroundLiveRegistry().dropSession(sessionId);
+      // Second Esc cancels only the main agent. Scope the process cleanup to
+      // the main agent's own commands: subagent-owned commands live under the
+      // same session id with their own scope ids and must survive until the
+      // third Esc confirms subagent cancellation (issue #145).
+      getBackgroundStore().terminateScope(sessionId, MAIN_AGENT_SCOPE_ID);
+      getForegroundLiveRegistry().dropScope(sessionId, MAIN_AGENT_SCOPE_ID);
       existing.agentCancelled = true;
       const context = existing.actor.getSnapshot().context as AgentContext;
       existing.actor.send({ type: 'CANCEL' });
@@ -247,6 +299,7 @@ export function registerChatIPC(): void {
       return { status: 'confirming_subagents' };
     }
     if (interruptState === 'confirmSubagents') {
+      clearSubagentCancelConfirm(sessionId);
       getBackgroundStore().terminateSession(sessionId);
       getForegroundLiveRegistry().dropSession(sessionId);
       getSubagentManager().cancelRunning(sessionId);

@@ -91,6 +91,15 @@ export function ChatView({ isVisible = true, bootstrapConfig = null, onNotify, a
   const workspaceCwdRef = useRef(workspaceCwd);
   workspaceCwdRef.current = workspaceCwd;
   const subagents = useSubagents(session.activeSession?.id ?? null);
+  /**
+   * Esc keeps the third interrupt layer reachable while the session owns
+   * queued/running subagents, even when no main-agent turn is live (#145).
+   * Memoized on the group arrays' contents so the composer prop stays stable.
+   */
+  const hasRunningSubagents = useMemo(
+    () => subagents.groups.running.length > 0 || subagents.groups.queued.length > 0,
+    [subagents.groups.running, subagents.groups.queued],
+  );
   const todos = useTodos(
     session.activeSession?.id ?? null,
     session.activeSession?.todoStore.tasks ?? null,
@@ -1372,6 +1381,7 @@ export function ChatView({ isVisible = true, bootstrapConfig = null, onNotify, a
           onOpenProviders={handleOpenProviders}
           onPickProjectDir={handlePickProjectDirClick}
           isViewActive={!isVisible || contentMode === 'subagents'}
+          hasRunningSubagents={hasRunningSubagents}
           draftRestore={trustSend.draftRestore}
         />
         <DeferredSurface isVisible={isVisible}>

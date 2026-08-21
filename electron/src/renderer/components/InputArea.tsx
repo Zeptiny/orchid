@@ -66,6 +66,11 @@ interface InputAreaProps {
   /** ChatView keeps this subtree mounted while the Subagent View owns focus. */
   isViewActive?: boolean;
   /**
+   * The session still owns queued/running subagents: Esc must reach the
+   * third interrupt layer even when no main-agent turn is live (issue #145).
+   */
+  hasRunningSubagents?: boolean;
+  /**
    * One-shot composer text restore (e.g. a trust-gated send the user
    * declined). The text replaces the input once; `consumed()` reports back so
    * the owner drops the restore and cannot fire it twice.
@@ -85,13 +90,15 @@ export type InputEscapeAction = 'cancel-question' | 'cancel-chat' | 'none';
 export function resolveInputEscapeAction(options: {
   hasActiveQuestion: boolean;
   canInterrupt: boolean;
+  /** Session still owns queued/running subagents (third interrupt layer). */
+  hasRunningSubagents: boolean;
   isSlashMode: boolean;
   isViewActive: boolean;
   settingsOpen: boolean;
 }): InputEscapeAction {
   if (options.isViewActive || options.settingsOpen) return 'none';
   if (options.hasActiveQuestion) return 'cancel-question';
-  if (!options.canInterrupt || options.isSlashMode) return 'none';
+  if ((!options.canInterrupt && !options.hasRunningSubagents) || options.isSlashMode) return 'none';
   return 'cancel-chat';
 }
 
@@ -116,6 +123,7 @@ export const InputArea = memo(function InputArea({
   modelSelected = true,
   onOpenProviders,
   isViewActive = false,
+  hasRunningSubagents = false,
   draftRestore = null,
 }: InputAreaProps) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -420,6 +428,7 @@ export const InputArea = memo(function InputArea({
       const action = resolveInputEscapeAction({
         hasActiveQuestion,
         canInterrupt,
+        hasRunningSubagents,
         isSlashMode,
         isViewActive: false,
         settingsOpen: false,
@@ -435,7 +444,7 @@ export const InputArea = memo(function InputArea({
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [askQuestion.cancelAll, canInterrupt, hasActiveQuestion, isSlashMode, isViewActive, onCancel]);
+  }, [askQuestion.cancelAll, canInterrupt, hasActiveQuestion, hasRunningSubagents, isSlashMode, isViewActive, onCancel]);
 
   const resetComposerHeight = useCallback(() => {
     if (rafRef.current !== null) cancelAnimationFrame(rafRef.current);

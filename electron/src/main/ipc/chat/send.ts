@@ -57,6 +57,7 @@ import { emitSessionUpdated, sendChatState, sendTurnEvent } from './events';
 import {
   activeAgents,
   canEmitStreamEvents,
+  clearSubagentCancelConfirm,
   isCurrentAgent,
   nextAgentGeneration,
   sessionOperationGateTail,
@@ -394,6 +395,9 @@ export async function startChatTurn(
   };
   activeAgents.set(sessionId, activeAgent);
   sessionsStarting.delete(sessionId);
+  // A live main-agent turn owns the Esc phases again; drop any staged
+  // standalone subagent-cancel confirmation from a previously disposed turn.
+  clearSubagentCancelConfirm(sessionId);
 
   // A long-running first turn must not leave the session unnamed forever:
   // after the configured wait, name from the current in-flight history even
