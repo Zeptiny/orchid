@@ -1060,10 +1060,11 @@ export function finishChain(
  * - Empty or unreadable rows are never deleted (an empty id set is not a match).
  * - Fresh-id chains (turns start with a new user message, summary heads carry a
  *   new summary id) can never be subsets, so legitimate chains are immune.
- * - Containment is judged on VISIBLE ids: hidden extras (usage carriers
- *   duplicated into stale split rows) must not protect a row whose whole
- *   visible content an earlier row already holds. Owner containment uses the
- *   full id set.
+ * - Containment is judged on the FULL id set (visible + hidden) of BOTH rows:
+ *   duplicated hidden extras (usage carriers mirrored into stale split rows)
+ *   do not protect a row the owner fully subsumes, but a row carrying hidden
+ *   content the owner LACKS is preserved — retiring it would silently drop
+ *   that usage evidence (nothing else holds it).
  * - Deleting the LATER duplicate matches replay semantics: history assembly
  *   dedupes by id keeping first occurrence, so the deleted rows were already
  *   invisible to the model.
@@ -1080,30 +1081,23 @@ function deleteSupersededChains(
   if (rows.length < 2) return [];
 
   const idSets = new Map<string, Set<string>>();
-  const visibleIdSets = new Map<string, Set<string>>();
   for (const row of rows) {
     let ids: Set<string> | null = null;
-    let visibleIds: Set<string> | null = null;
     try {
       const parsed: unknown = JSON.parse(row.messages_json ?? '[]');
       if (Array.isArray(parsed)) {
         ids = new Set<string>();
-        visibleIds = new Set<string>();
         for (const message of parsed) {
           if (message && typeof message === 'object' && typeof (message as { id?: unknown }).id === 'string') {
-            const id = (message as { id: string }).id;
-            ids.add(id);
-            if (!(message as { hidden?: unknown }).hidden) visibleIds.add(id);
+            ids.add((message as { id: string }).id);
           }
         }
       }
     } catch {
       ids = null;
-      visibleIds = null;
     }
-    if (ids && visibleIds) {
+    if (ids) {
       idSets.set(row.id, ids);
-      visibleIdSets.set(row.id, visibleIds);
     }
   }
 
@@ -1111,7 +1105,7 @@ function deleteSupersededChains(
   for (let candidateIndex = 0; candidateIndex < rows.length; candidateIndex += 1) {
     const candidate = rows[candidateIndex]!;
     if (candidate.id === finalizedChainId || candidate.id === activeChainId) continue;
-    const candidateIds = visibleIdSets.get(candidate.id);
+    const candidateIds = idSets.get(candidate.id);
     if (!candidateIds || candidateIds.size === 0) continue;
     for (let ownerIndex = 0; ownerIndex < candidateIndex; ownerIndex += 1) {
       const ownerIds = idSets.get(rows[ownerIndex]!.id);
@@ -1963,6 +1957,14 @@ export interface CompactionPersistencePayload {
    */
   readonly flaggedMessageIds: readonly string[];
   /**
+   * Message ids whose `excludeFromModel` flag the settle CLEARED (scoped
+   * exempt users, selective covered-kept resets). Resolved exactly like the
+   * flagged ids — against durable rows, fail-closed — and cleared in the SAME
+   * transaction as the flag writes, so the durable rows can never keep a
+   * stale true flag that resurrects on reload.
+   */
+  readonly clearedMessageIds?: readonly string[];
+  /**
    * Summary-head chain row to insert verbatim (R20: the summary is its own
    * COMPLETED chain); null for reclaim-only compaction.
    */
@@ -1982,7 +1984,12 @@ export interface CompactionPersistenceResult {
   readonly chainIds: readonly string[];
   /** Durable chain ids whose rows received `excludeFromModel` flags. */
   readonly flaggedChainIds: readonly string[];
-  /** Inserted summary-head chain id (null for reclaim-only compaction). */
+  /**
+   * Inserted summary-head chain id — set only when the summary became its own
+   * durable row (append path). Null for reclaim-only compaction AND for
+   * INLINE insertion (the summary lives inside the owning chain row; no row
+   * carries the summary chain's id).
+   */
   readonly summaryChainId: string | null;
 }
 
@@ -2067,6 +2074,27 @@ export function applyCompactionPersistence(
         }
       }
 
+      // Cleared flags resolve exactly like flagged ids (same owner index,
+      // same fail-closed integrity throw) — a cleared id that misses its
+      // durable owner aborts the whole write rather than half-settling.
+      const clearsByChain = new Map<string, Set<string>>();
+      for (const messageId of new Set(payload.clearedMessageIds ?? [])) {
+        const owners = chainIdsByMessageId.get(messageId);
+        if (!owners || owners.length === 0) {
+          throw new Error(
+            `applyCompactionPersistence: cleared message ${messageId} not found in durable chains (session ${sessionId})`,
+          );
+        }
+        for (const chainId of owners) {
+          let ids = clearsByChain.get(chainId);
+          if (!ids) {
+            ids = new Set<string>();
+            clearsByChain.set(chainId, ids);
+          }
+          ids.add(messageId);
+        }
+      }
+
       // Resolve the summary insertion anchor before mutating anything.
       let anchorEntry: (typeof entries)[number] | null = null;
       let anchorIndex = -1;
@@ -2090,14 +2118,25 @@ export function applyCompactionPersistence(
 
       const chainIds = entries.map((entry) => entry.row.id);
 
-      // 1. In-place flag writes: full durable messages, only flags change.
-      for (const [chainId, ids] of flagsByChain) {
+      // 1. In-place flag writes: full durable messages, only flags change —
+      //    sets and clears in the SAME transaction, so an in-memory-only
+      //    clear can never leave a stale true flag on the durable row.
+      const touchedChainIds = new Set([...flagsByChain.keys(), ...clearsByChain.keys()]);
+      for (const chainId of touchedChainIds) {
+        const setIds = flagsByChain.get(chainId);
+        const clearIds = clearsByChain.get(chainId);
         const entry = entries.find((candidate) => candidate.row.id === chainId)!;
-        entry.messages = entry.messages.map((message) =>
-          ids.has(message.id) && !message.excludeFromModel
-            ? { ...message, excludeFromModel: true }
-            : message,
-        );
+        entry.messages = entry.messages.map((message) => {
+          // A set wins if an id were somehow both (the settle guarantees
+          // flagged and cleared ids are disjoint).
+          if (setIds?.has(message.id) && !message.excludeFromModel) {
+            return { ...message, excludeFromModel: true };
+          }
+          if (clearIds?.has(message.id) && message.excludeFromModel) {
+            return { ...message, excludeFromModel: false };
+          }
+          return message;
+        });
         updateChainRow(db, { ...chainMetadataFromRow(entry.row), messages: entry.messages });
       }
 
@@ -2116,6 +2155,9 @@ export function applyCompactionPersistence(
         const summary: Chain = { ...summaryChain, sessionId };
         if (!anchorEntry) {
           // Append after the last durable chain (no anchor chain to inline into).
+          // This is the ONLY branch that creates a durable row carrying the
+          // summary chain's id — the inline branch below leaves summaryChainId
+          // null (no row with summary.id exists to reference).
           const insertChain = db.prepare(INSERT_CHAIN_SQL);
           const ordinal = db
             .prepare('SELECT COALESCE(MAX(ordinal), -1) + 1 FROM chains WHERE session_id = ?')
@@ -2123,6 +2165,7 @@ export function applyCompactionPersistence(
             .get(sessionId) as number;
           insertChainRow(db, insertChain, summary, ordinal);
           chainIds.push(summary.id);
+          summaryChainId = summary.id;
         } else {
           const withSummary: Message[] = [
             ...anchorEntry.messages.slice(0, anchorIndex),
@@ -2132,7 +2175,6 @@ export function applyCompactionPersistence(
           updateChainRow(db, { ...chainMetadataFromRow(anchorEntry.row), messages: withSummary });
           anchorEntry.messages = withSummary;
         }
-        summaryChainId = summary.id;
       }
 
       // 3. Recency bump (mirrors saveSession's updated_at write).
@@ -2220,6 +2262,13 @@ export interface SubagentCompactionPayload {
    * is the write source.
    */
   readonly flaggedMessageIds: readonly string[];
+  /**
+   * Message ids whose `excludeFromModel` flag the settle CLEARED (scoped
+   * exempt users, selective covered-kept resets). Resolved exactly like the
+   * flagged ids and cleared in the SAME transaction, mirroring the
+   * `applyCompactionPersistence` behavior over `subagent_chains`.
+   */
+  readonly clearedMessageIds?: readonly string[];
   /**
    * Summary-head message carrying the `compacted` marker to insert into the
    * chain's messages at the cut position (R20: the summary is its own message
@@ -2342,6 +2391,17 @@ export function applySubagentCompactionPersistence(
         }
       }
 
+      // Cleared ids resolve with the same fail-closed integrity throw — a
+      // clear that misses its durable message aborts the whole write.
+      const clearedSet = new Set(payload.clearedMessageIds ?? []);
+      for (const id of clearedSet) {
+        if (!messageIdSet.has(id)) {
+          throw new Error(
+            `applySubagentCompactionPersistence: cleared message ${id} not found in durable chain (subagent ${subagentId}, session ${sessionId})`,
+          );
+        }
+      }
+
       // Resolve the summary insertion anchor before mutating anything.
       let anchorIndex = -1;
       if (payload.summaryMessage && payload.insertBeforeMessageId != null) {
@@ -2356,11 +2416,19 @@ export function applySubagentCompactionPersistence(
       }
 
       // 1. In-place flag writes: only flags change, originals preserved (R3).
-      let updatedMessages = messages.map((m) =>
-        flaggedSet.has(m.id) && !m.excludeFromModel
-          ? { ...m, excludeFromModel: true }
-          : m,
-      );
+      //    Sets and clears land in the SAME message pass so a cleared flag can
+      //    never leave a stale true flag on the durable record.
+      let updatedMessages = messages.map((m) => {
+        // A set wins if an id were somehow both (the settle guarantees the
+        // flagged and cleared ids are disjoint).
+        if (flaggedSet.has(m.id) && !m.excludeFromModel) {
+          return { ...m, excludeFromModel: true };
+        }
+        if (clearedSet.has(m.id) && m.excludeFromModel) {
+          return { ...m, excludeFromModel: false };
+        }
+        return m;
+      });
 
       // 2. Summary-head insertion at the cut position (R20).
       let summaryInserted = false;

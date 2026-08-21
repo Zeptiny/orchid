@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto';
 import type { Message } from '../../src/shared/types/message';
 import { MessageRole, MessageType } from '../../src/shared/types/message';
 import { ChainStatus, type Chain } from '../../src/shared/types/chain';
-import { buildCompactionApply, stampCompactionMetrics } from '../../src/main/llm/compaction/apply';
+import { buildCompactionApply, buildSelectiveCompactionApply, stampCompactionMetrics } from '../../src/main/llm/compaction/apply';
 import type { CutResult } from '../../src/main/llm/compaction/select';
 
 // Reuse MessageType / Role helpers
@@ -83,7 +83,7 @@ function makeCut(messages: Message[], keepRecentChains: number, chainBoundaries:
 }
 
 describe('compaction apply — pure build', () => {
-  it('flags compactable range and inserts summary head as its own chain', () => {
+  it('flags compactable range and produces the summary head without its own chain row (single-row topology)', () => {
     const { sessionId, chains, messages, chainBoundaries } = buildSession(4);
     const cut = makeCut(messages, 1, chainBoundaries); // preserve last chain, compact first 3
     const summaryText = '### Handoff summary\n- Goal: implement feature X\n- Files: a.txt, b.txt\n- Remaining: tests';
@@ -98,11 +98,13 @@ describe('compaction apply — pure build', () => {
     const expectedFlagged = (cut.compactableRange.end - cut.compactableRange.start) - rangeUserIds.length;
     expect(result.flaggedIds.length).toBe(expectedFlagged);
     expect(result.flaggedIds).not.toContainEqual(expect.arrayContaining(rangeUserIds));
+    expect(result.unflaggedIds).toEqual([]); // nothing pre-flagged to clear
     expect(result.updatedMessages.length).toBe(messages.length + 1); // + summary head
     const flaggedInFlat = result.updatedMessages.filter((m) => m.excludeFromModel);
     expect(flaggedInFlat.length).toBe(result.flaggedIds.length);
 
-    // summary head is its own chain (R20)
+    // summary head carrier (R20): newChain holds the head as a payload for
+    // the durable write — it is never inserted as its own chain row.
     expect(result.summaryMessage).not.toBeNull();
     expect(result.newChain).not.toBeNull();
     expect(result.newChain!.messages).toHaveLength(1);
@@ -119,9 +121,14 @@ describe('compaction apply — pure build', () => {
       expect(chain.messages.some((m) => m.id === result.summaryMessage!.id)).toBe(false);
     }
 
-    // updatedChains contains new chain plus flagged clones (never mutates input)
-    expect(result.updatedChains.length).toBe(chains.length + 1);
-    expect(result.updatedChains.some((c) => c.id === result.newChain!.id)).toBe(true);
+    // updatedChains holds only flagged clones — the cut sits at a chain
+    // boundary, so no chain row carries the head and every original chain id
+    // survives exactly once (never mutated).
+    expect(result.updatedChains.length).toBe(chains.length);
+    expect(result.updatedChains.some((c) => c.id === result.newChain!.id)).toBe(false);
+    for (const c of chains) {
+      expect(result.updatedChains.filter((x) => x.id === c.id)).toHaveLength(1);
+    }
     // input chains not mutated
     expect(chains[0]!.messages[0]!.excludeFromModel).not.toBe(true);
     // R31: user messages in the range stay un-flagged; non-user are flagged
@@ -149,6 +156,7 @@ describe('compaction apply — pure build', () => {
     expect(result.newChain).toBeNull();
     // R31: user messages are never flagged — only a-0 survives the settle.
     expect(result.flaggedIds).toEqual(['a-0']);
+    expect(result.unflaggedIds).toEqual([]); // nothing pre-flagged to clear
     expect(result.updatedMessages.length).toBe(messages.length); // no insertion
     expect(result.updatedChains.length).toBe(chains.length); // no new chain
     // R31: user message u-0 is NOT flagged (stays in model view); a-0 is.
@@ -178,6 +186,7 @@ describe('compaction apply — pure build', () => {
     expect(result.didApply).toBe(false);
     expect(result.newChain).toBeNull();
     expect(result.summaryMessage).toBeNull();
+    expect(result.unflaggedIds).toEqual([]);
     expect(result.updatedMessages).toEqual(messages);
   });
 });
@@ -337,13 +346,13 @@ describe('compaction apply — pre-flagged inner messages are tolerated (FIX #4)
 
 });
 
-describe('compaction apply — intra-chain split keeps the original id on the preserved half (FIX #7)', () => {
-  it('after-half retains the original chain id; flagged prefix gets a fresh id; summary head sits between them', () => {
+describe('compaction apply — intra-chain cut inlines the summary into the owning chain (single-row topology)', () => {
+  it('the cut chain keeps its ORIGINAL id with the summary inline at the cut; no split rows, no fresh ids', () => {
     const { sessionId, chains, messages } = buildSession(3);
-    // Make the split chain the session's ACTIVE chain (external activeChainId points at it)
+    // Make the cut chain the session's ACTIVE chain (external activeChainId points at it)
     const originalId = chains[1]!.id;
-    const activeSplitChain = { ...chains[1]!, status: ChainStatus.ACTIVE as const };
-    const allChains = [chains[0]!, activeSplitChain, chains[2]!];
+    const activeCutChain = { ...chains[1]!, status: ChainStatus.ACTIVE as const };
+    const allChains = [chains[0]!, activeCutChain, chains[2]!];
     // Cut strictly inside chain 1 (flat messages idx 2..3): [u-0,a-0,u-1) | [a-1,u-2,a-2]
     const cut: CutResult = {
       cutIndex: 3,
@@ -357,36 +366,35 @@ describe('compaction apply — intra-chain split keeps the original id on the pr
       messages,
       chains: allChains,
       cutResult: cut,
-      summaryText: 'split summary',
+      summaryText: 'inline summary',
       mode: 'simple',
       sessionId,
     });
 
-    // The preserved after-half keeps the ORIGINAL id — exactly one chain has it
-    const afterHalf = result.updatedChains.find((c) => c.id === originalId);
-    expect(afterHalf).toBeDefined();
-    expect(result.updatedChains.filter((c) => c.id === originalId)).toHaveLength(1);
-    expect(afterHalf!.messages.map((m) => m.id)).toEqual([messages[3]!.id]);
-    expect(afterHalf!.messages.every((m) => !m.excludeFromModel)).toBe(true);
-    expect(afterHalf!.status).toBe(ChainStatus.ACTIVE); // status preserved on continuing half
+    // One chain row per input chain — no split rows, no fresh ids; the cut
+    // chain keeps its ORIGINAL id (external references stay valid).
+    expect(result.updatedChains).toHaveLength(allChains.length);
+    for (const c of allChains) {
+      expect(result.updatedChains.filter((x) => x.id === c.id)).toHaveLength(1);
+    }
+    expect(result.updatedChains.some((c) => c.id === result.newChain!.id)).toBe(false);
 
-    // The flagged prefix half gets a NEW id (frozen history). R31: messages[2]
-    // is u-1 (a user message) — it stays un-flagged in the prefix half.
-    const prefixHalf = result.updatedChains.find(
-      (c) => c.id !== originalId && c.messages.some((m) => m.id === messages[2]!.id),
-    );
-    expect(prefixHalf).toBeDefined();
-    expect(prefixHalf!.id).not.toBe(originalId);
-    expect(prefixHalf!.messages.map((m) => m.id)).toEqual([messages[2]!.id]);
-    expect(prefixHalf!.messages[0]!.excludeFromModel).not.toBe(true); // R31: user un-flagged
-    expect(prefixHalf!.status).toBe(ChainStatus.ACTIVE); // statuses preserved on both halves
-
-    // Replay order in updatedChains: prefix (new id) → summary head → after-half (original id)
-    const prefixIdx = result.updatedChains.indexOf(prefixHalf!);
-    const summaryChainIdx = result.updatedChains.findIndex((c) => c.id === result.newChain!.id);
-    const afterIdx = result.updatedChains.indexOf(afterHalf!);
-    expect(summaryChainIdx).toBe(prefixIdx + 1);
-    expect(afterIdx).toBe(summaryChainIdx + 1);
+    // The cut chain holds the summary INLINE at the cut offset:
+    // [u-1 (kept prefix, un-flagged), summary head, a-1 (preserved suffix)].
+    const containing = result.updatedChains.find((c) => c.id === originalId)!;
+    expect(containing.messages.map((m) => m.id)).toEqual([
+      messages[2]!.id,
+      result.summaryMessage!.id,
+      messages[3]!.id,
+    ]);
+    // R31: messages[2] is u-1 (a user message) — it stays un-flagged inline.
+    expect(containing.messages[0]!.excludeFromModel).not.toBe(true);
+    expect(containing.messages.every((m) => !m.excludeFromModel)).toBe(true);
+    expect(containing.status).toBe(ChainStatus.ACTIVE); // status preserved
+    // The summary appears exactly once across all chains.
+    const summaryCount = result.updatedChains.flatMap((c) => c.messages)
+      .filter((m) => m.id === result.summaryMessage!.id).length;
+    expect(summaryCount).toBe(1);
 
     // Flat replay: summary head at cutIndex; non-user range messages flagged,
     // user messages un-flagged (R31), preserved tail un-flagged.
@@ -423,11 +431,17 @@ describe('compaction apply — crash before/after (R22)', () => {
     expect(persistedMessages.filter((m) => m.excludeFromModel)).toHaveLength(nonUserRange.length);
     expect(nonUserRange.every((m) => persistedMessages.find((x) => x.id === m.id)!.excludeFromModel)).toBe(true);
     expect(userRange.every((m) => !persistedMessages.find((x) => x.id === m.id)!.excludeFromModel)).toBe(true);
-    expect(persistedChains.some((c) => c.id === applyResult.newChain!.id)).toBe(true);
-    // Summary head is its own chain, not merged into old
-    const summaryChain = persistedChains.find((c) => c.id === applyResult.newChain!.id)!;
-    expect(summaryChain.messages[0]!.compacted).toBeDefined();
-    expect(summaryChain.messages[0]!.compacted!.mode).toBe('simple');
+    // Single-row topology: no chain row carries the summary chain's id (the
+    // cut is at a chain boundary here); every original chain id survives once.
+    expect(persistedChains.some((c) => c.id === applyResult.newChain!.id)).toBe(false);
+    for (const c of chains) {
+      expect(persistedChains.filter((x) => x.id === c.id)).toHaveLength(1);
+    }
+    // The head rides the flat replay and the carrier payload
+    const head = persistedMessages.find((m) => m.id === applyResult.summaryMessage!.id)!;
+    expect(head.compacted).toBeDefined();
+    expect(head.compacted!.mode).toBe('simple');
+    expect(applyResult.newChain!.messages[0]!.id).toBe(head.id);
   });
 
   it('reclaim-only crash semantics same (flags atomically)', () => {
@@ -457,7 +471,8 @@ describe('compaction apply — mid-turn (active chain) outputs', () => {
 
     const result = buildCompactionApply({ messages, chains: allChains, cutResult: cut, summaryText: 'mid-turn summary', mode: 'simple', sessionId });
 
-    // Summary head is its own chain (not inside the active chain)
+    // Summary head carrier (not inside the active chain — the cut sits at a
+    // boundary, so the active chain row is untouched)
     expect(result.summaryMessage).not.toBeNull();
     expect(result.newChain).not.toBeNull();
     expect(result.newChain!.messages[0]!.compacted).toBeDefined();
@@ -549,9 +564,10 @@ describe('compaction apply — persisted-shape outputs (pure build)', () => {
     const cut = makeCut(messages, 1, chainBoundaries);
     const applyResult = buildCompactionApply({ messages, chains, cutResult: cut, summaryText: 'integrated summary', mode: 'simple', sessionId });
 
-    // One extra chain (the summary head); every original chain id survives exactly once
-    expect(applyResult.updatedChains).toHaveLength(chains.length + 1);
-    expect(applyResult.updatedChains.some((c) => c.id === applyResult.newChain!.id)).toBe(true);
+    // No extra chain row: every original chain id survives exactly once and
+    // newChain is only the summary-carrier payload (single-row topology)
+    expect(applyResult.updatedChains).toHaveLength(chains.length);
+    expect(applyResult.updatedChains.some((c) => c.id === applyResult.newChain!.id)).toBe(false);
     for (const c of chains) {
       expect(applyResult.updatedChains.filter((x) => x.id === c.id)).toHaveLength(1);
     }
@@ -644,9 +660,12 @@ describe('compaction apply — scoped user settle (exemptIds)', () => {
     });
     expect(result.flaggedIds).not.toContain('u1');
     expect(result.updatedMessages.find((m) => m.id === 'u1')!.excludeFromModel).not.toBe(true);
+    // F3: the cleared id is surfaced so the durable write can un-flag it in
+    // the same transaction.
+    expect(result.unflaggedIds).toEqual(['u1']);
     // A non-exempt user message follows normal semantics: a pre-existing
     // exclusion is tolerated (never resurrected), exactly like any other
-    // already-excluded range message.
+    // already-excluded range message — so nothing is cleared.
     messages[0] = { ...messages[0]!, excludeFromModel: true };
     const nonExempt = buildCompactionApply({
       messages,
@@ -657,6 +676,35 @@ describe('compaction apply — scoped user settle (exemptIds)', () => {
       exemptIds: new Set(['u1']),
     });
     expect(nonExempt.updatedMessages.find((m) => m.id === 'u0')!.excludeFromModel).toBe(true);
+    // u1 is still exempt, so its clear is still surfaced; the NON-exempt u0
+    // flag survives and is never reported as cleared.
+    expect(nonExempt.unflaggedIds).toEqual(['u1']);
+  });
+
+  it('selective settle surfaces cleared ids: exempt restore; kept-verbatim reset and pre-excluded stays are not clears', () => {
+    const messages = scopedMessages();
+    // u1: pre-flagged exempt user (prior superseded run) — restored (cleared).
+    // a1: pre-flagged BEFORE this run and re-summarized — must stay excluded.
+    messages[2] = { ...messages[2]!, excludeFromModel: true }; // u1 exempt
+    messages[3] = { ...messages[3]!, excludeFromModel: true }; // a1 pre-excluded
+    const result = buildSelectiveCompactionApply({
+      messages,
+      chains: [makeChain('chain-1', 'session-1', messages)],
+      cutResult: scopedCut,
+      // The selective pass summarized a1 only — u0/a0 were kept verbatim.
+      flaggedIds: ['a1'],
+      summaryText: 'selective summary',
+      exemptIds: new Set(['u1']),
+    });
+    expect(result).not.toBeNull();
+    // u1: exempt restore; u0: kept verbatim — the inner whole-range flag the
+    // settle reset back to visible (never durably flagged, so no clear).
+    expect(result!.updatedMessages.find((m) => m.id === 'u1')!.excludeFromModel).not.toBe(true);
+    expect(result!.updatedMessages.find((m) => m.id === 'u0')!.excludeFromModel).not.toBe(true);
+    // a1 stays excluded (pre-existing exclusion survives).
+    expect(result!.updatedMessages.find((m) => m.id === 'a1')!.excludeFromModel).toBe(true);
+    // F3: exactly the pre-existing flag the settle cleared, in flat order.
+    expect(result!.unflaggedIds).toEqual(['u1']);
   });
 });
 

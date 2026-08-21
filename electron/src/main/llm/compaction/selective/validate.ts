@@ -3,7 +3,8 @@
  *
  * Requirements R8,R9,R24. Dependencies U12.
  *
- * Checks: op ids are subsequence of manifest order; every user message present;
+ * Checks: op ids are subsequence of manifest order; every EXEMPT user message
+ * present (R9, scoped via exemptIds);
  * tool_call/result pairing intact (reuse reconcileOrphanToolResults + survival pre-pass);
  * ranged keeps within bounds; summarized spans contiguous; thinking kept verbatim or dropped,
  * never summarized. Auto-correct: drop dangling refs, clamp ranges, sort to manifest order.
@@ -15,6 +16,7 @@ import type { Message } from '../../../../shared/types/message';
 import { MessageType, MessageRole } from '../../../../shared/types/message';
 import type { Manifest, SelectiveOp, SummarizeOp } from './manifest';
 import { isSubstantiveHandoffText } from '../message-chars';
+import { selectiveTranscriptChars } from './transcript';
 
 /**
  * Minimum source chars a summarize span must cover before its text is held
@@ -38,6 +40,26 @@ function lineCountForMessage(msg: Message): number {
   const content = msg.content ?? '';
   if (content.length === 0) return 1;
   return content.split('\n').length;
+}
+
+/**
+ * R9/R31: user ids the keep-verbatim rule protects under a scoped exempt set.
+ * `exemptIds` omitted/undefined → EVERY user message (backcompat universal
+ * protection); provided → only the exempt ids present as user messages. User
+ * ids outside the set follow normal compaction semantics (flaggable,
+ * summarizable). Apply-side counterpart: scopedExemptUserIds in apply.ts.
+ */
+export function scopedExemptUserIds(
+  messages: readonly Message[],
+  exemptIds?: ReadonlySet<string> | readonly string[],
+): Set<string> {
+  const exempt = exemptIds ? (exemptIds instanceof Set ? exemptIds : new Set(exemptIds)) : null;
+  const ids = new Set<string>();
+  for (const m of messages) {
+    if (m.role !== MessageRole.USER) continue;
+    if (!exempt || exempt.has(m.id)) ids.add(m.id);
+  }
+  return ids;
 }
 
 function findOpForId(ops: readonly SelectiveOp[], id: string): SelectiveOp | undefined {
@@ -66,8 +88,13 @@ function summarizeOpContainingId(ops: readonly SelectiveOp[], id: string): Summa
  * - Reject summarized thinking (R24) — semantic
  * - Sort to manifest order — mechanical
  * - Check summarized spans contiguous — semantic
- * - Check every user message present — semantic
+ * - Check exempt user messages kept verbatim (R9, scoped via `exemptIds`) — semantic
+ * - Check every exempt user message present — semantic
  * - Check tool_call/result pairing intact — semantic (un-inferable broken pairs)
+ *
+ * `exemptIds` (`resolveUserExemptIds` output) scopes R9's keep-verbatim rule to
+ * the exempt user ids; non-exempt user ids may be summarized like any other
+ * entry. Omitted → every user message is protected (backcompat default).
  *
  * Returns {valid, correctedOps, errors, mechanicalCorrections}
  */
@@ -75,6 +102,7 @@ export function validateSelectiveOps(
   ops: readonly SelectiveOp[],
   manifest: Manifest,
   messages: readonly Message[],
+  exemptIds?: ReadonlySet<string> | readonly string[],
 ): ValidateResult {
   const errors: string[] = [];
   const mechanicalCorrections: string[] = [];
@@ -87,6 +115,9 @@ export function validateSelectiveOps(
   // Quick message by id
   const msgById = new Map<string, Message>();
   for (const m of messages) msgById.set(m.id, m);
+
+  // R9 keep-verbatim protection set (scoped via exemptIds; universal when omitted)
+  const protectedUsers = scopedExemptUserIds(messages, exemptIds);
 
   // ── Step A: drop dangling refs ──────────────────────────────────────────────
   const opsAfterDangling: SelectiveOp[] = [];
@@ -179,8 +210,10 @@ export function validateSelectiveOps(
       mechanicalCorrections.push(`keep_range on thinking ${op.id} converted to keep`);
       continue;
     }
-    // Also reject keep_range on user — user messages must be kept verbatim (R9)
-    if (entry && (entry.kind === 'user' || entry.role === MessageRole.USER)) {
+    // Also reject keep_range on a protected user entry — R9's verbatim rule is
+    // scoped to the exempt set; non-exempt user messages are compactable and
+    // may be ranged-kept like any other entry.
+    if (entry && protectedUsers.has(op.id)) {
       errors.push(`keep_range on user message ${op.id} is not allowed (R9: user kept verbatim)`);
       opsAfterClamp.push({ type: 'keep', id: op.id });
       mechanicalCorrections.push(`keep_range on user ${op.id} converted to keep`);
@@ -351,10 +384,13 @@ export function validateSelectiveOps(
     if (!op.text || op.text.trim().length === 0) {
       errors.push(`summarize op for ids ${ids.join(',')} has empty text`);
     } else {
-      const spanSourceChars = ids.reduce(
-        (sum, id) => sum + (msgById.get(id)?.content?.length ?? 0),
-        0,
-      );
+      // Measure the serialized transcript fields the compactor reads for the
+      // span (content, tool names/arguments, tool_call_id, thinking) — content
+      // alone under-counts spans of small tool calls under the substance floor.
+      const spanSourceChars = ids.reduce((sum, id) => {
+        const msg = msgById.get(id);
+        return sum + (msg ? selectiveTranscriptChars(msg) : 0);
+      }, 0);
       if (spanSourceChars >= SUBSTANTIVE_SPAN_MIN_SOURCE_CHARS && !isSubstantiveHandoffText(op.text)) {
         errors.push(
           `summarize op for ids ${ids.join(',')} replaces ${spanSourceChars} chars of source content but its text is not a substantive handoff ` +
@@ -365,32 +401,23 @@ export function validateSelectiveOps(
     }
   }
 
-  // ── Step F2: user messages must be kept verbatim (R9) ─────────────────────
-  // Summarize covering user ids is rejected — user messages must be kept verbatim.
+  // ── Step F2: exempt user messages must be kept verbatim (R9/R31) ─────────
+  // Summarize covering an EXEMPT user id is rejected — only those ids are held
+  // to the keep-verbatim rule; user ids outside the scoped set may be
+  // summarized like any other compactable entry.
   for (const op of opsSorted) {
     if (op.type !== 'summarize') continue;
     for (const id of op.ids as readonly string[]) {
-      const entry = manifestById.get(id);
-      if (entry && (entry.kind === 'user' || entry.role === MessageRole.USER)) {
-        errors.push(`user message ${id} must be kept verbatim (R9: summarize covering user ids rejected)`);
-      } else if (!entry) {
-        // Fallback: check message role if entry missing (should not happen after dangling filter)
-        const msg = msgById.get(id);
-        if (msg && msg.role === MessageRole.USER) {
-          if (!errors.some((e) => e.includes(id) && e.includes('must be kept verbatim'))) {
-            errors.push(`user message ${id} must be kept verbatim (R9)`);
-          }
-        }
-      }
+      if (!protectedUsers.has(id)) continue;
+      errors.push(`exempt user message ${id} must be kept verbatim (R9: summarize covering user ids rejected)`);
     }
   }
 
-  // ── Step G: every user message present ───────────────────────────────────
+  // ── Step G: every exempt user message present ────────────────────────────
   for (const entry of manifest.entries) {
-    if (entry.role === MessageRole.USER || entry.kind === 'user') {
-      if (!findOpForId(opsSorted, entry.id)) {
-        errors.push(`user message ${entry.id} missing from ops (R9: user messages must be kept verbatim)`);
-      }
+    if (!protectedUsers.has(entry.id)) continue;
+    if (!findOpForId(opsSorted, entry.id)) {
+      errors.push(`exempt user message ${entry.id} missing from ops (R9: user messages must be kept verbatim)`);
     }
   }
 

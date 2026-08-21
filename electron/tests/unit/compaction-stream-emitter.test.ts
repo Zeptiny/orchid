@@ -378,11 +378,7 @@ describe('createCompactionStreamEmitter', () => {
     emit('partial'); // immediate flush
     emit('partial, continued'); // pending trailing flush
 
-    try {
-      clearCompactionState(SESSION_ID);
-    } catch {
-      // module state unavailable in isolated imports — ignore
-    }
+    clearCompactionState(SESSION_ID);
     sendTurnEvent.mockClear();
 
     vi.advanceTimersByTime(COMPACTION_STREAM_EMIT_INTERVAL_MS + 1);
@@ -455,9 +451,14 @@ describe('usage fire-point guards (review #53 — orphaned-run cascade)', () => 
 
   it('suppresses re-prepare while a selective run is still in flight, then re-arms once it settles', async () => {
     let settleRun: (value: unknown) => void = () => undefined;
-    runCompactionAttemptMock.mockImplementation(
-      () => new Promise((resolve) => { settleRun = resolve; }),
-    );
+    let trackedRun: Promise<unknown> = Promise.resolve();
+    runCompactionAttemptMock.mockImplementation(() => {
+      let resolveRun!: (value: unknown) => void;
+      const run = new Promise<unknown>((resolve) => { resolveRun = resolve; });
+      trackedRun = run;
+      settleRun = resolveRun;
+      return run;
+    });
 
     fireUsage(9_000); // over threshold → prepare starts the (mocked) selective run
     expect(runCompactionAttemptMock).toHaveBeenCalledTimes(1);
@@ -470,9 +471,12 @@ describe('usage fire-point guards (review #53 — orphaned-run cascade)', () => 
     expect(runCompactionAttemptMock).toHaveBeenCalledTimes(1);
 
     // Once the run settles, the guard releases and a new fire may prepare.
+    // Awaiting the run itself is the deterministic release signal: the
+    // guard's finally-cleanup was registered on this promise when the run
+    // was tracked, so it has already run by the time this await resumes —
+    // no fixed microtask-count hop.
     settleRun({ kind: 'noop', reason: 'empty-slice' });
-    await Promise.resolve();
-    await Promise.resolve();
+    await trackedRun;
     fireUsage(9_600);
     expect(runCompactionAttemptMock).toHaveBeenCalledTimes(2);
   });

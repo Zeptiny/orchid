@@ -3066,10 +3066,10 @@ describe('chat compaction selective pending (P1 #5)', () => {
       };
     });
     // First stream: two tool groups + usage over threshold → selective pending
-    // prepares; the turn pauses, applies, and resumes. The resume is
-    // deliberately SLOW (450ms): the 300ms checkpoint debounce scheduled by
-    // the triggering usage event fires mid-resume — post-apply — which is
-    // exactly the stale-capture race window (review #55).
+    // prepares; the turn pauses, applies, and resumes. The resume generator
+    // below HOLDS until the 300ms checkpoint debounce scheduled by the
+    // triggering usage event has actually fired post-apply — exactly the
+    // stale-capture race window (review #55).
     mocks.streamChat.mockImplementationOnce(async function* () {
       yield {
         type: 'tool_call',
@@ -3092,7 +3092,20 @@ describe('chat compaction selective pending (P1 #5)', () => {
       yield { type: 'finish', finishReason: 'stop' };
     });
     mocks.streamChat.mockImplementationOnce(async function* () {
-      await new Promise((resolve) => setTimeout(resolve, 450));
+      // Deterministic handshake instead of a fixed sleep: wait until a
+      // checkpoint write (updateActiveChainMessages) has fired AFTER the
+      // compaction apply — the debounced checkpoint landing mid-resume —
+      // bounded by an explicit timeout budget.
+      const applyOrders = mocks.sessionManager.applyCompaction.mock.invocationCallOrder;
+      const updateOrders = mocks.sessionManager.updateActiveChainMessages.mock.invocationCallOrder;
+      const checkpointFiredPostApply = () => {
+        const applyOrder = applyOrders[0];
+        return applyOrder !== undefined && updateOrders.some((order) => order > applyOrder);
+      };
+      const deadline = Date.now() + 1000;
+      while (!checkpointFiredPostApply() && Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, 5));
+      }
       yield { type: 'content', text: 'Resumed answer' };
       yield { type: 'finish', finishReason: 'stop' };
     });
@@ -3140,15 +3153,19 @@ describe('chat compaction selective pending (P1 #5)', () => {
     // never the pre-compaction snapshot captured at schedule time.
     const applyOrder = mocks.sessionManager.applyCompaction.mock.invocationCallOrder[0]!;
     const updateMock = mocks.sessionManager.updateActiveChainMessages;
-    updateMock.mock.calls.forEach((call, index) => {
-      if (updateMock.mock.invocationCallOrder[index]! > applyOrder) {
-        const written = call[0] as Array<{
-          tool_call_id?: string;
-          excludeFromModel?: boolean;
-        }>;
-        expect(written.some((m) => m.tool_call_id === 'tc-sel-1' && m.excludeFromModel === true)).toBe(true);
-      }
-    });
+    const postApplyIndexes = updateMock.mock.invocationCallOrder
+      .map((order, index) => (order > applyOrder ? index : -1))
+      .filter((index) => index >= 0);
+    // The race is only exercised when a checkpoint write actually fired after
+    // the apply — fail loudly instead of passing vacuously when none did.
+    expect(postApplyIndexes.length).toBeGreaterThan(0);
+    for (const index of postApplyIndexes) {
+      const written = updateMock.mock.calls[index]![0] as Array<{
+        tool_call_id?: string;
+        excludeFromModel?: boolean;
+      }>;
+      expect(written.some((m) => m.tool_call_id === 'tc-sel-1' && m.excludeFromModel === true)).toBe(true);
+    }
   });
 });
 

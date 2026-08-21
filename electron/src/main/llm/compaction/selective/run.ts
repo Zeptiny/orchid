@@ -18,6 +18,8 @@ import { toApiMessages } from '../../history';
 import type { Manifest, SelectiveOp } from './manifest';
 import { buildManifest, parseSelectiveOps } from './manifest';
 import { validateSelectiveOps } from './validate';
+import { scopedExemptUserIds } from './validate';
+import { selectiveTranscriptLine } from './transcript';
 import { AgentType } from '../../../../shared/types/agent';
 import type { Agent } from '../../../../shared/types/agent';
 import type { ModelSelection } from '../../../../shared/types/provider';
@@ -57,7 +59,9 @@ export interface SelectiveUserPromptInput {
  * Full transcript of the model-visible compactable slice, each entry headed
  * `[id=<manifest id> <role>(type)]` so ops can reference what they read.
  * Mirrors formatCompactableRange (tool_calls, tool_call_id, thinking bodies),
- * XML-escaped — the transcript is DATA, not instructions.
+ * XML-escaped — the transcript is DATA, not instructions. The per-entry line
+ * lives in selective/transcript.ts so the validator's span-size measure counts
+ * exactly these serialized fields.
  */
 function formatSelectiveConversation(
   messages: readonly Message[],
@@ -69,22 +73,7 @@ function formatSelectiveConversation(
   const parts: string[] = [];
   for (const msg of messages.slice(start, end)) {
     if (msg.excludeFromModel || msg.hidden) continue;
-    const typeSuffix = msg.type !== 'text' ? ` (${msg.type})` : '';
-    const header = `[id=${msg.id} ${msg.role}${typeSuffix}]`;
-    let body = msg.content ?? '';
-    if (msg.tool_calls && msg.tool_calls.length > 0) {
-      const calls = msg.tool_calls
-        .map((tc) => `${tc.function.name}(${tc.function.arguments}) [id=${tc.id}]`)
-        .join(', ');
-      body = body ? `${body}\n  tool_calls: ${calls}` : `tool_calls: ${calls}`;
-    }
-    if (msg.tool_call_id) {
-      body = body ? `${body}\n  tool_call_id: ${msg.tool_call_id}` : `tool_call_id: ${msg.tool_call_id}`;
-    }
-    if (msg.thinking) {
-      body = body ? `${body}\n  thinking: ${msg.thinking}` : `thinking: ${msg.thinking}`;
-    }
-    parts.push(`${header} ${escapeXml(body)}`.trimEnd());
+    parts.push(selectiveTranscriptLine(msg));
   }
   return parts.join('\n\n');
 }
@@ -187,6 +176,13 @@ export interface SelectiveCompactionInput {
   readonly compactableRange: { start: number; end: number };
   readonly manifest?: Manifest;
   readonly maxCorrectionRounds?: number;
+  /**
+   * Scoped exempt user ids (`resolveUserExemptIds` output): only these user
+   * ids are held to the R9 keep-verbatim rule (validator + fallback replay);
+   * user ids outside the set may be summarized like any other compactable
+   * entry. Omitted → every user message is protected (backcompat default).
+   */
+  readonly exemptIds?: ReadonlySet<string> | readonly string[];
   /** Pluggable LLM caller — returns ops for a given attempt. Inject for tests or wire to real LLM. */
   readonly selectiveCaller: SelectiveCaller;
   /** Optional simple fallback — called when selective exhausts. If omitted, fallback is a synthetic simple marker. */
@@ -207,9 +203,9 @@ export type SimpleFallback = () => Promise<{ text: string } | null> | { text: st
 export interface MaterializeResult {
   readonly replayMessages: Message[];
   readonly flaggedIds: string[];
-  /** Coalesced summary head(s) — exactly one when any summarize op ran. */
+  /** Coalesced summary head(s) — one per maximal run of replay-adjacent summarize ops. */
   readonly summaryMessages: Message[];
-  /** The coalesced summary head, or null when the run only kept/dropped/ranged. */
+  /** The FIRST summary head, or null when the run only kept/dropped/ranged. */
   readonly summaryMessage: Message | null;
   /** Compacted marker for persistence (if needed) */
   readonly compactedMarker?: CompactedMarker;
@@ -294,11 +290,17 @@ function makeRangedCopy(original: Message, startLine: number, endLine: number): 
  * Pure transform: materialize ops into a replay list.
  *
  * Kept messages verbatim, ranged keeps as content-truncated copies (annotated),
- * and ALL summarize ops coalesced into ONE synthetic summary message inserted
- * at the first summarize op's position (one compaction = one summary head —
- * review #53: per-op synthetics stacked heads that blocked re-compaction and
- * rendered as multiple summary widgets). Originals in summarized/ranged ranges
- * are added to flaggedIds.
+ * and consecutive summarize ops coalesced into ONE synthetic summary message
+ * inserted at the run's first summarize position (one compaction = one head per
+ * replay run — review #53: per-op synthetics stacked heads that blocked
+ * re-compaction and rendered as multiple summary widgets). A kept NON-THINKING
+ * entry between summarize spans ends the current run and the next span opens
+ * its own head: coalescing across a kept milestone would splice the later
+ * span's summary BEFORE it (A,B,C → summary(A+C),B — order regression), while
+ * the run-scoped heads keep each span's replacement at its own position. Kept
+ * THINKING entries do not split a run — deliberation interleaved with tool work
+ * is the per-turn shape review #53 coalesced for; drop ops replay nothing.
+ * Originals in summarized/ranged ranges are added to flaggedIds.
  *
  * Full replay = materialized compactable prefix + preserve suffix (verbatim).
  */
@@ -333,24 +335,45 @@ export function materializeSelectiveOps(input: {
     }
   };
 
-  // Coalesced summarize collection: sections + anchors, spliced at the FIRST
-  // summarize op's position once the walk completes.
-  const summarySections: string[] = [];
-  let summaryFirstId: string | null = null;
-  let summaryLastId: string | null = null;
-  let summaryCount = 0;
-  let summaryInsertAt = -1;
+  // Coalesced summarize collection for the CURRENT run of replay-adjacent
+  // summarize ops: sections + anchors, spliced at the run's first summarize
+  // position. Split whenever a kept non-thinking entry hits the replay.
+  let headSections: string[] = [];
+  let headFirstId: string | null = null;
+  let headLastId: string | null = null;
+  let headCount = 0;
+  let headInsertAt = -1;
+  const flushHead = () => {
+    if (headSections.length === 0) return;
+    const head = makeSummaryMessage(headSections.join(SUMMARY_SECTION_SEPARATOR), 'selective', {
+      start: headFirstId ?? 'unknown',
+      end: headLastId ?? 'unknown',
+      count: headCount,
+    });
+    summaryMessages.push(head);
+    replayPrefix.splice(headInsertAt >= 0 ? headInsertAt : replayPrefix.length, 0, head);
+    headSections = [];
+    headFirstId = null;
+    headLastId = null;
+    headCount = 0;
+    headInsertAt = -1;
+  };
 
   // Ops are expected sorted to manifest order (validate does this)
   for (const op of ops) {
     if (op.type === 'keep') {
       const msg = msgById.get(op.id);
       if (!msg) continue;
+      // F4: a kept non-thinking entry is a conversation milestone that
+      // survives in replay — close the current summary run so its head splices
+      // in BEFORE the milestone instead of reordering it after later spans.
+      if (headSections.length > 0 && msg.type !== MessageType.THINKING) flushHead();
       replayPrefix.push(msg);
       covered.add(op.id);
     } else if (op.type === 'keep_range') {
       const msg = msgById.get(op.id);
       if (!msg) continue;
+      if (headSections.length > 0 && msg.type !== MessageType.THINKING) flushHead();
       addFlagged(op.id);
       const copy = makeRangedCopy(msg, op.startLine, op.endLine);
       replayPrefix.push(copy);
@@ -359,17 +382,17 @@ export function materializeSelectiveOps(input: {
       addFlagged(op.id);
       covered.add(op.id);
     } else {
-      // summarize: flag the originals, buffer one section of the coalesced head
+      // summarize: flag the originals, buffer one section of the current head
       const ids = op.ids as readonly string[];
       for (const id of ids) {
         addFlagged(id);
         covered.add(id);
       }
-      if (summaryInsertAt < 0) summaryInsertAt = replayPrefix.length;
-      summarySections.push(op.text || '(empty summary)');
-      summaryFirstId ??= ids[0] ?? 'unknown';
-      summaryLastId = ids[ids.length - 1] ?? summaryLastId ?? 'unknown';
-      summaryCount += ids.length;
+      if (headSections.length === 0) headInsertAt = replayPrefix.length;
+      headSections.push(op.text || '(empty summary)');
+      headFirstId ??= ids[0] ?? 'unknown';
+      headLastId = ids[ids.length - 1] ?? headLastId ?? 'unknown';
+      headCount += ids.length;
     }
   }
 
@@ -387,18 +410,9 @@ export function materializeSelectiveOps(input: {
     preserveSuffix.push(messages[i]!);
   }
 
-  // Materialize the ONE coalesced summary head at the first summarize position
-  let summaryMessage: Message | null = null;
-  if (summarySections.length > 0) {
-    summaryMessage = makeSummaryMessage(summarySections.join(SUMMARY_SECTION_SEPARATOR), 'selective', {
-      start: summaryFirstId ?? 'unknown',
-      end: summaryLastId ?? 'unknown',
-      count: summaryCount,
-    });
-    summaryMessages.push(summaryMessage);
-    const insertAt = summaryInsertAt >= 0 ? summaryInsertAt : replayPrefix.length;
-    replayPrefix.splice(insertAt, 0, summaryMessage);
-  }
+  // Materialize the pending summary head (trailing run) at its own position
+  flushHead();
+  const summaryMessage: Message | null = summaryMessages[0] ?? null;
 
   // Full replay list
   const replayMessages: Message[] = [...replayPrefix, ...preserveSuffix];
@@ -504,7 +518,7 @@ export async function runSelectiveCompaction(
       continue;
     }
 
-    const validation = validateSelectiveOps(ops, manifest, messages);
+    const validation = validateSelectiveOps(ops, manifest, messages, input.exemptIds);
 
     if (input.onCorrection && (validation.errors.length > 0 || validation.mechanicalCorrections.length > 0)) {
       input.onCorrection(attempt, validation.errors, validation.mechanicalCorrections);
@@ -556,17 +570,22 @@ export async function runSelectiveCompaction(
 
   // Produce a fallback synthetic if we have text, to keep callers simple
   if (fallbackText) {
+    // R9 scoped via exemptIds (R31): only EXEMPT user messages are preserved
+    // verbatim in the replay; user ids outside the set are summarized away
+    // with the rest of the range. Omitted → every user message (backcompat).
+    const protectedUsers = scopedExemptUserIds(messages, input.exemptIds);
     const fbMsg = makeSummaryMessage(fallbackText, 'simple', {
       start: manifest.entries[0]?.id ?? 'fallback-start',
       end: manifest.entries[manifest.entries.length - 1]?.id ?? 'fallback-end',
-      count: manifest.entries.filter((e) => e.kind !== 'user').length || manifest.entries.length,
+      count: manifest.entries.filter((e) => !protectedUsers.has(e.id)).length || manifest.entries.length,
     });
-    // For fallback, flaggedIds must NOT include user messages (R9: keep user verbatim).
-    // Filter to non-user only; users are kept via keep ops / replay interleaving.
-    const flaggedIds = manifest.entries.filter((e) => e.kind !== 'user').map((e) => e.id);
+    // Fallback flags everything except the protected user entries — non-exempt
+    // users leave the model view with the rest of the summarized range.
+    const flaggedIds = manifest.entries.filter((e) => !protectedUsers.has(e.id)).map((e) => e.id);
     // Preserve suffix still needed for full replay — build replay correctly interleaved
-    // (users kept verbatim at their manifest positions, single summary at first non-user slot)
-    // so callers do not need to re-insert at a single cut.
+    // (protected users kept verbatim at their manifest positions, single summary
+    // at the first non-protected slot) so callers do not need to re-insert at a
+    // single cut.
     const n = messages.length;
     const end = Math.max(0, Math.min(compactableRange.end, n));
     const preserveSuffix = messages.slice(end);
@@ -574,7 +593,7 @@ export async function runSelectiveCompaction(
     const replayPrefix: Message[] = [];
     let summaryInserted = false;
     for (const entry of manifest.entries) {
-      if (entry.kind === 'user') {
+      if (protectedUsers.has(entry.id)) {
         const original = msgById.get(entry.id);
         if (original) replayPrefix.push(original);
       } else {
@@ -582,11 +601,11 @@ export async function runSelectiveCompaction(
           replayPrefix.push(fbMsg);
           summaryInserted = true;
         }
-        // non-user originals are flagged, not replayed verbatim
+        // summarized originals are flagged, not replayed verbatim
       }
     }
     if (!summaryInserted) {
-      // Edge: range contained only user messages — still insert summary
+      // Edge: range contained only protected user messages — still insert summary
       replayPrefix.push(fbMsg);
     }
     const replayMessages = [...replayPrefix, ...preserveSuffix];

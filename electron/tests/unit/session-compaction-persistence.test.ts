@@ -28,6 +28,7 @@ import {
   loadSubagentRecords,
   upsertSubagentRecords,
   applyCompactionPersistence,
+  applySubagentCompactionPersistence,
   finishChain,
   _clearDbCache,
 } from '../../src/main/session/storage';
@@ -528,6 +529,112 @@ describe('applyCompactionPersistence (targeted durable write)', () => {
     const full = loadSessionForReplacement(sessionId, storageOpts)!;
     expect(full.chains.filter((chain) => chain.id === 'chain-summary')).toHaveLength(1);
   });
+
+  it('(e) clears settle-cleared ids in the same transaction; unknown cleared ids abort the write', () => {
+    const sessionId = 'cafe000d-000d-400d-800d-00000000000d';
+    // m-0005 is a pre-flagged exempt user message (flagged by a prior, now
+    // superseded selective run) — the settle clears it while the compaction
+    // flags the prefix.
+    const chainA = makeChain(sessionId, 'chain-a', [
+      ...messages('m', 5, 0),
+      {
+        ...makeMessage('m-0005', { role: MessageRole.USER, content: 'keep me' }),
+        excludeFromModel: true,
+      },
+      ...messages('m', 4, 6),
+    ]);
+    saveSession(makeSession(sessionId, [chainA]), storageOpts);
+
+    applyCompactionPersistence(sessionId, {
+      updatedAt: '2026-01-02T00:00:00.000Z',
+      flaggedMessageIds: idRange('m', 5, 0),
+      clearedMessageIds: ['m-0005'],
+      summaryChain: null,
+      insertBeforeMessageId: null,
+    }, storageOpts);
+
+    const full = loadSessionForReplacement(sessionId, storageOpts)!;
+    expect(flatIds(full)).toEqual([...idRange('m', 6, 0), ...idRange('m', 4, 6)]);
+    for (const id of idRange('m', 5, 0)) {
+      expect(full.chains[0]!.messages.find((message) => message.id === id)!.excludeFromModel)
+        .toBe(true);
+    }
+    // DURABLY un-flagged: without the same-transaction clear the stale true
+    // flag would resurrect the exclusion on reload.
+    expect(full.chains[0]!.messages.find((message) => message.id === 'm-0005')!.excludeFromModel)
+      .not.toBe(true);
+    for (const id of idRange('m', 4, 6)) {
+      expect(full.chains[0]!.messages.find((message) => message.id === id)!.excludeFromModel)
+        .not.toBe(true);
+    }
+
+    // A cleared id with no durable owner is an integrity failure (mirrors the
+    // flagged-id throw) and leaves the rows untouched.
+    const jsonBeforeFailedWrite = readChainJson('chain-a');
+    expect(() => applyCompactionPersistence(sessionId, {
+      updatedAt: T0,
+      flaggedMessageIds: [],
+      clearedMessageIds: ['not-a-durable-message'],
+      summaryChain: null,
+      insertBeforeMessageId: null,
+    }, storageOpts)).toThrow(/not-a-durable-message/);
+    expect(readChainJson('chain-a')).toBe(jsonBeforeFailedWrite);
+  });
+});
+
+// ===========================================================================
+// applySubagentCompactionPersistence — subagent-chain durable write
+// ===========================================================================
+
+describe('applySubagentCompactionPersistence (targeted subagent durable write)', () => {
+  it('flags and clears excludeFromModel, and inserts the summary head inline, in one durable record transaction', () => {
+    const sessionId = 'cafe000e-000e-400e-800e-00000000000e';
+    saveSession(makeSession(sessionId, [
+      makeChain(sessionId, 'chain-a', messages('m', 4, 0)),
+    ]), storageOpts);
+
+    const base = makeSubagentRecord(sessionId, 'sub-1');
+    const subMessages = [
+      // Pre-flagged exempt user message (superseded selective run) — cleared.
+      { ...makeMessage('sm-0000', { role: MessageRole.USER, content: 'keep me' }), excludeFromModel: true },
+      ...messages('sm', 3, 1).map((message) => ({ ...message, role: MessageRole.ASSISTANT })),
+    ];
+    const record = { ...base, chain: makeChain(sessionId, 'chain-sub-1', subMessages) };
+    upsertSubagentRecords(sessionId, [record], T0, storageOpts);
+
+    applySubagentCompactionPersistence(sessionId, 'sub-1', {
+      updatedAt: '2026-01-02T00:00:00.000Z',
+      flaggedMessageIds: ['sm-0001'],
+      clearedMessageIds: ['sm-0000'],
+      summaryMessage: {
+        ...makeMessage('sub-summary-head', { role: MessageRole.ASSISTANT, content: 'SUMMARY: subagent' }),
+        compacted: { rangeStart: 'sm-0000', rangeEnd: 'sm-0001', mode: 'selective' },
+      },
+      insertBeforeMessageId: 'sm-0002',
+    }, storageOpts);
+
+    // The durable record is reloaded (not the in-memory snapshot) and shows
+    // the settled shape: cleared id visible, flagged id excluded, summary
+    // head inline before the anchor, anchor + tail untouched.
+    const reloaded = loadSubagentRecords(sessionId, ['sub-1'], storageOpts)[0]!;
+    expect(reloaded.chain.messages.map((message) => [message.id, message.excludeFromModel === true]))
+      .toEqual([
+        ['sm-0000', false], // cleared (F3)
+        ['sm-0001', true],  // flagged
+        ['sub-summary-head', false], // inline summary head before the anchor
+        ['sm-0002', false],
+        ['sm-0003', false],
+      ]);
+
+    // Unknown cleared ids abort the whole write (integrity throw).
+    expect(() => applySubagentCompactionPersistence(sessionId, 'sub-1', {
+      updatedAt: T0,
+      flaggedMessageIds: [],
+      clearedMessageIds: ['not-a-durable-message'],
+      summaryMessage: null,
+      insertBeforeMessageId: null,
+    }, storageOpts)).toThrow(/not-a-durable-message/);
+  });
 });
 
 // ===========================================================================
@@ -594,7 +701,8 @@ describe('persistCompactionBetweenTurns (durable path over partial view)', () =>
 
     const applyResult = buildApplyFor(sessionId);
     expect(applyResult.didApply).toBe(true);
-    // The pure apply split the partial chain-a around the cut.
+    // The pure apply produces the summary carrier (single-row topology — the
+    // partial view chains are never split into rows).
     expect(applyResult.newChain).not.toBeNull();
 
     const ok = persistCompactionBetweenTurns(sessionId, applyResult);
@@ -759,11 +867,12 @@ describe('superseded chain reconcile (split-tail retirement)', () => {
     expect(full.chains[0]!.messages[42]!.compacted).toMatchObject({ mode: 'simple' });
   });
 
-  it('retires a stale duplicate row whose only extra content is a hidden usage carrier', () => {
+  it('retires a stale duplicate row whose extra content the owner also holds (duplicated hidden carrier); the head keeps its visible sequence', () => {
     const sessionId = 'cafe0107-0107-4107-8107-000000000107';
     // Shape reproduced from session "Analyze Compaction System Implementation":
-    // a stray split row duplicating two visible tool ids plus one hidden
-    // usage-carrier message that kept it outside strict id containment.
+    // a stray split row duplicating two visible tool ids plus a hidden
+    // usage-carrier message. When the owner holds that carrier id too, the
+    // full id set (visible + hidden) is contained and the row retires.
     const head = makeChain(sessionId, 'chain-head', [
       ...messages('m', 46, 0),
       makeMessage('hidden-extra', { role: MessageRole.ASSISTANT, hidden: true }),
@@ -771,15 +880,44 @@ describe('superseded chain reconcile (split-tail retirement)', () => {
     const stray = makeChain(sessionId, 'chain-stray', [
       makeMessage('m-0043'),
       makeMessage('m-0044'),
-      makeMessage('stray-hidden', { role: MessageRole.ASSISTANT, hidden: true }),
+      makeMessage('hidden-extra', { role: MessageRole.ASSISTANT, hidden: true }), // duplicated carrier
     ]);
     saveSession(makeSession(sessionId, [head, stray]), storageOpts);
 
     const view = loadSessionView(sessionId, storageOpts)!;
 
-    // Visible content is fully contained in chain-head — the hidden extra
-    // must not protect the duplicate row.
+    // Full id set contained in chain-head — the duplicated hidden extra does
+    // not protect the row.
     expect(view.chains.map((chain) => chain.id)).toEqual(['chain-head']);
+    // The surviving chain-head keeps its expected visible message sequence —
+    // the retire dropped only the duplicate row, nothing else (F26).
+    const surviving = view.chains[0]!;
+    expect(surviving.messages.filter((message) => !message.hidden).map((message) => message.id))
+      .toEqual(idRange('m', 46, 0));
+  });
+
+  it('preserves a stray row whose hidden ids the owner does not hold (no hidden-usage loss)', () => {
+    const sessionId = 'cafe0108-0108-4108-8108-000000000108';
+    // Same stray shape, but the hidden usage carrier is UNIQUE to the stray
+    // row — retiring it would silently drop usage evidence nothing else holds.
+    const head = makeChain(sessionId, 'chain-head', [
+      ...messages('m', 46, 0),
+      makeMessage('hidden-extra', { role: MessageRole.ASSISTANT, hidden: true }),
+    ]);
+    const stray = makeChain(sessionId, 'chain-stray', [
+      makeMessage('m-0043'),
+      makeMessage('m-0044'),
+      makeMessage('stray-hidden', { role: MessageRole.ASSISTANT, hidden: true }), // unique carrier
+    ]);
+    saveSession(makeSession(sessionId, [head, stray]), storageOpts);
+
+    const view = loadSessionView(sessionId, storageOpts)!;
+
+    // Visible content is contained but the hidden carrier is not — the row
+    // survives, hidden usage intact.
+    expect(view.chains.map((chain) => chain.id)).toEqual(['chain-head', 'chain-stray']);
+    expect(view.chains[1]!.messages.map((message) => message.id))
+      .toEqual(['m-0043', 'm-0044', 'stray-hidden']);
   });
 
   it('finishChain leaves sibling chains alone when nothing is subsumed', () => {

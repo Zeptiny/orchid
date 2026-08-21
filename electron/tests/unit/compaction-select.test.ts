@@ -430,20 +430,14 @@ describe('selectCut — exempt ids (R31: pinned user messages)', () => {
   });
 
   it('exempt ids in the suffix do not consume the preserve budget', () => {
-    // 4 messages × 25 tokens each; budget 25 → suffix of 1 (25 tokens).
-    // u-2 (index 2, a user message) is exempt. The suffix [3,4) fits 25 tokens.
-    // If u-2 consumed budget, the suffix containing it would exceed — but u-2
-    // is at index 2, not in [3,4). Instead make u-3 (index 3) exempt: the
-    // suffix [3,4) contains u-3 which is exempt, so the budget for the
-    // non-exempt content is 0 → cut could go further back. With u-3 exempt,
-    // the suffix [3,4) has 0 non-exempt tokens → the walk keeps more.
+    // 4 uniform messages × 25 tokens each; budget 25. u-2 (index 2, a user
+    // message) is exempt, so the walk's estimate filters it out: suffix [2,4)
+    // costs only a-3 (25 ≤ 25 → fits), while [1,4) costs {a-1, a-3} = 50 > 25.
+    // The cut lands at 2 — the exempt u-2 rides in the preserved window
+    // budget-free instead of pushing the cut forward to 3.
     const messages = uniformMessages(4, 100); // u-0, a-1, u-2, a-3
     const exempt = new Set(['u-2']); // exempt user at index 2
     const result = selectCut(messages, { preserveTokens: 25, chainBoundaries: [0], exemptIds: exempt });
-    // u-2 is exempt. The suffix walk filters u-2 from the estimate. With
-    // budget 25: suffix [2,4) = {u-2(exempt), a-3} → non-exempt estimate 25 →
-    // fits. So cut lands at 2 (or earlier if a-1 also fits). a-1 alone = 25
-    // → [1,4) non-exempt = {a-1, a-3} = 50 > 25. So cut = 2.
     expect(result.cutIndex).toBe(2);
     // u-2 (exempt) is in the preserved window, not the compactable range.
     expect(result.preservedRange).toEqual({ start: 2, end: 4 });

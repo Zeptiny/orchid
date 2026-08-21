@@ -505,10 +505,13 @@ function persistSelectiveCompaction(sessionId: string, input: SelectivePersistIn
     // Single targeted durable transaction (same P0-safe path as the simple
     // mode): flags + summary head against FULL durable chain rows — never a
     // wholesale saveSession from the bounded in-memory view, which would
-    // truncate pre-window history and wipe durable subagent rows.
+    // truncate pre-window history and wipe durable subagent rows. The
+    // settle-cleared ids (covered-kept resets / exempt users) ride the same
+    // transaction so no stale true flag survives on the durable rows.
     const durable = persistCompactionDurable({
       sessionId,
       flaggedMessageIds: [...flaggedSet],
+      clearedMessageIds: settled?.unflaggedIds ?? [],
       summaryChain,
       insertBeforeMessageId,
       updatedAt,

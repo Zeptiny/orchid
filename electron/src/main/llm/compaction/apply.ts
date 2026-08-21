@@ -5,7 +5,9 @@
  * Dependencies U3,U4,U5.
  *
  * Replacement via excludeFromModel never deletion (R3).
- * Summary head is its own chain (R20, R23).
+ * Summary head lives inline inside the owning chain at the cut position —
+ * never as its own chain row (R20/R23; single-row topology, CONCEPTS.md
+ * "Summary Head"; the split design is retired).
  * Crash before apply leaves old history, crash after leaves compacted (R22).
  * Exempt user messages are never excluded from the model view in any mode
  * (R31/R33) — the scoped settle in buildCompactionApply filters the resolved
@@ -18,7 +20,7 @@
  * - Pure build: buildCompactionApply() produces flagged replay state + summary head
  *   with compacted marker {rangeStart, rangeEnd, mode, summarizedCount}.
  * - Persistence is owned by the caller (ipc/chat/persist.ts): it takes the
- *   ApplyResult and writes flagged chains + the summary-head chain as one
+ *   ApplyResult and writes flagged chains + the inline summary head as one
  *   crash-safe transaction (crash before → old history, crash after → compacted).
  *
  * Never mutate older chains in place: callers receive new chain objects; storage
@@ -63,14 +65,33 @@ export interface ApplyInput {
 export interface ApplyResult {
   /** New flat replay state: flagged range + summary head inserted at cutIndex (when present). */
   readonly updatedMessages: Message[];
-  /** New chain list: every input chain cloned with flagged messages, plus newChain appended when present. */
+  /**
+   * New chain list: every input chain cloned with flagged messages. An
+   * INTERIOR cut inlines the summary head into the containing chain at the
+   * cut offset (the chain keeps its ORIGINAL id); boundary/no-chain cuts add
+   * no row — the head exists in flat updatedMessages and in newChain.
+   */
   readonly updatedChains: Chain[];
   /** Summary head message with compacted marker, or null for reclaim-only. */
   readonly summaryMessage: Message | null;
-  /** Summary head chain (COMPLETED), or null for reclaim-only / empty compactable. */
+  /**
+   * Summary head chain (COMPLETED) — the summary-carrier payload consumed by
+   * the durable write (storage inlines its messages into the owning chain).
+   * Never inserted as a row into updatedChains; null for reclaim-only /
+   * empty compactable.
+   */
   readonly newChain: Chain | null;
   /** Flags that were applied to the flat history (ids). */
   readonly flaggedIds: string[];
+  /**
+   * Message ids whose pre-existing `excludeFromModel` the settle CLEARED
+   * (scoped exempt users here; selective covered-kept resets in
+   * buildSelectiveCompactionApply). Order-stable and deduped; surfaced so the
+   * durable write can clear them in the SAME transaction as the flag writes —
+   * otherwise the stale true flag reaches only the in-memory view and
+   * resurrects on reload.
+   */
+  readonly unflaggedIds: string[];
   /** Compacted marker placed on summary head (when present). */
   readonly compactedMarker: CompactedMarker | null;
   /** Whether anything was actually applied (flags or summary). */
@@ -259,6 +280,7 @@ export function buildCompactionApply(input: ApplyInput): ApplyResult {
       summaryMessage: null,
       newChain: null,
       flaggedIds: [],
+      unflaggedIds: [],
       compactedMarker: null,
       didApply: false,
     };
@@ -275,6 +297,17 @@ export function buildCompactionApply(input: ApplyInput): ApplyResult {
     }
     return m;
   });
+
+  // Ids the settle above cleared (exempt user messages only — finalFlaggedIds
+  // was already filtered, so flaggedSet and exemptUserIds are disjoint).
+  // Collected in flat-message order so the durable clear write is stable.
+  const unflaggedIds: string[] = [];
+  const unflaggedSeen = new Set<string>();
+  for (const m of messages) {
+    if (!m.excludeFromModel || !exemptUserIds.has(m.id) || unflaggedSeen.has(m.id)) continue;
+    unflaggedSeen.add(m.id);
+    unflaggedIds.push(m.id);
+  }
 
   let summaryMessage: Message | null = null;
   let compactedMarker: CompactedMarker | null = null;
@@ -321,6 +354,16 @@ export function buildCompactionApply(input: ApplyInput): ApplyResult {
     return { ...chain, messages: newMessages };
   });
 
+  // Summary-head placement in updatedChains (single-row topology, CONCEPTS.md
+  // "Summary Head"): the head lives INLINE inside the owning chain at the cut
+  // position — never as its own chain row. The retired chain-split design
+  // (fresh-id prefix + standalone summary row + continuing suffix) corrupted
+  // live transcripts, and no durable path consumes that split shape. Only an
+  // INTERIOR cut restructures a chain here, and it keeps the chain's ORIGINAL
+  // id (external references — session.activeChainId, subagent record.chain —
+  // keep pointing at the live row). Boundary cuts and chain-less inputs add
+  // no row at all: the head already exists in flat updatedMessages and in
+  // newChain (the carrier payload the durable write inlines itself).
   let newChain: Chain | null = null;
   const finalChains: Chain[] = [...updatedChains];
   if (summaryMessage) {
@@ -342,107 +385,43 @@ export function buildCompactionApply(input: ApplyInput): ApplyResult {
       errorDetail: null,
       errorTitle: null,
     };
-    // Append-only insertion: place newChain logically before preserved window for
-    // flat replay correctness, but persist atomically. For pure transform we
-    // insert it at the ordinal that preserves chronological replay:
-    // find first chain whose start index >= cutIndex.
-    // We don't have explicit ordinal mapping here; infer from flat messages order.
-    // Build flat index -> chain mapping via original messages order.
-    // Simpler for pure result: insert at position that keeps flat updatedMessages order consistent.
-    // Determine insertion index as number of chains that are fully before cut.
-    const originalFlat = messages;
-    let insertionIdx = finalChains.length;
-    let intraHandled = false;
     if (chains.length > 0) {
+      // Flat index → chain mapping via the original messages order, mirroring
+      // the flat replay the summary insertion must stay consistent with.
       const idToChainIdx = new Map<string, number>();
       chains.forEach((chain, idx) => {
         for (const m of chain.messages) if (!idToChainIdx.has(m.id)) idToChainIdx.set(m.id, idx);
       });
       const firstIndexByChain = new Map<string, number>();
       const lastIndexByChain = new Map<string, number>();
-      for (let i = 0; i < originalFlat.length; i += 1) {
-        const msgId = originalFlat[i]!.id;
-        const chainIdx = idToChainIdx.get(msgId);
-        if (chainIdx !== undefined) {
-          const chainId = chains[chainIdx]!.id;
-          if (!firstIndexByChain.has(chainId)) firstIndexByChain.set(chainId, i);
-          lastIndexByChain.set(chainId, i);
-        }
+      for (let i = 0; i < messages.length; i += 1) {
+        const chainIdx = idToChainIdx.get(messages[i]!.id);
+        if (chainIdx === undefined) continue;
+        const chainId = chains[chainIdx]!.id;
+        if (!firstIndexByChain.has(chainId)) firstIndexByChain.set(chainId, i);
+        lastIndexByChain.set(chainId, i);
       }
-      let containingIdx: number | null = null;
-      let containingId: string | null = null;
-      for (let idx = 0; idx < chains.length; idx += 1) {
-        const chainId = chains[idx]!.id;
-        const firstIdx = firstIndexByChain.get(chainId);
-        const lastIdx = lastIndexByChain.get(chainId);
-        if (firstIdx !== undefined && lastIdx !== undefined && cutIndex >= firstIdx && cutIndex <= lastIdx + 1) {
-          containingIdx = idx;
-          containingId = chainId;
-          break;
-        }
+      for (const chain of chains) {
+        const firstIdx = firstIndexByChain.get(chain.id);
+        const lastIdx = lastIndexByChain.get(chain.id);
+        if (firstIdx === undefined || lastIdx === undefined) continue;
+        // Strictly interior cut only: a cut AT a chain boundary (firstIdx or
+        // lastIdx + 1) inlines nothing — the owning row is not restructured.
+        if (cutIndex <= firstIdx || cutIndex > lastIdx) continue;
+        const finalIdx = finalChains.findIndex((c) => c.id === chain.id);
+        if (finalIdx < 0) continue;
+        const target = finalChains[finalIdx]!;
+        const cutOffsetInChain = cutIndex - firstIdx;
+        finalChains[finalIdx] = {
+          ...target,
+          messages: [
+            ...target.messages.slice(0, cutOffsetInChain),
+            summaryMessage,
+            ...target.messages.slice(cutOffsetInChain),
+          ],
+        };
+        break;
       }
-      if (containingIdx !== null && containingId !== null) {
-        const firstIdx = firstIndexByChain.get(containingId)!;
-        if (cutIndex === firstIdx) {
-          const finalIdx = finalChains.findIndex((c) => c.id === containingId);
-          insertionIdx = finalIdx >= 0 ? finalIdx : finalChains.length;
-        } else if (cutIndex > firstIdx) {
-          const finalIdx = finalChains.findIndex((c) => c.id === containingId);
-          if (finalIdx >= 0) {
-            const originalChain = finalChains[finalIdx]!;
-            const cutOffsetInChain = cutIndex - firstIdx;
-            const beforeMessages = originalChain.messages.slice(0, cutOffsetInChain);
-            const afterMessages = originalChain.messages.slice(cutOffsetInChain);
-            if (beforeMessages.length === 0) {
-              finalChains.splice(finalIdx, 1, newChain, { ...originalChain, messages: afterMessages });
-            } else if (afterMessages.length === 0) {
-              finalChains.splice(finalIdx + 1, 0, newChain);
-            } else {
-              // Split id assignment: the PRESERVED after-half keeps the ORIGINAL
-              // chain id so external references (session.activeChainId, subagent
-              // record.chain) keep pointing at the live, continuing half. The
-              // flagged prefix half is frozen history and takes a fresh id —
-              // nothing external references it.
-              const prefixChain: Chain = {
-                id: randomUUID(),
-                sessionId: originalChain.sessionId,
-                messages: beforeMessages,
-                status: originalChain.status,
-                selection: originalChain.selection,
-                modelLabel: originalChain.modelLabel,
-                agentName: originalChain.agentName,
-                agentType: originalChain.agentType,
-                agentTier: originalChain.agentTier,
-                subagentRecord: null,
-                startTime: originalChain.startTime,
-                endTime: originalChain.endTime,
-                errorDetail: originalChain.errorDetail,
-                errorTitle: originalChain.errorTitle,
-              };
-              const afterChain: Chain = { ...originalChain, messages: afterMessages };
-              // Replay order: flagged prefix (new id) → summary head → preserved
-              // after-half (original id).
-              finalChains.splice(finalIdx, 1, prefixChain, newChain, afterChain);
-            }
-            intraHandled = true;
-          }
-        }
-      } else {
-        insertionIdx = finalChains.length;
-      }
-      if (!intraHandled) {
-        for (let idx = 0; idx < finalChains.length; idx += 1) {
-          const chain = finalChains[idx]!;
-          const firstIdx = firstIndexByChain.get(chain.id) ?? Number.MAX_SAFE_INTEGER;
-          if (firstIdx >= cutIndex) {
-            insertionIdx = idx;
-            break;
-          }
-        }
-        finalChains.splice(insertionIdx, 0, newChain);
-      }
-    } else {
-      finalChains.splice(insertionIdx, 0, newChain);
     }
   }
 
@@ -452,6 +431,7 @@ export function buildCompactionApply(input: ApplyInput): ApplyResult {
     summaryMessage,
     newChain,
     flaggedIds: finalFlaggedIds,
+    unflaggedIds,
     compactedMarker,
     didApply: true,
   };
@@ -569,10 +549,26 @@ export function buildSelectiveCompactionApply(
     if (coveredIds.has(m.id) && m.excludeFromModel) return { ...m, excludeFromModel: false };
     return m;
   };
+  const settledMessages = applyResult.updatedMessages.map(settle);
+  // Cleared ids (durable clear write): compare the settled state against the
+  // ORIGINAL input flags — the inner buildCompactionApply settle already
+  // flattened the exempt clears, so they are invisible to a naive diff over
+  // applyResult. Flagged ids and pre-excluded ids keep their true flag and
+  // are never collected.
+  const settledById = new Map<string, Message>(settledMessages.map((m) => [m.id, m]));
+  const unflaggedIds: string[] = [];
+  const unflaggedSeen = new Set<string>();
+  for (const m of messages) {
+    if (m.excludeFromModel !== true || unflaggedSeen.has(m.id)) continue;
+    if (settledById.get(m.id)?.excludeFromModel === true) continue;
+    unflaggedSeen.add(m.id);
+    unflaggedIds.push(m.id);
+  }
   return {
     ...applyResult,
-    updatedMessages: applyResult.updatedMessages.map(settle),
+    updatedMessages: settledMessages,
     updatedChains: applyResult.updatedChains.map((c) => ({ ...c, messages: c.messages.map(settle) })),
     flaggedIds: mergedFlagged,
+    unflaggedIds,
   };
 }

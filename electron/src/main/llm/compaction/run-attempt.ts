@@ -14,9 +14,10 @@
  *
  * Unified behavior (intentional, #11):
  *  - R9: selective mode — including its fallback — never flags EXEMPT user
- *    messages. The runner filters the resolved exempt set
- *    (`resolveUserExemptIds` output, threaded via `exemptIds`; omitted →
- *    every user message, the backcompat default) out of the result's
+ *    messages. The resolved exempt set (`resolveUserExemptIds` output, threaded
+ *    via `exemptIds`; omitted → every user message, the backcompat default) is
+ *    forwarded into the selective runner (validator + fallback replay apply the
+ *    same scoped keep-verbatim rule) and filtered out of the result's
  *    `flaggedIds`. The apply-side settle is owned by `buildCompactionApply` /
  *    `buildSelectiveCompactionApply` (U1/R31, scoped via their `exemptIds`) —
  *    the old per-mode un-flag helpers were removed once both covered their
@@ -24,7 +25,6 @@
  */
 
 import type { Message } from '../../../shared/types/message';
-import { MessageRole } from '../../../shared/types/message';
 import type { ModelSelection } from '../../../shared/types/provider';
 import type { Config } from '../../config/schema';
 import type { ProjectRuntime } from '../../project/runtime';
@@ -33,6 +33,7 @@ import type { CutResult } from './select';
 import { buildManifest } from './selective/manifest';
 import { createLlmSelectiveCaller, runSelectiveCompaction } from './selective/run';
 import type { SelectiveCompactionResult, SimpleFallback } from './selective/run';
+import { scopedExemptUserIds } from './selective/validate';
 import { buildCompactionBridgeContext, summarizeCompactableRange } from './summarize';
 
 /** Ledger + identity context the selective/summarizer attempts attribute to. */
@@ -94,27 +95,13 @@ export function compactableModelSlice(
     .filter((m) => !m.excludeFromModel && !m.hidden);
 }
 
-/** R9: ids of EXEMPT user messages, which selective mode never excludes from the model view. */
-function exemptUserIdsIn(
-  messages: readonly Message[],
-  exemptIds?: ReadonlySet<string> | readonly string[],
-): Set<string> {
-  const exempt = exemptIds ? (exemptIds instanceof Set ? exemptIds : new Set(exemptIds)) : null;
-  const userIds = new Set<string>();
-  for (const m of messages) {
-    if (m.role !== MessageRole.USER) continue;
-    if (!exempt || exempt.has(m.id)) userIds.add(m.id);
-  }
-  return userIds;
-}
-
 /** R9: drop exempt-user ids from a flagged set (selective mode, including its fallback). */
 function filterUserFlaggedIds(
   messages: readonly Message[],
   flaggedIds: readonly string[],
   exemptIds?: ReadonlySet<string> | readonly string[],
 ): string[] {
-  const userIds = exemptUserIdsIn(messages, exemptIds);
+  const userIds = scopedExemptUserIds(messages, exemptIds);
   return flaggedIds.filter((id) => !userIds.has(id));
 }
 
@@ -181,6 +168,11 @@ export async function runCompactionAttempt(
     manifest,
     selectiveCaller,
     simpleFallback,
+    // F11/R31: thread the scoped exempt set into the runner so the validator
+    // (only exempt user ids are held to the R9 keep rule) and the fallback
+    // replay (only exempt user messages preserved verbatim) agree with the
+    // R9 filter below and the apply-side settle.
+    ...(input.exemptIds ? { exemptIds: input.exemptIds } : {}),
     ...(input.maxCorrectionRounds !== undefined ? { maxCorrectionRounds: input.maxCorrectionRounds } : {}),
   });
   return { kind: 'ran', result: applyR9ToResult(messages, result, input.exemptIds) };

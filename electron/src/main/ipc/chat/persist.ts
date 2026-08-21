@@ -272,6 +272,8 @@ export interface CompactionApplyResultLike {
   readonly updatedMessages?: readonly Message[];
   readonly summaryMessage?: Message | null;
   readonly flaggedIds?: readonly string[];
+  /** Ids whose excludeFromModel flag the settle CLEARED (durable clear write). */
+  readonly unflaggedIds?: readonly string[];
 }
 
 /** Reusable durable compaction input (shared by simple + selective paths). */
@@ -282,6 +284,12 @@ export interface CompactionDurablePersistInput {
    * Storage resolves each id against durable rows and refuses partial sets.
    */
   readonly flaggedMessageIds: readonly string[];
+  /**
+   * Message ids whose `excludeFromModel` flag the settle CLEARED — storage
+   * clears them in the SAME transaction as the flag writes so the durable
+   * rows cannot keep a stale true flag that resurrects on reload.
+   */
+  readonly clearedMessageIds?: readonly string[];
   /** Summary-head chain row to insert; null for reclaim-only compaction. */
   readonly summaryChain: Chain | null;
   /**
@@ -309,6 +317,9 @@ export function persistCompactionDurable(
   return manager.applyCompaction(input.sessionId, {
     updatedAt: input.updatedAt ?? new Date().toISOString(),
     flaggedMessageIds: input.flaggedMessageIds,
+    // Always forwarded (empty/omitted → nothing to clear) — keep the payload
+    // shape uniform across call sites.
+    ...(input.clearedMessageIds ? { clearedMessageIds: input.clearedMessageIds } : {}),
     summaryChain: input.summaryChain,
     insertBeforeMessageId: input.insertBeforeMessageId,
   });
@@ -349,22 +360,31 @@ function resolveSummaryInsertionAnchor(
     const index = updatedMessages.findIndex((m) => m.id === summaryMessage.id);
     if (index >= 0) return updatedMessages[index + 1]?.id ?? null;
   }
-  const chainIndex = applyResult.updatedChains.findIndex(
-    (chain) => chain.id === applyResult.newChain!.id,
-  );
-  const next = chainIndex >= 0 ? applyResult.updatedChains[chainIndex + 1] : undefined;
-  return next?.messages[0]?.id ?? null;
+  // Fallback (minimal apply results without updatedMessages): the pure apply
+  // never splices newChain in as its own row — the summary, when present in a
+  // chain at all, is INLINE. Anchor on the message following it in replay
+  // order (next message in the owning chain, else the next chain's first
+  // message); null when the summary is last appends it after the last chain.
+  for (let i = 0; i < applyResult.updatedChains.length; i += 1) {
+    const chain = applyResult.updatedChains[i]!;
+    const index = chain.messages.findIndex((m) => m.id === summaryMessage.id);
+    if (index < 0) continue;
+    return chain.messages[index + 1]?.id
+      ?? applyResult.updatedChains[i + 1]?.messages[0]?.id
+      ?? null;
+  }
+  return null;
 }
 
 /**
  * Refresh the cached session from durable rows after a compaction write and
  * emit SESSION_COMPACTION / SESSION_UPDATED.
  *
- * The durable write restructured the chain layout (flags + summary head +
- * splits). The cache is refreshed from storage — unrecovered, so a live
+ * The durable write restructured the chain layout (flags + inline summary
+ * head). The cache is refreshed from storage — unrecovered, so a live
  * ACTIVE continuing row keeps its status and pointer — because the
  * renderer's compaction reload (session:open) reuses this cache: serving the
- * pre-split view would mis-order it (summary above the turn's user message,
+ * pre-write view would mis-order it (summary above the turn's user message,
  * user message vanishing on the next checkpoint update).
  */
 export function publishCompactedSession(
@@ -453,6 +473,9 @@ export function persistCompactionBetweenTurns(
     const durable = persistCompactionDurable({
       sessionId,
       flaggedMessageIds,
+      // Settle-cleared ids ride the same transaction so a cleared flag can
+      // never resurrect from a stale durable row on reload.
+      clearedMessageIds: applyResult.unflaggedIds ?? [],
       summaryChain,
       insertBeforeMessageId,
       updatedAt,

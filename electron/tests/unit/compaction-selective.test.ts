@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Message } from '../../src/shared/types/message';
-import { MessageRole, MessageType } from '../../src/shared/types/message';
+import { MessageRole, MessageType, SUMMARY_SECTION_SEPARATOR } from '../../src/shared/types/message';
 import type { ToolCall } from '../../src/shared/types/tool';
 import { buildManifest, parseSelectiveOps, selectiveOpsToJson, PREVIEW_MAX_LENGTH } from '../../src/main/llm/compaction/selective/manifest';
 import { validateSelectiveOps } from '../../src/main/llm/compaction/selective/validate';
@@ -322,6 +322,76 @@ describe('U13 validator', () => {
     const res = validateSelectiveOps(ops, manifest, msgs);
     expect(res.valid).toBe(true);
   });
+
+  it('span size counts the serialized transcript fields, not content alone (F5)', () => {
+    // Five tool pairs whose results carry only 60 content chars each (300
+    // total — under SUBSTANTIVE_SPAN_MIN_SOURCE_CHARS when measuring content
+    // alone), but the transcript serialization the compactor reads adds the
+    // tool names/arguments and tool_call_id lines, pushing the span over the
+    // substance floor — so the activity-log text must be rejected.
+    const msgs: Message[] = [makeUser('u1','q')];
+    for (let i = 0; i < 5; i += 1) {
+      msgs.push(makeToolCallMsg(`tc-${i}`, `c${i}`, 'grep', JSON.stringify({ pattern: 'x'.repeat(50) })));
+      msgs.push(makeToolResult(`tr-${i}`, `c${i}`, 'grep', 'y'.repeat(60)));
+    }
+    const manifest = buildManifest(msgs, { start: 0, end: msgs.length });
+    const spanIds = msgs.slice(1).map((m) => m.id);
+    const ops: SelectiveOp[] = [
+      { type: 'keep', id: 'u1' },
+      { type: 'summarize', ids: spanIds, text: 'Assistant ran some searches.' },
+    ];
+    const res = validateSelectiveOps(ops, manifest, msgs);
+    expect(res.valid).toBe(false);
+    expect(res.errors.some(e => e.includes('not a substantive handoff'))).toBe(true);
+  });
+
+  it('scoped exemptIds: non-exempt user ids may be summarized; exempt ids must be kept verbatim (F11/R31)', () => {
+    const msgs = [makeUser('u1','task head'), makeUser('u2','old question'), makeAssistant('a1','answer')];
+    const manifest = buildManifest(msgs, { start: 0, end: 3 });
+    const ops: SelectiveOp[] = [
+      { type: 'keep', id: 'u1' },
+      { type: 'summarize', ids: ['u2', 'a1'], text: 'summarized exchange' },
+    ];
+    // Backcompat default (no exemptIds): summarizing any user id is rejected.
+    const universal = validateSelectiveOps(ops, manifest, msgs);
+    expect(universal.valid).toBe(false);
+    expect(universal.errors.some(e => e.includes('u2') && e.includes('must be kept verbatim'))).toBe(true);
+    // Scoped set: u1 is exempt (and kept), u2 is not — the span is valid.
+    const scoped = validateSelectiveOps(ops, manifest, msgs, new Set(['u1']));
+    expect(scoped.valid).toBe(true);
+    expect(scoped.errors).toHaveLength(0);
+  });
+
+  it('scoped exemptIds: an exempt user message left out of ops is still required present (F11/R31)', () => {
+    const msgs = [makeUser('u1','q'), makeUser('u2','q2'), makeAssistant('a1','a')];
+    const manifest = buildManifest(msgs, { start: 0, end: 3 });
+    const ops: SelectiveOp[] = [
+      { type: 'keep', id: 'u2' },
+      { type: 'summarize', ids: ['a1'], text: 'summarized' },
+      // u1 (exempt) missing
+    ];
+    const res = validateSelectiveOps(ops, manifest, msgs, new Set(['u1']));
+    expect(res.valid).toBe(false);
+    expect(res.errors.some(e => e.includes('u1') && e.includes('missing'))).toBe(true);
+  });
+
+  it('scoped exemptIds: keep_range on a non-exempt user passes; on an exempt user it errors (F11)', () => {
+    const msgs = [makeUser('u1','task head'), makeUser('u2', multiLineContent(10))];
+    const manifest = buildManifest(msgs, { start: 0, end: 2 });
+    const exempt = new Set(['u1']);
+    const rangedNonExempt: SelectiveOp[] = [
+      { type: 'keep', id: 'u1' },
+      { type: 'keep_range', id: 'u2', startLine: 1, endLine: 5 },
+    ];
+    expect(validateSelectiveOps(rangedNonExempt, manifest, msgs, exempt).valid).toBe(true);
+    const rangedExempt: SelectiveOp[] = [
+      { type: 'keep', id: 'u2' },
+      { type: 'keep_range', id: 'u1', startLine: 1, endLine: 5 },
+    ];
+    const res = validateSelectiveOps(rangedExempt, manifest, msgs, exempt);
+    expect(res.valid).toBe(false);
+    expect(res.errors.some(e => e.includes('keep_range on user message u1'))).toBe(true);
+  });
 });
 
 // ── U14 materialization and loop ────────────────────────────────────────────
@@ -388,12 +458,14 @@ describe('U14 materialization', () => {
   });
 
   it('coalesces MULTIPLE summarize ops into ONE synthetic summary head (review #53)', () => {
+    // Spans hold only valid non-thinking messages (assistant text) —
+    // summarizing thinking is rejected by the validator (R24).
     const msgs = [
       makeUser('u1', 'q'),
       makeAssistant('a1', 'first work'),
-      makeThinking('th1', 'reasoning one'),
+      makeAssistant('th1', 'reasoning one'),
       makeAssistant('a2', 'second work'),
-      makeThinking('th2', 'reasoning two'),
+      makeAssistant('th2', 'reasoning two'),
       makeUser('u2', 'preserve'),
     ];
     const manifest = buildManifest(msgs, { start: 0, end: 5 });
@@ -410,7 +482,7 @@ describe('U14 materialization', () => {
     expect(m.summaryMessages).toHaveLength(1);
     expect(m.summaryMessage?.id).toBe(heads[0]!.id);
     // Combined sections joined with a separator.
-    expect(heads[0]!.content).toBe('Section one summary.\n\n---\n\nSection two summary.');
+    expect(heads[0]!.content).toBe(['Section one summary.', 'Section two summary.'].join(SUMMARY_SECTION_SEPARATOR));
     // Marker anchors span all summarized ids with the total count.
     expect(heads[0]!.compacted?.rangeStart).toBe('a1');
     expect(heads[0]!.compacted?.rangeEnd).toBe('th2');
@@ -420,6 +492,62 @@ describe('U14 materialization', () => {
     // All summarized originals flagged exactly once.
     expect(m.flaggedIds).toEqual(expect.arrayContaining(['a1', 'th1', 'a2', 'th2']));
     expect(m.flaggedIds).toHaveLength(4);
+  });
+
+  it('keeps a kept milestone between summarize spans at its replay position (F4)', () => {
+    // summarize(A), keep(B), summarize(C): B must stay BETWEEN the two summary
+    // heads — coalescing everything into ONE head at the first span's slot
+    // would surface B after C's summarized content (A,B,C → summary(A+C),B).
+    const msgs = [
+      makeUser('u1', 'q'),
+      makeAssistant('a1', 'work A'),
+      makeAssistant('a2', 'milestone B'),
+      makeAssistant('a3', 'work C'),
+      makeUser('u2', 'preserve'),
+    ];
+    const manifest = buildManifest(msgs, { start: 0, end: 4 });
+    const ops: SelectiveOp[] = [
+      { type: 'keep', id: 'u1' },
+      { type: 'summarize', ids: ['a1'], text: 'Section one summary.' },
+      { type: 'keep', id: 'a2' },
+      { type: 'summarize', ids: ['a3'], text: 'Section two summary.' },
+    ];
+    const m = materializeSelectiveOps({ manifest, messages: msgs, ops });
+
+    expect(m.summaryMessages).toHaveLength(2);
+    expect(m.summaryMessage?.id).toBe(m.summaryMessages[0]!.id);
+    // Replay order preserved: A's summary, then B verbatim, then C's summary.
+    expect(m.replayMessages.map((r) => r.id)).toEqual([
+      'u1', m.summaryMessages[0]!.id, 'a2', m.summaryMessages[1]!.id, 'u2',
+    ]);
+    // Each head anchors only its own span.
+    expect(m.summaryMessages[0]!.compacted?.rangeStart).toBe('a1');
+    expect(m.summaryMessages[0]!.compacted?.rangeEnd).toBe('a1');
+    expect(m.summaryMessages[1]!.compacted?.rangeStart).toBe('a3');
+    expect(m.flaggedIds).toEqual(expect.arrayContaining(['a1', 'a3']));
+  });
+
+  it('kept thinking between summarize spans does not split the coalesced head (review #53 shape)', () => {
+    const msgs = [
+      makeUser('u1', 'q'),
+      makeAssistant('a1', 'work A'),
+      makeThinking('th1', 'reasoning'),
+      makeAssistant('a2', 'work B'),
+      makeUser('u2', 'preserve'),
+    ];
+    const manifest = buildManifest(msgs, { start: 0, end: 4 });
+    const ops: SelectiveOp[] = [
+      { type: 'keep', id: 'u1' },
+      { type: 'summarize', ids: ['a1'], text: 'Section one summary.' },
+      { type: 'keep', id: 'th1' },
+      { type: 'summarize', ids: ['a2'], text: 'Section two summary.' },
+    ];
+    const m = materializeSelectiveOps({ manifest, messages: msgs, ops });
+    // Thinking separators are transparent (deliberation interleaved with tool
+    // work): one head covering both spans, kept thinking after it.
+    expect(m.summaryMessages).toHaveLength(1);
+    expect(m.summaryMessages[0]!.compacted?.summarizedCount).toBe(2);
+    expect(m.replayMessages.map((r) => r.id)).toEqual(['u1', m.summaryMessages[0]!.id, 'th1', 'u2']);
   });
 });
 
@@ -760,6 +888,69 @@ describe('U14 runSelectiveCompaction loop', () => {
       // Should be sorted in replay
       const ids = result.replayMessages.filter(r => ['u1','a1','u2'].includes(r.id)).map(r=>r.id);
       expect(ids).toEqual(['u1','a1','u2']);
+    }
+  });
+
+  it('threads exemptIds into validation: non-exempt user summarizable on first try (F11/R31)', async () => {
+    const msgs = [
+      makeUser('u1','task head'),
+      makeUser('u2','old question'),
+      makeAssistant('a1','a'),
+      makeUser('u3','preserve me'),
+    ];
+    const range = { start: 0, end: 3 };
+    const ops = (): SelectiveOp[] => [
+      { type: 'keep', id: 'u1' },
+      { type: 'summarize', ids: ['u2', 'a1'], text: 'summarized exchange' },
+    ];
+    // Backcompat default (no exemptIds): u2 is protected, so the ops fail
+    // validation and the run exhausts into fallback.
+    const universal = await runSelectiveCompaction({
+      messages: msgs,
+      compactableRange: range,
+      maxCorrectionRounds: 1,
+      selectiveCaller: async () => ops(),
+      simpleFallback: () => null,
+    });
+    expect(universal.kind).toBe('fallback');
+    // Scoped exempt set: the same ops are valid on the first attempt.
+    const scoped = await runSelectiveCompaction({
+      messages: msgs,
+      compactableRange: range,
+      exemptIds: new Set(['u1']),
+      selectiveCaller: async () => ops(),
+    });
+    expect(scoped.kind).toBe('selective');
+    if (scoped.kind === 'selective') {
+      expect(scoped.attempts).toBe(1);
+      expect(scoped.flaggedIds).toEqual(expect.arrayContaining(['u2', 'a1']));
+    }
+  });
+
+  it('fallback replay preserves only EXEMPT user messages verbatim (F11/R31)', async () => {
+    const msgs = [
+      makeUser('u1','task head'),
+      makeUser('u2','old question'),
+      makeAssistant('a1','a'),
+      makeUser('u3','preserve me'),
+    ];
+    const range = { start: 0, end: 3 };
+    const fallbackText = 'Fallback handoff summary: the exploration covered the compaction trigger engine, the select and apply pipeline, and the selective validator; the remaining work is the IPC wiring, renderer widgets, and subagent integration.';
+    const result = await runSelectiveCompaction({
+      messages: msgs,
+      compactableRange: range,
+      maxCorrectionRounds: 1,
+      exemptIds: new Set(['u1']),
+      selectiveCaller: async () => [], // exhausts correction rounds → simple fallback
+      simpleFallback: () => ({ text: fallbackText }),
+    });
+    expect(result.kind).toBe('fallback');
+    if (result.kind === 'fallback') {
+      // Only the exempt task head rides in the replay verbatim; the
+      // non-exempt u2 leaves the model view with the rest of the range.
+      expect(result.replayMessages?.map((m) => m.id)).toEqual(['u1', result.summaryMessage!.id, 'u3']);
+      expect(result.flaggedIds).toEqual(expect.arrayContaining(['u2', 'a1']));
+      expect(result.flaggedIds).not.toContain('u1');
     }
   });
 });
