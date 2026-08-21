@@ -36,6 +36,7 @@ import {
   getSubagentDetail,
   getContext,
   getContextSessionDetail,
+  getContextSessionList,
 } from '../../src/main/providers/accounting/analytics-queries';
 import { _clearDbCache } from '../../src/main/session/storage';
 import { applyAccountingSchemaMigrations } from '../../src/main/providers/accounting/schema';
@@ -183,6 +184,8 @@ function seedProviderAttempt(opts: {
 function seedStreamedAttempt(opts: {
   attemptId: string;
   sessionId: string;
+  /** Defaults to null (main chain); pass a chainId to seed a subagent-chain attempt. */
+  chainId?: string | null;
   ttftMs: number;
   generationMs: number;
   outputTokens: number;
@@ -191,7 +194,7 @@ function seedStreamedAttempt(opts: {
   providerStore.insertPending({
     attemptId: opts.attemptId,
     sessionId: opts.sessionId,
-    chainId: null,
+    chainId: opts.chainId ?? null,
     turnId: null,
     sdkCallId: `sdk-${opts.attemptId}`,
     snapshot: opts.snapshot ?? anthropicSnapshot(),
@@ -1946,6 +1949,54 @@ describe('analytics-queries', () => {
     });
   });
 
+  describe('getSubagentDetail latency and invocation cap', () => {
+    it('joins first-token-stamped chain attempts into positive summary latency', () => {
+      // Attribution first (run window starts at its started_at), then a streamed
+      // attempt on that chain: ttft 1000ms, generation 1000ms, 500 output tokens.
+      seedSubagentAttribution({
+        subagentId: 'sub-lat', sessionId: 'sess-lat', chainId: 'chain-lat',
+        agentName: 'latency-agent', agentType: 'worker', agentTier: 'sprout',
+        modelId: 'claude-test', connectionId: ANTHROPIC_CONNECTION_ID,
+        status: 'completed',
+      });
+      seedStreamedAttempt({
+        attemptId: 'att-lat', sessionId: 'sess-lat', chainId: 'chain-lat',
+        ttftMs: 1000, generationMs: 1000, outputTokens: 500,
+      });
+
+      const result = getSubagentDetail({ agentName: 'latency-agent', agentType: 'worker', agentTier: 'sprout' });
+
+      expect(result.truncated).toBe(false);
+      expect(result.summary.avgTtftMs).toBe(1000);
+      expect(result.summary.p50TtftMs).toBe(1000);
+      expect(result.summary.p95TtftMs).toBe(1000);
+      // Token-weighted: 500 tokens over a 1s generation window.
+      expect(result.summary.avgTokensPerSecond).toBe(500);
+      expect(result.invocations).toHaveLength(1);
+      expect(result.invocations[0].attempts).toBe(1);
+    });
+
+    it('caps invocation rows at 500 while the summary counts every attribution', () => {
+      // One (agentName, agentType, agentTier) triple, 501 distinct subagent
+      // runs with no attempts on their chains. Each insert advances the shared
+      // clock by 1s per store call — that is fine for the join.
+      for (let i = 0; i < 501; i++) {
+        seedSubagentAttribution({
+          subagentId: `cap-sub-${i}`, sessionId: 'sess-cap', chainId: `cap-chain-${i}`,
+          agentName: 'cap-agent', agentType: 'worker', agentTier: 'sprout',
+          modelId: 'claude-test', connectionId: ANTHROPIC_CONNECTION_ID,
+          status: 'completed',
+        });
+      }
+
+      const result = getSubagentDetail({ agentName: 'cap-agent', agentType: 'worker', agentTier: 'sprout' });
+
+      expect(result.truncated).toBe(true);
+      expect(result.invocations).toHaveLength(500);
+      expect(result.summary.invocations).toBe(501);
+    });
+  });
+
   // ── getContextSessionDetail ─────────────────────────────────────────────────
 
   describe('getContextSessionDetail', () => {
@@ -2010,11 +2061,13 @@ describe('analytics-queries', () => {
       expect(result.series[0].summaryTokens).toBe(40);
       expect(result.series[0].capturedAt.localeCompare(result.series[1].capturedAt)).toBeLessThan(0);
 
-      // Picker — every main-agent session in range, ordered by max used tokens.
-      expect(result.sessions.map((s) => s.sessionId)).toEqual(['sess-z', 'sess-other']);
-      expect(result.sessions[0].snapshotCount).toBe(4);
-      expect(result.sessions[0].maxUsedTokens).toBe(5020);
-      expect(result.sessions[1].snapshotCount).toBe(1);
+      // Picker lives in its own query — every main-agent session in range,
+      // ordered by max used tokens.
+      const picker = getContextSessionList();
+      expect(picker.sessions.map((s) => s.sessionId)).toEqual(['sess-z', 'sess-other']);
+      expect(picker.sessions[0].snapshotCount).toBe(4);
+      expect(picker.sessions[0].maxUsedTokens).toBe(5020);
+      expect(picker.sessions[1].snapshotCount).toBe(1);
 
       // Events — 3 jumps + 1 compaction, interleaved chronologically.
       expect(result.events).toHaveLength(4);

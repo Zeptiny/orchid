@@ -540,6 +540,14 @@ export interface ContextSessionPickerEntry {
   readonly maxUsedTokens: number;
 }
 
+/**
+ * Context session picker result. A standalone query so the picker is computed
+ * once per time range instead of being re-derived on every drill-down switch.
+ */
+export interface ContextSessionsResult {
+  readonly sessions: readonly ContextSessionPickerEntry[];
+}
+
 /** Full-fidelity main-agent snapshot point (no stride sampling). */
 export interface ContextSessionDetailPoint {
   readonly capturedAt: string;
@@ -587,7 +595,6 @@ export type ContextEvent = ContextCompactionEvent | ContextJumpEvent;
 export interface ContextSessionDetailResult {
   readonly sessionId: string;
   readonly sessionName: string | null;
-  readonly sessions: readonly ContextSessionPickerEntry[];
   readonly series: readonly ContextSessionDetailPoint[];
   /** True when the series was capped at the 2000 most recent snapshots. */
   readonly truncated: boolean;

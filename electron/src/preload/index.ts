@@ -125,6 +125,7 @@ import type {
   SubagentAnalyticsDetailResult,
   ContextResult,
   ContextSessionDetailResult,
+  ContextSessionsResult,
   AnalyticsTimeRange,
 } from '../shared/types/analytics';
 import {
@@ -748,6 +749,9 @@ const orchidAPI: OrchidAPI = {
 
     contextSessionDetail: (params: { readonly sessionId: string; readonly timeRange?: AnalyticsTimeRange }) =>
       invoke<ContextSessionDetailResult>(IPC_CHANNELS.ANALYTICS_CONTEXT_SESSION_DETAIL, params),
+
+    contextSessions: (params?: { readonly timeRange?: AnalyticsTimeRange }) =>
+      invoke<ContextSessionsResult>(IPC_CHANNELS.ANALYTICS_CONTEXT_SESSIONS, params),
   },
 };
 

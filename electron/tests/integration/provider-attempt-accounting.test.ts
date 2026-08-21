@@ -179,6 +179,44 @@ describe('provider attempt accounting middleware', () => {
     ledger.close();
   });
 
+  it('records the delta-time timestamp even when the stream errors immediately after content', async () => {
+    const ledger = store();
+    const middleware = createAttemptAccountingMiddleware({
+      store: ledger, sessionId: 'session-err-immediate', chainId: 'chain-1', turnId: 'turn-1', snapshot: snapshot(),
+    });
+    const wrapStream = middleware.wrapStream! as unknown as (input: Record<string, unknown>) => Promise<{ stream: ReadableStream<unknown> }>;
+    const before = Date.now();
+    const result = await wrapStream({
+      doStream: async () => ({
+        response: { headers: {} },
+        stream: new ReadableStream({
+          start(controller) {
+            controller.enqueue({ type: 'text-delta', id: '0', delta: 'partial' });
+            controller.enqueue({ type: 'error', error: new Error('boom') });
+            controller.close();
+          },
+        }),
+      }),
+      doGenerate: async () => { throw new Error('not used'); },
+      params: {}, model: {},
+    });
+    await consume(result.stream);
+    // The durable write is deferred to a microtask; flush before asserting.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const after = Date.now();
+
+    const row = ledger.getDatabase()
+      .prepare('SELECT outcome, first_token_at FROM provider_attempts WHERE session_id = ?')
+      .get('session-err-immediate') as { outcome: string; first_token_at: string | null };
+    expect(row.outcome).toBe('failed');
+    // TTFT accuracy: the timestamp is captured at the delta, not at the (later)
+    // deferred write — it must sit inside the wall-clock window of the run.
+    expect(row.first_token_at).not.toBeNull();
+    const stampedMs = Date.parse(row.first_token_at!);
+    expect(stampedMs).toBeGreaterThanOrEqual(before);
+    expect(stampedMs).toBeLessThanOrEqual(after);
+  });
+
   it('estimates reasoning tokens from output characters when the provider does not report them', async () => {
     const ledger = store();
     const middleware = createAttemptAccountingMiddleware({

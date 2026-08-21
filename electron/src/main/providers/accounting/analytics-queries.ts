@@ -30,6 +30,7 @@ import type {
   TtftOverTimePoint,
   SubagentAnalyticsDetailResult,
   ContextSessionDetailResult,
+  ContextSessionsResult,
   ContextEvent,
   ContextJumpEvent,
 } from '../../../shared/types/analytics';
@@ -85,6 +86,31 @@ function getDb(ctx?: AnalyticsQueryContext): SqliteDatabase {
 }
 
 /**
+ * Resolve session names from the accounting ledger's `session_names` tombstone
+ * table only. Tombstones are readable from any accounting.db connection (the
+ * analytics worker included), unlike live sessions.db names — the worker
+ * resolves tombstones itself and the main process live-patches on top.
+ * Fail-soft (table missing, db locked → empty map).
+ */
+export function resolveTombstoneNames(
+  db: SqliteDatabase,
+  sessionIds: readonly string[],
+): Map<string, string> {
+  const names = new Map<string, string>();
+  if (sessionIds.length === 0) return names;
+  try {
+    const placeholders = sessionIds.map(() => '?').join(', ');
+    const rows = db.prepare(
+      `SELECT session_id, name FROM session_names WHERE session_id IN (${placeholders})`,
+    ).all(...sessionIds) as Array<{ session_id: string; name: string }>;
+    for (const row of rows) {
+      names.set(row.session_id, row.name);
+    }
+  } catch { /* tombstone table missing or db locked — skip */ }
+  return names;
+}
+
+/**
  * Resolve session names with a tombstone fallback.
  *
  * Live sessions.db rows win: a session that still exists keeps its current
@@ -97,23 +123,17 @@ function getDb(ctx?: AnalyticsQueryContext): SqliteDatabase {
 export function resolveSessionNamesWithFallback(
   db: SqliteDatabase,
   sessionIds: readonly string[],
-): Map<string, string> {  const names = new Map<string, string>();
+): Map<string, string> {
+  const names = new Map<string, string>();
   try {
     for (const [id, name] of getSessionNames(sessionIds)) {
       names.set(id, name);
     }
   } catch { /* session DB unavailable */ }
   const missing = sessionIds.filter((id) => !names.has(id));
-  if (missing.length === 0) return names;
-  try {
-    const placeholders = missing.map(() => '?').join(', ');
-    const rows = db.prepare(
-      `SELECT session_id, name FROM session_names WHERE session_id IN (${placeholders})`,
-    ).all(...missing) as Array<{ session_id: string; name: string }>;
-    for (const row of rows) {
-      names.set(row.session_id, row.name);
-    }
-  } catch { /* tombstone table missing or db locked — skip */ }
+  for (const [id, name] of resolveTombstoneNames(db, missing)) {
+    names.set(id, name);
+  }
   return names;
 }
 
@@ -1850,10 +1870,44 @@ export function getContext(sessionId?: string, timeRange?: AnalyticsTimeRange, c
 }
 
 /**
- * Context drill-down for one session: a picker over every main-agent session
- * with snapshots in range, the full-fidelity main-agent snapshot series (no
- * stride sampling — capped at the most recent 2000 points), and a timeline of
- * contextual events (compactor attempts + largest used_tokens jumps).
+ * Context session picker: every distinct main-agent session with snapshots in
+ * range (ids + ints, so no cap). Standalone from the drill-down so switching
+ * sessions does not recompute the picker.
+ */
+export function getContextSessionList(
+  timeRange?: AnalyticsTimeRange,
+  ctx: AnalyticsQueryContext = {},
+): ContextSessionsResult {
+  const db = getDb(ctx);
+  const capturedFilter = buildDateFilter(timeRange, 'captured_at');
+  const resolveNames = ctx.resolveSessionNames
+    ?? ((ids: readonly string[]) => resolveSessionNamesWithFallback(db, ids));
+
+  const pickerRows = db.prepare(`
+    SELECT session_id, COUNT(*) as snapshot_count, MAX(used_tokens) as max_used_tokens
+    FROM context_snapshots
+    ${whereClause(['agent_scope IS NULL'], capturedFilter.clause)}
+    GROUP BY session_id
+    ORDER BY max_used_tokens DESC, session_id ASC
+  `).all(...capturedFilter.params) as Array<{
+    session_id: string; snapshot_count: number; max_used_tokens: number;
+  }>;
+  const nameMap = resolveManySessionNames(resolveNames, pickerRows.map((r) => r.session_id));
+  return {
+    sessions: pickerRows.map((r) => ({
+      sessionId: r.session_id,
+      sessionName: nameMap.get(r.session_id) ?? null,
+      snapshotCount: r.snapshot_count,
+      maxUsedTokens: r.max_used_tokens,
+    })),
+  };
+}
+
+/**
+ * Context drill-down for one session: the full-fidelity main-agent snapshot
+ * series (no stride sampling — capped at the most recent 2000 points) and a
+ * timeline of contextual events (compactor attempts + largest used_tokens
+ * jumps). The session picker lives in {@link getContextSessionList}.
  */
 export function getContextSessionDetail(
   input: { sessionId: string; timeRange?: AnalyticsTimeRange },
@@ -1865,24 +1919,6 @@ export function getContextSessionDetail(
   const attemptFilter = buildDateFilter(input.timeRange);
   const resolveNames = ctx?.resolveSessionNames
     ?? ((ids: readonly string[]) => resolveSessionNamesWithFallback(db, ids));
-
-  // Picker — every distinct main-agent session in range (ids + ints, so no cap).
-  const pickerRows = db.prepare(`
-    SELECT session_id, COUNT(*) as snapshot_count, MAX(used_tokens) as max_used_tokens
-    FROM context_snapshots
-    ${whereClause(['agent_scope IS NULL'], capturedFilter.clause)}
-    GROUP BY session_id
-    ORDER BY max_used_tokens DESC, session_id ASC
-  `).all(...capturedFilter.params) as Array<{
-    session_id: string; snapshot_count: number; max_used_tokens: number;
-  }>;
-  const pickerNameMap = resolveManySessionNames(resolveNames, pickerRows.map((r) => r.session_id));
-  const sessions = pickerRows.map((r) => ({
-    sessionId: r.session_id,
-    sessionName: pickerNameMap.get(r.session_id) ?? null,
-    snapshotCount: r.snapshot_count,
-    maxUsedTokens: r.max_used_tokens,
-  }));
 
   const { count: seriesCount } = db.prepare(`
     SELECT COUNT(*) as count FROM context_snapshots
@@ -1975,7 +2011,6 @@ export function getContextSessionDetail(
   return {
     sessionId: input.sessionId,
     sessionName: resolveManySessionNames(resolveNames, [input.sessionId]).get(input.sessionId) ?? null,
-    sessions,
     series,
     truncated: seriesCount > series.length,
     events,

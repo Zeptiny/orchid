@@ -143,6 +143,44 @@ describe('ProviderAccountingStore', () => {
     store.close();
   });
 
+  it('markFirstTokenAt writes the given timestamp and never lets a later stamp overwrite it', () => {
+    let clockMs = Date.parse('2026-07-12T11:00:00.000Z');
+    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'orchid-accounting-'));
+    const store = new ProviderAccountingStore({ dbPath: path.join(tempDir, 'accounting.db'), now: () => new Date(clockMs) });
+    store.insertPending({ attemptId: 'ttft-at-1', sessionId: 'session-1', chainId: null, turnId: null, sdkCallId: null, snapshot: snapshot() });
+
+    // The delta observes the clock; the deferred write persists that instant.
+    const eventAt = '2026-07-12T10:59:59.500Z';
+    store.markFirstTokenAt('ttft-at-1', eventAt);
+    const stamped = (store.getDatabase()
+      .prepare('SELECT first_token_at FROM provider_attempts WHERE attempt_id = ?')
+      .get('ttft-at-1') as { first_token_at: string | null }).first_token_at;
+    expect(stamped).toBe(eventAt);
+
+    // A later duplicate stamp with a later explicit timestamp must not
+    // overwrite the original — the guard is the IS NULL clause.
+    clockMs += 5000;
+    store.markFirstTokenAt('ttft-at-1', new Date(clockMs).toISOString());
+    const again = (store.getDatabase()
+      .prepare('SELECT first_token_at FROM provider_attempts WHERE attempt_id = ?')
+      .get('ttft-at-1') as { first_token_at: string | null }).first_token_at;
+    expect(again).toBe(eventAt);
+    store.close();
+  });
+
+  it('clearSessionNameTombstones removes every tombstone and reports the change count', () => {
+    const store = createStore();
+    store.upsertSessionNameTombstone('session-a', 'Alpha');
+    store.upsertSessionNameTombstone('session-b', 'Beta');
+    expect(store.getSessionNameTombstones(['session-a', 'session-b']).size).toBe(2);
+
+    expect(store.clearSessionNameTombstones()).toBe(2);
+    expect(store.getSessionNameTombstones(['session-a', 'session-b'])).toEqual(new Map());
+    // An already-empty table clears as a no-op.
+    expect(store.clearSessionNameTombstones()).toBe(0);
+    store.close();
+  });
+
   it('never regresses a recorded schema_version when an older binary reopens the ledger', () => {
     const store = createStore();
     store.getDatabase().prepare(

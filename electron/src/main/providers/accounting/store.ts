@@ -298,11 +298,20 @@ export class ProviderAccountingStore {
    * keeps it idempotent — only the first observed delta wins.
    */
   markFirstToken(attemptId: string): void {
+    this.markFirstTokenAt(attemptId, this.now().toISOString());
+  }
+
+  /**
+   * markFirstToken with a caller-captured timestamp: the stream observes the
+   * delta-time clock, the durable write may land later (deferred off the token
+   * hot path) without regressing TTFT accuracy.
+   */
+  markFirstTokenAt(attemptId: string, at: string): void {
     this.connection().prepare(`
       UPDATE provider_attempts
       SET first_token_at = ?
       WHERE attempt_id = ? AND first_token_at IS NULL
-    `).run(this.now().toISOString(), attemptId);
+    `).run(at, attemptId);
   }
 
   /** Mark process-crash leftovers interrupted once, without mutating completed rows. */
@@ -366,6 +375,15 @@ export class ProviderAccountingStore {
       `SELECT session_id, name FROM session_names WHERE session_id IN (${placeholders})`,
     ).all(...sessionIds) as Array<{ session_id: string; name: string }>;
     return new Map(rows.map((row) => [row.session_id, row.name]));
+  }
+
+  /**
+   * Delete every session-name tombstone. This is the clearing primitive a
+   * future "clear analytics" flow calls — tombstones otherwise persist
+   * indefinitely by design.
+   */
+  clearSessionNameTombstones(): number {
+    return this.connection().prepare('DELETE FROM session_names').run().changes;
   }
 
   getDatabase(): SqliteDatabase {

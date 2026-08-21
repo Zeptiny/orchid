@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useMemo, useState, type ReactNode } from 'react';
 import { useAnalytics } from '../../hooks/useAnalytics';
 import type {
   AnalyticsTimeRange,
@@ -370,10 +370,16 @@ function ContextSessionDrilldown({ detail }: { detail: ContextSessionDetailResul
 
 export function ContextTab({ timeRange }: { timeRange: AnalyticsTimeRange }) {
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
-  const [sessionOptions, setSessionOptions] = useState<readonly ContextSessionPickerEntry[] | null>(null);
 
   const { data, loading, error, refresh } = useAnalytics(
     () => window.orchid.analytics.context({ timeRange }),
+    [timeRange],
+  );
+
+  // Session picker is its own query so switching drill-down sessions does not
+  // recompute it; it already covers every main-agent session in range.
+  const pickerQuery = useAnalytics(
+    () => window.orchid.analytics.contextSessions({ timeRange }),
     [timeRange],
   );
 
@@ -388,31 +394,15 @@ export function ContextTab({ timeRange }: { timeRange: AnalyticsTimeRange }) {
     ? detailQuery.data
     : null;
 
-  useEffect(() => {
-    setSessionOptions(null);
-  }, [timeRange]);
-
-  useEffect(() => {
-    if (detailQuery.data !== null) setSessionOptions(detailQuery.data.sessions);
-  }, [detailQuery.data]);
-
-  const aggregateOptions = useMemo<readonly ContextSessionPickerEntry[]>(
-    () => (data?.topSessions ?? []).map((series) => ({
-      sessionId: series.sessionId,
-      sessionName: series.sessionName,
-      snapshotCount: 0,
-      maxUsedTokens: series.maxUsedTokens,
-    })),
-    [data],
-  );
-
-  const pickerOptions = useMemo(() => {
-    const base = sessionOptions ?? aggregateOptions;
+  const pickerOptions = useMemo<readonly ContextSessionPickerEntry[]>(() => {
+    const base = pickerQuery.data?.sessions ?? [];
+    // Keep the select from showing blank while the picker loads for a session
+    // that is already selected (e.g. restored from the growth chart).
     if (selectedSessionId !== null && !base.some((entry) => entry.sessionId === selectedSessionId)) {
       return [{ sessionId: selectedSessionId, sessionName: null, snapshotCount: 0, maxUsedTokens: 0 }, ...base];
     }
     return base;
-  }, [sessionOptions, aggregateOptions, selectedSessionId]);
+  }, [pickerQuery.data, selectedSessionId]);
 
   const handleSelectSession = (sessionId: string) => {
     setSelectedSessionId(sessionId === '' ? null : sessionId);
@@ -482,6 +472,7 @@ export function ContextTab({ timeRange }: { timeRange: AnalyticsTimeRange }) {
             size="xs"
             onClick={() => {
               refresh();
+              pickerQuery.refresh();
               detailQuery.refresh();
             }}
           >
