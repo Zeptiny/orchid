@@ -180,6 +180,8 @@ function seedProviderAttempt(opts: {
  * Seed a streamed attempt with explicit TTFT/generation spans. Each store call
  * advances the shared clock by 1s, so the helper tops the clock up between
  * insertPending → markFirstToken → finalize to hit the requested spans exactly.
+ * `outcome` defaults to 'succeeded'; pass 'interrupted' to reproduce the
+ * crash-recovered shape (first token stamped, sentinel completed_at).
  */
 function seedStreamedAttempt(opts: {
   attemptId: string;
@@ -189,6 +191,7 @@ function seedStreamedAttempt(opts: {
   ttftMs: number;
   generationMs: number;
   outputTokens: number;
+  outcome?: 'succeeded' | 'failed' | 'interrupted';
   snapshot?: FrozenProviderRequestSnapshot;
 }): void {
   providerStore.insertPending({
@@ -207,7 +210,7 @@ function seedStreamedAttempt(opts: {
   providerStore.markFirstToken(opts.attemptId);
   clockMs += opts.generationMs - 1000;
   providerStore.finalize(opts.attemptId, {
-    outcome: 'succeeded',
+    outcome: opts.outcome ?? 'succeeded',
     usage: { inputTokens: 100, outputTokens: opts.outputTokens },
     providerEvidence: {},
     cost: calculatedCost('1'),
@@ -1235,6 +1238,45 @@ describe('analytics-queries', () => {
       expect(claude.avgTtftMs).not.toBeNull();
       expect(claude.p50TtftMs).not.toBeNull();
       expect(claude.avgTokensPerSecond).toBeNull();
+    });
+
+    it('excludes non-succeeded attempts from the TPS ratio while still counting their TTFT (#159)', () => {
+      // Crash-recovered shape: first token WAS delivered, but completed_at is
+      // a recovery-time sentinel stamped hours later (see store.recoverPending
+      // / interruptPendingForConnection), so its huge generation window would
+      // massively dilute the token-weighted rate.
+      seedStreamedAttempt({
+        attemptId: 'att-interrupted', sessionId: 'sess-1',
+        ttftMs: 2000, generationMs: 3_600_000, outputTokens: 100_000,
+        outcome: 'interrupted',
+      });
+
+      const only = getModels();
+      const claudeOnly = only.models.find((m) => m.modelId === 'claude-test')!;
+      // TTFT still counts the interrupted sample — a token was delivered.
+      expect(claudeOnly.avgTtftMs).toBe(2000);
+      // No succeeded sample left → the ratio reports null instead of a
+      // diluted value built from the sentinel window.
+      expect(claudeOnly.avgTokensPerSecond).toBeNull();
+
+      // Mixed with a succeeded attempt: the ratio uses only its tokens/window.
+      seedStreamedAttempt({
+        attemptId: 'att-succeeded', sessionId: 'sess-1',
+        ttftMs: 4000, generationMs: 2000, outputTokens: 600,
+      });
+
+      const mixed = getModels();
+      const claudeMixed = mixed.models.find((m) => m.modelId === 'claude-test')!;
+      // Both TTFT samples aggregate: (2000 + 4000) / 2.
+      expect(claudeMixed.avgTtftMs).toBe(3000);
+      // 600 tokens over the succeeded 2s window — the interrupted attempt's
+      // 100_000 tokens / 3600s are excluded (they would drag it to ~28.0).
+      expect(claudeMixed.avgTokensPerSecond).toBe(300);
+
+      // The overview's overall ratio flows through the same gate.
+      const overview = getOverview();
+      expect(overview.stats.avgTtftMs).toBe(3000);
+      expect(overview.stats.avgTokensPerSecond).toBe(300);
     });
 
     it('drops clock-skewed negative TTFT samples from aggregates but reports them per attempt', () => {

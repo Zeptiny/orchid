@@ -137,7 +137,11 @@ electron/
 │   │   │       ├── tool-attempt-store.ts # Tool invocation telemetry
 │   │   │       ├── subagent-attribution-store.ts # Subagent chain attribution
 │   │   │       ├── context-snapshot-store.ts # Per-turn context window snapshots
-│   │   │       └── analytics-queries.ts # Read-model queries backing the Analytics view
+│   │   │       ├── analytics-queries.ts # Aggregate read-model queries + detail-query re-exports
+│   │   │       ├── analytics-detail-queries.ts # Model/subagent/context drill-down queries
+│   │   │       ├── analytics-query-shared.ts # Shared plumbing: filters, Decimal/cost, latency, name resolution
+│   │   │       ├── analytics-query-runner.ts # Worker-pool dispatch with inline fallback
+│   │   │       └── analytics-worker.ts # Worker thread running queries off the main process
 │   │   ├── tools/               # Tool registry and built-in tools
 │   │   │   ├── index.ts         # registerBuiltinTools() — singleton registry setup
 │   │   │   ├── registry.ts      # ToolRegistry class — register/filter/validate/toJsonSchema

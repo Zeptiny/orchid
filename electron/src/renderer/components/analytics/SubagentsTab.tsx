@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from 'react';
+import { useState } from 'react';
 import { useAnalytics } from '../../hooks/useAnalytics';
 import type {
   AnalyticsTimeRange,
@@ -8,8 +8,8 @@ import type {
 } from '../../../shared/types/analytics';
 import { SUBAGENT_DETAIL_MAX_INVOCATIONS } from '../../../shared/types/analytics';
 import {
-  StatCard, ChartCard, SortableTable, formatTokenCount, formatCost, formatCostAmount, formatDuration,
-  formatTtft, formatTps, formatDate, truncateId,
+  StatCard, ChartCard, SortableTable, type Column, formatTokenCount, formatCost, formatCostAmount,
+  maxCostAmount, formatDuration, formatTtft, formatTps, formatDate, dateSortValue, truncateId,
   CHART_PALETTE, GRID_STROKE, axisTickProps, tooltipProps, tokenTooltipProps,
 } from './shared';
 import { Button } from '../ui/Button';
@@ -52,20 +52,13 @@ function SubagentOverview({ timeRange, onRowClick }: { timeRange: AnalyticsTimeR
     currency: c.currency,
   }));
 
-  const columns: ReadonlyArray<{
-    key: string;
-    label: string;
-    sortable?: boolean;
-    initialDir?: 'asc' | 'desc';
-    sortValue?: (row: SubagentSummary) => string | number;
-    render: (row: SubagentSummary) => ReactNode;
-  }> = [
+  const columns: ReadonlyArray<Column<SubagentSummary>> = [
     { key: 'agentName', label: 'Agent Name', sortable: true, initialDir: 'asc', sortValue: (s) => s.agentName, render: (s) => s.agentName },
     { key: 'agentType', label: 'Type', sortable: true, initialDir: 'asc', sortValue: (s) => s.agentType, render: (s) => s.agentType },
     { key: 'agentTier', label: 'Tier', sortable: true, initialDir: 'asc', sortValue: (s) => s.agentTier, render: (s) => s.agentTier },
     { key: 'modelsUsed', label: 'Models Used', sortable: true, initialDir: 'asc', sortValue: (s) => s.modelsUsed.join(','), render: (s) => s.modelsUsed.join(', ') || '—' },
     { key: 'invocations', label: 'Invocations', sortable: true, initialDir: 'desc', sortValue: (s) => s.invocations, render: (s) => s.invocations },
-    { key: 'totalCost', label: 'Total Cost', sortable: true, initialDir: 'desc', sortValue: (s) => Math.max(...s.totalCost.map((c) => Number(c.amount)), 0), render: (s) => formatCost(s.totalCost) },
+    { key: 'totalCost', label: 'Total Cost', sortable: true, initialDir: 'desc', sortValue: (s) => maxCostAmount(s.totalCost), render: (s) => formatCost(s.totalCost) },
     { key: 'inputTokens', label: 'Input Tokens', sortable: true, initialDir: 'desc', sortValue: (s) => s.inputTokens, render: (s) => formatTokenCount(s.inputTokens) },
     { key: 'outputTokens', label: 'Output Tokens', sortable: true, initialDir: 'desc', sortValue: (s) => s.outputTokens, render: (s) => formatTokenCount(s.outputTokens) },
     { key: 'attempts', label: 'Attempts', sortable: true, initialDir: 'desc', sortValue: (s) => s.attempts, render: (s) => s.attempts },
@@ -185,39 +178,25 @@ function SubagentExplorer({ row, timeRange, onBack }: { row: SubagentSummary; ti
 
   const { summary } = data;
 
-  const invocationColumns: ReadonlyArray<{
-    key: string;
-    label: string;
-    sortable?: boolean;
-    initialDir?: 'asc' | 'desc';
-    sortValue?: (row: SubagentInvocation) => string | number;
-    render: (row: SubagentInvocation) => ReactNode;
-  }> = [
+  const invocationColumns: ReadonlyArray<Column<SubagentInvocation>> = [
     { key: 'subagentId', label: 'Subagent ID', sortable: true, initialDir: 'asc', sortValue: (r) => r.subagentId, render: (r) => <span title={r.subagentId}>{truncateId(r.subagentId)}</span> },
     { key: 'session', label: 'Session', sortable: true, initialDir: 'asc', sortValue: (r) => r.sessionName ?? r.sessionId, render: (r) => <span title={r.sessionId}>{r.sessionName ?? truncateId(r.sessionId)}</span> },
     { key: 'modelId', label: 'Model', sortable: true, initialDir: 'asc', sortValue: (r) => r.modelId, render: (r) => r.modelId },
     { key: 'status', label: 'Status', sortable: true, initialDir: 'asc', sortValue: (r) => r.status, render: (r) => r.status },
-    { key: 'startedAt', label: 'Started', sortable: true, initialDir: 'desc', sortValue: (r) => r.startedAt, render: (r) => formatDate(r.startedAt) },
+    { key: 'startedAt', label: 'Started', sortable: true, initialDir: 'desc', sortValue: (r) => dateSortValue(r.startedAt), render: (r) => formatDate(r.startedAt) },
     { key: 'durationMs', label: 'Duration', sortable: true, initialDir: 'desc', sortValue: (r) => r.durationMs ?? -1, render: (r) => formatDuration(r.durationMs) },
     { key: 'attempts', label: 'Attempts', sortable: true, initialDir: 'desc', sortValue: (r) => r.attempts, render: (r) => r.attempts },
     { key: 'inputTokens', label: 'Input Tokens', sortable: true, initialDir: 'desc', sortValue: (r) => r.inputTokens, render: (r) => formatTokenCount(r.inputTokens) },
     { key: 'outputTokens', label: 'Output Tokens', sortable: true, initialDir: 'desc', sortValue: (r) => r.outputTokens, render: (r) => formatTokenCount(r.outputTokens) },
-    { key: 'totalCost', label: 'Cost', sortable: true, initialDir: 'desc', sortValue: (r) => Math.max(...r.totalCost.map((c) => Number(c.amount)), 0), render: (r) => formatCost(r.totalCost) },
+    { key: 'totalCost', label: 'Cost', sortable: true, initialDir: 'desc', sortValue: (r) => maxCostAmount(r.totalCost), render: (r) => formatCost(r.totalCost) },
   ];
 
-  const modelColumns: ReadonlyArray<{
-    key: string;
-    label: string;
-    sortable?: boolean;
-    initialDir?: 'asc' | 'desc';
-    sortValue?: (row: SubagentModelUsage) => string | number;
-    render: (row: SubagentModelUsage) => ReactNode;
-  }> = [
+  const modelColumns: ReadonlyArray<Column<SubagentModelUsage>> = [
     { key: 'modelId', label: 'Model', sortable: true, initialDir: 'asc', sortValue: (m) => m.modelId, render: (m) => m.modelId },
     { key: 'attempts', label: 'Attempts', sortable: true, initialDir: 'desc', sortValue: (m) => m.attempts, render: (m) => m.attempts },
     { key: 'inputTokens', label: 'Input Tokens', sortable: true, initialDir: 'desc', sortValue: (m) => m.inputTokens, render: (m) => formatTokenCount(m.inputTokens) },
     { key: 'outputTokens', label: 'Output Tokens', sortable: true, initialDir: 'desc', sortValue: (m) => m.outputTokens, render: (m) => formatTokenCount(m.outputTokens) },
-    { key: 'totalCost', label: 'Cost', sortable: true, initialDir: 'desc', sortValue: (m) => Math.max(...m.totalCost.map((c) => Number(c.amount)), 0), render: (m) => formatCost(m.totalCost) },
+    { key: 'totalCost', label: 'Cost', sortable: true, initialDir: 'desc', sortValue: (m) => maxCostAmount(m.totalCost), render: (m) => formatCost(m.totalCost) },
   ];
 
   return (

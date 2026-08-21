@@ -1,4 +1,4 @@
-import { useMemo, useState, type ReactNode } from 'react';
+import { useMemo, useState } from 'react';
 import { useAnalytics } from '../../hooks/useAnalytics';
 import type {
   AnalyticsTimeRange,
@@ -14,6 +14,7 @@ import {
   StatCard,
   ChartCard,
   SortableTable,
+  type Column,
   formatTokenCount,
   truncateId,
   CHART_PALETTE,
@@ -112,15 +113,6 @@ function deltaTone(n: number): string {
 function SegmentDelta({ value }: { value: number }) {
   return <span className={`ml-1 text-xs ${deltaTone(value)}`}>({formatDelta(value)})</span>;
 }
-
-type Column<T> = {
-  key: string;
-  label: string;
-  sortable?: boolean;
-  initialDir?: 'asc' | 'desc';
-  sortValue?: (row: T) => string | number;
-  render: (row: T) => ReactNode;
-};
 
 const jumpColumns: ReadonlyArray<Column<ContextJumpEvent>> = [
   {

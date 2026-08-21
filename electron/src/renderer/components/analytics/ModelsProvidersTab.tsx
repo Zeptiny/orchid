@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from 'react';
+import { useState } from 'react';
 import { useAnalytics } from '../../hooks/useAnalytics';
 import type {
   ModelBreakdown,
@@ -12,14 +12,17 @@ import {
   StatCard,
   ChartCard,
   SortableTable,
+  type Column,
   formatTokenCount,
   formatCost,
   formatCostAmount,
+  maxCostAmount,
   formatPercent,
   formatDuration,
   formatTtft,
   formatTps,
   formatDate,
+  dateSortValue,
   netInputTokens,
   netOutputTokens,
   tokenStackTooltipRows,
@@ -37,15 +40,6 @@ import {
 } from 'recharts';
 
 const DETAIL_PAGE_SIZE = 10;
-
-type Column<T> = {
-  key: string;
-  label: string;
-  sortable?: boolean;
-  initialDir?: 'asc' | 'desc';
-  sortValue?: (row: T) => string | number;
-  render: (row: T) => ReactNode;
-};
 
 function pivotCostByDate<T extends CostTimeSeriesPoint>(
   points: readonly T[],
@@ -72,7 +66,7 @@ function pivotCostByDate<T extends CostTimeSeriesPoint>(
 const modelColumns: ReadonlyArray<Column<ModelBreakdown>> = [
   { key: 'model', label: 'Model', sortable: true, initialDir: 'asc', sortValue: (m) => m.modelId, render: (m) => m.modelId },
   { key: 'connection', label: 'Connection', sortable: true, initialDir: 'asc', sortValue: (m) => m.connectionName ?? m.connectionId, render: (m) => m.connectionName ?? '—' },
-  { key: 'cost', label: 'Total Cost', sortable: true, initialDir: 'desc', sortValue: (m) => Math.max(...m.totalCost.map((c) => Number(c.amount)), 0), render: (m) => formatCost(m.totalCost) },
+  { key: 'cost', label: 'Total Cost', sortable: true, initialDir: 'desc', sortValue: (m) => maxCostAmount(m.totalCost), render: (m) => formatCost(m.totalCost) },
   { key: 'input', label: 'Input Tokens', sortable: true, initialDir: 'desc', sortValue: (m) => m.inputTokens, render: (m) => formatTokenCount(m.inputTokens) },
   { key: 'output', label: 'Output Tokens', sortable: true, initialDir: 'desc', sortValue: (m) => m.outputTokens, render: (m) => formatTokenCount(m.outputTokens) },
   { key: 'cacheRead', label: 'Cache Read', sortable: true, initialDir: 'desc', sortValue: (m) => m.cacheReadTokens, render: (m) => formatTokenCount(m.cacheReadTokens) },
@@ -86,13 +80,13 @@ const modelColumns: ReadonlyArray<Column<ModelBreakdown>> = [
   { key: 'succeeded', label: 'Succeeded', sortable: true, initialDir: 'desc', sortValue: (m) => m.succeeded, render: (m) => m.succeeded },
   { key: 'failed', label: 'Failed', sortable: true, initialDir: 'desc', sortValue: (m) => m.failed, render: (m) => m.failed },
   { key: 'interrupted', label: 'Interrupted', sortable: true, initialDir: 'desc', sortValue: (m) => m.interrupted, render: (m) => m.interrupted },
-  { key: 'firstUsed', label: 'First Used', sortable: true, initialDir: 'desc', sortValue: (m) => m.firstUsed !== null ? Date.parse(m.firstUsed) : -1, render: (m) => formatDate(m.firstUsed) },
-  { key: 'lastUsed', label: 'Last Used', sortable: true, initialDir: 'desc', sortValue: (m) => m.lastUsed !== null ? Date.parse(m.lastUsed) : -1, render: (m) => formatDate(m.lastUsed) },
+  { key: 'firstUsed', label: 'First Used', sortable: true, initialDir: 'desc', sortValue: (m) => dateSortValue(m.firstUsed), render: (m) => formatDate(m.firstUsed) },
+  { key: 'lastUsed', label: 'Last Used', sortable: true, initialDir: 'desc', sortValue: (m) => dateSortValue(m.lastUsed), render: (m) => formatDate(m.lastUsed) },
 ];
 
 const connectionColumns: ReadonlyArray<Column<ConnectionBreakdown>> = [
   { key: 'connectionName', label: 'Connection', sortable: true, initialDir: 'asc', sortValue: (c) => c.connectionName ?? c.connectionId, render: (c) => c.connectionName ?? '—' },
-  { key: 'cost', label: 'Total Cost', sortable: true, initialDir: 'desc', sortValue: (c) => Math.max(...c.totalCost.map((x) => Number(x.amount)), 0), render: (c) => formatCost(c.totalCost) },
+  { key: 'cost', label: 'Total Cost', sortable: true, initialDir: 'desc', sortValue: (c) => maxCostAmount(c.totalCost), render: (c) => formatCost(c.totalCost) },
   { key: 'input', label: 'Input Tokens', sortable: true, initialDir: 'desc', sortValue: (c) => c.totalInputTokens, render: (c) => formatTokenCount(c.totalInputTokens) },
   { key: 'output', label: 'Output Tokens', sortable: true, initialDir: 'desc', sortValue: (c) => c.totalOutputTokens, render: (c) => formatTokenCount(c.totalOutputTokens) },
   { key: 'ttftAvg', label: 'TTFT (avg)', sortable: true, initialDir: 'desc', sortValue: (c) => c.avgTtftMs ?? -1, render: (c) => formatTtft(c.avgTtftMs) },
@@ -103,8 +97,8 @@ const connectionColumns: ReadonlyArray<Column<ConnectionBreakdown>> = [
   { key: 'failed', label: 'Failed', sortable: true, initialDir: 'desc', sortValue: (c) => c.failed, render: (c) => c.failed },
   { key: 'interrupted', label: 'Interrupted', sortable: true, initialDir: 'desc', sortValue: (c) => c.interrupted, render: (c) => c.interrupted },
   { key: 'models', label: 'Models', sortable: true, initialDir: 'desc', sortValue: (c) => c.modelCount, render: (c) => c.modelCount },
-  { key: 'firstUsed', label: 'First Used', sortable: true, initialDir: 'desc', sortValue: (c) => c.firstUsed !== null ? Date.parse(c.firstUsed) : -1, render: (c) => formatDate(c.firstUsed) },
-  { key: 'lastUsed', label: 'Last Used', sortable: true, initialDir: 'desc', sortValue: (c) => c.lastUsed !== null ? Date.parse(c.lastUsed) : -1, render: (c) => formatDate(c.lastUsed) },
+  { key: 'firstUsed', label: 'First Used', sortable: true, initialDir: 'desc', sortValue: (c) => dateSortValue(c.firstUsed), render: (c) => formatDate(c.firstUsed) },
+  { key: 'lastUsed', label: 'Last Used', sortable: true, initialDir: 'desc', sortValue: (c) => dateSortValue(c.lastUsed), render: (c) => formatDate(c.lastUsed) },
 ];
 
 interface ModelTokenUsageRow {
@@ -406,7 +400,7 @@ function ModelExplorer({ model, timeRange, onBack }: { model: ModelBreakdown; ti
             { key: 'attempts', label: 'Attempts', sortable: true, initialDir: 'desc', sortValue: (r) => r.attempts, render: (r) => r.attempts },
             { key: 'inputTokens', label: 'Input Tokens', sortable: true, initialDir: 'desc', sortValue: (r) => r.inputTokens, render: (r) => formatTokenCount(r.inputTokens) },
             { key: 'outputTokens', label: 'Output Tokens', sortable: true, initialDir: 'desc', sortValue: (r) => r.outputTokens, render: (r) => formatTokenCount(r.outputTokens) },
-            { key: 'totalCost', label: 'Total Cost', sortable: true, initialDir: 'desc', sortValue: (r) => Math.max(...r.totalCost.map((c) => Number(c.amount)), 0), render: (r) => formatCost(r.totalCost) },
+            { key: 'totalCost', label: 'Total Cost', sortable: true, initialDir: 'desc', sortValue: (r) => maxCostAmount(r.totalCost), render: (r) => formatCost(r.totalCost) },
           ]}
           rows={data.topSessions}
           rowKey={(r) => r.sessionId}
@@ -417,7 +411,7 @@ function ModelExplorer({ model, timeRange, onBack }: { model: ModelBreakdown; ti
       <ChartCard title="Recent Attempts">
         <SortableTable
           columns={[
-            { key: 'startedAt', label: 'Started', sortable: true, initialDir: 'desc', sortValue: (r) => Date.parse(r.startedAt), render: (r) => formatDate(r.startedAt) },
+            { key: 'startedAt', label: 'Started', sortable: true, initialDir: 'desc', sortValue: (r) => dateSortValue(r.startedAt), render: (r) => formatDate(r.startedAt) },
             { key: 'outcome', label: 'Outcome', sortable: true, initialDir: 'asc', sortValue: (r) => r.outcome, render: (r) => r.outcome },
             { key: 'costAmount', label: 'Cost', sortable: true, initialDir: 'desc', sortValue: (r) => r.costAmount !== null ? Number(r.costAmount) : -1, render: (r) => formatCostAmount(r.costAmount, r.currency) },
             { key: 'inputTokens', label: 'Input', sortable: true, initialDir: 'desc', sortValue: (r) => r.inputTokens ?? -1, render: (r) => r.inputTokens !== null ? formatTokenCount(r.inputTokens) : '—' },

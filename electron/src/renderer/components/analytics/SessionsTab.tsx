@@ -7,9 +7,11 @@ import {
   formatTokenCount,
   formatCost,
   formatCostAmount,
+  maxCostAmount,
   formatNativeAmount,
   formatDuration,
   formatDate,
+  dateSortValue,
   formatTps,
   formatTtft,
   formatBytes,
@@ -32,11 +34,6 @@ import type { SessionSummary, AnalyticsTimeRange } from '../../../shared/types/a
 
 const DETAIL_PAGE_SIZE = 10;
 const SESSIONS_PAGE_SIZE = 100;
-
-function dateSortValue(iso: string | null): number {
-  const ms = Date.parse(iso ?? '');
-  return Number.isNaN(ms) ? 0 : ms;
-}
 
 interface SessionTokenUsageRow {
   label: string;
@@ -96,7 +93,7 @@ function SessionList({ timeRange, onRowClick }: { timeRange: AnalyticsTimeRange;
         <SortableTable
           columns={[
             { key: 'sessionName', label: 'Session Name', sortable: true, sortValue: (r) => r.sessionName ?? '', render: (r) => <span title={r.sessionId}>{r.sessionName ?? '—'}</span> },
-            { key: 'totalCost', label: 'Total Cost', sortable: true, initialDir: 'desc', sortValue: (r) => Math.max(...r.totalCost.map((c) => Number(c.amount)), 0), render: (r) => formatCost(r.totalCost) },
+            { key: 'totalCost', label: 'Total Cost', sortable: true, initialDir: 'desc', sortValue: (r) => maxCostAmount(r.totalCost), render: (r) => formatCost(r.totalCost) },
             { key: 'inputTokens', label: 'Input Tokens', sortable: true, initialDir: 'desc', sortValue: (r) => r.inputTokens, render: (r) => formatTokenCount(r.inputTokens) },
             { key: 'outputTokens', label: 'Output Tokens', sortable: true, initialDir: 'desc', sortValue: (r) => r.outputTokens, render: (r) => formatTokenCount(r.outputTokens) },
             { key: 'cache', label: 'Cache', sortable: true, initialDir: 'desc', sortValue: (r) => r.cacheReadTokens, render: (r) => formatTokenCount(r.cacheReadTokens) },
@@ -322,7 +319,7 @@ function SessionDetail({ sessionId, timeRange, onBack }: { sessionId: string; ti
             { key: 'chainId', label: 'Chain ID', sortable: true, sortValue: (r) => r.chainId ?? '', render: (r) => r.chainId ? <span title={r.chainId}>{truncateId(r.chainId)}</span> : '—' },
             { key: 'agentName', label: 'Agent', sortable: true, sortValue: (r) => r.agentName ?? '', render: (r) => r.agentName ?? '—' },
             { key: 'agentTier', label: 'Tier', sortable: true, sortValue: (r) => r.agentTier ?? '', render: (r) => r.agentTier ?? '—' },
-            { key: 'totalCost', label: 'Cost', sortable: true, initialDir: 'desc', sortValue: (r) => Math.max(...r.totalCost.map((c) => Number(c.amount)), 0), render: (r) => formatCost(r.totalCost) },
+            { key: 'totalCost', label: 'Cost', sortable: true, initialDir: 'desc', sortValue: (r) => maxCostAmount(r.totalCost), render: (r) => formatCost(r.totalCost) },
             { key: 'inputTokens', label: 'Input Tokens', sortable: true, initialDir: 'desc', sortValue: (r) => r.inputTokens, render: (r) => formatTokenCount(r.inputTokens) },
             { key: 'outputTokens', label: 'Output Tokens', sortable: true, initialDir: 'desc', sortValue: (r) => r.outputTokens, render: (r) => formatTokenCount(r.outputTokens) },
             { key: 'attempts', label: 'Attempts', sortable: true, initialDir: 'desc', sortValue: (r) => r.attempts, render: (r) => r.attempts },
@@ -402,7 +399,7 @@ function SessionDetail({ sessionId, timeRange, onBack }: { sessionId: string; ti
             { key: 'agentTier', label: 'Tier', sortable: true, sortValue: (r) => r.agentTier, render: (r) => r.agentTier },
             { key: 'modelId', label: 'Model', sortable: true, sortValue: (r) => r.modelId, render: (r) => r.modelId },
             { key: 'status', label: 'Status', sortable: true, sortValue: (r) => r.status, render: (r) => r.status },
-            { key: 'totalCost', label: 'Cost', sortable: true, initialDir: 'desc', sortValue: (r) => Math.max(...r.totalCost.map((c) => Number(c.amount)), 0), render: (r) => formatCost(r.totalCost) },
+            { key: 'totalCost', label: 'Cost', sortable: true, initialDir: 'desc', sortValue: (r) => maxCostAmount(r.totalCost), render: (r) => formatCost(r.totalCost) },
             { key: 'inputTokens', label: 'Input Tokens', sortable: true, initialDir: 'desc', sortValue: (r) => r.inputTokens, render: (r) => formatTokenCount(r.inputTokens) },
             { key: 'outputTokens', label: 'Output Tokens', sortable: true, initialDir: 'desc', sortValue: (r) => r.outputTokens, render: (r) => formatTokenCount(r.outputTokens) },
             { key: 'attempts', label: 'Attempts', sortable: true, initialDir: 'desc', sortValue: (r) => r.attempts, render: (r) => r.attempts },

@@ -1,14 +1,11 @@
-import type { ReactNode } from 'react';
 import { useAnalytics } from '../../hooks/useAnalytics';
 import type { ToolBreakdown, AnalyticsTimeRange } from '../../../shared/types/analytics';
-import { StatCard, ChartCard, SortableTable, formatDuration, formatBytes, formatPercent, CHART_PALETTE, GRID_STROKE, axisTickProps, tooltipProps } from './shared';
+import { StatCard, ChartCard, SortableTable, type Column, formatDuration, formatBytes, formatPercent, CHART_PALETTE, GRID_STROKE, axisTickProps, tooltipProps } from './shared';
 import { Button } from '../ui/Button';
 import {
   BarChart, Bar, PieChart, Pie, Cell, XAxis, YAxis, CartesianGrid, Tooltip,
   ResponsiveContainer, Legend,
 } from 'recharts';
-
-type Column<T> = { key: string; label: string; render: (row: T) => ReactNode };
 
 function pivotInvocations(rows: readonly { date: string; toolName: string; count: number }[]) {
   const toolNames = [...new Set(rows.map((r) => r.toolName))];

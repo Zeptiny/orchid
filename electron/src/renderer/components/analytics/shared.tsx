@@ -51,6 +51,12 @@ export function formatCostAmount(amount: string | null, currency: string | null)
   return currency ? `${currency} ${formatted}` : formatted;
 }
 
+/** Sort key for multi-currency cost columns: the largest amount across
+ *  currencies, floored at zero so empty/negative inputs never lead. */
+export function maxCostAmount(totalCost: ReadonlyArray<{ currency: string; amount: string }>): number {
+  return Math.max(...totalCost.map((c) => Number(c.amount)), 0);
+}
+
 /**
  * Format a native-unit amount (e.g. kWh) with its own unit label. Non-fiat
  * units are never converted or merged into a fiat bucket (R8/AE7).
@@ -100,6 +106,13 @@ export function formatDate(iso: string | null): string {
   const hh = String(d.getUTCHours()).padStart(2, '0');
   const min = String(d.getUTCMinutes()).padStart(2, '0');
   return `${yyyy}-${mm}-${dd} ${hh}:${min} UTC`;
+}
+
+/** Sort key for ISO date columns: null/unparseable → 0. For equal-format
+ *  ISO-8601 strings, epoch-ms ordering matches lexicographic ordering. */
+export function dateSortValue(iso: string | null): number {
+  const ms = Date.parse(iso ?? '');
+  return Number.isNaN(ms) ? 0 : ms;
 }
 
 export function truncateId(id: string, len = 8): string {
@@ -211,6 +224,8 @@ interface SortableTableColumn<T> {
   sortValue?: (row: T) => string | number;
   render: (row: T) => ReactNode;
 }
+
+export type Column<T> = SortableTableColumn<T>;
 
 interface SortableTableProps<T> {
   columns: ReadonlyArray<SortableTableColumn<T>>;
