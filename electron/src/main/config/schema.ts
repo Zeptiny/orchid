@@ -106,10 +106,13 @@ export const compactionScopeSchema = z.object({
   model: modelSelectionSchema.nullable().default(null),
   agent_name: z.literal('compactor').default('compactor'),
   preserve_percent: z.number().min(0.05).max(0.9).default(0.25),
-  // Deprecated: replaced by preserve_percent. Parsed (accepted) but ignored.
-  // The transform is pure (schema only); the deprecation warning is emitted
-  // from the config load path (loader.ts loadConfig) so users know to migrate.
-  keep_recent_chains: z.number().int().min(0).max(100).optional().transform(() => undefined),
+  // Deprecated: replaced by preserve_percent. Parsed (accepted) but ignored,
+  // then dropped from the parsed scope entirely — never an undefined-valued
+  // key (the object-level strip in compactionConfigSchema owns the delete so
+  // this schema stays a plain ZodObject for extend/partial consumers).
+  // The deprecation warning is emitted from the config load path
+  // (loader.ts loadConfig) so users know to migrate.
+  keep_recent_chains: z.number().int().min(0).max(100).optional(),
   min_compactable_tokens: z.number().int().min(0).max(1_000_000).default(4000),
   mechanical_reclaim: z.boolean().default(true),
   hysteresis_delta: z.number().min(0).max(0.5).default(0.1),
@@ -131,13 +134,31 @@ export const compactionSubagentsScopeSchema = compactionScopeSchema
     keep_last_user_messages: z.number().int().min(1).max(1000).nullable().default(null),
   });
 
-export const compactionConfigSchema = z.object({
-  main: compactionScopeSchema.default({}),
-  subagents: compactionSubagentsScopeSchema.default({}),
-  // Removed: was the compactor concurrency cap. Parsed (accepted) but ignored
-  // so previously-saved configs keep loading.
-  max_concurrent_compactors: z.number().int().min(1).max(8).optional().transform(() => undefined),
-}).default({});
+/**
+ * Strip the deprecated `keep_recent_chains` key from a parsed scope. Applied
+ * at the compactionConfigSchema field level (both scopes) because the base
+ * scope schemas must remain plain ZodObjects — `compactionSubagentsScopeSchema`
+ * extends this schema and the IPC boundary calls `.partial().strict()` on both.
+ */
+function stripDeprecatedScopeKeys<T extends { keep_recent_chains?: number }>(parsed: T): T {
+  delete parsed.keep_recent_chains;
+  return parsed;
+}
+
+export const compactionConfigSchema = z
+  .object({
+    main: compactionScopeSchema.transform(stripDeprecatedScopeKeys).default({}),
+    subagents: compactionSubagentsScopeSchema.transform(stripDeprecatedScopeKeys).default({}),
+    // Removed: was the compactor concurrency cap. Parsed (accepted) so
+    // previously-saved configs keep loading, then dropped from the parsed
+    // result entirely — never left behind as an undefined-valued key.
+    max_concurrent_compactors: z.number().int().min(1).max(8).optional(),
+  })
+  .transform((parsed) => {
+    delete parsed.max_concurrent_compactors;
+    return parsed;
+  })
+  .default({});
 
 // ---------------------------------------------------------------------------
 // Main config schema
