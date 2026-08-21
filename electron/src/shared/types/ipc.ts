@@ -1557,9 +1557,12 @@ export interface OrchidAPI {
      sessions: (params?: { readonly limit?: number; readonly offset?: number; readonly timeRange?: import('./analytics').AnalyticsTimeRange }) => Promise<import('./analytics').SessionsResult>;
      sessionDetail: (params: { readonly sessionId: string; readonly timeRange?: import('./analytics').AnalyticsTimeRange }) => Promise<import('./analytics').SessionDetailResult>;
      models: (params?: { readonly timeRange?: import('./analytics').AnalyticsTimeRange }) => Promise<import('./analytics').ModelsResult>;
+     modelDetail: (params: { readonly modelId: string; readonly providerId: string; readonly connectionId: string; readonly timeRange?: import('./analytics').AnalyticsTimeRange }) => Promise<import('./analytics').ModelDetailResult>;
      tools: (params?: { readonly timeRange?: import('./analytics').AnalyticsTimeRange }) => Promise<import('./analytics').ToolsResult>;
      subagents: (params?: { readonly timeRange?: import('./analytics').AnalyticsTimeRange }) => Promise<import('./analytics').SubagentsResult>;
+     subagentDetail: (params: { readonly agentName: string; readonly agentType: string; readonly agentTier: string; readonly timeRange?: import('./analytics').AnalyticsTimeRange }) => Promise<import('./analytics').SubagentAnalyticsDetailResult>;
      context: (params?: { readonly sessionId?: string; readonly timeRange?: import('./analytics').AnalyticsTimeRange }) => Promise<import('./analytics').ContextResult>;
+     contextSessionDetail: (params: { readonly sessionId: string; readonly timeRange?: import('./analytics').AnalyticsTimeRange }) => Promise<import('./analytics').ContextSessionDetailResult>;
    };
 }
 
@@ -1745,9 +1748,12 @@ export const IPC_CHANNELS = {
   ANALYTICS_SESSIONS: 'analytics:sessions',
   ANALYTICS_SESSION_DETAIL: 'analytics:session_detail',
   ANALYTICS_MODELS: 'analytics:models',
+  ANALYTICS_MODEL_DETAIL: 'analytics:model_detail',
   ANALYTICS_TOOLS: 'analytics:tools',
   ANALYTICS_SUBAGENTS: 'analytics:subagents',
+  ANALYTICS_SUBAGENT_DETAIL: 'analytics:subagent_detail',
   ANALYTICS_CONTEXT: 'analytics:context',
+  ANALYTICS_CONTEXT_SESSION_DETAIL: 'analytics:context_session_detail',
 } as const;
 
 export type IPCChannel = (typeof IPC_CHANNELS)[keyof typeof IPC_CHANNELS];
@@ -1846,9 +1852,12 @@ export const ALLOWED_INVOKE_CHANNELS = [
   IPC_CHANNELS.ANALYTICS_SESSIONS,
   IPC_CHANNELS.ANALYTICS_SESSION_DETAIL,
   IPC_CHANNELS.ANALYTICS_MODELS,
+  IPC_CHANNELS.ANALYTICS_MODEL_DETAIL,
   IPC_CHANNELS.ANALYTICS_TOOLS,
   IPC_CHANNELS.ANALYTICS_SUBAGENTS,
+  IPC_CHANNELS.ANALYTICS_SUBAGENT_DETAIL,
   IPC_CHANNELS.ANALYTICS_CONTEXT,
+  IPC_CHANNELS.ANALYTICS_CONTEXT_SESSION_DETAIL,
 ] as const satisfies readonly IPCChannel[];
 
 // ── Allowed event channels (preload security gate) ───────────────────────────

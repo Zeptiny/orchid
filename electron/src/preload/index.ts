@@ -119,9 +119,12 @@ import type {
   SessionsResult,
   SessionDetailResult,
   ModelsResult,
+  ModelDetailResult,
   ToolsResult,
   SubagentsResult,
+  SubagentAnalyticsDetailResult,
   ContextResult,
+  ContextSessionDetailResult,
   AnalyticsTimeRange,
 } from '../shared/types/analytics';
 import {
@@ -728,14 +731,23 @@ const orchidAPI: OrchidAPI = {
     models: (params?: { readonly timeRange?: AnalyticsTimeRange }) =>
       invoke<ModelsResult>(IPC_CHANNELS.ANALYTICS_MODELS, params),
 
+    modelDetail: (params: { readonly modelId: string; readonly providerId: string; readonly connectionId: string; readonly timeRange?: AnalyticsTimeRange }) =>
+      invoke<ModelDetailResult>(IPC_CHANNELS.ANALYTICS_MODEL_DETAIL, params),
+
     tools: (params?: { readonly timeRange?: AnalyticsTimeRange }) =>
       invoke<ToolsResult>(IPC_CHANNELS.ANALYTICS_TOOLS, params),
 
     subagents: (params?: { readonly timeRange?: AnalyticsTimeRange }) =>
       invoke<SubagentsResult>(IPC_CHANNELS.ANALYTICS_SUBAGENTS, params),
 
+    subagentDetail: (params: { readonly agentName: string; readonly agentType: string; readonly agentTier: string; readonly timeRange?: AnalyticsTimeRange }) =>
+      invoke<SubagentAnalyticsDetailResult>(IPC_CHANNELS.ANALYTICS_SUBAGENT_DETAIL, params),
+
     context: (params?: { readonly sessionId?: string; readonly timeRange?: AnalyticsTimeRange }) =>
       invoke<ContextResult>(IPC_CHANNELS.ANALYTICS_CONTEXT, params),
+
+    contextSessionDetail: (params: { readonly sessionId: string; readonly timeRange?: AnalyticsTimeRange }) =>
+      invoke<ContextSessionDetailResult>(IPC_CHANNELS.ANALYTICS_CONTEXT_SESSION_DETAIL, params),
   },
 };
 
