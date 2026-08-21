@@ -13,6 +13,8 @@ import type {
   ProviderConnectionIdMessage,
   ProviderConnectionUpdateMessage,
   ProviderConnectionView,
+  ProviderDraftDiscoveryMessage,
+  ProviderDraftDiscoveryResult,
   ProviderDiscoverModelsResult,
   ProviderDisconnectMessage,
   ProviderModelListMessage,
@@ -81,6 +83,10 @@ export interface UseProvidersReturn {
   readonly discoverModels: (
     message: ProviderConnectionIdMessage,
   ) => Promise<ProviderDiscoverModelsResult>;
+  /** Draft live-discovery for a connection that does not exist yet (#138). */
+  readonly discoverDraftModels: (
+    message: ProviderDraftDiscoveryMessage,
+  ) => Promise<ProviderDraftDiscoveryResult>;
   readonly refreshStatus: (
     message: ProviderStatusRefreshMessage,
   ) => Promise<ProviderStatusView | null>;
@@ -492,6 +498,12 @@ export function useProviders(): UseProvidersReturn {
     [runMutation],
   );
 
+  const discoverDraftModels = useCallback(
+    (message: ProviderDraftDiscoveryMessage) =>
+      runMutation((providers) => providers.discoverDraftModels(message)),
+    [runMutation],
+  );
+
   const refreshStatus = useCallback(
     (message: ProviderStatusRefreshMessage) =>
       runMutation(
@@ -544,6 +556,7 @@ export function useProviders(): UseProvidersReturn {
     deleteConnection,
     modelList,
     discoverModels,
+    discoverDraftModels,
     refreshStatus,
     refreshQuota,
   };

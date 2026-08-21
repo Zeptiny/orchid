@@ -3,7 +3,6 @@ import { useEffect, useMemo, useState } from 'react';
 import type {
   ProviderConnectionView,
   ProviderDefinitionView,
-  ProviderDiscoverModelsResult,
   ProviderModelOption,
   ProviderModelView,
 } from '../../../shared/types/ipc';
@@ -13,6 +12,7 @@ import type {
   ReasoningModelConfig,
 } from '../../../shared/types/provider';
 import type { PricingRateFields } from '../../../shared/types/provider-facets';
+import { fuzzyMatch } from '../../../shared/commands';
 import {
   CONNECTION_MODEL_MODALITIES,
   connectionModelCapabilities,
@@ -97,9 +97,17 @@ export interface ConnectionModelsEditorProps {
   readonly disabled?: boolean;
   /** Unified listing rows from the main process (edit mode); locally composed when absent. */
   readonly unifiedModels?: readonly ProviderModelOption[] | null;
+  /**
+   * Live rows fetched while the connection does not exist yet (#138); merged as
+   * provider rows below catalog and custom models.
+   */
+  readonly previewModels?: readonly ProviderModelView[] | null;
+  /** When the live endpoint published `previewModels`; drives the discovered badge. */
+  readonly previewDiscoveredAt?: string | null;
   readonly discoveryAvailable?: boolean;
   readonly discovering?: boolean;
-  readonly onDiscoverModels?: () => Promise<ProviderDiscoverModelsResult>;
+  /** Runs one live fetch; only the surfaced message is consumed here. */
+  readonly onDiscoverModels?: () => Promise<{ readonly message: string | null }>;
   readonly onSelectedModelIdsChange: (modelIds: readonly string[]) => void;
   readonly onCustomModelsChange: (models: readonly CustomConnectionModel[]) => void;
   readonly onReasoningConfigChange: (config: Record<string, ReasoningModelConfig>) => void;
@@ -275,6 +283,8 @@ export function ConnectionModelsEditor({
   tierSelections = {},
   disabled = false,
   unifiedModels = null,
+  previewModels = null,
+  previewDiscoveredAt = null,
   discoveryAvailable = false,
   discovering = false,
   onDiscoverModels,
@@ -291,6 +301,7 @@ export function ConnectionModelsEditor({
   const [pricingDraft, setPricingDraft] = useState(EMPTY_PRICING_DRAFT);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [modelQuery, setModelQuery] = useState('');
 
   const catalogModels = useMemo(
     () => definition.models.filter(
@@ -303,7 +314,7 @@ export function ConnectionModelsEditor({
     [catalogModels],
   );
 
-  const rows = useMemo<readonly EditorModelRow[]>(() => {
+  const baseRows = useMemo<readonly EditorModelRow[]>(() => {
     const overrideView = (
       view: ProviderModelView,
       override: CustomConnectionModel | undefined,
@@ -383,16 +394,45 @@ export function ConnectionModelsEditor({
     return local;
   }, [unifiedModels, catalogModels, catalogModelIds, customModels]);
 
+  // Preview rows fetched before the connection exists (#138) layer under catalog
+  // and custom models; ids already listed keep their existing metadata.
+  const rows = useMemo<readonly EditorModelRow[]>(() => {
+    if (!previewModels || previewModels.length === 0) return baseRows;
+    const present = new Set(baseRows.map((row) => row.view.id));
+    const appended = previewModels
+      .filter((model) => !present.has(model.id) && modelAvailable(model))
+      .map((model) => ({
+        view: model,
+        source: 'provider' as const,
+        customized: false,
+        discoveredAt: previewDiscoveredAt,
+        removable: false,
+      }));
+    return appended.length > 0 ? [...baseRows, ...appended] : baseRows;
+  }, [baseRows, previewModels, previewDiscoveredAt]);
+
+  const normalizedQuery = modelQuery.trim().toLowerCase();
+  const filteredRows = useMemo(() => {
+    if (!normalizedQuery) return rows;
+    return rows.filter((row) =>
+      fuzzyMatch(normalizedQuery, row.view.displayName) >= 0
+      || fuzzyMatch(normalizedQuery, row.view.id) >= 0);
+  }, [rows, normalizedQuery]);
+
   const selectableModelIds = useMemo(
     () => rows.map((row) => row.view.id),
     [rows],
+  );
+  const visibleModelIds = useMemo(
+    () => filteredRows.map((row) => row.view.id),
+    [filteredRows],
   );
   const discoveredRowIds = useMemo(
     () => new Set(rows.filter((row) => row.discoveredAt !== null).map((row) => row.view.id)),
     [rows],
   );
-  const allModelsSelected = selectableModelIds.length > 0
-    && selectableModelIds.every((modelId) => selectedModelIds.includes(modelId));
+  const allModelsSelected = visibleModelIds.length > 0
+    && visibleModelIds.every((modelId) => selectedModelIds.includes(modelId));
   const orphanModelIds = selectedModelIds.filter(
     (modelId) => !selectableModelIds.includes(modelId),
   );
@@ -416,7 +456,16 @@ export function ConnectionModelsEditor({
   };
 
   const toggleAllModels = () => {
-    onSelectedModelIdsChange(allModelsSelected ? [] : selectableModelIds);
+    // With an active search, select-all touches only the visible rows so a
+    // filtered view never silently changes hidden selections (#155).
+    if (allModelsSelected) {
+      const visible = new Set(visibleModelIds);
+      onSelectedModelIdsChange(
+        selectedModelIds.filter((modelId) => !visible.has(modelId)),
+      );
+      return;
+    }
+    onSelectedModelIdsChange([...new Set([...selectedModelIds, ...visibleModelIds])]);
   };
 
   const startAddingCustomModel = () => {
@@ -647,7 +696,7 @@ export function ConnectionModelsEditor({
                       variant="ghost"
                       size="sm"
                       onClick={toggleAllModels}
-                      disabled={disabled || editingCustomModelId !== null || selectableModelIds.length === 0}
+                      disabled={disabled || editingCustomModelId !== null || visibleModelIds.length === 0}
                       aria-pressed={allModelsSelected}
                     >
                       {allModelsSelected ? 'Deselect all models' : 'Select all models'}
@@ -673,13 +722,30 @@ export function ConnectionModelsEditor({
               {notice && (
                 <Alert tone="info" role="status" icon="alertCircle" aria-live="polite">{notice}</Alert>
               )}
+              {(rows.length > 8 || modelQuery !== '') && (
+                <TextInput
+                  id="connection-models-search"
+                  aria-label="Search models"
+                  bordered={false}
+                  className="w-full"
+                  type="search"
+                  value={modelQuery}
+                  onChange={(event) => setModelQuery(event.target.value)}
+                  placeholder={`Search ${rows.length} models by name or id…`}
+                  disabled={disabled || editingCustomModelId !== null}
+                />
+              )}
               {rows.length === 0 ? (
                 <Alert tone="info" role="status" icon="cpu">
                   No models are available for this connection protocol.
                 </Alert>
+              ) : filteredRows.length === 0 ? (
+                <Alert tone="info" role="status" icon="search">
+                  No models match “{modelQuery.trim()}”. Clear the search to see all {rows.length}.
+                </Alert>
               ) : (
                 <ul className="list max-h-96 overflow-y-auto rounded-box border border-base-300 bg-base-100">
-                  {rows.map((row) => {
+                  {filteredRows.map((row) => {
                     const selected = selectedModelIds.includes(row.view.id);
                     return (
                       <li

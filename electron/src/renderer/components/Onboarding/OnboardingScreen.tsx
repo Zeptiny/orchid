@@ -796,6 +796,7 @@ export function OnboardingScreen({ isOpen, onComplete, onSkip }: OnboardingScree
           onCreate={providers.createConnection}
           onSubmitApiKey={providers.submitApiKey}
           onValidate={providers.validateConnection}
+          onDiscoverDraftModels={providers.discoverDraftModels}
           onComplete={handleProviderComplete}
         />
       )}

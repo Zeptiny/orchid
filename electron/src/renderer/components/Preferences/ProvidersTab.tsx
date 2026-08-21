@@ -100,6 +100,7 @@ export function ProvidersTab({ onNotify }: { readonly onNotify: Notify }) {
         onSubmitApiKey={providers.submitApiKey}
         onValidate={providers.validateConnection}
         onDiscoverModels={providers.discoverModels}
+        onDiscoverDraftModels={providers.discoverDraftModels}
         onListModels={providers.modelList}
         onComplete={completeConnection}
       />

@@ -1512,6 +1512,218 @@ describe('provider live model discovery IPC', () => {
     expect(memory.status.invalidate).toHaveBeenCalledWith('openai', id);
     expect(memory.pricing.invalidate).toHaveBeenCalledWith('openai', id);
   });
+
+  describe('draft discovery before the connection exists (#138)', () => {
+    function genericDraftServices(fetchModels: unknown) {
+      const memory = memoryServices([GENERIC]);
+      const registryWithGenericDiscovery = new ProviderDriverRegistry([{
+        id: 'generic-openai-compatible',
+        supportedAuthMethods: ['api-key', 'environment', 'none'],
+        supportedProtocols: ['openai-compatible'],
+        allowsCustomEndpoint: true,
+        origin: null,
+        createLanguageModel: vi.fn(),
+        discoveryFacet: { fetchModels: fetchModels as never },
+      }]);
+      return { ...memory, services: { ...memory.services, registry: registryWithGenericDiscovery } };
+    }
+
+    it('fetches provider rows for a draft connection without persisting anything', async () => {
+      const fetchModels = vi.fn(async () => [
+        { id: 'nw-base', displayName: 'NW Base Live' },
+        { id: 'nw-draft-new', displayName: 'NW Draft New' },
+      ]);
+      const memory = discoveryServices(fetchModels);
+      process.env.ORCHID_TEST_NEURALWATT_KEY = 'nw-env-key';
+      try {
+        providersIpc._setProviderIPCServicesForTests(memory.services);
+        registerProviderIpc();
+
+        const result = await handler(IPC_CHANNELS.PROVIDERS_DISCOVER_DRAFT_MODELS)(null, {
+          providerId: 'neuralwatt',
+          protocol: 'openai-compatible',
+          authMethod: 'environment',
+          environmentVariable: 'ORCHID_TEST_NEURALWATT_KEY',
+        });
+
+        expect(result.status).toBe('ok');
+        expect(result.models).toEqual([
+          expect.objectContaining({
+            id: 'nw-base',
+            displayName: 'NW Base Live',
+            protocol: 'openai-compatible',
+            source: 'provider',
+          }),
+          expect.objectContaining({ id: 'nw-draft-new', source: 'provider' }),
+        ]);
+        expect(typeof result.discoveredAt).toBe('string');
+        expect(result.message).toMatch(/fetched 2 models/i);
+        expect(fetchModels).toHaveBeenCalledWith(expect.objectContaining({
+          credential: { kind: 'api-key', apiKey: 'nw-env-key' },
+        }));
+        // A draft fetch never creates or mutates stored connections.
+        expect(memory.records.size).toBe(0);
+        expect(memory.connections.create).not.toHaveBeenCalled();
+        expect(memory.connections.update).not.toHaveBeenCalled();
+      } finally {
+        delete process.env.ORCHID_TEST_NEURALWATT_KEY;
+      }
+    });
+
+    it('uses the one-shot payload api key for the fetch only', async () => {
+      const fetchModels = vi.fn(async () => [{ id: 'nw-draft' }]);
+      const memory = discoveryServices(fetchModels);
+      providersIpc._setProviderIPCServicesForTests(memory.services);
+      registerProviderIpc();
+
+      const result = await handler(IPC_CHANNELS.PROVIDERS_DISCOVER_DRAFT_MODELS)(null, {
+        providerId: 'neuralwatt',
+        protocol: 'openai-compatible',
+        authMethod: 'api-key',
+        apiKey: 'nw-draft-key',
+      });
+
+      expect(result.status).toBe('ok');
+      expect(fetchModels).toHaveBeenCalledWith(expect.objectContaining({
+        credential: { kind: 'api-key', apiKey: 'nw-draft-key' },
+      }));
+      expect(JSON.stringify(result)).not.toContain('nw-draft-key');
+    });
+
+    it('reports no-credential drafts without calling the driver', async () => {
+      const fetchModels = vi.fn();
+      const memory = discoveryServices(fetchModels);
+      providersIpc._setProviderIPCServicesForTests(memory.services);
+      registerProviderIpc();
+
+      const result = await handler(IPC_CHANNELS.PROVIDERS_DISCOVER_DRAFT_MODELS)(null, {
+        providerId: 'neuralwatt',
+        protocol: 'openai-compatible',
+        authMethod: 'api-key',
+      });
+
+      expect(result).toMatchObject({ status: 'no-credential', models: [] });
+      expect(result.message).toMatch(/working credential/i);
+      expect(fetchModels).not.toHaveBeenCalled();
+    });
+
+    it('keeps the failure redacted and non-blocking when the endpoint fails', async () => {
+      const fetchModels = vi.fn(async () => {
+        throw new Error('boom with key sk-nw-secret');
+      });
+      const memory = discoveryServices(fetchModels);
+      providersIpc._setProviderIPCServicesForTests(memory.services);
+      registerProviderIpc();
+
+      const result = await handler(IPC_CHANNELS.PROVIDERS_DISCOVER_DRAFT_MODELS)(null, {
+        providerId: 'neuralwatt',
+        protocol: 'openai-compatible',
+        authMethod: 'api-key',
+        apiKey: 'nw-draft-key',
+      });
+
+      expect(result.status).toBe('failed');
+      expect(result.message).toMatch(/discovery failed/i);
+      expect(JSON.stringify(result)).not.toContain('sk-nw-secret');
+    });
+
+    it('applies the create-time static gate to drafts', async () => {
+      const fetchModels = vi.fn();
+      const memory = discoveryServices(fetchModels);
+      providersIpc._setProviderIPCServicesForTests(memory.services);
+      registerProviderIpc();
+
+      await expect(handler(IPC_CHANNELS.PROVIDERS_DISCOVER_DRAFT_MODELS)(null, {
+        providerId: 'neuralwatt',
+        protocol: 'anthropic-messages',
+        authMethod: 'api-key',
+        apiKey: 'nw-draft-key',
+      })).rejects.toThrow(/not supported/i);
+
+      await expect(handler(IPC_CHANNELS.PROVIDERS_DISCOVER_DRAFT_MODELS)(null, {
+        providerId: 'unknown-provider',
+        protocol: 'openai-compatible',
+        authMethod: 'api-key',
+      })).rejects.toThrow(/unknown provider/i);
+
+      expect(fetchModels).not.toHaveBeenCalled();
+    });
+
+    it('validates generic endpoints and passes them to the driver fetch', async () => {
+      const fetchModels = vi.fn(async () => [{ id: 'generic-live' }]);
+      const memory = genericDraftServices(fetchModels);
+      providersIpc._setProviderIPCServicesForTests(memory.services);
+      registerProviderIpc();
+
+      await expect(handler(IPC_CHANNELS.PROVIDERS_DISCOVER_DRAFT_MODELS)(null, {
+        providerId: 'generic-openai-compatible',
+        protocol: 'openai-compatible',
+        authMethod: 'none',
+      })).rejects.toThrow(/requires a custom endpoint/i);
+      expect(fetchModels).not.toHaveBeenCalled();
+
+      const result = await handler(IPC_CHANNELS.PROVIDERS_DISCOVER_DRAFT_MODELS)(null, {
+        providerId: 'generic-openai-compatible',
+        protocol: 'openai-compatible',
+        authMethod: 'none',
+        endpoint: 'https://api.example.com/v1',
+      });
+
+      expect(result.status).toBe('ok');
+      expect(fetchModels).toHaveBeenCalledWith(expect.objectContaining({
+        endpoint: 'https://api.example.com/v1',
+      }));
+    });
+
+    it('persists discovery for none-auth connections so draft previews converge after create', async () => {
+      const fetchModels = vi.fn(async () => [{ id: 'generic-live' }]);
+      const memory = genericDraftServices(fetchModels);
+      providersIpc._setProviderIPCServicesForTests(memory.services);
+      registerProviderIpc();
+
+      const draft = await handler(IPC_CHANNELS.PROVIDERS_DISCOVER_DRAFT_MODELS)(null, {
+        providerId: 'generic-openai-compatible',
+        protocol: 'openai-compatible',
+        authMethod: 'none',
+        endpoint: 'https://api.example.com/v1',
+      });
+      expect(draft.status).toBe('ok');
+
+      const created = await handler(IPC_CHANNELS.PROVIDERS_CREATE)(null, {
+        providerId: 'generic-openai-compatible',
+        name: 'Local endpoint',
+        protocol: 'openai-compatible',
+        authMethod: 'none',
+        endpoint: 'https://api.example.com/v1',
+        modelIds: ['generic-live'],
+      });
+
+      // The persisted path fetches for none-auth too, so the id selected from
+      // the draft preview is backed instead of orphaned after creation.
+      expect(fetchModels).toHaveBeenCalledTimes(2);
+      const record = memory.records.get(created.connection.id);
+      expect(record?.discoveredModels).toEqual([
+        expect.objectContaining({ id: 'generic-live', provenance: 'provider' }),
+      ]);
+    });
+
+    it('reports no-credential when an environment variable is declared but unset', async () => {
+      const fetchModels = vi.fn();
+      const memory = discoveryServices(fetchModels);
+      providersIpc._setProviderIPCServicesForTests(memory.services);
+      registerProviderIpc();
+
+      const result = await handler(IPC_CHANNELS.PROVIDERS_DISCOVER_DRAFT_MODELS)(null, {
+        providerId: 'neuralwatt',
+        protocol: 'openai-compatible',
+        authMethod: 'environment',
+        environmentVariable: 'ORCHID_TEST_NEURALWATT_UNSET',
+      });
+
+      expect(result).toMatchObject({ status: 'no-credential', models: [] });
+      expect(fetchModels).not.toHaveBeenCalled();
+    });
+  });
 });
 
 describe('provider per-model pricing override IPC', () => {
@@ -1649,5 +1861,20 @@ describe('provider channel zod rejection', () => {
       .rejects.toThrow('Invalid providers:quota_refresh payload');
     await expect(handler(IPC_CHANNELS.PROVIDERS_QUOTA_REFRESH)(null, {}))
       .rejects.toThrow('Invalid providers:quota_refresh payload');
+  });
+
+  it('rejects providers:discover_draft_models with an invalid payload', async () => {
+    registerProviderIpc();
+
+    await expect(handler(IPC_CHANNELS.PROVIDERS_DISCOVER_DRAFT_MODELS)(null, undefined))
+      .rejects.toThrow('Invalid providers:discover_draft_models payload');
+    await expect(handler(IPC_CHANNELS.PROVIDERS_DISCOVER_DRAFT_MODELS)(null, {}))
+      .rejects.toThrow('Invalid providers:discover_draft_models payload');
+    // Environment auth without a variable never reaches driver code.
+    await expect(handler(IPC_CHANNELS.PROVIDERS_DISCOVER_DRAFT_MODELS)(null, {
+      providerId: 'openai',
+      protocol: 'openai-compatible',
+      authMethod: 'environment',
+    })).rejects.toThrow('Invalid providers:discover_draft_models payload');
   });
 });

@@ -787,6 +787,32 @@ export interface ProviderDiscoverModelsResult {
   message: string | null;
 }
 
+/**
+ * Draft live-discovery request for a connection that does not exist yet (#138).
+ * The one-shot `apiKey` is used only for this fetch and is never persisted or
+ * echoed back.
+ */
+export interface ProviderDraftDiscoveryMessage {
+  readonly providerId: string;
+  readonly protocol: ProviderProtocol;
+  readonly authMethod: ProviderAuthMethod;
+  readonly endpoint?: string | null;
+  readonly allowInsecureHttp?: boolean;
+  readonly environmentVariable?: string;
+  readonly apiKey?: string;
+}
+
+/** Result of one draft live-discovery fetch; nothing is persisted (#138). */
+export interface ProviderDraftDiscoveryResult {
+  readonly status: 'ok' | 'unsupported' | 'no-credential' | 'failed';
+  /** Renderer-ready provider rows for the wizard models editor. */
+  readonly models: readonly ProviderModelView[];
+  /** When the live endpoint published this snapshot; null unless status is ok. */
+  readonly discoveredAt: string | null;
+  /** Redacted, user-presentable detail; null when nothing needs surfacing. */
+  readonly message: string | null;
+}
+
 export interface ProviderMutationResult {
   connection: ProviderConnectionView;
   message: string | null;
@@ -1368,6 +1394,10 @@ export interface OrchidAPI {
     modelList: (message?: ProviderModelListMessage) => Promise<readonly ProviderModelOption[]>;
     /** One explicit live model discovery fetch for a connection; never polled (R26). */
     discoverModels: (message: ProviderConnectionIdMessage) => Promise<ProviderDiscoverModelsResult>;
+    /** Draft live-discovery fetch for a connection that does not exist yet (#138). */
+    discoverDraftModels: (
+      message: ProviderDraftDiscoveryMessage,
+    ) => Promise<ProviderDraftDiscoveryResult>;
     /** Refresh informational status only; it never changes connection health. */
     refreshStatus: (message: ProviderStatusRefreshMessage) => Promise<ProviderStatusView | null>;
     /**
@@ -1620,6 +1650,7 @@ export const IPC_CHANNELS = {
   PROVIDERS_DELETE: 'providers:delete',
   PROVIDERS_MODEL_LIST: 'providers:model_list',
   PROVIDERS_DISCOVER_MODELS: 'providers:discover_models',
+  PROVIDERS_DISCOVER_DRAFT_MODELS: 'providers:discover_draft_models',
   PROVIDERS_STATUS_REFRESH: 'providers:status_refresh',
   PROVIDERS_QUOTA_REFRESH: 'providers:quota_refresh',
 
@@ -1792,6 +1823,7 @@ export const ALLOWED_INVOKE_CHANNELS = [
   IPC_CHANNELS.PROVIDERS_DELETE,
   IPC_CHANNELS.PROVIDERS_MODEL_LIST,
   IPC_CHANNELS.PROVIDERS_DISCOVER_MODELS,
+  IPC_CHANNELS.PROVIDERS_DISCOVER_DRAFT_MODELS,
   IPC_CHANNELS.PROVIDERS_STATUS_REFRESH,
   IPC_CHANNELS.PROVIDERS_QUOTA_REFRESH,
   IPC_CHANNELS.SESSION_LIST,

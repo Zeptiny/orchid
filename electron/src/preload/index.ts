@@ -44,6 +44,7 @@ import type {
   ProviderConnectionIdMessage,
   ProviderDisconnectMessage,
   ProviderDeleteConnectionMessage,
+  ProviderDraftDiscoveryMessage,
   ProviderModelListMessage,
   ProviderStatusRefreshMessage,
   SessionLoadMessage,
@@ -445,6 +446,9 @@ const orchidAPI: OrchidAPI = {
 
     discoverModels: (message: ProviderConnectionIdMessage) =>
       invoke(IPC_CHANNELS.PROVIDERS_DISCOVER_MODELS, message),
+
+    discoverDraftModels: (message: ProviderDraftDiscoveryMessage) =>
+      invoke(IPC_CHANNELS.PROVIDERS_DISCOVER_DRAFT_MODELS, message),
 
     refreshStatus: (message: ProviderStatusRefreshMessage) =>
       invoke(IPC_CHANNELS.PROVIDERS_STATUS_REFRESH, message),
