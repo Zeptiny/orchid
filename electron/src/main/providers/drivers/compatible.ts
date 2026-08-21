@@ -133,6 +133,16 @@ function record(value: unknown): Record<string, unknown> | undefined {
     : undefined;
 }
 
+/** HTTP header names are case-insensitive; the middleware lowercases but the facet contract does not guarantee it. */
+function headerValue(headers: Readonly<Record<string, string>>, name: string): string | undefined {
+  const direct = headers[name];
+  if (direct !== undefined) return direct;
+  for (const [key, value] of Object.entries(headers)) {
+    if (key.toLowerCase() === name) return value;
+  }
+  return undefined;
+}
+
 /**
  * Extract the de-facto usage-body cost convention shared by OpenAI-compatible
  * gateways (OpenRouter, Surplus Intelligence, Requesty, …): `usage.cost` (or
@@ -147,7 +157,7 @@ export function extractGenericUsageCostEvidence(
 ): GenericUsageCostEvidence {
   const usage = record(rawUsage);
   const bodyCost = decimalText(usage?.cost) ?? decimalText(usage?.cost_usd);
-  const headerCost = decimalText(headers['x-request-cost-usd']);
+  const headerCost = decimalText(headerValue(headers, 'x-request-cost-usd'));
   const costDetails = record(usage?.cost_details);
   return {
     reportedCostUsd: bodyCost ?? headerCost,

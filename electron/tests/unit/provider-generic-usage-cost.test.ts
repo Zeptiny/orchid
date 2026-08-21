@@ -48,6 +48,14 @@ describe('generic usage-body cost evidence', () => {
     ).toBe('0.0000914');
   });
 
+  it('reads the cost header regardless of its casing', async () => {
+    const { extractGenericUsageCostEvidence } = await import('../../src/main/providers/drivers/compatible');
+
+    expect(
+      extractGenericUsageCostEvidence({ 'X-Request-Cost-USD': '0.0042' }, {}).reportedCostUsd,
+    ).toBe('0.0042');
+  });
+
   it('declares the facet on both generic compatible drivers', async () => {
     const { createCompatibleProviderDrivers } = await import('../../src/main/providers/drivers/compatible');
 
