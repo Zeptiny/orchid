@@ -7,7 +7,7 @@ import {
 } from '../llm/message-factories';
 
 import type { Message, Usage } from '../../shared/types/message';
-import { MessageType } from '../../shared/types/message';
+import { MessageRole, MessageType } from '../../shared/types/message';
 import type { ThinkingReplayPayload } from '../../shared/types/message';
 import type { CanonicalToolResult, TerminalToolResultStatus } from '../../shared/types/tool-result';
 import type { StreamEvent } from '../llm/orchestrator';
@@ -100,6 +100,8 @@ export class SubagentRunAssembler {
   private readonly newId: () => string;
   private readonly now: () => string;
   private committedSegmentCount = 0;
+  /** Initial base length — messages at or after this index were created by this run. */
+  private readonly baseMessageCount: number;
   private responseText = '';
   private resultText = '';
   private stepText = '';
@@ -117,6 +119,7 @@ export class SubagentRunAssembler {
 
   constructor(initialMessages: readonly Message[], options: SubagentRunAssemblerOptions = {}) {
     this.messages = [...initialMessages];
+    this.baseMessageCount = this.messages.length;
     this.newId = options.newId ?? (() => crypto.randomUUID());
     this.now = options.now ?? (() => new Date().toISOString());
   }
@@ -310,11 +313,25 @@ export class SubagentRunAssembler {
    * Commit the remaining uncommitted segments with only the usage no earlier
    * boundary commit already stamped, and consume it once it actually lands on
    * a text message. A commit whose range holds no stampable text leaves the
-   * usage unconsumed so a later commit can still carry it.
+   * usage unconsumed so a later commit can still carry it — but the tail IS
+   * the last commit, so residual usage falls back to the latest assistant
+   * text this run created (e.g. text → tool call → usage → finish, where the
+   * tool-call commit stamped nothing because the usage had not arrived yet)
+   * instead of being lost outright. Stamps are additive (`addStepUsage`) so a
+   * message already stamped at a pause boundary keeps its earlier usage.
    */
   private commitTail(): void {
     if (this.commitThrough(this.segments.length, this.unstampedUsage)) {
       this.unstampedUsage = null;
+      return;
+    }
+    if (!this.unstampedUsage) return;
+    for (let index = this.messages.length - 1; index >= this.baseMessageCount; index -= 1) {
+      const message = this.messages[index]!;
+      if (message.type !== MessageType.TEXT || message.role !== MessageRole.ASSISTANT) continue;
+      this.messages[index] = { ...message, usage: addStepUsage(message.usage, this.unstampedUsage) };
+      this.unstampedUsage = null;
+      return;
     }
   }
 

@@ -1382,6 +1382,91 @@ describe('SubagentCompactionController prepare in-flight latch (C9)', () => {
   });
 });
 
+// ── Progress silencing: superseded runs never emit stale compaction progress ──
+
+describe('SubagentCompactionController progress silencing', () => {
+  const SILENCE_SESSION = 'session-silence';
+  const SILENCE_SUB = 'sub-silence-1';
+
+  function silenceController(recordEmit: (progress: unknown) => void): SubagentCompactionController {
+    const messages = [
+      { id: 'task-head', role: 'user', content: TASK, type: 'text' },
+    ] as unknown as Message[];
+    const chain = {
+      id: 'chain-silence',
+      sessionId: SILENCE_SESSION,
+      messages,
+    } as unknown as Chain;
+    const record = {
+      id: SILENCE_SUB,
+      agent: testAgent,
+      state: SubagentState.RUNNING,
+      label: 'silence probe',
+      task: TASK,
+      result: null,
+      error: null,
+      startTime: Date.now(),
+      queuedAt: null,
+      startedAt: Date.now(),
+      endTime: null,
+      chain,
+      usage: null,
+      selection: SELECTION,
+      parentChainIndex: null,
+      sessionId: SILENCE_SESSION,
+      closed: false,
+    } as unknown as RuntimeSubagentRecord;
+    return new SubagentCompactionController({
+      record,
+      runGeneration: 1,
+      abortSignal: new AbortController().signal,
+      historyBox: { messages: [...messages] },
+      assembler: new SubagentRunAssembler(messages),
+      emitProgress: (progress) => recordEmit(progress),
+      setChainMessages: () => undefined,
+      applySubagentCompaction: () => undefined,
+      markCompaction: () => undefined,
+      markRecordDirty: () => undefined,
+      emptyChain: () => chain,
+      onPrepareEvaluated: () => undefined,
+    });
+  }
+
+  function textDelta(controller: SubagentCompactionController, text: string): void {
+    (controller as unknown as { _onTextDelta: (text: string) => void })._onTextDelta(text);
+  }
+
+  it('silenceProgress stops later compactor callbacks from emitting; progress flows before it', () => {
+    const emitted: { phase: string }[] = [];
+    const controller = silenceController((progress) => emitted.push(progress as { phase: string }));
+
+    // Before silencing, a delta outside the throttle window emits synchronously.
+    textDelta(controller, 'live compactor text');
+    expect(emitted.map((progress) => progress.phase)).toEqual(['compacting']);
+
+    // Supersession: a NEW schedule from the still-streaming compactor captures
+    // the already-bumped epoch, so the epoch guard alone cannot stop it — the
+    // silence latch must.
+    controller.silenceProgress();
+    textDelta(controller, 'stale compactor text');
+    (controller as unknown as { _emitProgress: (p: { phase: string }) => void })
+      ._emitProgress({ phase: 'complete' });
+    expect(emitted).toHaveLength(1);
+  });
+
+  it('discard permanently silences progress too', () => {
+    const emitted: { phase: string }[] = [];
+    const controller = silenceController((progress) => emitted.push(progress as { phase: string }));
+
+    controller.discard();
+    textDelta(controller, 'late compactor text');
+    (controller as unknown as { _emitProgress: (p: { phase: string }) => void })
+      ._emitProgress({ phase: 'compacting' });
+
+    expect(emitted).toEqual([]);
+  });
+});
+
 // ── Scoped user settle (R31/R33): keep_last_user_messages as a real knob ────
 
 describe('Subagent compaction scoped user settle (keep_last_user_messages)', () => {

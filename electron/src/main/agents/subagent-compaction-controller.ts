@@ -150,6 +150,14 @@ export class SubagentCompactionController {
    * the widget back to a running phase (main's compaction epoch pattern).
    */
   private _terminalEpoch = 0;
+  /**
+   * Persistent silence latch: set by `silenceProgress()` (supersession) and
+   * `discard()` (interrupt/natural end). The epoch check only suppresses
+   * flushes scheduled BEFORE its bump — a still-streaming superseded compactor
+   * can schedule NEW trailing flushes (capturing the already-bumped epoch) or
+   * call `onProgress` directly, so both emission paths gate on this latch.
+   */
+  private _silenced = false;
   /** Synchronous in-flight latch for the prepare fire points (see `_maybePrepare`). */
   private _prepareInFlight = false;
 
@@ -177,9 +185,11 @@ export class SubagentCompactionController {
    * R27: route widget progress through the live projection keyed by agent
    * scope. Failures are display-only and never break the compaction. Terminal
    * phases (`complete`/`failed`) bump the terminal epoch so the throttled
-   * stream tail in `_onTextDelta` goes permanently silent afterwards.
+   * stream tail in `_onTextDelta` goes permanently silent afterwards, and the
+   * silence latch drops every emission after supersession/discard.
    */
   private _emitProgress(progress: SubagentCompactionProgress): void {
+    if (this._silenced) return;
     try {
       if (progress.phase === 'complete' || progress.phase === 'failed') {
         this._terminalEpoch += 1;
@@ -196,9 +206,11 @@ export class SubagentCompactionController {
    * estimate, throttled to the emission interval. The scheduled flush binds
    * the terminal epoch at schedule time and no-ops once a terminal phase (or
    * discard) has been emitted — a trailing `compacting` event after the
-   * widget completed would resurrect it (review B).
+   * widget completed would resurrect it (review B). Once the run is
+   * superseded/discarded the silence latch stops new schedules outright.
    */
   private _onTextDelta(accumulatedText: string): void {
+    if (this._silenced) return;
     const epochAtSchedule = this._terminalEpoch;
     const emit = (): void => {
       this._progressTimer = null;
@@ -876,11 +888,15 @@ export class SubagentCompactionController {
    * only for the CURRENT generation — a superseded run's scoped pause and
    * pending state belong to its replacement. But this generation's controller
    * can still own a scheduled progress timer (a throttled `compacting` flush
-   * in `_onTextDelta`), so stop it locally and advance the terminal epoch so
-   * no stale emission can fire for a run the manager already replaced.
-   * Deliberately local-only: no pause/pending mutation, no trigger touch.
+   * in `_onTextDelta`) and a possibly still-streaming compactor whose
+   * callbacks can schedule NEW flushes or emit terminal progress after the
+   * replacement, so cancel the timer, advance the terminal epoch, and latch
+   * permanent silence — no stale emission can fire for a run the manager
+   * already replaced. Deliberately local-only: no pause/pending mutation, no
+   * trigger touch.
    */
   silenceProgress(): void {
+    this._silenced = true;
     this._terminalEpoch += 1;
     if (this._progressTimer) {
       clearTimeout(this._progressTimer);
@@ -892,11 +908,13 @@ export class SubagentCompactionController {
    * Interrupt or natural-end teardown: clear this run's scoped compaction
    * gate and drop any pending it never consumed — the per-run trigger dies
    * with the run, and the next run re-prepares via its own gates. Also bumps
-   * the terminal widget epoch (silences any in-flight trailing progress
-   * flush), cancels that timer, and releases the prepare in-flight latch so
-   * a late fire point parked at an await cannot resurrect run state.
+   * the terminal widget epoch, cancels that timer, latches permanent
+   * progress silence (any in-flight or later compactor callback), and
+   * releases the prepare in-flight latch so a late fire point parked at an
+   * await cannot resurrect run state.
    */
   discard(): void {
+    this._silenced = true;
     this._terminalEpoch += 1;
     if (this._progressTimer) {
       clearTimeout(this._progressTimer);
