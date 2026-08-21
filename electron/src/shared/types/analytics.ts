@@ -82,8 +82,19 @@ export interface SessionSummary {
 export interface SessionsResult {
   readonly sessions: readonly SessionSummary[];
   readonly totalSessions: number;
+  /** Offset-aware pagination flag: more pages exist past `offset + sessions.length`. */
   readonly truncated: boolean;
 }
+
+// Detail-view caps shared by main-process queries and renderer copy/chart
+// logic — single source so UI text never drifts from the query limits.
+
+/** Max snapshots in a context drill-down series (newest kept). */
+export const CONTEXT_DETAIL_MAX_POINTS = 2000;
+/** Max invocation rows in the subagent explorer detail. */
+export const SUBAGENT_DETAIL_MAX_INVOCATIONS = 500;
+/** TTFT histogram bucket width, ms. */
+export const TTFT_BUCKET_MS = 50;
 
 export interface AttemptDetail {
   readonly attemptId: string;

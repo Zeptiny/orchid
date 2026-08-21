@@ -33,6 +33,11 @@ import type {
   ContextEvent,
   ContextJumpEvent,
 } from '../../../shared/types/analytics';
+import {
+  CONTEXT_DETAIL_MAX_POINTS,
+  SUBAGENT_DETAIL_MAX_INVOCATIONS,
+  TTFT_BUCKET_MS,
+} from '../../../shared/types/analytics';
 import type { SubagentAttributionRecord } from '../../../shared/types/accounting';
 import type { QuotaOverviewEntry } from '../../../shared/types/analytics';
 import { providerQuotaSchema } from '../../../shared/types/provider-facets';
@@ -45,10 +50,7 @@ const CONTEXT_TOP_SUBAGENTS = 5;
 const CONTEXT_MAX_POINTS_PER_SERIES = 500;
 const MODEL_DETAIL_TOP_SESSIONS = 10;
 const MODEL_DETAIL_RECENT_ATTEMPTS = 50;
-const TTFT_BUCKET_MS = 50;
 const TTFT_BUCKET_MAX_MS = 5000;
-const SUBAGENT_DETAIL_MAX_INVOCATIONS = 500;
-const CONTEXT_DETAIL_MAX_POINTS = 2000;
 const CONTEXT_DETAIL_MAX_EVENTS = 10;
 /** Chunk size for bulk session-name lookups — one IN(...) per batch stays well
  * below the SQLite bound-variable limit even for very long picker lists. */
@@ -92,11 +94,10 @@ function getDb(ctx?: AnalyticsQueryContext): SqliteDatabase {
  * preserves the last-known name for analytics. Both lookups are fail-soft
  * (sessions.db unavailable, tombstone table missing, locked db → skip).
  */
-function resolveSessionNamesWithFallback(
+export function resolveSessionNamesWithFallback(
   db: SqliteDatabase,
   sessionIds: readonly string[],
-): Map<string, string> {
-  const names = new Map<string, string>();
+): Map<string, string> {  const names = new Map<string, string>();
   try {
     for (const [id, name] of getSessionNames(sessionIds)) {
       names.set(id, name);
@@ -379,7 +380,10 @@ function recordLatencySample(
 ): number {
   const ttftMs = new Date(row.first_token_at).getTime() - new Date(row.started_at).getTime();
   const generationMs = new Date(row.completed_at).getTime() - new Date(row.first_token_at).getTime();
-  samples.ttftMs.push(ttftMs);
+  // Clock skew between the two wall-clock writes can produce negative TTFT;
+  // such samples distort percentiles/histograms and are dropped (the raw
+  // value is still returned for per-attempt display).
+  if (ttftMs >= 0) samples.ttftMs.push(ttftMs);
   // Rows without a positive generation window or a known token count still
   // contribute TTFT but cannot rate tokens.
   if (generationMs > 0 && row.output_tokens !== null) {
@@ -1356,6 +1360,46 @@ export function getTools(timeRange?: AnalyticsTimeRange): ToolsResult {
     outcomeDistribution,
   };
 }
+// ── Subagent attribution ↔ attempt joins ──────────────────────────────────────
+
+/**
+ * Follow-up runs share one chain (record.chain.id is stable) while each run
+ * inserts its own attribution row — so attempts must be attributed to the run
+ * whose window contains them. Joining by chain alone would multiply usage,
+ * cost, and latency once per run sharing the chain. The first run's window is
+ * unbounded below so chain attempts recorded before the earliest attribution
+ * row (e.g. recovery-reconstructed attributions) still count once.
+ */
+function subagentRunWindows(filteredSaCte: string): string {
+  return `
+    run_windows AS (
+      SELECT sa.subagent_id, sa.agent_name, sa.agent_type, sa.agent_tier,
+        sa.session_id, sa.chain_id, sa.model_id, sa.started_at, sa.completed_at, sa.status,
+        LAG(sa.started_at) OVER (PARTITION BY sa.chain_id ORDER BY sa.started_at, sa.subagent_id) as prev_started_at,
+        LEAD(sa.started_at) OVER (PARTITION BY sa.chain_id ORDER BY sa.started_at, sa.subagent_id) as next_started_at
+      FROM (${filteredSaCte}) sa
+    )`;
+}
+
+const ATTEMPT_RUN_WINDOW_JOIN = 'pa.chain_id = rw.chain_id'
+  + ' AND (rw.prev_started_at IS NULL OR pa.started_at >= rw.started_at)'
+  + ' AND (rw.next_started_at IS NULL OR pa.started_at < rw.next_started_at)';
+
+/** Per-run usage sums: window-attributed attempts, one row per attribution run. */
+function subagentRunUsage(filteredAttempts: string): string {
+  return `
+    run_usage AS (
+      SELECT rw.subagent_id, rw.chain_id, rw.started_at, rw.model_id,
+        COUNT(pa.attempt_id) as attempts,
+        COALESCE(SUM(json_extract(pa.usage_json, '$.inputTokens')), 0) as input_tokens,
+        COALESCE(SUM(json_extract(pa.usage_json, '$.outputTokens')), 0) as output_tokens
+      FROM run_windows rw LEFT JOIN (${filteredAttempts}) pa ON ${ATTEMPT_RUN_WINDOW_JOIN}
+      GROUP BY rw.subagent_id, rw.chain_id, rw.started_at, rw.model_id
+    )`;
+}
+
+const RUN_USAGE_JOIN = 'ru.subagent_id = sa.subagent_id AND ru.chain_id = sa.chain_id AND ru.started_at = sa.started_at';
+
 export function getSubagents(timeRange?: AnalyticsTimeRange): SubagentsResult {
   const db = getDb();
   const dateFilter = buildDateFilter(timeRange);
@@ -1363,24 +1407,19 @@ export function getSubagents(timeRange?: AnalyticsTimeRange): SubagentsResult {
   const filteredAttempts = `SELECT * FROM provider_attempts ${whereClause([], dateFilter.clause)}`;
   const summaryRows = db.prepare(`
     WITH filtered_sa AS (${filteredSubagents}),
-    chain_usage AS (
-      SELECT chain_id,
-        COALESCE(SUM(json_extract(usage_json, '$.inputTokens')), 0) as input_tokens,
-        COALESCE(SUM(json_extract(usage_json, '$.outputTokens')), 0) as output_tokens,
-        COUNT(*) as attempts
-      FROM (${filteredAttempts}) WHERE chain_id IS NOT NULL GROUP BY chain_id
-    )
+    ${subagentRunWindows('filtered_sa')},
+    ${subagentRunUsage(filteredAttempts)}
     SELECT sa.agent_name, sa.agent_type, sa.agent_tier,
       GROUP_CONCAT(DISTINCT sa.model_id) as models,
       COUNT(*) as invocations,
-      COALESCE(SUM(cu.input_tokens), 0) as input_tokens,
-      COALESCE(SUM(cu.output_tokens), 0) as output_tokens,
-      COALESCE(SUM(cu.attempts), 0) as attempts,
+      COALESCE(SUM(ru.input_tokens), 0) as input_tokens,
+      COALESCE(SUM(ru.output_tokens), 0) as output_tokens,
+      COALESCE(SUM(ru.attempts), 0) as attempts,
       COALESCE(SUM(CASE WHEN sa.status = 'completed' THEN 1 ELSE 0 END), 0) as completed,
       COALESCE(SUM(CASE WHEN sa.status = 'failed' THEN 1 ELSE 0 END), 0) as failed,
       COALESCE(SUM(CASE WHEN sa.status = 'interrupted' THEN 1 ELSE 0 END), 0) as interrupted,
       AVG(CASE WHEN sa.completed_at IS NOT NULL THEN (julianday(sa.completed_at) - julianday(sa.started_at)) * 86400000 END) as avg_duration_ms
-    FROM filtered_sa sa LEFT JOIN chain_usage cu ON cu.chain_id = sa.chain_id
+    FROM filtered_sa sa JOIN run_usage ru ON ${RUN_USAGE_JOIN}
     GROUP BY sa.agent_name, sa.agent_type, sa.agent_tier
     ORDER BY invocations DESC, sa.agent_name
   `).all(...dateFilter.params, ...dateFilter.params) as Array<{
@@ -1395,9 +1434,9 @@ export function getSubagents(timeRange?: AnalyticsTimeRange): SubagentsResult {
   for (const row of iterateRows<{
     agent_name: string; agent_type: string; agent_tier: string; currency: string; cost_amount: string;
   }>(db, `
-    WITH filtered_sa AS (${filteredSubagents})
-    SELECT sa.agent_name, sa.agent_type, sa.agent_tier, pa.currency, pa.cost_amount
-    FROM filtered_sa sa JOIN (${filteredAttempts}) pa ON pa.chain_id = sa.chain_id
+    WITH filtered_sa AS (${filteredSubagents}), ${subagentRunWindows('filtered_sa')}
+    SELECT rw.agent_name, rw.agent_type, rw.agent_tier, pa.currency, pa.cost_amount
+    FROM run_windows rw JOIN (${filteredAttempts}) pa ON ${ATTEMPT_RUN_WINDOW_JOIN}
     WHERE pa.cost_state IN ('reported','calculated') AND pa.currency IS NOT NULL AND pa.cost_amount IS NOT NULL
   `, [...dateFilter.params, ...dateFilter.params])) {
     const amount = parseCostAmount(row.cost_amount);
@@ -1474,31 +1513,25 @@ export function getSubagentDetail(
 ): SubagentAnalyticsDetailResult {
   const db = getDb(ctx);
   const dateFilter = buildDateFilter(input.timeRange);
-  // Same join shape as getSubagents: attribution rows for the triple, joined
-  // to their chain's attempts under the same date filter.
+  // Same join shape as getSubagents: attribution rows for the triple, with
+  // attempts attributed to their run's window (see subagentRunWindows).
   const tripleConditions = ['agent_name = ?', 'agent_type = ?', 'agent_tier = ?'];
   const filteredSubagents = `SELECT * FROM subagent_attribution ${whereClause(tripleConditions, dateFilter.clause)}`;
   const filteredAttempts = `SELECT * FROM provider_attempts ${whereClause([], dateFilter.clause)}`;
-  const chainUsage = `
-    chain_usage AS (
-      SELECT chain_id,
-        COALESCE(SUM(json_extract(usage_json, '$.inputTokens')), 0) as input_tokens,
-        COALESCE(SUM(json_extract(usage_json, '$.outputTokens')), 0) as output_tokens,
-        COUNT(*) as attempts
-      FROM (${filteredAttempts}) WHERE chain_id IS NOT NULL GROUP BY chain_id
-    )`;
-  // filteredSubagents binds the triple + date params, chain_usage re-binds the
-  // date params — same parameter layout getSubagents uses.
+  // filtered_sa binds the triple + date params, run_usage re-binds the date
+  // params — same parameter layout getSubagents uses.
   const joinParams = [input.agentName, input.agentType, input.agentTier, ...dateFilter.params, ...dateFilter.params];
 
   const invocationRows = db.prepare(`
-    WITH filtered_sa AS (${filteredSubagents}), ${chainUsage}
+    WITH filtered_sa AS (${filteredSubagents}),
+    ${subagentRunWindows('filtered_sa')},
+    ${subagentRunUsage(filteredAttempts)}
     SELECT sa.subagent_id, sa.session_id, sa.chain_id, sa.model_id, sa.status,
       sa.started_at, sa.completed_at,
-      COALESCE(cu.attempts, 0) as attempts,
-      COALESCE(cu.input_tokens, 0) as input_tokens,
-      COALESCE(cu.output_tokens, 0) as output_tokens
-    FROM filtered_sa sa LEFT JOIN chain_usage cu ON cu.chain_id = sa.chain_id
+      COALESCE(ru.attempts, 0) as attempts,
+      COALESCE(ru.input_tokens, 0) as input_tokens,
+      COALESCE(ru.output_tokens, 0) as output_tokens
+    FROM filtered_sa sa JOIN run_usage ru ON ${RUN_USAGE_JOIN}
     ORDER BY sa.started_at DESC, sa.subagent_id ASC
     LIMIT ?
   `).all(...joinParams, SUBAGENT_DETAIL_MAX_INVOCATIONS) as Array<{
@@ -1513,47 +1546,51 @@ export function getSubagentDetail(
   `).get(input.agentName, input.agentType, input.agentTier, ...dateFilter.params) as { count: number };
 
   const summaryRow = db.prepare(`
-    WITH filtered_sa AS (${filteredSubagents}), ${chainUsage}
+    WITH filtered_sa AS (${filteredSubagents}),
+    ${subagentRunWindows('filtered_sa')},
+    ${subagentRunUsage(filteredAttempts)}
     SELECT COUNT(*) as invocations,
       COALESCE(SUM(CASE WHEN sa.status = 'completed' THEN 1 ELSE 0 END), 0) as completed,
       COALESCE(SUM(CASE WHEN sa.status = 'failed' THEN 1 ELSE 0 END), 0) as failed,
       COALESCE(SUM(CASE WHEN sa.status = 'interrupted' THEN 1 ELSE 0 END), 0) as interrupted,
-      COALESCE(SUM(cu.attempts), 0) as attempts,
-      COALESCE(SUM(cu.input_tokens), 0) as input_tokens,
-      COALESCE(SUM(cu.output_tokens), 0) as output_tokens,
+      COALESCE(SUM(ru.attempts), 0) as attempts,
+      COALESCE(SUM(ru.input_tokens), 0) as input_tokens,
+      COALESCE(SUM(ru.output_tokens), 0) as output_tokens,
       AVG(CASE WHEN sa.completed_at IS NOT NULL THEN (julianday(sa.completed_at) - julianday(sa.started_at)) * 86400000 END) as avg_duration_ms
-    FROM filtered_sa sa LEFT JOIN chain_usage cu ON cu.chain_id = sa.chain_id
+    FROM filtered_sa sa JOIN run_usage ru ON ${RUN_USAGE_JOIN}
   `).get(...joinParams) as {
     invocations: number; completed: number; failed: number; interrupted: number;
     attempts: number; input_tokens: number; output_tokens: number; avg_duration_ms: number | null;
   };
 
-  // Costs are keyed per chain (the join identity — subagent_id can repeat for
-  // follow-up runs), aggregated per model and overall from the same stream.
-  const chainCostMap = new Map<string, Map<string, DecimalTotal>>();
+  // Costs are attributed per run window (subagent_id can repeat for follow-up
+  // runs sharing one chain), aggregated per model and overall from the stream.
+  const runCostMap = new Map<string, Map<string, DecimalTotal>>();
   const modelCostMap = new Map<string, Map<string, DecimalTotal>>();
   const totalCostMap = new Map<string, DecimalTotal>();
   for (const row of iterateRows<{
-    chain_id: string; model_id: string; currency: string; cost_amount: string;
+    chain_id: string; started_at: string; model_id: string; currency: string; cost_amount: string;
   }>(db, `
-    WITH filtered_sa AS (${filteredSubagents})
-    SELECT sa.chain_id, sa.model_id, pa.currency, pa.cost_amount
-    FROM filtered_sa sa JOIN (${filteredAttempts}) pa ON pa.chain_id = sa.chain_id
+    WITH filtered_sa AS (${filteredSubagents}), ${subagentRunWindows('filtered_sa')}
+    SELECT rw.chain_id, rw.started_at, rw.model_id, pa.currency, pa.cost_amount
+    FROM run_windows rw JOIN (${filteredAttempts}) pa ON ${ATTEMPT_RUN_WINDOW_JOIN}
     WHERE pa.cost_state IN ('reported','calculated') AND pa.currency IS NOT NULL AND pa.cost_amount IS NOT NULL
   `, joinParams)) {
     const amount = parseCostAmount(row.cost_amount);
-    bumpCurrencyTotal(nestedCurrencyMap(chainCostMap, row.chain_id), row.currency, amount);
+    bumpCurrencyTotal(nestedCurrencyMap(runCostMap, `${row.chain_id}\0${row.started_at}`), row.currency, amount);
     bumpCurrencyTotal(nestedCurrencyMap(modelCostMap, row.model_id), row.currency, amount);
     bumpCurrencyTotal(totalCostMap, row.currency, amount);
   }
 
   const modelRows = db.prepare(`
-    WITH filtered_sa AS (${filteredSubagents}), ${chainUsage}
+    WITH filtered_sa AS (${filteredSubagents}),
+    ${subagentRunWindows('filtered_sa')},
+    ${subagentRunUsage(filteredAttempts)}
     SELECT sa.model_id,
-      COALESCE(SUM(cu.attempts), 0) as attempts,
-      COALESCE(SUM(cu.input_tokens), 0) as input_tokens,
-      COALESCE(SUM(cu.output_tokens), 0) as output_tokens
-    FROM filtered_sa sa LEFT JOIN chain_usage cu ON cu.chain_id = sa.chain_id
+      COALESCE(SUM(ru.attempts), 0) as attempts,
+      COALESCE(SUM(ru.input_tokens), 0) as input_tokens,
+      COALESCE(SUM(ru.output_tokens), 0) as output_tokens
+    FROM filtered_sa sa JOIN run_usage ru ON ${RUN_USAGE_JOIN}
     GROUP BY sa.model_id ORDER BY attempts DESC, sa.model_id ASC
   `).all(...joinParams) as Array<{
     model_id: string; attempts: number; input_tokens: number; output_tokens: number;
@@ -1570,10 +1607,10 @@ export function getSubagentDetail(
   for (const row of iterateRows<{
     started_at: string; first_token_at: string; completed_at: string; output_tokens: number | null;
   }>(db, `
-    WITH filtered_sa AS (${filteredSubagents})
+    WITH filtered_sa AS (${filteredSubagents}), ${subagentRunWindows('filtered_sa')}
     SELECT pa.started_at, pa.first_token_at, pa.completed_at,
       json_extract(pa.usage_json, '$.outputTokens') as output_tokens
-    FROM filtered_sa sa JOIN (${filteredAttempts}) pa ON pa.chain_id = sa.chain_id
+    FROM run_windows rw JOIN (${filteredAttempts}) pa ON ${ATTEMPT_RUN_WINDOW_JOIN}
     WHERE pa.first_token_at IS NOT NULL AND pa.completed_at IS NOT NULL
   `, joinParams)) {
     recordLatencySample(latencySamples, row);
@@ -1604,7 +1641,7 @@ export function getSubagentDetail(
     attempts: r.attempts,
     inputTokens: r.input_tokens,
     outputTokens: r.output_tokens,
-    totalCost: toCurrencyTotals(chainCostMap.get(r.chain_id)),
+    totalCost: toCurrencyTotals(runCostMap.get(`${r.chain_id}\0${r.started_at}`)),
   }));
 
   return {
@@ -1880,12 +1917,16 @@ export function getContextSessionDetail(
   }));
 
   // Compaction runs live in the ledger as compactor attempts for the session.
+  // Exact internal names only — a user-defined agent named "compactor-*"
+  // must not masquerade as a compaction event (names source: compaction/
+  // summarize.ts + apply.ts).
+  const COMPACTOR_AGENT_NAMES = "('compactor','compactor-selective','compactor-subagent','compactor-subagent-selective')";
   const compactionRows = db.prepare(`
     SELECT started_at, agent_name,
       json_extract(usage_json, '$.inputTokens') as input_tokens,
       json_extract(usage_json, '$.outputTokens') as output_tokens
     FROM provider_attempts
-    ${whereClause(['session_id = ?', "agent_name LIKE 'compactor%'"], attemptFilter.clause)}
+    ${whereClause(['session_id = ?', `agent_name IN ${COMPACTOR_AGENT_NAMES}`], attemptFilter.clause)}
     ORDER BY started_at ASC
   `).all(input.sessionId, ...attemptFilter.params) as Array<{
     started_at: string; agent_name: string; input_tokens: number | null; output_tokens: number | null;

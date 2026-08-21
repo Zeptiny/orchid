@@ -122,7 +122,9 @@ describe('ProviderAccountingStore', () => {
   });
 
   it('stamps first_token_at once per attempt (IS NULL guard keeps it idempotent)', () => {
-    const store = createStore();
+    let clockMs = Date.parse('2026-07-12T10:00:00.000Z');
+    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'orchid-accounting-'));
+    const store = new ProviderAccountingStore({ dbPath: path.join(tempDir, 'accounting.db'), now: () => new Date(clockMs) });
     store.insertPending({ attemptId: 'ttft-1', sessionId: 'session-1', chainId: null, turnId: null, sdkCallId: null, snapshot: snapshot() });
     store.markFirstToken('ttft-1');
     const stamped = (store.getDatabase()
@@ -130,13 +132,31 @@ describe('ProviderAccountingStore', () => {
       .get('ttft-1') as { first_token_at: string | null }).first_token_at;
     expect(stamped).not.toBeNull();
 
-    // A late duplicate call must not overwrite the original stamp.
+    // A late duplicate call at a later clock time must not overwrite the
+    // original stamp — the guard is the IS NULL clause, not clock granularity.
+    clockMs += 5000;
     store.markFirstToken('ttft-1');
     const again = (store.getDatabase()
       .prepare('SELECT first_token_at FROM provider_attempts WHERE attempt_id = ?')
       .get('ttft-1') as { first_token_at: string | null }).first_token_at;
     expect(again).toBe(stamped);
     store.close();
+  });
+
+  it('never regresses a recorded schema_version when an older binary reopens the ledger', () => {
+    const store = createStore();
+    store.getDatabase().prepare(
+      "UPDATE schema_meta SET value = '99' WHERE key = 'schema_version'",
+    ).run();
+    store.close();
+
+    // A new open with the compiled-in version must not downgrade 99.
+    const reopened = new ProviderAccountingStore({ dbPath: path.join(tempDir!, 'accounting.db') });
+    const version = reopened.getDatabase()
+      .prepare("SELECT value FROM schema_meta WHERE key = 'schema_version'")
+      .get() as { value: string };
+    expect(Number(version.value)).toBeGreaterThanOrEqual(99);
+    reopened.close();
   });
 
   it('marks abandoned pending rows interrupted exactly once on restart recovery', () => {

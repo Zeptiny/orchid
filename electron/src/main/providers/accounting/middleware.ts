@@ -311,8 +311,10 @@ export function createAttemptAccountingMiddleware(
               firstTokenMarked = true;
               try {
                 context.store.markFirstToken(attemptId);
-              } catch {
-                // Ignored: the attempt still finalizes normally.
+              } catch (error) {
+                // Non-fatal, but a persistent failure would silently null all
+                // TTFT/TPS analytics — leave a diagnostic trail.
+                console.warn('[accounting] markFirstToken failed', { error });
               }
             }
             if (next.value.type === 'finish') finalize('succeeded', next.value);

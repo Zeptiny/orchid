@@ -11,8 +11,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { WorkerPool } from '../../utils/worker-pool';
-import { getContext } from './analytics-queries';
-import { getSessionNames } from '../../session/storage';
+import { getContext, resolveSessionNamesWithFallback } from './analytics-queries';
 import { getProviderAccountingStore } from './store';
 import type { ContextQueryWorkerResult } from './analytics-worker';
 import type { AnalyticsTimeRange, ContextResult } from '../../../shared/types/analytics';
@@ -89,24 +88,17 @@ export async function runContextQuery(
 }
 
 function patchSessionNames(envelope: ContextQueryWorkerResult): ContextResult {
+  // Single implementation of the live-name-wins / tombstone-fallback policy
+  // (analytics-queries.ts) so the worker path cannot drift from inline runs.
   let nameMap = new Map<string, string>();
   if (envelope.sessionIds.length > 0) {
     try {
-      nameMap = getSessionNames(envelope.sessionIds);
+      nameMap = resolveSessionNamesWithFallback(
+        getProviderAccountingStore().getDatabase(),
+        envelope.sessionIds,
+      );
     } catch (error) {
       console.warn('[analytics] Session name lookup failed', { error });
-    }
-    // Deleted sessions keep their last-known name from the accounting ledger's
-    // tombstone table (live sessions.db rows above always win).
-    const missing = envelope.sessionIds.filter((id) => !nameMap.has(id));
-    if (missing.length > 0) {
-      try {
-        for (const [id, name] of getProviderAccountingStore().getSessionNameTombstones(missing)) {
-          nameMap.set(id, name);
-        }
-      } catch (error) {
-        console.warn('[analytics] Session name tombstone lookup failed', { error });
-      }
     }
   }
   return {

@@ -1233,6 +1233,26 @@ describe('analytics-queries', () => {
       expect(claude.p50TtftMs).not.toBeNull();
       expect(claude.avgTokensPerSecond).toBeNull();
     });
+
+    it('drops clock-skewed negative TTFT samples from aggregates but reports them per attempt', () => {
+      // Backward clock step: started_at pushed past first_token_at.
+      seedStreamedAttempt({
+        attemptId: 'att-skew', sessionId: 'sess-skew', ttftMs: 800, generationMs: 1000, outputTokens: 100,
+        snapshot: anthropicSnapshot('skew-model'),
+      });
+      providerStore.getDatabase().prepare(
+        "UPDATE provider_attempts SET started_at = datetime(started_at, '+10 seconds') WHERE attempt_id = ?",
+      ).run('att-skew');
+
+      const detail = getSessionDetail('sess-skew');
+      expect(detail.attempts[0].ttftMs).toBeLessThan(0);
+
+      const result = getModels();
+      const skew = result.models.find((m) => m.modelId === 'skew-model')!;
+      expect(skew.avgTtftMs).toBeNull();
+      expect(skew.p50TtftMs).toBeNull();
+      expect(skew.p95TtftMs).toBeNull();
+    });
   });
 
   // ── getTools ────────────────────────────────────────────────────────────────
@@ -1862,6 +1882,67 @@ describe('analytics-queries', () => {
         totalCost: [{ currency: 'USD', amount: '3', recordCount: 2 }],
       }]);
       expect(result.invocationsOverTime).toEqual([{ date: '2026-07-12', count: 1 }]);
+    });
+
+    it('returns zeros for an unknown triple without error', () => {
+      const result = getSubagentDetail({ agentName: 'nope', agentType: 'worker', agentTier: 'bloom' });
+      expect(result.invocations).toHaveLength(0);
+      expect(result.truncated).toBe(false);
+      expect(result.summary.invocations).toBe(0);
+      expect(result.summary.attempts).toBe(0);
+      expect(result.summary.avgTtftMs).toBeNull();
+      expect(result.modelsUsed).toHaveLength(0);
+      expect(result.invocationsOverTime).toHaveLength(0);
+    });
+
+    it('attributes follow-up runs sharing one chain once each — no multiplication', () => {
+      // Follow-up semantics: the same subagent re-runs on the SAME chain while
+      // each run inserts its own attribution row (subagent-runner does exactly
+      // this). Attempts must be attributed to the run whose window contains
+      // them, never counted once per attribution row.
+      const seedRun = () => seedSubagentAttribution({
+        subagentId: 'sub-f', sessionId: 'sess-f', chainId: 'chain-f',
+        agentName: 'impl', agentType: 'worker', agentTier: 'bloom',
+        modelId: 'claude-test', connectionId: ANTHROPIC_CONNECTION_ID,
+        status: 'completed',
+      });
+      seedRun();
+      seedProviderAttempt({
+        attemptId: 'f-a', sessionId: 'sess-f', chainId: 'chain-f', turnId: null,
+        outcome: 'succeeded', usage: { inputTokens: 100, outputTokens: 50 },
+        cost: calculatedCost('1'), agentName: 'impl', agentTier: 'bloom', agentScope: 'sub-f',
+      });
+      seedRun();
+      seedProviderAttempt({
+        attemptId: 'f-b', sessionId: 'sess-f', chainId: 'chain-f', turnId: null,
+        outcome: 'succeeded', usage: { inputTokens: 200, outputTokens: 80 },
+        cost: calculatedCost('2'), agentName: 'impl', agentTier: 'bloom', agentScope: 'sub-f',
+      });
+
+      const result = getSubagentDetail({ agentName: 'impl', agentType: 'worker', agentTier: 'bloom' });
+      expect(result.summary.invocations).toBe(2);
+      expect(result.summary.attempts).toBe(2);
+      expect(result.summary.inputTokens).toBe(300);
+      expect(result.summary.outputTokens).toBe(130);
+      expect(result.summary.totalCost).toEqual([{ currency: 'USD', amount: '3', recordCount: 2 }]);
+
+      // Per-run window attribution: newest row owns the follow-up attempt.
+      expect(result.invocations).toHaveLength(2);
+      const [newest, oldest] = result.invocations;
+      expect(newest.attempts).toBe(1);
+      expect(newest.inputTokens).toBe(200);
+      expect(newest.totalCost).toEqual([{ currency: 'USD', amount: '2', recordCount: 1 }]);
+      expect(oldest.attempts).toBe(1);
+      expect(oldest.inputTokens).toBe(100);
+      expect(oldest.totalCost).toEqual([{ currency: 'USD', amount: '1', recordCount: 1 }]);
+
+      // The overview list must not multiply either.
+      const overview = getSubagents();
+      const row = overview.summaries.find((s) => s.agentName === 'impl');
+      expect(row).toBeDefined();
+      expect(row!.invocations).toBe(2);
+      expect(row!.attempts).toBe(2);
+      expect(row!.inputTokens).toBe(300);
     });
   });
 

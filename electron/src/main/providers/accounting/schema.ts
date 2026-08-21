@@ -123,6 +123,10 @@ CREATE INDEX IF NOT EXISTS idx_subagent_attribution_status ON subagent_attributi
 -- Session-name tombstones: written when a session is deleted so analytics
 -- rows (which outlive the session) keep a readable name. Live sessions.db
 -- rows always take precedence over these at query time.
+-- Session-name tombstones: written best-effort when a session is deleted so
+-- analytics keeps the last-known name. Retention note: rows are never pruned,
+-- and the name (often auto-generated from chat content) deliberately outlives
+-- the session — a future "clear analytics" flow must DELETE from here too.
 CREATE TABLE IF NOT EXISTS session_names (
   session_id TEXT PRIMARY KEY,
   name TEXT NOT NULL,

@@ -131,7 +131,7 @@ electron/
 │   │   │   ├── status/          # Provider status cache/service
 │   │   │   └── accounting/      # SQLite attempt ledger + cost + analytics queries
 │   │   │       ├── store.ts     # provider_attempts insert/finalize (fail-closed singleton)
-│   │   │       ├── schema.ts    # Ledger tables (attempts, tool attempts, context snapshots, attribution)
+│   │   │       ├── schema.ts    # Ledger tables (attempts, tool attempts, context snapshots, attribution, session-name tombstones)
 │   │   │       ├── cost.ts      # Cost calculation (reported header → token/energy formula)
 │   │   │       ├── middleware.ts # Attempt accounting middleware (between retry and throttle)
 │   │   │       ├── tool-attempt-store.ts # Tool invocation telemetry
@@ -562,7 +562,7 @@ Applied via `wrapLanguageModel()`:
 ### Accounting & Analytics
 - **Ledger** (`providers/accounting/`): SQLite `~/.orchid/accounting.db` — `provider_attempts`, `tool_attempts`, `context_snapshots`, `subagent_attribution`. Each attempt freezes a `FrozenProviderRequestSnapshot` (provider/connection/model/pricing) and records outcome (`pending|succeeded|failed|interrupted`) + normalized usage; `insertPending()` before I/O, idempotent `finalize()`, crash recovery for pendings.
 - **Cost** (`cost.ts`): prefers the `x-request-cost-usd` response header (`provider-reported`), else token/energy formulas from frozen pricing (`Decimal.js`); `unknown` when ambiguous. Billing estimates never influence recorded cost.
-- **Analytics IPC** (`ipc/analytics.ts`): `analytics:overview`, `analytics:sessions`, `analytics:session_detail`, `analytics:models`, `analytics:tools`, `analytics:subagents`, `analytics:context` — all accept an optional Zod-validated `{startDate?, endDate?}` time range; queries in `analytics-queries.ts`.
+- **Analytics IPC** (`ipc/analytics.ts`): `analytics:overview`, `analytics:sessions`, `analytics:session_detail`, `analytics:models`, `analytics:tools`, `analytics:subagents`, `analytics:context`, `analytics:model_detail`, `analytics:subagent_detail`, `analytics:context_session_detail` — all accept an optional Zod-validated `{startDate?, endDate?}` time range; queries in `analytics-queries.ts` (sessions also accepts `limit`/`offset` for pagination).
 - **Renderer**: `AnalyticsView.tsx` with tabs Overview (totals + time series + breakdowns), Sessions (per-session aggregates + detail), Models & Providers, Tools (invocations/durations/offload rate), Subagents (by name/type/tier), Context (token breakdown + top sessions). `TimeRangeSelector` provides preset + custom ranges (`useTimeRange`).
 
 ### RAG Pipeline

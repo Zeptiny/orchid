@@ -74,11 +74,17 @@ function SessionList({ timeRange, onRowClick }: { timeRange: AnalyticsTimeRange;
     setPage(0);
   }, [timeRange]);
 
+  const totalPages = Math.max(1, Math.ceil((data?.totalSessions ?? 0) / SESSIONS_PAGE_SIZE));
+
+  // Clamp when the ledger shrinks (e.g. a filter change) so the pager can
+  // never sit past the last page.
+  useEffect(() => {
+    setPage((p) => Math.min(p, totalPages - 1));
+  }, [totalPages]);
+
   if (loading) return <div className="p-8 text-base-content/50">Loading sessions…</div>;
   if (error) return <div className="p-8 text-error">Error: {error}</div>;
   if (!data) return null;
-
-  const totalPages = Math.max(1, Math.ceil(data.totalSessions / SESSIONS_PAGE_SIZE));
 
   return (
     <div className="space-y-4">
@@ -404,7 +410,7 @@ function SessionDetail({ sessionId, timeRange, onBack }: { sessionId: string; ti
             { key: 'completedAt', label: 'Completed', sortable: true, initialDir: 'desc', sortValue: (r) => dateSortValue(r.completedAt), render: (r) => formatDate(r.completedAt) },
           ]}
           rows={data.subagents}
-          rowKey={(r) => r.subagentId}
+          rowKey={(r) => `${r.subagentId}:${r.startedAt}`}
           emptyMessage="No subagents"
           pageSize={DETAIL_PAGE_SIZE}
         />

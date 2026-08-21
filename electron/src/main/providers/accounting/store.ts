@@ -426,8 +426,13 @@ export class ProviderAccountingStore {
     }
     db.pragma('foreign_keys = ON');
     applyAccountingSchemaMigrations(db);
-    db.prepare('INSERT OR REPLACE INTO schema_meta (key, value) VALUES (?, ?)')
-      .run('schema_version', String(ACCOUNTING_SCHEMA_VERSION));
+    // Monotonic upsert: an older binary opening a newer-schema db must not
+    // regress the recorded version (migrations are presence-checked, but the
+    // recorded version stays the diagnostic source of truth).
+    db.prepare(`
+      INSERT INTO schema_meta (key, value) VALUES (?, ?)
+      ON CONFLICT(key) DO UPDATE SET value = CAST(MAX(CAST(value AS INTEGER), CAST(excluded.value AS INTEGER)) AS TEXT)
+    `).run('schema_version', String(ACCOUNTING_SCHEMA_VERSION));
     this.db = db;
     return db;
   }

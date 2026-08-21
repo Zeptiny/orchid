@@ -6,6 +6,7 @@ import type {
   SubagentInvocation,
   SubagentModelUsage,
 } from '../../../shared/types/analytics';
+import { SUBAGENT_DETAIL_MAX_INVOCATIONS } from '../../../shared/types/analytics';
 import {
   StatCard, ChartCard, SortableTable, formatTokenCount, formatCost, formatCostAmount, formatDuration,
   formatTtft, formatTps, formatDate, truncateId,
@@ -247,12 +248,12 @@ function SubagentExplorer({ row, timeRange, onBack }: { row: SubagentSummary; ti
         <SortableTable
           columns={invocationColumns}
           rows={data.invocations}
-          rowKey={(r) => r.subagentId}
+          rowKey={(r) => `${r.subagentId}:${r.chainId}:${r.startedAt}`}
           emptyMessage="No invocations"
           pageSize={EXPLORER_PAGE_SIZE}
         />
         {data.truncated && (
-          <div className="mt-2 text-xs text-base-content/50">showing first 500 invocations</div>
+          <div className="mt-2 text-xs text-base-content/50">showing first {SUBAGENT_DETAIL_MAX_INVOCATIONS} invocations</div>
         )}
       </ChartCard>
 

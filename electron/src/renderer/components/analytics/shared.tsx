@@ -68,11 +68,13 @@ export function formatDuration(ms: number | null): string {
   return `${(ms / 1000).toFixed(1)}s`;
 }
 
+/** Format a tokens-per-second rate; null (no latency samples) renders as an em dash. */
 export function formatTps(tps: number | null): string {
   if (tps === null) return '—';
   return `${tps.toFixed(1)} tok/s`;
 }
 
+/** Format a time-to-first-token duration (same scale rules as {@link formatDuration}). */
 export function formatTtft(ms: number | null): string {
   return formatDuration(ms);
 }

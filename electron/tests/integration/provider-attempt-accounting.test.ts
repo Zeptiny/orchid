@@ -125,6 +125,57 @@ describe('provider attempt accounting middleware', () => {
       { type: 'finish', finishReason: 'stop', usage },
     ]);
     expect(firstTokenAt('session-finish-only')).toBeNull();
+
+    // Metadata/raw parts alone never stamp — only content deltas do.
+    await runStream('session-non-content', [
+      { type: 'stream-start', warnings: [] },
+      { type: 'response-metadata', id: '0', timestamp: '2026-07-12T10:00:00.000Z', modelId: 'claude-test' },
+      { type: 'raw', rawValue: { chunk: {} } },
+      { type: 'finish', finishReason: 'stop', usage },
+    ]);
+    expect(firstTokenAt('session-non-content')).toBeNull();
+
+    // Reasoning and tool-input deltas count as first tokens too.
+    await runStream('session-reasoning-first', [
+      { type: 'reasoning-delta', id: '0', delta: 'think' },
+      { type: 'finish', finishReason: 'stop', usage },
+    ]);
+    expect(firstTokenAt('session-reasoning-first')).not.toBeNull();
+    await runStream('session-tool-input-first', [
+      { type: 'tool-input-delta', id: '0', toolName: 'read', delta: '{"f' },
+      { type: 'finish', finishReason: 'stop', usage },
+    ]);
+    expect(firstTokenAt('session-tool-input-first')).not.toBeNull();
+    ledger.close();
+  });
+
+  it('keeps the first-token stamp when the stream errors after content', async () => {
+    const ledger = store();
+    const middleware = createAttemptAccountingMiddleware({
+      store: ledger, sessionId: 'session-err', chainId: 'chain-1', turnId: 'turn-1', snapshot: snapshot(),
+    });
+    const wrapStream = middleware.wrapStream! as unknown as (input: Record<string, unknown>) => Promise<{ stream: ReadableStream<unknown> }>;
+    const result = await wrapStream({
+      doStream: async () => ({
+        response: { headers: {} },
+        stream: new ReadableStream({
+          start(controller) {
+            controller.enqueue({ type: 'text-delta', id: '0', delta: 'partial' });
+            controller.enqueue({ type: 'error', error: new Error('boom') });
+            controller.close();
+          },
+        }),
+      }),
+      doGenerate: async () => { throw new Error('not used'); },
+      params: {}, model: {},
+    });
+    await consume(result.stream);
+
+    const row = ledger.getDatabase()
+      .prepare('SELECT outcome, first_token_at FROM provider_attempts WHERE session_id = ?')
+      .get('session-err') as { outcome: string; first_token_at: string | null };
+    expect(row.outcome).toBe('failed');
+    expect(row.first_token_at).not.toBeNull();
     ledger.close();
   });
 

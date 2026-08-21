@@ -7,6 +7,7 @@ import type {
   ModelTokensOverTimePoint,
   AnalyticsTimeRange,
 } from '../../../shared/types/analytics';
+import { TTFT_BUCKET_MS } from '../../../shared/types/analytics';
 import {
   StatCard,
   ChartCard,
@@ -287,7 +288,7 @@ function ModelExplorer({ model, timeRange, onBack }: { model: ModelBreakdown; ti
     const minBucket = Math.min(...data.ttftHistogram.map((b) => b.bucketMs));
     const maxBucket = Math.max(...data.ttftHistogram.map((b) => b.bucketMs));
     const rows: { bucket: string; count: number }[] = [];
-    for (let ms = minBucket; ms <= maxBucket; ms += 50) {
+    for (let ms = minBucket; ms <= maxBucket; ms += TTFT_BUCKET_MS) {
       rows.push({ bucket: `${ms}ms`, count: counts.get(ms) ?? 0 });
     }
     return rows;

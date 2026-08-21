@@ -4,10 +4,12 @@ import type {
   AnalyticsTimeRange,
   ContextCompactionEvent,
   ContextJumpEvent,
+  ContextResult,
   ContextSessionDetailPoint,
   ContextSessionDetailResult,
   ContextSessionPickerEntry,
 } from '../../../shared/types/analytics';
+import { CONTEXT_DETAIL_MAX_POINTS } from '../../../shared/types/analytics';
 import {
   StatCard,
   ChartCard,
@@ -246,7 +248,7 @@ function ContextSessionDrilldown({ detail }: { detail: ContextSessionDetailResul
         <StatCard
           label="Snapshots"
           value={detail.series.length}
-          subtext={detail.truncated ? 'capped at newest 2000' : undefined}
+          subtext={detail.truncated ? `capped at newest ${CONTEXT_DETAIL_MAX_POINTS}` : undefined}
         />
         <StatCard label="Peak Used Tokens" value={peakUsedTokens === null ? '—' : formatTokenCount(peakUsedTokens)} />
         <StatCard
@@ -448,9 +450,13 @@ export function ContextTab({ timeRange }: { timeRange: AnalyticsTimeRange }) {
     Assistant: data.avgBreakdown.assistantTokens,
   }] : [], [data]);
 
-  if (loading) return <StateMessage kind="loading" title="Loading Context…" />;
-  if (error) return <div className="p-8 text-error">Error: {error}</div>;
-  if (!data) return null;
+  // Aggregate-view guards: with a session selected the drill-down renders from
+  // its own query — an aggregate refetch must not unmount it.
+  if (selectedSessionId === null) {
+    if (loading) return <StateMessage kind="loading" title="Loading Context…" />;
+    if (error) return <div className="p-8 text-error">Error: {error}</div>;
+    if (!data) return null;
+  }
 
   return (
     <div className="space-y-6">
@@ -487,117 +493,133 @@ export function ContextTab({ timeRange }: { timeRange: AnalyticsTimeRange }) {
       {selectedSessionId !== null ? (
         detailQuery.error !== null ? (
           <div className="p-8 text-error">Error: {detailQuery.error}</div>
-        ) : detail === null ? (
+        ) : detailQuery.loading || detail === null ? (
           <StateMessage kind="loading" title="Loading Session Context…" />
         ) : (
           <ContextSessionDrilldown key={detail.sessionId} detail={detail} />
         )
-      ) : (
-        <>
-          <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
-            <StatCard label="Total Snapshots" value={data.totalSnapshots} />
-            <StatCard label="Avg Used Tokens" value={formatTokenCount(data.avgBreakdown.usedTokens)} />
-            <StatCard label="Avg System Tokens" value={formatTokenCount(data.avgBreakdown.systemTokens)} />
-            <StatCard label="Avg Tools Tokens" value={formatTokenCount(data.avgBreakdown.toolsTokens + data.avgBreakdown.toolUseTokens)} />
-          </div>
-
-          <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-            <ChartCard
-              title="Context Growth"
-              className="lg:col-span-2"
-              empty={growthData.length === 0}
-              emptyMessage="No context snapshots recorded"
-            >
-              {(data.totalSessionCount > data.topSessions.length
-                || data.totalSubagentCount > data.topSubagents.length) && (
-                <div className="mb-2 space-y-0.5 text-xs text-base-content/50">
-                  {data.totalSessionCount > data.topSessions.length && (
-                    <div>(showing top {data.topSessions.length} of {data.totalSessionCount} sessions)</div>
-                  )}
-                  {data.totalSubagentCount > data.topSubagents.length && (
-                    <div>(showing top {data.topSubagents.length} of {data.totalSubagentCount} subagents)</div>
-                  )}
-                </div>
-              )}
-              <ResponsiveContainer width="100%" height={300}>
-                <LineChart data={growthData}>
-                  <CartesianGrid strokeDasharray="3 3" stroke={GRID_STROKE} />
-                  <XAxis dataKey="capturedAt" tick={axisTickProps} tickFormatter={(value) => formatTimestamp(String(value))} />
-                  <YAxis tick={axisTickProps} tickFormatter={(value) => formatTokenCount(Number(value))} />
-                  <Tooltip {...tokenTooltipProps} labelFormatter={(label) => formatTimestamp(String(label))} />
-                  <Legend />
-                  {data.topSessions.map((series, i) => (
-                    <Line
-                      key={series.sessionId}
-                      type="monotone"
-                      dataKey={series.sessionId}
-                      name={sessionLabel(series.sessionName, series.sessionId)}
-                      stroke={CHART_PALETTE[i % CHART_PALETTE.length]}
-                      strokeWidth={2}
-                      connectNulls
-                      isAnimationActive={false}
-                    />
-                  ))}
-                  {data.topSubagents.map((series, i) => (
-                    <Line
-                      key={`${SUBAGENT_SERIES_KEY_PREFIX}${series.subagentId}`}
-                      type="monotone"
-                      dataKey={`${SUBAGENT_SERIES_KEY_PREFIX}${series.subagentId}`}
-                      name={subagentLabel(series)}
-                      stroke={CHART_PALETTE[(data.topSessions.length + i) % CHART_PALETTE.length]}
-                      strokeWidth={1.5}
-                      strokeDasharray="5 3"
-                      connectNulls
-                      isAnimationActive={false}
-                    />
-                  ))}
-                </LineChart>
-              </ResponsiveContainer>
-            </ChartCard>
-
-            <ChartCard title="Context Breakdown (Average)" empty={data.totalSnapshots === 0} emptyMessage="No context snapshots recorded">
-              <ResponsiveContainer width="100%" height={300}>
-                <BarChart data={breakdownData} layout="vertical">
-                  <CartesianGrid strokeDasharray="3 3" stroke={GRID_STROKE} />
-                  <XAxis type="number" tick={axisTickProps} tickFormatter={(value) => formatTokenCount(Number(value))} />
-                  <YAxis type="category" dataKey="name" tick={axisTickProps} />
-                  <Tooltip {...tokenTooltipProps} />
-                  <Legend />
-                  <Bar dataKey="System" stackId="a" fill={CHART_PALETTE[0]} />
-                  <Bar dataKey="Tools" stackId="a" fill={CHART_PALETTE[2]} />
-                  <Bar dataKey="Tool Results" stackId="a" fill={CHART_PALETTE[3]} />
-                  <Bar dataKey="User" stackId="a" fill={CHART_PALETTE[1]} />
-                  <Bar dataKey="Assistant" stackId="a" fill={CHART_PALETTE[4]} />
-                </BarChart>
-              </ResponsiveContainer>
-            </ChartCard>
-
-            <ChartCard title="Largest Contexts" empty={data.topSessions.length === 0} emptyMessage="No context snapshots recorded">
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="border-b border-base-300 text-left">
-                    <th className="px-3 py-2 font-medium text-base-content/70">Session</th>
-                    <th className="px-3 py-2 text-right font-medium text-base-content/70">Max Used Tokens</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {data.topSessions.map((series) => (
-                    <tr
-                      key={series.sessionId}
-                      title="Drill into session"
-                      className="cursor-pointer border-b border-base-300/50 hover:bg-base-200"
-                      onClick={() => handleSelectSession(series.sessionId)}
-                    >
-                      <td className="px-3 py-2 text-base-content/90">{sessionLabel(series.sessionName, series.sessionId)}</td>
-                      <td className="px-3 py-2 text-right text-base-content/90">{formatTokenCount(series.maxUsedTokens)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </ChartCard>
-          </div>
-        </>
-      )}
+      ) : data !== null ? (
+        <AggregateContextView
+          data={data}
+          growthData={growthData}
+          breakdownData={breakdownData}
+          onSelectSession={handleSelectSession}
+        />
+      ) : null}
     </div>
+  );
+}
+
+function AggregateContextView({ data, growthData, breakdownData, onSelectSession }: {
+  data: ContextResult;
+  growthData: ReadonlyArray<Record<string, string | number>>;
+  breakdownData: ReadonlyArray<Record<string, string | number>>;
+  onSelectSession: (sessionId: string) => void;
+}) {
+  return (
+    <>
+      <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+        <StatCard label="Total Snapshots" value={data.totalSnapshots} />
+        <StatCard label="Avg Used Tokens" value={formatTokenCount(data.avgBreakdown.usedTokens)} />
+        <StatCard label="Avg System Tokens" value={formatTokenCount(data.avgBreakdown.systemTokens)} />
+        <StatCard label="Avg Tools Tokens" value={formatTokenCount(data.avgBreakdown.toolsTokens + data.avgBreakdown.toolUseTokens)} />
+      </div>
+
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+        <ChartCard
+          title="Context Growth"
+          className="lg:col-span-2"
+          empty={growthData.length === 0}
+          emptyMessage="No context snapshots recorded"
+        >
+          {(data.totalSessionCount > data.topSessions.length
+            || data.totalSubagentCount > data.topSubagents.length) && (
+            <div className="mb-2 space-y-0.5 text-xs text-base-content/50">
+              {data.totalSessionCount > data.topSessions.length && (
+                <div>(showing top {data.topSessions.length} of {data.totalSessionCount} sessions)</div>
+              )}
+              {data.totalSubagentCount > data.topSubagents.length && (
+                <div>(showing top {data.topSubagents.length} of {data.totalSubagentCount} subagents)</div>
+              )}
+            </div>
+          )}
+          <ResponsiveContainer width="100%" height={300}>
+            <LineChart data={growthData}>
+              <CartesianGrid strokeDasharray="3 3" stroke={GRID_STROKE} />
+              <XAxis dataKey="capturedAt" tick={axisTickProps} tickFormatter={(value) => formatTimestamp(String(value))} />
+              <YAxis tick={axisTickProps} tickFormatter={(value) => formatTokenCount(Number(value))} />
+              <Tooltip {...tokenTooltipProps} labelFormatter={(label) => formatTimestamp(String(label))} />
+              <Legend />
+              {data.topSessions.map((series, i) => (
+                <Line
+                  key={series.sessionId}
+                  type="monotone"
+                  dataKey={series.sessionId}
+                  name={sessionLabel(series.sessionName, series.sessionId)}
+                  stroke={CHART_PALETTE[i % CHART_PALETTE.length]}
+                  strokeWidth={2}
+                  connectNulls
+                  isAnimationActive={false}
+                />
+              ))}
+              {data.topSubagents.map((series, i) => (
+                <Line
+                  key={`${SUBAGENT_SERIES_KEY_PREFIX}${series.subagentId}`}
+                  type="monotone"
+                  dataKey={`${SUBAGENT_SERIES_KEY_PREFIX}${series.subagentId}`}
+                  name={subagentLabel(series)}
+                  stroke={CHART_PALETTE[(data.topSessions.length + i) % CHART_PALETTE.length]}
+                  strokeWidth={1.5}
+                  strokeDasharray="5 3"
+                  connectNulls
+                  isAnimationActive={false}
+                />
+              ))}
+            </LineChart>
+          </ResponsiveContainer>
+        </ChartCard>
+
+        <ChartCard title="Context Breakdown (Average)" empty={data.totalSnapshots === 0} emptyMessage="No context snapshots recorded">
+          <ResponsiveContainer width="100%" height={300}>
+            <BarChart data={breakdownData} layout="vertical">
+              <CartesianGrid strokeDasharray="3 3" stroke={GRID_STROKE} />
+              <XAxis type="number" tick={axisTickProps} tickFormatter={(value) => formatTokenCount(Number(value))} />
+              <YAxis type="category" dataKey="name" tick={axisTickProps} />
+              <Tooltip {...tokenTooltipProps} />
+              <Legend />
+              <Bar dataKey="System" stackId="a" fill={CHART_PALETTE[0]} />
+              <Bar dataKey="Tools" stackId="a" fill={CHART_PALETTE[2]} />
+              <Bar dataKey="Tool Results" stackId="a" fill={CHART_PALETTE[3]} />
+              <Bar dataKey="User" stackId="a" fill={CHART_PALETTE[1]} />
+              <Bar dataKey="Assistant" stackId="a" fill={CHART_PALETTE[4]} />
+            </BarChart>
+          </ResponsiveContainer>
+        </ChartCard>
+
+        <ChartCard title="Largest Contexts" empty={data.topSessions.length === 0} emptyMessage="No context snapshots recorded">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="border-b border-base-300 text-left">
+                <th className="px-3 py-2 font-medium text-base-content/70">Session</th>
+                <th className="px-3 py-2 text-right font-medium text-base-content/70">Max Used Tokens</th>
+              </tr>
+            </thead>
+            <tbody>
+              {data.topSessions.map((series) => (
+                <tr
+                  key={series.sessionId}
+                  title="Drill into session"
+                  className="cursor-pointer border-b border-base-300/50 hover:bg-base-200"
+                  onClick={() => onSelectSession(series.sessionId)}
+                >
+                  <td className="px-3 py-2 text-base-content/90">{sessionLabel(series.sessionName, series.sessionId)}</td>
+                  <td className="px-3 py-2 text-right text-base-content/90">{formatTokenCount(series.maxUsedTokens)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </ChartCard>
+      </div>
+    </>
   );
 }
