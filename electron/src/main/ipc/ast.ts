@@ -16,6 +16,8 @@ import { ASTStore } from '../ast/store';
 import { withDisposable } from '../utils/with-disposable';
 import { resolveBoundProjectPath } from './session';
 import { getProjectTrustState } from '../project/trust';
+import { getProjectRuntimeRegistry } from '../project/runtime';
+import type { Config } from '../config';
 import { astIndexSchema } from './payload-schemas';
 
 function broadcastProgress(projectPath: string, progress: ASTIndexProgress): void {
@@ -98,9 +100,20 @@ export function registerASTIPC(): void {
       };
     }
 
+    // Inline fallback consistency: the worker self-loads project config, but a
+    // missing worker bundle falls back to this main-thread snapshot. If the
+    // runtime cannot be resolved (e.g. the directory vanished), index without
+    // an explicit config and let the process-wide config apply.
+    let runtimeConfig: Config | undefined;
+    try {
+      runtimeConfig = getProjectRuntimeRegistry().get(projectPath).config;
+    } catch {
+      runtimeConfig = undefined;
+    }
     return indexProject({
       force,
       projectPath,
+      config: runtimeConfig,
       progressCallback: (progress) => broadcastProgress(projectPath, progress),
     });
   });

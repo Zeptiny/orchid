@@ -5,12 +5,14 @@ import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/re
 import userEvent from '@testing-library/user-event';
 import {
   ProjectConfigView,
+} from '../../src/renderer/components/ProjectConfigView';
+import {
   fieldInputId,
   isPlainRecord,
   readGlobalValue,
   readStoredOverride,
   toInputValue,
-} from '../../src/renderer/components/ProjectConfigView';
+} from '../../src/renderer/utils/project-config';
 import type { DefinitionsListResult } from '../../src/shared/types/definitions';
 import type { Config } from '../../src/shared/types/ipc-boundary';
 
@@ -29,6 +31,15 @@ const MOCK_CONFIG = {
   directory_tree_depth: 2,
   theme: 'default',
   personality: 'default',
+  agents_md: {
+    enabled: true,
+    filenames: ['AGENTS.md', 'CLAUDE.md'],
+    max_file_bytes: 32768,
+    max_chain_depth: 8,
+    enforce_on_write: 'warn',
+    inject_on_read: true,
+    include_local: false,
+  },
   rag: {
     chunk_size: 2000,
     chunk_overlap: 200,
@@ -66,6 +77,7 @@ const MOCK_CONFIG = {
   bg_prompt_tail_lines: 8,
   bg_prompt_tail_chars: 500,
   mcp_result_max_bytes: 5242880,
+  session_title_max_wait_seconds: 15,
   max_background_processes: 64,
   bg_output_head_bytes: 524288,
   bg_output_tail_bytes: 524288,
@@ -197,7 +209,7 @@ describe('ProjectConfigView', () => {
     expect(html).toContain('Back');
   });
 
-  it('renders all eight tab buttons', () => {
+  it('renders all ten tab buttons', () => {
     const html = renderStatic();
     for (const label of [
       'General',
@@ -205,6 +217,7 @@ describe('ProjectConfigView', () => {
       'MCP Servers',
       'Tier Models',
       'RAG',
+      'AGENTS.md',
       'Skills',
       'Agents',
       'Personalities',
@@ -257,11 +270,136 @@ describe('ProjectConfigView', () => {
     expect(inputById('mcp_result_max_bytes').placeholder).toBe('5242880');
   });
 
-  it('tier models tab points to global configuration', async () => {
+  it('mcp tab renders the project server editor and saves deletions as tombstones', async () => {
+    const user = userEvent.setup();
+    const { saveProject } = await renderLoaded({
+      mcp_servers: {
+        docs: { command: 'npx', args: ['-y', 'docs-mcp'] },
+      },
+    });
+    await switchTab(user, 'MCP Servers');
+
+    expect(screen.getByText('docs')).toBeTruthy();
+    expect(screen.getByText('+ Add Server')).toBeTruthy();
+
+    await user.click(screen.getByRole('button', { name: 'Delete' }));
+    expect(screen.queryByText('docs')).toBeNull();
+    expect(screen.getByText('Unsaved')).toBeTruthy();
+
+    const saveButton = screen.getByText('Save').closest('button') as HTMLButtonElement;
+    await user.click(saveButton);
+
+    await waitFor(() => {
+      expect(saveProject).toHaveBeenCalledWith({
+        projectDir: PROJECT_DIR,
+        updates: { mcp_servers: { docs: null } },
+      });
+    });
+  });
+
+  it('mcp tab shows home-only servers as inherited and read-only', async () => {
+    const user = userEvent.setup();
+    const getHome = vi.fn().mockResolvedValue({
+      ...MOCK_CONFIG,
+      mcp_servers: { shared: { command: 'shared-mcp' } },
+    });
+    const readProject = vi.fn().mockResolvedValue({ projectDir: PROJECT_DIR, overrides: {} });
+    (window as Record<string, unknown>).orchid = {
+      config: {
+        readProject,
+        getHome,
+        saveProject: vi.fn(),
+        savePermissionScope: vi.fn().mockResolvedValue({ status: 'saved' }),
+      },
+      definitions: { list: vi.fn().mockResolvedValue(MOCK_DEFINITIONS) },
+    };
+    renderView();
+    await waitFor(() => {
+      expect(screen.queryByText('Loading project configuration…')).toBeNull();
+    });
+    await switchTab(user, 'MCP Servers');
+
+    expect(screen.getByText('shared')).toBeTruthy();
+    expect(screen.getByText('inherited from global')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Override' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Delete' })).toBeNull();
+  });
+
+  it('mcp tab commits a new project server through the add editor', async () => {
+    const user = userEvent.setup();
+    const { saveProject } = await renderLoaded();
+    await switchTab(user, 'MCP Servers');
+
+    await user.click(screen.getByText('+ Add Server'));
+    await user.click(screen.getByLabelText('Server ID'));
+    await user.keyboard('docs');
+    await user.click(screen.getByLabelText('Command'));
+    await user.keyboard('npx');
+    await user.click(screen.getByText('Add Server'));
+
+    expect(screen.getByText('docs')).toBeTruthy();
+    expect(screen.getByText('Unsaved')).toBeTruthy();
+
+    const saveButton = screen.getByText('Save').closest('button') as HTMLButtonElement;
+    await user.click(saveButton);
+
+    await waitFor(() => {
+      expect(saveProject).toHaveBeenCalledWith({
+        projectDir: PROJECT_DIR,
+        updates: { mcp_servers: { docs: { command: 'npx' } } },
+      });
+    });
+  });
+
+  it('mcp tab commits an Override seeded from an inherited home server', async () => {
+    const user = userEvent.setup();
+    const getHome = vi.fn().mockResolvedValue({
+      ...MOCK_CONFIG,
+      mcp_servers: { shared: { command: 'shared-mcp', args: ['-v'] } },
+    });
+    const readProject = vi.fn().mockResolvedValue({ projectDir: PROJECT_DIR, overrides: {} });
+    const saveProject = vi.fn().mockResolvedValue(undefined);
+    (window as Record<string, unknown>).orchid = {
+      config: {
+        readProject,
+        getHome,
+        saveProject,
+        savePermissionScope: vi.fn().mockResolvedValue({ status: 'saved' }),
+      },
+      definitions: { list: vi.fn().mockResolvedValue(MOCK_DEFINITIONS) },
+    };
+    renderView();
+    await waitFor(() => {
+      expect(screen.queryByText('Loading project configuration…')).toBeNull();
+    });
+    await switchTab(user, 'MCP Servers');
+
+    await user.click(screen.getByRole('button', { name: 'Override' }));
+    expect((screen.getByLabelText('Command') as HTMLInputElement).value).toBe('shared-mcp');
+    await user.click(screen.getByText('Add Server'));
+
+    expect(screen.getByText('overrides global')).toBeTruthy();
+
+    const saveButton = screen.getByText('Save').closest('button') as HTMLButtonElement;
+    await user.click(saveButton);
+
+    await waitFor(() => {
+      expect(saveProject).toHaveBeenCalledWith({
+        projectDir: PROJECT_DIR,
+        updates: {
+          mcp_servers: { shared: { command: 'shared-mcp', args: ['-v'] } },
+        },
+      });
+    });
+  });
+
+  it('tier models tab renders project-scope assignments instead of a global-only notice', async () => {
     const user = userEvent.setup();
     await renderLoaded();
     await switchTab(user, 'Tier Models');
-    expect(screen.getByText('Tier models are configured globally')).toBeTruthy();
+    expect(screen.queryByText('Tier models are configured globally')).toBeNull();
+    expect(screen.getByText('Default model')).toBeTruthy();
+    expect(screen.getByText(/Unset tiers inherit the global assignment/)).toBeTruthy();
   });
 
   it('field change updates draft and shows dirty state', async () => {
@@ -368,15 +506,16 @@ describe('ProjectConfigView', () => {
     });
   });
 
-  it('theme select stages an override and saves it', async () => {
+  it('agents-md tab stages a nested agents_md override', async () => {
     const user = userEvent.setup();
     const { saveProject } = await renderLoaded();
-    const themeSelect = selectById('theme');
-    expect(themeSelect).not.toBeNull();
-    expect(themeSelect.value).toBe('');
-    expect(themeSelect.options[0].textContent).toBe('Inherit global (Default (Dark))');
+    await switchTab(user, 'AGENTS.md');
 
-    await user.selectOptions(themeSelect, 'light');
+    const enforceSelect = selectById('agents_md.enforce_on_write');
+    expect(enforceSelect).not.toBeNull();
+    expect(enforceSelect.options[0].textContent).toBe('Inherit global (warn)');
+
+    await user.selectOptions(enforceSelect, 'block');
     expect(screen.getByText('Unsaved')).toBeTruthy();
 
     const saveButton = screen.getByText('Save').closest('button') as HTMLButtonElement;
@@ -385,7 +524,7 @@ describe('ProjectConfigView', () => {
     await waitFor(() => {
       expect(saveProject).toHaveBeenCalledWith({
         projectDir: PROJECT_DIR,
-        updates: { theme: 'light' },
+        updates: { agents_md: { enforce_on_write: 'block' } },
       });
     });
   });

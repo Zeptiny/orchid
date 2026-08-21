@@ -559,6 +559,14 @@ export interface ProjectConfigReadResult {
 
 export interface ProjectConfigSaveMessage {
   projectDir: string;
+  /**
+   * Project-config overrides. Keys outside the per-project allow-list are
+   * rejected (fail-loud), not filtered. Special semantics: `mcp_servers`
+   * merges per alias with `null` tombstones for removed aliases;
+   * `tier_models`/`tier_reasoning_effort` replace the stored map exactly
+   * (absent tier = inherit global); `default_model: null` clears the
+   * override instead of storing an explicit null.
+   */
   updates: Record<string, unknown>;
 }
 

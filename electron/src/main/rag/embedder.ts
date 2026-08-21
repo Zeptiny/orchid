@@ -13,6 +13,7 @@
  */
 
 import type { ModelSelection } from '../../shared/types/provider';
+import type { RAGConfig } from '../../shared/types/ipc-boundary';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -312,7 +313,7 @@ export class ApiEmbedder implements IEmbedder {
  * credential, and code-owned endpoint resolution; legacy alias strings never
  * reach this function as executable providers.
  */
-export async function createEmbedderFromConfig(): Promise<IEmbedder> {
+export async function createEmbedderFromConfig(rag?: RAGConfig): Promise<IEmbedder> {
   let cfgThreads = DEFAULT_THREADS;
   let cfgBatch = DEFAULT_BATCH_SIZE;
   let cfgModel: string | undefined;
@@ -320,22 +321,24 @@ export async function createEmbedderFromConfig(): Promise<IEmbedder> {
   let cfgApiTimeout: number | undefined;
   let cfgApiRetries: number | undefined;
   try {
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const { getConfig } = require('../config/loader') as typeof import('../config/loader');
-    const rag = getConfig().rag;
-    cfgModel = rag.embedding_model;
-    cfgApiSelection = rag.embedding_api_model;
-    if (typeof rag.embedding_threads === 'number' && rag.embedding_threads > 0) {
-      cfgThreads = rag.embedding_threads;
+    const conf = rag ?? (() => {
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const { getConfig } = require('../config/loader') as typeof import('../config/loader');
+      return getConfig().rag;
+    })();
+    cfgModel = conf.embedding_model;
+    cfgApiSelection = conf.embedding_api_model;
+    if (typeof conf.embedding_threads === 'number' && conf.embedding_threads > 0) {
+      cfgThreads = conf.embedding_threads;
     }
-    if (typeof rag.embedding_batch_size === 'number' && rag.embedding_batch_size > 0) {
-      cfgBatch = rag.embedding_batch_size;
+    if (typeof conf.embedding_batch_size === 'number' && conf.embedding_batch_size > 0) {
+      cfgBatch = conf.embedding_batch_size;
     }
-    if (typeof rag.embedding_api_timeout === 'number' && rag.embedding_api_timeout > 0) {
-      cfgApiTimeout = rag.embedding_api_timeout * 1000;
+    if (typeof conf.embedding_api_timeout === 'number' && conf.embedding_api_timeout > 0) {
+      cfgApiTimeout = conf.embedding_api_timeout * 1000;
     }
-    if (typeof rag.embedding_api_retries === 'number' && rag.embedding_api_retries >= 0) {
-      cfgApiRetries = rag.embedding_api_retries;
+    if (typeof conf.embedding_api_retries === 'number' && conf.embedding_api_retries >= 0) {
+      cfgApiRetries = conf.embedding_api_retries;
     }
   } catch {
     // config unavailable — use hard defaults

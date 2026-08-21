@@ -372,39 +372,163 @@ describe('config:read_project', () => {
 });
 
 describe('config:save_project', () => {
+  const SELECTION = { connectionId: '123e4567-e89b-12d3-a456-426614174000', modelId: 'model-x' };
+
   it('merges updates and writes to the project config path', async () => {
-    await callSaveProject({ theme: 'project-theme', command_timeout: 42 });
+    await callSaveProject({ personality: 'project-persona', command_timeout: 42 });
 
     const write = lastProjectWrite();
     expect(write.path).toBe(path.join(projectDir, '.orchid.json'));
-    expect(write.data['theme']).toBe('project-theme');
+    expect(write.data['personality']).toBe('project-persona');
     expect(write.data['command_timeout']).toBe(42);
     expect(write.options).toEqual({ hardenDirectory: false });
   });
 
   it('deletes a key with a null tombstone from an existing config', async () => {
-    writeProjectConfig({ theme: 'kept', command_timeout: 99 });
+    writeProjectConfig({ personality: 'kept', command_timeout: 99 });
 
     await callSaveProject({ command_timeout: null });
 
     const write = lastProjectWrite();
-    expect(write.data['theme']).toBe('kept');
+    expect(write.data['personality']).toBe('kept');
     expect(write.data).not.toHaveProperty('command_timeout');
   });
 
-  it('filters out keys outside the project config allowlist', async () => {
+  it('persists per-project MCP servers and default model', async () => {
     await callSaveProject({
-      theme: 'visible',
-      mcp_servers: { evil: { command: 'rm' } },
-      permissions: { Bash: 'approve' },
-      default_model: { connectionId: 'c', modelId: 'm' },
+      mcp_servers: { docs: { command: 'npx', args: ['-y', 'docs-mcp'] } },
+      default_model: SELECTION,
     });
 
     const write = lastProjectWrite();
-    expect(write.data['theme']).toBe('visible');
-    expect(write.data).not.toHaveProperty('mcp_servers');
-    expect(write.data).not.toHaveProperty('permissions');
+    expect(write.data['mcp_servers']).toEqual({
+      docs: { command: 'npx', args: ['-y', 'docs-mcp'] },
+    });
+    expect(write.data['default_model']).toEqual(SELECTION);
+  });
+
+  it('deletes an MCP alias with a null tombstone from the project config', async () => {
+    writeProjectConfig({
+      mcp_servers: { keep: { command: 'keep' }, drop: { command: 'drop' } },
+    });
+
+    await callSaveProject({ mcp_servers: { drop: null } });
+
+    const write = lastProjectWrite();
+    expect(write.data['mcp_servers']).toEqual({ keep: { command: 'keep' } });
+  });
+
+  it('clears a default_model override with null instead of storing an explicit null', async () => {
+    writeProjectConfig({ default_model: SELECTION });
+
+    await callSaveProject({ default_model: null });
+
+    const write = lastProjectWrite();
     expect(write.data).not.toHaveProperty('default_model');
+  });
+
+  it('replaces tier maps exactly so removed overrides are deleted', async () => {
+    writeProjectConfig({
+      tier_models: {
+        seed: { ...SELECTION, modelId: 'seed-model' },
+        crown: { ...SELECTION, modelId: 'crown-model' },
+      },
+      tier_reasoning_effort: { seed: 'low', crown: 'high' },
+    });
+
+    await callSaveProject({
+      tier_models: { crown: { ...SELECTION, modelId: 'crown-model' } },
+      tier_reasoning_effort: { crown: 'high' },
+    });
+
+    const write = lastProjectWrite();
+    expect(write.data['tier_models']).toEqual({
+      crown: { ...SELECTION, modelId: 'crown-model' },
+    });
+    expect(write.data['tier_reasoning_effort']).toEqual({ crown: 'high' });
+  });
+
+  it('persists agents_md overrides', async () => {
+    await callSaveProject({ agents_md: { enforce_on_write: 'block' } });
+
+    const write = lastProjectWrite();
+    expect(write.data['agents_md']).toEqual({ enforce_on_write: 'block' });
+  });
+
+  it('rejects keys outside the project config allowlist without writing', async () => {
+    await expect(callSaveProject({
+      permissions: { Bash: 'approve' },
+      theme: 'light',
+    })).rejects.toThrow(/Not configurable per project/);
+    await expect(callSaveProject({
+      permissions: { Bash: 'approve' },
+    })).rejects.toThrow(/permissions/);
+
+    expect(mocks.writtenConfigs).toHaveLength(0);
+  });
+
+  it('rejects a mixed payload (allowed + disallowed) without a partial write', async () => {
+    await expect(callSaveProject({
+      command_timeout: 45,
+      subagents: { max_active_global: 2 },
+    })).rejects.toThrow(/Not configurable per project: subagents/);
+
+    expect(mocks.writtenConfigs).toHaveLength(0);
+  });
+
+  it('rejects null tier maps instead of silently ignoring them', async () => {
+    await expect(callSaveProject({ tier_models: null })).rejects.toThrow(
+      /tier_models must be an object map/,
+    );
+    await expect(callSaveProject({ tier_reasoning_effort: null })).rejects.toThrow(
+      /tier_reasoning_effort must be an object map/,
+    );
+    expect(mocks.writtenConfigs).toHaveLength(0);
+  });
+
+  it('drops prototype-pollution aliases from tier maps', async () => {
+    const poisoned = JSON.parse(
+      `{"tier_models":{"__proto__":{"connectionId":"x"},"seed":${JSON.stringify(SELECTION)}},"tier_reasoning_effort":{"constructor":"low"}}`,
+    ) as Record<string, unknown>;
+
+    await callSaveProject(poisoned);
+
+    const write = lastProjectWrite();
+    expect(write.data['tier_models']).toEqual({ seed: SELECTION });
+    expect(write.data['tier_reasoning_effort']).toEqual({});
+  });
+
+  it('preserves project permissions written through the permission-scope channel', async () => {
+    writeProjectConfig({
+      permissions: { grep: 'ask' },
+      command_timeout: 60,
+    });
+
+    await callSaveProject({ command_timeout: 45 });
+
+    const write = lastProjectWrite();
+    expect(write.data['permissions']).toEqual({ grep: 'ask' });
+    expect(write.data['command_timeout']).toBe(45);
+  });
+
+  it('unblocks unrelated saves when the project file was already invalid', async () => {
+    writeProjectConfig({ default_model: 'not-a-selection' });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      await callSaveProject({ command_timeout: 45 });
+      const write = lastProjectWrite();
+      expect(write.data['command_timeout']).toBe(45);
+      // The pre-existing invalid value is preserved, not silently dropped.
+      expect(write.data['default_model']).toBe('not-a-selection');
+      expect(warn).toHaveBeenCalledTimes(1);
+    } finally {
+      warn.mockRestore();
+    }
+
+    // But a save that itself introduces an invalid value (on a clean file)
+    // still rejects.
+    writeProjectConfig({ command_timeout: 45 });
+    await expect(callSaveProject({ personality: 42 })).rejects.toThrow(/Invalid project config/);
   });
 
   it('rejects schema-violating values without writing', async () => {
@@ -419,7 +543,7 @@ describe('config:save_project', () => {
     vi.mocked(loader.ConfigManager.reset).mockClear();
     vi.mocked(loader.ConfigManager.load).mockClear();
 
-    await callSaveProject({ theme: 'cache-test' });
+    await callSaveProject({ command_timeout: 45 });
 
     expect(loader.ConfigManager.reset).toHaveBeenCalledTimes(1);
     expect(mocks.clearProjectRuntimeRegistry).toHaveBeenCalledTimes(1);
@@ -433,16 +557,16 @@ describe('config:save_project', () => {
     mocks.state.workspaceCwd = '/some/other/workspace';
     mocks.state.sessionCwds = [projectDir];
 
-    await callSaveProject({ theme: 'cross-project' });
+    await callSaveProject({ command_timeout: 45 });
     const write = lastProjectWrite();
     expect(write.path).toBe(path.join(projectDir, '.orchid.json'));
-    expect(write.data['theme']).toBe('cross-project');
+    expect(write.data['command_timeout']).toBe(45);
   });
 
   it('rejects a projectDir that is neither the selected workspace nor a session project', async () => {
     mocks.state.workspaceCwd = '/some/other/workspace';
 
-    await expect(callSaveProject({ theme: 'x' })).rejects.toThrow(
+    await expect(callSaveProject({ command_timeout: 45 })).rejects.toThrow(
       /selected workspace or any project with sessions/i,
     );
     expect(mocks.writtenConfigs).toHaveLength(0);

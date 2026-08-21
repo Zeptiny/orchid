@@ -1,13 +1,28 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { DefinitionsListResult } from '../../shared/types/definitions';
-import type { Config, PermissionRule, RAGConfig } from '../../shared/types/ipc-boundary';
+import type { Config, PermissionRule } from '../../shared/types/ipc-boundary';
 import type { ConfigPatch, ConfigPatchMap } from '../../shared/types/ipc';
 import { useGlobalShortcuts } from '../keyboard';
-import { THEMES, THEME_NAMES, type ThemeName } from '../themes';
 import { parseConfigNumber } from '../utils/config-draft';
+import {
+  deepEqual,
+  fieldInputId,
+  isPlainRecord,
+  readGlobalValue,
+  readStoredOverride,
+  toInputValue,
+  toServerMap,
+  withMcpTombstones,
+} from '../utils/project-config';
 import { AgentsTab } from './Preferences/AgentsTab';
+import { MCPServersTab } from './Preferences/MCPServersTab';
 import { PermissionsTab } from './Preferences/PermissionsTab';
 import { PersonalitiesTab } from './Preferences/PersonalitiesTab';
+import {
+  ProjectTierModelsTab,
+  readTierOverrides,
+  type ProjectTierOverrides,
+} from './Preferences/ProjectTierModelsTab';
 import { SkillsTab } from './Preferences/SkillsTab';
 import { Keycaps } from './Keycaps';
 import { Alert } from './ui/Alert';
@@ -37,6 +52,7 @@ type ProjectTab =
   | 'mcp'
   | 'tiers'
   | 'rag'
+  | 'agents-md'
   | 'skills'
   | 'agents'
   | 'personalities'
@@ -53,6 +69,7 @@ const PROJECT_TABS: ProjectTabDef[] = [
   { id: 'mcp', label: 'MCP Servers' },
   { id: 'tiers', label: 'Tier Models' },
   { id: 'rag', label: 'RAG' },
+  { id: 'agents-md', label: 'AGENTS.md' },
   { id: 'compaction', label: 'Compaction' },
   { id: 'skills', label: 'Skills' },
   { id: 'agents', label: 'Agents' },
@@ -65,7 +82,6 @@ type ProjectFieldKind =
   | 'text'
   | 'string-list'
   | 'boolean'
-  | 'theme'
   | 'personality'
   | 'select';
 
@@ -94,10 +110,17 @@ const TAB_SECTIONS: Partial<Record<ProjectTab, ProjectConfigSection[]>> = {
     {
       title: 'General',
       fields: [
-        { key: 'theme', label: 'Theme', kind: 'theme' },
         { key: 'personality', label: 'Personality', kind: 'personality' },
         { key: 'ignored_dirs', label: 'Ignored Directories', kind: 'string-list', fullWidth: true },
         { key: 'always_expand_tool_groups', label: 'Always Expand Tool Groups', kind: 'boolean' },
+        {
+          key: 'session_title_max_wait_seconds',
+          label: 'Session Title Max Wait (s)',
+          kind: 'number',
+          min: 0,
+          max: 3600,
+          hint: 'Deadline after a turn starts before auto-naming from the conversation. 0 disables the deadline.',
+        },
       ],
     },
     {
@@ -178,6 +201,31 @@ const TAB_SECTIONS: Partial<Record<ProjectTab, ProjectConfigSection[]>> = {
       ],
     },
   ],
+  'agents-md': [
+    {
+      title: 'AGENTS.md Discovery',
+      fields: [
+        { key: 'agents_md.enabled', label: 'Enabled', kind: 'boolean' },
+        { key: 'agents_md.inject_on_read', label: 'Inject On Read', kind: 'boolean' },
+        { key: 'agents_md.include_local', label: 'Include Local', kind: 'boolean' },
+        {
+          key: 'agents_md.enforce_on_write',
+          label: 'Enforce On Write',
+          kind: 'select',
+          options: ['block', 'inject', 'warn', 'off'],
+        },
+        {
+          key: 'agents_md.filenames',
+          label: 'Filenames',
+          kind: 'string-list',
+          fullWidth: true,
+          hint: 'Up to 16 filenames.',
+        },
+        { key: 'agents_md.max_file_bytes', label: 'Max File Bytes', kind: 'integer', min: 1, max: 2_097_152 },
+        { key: 'agents_md.max_chain_depth', label: 'Max Chain Depth', kind: 'integer', min: 1, max: 32 },
+      ],
+    },
+  ],
   compaction: [
     {
       title: 'Main Scope',
@@ -212,66 +260,6 @@ const ALL_FIELD_KEYS = Object.values(TAB_SECTIONS).flatMap((sections) => (
   (sections ?? []).flatMap((section) => section.fields.map((field) => field.key))
 ));
 
-/** Type guard for a non-null, non-array plain object. */
-export function isPlainRecord(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === 'object' && !Array.isArray(value);
-}
-
-/** Read a stored project override by field key, resolving `rag.*` and `compaction.*` into nested maps. */
-export function readStoredOverride(overrides: Record<string, unknown>, key: string): unknown {
-  if (key === 'compaction') {
-    return overrides['compaction'];
-  }
-  if (key.startsWith('compaction.')) {
-    const parts = key.slice('compaction.'.length).split('.');
-    let cur: unknown = overrides['compaction'];
-    for (const part of parts) {
-      if (!isPlainRecord(cur)) return undefined;
-      cur = (cur as Record<string, unknown>)[part];
-    }
-    return cur;
-  }
-  if (key.startsWith('rag.')) {
-    const rag = overrides['rag'];
-    return isPlainRecord(rag) ? rag[key.slice(4)] : undefined;
-  }
-  return overrides[key];
-}
-
-/** Read a value from the global (home) config by field key, resolving `rag.*` and `compaction.*` into nested maps. */
-export function readGlobalValue(config: Config | null, key: string): unknown {
-  if (!config) return undefined;
-  if (key === 'compaction') {
-    return (config as unknown as Record<string, unknown>)['compaction'];
-  }
-  if (key.startsWith('compaction.')) {
-    const parts = key.slice('compaction.'.length).split('.');
-    let cur: unknown = (config as unknown as Record<string, unknown>)['compaction'];
-    for (const part of parts) {
-      if (cur == null || typeof cur !== 'object') return undefined;
-      cur = (cur as Record<string, unknown>)[part];
-    }
-    return cur;
-  }
-  if (key.startsWith('rag.')) {
-    return config.rag[key.slice(4) as keyof RAGConfig];
-  }
-  return config[key as keyof Config];
-}
-
-/** Coerce a config value into an editable form input value (arrays become comma-separated). */
-export function toInputValue(value: unknown): string | number {
-  if (value === null || value === undefined) return '';
-  if (typeof value === 'number') return value;
-  if (Array.isArray(value)) return value.map(String).join(', ');
-  return String(value);
-}
-
-/** Derive a stable, DOM-safe input element id from a config field key. */
-export function fieldInputId(key: string): string {
-  return `project-config-${key.replace(/[^a-zA-Z0-9]+/g, '-')}`;
-}
-
 function toPlaceholder(value: unknown): string {
   if (value === null || value === undefined) return '';
   if (Array.isArray(value)) return value.map(String).join(', ');
@@ -297,6 +285,8 @@ export function ProjectConfigView({ projectDir, onNewChat, onClose }: ProjectCon
   const [homeConfig, setHomeConfig] = useState<Config | null>(null);
   const [draft, setDraft] = useState<Record<string, unknown>>({});
   const [permissionDraft, setPermissionDraft] = useState<ConfigPatchMap<PermissionRule>>({});
+  const [tierDraft, setTierDraft] = useState<ProjectTierOverrides | null>(null);
+  const [mcpDraft, setMcpDraft] = useState<Record<string, Record<string, unknown>> | null>(null);
   const [definitions, setDefinitions] = useState<DefinitionsListResult | null>(null);
   const [defsLoading, setDefsLoading] = useState(true);
   const [loading, setLoading] = useState(true);
@@ -329,6 +319,8 @@ export function ProjectConfigView({ projectDir, onNewChat, onClose }: ProjectCon
     setError(null);
     setDraft({});
     setPermissionDraft({});
+    setTierDraft(null);
+    setMcpDraft(null);
     setDefsLoading(true);
     async function load() {
       try {
@@ -384,14 +376,50 @@ export function ProjectConfigView({ projectDir, onNewChat, onClose }: ProjectCon
     [permissionDraft, storedProjectPermissions],
   );
 
-  const dirty = configDirty || permissionDirty;
+  const storedTierOverrides = useMemo(() => readTierOverrides(overrides), [overrides]);
+
+  const tierDirty = useMemo(
+    () => tierDraft !== null && !(
+      deepEqual(tierDraft.defaultModel, storedTierOverrides.defaultModel)
+      && deepEqual(tierDraft.tierModels, storedTierOverrides.tierModels)
+      && deepEqual(tierDraft.tierReasoningEffort, storedTierOverrides.tierReasoningEffort)
+    ),
+    [tierDraft, storedTierOverrides],
+  );
+
+  const storedMcpServers = useMemo(
+    () => toServerMap(overrides['mcp_servers']),
+    [overrides],
+  );
+
+  const mcpDirty = useMemo(
+    () => mcpDraft !== null && !deepEqual(mcpDraft, storedMcpServers),
+    [mcpDraft, storedMcpServers],
+  );
+
+  const dirty = configDirty || permissionDirty || tierDirty || mcpDirty;
 
   const overrideCount = useMemo(
     () => ALL_FIELD_KEYS.filter((key) => effectiveValue(key) != null).length,
     [effectiveValue],
   );
 
-  const totalOverrideCount = overrideCount + Object.keys(effectiveProjectPermissions).length;
+  const tierOverrideCount = useMemo(
+    () => (storedTierOverrides.defaultModel ? 1 : 0)
+      + Object.keys(storedTierOverrides.tierModels).length
+      + Object.keys(storedTierOverrides.tierReasoningEffort).length,
+    [storedTierOverrides],
+  );
+
+  const mcpOverrideCount = useMemo(
+    () => Object.keys(storedMcpServers).length,
+    [storedMcpServers],
+  );
+
+  const totalOverrideCount = overrideCount
+    + Object.keys(effectiveProjectPermissions).length
+    + tierOverrideCount
+    + mcpOverrideCount;
 
   const personalityNames = useMemo(() => {
     const names = new Set<string>();
@@ -419,7 +447,6 @@ export function ProjectConfigView({ projectDir, onNewChat, onClose }: ProjectCon
       if (trimmed === '') return { ...previous, [field.key]: null };
       switch (field.kind) {
         case 'text':
-        case 'theme':
         case 'personality':
         case 'select':
           return { ...previous, [field.key]: trimmed };
@@ -470,6 +497,8 @@ export function ProjectConfigView({ projectDir, onNewChat, onClose }: ProjectCon
       for (const key of Object.keys(effectiveProjectPermissions)) next[key] = null;
       return next;
     });
+    setTierDraft({ defaultModel: null, tierModels: {}, tierReasoningEffort: {} });
+    setMcpDraft({});
   }, [effectiveProjectPermissions]);
 
   const handleSave = useCallback(async () => {
@@ -487,11 +516,15 @@ export function ProjectConfigView({ projectDir, onNewChat, onClose }: ProjectCon
     try {
       const updates: Record<string, unknown> = {};
       const ragUpdates: Record<string, unknown> = {};
+      const agentsMdUpdates: Record<string, unknown> = {};
       const compactionUpdates: Record<string, Record<string, unknown>> = {};
       for (const [key, value] of Object.entries(draft)) {
         const stored = readStoredOverride(overrides, key);
         if ((value ?? undefined) === (stored ?? undefined)) continue;
         if (key.startsWith('rag.')) ragUpdates[key.slice(4)] = value;
+        else if (key.startsWith('agents_md.')) {
+          agentsMdUpdates[key.slice('agents_md.'.length)] = value;
+        }
         else if (key.startsWith('compaction.')) {
           const remainder = key.slice('compaction.'.length);
           const parts = remainder.split('.');
@@ -508,7 +541,23 @@ export function ProjectConfigView({ projectDir, onNewChat, onClose }: ProjectCon
         else updates[key] = value;
       }
       if (Object.keys(ragUpdates).length > 0) updates['rag'] = ragUpdates;
+      if (Object.keys(agentsMdUpdates).length > 0) updates['agents_md'] = agentsMdUpdates;
       if (Object.keys(compactionUpdates).length > 0) updates['compaction'] = compactionUpdates;
+
+      if (tierDraft !== null) {
+        if (!deepEqual(tierDraft.defaultModel, storedTierOverrides.defaultModel)) {
+          updates['default_model'] = tierDraft.defaultModel;
+        }
+        if (!deepEqual(tierDraft.tierModels, storedTierOverrides.tierModels)) {
+          updates['tier_models'] = tierDraft.tierModels;
+        }
+        if (!deepEqual(tierDraft.tierReasoningEffort, storedTierOverrides.tierReasoningEffort)) {
+          updates['tier_reasoning_effort'] = tierDraft.tierReasoningEffort;
+        }
+      }
+      if (mcpDraft !== null && !deepEqual(mcpDraft, storedMcpServers)) {
+        updates['mcp_servers'] = withMcpTombstones(mcpDraft, storedMcpServers);
+      }
 
       const permissionUpdates: Record<string, PermissionRule | null> = {};
       for (const [key, value] of Object.entries(permissionDraft)) {
@@ -532,12 +581,26 @@ export function ProjectConfigView({ projectDir, onNewChat, onClose }: ProjectCon
       setOverrides(isPlainRecord(result.overrides) ? result.overrides : {});
       setDraft({});
       setPermissionDraft({});
+      setTierDraft(null);
+      setMcpDraft(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to save project configuration.');
     } finally {
       setSaving(false);
     }
-  }, [dirty, saving, draft, overrides, permissionDraft, storedProjectPermissions, projectDir]);
+  }, [
+    dirty,
+    saving,
+    draft,
+    overrides,
+    permissionDraft,
+    storedProjectPermissions,
+    storedTierOverrides,
+    storedMcpServers,
+    tierDraft,
+    mcpDraft,
+    projectDir,
+  ]);
 
   useGlobalShortcuts({
     handlers: {
@@ -555,7 +618,9 @@ export function ProjectConfigView({ projectDir, onNewChat, onClose }: ProjectCon
     activeTab === 'general' ||
     activeTab === 'permissions' ||
     activeTab === 'mcp' ||
+    activeTab === 'tiers' ||
     activeTab === 'rag' ||
+    activeTab === 'agents-md' ||
     activeTab === 'compaction';
 
   const renderSelectOptions = (field: ProjectFieldSpec, homeValue: unknown) => {
@@ -568,22 +633,6 @@ export function ProjectConfigView({ projectDir, onNewChat, onClose }: ProjectCon
           {opts.map((opt) => (
             <option key={opt} value={opt}>
               {opt}
-            </option>
-          ))}
-        </>
-      );
-    }
-    if (field.kind === 'theme') {
-      const homeLabel =
-        typeof homeValue === 'string' && homeValue in THEMES
-          ? THEMES[homeValue as ThemeName]
-          : toPlaceholder(homeValue);
-      return (
-        <>
-          <option value="">{homeLabel ? `Inherit global (${homeLabel})` : 'Inherit global'}</option>
-          {THEME_NAMES.map((name) => (
-            <option key={name} value={name}>
-              {THEMES[name]}
             </option>
           ))}
         </>
@@ -618,7 +667,6 @@ export function ProjectConfigView({ projectDir, onNewChat, onClose }: ProjectCon
     const inputId = fieldInputId(field.key);
     const isSelect =
       field.kind === 'boolean' ||
-      field.kind === 'theme' ||
       field.kind === 'personality' ||
       field.kind === 'select';
     return (
@@ -693,10 +741,46 @@ export function ProjectConfigView({ projectDir, onNewChat, onClose }: ProjectCon
   const renderTab = () => {
     switch (activeTab) {
       case 'general':
-      case 'mcp':
       case 'rag':
+      case 'agents-md':
       case 'compaction':
         return renderConfigTab(activeTab);
+      case 'mcp': {
+        const effectiveMcp = mcpDraft ?? storedMcpServers;
+        const homeServers = toServerMap(homeConfig?.mcp_servers);
+        const inheritedServers = Object.fromEntries(
+          Object.entries(homeServers).filter(([alias]) => !(alias in effectiveMcp)),
+        );
+        const overridingAliases = new Set(
+          Object.keys(effectiveMcp).filter((alias) => alias in homeServers),
+        );
+        return (
+          <>
+            {renderConfigTab('mcp')}
+            <MCPServersTab
+              mcpServers={effectiveMcp}
+              inheritedServers={inheritedServers}
+              overridingAliases={overridingAliases}
+              onChange={setMcpDraft}
+            />
+            <p className="px-1 text-xs text-base-content/60">
+              Server changes take effect for new turns in this project; running turns keep
+              their current servers. Project stdio servers run from this directory. Note:
+              entries (including auth tokens and env values) are stored in{' '}
+              <code>.orchid.json</code>, which is usually committed — avoid secrets here.
+            </p>
+          </>
+        );
+      }
+      case 'tiers':
+        return (
+          <ProjectTierModelsTab
+            homeConfig={homeConfig}
+            stored={storedTierOverrides}
+            draft={tierDraft}
+            onDraftChange={setTierDraft}
+          />
+        );
       case 'permissions':
         if (!permissionConfig) {
           return (
@@ -711,13 +795,6 @@ export function ProjectConfigView({ projectDir, onNewChat, onClose }: ProjectCon
             projectDir={projectDir}
             inheritedPermissions={homeConfig?.permissions ?? {}}
           />
-        );
-      case 'tiers':
-        return (
-          <StateMessage kind="info" title="Tier models are configured globally">
-            Model and reasoning effort assignments apply to every project. Open the global
-            Configuration view to change them.
-          </StateMessage>
         );
       case 'skills':
         if (!definitions) {

@@ -92,10 +92,11 @@ export const ragSearchHandler: ToolHandler = async (
       );
     }
 
-    // Search
+    // Search — pass the effective top_k explicitly; the store's internal
+    // fallback reads process-global config and would ignore project overrides.
     const results = store.search(
       Array.from(queryEmbedding),
-      top_k,
+      top_k ?? cfg.rag.top_k,
       file_pattern,
     );
 

@@ -10,7 +10,7 @@ import * as path from 'node:path';
 import { Worker } from 'node:worker_threads';
 import { langForExtension, loadQueryFile, parseFile, runQuery } from './parser';
 import { ASTStore, type Symbol } from './store';
-import { getConfig } from '../config';
+import { getConfig, type Config } from '../config';
 import { withDisposableAsync } from '../utils/with-disposable';
 import type { ASTIndexResult, ASTIndexProgress } from '../../shared/types/ipc-boundary';
 
@@ -133,6 +133,11 @@ export interface IndexProjectOptions {
   force?: boolean;
   progressCallback?: ASTIndexProgressCallback;
   /**
+    * Frozen per-project config (ignored_dirs, ast_max_file_size) captured by
+    * the caller. Falls back to the process-wide config when omitted.
+    */
+  config?: Config;
+  /**
    * Force the index to run on the current thread (used by the worker itself
    * and tests that need a synchronous-style progress callback).
    */
@@ -190,6 +195,7 @@ export async function indexProject(
         opts.projectPath!,
         opts.force === true,
         trackProgress,
+        opts.config,
       );
       // Worker set its own session flag; mark main-process session as ready too
       // so ensureIndexed() short-circuits after a successful run.
@@ -215,11 +221,12 @@ export async function runIndexProjectImpl(opts: {
   projectPath?: string;
   force?: boolean;
   progressCallback?: ASTIndexProgressCallback;
+  config?: Config;
 }): Promise<ASTIndexResult> {
   const { force = false, progressCallback } = opts;
   const { projectPath } = opts;
 
-  const cfg = getConfig();
+  const cfg = opts.config ?? getConfig();
   if (!projectPath) {
     throw new Error('projectPath is required; pass the active workspace cwd');
   }
@@ -292,7 +299,7 @@ export async function runIndexProjectImpl(opts: {
     });
 
     try {
-      const readResult = await readAndHash(filepath);
+      const readResult = await readAndHash(filepath, cfg.ast_max_file_size);
 
       if (!readResult) {
         if (existingHashes[rel]) {
@@ -383,13 +390,14 @@ async function runIndexInWorker(
   projectPath: string,
   force: boolean,
   progressCallback?: ASTIndexProgressCallback,
+  config?: Config,
 ): Promise<ASTIndexResult> {
   const workerPath = path.join(__dirname, 'index-worker.js');
   if (!fs.existsSync(workerPath)) {
     console.warn(
       `AST worker not found at ${workerPath}; running index inline on the main thread`,
     );
-    return runIndexProjectImpl({ projectPath, force, progressCallback });
+    return runIndexProjectImpl({ projectPath, force, progressCallback, config });
   }
 
   const startData: AstWorkerStartData = {
@@ -407,7 +415,7 @@ async function runIndexInWorker(
     console.warn(
       `AST worker failed to start (${err instanceof Error ? err.message : String(err)}); running index inline on the main thread`,
     );
-    return runIndexProjectImpl({ projectPath, force, progressCallback });
+    return runIndexProjectImpl({ projectPath, force, progressCallback, config });
   }
 
   return new Promise<ASTIndexResult>((resolve, reject) => {
@@ -506,11 +514,13 @@ function shouldInclude(filepath: string): boolean {
  * Read file content and compute MD5 hash.
  * Returns null for files that should be skipped (too large, empty, binary).
  */
-async function readAndHash(filepath: string): Promise<{ content: string; hash: string } | null> {
-  const cfg = getConfig();
+async function readAndHash(
+  filepath: string,
+  maxFileSize: number,
+): Promise<{ content: string; hash: string } | null> {
   try {
     const stat = await fs.promises.stat(filepath);
-    if (stat.size > cfg.ast_max_file_size) return null;
+    if (stat.size > maxFileSize) return null;
     if (stat.size === 0) return null;
 
     const content = await fs.promises.readFile(filepath, 'utf-8');

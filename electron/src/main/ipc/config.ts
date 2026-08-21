@@ -16,7 +16,7 @@ import {
   HOME_CONFIG_PATH,
   PROJECT_CONFIG_NAME,
 } from '../config/loader';
-import { isPlainObject, mergeConfigUpdates } from '../config/merge';
+import { isPlainObject, isUnsafeKey, mergeConfigUpdates } from '../config/merge';
 import { configSchema } from '../config/schema';
 import { withConfigSaveLock } from '../config/write-lock';
 import {
@@ -32,6 +32,13 @@ import {
 } from './payload-schemas';
 import { resolveAuthorizedProjectDir } from './project-target';
 
+/**
+ * Config keys a project `.orchid.json` may override. Kept aligned with what
+ * the project runtime actually consumes from `ProjectRuntime.config` — keys
+ * that are process-global by implementation (`subagents`, worker pool sizing,
+ * onboarding state, …) stay out. `theme` is renderer-global and has no
+ * per-project consumer, so it is not overridable either.
+ */
 const PROJECT_CONFIG_ALLOWED_KEYS = new Set([
   'command_timeout',
   'command_max_output_bytes',
@@ -64,15 +71,29 @@ const PROJECT_CONFIG_ALLOWED_KEYS = new Set([
   'mcp_startup_timeout',
   'mcp_per_server_timeout',
   'mcp_result_max_bytes',
+  'mcp_servers',
+  'agents_md',
+  'default_model',
+  'tier_models',
+  'tier_reasoning_effort',
   'rag',
   'compaction',
   'ignored_dirs',
   'always_expand_tool_groups',
-  'theme',
   'personality',
 ]);
 
 // ── IPC registration ─────────────────────────────────────────────────────────
+
+/** Copy a plain record map, dropping prototype-pollution aliases. */
+function copyMapValues<T>(map: Record<string, T>): Record<string, T> {
+  const out: Record<string, T> = {};
+  for (const [key, value] of Object.entries(map)) {
+    if (isUnsafeKey(key)) continue;
+    out[key] = value;
+  }
+  return out;
+}
 
 function loadJsonSafe(filePath: string): unknown {
   try {
@@ -163,12 +184,44 @@ export function registerConfigIPC(): void {
 
     const verifiedProjectDir = resolveAuthorizedProjectDir(event.sender.id, projectDir);
 
-    const filteredUpdates: Record<string, unknown> = {};
-    for (const [key, value] of Object.entries(updates)) {
-      if (PROJECT_CONFIG_ALLOWED_KEYS.has(key)) {
-        filteredUpdates[key] = value;
+    // Fail loudly instead of silently dropping keys: a caller must learn that
+    // a key cannot be configured per project, not believe it was saved.
+    const rejectedKeys = Object.keys(updates).filter((key) => !PROJECT_CONFIG_ALLOWED_KEYS.has(key));
+    if (rejectedKeys.length > 0) {
+      throw new Error(
+        `Not configurable per project: ${[...rejectedKeys].sort().join(', ')}. ` +
+          'Use the global configuration for these settings.',
+      );
+    }
+
+    const filteredUpdates: Record<string, unknown> = { ...updates };
+
+    // Project-scope override semantics that differ from the global merge:
+    // - `default_model: null` clears the override (inherit home) instead of
+    //   masking the home selection with an explicit null.
+    // - `tier_models` / `tier_reasoning_effort` are exact-map replacements so
+    //   removing one tier's override deletes its key (per-tier merge cannot
+    //   express deletion because null is a meaningful "use default" value).
+    // A null/non-object tier map would fall back to whole-key merge semantics
+    // that are silent no-ops here, so it is rejected with the same fail-loud
+    // contract as the allow-list above.
+    for (const mapKey of ['tier_models', 'tier_reasoning_effort'] as const) {
+      if (mapKey in filteredUpdates && !isPlainObject(filteredUpdates[mapKey])) {
+        throw new Error(
+          `Not configurable per project: ${mapKey} must be an object map of tier assignments.`,
+        );
       }
     }
+    const clearDefaultModel = filteredUpdates['default_model'] === null;
+    if (clearDefaultModel) delete filteredUpdates['default_model'];
+    const tierModelsUpdate = isPlainObject(filteredUpdates['tier_models'])
+      ? copyMapValues(filteredUpdates['tier_models'] as Record<string, unknown>)
+      : undefined;
+    if (tierModelsUpdate) delete filteredUpdates['tier_models'];
+    const tierReasoningUpdate = isPlainObject(filteredUpdates['tier_reasoning_effort'])
+      ? copyMapValues(filteredUpdates['tier_reasoning_effort'] as Record<string, unknown>)
+      : undefined;
+    if (tierReasoningUpdate) delete filteredUpdates['tier_reasoning_effort'];
 
     return withConfigSaveLock(async () => {
       const configPath = path.join(verifiedProjectDir, PROJECT_CONFIG_NAME);
@@ -177,14 +230,34 @@ export function registerConfigIPC(): void {
         isPlainObject(current) ? current : {},
         filteredUpdates,
       );
-      const filtered = Object.fromEntries(
-        Object.entries(merged).filter(([k]) => PROJECT_CONFIG_ALLOWED_KEYS.has(k)),
-      );
-      const validated = configSchema.safeParse(filtered);
-      if (!validated.success) {
-        throw new Error(`Invalid project config: ${validated.error.message}`);
+      if (clearDefaultModel) delete merged['default_model'];
+      if (tierModelsUpdate !== undefined) merged['tier_models'] = tierModelsUpdate;
+      if (tierReasoningUpdate !== undefined) {
+        merged['tier_reasoning_effort'] = tierReasoningUpdate;
       }
-      atomicWriteJson(configPath, filtered, { hardenDirectory: false });
+      // Write `merged` as-is: every updated key passed the allow-list above,
+      // and pre-existing file keys that are managed through other channels
+      // (notably project `permissions` via config:savePermissionScope) must
+      // survive a project-config save instead of being stripped.
+      const validated = configSchema.safeParse(merged);
+      if (!validated.success) {
+        // A hand-edited project file can already violate the schema under a
+        // key that is now allow-listed. Rejecting would block every unrelated
+        // save behind that pre-existing damage, so when the file was already
+        // invalid before this update, warn and write anyway (the invalid
+        // value is preserved as-is either way).
+        const prior = configSchema.safeParse(
+          isPlainObject(current) ? current : {},
+        );
+        if (prior.success) {
+          throw new Error(`Invalid project config: ${validated.error.message}`);
+        }
+        console.warn(
+          `[config] project config of '${verifiedProjectDir}' was already invalid ` +
+            `before this save; writing anyway: ${validated.error.message}`,
+        );
+      }
+      atomicWriteJson(configPath, merged, { hardenDirectory: false });
       ConfigManager.reset();
       clearProjectRuntimeRegistry();
       invalidateAllProjectMCPManagers();

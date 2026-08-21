@@ -252,6 +252,8 @@ function deepEqual(left: unknown, right: unknown): boolean {
   );
 }
 
+export { deepEqual };
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value != null && typeof value === 'object';
 }
