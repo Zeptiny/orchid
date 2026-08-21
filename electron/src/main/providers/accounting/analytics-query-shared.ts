@@ -458,8 +458,10 @@ export function toAttemptDetail(r: AttemptDetailRow, u: ParsedUsage): AttemptDet
     latencyMs: r.completed_at ? new Date(r.completed_at).getTime() - new Date(r.started_at).getTime() : null,
     firstTokenAt: r.first_token_at,
     ttftMs,
-    // Generation window must be positive to rate tokens.
-    tokensPerSecond: generationMs > 0
+    // Generation window must be positive to rate tokens, and only succeeded
+    // attempts rate them at all — crash-recovered rows carry a sentinel
+    // completed_at that would produce a bogus rate (see recordLatencySample).
+    tokensPerSecond: generationMs > 0 && r.outcome === 'succeeded'
       ? Math.round((u.outputTokens / (generationMs / 1000)) * 10) / 10
       : null,
     agentScope: r.agent_scope,

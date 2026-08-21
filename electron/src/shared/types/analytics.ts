@@ -95,6 +95,8 @@ export const CONTEXT_DETAIL_MAX_POINTS = 2000;
 export const SUBAGENT_DETAIL_MAX_INVOCATIONS = 500;
 /** TTFT histogram bucket width, ms. */
 export const TTFT_BUCKET_MS = 50;
+/** TTFT histogram overflow cap, ms — larger samples lump into this bucket. */
+export const TTFT_BUCKET_MAX_MS = 5000;
 
 export interface AttemptDetail {
   readonly attemptId: string;

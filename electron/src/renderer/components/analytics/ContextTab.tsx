@@ -589,13 +589,17 @@ function AggregateContextView({ data, growthData, breakdownData, onSelectSession
             </thead>
             <tbody>
               {data.topSessions.map((series) => (
-                <tr
-                  key={series.sessionId}
-                  title="Drill into session"
-                  className="cursor-pointer border-b border-base-300/50 hover:bg-base-200"
-                  onClick={() => onSelectSession(series.sessionId)}
-                >
-                  <td className="px-3 py-2 text-base-content/90">{sessionLabel(series.sessionName, series.sessionId)}</td>
+                <tr key={series.sessionId} className="border-b border-base-300/50 hover:bg-base-200">
+                  <td className="px-3 py-2 text-base-content/90">
+                    <button
+                      type="button"
+                      title="Drill into session"
+                      className="cursor-pointer text-left"
+                      onClick={() => onSelectSession(series.sessionId)}
+                    >
+                      {sessionLabel(series.sessionName, series.sessionId)}
+                    </button>
+                  </td>
                   <td className="px-3 py-2 text-right text-base-content/90">{formatTokenCount(series.maxUsedTokens)}</td>
                 </tr>
               ))}

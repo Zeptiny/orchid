@@ -11,6 +11,7 @@ import Decimal from 'decimal.js';
 import {
   CONTEXT_DETAIL_MAX_POINTS,
   SUBAGENT_DETAIL_MAX_INVOCATIONS,
+  TTFT_BUCKET_MAX_MS,
   TTFT_BUCKET_MS,
 } from '../../../shared/types/analytics';
 import type {
@@ -52,7 +53,6 @@ import {
 
 const MODEL_DETAIL_TOP_SESSIONS = 10;
 const MODEL_DETAIL_RECENT_ATTEMPTS = 50;
-const TTFT_BUCKET_MAX_MS = 5000;
 const CONTEXT_DETAIL_MAX_EVENTS = 10;
 
 // ── Subagent attribution ↔ attempt joins ──────────────────────────────────────
@@ -151,9 +151,13 @@ export function getModelDetail(
     ${tripleWhere(latencyRowGating())}
   `, [...tripleParams, ...dateFilter.params])) {
     const ttftMs = recordLatencySample(latencySamples, row);
-    const day = dailyTtft.get(row.date) ?? [];
-    day.push(ttftMs);
-    dailyTtft.set(row.date, day);
+    // Same validity rule as the aggregate: clock-skewed (negative) or
+    // non-finite spans are dropped from the daily percentiles too.
+    if (Number.isFinite(ttftMs) && ttftMs >= 0) {
+      const day = dailyTtft.get(row.date) ?? [];
+      day.push(ttftMs);
+      dailyTtft.set(row.date, day);
+    }
   }
   const latency = summarizeLatency(latencySamples);
 

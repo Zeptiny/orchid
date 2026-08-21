@@ -169,8 +169,8 @@ function ModelsList({ timeRange, onRowClick }: { timeRange: AnalyticsTimeRange; 
         <StatCard label="Total Tokens" value={formatTokenCount(totalInput + totalOutput)} subtext={`${formatTokenCount(totalInput)} in / ${formatTokenCount(totalOutput)} out`} />
         <StatCard label="API Calls" value={totalAttempts} subtext={`${totalSucceeded} succeeded`} />
         <StatCard label="Error Rate" value={errorRate} subtext={`${totalFailed} failed / ${totalInterrupted} interrupted`} />
-        <StatCard label="Avg TTFT" value={formatTtft(avgTtft)} subtext={`${ttftSamples.length} models sampled`} />
-        <StatCard label="Avg Speed" value={formatTps(avgSpeed)} subtext={`${speedSamples.length} models sampled`} />
+        <StatCard label="Avg TTFT (per model)" value={formatTtft(avgTtft)} subtext={`${ttftSamples.length} models sampled`} />
+        <StatCard label="Avg Speed (per model)" value={formatTps(avgSpeed)} subtext={`${speedSamples.length} models sampled`} />
       </div>
 
       <ChartCard title="Per-Model Breakdown">

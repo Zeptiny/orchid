@@ -17,6 +17,7 @@ import { ACCOUNTING_SCHEMA_SQL, applyAccountingSchemaMigrations } from './schema
 import {
   getContext,
   getModelDetail,
+  getOverview,
   getSubagentDetail,
   getContextSessionDetail,
   getContextSessionList,
@@ -29,6 +30,7 @@ const ACCOUNTING_DB_PATH = path.join(HOME_CONFIG_DIR, 'accounting.db');
 
 /** Query kinds the worker can execute (mirrored by the runner's dispatch). */
 export type AnalyticsQueryKind =
+  | 'overview'
   | 'context'
   | 'model_detail'
   | 'subagent_detail'
@@ -95,6 +97,13 @@ function handleExecute(message: AnalyticsWorkerExecuteMessage): void {
     let result: unknown;
     let sessionIds: string[];
     switch (query) {
+      case 'overview': {
+        // The full provider_attempts scan runs off the main process. Quota
+        // status is unavailable here — the runner patches it on the main side.
+        result = getOverview(timeRange ?? undefined, ctx);
+        sessionIds = [];
+        break;
+      }
       case 'context': {
         const context = getContext(sessionId ?? undefined, timeRange ?? undefined, ctx);
         result = context;

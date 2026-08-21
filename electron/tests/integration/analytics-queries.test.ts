@@ -60,9 +60,11 @@ let attributionStore: SubagentAttributionStore;
 let clockMs: number;
 
 /** Clock that advances 1 second on each call so started_at ≠ completed_at. */
+const CLOCK_STEP_MS = 1000;
+
 function clock(): Date {
   const d = new Date(clockMs);
-  clockMs += 1000;
+  clockMs += CLOCK_STEP_MS;
   return d;
 }
 
@@ -194,6 +196,10 @@ function seedStreamedAttempt(opts: {
   outcome?: 'succeeded' | 'failed' | 'interrupted';
   snapshot?: FrozenProviderRequestSnapshot;
 }): void {
+  // Spans below the clock step would move the clock backwards and seed
+  // garbage timestamps — fail the test instead of skewing every assertion.
+  expect(opts.ttftMs).toBeGreaterThanOrEqual(CLOCK_STEP_MS);
+  expect(opts.generationMs).toBeGreaterThanOrEqual(CLOCK_STEP_MS);
   providerStore.insertPending({
     attemptId: opts.attemptId,
     sessionId: opts.sessionId,
@@ -1282,7 +1288,7 @@ describe('analytics-queries', () => {
     it('drops clock-skewed negative TTFT samples from aggregates but reports them per attempt', () => {
       // Backward clock step: started_at pushed past first_token_at.
       seedStreamedAttempt({
-        attemptId: 'att-skew', sessionId: 'sess-skew', ttftMs: 800, generationMs: 1000, outputTokens: 100,
+        attemptId: 'att-skew', sessionId: 'sess-skew', ttftMs: 1000, generationMs: 1000, outputTokens: 100,
         snapshot: anthropicSnapshot('skew-model'),
       });
       providerStore.getDatabase().prepare(

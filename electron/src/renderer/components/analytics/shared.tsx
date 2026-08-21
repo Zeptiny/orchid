@@ -52,9 +52,11 @@ export function formatCostAmount(amount: string | null, currency: string | null)
 }
 
 /** Sort key for multi-currency cost columns: the largest amount across
- *  currencies, floored at zero so empty/negative inputs never lead. */
+ *  currencies, floored at zero so empty/negative inputs never lead.
+ *  Non-finite amounts are excluded (mirrors formatCostAmount) so malformed
+ *  rows can never make the key NaN. */
 export function maxCostAmount(totalCost: ReadonlyArray<{ currency: string; amount: string }>): number {
-  return Math.max(...totalCost.map((c) => Number(c.amount)), 0);
+  return Math.max(...totalCost.map((c) => Number(c.amount)).filter(Number.isFinite), 0);
 }
 
 /**
@@ -334,29 +336,51 @@ export function SortableTable<T>({
         </table>
       </div>
       {pageSize && sortedRows.length > pageSize && (
-        <div className="flex items-center justify-between px-1 py-2 text-xs text-base-content/50">
-          <span>
-            {clampedPage * pageSize + 1}–{Math.min((clampedPage + 1) * pageSize, sortedRows.length)} of {sortedRows.length}
-          </span>
-          <div className="flex gap-1">
-            <button
-              className="rounded px-2 py-1 hover:bg-base-200 disabled:opacity-30"
-              onClick={() => setPage((p) => Math.max(0, p - 1))}
-              disabled={clampedPage === 0}
-            >
-              ← Prev
-            </button>
-            <span className="px-2 py-1">Page {clampedPage + 1}/{totalPages}</span>
-            <button
-              className="rounded px-2 py-1 hover:bg-base-200 disabled:opacity-30"
-              onClick={() => setPage((p) => Math.min(totalPages - 1, p + 1))}
-              disabled={clampedPage >= totalPages - 1}
-            >
-              Next →
-            </button>
-          </div>
-        </div>
+        <TablePager
+          page={clampedPage}
+          totalPages={totalPages}
+          totalItems={sortedRows.length}
+          pageSize={pageSize}
+          onPageChange={setPage}
+        />
       )}
+    </div>
+  );
+}
+
+interface TablePagerProps {
+  /** Zero-based current page. */
+  page: number;
+  totalPages: number;
+  totalItems: number;
+  pageSize: number;
+  onPageChange: (page: number) => void;
+}
+
+/** Shared pager for paged analytics tables: range label + Prev/Next controls. */
+export function TablePager({ page, totalPages, totalItems, pageSize, onPageChange }: TablePagerProps) {
+  return (
+    <div className="flex items-center justify-between px-1 py-2 text-xs text-base-content/50">
+      <span>
+        {page * pageSize + 1}–{Math.min((page + 1) * pageSize, totalItems)} of {totalItems}
+      </span>
+      <div className="flex gap-1">
+        <button
+          className="rounded px-2 py-1 hover:bg-base-200 disabled:opacity-30"
+          onClick={() => onPageChange(Math.max(0, page - 1))}
+          disabled={page === 0}
+        >
+          ← Prev
+        </button>
+        <span className="px-2 py-1">Page {page + 1}/{totalPages}</span>
+        <button
+          className="rounded px-2 py-1 hover:bg-base-200 disabled:opacity-30"
+          onClick={() => onPageChange(Math.min(totalPages - 1, page + 1))}
+          disabled={page >= totalPages - 1}
+        >
+          Next →
+        </button>
+      </div>
     </div>
   );
 }

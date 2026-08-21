@@ -3,7 +3,6 @@ import { IPC_CHANNELS } from '../../shared/types/ipc';
 import { z } from 'zod';
 import type { AnalyticsTimeRange } from '../../shared/types/analytics';
 import {
-  getOverview,
   getSessions,
   getSessionDetail,
   getModels,
@@ -66,7 +65,7 @@ export function registerAnalyticsIPC(): void {
     if (!parsed.success) throw new Error('Invalid analytics:overview payload');
     const timeRange = parsed.data?.timeRange as AnalyticsTimeRange | undefined;
     try {
-      return getOverview(timeRange);
+      return await runAnalyticsQuery('overview', { timeRange });
     } catch (error) {
       console.error('[analytics] Overview query failed', { error });
       throw new Error(`Analytics overview query failed: ${error instanceof Error ? error.message : String(error)}`, { cause: error });

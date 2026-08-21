@@ -31,9 +31,9 @@ function snapshot(): FrozenProviderRequestSnapshot {
   };
 }
 
-function createStore() {
+function createStore(now?: () => Date) {
   tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'orchid-accounting-'));
-  return new ProviderAccountingStore({ dbPath: path.join(tempDir, 'accounting.db') });
+  return new ProviderAccountingStore({ dbPath: path.join(tempDir, 'accounting.db'), ...(now ? { now } : {}) });
 }
 
 describe('ProviderAccountingStore', () => {
@@ -123,8 +123,7 @@ describe('ProviderAccountingStore', () => {
 
   it('stamps first_token_at once per attempt (IS NULL guard keeps it idempotent)', () => {
     let clockMs = Date.parse('2026-07-12T10:00:00.000Z');
-    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'orchid-accounting-'));
-    const store = new ProviderAccountingStore({ dbPath: path.join(tempDir, 'accounting.db'), now: () => new Date(clockMs) });
+    const store = createStore(() => new Date(clockMs));
     store.insertPending({ attemptId: 'ttft-1', sessionId: 'session-1', chainId: null, turnId: null, sdkCallId: null, snapshot: snapshot() });
     store.markFirstToken('ttft-1');
     const stamped = (store.getDatabase()
@@ -145,8 +144,7 @@ describe('ProviderAccountingStore', () => {
 
   it('markFirstTokenAt writes the given timestamp and never lets a later stamp overwrite it', () => {
     let clockMs = Date.parse('2026-07-12T11:00:00.000Z');
-    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'orchid-accounting-'));
-    const store = new ProviderAccountingStore({ dbPath: path.join(tempDir, 'accounting.db'), now: () => new Date(clockMs) });
+    const store = createStore(() => new Date(clockMs));
     store.insertPending({ attemptId: 'ttft-at-1', sessionId: 'session-1', chainId: null, turnId: null, sdkCallId: null, snapshot: snapshot() });
 
     // The delta observes the clock; the deferred write persists that instant.

@@ -19,6 +19,7 @@ import {
   netInputTokens,
   netOutputTokens,
   tokenStackTooltipRows,
+  TablePager,
   CHART_PALETTE,
   GRID_STROKE,
   axisTickProps,
@@ -57,7 +58,11 @@ interface TokensByModelRow {
 }
 
 function SessionList({ timeRange, onRowClick }: { timeRange: AnalyticsTimeRange; onRowClick: (row: SessionSummary) => void }) {
-  const [page, setPage] = useState(0);
+  // Pagination is keyed to the time range: a range change resets to the first
+  // page within the same render, so the request never carries a stale offset.
+  const [pagination, setPagination] = useState({ range: timeRange, page: 0 });
+  const page = pagination.range === timeRange ? pagination.page : 0;
+  const setPage = (next: number) => setPagination({ range: timeRange, page: next });
   const { data, loading, error, refresh } = useAnalytics(
     () => window.orchid.analytics.sessions({
       timeRange,
@@ -67,17 +72,13 @@ function SessionList({ timeRange, onRowClick }: { timeRange: AnalyticsTimeRange;
     [timeRange, page],
   );
 
-  useEffect(() => {
-    setPage(0);
-  }, [timeRange]);
-
   const totalPages = Math.max(1, Math.ceil((data?.totalSessions ?? 0) / SESSIONS_PAGE_SIZE));
 
   // Clamp when the ledger shrinks (e.g. a filter change) so the pager can
   // never sit past the last page.
   useEffect(() => {
-    setPage((p) => Math.min(p, totalPages - 1));
-  }, [totalPages]);
+    setPage(Math.min(page, totalPages - 1));
+  }, [totalPages, page]);
 
   if (loading) return <div className="p-8 text-base-content/50">Loading sessions…</div>;
   if (error) return <div className="p-8 text-error">Error: {error}</div>;
@@ -97,7 +98,7 @@ function SessionList({ timeRange, onRowClick }: { timeRange: AnalyticsTimeRange;
             { key: 'inputTokens', label: 'Input Tokens', sortable: true, initialDir: 'desc', sortValue: (r) => r.inputTokens, render: (r) => formatTokenCount(r.inputTokens) },
             { key: 'outputTokens', label: 'Output Tokens', sortable: true, initialDir: 'desc', sortValue: (r) => r.outputTokens, render: (r) => formatTokenCount(r.outputTokens) },
             { key: 'cache', label: 'Cache', sortable: true, initialDir: 'desc', sortValue: (r) => r.cacheReadTokens, render: (r) => formatTokenCount(r.cacheReadTokens) },
-            { key: 'outcomes', label: 'Outcomes', sortable: true, initialDir: 'desc', sortValue: (r) => r.attempts, render: (r) => <span title={`${r.succeeded} succeeded / ${r.failed} failed / ${r.interrupted} interrupted`}>{r.succeeded}/{r.failed}/{r.interrupted}</span> },
+            { key: 'outcomes', label: 'Outcomes', sortable: true, initialDir: 'desc', sortValue: (r) => r.failed, render: (r) => <span title={`${r.succeeded} succeeded / ${r.failed} failed / ${r.interrupted} interrupted`}>{r.succeeded}/{r.failed}/{r.interrupted}</span> },
             { key: 'firstAttempt', label: 'First Attempt', sortable: true, initialDir: 'desc', sortValue: (r) => dateSortValue(r.firstAttempt), render: (r) => formatDate(r.firstAttempt) },
             { key: 'lastAttempt', label: 'Last Attempt', sortable: true, initialDir: 'desc', sortValue: (r) => dateSortValue(r.lastAttempt), render: (r) => formatDate(r.lastAttempt) },
             { key: 'models', label: 'Models', sortable: true, initialDir: 'desc', sortValue: (r) => r.modelsUsed.join(','), render: (r) => r.modelsUsed.join(', ') || '—' },
@@ -110,28 +111,13 @@ function SessionList({ timeRange, onRowClick }: { timeRange: AnalyticsTimeRange;
         />
       </div>
       {data.totalSessions > SESSIONS_PAGE_SIZE && (
-        <div className="flex items-center justify-between px-1 py-2 text-xs text-base-content/50">
-          <span>
-            {page * SESSIONS_PAGE_SIZE + 1}–{Math.min((page + 1) * SESSIONS_PAGE_SIZE, data.totalSessions)} of {data.totalSessions}
-          </span>
-          <div className="flex gap-1">
-            <button
-              className="rounded px-2 py-1 hover:bg-base-200 disabled:opacity-30"
-              onClick={() => setPage((p) => Math.max(0, p - 1))}
-              disabled={page === 0}
-            >
-              ← Prev
-            </button>
-            <span className="px-2 py-1">Page {page + 1}/{totalPages}</span>
-            <button
-              className="rounded px-2 py-1 hover:bg-base-200 disabled:opacity-30"
-              onClick={() => setPage((p) => Math.min(totalPages - 1, p + 1))}
-              disabled={page >= totalPages - 1}
-            >
-              Next →
-            </button>
-          </div>
-        </div>
+        <TablePager
+          page={page}
+          totalPages={totalPages}
+          totalItems={data.totalSessions}
+          pageSize={SESSIONS_PAGE_SIZE}
+          onPageChange={setPage}
+        />
       )}
       {data.truncated && (page + 1) * SESSIONS_PAGE_SIZE < data.totalSessions && (
         <div className="text-xs text-base-content/50">Showing {data.sessions.length} of {data.totalSessions} sessions in this range.</div>
@@ -323,7 +309,7 @@ function SessionDetail({ sessionId, timeRange, onBack }: { sessionId: string; ti
             { key: 'inputTokens', label: 'Input Tokens', sortable: true, initialDir: 'desc', sortValue: (r) => r.inputTokens, render: (r) => formatTokenCount(r.inputTokens) },
             { key: 'outputTokens', label: 'Output Tokens', sortable: true, initialDir: 'desc', sortValue: (r) => r.outputTokens, render: (r) => formatTokenCount(r.outputTokens) },
             { key: 'attempts', label: 'Attempts', sortable: true, initialDir: 'desc', sortValue: (r) => r.attempts, render: (r) => r.attempts },
-            { key: 'outcomes', label: 'Outcomes', sortable: true, initialDir: 'desc', sortValue: (r) => r.attempts, render: (r) => `${r.succeeded}/${r.failed}/${r.interrupted}` },
+            { key: 'outcomes', label: 'Outcomes', sortable: true, initialDir: 'desc', sortValue: (r) => r.failed, render: (r) => `${r.succeeded}/${r.failed}/${r.interrupted}` },
           ]}
           rows={data.chains}
           rowKey={(r) => r.chainId ?? `no-chain-${r.agentName ?? 'default'}`}

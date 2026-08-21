@@ -170,6 +170,8 @@ describe('provider attempt accounting middleware', () => {
       params: {}, model: {},
     });
     await consume(result.stream);
+    // The durable write is deferred to a microtask; flush before asserting.
+    await new Promise((resolve) => setTimeout(resolve, 0));
 
     const row = ledger.getDatabase()
       .prepare('SELECT outcome, first_token_at FROM provider_attempts WHERE session_id = ?')
@@ -215,6 +217,7 @@ describe('provider attempt accounting middleware', () => {
     const stampedMs = Date.parse(row.first_token_at!);
     expect(stampedMs).toBeGreaterThanOrEqual(before);
     expect(stampedMs).toBeLessThanOrEqual(after);
+    ledger.close();
   });
 
   it('estimates reasoning tokens from output characters when the provider does not report them', async () => {

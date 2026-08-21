@@ -14,6 +14,8 @@ import { WorkerPool } from '../../utils/worker-pool';
 import {
   getContext,
   getModelDetail,
+  getOverview,
+  getQuotaOverview,
   getSubagentDetail,
   getContextSessionDetail,
   getContextSessionList,
@@ -26,12 +28,19 @@ import type {
   ContextSessionDetailResult,
   ContextSessionsResult,
   ModelDetailResult,
+  OverviewResult,
   SubagentAnalyticsDetailResult,
 } from '../../../shared/types/analytics';
 
 /** Same batch cap as analytics-queries: one IN(...) per 500 ids stays well
  * below the SQLite bound-variable limit for very long picker lists. */
 const LIVE_NAME_BATCH = 500;
+
+/**
+ * Bound on a single worker query (queue wait + execution). An unresponsive
+ * worker is terminated and the query re-run inline instead of hanging the UI.
+ */
+const WORKER_QUERY_TIMEOUT_MS = 30_000;
 
 /** Inputs accepted by {@link runAnalyticsQuery}; each query kind reads its own. */
 export interface AnalyticsQueryInput {
@@ -88,6 +97,8 @@ export function ensureAnalyticsWorkerPool(): Promise<WorkerPool | null> {
 /** Inline (main-thread) execution — the fallback path and parity baseline. */
 function runInlineAnalyticsQuery(query: AnalyticsQueryKind, input: AnalyticsQueryInput): unknown {
   switch (query) {
+    case 'overview':
+      return getOverview(input.timeRange);
     case 'context':
       return getContext(input.sessionId, input.timeRange);
     case 'model_detail':
@@ -125,13 +136,22 @@ function resolveLiveSessionNames(sessionIds: readonly string[]): Map<string, str
 /**
  * Overwrite sessionName fields with live names where they exist, walking the
  * known name-bearing fields of each query result shape. Ids without a live
- * name keep the tombstone name the worker already embedded (or null).
+ * name keep the tombstone name the worker already embedded (or null). The
+ * overview instead gets its quota panel patched: quota status is read from
+ * main-process services the worker has no access to.
  */
 function patchAnalyticsResultSessionNames(query: AnalyticsQueryKind, envelope: AnalyticsQueryWorkerResult): unknown {
   const liveNames = envelope.sessionIds.length > 0
     ? resolveLiveSessionNames(envelope.sessionIds)
     : new Map<string, string>();
   switch (query) {
+    case 'overview': {
+      const result = envelope.result as OverviewResult;
+      return {
+        ...result,
+        quotaByProvider: getQuotaOverview(),
+      };
+    }
     case 'context': {
       const result = envelope.result as ContextResult;
       return {
@@ -194,6 +214,8 @@ export async function runAnalyticsQuery(
   const workerPool = await ensureAnalyticsWorkerPool();
   if (!workerPool) return runInlineAnalyticsQuery(query, input);
 
+  const timeout = new AbortController();
+  const timeoutTimer = setTimeout(() => timeout.abort(), WORKER_QUERY_TIMEOUT_MS);
   try {
     const envelope = await workerPool.run<AnalyticsQueryWorkerResult>({
       query,
@@ -201,7 +223,7 @@ export async function runAnalyticsQuery(
       timeRange: input.timeRange ?? null,
       modelDetail: input.modelDetail ?? null,
       subagentDetail: input.subagentDetail ?? null,
-    });
+    }, timeout.signal);
     return patchAnalyticsResultSessionNames(query, envelope);
   } catch (error) {
     console.warn('[analytics-worker] Worker query failed, falling back to main-thread execution', {
@@ -209,6 +231,8 @@ export async function runAnalyticsQuery(
       error: error instanceof Error ? error.message : String(error),
     });
     return runInlineAnalyticsQuery(query, input);
+  } finally {
+    clearTimeout(timeoutTimer);
   }
 }
 

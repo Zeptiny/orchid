@@ -97,7 +97,7 @@ const CONTEXT_MAX_POINTS_PER_SERIES = 500;
  * and persisted cache entries would surface quota for providers with no
  * connection — information that is irrelevant to the user.
  */
-function getQuotaOverview(): QuotaOverviewEntry[] {
+export function getQuotaOverview(): QuotaOverviewEntry[] {
   try {
     const status = getProviderStatusService();
     const connectedProviders = getProviderConnectionStore().listProviderIdsSync();
@@ -133,8 +133,11 @@ function getQuotaOverview(): QuotaOverviewEntry[] {
   }
 }
 
-export function getOverview(timeRange?: AnalyticsTimeRange): OverviewResult {
-  const db = getDb();
+export function getOverview(
+  timeRange?: AnalyticsTimeRange,
+  ctx?: AnalyticsQueryContext,
+): OverviewResult {
+  const db = getDb(ctx);
   const dateFilter = buildDateFilter(timeRange);
 
   const stats = db.prepare(`
@@ -339,24 +342,36 @@ export function getSessions(
     models: string | null;
   }>;
 
-  const subagentRows = db.prepare(`
-    SELECT session_id, COUNT(*) as count FROM subagent_attribution ${whereClause([], buildDateFilter(timeRange).clause)} GROUP BY session_id
-  `).all(...buildDateFilter(timeRange).params) as Array<{ session_id: string; count: number }>;
-  const subagentMap = new Map<string, number>();
-  for (const r of subagentRows) {
-    subagentMap.set(r.session_id, r.count);
-  }
-
-  const costMap = new Map<string, Map<string, DecimalTotal>>();
-  for (const row of iterateRows<{ session_id: string; currency: string; cost_amount: string }>(db, `
-    SELECT session_id, currency, cost_amount
-    FROM provider_attempts
-    ${whereClause(COST_ROW_CONDITIONS, dateFilter.clause)}
-  `, dateFilter.params)) {
-    bumpCurrencyTotal(nestedCurrencyMap(costMap, row.session_id), row.currency, parseCostAmount(row.cost_amount));
-  }
-
   const sessionIds = sessions.map((s) => s.session_id);
+
+  // Subagent counts and cost rows are scoped to this page's session ids so a
+  // page fetch never scans the whole ledger. Batched IN(...) clauses (one per
+  // 500 ids) stay below the SQLite bound-variable limit even at the max page
+  // size — same cap as the session-name resolver.
+  const SESSION_AGGREGATE_BATCH = 500;
+  const subagentMap = new Map<string, number>();
+  const costMap = new Map<string, Map<string, DecimalTotal>>();
+  for (let i = 0; i < sessionIds.length; i += SESSION_AGGREGATE_BATCH) {
+    const batch = sessionIds.slice(i, i + SESSION_AGGREGATE_BATCH);
+    const inClause = `session_id IN (${batch.map(() => '?').join(', ')})`;
+
+    const subagentRows = db.prepare(`
+      SELECT session_id, COUNT(*) as count FROM subagent_attribution
+      ${whereClause([inClause], dateFilter.clause)} GROUP BY session_id
+    `).all(...batch, ...dateFilter.params) as Array<{ session_id: string; count: number }>;
+    for (const r of subagentRows) {
+      subagentMap.set(r.session_id, r.count);
+    }
+
+    for (const row of iterateRows<{ session_id: string; currency: string; cost_amount: string }>(db, `
+      SELECT session_id, currency, cost_amount
+      FROM provider_attempts
+      ${whereClause([inClause, ...COST_ROW_CONDITIONS], dateFilter.clause)}
+    `, [...batch, ...dateFilter.params])) {
+      bumpCurrencyTotal(nestedCurrencyMap(costMap, row.session_id), row.currency, parseCostAmount(row.cost_amount));
+    }
+  }
+
   const resolveNames = sessionNameResolver(ctx, db);
   let nameMap = new Map<string, string>();
   try {

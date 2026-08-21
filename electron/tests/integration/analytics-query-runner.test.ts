@@ -25,6 +25,7 @@ import {
   getContextSessionDetail,
   getContextSessionList,
   getModelDetail,
+  getOverview,
   getSubagentDetail,
 } from '../../src/main/providers/accounting/analytics-queries';
 import {
@@ -221,6 +222,8 @@ function seedProviderAttempt(opts: {
   agentName?: string | null;
   agentTier?: string | null;
   agentScope?: string | null;
+  /** Stamp a first token between started_at and completed_at (streamed attempt). */
+  firstToken?: boolean;
 }): void {
   providerStore.insertPending({
     attemptId: opts.attemptId,
@@ -234,6 +237,7 @@ function seedProviderAttempt(opts: {
     agentTier: opts.agentTier ?? null,
     agentType: null,
   });
+  if (opts.firstToken) providerStore.markFirstToken(opts.attemptId);
   providerStore.finalize(opts.attemptId, {
     outcome: 'succeeded',
     usage: { inputTokens: 100, outputTokens: 50 },
@@ -244,7 +248,9 @@ function seedProviderAttempt(opts: {
 
 /** Attempts + subagent attribution + context snapshots for the parity fixture. */
 function seedDetailFixture(): void {
-  seedProviderAttempt({ attemptId: 'att-1', sessionId: 'sess-a', chainId: 'chain-1', agentName: 'agent-x', agentTier: 'sub', agentScope: 'sub-1' });
+  // att-1 streams (first token between started_at and completed_at) so the
+  // TTFT, TPS, histogram, and time-series latency projections are exercised.
+  seedProviderAttempt({ attemptId: 'att-1', sessionId: 'sess-a', chainId: 'chain-1', agentName: 'agent-x', agentTier: 'sub', agentScope: 'sub-1', firstToken: true });
   seedProviderAttempt({ attemptId: 'att-2', sessionId: 'sess-a', chainId: null });
   seedProviderAttempt({ attemptId: 'att-3', sessionId: 'sess-deleted', chainId: null });
   attributionStore.insert({
@@ -280,6 +286,8 @@ describe('runAnalyticsQuery (detail kinds)', () => {
     seedDetailFixture();
     const timeRange = { startDate: '2000-01-01T00:00:00.000Z', endDate: '2100-01-01T00:00:00.000Z' };
 
+    expect(await runAnalyticsQuery('overview', { timeRange }))
+      .toEqual(getOverview(timeRange));
     expect(await runAnalyticsQuery('model_detail', { modelDetail: MODEL_TRIPLE, timeRange }))
       .toEqual(getModelDetail({ ...MODEL_TRIPLE, timeRange }));
     expect(await runAnalyticsQuery('subagent_detail', { subagentDetail: SUBAGENT_TRIPLE, timeRange }))
