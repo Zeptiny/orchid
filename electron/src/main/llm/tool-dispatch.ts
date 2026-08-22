@@ -53,6 +53,8 @@ import {
 } from '../agents-md/enforce';
 import { statAgentsMdEntry } from '../agents-md/resolver';
 import type { AgentsMdContextStore } from '../session/agents-md-context';
+import { extractMutations } from '../indexing/mutation-paths';
+import { enqueueMutation, markDirty } from '../indexing/refresh-coordinator';
 import { withTimeout as sharedWithTimeout } from '../utils/async';
 import { checkPermission } from '../permissions/gate';
 import { recordToolCall } from '../permissions/history';
@@ -512,6 +514,7 @@ export async function executeToolCall(
       handlerArgs as Record<string, unknown>,
     );
     execution = maybeEnforceAgentsMdOnWrite(execution, request, options, agentsMdWrite);
+    maybeNotifyIndexRefresh(execution, name, options);
     const executionSchema = registry.getToolExecutionResultSchema(name);
     if (!executionSchema) {
       throw new TypeError(`No execution schema registered for tool '${name}'`);
@@ -949,6 +952,44 @@ function maybeEnforceAgentsMdOnWrite(
       exceptionClass: error instanceof Error ? error.constructor.name : 'Unknown',
     });
     return execution;
+  }
+}
+
+/**
+ * Index auto-refresh notification. Extracts the mutated files from a
+ * successful canonical result and feeds the fire-and-forget refresh
+ * coordinator: file-write/file-change/apply-patch outcomes enqueue targeted
+ * mutations, and a completed execute_command marks the project dirty
+ * (commands do not report which files they touched). Failed or cancelled
+ * outcomes never notify — nothing landed (same rule as AGENTS.md Phase B F8).
+ * Any failure logs and degrades to a no-op so the tool result stays
+ * byte-identical (R2).
+ */
+function maybeNotifyIndexRefresh(
+  execution: ToolExecutionResult,
+  name: string,
+  options: ToolDispatchOptions,
+): void {
+  if (
+    execution.canonical.status === 'error' ||
+    execution.canonical.status === 'cancelled'
+  ) {
+    return;
+  }
+  if (!options.cwd) return;
+  try {
+    const mutations = extractMutations(name, execution.canonical, options.cwd);
+    if (mutations.length > 0) {
+      enqueueMutation(options.cwd, mutations);
+    }
+    if (name === 'execute_command') {
+      markDirty(options.cwd);
+    }
+  } catch (error) {
+    console.warn('[tool-dispatch] index refresh notify failed', {
+      toolName: name,
+      exceptionClass: error instanceof Error ? error.constructor.name : 'Unknown',
+    });
   }
 }
 
