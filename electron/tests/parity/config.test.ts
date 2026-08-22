@@ -416,11 +416,11 @@ describe('Config Parity', () => {
       expect(cfg.subagents).toHaveProperty('prompt_task_max_chars');
     });
 
-    it('top-level field count matches expected (48 top-level + 12 rag + 7 agents_md + 11 subagents nested fields)', () => {
+    it('top-level field count matches expected (49 top-level + 12 rag + 7 agents_md + 11 subagents nested fields)', () => {
       const cfg = defaults();
       // Top-level keys count
       const topLevelKeys = Object.keys(cfg);
-      expect(topLevelKeys).toHaveLength(48); // 48 top-level fields (rag, agents_md, subagents, compaction are nested)
+      expect(topLevelKeys).toHaveLength(49); // 49 top-level fields (rag, agents_md, subagents, compaction are nested)
 
       // RAG nested keys count
       const ragKeys = Object.keys(cfg.rag);
