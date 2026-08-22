@@ -12,12 +12,15 @@ import { AgentTier, AgentType } from '../../shared/types/agent';
 import {
   deleteAgent,
   deletePersonality,
+  deleteSharedPrompt,
   deleteSkill,
   listManagedAgents,
   listManagedPersonalities,
+  listManagedSharedPrompts,
   listManagedSkills,
   saveAgent,
   savePersonality,
+  saveSharedPrompt,
   saveSkill,
 } from '../defs/manage';
 import { assertPathUnderOrchidRoots } from '../defs/paths';
@@ -64,6 +67,17 @@ const personalitySaveSchema = z.object({
   name: nameSchema,
   content: z.string().min(1),
   previousName: z.string().optional(),
+});
+
+const sharedPromptSaveSchema = z.object({
+  scope: scopeSchema,
+  slot: z.enum(['all-agents', 'subagents']),
+  content: z.string(),
+});
+
+const sharedPromptDeleteSchema = z.object({
+  scope: scopeSchema,
+  slot: z.enum(['all-agents', 'subagents']),
 });
 
 const deleteSchema = z.object({
@@ -150,6 +164,7 @@ export function registerDefinitionsIPC(): void {
       skills,
       agents: listManagedAgents(listProjectDir),
       personalities: listManagedPersonalities(listProjectDir),
+      sharedPrompts: listManagedSharedPrompts(listProjectDir),
       availableTools,
       availableSkills: Array.from(skillNames).sort((a, b) => a.localeCompare(b)),
     };
@@ -206,6 +221,27 @@ export function registerDefinitionsIPC(): void {
     ),
   );
 
+  ipcMain.handle(
+    IPC_CHANNELS.SHARED_PROMPT_SAVE,
+    withDefinitionMutation(
+      sharedPromptSaveSchema,
+      'shared-prompt:save',
+      (data, projectDir) => saveSharedPrompt(data, projectDir),
+    ),
+  );
+
+  ipcMain.handle(
+    IPC_CHANNELS.SHARED_PROMPT_DELETE,
+    withDefinitionMutation(
+      sharedPromptDeleteSchema,
+      'shared-prompt:delete',
+      (data, projectDir) => {
+        deleteSharedPrompt(data.scope, data.slot, projectDir);
+        return { status: 'deleted' as const };
+      },
+    ),
+  );
+
   ipcMain.handle(IPC_CHANNELS.DEFINITION_REVEAL, async (event, payload: unknown) => {
     const parsed = revealSchema.safeParse(payload);
     if (!parsed.success) {
@@ -226,5 +262,7 @@ export function unregisterDefinitionsIPC(): void {
   ipcMain.removeHandler(IPC_CHANNELS.AGENT_DELETE);
   ipcMain.removeHandler(IPC_CHANNELS.PERSONALITY_SAVE);
   ipcMain.removeHandler(IPC_CHANNELS.PERSONALITY_DELETE);
+  ipcMain.removeHandler(IPC_CHANNELS.SHARED_PROMPT_SAVE);
+  ipcMain.removeHandler(IPC_CHANNELS.SHARED_PROMPT_DELETE);
   ipcMain.removeHandler(IPC_CHANNELS.DEFINITION_REVEAL);
 }

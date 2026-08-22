@@ -18,7 +18,7 @@ import type { Notify, NotifySeverity } from './utils/notify';
 import { useSessionActivity } from './hooks/useSessionActivity';
 import type { Config } from '../shared/types/ipc-boundary';
 
-type SettingsTab = 'general' | 'providers' | 'mcp' | 'tier-models' | 'rag' | 'skills' | 'agents' | 'personalities';
+type SettingsTab = 'general' | 'providers' | 'mcp' | 'tier-models' | 'rag' | 'skills' | 'agents' | 'personalities' | 'shared-prompts';
 
 const ConfigView = lazy(() => import('./components/ConfigView').then((module) => ({
   default: module.ConfigView,

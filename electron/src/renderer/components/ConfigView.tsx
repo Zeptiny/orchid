@@ -83,6 +83,9 @@ const ProvidersTab = lazyWithPreload(() => import('./Preferences/ProvidersTab').
 const RAGTab = lazyWithPreload(() => import('./Preferences/RAGTab').then((module) => ({
   default: module.RAGTab,
 })));
+const SharedPromptsTab = lazyWithPreload(() => import('./Preferences/SharedPromptsTab').then((module) => ({
+  default: module.SharedPromptsTab,
+})));
 const SkillsTab = lazyWithPreload(() => import('./Preferences/SkillsTab').then((module) => ({
   default: module.SkillsTab,
 })));
@@ -115,7 +118,8 @@ type TabId =
   | 'compaction'
   | 'skills'
   | 'agents'
-  | 'personalities';
+  | 'personalities'
+  | 'shared-prompts';
 
 const TAB_COMPONENTS = {
   general: GeneralTab,
@@ -131,6 +135,7 @@ const TAB_COMPONENTS = {
   skills: SkillsTab,
   agents: AgentsTab,
   personalities: PersonalitiesTab,
+  'shared-prompts': SharedPromptsTab,
 } satisfies Record<TabId, { preload: () => Promise<unknown> }>;
 
 interface TabDef {
@@ -152,6 +157,7 @@ const TABS: TabDef[] = [
   { id: 'skills', label: 'Skills' },
   { id: 'agents', label: 'Agents' },
   { id: 'personalities', label: 'Personalities' },
+  { id: 'shared-prompts', label: 'Shared Prompts' },
 ];
 
 interface ConfigViewProps {
@@ -283,7 +289,12 @@ export function ConfigView({ onClose, initialTab = 'general', onNotify, onOpenAn
         if (!providers.overview) await providers.refresh();
       } else if (tab === 'tier-models' || tab === 'rag') {
         await providers.ensureModelList();
-      } else if (tab === 'skills' || tab === 'agents' || tab === 'personalities') {
+      } else if (
+        tab === 'skills'
+        || tab === 'agents'
+        || tab === 'personalities'
+        || tab === 'shared-prompts'
+      ) {
         if (!definitions) await loadDefinitions({ silent: true });
       }
     };
@@ -1002,5 +1013,10 @@ function renderTab(
         return <StateMessage kind="warning" title="Personalities could not be loaded." />;
       }
       return <PersonalitiesTab data={definitions} onReload={reloadDefinitions} lockedScope="global" />;
+    case 'shared-prompts':
+      if (!definitions) {
+        return <StateMessage kind="warning" title="Shared prompts could not be loaded." />;
+      }
+      return <SharedPromptsTab data={definitions} onReload={reloadDefinitions} lockedScope="global" />;
   }
 }

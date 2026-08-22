@@ -1402,7 +1402,7 @@ export function ChatView({ isVisible = true, bootstrapConfig = null, onNotify, a
             usage={chat.usage}
             maxContext={maxContext}
             messages={chat.messages}
-            streamingThinkingChars={Math.floor(chat.streamingThinking.length / 500) * 500 || undefined}
+            streamingThinkingChars={Math.floor(chat.streamingUnaccountedThinkingChars / 500) * 500 || undefined}
             model={providerPickerValue}
             modelLabels={providerModelLabels}
             modelDetails={providerModelDetails}
@@ -1470,7 +1470,7 @@ export function ChatView({ isVisible = true, bootstrapConfig = null, onNotify, a
           cumulativeUsage={chat.cumulativeUsage}
           maxContext={maxContext}
           messages={chat.messages}
-          streamingThinkingChars={Math.floor(chat.streamingThinking.length / 500) * 500 || undefined}
+          streamingThinkingChars={Math.floor(chat.streamingUnaccountedThinkingChars / 500) * 500 || undefined}
           focusSection={inspectorFocusSection}
           onFocusSectionConsumed={handleFocusSectionConsumed}
         />

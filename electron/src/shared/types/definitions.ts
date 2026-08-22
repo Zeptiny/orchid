@@ -48,6 +48,26 @@ export interface ManagedPersonality {
   readonly overriddenByProject: boolean;
 }
 
+/**
+ * Shared prompt slots — fixed singleton prompt files injected into the
+ * system prompt alongside each agent's own instructions.
+ *
+ * - `all-agents`: injected for the main agent and every subagent
+ * - `subagents`: injected for subagents only (parallel-work awareness, …)
+ */
+export type SharedPromptSlot = 'all-agents' | 'subagents';
+
+export const SHARED_PROMPT_SLOTS: readonly SharedPromptSlot[] = ['all-agents', 'subagents'];
+
+export interface ManagedSharedPrompt {
+  readonly slot: SharedPromptSlot;
+  readonly content: string;
+  readonly scope: DefinitionScope;
+  /** Absolute path to `<slot>.md` */
+  readonly path: string;
+  readonly overriddenByProject: boolean;
+}
+
 export interface SkillSaveMessage {
   /** Write scope. Project requires a bound workspace. */
   scope: DefinitionScope;
@@ -82,6 +102,18 @@ export interface PersonalitySaveMessage {
   previousName?: string;
 }
 
+export interface SharedPromptSaveMessage {
+  /** Write scope. Project requires a bound workspace. */
+  scope: DefinitionScope;
+  slot: SharedPromptSlot;
+  content: string;
+}
+
+export interface SharedPromptDeleteMessage {
+  scope: DefinitionScope;
+  slot: SharedPromptSlot;
+}
+
 export interface DefinitionDeleteMessage {
   scope: DefinitionScope;
   name: string;
@@ -98,6 +130,7 @@ export interface DefinitionsListResult {
   skills: ManagedSkill[];
   agents: ManagedAgent[];
   personalities: ManagedPersonality[];
+  sharedPrompts: ManagedSharedPrompt[];
   /**
    * Registered tool names available for agent `allowed_tools` selection.
    * Includes built-ins and currently registered MCP tools.

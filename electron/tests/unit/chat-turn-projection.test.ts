@@ -103,7 +103,10 @@ describe('ChatTurnProjection', () => {
       interrupted: true,
     });
 
-    const { terminal, status, compactionProgress, ...projection } = seedChatTurnProjection(snapshot);
+    const { terminal, status, compactionProgress, usageThinkingChars, ...projection } = seedChatTurnProjection(snapshot);
+    // The snapshot carried a usage event, so its thinking length is fully
+    // accounted (issue 187).
+    expect(usageThinkingChars).toBe(snapshot.thinking.length);
 
     expect({ ...projection, state: status }).toEqual(snapshot);
     expect(terminal).toBeNull();

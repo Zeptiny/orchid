@@ -40,6 +40,7 @@ import {
   type ProjectRuntime,
 } from '../project/runtime';
 import { appendRootAgentsMd, seedSubagentRootAgentsMd } from '../project/agents-md';
+import { appendSharedRules, appendSubagentRules } from '../project/shared-prompts';
 import type {
   SubagentCompactionPauseController,
   SubagentHistoryBox,
@@ -275,15 +276,16 @@ export function createSubagentStreamRunner(): SubagentStreamRunner {
         .map((tool) => tool.definition.name)
         .filter((name) => !SUBAGENT_FORBIDDEN_TOOLS.has(name));
       const agentForRun: Agent = { ...params.agent, allowed_tools: allowedTools };
-      // Root AGENTS.md injection is non-fatal: an fs/config failure falls back
-      // to the un-augmented prompt rather than failing the delegation (the
-      // adjacent tracker seeding is already non-fatal).
+      // Shared-prompt + root AGENTS.md injection is non-fatal: an fs/config
+      // failure falls back to the un-augmented prompt rather than failing the
+      // delegation (the adjacent tracker seeding is already non-fatal).
       const basePrompt = params.agent.system_prompt || 'You are a helpful assistant.';
       let fullPrompt = basePrompt;
       try {
-        fullPrompt = appendRootAgentsMd(basePrompt, runtime);
+        fullPrompt = appendSubagentRules(appendSharedRules(basePrompt, runtime), runtime);
+        fullPrompt = appendRootAgentsMd(fullPrompt, runtime);
       } catch (err) {
-        console.debug('root AGENTS.md injection failed (non-fatal):', err);
+        console.debug('shared prompt / root AGENTS.md injection failed (non-fatal):', err);
       }
       // U5: the run's history is a mutable handoff. Every stream segment reads
       // the box's CURRENT contents, so a compaction apply that swaps it between

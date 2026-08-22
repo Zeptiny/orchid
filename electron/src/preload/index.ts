@@ -76,6 +76,8 @@ import type {
   DefinitionDeleteMessage,
   DefinitionRevealMessage,
   PersonalitySaveMessage,
+  SharedPromptDeleteMessage,
+  SharedPromptSaveMessage,
   SkillSaveMessage,
   RAGIndexMessage,
   RAGIndexProgress,
@@ -629,6 +631,14 @@ const orchidAPI: OrchidAPI = {
 
     delete: (message: DefinitionDeleteMessage) =>
       invoke(IPC_CHANNELS.PERSONALITY_DELETE, message),
+  },
+
+  sharedPrompt: {
+    save: (message: SharedPromptSaveMessage) =>
+      invoke(IPC_CHANNELS.SHARED_PROMPT_SAVE, message),
+
+    delete: (message: SharedPromptDeleteMessage) =>
+      invoke(IPC_CHANNELS.SHARED_PROMPT_DELETE, message),
   },
 
   mcp: {

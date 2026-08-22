@@ -210,6 +210,44 @@ describe('SdkEventAdapter', () => {
     expect(bridge.sdkToolCall).toHaveBeenCalledTimes(2);
   });
 
+  it('counts whole-delivered tool input as tool-use chars, deduped against streamed deltas', () => {
+    const { adapter, buildUsage } = createAdapter();
+    adapt(adapter, { type: 'start-step' });
+
+    // Whole delivery: no tool-input-delta parts preceded this call.
+    adapt(adapter, { type: 'tool-call', toolCallId: 'whole', toolName: 'read', input: { path: '/a/b/c'.repeat(20) } });
+    // Streamed delivery: chars arrive via deltas, the final part must not
+    // double-count them.
+    adapt(adapter, { type: 'tool-input-start', toolCallId: 'streamed', toolName: 'grep' });
+    adapt(adapter, { type: 'tool-input-delta', toolCallId: 'streamed', inputTextDelta: '{"pattern":"x' });
+    adapt(adapter, { type: 'tool-input-delta', toolCallId: 'streamed', inputTextDelta: '"}' });
+    adapt(adapter, { type: 'tool-input-available', toolCallId: 'streamed', toolName: 'grep', input: { pattern: 'x' } });
+    adapt(adapter, {
+      type: 'finish-step',
+      usage: { inputTokens: 10, outputTokens: 40 },
+    });
+
+    const chars = buildUsage.mock.calls[0]?.[2];
+    expect(chars?.tool).toBe(JSON.stringify({ path: '/a/b/c'.repeat(20) }).length + '{"pattern":"x"}'.length);
+  });
+
+  it('resets per-step tool-input dedupe state at the next start-step', () => {
+    const { adapter, buildUsage } = createAdapter();
+    adapt(adapter, { type: 'start-step' });
+    adapt(adapter, { type: 'tool-call', toolCallId: 'whole', toolName: 'read', input: { path: '/a' } });
+    adapt(adapter, { type: 'finish-step', usage: { inputTokens: 10, outputTokens: 40 } });
+    // Next step re-delivers the same call id — it must count again (fresh
+    // dedupe state), not be suppressed by the previous step's set.
+    adapt(adapter, { type: 'start-step' });
+    adapt(adapter, { type: 'tool-call', toolCallId: 'whole', toolName: 'read', input: { path: '/a' } });
+    adapt(adapter, { type: 'finish-step', usage: { inputTokens: 12, outputTokens: 40 } });
+
+    const stepOne = buildUsage.mock.calls[0]?.[2];
+    const stepTwo = buildUsage.mock.calls[1]?.[2];
+    expect(stepOne?.tool).toBe(JSON.stringify({ path: '/a' }).length);
+    expect(stepTwo?.tool).toBe(JSON.stringify({ path: '/a' }).length);
+  });
+
   it('emits finalized eager starts before a new streamed start without draining completions', () => {
     const { adapter, bridge } = createAdapter();
     vi.mocked(bridge.drainEagerStarts).mockImplementation(function* () {

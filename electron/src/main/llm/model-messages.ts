@@ -39,6 +39,10 @@ export function toModelMessages(
   options: { readonly responsesReplay?: boolean } = {},
 ): ModelMessage[] {
   const modelMessages: ModelMessage[] = [];
+  // tool_call_id → tool name recovered from the paired assistant tool_calls.
+  // Persisted results carry no name; providers like Google serialize this
+  // name on the wire, so 'unknown' must remain a fallback only.
+  const toolNamesByCallId = new Map<string, string>();
 
   for (const message of historyMessages) {
     if (message.role === MessageRole.SYSTEM) {
@@ -87,6 +91,11 @@ export function toModelMessages(
           },
         ];
       }) ?? [];
+      // Record names even when the arguments fail to parse: the id→name
+      // association is a persisted fact, independent of part replayability.
+      for (const toolCall of message.tool_calls ?? []) {
+        toolNamesByCallId.set(toolCall.id, toolCall.function.name);
+      }
 
       const content: AssistantContent = toolCallContent.length > 0
         ? [
@@ -120,8 +129,7 @@ export function toModelMessages(
           {
             type: 'tool-result' as const,
             toolCallId: message.tool_call_id,
-            // The persisted result has no name; AI SDK pairs by toolCallId.
-            toolName: 'unknown',
+            toolName: toolNamesByCallId.get(message.tool_call_id) ?? 'unknown',
             output: { type: 'text', value: textContent },
           },
         ],

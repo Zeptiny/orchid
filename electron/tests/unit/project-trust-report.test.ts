@@ -83,6 +83,7 @@ beforeEach(() => {
     homeAgentsDir: path.join(homeDir, 'agents'),
     homeSkillsDir: path.join(homeDir, 'skills'),
     homePersonalitiesDir: path.join(homeDir, 'personalities'),
+    homePromptsDir: path.join(homeDir, 'prompts'),
   });
 });
 
@@ -209,6 +210,34 @@ describe('ProjectTrustStore.buildReport', () => {
     expect(byKey.get('agent:shared-agent')?.overridesHome).toBe(true);
     expect(byKey.get('agent:project-only')?.overridesHome).toBe(false);
     expect(byKey.get('skill:brand-new-skill')?.overridesHome).toBe(false);
+  });
+
+  it('reports project shared prompts and flags home overrides', () => {
+    fs.mkdirSync(path.join(homeDir, 'prompts'), { recursive: true });
+    fs.writeFileSync(
+      path.join(homeDir, 'prompts', 'all-agents.md'),
+      'Home rules',
+      'utf-8',
+    );
+    fs.mkdirSync(path.join(project, '.orchid', 'prompts'), { recursive: true });
+    fs.writeFileSync(
+      path.join(project, '.orchid', 'prompts', 'all-agents.md'),
+      'Project rules',
+      'utf-8',
+    );
+    fs.writeFileSync(
+      path.join(project, '.orchid', 'prompts', 'subagents.md'),
+      'Project subagent rules',
+      'utf-8',
+    );
+
+    const report = store.buildReport(project);
+    const byKey = new Map(
+      report.definitions.map((d) => [`${d.kind}:${d.name}`, d]),
+    );
+
+    expect(byKey.get('prompt:prompts/all-agents.md')?.overridesHome).toBe(true);
+    expect(byKey.get('prompt:prompts/subagents.md')?.overridesHome).toBe(false);
   });
 
   it('splits model overrides from other top-level config overrides', () => {

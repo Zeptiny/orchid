@@ -1,5 +1,6 @@
 import { parentPort } from 'node:worker_threads';
 import { ConfigManager } from '../config/loader';
+import { EMPTY_SHARED_PROMPTS } from '../prompts/registry';
 import { createToolWorkerRegistry } from './worker-registry';
 import type {
   ToolExecutionContext,
@@ -53,6 +54,7 @@ async function handleExecute(message: ToolWorkerExecuteMessage): Promise<void> {
       agents: new Map(),
       skills: new Map(),
       personalities: new Map(),
+      sharedPrompts: EMPTY_SHARED_PROMPTS,
     };
     const toolCtx: ToolExecutionContext = { cwd: context.cwd, projectRuntime };
     const result = await registered.handler(validation.data, toolCtx);

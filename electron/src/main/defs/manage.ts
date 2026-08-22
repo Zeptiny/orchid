@@ -22,12 +22,19 @@ import type {
   DefinitionScope,
   ManagedAgent,
   ManagedPersonality,
+  ManagedSharedPrompt,
   ManagedSkill,
   AgentSaveMessage,
   PersonalitySaveMessage,
+  SharedPromptSaveMessage,
   SkillSaveMessage,
 } from '../../shared/types/definitions';
 import type { Skill } from '../../shared/types/skill';
+import { sharedPromptFileName } from '../prompts/registry';
+import {
+  SHARED_PROMPT_SLOTS,
+  type SharedPromptSlot,
+} from '../../shared/types/definitions';
 import {
   parseFrontmatter,
   serializeFrontmatter,
@@ -52,6 +59,7 @@ import {
   removeFileInScope,
   renameDefinitionDir,
   resolveScopeRoot,
+  sharedPromptMdPath,
   skillMdPath,
   validateDefinitionName,
 } from './paths';
@@ -434,6 +442,104 @@ export function listManagedPersonalities(
     collectProjectNames: collectPersonalityProjectNames,
     listInDir: listPersonalityEntriesInDir,
   });
+}
+
+// ── Shared prompts ───────────────────────────────────────────────────────────
+
+/**
+ * List both shared prompt slots across scopes (up to 2 slots × 2 scopes).
+ * A non-empty file is required — an empty slot file is equivalent to absent.
+ */
+export function listManagedSharedPrompts(
+  projectDir: string | null,
+): ManagedSharedPrompt[] {
+  const out: ManagedSharedPrompt[] = [];
+  const scopes: readonly DefinitionScope[] =
+    projectDir != null ? ['global', 'project'] : ['global'];
+  for (const scope of scopes) {
+    const root = resolveScopeRoot('prompts', scope, projectDir);
+    for (const slot of SHARED_PROMPT_SLOTS) {
+      const filePath = path.join(root, sharedPromptFileName(slot));
+      const content = readSlotFileContent(filePath);
+      if (content == null) continue;
+      const overriddenByProject =
+        scope === 'global' &&
+        projectDir != null &&
+        readSlotFileContent(path.join(
+          projectDir,
+          '.orchid',
+          'prompts',
+          sharedPromptFileName(slot),
+        )) != null;
+      out.push({
+        slot,
+        content,
+        scope,
+        path: filePath,
+        overriddenByProject,
+      });
+    }
+  }
+  return out;
+}
+
+/** Trimmed slot file content, or null when missing/empty/unreadable. */
+function readSlotFileContent(file: string): string | null {
+  try {
+    const raw = fs.readFileSync(file, 'utf-8').trim();
+    return raw ? raw : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Write one shared prompt slot file. Empty/whitespace content disables the
+ * slot by deleting its file — the reader treats missing files as absent, and
+ * deleting (rather than writing an empty file) keeps the trust fingerprint
+ * free of invisible residue.
+ */
+export function saveSharedPrompt(
+  msg: SharedPromptSaveMessage,
+  projectDir: string | null,
+): ManagedSharedPrompt {
+  const slot: SharedPromptSlot = msg.slot;
+  if (!SHARED_PROMPT_SLOTS.includes(slot)) {
+    throw new Error(`Invalid shared prompt slot: ${msg.slot}`);
+  }
+
+  const scopeRoot = resolveScopeRoot('prompts', msg.scope, projectDir);
+  const filePath = sharedPromptMdPath(msg.scope, slot, projectDir);
+  const content = msg.content.trim();
+  if (content) {
+    atomicWriteText(filePath, `${content}\n`, scopeRoot);
+  } else if (fs.existsSync(filePath)) {
+    removeFileInScope(filePath, scopeRoot);
+  }
+
+  return {
+    slot,
+    content,
+    scope: msg.scope,
+    path: filePath,
+    overriddenByProject: false,
+  };
+}
+
+export function deleteSharedPrompt(
+  scope: DefinitionScope,
+  slot: string,
+  projectDir: string | null,
+): void {
+  if (!SHARED_PROMPT_SLOTS.includes(slot as SharedPromptSlot)) {
+    throw new Error(`Invalid shared prompt slot: ${slot}`);
+  }
+  const root = resolveScopeRoot('prompts', scope, projectDir);
+  const filePath = sharedPromptMdPath(scope, slot as SharedPromptSlot, projectDir);
+  if (!fs.existsSync(filePath)) {
+    throw new Error(`Shared prompt "${slot}" not found in ${scope} scope`);
+  }
+  removeFileInScope(filePath, root);
 }
 
 // ── Save ─────────────────────────────────────────────────────────────────────

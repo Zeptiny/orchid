@@ -109,6 +109,11 @@ export interface ChatState {
   streamingContent: string;
   /** Thinking content being streamed. */
   streamingThinking: string;
+  /**
+   * Thinking chars not yet covered by a usage event — the only part the
+   * context panel may estimate as in-flight reasoning (issue 187).
+   */
+  streamingUnaccountedThinkingChars: number;
   /** Tool calls generated or run during the current turn. */
   toolBlocks: ToolBlock[];
   /**
@@ -466,6 +471,14 @@ export function useChat(
   const status: ChatStatus = projection?.status ?? 'idle';
   const streamingContent = projection?.response ?? '';
   const streamingThinking = projection?.thinking ?? '';
+  /**
+   * Thinking chars not yet covered by a usage event — the only part the
+   * context panel may estimate as in-flight reasoning (issue 187). Counted
+   * thinking is already attributed through the provider-reported tokens.
+   */
+  const streamingUnaccountedThinkingChars = projection
+    ? Math.max(0, projection.thinking.length - projection.usageThinkingChars)
+    : 0;
   const toolBlocks = useMemo(() => projection?.toolCalls.map(chatToolSnapshotToBlock) ?? [], [projection?.toolCalls]);
   const streamSegments = projection?.streamSegments ?? [];
   const usage = projection?.usage ?? persistedUsage;
@@ -945,6 +958,7 @@ export function useChat(
     status,
     streamingContent,
     streamingThinking,
+    streamingUnaccountedThinkingChars,
     toolBlocks,
     streamSegments,
     streamRevision: projectionState.revision,

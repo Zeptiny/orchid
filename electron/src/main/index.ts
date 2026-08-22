@@ -22,10 +22,12 @@ import {
   HOME_AGENTS_DIR,
   HOME_SKILLS_DIR,
   HOME_PERSONALITIES_DIR,
+  HOME_PROMPTS_DIR,
 } from './config/loader';
 import { loadAgents, seedAgentsDir } from './agents/registry';
 import { loadSkills, seedSkillsDir } from './skills/registry';
 import { loadPersonalities, seedPersonalitiesDir } from './personality/registry';
+import { seedSharedPromptsDir } from './prompts/registry';
 import { shutdownProjectMCPManagers } from './mcp/project-registry';
 import { initUpdater, destroyUpdater, checkForUpdates } from './updater';
 import { initFileLogging, closeFileLogging } from './logging';
@@ -317,6 +319,7 @@ app.whenReady().then(async () => {
         seedAgentsDir(HOME_AGENTS_DIR);
         seedSkillsDir(HOME_SKILLS_DIR);
         seedPersonalitiesDir(HOME_PERSONALITIES_DIR);
+        seedSharedPromptsDir(HOME_PROMPTS_DIR);
         loadPersonalities();
 
         // Do not select a project layer as a process-wide default.

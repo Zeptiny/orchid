@@ -87,12 +87,15 @@ vi.mock('../../src/main/defs/manage', () => ({
   listManagedSkills: mocks.listManagedSkills,
   listManagedAgents: mocks.listManagedAgents,
   listManagedPersonalities: mocks.listManagedPersonalities,
+  listManagedSharedPrompts: vi.fn(() => []),
   saveSkill: vi.fn(),
   saveAgent: vi.fn(),
   savePersonality: vi.fn(),
+  saveSharedPrompt: vi.fn(),
   deleteSkill: vi.fn(),
   deleteAgent: vi.fn(),
   deletePersonality: vi.fn(),
+  deleteSharedPrompt: vi.fn(),
 }));
 
 import { reloadDefinitionRegistries } from '../../src/main/defs/reload';

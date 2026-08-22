@@ -765,8 +765,8 @@ describe('apply_patch agentProjector', () => {
     expect(result.content).toContain('<file path="src/app.ts" operation="update" status="complete"');
     expect(result.content).toContain('<file path="bad.ts" operation="update" status="error"');
     expect(result.content).toContain('<error code="match_failed"');
-    expect(result.content).toContain('3 files');
-    expect(result.content).toContain('1 failed');
+    expect(result.content).toContain('files="3"');
+    expect(result.content).toContain('failed="1"');
   });
 
   it('renders move_path attribute', () => {
@@ -897,8 +897,10 @@ describe('apply_patch agentProjector', () => {
     expect(result.content).not.toContain('<new_string>');
   });
 
-  it('F11: counts unique file paths in summary (not operations)', () => {
-    // Two operations on the same file — the summary should say "1 file", not "2 files".
+  it('omits the prose summary; envelope attributes carry the counts', () => {
+    // Two operations on the same file. The projection no longer renders a
+    // summary line (it duplicated the envelope's files/added/… attributes);
+    // the counts live only in the attributes.
     const data: ApplyPatchResultData = {
       files: [
         {
@@ -948,7 +950,8 @@ describe('apply_patch agentProjector', () => {
 
     const result = projector(canonical(data));
 
-    expect(result.content).toContain('1 file:');
-    expect(result.content).not.toContain('2 files');
+    expect(result.content).toContain('files="2"');
+    expect(result.content).toContain('modified="2"');
+    expect(result.content).not.toMatch(/\d+ files?:/);
   });
 });

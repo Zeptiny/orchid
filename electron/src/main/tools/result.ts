@@ -329,6 +329,35 @@ function renderListMcpResourcesPayload(record: Record<string, JsonValue>): strin
     '\n</resources>';
 }
 
+function renderAskQuestionPayload(record: Record<string, JsonValue>): string {
+  // The questions are intentionally omitted: the agent authored them in the
+  // tool-call args one message earlier. Only the answers are new information.
+  if (record.cancelled === true) return '';
+  const answers = Array.isArray(record.answers)
+    ? record.answers.filter((entry): entry is Record<string, JsonValue> =>
+        entry !== null && typeof entry === 'object' && !Array.isArray(entry))
+    : [];
+  if (answers.length === 0) return '<answers count="0" />';
+  return '<answers count="' + answers.length + '">\n' +
+    answers.map((answer) => {
+      if (answer.skipped === true) return '<answer skipped="true" />';
+      const selected = Array.isArray(answer.selected)
+        ? answer.selected
+            .filter((label): label is string => typeof label === 'string')
+            .join(', ')
+        : '';
+      const attrs = selected.length > 0
+        ? ' selected="' + escapeXmlAttribute(selected) + '"'
+        : '';
+      const text = typeof answer.text === 'string' && answer.text.length > 0
+        ? xmlText(answer.text)
+        : '';
+      if (attrs.length === 0 && text.length === 0) return '<answer />';
+      return '<answer' + attrs + '>' + text + '</answer>';
+    }).join('\n') +
+    '\n</answers>';
+}
+
 function renderFindSymbolReferencesPayload(record: Record<string, JsonValue>): string {
   if (typeof record.error === 'string') return '';
   const references = Array.isArray(record.references)
@@ -424,9 +453,6 @@ function renderReplaceSymbolPayload(record: Record<string, JsonValue>): string {
     'path="' + escapeXmlAttribute(record.file) + '"',
     'success="' + escapeXmlAttribute(record.success ?? true) + '"',
     'replacements="' + escapeXmlAttribute(record.replacements ?? 0) + '"',
-    'replace_all="false"',
-    'added="0"',
-    'removed="0"',
   ];
   if (typeof record.error === 'string') {
     attrs.push('error="' + escapeXmlAttribute(record.error) + '"');
@@ -479,6 +505,7 @@ export const payloadRenderers: ReadonlyMap<string, PayloadRenderer> = new Map([
   ['web_fetch', renderWebFetchPayload],
   ['delegate_to_subagent', renderDelegateToSubagentPayload],
   ['replace_symbol', renderReplaceSymbolPayload],
+  ['ask_question', renderAskQuestionPayload],
 ]);
 
 function renderGenericPayload(
@@ -525,6 +552,11 @@ export const genericAgentProjector: AgentProjector = (canonical, toolName) => {
     typeof value.uri === 'string'
     ? value.uri
     : undefined;
+  // String-valued error outcomes default error.message to the value itself
+  // (genericBuiltInToolOutcome), so rendering both <data> and <error> would
+  // emit the text twice. Emit <error> only.
+  const includeBodyOnError = canonical.status !== 'error'
+    || typeof (generic.success ? generic.data.value : undefined) !== 'string';
   return projectionWithCanonicalCompleteness(
     canonical,
     renderXmlToolResult(
@@ -536,7 +568,7 @@ export const genericAgentProjector: AgentProjector = (canonical, toolName) => {
         ...(resourceUri !== undefined ? { uri: resourceUri } : {}),
       },
       undefined,
-      true,
+      includeBodyOnError,
     ),
   );
 };

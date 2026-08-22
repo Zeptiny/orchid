@@ -12,6 +12,7 @@ import { readAgents } from '../agents/registry';
 import { loadConfig } from '../config/loader';
 import type { Config } from '../config/schema';
 import { readPersonalities } from '../personality/registry';
+import { readSharedPrompts, type SharedPrompts } from '../prompts/registry';
 import { readSkills } from '../skills/registry';
 import { canonicalizeProjectDirectory } from './path';
 
@@ -26,6 +27,8 @@ export interface ProjectRuntime {
   readonly skills: ReadonlyMap<string, Skill>;
   /** Home personalities overlaid by this project's personalities. */
   readonly personalities: ReadonlyMap<string, string>;
+  /** Shared prompt slots (home replaced per-slot by this project's files). */
+  readonly sharedPrompts: SharedPrompts;
 }
 
 export interface ProjectRuntimeRegistryOptions {
@@ -37,6 +40,8 @@ export interface ProjectRuntimeRegistryOptions {
   readonly homeSkillsDir?: string;
   /** Override the home personalities directory. */
   readonly homePersonalitiesDir?: string;
+  /** Override the home shared prompts directory. */
+  readonly homePromptsDir?: string;
 }
 
 function requireCanonicalProjectDirectory(projectDir: string): string {
@@ -93,6 +98,10 @@ export class ProjectRuntimeRegistry {
       }),
       personalities: readPersonalities({
         homeDir: this.options.homePersonalitiesDir,
+        projectDir: canonicalProjectDir,
+      }),
+      sharedPrompts: readSharedPrompts({
+        homeDir: this.options.homePromptsDir,
         projectDir: canonicalProjectDir,
       }),
     });

@@ -24,6 +24,7 @@ export const HOME_CONFIG_PATH = path.join(HOME_CONFIG_DIR, 'config.json');
 export const HOME_AGENTS_DIR = path.join(HOME_CONFIG_DIR, 'agents');
 export const HOME_SKILLS_DIR = path.join(HOME_CONFIG_DIR, 'skills');
 export const HOME_PERSONALITIES_DIR = path.join(HOME_CONFIG_DIR, 'personalities');
+export const HOME_PROMPTS_DIR = path.join(HOME_CONFIG_DIR, 'prompts');
 export const PROJECT_CONFIG_NAME = '.orchid.json';
 
 // ---------------------------------------------------------------------------
@@ -201,6 +202,7 @@ export function ensureHomeConfig(): void {
   fs.mkdirSync(HOME_AGENTS_DIR, { recursive: true });
   fs.mkdirSync(HOME_SKILLS_DIR, { recursive: true });
   fs.mkdirSync(HOME_PERSONALITIES_DIR, { recursive: true });
+  fs.mkdirSync(HOME_PROMPTS_DIR, { recursive: true });
 }
 
 // ---------------------------------------------------------------------------

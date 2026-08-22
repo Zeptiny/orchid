@@ -9,7 +9,7 @@
 import { useMemo } from 'react';
 import type { Message, Usage } from '../../shared/types/message';
 import { MessageRole, MessageType } from '../../shared/types/message';
-import { contextUsedTokens } from '../../shared/usage';
+import { contextUsedTokens, usageCountersEqual } from '../../shared/usage';
 
 const COLOR_FREE = 'var(--context-free)';
 const COLOR_SYSTEM = 'var(--context-system)';
@@ -179,13 +179,18 @@ function estimateSummaryTokensFromChars(
   return Math.round((chars.summary / totalChars) * inputTokens);
 }
 
-function isPersistedUsageRef(
+/**
+ * True when the usage record is already attached to one of the visible
+ * messages. Reference equality is useless here: the done-event usage and the
+ * message-attached usage cross IPC as separate structured clones (issue 187).
+ */
+function isPersistedUsage(
   messages: readonly Message[],
   usage: Usage | null,
 ): boolean {
   if (!usage) return false;
   for (const message of messages) {
-    if (message.usage === usage) return true;
+    if (usageCountersEqual(message.usage, usage)) return true;
   }
   return false;
 }
@@ -201,21 +206,21 @@ function computeBreakdown(
   if (usage?.context) {
     const context = usage.context;
     const persistedReasoning = sumPersistedReasoning(messages);
-    const isPersisted = isPersistedUsageRef(messages, usage);
     const normalizeNonNegative = (value: number | undefined): number | undefined =>
       typeof value === 'number' && value >= 0 ? value : undefined;
     const usageReasoning = normalizeNonNegative(usage.reasoning_tokens);
     const contextReasoning = normalizeNonNegative(usage.context?.reasoning_tokens);
-    const providerDelta = isPersisted ? 0 : (usageReasoning ?? contextReasoning ?? 0);
+    const providerDelta = isPersistedUsage(messages, usage) ? 0 : (usageReasoning ?? contextReasoning ?? 0);
     const streamingTokens =
       streamingThinkingChars && streamingThinkingChars > 0
         ? Math.round(streamingThinkingChars / 4)
         : 0;
-    // A positive provider count is authoritative; the thinking-char estimate is
-    // only a fallback for providers that never report reasoning tokens. Taking
-    // the max would let the estimate inflate a turn the provider already counted.
-    const liveOrStreaming = providerDelta > 0 ? providerDelta : streamingTokens;
-    const streamingDelta = Math.max(0, streamingTokens - providerDelta);
+    // Provider-reported reasoning (finished steps) and the thinking-char
+    // estimate (in-flight step) cover DISJOINT parts of the turn — they are
+    // summed, never exchanged. The caller passes only thinking chars not yet
+    // covered by a usage event, so no finished step is estimated twice.
+    const liveOrStreaming = providerDelta + streamingTokens;
+    const streamingDelta = streamingTokens;
     const effectiveAssistantTokens = context.assistant_tokens + streamingDelta;
     const effectiveUsedTokens = context.used_tokens + streamingDelta;
     // Summary tokens: provider-reported when present, otherwise estimated from
@@ -235,27 +240,25 @@ function computeBreakdown(
     const reserve = (value: number): number => Math.round(Math.max(0, value) * summaryReserve);
     const scaledAssistantTokens = reserve(effectiveAssistantTokens);
     const windowReasoning = persistedReasoning + liveOrStreaming;
+    const chars = countMessageChars(messages);
+    if (streamingThinkingChars && streamingThinkingChars > 0) {
+      chars.reasoning += streamingThinkingChars;
+    }
     let assistant: { response: number; reasoning: number };
-    if (windowReasoning > 0) {
-      const reasoning = Math.min(
-        Math.max(0, scaledAssistantTokens),
-        Math.max(0, windowReasoning),
-      );
+    if (windowReasoning > 0 && windowReasoning <= Math.max(0, scaledAssistantTokens)) {
+      // Reported reasoning fits inside the assistant bucket — authoritative.
       assistant = {
-        response: Math.max(0, scaledAssistantTokens - reasoning),
-        reasoning,
+        response: Math.max(0, scaledAssistantTokens - windowReasoning),
+        reasoning: windowReasoning,
       };
     } else {
-      // No positive provider count. A provider-reported zero is not treated as
-      // authoritative here: models that stream visible thinking but report
-      // reasoning_tokens = 0 would otherwise show no reasoning once the chain
-      // finishes (the live view counts the same thinking via streaming chars).
-      // Fall back to the character-ratio estimate, which yields zero on its own
-      // when there is no visible reasoning text.
-      const chars = countMessageChars(messages);
-      if (streamingThinkingChars && streamingThinkingChars > 0) {
-        chars.reasoning += streamingThinkingChars;
-      }
+      // Either nothing was reported, or the reported reasoning exceeds what
+      // the final snapshot's assistant bucket holds — generated-token totals
+      // (per-message usage) outgrow the last step's window position on every
+      // multi-step reasoning-heavy turn, and clamping there redirected the
+      // whole bucket into Reasoning, collapsing an explicit response to zero
+      // (issue 187). Fall back to the visible character ratio, which yields
+      // zero on its own when there is no visible reasoning text.
       assistant = splitAssistantTokens(scaledAssistantTokens, chars);
     }
     return {
@@ -344,7 +347,7 @@ function buildLegendSections(b: TokenBreakdown): LegendSection[] {
     {
       entries: [
         entry('tool-definition', COLOR_TOOLS, 'Tool (Definition)', b.tools),
-        entry('tool-use', COLOR_TOOL_USE, 'Tool use (Output)', b.toolUse),
+        entry('tool-use', COLOR_TOOL_USE, 'Tool use', b.toolUse),
       ],
     },
     { entries: [entry('user', COLOR_USER, 'User', b.user)] },

@@ -87,23 +87,24 @@ export const getFunctionHandler: ToolHandler = async (input: unknown, ctx) => {
     try {
       stat = await fs.promises.stat(file_path);
     } catch {
-      return genericBuiltInToolOutcome('get_function', `<ast_error tool="get_function" file="${xmlAttr(file_path)}">` +
-          `File not found: ${file_path}</ast_error>`, 'error');
+      return genericBuiltInToolOutcome('get_function', `File not found: ${file_path}`, 'error');
     }
 
     const names = [function_name.trim()].filter(Boolean);
     if (names.length === 0) {
-      return genericBuiltInToolOutcome('get_function', '<ast_error tool="get_function">No valid function names provided.</ast_error>', 'error');
+      return genericBuiltInToolOutcome('get_function', 'No valid function names provided.', 'error');
     }
 
     const maxFileSize = getToolConfig(ctx).ast_max_file_size;
     if (!stat.isFile()) {
-      return genericBuiltInToolOutcome('get_function', `<ast_error tool="get_function" file="${xmlAttr(file_path)}">` +
-          `Path is not a regular file: ${file_path}</ast_error>`, 'error');
+      return genericBuiltInToolOutcome('get_function', `Path is not a regular file: ${file_path}`, 'error');
     }
     if (stat.size > maxFileSize) {
-      return genericBuiltInToolOutcome('get_function', `<ast_error tool="get_function" file="${xmlAttr(file_path)}">` +
-          `File exceeds AST size limit (${stat.size} bytes; maximum ${maxFileSize} bytes).</ast_error>`, 'error');
+      return genericBuiltInToolOutcome(
+        'get_function',
+        `File exceeds AST size limit (${stat.size} bytes; maximum ${maxFileSize} bytes).`,
+        'error',
+      );
     }
 
     const extraction = await runGetFunctionInWorker({
@@ -118,8 +119,7 @@ export const getFunctionHandler: ToolHandler = async (input: unknown, ctx) => {
       const matches = extraction.functions.filter((item) => item.name === targetName);
       if (matches.length === 0) {
         foundFunctions.push(
-          `<function name="${xmlAttr(targetName)}" ` +
-          `file="${xmlAttr(file_path)}" status="not_found">\n` +
+          `<function name="${xmlAttr(targetName)}" status="not_found">\n` +
           `Function '${targetName}' not found.\n</function>`,
         );
         continue;
@@ -132,7 +132,6 @@ export const getFunctionHandler: ToolHandler = async (input: unknown, ctx) => {
         if (lastHash === currentHash) {
           foundFunctions.push(
             `<function name="${xmlAttr(targetName)}" ` +
-            `file="${xmlAttr(file_path)}" ` +
             `start_line="${match.startLine}" end_line="${match.endLine}">\n` +
             'No changes have been made since last retrieval.\n</function>',
           );
@@ -140,7 +139,6 @@ export const getFunctionHandler: ToolHandler = async (input: unknown, ctx) => {
           const parts: string[] = [];
           parts.push(
             `<function name="${xmlAttr(targetName)}" ` +
-            `file="${xmlAttr(file_path)}" ` +
             `start_line="${match.startLine}" end_line="${match.endLine}">`,
           );
           if (extraction.importsText) {
@@ -169,16 +167,14 @@ export const getFunctionHandler: ToolHandler = async (input: unknown, ctx) => {
     return genericBuiltInToolOutcome('get_function', contentXml, 'complete');
   } catch (err) {
     if (err instanceof GetFunctionCapacityError) {
-      return genericBuiltInToolOutcome('get_function', '<ast_error tool="get_function">' +
-        'AST extraction is at capacity; retry shortly.</ast_error>', 'error');
+      return genericBuiltInToolOutcome('get_function',
+        'AST extraction is at capacity; retry shortly.', 'error');
     }
     if (err instanceof Error && err.message.includes('Unsupported file extension')) {
-      return genericBuiltInToolOutcome('get_function', `<ast_error tool="get_function" file="${xmlAttr(file_path)}">` +
-          `${err.message}</ast_error>`, 'error');
+      return genericBuiltInToolOutcome('get_function', err.message, 'error');
     }
     const msg = err instanceof Error ? err.message : String(err);
-    return genericBuiltInToolOutcome('get_function', `<ast_error tool="get_function" file="${xmlAttr(file_path)}">` +
-        `${msg}</ast_error>`, 'error');
+    return genericBuiltInToolOutcome('get_function', msg, 'error');
   }
 };
 

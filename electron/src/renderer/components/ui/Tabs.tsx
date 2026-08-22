@@ -1,4 +1,4 @@
-import { type HTMLAttributes, type ReactNode } from 'react';
+import { useEffect, useRef, type HTMLAttributes, type ReactNode } from 'react';
 
 export type TabsVariant = 'boxed' | 'bordered' | 'lift' | 'pill';
 
@@ -37,8 +37,31 @@ export function Tabs({
   activeItemClassName = '',
   ...props
 }: TabsProps) {
+  const rootRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const root = rootRef.current;
+    if (!root) return;
+    const onWheel = (e: WheelEvent) => {
+      if (e.ctrlKey || e.metaKey) return;
+      if (e.deltaY === 0 || root.scrollWidth <= root.clientWidth) return;
+      e.preventDefault();
+      root.scrollLeft += e.deltaX || e.deltaY;
+    };
+    root.addEventListener('wheel', onWheel, { passive: false });
+    return () => root.removeEventListener('wheel', onWheel);
+  }, []);
+
+  useEffect(() => {
+    const root = rootRef.current;
+    if (!root) return;
+    const active = root.querySelector<HTMLElement>('[aria-selected="true"]');
+    active?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+  }, [value]);
+
   return (
     <div
+      ref={rootRef}
       role="tablist"
       className={`tabs ${VARIANT_CLASS[variant]} ${className}`.trim().replace(/\s+/g, ' ')}
       {...props}

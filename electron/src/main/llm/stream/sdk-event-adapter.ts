@@ -118,6 +118,8 @@ export class SdkEventAdapter {
   private currentStepMessages: readonly ModelMessage[];
   private stepIndex = 0;
   private stepChars: ReasoningChars = emptyReasoningChars();
+  /** Tool-call ids whose input chars already landed in `stepChars.tool`. */
+  private readonly countedToolInput = new Set<string>();
   private readonly reasoningParts = new Map<string, PendingReasoningSequence>();
 
   constructor(private readonly options: SdkEventAdapterOptions) {
@@ -136,6 +138,7 @@ export class SdkEventAdapter {
           : this.options.coreMessages;
         this.reasoningParts.clear();
         this.stepChars = emptyReasoningChars();
+        this.countedToolInput.clear();
         break;
       }
 
@@ -192,6 +195,7 @@ export class SdkEventAdapter {
         const argsDelta = stringField(part.inputTextDelta) ?? stringField(part.delta) ?? '';
         if (toolCallId && argsDelta) {
           this.stepChars.tool += argsDelta.length;
+          this.countedToolInput.add(toolCallId);
           this.options.eagerBridge.inputDelta(toolCallId, argsDelta);
           this.options.attempt.markDeliveredOutput();
           yield { type: 'tool_call_delta', toolCallId, argsDelta };
@@ -210,11 +214,19 @@ export class SdkEventAdapter {
         const toolCallId = streamToolCallId(part);
         const toolName = this.options.resolveToolName(stringField(part.toolName) ?? 'unknown');
         const rawInput = part.input ?? part.args;
+        // Whole-delivered tool calls (no input-delta parts) still generated
+        // tokens — count their input as tool-use chars once, deduped against
+        // streamed deltas for the same call (issue 187).
+        const args = stringifyToolInput(rawInput);
+        if (toolCallId && !this.countedToolInput.has(toolCallId) && args) {
+          this.stepChars.tool += args.length;
+          this.countedToolInput.add(toolCallId);
+        }
         if (toolCallId) {
           const event = this.options.eagerBridge.sdkToolCall({
             toolCallId,
             toolName,
-            args: stringifyToolInput(rawInput),
+            args,
             rawInput,
             providerExecuted: part.providerExecuted === true,
             invalid: part.invalid === true,
