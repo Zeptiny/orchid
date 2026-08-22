@@ -4,6 +4,9 @@
  * Covers:
  * - Successful write/edit outcomes enqueue an upsert with the canonical path (relative)
  * - apply_patch with mixed operations enqueues upserts plus one delete, skipping errored entries
+ * - apply_patch moves enqueue a source delete plus a destination upsert; an
+ *   escaping destination keeps only the source delete
+ * - rename_symbol / replace_symbol results enqueue an upsert per mutated file
  * - Error and cancelled outcomes enqueue nothing
  * - Completed execute_command marks the project dirty; a read-only tool does not
  * - A path escaping the workspace is dropped
@@ -176,10 +179,13 @@ function applyPatchOutcome(files: ApplyPatchFileResult[]): ToolHandlerOutcome<Js
   };
 }
 
-function genericOutcome(value: string): ToolHandlerOutcome<JsonValue> {
+function genericOutcome(
+  value: JsonValue,
+  name = 'test',
+): ToolHandlerOutcome<JsonValue> {
   return {
     status: 'complete',
-    data: { value, origin: { kind: 'built-in', name: 'test' } },
+    data: { value, origin: { kind: 'built-in', name } },
   };
 }
 
@@ -337,6 +343,124 @@ describe('executeToolCall index refresh notification', () => {
       timerArmed: true,
       flushing: false,
     });
+  });
+
+  it('splits an apply_patch move into a source delete plus a destination upsert', async () => {
+    registerFakeTool(
+      {
+        name: 'apply_patch',
+        resultFamily: 'generic',
+        outputDataSchema: applyPatchResultDataSchema,
+        riskClass: 'mutation',
+      },
+      () => applyPatchOutcome([
+        {
+          path: 'src/old-name.ts',
+          operation: 'update',
+          status: 'complete',
+          movePath: 'src/new-name.ts',
+        },
+      ]),
+    );
+
+    const result = await dispatch('apply_patch');
+
+    expect(result.canonical.status).toBe('complete');
+    expect(_getPendingIndexRefreshForTests(cwd)).toEqual({
+      entries: [
+        { rel: 'src/old-name.ts', op: 'delete' },
+        { rel: 'src/new-name.ts', op: 'upsert' },
+      ],
+      dirty: false,
+      timerArmed: true,
+      flushing: false,
+    });
+  });
+
+  it('keeps the source delete when an apply_patch move destination escapes the workspace', async () => {
+    registerFakeTool(
+      {
+        name: 'apply_patch',
+        resultFamily: 'generic',
+        outputDataSchema: applyPatchResultDataSchema,
+        riskClass: 'mutation',
+      },
+      () => applyPatchOutcome([
+        {
+          path: 'src/moved.ts',
+          operation: 'update',
+          status: 'complete',
+          movePath: '../outside.ts',
+        },
+      ]),
+    );
+
+    const result = await dispatch('apply_patch', 'patch-move-outside');
+
+    expect(result.canonical.status).toBe('complete');
+    expect(_getPendingIndexRefreshForTests(cwd).entries).toEqual([
+      { rel: 'src/moved.ts', op: 'delete' },
+    ]);
+  });
+
+  it('enqueues an upsert per mutated file from rename_symbol and replace_symbol results', async () => {
+    registerFakeTool(
+      {
+        name: 'rename_symbol',
+        resultFamily: 'generic',
+        outputDataSchema: genericToolResultDataSchema,
+        riskClass: 'mutation',
+      },
+      () => genericOutcome({
+        oldName: 'greet',
+        newName: 'salute',
+        files: 2,
+        success: true,
+        edits: [
+          { path: 'src/greeter.ts', replacements: 2 },
+          { path: 'src/greeter.test.ts', replacements: 1 },
+          {
+            path: 'src/locked.ts',
+            success: false,
+            replacements: 0,
+            replaceAll: false,
+            added: 0,
+            removed: 0,
+            error: 'EACCES: permission denied',
+          },
+        ],
+      }, 'rename_symbol'),
+    );
+    registerFakeTool(
+      {
+        name: 'replace_symbol',
+        resultFamily: 'generic',
+        outputDataSchema: genericToolResultDataSchema,
+        riskClass: 'mutation',
+      },
+      () => genericOutcome({
+        file: path.join(cwd, 'src', 'geometry.ts'),
+        symbol: 'areaOfCircle',
+        success: true,
+        replacements: 1,
+        items: [{ oldString: 'return 3.14 * r * r;', newString: 'return Math.PI * r * r;' }],
+      }, 'replace_symbol'),
+    );
+
+    const renameResult = await dispatch('rename_symbol', 'rename-call');
+    expect(renameResult.canonical.status).toBe('complete');
+    expect(_getPendingIndexRefreshForTests(cwd).entries).toEqual([
+      { rel: 'src/greeter.ts', op: 'upsert' },
+      { rel: 'src/greeter.test.ts', op: 'upsert' },
+    ]);
+
+    const replaceResult = await dispatch('replace_symbol', 'replace-call');
+    expect(replaceResult.canonical.status).toBe('complete');
+    expect(_getPendingIndexRefreshForTests(cwd).entries).toEqual([
+      { rel: 'src/greeter.ts', op: 'upsert' },
+      { rel: 'src/greeter.test.ts', op: 'upsert' },
+      { rel: 'src/geometry.ts', op: 'upsert' },
+    ]);
   });
 
   it('enqueues nothing for error and cancelled outcomes', async () => {
