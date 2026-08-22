@@ -554,9 +554,14 @@ export const genericAgentProjector: AgentProjector = (canonical, toolName) => {
     : undefined;
   // String-valued error outcomes default error.message to the value itself
   // (genericBuiltInToolOutcome), so rendering both <data> and <error> would
-  // emit the text twice. Emit <error> only.
+  // emit the text twice. Emit <error> only; keep <data> when it differs from
+  // error.message so distinct payload text is not lost.
+  const stringValue = generic.success && typeof generic.data.value === 'string'
+    ? generic.data.value
+    : undefined;
   const includeBodyOnError = canonical.status !== 'error'
-    || typeof (generic.success ? generic.data.value : undefined) !== 'string';
+    || stringValue === undefined
+    || stringValue !== canonical.error.message;
   return projectionWithCanonicalCompleteness(
     canonical,
     renderXmlToolResult(
