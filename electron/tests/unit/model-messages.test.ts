@@ -101,6 +101,89 @@ describe('toModelMessages', () => {
     ]);
   });
 
+  it('recovers the tool name from the paired assistant tool call', () => {
+    expect(toModelMessages([
+      assistant({
+        content: null,
+        tool_calls: [
+          {
+            id: 'call-read',
+            type: 'function',
+            function: { name: 'read', arguments: '{"path":"README.md"}' },
+          },
+          {
+            id: 'call-grep',
+            type: 'function',
+            function: { name: 'grep', arguments: '{"pattern":"foo"}' },
+          },
+        ],
+      }),
+      { role: 'tool', content: 'result-a', tool_call_id: 'call-read' },
+      { role: 'tool', content: 'result-b', tool_call_id: 'call-grep' },
+    ])).toEqual([
+      {
+        role: 'assistant',
+        content: [
+          {
+            type: 'tool-call',
+            toolCallId: 'call-read',
+            toolName: 'read',
+            input: { path: 'README.md' },
+          },
+          {
+            type: 'tool-call',
+            toolCallId: 'call-grep',
+            toolName: 'grep',
+            input: { pattern: 'foo' },
+          },
+        ],
+      },
+      {
+        role: 'tool',
+        content: [{
+          type: 'tool-result',
+          toolCallId: 'call-read',
+          toolName: 'read',
+          output: { type: 'text', value: 'result-a' },
+        }],
+      },
+      {
+        role: 'tool',
+        content: [{
+          type: 'tool-result',
+          toolCallId: 'call-grep',
+          toolName: 'grep',
+          output: { type: 'text', value: 'result-b' },
+        }],
+      },
+    ]);
+  });
+
+  it('recovers the tool name even when the call arguments do not parse', () => {
+    expect(toModelMessages([
+      assistant({
+        content: null,
+        tool_calls: [{
+          id: 'call-1',
+          type: 'function',
+          function: { name: 'read', arguments: '{not json}' },
+        }],
+      }),
+      { role: 'tool', content: 'result', tool_call_id: 'call-1' },
+    ])).toEqual([
+      { role: 'assistant', content: '' },
+      {
+        role: 'tool',
+        content: [{
+          type: 'tool-result',
+          toolCallId: 'call-1',
+          toolName: 'read',
+          output: { type: 'text', value: 'result' },
+        }],
+      },
+    ]);
+  });
+
   it('skips persisted tool results without a tool call ID', () => {
     expect(toModelMessages([
       { role: 'tool', content: 'orphaned result' },
