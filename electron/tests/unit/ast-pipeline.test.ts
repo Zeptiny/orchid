@@ -584,6 +584,134 @@ describe('Indexer', () => {
 
 });
 
+// ── Indexer: incremental updates ───────────────────────────────────────────
+
+describe('Indexer incremental updates', () => {
+  it('should replace symbols and hash for a changed file on upsertFiles', async () => {
+    const projectDir = path.join(tmpDir, 'project');
+    fs.mkdirSync(projectDir, { recursive: true });
+    fs.writeFileSync(path.join(projectDir, 'test.py'), SAMPLE_PYTHON);
+    const { upsertFiles } = await import('../../src/main/ast/indexer');
+    await upsertFiles({ projectPath: projectDir, rels: ['test.py'] });
+    const { ASTStore } = await import('../../src/main/ast/store');
+    const store = new ASTStore(projectDir);
+    const hashBefore = store.getFileHash('test.py');
+    expect(hashBefore).toBeTruthy();
+    expect(store.getSymbolsByName('greet', 'definition')).toHaveLength(1);
+
+    fs.writeFileSync(
+      path.join(projectDir, 'test.py'),
+      SAMPLE_PYTHON.replace('def greet(name):', 'def salute(name):'),
+    );
+    const result = await upsertFiles({ projectPath: projectDir, rels: ['test.py'] });
+    expect(result.filesIndexed).toBe(1);
+    expect(result.filesSkipped).toBe(0);
+    expect(result.symbolsExtracted).toBeGreaterThan(0);
+    expect(result.errors).toHaveLength(0);
+    expect(store.getFileHash('test.py')).not.toBe(hashBefore);
+    expect(store.getSymbolsByName('greet', 'definition')).toHaveLength(0);
+    expect(store.getSymbolsByName('salute', 'definition')).toHaveLength(1);
+  });
+
+  it('should skip unchanged files on upsertFiles', async () => {
+    const projectDir = path.join(tmpDir, 'project');
+    fs.mkdirSync(projectDir, { recursive: true });
+    fs.writeFileSync(path.join(projectDir, 'test.py'), SAMPLE_PYTHON);
+    const { upsertFiles } = await import('../../src/main/ast/indexer');
+    await upsertFiles({ projectPath: projectDir, rels: ['test.py'] });
+    const { ASTStore } = await import('../../src/main/ast/store');
+    const store = new ASTStore(projectDir);
+    const hashBefore = store.getFileHash('test.py');
+    const result = await upsertFiles({ projectPath: projectDir, rels: ['test.py'] });
+    expect(result.filesIndexed).toBe(0);
+    expect(result.filesSkipped).toBe(1);
+    expect(result.filesDeleted).toBe(0);
+    expect(result.symbolsExtracted).toBe(0);
+    expect(result.errors).toHaveLength(0);
+    expect(store.getFileHash('test.py')).toBe(hashBefore);
+  });
+
+  it('should remove all rows for the given rels on deleteFiles', async () => {
+    const projectDir = path.join(tmpDir, 'project');
+    fs.mkdirSync(path.join(projectDir, 'src'), { recursive: true });
+    fs.writeFileSync(path.join(projectDir, 'src', 'util.py'), 'def helper():\n    return 1\n');
+    fs.writeFileSync(path.join(projectDir, 'other.py'), 'def main():\n    return helper()\n');
+    const { upsertFiles, deleteFiles } = await import('../../src/main/ast/indexer');
+    await upsertFiles({ projectPath: projectDir, rels: ['src/util.py', 'other.py'] });
+    const { ASTStore } = await import('../../src/main/ast/store');
+    const store = new ASTStore(projectDir);
+    expect(store.getFileHash('src/util.py')).toBeTruthy();
+    expect(store.getSymbolsByName('helper', 'definition')).toHaveLength(1);
+
+    const deleted = await deleteFiles(projectDir, ['src/util.py', 'missing.py']);
+    expect(deleted).toBe(1);
+    expect(store.getFileHash('src/util.py')).toBe('');
+    expect(store.getSymbolsByName('helper', 'definition')).toHaveLength(0);
+    expect(store.getFileHash('other.py')).toBeTruthy();
+    expect(store.getSymbolsByName('main', 'definition')).toHaveLength(1);
+  });
+
+  it('should ignore non-source extensions on upsertFiles', async () => {
+    const projectDir = path.join(tmpDir, 'project');
+    fs.mkdirSync(projectDir, { recursive: true });
+    fs.writeFileSync(path.join(projectDir, 'README.md'), '# Notes\n\ndef fake():\n    return 1\n');
+    fs.writeFileSync(path.join(projectDir, 'data.json'), '{"a": 1}\n');
+    const { upsertFiles } = await import('../../src/main/ast/indexer');
+    const result = await upsertFiles({ projectPath: projectDir, rels: ['README.md', 'data.json'] });
+    expect(result.filesIndexed).toBe(0);
+    expect(result.filesSkipped).toBe(0);
+    expect(result.filesDeleted).toBe(0);
+    expect(result.errors).toHaveLength(0);
+    const { ASTStore } = await import('../../src/main/ast/store');
+    expect(new ASTStore(projectDir).status().totalFiles).toBe(0);
+  });
+
+  it('should upsert partial symbols for a file with a syntax error', async () => {
+    const projectDir = path.join(tmpDir, 'project');
+    fs.mkdirSync(projectDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(projectDir, 'broken.ts'),
+      'def alpha():\n    return 1\n\ndefn beta(:\n    return 2\n\ndef gamma():\n    return 3\n',
+    );
+    const { upsertFiles } = await import('../../src/main/ast/indexer');
+    const result = await upsertFiles({ projectPath: projectDir, rels: ['broken.ts'] });
+    expect(result.filesIndexed).toBe(1);
+    expect(result.symbolsExtracted).toBeGreaterThan(0);
+    expect(result.errors).toHaveLength(0);
+    const { ASTStore } = await import('../../src/main/ast/store');
+    const store = new ASTStore(projectDir);
+    expect(store.getSymbolsByName('alpha', 'definition')).toHaveLength(1);
+    expect(store.getSymbolsByName('gamma', 'definition')).toHaveLength(1);
+    expect(store.getSymbolsByName('beta', 'definition')).toHaveLength(0);
+  });
+
+  it('should remove stored rows for rels that fail re-read', async () => {
+    const projectDir = path.join(tmpDir, 'project');
+    fs.mkdirSync(projectDir, { recursive: true });
+    fs.writeFileSync(path.join(projectDir, 'keep.py'), SAMPLE_PYTHON);
+    fs.writeFileSync(path.join(projectDir, 'gone.py'), 'def vanish():\n    return 1\n');
+    const { getConfig } = await import('../../src/main/config');
+    const { upsertFiles } = await import('../../src/main/ast/indexer');
+    await upsertFiles({ projectPath: projectDir, rels: ['keep.py', 'gone.py'] });
+    const { ASTStore } = await import('../../src/main/ast/store');
+    const store = new ASTStore(projectDir);
+    expect(store.getFileHash('keep.py')).toBeTruthy();
+    expect(store.getFileHash('gone.py')).toBeTruthy();
+
+    fs.unlinkSync(path.join(projectDir, 'gone.py'));
+    const result = await upsertFiles({
+      projectPath: projectDir,
+      rels: ['keep.py', 'gone.py'],
+      config: { ...getConfig(), ast_max_file_size: 1 },
+    });
+    expect(result.filesDeleted).toBe(2);
+    expect(result.filesIndexed).toBe(0);
+    expect(store.getFileHash('keep.py')).toBe('');
+    expect(store.getFileHash('gone.py')).toBe('');
+    expect(store.getSymbolsByName('greet', 'definition')).toHaveLength(0);
+  });
+});
+
 // ── Tool: get_file_skeleton ───────────────────────────────────────────────
 
 describe('get_file_skeleton', () => {

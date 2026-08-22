@@ -383,6 +383,103 @@ export async function runIndexProjectImpl(opts: {
 }
 
 // ---------------------------------------------------------------------------
+// Incremental updates
+// ---------------------------------------------------------------------------
+
+export interface UpsertFilesOptions {
+  projectPath: string;
+  rels: string[];
+  /**
+   * Frozen per-project config (ast_max_file_size) captured by the caller.
+   * Falls back to the process-wide config when omitted.
+   */
+  config?: Config;
+}
+
+export interface ASTIncrementalResult {
+  filesIndexed: number;
+  filesSkipped: number;
+  filesDeleted: number;
+  symbolsExtracted: number;
+  errors: string[];
+}
+
+/**
+ * Incrementally index a targeted set of files (project-relative paths).
+ *
+ * Runs inline on the calling thread — single-file tree-sitter parses are
+ * ms-scale, so no worker is spawned. Non-source rels are no-ops; rels that
+ * fail re-read (missing, oversized, binary, empty) are removed from the
+ * store instead of indexed.
+ */
+export async function upsertFiles(opts: UpsertFilesOptions): Promise<ASTIncrementalResult> {
+  const cfg = opts.config ?? getConfig();
+  const result: ASTIncrementalResult = {
+    filesIndexed: 0,
+    filesSkipped: 0,
+    filesDeleted: 0,
+    symbolsExtracted: 0,
+    errors: [],
+  };
+
+  return withDisposableAsync(new ASTStore(opts.projectPath), async (store) => {
+    store.initDb();
+    const existingHashes = store.getAllFileHashes();
+
+    for (const rel of new Set(opts.rels)) {
+      const normalized = normalizeRel(opts.projectPath, rel);
+      if (!shouldInclude(normalized)) continue;
+
+      try {
+        const readResult = await readAndHash(
+          path.resolve(opts.projectPath, normalized),
+          cfg.ast_max_file_size,
+        );
+
+        if (!readResult) {
+          if (existingHashes[normalized]) {
+            store.deleteByFile(normalized);
+            result.filesDeleted++;
+          }
+        } else if (existingHashes[normalized] === readResult.hash) {
+          result.filesSkipped++;
+        } else {
+          const symbols = await extractSymbols(normalized, readResult.content);
+          store.upsertFile(normalized, readResult.hash, symbols);
+          result.filesIndexed++;
+          result.symbolsExtracted += symbols.length;
+        }
+      } catch (err) {
+        const msg = `${normalized}: ${err instanceof Error ? err.message : String(err)}`;
+        console.warn(`AST incremental upsert error: ${msg}`);
+        result.errors.push(msg);
+      }
+    }
+
+    return result;
+  });
+}
+
+/**
+ * Remove a targeted set of files (project-relative paths) from the symbol
+ * store. Returns the number of stored files removed.
+ */
+export async function deleteFiles(projectPath: string, rels: string[]): Promise<number> {
+  return withDisposableAsync(new ASTStore(projectPath), async (store) => {
+    store.initDb();
+    const existing = store.getAllFileHashes();
+    let deleted = 0;
+    for (const rel of new Set(rels)) {
+      const normalized = normalizeRel(projectPath, rel);
+      if (!(normalized in existing)) continue;
+      store.deleteByFile(normalized);
+      deleted++;
+    }
+    return deleted;
+  });
+}
+
+// ---------------------------------------------------------------------------
 // Worker runner (main process)
 // ---------------------------------------------------------------------------
 
@@ -508,6 +605,14 @@ async function walk(directory: string, skip: Set<string>, out: string[]): Promis
 function shouldInclude(filepath: string): boolean {
   const ext = path.extname(filepath).toLowerCase();
   return AST_INCLUDE_EXTS.has(ext);
+}
+
+/**
+ * Canonicalize a caller-supplied rel path to the same key form a full scan
+ * stores (`path.relative(projectPath, …)`).
+ */
+function normalizeRel(projectPath: string, rel: string): string {
+  return path.relative(projectPath, path.resolve(projectPath, rel));
 }
 
 /**
