@@ -157,7 +157,13 @@ export const EMPTY_SUBAGENT_USAGE_SUMMARY: SubagentUsageSummary = {
   total: null,
 };
 
-function usageCountersEqual(a: Usage | null | undefined, b: Usage | null | undefined): boolean {
+/**
+ * Compare the token counters of two usage records (context snapshots
+ * excluded). IPC structured clones break reference identity between the
+ * done-event usage and its message-attached copy, so persisted-usage checks
+ * must compare by value (issue 187).
+ */
+export function usageCountersEqual(a: Usage | null | undefined, b: Usage | null | undefined): boolean {
   if (a === b) return true;
   if (!a || !b) return false;
   return (

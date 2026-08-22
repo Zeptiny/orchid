@@ -94,6 +94,13 @@ export interface ChatTurnProjection {
   streamSegments: ChatStreamSegmentSnapshot[];
   toolCalls: ChatTurnToolSnapshot[];
   usage: Usage | null;
+  /**
+   * Thinking character count already covered by the latest usage event.
+   * The difference to `thinking.length` is in-flight thinking the provider
+   * has not accounted for yet — the renderer estimates those tokens instead
+   * of re-estimating the whole turn (issue 187).
+   */
+  usageThinkingChars: number;
   error: string | null;
   interruptState: ChatSnapshot['interruptState'];
   cwd: string | null;
@@ -160,6 +167,7 @@ export function beginChatTurnProjection(sessionId: string, startedAt: number | n
     streamSegments: [],
     toolCalls: [],
     usage: null,
+    usageThinkingChars: 0,
     error: null,
     interruptState: 'idle',
     cwd: null,
@@ -253,6 +261,9 @@ export function seedChatTurnProjection(snapshot: ChatSnapshot): ChatTurnProjecti
     streamSegments: snapshot.streamSegments.map(copySegment),
     toolCalls: snapshot.toolCalls.map((tool) => ({ ...tool })),
     usage: snapshot.usage,
+    // A non-null snapshot usage means the last finish-step already accounted
+    // every thinking char emitted before the snapshot was taken.
+    usageThinkingChars: snapshot.usage ? snapshot.thinking.length : 0,
     error: snapshot.error,
     interruptState: snapshot.interruptState,
     cwd: snapshot.cwd,
@@ -312,7 +323,7 @@ export function applyChatTurnEvent(
         streamSegments: appendSegment(next.streamSegments, 'thinking', action.segmentId, action.data, action.occurredAt),
       };
     case 'usage':
-      return { ...next, usage: action.usage };
+      return { ...next, usage: action.usage, usageThinkingChars: next.thinking.length };
     case 'tool_call_start':
       return updateTool(next, action.toolCallId, action.toolName, action.occurredAt, () => ({}));
     case 'tool_call_delta':

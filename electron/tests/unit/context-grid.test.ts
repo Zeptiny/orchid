@@ -278,10 +278,11 @@ describe('context grid breakdown', () => {
     expect(categories.reasoning + categories.response).toBe(4_069);
   });
 
-  it('does not inflate a positive provider reasoning count with the streaming estimate', () => {
-    // While a turn is active the provider-reported count (here 500) is
-    // authoritative. The thinking-char estimate (8000 chars -> 2000 tokens)
-    // must not override it, or the live reasoning figure is overstated.
+  it('sums the provider reasoning count with the in-flight streaming estimate', () => {
+    // While a turn is active the provider-reported count (here 500) covers
+    // finished steps; the thinking-char estimate (8000 chars -> 2000 tokens)
+    // covers the in-flight step. They are disjoint and must be summed —
+    // picking one made live thinking inflate "Response" (issue 187).
     const usage = {
       prompt_tokens: 1_000,
       completion_tokens: 600,
@@ -314,7 +315,7 @@ describe('context grid breakdown', () => {
     const reasoningTokens = html.match(
       /context-panel-label">Reasoning<\/span>.*?context-panel-tokens">([^<]+)</s,
     )?.[1];
-    expect(reasoningTokens).toBe('500');
+    expect(reasoningTokens).toBe('2.5k');
   });
 
   it('excludes hidden messages from every character bucket', () => {
@@ -368,7 +369,8 @@ describe('context grid breakdown', () => {
     );
 
     expect(html).toContain('Tool (Definition)');
-    expect(html).toContain('Tool use (Output)');
+    expect(html).toContain('Tool use');
+    expect(html).not.toContain('Tool use (Output)');
     expect(html).toContain('Response');
     expect(html).toContain('Reasoning');
     expect(html).not.toContain('>Tools<');
