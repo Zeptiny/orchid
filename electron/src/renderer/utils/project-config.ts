@@ -13,7 +13,7 @@ export function isPlainRecord(value: unknown): value is Record<string, unknown> 
 
 export { deepEqual };
 
-/** Read a stored project override by field key, resolving `rag.*`, `agents_md.*` and `compaction.*` into nested maps. */
+/** Read a stored project override by field key, resolving `rag.*`, `agents_md.*`, `index_refresh.*` and `compaction.*` into nested maps. */
 export function readStoredOverride(overrides: Record<string, unknown>, key: string): unknown {
   if (key === 'compaction') {
     return overrides['compaction'];
@@ -35,10 +35,16 @@ export function readStoredOverride(overrides: Record<string, unknown>, key: stri
     const agentsMd = overrides['agents_md'];
     return isPlainRecord(agentsMd) ? agentsMd[key.slice('agents_md.'.length)] : undefined;
   }
+  if (key.startsWith('index_refresh.')) {
+    const indexRefresh = overrides['index_refresh'];
+    return isPlainRecord(indexRefresh)
+      ? indexRefresh[key.slice('index_refresh.'.length)]
+      : undefined;
+  }
   return overrides[key];
 }
 
-/** Read a value from the global (home) config by field key, resolving `rag.*`, `agents_md.*` and `compaction.*` into nested maps. */
+/** Read a value from the global (home) config by field key, resolving `rag.*`, `agents_md.*`, `index_refresh.*` and `compaction.*` into nested maps. */
 export function readGlobalValue(config: Config | null, key: string): unknown {
   if (!config) return undefined;
   if (key === 'compaction') {
@@ -60,6 +66,12 @@ export function readGlobalValue(config: Config | null, key: string): unknown {
     const agentsMd = (config as unknown as Record<string, unknown>)['agents_md'];
     return isPlainRecord(agentsMd)
       ? agentsMd[key.slice('agents_md.'.length)]
+      : undefined;
+  }
+  if (key.startsWith('index_refresh.')) {
+    const indexRefresh = (config as unknown as Record<string, unknown>)['index_refresh'];
+    return isPlainRecord(indexRefresh)
+      ? indexRefresh[key.slice('index_refresh.'.length)]
       : undefined;
   }
   return config[key as keyof Config];

@@ -967,6 +967,8 @@ function renderTab(
         <RAGTab
           rag={config.rag}
           onChange={(rag) => updateDraft({ rag })}
+          indexRefresh={config.index_refresh}
+          onIndexRefreshChange={(index_refresh) => updateDraft({ index_refresh })}
         />
       );
     case 'agents-md':
