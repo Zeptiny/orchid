@@ -123,6 +123,22 @@ describe('mergeConfigDraft', () => {
 
     expect(second.permissions).toEqual({ grep: null, write: 'allow' });
   });
+
+  it('continues to accumulate incremental index_refresh edits field-by-field', () => {
+    const first = mergeConfigDraft({}, { index_refresh: { rag: false } });
+    const second = mergeConfigDraft(first, { index_refresh: { debounce_ms: 5000 } });
+
+    expect(second.index_refresh).toEqual({ rag: false, debounce_ms: 5000 });
+  });
+
+  it('merges index_refresh drafts without dropping untouched sibling fields', () => {
+    const current: ConfigPatch = {
+      index_refresh: { rag: true, ast: false, watch: true, debounce_ms: 2000 },
+    };
+    const next = mergeConfigDraft(current, { index_refresh: { rag: false } });
+
+    expect(next.index_refresh).toEqual({ rag: false, ast: false, watch: true, debounce_ms: 2000 });
+  });
 });
 
 describe('applyConfigDraft', () => {
@@ -365,6 +381,16 @@ describe('applyConfigDraft', () => {
     expect(next.compaction.subagents.keep_last_user_messages).toBe(5);
     expect(next.compaction.subagents.mode).toBe(base.compaction.subagents.mode);
     expect(next.compaction.main).toEqual(base.compaction.main);
+  });
+
+  it('merges index_refresh patches field-by-field and keeps sibling fields', () => {
+    const base = defaults();
+    expect(base.index_refresh).toEqual({ rag: true, ast: true, watch: true, debounce_ms: 2000 });
+
+    const next = applyConfigDraft(base, { index_refresh: { rag: false } });
+
+    expect(next.index_refresh).toEqual({ rag: false, ast: true, watch: true, debounce_ms: 2000 });
+    expect(next.rag).toEqual(base.rag);
   });
 
   it('keeps top-level compaction patch fields when a scope patch rides along', () => {

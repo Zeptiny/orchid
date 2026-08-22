@@ -59,6 +59,12 @@ const MOCK_CONFIG = {
     model_download_total_timeout: 900,
     embedding_api_model: null,
   },
+  index_refresh: {
+    rag: true,
+    ast: true,
+    watch: true,
+    debounce_ms: 2000,
+  },
   subagents: {
     event_max_per_flush: 200,
     event_byte_budget_kb: 64,
@@ -496,6 +502,61 @@ describe('ProjectConfigView', () => {
       expect(saveProject).toHaveBeenCalledWith({
         projectDir: PROJECT_DIR,
         updates: { rag: { chunk_size: 4000 } },
+      });
+    });
+  });
+
+  it('index_refresh nested key mapping produces nested index_refresh object in save payload', async () => {
+    const user = userEvent.setup();
+    const { saveProject } = await renderLoaded();
+    await switchTab(user, 'RAG');
+
+    const ragSelect = selectById('index_refresh.rag');
+    expect(ragSelect).not.toBeNull();
+    expect(ragSelect.options[0].textContent).toBe('Inherit global (enabled)');
+    await user.selectOptions(ragSelect, 'false');
+
+    const debounceInput = inputById('index_refresh.debounce_ms');
+    expect(debounceInput.placeholder).toBe('2000');
+    setInputValue(debounceInput, '5000');
+
+    const saveButton = screen.getByText('Save').closest('button') as HTMLButtonElement;
+    await user.click(saveButton);
+
+    await waitFor(() => {
+      // ast/watch stayed inherit-global and must be omitted from the group.
+      expect(saveProject).toHaveBeenCalledWith({
+        projectDir: PROJECT_DIR,
+        updates: { index_refresh: { rag: false, debounce_ms: 5000 } },
+      });
+    });
+  });
+
+  it('clearing index_refresh overrides stages null tombstones for the nested group', async () => {
+    const user = userEvent.setup();
+    const { saveProject } = await renderLoaded({
+      index_refresh: { rag: false, debounce_ms: 5000 },
+    });
+    await switchTab(user, 'RAG');
+
+    expect(selectById('index_refresh.rag').value).toBe('false');
+    expect(inputById('index_refresh.debounce_ms').value).toBe('5000');
+
+    await user.click(screen.getByLabelText('Reset RAG Auto-Refresh to global'));
+    await user.click(screen.getByLabelText('Reset Debounce Window (ms) to global'));
+
+    expect(selectById('index_refresh.rag').value).toBe('');
+    expect(inputById('index_refresh.debounce_ms').value).toBe('');
+    expect(screen.getByText('Unsaved')).toBeTruthy();
+
+    const saveButton = screen.getByText('Save').closest('button') as HTMLButtonElement;
+    await user.click(saveButton);
+
+    await waitFor(() => {
+      // Per-field nulls tombstone the stored group overrides on save.
+      expect(saveProject).toHaveBeenCalledWith({
+        projectDir: PROJECT_DIR,
+        updates: { index_refresh: { rag: null, debounce_ms: null } },
       });
     });
   });
