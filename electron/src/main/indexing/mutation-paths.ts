@@ -47,7 +47,8 @@ export function extractMutations(
 
 function toWorkspaceRel(cwd: string, mutated: string): string | null {
   const rel = path.relative(cwd, path.resolve(cwd, mutated));
-  if (rel === '' || rel.startsWith('..') || path.isAbsolute(rel)) return null;
+  if (rel === '' || path.isAbsolute(rel)) return null;
+  if (rel === '..' || rel.startsWith(`..${path.sep}`) || rel.startsWith('../')) return null;
   return rel;
 }
 

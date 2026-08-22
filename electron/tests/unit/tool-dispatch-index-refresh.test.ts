@@ -607,6 +607,40 @@ describe('executeToolCall index refresh notification', () => {
     ]);
   });
 
+  it('keeps in-workspace files whose names start with dots', async () => {
+    registerFakeTool(
+      {
+        name: 'write',
+        resultFamily: 'file-write',
+        outputDataSchema: fileWriteDataSchema,
+        riskClass: 'mutation',
+      },
+      () => fileWriteOutcome(path.join(cwd, '..notes.ts')),
+    );
+    registerFakeTool(
+      {
+        name: 'edit',
+        resultFamily: 'file-change',
+        outputDataSchema: fileChangeDataSchema,
+        riskClass: 'mutation',
+      },
+      () => fileChangeOutcome(path.join(cwd, '.env.local')),
+    );
+
+    const dotdotResult = await dispatch('write', 'write-dotdot');
+    expect(dotdotResult.canonical.status).toBe('complete');
+    expect(_getPendingIndexRefreshForTests(cwd).entries).toEqual([
+      { rel: '..notes.ts', op: 'upsert' },
+    ]);
+
+    disposeIndexRefreshCoordinator();
+    const dotResult = await dispatch('edit', 'edit-dot');
+    expect(dotResult.canonical.status).toBe('complete');
+    expect(_getPendingIndexRefreshForTests(cwd).entries).toEqual([
+      { rel: '.env.local', op: 'upsert' },
+    ]);
+  });
+
   it('leaves the tool result byte-identical when the coordinator throws', async () => {
     registerFakeTool(
       {
