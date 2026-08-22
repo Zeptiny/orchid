@@ -199,6 +199,24 @@ describe('schema & defaults', () => {
     expect(parsed.rag.chunk_overlap).toBe(200); // default
   });
 
+  it('defaults populate index_refresh (auto-refresh on, 2000ms debounce)', () => {
+    const cfg = defaults();
+    expect(cfg.index_refresh).toEqual({
+      rag: true,
+      ast: true,
+      watch: true,
+      debounce_ms: 2000,
+    });
+  });
+
+  it('configSchema.parse with partial index_refresh fills in remaining defaults', () => {
+    const parsed = configSchema.parse({ index_refresh: { debounce_ms: 500 } });
+    expect(parsed.index_refresh.debounce_ms).toBe(500);
+    expect(parsed.index_refresh.rag).toBe(true);
+    expect(parsed.index_refresh.ast).toBe(true);
+    expect(parsed.index_refresh.watch).toBe(true);
+  });
+
   it('parsePartial returns typed selection fields without splitting model IDs', () => {
     const partial = parsePartial({ default_model: WORK_MODEL_SELECTION, rag: { top_k: 10 } });
     expect(partial).toHaveProperty('default_model', WORK_MODEL_SELECTION);
@@ -564,6 +582,12 @@ describe('configSchema range rejection', () => {
     expect(configSchema.safeParse({ command_timeout: -1 }).success).toBe(false);
   });
 
+  it('rejects out-of-range index_refresh.debounce_ms', () => {
+    expect(configSchema.safeParse({ index_refresh: { debounce_ms: 10 } }).success).toBe(false);
+    expect(configSchema.safeParse({ index_refresh: { debounce_ms: 60_001 } }).success).toBe(false);
+    expect(configSchema.safeParse({ index_refresh: { debounce_ms: 500 } }).success).toBe(true);
+  });
+
   it('rejects negative llm_stream_retries', () => {
     expect(configSchema.safeParse({ llm_stream_retries: -1 }).success).toBe(false);
   });
@@ -645,6 +669,18 @@ describe('loadConfig', () => {
     expect(cfg.rag.top_k).toBe(10);
     expect(cfg.rag.chunk_size).toBe(2000); // default preserved
     expect(cfg.rag.embedding_model).toBe('fastembed/BAAI/bge-small-en-v1.5'); // default
+  });
+
+  it('deep merges a partial index_refresh project override', () => {
+    writeJson(path.join(tmpDir, '.orchid.json'), {
+      index_refresh: { rag: false },
+    });
+
+    const cfg = loadNoHome();
+    expect(cfg.index_refresh.rag).toBe(false);
+    expect(cfg.index_refresh.ast).toBe(true);
+    expect(cfg.index_refresh.watch).toBe(true);
+    expect(cfg.index_refresh.debounce_ms).toBe(2000);
   });
 
   it('env override casts ORCHID_COMMAND_TIMEOUT to int', () => {

@@ -58,6 +58,7 @@ import type {
   IndexRunState,
   RAGConfig,
   AgentsMdConfig,
+  IndexRefreshConfig,
   SubagentsConfig,
   CompactionScopeConfig,
   PermissionModeValue,
@@ -97,6 +98,7 @@ export type {
   IndexRunState,
   RAGConfig,
   AgentsMdConfig,
+  IndexRefreshConfig,
   SubagentsConfig,
   PermissionModeValue,
   PermissionRule,
@@ -506,6 +508,7 @@ export type ConfigPatch = {
     embedding_api_model?: ModelSelection | null;
   };
   agents_md?: Partial<AgentsMdConfig>;
+  index_refresh?: Partial<IndexRefreshConfig>;
   subagents?: Partial<SubagentsConfig>;
   compaction?: {
     main?: Partial<CompactionScopeConfig>;

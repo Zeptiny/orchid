@@ -120,6 +120,7 @@ const TOP_LEVEL_OBJECT_KEYS = new Set([
   'rag',
   'tier_models',
   'agents_md',
+  'index_refresh',
   'subagents',
   'compaction',
 ]);

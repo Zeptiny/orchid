@@ -139,6 +139,22 @@ export interface AgentsMdConfig {
 }
 
 /**
+ * Index auto-refresh settings (tool mutations, watcher events, and command
+ * dirty-scans feed one debounced refresh pipeline). See the `index_refresh`
+ * block in the config schema for field defaults.
+ */
+export interface IndexRefreshConfig {
+  /** Refresh the RAG vector index for detected mutations. */
+  rag: boolean;
+  /** Refresh the AST symbol index for detected mutations. */
+  ast: boolean;
+  /** Watch the bound workspace for external changes. */
+  watch: boolean;
+  /** Coalescing window (ms) before a project's refresh batch flushes. */
+  debounce_ms: number;
+}
+
+/**
  * Subagent live-event batching, admission, retention, and prompt-context
  * settings. See the `subagents` block in the config schema for field defaults.
  * All knobs are collected here so later units (persistence, admission,
@@ -223,6 +239,7 @@ export interface Config {
   personality: string;
   rag: RAGConfig;
   agents_md: AgentsMdConfig;
+  index_refresh: IndexRefreshConfig;
   subagents: SubagentsConfig;
   compaction: CompactionConfig;
   ast_max_file_size: number;

@@ -14,6 +14,7 @@ export type {
   RAGConfig,
   AgentsMdConfig,
   AgentsMdEnforcePolicy,
+  IndexRefreshConfig,
   SubagentsConfig,
   CompactionConfig,
   CompactionScopeConfig,
@@ -76,6 +77,21 @@ export const agentsMdConfigSchema = z.object({
   enforce_on_write: z.enum(AGENTS_MD_ENFORCE_POLICIES).default('warn'),
   inject_on_read: z.boolean().default(true),
   include_local: z.boolean().default(false),
+});
+
+/**
+ * Index auto-refresh settings. Mirrors the `rag`/`agents_md` nested objects:
+ * per-field defaults, referenced as `index_refresh` with an explicit
+ * `.default({})` so partial project overrides deep-merge cleanly. Refresh
+ * behavior is per-project (it follows the bound workspace), so the key is
+ * project-allow-listed like `agents_md`.
+ */
+export const indexRefreshConfigSchema = z.object({
+  rag: z.boolean().default(true),
+  ast: z.boolean().default(true),
+  /** Consumed by the workspace watcher. */
+  watch: z.boolean().default(true),
+  debounce_ms: z.number().int().min(100).max(60_000).default(2000),
 });
 
 /**
@@ -241,6 +257,7 @@ export const configSchema = z
     personality: z.string().min(1).default('default'),
     rag: ragConfigSchema.default({}),
     agents_md: agentsMdConfigSchema.default({}),
+    index_refresh: indexRefreshConfigSchema.default({}),
     subagents: subagentsConfigSchema.default({}),
     compaction: compactionConfigSchema,
     ast_max_file_size: z.number().int().positive().default(1_048_576),

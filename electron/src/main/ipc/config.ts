@@ -75,6 +75,7 @@ const PROJECT_CONFIG_ALLOWED_KEYS = new Set([
   'mcp_result_max_bytes',
   'mcp_servers',
   'agents_md',
+  'index_refresh',
   'default_model',
   'tier_models',
   'tier_reasoning_effort',
