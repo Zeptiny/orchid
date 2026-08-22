@@ -415,7 +415,9 @@ export async function runIndexProjectImpl(
     }
   }
 
-  // Remove deleted files
+  // Remove deleted files within the run's scope — a paths-scoped run must
+  // not prune stored files it never discovered
+  const scopeRoots = resolveScopeRoots(root, paths);
   const currentRels = new Set<string>();
   for (const f of files) {
     try {
@@ -425,7 +427,10 @@ export async function runIndexProjectImpl(
     }
   }
   for (const storedPath of existingHashes.keys()) {
-    if (!currentRels.has(storedPath)) {
+    if (
+      !currentRels.has(storedPath) &&
+      isInsideAnyScope(path.resolve(root, storedPath), scopeRoots)
+    ) {
       store.deleteByFileBatch(vectorState, storedPath);
       stats.filesDeleted++;
     }
@@ -671,6 +676,21 @@ function shouldInclude(filepath: string): boolean {
   const ext = path.extname(filepath).toLowerCase();
   if (SKIP_EXTS.has(ext)) return false;
   return INCLUDE_EXTS.has(ext);
+}
+
+function resolveScopeRoots(root: string, paths: string[] | undefined): string[] {
+  if (paths && paths.length > 0) {
+    return paths.map((p) => (
+      path.resolve(path.isAbsolute(p) ? p : path.join(root, p))
+    ));
+  }
+  return [path.resolve(root)];
+}
+
+function isInsideAnyScope(absPath: string, scopeRoots: string[]): boolean {
+  return scopeRoots.some(
+    (scopeRoot) => absPath === scopeRoot || absPath.startsWith(scopeRoot + path.sep),
+  );
 }
 
 // ---------------------------------------------------------------------------

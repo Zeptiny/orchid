@@ -1003,6 +1003,125 @@ describe('Interrupted Index Recovery', () => {
 });
 
 // ---------------------------------------------------------------------------
+// Scoped deleted-file sweep
+// ---------------------------------------------------------------------------
+
+describe('Scoped Deleted-File Sweep', () => {
+  let indexProject: typeof import('../../src/main/rag/indexer').indexProject;
+  let RAGStore: typeof import('../../src/main/rag/store').RAGStore;
+
+  function embedForText(text: string): Float32Array {
+    if (text.includes('alpha')) return Float32Array.from([1, 0, 0]);
+    if (text.includes('beta')) return Float32Array.from([0, 1, 0]);
+    return Float32Array.from([0, 0, 1]);
+  }
+
+  const contentEmbedder = {
+    embed: async (texts: string[]) => texts.map(embedForText),
+    embedSingle: async (text: string) => embedForText(text),
+    warmedUp: true,
+    modelName: 'test',
+    _warmup: async () => {},
+    _embedBatchWithRetry: async (texts: string[]) => texts.map(embedForText),
+    _embedBatch: async (texts: string[]) => texts.map(embedForText),
+  };
+
+  const embedder = contentEmbedder as unknown as import('../../src/main/rag/embedder').Embedder;
+
+  beforeEach(async () => {
+    const indexerModule = await import('../../src/main/rag/indexer');
+    indexProject = indexerModule.indexProject;
+    const storeModule = await import('../../src/main/rag/store');
+    RAGStore = storeModule.RAGStore;
+  });
+
+  it('scoped run leaves stored files outside the scope untouched', async () => {
+    writeFile('src/a/keep.ts', 'const alphaKeep = 1;');
+    writeFile('src/b/two.ts', 'const betaTwo = 2;');
+    writeFile('src/b/gone.ts', 'const betaGone = 3;');
+
+    const result1 = await indexProject(tmpDir, undefined, undefined, embedder);
+    expect(result1.filesIndexed).toBe(3);
+
+    fs.rmSync(path.join(tmpDir, 'src', 'b', 'gone.ts'));
+
+    const result2 = await indexProject(tmpDir, ['src/a'], undefined, embedder);
+    expect(result2.filesDeleted).toBe(0);
+
+    const store = new RAGStore(tmpDir);
+    const hashes = store.getFileHashes();
+    expect(hashes.has('src/a/keep.ts')).toBe(true);
+    expect(hashes.has('src/b/two.ts')).toBe(true);
+    expect(hashes.has('src/b/gone.ts')).toBe(true);
+    expect(store.status().totalFiles).toBe(3);
+    expect(store.loadVectorState().consistent).toBe(true);
+
+    // The deleted-but-out-of-scope file is still searchable
+    const beta = store.search([0, 1, 0], 3);
+    expect(beta.some((r) => r.filePath === 'src/b/gone.ts')).toBe(true);
+    expect(beta.some((r) => r.filePath === 'src/b/two.ts')).toBe(true);
+  });
+
+  it('scoped run prunes an in-scope stored file that no longer exists on disk', async () => {
+    writeFile('src/a/keep.ts', 'const alphaKeep = 1;');
+    writeFile('src/a/gone.ts', 'const alphaGone = 2;');
+    writeFile('src/b/two.ts', 'const betaTwo = 3;');
+
+    await indexProject(tmpDir, undefined, undefined, embedder);
+
+    fs.rmSync(path.join(tmpDir, 'src', 'a', 'gone.ts'));
+
+    const result2 = await indexProject(tmpDir, ['src/a'], undefined, embedder);
+    expect(result2.filesDeleted).toBe(1);
+
+    const store = new RAGStore(tmpDir);
+    const hashes = store.getFileHashes();
+    expect(hashes.has('src/a/gone.ts')).toBe(false);
+    expect(hashes.has('src/a/keep.ts')).toBe(true);
+    expect(hashes.has('src/b/two.ts')).toBe(true);
+    expect(store.loadVectorState().consistent).toBe(true);
+  });
+
+  it('scoped run prunes an in-scope file that became excluded from discovery', async () => {
+    writeFile('src/a/keep.ts', 'const alphaKeep = 1;');
+    writeFile('src/a/old.ts', 'const alphaOld = 2;');
+
+    await indexProject(tmpDir, undefined, undefined, embedder);
+
+    fs.renameSync(
+      path.join(tmpDir, 'src', 'a', 'old.ts'),
+      path.join(tmpDir, 'src', 'a', 'old.bak'),
+    );
+
+    const result2 = await indexProject(tmpDir, ['src/a'], undefined, embedder);
+    expect(result2.filesScanned).toBe(1);
+    expect(result2.filesDeleted).toBe(1);
+
+    const store = new RAGStore(tmpDir);
+    expect(store.getFileHashes().has('src/a/old.ts')).toBe(false);
+    expect(store.getFileHashes().has('src/a/keep.ts')).toBe(true);
+  });
+
+  it('full run still prunes every stored path absent from discovery', async () => {
+    writeFile('src/a/keep.ts', 'const alphaKeep = 1;');
+    writeFile('src/b/gone.ts', 'const betaGone = 2;');
+    writeFile('root.md', 'alpha readme');
+
+    await indexProject(tmpDir, undefined, undefined, embedder);
+
+    fs.rmSync(path.join(tmpDir, 'src', 'b', 'gone.ts'));
+    fs.rmSync(path.join(tmpDir, 'root.md'));
+
+    const result2 = await indexProject(tmpDir, undefined, undefined, embedder);
+    expect(result2.filesDeleted).toBe(2);
+
+    const hashes = new RAGStore(tmpDir).getFileHashes();
+    expect(hashes.size).toBe(1);
+    expect(hashes.has('src/a/keep.ts')).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Embedder model download tests
 // ---------------------------------------------------------------------------
 
