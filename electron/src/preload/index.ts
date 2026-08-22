@@ -129,6 +129,10 @@ import type {
   ContextSessionsResult,
   AnalyticsTimeRange,
 } from '../shared/types/analytics';
+import {
+  debugSessionRequestsResultSchema,
+  debugRequestCaptureResultSchema,
+} from '../shared/types/debug';
 import type {
   DebugSessionRequestsResult,
   DebugRequestCaptureResult,
@@ -225,6 +229,8 @@ const INVOKE_RESULT_SCHEMAS: Partial<Record<string, z.ZodTypeAny>> = {
   [IPC_CHANNELS.PROJECT_TRUST_GET]: projectTrustInfoSchema,
   [IPC_CHANNELS.PROJECT_TRUST_SET]: projectTrustInfoSchema,
   [IPC_CHANNELS.PROJECT_TRUST_LIST]: z.array(trustedProjectEntrySchema),
+  [IPC_CHANNELS.DEBUG_SESSION_REQUESTS]: debugSessionRequestsResultSchema,
+  [IPC_CHANNELS.DEBUG_REQUEST_CAPTURE]: debugRequestCaptureResultSchema,
 };
 
 async function invoke<T>(channel: string, ...args: unknown[]): Promise<T> {

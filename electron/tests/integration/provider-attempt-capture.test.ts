@@ -305,6 +305,35 @@ describe('provider attempt debug capture (issue 146)', () => {
     expect(headers.authorization).toBe('[REDACTED]');
   });
 
+  it('redacts set-cookie response headers before persistence', async () => {
+    const h = harness({ sessionId: 'session-set-cookie', debugCapture: true });
+    await h.wrapGenerate({
+      doGenerate: async () => ({
+        content: [{ type: 'text', text: 'hi' }],
+        usage: { ...USAGE, raw: undefined },
+        response: {
+          headers: {
+            'Set-Cookie': 'session=secret-cookie-token; Path=/; HttpOnly',
+            'content-type': 'application/json',
+          },
+        },
+      }),
+      doStream: async () => { throw new Error('not used'); },
+      params: { prompt: [] },
+      model: {},
+    });
+
+    const [summary] = h.capture.listForSession('session-set-cookie');
+    const captured = h.capture.getCapture(summary.attemptId)!;
+    // What getCapture returns is exactly what the Requests inspector renders —
+    // the credential must never survive into the persisted/read-back capture.
+    const headers = ((captured.response as { response: { headers: Record<string, string> } })
+      .response).headers;
+    expect(headers['Set-Cookie']).toBe('[REDACTED]');
+    expect(headers['content-type']).toBe('application/json');
+    expect(JSON.stringify(captured)).not.toContain('secret-cookie-token');
+  });
+
   it('redacts credential headers from the captured call options', async () => {
     const h = harness({ sessionId: 'session-headers', debugCapture: true });
     const result = await h.wrapStream({

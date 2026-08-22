@@ -7,6 +7,7 @@
  * `debug_capture_requests` config gate is enabled; the attempt ledger rows
  * themselves are always written.
  */
+import { z } from 'zod';
 
 /** One captured request row in the session debug list. */
 export interface DebugRequestSummary {
@@ -63,3 +64,52 @@ export interface DebugRequestCapture {
 export interface DebugRequestCaptureResult {
   readonly capture: DebugRequestCapture | null;
 }
+
+// ── Preload boundary validation ───────────────────────────────────────────────
+
+/**
+ * Invoke-result schemas for the debug IPC channels. The request/response/
+ * rawChunks payloads are intentionally opaque (`z.unknown()`): captures exist
+ * to preserve exact provider payloads, so only the envelope is validated.
+ */
+export const debugRequestSummarySchema = z.object({
+  attemptId: z.string(),
+  sessionId: z.string(),
+  chainId: z.string().nullable(),
+  turnId: z.string().nullable(),
+  providerId: z.string(),
+  connectionName: z.string(),
+  modelId: z.string(),
+  protocol: z.string(),
+  agentScope: z.string().nullable(),
+  agentName: z.string().nullable(),
+  agentType: z.string().nullable(),
+  agentTier: z.string().nullable(),
+  outcome: z.enum(['pending', 'succeeded', 'failed', 'interrupted']),
+  startedAt: z.string(),
+  completedAt: z.string().nullable(),
+  firstTokenAt: z.string().nullable(),
+  inputTokens: z.number().nullable(),
+  outputTokens: z.number().nullable(),
+  requestBytes: z.number().nullable(),
+  responseBytes: z.number().nullable(),
+  truncated: z.boolean(),
+  rawAvailable: z.boolean(),
+  error: z.string().nullable(),
+});
+
+export const debugSessionRequestsResultSchema = z.object({
+  requests: z.array(debugRequestSummarySchema),
+});
+
+export const debugRequestCaptureSchema = z.object({
+  attemptId: z.string(),
+  summary: debugRequestSummarySchema,
+  request: z.unknown(),
+  response: z.unknown(),
+  rawChunks: z.array(z.unknown()),
+});
+
+export const debugRequestCaptureResultSchema = z.object({
+  capture: debugRequestCaptureSchema.nullable(),
+});

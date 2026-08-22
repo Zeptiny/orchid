@@ -41,6 +41,7 @@ const CAPTURE_REDACTED_HEADERS = new Set([
   'x-api-key',
   'x-goog-api-key',
   'cookie',
+  'set-cookie',
   'proxy-authorization',
 ]);
 
