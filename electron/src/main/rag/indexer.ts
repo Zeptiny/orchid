@@ -457,6 +457,86 @@ export async function runIndexProjectImpl(
 }
 
 // ---------------------------------------------------------------------------
+// Incremental updates (targeted upsert / delete)
+// ---------------------------------------------------------------------------
+
+/** Options for {@link upsertFiles}. */
+export interface UpsertFilesOptions {
+  /** Project root the update runs against. */
+  projectPath: string;
+  /** Project-relative (or absolute) file paths to upsert. */
+  rels: string[];
+  /** Frozen project configuration for this update turn. */
+  config?: Config;
+  /**
+   * Custom embedder instance; forces the update to run inline on the current
+   * thread (same rule as `indexProject`).
+   */
+  embedder?: IEmbedder;
+  progressCallback?: RAGIndexProgressCallback;
+  /** @internal Test-only worker entry override for deterministic watchdog tests. */
+  workerPath?: string;
+}
+
+/**
+ * Incrementally upsert a targeted set of files.
+ *
+ * Delegates to a paths-scoped `indexProject` run, so hash-skip, chunking,
+ * embedding, and the scope-aware deleted-file sweep behave exactly like a
+ * scoped manual run (off-thread by default). An empty or fully excluded
+ * `rels` list is a no-op. When the vector state is inconsistent (e.g. an
+ * interrupted previous run), the update delegates to a full rebuild instead —
+ * appending to a misaligned vectors.npy would permanently corrupt search. An
+ * in-progress run for the project propagates `indexProject`'s
+ * "Indexing already in progress" sentinel result unchanged.
+ */
+export async function upsertFiles(opts: UpsertFilesOptions): Promise<RAGIndexResult> {
+  const { projectPath, rels, config, embedder, progressCallback, workerPath } = opts;
+  const targets = [...new Set(rels)]
+    .map((rel) => (path.isAbsolute(rel) ? rel : path.join(projectPath, rel)))
+    .filter((abs) => shouldInclude(abs))
+    .sort();
+  if (targets.length === 0) {
+    return {
+      filesScanned: 0, filesIndexed: 0, filesSkipped: 0,
+      filesDeleted: 0, chunksCreated: 0, errors: [], durationSeconds: 0,
+    };
+  }
+  const consistent = withDisposable(new RAGStore(projectPath), (store) => {
+    store.initDb();
+    return store.loadVectorState().consistent;
+  });
+  return indexProject(
+    projectPath,
+    consistent ? targets : undefined,
+    false,
+    embedder,
+    progressCallback,
+    { config, workerPath },
+  );
+}
+
+/**
+ * Remove the chunks, file row, and vectors for a targeted set of files.
+ *
+ * No-ops on an inconsistent vector state — nothing can be deleted safely
+ * there; the full rebuild the next upsert triggers is the repair.
+ */
+export async function deleteFiles(projectPath: string, rels: string[]): Promise<void> {
+  const unique = [...new Set(rels)];
+  if (unique.length === 0) return;
+  await withDisposableAsync(new RAGStore(projectPath), async (store) => {
+    store.initDb();
+    const vectorState = store.loadVectorState();
+    if (!vectorState.consistent) return;
+    for (const rel of unique) {
+      store.deleteByFileBatch(vectorState, rel);
+    }
+    store.flushVectorState(vectorState);
+  });
+}
+
+// ---------------------------------------------------------------------------
 // Worker runner (main process)
 // ---------------------------------------------------------------------------
 

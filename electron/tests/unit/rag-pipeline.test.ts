@@ -12,9 +12,11 @@
  * modules aren't available, and real implementations when they are.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import * as crypto from 'node:crypto';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import type { Config } from '../../src/main/config/schema';
 
 // ---------------------------------------------------------------------------
 // Mock better-sqlite3 with a robust in-memory implementation
@@ -1118,6 +1120,255 @@ describe('Scoped Deleted-File Sweep', () => {
     const hashes = new RAGStore(tmpDir).getFileHashes();
     expect(hashes.size).toBe(1);
     expect(hashes.has('src/a/keep.ts')).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Incremental update API (upsertFiles / deleteFiles)
+// ---------------------------------------------------------------------------
+
+describe('Incremental Update API', () => {
+  let indexProject: typeof import('../../src/main/rag/indexer').indexProject;
+  let upsertFiles: typeof import('../../src/main/rag/indexer').upsertFiles;
+  let deleteFiles: typeof import('../../src/main/rag/indexer').deleteFiles;
+  let RAGStore: typeof import('../../src/main/rag/store').RAGStore;
+
+  function embedForText(text: string): Float32Array {
+    if (text.includes('alpha')) return Float32Array.from([1, 0, 0]);
+    if (text.includes('beta')) return Float32Array.from([0, 1, 0]);
+    return Float32Array.from([0, 0, 1]);
+  }
+
+  let embeddedTexts: string[] = [];
+
+  const countingEmbedder = {
+    embed: async (texts: string[]) => {
+      embeddedTexts.push(...texts);
+      return texts.map(embedForText);
+    },
+    embedSingle: async (text: string) => embedForText(text),
+    warmedUp: true,
+    modelName: 'test',
+    _warmup: async () => {},
+    _embedBatchWithRetry: async (texts: string[]) => texts.map(embedForText),
+    _embedBatch: async (texts: string[]) => texts.map(embedForText),
+  };
+
+  const embedder = countingEmbedder as unknown as import('../../src/main/rag/embedder').Embedder;
+
+  const md5 = (content: string): string =>
+    crypto.createHash('md5').update(content).digest('hex');
+
+  beforeEach(async () => {
+    const indexerModule = await import('../../src/main/rag/indexer');
+    indexProject = indexerModule.indexProject;
+    upsertFiles = indexerModule.upsertFiles;
+    deleteFiles = indexerModule.deleteFiles;
+    const storeModule = await import('../../src/main/rag/store');
+    RAGStore = storeModule.RAGStore;
+    embeddedTexts = [];
+  });
+
+  it('upsertFiles on a changed file replaces its chunks and updates the stored hash', async () => {
+    writeFile('src/a.ts', 'const alphaOriginal = 1;');
+    writeFile('src/b.ts', 'const betaUntouched = 2;');
+
+    await indexProject(tmpDir, undefined, undefined, embedder);
+
+    const changed = 'const alphaUpdated = 1; // changed';
+    writeFile('src/a.ts', changed);
+    embeddedTexts = [];
+
+    const result = await upsertFiles({ projectPath: tmpDir, rels: ['src/a.ts'], embedder });
+
+    expect(result.errors).toHaveLength(0);
+    expect(result.filesScanned).toBe(1);
+    expect(result.filesIndexed).toBe(1);
+    expect(result.filesDeleted).toBe(0);
+    expect(embeddedTexts).toHaveLength(1);
+    expect(embeddedTexts[0]).toContain('alphaUpdated');
+
+    const store = new RAGStore(tmpDir);
+    const hashes = store.getFileHashes();
+    expect(hashes.get('src/a.ts')).toBe(md5(changed));
+    expect(hashes.has('src/b.ts')).toBe(true);
+    expect(store.status().totalFiles).toBe(2);
+    expect(store.loadVectorState().consistent).toBe(true);
+
+    const hit = store.search([1, 0, 0], 1)[0]!;
+    expect(hit.filePath).toBe('src/a.ts');
+    expect(hit.content).toContain('alphaUpdated');
+  });
+
+  it('upsertFiles on an unchanged file hash-skips without embedding', async () => {
+    writeFile('src/a.ts', 'const alphaSame = 1;');
+    writeFile('src/b.ts', 'const betaSame = 2;');
+
+    await indexProject(tmpDir, undefined, undefined, embedder);
+
+    const hashBefore = new RAGStore(tmpDir).getFileHashes().get('src/a.ts');
+    embeddedTexts = [];
+
+    const result = await upsertFiles({ projectPath: tmpDir, rels: ['src/a.ts'], embedder });
+
+    expect(result.errors).toHaveLength(0);
+    expect(result.filesScanned).toBe(1);
+    expect(result.filesSkipped).toBe(1);
+    expect(result.filesIndexed).toBe(0);
+    expect(embeddedTexts).toHaveLength(0);
+
+    const store = new RAGStore(tmpDir);
+    expect(store.getFileHashes().get('src/a.ts')).toBe(hashBefore);
+    expect(store.status().totalFiles).toBe(2);
+    expect(store.loadVectorState().consistent).toBe(true);
+  });
+
+  it('upsertFiles with inconsistent vector state triggers a full rebuild instead of a scoped append', async () => {
+    writeFile('src/a.ts', 'const alphaStable = 1;');
+    writeFile('src/b.ts', 'const betaOriginal = 2;');
+
+    await indexProject(tmpDir, undefined, undefined, embedder);
+
+    const changedB = 'const betaUpdated = 2; // changed';
+    writeFile('src/b.ts', changedB);
+
+    const store = new RAGStore(tmpDir);
+    const interrupted = store.loadVectorState();
+    store.upsertFileBatch(
+      interrupted,
+      'src/b.ts',
+      [{ filePath: 'src/b.ts', content: changedB, startLine: 1, endLine: 1 }],
+      [Array.from(embedForText(changedB))],
+    );
+    store.dispose();
+    expect(new RAGStore(tmpDir).loadVectorState().consistent).toBe(false);
+
+    embeddedTexts = [];
+    const result = await upsertFiles({ projectPath: tmpDir, rels: ['src/a.ts'], embedder });
+
+    expect(result.errors).toHaveLength(0);
+    expect(result.filesScanned).toBe(2);
+    expect(result.filesIndexed).toBe(2);
+    expect(result.filesSkipped).toBe(0);
+    expect(embeddedTexts.some((t) => t.includes('betaUpdated'))).toBe(true);
+
+    const rebuilt = new RAGStore(tmpDir);
+    expect(rebuilt.loadVectorState().consistent).toBe(true);
+
+    const beta = rebuilt.search([0, 1, 0], 1)[0]!;
+    expect(beta.filePath).toBe('src/b.ts');
+    expect(beta.content).toContain('betaUpdated');
+    expect(rebuilt.getFileHashes().get('src/b.ts')).toBe(md5(changedB));
+  });
+
+  it('deleteFiles removes chunks, file row, and vectors for the given rels', async () => {
+    writeFile('src/a.ts', 'const alphaGone = 1;');
+    writeFile('src/b.ts', 'const betaKept = 2;');
+
+    await indexProject(tmpDir, undefined, undefined, embedder);
+
+    await deleteFiles(tmpDir, ['src/a.ts']);
+
+    const store = new RAGStore(tmpDir);
+    const hashes = store.getFileHashes();
+    expect(hashes.has('src/a.ts')).toBe(false);
+    expect(hashes.has('src/b.ts')).toBe(true);
+
+    const status = store.status();
+    expect(status.totalChunks).toBe(1);
+    expect(status.totalFiles).toBe(1);
+
+    const state = store.loadVectorState();
+    expect(state.consistent).toBe(true);
+    expect(state.chunkIds).toHaveLength(1);
+    expect(state.vectors).toHaveLength(1);
+
+    expect(store.search([0, 1, 0], 1)[0]!.filePath).toBe('src/b.ts');
+    expect(store.search([1, 0, 0], 3).find((r) => r.filePath === 'src/a.ts')).toBeUndefined();
+
+    await deleteFiles(tmpDir, ['src/never-indexed.ts']);
+    expect(new RAGStore(tmpDir).status().totalChunks).toBe(1);
+    expect(new RAGStore(tmpDir).loadVectorState().consistent).toBe(true);
+  });
+
+  it('drops oversized, binary, and empty rels instead of indexing them', async () => {
+    const tinyLimitConfig = {
+      rag: { chunk_size: 2000, chunk_overlap: 200, max_file_size: 64 },
+      ignored_dirs: [],
+    } as unknown as Config;
+
+    writeFile('src/a.ts', 'const alphaKeep = 1;');
+    writeFile('src/binary.ts', 'const betaBinary = 1;');
+    writeFile('src/empty.ts', 'const betaEmpty = 1;');
+
+    const initial = await indexProject(tmpDir, undefined, undefined, embedder, undefined, {
+      config: tinyLimitConfig,
+    });
+    expect(initial.filesIndexed).toBe(3);
+
+    writeFile('src/binary.ts', 'const betaBinary = 1;\x00binary tail');
+    writeFile('src/empty.ts', '');
+    writeFile('src/huge.ts', `const betaHuge = 1;\n${'x'.repeat(200)}`);
+
+    embeddedTexts = [];
+    const result = await upsertFiles({
+      projectPath: tmpDir,
+      rels: ['src/binary.ts', 'src/empty.ts', 'src/huge.ts', 'src/old.bak'],
+      config: tinyLimitConfig,
+      embedder,
+    });
+
+    expect(result.errors).toHaveLength(0);
+    expect(result.filesScanned).toBe(3);
+    expect(result.filesIndexed).toBe(0);
+    expect(result.filesSkipped).toBe(0);
+    expect(embeddedTexts).toHaveLength(0);
+
+    const store = new RAGStore(tmpDir);
+    const hashes = store.getFileHashes();
+    expect(hashes.has('src/binary.ts')).toBe(false);
+    expect(hashes.has('src/empty.ts')).toBe(false);
+    expect(hashes.has('src/huge.ts')).toBe(false);
+    expect(hashes.has('src/a.ts')).toBe(true);
+    expect(store.status().totalFiles).toBe(1);
+    expect(store.loadVectorState().consistent).toBe(true);
+  });
+
+  it('propagates the in-progress sentinel while an index run is active', async () => {
+    writeFile('src/a.ts', 'const alphaSlow = 1;');
+
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const slowEmbedder = {
+      embed: async (texts: string[]) => {
+        await gate;
+        return texts.map(embedForText);
+      },
+      embedSingle: async (text: string) => embedForText(text),
+      warmedUp: true,
+      modelName: 'test',
+      _warmup: async () => {},
+      _embedBatchWithRetry: async (texts: string[]) => {
+        await gate;
+        return texts.map(embedForText);
+      },
+      _embedBatch: async (texts: string[]) => texts.map(embedForText),
+    } as unknown as import('../../src/main/rag/embedder').Embedder;
+
+    const first = indexProject(tmpDir, undefined, undefined, slowEmbedder);
+
+    const sentinel = await upsertFiles({ projectPath: tmpDir, rels: ['src/a.ts'], embedder });
+    expect(sentinel.errors).toEqual(['Indexing already in progress']);
+    expect(sentinel.filesScanned).toBe(0);
+    expect(sentinel.filesIndexed).toBe(0);
+    expect(sentinel.durationSeconds).toBe(0);
+
+    release();
+    const firstResult = await first;
+    expect(firstResult.filesIndexed).toBe(1);
+    expect(firstResult.errors).toHaveLength(0);
   });
 });
 
