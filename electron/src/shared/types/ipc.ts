@@ -37,8 +37,11 @@ import type {
   DefinitionsListResult,
   ManagedAgent,
   ManagedPersonality,
+  ManagedSharedPrompt,
   ManagedSkill,
   PersonalitySaveMessage,
+  SharedPromptDeleteMessage,
+  SharedPromptSaveMessage,
   SkillSaveMessage,
 } from './definitions';
 import type {
@@ -70,8 +73,12 @@ export type {
   DefinitionsListResult,
   ManagedAgent,
   ManagedPersonality,
+  ManagedSharedPrompt,
   ManagedSkill,
   PersonalitySaveMessage,
+  SharedPromptDeleteMessage,
+  SharedPromptSaveMessage,
+  SharedPromptSlot,
   SkillSaveMessage,
   DefinitionScope,
 } from './definitions';
@@ -1099,9 +1106,9 @@ export interface TrustReportModelOverride {
   modelId: string;
 }
 
-/** One project-local definition (agent / skill / personality). */
+/** One project-local definition (agent / skill / personality / shared prompt). */
 export interface TrustReportDefinition {
-  kind: 'agent' | 'skill' | 'personality';
+  kind: 'agent' | 'skill' | 'personality' | 'prompt';
   name: string;
   /** True when it shadows a home definition of the same name. */
   overridesHome: boolean;
@@ -1549,6 +1556,11 @@ export interface OrchidAPI {
     delete: (message: DefinitionDeleteMessage) => Promise<{ status: string }>;
   };
 
+  sharedPrompt: {
+    save: (message: SharedPromptSaveMessage) => Promise<ManagedSharedPrompt>;
+    delete: (message: SharedPromptDeleteMessage) => Promise<{ status: string }>;
+  };
+
   mcp: {
     status: () => Promise<MCPServerStatus[]>;
   };
@@ -1755,6 +1767,8 @@ export const IPC_CHANNELS = {
   SKILL_DELETE: 'skill:delete',
   PERSONALITY_SAVE: 'personality:save',
   PERSONALITY_DELETE: 'personality:delete',
+  SHARED_PROMPT_SAVE: 'shared_prompt:save',
+  SHARED_PROMPT_DELETE: 'shared_prompt:delete',
 
   // MCP
   MCP_STATUS: 'mcp:status',
@@ -1894,6 +1908,8 @@ export const ALLOWED_INVOKE_CHANNELS = [
   IPC_CHANNELS.SKILL_DELETE,
   IPC_CHANNELS.PERSONALITY_SAVE,
   IPC_CHANNELS.PERSONALITY_DELETE,
+  IPC_CHANNELS.SHARED_PROMPT_SAVE,
+  IPC_CHANNELS.SHARED_PROMPT_DELETE,
   IPC_CHANNELS.MCP_STATUS,
   IPC_CHANNELS.RAG_STATUS,
   IPC_CHANNELS.RAG_INDEX,

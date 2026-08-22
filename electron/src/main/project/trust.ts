@@ -3,7 +3,7 @@
  *
  * Trust is keyed by canonical absolute path and fingerprinted against the
  * project's security surface: the raw `.orchid.json` bytes, the files under
- * `.orchid/{agents,skills,personalities}`, and root instruction-file aliases.
+ * `.orchid/{agents,skills,personalities,prompts}`, and root instruction-file aliases.
  * Bare projects carry no surface and resolve `trusted` without a store entry;
  * a drifted fingerprint turns an existing grant into `changed`.
  */
@@ -28,6 +28,7 @@ import {
   HOME_AGENTS_DIR,
   HOME_CONFIG_DIR,
   HOME_PERSONALITIES_DIR,
+  HOME_PROMPTS_DIR,
   HOME_SKILLS_DIR,
   PROJECT_CONFIG_NAME,
 } from '../config/loader';
@@ -40,6 +41,7 @@ import {
   type Config,
 } from '../config/schema';
 import { readPersonalities } from '../personality/registry';
+import { readSharedPrompts } from '../prompts/registry';
 import { readSkills } from '../skills/registry';
 import { canonicalizeProjectDirectory } from './path';
 
@@ -85,7 +87,7 @@ const OVERSIZE_CONFIG_NOTE =
   `.orchid.json exceeds ${TRUST_REPORT_MAX_CONFIG_BYTES} bytes; ` +
   'its content is omitted from this report.';
 
-const DEFINITION_DIRS = ['agents', 'skills', 'personalities'] as const;
+const DEFINITION_DIRS = ['agents', 'skills', 'personalities', 'prompts'] as const;
 
 /** Top-level project-config keys with dedicated report sections. */
 const SECTION_KEYS = new Set([
@@ -119,6 +121,8 @@ export interface ProjectTrustStoreOptions {
   readonly homeSkillsDir?: string;
   /** Override the home personalities directory. */
   readonly homePersonalitiesDir?: string;
+  /** Override the home shared prompts directory. */
+  readonly homePromptsDir?: string;
 }
 
 interface SurfaceFile {
@@ -207,7 +211,7 @@ function readTrustStoreFile(storePath: string): Map<string, TrustStoreRecord> {
 }
 
 /**
- * Files under `.orchid/{agents,skills,personalities}` sorted by relative
+ * Files under `.orchid/{agents,skills,personalities,prompts}` sorted by relative
  * path, capped at TRUST_FINGERPRINT_MAX_FILES. The walk exits early once
  * MAX_FILES + 1 files are collected; the first overflowing file is returned
  * separately so the fingerprint can name it. Residual: files deeper past the
@@ -763,6 +767,9 @@ export class ProjectTrustStore {
     const homePersonalities = readPersonalities({
       homeDir: this.options.homePersonalitiesDir ?? HOME_PERSONALITIES_DIR,
     });
+    const homePrompts = readSharedPrompts({
+      homeDir: this.options.homePromptsDir ?? HOME_PROMPTS_DIR,
+    });
     const projectAgents = readAgents({
       homeDir: null,
       projectDir: path.join(canonical, '.orchid', 'agents'),
@@ -791,6 +798,18 @@ export class ProjectTrustStore {
         kind: 'personality',
         name,
         overridesHome: homePersonalities.has(name),
+      });
+    }
+    const projectPrompts = readSharedPrompts({
+      homeDir: null,
+      projectDir: canonical,
+    });
+    for (const [slot, content] of Object.entries(projectPrompts)) {
+      if (content == null) continue;
+      definitions.push({
+        kind: 'prompt',
+        name: `prompts/${slot}.md`,
+        overridesHome: homePrompts[slot as keyof typeof homePrompts] != null,
       });
     }
     return definitions.slice(0, TRUST_REPORT_MAX_DEFINITIONS);

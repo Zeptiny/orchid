@@ -18,6 +18,7 @@ import { AgentsTab } from './Preferences/AgentsTab';
 import { MCPServersTab } from './Preferences/MCPServersTab';
 import { PermissionsTab } from './Preferences/PermissionsTab';
 import { PersonalitiesTab } from './Preferences/PersonalitiesTab';
+import { SharedPromptsTab } from './Preferences/SharedPromptsTab';
 import {
   ProjectTierModelsTab,
   readTierOverrides,
@@ -56,6 +57,7 @@ type ProjectTab =
   | 'skills'
   | 'agents'
   | 'personalities'
+  | 'shared-prompts'
   | 'compaction';
 
 interface ProjectTabDef {
@@ -74,6 +76,7 @@ const PROJECT_TABS: ProjectTabDef[] = [
   { id: 'skills', label: 'Skills' },
   { id: 'agents', label: 'Agents' },
   { id: 'personalities', label: 'Personalities' },
+  { id: 'shared-prompts', label: 'Shared Prompts' },
 ];
 
 type ProjectFieldKind =
@@ -832,6 +835,17 @@ export function ProjectConfigView({ projectDir, onNewChat, onClose }: ProjectCon
         }
         return (
           <PersonalitiesTab data={definitions} onReload={loadDefinitions} lockedScope="project" />
+        );
+      case 'shared-prompts':
+        if (!definitions) {
+          return defsLoading ? (
+            <StateMessage kind="loading" title="Loading shared prompts…" />
+          ) : (
+            <StateMessage kind="warning" title="Shared prompts could not be loaded." />
+          );
+        }
+        return (
+          <SharedPromptsTab data={definitions} onReload={loadDefinitions} lockedScope="project" />
         );
     }
   };

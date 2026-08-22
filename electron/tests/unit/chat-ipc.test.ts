@@ -101,6 +101,7 @@ const mocks = vi.hoisted(() => {
     agents: Map<string, Agent>;
     skills: Map<string, unknown>;
     personalities: Map<string, string>;
+    sharedPrompts: Record<'all-agents' | 'subagents', string | null>;
   }>();
   const runtimeRegistry = {
     get: vi.fn((cwd: string) => {
@@ -122,6 +123,7 @@ const mocks = vi.hoisted(() => {
         ]),
         skills: new Map(),
         personalities: new Map(),
+        sharedPrompts: { 'all-agents': null, subagents: null },
       };
     }),
     _set: (cwd: string, runtime: {
@@ -129,6 +131,7 @@ const mocks = vi.hoisted(() => {
       agents?: Map<string, Agent>;
       skills?: Map<string, unknown>;
       personalities?: Map<string, string>;
+      sharedPrompts?: Record<'all-agents' | 'subagents', string | null>;
     }) => {
       runtimeByCwd.set(cwd, {
         config: runtime.config ?? {
@@ -145,6 +148,7 @@ const mocks = vi.hoisted(() => {
         ]),
         skills: runtime.skills ?? new Map(),
         personalities: runtime.personalities ?? new Map(),
+        sharedPrompts: runtime.sharedPrompts ?? { 'all-agents': null, subagents: null },
       });
     },
     _reset: () => {

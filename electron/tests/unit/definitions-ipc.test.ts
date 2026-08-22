@@ -40,6 +40,7 @@ const mocks = vi.hoisted(() => {
     listManagedSkills: vi.fn(() => []),
     listManagedAgents: vi.fn(() => []),
     listManagedPersonalities: vi.fn(() => []),
+    listManagedSharedPrompts: vi.fn(() => []),
   };
 });
 
@@ -53,12 +54,15 @@ vi.mock('../../src/main/defs/manage', () => ({
   listManagedSkills: mocks.listManagedSkills,
   listManagedAgents: mocks.listManagedAgents,
   listManagedPersonalities: mocks.listManagedPersonalities,
+  listManagedSharedPrompts: mocks.listManagedSharedPrompts,
   saveSkill: vi.fn(),
   deleteSkill: vi.fn(),
   saveAgent: vi.fn(),
   deleteAgent: vi.fn(),
   savePersonality: vi.fn(),
   deletePersonality: vi.fn(),
+  saveSharedPrompt: vi.fn(),
+  deleteSharedPrompt: vi.fn(),
 }));
 
 vi.mock('../../src/main/defs/paths', () => ({

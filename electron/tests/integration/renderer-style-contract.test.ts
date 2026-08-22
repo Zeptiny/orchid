@@ -598,6 +598,7 @@ const BASELINE_COMPONENT_ROOT_HITS: ReadonlySet<string> = new Set([
   'components/Preferences/ScopeToggle.tsx::join',
   'components/Preferences/SkillsTab.tsx::label',
   'components/Preferences/SkillsTab.tsx::textarea',
+  'components/Preferences/SharedPromptsTab.tsx::textarea',
   'components/Providers/ConnectionModelsDialog.tsx::label',
   'components/Providers/ConnectionModelsDialog.tsx::list',
   'components/Providers/ConnectionWizard.tsx::label',
@@ -609,7 +610,7 @@ const BASELINE_COMPONENT_ROOT_HITS: ReadonlySet<string> = new Set([
 ]);
 
 /** Total component-root token occurrences captured at baseline time (count guard). */
-const BASELINE_COMPONENT_ROOT_TOTAL_TOKENS = 67;
+const BASELINE_COMPONENT_ROOT_TOTAL_TOKENS = 68;
 
 const BASELINE_NON_TOKEN_COLORS: ReadonlyMap<string, number> = new Map([
 ]);

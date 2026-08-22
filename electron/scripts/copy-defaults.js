@@ -11,6 +11,7 @@ const pairs = [
   ['src/main/agents/defaults', 'dist/main/agents/defaults'],
   ['src/main/skills/defaults', 'dist/main/skills/defaults'],
   ['src/main/personality/defaults', 'dist/main/personality/defaults'],
+  ['src/main/prompts/defaults', 'dist/main/prompts/defaults'],
   // AST tree-sitter queries (.scm) — required by parser.loadQueryFile()
   ['src/main/ast/queries', 'dist/main/ast/queries'],
 ];

@@ -13,14 +13,17 @@ import { safeFsync } from '../utils/safe-fsync';
 import {
   HOME_AGENTS_DIR,
   HOME_PERSONALITIES_DIR,
+  HOME_PROMPTS_DIR,
   HOME_SKILLS_DIR,
 } from '../config/loader';
 import {
   DEFINITION_NAME_PATTERN,
   type DefinitionScope,
+  type SharedPromptSlot,
 } from '../../shared/types/definitions';
+import { sharedPromptFileName } from '../prompts/registry';
 
-export type DefinitionKind = 'skills' | 'agents' | 'personalities';
+export type DefinitionKind = 'skills' | 'agents' | 'personalities' | 'prompts';
 
 /** Built-in internal agents that must never be project-overlaid or IPC-deleted. */
 export const RESERVED_INTERNAL_AGENT_NAMES = new Set([
@@ -53,6 +56,8 @@ export function resolveScopeRoot(
         return HOME_AGENTS_DIR;
       case 'personalities':
         return HOME_PERSONALITIES_DIR;
+      case 'prompts':
+        return HOME_PROMPTS_DIR;
     }
   }
 
@@ -99,6 +104,18 @@ export function personalityMdPath(
 ): string {
   const safe = validateDefinitionName(name);
   return path.join(resolveScopeRoot('personalities', scope, projectDir), `${safe}.md`);
+}
+
+/** Absolute path of one shared prompt slot file. */
+export function sharedPromptMdPath(
+  scope: DefinitionScope,
+  slot: SharedPromptSlot,
+  projectDir: string | null,
+): string {
+  return path.join(
+    resolveScopeRoot('prompts', scope, projectDir),
+    sharedPromptFileName(slot),
+  );
 }
 
 // ── Path containment ─────────────────────────────────────────────────────────
@@ -273,6 +290,7 @@ export function assertPathUnderOrchidRoots(
     path.resolve(HOME_SKILLS_DIR),
     path.resolve(HOME_AGENTS_DIR),
     path.resolve(HOME_PERSONALITIES_DIR),
+    path.resolve(HOME_PROMPTS_DIR),
   ];
   if (projectDir) {
     rootsLogical.push(path.resolve(path.join(projectDir, '.orchid')));
