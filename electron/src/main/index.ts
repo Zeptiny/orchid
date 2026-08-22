@@ -80,7 +80,7 @@ import {
 } from './providers/accounting/subagent-attribution-store';
 import { closeSessionDb } from './session/storage';
 import { disposeAllWorkspaceWatchers } from './indexing/watcher';
-import { disposeIndexRefreshCoordinator } from './indexing/refresh-coordinator';
+import { disposeIndexRefreshCoordinatorAsync } from './indexing/refresh-coordinator';
 import { withTimeoutPromise } from './utils/async';
 
 // ── Global state ─────────────────────────────────────────────────────────────
@@ -426,8 +426,12 @@ app.on('before-quit', async (event) => {
     // Flush live subagent checkpoints before IPC/runtime teardown.
     flushSubagentPersistence();
 
+    // Watchers close fire-and-forget; the coordinator's async dispose latches
+    // producers off (so any chokidar event still in flight after close is a
+    // logged no-op) and awaits in-flight flushes, capped at 5s, before IPC
+    // teardown so a mid-flush indexer run is not torn down while writing.
     disposeAllWorkspaceWatchers();
-    disposeIndexRefreshCoordinator();
+    await disposeIndexRefreshCoordinatorAsync();
 
     // 3. Unregister IPC handlers
     unregisterAllIPC();

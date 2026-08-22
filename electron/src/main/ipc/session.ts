@@ -116,6 +116,15 @@ function resolveDraftModelSelection(windowId: string): ModelSelection | null {
 }
 
 /**
+ * Resolved cwd whose watcher reference this module last established for a
+ * window. Only the reconcile seam reads it; the explicit transitions
+ * (bind / load / open / delete) re-derive their prior cwd from the window's
+ * effective workspace, which is authoritative for them. Every path updates it
+ * through {@link retargetWorkspaceWatcher} so the two never diverge.
+ */
+const windowWatcherCwd = new Map<string, string>();
+
+/**
  * Move the window's workspace-watcher reference after its effective workspace
  * changed (project bind, session switch). Attach is refcounted per project
  * path, so every site that can change the effective cwd must share these
@@ -125,10 +134,30 @@ function resolveDraftModelSelection(windowId: string): ModelSelection | null {
  * prior one is released so a project shared with another window keeps its
  * instance. Never attaches an unbound (null) workspace.
  */
-function retargetWorkspaceWatcher(prior: string | null, next: string | null): void {
+function retargetWorkspaceWatcher(
+  windowId: string,
+  prior: string | null,
+  next: string | null,
+): void {
   if (prior === next) return;
   if (next != null) attachWorkspaceWatcher(next);
   if (prior != null) detachWorkspaceWatcher(prior);
+  if (next != null) windowWatcherCwd.set(windowId, next);
+  else windowWatcherCwd.delete(windowId);
+}
+
+/**
+ * Bring a window's watcher reference in line with its currently resolved
+ * workspace. This is the startup seam: a freshly created window whose
+ * workspace comes from the sticky default (no draft, no session) never goes
+ * through a bind or an activation, so the first workspace resolution is what
+ * attaches it. Idempotent — a window whose recorded reference already matches
+ * the resolution is a no-op, so repeated resolutions never stack references.
+ * Never attaches an unbound (null) workspace.
+ */
+function reconcileWindowWatcher(windowId: string, workspace: WorkspaceInfo): void {
+  const next = isWorkspaceBound(workspace) ? workspace.cwd : null;
+  retargetWorkspaceWatcher(windowId, windowWatcherCwd.get(windowId) ?? null, next);
 }
 
 /**
@@ -165,7 +194,7 @@ export async function bindProjectDirectory(
   }
 
   if (priorWorkspace.cwd !== canonical) {
-    retargetWorkspaceWatcher(priorWorkspace.cwd, canonical);
+    retargetWorkspaceWatcher(windowId, priorWorkspace.cwd, canonical);
     if (priorWorkspace.cwd) {
       const {
         clearFunctionHashesForSession,
@@ -372,7 +401,7 @@ export function registerSessionIPC(): void {
     // runtime. Selecting a session must not replace process-wide layers that
     // another running session could still depend on.
     const workspace = resolveWindowWorkspace(windowId);
-    retargetWorkspaceWatcher(priorCwd, workspace.cwd);
+    retargetWorkspaceWatcher(windowId, priorCwd, workspace.cwd);
 
     emitWorkspaceChanged(event.sender, workspace);
     return session ? sessionForRenderer(session) : null;
@@ -426,7 +455,7 @@ export function registerSessionIPC(): void {
     }
 
     const workspace = resolveWindowWorkspace(windowId);
-    retargetWorkspaceWatcher(priorCwd, workspace.cwd);
+    retargetWorkspaceWatcher(windowId, priorCwd, workspace.cwd);
     emitWorkspaceChanged(event.sender, workspace);
 
     // Live in-flight snapshot (chat.ts owns the active-agent registry). Dynamic
@@ -524,7 +553,8 @@ export function registerSessionIPC(): void {
     }
 
     const manager = getSessionManager();
-    const wasActive = manager.getActive(String(event.sender.id))?.id === parsed.data.id;
+    const windowId = String(event.sender.id);
+    const wasActive = manager.getActive(windowId)?.id === parsed.data.id;
     // Load cleanup seams before the durable mutation, but do not stop any work
     // until the synchronous row deletion succeeds.
     const [
@@ -538,6 +568,12 @@ export function registerSessionIPC(): void {
       import('../permissions/history.js'),
       import('../tools/ast/get-function.js'),
     ]);
+    // Deleting the window's active session changes its effective workspace (it
+    // falls back to draft / sticky default), so the watcher reference must
+    // follow — captured while the selection is still held, immediately before
+    // the delete clears it. A background session deleted from the working set
+    // leaves the window's workspace untouched and must not move the reference.
+    const priorCwd = wasActive ? resolveWindowWorkspace(windowId).cwd : null;
     const deleted = manager.delete(parsed.data.id);
     // A deleted background session must not keep spending provider/tool work or
     // recreate activity after it disappears from the catalog. This teardown is
@@ -548,14 +584,15 @@ export function registerSessionIPC(): void {
     clearFunctionHashesForSession(parsed.data.id);
     clearNextRequestStop(parsed.data.id);
     removeSessionActivity(parsed.data.id);
-    const workingSet = workingSetRemove(parsed.data.id, String(event.sender.id));
+    const workingSet = workingSetRemove(parsed.data.id, windowId);
     clearChatHistory(parsed.data.id);
     // `not_found` is still authoritative absence and must clear stale copies
     // held by other windows just like a newly deleted row.
     broadcastSessionDeleted(parsed.data.id);
     if (deleted && wasActive) {
-      const windowId = String(event.sender.id);
-      emitWorkspaceChanged(event.sender, resolveWindowWorkspace(windowId));
+      const workspace = resolveWindowWorkspace(windowId);
+      retargetWorkspaceWatcher(windowId, priorCwd, workspace.cwd);
+      emitWorkspaceChanged(event.sender, workspace);
     }
     return { status: deleted ? 'deleted' : 'not_found', workingSet };
   });
@@ -640,10 +677,16 @@ export function registerSessionIPC(): void {
     };
   });
 
-  // session:get_workspace — resolve current workspace for this window
+  // session:get_workspace — resolve current workspace for this window.
+  // Also the startup watcher seam: a fresh window whose workspace resolves
+  // from the sticky default (no draft, no session) never goes through a bind
+  // or an activation, so this first resolution is what attaches its watcher
+  // reference. Idempotent — see reconcileWindowWatcher.
   ipcMain.handle(IPC_CHANNELS.SESSION_GET_WORKSPACE, async (event) => {
     const windowId = String(event.sender.id);
-    return resolveWindowWorkspace(windowId);
+    const workspace = resolveWindowWorkspace(windowId);
+    reconcileWindowWatcher(windowId, workspace);
+    return workspace;
   });
 
   // session:pick_project_dir — native directory dialog → bind + sticky
@@ -873,6 +916,9 @@ export function unregisterSessionIPC(): void {
   ipcMain.removeHandler(IPC_CHANNELS.SESSION_GET_SERVICE_TIER_CONFIG);
   clearDraftReasoningOverrides();
   clearDraftTierOverrides();
+  // Watcher references are meaningless once these handlers are gone (tests,
+  // shutdown); dropping them keeps the reconcile seam from acting on stale state.
+  windowWatcherCwd.clear();
 }
 
 // Re-export draft helper for tests that need to seed draft without IPC.
