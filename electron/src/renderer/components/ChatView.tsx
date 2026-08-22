@@ -15,6 +15,7 @@ import {
 import { useChat } from '../hooks/useChat';
 import { useSession } from '../hooks/useSession';
 import { useBackgroundCommands } from '../hooks/useBackgroundCommands';
+import { useDebugRequests } from '../hooks/useDebugRequests';
 import { useInspectorHydration } from '../hooks/useInspectorHydration';
 import { useSubagents } from '../hooks/useSubagents';
 import { useTodos } from '../hooks/useTodos';
@@ -241,6 +242,14 @@ export function ChatView({ isVisible = true, bootstrapConfig = null, onNotify, a
     latestPersistedUsage: sessionUsage.latest,
     onUntrustedProject: trustSend.onUntrustedProject,
   });
+
+  // Debug request captures (inspector Requests section). Polls only while the
+  // inspector is open; paces at the subagents tick while a turn is streaming.
+  const debugRequests = useDebugRequests(
+    session.activeSession?.id ?? null,
+    sidebarOpen,
+    chat.status === 'streaming',
+  );
 
   useEffect(() => {
     const element = chatContentRef.current;
@@ -1443,6 +1452,12 @@ export function ChatView({ isVisible = true, bootstrapConfig = null, onNotify, a
           onRefreshTodos={todos.refresh}
           commandsState={commands.state}
           onRefreshCommands={commands.refresh}
+          requestsState={debugRequests.state}
+          onRefreshRequests={debugRequests.refresh}
+          selectedRequestId={debugRequests.selectedId}
+          onSelectRequest={debugRequests.select}
+          requestCapture={debugRequests.capture}
+          onRetryRequestCapture={debugRequests.retryCapture}
           sessionId={session.activeSession?.id ?? null}
           mcpServers={mcpServers}
           ragStatus={ragStatus}

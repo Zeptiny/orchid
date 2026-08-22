@@ -222,6 +222,7 @@ export const CommandPalette = memo(function CommandPalette({
         { name: 'Todos', desc: 'Task list' },
         { name: 'MCP Servers', desc: 'MCP server status' },
         { name: 'Index Status', desc: 'RAG and AST index status' },
+        { name: 'Requests', desc: 'Captured provider requests (debug)' },
       ];
       for (const item of navItems) {
         const score = Math.max(

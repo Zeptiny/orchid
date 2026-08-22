@@ -881,6 +881,7 @@ function renderTab(
           llmStreamIdleTimeout={config.llm_stream_idle_timeout}
           llmStreamRetries={config.llm_stream_retries}
           maxToolSteps={config.max_tool_steps}
+          debugCaptureRequests={config.debug_capture_requests}
           mcpStartupTimeout={config.mcp_startup_timeout}
           mcpPerServerTimeout={config.mcp_per_server_timeout}
           personality={config.personality}

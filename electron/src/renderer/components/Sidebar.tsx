@@ -2,7 +2,7 @@
  * Sidebar — right inspector panel (Todos, Subagents, Commands, Context, Usage, Index, MCP).
  * Iteration 012 mock-aligned collapse blocks.
  */
-import { memo, useEffect, useState, type ReactNode } from 'react';
+import { memo, useEffect, useMemo, useState, type ReactNode } from 'react';
 import type {
   MCPServerStatus,
   MCPServerStatusValue,
@@ -11,6 +11,7 @@ import type {
   RAGIndexProgress,
   ASTIndexProgress,
 } from '../../shared/types/ipc-boundary';
+import type { DebugRequestSummary } from '../../shared/types/debug';
 import { ContextGrid, contextPercent as getContextPercent } from './ContextGrid';
 import { contextUsedTokens } from '../../shared/usage';
 import type { Message, Usage } from '../../shared/types/message';
@@ -19,6 +20,11 @@ import type { SubagentSummary } from '../../shared/types/subagent';
 import type { SubagentListState, SubagentDetail } from '../hooks/useSubagents';
 import type { TodoListState } from '../hooks/useTodos';
 import type { BackgroundCommandsState } from '../hooks/useBackgroundCommands';
+import type {
+  DebugRequestCaptureState,
+  DebugRequestsListState,
+} from '../hooks/useDebugRequests';
+import { countRequestAgentOrigins } from '../hooks/useDebugRequests';
 import { formatShortcut } from '../keyboard';
 import {
   nextForceOpenEpoch,
@@ -35,7 +41,12 @@ import { IconButton } from './ui/IconButton';
 import { Spinner } from './ui/Spinner';
 import { StateMessage } from './ui/StateMessage';
 import { StatusBadge } from './ui/StatusBadge';
+import { Tabs, type TabItem } from './ui/Tabs';
 import { CommandsSection, countRunningCommands } from './Sidebar/CommandsSection';
+
+/** Stable prop defaults so the memoized Sidebar never churns on re-renders. */
+const EMPTY_REQUESTS_LIST: DebugRequestsListState = { status: 'empty' };
+const EMPTY_REQUEST_CAPTURE: DebugRequestCaptureState = { status: 'idle' };
 
 interface SidebarProps {
   isOpen: boolean;
@@ -52,6 +63,13 @@ interface SidebarProps {
   /** Session-wide background command fleet (main + subagent scopes). */
   commandsState: BackgroundCommandsState;
   onRefreshCommands: () => void;
+  /** Per-session captured provider requests (debug inspector section). */
+  requestsState?: DebugRequestsListState;
+  onRefreshRequests?: () => void;
+  selectedRequestId?: string | null;
+  onSelectRequest?: (attemptId: string | null) => void;
+  requestCapture?: DebugRequestCaptureState;
+  onRetryRequestCapture?: () => void;
   /** Active session the command widgets resolve visibility and controls against. */
   sessionId: string | null;
   mcpServers: MCPServerStatus[];
@@ -88,6 +106,12 @@ export const Sidebar = memo(function Sidebar({
   onRefreshTodos,
   commandsState,
   onRefreshCommands,
+  requestsState = EMPTY_REQUESTS_LIST,
+  onRefreshRequests = () => {},
+  selectedRequestId = null,
+  onSelectRequest = () => {},
+  requestCapture = EMPTY_REQUEST_CAPTURE,
+  onRetryRequestCapture = () => {},
   sessionId = null,
   mcpServers,
   ragStatus = null,
@@ -113,6 +137,11 @@ export const Sidebar = memo(function Sidebar({
   const runningCommandCount = commandsState.status === 'ready'
     ? countRunningCommands(commandsState.commands)
     : 0;
+  const debugRequests = requestsState.status === 'ready' ? requestsState.requests : [];
+  const debugRequestOrigins = useMemo(
+    () => countRequestAgentOrigins(debugRequests),
+    [debugRequests],
+  );
 
   useEffect(() => {
     if (!focusSection) return;
@@ -258,6 +287,26 @@ export const Sidebar = memo(function Sidebar({
           badge={<MCPStatusBadges servers={mcpServers} />}
         >
           <MCPSection servers={mcpServers} />
+        </CollapseBlock>
+
+        <CollapseBlock
+          title="Requests"
+          sectionId="inspector-requests"
+          forceOpenToken={forcedSection === 'inspector-requests' ? forceOpenEpoch : 0}
+          badge={
+            debugRequests.length > 0
+              ? <RequestsBadge count={debugRequests.length} origins={debugRequestOrigins} />
+              : null
+          }
+        >
+          <RequestsSection
+            state={requestsState}
+            onRefresh={onRefreshRequests}
+            selectedId={selectedRequestId}
+            onSelect={onSelectRequest}
+            capture={requestCapture}
+            onRetryCapture={onRetryRequestCapture}
+          />
         </CollapseBlock>
       </div>
     </aside>
@@ -1116,4 +1165,390 @@ function formatTokenCount(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
   if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`;
   return String(n);
+}
+
+// ── Requests Section (debug captures) ────────────────────────────────────────
+
+const REQUEST_OUTCOME_CONFIG: Readonly<
+  Record<DebugRequestSummary['outcome'], { tone: 'neutral' | 'success' | 'warning' | 'error'; label: string }>
+> = {
+  pending: { tone: 'neutral', label: 'pending' },
+  succeeded: { tone: 'success', label: 'ok' },
+  failed: { tone: 'error', label: 'failed' },
+  interrupted: { tone: 'warning', label: 'interrupted' },
+};
+
+/** Header count; flags multi-origin sessions (main + subagents/internals). */
+function RequestsBadge({ count, origins }: { count: number; origins: number }) {
+  return (
+    <StatusBadge tone="neutral" size="xs" outline>
+      {origins > 1 ? `${count} · ${origins} agents` : count}
+    </StatusBadge>
+  );
+}
+
+interface RequestsSectionProps {
+  state: DebugRequestsListState;
+  onRefresh: () => void;
+  selectedId: string | null;
+  onSelect: (attemptId: string | null) => void;
+  capture: DebugRequestCaptureState;
+  onRetryCapture: () => void;
+}
+
+function RequestsSection({
+  state,
+  onRefresh,
+  selectedId,
+  onSelect,
+  capture,
+  onRetryCapture,
+}: RequestsSectionProps) {
+  if (state.status === 'loading') {
+    return <StateMessage kind="loading" className="inspector-empty py-4" title="Loading requests…" />;
+  }
+
+  if (state.status === 'error') {
+    return (
+      <StateMessage
+        kind="error"
+        className="inspector-empty py-4"
+        title={state.error}
+        action={
+          <Button variant="ghost" size="xs" onClick={onRefresh}>
+            Retry
+          </Button>
+        }
+      />
+    );
+  }
+
+  if (state.status === 'empty') {
+    return (
+      <StateMessage className="inspector-empty py-4" kind="empty" title="No captured requests">
+        enable debug_capture_requests in settings.
+      </StateMessage>
+    );
+  }
+
+  // Newest attempt first; unparseable timestamps keep their arrival order.
+  const requests = [...state.requests].sort((a, b) => {
+    const left = Date.parse(a.startedAt);
+    const right = Date.parse(b.startedAt);
+    if (Number.isNaN(left) || Number.isNaN(right)) return 0;
+    return right - left;
+  });
+
+  return (
+    <div className="inspector-stack">
+      {requests.map((request) => (
+        <RequestRow
+          key={request.attemptId}
+          request={request}
+          selectedId={selectedId}
+          onSelect={onSelect}
+          capture={capture}
+          onRetryCapture={onRetryCapture}
+        />
+      ))}
+    </div>
+  );
+}
+
+interface RequestRowProps {
+  request: DebugRequestSummary;
+  selectedId: string | null;
+  onSelect: (attemptId: string | null) => void;
+  capture: DebugRequestCaptureState;
+  onRetryCapture: () => void;
+}
+
+function RequestRow({ request, selectedId, onSelect, capture, onRetryCapture }: RequestRowProps) {
+  // Mock-style compact row: mono agent + outcome badge, model + time + tokens.
+  const isSelected = selectedId === request.attemptId;
+  const scope = request.agentScope || 'main';
+  const tokens = formatRequestTokens(request);
+
+  return (
+    <div className="inspector-stack gap-0">
+      <button
+        type="button"
+        className={`inspector-row inspector-subagent-row rounded py-1 pr-0.5 ${isSelected ? 'inspector-row-active' : ''}`}
+        onClick={() => onSelect(isSelected ? null : request.attemptId)}
+      >
+        <span className="flex min-w-0 flex-1 flex-col items-start gap-0.5">
+          <span className="inline-flex min-w-0 items-center gap-1.5">
+            <span className="inspector-row-label mono truncate" title={request.agentName || scope}>
+              {request.agentName || scope}
+            </span>
+            {scope !== 'main' && (
+              <StatusBadge tone="info" size="xs" className="max-w-24 shrink-0 truncate" title={scope}>
+                {scope}
+              </StatusBadge>
+            )}
+            {request.truncated && (
+              <span className="subtle shrink-0 text-xs" title="A capture field exceeded the byte cap">
+                trunc
+              </span>
+            )}
+          </span>
+          <span className="inspector-row-label subtle truncate" title={request.modelId}>
+            {request.modelId}
+          </span>
+        </span>
+        <span className="inline-flex shrink-0 flex-col items-end gap-0.5">
+          <RequestOutcomeBadge outcome={request.outcome} />
+          <span className="subtle mono whitespace-nowrap" title={request.startedAt}>
+            {formatRelativeTime(request.startedAt)}
+            {tokens ? ` · ${tokens}` : ''}
+          </span>
+        </span>
+      </button>
+      {isSelected && (
+        <RequestDetail summary={request} capture={capture} onRetry={onRetryCapture} />
+      )}
+    </div>
+  );
+}
+
+function RequestOutcomeBadge({ outcome }: { outcome: DebugRequestSummary['outcome'] }) {
+  const { tone, label } = REQUEST_OUTCOME_CONFIG[outcome];
+  return (
+    <StatusBadge tone={tone} size="xs" withDot outline={tone === 'neutral'}>
+      {label}
+    </StatusBadge>
+  );
+}
+
+/** Compact in/out pair (e.g. `1.2k→300`); empty while the attempt is pending. */
+function formatRequestTokens(request: DebugRequestSummary): string {
+  if (request.inputTokens == null && request.outputTokens == null) return '';
+  const input = request.inputTokens != null ? formatTokenCount(request.inputTokens) : '–';
+  const output = request.outputTokens != null ? formatTokenCount(request.outputTokens) : '–';
+  return `${input}→${output}`;
+}
+
+function formatRequestClockTime(iso: string): string {
+  const ms = new Date(iso).getTime();
+  if (Number.isNaN(ms)) return iso;
+  return new Date(ms).toLocaleTimeString([], { hour12: false });
+}
+
+function formatRequestDuration(request: DebugRequestSummary): string | null {
+  const start = new Date(request.startedAt).getTime();
+  const end = request.completedAt ? new Date(request.completedAt).getTime() : Number.NaN;
+  if (Number.isNaN(start) || Number.isNaN(end)) return null;
+  const seconds = Math.max(0, (end - start) / 1000);
+  return seconds < 10 ? `${seconds.toFixed(1)}s` : `${Math.round(seconds)}s`;
+}
+
+interface RequestDetailProps {
+  summary: DebugRequestSummary;
+  capture: DebugRequestCaptureState;
+  onRetry: () => void;
+}
+
+function RequestDetail({ summary, capture, onRetry }: RequestDetailProps) {
+  const duration = formatRequestDuration(summary);
+
+  return (
+    <div className="inspector-subagent-detail">
+      <div className="inspector-row">
+        <span className="subtle">outcome</span>
+        <RequestOutcomeBadge outcome={summary.outcome} />
+      </div>
+      <div className="inspector-row">
+        <span className="subtle">model</span>
+        <span
+          className="inspector-row-label mono truncate text-right"
+          title={`${summary.connectionName} · ${summary.providerId} · ${summary.protocol}`}
+        >
+          {summary.modelId}
+        </span>
+      </div>
+      {summary.agentTier && (
+        <div className="inspector-row">
+          <span className="subtle">tier</span>
+          <span className="subtle">{summary.agentTier}</span>
+        </div>
+      )}
+      <div className="inspector-row">
+        <span className="subtle">started</span>
+        <span className="subtle mono">{formatRequestClockTime(summary.startedAt)}</span>
+      </div>
+      {duration && (
+        <div className="inspector-row">
+          <span className="subtle">duration</span>
+          <span className="subtle mono">{duration}</span>
+        </div>
+      )}
+      {(summary.inputTokens != null || summary.outputTokens != null) && (
+        <div className="inspector-row">
+          <span className="subtle">tokens</span>
+          <span className="subtle mono">{formatRequestTokens(summary) || '–'}</span>
+        </div>
+      )}
+      {(summary.requestBytes != null || summary.responseBytes != null) && (
+        <div className="inspector-row">
+          <span className="subtle">bytes</span>
+          <span className="subtle mono">
+            {summary.requestBytes != null ? formatCompactCount(summary.requestBytes) : '–'}
+            {' / '}
+            {summary.responseBytes != null ? formatCompactCount(summary.responseBytes) : '–'}
+          </span>
+        </div>
+      )}
+      {summary.error && (
+        <div className="subtle text-error break-words" title={summary.error}>
+          {summary.error}
+        </div>
+      )}
+      <RequestCapturePane summary={summary} capture={capture} onRetry={onRetry} />
+    </div>
+  );
+}
+
+// ── Requests capture panes ───────────────────────────────────────────────────
+
+/** Cap the rendered string; multi-MB payloads must not hit the DOM in full. */
+const MAX_RENDER_CHARS = 500_000;
+
+function prettyPayload(value: unknown): string {
+  if (typeof value === 'string') return value;
+  try {
+    return JSON.stringify(value, null, 2);
+  } catch {
+    return String(value);
+  }
+}
+
+interface RequestCapturePaneProps {
+  summary: DebugRequestSummary;
+  capture: DebugRequestCaptureState;
+  onRetry: () => void;
+}
+
+function RequestCapturePane({ summary, capture, onRetry }: RequestCapturePaneProps) {
+  const [tab, setTab] = useState('request');
+
+  if (capture.status === 'idle') return null;
+
+  if (capture.status === 'loading') {
+    return <div className="subtle">Loading capture…</div>;
+  }
+
+  if (capture.status === 'error') {
+    return (
+      <div className="inspector-stack gap-1">
+        <div className="subtle text-error break-words">{capture.error}</div>
+        <div>
+          <Button variant="ghost" size="xs" onClick={onRetry}>
+            Retry
+          </Button>
+        </div>
+      </div>
+    );
+  }
+
+  if (capture.status === 'unavailable') {
+    return (
+      <div className="subtle">
+        {summary.outcome === 'pending'
+          ? 'Capture pending — loads when the attempt settles.'
+          : 'Capture unavailable for this attempt.'}
+      </div>
+    );
+  }
+
+  const hasRaw = capture.capture.rawChunks.length > 0;
+  const activeTab = tab === 'raw' && !hasRaw ? 'request' : tab;
+  const items: TabItem[] = [
+    { id: 'request', label: 'Request' },
+    { id: 'response', label: 'Response' },
+    ...(hasRaw ? [{ id: 'raw' as const, label: 'Raw chunks' }] : []),
+  ];
+  const value = activeTab === 'request'
+    ? capture.capture.request
+    : activeTab === 'response'
+      ? capture.capture.response
+      : capture.capture.rawChunks;
+
+  return (
+    <CaptureTabs
+      items={items}
+      activeTab={activeTab}
+      onSelectTab={setTab}
+      value={value}
+    />
+  );
+}
+
+interface CaptureTabsProps {
+  items: readonly TabItem[];
+  activeTab: string;
+  onSelectTab: (id: string) => void;
+  value: unknown;
+}
+
+function CaptureTabs({ items, activeTab, onSelectTab, value }: CaptureTabsProps) {
+  // Pretty-print once per payload; the full string backs the copy action.
+  const text = useMemo(() => prettyPayload(value), [value]);
+
+  return (
+    <div className="inspector-stack">
+      <div className="flex items-center justify-between gap-1 pt-0.5">
+        <Tabs
+          items={items}
+          value={activeTab}
+          onValueChange={onSelectTab}
+          className="min-w-0 flex-1"
+          itemClassName="flex-1 text-xs"
+        />
+        <CopyPayloadButton text={text} />
+      </div>
+      <PayloadPane text={text} />
+    </div>
+  );
+}
+
+function CopyPayloadButton({ text }: { text: string }) {
+  const [copied, setCopied] = useState(false);
+
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1500);
+    } catch {
+      // Clipboard access can be denied; the selection path still works.
+    }
+  };
+
+  return (
+    <IconButton
+      label={copied ? 'Copied' : 'Copy payload'}
+      tooltip={copied ? 'Copied' : 'Copy payload'}
+      icon="copy"
+      size="xs"
+      variant="ghost"
+      className="shrink-0"
+      onClick={() => void copy()}
+    />
+  );
+}
+
+function PayloadPane({ text }: { text: string }) {
+  const truncatedForDisplay = text.length > MAX_RENDER_CHARS;
+  const shown = truncatedForDisplay ? text.slice(0, MAX_RENDER_CHARS) : text;
+
+  return (
+    <div className="inspector-stack gap-0">
+      <pre className="orchid-tool-result-selectable m-0 max-h-96 max-w-full overflow-auto whitespace-pre-wrap break-words rounded-md border border-base-300 bg-base-100 p-2 font-mono text-xs leading-relaxed text-base-content/80">
+        {shown.length > 0 ? shown : '(empty payload)'}
+      </pre>
+      {truncatedForDisplay && (
+        <div className="subtle text-xs">(truncated for display — use copy for full payload)</div>
+      )}
+    </div>
+  );
 }
