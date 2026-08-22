@@ -165,13 +165,18 @@ function ThinkingMessage({
           ) : (
             <Icon name="alertCircle" size={12} />
           )}
-          {`${isStreaming ? 'Thinking…' : 'Thought'}${durationLabel ? ` ${durationLabel}` : ''}`}
+          {isStreaming ? 'Thinking…' : 'Thought'}
         </span>
-        <Icon
-          name="chevronDown"
-          size={12}
-          className={`orchid-disclosure-chevron ${expanded ? 'is-open' : ''}`}
-        />
+        <span className="inline-flex shrink-0 items-center gap-1.5">
+          {durationLabel ? (
+            <span className="orchid-tool-elapsed" aria-hidden="true">{durationLabel}</span>
+          ) : null}
+          <Icon
+            name="chevronDown"
+            size={12}
+            className={`orchid-disclosure-chevron ${expanded ? 'is-open' : ''}`}
+          />
+        </span>
       </button>
       <CollapsibleRegion open={expanded} id={panelId}>
         <div
