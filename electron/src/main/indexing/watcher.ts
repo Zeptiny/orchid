@@ -19,6 +19,7 @@ import { getProjectRuntimeRegistry } from '../project/runtime';
 import { getProjectTrustState } from '../project/trust';
 import { importESM } from '../utils/esm-import';
 import { enqueueMutation, markDirty } from './refresh-coordinator';
+import { INDEX_SKIP_DIR_NAMES } from './skip-dirs';
 
 type ChokidarModule = typeof import('chokidar');
 type ChokidarOptions = import('chokidar').ChokidarOptions;
@@ -43,16 +44,8 @@ interface WatcherEntry {
 
 const LOG_PREFIX = '[index-watcher]';
 
-/**
- * Default skip dirs shared by both indexers (AST `SKIP_DIRS` ∪ RAG
- * `DEFAULT_IGNORED_DIRS`), matched by directory name anywhere in the tree.
- */
-const DEFAULT_SKIP_DIR_NAMES = new Set([
-  'node_modules', '.git', '__pycache__',
-  '.venv', 'venv', 'env',
-  '.orchid', 'dist', 'build',
-  '.next', '.cache', 'target',
-]);
+/** Default skip dirs shared with both indexers, matched by directory name. */
+const DEFAULT_SKIP_DIR_NAMES = new Set(INDEX_SKIP_DIR_NAMES);
 
 /**
  * Always ignored regardless of config (R9): both index stores live under
