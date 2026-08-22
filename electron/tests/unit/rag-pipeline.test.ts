@@ -1169,7 +1169,7 @@ describe('Model Download', () => {
 
     const pending = downloadModel('test/stalled-model', undefined, {
       inactivityTimeoutMs: 20,
-      totalTimeoutMs: 100,
+      totalTimeoutMs: 5000,
     });
 
     await expect(pending).rejects.toThrow(/timed out/i);
