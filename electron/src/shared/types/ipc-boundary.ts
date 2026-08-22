@@ -326,6 +326,16 @@ export interface RAGStoreStatus {
   lastIndexDuration: number | null;
 }
 
+/**
+ * rag:status IPC response — store status plus the workspace-watcher slice.
+ * `watcher` is additive and optional: it is absent when introspection is
+ * unavailable, and consumers must tolerate its absence.
+ */
+export interface RAGStatusResponse extends RAGStoreStatus {
+  /** Whether the workspace watcher has a live instance for this project. */
+  watcher?: { watching: boolean };
+}
+
 // ── AST Store ───────────────────────────────────────────────────────────────
 
 export interface ASTStoreStatus {

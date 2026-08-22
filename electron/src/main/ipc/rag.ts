@@ -18,6 +18,8 @@ import {
 import { resolveBoundProjectPath } from './session';
 import { getProjectRuntimeRegistry } from '../project/runtime';
 import { getProjectTrustState } from '../project/trust';
+import { cancelProjectRefresh } from '../indexing/refresh-coordinator';
+import { getWorkspaceWatcherState } from '../indexing/watcher';
 import { ragIndexSchema } from './payload-schemas';
 
 function broadcastProgress(projectPath: string, progress: RAGIndexProgress): void {
@@ -42,7 +44,17 @@ export function registerRAGIPC(): void {
         lastIndexDuration: null,
       };
     }
-    return getStatus(projectPath);
+    const status = getStatus(projectPath);
+    // Watcher introspection is additive and must never fail status: a throw
+    // degrades to the plain store status (watcher absent = unknown).
+    try {
+      return {
+        ...status,
+        watcher: { watching: getWorkspaceWatcherState(projectPath).watching },
+      };
+    } catch {
+      return status;
+    }
   });
 
   // rag:index_state — in-flight run snapshot for remounting UIs
@@ -115,6 +127,10 @@ export function registerRAGIPC(): void {
     // Untrusted projects keep their index untouched (no-op clear).
     if (projectPath != null && getProjectTrustState(projectPath) === 'trusted') {
       await cancelIndex(projectPath);
+      // Drain any pending refresh before dropping the store: a queued
+      // coordinator flush could otherwise repopulate the cleared index from
+      // stale upserts armed before the clear.
+      cancelProjectRefresh(projectPath);
       clearIndex(projectPath);
     }
     return { status: 'cleared' };

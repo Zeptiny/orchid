@@ -49,7 +49,7 @@ import type {
   SessionActivity,
   Config,
   MCPServerStatus,
-  RAGStoreStatus,
+  RAGStatusResponse,
   ASTStoreStatus,
   RAGIndexResult,
   RAGIndexProgress,
@@ -90,6 +90,7 @@ export type {
   Config,
   MCPServerStatus,
   RAGStoreStatus,
+  RAGStatusResponse,
   ASTStoreStatus,
   RAGIndexResult,
   RAGIndexProgress,
@@ -1569,7 +1570,7 @@ export interface OrchidAPI {
   };
 
   rag: {
-    status: () => Promise<RAGStoreStatus>;
+    status: () => Promise<RAGStatusResponse>;
     index: (message?: RAGIndexMessage) => Promise<RAGIndexResult>;
     clear: () => Promise<{ status: string }>;
     /** Whether a run is active + last progress (for tab remount / late join). */

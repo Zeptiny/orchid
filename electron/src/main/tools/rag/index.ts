@@ -9,6 +9,7 @@ import { RiskClass } from '../../../shared/types/permission';
 import { genericToolResultMetadata } from '../types';
 import { genericBuiltInToolOutcome, type GenericBuiltInToolOutcome } from '../result';
 import { cancelIndex, indexProject, getStatus, clearIndex } from '../../rag/indexer';
+import { cancelProjectRefresh } from '../../indexing/refresh-coordinator';
 
 // ---------------------------------------------------------------------------
 // Schema
@@ -89,6 +90,10 @@ export const ragIndexHandler: ToolHandler = async (
 
     case 'clear': {
       await cancelIndex(projectPath);
+      // Drain any pending refresh before dropping the store: a queued
+      // coordinator flush could otherwise repopulate the cleared index from
+      // stale upserts armed before the clear.
+      cancelProjectRefresh(projectPath);
       clearIndex(projectPath);
       return genericBuiltInToolOutcome('rag_index', { action: 'clear' });
     }
