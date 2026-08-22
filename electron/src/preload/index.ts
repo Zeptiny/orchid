@@ -769,7 +769,7 @@ const orchidAPI: OrchidAPI = {
   },
 
   debug: {
-    sessionRequests: (params: { readonly sessionId: string }) =>
+    sessionRequests: (params: { readonly sessionId: string; readonly limit?: number }) =>
       invoke<DebugSessionRequestsResult>(IPC_CHANNELS.DEBUG_SESSION_REQUESTS, params),
 
     requestCapture: (params: { readonly attemptId: string }) =>

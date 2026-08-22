@@ -8,10 +8,15 @@
 import { ipcMain } from 'electron';
 import { z } from 'zod';
 import { IPC_CHANNELS } from '../../shared/types/ipc';
-import { getProviderAttemptCaptureStore } from '../providers/accounting/capture-store';
+import {
+  DEBUG_CAPTURE_LIST_DEFAULT_LIMIT,
+  DEBUG_CAPTURE_LIST_MAX_LIMIT,
+  getProviderAttemptCaptureStore,
+} from '../providers/accounting/capture-store';
 
 const sessionRequestsParamsSchema = z.object({
   sessionId: z.string().min(1),
+  limit: z.number().int().positive().max(DEBUG_CAPTURE_LIST_MAX_LIMIT).optional(),
 }).strict();
 
 const requestCaptureParamsSchema = z.object({
@@ -24,8 +29,8 @@ export function registerDebugIPC(): void {
     if (!parsed.success) throw new Error('Invalid debug:session_requests payload');
     try {
       const store = getProviderAttemptCaptureStore();
-      if (!store) return { requests: [] };
-      return { requests: store.listForSession(parsed.data.sessionId) };
+      if (!store) return { requests: [], total: 0 };
+      return store.listForSession(parsed.data.sessionId, parsed.data.limit ?? DEBUG_CAPTURE_LIST_DEFAULT_LIMIT);
     } catch (error) {
       console.error('[debug] Session requests query failed', { error });
       throw new Error(`Debug session requests query failed: ${error instanceof Error ? error.message : String(error)}`, { cause: error });

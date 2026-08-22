@@ -19,7 +19,7 @@ import type {
 export type DebugRequestsListState =
   | { status: 'loading' }
   | { status: 'empty' }
-  | { status: 'ready'; requests: readonly DebugRequestSummary[] }
+  | { status: 'ready'; requests: readonly DebugRequestSummary[]; total: number }
   | { status: 'error'; error: string };
 
 export type DebugRequestCaptureState =
@@ -36,6 +36,8 @@ export interface UseDebugRequestsReturn {
   requests: readonly DebugRequestSummary[];
   /** Refresh the capture list for the active session. */
   refresh: () => Promise<void>;
+  /** Grow the window and re-fetch (Show more). */
+  showMore: () => Promise<void>;
   /** Currently selected attempt id (null when none). */
   selectedId: string | null;
   /** Toggle row selection; selecting the active id clears it. */
@@ -52,6 +54,10 @@ export interface UseDebugRequestsReturn {
 const POLL_INTERVAL_STREAMING_MS = 1_000;
 /** Idle sessions only accrue captures from background origins (titler, …). */
 const POLL_INTERVAL_IDLE_MS = 5_000;
+/** Initial list window — matches the main-process default. */
+const LIST_WINDOW_INITIAL = 200;
+/** Each Show more grows the window by this many rows. */
+const LIST_WINDOW_STEP = 200;
 
 /** Distinct agent origins among captures ('main' when the scope is absent). */
 export function countRequestAgentOrigins(requests: readonly DebugRequestSummary[]): number {
@@ -85,6 +91,8 @@ export function useDebugRequests(
   sessionIdRef.current = activeSessionId;
   const enabledRef = useRef(enabled);
   enabledRef.current = enabled;
+  // Window size survives polls and refreshes; resets on session switch.
+  const windowRef = useRef(LIST_WINDOW_INITIAL);
   const requestGenerationRef = useRef(0);
   const captureGenerationRef = useRef(0);
   // Prevent overlapping same-session polls (IPC > poll interval) from
@@ -112,7 +120,10 @@ export function useDebugRequests(
     const generation = ++requestGenerationRef.current;
     const requestId = activeSessionId;
     try {
-      const result = await window.orchid.debug.sessionRequests({ sessionId: requestId });
+      const result = await window.orchid.debug.sessionRequests({
+        sessionId: requestId,
+        limit: windowRef.current,
+      });
       if (
         !aliveRef.current
         || !enabledRef.current
@@ -120,7 +131,7 @@ export function useDebugRequests(
         || sessionIdRef.current !== requestId
       ) return;
       setState(result.requests.length
-        ? { status: 'ready', requests: result.requests }
+        ? { status: 'ready', requests: result.requests, total: result.total }
         : { status: 'empty' });
     } catch (err) {
       if (
@@ -144,6 +155,7 @@ export function useDebugRequests(
       setState({ status: 'empty' });
       return;
     }
+    windowRef.current = LIST_WINDOW_INITIAL;
     setState({ status: 'loading' });
     void refresh();
   }, [activeSessionId, enabled, refresh]);
@@ -168,6 +180,11 @@ export function useDebugRequests(
   const select = useCallback((attemptId: string | null) => {
     setSelectedId((previous) => (previous === attemptId ? null : attemptId));
   }, []);
+
+  const showMore = useCallback(async () => {
+    windowRef.current += LIST_WINDOW_STEP;
+    await refresh();
+  }, [refresh]);
 
   const requests = state.status === 'ready' ? state.requests : [];
   const selectedSummary = selectedId
@@ -214,5 +231,5 @@ export function useDebugRequests(
     await loadCapture(selectedId);
   }, [loadCapture, selectedId]);
 
-  return { state, requests, refresh, selectedId, select, capture, retryCapture };
+  return { state, requests, refresh, showMore, selectedId, select, capture, retryCapture };
 }

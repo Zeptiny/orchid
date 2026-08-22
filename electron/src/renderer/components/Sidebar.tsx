@@ -66,6 +66,7 @@ interface SidebarProps {
   /** Per-session captured provider requests (debug inspector section). */
   requestsState?: DebugRequestsListState;
   onRefreshRequests?: () => void;
+  onShowMoreRequests?: () => void;
   selectedRequestId?: string | null;
   onSelectRequest?: (attemptId: string | null) => void;
   requestCapture?: DebugRequestCaptureState;
@@ -108,6 +109,7 @@ export const Sidebar = memo(function Sidebar({
   onRefreshCommands,
   requestsState = EMPTY_REQUESTS_LIST,
   onRefreshRequests = () => {},
+  onShowMoreRequests = () => {},
   selectedRequestId = null,
   onSelectRequest = () => {},
   requestCapture = EMPTY_REQUEST_CAPTURE,
@@ -138,6 +140,8 @@ export const Sidebar = memo(function Sidebar({
     ? countRunningCommands(commandsState.commands)
     : 0;
   const debugRequests = requestsState.status === 'ready' ? requestsState.requests : [];
+  // Badge reports the session total, not the loaded window.
+  const debugRequestTotal = requestsState.status === 'ready' ? requestsState.total : 0;
   const debugRequestOrigins = useMemo(
     () => countRequestAgentOrigins(debugRequests),
     [debugRequests],
@@ -294,14 +298,15 @@ export const Sidebar = memo(function Sidebar({
           sectionId="inspector-requests"
           forceOpenToken={forcedSection === 'inspector-requests' ? forceOpenEpoch : 0}
           badge={
-            debugRequests.length > 0
-              ? <RequestsBadge count={debugRequests.length} origins={debugRequestOrigins} />
+            debugRequestTotal > 0
+              ? <RequestsBadge count={debugRequestTotal} origins={debugRequestOrigins} />
               : null
           }
         >
           <RequestsSection
             state={requestsState}
             onRefresh={onRefreshRequests}
+            onShowMore={onShowMoreRequests}
             selectedId={selectedRequestId}
             onSelect={onSelectRequest}
             capture={requestCapture}
@@ -1190,6 +1195,7 @@ function RequestsBadge({ count, origins }: { count: number; origins: number }) {
 interface RequestsSectionProps {
   state: DebugRequestsListState;
   onRefresh: () => void;
+  onShowMore: () => void;
   selectedId: string | null;
   onSelect: (attemptId: string | null) => void;
   capture: DebugRequestCaptureState;
@@ -1199,6 +1205,7 @@ interface RequestsSectionProps {
 function RequestsSection({
   state,
   onRefresh,
+  onShowMore,
   selectedId,
   onSelect,
   capture,
@@ -1231,13 +1238,9 @@ function RequestsSection({
     );
   }
 
-  // Newest attempt first; unparseable timestamps keep their arrival order.
-  const requests = [...state.requests].sort((a, b) => {
-    const left = Date.parse(a.startedAt);
-    const right = Date.parse(b.startedAt);
-    if (Number.isNaN(left) || Number.isNaN(right)) return 0;
-    return right - left;
-  });
+  // Rows arrive newest-first from the store's windowed query; no re-sort.
+  const requests = state.requests;
+  const hidden = Math.max(0, state.total - requests.length);
 
   return (
     <div className="inspector-stack">
@@ -1251,6 +1254,11 @@ function RequestsSection({
           onRetryCapture={onRetryCapture}
         />
       ))}
+      {hidden > 0 && (
+        <Button variant="ghost" size="xs" className="w-full" onClick={onShowMore}>
+          Show more ({hidden} older)
+        </Button>
+      )}
     </div>
   );
 }

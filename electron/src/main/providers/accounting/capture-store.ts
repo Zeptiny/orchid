@@ -18,6 +18,12 @@ export const PROVIDER_ATTEMPT_CAPTURE_DB_PATH = path.join(HOME_CONFIG_DIR, 'acco
  */
 export const DEBUG_CAPTURE_MAX_FIELD_BYTES = 4 * 1024 * 1024;
 
+/** Session list window when the caller does not request one explicitly. */
+export const DEBUG_CAPTURE_LIST_DEFAULT_LIMIT = 200;
+
+/** Hard ceiling on the requested window (Show more growth is bounded). */
+export const DEBUG_CAPTURE_LIST_MAX_LIMIT = 10_000;
+
 export interface ProviderAttemptCaptureStoreOptions {
   readonly dbPath?: string;
   readonly now?: () => Date;
@@ -231,8 +237,18 @@ export class ProviderAttemptCaptureStore {
    * Captured attempts for one session joined with their ledger metadata.
    * Only attempts that have a capture row are listed — the capture gate
    * (not the ledger) defines the debug view's population.
+   *
+   * Windowed newest-first: long debugged sessions accumulate hundreds of
+   * attempts (one per tool-loop step, retry, and background origin), so the
+   * renderer pages through a growing window instead of shipping every row
+   * over IPC on each poll. Returns the newest `limit` summaries plus the
+   * unwindowed total so the UI can render "N of M".
    */
-  listForSession(sessionId: string): readonly DebugRequestSummary[] {
+  listForSession(
+    sessionId: string,
+    limit: number = DEBUG_CAPTURE_LIST_DEFAULT_LIMIT,
+  ): { requests: readonly DebugRequestSummary[]; total: number } {
+    const cappedLimit = Math.min(DEBUG_CAPTURE_LIST_MAX_LIMIT, Math.max(1, Math.floor(limit)));
     const rows = this.connection().prepare(`
       SELECT cap.attempt_id, cap.session_id, cap.request_bytes, cap.response_bytes,
              cap.raw_available, cap.truncated, cap.captured_at,
@@ -245,13 +261,20 @@ export class ProviderAttemptCaptureStore {
       FROM provider_attempt_captures cap
       JOIN provider_attempts pa ON pa.attempt_id = cap.attempt_id
       WHERE cap.session_id = ?
-      ORDER BY pa.started_at, pa.attempt_id
-    `).all(sessionId) as Array<SummaryJoinRow & { snapshot_json: string }>;
+      ORDER BY pa.started_at DESC, pa.attempt_id DESC
+      LIMIT ?
+    `).all(sessionId, cappedLimit) as Array<SummaryJoinRow & { snapshot_json: string }>;
+    const totalRow = this.connection().prepare(
+      'SELECT COUNT(*) as total FROM provider_attempt_captures WHERE session_id = ?',
+    ).get(sessionId) as { total: number };
     // connection_name lives inside the frozen snapshot JSON, not a column.
-    return rows.map((row) => joinRowToSummary({
-      ...row,
-      connection_name: snapshotConnectionName(row.snapshot_json),
-    }));
+    return {
+      requests: rows.map((row) => joinRowToSummary({
+        ...row,
+        connection_name: snapshotConnectionName(row.snapshot_json),
+      })),
+      total: totalRow.total,
+    };
   }
 
   /** Full capture (request + response + raw chunks) for one attempt. */

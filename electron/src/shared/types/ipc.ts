@@ -1619,7 +1619,7 @@ export interface OrchidAPI {
 
   debug: {
     /** List captured provider requests for one session (any agent origin). */
-    sessionRequests: (params: { readonly sessionId: string }) => Promise<import('./debug').DebugSessionRequestsResult>;
+    sessionRequests: (params: { readonly sessionId: string; readonly limit?: number }) => Promise<import('./debug').DebugSessionRequestsResult>;
     /** Full raw request response capture for one provider attempt. */
     requestCapture: (params: { readonly attemptId: string }) => Promise<import('./debug').DebugRequestCaptureResult>;
   };

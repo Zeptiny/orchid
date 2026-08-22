@@ -124,7 +124,7 @@ describe('provider attempt debug capture (issue 146)', () => {
     const attempts = h.ledger.listAttempts('session-off');
     expect(attempts).toHaveLength(1);
     expect(attempts[0].outcome).toBe('succeeded');
-    expect(h.capture.listForSession('session-off')).toEqual([]);
+    expect(h.capture.listForSession('session-off')).toEqual({ requests: [], total: 0 });
   });
 
   it('captures the request and the normalized stream parts in arrival order', async () => {
@@ -144,7 +144,7 @@ describe('provider attempt debug capture (issue 146)', () => {
     });
     await consume(result.stream);
 
-    const summaries = h.capture.listForSession('session-stream');
+    const summaries = h.capture.listForSession('session-stream').requests;
     expect(summaries).toHaveLength(1);
     expect(summaries[0]).toMatchObject({
       sessionId: 'session-stream', chainId: 'chain-1', turnId: 'turn-1',
@@ -199,7 +199,7 @@ describe('provider attempt debug capture (issue 146)', () => {
     });
     await consume(result.stream);
 
-    const [summary] = h.capture.listForSession('session-raw');
+    const [summary] = h.capture.listForSession('session-raw').requests;
     expect(summary.rawAvailable).toBe(true);
     const captured = h.capture.getCapture(summary.attemptId)!;
     // Raw parts never appear in the normalized response array…
@@ -237,7 +237,7 @@ describe('provider attempt debug capture (issue 146)', () => {
     await consume(result.stream);
 
     expect(h.ledger.listAttempts('session-err')[0].outcome).toBe('failed');
-    const [summary] = h.capture.listForSession('session-err');
+    const [summary] = h.capture.listForSession('session-err').requests;
     expect(summary.outcome).toBe('failed');
     expect(summary.responseBytes).not.toBeNull();
     const captured = h.capture.getCapture(summary.attemptId)!;
@@ -262,7 +262,7 @@ describe('provider attempt debug capture (issue 146)', () => {
       params, model: {},
     })).rejects.toThrow(/temporary network/i);
 
-    const summaries = h.capture.listForSession('session-throw');
+    const summaries = h.capture.listForSession('session-throw').requests;
     expect(summaries).toHaveLength(1);
     expect(summaries[0].outcome).toBe('failed');
     const captured = h.capture.getCapture(summaries[0].attemptId)!;
@@ -288,7 +288,7 @@ describe('provider attempt debug capture (issue 146)', () => {
       model: {},
     });
 
-    const summaries = h.capture.listForSession('session-generate');
+    const summaries = h.capture.listForSession('session-generate').requests;
     expect(summaries).toHaveLength(1);
     expect(summaries[0]).toMatchObject({ outcome: 'succeeded', rawAvailable: false });
     const captured = h.capture.getCapture(summaries[0].attemptId)!;
@@ -323,7 +323,7 @@ describe('provider attempt debug capture (issue 146)', () => {
       model: {},
     });
 
-    const [summary] = h.capture.listForSession('session-set-cookie');
+    const [summary] = h.capture.listForSession('session-set-cookie').requests;
     const captured = h.capture.getCapture(summary.attemptId)!;
     // What getCapture returns is exactly what the Requests inspector renders —
     // the credential must never survive into the persisted/read-back capture.
@@ -351,7 +351,7 @@ describe('provider attempt debug capture (issue 146)', () => {
     });
     await consume(result.stream);
 
-    const [summary] = h.capture.listForSession('session-headers');
+    const [summary] = h.capture.listForSession('session-headers').requests;
     const captured = h.capture.getCapture(summary.attemptId)!;
     const callOptions = (captured.request as { callOptions: Record<string, unknown> }).callOptions;
     expect(callOptions.headers).toEqual({
@@ -393,7 +393,7 @@ describe('provider attempt debug capture (issue 146)', () => {
       request: { callOptions: { prompt: 'x'.repeat(DEBUG_CAPTURE_MAX_FIELD_BYTES + 1024) } },
     });
 
-    const [summary] = capture.listForSession('session-big');
+    const [summary] = capture.listForSession('session-big').requests;
     expect(summary.truncated).toBe(true);
     const captured = capture.getCapture('cap-big')!;
     expect(captured.request).toEqual({
@@ -442,5 +442,38 @@ describe('provider attempt debug capture (issue 146)', () => {
     expect(book.listAttempts('session-broken')[0]).toMatchObject({
       outcome: 'succeeded', usage: { inputTokens: 1000, outputTokens: 100 },
     });
+  });
+
+  it('windows the session list newest-first with a total count', () => {
+    const { ledger: book, capture } = setup();
+    const COUNT = 30;
+    // Distinct started_at stamps so the DESC ordering is deterministic.
+    for (let i = 0; i < COUNT; i++) {
+      const attemptId = `win-${String(i).padStart(2, '0')}`;
+      book.insertPending({
+        attemptId, sessionId: 'session-window', chainId: 'chain-1', turnId: 'turn-1',
+        sdkCallId: attemptId, snapshot: snapshot(),
+      });
+      capture.insertRequest({
+        attemptId, sessionId: 'session-window',
+        request: { callOptions: { prompt: [] } },
+      });
+    }
+
+    const full = capture.listForSession('session-window');
+    expect(full.total).toBe(COUNT);
+    expect(full.requests).toHaveLength(COUNT);
+
+    const window = capture.listForSession('session-window', 10);
+    expect(window.total).toBe(COUNT);
+    expect(window.requests).toHaveLength(10);
+    // Newest first: the window covers the most recent attempts, and the
+    // ordering matches the full list's head.
+    const firstIds = window.requests.map((r) => r.attemptId);
+    expect(firstIds).toEqual(full.requests.slice(0, 10).map((r) => r.attemptId));
+    expect(firstIds[0]).toBe('win-29');
+
+    // The limit is clamped, never throws, and never returns zero rows.
+    expect(capture.listForSession('session-window', 0).requests).toHaveLength(1);
   });
 });

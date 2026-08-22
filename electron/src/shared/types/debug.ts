@@ -39,7 +39,10 @@ export interface DebugRequestSummary {
 }
 
 export interface DebugSessionRequestsResult {
+  /** Newest-first summaries within the requested window. */
   readonly requests: readonly DebugRequestSummary[];
+  /** Unwindowed capture count for the session ("N of M" in the UI). */
+  readonly total: number;
 }
 
 /**

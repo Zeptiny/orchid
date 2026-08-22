@@ -1454,6 +1454,7 @@ export function ChatView({ isVisible = true, bootstrapConfig = null, onNotify, a
           onRefreshCommands={commands.refresh}
           requestsState={debugRequests.state}
           onRefreshRequests={debugRequests.refresh}
+          onShowMoreRequests={debugRequests.showMore}
           selectedRequestId={debugRequests.selectedId}
           onSelectRequest={debugRequests.select}
           requestCapture={debugRequests.capture}
