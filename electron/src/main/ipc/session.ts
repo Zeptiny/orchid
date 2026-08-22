@@ -48,6 +48,7 @@ import { listConnectionModelRows } from '../providers/facets/discovery';
 import { groupTierVariantRows } from '../providers/facets/tiers';
 import { invalidateProjectMCPManagers } from '../mcp/project-registry';
 import { cancelIndex } from '../rag/indexer';
+import { cancelProjectRefresh } from '../indexing/refresh-coordinator';
 import {
   attachWorkspaceWatcher,
   detachWorkspaceWatcher,
@@ -115,6 +116,22 @@ function resolveDraftModelSelection(windowId: string): ModelSelection | null {
 }
 
 /**
+ * Move the window's workspace-watcher reference after its effective workspace
+ * changed (project bind, session switch). Attach is refcounted per project
+ * path, so every site that can change the effective cwd must share these
+ * exact semantics or references ratchet across switches.
+ *
+ * No-op when the cwd did not change; the next path is attached before the
+ * prior one is released so a project shared with another window keeps its
+ * instance. Never attaches an unbound (null) workspace.
+ */
+function retargetWorkspaceWatcher(prior: string | null, next: string | null): void {
+  if (prior === next) return;
+  if (next != null) attachWorkspaceWatcher(next);
+  if (prior != null) detachWorkspaceWatcher(prior);
+}
+
+/**
  * Bind a validated absolute project directory as the current workspace.
  *
  * - If an active session exists: update session.cwd via changeCwd.
@@ -148,9 +165,8 @@ export async function bindProjectDirectory(
   }
 
   if (priorWorkspace.cwd !== canonical) {
-    attachWorkspaceWatcher(canonical);
+    retargetWorkspaceWatcher(priorWorkspace.cwd, canonical);
     if (priorWorkspace.cwd) {
-      detachWorkspaceWatcher(priorWorkspace.cwd);
       const {
         clearFunctionHashesForSession,
         clearFunctionHashesForWorkspace,
@@ -171,7 +187,8 @@ export async function bindProjectDirectory(
  * The trust record drops first so concurrent gate reads fail closed, then the
  * cached runtime and MCP managers are invalidated (lease-aware shutdown
  * retires them as running turns finish), any in-flight RAG indexing is
- * cancelled, and every session bound to the directory is force-stopped.
+ * cancelled, queued index-refresh batches are dropped, and every session
+ * bound to the directory is force-stopped.
  *
  * A directory that can no longer be canonicalized (deleted/moved) cannot be
  * runtime-invalidated, but its store entry — keyed by the exact path string —
@@ -192,6 +209,8 @@ export async function revokeProjectTrustForDir(projectDir: string): Promise<void
   getProjectRuntimeRegistry().invalidate(canonical);
   invalidateProjectMCPManagers(canonical);
   detachWorkspaceWatcher(canonical);
+  // Queued refresh batches must never flush into the now-untrusted project.
+  cancelProjectRefresh(canonical);
 
   // Trust just dropped — an in-flight index run for this directory must stop.
   void cancelIndex(canonical).catch(() => {});
@@ -311,6 +330,10 @@ export function registerSessionIPC(): void {
       return session ? sessionForRenderer(session) : null;
     }
 
+    // Effective workspace before the switch — the watcher reference must
+    // follow every cwd the window was holding (prior session cwd, draft, or
+    // sticky default), not only an explicit project bind.
+    const priorCwd = resolveWindowWorkspace(windowId).cwd;
     const releasedDraftCwd = getDraftCwd(windowId);
     // Selecting a session is view navigation. Work in the previously selected
     // session continues and remains addressed by its own session id.
@@ -349,10 +372,7 @@ export function registerSessionIPC(): void {
     // runtime. Selecting a session must not replace process-wide layers that
     // another running session could still depend on.
     const workspace = resolveWindowWorkspace(windowId);
-
-    if (releasedDraftCwd && workspace.cwd !== releasedDraftCwd) {
-      detachWorkspaceWatcher(releasedDraftCwd);
-    }
+    retargetWorkspaceWatcher(priorCwd, workspace.cwd);
 
     emitWorkspaceChanged(event.sender, workspace);
     return session ? sessionForRenderer(session) : null;
@@ -371,6 +391,11 @@ export function registerSessionIPC(): void {
     const manager = getSessionManager();
     const { id } = parsed.data;
     const windowId = String(event.sender.id);
+
+    // Effective workspace before the switch — activating a session moves the
+    // window's watcher reference with it (this is the dominant flow after an
+    // app restart, where no explicit project bind ever happens).
+    const priorCwd = resolveWindowWorkspace(windowId).cwd;
 
     // Selecting a session is view navigation. Work in the previously selected
     // session continues and remains addressed by its own session id.
@@ -401,6 +426,7 @@ export function registerSessionIPC(): void {
     }
 
     const workspace = resolveWindowWorkspace(windowId);
+    retargetWorkspaceWatcher(priorCwd, workspace.cwd);
     emitWorkspaceChanged(event.sender, workspace);
 
     // Live in-flight snapshot (chat.ts owns the active-agent registry). Dynamic
