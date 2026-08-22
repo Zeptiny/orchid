@@ -9,6 +9,9 @@
  * - Per-index config flags gate their respective indexer calls
  * - Indexer rejection is swallowed, logged, and does not break the next flush
  * - markDirty triggers a full indexProject per enabled index
+ * - Untrusted projects drop their batch (fail-closed trust gate)
+ * - Project-level index_refresh config overrides are honored
+ * - A RAG single-flight sentinel re-enqueues the drained batch for a retry
  * - dispose clears pending state
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
@@ -16,6 +19,7 @@ import * as path from 'node:path';
 import {
   enqueueMutation,
   markDirty,
+  cancelProjectRefresh,
   disposeIndexRefreshCoordinator,
   _setIndexRefreshCoordinatorForTests,
   _getPendingIndexRefreshForTests,
@@ -24,6 +28,7 @@ import {
 } from '../../src/main/indexing/refresh-coordinator';
 import { defaults } from '../../src/main/config';
 import type { Config } from '../../src/main/config';
+import type { TrustState } from '../../src/shared/types/ipc';
 import type {
   RAGIndexResult,
   ASTIndexResult,
@@ -91,6 +96,8 @@ function makeAstIndexer(): RefreshAstIndexer {
 }
 
 let config: Config;
+let projectConfigOverride: Config | null;
+let trustState: TrustState;
 let rag: RefreshRagIndexer;
 let ast: RefreshAstIndexer;
 let warnSpy: ReturnType<typeof vi.spyOn>;
@@ -106,12 +113,17 @@ beforeEach(() => {
   vi.useFakeTimers();
   warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
   config = withIndexRefresh({ debounce_ms: DEBOUNCE_MS });
+  projectConfigOverride = null;
+  trustState = 'trusted';
   rag = makeRagIndexer();
   ast = makeAstIndexer();
   _setIndexRefreshCoordinatorForTests({
     ragIndexer: rag,
     astIndexer: ast,
-    configLoader: () => config,
+    // Simulates the runtime-registry project layer (the production default
+    // resolves registry-first with a home-config fallback).
+    projectConfigResolver: () => projectConfigOverride ?? config,
+    trustStateResolver: () => trustState,
   });
 });
 
@@ -331,6 +343,115 @@ describe('index refresh coordinator', () => {
     expect(rag.indexProject).toHaveBeenCalledTimes(1);
     expect(ast.upsertFiles).toHaveBeenCalledTimes(1);
     expect(ast.indexProject).toHaveBeenCalledTimes(1);
+  });
+
+  it('drops the batch when the project is not trusted', async () => {
+    trustState = 'untrusted';
+    enqueueMutation(PROJECT, [{ rel: 'src/a.ts', op: 'upsert' }]);
+    markDirty(PROJECT);
+
+    await vi.advanceTimersByTimeAsync(DEBOUNCE_MS);
+    expect(rag.upsertFiles).not.toHaveBeenCalled();
+    expect(rag.deleteFiles).not.toHaveBeenCalled();
+    expect(rag.indexProject).not.toHaveBeenCalled();
+    expect(ast.upsertFiles).not.toHaveBeenCalled();
+    expect(ast.indexProject).not.toHaveBeenCalled();
+    expect(warnSpy).toHaveBeenCalledWith(
+      '[index-refresh] project not trusted; dropping batch',
+      PROJECT,
+    );
+    // The drained batch is dropped, not re-armed.
+    expect(_getPendingIndexRefreshForTests(PROJECT)).toEqual({
+      entries: [],
+      dirty: false,
+      timerArmed: false,
+      flushing: false,
+    });
+  });
+
+  it('honors project-level index_refresh config over the home config', async () => {
+    projectConfigOverride = withIndexRefresh({ rag: false });
+    enqueueMutation(PROJECT, [{ rel: 'src/a.ts', op: 'upsert' }]);
+
+    await vi.advanceTimersByTimeAsync(DEBOUNCE_MS);
+    expect(rag.upsertFiles).not.toHaveBeenCalled();
+    expect(ast.upsertFiles).toHaveBeenCalledTimes(1);
+    expect(ast.upsertFiles).toHaveBeenCalledWith({
+      projectPath: PROJECT,
+      rels: ['src/a.ts'],
+      config: projectConfigOverride,
+    });
+  });
+
+  it('re-enqueues a drained batch when RAG reports the single-flight sentinel', async () => {
+    rag.upsertFiles.mockImplementationOnce(async (): RAGIndexResult => ({
+      ...RAG_RESULT,
+      errors: ['Indexing already in progress'],
+    }));
+
+    enqueueMutation(PROJECT, [{ rel: 'src/a.ts', op: 'upsert' }]);
+    await vi.advanceTimersByTimeAsync(DEBOUNCE_MS);
+    expect(rag.upsertFiles).toHaveBeenCalledTimes(1);
+    expect(_getPendingIndexRefreshForTests(PROJECT)).toEqual({
+      entries: [{ rel: 'src/a.ts', op: 'upsert' }],
+      dirty: false,
+      timerArmed: true,
+      flushing: false,
+    });
+
+    // The re-armed debounce retries the batch after the in-flight run.
+    await vi.advanceTimersByTimeAsync(DEBOUNCE_MS);
+    expect(rag.upsertFiles).toHaveBeenCalledTimes(2);
+    expect(rag.upsertFiles).toHaveBeenLastCalledWith({
+      projectPath: PROJECT,
+      rels: ['src/a.ts'],
+      config,
+    });
+    expect(_getPendingIndexRefreshForTests(PROJECT).entries).toEqual([]);
+    expect(_getPendingIndexRefreshForTests(PROJECT).timerArmed).toBe(false);
+  });
+
+  it('re-sets the dirty flag when the RAG dirty scan reports the sentinel', async () => {
+    rag.indexProject.mockImplementationOnce(async (): RAGIndexResult => ({
+      ...RAG_RESULT,
+      errors: ['Indexing already in progress'],
+    }));
+
+    markDirty(PROJECT);
+    await vi.advanceTimersByTimeAsync(DEBOUNCE_MS);
+    expect(rag.indexProject).toHaveBeenCalledTimes(1);
+    expect(_getPendingIndexRefreshForTests(PROJECT).dirty).toBe(true);
+
+    await vi.advanceTimersByTimeAsync(DEBOUNCE_MS);
+    expect(rag.indexProject).toHaveBeenCalledTimes(2);
+    expect(_getPendingIndexRefreshForTests(PROJECT).dirty).toBe(false);
+  });
+
+  it('cancels one project without touching other projects pending state', async () => {
+    const other = path.resolve('/tmp/orchid-index-refresh-other');
+    enqueueMutation(PROJECT, [{ rel: 'src/a.ts', op: 'upsert' }]);
+    markDirty(other);
+
+    cancelProjectRefresh(PROJECT);
+    expect(_getPendingIndexRefreshForTests(PROJECT)).toEqual({
+      entries: [],
+      dirty: false,
+      timerArmed: false,
+      flushing: false,
+    });
+    expect(_getPendingIndexRefreshForTests(other).timerArmed).toBe(true);
+
+    await vi.advanceTimersByTimeAsync(DEBOUNCE_MS * 2);
+    expect(rag.upsertFiles).not.toHaveBeenCalled();
+    expect(rag.indexProject).toHaveBeenCalledTimes(1);
+    expect(rag.indexProject).toHaveBeenCalledWith(
+      other,
+      undefined,
+      false,
+      undefined,
+      undefined,
+      { config },
+    );
   });
 
   it('clears pending state on dispose', async () => {

@@ -2,15 +2,21 @@
  * Workspace watcher — external file changes feed the index refresh coordinator.
  *
  * One chokidar instance per watched project path, refcounted across the
- * windows/sessions that bind the same workspace. `add`/`change` enqueue
- * upserts, `unlink` enqueues deletes, `unlinkDir` marks the project dirty
- * (subtree membership is not cheaply known), `addDir` is ignored. The index
- * store root `.orchid` is hard-ignored regardless of config so refreshes never
- * observe their own index writes. Every event is wrapped: a watcher failure
- * logs, disables that project's instance, and never throws into the caller.
+ * windows/sessions that bind the same workspace. Untrusted projects never
+ * get an instance (fail-closed trust gating, same gate as the rag/ast IPC);
+ * config is resolved per project so `.orchid.json` overrides are
+ * honored. `add`/`change` enqueue upserts, `unlink` enqueues deletes,
+ * `unlinkDir` marks the project dirty (subtree membership is not cheaply
+ * known), `addDir` is ignored. The index store root `.orchid` is hard-ignored
+ * regardless of config so refreshes never observe their own index writes.
+ * Every event is wrapped: a watcher failure logs, disables that project's
+ * instance, and never throws into the caller.
  */
 import * as path from 'node:path';
 import { getConfig } from '../config/loader';
+import type { Config } from '../config/schema';
+import { getProjectRuntimeRegistry } from '../project/runtime';
+import { getProjectTrustState } from '../project/trust';
 import { importESM } from '../utils/esm-import';
 import { enqueueMutation, markDirty } from './refresh-coordinator';
 
@@ -68,15 +74,43 @@ function loadChokidar(): Promise<ChokidarModule> {
 }
 
 /**
- * Live `index_refresh.watch` read (checked at instance-creation and event
- * time). Config-load failure fails safe: no watching.
+ * Per-project config resolution: the project runtime registry applies the
+ * project's `.orchid.json` layer; when the runtime cannot resolve the
+ * directory the home-only config applies (mirrors the ipc/ast.ts fallback).
+ * Config-load failure fails safe: null.
  */
-function watchEnabled(): boolean {
+function resolveProjectConfig(projectPath: string): Config | null {
   try {
-    return getConfig().index_refresh.watch;
+    return getProjectRuntimeRegistry().get(projectPath).config;
+  } catch {
+    // Runtime cannot resolve the project — home-only config applies.
+  }
+  try {
+    return getConfig();
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Trust gate (fail closed like the rag/ast IPC handlers): only `'trusted'`
+ * projects may watch — `untrusted` and `changed` (drifted surface) never do.
+ */
+function projectTrusted(projectPath: string): boolean {
+  try {
+    return getProjectTrustState(projectPath) === 'trusted';
   } catch {
     return false;
   }
+}
+
+/**
+ * Live `index_refresh.watch` read per project (checked at instance-creation
+ * and event time). Config-load failure fails safe: no watching.
+ */
+function watchEnabled(projectPath: string): boolean {
+  const config = resolveProjectConfig(projectPath);
+  return config !== null && config.index_refresh.watch;
 }
 
 /**
@@ -118,10 +152,12 @@ function disableEntry(entry: WatcherEntry): void {
 
 async function ensureInstance(entry: WatcherEntry): Promise<void> {
   if (entry.watcher !== null || entry.disabled || entry.creating) return;
-  if (!watchEnabled()) return;
+  if (!projectTrusted(entry.projectPath)) return;
+  const config = resolveProjectConfig(entry.projectPath);
+  if (config === null || !config.index_refresh.watch) return;
   entry.creating = true;
   try {
-    const configIgnoredDirs = getConfig().ignored_dirs;
+    const configIgnoredDirs = config.ignored_dirs;
     const chokidar = await loadChokidar();
     if (watcherEntries.get(entry.projectPath) !== entry) return;
     if (entry.watcher !== null || entry.disabled) return;
@@ -145,9 +181,20 @@ async function ensureInstance(entry: WatcherEntry): Promise<void> {
   }
 }
 
+/**
+ * Event-time guard (cheap belt-and-braces — events cannot fire without an
+ * instance, and revocation detaches the instance): the watcher is alive, the
+ * project is still trusted, and watching is still enabled.
+ */
+function eventsEnabled(entry: WatcherEntry): boolean {
+  if (entry.watcher === null) return false;
+  if (!projectTrusted(entry.projectPath)) return false;
+  return watchEnabled(entry.projectPath);
+}
+
 function enqueueUpsert(entry: WatcherEntry, absPath: string): void {
   try {
-    if (entry.watcher === null || !watchEnabled()) return;
+    if (!eventsEnabled(entry)) return;
     const rel = path.relative(entry.projectPath, absPath);
     if (rel === '' || rel.startsWith('..')) return;
     enqueueMutation(entry.projectPath, [{ rel, op: 'upsert' }]);
@@ -158,7 +205,7 @@ function enqueueUpsert(entry: WatcherEntry, absPath: string): void {
 
 function enqueueDelete(entry: WatcherEntry, absPath: string): void {
   try {
-    if (entry.watcher === null || !watchEnabled()) return;
+    if (!eventsEnabled(entry)) return;
     const rel = path.relative(entry.projectPath, absPath);
     if (rel === '' || rel.startsWith('..')) return;
     enqueueMutation(entry.projectPath, [{ rel, op: 'delete' }]);
@@ -169,7 +216,7 @@ function enqueueDelete(entry: WatcherEntry, absPath: string): void {
 
 function markProjectDirty(entry: WatcherEntry): void {
   try {
-    if (entry.watcher === null || !watchEnabled()) return;
+    if (!eventsEnabled(entry)) return;
     markDirty(entry.projectPath);
   } catch (error) {
     console.warn(`${LOG_PREFIX} failed to mark ${entry.projectPath} dirty`, error);
@@ -179,8 +226,8 @@ function markProjectDirty(entry: WatcherEntry): void {
 /**
  * Attach a watcher for a project path (refcounted: the first attach for a
  * resolved path creates the chokidar instance, later attaches only increment).
- * Config `index_refresh.watch: false` never starts an instance; the refcount
- * is still tracked so the lifecycle stays balanced.
+ * Config `index_refresh.watch: false` and untrusted projects never start an
+ * instance; the refcount is still tracked so the lifecycle stays balanced.
  */
 export function attachWorkspaceWatcher(projectPath: string): void {
   const key = path.resolve(projectPath);
@@ -197,6 +244,20 @@ export function attachWorkspaceWatcher(projectPath: string): void {
     watcherEntries.set(key, entry);
   }
   entry.refcount += 1;
+  void ensureInstance(entry);
+}
+
+/**
+ * Trust-grant hook: (re)attempt instance creation for a project that windows
+ * already reference. A project bound while untrusted holds a refcount but no
+ * instance, so the grant is what starts it. Never adjusts refcounts — a
+ * project already watching is left untouched (no second reference that no
+ * detach would release), and a project no window holds stays unattached
+ * (the next workspace transition attaches it normally).
+ */
+export function ensureWorkspaceWatcherStarted(projectPath: string): void {
+  const entry = watcherEntries.get(path.resolve(projectPath));
+  if (!entry) return;
   void ensureInstance(entry);
 }
 

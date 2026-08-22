@@ -3,7 +3,9 @@
  *
  * Chokidar watches a real temp directory (no fake timers); events are awaited
  * with poll-based waits and a short awaitWriteFinish injected through the
- * options test seam. Mutations enqueue into the real refresh coordinator,
+ * options test seam. Trust and the project runtime registry are module mocks
+ * (the registry routes every per-project config read through the test-home
+ * ConfigManager), and mutations enqueue into the real refresh coordinator,
  * observed via `_getPendingIndexRefreshForTests`; the coordinator's config
  * override disables both indexes (and stretches the debounce) so no flush can
  * ever reach a real indexer.
@@ -16,6 +18,8 @@
  * - a watcher error disables the instance without throwing into the coordinator
  * - rebind releases the old project's watcher while the new one keeps watching
  * - config `index_refresh.watch: false` never starts an instance
+ * - an untrusted project never starts an instance; a trust grant starts one
+ *   for the references windows already hold (without a second refcount)
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import * as fs from 'node:fs';
@@ -25,6 +29,7 @@ import {
   attachWorkspaceWatcher,
   detachWorkspaceWatcher,
   disposeAllWorkspaceWatchers,
+  ensureWorkspaceWatcherStarted,
   getWorkspaceWatcherState,
   _setWatcherOptionsForTests,
   _getWorkspaceWatcherForTests,
@@ -37,6 +42,7 @@ import {
 } from '../../src/main/indexing/refresh-coordinator';
 import { ConfigManager } from '../../src/main/config/loader';
 import { defaults, type Config } from '../../src/main/config';
+import type { TrustState } from '../../src/shared/types/ipc';
 
 vi.mock('../../src/main/utils/esm-import', () => ({
   importESM: vi.fn(async (specifier: string) => {
@@ -44,6 +50,24 @@ vi.mock('../../src/main/utils/esm-import', () => ({
       throw new Error(`unexpected ESM-only import in watcher test: ${specifier}`);
     }
     return import('chokidar');
+  }),
+}));
+
+// Trust gate control: default trusted (existing fixtures are bare projects);
+// the trust test flips to untrusted and back to simulate revoke/grant.
+const mockTrust = vi.hoisted(() => ({
+  state: 'trusted' as TrustState,
+}));
+
+vi.mock('../../src/main/project/trust', () => ({
+  getProjectTrustState: (_dir: string) => mockTrust.state,
+}));
+
+// Per-project config resolution routes through the test-home ConfigManager,
+// keeping the watcher off the real ~/.orchid config.
+vi.mock('../../src/main/project/runtime', () => ({
+  getProjectRuntimeRegistry: () => ({
+    get: (_projectDir: string) => ({ config: ConfigManager.load() }),
   }),
 }));
 
@@ -98,6 +122,7 @@ beforeEach(() => {
   homeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'orchid-index-watcher-home-'));
   homeConfigPath = path.join(homeDir, 'config.json');
   loadHomeConfig();
+  mockTrust.state = 'trusted';
   warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
   _setIndexRefreshCoordinatorForTests({ configLoader: () => coordinatorConfig });
   _setWatcherOptionsForTests({
@@ -257,5 +282,47 @@ describe('workspace watcher', () => {
 
     detachWorkspaceWatcher(project);
     expect(getWorkspaceWatcherState(project)).toEqual({ watching: false, refcount: 0 });
+  });
+
+  it('never starts an instance for an untrusted project; a grant starts it', async () => {
+    mockTrust.state = 'untrusted';
+    const project = makeProject('proj');
+    attachWorkspaceWatcher(project);
+    // The reference is held (refcount 1) but no instance is ever created.
+    await sleep(200);
+    expect(getWorkspaceWatcherState(project)).toEqual({ watching: false, refcount: 1 });
+
+    fs.writeFileSync(path.join(project, 'untrusted.ts'), 'x');
+    await sleep(400);
+    expect(pending(project).entries).toEqual([]);
+
+    // Grant: the held reference gains an instance without a second refcount.
+    mockTrust.state = 'trusted';
+    ensureWorkspaceWatcherStarted(project);
+    await _awaitWorkspaceWatcherReadyForTests(project);
+    expect(getWorkspaceWatcherState(project)).toEqual({ watching: true, refcount: 1 });
+
+    fs.writeFileSync(path.join(project, 'seen.ts'), 'x');
+    await waitFor(() =>
+      pending(project).entries.some((entry) => entry.rel === 'seen.ts' && entry.op === 'upsert'),
+    );
+  });
+
+  it('leaves projects no window holds unattached on grant', async () => {
+    mockTrust.state = 'untrusted';
+    const bound = makeProject('bound');
+    const unbound = makeProject('unbound');
+    attachWorkspaceWatcher(bound);
+
+    mockTrust.state = 'trusted';
+    ensureWorkspaceWatcherStarted(bound);
+    await _awaitWorkspaceWatcherReadyForTests(bound);
+    expect(getWorkspaceWatcherState(bound)).toEqual({ watching: true, refcount: 1 });
+
+    // No reference exists for the unbound project — the grant must not
+    // attach one that no detach would release.
+    ensureWorkspaceWatcherStarted(unbound);
+    expect(getWorkspaceWatcherState(unbound)).toEqual({ watching: false, refcount: 0 });
+    expect(getWorkspaceWatcherState()).toEqual({ watching: true, refcount: 1 });
   });
 });

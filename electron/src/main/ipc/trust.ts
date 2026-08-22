@@ -4,7 +4,8 @@
  * Exposes the trust store to the renderer: surface-diff reports for untrusted
  * or changed projects, grant/revoke decisions, and the settings listing.
  * Granting invalidates cached project runtimes and MCP managers so services
- * pick up trust immediately; every decision broadcasts project:trust_changed
+ * pick up trust immediately, and starts the workspace watcher for projects
+ * windows already reference; every decision broadcasts project:trust_changed
  * and re-emits session:workspace_changed to windows bound to the directory.
  */
 import { BrowserWindow, ipcMain } from 'electron';
@@ -17,6 +18,7 @@ import {
 import { invalidateProjectMCPManagers } from '../mcp/project-registry';
 import { canonicalizeProjectDirectory } from '../project/path';
 import { getProjectRuntimeRegistry } from '../project/runtime';
+import { ensureWorkspaceWatcherStarted } from '../indexing/watcher';
 import {
   buildProjectTrustReport,
   getProjectTrustState,
@@ -103,6 +105,10 @@ export function registerTrustIPC(): void {
       grantProjectTrust(canonical);
       getProjectRuntimeRegistry().invalidate(canonical);
       invalidateProjectMCPManagers(canonical);
+      // A project bound while untrusted never started a workspace watcher
+      // instance (fail-closed gate); the grant is what makes it eligible, so
+      // retry for the references windows already hold.
+      ensureWorkspaceWatcherStarted(canonical);
     } else {
       await revokeProjectTrustForDir(cwd);
       canonical = canonicalizeProjectDirectory(cwd) ?? cwd;
