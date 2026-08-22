@@ -10,7 +10,9 @@
  * known), `addDir` is ignored. The index store root `.orchid` is hard-ignored
  * regardless of config so refreshes never observe their own index writes.
  * Every event is wrapped: a watcher failure logs, disables that project's
- * instance, and never throws into the caller.
+ * instance, and never throws into the caller. Config saves reconcile live
+ * instances through `reconfigureWorkspaceWatchers`; the event-time config
+ * check reads through a short TTL cache so per-event cost stays flat.
  */
 import * as path from 'node:path';
 import { getConfig } from '../config/loader';
@@ -61,7 +63,15 @@ let watcherOptionsOverride: ChokidarOptions | null = null;
 
 function loadChokidar(): Promise<ChokidarModule> {
   if (chokidarModulePromise === null) {
-    chokidarModulePromise = importESM<ChokidarModule>('chokidar');
+    const attempt = importESM<ChokidarModule>('chokidar');
+    // A rejected import must not stay memoized (P3 #1): one transient
+    // failure would otherwise disable watching until restart. Clearing the
+    // slot on rejection lets the next attach retry; the handler swallows the
+    // rejection so callers still observe it (and log it) themselves.
+    attempt.catch(() => {
+      if (chokidarModulePromise === attempt) chokidarModulePromise = null;
+    });
+    chokidarModulePromise = attempt;
   }
   return chokidarModulePromise;
 }
@@ -98,18 +108,53 @@ function projectTrusted(projectPath: string): boolean {
 }
 
 /**
- * Live `index_refresh.watch` read per project (checked at instance-creation
- * and event time). Config-load failure fails safe: no watching.
+ * Event-time config cache (Minor-a): `eventsEnabled` runs on *every* chokidar
+ * event, and a fresh per-project resolution costs a registry miss (realpath +
+ * config load) each time. Event-time checks therefore read through this short
+ * TTL cache — a config flip lands within the TTL, and immediately on
+ * `reconfigureWorkspaceWatchers` (which invalidates it). Instance-creation
+ * captures (`ensureInstance`, `reconfigureWorkspaceWatchers`) always take the
+ * fresh path above so a new instance never starts on a stale config.
  */
-function watchEnabled(projectPath: string): boolean {
-  const config = resolveProjectConfig(projectPath);
+const WATCH_CONFIG_CACHE_TTL_MS = 5000;
+
+let watcherConfigCacheTtlMs = WATCH_CONFIG_CACHE_TTL_MS;
+
+const watcherConfigCache = new Map<string, { value: Config | null; expiresAt: number }>();
+
+/** Cached resolution for event-time checks only (see above). */
+function resolveProjectConfigCached(projectPath: string): Config | null {
+  const key = path.resolve(projectPath);
+  const now = Date.now();
+  const cached = watcherConfigCache.get(key);
+  if (cached !== undefined && cached.expiresAt > now) return cached.value;
+  const value = resolveProjectConfig(key);
+  watcherConfigCache.set(key, { value, expiresAt: now + watcherConfigCacheTtlMs });
+  return value;
+}
+
+/** Drop every cached event-time config read (config change / dispose / tests). */
+function clearWatcherConfigCache(): void {
+  watcherConfigCache.clear();
+}
+
+/**
+ * Live `index_refresh.watch` read per project, checked at event time (cached —
+ * see `resolveProjectConfigCached`). Config-load failure fails safe: no
+ * watching.
+ */
+function watchEnabledForEvents(projectPath: string): boolean {
+  const config = resolveProjectConfigCached(projectPath);
   return config !== null && config.index_refresh.watch;
 }
 
 /**
  * Segment matcher mirroring the indexers' exact directory-name skip semantics:
  * any path segment (relative to the project root) naming a skipped directory
- * ignores the whole subtree.
+ * ignores the whole subtree. Candidate paths are split on both `/` and `\`
+ * (not `path.sep`) so win32-style event paths are filtered identically to
+ * POSIX ones — chokidar reports host-separator paths, and the two must agree
+ * for tests that exercise backslash paths on a POSIX host.
  */
 function makeIgnoredMatcher(root: string, skipNames: Set<string>): (candidate: string) => boolean {
   return (candidate: string): boolean => {
@@ -119,6 +164,14 @@ function makeIgnoredMatcher(root: string, skipNames: Set<string>): (candidate: s
     const segments = rel.split(/[\\/]+/);
     return segments.some((segment) => skipNames.has(segment));
   };
+}
+
+/** @internal Test seam exposing the ignore matcher for direct unit tests. */
+export function _makeIgnoredMatcherForTests(
+  root: string,
+  skipNames: Set<string>,
+): (candidate: string) => boolean {
+  return makeIgnoredMatcher(root, skipNames);
 }
 
 function buildChokidarOptions(projectPath: string, configIgnoredDirs: string[]): ChokidarOptions {
@@ -150,10 +203,14 @@ async function ensureInstance(entry: WatcherEntry): Promise<void> {
   if (config === null || !config.index_refresh.watch) return;
   entry.creating = true;
   try {
-    const configIgnoredDirs = config.ignored_dirs;
     const chokidar = await loadChokidar();
     if (watcherEntries.get(entry.projectPath) !== entry) return;
     if (entry.watcher !== null || entry.disabled) return;
+    // Re-resolve after the await: a config change (or a load failure) that
+    // landed while chokidar was loading must not leave an unwanted instance.
+    const liveConfig = resolveProjectConfig(entry.projectPath);
+    if (liveConfig === null || !liveConfig.index_refresh.watch) return;
+    const configIgnoredDirs = liveConfig.ignored_dirs;
     const watcher = chokidar.watch(entry.projectPath, buildChokidarOptions(entry.projectPath, configIgnoredDirs));
     entry.watcher = watcher;
     entry.ready = new Promise<void>((resolve) => {
@@ -182,14 +239,24 @@ async function ensureInstance(entry: WatcherEntry): Promise<void> {
 function eventsEnabled(entry: WatcherEntry): boolean {
   if (entry.watcher === null) return false;
   if (!projectTrusted(entry.projectPath)) return false;
-  return watchEnabled(entry.projectPath);
+  return watchEnabledForEvents(entry.projectPath);
+}
+
+/**
+ * Exact `..`-segment escape check: a workspace-relative path is outside only
+ * when it is `..` itself or starts with a `..` path segment. A file literally
+ * named `..notes.ts` at the root stays inside.
+ */
+function isInsideWorkspaceRel(rel: string): boolean {
+  if (rel === '' || path.isAbsolute(rel)) return false;
+  return rel !== '..' && !rel.startsWith(`..${path.sep}`) && !rel.startsWith('../');
 }
 
 function enqueueUpsert(entry: WatcherEntry, absPath: string): void {
   try {
     if (!eventsEnabled(entry)) return;
     const rel = path.relative(entry.projectPath, absPath);
-    if (rel === '' || rel.startsWith('..')) return;
+    if (!isInsideWorkspaceRel(rel)) return;
     enqueueMutation(entry.projectPath, [{ rel, op: 'upsert' }]);
   } catch (error) {
     console.warn(`${LOG_PREFIX} failed to enqueue upsert for ${absPath}`, error);
@@ -200,7 +267,7 @@ function enqueueDelete(entry: WatcherEntry, absPath: string): void {
   try {
     if (!eventsEnabled(entry)) return;
     const rel = path.relative(entry.projectPath, absPath);
-    if (rel === '' || rel.startsWith('..')) return;
+    if (!isInsideWorkspaceRel(rel)) return;
     enqueueMutation(entry.projectPath, [{ rel, op: 'delete' }]);
   } catch (error) {
     console.warn(`${LOG_PREFIX} failed to enqueue delete for ${absPath}`, error);
@@ -254,6 +321,56 @@ export function ensureWorkspaceWatcherStarted(projectPath: string): void {
   void ensureInstance(entry);
 }
 
+/** Close a live instance without touching the refcount or `disabled` flag. */
+function closeInstance(entry: WatcherEntry, reason: string): void {
+  const watcher = entry.watcher;
+  entry.watcher = null;
+  entry.ready = null;
+  if (watcher === null) return;
+  console.warn(`${LOG_PREFIX} closing watcher for ${entry.projectPath} (${reason})`);
+  void watcher.close().catch(() => {});
+}
+
+/**
+ * Config-change hook (P3 #6 / #13): re-resolve per-project config for every
+ * entry a window still references and reconcile the live instances.
+ *
+ * For each entry with `refcount > 0`:
+ * - `index_refresh.watch` is now false (or config fails to load) → close the
+ *   instance. The reference is kept so re-enabling (or a later rebind) can
+ *   start it again without an unbalanced refcount.
+ * - watch is true but no instance exists (toggled on while held, or a project
+ *   granted trust while watch was false) → create one, capturing the current
+ *   `ignored_dirs`.
+ * - watch is true and a healthy instance exists → leave it alone. In
+ *   particular an `ignored_dirs` edit does not restart a live instance; the
+ *   new list is captured the next time an instance is created.
+ *
+ * Never throws — callers hook this fire-and-forget behind config saves, which
+ * must not fail because of watching.
+ */
+export function reconfigureWorkspaceWatchers(): void {
+  // The event-time cache must not keep serving the previous config.
+  clearWatcherConfigCache();
+  for (const entry of [...watcherEntries.values()]) {
+    try {
+      if (entry.refcount <= 0) continue;
+      // Fresh (uncached) read: an instance must never start on stale config.
+      const config = resolveProjectConfig(entry.projectPath);
+      const watch = config !== null && config.index_refresh.watch;
+      if (!watch) {
+        if (entry.watcher !== null) closeInstance(entry, 'index_refresh.watch is false');
+        continue;
+      }
+      if (entry.watcher === null && !entry.disabled && !entry.creating) {
+        void ensureInstance(entry);
+      }
+    } catch (error) {
+      console.warn(`${LOG_PREFIX} reconfigure failed for ${entry.projectPath}`, error);
+    }
+  }
+}
+
 /**
  * Detach one reference; the last detach closes and releases the instance.
  * Detaching a path with no live entry is a no-op.
@@ -282,6 +399,7 @@ export function disposeAllWorkspaceWatchers(): void {
     if (watcher !== null) void watcher.close().catch(() => {});
   }
   watcherEntries.clear();
+  clearWatcherConfigCache();
 }
 
 /**
@@ -309,6 +427,28 @@ export function getWorkspaceWatcherState(projectPath?: string): WorkspaceWatcher
  */
 export function _setWatcherOptionsForTests(overrides: ChokidarOptions | null): void {
   watcherOptionsOverride = overrides;
+}
+
+/**
+ * @internal Test-only TTL override for the event-time config cache so expiry
+ * can be exercised without a 5s wait (pass 5000 to restore the default).
+ */
+export function _setWatcherConfigCacheTtlForTests(ttlMs: number): void {
+  watcherConfigCacheTtlMs = ttlMs;
+}
+
+/** @internal Test-only cache drop (the invalidation reconfigure performs). */
+export function _clearWatcherConfigCacheForTests(): void {
+  clearWatcherConfigCache();
+}
+
+/**
+ * @internal Test-only: forget the memoized chokidar module promise so a test
+ * can exercise the rejection/retry path of `loadChokidar` even after an
+ * earlier successful load in the same process.
+ */
+export function _resetChokidarLoadForTests(): void {
+  chokidarModulePromise = null;
 }
 
 /**

@@ -20,6 +20,7 @@ import {
 import { isPlainObject, isUnsafeKey, mergeConfigUpdates } from '../config/merge';
 import { configSchema } from '../config/schema';
 import { withConfigSaveLock } from '../config/write-lock';
+import { reconfigureWorkspaceWatchers } from '../indexing/watcher';
 import {
   listPersonalityNames,
   loadPersonalities,
@@ -124,6 +125,19 @@ function unchangedValue(before: unknown, after: unknown): boolean {
 }
 
 /**
+ * Reconcile workspace watchers with the freshly written config (both `watch`
+ * itself and per-project layers can change what should be watched). Fire and
+ * forget: watching must never be able to fail a config save.
+ */
+function applyWorkspaceWatcherConfigChange(): void {
+  try {
+    reconfigureWorkspaceWatchers();
+  } catch (error) {
+    console.warn('[config] failed to apply watcher config change', error);
+  }
+}
+
+/**
  * Validation issues this update introduced: errors at paths the prior file did
  * not already fail, or a changed value at a previously-invalid path.
  */
@@ -202,6 +216,8 @@ export function registerConfigIPC(): void {
       // Keep the process-wide compatibility cache home-only. Project overlays
       // are independently resolved for the session/turn that needs them.
       ConfigManager.load({ projectDir: HOME_CONFIG_DIR });
+
+      applyWorkspaceWatcherConfigChange();
 
       return { status: 'saved' as const };
     });
@@ -317,6 +333,7 @@ export function registerConfigIPC(): void {
       clearProjectRuntimeRegistry();
       invalidateAllProjectMCPManagers();
       ConfigManager.load({ projectDir: HOME_CONFIG_DIR });
+      applyWorkspaceWatcherConfigChange();
     });
   });
 }
