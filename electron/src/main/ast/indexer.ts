@@ -1,8 +1,9 @@
 /**
  * AST Indexer — project-wide symbol indexing with hash change detection.
  *
- * Full project indexes run in a dedicated `worker_threads` worker so
- * tree-sitter WASM + SQLite work does not block the Electron main process.
+ * Full project indexes and incremental upsert/delete batches run in a
+ * dedicated `worker_threads` worker so tree-sitter WASM + SQLite work does
+ * not block the Electron main process.
  */
 import * as crypto from 'node:crypto';
 import * as fs from 'node:fs';
@@ -11,21 +12,30 @@ import { Worker } from 'node:worker_threads';
 import { langForExtension, loadQueryFile, parseFile, runQuery } from './parser';
 import { ASTStore, type Symbol } from './store';
 import { getConfig, type Config } from '../config';
+import { INDEX_SKIP_DIR_NAMES } from '../indexing/skip-dirs';
 import { withDisposableAsync } from '../utils/with-disposable';
 import type { ASTIndexResult, ASTIndexProgress } from '../../shared/types/ipc-boundary';
 
 export type ASTIndexProgressCallback = (progress: ASTIndexProgress) => void;
 
-/** Payload passed to the AST index worker via workerData. */
-export interface AstWorkerStartData {
-  projectPath: string;
-  force?: boolean;
-}
+/**
+ * Payload passed to the AST index worker via `workerData`.
+ *
+ * The `op` discriminator selects the run: omitted (or `'index'`) performs a
+ * full project scan, while `'upsert'` / `'delete'` run a targeted
+ * incremental batch against `rels`.
+ */
+export type AstWorkerStartData =
+  | { op?: 'index'; projectPath: string; force?: boolean }
+  | { op: 'upsert'; projectPath: string; rels: string[]; config?: Config }
+  | { op: 'delete'; projectPath: string; rels: string[] };
 
 /** Messages the AST index worker posts back to the parent. */
 export type AstWorkerOutbound =
   | { type: 'progress'; progress: ASTIndexProgress }
   | { type: 'result'; result: ASTIndexResult }
+  | { type: 'incremental-result'; result: ASTIncrementalResult }
+  | { type: 'delete-result'; deleted: number }
   | { type: 'error'; error: string };
 
 // ---------------------------------------------------------------------------
@@ -34,12 +44,7 @@ export type AstWorkerOutbound =
 
 const AST_INCLUDE_EXTS = new Set(['.py', '.js', '.jsx', '.ts', '.tsx']);
 
-const SKIP_DIRS = new Set([
-  'node_modules', '.git', '__pycache__',
-  '.venv', 'venv', 'env',
-  '.orchid', 'dist', 'build',
-  '.next', '.cache', 'target',
-]);
+const SKIP_DIRS = new Set(INDEX_SKIP_DIR_NAMES);
 
 // ---------------------------------------------------------------------------
 // State
@@ -394,6 +399,8 @@ export interface UpsertFilesOptions {
    * Falls back to the process-wide config when omitted.
    */
   config?: Config;
+  /** @internal Test-only worker entry override for deterministic worker tests. */
+  workerPath?: string;
 }
 
 export interface ASTIncrementalResult {
@@ -407,12 +414,30 @@ export interface ASTIncrementalResult {
 /**
  * Incrementally index a targeted set of files (project-relative paths).
  *
- * Runs inline on the calling thread — single-file tree-sitter parses are
- * ms-scale, so no worker is spawned. Non-source rels are no-ops; rels that
- * fail re-read (missing, oversized, binary, empty) are removed from the
+ * Runs in the AST worker by default so watcher/apply_patch flush batches
+ * keep their tree-sitter parses + SQLite writes off the Electron main
+ * process; falls back to the calling thread when the compiled worker is
+ * unavailable (tests, unbundled dev runs). Non-source rels are no-ops; rels
+ * that fail re-read (missing, oversized, binary, empty) are removed from the
  * store instead of indexed.
  */
 export async function upsertFiles(opts: UpsertFilesOptions): Promise<ASTIncrementalResult> {
+  return runAstWorker(
+    buildAstWorkerStartData('upsert', opts),
+    (msg) => (msg.type === 'incremental-result' ? { value: msg.result } : undefined),
+    () => runUpsertFilesImpl(opts),
+    undefined,
+    opts.workerPath,
+  );
+}
+
+/**
+ * Core upsert implementation (runs on whatever thread calls it).
+ *
+ * Exported so the worker entry can invoke it without re-entering the
+ * worker-spawning dispatcher on `upsertFiles`.
+ */
+export async function runUpsertFilesImpl(opts: UpsertFilesOptions): Promise<ASTIncrementalResult> {
   const cfg = opts.config ?? getConfig();
   const result: ASTIncrementalResult = {
     filesIndexed: 0,
@@ -460,11 +485,36 @@ export async function upsertFiles(opts: UpsertFilesOptions): Promise<ASTIncremen
   });
 }
 
+export interface DeleteFilesOptions {
+  /** @internal Test-only worker entry override for deterministic worker tests. */
+  workerPath?: string;
+}
+
 /**
  * Remove a targeted set of files (project-relative paths) from the symbol
- * store. Returns the number of stored files removed.
+ * store. Runs in the AST worker by default (same fallback as
+ * {@link upsertFiles}); returns the number of stored files removed.
  */
-export async function deleteFiles(projectPath: string, rels: string[]): Promise<number> {
+export async function deleteFiles(
+  projectPath: string,
+  rels: string[],
+  opts: DeleteFilesOptions = {},
+): Promise<number> {
+  return runAstWorker(
+    buildAstWorkerStartData('delete', { projectPath, rels }),
+    (msg) => (msg.type === 'delete-result' ? { value: msg.deleted } : undefined),
+    () => runDeleteFilesImpl(projectPath, rels),
+    undefined,
+    opts.workerPath,
+  );
+}
+
+/**
+ * Core delete implementation (runs on whatever thread calls it). Exported so
+ * the worker entry can invoke it without re-entering the `deleteFiles`
+ * dispatcher.
+ */
+export async function runDeleteFilesImpl(projectPath: string, rels: string[]): Promise<number> {
   return withDisposableAsync(new ASTStore(projectPath), async (store) => {
     store.initDb();
     const existing = store.getAllFileHashes();
@@ -483,24 +533,58 @@ export async function deleteFiles(projectPath: string, rels: string[]): Promise<
 // Worker runner (main process)
 // ---------------------------------------------------------------------------
 
-async function runIndexInWorker(
-  projectPath: string,
-  force: boolean,
+/**
+ * Build the `workerData` start payload for one AST worker op.
+ *
+ * The default full-index run omits `op` so its wire shape stays
+ * `{ projectPath, force }`; incremental runs carry `op` plus their `rels`.
+ * Extracted so the op protocol is unit-testable without spawning a worker.
+ */
+export function buildAstWorkerStartData(
+  op: 'index',
+  args: { projectPath: string; force: boolean },
+): AstWorkerStartData;
+export function buildAstWorkerStartData(op: 'upsert', args: UpsertFilesOptions): AstWorkerStartData;
+export function buildAstWorkerStartData(
+  op: 'delete',
+  args: { projectPath: string; rels: string[] },
+): AstWorkerStartData;
+export function buildAstWorkerStartData(
+  op: 'index' | 'upsert' | 'delete',
+  args: { projectPath: string; force?: boolean; rels?: string[]; config?: Config },
+): AstWorkerStartData {
+  if (op === 'upsert') {
+    return { op, projectPath: args.projectPath, rels: args.rels ?? [], config: args.config };
+  }
+  if (op === 'delete') {
+    return { op, projectPath: args.projectPath, rels: args.rels ?? [] };
+  }
+  return { projectPath: args.projectPath, force: args.force === true };
+}
+
+/**
+ * Spawn the AST index worker for one op and settle its result.
+ *
+ * Mirrors the `indexProject` worker path's promise handling (no watchdog):
+ * progress messages forward to `progressCallback`, `takeResult` maps the
+ * op-specific result message to the resolved value, and worker error /
+ * early exit reject. Falls back to `inlineFallback` when the compiled
+ * worker file is missing or fails to start.
+ */
+async function runAstWorker<T>(
+  startData: AstWorkerStartData,
+  takeResult: (msg: AstWorkerOutbound) => { value: T } | undefined,
+  inlineFallback: () => Promise<T>,
   progressCallback?: ASTIndexProgressCallback,
-  config?: Config,
-): Promise<ASTIndexResult> {
-  const workerPath = path.join(__dirname, 'index-worker.js');
+  workerPathOverride?: string,
+): Promise<T> {
+  const workerPath = workerPathOverride ?? path.join(__dirname, 'index-worker.js');
   if (!fs.existsSync(workerPath)) {
     console.warn(
-      `AST worker not found at ${workerPath}; running index inline on the main thread`,
+      `AST worker not found at ${workerPath}; running inline on the calling thread`,
     );
-    return runIndexProjectImpl({ projectPath, force, progressCallback, config });
+    return inlineFallback();
   }
-
-  const startData: AstWorkerStartData = {
-    projectPath,
-    force,
-  };
 
   let worker: Worker;
   try {
@@ -510,12 +594,12 @@ async function runIndexInWorker(
     });
   } catch (err) {
     console.warn(
-      `AST worker failed to start (${err instanceof Error ? err.message : String(err)}); running index inline on the main thread`,
+      `AST worker failed to start (${err instanceof Error ? err.message : String(err)}); running inline on the calling thread`,
     );
-    return runIndexProjectImpl({ projectPath, force, progressCallback, config });
+    return inlineFallback();
   }
 
-  return new Promise<ASTIndexResult>((resolve, reject) => {
+  return new Promise<T>((resolve, reject) => {
     let settled = false;
 
     const finish = (fn: () => void) => {
@@ -534,10 +618,11 @@ async function runIndexInWorker(
         }
         return;
       }
-      if (msg.type === 'result') {
+      const taken = takeResult(msg);
+      if (taken) {
         finish(() => {
           void worker.terminate();
-          resolve(msg.result);
+          resolve(taken.value);
         });
         return;
       }
@@ -560,6 +645,20 @@ async function runIndexInWorker(
       });
     });
   });
+}
+
+async function runIndexInWorker(
+  projectPath: string,
+  force: boolean,
+  progressCallback?: ASTIndexProgressCallback,
+  config?: Config,
+): Promise<ASTIndexResult> {
+  return runAstWorker(
+    buildAstWorkerStartData('index', { projectPath, force }),
+    (msg) => (msg.type === 'result' ? { value: msg.result } : undefined),
+    () => runIndexProjectImpl({ projectPath, force, progressCallback, config }),
+    progressCallback,
+  );
 }
 
 // ---------------------------------------------------------------------------

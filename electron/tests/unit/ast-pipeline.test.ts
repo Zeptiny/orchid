@@ -712,6 +712,138 @@ describe('Indexer incremental updates', () => {
   });
 });
 
+// ── Indexer: incremental worker routing ────────────────────────────────────
+
+describe('Indexer incremental worker routing', () => {
+  /**
+   * Minimal stand-in for the compiled AST worker: echoes its start data to
+   * `worker-echo.json` inside the project (so the test can assert the op
+   * protocol) and posts back the result message its op expects. Written at
+   * runtime because unit tests run the TypeScript sources — no compiled
+   * index-worker.js exists, which is also what keeps the other upsert/delete
+   * tests on the inline fallback path.
+   */
+  const ECHO_WORKER_SOURCE = [
+    "const { parentPort, workerData } = require('node:worker_threads');",
+    "const fs = require('node:fs');",
+    "const path = require('node:path');",
+    "const d = workerData || {};",
+    "fs.writeFileSync(path.join(d.projectPath, 'worker-echo.json'), JSON.stringify(d));",
+    "if (d.op === 'upsert') {",
+    "  parentPort.postMessage({ type: 'incremental-result', result: {",
+    "    filesIndexed: d.rels.length, filesSkipped: 0, filesDeleted: 0,",
+    "    symbolsExtracted: 0, errors: [],",
+    "  } });",
+    "} else if (d.op === 'delete') {",
+    "  parentPort.postMessage({ type: 'delete-result', deleted: d.rels.length });",
+    "} else {",
+    "  parentPort.postMessage({ type: 'result', result: {",
+    "    filesScanned: 0, filesIndexed: 0, filesSkipped: 0, filesDeleted: 0,",
+    "    symbolsExtracted: 0, errors: [], durationSeconds: 0,",
+    "  } });",
+    "}",
+  ].join('\n');
+
+  it('routes upsert ops through the worker with op + rels start data', async () => {
+    const projectDir = path.join(tmpDir, 'project');
+    fs.mkdirSync(projectDir, { recursive: true });
+    fs.writeFileSync(path.join(projectDir, 'test.py'), SAMPLE_PYTHON);
+    const echoWorker = path.join(tmpDir, 'ast-echo-worker.cjs');
+    fs.writeFileSync(echoWorker, ECHO_WORKER_SOURCE);
+
+    const { upsertFiles } = await import('../../src/main/ast/indexer');
+    const result = await upsertFiles({
+      projectPath: projectDir,
+      rels: ['test.py', 'other.py'],
+      workerPath: echoWorker,
+    });
+
+    // The worker's incremental-result message resolved the dispatcher.
+    expect(result).toEqual({
+      filesIndexed: 2,
+      filesSkipped: 0,
+      filesDeleted: 0,
+      symbolsExtracted: 0,
+      errors: [],
+    });
+    // The worker received the op discriminator + rels (not an index scan).
+    const echo = JSON.parse(
+      fs.readFileSync(path.join(projectDir, 'worker-echo.json'), 'utf-8'),
+    );
+    expect(echo).toMatchObject({
+      op: 'upsert',
+      projectPath: projectDir,
+      rels: ['test.py', 'other.py'],
+    });
+    // Nothing ran inline: the fixture worker never touched the store.
+    const { ASTStore } = await import('../../src/main/ast/store');
+    expect(new ASTStore(projectDir).status().totalFiles).toBe(0);
+  });
+
+  it('routes delete ops through the worker with op + rels start data', async () => {
+    const projectDir = path.join(tmpDir, 'project');
+    fs.mkdirSync(projectDir, { recursive: true });
+    const echoWorker = path.join(tmpDir, 'ast-echo-worker.cjs');
+    fs.writeFileSync(echoWorker, ECHO_WORKER_SOURCE);
+
+    const { deleteFiles } = await import('../../src/main/ast/indexer');
+    const deleted = await deleteFiles(
+      projectDir,
+      ['a.py', 'b.py', 'c.py'],
+      { workerPath: echoWorker },
+    );
+
+    // The worker's delete-result message resolved the dispatcher.
+    expect(deleted).toBe(3);
+    const echo = JSON.parse(
+      fs.readFileSync(path.join(projectDir, 'worker-echo.json'), 'utf-8'),
+    );
+    expect(echo).toMatchObject({
+      op: 'delete',
+      projectPath: projectDir,
+      rels: ['a.py', 'b.py', 'c.py'],
+    });
+  });
+
+  it('rejects when the upsert worker errors', async () => {
+    const projectDir = path.join(tmpDir, 'project');
+    fs.mkdirSync(projectDir, { recursive: true });
+    const boomWorker = path.join(tmpDir, 'ast-boom-worker.cjs');
+    fs.writeFileSync(
+      boomWorker,
+      "const { parentPort } = require('node:worker_threads');\n" +
+        "parentPort.postMessage({ type: 'error', error: 'upsert exploded' });\n",
+    );
+
+    const { upsertFiles } = await import('../../src/main/ast/indexer');
+    await expect(
+      upsertFiles({ projectPath: projectDir, rels: ['test.py'], workerPath: boomWorker }),
+    ).rejects.toThrow('upsert exploded');
+  });
+
+  it('keeps the default index start data as { projectPath, force }', async () => {
+    const { buildAstWorkerStartData } = await import('../../src/main/ast/indexer');
+    expect(buildAstWorkerStartData('index', { projectPath: '/p', force: true })).toEqual({
+      projectPath: '/p',
+      force: true,
+    });
+    expect(buildAstWorkerStartData('index', { projectPath: '/p', force: false })).toEqual({
+      projectPath: '/p',
+      force: false,
+    });
+    expect(buildAstWorkerStartData('upsert', { projectPath: '/p', rels: ['a.py'] })).toEqual({
+      op: 'upsert',
+      projectPath: '/p',
+      rels: ['a.py'],
+    });
+    expect(buildAstWorkerStartData('delete', { projectPath: '/p', rels: ['a.py'] })).toEqual({
+      op: 'delete',
+      projectPath: '/p',
+      rels: ['a.py'],
+    });
+  });
+});
+
 // ── Tool: get_file_skeleton ───────────────────────────────────────────────
 
 describe('get_file_skeleton', () => {
