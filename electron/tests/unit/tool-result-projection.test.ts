@@ -49,6 +49,19 @@ describe('genericAgentProjector token trims', () => {
     expect(projection.content).toContain('<error code="tool_error">');
   });
 
+  it('keeps the body when a string error value differs from error.message', () => {
+    const canonical = {
+      ...errorCanonical('Command exited with code 1.'),
+      data: {
+        value: 'stderr: ENOENT no such file',
+        origin: { kind: 'built-in', name: 'execute_command' },
+      },
+    } as CanonicalToolResult;
+    const projection = genericAgentProjector(canonical, 'execute_command');
+    expect(projection.content).toContain('<error code="tool_error">Command exited with code 1.</error>');
+    expect(projection.content).toContain('<data>stderr: ENOENT no such file</data>');
+  });
+
   it('renders string values as data for non-error statuses', () => {
     const projection = genericAgentProjector(
       completeCanonical('plain output', 'skill'),
