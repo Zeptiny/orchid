@@ -256,18 +256,32 @@ export class SubagentLiveProjectionStore {
           if (last?.kind === effect.kind && last.id === effect.segmentId) {
             last.content += effect.append;
           } else {
+            const startedAt = effect.startedAt ?? new Date().toISOString();
+            this.closeOpenSegment(entry.projection.segments, startedAt);
             entry.projection.segments.push({
               kind: effect.kind,
               id: effect.segmentId,
               content: effect.append,
+              startedAt,
+              endedAt: null,
             });
           }
           this.advance(entry);
           const sequence = entry.projection.sequence;
           applied.push({
             publish: () => this.emitEntry(entry, effect.kind === 'text'
-              ? { type: SubagentDeltaEventType.TEXT_DELTA, segmentId: effect.segmentId, append: effect.append }
-              : { type: SubagentDeltaEventType.THINKING_DELTA, segmentId: effect.segmentId, append: effect.append },
+              ? {
+                  type: SubagentDeltaEventType.TEXT_DELTA,
+                  segmentId: effect.segmentId,
+                  append: effect.append,
+                  ...(effect.startedAt ? { startedAt: effect.startedAt } : {}),
+                }
+              : {
+                  type: SubagentDeltaEventType.THINKING_DELTA,
+                  segmentId: effect.segmentId,
+                  append: effect.append,
+                  ...(effect.startedAt ? { startedAt: effect.startedAt } : {}),
+                },
             sequence),
           });
           break;
@@ -307,6 +321,7 @@ export class SubagentLiveProjectionStore {
             startedAt: effect.startedAt,
             finishedAt: null,
           });
+          this.closeOpenSegment(entry.projection.segments, effect.startedAt);
           entry.projection.segments.push({ kind: 'tool', id: effect.segmentId, toolCallId: effect.toolCallId });
           this.advance(entry);
           const sequence = entry.projection.sequence;
@@ -475,6 +490,13 @@ export class SubagentLiveProjectionStore {
     this.bumpSessionRevision(entry.projection.sessionId);
   }
 
+  /** Freeze the trailing open text/thinking segment at a segment transition. */
+  private closeOpenSegment(segments: SubagentLiveSegment[], at: string): void {
+    const last = segments.at(-1);
+    if (!last || last.kind === 'tool' || last.endedAt != null) return;
+    last.endedAt = at;
+  }
+
   private emitEntry(
     entry: ProjectionEntry,
     delta: SubagentDeltaPayload,
@@ -517,9 +539,15 @@ export function materializeProjectionTail(
   if (tail.length === 0) return chain;
   const messages = [...chain.messages];
   const lastTextIndex = tail.findLastIndex((segment) => segment.kind === 'text');
+  const now = new Date().toISOString();
   for (const [index, segment] of tail.entries()) {
     if (segment.kind === 'thinking' && segment.content) {
-      messages.push(makeThinkingMessage(segment.content, segment.id));
+      const startedAt = segment.startedAt ? Date.parse(segment.startedAt) : null;
+      const endedAt = Date.parse(segment.endedAt ?? now);
+      const durationMs = startedAt != null && Number.isFinite(endedAt) && endedAt >= startedAt
+        ? endedAt - startedAt
+        : null;
+      messages.push(makeThinkingMessage(segment.content, segment.id, undefined, durationMs));
     } else if (segment.kind === 'text' && segment.content) {
       messages.push(makeAssistantMessage(
         segment.content,

@@ -358,7 +358,7 @@ describe('dispatch-level write enforcement', () => {
     const { executeToolCall, _setAgentsMdStoreResolverForTests } = await import(
       '../../src/main/llm/tool-dispatch'
     );
-    const { sessionPermissionOverrides } = await import('../../src/main/ipc/permission');
+    const { sessionPermissionOverrides } = await import('../../src/main/permissions/session-overrides');
     const registry = await registerWriteTool();
     sessionPermissionOverrides.set(sessionId, 'allow');
     _setAgentsMdStoreResolverForTests(() => store);
@@ -391,7 +391,7 @@ describe('dispatch-level write enforcement', () => {
     const { executeToolCall, _setAgentsMdStoreResolverForTests } = await import(
       '../../src/main/llm/tool-dispatch'
     );
-    const { sessionPermissionOverrides } = await import('../../src/main/ipc/permission');
+    const { sessionPermissionOverrides } = await import('../../src/main/permissions/session-overrides');
     const registry = await registerWriteTool();
     sessionPermissionOverrides.set(sessionId, 'allow');
     _setAgentsMdStoreResolverForTests(() => store);
@@ -420,7 +420,7 @@ describe('dispatch-level write enforcement', () => {
     const { executeToolCall, _setAgentsMdStoreResolverForTests } = await import(
       '../../src/main/llm/tool-dispatch'
     );
-    const { sessionPermissionOverrides } = await import('../../src/main/ipc/permission');
+    const { sessionPermissionOverrides } = await import('../../src/main/permissions/session-overrides');
     const registry = await registerWriteTool();
     sessionPermissionOverrides.set(sessionId, 'allow');
     _setAgentsMdStoreResolverForTests(() => store);
@@ -452,7 +452,7 @@ describe('dispatch-level write enforcement', () => {
     const { executeToolCall, _setAgentsMdStoreResolverForTests } = await import(
       '../../src/main/llm/tool-dispatch'
     );
-    const { sessionPermissionOverrides } = await import('../../src/main/ipc/permission');
+    const { sessionPermissionOverrides } = await import('../../src/main/permissions/session-overrides');
     const registry = await registerWriteTool();
     sessionPermissionOverrides.set(sessionId, 'allow');
     _setAgentsMdStoreResolverForTests(() => store);
@@ -485,7 +485,7 @@ describe('dispatch-level write enforcement', () => {
     const { executeToolCall, _setAgentsMdStoreResolverForTests } = await import(
       '../../src/main/llm/tool-dispatch'
     );
-    const { sessionPermissionOverrides } = await import('../../src/main/ipc/permission');
+    const { sessionPermissionOverrides } = await import('../../src/main/permissions/session-overrides');
     const registry = await registerWriteTool();
     sessionPermissionOverrides.set(sessionId, 'allow');
     // Simulate the no-session degradation: the store resolver yields nothing.
@@ -527,7 +527,7 @@ describe('dispatch-level write enforcement', () => {
     const { executeToolCall, _setAgentsMdStoreResolverForTests } = await import(
       '../../src/main/llm/tool-dispatch'
     );
-    const { sessionPermissionOverrides } = await import('../../src/main/ipc/permission');
+    const { sessionPermissionOverrides } = await import('../../src/main/permissions/session-overrides');
     const config = agentsConfig({ enforce_on_write: 'block' });
     const diskWrite = diskWritingHandler();
     const registry = await registerWriteTool(diskWrite);
@@ -573,7 +573,7 @@ describe('dispatch-level write enforcement', () => {
     const { executeToolCall, _setAgentsMdStoreResolverForTests } = await import(
       '../../src/main/llm/tool-dispatch'
     );
-    const { sessionPermissionOverrides } = await import('../../src/main/ipc/permission');
+    const { sessionPermissionOverrides } = await import('../../src/main/permissions/session-overrides');
     const config = agentsConfig({ enforce_on_write: 'block' });
     // The parent pkg/AGENTS.md already governs pkg/new; mark it seen so this test
     // isolates the creation-gap behavior of the brand-new pkg/new/AGENTS.md.
@@ -621,7 +621,7 @@ describe('dispatch-level write enforcement', () => {
     const { executeToolCall, _setAgentsMdStoreResolverForTests } = await import(
       '../../src/main/llm/tool-dispatch'
     );
-    const { sessionPermissionOverrides } = await import('../../src/main/ipc/permission');
+    const { sessionPermissionOverrides } = await import('../../src/main/permissions/session-overrides');
     const registry = await registerWriteTool();
     sessionPermissionOverrides.set(sessionId, 'allow');
     _setAgentsMdStoreResolverForTests(() => store);
@@ -650,7 +650,7 @@ describe('dispatch-level write enforcement', () => {
     const { executeToolCall, _setAgentsMdStoreResolverForTests } = await import(
       '../../src/main/llm/tool-dispatch'
     );
-    const { sessionPermissionOverrides } = await import('../../src/main/ipc/permission');
+    const { sessionPermissionOverrides } = await import('../../src/main/permissions/session-overrides');
     const failingHandler = vi.fn(async () => ({
       status: 'error' as const,
       data: { value: 'old_string not found' },
@@ -683,7 +683,7 @@ describe('dispatch-level write enforcement', () => {
     const { executeToolCall, _setAgentsMdStoreResolverForTests } = await import(
       '../../src/main/llm/tool-dispatch'
     );
-    const { sessionPermissionOverrides } = await import('../../src/main/ipc/permission');
+    const { sessionPermissionOverrides } = await import('../../src/main/permissions/session-overrides');
     const failingHandler = vi.fn(async () => ({
       status: 'error' as const,
       data: { value: 'old_string not found' },

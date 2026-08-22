@@ -11,7 +11,7 @@ import type { ToolBlock } from '../hooks/useChat';
 import { useSmartAutoScroll } from '../hooks/useSmartAutoScroll';
 import { foldActivityRuns, isActiveToolStatus, isGroupableTool } from '../utils/tool-grouping';
 import { MessageWidget } from './MessageWidget';
-import type { ActivityChild, CompactionProgressWidgetItem } from '../utils/stream-building';
+import type { ActivityChild, CompactionProgressWidgetItem, ThoughtTiming } from '../utils/stream-building';
 import { compactionProgressToWidgetItem } from '../utils/stream-building';
 import { ToolActivityGroup } from './ToolActivityGroup';
 import { ToolCallBlock } from './ToolCallBlock';
@@ -19,7 +19,7 @@ import { CompactionRunningWidget, CompactionWidget } from './ToolResults/Compact
 import { Button } from './ui/Button';
 
 export type SubagentTranscriptItem =
-  | { kind: 'message'; key: string; message: Message; isStreaming?: boolean }
+  | { kind: 'message'; key: string; message: Message; isStreaming?: boolean; timing?: ThoughtTiming }
   | { kind: 'tool'; key: string; block: ToolBlock }
   | { kind: 'tool-group'; key: string; children: ActivityChild[] }
   | { kind: 'compaction-progress'; key: string; item: CompactionProgressWidgetItem }
@@ -86,6 +86,15 @@ function textMessage(id: string, content: string, type: MessageType, isStreaming
     tool_result: null,
     ...(isStreaming ? {} : {}),
   };
+}
+
+/** Measured timing for a live segment; tools carry none (they own snapshots). */
+function segmentTiming(
+  segment: SubagentLiveSegment,
+): { startedAt: string | null; endedAt: string | null } {
+  return segment.kind === 'tool'
+    ? { startedAt: null, endedAt: null }
+    : { startedAt: segment.startedAt ?? null, endedAt: segment.endedAt ?? null };
 }
 
 function liveToolBlock(
@@ -166,7 +175,13 @@ export function buildSubagentTranscriptItems(
         if (committedMessageIds.has(segment.id)) continue;
         if (segment.content.trim()) {
           const type = segment.kind === 'thinking' ? MessageType.THINKING : MessageType.TEXT;
-          items.push({ kind: 'message', key: segment.id || `live-${index}`, message: textMessage(segment.id || `live-${index}`, segment.content, type), isStreaming: live.state === 'running' && index === live.segments.length - 1 });
+          items.push({
+            kind: 'message',
+            key: segment.id || `live-${index}`,
+            message: textMessage(segment.id || `live-${index}`, segment.content, type),
+            isStreaming: live.state === 'running' && index === live.segments.length - 1,
+            timing: segmentTiming(segment),
+          });
         }
       }
     }
@@ -195,7 +210,7 @@ function foldTranscriptActivityGroups(items: readonly SubagentTranscriptItem[]):
       const children: ActivityChild[] = sources.flatMap((source): ActivityChild[] => {
         if (source.kind === 'tool') return [{ kind: 'tool' as const, block: source.block }];
         if (source.kind === 'message' && source.message.type === MessageType.THINKING) {
-          return [{ kind: 'thought' as const, message: source.message, isStreaming: source.isStreaming }];
+          return [{ kind: 'thought' as const, message: source.message, isStreaming: source.isStreaming, timing: source.timing }];
         }
         return [];
       });
@@ -244,7 +259,14 @@ export function SubagentTranscript({ record, live = null, selectedId = null }: S
             );
           }
           if (item.kind === 'compaction-summary') return <CompactionWidget key={item.key} messages={item.messages} />;
-          return <MessageWidget key={item.key} message={item.message} isStreaming={item.isStreaming} />;
+          return (
+            <MessageWidget
+              key={item.key}
+              message={item.message}
+              isStreaming={item.isStreaming}
+              thinkingTiming={item.timing}
+            />
+          );
         })}
         {record.error || record.status === 'interrupted' || record.status === 'failed' ? (
           <div role="status" aria-label="Subagent terminal status" className="text-error">

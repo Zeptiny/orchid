@@ -215,7 +215,7 @@ describe('dispatch-level UI gating (agentsMdDisabled)', () => {
     const { executeToolCall, _setAgentsMdStoreResolverForTests } = await import(
       '../../src/main/llm/tool-dispatch'
     );
-    const { sessionPermissionOverrides } = await import('../../src/main/ipc/permission');
+    const { sessionPermissionOverrides } = await import('../../src/main/permissions/session-overrides');
     const registry = await registerReadTool();
     sessionPermissionOverrides.set(sessionId, 'allow');
     _setAgentsMdStoreResolverForTests(() => store);
@@ -251,7 +251,7 @@ describe('dispatch-level UI gating (agentsMdDisabled)', () => {
     const { executeToolCall, _setAgentsMdStoreResolverForTests } = await import(
       '../../src/main/llm/tool-dispatch'
     );
-    const { sessionPermissionOverrides } = await import('../../src/main/ipc/permission');
+    const { sessionPermissionOverrides } = await import('../../src/main/permissions/session-overrides');
     const registry = await registerWriteTool();
     sessionPermissionOverrides.set(sessionId, 'allow');
     _setAgentsMdStoreResolverForTests(() => store);

@@ -112,8 +112,9 @@ export const configSaveSchema = z.object({
 
 /**
  * Project-scoped config:save payload — a verified `projectDir` plus a
- * free-form updates map. Allowed-key filtering and merged-structure
- * validation happen in the handler after the workspace is verified.
+ * free-form updates map. Allow-list rejection (fail-loud, no filtering) and
+ * merged-structure validation happen in the handler after the workspace is
+ * verified.
  */
 export const configSaveProjectSchema = z.object({
   projectDir: z.string().min(1),

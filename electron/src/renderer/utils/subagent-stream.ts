@@ -156,6 +156,13 @@ export function resolveSubagentSelection(
 
 type ToolDraft = { -readonly [K in keyof SubagentToolSnapshot]: SubagentToolSnapshot[K] };
 
+/** Freeze the trailing open text/thinking segment at a segment transition. */
+function closeOpenSegment(segments: SubagentLiveSegment[], at: string): void {
+  const last = segments.at(-1);
+  if (!last || last.kind === 'tool' || last.endedAt != null) return;
+  last.endedAt = at;
+}
+
 /** Mutable per-subagent projection draft; one rebuild per subagent per batch. */
 interface LiveDraft {
   sessionId: string | null;
@@ -218,7 +225,9 @@ function applyDeltaToDraft(draft: LiveDraft, event: ContentDelta): void {
       const kind = event.type === 'text_delta' ? 'text' : 'thinking';
       const segment = draft.segments.find((item) => item.id === event.segmentId);
       if (!segment) {
-        draft.segments.push({ kind, id: event.segmentId, content: event.append });
+        const startedAt = event.startedAt ?? new Date().toISOString();
+        closeOpenSegment(draft.segments, startedAt);
+        draft.segments.push({ kind, id: event.segmentId, content: event.append, startedAt, endedAt: null });
       } else if (segment.kind !== 'tool') {
         segment.content += event.append;
       }
@@ -247,6 +256,7 @@ function applyDeltaToDraft(draft: LiveDraft, event: ContentDelta): void {
         draft.toolCalls.push(tool);
       }
       if (!draft.segments.some((item) => item.kind === 'tool' && item.toolCallId === event.toolCallId)) {
+        closeOpenSegment(draft.segments, event.startedAt);
         draft.segments.push({ kind: 'tool', id: event.segmentId, toolCallId: event.toolCallId });
       }
       break;

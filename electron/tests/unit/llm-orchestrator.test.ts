@@ -2044,6 +2044,46 @@ describe('streamChat', () => {
     });
   });
 
+  it('buckets tool-call generation output into the context tool-use category', async () => {
+    setupStreamText({
+      fullStreamParts: [
+        {
+          type: 'start-step',
+          request: { messages: [{ role: 'user', content: 'Read the file' }] },
+          warnings: [],
+        },
+        { type: 'tool-input-start', toolCallId: 'tc-1', toolName: 'read' },
+        { type: 'tool-input-delta', toolCallId: 'tc-1', inputTextDelta: '{"path":"README.md"}' },
+        {
+          type: 'finish-step',
+          finishReason: 'tool-calls',
+          usage: { inputTokens: 1_000, outputTokens: 200, totalTokens: 1_200 },
+        },
+      ],
+      finishReason: 'tool-calls',
+    });
+
+    const events = await collectStreamEvents(streamChat(makeStreamChatParams()));
+    const usageEvent = events.find((event) => event.type === 'usage');
+    if (usageEvent?.type !== 'usage' || !usageEvent.usage.context) {
+      throw new Error('Expected a context snapshot');
+    }
+    const context = usageEvent.usage.context;
+
+    // The step emitted only a tool call: its output tokens are tool use,
+    // so the assistant ("Response") bucket must stay at its prompt-side
+    // allocation of zero assistant messages.
+    expect(context.tool_use_tokens).toBe(200);
+    expect(context.assistant_tokens).toBe(0);
+    expect(
+      context.system_tokens +
+        context.tools_tokens +
+        context.tool_use_tokens +
+        context.user_tokens +
+        context.assistant_tokens,
+    ).toBe(context.used_tokens);
+  });
+
   it('captures provider cache reads and the latest request context snapshot', async () => {
     setupStreamText({
       fullStreamError: new Error('fullStream unavailable'),
@@ -2331,14 +2371,16 @@ describe('streamChat', () => {
         ));
         return {
           fullStream: {
-            async *[Symbol.asyncIterator]() {
-              await new Promise<void>((_resolve, reject) => {
-                params.abortSignal.addEventListener(
-                  'abort',
-                  () => reject(new DOMException('Aborted', 'AbortError')),
-                  { once: true },
-                );
-              });
+            [Symbol.asyncIterator]() {
+              return {
+                next: () => new Promise<never>((_resolve, reject) => {
+                  params.abortSignal.addEventListener(
+                    'abort',
+                    () => reject(new DOMException('Aborted', 'AbortError')),
+                    { once: true },
+                  );
+                }),
+              };
             },
           },
           textStream: createAsyncIterable<string>([]),

@@ -159,6 +159,7 @@ function buildStepUsage(
       messages,
       inputTokens,
       outputTokens,
+      ...(chars ? { outputChars: chars } : {}),
       ...(reasoningTokens === undefined ? {} : { reasoningTokens }),
     }),
   };

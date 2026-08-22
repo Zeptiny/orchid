@@ -341,7 +341,7 @@ describe('dispatch-level read-path injection', () => {
     );
     const { ToolRegistry } = await import('../../src/main/tools/registry');
     const { genericToolResultDataSchema } = await import('../../src/shared/types/tool-result');
-    const { sessionPermissionOverrides } = await import('../../src/main/ipc/permission');
+    const { sessionPermissionOverrides } = await import('../../src/main/permissions/session-overrides');
 
     const registry = new ToolRegistry();
     registry.register(

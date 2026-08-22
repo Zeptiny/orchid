@@ -105,4 +105,68 @@ describe('context snapshot', () => {
 
     expect(snapshot.reasoning_tokens).toBe(snapshot.assistant_tokens);
   });
+
+  it('buckets tool-only output into tool use, not the assistant bucket', () => {
+    const snapshot = buildContextSnapshot({
+      systemPrompt: 'System instructions',
+      tools: {},
+      messages: [{ role: 'user', content: 'Open the file' }] as ModelMessage[],
+      inputTokens: 1_000,
+      outputTokens: 200,
+      outputChars: { reasoning: 0, text: 0, tool: 800 },
+    });
+
+    expect(snapshot.tool_use_tokens).toBe(200);
+    expect(snapshot.assistant_tokens).toBe(0);
+    expect(
+      snapshot.system_tokens +
+        snapshot.tools_tokens +
+        snapshot.tool_use_tokens +
+        snapshot.user_tokens +
+        snapshot.assistant_tokens,
+    ).toBe(snapshot.used_tokens);
+  });
+
+  it('splits mixed text and tool-call output proportionally', () => {
+    const snapshot = buildContextSnapshot({
+      systemPrompt: 'System instructions',
+      tools: {},
+      messages: [{ role: 'user', content: 'Open the file' }] as ModelMessage[],
+      inputTokens: 1_000,
+      outputTokens: 300,
+      outputChars: { reasoning: 0, text: 100, tool: 300 },
+    });
+
+    expect(snapshot.tool_use_tokens).toBe(225);
+    expect(snapshot.assistant_tokens).toBe(75);
+  });
+
+  it('keeps the whole output in the assistant bucket when chars are absent', () => {
+    const snapshot = buildContextSnapshot({
+      systemPrompt: 'System instructions',
+      tools: {},
+      messages: [{ role: 'user', content: 'Open the file' }] as ModelMessage[],
+      inputTokens: 1_000,
+      outputTokens: 200,
+    });
+
+    expect(snapshot.tool_use_tokens).toBe(0);
+    expect(snapshot.assistant_tokens).toBe(200);
+  });
+
+  it('does not shift reasoning output into tool use', () => {
+    const snapshot = buildContextSnapshot({
+      systemPrompt: 'System instructions',
+      tools: {},
+      messages: [{ role: 'user', content: 'Open the file' }] as ModelMessage[],
+      inputTokens: 1_000,
+      outputTokens: 300,
+      reasoningTokens: 150,
+      outputChars: { reasoning: 150, text: 0, tool: 300 },
+    });
+
+    expect(snapshot.reasoning_tokens).toBe(100);
+    expect(snapshot.assistant_tokens).toBe(100);
+    expect(snapshot.tool_use_tokens).toBe(200);
+  });
 });

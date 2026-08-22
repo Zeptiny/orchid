@@ -908,6 +908,7 @@ function renderTab(
           mcpResultMaxBytes={config.mcp_result_max_bytes}
           toolWorkerPoolSize={config.tool_worker_pool_size}
           toolWorkerPoolMainAgentReserved={config.tool_worker_pool_main_agent_reserved}
+          sessionTitleMaxWaitSeconds={config.session_title_max_wait_seconds}
           onChange={updateDraft}
         />
       );

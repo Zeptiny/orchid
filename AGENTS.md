@@ -295,7 +295,7 @@ electron/
 │   │   │   ├── ToolResults/     # Tool result widgets by family (+ registry)
 │   │   │   ├── ToolWidgets/     # Tool call activity widgets (live command output)
 │   │   │   ├── ui/              # Typed primitives (Button, TextInput, Select, Tabs, …)
-│   │   │   ├── Preferences/     # Settings tab panels (used by ConfigView)
+│   │   │   ├── Preferences/     # Settings tab panels (shared by ConfigView and ProjectConfigView)
 │   │   │   ├── Providers/       # Connection list/wizard/models/status
 │   │   │   └── Onboarding/      # First-run setup wizard
 │   │   ├── hooks/

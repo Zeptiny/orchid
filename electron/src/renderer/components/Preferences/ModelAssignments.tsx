@@ -42,6 +42,19 @@ export interface ModelAssignmentsProps {
   ) => void;
   readonly disabled?: boolean;
   readonly className?: string;
+  /**
+   * Project-scope mode: the maps hold explicit project overrides only, the
+   * empty picker entry means "inherit the global (home) assignment", and tier
+   * overrides are reset through {@link onTierReset} rather than null entries.
+   */
+  readonly projectScope?: boolean;
+  /** Home-layer values shown as inherit targets (project scope only). */
+  readonly inheritedDefaultModel?: ModelSelection | null;
+  readonly inheritedTierModels?: Record<string, ModelSelection | null>;
+  /** Remove one tier's project override — revert to the home assignment. */
+  readonly onTierReset?: (tierId: string) => void;
+  /** Remove the project default-model override — revert to the home default. */
+  readonly onDefaultModelReset?: () => void;
 }
 
 function optionSelection(option: ProviderModelOption): ModelSelection {
@@ -62,6 +75,11 @@ export function ModelAssignments({
   onTierReasoningEffortChange,
   disabled = false,
   className = '',
+  projectScope = false,
+  inheritedDefaultModel = null,
+  inheritedTierModels = {},
+  onTierReset,
+  onDefaultModelReset,
 }: ModelAssignmentsProps) {
   const byKey = useMemo(
     () => new Map(options.map((option) => [providerModelOptionKey(option), option])),
@@ -79,6 +97,17 @@ export function ModelAssignments({
     [options],
   );
 
+  // Human label for a selection, falling back to its raw ids.
+  const selectionLabel = (selection: ModelSelection | null | undefined): string => {
+    if (!selection) return '';
+    return optionLabels[selectionKey(selection)]
+      ?? `${selection.connectionId} · ${selection.modelId}`;
+  };
+  const inheritLabel = (selection: ModelSelection | null | undefined, fallback: string): string => {
+    const label = selectionLabel(selection);
+    return label ? `Inherit global (${label})` : `Inherit global (${fallback})`;
+  };
+
   const updateSelection = (
     value: string,
     onChange: (selection: ModelSelection | null) => void,
@@ -95,7 +124,9 @@ export function ModelAssignments({
       <Panel as="section" className="config-fieldset flex flex-col gap-3">
         <SectionHeader
           title="Default model"
-          description="This model is selected for new chats. Each tier can override it for agent work."
+          description={projectScope
+            ? 'Project default for chats in this workspace. Inherits the global default when unset.'
+            : 'This model is selected for new chats. Each tier can override it for agent work.'}
         />
         {!defaultAvailable && (
           <Alert tone="warning" className="text-sm">
@@ -107,20 +138,33 @@ export function ModelAssignments({
           options={options.map(providerModelOptionKey)}
           optionLabels={optionLabels}
           optionDetails={optionDetails}
-          additionalOptions={[{ value: '', label: 'Not configured' }]}
+          additionalOptions={[{
+            value: '',
+            label: projectScope
+              ? inheritLabel(inheritedDefaultModel, 'not configured')
+              : 'Not configured',
+          }]}
           label="Default model"
           align="start"
           className="w-full"
           disabled={disabled || options.length === 0}
           emptyMessage="No ready chat models available"
-          onChange={(value) => updateSelection(value, onDefaultModelChange)}
+          onChange={(value) => {
+            if (projectScope && value === '') {
+              onDefaultModelReset?.();
+              return;
+            }
+            updateSelection(value, onDefaultModelChange);
+          }}
         />
       </Panel>
 
       <Panel as="section" className="config-fieldset flex flex-col gap-3">
         <SectionHeader
           title="Tier Models"
-          description="Assign a model to each tier. A tier left unconfigured falls back to the default model."
+          description={projectScope
+            ? 'Project tier assignments override the global ones for this workspace. Unset tiers inherit the global assignment.'
+            : 'Assign a model to each tier. A tier left unconfigured falls back to the default model.'}
         />
         {options.length === 0 && (
           <StateMessage
@@ -135,16 +179,26 @@ export function ModelAssignments({
             const selected = tierModels[tier.id] ?? null;
             const currentKey = selectionKey(selected);
             const currentAvailable = !selected || byKey.has(currentKey);
-            const reasoning = reasoningConfigForSelection(selected, connections, options);
+            const overridden = projectScope && tier.id in tierModels;
+            const inheritedSelection = inheritedTierModels[tier.id] ?? null;
+            const reasoningSelection = projectScope
+              ? (selected ?? inheritedSelection)
+              : selected;
+            const reasoning = reasoningConfigForSelection(reasoningSelection, connections, options);
             const showReasoning = onTierReasoningEffortChange !== undefined
               && reasoning.supportsReasoning
               && reasoning.levels.length > 0;
             return (
-              <ConfigCard key={tier.id}>
+              <ConfigCard key={tier.id} variant={overridden ? 'active' : undefined}>
                 <ConfigCard.Body variant="row">
                   <div className="min-w-0 flex-1">
                     <div className="config-card-title font-semibold">{tier.label}</div>
                     <p className="config-card-desc text-sm text-base-content/70">{tier.description}</p>
+                    {projectScope && !overridden && (
+                      <p className="config-card-desc mt-1 text-xs text-base-content/60">
+                        {inheritLabel(inheritedSelection, 'default model')}
+                      </p>
+                    )}
                     {!currentAvailable && (
                       <p className="mt-1 text-xs text-warning">
                         Current selection is unavailable; choose a ready connection.
@@ -157,13 +211,22 @@ export function ModelAssignments({
                       options={options.map(providerModelOptionKey)}
                       optionLabels={optionLabels}
                       optionDetails={optionDetails}
-                      additionalOptions={[{ value: '', label: 'Use default model' }]}
+                      additionalOptions={[{
+                        value: '',
+                        label: projectScope
+                          ? inheritLabel(inheritedSelection, 'default model')
+                          : 'Use default model',
+                      }]}
                       label={`${tier.label} tier model`}
                       align="end"
                       className="tier-model-picker"
                       disabled={disabled || options.length === 0}
                       emptyMessage="No ready chat models available"
                       onChange={(value) => {
+                        if (projectScope && value === '') {
+                          onTierReset?.(tier.id);
+                          return;
+                        }
                         const next = { ...tierModels };
                         const option = byKey.get(value);
                         next[tier.id] = option ? optionSelection(option) : null;

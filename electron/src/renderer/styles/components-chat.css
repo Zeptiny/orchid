@@ -107,9 +107,12 @@
     @apply flex flex-col gap-0.5;
   }
 
+  /* Children never re-run their entrance animation when a group absorbs
+     them — the group container animates once for the whole state change (#179). */
   .orchid-tool-activity-children .orchid-tool-block,
   .orchid-tool-activity-children .orchid-thought {
     margin-bottom: 0;
+    animation: none;
   }
 
   /* Stream error / inline message error */

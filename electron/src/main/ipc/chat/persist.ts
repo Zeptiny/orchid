@@ -15,7 +15,7 @@ import {
 } from '../../llm/message-factories';
 import { activeAgents, pendingCheckpoints, type ActiveAgent } from './state';
 import { buildSessionUpdatedEvent, sendSessionEvent, webContentsForWindowId } from './events';
-import { textSegmentIdAtOffset } from './snapshot';
+import { textSegmentIdAtOffset, thinkingDurationMsForRange } from './snapshot';
 import type { CompactionPersistenceResult } from '../../session/storage';
 
 // ── Compaction persistence (U7) ─────────────────────────────────────────────
@@ -60,6 +60,7 @@ export function appendLiveTailMessages(
         segment,
         textSegmentIdAtOffset(agent, 'thinking', agent.thinkingCommittedLength),
         context?.thinkingPayloads?.[thinking.length],
+        thinkingDurationMsForRange(agent, agent.thinkingCommittedLength, thinking.length),
       ));
     }
   }

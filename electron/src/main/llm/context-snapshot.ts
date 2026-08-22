@@ -2,6 +2,7 @@ import type { ModelMessage, Tool } from 'ai';
 import { zodToJsonSchema } from 'zod-to-json-schema';
 import type { ContextSnapshot } from '../../shared/types/message';
 import { compactedMarkerFromUnknown } from '../../shared/types/message';
+import type { ReasoningChars } from './reasoning-tokens';
 
 interface ContextSnapshotInput {
   systemPrompt: string;
@@ -11,11 +12,19 @@ interface ContextSnapshotInput {
   outputTokens: number | undefined;
   /** Provider-reported reasoning tokens, already included in `outputTokens`. */
   reasoningTokens?: number | undefined;
+  /**
+   * Observed output character mix for the step being snapshotted (visible
+   * text / reasoning / tool-call input). When present, tool-call generation
+   * tokens are bucketed into tool use instead of the assistant bucket —
+   * output tokens cover everything the model generated, including the
+   * tool-call name + arguments JSON of tool-only steps.
+   */
+  outputChars?: ReasoningChars | undefined;
 }
 
 type DynamicContextSnapshotInput = Pick<
   ContextSnapshotInput,
-  'messages' | 'inputTokens' | 'outputTokens' | 'reasoningTokens'
+  'messages' | 'inputTokens' | 'outputTokens' | 'reasoningTokens' | 'outputChars'
 >;
 
 interface ContextChars {
@@ -137,6 +146,28 @@ function allocateInputTokens(chars: ContextChars, inputTokens: number): ContextC
   return allocated;
 }
 
+/**
+ * Split the provider's output total by the observed output characters.
+ * Tool-call generation (name + arguments JSON) is tool use, not an assistant
+ * response; without this every tool-only step lands entirely in the assistant
+ * bucket, which the renderer labels "Response". Chars absent or zero → no
+ * split, preserving the legacy whole-output attribution.
+ */
+function splitOutputTokens(
+  output: number,
+  chars: ReasoningChars | undefined,
+): { assistant: number; toolUse: number } {
+  if (output <= 0 || !chars || chars.tool <= 0) {
+    return { assistant: output, toolUse: 0 };
+  }
+  const totalChars = chars.reasoning + chars.text + chars.tool;
+  if (totalChars <= 0) {
+    return { assistant: output, toolUse: 0 };
+  }
+  const toolUse = Math.min(output, Math.round((output * chars.tool) / totalChars));
+  return { assistant: output - toolUse, toolUse };
+}
+
 /** Precompute fixed prompt/tool weights for repeated snapshots in one turn. */
 export function createContextSnapshotBuilder(
   systemPrompt: string,
@@ -149,6 +180,7 @@ export function createContextSnapshotBuilder(
     inputTokens,
     outputTokens,
     reasoningTokens,
+    outputChars,
   }: DynamicContextSnapshotInput): ContextSnapshot => {
     const input = Math.max(0, inputTokens ?? 0);
     const output = Math.max(0, outputTokens ?? 0);
@@ -166,7 +198,8 @@ export function createContextSnapshotBuilder(
       input,
     );
 
-    const assistantTokens = allocated.assistant + output;
+    const outputSplit = splitOutputTokens(output, outputChars);
+    const assistantTokens = allocated.assistant + outputSplit.assistant;
     // Provider-reported reasoning is authoritative: visible reasoning text
     // may be a summary, so character ratios can misattribute it. Omit the
     // field entirely when the provider did not report a count, so consumers
@@ -182,7 +215,7 @@ export function createContextSnapshotBuilder(
       used_tokens: input + output,
       system_tokens: allocated.system,
       tools_tokens: allocated.tools,
-      tool_use_tokens: allocated.toolUse,
+      tool_use_tokens: allocated.toolUse + outputSplit.toolUse,
       user_tokens: allocated.user,
       assistant_tokens: assistantTokens,
       summary_tokens: allocated.summary,
@@ -199,11 +232,13 @@ export function buildContextSnapshot({
   inputTokens,
   outputTokens,
   reasoningTokens,
+  outputChars,
 }: ContextSnapshotInput): ContextSnapshot {
   return createContextSnapshotBuilder(systemPrompt, tools)({
     messages,
     inputTokens,
     outputTokens,
     reasoningTokens,
+    outputChars,
   });
 }

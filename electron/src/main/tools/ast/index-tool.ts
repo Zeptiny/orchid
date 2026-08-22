@@ -6,7 +6,7 @@
 import { z } from 'zod';
 import type { ToolDefinition, ToolHandler } from '../types';
 import { RiskClass } from '../../../shared/types/permission';
-import { genericToolResultMetadata } from '../types';
+import { genericToolResultMetadata, getToolConfig } from '../types';
 import { genericBuiltInToolOutcome, type GenericBuiltInToolOutcome } from '../result';
 import { indexProject } from '../../ast/indexer';
 import { ASTStore } from '../../ast/store';
@@ -81,6 +81,7 @@ export const astIndexHandler: ToolHandler = async (
       const result = await indexProject({
         projectPath,
         force: force === true,
+        config: getToolConfig(ctx),
       });
       return genericBuiltInToolOutcome('ast_index', {
         action: 'index',

@@ -85,6 +85,13 @@ export const agentsMdConfigSchema = z.object({
  * overrides deep-merge cleanly. All knobs for the live/durable separation
  * (batcher, persistence wave, admission, eviction, prompt bounding) are
  * collected here in one unit to avoid repeated schema churn.
+ *
+ * NOTE: these knobs are process-global by implementation — admission queues
+ * and event batchers are shared main-process resources read from the live
+ * config at emission time (`agents/manager.ts`, `agents/subagent-events.ts`),
+ * so a project-layer override in `.orchid.json` is NOT honored and the key is
+ * intentionally excluded from the project-config allow-list. Compaction
+ * behavior for subagents is per-project instead (`compaction.subagents`).
  */
 export const subagentsConfigSchema = z.object({
   event_max_per_flush: z.number().int().min(1).max(100_000).default(200),
@@ -251,7 +258,7 @@ export const configSchema = z
      * conversation history. 0 disables the deadline entirely; naming then
      * only happens when a turn completes or is interrupted.
      */
-    session_title_max_wait_seconds: z.number().min(0).default(15),
+    session_title_max_wait_seconds: z.number().min(0).max(3600).default(15),
     /**
      * Max multi-step tool-loop iterations per stream (AI SDK stopWhen).
      */

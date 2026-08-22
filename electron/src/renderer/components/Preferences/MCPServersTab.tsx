@@ -32,8 +32,17 @@ export interface MCPServerEntry {
 }
 
 export interface MCPServersTabProps {
+  /** Servers owned by this scope (global: every server; project: overrides). */
   mcpServers: Record<string, Record<string, unknown>>;
   onChange: (servers: Record<string, Record<string, unknown>>) => void;
+  /**
+   * Project scope: home-layer servers not overridden by this project. Shown
+   * read-only with an "Override" action; cannot be deleted here because the
+   * layer merge cannot mask a home alias.
+   */
+  inheritedServers?: Record<string, Record<string, unknown>>;
+  /** Aliases in `mcpServers` that override a same-named home server. */
+  overridingAliases?: ReadonlySet<string>;
 }
 
 interface EditingServer {
@@ -128,7 +137,28 @@ function withoutAuth(headers: Record<string, string>): Record<string, string> {
 
 // ── Component ────────────────────────────────────────────────────────────────
 
-export function MCPServersTab({ mcpServers, onChange }: MCPServersTabProps) {
+// Build the edit form state for one server entry (shared by edit/override/add).
+function toEditForm(s: MCPServerEntry): EditingServer {
+  return {
+    id: s.id,
+    transport: s.transport,
+    command: s.command ?? '',
+    url: s.url ?? '',
+    argsText: s.args.join(' '),
+    envText: Object.entries(s.env)
+      .map(([k, v]) => `${k}=${v}`)
+      .join('\n'),
+    authToken: extractAuthToken(s.headers),
+    headers: withoutAuth(s.headers),
+  };
+}
+
+export function MCPServersTab({
+  mcpServers,
+  onChange,
+  inheritedServers,
+  overridingAliases,
+}: MCPServersTabProps) {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editForm, setEditForm] = useState<EditingServer | null>(null);
   const [isAdding, setIsAdding] = useState(false);
@@ -136,21 +166,13 @@ export function MCPServersTab({ mcpServers, onChange }: MCPServersTabProps) {
   const serverList = Object.entries(mcpServers).map(([id, data]) =>
     parseServer(id, data),
   );
+  const inheritedList = Object.entries(inheritedServers ?? {}).map(([id, data]) =>
+    parseServer(id, data),
+  );
 
   const startEdit = useCallback((s: MCPServerEntry) => {
     setEditingId(s.id);
-    setEditForm({
-      id: s.id,
-      transport: s.transport,
-      command: s.command ?? '',
-      url: s.url ?? '',
-      argsText: s.args.join(' '),
-      envText: Object.entries(s.env)
-        .map(([k, v]) => `${k}=${v}`)
-        .join('\n'),
-      authToken: extractAuthToken(s.headers),
-      headers: withoutAuth(s.headers),
-    });
+    setEditForm(toEditForm(s));
     setIsAdding(false);
   }, []);
 
@@ -161,7 +183,9 @@ export function MCPServersTab({ mcpServers, onChange }: MCPServersTabProps) {
   }, []);
 
   const saveEdit = useCallback(() => {
-    if (!editForm || !editingId) return;
+    // New servers (add / override) have no editingId — they commit through
+    // the same path once the form is valid.
+    if (!editForm || (!editingId && !isAdding)) return;
 
     const server: MCPServerEntry = {
       id: editForm.id,
@@ -184,7 +208,7 @@ export function MCPServersTab({ mcpServers, onChange }: MCPServersTabProps) {
     }
 
     const updated = { ...mcpServers };
-    if (editingId !== editForm.id && editingId in updated) {
+    if (editingId && editingId !== editForm.id && editingId in updated) {
       delete updated[editingId];
     }
     updated[editForm.id] = serverToDict(server);
@@ -193,7 +217,7 @@ export function MCPServersTab({ mcpServers, onChange }: MCPServersTabProps) {
     setEditingId(null);
     setEditForm(null);
     setIsAdding(false);
-  }, [editForm, editingId, mcpServers, onChange]);
+  }, [editForm, editingId, isAdding, mcpServers, onChange]);
 
   const deleteServer = useCallback(
     (id: string) => {
@@ -206,16 +230,20 @@ export function MCPServersTab({ mcpServers, onChange }: MCPServersTabProps) {
 
   const startAdd = useCallback(() => {
     setEditingId(null);
-    setEditForm({
+    setEditForm(toEditForm({
       id: '',
       transport: 'stdio',
-      command: '',
-      url: '',
-      argsText: '',
-      envText: '',
-      authToken: '',
+      args: [],
+      env: {},
       headers: {},
-    });
+    }));
+    setIsAdding(true);
+  }, []);
+
+  // Seed the add-editor with an inherited entry to create a project override.
+  const startOverride = useCallback((s: MCPServerEntry) => {
+    setEditingId(null);
+    setEditForm(toEditForm(s));
     setIsAdding(true);
   }, []);
 
@@ -376,15 +404,57 @@ export function MCPServersTab({ mcpServers, onChange }: MCPServersTabProps) {
         />
 
         <div className="config-card-list">
-          {serverList.map((s) => (
+          {inheritedList.map((s) => (
             <ConfigCard key={s.id}>
+              <ConfigCard.Body>
+                <div className="config-card-row flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <div className="config-card-title font-semibold">
+                      {s.id}
+                      <span className="ml-2 align-middle text-xs font-normal text-base-content/60">
+                        inherited from global
+                      </span>
+                    </div>
+                    <p className="config-card-desc truncate text-sm text-base-content/70">
+                      {s.command ?? s.url ?? '(no command/url)'}
+                    </p>
+                    {s.args.length > 0 && (
+                      <p className="config-card-desc mt-1 font-mono truncate text-xs text-base-content/60">
+                        {s.args.join(' ')}
+                      </p>
+                    )}
+                  </div>
+                  <div className="flex shrink-0 items-center gap-1">
+                    <Button
+                      variant="ghost"
+                      size="xs"
+                      type="button"
+                      onClick={() => startOverride(s)}
+                    >
+                      Override
+                    </Button>
+                  </div>
+                </div>
+              </ConfigCard.Body>
+            </ConfigCard>
+          ))}
+
+          {serverList.map((s) => (
+            <ConfigCard key={s.id} variant={overridingAliases?.has(s.id) ? 'active' : undefined}>
               <ConfigCard.Body>
                 {editingId === s.id && editForm ? (
                   renderEditor(editForm, null)
                 ) : (
                   <div className="config-card-row flex items-start justify-between gap-3">
                     <div className="min-w-0">
-                      <div className="config-card-title font-semibold">{s.id}</div>
+                      <div className="config-card-title font-semibold">
+                        {s.id}
+                        {overridingAliases?.has(s.id) && (
+                          <span className="ml-2 align-middle text-xs font-normal text-primary">
+                            overrides global
+                          </span>
+                        )}
+                      </div>
                       <p className="config-card-desc truncate text-sm text-base-content/70">
                         {s.command ?? s.url ?? '(no command/url)'}
                       </p>
@@ -410,10 +480,14 @@ export function MCPServersTab({ mcpServers, onChange }: MCPServersTabProps) {
             </ConfigCard>
           )}
 
-          {!isAdding && serverList.length === 0 && (
+          {!isAdding && serverList.length === 0 && inheritedList.length === 0 && (
             <StateMessage
               kind="empty"
-              title="No MCP servers configured"
+              title={
+                inheritedServers
+                  ? 'No MCP servers configured for this project'
+                  : 'No MCP servers configured'
+              }
               className="py-4"
             />
           )}

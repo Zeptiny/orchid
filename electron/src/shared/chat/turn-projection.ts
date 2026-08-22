@@ -303,13 +303,13 @@ export function applyChatTurnEvent(
       return {
         ...next,
         response: next.response + action.data,
-        streamSegments: appendSegment(next.streamSegments, 'text', action.segmentId, action.data),
+        streamSegments: appendSegment(next.streamSegments, 'text', action.segmentId, action.data, action.occurredAt),
       };
     case 'thinking':
       return {
         ...next,
         thinking: next.thinking + action.data,
-        streamSegments: appendSegment(next.streamSegments, 'thinking', action.segmentId, action.data),
+        streamSegments: appendSegment(next.streamSegments, 'thinking', action.segmentId, action.data, action.occurredAt),
       };
     case 'usage':
       return { ...next, usage: action.usage };
@@ -488,7 +488,7 @@ function updateTool(
   return {
     ...projection,
     toolCalls,
-    streamSegments: ensureToolSegment(projection.streamSegments, toolCallId),
+    streamSegments: ensureToolSegment(projection.streamSegments, toolCallId, occurredAt),
   };
 }
 
@@ -513,11 +513,13 @@ function createTool(
 function ensureToolSegment(
   segments: ChatStreamSegmentSnapshot[],
   toolCallId: string,
+  occurredAt: string,
 ): ChatStreamSegmentSnapshot[] {
   if (segments.some((segment) => segment.kind === 'tool' && segment.toolCallId === toolCallId)) {
     return segments;
   }
-  return [...segments, { kind: 'tool', toolCallId }];
+  return closeOpenSegment(segments, occurredAt)
+    .concat([{ kind: 'tool', toolCallId }]);
 }
 
 function appendSegment(
@@ -525,12 +527,30 @@ function appendSegment(
   kind: 'text' | 'thinking',
   id: string,
   data: string,
+  occurredAt: string,
 ): ChatStreamSegmentSnapshot[] {
   const last = segments.at(-1);
   if (last?.kind === kind && last.id === id) {
     return [...segments.slice(0, -1), { ...last, content: last.content + data }];
   }
-  return [...segments, { kind, id, content: data }];
+  return closeOpenSegment(segments, occurredAt)
+    .concat([{ kind, id, content: data, startedAt: occurredAt, endedAt: null }]);
+}
+
+/**
+ * Close the trailing open text/thinking segment (`endedAt` still null) when a
+ * newer segment supersedes it, so elapsed timers freeze at the transition.
+ * Only the last segment can be open — earlier ones were closed on arrival.
+ */
+function closeOpenSegment(
+  segments: readonly ChatStreamSegmentSnapshot[],
+  occurredAt: string,
+): ChatStreamSegmentSnapshot[] {
+  const last = segments.at(-1);
+  if (!last || last.kind === 'tool' || last.endedAt != null) {
+    return [...segments];
+  }
+  return [...segments.slice(0, -1), { ...last, endedAt: occurredAt }];
 }
 
 function copySegment(segment: ChatStreamSegmentSnapshot): ChatStreamSegmentSnapshot {

@@ -160,10 +160,21 @@ export interface ChatToolCallSnapshot {
   estimatedTokens?: number | null;
 }
 
+/**
+ * Text/thinking stream segments carry measured timing when available:
+ * `startedAt` is stamped when the segment opens, `endedAt` when a later
+ * segment supersedes it (null while it is still the open tail). Elapsed-time
+ * displays anchor on these instead of view-mount clocks.
+ */
+export interface ChatSegmentTiming {
+  startedAt?: string;
+  endedAt?: string | null;
+}
+
 export type ChatStreamSegmentSnapshot =
   | { kind: 'tool'; toolCallId: string }
-  | { kind: 'text'; id: string; content: string }
-  | { kind: 'thinking'; id: string; content: string };
+  | ({ kind: 'text'; id: string; content: string } & ChatSegmentTiming)
+  | ({ kind: 'thinking'; id: string; content: string } & ChatSegmentTiming);
 
 /** Atomic in-flight view used when a renderer returns to a running session. */
 export interface ChatSnapshot {
@@ -559,6 +570,14 @@ export interface ProjectConfigReadResult {
 
 export interface ProjectConfigSaveMessage {
   projectDir: string;
+  /**
+   * Project-config overrides. Keys outside the per-project allow-list are
+   * rejected (fail-loud), not filtered. Special semantics: `mcp_servers`
+   * merges per alias with `null` tombstones for removed aliases;
+   * `tier_models`/`tier_reasoning_effort` replace the stored map exactly
+   * (absent tier = inherit global); `default_model: null` clears the
+   * override instead of storing an explicit null.
+   */
   updates: Record<string, unknown>;
 }
 

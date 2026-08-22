@@ -43,7 +43,7 @@ Key files: `electron/src/main/project/trust.ts` (store/fingerprint/report), gate
 ## Gotchas discovered in review
 
 - Report building happens for *untrusted* content — cap raw config size, definition counts, and serialized value lengths, or a crafted repo DoSes the main process pre-trust.
-- Orchid's own writes (agent edits of root AGENTS.md, definition saves) flip trusted → changed by design; the next send re-prompts. Product-accepted residual.
+- Orchid's own writes (agent edits of root AGENTS.md, definition saves, `config:save_project` from ProjectConfigView) flip trusted → changed by design; the next send re-prompts. Product-accepted residual — note that every ProjectConfigView save (per-project MCP servers, tier models, AGENTS.md overrides, …) rewrites `.orchid.json` and therefore trips this, so the re-prompt frequency scales with project-config editing.
 - Grant records the fingerprint at click time, not review time (TOCTOU while the dialog is open) — accepted residual; a hardened version carries the reviewed fingerprint into `trust_set`.
 
 ## Verification

@@ -1036,6 +1036,27 @@ describe('Model Download', () => {
     expect(typeof embedderModule.getModelDir).toBe('function');
   });
 
+  it('maps RAGConfig model-download timeouts to per-download options', async () => {
+    const { modelDownloadOptionsFromConfig } = await import('../../src/main/rag/embedder');
+
+    expect(
+      modelDownloadOptionsFromConfig({
+        model_download_inactivity_timeout: 2,
+        model_download_total_timeout: 60,
+      }),
+    ).toEqual({ inactivityTimeoutMs: 2000, totalTimeoutMs: 60000 });
+
+    // Absent or non-positive fields fall back to the default resolution.
+    expect(modelDownloadOptionsFromConfig({})).toEqual({});
+    expect(
+      modelDownloadOptionsFromConfig({
+        model_download_inactivity_timeout: 0,
+        model_download_total_timeout: -5,
+      }),
+    ).toEqual({});
+    expect(modelDownloadOptionsFromConfig(undefined)).toEqual({});
+  });
+
   it('should export DownloadProgressCallback type', async () => {
     // Type-only test: ensure the type is exported and usable
     const embedderModule = await import('../../src/main/rag/embedder');

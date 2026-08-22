@@ -285,7 +285,7 @@ export async function runIndexProjectImpl(
     store.initDb();
 
   if (!embedder) {
-    embedder = await createEmbedderFromConfig();
+    embedder = await createEmbedderFromConfig(cfg.rag);
   }
 
   // Verify vector/chunk alignment BEFORE reading file hashes. DB rows commit
@@ -337,7 +337,7 @@ export async function runIndexProjectImpl(
 
     try {
       // Read + hash
-      const result = await readAndHash(filepath);
+      const result = await readAndHash(filepath, cfg.rag.max_file_size);
       if (!result) {
         if (existingHashes.has(rel)) {
           store.deleteByFileBatch(vectorState, rel);
@@ -679,11 +679,11 @@ function shouldInclude(filepath: string): boolean {
 
 async function readAndHash(
   filepath: string,
+  maxFileSize: number,
 ): Promise<{ content: string; hash: string } | null> {
-  const cfg = getConfig();
   try {
     const stat = await fs.promises.stat(filepath);
-    if (stat.size > cfg.rag.max_file_size) return null;
+    if (stat.size > maxFileSize) return null;
     if (stat.size === 0) return null;
 
     const content = await fs.promises.readFile(filepath, 'utf-8');

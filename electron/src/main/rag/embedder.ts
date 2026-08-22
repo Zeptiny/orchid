@@ -13,6 +13,7 @@
  */
 
 import type { ModelSelection } from '../../shared/types/provider';
+import type { RAGConfig } from '../../shared/types/ipc-boundary';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -312,31 +313,35 @@ export class ApiEmbedder implements IEmbedder {
  * credential, and code-owned endpoint resolution; legacy alias strings never
  * reach this function as executable providers.
  */
-export async function createEmbedderFromConfig(): Promise<IEmbedder> {
+export async function createEmbedderFromConfig(rag?: RAGConfig): Promise<IEmbedder> {
   let cfgThreads = DEFAULT_THREADS;
   let cfgBatch = DEFAULT_BATCH_SIZE;
   let cfgModel: string | undefined;
   let cfgApiSelection: ModelSelection | null = null;
   let cfgApiTimeout: number | undefined;
   let cfgApiRetries: number | undefined;
+  let cfgDownloadTimeouts: ModelDownloadOptions | undefined;
   try {
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const { getConfig } = require('../config/loader') as typeof import('../config/loader');
-    const rag = getConfig().rag;
-    cfgModel = rag.embedding_model;
-    cfgApiSelection = rag.embedding_api_model;
-    if (typeof rag.embedding_threads === 'number' && rag.embedding_threads > 0) {
-      cfgThreads = rag.embedding_threads;
+    const conf = rag ?? (() => {
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const { getConfig } = require('../config/loader') as typeof import('../config/loader');
+      return getConfig().rag;
+    })();
+    cfgModel = conf.embedding_model;
+    cfgApiSelection = conf.embedding_api_model;
+    if (typeof conf.embedding_threads === 'number' && conf.embedding_threads > 0) {
+      cfgThreads = conf.embedding_threads;
     }
-    if (typeof rag.embedding_batch_size === 'number' && rag.embedding_batch_size > 0) {
-      cfgBatch = rag.embedding_batch_size;
+    if (typeof conf.embedding_batch_size === 'number' && conf.embedding_batch_size > 0) {
+      cfgBatch = conf.embedding_batch_size;
     }
-    if (typeof rag.embedding_api_timeout === 'number' && rag.embedding_api_timeout > 0) {
-      cfgApiTimeout = rag.embedding_api_timeout * 1000;
+    if (typeof conf.embedding_api_timeout === 'number' && conf.embedding_api_timeout > 0) {
+      cfgApiTimeout = conf.embedding_api_timeout * 1000;
     }
-    if (typeof rag.embedding_api_retries === 'number' && rag.embedding_api_retries >= 0) {
-      cfgApiRetries = rag.embedding_api_retries;
+    if (typeof conf.embedding_api_retries === 'number' && conf.embedding_api_retries >= 0) {
+      cfgApiRetries = conf.embedding_api_retries;
     }
+    cfgDownloadTimeouts = modelDownloadOptionsFromConfig(conf);
   } catch {
     // config unavailable — use hard defaults
   }
@@ -361,6 +366,7 @@ export async function createEmbedderFromConfig(): Promise<IEmbedder> {
     model: cfgModel ?? DEFAULT_ONNX_MODEL,
     threads: cfgThreads,
     batchSize: cfgBatch,
+    modelDownloadTimeouts: cfgDownloadTimeouts,
   });
 }
 
@@ -381,6 +387,8 @@ export interface EmbedderOptions {
   threads?: number;
   /** Texts per ONNX forward pass (default from config, else 16). */
   batchSize?: number;
+  /** Model-download deadlines from the caller-supplied RAGConfig (ms); unset fields keep the default resolution. */
+  modelDownloadTimeouts?: ModelDownloadOptions;
 }
 
 /** Optional controls for a single model-file download. */
@@ -398,6 +406,7 @@ export class Embedder implements IEmbedder {
   private modelName: string;
   private threads: number;
   private batchSize: number;
+  private modelDownloadTimeouts?: ModelDownloadOptions;
 
   constructor(modelOrOptions?: string | EmbedderOptions) {
     const opts: EmbedderOptions =
@@ -427,6 +436,7 @@ export class Embedder implements IEmbedder {
     this.modelName = opts.model ?? cfgModel ?? DEFAULT_ONNX_MODEL;
     this.threads = Math.max(1, Math.min(64, opts.threads ?? cfgThreads));
     this.batchSize = Math.max(1, Math.min(256, opts.batchSize ?? cfgBatch));
+    this.modelDownloadTimeouts = opts.modelDownloadTimeouts;
   }
 
   /**
@@ -516,7 +526,7 @@ export class Embedder implements IEmbedder {
    */
   private async _embedBatch(texts: string[]): Promise<Float32Array[]> {
     try {
-      return await runOnnxEmbedding(texts, this.modelName, this.threads);
+      return await runOnnxEmbedding(texts, this.modelName, this.threads, this.modelDownloadTimeouts);
     } catch (err) {
       if (err instanceof EmbeddingError) throw err;
       throw new EmbeddingError(
@@ -751,6 +761,26 @@ function modelDownloadTimeouts(): {
   }
 }
 
+/**
+ * Map the caller-supplied RAGConfig's model-download timeouts (seconds) to
+ * download options (ms). Absent or non-positive fields stay unset so the
+ * default resolution (`modelDownloadTimeouts`) still applies.
+ */
+export function modelDownloadOptionsFromConfig(
+  rag?: Partial<RAGConfig>,
+): ModelDownloadOptions {
+  const inactivity = rag?.model_download_inactivity_timeout;
+  const total = rag?.model_download_total_timeout;
+  return {
+    ...(typeof inactivity === 'number' && inactivity > 0
+      ? { inactivityTimeoutMs: inactivity * 1000 }
+      : {}),
+    ...(typeof total === 'number' && total > 0
+      ? { totalTimeoutMs: total * 1000 }
+      : {}),
+  };
+}
+
 /** Remove incomplete model downloads after an interrupted index worker exits. */
 export async function removeModelDownloadTemps(modelName: string): Promise<void> {
   const fs = await import('node:fs');
@@ -799,6 +829,7 @@ async function runOnnxEmbedding(
   texts: string[],
   modelName: string,
   threads: number,
+  downloadOptions?: ModelDownloadOptions,
 ): Promise<Float32Array[]> {
   // Dynamic import — onnxruntime-node is an optional native dependency
   let ort: typeof import('onnxruntime-node');
@@ -811,7 +842,7 @@ async function runOnnxEmbedding(
   }
 
   // Inference runs inline with a hard-capped thread pool (see SessionOptions).
-  const session = await getOrCreateSession(ort, modelName, threads);
+  const session = await getOrCreateSession(ort, modelName, threads, downloadOptions);
 
   // Tokenize using proper BPE tokenizer, falling back to simpleTokenize.
   // Current local models (BGE / MiniLM) all use a 512-token window.
@@ -950,6 +981,7 @@ async function getOrCreateSession(
   ort: typeof import('onnxruntime-node'),
   modelName: string,
   threads: number,
+  downloadOptions?: ModelDownloadOptions,
 ): Promise<import('onnxruntime-node').InferenceSession> {
   // Cache key includes thread count so changing config takes effect after restart
   // (or after the cache entry is recreated on next process boot).
@@ -958,7 +990,7 @@ async function getOrCreateSession(
     return sessionCache.get(cacheKey)!;
   }
 
-  const modelPath = await resolveModelPath(modelName);
+  const modelPath = await resolveModelPath(modelName, downloadOptions);
   // Limit CPU: ORT defaults to "all physical cores" when threads are unset.
   // sequential executionMode avoids extra inter-op fan-out across graph nodes.
   const session = await ort.InferenceSession.create(modelPath, {
@@ -980,7 +1012,10 @@ async function getOrCreateSession(
  *
  * If not found, auto-downloads the model files from Hugging Face into storageId.
  */
-async function resolveModelPath(modelName: string): Promise<string> {
+async function resolveModelPath(
+  modelName: string,
+  downloadOptions?: ModelDownloadOptions,
+): Promise<string> {
   const fs = await import('node:fs');
   const path = await import('node:path');
 
@@ -1000,7 +1035,7 @@ async function resolveModelPath(modelName: string): Promise<string> {
   }
 
   // Auto-download on first use into the storageId directory
-  await downloadModel(modelName);
+  await downloadModel(modelName, undefined, downloadOptions);
 
   const primary = candidates[0]!;
   if (fs.existsSync(primary)) {

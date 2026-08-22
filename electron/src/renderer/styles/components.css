@@ -388,6 +388,12 @@
     @apply inline-flex shrink-0 items-center gap-1.5;
   }
 
+  .orchid-tool-elapsed {
+    @apply font-mono opacity-60;
+    font-size: 11px;
+    font-variant-numeric: tabular-nums;
+  }
+
   .orchid-tool-block-content {
     @apply text-base-content/70;
     font-size: 1rem;

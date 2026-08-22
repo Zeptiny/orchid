@@ -63,6 +63,8 @@ export interface GeneralTabProps {
   mcpResultMaxBytes: number;
   toolWorkerPoolSize: number;
   toolWorkerPoolMainAgentReserved: number;
+  /** Max seconds to wait mid-turn before auto-naming a default-named session. */
+  sessionTitleMaxWaitSeconds: number;
   onChange: (updates: ConfigPatch) => void;
 }
 
@@ -105,6 +107,7 @@ export function GeneralTab({
   mcpResultMaxBytes,
   toolWorkerPoolSize,
   toolWorkerPoolMainAgentReserved,
+  sessionTitleMaxWaitSeconds,
   onChange,
 }: GeneralTabProps) {
   const personalityOptions =
@@ -113,8 +116,8 @@ export function GeneralTab({
       : [...personalities];
 
   const handleNumberChange = useCallback(
-    (field: NumericConfigKey, value: string, min = 1) => {
-      const num = parseConfigNumber(value, min);
+    (field: NumericConfigKey, value: string, min = 1, max?: number) => {
+      const num = parseConfigNumber(value, min, { max });
       if (num !== null) {
         onChange(configNumberPatch(field, num));
       }
@@ -330,6 +333,23 @@ export function GeneralTab({
               className="w-full"
               min={0}
               max={8}
+            />
+          </FormField>
+          <FormField
+            label="Session Title Max Wait (s)"
+            htmlFor="general-session-title-wait"
+            hint="Deadline after a turn starts before auto-naming a default-named session from the conversation. 0 disables the deadline."
+            className="config-field"
+          >
+            <TextInput
+              id="general-session-title-wait"
+              type="number"
+              value={sessionTitleMaxWaitSeconds}
+              onChange={(e) => handleNumberChange('session_title_max_wait_seconds', e.target.value, 0, 3600)}
+              bordered
+              className="w-full"
+              min={0}
+              max={3600}
             />
           </FormField>
         </div>

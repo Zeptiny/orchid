@@ -61,7 +61,7 @@ describe('SubagentLiveProjectionStore', () => {
     }
 
     expect(store.getCheckpoint('subagent-1')).toEqual({
-      segments: [{ kind: 'text', id: 'segment-1', content: 'partial' }],
+      segments: [expect.objectContaining({ kind: 'text', id: 'segment-1', content: 'partial', endedAt: null })],
       committedSegmentCount: 0,
       usage,
     });

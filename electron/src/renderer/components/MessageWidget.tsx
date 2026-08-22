@@ -5,13 +5,10 @@
  * chrome; tool call/result messages fall back to ToolCallBlock for edge cases.
  * ChatStream normally converts them into ToolBlocks for consistent ordering.
  */
-import { memo, useState, useCallback, useMemo, useEffect, useId, useRef } from 'react';
+import { memo, useState, useCallback, useMemo, useEffect, useId } from 'react';
 import type { Message } from '../../shared/types/message';
 import { MessageRole, MessageType, ThinkingArtifactKind } from '../../shared/types/message';
-import {
-  estimateThoughtDurationMs,
-  formatDurationMs,
-} from '../utils/thought-grouping';
+import { formatDurationMs, useElapsedMs } from '../utils/elapsed';
 import type { ToolBlock } from '../hooks/useChat';
 import { MarkdownContent } from './MarkdownContent';
 import { Icon } from './Icon';
@@ -23,16 +20,22 @@ import { Spinner } from './ui/Spinner';
 interface MessageWidgetProps {
   message: Message;
   isStreaming?: boolean;
+  /**
+   * Measured segment timing for live thinking (anchors the elapsed timer at
+   * the model's actual reasoning start, not when the view mounted). Absent
+   * for committed history — those messages carry thinking_duration_ms.
+   */
+  thinkingTiming?: { startedAt: string | null; endedAt: string | null };
 }
 
-export const MessageWidget = memo(function MessageWidget({ message, isStreaming }: MessageWidgetProps) {
+export const MessageWidget = memo(function MessageWidget({ message, isStreaming, thinkingTiming }: MessageWidgetProps) {
   if (message.hidden) return null;
 
   switch (message.type) {
     case MessageType.ERROR:
       return <ErrorMessage message={message} />;
     case MessageType.THINKING:
-      return <ThinkingMessage message={message} isStreaming={isStreaming} />;
+      return <ThinkingMessage message={message} isStreaming={isStreaming} timing={thinkingTiming} />;
     case MessageType.TOOL_CALL:
       return <ToolCallMessage message={message} />;
     case MessageType.TOOL_RESULT:
@@ -95,14 +98,14 @@ function OpaqueThinkingMessage({ tokenCount }: { tokenCount?: number }) {
 function ThinkingMessage({
   message,
   isStreaming,
+  timing,
 }: {
   message: Message;
   isStreaming?: boolean;
+  timing?: { startedAt: string | null; endedAt: string | null };
 }) {
   // Open for live reasoning, then close when that segment settles.
   const [expanded, setExpanded] = useState(Boolean(isStreaming));
-  const [streamingElapsedMs, setStreamingElapsedMs] = useState(0);
-  const thinkingStartedAt = useRef<number | null>(isStreaming ? Date.now() : null);
   const panelId = useId();
   const toggle = useCallback(() => {
     setExpanded((prev) => !prev);
@@ -113,28 +116,33 @@ function ThinkingMessage({
   const content = message.content || (message.thinking ?? '');
   const payload = message.thinking_payload;
   const isOpaque = !content && !!payload && payload.kind !== ThinkingArtifactKind.TEXT;
-  // Mock shows "Thought 936ms" — estimate from content length when no duration field
-  const durationLabel = useMemo(() => {
-    if (isStreaming) return formatDurationMs(streamingElapsedMs);
-    const ms = estimateThoughtDurationMs(content);
-    return ms != null ? formatDurationMs(ms) : null;
-  }, [content, isStreaming, streamingElapsedMs]);
 
   useEffect(() => {
     setExpanded(Boolean(isStreaming));
-    if (!isStreaming) {
-      thinkingStartedAt.current = null;
-      setStreamingElapsedMs(0);
-      return undefined;
-    }
-    thinkingStartedAt.current ??= Date.now();
-    const updateElapsed = () => {
-      setStreamingElapsedMs(Date.now() - (thinkingStartedAt.current ?? Date.now()));
-    };
-    updateElapsed();
-    const intervalId = window.setInterval(updateElapsed, 100);
-    return () => window.clearInterval(intervalId);
   }, [isStreaming]);
+
+  // Anchor on measured timing: the wire stamps when reasoning actually began,
+  // so a view mounted mid-thought (or a subagent page opened late) shows the
+  // true elapsed value instead of restarting from zero.
+  const measuredStartedAt = timing?.startedAt ?? null;
+  const measuredEndedAt = timing?.endedAt ?? null;
+  const liveElapsedMs = useElapsedMs({
+    startedAt: isStreaming ? measuredStartedAt : null,
+    endedAt: measuredEndedAt,
+  });
+  const settledElapsedMs = useMemo(() => {
+    if (isStreaming) return null;
+    if (message.thinking_duration_ms != null) return message.thinking_duration_ms;
+    if (measuredStartedAt && measuredEndedAt) {
+      const span = Date.parse(measuredEndedAt) - Date.parse(measuredStartedAt);
+      if (Number.isFinite(span) && span >= 0) return span;
+    }
+    return null;
+  }, [isStreaming, message.thinking_duration_ms, measuredStartedAt, measuredEndedAt]);
+  const durationLabel = useMemo(() => {
+    const ms = isStreaming ? liveElapsedMs : settledElapsedMs;
+    return ms != null ? formatDurationMs(ms) : null;
+  }, [isStreaming, liveElapsedMs, settledElapsedMs]);
 
   if (isOpaque && !isStreaming) {
     return <OpaqueThinkingMessage tokenCount={payload?.reasoningTokenCount} />;
@@ -157,13 +165,18 @@ function ThinkingMessage({
           ) : (
             <Icon name="alertCircle" size={12} />
           )}
-          {`${isStreaming ? 'Thinking…' : 'Thought'}${durationLabel ? ` ${durationLabel}` : ''}`}
+          {isStreaming ? 'Thinking…' : 'Thought'}
         </span>
-        <Icon
-          name="chevronDown"
-          size={12}
-          className={`orchid-disclosure-chevron ${expanded ? 'is-open' : ''}`}
-        />
+        <span className="inline-flex shrink-0 items-center gap-1.5">
+          {durationLabel ? (
+            <span className="orchid-tool-elapsed" aria-hidden="true">{durationLabel}</span>
+          ) : null}
+          <Icon
+            name="chevronDown"
+            size={12}
+            className={`orchid-disclosure-chevron ${expanded ? 'is-open' : ''}`}
+          />
+        </span>
       </button>
       <CollapsibleRegion open={expanded} id={panelId}>
         <div

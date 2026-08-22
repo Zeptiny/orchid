@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { importESM } from '../../src/main/utils/esm-import';
 import type { ProviderConnection, ProviderDefinition } from '../../src/shared/types/provider';
 import { MessageRole, MessageType, type Message } from '../../src/shared/types/message';
@@ -153,6 +153,14 @@ describe('native provider adapters', () => {
 });
 
 describe('OpenAI Responses protocol end-to-end', () => {
+  // Warm the real AI SDK packages and the orchestrator import graph once in a
+  // hook (10s hook budget) instead of inside the first test (5s test budget).
+  beforeAll(async () => {
+    await vi.importActual('ai');
+    await vi.importActual('@ai-sdk/openai');
+    await import('../../src/main/llm/orchestrator');
+  });
+
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(importESM).mockImplementation(async (specifier: string) => {
