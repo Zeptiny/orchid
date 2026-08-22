@@ -10,7 +10,7 @@ import { RiskClass } from '../../../shared/types/permission';
 import { genericToolResultMetadata } from '../types';
 import { genericBuiltInToolOutcome } from '../result';
 import type { TodoToolResult, NotifyTodoChanged, TodoStoreSource } from './create';
-import { resolveTodoStore, TODO_BATCH_MAX_SIZE } from './create';
+import { resolveTodoStore, TODO_BATCH_MAX_SIZE, expandStringifiedBatch } from './create';
 import { TodoStatus, type Todo } from '../../../shared/types/todo';
 import {
   isMainAgentScope,
@@ -43,22 +43,35 @@ export function buildUpdateTool(
       'Accepts a single id or an array of ids for batch updates. When using ' +
       'arrays, title/status arrays are matched by index to id arrays.',
     inputSchema: z.object({
-      id: z
-        .union([z.string(), z.array(z.string()).min(1).max(TODO_BATCH_MAX_SIZE)])
-        .describe('The ID of the task to update, or an array of IDs for batch update.'),
+      id: z.preprocess(
+        expandStringifiedBatch,
+        z.union([z.string(), z.array(z.string()).min(1).max(TODO_BATCH_MAX_SIZE)]).describe(
+          'The ID of the task to update, or an array of IDs for batch update.',
+        ),
+      ),
       title: z
-        .union([z.string(), z.array(z.string()).max(TODO_BATCH_MAX_SIZE)])
-        .optional()
-        .describe(
-          'New title (optional). A single value is applied to every id; an array is matched by index.',
-        ),
+        .preprocess(
+          expandStringifiedBatch,
+          z.union([z.string(), z.array(z.string()).max(TODO_BATCH_MAX_SIZE)]).describe(
+            'New title (optional). A single value is applied to every id; an array is matched by index.',
+          ),
+        )
+        .optional(),
       status: z
-        .union([todoStatusSchema, z.array(todoStatusSchema).max(TODO_BATCH_MAX_SIZE)])
-        .optional()
-        .describe(
-          `New status. Must be one of: ${Object.values(TodoStatus).join(', ')}. ` +
-            'A single value is applied to every id; an array is matched by index.',
-        ),
+        .preprocess(
+          (v) => {
+            const expanded = expandStringifiedBatch(v);
+            if (Array.isArray(expanded)) {
+              return expanded.map((el) => (typeof el === 'string' ? el.toUpperCase() : el));
+            }
+            return expanded;
+          },
+          z.union([todoStatusSchema, z.array(todoStatusSchema).max(TODO_BATCH_MAX_SIZE)]).describe(
+            `New status. Must be one of: ${Object.values(TodoStatus).join(', ')}. ` +
+              'A single value is applied to every id; an array is matched by index.',
+          ),
+        )
+        .optional(),
       subagent_id: z
         .string()
         .optional()

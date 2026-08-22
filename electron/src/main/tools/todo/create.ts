@@ -38,6 +38,31 @@ export function resolveTodoStore(
 }
 
 /**
+ * Expand a JSON-encoded batch string into its array form.
+ *
+ * Some model/provider paths transport array arguments as JSON-encoded strings,
+ * so a batch like '["a","b"]' arrives as a single title string. The schema
+ * union's string branch accepts it and the store would create one task titled
+ * with the raw array text (#171). Only strings that parse to an array whose
+ * elements are all strings are expanded; everything else passes through
+ * unchanged so literal bracketed titles survive.
+ */
+export function expandStringifiedBatch(value: unknown): unknown {
+  if (typeof value !== 'string') return value;
+  const trimmed = value.trim();
+  if (!trimmed.startsWith('[')) return value;
+  try {
+    const parsed: unknown = JSON.parse(trimmed);
+    if (Array.isArray(parsed) && parsed.every((el) => typeof el === 'string')) {
+      return parsed;
+    }
+  } catch {
+    // Not JSON — treat as a literal string value.
+  }
+  return value;
+}
+
+/**
  * Resolve ownership for a new todo under the calling agent scope.
  * - Subagents: always own the todo (caller cannot forge another scope).
  * - Main: may optionally tag a subagent_id (assigns ownership to that subagent).
@@ -76,9 +101,12 @@ export function buildCreateTool(
       'modify their own tasks. Accepts a single title or an array of titles ' +
       'for batch creation.',
     inputSchema: z.object({
-      title: z
-        .union([z.string(), z.array(z.string()).min(1).max(TODO_BATCH_MAX_SIZE)])
-        .describe('Task title or array of task titles for batch creation.'),
+      title: z.preprocess(
+        expandStringifiedBatch,
+        z.union([z.string(), z.array(z.string()).min(1).max(TODO_BATCH_MAX_SIZE)]).describe(
+          'Task title or array of task titles for batch creation.',
+        ),
+      ),
       subagent_id: z
         .string()
         .optional()
