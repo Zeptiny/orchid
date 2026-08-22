@@ -576,9 +576,8 @@ function flushCompactedBuffer(
     emittedToolIds.add(block.id);
     state.items.push({
       kind: 'tool',
-      key: block.id
-        ? `${keyPrefix}-tool-${block.id}-${emittedToolIds.size}`
-        : `${keyPrefix}-tool-${emittedToolIds.size}`,
+      // Same formula as the live tail (block.id) — see walkMessagesToItems (#179).
+      key: block.id || `${keyPrefix}-tool-${emittedToolIds.size}`,
       block,
     });
   };
@@ -719,7 +718,10 @@ function walkMessagesToItems(
     emittedToolIds.add(block.id);
     state.items.push({
       kind: 'tool',
-      key: block.id ? `${keyPrefix}-tool-${block.id}-${emittedToolIds.size}` : `${keyPrefix}-tool-${emittedToolIds.size}`,
+      // Same formula as the live tail (block.id) so a tool that commits
+      // keeps its DOM node across the live→history swap instead of
+      // remounting and replaying its entrance animation (#179).
+      key: block.id || `${keyPrefix}-tool-${emittedToolIds.size}`,
       block,
     });
   };
@@ -964,7 +966,10 @@ export function buildLiveTailItems(opts: {
   const pushMessage = (msg: Message, isStreaming: boolean, timing?: ThoughtTiming) => {
     items.push({
       kind: 'message',
-      key: isStreaming ? (msg.id ? `live-${msg.id}-streaming` : 'streaming') : `live-${msg.id}-${items.length}`,
+      // Keyed by segment id only — never by streaming state or position.
+      // A segment that stops being the trailing one keeps its DOM node
+      // instead of remounting and replaying its entrance animation (#179).
+      key: msg.id ? `live-${msg.id}` : `live-msg-${items.length}`,
       message: msg,
       isStreaming,
       ...(msg.type === MessageType.THINKING && timing ? { timing } : {}),

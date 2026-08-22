@@ -646,7 +646,7 @@ describe('buildLiveTailItems', () => {
     expect(result[0]?.kind).toBe('tool');
   });
 
-  it('keys live text by segment id and position, not by timestamp', () => {
+  it('keys live text by segment id, stable while streaming and after settling', () => {
     const segments = [
       { kind: 'text' as const, id: 'seg-1', content: 'first' },
       { kind: 'tool' as const, toolCallId: 'tc-9' },
@@ -660,9 +660,9 @@ describe('buildLiveTailItems', () => {
       emittedToolIds: new Set(),
     });
     expect(result.map((it) => it.key)).toEqual([
-      'live-seg-1-0',
+      'live-seg-1',
       'tc-9',
-      'live-seg-2-streaming',
+      'live-seg-2',
     ]);
   });
 
@@ -680,8 +680,118 @@ describe('buildLiveTailItems', () => {
     });
     const first = build();
     const second = build();
-    expect(second.map((it) => it.key)).toEqual(['live-seg-a-0', 'live-seg-b-streaming']);
+    expect(second.map((it) => it.key)).toEqual(['live-seg-a', 'live-seg-b']);
     expect(second.map((it) => it.key)).toEqual(first.map((it) => it.key));
+  });
+});
+
+// ── Widget key stability across state transitions (#179) ─────────────────────
+//
+// Entrance animations (orchid-rise on .orchid-msg / .orchid-thought /
+// .orchid-tool-block) replay whenever a React key changes: the widget
+// unmounts and remounts as a "new" node. These tests pin the key contracts
+// that keep already-visible nodes mounted across status flips and the
+// live→committed swap.
+
+describe('widget key stability (#179)', () => {
+  const historyOpts = {
+    messages: [] as Message[],
+    toolBlocks: [] as ToolBlock[],
+    status: 'idle' as const,
+    liveUsage: null as Usage | null,
+    subagentUsage: EMPTY_SUBAGENT_USAGE_SUMMARY,
+    interrupted: false,
+    expandedChainIndexes: new Set<number>(),
+  };
+
+  it('keeps a live text segment key stable when it stops being the trailing segment', () => {
+    const base = {
+      toolBlocks: [] as ToolBlock[],
+      streamingContent: '',
+      status: 'streaming' as const,
+      emittedToolIds: new Set<string>(),
+    };
+    const during = buildLiveTailItems({
+      ...base,
+      streamSegments: [{ kind: 'text', id: 'seg-1', content: 'answer' }],
+    });
+    const after = buildLiveTailItems({
+      ...base,
+      streamSegments: [
+        { kind: 'text', id: 'seg-1', content: 'answer' },
+        { kind: 'tool', toolCallId: 'tc-1' },
+      ],
+    });
+    expect(after[0]?.key).toBe(during[0]?.key);
+  });
+
+  it('keeps a live thinking segment key stable when a later segment arrives', () => {
+    const base = {
+      toolBlocks: [] as ToolBlock[],
+      streamingContent: '',
+      status: 'streaming' as const,
+      emittedToolIds: new Set<string>(),
+    };
+    const during = buildLiveTailItems({
+      ...base,
+      streamSegments: [{ kind: 'thinking', id: 'seg-t', content: 'hmm' }],
+    });
+    const after = buildLiveTailItems({
+      ...base,
+      streamSegments: [
+        { kind: 'thinking', id: 'seg-t', content: 'hmm' },
+        { kind: 'text', id: 'seg-2', content: 'answer' },
+      ],
+    });
+    expect(after[0]?.key).toBe(during[0]?.key);
+  });
+
+  it('keys committed tool items by block id so the live→history swap keeps the DOM node', () => {
+    const sessionChains = [
+      chain({
+        id: 'c1',
+        messages: [toolCallMsg('m-call', 'tc-1', 'read'), toolResultMsg('m-res', 'tc-1')],
+      }),
+    ];
+    const live = buildLiveTailItems({
+      toolBlocks: [toolBlock('tc-1', 'read', 'running')],
+      streamSegments: [{ kind: 'tool', toolCallId: 'tc-1' }],
+      streamingContent: '',
+      status: 'streaming',
+      emittedToolIds: new Set(),
+    });
+    expect(live.map((it) => it.key)).toEqual(['tc-1']);
+
+    const history = buildHistoryStreamItems({
+      ...historyOpts,
+      toolBlocks: [toolBlock('tc-1', 'read', 'completed')],
+      sessionChains,
+    });
+    const tools = history.items.filter((it) => it.kind === 'tool');
+    expect(tools.map((it) => it.key)).toEqual(['tc-1']);
+  });
+
+  it('keys tools inside an expanded compacted run by block id', () => {
+    const opts = { ...historyOpts, toolBlocks: [toolBlock('call-1', 'read', 'completed')] };
+    const messages = [
+      userMsg('u1', 'explore'),
+      toolCallMsg('tc-1', 'call-1', 'read', { excludeFromModel: true }),
+      toolResultMsg('tr-1', 'call-1', { excludeFromModel: true }),
+      summaryHead('sum-1', 'Compaction summary.'),
+    ];
+    const sessionChains = [chain({ id: 'c1', messages })];
+
+    const collapsed = buildHistoryStreamItems({ ...opts, sessionChains });
+    const stub = collapsed.items.find((it) => it.kind === 'compacted-stub');
+    if (stub?.kind !== 'compacted-stub') throw new Error('expected compacted-stub');
+
+    const expanded = buildHistoryStreamItems({
+      ...opts,
+      sessionChains,
+      expandedCompactedKeys: new Set([stub.key]),
+    });
+    const tools = expanded.items.filter((it) => it.kind === 'tool');
+    expect(tools.map((it) => it.key)).toEqual(['call-1']);
   });
 });
 
@@ -1584,12 +1694,12 @@ describe('stream item React keys', () => {
     ],
   });
 
-  it('formats history message keys as prefix-kind-id-index and tool keys as prefix-tool-id-size', () => {
+  it('formats history message keys as prefix-kind-id-index and tool keys as block id', () => {
     const result = buildHistoryStreamItems({ ...opts, sessionChains: [mixedChain] });
     expect(bodyItems(result.items).map((it) => it.key)).toEqual([
       'c0-user-u1-0',
       'c0-thought-th1-1',
-      'c0-tool-tc-1-1',
+      'tc-1',
       'c0-asst-a1-4',
     ]);
   });
@@ -1607,7 +1717,7 @@ describe('stream item React keys', () => {
     expect(second.items.map((it) => it.key)).toEqual([
       'c0-user-u1-0',
       'c0-thought-th1-1',
-      'c0-tool-tc-1-1',
+      'tc-1',
       'c0-asst-a1-4',
       'footer-chain-c1',
     ]);
@@ -1627,7 +1737,7 @@ describe('stream item React keys', () => {
     expect(soloKeys).toEqual([
       'c0-user-u1-0',
       'c0-thought-th1-1',
-      'c0-tool-tc-1-1',
+      'tc-1',
       'c0-asst-a1-4',
     ]);
     expect(bodyItems(withSecond.items).map((it) => it.key).slice(0, soloKeys.length))
