@@ -41,6 +41,8 @@ export interface GeneralTabProps {
    * Default 100.
    */
   maxToolSteps: number;
+  /** Raw provider request/response debug capture (issue 146). */
+  debugCaptureRequests: boolean;
   /** When true, compact tool-activity groups start expanded. */
   alwaysExpandToolGroups: boolean;
   commandMaxOutputBytes: number;
@@ -86,6 +88,7 @@ export function GeneralTab({
   llmStreamRetries,
   backgroundCommandIdleTimeout,
   maxToolSteps,
+  debugCaptureRequests,
   alwaysExpandToolGroups,
   commandMaxOutputBytes,
   toolOutputInlineThreshold,
@@ -562,6 +565,21 @@ export function GeneralTab({
               className="w-full"
               min={1}
               max={256}
+            />
+          </FormField>
+          <FormField
+            label="Capture raw provider requests and responses"
+            htmlFor="general-debug-capture"
+            hint="Save the exact request sent and response received for every LLM call in every session (main agent, subagents, compactors, title namer, evaluators) and inspect them in the Requests inspector section. Increases disk usage — leave off unless debugging."
+            className="config-field config-form-grid-full"
+          >
+            <Checkbox
+              id="general-debug-capture"
+              size="sm"
+              checked={debugCaptureRequests}
+              onChange={(e) =>
+                onChange({ debug_capture_requests: e.target.checked })
+              }
             />
           </FormField>
         </div>

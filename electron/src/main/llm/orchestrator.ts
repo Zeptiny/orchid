@@ -350,7 +350,12 @@ export async function* streamChat(params: StreamChatParams): AsyncGenerator<Stre
       model: wrappedModel,
       system: placed.system,
       messages: placed.messages,
-      include: { requestMessages: true },
+      include: {
+        requestMessages: true,
+        // Raw provider chunks for the per-session debug capture (issue 146);
+        // drivers emit `{ type: 'raw' }` parts only when requested.
+        ...(accounting?.debugCapture ? { rawChunks: true } : {}),
+      },
       tools: placed.tools as Record<string, Tool> | undefined,
       stopWhen,
       abortSignal: attempt.signal,

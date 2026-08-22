@@ -139,6 +139,7 @@ export function createLlmSelectiveCaller(params: {
       store, sessionId: accounting.sessionId, chainId: accounting.chainId, turnId: accounting.turnId,
       snapshot: execution.snapshot, agentScope, agentName: agent.name, agentType: agent.type, agentTier: agent.tier,
       pricingFacet: execution.pricingFacet, tierMechanism: execution.tierMechanism, attemptIdHolder: attemptHolder,
+      debugCapture: config.debug_capture_requests,
     };
     const { streamText, wrapLanguageModel } = await importESM<typeof import('ai')>('ai');
     const model = wrapLanguageModel({ model: execution.modelInstance, middleware: createMiddlewareStack({ retry: { maxRetries: config.llm_stream_retries }, accounting: ctx }) });
@@ -148,7 +149,11 @@ export function createLlmSelectiveCaller(params: {
     const userPrompt = buildSelectiveUserPrompt({ manifest, messages, bridgeContext, previousErrors });
     // Streamed so onTextDelta can surface the raw ops text as it arrives;
     // draining textStream reproduces generateText's semantics.
-    const stream = streamText({ model, instructions: agent.system_prompt, messages: [{ role: 'user', content: userPrompt }], abortSignal: combinedSignal, maxRetries: 0 });
+    const stream = streamText({
+      model, instructions: agent.system_prompt, messages: [{ role: 'user', content: userPrompt }],
+      abortSignal: combinedSignal, maxRetries: 0,
+      include: ctx.debugCapture === true ? { rawChunks: true } : undefined,
+    });
     let text = '';
     for await (const delta of stream.textStream) {
       text += delta;

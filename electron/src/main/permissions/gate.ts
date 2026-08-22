@@ -17,6 +17,11 @@ import {
 import { getRecentToolCallHistory } from './history';
 import { getProviderRuntime } from '../providers';
 import { createMiddlewareStack } from '../llm/middleware';
+import type { ProviderAttemptAccountingContext } from '../providers/accounting/middleware';
+import {
+  getProviderAccountingStore,
+  initializeProviderAccountingStore,
+} from '../providers/accounting/store';
 import { getTierModelSelection } from '../config/loader';
 import { importESM } from '../utils/esm-import';
 import { AgentType } from '../../shared/types/agent';
@@ -99,11 +104,43 @@ async function runEvaluator(
     if (abortSignal?.aborted) {
       return { decision: 'cancelled', reason: 'parent turn cancelled' };
     }
+    // The evaluator is an attributable provider request: give it a durable
+    // ledger row (usage/cost analytics + the issue-146 debug capture). If the
+    // ledger is unavailable, fail open to an unattributed evaluator call —
+    // parity with pre-accounting behavior.
+    let accountingStore: ReturnType<typeof getProviderAccountingStore> | undefined;
+    try {
+      accountingStore = getProviderAccountingStore();
+    } catch {
+      try {
+        accountingStore = initializeProviderAccountingStore();
+      } catch {
+        accountingStore = undefined;
+      }
+    }
+    const accounting: ProviderAttemptAccountingContext | undefined = accountingStore && sessionId
+      ? {
+          store: accountingStore,
+          sessionId,
+          chainId: null,
+          turnId: null,
+          snapshot: execution.snapshot,
+          agentScope: agentScopeId ?? null,
+          agentName: evaluatorAgent.name,
+          agentType: evaluatorAgent.type,
+          agentTier: evaluatorAgent.tier,
+          attemptIdHolder: { value: null },
+          pricingFacet: execution.pricingFacet,
+          tierMechanism: execution.tierMechanism,
+          debugCapture: config.debug_capture_requests,
+        }
+      : undefined;
     const { generateText, wrapLanguageModel } = await importESM<typeof import('ai')>('ai');
     const model = wrapLanguageModel({
       model: execution.modelInstance,
       middleware: createMiddlewareStack({
         retry: { maxRetries: config.llm_stream_retries },
+        ...(accounting ? { accounting } : {}),
       }),
     });
 

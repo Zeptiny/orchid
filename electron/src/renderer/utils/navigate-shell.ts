@@ -26,6 +26,7 @@ export const NAV_SECTION_MAP: Readonly<Record<string, string>> = {
   'index-status': 'inspector-index',
   context: 'inspector-context',
   usage: 'inspector-usage',
+  requests: 'inspector-requests',
 };
 
 export function resolveInspectorSectionId(focusSection: string): string {

@@ -1,7 +1,7 @@
 import type { SqliteDatabase } from '../../utils/sqlite';
 
 /** SQLite schema version for append-only provider attempt records. */
-export const ACCOUNTING_SCHEMA_VERSION = 6;
+export const ACCOUNTING_SCHEMA_VERSION = 7;
 
 export const ACCOUNTING_SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS schema_meta (
@@ -129,6 +129,26 @@ CREATE TABLE IF NOT EXISTS session_names (
   name TEXT NOT NULL,
   deleted_at TEXT NOT NULL
 );
+
+-- Raw request/response captures (issue 146). Written only when the
+-- debug_capture_requests config gate is enabled; one row per provider
+-- attempt (see accounting middleware). The request half is written before
+-- network I/O; the response half is finalized when the attempt settles.
+-- Payloads may be truncated to the per-field byte cap — see capture-store.
+CREATE TABLE IF NOT EXISTS provider_attempt_captures (
+  attempt_id TEXT PRIMARY KEY,
+  session_id TEXT NOT NULL,
+  request_json TEXT NOT NULL,
+  request_bytes INTEGER NOT NULL,
+  response_json TEXT,
+  response_bytes INTEGER,
+  raw_chunks_json TEXT,
+  raw_available INTEGER NOT NULL DEFAULT 0,
+  truncated INTEGER NOT NULL DEFAULT 0,
+  captured_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_provider_attempt_captures_session ON provider_attempt_captures(session_id, captured_at);
 `;
 
 /**

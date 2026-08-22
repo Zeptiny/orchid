@@ -130,6 +130,14 @@ import type {
   AnalyticsTimeRange,
 } from '../shared/types/analytics';
 import {
+  debugSessionRequestsResultSchema,
+  debugRequestCaptureResultSchema,
+} from '../shared/types/debug';
+import type {
+  DebugSessionRequestsResult,
+  DebugRequestCaptureResult,
+} from '../shared/types/debug';
+import {
   chatChunkEventSchema,
   chatThinkingEventSchema,
   chatStateEventSchema,
@@ -221,6 +229,8 @@ const INVOKE_RESULT_SCHEMAS: Partial<Record<string, z.ZodTypeAny>> = {
   [IPC_CHANNELS.PROJECT_TRUST_GET]: projectTrustInfoSchema,
   [IPC_CHANNELS.PROJECT_TRUST_SET]: projectTrustInfoSchema,
   [IPC_CHANNELS.PROJECT_TRUST_LIST]: z.array(trustedProjectEntrySchema),
+  [IPC_CHANNELS.DEBUG_SESSION_REQUESTS]: debugSessionRequestsResultSchema,
+  [IPC_CHANNELS.DEBUG_REQUEST_CAPTURE]: debugRequestCaptureResultSchema,
 };
 
 async function invoke<T>(channel: string, ...args: unknown[]): Promise<T> {
@@ -756,6 +766,14 @@ const orchidAPI: OrchidAPI = {
 
     contextSessions: (params?: { readonly timeRange?: AnalyticsTimeRange }) =>
       invoke<ContextSessionsResult>(IPC_CHANNELS.ANALYTICS_CONTEXT_SESSIONS, params),
+  },
+
+  debug: {
+    sessionRequests: (params: { readonly sessionId: string; readonly limit?: number }) =>
+      invoke<DebugSessionRequestsResult>(IPC_CHANNELS.DEBUG_SESSION_REQUESTS, params),
+
+    requestCapture: (params: { readonly attemptId: string }) =>
+      invoke<DebugRequestCaptureResult>(IPC_CHANNELS.DEBUG_REQUEST_CAPTURE, params),
   },
 };
 

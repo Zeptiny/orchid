@@ -152,6 +152,7 @@ const TAB_SECTIONS: Partial<Record<ProjectTab, ProjectConfigSection[]>> = {
         { key: 'llm_retry_backoff_base', label: 'Retry Backoff Base (s)', kind: 'number', min: 0.01, step: 0.01 },
         { key: 'llm_retry_max_delay', label: 'Retry Max Delay (s)', kind: 'number', min: 1 },
         { key: 'max_tool_steps', label: 'Max Tool Steps', kind: 'integer', min: 1, max: 1000 },
+        { key: 'debug_capture_requests', label: 'Capture Raw Provider Requests', kind: 'boolean', hint: 'Save the exact request/response for every LLM call in this project (Requests inspector section). Increases disk usage.' },
         { key: 'background_command_idle_timeout', label: 'BG Command Idle Timeout (s)', kind: 'number', min: 30, max: 3600 },
       ],
     },

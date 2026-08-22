@@ -251,6 +251,15 @@ export const configSchema = z
       .default({}),
     llm_stream_idle_timeout: z.number().positive().default(300.0),
     llm_stream_retries: z.number().int().nonnegative().default(3),
+    /**
+     * Raw request/response debug capture (issue 146). When true, every
+     * provider attempt from any agent origin (main, subagent, compactor,
+     * title namer, permission evaluator, web-fetch summarizer) persists the
+     * exact request sent and response received, viewable per session in the
+     * Requests inspector section. Off by default: captures duplicate full
+     * conversation payloads per attempt and grow accounting.db quickly.
+     */
+    debug_capture_requests: z.boolean().default(false),
     background_command_idle_timeout: z.number().positive().default(900.0),
     /**
      * Max seconds to wait after a turn starts before auto-naming a

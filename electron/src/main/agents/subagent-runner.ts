@@ -245,6 +245,7 @@ export function createSubagentStreamRunner(): SubagentStreamRunner {
      attemptIdHolder: { value: null },
       pricingFacet,
       tierMechanism,
+      debugCapture: config.debug_capture_requests,
     };
     try {
       getSubagentAttributionStore().insert({

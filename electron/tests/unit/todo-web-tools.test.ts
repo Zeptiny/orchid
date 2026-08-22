@@ -303,6 +303,53 @@ describe('Todo Tools', () => {
       expect(store.get(ids[1])!.status).toBe(TodoStatus.OPEN);
       expect(notifyCount).toBe(0);
     });
+
+    // -- stringified batch inputs (#171) ---------------------------------------
+
+    it('todo_create expands a JSON-encoded title array string into a batch', async () => {
+      const { definition, handler } = buildCreateTool(store);
+      const parsed = definition.inputSchema.parse({
+        title: JSON.stringify(['First', 'Second', 'Third']),
+      });
+      expect(parsed.title).toEqual(['First', 'Second', 'Third']);
+
+      const result = (await callTool(handler, parsed)) as ToolExecutionResult;
+      expect(result.canonical.status).toBe('complete');
+      expect(result.agentProjection.content).toContain('count="3"');
+      expect(store.list().map((t) => t.title).sort()).toEqual(['First', 'Second', 'Third']);
+    });
+
+    it('todo_create leaves non-batch bracketed strings as single titles', () => {
+      const { definition } = buildCreateToolRaw(store);
+      for (const title of ['[not json', '[1, 2]', '["a", 2]']) {
+        expect(definition.inputSchema.parse({ title }).title).toBe(title);
+      }
+    });
+
+    it('todo_create rejects an empty JSON-encoded title array string at schema boundary', () => {
+      const { definition } = buildCreateToolRaw(store);
+      expect(definition.inputSchema.safeParse({ title: '[]' }).success).toBe(false);
+    });
+
+    it('todo_update expands JSON-encoded id/title/status array strings', async () => {
+      const ids = await createTwoTasks();
+      const { definition, handler } = buildUpdateTool(store);
+      const parsed = definition.inputSchema.parse({
+        id: JSON.stringify(ids),
+        title: JSON.stringify(['A2', 'B2']),
+        status: JSON.stringify(['in_progress', 'done']),
+      });
+      expect(parsed.id).toEqual(ids);
+      expect(parsed.title).toEqual(['A2', 'B2']);
+      expect(parsed.status).toEqual([TodoStatus.IN_PROGRESS, TodoStatus.DONE]);
+
+      const result = (await callTool(handler, parsed)) as ToolExecutionResult;
+      expect(result.canonical.status).toBe('complete');
+      expect(store.get(ids[0])!.title).toBe('A2');
+      expect(store.get(ids[0])!.status).toBe(TodoStatus.IN_PROGRESS);
+      expect(store.get(ids[1])!.title).toBe('B2');
+      expect(store.get(ids[1])!.status).toBe(TodoStatus.DONE);
+    });
   });
 
   // -- todo_update ------------------------------------------------------------

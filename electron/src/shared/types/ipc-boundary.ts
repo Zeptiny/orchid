@@ -231,6 +231,8 @@ export interface Config {
   mcp_servers: Record<string, Record<string, unknown>>;
   llm_stream_idle_timeout: number;
   llm_stream_retries: number;
+  /** Raw provider request/response debug capture gate (issue 146). */
+  debug_capture_requests: boolean;
   background_command_idle_timeout: number;
   /**
    * Max seconds after a turn starts before a still-default-named session is

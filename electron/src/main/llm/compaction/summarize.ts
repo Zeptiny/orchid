@@ -426,6 +426,7 @@ export async function summarizeCompactableRange(input: SummarizeInput): Promise<
     pricingFacet: execution.pricingFacet,
     tierMechanism: execution.tierMechanism,
     attemptIdHolder,
+    debugCapture: config.debug_capture_requests,
   };
 
   // 6. Build model with retry + accounting middleware (accounting sits inside retry, per middleware/index.ts)
@@ -482,6 +483,9 @@ export async function summarizeCompactableRange(input: SummarizeInput): Promise<
       instructions: agent.system_prompt,
       messages: [{ role: 'user', content: userPrompt }],
       abortSignal: combinedSignal,
+      include: accountingContext.debugCapture === true
+        ? { rawChunks: true }
+        : undefined,
       // Orchid's accounting-aware retry middleware owns retries.
       maxRetries: 0,
     });
