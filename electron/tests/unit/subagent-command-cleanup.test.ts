@@ -26,6 +26,11 @@ import {
 import { SubagentManager, SubagentState } from '../../src/main/agents/manager';
 import type { Agent } from '../../src/shared/types/agent';
 import type { StreamEvent } from '../../src/main/llm/orchestrator';
+import { defaults } from '../../src/main/config';
+import {
+  disposeIndexRefreshCoordinator,
+  _setIndexRefreshCoordinatorForTests,
+} from '../../src/main/indexing/refresh-coordinator';
 
 const testAgent: Agent = {
   name: 'explorer',
@@ -52,6 +57,23 @@ async function waitForExit(
   }
   return store.get(procId)?.exitCode ?? null;
 }
+
+// Background spawns in this suite exit (naturally or via the scope sweeps)
+// and the store's exit path marks process.cwd() dirty in the index-refresh
+// coordinator. Pin the debounce high and dispose the state after each test
+// so no real flush can ever fire.
+beforeEach(() => {
+  _setIndexRefreshCoordinatorForTests({
+    configLoader: () => ({
+      ...defaults(),
+      index_refresh: { ...defaults().index_refresh, debounce_ms: 60_000 },
+    }),
+  });
+});
+
+afterEach(() => {
+  disposeIndexRefreshCoordinator();
+});
 
 // ---------------------------------------------------------------------------
 // Store-level scope sweep

@@ -9,6 +9,8 @@
  * - rename_symbol / replace_symbol results enqueue an upsert per mutated file
  * - Error and cancelled outcomes enqueue nothing
  * - Completed execute_command marks the project dirty; a read-only tool does not
+ * - A background execute_command spawn does NOT mark dirty (the store marks
+ *   at process exit instead — see background-store-index-refresh.test.ts)
  * - A path escaping the workspace is dropped
  * - A coordinator throw leaves the tool result byte-identical
  */
@@ -535,6 +537,38 @@ describe('executeToolCall index refresh notification', () => {
       entries: [],
       dirty: true,
       timerArmed: true,
+      flushing: false,
+    });
+  });
+
+  it('does not mark the project dirty when execute_command spawns a background process', async () => {
+    // Mirrors the real background spawn facts: the outcome is complete while
+    // the process is still running, so dispatch must defer the dirty mark to
+    // the background store's process-exit path.
+    registerFakeTool(
+      {
+        name: 'execute_command',
+        resultFamily: 'generic',
+        outputDataSchema: genericToolResultDataSchema,
+        riskClass: 'execution',
+      },
+      () => genericOutcome({
+        commandId: 7,
+        command: 'npm run watch',
+        description: 'npm run watch',
+        background: true,
+        running: true,
+        createdAt: 1_700_000_000_000,
+      }, 'execute_command'),
+    );
+
+    const result = await dispatch('execute_command', 'background-command-call');
+
+    expect(result.canonical.status).toBe('complete');
+    expect(_getPendingIndexRefreshForTests(cwd)).toEqual({
+      entries: [],
+      dirty: false,
+      timerArmed: false,
       flushing: false,
     });
   });

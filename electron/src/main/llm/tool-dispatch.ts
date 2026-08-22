@@ -960,10 +960,12 @@ function maybeEnforceAgentsMdOnWrite(
  * successful canonical result and feeds the fire-and-forget refresh
  * coordinator: file-write/file-change/apply-patch outcomes enqueue targeted
  * mutations, and a completed execute_command marks the project dirty
- * (commands do not report which files they touched). Failed or cancelled
- * outcomes never notify — nothing landed (same rule as AGENTS.md Phase B F8).
- * Any failure logs and degrades to a no-op so the tool result stays
- * byte-identical (R2).
+ * (commands do not report which files they touched) — except background
+ * spawns, which "complete" at spawn time while the process keeps running;
+ * those are marked dirty by the background store when the process exits.
+ * Failed or cancelled outcomes never notify — nothing landed (same rule as
+ * AGENTS.md Phase B F8). Any failure logs and degrades to a no-op so the
+ * tool result stays byte-identical (R2).
  */
 function maybeNotifyIndexRefresh(
   execution: ToolExecutionResult,
@@ -982,7 +984,7 @@ function maybeNotifyIndexRefresh(
     if (mutations.length > 0) {
       enqueueMutation(options.cwd, mutations);
     }
-    if (name === 'execute_command') {
+    if (name === 'execute_command' && !isBackgroundSpawnOutcome(execution.canonical.data)) {
       markDirty(options.cwd);
     }
   } catch (error) {
@@ -991,6 +993,23 @@ function maybeNotifyIndexRefresh(
       exceptionClass: error instanceof Error ? error.constructor.name : 'Unknown',
     });
   }
+}
+
+/**
+ * Detect a background execute_command spawn from its canonical result. The
+ * spawn path returns immediately with generic-family spawn facts whose
+ * `value` carries `background: true` (plus `running: true`), while a
+ * foreground completion reports `{ stdout, stderr, exitCode, truncated }`.
+ * A background spawn must not mark the project dirty here: the command's
+ * own writes are still landing, so an immediate dirty mark would race them
+ * with the debounced hash-diff scan. The background store marks the owning
+ * workspace dirty when the process actually exits.
+ */
+function isBackgroundSpawnOutcome(canonicalData: unknown): boolean {
+  if (canonicalData == null || typeof canonicalData !== 'object') return false;
+  const value = (canonicalData as { value?: unknown }).value;
+  if (value == null || typeof value !== 'object') return false;
+  return (value as { background?: unknown }).background === true;
 }
 
 // ---------------------------------------------------------------------------

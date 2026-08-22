@@ -12,6 +12,7 @@ import * as path from 'node:path';
 import { sleep } from '../../utils/async';
 import { HeadTailBuffer } from './head-tail-buffer';
 import { getConfig } from '../../config/loader';
+import { markDirty } from '../../indexing/refresh-coordinator';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -64,6 +65,8 @@ export interface ProcessEntry {
   sessionId: string | null;
   agentScopeId: string;
   description: string;
+  /** Resolved absolute workspace cwd — the index-refresh target at exit. */
+  cwd: string;
 }
 
 type BackgroundProcessChangeListener = (sessionId: string | null) => void;
@@ -77,6 +80,21 @@ function emitBackgroundProcessChange(sessionId: string | null): void {
     } catch (err) {
       console.debug('Background-process change listener failed (non-fatal):', err);
     }
+  }
+}
+
+/**
+ * Mark the owning workspace dirty when a background process exits. A
+ * background execute_command "completes" at spawn time — tool dispatch
+ * deliberately skips its dirty mark for background spawns — so process exit
+ * is the first point where the command's writes can no longer race the
+ * debounced hash-diff scan. Fire-and-forget: never throws into the exit path.
+ */
+function notifyBackgroundExitIndexRefresh(projectPath: string): void {
+  try {
+    markDirty(projectPath);
+  } catch (err) {
+    console.debug('Background-process exit index refresh failed (non-fatal):', err);
   }
 }
 
@@ -128,6 +146,7 @@ export class BackgroundProcessStore {
     const procId = this._nextId++;
     const buf = new HeadTailBuffer();
     const now = Date.now();
+    const resolvedCwd = path.resolve(cwd);
 
     let proc: ChildProcess | IPty;
 
@@ -140,7 +159,7 @@ export class BackgroundProcessStore {
           name: 'xterm-256color',
           cols: 120,
           rows: 30,
-          cwd: path.resolve(cwd),
+          cwd: resolvedCwd,
           env,
         },
       );
@@ -155,6 +174,7 @@ export class BackgroundProcessStore {
         this._clearKillTimer(procId);
         dataDisposable.dispose();
         exitDisposable.dispose();
+        notifyBackgroundExitIndexRefresh(resolvedCwd);
         emitBackgroundProcessChange(sessionId);
       });
 
@@ -163,7 +183,7 @@ export class BackgroundProcessStore {
       const env = { ...process.env, ...ENV_SUPPRESSION };
       const childProc = spawn('/bin/sh', ['-c', command], {
         stdio: ['ignore', 'pipe', 'pipe'],
-        cwd: path.resolve(cwd),
+        cwd: resolvedCwd,
         detached: true, // creates a new process group
         env,
       });
@@ -185,9 +205,13 @@ export class BackgroundProcessStore {
       childProc.on('exit', (code) => {
         entry.exitCode = code ?? -1;
         this._clearKillTimer(procId);
+        notifyBackgroundExitIndexRefresh(resolvedCwd);
         emitBackgroundProcessChange(sessionId);
       });
       childProc.on('error', () => {
+        // Spawn/kill failure — the command never ran to completion, so there
+        // is no exit mark (the index-refresh rule is "mark where writes can
+        // have landed"; a failed spawn wrote nothing).
         if (entry.exitCode === null) {
           entry.exitCode = -1;
           this._clearKillTimer(procId);
@@ -212,6 +236,7 @@ export class BackgroundProcessStore {
       sessionId,
       agentScopeId,
       description,
+      cwd: resolvedCwd,
     };
     this._entries.set(procId, entry);
     emitBackgroundProcessChange(sessionId);
