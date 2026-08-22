@@ -55,16 +55,8 @@ const applyPatchAgentProjector: AgentProjector = (canonical, toolName = 'apply_p
   const parsed = applyPatchResultDataSchema.parse(canonical.data);
   const { files, added, modified, deleted, failed } = parsed;
 
-  const summaryParts: string[] = [];
-  if (added > 0) summaryParts.push(`${added} added`);
-  if (modified > 0) summaryParts.push(`${modified} modified`);
-  if (deleted > 0) summaryParts.push(`${deleted} deleted`);
-  if (failed > 0) summaryParts.push(`${failed} failed`);
-  // F11: count unique file paths so multi-operation patches on the same file
-  // don't inflate the file count in the summary.
-  const uniquePaths = new Set(files.map((f) => f.path));
-  const summary = `${uniquePaths.size} file${uniquePaths.size === 1 ? '' : 's'}: ${summaryParts.join(', ')}`;
-
+  // No summary line: the envelope attributes (files/added/modified/deleted/
+  // failed) already carry the counts; a prose summary would restate them.
   const fileSections = files.map((file) => {
     const attrs: Record<string, string | number | undefined> = {
       path: file.path,
@@ -85,7 +77,7 @@ const applyPatchAgentProjector: AgentProjector = (canonical, toolName = 'apply_p
     return `<file${attrString} />`;
   });
 
-  const body = [summary, ...fileSections].join('\n');
+  const body = fileSections.join('\n');
 
   return projectionWithCanonicalCompleteness(
     canonical,
