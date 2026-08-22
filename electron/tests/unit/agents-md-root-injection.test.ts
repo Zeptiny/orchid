@@ -23,6 +23,7 @@ import {
   findRootAgentsMdEntry,
 } from '../../src/main/project/agents-md';
 import type { ProjectRuntime } from '../../src/main/project/runtime';
+import { EMPTY_SHARED_PROMPTS } from '../../src/main/prompts/registry';
 
 const BASE_PROMPT = 'You are a helpful assistant.';
 
@@ -39,6 +40,7 @@ function makeRuntime(projectDir: string, config: Config): ProjectRuntime {
     agents: new Map(),
     skills: new Map(),
     personalities: new Map(),
+    sharedPrompts: EMPTY_SHARED_PROMPTS,
   };
 }
 

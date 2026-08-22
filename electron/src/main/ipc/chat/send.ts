@@ -19,6 +19,7 @@ import { agentMachine, type AgentContext } from '../../agents/xstate/agent-machi
 import { interruptMachine } from '../../agents/xstate/interrupt-machine';
 import { appendRootAgentsMd, findRootAgentsMdEntry } from '../../project/agents-md';
 import { appendProjectPersonality } from '../../project/personality';
+import { appendSharedRules } from '../../project/shared-prompts';
 import { getProviderRuntime } from '../../providers';
 import { getProviderAccountingStore } from '../../providers/accounting/store';
 import type { ProviderAttemptAccountingContext } from '../../providers/accounting/middleware';
@@ -320,7 +321,8 @@ export async function startChatTurn(
     const turnRegistry = getBuiltinToolRegistryForRuntime(runtime, {
       agents: new Map(runtime.agents), skills: new Map(runtime.skills), mcpManager,
     });
-    const personalityPrompt = appendProjectPersonality(baseSystemPrompt, runtime);
+    const sharedRulesPrompt = appendSharedRules(baseSystemPrompt, runtime);
+    const personalityPrompt = appendProjectPersonality(sharedRulesPrompt, runtime);
     let fullSystemPrompt = personalityPrompt;
     try {
       fullSystemPrompt = appendRootAgentsMd(personalityPrompt, runtime);
