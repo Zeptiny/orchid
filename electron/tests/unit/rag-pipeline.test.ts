@@ -11,7 +11,7 @@
  * Tests use mocks for onnxruntime-node and better-sqlite3 when native
  * modules aren't available, and real implementations when they are.
  */
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi, type Mock } from 'vitest';
 import * as crypto from 'node:crypto';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
@@ -190,6 +190,42 @@ vi.mock('onnxruntime-node', () => {
         data,
         dims,
       }),
+    ),
+  };
+});
+
+// ---------------------------------------------------------------------------
+// Mock createEmbedderFromConfig only — the rest of the embedder module stays
+// real so the download tests below keep exercising it. No-embedder index runs
+// (the production worker-dispatch path) get a deterministic in-process
+// embedder, and tests can assert lazy-creation behavior on the mock.
+// ---------------------------------------------------------------------------
+
+const ragEmbedderMock = vi.hoisted(() => {
+  const state = { embeddedTexts: [] as string[] };
+  const embedForText = (text: string): Float32Array => {
+    if (text.includes('alpha')) return Float32Array.from([1, 0, 0]);
+    if (text.includes('beta')) return Float32Array.from([0, 1, 0]);
+    return Float32Array.from([0, 0, 1]);
+  };
+  const embedder = {
+    embed: async (texts: string[]) => {
+      state.embeddedTexts.push(...texts);
+      return texts.map((t) => embedForText(t));
+    },
+    embedSingle: async (text: string) => embedForText(text),
+    warmedUp: true,
+    modelName: 'test',
+  };
+  return { state, embedder, embedForText };
+});
+
+vi.mock('../../src/main/rag/embedder', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../src/main/rag/embedder')>();
+  return {
+    ...actual,
+    createEmbedderFromConfig: vi.fn(
+      async () => ragEmbedderMock.embedder as import('../../src/main/rag/embedder').IEmbedder,
     ),
   };
 });
@@ -1369,6 +1405,333 @@ describe('Incremental Update API', () => {
     const firstResult = await first;
     expect(firstResult.filesIndexed).toBe(1);
     expect(firstResult.errors).toHaveLength(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Worker op protocol — incremental upsert/delete run in the index worker
+// ---------------------------------------------------------------------------
+
+describe('RAG Worker Op Protocol', () => {
+  let indexProject: typeof import('../../src/main/rag/indexer').indexProject;
+  let upsertFiles: typeof import('../../src/main/rag/indexer').upsertFiles;
+  let deleteFiles: typeof import('../../src/main/rag/indexer').deleteFiles;
+  let RAGStore: typeof import('../../src/main/rag/store').RAGStore;
+
+  function embedForText(text: string): Float32Array {
+    if (text.includes('alpha')) return Float32Array.from([1, 0, 0]);
+    if (text.includes('beta')) return Float32Array.from([0, 1, 0]);
+    return Float32Array.from([0, 0, 1]);
+  }
+
+  const contentEmbedder = {
+    embed: async (texts: string[]) => texts.map(embedForText),
+    embedSingle: async (text: string) => embedForText(text),
+    warmedUp: true,
+    modelName: 'test',
+  };
+
+  const embedder = contentEmbedder as unknown as import('../../src/main/rag/embedder').Embedder;
+
+  function writeFileIn(dir: string, rel: string, content: string): void {
+    const abs = path.join(dir, rel);
+    fs.mkdirSync(path.dirname(abs), { recursive: true });
+    fs.writeFileSync(abs, content, 'utf-8');
+  }
+
+  /**
+   * Minimal worker: records the workerData it was started with into the
+   * project dir and posts a valid result, so tests can assert exactly what
+   * the main thread puts on the worker wire.
+   */
+  function writeOpEchoWorker(): string {
+    const workerPath = path.join(tmpDir, 'op-echo-worker.cjs');
+    fs.writeFileSync(workerPath, [
+      "const { parentPort, workerData } = require('node:worker_threads');",
+      "const fs = require('node:fs');",
+      "const path = require('node:path');",
+      'fs.writeFileSync(',
+      "  path.join(workerData.projectPath, 'received-op.json'),",
+      '  JSON.stringify({',
+      '    op: workerData.op ?? null,',
+      '    rels: workerData.rels ?? null,',
+      '    paths: workerData.paths ?? null,',
+      '    hasConfig: workerData.config != null,',
+      '  }),',
+      ');',
+      'parentPort.postMessage({',
+      "  type: 'result',",
+      '  result: {',
+      '    filesScanned: 0, filesIndexed: 0, filesSkipped: 0,',
+      '    filesDeleted: 0, chunksCreated: 0, errors: [], durationSeconds: 0,',
+      '  },',
+      '});',
+      '',
+    ].join('\n'));
+    return workerPath;
+  }
+
+  function receivedOp(): {
+    op: string | null;
+    rels: string[] | null;
+    paths: string[] | null;
+    hasConfig: boolean;
+  } {
+    return JSON.parse(fs.readFileSync(path.join(tmpDir, 'received-op.json'), 'utf-8'));
+  }
+
+  beforeEach(async () => {
+    const indexerModule = await import('../../src/main/rag/indexer');
+    indexProject = indexerModule.indexProject;
+    upsertFiles = indexerModule.upsertFiles;
+    deleteFiles = indexerModule.deleteFiles;
+    const storeModule = await import('../../src/main/rag/store');
+    RAGStore = storeModule.RAGStore;
+  });
+
+  it('dispatches the upsert op with normalized absolute rels and config passthrough', async () => {
+    writeFile('src/a.ts', 'const alphaA = 1;');
+    writeFile('src/b.ts', 'const betaB = 2;');
+    const echo = writeOpEchoWorker();
+
+    const result = await upsertFiles({
+      projectPath: tmpDir,
+      // dedup + exclusion filter + sort all happen before the wire
+      rels: ['src/b.ts', 'src/a.ts', 'src/a.ts', 'src/excluded.me'],
+      workerPath: echo,
+    });
+    expect(result.errors).toEqual([]);
+
+    const received = receivedOp();
+    expect(received.op).toBe('upsert');
+    expect(received.rels).toEqual([
+      path.join(tmpDir, 'src/a.ts'),
+      path.join(tmpDir, 'src/b.ts'),
+    ]);
+    expect(received.paths).toBeNull();
+    expect(received.hasConfig).toBe(false);
+
+    // A frozen config rides along with the op untouched.
+    await upsertFiles({
+      projectPath: tmpDir,
+      rels: ['src/a.ts'],
+      workerPath: echo,
+      config: {
+        rag: { chunk_size: 2000, chunk_overlap: 200, max_file_size: 1000 },
+      } as unknown as Config,
+    });
+    const withConfig = receivedOp();
+    expect(withConfig.op).toBe('upsert');
+    expect(withConfig.rels).toEqual([path.join(tmpDir, 'src/a.ts')]);
+    expect(withConfig.hasConfig).toBe(true);
+  });
+
+  it('dispatches the delete op with deduped rels', async () => {
+    writeFile('src/a.ts', 'const alphaA = 1;');
+    const echo = writeOpEchoWorker();
+
+    await deleteFiles(tmpDir, ['src/a.ts', 'src/a.ts', 'src/b.ts'], { workerPath: echo });
+
+    const received = receivedOp();
+    expect(received.op).toBe('delete');
+    expect(received.rels).toEqual(['src/a.ts', 'src/b.ts']);
+    expect(received.paths).toBeNull();
+    expect(received.hasConfig).toBe(false);
+  });
+
+  it('a worker-dispatched upsert matches the inline escape store-for-store', async () => {
+    const dirWorker = makeTmpDir();
+    const dirInline = makeTmpDir();
+    try {
+      for (const dir of [dirWorker, dirInline]) {
+        writeFileIn(dir, 'src/a.ts', 'const alphaOriginal = 1;');
+        writeFileIn(dir, 'src/b.ts', 'const betaUntouched = 2;');
+        await indexProject(dir, undefined, undefined, embedder);
+        writeFileIn(dir, 'src/a.ts', 'const alphaUpdated = 1; // changed');
+      }
+
+      // Production shape (no embedder) vs the inline escape hatch.
+      const viaWorker = await upsertFiles({ projectPath: dirWorker, rels: ['src/a.ts'] });
+      const viaInline = await upsertFiles({ projectPath: dirInline, rels: ['src/a.ts'], embedder });
+
+      expect(viaWorker.errors).toEqual([]);
+      expect(viaInline.errors).toEqual([]);
+      expect(viaWorker.filesIndexed).toBe(1);
+      expect(viaInline.filesIndexed).toBe(1);
+
+      const storeWorker = new RAGStore(dirWorker);
+      const storeInline = new RAGStore(dirInline);
+      expect(storeWorker.status().totalFiles).toBe(storeInline.status().totalFiles);
+      expect(storeWorker.status().totalChunks).toBe(storeInline.status().totalChunks);
+      expect(storeWorker.getFileHashes().get('src/a.ts'))
+        .toBe(storeInline.getFileHashes().get('src/a.ts'));
+      expect(storeWorker.loadVectorState().consistent).toBe(true);
+      expect(storeInline.loadVectorState().consistent).toBe(true);
+      expect(storeWorker.search([1, 0, 0], 1)[0]!.content)
+        .toBe(storeInline.search([1, 0, 0], 1)[0]!.content);
+      expect(storeWorker.search([1, 0, 0], 1)[0]!.content).toContain('alphaUpdated');
+    } finally {
+      fs.rmSync(dirWorker, { recursive: true, force: true });
+      fs.rmSync(dirInline, { recursive: true, force: true });
+    }
+  });
+
+  it('a worker-dispatched delete matches the inline escape store-for-store', async () => {
+    const dirWorker = makeTmpDir();
+    const dirInline = makeTmpDir();
+    try {
+      for (const dir of [dirWorker, dirInline]) {
+        writeFileIn(dir, 'src/a.ts', 'const alphaGone = 1;');
+        writeFileIn(dir, 'src/b.ts', 'const betaKept = 2;');
+        await indexProject(dir, undefined, undefined, embedder);
+      }
+
+      await deleteFiles(dirWorker, ['src/a.ts']);
+      await deleteFiles(dirInline, ['src/a.ts'], { inline: true });
+
+      const storeWorker = new RAGStore(dirWorker);
+      const storeInline = new RAGStore(dirInline);
+      for (const store of [storeWorker, storeInline]) {
+        const hashes = store.getFileHashes();
+        expect(hashes.has('src/a.ts')).toBe(false);
+        expect(hashes.has('src/b.ts')).toBe(true);
+        expect(store.status().totalChunks).toBe(1);
+        expect(store.status().totalFiles).toBe(1);
+        expect(store.loadVectorState().consistent).toBe(true);
+        expect(store.loadVectorState().chunkIds).toHaveLength(1);
+        expect(store.search([0, 1, 0], 1)[0]!.filePath).toBe('src/b.ts');
+      }
+    } finally {
+      fs.rmSync(dirWorker, { recursive: true, force: true });
+      fs.rmSync(dirInline, { recursive: true, force: true });
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Lazy embedder creation (P2: an all-skipped scan pays no ONNX session init)
+// ---------------------------------------------------------------------------
+
+describe('Lazy Embedder Creation', () => {
+  let indexProject: typeof import('../../src/main/rag/indexer').indexProject;
+  let createEmbedderFromConfig: Mock;
+
+  function embedForText(text: string): Float32Array {
+    if (text.includes('alpha')) return Float32Array.from([1, 0, 0]);
+    if (text.includes('beta')) return Float32Array.from([0, 1, 0]);
+    return Float32Array.from([0, 0, 1]);
+  }
+
+  const contentEmbedder = {
+    embed: async (texts: string[]) => texts.map(embedForText),
+    embedSingle: async (text: string) => embedForText(text),
+    warmedUp: true,
+    modelName: 'test',
+  };
+
+  const embedder = contentEmbedder as unknown as import('../../src/main/rag/embedder').Embedder;
+
+  beforeEach(async () => {
+    const indexerModule = await import('../../src/main/rag/indexer');
+    indexProject = indexerModule.indexProject;
+    const embedderModule = await import('../../src/main/rag/embedder');
+    createEmbedderFromConfig = vi.mocked(embedderModule.createEmbedderFromConfig);
+    createEmbedderFromConfig.mockClear();
+    ragEmbedderMock.state.embeddedTexts.length = 0;
+  });
+
+  it('an all-skipped scan creates no embedder at all', async () => {
+    writeFile('src/a.ts', 'const alphaSame = 1;');
+
+    const first = await indexProject(tmpDir, undefined, undefined, embedder);
+    expect(first.filesIndexed).toBe(1);
+
+    // Production shape: no embedder supplied — the run still skips on hash
+    // and must never pay embedder (ONNX session) creation.
+    const second = await indexProject(tmpDir, undefined, undefined, undefined);
+
+    expect(second.errors).toEqual([]);
+    expect(second.filesSkipped).toBe(1);
+    expect(second.filesIndexed).toBe(0);
+    expect(createEmbedderFromConfig).not.toHaveBeenCalled();
+  });
+
+  it('creates the embedder exactly once for a run that needs embeddings', async () => {
+    writeFile('src/a.ts', 'const alphaOne = 1;');
+    writeFile('src/b.ts', 'const betaTwo = 2;');
+
+    const result = await indexProject(tmpDir, undefined, undefined, undefined);
+
+    expect(result.errors).toEqual([]);
+    expect(result.filesIndexed).toBe(2);
+    expect(createEmbedderFromConfig).toHaveBeenCalledTimes(1);
+    expect(ragEmbedderMock.state.embeddedTexts).toHaveLength(2);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// No-op scan flush (P2: nothing changed → no vectors.npy rewrite)
+// ---------------------------------------------------------------------------
+
+describe('No-op Scan Vector Flush', () => {
+  let indexProject: typeof import('../../src/main/rag/indexer').indexProject;
+  let RAGStore: typeof import('../../src/main/rag/store').RAGStore;
+
+  function embedForText(text: string): Float32Array {
+    if (text.includes('alpha')) return Float32Array.from([1, 0, 0]);
+    if (text.includes('beta')) return Float32Array.from([0, 1, 0]);
+    return Float32Array.from([0, 0, 1]);
+  }
+
+  const contentEmbedder = {
+    embed: async (texts: string[]) => texts.map(embedForText),
+    embedSingle: async (text: string) => embedForText(text),
+    warmedUp: true,
+    modelName: 'test',
+  };
+
+  const embedder = contentEmbedder as unknown as import('../../src/main/rag/embedder').Embedder;
+
+  beforeEach(async () => {
+    const indexerModule = await import('../../src/main/rag/indexer');
+    indexProject = indexerModule.indexProject;
+    const storeModule = await import('../../src/main/rag/store');
+    RAGStore = storeModule.RAGStore;
+  });
+
+  it('skips flushVectorState and recordIndexDuration when nothing changed', async () => {
+    writeFile('src/a.ts', 'const alphaSame = 1;');
+    writeFile('src/b.ts', 'const betaSame = 2;');
+
+    await indexProject(tmpDir, undefined, undefined, embedder);
+
+    const vectorsFile = new RAGStore(tmpDir).vectorsFile;
+    const vectorsMtime = fs.statSync(vectorsFile).mtimeMs;
+    const flushSpy = vi.spyOn(RAGStore.prototype, 'flushVectorState');
+    const durationSpy = vi.spyOn(RAGStore.prototype, 'recordIndexDuration');
+    try {
+      const result = await indexProject(tmpDir, undefined, undefined, embedder);
+
+      expect(result.errors).toEqual([]);
+      expect(result.filesSkipped).toBe(2);
+      expect(result.filesIndexed).toBe(0);
+      // No store mutation → no full vectors.npy rewrite, no duration churn.
+      expect(flushSpy).not.toHaveBeenCalled();
+      expect(durationSpy).not.toHaveBeenCalled();
+      expect(fs.statSync(vectorsFile).mtimeMs).toBe(vectorsMtime);
+      expect(new RAGStore(tmpDir).loadVectorState().consistent).toBe(true);
+
+      // Positive control: a real change still flushes exactly once.
+      writeFile('src/a.ts', 'const alphaChanged = 1;');
+      const changed = await indexProject(tmpDir, undefined, undefined, embedder);
+      expect(changed.filesIndexed).toBe(1);
+      expect(flushSpy).toHaveBeenCalledTimes(1);
+      expect(durationSpy).toHaveBeenCalledTimes(1);
+      expect(new RAGStore(tmpDir).loadVectorState().consistent).toBe(true);
+    } finally {
+      flushSpy.mockRestore();
+      durationSpy.mockRestore();
+    }
   });
 });
 
