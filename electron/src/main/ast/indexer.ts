@@ -562,14 +562,30 @@ export function buildAstWorkerStartData(
   return { projectPath: args.projectPath, force: args.force === true };
 }
 
+/** Live AST worker idle-watchdog timers (test observability for leak checks). */
+const armedAstWorkerWatchdogs = new Set<ReturnType<typeof setTimeout>>();
+
+/**
+ * @internal Test-only: number of AST worker idle-watchdog timers currently
+ * armed. Every settled (resolved, rejected, or watchdog-fired) worker run
+ * must leave this at zero.
+ */
+export function getAstWorkerWatchdogArmedCountForTests(): number {
+  return armedAstWorkerWatchdogs.size;
+}
+
 /**
  * Spawn the AST index worker for one op and settle its result.
  *
- * Mirrors the `indexProject` worker path's promise handling (no watchdog):
- * progress messages forward to `progressCallback`, `takeResult` maps the
+ * Progress messages forward to `progressCallback`, `takeResult` maps the
  * op-specific result message to the resolved value, and worker error /
- * early exit reject. Falls back to `inlineFallback` when the compiled
- * worker file is missing or fails to start.
+ * early exit reject. An idle watchdog (same discipline as the RAG worker
+ * path) rejects and terminates a wedged worker that posts no messages for
+ * `background_command_idle_timeout` seconds (default 900s) — re-armed on
+ * every inbound message, cleared on every settle path — so the shared
+ * in-flight promise can never hang a project's pipeline forever. Falls back
+ * to `inlineFallback` when the compiled worker file is missing or fails to
+ * start.
  */
 async function runAstWorker<T>(
   startData: AstWorkerStartData,
@@ -599,17 +615,57 @@ async function runAstWorker<T>(
     return inlineFallback();
   }
 
+  // Only the upsert start data carries a config today; index/delete runs (and
+  // an upsert without one) default to 900s of allowed silence.
+  const workerIdleTimeoutMs = Math.max(
+    1,
+    (((startData as { config?: Partial<Config> }).config as Partial<Config> | undefined)
+      ?.background_command_idle_timeout ?? 900) * 1000,
+  );
+
   return new Promise<T>((resolve, reject) => {
     let settled = false;
+    let watchdog: ReturnType<typeof setTimeout> | undefined;
+
+    const disarmWatchdog = () => {
+      if (!watchdog) return;
+      clearTimeout(watchdog);
+      armedAstWorkerWatchdogs.delete(watchdog);
+      watchdog = undefined;
+    };
 
     const finish = (fn: () => void) => {
       if (settled) return;
       settled = true;
+      disarmWatchdog();
       fn();
     };
 
+    const armWatchdog = () => {
+      if (settled) return;
+      disarmWatchdog();
+      const timer = setTimeout(() => {
+        // The fired timer is no longer clearable; drop it from bookkeeping
+        // before finishing so settle paths see a consistent state.
+        armedAstWorkerWatchdogs.delete(timer);
+        watchdog = undefined;
+        finish(() => {
+          void worker.terminate();
+          reject(new Error(`AST index worker made no progress for ${workerIdleTimeoutMs}ms`));
+        });
+      }, workerIdleTimeoutMs);
+      watchdog = timer;
+      armedAstWorkerWatchdogs.add(timer);
+      if (typeof timer === 'object' && timer && 'unref' in timer) {
+        (timer as NodeJS.Timeout).unref();
+      }
+    };
+
+    armWatchdog();
+
     worker.on('message', (msg: AstWorkerOutbound) => {
       if (!msg || typeof msg !== 'object' || !('type' in msg)) return;
+      armWatchdog();
       if (msg.type === 'progress') {
         try {
           progressCallback?.(msg.progress);
