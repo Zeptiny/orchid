@@ -519,6 +519,7 @@ function renderStreamItem(
       key={item.key}
       message={item.message}
       isStreaming={item.isStreaming}
+      thinkingTiming={item.timing}
     />
   );
 }

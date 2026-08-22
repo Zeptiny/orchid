@@ -77,6 +77,7 @@ import {
   appendTextSegment,
   ensureToolSnapshot,
   textSegmentIdAtOffset,
+  thinkingDurationMsForRange,
   updateToolSnapshot,
 } from './snapshot';
 import { ensureActiveSessionSingleFlight } from './session';
@@ -438,9 +439,10 @@ export async function startChatTurn(
       const segment = fullThinking.slice(activeAgent.thinkingCommittedLength);
       const segmentId = textSegmentIdAtOffset(activeAgent, 'thinking', activeAgent.thinkingCommittedLength);
       const payload = context.thinkingPayloads?.[fullThinking.length];
+      const durationMs = thinkingDurationMsForRange(activeAgent, activeAgent.thinkingCommittedLength, fullThinking.length);
       activeAgent.thinkingCommittedLength = fullThinking.length;
       if (segment.trim()) {
-        activeAgent.turnMessages.push(makeThinkingMessage(segment, segmentId, payload));
+        activeAgent.turnMessages.push(makeThinkingMessage(segment, segmentId, payload, durationMs));
       }
     }
     const artifacts = context.thinkingArtifacts ?? [];

@@ -20,9 +20,15 @@ import {
   isGroupableTool,
 } from './tool-grouping';
 
+/** Measured timing for a live thought segment (wire-stamped anchors). */
+export interface ThoughtTiming {
+  readonly startedAt: string | null;
+  readonly endedAt: string | null;
+}
+
 export type ActivityChild =
   | { kind: 'tool'; block: ToolBlock }
-  | { kind: 'thought'; message: Message; isStreaming?: boolean };
+  | { kind: 'thought'; message: Message; isStreaming?: boolean; timing?: ThoughtTiming };
 
 /** Maximum fully-mounted chains; older ones collapse to stubs. */
 export const CHAIN_COLLAPSE_THRESHOLD = 20;
@@ -87,7 +93,7 @@ export function compactionProgressToWidgetItem(
 }
 
 export type StreamItem =
-  | { kind: 'message'; key: string; message: Message; isStreaming?: boolean }
+  | { kind: 'message'; key: string; message: Message; isStreaming?: boolean; timing?: ThoughtTiming }
   | { kind: 'tool'; key: string; block: ToolBlock }
   /** Explore activity: tools ± thoughts, title is tool-only summary. */
   | { kind: 'tool-group'; key: string; children: ActivityChild[] }
@@ -235,6 +241,7 @@ export function foldStreamActivityGroups(items: readonly StreamItem[]): StreamIt
             kind: 'thought',
             message: s.message,
             isStreaming: s.isStreaming,
+            timing: s.timing,
           });
         }
       }
@@ -954,12 +961,13 @@ export function buildLiveTailItems(opts: {
     });
   };
 
-  const pushMessage = (msg: Message, isStreaming: boolean) => {
+  const pushMessage = (msg: Message, isStreaming: boolean, timing?: ThoughtTiming) => {
     items.push({
       kind: 'message',
       key: isStreaming ? (msg.id ? `live-${msg.id}-streaming` : 'streaming') : `live-${msg.id}-${items.length}`,
       message: msg,
       isStreaming,
+      ...(msg.type === MessageType.THINKING && timing ? { timing } : {}),
     });
   };
 
@@ -991,12 +999,13 @@ export function buildLiveTailItems(opts: {
             tool_call_id: null,
             name: null,
             thinking: null,
-            timestamp: ts,
+            timestamp: seg.startedAt ?? ts,
             usage: null,
             hidden: false,
             tool_result: null,
   },
           stillStreaming,
+          { startedAt: seg.startedAt ?? null, endedAt: seg.endedAt ?? null },
         );
         return;
       }
@@ -1014,12 +1023,13 @@ export function buildLiveTailItems(opts: {
             tool_call_id: null,
             name: null,
             thinking: seg.content,
-            timestamp: ts,
+            timestamp: seg.startedAt ?? ts,
             usage: null,
             hidden: false,
             tool_result: null,
   },
           stillStreamingThink,
+          { startedAt: seg.startedAt ?? null, endedAt: seg.endedAt ?? null },
         );
       }
     });

@@ -185,7 +185,7 @@ describe('SubagentManager runtime', () => {
 
     expect(record.state).toBe(SubagentState.RUNNING);
     expect(manager.getLiveProjection(record.id)?.segments)
-      .toEqual([{ kind: 'text', id: expect.any(String), content: 'Hello live' }]);
+      .toEqual([{ kind: 'text', id: expect.any(String), content: 'Hello live', startedAt: expect.any(String), endedAt: null }]);
     expect(record.chain?.messages).toHaveLength(1);
     expect(sequences).toEqual([...sequences].sort((a, b) => a - b));
     expect(new Set(sequences).size).toBe(sequences.length);

@@ -63,6 +63,7 @@ export function makeThinkingMessage(
   content: string,
   id: string = newId(),
   payload?: ThinkingReplayPayload,
+  durationMs?: number | null,
 ): Message {
   return {
     id,
@@ -74,6 +75,7 @@ export function makeThinkingMessage(
     name: null,
     thinking: content,
     ...(payload ? { thinking_payload: payload } : {}),
+    ...(durationMs != null && durationMs > 0 ? { thinking_duration_ms: Math.round(durationMs) } : {}),
     timestamp: nowIso(),
     usage: null,
     hidden: false,

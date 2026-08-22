@@ -32,8 +32,8 @@ export type SubagentStatus = (typeof SubagentStatus)[keyof typeof SubagentStatus
 
 /** Chronological, in-memory output emitted by one subagent run. */
 export type SubagentLiveSegment =
-  | { kind: 'text'; id: string; content: string }
-  | { kind: 'thinking'; id: string; content: string }
+  | { kind: 'text'; id: string; content: string; startedAt?: string; endedAt?: string | null }
+  | { kind: 'thinking'; id: string; content: string; startedAt?: string; endedAt?: string | null }
   | { kind: 'tool'; id: string; toolCallId: string };
 
 /** Current state of a tool, including partially generated arguments. */
@@ -131,6 +131,8 @@ export interface SubagentTextDeltaEvent extends SubagentDeltaEventBase {
   readonly type: typeof SubagentDeltaEventType.TEXT_DELTA;
   readonly segmentId: string;
   readonly append: string;
+  /** Present when this delta opened the segment; anchors elapsed timers. */
+  readonly startedAt?: string;
 }
 
 /** Append to a thinking live segment (`SubagentLiveSegment` kind `thinking`). */
@@ -138,6 +140,8 @@ export interface SubagentThinkingDeltaEvent extends SubagentDeltaEventBase {
   readonly type: typeof SubagentDeltaEventType.THINKING_DELTA;
   readonly segmentId: string;
   readonly append: string;
+  /** Present when this delta opened the segment; anchors elapsed timers. */
+  readonly startedAt?: string;
 }
 
 /**
@@ -320,7 +324,7 @@ export function estimateDeltaBytes(event: SubagentDeltaEvent): number {
   switch (event.type) {
     case 'text_delta':
     case 'thinking_delta':
-      bytes += event.segmentId.length + event.append.length;
+      bytes += event.segmentId.length + event.append.length + (event.startedAt?.length ?? 0);
       break;
     case 'tool_start':
       bytes += event.segmentId.length + event.toolCallId.length + event.toolName.length

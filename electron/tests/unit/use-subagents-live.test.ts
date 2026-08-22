@@ -31,6 +31,8 @@ import {
 
 const sessionA = '11111111-1111-4111-8111-111111111111';
 const sessionB = '22222222-2222-4222-8222-222222222222';
+const SEG_OPENED_AT = '2026-01-01T00:00:00.000Z';
+const SEG_NEXT_AT = '2026-01-01T00:00:01.000Z';
 
 function record(id: string, status: SubagentSummary['status'], start = '2026-01-01T00:00:00.000Z'): SubagentSummary {
   return {
@@ -85,7 +87,14 @@ function terminal(
 }
 
 function textDelta(sequence: number, append: string, options: DeltaFactoryOptions & { segmentId?: string } = {}): SubagentDeltaEvent {
-  return { ...deltaBase(options), sequence, type: 'text_delta', segmentId: options.segmentId ?? 'seg-text', append };
+  return {
+    ...deltaBase(options),
+    sequence,
+    type: 'text_delta',
+    segmentId: options.segmentId ?? 'seg-text',
+    append,
+    startedAt: SEG_OPENED_AT,
+  };
 }
 
 function batch(events: SubagentDeltaEvent[], sessionId = sessionA): SubagentEvent {
@@ -164,7 +173,7 @@ describe('subagent delta application', () => {
     expect(state.records.map((item) => item.id)).toEqual(['one']);
     const live = state.live.get('one');
     expect(live).toMatchObject({ runId: 'run-1', sequence: 2, state: 'running' });
-    expect(live?.segments).toEqual([{ kind: 'text', id: 'seg-text', content: 'Hello world' }]);
+    expect(live?.segments).toEqual([{ kind: 'text', id: 'seg-text', content: 'Hello world', startedAt: SEG_OPENED_AT, endedAt: null }]);
     expect(state.highWater.get('one')).toBe(2);
     expect(state.runs.get('one')).toBe('run-1');
   });
@@ -178,7 +187,7 @@ describe('subagent delta application', () => {
     // Admission carries no delta; the first content delta proves the run started.
     state = applyDeltaBatch(state, batch([textDelta(1, 'working')]));
     expect(state.live.get('one')).toMatchObject({ sequence: 1, state: 'running' });
-    expect(state.live.get('one')?.segments).toEqual([{ kind: 'text', id: 'seg-text', content: 'working' }]);
+    expect(state.live.get('one')?.segments).toEqual([{ kind: 'text', id: 'seg-text', content: 'working', startedAt: SEG_OPENED_AT, endedAt: null }]);
   });
 
   it('seeds queued live projections from snapshots so post-admission deltas apply', () => {
@@ -192,7 +201,7 @@ describe('subagent delta application', () => {
 
     const next = applyDeltaBatch(state, batch([textDelta(1, 'admitted')]));
     expect(next.live.get('one')?.state).toBe('running');
-    expect(next.live.get('one')?.segments).toEqual([{ kind: 'text', id: 'seg-text', content: 'admitted' }]);
+    expect(next.live.get('one')?.segments).toEqual([{ kind: 'text', id: 'seg-text', content: 'admitted', startedAt: SEG_OPENED_AT, endedAt: null }]);
   });
 
   it('ignores record-carrying deltas whose record id does not match the subagent', () => {
@@ -342,21 +351,24 @@ describe('delta/snapshot parity', () => {
       deltas: [textDelta(1, 'Hello '), textDelta(2, 'world')],
       live: projection({
         subagentId: id, sequence: 2,
-        segments: [{ kind: 'text', id: 'seg-text', content: 'Hello world' }],
+        segments: [{ kind: 'text', id: 'seg-text', content: 'Hello world', startedAt: SEG_OPENED_AT, endedAt: null }],
       }),
     },
     {
       name: 'text and thinking interleaved',
       deltas: [
         textDelta(1, 'a', { segmentId: 'seg-text' }),
-        { ...deltaBase({ subagentId: id, runId }), sequence: 2, type: 'thinking_delta', segmentId: 'seg-think', append: 'hmm' },
+        {
+          ...deltaBase({ subagentId: id, runId }), sequence: 2, type: 'thinking_delta',
+          segmentId: 'seg-think', append: 'hmm', startedAt: SEG_NEXT_AT,
+        },
         textDelta(3, 'b', { segmentId: 'seg-text' }),
       ],
       live: projection({
         subagentId: id, sequence: 3,
         segments: [
-          { kind: 'text', id: 'seg-text', content: 'ab' },
-          { kind: 'thinking', id: 'seg-think', content: 'hmm' },
+          { kind: 'text', id: 'seg-text', content: 'ab', startedAt: SEG_OPENED_AT, endedAt: SEG_NEXT_AT },
+          { kind: 'thinking', id: 'seg-think', content: 'hmm', startedAt: SEG_NEXT_AT, endedAt: null },
         ],
       }),
     },
@@ -426,7 +438,7 @@ describe('delta/snapshot parity', () => {
       ],
       live: projection({
         subagentId: id, sequence: 4,
-        segments: [{ kind: 'text', id: 'seg-text', content: 'ab' }],
+        segments: [{ kind: 'text', id: 'seg-text', content: 'ab', startedAt: SEG_OPENED_AT, endedAt: null }],
         usage: { prompt_tokens: 3, cached_tokens: 1, completion_tokens: 2, total_tokens: 5 },
       }),
     },
@@ -497,7 +509,7 @@ describe('hydration buffering and reseed floor', () => {
       projection({ subagentId: 'b', runId: 'run-b', sequence: 0, sessionId: sessionB }),
     ]));
     expect(state.live.get('b')?.sequence).toBe(1);
-    expect(state.live.get('b')?.segments).toEqual([{ kind: 'text', id: 'seg-text', content: 'new' }]);
+    expect(state.live.get('b')?.segments).toEqual([{ kind: 'text', id: 'seg-text', content: 'new', startedAt: SEG_OPENED_AT, endedAt: null }]);
     expect(state.records.map((item) => item.id)).toEqual(['b']);
   });
 
@@ -767,7 +779,7 @@ describe('run rotation for resumed subagents', () => {
       spawned('one', 'run-A', record('one', 'pending'), 0, 1),
       textDelta(1, 'run A work', { runId: 'run-A', sessionRevision: 2 }),
     ]));
-    expect(state.live.get('one')?.segments).toEqual([{ kind: 'text', id: 'seg-text', content: 'run A work' }]);
+    expect(state.live.get('one')?.segments).toEqual([{ kind: 'text', id: 'seg-text', content: 'run A work', startedAt: SEG_OPENED_AT, endedAt: null }]);
 
     const doneA = { ...record('one', 'completed'), end_time: '2026-01-01T00:00:05.000Z' };
     state = applyDeltaBatch(state, batch([terminal('one', 'run-A', doneA, 2, null, 3)]));
@@ -784,7 +796,7 @@ describe('run rotation for resumed subagents', () => {
     // The live stream is built from run B's deltas only — no run-A content.
     const live = state.live.get('one');
     expect(live).toMatchObject({ runId: 'run-B', sequence: 1, state: 'running' });
-    expect(live?.segments).toEqual([{ kind: 'text', id: 'seg-text', content: 'run B work' }]);
+    expect(live?.segments).toEqual([{ kind: 'text', id: 'seg-text', content: 'run B work', startedAt: SEG_OPENED_AT, endedAt: null }]);
     expect(state.runs.get('one')).toBe('run-B');
     expect(state.highWater.get('one')).toBe(1);
 
@@ -818,7 +830,7 @@ describe('run rotation for resumed subagents', () => {
       textDelta(3, 'stale A', { runId: 'run-A', sessionRevision: 6 }),
     ]));
     expect(state).toBe(before);
-    expect(state.live.get('one')?.segments).toEqual([{ kind: 'text', id: 'seg-text', content: 'B' }]);
+    expect(state.live.get('one')?.segments).toEqual([{ kind: 'text', id: 'seg-text', content: 'B', startedAt: SEG_OPENED_AT, endedAt: null }]);
   });
 
   it('replaces the record on rotation-spawn so status flips back from terminal', () => {
@@ -847,7 +859,7 @@ describe('run rotation for resumed subagents', () => {
       textDelta(1, 'work', { sessionRevision: 2 }),
       textDelta(2, ' more', { sessionRevision: 3 }),
     ]));
-    expect(state.live.get('one')?.segments).toEqual([{ kind: 'text', id: 'seg-text', content: 'work more' }]);
+    expect(state.live.get('one')?.segments).toEqual([{ kind: 'text', id: 'seg-text', content: 'work more', startedAt: SEG_OPENED_AT, endedAt: null }]);
     const recordsAfterFirst = state.records;
 
     // A re-delivered spawned for the SAME runId is dropped by the sequence
@@ -855,7 +867,7 @@ describe('run rotation for resumed subagents', () => {
     // run's accumulated stream and record identity survive unchanged.
     const afterDup = applyDeltaBatch(state, batch([spawned('one', 'run-1', record('one', 'pending'), 0, 4)]));
     expect(afterDup).toBe(state);
-    expect(afterDup.live.get('one')?.segments).toEqual([{ kind: 'text', id: 'seg-text', content: 'work more' }]);
+    expect(afterDup.live.get('one')?.segments).toEqual([{ kind: 'text', id: 'seg-text', content: 'work more', startedAt: SEG_OPENED_AT, endedAt: null }]);
     expect(afterDup.records).toBe(recordsAfterFirst);
   });
 

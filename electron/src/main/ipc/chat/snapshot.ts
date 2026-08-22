@@ -2,6 +2,7 @@ import type { AgentContext } from '../../agents/xstate/agent-machine';
 import type { Usage } from '../../../shared/types/message';
 import type {
   ChatSnapshot,
+  ChatStreamSegmentSnapshot,
   ChatToolCallSnapshot,
 } from '../../../shared/types/ipc';
 import { normalizeChatSnapshotState } from '../../../shared/chat/turn-projection';
@@ -21,8 +22,57 @@ export function appendTextSegment(
     return last.id;
   }
   const id = crypto.randomUUID();
-  active.streamSegments.push({ kind, id, content });
+  closeOpenStreamSegment(active.streamSegments);
+  active.streamSegments.push({ kind, id, content, startedAt: new Date().toISOString() });
   return id;
+}
+
+/**
+ * Freeze the trailing open text/thinking segment when a newer segment
+ * supersedes it, so its elapsed timer stops at the transition.
+ */
+function closeOpenStreamSegment(segments: ChatStreamSegmentSnapshot[]): void {
+  const last = segments.at(-1);
+  if (!last || last.kind === 'tool' || last.endedAt != null) return;
+  segments[segments.length - 1] = { ...last, endedAt: new Date().toISOString() };
+}
+
+/** Close the open trailing segment, if any (turn finalize / flush paths). */
+export function closeOpenStreamSegments(active: ActiveAgent): void {
+  closeOpenStreamSegment(active.streamSegments);
+}
+
+/**
+ * Measured thinking duration (ms) for the thinking text covering
+ * [fromOffset, toOffset). Sums per-segment spans, so thinking split by
+ * interleaved text still reports only the reasoning time. Returns null when
+ * no matched segment carries both stamps (legacy snapshots).
+ */
+export function thinkingDurationMsForRange(
+  active: ActiveAgent,
+  fromOffset: number,
+  toOffset: number,
+): number | null {
+  if (toOffset <= fromOffset) return null;
+  let consumed = 0;
+  let totalMs: number | null = null;
+  const closeAt = new Date().toISOString();
+  for (const segment of active.streamSegments) {
+    if (segment.kind !== 'thinking') continue;
+    const end = consumed + segment.content.length;
+    if (end > fromOffset && consumed < toOffset) {
+      const startedAt = segment.startedAt;
+      const endedAt = segment.endedAt ?? closeAt;
+      if (startedAt) {
+        const span = Date.parse(endedAt) - Date.parse(startedAt);
+        if (Number.isFinite(span) && span >= 0) {
+          totalMs = (totalMs ?? 0) + span;
+        }
+      }
+    }
+    consumed = end;
+  }
+  return totalMs;
 }
 
 export function textSegmentIdAtOffset(
@@ -66,6 +116,7 @@ export function ensureToolSnapshot(
     (segment) => segment.kind === 'tool' && segment.toolCallId === toolCallId,
   );
   if (!hasSegment) {
+    closeOpenStreamSegment(active.streamSegments);
     active.streamSegments.push({ kind: 'tool', toolCallId });
   }
   return next;

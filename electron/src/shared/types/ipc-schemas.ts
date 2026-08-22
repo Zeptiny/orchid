@@ -106,6 +106,7 @@ const messageSchema = z.object({
   name: z.string().nullable(),
   thinking: z.string().nullable(),
   thinking_payload: thinkingReplayPayloadSchema.optional(),
+  thinking_duration_ms: z.number().int().nonnegative().nullable().optional(),
   timestamp: z.string().datetime({ offset: true }),
   usage: usageSchema.nullable(),
   hidden: z.boolean(),
@@ -594,8 +595,16 @@ export const chatSessionSnapshotSchema = z
   .nullable();
 
 const subagentLiveSegmentSchema = z.discriminatedUnion('kind', [
-  z.object({ kind: z.literal('text'), id: z.string(), content: z.string() }),
-  z.object({ kind: z.literal('thinking'), id: z.string(), content: z.string() }),
+  z.object({
+    kind: z.literal('text'), id: z.string(), content: z.string(),
+    startedAt: z.string().optional(),
+    endedAt: z.string().nullable().optional(),
+  }),
+  z.object({
+    kind: z.literal('thinking'), id: z.string(), content: z.string(),
+    startedAt: z.string().optional(),
+    endedAt: z.string().nullable().optional(),
+  }),
   z.object({ kind: z.literal('tool'), id: z.string(), toolCallId: z.string() }),
 ]);
 const subagentToolSchema = z.object({
@@ -692,9 +701,11 @@ export const subagentStatusChangedEventSchema = subagentDeltaBaseSchema.extend({
 });
 export const subagentTextDeltaEventSchema = subagentDeltaBaseSchema.extend({
   type: z.literal('text_delta'), segmentId: z.string(), append: z.string(),
+  startedAt: z.string().optional(),
 });
 export const subagentThinkingDeltaEventSchema = subagentDeltaBaseSchema.extend({
   type: z.literal('thinking_delta'), segmentId: z.string(), append: z.string(),
+  startedAt: z.string().optional(),
 });
 export const subagentToolStartEventSchema = subagentDeltaBaseSchema.extend({
   type: z.literal('tool_start'), segmentId: z.string(), toolCallId: z.string(),

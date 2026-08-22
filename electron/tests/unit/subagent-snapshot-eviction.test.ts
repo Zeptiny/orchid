@@ -490,7 +490,7 @@ describe('exact-revision checkpoint confirmation', () => {
     await vi.waitFor(() => expect(record.state).toBe(SubagentState.RUNNING));
     await vi.waitFor(() => {
       expect(manager.getLiveProjection(record.id)?.segments)
-        .toEqual([{ kind: 'text', id: expect.any(String), content: 'partial answer' }]);
+        .toEqual([{ kind: 'text', id: expect.any(String), content: 'partial answer', startedAt: expect.any(String), endedAt: null }]);
     });
 
     expect(manager.cancelOne(record.id)).toBe(true);

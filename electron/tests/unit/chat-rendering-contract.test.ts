@@ -78,8 +78,8 @@ describe('chat rendering contract (U5)', () => {
 
       expect(contentStart).toBeGreaterThanOrEqual(0);
       expect(src).toContain('setExpanded(Boolean(isStreaming))');
-      expect(src).toContain('window.setInterval(updateElapsed, 100)');
-      expect(src).toContain('if (isStreaming) return formatDurationMs(streamingElapsedMs)');
+      expect(src).toContain('useElapsedMs');
+      expect(src).not.toMatch(/Date\.now\(\)\s*\?\?=|estimateThoughtDurationMs/);
       expect(contentSource).toContain('onClick={collapse}');
       expect(contentSource).toContain('role="button"');
       expect(contentSource).toContain('title="Click to collapse"');
@@ -106,13 +106,48 @@ describe('chat rendering contract (U5)', () => {
       const settled = renderToStaticMarkup(createElement(MessageWidget, { message, isStreaming: false }));
 
       expect(live).toContain('aria-expanded="true"');
-      expect(live).toContain('Thinking… 0ms');
+      // No wire timing → no invented duration label (issue #139)
+      expect(live).toContain('Thinking…</span>');
       expect(live).toContain('first line\nsecond line');
       expect(settled).toContain('aria-expanded="false"');
       expect(settled).toContain('orchid-thought-content');
       expect(settled).toContain('orchid-collapsible-region');
       expect(settled).toContain('aria-hidden="true"');
       expect(settled).toContain('inert=""');
+    });
+
+    it('anchors the live thinking timer on wire-provided segment timing, not mount time', () => {
+      const message: Message = {
+        id: 'thought-timing',
+        role: MessageRole.ASSISTANT,
+        content: 'reasoning',
+        type: MessageType.THINKING,
+        tool_calls: null,
+        tool_call_id: null,
+        name: null,
+        thinking: 'reasoning',
+        timestamp: new Date().toISOString(),
+        usage: null,
+        hidden: false,
+        tool_result: null,
+      };
+
+      // Mounted "late": segment started 2s ago and closed 1s ago. The settled
+      // label must reflect the measured span, never the mount instant.
+      const startedAt = new Date(Date.now() - 2000).toISOString();
+      const endedAt = new Date(Date.now() - 1000).toISOString();
+      const late = renderToStaticMarkup(createElement(MessageWidget, {
+        message,
+        isStreaming: true,
+        thinkingTiming: { startedAt, endedAt },
+      }));
+      expect(late).toMatch(/Thought|Thinking…/);
+      expect(late).toContain('1.0s');
+
+      // Measured duration survives as persisted history
+      const recorded: Message = { ...message, thinking_duration_ms: 65000 };
+      const settled = renderToStaticMarkup(createElement(MessageWidget, { message: recorded, isStreaming: false }));
+      expect(settled).toContain('1m 05s');
     });
   });
 

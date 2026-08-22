@@ -164,9 +164,9 @@ describe('ChatTurnProjection', () => {
     ]);
 
     expect(projected.streamSegments).toEqual([
-      { kind: 'text', id: 'text-1', content: 'Before ' },
+      { kind: 'text', id: 'text-1', content: 'Before ', startedAt: TOOL_STARTED_AT, endedAt: TOOL_STARTED_AT },
       { kind: 'tool', toolCallId: 'tool-1' },
-      { kind: 'text', id: 'text-2', content: 'after' },
+      { kind: 'text', id: 'text-2', content: 'after', startedAt: TOOL_FINISHED_AT, endedAt: null },
     ]);
     expect(projected.toolCalls).toEqual([expect.objectContaining({
       toolCallId: 'tool-1',

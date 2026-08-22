@@ -272,6 +272,8 @@ export interface Message {
   readonly thinking: string | null;
   /** Replay artifact for THINKING messages; absent for plain-text reasoning. */
   readonly thinking_payload?: ThinkingReplayPayload;
+  /** Measured reasoning duration in ms; absent when never measured. */
+  readonly thinking_duration_ms?: number | null;
   readonly timestamp: string;
   readonly usage: Usage | null;
   readonly hidden: boolean;
@@ -294,6 +296,7 @@ export interface MessageStorageDict {
   name?: string;
   thinking?: string;
   thinking_payload?: ThinkingReplayPayload;
+  thinking_duration_ms?: number | null;
   timestamp?: string;
   usage?: {
     prompt_tokens?: number;
@@ -409,6 +412,9 @@ export function messageToStorageDict(msg: Message): MessageStorageDict {
   if (msg.thinking_payload) {
     d.thinking_payload = msg.thinking_payload;
   }
+  if (msg.thinking_duration_ms != null) {
+    d.thinking_duration_ms = msg.thinking_duration_ms;
+  }
   if (msg.timestamp) {
     d.timestamp = msg.timestamp;
   }
@@ -508,6 +514,9 @@ export function messageFromStorageDict(data: unknown): Message {
     name: typeof raw.name === 'string' ? raw.name : null,
     thinking: typeof raw.thinking === 'string' ? raw.thinking : null,
     ...(thinkingPayload ? { thinking_payload: thinkingPayload } : {}),
+    ...(typeof raw.thinking_duration_ms === 'number' && Number.isFinite(raw.thinking_duration_ms)
+      ? { thinking_duration_ms: Math.max(0, Math.round(raw.thinking_duration_ms)) }
+      : {}),
     timestamp: typeof raw.timestamp === 'string' ? raw.timestamp : new Date().toISOString(),
     usage,
     hidden: raw.hidden === true,

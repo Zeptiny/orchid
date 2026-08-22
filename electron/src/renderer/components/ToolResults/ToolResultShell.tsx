@@ -1,6 +1,7 @@
 import { useEffect, useId, useMemo, useState, type ReactNode } from 'react';
 import type { CanonicalToolResult, TerminalToolResultStatus } from '../../../shared/types/tool-result';
 import type { ToolBlock } from '../../hooks/useChat';
+import { formatDurationMs, useElapsedMs } from '../../utils/elapsed';
 import { Icon, type IconName } from '../Icon';
 import { CollapsibleRegion } from '../ui/CollapsibleRegion';
 import { Spinner } from '../ui/Spinner';
@@ -117,6 +118,16 @@ export function ToolResultShell({
   const [announcement, setAnnouncement] = useState('');
   const active = block.status === 'generating' || block.status === 'running';
 
+  // Elapsed counter anchored on the tool's own startedAt/finishedAt stamps,
+  // so it reads true regardless of when the widget mounted (issue #140).
+  const elapsedMs = useElapsedMs({
+    startedAt: active || block.finishedAt ? block.startedAt || null : null,
+    endedAt: block.finishedAt ?? null,
+  });
+  const elapsedLabel = elapsedMs != null && (active || elapsedMs > 0)
+    ? formatDurationMs(elapsedMs)
+    : null;
+
   useEffect(() => {
     setAnnouncement(`${status} tool result`);
   }, [status]);
@@ -190,6 +201,9 @@ export function ToolResultShell({
           <span className="orchid-tool-block-title-text min-w-0 truncate">{displayTitle}</span>
         </span>
         <span className="orchid-tool-block-title-right shrink-0">
+          {elapsedLabel ? (
+            <span className="orchid-tool-elapsed" aria-hidden="true">{elapsedLabel}</span>
+          ) : null}
           {lifecycleBadge(block, canonical, statusBadge)}
           <Icon
             name="chevronDown"

@@ -144,6 +144,7 @@ export function ToolActivityGroup({
                   key={child.message.id || `thought-${i}`}
                   message={child.message}
                   isStreaming={child.isStreaming}
+                  thinkingTiming={child.timing}
                 />
               );
             })}

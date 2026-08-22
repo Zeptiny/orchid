@@ -18,6 +18,8 @@ export type SubagentRunProjectionEffect =
       readonly kind: 'text' | 'thinking';
       readonly segmentId: string;
       readonly append: string;
+      /** Present when this effect opened the segment; anchors elapsed timers. */
+      readonly startedAt?: string;
     }
   | {
       readonly type: 'thinking_artifact';
@@ -75,8 +77,8 @@ export interface SubagentRunAssemblerOptions {
 }
 
 type AssemblySegment =
-  | { kind: 'text'; id: string; content: string }
-  | { kind: 'thinking'; id: string; content: string }
+  | { kind: 'text'; id: string; content: string; startedAt: string; endedAt: string | null }
+  | { kind: 'thinking'; id: string; content: string; startedAt: string; endedAt: string | null }
   | { kind: 'tool'; id: string; toolCallId: string };
 
 interface AssemblyTool {
@@ -236,18 +238,35 @@ export class SubagentRunAssembler {
     }
 
     const segmentId = this.newId();
-    this.segments.push({ kind, id: segmentId, content: append });
-    return { type: 'append_text', kind, segmentId, append };
+    const startedAt = this.now();
+    this.closeOpenSegment(startedAt);
+    this.segments.push({ kind, id: segmentId, content: append, startedAt, endedAt: null });
+    return { type: 'append_text', kind, segmentId, append, startedAt };
   }
 
   private ensureTool(toolCallId: string, toolName: string): SubagentRunProjectionEffect[] {
     if (this.tools.has(toolCallId)) return [];
     const segmentId = this.newId();
     const startedAt = this.now();
+    this.closeOpenSegment(startedAt);
     this.tools.set(toolCallId, { toolCallId, toolName, segmentId, startedAt });
     this.toolNames.set(toolCallId, toolName);
     this.segments.push({ kind: 'tool', id: segmentId, toolCallId });
     return [{ type: 'tool_start', toolCallId, toolName, segmentId, startedAt }];
+  }
+
+  /** Freeze the trailing open text/thinking segment at a segment transition. */
+  private closeOpenSegment(at: string): void {
+    const last = this.segments.at(-1);
+    if (!last || last.kind === 'tool' || last.endedAt != null) return;
+    last.endedAt = at;
+  }
+
+  /** Measured reasoning duration for one committed thinking segment. */
+  private thinkingSegmentDurationMs(segment: Extract<AssemblySegment, { kind: 'thinking' }>): number | null {
+    const endedAt = segment.endedAt ?? this.now();
+    const span = Date.parse(endedAt) - Date.parse(segment.startedAt);
+    return Number.isFinite(span) && span >= 0 ? span : null;
   }
 
   private handleToolCall(
@@ -357,6 +376,7 @@ export class SubagentRunAssembler {
           segment.content,
           segment.id,
           this.thinkingPayloads.get(segment.id),
+          this.thinkingSegmentDurationMs(segment),
         ));
       }
     }
