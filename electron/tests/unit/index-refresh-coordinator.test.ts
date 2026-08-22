@@ -13,6 +13,13 @@
  * - Project-level index_refresh config overrides are honored
  * - A RAG single-flight sentinel re-enqueues the drained batch for a retry
  * - dispose clears pending state
+ * - Sustained sub-window churn flushes once max-wait elapses (P3 #2)
+ * - A rejected flush retries once via the dirty scan, then drops (P3 #3)
+ * - A wedged index branch is abandoned after the watchdog timeout (P3 #4a)
+ * - Both flags disabled drops a dirty batch (dead-term collapse, P3 #9)
+ * - A sentinel collision requeues only the collided index's entries (minor)
+ * - disposeAsync awaits in-flight flushes and latches producers off
+ * - A config-resolution failure drops the batch without wedging the pipeline
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import * as path from 'node:path';
@@ -21,6 +28,7 @@ import {
   markDirty,
   cancelProjectRefresh,
   disposeIndexRefreshCoordinator,
+  disposeIndexRefreshCoordinatorAsync,
   _setIndexRefreshCoordinatorForTests,
   _getPendingIndexRefreshForTests,
   type RefreshRagIndexer,
@@ -97,6 +105,8 @@ function makeAstIndexer(): RefreshAstIndexer {
 
 let config: Config;
 let projectConfigOverride: Config | null;
+/** When true, the per-project config resolver throws (config-load-failure path). */
+let configLoadFails: boolean;
 let trustState: TrustState;
 let rag: RefreshRagIndexer;
 let ast: RefreshAstIndexer;
@@ -114,6 +124,7 @@ beforeEach(() => {
   warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
   config = withIndexRefresh({ debounce_ms: DEBOUNCE_MS });
   projectConfigOverride = null;
+  configLoadFails = false;
   trustState = 'trusted';
   rag = makeRagIndexer();
   ast = makeAstIndexer();
@@ -122,7 +133,10 @@ beforeEach(() => {
     astIndexer: ast,
     // Simulates the runtime-registry project layer (the production default
     // resolves registry-first with a home-config fallback).
-    projectConfigResolver: () => projectConfigOverride ?? config,
+    projectConfigResolver: () => {
+      if (configLoadFails) throw new Error('config resolver boom');
+      return projectConfigOverride ?? config;
+    },
     trustStateResolver: () => trustState,
   });
 });
@@ -476,5 +490,299 @@ describe('index refresh coordinator', () => {
     expect(rag.upsertFiles).not.toHaveBeenCalled();
     expect(rag.indexProject).not.toHaveBeenCalled();
     expect(ast.upsertFiles).not.toHaveBeenCalled();
+  });
+
+  it('flushes despite continuous churn once max-wait elapses from the first enqueue', async () => {
+    // Churn faster than the debounce window (1500 < 2000): each enqueue
+    // restarts the timer, so without max-wait the batch would never flush.
+    // maxWaitMs = max(DEBOUNCE_MS * 3, 10_000) = 10_000 from the first enqueue.
+    const CHURN_MS = 1500;
+    for (let i = 0; i < 7; i++) {
+      if (i > 0) await vi.advanceTimersByTimeAsync(CHURN_MS);
+      enqueueMutation(PROJECT, [{ rel: `src/a${i}.ts`, op: 'upsert' }]);
+      expect(rag.upsertFiles).not.toHaveBeenCalled();
+    }
+    // t = 9000: elapsed 9000 < 10000, and the restarted timer never expired.
+    expect(_getPendingIndexRefreshForTests(PROJECT).entries).toHaveLength(7);
+
+    // t = 10500: elapsed 10500 >= 10000 → the flush runs immediately on
+    // enqueue instead of restarting the timer yet again.
+    await vi.advanceTimersByTimeAsync(CHURN_MS);
+    enqueueMutation(PROJECT, [{ rel: 'src/a7.ts', op: 'upsert' }]);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(rag.upsertFiles).toHaveBeenCalledTimes(1);
+    expect(rag.upsertFiles).toHaveBeenCalledWith({
+      projectPath: PROJECT,
+      rels: ['src/a0.ts', 'src/a1.ts', 'src/a2.ts', 'src/a3.ts', 'src/a4.ts', 'src/a5.ts', 'src/a6.ts', 'src/a7.ts'],
+      config,
+    });
+    expect(ast.upsertFiles).toHaveBeenCalledTimes(1);
+
+    // The anchor resets on drain: post-flush churn starts a fresh max-wait cycle.
+    await vi.advanceTimersByTimeAsync(CHURN_MS);
+    enqueueMutation(PROJECT, [{ rel: 'src/a8.ts', op: 'upsert' }]);
+    await vi.advanceTimersByTimeAsync(DEBOUNCE_MS);
+    expect(rag.upsertFiles).toHaveBeenCalledTimes(2);
+    expect(rag.upsertFiles).toHaveBeenLastCalledWith({
+      projectPath: PROJECT,
+      rels: ['src/a8.ts'],
+      config,
+    });
+  });
+
+  it('re-arms a dirty-scan retry when a flush rejects, then heals cleanly', async () => {
+    rag.upsertFiles.mockImplementationOnce(() => Promise.reject(new Error('boom')));
+
+    enqueueMutation(PROJECT, [{ rel: 'src/a.ts', op: 'upsert' }]);
+    await vi.advanceTimersByTimeAsync(DEBOUNCE_MS);
+    expect(warnSpy).toHaveBeenCalledWith('[index-refresh] rag refresh failed', expect.any(Error));
+    // Failure → dirty flag re-set + flush re-armed (entries stay consumed:
+    // the hash-diff scan is the self-heal).
+    expect(ast.upsertFiles).toHaveBeenCalledTimes(1);
+    expect(_getPendingIndexRefreshForTests(PROJECT).dirty).toBe(true);
+    expect(_getPendingIndexRefreshForTests(PROJECT).timerArmed).toBe(true);
+
+    // The retry flush runs the dirty scan for both indexes and succeeds.
+    await vi.advanceTimersByTimeAsync(DEBOUNCE_MS);
+    expect(rag.upsertFiles).toHaveBeenCalledTimes(1);
+    expect(rag.indexProject).toHaveBeenCalledTimes(1);
+    expect(ast.indexProject).toHaveBeenCalledTimes(1);
+    expect(_getPendingIndexRefreshForTests(PROJECT)).toEqual({
+      entries: [],
+      dirty: false,
+      timerArmed: false,
+      flushing: false,
+    });
+
+    // The retry budget was cleared on success: a later failure retries again.
+    rag.upsertFiles.mockImplementationOnce(() => Promise.reject(new Error('boom-2')));
+    enqueueMutation(PROJECT, [{ rel: 'src/b.ts', op: 'upsert' }]);
+    await vi.advanceTimersByTimeAsync(DEBOUNCE_MS);
+    expect(_getPendingIndexRefreshForTests(PROJECT).dirty).toBe(true);
+  });
+
+  it('drops the batch after a second consecutive flush failure instead of retrying forever', async () => {
+    rag.upsertFiles.mockImplementationOnce(() => Promise.reject(new Error('boom-1')));
+    rag.indexProject.mockImplementationOnce(() => Promise.reject(new Error('boom-2')));
+
+    enqueueMutation(PROJECT, [{ rel: 'src/a.ts', op: 'upsert' }]);
+    await vi.advanceTimersByTimeAsync(DEBOUNCE_MS); // failure #1 → retry armed
+    await vi.advanceTimersByTimeAsync(DEBOUNCE_MS); // retry fails → drop
+
+    expect(rag.indexProject).toHaveBeenCalledTimes(1);
+    expect(warnSpy).toHaveBeenCalledWith('[index-refresh] flush failed again; dropping batch', PROJECT);
+    expect(_getPendingIndexRefreshForTests(PROJECT)).toEqual({
+      entries: [],
+      dirty: false,
+      timerArmed: false,
+      flushing: false,
+    });
+
+    // No third attempt fires.
+    await vi.advanceTimersByTimeAsync(DEBOUNCE_MS * 3);
+    expect(rag.indexProject).toHaveBeenCalledTimes(1);
+  });
+
+  it('abandons a wedged index branch after the watchdog timeout and keeps flushing', async () => {
+    _setIndexRefreshCoordinatorForTests({
+      ragIndexer: rag,
+      astIndexer: ast,
+      projectConfigResolver: () => {
+        if (configLoadFails) throw new Error('config resolver boom');
+        return projectConfigOverride ?? config;
+      },
+      trustStateResolver: () => trustState,
+      flushTimeoutMs: 50,
+    });
+    const gate = deferred<void>();
+    rag.upsertFiles.mockImplementationOnce(async () => {
+      await gate.promise;
+      return { ...RAG_RESULT };
+    });
+
+    enqueueMutation(PROJECT, [{ rel: 'src/a.ts', op: 'upsert' }]);
+    await vi.advanceTimersByTimeAsync(DEBOUNCE_MS);
+    expect(rag.upsertFiles).toHaveBeenCalledTimes(1);
+    expect(_getPendingIndexRefreshForTests(PROJECT).flushing).toBe(true);
+
+    // The wedged RAG branch is abandoned after the (tiny) watchdog timeout;
+    // the healthy AST branch completed and the flushing flag clears.
+    await vi.advanceTimersByTimeAsync(50);
+    expect(warnSpy).toHaveBeenCalledWith(
+      '[index-refresh] rag refresh timed out after 50ms; abandoning branch',
+    );
+    expect(ast.upsertFiles).toHaveBeenCalledTimes(1);
+    expect(_getPendingIndexRefreshForTests(PROJECT).flushing).toBe(false);
+    expect(_getPendingIndexRefreshForTests(PROJECT).timerArmed).toBe(false);
+
+    // The pipeline keeps working: the next mutation flushes normally.
+    enqueueMutation(PROJECT, [{ rel: 'src/b.ts', op: 'upsert' }]);
+    await vi.advanceTimersByTimeAsync(DEBOUNCE_MS);
+    expect(rag.upsertFiles).toHaveBeenCalledTimes(2);
+    expect(rag.upsertFiles).toHaveBeenLastCalledWith({
+      projectPath: PROJECT,
+      rels: ['src/b.ts'],
+      config,
+    });
+  });
+
+  it('drops a dirty batch when both indexes are disabled (dead-term collapse)', async () => {
+    config = withIndexRefresh({ rag: false, ast: false });
+    enqueueMutation(PROJECT, [{ rel: 'src/a.ts', op: 'upsert' }]);
+    markDirty(PROJECT);
+
+    await vi.advanceTimersByTimeAsync(DEBOUNCE_MS);
+    expect(rag.upsertFiles).not.toHaveBeenCalled();
+    expect(rag.indexProject).not.toHaveBeenCalled();
+    expect(ast.upsertFiles).not.toHaveBeenCalled();
+    expect(ast.indexProject).not.toHaveBeenCalled();
+    expect(_getPendingIndexRefreshForTests(PROJECT)).toEqual({
+      entries: [],
+      dirty: false,
+      timerArmed: false,
+      flushing: false,
+    });
+  });
+
+  it('requeues only RAG entries on a sentinel collision; AST entries stay consumed', async () => {
+    rag.upsertFiles.mockImplementationOnce(async (): RAGIndexResult => ({
+      ...RAG_RESULT,
+      errors: ['Indexing already in progress'],
+    }));
+
+    enqueueMutation(PROJECT, [
+      { rel: 'src/a.ts', op: 'upsert' },
+      { rel: 'src/b.ts', op: 'upsert' },
+    ]);
+    await vi.advanceTimersByTimeAsync(DEBOUNCE_MS);
+    expect(rag.upsertFiles).toHaveBeenCalledTimes(1);
+    expect(ast.upsertFiles).toHaveBeenCalledTimes(1);
+    expect(_getPendingIndexRefreshForTests(PROJECT).entries).toEqual([
+      { rel: 'src/a.ts', op: 'upsert' },
+      { rel: 'src/b.ts', op: 'upsert' },
+    ]);
+
+    // Retry flush: RAG re-processes the batch…
+    await vi.advanceTimersByTimeAsync(DEBOUNCE_MS);
+    expect(rag.upsertFiles).toHaveBeenCalledTimes(2);
+    expect(rag.upsertFiles).toHaveBeenLastCalledWith({
+      projectPath: PROJECT,
+      rels: ['src/a.ts', 'src/b.ts'],
+      config,
+    });
+    // …but AST does not repeat its (idempotent, already-applied) upserts.
+    expect(ast.upsertFiles).toHaveBeenCalledTimes(1);
+    expect(_getPendingIndexRefreshForTests(PROJECT)).toEqual({
+      entries: [],
+      dirty: false,
+      timerArmed: false,
+      flushing: false,
+    });
+  });
+
+  it('does not re-set dirty when only the mutation upsert hit the sentinel', async () => {
+    rag.upsertFiles.mockImplementationOnce(async (): RAGIndexResult => ({
+      ...RAG_RESULT,
+      errors: ['Indexing already in progress'],
+    }));
+
+    enqueueMutation(PROJECT, [{ rel: 'src/a.ts', op: 'upsert' }]);
+    markDirty(PROJECT);
+    await vi.advanceTimersByTimeAsync(DEBOUNCE_MS);
+    // The mutation upsert collided (re-enqueued rag-only for a retry) but the
+    // dirty scan itself completed, so dirty stays consumed.
+    expect(rag.indexProject).toHaveBeenCalledTimes(1);
+    expect(ast.indexProject).toHaveBeenCalledTimes(1);
+    expect(_getPendingIndexRefreshForTests(PROJECT).dirty).toBe(false);
+    expect(_getPendingIndexRefreshForTests(PROJECT).entries).toEqual([
+      { rel: 'src/a.ts', op: 'upsert' },
+    ]);
+    expect(_getPendingIndexRefreshForTests(PROJECT).timerArmed).toBe(true);
+  });
+
+  it('disposeAsync awaits in-flight flushes and no-ops later producer calls (logged once)', async () => {
+    const gate = deferred<void>();
+    rag.upsertFiles.mockImplementationOnce(async () => {
+      await gate.promise;
+      return { ...RAG_RESULT };
+    });
+    enqueueMutation(PROJECT, [{ rel: 'src/a.ts', op: 'upsert' }]);
+    await vi.advanceTimersByTimeAsync(DEBOUNCE_MS);
+    expect(rag.upsertFiles).toHaveBeenCalledTimes(1);
+    expect(_getPendingIndexRefreshForTests(PROJECT).flushing).toBe(true);
+
+    const disposed = disposeIndexRefreshCoordinatorAsync();
+    // Post-dispose producers are logged no-ops — logged once, not per call.
+    enqueueMutation(PROJECT, [{ rel: 'src/b.ts', op: 'upsert' }]);
+    markDirty(PROJECT);
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+    expect(warnSpy).toHaveBeenCalledWith(
+      '[index-refresh] coordinator disposed; ignoring index refresh requests',
+    );
+
+    gate.resolve();
+    await disposed;
+    expect(_getPendingIndexRefreshForTests(PROJECT).flushing).toBe(false);
+
+    // The drained timer is gone and nothing new ever flushes.
+    await vi.advanceTimersByTimeAsync(DEBOUNCE_MS * 3);
+    expect(rag.upsertFiles).toHaveBeenCalledTimes(1);
+    expect(rag.indexProject).not.toHaveBeenCalled();
+    expect(ast.indexProject).not.toHaveBeenCalled();
+  });
+
+  it('disposeAsync caps its wait for a wedged in-flight flush at 5s', async () => {
+    const gate = deferred<void>();
+    rag.upsertFiles.mockImplementationOnce(async () => {
+      await gate.promise;
+      return { ...RAG_RESULT };
+    });
+    enqueueMutation(PROJECT, [{ rel: 'src/a.ts', op: 'upsert' }]);
+    await vi.advanceTimersByTimeAsync(DEBOUNCE_MS);
+    expect(_getPendingIndexRefreshForTests(PROJECT).flushing).toBe(true);
+
+    const disposed = disposeIndexRefreshCoordinatorAsync();
+    let settled = false;
+    void disposed.then(() => {
+      settled = true;
+    });
+    await vi.advanceTimersByTimeAsync(4999);
+    expect(settled).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    await disposed;
+    expect(settled).toBe(true);
+  });
+
+  it('drops the batch when config resolution throws, and later enqueues flush again', async () => {
+    configLoadFails = true;
+    enqueueMutation(PROJECT, [{ rel: 'src/a.ts', op: 'upsert' }]);
+    markDirty(PROJECT);
+
+    await vi.advanceTimersByTimeAsync(DEBOUNCE_MS);
+    expect(warnSpy).toHaveBeenCalledWith(
+      '[index-refresh] config load failed; dropping batch',
+      expect.any(Error),
+    );
+    expect(rag.upsertFiles).not.toHaveBeenCalled();
+    expect(rag.indexProject).not.toHaveBeenCalled();
+    expect(ast.upsertFiles).not.toHaveBeenCalled();
+    expect(ast.indexProject).not.toHaveBeenCalled();
+    expect(_getPendingIndexRefreshForTests(PROJECT)).toEqual({
+      entries: [],
+      dirty: false,
+      timerArmed: false,
+      flushing: false,
+    });
+
+    // A working resolver revives the pipeline for later mutations.
+    configLoadFails = false;
+    enqueueMutation(PROJECT, [{ rel: 'src/b.ts', op: 'upsert' }]);
+    await vi.advanceTimersByTimeAsync(DEBOUNCE_MS);
+    expect(rag.upsertFiles).toHaveBeenCalledTimes(1);
+    expect(rag.upsertFiles).toHaveBeenCalledWith({
+      projectPath: PROJECT,
+      rels: ['src/b.ts'],
+      config,
+    });
   });
 });
