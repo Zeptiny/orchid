@@ -53,6 +53,11 @@ import { getSessionManager } from '../session/singleton';
 import { getTierModelSelection } from '../config/loader';
 import { getProviderRuntime } from '../providers';
 import { createMiddlewareStack } from '../llm/middleware';
+import type { ProviderAttemptAccountingContext } from '../providers/accounting/middleware';
+import {
+  getProviderAccountingStore,
+  initializeProviderAccountingStore,
+} from '../providers/accounting/store';
 import { importESM } from '../utils/esm-import';
 import { IPC_CHANNELS } from '../../shared/types/ipc';
 
@@ -176,10 +181,42 @@ function buildWebFetchSummarizer(
 
     const execution = await getProviderRuntime().resolveExecution(selection);
     const { generateText, wrapLanguageModel } = await importESM<typeof import('ai')>('ai');
+
+    // The summarizer is an attributable provider request: give it a durable
+    // ledger row (usage/cost analytics + the issue-146 debug capture). Best
+    // effort — a telemetry outage degrades to an unattributed call.
+    let accountingStore: ReturnType<typeof getProviderAccountingStore> | undefined;
+    try {
+      accountingStore = getProviderAccountingStore();
+    } catch {
+      try {
+        accountingStore = initializeProviderAccountingStore();
+      } catch {
+        accountingStore = undefined;
+      }
+    }
+    const accounting: ProviderAttemptAccountingContext | undefined = accountingStore && context.sessionId
+      ? {
+          store: accountingStore,
+          sessionId: context.sessionId,
+          chainId: null,
+          turnId: null,
+          snapshot: execution.snapshot,
+          agentScope: context.agentScopeId ?? null,
+          agentName: agent.name,
+          agentType: agent.type,
+          agentTier: agent.tier,
+          attemptIdHolder: { value: null },
+          pricingFacet: execution.pricingFacet,
+          tierMechanism: execution.tierMechanism,
+          debugCapture: config.debug_capture_requests,
+        }
+      : undefined;
     const model = wrapLanguageModel({
       model: execution.modelInstance,
       middleware: createMiddlewareStack({
         retry: { maxRetries: config.llm_stream_retries },
+        ...(accounting ? { accounting } : {}),
       }),
     });
 

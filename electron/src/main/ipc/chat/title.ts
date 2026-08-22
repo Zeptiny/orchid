@@ -78,6 +78,7 @@ export function createGenerateTitleCallback(input: {
             snapshot: execution.snapshot,
             pricingFacet: execution.pricingFacet,
            attemptIdHolder: { value: null },
+            debugCapture: input.runtime.config.debug_capture_requests,
           },
         }),
       });

@@ -129,6 +129,10 @@ import type {
   ContextSessionsResult,
   AnalyticsTimeRange,
 } from '../shared/types/analytics';
+import type {
+  DebugSessionRequestsResult,
+  DebugRequestCaptureResult,
+} from '../shared/types/debug';
 import {
   chatChunkEventSchema,
   chatThinkingEventSchema,
@@ -756,6 +760,14 @@ const orchidAPI: OrchidAPI = {
 
     contextSessions: (params?: { readonly timeRange?: AnalyticsTimeRange }) =>
       invoke<ContextSessionsResult>(IPC_CHANNELS.ANALYTICS_CONTEXT_SESSIONS, params),
+  },
+
+  debug: {
+    sessionRequests: (params: { readonly sessionId: string }) =>
+      invoke<DebugSessionRequestsResult>(IPC_CHANNELS.DEBUG_SESSION_REQUESTS, params),
+
+    requestCapture: (params: { readonly attemptId: string }) =>
+      invoke<DebugRequestCaptureResult>(IPC_CHANNELS.DEBUG_REQUEST_CAPTURE, params),
   },
 };
 

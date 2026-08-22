@@ -69,6 +69,10 @@ import {
   resetContextSnapshotStore,
 } from './providers/accounting/context-snapshot-store';
 import {
+  initializeProviderAttemptCaptureStore,
+  resetProviderAttemptCaptureStore,
+} from './providers/accounting/capture-store';
+import {
   initializeSubagentAttributionStore,
   resetSubagentAttributionStore,
 } from './providers/accounting/subagent-attribution-store';
@@ -210,6 +214,12 @@ function initializeProviderAccounting(): void {
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     console.error(`Subagent attribution telemetry is unavailable: ${message}`);
+  }
+  try {
+    initializeProviderAttemptCaptureStore();
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.error(`Provider request debug capture is unavailable: ${message}`);
   }
 }
 
@@ -447,6 +457,7 @@ app.on('before-quit', async (event) => {
     resetToolAttemptStore();
     resetContextSnapshotStore();
     resetSubagentAttributionStore();
+    resetProviderAttemptCaptureStore();
 
     // 7. Now actually quit
     // Final safety flush after teardown, immediately before process exit.

@@ -35,6 +35,7 @@ import { registerAskQuestionIPC, unregisterAskQuestionIPC } from './ask-question
 import { registerPermissionIPC, unregisterPermissionIPC } from './permission';
 import { registerTrustIPC, unregisterTrustIPC } from './trust';
 import { registerAnalyticsIPC, unregisterAnalyticsIPC } from './analytics';
+import { registerDebugIPC, unregisterDebugIPC } from './debug';
 
 /**
  * Register all IPC handlers.
@@ -58,6 +59,7 @@ export function registerAllIPC(): void {
   registerPermissionIPC();
   registerTrustIPC();
   registerAnalyticsIPC();
+  registerDebugIPC();
 }
 
 /**
@@ -82,4 +84,5 @@ export function unregisterAllIPC(): void {
   unregisterPermissionIPC();
   unregisterTrustIPC();
   unregisterAnalyticsIPC();
+  unregisterDebugIPC();
 }

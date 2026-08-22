@@ -510,6 +510,8 @@ export type ConfigPatch = {
   mcp_servers?: ConfigPatchMap<Record<string, unknown>>;
   llm_stream_idle_timeout?: number;
   llm_stream_retries?: number;
+  /** Raw provider request/response debug capture gate (issue 146). */
+  debug_capture_requests?: boolean;
   background_command_idle_timeout?: number;
   session_title_max_wait_seconds?: number;
   max_tool_steps?: number;
@@ -1614,6 +1616,13 @@ export interface OrchidAPI {
      contextSessionDetail: (params: { readonly sessionId: string; readonly timeRange?: import('./analytics').AnalyticsTimeRange }) => Promise<import('./analytics').ContextSessionDetailResult>;
       contextSessions: (params?: { readonly timeRange?: import('./analytics').AnalyticsTimeRange }) => Promise<import('./analytics').ContextSessionsResult>;
    };
+
+  debug: {
+    /** List captured provider requests for one session (any agent origin). */
+    sessionRequests: (params: { readonly sessionId: string }) => Promise<import('./debug').DebugSessionRequestsResult>;
+    /** Full raw request response capture for one provider attempt. */
+    requestCapture: (params: { readonly attemptId: string }) => Promise<import('./debug').DebugRequestCaptureResult>;
+  };
 }
 
 // ── IPC Channel names ────────────────────────────────────────────────────────
@@ -1806,6 +1815,10 @@ export const IPC_CHANNELS = {
   ANALYTICS_CONTEXT: 'analytics:context',
   ANALYTICS_CONTEXT_SESSION_DETAIL: 'analytics:context_session_detail',
   ANALYTICS_CONTEXT_SESSIONS: 'analytics:context_sessions',
+
+  // Debug — per-session raw request/response captures (issue 146)
+  DEBUG_SESSION_REQUESTS: 'debug:session_requests',
+  DEBUG_REQUEST_CAPTURE: 'debug:request_capture',
 } as const;
 
 export type IPCChannel = (typeof IPC_CHANNELS)[keyof typeof IPC_CHANNELS];
@@ -1912,6 +1925,8 @@ export const ALLOWED_INVOKE_CHANNELS = [
   IPC_CHANNELS.ANALYTICS_CONTEXT,
   IPC_CHANNELS.ANALYTICS_CONTEXT_SESSION_DETAIL,
   IPC_CHANNELS.ANALYTICS_CONTEXT_SESSIONS,
+  IPC_CHANNELS.DEBUG_SESSION_REQUESTS,
+  IPC_CHANNELS.DEBUG_REQUEST_CAPTURE,
 ] as const satisfies readonly IPCChannel[];
 
 // ── Allowed event channels (preload security gate) ───────────────────────────

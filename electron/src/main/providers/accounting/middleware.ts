@@ -22,6 +22,7 @@ import {
 } from '../../llm/reasoning-tokens';
 import { calculateAttemptCost, type AttemptCostEvidence } from './cost';
 import { ProviderAccountingStore } from './store';
+import { getProviderAttemptCaptureStore } from './capture-store';
 
 export interface ProviderAttemptAccountingContext {
   readonly store: ProviderAccountingStore;
@@ -39,6 +40,15 @@ export interface ProviderAttemptAccountingContext {
   readonly pricingFacet?: DriverPricingFacet;
   /** Driver tier mechanism for served-tier evidence capture (R22). */
   readonly tierMechanism?: import('../../../shared/types/provider-facets').TierMechanism;
+  /**
+   * Raw request/response debug capture gate (issue 146), frozen per turn from
+   * the `debug_capture_requests` config. When true, every attempt persisted by
+   * this middleware also writes its exact provider request and response into
+   * the capture store. Callers should additionally pass
+   * `include: { rawChunks: true }` to the AI SDK call so raw provider chunks
+   * are captured alongside the normalized stream parts.
+   */
+  readonly debugCapture?: boolean;
 }
 
 function normalizeUsage(usage: LanguageModelV4Usage | undefined): NormalizedProviderUsage | null {
@@ -187,6 +197,45 @@ function errorMessage(error: unknown): string {
 }
 
 /**
+ * Best-effort raw capture plumbing (issue 146). Every entry point swallows
+ * its errors: a capture failure must never alter provider behavior.
+ */
+function captureRequest(context: ProviderAttemptAccountingContext, attemptId: string, params: LanguageModelV4CallOptions): void {
+  if (!context.debugCapture) return;
+  try {
+    getProviderAttemptCaptureStore()?.insertRequest({
+      attemptId,
+      sessionId: context.sessionId,
+      request: {
+        callOptions: params,
+        identity: {
+          providerId: context.snapshot.providerId,
+          connectionId: context.snapshot.connectionId,
+          modelId: context.snapshot.modelId,
+          protocol: context.snapshot.protocol,
+        },
+      },
+    });
+  } catch (error) {
+    console.warn('[accounting] Request capture failed', { error });
+  }
+}
+
+function captureResponse(
+  context: ProviderAttemptAccountingContext,
+  attemptId: string,
+  response: unknown,
+  rawChunks: readonly unknown[],
+): void {
+  if (!context.debugCapture) return;
+  try {
+    getProviderAttemptCaptureStore()?.finalizeResponse(attemptId, { response, rawChunks });
+  } catch (error) {
+    console.warn('[accounting] Response capture failed', { error });
+  }
+}
+
+/**
  * Middleware inserted immediately inside retry middleware. Each doStream or
  * doGenerate invocation gets its own pending ledger row, including retries and
  * AI SDK tool-loop steps. Failure to create that row aborts transport before I/O.
@@ -207,6 +256,7 @@ export function createAttemptAccountingMiddleware(
       const attemptId = randomUUID();
       if (context.attemptIdHolder) context.attemptIdHolder.value = attemptId;
       context.store.insertPending({ ...context, attemptId, sdkCallId: attemptId });
+      captureRequest(context, attemptId, params);
       try {
         const result = await doGenerate();
         const chars = emptyOutputChars();
@@ -224,6 +274,9 @@ export function createAttemptAccountingMiddleware(
           providerEvidence: extracted.providerEvidence,
           cost: calculateAttemptCost({ snapshot: context.snapshot, usage: extracted.usage, evidence: extracted.evidence }),
         });
+        // Generate results carry the exact request/response HTTP bodies in
+        // their telemetry fields — no rawChunks flag needed on this path.
+        captureResponse(context, attemptId, result, []);
         return result;
       } catch (error) {
         context.store.finalize(attemptId, {
@@ -249,6 +302,7 @@ export function createAttemptAccountingMiddleware(
       const attemptId = randomUUID();
       if (context.attemptIdHolder) context.attemptIdHolder.value = attemptId;
       context.store.insertPending({ ...context, attemptId, sdkCallId: attemptId });
+      captureRequest(context, attemptId, params);
       let result: LanguageModelV4StreamResult;
       try {
         result = await doStream();
@@ -266,6 +320,12 @@ export function createAttemptAccountingMiddleware(
       let finalized = false;
       let firstTokenMarked = false;
       const chars = emptyOutputChars();
+      // Debug capture accumulators (issue 146): normalized parts in arrival
+      // order plus raw provider chunks when the driver honors the
+      // includeRawChunks call option.
+      const capturedParts: LanguageModelV4StreamPart[] = [];
+      const capturedRawChunks: unknown[] = [];
+      const captureEnabled = context.debugCapture === true;
       const finalize = (outcome: 'succeeded' | 'failed' | 'interrupted', part?: LanguageModelV4StreamPart, error?: unknown) => {
         if (finalized) return;
         finalized = true;
@@ -285,6 +345,16 @@ export function createAttemptAccountingMiddleware(
             ? calculateAttemptCost({ snapshot: context.snapshot, usage: extracted.usage, evidence: extracted.evidence })
             : { state: 'unknown', source: 'unknown', reason: 'Provider stream did not complete with authoritative cost' },
           ...(error === undefined ? {} : { error: errorMessage(error) }),
+        });
+        // Deferred off the settle path: a multi-MiB serialize + synchronous
+        // UPDATE here can busy-wait the SQLite write lock and stall the turn
+        // handoff (same hazard the TTFT write defers around). The parts array
+        // is complete at finalize time and never mutated afterwards; the
+        // response_json IS NULL guard makes the late write idempotent-safe.
+        const responseSnapshot = { http: result.response, parts: capturedParts };
+        const rawSnapshot = [...capturedRawChunks];
+        queueMicrotask(() => {
+          captureResponse(context, attemptId, responseSnapshot, rawSnapshot);
         });
       };
 
@@ -327,6 +397,14 @@ export function createAttemptAccountingMiddleware(
                   console.warn('[accounting] markFirstToken failed', { error });
                 }
               });
+            }
+            // Capture before finalize: the finalize() below flushes the
+            // accumulated parts, so the finish/error part currently being
+            // processed must be in the buffer first — a successful stream's
+            // capture must include its terminal part (usage, finishReason).
+            if (captureEnabled) {
+              if (next.value.type === 'raw') capturedRawChunks.push(next.value.rawValue);
+              else capturedParts.push(next.value);
             }
             if (next.value.type === 'finish') finalize('succeeded', next.value);
             if (next.value.type === 'error') {
