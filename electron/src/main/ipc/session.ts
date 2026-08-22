@@ -48,6 +48,10 @@ import { listConnectionModelRows } from '../providers/facets/discovery';
 import { groupTierVariantRows } from '../providers/facets/tiers';
 import { invalidateProjectMCPManagers } from '../mcp/project-registry';
 import { cancelIndex } from '../rag/indexer';
+import {
+  attachWorkspaceWatcher,
+  detachWorkspaceWatcher,
+} from '../indexing/watcher';
 import { clearNextRequestStop } from './next-request-stop';
 import { removeSessionActivity } from './session-activity';
 import {
@@ -143,14 +147,18 @@ export async function bindProjectDirectory(
     setDraftCwd(windowId, canonical);
   }
 
-  if (priorWorkspace.cwd && priorWorkspace.cwd !== canonical) {
-    const {
-      clearFunctionHashesForSession,
-      clearFunctionHashesForWorkspace,
-    } = await import('../tools/ast/get-function.js');
-    clearFunctionHashesForWorkspace(priorWorkspace.cwd);
-    if (active && active.chains.length === 0) {
-      clearFunctionHashesForSession(active.id);
+  if (priorWorkspace.cwd !== canonical) {
+    attachWorkspaceWatcher(canonical);
+    if (priorWorkspace.cwd) {
+      detachWorkspaceWatcher(priorWorkspace.cwd);
+      const {
+        clearFunctionHashesForSession,
+        clearFunctionHashesForWorkspace,
+      } = await import('../tools/ast/get-function.js');
+      clearFunctionHashesForWorkspace(priorWorkspace.cwd);
+      if (active && active.chains.length === 0) {
+        clearFunctionHashesForSession(active.id);
+      }
     }
   }
 
@@ -183,6 +191,7 @@ export async function revokeProjectTrustForDir(projectDir: string): Promise<void
   revokeProjectTrust(canonical);
   getProjectRuntimeRegistry().invalidate(canonical);
   invalidateProjectMCPManagers(canonical);
+  detachWorkspaceWatcher(canonical);
 
   // Trust just dropped — an in-flight index run for this directory must stop.
   void cancelIndex(canonical).catch(() => {});
@@ -340,6 +349,10 @@ export function registerSessionIPC(): void {
     // runtime. Selecting a session must not replace process-wide layers that
     // another running session could still depend on.
     const workspace = resolveWindowWorkspace(windowId);
+
+    if (releasedDraftCwd && workspace.cwd !== releasedDraftCwd) {
+      detachWorkspaceWatcher(releasedDraftCwd);
+    }
 
     emitWorkspaceChanged(event.sender, workspace);
     return session ? sessionForRenderer(session) : null;

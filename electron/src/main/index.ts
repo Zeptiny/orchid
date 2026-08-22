@@ -79,6 +79,8 @@ import {
   resetSubagentAttributionStore,
 } from './providers/accounting/subagent-attribution-store';
 import { closeSessionDb } from './session/storage';
+import { disposeAllWorkspaceWatchers } from './indexing/watcher';
+import { disposeIndexRefreshCoordinator } from './indexing/refresh-coordinator';
 import { withTimeoutPromise } from './utils/async';
 
 // ── Global state ─────────────────────────────────────────────────────────────
@@ -423,6 +425,9 @@ app.on('before-quit', async (event) => {
 
     // Flush live subagent checkpoints before IPC/runtime teardown.
     flushSubagentPersistence();
+
+    disposeAllWorkspaceWatchers();
+    disposeIndexRefreshCoordinator();
 
     // 3. Unregister IPC handlers
     unregisterAllIPC();
