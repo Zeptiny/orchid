@@ -13,11 +13,14 @@ import { canonicalizeProjectDirectory } from '../project/path';
 
 /**
  * Resolve a renderer-supplied project directory to its canonical path when
- * the sender window is authorized to read/write that project's config.
+ * the sender is authorized to read/write that project's config.
+ *
+ * `senderId` is the opaque client identity (Electron window id or host
+ * connection id).
  *
  * @throws When the directory is invalid or is neither the selected workspace nor a session project.
  */
-export function resolveAuthorizedProjectDir(senderId: number, projectDir: string): string {
+export function resolveAuthorizedProjectDir(senderId: string | number, projectDir: string): string {
   const canonical = canonicalizeProjectDirectory(projectDir);
   if (canonical == null) {
     throw new Error(`Project config target is not a valid project directory: ${projectDir}`);

@@ -200,6 +200,8 @@ export const HOST_ERROR_CODES = {
   INTERNAL: 'INTERNAL',
   /** Channel family is host-routed but the capability is absent (e.g. vault writes on a remote). */
   UNSUPPORTED_ON_HOST: 'UNSUPPORTED_ON_HOST',
+  /** Method arrived before a successful `host.hello` handshake (U4). */
+  HANDSHAKE_REQUIRED: 'HANDSHAKE_REQUIRED',
   /** Transport lost the host before a response arrived. */
   HOST_UNAVAILABLE: 'HOST_UNAVAILABLE',
   /** No response within the request deadline. */

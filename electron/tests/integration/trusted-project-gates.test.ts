@@ -80,6 +80,12 @@ vi.mock('../../src/main/project/runtime', () => ({
 vi.mock('../../src/main/ipc/chat', () => ({
   forceStopSession: (sessionId: string) => mocks.forceStopSession(sessionId),
 }));
+// The revoke flow sources forceStopSession from the relocated host pipeline
+// (host/chat/abort) instead of the IPC facade.
+vi.mock('../../src/main/host/chat/abort', async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  forceStopSession: (sessionId: string) => mocks.forceStopSession(sessionId),
+}));
 
 vi.mock('../../src/main/session/working-set-live', () => ({
   workingSetOpenOrFocus: (...args: unknown[]) => mocks.workingSetOpenOrFocus(...args),

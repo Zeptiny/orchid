@@ -26,33 +26,29 @@ import {
   setDraftTierOverride,
 } from '../session/draft-tier';
 import { getConfig } from '../config/loader';
-import { clearChatHistory, seedChatHistory } from './chat-history';
+import { clearChatHistory } from './chat-history';
 import { sendSessionEvent } from '../host/chat/events';
+import {
+  bindProjectDirectory,
+  reconcileClientWatcher,
+  resetWorkspaceWatcherReferences,
+  retargetWorkspaceWatcher,
+  seedCompleteChatHistory,
+  startOpenedSessionSubagentHydration,
+} from '../host/session-ops';
 import {
   clearDraftCwd,
   getDraftCwd,
   isWorkspaceBound,
-  requireValidProjectDirectory,
   setDraftCwd,
-  updateStickyDefaultProjectDir,
   type WorkspaceInfo,
 } from '../project/workspace';
 import { getProjectRuntimeRegistry } from '../project/runtime';
-import { canonicalizeProjectDirectory } from '../project/path';
 import {
   getProjectTrustState,
-  revokeProjectTrust,
-  revokeProjectTrustRaw,
 } from '../project/trust';
 import { listConnectionModelRows } from '../providers/facets/discovery';
 import { groupTierVariantRows } from '../providers/facets/tiers';
-import { invalidateProjectMCPManagers } from '../mcp/project-registry';
-import { cancelIndex } from '../rag/indexer';
-import { cancelProjectRefresh } from '../indexing/refresh-coordinator';
-import {
-  attachWorkspaceWatcher,
-  detachWorkspaceWatcher,
-} from '../indexing/watcher';
 import { clearNextRequestStop } from '../agents/next-request-stop';
 import { removeSessionActivity } from './session-activity';
 import {
@@ -89,14 +85,13 @@ export { flattenSessionMessages, sessionForRenderer };
 
 export { takeDraftReasoningOverride } from '../session/draft-reasoning';
 
-function seedCompleteChatHistory(
-  session: Parameters<typeof flattenSessionMessages>[0],
-  messages = flattenSessionMessages(session),
-): void {
-  if (session.chains.every((chain) => chain.messagesLoaded !== false)) {
-    seedChatHistory(session.id, messages);
-  }
-}
+// Workspace-binding + session-open core relocated to host/session-ops.ts
+// (electron-free, shared with the headless host); re-exported for consumers.
+export {
+  bindProjectDirectory,
+  reconcileClientWatcher as reconcileWindowWatcher,
+  revokeProjectTrustForDir,
+} from '../host/session-ops';
 
 /**
  * Model selection to reason about in draft mode (no active session):
@@ -113,163 +108,6 @@ function resolveDraftModelSelection(windowId: string): ModelSelection | null {
     // Workspace/runtime unresolvable — fall through to the user default.
   }
   return getConfig().default_model ?? null;
-}
-
-/**
- * Resolved cwd whose watcher reference this module last established for a
- * window — the authoritative record of the reference each window actually
- * holds. Every attach/detach goes through {@link retargetWorkspaceWatcher},
- * so the map never diverges from the refcounts it produced.
- */
-const windowWatcherCwd = new Map<string, string>();
-
-/**
- * Move the window's workspace-watcher reference after its effective workspace
- * changed (project bind, session switch). Attach is refcounted per project
- * path, so every site that can change the effective cwd must share these
- * exact semantics or references ratchet across switches. The prior reference
- * is read from {@link windowWatcherCwd}, never re-derived from the effective
- * workspace: a window whose cwd comes from the sticky default but that never
- * resolved a workspace must not detach a path another window attached.
- *
- * No-op when the cwd did not change; the next path is attached before the
- * prior one is released so a project shared with another window keeps its
- * instance. Never attaches an unbound (null) workspace.
- */
-function retargetWorkspaceWatcher(
-  windowId: string,
-  next: string | null,
-): void {
-  const prior = windowWatcherCwd.get(windowId) ?? null;
-  if (prior === next) return;
-  if (next != null) attachWorkspaceWatcher(next);
-  if (prior != null) detachWorkspaceWatcher(prior);
-  if (next != null) windowWatcherCwd.set(windowId, next);
-  else windowWatcherCwd.delete(windowId);
-}
-
-/**
- * Bring a window's watcher reference in line with its currently resolved
- * workspace. This is the startup seam: a freshly created window whose
- * workspace comes from the sticky default (no draft, no session) never goes
- * through a bind or an activation, so the first workspace resolution is what
- * attaches it. Idempotent — a window whose recorded reference already matches
- * the resolution is a no-op, so repeated resolutions never stack references.
- * Never attaches an unbound (null) workspace.
- */
-function reconcileWindowWatcher(windowId: string, workspace: WorkspaceInfo): void {
-  const next = isWorkspaceBound(workspace) ? workspace.cwd : null;
-  retargetWorkspaceWatcher(windowId, next);
-}
-
-/**
- * Bind a validated absolute project directory as the current workspace.
- *
- * - If an active session exists: update session.cwd via changeCwd.
- * - Otherwise: store as draft for this window.
- * - Always updates sticky default_project_dir (intentional pick).
- */
-export async function bindProjectDirectory(
-  windowId: string,
-  dir: string,
-): Promise<WorkspaceInfo> {
-  const canonical = requireValidProjectDirectory(dir);
-  const priorWorkspace = resolveWindowWorkspace(windowId);
-
-  await updateStickyDefaultProjectDir(canonical);
-
-  const manager = getSessionManager();
-  const active = manager.getActive(windowId);
-  if (active) {
-    if (active.chains.length === 0) {
-      manager.changeCwd(active.id, canonical);
-      clearDraftCwd(windowId);
-    } else {
-      // A conversation remains bound to the project it started in. Picking a
-      // different folder opens a draft there without moving or cancelling it.
-      manager.clearActive(windowId);
-      workingSetClearFocus(windowId);
-      setDraftCwd(windowId, canonical);
-    }
-  } else {
-    setDraftCwd(windowId, canonical);
-  }
-
-  if (priorWorkspace.cwd !== canonical) {
-    retargetWorkspaceWatcher(windowId, canonical);
-    if (priorWorkspace.cwd) {
-      const {
-        clearFunctionHashesForSession,
-        clearFunctionHashesForWorkspace,
-      } = await import('../tools/ast/get-function.js');
-      clearFunctionHashesForWorkspace(priorWorkspace.cwd);
-      if (active && active.chains.length === 0) {
-        clearFunctionHashesForSession(active.id);
-      }
-    }
-  }
-
-  return resolveWindowWorkspace(windowId);
-}
-
-/**
- * Revoke trust for one project and stop all of its activity.
- *
- * The trust record drops first so concurrent gate reads fail closed, then the
- * cached runtime and MCP managers are invalidated (lease-aware shutdown
- * retires them as running turns finish), any in-flight RAG indexing is
- * cancelled, queued index-refresh batches are dropped, and every session
- * bound to the directory is force-stopped.
- *
- * A directory that can no longer be canonicalized (deleted/moved) cannot be
- * runtime-invalidated, but its store entry — keyed by the exact path string —
- * is still removed so the settings listing can recover.
- */
-export async function revokeProjectTrustForDir(projectDir: string): Promise<void> {
-  const canonical = canonicalizeProjectDirectory(projectDir);
-  if (canonical == null) {
-    try {
-      revokeProjectTrustRaw(projectDir);
-    } catch (error) {
-      console.warn(`Failed to remove trust record for '${projectDir}':`, error);
-    }
-    return;
-  }
-
-  revokeProjectTrust(canonical);
-  getProjectRuntimeRegistry().invalidate(canonical);
-  invalidateProjectMCPManagers(canonical);
-  detachWorkspaceWatcher(canonical);
-  // Queued refresh batches must never flush into the now-untrusted project.
-  cancelProjectRefresh(canonical);
-
-  // Trust just dropped — an in-flight index run for this directory must stop.
-  void cancelIndex(canonical).catch(() => {});
-
-  const boundSessionIds = getSessionManager()
-    .listSaved()
-    .filter((summary) => summary.cwd === canonical)
-    .map((summary) => summary.id);
-  if (boundSessionIds.length === 0) return;
-
-  // Dynamic import avoids the session.ts <-> chat.ts circular dependency.
-  // The store record is already deleted, so a load failure must not reject.
-  let forceStopSession: ((sessionId: string) => unknown) | null = null;
-  try {
-    ({ forceStopSession } = await import('./chat.js'));
-  } catch (error) {
-    console.warn(`Failed to load chat module while revoking trust for '${canonical}':`, error);
-  }
-  if (forceStopSession == null) return;
-
-  for (const sessionId of boundSessionIds) {
-    // One failing session stop must not prevent the remaining stops.
-    try {
-      forceStopSession(sessionId);
-    } catch (error) {
-      console.warn(`Failed to force-stop session '${sessionId}' during trust revocation:`, error);
-    }
-  }
 }
 
 /** Emit session:workspace_changed to the sender window. */
@@ -301,37 +139,6 @@ function broadcastSessionDeleted(sessionId: string): void {
       console.debug('[session] deletion broadcast failed for a window', error);
     }
   }
-}
-
-/**
- * Materialize a session's persisted subagent chains back into the runtime
- * manager so the main agent regains its subagent context after an app restart
- * (records live only in memory for the current launch). The task is detached
- * from navigation; send and lifecycle operations join the same readiness
- * promise. Session open must not fail because hydration could not run, so
- * errors are logged and left retryable.
- */
-function startOpenedSessionSubagentHydration(
-  sessionId: string,
-  windowId: string,
-): void {
-  void (async () => {
-    const { getSubagentManager } = await import('../tools/index.js');
-    const { awaitSessionSubagentHydration } = await import('../tools/subagent/hydrate.js');
-    const result = await awaitSessionSubagentHydration(
-      getSubagentManager(),
-      sessionId,
-      { windowId },
-    );
-    if (result.agentMissing.length > 0) {
-      console.warn(
-        `[subagents] session-open hydration skipped records with missing agent definitions for ${sessionId}:`,
-        result.agentMissing,
-      );
-    }
-  })().catch((error) => {
-    console.warn(`[subagents] session-open hydration failed for ${sessionId}:`, error);
-  });
 }
 
 // ── IPC registration ─────────────────────────────────────────────────────────
@@ -676,7 +483,7 @@ export function registerSessionIPC(): void {
   ipcMain.handle(IPC_CHANNELS.SESSION_GET_WORKSPACE, async (event) => {
     const windowId = String(event.sender.id);
     const workspace = resolveWindowWorkspace(windowId);
-    reconcileWindowWatcher(windowId, workspace);
+    reconcileClientWatcher(windowId, workspace);
     return workspace;
   });
 
@@ -907,9 +714,10 @@ export function unregisterSessionIPC(): void {
   ipcMain.removeHandler(IPC_CHANNELS.SESSION_GET_SERVICE_TIER_CONFIG);
   clearDraftReasoningOverrides();
   clearDraftTierOverrides();
-  // Watcher references are meaningless once these handlers are gone (tests,
-  // shutdown); dropping them keeps the reconcile seam from acting on stale state.
-  windowWatcherCwd.clear();
+  // Watcher references (host/session-ops) are meaningless once these handlers
+  // are gone (tests, shutdown); dropping them keeps the reconcile seam from
+  // acting on stale state.
+  resetWorkspaceWatcherReferences();
 }
 
 // Re-export draft helper for tests that need to seed draft without IPC.

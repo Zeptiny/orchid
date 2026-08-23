@@ -43,6 +43,12 @@ vi.mock('../../src/main/ipc/chat', () => ({
   activeSessionsForProviderConnection: mocks.activeSessionsForProviderConnection,
   stopActiveProviderConnectionTurns: mocks.stopActiveProviderConnectionTurns,
 }));
+// The provider view/mutation core (providers/views.ts) sources the active-turn
+// helpers from the relocated host pipeline instead of the IPC facade.
+vi.mock('../../src/main/host/chat/abort', () => ({
+  activeSessionsForProviderConnection: mocks.activeSessionsForProviderConnection,
+  stopActiveProviderConnectionTurns: mocks.stopActiveProviderConnectionTurns,
+}));
 
 let providersIpc: typeof import('../../src/main/ipc/providers');
 let providerModelsIpc: typeof import('../../src/main/ipc/provider-models');
