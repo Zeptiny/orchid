@@ -481,12 +481,15 @@ describe('getMcpProviderToolAliases (sticky pinning)', () => {
     expect(getMcpProviderToolAliases(a).get('mcp::s::tool')).toBe('mcp_s_tool');
     expect(getMcpProviderToolAliases(b).get('mcp::s::tool')).toBe('mcp_s_tool');
 
-    // Manager A later sees a colliding sibling; B stays untouched.
+    // Manager A later sees a colliding sibling: A's pinned plain alias survives
+    // (only the newcomer hashes); B stays untouched.
     (a as unknown as { getTools: () => unknown[] }).getTools = () => [
       { definition: { name: 'mcp::s::tool' } },
       { definition: { name: 'mcp::s::tool!' } },
     ];
-    expect(getMcpProviderToolAliases(a).get('mcp::s::tool')).toMatch(/_[0-9a-f]{16}$/);
+    const afterCollision = getMcpProviderToolAliases(a);
+    expect(afterCollision.get('mcp::s::tool')).toBe('mcp_s_tool');
+    expect(afterCollision.get('mcp::s::tool!')).toMatch(/^mcp_s_tool_[0-9a-f]{16}$/);
     expect(getMcpProviderToolAliases(b).get('mcp::s::tool')).toBe('mcp_s_tool');
   });
 });

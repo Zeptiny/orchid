@@ -100,6 +100,13 @@ export function buildUpdateTool(
         'error',
       );
     }
+    if (title === undefined && status === undefined) {
+      return genericBuiltInToolOutcome(
+        'todo_update',
+        'Error: Nothing to update — provide title and/or status.',
+        'error',
+      );
+    }
 
     const titles = title === undefined ? undefined : Array.isArray(title) ? title : ids.map(() => title);
     const statuses = status === undefined ? undefined : Array.isArray(status) ? status : ids.map(() => status);

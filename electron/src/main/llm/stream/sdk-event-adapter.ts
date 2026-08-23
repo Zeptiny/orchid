@@ -456,9 +456,9 @@ const mcpAliasPins = new WeakMap<MCPManager, McpAliasPins>();
  * every tool name the manager has exposed (not just the current snapshot), so
  * tool registration (orchestrator) and stream-time alias reversal
  * (createToolNameResolver) always agree even if the set mutates between them.
- * Pinning also keeps aliases stable across mid-session server reconnects: a
- * tool's alias may flip plain->hashed as colliding siblings appear, but never
- * back, so the model never sees a learned name disappear.
+ * Pinning also keeps aliases stable across mid-session server reconnects: an
+ * assigned alias never changes, so the model never sees a learned name
+ * disappear — colliding siblings that appear later hash around it.
  */
 export function getMcpProviderToolAliases(mcpManager: MCPManager): Map<string, string> {
   let pins = mcpAliasPins.get(mcpManager);
@@ -469,7 +469,11 @@ export function getMcpProviderToolAliases(mcpManager: MCPManager): Map<string, s
   for (const { definition } of mcpManager.getTools()) {
     pins.seen.add(definition.name);
   }
-  return buildMcpProviderToolAliases([...pins.seen], pins.assigned);
+  const aliases = buildMcpProviderToolAliases([...pins.seen], pins.assigned);
+  for (const [internalName, alias] of aliases) {
+    pins.assigned.set(internalName, alias);
+  }
+  return aliases;
 }
 
 /** Snapshot provider-safe MCP aliases once for this frozen stream attempt. */

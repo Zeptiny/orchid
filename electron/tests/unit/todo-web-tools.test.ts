@@ -231,6 +231,23 @@ describe('Todo Tools', () => {
       expect(parsed.success).toBe(false);
     });
 
+    it('todo_update with neither title nor status errors without mutating or notifying', async () => {
+      const createHandler = buildCreateTool(store).handler;
+      const created = (await callTool(createHandler, { title: 'Untouched' })) as ToolExecutionResult;
+      const id = created.agentProjection.content.match(/<task id="([a-f0-9]{8})"/)![1];
+
+      let notifyCount = 0;
+      const { handler } = buildUpdateTool(store, () => {
+        notifyCount++;
+      });
+      const result = (await callTool(handler, { id })) as ToolExecutionResult;
+
+      expect(result.canonical.status).toBe('error');
+      expect(result.agentProjection.content).toContain('Nothing to update');
+      expect(store.get(id)!.title).toBe('Untouched');
+      expect(notifyCount).toBe(0);
+    });
+
     it('todo_update batch collects per-item errors without failing the whole call', async () => {
       const createHandler = buildCreateTool(store).handler;
       const created = (await callTool(createHandler, { title: 'Real' })) as ToolExecutionResult;
