@@ -164,22 +164,25 @@ electron/
 │   │   │   ├── mcp/             # MCP resource reader + resource listing
 │   │   │   ├── ask-question/    # ask_question tool + QuestionStore (agent→user questions)
 │   │   │   └── subagent/        # delegate, wait, interrupt, answer, close, follow-up, hydrate
-│   │   ├── ipc/                 # IPC handlers (main process side)
+│   │   ├── host/               # Headless agent host (Electron-free; shared by app + orchid-agent daemon)
+│   │   │   ├── events.ts       # HostEventSink interface + setHostEventSink() (no-op default)
+│   │   │   ├── chat/           # Agentic turn pipeline (client ids, not WebContents)
+│   │   │   │   ├── send.ts     # startChatTurn — session single-flight, actors, event flush
+│   │   │   │   ├── stream.ts   # createProviderStreamFn — freezes runtime snapshot per turn
+│   │   │   │   ├── events.ts   # Sink wrappers — sequenced turn/session event delivery
+│   │   │   │   ├── state.ts    # ActiveAgent registry (messages, tool calls, generations)
+│   │   │   │   ├── snapshot.ts # Live chat snapshot builder
+│   │   │   │   ├── persist.ts  # Debounced checkpoints + turn persistence
+│   │   │   │   ├── abort.ts    # Force-abort / dispose paths
+│   │   │   │   ├── compaction.ts # Main-session compaction engine — trigger/pending/retry state
+│   │   │   │   ├── session.ts  # ensureActiveSession (workspace resolve + trust gate)
+│   │   │   │   └── title.ts    # Auto-naming via internal session-namer
+│   │   ├── ipc/                 # IPC handlers (main process side; thin registration layer)
 │   │   │   ├── index.ts         # registerAllIPC() / unregisterAllIPC()
 │   │   │   ├── payload-schemas.ts # Zod schemas for IPC payloads
-│   │   │   ├── chat.ts          # Facade: chat:send/snapshot/stop/cancel/queue_next + bgcmd:*
-│   │   │   ├── chat/            # Agentic loop internals
-│   │   │   │   ├── send.ts      # startChatTurn — session single-flight, actors, event flush
-│   │   │   │   ├── stream.ts    # createProviderStreamFn — freezes runtime snapshot per turn
-│   │   │   │   ├── events.ts    # Sequenced turn/session event broadcast
-│   │   │   │   ├── state.ts     # ActiveAgent registry (messages, tool calls, generations)
-│   │   │   │   ├── snapshot.ts  # Live chat snapshot builder
-│   │   │   │   ├── persist.ts   # Debounced checkpoints + turn persistence
-│   │   │   │   ├── abort.ts     # Force-abort / dispose paths
-│   │   │   │   ├── compaction.ts # Main-session compaction engine — trigger/pending/retry state, send-time + mid-turn compaction seams
-│   │   │   │   ├── session.ts   # ensureActiveSession (workspace resolve + trust gate)
-│   │   │   │   └── title.ts     # Auto-naming via internal session-namer
-│   │   │   ├── next-request-stop.ts # Stop the next request at the next step boundary
+│   │   │   ├── chat.ts          # Facade: chat:send/snapshot/stop/cancel/queue_next + bgcmd:*; installs the Electron HostEventSink
+│   │   │   ├── chat/
+│   │   │   │   └── events.ts    # Electron HostEventSink — window fan-out + webContentsForWindowId
 │   │   │   ├── chat-history.ts  # chat history helpers
 │   │   │   ├── config.ts        # config:get, config:save
 │   │   │   ├── permission.ts    # Approval IPC + session permission mode
@@ -486,7 +489,7 @@ idle → [USER_INPUT] → streaming → [TOOL_CALL] → toolExecuting → [TOOL_
 - `stream/eager-tool-bridge.ts` accumulates streamed `tool-input-*` deltas and launches eager execution exactly once per tool call.
 - `stream/normalized-stream.ts` prefers `fullStream`, falls back to `textStream` + `onStepFinish` when `fullStream` errors without user abort/idle.
 - `stream/sdk-event-adapter.ts` normalizes AI SDK parts into the `StreamEvent` union (`stream/events.ts`) and builds provider-safe MCP tool aliases.
-- `ipc/next-request-stop.ts`: `chat:queue_next` arms a per-session stop that ends the current `maxSteps` loop at the next step boundary (`shouldStopNextRequest` feeds `stopWhen`).
+- `agents/next-request-stop.ts`: `chat:queue_next` arms a per-session stop that ends the current `maxSteps` loop at the next step boundary (`shouldStopNextRequest` feeds `stopWhen`).
 
 ### Tool System
 - Tools are Zod-validated definitions + async handlers
@@ -532,7 +535,7 @@ Every tool dispatch passes `permissions/gate.ts:checkPermission()` before the ha
 ### AGENTS.md Context Handling
 Instruction files (`AGENTS.md` and the configured `agents_md.filenames` aliases) are discovered and surfaced automatically — the agent never loads them manually.
 - **Discovery** (`agents-md/resolver.ts`): for any touched path, walk up from its directory to the workspace root, taking the first matching alias per directory. Symlinks that escape the workspace are ignored and filenames match case-insensitively. The workspace-root file is the `root` tier; the rest are `nested`.
-- **Root injection** (`project/agents-md.ts`, wired in `ipc/chat/send.ts` and `agents/subagent-runner.ts`): the root file is appended once to the static system instructions (after personality) and seeded into the per-session tracker, so it is never re-injected. Subagents get the root the same way.
+- **Root injection** (`project/agents-md.ts`, wired in `host/chat/send.ts` and `agents/subagent-runner.ts`): the root file is appended once to the static system instructions (after personality) and seeded into the per-session tracker, so it is never re-injected. Subagents get the root the same way.
 - **Read-path injection** (`agents-md/inject.ts`, in `llm/tool-dispatch.ts`): single-path read tools (`read`, `read_directory`, `get_file_skeleton`, `get_function`, `find_symbol_references`) append the byte-capped content of every not-yet-seen governing file to their result as an `<agents_md>` block, then mark it seen. `grep`/`glob`/`rag_search` fan-out is deliberately skipped.
 - **Write-path enforcement** (`agents-md/enforce.ts`, in `llm/tool-dispatch.ts`): the five file mutators (`edit`, `write`, `apply_patch`, `rename_symbol`, `replace_symbol`) are gated by `agents_md.enforce_on_write` — `block` denies the mutation until the governing files are read, `warn` appends a warning, `inject` appends the content and marks it seen, `off` disables. `apply_patch` reports every unseen file at once; editing an instruction file is exempt and refreshes its tracker entry.
 - **Tracker** (`session/agents-md-context.ts`): an ephemeral, in-memory, per-session set of seen canonical paths, keyed by `sessionId::agentScope` so each subagent starts fresh (root only) rather than inheriting the parent's seen-set. With no session there is no injection/enforcement and never a block; the renderer `tool:execute` path opts out via `agentsMdDisabled`.
@@ -599,7 +602,7 @@ Applied via `wrapLanguageModel()`:
 - SQLite database `~/.orchid/sessions.db` (WAL mode, foreign keys, `busy_timeout=5000`, corruption-recovery rebuild — `utils/sqlite.ts`)
 - Schema v2 (`session/schema.ts`): `sessions`, `chains` (messages JSON per chain, FK CASCADE), `subagent_chains`, `schema_meta`; sessions also persist `reasoning_effort_override` and `permission_mode`
 - `session/manager.ts` does CRUD + auto-naming; `session/singleton.ts` owns the lazy `getSessionManager()`
-- Auto-naming: internal `session-namer` agent generates titles from first exchange (`ipc/chat/title.ts`, deadline `session_title_max_wait_seconds`)
+- Auto-naming: internal `session-namer` agent generates titles from first exchange (`host/chat/title.ts`, deadline `session_title_max_wait_seconds`)
 
 ### Renderer Shell
 - **Layout** (`ChatView.tsx`): top `SessionTabBar`, left `LeftSidebar` (workspace chip + project-grouped sessions), center chat (`ChatStream` + `MessageQueue` + `InputArea` + `Footer`), right inspector `Sidebar` (collapsible Todos/Subagents/Commands/Context/Usage/Index/MCP blocks). Topology is frozen by the styling contract — restyle in place only (`styles/README.md`).
@@ -797,7 +800,7 @@ Motion is a shared interaction contract, not local decoration. Use it to explain
 |------|-------|
 | Add a new tool | `src/main/tools/registry.ts`, `src/main/tools/index.ts`, new file in `src/main/tools/<category>/`; risk class + permission defaults in `src/shared/types/permission.ts` |
 | Add IPC channel | `src/shared/types/ipc.ts` (channels + types), `src/main/ipc/<module>.ts`, `src/preload/index.ts` |
-| Modify chat flow | `src/main/ipc/chat/send.ts`, `src/main/ipc/chat/stream.ts`, `src/main/agents/xstate/agent-machine.ts`, `src/renderer/hooks/useChat.ts` |
+| Modify chat flow | `src/main/host/chat/send.ts`, `src/main/host/chat/stream.ts`, `src/main/agents/xstate/agent-machine.ts`, `src/renderer/hooks/useChat.ts` |
 | Change config | `src/main/config/schema.ts`, `src/main/config/loader.ts`, `src/shared/types/ipc-boundary.ts` |
 | Permission modes / approval UI | `src/main/permissions/` (gate/resolver/evaluator/detection), `src/main/ipc/permission.ts`, `src/renderer/components/PermissionApprovalPanel.tsx`, `src/shared/types/permission.ts` |
 | Analytics | `src/main/ipc/analytics.ts`, `src/main/providers/accounting/analytics-queries.ts`, `src/renderer/components/AnalyticsView.tsx`, `src/shared/types/analytics.ts` |
