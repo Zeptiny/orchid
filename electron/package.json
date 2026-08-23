@@ -59,6 +59,7 @@
     "diff": "^9.0.0",
     "electron-updater": "^6.3.0",
     "node-pty": "^1.0.0",
+    "onnxruntime-node": "^1.20.0",
     "react-markdown": "^10.1.0",
     "recharts": "^3.10.1",
     "rehype-highlight": "^7.0.2",
@@ -68,9 +69,6 @@
     "web-tree-sitter": "^0.26.11",
     "xstate": "^5.32.5",
     "zod": "^3.23.0"
-  },
-  "optionalDependencies": {
-    "onnxruntime-node": "^1.20.0"
   },
   "devDependencies": {
     "@electron/rebuild": "^4.0.0",
