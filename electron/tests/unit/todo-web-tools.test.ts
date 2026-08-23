@@ -111,12 +111,11 @@ describe('Todo Tools', () => {
       expect(notifyCalled).toBe(true);
     });
 
-    it('should create a task with optional subagent_id', async () => {
+    it('should create a task owned by the calling subagent scope', async () => {
       const { handler } = buildCreateTool(store);
       const result = (await callTool(handler, {
         title: 'Subagent task',
-        subagent_id: 'sub-123',
-      })) as ToolExecutionResult;
+      }, 'sub-123')) as ToolExecutionResult;
 
       const idMatch = result.agentProjection.content.match(/<task id="([a-f0-9]{8})"/);
       const id = idMatch![1];
@@ -529,8 +528,8 @@ describe('Todo Tools', () => {
     it('should isolate list by agent scope (not peer todos)', async () => {
       const createHandler = buildCreateTool(store).handler;
       await callTool(createHandler, { title: 'Main task' }, 'main');
-      // Main assigns ownership to sub-1
-      await callTool(createHandler, { title: 'Sub task', subagent_id: 'sub-1' }, 'main');
+      // Sub-1 owns its own task (subagent calls auto-stamp their scope)
+      await callTool(createHandler, { title: 'Sub task' }, 'sub-1');
 
       const listHandler = buildListTool(store).handler;
       const asSub = (await callTool(listHandler, {}, 'sub-1')) as {

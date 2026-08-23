@@ -53,10 +53,9 @@ describe('agent-scope helpers', () => {
     expect(todoBelongsToScope({ subagent_id: 'sub-a' }, 'sub-b')).toBe(false);
   });
 
-  it('resolveCreateOwner stamps subagent and lets main assign', () => {
-    expect(resolveCreateOwner('sub-a', 'forged')).toBe('sub-a');
-    expect(resolveCreateOwner('main', 'sub-b')).toBe('sub-b');
-    expect(resolveCreateOwner('main', undefined)).toBeUndefined();
+  it('resolveCreateOwner stamps subagent scope and main to null owner', () => {
+    expect(resolveCreateOwner('sub-a')).toBe('sub-a');
+    expect(resolveCreateOwner('main')).toBeUndefined();
   });
 });
 
