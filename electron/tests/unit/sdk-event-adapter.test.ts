@@ -1,10 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { ModelMessage } from 'ai';
 import {
+  buildMcpProviderToolAliases,
   classifyStreamError,
   createToolNameResolver,
   SdkEventAdapter,
-  toProviderMcpToolName,
 } from '../../src/main/llm/stream/sdk-event-adapter';
 import type { MCPManager } from '../../src/main/mcp/manager';
 import type { EagerToolBridge } from '../../src/main/llm/stream/eager-tool-bridge';
@@ -294,7 +294,7 @@ describe('SdkEventAdapter', () => {
     expect(adapt(aliasAdapter, {
       type: 'tool-call',
       toolCallId: 'mcp-call',
-      toolName: toProviderMcpToolName(internalName),
+      toolName: buildMcpProviderToolAliases([internalName]).get(internalName),
       input: {},
     })).toEqual([
       { type: 'tool_call', toolCallId: 'mcp-call', toolName: internalName, args: '{}' },
@@ -302,7 +302,7 @@ describe('SdkEventAdapter', () => {
     adapt(aliasAdapter, {
       type: 'tool-input-start',
       toolCallId: 'mcp-call-2',
-      toolName: toProviderMcpToolName(internalName),
+      toolName: buildMcpProviderToolAliases([internalName]).get(internalName),
     });
     expect(getTools).toHaveBeenCalledOnce();
   });
@@ -344,5 +344,55 @@ describe('SdkEventAdapter', () => {
       title: 'Unexpected Error',
       detail: '[object Object]',
     });
+  });
+});
+
+describe('buildMcpProviderToolAliases', () => {
+  it('uses the sanitized name without a hash when it is unique and short enough', () => {
+    const aliases = buildMcpProviderToolAliases(['mcp::context7::resolve-library-id']);
+
+    expect(aliases.get('mcp::context7::resolve-library-id')).toBe('mcp_context7_resolve-library-id');
+  });
+
+  it('appends a deterministic hash when sanitized names collide', () => {
+    const internalNames = ['mcp::s::search:web', 'mcp::s::search_web'];
+    const aliases = buildMcpProviderToolAliases(internalNames);
+    const values = [...aliases.values()];
+
+    expect(values[0]).toMatch(/^mcp_s_search_web_[0-9a-f]{16}$/);
+    expect(values[1]).toMatch(/^mcp_s_search_web_[0-9a-f]{16}$/);
+    expect(values[0]).not.toBe(values[1]);
+    expect(aliases).toEqual(buildMcpProviderToolAliases([...internalNames].reverse()));
+  });
+
+  it('hashes names that exceed the provider length budget so truncation cannot merge them', () => {
+    const longA = `mcp::s::${'a'.repeat(60)}A`;
+    const longB = `mcp::s::${'a'.repeat(60)}B`;
+    const aliases = buildMcpProviderToolAliases([longA, longB]);
+    const values = [...aliases.values()];
+
+    for (const value of values) {
+      expect(value.length).toBeLessThanOrEqual(64);
+    }
+    expect(values[0]).not.toBe(values[1]);
+    expect(values[0]).toMatch(/_[0-9a-f]{16}$/);
+  });
+
+  it('resolves aliases back to internal names for the full set', () => {
+    const internalNames = [
+      'mcp::context7::resolve-library-id',
+      'mcp::s::search:web',
+      'mcp::s::search_web',
+    ];
+    const getTools = vi.fn(() => internalNames.map((name) => ({ definition: { name } })));
+    const mcpManager = { getTools } as unknown as MCPManager;
+    const resolve = createToolNameResolver(mcpManager);
+    const aliases = buildMcpProviderToolAliases(internalNames);
+
+    for (const internalName of internalNames) {
+      expect(resolve(aliases.get(internalName)!)).toBe(internalName);
+    }
+    expect(resolve('mcp::direct::name')).toBe('mcp::direct::name');
+    expect(resolve('todo_list')).toBe('todo_list');
   });
 });

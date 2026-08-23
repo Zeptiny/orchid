@@ -51,7 +51,7 @@ import {
   EagerToolBridge,
 } from './stream/eager-tool-bridge';
 import { NormalizedStream } from './stream/normalized-stream';
-import { classifyStreamError, toProviderMcpToolName } from './stream/sdk-event-adapter';
+import { classifyStreamError, buildMcpProviderToolAliases } from './stream/sdk-event-adapter';
 import type { ProviderStepUsage } from './stream/sdk-event-adapter';
 import type { StreamEvent } from './stream/events';
 import { buildSystemPrompt, type SystemPromptContext } from './system-prompt';
@@ -575,6 +575,11 @@ export function buildToolMap(
   // Add MCP tools if available
   if (mcpManager) {
     const mcpTools = mcpManager.getTools();
+    // Aliases are built from the full tool set (not the allowed subset) so the
+    // stream-time resolver and this registration always agree.
+    const mcpAliases = buildMcpProviderToolAliases(
+      mcpTools.map(({ definition }) => definition.name),
+    );
     for (const { definition, handler } of mcpTools) {
       const isAllowed = allowedTools.some((pattern) => {
         if (pattern === '*') return true;
@@ -588,7 +593,7 @@ export function buildToolMap(
       if (!isAllowed) continue;
 
       const internalName = definition.name;
-      const providerName = toProviderMcpToolName(internalName);
+      const providerName = mcpAliases.get(internalName)!;
       if (providerName in toolMap) {
         throw new Error(
           `Provider tool name collision for MCP tool "${internalName}": "${providerName}"`,
