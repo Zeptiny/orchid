@@ -8,7 +8,7 @@ import {
   clearNextRequestStop,
   requestNextRequestStop,
   shouldStopNextRequest,
-} from '../../src/main/ipc/next-request-stop';
+} from '../../src/main/agents/next-request-stop';
 import { OPENAI_TIER_MECHANISM } from '../../src/main/providers/drivers/native';
 
 function successfulToolResult(toolCallId: string, content: string): Record<string, unknown> {

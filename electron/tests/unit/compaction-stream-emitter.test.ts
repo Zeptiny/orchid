@@ -36,7 +36,7 @@ vi.mock('../../src/main/session/singleton', () => ({
 }));
 vi.mock('../../src/main/session/manager', () => ({ onSessionDeleted: vi.fn() }));
 vi.mock('../../src/main/ipc/chat-history', () => ({ setChatHistory: vi.fn() }));
-vi.mock('../../src/main/ipc/next-request-stop', () => ({
+vi.mock('../../src/main/agents/next-request-stop', () => ({
   requestCompactionPause: vi.fn(),
   clearCompactionPause: vi.fn(),
   clearCompactionPausesForSession: vi.fn(),

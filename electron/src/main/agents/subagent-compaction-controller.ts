@@ -44,7 +44,7 @@ import {
   clearCompactionPause,
   requestCompactionPause,
   shouldPauseForCompaction,
-} from '../ipc/next-request-stop';
+} from './next-request-stop';
 import {
   applySubagentPendingCompaction,
   buildSubagentPartialReport,

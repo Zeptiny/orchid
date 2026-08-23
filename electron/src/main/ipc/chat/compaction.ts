@@ -41,7 +41,7 @@ import {
   clearCompactionPausesForSession,
   requestCompactionPause,
   shouldPauseForCompaction,
-} from '../next-request-stop';
+} from '../../agents/next-request-stop';
 import { publishSessionActivity } from '../session-activity';
 import { totalCharsForMessages } from '../../llm/compaction/message-chars';
 import { resolveUserExemptIds, type CutResult } from '../../llm/compaction/select';

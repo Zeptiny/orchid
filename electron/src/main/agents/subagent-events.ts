@@ -1,11 +1,14 @@
 /**
- * Live subagent delta batching and window delivery.
+ * Live subagent delta batching and delivery.
  *
  * This is intentionally owned by the agent runtime rather than IPC
  * registration: the runtime wires and flushes these process-wide helpers,
  * while the IPC module only owns snapshot handler registration.
+ *
+ * Delivery is injected via {@link setSubagentDeltaDelivery} so the runtime
+ * stays Electron-free; the Electron shell installs the window broadcast and
+ * plain-Node hosts keep the no-op default.
  */
-import { BrowserWindow, type WebContents } from 'electron';
 import { IPC_CHANNELS, type SubagentEvent } from '../../shared/types/ipc';
 import type {
   SubagentDeltaEvent,
@@ -17,7 +20,20 @@ import { getConfig } from '../config/loader';
 import { subagentsConfigSchema } from '../config/schema';
 import { getSessionManager } from '../session/singleton';
 
-export function isEligibleSubagentRecipient(contents: WebContents, sessionId: string): boolean {
+/** Structural delivery target (a window's web contents). */
+export interface SubagentDeliveryContents {
+  id: number | string;
+  isDestroyed(): boolean;
+  send(channel: string, ...args: unknown[]): void;
+}
+
+/** Structural window shape targeted by the delivery helpers. */
+export interface SubagentDeliveryWindow {
+  isDestroyed(): boolean;
+  webContents?: SubagentDeliveryContents | null;
+}
+
+export function isEligibleSubagentRecipient(contents: SubagentDeliveryContents, sessionId: string): boolean {
   if (contents.isDestroyed()) return false;
   return getSessionManager().getActive(String(contents.id))?.id === sessionId;
 }
@@ -195,26 +211,53 @@ export function createSubagentDeltaBatcher(
 /** Deliver one batched delta envelope to the windows owning its session. */
 export function deliverSubagentDeltaEvent(
   envelope: SubagentEvent,
-  windows: readonly BrowserWindow[] = BrowserWindow.getAllWindows(),
+  windows: readonly SubagentDeliveryWindow[] = [],
 ): void {
   for (const win of windows) {
     try {
-      if (!win.isDestroyed() && isEligibleSubagentRecipient(win.webContents, envelope.sessionId)) {
+      if (!win.isDestroyed() && win.webContents && isEligibleSubagentRecipient(win.webContents, envelope.sessionId)) {
         win.webContents.send(IPC_CHANNELS.SUBAGENTS_EVENT, envelope);
       }
     } catch { /* window closed between targeting and send */ }
   }
 }
 
-function hasEligibleSubagentRecipient(sessionId: string): boolean {
-  return BrowserWindow.getAllWindows().some(
-    (win) => !win.isDestroyed() && isEligibleSubagentRecipient(win.webContents, sessionId),
+/** Whether any live window in the set owns the session. */
+export function hasEligibleSubagentRecipientWindow(
+  sessionId: string,
+  windows: readonly SubagentDeliveryWindow[] = [],
+): boolean {
+  return windows.some(
+    (win) => !win.isDestroyed() && win.webContents != null && isEligibleSubagentRecipient(win.webContents, sessionId),
   );
 }
 
+/** Injected delivery for the process-wide delta batcher. */
+export interface SubagentDeltaDelivery {
+  /** Deliver one batched envelope to its live recipients. */
+  deliver(envelope: SubagentEvent): void;
+  /** Whether any live recipient currently owns the session. */
+  hasEligibleRecipient(sessionId: string): boolean;
+}
+
+const noopDeltaDelivery: SubagentDeltaDelivery = {
+  deliver: () => {},
+  hasEligibleRecipient: () => false,
+};
+
+let deltaDelivery: SubagentDeltaDelivery = noopDeltaDelivery;
+
+/**
+ * Install delta delivery for the process-wide batcher (the Electron shell
+ * installs the window broadcast). Passing null restores the no-op default.
+ */
+export function setSubagentDeltaDelivery(delivery: SubagentDeltaDelivery | null): void {
+  deltaDelivery = delivery ?? noopDeltaDelivery;
+}
+
 const deltaBatcher = createSubagentDeltaBatcher(
-  (envelope) => deliverSubagentDeltaEvent(envelope),
-  { isEligible: hasEligibleSubagentRecipient },
+  (envelope) => deltaDelivery.deliver(envelope),
+  { isEligible: (sessionId) => deltaDelivery.hasEligibleRecipient(sessionId) },
 );
 
 export function queueSubagentDelta(event: SubagentDeltaEvent): void { deltaBatcher.queue(event); }

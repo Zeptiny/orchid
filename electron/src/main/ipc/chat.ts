@@ -18,7 +18,7 @@ import { getProjectTrustState } from '../project/trust';
 import { getProjectRuntimeRegistry } from '../project/runtime';
 import { clearAllChatHistory } from './chat-history';
 import { chatCancelSchema, chatCompactSchema, chatQueueNextSchema, chatSendSchema, chatSnapshotSchema, chatStopSchema } from './payload-schemas';
-import { requestNextRequestStop } from './next-request-stop';
+import { requestNextRequestStop } from '../agents/next-request-stop';
 import { completeSessionActivity } from './session-activity';
 import {
   activeAgents,

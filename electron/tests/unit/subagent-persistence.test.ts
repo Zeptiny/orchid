@@ -26,7 +26,7 @@ import {
   getCompactionPending,
   setCompactionPending,
 } from '../../src/main/llm/compaction/pending-store';
-import { clearCompactionPause, shouldPauseForCompaction } from '../../src/main/ipc/next-request-stop';
+import { clearCompactionPause, shouldPauseForCompaction } from '../../src/main/agents/next-request-stop';
 import type { CompactionTrigger } from '../../src/main/llm/compaction/trigger';
 
 vi.mock('electron', () => ({

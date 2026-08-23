@@ -31,13 +31,21 @@ import { seedSharedPromptsDir } from './prompts/registry';
 import { shutdownProjectMCPManagers } from './mcp/project-registry';
 import { initUpdater, destroyUpdater, checkForUpdates } from './updater';
 import { initFileLogging, closeFileLogging } from './logging';
-import { registerBuiltinTools } from './tools';
+import { registerBuiltinTools, setTodosChangedNotifier } from './tools';
 import { getBackgroundStore } from './tools/process/background-store';
+import { IPC_CHANNELS } from '../shared/types/ipc';
 import {
   wireSubagentRuntime,
   flushSubagentPersistence,
   disposeSubagentPersistence,
+  broadcastSubagentsChanged,
+  setSubagentsChangedBroadcast,
 } from './agents/wire-subagents';
+import {
+  deliverSubagentDeltaEvent,
+  hasEligibleSubagentRecipientWindow,
+  setSubagentDeltaDelivery,
+} from './agents/subagent-events';
 import { initToolWorkerPool, disposeToolWorkerPool } from './llm/tool-pool';
 import { disposeAnalyticsWorkerPool } from './providers/accounting/analytics-query-runner';
 import { runStartupLifecycle, type StartupLifecycleResult } from './startup-lifecycle';
@@ -229,6 +237,29 @@ function initializeProviderAccounting(): void {
 
 // ── Window creation ──────────────────────────────────────────────────────────
 
+/**
+ * Install the Electron window broadcasts behind the agent runtime's
+ * injectable delivery seams: todos changes, live subagent deltas, and
+ * durable subagent snapshot changes.
+ */
+function installWindowBroadcasts(): void {
+  setTodosChangedNotifier((sessionId) => {
+    for (const win of BrowserWindow.getAllWindows()) {
+      if (!win.isDestroyed()) {
+        win.webContents.send(IPC_CHANNELS.SESSION_TODOS_CHANGED, { sessionId });
+      }
+    }
+  });
+  setSubagentDeltaDelivery({
+    deliver: (envelope) => deliverSubagentDeltaEvent(envelope, BrowserWindow.getAllWindows()),
+    hasEligibleRecipient: (sessionId) =>
+      hasEligibleSubagentRecipientWindow(sessionId, BrowserWindow.getAllWindows()),
+  });
+  setSubagentsChangedBroadcast((sessionId) =>
+    broadcastSubagentsChanged(sessionId, BrowserWindow.getAllWindows()),
+  );
+}
+
 function resolveAppIcon(): string | undefined {
   // Packaged builds: electron-builder places icon under resources via extraResources.
   // Dev: use build/icon.png next to the electron package root.
@@ -329,6 +360,7 @@ app.whenReady().then(async () => {
         ConfigManager.load({ projectDir: HOME_CONFIG_DIR });
         const agents = loadAgents();
         const skills = loadSkills();
+        installWindowBroadcasts();
         registerBuiltinTools({ agents, skills, mcpManager: null });
         wireSubagentRuntime();
       },

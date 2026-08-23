@@ -59,7 +59,6 @@ import {
   initializeProviderAccountingStore,
 } from '../providers/accounting/store';
 import { importESM } from '../utils/esm-import';
-import { IPC_CHANNELS } from '../../shared/types/ipc';
 
 /** Compatibility registry for non-turn IPC and isolated callers. */
 export const toolRegistry = new ToolRegistry();
@@ -128,6 +127,20 @@ function createSessionTodoStoreResolver(
   };
 }
 
+/**
+ * Notifier invoked after a todo mutation with the affected session id (null
+ * when no session could be resolved). Default no-op; the Electron shell
+ * installs the SESSION_TODOS_CHANGED window broadcast.
+ */
+export type TodosChangedNotifier = (sessionId: string | null) => void;
+
+let todosChangedNotifier: TodosChangedNotifier = () => {};
+
+/** Install the todos-changed notifier (window broadcast under Electron). */
+export function setTodosChangedNotifier(notifier: TodosChangedNotifier): void {
+  todosChangedNotifier = notifier;
+}
+
 function notifyTodosChanged(ctx: ToolExecutionContext): void {
   try {
     const manager = getSessionManager();
@@ -135,16 +148,7 @@ function notifyTodosChanged(ctx: ToolExecutionContext): void {
     if (sessionId) {
       manager.persistTodos(sessionId);
     }
-    // Dynamic require so unit tests that import tools without Electron still load.
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const { createRequire } = require('node:module') as typeof import('node:module');
-    const req = createRequire(__filename);
-    const { BrowserWindow } = req('electron') as typeof import('electron');
-    for (const win of BrowserWindow.getAllWindows()) {
-      if (!win.isDestroyed()) {
-        win.webContents.send(IPC_CHANNELS.SESSION_TODOS_CHANGED, { sessionId });
-      }
-    }
+    todosChangedNotifier(sessionId);
   } catch (err) {
     if (process.env.NODE_ENV !== 'test' && process.env.VITEST === undefined) {
       console.warn(

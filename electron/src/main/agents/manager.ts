@@ -26,7 +26,7 @@ import type { SubagentRecord as DomainSubagentRecord } from '../../shared/types/
 import { getConfig } from '../config/loader';
 import type { SubagentCompactionPayload, SubagentCompactionResult } from '../session/storage';
 import { clearCompactionPendingsForSession } from '../llm/compaction/pending-store';
-import { clearCompactionPausesForSession } from '../ipc/next-request-stop';
+import { clearCompactionPausesForSession } from './next-request-stop';
 import {
   SubagentDeltaEventType,
   SubagentStatus,

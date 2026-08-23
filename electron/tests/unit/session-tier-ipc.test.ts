@@ -228,7 +228,7 @@ vi.mock('../../src/main/tools/ast/get-function', () => ({
   clearFunctionHashesForSession: mocks.clearFunctionHashesForSession,
 }));
 
-vi.mock('../../src/main/ipc/next-request-stop', () => ({
+vi.mock('../../src/main/agents/next-request-stop', () => ({
   clearNextRequestStop: mocks.clearNextRequestStop,
 }));
 

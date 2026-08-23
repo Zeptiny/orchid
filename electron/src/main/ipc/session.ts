@@ -53,7 +53,7 @@ import {
   attachWorkspaceWatcher,
   detachWorkspaceWatcher,
 } from '../indexing/watcher';
-import { clearNextRequestStop } from './next-request-stop';
+import { clearNextRequestStop } from '../agents/next-request-stop';
 import { removeSessionActivity } from './session-activity';
 import {
   takeDraftPermissionOverride,

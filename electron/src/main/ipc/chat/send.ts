@@ -50,7 +50,7 @@ import { ChainStatus } from '../../../shared/types/chain';
 import { MessageType, type Message, type Usage } from '../../../shared/types/message';
 import { getChatHistory, setChatHistory } from '../chat-history';
 import { chatSendSchema } from '../payload-schemas';
-import { clearNextRequestStop, clearCompactionPause, shouldPauseForCompaction } from '../next-request-stop';
+import { clearNextRequestStop, clearCompactionPause, shouldPauseForCompaction } from '../../agents/next-request-stop';
 import { MAIN_AGENT_SCOPE_ID } from '../../../shared/types/agent-scope';
 import { completeSessionActivity, publishSessionActivity } from '../session-activity';
 import { disposeActiveAgent, forceAbortSession } from './abort';

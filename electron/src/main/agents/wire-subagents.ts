@@ -3,7 +3,6 @@
  *
  * Call once after tools are registered and the Electron app is ready.
  */
-import { BrowserWindow } from 'electron';
 import { IPC_CHANNELS } from '../../shared/types/ipc';
 import type { SubagentDeltaEvent } from '../../shared/types/subagent';
 import { getConfig } from '../config/loader';
@@ -23,6 +22,7 @@ import {
   flushSubagentDeltas,
   isEligibleSubagentRecipient,
   queueSubagentDelta,
+  type SubagentDeliveryWindow,
 } from './subagent-events';
 import { isTerminalSubagentState } from './manager';
 import { clearToolCallHistoryForAgentScope } from '../permissions/history';
@@ -95,7 +95,7 @@ export function wireSubagentRuntime(): void {
     createSubagentPersistenceWriteCallback(
       (sessionId, info) =>
         persistSubagentChains(manager, sessionId, { recovery: info.recovery }),
-      broadcastSubagentsChanged,
+      (sessionId) => subagentsChangedBroadcast(sessionId),
     ),
   );
   setSubagentPersistenceRecoveryScheduler(persistenceScheduler);
@@ -152,7 +152,7 @@ export function disposeSubagentPersistence(): void {
 
 export function broadcastSubagentsChanged(
   sessionId: string,
-  windows: readonly BrowserWindow[] = BrowserWindow.getAllWindows(),
+  windows: readonly SubagentDeliveryWindow[] = [],
 ): void {
   for (const win of windows) {
     try {
@@ -163,4 +163,17 @@ export function broadcastSubagentsChanged(
       // window gone
     }
   }
+}
+
+/**
+ * Injected SESSION_SUBAGENTS_CHANGED broadcast used by persistence recovery
+ * flushes. Default no-op; the Electron shell installs the window broadcast.
+ */
+export type SubagentsChangedBroadcast = (sessionId: string) => void;
+
+let subagentsChangedBroadcast: SubagentsChangedBroadcast = () => {};
+
+/** Install the subagents-changed broadcast (window broadcast under Electron). */
+export function setSubagentsChangedBroadcast(broadcast: SubagentsChangedBroadcast | null): void {
+  subagentsChangedBroadcast = broadcast ?? (() => {});
 }

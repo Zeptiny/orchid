@@ -126,7 +126,7 @@ import {
   clearCompactionPause,
   requestCompactionPause,
   shouldPauseForCompaction,
-} from '../../src/main/ipc/next-request-stop';
+} from '../../src/main/agents/next-request-stop';
 
 const agent: Agent = {
   name: 'worker',

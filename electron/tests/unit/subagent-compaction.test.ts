@@ -127,7 +127,7 @@ import {
 import { resolveUserExemptIds, type CutResult } from '../../src/main/llm/compaction/select';
 import type { ApplyResult } from '../../src/main/llm/compaction/apply';
 import type { SelectiveCompactionResult } from '../../src/main/llm/compaction/selective/run';
-import { shouldPauseForCompaction } from '../../src/main/ipc/next-request-stop';
+import { shouldPauseForCompaction } from '../../src/main/agents/next-request-stop';
 import {
   SubagentDeltaEventType,
   type SubagentCompactionProgressEvent,

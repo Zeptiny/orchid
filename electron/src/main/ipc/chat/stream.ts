@@ -11,7 +11,7 @@ import type { ProjectRuntime } from '../../project/runtime';
 import type { LanguageModelV4 } from '@ai-sdk/provider';
 import type { ProviderAttemptAccountingContext } from '../../providers/accounting/middleware';
 import type { CacheFacet } from '../../../shared/types/provider-facets';
-import { shouldStopEarlyForSession } from '../next-request-stop';
+import { shouldStopEarlyForSession } from '../../agents/next-request-stop';
 import { isContextLengthExceededMessage } from '../../llm/middleware/error-classification';
 
 export function classifyErrorKind(title: string | null | undefined, detail: string): ChatErrorKind {
