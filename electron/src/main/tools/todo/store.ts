@@ -84,20 +84,16 @@ export class TodoStore {
   }
 
   /**
-   * List tasks, optionally filtered by status and/or subagent_id.
+   * List tasks, optionally filtered by status.
    *
    * @param status - Filter by status (optional)
-   * @param subagent_id - Filter by subagent ID (optional)
    * @returns Array of matching tasks
    */
-  list(status?: TodoStatus, subagent_id?: string): Todo[] {
+  list(status?: TodoStatus): Todo[] {
     let tasks = Array.from(this._tasks.values());
 
     if (status !== undefined) {
       tasks = tasks.filter((t) => t.status === status);
-    }
-    if (subagent_id !== undefined) {
-      tasks = tasks.filter((t) => t.subagent_id === subagent_id);
     }
 
     return tasks;
@@ -109,12 +105,12 @@ export class TodoStore {
    * No status-transition restrictions — any status can go to any status.
    *
    * @param id - Task ID to update
-   * @param updates - Fields to update (title, status, subagent_id)
+   * @param updates - Fields to update (title, status)
    * @returns Tuple of [updated task | null, error message | null]
    */
   update(
     id: string,
-    updates: { title?: string; status?: TodoStatus; subagent_id?: string },
+    updates: { title?: string; status?: TodoStatus },
   ): [Todo | null, string | null] {
     const task = this._tasks.get(id);
     if (!task) {
@@ -127,13 +123,6 @@ export class TodoStore {
       ...task,
       title: updates.title ?? task.title,
       status: updates.status ?? task.status,
-      // Empty string reassigns ownership to main (null).
-      subagent_id:
-        updates.subagent_id !== undefined
-          ? updates.subagent_id.trim() === ''
-            ? null
-            : updates.subagent_id
-          : task.subagent_id,
       updated_at: now,
     };
 
