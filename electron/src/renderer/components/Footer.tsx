@@ -5,7 +5,7 @@
  * Right: model picker + context radial with dropup breakdown.
  * Wording mirrors the multi-stage cancel button on the composer.
  */
-import { memo, useCallback, useEffect, useId, useRef, useState, type CSSProperties } from 'react';
+import { memo, useCallback, useEffect, useRef, useState } from 'react';
 import type { Message, Usage } from '../../shared/types/message';
 import type { CommandContext } from '../../shared/types/ipc-boundary';
 import type {
@@ -21,17 +21,14 @@ import type { PermissionMode } from '../../shared/types/permission';
 import { useElapsedSeconds, type InterruptState } from '../hooks/useChat';
 import { FOOTER_SHORTCUT_IDS, getShortcut } from '../keyboard';
 import { resolveModelNotifyLabel } from '../utils/provider-selection';
-import { ContextBreakdownView, contextPercent as getContextPercent } from './ContextGrid';
-import { contextUsedTokens } from '../../shared/usage';
+import { ContextRadialButton } from './ContextRadialButton';
 import { Icon } from './Icon';
 import { Keycaps } from './Keycaps';
 import { ModelPicker } from './ModelPicker';
 import { PermissionSelector } from './PermissionSelector';
 import { ReasoningSelector, shouldShowReasoningSelector } from './ReasoningSelector';
 import { ServiceTierSelector, shouldShowServiceTierSelector } from './ServiceTierSelector';
-import { Button } from './ui/Button';
 import { Spinner } from './ui/Spinner';
-import { StatusBadge } from './ui/StatusBadge';
 
 /** Orders async permission-mode reads and writes so stale responses cannot commit. */
 export class PermissionModeCoordinator {
@@ -129,8 +126,6 @@ export const Footer = memo(function Footer({
     streamStartTime,
     isVisible && (isStreaming || Boolean(confirming)),
   );
-  const [contextOpen, setContextOpen] = useState(false);
-  const contextMenuId = useId();
   const [reasoningConfig, setReasoningConfig] = useState<SessionReasoningConfigResult | null>(null);
   const [serviceTierConfig, setServiceTierConfig] = useState<SessionServiceTierConfigResult | null>(null);
   const [sessionPermissionMode, setSessionPermissionMode] = useState<PermissionMode | null>(permissionMode);
@@ -142,39 +137,6 @@ export const Footer = memo(function Footer({
   reasoningOverrideRef.current = reasoningEffortOverride;
   serviceTierOverrideRef.current = serviceTierOverride;
   const isDraft = sessionId == null;
-
-  const usedContextTokens = contextUsedTokens(usage);
-  const contextPercent = getContextPercent(usage, maxContext);
-
-  const contextTone =
-    contextPercent == null
-      ? usedContextTokens > 0 ? 'text-info' : 'text-base-content/25'
-      : contextPercent >= 85
-        ? 'text-error'
-        : contextPercent >= 60
-          ? 'text-warning'
-          : contextPercent > 0
-            ? 'text-info'
-            : 'text-base-content/25';
-
-  useEffect(() => {
-    if (!contextOpen) return;
-    const onPointer = (e: MouseEvent) => {
-      const target = e.target as HTMLElement | null;
-      if (!target?.closest('[data-footer-context-dropup]')) {
-        setContextOpen(false);
-      }
-    };
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setContextOpen(false);
-    };
-    document.addEventListener('mousedown', onPointer);
-    document.addEventListener('keydown', onKey);
-    return () => {
-      document.removeEventListener('mousedown', onPointer);
-      document.removeEventListener('keydown', onKey);
-    };
-  }, [contextOpen]);
 
   useEffect(() => {
     let cancelled = false;
@@ -272,15 +234,6 @@ export const Footer = memo(function Footer({
     );
     return () => coordinator.invalidate();
   }, [permissionMode, sessionId]);
-
-  const badgeTone =
-    contextPercent != null && contextPercent >= 85
-      ? 'error'
-      : contextPercent != null && contextPercent >= 60
-        ? 'warning'
-        : contextPercent != null && contextPercent > 0
-          ? 'info'
-          : 'neutral';
 
   const availableModels = commandContext?.getAvailableModels() ?? [];
 
@@ -441,86 +394,12 @@ export const Footer = memo(function Footer({
           />
         )}
 
-      <div
-        className={`dropdown dropdown-top dropdown-end shrink-0 ${contextOpen ? 'dropdown-open' : ''}`}
-        data-footer-context-dropup
-      >
-        <Button
-          variant="ghost"
-          shape="circle"
-          size="xs"
-          className="orchid-footer-context-btn"
-          aria-haspopup="dialog"
-          aria-expanded={contextOpen}
-          aria-controls={contextMenuId}
-          title={contextPercent == null
-            ? usedContextTokens > 0
-              ? `${formatTokens(usedContextTokens)} context tokens used`
-              : 'Context usage unavailable'
-            : `${contextPercent}% context`}
-          onClick={() => setContextOpen((o) => !o)}
-        >
-          <div
-            className={`radial-progress orchid-footer-context-radial ${contextTone}`}
-            style={
-              {
-                '--value': contextPercent ?? 0,
-                '--size': '1.4rem',
-                '--thickness': '2px',
-              } as CSSProperties
-            }
-            aria-valuenow={contextPercent ?? 0}
-            role="progressbar"
-            aria-label={contextPercent == null
-              ? usedContextTokens > 0
-                ? `${formatTokens(usedContextTokens)} context tokens used; context window loading`
-                : 'Context usage unavailable'
-              : `${contextPercent}% context used`}
-          >
-            <span className="footer-context-value">
-              {contextPercent == null ? '—' : contextPercent}
-            </span>
-          </div>
-        </Button>
-        {contextOpen && (
-          <div
-            id={contextMenuId}
-            role="dialog"
-            aria-label="Context breakdown"
-            className="dropdown-content orchid-footer-context-panel z-50 mb-1"
-          >
-            <div className="footer-context-panel-header">
-              <div className="footer-context-panel-title">
-                <Icon name="layers" size={12} className="opacity-70" />
-                <span>Context</span>
-              </div>
-              <div className="footer-context-panel-meta mono">
-                <StatusBadge tone={badgeTone} size="xs">
-                  {contextPercent == null
-                    ? usedContextTokens > 0
-                      ? `${formatTokens(usedContextTokens)} used`
-                      : 'window loading'
-                    : `${contextPercent}% used`}
-                </StatusBadge>
-                {maxContext && maxContext > 0 ? (
-                  <span className="footer-context-panel-window">
-                    {formatTokens(maxContext)} window
-                  </span>
-                ) : null}
-              </div>
-            </div>
-            <div className="footer-context-panel-body">
-              <ContextBreakdownView
-                usage={usage}
-                messages={messages}
-                maxContext={maxContext}
-                streamingThinkingChars={streamingThinkingChars}
-                variant="panel"
-              />
-            </div>
-          </div>
-        )}
-      </div>
+        <ContextRadialButton
+          usage={usage}
+          messages={messages}
+          maxContext={maxContext}
+          streamingThinkingChars={streamingThinkingChars}
+        />
       </div>
     </div>
   );
@@ -533,10 +412,4 @@ function formatElapsed(seconds: number): string {
   const mins = Math.floor(seconds / 60);
   const secs = Math.floor(seconds % 60);
   return `${mins}m ${secs}s`;
-}
-
-function formatTokens(n: number): string {
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
-  if (n >= 1000) return `${(n / 1000).toFixed(1)}k`;
-  return String(n);
 }

@@ -14,6 +14,19 @@ export function selectionKey(selection: ModelSelection | null | undefined): stri
   return selection ? `${selection.connectionId}\u001f${selection.modelId}` : '';
 }
 
+/**
+ * Context window (tokens) for an arbitrary selection — e.g. a subagent
+ * chain's persisted `chain.selection` — resolved against typed model
+ * metadata. Null when the selection or its model limits are unknown.
+ */
+export function contextTokensForSelection(
+  selection: ModelSelection | null | undefined,
+  optionDetails?: Readonly<Record<string, ProviderModelOption>>,
+): number | null {
+  if (!selection || !optionDetails) return null;
+  return optionDetails[selectionKey(selection)]?.model.limits?.contextTokens ?? null;
+}
+
 export function providerModelOptionDisplayName(option: ProviderModelOption): string {
   return option.model.displayName;
 }

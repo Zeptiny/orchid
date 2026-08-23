@@ -128,10 +128,13 @@ describe('composer contract (U6)', () => {
 
     it('footer uses the radial context indicator and stacked dropup bar', () => {
       const src = read('components/Footer.tsx');
-      expect(src).toMatch(/radial-progress/);
-      expect(src).toMatch(/ContextBreakdownView/);
+      expect(src).toMatch(/ContextRadialButton/);
       expect(src).toMatch(/<Spinner\b/);
       expect(src).toMatch(/Keycaps/);
+      // The shared radial (footer + subagent view) owns the indicator markup.
+      const radialSrc = read('components/ContextRadialButton.tsx');
+      expect(radialSrc).toMatch(/radial-progress/);
+      expect(radialSrc).toMatch(/ContextBreakdownView/);
     });
 
     it('command palette avoids arbitrary Tailwind values for layout chrome', () => {

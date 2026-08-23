@@ -1,7 +1,11 @@
 import { useEffect, useRef, useState } from 'react';
+import type { ProviderModelOption } from '../../shared/types/ipc';
 import type { SubagentSummary } from '../../shared/types/subagent';
+import type { Usage } from '../../shared/types/message';
 import type { UseSubagentsReturn } from '../hooks/useSubagents';
+import { contextTokensForSelection } from '../utils/provider-selection';
 import { formatUsageSummary } from '../utils/format-usage';
+import { ContextRadialButton } from './ContextRadialButton';
 import { SubagentTranscript } from './SubagentTranscript';
 import { Button } from './ui/Button';
 import { Disclosure } from './ui/Disclosure';
@@ -15,6 +19,8 @@ interface SubagentViewProps {
   subagents: UseSubagentsReturn;
   onBackToChat: () => void;
   openRequest: SubagentOpenRequest;
+  /** Typed model metadata used to resolve the selected subagent's context window. */
+  modelDetails?: Readonly<Record<string, ProviderModelOption>>;
 }
 
 export interface SubagentOpenRequest {
@@ -80,10 +86,11 @@ function SubagentRow({
   );
 }
 
-export function SubagentView({ subagents, onBackToChat, openRequest }: SubagentViewProps) {
+export function SubagentView({ subagents, onBackToChat, openRequest, modelDetails }: SubagentViewProps) {
   const initialOpen = resolveSubagentOpenRequest(openRequest);
   const [narrowDetail, setNarrowDetail] = useState(initialOpen.narrowDetail);
   const appliedOpenGeneration = useRef<number | null>(null);
+  const thinkingBaselineRef = useRef<{ id: string; usage: Usage; chars: number } | null>(null);
   const records = subagents.subagents;
   const hasPendingOpenRequest = appliedOpenGeneration.current !== openRequest.generation;
   const effectiveSelectedId = hasPendingOpenRequest ? openRequest.id : subagents.selectedId;
@@ -148,6 +155,40 @@ export function SubagentView({ subagents, onBackToChat, openRequest }: SubagentV
   );
 
   const detail = selected ? subagents.getDetail(selected.id) : null;
+  const transcriptRecord = subagents.transcript.status === 'ready'
+    ? subagents.transcript.record
+    : null;
+  // Guard the one-frame stale transcript after a selection change: only use
+  // the record when it belongs to the selected row.
+  const transcriptChain = transcriptRecord && selected && transcriptRecord.id === selected.id
+    ? transcriptRecord.chain
+    : null;
+  const live = selected ? subagents.getLive(selected.id) : null;
+  const openThinkingChars = live
+    ? live.segments.reduce(
+        (total, segment) =>
+          segment.kind === 'thinking' && segment.endedAt == null
+            ? total + segment.content.length
+            : total,
+        0,
+      )
+    : 0;
+  // Thinking chars not yet covered by a usage event — mirrors the main
+  // agent's streamingUnaccountedThinkingChars (issue 187): the projection
+  // closes segments lazily, so an open segment can already be counted in the
+  // last usage event. Record the open-char baseline per usage reference and
+  // subtract it before estimating in-flight reasoning.
+  if (selected && live?.usage) {
+    const baseline = thinkingBaselineRef.current;
+    if (!baseline || baseline.id !== selected.id || baseline.usage !== live.usage) {
+      thinkingBaselineRef.current = { id: selected.id, usage: live.usage, chars: openThinkingChars };
+    }
+  }
+  const baseline = thinkingBaselineRef.current;
+  const streamingThinkingChars = baseline && selected && baseline.id === selected.id
+    ? Math.max(0, openThinkingChars - baseline.chars)
+    : 0;
+  const subagentMaxContext = contextTokensForSelection(transcriptChain?.selection ?? null, modelDetails);
   const detailRegion = (
     <Panel className="orchid-subagent-view-detail" padded={false} aria-label="Subagent detail">
       <div className="orchid-subagent-view-detail-header">
@@ -155,7 +196,19 @@ export function SubagentView({ subagents, onBackToChat, openRequest }: SubagentV
         {selected ? (
           <SectionHeader
             title={selected.agent_name || 'Subagent'}
-            actions={<StatusBadge tone={statusTone(detail?.state ?? selected.status)}>{statusLabel(detail?.state ?? selected.status)}</StatusBadge>}
+            actions={(
+              <>
+                <StatusBadge tone={statusTone(detail?.state ?? selected.status)}>{statusLabel(detail?.state ?? selected.status)}</StatusBadge>
+                {detail ? (
+                  <ContextRadialButton
+                    usage={detail.usage}
+                    messages={transcriptChain?.messages}
+                    maxContext={subagentMaxContext}
+                    streamingThinkingChars={streamingThinkingChars || undefined}
+                  />
+                ) : null}
+              </>
+            )}
           />
         ) : null}
       </div>

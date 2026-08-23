@@ -1453,7 +1453,7 @@ export function ChatView({ isVisible = true, bootstrapConfig = null, onNotify, a
               )}
             >
             <DeferredSurface isVisible={isVisible}>
-              <SubagentView subagents={subagents} openRequest={subagentOpenRequest} onBackToChat={() => setContentMode('chat')} />
+              <SubagentView subagents={subagents} openRequest={subagentOpenRequest} modelDetails={providerModelDetails} onBackToChat={() => setContentMode('chat')} />
             </DeferredSurface>
             </Suspense>
           </div>
