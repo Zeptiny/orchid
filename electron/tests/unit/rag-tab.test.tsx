@@ -32,6 +32,14 @@ const INDEX_REFRESH: IndexRefreshConfig = {
 
 function renderTab(): ReturnType<typeof vi.fn> {
   const onIndexRefreshChange = vi.fn();
+  // RAGTab mounts the provider-backed embedding-model picker; give the
+  // shared providers store a minimal API surface before mounting.
+  window.orchid = {
+    providers: {
+      list: vi.fn(async () => ({ connections: [], statuses: [] })),
+      modelList: vi.fn(async () => []),
+    },
+  } as never;
   render(
     <RAGTab
       rag={RAG}

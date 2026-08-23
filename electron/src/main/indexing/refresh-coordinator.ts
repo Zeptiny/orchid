@@ -90,6 +90,13 @@ interface ProjectRefreshState {
   flushing: boolean;
   /** The in-flight runFlush promise, if any (awaited by the async dispose). */
   flushPromise: Promise<void> | null;
+  /**
+   * Set by {@link cancelProjectRefresh} before the state is dropped: an
+   * in-flight flush still holding this state must observe the flag in its
+   * requeue / retry / finally paths and never re-arm work for the cancelled
+   * batch (e.g. after a trust revocation or an index clear).
+   */
+  cancelled: boolean;
 }
 
 const DEFAULT_DEBOUNCE_MS = 2000;
@@ -212,6 +219,7 @@ function getState(projectPath: string): ProjectRefreshState {
       timer: null,
       flushing: false,
       flushPromise: null,
+      cancelled: false,
     };
     refreshStates.set(key, state);
   }
@@ -345,7 +353,8 @@ async function runFlush(
           if (isRagBusy(result)) mutationsCollided = true;
         }
         if (ragDeletes.length > 0) {
-          await rag.deleteFiles(projectPath, ragDeletes);
+          const result = await rag.deleteFiles(projectPath, ragDeletes);
+          if (isRagBusy(result)) mutationsCollided = true;
         }
         if (dirty) {
           const result = await rag.indexProject(projectPath, undefined, false, undefined, undefined, { config });
@@ -377,7 +386,7 @@ async function runFlush(
     }
   } finally {
     state.flushing = false;
-    if (state.pending.size > 0 || state.dirty) scheduleFlush(state);
+    if (!state.cancelled && (state.pending.size > 0 || state.dirty)) scheduleFlush(state);
   }
 }
 
@@ -401,6 +410,7 @@ function requeueRagCollision(
   scopes: Map<string, RefreshScope>,
   dirtyScanCollided: boolean,
 ): void {
+  if (state.cancelled) return;
   for (const [rel, op] of entries) {
     if (scopes.get(rel) === 'ast') continue;
     if (!state.pending.has(rel)) {
@@ -420,6 +430,7 @@ function requeueRagCollision(
  * failure drops the batch instead of retrying forever.
  */
 function retryOrDropFailedFlush(state: ProjectRefreshState): void {
+  if (state.cancelled) return;
   if (state.failureRetried) {
     console.warn('[index-refresh] flush failed again; dropping batch', state.projectPath);
     return;
@@ -544,18 +555,46 @@ export async function disposeIndexRefreshCoordinatorAsync(): Promise<void> {
 /**
  * Clear one project's pending refresh state — queued mutations, the dirty
  * flag, and any armed timer (trust revocation). No-op when the project has
- * no pending state.
+ * no pending state. An in-flight flush holding the dropped state observes the
+ * cancellation flag and never requeues, retries, or reschedules work for it.
  */
 export function cancelProjectRefresh(projectPath: string): void {
   const key = path.resolve(projectPath);
   const state = refreshStates.get(key);
   if (!state) return;
+  // Flag before clearing: a flush that is mid-flight on this state checks the
+  // flag once its indexer calls settle and must not re-arm the cancelled batch.
+  state.cancelled = true;
   if (state.timer !== null) clearTimeout(state.timer);
   state.timer = null;
   state.pending.clear();
   state.scopes.clear();
   state.dirty = false;
   refreshStates.delete(key);
+}
+
+/**
+ * Cancel one project's refresh state (see {@link cancelProjectRefresh}) and
+ * wait — capped at {@link DISPOSE_AWAIT_CAP_MS} — for an in-flight flush to
+ * settle, so a caller about to drop the underlying store (rag:clear) cannot
+ * race a flush that would repopulate it.
+ */
+export async function cancelProjectRefreshAsync(projectPath: string): Promise<void> {
+  const flushPromise = refreshStates.get(path.resolve(projectPath))?.flushPromise ?? null;
+  cancelProjectRefresh(projectPath);
+  if (flushPromise === null) return;
+  let capTimer: ReturnType<typeof setTimeout> | null = null;
+  try {
+    await Promise.race([
+      flushPromise.catch(() => {}),
+      new Promise<void>((resolve) => {
+        capTimer = setTimeout(resolve, DISPOSE_AWAIT_CAP_MS);
+        unrefTimer(capTimer);
+      }),
+    ]);
+  } finally {
+    if (capTimer !== null) clearTimeout(capTimer);
+  }
 }
 
 /**

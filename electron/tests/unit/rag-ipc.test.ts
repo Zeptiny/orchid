@@ -39,7 +39,7 @@ const mocks = vi.hoisted(() => {
     })),
     cancelIndex: vi.fn(async () => false),
     clearIndex: vi.fn(),
-    cancelProjectRefresh: vi.fn(),
+    cancelProjectRefreshAsync: vi.fn(async () => {}),
     getWorkspaceWatcherState: vi.fn((): { watching: boolean; refcount: number } => ({
       watching: false,
       refcount: 0,
@@ -79,7 +79,7 @@ vi.mock('../../src/main/rag/indexer', () => ({
 }));
 
 vi.mock('../../src/main/indexing/refresh-coordinator', () => ({
-  cancelProjectRefresh: mocks.cancelProjectRefresh,
+  cancelProjectRefreshAsync: mocks.cancelProjectRefreshAsync,
 }));
 
 vi.mock('../../src/main/indexing/watcher', () => ({
@@ -99,7 +99,7 @@ beforeEach(async () => {
   mocks.indexProject.mockClear();
   mocks.cancelIndex.mockClear();
   mocks.clearIndex.mockClear();
-  mocks.cancelProjectRefresh.mockClear();
+  mocks.cancelProjectRefreshAsync.mockClear();
   mocks.getWorkspaceWatcherState.mockReset();
   mocks.getWorkspaceWatcherState.mockReturnValue({ watching: false, refcount: 0 });
   mocks.getRuntime.mockClear();
@@ -224,26 +224,26 @@ describe('rag:clear', () => {
 
     mocks.cancelIndex.mockClear();
     mocks.clearIndex.mockClear();
-    mocks.cancelProjectRefresh.mockClear();
+    mocks.cancelProjectRefreshAsync.mockClear();
     mocks.resolveBoundProjectPath.mockReturnValue(null);
     await expect(handler(IPC_CHANNELS.RAG_CLEAR)(event)).resolves.toEqual({
       status: 'cleared',
     });
     expect(mocks.cancelIndex).not.toHaveBeenCalled();
     expect(mocks.clearIndex).not.toHaveBeenCalled();
-    expect(mocks.cancelProjectRefresh).not.toHaveBeenCalled();
+    expect(mocks.cancelProjectRefreshAsync).not.toHaveBeenCalled();
   });
 
   it('drains pending index refreshes after the run cancel, before the drop', async () => {
     await handler(IPC_CHANNELS.RAG_CLEAR)(event);
 
-    expect(mocks.cancelProjectRefresh).toHaveBeenCalledWith(PROJECT_DIR);
+    expect(mocks.cancelProjectRefreshAsync).toHaveBeenCalledWith(PROJECT_DIR);
     // Drain runs once the in-flight run is cancelled (no new flush may start
     // from stale pending state) but strictly before the store is dropped.
-    expect(mocks.cancelProjectRefresh.mock.invocationCallOrder[0]).toBeGreaterThan(
+    expect(mocks.cancelProjectRefreshAsync.mock.invocationCallOrder[0]).toBeGreaterThan(
       mocks.cancelIndex.mock.invocationCallOrder[0],
     );
-    expect(mocks.cancelProjectRefresh.mock.invocationCallOrder[0]).toBeLessThan(
+    expect(mocks.cancelProjectRefreshAsync.mock.invocationCallOrder[0]).toBeLessThan(
       mocks.clearIndex.mock.invocationCallOrder[0],
     );
   });
@@ -260,12 +260,12 @@ describe('rag_index tool clear', () => {
 
     expect(outcome.status).toBe('complete');
     expect(mocks.cancelIndex).toHaveBeenCalledWith(PROJECT_DIR);
-    expect(mocks.cancelProjectRefresh).toHaveBeenCalledWith(PROJECT_DIR);
+    expect(mocks.cancelProjectRefreshAsync).toHaveBeenCalledWith(PROJECT_DIR);
     expect(mocks.clearIndex).toHaveBeenCalledWith(PROJECT_DIR);
-    expect(mocks.cancelProjectRefresh.mock.invocationCallOrder[0]).toBeGreaterThan(
+    expect(mocks.cancelProjectRefreshAsync.mock.invocationCallOrder[0]).toBeGreaterThan(
       mocks.cancelIndex.mock.invocationCallOrder[0],
     );
-    expect(mocks.cancelProjectRefresh.mock.invocationCallOrder[0]).toBeLessThan(
+    expect(mocks.cancelProjectRefreshAsync.mock.invocationCallOrder[0]).toBeLessThan(
       mocks.clearIndex.mock.invocationCallOrder[0],
     );
   });
@@ -305,7 +305,7 @@ describe('rag trust gate (untrusted project)', () => {
     });
     expect(mocks.cancelIndex).not.toHaveBeenCalled();
     expect(mocks.clearIndex).not.toHaveBeenCalled();
-    expect(mocks.cancelProjectRefresh).not.toHaveBeenCalled();
+    expect(mocks.cancelProjectRefreshAsync).not.toHaveBeenCalled();
   });
 
   it.each(['untrusted', 'changed'] as const)(

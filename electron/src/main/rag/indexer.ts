@@ -22,7 +22,7 @@ import {
   removeModelDownloadTemps,
   type IEmbedder,
 } from './embedder';
-import { RAGStore } from './store';
+import { RAGStore, type VectorState } from './store';
 import { INDEX_SKIP_DIR_NAMES } from '../indexing/skip-dirs';
 import type { RAGStoreStatus } from '../../shared/types/ipc-boundary';
 import type { RAGIndexResult, RAGIndexProgress } from '../../shared/types/ipc-boundary';
@@ -141,12 +141,15 @@ export interface IndexProjectOptions {
   /** @internal Test-only worker entry override for deterministic watchdog tests. */
   workerPath?: string;
   /**
-   * Run a targeted incremental upsert instead of a plain index pass: the
-   * vector-state consistency probe AND the scoped-or-full decision execute
-   * on the chosen thread, so the caller never probes on the main thread.
+   * Run a targeted incremental op instead of a plain index pass: the
+   * vector-state consistency probe (upsert) AND the scoped-or-full decision
+   * execute on the chosen thread, so the caller never probes on the main
+   * thread. `'delete'` removes the stored chunks, file rows, and vectors for
+   * `rels`. Incremental ops share this function's single-flight slot,
+   * progress tracking, and cancellation machinery.
    */
-  op?: 'upsert';
-  /** Normalized (absolute) targets for `op: 'upsert'`. */
+  op?: 'upsert' | 'delete';
+  /** Normalized targets for the incremental `'upsert'` / `'delete'` ops. */
   rels?: string[];
 }
 
@@ -192,6 +195,9 @@ export async function indexProject(
   try {
     // Custom embedder cannot be serialized into a worker — run inline.
     if (options?.inline || embedder) {
+      if (options?.op === 'delete') {
+        return await runDeleteFilesImpl(projectPath, options.rels ?? []);
+      }
       if (options?.op === 'upsert') {
         // Incremental upsert: probe + scoped-or-full decision stay on this
         // thread when forced inline; the single-flight held above still
@@ -221,8 +227,8 @@ export async function indexProject(
       options?.config,
       options?.workerPath,
       (cancel) => activeIndexCancels.set(key, cancel),
-      options?.op === 'upsert'
-        ? { op: 'upsert', rels: options.rels ?? [] }
+      options?.op === 'upsert' || options?.op === 'delete'
+        ? { op: options.op, rels: options.rels ?? [] }
         : undefined,
     );
   } finally {
@@ -244,6 +250,12 @@ export async function runIndexProjectImpl(
   embedder?: IEmbedder,
   progressCallback?: RAGIndexProgressCallback,
   config?: Config,
+  /**
+   * Vector state a caller probed immediately before this run (the upsert
+   * path's consistency probe); when consistent it is used directly so
+   * vectors.npy is not loaded a second time.
+   */
+  preloadedVectorState?: VectorState,
 ): Promise<RAGIndexResult> {
   const cfg = config ?? getConfig();
   if (!projectPath) {
@@ -338,7 +350,7 @@ export async function runIndexProjectImpl(
   // rebuild instead. Clearing before the hash read also ensures unchanged
   // files are not skipped against a reset database.
   let vectorStateDirty = false;
-  let vectorState = store.loadVectorState();
+  let vectorState = preloadedVectorState ?? store.loadVectorState();
   if (!vectorState.consistent) {
     console.warn(
       '[RAG] vectors.npy is out of sync with the chunk database ' +
@@ -598,10 +610,11 @@ export async function runUpsertFilesImpl(opts: {
   if (targets.length === 0) {
     return emptyIndexResult();
   }
-  const consistent = withDisposable(new RAGStore(projectPath), (store) => {
+  const vectorState = withDisposable(new RAGStore(projectPath), (store) => {
     store.initDb();
-    return store.loadVectorState().consistent;
+    return store.loadVectorState();
   });
+  const consistent = vectorState.consistent;
   return runIndexProjectImpl(
     projectPath,
     consistent ? targets : undefined,
@@ -609,6 +622,9 @@ export async function runUpsertFilesImpl(opts: {
     embedder,
     progressCallback,
     config,
+    // Reuse the probed state (loaded once) instead of paying a second full
+    // vectors.npy read inside the index run.
+    consistent ? vectorState : undefined,
   );
 }
 
@@ -625,30 +641,27 @@ export interface DeleteFilesOptions {
  *
  * Deletes rewrite vectors.npy in full (plus the id sidecar), so the work is
  * dispatched to the index worker; the main thread never pays the
- * synchronous read-modify-rewrite. No-ops on an inconsistent vector state —
- * nothing can be deleted safely there; the full rebuild the next upsert
- * triggers is the repair.
+ * synchronous read-modify-rewrite. Routed through `indexProject`, so deletes
+ * share that function's single-flight slot ("Indexing already in progress"
+ * sentinel), progress tracking, and cancellation — a delete racing an
+ * index/upsert run would corrupt the vector rewrite. No-ops on an
+ * inconsistent vector state — nothing can be deleted safely there; the full
+ * rebuild the next upsert triggers is the repair.
  */
 export async function deleteFiles(
   projectPath: string,
   rels: string[],
   options?: DeleteFilesOptions,
-): Promise<void> {
+): Promise<RAGIndexResult> {
   const unique = [...new Set(rels)];
-  if (unique.length === 0) return;
-  if (options?.inline) {
-    await runDeleteFilesImpl(projectPath, unique);
-    return;
-  }
-  await runIndexInWorker(
+  if (unique.length === 0) return emptyIndexResult();
+  return indexProject(
     projectPath,
     undefined,
     undefined,
     undefined,
     undefined,
-    options?.workerPath,
-    undefined,
-    { op: 'delete', rels: unique },
+    { workerPath: options?.workerPath, inline: options?.inline, op: 'delete', rels: unique },
   );
 }
 

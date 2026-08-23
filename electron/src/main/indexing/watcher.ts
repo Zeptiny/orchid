@@ -40,7 +40,11 @@ interface WatcherEntry {
   watcher: ChokidarWatcher | null;
   creating: boolean;
   ready: Promise<void> | null;
-  /** Set after a watcher error; blocks instance (re)creation while held. */
+  /**
+   * Set after a watcher error; blocks instance (re)creation while held.
+   * Cleared again by an explicit retry signal (config save via
+   * `reconfigureWorkspaceWatchers`, or a trust grant).
+   */
   disabled: boolean;
 }
 
@@ -318,6 +322,9 @@ export function attachWorkspaceWatcher(projectPath: string): void {
 export function ensureWorkspaceWatcherStarted(projectPath: string): void {
   const entry = watcherEntries.get(path.resolve(projectPath));
   if (!entry) return;
+  // An explicit grant is a retry signal for an instance a previous watcher
+  // error disabled; the automatic latch stays for event-driven recreation.
+  entry.disabled = false;
   void ensureInstance(entry);
 }
 
@@ -362,7 +369,11 @@ export function reconfigureWorkspaceWatchers(): void {
         if (entry.watcher !== null) closeInstance(entry, 'index_refresh.watch is false');
         continue;
       }
-      if (entry.watcher === null && !entry.disabled && !entry.creating) {
+      if (entry.watcher === null && !entry.creating) {
+        // An explicit reconfiguration (config save) is the retry signal for
+        // an instance a previous watcher error disabled; the automatic
+        // latch stays for event-driven recreation.
+        entry.disabled = false;
         void ensureInstance(entry);
       }
     } catch (error) {

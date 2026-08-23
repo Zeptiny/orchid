@@ -117,10 +117,9 @@ function resolveDraftModelSelection(windowId: string): ModelSelection | null {
 
 /**
  * Resolved cwd whose watcher reference this module last established for a
- * window. Only the reconcile seam reads it; the explicit transitions
- * (bind / load / open / delete) re-derive their prior cwd from the window's
- * effective workspace, which is authoritative for them. Every path updates it
- * through {@link retargetWorkspaceWatcher} so the two never diverge.
+ * window — the authoritative record of the reference each window actually
+ * holds. Every attach/detach goes through {@link retargetWorkspaceWatcher},
+ * so the map never diverges from the refcounts it produced.
  */
 const windowWatcherCwd = new Map<string, string>();
 
@@ -128,7 +127,10 @@ const windowWatcherCwd = new Map<string, string>();
  * Move the window's workspace-watcher reference after its effective workspace
  * changed (project bind, session switch). Attach is refcounted per project
  * path, so every site that can change the effective cwd must share these
- * exact semantics or references ratchet across switches.
+ * exact semantics or references ratchet across switches. The prior reference
+ * is read from {@link windowWatcherCwd}, never re-derived from the effective
+ * workspace: a window whose cwd comes from the sticky default but that never
+ * resolved a workspace must not detach a path another window attached.
  *
  * No-op when the cwd did not change; the next path is attached before the
  * prior one is released so a project shared with another window keeps its
@@ -136,9 +138,9 @@ const windowWatcherCwd = new Map<string, string>();
  */
 function retargetWorkspaceWatcher(
   windowId: string,
-  prior: string | null,
   next: string | null,
 ): void {
+  const prior = windowWatcherCwd.get(windowId) ?? null;
   if (prior === next) return;
   if (next != null) attachWorkspaceWatcher(next);
   if (prior != null) detachWorkspaceWatcher(prior);
@@ -157,7 +159,7 @@ function retargetWorkspaceWatcher(
  */
 function reconcileWindowWatcher(windowId: string, workspace: WorkspaceInfo): void {
   const next = isWorkspaceBound(workspace) ? workspace.cwd : null;
-  retargetWorkspaceWatcher(windowId, windowWatcherCwd.get(windowId) ?? null, next);
+  retargetWorkspaceWatcher(windowId, next);
 }
 
 /**
@@ -194,7 +196,7 @@ export async function bindProjectDirectory(
   }
 
   if (priorWorkspace.cwd !== canonical) {
-    retargetWorkspaceWatcher(windowId, priorWorkspace.cwd, canonical);
+    retargetWorkspaceWatcher(windowId, canonical);
     if (priorWorkspace.cwd) {
       const {
         clearFunctionHashesForSession,
@@ -359,10 +361,6 @@ export function registerSessionIPC(): void {
       return session ? sessionForRenderer(session) : null;
     }
 
-    // Effective workspace before the switch — the watcher reference must
-    // follow every cwd the window was holding (prior session cwd, draft, or
-    // sticky default), not only an explicit project bind.
-    const priorCwd = resolveWindowWorkspace(windowId).cwd;
     const releasedDraftCwd = getDraftCwd(windowId);
     // Selecting a session is view navigation. Work in the previously selected
     // session continues and remains addressed by its own session id.
@@ -401,7 +399,7 @@ export function registerSessionIPC(): void {
     // runtime. Selecting a session must not replace process-wide layers that
     // another running session could still depend on.
     const workspace = resolveWindowWorkspace(windowId);
-    retargetWorkspaceWatcher(windowId, priorCwd, workspace.cwd);
+    retargetWorkspaceWatcher(windowId, workspace.cwd);
 
     emitWorkspaceChanged(event.sender, workspace);
     return session ? sessionForRenderer(session) : null;
@@ -420,11 +418,6 @@ export function registerSessionIPC(): void {
     const manager = getSessionManager();
     const { id } = parsed.data;
     const windowId = String(event.sender.id);
-
-    // Effective workspace before the switch — activating a session moves the
-    // window's watcher reference with it (this is the dominant flow after an
-    // app restart, where no explicit project bind ever happens).
-    const priorCwd = resolveWindowWorkspace(windowId).cwd;
 
     // Selecting a session is view navigation. Work in the previously selected
     // session continues and remains addressed by its own session id.
@@ -455,7 +448,7 @@ export function registerSessionIPC(): void {
     }
 
     const workspace = resolveWindowWorkspace(windowId);
-    retargetWorkspaceWatcher(windowId, priorCwd, workspace.cwd);
+    retargetWorkspaceWatcher(windowId, workspace.cwd);
     emitWorkspaceChanged(event.sender, workspace);
 
     // Live in-flight snapshot (chat.ts owns the active-agent registry). Dynamic
@@ -570,10 +563,8 @@ export function registerSessionIPC(): void {
     ]);
     // Deleting the window's active session changes its effective workspace (it
     // falls back to draft / sticky default), so the watcher reference must
-    // follow — captured while the selection is still held, immediately before
-    // the delete clears it. A background session deleted from the working set
-    // leaves the window's workspace untouched and must not move the reference.
-    const priorCwd = wasActive ? resolveWindowWorkspace(windowId).cwd : null;
+    // follow. A background session deleted from the working set leaves the
+    // window's workspace untouched and must not move the reference.
     const deleted = manager.delete(parsed.data.id);
     // A deleted background session must not keep spending provider/tool work or
     // recreate activity after it disappears from the catalog. This teardown is
@@ -591,7 +582,7 @@ export function registerSessionIPC(): void {
     broadcastSessionDeleted(parsed.data.id);
     if (deleted && wasActive) {
       const workspace = resolveWindowWorkspace(windowId);
-      retargetWorkspaceWatcher(windowId, priorCwd, workspace.cwd);
+      retargetWorkspaceWatcher(windowId, workspace.cwd);
       emitWorkspaceChanged(event.sender, workspace);
     }
     return { status: deleted ? 'deleted' : 'not_found', workingSet };

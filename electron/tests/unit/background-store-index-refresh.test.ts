@@ -60,17 +60,17 @@ const AST_INCREMENTAL_RESULT: ASTIncrementalResult = {
 
 function makeRagIndexer(): RefreshRagIndexer {
   return {
-    upsertFiles: async (): RAGIndexResult => ({ ...RAG_RESULT }),
+    upsertFiles: async (): Promise<RAGIndexResult> => ({ ...RAG_RESULT }),
     deleteFiles: async (): Promise<void> => {},
-    indexProject: async (): RAGIndexResult => ({ ...RAG_RESULT }),
+    indexProject: async (): Promise<RAGIndexResult> => ({ ...RAG_RESULT }),
   };
 }
 
 function makeAstIndexer(): RefreshAstIndexer {
   return {
-    upsertFiles: async (): ASTIncrementalResult => ({ ...AST_INCREMENTAL_RESULT }),
+    upsertFiles: async (): Promise<ASTIncrementalResult> => ({ ...AST_INCREMENTAL_RESULT }),
     deleteFiles: async (): Promise<number> => 0,
-    indexProject: async (): ASTIndexResult => ({ ...AST_RESULT }),
+    indexProject: async (): Promise<ASTIndexResult> => ({ ...AST_RESULT }),
   };
 }
 

@@ -756,6 +756,14 @@ describe('session workspace IPC', () => {
     const projectP = fs.realpathSync(tmpProject);
     const projectQ = fs.realpathSync(otherProject);
     workspace.setDraftCwd('23', projectP);
+    // The draft's watcher reference is established by a workspace resolution
+    // (the seam that attaches); setDraftCwd alone holds no reference.
+    const getWs = mocks.handlers.get(IPC_CHANNELS.SESSION_GET_WORKSPACE)!;
+    await getWs({ sender: sender(23) });
+    expect(mocks.watcherAttach).toHaveBeenCalledWith(projectP);
+    mocks.watcherAttach.mockClear();
+    mocks.watcherDetach.mockClear();
+
     mocks.switchToTarget.cwd = projectQ;
 
     const load = mocks.handlers.get(IPC_CHANNELS.SESSION_LOAD)!;
@@ -839,6 +847,32 @@ describe('session workspace IPC', () => {
       status: 'unbound',
     });
     expect(mocks.watcherAttach).not.toHaveBeenCalled();
+    expect(mocks.watcherDetach).not.toHaveBeenCalled();
+  });
+
+  it('session:open on a second window does not detach a sticky default it never attached', async () => {
+    const stickyPath = fs.realpathSync(tmpProject);
+    const projectQ = fs.realpathSync(otherProject);
+    mocks.configState.default_project_dir = stickyPath;
+
+    // Only the first window resolves its workspace — that resolution is what
+    // attaches the shared sticky default's watcher reference.
+    const getWs = mocks.handlers.get(IPC_CHANNELS.SESSION_GET_WORKSPACE)!;
+    await getWs({ sender: sender(28) });
+    expect(mocks.watcherAttach).toHaveBeenCalledTimes(1);
+    expect(mocks.watcherAttach).toHaveBeenCalledWith(stickyPath);
+
+    mocks.watcherAttach.mockClear();
+    mocks.watcherDetach.mockClear();
+
+    // The second window shares the sticky default but never attached it, so
+    // opening a session in another project must not release that reference.
+    mocks.switchToTarget.cwd = projectQ;
+    const open = mocks.handlers.get(IPC_CHANNELS.SESSION_OPEN)!;
+    await open({ sender: sender(29) }, { id: SESSION_UUID });
+
+    expect(mocks.watcherAttach).toHaveBeenCalledTimes(1);
+    expect(mocks.watcherAttach).toHaveBeenCalledWith(projectQ);
     expect(mocks.watcherDetach).not.toHaveBeenCalled();
   });
 

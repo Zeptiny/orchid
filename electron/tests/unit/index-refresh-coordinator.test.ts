@@ -89,17 +89,17 @@ function deferred<T>(): Deferred<T> {
 
 function makeRagIndexer(): RefreshRagIndexer {
   return {
-    upsertFiles: vi.fn(async (): RAGIndexResult => ({ ...RAG_RESULT })),
-    deleteFiles: vi.fn(async (): Promise<void> => {}),
-    indexProject: vi.fn(async (): RAGIndexResult => ({ ...RAG_RESULT })),
+    upsertFiles: vi.fn(async (): Promise<RAGIndexResult> => ({ ...RAG_RESULT })),
+    deleteFiles: vi.fn(async (): Promise<RAGIndexResult> => ({ ...RAG_RESULT })),
+    indexProject: vi.fn(async (): Promise<RAGIndexResult> => ({ ...RAG_RESULT })),
   };
 }
 
 function makeAstIndexer(): RefreshAstIndexer {
   return {
-    upsertFiles: vi.fn(async (): ASTIncrementalResult => ({ ...AST_INCREMENTAL_RESULT })),
+    upsertFiles: vi.fn(async (): Promise<ASTIncrementalResult> => ({ ...AST_INCREMENTAL_RESULT })),
     deleteFiles: vi.fn(async (): Promise<number> => 0),
-    indexProject: vi.fn(async (): ASTIndexResult => ({ ...AST_RESULT })),
+    indexProject: vi.fn(async (): Promise<ASTIndexResult> => ({ ...AST_RESULT })),
   };
 }
 
@@ -398,7 +398,7 @@ describe('index refresh coordinator', () => {
   });
 
   it('re-enqueues a drained batch when RAG reports the single-flight sentinel', async () => {
-    rag.upsertFiles.mockImplementationOnce(async (): RAGIndexResult => ({
+    rag.upsertFiles.mockImplementationOnce(async (): Promise<RAGIndexResult> => ({
       ...RAG_RESULT,
       errors: ['Indexing already in progress'],
     }));
@@ -426,7 +426,7 @@ describe('index refresh coordinator', () => {
   });
 
   it('re-sets the dirty flag when the RAG dirty scan reports the sentinel', async () => {
-    rag.indexProject.mockImplementationOnce(async (): RAGIndexResult => ({
+    rag.indexProject.mockImplementationOnce(async (): Promise<RAGIndexResult> => ({
       ...RAG_RESULT,
       errors: ['Indexing already in progress'],
     }));
@@ -466,6 +466,54 @@ describe('index refresh coordinator', () => {
       undefined,
       { config },
     );
+  });
+
+  it('does not re-arm an in-flight flush cancelled mid-run when its sentinel lands', async () => {
+    const gate = deferred<RAGIndexResult>();
+    rag.upsertFiles.mockImplementationOnce(() => gate.promise);
+    enqueueMutation(PROJECT, [{ rel: 'src/a.ts', op: 'upsert' }]);
+    await vi.advanceTimersByTimeAsync(DEBOUNCE_MS);
+    expect(rag.upsertFiles).toHaveBeenCalledTimes(1);
+
+    // Cancel while the flush is mid-flight (trust revoked / index cleared).
+    cancelProjectRefresh(PROJECT);
+
+    // The sentinel resolves after the cancellation — the batch must not
+    // requeue or re-arm, and the indexers must not be invoked again.
+    gate.resolve({ ...RAG_RESULT, errors: ['Indexing already in progress'] });
+    await vi.advanceTimersByTimeAsync(DEBOUNCE_MS * 3);
+    expect(rag.upsertFiles).toHaveBeenCalledTimes(1);
+    expect(_getPendingIndexRefreshForTests(PROJECT)).toEqual({
+      entries: [],
+      dirty: false,
+      timerArmed: false,
+      flushing: false,
+    });
+  });
+
+  it('requeues deletes that hit the RAG single-flight sentinel', async () => {
+    rag.deleteFiles.mockImplementationOnce(async (): Promise<RAGIndexResult> => ({
+      ...RAG_RESULT,
+      errors: ['Indexing already in progress'],
+    }));
+
+    enqueueMutation(PROJECT, [{ rel: 'src/gone.ts', op: 'delete' }]);
+    await vi.advanceTimersByTimeAsync(DEBOUNCE_MS);
+    expect(rag.deleteFiles).toHaveBeenCalledTimes(1);
+    expect(_getPendingIndexRefreshForTests(PROJECT)).toEqual({
+      entries: [{ rel: 'src/gone.ts', op: 'delete' }],
+      dirty: false,
+      timerArmed: true,
+      flushing: false,
+    });
+
+    // The re-armed debounce retries the delete after the in-flight run; the
+    // other index does not repeat its already-applied delete.
+    await vi.advanceTimersByTimeAsync(DEBOUNCE_MS);
+    expect(rag.deleteFiles).toHaveBeenCalledTimes(2);
+    expect(ast.deleteFiles).toHaveBeenCalledTimes(1);
+    expect(_getPendingIndexRefreshForTests(PROJECT).entries).toEqual([]);
+    expect(_getPendingIndexRefreshForTests(PROJECT).timerArmed).toBe(false);
   });
 
   it('clears pending state on dispose', async () => {
@@ -645,7 +693,7 @@ describe('index refresh coordinator', () => {
   });
 
   it('requeues only RAG entries on a sentinel collision; AST entries stay consumed', async () => {
-    rag.upsertFiles.mockImplementationOnce(async (): RAGIndexResult => ({
+    rag.upsertFiles.mockImplementationOnce(async (): Promise<RAGIndexResult> => ({
       ...RAG_RESULT,
       errors: ['Indexing already in progress'],
     }));
@@ -681,7 +729,7 @@ describe('index refresh coordinator', () => {
   });
 
   it('does not re-set dirty when only the mutation upsert hit the sentinel', async () => {
-    rag.upsertFiles.mockImplementationOnce(async (): RAGIndexResult => ({
+    rag.upsertFiles.mockImplementationOnce(async (): Promise<RAGIndexResult> => ({
       ...RAG_RESULT,
       errors: ['Indexing already in progress'],
     }));

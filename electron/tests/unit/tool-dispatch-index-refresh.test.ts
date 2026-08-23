@@ -104,17 +104,17 @@ const AST_INCREMENTAL_RESULT: ASTIncrementalResult = {
 
 function makeRagIndexer(): RefreshRagIndexer {
   return {
-    upsertFiles: vi.fn(async (): RAGIndexResult => ({ ...RAG_RESULT })),
+    upsertFiles: vi.fn(async (): Promise<RAGIndexResult> => ({ ...RAG_RESULT })),
     deleteFiles: vi.fn(async (): Promise<void> => {}),
-    indexProject: vi.fn(async (): RAGIndexResult => ({ ...RAG_RESULT })),
+    indexProject: vi.fn(async (): Promise<RAGIndexResult> => ({ ...RAG_RESULT })),
   };
 }
 
 function makeAstIndexer(): RefreshAstIndexer {
   return {
-    upsertFiles: vi.fn(async (): ASTIncrementalResult => ({ ...AST_INCREMENTAL_RESULT })),
+    upsertFiles: vi.fn(async (): Promise<ASTIncrementalResult> => ({ ...AST_INCREMENTAL_RESULT })),
     deleteFiles: vi.fn(async (): Promise<number> => 0),
-    indexProject: vi.fn(async (): ASTIndexResult => ({ ...AST_RESULT })),
+    indexProject: vi.fn(async (): Promise<ASTIndexResult> => ({ ...AST_RESULT })),
   };
 }
 
