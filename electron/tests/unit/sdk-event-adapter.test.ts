@@ -4,6 +4,7 @@ import {
   buildMcpProviderToolAliases,
   classifyStreamError,
   createToolNameResolver,
+  getMcpProviderToolAliases,
   SdkEventAdapter,
 } from '../../src/main/llm/stream/sdk-event-adapter';
 import type { MCPManager } from '../../src/main/mcp/manager';
@@ -394,5 +395,98 @@ describe('buildMcpProviderToolAliases', () => {
     }
     expect(resolve('mcp::direct::name')).toBe('mcp::direct::name');
     expect(resolve('todo_list')).toBe('todo_list');
+  });
+
+  it('reuses pinned aliases as-is and reserves their values', () => {
+    // search:web was pinned to a hashed alias; search_web (which would
+    // otherwise take the plain name) must not collide with any future sibling.
+    const pinned = new Map([['mcp::s::search:web', 'mcp_s_search_web_pinned00000000']]);
+    const aliases = buildMcpProviderToolAliases(['mcp::s::search:web'], pinned);
+
+    expect(aliases.get('mcp::s::search:web')).toBe('mcp_s_search_web_pinned00000000');
+
+    // A different tool whose plain name equals the pinned value must be hashed,
+    // not silently merged onto the pinned alias.
+    const displaced = buildMcpProviderToolAliases(
+      ['mcp::s::search:web', 'mcp::s::x', 'mcp::other'],
+      pinned,
+    );
+    const bySafe = new Map(
+      [...displaced.entries()].map(([k, v]) => [k, v] as const),
+    );
+    expect(bySafe.get('mcp::s::search:web')).toBe('mcp_s_search_web_pinned00000000');
+    expect(new Set(displaced.values()).size).toBe(displaced.size);
+  });
+
+  it('throws on a hashed-alias collision instead of silently merging', () => {
+    // Two names whose hashed aliases coincide cannot be constructed via sha256
+    // truncation, so force it via a pin: pin the first tool to the second
+    // tool's natural hashed alias.
+    const pair = buildMcpProviderToolAliases(['mcp::s::search:web', 'mcp::s::search_web']);
+    const firstAlias = pair.get('mcp::s::search:web')!;
+    const second = 'mcp::s::search_web';
+    const pinned = new Map([[second, firstAlias]]);
+
+    expect(() =>
+      buildMcpProviderToolAliases(['mcp::s::search:web', second], pinned),
+    ).toThrow(/MCP tool alias collision/);
+  });
+});
+
+describe('getMcpProviderToolAliases (sticky pinning)', () => {
+  it('keeps a hashed alias after its colliding sibling disappears', () => {
+    const collidingSet = ['mcp::s::search:web', 'mcp::s::search_web'];
+    const getTools = vi.fn(() => collidingSet.map((name) => ({ definition: { name } })));
+    const manager = { getTools } as unknown as MCPManager;
+
+    const before = getMcpProviderToolAliases(manager);
+    const survivor = 'mcp::s::search:web';
+    expect(before.get(survivor)).toMatch(/^mcp_s_search_web_[0-9a-f]{16}$/);
+
+    // Server reconnects with only one tool left; the survivor keeps its alias.
+    getTools.mockImplementation(() => [{ definition: { name: survivor } }]);
+    const after = getMcpProviderToolAliases(manager);
+    expect(after.get(survivor)).toBe(before.get(survivor));
+  });
+
+  it('never revokes a name: dropped tools still reserve their aliases', () => {
+    const getTools = vi.fn(() => [
+      { definition: { name: 'mcp::s::search:web' } },
+      { definition: { name: 'mcp::s::search_web' } },
+    ]);
+    const manager = { getTools } as unknown as MCPManager;
+
+    const withPair = getMcpProviderToolAliases(manager);
+    const dropped = 'mcp::s::search_web';
+
+    getTools.mockImplementation(() => [{ definition: { name: 'mcp::s::search:web' } }]);
+    const afterDrop = getMcpProviderToolAliases(manager);
+    expect(afterDrop.get(dropped)).toBe(withPair.get(dropped));
+
+    // A newly appearing tool sanitizing to the dropped name's plain form must
+    // not reuse it (the dropped tool's alias is still pinned).
+    getTools.mockImplementation(() => [
+      { definition: { name: 'mcp::s::search:web' } },
+      { definition: { name: 'mcp::s::search_web' } },
+    ]);
+    const restored = getMcpProviderToolAliases(manager);
+    expect(restored.get('mcp::s::search_web')).toBe(withPair.get('mcp::s::search_web'));
+    expect(new Set(restored.values()).size).toBe(restored.size);
+  });
+
+  it('pins are per-manager: separate managers assign independently', () => {
+    const a = { getTools: () => [{ definition: { name: 'mcp::s::tool' } }] } as unknown as MCPManager;
+    const b = { getTools: () => [{ definition: { name: 'mcp::s::tool' } }] } as unknown as MCPManager;
+
+    expect(getMcpProviderToolAliases(a).get('mcp::s::tool')).toBe('mcp_s_tool');
+    expect(getMcpProviderToolAliases(b).get('mcp::s::tool')).toBe('mcp_s_tool');
+
+    // Manager A later sees a colliding sibling; B stays untouched.
+    (a as unknown as { getTools: () => unknown[] }).getTools = () => [
+      { definition: { name: 'mcp::s::tool' } },
+      { definition: { name: 'mcp::s::tool!' } },
+    ];
+    expect(getMcpProviderToolAliases(a).get('mcp::s::tool')).toMatch(/_[0-9a-f]{16}$/);
+    expect(getMcpProviderToolAliases(b).get('mcp::s::tool')).toBe('mcp_s_tool');
   });
 });

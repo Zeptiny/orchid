@@ -439,14 +439,45 @@ export function payloadFromProviderMetadata(
 
 export type ToolNameResolver = (providerToolName: string) => string;
 
+/** Per-manager alias pins: first assignment wins for the manager's lifetime. */
+interface McpAliasPins {
+  /** Every internal name ever observed (sticky membership). */
+  seen: Set<string>;
+  /** internalName -> alias, assigned once, never revoked. */
+  assigned: Map<string, string>;
+}
+
+const mcpAliasPins = new WeakMap<MCPManager, McpAliasPins>();
+
+/**
+ * Derive provider-safe MCP aliases for a manager's current tool set.
+ *
+ * Delegates to {@link buildMcpProviderToolAliases} over the sticky union of
+ * every tool name the manager has exposed (not just the current snapshot), so
+ * tool registration (orchestrator) and stream-time alias reversal
+ * (createToolNameResolver) always agree even if the set mutates between them.
+ * Pinning also keeps aliases stable across mid-session server reconnects: a
+ * tool's alias may flip plain->hashed as colliding siblings appear, but never
+ * back, so the model never sees a learned name disappear.
+ */
+export function getMcpProviderToolAliases(mcpManager: MCPManager): Map<string, string> {
+  let pins = mcpAliasPins.get(mcpManager);
+  if (!pins) {
+    pins = { seen: new Set(), assigned: new Map() };
+    mcpAliasPins.set(mcpManager, pins);
+  }
+  for (const { definition } of mcpManager.getTools()) {
+    pins.seen.add(definition.name);
+  }
+  return buildMcpProviderToolAliases([...pins.seen], pins.assigned);
+}
+
 /** Snapshot provider-safe MCP aliases once for this frozen stream attempt. */
 export function createToolNameResolver(mcpManager: MCPManager | null): ToolNameResolver {
   if (!mcpManager) return (toolName) => toolName;
 
   const internalNamesByAlias = new Map<string, string>();
-  for (const [internalName, alias] of buildMcpProviderToolAliases(
-    mcpManager.getTools().map((tool) => tool.definition.name),
-  )) {
+  for (const [internalName, alias] of getMcpProviderToolAliases(mcpManager)) {
     internalNamesByAlias.set(alias, internalName);
   }
   return (toolName) => toolName.startsWith('mcp::')
@@ -483,11 +514,19 @@ function hashedMcpToolAlias(internalName: string, safeName: string): string {
  * truncation can never merge two tools into one alias; if even the hashed
  * form collides (truncated sha256 prefix tie), the builder throws.
  *
+ * Optional `pinned` aliases (internalName -> alias, from
+ * {@link getMcpProviderToolAliases}) are reused as-is and reserve their values
+ * in the taken set, so a pinned tool keeps its alias even if the reason it was
+ * hashed (a colliding sibling) has since disappeared.
+ *
  * Deterministic for a given set: tool registration (orchestrator) and
  * stream-time alias reversal (createToolNameResolver) both derive aliases from
  * the same full MCP tool set, so they always agree.
  */
-export function buildMcpProviderToolAliases(internalNames: string[]): Map<string, string> {
+export function buildMcpProviderToolAliases(
+  internalNames: string[],
+  pinned?: ReadonlyMap<string, string>,
+): Map<string, string> {
   const safeNames = internalNames.map(sanitizeMcpToolName);
   const counts = new Map<string, number>();
   for (const safe of safeNames) {
@@ -503,7 +542,15 @@ export function buildMcpProviderToolAliases(internalNames: string[]): Map<string
     const safe = safeNames[i]!;
     let alias: string;
 
-    if ((counts.get(safe) ?? 0) === 1 && safe.length <= unhashedBudget && !taken.has(safe)) {
+    const pinnedAlias = pinned?.get(internalName);
+    if (pinnedAlias !== undefined) {
+      alias = pinnedAlias;
+      if (taken.has(alias)) {
+        throw new Error(
+          `MCP tool alias collision for '${internalName}': '${alias}'`,
+        );
+      }
+    } else if ((counts.get(safe) ?? 0) === 1 && safe.length <= unhashedBudget && !taken.has(safe)) {
       alias = safe;
     } else {
       alias = hashedMcpToolAlias(internalName, safe);
