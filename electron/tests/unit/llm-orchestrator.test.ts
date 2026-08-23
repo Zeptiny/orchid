@@ -40,6 +40,7 @@ import {
   type StreamChatParams,
 } from '../../src/main/llm/orchestrator';
 import { combineAbortSignals } from '../../src/main/llm/stream/attempt-controller';
+import { createToolNameResolver } from '../../src/main/llm/stream/sdk-event-adapter';
 import { ToolRegistry } from '../../src/main/tools/registry';
 import type { MCPManager } from '../../src/main/mcp/manager';
 import { defaults } from '../../src/main/config/schema';
@@ -1300,6 +1301,42 @@ describe('ToolRegistry integration with dispatch', () => {
       '<tool_result name="mcp::context7::query.docs"',
     );
     expect(routedResult.agentProjection.content).not.toContain(aliases[0]);
+  });
+
+  it('allowed-tools filtering keeps full-set aliases: hashed name survives exclusion and the resolver agrees', () => {
+    // Both tools sanitize to mcp_s_search_web, so the FULL set assigns both
+    // hashed aliases. Registration may exclude one, but the excluded sibling
+    // still counts toward collision detection — the allowed tool must keep its
+    // hashed alias (not flip to the plain name) or stream-time reversal
+    // (built from the full set) would miss it.
+    const internalNames = ['mcp::s::search:web', 'mcp::s::search_web'];
+    const mcpManager = {
+      getTools: () => internalNames.map((name, index) => ({
+        definition: {
+          name,
+          riskClass: 'read-only',
+          description: `MCP tool ${index}`,
+          inputSchema: z.object({ query: z.string().optional() }),
+          resultFamily: 'generic',
+          outputDataSchema: genericToolResultDataSchema,
+          category: 'mcp',
+        },
+        handler: vi.fn(async () => 'ok'),
+      })),
+    } as unknown as MCPManager;
+
+    const allowed = buildToolMap(['mcp::s::search:web'], registry, mcpManager, {
+      cwd: TEST_TOOL_CWD,
+    });
+    const aliasKeys = Object.keys(allowed).filter((key) => key.startsWith('mcp_'));
+
+    expect(aliasKeys).toHaveLength(1);
+    expect(aliasKeys[0]).toMatch(/^mcp_s_search_web_[0-9a-f]{16}$/);
+
+    const resolve = createToolNameResolver(mcpManager);
+    expect(resolve(aliasKeys[0])).toBe('mcp::s::search:web');
+    // The plain sanitized name resolves to no tool — it was never registered.
+    expect(resolve('mcp_s_search_web')).toBe('mcp_s_search_web');
   });
 });
 

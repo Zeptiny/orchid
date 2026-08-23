@@ -593,7 +593,10 @@ export function buildToolMap(
       if (!isAllowed) continue;
 
       const internalName = definition.name;
-      const providerName = mcpAliases.get(internalName)!;
+      const providerName = mcpAliases.get(internalName);
+      if (!providerName) {
+        throw new TypeError(`No provider alias for MCP tool '${internalName}'`);
+      }
       if (providerName in toolMap) {
         throw new Error(
           `Provider tool name collision for MCP tool "${internalName}": "${providerName}"`,

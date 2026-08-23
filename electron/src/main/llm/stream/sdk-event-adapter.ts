@@ -456,8 +456,6 @@ export function createToolNameResolver(mcpManager: MCPManager | null): ToolNameR
 
 const PROVIDER_TOOL_NAME_MAX_LENGTH = 64;
 const PROVIDER_TOOL_NAME_HASH_LENGTH = 16;
-/** Longest hash extension tried before accepting a (practically impossible) tie. */
-const PROVIDER_TOOL_NAME_HASH_MAX_LENGTH = 32;
 
 function sanitizeMcpToolName(internalName: string): string {
   return internalName
@@ -465,9 +463,12 @@ function sanitizeMcpToolName(internalName: string): string {
     .replace(/^_+|_+$/g, '') || 'mcp_tool';
 }
 
-function hashedMcpToolAlias(internalName: string, safeName: string, hashLength: number): string {
-  const hash = createHash('sha256').update(internalName).digest('hex').slice(0, hashLength);
-  const budget = PROVIDER_TOOL_NAME_MAX_LENGTH - hashLength - 1;
+function hashedMcpToolAlias(internalName: string, safeName: string): string {
+  const hash = createHash('sha256')
+    .update(internalName)
+    .digest('hex')
+    .slice(0, PROVIDER_TOOL_NAME_HASH_LENGTH);
+  const budget = PROVIDER_TOOL_NAME_MAX_LENGTH - PROVIDER_TOOL_NAME_HASH_LENGTH - 1;
   return `${safeName.slice(0, budget)}_${hash}`;
 }
 
@@ -479,7 +480,8 @@ function hashedMcpToolAlias(internalName: string, safeName: string, hashLength: 
  * 64-char provider budget minus the room a hash suffix would need, so a name
  * that later needs hashing keeps its exact prefix. Longer or colliding
  * sanitized names get a content hash appended so sanitization collisions and
- * truncation can never merge two tools into one alias.
+ * truncation can never merge two tools into one alias; if even the hashed
+ * form collides (truncated sha256 prefix tie), the builder throws.
  *
  * Deterministic for a given set: tool registration (orchestrator) and
  * stream-time alias reversal (createToolNameResolver) both derive aliases from
@@ -504,13 +506,14 @@ export function buildMcpProviderToolAliases(internalNames: string[]): Map<string
     if ((counts.get(safe) ?? 0) === 1 && safe.length <= unhashedBudget && !taken.has(safe)) {
       alias = safe;
     } else {
-      alias = hashedMcpToolAlias(internalName, safe, PROVIDER_TOOL_NAME_HASH_LENGTH);
-      for (
-        let hashLength = PROVIDER_TOOL_NAME_HASH_LENGTH + 1;
-        hashLength <= PROVIDER_TOOL_NAME_HASH_MAX_LENGTH && taken.has(alias);
-        hashLength++
-      ) {
-        alias = hashedMcpToolAlias(internalName, safe, hashLength);
+      alias = hashedMcpToolAlias(internalName, safe);
+      if (taken.has(alias)) {
+        // Two distinct internal names sharing a truncated sha256 prefix (~2^-64).
+        // Fail closed so registration and stream-time reversal fail identically
+        // instead of the resolver silently remapping one tool onto the other.
+        throw new Error(
+          `MCP tool alias collision for '${internalName}': '${alias}'`,
+        );
       }
     }
 

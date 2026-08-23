@@ -91,9 +91,9 @@ export function buildCreateTool(
     name: 'todo_create',
     description:
       'Create a new task in the session todo list. Tasks are scoped to the ' +
-      'calling agent (main or a specific subagent). Subagents only see and ' +
-      'modify their own tasks. Accepts a single title or an array of titles ' +
-      'for batch creation.',
+      'calling agent (main or a subagent). Subagents only see and modify ' +
+      'their own tasks. Accepts a single title or an array of titles for ' +
+      'batch creation.',
     inputSchema: z.object({
       title: z.preprocess(
         expandStringifiedBatch,

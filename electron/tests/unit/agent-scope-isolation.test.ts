@@ -123,6 +123,19 @@ describe('todo tools agent isolation', () => {
     expect(tasks).toHaveLength(1);
     expect(tasks[0]!.subagent_id).toBe('sub-a');
   });
+
+  it('main-scope create ignores a stale subagent_id key (param removed)', async () => {
+    const create = buildCreateTool(store);
+    // Models holding pre-removal tool schemas may still emit subagent_id;
+    // the schema strips it and ownership stays with the caller.
+    await create.handler(
+      { title: 'Stale', subagent_id: 'sub-9' } as never,
+      ctx('main'),
+    );
+    const tasks = store.list();
+    expect(tasks).toHaveLength(1);
+    expect(tasks[0]!.subagent_id).toBeNull();
+  });
 });
 
 describe('prompt context agent isolation', () => {
