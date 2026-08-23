@@ -34,6 +34,7 @@ Shared domain vocabulary for the orchid project. This file defines terms used ac
 - **User Projection** — A human-oriented representation rendered from a canonical tool result for live or persisted replay through generic or specialized tool widgets; it is not a second stored source of facts.
 - **RAG Search** — Semantic code search using embeddings and cosine similarity over indexed project files.
 - **RAG Index** — The vector store (SQLite + numpy) built by indexing and chunking project files.
+- **Index Auto-Refresh** — The background process that keeps the RAG and AST indexes current after file mutations and external changes. Mutations from file-editing tools and events from a workspace watcher feed one coalesced, debounced pipeline of targeted index updates; completed shell commands trigger a full hash-diff scan instead. Rules: refresh is fire-and-forget (it can never delay or fail the work that caused it), it only runs on trusted projects and cancels pending work on trust revocation, and it reads per-project settings so project-level overrides apply.
 
 ## Permission System
 

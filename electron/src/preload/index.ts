@@ -83,6 +83,7 @@ import type {
   RAGIndexProgress,
   ASTIndexMessage,
   ASTIndexProgress,
+  IndexAutoRefreshEvent,
   BgCommandSnapshotRequest,
   BgCommandListRequest,
   BgCommandSendInputRequest,
@@ -160,6 +161,7 @@ import {
   workingSetChangedEventSchema,
   ragIndexProgressSchema,
   astIndexProgressSchema,
+  indexAutoRefreshEventSchema,
   chatSendResultSchema,
   toolExecuteResultSchema,
   bgCommandSnapshotResultSchema,
@@ -675,6 +677,11 @@ const orchidAPI: OrchidAPI = {
 
     onProgress: (callback: (progress: ASTIndexProgress) => void) =>
       onParsed(IPC_CHANNELS.AST_PROGRESS, astIndexProgressSchema, callback),
+  },
+
+  index: {
+    onAutoRefresh: (callback: (event: IndexAutoRefreshEvent) => void) =>
+      onParsed(IPC_CHANNELS.INDEX_AUTO_REFRESH, indexAutoRefreshEventSchema, callback),
   },
 
   bgCmd: {

@@ -204,6 +204,20 @@ const TAB_SECTIONS: Partial<Record<ProjectTab, ProjectConfigSection[]>> = {
         { key: 'rag.embedding_api_retries', label: 'Embedding API Retries', kind: 'integer', min: 0, max: 10 },
       ],
     },
+    {
+      title: 'Index Auto-Refresh',
+      fields: [
+        { key: 'index_refresh.rag', label: 'RAG Auto-Refresh', kind: 'boolean' },
+        { key: 'index_refresh.ast', label: 'AST Auto-Refresh', kind: 'boolean' },
+        {
+          key: 'index_refresh.watch',
+          label: 'Watch Workspace',
+          kind: 'boolean',
+          hint: 'Detect edits made outside Orchid (editor, git, build tooling) and refresh both indexes.',
+        },
+        { key: 'index_refresh.debounce_ms', label: 'Debounce Window (ms)', kind: 'integer', min: 100, max: 60000 },
+      ],
+    },
   ],
   'agents-md': [
     {
@@ -521,6 +535,7 @@ export function ProjectConfigView({ projectDir, onNewChat, onClose }: ProjectCon
       const updates: Record<string, unknown> = {};
       const ragUpdates: Record<string, unknown> = {};
       const agentsMdUpdates: Record<string, unknown> = {};
+      const indexRefreshUpdates: Record<string, unknown> = {};
       const compactionUpdates: Record<string, Record<string, unknown>> = {};
       for (const [key, value] of Object.entries(draft)) {
         const stored = readStoredOverride(overrides, key);
@@ -528,6 +543,9 @@ export function ProjectConfigView({ projectDir, onNewChat, onClose }: ProjectCon
         if (key.startsWith('rag.')) ragUpdates[key.slice(4)] = value;
         else if (key.startsWith('agents_md.')) {
           agentsMdUpdates[key.slice('agents_md.'.length)] = value;
+        }
+        else if (key.startsWith('index_refresh.')) {
+          indexRefreshUpdates[key.slice('index_refresh.'.length)] = value;
         }
         else if (key.startsWith('compaction.')) {
           const remainder = key.slice('compaction.'.length);
@@ -546,6 +564,7 @@ export function ProjectConfigView({ projectDir, onNewChat, onClose }: ProjectCon
       }
       if (Object.keys(ragUpdates).length > 0) updates['rag'] = ragUpdates;
       if (Object.keys(agentsMdUpdates).length > 0) updates['agents_md'] = agentsMdUpdates;
+      if (Object.keys(indexRefreshUpdates).length > 0) updates['index_refresh'] = indexRefreshUpdates;
       if (Object.keys(compactionUpdates).length > 0) updates['compaction'] = compactionUpdates;
 
       if (tierDraft !== null) {

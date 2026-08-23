@@ -2,7 +2,6 @@
  * todo_update tool — update a task owned by the calling agent scope.
  *
  * Cross-scope updates are rejected (Sub1 cannot mutate main/Sub2 todos).
- * Subagents cannot reassign ownership away from themselves.
  */
 import { z } from 'zod';
 import type { ToolDefinition, ToolHandler } from '../types';
@@ -13,7 +12,6 @@ import type { TodoToolResult, NotifyTodoChanged, TodoStoreSource } from './creat
 import { resolveTodoStore, TODO_BATCH_MAX_SIZE, expandStringifiedBatch } from './create';
 import { TodoStatus, type Todo } from '../../../shared/types/todo';
 import {
-  isMainAgentScope,
   normalizeAgentScopeId,
   todoBelongsToScope,
 } from '../../../shared/types/agent-scope';
@@ -72,23 +70,16 @@ export function buildUpdateTool(
           ),
         )
         .optional(),
-      subagent_id: z
-        .string()
-        .optional()
-        .describe(
-          'Main agent only: reassign ownership. Subagents cannot change owner.',
-        ),
     }),
     category: 'todo',
     riskClass: RiskClass.MUTATION,
   };
 
   const handler: ToolHandler = async (input: unknown, ctx): Promise<TodoToolResult> => {
-    const { id, title, status, subagent_id } = input as {
+    const { id, title, status } = input as {
       id: string | string[];
       title?: string | string[];
       status?: TodoStatus | TodoStatus[];
-      subagent_id?: string;
     };
 
     const scope = normalizeAgentScopeId(ctx.agentScopeId);
@@ -109,11 +100,18 @@ export function buildUpdateTool(
         'error',
       );
     }
+    if (title === undefined && status === undefined) {
+      return genericBuiltInToolOutcome(
+        'todo_update',
+        'Error: Nothing to update — provide title and/or status.',
+        'error',
+      );
+    }
 
     const titles = title === undefined ? undefined : Array.isArray(title) ? title : ids.map(() => title);
     const statuses = status === undefined ? undefined : Array.isArray(status) ? status : ids.map(() => status);
 
-    const results: { task: Todo | null; error: string | null; changes: { title?: string; status?: string; owner?: string } }[] = [];
+    const results: { task: Todo | null; error: string | null; changes: { title?: string; status?: string } }[] = [];
 
     for (let i = 0; i < ids.length; i++) {
       const existing = todoStore.get(ids[i]);
@@ -126,15 +124,12 @@ export function buildUpdateTool(
         continue;
       }
 
-      const updates: { title?: string; status?: TodoStatus; subagent_id?: string } = {};
+      const updates: { title?: string; status?: TodoStatus } = {};
       if (titles !== undefined && titles[i] !== undefined) {
         updates.title = titles[i];
       }
       if (statuses !== undefined && statuses[i] !== undefined) {
         updates.status = statuses[i];
-      }
-      if (isMainAgentScope(scope) && subagent_id !== undefined) {
-        updates.subagent_id = subagent_id;
       }
 
       const [task, error] = todoStore.update(ids[i], updates);
@@ -142,12 +137,9 @@ export function buildUpdateTool(
         results.push({ task: null, error: error ?? 'Unknown error.', changes: {} });
         continue;
       }
-      const changes: { title?: string; status?: string; owner?: string } = {};
+      const changes: { title?: string; status?: string } = {};
       if (updates.title !== undefined) changes.title = task.title;
       if (updates.status !== undefined) changes.status = task.status;
-      if (isMainAgentScope(scope) && subagent_id !== undefined) {
-        changes.owner = task.subagent_id || 'main';
-      }
       results.push({ task, error: null, changes });
     }
 

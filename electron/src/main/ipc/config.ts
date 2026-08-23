@@ -20,6 +20,7 @@ import {
 import { isPlainObject, isUnsafeKey, mergeConfigUpdates } from '../config/merge';
 import { configSchema } from '../config/schema';
 import { withConfigSaveLock } from '../config/write-lock';
+import { reconfigureWorkspaceWatchers } from '../indexing/watcher';
 import {
   listPersonalityNames,
   loadPersonalities,
@@ -75,6 +76,7 @@ const PROJECT_CONFIG_ALLOWED_KEYS = new Set([
   'mcp_result_max_bytes',
   'mcp_servers',
   'agents_md',
+  'index_refresh',
   'default_model',
   'tier_models',
   'tier_reasoning_effort',
@@ -120,6 +122,19 @@ function valueAtPath(source: unknown, path: readonly PropertyKey[]): unknown {
 
 function unchangedValue(before: unknown, after: unknown): boolean {
   return before === after || JSON.stringify(before) === JSON.stringify(after);
+}
+
+/**
+ * Reconcile workspace watchers with the freshly written config (both `watch`
+ * itself and per-project layers can change what should be watched). Fire and
+ * forget: watching must never be able to fail a config save.
+ */
+function applyWorkspaceWatcherConfigChange(): void {
+  try {
+    reconfigureWorkspaceWatchers();
+  } catch (error) {
+    console.warn('[config] failed to apply watcher config change', error);
+  }
 }
 
 /**
@@ -201,6 +216,8 @@ export function registerConfigIPC(): void {
       // Keep the process-wide compatibility cache home-only. Project overlays
       // are independently resolved for the session/turn that needs them.
       ConfigManager.load({ projectDir: HOME_CONFIG_DIR });
+
+      applyWorkspaceWatcherConfigChange();
 
       return { status: 'saved' as const };
     });
@@ -316,6 +333,7 @@ export function registerConfigIPC(): void {
       clearProjectRuntimeRegistry();
       invalidateAllProjectMCPManagers();
       ConfigManager.load({ projectDir: HOME_CONFIG_DIR });
+      applyWorkspaceWatcherConfigChange();
     });
   });
 }

@@ -40,6 +40,11 @@ import type { Config } from '../../src/main/config/schema';
 import type { ProjectRuntime } from '../../src/main/project/runtime';
 import type { ToolDefinition } from '../../src/main/tools/types';
 import { finalizeToolExecutionResult } from '../../src/main/tools/result';
+import { defaults } from '../../src/main/config';
+import {
+  disposeIndexRefreshCoordinator,
+  _setIndexRefreshCoordinatorForTests,
+} from '../../src/main/indexing/refresh-coordinator';
 import {
   createCanonicalToolResult,
   type GenericToolResultData,
@@ -94,6 +99,23 @@ function writeFile(relPath: string, content: string): void {
   fs.mkdirSync(path.dirname(fullPath), { recursive: true });
   fs.writeFileSync(fullPath, content, 'utf-8');
 }
+
+// Background spawns in this suite exit (naturally or via store.clear()) and
+// the store's exit path marks process.cwd() dirty in the index-refresh
+// coordinator. Pin the debounce high and dispose the state after each test
+// so no real flush can ever fire.
+beforeEach(() => {
+  _setIndexRefreshCoordinatorForTests({
+    configLoader: () => ({
+      ...defaults(),
+      index_refresh: { ...defaults().index_refresh, debounce_ms: 60_000 },
+    }),
+  });
+});
+
+afterEach(() => {
+  disposeIndexRefreshCoordinator();
+});
 
 // ---------------------------------------------------------------------------
 // HeadTailBuffer tests

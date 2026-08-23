@@ -39,6 +39,11 @@ const mocks = vi.hoisted(() => {
     })),
     cancelIndex: vi.fn(async () => false),
     clearIndex: vi.fn(),
+    cancelProjectRefreshAsync: vi.fn(async () => {}),
+    getWorkspaceWatcherState: vi.fn((): { watching: boolean; refcount: number } => ({
+      watching: false,
+      refcount: 0,
+    })),
     getRuntime: vi.fn(() => ({ projectDir: PROJECT_DIR, config: { rag: {} } })),
     trustState: { current: 'trusted' as 'trusted' | 'untrusted' | 'changed' },
   };
@@ -73,6 +78,14 @@ vi.mock('../../src/main/rag/indexer', () => ({
   clearIndex: mocks.clearIndex,
 }));
 
+vi.mock('../../src/main/indexing/refresh-coordinator', () => ({
+  cancelProjectRefreshAsync: mocks.cancelProjectRefreshAsync,
+}));
+
+vi.mock('../../src/main/indexing/watcher', () => ({
+  getWorkspaceWatcherState: mocks.getWorkspaceWatcherState,
+}));
+
 let ragIpc: typeof import('../../src/main/ipc/rag');
 
 beforeEach(async () => {
@@ -86,6 +99,9 @@ beforeEach(async () => {
   mocks.indexProject.mockClear();
   mocks.cancelIndex.mockClear();
   mocks.clearIndex.mockClear();
+  mocks.cancelProjectRefreshAsync.mockClear();
+  mocks.getWorkspaceWatcherState.mockReset();
+  mocks.getWorkspaceWatcherState.mockReturnValue({ watching: false, refcount: 0 });
   mocks.getRuntime.mockClear();
   mocks.trustState.current = 'trusted';
 
@@ -114,6 +130,7 @@ describe('rag:status / rag:index_state', () => {
       totalFiles: 0,
       lastIndexed: null,
       lastIndexDuration: null,
+      lastAutoRefresh: null,
     });
     expect(mocks.getStatus).not.toHaveBeenCalled();
   });
@@ -122,6 +139,32 @@ describe('rag:status / rag:index_state', () => {
     const status = await handler(IPC_CHANNELS.RAG_STATUS)(event);
     expect(mocks.getStatus).toHaveBeenCalledWith(PROJECT_DIR);
     expect(status).toMatchObject({ totalChunks: 10, totalFiles: 2 });
+  });
+
+  it('reports the workspace watcher slice on status', async () => {
+    mocks.getWorkspaceWatcherState.mockReturnValue({ watching: true, refcount: 1 });
+
+    const status = await handler(IPC_CHANNELS.RAG_STATUS)(event);
+    expect(mocks.getWorkspaceWatcherState).toHaveBeenCalledWith(PROJECT_DIR);
+    expect(status).toMatchObject({
+      totalChunks: 10,
+      totalFiles: 2,
+      watcher: { watching: true },
+    });
+  });
+
+  it('degrades to the plain store status when watcher introspection fails', async () => {
+    mocks.getWorkspaceWatcherState.mockImplementation(() => {
+      throw new Error('watcher unavailable');
+    });
+
+    const status = await handler(IPC_CHANNELS.RAG_STATUS)(event);
+    expect(status).toEqual({
+      totalChunks: 10,
+      totalFiles: 2,
+      lastIndexed: '2026-01-01T00:00:00.000Z',
+      lastIndexDuration: 1.5,
+    });
   });
 
   it('passes project path to index state', async () => {
@@ -182,12 +225,50 @@ describe('rag:clear', () => {
 
     mocks.cancelIndex.mockClear();
     mocks.clearIndex.mockClear();
+    mocks.cancelProjectRefreshAsync.mockClear();
     mocks.resolveBoundProjectPath.mockReturnValue(null);
     await expect(handler(IPC_CHANNELS.RAG_CLEAR)(event)).resolves.toEqual({
       status: 'cleared',
     });
     expect(mocks.cancelIndex).not.toHaveBeenCalled();
     expect(mocks.clearIndex).not.toHaveBeenCalled();
+    expect(mocks.cancelProjectRefreshAsync).not.toHaveBeenCalled();
+  });
+
+  it('drains pending index refreshes after the run cancel, before the drop', async () => {
+    await handler(IPC_CHANNELS.RAG_CLEAR)(event);
+
+    expect(mocks.cancelProjectRefreshAsync).toHaveBeenCalledWith(PROJECT_DIR);
+    // Drain runs once the in-flight run is cancelled (no new flush may start
+    // from stale pending state) but strictly before the store is dropped.
+    expect(mocks.cancelProjectRefreshAsync.mock.invocationCallOrder[0]).toBeGreaterThan(
+      mocks.cancelIndex.mock.invocationCallOrder[0],
+    );
+    expect(mocks.cancelProjectRefreshAsync.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.clearIndex.mock.invocationCallOrder[0],
+    );
+  });
+});
+
+// The rag_index tool's clear action shares the drain requirement; no dedicated
+// rag_index tool behavior test exists, so it is covered here alongside the IPC
+// path (the indexer/coordinator mocks apply module-graph-wide).
+describe('rag_index tool clear', () => {
+  it('drains pending index refreshes before clearing the store', async () => {
+    const { ragIndexHandler } = await import('../../src/main/tools/rag/index');
+
+    const outcome = await ragIndexHandler({ action: 'clear' }, { cwd: PROJECT_DIR });
+
+    expect(outcome.status).toBe('complete');
+    expect(mocks.cancelIndex).toHaveBeenCalledWith(PROJECT_DIR);
+    expect(mocks.cancelProjectRefreshAsync).toHaveBeenCalledWith(PROJECT_DIR);
+    expect(mocks.clearIndex).toHaveBeenCalledWith(PROJECT_DIR);
+    expect(mocks.cancelProjectRefreshAsync.mock.invocationCallOrder[0]).toBeGreaterThan(
+      mocks.cancelIndex.mock.invocationCallOrder[0],
+    );
+    expect(mocks.cancelProjectRefreshAsync.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.clearIndex.mock.invocationCallOrder[0],
+    );
   });
 });
 
@@ -200,6 +281,7 @@ describe('rag trust gate (untrusted project)', () => {
       totalFiles: 0,
       lastIndexed: null,
       lastIndexDuration: null,
+      lastAutoRefresh: null,
     });
     expect(mocks.getStatus).not.toHaveBeenCalled();
   });
@@ -225,6 +307,7 @@ describe('rag trust gate (untrusted project)', () => {
     });
     expect(mocks.cancelIndex).not.toHaveBeenCalled();
     expect(mocks.clearIndex).not.toHaveBeenCalled();
+    expect(mocks.cancelProjectRefreshAsync).not.toHaveBeenCalled();
   });
 
   it.each(['untrusted', 'changed'] as const)(
@@ -237,6 +320,7 @@ describe('rag trust gate (untrusted project)', () => {
         totalFiles: 0,
         lastIndexed: null,
         lastIndexDuration: null,
+        lastAutoRefresh: null,
       });
       expect(mocks.getStatus).not.toHaveBeenCalled();
     },

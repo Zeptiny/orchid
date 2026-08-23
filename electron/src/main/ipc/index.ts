@@ -25,6 +25,10 @@ import {
 } from './mcp';
 import { registerRAGIPC, unregisterRAGIPC } from './rag';
 import { registerASTIPC, unregisterASTIPC } from './ast';
+import {
+  registerIndexAutoRefreshBroadcast,
+  unregisterIndexAutoRefreshBroadcast,
+} from './index-refresh';
 import { registerProviderIPC, unregisterProviderIPC } from './providers';
 import {
   registerProviderModelsIPC,
@@ -54,6 +58,7 @@ export function registerAllIPC(): void {
   registerMCPIPC();
   registerRAGIPC();
   registerASTIPC();
+  registerIndexAutoRefreshBroadcast();
   registerSubagentIPC();
   registerAskQuestionIPC();
   registerPermissionIPC();
@@ -79,6 +84,7 @@ export function unregisterAllIPC(): void {
   unregisterMCPIPC();
   unregisterRAGIPC();
   unregisterASTIPC();
+  unregisterIndexAutoRefreshBroadcast();
   unregisterSubagentIPC();
   unregisterAskQuestionIPC();
   unregisterPermissionIPC();

@@ -27,7 +27,7 @@ export function isMainAgentScope(scope?: string | null): boolean {
  * Owner of a todo for scope checks.
  * Empty/null `subagent_id` → main.
  */
-export function todoOwnerScopeId(subagentId: string | null | undefined): AgentScopeId {
+function todoOwnerScopeId(subagentId: string | null | undefined): AgentScopeId {
   return normalizeAgentScopeId(subagentId);
 }
 

@@ -53,10 +53,9 @@ describe('agent-scope helpers', () => {
     expect(todoBelongsToScope({ subagent_id: 'sub-a' }, 'sub-b')).toBe(false);
   });
 
-  it('resolveCreateOwner stamps subagent and lets main assign', () => {
-    expect(resolveCreateOwner('sub-a', 'forged')).toBe('sub-a');
-    expect(resolveCreateOwner('main', 'sub-b')).toBe('sub-b');
-    expect(resolveCreateOwner('main', undefined)).toBeUndefined();
+  it('resolveCreateOwner stamps subagent scope and main to null owner', () => {
+    expect(resolveCreateOwner('sub-a')).toBe('sub-a');
+    expect(resolveCreateOwner('main')).toBeUndefined();
   });
 });
 
@@ -123,6 +122,19 @@ describe('todo tools agent isolation', () => {
     const tasks = store.list();
     expect(tasks).toHaveLength(1);
     expect(tasks[0]!.subagent_id).toBe('sub-a');
+  });
+
+  it('main-scope create ignores a stale subagent_id key (param removed)', async () => {
+    const create = buildCreateTool(store);
+    // Models holding pre-removal tool schemas may still emit subagent_id;
+    // the schema strips it and ownership stays with the caller.
+    await create.handler(
+      { title: 'Stale', subagent_id: 'sub-9' } as never,
+      ctx('main'),
+    );
+    const tasks = store.list();
+    expect(tasks).toHaveLength(1);
+    expect(tasks[0]!.subagent_id).toBeNull();
   });
 });
 

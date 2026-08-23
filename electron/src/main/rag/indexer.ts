@@ -1,8 +1,10 @@
 /**
  * RAG Indexer — file discovery → chunking → embedding → vector store.
  *
- * Full project indexes run in a dedicated `worker_threads` worker so ONNX +
- * SQLite work does not block the Electron main process. Single-file
+ * Full project indexes AND incremental upsert/delete runs execute in a
+ * dedicated `worker_threads` worker so ONNX + SQLite work — including the
+ * synchronous vectors.npy read/rewrite behind every incremental flush —
+ * never blocks the Electron main process.
  */
 import * as crypto from 'node:crypto';
 import * as fs from 'node:fs';
@@ -20,7 +22,8 @@ import {
   removeModelDownloadTemps,
   type IEmbedder,
 } from './embedder';
-import { RAGStore } from './store';
+import { RAGStore, type VectorState } from './store';
+import { INDEX_SKIP_DIR_NAMES } from '../indexing/skip-dirs';
 import type { RAGStoreStatus } from '../../shared/types/ipc-boundary';
 import type { RAGIndexResult, RAGIndexProgress } from '../../shared/types/ipc-boundary';
 
@@ -33,6 +36,16 @@ export interface RagWorkerStartData {
   paths?: string[];
   /** Frozen, secret-free project configuration captured by the caller. */
   config?: Config;
+  /**
+   * Operation selector. Absent (or `'index'`) runs the standard index pass
+   * over `paths`/`force`. `'upsert'` probes vector-state consistency and runs
+   * a scoped (or full, on mismatch) index over `rels`; `'delete'` removes the
+   * stored chunks, file rows, and vectors for `rels`. Incremental ops exist
+   * so the full vectors.npy read/rewrite never runs on the main thread.
+   */
+  op?: 'index' | 'upsert' | 'delete';
+  /** Normalized targets for the `'upsert'` / `'delete'` ops. */
+  rels?: string[];
 }
 
 /** Messages the index worker posts back to the parent. */
@@ -40,6 +53,14 @@ export type RagWorkerOutbound =
   | { type: 'progress'; progress: RAGIndexProgress }
   | { type: 'result'; result: RAGIndexResult }
   | { type: 'error'; error: string };
+
+/** A zeroed result shape (sentinel / no-op incremental runs). */
+function emptyIndexResult(errors: string[] = []): RAGIndexResult {
+  return {
+    filesScanned: 0, filesIndexed: 0, filesSkipped: 0,
+    filesDeleted: 0, chunksCreated: 0, errors, durationSeconds: 0,
+  };
+}
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -54,12 +75,7 @@ const INCLUDE_EXTS = new Set([
 
 const SKIP_EXTS = new Set(['.pyc', '.pyo', '.pyd', '.so', '.dll', '.exe']);
 
-const DEFAULT_IGNORED_DIRS = new Set([
-  'node_modules', '.git', '__pycache__',
-  '.venv', 'venv', 'env',
-  '.orchid', 'dist', 'build',
-  '.next', '.cache', 'target',
-]);
+const DEFAULT_IGNORED_DIRS = new Set(INDEX_SKIP_DIR_NAMES);
 
 // ---------------------------------------------------------------------------
 // Module-level state
@@ -124,6 +140,17 @@ export interface IndexProjectOptions {
   config?: Config;
   /** @internal Test-only worker entry override for deterministic watchdog tests. */
   workerPath?: string;
+  /**
+   * Run a targeted incremental op instead of a plain index pass: the
+   * vector-state consistency probe (upsert) AND the scoped-or-full decision
+   * execute on the chosen thread, so the caller never probes on the main
+   * thread. `'delete'` removes the stored chunks, file rows, and vectors for
+   * `rels`. Incremental ops share this function's single-flight slot,
+   * progress tracking, and cancellation machinery.
+   */
+  op?: 'upsert' | 'delete';
+  /** Normalized targets for the incremental `'upsert'` / `'delete'` ops. */
+  rels?: string[];
 }
 
 /**
@@ -145,11 +172,7 @@ export async function indexProject(
   }
   const key = projectKey(projectPath);
   if (activeIndexes.has(key)) {
-    return {
-      filesScanned: 0, filesIndexed: 0, filesSkipped: 0,
-      filesDeleted: 0, chunksCreated: 0, errors: ['Indexing already in progress'],
-      durationSeconds: 0,
-    };
+    return emptyIndexResult(['Indexing already in progress']);
   }
   activeIndexes.set(key, {
     phase: 'discovering',
@@ -172,6 +195,21 @@ export async function indexProject(
   try {
     // Custom embedder cannot be serialized into a worker — run inline.
     if (options?.inline || embedder) {
+      if (options?.op === 'delete') {
+        return await runDeleteFilesImpl(projectPath, options.rels ?? []);
+      }
+      if (options?.op === 'upsert') {
+        // Incremental upsert: probe + scoped-or-full decision stay on this
+        // thread when forced inline; the single-flight held above still
+        // covers the entire run (probe included).
+        return await runUpsertFilesImpl({
+          projectPath,
+          rels: options.rels ?? [],
+          embedder,
+          progressCallback: trackProgress,
+          config: options?.config,
+        });
+      }
       return await runIndexProjectImpl(
         projectPath,
         paths,
@@ -189,6 +227,9 @@ export async function indexProject(
       options?.config,
       options?.workerPath,
       (cancel) => activeIndexCancels.set(key, cancel),
+      options?.op === 'upsert' || options?.op === 'delete'
+        ? { op: options.op, rels: options.rels ?? [] }
+        : undefined,
     );
   } finally {
     activeIndexes.delete(key);
@@ -209,6 +250,12 @@ export async function runIndexProjectImpl(
   embedder?: IEmbedder,
   progressCallback?: RAGIndexProgressCallback,
   config?: Config,
+  /**
+   * Vector state a caller probed immediately before this run (the upsert
+   * path's consistency probe); when consistent it is used directly so
+   * vectors.npy is not loaded a second time.
+   */
+  preloadedVectorState?: VectorState,
 ): Promise<RAGIndexResult> {
   const cfg = config ?? getConfig();
   if (!projectPath) {
@@ -284,9 +331,16 @@ export async function runIndexProjectImpl(
   return withDisposableAsync(new RAGStore(root), async (store) => {
     store.initDb();
 
-  if (!embedder) {
-    embedder = await createEmbedderFromConfig(cfg.rag);
-  }
+  // Create the embedder lazily — only when a file actually needs embedding.
+  // An all-skipped (hash-identical) scan then pays neither the ONNX session
+  // initialization nor the worker spawn that eager creation implies.
+  let lazyEmbedder: IEmbedder | undefined = embedder;
+  const getEmbedder = async (): Promise<IEmbedder> => {
+    if (!lazyEmbedder) {
+      lazyEmbedder = await createEmbedderFromConfig(cfg.rag);
+    }
+    return lazyEmbedder;
+  };
 
   // Verify vector/chunk alignment BEFORE reading file hashes. DB rows commit
   // per file while vectors.npy flushes once at the end, so an interrupted
@@ -295,7 +349,8 @@ export async function runIndexProjectImpl(
   // vector rows against chunks (search returns wrong files), so force a full
   // rebuild instead. Clearing before the hash read also ensures unchanged
   // files are not skipped against a reset database.
-  let vectorState = store.loadVectorState();
+  let vectorStateDirty = false;
+  let vectorState = preloadedVectorState ?? store.loadVectorState();
   if (!vectorState.consistent) {
     console.warn(
       '[RAG] vectors.npy is out of sync with the chunk database ' +
@@ -303,6 +358,7 @@ export async function runIndexProjectImpl(
     );
     store.clear();
     vectorState = store.loadVectorState();
+    vectorStateDirty = true;
   }
 
   const existingHashes = store.getFileHashes();
@@ -341,6 +397,7 @@ export async function runIndexProjectImpl(
       if (!result) {
         if (existingHashes.has(rel)) {
           store.deleteByFileBatch(vectorState, rel);
+          vectorStateDirty = true;
         }
         // count as processed
       } else {
@@ -356,15 +413,18 @@ export async function runIndexProjectImpl(
           if (chunks.length === 0) {
             if (existingHashes.has(rel)) {
               store.deleteByFileBatch(vectorState, rel);
+              vectorStateDirty = true;
             }
             indexedFiles.add(rel);
           } else {
             // Embed (CPU/memory capped by embedder threads + batch size)
             const texts = chunks.map((c) => c.content);
-            const embeddingsFloat = await embedder.embed(texts);
+            const activeEmbedder = await getEmbedder();
+            const embeddingsFloat = await activeEmbedder.embed(texts);
             const embeddings = embeddingsFloat.map((e) => Array.from(e));
 
             store.upsertFileBatch(vectorState, rel, chunks, embeddings);
+            vectorStateDirty = true;
             stats.filesIndexed++;
             stats.chunksCreated += chunks.length;
             indexedFiles.add(rel);
@@ -415,7 +475,9 @@ export async function runIndexProjectImpl(
     }
   }
 
-  // Remove deleted files
+  // Remove deleted files within the run's scope — a paths-scoped run must
+  // not prune stored files it never discovered
+  const scopeRoots = resolveScopeRoots(root, paths);
   const currentRels = new Set<string>();
   for (const f of files) {
     try {
@@ -425,16 +487,27 @@ export async function runIndexProjectImpl(
     }
   }
   for (const storedPath of existingHashes.keys()) {
-    if (!currentRels.has(storedPath)) {
+    if (
+      !currentRels.has(storedPath) &&
+      isInsideAnyScope(path.resolve(root, storedPath), scopeRoots)
+    ) {
       store.deleteByFileBatch(vectorState, storedPath);
+      vectorStateDirty = true;
       stats.filesDeleted++;
     }
   }
 
-  store.flushVectorState(vectorState);
+  // A no-op scan (every file hash-skipped, nothing pruned) leaves vectorState
+  // identical to what is already persisted — skip the full vectors.npy
+  // rewrite and the duration churn; only state-touching runs flush.
+  if (vectorStateDirty) {
+    store.flushVectorState(vectorState);
+  }
 
   stats.durationSeconds = elapsed();
-  store.recordIndexDuration(stats.durationSeconds);
+  if (vectorStateDirty) {
+    store.recordIndexDuration(stats.durationSeconds);
+  }
 
   emit({
     phase: 'done',
@@ -452,8 +525,182 @@ export async function runIndexProjectImpl(
 }
 
 // ---------------------------------------------------------------------------
+// Incremental updates (targeted upsert / delete)
+// ---------------------------------------------------------------------------
+
+/** Options for {@link upsertFiles}. */
+export interface UpsertFilesOptions {
+  /** Project root the update runs against. */
+  projectPath: string;
+  /** Project-relative (or absolute) file paths to upsert. */
+  rels: string[];
+  /** Frozen project configuration for this update turn. */
+  config?: Config;
+  /**
+   * Custom embedder instance; forces the update to run inline on the current
+   * thread (same rule as `indexProject`).
+   */
+  embedder?: IEmbedder;
+  progressCallback?: RAGIndexProgressCallback;
+  /** @internal Test-only worker entry override for deterministic watchdog tests. */
+  workerPath?: string;
+  /** Force inline execution on the calling thread (tests; same rule as `indexProject`). */
+  inline?: boolean;
+}
+
+/** Dedupe, absolutize, extension-filter, and sort incremental upsert targets. */
+function normalizeUpsertTargets(projectPath: string, rels: string[]): string[] {
+  return [...new Set(rels)]
+    .map((rel) => (path.isAbsolute(rel) ? rel : path.join(projectPath, rel)))
+    .filter((abs) => shouldInclude(abs))
+    .sort();
+}
+
+/**
+ * Incrementally upsert a targeted set of files.
+ *
+ * The whole update — the vector-state consistency probe included — runs in
+ * the index worker, so the synchronous vectors.npy read behind the probe
+ * never blocks the Electron main thread. It still routes through
+ * `indexProject`, preserving that function's single-flight sentinel
+ * ("Indexing already in progress"), progress tracking, and cancellation
+ * machinery for incremental runs. When the vector state is inconsistent
+ * (e.g. an interrupted previous run), the update delegates to a full rebuild
+ * instead — appending to a misaligned vectors.npy would permanently corrupt
+ * search. An empty or fully excluded `rels` list is a no-op.
+ */
+export async function upsertFiles(opts: UpsertFilesOptions): Promise<RAGIndexResult> {
+  const { projectPath, rels, config, embedder, progressCallback, workerPath, inline } = opts;
+  // Pure path math (no fs access) — cheap enough for the main thread, and
+  // needed here so a fully-excluded batch no-ops before touching the
+  // single-flight slot.
+  const targets = normalizeUpsertTargets(projectPath, rels);
+  if (targets.length === 0) {
+    return emptyIndexResult();
+  }
+  return indexProject(
+    projectPath,
+    undefined,
+    false,
+    embedder,
+    progressCallback,
+    { config, workerPath, inline, op: 'upsert', rels: targets },
+  );
+}
+
+/**
+ * Core incremental-upsert implementation (runs on whatever thread calls it).
+ *
+ * Probes the vector-state consistency, then delegates to a paths-scoped
+ * {@link runIndexProjectImpl} run when consistent — hash-skip, chunking,
+ * embedding, and the scope-aware deleted-file sweep behave exactly like a
+ * scoped manual run — or to a full rebuild when inconsistent. Exported so
+ * the index worker can run the probe off the Electron main thread.
+ */
+export async function runUpsertFilesImpl(opts: {
+  projectPath: string;
+  /** Project-relative (or absolute) file paths to upsert. */
+  rels: string[];
+  embedder?: IEmbedder;
+  progressCallback?: RAGIndexProgressCallback;
+  config?: Config;
+}): Promise<RAGIndexResult> {
+  const { projectPath, rels, embedder, progressCallback, config } = opts;
+  const targets = normalizeUpsertTargets(projectPath, rels);
+  if (targets.length === 0) {
+    return emptyIndexResult();
+  }
+  const vectorState = withDisposable(new RAGStore(projectPath), (store) => {
+    store.initDb();
+    return store.loadVectorState();
+  });
+  const consistent = vectorState.consistent;
+  return runIndexProjectImpl(
+    projectPath,
+    consistent ? targets : undefined,
+    false,
+    embedder,
+    progressCallback,
+    config,
+    // Reuse the probed state (loaded once) instead of paying a second full
+    // vectors.npy read inside the index run.
+    consistent ? vectorState : undefined,
+  );
+}
+
+/** Options for {@link deleteFiles}. */
+export interface DeleteFilesOptions {
+  /** Force inline execution on the calling thread (tests, worker itself). */
+  inline?: boolean;
+  /** @internal Test-only worker entry override for deterministic watchdog tests. */
+  workerPath?: string;
+}
+
+/**
+ * Remove the chunks, file row, and vectors for a targeted set of files.
+ *
+ * Deletes rewrite vectors.npy in full (plus the id sidecar), so the work is
+ * dispatched to the index worker; the main thread never pays the
+ * synchronous read-modify-rewrite. Routed through `indexProject`, so deletes
+ * share that function's single-flight slot ("Indexing already in progress"
+ * sentinel), progress tracking, and cancellation — a delete racing an
+ * index/upsert run would corrupt the vector rewrite. No-ops on an
+ * inconsistent vector state — nothing can be deleted safely there; the full
+ * rebuild the next upsert triggers is the repair.
+ */
+export async function deleteFiles(
+  projectPath: string,
+  rels: string[],
+  options?: DeleteFilesOptions,
+): Promise<RAGIndexResult> {
+  const unique = [...new Set(rels)];
+  if (unique.length === 0) return emptyIndexResult();
+  return indexProject(
+    projectPath,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    { workerPath: options?.workerPath, inline: options?.inline, op: 'delete', rels: unique },
+  );
+}
+
+/**
+ * Core incremental-delete implementation (runs on whatever thread calls it).
+ * Exported so the index worker can run the vectors.npy rewrite off the main
+ * thread. See {@link deleteFiles} for the consistency no-op contract.
+ */
+export async function runDeleteFilesImpl(
+  projectPath: string,
+  rels: string[],
+): Promise<RAGIndexResult> {
+  const unique = [...new Set(rels)];
+  const stats = emptyIndexResult();
+  if (unique.length === 0) return stats;
+  const t0 = Date.now();
+  await withDisposableAsync(new RAGStore(projectPath), async (store) => {
+    store.initDb();
+    const vectorState = store.loadVectorState();
+    if (!vectorState.consistent) return;
+    for (const rel of unique) {
+      store.deleteByFileBatch(vectorState, rel);
+      stats.filesDeleted++;
+    }
+    store.flushVectorState(vectorState);
+  });
+  stats.durationSeconds = (Date.now() - t0) / 1000;
+  return stats;
+}
+
+// ---------------------------------------------------------------------------
 // Worker runner (main process)
 // ---------------------------------------------------------------------------
+
+/** Incremental-op payload forwarded to the index worker. */
+type RagWorkerIncremental = {
+  op: 'upsert' | 'delete';
+  rels: string[];
+};
 
 async function runIndexInWorker(
   projectPath: string,
@@ -463,6 +710,7 @@ async function runIndexInWorker(
   config?: Config,
   workerPathOverride?: string,
   registerCancel?: (cancel: (reason: Error) => Promise<void>) => void,
+  incremental?: RagWorkerIncremental,
 ): Promise<RAGIndexResult> {
   const workerPath = workerPathOverride ?? path.join(__dirname, 'index-worker.js');
   if (!fs.existsSync(workerPath)) {
@@ -470,6 +718,17 @@ async function runIndexInWorker(
     console.warn(
       `RAG worker not found at ${workerPath}; running index inline on the main thread`,
     );
+    if (incremental?.op === 'delete') {
+      return runDeleteFilesImpl(projectPath, incremental.rels);
+    }
+    if (incremental?.op === 'upsert') {
+      return runUpsertFilesImpl({
+        projectPath,
+        rels: incremental.rels,
+        progressCallback,
+        config,
+      });
+    }
     return runIndexProjectImpl(
       projectPath,
       paths,
@@ -485,6 +744,7 @@ async function runIndexInWorker(
     force: force === true,
     paths,
     config,
+    ...(incremental ?? {}),
   };
 
   return new Promise<RAGIndexResult>((resolve, reject) => {
@@ -601,6 +861,24 @@ export function getStatus(projectPath?: string): RAGStoreStatus {
   );
 }
 
+/**
+ * Stamp `last_auto_refresh` for a project (see `RAGStore.touchLastAutoRefresh`).
+ * Called by the index refresh coordinator after a background flush lands RAG
+ * work; manual index runs keep using `last_indexed` only.
+ */
+export function touchAutoRefresh(projectPath?: string): void {
+  if (!projectPath) {
+    throw new Error('projectPath is required; pass the active workspace cwd');
+  }
+  withDisposable(
+    new RAGStore(projectPath),
+    (store) => {
+      store.initDb();
+      store.touchLastAutoRefresh();
+    },
+  );
+}
+
 export function clearIndex(projectPath?: string): void {
   if (!projectPath) {
     throw new Error('projectPath is required; pass the active workspace cwd');
@@ -671,6 +949,21 @@ function shouldInclude(filepath: string): boolean {
   const ext = path.extname(filepath).toLowerCase();
   if (SKIP_EXTS.has(ext)) return false;
   return INCLUDE_EXTS.has(ext);
+}
+
+function resolveScopeRoots(root: string, paths: string[] | undefined): string[] {
+  if (paths && paths.length > 0) {
+    return paths.map((p) => (
+      path.resolve(path.isAbsolute(p) ? p : path.join(root, p))
+    ));
+  }
+  return [path.resolve(root)];
+}
+
+function isInsideAnyScope(absPath: string, scopeRoots: string[]): boolean {
+  return scopeRoots.some(
+    (scopeRoot) => absPath === scopeRoot || absPath.startsWith(scopeRoot + path.sep),
+  );
 }
 
 // ---------------------------------------------------------------------------

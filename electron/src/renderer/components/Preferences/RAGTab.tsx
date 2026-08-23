@@ -1,13 +1,15 @@
 /**
  * RAGTab — RAG (Retrieval-Augmented Generation) configuration.
  *
- * Controls: chunking, retrieval, embedding model, and resource caps.
+ * Controls: chunking, retrieval, embedding model, resource caps, and
+ * index auto-refresh.
  * Provider-backed embeddings use the same typed connection-scoped selection as
  * chat, while local ONNX remains the default path.
  */
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { ModelPicker } from '../ModelPicker';
 import type { ProviderModelOption } from '../../../shared/types/ipc';
+import type { IndexRefreshConfig } from '../../../shared/types/ipc-boundary';
 import type { ModelSelection } from '../../../shared/types/provider';
 import { useProviders } from '../../hooks/useProviders';
 import {
@@ -21,6 +23,7 @@ import {
   providerModelOptionKey,
   selectionKey,
 } from '../../utils/provider-selection';
+import { Checkbox } from '../ui/Checkbox';
 import { FormField } from '../ui/FormField';
 import { Panel } from '../ui/Panel';
 import { SectionHeader } from '../ui/SectionHeader';
@@ -46,6 +49,8 @@ export interface RAGConfig {
 export interface RAGTabProps {
   rag: RAGConfig;
   onChange: (rag: RAGConfig) => void;
+  indexRefresh: IndexRefreshConfig;
+  onIndexRefreshChange: (indexRefresh: IndexRefreshConfig) => void;
 }
 
 // ── Known local ONNX embedding models (auto-download from Hugging Face) ─────
@@ -60,7 +65,7 @@ const LOCAL_EMBEDDING_MODELS = [
 
 // ── Component ────────────────────────────────────────────────────────────────
 
-export function RAGTab({ rag, onChange }: RAGTabProps) {
+export function RAGTab({ rag, onChange, indexRefresh, onIndexRefreshChange }: RAGTabProps) {
   const providers = useProviders();
   const [providerEmbeddingOptions, setProviderEmbeddingOptions] = useState<readonly ProviderModelOption[]>([]);
 
@@ -96,6 +101,23 @@ export function RAGTab({ rag, onChange }: RAGTabProps) {
       }
     },
     [updateField],
+  );
+
+  const updateIndexRefreshField = useCallback(
+    <K extends keyof IndexRefreshConfig>(field: K, value: IndexRefreshConfig[K]) => {
+      onIndexRefreshChange({ ...indexRefresh, [field]: value });
+    },
+    [indexRefresh, onIndexRefreshChange],
+  );
+
+  const handleDebounceChange = useCallback(
+    (value: string) => {
+      const num = parseConfigNumber(value, 100, { integer: true, max: 60_000 });
+      if (num !== null) {
+        updateIndexRefreshField('debounce_ms', num);
+      }
+    },
+    [updateIndexRefreshField],
   );
 
   const activeModel = rag.embedding_api_model
@@ -319,6 +341,83 @@ export function RAGTab({ rag, onChange }: RAGTabProps) {
               bordered
               className="w-full"
               min={1}
+            />
+          </FormField>
+        </div>
+      </Panel>
+
+      <Panel as="section" className="config-fieldset flex flex-col gap-3">
+        <SectionHeader
+          title="Index Auto-Refresh"
+          description="Keep the RAG and AST indexes current after file mutations and external changes."
+        />
+        <div className="config-form-grid">
+          <div className="config-field config-form-grid-full flex flex-col gap-1">
+            <label className="flex cursor-pointer items-center gap-3" htmlFor="index-refresh-rag">
+              <Checkbox
+                id="index-refresh-rag"
+                size="sm"
+                checked={indexRefresh.rag}
+                onChange={(e) => updateIndexRefreshField('rag', e.target.checked)}
+              />
+              <span>
+                RAG auto-refresh
+              </span>
+            </label>
+            <p className="text-base-content/60 text-sm">
+              Refresh the RAG vector index after successful file mutations.
+            </p>
+          </div>
+
+          <div className="config-field config-form-grid-full flex flex-col gap-1">
+            <label className="flex cursor-pointer items-center gap-3" htmlFor="index-refresh-ast">
+              <Checkbox
+                id="index-refresh-ast"
+                size="sm"
+                checked={indexRefresh.ast}
+                onChange={(e) => updateIndexRefreshField('ast', e.target.checked)}
+              />
+              <span>
+                AST auto-refresh
+              </span>
+            </label>
+            <p className="text-base-content/60 text-sm">
+              Refresh the AST symbol index after successful file mutations.
+            </p>
+          </div>
+
+          <div className="config-field config-form-grid-full flex flex-col gap-1">
+            <label className="flex cursor-pointer items-center gap-3" htmlFor="index-refresh-watch">
+              <Checkbox
+                id="index-refresh-watch"
+                size="sm"
+                checked={indexRefresh.watch}
+                onChange={(e) => updateIndexRefreshField('watch', e.target.checked)}
+              />
+              <span>
+                Watch workspace for external changes
+              </span>
+            </label>
+            <p className="text-base-content/60 text-sm">
+              Detect edits made outside Orchid (editor, git, build tooling) and refresh both indexes.
+            </p>
+          </div>
+
+          <FormField
+            label="Debounce Window (ms)"
+            htmlFor="index-refresh-debounce"
+            hint="Idle time that coalesces a burst of changes into one refresh batch."
+            className="config-field"
+          >
+            <TextInput
+              id="index-refresh-debounce"
+              type="number"
+              value={indexRefresh.debounce_ms}
+              onChange={(e) => handleDebounceChange(e.target.value)}
+              bordered
+              className="w-full"
+              min={100}
+              max={60000}
             />
           </FormField>
         </div>

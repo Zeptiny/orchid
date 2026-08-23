@@ -2,18 +2,26 @@
  * AST index worker — runs discovery + tree-sitter + SQLite off the Electron main thread.
  *
  * Loaded via `worker_threads.Worker`. Receives start params on `workerData`
- * and streams progress / result back via `parentPort`.
+ * (an `AstWorkerStartData`: default full index, or an `op`-discriminated
+ * incremental upsert/delete batch) and streams progress / result back via
+ * `parentPort`.
  */
 import { parentPort, workerData } from 'node:worker_threads';
 import { ConfigManager } from '../config/loader';
 import {
+  runDeleteFilesImpl,
   runIndexProjectImpl,
+  runUpsertFilesImpl,
   type AstWorkerOutbound,
   type AstWorkerStartData,
 } from './indexer';
 
 function post(msg: AstWorkerOutbound): void {
   parentPort?.postMessage(msg);
+}
+
+function readRels(data: { rels?: string[] }): string[] {
+  return Array.isArray(data.rels) ? data.rels : [];
 }
 
 async function run(): Promise<void> {
@@ -27,6 +35,23 @@ async function run(): Promise<void> {
   ConfigManager.reset();
   ConfigManager.load({ projectDir: projectPath });
 
+  // Incremental ops: targeted upsert / delete batches (no discovery sweep).
+  if (data.op === 'upsert') {
+    const result = await runUpsertFilesImpl({
+      projectPath,
+      rels: readRels(data),
+      config: data.config,
+    });
+    post({ type: 'incremental-result', result });
+    return;
+  }
+  if (data.op === 'delete') {
+    const deleted = await runDeleteFilesImpl(projectPath, readRels(data));
+    post({ type: 'delete-result', deleted });
+    return;
+  }
+
+  // Default op: full project index.
   post({
     type: 'progress',
     progress: {

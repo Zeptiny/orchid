@@ -274,11 +274,30 @@ export class ASTStore {
   }
 
   /**
+   * Record the current time as `last_auto_refresh` — stamped by the index
+   * refresh coordinator after a background flush lands AST work. Separate from
+   * `last_indexed` so manual and automatic times stay distinguishable.
+   */
+  recordAutoRefresh(): void {
+    const db = this.getConn();
+    db.prepare('INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)').run(
+      'last_auto_refresh',
+      new Date().toISOString(),
+    );
+  }
+
+  /**
    * Get store status (file count, symbol count, last indexed time).
    */
   status(): ASTStoreStatus {
     if (!fs.existsSync(this.dbPath)) {
-      return { totalFiles: 0, totalSymbols: 0, lastIndexed: null, lastIndexDuration: null };
+      return {
+        totalFiles: 0,
+        totalSymbols: 0,
+        lastIndexed: null,
+        lastIndexDuration: null,
+        lastAutoRefresh: null,
+      };
     }
     const db = this.getConn();
     const fileCount = (db.prepare('SELECT COUNT(*) as cnt FROM files').get() as { cnt: number })
@@ -286,20 +305,21 @@ export class ASTStore {
     const symbolCount = (
       db.prepare('SELECT COUNT(*) as cnt FROM symbols').get() as { cnt: number }
     ).cnt;
-    const lastRow = db.prepare("SELECT value FROM meta WHERE key = 'last_indexed'").get() as
-      | { value: string }
-      | undefined;
-    const lastIndexed = lastRow?.value ?? null;
-    const durRow = db
-      .prepare("SELECT value FROM meta WHERE key = 'last_index_duration'")
-      .get() as { value: string } | undefined;
-    const duration = durRow ? parseFloat(durRow.value) : null;
+    const metaValue = (key: string): string | null => {
+      const row = db.prepare('SELECT value FROM meta WHERE key = ?').get(key) as
+        | { value: string }
+        | undefined;
+      return row?.value ?? null;
+    };
+    const lastIndexed = metaValue('last_indexed');
+    const duration = metaValue('last_index_duration');
 
     return {
       totalFiles: fileCount,
       totalSymbols: symbolCount,
       lastIndexed,
-      lastIndexDuration: duration,
+      lastIndexDuration: duration !== null ? parseFloat(duration) : null,
+      lastAutoRefresh: metaValue('last_auto_refresh'),
     };
   }
 }

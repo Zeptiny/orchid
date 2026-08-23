@@ -229,15 +229,20 @@ electron/
 │   │   ├── rag/                 # Retrieval-Augmented Generation
 │   │   │   ├── chunker.ts       # Text chunking with overlap
 │   │   │   ├── embedder.ts      # ONNX-based local embedding (fastembed) or API embedder
-│   │   │   ├── indexer.ts       # File indexing pipeline
-│   │   │   ├── index-worker.ts  # Worker-thread indexing
+│   │   │   ├── indexer.ts       # File indexing pipeline (full scans + incremental upsert/delete worker ops)
+│   │   │   ├── index-worker.ts  # Worker-thread indexing (index/upsert/delete ops)
 │   │   │   └── store.ts         # SQLite-backed vector store
 │   │   ├── ast/                 # Abstract Syntax Tree indexing
-│   │   │   ├── indexer.ts       # Tree-sitter based code indexing
-│   │   │   ├── index-worker.ts  # Worker-thread indexing
+│   │   │   ├── indexer.ts       # Tree-sitter based code indexing (full scans + incremental ops)
+│   │   │   ├── index-worker.ts  # Worker-thread indexing (index/upsert/delete ops)
 │   │   │   ├── parser.ts        # Tree-sitter parser management
 │   │   │   ├── queries/         # Tree-sitter query files (.scm, copied by copy-defaults)
 │   │   │   └── store.ts         # SQLite-backed symbol store
+│   │   ├── indexing/            # Index auto-refresh (issue 106)
+│   │   │   ├── refresh-coordinator.ts # Per-project debounced coalescing flush pipeline (trust-gated)
+│   │   │   ├── mutation-paths.ts      # Canonical tool result → mutated rels extraction
+│   │   │   ├── watcher.ts       # Refcounted chokidar workspace watcher (trust-gated, .orchid-skipped)
+│   │   │   └── skip-dirs.ts     # Canonical skip-dir set shared by indexers + watcher
 │   │   ├── defs/                # Definition file management (agents/skills/personalities)
 │   │   │   ├── manage.ts        # Create/update/delete definition files
 │   │   │   ├── paths.ts         # Resolve definition storage paths
@@ -583,6 +588,13 @@ Applied via `wrapLanguageModel()`:
 - Symbol extraction, reference finding, file skeleton generation
 - SQLite-backed symbol store; indexing runs in a worker (`index-worker.ts`)
 
+### Index Auto-Refresh
+- Both indexes refresh automatically after file mutations: successful `write`/`edit`/`apply_patch`/`rename_symbol`/`replace_symbol` outcomes are extracted from canonical results (`indexing/mutation-paths.ts`, hooked in `llm/tool-dispatch.ts`) and fed to the per-project debounced coordinator (`indexing/refresh-coordinator.ts`) — fire-and-forget, never fails the tool result
+- External changes: a refcounted chokidar watcher (`indexing/watcher.ts`) attaches on every workspace transition (bind, session open/load, rebind, trust grant) and routes add/change/unlink into the same pipeline; completed foreground `execute_command` and background-process exits mark the project dirty for a hash-diff scan
+- Incremental updates run as worker ops (`upsert`/`delete`) on both indexers; RAG bails to a full rebuild on inconsistent vector state
+- Trust-gated end to end: untrusted projects are never watched or flushed; revocation cancels pending refresh work; `index_refresh.*` config is honored per project (user + `.orchid.json`)
+- Shutdown: `before-quit` awaits `disposeIndexRefreshCoordinatorAsync()` and closes all watchers before IPC teardown
+
 ### Session Persistence
 - SQLite database `~/.orchid/sessions.db` (WAL mode, foreign keys, `busy_timeout=5000`, corruption-recovery rebuild — `utils/sqlite.ts`)
 - Schema v2 (`session/schema.ts`): `sessions`, `chains` (messages JSON per chain, FK CASCADE), `subagent_chains`, `schema_meta`; sessions also persist `reasoning_effort_override` and `permission_mode`
@@ -638,6 +650,10 @@ Defined in `src/main/config/schema.ts` — single source of truth (strict schema
 | `agents_md.enforce_on_write` | `warn` | Mutation policy for unseen governing files: `block` \| `inject` \| `warn` \| `off` |
 | `agents_md.inject_on_read` | `true` | Inject unseen governing files into single-path read-tool results |
 | `agents_md.include_local` | `false` | Also consider `AGENTS.local.md` (appended as the lowest-precedence alias) |
+| `index_refresh.rag` | `true` | Auto-refresh the RAG index after file mutations (per-project honored) |
+| `index_refresh.ast` | `true` | Auto-refresh the AST symbol index after file mutations (per-project honored) |
+| `index_refresh.watch` | `true` | Watch the workspace for external changes (editor/git) feeding the same refresh pipeline |
+| `index_refresh.debounce_ms` | 2000 | Coalescing window before an auto-refresh flush (100–60000, per-project honored) |
 | `subagents.event_max_per_flush` | 200 | Max delta events delivered in one batched flush across all subagents |
 | `subagents.event_byte_budget_kb` | 64 | Soft byte budget (KB) per batched flush; overflow non-terminal deltas defer to the next flush |
 | `subagents.usage_event_interval_ms` | 1000 | Min interval between per-subagent `usage` deltas; 0 emits every usage event |

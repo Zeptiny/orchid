@@ -402,6 +402,12 @@ describe('Config Parity', () => {
       expect(cfg.agents_md).toHaveProperty('inject_on_read');
       expect(cfg.agents_md).toHaveProperty('include_local');
 
+      // Index refresh nested fields (4)
+      expect(cfg.index_refresh).toHaveProperty('rag');
+      expect(cfg.index_refresh).toHaveProperty('ast');
+      expect(cfg.index_refresh).toHaveProperty('watch');
+      expect(cfg.index_refresh).toHaveProperty('debounce_ms');
+
       // Subagents nested fields (11)
       expect(cfg.subagents).toHaveProperty('event_max_per_flush');
       expect(cfg.subagents).toHaveProperty('event_byte_budget_kb');
@@ -416,11 +422,11 @@ describe('Config Parity', () => {
       expect(cfg.subagents).toHaveProperty('prompt_task_max_chars');
     });
 
-    it('top-level field count matches expected (49 top-level + 12 rag + 7 agents_md + 11 subagents nested fields)', () => {
+    it('top-level field count matches expected (50 top-level + 12 rag + 7 agents_md + 4 index_refresh + 11 subagents nested fields)', () => {
       const cfg = defaults();
       // Top-level keys count
       const topLevelKeys = Object.keys(cfg);
-      expect(topLevelKeys).toHaveLength(49); // 49 top-level fields (rag, agents_md, subagents, compaction are nested)
+      expect(topLevelKeys).toHaveLength(50); // 50 top-level fields (rag, agents_md, index_refresh, subagents, compaction are nested)
 
       // RAG nested keys count
       const ragKeys = Object.keys(cfg.rag);
@@ -429,6 +435,10 @@ describe('Config Parity', () => {
       // AGENTS.md nested keys count
       const agentsMdKeys = Object.keys(cfg.agents_md);
       expect(agentsMdKeys).toHaveLength(7);
+
+      // Index refresh nested keys count
+      const indexRefreshKeys = Object.keys(cfg.index_refresh);
+      expect(indexRefreshKeys).toHaveLength(4);
 
       // Subagents nested keys count
       const subagentsKeys = Object.keys(cfg.subagents);
@@ -470,6 +480,15 @@ describe('Config Parity', () => {
           `AGENTS.md field '${expected.field}' default`,
         ).toEqual(expected.defaultValue);
       }
+    });
+
+    it('index_refresh nested fields have correct defaults', () => {
+      const cfg = defaults();
+
+      expect(cfg.index_refresh.rag).toBe(true);
+      expect(cfg.index_refresh.ast).toBe(true);
+      expect(cfg.index_refresh.watch).toBe(true);
+      expect(cfg.index_refresh.debounce_ms).toBe(2000);
     });
 
     it('subagents nested fields have correct defaults', () => {

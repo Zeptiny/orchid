@@ -45,6 +45,13 @@ const mocks = vi.hoisted(() => {
     filePaths: [],
   };
 
+  /** Workspace-watcher spies (module mock below delegates attach/detach here). */
+  const watcherAttach = vi.fn();
+  const watcherDetach = vi.fn();
+
+  /** cwd that switchTo hands back — per-test knob for project-switch scenarios. */
+  const switchToTarget: { cwd: string | null } = { cwd: '/other/project' };
+
   const sessionManager = {
     getActive: vi.fn((windowId?: string) => (
       windowId === undefined
@@ -71,12 +78,12 @@ const mocks = vi.hoisted(() => {
       };
       return activeSession;
     }),
-    switchTo: vi.fn((id: string) => {
+    switchTo: vi.fn((id: string, windowId?: string) => {
       activeSession = {
         id,
         name: 'Loaded session',
         model: 'test/model',
-        cwd: '/other/project',
+        cwd: switchToTarget.cwd,
         chains: [],
         activeChainId: null,
         createdAt: new Date().toISOString(),
@@ -84,6 +91,11 @@ const mocks = vi.hoisted(() => {
         subagentChains: [],
         todoStore: { tasks: [] },
       };
+      // Real switchTo records the per-window selection; the workspace
+      // resolution before/after a switch depends on it.
+      if (windowId !== undefined) {
+        activeSessionsByWindow.set(windowId, activeSession);
+      }
       return activeSession;
     }),
     load: vi.fn((id: string) => sessionManager.switchTo(id)),
@@ -103,7 +115,15 @@ const mocks = vi.hoisted(() => {
       if (!activeSession || activeSession.id !== id) return;
       activeSession = { ...activeSession, name };
     }),
-    delete: vi.fn(() => true),
+    delete: vi.fn((id: string) => {
+      // Real SessionManager.delete() clears every owner selection pointing at
+      // the deleted id — the window's workspace then falls back to draft/sticky.
+      if (activeSession?.id === id) activeSession = null;
+      for (const [owner, selected] of [...activeSessionsByWindow]) {
+        if (selected?.id === id) activeSessionsByWindow.delete(owner);
+      }
+      return true;
+    }),
     changeModel: vi.fn((
       id: string,
       selection: { connectionId: string; modelId: string } | null,
@@ -122,6 +142,9 @@ const mocks = vi.hoisted(() => {
       activeSession = null;
       activeSessionsByWindow.clear();
       configState.default_project_dir = null;
+      switchToTarget.cwd = '/other/project';
+      watcherAttach.mockClear();
+      watcherDetach.mockClear();
       sessionManager.getActive.mockClear();
       sessionManager.create.mockClear();
       sessionManager.switchTo.mockClear();
@@ -130,6 +153,7 @@ const mocks = vi.hoisted(() => {
       sessionManager.getSession.mockClear();
       sessionManager.rename.mockClear();
       sessionManager.changeModel.mockClear();
+      sessionManager.delete.mockClear();
     },
     _setActiveForWindow: (windowId: string, session: SessionShape | null) => {
       activeSessionsByWindow.set(windowId, session);
@@ -141,6 +165,9 @@ const mocks = vi.hoisted(() => {
     sessionManager,
     configState,
     dialogResult,
+    watcherAttach,
+    watcherDetach,
+    switchToTarget,
     get homeConfigPath() {
       return homeConfigPath;
     },
@@ -211,6 +238,29 @@ vi.mock('../../src/main/project/trust', () => ({
 vi.mock('../../src/main/ipc/chat-history', () => ({
   clearChatHistory: vi.fn(),
   seedChatHistory: vi.fn(),
+}));
+
+// The watcher reference must follow the window's effective workspace through
+// every switch path (bind / session:load / session:open); spy on attach and
+// detach while keeping the rest of the real module surface.
+vi.mock('../../src/main/indexing/watcher', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../src/main/indexing/watcher')>();
+  return {
+    ...actual,
+    attachWorkspaceWatcher: mocks.watcherAttach,
+    detachWorkspaceWatcher: mocks.watcherDetach,
+  };
+});
+
+// session:open's detached subagent hydration and live-snapshot lookup stay
+// outside this suite's seams (they hit persistence and the chat IPC module).
+vi.mock('../../src/main/tools/subagent/hydrate', () => ({
+  awaitSessionSubagentHydration: vi.fn(async () => ({ agentMissing: [] })),
+}));
+
+vi.mock('../../src/main/ipc/chat', () => ({
+  getLiveChatSnapshot: vi.fn(() => null),
+  discardDeletedSessionRuntime: vi.fn(),
 }));
 
 let sessionIpc: typeof import('../../src/main/ipc/session');
@@ -651,5 +701,231 @@ describe('session workspace IPC', () => {
       next,
       next.modelId,
     );
+  });
+
+  // ── Workspace watcher retargeting ─────────────────────────────────────────
+
+  it('session:open attaches the watcher for the opened session project', async () => {
+    const projectQ = fs.realpathSync(otherProject);
+    mocks.switchToTarget.cwd = projectQ;
+    const open = mocks.handlers.get(IPC_CHANNELS.SESSION_OPEN);
+    expect(open).toBeDefined();
+
+    const result = await open!({ sender: sender(20) }, { id: SESSION_UUID });
+
+    // Window was unbound before the open: the session's project is attached.
+    expect(mocks.watcherAttach).toHaveBeenCalledTimes(1);
+    expect(mocks.watcherAttach).toHaveBeenCalledWith(projectQ);
+    expect(mocks.watcherDetach).not.toHaveBeenCalled();
+    expect(result.workspace.cwd).toBe(projectQ);
+    expect(result.workspace.source).toBe('session');
+  });
+
+  it('session:open detaches the old project and attaches the new one on switch', async () => {
+    const projectP = fs.realpathSync(tmpProject);
+    const projectQ = fs.realpathSync(otherProject);
+    const open = mocks.handlers.get(IPC_CHANNELS.SESSION_OPEN)!;
+    const s = sender(21);
+
+    mocks.switchToTarget.cwd = projectP;
+    await open({ sender: s }, { id: SESSION_UUID });
+    expect(mocks.watcherAttach).toHaveBeenCalledTimes(1);
+    expect(mocks.watcherAttach).toHaveBeenCalledWith(projectP);
+    expect(mocks.watcherDetach).not.toHaveBeenCalled();
+
+    mocks.watcherAttach.mockClear();
+    mocks.watcherDetach.mockClear();
+
+    mocks.switchToTarget.cwd = projectQ;
+    await open({ sender: s }, { id: 'cccccccc-dddd-4eee-8fff-000000000001' });
+
+    expect(mocks.watcherAttach).toHaveBeenCalledTimes(1);
+    expect(mocks.watcherAttach).toHaveBeenCalledWith(projectQ);
+    expect(mocks.watcherDetach).toHaveBeenCalledTimes(1);
+    expect(mocks.watcherDetach).toHaveBeenCalledWith(projectP);
+
+    // Re-opening a session in the same project must not stack a reference.
+    mocks.watcherAttach.mockClear();
+    mocks.watcherDetach.mockClear();
+    await open({ sender: s }, { id: 'cccccccc-dddd-4eee-8fff-000000000002' });
+    expect(mocks.watcherAttach).not.toHaveBeenCalled();
+    expect(mocks.watcherDetach).not.toHaveBeenCalled();
+  });
+
+  it('session:load retargets the watcher from a released draft to the session cwd', async () => {
+    const projectP = fs.realpathSync(tmpProject);
+    const projectQ = fs.realpathSync(otherProject);
+    workspace.setDraftCwd('23', projectP);
+    // The draft's watcher reference is established by a workspace resolution
+    // (the seam that attaches); setDraftCwd alone holds no reference.
+    const getWs = mocks.handlers.get(IPC_CHANNELS.SESSION_GET_WORKSPACE)!;
+    await getWs({ sender: sender(23) });
+    expect(mocks.watcherAttach).toHaveBeenCalledWith(projectP);
+    mocks.watcherAttach.mockClear();
+    mocks.watcherDetach.mockClear();
+
+    mocks.switchToTarget.cwd = projectQ;
+
+    const load = mocks.handlers.get(IPC_CHANNELS.SESSION_LOAD)!;
+    await load({ sender: sender(23) }, { id: SESSION_UUID, activate: true });
+
+    expect(mocks.watcherAttach).toHaveBeenCalledTimes(1);
+    expect(mocks.watcherAttach).toHaveBeenCalledWith(projectQ);
+    expect(mocks.watcherDetach).toHaveBeenCalledTimes(1);
+    expect(mocks.watcherDetach).toHaveBeenCalledWith(projectP);
+  });
+
+  it('bindProjectDirectory retargets the watcher without stacking references', async () => {
+    const projectP = fs.realpathSync(tmpProject);
+    const projectQ = fs.realpathSync(otherProject);
+
+    await sessionIpc.bindProjectDirectory('22', tmpProject);
+    expect(mocks.watcherAttach).toHaveBeenCalledTimes(1);
+    expect(mocks.watcherAttach).toHaveBeenCalledWith(projectP);
+    expect(mocks.watcherDetach).not.toHaveBeenCalled();
+
+    mocks.watcherAttach.mockClear();
+    await sessionIpc.bindProjectDirectory('22', otherProject);
+    expect(mocks.watcherAttach).toHaveBeenCalledTimes(1);
+    expect(mocks.watcherAttach).toHaveBeenCalledWith(projectQ);
+    expect(mocks.watcherDetach).toHaveBeenCalledTimes(1);
+    expect(mocks.watcherDetach).toHaveBeenCalledWith(projectP);
+
+    // Rebinding the same project is a no-op for the watcher refcount.
+    mocks.watcherAttach.mockClear();
+    mocks.watcherDetach.mockClear();
+    await sessionIpc.bindProjectDirectory('22', otherProject);
+    expect(mocks.watcherAttach).not.toHaveBeenCalled();
+    expect(mocks.watcherDetach).not.toHaveBeenCalled();
+  });
+
+  it('session:get_workspace attaches the watcher for the sticky default at startup', async () => {
+    const stickyPath = fs.realpathSync(tmpProject);
+    const projectQ = fs.realpathSync(otherProject);
+    mocks.configState.default_project_dir = stickyPath;
+
+    const getWs = mocks.handlers.get(IPC_CHANNELS.SESSION_GET_WORKSPACE)!;
+    const s = sender(24);
+
+    // Fresh window: no draft, no session — the workspace resolves from the
+    // sticky default, and that resolution is what attaches the reference.
+    const workspace = await getWs({ sender: s });
+    expect(workspace).toMatchObject({
+      cwd: stickyPath,
+      source: 'default',
+      status: 'valid',
+    });
+    expect(mocks.watcherAttach).toHaveBeenCalledTimes(1);
+    expect(mocks.watcherAttach).toHaveBeenCalledWith(stickyPath);
+    expect(mocks.watcherDetach).not.toHaveBeenCalled();
+
+    // Repeated resolutions must not stack references.
+    await getWs({ sender: s });
+    expect(mocks.watcherAttach).toHaveBeenCalledTimes(1);
+
+    // A later activation moves the reference off the sticky default cleanly.
+    mocks.watcherAttach.mockClear();
+    mocks.watcherDetach.mockClear();
+    mocks.switchToTarget.cwd = projectQ;
+    const open = mocks.handlers.get(IPC_CHANNELS.SESSION_OPEN)!;
+    await open({ sender: s }, { id: SESSION_UUID });
+    expect(mocks.watcherAttach).toHaveBeenCalledTimes(1);
+    expect(mocks.watcherAttach).toHaveBeenCalledWith(projectQ);
+    expect(mocks.watcherDetach).toHaveBeenCalledTimes(1);
+    expect(mocks.watcherDetach).toHaveBeenCalledWith(stickyPath);
+  });
+
+  it('session:get_workspace does not attach a watcher when the window is unbound', async () => {
+    mocks.configState.default_project_dir = null;
+    const getWs = mocks.handlers.get(IPC_CHANNELS.SESSION_GET_WORKSPACE)!;
+
+    const workspace = await getWs({ sender: sender(25) });
+
+    expect(workspace).toEqual({
+      cwd: null,
+      source: 'unbound',
+      status: 'unbound',
+    });
+    expect(mocks.watcherAttach).not.toHaveBeenCalled();
+    expect(mocks.watcherDetach).not.toHaveBeenCalled();
+  });
+
+  it('session:open on a second window does not detach a sticky default it never attached', async () => {
+    const stickyPath = fs.realpathSync(tmpProject);
+    const projectQ = fs.realpathSync(otherProject);
+    mocks.configState.default_project_dir = stickyPath;
+
+    // Only the first window resolves its workspace — that resolution is what
+    // attaches the shared sticky default's watcher reference.
+    const getWs = mocks.handlers.get(IPC_CHANNELS.SESSION_GET_WORKSPACE)!;
+    await getWs({ sender: sender(28) });
+    expect(mocks.watcherAttach).toHaveBeenCalledTimes(1);
+    expect(mocks.watcherAttach).toHaveBeenCalledWith(stickyPath);
+
+    mocks.watcherAttach.mockClear();
+    mocks.watcherDetach.mockClear();
+
+    // The second window shares the sticky default but never attached it, so
+    // opening a session in another project must not release that reference.
+    mocks.switchToTarget.cwd = projectQ;
+    const open = mocks.handlers.get(IPC_CHANNELS.SESSION_OPEN)!;
+    await open({ sender: sender(29) }, { id: SESSION_UUID });
+
+    expect(mocks.watcherAttach).toHaveBeenCalledTimes(1);
+    expect(mocks.watcherAttach).toHaveBeenCalledWith(projectQ);
+    expect(mocks.watcherDetach).not.toHaveBeenCalled();
+  });
+
+  it('session:delete of the active session retargets the watcher to the next workspace', async () => {
+    const projectP = fs.realpathSync(otherProject);
+    const stickyPath = fs.realpathSync(tmpProject);
+    mocks.configState.default_project_dir = stickyPath;
+
+    mocks.switchToTarget.cwd = projectP;
+    const open = mocks.handlers.get(IPC_CHANNELS.SESSION_OPEN)!;
+    const s = sender(26);
+    await open({ sender: s }, { id: SESSION_UUID });
+    expect(mocks.watcherAttach).toHaveBeenCalledWith(projectP);
+    mocks.watcherAttach.mockClear();
+    mocks.watcherDetach.mockClear();
+    s.send.mockClear();
+
+    const del = mocks.handlers.get(IPC_CHANNELS.SESSION_DELETE)!;
+    const result = await del({ sender: s }, { id: SESSION_UUID });
+
+    expect(result.status).toBe('deleted');
+    // The window's workspace fell back to the sticky default: the reference
+    // follows it instead of leaking the deleted session's project.
+    expect(mocks.watcherAttach).toHaveBeenCalledTimes(1);
+    expect(mocks.watcherAttach).toHaveBeenCalledWith(stickyPath);
+    expect(mocks.watcherDetach).toHaveBeenCalledTimes(1);
+    expect(mocks.watcherDetach).toHaveBeenCalledWith(projectP);
+    const [channel, payload] = s.send.mock.calls.find(
+      ([ch]: [string]) => ch === IPC_CHANNELS.SESSION_WORKSPACE_CHANGED,
+    ) ?? [];
+    expect(channel).toBe(IPC_CHANNELS.SESSION_WORKSPACE_CHANGED);
+    expect(payload).toMatchObject({
+      workspace: { cwd: stickyPath, source: 'default', status: 'valid' },
+    });
+  });
+
+  it('session:delete of a background working-set session leaves the watcher untouched', async () => {
+    const projectP = fs.realpathSync(otherProject);
+    mocks.switchToTarget.cwd = projectP;
+    const open = mocks.handlers.get(IPC_CHANNELS.SESSION_OPEN)!;
+    const s = sender(27);
+    await open({ sender: s }, { id: SESSION_UUID });
+    mocks.watcherAttach.mockClear();
+    mocks.watcherDetach.mockClear();
+
+    const del = mocks.handlers.get(IPC_CHANNELS.SESSION_DELETE)!;
+    const result = await del(
+      { sender: s },
+      { id: 'dddddddd-dddd-4ddd-8ddd-eeeeeeeeeeee' },
+    );
+
+    expect(result.status).toBe('deleted');
+    expect(mocks.watcherAttach).not.toHaveBeenCalled();
+    expect(mocks.watcherDetach).not.toHaveBeenCalled();
   });
 });

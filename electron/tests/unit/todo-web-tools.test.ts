@@ -111,12 +111,11 @@ describe('Todo Tools', () => {
       expect(notifyCalled).toBe(true);
     });
 
-    it('should create a task with optional subagent_id', async () => {
+    it('should create a task owned by the calling subagent scope', async () => {
       const { handler } = buildCreateTool(store);
       const result = (await callTool(handler, {
         title: 'Subagent task',
-        subagent_id: 'sub-123',
-      })) as ToolExecutionResult;
+      }, 'sub-123')) as ToolExecutionResult;
 
       const idMatch = result.agentProjection.content.match(/<task id="([a-f0-9]{8})"/);
       const id = idMatch![1];
@@ -230,6 +229,23 @@ describe('Todo Tools', () => {
       const ids = Array.from({ length: TODO_BATCH_MAX_SIZE + 1 }, (_, i) => `id-${i}`);
       const parsed = definition.inputSchema.safeParse({ id: ids, status: 'OPEN' });
       expect(parsed.success).toBe(false);
+    });
+
+    it('todo_update with neither title nor status errors without mutating or notifying', async () => {
+      const createHandler = buildCreateTool(store).handler;
+      const created = (await callTool(createHandler, { title: 'Untouched' })) as ToolExecutionResult;
+      const id = created.agentProjection.content.match(/<task id="([a-f0-9]{8})"/)![1];
+
+      let notifyCount = 0;
+      const { handler } = buildUpdateTool(store, () => {
+        notifyCount++;
+      });
+      const result = (await callTool(handler, { id })) as ToolExecutionResult;
+
+      expect(result.canonical.status).toBe('error');
+      expect(result.agentProjection.content).toContain('Nothing to update');
+      expect(store.get(id)!.title).toBe('Untouched');
+      expect(notifyCount).toBe(0);
     });
 
     it('todo_update batch collects per-item errors without failing the whole call', async () => {
@@ -529,8 +545,8 @@ describe('Todo Tools', () => {
     it('should isolate list by agent scope (not peer todos)', async () => {
       const createHandler = buildCreateTool(store).handler;
       await callTool(createHandler, { title: 'Main task' }, 'main');
-      // Main assigns ownership to sub-1
-      await callTool(createHandler, { title: 'Sub task', subagent_id: 'sub-1' }, 'main');
+      // Sub-1 owns its own task (subagent calls auto-stamp their scope)
+      await callTool(createHandler, { title: 'Sub task' }, 'sub-1');
 
       const listHandler = buildListTool(store).handler;
       const asSub = (await callTool(listHandler, {}, 'sub-1')) as {

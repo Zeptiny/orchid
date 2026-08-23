@@ -439,16 +439,50 @@ export function payloadFromProviderMetadata(
 
 export type ToolNameResolver = (providerToolName: string) => string;
 
+/** Per-manager alias pins: first assignment wins for the manager's lifetime. */
+interface McpAliasPins {
+  /** Every internal name ever observed (sticky membership). */
+  seen: Set<string>;
+  /** internalName -> alias, assigned once, never revoked. */
+  assigned: Map<string, string>;
+}
+
+const mcpAliasPins = new WeakMap<MCPManager, McpAliasPins>();
+
+/**
+ * Derive provider-safe MCP aliases for a manager's current tool set.
+ *
+ * Delegates to {@link buildMcpProviderToolAliases} over the sticky union of
+ * every tool name the manager has exposed (not just the current snapshot), so
+ * tool registration (orchestrator) and stream-time alias reversal
+ * (createToolNameResolver) always agree even if the set mutates between them.
+ * Pinning also keeps aliases stable across mid-session server reconnects: an
+ * assigned alias never changes, so the model never sees a learned name
+ * disappear — colliding siblings that appear later hash around it.
+ */
+export function getMcpProviderToolAliases(mcpManager: MCPManager): Map<string, string> {
+  let pins = mcpAliasPins.get(mcpManager);
+  if (!pins) {
+    pins = { seen: new Set(), assigned: new Map() };
+    mcpAliasPins.set(mcpManager, pins);
+  }
+  for (const { definition } of mcpManager.getTools()) {
+    pins.seen.add(definition.name);
+  }
+  const aliases = buildMcpProviderToolAliases([...pins.seen], pins.assigned);
+  for (const [internalName, alias] of aliases) {
+    pins.assigned.set(internalName, alias);
+  }
+  return aliases;
+}
+
 /** Snapshot provider-safe MCP aliases once for this frozen stream attempt. */
 export function createToolNameResolver(mcpManager: MCPManager | null): ToolNameResolver {
   if (!mcpManager) return (toolName) => toolName;
 
   const internalNamesByAlias = new Map<string, string>();
-  for (const { definition } of mcpManager.getTools()) {
-    const alias = toProviderMcpToolName(definition.name);
-    if (!internalNamesByAlias.has(alias)) {
-      internalNamesByAlias.set(alias, definition.name);
-    }
+  for (const [internalName, alias] of getMcpProviderToolAliases(mcpManager)) {
+    internalNamesByAlias.set(alias, internalName);
   }
   return (toolName) => toolName.startsWith('mcp::')
     ? toolName
@@ -458,13 +492,87 @@ export function createToolNameResolver(mcpManager: MCPManager | null): ToolNameR
 const PROVIDER_TOOL_NAME_MAX_LENGTH = 64;
 const PROVIDER_TOOL_NAME_HASH_LENGTH = 16;
 
-/** Kept alongside alias reversal so provider naming is one coherent concern. */
-export function toProviderMcpToolName(internalName: string): string {
-  const safePrefix = internalName
+function sanitizeMcpToolName(internalName: string): string {
+  return internalName
     .replace(/[^A-Za-z0-9_-]+/g, '_')
     .replace(/^_+|_+$/g, '') || 'mcp_tool';
-  const hash = createHash('sha256').update(internalName).digest('hex').slice(0, PROVIDER_TOOL_NAME_HASH_LENGTH);
-  return `${safePrefix.slice(0, PROVIDER_TOOL_NAME_MAX_LENGTH - hash.length - 1)}_${hash}`;
+}
+
+function hashedMcpToolAlias(internalName: string, safeName: string): string {
+  const hash = createHash('sha256')
+    .update(internalName)
+    .digest('hex')
+    .slice(0, PROVIDER_TOOL_NAME_HASH_LENGTH);
+  const budget = PROVIDER_TOOL_NAME_MAX_LENGTH - PROVIDER_TOOL_NAME_HASH_LENGTH - 1;
+  return `${safeName.slice(0, budget)}_${hash}`;
+}
+
+/**
+ * Build provider-safe aliases for a set of MCP internal tool names.
+ *
+ * The sanitized name (`mcp::server::tool` → `mcp_server_tool`) is used as the
+ * alias when it is unique within the set and no longer than 47 chars — the
+ * 64-char provider budget minus the room a hash suffix would need, so a name
+ * that later needs hashing keeps its exact prefix. Longer or colliding
+ * sanitized names get a content hash appended so sanitization collisions and
+ * truncation can never merge two tools into one alias; if even the hashed
+ * form collides (truncated sha256 prefix tie), the builder throws.
+ *
+ * Optional `pinned` aliases (internalName -> alias, from
+ * {@link getMcpProviderToolAliases}) are reused as-is and reserve their values
+ * in the taken set, so a pinned tool keeps its alias even if the reason it was
+ * hashed (a colliding sibling) has since disappeared.
+ *
+ * Deterministic for a given set: tool registration (orchestrator) and
+ * stream-time alias reversal (createToolNameResolver) both derive aliases from
+ * the same full MCP tool set, so they always agree.
+ */
+export function buildMcpProviderToolAliases(
+  internalNames: string[],
+  pinned?: ReadonlyMap<string, string>,
+): Map<string, string> {
+  const safeNames = internalNames.map(sanitizeMcpToolName);
+  const counts = new Map<string, number>();
+  for (const safe of safeNames) {
+    counts.set(safe, (counts.get(safe) ?? 0) + 1);
+  }
+
+  const unhashedBudget = PROVIDER_TOOL_NAME_MAX_LENGTH - PROVIDER_TOOL_NAME_HASH_LENGTH - 1;
+  const taken = new Set<string>();
+  const aliases = new Map<string, string>();
+
+  for (let i = 0; i < internalNames.length; i++) {
+    const internalName = internalNames[i]!;
+    const safe = safeNames[i]!;
+    let alias: string;
+
+    const pinnedAlias = pinned?.get(internalName);
+    if (pinnedAlias !== undefined) {
+      alias = pinnedAlias;
+      if (taken.has(alias)) {
+        throw new Error(
+          `MCP tool alias collision for '${internalName}': '${alias}'`,
+        );
+      }
+    } else if ((counts.get(safe) ?? 0) === 1 && safe.length <= unhashedBudget && !taken.has(safe)) {
+      alias = safe;
+    } else {
+      alias = hashedMcpToolAlias(internalName, safe);
+      if (taken.has(alias)) {
+        // Two distinct internal names sharing a truncated sha256 prefix (~2^-64).
+        // Fail closed so registration and stream-time reversal fail identically
+        // instead of the resolver silently remapping one tool onto the other.
+        throw new Error(
+          `MCP tool alias collision for '${internalName}': '${alias}'`,
+        );
+      }
+    }
+
+    taken.add(alias);
+    aliases.set(internalName, alias);
+  }
+
+  return aliases;
 }
 
 function genericSdkExecution(

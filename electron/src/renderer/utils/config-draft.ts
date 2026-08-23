@@ -3,7 +3,7 @@ import type { ConfigPatch, ConfigPatchMap } from '../../shared/types/ipc';
 import type { ModelSelection } from '../../shared/types/provider';
 
 /** Nested ConfigPatch keys that need specialized merge (not scalar assign). */
-type NestedPatchKey = 'rag' | 'agents_md' | 'subagents' | 'compaction' | 'tier_models' | 'tier_reasoning_effort' | 'mcp_servers' | 'permissions';
+type NestedPatchKey = 'rag' | 'agents_md' | 'index_refresh' | 'subagents' | 'compaction' | 'tier_models' | 'tier_reasoning_effort' | 'mcp_servers' | 'permissions';
 
 /** Scalar / nullable top-level patch keys applied with simple defined-assign. */
 type ScalarPatchKey = Exclude<keyof ConfigPatch, NestedPatchKey>;
@@ -31,6 +31,9 @@ export function mergeConfigDraft(
   }
   if (updates.agents_md !== undefined) {
     next.agents_md = { ...(current.agents_md ?? {}), ...updates.agents_md };
+  }
+  if (updates.index_refresh !== undefined) {
+    next.index_refresh = { ...(current.index_refresh ?? {}), ...updates.index_refresh };
   }
   if (updates.subagents !== undefined) {
     next.subagents = { ...(current.subagents ?? {}), ...updates.subagents };
@@ -122,6 +125,10 @@ export function applyConfigDraft(base: Config, draft: ConfigPatch): Config {
     next.agents_md = { ...base.agents_md, ...draft.agents_md };
   }
 
+  if (draft.index_refresh !== undefined) {
+    next.index_refresh = { ...base.index_refresh, ...draft.index_refresh };
+  }
+
   if (draft.subagents !== undefined) {
     next.subagents = { ...base.subagents, ...draft.subagents };
   }
@@ -158,6 +165,7 @@ function isNestedPatchKey(key: keyof ConfigPatch): key is NestedPatchKey {
   return (
     key === 'rag' ||
     key === 'agents_md' ||
+    key === 'index_refresh' ||
     key === 'subagents' ||
     key === 'compaction' ||
     key === 'tier_models' ||

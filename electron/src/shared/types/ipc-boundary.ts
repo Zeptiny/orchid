@@ -139,6 +139,22 @@ export interface AgentsMdConfig {
 }
 
 /**
+ * Index auto-refresh settings (tool mutations, watcher events, and command
+ * dirty-scans feed one debounced refresh pipeline). See the `index_refresh`
+ * block in the config schema for field defaults.
+ */
+export interface IndexRefreshConfig {
+  /** Refresh the RAG vector index for detected mutations. */
+  rag: boolean;
+  /** Refresh the AST symbol index for detected mutations. */
+  ast: boolean;
+  /** Watch the bound workspace for external changes. */
+  watch: boolean;
+  /** Coalescing window (ms) before a project's refresh batch flushes. */
+  debounce_ms: number;
+}
+
+/**
  * Subagent live-event batching, admission, retention, and prompt-context
  * settings. See the `subagents` block in the config schema for field defaults.
  * All knobs are collected here so later units (persistence, admission,
@@ -223,6 +239,7 @@ export interface Config {
   personality: string;
   rag: RAGConfig;
   agents_md: AgentsMdConfig;
+  index_refresh: IndexRefreshConfig;
   subagents: SubagentsConfig;
   compaction: CompactionConfig;
   ast_max_file_size: number;
@@ -307,6 +324,18 @@ export interface RAGStoreStatus {
   totalFiles: number;
   lastIndexed: string | null;
   lastIndexDuration: number | null;
+  /** When the background index auto-refresh last landed RAG work (null = never). */
+  lastAutoRefresh: string | null;
+}
+
+/**
+ * rag:status IPC response — store status plus the workspace-watcher slice.
+ * `watcher` is additive and optional: it is absent when introspection is
+ * unavailable, and consumers must tolerate its absence.
+ */
+export interface RAGStatusResponse extends RAGStoreStatus {
+  /** Whether the workspace watcher has a live instance for this project. */
+  watcher?: { watching: boolean };
 }
 
 // ── AST Store ───────────────────────────────────────────────────────────────
@@ -316,7 +345,34 @@ export interface ASTStoreStatus {
   totalSymbols: number;
   lastIndexed: string | null;
   lastIndexDuration: number | null;
+  /** When the background index auto-refresh last landed AST work (null = never). */
+  lastAutoRefresh: string | null;
 }
+
+// ── Index auto-refresh ───────────────────────────────────────────────────────
+
+/**
+ * `index:auto_refresh` push event — the background index auto-refresh
+ * lifecycle for one project, as a phase machine:
+ *
+ * - `started`: a flush is running for the listed indexes (`true` = that index
+ *   has work in this flush).
+ * - `landed`: work completed for the listed indexes; carries fresh post-flush
+ *   store statuses for each refreshed index.
+ * - `settled`: the flush finished (landed, failed, timed out, or was
+ *   requeued) — clears any in-progress indication. Always paired with a
+ *   preceding `started`.
+ */
+export type IndexAutoRefreshEvent =
+  | { phase: 'started'; rag: boolean; ast: boolean }
+  | { phase: 'settled'; rag: boolean; ast: boolean }
+  | {
+      phase: 'landed';
+      /** Fresh RAG store status (absent when RAG did not land work). */
+      rag?: RAGStatusResponse;
+      /** Fresh AST store status (absent when AST did not land work). */
+      ast?: ASTStoreStatus;
+    };
 
 // ── RAG Indexer ─────────────────────────────────────────────────────────────
 

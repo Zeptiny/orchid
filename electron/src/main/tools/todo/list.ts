@@ -3,7 +3,6 @@
  *
  * Agent isolation: main only lists main-owned tasks; subagents only list
  * their own. Optional status filter still applies within the scope.
- * The subagent_id param is ignored for isolation (scope is always the caller).
  */
 import { z } from 'zod';
 import type { ToolDefinition, ToolHandler } from '../types';
@@ -45,11 +44,6 @@ export function buildListTool(
         .describe(
           `Filter by status. Must be one of: ${Object.values(TodoStatus).join(', ')}.`,
         ),
-      // Kept for schema stability; enforced scope always overrides.
-      subagent_id: z
-        .string()
-        .optional()
-        .describe('Deprecated: scope is always the calling agent. Ignored.'),
     }),
     category: 'todo',
     riskClass: RiskClass.READ_ONLY,

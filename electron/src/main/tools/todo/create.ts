@@ -1,8 +1,8 @@
 /**
  * todo_create tool — create a new task in the session todo list.
  *
- * Ownership is agent-scoped: empty/null subagent_id = main. Subagents auto-stamp
- * their scope id so peers and main do not share ownership by default.
+ * Ownership is agent-scoped: main creates main-owned tasks (null owner);
+ * subagents auto-stamp their own scope id.
  */
 import { z } from 'zod';
 import type { ToolDefinition, ToolExecutionContext, ToolHandler } from '../types';
@@ -65,18 +65,12 @@ export function expandStringifiedBatch(value: unknown): unknown {
 /**
  * Resolve ownership for a new todo under the calling agent scope.
  * - Subagents: always own the todo (caller cannot forge another scope).
- * - Main: may optionally tag a subagent_id (assigns ownership to that subagent).
+ * - Main: store null (empty owner).
  */
-export function resolveCreateOwner(
-  agentScopeId: string | undefined,
-  requestedSubagentId?: string,
-): string | undefined {
+export function resolveCreateOwner(agentScopeId: string | undefined): string | undefined {
   const scope = normalizeAgentScopeId(agentScopeId);
   if (!isMainAgentScope(scope)) {
     return scope;
-  }
-  if (requestedSubagentId !== undefined && requestedSubagentId.trim() !== '') {
-    return requestedSubagentId.trim();
   }
   // Main-owned: store null (empty owner)
   return undefined;
@@ -97,9 +91,9 @@ export function buildCreateTool(
     name: 'todo_create',
     description:
       'Create a new task in the session todo list. Tasks are scoped to the ' +
-      'calling agent (main or a specific subagent). Subagents only see and ' +
-      'modify their own tasks. Accepts a single title or an array of titles ' +
-      'for batch creation.',
+      'calling agent (main or a subagent). Subagents only see and modify ' +
+      'their own tasks. Accepts a single title or an array of titles for ' +
+      'batch creation.',
     inputSchema: z.object({
       title: z.preprocess(
         expandStringifiedBatch,
@@ -107,25 +101,17 @@ export function buildCreateTool(
           'Task title or array of task titles for batch creation.',
         ),
       ),
-      subagent_id: z
-        .string()
-        .optional()
-        .describe(
-          'Main agent only: assign ownership to a subagent id. ' +
-            'Ignored when called by a subagent (auto-stamped to caller).',
-        ),
     }),
     category: 'todo',
     riskClass: RiskClass.MUTATION,
   };
 
   const handler: ToolHandler = async (input: unknown, ctx): Promise<TodoToolResult> => {
-    const { title, subagent_id } = input as {
+    const { title } = input as {
       title: string | string[];
-      subagent_id?: string;
     };
 
-    const owner = resolveCreateOwner(ctx.agentScopeId, subagent_id);
+    const owner = resolveCreateOwner(ctx.agentScopeId);
     const titles = Array.isArray(title) ? title : [title];
     const todoStore = resolveTodoStore(store, ctx);
     const created = titles.map((t) => todoStore.create(t, owner));

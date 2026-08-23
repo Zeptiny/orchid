@@ -880,7 +880,13 @@ export class RAGStore {
 
   status(): RAGStoreStatus {
     if (!fs.existsSync(this.dbPath)) {
-      return { totalChunks: 0, totalFiles: 0, lastIndexed: null, lastIndexDuration: null };
+      return {
+        totalChunks: 0,
+        totalFiles: 0,
+        lastIndexed: null,
+        lastIndexDuration: null,
+        lastAutoRefresh: null,
+      };
     }
 
     const db = this._getDb();
@@ -890,18 +896,21 @@ export class RAGStore {
     const fileCount = (
       db.prepare('SELECT COUNT(*) as cnt FROM files').get() as { cnt: number }
     ).cnt;
-    const lastRow = db
-      .prepare('SELECT value FROM meta WHERE key = ?')
-      .get('last_indexed') as { value: string } | undefined;
-    const durationRow = db
-      .prepare('SELECT value FROM meta WHERE key = ?')
-      .get('last_index_duration') as { value: string } | undefined;
+    const metaValue = (key: string): string | null => {
+      const row = db.prepare('SELECT value FROM meta WHERE key = ?').get(key) as
+        | { value: string }
+        | undefined;
+      return row?.value ?? null;
+    };
+    const lastIndexed = metaValue('last_indexed');
+    const durationRow = metaValue('last_index_duration');
 
     return {
       totalChunks: chunkCount,
       totalFiles: fileCount,
-      lastIndexed: lastRow?.value ?? null,
-      lastIndexDuration: durationRow ? parseFloat(durationRow.value) : null,
+      lastIndexed,
+      lastIndexDuration: durationRow !== null ? parseFloat(durationRow) : null,
+      lastAutoRefresh: metaValue('last_auto_refresh'),
     };
   }
 
@@ -919,6 +928,20 @@ export class RAGStore {
     db.prepare(
       'INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)',
     ).run('last_indexed', new Date().toISOString());
+  }
+
+  /**
+   * Record the current time as `last_auto_refresh` — stamped by the index
+   * refresh coordinator after a background flush lands RAG work. Deliberately
+   * separate from `last_indexed` so manual and automatic times stay
+   * distinguishable in status surfaces.
+   */
+  touchLastAutoRefresh(): void {
+    this._invalidateCache();
+    const db = this._getDb();
+    db.prepare(
+      'INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)',
+    ).run('last_auto_refresh', new Date().toISOString());
   }
 
   getFileHashes(): Map<string, string> {

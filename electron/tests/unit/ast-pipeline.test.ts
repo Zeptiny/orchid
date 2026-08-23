@@ -25,6 +25,37 @@ function outputText(result: unknown): string {
   return JSON.stringify(value ?? result);
 }
 
+/**
+ * Poll until a file exists (bounded). Returns false on timeout so callers
+ * can distinguish "worker never got that far" from a hard failure.
+ */
+async function waitForFile(filePath: string, timeoutMs = 2000): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (fs.existsSync(filePath)) return true;
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  return false;
+}
+
+/**
+ * Poll a fixture worker's heartbeat file until two consecutive reads (well
+ * past its write interval) agree — proof the worker thread was terminated
+ * and its interval can no longer advance. Throws on `timeoutMs` of steady
+ * progress instead.
+ */
+async function waitForFrozenHeartbeat(beatPath: string, timeoutMs = 3000): Promise<number> {
+  const deadline = Date.now() + timeoutMs;
+  let last = Number(fs.readFileSync(beatPath, 'utf-8'));
+  while (Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    const current = Number(fs.readFileSync(beatPath, 'utf-8'));
+    if (current === last) return current;
+    last = current;
+  }
+  throw new Error('worker heartbeat never froze — the stalled worker was not terminated');
+}
+
 // ---------------------------------------------------------------------------
 // Mock tree-sitter parser
 // ---------------------------------------------------------------------------
@@ -469,12 +500,26 @@ describe('ASTStore', () => {
     expect(s.lastIndexDuration).toBe(1.5);
   });
 
+  it('should record auto-refresh separately from manual index metadata', () => {
+    const store = new ASTStore(tmpDir);
+    store.initDb();
+    expect(store.status().lastAutoRefresh).toBeNull();
+
+    store.recordAutoRefresh();
+    const s = store.status();
+    expect(s.lastAutoRefresh).toBeTruthy();
+    // The auto stamp must not leak into the manual-index fields.
+    expect(s.lastIndexed).toBeNull();
+    expect(s.lastIndexDuration).toBeNull();
+  });
+
   it('should return empty status for non-existent db', () => {
     const store = new ASTStore(tmpDir);
     const s = store.status();
     expect(s.totalFiles).toBe(0);
     expect(s.totalSymbols).toBe(0);
     expect(s.lastIndexed).toBeNull();
+    expect(s.lastAutoRefresh).toBeNull();
   });
 
   it('should filter symbols by type', () => {
@@ -582,6 +627,354 @@ describe('Indexer', () => {
     } finally { process.cwd = origCwd; }
   });
 
+});
+
+// ── Indexer: incremental updates ───────────────────────────────────────────
+
+describe('Indexer incremental updates', () => {
+  it('should replace symbols and hash for a changed file on upsertFiles', async () => {
+    const projectDir = path.join(tmpDir, 'project');
+    fs.mkdirSync(projectDir, { recursive: true });
+    fs.writeFileSync(path.join(projectDir, 'test.py'), SAMPLE_PYTHON);
+    const { upsertFiles } = await import('../../src/main/ast/indexer');
+    await upsertFiles({ projectPath: projectDir, rels: ['test.py'] });
+    const { ASTStore } = await import('../../src/main/ast/store');
+    const store = new ASTStore(projectDir);
+    const hashBefore = store.getFileHash('test.py');
+    expect(hashBefore).toBeTruthy();
+    expect(store.getSymbolsByName('greet', 'definition')).toHaveLength(1);
+
+    fs.writeFileSync(
+      path.join(projectDir, 'test.py'),
+      SAMPLE_PYTHON.replace('def greet(name):', 'def salute(name):'),
+    );
+    const result = await upsertFiles({ projectPath: projectDir, rels: ['test.py'] });
+    expect(result.filesIndexed).toBe(1);
+    expect(result.filesSkipped).toBe(0);
+    expect(result.symbolsExtracted).toBeGreaterThan(0);
+    expect(result.errors).toHaveLength(0);
+    expect(store.getFileHash('test.py')).not.toBe(hashBefore);
+    expect(store.getSymbolsByName('greet', 'definition')).toHaveLength(0);
+    expect(store.getSymbolsByName('salute', 'definition')).toHaveLength(1);
+  });
+
+  it('should skip unchanged files on upsertFiles', async () => {
+    const projectDir = path.join(tmpDir, 'project');
+    fs.mkdirSync(projectDir, { recursive: true });
+    fs.writeFileSync(path.join(projectDir, 'test.py'), SAMPLE_PYTHON);
+    const { upsertFiles } = await import('../../src/main/ast/indexer');
+    await upsertFiles({ projectPath: projectDir, rels: ['test.py'] });
+    const { ASTStore } = await import('../../src/main/ast/store');
+    const store = new ASTStore(projectDir);
+    const hashBefore = store.getFileHash('test.py');
+    const result = await upsertFiles({ projectPath: projectDir, rels: ['test.py'] });
+    expect(result.filesIndexed).toBe(0);
+    expect(result.filesSkipped).toBe(1);
+    expect(result.filesDeleted).toBe(0);
+    expect(result.symbolsExtracted).toBe(0);
+    expect(result.errors).toHaveLength(0);
+    expect(store.getFileHash('test.py')).toBe(hashBefore);
+  });
+
+  it('should remove all rows for the given rels on deleteFiles', async () => {
+    const projectDir = path.join(tmpDir, 'project');
+    fs.mkdirSync(path.join(projectDir, 'src'), { recursive: true });
+    fs.writeFileSync(path.join(projectDir, 'src', 'util.py'), 'def helper():\n    return 1\n');
+    fs.writeFileSync(path.join(projectDir, 'other.py'), 'def main():\n    return helper()\n');
+    const { upsertFiles, deleteFiles } = await import('../../src/main/ast/indexer');
+    await upsertFiles({ projectPath: projectDir, rels: ['src/util.py', 'other.py'] });
+    const { ASTStore } = await import('../../src/main/ast/store');
+    const store = new ASTStore(projectDir);
+    expect(store.getFileHash('src/util.py')).toBeTruthy();
+    expect(store.getSymbolsByName('helper', 'definition')).toHaveLength(1);
+
+    const deleted = await deleteFiles(projectDir, ['src/util.py', 'missing.py']);
+    expect(deleted).toBe(1);
+    expect(store.getFileHash('src/util.py')).toBe('');
+    expect(store.getSymbolsByName('helper', 'definition')).toHaveLength(0);
+    expect(store.getFileHash('other.py')).toBeTruthy();
+    expect(store.getSymbolsByName('main', 'definition')).toHaveLength(1);
+  });
+
+  it('should ignore non-source extensions on upsertFiles', async () => {
+    const projectDir = path.join(tmpDir, 'project');
+    fs.mkdirSync(projectDir, { recursive: true });
+    fs.writeFileSync(path.join(projectDir, 'README.md'), '# Notes\n\ndef fake():\n    return 1\n');
+    fs.writeFileSync(path.join(projectDir, 'data.json'), '{"a": 1}\n');
+    const { upsertFiles } = await import('../../src/main/ast/indexer');
+    const result = await upsertFiles({ projectPath: projectDir, rels: ['README.md', 'data.json'] });
+    expect(result.filesIndexed).toBe(0);
+    expect(result.filesSkipped).toBe(0);
+    expect(result.filesDeleted).toBe(0);
+    expect(result.errors).toHaveLength(0);
+    const { ASTStore } = await import('../../src/main/ast/store');
+    expect(new ASTStore(projectDir).status().totalFiles).toBe(0);
+  });
+
+  it('should upsert partial symbols for a file with a syntax error', async () => {
+    const projectDir = path.join(tmpDir, 'project');
+    fs.mkdirSync(projectDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(projectDir, 'broken.ts'),
+      'def alpha():\n    return 1\n\ndefn beta(:\n    return 2\n\ndef gamma():\n    return 3\n',
+    );
+    const { upsertFiles } = await import('../../src/main/ast/indexer');
+    const result = await upsertFiles({ projectPath: projectDir, rels: ['broken.ts'] });
+    expect(result.filesIndexed).toBe(1);
+    expect(result.symbolsExtracted).toBeGreaterThan(0);
+    expect(result.errors).toHaveLength(0);
+    const { ASTStore } = await import('../../src/main/ast/store');
+    const store = new ASTStore(projectDir);
+    expect(store.getSymbolsByName('alpha', 'definition')).toHaveLength(1);
+    expect(store.getSymbolsByName('gamma', 'definition')).toHaveLength(1);
+    expect(store.getSymbolsByName('beta', 'definition')).toHaveLength(0);
+  });
+
+  it('should remove stored rows for rels that fail re-read', async () => {
+    const projectDir = path.join(tmpDir, 'project');
+    fs.mkdirSync(projectDir, { recursive: true });
+    fs.writeFileSync(path.join(projectDir, 'keep.py'), SAMPLE_PYTHON);
+    fs.writeFileSync(path.join(projectDir, 'gone.py'), 'def vanish():\n    return 1\n');
+    const { getConfig } = await import('../../src/main/config');
+    const { upsertFiles } = await import('../../src/main/ast/indexer');
+    await upsertFiles({ projectPath: projectDir, rels: ['keep.py', 'gone.py'] });
+    const { ASTStore } = await import('../../src/main/ast/store');
+    const store = new ASTStore(projectDir);
+    expect(store.getFileHash('keep.py')).toBeTruthy();
+    expect(store.getFileHash('gone.py')).toBeTruthy();
+
+    fs.unlinkSync(path.join(projectDir, 'gone.py'));
+    const result = await upsertFiles({
+      projectPath: projectDir,
+      rels: ['keep.py', 'gone.py'],
+      config: { ...getConfig(), ast_max_file_size: 1 },
+    });
+    expect(result.filesDeleted).toBe(2);
+    expect(result.filesIndexed).toBe(0);
+    expect(store.getFileHash('keep.py')).toBe('');
+    expect(store.getFileHash('gone.py')).toBe('');
+    expect(store.getSymbolsByName('greet', 'definition')).toHaveLength(0);
+  });
+});
+
+// ── Indexer: incremental worker routing ────────────────────────────────────
+
+describe('Indexer incremental worker routing', () => {
+  /**
+   * Minimal stand-in for the compiled AST worker: echoes its start data to
+   * `worker-echo.json` inside the project (so the test can assert the op
+   * protocol) and posts back the result message its op expects. Written at
+   * runtime because unit tests run the TypeScript sources — no compiled
+   * index-worker.js exists, which is also what keeps the other upsert/delete
+   * tests on the inline fallback path.
+   */
+  const ECHO_WORKER_SOURCE = [
+    "const { parentPort, workerData } = require('node:worker_threads');",
+    "const fs = require('node:fs');",
+    "const path = require('node:path');",
+    "const d = workerData || {};",
+    "fs.writeFileSync(path.join(d.projectPath, 'worker-echo.json'), JSON.stringify(d));",
+    "if (d.op === 'upsert') {",
+    "  parentPort.postMessage({ type: 'incremental-result', result: {",
+    "    filesIndexed: d.rels.length, filesSkipped: 0, filesDeleted: 0,",
+    "    symbolsExtracted: 0, errors: [],",
+    "  } });",
+    "} else if (d.op === 'delete') {",
+    "  parentPort.postMessage({ type: 'delete-result', deleted: d.rels.length });",
+    "} else {",
+    "  parentPort.postMessage({ type: 'result', result: {",
+    "    filesScanned: 0, filesIndexed: 0, filesSkipped: 0, filesDeleted: 0,",
+    "    symbolsExtracted: 0, errors: [], durationSeconds: 0,",
+    "  } });",
+    "}",
+  ].join('\n');
+
+  /**
+   * Stalled-worker stand-in: posts one progress message (exercising the
+   * watchdog re-arm path), then never reports again — heartbeating a file so
+   * the test can observe that the idle watchdog terminated the wedged
+   * thread. Written at runtime, same convention as the echo worker above.
+   */
+  const STALLED_WORKER_SOURCE = [
+    "const { parentPort, workerData } = require('node:worker_threads');",
+    "const fs = require('node:fs');",
+    "const path = require('node:path');",
+    "const beatPath = path.join(workerData.projectPath, 'stalled-beat.txt');",
+    "fs.writeFileSync(beatPath, '0');",
+    "parentPort.postMessage({ type: 'progress', progress: {",
+    "  phase: 'indexing', done: 0, total: 1, filesIndexed: 0, filesSkipped: 0,",
+    "  symbolsExtracted: 0, filesDeleted: 0, elapsedSeconds: 0,",
+    "} });",
+    "let beats = 0;",
+    "setInterval(() => { beats++; fs.writeFileSync(beatPath, String(beats)); }, 20);",
+  ].join('\n');
+
+  it('routes upsert ops through the worker with op + rels start data', async () => {
+    const projectDir = path.join(tmpDir, 'project');
+    fs.mkdirSync(projectDir, { recursive: true });
+    fs.writeFileSync(path.join(projectDir, 'test.py'), SAMPLE_PYTHON);
+    const echoWorker = path.join(tmpDir, 'ast-echo-worker.cjs');
+    fs.writeFileSync(echoWorker, ECHO_WORKER_SOURCE);
+
+    const { upsertFiles } = await import('../../src/main/ast/indexer');
+    const result = await upsertFiles({
+      projectPath: projectDir,
+      rels: ['test.py', 'other.py'],
+      workerPath: echoWorker,
+    });
+
+    // The worker's incremental-result message resolved the dispatcher.
+    expect(result).toEqual({
+      filesIndexed: 2,
+      filesSkipped: 0,
+      filesDeleted: 0,
+      symbolsExtracted: 0,
+      errors: [],
+    });
+    // The worker received the op discriminator + rels (not an index scan).
+    const echo = JSON.parse(
+      fs.readFileSync(path.join(projectDir, 'worker-echo.json'), 'utf-8'),
+    );
+    expect(echo).toMatchObject({
+      op: 'upsert',
+      projectPath: projectDir,
+      rels: ['test.py', 'other.py'],
+    });
+    // Nothing ran inline: the fixture worker never touched the store.
+    const { ASTStore } = await import('../../src/main/ast/store');
+    expect(new ASTStore(projectDir).status().totalFiles).toBe(0);
+  });
+
+  it('routes delete ops through the worker with op + rels start data', async () => {
+    const projectDir = path.join(tmpDir, 'project');
+    fs.mkdirSync(projectDir, { recursive: true });
+    const echoWorker = path.join(tmpDir, 'ast-echo-worker.cjs');
+    fs.writeFileSync(echoWorker, ECHO_WORKER_SOURCE);
+
+    const { deleteFiles } = await import('../../src/main/ast/indexer');
+    const deleted = await deleteFiles(
+      projectDir,
+      ['a.py', 'b.py', 'c.py'],
+      { workerPath: echoWorker },
+    );
+
+    // The worker's delete-result message resolved the dispatcher.
+    expect(deleted).toBe(3);
+    const echo = JSON.parse(
+      fs.readFileSync(path.join(projectDir, 'worker-echo.json'), 'utf-8'),
+    );
+    expect(echo).toMatchObject({
+      op: 'delete',
+      projectPath: projectDir,
+      rels: ['a.py', 'b.py', 'c.py'],
+    });
+  });
+
+  it('rejects when the upsert worker errors', async () => {
+    const projectDir = path.join(tmpDir, 'project');
+    fs.mkdirSync(projectDir, { recursive: true });
+    const boomWorker = path.join(tmpDir, 'ast-boom-worker.cjs');
+    fs.writeFileSync(
+      boomWorker,
+      "const { parentPort } = require('node:worker_threads');\n" +
+        "parentPort.postMessage({ type: 'error', error: 'upsert exploded' });\n",
+    );
+
+    const { upsertFiles } = await import('../../src/main/ast/indexer');
+    await expect(
+      upsertFiles({ projectPath: projectDir, rels: ['test.py'], workerPath: boomWorker }),
+    ).rejects.toThrow('upsert exploded');
+  });
+
+  it('rejects a stalled worker via the idle watchdog and terminates it', async () => {
+    const projectDir = path.join(tmpDir, 'project');
+    fs.mkdirSync(projectDir, { recursive: true });
+    const stalledWorker = path.join(tmpDir, 'ast-stalled-worker.cjs');
+    fs.writeFileSync(stalledWorker, STALLED_WORKER_SOURCE);
+    const beatPath = path.join(projectDir, 'stalled-beat.txt');
+
+    const { upsertFiles, getAstWorkerWatchdogArmedCountForTests } = await import(
+      '../../src/main/ast/indexer'
+    );
+    // The idle window rides the upsert config (seconds), mirroring the RAG
+    // watchdog seam. 1s (not 100ms) so a loaded CI machine can still boot
+    // the fixture worker inside the window; the run then stalls after its
+    // one progress post.
+    const pending = upsertFiles({
+      projectPath: projectDir,
+      rels: ['test.py'],
+      workerPath: stalledWorker,
+      config: { background_command_idle_timeout: 1 } as unknown as import(
+        '../../src/main/config/schema'
+      ).Config,
+    });
+    // The watchdog arms synchronously when the worker spawns.
+    expect(getAstWorkerWatchdogArmedCountForTests()).toBe(1);
+
+    await expect(pending).rejects.toThrow('AST index worker made no progress for 1000ms');
+    // The fired watchdog left no pending timer behind.
+    expect(getAstWorkerWatchdogArmedCountForTests()).toBe(0);
+
+    // Termination evidence: normally the booted worker is heartbeating and
+    // its beat file freezes once terminate() lands. If the file never
+    // appears, the watchdog killed the worker before it wrote anything —
+    // the rejection above already proves that kill.
+    if (await waitForFile(beatPath)) {
+      await waitForFrozenHeartbeat(beatPath);
+    }
+  });
+
+  it('disarms the watchdog without firing it when the worker settles promptly', async () => {
+    const projectDir = path.join(tmpDir, 'project');
+    fs.mkdirSync(projectDir, { recursive: true });
+    fs.writeFileSync(path.join(projectDir, 'test.py'), SAMPLE_PYTHON);
+    const echoWorker = path.join(tmpDir, 'ast-echo-worker.cjs');
+    fs.writeFileSync(echoWorker, ECHO_WORKER_SOURCE);
+
+    const { upsertFiles, getAstWorkerWatchdogArmedCountForTests } = await import(
+      '../../src/main/ast/indexer'
+    );
+    // A short idle window (2s): the healthy worker posts its result long
+    // before it even on a loaded machine, so the watchdog must not
+    // false-fire on normal runs.
+    const pending = upsertFiles({
+      projectPath: projectDir,
+      rels: ['test.py'],
+      workerPath: echoWorker,
+      config: { background_command_idle_timeout: 2 } as unknown as import(
+        '../../src/main/config/schema'
+      ).Config,
+    });
+    expect(getAstWorkerWatchdogArmedCountForTests()).toBe(1);
+
+    const result = await pending;
+
+    expect(result.filesIndexed).toBe(1);
+    // Settling disarmed the watchdog — no dangling timer outlives the run.
+    expect(getAstWorkerWatchdogArmedCountForTests()).toBe(0);
+  });
+
+  it('keeps the default index start data as { projectPath, force }', async () => {
+    const { buildAstWorkerStartData } = await import('../../src/main/ast/indexer');
+    expect(buildAstWorkerStartData('index', { projectPath: '/p', force: true })).toEqual({
+      projectPath: '/p',
+      force: true,
+    });
+    expect(buildAstWorkerStartData('index', { projectPath: '/p', force: false })).toEqual({
+      projectPath: '/p',
+      force: false,
+    });
+    expect(buildAstWorkerStartData('upsert', { projectPath: '/p', rels: ['a.py'] })).toEqual({
+      op: 'upsert',
+      projectPath: '/p',
+      rels: ['a.py'],
+    });
+    expect(buildAstWorkerStartData('delete', { projectPath: '/p', rels: ['a.py'] })).toEqual({
+      op: 'delete',
+      projectPath: '/p',
+      rels: ['a.py'],
+    });
+  });
 });
 
 // ── Tool: get_file_skeleton ───────────────────────────────────────────────

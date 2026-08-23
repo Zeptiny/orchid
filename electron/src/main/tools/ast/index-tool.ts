@@ -68,6 +68,7 @@ export const astIndexHandler: ToolHandler = async (
           totalFiles: status.totalFiles,
           totalSymbols: status.totalSymbols,
           lastIndexed: status.lastIndexed ?? 'never',
+          lastAutoRefresh: status.lastAutoRefresh ?? 'never',
           lastDuration: status.lastIndexDuration != null
             ? status.lastIndexDuration.toFixed(1) + 's'
             : 'N/A',

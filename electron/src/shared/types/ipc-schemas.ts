@@ -417,6 +417,38 @@ export const astIndexProgressSchema = z
   })
   .passthrough();
 
+// ── Index auto-refresh event ─────────────────────────────────────────────────
+
+const ragStatusEventSchema = z
+  .object({
+    totalChunks: z.number(),
+    totalFiles: z.number(),
+    lastIndexed: z.string().nullable(),
+    lastIndexDuration: z.number().nullable(),
+    lastAutoRefresh: z.string().nullable(),
+  })
+  .passthrough();
+
+const astStatusEventSchema = z
+  .object({
+    totalFiles: z.number(),
+    totalSymbols: z.number(),
+    lastIndexed: z.string().nullable(),
+    lastIndexDuration: z.number().nullable(),
+    lastAutoRefresh: z.string().nullable(),
+  })
+  .passthrough();
+
+export const indexAutoRefreshEventSchema = z.discriminatedUnion('phase', [
+  z.object({ phase: z.literal('started'), rag: z.boolean(), ast: z.boolean() }),
+  z.object({ phase: z.literal('settled'), rag: z.boolean(), ast: z.boolean() }),
+  z.object({
+    phase: z.literal('landed'),
+    rag: ragStatusEventSchema.optional(),
+    ast: astStatusEventSchema.optional(),
+  }),
+]);
+
 // ── Updater events ───────────────────────────────────────────────────────────
 
 export const updaterStateSchema = z.object({

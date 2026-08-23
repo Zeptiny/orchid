@@ -2,12 +2,18 @@
  * RAG index worker — runs discovery + embed + SQLite off the Electron main thread.
  *
  * Loaded via `worker_threads.Worker`. Receives start params on `workerData`
- * and streams progress / result back via `parentPort`.
+ * and streams progress / result back via `parentPort`. Besides the plain
+ * index pass (`op` absent), it executes the incremental upsert/delete ops so
+ * the synchronous vectors.npy read/rewrite behind every incremental flush
+ * never runs on the main thread.
  */
 import { parentPort, workerData } from 'node:worker_threads';
 import { ConfigManager } from '../config/loader';
+import type { RAGIndexProgress, RAGIndexResult } from '../../shared/types/ipc-boundary';
 import {
+  runDeleteFilesImpl,
   runIndexProjectImpl,
+  runUpsertFilesImpl,
   type RagWorkerOutbound,
   type RagWorkerStartData,
 } from './indexer';
@@ -16,16 +22,22 @@ function post(msg: RagWorkerOutbound): void {
   parentPort?.postMessage(msg);
 }
 
+function report(progress: RAGIndexProgress): void {
+  post({ type: 'progress', progress });
+}
+
 async function run(): Promise<void> {
   const data = (workerData ?? {}) as RagWorkerStartData;
   const projectPath = data.projectPath;
   if (!projectPath || typeof projectPath !== 'string') {
     throw new Error('RAG worker: projectPath is required');
   }
+  const op = data.op ?? 'index';
 
   // Legacy callers may omit a frozen runtime config. Preserve the previous
-  // project-layer load in that compatibility path only.
-  if (!data.config) {
+  // project-layer load in that compatibility path only. Deletes touch only
+  // the vector store and never read config, so they skip the load entirely.
+  if (op !== 'delete' && !data.config) {
     ConfigManager.reset();
     ConfigManager.load({ projectDir: projectPath });
   }
@@ -44,16 +56,26 @@ async function run(): Promise<void> {
     },
   });
 
-  const result = await runIndexProjectImpl(
-    projectPath,
-    data.paths,
-    data.force === true,
-    undefined,
-    (progress) => {
-      post({ type: 'progress', progress });
-    },
-    data.config,
-  );
+  let result: RAGIndexResult;
+  if (op === 'delete') {
+    result = await runDeleteFilesImpl(projectPath, data.rels ?? []);
+  } else if (op === 'upsert') {
+    result = await runUpsertFilesImpl({
+      projectPath,
+      rels: data.rels ?? [],
+      progressCallback: report,
+      config: data.config,
+    });
+  } else {
+    result = await runIndexProjectImpl(
+      projectPath,
+      data.paths,
+      data.force === true,
+      undefined,
+      report,
+      data.config,
+    );
+  }
 
   post({
     type: 'progress',

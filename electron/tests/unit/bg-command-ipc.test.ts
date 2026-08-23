@@ -31,6 +31,11 @@ import {
   type GenericToolResultData,
   type ToolHandlerOutcome,
 } from '../../src/shared/types/tool-result';
+import { defaults } from '../../src/main/config';
+import {
+  disposeIndexRefreshCoordinator,
+  _setIndexRefreshCoordinatorForTests,
+} from '../../src/main/indexing/refresh-coordinator';
 import type {
   BgCommandListResult,
   BgCommandReleaseInputResult,
@@ -275,6 +280,15 @@ beforeEach(async () => {
   mocks.windows.length = 0;
   mocks.sessionManager._reset();
   mocks.subagentManager._reset();
+  // Background spawns in this suite exit (naturally or via store.clear()) and
+  // the store's exit path marks process.cwd() dirty in the index-refresh
+  // coordinator. Pin the debounce high so no real flush can fire mid-test.
+  _setIndexRefreshCoordinatorForTests({
+    configLoader: () => ({
+      ...defaults(),
+      index_refresh: { ...defaults().index_refresh, debounce_ms: 60_000 },
+    }),
+  });
   store = new BackgroundProcessStore();
   setBackgroundStore(store);
   registry = new ForegroundLiveRegistry();
@@ -287,6 +301,7 @@ afterEach(() => {
   chatIpc.unregisterChatIPC();
   store.clear();
   registry.clear();
+  disposeIndexRefreshCoordinator();
 });
 
 // ── Snapshot target discrimination ───────────────────────────────────────────
