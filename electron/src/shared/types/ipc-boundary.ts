@@ -324,6 +324,8 @@ export interface RAGStoreStatus {
   totalFiles: number;
   lastIndexed: string | null;
   lastIndexDuration: number | null;
+  /** When the background index auto-refresh last landed RAG work (null = never). */
+  lastAutoRefresh: string | null;
 }
 
 /**
@@ -343,7 +345,34 @@ export interface ASTStoreStatus {
   totalSymbols: number;
   lastIndexed: string | null;
   lastIndexDuration: number | null;
+  /** When the background index auto-refresh last landed AST work (null = never). */
+  lastAutoRefresh: string | null;
 }
+
+// ── Index auto-refresh ───────────────────────────────────────────────────────
+
+/**
+ * `index:auto_refresh` push event — the background index auto-refresh
+ * lifecycle for one project, as a phase machine:
+ *
+ * - `started`: a flush is running for the listed indexes (`true` = that index
+ *   has work in this flush).
+ * - `landed`: work completed for the listed indexes; carries fresh post-flush
+ *   store statuses for each refreshed index.
+ * - `settled`: the flush finished (landed, failed, timed out, or was
+ *   requeued) — clears any in-progress indication. Always paired with a
+ *   preceding `started`.
+ */
+export type IndexAutoRefreshEvent =
+  | { phase: 'started'; rag: boolean; ast: boolean }
+  | { phase: 'settled'; rag: boolean; ast: boolean }
+  | {
+      phase: 'landed';
+      /** Fresh RAG store status (absent when RAG did not land work). */
+      rag?: RAGStatusResponse;
+      /** Fresh AST store status (absent when AST did not land work). */
+      ast?: ASTStoreStatus;
+    };
 
 // ── RAG Indexer ─────────────────────────────────────────────────────────────
 

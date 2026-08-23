@@ -500,12 +500,26 @@ describe('ASTStore', () => {
     expect(s.lastIndexDuration).toBe(1.5);
   });
 
+  it('should record auto-refresh separately from manual index metadata', () => {
+    const store = new ASTStore(tmpDir);
+    store.initDb();
+    expect(store.status().lastAutoRefresh).toBeNull();
+
+    store.recordAutoRefresh();
+    const s = store.status();
+    expect(s.lastAutoRefresh).toBeTruthy();
+    // The auto stamp must not leak into the manual-index fields.
+    expect(s.lastIndexed).toBeNull();
+    expect(s.lastIndexDuration).toBeNull();
+  });
+
   it('should return empty status for non-existent db', () => {
     const store = new ASTStore(tmpDir);
     const s = store.status();
     expect(s.totalFiles).toBe(0);
     expect(s.totalSymbols).toBe(0);
     expect(s.lastIndexed).toBeNull();
+    expect(s.lastAutoRefresh).toBeNull();
   });
 
   it('should filter symbols by type', () => {

@@ -197,6 +197,31 @@ export function ChatView({ isVisible = true, bootstrapConfig = null, onNotify, a
     }
   }, []);
 
+  // Background auto-refreshes (index refresh coordinator) push a lifecycle
+  // stream so the Workspace Index panel shows live busy state and fresh store
+  // statuses without polling. `started` marks the indexes a flush is running
+  // for, `landed` carries fresh statuses, `settled` clears the busy state on
+  // every outcome (failures included). The broadcast is routed per-window to
+  // the flushed project, mirroring the index progress events.
+  const [autoRefreshing, setAutoRefreshing] = useState<{ rag: boolean; ast: boolean }>({
+    rag: false,
+    ast: false,
+  });
+  useEffect(() => {
+    const unsubscribe = window.orchid?.index?.onAutoRefresh?.((event) => {
+      if (event.phase === 'started') {
+        setAutoRefreshing({ rag: event.rag, ast: event.ast });
+      } else if (event.phase === 'landed') {
+        if (event.rag) setRagStatus(event.rag);
+        if (event.ast) setAstStatus(event.ast);
+        setAutoRefreshing({ rag: false, ast: false });
+      } else {
+        setAutoRefreshing({ rag: false, ast: false });
+      }
+    });
+    return () => unsubscribe?.();
+  }, []);
+
   // Trusted-projects prompt: explicit interactions (bind result, send failure,
   // badge click) call openFor; granting re-resolves workspace + gated services.
   // useTrustSendReplay owns the #148 stash/replay/restore flow for gated sends
@@ -1463,6 +1488,7 @@ export function ChatView({ isVisible = true, bootstrapConfig = null, onNotify, a
           mcpServers={mcpServers}
           ragStatus={ragStatus}
           astStatus={astStatus}
+          autoRefreshing={autoRefreshing}
           onIndexRAG={handleIndexRAG}
           onIndexAST={handleIndexAST}
           onRefreshIndex={refreshIndex}

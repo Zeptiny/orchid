@@ -107,6 +107,7 @@ function makeRagIndexer(): RefreshRagIndexer {
     upsertFiles: vi.fn(async (): Promise<RAGIndexResult> => ({ ...RAG_RESULT })),
     deleteFiles: vi.fn(async (): Promise<void> => {}),
     indexProject: vi.fn(async (): Promise<RAGIndexResult> => ({ ...RAG_RESULT })),
+    touchAutoRefresh: vi.fn(),
   };
 }
 
@@ -115,6 +116,7 @@ function makeAstIndexer(): RefreshAstIndexer {
     upsertFiles: vi.fn(async (): Promise<ASTIncrementalResult> => ({ ...AST_INCREMENTAL_RESULT })),
     deleteFiles: vi.fn(async (): Promise<number> => 0),
     indexProject: vi.fn(async (): Promise<ASTIndexResult> => ({ ...AST_RESULT })),
+    touchAutoRefresh: vi.fn(),
   };
 }
 

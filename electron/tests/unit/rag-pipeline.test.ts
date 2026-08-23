@@ -525,6 +525,17 @@ describe('Store', () => {
     expect(status.lastIndexDuration).toBe(42.5);
   });
 
+  it('should record auto-refresh separately from manual index stamps', () => {
+    const store = new RAGStore(tmpDir);
+    store.initDb();
+    expect(store.status().lastAutoRefresh).toBeNull();
+
+    store.touchLastAutoRefresh();
+    const status = store.status();
+    expect(status.lastAutoRefresh).toBeTruthy();
+    expect(status.lastIndexed).toBeNull();
+  });
+
   it('should clear and return empty status', () => {
     const store = new RAGStore(tmpDir);
     store.initDb();

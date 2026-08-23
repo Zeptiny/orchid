@@ -13,6 +13,7 @@ const mocks = vi.hoisted(() => {
     totalSymbols: 20,
     lastIndexed: null,
     lastIndexDuration: null,
+    lastAutoRefresh: null,
   }));
   const dispose = vi.fn();
 
@@ -118,6 +119,7 @@ describe('ast:status / ast:index_state', () => {
       totalSymbols: 0,
       lastIndexed: null,
       lastIndexDuration: null,
+      lastAutoRefresh: null,
     });
     expect(mocks.ASTStore).not.toHaveBeenCalled();
   });
@@ -193,6 +195,7 @@ describe('ast trust gate (untrusted project)', () => {
       totalSymbols: 0,
       lastIndexed: null,
       lastIndexDuration: null,
+      lastAutoRefresh: null,
     });
     expect(mocks.ASTStore).not.toHaveBeenCalled();
   });
@@ -221,6 +224,7 @@ describe('ast trust gate (untrusted project)', () => {
         totalSymbols: 0,
         lastIndexed: null,
         lastIndexDuration: null,
+        lastAutoRefresh: null,
       });
       expect(mocks.ASTStore).not.toHaveBeenCalled();
     },

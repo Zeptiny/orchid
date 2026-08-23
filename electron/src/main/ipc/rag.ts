@@ -42,6 +42,7 @@ export function registerRAGIPC(): void {
         totalFiles: 0,
         lastIndexed: null,
         lastIndexDuration: null,
+        lastAutoRefresh: null,
       };
     }
     const status = getStatus(projectPath);

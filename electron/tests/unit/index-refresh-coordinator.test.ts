@@ -20,6 +20,11 @@
  * - A sentinel collision requeues only the collided index's entries (minor)
  * - disposeAsync awaits in-flight flushes and latches producers off
  * - A config-resolution failure drops the batch without wedging the pipeline
+ * - Successful flushes stamp last_auto_refresh per index and emit the
+ *   started/landed/settled lifecycle
+ * - Sentinel collisions, disabled flags, and failures skip their index's stamp
+ * - settled always follows started (failures included) so UI can never stick
+ * - A throwing notifier is swallowed and never fails the flush
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import * as path from 'node:path';
@@ -29,6 +34,7 @@ import {
   cancelProjectRefresh,
   disposeIndexRefreshCoordinator,
   disposeIndexRefreshCoordinatorAsync,
+  setIndexAutoRefreshNotifier,
   _setIndexRefreshCoordinatorForTests,
   _getPendingIndexRefreshForTests,
   type RefreshRagIndexer,
@@ -92,6 +98,7 @@ function makeRagIndexer(): RefreshRagIndexer {
     upsertFiles: vi.fn(async (): Promise<RAGIndexResult> => ({ ...RAG_RESULT })),
     deleteFiles: vi.fn(async (): Promise<RAGIndexResult> => ({ ...RAG_RESULT })),
     indexProject: vi.fn(async (): Promise<RAGIndexResult> => ({ ...RAG_RESULT })),
+    touchAutoRefresh: vi.fn(),
   };
 }
 
@@ -100,6 +107,7 @@ function makeAstIndexer(): RefreshAstIndexer {
     upsertFiles: vi.fn(async (): Promise<ASTIncrementalResult> => ({ ...AST_INCREMENTAL_RESULT })),
     deleteFiles: vi.fn(async (): Promise<number> => 0),
     indexProject: vi.fn(async (): Promise<ASTIndexResult> => ({ ...AST_RESULT })),
+    touchAutoRefresh: vi.fn(),
   };
 }
 
@@ -832,5 +840,186 @@ describe('index refresh coordinator', () => {
       rels: ['src/b.ts'],
       config,
     });
+  });
+
+  // ── Auto-refresh observability (last_auto_refresh + notification) ─────────
+
+  it('stamps both indexes and emits started → landed → settled on a successful flush', async () => {
+    const notifier = vi.fn();
+    setIndexAutoRefreshNotifier(notifier);
+
+    enqueueMutation(PROJECT, [{ rel: 'src/a.ts', op: 'upsert' }]);
+    await vi.advanceTimersByTimeAsync(DEBOUNCE_MS);
+
+    expect(rag.touchAutoRefresh).toHaveBeenCalledWith(PROJECT);
+    expect(ast.touchAutoRefresh).toHaveBeenCalledWith(PROJECT);
+    expect(notifier).toHaveBeenCalledTimes(3);
+    expect(notifier).toHaveBeenNthCalledWith(1, PROJECT, {
+      phase: 'started',
+      rag: true,
+      ast: true,
+    });
+    expect(notifier).toHaveBeenNthCalledWith(2, PROJECT, {
+      phase: 'landed',
+      rag: true,
+      ast: true,
+    });
+    expect(notifier).toHaveBeenNthCalledWith(3, PROJECT, {
+      phase: 'settled',
+      rag: true,
+      ast: true,
+    });
+  });
+
+  it('stamps after a dirty-scan flush and emits the full lifecycle', async () => {
+    const notifier = vi.fn();
+    setIndexAutoRefreshNotifier(notifier);
+
+    markDirty(PROJECT);
+    await vi.advanceTimersByTimeAsync(DEBOUNCE_MS);
+
+    expect(rag.indexProject).toHaveBeenCalledTimes(1);
+    expect(ast.indexProject).toHaveBeenCalledTimes(1);
+    expect(rag.touchAutoRefresh).toHaveBeenCalledWith(PROJECT);
+    expect(ast.touchAutoRefresh).toHaveBeenCalledWith(PROJECT);
+    expect(notifier).toHaveBeenNthCalledWith(1, PROJECT, {
+      phase: 'started',
+      rag: true,
+      ast: true,
+    });
+    expect(notifier).toHaveBeenLastCalledWith(PROJECT, {
+      phase: 'settled',
+      rag: true,
+      ast: true,
+    });
+  });
+
+  it('does not stamp or land the RAG side when the sentinel collides (AST still lands; settled still fires)', async () => {
+    const notifier = vi.fn();
+    setIndexAutoRefreshNotifier(notifier);
+    rag.upsertFiles.mockImplementationOnce(async (): Promise<RAGIndexResult> => ({
+      ...RAG_RESULT,
+      errors: ['Indexing already in progress'],
+    }));
+
+    enqueueMutation(PROJECT, [{ rel: 'src/a.ts', op: 'upsert' }]);
+    await vi.advanceTimersByTimeAsync(DEBOUNCE_MS);
+
+    expect(rag.touchAutoRefresh).not.toHaveBeenCalled();
+    expect(ast.touchAutoRefresh).toHaveBeenCalledWith(PROJECT);
+    expect(notifier).toHaveBeenNthCalledWith(1, PROJECT, {
+      phase: 'started',
+      rag: true,
+      ast: true,
+    });
+    expect(notifier).toHaveBeenNthCalledWith(2, PROJECT, {
+      phase: 'landed',
+      rag: false,
+      ast: true,
+    });
+    expect(notifier).toHaveBeenLastCalledWith(PROJECT, {
+      phase: 'settled',
+      rag: true,
+      ast: true,
+    });
+  });
+
+  it('skips a disabled index: no stamp, no started/landed flag for it', async () => {
+    const notifier = vi.fn();
+    setIndexAutoRefreshNotifier(notifier);
+    projectConfigOverride = withIndexRefresh({ rag: false });
+
+    enqueueMutation(PROJECT, [{ rel: 'src/a.ts', op: 'upsert' }]);
+    await vi.advanceTimersByTimeAsync(DEBOUNCE_MS);
+
+    expect(rag.upsertFiles).not.toHaveBeenCalled();
+    expect(rag.touchAutoRefresh).not.toHaveBeenCalled();
+    expect(ast.touchAutoRefresh).toHaveBeenCalledWith(PROJECT);
+    expect(notifier).toHaveBeenNthCalledWith(1, PROJECT, {
+      phase: 'started',
+      rag: false,
+      ast: true,
+    });
+    expect(notifier).toHaveBeenNthCalledWith(2, PROJECT, {
+      phase: 'landed',
+      rag: false,
+      ast: true,
+    });
+    expect(notifier).toHaveBeenLastCalledWith(PROJECT, {
+      phase: 'settled',
+      rag: false,
+      ast: true,
+    });
+  });
+
+  it('does not stamp or land an index whose branch failed, but settled still fires', async () => {
+    const notifier = vi.fn();
+    setIndexAutoRefreshNotifier(notifier);
+    ast.upsertFiles.mockImplementationOnce(async (): Promise<ASTIncrementalResult> => {
+      throw new Error('ast boom');
+    });
+
+    enqueueMutation(PROJECT, [{ rel: 'src/a.ts', op: 'upsert' }]);
+    await vi.advanceTimersByTimeAsync(DEBOUNCE_MS);
+
+    expect(ast.touchAutoRefresh).not.toHaveBeenCalled();
+    expect(rag.touchAutoRefresh).toHaveBeenCalledWith(PROJECT);
+    expect(notifier).toHaveBeenNthCalledWith(2, PROJECT, {
+      phase: 'landed',
+      rag: true,
+      ast: false,
+    });
+    expect(notifier).toHaveBeenLastCalledWith(PROJECT, {
+      phase: 'settled',
+      rag: true,
+      ast: true,
+    });
+  });
+
+  it('emits no lifecycle events when the trust gate drops the batch', async () => {
+    const notifier = vi.fn();
+    setIndexAutoRefreshNotifier(notifier);
+    trustState = 'untrusted';
+
+    enqueueMutation(PROJECT, [{ rel: 'src/a.ts', op: 'upsert' }]);
+    await vi.advanceTimersByTimeAsync(DEBOUNCE_MS);
+
+    expect(notifier).not.toHaveBeenCalled();
+    expect(rag.touchAutoRefresh).not.toHaveBeenCalled();
+    expect(ast.touchAutoRefresh).not.toHaveBeenCalled();
+  });
+
+  it('a throwing notifier is swallowed and logged, never failing the flush', async () => {
+    const notifier = vi.fn(() => {
+      throw new Error('notifier boom');
+    });
+    setIndexAutoRefreshNotifier(notifier);
+
+    enqueueMutation(PROJECT, [{ rel: 'src/a.ts', op: 'upsert' }]);
+    await vi.advanceTimersByTimeAsync(DEBOUNCE_MS);
+
+    // One throw per lifecycle phase (started / landed / settled) — all swallowed.
+    expect(notifier).toHaveBeenCalledTimes(3);
+    expect(warnSpy).toHaveBeenCalledWith(
+      '[index-refresh] auto-refresh notification failed',
+      expect.any(Error),
+    );
+    // The flush still fully drained — the batch is not retried.
+    expect(_getPendingIndexRefreshForTests(PROJECT)).toEqual({
+      entries: [],
+      dirty: false,
+      timerArmed: false,
+      flushing: false,
+    });
+  });
+
+  it('notifies only while a notifier is wired (null = no-op)', async () => {
+    setIndexAutoRefreshNotifier(null);
+
+    enqueueMutation(PROJECT, [{ rel: 'src/a.ts', op: 'upsert' }]);
+    await vi.advanceTimersByTimeAsync(DEBOUNCE_MS);
+
+    expect(rag.touchAutoRefresh).toHaveBeenCalledWith(PROJECT);
+    expect(ast.touchAutoRefresh).toHaveBeenCalledWith(PROJECT);
   });
 });

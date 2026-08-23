@@ -861,6 +861,24 @@ export function getStatus(projectPath?: string): RAGStoreStatus {
   );
 }
 
+/**
+ * Stamp `last_auto_refresh` for a project (see `RAGStore.touchLastAutoRefresh`).
+ * Called by the index refresh coordinator after a background flush lands RAG
+ * work; manual index runs keep using `last_indexed` only.
+ */
+export function touchAutoRefresh(projectPath?: string): void {
+  if (!projectPath) {
+    throw new Error('projectPath is required; pass the active workspace cwd');
+  }
+  withDisposable(
+    new RAGStore(projectPath),
+    (store) => {
+      store.initDb();
+      store.touchLastAutoRefresh();
+    },
+  );
+}
+
 export function clearIndex(projectPath?: string): void {
   if (!projectPath) {
     throw new Error('projectPath is required; pass the active workspace cwd');

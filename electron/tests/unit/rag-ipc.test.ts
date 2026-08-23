@@ -130,6 +130,7 @@ describe('rag:status / rag:index_state', () => {
       totalFiles: 0,
       lastIndexed: null,
       lastIndexDuration: null,
+      lastAutoRefresh: null,
     });
     expect(mocks.getStatus).not.toHaveBeenCalled();
   });
@@ -280,6 +281,7 @@ describe('rag trust gate (untrusted project)', () => {
       totalFiles: 0,
       lastIndexed: null,
       lastIndexDuration: null,
+      lastAutoRefresh: null,
     });
     expect(mocks.getStatus).not.toHaveBeenCalled();
   });
@@ -318,6 +320,7 @@ describe('rag trust gate (untrusted project)', () => {
         totalFiles: 0,
         lastIndexed: null,
         lastIndexDuration: null,
+        lastAutoRefresh: null,
       });
       expect(mocks.getStatus).not.toHaveBeenCalled();
     },

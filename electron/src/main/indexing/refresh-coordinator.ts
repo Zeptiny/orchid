@@ -9,6 +9,12 @@
  * Flushes fail closed on project trust (same gate as the rag/ast IPC) and
  * resolve config per project so `.orchid.json` overrides are honored.
  *
+ * Observability: a branch that lands work stamps the store's separate
+ * `last_auto_refresh` meta key and — via the wired notifier — triggers the
+ * `index:auto_refresh` lifecycle broadcast (started/landed/settled) so the
+ * renderer sees live busy state and fresh statuses without polling.
+ * `last_indexed` stays reserved for manual/full index runs.
+ *
  * Reliability rails:
  * - The debounce is bounded by a max-wait anchored at the first pending
  *   mutation, so sustained sub-window churn can never postpone a flush forever.
@@ -32,13 +38,13 @@ import type { TrustState } from '../../shared/types/ipc';
 /** The RAG indexer surface the coordinator consumes. */
 export type RefreshRagIndexer = Pick<
   typeof ragIndexer,
-  'upsertFiles' | 'deleteFiles' | 'indexProject'
+  'upsertFiles' | 'deleteFiles' | 'indexProject' | 'touchAutoRefresh'
 >;
 
 /** The AST indexer surface the coordinator consumes. */
 export type RefreshAstIndexer = Pick<
   typeof astIndexer,
-  'upsertFiles' | 'deleteFiles' | 'indexProject'
+  'upsertFiles' | 'deleteFiles' | 'indexProject' | 'touchAutoRefresh'
 >;
 
 /** One queued file mutation. */
@@ -122,6 +128,29 @@ const RAG_INDEX_BUSY_ERROR = 'Indexing already in progress';
 
 /** Pending + in-flight state keyed by resolved project path. */
 const refreshStates = new Map<string, ProjectRefreshState>();
+
+/**
+ * Sink notified with the auto-refresh lifecycle for a flush. Wired by the IPC
+ * layer (which owns window routing) to broadcast the `index:auto_refresh`
+ * push event: `started` when a flush begins running work, `landed` when an
+ * index completes work, `settled` when the flush finishes (any outcome).
+ */
+export type IndexAutoRefreshNotification =
+  | { phase: 'started'; rag: boolean; ast: boolean }
+  | { phase: 'settled'; rag: boolean; ast: boolean }
+  | { phase: 'landed'; rag: boolean; ast: boolean };
+
+export type IndexAutoRefreshNotifier = (
+  projectPath: string,
+  event: IndexAutoRefreshNotification,
+) => void;
+
+let autoRefreshNotifier: IndexAutoRefreshNotifier | null = null;
+
+/** Wire (or clear, with null) the auto-refresh lifecycle sink. */
+export function setIndexAutoRefreshNotifier(notifier: IndexAutoRefreshNotifier | null): void {
+  autoRefreshNotifier = notifier;
+}
 
 let ragIndexerOverride: RefreshRagIndexer | null = null;
 let astIndexerOverride: RefreshAstIndexer | null = null;
@@ -310,6 +339,8 @@ async function runFlush(
   scopes: Map<string, RefreshScope>,
   dirty: boolean,
 ): Promise<void> {
+  /** Which indexes this flush is running work for — drives lifecycle events. */
+  let flushActive: { rag: boolean; ast: boolean } | null = null;
   try {
     if (!projectTrusted(state.projectPath)) {
       console.warn('[index-refresh] project not trusted; dropping batch', state.projectPath);
@@ -340,6 +371,18 @@ async function runFlush(
     }
 
     const { projectPath } = state;
+    // Which indexes completed work this flush (post-stamp) — drives the
+    // auto-refresh notification. Only set after the branch's stamp landed, so
+    // a failed, timed-out, or sentinel-collided branch never reports itself.
+    const refreshed: { rag: boolean; ast: boolean } = { rag: false, ast: false };
+    // Announce the flush before it starts, scoped to the indexes that actually
+    // have work (an index with no entries in this batch never runs).
+    const ragActive = flags.rag && (ragUpserts.length > 0 || ragDeletes.length > 0 || dirty);
+    const astActive = flags.ast && (astUpserts.length > 0 || astDeletes.length > 0 || dirty);
+    if (ragActive || astActive) {
+      flushActive = { rag: ragActive, ast: astActive };
+      notifyAutoRefresh(projectPath, { phase: 'started', ...flushActive });
+    }
     // Different stores, so the two indexes may refresh concurrently; each
     // index's own work stays sequential (its runs are per-project single-flight).
     const outcomes = await Promise.all([
@@ -362,6 +405,9 @@ async function runFlush(
         }
         if (mutationsCollided || dirtyScanCollided) {
           requeueRagCollision(state, entries, scopes, dirtyScanCollided);
+        } else if (ragUpserts.length > 0 || ragDeletes.length > 0 || dirty) {
+          rag.touchAutoRefresh(projectPath);
+          refreshed.rag = true;
         }
       }),
       runIndexBranch('ast', async () => {
@@ -376,8 +422,15 @@ async function runFlush(
         if (dirty) {
           await ast.indexProject({ projectPath, config });
         }
+        if (astUpserts.length > 0 || astDeletes.length > 0 || dirty) {
+          ast.touchAutoRefresh(projectPath);
+          refreshed.ast = true;
+        }
       }),
     ]);
+    if (!state.cancelled && (refreshed.rag || refreshed.ast)) {
+      notifyAutoRefresh(projectPath, { phase: 'landed', rag: refreshed.rag, ast: refreshed.ast });
+    }
     if (outcomes.includes('failed')) {
       retryOrDropFailedFlush(state);
     } else if (!outcomes.includes('timeout')) {
@@ -385,6 +438,11 @@ async function runFlush(
       state.failureRetried = false;
     }
   } finally {
+    // Settled fires for every outcome (landed, failed, timeout, cancelled,
+    // requeued) so an in-progress indication can never stick.
+    if (flushActive !== null) {
+      notifyAutoRefresh(state.projectPath, { phase: 'settled', ...flushActive });
+    }
     state.flushing = false;
     if (!state.cancelled && (state.pending.size > 0 || state.dirty)) scheduleFlush(state);
   }
@@ -393,6 +451,19 @@ async function runFlush(
 /** The RAG indexer reports single-flight collisions as a success-shaped sentinel. */
 function isRagBusy(result: RAGIndexResult): boolean {
   return result.errors.includes(RAG_INDEX_BUSY_ERROR);
+}
+
+/** Fire-and-forget lifecycle notification — never fails the flush (R2). */
+function notifyAutoRefresh(
+  projectPath: string,
+  event: IndexAutoRefreshNotification,
+): void {
+  if (autoRefreshNotifier === null) return;
+  try {
+    autoRefreshNotifier(projectPath, event);
+  } catch (error) {
+    console.warn('[index-refresh] auto-refresh notification failed', error);
+  }
 }
 
 /**
@@ -620,6 +691,7 @@ export function _setIndexRefreshCoordinatorForTests(overrides: {
   projectConfigResolverOverride = overrides.projectConfigResolver ?? null;
   trustStateResolverOverride = overrides.trustStateResolver ?? null;
   flushTimeoutMsOverride = overrides.flushTimeoutMs ?? null;
+  autoRefreshNotifier = null;
   disposed = false;
   disposedLogged = false;
 }

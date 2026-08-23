@@ -63,6 +63,7 @@ function makeRagIndexer(): RefreshRagIndexer {
     upsertFiles: async (): Promise<RAGIndexResult> => ({ ...RAG_RESULT }),
     deleteFiles: async (): Promise<void> => {},
     indexProject: async (): Promise<RAGIndexResult> => ({ ...RAG_RESULT }),
+    touchAutoRefresh: () => {},
   };
 }
 
@@ -71,6 +72,7 @@ function makeAstIndexer(): RefreshAstIndexer {
     upsertFiles: async (): Promise<ASTIncrementalResult> => ({ ...AST_INCREMENTAL_RESULT }),
     deleteFiles: async (): Promise<number> => 0,
     indexProject: async (): Promise<ASTIndexResult> => ({ ...AST_RESULT }),
+    touchAutoRefresh: () => {},
   };
 }
 

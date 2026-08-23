@@ -56,6 +56,7 @@ import type {
   ASTIndexResult,
   ASTIndexProgress,
   IndexRunState,
+  IndexAutoRefreshEvent,
   RAGConfig,
   AgentsMdConfig,
   IndexRefreshConfig,
@@ -97,6 +98,7 @@ export type {
   ASTIndexResult,
   ASTIndexProgress,
   IndexRunState,
+  IndexAutoRefreshEvent,
   RAGConfig,
   AgentsMdConfig,
   IndexRefreshConfig,
@@ -1588,6 +1590,17 @@ export interface OrchidAPI {
     onProgress: (callback: (progress: ASTIndexProgress) => void) => () => void;
   };
 
+  index: {
+    /**
+     * Subscribe to the background auto-refresh lifecycle: `started` while a
+     * flush is running, `landed` with fresh store statuses when work lands,
+     * `settled` when the flush finishes (any outcome).
+     */
+    onAutoRefresh: (
+      callback: (event: IndexAutoRefreshEvent) => void,
+    ) => () => void;
+  };
+
   bgCmd: {
     snapshot: (request: BgCommandSnapshotRequest) => Promise<BgCommandSnapshotResult>;
     /** List the session's background fleet across agent scopes (running-first). */
@@ -1792,6 +1805,10 @@ export const IPC_CHANNELS = {
   /** Push event: live AST index progress from worker. */
   AST_PROGRESS: 'ast:progress',
 
+  // Index auto-refresh
+  /** Push event: background index auto-refresh lifecycle (started/landed/settled). */
+  INDEX_AUTO_REFRESH: 'index:auto_refresh',
+
   // Background Commands
   BG_CMD_SNAPSHOT: 'bgcmd:snapshot',
   BG_CMD_LIST: 'bgcmd:list',
@@ -1976,6 +1993,7 @@ export const ALLOWED_EVENT_CHANNELS = [
   IPC_CHANNELS.PROJECT_TRUST_CHANGED,
   IPC_CHANNELS.RAG_PROGRESS,
   IPC_CHANNELS.AST_PROGRESS,
+  IPC_CHANNELS.INDEX_AUTO_REFRESH,
   IPC_CHANNELS.BG_CMD_CHANGED,
   IPC_CHANNELS.ASK_QUESTION_ASKED,
   IPC_CHANNELS.ASK_QUESTION_SETTLED,

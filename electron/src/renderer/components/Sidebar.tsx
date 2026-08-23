@@ -76,6 +76,8 @@ interface SidebarProps {
   mcpServers: MCPServerStatus[];
   ragStatus?: RAGStoreStatus | null;
   astStatus?: ASTStoreStatus | null;
+  /** Background auto-refresh busy flags (index refresh coordinator flush). */
+  autoRefreshing?: { rag: boolean; ast: boolean };
   onIndexRAG?: () => void | Promise<void>;
   onIndexAST?: () => void | Promise<void>;
   /** Refresh RAG/AST store status (after a run completes, including late-join). */
@@ -118,6 +120,7 @@ export const Sidebar = memo(function Sidebar({
   mcpServers,
   ragStatus = null,
   astStatus = null,
+  autoRefreshing,
   onIndexRAG,
   onIndexAST,
   onRefreshIndex,
@@ -277,6 +280,7 @@ export const Sidebar = memo(function Sidebar({
           <IndexSection
             ragStatus={ragStatus}
             astStatus={astStatus}
+            autoRefreshing={autoRefreshing}
             onIndexRAG={onIndexRAG}
             onIndexAST={onIndexAST}
             onRefreshIndex={onRefreshIndex}
@@ -655,6 +659,7 @@ function TodosSection({ state }: TodosSectionProps) {
 interface IndexSectionProps {
   ragStatus: RAGStoreStatus | null;
   astStatus: ASTStoreStatus | null;
+  autoRefreshing?: { rag: boolean; ast: boolean };
   onIndexRAG?: () => void | Promise<void>;
   onIndexAST?: () => void | Promise<void>;
   onRefreshIndex?: () => void | Promise<void>;
@@ -663,6 +668,7 @@ interface IndexSectionProps {
 function IndexSection({
   ragStatus,
   astStatus,
+  autoRefreshing,
   onIndexRAG,
   onIndexAST,
   onRefreshIndex,
@@ -815,6 +821,23 @@ function IndexSection({
           </span>
         </div>
       )}
+      {autoRefreshing?.rag && (
+        <div className="inspector-row">
+          <span className="subtle">Auto-refresh</span>
+          <span className="subtle text-right inline-flex items-center justify-end gap-1">
+            <Spinner size="xs" />
+            running
+          </span>
+        </div>
+      )}
+      {ragStatus?.lastAutoRefresh && !indexingRag && (
+        <div className="inspector-row">
+          <span className="subtle">Auto-refreshed</span>
+          <span className="subtle text-right">
+            {formatRelativeTime(ragStatus.lastAutoRefresh)}
+          </span>
+        </div>
+      )}
 
       <div className="inspector-row">
         <strong>AST</strong>
@@ -840,6 +863,23 @@ function IndexSection({
             {astStatus.lastIndexDuration != null
               ? ` · ${astStatus.lastIndexDuration.toFixed(1)}s`
               : ''}
+          </span>
+        </div>
+      )}
+      {autoRefreshing?.ast && (
+        <div className="inspector-row">
+          <span className="subtle">Auto-refresh</span>
+          <span className="subtle text-right inline-flex items-center justify-end gap-1">
+            <Spinner size="xs" />
+            running
+          </span>
+        </div>
+      )}
+      {astStatus?.lastAutoRefresh && !indexingAst && (
+        <div className="inspector-row">
+          <span className="subtle">Auto-refreshed</span>
+          <span className="subtle text-right">
+            {formatRelativeTime(astStatus.lastAutoRefresh)}
           </span>
         </div>
       )}

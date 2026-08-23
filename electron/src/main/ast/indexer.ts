@@ -13,7 +13,7 @@ import { langForExtension, loadQueryFile, parseFile, runQuery } from './parser';
 import { ASTStore, type Symbol } from './store';
 import { getConfig, type Config } from '../config';
 import { INDEX_SKIP_DIR_NAMES } from '../indexing/skip-dirs';
-import { withDisposableAsync } from '../utils/with-disposable';
+import { withDisposable, withDisposableAsync } from '../utils/with-disposable';
 import type { ASTIndexResult, ASTIndexProgress } from '../../shared/types/ipc-boundary';
 
 export type ASTIndexProgressCallback = (progress: ASTIndexProgress) => void;
@@ -488,6 +488,21 @@ export async function runUpsertFilesImpl(opts: UpsertFilesOptions): Promise<ASTI
 export interface DeleteFilesOptions {
   /** @internal Test-only worker entry override for deterministic worker tests. */
   workerPath?: string;
+}
+
+/**
+ * Stamp `last_auto_refresh` for a project (see `ASTStore.recordAutoRefresh`).
+ * Called by the index refresh coordinator after a background flush lands AST
+ * work; manual index runs keep using `last_indexed` only.
+ */
+export function touchAutoRefresh(projectPath: string): void {
+  withDisposable(
+    new ASTStore(projectPath),
+    (store) => {
+      store.initDb();
+      store.recordAutoRefresh();
+    },
+  );
 }
 
 /**

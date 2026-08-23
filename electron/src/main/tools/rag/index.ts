@@ -55,6 +55,7 @@ export const ragIndexHandler: ToolHandler = async (
         totalChunks: status.totalChunks,
         totalFiles: status.totalFiles,
         lastIndexed: status.lastIndexed ?? 'never',
+        lastAutoRefresh: status.lastAutoRefresh ?? 'never',
         lastDuration: status.lastIndexDuration != null
           ? status.lastIndexDuration.toFixed(1) + 's'
           : 'N/A',

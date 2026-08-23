@@ -40,6 +40,7 @@ export function registerASTIPC(): void {
         totalSymbols: 0,
         lastIndexed: null,
         lastIndexDuration: null,
+        lastAutoRefresh: null,
       };
     }
     return withDisposable(
