@@ -114,6 +114,13 @@ import type {
   ProjectTrustInfo,
   ProjectTrustChangedEvent,
   TrustedProjectEntry,
+  MachineCreateMessage,
+  MachineDeleteMessage,
+  MachineDeleteResult,
+  MachineListResult,
+  MachineUpdateMessage,
+  MachinesChangedEvent,
+  RemoteMachineRecord,
   StartupSnapshot,
   StartupContinueDegradedResult,
   CompactionProgressEvent,
@@ -136,6 +143,7 @@ import {
   debugSessionRequestsResultSchema,
   debugRequestCaptureResultSchema,
 } from '../shared/types/debug';
+import { remoteMachineRecordSchema } from '../shared/types/machine';
 import type {
   DebugSessionRequestsResult,
   DebugRequestCaptureResult,
@@ -187,6 +195,8 @@ import {
   projectTrustInfoSchema,
   projectTrustChangedEventSchema,
   trustedProjectEntrySchema,
+  machineListResultSchema,
+  machinesChangedEventSchema,
 } from '../shared/types/ipc-schemas';
 
 // ── Security helpers ─────────────────────────────────────────────────────────
@@ -233,6 +243,9 @@ const INVOKE_RESULT_SCHEMAS: Partial<Record<string, z.ZodTypeAny>> = {
   [IPC_CHANNELS.PROJECT_TRUST_GET]: projectTrustInfoSchema,
   [IPC_CHANNELS.PROJECT_TRUST_SET]: projectTrustInfoSchema,
   [IPC_CHANNELS.PROJECT_TRUST_LIST]: z.array(trustedProjectEntrySchema),
+  [IPC_CHANNELS.MACHINES_LIST]: machineListResultSchema,
+  [IPC_CHANNELS.MACHINES_CREATE]: remoteMachineRecordSchema,
+  [IPC_CHANNELS.MACHINES_UPDATE]: remoteMachineRecordSchema,
   [IPC_CHANNELS.DEBUG_SESSION_REQUESTS]: debugSessionRequestsResultSchema,
   [IPC_CHANNELS.DEBUG_REQUEST_CAPTURE]: debugRequestCaptureResultSchema,
 };
@@ -587,6 +600,23 @@ const orchidAPI: OrchidAPI = {
 
     onChanged: (callback: (event: ProjectTrustChangedEvent) => void) =>
       onParsed(IPC_CHANNELS.PROJECT_TRUST_CHANGED, projectTrustChangedEventSchema, callback),
+  },
+
+  machines: {
+    list: () =>
+      invoke<MachineListResult>(IPC_CHANNELS.MACHINES_LIST),
+
+    create: (message: MachineCreateMessage) =>
+      invoke<RemoteMachineRecord>(IPC_CHANNELS.MACHINES_CREATE, message),
+
+    update: (message: MachineUpdateMessage) =>
+      invoke<RemoteMachineRecord>(IPC_CHANNELS.MACHINES_UPDATE, message),
+
+    delete: (message: MachineDeleteMessage) =>
+      invoke<MachineDeleteResult>(IPC_CHANNELS.MACHINES_DELETE, message),
+
+    onChanged: (callback: (event: MachinesChangedEvent) => void) =>
+      onParsed(IPC_CHANNELS.MACHINES_CHANGED, machinesChangedEventSchema, callback),
   },
 
   subagents: {

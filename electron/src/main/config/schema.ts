@@ -6,6 +6,7 @@ import { z } from 'zod';
 import type { Config } from '../../shared/types/ipc-boundary';
 import { PERMISSION_MODE_VALUES } from '../../shared/types/permission';
 import { modelSelectionSchema } from '../../shared/types/provider';
+import { remoteMachineRecordSchema } from '../../shared/types/machine';
 import { COMPACTION_MODES } from '../../shared/types/message';
 export { COMPACTION_MODES };
 
@@ -183,6 +184,12 @@ export const compactionConfigSchema = z
   })
   .default({});
 
+/**
+ * User-added SSH remote machines. Metadata only (no secrets) — the implicit
+ * local machine is synthesized by the machine registry and never stored.
+ */
+export const machinesConfigSchema = z.array(remoteMachineRecordSchema).default([]);
+
 // ---------------------------------------------------------------------------
 // Main config schema
 // ---------------------------------------------------------------------------
@@ -337,6 +344,7 @@ export const configSchema = z
     read_output_long_poll_max: z.number().positive().max(300).default(60),
     llm_retry_backoff_base: z.number().min(0.01).max(10).default(0.2),
     llm_retry_max_delay: z.number().positive().max(300).default(30),
+    machines: machinesConfigSchema,
   })
   .strict();
 

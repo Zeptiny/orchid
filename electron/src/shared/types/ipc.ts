@@ -31,6 +31,12 @@ import type {
   ProviderProtocol,
 } from './provider';
 import type {
+  MachineCreateInput,
+  MachineRecord,
+  MachineUpdateInput,
+  RemoteMachineRecord,
+} from './machine';
+import type {
   AgentSaveMessage,
   DefinitionDeleteMessage,
   DefinitionRevealMessage,
@@ -112,6 +118,40 @@ export type {
 } from './ipc-boundary';
 
 export type { CompactionProgressEvent, CompactionProgressPhase } from './compaction-progress';
+
+export type {
+  LocalMachineRecord,
+  MachineKind,
+  MachineRecord,
+  RemoteMachineRecord,
+} from './machine';
+
+// ── Machines API ─────────────────────────────────────────────────────────────
+
+export type MachineCreateMessage = MachineCreateInput;
+
+export interface MachineUpdateMessage {
+  id: string;
+  patch: MachineUpdateInput;
+}
+
+export interface MachineDeleteMessage {
+  id: string;
+}
+
+/** Local machine first, then remote machines sorted by label. */
+export interface MachineListResult {
+  machines: MachineRecord[];
+}
+
+export type MachineDeleteResult =
+  | { status: 'deleted'; machine: RemoteMachineRecord }
+  | { status: 'not_found' };
+
+/** Push event: the machine registry changed (any create/update/delete). */
+export interface MachinesChangedEvent {
+  machines: MachineRecord[];
+}
 
 // ── Chat API ─────────────────────────────────────────────────────────────────
 
@@ -551,6 +591,8 @@ export type ConfigPatch = {
   read_output_long_poll_max?: number;
   llm_retry_backoff_base?: number;
   llm_retry_max_delay?: number;
+  /** Whole-array replacement; the machine registry owns per-record edits. */
+  machines?: RemoteMachineRecord[];
 };
 
 export interface ConfigSaveMessage {
@@ -1524,6 +1566,19 @@ export interface OrchidAPI {
     onChanged: (callback: (event: ProjectTrustChangedEvent) => void) => () => void;
   };
 
+  machines: {
+    /** Local machine first, then remote machines sorted by label. */
+    list: () => Promise<MachineListResult>;
+    /** Add an SSH remote machine; broadcasts machines:changed. */
+    create: (message: MachineCreateMessage) => Promise<RemoteMachineRecord>;
+    /** Patch editable fields of one remote machine; broadcasts machines:changed. */
+    update: (message: MachineUpdateMessage) => Promise<RemoteMachineRecord>;
+    /** Remove one remote machine; broadcasts machines:changed. */
+    delete: (message: MachineDeleteMessage) => Promise<MachineDeleteResult>;
+    /** The machine registry changed; carries the fresh ordered list. */
+    onChanged: (callback: (event: MachinesChangedEvent) => void) => () => void;
+  };
+
   subagents: {
     snapshot: (request: SubagentSnapshotRequest) => Promise<SubagentSnapshot>;
     /** Fetch the full durable transcript for the currently selected row. */
@@ -1770,6 +1825,15 @@ export const IPC_CHANNELS = {
   /** Push event: trust state changed for one project dir. */
   PROJECT_TRUST_CHANGED: 'project:trust_changed',
 
+  // Machines
+  /** List machines: implicit local machine first, then remotes by label. */
+  MACHINES_LIST: 'machines:list',
+  MACHINES_CREATE: 'machines:create',
+  MACHINES_UPDATE: 'machines:update',
+  MACHINES_DELETE: 'machines:delete',
+  /** Push event: the machine registry changed (any create/update/delete). */
+  MACHINES_CHANGED: 'machines:changed',
+
   // Tool
   TOOL_EXECUTE: 'tool:execute',
 
@@ -1920,6 +1984,10 @@ export const ALLOWED_INVOKE_CHANNELS = [
   IPC_CHANNELS.PROJECT_TRUST_GET,
   IPC_CHANNELS.PROJECT_TRUST_SET,
   IPC_CHANNELS.PROJECT_TRUST_LIST,
+  IPC_CHANNELS.MACHINES_LIST,
+  IPC_CHANNELS.MACHINES_CREATE,
+  IPC_CHANNELS.MACHINES_UPDATE,
+  IPC_CHANNELS.MACHINES_DELETE,
   IPC_CHANNELS.TOOL_EXECUTE,
   IPC_CHANNELS.AGENT_SAVE,
   IPC_CHANNELS.AGENT_DELETE,
@@ -1991,6 +2059,7 @@ export const ALLOWED_EVENT_CHANNELS = [
   IPC_CHANNELS.SESSION_ACTIVITY_CHANGED,
   IPC_CHANNELS.SESSION_WORKING_SET_CHANGED,
   IPC_CHANNELS.PROJECT_TRUST_CHANGED,
+  IPC_CHANNELS.MACHINES_CHANGED,
   IPC_CHANNELS.RAG_PROGRESS,
   IPC_CHANNELS.AST_PROGRESS,
   IPC_CHANNELS.INDEX_AUTO_REFRESH,

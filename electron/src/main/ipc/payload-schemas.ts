@@ -6,6 +6,11 @@
  */
 import { z } from 'zod';
 import { modelSelectionSchema } from '../../shared/types/provider';
+import {
+  machineCreateSchema,
+  machineIdSchema,
+  machineUpdateSchema,
+} from '../../shared/types/machine';
 import { configSchema, permissionRuleSchema, compactionScopeSchema, compactionSubagentsScopeSchema } from '../config/schema';
 
 // ── Chat ─────────────────────────────────────────────────────────────────────
@@ -203,6 +208,23 @@ export const projectTrustSetSchema = z.object({
   cwd: z.string().min(1),
   trusted: z.boolean(),
 });
+
+// ── Machines ─────────────────────────────────────────────────────────────────
+
+export const machinesCreateSchema = machineCreateSchema;
+
+export const machinesUpdateSchema = z
+  .object({
+    id: machineIdSchema,
+    patch: machineUpdateSchema,
+  })
+  .strict();
+
+export const machinesDeleteSchema = z
+  .object({
+    id: machineIdSchema,
+  })
+  .strict();
 
 export const sessionSetReasoningEffortSchema = z.object({
   effort: z.union([

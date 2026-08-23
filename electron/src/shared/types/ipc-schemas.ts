@@ -12,6 +12,7 @@ import {
 } from './message';
 import { subagentStatusSchema } from './subagent';
 import { STARTUP_STEP_DEFINITIONS, type StartupStepId } from './ipc-boundary';
+import { machineRecordSchema } from './machine';
 import { toolCallSchema } from './tool';
 import {
   canonicalToolResultSchema,
@@ -383,6 +384,17 @@ export const trustedProjectEntrySchema = z.object({
   projectDir: z.string().min(1),
   trustedAt: z.string(),
   state: trustStateSchema,
+});
+
+// ── Machines ─────────────────────────────────────────────────────────────────
+
+/** The local machine is always present, so a machine list is never empty. */
+export const machineListResultSchema = z.object({
+  machines: z.array(machineRecordSchema).min(1),
+});
+
+export const machinesChangedEventSchema = z.object({
+  machines: z.array(machineRecordSchema).min(1),
 });
 
 export const sessionTodosChangedEventSchema = z.object({

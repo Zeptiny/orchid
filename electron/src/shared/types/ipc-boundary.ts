@@ -11,6 +11,7 @@
 
 import type { ModelSelection } from './provider';
 import type { PermissionMode } from './permission';
+import type { RemoteMachineRecord } from './machine';
 import { COMPACTION_MODES } from './message';
 
 // ── Startup ─────────────────────────────────────────────────────────────────
@@ -298,6 +299,11 @@ export interface Config {
   read_output_long_poll_max: number;
   llm_retry_backoff_base: number;
   llm_retry_max_delay: number;
+  /**
+   * User-added SSH remote machines. The implicit local machine is never
+   * stored here; it is synthesized by the machine registry at read time.
+   */
+  machines: RemoteMachineRecord[];
 }
 
 // ── MCP ─────────────────────────────────────────────────────────────────────
