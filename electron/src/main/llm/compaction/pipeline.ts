@@ -4,7 +4,7 @@
  * One engine owns the gate sequence every compaction fire point shares:
  * calibrate → threshold/hysteresis gate → cut selection (exempt user ids) →
  * mechanical reclaim → trigger evaluation with the reclaim short-circuit.
- * Scope adapters (`ipc/chat/compaction.ts` for main, `agents/subagent-compaction.ts`
+ * Scope adapters (`host/chat/compaction.ts` for main, `agents/subagent-compaction.ts`
  * for subagents) own everything the gate deliberately does not: summarizer
  * execution, trigger-state mutation, persistence, and widget routing.
  *

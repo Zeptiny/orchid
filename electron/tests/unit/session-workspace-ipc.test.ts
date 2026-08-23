@@ -30,6 +30,7 @@ const mocks = vi.hoisted(() => {
   let activeSession: SessionShape | null = null;
   const activeSessionsByWindow = new Map<string, SessionShape | null>();
   const electronWebContents = {
+    fromId: vi.fn(() => null),
     getAllWebContents: vi.fn(() => []),
   };
 
@@ -265,6 +266,8 @@ vi.mock('../../src/main/ipc/chat', () => ({
 
 let sessionIpc: typeof import('../../src/main/ipc/session');
 let workspace: typeof import('../../src/main/project/workspace');
+let hostEvents: typeof import('../../src/main/host/events');
+let electronSink: typeof import('../../src/main/ipc/chat/events');
 let tmpProject: string;
 let otherProject: string;
 let homeDir: string;
@@ -288,6 +291,11 @@ beforeEach(async () => {
   // Avoid resetModules so electron/chat mocks stay applied for require('./chat')
   sessionIpc = await import('../../src/main/ipc/session');
   workspace = await import('../../src/main/project/workspace');
+  hostEvents = await import('../../src/main/host/events');
+  electronSink = await import('../../src/main/ipc/chat/events');
+  // Session events ride the host event sink; install the Electron one (the
+  // chat IPC module that normally installs it is mocked out above).
+  hostEvents.setHostEventSink(electronSink.electronHostEventSink);
 
   // Ensure singleton methods are our mocks (first import constructs real manager)
   const mgr = sessionIpc.getSessionManager();
@@ -314,6 +322,7 @@ beforeEach(async () => {
 
 afterEach(() => {
   sessionIpc.unregisterSessionIPC();
+  hostEvents.setHostEventSink(null);
   workspace.clearAllDraftCwds();
   mocks.handlers.clear();
   mocks.sessionManager._reset();

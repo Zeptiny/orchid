@@ -210,7 +210,7 @@ vi.mock('../../src/main/project/runtime', () => ({
   getProjectRuntimeRegistry: () => ({ get: vi.fn() }),
 }));
 
-vi.mock('../../src/main/ipc/session-activity', () => ({
+vi.mock('../../src/main/session/activity-live', () => ({
   publishSessionActivity: vi.fn(),
   completeSessionActivity: vi.fn(),
 }));
@@ -978,7 +978,7 @@ describe('foreground registry abort/stop cleanup (#12)', () => {
     // Sanity: snapshot is visible before abort.
     expect(registry.snapshotForSession('call-via-abort', 50, SESSION_A)).toBeDefined();
 
-    const { forceAbortSession } = await import('../../src/main/ipc/chat/abort');
+    const { forceAbortSession } = await import('../../src/main/host/chat/abort');
     forceAbortSession(SESSION_A);
 
     expect(registry.snapshotForSession('call-via-abort', 50, SESSION_A)).toBeUndefined();
@@ -1011,7 +1011,7 @@ describe('foreground registry abort/stop cleanup (#12)', () => {
     // Directly exercise the dropSession contract exercised by chat:stop's
     // confirm path and by forceStopSession. The handler itself is exercised
     // more fully in chat-ipc.test.ts; this asserts the registry seam.
-    const { forceStopSession } = await import('../../src/main/ipc/chat/abort');
+    const { forceStopSession } = await import('../../src/main/host/chat/abort');
     forceStopSession(SESSION_A);
 
     expect(registry.get('call-via-stop')).toBeUndefined();

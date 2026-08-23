@@ -5,7 +5,7 @@ import { getSessionManager } from '../../session/singleton';
 import { getBackgroundStore } from '../../tools/process/background-store';
 import { getForegroundLiveRegistry } from '../../tools/process/foreground-live';
 import { getSubagentManager } from '../../tools';
-import { completeSessionActivity } from '../session-activity';
+import { completeSessionActivity } from '../../session/activity-live';
 import {
   activeAgents,
   nextAgentGeneration,
@@ -17,7 +17,7 @@ import {
   persistTurnConversation,
   turnMessagesFromAgent,
 } from './persist';
-import { sendChatState, sendTurnEvent, webContentsForWindowId } from './events';
+import { canDeliverTo, sendChatState, sendTurnEvent } from './events';
 import { triggerInterruptedTurnAutoName } from './title';
 
 export function disposeActiveAgent(sessionId: string, active: ActiveAgent): void {
@@ -117,7 +117,6 @@ export function forceAbortMainTurn(
       fullHistory = [...existing.messages, ...existing.turnMessages];
       if (fullHistory.length > 0) {
         try {
-          const wc = webContentsForWindowId(existing.windowId);
           persistTurnConversation(
             sessionId,
             fullHistory,
@@ -125,7 +124,8 @@ export function forceAbortMainTurn(
             ChainStatus.INTERRUPTED,
             existing.agent,
             existing.selection,
-            wc ?? undefined,
+            // The old resolver gated the event on a live originating window.
+            canDeliverTo(existing.windowId) ? existing.windowId : null,
           );
         } catch (err) {
           console.debug(
@@ -155,12 +155,11 @@ export function forceAbortMainTurn(
   );
 
   if (options.emitTerminalEvents) {
-    const ownerWebContents = webContentsForWindowId(existing.windowId);
-    if (ownerWebContents) {
+    if (canDeliverTo(existing.windowId)) {
       const response = context?.response ?? '';
       const usage = context?.usage ?? null;
       try {
-        sendTurnEvent(ownerWebContents, existing, IPC_CHANNELS.CHAT_DONE, {
+        sendTurnEvent(existing.windowId, existing, IPC_CHANNELS.CHAT_DONE, {
           type: 'done',
           response,
           messages: terminalMessages,
@@ -171,7 +170,7 @@ export function forceAbortMainTurn(
         console.debug('Failed to emit CHAT_DONE on main-turn abort (non-fatal):', err);
       }
       try {
-        sendChatState(ownerWebContents, existing, {
+        sendChatState(existing.windowId, existing, {
           state: 'idle',
           error: null,
           interruptState: 'idle',
@@ -213,8 +212,7 @@ export function forceStopSession(sessionId: string): boolean {
     return true;
   }
 
-  const ownerWebContents =
-    webContentsForWindowId(existing.windowId) ?? null;
+  const ownerClientId = canDeliverTo(existing.windowId) ? existing.windowId : null;
   existing.agentCancelled = true;
   existing.finalized = true;
   const context = existing.actor.getSnapshot().context as AgentContext;
@@ -230,7 +228,7 @@ export function forceStopSession(sessionId: string): boolean {
       ChainStatus.INTERRUPTED,
       existing.agent,
       existing.selection,
-      ownerWebContents ?? undefined,
+      ownerClientId,
     );
   }
   existing.messages = fullHistory;
@@ -241,15 +239,15 @@ export function forceStopSession(sessionId: string): boolean {
     getSessionManager().getActive(existing.windowId)?.id !== sessionId,
   );
 
-  if (ownerWebContents) {
-    sendTurnEvent(ownerWebContents, existing, IPC_CHANNELS.CHAT_DONE, {
+  if (ownerClientId) {
+    sendTurnEvent(ownerClientId, existing, IPC_CHANNELS.CHAT_DONE, {
       type: 'done',
       response: context.response ?? '',
       messages: terminalMessages,
       interrupted: true,
       usage: context.usage ?? null,
     });
-    sendChatState(ownerWebContents, existing, {
+    sendChatState(ownerClientId, existing, {
       state: 'idle',
       error: null,
       interruptState: 'idle',

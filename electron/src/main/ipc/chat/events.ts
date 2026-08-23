@@ -1,41 +1,24 @@
+/**
+ * Electron implementation of the host event sink (host/events.ts).
+ *
+ * Window fan-out stays Electron-side: turn/session events reach every
+ * webContents still viewing the session, turn identity sequencing comes from
+ * the shared host helpers, and `webContentsForWindowId` remains the resolver
+ * the permission / ask-question routing uses.
+ */
 import { webContents as electronWebContents, type WebContents } from 'electron';
-import { IPC_CHANNELS, type SessionUpdatedEvent } from '../../../shared/types/ipc';
-import type { Session } from '../../../shared/types/session';
+import { IPC_CHANNELS } from '../../../shared/types/ipc';
 import { getSessionManager } from '../../session/singleton';
-import type { ActiveAgent, ChatStatePayload } from './state';
+import {
+  buildSessionUpdatedEvent,
+  nextEventIdentity,
+  type HostClientId,
+  type HostEventSink,
+} from '../../host/events';
+import type { ActiveAgent } from '../../host/chat/state';
 
 export function canSend(webContents: WebContents): boolean {
   return typeof webContents.isDestroyed !== 'function' || !webContents.isDestroyed();
-}
-
-/**
- * Send a durable session event to every window that still has that session
- * selected. The source window is deliberately subject to the same check: a
- * delayed persistence or title update must not revive a session it left.
- */
-export function sendSessionEvent(
-  source: WebContents | null,
-  sessionId: string,
-  channel: string,
-  payload: object,
-): void {
-  const recipients = new Map<number, WebContents>();
-  const addIfSelected = (candidate: WebContents): void => {
-    if (getSessionManager().getActive(String(candidate.id))?.id === sessionId) {
-      recipients.set(candidate.id, candidate);
-    }
-  };
-
-  if (source) addIfSelected(source);
-  for (const candidate of electronWebContents.getAllWebContents?.() ?? []) {
-    addIfSelected(candidate);
-  }
-
-  for (const recipient of recipients.values()) {
-    if (canSend(recipient)) {
-      recipient.send(channel, payload);
-    }
-  }
 }
 
 /** Resolve WebContents for a window id (forceAbort / SESSION_UPDATED). */
@@ -53,24 +36,42 @@ export function webContentsForWindowId(windowId: string): WebContents | null {
   }
 }
 
-function nextEventIdentity(active: ActiveAgent) {
-  active.eventSequence += 1;
-  return {
-    sessionId: active.sessionId,
-    turnId: active.turnId,
-    sequence: active.eventSequence,
+function deliverSessionEvent(
+  clientId: HostClientId | null,
+  sessionId: string,
+  channel: string,
+  payload: object,
+): void {
+  const recipients = new Map<number, WebContents>();
+  const addIfSelected = (candidate: WebContents): void => {
+    if (getSessionManager().getActive(String(candidate.id))?.id === sessionId) {
+      recipients.set(candidate.id, candidate);
+    }
   };
+
+  const source = clientId == null ? null : webContentsForWindowId(clientId);
+  if (source) addIfSelected(source);
+  for (const candidate of electronWebContents.getAllWebContents?.() ?? []) {
+    addIfSelected(candidate);
+  }
+
+  for (const recipient of recipients.values()) {
+    if (canSend(recipient)) {
+      recipient.send(channel, payload);
+    }
+  }
 }
 
-export function sendTurnEvent(
-  webContents: WebContents,
+function deliverTurnEvent(
+  clientId: HostClientId,
   active: ActiveAgent,
   channel: string,
   payload: Record<string, unknown>,
 ): void {
   const identity = nextEventIdentity(active);
   const recipients = new Map<number, WebContents>();
-  recipients.set(webContents.id, webContents);
+  const source = clientId == null ? null : webContentsForWindowId(clientId);
+  if (source) recipients.set(source.id, source);
   const allWebContents = electronWebContents.getAllWebContents?.() ?? [];
   for (const candidate of allWebContents) {
     if (getSessionManager().getActive(String(candidate.id))?.id === active.sessionId) {
@@ -84,57 +85,23 @@ export function sendTurnEvent(
   }
 }
 
-/**
- * Send state only when renderer-visible metadata changes. Streaming content is
- * intentionally excluded: it is delivered as CHAT_CHUNK and retained in the
- * explicit ChatSnapshot hydration path.
- */
-export function sendChatState(
-  webContents: WebContents,
-  active: ActiveAgent,
-  payload: ChatStatePayload,
-): void {
-  const previous = active.lastChatState;
-  if (
-    previous &&
-    previous.state === payload.state &&
-    previous.error === payload.error &&
-    previous.interruptState === payload.interruptState &&
-    previous.cwd === payload.cwd
-  ) {
-    return;
-  }
-
-  active.lastChatState = payload;
-  sendTurnEvent(webContents, active, IPC_CHANNELS.CHAT_STATE, payload);
-}
-
-/** Build the bounded renderer patch for the chain changed by this write. */
-export function buildSessionUpdatedEvent(
-  session: Session,
-  chainId: string | null = session.activeChainId,
-): SessionUpdatedEvent | null {
-  const chain = chainId
-    ? session.chains.find((candidate) => candidate.id === chainId)
-    : session.chains.at(-1);
-  if (!chain) return null;
-  return {
-    sessionId: session.id,
-    chain,
-    activeChainId: session.activeChainId,
-    updatedAt: session.updatedAt,
-  };
-}
-
-/** Notify renderer of live session (multi-chain) state after startChain. */
-export function emitSessionUpdated(webContents: WebContents, sessionId: string): void {
-  try {
-    const session = getSessionManager().getSession(sessionId);
-    const update = session ? buildSessionUpdatedEvent(session) : null;
-    if (update) {
-      sendSessionEvent(webContents, sessionId, IPC_CHANNELS.SESSION_UPDATED, update);
+/** The sink the Electron shell installs for the host chat pipeline. */
+export const electronHostEventSink: HostEventSink = {
+  sendSessionEvent: deliverSessionEvent,
+  sendTurnEvent: deliverTurnEvent,
+  sendChatState: (clientId, active, payload) => {
+    deliverTurnEvent(clientId, active, IPC_CHANNELS.CHAT_STATE, payload);
+  },
+  emitSessionUpdated: (clientId, sessionId) => {
+    try {
+      const session = getSessionManager().getSession(sessionId);
+      const update = session ? buildSessionUpdatedEvent(session) : null;
+      if (update) {
+        deliverSessionEvent(clientId, sessionId, IPC_CHANNELS.SESSION_UPDATED, update);
+      }
+    } catch {
+      // non-fatal
     }
-  } catch {
-    // non-fatal
-  }
-}
+  },
+  canDeliverTo: (clientId) => webContentsForWindowId(clientId) != null,
+};

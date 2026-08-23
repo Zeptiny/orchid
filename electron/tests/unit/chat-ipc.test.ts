@@ -50,8 +50,12 @@ const mocks = vi.hoisted(() => {
   const streamResponses: string[] = [];
   const streamEventSequences: Array<Array<Record<string, unknown>>> = [];
   let modelHistory: Array<Record<string, unknown>> = [];
+  // Real Electron resolves webContents.fromId(id) for the webContents serving
+  // an IPC request; emulate that registry so event delivery can address the
+  // inline sender objects by client id.
+  const sendersById = new Map<number, unknown>();
   const electronWebContents = {
-    fromId: vi.fn(() => null),
+    fromId: vi.fn((id: number) => sendersById.get(id) ?? null),
     getAllWebContents: vi.fn(() => []),
   };
 
@@ -588,7 +592,11 @@ const mocks = vi.hoisted(() => {
     ),
     ipcMain: {
       handle: vi.fn((channel: string, handler: (...args: unknown[]) => unknown) => {
-        handlers.set(channel, handler);
+        handlers.set(channel, (event: { sender?: { id?: number } }, ...rest: unknown[]) => {
+          const sender = event?.sender;
+          if (sender && typeof sender.id === 'number') sendersById.set(sender.id, sender);
+          return handler(event, ...rest);
+        });
       }),
       removeHandler: vi.fn((channel: string) => {
         handlers.delete(channel);
@@ -613,6 +621,7 @@ const mocks = vi.hoisted(() => {
       discardSession: vi.fn(),
       getStates: vi.fn((): Array<{ id: string; state: string }> => []),
     },
+    sendersById,
     publishSessionActivity: vi.fn(),
     completeSessionActivity: vi.fn(),
     electronWebContents,
@@ -759,7 +768,7 @@ vi.mock('../../src/main/tools/process/background-store', () => ({
   subscribeBackgroundProcessChanges: vi.fn(() => vi.fn()),
 }));
 
-vi.mock('../../src/main/ipc/session-activity', () => ({
+vi.mock('../../src/main/session/activity-live', () => ({
   publishSessionActivity: mocks.publishSessionActivity,
   completeSessionActivity: mocks.completeSessionActivity,
 }));
@@ -950,7 +959,10 @@ describe('chat IPC driver streaming', () => {
     mocks.subagentManager.cancelRunning.mockClear();
     mocks.runtimeRegistry._reset();
     mocks.electronWebContents.fromId.mockReset();
-    mocks.electronWebContents.fromId.mockReturnValue(null);
+    mocks.sendersById.clear();
+    mocks.electronWebContents.fromId.mockImplementation(
+      (id: number) => mocks.sendersById.get(id) ?? null,
+    );
     mocks.electronWebContents.getAllWebContents.mockReset();
     mocks.electronWebContents.getAllWebContents.mockReturnValue([]);
     mocks.sessionManager._reset();
@@ -2398,7 +2410,10 @@ describe('chat:cancel interrupt layers (issue #145)', () => {
     mocks.subagentManager.getStates.mockReturnValue([]);
     mocks.runtimeRegistry._reset();
     mocks.electronWebContents.fromId.mockReset();
-    mocks.electronWebContents.fromId.mockReturnValue(null);
+    mocks.sendersById.clear();
+    mocks.electronWebContents.fromId.mockImplementation(
+      (id: number) => mocks.sendersById.get(id) ?? null,
+    );
     mocks.electronWebContents.getAllWebContents.mockReset();
     mocks.electronWebContents.getAllWebContents.mockReturnValue([]);
     mocks.sessionManager._reset();
@@ -2774,7 +2789,12 @@ describe('chat compaction mid-turn pause', () => {
     const compactionEvents = channelEvents(send, IPC_CHANNELS.CHAT_COMPACTION_PROGRESS)
       .map(([, payload]) => payload);
     expect(compactionEvents.length).toBeGreaterThanOrEqual(2);
-    expect(compactionEvents[0]).toMatchObject({ phase: 'compacting', agentScopeId: 'main' });
+    // The window is resolvable, so the preparing widget event lands first
+    // (production always delivered it; the old fromId=null mock dropped it).
+    expect(compactionEvents[0]).toMatchObject({ phase: 'preparing', agentScopeId: 'main' });
+    expect(compactionEvents).toContainEqual(
+      expect.objectContaining({ phase: 'compacting', agentScopeId: 'main' }),
+    );
     expect(compactionEvents.at(-1)).toMatchObject({ phase: 'complete', agentScopeId: 'main' });
   });
 

@@ -9,27 +9,26 @@
  * running phase (the regression the old tool-id machinery guarded against).
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { ActiveAgent } from '../../src/main/ipc/chat/state';
+import type { ActiveAgent } from '../../src/main/host/chat/state';
 import type { ChatStreamSegmentSnapshot } from '../../src/shared/types/ipc';
 
-const { activeAgents, sessionsStarting, sendTurnEvent, sendSessionEvent, webContentsForWindowId, selectCutMock, compactableModelSliceMock, runCompactionAttemptMock } = vi.hoisted(() => ({
+const { activeAgents, sessionsStarting, sendTurnEvent, sendSessionEvent, canDeliverTo, selectCutMock, compactableModelSliceMock, runCompactionAttemptMock } = vi.hoisted(() => ({
   activeAgents: new Map<string, unknown>(),
   sessionsStarting: new Set<string>(),
   sendTurnEvent: vi.fn(),
   sendSessionEvent: vi.fn(),
-  webContentsForWindowId: vi.fn(() => ({})),
+  canDeliverTo: vi.fn(() => true),
   selectCutMock: vi.fn(),
   compactableModelSliceMock: vi.fn(),
   runCompactionAttemptMock: vi.fn(),
 }));
 
-vi.mock('../../src/main/ipc/chat/state', () => ({ activeAgents, sessionsStarting }));
-vi.mock('../../src/main/ipc/chat/events', () => ({
+vi.mock('../../src/main/host/chat/state', () => ({ activeAgents, sessionsStarting }));
+vi.mock('../../src/main/host/chat/events', () => ({
   sendTurnEvent,
   sendSessionEvent,
-  webContentsForWindowId,
+  canDeliverTo,
   buildSessionUpdatedEvent: vi.fn(),
-  canSend: vi.fn(() => true),
 }));
 vi.mock('../../src/main/session/singleton', () => ({
   getSessionManager: vi.fn(() => ({ getSession: vi.fn(() => null) })),
@@ -42,7 +41,7 @@ vi.mock('../../src/main/agents/next-request-stop', () => ({
   clearCompactionPausesForSession: vi.fn(),
   shouldPauseForCompaction: vi.fn(() => false),
 }));
-vi.mock('../../src/main/ipc/session-activity', () => ({ publishSessionActivity: vi.fn() }));
+vi.mock('../../src/main/session/activity-live', () => ({ publishSessionActivity: vi.fn() }));
 vi.mock('../../src/main/llm/compaction/select', () => ({
   selectCut: selectCutMock,
   resolvePreservePercent: vi.fn(() => 0.25),
@@ -93,7 +92,7 @@ vi.mock('../../src/main/llm/compaction/run-attempt', () => ({
   compactableModelSlice: compactableModelSliceMock,
   runCompactionAttempt: runCompactionAttemptMock,
 }));
-vi.mock('../../src/main/ipc/chat/persist', () => ({
+vi.mock('../../src/main/host/chat/persist', () => ({
   persistCompactionBetweenTurns: vi.fn(),
   persistCompactionDurable: vi.fn(),
 }));
@@ -105,7 +104,7 @@ import {
   emitCompactionProgress,
   getCompactionTrigger,
   handleUsageCompaction,
-} from '../../src/main/ipc/chat/compaction';
+} from '../../src/main/host/chat/compaction';
 import { deleteCompactionPending } from '../../src/main/llm/compaction/pending-store';
 import { IPC_CHANNELS } from '../../src/shared/types/ipc';
 
@@ -137,8 +136,8 @@ beforeEach(() => {
   sessionsStarting.clear();
   sendTurnEvent.mockClear();
   sendSessionEvent.mockClear();
-  webContentsForWindowId.mockClear();
-  webContentsForWindowId.mockReturnValue({});
+  canDeliverTo.mockClear();
+  canDeliverTo.mockReturnValue(true);
   try {
     clearCompactionState(SESSION_ID);
   } catch {
@@ -242,27 +241,27 @@ describe('emitCompactionProgress', () => {
     expect(sendTurnEvent).not.toHaveBeenCalled();
 
     activeAgents.set(SESSION_ID, makeActive());
-    webContentsForWindowId.mockReturnValue(null);
+    canDeliverTo.mockReturnValue(false);
     emitCompactionProgress(SESSION_ID, 'preparing');
     expect(sendTurnEvent).not.toHaveBeenCalled();
   });
 
-  it('delivers on the caller-supplied webContents when provided', () => {
+  it('delivers on the caller-supplied client id when provided', () => {
     activeAgents.set(SESSION_ID, makeActive());
-    const callerWebContents = { id: 4242 } as never;
+    const callerClientId = '4242';
 
     emitCompactionProgress(SESSION_ID, 'compacting', 'Applying summary', {
-      webContents: callerWebContents,
+      clientId: callerClientId,
     });
 
     expect(sendTurnEvent).toHaveBeenCalledTimes(1);
     expect(sendTurnEvent).toHaveBeenCalledWith(
-      callerWebContents,
+      callerClientId,
       expect.anything(),
       IPC_CHANNELS.CHAT_COMPACTION_PROGRESS,
       compactingPayload({ detail: 'Applying summary' }),
     );
-    expect(webContentsForWindowId).not.toHaveBeenCalled();
+    expect(canDeliverTo).not.toHaveBeenCalled();
   });
 });
 

@@ -10,7 +10,7 @@
  * (or a re-written history) can never be compacted against a stale cut.
  *
  * Deliberately dependency-free beyond the compaction engine's own types so
- * both `ipc/chat/compaction.ts` (main adapter) and `agents/subagent-compaction.ts`
+ * both `host/chat/compaction.ts` (main adapter) and `agents/subagent-compaction.ts`
  * (subagent adapter) can import it without crossing module-graph boundaries.
  */
 import type { Message } from '../../../shared/types/message';

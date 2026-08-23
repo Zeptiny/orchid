@@ -511,7 +511,7 @@ export class SubagentCompactionController {
 
   /**
    * R29 fire point 3 / R30: reactive overflow retry — the subagent twin of
-   * main's overflow-retry site in ipc/chat/send.ts. A classified
+   * main's overflow-retry site in host/chat/send.ts. A classified
    * context_length_exceeded error is terminal for the stream segment but not
    * for the run: record the window as a measured lower bound (the overflow
    * proves input >= window; calibrate-or-skip never fabricates an estimate),
@@ -683,7 +683,7 @@ export class SubagentCompactionController {
    * whether the compaction is worth applying.
    *
    * Calibrate-or-skip governs arming, not the boundary: main's apply path
-   * (ipc/chat/compaction.ts) never re-checks a token estimate, so when this
+   * (host/chat/compaction.ts) never re-checks a token estimate, so when this
    * run offers no calibrated ratio — or the flagged ids measure no chars in
    * the record chain — there is no sanctioned estimate to judge against and
    * the prepared apply goes through rather than tripping the boundary floor
@@ -720,7 +720,7 @@ export class SubagentCompactionController {
    * and only on success the memory swaps (record chain, assembler rebase,
    * history box) followed by the record revision bump and the trigger's
    * pending consumption — main's documented DB-first-then-memory ordering
-   * (see ipc/chat/compaction.ts applyPendingCompactionIfAny). On a genuine
+   * (see host/chat/compaction.ts applyPendingCompactionIfAny). On a genuine
    * durable-write failure the apply is treated as failed: no memory swap,
    * the pending is consumed so the trigger is not stuck, and the widget
    * completes with empty detail; the caller maps the `false` return onto its

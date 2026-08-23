@@ -13,6 +13,7 @@ const electronPackageName = 'electron';
  */
 const HOST_CORE_ROOTS = [
   'src/main/llm',
+  'src/main/host',
   'src/main/session',
   'src/main/permissions',
   'src/main/config',

@@ -27,7 +27,7 @@ import {
 } from '../session/draft-tier';
 import { getConfig } from '../config/loader';
 import { clearChatHistory, seedChatHistory } from './chat-history';
-import { sendSessionEvent } from './chat/events';
+import { sendSessionEvent } from '../host/chat/events';
 import {
   clearDraftCwd,
   getDraftCwd,
@@ -611,7 +611,7 @@ export function registerSessionIPC(): void {
     }
 
     // Push rename event to every window currently viewing this session.
-    sendSessionEvent(event.sender, parsed.data.id, IPC_CHANNELS.SESSION_RENAMED, {
+    sendSessionEvent(String(event.sender.id), parsed.data.id, IPC_CHANNELS.SESSION_RENAMED, {
       id: parsed.data.id,
       name: parsed.data.name,
     });

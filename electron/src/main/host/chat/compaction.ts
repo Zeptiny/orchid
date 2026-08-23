@@ -21,7 +21,6 @@
  * and the pause registry on top of the pipeline's decisions.
  */
 import { randomUUID } from 'node:crypto';
-import type { WebContents } from 'electron';
 import type { ModelSelection } from '../../../shared/types/provider';
 import { ChainStatus } from '../../../shared/types/chain';
 import type { Chain } from '../../../shared/types/chain';
@@ -35,14 +34,14 @@ import { getProviderRuntime } from '../../providers';
 import { getProviderAccountingStore } from '../../providers/accounting/store';
 import { getSessionManager } from '../../session/singleton';
 import { onSessionDeleted } from '../../session/manager';
-import { getChatHistory, setChatHistory } from '../chat-history';
+import { getChatHistory, setChatHistory } from '../../ipc/chat-history';
 import {
   clearCompactionPause,
   clearCompactionPausesForSession,
   requestCompactionPause,
   shouldPauseForCompaction,
 } from '../../agents/next-request-stop';
-import { publishSessionActivity } from '../session-activity';
+import { publishSessionActivity } from '../../session/activity-live';
 import { totalCharsForMessages } from '../../llm/compaction/message-chars';
 import { resolveUserExemptIds, type CutResult } from '../../llm/compaction/select';
 import {
@@ -72,7 +71,7 @@ import {
   type CompactionAttemptOutcome,
 } from '../../llm/compaction/run-attempt';
 import { activeAgents, runWithSessionOperationGate, sessionsStarting } from './state';
-import { sendSessionEvent, sendTurnEvent, webContentsForWindowId } from './events';
+import { canDeliverTo, sendSessionEvent, sendTurnEvent, type HostClientId } from './events';
 import {
   historyFromSession,
   persistCompactionBetweenTurns as persistCompaction,
@@ -155,9 +154,9 @@ function idleCompactionIdentity(
  * tool-result. The renderer derives widget lifecycle from this event live and
  * from the persisted `compacted` marker on replay.
  *
- * `options.webContents` lets turn-lifecycle call sites deliver on their own
- * sender (the same window the turn events stream to); without it the active
- * agent's window is resolved from the electron registry.
+ * `options.clientId` lets turn-lifecycle call sites deliver on their own
+ * sender (the same client the turn events stream to); without it the active
+ * agent's window is used only when the installed sink can deliver to it.
  *
  * Idle sessions (manual `/compact` — no ActiveAgent owns a turn identity)
  * emit through a per-session synthetic identity via `sendSessionEvent`, so
@@ -170,7 +169,7 @@ export function emitCompactionProgress(
   phase: CompactionProgressPhase,
   detail?: string,
   options?: {
-    webContents?: WebContents;
+    clientId?: HostClientId;
     mode?: CompactionProgressEvent['mode'];
     streamText?: string | null;
     estimatedTokens?: number | null;
@@ -190,9 +189,10 @@ export function emitCompactionProgress(
   };
   const active = activeAgents.get(sessionId);
   if (active && !active.finalized) {
-    const wc = options?.webContents ?? webContentsForWindowId(active.windowId);
-    if (!wc) return;
-    sendTurnEvent(wc, active, IPC_CHANNELS.CHAT_COMPACTION_PROGRESS, payload);
+    const clientId = options?.clientId
+      ?? (canDeliverTo(active.windowId) ? active.windowId : null);
+    if (clientId == null) return;
+    sendTurnEvent(clientId, active, IPC_CHANNELS.CHAT_COMPACTION_PROGRESS, payload);
     return;
   }
   const identity = idleCompactionIdentity(sessionId, phase === 'complete' || phase === 'failed');

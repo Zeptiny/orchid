@@ -12,7 +12,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { IPC_CHANNELS } from '../../src/shared/types/ipc';
-import { ensureActiveSession } from '../../src/main/ipc/chat/session';
+import { ensureActiveSession } from '../../src/main/host/chat/session';
 import {
   clearDraftTierOverrides,
   getDraftTierOverride,
@@ -205,7 +205,7 @@ vi.mock('../../src/main/ipc/chat-history', () => ({
   seedChatHistory: vi.fn(),
 }));
 
-vi.mock('../../src/main/ipc/session-working-set', () => ({
+vi.mock('../../src/main/session/working-set-live', () => ({
   workingSetClearFocus: vi.fn(),
   workingSetOpenOrFocus: mocks.workingSetOpenOrFocus,
   workingSetRemove: mocks.workingSetRemove,
@@ -232,7 +232,7 @@ vi.mock('../../src/main/agents/next-request-stop', () => ({
   clearNextRequestStop: mocks.clearNextRequestStop,
 }));
 
-vi.mock('../../src/main/ipc/session-activity', () => ({
+vi.mock('../../src/main/session/activity-live', () => ({
   removeSessionActivity: mocks.removeSessionActivity,
 }));
 
@@ -544,10 +544,7 @@ describe('session:set_service_tier', () => {
       });
       const preferred = { connectionId: CONNECTION_UUID, modelId: 'glm-5.2' };
 
-      const result = ensureActiveSession(
-        { id: 9, send: vi.fn(), isDestroyed: () => false } as never,
-        preferred,
-      );
+      const result = ensureActiveSession('9', preferred);
 
       expect(result).toMatchObject({ ok: true });
       expect(mocks.sessionManager.create).toHaveBeenCalledWith(

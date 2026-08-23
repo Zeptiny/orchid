@@ -81,7 +81,7 @@ vi.mock('../../src/main/ipc/chat', () => ({
   forceStopSession: (sessionId: string) => mocks.forceStopSession(sessionId),
 }));
 
-vi.mock('../../src/main/ipc/session-working-set', () => ({
+vi.mock('../../src/main/session/working-set-live', () => ({
   workingSetOpenOrFocus: (...args: unknown[]) => mocks.workingSetOpenOrFocus(...args),
 }));
 
@@ -93,7 +93,7 @@ vi.mock('../../src/main/rag/indexer', () => ({
 
 // ── Imports after mocks ─────────────────────────────────────────────────────
 
-import { ensureActiveSession } from '../../src/main/ipc/chat/session';
+import { ensureActiveSession } from '../../src/main/host/chat/session';
 import {
   registerSessionIPC,
   revokeProjectTrustForDir,
@@ -193,10 +193,6 @@ function tempStorage(): StorageOptions {
   };
 }
 
-function fakeWebContents(id: number) {
-  return { id, send: vi.fn() } as never;
-}
-
 interface FakeSession {
   id: string;
   name: string;
@@ -261,7 +257,7 @@ describe('chat:send gate (ensureActiveSession)', () => {
     mocks.sessionManager = makeFakeSessionManager();
     mocks.workspaceFor = () => ({ cwd: surfaceProject, source: 'default', status: 'valid' });
 
-    const result = ensureActiveSession(fakeWebContents(701), TEST_SELECTION);
+    const result = ensureActiveSession('701', TEST_SELECTION);
 
     expect(result.ok).toBe(false);
     if (!result.ok) {
@@ -278,7 +274,7 @@ describe('chat:send gate (ensureActiveSession)', () => {
     mocks.workspaceFor = () => ({ cwd: surfaceProject, source: 'default', status: 'valid' });
     grantProjectTrust(surfaceProject);
 
-    const result = ensureActiveSession(fakeWebContents(702), TEST_SELECTION);
+    const result = ensureActiveSession('702', TEST_SELECTION);
 
     expect(result.ok).toBe(true);
     if (result.ok) {
@@ -291,7 +287,7 @@ describe('chat:send gate (ensureActiveSession)', () => {
     mocks.sessionManager = makeFakeSessionManager();
     mocks.workspaceFor = () => ({ cwd: bareProject, source: 'default', status: 'valid' });
 
-    const result = ensureActiveSession(fakeWebContents(703), TEST_SELECTION);
+    const result = ensureActiveSession('703', TEST_SELECTION);
 
     expect(result.ok).toBe(true);
     if (result.ok) {
@@ -373,7 +369,7 @@ describe("'changed' trust state (surface drift)", () => {
     // The send gate fails closed for a drifted project.
     mocks.sessionManager = makeFakeSessionManager();
     mocks.workspaceFor = () => ({ cwd: surfaceProject, source: 'default', status: 'valid' });
-    const blocked = ensureActiveSession(fakeWebContents(705), TEST_SELECTION);
+    const blocked = ensureActiveSession('705', TEST_SELECTION);
     expect(blocked.ok).toBe(false);
     if (!blocked.ok) {
       expect(blocked.result).toMatchObject({
@@ -397,7 +393,7 @@ describe("'changed' trust state (surface drift)", () => {
       expect(getProjectTrustState(surfaceProject)).toBe('trusted');
       expect(storedFingerprint()).not.toBe(fingerprintBefore);
 
-      const retry = ensureActiveSession(fakeWebContents(706), TEST_SELECTION);
+      const retry = ensureActiveSession('706', TEST_SELECTION);
       expect(retry.ok).toBe(true);
 
       // Grant invalidation (as trust:set performs) recreates + starts servers.

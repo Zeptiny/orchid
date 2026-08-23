@@ -1,5 +1,5 @@
 /** Chat IPC registration and small boundary handlers. */
-import { BrowserWindow, ipcMain, type IpcMainInvokeEvent, type WebContents } from 'electron';
+import { BrowserWindow, ipcMain, type IpcMainInvokeEvent } from 'electron';
 import { z } from 'zod';
 import { getSubagentManager } from '../tools';
 import {
@@ -19,7 +19,9 @@ import { getProjectRuntimeRegistry } from '../project/runtime';
 import { clearAllChatHistory } from './chat-history';
 import { chatCancelSchema, chatCompactSchema, chatQueueNextSchema, chatSendSchema, chatSnapshotSchema, chatStopSchema } from './payload-schemas';
 import { requestNextRequestStop } from '../agents/next-request-stop';
-import { completeSessionActivity } from './session-activity';
+import { completeSessionActivity } from '../session/activity-live';
+import { electronHostEventSink } from './chat/events';
+import { setHostEventSink } from '../host/events';
 import {
   activeAgents,
   agentGenerations,
@@ -28,35 +30,35 @@ import {
   draftEnsureByWindow,
   sessionsStarting,
   stageSubagentCancelConfirm,
-} from './chat/state';
-import { sendChatState, sendTurnEvent, webContentsForWindowId } from './chat/events';
-import { snapshotForAgent } from './chat/snapshot';
-import { appendLiveTailMessages, persistTurnConversation, turnMessagesFromAgent } from './chat/persist';
+} from '../host/chat/state';
+import { canDeliverTo, sendChatState, sendTurnEvent } from '../host/chat/events';
+import { snapshotForAgent } from '../host/chat/snapshot';
+import { appendLiveTailMessages, persistTurnConversation, turnMessagesFromAgent } from '../host/chat/persist';
 import {
   discardDeletedSessionRuntime,
   disposeActiveAgent,
   forceAbortSession,
   forceStopSession,
-} from './chat/abort';
-import { startChatTurn } from './chat/send';
-import { compactSessionNow } from './chat/compaction';
-import { triggerInterruptedTurnAutoName } from './chat/title';
+} from '../host/chat/abort';
+import { startChatTurn } from '../host/chat/send';
+import { compactSessionNow } from '../host/chat/compaction';
+import { triggerInterruptedTurnAutoName } from '../host/chat/title';
 import type { AgentContext } from '../agents/xstate/agent-machine';
 
-export { getActiveMainTurnWindowId, getLiveChatSnapshot } from './chat/snapshot';
+export { getActiveMainTurnWindowId, getLiveChatSnapshot } from '../host/chat/snapshot';
 export {
   activeSessionsForProviderConnection,
   forceAbortChat,
   forceAbortMainTurn,
   stopActiveProviderConnectionTurns,
-} from './chat/abort';
-export type { ForceAbortMainTurnOptions } from './chat/abort';
-export { ensureActiveSession } from './chat/session';
+} from '../host/chat/abort';
+export type { ForceAbortMainTurnOptions } from '../host/chat/abort';
+export { ensureActiveSession } from '../host/chat/session';
+export { webContentsForWindowId } from './chat/events';
 export {
   discardDeletedSessionRuntime,
   forceAbortSession,
   forceStopSession,
-  webContentsForWindowId,
 };
 
 const BG_CMD_SNAPSHOT_MAX_LAST_N = 1000;
@@ -127,14 +129,16 @@ function broadcastBgCommandChanged(sessionId: string): void {
 
 let removeBgCommandChangeListener: (() => void) | null = null;
 
-/** Register chat IPC boundaries; the turn lifecycle lives in `chat/send.ts`. */
+/** Register chat IPC boundaries; the turn lifecycle lives in `host/chat/send.ts`. */
 export function registerChatIPC(): void {
+  setHostEventSink(electronHostEventSink);
+
   ipcMain.handle(IPC_CHANNELS.CHAT_SEND, async (event, payload: unknown) => {
     const parsed = chatSendSchema.safeParse(payload);
     if (!parsed.success) {
       throw new Error(`Invalid chat:send payload: ${parsed.error.message}`);
     }
-    return startChatTurn(event.sender, parsed.data);
+    return startChatTurn(String(event.sender.id), parsed.data);
   });
 
   ipcMain.handle(
@@ -240,15 +244,14 @@ export function registerChatIPC(): void {
   }
 
   ipcMain.handle(IPC_CHANNELS.CHAT_CANCEL, async (event, payload: unknown) => {
-    const webContents: WebContents = event.sender;
-    const windowId = String(webContents.id);
+    const windowId = String(event.sender.id);
     const parsed = chatCancelSchema.safeParse(payload ?? {});
     if (!parsed.success) throw new Error(`Invalid chat:cancel payload: ${parsed.error.message}`);
     const sessionId = parsed.data.sessionId ?? getSessionManager().getActive(windowId)?.id;
     if (!sessionId) return { status: 'no_active_stream' };
     const existing = activeAgents.get(sessionId);
     if (!existing) return handleSubagentOnlyCancel(sessionId, windowId);
-    const streamWebContents = webContentsForWindowId(existing.windowId) ?? webContents;
+    const streamClientId = canDeliverTo(existing.windowId) ? existing.windowId : windowId;
     const interruptState = existing.interruptActor.getSnapshot().value as
       | 'idle'
       | 'confirmAgent'
@@ -279,7 +282,7 @@ export function registerChatIPC(): void {
         const fullHistory = [...existing.messages, ...existing.turnMessages];
         persistTurnConversation(
           sessionId, fullHistory, terminalMessages, ChainStatus.INTERRUPTED,
-          existing.agent, existing.selection, streamWebContents,
+          existing.agent, existing.selection, streamClientId,
         );
         existing.messages = fullHistory;
         // Interrupted turns still name the session from what was exchanged so far.
@@ -288,10 +291,10 @@ export function registerChatIPC(): void {
           sessionId,
           getSessionManager().getActive(existing.windowId)?.id !== sessionId,
         );
-        sendTurnEvent(streamWebContents, existing, IPC_CHANNELS.CHAT_DONE, {
+        sendTurnEvent(streamClientId, existing, IPC_CHANNELS.CHAT_DONE, {
           type: 'done', response: partial, messages: terminalMessages, interrupted: true, usage,
         });
-        sendChatState(streamWebContents, existing, {
+        sendChatState(streamClientId, existing, {
           state: 'idle', error: null, interruptState: 'confirmSubagents', cwd: existing.cwd,
         });
       }
@@ -304,7 +307,7 @@ export function registerChatIPC(): void {
       getForegroundLiveRegistry().dropSession(sessionId);
       getSubagentManager().cancelRunning(sessionId);
       disposeActiveAgent(sessionId, existing);
-      sendChatState(streamWebContents, existing, {
+      sendChatState(streamClientId, existing, {
         state: 'idle', error: null, interruptState: 'idle', cwd: existing.cwd,
       });
       return { status: 'cancelled' };
@@ -456,6 +459,7 @@ export function registerChatIPC(): void {
 
 /** Unregister chat IPC handlers (for cleanup/testing). */
 export function unregisterChatIPC(): void {
+  setHostEventSink(null);
   ipcMain.removeHandler(IPC_CHANNELS.CHAT_SEND);
   ipcMain.removeHandler(IPC_CHANNELS.CHAT_CANCEL);
   ipcMain.removeHandler(IPC_CHANNELS.CHAT_QUEUE_NEXT);

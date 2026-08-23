@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { IPC_CHANNELS } from '../../src/shared/types/ipc';
-import { activeAgents, type ActiveAgent } from '../../src/main/ipc/chat/state';
+import { activeAgents, type ActiveAgent } from '../../src/main/host/chat/state';
 
 const mocks = vi.hoisted(() => {
   const handlers = new Map<string, (...args: unknown[]) => unknown>();

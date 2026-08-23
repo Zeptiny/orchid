@@ -12,7 +12,6 @@
  * compaction pause/resume boundary, and the overflow retry.
  */
 import type { LanguageModelV4 } from '@ai-sdk/provider';
-import type { WebContents } from 'electron';
 import { createActor } from 'xstate';
 import { z } from 'zod';
 import { agentMachine, type AgentContext } from '../../agents/xstate/agent-machine';
@@ -48,13 +47,13 @@ import { acquireProjectMCPManager, releaseProjectMCPManager } from '../../mcp/pr
 import { IPC_CHANNELS } from '../../../shared/types/ipc';
 import { ChainStatus } from '../../../shared/types/chain';
 import { MessageType, type Message, type Usage } from '../../../shared/types/message';
-import { getChatHistory, setChatHistory } from '../chat-history';
-import { chatSendSchema } from '../payload-schemas';
+import { getChatHistory, setChatHistory } from '../../ipc/chat-history';
+import { chatSendSchema } from '../../ipc/payload-schemas';
 import { clearNextRequestStop, clearCompactionPause, shouldPauseForCompaction } from '../../agents/next-request-stop';
 import { MAIN_AGENT_SCOPE_ID } from '../../../shared/types/agent-scope';
-import { completeSessionActivity, publishSessionActivity } from '../session-activity';
+import { completeSessionActivity, publishSessionActivity } from '../../session/activity-live';
 import { disposeActiveAgent, forceAbortSession } from './abort';
-import { emitSessionUpdated, sendChatState, sendTurnEvent } from './events';
+import { emitSessionUpdated, sendChatState, sendTurnEvent, type HostClientId } from './events';
 import {
   activeAgents,
   canEmitStreamEvents,
@@ -101,12 +100,12 @@ import {
 export type ChatSendPayload = z.infer<typeof chatSendSchema>;
 
 export async function startChatTurn(
-  webContents: WebContents,
+  clientId: HostClientId,
   { message, model: preferredModel, sessionId: requestedSessionId, draftGeneration }: ChatSendPayload,
 ) {
-  const windowId = String(webContents.id);
+  const windowId = clientId;
   const sessionGate = await Promise.resolve(
-    ensureActiveSessionSingleFlight(webContents, preferredModel, requestedSessionId, draftGeneration),
+    ensureActiveSessionSingleFlight(clientId, preferredModel, requestedSessionId, draftGeneration),
   );
   if (!sessionGate.ok) return sessionGate.result;
 
@@ -269,7 +268,7 @@ export async function startChatTurn(
     }, sessionId);
     chainId = chain?.id ?? null;
     turnId = chain?.id ?? turnId;
-    emitSessionUpdated(webContents, sessionId);
+    emitSessionUpdated(windowId, sessionId);
   } catch (error) {
     console.debug('startChain failed (non-fatal):', error);
   }
@@ -417,7 +416,7 @@ export async function startChatTurn(
       triggerSessionAutoName({
         sessionId,
         runtime,
-        webContents,
+        clientId: windowId,
         messages: currentTurnSnapshot(activeAgent, actor.getSnapshot().context as AgentContext),
         fallbackSelection: activeAgent.selection,
         accounting: { store: accountingStore, sessionId, chainId, turnId },
@@ -506,12 +505,12 @@ export async function startChatTurn(
     persistTurnConversation(
       sessionId, fullHistory, terminalMessages,
       opts.interrupted ? ChainStatus.INTERRUPTED : ChainStatus.COMPLETED,
-      agent, activeAgent.selection, webContents,
+      agent, activeAgent.selection, windowId,
     );
     activeAgent.messages = fullHistory;
     completeSessionActivity(sessionId, getSessionManager().getActive(windowId)?.id !== sessionId);
     if (opts.sendDone) {
-      sendTurnEvent(webContents, activeAgent, IPC_CHANNELS.CHAT_DONE, {
+      sendTurnEvent(windowId, activeAgent, IPC_CHANNELS.CHAT_DONE, {
         type: 'done', response: opts.response, messages: terminalMessages,
         interrupted: opts.interrupted, usage: opts.usage,
       });
@@ -522,7 +521,7 @@ export async function startChatTurn(
     triggerSessionAutoName({
       sessionId,
       runtime,
-      webContents,
+      clientId: windowId,
       messages: fullHistory,
       fallbackSelection: activeAgent.selection,
       accounting: { store: accountingStore, sessionId, chainId, turnId },
@@ -547,7 +546,7 @@ export async function startChatTurn(
       });
     }
     const context = actor.getSnapshot().context as AgentContext;
-    sendChatState(webContents, activeAgent, {
+    sendChatState(windowId, activeAgent, {
       state: String(actor.getSnapshot().value), error: context.error, interruptState, cwd: turnCtx.cwd,
     });
   });
@@ -569,22 +568,22 @@ export async function startChatTurn(
       const newContent = context.response.slice(lastSentLength);
       lastSentLength = context.response.length;
       const segmentId = appendTextSegment(activeAgent, 'text', newContent);
-      sendTurnEvent(webContents, activeAgent, IPC_CHANNELS.CHAT_CHUNK, { type: 'chunk', data: newContent, segmentId });
+      sendTurnEvent(windowId, activeAgent, IPC_CHANNELS.CHAT_CHUNK, { type: 'chunk', data: newContent, segmentId });
     }
     const thinking = context.thinking ?? '';
     if (thinking.length > lastThinkingLength) {
       const newThinking = thinking.slice(lastThinkingLength);
       lastThinkingLength = thinking.length;
       const segmentId = appendTextSegment(activeAgent, 'thinking', newThinking);
-      sendTurnEvent(webContents, activeAgent, IPC_CHANNELS.CHAT_THINKING, { type: 'thinking', data: newThinking, segmentId });
+      sendTurnEvent(windowId, activeAgent, IPC_CHANNELS.CHAT_THINKING, { type: 'thinking', data: newThinking, segmentId });
     }
     const interruptState = interruptActor.getSnapshot().value as 'idle' | 'confirmAgent' | 'confirmSubagents';
-    sendChatState(webContents, activeAgent, {
+    sendChatState(windowId, activeAgent, {
       state: String(snapshot.value), error: context.error, interruptState, cwd: turnCtx.cwd,
     });
     if (context.usage && context.usage !== lastUsage) {
       lastUsage = context.usage;
-      sendTurnEvent(webContents, activeAgent, IPC_CHANNELS.CHAT_USAGE, { type: 'usage', usage: context.usage });
+      sendTurnEvent(windowId, activeAgent, IPC_CHANNELS.CHAT_USAGE, { type: 'usage', usage: context.usage });
       checkpointActiveTurn(activeAgent, context);
       if (contextTokens != null) {
         const inputTokens = context.usage.context?.input_tokens ?? context.usage.prompt_tokens;
@@ -598,7 +597,7 @@ export async function startChatTurn(
         lastStreamingToolCallId = stc.toolCallId;
         lastStreamingToolArgLength.set(stc.toolCallId, 0);
         ensureToolSnapshot(activeAgent, stc.toolCallId, stc.toolName);
-        sendTurnEvent(webContents, activeAgent, IPC_CHANNELS.CHAT_TOOL_CALL_START, {
+        sendTurnEvent(windowId, activeAgent, IPC_CHANNELS.CHAT_TOOL_CALL_START, {
           type: 'tool_call_start', toolCallId: stc.toolCallId, toolName: stc.toolName,
         });
       }
@@ -608,7 +607,7 @@ export async function startChatTurn(
         lastStreamingToolArgLength.set(stc.toolCallId, stc.partialArgs.length);
         const current = ensureToolSnapshot(activeAgent, stc.toolCallId, stc.toolName);
         updateToolSnapshot(activeAgent, stc.toolCallId, stc.toolName, { partialArgs: current.partialArgs + argsDelta });
-        sendTurnEvent(webContents, activeAgent, IPC_CHANNELS.CHAT_TOOL_CALL_DELTA, {
+        sendTurnEvent(windowId, activeAgent, IPC_CHANNELS.CHAT_TOOL_CALL_DELTA, {
           type: 'tool_call_delta', toolCallId: stc.toolCallId, argsDelta,
         });
       }
@@ -623,7 +622,7 @@ export async function startChatTurn(
         content: update.content ?? null, toolResult: update.toolResult ?? null,
         finishedAt: update.status === 'running' ? null : new Date().toISOString(),
       });
-      sendTurnEvent(webContents, activeAgent, IPC_CHANNELS.CHAT_TOOL_CALL_UPDATE, {
+      sendTurnEvent(windowId, activeAgent, IPC_CHANNELS.CHAT_TOOL_CALL_UPDATE, {
         type: 'tool_call_update', toolCallId: update.toolCallId, toolName: update.toolName,
         status: update.status, args: update.args, content: update.content, toolResult: update.toolResult,
       });
@@ -697,7 +696,7 @@ export async function startChatTurn(
         clearCompactionPause(sessionId, MAIN_AGENT_SCOPE_ID);
         const fullHistoryForPause = [...messages, ...turnMessagesFromAgent(activeAgent)];
         publishSessionActivity(sessionId, { cwd: turnCtx.cwd, state: 'working', phase: 'agent', detail: 'Compacting context — applying summary…', canCancel: true });
-        emitCompactionProgress(sessionId, 'compacting', 'Applying summary', { webContents });
+        emitCompactionProgress(sessionId, 'compacting', 'Applying summary', { clientId: windowId });
         (async () => {
           try {
             let applied = false;
@@ -727,7 +726,7 @@ export async function startChatTurn(
               try {
                 actor.send({ type: 'USER_INPUT', message });
                 publishSessionActivity(sessionId, { cwd: turnCtx.cwd, state: 'working', phase: 'agent', detail: 'Resuming after compaction', canCancel: true });
-                emitCompactionProgress(sessionId, 'complete', 'Context compacted — resuming', { webContents });
+                emitCompactionProgress(sessionId, 'complete', 'Context compacted — resuming', { clientId: windowId });
                 return;
               } catch (e) {
                 console.debug('[compaction] mid-turn resume failed:', e);
@@ -737,7 +736,7 @@ export async function startChatTurn(
             console.debug('[compaction] mid-turn pause handling failed:', e);
           }
           {
-            emitCompactionProgress(sessionId, 'complete', undefined, { webContents });
+            emitCompactionProgress(sessionId, 'complete', undefined, { clientId: windowId });
           }
           clearCompactionPause(sessionId, MAIN_AGENT_SCOPE_ID);
           try {
@@ -822,11 +821,11 @@ export async function startChatTurn(
           const fullHistory = [...messages, ...activeAgent.turnMessages];
           persistTurnConversation(
             sessionId, fullHistory, terminalMessages, ChainStatus.FAILED,
-            agent, activeAgent.selection, webContents,
+            agent, activeAgent.selection, windowId,
             detail, title,
           );
           activeAgent.messages = fullHistory;
-          sendTurnEvent(webContents, activeAgent, IPC_CHANNELS.CHAT_ERROR, {
+          sendTurnEvent(windowId, activeAgent, IPC_CHANNELS.CHAT_ERROR, {
             type: 'error', error: detail, messages: terminalMessages, title, kind: classifyErrorKind(title, detail),
           });
           queueMicrotask(() => disposeActiveAgent(sessionId, activeAgent));
@@ -848,11 +847,11 @@ export async function startChatTurn(
       const fullHistory = [...messages, ...activeAgent.turnMessages];
       persistTurnConversation(
         sessionId, fullHistory, terminalMessages, ChainStatus.FAILED,
-        agent, activeAgent.selection, webContents,
+        agent, activeAgent.selection, windowId,
         detail, title,
       );
       activeAgent.messages = fullHistory;
-      sendTurnEvent(webContents, activeAgent, IPC_CHANNELS.CHAT_ERROR, {
+      sendTurnEvent(windowId, activeAgent, IPC_CHANNELS.CHAT_ERROR, {
         type: 'error', error: detail, messages: terminalMessages, title, kind: classifyErrorKind(title, detail),
       });
       queueMicrotask(() => disposeActiveAgent(sessionId, activeAgent));
@@ -862,7 +861,7 @@ export async function startChatTurn(
   try {
     actor.start();
     interruptActor.start();
-    sendChatState(webContents, activeAgent, {
+    sendChatState(windowId, activeAgent, {
       state: 'streaming', error: null, interruptState: 'idle', cwd: turnCtx.cwd,
     });
     actor.send({ type: 'USER_INPUT', message });

@@ -1,4 +1,3 @@
-import type { WebContents } from 'electron';
 import type { AgentContext } from '../../agents/xstate/agent-machine';
 import type { Agent } from '../../../shared/types/agent';
 import type { ModelSelection } from '../../../shared/types/provider';
@@ -8,13 +7,13 @@ import { ChainStatus, type Chain } from '../../../shared/types/chain';
 import type { Session } from '../../../shared/types/session';
 import { IPC_CHANNELS } from '../../../shared/types/ipc';
 import { getSessionManager } from '../../session/singleton';
-import { setChatHistory } from '../chat-history';
+import { setChatHistory } from '../../ipc/chat-history';
 import {
   makeAssistantMessage,
   makeThinkingMessage,
 } from '../../llm/message-factories';
 import { activeAgents, pendingCheckpoints, type ActiveAgent } from './state';
-import { buildSessionUpdatedEvent, sendSessionEvent, webContentsForWindowId } from './events';
+import { buildSessionUpdatedEvent, sendSessionEvent, type HostClientId } from './events';
 import { textSegmentIdAtOffset, thinkingDurationMsForRange } from './snapshot';
 import type { CompactionPersistenceResult } from '../../session/storage';
 
@@ -188,7 +187,7 @@ function scheduleCheckpoint(
       const update = updated ? buildSessionUpdatedEvent(updated) : null;
       if (update) {
         sendSessionEvent(
-          webContentsForWindowId(active.windowId),
+          active.windowId,
           sessionId,
           IPC_CHANNELS.SESSION_UPDATED,
           update,
@@ -230,7 +229,7 @@ export function persistTurnConversation(
   status: ChainStatus,
   agent: Agent,
   selection?: ModelSelection | null,
-  webContents?: WebContents,
+  clientId?: HostClientId | null,
   errorDetail?: string | null,
   errorTitle?: string | null,
 ): void {
@@ -249,8 +248,8 @@ export function persistTurnConversation(
       errorTitle,
     }, sessionId);
     const update = updated ? buildSessionUpdatedEvent(updated, null) : null;
-    if (update && webContents) {
-      sendSessionEvent(webContents, sessionId, IPC_CHANNELS.SESSION_UPDATED, update);
+    if (update && clientId) {
+      sendSessionEvent(clientId, sessionId, IPC_CHANNELS.SESSION_UPDATED, update);
     }
   } catch (err) {
     console.debug('Failed to persist chat chain (non-fatal):', err);
@@ -532,7 +531,7 @@ export function flushCompactionCheckpoint(sessionId: string): boolean {
     const update = updated ? buildSessionUpdatedEvent(updated) : null;
     if (update) {
       sendSessionEvent(
-        webContentsForWindowId(active.windowId),
+        active.windowId,
         sessionId,
         IPC_CHANNELS.SESSION_UPDATED,
         update,

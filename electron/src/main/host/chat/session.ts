@@ -1,4 +1,3 @@
-import type { WebContents } from 'electron';
 import type { ModelSelection } from '../../../shared/types/provider';
 import type { Session } from '../../../shared/types/session';
 import type { ChatSendResult } from '../../../shared/types/ipc';
@@ -9,14 +8,14 @@ import { getProjectTrustState } from '../../project/trust';
 import { takeDraftReasoningOverride } from '../../session/draft-reasoning';
 import { takeDraftTierOverride } from '../../session/draft-tier';
 import { takeDraftPermissionOverride } from '../../permissions/session-overrides';
-import { workingSetOpenOrFocus } from '../session-working-set';
+import { workingSetOpenOrFocus } from '../../session/working-set-live';
 import { clearDraftCwd } from '../../project/workspace';
 import {
   getProjectRuntimeRegistry,
   type ProjectRuntime,
 } from '../../project/runtime';
 import { draftEnsureByWindow } from './state';
-import { canSend } from './events';
+import { sendSessionEvent, type HostClientId } from './events';
 
 export type EnsureActiveSessionResult =
   | {
@@ -41,12 +40,12 @@ export type EnsureActiveSessionResult =
  * @returns ok + session cwd, or a structured failure for the send gate
  */
 export function ensureActiveSession(
-  webContents: WebContents,
+  clientId: HostClientId,
   preferredModel?: ModelSelection | null,
   requestedSessionId?: string,
   draftGeneration?: number,
 ): EnsureActiveSessionResult {
-  const windowId = String(webContents.id);
+  const windowId = clientId;
   const manager = getSessionManager();
   // Resolve by id without switchTo — do not steal window selection mid-flight.
   let active = requestedSessionId
@@ -174,9 +173,9 @@ export function ensureActiveSession(
   // Draft was promoted into the new session.
   clearDraftCwd(windowId);
   workingSetOpenOrFocus(session.id, windowId);
-  if (canSend(webContents)) {
-    webContents.send(IPC_CHANNELS.SESSION_CREATED, { session, draftGeneration });
-  }
+  // Only the creating client can have the fresh session selected, so the
+  // session-event fan-out reaches exactly that sender.
+  sendSessionEvent(windowId, session.id, IPC_CHANNELS.SESSION_CREATED, { session, draftGeneration });
   return { ok: true, cwd: boundCwd, session, runtime };
 }
 
@@ -185,17 +184,17 @@ export function ensureActiveSession(
  * sessionId share one ensure promise so only one session is created.
  */
 export function ensureActiveSessionSingleFlight(
-  webContents: WebContents,
+  clientId: HostClientId,
   preferredModel?: ModelSelection | null,
   requestedSessionId?: string,
   draftGeneration?: number,
 ): EnsureActiveSessionResult | Promise<EnsureActiveSessionResult> {
-  const windowId = String(webContents.id);
+  const windowId = clientId;
   const manager = getSessionManager();
   // Existing session or explicit id: no draft create race.
   if (requestedSessionId || manager.getActive(windowId)) {
     return ensureActiveSession(
-      webContents,
+      clientId,
       preferredModel,
       requestedSessionId,
       draftGeneration,
@@ -215,7 +214,7 @@ export function ensureActiveSessionSingleFlight(
 
   try {
     const result = ensureActiveSession(
-      webContents,
+      clientId,
       preferredModel,
       requestedSessionId,
       draftGeneration,

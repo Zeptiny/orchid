@@ -1,4 +1,3 @@
-import type { WebContents } from 'electron';
 import { createMiddlewareStack } from '../../llm/middleware';
 import { AgentType } from '../../../shared/types/agent';
 import type { ModelSelection } from '../../../shared/types/provider';
@@ -13,7 +12,7 @@ import { importESM } from '../../utils/esm-import';
 import { getTierModelSelection } from '../../config/loader';
 import type { ProjectRuntime } from '../../project/runtime';
 import type { ProviderAttemptAccountingContext } from '../../providers/accounting/middleware';
-import { sendSessionEvent, webContentsForWindowId } from './events';
+import { sendSessionEvent, type HostClientId } from './events';
 import { namingInFlight, type ActiveAgent } from './state';
 
 const SESSION_NAMER_AGENT_NAME = 'session-namer';
@@ -113,8 +112,8 @@ export interface AutoNameTriggerInput {
   messages: readonly Message[];
   fallbackSelection: ModelSelection;
   accounting: Omit<ProviderAttemptAccountingContext, 'snapshot'>;
-  /** Turn-originating window; the event also fans out to other viewers. */
-  webContents: WebContents | null;
+  /** Turn-originating client; the event also fans out to other viewers. */
+  clientId: HostClientId | null;
 }
 
 /**
@@ -137,7 +136,7 @@ export function triggerSessionAutoName(input: AutoNameTriggerInput): void {
     .autoName(input.sessionId, generateTitle)
     .then((updated) => {
       if (updated) {
-        sendSessionEvent(input.webContents, input.sessionId, IPC_CHANNELS.SESSION_RENAMED, {
+        sendSessionEvent(input.clientId, input.sessionId, IPC_CHANNELS.SESSION_RENAMED, {
           id: updated.id, name: updated.name,
         });
       }
@@ -165,6 +164,5 @@ export function triggerInterruptedTurnAutoName(
       chainId: agent.chainId,
       turnId: agent.turnId,
     },
-    webContents: webContentsForWindowId(agent.windowId),
-  });
-}
+    clientId: agent.windowId,
+  });}

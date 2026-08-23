@@ -35,7 +35,7 @@ import {
 import { openSqliteDb } from '../../src/main/utils/sqlite';
 import { SessionManager } from '../../src/main/session/manager';
 import { buildCompactionApply } from '../../src/main/llm/compaction/apply';
-import { persistCompactionBetweenTurns, attachUsageToLatestAssistant } from '../../src/main/ipc/chat/persist';
+import { persistCompactionBetweenTurns, attachUsageToLatestAssistant } from '../../src/main/host/chat/persist';
 
 const holders = vi.hoisted(() => ({
   sessionManager: null as unknown,
