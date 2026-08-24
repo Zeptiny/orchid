@@ -103,6 +103,16 @@ Shared domain vocabulary for the orchid project. This file defines terms used ac
 
 The earlier design where a compaction cut inside a chain divided it into a flagged prefix row, a summary-head row, and a continuing row. Removed after it corrupted live transcripts: multi-row turns starved the bounded renderer view and compounded into duplicate "ladder" rows under mid-turn resume. "Chain split" now refers only to legacy sessions carrying that layout.
 
+## Remote Machines
+
+- **Host** — The machine-owning side of the unified client protocol: it owns sessions, chains, todos, indexes, trust grants, MCP servers, and provider configuration under its own `~/.orchid`, and runs the agentic turn pipeline host-side. The local machine is an embedded in-process host; a remote is a daemon reached over SSH.
+- **orchid-agent daemon** — The plain-Node, Electron-free host process (`orchid-agent serve --stdio` / `serve --socket <path>`) that owns a machine's `~/.orchid` state. Detached socket mode survives the SSH session, which is what makes turns keep running with no client connected.
+- **Machine** — One entry in the machine connection list: the implicit local machine (never persisted) or a user-added SSH remote (host/user/port/agent command, metadata only, no secrets). Machine records live in the home config `machines` section.
+- **TOFU host-key pin** — Trust-on-first-use host-key verification: adding a machine captures `ssh-keyscan` output out-of-band, requires explicit fingerprint confirmation, and pins that scan into a per-machine app-managed known-hosts file (`~/.orchid/machines/<id>/known_hosts`) enforced with `StrictHostKeyChecking=yes` on every connection. A mismatch is a hard fail.
+- **ClientId** — The opaque per-connection identity the host attributes requests, events, and ownership (approvals, questions, active sessions) to. Locally it is the renderer window id; on a remote it is the daemon-assigned connection id. Ownership keyed on ClientIds generalizes window routing without redesign.
+- **Resync** — The reconnect reconciliation driven by the per-connection event `seq`: after a drop, the client refetches session list, open-session snapshots, subagent snapshot, background commands, and pending approvals/questions, so the restored view has neither duplicates nor gaps. Sequence gaps trigger a full snapshot fallback.
+- **Daemon-ensure** — The idempotent startup of a remote's daemon: when the bridge reaches the remote but no daemon answers, one one-shot `orchid-agent serve --socket ~/.orchid/daemon.sock --detached` runs over SSH (at most once per connect cycle) and the bridge handshake retries against the freshly detached daemon.
+
 ## Trusted Projects
 
 - **Trust State** — The posture of a bound project directory: `trusted` (granted and fingerprint-current, or a bare project auto-trusted), `untrusted` (has a project surface with no grant), or `changed` (previously trusted but the surface fingerprint drifted).
