@@ -11,6 +11,7 @@
 import { ipcMain } from 'electron';
 import { z } from 'zod';
 import { IPC_CHANNELS } from '../../shared/types/ipc';
+import { hostRequest } from './host-request';
 import type { ProviderDraftDiscoveryResult } from '../../shared/types/ipc';
 import type { ProviderConnection } from '../../shared/types/provider';
 import {
@@ -26,13 +27,9 @@ import {
 import type { DriverCredential } from '../providers/drivers/types';
 import {
   connectionIdSchema,
-  discoverModels,
-  listModelOptions,
   modelView,
-  refreshQuota,
   requireStaticConnectionSupport,
   services,
-  statusView,
 } from '../providers/views';
 
 const modelListSchema = connectionIdSchema.extend({
@@ -141,17 +138,28 @@ function draftDiscoveryMessage(outcome: ConnectionDiscoveryOutcome): string {
 // ── Registration ────────────────────────────────────────────────────────────
 
 export function registerProviderModelsIPC(): void {
-  ipcMain.handle(IPC_CHANNELS.PROVIDERS_MODEL_LIST, async (_event, payload: unknown) => {
-    if (payload === undefined) return listModelOptions();
+  ipcMain.handle(IPC_CHANNELS.PROVIDERS_MODEL_LIST, async (event, payload: unknown) => {
+    if (payload === undefined) {
+      // List every enabled option across connections (no connection selected).
+      return hostRequest(String(event.sender.id), IPC_CHANNELS.PROVIDERS_MODEL_LIST);
+    }
     const parsed = modelListSchema.safeParse(payload);
     if (!parsed.success) throw new Error('Invalid providers:model_list payload');
-    return listModelOptions(parsed.data.connectionId, parsed.data.includeDisabled);
+    return hostRequest(
+      String(event.sender.id),
+      IPC_CHANNELS.PROVIDERS_MODEL_LIST,
+      parsed.data,
+    );
   });
 
   ipcMain.handle(IPC_CHANNELS.PROVIDERS_DISCOVER_MODELS, async (_event, payload: unknown) => {
     const parsed = connectionIdSchema.safeParse(payload);
     if (!parsed.success) throw new Error('Invalid providers:discover_models payload');
-    return discoverModels(parsed.data.connectionId);
+    return hostRequest(
+      String(_event.sender.id),
+      IPC_CHANNELS.PROVIDERS_DISCOVER_MODELS,
+      parsed.data,
+    );
   });
 
   ipcMain.handle(IPC_CHANNELS.PROVIDERS_DISCOVER_DRAFT_MODELS, async (_event, payload: unknown) => {
@@ -163,8 +171,11 @@ export function registerProviderModelsIPC(): void {
   ipcMain.handle(IPC_CHANNELS.PROVIDERS_QUOTA_REFRESH, async (_event, payload: unknown) => {
     const parsed = connectionIdSchema.safeParse(payload);
     if (!parsed.success) throw new Error('Invalid providers:quota_refresh payload');
-    const observation = await refreshQuota(parsed.data.connectionId);
-    return observation ? statusView(observation) : null;
+    return hostRequest(
+      String(_event.sender.id),
+      IPC_CHANNELS.PROVIDERS_QUOTA_REFRESH,
+      parsed.data,
+    );
   });
 }
 

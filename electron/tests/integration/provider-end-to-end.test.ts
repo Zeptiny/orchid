@@ -143,7 +143,8 @@ function makeTempDirectory(): string {
 function invoke<T>(channel: string, payload?: unknown): Promise<T> {
   const handler = electron.handlers.get(channel);
   if (!handler) throw new Error(`Missing provider IPC handler '${channel}'`);
-  return Promise.resolve(handler({ sender: null }, payload) as T);
+  // U5: host-routed handlers resolve the caller from event.sender.id.
+  return Promise.resolve(handler({ sender: { id: 1 } }, payload) as T);
 }
 
 function emptyCatalogSnapshot(): ProviderCatalogSnapshot {

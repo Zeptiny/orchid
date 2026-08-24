@@ -52,6 +52,8 @@ vi.mock('../../src/main/config/loader', () => ({
   HOME_CONFIG_PATH: '/tmp/orchid-test-config.json',
   HOME_CONFIG_DIR: '/tmp/orchid-test-home',
   PROJECT_CONFIG_NAME: '.orchid.json',
+  // U5: the embedded local host (behind the config handlers) composes this.
+  ensureHomeConfig: vi.fn(),
   getConfig: vi.fn(() => {
     mocks.getConfigCalls++;
     return configState;
@@ -162,11 +164,11 @@ function getConfigHandler() {
 /** Simulate a config:save IPC call with the given updates. */
 function callSave(updates: Record<string, unknown>) {
   const handler = getSaveHandler();
-  return handler(null, { updates });
+  return handler(fakeEvent, { updates });
 }
 
 function callRawSave(payload: unknown) {
-  return getSaveHandler()(null, payload);
+  return getSaveHandler()(fakeEvent, payload);
 }
 
 const fakeEvent = { sender: { id: 1 } };

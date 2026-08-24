@@ -41,12 +41,16 @@ import { registerTrustIPC, unregisterTrustIPC } from './trust';
 import { registerMachinesIPC, unregisterMachinesIPC } from './machines';
 import { registerAnalyticsIPC, unregisterAnalyticsIPC } from './analytics';
 import { registerDebugIPC, unregisterDebugIPC } from './debug';
+import { wireLocalHostWindowBroadcast } from './host-broadcast';
 
 /**
  * Register all IPC handlers.
  * Must finish before startup publishes ready and normal renderer consumers mount.
  */
 export function registerAllIPC(): void {
+  // Idempotent: the embedded local host may already be running (app startup)
+  // or start lazily on the first machine-scoped request.
+  wireLocalHostWindowBroadcast();
   registerChatIPC();
   registerConfigIPC();
   registerProviderIPC();

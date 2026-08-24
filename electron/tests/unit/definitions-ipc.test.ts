@@ -50,6 +50,14 @@ vi.mock('../../src/main/ipc/session', () => ({
   resolveBoundProjectPath: mocks.resolveBoundProjectPath,
 }));
 
+// U5: the host-routed handler resolves the caller's project through the
+// session singleton (the server binding), not the IPC re-export.
+vi.mock('../../src/main/session/singleton', () => ({
+  resolveBoundProjectPath: mocks.resolveBoundProjectPath,
+  resolveWindowWorkspace: () => ({ cwd: null, source: 'unbound', status: 'unbound' }),
+  getSessionManager: () => ({ getActive: () => null, listSaved: () => [] }),
+}));
+
 vi.mock('../../src/main/defs/manage', () => ({
   listManagedSkills: mocks.listManagedSkills,
   listManagedAgents: mocks.listManagedAgents,
@@ -87,6 +95,9 @@ vi.mock('../../src/main/mcp/project-registry', () => ({
 
 vi.mock('../../src/main/tools', () => ({
   toolRegistry: { listAll: mocks.listAll },
+  // U5: the embedded local host's HostServer installs its own notifier.
+  setTodosChangedNotifier: vi.fn(),
+  getSubagentManager: () => ({ addOnChangeListener: vi.fn(() => vi.fn()) }),
 }));
 
 let definitionsIpc: typeof import('../../src/main/ipc/definitions');

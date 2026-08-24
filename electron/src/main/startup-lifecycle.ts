@@ -16,6 +16,13 @@ export interface StartupLifecycleDependencies {
   loadSettingsAndProviders: () => void | Promise<void>;
   loadAgentsAndTools: () => void | Promise<void>;
   startToolWorkers: () => Promise<ToolWorkerPoolStartupResult>;
+  /**
+   * Start the embedded local host (the unified client protocol for the local
+   * machine, U5). Runs after providers/agents/tools are up and before the IPC
+   * facade is registered. Failure degrades startup (the lazy path retries on
+   * the first machine-scoped request) rather than failing it.
+   */
+  startLocalHost?: () => void | Promise<void>;
   /** Must register normal IPC before this stage settles and startup becomes terminal. */
   prepareInterface: () => void | Promise<void>;
   /** Detailed diagnostics stay local; startup state remains sanitized. */
@@ -74,8 +81,22 @@ export async function runStartupLifecycle(
     );
     activeStep = null;
 
+    let localHostDegraded = false;
+    if (dependencies.startLocalHost) {
+      if (isAborted()) return 'aborted';
+      try {
+        await dependencies.startLocalHost();
+      } catch (error) {
+        // The embedded host is retryable lazily, so treat a failure as a
+        // degraded (not failed) startup exactly like the worker-pool case.
+        dependencies.logFailure('preparing_interface', error);
+        localHostDegraded = true;
+      }
+    }
+    if (isAborted()) return 'aborted';
+
     if (!await runStage('preparing_interface', dependencies.prepareInterface)) return 'aborted';
-    if (workerResult.status === 'unavailable') {
+    if (workerResult.status === 'unavailable' || localHostDegraded) {
       state.degraded();
       return 'degraded';
     }

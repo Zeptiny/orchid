@@ -3,7 +3,7 @@ import { ipcMain } from 'electron';
 import { IPC_CHANNELS } from '../../shared/types/ipc';
 import { subagentDetailSchema, subagentSnapshotSchema } from './payload-schemas';
 import { flushSubagentDeltas } from '../agents/subagent-events';
-import { createSubagentDetail, createSubagentSnapshot } from '../host/subagents';
+import { hostRequest } from './host-request';
 
 // Snapshot/detail builders relocated to host/subagents.ts (electron-free,
 // shared with the headless host); re-exported for existing consumers.
@@ -37,15 +37,15 @@ let wired = false;
 export function registerSubagentIPC(): void {
   if (wired) return;
   wired = true;
-  ipcMain.handle(IPC_CHANNELS.SUBAGENTS_SNAPSHOT, (_event, raw: unknown) => {
+  ipcMain.handle(IPC_CHANNELS.SUBAGENTS_SNAPSHOT, (event, raw: unknown) => {
     const parsed = subagentSnapshotSchema.safeParse(raw);
     if (!parsed.success) throw new Error(`Invalid subagent snapshot request: ${parsed.error.message}`);
-    return createSubagentSnapshot(parsed.data.sessionId);
+    return hostRequest(String(event.sender.id), IPC_CHANNELS.SUBAGENTS_SNAPSHOT, parsed.data);
   });
-  ipcMain.handle(IPC_CHANNELS.SUBAGENTS_DETAIL, (_event, raw: unknown) => {
+  ipcMain.handle(IPC_CHANNELS.SUBAGENTS_DETAIL, (event, raw: unknown) => {
     const parsed = subagentDetailSchema.safeParse(raw);
     if (!parsed.success) throw new Error(`Invalid subagent detail request: ${parsed.error.message}`);
-    return createSubagentDetail(parsed.data.sessionId, parsed.data.subagentId);
+    return hostRequest(String(event.sender.id), IPC_CHANNELS.SUBAGENTS_DETAIL, parsed.data);
   });
 }
 

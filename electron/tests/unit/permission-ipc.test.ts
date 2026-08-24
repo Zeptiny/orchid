@@ -163,68 +163,68 @@ describe('permission IPC ownership', () => {
     fs.rmSync(TEST_CONFIG_ROOT, { recursive: true, force: true });
   });
 
-  it('derives the session-mode target from the sender and rejects no-session writes', () => {
+  it('derives the session-mode target from the sender and rejects no-session writes', async () => {
     mocks.selectedByWebContents.set(10, SESSION_A);
     const setMode = mocks.handlers.get(IPC_CHANNELS.PERMISSION_SET_SESSION_MODE)!;
 
     expect(() => setMode(eventFrom(10), { sessionId: SESSION_B, mode: 'allow' })).toThrow();
-    expect(setMode(eventFrom(10), {
+    await expect(setMode(eventFrom(10), {
       expectedSessionId: SESSION_B,
       mode: 'allow',
-    })).toEqual({ ok: false, sessionId: SESSION_A });
-    expect(setMode(eventFrom(10), {
+    })).resolves.toEqual({ ok: false, sessionId: SESSION_A });
+    await expect(setMode(eventFrom(10), {
       expectedSessionId: SESSION_A,
       mode: 'allow',
-    })).toEqual({ ok: true, sessionId: SESSION_A });
+    })).resolves.toEqual({ ok: true, sessionId: SESSION_A });
     expect(permissionIpc.sessionPermissionOverrides.get(SESSION_A)).toBe('allow');
     expect(permissionIpc.sessionPermissionOverrides.has(SESSION_B)).toBe(false);
 
     mocks.selectedByWebContents.delete(10);
     // Draft mode (no active session): the override is stashed per-window,
     // not in the session map. It returns ok: true so the coordinator commits.
-    expect(setMode(eventFrom(10), {
+    await expect(setMode(eventFrom(10), {
       expectedSessionId: null,
       mode: 'ask',
-    })).toEqual({ ok: true, sessionId: null });
+    })).resolves.toEqual({ ok: true, sessionId: null });
     expect(permissionIpc.sessionPermissionOverrides.get(SESSION_A)).toBe('allow');
   });
 
-  it('deletes the selected session override when mode is null', () => {
+  it('deletes the selected session override when mode is null', async () => {
     mocks.selectedByWebContents.set(10, SESSION_A);
     permissionIpc.sessionPermissionOverrides.set(SESSION_A, 'allow');
     const setMode = mocks.handlers.get(IPC_CHANNELS.PERMISSION_SET_SESSION_MODE)!;
 
-    expect(setMode(eventFrom(10), {
+    await expect(setMode(eventFrom(10), {
       expectedSessionId: SESSION_A,
       mode: null,
-    })).toEqual({ ok: true, sessionId: SESSION_A });
+    })).resolves.toEqual({ ok: true, sessionId: SESSION_A });
     expect(permissionIpc.sessionPermissionOverrides.has(SESSION_A)).toBe(false);
   });
 
-  it('reads distinct modes for the session selected by each sender', () => {
+  it('reads distinct modes for the session selected by each sender', async () => {
     mocks.selectedByWebContents.set(10, SESSION_A);
     mocks.selectedByWebContents.set(20, SESSION_B);
     mocks.sessionPermissionModeById.set(SESSION_A, 'allow');
     mocks.sessionPermissionModeById.set(SESSION_B, 'ask');
     const getMode = mocks.handlers.get(IPC_CHANNELS.PERMISSION_GET_SESSION_MODE)!;
 
-    expect(getMode(eventFrom(10), { expectedSessionId: SESSION_A })).toEqual({
+    await expect(getMode(eventFrom(10), { expectedSessionId: SESSION_A })).resolves.toEqual({
       ok: true,
       sessionId: SESSION_A,
       mode: 'allow',
     });
-    expect(getMode(eventFrom(20), { expectedSessionId: SESSION_B })).toEqual({
+    await expect(getMode(eventFrom(20), { expectedSessionId: SESSION_B })).resolves.toEqual({
       ok: true,
       sessionId: SESSION_B,
       mode: 'ask',
     });
-    expect(getMode(eventFrom(20), { expectedSessionId: SESSION_A })).toEqual({
+    await expect(getMode(eventFrom(20), { expectedSessionId: SESSION_A })).resolves.toEqual({
       ok: false,
       sessionId: SESSION_B,
       mode: null,
     });
     mocks.selectedByWebContents.delete(20);
-    expect(getMode(eventFrom(20), { expectedSessionId: null })).toEqual({
+    await expect(getMode(eventFrom(20), { expectedSessionId: null })).resolves.toEqual({
       ok: true,
       sessionId: null,
       mode: null,
@@ -419,7 +419,7 @@ describe('permission IPC ownership', () => {
     await expect(pending).resolves.toEqual({ decision: 'denied', reason: 'cancelled' });
   });
 
-  it('returns approvals only for the sender selected session and exact owner window', () => {
+  it('returns approvals only for the sender selected session and exact owner window', async () => {
     addWindow(10);
     addWindow(20);
     mocks.selectedByWebContents.set(10, SESSION_A);
@@ -430,10 +430,10 @@ describe('permission IPC ownership', () => {
     void createApproval(TOOL_B, SESSION_A, '20');
 
     const snapshot = mocks.handlers.get(IPC_CHANNELS.PERMISSION_SNAPSHOT)!;
-    expect(snapshot(eventFrom(10))).toEqual({
+    await expect(snapshot(eventFrom(10))).resolves.toEqual({
       approvals: [expect.objectContaining({ toolCallId: TOOL_A, sessionId: SESSION_A })],
     });
-    expect(snapshot(eventFrom(20))).toEqual({
+    await expect(snapshot(eventFrom(20))).resolves.toEqual({
       approvals: [expect.objectContaining({ toolCallId: TOOL_B, sessionId: SESSION_A })],
     });
   });
@@ -446,24 +446,24 @@ describe('permission IPC ownership', () => {
     const pending = createApproval(TOOL_A, SESSION_A, '10');
     const answer = mocks.handlers.get(IPC_CHANNELS.PERMISSION_APPROVAL_ANSWER)!;
 
-    expect(answer(eventFrom(20), {
+    await expect(answer(eventFrom(20), {
       toolCallId: TOOL_A,
       decision: 'approved',
-    })).toEqual({ ok: false });
+    })).resolves.toEqual({ ok: false });
     expect(approvalStore.get(TOOL_A)).toBeDefined();
 
     mocks.selectedByWebContents.set(10, SESSION_B);
-    expect(answer(eventFrom(10), {
+    await expect(answer(eventFrom(10), {
       toolCallId: TOOL_A,
       decision: 'approved',
-    })).toEqual({ ok: false });
+    })).resolves.toEqual({ ok: false });
     expect(approvalStore.get(TOOL_A)).toBeDefined();
 
     mocks.selectedByWebContents.set(10, SESSION_A);
-    expect(answer(eventFrom(10), {
+    await expect(answer(eventFrom(10), {
       toolCallId: TOOL_A,
       decision: 'approved',
-    })).toEqual({ ok: true });
+    })).resolves.toEqual({ ok: true });
     await expect(pending).resolves.toEqual({ decision: 'approved' });
   });
 

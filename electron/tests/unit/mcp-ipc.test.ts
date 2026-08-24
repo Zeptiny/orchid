@@ -43,6 +43,14 @@ vi.mock('../../src/main/ipc/session', () => ({
   resolveBoundProjectPath: mocks.resolveBoundProjectPath,
 }));
 
+// U5: the host-routed handler resolves the caller's project through the
+// session singleton (the server binding), not the IPC re-export.
+vi.mock('../../src/main/session/singleton', () => ({
+  resolveBoundProjectPath: mocks.resolveBoundProjectPath,
+  resolveWindowWorkspace: () => ({ cwd: null, source: 'unbound', status: 'unbound' }),
+  getSessionManager: () => ({ getActive: () => null, listSaved: () => [] }),
+}));
+
 vi.mock('../../src/main/project/runtime', () => ({
   getProjectRuntimeRegistry: () => ({ get: mocks.getRuntime }),
 }));

@@ -87,9 +87,19 @@ vi.mock('../../src/main/host/chat/abort', async (importOriginal) => ({
   forceStopSession: (sessionId: string) => mocks.forceStopSession(sessionId),
 }));
 
-vi.mock('../../src/main/session/working-set-live', () => ({
-  workingSetOpenOrFocus: (...args: unknown[]) => mocks.workingSetOpenOrFocus(...args),
-}));
+vi.mock('../../src/main/session/working-set-live', async (importOriginal) => {
+  const actual = await importOriginal<
+    typeof import('../../src/main/session/working-set-live')
+  >();
+  return {
+    ...actual,
+    workingSetOpenOrFocus: (...args: unknown[]) => mocks.workingSetOpenOrFocus(...args),
+    // U5: the embedded local host's HostServer installs its own broadcast and
+    // bootstraps the store; keep them out of this suite's temp-fixture seams.
+    setWorkingSetBroadcast: vi.fn(),
+    bootstrapWorkingSet: vi.fn(),
+  };
+});
 
 // The revoke flow cancels any in-flight RAG index; keep the worker pipeline
 // out of this suite entirely.

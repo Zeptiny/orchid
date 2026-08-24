@@ -49,8 +49,23 @@ vi.mock('../../src/main/ipc/chat', () => ({
   },
 }));
 
+// U5: ask_question:cancel now aborts through the host pipeline binding, which
+// sources forceAbortMainTurn from host/chat/abort instead of the IPC facade.
+vi.mock('../../src/main/host/chat/abort', async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  forceAbortMainTurn: mocks.forceAbortMainTurn,
+}));
+
 vi.mock('../../src/main/ipc/session', () => ({
   getSessionManager: () => mocks.sessionManager,
+}));
+
+// U5: the host-routed handlers resolve the caller's active session through the
+// session singleton (the server binding), not the IPC re-export.
+vi.mock('../../src/main/session/singleton', () => ({
+  getSessionManager: () => mocks.sessionManager,
+  resolveWindowWorkspace: () => ({ cwd: null, source: 'unbound', status: 'unbound' }),
+  resolveBoundProjectPath: () => null,
 }));
 
 import {
@@ -94,7 +109,7 @@ describe('ask_question IPC', () => {
     unregisterAskQuestionIPC();
   });
 
-  it('sends and replays questions only to windows viewing the owning session', () => {
+  it('sends and replays questions only to windows viewing the owning session', async () => {
     const owner = addWindow(10);
     const other = addWindow(20);
     mocks.selectedByWebContents.set(10, SESSION_A);
@@ -110,10 +125,10 @@ describe('ask_question IPC', () => {
     expect(other.webContents.send).not.toHaveBeenCalled();
 
     const snapshot = mocks.handlers.get(IPC_CHANNELS.ASK_QUESTION_SNAPSHOT)!;
-    expect(snapshot(eventFrom(10))).toEqual({
+    await expect(snapshot(eventFrom(10))).resolves.toEqual({
       questions: [{ sessionId: SESSION_A, toolCallId: TOOL_A, questions: QUESTIONS }],
     });
-    expect(snapshot(eventFrom(20))).toEqual({ questions: [] });
+    await expect(snapshot(eventFrom(20))).resolves.toEqual({ questions: [] });
   });
 
   it('forwards settlement only to the exact owning window', async () => {
@@ -181,13 +196,13 @@ describe('ask_question IPC', () => {
     expect(sameSessionOtherWindow.webContents.send).not.toHaveBeenCalled();
 
     const snapshot = mocks.handlers.get(IPC_CHANNELS.ASK_QUESTION_SNAPSHOT)!;
-    expect(snapshot(eventFrom(20))).toEqual({ questions: [] });
+    await expect(snapshot(eventFrom(20))).resolves.toEqual({ questions: [] });
 
     const answer = mocks.handlers.get(IPC_CHANNELS.ASK_QUESTION_ANSWER)!;
-    expect(answer(eventFrom(20), { toolCallId: TOOL_A, answers: [] })).toEqual({ ok: false });
+    await expect(answer(eventFrom(20), { toolCallId: TOOL_A, answers: [] })).resolves.toEqual({ ok: false });
     expect(questionStore.get(TOOL_A)).toBeDefined();
 
-    expect(answer(eventFrom(10), { toolCallId: TOOL_A, answers: [] })).toEqual({ ok: true });
+    await expect(answer(eventFrom(10), { toolCallId: TOOL_A, answers: [] })).resolves.toEqual({ ok: true });
     await expect(pending).resolves.toEqual({ type: 'answered', answers: [] });
   });
 
@@ -200,7 +215,7 @@ describe('ask_question IPC', () => {
     const pending = questionStore.create(TOOL_A, SESSION_A, QUESTIONS);
     const answer = mocks.handlers.get(IPC_CHANNELS.ASK_QUESTION_ANSWER)!;
 
-    expect(answer(eventFrom(20), { toolCallId: TOOL_A, answers: [] })).toEqual({ ok: false });
+    await expect(answer(eventFrom(20), { toolCallId: TOOL_A, answers: [] })).resolves.toEqual({ ok: false });
     expect(() => answer(eventFrom(10), {
       toolCallId: TOOL_A,
       answers: [{ selected: 'A', text: null, skipped: false }],
@@ -208,7 +223,7 @@ describe('ask_question IPC', () => {
     expect(answer(eventFrom(10), {
       toolCallId: TOOL_A,
       answers: [{ selected: ['A'], text: null, skipped: false }],
-    })).toEqual({ ok: true });
+    })).resolves.toEqual({ ok: true });
     await expect(pending).resolves.toMatchObject({ type: 'answered' });
   });
 
@@ -220,7 +235,7 @@ describe('ask_question IPC', () => {
     const cancel = mocks.handlers.get(IPC_CHANNELS.ASK_QUESTION_CANCEL)!;
 
     expect(() => cancel(eventFrom(10), { toolCallId: 'not-a-uuid' })).toThrow();
-    expect(cancel(eventFrom(10), { toolCallId: TOOL_B })).toEqual({ ok: true });
+    await expect(cancel(eventFrom(10), { toolCallId: TOOL_B })).resolves.toEqual({ ok: true });
     await expect(pending).resolves.toEqual({ type: 'cancelled' });
     await new Promise<void>((resolve) => setImmediate(resolve));
     expect(mocks.forceAbortMainTurn).toHaveBeenCalledWith(

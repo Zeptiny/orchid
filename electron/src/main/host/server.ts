@@ -21,6 +21,7 @@ import {
   PROTOCOL_VERSION,
   HostProtocolError,
   assertProtocolVersionMatches,
+  attachHostOriginalError,
   lookupHostMethod,
   type HostCapability,
   type HostEvent,
@@ -82,7 +83,7 @@ import {
   saveProjectConfigUpdates,
 } from '../config/persist';
 import { resolveAuthorizedProjectDir } from '../ipc/project-target';
-import { clearFunctionHashesForWorkspace } from '../tools/ast/get-function';
+import { clearFunctionHashesForWorkspace, clearFunctionHashesForSession } from '../tools/ast/get-function';
 import { canonicalizeProjectDirectory } from '../project/path';
 import {
   clearDraftCwd,
@@ -356,7 +357,17 @@ export class HostServer {
         return { id, ok: false, error: error.toPayload() };
       }
       const message = error instanceof Error ? error.message : String(error);
-      return { id, ok: false, error: { code: HOST_ERROR_CODES.INTERNAL, message } };
+      // U5 additive fix (error identity): carry the original thrown value on
+      // the error leg (non-enumerably — wire encoders never serialize it) so
+      // an in-process client rethrows exactly what the binding threw.
+      return {
+        id,
+        ok: false,
+        error: attachHostOriginalError(
+          { code: HOST_ERROR_CODES.INTERNAL, message },
+          error,
+        ),
+      };
     }
   }
 
@@ -881,6 +892,9 @@ function buildBindings(server: () => HostServer): ReadonlyMap<string, HostBindin
     sessionPermissionOverrides.delete(params.id);
     approvalStore.cancelAllForSession(params.id);
     clearToolCallHistoryForSession(params.id);
+    // U5 additive fix (parity with the Electron handler this binding replaced):
+    // a deleted session must also drop its AST function-hash cache entries.
+    clearFunctionHashesForSession(params.id);
     clearNextRequestStop(params.id);
     removeSessionActivity(params.id);
     const workingSet = workingSetRemove(params.id, ctx.clientId);
@@ -1477,8 +1491,10 @@ function buildBindings(server: () => HostServer): ReadonlyMap<string, HostBindin
   bind('config.save', (_ctx, params: { updates: Record<string, unknown> }) =>
     saveHomeConfigUpdates(params.updates));
   bind('config.get_home', () => loadHomeConfig());
-  bind('config.read_project', (ctx, params: { projectDir: string }) => {
-    const verifiedProjectDir = resolveAuthorizedProjectDir(ctx.clientId, params.projectDir);
+  // U5 additive fix: the params schema is the IPC boundary's bare directory
+  // string (configReadProjectSchema), not an object wrapper.
+  bind('config.read_project', (ctx, params: string) => {
+    const verifiedProjectDir = resolveAuthorizedProjectDir(ctx.clientId, params);
     return readProjectConfig(verifiedProjectDir);
   });
   bind('config.save_project', (ctx, params: { projectDir: string; updates: Record<string, unknown> }) => {

@@ -29,8 +29,12 @@ const mocks = vi.hoisted(() => {
 
   let activeSession: SessionShape | null = null;
   const activeSessionsByWindow = new Map<string, SessionShape | null>();
+  // Real Electron resolves webContents.fromId(id) for the webContents serving
+  // an IPC request; emulate that registry so the embedded local host's client
+  // broadcast can address the sender objects by window id (U5).
+  const sendersById = new Map<number, unknown>();
   const electronWebContents = {
-    fromId: vi.fn(() => null),
+    fromId: vi.fn((id: number) => sendersById.get(id) ?? null),
     getAllWebContents: vi.fn(() => []),
   };
 
@@ -190,6 +194,7 @@ const mocks = vi.hoisted(() => {
       fromWebContents: vi.fn(() => ({ id: 1 })),
     },
     electronWebContents,
+    sendersById,
   };
 });
 
@@ -293,9 +298,11 @@ beforeEach(async () => {
   workspace = await import('../../src/main/project/workspace');
   hostEvents = await import('../../src/main/host/events');
   electronSink = await import('../../src/main/ipc/chat/events');
-  // Session events ride the host event sink; install the Electron one (the
-  // chat IPC module that normally installs it is mocked out above).
-  hostEvents.setHostEventSink(electronSink.electronHostEventSink);
+  // U5: session events ride the embedded local host's own sink (installed by
+  // its HostServer) and reach windows through the client window broadcast, so
+  // this suite installs no Electron sink of its own.
+  void hostEvents;
+  void electronSink;
 
   // Ensure singleton methods are our mocks (first import constructs real manager)
   const mgr = sessionIpc.getSessionManager();
@@ -322,7 +329,7 @@ beforeEach(async () => {
 
 afterEach(() => {
   sessionIpc.unregisterSessionIPC();
-  hostEvents.setHostEventSink(null);
+  mocks.sendersById.clear();
   workspace.clearAllDraftCwds();
   mocks.handlers.clear();
   mocks.sessionManager._reset();
@@ -332,11 +339,14 @@ afterEach(() => {
 });
 
 function sender(id = 1) {
-  return {
+  const webContents = {
     id,
     send: vi.fn(),
     isDestroyed: () => false,
   };
+  // Register the sender so the client window broadcast can address it by id.
+  mocks.sendersById.set(id, webContents);
+  return webContents;
 }
 
 describe('session workspace IPC', () => {

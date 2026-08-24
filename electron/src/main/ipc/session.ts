@@ -2,12 +2,14 @@
  * Session IPC handlers — session:list, session:load, session:create,
  * session:delete, session:rename, workspace binding (get/pick/set/change_cwd).
  *
- * Wraps SessionManager from U5 with zod-validated payloads.
+ * U5: machine-scoped handlers forward over the host protocol (`host/routing.ts`)
+ * so the local machine speaks the same surface as a remote host. The native
+ * folder dialog and the reasoning/tier config reads stay local, as do the
+ * re-exports other IPC modules use.
  */
 import { BrowserWindow, dialog, ipcMain } from 'electron';
-import { IPC_CHANNELS } from '../../shared/types/ipc';
+import { IPC_CHANNELS, type SessionOpenResult } from '../../shared/types/ipc';
 import { flattenSessionMessages, sessionForRenderer } from '../../shared/types/session';
-import { lastChainError } from '../../shared/types/chain';
 import type { ModelSelection } from '../../shared/types/provider';
 import {
   getSessionManager,
@@ -17,8 +19,6 @@ import {
 import {
   clearDraftReasoningOverrides,
   getDraftReasoningOverride,
-  setDraftReasoningOverride,
-  takeDraftReasoningOverride,
 } from '../session/draft-reasoning';
 import {
   clearDraftTierOverrides,
@@ -26,40 +26,19 @@ import {
   setDraftTierOverride,
 } from '../session/draft-tier';
 import { getConfig } from '../config/loader';
-import { clearChatHistory } from './chat-history';
-import { sendSessionEvent } from '../host/chat/events';
+import { hostRequest } from './host-request';
 import {
   bindProjectDirectory,
-  reconcileClientWatcher,
   resetWorkspaceWatcherReferences,
-  retargetWorkspaceWatcher,
-  seedCompleteChatHistory,
-  startOpenedSessionSubagentHydration,
 } from '../host/session-ops';
 import {
-  clearDraftCwd,
   getDraftCwd,
-  isWorkspaceBound,
   setDraftCwd,
   type WorkspaceInfo,
 } from '../project/workspace';
 import { getProjectRuntimeRegistry } from '../project/runtime';
-import {
-  getProjectTrustState,
-} from '../project/trust';
 import { listConnectionModelRows } from '../providers/facets/discovery';
 import { groupTierVariantRows } from '../providers/facets/tiers';
-import { clearNextRequestStop } from '../agents/next-request-stop';
-import { removeSessionActivity } from './session-activity';
-import {
-  takeDraftPermissionOverride,
-  hydrateSessionPermissionOverride,
-} from '../permissions/session-overrides';
-import {
-  workingSetClearFocus,
-  workingSetOpenOrFocus,
-  workingSetRemove,
-} from './session-working-set';
 import {
   sessionChangeCwdSchema,
   sessionChangeModelSchema,
@@ -110,44 +89,12 @@ function resolveDraftModelSelection(windowId: string): ModelSelection | null {
   return getConfig().default_model ?? null;
 }
 
-/** Emit session:workspace_changed to the sender window. */
-function emitWorkspaceChanged(
-  sender: Electron.WebContents,
-  workspace: WorkspaceInfo,
-): void {
-  if (typeof sender.isDestroyed === 'function' && sender.isDestroyed()) {
-    return;
-  }
-  sender.send(IPC_CHANNELS.SESSION_WORKSPACE_CHANGED, { workspace });
-}
-
-/** Broadcast durable deletion with each recipient's own MRU/focus snapshot. */
-function broadcastSessionDeleted(sessionId: string): void {
-  const windows = typeof BrowserWindow.getAllWindows === 'function'
-    ? BrowserWindow.getAllWindows()
-    : [];
-  for (const win of windows) {
-    try {
-      if (win.isDestroyed() || win.webContents.isDestroyed()) continue;
-      const ownerId = String(win.webContents.id);
-      const workingSet = workingSetRemove(sessionId, ownerId);
-      win.webContents.send(IPC_CHANNELS.SESSION_DELETED, {
-        id: sessionId,
-        workingSet,
-      });
-    } catch (error) {
-      console.debug('[session] deletion broadcast failed for a window', error);
-    }
-  }
-}
-
 // ── IPC registration ─────────────────────────────────────────────────────────
 
 export function registerSessionIPC(): void {
   // session:list — return all saved sessions
-  ipcMain.handle(IPC_CHANNELS.SESSION_LIST, async () => {
-    const manager = getSessionManager();
-    return manager.listSaved();
+  ipcMain.handle(IPC_CHANNELS.SESSION_LIST, async (event) => {
+    return hostRequest(String(event.sender.id), IPC_CHANNELS.SESSION_LIST);
   });
 
   // session:load — load a session by ID; optionally set as active + seed history
@@ -157,59 +104,7 @@ export function registerSessionIPC(): void {
     if (!parsed.success) {
       throw new Error(`Invalid session:load payload: ${parsed.error.message}`);
     }
-
-    const manager = getSessionManager();
-    const { id, activate } = parsed.data;
-    const windowId = String(event.sender.id);
-
-    // Read-only peek (todos / subagents refresh) — do not switch or reseed.
-    if (!activate) {
-      const session = manager.load(id);
-      return session ? sessionForRenderer(session) : null;
-    }
-
-    const releasedDraftCwd = getDraftCwd(windowId);
-    // Selecting a session is view navigation. Work in the previously selected
-    // session continues and remains addressed by its own session id.
-    const session = manager.switchTo(id, windowId);
-
-    if (session) {
-      workingSetOpenOrFocus(session.id, windowId);
-      // Hydrate the in-memory permission gate map from the persisted session
-      // record so the override survives restarts.
-      hydrateSessionPermissionOverride(session.id, session.permissionMode);
-      // Restore the runtime subagent records (prompt context + wait/interrupt)
-      // after a restart; the renderer already renders the stored rows.
-      startOpenedSessionSubagentHydration(session.id, windowId);
-    } else {
-      // Drop ghost tabs when the session cannot be loaded (missing/corrupt).
-      workingSetRemove(id, windowId);
-    }
-
-    // Session owns workspace now — clear draft so it doesn't shadow session.cwd.
-    // Sticky default is intentionally NOT updated on load (R4).
-    clearDraftCwd(windowId);
-    if (releasedDraftCwd) {
-      const { clearFunctionHashesForWorkspace } = await import('../tools/ast/get-function.js');
-      clearFunctionHashesForWorkspace(releasedDraftCwd);
-    }
-
-    // Seed history with ALL chains (matches renderer flatten) so the next
-    // chat:send continues the full conversation, not only the active chain.
-    if (session) {
-      seedCompleteChatHistory(session);
-    } else {
-      clearChatHistory(id);
-    }
-
-    // Project config and definitions are resolved from each turn's captured
-    // runtime. Selecting a session must not replace process-wide layers that
-    // another running session could still depend on.
-    const workspace = resolveWindowWorkspace(windowId);
-    retargetWorkspaceWatcher(windowId, workspace.cwd);
-
-    emitWorkspaceChanged(event.sender, workspace);
-    return session ? sessionForRenderer(session) : null;
+    return hostRequest(String(event.sender.id), IPC_CHANNELS.SESSION_LOAD, parsed.data);
   });
 
   // session:open — activate a session and return its bounded renderer view in
@@ -221,55 +116,7 @@ export function registerSessionIPC(): void {
     if (!parsed.success) {
       throw new Error(`Invalid session:open payload: ${parsed.error.message}`);
     }
-
-    const manager = getSessionManager();
-    const { id } = parsed.data;
-    const windowId = String(event.sender.id);
-
-    // Selecting a session is view navigation. Work in the previously selected
-    // session continues and remains addressed by its own session id.
-    const session = manager.switchTo(id, windowId);
-
-    if (session) {
-      workingSetOpenOrFocus(session.id, windowId);
-      hydrateSessionPermissionOverride(session.id, session.permissionMode);
-      // Restore the runtime subagent records (prompt context + wait/interrupt)
-      // after a restart; the renderer already renders the stored rows.
-      startOpenedSessionSubagentHydration(session.id, windowId);
-    } else {
-      // Drop ghost tabs when the session cannot be loaded (missing/corrupt).
-      workingSetRemove(id, windowId);
-    }
-
-    // Session owns workspace now — clear draft so it doesn't shadow session.cwd.
-    // Sticky default is intentionally NOT updated on open (matches session:load).
-    clearDraftCwd(windowId);
-
-    // Flatten once and reuse for both the seeded chat history (so the next
-    // chat:send continues the full conversation) and the renderer payload.
-    const messages = session ? flattenSessionMessages(session) : [];
-    if (session) {
-      seedCompleteChatHistory(session, messages);
-    } else {
-      clearChatHistory(id);
-    }
-
-    const workspace = resolveWindowWorkspace(windowId);
-    retargetWorkspaceWatcher(windowId, workspace.cwd);
-    emitWorkspaceChanged(event.sender, workspace);
-
-    // Live in-flight snapshot (chat.ts owns the active-agent registry). Dynamic
-    // import avoids the session.ts <-> chat.ts circular dependency.
-    const { getLiveChatSnapshot } = await import('./chat.js');
-    const live = getLiveChatSnapshot(id);
-
-    return {
-      session: session ? sessionForRenderer(session) : null,
-      messages,
-      live,
-      workspace,
-      lastChainError: session && !live ? lastChainError(session.chains) : null,
-    };
+    return hostRequest<SessionOpenResult>(String(event.sender.id), IPC_CHANNELS.SESSION_OPEN, parsed.data);
   });
 
   // session:history_page — bounded older-message hydration for one chain.
@@ -279,10 +126,10 @@ export function registerSessionIPC(): void {
     if (!parsed.success) {
       throw new Error(`Invalid session:history_page payload: ${parsed.error.message}`);
     }
-    return getSessionManager().getHistoryPage(
-      parsed.data.sessionId,
-      parsed.data.chainId,
-      parsed.data.beforeIndex,
+    return hostRequest(
+      String(_event.sender.id),
+      IPC_CHANNELS.SESSION_HISTORY_PAGE,
+      parsed.data,
     );
   });
 
@@ -291,58 +138,13 @@ export function registerSessionIPC(): void {
   // for tests and any callers that need an immediate empty session file.
   // Requires a valid workspace (draft or sticky); never process.cwd().
   ipcMain.handle(IPC_CHANNELS.SESSION_CREATE, async (event) => {
-    const manager = getSessionManager();
-    const windowId = String(event.sender.id);
-
-    const workspace = resolveWindowWorkspace(windowId);
-    if (!isWorkspaceBound(workspace) || workspace.cwd == null) {
-      throw new Error(
-        'Cannot create session: no project folder selected. Choose a folder first.',
-      );
-    }
-
-    if (getProjectTrustState(workspace.cwd) !== 'trusted') {
-      throw new Error(
-        'Cannot create session: project folder is not trusted. Trust the project first.',
-      );
-    }
-
-    const config = getProjectRuntimeRegistry().get(workspace.cwd).config;
-    const created = manager.create(
-      config.default_model,
-      { cwd: workspace.cwd },
-      windowId,
-    );
-    const draftOverride = takeDraftReasoningOverride(windowId);
-    if (draftOverride !== undefined) {
-      manager.setReasoningEffortOverride(created.id, draftOverride);
-    }
-    const draftPermission = takeDraftPermissionOverride(windowId);
-    if (draftPermission !== undefined) {
-      manager.setPermissionMode(created.id, draftPermission);
-    }
-    const session = manager.getSession(created.id) ?? created;
-    // Draft was promoted into the session.
-    clearDraftCwd(windowId);
-    clearChatHistory(session.id);
-    workingSetOpenOrFocus(session.id, windowId);
-    event.sender.send(IPC_CHANNELS.SESSION_CREATED, { session });
-    emitWorkspaceChanged(event.sender, resolveWindowWorkspace(windowId));
-    return session;
+    return hostRequest(String(event.sender.id), IPC_CHANNELS.SESSION_CREATE);
   });
 
   // session:clear_active — draft / new chat: no active session, no new file
   // Keeps any existing draft cwd; otherwise UI falls through to sticky default.
   ipcMain.handle(IPC_CHANNELS.SESSION_CLEAR_ACTIVE, async (event) => {
-    const manager = getSessionManager();
-    const windowId = String(event.sender.id);
-    const selected = manager.getActive(windowId);
-    if (selected?.cwd) setDraftCwd(windowId, selected.cwd);
-    manager.clearActive(windowId);
-    workingSetClearFocus(windowId);
-    const workspace = resolveWindowWorkspace(windowId);
-    emitWorkspaceChanged(event.sender, workspace);
-    return { status: 'cleared' };
+    return hostRequest(String(event.sender.id), IPC_CHANNELS.SESSION_CLEAR_ACTIVE);
   });
 
   // session:delete — delete a session
@@ -352,47 +154,7 @@ export function registerSessionIPC(): void {
       throw new Error(`Invalid session:delete payload: ${parsed.error.message}`);
     }
 
-    const manager = getSessionManager();
-    const windowId = String(event.sender.id);
-    const wasActive = manager.getActive(windowId)?.id === parsed.data.id;
-    // Load cleanup seams before the durable mutation, but do not stop any work
-    // until the synchronous row deletion succeeds.
-    const [
-      { discardDeletedSessionRuntime },
-      { clearPermissionSessionState },
-      { clearToolCallHistoryForSession },
-      { clearFunctionHashesForSession },
-    ] = await Promise.all([
-      import('./chat.js'),
-      import('./permission.js'),
-      import('../permissions/history.js'),
-      import('../tools/ast/get-function.js'),
-    ]);
-    // Deleting the window's active session changes its effective workspace (it
-    // falls back to draft / sticky default), so the watcher reference must
-    // follow. A background session deleted from the working set leaves the
-    // window's workspace untouched and must not move the reference.
-    const deleted = manager.delete(parsed.data.id);
-    // A deleted background session must not keep spending provider/tool work or
-    // recreate activity after it disappears from the catalog. This teardown is
-    // intentionally non-persistent because the durable row is already gone.
-    discardDeletedSessionRuntime(parsed.data.id);
-    clearPermissionSessionState(parsed.data.id);
-    clearToolCallHistoryForSession(parsed.data.id);
-    clearFunctionHashesForSession(parsed.data.id);
-    clearNextRequestStop(parsed.data.id);
-    removeSessionActivity(parsed.data.id);
-    const workingSet = workingSetRemove(parsed.data.id, windowId);
-    clearChatHistory(parsed.data.id);
-    // `not_found` is still authoritative absence and must clear stale copies
-    // held by other windows just like a newly deleted row.
-    broadcastSessionDeleted(parsed.data.id);
-    if (deleted && wasActive) {
-      const workspace = resolveWindowWorkspace(windowId);
-      retargetWorkspaceWatcher(windowId, workspace.cwd);
-      emitWorkspaceChanged(event.sender, workspace);
-    }
-    return { status: deleted ? 'deleted' : 'not_found', workingSet };
+    return hostRequest(String(event.sender.id), IPC_CHANNELS.SESSION_DELETE, parsed.data);
   });
 
   // session:rename — rename a session
@@ -402,28 +164,7 @@ export function registerSessionIPC(): void {
       throw new Error(`Invalid session:rename payload: ${parsed.error.message}`);
     }
 
-    const manager = getSessionManager();
-    const existing = manager.getSession(parsed.data.id);
-    if (!existing) {
-      return { status: 'not_found' };
-    }
-    if (existing.name === parsed.data.name) {
-      return { status: 'unchanged', name: existing.name };
-    }
-
-    manager.rename(parsed.data.id, parsed.data.name);
-    const after = manager.getSession(parsed.data.id);
-    if (!after || after.name !== parsed.data.name) {
-      return { status: 'not_active' };
-    }
-
-    // Push rename event to every window currently viewing this session.
-    sendSessionEvent(String(event.sender.id), parsed.data.id, IPC_CHANNELS.SESSION_RENAMED, {
-      id: parsed.data.id,
-      name: parsed.data.name,
-    });
-
-    return { status: 'renamed' };
+    return hostRequest(String(event.sender.id), IPC_CHANNELS.SESSION_RENAME, parsed.data);
   });
 
   // session:change_model — update model on the active session
@@ -433,46 +174,7 @@ export function registerSessionIPC(): void {
       throw new Error(`Invalid session:change_model payload: ${parsed.error.message}`);
     }
 
-    const manager = getSessionManager();
-    const existing = manager.getSession(parsed.data.id);
-    if (!existing) {
-      return { status: 'not_found' };
-    }
-
-    const nextLabel = parsed.data.modelLabel ?? parsed.data.selection?.modelId ?? null;
-    const sameSelection =
-      (existing.selection === null && parsed.data.selection === null) ||
-      (existing.selection !== null &&
-        parsed.data.selection !== null &&
-        existing.selection.connectionId === parsed.data.selection.connectionId &&
-        existing.selection.modelId === parsed.data.selection.modelId);
-    if (sameSelection && existing.modelLabel === nextLabel) {
-      return {
-        status: 'unchanged',
-        selection: existing.selection,
-        modelLabel: existing.modelLabel,
-      };
-    }
-
-    manager.changeModel(parsed.data.id, parsed.data.selection, nextLabel);
-    const after = manager.getSession(parsed.data.id);
-    if (!after) {
-      return { status: 'not_found' };
-    }
-    const afterSame =
-      (after.selection === null && parsed.data.selection === null) ||
-      (after.selection !== null &&
-        parsed.data.selection !== null &&
-        after.selection.connectionId === parsed.data.selection.connectionId &&
-        after.selection.modelId === parsed.data.selection.modelId);
-    if (!afterSame || after.modelLabel !== nextLabel) {
-      return { status: 'not_active' };
-    }
-    return {
-      status: 'changed',
-      selection: after.selection,
-      modelLabel: after.modelLabel,
-    };
+    return hostRequest(String(_event.sender.id), IPC_CHANNELS.SESSION_CHANGE_MODEL, parsed.data);
   });
 
   // session:get_workspace — resolve current workspace for this window.
@@ -481,10 +183,7 @@ export function registerSessionIPC(): void {
   // or an activation, so this first resolution is what attaches its watcher
   // reference. Idempotent — see reconcileWindowWatcher.
   ipcMain.handle(IPC_CHANNELS.SESSION_GET_WORKSPACE, async (event) => {
-    const windowId = String(event.sender.id);
-    const workspace = resolveWindowWorkspace(windowId);
-    reconcileClientWatcher(windowId, workspace);
-    return workspace;
+    return hostRequest<WorkspaceInfo>(String(event.sender.id), IPC_CHANNELS.SESSION_GET_WORKSPACE);
   });
 
   // session:pick_project_dir — native directory dialog → bind + sticky
@@ -505,7 +204,10 @@ export function registerSessionIPC(): void {
     }
 
     const workspace = await bindProjectDirectory(windowId, result.filePaths[0]);
-    emitWorkspaceChanged(event.sender, workspace);
+    if (typeof event.sender.isDestroyed === 'function' && event.sender.isDestroyed()) {
+      return workspace;
+    }
+    event.sender.send(IPC_CHANNELS.SESSION_WORKSPACE_CHANGED, { workspace });
     return workspace;
   });
 
@@ -516,10 +218,11 @@ export function registerSessionIPC(): void {
       throw new Error(`Invalid session:set_workspace payload: ${parsed.error.message}`);
     }
 
-    const windowId = String(event.sender.id);
-    const workspace = await bindProjectDirectory(windowId, parsed.data.cwd);
-    emitWorkspaceChanged(event.sender, workspace);
-    return workspace;
+    return hostRequest<WorkspaceInfo>(
+      String(event.sender.id),
+      IPC_CHANNELS.SESSION_SET_WORKSPACE,
+      parsed.data,
+    );
   });
 
   // session:change_cwd — legacy route retained for empty-session drafts.
@@ -531,17 +234,7 @@ export function registerSessionIPC(): void {
       throw new Error(`Invalid session:change_cwd payload: ${parsed.error.message}`);
     }
 
-    const windowId = String(event.sender.id);
-    const manager = getSessionManager();
-    const active = manager.getActive(windowId);
-    if (!active || active.id !== parsed.data.id) {
-      throw new Error('Cannot change project for a session that is not selected.');
-    }
-
-    const hadConversation = active.chains.length > 0;
-    const workspace = await bindProjectDirectory(windowId, parsed.data.cwd);
-    emitWorkspaceChanged(event.sender, workspace);
-    return hadConversation ? null : manager.getActive(windowId);
+    return hostRequest(String(event.sender.id), IPC_CHANNELS.SESSION_CHANGE_CWD, parsed.data);
   });
 
   ipcMain.handle(IPC_CHANNELS.SESSION_SET_REASONING_EFFORT, async (event, payload: unknown) => {
@@ -550,17 +243,7 @@ export function registerSessionIPC(): void {
       throw new Error(`Invalid session:set_reasoning_effort payload: ${parsed.error.message}`);
     }
 
-    const windowId = String(event.sender.id);
-    const manager = getSessionManager();
-    const active = manager.getActive(windowId);
-    if (!active) {
-      // Draft mode: no session file yet — park the override until one exists.
-      setDraftReasoningOverride(windowId, parsed.data.effort);
-      return { status: 'ok' };
-    }
-
-    manager.setReasoningEffortOverride(active.id, parsed.data.effort);
-    return { status: 'ok' };
+    return hostRequest(String(event.sender.id), IPC_CHANNELS.SESSION_SET_REASONING_EFFORT, parsed.data);
   });
 
   ipcMain.handle(IPC_CHANNELS.SESSION_GET_REASONING_CONFIG, async (event, payload: unknown) => {
@@ -720,5 +403,7 @@ export function unregisterSessionIPC(): void {
   resetWorkspaceWatcherReferences();
 }
 
-// Re-export draft helper for tests that need to seed draft without IPC.
-export { getDraftCwd, setDraftCwd, clearDraftCwd, takeDraftPermissionOverride };
+// Re-export draft helpers for tests that need to seed draft without IPC.
+export { getDraftCwd, setDraftCwd };
+export { clearDraftCwd } from '../project/workspace';
+export { takeDraftPermissionOverride } from '../permissions/session-overrides';

@@ -16,6 +16,7 @@ import { z } from 'zod';
 import { IPC_CHANNELS } from '../../shared/types/ipc';
 import type { ProviderConnection } from '../../shared/types/provider';
 import type { ProviderMutationResult } from '../../shared/types/ipc';
+import { hostRequest } from './host-request';
 import { createEnvironmentCredentialReference } from '../providers/credentials/vault';
 import {
   automaticDiscoveryMessage,
@@ -23,16 +24,11 @@ import {
   connectionIdSchema,
   connectionView,
   credentialBinding,
-  deleteConnection,
-  disableConnection,
   discoveryCredential,
-  disconnectConnection,
   disconnectSchema,
   dropRecordKeys,
-  enableConnection,
   genericOrigin,
   modelView,
-  overview,
   pricingView,
   readApiKeyForTrustedStatus,
   refreshStatus,
@@ -166,7 +162,9 @@ const submitApiKeySchema = z.object({
 // ── Registration ────────────────────────────────────────────────────────────
 
 export function registerProviderIPC(): void {
-  ipcMain.handle(IPC_CHANNELS.PROVIDERS_LIST, async () => overview());
+  ipcMain.handle(IPC_CHANNELS.PROVIDERS_LIST, async (event) => {
+    return hostRequest(String(event.sender.id), IPC_CHANNELS.PROVIDERS_LIST);
+  });
 
   ipcMain.handle(IPC_CHANNELS.PROVIDERS_CREATE, async (_event, payload: unknown) => {
     const parsed = createConnectionSchema.safeParse(payload);
@@ -332,48 +330,57 @@ export function registerProviderIPC(): void {
   ipcMain.handle(IPC_CHANNELS.PROVIDERS_VALIDATE, async (_event, payload: unknown) => {
     const parsed = connectionIdSchema.safeParse(payload);
     if (!parsed.success) throw new Error('Invalid providers:validate payload');
-    return withConnectionMutationLock(parsed.data.connectionId, () =>
-      validateConnection(parsed.data.connectionId),
+    return hostRequest(
+      String(_event.sender.id),
+      IPC_CHANNELS.PROVIDERS_VALIDATE,
+      parsed.data,
     );
   });
 
   ipcMain.handle(IPC_CHANNELS.PROVIDERS_DISABLE, async (_event, payload: unknown) => {
     const parsed = connectionIdSchema.safeParse(payload);
     if (!parsed.success) throw new Error('Invalid providers:disable payload');
-    return withConnectionMutationLock(parsed.data.connectionId, () =>
-      disableConnection(parsed.data.connectionId),
+    return hostRequest(
+      String(_event.sender.id),
+      IPC_CHANNELS.PROVIDERS_DISABLE,
+      parsed.data,
     );
   });
 
   ipcMain.handle(IPC_CHANNELS.PROVIDERS_ENABLE, async (_event, payload: unknown) => {
     const parsed = connectionIdSchema.safeParse(payload);
     if (!parsed.success) throw new Error('Invalid providers:enable payload');
-    return withConnectionMutationLock(parsed.data.connectionId, () =>
-      enableConnection(parsed.data.connectionId),
+    return hostRequest(
+      String(_event.sender.id),
+      IPC_CHANNELS.PROVIDERS_ENABLE,
+      parsed.data,
     );
   });
 
   ipcMain.handle(IPC_CHANNELS.PROVIDERS_DISCONNECT, async (_event, payload: unknown) => {
     const parsed = disconnectSchema.safeParse(payload);
     if (!parsed.success) throw new Error('Invalid providers:disconnect payload');
-    return withConnectionMutationLock(parsed.data.connectionId, () =>
-      disconnectConnection(parsed.data.connectionId),
+    return hostRequest(
+      String(_event.sender.id),
+      IPC_CHANNELS.PROVIDERS_DISCONNECT,
+      parsed.data,
     );
   });
 
   ipcMain.handle(IPC_CHANNELS.PROVIDERS_DELETE, async (_event, payload: unknown) => {
     const parsed = disconnectSchema.safeParse(payload);
     if (!parsed.success) throw new Error('Invalid providers:delete payload');
-    return withConnectionMutationLock(parsed.data.connectionId, () =>
-      deleteConnection(parsed.data.connectionId),
+    return hostRequest(
+      String(_event.sender.id),
+      IPC_CHANNELS.PROVIDERS_DELETE,
+      parsed.data,
     );
   });
 
-  ipcMain.handle(IPC_CHANNELS.PROVIDERS_STATUS_REFRESH, async (_event, payload: unknown) => {
+  ipcMain.handle(IPC_CHANNELS.PROVIDERS_STATUS_REFRESH, async (event, payload: unknown) => {
     const parsed = statusRefreshSchema.safeParse(payload);
     if (!parsed.success) throw new Error('Invalid providers:status_refresh payload');
-    const observation = await refreshStatus(parsed.data.providerId, parsed.data.connectionId);
-    return observation ? statusView(observation) : null;
+    return hostRequest(String(event.sender.id), IPC_CHANNELS.PROVIDERS_STATUS_REFRESH, parsed.data);
   });
 }
 

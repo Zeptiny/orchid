@@ -210,6 +210,37 @@ export const HOST_ERROR_CODES = {
 
 export type HostErrorCode = (typeof HOST_ERROR_CODES)[keyof typeof HOST_ERROR_CODES];
 
+/**
+ * Field under which an in-process server carries the *original* thrown value
+ * on the response error leg so a co-located client can rethrow it verbatim
+ * (error identity preservation — see main/host/transport-inprocess.ts).
+ *
+ * The field is attached NON-enumerably, so wire transports that JSON-encode
+ * the error payload never serialize it (and can never trip on a circular
+ * thrown value); only in-process readers observe it.
+ */
+export const HOST_ORIGINAL_ERROR_KEY = '__orchidOriginalError';
+
+/** Carry the original thrown value on an error payload without serializing it. */
+export function attachHostOriginalError(
+  payload: HostErrorPayload,
+  error: unknown,
+): HostErrorPayload {
+  Object.defineProperty(payload, HOST_ORIGINAL_ERROR_KEY, {
+    value: error,
+    enumerable: false,
+    writable: false,
+    configurable: true,
+  });
+  return payload;
+}
+
+/** Read the original thrown value carried on an error payload, if any. */
+export function takeHostOriginalError(payload: HostErrorPayload): unknown {
+  if (payload == null || typeof payload !== 'object') return undefined;
+  return (payload as Record<string, unknown>)[HOST_ORIGINAL_ERROR_KEY];
+}
+
 /** Error throwable by both sides; serializes onto the response error leg. */
 export class HostProtocolError extends Error {
   readonly code: HostErrorCode;
@@ -481,10 +512,16 @@ const providerDisconnectParamsSchema = providerConnectionIdParamsSchema
   .extend({ confirm: z.literal(true) })
   .strict();
 
-/** Mirrors the providers:model_list handler schema (main/ipc/provider-models.ts). */
-const providerModelListParamsSchema = providerConnectionIdParamsSchema
-  .extend({ includeDisabled: z.boolean().optional() })
-  .strict();
+/**
+ * Mirrors the providers:model_list handler schema (main/ipc/provider-models.ts):
+ * `connectionId` is optional — an absent id lists options across connections.
+ * (U5 additive fix: the original draft required it, which would have rejected
+ * the renderer's "no connection selected" listing.)
+ */
+const providerModelListParamsSchema = z.object({
+  connectionId: z.string().uuid().optional(),
+  includeDisabled: z.boolean().optional(),
+}).strict().optional();
 
 /** Mirrors the providers:status_refresh handler schema. */
 const providerStatusRefreshParamsSchema = z.object({

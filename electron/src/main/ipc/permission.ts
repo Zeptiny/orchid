@@ -12,6 +12,7 @@ import { ipcMain } from 'electron';
 import { z } from 'zod';
 import { IPC_CHANNELS } from '../../shared/types/ipc';
 import type { PermissionRule } from '../../shared/types/ipc-boundary';
+import { hostRequest } from './host-request';
 import {
   PERMISSION_MODE_VALUES,
   type RiskClass,
@@ -40,11 +41,9 @@ import {
 } from './chat';
 import { permissionConfigScopeSaveSchema } from './payload-schemas';
 import { resolveAuthorizedProjectDir } from './project-target';
-import { getSessionManager, resolveWindowWorkspace } from '../session/singleton';
+import { resolveWindowWorkspace } from '../session/singleton';
 import {
   sessionPermissionOverrides,
-  setDraftPermissionOverride,
-  getDraftPermissionOverride,
   clearDraftPermissionOverrides,
 } from '../permissions/session-overrides';
 
@@ -128,19 +127,6 @@ function onApprovalSettled({
   } catch { /* noop */ }
 }
 
-function selectedSessionId(senderId: number): string | null {
-  return getSessionManager().getActive(String(senderId))?.id ?? null;
-}
-
-function senderOwnsApproval(senderId: number, toolCallId: string): boolean {
-  const entry = approvalStore.get(toolCallId);
-  return (
-    entry != null &&
-    entry.ownerWindowId === String(senderId) &&
-    entry.sessionId === selectedSessionId(senderId)
-  );
-}
-
 function readConfigLayer(filePath: string): Record<string, unknown> {
   let parsed: unknown;
   try {
@@ -197,83 +183,38 @@ export function registerPermissionIPC(): void {
   approvalStore.on('approval-requested', onApprovalRequested);
   approvalStore.on('approval-settled', onApprovalSettled);
 
-  ipcMain.handle(IPC_CHANNELS.PERMISSION_SNAPSHOT, (event) => {
-    const sessionId = selectedSessionId(event.sender.id);
-    return {
-      approvals: sessionId == null
-        ? []
-        : approvalStore.listForOwner(sessionId, String(event.sender.id)),
-    };
-  });
+  ipcMain.handle(IPC_CHANNELS.PERMISSION_SNAPSHOT, (event) =>
+    hostRequest(String(event.sender.id), IPC_CHANNELS.PERMISSION_SNAPSHOT));
 
   ipcMain.handle(
     IPC_CHANNELS.PERMISSION_APPROVAL_ANSWER,
     (event, payload: unknown) => {
       const parsed = approvalAnswerSchema.parse(payload);
-      if (!senderOwnsApproval(event.sender.id, parsed.toolCallId)) {
-        return { ok: false };
-      }
-      const ok = approvalStore.answer(parsed.toolCallId, parsed.decision, parsed.reason);
-      return { ok };
+      return hostRequest(
+        String(event.sender.id),
+        IPC_CHANNELS.PERMISSION_APPROVAL_ANSWER,
+        parsed,
+      );
     },
   );
 
   ipcMain.handle(
     IPC_CHANNELS.PERMISSION_SET_SESSION_MODE,
     (event, payload: unknown) => {
-      const parsed = setSessionModeSchema.parse(payload);
-      const windowId = String(event.sender.id);
-      const sessionId = selectedSessionId(event.sender.id);
-
-      if (sessionId == null) {
-        // Draft mode (no session file yet): stash in the per-window draft store.
-        // Transferred to the session when one is created.
-        if (parsed.expectedSessionId !== null) {
-          return { ok: false, sessionId: null };
-        }
-        setDraftPermissionOverride(windowId, parsed.mode);
-        return { ok: true, sessionId: null };
-      }
-
-      if (sessionId !== parsed.expectedSessionId) {
-        return { ok: false, sessionId };
-      }
-
-      // Persist to the session DB; setPermissionMode also syncs the in-memory
-      // gate map so the selector choice takes effect immediately.
-      getSessionManager().setPermissionMode(sessionId, parsed.mode);
-      return { ok: true, sessionId };
+      return hostRequest(
+        String(event.sender.id),
+        IPC_CHANNELS.PERMISSION_SET_SESSION_MODE,
+        setSessionModeSchema.parse(payload),
+      );
     },
   );
 
   ipcMain.handle(IPC_CHANNELS.PERMISSION_GET_SESSION_MODE, (event, payload: unknown) => {
-    const parsed = getSessionModeSchema.parse(payload);
-    const windowId = String(event.sender.id);
-    const sessionId = selectedSessionId(event.sender.id);
-
-    if (sessionId == null) {
-      // Draft mode: read the per-window draft override.
-      if (parsed.expectedSessionId !== null) {
-        return { ok: false, sessionId: null, mode: null };
-      }
-      return {
-        ok: true,
-        sessionId: null,
-        mode: getDraftPermissionOverride(windowId) ?? null,
-      };
-    }
-
-    if (sessionId !== parsed.expectedSessionId) {
-      return { ok: false, sessionId, mode: null };
-    }
-
-    // The session record is the source of truth (survives restarts).
-    const session = getSessionManager().getSession(sessionId);
-    return {
-      ok: true,
-      sessionId,
-      mode: session?.permissionMode ?? null,
-    };
+    return hostRequest(
+      String(event.sender.id),
+      IPC_CHANNELS.PERMISSION_GET_SESSION_MODE,
+      getSessionModeSchema.parse(payload),
+    );
   });
 
   ipcMain.handle(IPC_CHANNELS.CONFIG_PERMISSION_SCOPES, (event) => {

@@ -4,49 +4,21 @@
  * Full indexes run in a worker thread; progress is broadcast to all windows so
  * late UI subscribers (tab switches / remounts) keep seeing updates.
  */
-import { BrowserWindow, ipcMain } from 'electron';
+import { ipcMain } from 'electron';
 import { IPC_CHANNELS } from '../../shared/types/ipc';
-import type { ASTIndexProgress } from '../../shared/types/ipc-boundary';
+import { hostRequest } from './host-request';
 import {
-  indexProject,
-  isIndexing,
   getIndexState,
 } from '../ast/indexer';
-import { ASTStore } from '../ast/store';
-import { withDisposable } from '../utils/with-disposable';
 import { resolveBoundProjectPath } from './session';
-import { getProjectTrustState } from '../project/trust';
-import { getProjectRuntimeRegistry } from '../project/runtime';
-import type { Config } from '../config';
 import { astIndexSchema } from './payload-schemas';
-
-function broadcastProgress(projectPath: string, progress: ASTIndexProgress): void {
-  for (const win of BrowserWindow.getAllWindows()) {
-    if (win.isDestroyed() || win.webContents.isDestroyed()) continue;
-    if (resolveBoundProjectPath(String(win.webContents.id)) !== projectPath) continue;
-    win.webContents.send(IPC_CHANNELS.AST_PROGRESS, progress);
-  }
-}
 
 // ── IPC registration ─────────────────────────────────────────────────────────
 
 export function registerASTIPC(): void {
   // ast:status — return AST store status
   ipcMain.handle(IPC_CHANNELS.AST_STATUS, async (event) => {
-    const projectPath = resolveBoundProjectPath(String(event.sender.id));
-    if (projectPath == null || getProjectTrustState(projectPath) !== 'trusted') {
-      return {
-        totalFiles: 0,
-        totalSymbols: 0,
-        lastIndexed: null,
-        lastIndexDuration: null,
-        lastAutoRefresh: null,
-      };
-    }
-    return withDisposable(
-      new ASTStore(projectPath),
-      (store) => store.status(),
-    );
+    return hostRequest(String(event.sender.id), IPC_CHANNELS.AST_STATUS);
   });
 
   // ast:index_state — in-flight run snapshot for remounting UIs
@@ -62,61 +34,7 @@ export function registerASTIPC(): void {
       throw new Error(`Invalid ast:index payload: ${parsed.error.message}`);
     }
 
-    const { force } = parsed.data;
-
-    const projectPath = resolveBoundProjectPath(String(event.sender.id));
-    if (!projectPath) {
-      return {
-        filesScanned: 0,
-        filesIndexed: 0,
-        filesSkipped: 0,
-        filesDeleted: 0,
-        symbolsExtracted: 0,
-        errors: ['No project folder selected'],
-        durationSeconds: 0,
-      };
-    }
-
-    if (getProjectTrustState(projectPath) !== 'trusted') {
-      return {
-        filesScanned: 0,
-        filesIndexed: 0,
-        filesSkipped: 0,
-        filesDeleted: 0,
-        symbolsExtracted: 0,
-        errors: ['Project folder is not trusted'],
-        durationSeconds: 0,
-      };
-    }
-
-    if (isIndexing(projectPath)) {
-      return {
-        filesScanned: 0,
-        filesIndexed: 0,
-        filesSkipped: 0,
-        filesDeleted: 0,
-        symbolsExtracted: 0,
-        errors: ['Indexing already in progress'],
-        durationSeconds: 0,
-      };
-    }
-
-    // Inline fallback consistency: the worker self-loads project config, but a
-    // missing worker bundle falls back to this main-thread snapshot. If the
-    // runtime cannot be resolved (e.g. the directory vanished), index without
-    // an explicit config and let the process-wide config apply.
-    let runtimeConfig: Config | undefined;
-    try {
-      runtimeConfig = getProjectRuntimeRegistry().get(projectPath).config;
-    } catch {
-      runtimeConfig = undefined;
-    }
-    return indexProject({
-      force,
-      projectPath,
-      config: runtimeConfig,
-      progressCallback: (progress) => broadcastProgress(projectPath, progress),
-    });
+    return hostRequest(String(event.sender.id), IPC_CHANNELS.AST_INDEX, parsed.data);
   });
 }
 

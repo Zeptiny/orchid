@@ -210,9 +210,26 @@ vi.mock('../../src/main/session/working-set-live', () => ({
   workingSetOpenOrFocus: mocks.workingSetOpenOrFocus,
   workingSetRemove: mocks.workingSetRemove,
   getWorkingSetSnapshot: mocks.getWorkingSetSnapshot,
+  // U5: the embedded local host's HostServer installs its own broadcast and
+  // bootstraps the store.
+  setWorkingSetBroadcast: vi.fn(),
+  bootstrapWorkingSet: vi.fn(),
+  filterIfCatalogOk: vi.fn(() => ({
+    snapshot: mocks.getWorkingSetSnapshot(),
+    membershipChanged: false,
+  })),
+  tryListSessionCatalog: vi.fn(() => ({ status: 'ok', ids: new Set() })),
+  mutateAndPersist: vi.fn((_owner: string, run: () => unknown) => run()),
 }));
 
 vi.mock('../../src/main/ipc/chat', () => ({
+  discardDeletedSessionRuntime: mocks.discardDeletedSessionRuntime,
+}));
+
+// U5: session:delete now runs in the host binding, which sources the runtime
+// teardown from host/chat/abort instead of the IPC facade.
+vi.mock('../../src/main/host/chat/abort', async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
   discardDeletedSessionRuntime: mocks.discardDeletedSessionRuntime,
 }));
 
@@ -234,6 +251,8 @@ vi.mock('../../src/main/agents/next-request-stop', () => ({
 
 vi.mock('../../src/main/session/activity-live', () => ({
   removeSessionActivity: mocks.removeSessionActivity,
+  // U5: the embedded local host's HostServer installs its own broadcast.
+  setSessionActivityBroadcast: vi.fn(),
 }));
 
 vi.mock('../../src/main/providers/runtime-context', () => ({

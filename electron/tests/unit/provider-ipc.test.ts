@@ -218,7 +218,15 @@ function memoryServices(definitions: readonly ProviderDefinition[] = [OPENAI, GE
 function handler(channel: string) {
   const registered = mocks.handlers.get(channel);
   if (!registered) throw new Error(`Missing handler: ${channel}`);
-  return registered;
+  // U5: host-routed handlers resolve the caller from event.sender.id; this
+  // suite invokes handlers directly, so substitute a stable sender when the
+  // call does not provide one.
+  return (event: unknown, ...rest: unknown[]) => {
+    const sender = event != null && typeof event === 'object' && 'sender' in event
+      ? event
+      : { sender: { id: 1 } };
+    return registered(sender, ...rest);
+  };
 }
 
 beforeEach(async () => {

@@ -13,6 +13,7 @@ import { BrowserWindow } from 'electron';
 import { IPC_CHANNELS } from '../../shared/types/ipc';
 import type { IndexAutoRefreshEvent } from '../../shared/types/ipc-boundary';
 import { setIndexAutoRefreshNotifier } from '../indexing/refresh-coordinator';
+import { isEmbeddedLocalHostRunning } from '../host/local-host';
 import { getStatus } from '../rag/indexer';
 import { ASTStore } from '../ast/store';
 import { withDisposable } from '../utils/with-disposable';
@@ -20,6 +21,9 @@ import { getWorkspaceWatcherState } from '../indexing/watcher';
 import { resolveBoundProjectPath } from './session';
 
 export function registerIndexAutoRefreshBroadcast(): void {
+  // Fallback only: once the embedded local host is running its HostServer owns
+  // the notifier and pushes index:auto_refresh through the client broadcast.
+  if (isEmbeddedLocalHostRunning()) return;
   setIndexAutoRefreshNotifier((projectPath, event) => {
     let payload: IndexAutoRefreshEvent;
     if (event.phase === 'landed') {
@@ -54,5 +58,6 @@ export function registerIndexAutoRefreshBroadcast(): void {
 }
 
 export function unregisterIndexAutoRefreshBroadcast(): void {
+  if (isEmbeddedLocalHostRunning()) return;
   setIndexAutoRefreshNotifier(null);
 }

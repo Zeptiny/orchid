@@ -62,6 +62,14 @@ vi.mock('../../src/main/ipc/session', () => ({
   resolveBoundProjectPath: mocks.resolveBoundProjectPath,
 }));
 
+// U5: the host-routed handler resolves the caller's project through the
+// session singleton (the server binding), not the IPC re-export.
+vi.mock('../../src/main/session/singleton', () => ({
+  resolveBoundProjectPath: mocks.resolveBoundProjectPath,
+  resolveWindowWorkspace: () => ({ cwd: null, source: 'unbound', status: 'unbound' }),
+  getSessionManager: () => ({ getActive: () => null, listSaved: () => [] }),
+}));
+
 // The trust gate is fail-closed for the mocked (non-existent) project dir,
 // so this fixture defaults to trusted to keep the suite on its own seams.
 // Tests flip `mocks.trustState.current` to exercise the untrusted branches.

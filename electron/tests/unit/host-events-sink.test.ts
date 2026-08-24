@@ -266,16 +266,16 @@ describe('buildSessionUpdatedEvent', () => {
   });
 });
 
-describe('Electron chat IPC installs the sink', () => {
-  it('registerChatIPC installs the Electron sink and unregister restores the default', async () => {
-    const { electronHostEventSink } = await import('../../src/main/ipc/chat/events');
+describe('Electron chat IPC no longer installs the sink (U5)', () => {
+  it('registerChatIPC leaves the sink alone; the embedded local host owns it', async () => {
     const chatIpc = await import('../../src/main/ipc/chat');
+    const before = getHostEventSink();
 
     chatIpc.registerChatIPC();
-    expect(getHostEventSink()).toBe(electronHostEventSink);
+    expect(getHostEventSink()).toBe(before);
 
     chatIpc.unregisterChatIPC();
-    expect(getHostEventSink()).not.toBe(electronHostEventSink);
+    expect(getHostEventSink()).toBe(before);
     expect(canDeliverTo(CLIENT_ID)).toBe(false);
   });
 });

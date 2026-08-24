@@ -13,6 +13,9 @@ import { spawnSync } from 'node:child_process';
 import * as path from 'path';
 import { setImmediate as setImmediatePromise } from 'node:timers/promises';
 import { registerAllIPC, unregisterAllIPC } from './ipc';
+import { unwireLocalHostWindowBroadcast, wireLocalHostWindowBroadcast } from './ipc/host-broadcast';
+import { disposeEmbeddedLocalHost, startEmbeddedLocalHost } from './host/local-host';
+import { verifyRoutingTable } from './host/routing';
 import { handlePermissionOwnerDestroyed } from './ipc/permission';
 import { registerStartupIPC, unregisterStartupIPC } from './ipc/startup';
 import {
@@ -365,6 +368,13 @@ app.whenReady().then(async () => {
         wireSubagentRuntime();
       },
       startToolWorkers: () => initToolWorkerPool(getConfig()),
+      startLocalHost: () => {
+         // Eagerly start the embedded local host so every machine-scoped IPC
+         // handler speaks the unified host protocol from the first request.
+         wireLocalHostWindowBroadcast();
+         verifyRoutingTable();
+         startEmbeddedLocalHost();
+      },
       prepareInterface: () => {
         // Normal renderer consumers remain unavailable until this final stage.
         registerAllIPC();
@@ -468,6 +478,8 @@ app.on('before-quit', async (event) => {
     // 3. Unregister IPC handlers
     unregisterAllIPC();
     unregisterStartupIPC();
+    unwireLocalHostWindowBroadcast();
+    disposeEmbeddedLocalHost();
 
     // 4. Shut down MCP transports
     await shutdownProjectMCPManagers();

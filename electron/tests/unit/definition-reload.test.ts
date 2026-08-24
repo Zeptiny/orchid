@@ -37,6 +37,9 @@ const mocks = vi.hoisted(() => {
 });
 
 vi.mock('../../src/main/config/loader', () => ({
+  // U5: the embedded local host pulls the host-server graph into this suite;
+  // those modules resolve config paths at module load.
+  HOME_CONFIG_DIR: '/tmp/orchid-definition-reload-home',
   HOME_AGENTS_DIR: '/home/agents',
   HOME_PERSONALITIES_DIR: '/home/personalities',
   HOME_SKILLS_DIR: '/home/skills',
@@ -57,6 +60,9 @@ vi.mock('../../src/main/personality/registry', () => ({
 vi.mock('../../src/main/tools', () => ({
   registerBuiltinTools: mocks.registerBuiltinTools,
   toolRegistry: { listAll: mocks.toolRegistryListAll },
+  // U5: the embedded local host's HostServer installs its own notifier.
+  setTodosChangedNotifier: vi.fn(),
+  getSubagentManager: () => ({ addOnChangeListener: vi.fn(() => vi.fn()) }),
 }));
 
 vi.mock('../../src/main/project/runtime', () => ({
@@ -81,6 +87,14 @@ vi.mock('electron', () => ({
 
 vi.mock('../../src/main/ipc/session', () => ({
   resolveBoundProjectPath: mocks.resolveBoundProjectPath,
+}));
+
+// U5: the host-routed handler resolves the caller's project through the
+// session singleton (the server binding), not the IPC re-export.
+vi.mock('../../src/main/session/singleton', () => ({
+  resolveBoundProjectPath: mocks.resolveBoundProjectPath,
+  resolveWindowWorkspace: () => ({ cwd: null, source: 'unbound', status: 'unbound' }),
+  getSessionManager: () => ({ getActive: () => null, listSaved: () => [] }),
 }));
 
 vi.mock('../../src/main/defs/manage', () => ({

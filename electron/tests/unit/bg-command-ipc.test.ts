@@ -92,6 +92,8 @@ const mocks = vi.hoisted(() => {
     getStates: vi.fn((sessionId?: string | null) =>
       subagentStatesBySession.get(sessionId ?? '') ?? [],
     ),
+    // U5: the embedded local host's HostServer subscribes to manager changes.
+    addOnChangeListener: vi.fn(() => vi.fn()),
     _setStates(sessionId: string, states: Array<Record<string, unknown>>) {
       subagentStatesBySession.set(sessionId, states);
     },
@@ -142,6 +144,9 @@ vi.mock('electron', () => ({
 }));
 
 vi.mock('../../src/main/config/loader', () => ({
+  // U5: the embedded local host pulls the host-server graph (accounting
+  // stores, catalog) into this suite; those modules resolve paths at load.
+  HOME_CONFIG_DIR: '/tmp/orchid-bgcmd-ipc-home',
   HOME_PERSONALITIES_DIR: '/tmp/orchid-test-personalities',
   getTierModelSelection: (
     config: { default_model: unknown; tier_models: Record<string, unknown> },
@@ -162,6 +167,8 @@ vi.mock('../../src/main/tools', () => ({
   createBuiltinToolRegistry: vi.fn(() => mocks.toolRegistry),
   getBuiltinToolRegistryForRuntime: vi.fn(() => mocks.toolRegistry),
   getSubagentManager: vi.fn(() => mocks.subagentManager),
+  // U5: the embedded local host's HostServer installs its own notifier.
+  setTodosChangedNotifier: vi.fn(),
 }));
 
 vi.mock('../../src/main/llm/orchestrator', () => ({
@@ -213,6 +220,8 @@ vi.mock('../../src/main/project/runtime', () => ({
 vi.mock('../../src/main/session/activity-live', () => ({
   publishSessionActivity: vi.fn(),
   completeSessionActivity: vi.fn(),
+  // U5: the embedded local host's HostServer installs its own broadcast.
+  setSessionActivityBroadcast: vi.fn(),
 }));
 
 vi.mock('../../src/main/project/trust', () => ({
@@ -907,7 +916,7 @@ describe('bgcmd:changed', () => {
     expect(sendC).toHaveBeenCalledWith(IPC_CHANNELS.BG_CMD_CHANGED, { sessionId: SESSION_A });
   });
 
-  it('stops broadcasting after unregisterChatIPC unsubscribes', async () => {
+  it('keeps bgcmd delivery across chat IPC re-registration (U5: the host owns it)', async () => {
     const send = makeWindow();
     mocks.sessionManager._setActiveForWindow(String(mocks.windows[0].webContents.id), { id: SESSION_A });
 
@@ -917,7 +926,10 @@ describe('bgcmd:changed', () => {
 
     chatIpc.unregisterChatIPC();
     await store.spawn('sleep 30', { sessionId: SESSION_A });
-    expect(send.mock.calls.length).toBe(callsAfterFirstSpawn);
+    // Delivery belongs to the embedded local host's HostServer (per-connection,
+    // through the client window broadcast), not to chat IPC registration, so it
+    // keeps flowing until the host itself is disposed.
+    expect(send.mock.calls.length).toBeGreaterThan(callsAfterFirstSpawn);
 
     // Re-register so afterEach cleanup sees a balanced register/unregister pair.
     chatIpc.registerChatIPC();

@@ -69,7 +69,17 @@ vi.mock('../../src/main/ipc/session', () => ({
   revokeProjectTrustForDir: (cwd: string) => mocks.revokeProjectTrustForDir(cwd),
 }));
 
+// U5: project:trust_set now runs in the host binding, which sources the revoke
+// flow from host/session-ops instead of the IPC re-export.
+vi.mock('../../src/main/host/session-ops', async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  revokeProjectTrustForDir: (cwd: string) => mocks.revokeProjectTrustForDir(cwd),
+}));
+
 vi.mock('../../src/main/session/singleton', () => ({
+  // U5: the host-routed trust binding reaches the session manager through the
+  // singleton while revoking trust.
+  getSessionManager: () => ({ getActive: () => null, listSaved: () => [] }),
   resolveWindowWorkspace: (windowId: string) => {
     const cwd = mocks.workspaceByWebContents.get(Number(windowId)) ?? null;
     if (cwd == null) {

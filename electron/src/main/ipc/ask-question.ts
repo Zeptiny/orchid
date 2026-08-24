@@ -7,6 +7,7 @@
  */
 import { ipcMain } from 'electron';
 import { IPC_CHANNELS } from '../../shared/types/ipc';
+import { hostRequest } from './host-request';
 import {
   questionStore,
   type QuestionSettledEvent,
@@ -16,7 +17,6 @@ import {
   getActiveMainTurnWindowId,
   webContentsForWindowId,
 } from './chat';
-import { getSessionManager } from './session';
 import {
   askQuestionAnswerSchema,
   askQuestionCancelSchema,
@@ -75,42 +75,24 @@ function onQuestionSettled({
   }
 }
 
-function selectedSessionId(senderId: number): string | null {
-  return getSessionManager().getActive(String(senderId))?.id ?? null;
-}
-
-function senderOwnsQuestion(senderId: number, toolCallId: string): boolean {
-  const entry = questionStore.get(toolCallId);
-  return (
-    entry != null &&
-    entry.ownerWindowId === String(senderId) &&
-    entry.sessionId === selectedSessionId(senderId)
-  );
-}
-
 /** Register ask_question IPC handlers and store event forwarding. */
 export function registerAskQuestionIPC(): void {
   questionStore.on('question-asked', onQuestionAsked);
   questionStore.on('question-settled', onQuestionSettled);
 
   ipcMain.handle(IPC_CHANNELS.ASK_QUESTION_SNAPSHOT, (event) => {
-    const sessionId = selectedSessionId(event.sender.id);
-    return {
-      questions: sessionId == null
-        ? []
-        : questionStore.listForOwner(sessionId, String(event.sender.id)),
-    };
+    return hostRequest(String(event.sender.id), IPC_CHANNELS.ASK_QUESTION_SNAPSHOT);
   });
 
   ipcMain.handle(
     IPC_CHANNELS.ASK_QUESTION_ANSWER,
     (event, payload: unknown) => {
       const parsed = askQuestionAnswerSchema.parse(payload);
-      if (!senderOwnsQuestion(event.sender.id, parsed.toolCallId)) {
-        return { ok: false };
-      }
-      const ok = questionStore.answer(parsed.toolCallId, parsed.answers);
-      return { ok };
+      return hostRequest(
+        String(event.sender.id),
+        IPC_CHANNELS.ASK_QUESTION_ANSWER,
+        parsed,
+      );
     },
   );
 
@@ -118,15 +100,11 @@ export function registerAskQuestionIPC(): void {
     IPC_CHANNELS.ASK_QUESTION_CANCEL,
     (event, payload: unknown) => {
       const parsed = askQuestionCancelSchema.parse(payload);
-      if (!senderOwnsQuestion(event.sender.id, parsed.toolCallId)) {
-        return { ok: false };
-      }
-      const entry = questionStore.get(parsed.toolCallId);
-      const ok = questionStore.cancel(parsed.toolCallId);
-      if (ok && entry) {
-        setImmediate(() => forceAbortMainTurn(entry.sessionId, { emitTerminalEvents: true }));
-      }
-      return { ok };
+      return hostRequest(
+        String(event.sender.id),
+        IPC_CHANNELS.ASK_QUESTION_CANCEL,
+        parsed,
+      );
     },
   );
 }

@@ -620,6 +620,8 @@ const mocks = vi.hoisted(() => {
       cancelRunning: vi.fn(() => []),
       discardSession: vi.fn(),
       getStates: vi.fn((): Array<{ id: string; state: string }> => []),
+      // U5: the embedded local host's HostServer subscribes to manager changes.
+      addOnChangeListener: vi.fn(() => vi.fn()),
     },
     sendersById,
     publishSessionActivity: vi.fn(),
@@ -680,6 +682,8 @@ vi.mock('../../src/main/tools', () => ({
   createBuiltinToolRegistry: vi.fn(() => mocks.toolRegistry),
   getBuiltinToolRegistryForRuntime: vi.fn(() => mocks.toolRegistry),
   getSubagentManager: vi.fn(() => mocks.subagentManager),
+  // U5: the embedded local host's HostServer installs its own notifier.
+  setTodosChangedNotifier: vi.fn(),
 }));
 
 vi.mock('../../src/main/llm/orchestrator', () => ({
@@ -771,6 +775,8 @@ vi.mock('../../src/main/tools/process/background-store', () => ({
 vi.mock('../../src/main/session/activity-live', () => ({
   publishSessionActivity: mocks.publishSessionActivity,
   completeSessionActivity: mocks.completeSessionActivity,
+  // U5: the embedded local host's HostServer installs its own broadcast.
+  setSessionActivityBroadcast: vi.fn(),
 }));
 
 // The trust gate is fail-closed for the mocked (non-existent) workspace dirs,

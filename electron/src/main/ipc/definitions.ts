@@ -9,19 +9,8 @@ import { ipcMain, shell } from 'electron';
 import { z } from 'zod';
 import { IPC_CHANNELS } from '../../shared/types/ipc';
 import { AgentTier, AgentType } from '../../shared/types/agent';
-import {
-  deleteAgent,
-  deletePersonality,
-  deleteSharedPrompt,
-  deleteSkill,
-  saveAgent,
-  savePersonality,
-  saveSharedPrompt,
-  saveSkill,
-} from '../defs/manage';
-import { listDefinitions } from '../defs/listing';
+import { hostRequest } from './host-request';
 import { assertPathUnderOrchidRoots } from '../defs/paths';
-import { reloadDefinitionRegistries } from '../defs/reload';
 import { resolveBoundProjectPath } from './session';
 
 // ── Schemas ──────────────────────────────────────────────────────────────────
@@ -89,23 +78,21 @@ function projectDirFromEvent(event: Electron.IpcMainInvokeEvent): string | null 
 }
 
 /**
- * Validate payload, resolve project dir, run mutation, reload registries.
- * Shared by skill/agent/personality save and delete handlers.
+ * Validate the payload and forward to the host method with the same name; the
+ * server binding resolves the caller's project dir, performs the mutation and
+ * reloads the registries.
  */
-function withDefinitionMutation<TSchema extends z.ZodTypeAny, TResult>(
+function withDefinitionMutation<TSchema extends z.ZodTypeAny>(
   schema: TSchema,
+  channel: string,
   channelLabel: string,
-  mutate: (data: z.infer<TSchema>, projectDir: string | null) => TResult,
-): (event: Electron.IpcMainInvokeEvent, payload: unknown) => TResult {
+): (event: Electron.IpcMainInvokeEvent, payload: unknown) => Promise<unknown> {
   return (event, payload) => {
     const parsed = schema.safeParse(payload);
     if (!parsed.success) {
       throw new Error(`Invalid ${channelLabel} payload: ${parsed.error.message}`);
     }
-    const projectDir = projectDirFromEvent(event);
-    const result = mutate(parsed.data, projectDir);
-    reloadDefinitionRegistries(projectDir);
-    return result;
+    return hostRequest(String(event.sender.id), channel, parsed.data);
   };
 }
 
@@ -113,79 +100,47 @@ function withDefinitionMutation<TSchema extends z.ZodTypeAny, TResult>(
 
 export function registerDefinitionsIPC(): void {
   ipcMain.handle(IPC_CHANNELS.DEFINITIONS_LIST, async (event) => {
-    return listDefinitions(projectDirFromEvent(event));
+    return hostRequest(String(event.sender.id), IPC_CHANNELS.DEFINITIONS_LIST);
   });
 
   ipcMain.handle(
     IPC_CHANNELS.SKILL_SAVE,
-    withDefinitionMutation(skillSaveSchema, 'skill:save', (data, projectDir) =>
-      saveSkill(data, projectDir),
-    ),
+    withDefinitionMutation(skillSaveSchema, IPC_CHANNELS.SKILL_SAVE, 'skill:save'),
   );
 
   ipcMain.handle(
     IPC_CHANNELS.SKILL_DELETE,
-    withDefinitionMutation(deleteSchema, 'skill:delete', (data, projectDir) => {
-      deleteSkill(data.scope, data.name, projectDir);
-      return { status: 'deleted' as const };
-    }),
+    withDefinitionMutation(deleteSchema, IPC_CHANNELS.SKILL_DELETE, 'skill:delete'),
   );
 
   ipcMain.handle(
     IPC_CHANNELS.AGENT_SAVE,
-    withDefinitionMutation(agentSaveSchema, 'agent:save', (data, projectDir) =>
-      saveAgent(data, projectDir),
-    ),
+    withDefinitionMutation(agentSaveSchema, IPC_CHANNELS.AGENT_SAVE, 'agent:save'),
   );
 
   ipcMain.handle(
     IPC_CHANNELS.AGENT_DELETE,
-    withDefinitionMutation(deleteSchema, 'agent:delete', (data, projectDir) => {
-      deleteAgent(data.scope, data.name, projectDir);
-      return { status: 'deleted' as const };
-    }),
+    withDefinitionMutation(deleteSchema, IPC_CHANNELS.AGENT_DELETE, 'agent:delete'),
   );
 
   ipcMain.handle(
     IPC_CHANNELS.PERSONALITY_SAVE,
-    withDefinitionMutation(
-      personalitySaveSchema,
-      'personality:save',
-      (data, projectDir) => savePersonality(data, projectDir),
-    ),
+    withDefinitionMutation(personalitySaveSchema, IPC_CHANNELS.PERSONALITY_SAVE, 'personality:save'),
   );
 
   ipcMain.handle(
     IPC_CHANNELS.PERSONALITY_DELETE,
-    withDefinitionMutation(
-      deleteSchema,
-      'personality:delete',
-      (data, projectDir) => {
-        deletePersonality(data.scope, data.name, projectDir);
-        return { status: 'deleted' as const };
-      },
-    ),
+    withDefinitionMutation(deleteSchema, IPC_CHANNELS.PERSONALITY_DELETE, 'personality:delete'),
   );
 
   ipcMain.handle(
     IPC_CHANNELS.SHARED_PROMPT_SAVE,
-    withDefinitionMutation(
-      sharedPromptSaveSchema,
-      'shared-prompt:save',
-      (data, projectDir) => saveSharedPrompt(data, projectDir),
-    ),
+    withDefinitionMutation(sharedPromptSaveSchema, IPC_CHANNELS.SHARED_PROMPT_SAVE, 'shared-prompt:save'),
   );
 
   ipcMain.handle(
     IPC_CHANNELS.SHARED_PROMPT_DELETE,
-    withDefinitionMutation(
-      sharedPromptDeleteSchema,
-      'shared-prompt:delete',
-      (data, projectDir) => {
-        deleteSharedPrompt(data.scope, data.slot, projectDir);
-        return { status: 'deleted' as const };
-      },
-    ),
+    withDefinitionMutation(sharedPromptDeleteSchema, IPC_CHANNELS.SHARED_PROMPT_DELETE, 'shared-prompt:delete'),
   );
 
   ipcMain.handle(IPC_CHANNELS.DEFINITION_REVEAL, async (event, payload: unknown) => {

@@ -4,58 +4,21 @@
  * Full indexes run in a worker thread; progress is broadcast to all windows so
  * late UI subscribers (tab switches / remounts) keep seeing updates.
  */
-import { BrowserWindow, ipcMain } from 'electron';
+import { ipcMain } from 'electron';
 import { IPC_CHANNELS } from '../../shared/types/ipc';
-import type { RAGIndexProgress } from '../../shared/types/ipc-boundary';
+import { hostRequest } from './host-request';
 import {
-  indexProject,
-  getStatus,
-  clearIndex,
-  cancelIndex,
-  isIndexing,
   getIndexState,
 } from '../rag/indexer';
 import { resolveBoundProjectPath } from './session';
-import { getProjectRuntimeRegistry } from '../project/runtime';
-import { getProjectTrustState } from '../project/trust';
-import { cancelProjectRefreshAsync } from '../indexing/refresh-coordinator';
-import { getWorkspaceWatcherState } from '../indexing/watcher';
 import { ragIndexSchema } from './payload-schemas';
-
-function broadcastProgress(projectPath: string, progress: RAGIndexProgress): void {
-  for (const win of BrowserWindow.getAllWindows()) {
-    if (win.isDestroyed() || win.webContents.isDestroyed()) continue;
-    if (resolveBoundProjectPath(String(win.webContents.id)) !== projectPath) continue;
-    win.webContents.send(IPC_CHANNELS.RAG_PROGRESS, progress);
-  }
-}
 
 // ── IPC registration ─────────────────────────────────────────────────────────
 
 export function registerRAGIPC(): void {
   // rag:status — return RAG store status
   ipcMain.handle(IPC_CHANNELS.RAG_STATUS, async (event) => {
-    const projectPath = resolveBoundProjectPath(String(event.sender.id));
-    if (projectPath == null || getProjectTrustState(projectPath) !== 'trusted') {
-      return {
-        totalChunks: 0,
-        totalFiles: 0,
-        lastIndexed: null,
-        lastIndexDuration: null,
-        lastAutoRefresh: null,
-      };
-    }
-    const status = getStatus(projectPath);
-    // Watcher introspection is additive and must never fail status: a throw
-    // degrades to the plain store status (watcher absent = unknown).
-    try {
-      return {
-        ...status,
-        watcher: { watching: getWorkspaceWatcherState(projectPath).watching },
-      };
-    } catch {
-      return status;
-    }
+    return hostRequest(String(event.sender.id), IPC_CHANNELS.RAG_STATUS);
   });
 
   // rag:index_state — in-flight run snapshot for remounting UIs
@@ -71,71 +34,12 @@ export function registerRAGIPC(): void {
       throw new Error(`Invalid rag:index payload: ${parsed.error.message}`);
     }
 
-    const { force } = parsed.data;
-
-    const projectPath = resolveBoundProjectPath(String(event.sender.id));
-    if (!projectPath) {
-      return {
-        filesScanned: 0,
-        filesIndexed: 0,
-        filesSkipped: 0,
-        filesDeleted: 0,
-        chunksCreated: 0,
-        errors: ['No project folder selected'],
-        durationSeconds: 0,
-      };
-    }
-
-    if (getProjectTrustState(projectPath) !== 'trusted') {
-      return {
-        filesScanned: 0,
-        filesIndexed: 0,
-        filesSkipped: 0,
-        filesDeleted: 0,
-        chunksCreated: 0,
-        errors: ['Project folder is not trusted'],
-        durationSeconds: 0,
-      };
-    }
-
-    if (isIndexing(projectPath)) {
-      return {
-        filesScanned: 0,
-        filesIndexed: 0,
-        filesSkipped: 0,
-        filesDeleted: 0,
-        chunksCreated: 0,
-        errors: ['Indexing already in progress'],
-        durationSeconds: 0,
-      };
-    }
-
-    return indexProject(
-      projectPath,
-      undefined,
-      force,
-      undefined,
-      (progress) => broadcastProgress(projectPath, progress),
-      {
-        config: getProjectRuntimeRegistry().get(projectPath).config,
-      },
-    );
+    return hostRequest(String(event.sender.id), IPC_CHANNELS.RAG_INDEX, parsed.data);
   });
 
   // rag:clear — clear the RAG index
   ipcMain.handle(IPC_CHANNELS.RAG_CLEAR, async (event) => {
-    const projectPath = resolveBoundProjectPath(String(event.sender.id));
-    // Untrusted projects keep their index untouched (no-op clear).
-    if (projectPath != null && getProjectTrustState(projectPath) === 'trusted') {
-      await cancelIndex(projectPath);
-      // Drain pending and in-flight refreshes before dropping the store: a
-      // coordinator flush could otherwise repopulate the cleared index from
-      // stale upserts armed before the clear. The wait for an in-flight
-      // flush is capped at 5s, after which the clear proceeds anyway.
-      await cancelProjectRefreshAsync(projectPath);
-      clearIndex(projectPath);
-    }
-    return { status: 'cleared' };
+    return hostRequest(String(event.sender.id), IPC_CHANNELS.RAG_CLEAR);
   });
 }
 

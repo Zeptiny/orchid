@@ -73,11 +73,22 @@ vi.mock('electron', () => ({ ipcMain: mocks.ipcMain }));
 
 vi.mock('../../src/main/tools', () => ({
   toolRegistry: mocks.toolRegistry,
+  // U5: the embedded local host's HostServer installs its own notifier.
+  setTodosChangedNotifier: vi.fn(),
+  getSubagentManager: () => ({ addOnChangeListener: vi.fn(() => vi.fn()) }),
 }));
 
 vi.mock('../../src/main/ipc/session', () => ({
   resolveBoundProjectPath: mocks.resolveBoundProjectPath,
   getSessionManager: () => ({ getActive: mocks.getActive }),
+}));
+
+// U5: the host-routed handler resolves the caller's project and active
+// session through the session singleton (the server binding).
+vi.mock('../../src/main/session/singleton', () => ({
+  resolveBoundProjectPath: mocks.resolveBoundProjectPath,
+  resolveWindowWorkspace: () => ({ cwd: null, source: 'unbound', status: 'unbound' }),
+  getSessionManager: () => ({ getActive: mocks.getActive, listSaved: () => [] }),
 }));
 
 // The trust gate is fail-closed for the mocked (non-existent) project dir,
@@ -169,7 +180,7 @@ describe('tool:execute allowlist', () => {
     for (const name of ['write', 'edit', 'execute_command', 'web_fetch', 'delegate']) {
       const result = await execute({ name, args: {} }) as ToolExecutionResult;
       expect(result.canonical.status).toBe('error');
-      expect(result.canonical.error?.message).toMatch(/not allowed via IPC/i);
+      expect(result.canonical.error?.message).toMatch(/not allowed on this host surface/i);
       expect(mocks.handler).not.toHaveBeenCalled();
     }
   });

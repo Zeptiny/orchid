@@ -5,16 +5,13 @@
 import { BrowserWindow, ipcMain } from 'electron';
 import { z } from 'zod';
 import { IPC_CHANNELS, type WorkingSetSnapshot } from '../../shared/types/ipc';
-import { sessionWorkingSet } from '../session/working-set';
+import { isEmbeddedLocalHostRunning } from '../host/local-host';
+import { hostRequest } from './host-request';
 import {
   bootstrapWorkingSet,
-  filterIfCatalogOk,
-  mutateAndPersist,
   setWorkingSetBroadcast,
-  tryListSessionCatalog,
-  workingSetOpenOrFocus,
-  workingSetRemove,
 } from '../session/working-set-live';
+import { sessionWorkingSet } from '../session/working-set';
 
 export {
   bootstrapWorkingSet,
@@ -54,25 +51,22 @@ function broadcastOpenSet(snapshot: WorkingSetSnapshot, sourceOwnerId: string): 
 }
 
 export function registerSessionWorkingSetIPC(): void {
-  setWorkingSetBroadcast(broadcastOpenSet);
-  try {
-    bootstrapWorkingSet();
-  } catch {
-    // empty store
+  // Fallback only: the embedded local host's HostServer owns working-set
+  // broadcasting once it is running (per-connection → client window push).
+  if (!isEmbeddedLocalHostRunning()) {
+    setWorkingSetBroadcast(broadcastOpenSet);
+    try {
+      bootstrapWorkingSet();
+    } catch {
+      // empty store
+    }
   }
 
   ipcMain.handle(IPC_CHANNELS.SESSION_WORKING_SET_GET, async (event) => {
-    const ownerId = ownerFromEvent(event);
-    const { snapshot, membershipChanged } = filterIfCatalogOk(ownerId);
-    if (membershipChanged) {
-      try {
-        sessionWorkingSet.saveToDisk();
-      } catch (err) {
-        console.error('[working-set] failed to persist ui-state.json', err);
-      }
-      broadcastOpenSet(snapshot, ownerId);
-    }
-    return snapshot;
+    return hostRequest<WorkingSetSnapshot>(
+      ownerFromEvent(event),
+      IPC_CHANNELS.SESSION_WORKING_SET_GET,
+    );
   });
 
   ipcMain.handle(
@@ -84,12 +78,11 @@ export function registerSessionWorkingSetIPC(): void {
           `Invalid session:working_set_open_or_focus payload: ${parsed.error.message}`,
         );
       }
-      const ownerId = ownerFromEvent(event);
-      const catalog = tryListSessionCatalog();
-      if (catalog.status === 'ok' && !catalog.ids.has(parsed.data.id)) {
-        return sessionWorkingSet.getSnapshot(ownerId);
-      }
-      return workingSetOpenOrFocus(parsed.data.id, ownerId);
+      return hostRequest<WorkingSetSnapshot>(
+        ownerFromEvent(event),
+        IPC_CHANNELS.SESSION_WORKING_SET_OPEN_OR_FOCUS,
+        parsed.data,
+      );
     },
   );
 
@@ -102,9 +95,11 @@ export function registerSessionWorkingSetIPC(): void {
           `Invalid session:working_set_close payload: ${parsed.error.message}`,
         );
       }
-      const ownerId = ownerFromEvent(event);
-      const owner = ownerId;
-      return mutateAndPersist(owner, () => sessionWorkingSet.close(parsed.data.id, owner));
+      return hostRequest<WorkingSetSnapshot>(
+        ownerFromEvent(event),
+        IPC_CHANNELS.SESSION_WORKING_SET_CLOSE,
+        parsed.data,
+      );
     },
   );
 
@@ -117,7 +112,11 @@ export function registerSessionWorkingSetIPC(): void {
           `Invalid session:working_set_remove payload: ${parsed.error.message}`,
         );
       }
-      return workingSetRemove(parsed.data.id, ownerFromEvent(event));
+      return hostRequest<WorkingSetSnapshot>(
+        ownerFromEvent(event),
+        IPC_CHANNELS.SESSION_WORKING_SET_REMOVE,
+        parsed.data,
+      );
     },
   );
 
@@ -130,10 +129,10 @@ export function registerSessionWorkingSetIPC(): void {
           `Invalid session:working_set_set_focus payload: ${parsed.error.message}`,
         );
       }
-      const ownerId = ownerFromEvent(event);
-      const owner = ownerId;
-      return mutateAndPersist(owner, () =>
-        sessionWorkingSet.setFocus(parsed.data.id, owner),
+      return hostRequest<WorkingSetSnapshot>(
+        ownerFromEvent(event),
+        IPC_CHANNELS.SESSION_WORKING_SET_SET_FOCUS,
+        parsed.data,
       );
     },
   );
@@ -145,5 +144,5 @@ export function unregisterSessionWorkingSetIPC(): void {
   ipcMain.removeHandler(IPC_CHANNELS.SESSION_WORKING_SET_CLOSE);
   ipcMain.removeHandler(IPC_CHANNELS.SESSION_WORKING_SET_REMOVE);
   ipcMain.removeHandler(IPC_CHANNELS.SESSION_WORKING_SET_SET_FOCUS);
-  setWorkingSetBroadcast(null);
+  if (!isEmbeddedLocalHostRunning()) setWorkingSetBroadcast(null);
 }

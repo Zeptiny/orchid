@@ -5,21 +5,14 @@
  */
 import { ipcMain } from 'electron';
 import { IPC_CHANNELS } from '../../shared/types/ipc';
-import { getProjectMCPManager } from '../mcp/project-registry';
-import { getProjectRuntimeRegistry } from '../project/runtime';
-import { resolveBoundProjectPath } from './session';
+import { hostRequest } from './host-request';
 
 // ── IPC registration ─────────────────────────────────────────────────────────
 
 export function registerMCPIPC(): void {
   // mcp:status — resolve the sender's project instead of a process-global manager.
   ipcMain.handle(IPC_CHANNELS.MCP_STATUS, async (event) => {
-    const cwd = resolveBoundProjectPath(String(event.sender.id));
-    if (cwd == null) {
-      return [];
-    }
-    const runtime = getProjectRuntimeRegistry().get(cwd);
-    return getProjectMCPManager(runtime).getStatus();
+    return hostRequest(String(event.sender.id), IPC_CHANNELS.MCP_STATUS);
   });
 }
 
