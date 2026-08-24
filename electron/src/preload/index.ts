@@ -128,6 +128,7 @@ import type {
   MachineStatusResult,
   MachineConnectResult,
   MachineDisconnectResult,
+  MachineResyncResult,
   MachineScanHostKeyResult,
   MachineConfirmHostKeyResult,
   RemoteMachineRecord,
@@ -213,6 +214,7 @@ import {
   machineSetActiveResultSchema,
   machineConnectResultSchema,
   machineDisconnectResultSchema,
+  machineResyncResultSchema,
   machineScanHostKeyResultSchema,
   machineConfirmHostKeyResultSchema,
 } from '../shared/types/ipc-schemas';
@@ -269,6 +271,7 @@ const INVOKE_RESULT_SCHEMAS: Partial<Record<string, z.ZodTypeAny>> = {
   [IPC_CHANNELS.MACHINES_SET_ACTIVE]: machineSetActiveResultSchema,
   [IPC_CHANNELS.MACHINES_CONNECT]: machineConnectResultSchema,
   [IPC_CHANNELS.MACHINES_DISCONNECT]: machineDisconnectResultSchema,
+  [IPC_CHANNELS.MACHINES_RESYNC]: machineResyncResultSchema,
   [IPC_CHANNELS.MACHINES_SCAN_HOST_KEY]: machineScanHostKeyResultSchema,
   [IPC_CHANNELS.MACHINES_CONFIRM_HOST_KEY]: machineConfirmHostKeyResultSchema,
   [IPC_CHANNELS.DEBUG_SESSION_REQUESTS]: debugSessionRequestsResultSchema,
@@ -660,6 +663,9 @@ const orchidAPI: OrchidAPI = {
 
     disconnect: (message: MachineIdMessage) =>
       invoke<MachineDisconnectResult>(IPC_CHANNELS.MACHINES_DISCONNECT, message),
+
+    resync: () =>
+      invoke<MachineResyncResult>(IPC_CHANNELS.MACHINES_RESYNC),
 
     scanHostKey: (message: MachineIdMessage) =>
       invoke<MachineScanHostKeyResult>(IPC_CHANNELS.MACHINES_SCAN_HOST_KEY, message),

@@ -10,11 +10,20 @@
  * `host.hello` request and waits for the response with the matching id
  * (`shared/host/protocol`). A response proves the remote `orchid-agent bridge`
  * attached to a running daemon; reaching the handshake timeout without a
- * close means ssh itself is fine but nothing answered — the daemon/agent is
- * missing on the remote. U10 slots the daemon ensure-and-spawn step right
- * there (before the timeout classification), retrying the handshake after
- * starting `orchid-agent serve --socket ~/.orchid/daemon.sock`; this unit only
- * detects and reports.
+ * close (or a command-not-found exit) means the remote agent/daemon is not
+ * answering.
+ *
+ * Daemon ensure (U10): the bridge protocol is request/response NDJSON over the
+ * single stdio channel, so an interactive second command cannot run inside the
+ * bridge session. Instead, on an agent-missing handshake failure the manager
+ * closes the failed transport, runs ONE one-shot ssh command
+ * (`<agentCommand> serve --socket ~/.orchid/daemon.sock --detached` — the
+ * remote daemonizes, the ssh command returns immediately), waits briefly for
+ * the socket to bind, then retries the normal bridge handshake on a fresh
+ * transport. If that still gets no answer the failure is classified
+ * agent-missing with the install hint. At most one ensure per connect cycle
+ * (armed on every manual connect and re-armed after a successful connection,
+ * so the backoff reconnect loop never hammers the remote).
  */
 import * as fs from 'node:fs';
 import {
@@ -24,7 +33,13 @@ import {
   isHostResponse,
 } from '../../shared/host/protocol';
 import { knownHostsPath } from './host-key';
-import { parseSshExit, spawnSshTransport, type HostTransport, type SshExitKind } from './ssh-transport';
+import {
+  parseSshExit,
+  spawnDaemonEnsure,
+  spawnSshTransport,
+  type HostTransport,
+  type SshExitKind,
+} from './ssh-transport';
 import type { MachineRecord, RemoteMachineRecord } from '../../shared/types/machine';
 
 /** Handshake deadline before declaring the remote agent missing. */
@@ -45,6 +60,13 @@ export const RECONNECT_MAX_ATTEMPTS = 5;
  * loop forever.
  */
 export const RECONNECT_RESET_AFTER_MS = 30_000;
+
+/**
+ * Grace period between the one-shot `serve --detached` command returning and
+ * the reconnect handshake, letting the freshly daemonized daemon bind its
+ * socket.
+ */
+export const DAEMON_ENSURE_SETTLE_MS = 1_000;
 
 export type MachineConnectionState = 'offline' | 'connecting' | 'connected' | 'lost';
 
@@ -90,6 +112,17 @@ export interface MachineConnectionBackoff {
   readonly resetAfterMs: number;
 }
 
+/**
+ * One daemon-ensure cycle: run the one-shot
+ * `serve --socket ~/.orchid/daemon.sock --detached` ssh command for the
+ * machine. Resolves true when the remote accepted the command (ssh exit 0).
+ * Injectable for tests.
+ */
+export type DaemonEnsureFn = (
+  machine: RemoteMachineRecord,
+  knownHostsPath: string,
+) => Promise<boolean>;
+
 export interface MachineConnectionManagerOptions {
   /** Base dir for known-hosts paths (tests); defaults to `~/.orchid`. */
   readonly homeDir?: string;
@@ -98,6 +131,10 @@ export interface MachineConnectionManagerOptions {
   readonly sleep?: (ms: number) => Promise<void>;
   readonly handshakeTimeoutMs?: number;
   readonly backoff?: Partial<MachineConnectionBackoff>;
+  /** Injectable daemon ensure (tests); defaults to the one-shot serve command. */
+  readonly ensureDaemon?: DaemonEnsureFn;
+  /** Settle delay after the ensure command before retrying the handshake. */
+  readonly ensureSettleMs?: number;
 }
 
 interface MachineEntry {
@@ -110,7 +147,16 @@ interface MachineEntry {
   /** Bumped by manual connect/disconnect to cancel in-flight reconnect loops. */
   generation: number;
   resetTimer: NodeJS.Timeout | null;
+  /** True once this connect cycle already ran its one daemon-ensure attempt. */
+  daemonEnsured: boolean;
 }
+
+/** Discriminated daemon-ensure cycle outcome (see ensureDaemonAndRetry). */
+type EnsureOutcome =
+  | { kind: 'no-retry' }
+  | { kind: 'ensure-failed'; error: MachineConnectionError }
+  | { kind: 'retry-failed'; error: MachineConnectionError }
+  | { kind: 'retry-connected'; transport: MachineTransport };
 
 /**
  * Per-machine connection state machine. All spawns happen through the
@@ -124,6 +170,8 @@ export class MachineConnectionManager {
   private readonly sleep: (ms: number) => Promise<void>;
   private readonly handshakeTimeoutMs: number;
   private readonly backoff: MachineConnectionBackoff;
+  private readonly ensureDaemon: DaemonEnsureFn;
+  private readonly ensureSettleMs: number;
   private readonly homeDir: string | undefined;
   private requestSeq = 0;
 
@@ -137,6 +185,9 @@ export class MachineConnectionManager {
         }));
     this.sleep = options.sleep ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
     this.handshakeTimeoutMs = options.handshakeTimeoutMs ?? HANDSHAKE_TIMEOUT_MS;
+    this.ensureDaemon =
+      options.ensureDaemon ?? ((machine, hostsPath) => spawnDaemonEnsure(machine, { knownHostsPath: hostsPath }));
+    this.ensureSettleMs = options.ensureSettleMs ?? DAEMON_ENSURE_SETTLE_MS;
     this.backoff = {
       initialMs: options.backoff?.initialMs ?? RECONNECT_INITIAL_DELAY_MS,
       maxMs: options.backoff?.maxMs ?? RECONNECT_MAX_DELAY_MS,
@@ -199,6 +250,9 @@ export class MachineConnectionManager {
 
     entry.generation += 1;
     entry.reconnectAttempts = 0;
+    // A manual connect starts a fresh connect cycle: the daemon-ensure budget
+    // re-arms so an explicit retry can attempt to start the daemon again.
+    entry.daemonEnsured = false;
     return this.startConnection(entry, entry.generation);
   }
 
@@ -235,6 +289,7 @@ export class MachineConnectionManager {
         connecting: null,
         generation: 0,
         resetTimer: null,
+        daemonEnsured: false,
       };
       this.entries.set(machine.id, entry);
     }
@@ -256,7 +311,12 @@ export class MachineConnectionManager {
     error: MachineConnectionError | null = null,
   ): void {
     if (state !== 'connecting') this.clearAttemptReset(entry);
-    if (state === 'connected') this.scheduleAttemptReset(entry);
+    if (state === 'connected') {
+      this.scheduleAttemptReset(entry);
+      // A healthy connection closes the connect cycle: the daemon-ensure
+      // budget re-arms so a later drop may attempt to start the daemon again.
+      entry.daemonEnsured = false;
+    }
     entry.state = state;
     if (state === 'lost') {
       entry.error = error;
@@ -323,8 +383,10 @@ export class MachineConnectionManager {
 
   /**
    * One connection attempt: pinned-key gate → transport spawn → handshake.
-   * Resolves with the connected status or rejects with the typed error (state
-   * left `lost`, unless the machine was disconnected/superseded meanwhile).
+   * On an agent-missing handshake failure the daemon-ensure cycle runs once
+   * per connect cycle (fresh transport + handshake retry). Resolves with the
+   * connected status or rejects with the typed error (state left `lost`,
+   * unless the machine was disconnected/superseded meanwhile).
    */
   private async attemptConnection(
     entry: MachineEntry,
@@ -348,15 +410,9 @@ export class MachineConnectionManager {
       throw error;
     }
 
-    const transport = this.transportFactory(entry.machine);
+    let transport = this.transportFactory(entry.machine);
     entry.transport = transport;
-    transport.onClose((code) => {
-      // Only an established connection can be "lost"; during the handshake the
-      // handshake's own close callback classifies the failure.
-      if (entry.transport === transport && entry.state === 'connected') {
-        this.handleUnexpectedLoss(entry, transport, code, generation);
-      }
-    });
+    this.watchTransport(entry, transport, generation);
 
     try {
       await this.handshake(transport);
@@ -364,12 +420,30 @@ export class MachineConnectionManager {
       transport.close();
       if (entry.transport === transport) entry.transport = null;
       if (entry.state !== 'connecting') throw error;
-      const typed =
-        error instanceof MachineConnectionError
-          ? error
-          : new MachineConnectionError('unknown', String(error));
-      this.transition(entry, 'lost', typed);
-      throw error;
+
+      const outcome = await this.ensureDaemonAndRetry(entry, generation, error, hostsPath);
+      if (outcome.kind === 'no-retry') {
+        // No ensure cycle ran — classify exactly as before.
+        const typed =
+          error instanceof MachineConnectionError
+            ? error
+            : new MachineConnectionError('unknown', String(error));
+        this.transition(entry, 'lost', typed);
+        throw error;
+      }
+      if (outcome.kind === 'ensure-failed') {
+        this.transition(entry, 'lost', outcome.error);
+        throw outcome.error;
+      }
+      if (outcome.kind === 'retry-failed') {
+        // The retry transport got no usable answer: the ensured daemon did not
+        // come up (a real hello answer keeps its own classification).
+        const typed = this.classifyPostEnsureFailure(entry.machine, outcome.error);
+        this.transition(entry, 'lost', typed);
+        throw typed;
+      }
+      // retry-connected: the retry transport owns the connection from here.
+      transport = outcome.transport;
     }
 
     if (entry.state !== 'connecting') {
@@ -385,6 +459,116 @@ export class MachineConnectionManager {
 
     this.transition(entry, 'connected');
     return this.statusOf(entry);
+  }
+
+  /** Register the unexpected-loss watcher for one live transport. */
+  private watchTransport(
+    entry: MachineEntry,
+    transport: MachineTransport,
+    generation: number,
+  ): void {
+    transport.onClose((code) => {
+      // Only an established connection can be "lost"; during the handshake the
+      // handshake's own close callback classifies the failure.
+      if (entry.transport === transport && entry.state === 'connected') {
+        this.handleUnexpectedLoss(entry, transport, code, generation);
+      }
+    });
+  }
+
+  /**
+   * The daemon-ensure cycle (U10). Eligible only for agent-missing handshake
+   * failures (ssh works, the remote agent/daemon did not answer) and at most
+   * once per connect cycle. Runs the one-shot
+   * `serve --socket ~/.orchid/daemon.sock --detached` ssh command, waits the
+   * settle delay, then retries the bridge handshake on a fresh transport.
+   */
+  private async ensureDaemonAndRetry(
+    entry: MachineEntry,
+    generation: number,
+    original: unknown,
+    hostsPath: string,
+  ): Promise<EnsureOutcome> {
+    if (!(original instanceof MachineConnectionError) || original.kind !== 'agent-missing') {
+      return { kind: 'no-retry' };
+    }
+    if (entry.daemonEnsured) return { kind: 'no-retry' };
+    entry.daemonEnsured = true;
+
+    let ensured: boolean;
+    try {
+      ensured = await this.ensureDaemon(entry.machine, hostsPath);
+    } catch (error) {
+      console.warn(`[machine-ensure] serve command threw for '${entry.machine.id}':`, error);
+      ensured = false;
+    }
+    // The machine was disconnected or superseded while the one-shot command
+    // ran — abandon without a state change (a newer attempt owns the entry).
+    if (entry.generation !== generation || entry.state !== 'connecting') return { kind: 'no-retry' };
+
+    if (!ensured) {
+      // The ensure bought nothing (agent absent, PATH miss, ssh failure): the
+      // original agent-missing classification is already the actionable one.
+      return { kind: 'ensure-failed', error: original };
+    }
+
+    await this.sleep(this.ensureSettleMs);
+    if (entry.generation !== generation || entry.state !== 'connecting') return { kind: 'no-retry' };
+
+    const retryTransport = this.transportFactory(entry.machine);
+    entry.transport = retryTransport;
+    this.watchTransport(entry, retryTransport, generation);
+    try {
+      await this.handshake(retryTransport);
+      return { kind: 'retry-connected', transport: retryTransport };
+    } catch (error) {
+      retryTransport.close();
+      if (entry.transport === retryTransport) entry.transport = null;
+      if (entry.state !== 'connecting') {
+        return {
+          kind: 'ensure-failed',
+          error: new MachineConnectionError(
+            'transport-closed',
+            'The connection attempt was cancelled.',
+            'The machine was disconnected before the handshake completed.',
+          ),
+        };
+      }
+      return {
+        kind: 'retry-failed',
+        error:
+          error instanceof MachineConnectionError
+            ? error
+            : new MachineConnectionError('unknown', String(error)),
+      };
+    }
+  }
+
+  /**
+   * Classify the handshake failure that followed a successful daemon-ensure
+   * command. A real `host.hello` answer (mismatch / rejected hello) or an
+   * ssh-level failure keeps its own classification — the daemon IS running.
+   * Everything else means the ensured daemon still did not answer:
+   * agent-missing with the install hint.
+   */
+  private classifyPostEnsureFailure(
+    machine: RemoteMachineRecord,
+    error: MachineConnectionError,
+  ): MachineConnectionError {
+    if (
+      error.kind === 'protocol-mismatch'
+      || error.kind === 'handshake-failed'
+      || error.kind === 'host-key-mismatch'
+      || error.kind === 'auth-failed'
+      || error.kind === 'unreachable'
+    ) {
+      return error;
+    }
+    return new MachineConnectionError(
+      'agent-missing',
+      `Started the daemon on '${machine.label}' automatically, but its bridge still did not answer the handshake.`,
+      'Check that `orchid-agent serve --socket ~/.orchid/daemon.sock` runs on the remote (see its ~/.orchid/logs), then reconnect.',
+    );
   }
 
   /**

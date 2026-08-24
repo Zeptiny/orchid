@@ -30,8 +30,12 @@ const attached = new Map<string, AttachedClient>();
  * the local path (clientId === window id) the recipients are resolved through
  * the per-window active-machine map, so several windows can share one remote
  * client and no window on another machine ever sees its events.
+ *
+ * Exported for `machines/resync.ts`, which re-broadcasts the reconnect
+ * catch-up through this exact path so resync deliveries are indistinguishable
+ * from live ones.
  */
-function deliverToMachineWindows(machineId: string, ev: string, params: unknown): void {
+export function deliverToMachineWindows(machineId: string, ev: string, params: unknown): void {
   for (const win of BrowserWindow.getAllWindows()) {
     try {
       if (win.isDestroyed?.() || win.webContents?.isDestroyed?.()) continue;

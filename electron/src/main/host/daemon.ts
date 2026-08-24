@@ -6,6 +6,8 @@
  * shared/host/framing.ts. Requests are dispatched through the server;
  * responses and events are written back on the same stream.
  */
+import { spawn } from 'node:child_process';
+import type { ChildProcess, SpawnOptions } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as net from 'node:net';
 import { createFrameDecoder, encodeMessage, FrameError } from '../../shared/host/framing';
@@ -16,6 +18,13 @@ import { createHostServer, type HostServer } from './server';
 export const STDIO_CLIENT_ID = 'stdio';
 
 const SOCKET_MODE = 0o600;
+
+/**
+ * Env key marking the detached child re-entry of `serve --socket --detached`
+ * (U10). The parent spawns a fresh process running the same entrypoint with
+ * this key set; that child recognizes itself and serves in the foreground.
+ */
+export const DETACHED_SERVE_ENV = 'ORCHID_AGENT_SERVE_DETACHED';
 
 interface TransportOptions {
   /** Server to dispatch through (one is created when omitted). */
@@ -154,6 +163,72 @@ export function serveSocket(
       resolve(netServer);
     });
   });
+}
+
+/**
+ * Spawn-detached (the classic double-fork equivalent on POSIX): the child runs
+ * in its own process group with all stdio ignored and is unref'd, so it
+ * survives the parent's exit and never blocks it. Injectable spawn for tests.
+ */
+export function spawnDetachedChild(
+  command: string,
+  args: string[],
+  env: NodeJS.ProcessEnv,
+  spawnFn: (command: string, args: string[], options: SpawnOptions) => ChildProcess = spawn,
+): ChildProcess {
+  const child = spawnFn(command, args, {
+    detached: true,
+    stdio: 'ignore',
+    env,
+  });
+  child.unref();
+  return child;
+}
+
+export interface DetachedServeOptions {
+  /**
+   * Absolute path of the runnable entrypoint to re-spawn (the CLI bundle).
+   * Only the parent path uses it; the child runs `serve` directly.
+   */
+  readonly entryPath: string;
+  /** Foreground serve the detached child runs; never called in the parent. */
+  readonly serve: (socketPath: string) => Promise<unknown> | unknown;
+  /** Spawn target override (tests); defaults to `process.execPath <entryPath>`. */
+  readonly spawnFn?: (command: string, args: string[], options: SpawnOptions) => ChildProcess;
+  readonly env?: NodeJS.ProcessEnv;
+  /** Exit hook override (tests); the parent exits 0 right after spawning. */
+  readonly exit?: (code: number) => void;
+}
+
+/**
+ * `serve --socket <path> --detached` (U10): daemonize the serve command so a
+ * one-shot `ssh <host> orchid-agent serve --socket ~/.orchid/daemon.sock
+ * --detached` returns immediately while the daemon keeps serving the socket.
+ *
+ * - Child re-entry (env marker set): run `serve` in the foreground.
+ * - Parent: spawn the detached child (stdio ignored, new process group,
+ *   unref'd), report its pid on stderr, and exit 0 without initializing the
+ *   runtime — the whole point is that the parent does no work.
+ */
+export async function serveSocketDetached(
+  socketPath: string,
+  options: DetachedServeOptions,
+): Promise<void> {
+  const env = options.env ?? process.env;
+  if (env[DETACHED_SERVE_ENV] === '1') {
+    await options.serve(socketPath);
+    return;
+  }
+  const child = spawnDetachedChild(
+    process.execPath,
+    [options.entryPath, 'serve', '--socket', socketPath, '--detached'],
+    { ...env, [DETACHED_SERVE_ENV]: '1' },
+    options.spawnFn,
+  );
+  process.stderr.write(`orchid-agent daemon started detached (pid ${child.pid ?? '?'}) on ${socketPath}\n`);
+  (options.exit ?? ((code: number) => {
+    process.exitCode = code;
+  }))(0);
 }
 
 /**

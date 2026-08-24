@@ -432,6 +432,12 @@ export const machineDisconnectResultSchema = z.discriminatedUnion('status', [
   machineActionErrorResultSchema,
 ]);
 
+/** `MachineResyncResult` (shared/types/ipc.ts) — reconnect catch-up ack (U10). */
+export const machineResyncResultSchema = z.discriminatedUnion('status', [
+  z.object({ status: z.literal('ok'), machineId: z.string().min(1), resynced: z.boolean() }),
+  z.object({ status: z.literal('error'), machineId: z.string().min(1), error: machineActionErrorSchema }),
+]);
+
 export const machineScanHostKeyResultSchema = z.discriminatedUnion('status', [
   z.object({ status: z.literal('scanned'), fingerprints: z.array(machineHostKeyFingerprintSchema).min(1) }),
   machineActionErrorResultSchema,

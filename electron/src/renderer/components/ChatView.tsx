@@ -23,6 +23,7 @@ import type { UseSessionActivityReturn } from '../hooks/useSessionActivity';
 import { useSessionTabs } from '../hooks/useSessionTabs';
 import { useSessionDeletionReconciliation } from '../hooks/useSessionDeletionReconciliation';
 import { useMachines } from '../hooks/useMachines';
+import { useMachineResync } from '../hooks/useMachineResync';
 import { useProviders } from '../hooks/useProviders';
 import { useMessageQueue } from '../hooks/useMessageQueue';
 import { useQueueAutoFire } from '../hooks/useQueueAutoFire';
@@ -51,7 +52,7 @@ import type {
   MCPServerStatus,
   RAGStoreStatus,
 } from '../../shared/types/ipc-boundary';
-import type { ProviderModelOption, SessionOpenResult } from '../../shared/types/ipc';
+import type { MachineStatusEntry, ProviderModelOption, SessionOpenResult } from '../../shared/types/ipc';
 import type { Notify } from '../utils/notify';
 import { ChatStream } from './ChatStream';
 import { DeferredSurface } from './deferred-surface';
@@ -69,6 +70,7 @@ import { Button } from './ui/Button';
 import { StateMessage } from './ui/StateMessage';
 import { Alert } from './ui/Alert';
 import { MachineSwitcher } from './Machines/MachineSwitcher';
+import { MachineLiveTurnIndicator } from './Machines/MachineLiveTurnIndicator';
 import type { SubagentOpenRequest } from './SubagentView';
 
 const ProjectConfigView = lazy(() => import('./ProjectConfigView').then((module) => ({
@@ -468,10 +470,12 @@ export function ChatView({ isVisible = true, bootstrapConfig = null, onNotify, a
   );
 
   const handleSessionSelect = useCallback(
-    async (id: string) => {
+    async (id: string, options?: { force?: boolean }) => {
       setProjectConfigDir(null);
       // Already focused this session (not draft) — skip full reload to avoid flicker.
-      if (session.activeSession?.id === id && !draftTabVisible) {
+      // `force` re-fetches anyway (reconnect resync: the view must land on the
+      // same complete state as a fresh open).
+      if (!options?.force && session.activeSession?.id === id && !draftTabVisible) {
         return;
       }
 
@@ -564,6 +568,14 @@ export function ChatView({ isVisible = true, bootstrapConfig = null, onNotify, a
     await enterDraftMode({ clearComposer: true });
   }, [session, enterDraftMode, applySessionMessages, trustPrompt.openFor]);
 
+  // The machine-scoped refresh shared by machine switches and reconnect
+  // resync: re-read the host's session list, workspace, and provider surface.
+  const refreshMachineScope = useCallback(() => {
+    void session.refresh();
+    void session.getWorkspace();
+    void providers.refresh();
+  }, [session.refresh, session.getWorkspace, providers.refresh]);
+
   // Machine switches re-scope this window: the open session belongs to the
   // previous machine's host, so re-enter draft mode against the new host and
   // re-read its session list, workspace, and provider surface. The initial
@@ -577,17 +589,44 @@ export function ChatView({ isVisible = true, bootstrapConfig = null, onNotify, a
     }
     if (machineScopeRef.current === active) return;
     machineScopeRef.current = active;
-    void session.refresh();
-    void session.getWorkspace();
-    void providers.refresh();
+    refreshMachineScope();
     void enterDraftMode({ clearComposer: true });
   }, [
     machines.activeMachineId,
-    session.refresh,
-    session.getWorkspace,
-    providers.refresh,
+    refreshMachineScope,
     enterDraftMode,
   ]);
+
+  // Reconnect resync (U10, R6): when the active machine comes back, restore
+  // the SAME complete view a fresh open produces — refresh the machine scope,
+  // force a re-open of the active session (messages + live snapshot + pending
+  // prompts), then ask main to re-broadcast what only it can push (pending
+  // approvals/questions owned by the old connection, fleet/subagent reload
+  // signals). A switch to another machine never fires this (see the hook).
+  const activeMachineConnectionState: MachineStatusEntry['state'] = canPickProjectDir
+    ? 'connected'
+    : machines.statusOf(machines.activeMachineId).state;
+  const activeSessionIdForResync = session.activeSession?.id ?? null;
+  const activeSessionIdForResyncRef = useRef(activeSessionIdForResync);
+  activeSessionIdForResyncRef.current = activeSessionIdForResync;
+  const { reconnectedAt } = useMachineResync({
+    machineId: machines.activeMachineId,
+    state: activeMachineConnectionState,
+    onReconnect: useCallback(() => {
+      refreshMachineScope();
+      const activeId = activeSessionIdForResyncRef.current;
+      if (activeId) {
+        void handleSessionSelect(activeId, { force: true }).then(() => {
+          // The re-open has landed host-side (the session is active for the
+          // machine client again), so the main-side catch-up resolves
+          // session-scoped pieces against it.
+          void window.orchid?.machines?.resync?.();
+        });
+      } else {
+        void window.orchid?.machines?.resync?.();
+      }
+    }, [refreshMachineScope, handleSessionSelect]),
+  });
 
   // Project-row New Chat: make that project the window's draft workspace, then
   // clear selection. The first message creates a new session there while any
@@ -1265,6 +1304,18 @@ export function ChatView({ isVisible = true, bootstrapConfig = null, onNotify, a
     : machines.statusOf(machines.activeMachineId);
   const remoteDisconnected = activeMachineStatus != null
     && (activeMachineStatus.state === 'lost' || activeMachineStatus.state === 'offline');
+  // Live-turn indicator (U10): a turn that started BEFORE the machine
+  // reconnected is work that survived the gap — the resync re-open seeds the
+  // projection (status + startedAt from the host snapshot), so the indicator
+  // anchors on the snapshot's own start time. Locally started turns already
+  // have the footer's Running state and are excluded by the timestamp gate.
+  const resumedLiveTurnStartedAt = !canPickProjectDir
+    && reconnectedAt != null
+    && chat.status === 'streaming'
+    && chat.streamStartTime != null
+    && chat.streamStartTime <= reconnectedAt
+      ? chat.streamStartTime
+      : null;
   const handleMachineReconnect = useCallback(async () => {
     if (canPickProjectDir) return;
     setReconnectingMachine(true);
@@ -1431,6 +1482,12 @@ export function ChatView({ isVisible = true, bootstrapConfig = null, onNotify, a
             {activeMachineStatus.error?.hint
               ?? 'Work keeps running on the remote machine; reconnect to resume the session view.'}
           </Alert>
+        )}
+        {!remoteDisconnected && (
+          <MachineLiveTurnIndicator
+            machineLabel={machines.activeMachineLabel}
+            startedAt={resumedLiveTurnStartedAt}
+          />
         )}
         <DeferredSurface isVisible={chatSurfaceVisible}>
           <ChatStream

@@ -159,6 +159,17 @@ export class QuestionStore extends EventEmitter {
     return true;
   }
 
+  /**
+   * Replace an existing owner binding (reconnect resync, U10 — see the
+   * approval store's twin for the rationale).
+   */
+  rebindOwnerWindow(toolCallId: string, ownerWindowId: string): boolean {
+    const entry = this.pending.get(toolCallId);
+    if (!entry) return false;
+    entry.ownerWindowId = ownerWindowId;
+    return true;
+  }
+
   /** Replayable snapshot restricted to the exact originating renderer window. */
   listForOwner(sessionId: string, ownerWindowId: string): PendingQuestion[] {
     return [...this.pending.values()]

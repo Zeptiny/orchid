@@ -72,7 +72,12 @@ import { getBackgroundStore } from './tools/process/background-store';
 import { disposeAllWorkspaceWatchers } from './indexing/watcher';
 import { disposeIndexRefreshCoordinatorAsync } from './indexing/refresh-coordinator';
 import { createHostServer, type HostServer } from './host/server';
-import { bridgeStdioToSocket, serveSocket, serveStdio } from './host/daemon';
+import {
+  bridgeStdioToSocket,
+  serveSocket,
+  serveSocketDetached,
+  serveStdio,
+} from './host/daemon';
 
 /** Replaced at bundle time from package.json (scripts/build-agent.js). */
 declare const __AGENT_VERSION__: string;
@@ -85,7 +90,10 @@ const USAGE = `orchid-agent — headless Orchid agent host
 Usage:
   orchid-agent --version              Print the agent version
   orchid-agent serve --stdio          Serve the host protocol over stdin/stdout
-  orchid-agent serve --socket <path>  Serve over a 0600 UNIX socket (detached)
+  orchid-agent serve --socket <path>  Serve over a 0600 UNIX socket
+  orchid-agent serve --socket <path> --detached
+                                      Daemonize: start serving in a detached
+                                      child and exit immediately
   orchid-agent bridge <socketPath>    Pipe stdio to a running socket daemon
 `;
 
@@ -256,8 +264,8 @@ async function main(): Promise<void> {
   process.on('SIGINT', () => void shutdown());
 
   if (args[0] === 'serve') {
-    const server = await initializeDaemonRuntime();
     if (args[1] === '--stdio') {
+      const server = await initializeDaemonRuntime();
       await serveStdio({ server });
       await shutdown();
       return;
@@ -269,6 +277,22 @@ async function main(): Promise<void> {
         process.exitCode = 1;
         return;
       }
+      if (args.includes('--detached')) {
+        // Parent: spawn the detached child and exit without initializing the
+        // runtime, so a one-shot `ssh … serve --socket … --detached` returns
+        // immediately (U10 daemon ensure). The child re-enters with the env
+        // marker and takes the foreground branch below.
+        await serveSocketDetached(socketPath, {
+          entryPath: __filename,
+          serve: async (detachedSocketPath) => {
+            const server = await initializeDaemonRuntime();
+            await serveSocket(detachedSocketPath, { server });
+            process.stderr.write(`orchid-agent listening on ${detachedSocketPath}\n`);
+          },
+        });
+        return;
+      }
+      const server = await initializeDaemonRuntime();
       await serveSocket(socketPath, { server });
       process.stderr.write(`orchid-agent listening on ${socketPath}\n`);
       return;

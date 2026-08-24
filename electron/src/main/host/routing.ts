@@ -149,13 +149,20 @@ export function unregisterHostClient(machineId: MachineId): void {
   clientsByMachine.delete(machineId);
 }
 
-/** The client of a registered machine; unknown ids are a hard error. */
+/**
+ * The client of a registered machine. A machine id that was never registered
+ * (or whose connection was unregistered) is a hard error. The actionable copy
+ * distinguishes the unreachable case (sends fail fast, work keeps running).
+ */
 export function getHostClient(machineId: MachineId): HostClient {
   const client = clientsByMachine.get(machineId);
   if (!client) {
     throw new HostProtocolError(
       HOST_ERROR_CODES.HOST_UNAVAILABLE,
-      `No host client is registered for machine '${machineId}'`,
+      `No host client is registered for machine '${machineId}' — ` +
+        'it may be disconnected or never connected. Work keeps running on a remote, ' +
+        'but sends fail until the connection is back. Use Reconnect ' +
+        '(or wait for the automatic reconnect) and try again.',
     );
   }
   return client;

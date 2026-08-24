@@ -83,6 +83,9 @@ function makeManager(
     handshakeTimeoutMs?: number;
     sleep?: (ms: number) => Promise<void>;
     backoff?: { initialMs?: number; maxMs?: number; maxAttempts?: number; resetAfterMs?: number };
+    /** Daemon-ensure fake (U10); default resolves false without spawning ssh. */
+    ensureDaemon?: (machine: RemoteMachineRecord, hostsPath: string) => Promise<boolean>;
+    ensureSettleMs?: number;
   } = {},
 ): Harness {
   let mode = options.mode ?? 'stable';
@@ -104,6 +107,8 @@ function makeManager(
     sleep: options.sleep,
     handshakeTimeoutMs: options.handshakeTimeoutMs ?? 4000,
     backoff: options.backoff,
+    ensureDaemon: options.ensureDaemon ?? (async () => false),
+    ensureSettleMs: options.ensureSettleMs ?? 0,
   });
   const harness: Harness = {
     manager,

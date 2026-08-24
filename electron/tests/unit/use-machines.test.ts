@@ -6,10 +6,22 @@
  * faked `window.orchid.machines` API, driving list/status/active state
  * transitions, the add-machine wizard action sequence (create → scan →
  * confirm → connect), and typed error surfacing.
+ *
+ * U10 additions: the useMachineResync reconnect trigger (lost→connected fires
+ * the machine-scoped refresh exactly once; switches/mounts never fire) and the
+ * MachineLiveTurnIndicator rendering (streaming → present, idle → absent).
  */
-import { act, cleanup, renderHook, waitFor } from '@testing-library/react';
+import { act, cleanup, render, renderHook, screen, waitFor } from '@testing-library/react';
+import { createElement } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { useMachines, __machinesCacheTest } from '../../src/renderer/hooks/useMachines';
+import {
+  isMachineReconnectTransition,
+  useMachineResync,
+} from '../../src/renderer/hooks/useMachineResync';
+import {
+  MachineLiveTurnIndicator,
+} from '../../src/renderer/components/Machines/MachineLiveTurnIndicator';
 import type {
   MachineListResult,
   MachineStatusResult,
@@ -327,5 +339,75 @@ describe('useMachines actions', () => {
       result.current.clearActionError();
     });
     expect(result.current.actionError).toBeNull();
+  });
+});
+
+// ── U10: reconnect resync trigger + live-turn indicator ──────────────────────
+
+describe('useMachineResync (U10 lost→connected refresh trigger)', () => {
+  type State = 'offline' | 'connecting' | 'connected' | 'lost';
+
+  function renderResync(initial: { machineId: string; state: State }) {
+    const onReconnect = vi.fn();
+    const utils = renderHook(
+      ({ machineId, state }) => useMachineResync({ machineId, state, onReconnect }),
+      { initialProps: initial },
+    );
+    return { ...utils, onReconnect };
+  }
+
+  it('detects reconnect transitions and only those', () => {
+    expect(isMachineReconnectTransition('lost', 'connected')).toBe(true);
+    expect(isMachineReconnectTransition('offline', 'connected')).toBe(true);
+    expect(isMachineReconnectTransition('connecting', 'connected')).toBe(true);
+    expect(isMachineReconnectTransition('connected', 'connected')).toBe(false);
+    expect(isMachineReconnectTransition('lost', 'connecting')).toBe(false);
+    expect(isMachineReconnectTransition('connected', 'lost')).toBe(false);
+  });
+
+  it('fires once on lost→connected and exposes the reconnect timestamp', async () => {
+    const { rerender, result, onReconnect } = renderResync({ machineId: 'build-1', state: 'lost' });
+    expect(onReconnect).not.toHaveBeenCalled();
+    expect(result.current.reconnectedAt).toBeNull();
+
+    rerender({ machineId: 'build-1', state: 'connecting' });
+    rerender({ machineId: 'build-1', state: 'connected' });
+
+    await waitFor(() => expect(onReconnect).toHaveBeenCalledTimes(1));
+    expect(result.current.reconnectedAt).not.toBeNull();
+
+    // Staying connected never re-fires.
+    rerender({ machineId: 'build-1', state: 'connected' });
+    rerender({ machineId: 'build-1', state: 'connected' });
+    expect(onReconnect).toHaveBeenCalledTimes(1);
+  });
+
+  it('never fires on mount or on a machine switch', async () => {
+    const { rerender, onReconnect } = renderResync({ machineId: 'build-1', state: 'connected' });
+    expect(onReconnect).not.toHaveBeenCalled();
+
+    // Switching to another already-connected machine is the switch path's job.
+    rerender({ machineId: 'zeta', state: 'connected' });
+    expect(onReconnect).not.toHaveBeenCalled();
+
+    // After the switch is recorded, a genuine drop and recovery of the NEW
+    // machine fires exactly once.
+    rerender({ machineId: 'zeta', state: 'lost' });
+    rerender({ machineId: 'zeta', state: 'connected' });
+    await waitFor(() => expect(onReconnect).toHaveBeenCalledTimes(1));
+  });
+});
+
+describe('MachineLiveTurnIndicator (U10 live-turn UX)', () => {
+  it('renders "running since HH:MM" when a resumed turn is streaming', () => {
+    const startedAt = new Date('2026-08-23T14:05:00').getTime();
+    render(createElement(MachineLiveTurnIndicator, { machineLabel: 'Build server', startedAt }));
+    expect(screen.getByText(/Build server kept working while disconnected/)).toBeTruthy();
+    expect(screen.getByText(/running \(since/)).toBeTruthy();
+  });
+
+  it('renders nothing when no turn was resumed across the reconnect', () => {
+    const { container } = render(createElement(MachineLiveTurnIndicator, { machineLabel: 'Build server', startedAt: null }));
+    expect(container.querySelector('[role="status"]')).toBeNull();
   });
 });

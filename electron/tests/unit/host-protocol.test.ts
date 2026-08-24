@@ -177,6 +177,10 @@ const METHOD_FIXTURES: Record<string, { params: unknown; result: unknown }> = {
       capabilities: [HOST_CAPABILITIES.CONFIG_WRITE],
     },
   },
+  'host.pending_state': {
+    params: { sessionId: SESSION_ID },
+    result: { approvals: [approvalRequested], questions: [askedEvent] },
+  },
   'chat.send': {
     params: { message: 'hello' },
     result: { status: 'started', sessionId: SESSION_ID, turnId: TURN_ID },
@@ -645,8 +649,9 @@ const EVENT_FIXTURES: Record<string, unknown> = {
 
 describe('HOST_METHODS registry', () => {
   it('registers the full host-routed method surface', () => {
-    expect(Object.keys(HOST_METHODS)).toHaveLength(78);
+    expect(Object.keys(HOST_METHODS)).toHaveLength(79);
     expect(HOST_METHODS[HOST_HELLO_METHOD]).toBeDefined();
+    expect(HOST_METHODS['host.pending_state']).toBeDefined();
     for (const method of Object.keys(HOST_METHODS)) {
       expect(
         ['machines.', 'analytics.', 'updater.', 'startup.'].some((prefix) =>
@@ -687,7 +692,9 @@ describe('HOST_METHODS registry', () => {
   it('maps every method back to a real IPC invoke channel', () => {
     const invokeChannels = ALLOWED_INVOKE_CHANNELS as readonly string[];
     for (const method of Object.keys(HOST_METHODS)) {
-      if (method === HOST_HELLO_METHOD) continue;
+      // Host-internal methods (handshake, reconnect resync) deliberately have
+      // no IPC channel counterpart.
+      if (method.startsWith('host.')) continue;
       expect(invokeChannels, `method ${method} has no IPC channel counterpart`).toContain(
         methodToChannel(method),
       );
@@ -701,6 +708,7 @@ describe('HOST_METHODS registry', () => {
     expect(lookupHostMethod('providers.submit_api_key')).toBeUndefined();
     expect(lookupHostMethod('__proto__')).toBeUndefined();
     expect(lookupHostMethod('chat.send')).toBe(HOST_METHODS['chat.send']);
+    expect(lookupHostMethod('host.pending_state')).toBe(HOST_METHODS['host.pending_state']);
   });
 
   it('excludes provider vault writes from the routed surface', () => {

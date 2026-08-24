@@ -68,14 +68,14 @@ export function splitAgentCommand(command: string): string[] {
 }
 
 /**
- * Build the ssh argv for one machine:
+ * Shared ssh hardening + destination argv (everything before `--`):
  *
  * `ssh -o BatchMode=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=<path>
- * -o ConnectTimeout=10 [-p port] [user@]host -- <agentCommand…> bridge`
+ * -o ConnectTimeout=10 [-p port] [user@]host`
  *
  * The port flag and user prefix are emitted only for non-default values.
  */
-export function buildSshCommand(machine: MachineRecord, knownHostsPath: string): string[] {
+function buildSshBaseArgv(machine: MachineRecord, knownHostsPath: string): string[] {
   if (machine.kind !== 'ssh') {
     throw new Error(`Machine '${machine.id}' is not an SSH remote`);
   }
@@ -94,8 +94,50 @@ export function buildSshCommand(machine: MachineRecord, knownHostsPath: string):
     argv.push('-p', String(machine.port));
   }
   argv.push(machine.user === '' ? machine.host : `${machine.user}@${machine.host}`);
-  argv.push('--', ...splitAgentCommand(machine.agentCommand), 'bridge');
   return argv;
+}
+
+/**
+ * Build the ssh argv for one machine's stdio bridge:
+ *
+ * `ssh <hardening> [user@]host -- <agentCommand…> bridge`
+ */
+export function buildSshCommand(machine: MachineRecord, knownHostsPath: string): string[] {
+  if (machine.kind !== 'ssh') {
+    throw new Error(`Machine '${machine.id}' is not an SSH remote`);
+  }
+  return [...buildSshBaseArgv(machine, knownHostsPath), '--', ...splitAgentCommand(machine.agentCommand), 'bridge'];
+}
+
+/**
+ * Default remote daemon socket the app ensures via `serve --detached` (U10).
+ * Literal tilde on purpose: the remote login shell expands it to the remote
+ * user's home, which this machine cannot assume to know.
+ */
+export const REMOTE_DAEMON_SOCKET_PATH = '~/.orchid/daemon.sock';
+
+/**
+ * Build the one-shot ssh argv that starts the remote daemon detached (U10):
+ *
+ * `ssh <same hardening as buildSshCommand> [user@]host --
+ *   <agentCommand…> serve --socket ~/.orchid/daemon.sock --detached`
+ *
+ * The remote `--detached` daemonizes and returns, so this ssh command exits
+ * immediately instead of holding the stdio bridge channel open.
+ */
+export function buildSshServeCommand(machine: MachineRecord, knownHostsPath: string): string[] {
+  if (machine.kind !== 'ssh') {
+    throw new Error(`Machine '${machine.id}' is not an SSH remote`);
+  }
+  return [
+    ...buildSshBaseArgv(machine, knownHostsPath),
+    '--',
+    ...splitAgentCommand(machine.agentCommand),
+    'serve',
+    '--socket',
+    REMOTE_DAEMON_SOCKET_PATH,
+    '--detached',
+  ];
 }
 
 // ---------------------------------------------------------------------------
@@ -304,4 +346,79 @@ export function spawnSshTransport(
       return [...stderrLines];
     },
   };
+}
+
+// ---------------------------------------------------------------------------
+// Daemon ensure (U10)
+// ---------------------------------------------------------------------------
+
+/** Ceiling for the one-shot `serve --detached` ssh command (connect + spawn). */
+export const DAEMON_ENSURE_TIMEOUT_MS = 30_000;
+
+export interface SpawnDaemonEnsureOptions {
+  readonly spawnFn?: SshSpawnFn;
+  readonly commandFactory?: SshCommandFactory;
+  /** Known-hosts path override; defaults to the machine's pinned file. */
+  readonly knownHostsPath?: string;
+  /** Deadline for the one-shot ssh command (default DAEMON_ENSURE_TIMEOUT_MS). */
+  readonly timeoutMs?: number;
+}
+
+/**
+ * Run the one-shot `serve --socket ~/.orchid/daemon.sock --detached` ssh
+ * command for a machine. Resolves `true` when ssh exited 0 (the remote
+ * daemonized the daemon and the command returned), `false` on a non-zero
+ * exit, a spawn error, or the deadline. Never rejects.
+ */
+export function spawnDaemonEnsure(
+  machine: MachineRecord,
+  options: SpawnDaemonEnsureOptions = {},
+): Promise<boolean> {
+  return new Promise((resolve) => {
+    let argv: string[];
+    try {
+      argv = (options.commandFactory ?? buildSshServeCommand)(
+        machine,
+        options.knownHostsPath ?? defaultKnownHostsPath(machine.id),
+      );
+    } catch (error) {
+      console.warn(`[machine-ensure] failed to build the serve command:`, error);
+      resolve(false);
+      return;
+    }
+    let settled = false;
+    // Referenced by `finish` before assignment below; only ever invoked after
+    // the synchronous setup completes, so the TDZ is never hit.
+    const timer: NodeJS.Timeout = setTimeout(() => {
+      try {
+        child.kill();
+      } catch {
+        // already gone
+      }
+      finish(false);
+    }, options.timeoutMs ?? DAEMON_ENSURE_TIMEOUT_MS);
+    timer.unref?.();
+    const finish = (ok: boolean): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(ok);
+    };
+
+    let child: ChildProcess;
+    try {
+      child = (options.spawnFn ?? spawn)(argv[0] as string, argv.slice(1), {
+        stdio: ['ignore', 'ignore', 'ignore'],
+        windowsHide: true,
+      });
+    } catch (error) {
+      console.warn(`[machine-ensure] failed to spawn the serve command:`, error);
+      finish(false);
+      return;
+    }
+    // A detached remote daemon never writes stdio; drain defensively anyway so
+    // a chatty ssh cannot block on full pipes before exiting.
+    child.on('error', () => finish(false));
+    child.on('close', (code) => finish(code === 0));
+  });
 }

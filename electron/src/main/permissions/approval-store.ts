@@ -190,6 +190,19 @@ export class ApprovalStore extends EventEmitter {
     return true;
   }
 
+  /**
+   * Replace an existing owner binding. Used by reconnect resync (U10): a
+   * remote host assigns a fresh connection id per attach, so a pending
+   * entry's owner can never return — the orphaned binding moves to the
+   * reconnecting client or the prompt stays visible-but-unanswerable.
+   */
+  rebindOwnerWindow(toolCallId: string, ownerWindowId: string): boolean {
+    const entry = this.pending.get(toolCallId);
+    if (!entry) return false;
+    entry.ownerWindowId = ownerWindowId;
+    return true;
+  }
+
   /** List pending approvals for a session scoped to a specific owner window. */
   listForOwner(sessionId: string, ownerWindowId: string): PendingApproval[] {
     return [...this.pending.values()]

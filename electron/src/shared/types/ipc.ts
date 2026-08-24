@@ -209,6 +209,15 @@ export type MachineConfirmHostKeyResult =
   | ({ status: 'pinned'; fingerprints: MachineHostKeyFingerprint[] })
   | ({ status: 'error'; error: MachineActionError });
 
+/**
+ * Re-broadcast the reconnect catch-up for the sending window's active machine
+ * (U10). `resynced` is false when there was nothing to push (local machine,
+ * unregistered remote).
+ */
+export type MachineResyncResult =
+  | ({ status: 'ok'; machineId: string; resynced: boolean })
+  | ({ status: 'error'; machineId: string; error: MachineActionError });
+
 // ── Chat API ─────────────────────────────────────────────────────────────────
 
 export interface ChatSendMessage {
@@ -1645,6 +1654,12 @@ export interface OrchidAPI {
     connect: (message: MachineIdMessage) => Promise<MachineConnectResult>;
     /** Disconnect one machine and drop its host client. */
     disconnect: (message: MachineIdMessage) => Promise<MachineDisconnectResult>;
+    /**
+     * Re-broadcast the reconnect catch-up for this window's active machine
+     * (pending approvals/questions + reload signals). Call after the
+     * machine-scoped refresh so session-scoped state is re-opened first.
+     */
+    resync: () => Promise<MachineResyncResult>;
     /** `ssh-keyscan` an existing machine record; the UI confirms before pinning. */
     scanHostKey: (message: MachineIdMessage) => Promise<MachineScanHostKeyResult>;
     /** Pin the machine's most recent scan (TOFU) into its known-hosts file. */
@@ -1917,6 +1932,13 @@ export const IPC_CHANNELS = {
   MACHINES_CONNECT: 'machines:connect',
   /** Disconnect one machine. */
   MACHINES_DISCONNECT: 'machines:disconnect',
+  /**
+   * Re-broadcast the reconnect catch-up (pending approvals/questions + reload
+   * signals) for the SENDING WINDOW's active machine (U10). Called by the
+   * renderer after its machine-scoped refresh so session-scoped pieces (live
+   * turn, background fleet) resolve against the re-opened session.
+   */
+  MACHINES_RESYNC: 'machines:resync',
   /** `ssh-keyscan` an existing machine record. */
   MACHINES_SCAN_HOST_KEY: 'machines:scan_host_key',
   /** Pin the machine's most recent scan (TOFU). */
@@ -2081,6 +2103,7 @@ export const ALLOWED_INVOKE_CHANNELS = [
   IPC_CHANNELS.MACHINES_SET_ACTIVE,
   IPC_CHANNELS.MACHINES_CONNECT,
   IPC_CHANNELS.MACHINES_DISCONNECT,
+  IPC_CHANNELS.MACHINES_RESYNC,
   IPC_CHANNELS.MACHINES_SCAN_HOST_KEY,
   IPC_CHANNELS.MACHINES_CONFIRM_HOST_KEY,
   IPC_CHANNELS.TOOL_EXECUTE,

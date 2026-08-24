@@ -30,6 +30,10 @@ import {
   type HostResponse,
 } from '../../shared/host/protocol';
 import { IPC_CHANNELS } from '../../shared/types/ipc';
+import type {
+  AskQuestionAskedEvent,
+  PermissionApprovalRequestedEvent,
+} from '../../shared/types/ipc';
 import type { IndexAutoRefreshEvent } from '../../shared/types/ipc-boundary';
 import type { PermissionMode } from '../../shared/types/permission';
 import { flattenSessionMessages, sessionForRenderer } from '../../shared/types/session';
@@ -188,6 +192,34 @@ export type HostServerOptions = {
   readonly serverVersion?: string;
 };
 
+/**
+ * Owner-stripped event payload for one pending approval — byte-identical to
+ * the store's live `permission:approval_requested` event, so a resync
+ * re-broadcast is indistinguishable from the first delivery.
+ */
+function pendingApprovalEvent(approval: PendingApprovalWithOwner): PermissionApprovalRequestedEvent {
+  return {
+    toolCallId: approval.toolCallId,
+    sessionId: approval.sessionId,
+    toolName: approval.toolName,
+    riskClass: approval.riskClass,
+    args: approval.args,
+    cwd: approval.cwd,
+    ...(approval.scope !== undefined ? { scope: approval.scope } : {}),
+  };
+}
+
+/** Owner-stripped event payload for one pending question (see above). */
+function pendingQuestionEvent(question: PendingQuestionWithOwner): AskQuestionAskedEvent {
+  return {
+    sessionId: question.sessionId,
+    toolCallId: question.toolCallId,
+    // The store keeps the tool-call's question array untyped; the wire payload
+    // is exactly what the live event delivers (askQuestionAskedEventSchema).
+    questions: question.questions as AskQuestionAskedEvent['questions'],
+  };
+}
+
 /** Callback a transport installs to receive one connection's framed events. */
 export type HostEventSinkCallback = (event: HostEvent) => void;
 
@@ -281,6 +313,24 @@ export class HostServer {
   }
 
   /**
+   * Re-bind approvals/questions whose owner connection is gone to a
+   * (re)connecting client. A remote host assigns a fresh connection id per
+   * attach, so a pending entry's owner can never come back as itself; without
+   * this rebind the resumed view would show prompts the window could not
+   * answer. Mirrors the candidate promotion in the live delivery paths.
+   */
+  adoptOrphanedPendingFor(clientId: string): void {
+    for (const approval of approvalStore.listPending()) {
+      if (approval.ownerClientId == null || this.isConnected(approval.ownerClientId)) continue;
+      approvalStore.rebindOwnerWindow(approval.toolCallId, clientId);
+    }
+    for (const question of questionStore.listPending()) {
+      if (question.ownerClientId == null || this.isConnected(question.ownerClientId)) continue;
+      questionStore.rebindOwnerWindow(question.toolCallId, clientId);
+    }
+  }
+
+  /**
    * Re-deliver approvals/questions still pending for one (re)connecting
    * client. The payloads are byte-identical to the original store events, so
    * a client cannot tell a re-delivery from the first delivery; the store
@@ -289,23 +339,11 @@ export class HostServer {
   private redeliverPendingTo(clientId: string): void {
     for (const approval of approvalStore.listPending()) {
       if (approval.ownerClientId !== clientId) continue;
-      this.emitTo(clientId, IPC_CHANNELS.PERMISSION_APPROVAL_REQUESTED, {
-        toolCallId: approval.toolCallId,
-        sessionId: approval.sessionId,
-        toolName: approval.toolName,
-        riskClass: approval.riskClass,
-        args: approval.args,
-        cwd: approval.cwd,
-        ...(approval.scope !== undefined ? { scope: approval.scope } : {}),
-      });
+      this.emitTo(clientId, IPC_CHANNELS.PERMISSION_APPROVAL_REQUESTED, pendingApprovalEvent(approval));
     }
     for (const question of questionStore.listPending()) {
       if (question.ownerClientId !== clientId) continue;
-      this.emitTo(clientId, IPC_CHANNELS.ASK_QUESTION_ASKED, {
-        sessionId: question.sessionId,
-        toolCallId: question.toolCallId,
-        questions: question.questions,
-      });
+      this.emitTo(clientId, IPC_CHANNELS.ASK_QUESTION_ASKED, pendingQuestionEvent(question));
     }
   }
 
@@ -1209,6 +1247,18 @@ function buildBindings(server: () => HostServer): ReadonlyMap<string, HostBindin
       approvals: sessionId == null
         ? []
         : approvalStore.listForOwner(sessionId, ctx.clientId),
+    };
+  });
+
+  // ── reconnect resync (U10, R6) ─────────────────────────────────────────────
+  // Owner-scoped snapshots answer [] for a reconnected remote client (fresh
+  // connection id), so resync goes through this machine-wide accessor instead
+  // and re-binds orphaned pendings to the requester so it can answer them.
+  bind('host.pending_state', (ctx, params: { sessionId?: string }) => {
+    server().adoptOrphanedPendingFor(ctx.clientId);
+    return {
+      approvals: server().listPendingApprovals(params?.sessionId).map(pendingApprovalEvent),
+      questions: server().listPendingQuestions(params?.sessionId).map(pendingQuestionEvent),
     };
   });
 

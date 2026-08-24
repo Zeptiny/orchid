@@ -419,6 +419,27 @@ export const permissionApprovalSettledEventSchema = z.object({
   }),
 });
 
+// ── Reconnect resync (U10) ────────────────────────────────────────────────────
+
+/** Params for `host.pending_state` — pending approvals/questions, optionally scoped. */
+export const hostPendingStateParamsSchema = z.object({
+  sessionId: z.string().uuid().optional(),
+}).strict();
+
+/**
+ * Result of `host.pending_state`: every pending approval/question for the
+ * scope (owner fields stripped) as the byte-identical event payloads a live
+ * delivery produces, so a reconnecting client can re-broadcast them through
+ * the same renderer paths without inventing new messages.
+ */
+export const hostPendingStateResultSchema = z.object({
+  approvals: z.array(permissionApprovalRequestedEventSchema),
+  questions: z.array(askQuestionAskedEventSchema),
+}).strict();
+
+export type HostPendingStateParams = z.infer<typeof hostPendingStateParamsSchema>;
+export type HostPendingStateResult = z.infer<typeof hostPendingStateResultSchema>;
+
 /** Mirrors the permission:approval_answer handler schema (main/ipc/permission.ts). */
 const permissionApprovalAnswerParamsSchema = z.object({
   toolCallId: z.string().min(1),
@@ -915,6 +936,14 @@ export interface HostMethodSpec {
  */
 export const HOST_METHODS = {
   'host.hello': { params: hostHelloParamsSchema, result: hostHelloResultSchema },
+  /**
+   * Reconnect resync (U10): every pending approval/question, owner-stripped to
+   * the live event payloads. Host-internal (no IPC channel counterpart).
+   */
+  'host.pending_state': {
+    params: hostPendingStateParamsSchema,
+    result: hostPendingStateResultSchema,
+  },
 
   'chat.send': { params: chatSendSchema, result: chatSendResultSchema },
   'chat.cancel': { params: chatCancelSchema, result: configSaveResultSchema },

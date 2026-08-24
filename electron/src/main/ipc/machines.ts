@@ -22,6 +22,7 @@ import type {
   MachineDisconnectResult,
   MachineErrorView,
   MachineRecord,
+  MachineResyncResult,
   MachineScanHostKeyResult,
   MachineSetActiveResult,
   MachineStatusEntry,
@@ -46,9 +47,12 @@ import {
   detachAllRemoteMachineClients,
   detachRemoteMachineClient,
 } from '../machines/remote-clients';
+import { resyncRemoteMachine } from '../machines/resync';
 import {
   activeMachineFor,
+  getHostClient,
   LOCAL_MACHINE_ID,
+  registeredMachines,
   resetWindowsForMachine,
   setActiveMachine,
 } from '../host/routing';
@@ -171,7 +175,10 @@ export function registerMachinesIPC(): void {
 
   // Manager transitions drive both the status broadcast and (on connected) the
   // host-client attachment, so manual connects and auto-reconnects are wired
-  // through one seam.
+  // through one seam. Every (re)attach immediately resyncs the machine's
+  // pending state to its windows (U10): the fresh connection id a remote host
+  // assigned means owner-scoped snapshots alone cannot restore pending
+  // approvals/questions.
   unsubscribeManagerStatus = manager.subscribe('*', (status: MachineConnectionStatus) => {
     if (status.state === 'connected') {
       const transport = manager.getTransport(status.machineId);
@@ -182,7 +189,10 @@ export function registerMachinesIPC(): void {
           // was resolving — never resurrect a torn-down client.
           if (manager.getStatus(status.machineId).state !== 'connected') return;
           if (manager.getTransport(status.machineId) !== transport) return;
-          attachRemoteMachineClient(machine, transport);
+          const client = attachRemoteMachineClient(machine, transport);
+          void resyncRemoteMachine(machine.id, client).catch(() => {
+            // Non-fatal: windows still re-fetch through their refresh path.
+          });
         }).catch(() => {
           // The status broadcast below still reports the transition.
         });
@@ -335,11 +345,36 @@ export function registerMachinesIPC(): void {
         },
       } satisfies MachineConnectResult;
     }
-    attachRemoteMachineClient(remote.machine, transport);
+    const client = attachRemoteMachineClient(remote.machine, transport);
+    void resyncRemoteMachine(remote.machine.id, client).catch(() => {
+      // Non-fatal: windows still re-fetch through their refresh path.
+    });
     return {
       status: 'ok',
       machine: statusEntryFor(remote.machine, manager),
     } satisfies MachineConnectResult;
+  });
+
+  ipcMain.handle(IPC_CHANNELS.MACHINES_RESYNC, async (event) => {
+    const machineId = activeMachineFor(String(event.sender.id));
+    if (machineId === LOCAL_MACHINE_ID || !registeredMachines().includes(machineId)) {
+      // The local machine rehydrates through its own paths; nothing to push.
+      return { status: 'ok', machineId, resynced: false } satisfies MachineResyncResult;
+    }
+    const machine = await findMachine(machineId);
+    if (!machine || machine.kind !== 'ssh') {
+      return { status: 'ok', machineId, resynced: false } satisfies MachineResyncResult;
+    }
+    try {
+      await resyncRemoteMachine(machineId, getHostClient(machineId));
+      return { status: 'ok', machineId, resynced: true } satisfies MachineResyncResult;
+    } catch (error) {
+      return {
+        status: 'error',
+        machineId,
+        error: actionError(error),
+      } satisfies MachineResyncResult;
+    }
   });
 
   ipcMain.handle(IPC_CHANNELS.MACHINES_DISCONNECT, async (_event, payload: unknown) => {
@@ -439,6 +474,7 @@ function unregisterMachinesIPCHandlers(): void {
   ipcMain.removeHandler(IPC_CHANNELS.MACHINES_SET_ACTIVE);
   ipcMain.removeHandler(IPC_CHANNELS.MACHINES_CONNECT);
   ipcMain.removeHandler(IPC_CHANNELS.MACHINES_DISCONNECT);
+  ipcMain.removeHandler(IPC_CHANNELS.MACHINES_RESYNC);
   ipcMain.removeHandler(IPC_CHANNELS.MACHINES_SCAN_HOST_KEY);
   ipcMain.removeHandler(IPC_CHANNELS.MACHINES_CONFIRM_HOST_KEY);
 }
