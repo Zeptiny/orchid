@@ -2,9 +2,17 @@
  * Permission IPC — bridge approval requests and permission config between the
  * main-process approval store and the renderer.
  *
- * Forwards approval-requested/settled events to the owning window only, and
- * exposes zod-validated invoke channels for answering approvals, session mode
- * overrides, and global/project permission scope reads and saves.
+ * Approval delivery is fully unified (U9): requests and settlements flow as
+ * host protocol events — `host/server.ts` forwards them to connected clients
+ * and `ipc/host-broadcast.ts` pushes them to windows. An approval whose owner
+ * client is not connected stays PENDING on the host; the approval store's
+ * `approval_timeout` timer settles it DENIED (fail-closed, never
+ * auto-approved), and `approval_timeout: 0` waits forever — the turn stays
+ * blocked exactly like an unanswered prompt.
+ *
+ * This module only registers the zod-validated invoke channels: answering
+ * approvals, session mode overrides, and global/project permission scope
+ * reads and saves.
  */
 import * as fs from 'node:fs';
 import * as path from 'node:path';
@@ -13,11 +21,7 @@ import { z } from 'zod';
 import { IPC_CHANNELS } from '../../shared/types/ipc';
 import type { PermissionRule } from '../../shared/types/ipc-boundary';
 import { hostRequest } from './host-request';
-import {
-  PERMISSION_MODE_VALUES,
-  type RiskClass,
-  type ToolScope,
-} from '../../shared/types/permission';
+import { PERMISSION_MODE_VALUES } from '../../shared/types/permission';
 import {
   atomicWriteJson,
   ConfigManager,
@@ -32,13 +36,7 @@ import { invalidateAllProjectMCPManagers } from '../mcp/project-registry';
 import { clearProjectRuntimeRegistry } from '../project/runtime';
 import {
   approvalStore,
-  type ApprovalSettledEvent,
 } from '../permissions/approval-store';
-import {
-  forceAbortMainTurn,
-  getActiveMainTurnWindowId,
-  webContentsForWindowId,
-} from './chat';
 import { permissionConfigScopeSaveSchema } from './payload-schemas';
 import { resolveAuthorizedProjectDir } from './project-target';
 import { resolveWindowWorkspace } from '../session/singleton';
@@ -63,69 +61,6 @@ const setSessionModeSchema = z.object({
 const getSessionModeSchema = z.object({
   expectedSessionId: z.string().min(1).nullable(),
 }).strict();
-
-interface ApprovalRequestedPayload {
-  toolCallId: string;
-  sessionId: string;
-  toolName: string;
-  riskClass: RiskClass;
-  args: unknown;
-  cwd: string;
-  scope?: ToolScope;
-}
-
-function abortUndeliverableApproval(
-  sessionId: string,
-  toolCallId: string,
-  ownerWindowId: string | null,
-): void {
-  approvalStore.cancel(toolCallId);
-  if (
-    ownerWindowId != null &&
-    getActiveMainTurnWindowId(sessionId) === ownerWindowId
-  ) {
-    forceAbortMainTurn(sessionId);
-  }
-}
-
-function onApprovalRequested(payload: ApprovalRequestedPayload): void {
-  const { sessionId, toolCallId } = payload;
-  const entry = approvalStore.get(toolCallId);
-  const ownerWindowId = entry?.ownerWindowId ?? getActiveMainTurnWindowId(sessionId);
-  if (ownerWindowId == null || !approvalStore.bindOwnerWindow(toolCallId, ownerWindowId)) {
-    abortUndeliverableApproval(sessionId, toolCallId, ownerWindowId);
-    return;
-  }
-
-  const ownerWebContents = webContentsForWindowId(ownerWindowId);
-  if (!ownerWebContents) {
-    abortUndeliverableApproval(sessionId, toolCallId, ownerWindowId);
-    return;
-  }
-
-  try {
-    ownerWebContents.send(IPC_CHANNELS.PERMISSION_APPROVAL_REQUESTED, payload);
-  } catch {
-    abortUndeliverableApproval(sessionId, toolCallId, ownerWindowId);
-  }
-}
-
-function onApprovalSettled({
-  sessionId,
-  toolCallId,
-  ownerWindowId,
-  result,
-}: ApprovalSettledEvent): void {
-  if (ownerWindowId == null) return;
-  const ownerWebContents = webContentsForWindowId(ownerWindowId);
-  if (!ownerWebContents) return;
-  try {
-    ownerWebContents.send(
-      IPC_CHANNELS.PERMISSION_APPROVAL_SETTLED,
-      { sessionId, toolCallId, result },
-    );
-  } catch { /* noop */ }
-}
 
 function readConfigLayer(filePath: string): Record<string, unknown> {
   let parsed: unknown;
@@ -163,16 +98,6 @@ function applyPermissionUpdates(
   return permissionsConfigSchema.parse(next);
 }
 
-/** Settle approvals owned by a destroyed renderer and abort only its main turns. */
-export function handlePermissionOwnerDestroyed(ownerWindowId: string): void {
-  const sessionIds = approvalStore.cancelAllForOwnerWindow(ownerWindowId);
-  for (const sessionId of sessionIds) {
-    if (getActiveMainTurnWindowId(sessionId) === ownerWindowId) {
-      forceAbortMainTurn(sessionId);
-    }
-  }
-}
-
 /** Drop permission state when a session is permanently deleted. */
 export function clearPermissionSessionState(sessionId: string): void {
   sessionPermissionOverrides.delete(sessionId);
@@ -180,9 +105,6 @@ export function clearPermissionSessionState(sessionId: string): void {
 }
 
 export function registerPermissionIPC(): void {
-  approvalStore.on('approval-requested', onApprovalRequested);
-  approvalStore.on('approval-settled', onApprovalSettled);
-
   ipcMain.handle(IPC_CHANNELS.PERMISSION_SNAPSHOT, (event) =>
     hostRequest(String(event.sender.id), IPC_CHANNELS.PERMISSION_SNAPSHOT));
 
@@ -263,8 +185,6 @@ export function registerPermissionIPC(): void {
 
 export function unregisterPermissionIPC(): void {
   approvalStore.cleanupAll();
-  approvalStore.off('approval-requested', onApprovalRequested);
-  approvalStore.off('approval-settled', onApprovalSettled);
   clearDraftPermissionOverrides();
   ipcMain.removeHandler(IPC_CHANNELS.PERMISSION_SNAPSHOT);
   ipcMain.removeHandler(IPC_CHANNELS.PERMISSION_APPROVAL_ANSWER);

@@ -24,6 +24,7 @@ const mocks = vi.hoisted(() => {
     sessionCwds: [] as string[],
     activeTurnOwnerBySession,
     webContentsById,
+    configState: { approval_timeout: 5 } as unknown,
     forceAbortMainTurn: vi.fn(),
     ipcMain: {
       handle: vi.fn((channel: string, handler: (...args: unknown[]) => unknown) => {
@@ -64,6 +65,7 @@ vi.mock('../../src/main/config/loader', async (importOriginal) => {
     ...actual,
     HOME_CONFIG_DIR: '/tmp/orchid-permission-ipc-config/home',
     HOME_CONFIG_PATH: '/tmp/orchid-permission-ipc-config/home/config.json',
+    getConfig: () => mocks.configState,
     ConfigManager: {
       reset: vi.fn(),
       load: vi.fn(),
@@ -158,6 +160,7 @@ describe('permission IPC ownership', () => {
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     permissionIpc.unregisterPermissionIPC();
     permissionIpc.sessionPermissionOverrides.clear();
     fs.rmSync(TEST_CONFIG_ROOT, { recursive: true, force: true });
@@ -467,43 +470,35 @@ describe('permission IPC ownership', () => {
     await expect(pending).resolves.toEqual({ decision: 'approved' });
   });
 
-  it('settles owner-bound approvals and aborts only that owner main turn on close', async () => {
-    addWindow(10);
-    addWindow(20);
-    mocks.activeTurnOwnerBySession.set(SESSION_A, '10');
-    mocks.activeTurnOwnerBySession.set(SESSION_B, '20');
-    const pendingA = createApproval(TOOL_A, SESSION_A, '10');
-    const pendingB = createApproval(TOOL_B, SESSION_B, '20');
+  it('settles undeliverable approvals fail-closed at the timeout instead of aborting immediately', async () => {
+    vi.useFakeTimers();
+    // Owner window 10 has no client connection and no renderer — the approval
+    // must stay pending (a brief disconnect must not kill it) and settle
+    // DENIED at the approval timeout (fail-closed preserved, R7).
+    const pending = createApproval(TOOL_A, SESSION_A, '10');
+    expect(approvalStore.get(TOOL_A)).toBeDefined();
+    expect(mocks.forceAbortMainTurn).not.toHaveBeenCalled();
 
-    const lifecycle = permissionIpc as typeof permissionIpc & {
-      handlePermissionOwnerDestroyed: (ownerWindowId: string) => void;
-    };
-    lifecycle.handlePermissionOwnerDestroyed('10');
-
-    await expect(pendingA).resolves.toEqual({ decision: 'denied', reason: 'cancelled' });
+    await vi.advanceTimersByTimeAsync(5_000);
+    await expect(pending).resolves.toEqual({ decision: 'denied', reason: 'approval-timeout' });
     expect(approvalStore.get(TOOL_A)).toBeUndefined();
-    expect(approvalStore.get(TOOL_B)).toBeDefined();
-    expect(mocks.forceAbortMainTurn).toHaveBeenCalledOnce();
-    expect(mocks.forceAbortMainTurn).toHaveBeenCalledWith(SESSION_A);
-
-    approvalStore.cancel(TOOL_B);
-    await expect(pendingB).resolves.toEqual({ decision: 'denied', reason: 'cancelled' });
+    expect(mocks.forceAbortMainTurn).not.toHaveBeenCalled();
   });
 
-  it('delivers a background-subagent approval using captured window affinity', async () => {
-    const owner = addWindow(10);
+  it('keeps a background-subagent approval answerable through the host path (delivery is protocol-owned)', async () => {
+    addWindow(10);
     mocks.selectedByWebContents.set(10, SESSION_A);
 
     const pending = createApproval(TOOL_A, SESSION_A, '10');
 
-    expect(owner.webContents.send).toHaveBeenCalledWith(
-      IPC_CHANNELS.PERMISSION_APPROVAL_REQUESTED,
-      expect.objectContaining({ toolCallId: TOOL_A, sessionId: SESSION_A }),
-    );
     expect(approvalStore.get(TOOL_A)?.ownerWindowId).toBe('10');
     expect(mocks.forceAbortMainTurn).not.toHaveBeenCalled();
 
-    approvalStore.answer(TOOL_A, 'approved');
+    const answer = mocks.handlers.get(IPC_CHANNELS.PERMISSION_APPROVAL_ANSWER)!;
+    await expect(answer(eventFrom(10), {
+      toolCallId: TOOL_A,
+      decision: 'approved',
+    })).resolves.toEqual({ ok: true });
     await expect(pending).resolves.toEqual({ decision: 'approved' });
   });
 });

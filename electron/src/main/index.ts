@@ -14,9 +14,12 @@ import * as path from 'path';
 import { setImmediate as setImmediatePromise } from 'node:timers/promises';
 import { registerAllIPC, unregisterAllIPC } from './ipc';
 import { unwireLocalHostWindowBroadcast, wireLocalHostWindowBroadcast } from './ipc/host-broadcast';
-import { disposeEmbeddedLocalHost, startEmbeddedLocalHost } from './host/local-host';
+import {
+  closeLocalHostClient,
+  disposeEmbeddedLocalHost,
+  startEmbeddedLocalHost,
+} from './host/local-host';
 import { verifyRoutingTable } from './host/routing';
-import { handlePermissionOwnerDestroyed } from './ipc/permission';
 import { registerStartupIPC, unregisterStartupIPC } from './ipc/startup';
 import {
   ensureHomeConfig,
@@ -292,7 +295,9 @@ function createWindow(): void {
   mainWindow = window;
   const ownerWindowId = String(window.webContents.id);
   window.webContents.once('destroyed', () => {
-    handlePermissionOwnerDestroyed(ownerWindowId);
+    // The client connection goes with the renderer; its pending approvals
+    // stay on the host and settle fail-closed at their timeouts (U9).
+    closeLocalHostClient(ownerWindowId);
   });
 
   if (!app.isPackaged) {
@@ -305,7 +310,7 @@ function createWindow(): void {
   }
 
   window.on('closed', () => {
-    handlePermissionOwnerDestroyed(ownerWindowId);
+    closeLocalHostClient(ownerWindowId);
     if (mainWindow === window) mainWindow = null;
   });
 }

@@ -10,33 +10,14 @@
  *
  * That replaces the Electron HostEventSink (ipc/chat/events.ts) plus the
  * per-module window broadcasts (todos, subagent deltas, working set, activity,
- * bgcmd, index auto-refresh) with one seam, so local and remote machines are
- * indistinguishable from the renderer's point of view.
+ * bgcmd, index auto-refresh, approvals, questions) with one seam, so local and
+ * remote machines are indistinguishable from the renderer's point of view.
  */
 import { BrowserWindow, webContents as electronWebContents, type WebContents } from 'electron';
 import { HOST_EVENTS, type HostEventName } from '../../shared/host/protocol';
-import { IPC_CHANNELS } from '../../shared/types/ipc';
 import { getLocalHostClient, setLocalClientListener, setLocalClientSweep } from '../host/local-host';
 import type { HostClient } from '../host/client';
 import { canSend } from './chat/events';
-
-/**
- * Events whose Electron delivery intentionally stays on the direct store
- * subscriptions in ipc/permission.ts and ipc/ask-question.ts.
- *
- * The payloads are byte-identical to the store events, but the local shell
- * additionally *aborts* an approval/question whose owner window is gone
- * (fail-closed), while the host keeps it pending for reconnecting clients
- * (U9's offline semantics). Routing these through the client would double
- * deliver (the host already forwards them) and would silently drop that
- * abort-on-undeliverable behavior — flagged for U9 to unify.
- */
-const CLIENT_SKIPPED_EVENTS: ReadonlySet<string> = new Set([
-  IPC_CHANNELS.PERMISSION_APPROVAL_REQUESTED,
-  IPC_CHANNELS.PERMISSION_APPROVAL_SETTLED,
-  IPC_CHANNELS.ASK_QUESTION_ASKED,
-  IPC_CHANNELS.ASK_QUESTION_SETTLED,
-]);
 
 /** Resolve the renderer a window-scoped client delivers to, if it is alive. */
 export function webContentsForClientId(clientId: string): WebContents | null {
@@ -86,7 +67,6 @@ function enumerateWebContents(): WebContents[] {
 /** Subscribe one client to every host event and push each to its window. */
 function attachWindowBroadcast(client: HostClient, clientId: string): void {
   for (const ev of Object.keys(HOST_EVENTS) as HostEventName[]) {
-    if (CLIENT_SKIPPED_EVENTS.has(ev)) continue;
     client.subscribe(ev, (params) => {
       const target = webContentsForClientId(clientId);
       if (!target) return;

@@ -198,6 +198,26 @@ export function getLocalHostClient(windowId: string): HostClient {
   return client;
 }
 
+/**
+ * Drop one window's client connection (window closed / renderer destroyed).
+ *
+ * Closing the transport removes the server connection, which is what turns
+ * that window from "connected client" into "disconnected owner": its pending
+ * approvals/questions stay pending and settle fail-closed at their timeouts,
+ * and its in-flight turns keep running on the host (R5) — a same-window-id
+ * reconnect (renderer reload) re-delivers the pending prompts.
+ */
+export function closeLocalHostClient(windowId: string): void {
+  const client = clientsByWindowId.get(windowId);
+  if (!client) return;
+  clientsByWindowId.delete(windowId);
+  try {
+    client.close();
+  } catch {
+    // non-fatal
+  }
+}
+
 /** Teardown for tests / shutdown: drop clients and dispose the server. */
 export function disposeEmbeddedLocalHost(): void {
   for (const client of clientsByWindowId.values()) {

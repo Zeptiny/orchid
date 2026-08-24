@@ -46,10 +46,18 @@ import {
   setDraftPermissionOverride,
   sessionPermissionOverrides,
 } from '../permissions/session-overrides';
-import { approvalStore, type ApprovalSettledEvent } from '../permissions/approval-store';
+import {
+  approvalStore,
+  type ApprovalSettledEvent,
+  type PendingApprovalWithOwner,
+} from '../permissions/approval-store';
 import { hydrateSessionPermissionOverride } from '../permissions/session-overrides';
 import { clearToolCallHistoryForSession } from '../permissions/history';
-import { questionStore, type QuestionSettledEvent } from '../tools/ask-question/store';
+import {
+  questionStore,
+  type PendingQuestionWithOwner,
+  type QuestionSettledEvent,
+} from '../tools/ask-question/store';
 import {
   listSessionActivity,
   markSessionActivitySeen,
@@ -233,15 +241,20 @@ export class HostServer {
   /**
    * Register a connected client. `emit` receives every event this connection
    * is eligible for, already stamped with its per-connection `seq`.
+   *
+   * Approvals/questions still pending for this client id are re-delivered
+   * immediately: a reconnecting owner (renderer reload locally, same client
+   * id) resumes its pending prompts without waiting for the resync snapshot.
    */
   addConnection(clientId: string, emit: HostEventSinkCallback): HostConnectionHandle {
     const existing = this.connections.get(clientId);
     if (existing) {
       existing.emit = emit;
       existing.explicit = true;
-      return { clientId, dispose: () => this.removeConnection(clientId) };
+    } else {
+      this.connections.set(clientId, { clientId, seq: 0, helloDone: false, emit, explicit: true });
     }
-    this.connections.set(clientId, { clientId, seq: 0, helloDone: false, emit, explicit: true });
+    this.redeliverPendingTo(clientId);
     return { clientId, dispose: () => this.removeConnection(clientId) };
   }
 
@@ -255,6 +268,45 @@ export class HostServer {
 
   isConnected(clientId: string): boolean {
     return this.connections.has(clientId);
+  }
+
+  /** Pending approvals for reconnect resync, tagged with owner client + createdAt (U10). */
+  listPendingApprovals(sessionId?: string): PendingApprovalWithOwner[] {
+    return approvalStore.listPending(sessionId);
+  }
+
+  /** Pending questions for reconnect resync, tagged with owner client + createdAt (U10). */
+  listPendingQuestions(sessionId?: string): PendingQuestionWithOwner[] {
+    return questionStore.listPending(sessionId);
+  }
+
+  /**
+   * Re-deliver approvals/questions still pending for one (re)connecting
+   * client. The payloads are byte-identical to the original store events, so
+   * a client cannot tell a re-delivery from the first delivery; the store
+   * timeouts kept the fail-closed boundary while the client was gone.
+   */
+  private redeliverPendingTo(clientId: string): void {
+    for (const approval of approvalStore.listPending()) {
+      if (approval.ownerClientId !== clientId) continue;
+      this.emitTo(clientId, IPC_CHANNELS.PERMISSION_APPROVAL_REQUESTED, {
+        toolCallId: approval.toolCallId,
+        sessionId: approval.sessionId,
+        toolName: approval.toolName,
+        riskClass: approval.riskClass,
+        args: approval.args,
+        cwd: approval.cwd,
+        ...(approval.scope !== undefined ? { scope: approval.scope } : {}),
+      });
+    }
+    for (const question of questionStore.listPending()) {
+      if (question.ownerClientId !== clientId) continue;
+      this.emitTo(clientId, IPC_CHANNELS.ASK_QUESTION_ASKED, {
+        sessionId: question.sessionId,
+        toolCallId: question.toolCallId,
+        questions: question.questions,
+      });
+    }
   }
 
   // Public accessors for the closure-based bindings (kept minimal on purpose).
@@ -539,11 +591,16 @@ export class HostServer {
   }
 
   /**
-   * Approval forwarding: the owner client (when resolvable and connected)
-   * receives the request; an unresolvable owner falls back to broadcasting to
-   * every connected client for visibility — the approval itself stays pending
-   * and the store's own timeout settles it fail-closed (U9 refines offline
-   * semantics; a daemon never auto-denies on disconnect).
+   * Approval forwarding (U9 offline semantics):
+   * - owner client connected → deliver to it (it may answer);
+   * - owner unresolvable/unconnected → promote the first connected client
+   *   viewing the session (it becomes the answerable owner) and broadcast for
+   *   visibility — non-owners' answers are rejected by the
+   *   `permission.approval_answer` ownership check;
+   * - zero connected clients → keep pending with NO abort; the approval
+   *   store's `approval_timeout` timer is the fail-closed boundary (DENIED,
+   *   never auto-approved; 0 = wait forever), and the requesting owner stays
+   *   bound so a same-id reconnect re-delivers it.
    */
   private subscribeApprovalStore(): () => void {
     const onRequested = (payload: {
@@ -568,6 +625,10 @@ export class HostServer {
       const candidates = this.clientsViewingSession(sessionId);
       if (candidates.length > 0) {
         approvalStore.bindOwnerWindow(toolCallId, candidates[0]);
+      } else if (ownerClientId != null) {
+        // Nobody connected can take it: keep the requesting owner bound so a
+        // same-id reconnect re-delivers; the store timeout settles fail-closed.
+        approvalStore.bindOwnerWindow(toolCallId, ownerClientId);
       }
       this.emitToAll(IPC_CHANNELS.PERMISSION_APPROVAL_REQUESTED, payload);
     };
@@ -601,6 +662,8 @@ export class HostServer {
       const candidates = this.clientsViewingSession(sessionId);
       if (candidates.length > 0) {
         questionStore.bindOwnerWindow(toolCallId, candidates[0]);
+      } else if (ownerClientId != null) {
+        questionStore.bindOwnerWindow(toolCallId, ownerClientId);
       }
       this.emitToAll(IPC_CHANNELS.ASK_QUESTION_ASKED, payload);
     };
