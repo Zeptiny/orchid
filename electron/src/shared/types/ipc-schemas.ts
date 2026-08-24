@@ -13,6 +13,11 @@ import {
 import { subagentStatusSchema } from './subagent';
 import { STARTUP_STEP_DEFINITIONS, type StartupStepId } from './ipc-boundary';
 import { machineRecordSchema } from './machine';
+import {
+  machineActionErrorSchema,
+  machineHostKeyFingerprintSchema,
+  machineStatusEntrySchema,
+} from './machine';
 import { toolCallSchema } from './tool';
 import {
   canonicalToolResultSchema,
@@ -396,6 +401,46 @@ export const machineListResultSchema = z.object({
 export const machinesChangedEventSchema = z.object({
   machines: z.array(machineRecordSchema).min(1),
 });
+
+export const machineStatusResultSchema = z.object({
+  machines: z.array(machineStatusEntrySchema).min(1),
+});
+
+export const machinesStatusChangedEventSchema = machineStatusResultSchema;
+
+export const machineActiveResultSchema = z.object({
+  machineId: z.string().min(1),
+});
+
+export const machineActionErrorResultSchema = z.object({
+  status: z.literal('error'),
+  error: machineActionErrorSchema,
+});
+
+export const machineSetActiveResultSchema = z.discriminatedUnion('status', [
+  z.object({ status: z.literal('ok'), machineId: z.string().min(1) }),
+  machineActionErrorResultSchema,
+]);
+
+export const machineConnectResultSchema = z.discriminatedUnion('status', [
+  z.object({ status: z.literal('ok'), machine: machineStatusEntrySchema }),
+  machineActionErrorResultSchema,
+]);
+
+export const machineDisconnectResultSchema = z.discriminatedUnion('status', [
+  z.object({ status: z.literal('ok') }),
+  machineActionErrorResultSchema,
+]);
+
+export const machineScanHostKeyResultSchema = z.discriminatedUnion('status', [
+  z.object({ status: z.literal('scanned'), fingerprints: z.array(machineHostKeyFingerprintSchema).min(1) }),
+  machineActionErrorResultSchema,
+]);
+
+export const machineConfirmHostKeyResultSchema = z.discriminatedUnion('status', [
+  z.object({ status: z.literal('pinned'), fingerprints: z.array(machineHostKeyFingerprintSchema).min(1) }),
+  machineActionErrorResultSchema,
+]);
 
 export const sessionTodosChangedEventSchema = z.object({
   sessionId: z.string().nullable(),

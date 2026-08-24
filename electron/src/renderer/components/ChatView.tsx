@@ -22,6 +22,7 @@ import { useTodos } from '../hooks/useTodos';
 import type { UseSessionActivityReturn } from '../hooks/useSessionActivity';
 import { useSessionTabs } from '../hooks/useSessionTabs';
 import { useSessionDeletionReconciliation } from '../hooks/useSessionDeletionReconciliation';
+import { useMachines } from '../hooks/useMachines';
 import { useProviders } from '../hooks/useProviders';
 import { useMessageQueue } from '../hooks/useMessageQueue';
 import { useQueueAutoFire } from '../hooks/useQueueAutoFire';
@@ -66,6 +67,8 @@ import { SessionTabBar } from './SessionTabBar';
 import { TrustProjectDialog } from './TrustProjectDialog';
 import { Button } from './ui/Button';
 import { StateMessage } from './ui/StateMessage';
+import { Alert } from './ui/Alert';
+import { MachineSwitcher } from './Machines/MachineSwitcher';
 import type { SubagentOpenRequest } from './SubagentView';
 
 const ProjectConfigView = lazy(() => import('./ProjectConfigView').then((module) => ({
@@ -107,6 +110,10 @@ export function ChatView({ isVisible = true, bootstrapConfig = null, onNotify, a
   );
   const tabs = useSessionTabs();
   const providers = useProviders();
+  const machines = useMachines();
+  // The native folder picker is a local-machine capability: a remote host's
+  // workspace binds through typed paths, never through a local dialog.
+  const canPickProjectDir = machines.isActiveMachineLocal;
   // Queue ownership follows the visible session: teardown paths (delete /
   // workspace rebind / switch) change this key and drop stale queued messages
   // instead of firing them into another session.
@@ -149,6 +156,7 @@ export function ChatView({ isVisible = true, bootstrapConfig = null, onNotify, a
   const [maxContext, setMaxContext] = useState<number | null>(null);
   const [alwaysExpandToolGroups, setAlwaysExpandToolGroups] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
+  const [reconnectingMachine, setReconnectingMachine] = useState(false);
   const [contentMode, setContentMode] = useState<'chat' | 'subagents'>('chat');
   const [projectConfigDir, setProjectConfigDir] = useState<string | null>(null);
   const [subagentOpenRequest, setSubagentOpenRequest] = useState<SubagentOpenRequest>({ generation: 0, id: null });
@@ -556,6 +564,31 @@ export function ChatView({ isVisible = true, bootstrapConfig = null, onNotify, a
     await enterDraftMode({ clearComposer: true });
   }, [session, enterDraftMode, applySessionMessages, trustPrompt.openFor]);
 
+  // Machine switches re-scope this window: the open session belongs to the
+  // previous machine's host, so re-enter draft mode against the new host and
+  // re-read its session list, workspace, and provider surface. The initial
+  // mount value is recorded without side effects (tab restore must win).
+  const machineScopeRef = useRef<string | null>(null);
+  useEffect(() => {
+    const active = machines.activeMachineId;
+    if (machineScopeRef.current === null) {
+      machineScopeRef.current = active;
+      return;
+    }
+    if (machineScopeRef.current === active) return;
+    machineScopeRef.current = active;
+    void session.refresh();
+    void session.getWorkspace();
+    void providers.refresh();
+    void enterDraftMode({ clearComposer: true });
+  }, [
+    machines.activeMachineId,
+    session.refresh,
+    session.getWorkspace,
+    providers.refresh,
+    enterDraftMode,
+  ]);
+
   // Project-row New Chat: make that project the window's draft workspace, then
   // clear selection. The first message creates a new session there while any
   // previous conversation keeps running in its own project.
@@ -861,10 +894,12 @@ export function ChatView({ isVisible = true, bootstrapConfig = null, onNotify, a
       if (chat.isSwitchingSession) return false;
       if (!workspaceBound) {
         notify(
-          'Choose a project folder before sending a message.',
+          canPickProjectDir
+            ? 'Choose a project folder before sending a message.'
+            : `Choose a project folder on ${machines.activeMachineLabel} before sending a message.`,
           'warning',
         );
-        void handlePickProjectDir();
+        if (canPickProjectDir) void handlePickProjectDir();
         return false;
       }
       if (!providerAvailable) {
@@ -896,6 +931,8 @@ export function ChatView({ isVisible = true, bootstrapConfig = null, onNotify, a
       preferredSelection,
       notify,
       handlePickProjectDir,
+      canPickProjectDir,
+      machines.activeMachineLabel,
     ],
   );
 
@@ -1221,6 +1258,23 @@ export function ChatView({ isVisible = true, bootstrapConfig = null, onNotify, a
   };
   const chatSurfaceVisible = isVisible && contentMode === 'chat';
 
+  // A remote machine that dropped (or was never reconnected) shows an inline
+  // banner above the stream; the manager keeps retrying while `lost`.
+  const activeMachineStatus = canPickProjectDir
+    ? null
+    : machines.statusOf(machines.activeMachineId);
+  const remoteDisconnected = activeMachineStatus != null
+    && (activeMachineStatus.state === 'lost' || activeMachineStatus.state === 'offline');
+  const handleMachineReconnect = useCallback(async () => {
+    if (canPickProjectDir) return;
+    setReconnectingMachine(true);
+    try {
+      await machines.connect(machines.activeMachineId);
+    } finally {
+      setReconnectingMachine(false);
+    }
+  }, [canPickProjectDir, machines]);
+
   return (
     <div
       className="app-frame grid h-screen min-h-0 overflow-hidden bg-base-100 text-base-content"
@@ -1237,7 +1291,7 @@ export function ChatView({ isVisible = true, bootstrapConfig = null, onNotify, a
         isOverlay={leftOverlay}
         onOpenSettings={openSettings}
         onOpenAnalytics={openAnalytics}
-        onPickProjectDir={handlePickProjectDirClick}
+        onPickProjectDir={canPickProjectDir ? handlePickProjectDirClick : undefined}
         projectPickerCreatesDraft={Boolean(session.activeSession?.chains.length)}
         onRefreshSessions={session.refresh}
         onSessionCreate={handleSessionCreateClick}
@@ -1254,6 +1308,7 @@ export function ChatView({ isVisible = true, bootstrapConfig = null, onNotify, a
         onToggle={toggleLeftSidebar}
         sessionListState={session.listState}
         workspace={session.workspace}
+        machineLabel={machines.activeMachine && !canPickProjectDir ? machines.activeMachine.label : null}
         onTrustBadgeClick={handleTrustBadgeClick}
         />
       </DeferredSurface>
@@ -1307,6 +1362,7 @@ export function ChatView({ isVisible = true, bootstrapConfig = null, onNotify, a
         <SessionHeader
           session={session.activeSession}
           workspace={session.workspace}
+          actions={<MachineSwitcher />}
         />
         {closeConfirmId ? (
           <div
@@ -1353,6 +1409,29 @@ export function ChatView({ isVisible = true, bootstrapConfig = null, onNotify, a
           className={contentMode === 'subagents' ? 'orchid-chat-content-preserved orchid-chat-content-hidden' : 'orchid-chat-content-preserved orchid-view-enter'}
           aria-hidden={contentMode === 'subagents' ? true : undefined}
         >
+        {remoteDisconnected && activeMachineStatus != null && (
+          <Alert
+            tone="warning"
+            icon="alert"
+            className="rounded-none border-x-0 border-t-0 py-2 text-sm"
+            title={`${machines.activeMachineLabel} — ${
+              activeMachineStatus.state === 'lost' ? 'connection lost / reconnecting…' : 'disconnected'
+            }`}
+            action={
+              <Button
+                variant="primary"
+                size="xs"
+                onClick={() => void handleMachineReconnect()}
+                loading={reconnectingMachine || activeMachineStatus.state === 'connecting'}
+              >
+                Reconnect
+              </Button>
+            }
+          >
+            {activeMachineStatus.error?.hint
+              ?? 'Work keeps running on the remote machine; reconnect to resume the session view.'}
+          </Alert>
+        )}
         <DeferredSurface isVisible={chatSurfaceVisible}>
           <ChatStream
             isVisible={chatSurfaceVisible}
@@ -1372,7 +1451,7 @@ export function ChatView({ isVisible = true, bootstrapConfig = null, onNotify, a
             sessionId={session.activeSession?.id ?? null}
             onClearError={chat.clearError}
             onOpenSettings={openSettings}
-            onPickProjectDir={workspaceBound ? undefined : handlePickProjectDirClick}
+            onPickProjectDir={!workspaceBound && canPickProjectDir ? handlePickProjectDirClick : undefined}
             workspaceUnbound={!workspaceBound}
             onRetry={handleRetry}
             streamStartTime={chat.streamStartTime}
@@ -1413,7 +1492,7 @@ export function ChatView({ isVisible = true, bootstrapConfig = null, onNotify, a
           providerAvailable={providerAvailable}
           modelSelected={modelSelected}
           onOpenProviders={handleOpenProviders}
-          onPickProjectDir={handlePickProjectDirClick}
+          onPickProjectDir={canPickProjectDir ? handlePickProjectDirClick : undefined}
           isViewActive={!isVisible || contentMode === 'subagents'}
           hasRunningSubagents={hasRunningSubagents}
           draftRestore={trustSend.draftRestore}

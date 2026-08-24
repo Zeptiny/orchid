@@ -226,6 +226,17 @@ export const machinesDeleteSchema = z
   })
   .strict();
 
+/**
+ * `{ machineId }` for the connection/status handlers. Unlike the CRUD schemas
+ * this accepts the reserved `local` id (set_active/connect/disconnect answer
+ * local-machine misuse with typed results, not validation errors).
+ */
+export const machinesMachineIdSchema = z
+  .object({
+    machineId: z.string().trim().min(1).max(64),
+  })
+  .strict();
+
 export const sessionSetReasoningEffortSchema = z.object({
   effort: z.union([
     z.string().trim().min(1).max(256),

@@ -120,6 +120,16 @@ import type {
   MachineListResult,
   MachineUpdateMessage,
   MachinesChangedEvent,
+  MachinesStatusChangedEvent,
+  MachineActiveResult,
+  MachineIdMessage,
+  MachineSetActiveMessage,
+  MachineSetActiveResult,
+  MachineStatusResult,
+  MachineConnectResult,
+  MachineDisconnectResult,
+  MachineScanHostKeyResult,
+  MachineConfirmHostKeyResult,
   RemoteMachineRecord,
   StartupSnapshot,
   StartupContinueDegradedResult,
@@ -197,6 +207,14 @@ import {
   trustedProjectEntrySchema,
   machineListResultSchema,
   machinesChangedEventSchema,
+  machineStatusResultSchema,
+  machinesStatusChangedEventSchema,
+  machineActiveResultSchema,
+  machineSetActiveResultSchema,
+  machineConnectResultSchema,
+  machineDisconnectResultSchema,
+  machineScanHostKeyResultSchema,
+  machineConfirmHostKeyResultSchema,
 } from '../shared/types/ipc-schemas';
 
 // ── Security helpers ─────────────────────────────────────────────────────────
@@ -246,6 +264,13 @@ const INVOKE_RESULT_SCHEMAS: Partial<Record<string, z.ZodTypeAny>> = {
   [IPC_CHANNELS.MACHINES_LIST]: machineListResultSchema,
   [IPC_CHANNELS.MACHINES_CREATE]: remoteMachineRecordSchema,
   [IPC_CHANNELS.MACHINES_UPDATE]: remoteMachineRecordSchema,
+  [IPC_CHANNELS.MACHINES_GET_STATUS]: machineStatusResultSchema,
+  [IPC_CHANNELS.MACHINES_GET_ACTIVE]: machineActiveResultSchema,
+  [IPC_CHANNELS.MACHINES_SET_ACTIVE]: machineSetActiveResultSchema,
+  [IPC_CHANNELS.MACHINES_CONNECT]: machineConnectResultSchema,
+  [IPC_CHANNELS.MACHINES_DISCONNECT]: machineDisconnectResultSchema,
+  [IPC_CHANNELS.MACHINES_SCAN_HOST_KEY]: machineScanHostKeyResultSchema,
+  [IPC_CHANNELS.MACHINES_CONFIRM_HOST_KEY]: machineConfirmHostKeyResultSchema,
   [IPC_CHANNELS.DEBUG_SESSION_REQUESTS]: debugSessionRequestsResultSchema,
   [IPC_CHANNELS.DEBUG_REQUEST_CAPTURE]: debugRequestCaptureResultSchema,
 };
@@ -617,6 +642,30 @@ const orchidAPI: OrchidAPI = {
 
     onChanged: (callback: (event: MachinesChangedEvent) => void) =>
       onParsed(IPC_CHANNELS.MACHINES_CHANGED, machinesChangedEventSchema, callback),
+
+    getStatus: () =>
+      invoke<MachineStatusResult>(IPC_CHANNELS.MACHINES_GET_STATUS),
+
+    onStatusChanged: (callback: (event: MachinesStatusChangedEvent) => void) =>
+      onParsed(IPC_CHANNELS.MACHINES_STATUS_CHANGED, machinesStatusChangedEventSchema, callback),
+
+    getActive: () =>
+      invoke<MachineActiveResult>(IPC_CHANNELS.MACHINES_GET_ACTIVE),
+
+    setActive: (message: MachineSetActiveMessage) =>
+      invoke<MachineSetActiveResult>(IPC_CHANNELS.MACHINES_SET_ACTIVE, message),
+
+    connect: (message: MachineIdMessage) =>
+      invoke<MachineConnectResult>(IPC_CHANNELS.MACHINES_CONNECT, message),
+
+    disconnect: (message: MachineIdMessage) =>
+      invoke<MachineDisconnectResult>(IPC_CHANNELS.MACHINES_DISCONNECT, message),
+
+    scanHostKey: (message: MachineIdMessage) =>
+      invoke<MachineScanHostKeyResult>(IPC_CHANNELS.MACHINES_SCAN_HOST_KEY, message),
+
+    confirmHostKey: (message: MachineIdMessage) =>
+      invoke<MachineConfirmHostKeyResult>(IPC_CHANNELS.MACHINES_CONFIRM_HOST_KEY, message),
   },
 
   subagents: {

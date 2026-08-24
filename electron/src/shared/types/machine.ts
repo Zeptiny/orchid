@@ -90,3 +90,61 @@ export const machineUpdateSchema = remoteMachineRecordSchema
   .partial();
 
 export type MachineUpdateInput = z.infer<typeof machineUpdateSchema>;
+
+// ── Connection status views (U8) ─────────────────────────────────────────────
+
+/**
+ * Machine connection lifecycle as the renderer sees it. Mirrors the
+ * connection-manager states; the implicit local machine is always `connected`.
+ */
+export const machineConnectionStateSchema = z.enum([
+  'offline',
+  'connecting',
+  'connected',
+  'lost',
+]);
+
+export type MachineConnectionStateView = z.infer<typeof machineConnectionStateSchema>;
+
+/** Renderer-safe host-key fingerprint; raw key material stays in main. */
+export const machineHostKeyFingerprintSchema = z
+  .object({
+    algorithm: z.string().min(1),
+    fingerprintSha256: z.string().min(1),
+  })
+  .strict();
+
+export type MachineHostKeyFingerprint = z.infer<typeof machineHostKeyFingerprintSchema>;
+
+/** Serialized machine failure: an actionable kind, message, and hint. */
+export const machineErrorViewSchema = z
+  .object({
+    kind: z.string().min(1),
+    message: z.string(),
+    hint: z.string().default(''),
+  })
+  .strict();
+
+export type MachineErrorView = z.infer<typeof machineErrorViewSchema>;
+
+/**
+ * A failed machine action. `fingerprints` rides only `host-key-not-pinned`
+ * connect failures so the UI can prompt TOFU confirmation without a re-scan.
+ */
+export const machineActionErrorSchema = machineErrorViewSchema.extend({
+  fingerprints: z.array(machineHostKeyFingerprintSchema).optional(),
+});
+
+export type MachineActionError = z.infer<typeof machineActionErrorSchema>;
+
+/** Connection status of one machine, including the implicit local machine. */
+export const machineStatusEntrySchema = z
+  .object({
+    machineId: z.string().min(1),
+    state: machineConnectionStateSchema,
+    error: machineErrorViewSchema.nullable(),
+    reconnectAttempts: z.number().int().nonnegative(),
+  })
+  .strict();
+
+export type MachineStatusEntry = z.infer<typeof machineStatusEntrySchema>;

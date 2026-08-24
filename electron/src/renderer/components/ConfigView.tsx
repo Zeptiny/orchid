@@ -17,6 +17,7 @@ import type {
   PermissionConfigScopes,
 } from '../../shared/types/ipc';
 import { LeftSidebar } from './LeftSidebar';
+import { useMachines } from '../hooks/useMachines';
 import { useProviders } from '../hooks/useProviders';
 import { useSession } from '../hooks/useSession';
 import type { UseSessionActivityReturn } from '../hooks/useSessionActivity';
@@ -101,6 +102,9 @@ const AgentsMdTab = lazyWithPreload(() => import('./Preferences/AgentsMdTab').th
 const TrustedProjectsTab = lazyWithPreload(() => import('./Preferences/TrustedProjectsTab').then((module) => ({
   default: module.TrustedProjectsTab,
 })));
+const MachinesTab = lazyWithPreload(() => import('./Preferences/MachinesTab').then((module) => ({
+  default: module.MachinesTab,
+})));
 const CompactionTab = lazyWithPreload(() => import('./Preferences/CompactionTab').then((module) => ({
   default: module.CompactionTab,
 })));
@@ -110,6 +114,7 @@ type TabId =
   | 'permissions'
   | 'trusted-projects'
   | 'providers'
+  | 'machines'
   | 'mcp'
   | 'tier-models'
   | 'rag'
@@ -126,6 +131,7 @@ const TAB_COMPONENTS = {
   permissions: PermissionsTab,
   'trusted-projects': TrustedProjectsTab,
   providers: ProvidersTab,
+  machines: MachinesTab,
   mcp: MCPServersTab,
   'tier-models': TierModelsTab,
   rag: RAGTab,
@@ -148,6 +154,7 @@ const TABS: TabDef[] = [
   { id: 'permissions', label: 'Permissions' },
   { id: 'trusted-projects', label: 'Trusted Projects' },
   { id: 'providers', label: 'Providers' },
+  { id: 'machines', label: 'Machines' },
   { id: 'mcp', label: 'MCP' },
   { id: 'tier-models', label: 'Tier Models' },
   { id: 'rag', label: 'RAG' },
@@ -181,6 +188,7 @@ interface PermissionTabContext {
 export function ConfigView({ onClose, initialTab = 'general', onNotify, onOpenAnalytics, activity }: ConfigViewProps) {
   const session = useSession();
   const providers = useProviders();
+  const machines = useMachines();
   const rootRef = useRef<HTMLDivElement>(null);
   const [leftCollapsed, setLeftCollapsed] = useState(false);
   /** Tab currently painted — only advances after target tab data is ready. */
@@ -617,9 +625,9 @@ export function ConfigView({ onClose, initialTab = 'general', onNotify, onOpenAn
         activeView="settings"
         onOpenSettings={() => {}}
         onOpenAnalytics={onOpenAnalytics}
-        onPickProjectDir={() => {
+        onPickProjectDir={machines.isActiveMachineLocal ? () => {
           void session.pickProjectDir();
-        }}
+        } : undefined}
         onRefreshSessions={session.refresh}
         onSessionCreate={() => {
           void handleSessionCreate();
@@ -943,6 +951,8 @@ function renderTab(
       return <TrustedProjectsTab onNotify={onNotify} />;
     case 'providers':
       return <ProvidersTab onNotify={onNotify} />;
+    case 'machines':
+      return <MachinesTab onNotify={onNotify} />;
     case 'mcp':
       return (
         <MCPServersTab

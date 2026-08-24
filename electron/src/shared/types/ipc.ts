@@ -32,7 +32,10 @@ import type {
 } from './provider';
 import type {
   MachineCreateInput,
+  MachineHostKeyFingerprint,
+  MachineActionError,
   MachineRecord,
+  MachineStatusEntry,
   MachineUpdateInput,
   RemoteMachineRecord,
 } from './machine';
@@ -121,8 +124,13 @@ export type { CompactionProgressEvent, CompactionProgressPhase } from './compact
 
 export type {
   LocalMachineRecord,
+  MachineActionError,
+  MachineConnectionStateView,
+  MachineErrorView,
+  MachineHostKeyFingerprint,
   MachineKind,
   MachineRecord,
+  MachineStatusEntry,
   RemoteMachineRecord,
 } from './machine';
 
@@ -152,6 +160,54 @@ export type MachineDeleteResult =
 export interface MachinesChangedEvent {
   machines: MachineRecord[];
 }
+
+/** Per-machine connection status; the local machine is always `connected`. */
+export interface MachineStatusResult {
+  machines: MachineStatusEntry[];
+}
+
+/** Push event: any machine's connection state changed (carries every entry). */
+export interface MachinesStatusChangedEvent {
+  machines: MachineStatusEntry[];
+}
+
+/** The machine a window currently drives. */
+export interface MachineActiveResult {
+  machineId: string;
+}
+
+export interface MachineSetActiveMessage {
+  machineId: string;
+}
+
+/** Point a window at a machine; remotes must be connected first. */
+export type MachineSetActiveResult =
+  | ({ status: 'ok'; machineId: string })
+  | ({ status: 'error'; error: MachineActionError });
+
+export interface MachineIdMessage {
+  machineId: string;
+}
+
+/** Connect one SSH machine (TOFU gate + handshake + client registration). */
+export type MachineConnectResult =
+  | ({ status: 'ok'; machine: MachineStatusEntry })
+  | ({ status: 'error'; error: MachineActionError });
+
+/** Disconnect one machine; idempotent for unknown machines. */
+export type MachineDisconnectResult =
+  | ({ status: 'ok' })
+  | ({ status: 'error'; error: MachineActionError });
+
+/** Out-of-band `ssh-keyscan` for an existing machine record. */
+export type MachineScanHostKeyResult =
+  | ({ status: 'scanned'; fingerprints: MachineHostKeyFingerprint[] })
+  | ({ status: 'error'; error: MachineActionError });
+
+/** Pin the machine's most recent scan into its known-hosts file (TOFU). */
+export type MachineConfirmHostKeyResult =
+  | ({ status: 'pinned'; fingerprints: MachineHostKeyFingerprint[] })
+  | ({ status: 'error'; error: MachineActionError });
 
 // ── Chat API ─────────────────────────────────────────────────────────────────
 
@@ -1577,6 +1633,22 @@ export interface OrchidAPI {
     delete: (message: MachineDeleteMessage) => Promise<MachineDeleteResult>;
     /** The machine registry changed; carries the fresh ordered list. */
     onChanged: (callback: (event: MachinesChangedEvent) => void) => () => void;
+    /** Connection status of every machine (local is always connected). */
+    getStatus: () => Promise<MachineStatusResult>;
+    /** Any machine's connection state changed; carries every entry. */
+    onStatusChanged: (callback: (event: MachinesStatusChangedEvent) => void) => () => void;
+    /** The machine this window currently drives. */
+    getActive: () => Promise<MachineActiveResult>;
+    /** Point this window at another machine; remotes must be connected. */
+    setActive: (message: MachineSetActiveMessage) => Promise<MachineSetActiveResult>;
+    /** Connect one SSH machine (TOFU gate + handshake + client registration). */
+    connect: (message: MachineIdMessage) => Promise<MachineConnectResult>;
+    /** Disconnect one machine and drop its host client. */
+    disconnect: (message: MachineIdMessage) => Promise<MachineDisconnectResult>;
+    /** `ssh-keyscan` an existing machine record; the UI confirms before pinning. */
+    scanHostKey: (message: MachineIdMessage) => Promise<MachineScanHostKeyResult>;
+    /** Pin the machine's most recent scan (TOFU) into its known-hosts file. */
+    confirmHostKey: (message: MachineIdMessage) => Promise<MachineConfirmHostKeyResult>;
   };
 
   subagents: {
@@ -1833,6 +1905,22 @@ export const IPC_CHANNELS = {
   MACHINES_DELETE: 'machines:delete',
   /** Push event: the machine registry changed (any create/update/delete). */
   MACHINES_CHANGED: 'machines:changed',
+  /** Connection status of every machine (local is always connected). */
+  MACHINES_GET_STATUS: 'machines:get_status',
+  /** Push event: any machine's connection state changed. */
+  MACHINES_STATUS_CHANGED: 'machines:status_changed',
+  /** The machine this window currently drives. */
+  MACHINES_GET_ACTIVE: 'machines:get_active',
+  /** Point the sending window at another machine. */
+  MACHINES_SET_ACTIVE: 'machines:set_active',
+  /** Connect one SSH machine. */
+  MACHINES_CONNECT: 'machines:connect',
+  /** Disconnect one machine. */
+  MACHINES_DISCONNECT: 'machines:disconnect',
+  /** `ssh-keyscan` an existing machine record. */
+  MACHINES_SCAN_HOST_KEY: 'machines:scan_host_key',
+  /** Pin the machine's most recent scan (TOFU). */
+  MACHINES_CONFIRM_HOST_KEY: 'machines:confirm_host_key',
 
   // Tool
   TOOL_EXECUTE: 'tool:execute',
@@ -1988,6 +2076,13 @@ export const ALLOWED_INVOKE_CHANNELS = [
   IPC_CHANNELS.MACHINES_CREATE,
   IPC_CHANNELS.MACHINES_UPDATE,
   IPC_CHANNELS.MACHINES_DELETE,
+  IPC_CHANNELS.MACHINES_GET_STATUS,
+  IPC_CHANNELS.MACHINES_GET_ACTIVE,
+  IPC_CHANNELS.MACHINES_SET_ACTIVE,
+  IPC_CHANNELS.MACHINES_CONNECT,
+  IPC_CHANNELS.MACHINES_DISCONNECT,
+  IPC_CHANNELS.MACHINES_SCAN_HOST_KEY,
+  IPC_CHANNELS.MACHINES_CONFIRM_HOST_KEY,
   IPC_CHANNELS.TOOL_EXECUTE,
   IPC_CHANNELS.AGENT_SAVE,
   IPC_CHANNELS.AGENT_DELETE,
@@ -2060,6 +2155,7 @@ export const ALLOWED_EVENT_CHANNELS = [
   IPC_CHANNELS.SESSION_WORKING_SET_CHANGED,
   IPC_CHANNELS.PROJECT_TRUST_CHANGED,
   IPC_CHANNELS.MACHINES_CHANGED,
+  IPC_CHANNELS.MACHINES_STATUS_CHANGED,
   IPC_CHANNELS.RAG_PROGRESS,
   IPC_CHANNELS.AST_PROGRESS,
   IPC_CHANNELS.INDEX_AUTO_REFRESH,

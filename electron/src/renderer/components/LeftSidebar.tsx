@@ -64,6 +64,11 @@ interface LeftSidebarProps {
   /** Current workspace (draft → session → sticky → unbound). */
   workspace?: WorkspaceInfo | null;
   /**
+   * Host machine label shown on the workspace chip when this window drives a
+   * remote machine (null/undefined = local machine, no extra chrome).
+   */
+  machineLabel?: string | null;
+  /**
    * Project path selected when no conversation is open (draft / project focus).
    * When set and activeSessionId is null, the matching project group is highlighted
    * instead of the first session row.
@@ -116,6 +121,7 @@ export const LeftSidebar = memo(function LeftSidebar({
   onOpenAnalytics,
   activeView = null,
   workspace = null,
+  machineLabel = null,
   selectedProjectPath = null,
   onProjectSelect,
   onPickProjectDir,
@@ -252,6 +258,7 @@ export const LeftSidebar = memo(function LeftSidebar({
           onNewChatInProject={onSessionCreate}
           projectPickerCreatesDraft={projectPickerCreatesDraft}
           onTrustBadgeClick={onTrustBadgeClick}
+          machineLabel={machineLabel}
         />
 
         <div className="session-search">
@@ -328,6 +335,7 @@ function WorkspaceChip({
   onNewChatInProject,
   projectPickerCreatesDraft,
   onTrustBadgeClick,
+  machineLabel,
 }: {
   workspace: WorkspaceInfo | null;
   isUnbound: boolean;
@@ -337,6 +345,8 @@ function WorkspaceChip({
   projectPickerCreatesDraft: boolean;
   /** Open the trust dialog for this workspace. */
   onTrustBadgeClick?: () => void;
+  /** Host machine label when the window drives a remote machine. */
+  machineLabel?: string | null;
 }) {
   const cwd = workspace?.cwd ?? null;
   const trust = workspace?.trust ?? 'trusted';
@@ -375,6 +385,14 @@ function WorkspaceChip({
             {trust === 'changed' ? 'Changed' : 'Not trusted'}
           </StatusBadge>
         </button>
+      )}
+      {machineLabel && (
+        <span
+          className="mono shrink-0 text-xs text-base-content/60"
+          title={`Host machine: ${machineLabel}`}
+        >
+          {machineLabel}
+        </span>
       )}
       {showNewChat && (
         <Button

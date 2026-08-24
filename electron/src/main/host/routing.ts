@@ -125,6 +125,21 @@ export function clearActiveMachine(windowId: string): void {
   machineByWindow.delete(windowId);
 }
 
+/**
+ * Reset every window still pointing at one machine back to local (the machine
+ * was deleted or its client torn down); returns the reset window ids.
+ */
+export function resetWindowsForMachine(machineId: MachineId): string[] {
+  const reset: string[] = [];
+  for (const [windowId, machine] of machineByWindow) {
+    if (machine === machineId) {
+      machineByWindow.delete(windowId);
+      reset.push(windowId);
+    }
+  }
+  return reset;
+}
+
 /** Register the client of a connected machine (remote machines, U7/U8). */
 export function registerHostClient(machineId: MachineId, client: HostClient): void {
   clientsByMachine.set(machineId, client);
