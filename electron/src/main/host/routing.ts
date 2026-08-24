@@ -22,7 +22,7 @@ import {
   methodToChannel,
 } from '../../shared/host/protocol';
 import { ALLOWED_INVOKE_CHANNELS, IPC_CHANNELS } from '../../shared/types/ipc';
-import { getLocalHostClient } from './local-host';
+import { closeLocalHostClient, getLocalHostClient } from './local-host';
 import type { HostClient } from './client';
 
 /** The machine this app runs on; implicitly connected, never registered. */
@@ -123,6 +123,17 @@ export function setActiveMachine(windowId: string, machineId: MachineId): Machin
 /** Forget a window's override (window closed / tests). */
 export function clearActiveMachine(windowId: string): void {
   machineByWindow.delete(windowId);
+}
+
+/**
+ * Release every host binding one window held: its local client connection and
+ * its active-machine override. Called from the shell's window
+ * 'destroyed'/'closed' handlers so neither per-window map leaks an entry for a
+ * window that can never come back with the same id.
+ */
+export function releaseWindowHostState(windowId: string): void {
+  closeLocalHostClient(windowId);
+  clearActiveMachine(windowId);
 }
 
 /**

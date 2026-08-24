@@ -410,7 +410,20 @@ export class MachineConnectionManager {
       throw error;
     }
 
-    let transport = this.transportFactory(entry.machine);
+    let transport: MachineTransport;
+    try {
+      transport = this.transportFactory(entry.machine);
+    } catch (error) {
+      // The factory builds the ssh argv: an unsafe agentCommand (or a broken
+      // spawn) rejects here before any handshake. Record the failure instead
+      // of leaving the entry stuck in `connecting`.
+      const typed =
+        error instanceof MachineConnectionError
+          ? error
+          : new MachineConnectionError('unknown', String(error));
+      this.transition(entry, 'lost', typed);
+      throw error;
+    }
     entry.transport = transport;
     this.watchTransport(entry, transport, generation);
 
@@ -423,7 +436,12 @@ export class MachineConnectionManager {
 
       const outcome = await this.ensureDaemonAndRetry(entry, generation, error, hostsPath);
       if (outcome.kind === 'no-retry') {
-        // No ensure cycle ran — classify exactly as before.
+        // No ensure cycle ran — classify exactly as before. But a disconnect
+        // or supersede that landed during the ensure window (or between the
+        // handshake failure and this point) owns the entry now; mirroring the
+        // guards inside ensureDaemonAndRetry, abandon without clobbering its
+        // state (a user disconnect must stay `offline`, not become `lost`).
+        if (entry.generation !== generation || entry.state !== 'connecting') throw error;
         const typed =
           error instanceof MachineConnectionError
             ? error

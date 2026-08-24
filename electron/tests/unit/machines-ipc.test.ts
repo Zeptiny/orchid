@@ -296,6 +296,34 @@ describe('MachineRegistry', () => {
     expect(readHomeConfig()).toEqual({});
   });
 
+  it('rejects agentCommand shell metacharacters without writing', async () => {
+    writeHomeConfig({});
+    const registry = makeRegistry();
+
+    const injected = [
+      'orchid-agent; rm -rf /',
+      'orchid-agent && echo pwned',
+      'orchid-agent | sh',
+      'orchid-agent & background',
+      'orchid-agent $(whoami)',
+      'orchid-agent `whoami`',
+      'echo "orchid-agent"',
+      "echo 'orchid-agent'",
+      'orchid-agent\\; ls',
+      'orchid-agent > /etc/passwd',
+      'orchid-agent < secret',
+      'orchid-agent *',
+    ];
+    for (const agentCommand of injected) {
+      await expect(
+        registry.create({ label: 'x', host: 'h', agentCommand }),
+        `agentCommand '${agentCommand}' must be rejected`,
+      ).rejects.toThrow(/agentCommand/);
+    }
+
+    expect(readHomeConfig()).toEqual({});
+  });
+
   it('rejects a duplicate machine id', async () => {
     writeHomeConfig({ machines: [remoteMachine('build-1', 'Build server')] });
     const registry = makeRegistry({ idFactory: () => 'build-1' });
@@ -440,6 +468,24 @@ describe('machines IPC', () => {
     })) as RemoteMachineRecord;
 
     expect(created).toMatchObject({ port: 22, user: '', agentCommand: 'orchid-agent' });
+  });
+
+  it('accepts plain agentCommand tokens with flags, paths, and tilde', async () => {
+    writeHomeConfig({});
+
+    for (const agentCommand of [
+      'orchid-agent --verbose',
+      '/usr/local/bin/orchid-agent --port=2222',
+      '~/bin/orchid-agent serve --socket ~/.orchid/daemon.sock',
+      'node ./agent.js --host 127.0.0.1',
+    ]) {
+      const created = (await handler(IPC_CHANNELS.MACHINES_CREATE)(null, {
+        label: 'x',
+        host: 'h',
+        agentCommand,
+      })) as RemoteMachineRecord;
+      expect(created.agentCommand).toBe(agentCommand);
+    }
   });
 
   it('rejects malformed create payloads without writing', async () => {
@@ -591,6 +637,37 @@ describe('machines payload schemas', () => {
       false,
     );
     expect(machinesCreateSchema.safeParse({ label: 'x', host: 'h', extra: 1 }).success).toBe(false);
+  });
+
+  it('accepts plain agentCommand tokens and rejects shell metacharacters', () => {
+    expect(machinesCreateSchema.safeParse({ label: 'x', host: 'h' }).success).toBe(true);
+    expect(
+      machinesCreateSchema.safeParse({ label: 'x', host: 'h', agentCommand: 'orchid-agent' })
+        .success,
+    ).toBe(true);
+    expect(
+      machinesCreateSchema.safeParse({
+        label: 'x',
+        host: 'h',
+        agentCommand: 'orchid-agent --verbose --socket ~/daemon.sock',
+      }).success,
+    ).toBe(true);
+    const injected = [
+      'orchid-agent; rm -rf /',
+      'orchid-agent && echo pwned',
+      'orchid-agent | sh',
+      'orchid-agent $(whoami)',
+      'orchid-agent `whoami`',
+      'echo "orchid-agent"',
+      'orchid-agent\\; ls',
+      'orchid-agent > /etc/passwd',
+    ];
+    for (const agentCommand of injected) {
+      expect(
+        machinesCreateSchema.safeParse({ label: 'x', host: 'h', agentCommand }).success,
+        `agentCommand '${agentCommand}' must be rejected`,
+      ).toBe(false);
+    }
   });
 
   it('accepts a partial update payload and rejects id or kind edits', () => {

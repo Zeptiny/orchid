@@ -10,6 +10,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('../../src/main/host/local-host', () => ({
   getLocalHostClient: (windowId: string) => ({ clientId: windowId, local: true }),
+  closeLocalHostClient: vi.fn(),
 }));
 
 import { HOST_METHODS, channelToMethod, methodToChannel } from '../../src/shared/host/protocol';
@@ -29,10 +30,12 @@ import {
   localInvokeChannels,
   registerHostClient,
   registeredMachines,
+  releaseWindowHostState,
   setActiveMachine,
   unregisterHostClient,
   verifyRoutingTable,
 } from '../../src/main/host/routing';
+import { closeLocalHostClient } from '../../src/main/host/local-host';
 import { HostProtocolError } from '../../src/shared/host/protocol';
 
 const UUID = '11111111-1111-4111-8111-111111111111';
@@ -158,6 +161,8 @@ describe('per-window active machine', () => {
     for (const machine of registeredMachines()) unregisterHostClient(machine);
     clearActiveMachine('7');
     clearActiveMachine('8');
+    clearActiveMachine('9');
+    vi.mocked(closeLocalHostClient).mockClear();
   });
 
   it('defaults every window to the local machine', () => {
@@ -195,6 +200,19 @@ describe('per-window active machine', () => {
     expect(registeredMachines()).toContain('remote-b');
     unregisterHostClient('remote-b');
     expect(registeredMachines()).not.toContain('remote-b');
+  });
+
+  it('releaseWindowHostState drops the override AND closes the local client (window close)', () => {
+    registerHostClient('remote-a', { clientId: 'remote-a' } as never);
+    setActiveMachine('9', 'remote-a');
+    expect(activeMachineFor('9')).toBe('remote-a');
+
+    releaseWindowHostState('9');
+
+    // The active-machine override is gone (no leaked machineByWindow entry)…
+    expect(activeMachineFor('9')).toBe(LOCAL_MACHINE_ID);
+    // …and the window's local client connection was closed alongside it.
+    expect(closeLocalHostClient).toHaveBeenCalledWith('9');
   });
 });
 

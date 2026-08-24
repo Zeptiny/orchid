@@ -345,10 +345,12 @@ export function registerMachinesIPC(): void {
         },
       } satisfies MachineConnectResult;
     }
-    const client = attachRemoteMachineClient(remote.machine, transport);
-    void resyncRemoteMachine(remote.machine.id, client).catch(() => {
-      // Non-fatal: windows still re-fetch through their refresh path.
-    });
+    // Idempotent attach so the machine is drivable the moment this handler
+    // returns; the manager's '*' subscription above is the SINGLE resync seam
+    // (it fires synchronously on the connected transition), so this handler
+    // must not resync on its own — a manual connect would push the reconnect
+    // catch-up (and its approval/question re-broadcasts) twice.
+    attachRemoteMachineClient(remote.machine, transport);
     return {
       status: 'ok',
       machine: statusEntryFor(remote.machine, manager),

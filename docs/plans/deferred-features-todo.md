@@ -124,3 +124,14 @@ Today approvals/questions route to the client that requested the work; other con
 **Status:** Deferred — codebase doc is stale
 **Priority:** Low — docs-only
 The repository AGENTS.md directory tree still omits the new `src/main/machines/` tree and the host entries added after U3 (`host/server.ts`, `host/daemon.ts`, `host/client.ts`, `host/transport-inprocess.ts`, `host/local-host.ts`, `host/routing.ts`, `shared/host/protocol.ts` + `framing.ts`, `agent-entry.ts`). **Why deferred:** a mechanical docs pass, batched with the next AGENTS.md refresh rather than landing piecemeal; the per-module header comments are accurate in the meantime.
+
+### Code-review follow-ups (2026-08-23 full review)
+
+Applied in this review: agentCommand injection guard + schema hardening, bridge socket-path argv, stale-socket takeover/unlink, GlobalKnownHostsFile=none + ServerAlive keepalives, disconnect-during-ensure race, approval promotion rebind, session-matched orphan adoption, error-smuggling guard, lazy-runtime retry, window-state release, single-resync seam, dead-code removal. Deferred after review:
+
+- (i) Per-window remote protocol connections — today all windows driving one remote share clientId `machine:<id>`; a session switch in one window can make another window's pending approvals unanswerable and starves its session-scoped events. Needs one bridge connection per window or multi-session subscription tokens.
+- (j) Oversized-frame resilience — a >32 MiB chat.snapshot/session.open kills the transport and reconnect resync re-requests the same frame (deterministic brick). Needs host-side pagination or per-request typed frame errors.
+- (k) Remote shell stdout pollution — rc-file output on the ssh channel kills framing; needs a dedicated typed error kind + docs.
+- (l) Split host/server.ts (~1.7k lines) into per-family binding modules; parameterize the approval/question store twins; hoist the 27 payload schemas out of main/ipc so shared/host/protocol.ts stops importing from the IPC layer.
+- (m) Event receive-path validation + seq-gap detection in HostClient (HOST_EVENTS schemas exist but are not enforced on dispatch).
+- (n) Review-flagged test gaps: end-to-end argv contract test against the real agent-entry CLI, ssh exit-classification integration (mismatch/auth/unreachable), mid-turn ask_question while disconnected, subagent delegation over a remote, two-windows-one-remote fan-out, disposeEmbeddedLocalHost teardown.

@@ -317,15 +317,32 @@ export class HostServer {
    * (re)connecting client. A remote host assigns a fresh connection id per
    * attach, so a pending entry's owner can never come back as itself; without
    * this rebind the resumed view would show prompts the window could not
-   * answer. Mirrors the candidate promotion in the live delivery paths.
+   * answer. Mirrors the candidate promotion in the live delivery paths: only
+   * pendings for the client's OWN active session are adopted — a client
+   * viewing session T must not inherit session S's prompts, which would make
+   * it the sole answerer of a prompt it cannot even see. Unmatched pendings
+   * stay unbound for the next client that does view their session.
    */
   adoptOrphanedPendingFor(clientId: string): void {
+    let resolvedActiveSessionId: string | null | undefined;
+    const activeSessionId = (): string | null | undefined => {
+      if (resolvedActiveSessionId === undefined) {
+        try {
+          resolvedActiveSessionId = getSessionManager().getActive(clientId)?.id ?? null;
+        } catch {
+          resolvedActiveSessionId = null;
+        }
+      }
+      return resolvedActiveSessionId;
+    };
     for (const approval of approvalStore.listPending()) {
       if (approval.ownerClientId == null || this.isConnected(approval.ownerClientId)) continue;
+      if (activeSessionId() !== approval.sessionId) continue;
       approvalStore.rebindOwnerWindow(approval.toolCallId, clientId);
     }
     for (const question of questionStore.listPending()) {
       if (question.ownerClientId == null || this.isConnected(question.ownerClientId)) continue;
+      if (activeSessionId() !== question.sessionId) continue;
       questionStore.rebindOwnerWindow(question.toolCallId, clientId);
     }
   }
@@ -660,9 +677,13 @@ export class HostServer {
       }
       // Unresolvable owner: promote the first connected client viewing the
       // session so the approval stays answerable, and notify everyone.
+      // `rebind`, not `bind`: an approval is created WITH its owner set, and
+      // bind refuses to move an existing binding — a plain bind here would
+      // broadcast a prompt that the disconnected owner (and nobody else)
+      // could answer, leaving the tool denied at the timeout.
       const candidates = this.clientsViewingSession(sessionId);
       if (candidates.length > 0) {
-        approvalStore.bindOwnerWindow(toolCallId, candidates[0]);
+        approvalStore.rebindOwnerWindow(toolCallId, candidates[0]);
       } else if (ownerClientId != null) {
         // Nobody connected can take it: keep the requesting owner bound so a
         // same-id reconnect re-delivers; the store timeout settles fail-closed.
@@ -699,6 +720,8 @@ export class HostServer {
       }
       const candidates = this.clientsViewingSession(sessionId);
       if (candidates.length > 0) {
+        // Unlike approvals, a question starts owner-null (questionStore.create
+        // takes no owner), so a plain bind always succeeds here.
         questionStore.bindOwnerWindow(toolCallId, candidates[0]);
       } else if (ownerClientId != null) {
         questionStore.bindOwnerWindow(toolCallId, ownerClientId);

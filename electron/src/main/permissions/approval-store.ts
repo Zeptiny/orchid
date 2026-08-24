@@ -162,18 +162,6 @@ export class ApprovalStore extends EventEmitter {
     }
   }
 
-  /** Cancel every pending approval owned by a window, returning affected session ids. */
-  cancelAllForOwnerWindow(ownerWindowId: string): string[] {
-    const sessionIds = new Set<string>();
-    for (const [toolCallId, entry] of this.pending) {
-      if (entry.ownerWindowId === ownerWindowId) {
-        sessionIds.add(entry.sessionId);
-        this.settle(toolCallId, { decision: 'denied', reason: 'cancelled' });
-      }
-    }
-    return [...sessionIds];
-  }
-
   /** Look up a pending approval by its tool call id. */
   get(toolCallId: string): ApprovalEntry | undefined {
     return this.pending.get(toolCallId);

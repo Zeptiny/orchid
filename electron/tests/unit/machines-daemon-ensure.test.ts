@@ -125,7 +125,10 @@ describe('buildSshServeCommand (one-shot argv)', () => {
       '-o', 'BatchMode=yes',
       '-o', 'StrictHostKeyChecking=yes',
       '-o', `UserKnownHostsFile=${hostsPath}`,
+      '-o', 'GlobalKnownHostsFile=none',
       '-o', 'ConnectTimeout=10',
+      '-o', 'ServerAliveInterval=15',
+      '-o', 'ServerAliveCountMax=3',
       '-p', '2222',
       'deploy@build.example.com',
       '--',
@@ -343,4 +346,58 @@ describe('MachineConnectionManager daemon ensure', () => {
     expect(ensure).toHaveBeenCalledTimes(2);
     expect(spawns.created).toBe(7);
   }, 20_000);
+
+  it('a user disconnect during the ensure window stays offline — never lost, no reconnect', async () => {
+    pinMachine();
+    // Slow ensure: parks open until released, simulating the one-shot ssh
+    // command still running when the user disconnects.
+    let releaseEnsure: (() => void) | null = null;
+    const ensure = vi.fn(
+      () =>
+        new Promise<boolean>((resolve) => {
+          releaseEnsure = () => resolve(true);
+        }),
+    );
+    const parkedSleeps: Array<{ resolve: () => void }> = [];
+    const sleep = (ms: number): Promise<void> => {
+      void ms;
+      return new Promise((resolve) => {
+        parkedSleeps.push({ resolve });
+      });
+    };
+    const { manager, spawns } = makeManager({
+      bridgeModes: ['silent'],
+      ensure,
+      handshakeTimeoutMs: 150,
+      sleep,
+    });
+
+    let connectRejected = false;
+    const attempt = manager.connect(sshMachine());
+    void attempt.catch(() => {
+      connectRejected = true;
+    });
+    // The handshake timed out (agent-missing) and the ensure window is open.
+    await vi.waitFor(() => expect(releaseEnsure).not.toBeNull(), { timeout: 5000, interval: 10 });
+    expect(manager.getStatus('build-1').state).toBe('connecting');
+
+    // User disconnect lands mid-ensure: generation bumps, state goes offline.
+    manager.disconnect('build-1');
+    expect(manager.getStatus('build-1').state).toBe('offline');
+    releaseEnsure?.();
+
+    await vi.waitFor(() => expect(connectRejected).toBe(true), { timeout: 5000, interval: 10 });
+    await expect(attempt).rejects.toThrow();
+
+    // The abandoned attempt must not clobber the newer owner's state.
+    expect(manager.getStatus('build-1').state).toBe('offline');
+    expect(manager.getStatus('build-1').error).toBeNull();
+
+    // No reconnect scheduled: drain anything parked in the backoff sleep and
+    // confirm nothing spawns.
+    while (parkedSleeps.length > 0) parkedSleeps.shift()?.resolve();
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    expect(spawns.created).toBe(1);
+    expect(parkedSleeps).toHaveLength(0);
+  }, 15_000);
 });

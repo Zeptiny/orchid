@@ -31,13 +31,11 @@ import {
 export { getActiveMainTurnWindowId, getLiveChatSnapshot } from '../host/chat/snapshot';
 export {
   activeSessionsForProviderConnection,
-  forceAbortChat,
   forceAbortMainTurn,
   stopActiveProviderConnectionTurns,
 } from '../host/chat/abort';
 export type { ForceAbortMainTurnOptions } from '../host/chat/abort';
 export { ensureActiveSession } from '../host/chat/session';
-export { webContentsForWindowId } from './chat/events';
 export {
   discardDeletedSessionRuntime,
   forceAbortSession,

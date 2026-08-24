@@ -77,59 +77,84 @@ function resolveBundledCatalogPath(): string | null {
  */
 let providerRuntimeEnsure: Promise<void> | null = null;
 
+/** The composition run per ensure attempt; replaceable in tests. */
+let composeProviderRuntime: () => Promise<void> = defaultComposeProviderRuntime;
+
+async function defaultComposeProviderRuntime(): Promise<void> {
+  const [
+    { ensureHomeConfig },
+    { ProviderCatalogStore },
+    { CredentialVault },
+    { ConnectionStore },
+    { ProviderStatusService },
+    { initializeProviderRuntime },
+    { isProviderRuntimeContextInitialized, ...runtimeContext },
+  ] = await Promise.all([
+    import('../config/loader'),
+    import('../providers/catalog/store'),
+    import('../providers/credentials/vault'),
+    import('../providers/connection-store'),
+    import('../providers/status/service'),
+    import('../providers'),
+    import('../providers/runtime-context'),
+  ]);
+  try {
+    ensureHomeConfig();
+  } catch (error) {
+    console.warn('[local-host] home config unavailable (non-fatal):', error);
+  }
+  if (isProviderRuntimeContextInitialized()) return;
+  const catalogPath = resolveBundledCatalogPath();
+  if (catalogPath == null) {
+    console.warn('[local-host] bundled provider catalog not found; provider methods are unavailable');
+    return;
+  }
+  const catalog = new ProviderCatalogStore({
+    bundledCatalogPath: catalogPath,
+    appVersion: EMBEDDED_HOST_VERSION,
+    keyring: RELEASE_CATALOG_KEYRING,
+  });
+  catalog.load();
+  runtimeContext.setProviderCatalogStore(catalog);
+  // Electron vault adapter (safeStorage); the headless daemon swaps in the
+  // plain-Node adapter instead.
+  const vault = new CredentialVault();
+  runtimeContext.setProviderCredentialVault(vault);
+  const status = new ProviderStatusService();
+  runtimeContext.setProviderStatusService(status);
+  const connections = new ConnectionStore();
+  runtimeContext.setProviderConnectionStore(connections);
+  initializeProviderRuntime({ catalog, vault, connections, status });
+}
+
 function ensureProviderRuntime(): Promise<void> {
-  providerRuntimeEnsure ??= (async () => {
-    const [
-      { ensureHomeConfig },
-      { ProviderCatalogStore },
-      { CredentialVault },
-      { ConnectionStore },
-      { ProviderStatusService },
-      { initializeProviderRuntime },
-      { isProviderRuntimeContextInitialized, ...runtimeContext },
-    ] = await Promise.all([
-      import('../config/loader'),
-      import('../providers/catalog/store'),
-      import('../providers/credentials/vault'),
-      import('../providers/connection-store'),
-      import('../providers/status/service'),
-      import('../providers'),
-      import('../providers/runtime-context'),
-    ]);
-    try {
-      ensureHomeConfig();
-    } catch (error) {
-      console.warn('[local-host] home config unavailable (non-fatal):', error);
-    }
-    if (isProviderRuntimeContextInitialized()) return;
-    const catalogPath = resolveBundledCatalogPath();
-    if (catalogPath == null) {
-      console.warn('[local-host] bundled provider catalog not found; provider methods are unavailable');
-      return;
-    }
-    const catalog = new ProviderCatalogStore({
-      bundledCatalogPath: catalogPath,
-      appVersion: EMBEDDED_HOST_VERSION,
-      keyring: RELEASE_CATALOG_KEYRING,
-    });
-    catalog.load();
-    runtimeContext.setProviderCatalogStore(catalog);
-    // Electron vault adapter (safeStorage); the headless daemon swaps in the
-    // plain-Node adapter instead.
-    const vault = new CredentialVault();
-    runtimeContext.setProviderCredentialVault(vault);
-    const status = new ProviderStatusService();
-    runtimeContext.setProviderStatusService(status);
-    const connections = new ConnectionStore();
-    runtimeContext.setProviderConnectionStore(connections);
-    initializeProviderRuntime({ catalog, vault, connections, status });
-  })().catch((error: unknown) => {
+  providerRuntimeEnsure ??= composeProviderRuntime().catch((error: unknown) => {
     // A catalog/trust failure must not take the embedded host down with it:
     // the shell (or the daemon entry) is the authoritative initializer; this
-    // lazy path only exists for callers that never ran startup.
+    // lazy path only exists for callers that never ran startup. The memo is
+    // reset so a later call (e.g. a degraded-startup lazy retry) re-attempts
+    // instead of reusing this resolved-but-failed promise forever.
     console.warn('[local-host] provider runtime unavailable (non-fatal):', error);
+    providerRuntimeEnsure = null;
   });
   return providerRuntimeEnsure;
+}
+
+/**
+ * Test seam: replace the lazy provider-runtime composition and clear the memo,
+ * so a test can force one failing attempt and observe the retry. Passing null
+ * restores the real composition.
+ */
+export function _setProviderRuntimeComposeForTests(
+  compose: (() => Promise<void>) | null,
+): void {
+  composeProviderRuntime = compose ?? defaultComposeProviderRuntime;
+  providerRuntimeEnsure = null;
+}
+
+/** Test seam: drive the lazy ensure directly (retry-on-failure coverage). */
+export function _ensureProviderRuntimeForTests(): Promise<void> {
+  return ensureProviderRuntime();
 }
 
 /**
@@ -230,4 +255,6 @@ export function disposeEmbeddedLocalHost(): void {
   clientsByWindowId.clear();
   server?.dispose();
   server = null;
+  // A failed lazy composition must not survive teardown as a settled memo.
+  providerRuntimeEnsure = null;
 }

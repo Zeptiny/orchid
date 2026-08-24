@@ -43,8 +43,10 @@ export function disposeActiveAgent(sessionId: string, active: ActiveAgent): void
 }
 
 /**
- * Silently abort any in-flight chat for a window (e.g. on session switch).
- * Does not emit CHAT_DONE — the renderer is about to replace its message list.
+ * Abort exactly one session without affecting work in any other session.
+ *
+ * Silently aborts any in-flight chat for it (e.g. on session switch) without
+ * emitting CHAT_DONE — the renderer is about to replace its message list.
  *
  * Dispose is synchronous: a deferred microtask left a window where the old
  * subscription could still emit CHAT_CHUNK after session:load swapped UI state
@@ -58,12 +60,6 @@ export function disposeActiveAgent(sessionId: string, active: ActiveAgent): void
  * If the agent already finalized (persist completed), only dispose — never
  * mint a duplicate INTERRUPTED chain.
  */
-export function forceAbortChat(windowId: string): void {
-  const sessionId = getSessionManager().getActive(windowId)?.id;
-  if (sessionId) forceAbortSession(sessionId);
-}
-
-/** Abort exactly one session without affecting work in any other session. */
 export function forceAbortSession(sessionId: string): void {
   getBackgroundStore().terminateSession(sessionId);
   getForegroundLiveRegistry().dropSession(sessionId);

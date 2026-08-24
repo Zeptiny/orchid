@@ -204,6 +204,21 @@ vi.mock('../../src/main/config/loader', async (importOriginal) => {
 // Routing's local-machine branch must not start the embedded host here.
 vi.mock('../../src/main/host/local-host', () => ({
   getLocalHostClient: (windowId: string) => ({ clientId: windowId, local: true }),
+  closeLocalHostClient: vi.fn(),
+}));
+
+// The resync seam is spied, not faked away from its contract: the connect flow
+// must invoke it exactly once per (re)connect, through the manager subscription.
+vi.mock('../../src/main/machines/resync', () => ({
+  resyncRemoteMachine: vi.fn(async () => ({
+    sessionIds: [],
+    activeSessionId: null,
+    liveTurn: null,
+    liveSubagentCount: 0,
+    hasBackgroundCommands: false,
+    approvals: [],
+    questions: [],
+  })),
 }));
 
 vi.mock('../../src/main/machines/connection-manager', async () => ({
@@ -223,6 +238,7 @@ vi.mock('../../src/main/machines/host-key', async (importOriginal) => {
 // ── Imports under test ──────────────────────────────────────────────────────
 
 import { registerMachinesIPC, unregisterMachinesIPC } from '../../src/main/ipc/machines';
+import { resyncRemoteMachine } from '../../src/main/machines/resync';
 import { _resetMachineRegistryForTests } from '../../src/main/machines/registry';
 import {
   _resetMachineConnectionManagerForTests,
@@ -314,6 +330,7 @@ beforeEach(() => {
   _resetMachineHostKeyFlowForTests();
   vi.mocked(scanHostKeys).mockReset();
   vi.mocked(scanHostKeys).mockResolvedValue(SCAN_LINES);
+  vi.mocked(resyncRemoteMachine).mockClear();
   addWindow(7);
   registerMachinesIPC();
 });
@@ -452,6 +469,25 @@ describe('machines:connect', () => {
     expect(result.machine.state).toBe('connected');
     expect(registeredMachines()).toContain('build-1');
     await vi.waitFor(() => expect(statusBroadcasts().length).toBeGreaterThan(0));
+  });
+
+  it('resyncs exactly once per manual connect (the subscription is the single seam)', async () => {
+    const machine = remoteMachine('build-1', 'Build server');
+    writeHomeConfig({ machines: [machine] });
+    await handler(IPC_CHANNELS.MACHINES_SCAN_HOST_KEY)(null, { machineId: 'build-1' });
+    await handler(IPC_CHANNELS.MACHINES_CONFIRM_HOST_KEY)(null, { machineId: 'build-1' });
+
+    const result = await handler(IPC_CHANNELS.MACHINES_CONNECT)(null, { machineId: 'build-1' });
+    expect(result).toMatchObject({ status: 'ok' });
+
+    // The manager's connected transition drives the one resync…
+    await vi.waitFor(() => expect(resyncRemoteMachine).toHaveBeenCalledTimes(1));
+    expect(vi.mocked(resyncRemoteMachine)).toHaveBeenCalledWith('build-1', expect.objectContaining({
+      clientId: 'machine:build-1',
+    }));
+    // …and the handler must not add a second one.
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(resyncRemoteMachine).toHaveBeenCalledTimes(1);
   });
 
   it('answers unpinned machines with host-key-not-pinned plus the scan fingerprints', async () => {

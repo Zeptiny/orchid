@@ -15,11 +15,10 @@ import { setImmediate as setImmediatePromise } from 'node:timers/promises';
 import { registerAllIPC, unregisterAllIPC } from './ipc';
 import { unwireLocalHostWindowBroadcast, wireLocalHostWindowBroadcast } from './ipc/host-broadcast';
 import {
-  closeLocalHostClient,
   disposeEmbeddedLocalHost,
   startEmbeddedLocalHost,
 } from './host/local-host';
-import { verifyRoutingTable } from './host/routing';
+import { releaseWindowHostState, verifyRoutingTable } from './host/routing';
 import { registerStartupIPC, unregisterStartupIPC } from './ipc/startup';
 import {
   ensureHomeConfig,
@@ -296,8 +295,10 @@ function createWindow(): void {
   const ownerWindowId = String(window.webContents.id);
   window.webContents.once('destroyed', () => {
     // The client connection goes with the renderer; its pending approvals
-    // stay on the host and settle fail-closed at their timeouts (U9).
-    closeLocalHostClient(ownerWindowId);
+    // stay on the host and settle fail-closed at their timeouts (U9). The
+    // active-machine override must go too, or the routing table leaks an
+    // entry for a window id that can never return.
+    releaseWindowHostState(ownerWindowId);
   });
 
   if (!app.isPackaged) {
@@ -310,7 +311,7 @@ function createWindow(): void {
   }
 
   window.on('closed', () => {
-    closeLocalHostClient(ownerWindowId);
+    releaseWindowHostState(ownerWindowId);
     if (mainWindow === window) mainWindow = null;
   });
 }

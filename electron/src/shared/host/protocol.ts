@@ -235,10 +235,20 @@ export function attachHostOriginalError(
   return payload;
 }
 
-/** Read the original thrown value carried on an error payload, if any. */
-export function takeHostOriginalError(payload: HostErrorPayload): unknown {
+/**
+ * Read the original thrown value carried on an error payload, if any.
+ *
+ * Only real `Error` instances are accepted: the in-process path attaches the
+ * thrown value by reference, while a JSON-deserialized payload (the wire) can
+ * only ever carry a plain object under this key — including one a hostile peer
+ * smuggled in verbatim. Anything that is not an `Error` is dropped so the
+ * client falls through to constructing a typed {@link HostProtocolError}
+ * instead of rejecting with an arbitrary non-Error value.
+ */
+export function takeHostOriginalError(payload: HostErrorPayload): Error | undefined {
   if (payload == null || typeof payload !== 'object') return undefined;
-  return (payload as Record<string, unknown>)[HOST_ORIGINAL_ERROR_KEY];
+  const carried = (payload as Record<string, unknown>)[HOST_ORIGINAL_ERROR_KEY];
+  return carried instanceof Error ? carried : undefined;
 }
 
 /** Error throwable by both sides; serializes onto the response error leg. */

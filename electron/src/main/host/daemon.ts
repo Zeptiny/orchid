@@ -20,6 +20,17 @@ export const STDIO_CLIENT_ID = 'stdio';
 const SOCKET_MODE = 0o600;
 
 /**
+ * Default daemon socket path. Literal tilde on purpose: the login shell
+ * expands it to the user's home directory. Mirrors the app-side
+ * `REMOTE_DAEMON_SOCKET_PATH` in `machines/ssh-transport.ts` (kept as two
+ * literals so the daemon graph never imports the ssh-transport graph).
+ */
+export const DEFAULT_DAEMON_SOCKET_PATH = '~/.orchid/daemon.sock';
+
+/** Deadline for the stale-socket ownership probe before listening (ms). */
+const SOCKET_PROBE_TIMEOUT_MS = 2_000;
+
+/**
  * Env key marking the detached child re-entry of `serve --socket --detached`
  * (U10). The parent spawns a fresh process running the same entrypoint with
  * this key set; that child recognizes itself and serves in the foreground.
@@ -119,12 +130,50 @@ export async function serveStdio(
 }
 
 /**
+ * Outcome of probing an existing socket path before listening.
+ *
+ * - `owned` — something accepted the connection: a live daemon owns the path.
+ * - `stale` — nothing answered (ECONNREFUSED/ENOENT, or any other error): the
+ *   path is a leftover file from a crashed/killed daemon and may be unlinked.
+ */
+type SocketProbeResult = 'owned' | 'stale';
+
+/**
+ * Probe one existing socket path with a single connect attempt. Never throws;
+ * the listen attempt after a `stale` verdict is the final arbiter.
+ */
+function probeSocketOwner(socketPath: string): Promise<SocketProbeResult> {
+  return new Promise((resolve) => {
+    const socket = net.connect(socketPath);
+    const finish = (result: SocketProbeResult): void => {
+      clearTimeout(timer);
+      socket.destroy();
+      resolve(result);
+    };
+    const timer = setTimeout(() => finish('stale'), SOCKET_PROBE_TIMEOUT_MS);
+    timer.unref?.();
+    socket.once('connect', () => finish('owned'));
+    socket.once('error', () => finish('stale'));
+  });
+}
+
+/**
  * `serve --socket <path>`: a UNIX-socket listener owning `~/.orchid` state.
  *
  * Multiple concurrent connections are supported, each with its own
  * `conn-<n>` client id. The socket is created with mode 0600 immediately
  * after listen (same-user only). Server-side errors are logged to stderr and
  * never crash the process.
+ *
+ * Stale-socket recovery: nothing unlinks the socket file when a daemon dies
+ * (crash, SIGKILL, even a clean exit), which would EADDRINUSE the next
+ * `serve --socket` forever. Before listening, an existing path is probed once
+ * with `net.connect`: when a live daemon answers, this call refuses cleanly
+ * (logs "another daemon is already serving <path>" and resolves WITHOUT
+ * listening — `server.listening` stays false so the caller can exit 0);
+ * otherwise the stale file is unlinked (best-effort) and the listen proceeds.
+ * On server close the socket file is unlinked best-effort, so a clean
+ * shutdown does not leave the next serve EADDRINUSE.
  */
 export function serveSocket(
   socketPath: string,
@@ -133,36 +182,63 @@ export function serveSocket(
   const server = options.server ?? createHostServer();
   let nextConnectionNumber = 1;
 
-  return new Promise((resolve, reject) => {
-    const netServer = net.createServer((socket) => {
-      const clientId = `conn-${nextConnectionNumber}`;
-      nextConnectionNumber += 1;
-      const connection = attachStreamConnection(server, socket, socket, clientId);
-      socket.on('error', (error) => logError('socket', error));
-      void connection.closed.then(() => {
+  const listen = (): Promise<net.Server> =>
+    new Promise((resolve, reject) => {
+      const netServer = net.createServer((socket) => {
+        const clientId = `conn-${nextConnectionNumber}`;
+        nextConnectionNumber += 1;
+        const connection = attachStreamConnection(server, socket, socket, clientId);
+        socket.on('error', (error) => logError('socket', error));
+        void connection.closed.then(() => {
+          try {
+            socket.destroy();
+          } catch {
+            // already gone
+          }
+        });
+      });
+
+      netServer.once('error', (error) => {
+        logError('listen', error);
+        reject(error);
+      });
+      // Best-effort cleanup on shutdown: never leave a stale socket file.
+      netServer.once('close', () => {
         try {
-          socket.destroy();
+          fs.unlinkSync(socketPath);
         } catch {
-          // already gone
+          // already gone / never ours
         }
+      });
+
+      netServer.listen(socketPath, () => {
+        // Same-user only: the daemon owns this machine's ~/.orchid state.
+        try {
+          fs.chmodSync(socketPath, SOCKET_MODE);
+        } catch (error) {
+          logError('chmod', error);
+        }
+        resolve(netServer);
       });
     });
 
-    netServer.on('error', (error) => {
-      logError('listen', error);
-      reject(error);
-    });
-
-    netServer.listen(socketPath, () => {
-      // Same-user only: the daemon owns this machine's ~/.orchid state.
-      try {
-        fs.chmodSync(socketPath, SOCKET_MODE);
-      } catch (error) {
-        logError('chmod', error);
+  return (async (): Promise<net.Server> => {
+    if (fs.existsSync(socketPath)) {
+      if ((await probeSocketOwner(socketPath)) === 'owned') {
+        console.error(`[orchid-agent:serve] another daemon is already serving ${socketPath}; not listening`);
+        // Resolve without listening (server.listening === false): the path is
+        // already served, so the caller treats this as success and may exit.
+        return net.createServer();
       }
-      resolve(netServer);
-    });
-  });
+      // Stale leftover from a crashed/killed daemon: remove it and listen.
+      try {
+        fs.unlinkSync(socketPath);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') logError('unlink', error);
+      }
+    }
+    return listen();
+  })();
 }
 
 /**

@@ -200,15 +200,16 @@ export class HostClient {
     }
     const error = payload as { code?: unknown; message?: unknown; data?: unknown };
     // Error identity: an in-process server carries the original thrown value
-    // (non-enumerable field). The `data` fallback accepts only real Error
-    // objects — over a wire the JSON encoding of an Error is `{}`, which must
-    // surface as the typed payload instead of an empty rejection value.
+    // (non-enumerable field). Both carriers accept only real Error objects —
+    // over a wire the JSON encoding of an Error is `{}`, and a hostile peer
+    // could smuggle an arbitrary plain object under the same key, so anything
+    // else must surface as the typed payload instead of a non-Error rejection.
     const fromDataPayload = error.data != null && typeof error.data === 'object'
       ? (error.data as Record<string, unknown>)[HOST_ORIGINAL_ERROR_KEY]
       : undefined;
     const fromData = fromDataPayload instanceof Error ? fromDataPayload : undefined;
     const original = takeHostOriginalError(payload as unknown as Parameters<typeof takeHostOriginalError>[0]) ?? fromData;
-    if (original !== undefined && original !== null) {
+    if (original !== undefined) {
       return original;
     }
     const code = typeof error.code === 'string'

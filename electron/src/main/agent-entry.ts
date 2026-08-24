@@ -73,6 +73,7 @@ import { disposeAllWorkspaceWatchers } from './indexing/watcher';
 import { disposeIndexRefreshCoordinatorAsync } from './indexing/refresh-coordinator';
 import { createHostServer, type HostServer } from './host/server';
 import {
+  DEFAULT_DAEMON_SOCKET_PATH,
   bridgeStdioToSocket,
   serveSocket,
   serveSocketDetached,
@@ -94,7 +95,8 @@ Usage:
   orchid-agent serve --socket <path> --detached
                                       Daemonize: start serving in a detached
                                       child and exit immediately
-  orchid-agent bridge <socketPath>    Pipe stdio to a running socket daemon
+  orchid-agent bridge [socketPath]    Pipe stdio to a running socket daemon
+                                       (default ~/.orchid/daemon.sock)
 `;
 
 /**
@@ -191,6 +193,21 @@ async function initializeDaemonRuntime(): Promise<HostServer> {
   return hostServer;
 }
 
+/**
+ * Foreground serve on one socket: initialize the runtime and serve. When
+ * another daemon already owns the socket, `serveSocket` resolves WITHOUT
+ * listening (it logs why) — this process has nothing to do and exits cleanly.
+ */
+async function serveForeground(socketPath: string): Promise<void> {
+  const server = await initializeDaemonRuntime();
+  const netServer = await serveSocket(socketPath, { server });
+  if (!netServer.listening) {
+    await shutdown();
+    return;
+  }
+  process.stderr.write(`orchid-agent listening on ${socketPath}\n`);
+}
+
 /** Graceful shutdown mirroring the Electron before-quit sequence. */
 async function shutdown(): Promise<void> {
   if (shuttingDown) return;
@@ -285,16 +302,12 @@ async function main(): Promise<void> {
         await serveSocketDetached(socketPath, {
           entryPath: __filename,
           serve: async (detachedSocketPath) => {
-            const server = await initializeDaemonRuntime();
-            await serveSocket(detachedSocketPath, { server });
-            process.stderr.write(`orchid-agent listening on ${detachedSocketPath}\n`);
+            await serveForeground(detachedSocketPath);
           },
         });
         return;
       }
-      const server = await initializeDaemonRuntime();
-      await serveSocket(socketPath, { server });
-      process.stderr.write(`orchid-agent listening on ${socketPath}\n`);
+      await serveForeground(socketPath);
       return;
     }
     process.stderr.write("serve requires a transport: '--stdio' or '--socket <path>'\n");
@@ -303,11 +316,12 @@ async function main(): Promise<void> {
   }
 
   if (args[0] === 'bridge') {
-    const socketPath = args[1];
+    let socketPath = args[1];
     if (!socketPath) {
-      process.stderr.write('bridge requires a socket path\n');
-      process.exitCode = 1;
-      return;
+      // Defense in depth: the app always passes the socket path explicitly,
+      // but defaulting keeps a hand-run `orchid-agent bridge` working.
+      socketPath = DEFAULT_DAEMON_SOCKET_PATH;
+      process.stderr.write(`bridge: no socket path given; defaulting to ${DEFAULT_DAEMON_SOCKET_PATH}\n`);
     }
     await bridgeStdioToSocket(socketPath);
     return;

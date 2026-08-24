@@ -249,7 +249,6 @@ vi.mock('../../src/main/host/chat/abort', () => ({
   activeSessionsForProviderConnection: vi.fn(() => []),
   stopActiveProviderConnectionTurns: vi.fn(() => []),
   forceAbortSession: vi.fn(),
-  forceAbortChat: vi.fn(),
 }));
 vi.mock('../../src/main/providers/views', () => ({
   overview: vi.fn(async () => ({ definitions: [], connections: [], statuses: [], secureStorage: { available: false, backend: null, reason: 'unavailable' } })),
@@ -450,6 +449,52 @@ describe('HostServer offline approvals (U9)', () => {
     expect(answered).toEqual({ id: 2, ok: true, result: { ok: true } });
     await expect(pending).resolves.toEqual({ decision: 'approved' });
     expect(ownerEvents.find((event) => event.ev === 'permission:approval_settled')).toBeDefined();
+  });
+
+  it('promotes a second client viewing the session once the owner disconnects, and it can answer', async () => {
+    const server = freshServer();
+    const sessionId = makeSession(OWNER);
+
+    // Owner connected and viewing the session; a second client also views it.
+    const ownerEvents = connect(server, OWNER);
+    (mocks.sessionManager as SessionManager).switchTo(sessionId, OTHER);
+    const otherEvents = connect(server, OTHER);
+    (mocks.sessionManager as SessionManager).switchTo(sessionId, OWNER);
+
+    // First approval lands with the connected owner.
+    const first = createApproval(sessionId, OWNER);
+    expect(ownerEvents.filter((event) => event.ev === 'permission:approval_requested')).toHaveLength(1);
+    expect(otherEvents.filter((event) => event.ev === 'permission:approval_requested')).toHaveLength(0);
+
+    // The owner goes away while its turn keeps running on the host.
+    server.removeConnection(OWNER);
+
+    // A later approval from that (now disconnected) owner must be promoted to
+    // the connected client viewing the session — broadcast to everyone, but
+    // answerable by the promoted client, not by nobody.
+    const TOOL_B = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee';
+    const second = approvalStore.create(
+      TOOL_B,
+      sessionId,
+      'write',
+      'destructive',
+      { path: 'y' },
+      projectDir,
+      undefined,
+      undefined,
+      OWNER,
+    ) as Promise<{ decision: string; reason?: string }>;
+    expect(otherEvents.filter((event) => event.ev === 'permission:approval_requested').map((event) => event.params.toolCallId)).toContain(TOOL_B);
+    expect(approvalStore.get(TOOL_B)?.ownerWindowId).toBe(OTHER);
+
+    await hello(server, OTHER);
+    const answered = await server.handleRequest(
+      { id: 1, method: 'permission.approval_answer', params: { toolCallId: TOOL_B, decision: 'approved' } },
+      OTHER,
+    );
+    expect(answered).toEqual({ id: 1, ok: true, result: { ok: true } });
+    await expect(second).resolves.toEqual({ decision: 'approved' });
+    void first;
   });
 
   it('keeps an approval pending forever when the timeout is 0 (infinite)', async () => {

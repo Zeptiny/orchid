@@ -3,8 +3,9 @@
  *
  * Spawns the system `ssh` binary with an app-managed per-machine known-hosts
  * file (`StrictHostKeyChecking=yes`, `BatchMode=yes` — key/agent auth only, no
- * passwords) and runs `<agentCommand> bridge` on the remote. Stdio carries
- * newline-delimited JSON frames decoded by `shared/host/framing`.
+ * passwords) and runs `<agentCommand> bridge ~/.orchid/daemon.sock` on the
+ * remote. Stdio carries newline-delimited JSON frames decoded by
+ * `shared/host/framing`.
  *
  * Tests never spawn real ssh: `spawnFn` and `commandFactory` are injectable so
  * a fixture Node bridge child can stand in for the ssh process.
@@ -48,19 +49,77 @@ export interface SshTransport extends HostTransport {
 // ---------------------------------------------------------------------------
 
 /**
- * Split a machine's `agentCommand` into argv tokens using the same shell-quote
- * handling as the execute-command tool (glob objects map to their pattern).
+ * Typed rejection for a machine `agentCommand` that is not a sequence of safe
+ * plain tokens. This is the enforcement point for remote-command injection:
+ * ssh re-joins everything after `--` with spaces and hands it to the remote
+ * login shell, so any shell metacharacter surviving in a token would execute
+ * there. (The registry's schema validation is a second, earlier layer.)
+ */
+export class MachineAgentCommandError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'MachineAgentCommandError';
+  }
+}
+
+/**
+ * Characters allowed in one agentCommand token. shell-quote already strips
+ * quoting, so every character left in a token is literal — anything outside
+ * this set (backticks, `$`, spaces, `;`, `&`, `|`, `<`, `>`, `\`, parens, glob
+ * wildcards, …) would pass straight through to the remote login shell. `~` is
+ * deliberately allowed: tilde expansion on the remote is the only way to
+ * address the remote user's home directory, which this machine cannot assume
+ * to know, and a tilde alone cannot inject shell syntax.
+ */
+const SAFE_TOKEN_PATTERN = /^[A-Za-z0-9_@%+=:,./~-]+$/;
+
+/** First character of a token that the safe pattern rejects. */
+const UNSAFE_TOKEN_CHAR = /[^A-Za-z0-9_@%+=:,./~-]/;
+
+/** Human description of a non-string shell-quote parse node. */
+function describeShellNode(node: unknown): string {
+  if (typeof node === 'object' && node !== null) {
+    const record = node as Record<string, unknown>;
+    if (typeof record.pattern === 'string') return record.pattern;
+    if (typeof record.op === 'string') return record.op;
+    if (typeof record.comment === 'string') return `#${record.comment}`;
+  }
+  return String(node);
+}
+
+/** Reject one token that carries shell metacharacters, naming the character. */
+function rejectUnsafeToken(command: string, token: string): never {
+  const invalid = UNSAFE_TOKEN_CHAR.exec(token)?.[0] ?? '';
+  throw new MachineAgentCommandError(
+    `Machine agentCommand '${command}' contains the shell metacharacter '${invalid}' in token '${token}'; ` +
+      'only plain command tokens (letters, digits, and _ @ % + = : , . / ~ -) are allowed. ' +
+      'ssh re-joins the command with spaces for the remote login shell, so metacharacters would run there.',
+  );
+}
+
+/**
+ * Split a machine's `agentCommand` into argv tokens. Everything after ssh's
+ * `--` is re-joined with spaces and parsed by the remote login shell, so this
+ * fail-closed guard rejects anything that is not one-or-more plain string
+ * tokens free of shell metacharacters (operator nodes throw; tokens must match
+ * {@link SAFE_TOKEN_PATTERN}). Simple multi-token commands
+ * (`orchid-agent --foo bar`) keep working.
  */
 export function splitAgentCommand(command: string): string[] {
-  const tokens = shellParse(command)
-    .map((part) => {
-      if (typeof part === 'string') return part;
-      if (typeof part === 'object' && part !== null && 'op' in part) {
-        return String((part as { pattern?: string }).pattern ?? part);
-      }
-      return String(part);
-    })
-    .filter((token) => token !== '');
+  const tokens: string[] = [];
+  for (const part of shellParse(command)) {
+    if (typeof part !== 'string') {
+      // Operator nodes (`;`, `|`, `&&`, `(`, `)`, glob patterns, comments, …)
+      // are shell syntax, never a literal command token.
+      throw new MachineAgentCommandError(
+        `Machine agentCommand '${command}' contains shell syntax ('${describeShellNode(part)}'); ` +
+          'only plain command tokens are allowed.',
+      );
+    }
+    if (part === '') continue;
+    if (!SAFE_TOKEN_PATTERN.test(part)) rejectUnsafeToken(command, part);
+    tokens.push(part);
+  }
   if (tokens.length === 0) {
     throw new Error(`Machine agentCommand '${command}' produced no shell tokens`);
   }
@@ -68,10 +127,19 @@ export function splitAgentCommand(command: string): string[] {
 }
 
 /**
+ * Default remote daemon socket the app targets for the bridge command and
+ * ensures via `serve --detached` (U10). Literal tilde on purpose: the remote
+ * login shell expands it to the remote user's home, which this machine cannot
+ * assume to know.
+ */
+export const REMOTE_DAEMON_SOCKET_PATH = '~/.orchid/daemon.sock';
+
+/**
  * Shared ssh hardening + destination argv (everything before `--`):
  *
  * `ssh -o BatchMode=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=<path>
- * -o ConnectTimeout=10 [-p port] [user@]host`
+ * -o GlobalKnownHostsFile=none -o ConnectTimeout=10 -o ServerAliveInterval=15
+ * -o ServerAliveCountMax=3 [-p port] [user@]host`
  *
  * The port flag and user prefix are emitted only for non-default values.
  */
@@ -87,8 +155,18 @@ function buildSshBaseArgv(machine: MachineRecord, knownHostsPath: string): strin
     'StrictHostKeyChecking=yes',
     '-o',
     `UserKnownHostsFile=${knownHostsPath}`,
+    // The per-machine pin file must be the only trust source: a system-wide
+    // (/etc/ssh/ssh_known_hosts) key must never satisfy host-key checking.
+    '-o',
+    'GlobalKnownHostsFile=none',
     '-o',
     `ConnectTimeout=${SSH_CONNECT_TIMEOUT_SECONDS}`,
+    // Detect half-open connections (NAT/firewall drops): without keepalives a
+    // dropped ssh bridge hangs forever and requests never time out.
+    '-o',
+    'ServerAliveInterval=15',
+    '-o',
+    'ServerAliveCountMax=3',
   ];
   if (machine.port !== 22) {
     argv.push('-p', String(machine.port));
@@ -100,21 +178,24 @@ function buildSshBaseArgv(machine: MachineRecord, knownHostsPath: string): strin
 /**
  * Build the ssh argv for one machine's stdio bridge:
  *
- * `ssh <hardening> [user@]host -- <agentCommand…> bridge`
+ * `ssh <hardening> [user@]host -- <agentCommand…> bridge ~/.orchid/daemon.sock`
+ *
+ * The socket path argument is required by the remote `bridge` command (the
+ * literal tilde is expanded by the remote login shell) — without it every
+ * remote connect exits 1 and gets misclassified.
  */
 export function buildSshCommand(machine: MachineRecord, knownHostsPath: string): string[] {
   if (machine.kind !== 'ssh') {
     throw new Error(`Machine '${machine.id}' is not an SSH remote`);
   }
-  return [...buildSshBaseArgv(machine, knownHostsPath), '--', ...splitAgentCommand(machine.agentCommand), 'bridge'];
+  return [
+    ...buildSshBaseArgv(machine, knownHostsPath),
+    '--',
+    ...splitAgentCommand(machine.agentCommand),
+    'bridge',
+    REMOTE_DAEMON_SOCKET_PATH,
+  ];
 }
-
-/**
- * Default remote daemon socket the app ensures via `serve --detached` (U10).
- * Literal tilde on purpose: the remote login shell expands it to the remote
- * user's home, which this machine cannot assume to know.
- */
-export const REMOTE_DAEMON_SOCKET_PATH = '~/.orchid/daemon.sock';
 
 /**
  * Build the one-shot ssh argv that starts the remote daemon detached (U10):

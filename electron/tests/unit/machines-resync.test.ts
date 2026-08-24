@@ -275,7 +275,6 @@ vi.mock('../../src/main/host/chat/abort', () => ({
   activeSessionsForProviderConnection: vi.fn(() => []),
   stopActiveProviderConnectionTurns: vi.fn(() => []),
   forceAbortSession: vi.fn(),
-  forceAbortChat: vi.fn(),
 }));
 vi.mock('../../src/main/providers/views', () => ({
   overview: vi.fn(async () => ({ definitions: [], connections: [], statuses: [], secureStorage: { available: false, backend: null, reason: 'unavailable' } })),

@@ -30,6 +30,33 @@ export const machineIdSchema = z
 /** Remote host address: hostname, IP, or an ssh-config alias. */
 const machineHostSchema = z.string().trim().min(1).max(255);
 
+/**
+ * Characters allowed in one `agentCommand` token, twin of the transport-layer
+ * guard (`machines/ssh-transport.ts` SAFE_TOKEN_PATTERN): ssh re-joins the
+ * command with spaces and hands it to the remote login shell, so quotes, `$`,
+ * backticks, `;`, `|`, `&`, `<`, `>`, backslashes, globs, and parens must be
+ * rejected at this boundary. `~` is allowed — tilde expansion on the remote is
+ * the only way to address the remote user's home directory.
+ */
+const AGENT_COMMAND_TOKEN_CHARS = 'A-Za-z0-9_@%+=:,./~-';
+
+/** One plain token; spaces only between tokens, nothing else. */
+const AGENT_COMMAND_PATTERN = new RegExp(
+  `^[${AGENT_COMMAND_TOKEN_CHARS}]+(?: [${AGENT_COMMAND_TOKEN_CHARS}]+)*$`,
+);
+
+const agentCommandSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .max(256)
+  .regex(
+    AGENT_COMMAND_PATTERN,
+    'agentCommand must be plain command tokens (letters, digits, and _ @ % + = : , . / ~ -) '
+      + 'separated by single spaces — shell metacharacters are not allowed',
+  )
+  .default('orchid-agent');
+
 /** Persisted SSH remote machine record (home config `machines` section). */
 export const remoteMachineRecordSchema = z
   .object({
@@ -39,7 +66,7 @@ export const remoteMachineRecordSchema = z
     host: machineHostSchema,
     port: z.number().int().min(1).max(65535).default(22),
     user: z.string().max(64).default(''),
-    agentCommand: z.string().trim().min(1).max(256).default('orchid-agent'),
+    agentCommand: agentCommandSchema,
     created_at: isoTimestampSchema,
     updated_at: isoTimestampSchema,
   })

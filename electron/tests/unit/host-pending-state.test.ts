@@ -243,7 +243,6 @@ vi.mock('../../src/main/host/chat/abort', () => ({
   activeSessionsForProviderConnection: vi.fn(() => []),
   stopActiveProviderConnectionTurns: vi.fn(() => []),
   forceAbortSession: vi.fn(),
-  forceAbortChat: vi.fn(),
 }));
 vi.mock('../../src/main/providers/views', () => ({
   overview: vi.fn(async () => ({ definitions: [], connections: [], statuses: [], secureStorage: { available: false, backend: null, reason: 'unavailable' } })),
@@ -476,6 +475,69 @@ describe('host.pending_state (U10)', () => {
       await vi.waitFor(() => expect(server.listPendingApprovals(sessionId)).toHaveLength(0));
     } finally {
       reconnect.close();
+    }
+  });
+
+  it('does not adopt an orphaned pending for a client viewing a different session', async () => {
+    const APPROVAL_ID = 'abcdefab-1234-4123-8123-123456789abc';
+    const first = new TestClient(socketPath);
+    await first.connected();
+    let sessionS = '';
+    let sessionT = '';
+    try {
+      await first.request(1, 'host.hello', { protocolVersion: 1 });
+      const createdS = await first.request(2, 'session.create');
+      sessionS = ((createdS.result ?? {}) as { id: string }).id;
+      await first.request(3, 'session.open', { id: sessionS });
+      // The approval binds to conn-1 (candidate promotion while it is connected)…
+      void approvalStore.create(APPROVAL_ID, sessionS, 'write', 'destructive', {}, mocks.workspace.cwd as string);
+      await first.next((frame) => frame.ev === 'permission:approval_requested');
+      expect(server.listPendingApprovals(sessionS)[0]?.ownerClientId).toBe('conn-1');
+      // …then a second session exists for the reconnecting client to view instead.
+      const createdT = await first.request(4, 'session.create');
+      sessionT = ((createdT.result ?? {}) as { id: string }).id;
+    } finally {
+      // conn-1 goes away: session S's approval is an orphan.
+      first.close();
+    }
+    await vi.waitFor(() => expect(server.listConnections()).not.toContain('conn-1'));
+
+    // A reconnecting client whose active session is T must NOT adopt S's
+    // orphan: it still sees it in pending_state (machine-wide view)…
+    const otherSession = new TestClient(socketPath);
+    await otherSession.connected();
+    try {
+      await otherSession.request(1, 'host.hello', { protocolVersion: 1 });
+      await otherSession.request(2, 'session.open', { id: sessionT });
+      const state = await otherSession.request(3, 'host.pending_state', {});
+      const approvals = ((state.result ?? {}) as { approvals: Array<{ toolCallId: string }> }).approvals;
+      expect(approvals.map((approval) => approval.toolCallId)).toContain(APPROVAL_ID);
+      // …but cannot answer it — the orphan stays bound to the dead owner.
+      const rejected = await otherSession.request(4, 'permission.approval_answer', {
+        toolCallId: APPROVAL_ID,
+        decision: 'denied',
+      });
+      expect(rejected).toMatchObject({ ok: true, result: { ok: false } });
+      expect(server.listPendingApprovals(sessionS)[0]?.ownerClientId).toBe('conn-1');
+    } finally {
+      otherSession.close();
+    }
+
+    // …until a client that actually views session S adopts and answers it.
+    const viewer = new TestClient(socketPath);
+    await viewer.connected();
+    try {
+      await viewer.request(1, 'host.hello', { protocolVersion: 1 });
+      await viewer.request(2, 'session.open', { id: sessionS });
+      await viewer.request(3, 'host.pending_state', {});
+      const answered = await viewer.request(4, 'permission.approval_answer', {
+        toolCallId: APPROVAL_ID,
+        decision: 'denied',
+      });
+      expect(answered).toMatchObject({ ok: true, result: { ok: true } });
+      await vi.waitFor(() => expect(server.listPendingApprovals(sessionS)).toHaveLength(0));
+    } finally {
+      viewer.close();
     }
   });
 });

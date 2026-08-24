@@ -243,7 +243,6 @@ vi.mock('../../src/main/host/chat/abort', () => ({
   activeSessionsForProviderConnection: vi.fn(() => []),
   stopActiveProviderConnectionTurns: vi.fn(() => []),
   forceAbortSession: vi.fn(),
-  forceAbortChat: vi.fn(),
 }));
 vi.mock('../../src/main/providers/views', () => ({
   overview: vi.fn(async () => ({ definitions: [], connections: [], statuses: [], secureStorage: { available: false, backend: null, reason: 'unavailable' } })),
@@ -448,6 +447,61 @@ describe('serveSocket transport', () => {
       clientA.close();
       clientB.close();
     }
+  });
+});
+
+describe('serveSocket stale-socket recovery', () => {
+  it('recovers from a stale socket file left by a dead daemon', async () => {
+    const stalePath = path.join(tmpRoot, 'stale.sock');
+    // A daemon crashed / was SIGKILLed: the socket file remains but nothing
+    // answers on it — without recovery every later serve would EADDRINUSE.
+    fs.writeFileSync(stalePath, 'leftover from a dead daemon\n');
+    expect(fs.existsSync(stalePath)).toBe(true);
+
+    const recovered = await serveSocket(stalePath, { server });
+    try {
+      expect(recovered.listening).toBe(true);
+      // The fresh socket is recreated with the same 0600 mode.
+      expect((fs.statSync(stalePath).mode & 0o777).toString(8)).toBe('600');
+
+      const client = new TestClient(stalePath);
+      await client.connected();
+      try {
+        const hello = await client.request(1, 'host.hello', { protocolVersion: 1 });
+        expect(hello.ok).toBe(true);
+        expect(hello.result).toMatchObject({ protocolVersion: 1, serverVersion: 'test' });
+      } finally {
+        client.close();
+      }
+    } finally {
+      await new Promise<void>((resolve) => recovered.close(() => resolve()));
+    }
+    // Closing the server removed its socket file: no stale path left behind.
+    expect(fs.existsSync(stalePath)).toBe(false);
+  });
+
+  it('refuses when another daemon owns the socket', async () => {
+    // The beforeEach server already serves socketPath.
+    const second = await serveSocket(socketPath, { server });
+    // Refused cleanly: resolved WITHOUT listening, nothing was unlinked.
+    expect(second.listening).toBe(false);
+    expect(fs.existsSync(socketPath)).toBe(true);
+    try {
+      const client = new TestClient(socketPath);
+      await client.connected();
+      try {
+        const hello = await client.request(1, 'host.hello', { protocolVersion: 1 });
+        expect(hello.ok).toBe(true);
+        expect(hello.result).toMatchObject({ serverVersion: 'test' });
+      } finally {
+        client.close();
+      }
+    } finally {
+      // close() on a never-listened server reports ERR_SERVER_NOT_RUNNING
+      // through the callback; the first daemon keeps serving.
+      await new Promise<void>((resolve) => second.close(() => resolve()));
+    }
+    expect(netServer.listening).toBe(true);
   });
 });
 

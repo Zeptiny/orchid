@@ -264,7 +264,6 @@ vi.mock('../../src/main/host/chat/abort', () => ({
   activeSessionsForProviderConnection: vi.fn(() => []),
   stopActiveProviderConnectionTurns: vi.fn(() => []),
   forceAbortSession: vi.fn(),
-  forceAbortChat: vi.fn(),
 }));
 vi.mock('../../src/main/providers/views', () => ({
   overview: vi.fn(async () => ({ definitions: [], connections: [], statuses: [], secureStorage: { available: false, backend: null, reason: 'unavailable' } })),
@@ -558,5 +557,32 @@ describe('HostServer event routing', () => {
     expect(await settled).toEqual({ decision: 'approved' });
     const settledEvent = events.find((event) => event.ev === 'permission:approval_settled');
     expect(settledEvent).toBeDefined();
+  });
+
+  it('session.delete drops permission state and settles pending approvals cancelled', async () => {
+    const projectDir = fs.mkdtempSync(path.join(tmpRoot, 'project-'));
+    mocks.workspace.cwd = projectDir;
+    mocks.workspace.status = 'valid';
+    mocks.workspace.source = 'sticky';
+    mocks.trustState.current = 'trusted';
+    const created = await call(server, 'session.create');
+    const sessionId = ((created.ok ? created.result : {}) as { id: string }).id;
+
+    const { approvalStore } = await import('../../src/main/permissions/approval-store');
+    const { sessionPermissionOverrides } = await import('../../src/main/permissions/session-overrides');
+    sessionPermissionOverrides.set(sessionId, 'allow');
+    const toolCallId = '22222222-3333-4444-8555-666666666666';
+    const pending = approvalStore.create(
+      toolCallId, sessionId, 'write', 'destructive', {}, projectDir,
+    );
+
+    const deleted = await call(server, 'session.delete', { id: sessionId });
+    expect(deleted).toMatchObject({ id: 1, ok: true, result: { status: 'deleted' } });
+
+    // The deleted session's permission override and pending approvals are gone.
+    expect(sessionPermissionOverrides.has(sessionId)).toBe(false);
+    expect(approvalStore.get(toolCallId)).toBeUndefined();
+    await expect(pending).resolves.toEqual({ decision: 'denied', reason: 'cancelled' });
+    expect(events.find((event) => event.ev === 'session:deleted')).toBeDefined();
   });
 });

@@ -52,10 +52,6 @@ vi.mock('../../src/main/ipc/chat', () => ({
   forceAbortMainTurn: mocks.forceAbortMainTurn,
   getActiveMainTurnWindowId: (sessionId: string) =>
     mocks.activeTurnOwnerBySession.get(sessionId) ?? null,
-  webContentsForWindowId: (windowId: string) => {
-    const webContents = mocks.webContentsById.get(windowId);
-    return webContents && !webContents.isDestroyed() ? webContents : null;
-  },
 }));
 
 // U5: ask_question:cancel now aborts through the host pipeline binding, which

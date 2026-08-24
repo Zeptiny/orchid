@@ -145,7 +145,6 @@ const mocks = vi.hoisted(() => {
     windows,
     discardDeletedSessionRuntime: vi.fn(),
     clearChatHistory: vi.fn(),
-    clearPermissionSessionState: vi.fn(),
     clearToolCallHistoryForSession: vi.fn(),
     clearFunctionHashesForSession: vi.fn(),
     clearNextRequestStop: vi.fn(),
@@ -231,10 +230,6 @@ vi.mock('../../src/main/ipc/chat', () => ({
 vi.mock('../../src/main/host/chat/abort', async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
   discardDeletedSessionRuntime: mocks.discardDeletedSessionRuntime,
-}));
-
-vi.mock('../../src/main/ipc/permission', () => ({
-  clearPermissionSessionState: mocks.clearPermissionSessionState,
 }));
 
 vi.mock('../../src/main/permissions/history', () => ({

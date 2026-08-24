@@ -98,12 +98,6 @@ function applyPermissionUpdates(
   return permissionsConfigSchema.parse(next);
 }
 
-/** Drop permission state when a session is permanently deleted. */
-export function clearPermissionSessionState(sessionId: string): void {
-  sessionPermissionOverrides.delete(sessionId);
-  approvalStore.cancelAllForSession(sessionId);
-}
-
 export function registerPermissionIPC(): void {
   ipcMain.handle(IPC_CHANNELS.PERMISSION_SNAPSHOT, (event) =>
     hostRequest(String(event.sender.id), IPC_CHANNELS.PERMISSION_SNAPSHOT));

@@ -330,6 +330,30 @@ describe('HostClient over a JSON-line transport', () => {
     client.close();
   });
 
+  it('rejects a smuggled non-Error original error with the typed payload', async () => {
+    // A hostile/buggy peer can put the non-enumerable key INTO the JSON error
+    // payload itself; the deserialized value is a plain object, which must
+    // never become the rejection value — only real Error instances rethrow.
+    const transport = new ScriptedTransport();
+    const smuggled = { evil: true };
+    transport.respondWith((frame) => ({
+      id: frame.id,
+      ok: false,
+      error: {
+        code: HOST_ERROR_CODES.INTERNAL,
+        message: 'binding exploded',
+        [HOST_ORIGINAL_ERROR_KEY]: smuggled,
+      },
+    }));
+    const client = createHostClient(transport, { clientId: 'w8' });
+    const error = await client.request('config.get').catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(HostProtocolError);
+    expect(error).not.toBe(smuggled);
+    expect((error as HostProtocolError).code).toBe(HOST_ERROR_CODES.INTERNAL);
+    expect((error as HostProtocolError).message).toBe('binding exploded');
+    client.close();
+  });
+
   it('attaches original errors without serializing them onto the payload', () => {
     const payload = attachHostOriginalError({ code: HOST_ERROR_CODES.INTERNAL, message: 'x' }, new Error('boom'));
     expect(JSON.parse(JSON.stringify(payload))).toEqual({ code: 'INTERNAL', message: 'x' });

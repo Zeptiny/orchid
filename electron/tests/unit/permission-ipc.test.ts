@@ -79,10 +79,6 @@ vi.mock('../../src/main/ipc/chat', () => ({
   forceAbortMainTurn: mocks.forceAbortMainTurn,
   getActiveMainTurnWindowId: (sessionId: string) =>
     mocks.activeTurnOwnerBySession.get(sessionId) ?? null,
-  webContentsForWindowId: (windowId: string) => {
-    const webContents = mocks.webContentsById.get(windowId);
-    return webContents && !webContents.isDestroyed() ? webContents : null;
-  },
 }));
 
 vi.mock('../../src/main/session/singleton', () => ({
@@ -408,18 +404,6 @@ describe('permission IPC ownership', () => {
     });
     expect(fs.statSync(path.dirname(TEST_HOME_CONFIG)).mode & 0o777).toBe(0o700);
     expect(fs.statSync(TEST_HOME_CONFIG).mode & 0o777).toBe(0o600);
-  });
-
-  it('cleans pending approvals and overrides when a session is deleted', async () => {
-    addWindow(10);
-    permissionIpc.sessionPermissionOverrides.set(SESSION_A, 'allow');
-    const pending = createApproval(TOOL_A, SESSION_A, '10');
-
-    permissionIpc.clearPermissionSessionState(SESSION_A);
-
-    expect(permissionIpc.sessionPermissionOverrides.has(SESSION_A)).toBe(false);
-    expect(approvalStore.get(TOOL_A)).toBeUndefined();
-    await expect(pending).resolves.toEqual({ decision: 'denied', reason: 'cancelled' });
   });
 
   it('returns approvals only for the sender selected session and exact owner window', async () => {
