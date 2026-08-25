@@ -8,7 +8,14 @@
 import { ipcMain, shell } from 'electron';
 import type { z } from 'zod';
 import { IPC_CHANNELS } from '../../shared/types/ipc';
+import { MACHINE_ID_LOCAL } from '../../shared/types/machine';
+import {
+  HOST_CAPABILITIES,
+  HOST_ERROR_CODES,
+  HostProtocolError,
+} from '../../shared/host/protocol';
 import { hostRequest } from './host-request';
+import { activeMachineFor } from '../host/routing';
 import {
   agentSaveSchema,
   definitionDeleteSchema,
@@ -97,6 +104,18 @@ export function registerDefinitionsIPC(): void {
     const parsed = definitionRevealSchema.safeParse(payload);
     if (!parsed.success) {
       throw new Error(`Invalid definition:reveal payload: ${parsed.error.message}`);
+    }
+    // Fix #30: on a remote-active window the listed definition paths live on
+    // another machine's filesystem; a local shell reveal would fail with a
+    // misleading "path is outside Orchid definition directories" error.
+    // Degrade with the same typed UNSUPPORTED_ON_HOST error the protocol's
+    // capability gate produces for a host that never declares
+    // 'definitions.reveal' (the daemon never does).
+    if (activeMachineFor(String(event.sender.id)) !== MACHINE_ID_LOCAL) {
+      throw new HostProtocolError(
+        HOST_ERROR_CODES.UNSUPPORTED_ON_HOST,
+        `Method 'definition.reveal' requires the '${HOST_CAPABILITIES.DEFINITIONS_REVEAL}' capability, which this host does not declare`,
+      );
     }
     const projectDir = projectDirFromEvent(event);
     const safePath = assertPathUnderOrchidRoots(parsed.data.path, projectDir);

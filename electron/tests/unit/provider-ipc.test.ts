@@ -4,6 +4,8 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { IPC_CHANNELS } from '../../src/shared/types/ipc';
+import { HOST_ERROR_CODES, HostProtocolError } from '../../src/shared/host/protocol';
+import { clearActiveMachine, setActiveMachine } from '../../src/main/host/routing';
 import type {
   ProviderConnection,
   ProviderDefinition,
@@ -1890,5 +1892,131 @@ describe('provider channel zod rejection', () => {
       protocol: 'openai-compatible',
       authMethod: 'environment',
     })).rejects.toThrow('Invalid providers:discover_draft_models payload');
+  });
+});
+
+describe('provider vault writes on a remote-active window (#5)', () => {
+  const REMOTE_WINDOW = { sender: { id: 1 } };
+  const REMOTE_MACHINE = 'build-1';
+
+  beforeEach(() => {
+    setActiveMachine('1', REMOTE_MACHINE);
+  });
+
+  afterEach(() => {
+    clearActiveMachine('1');
+  });
+
+  it('rejects providers:create with the typed unsupported-on-remote error and never touches the local store', async () => {
+    const memory = memoryServices();
+    providersIpc._setProviderIPCServicesForTests(memory.services);
+    registerProviderIpc();
+
+    const rejection = handler(IPC_CHANNELS.PROVIDERS_CREATE)(REMOTE_WINDOW, {
+      providerId: 'openai',
+      name: 'Wrong machine',
+      protocol: 'openai-compatible',
+      authMethod: 'api-key',
+      modelIds: ['gpt-5/test'],
+    });
+
+    await expect(rejection).rejects.toThrow(HostProtocolError);
+    await expect(rejection).rejects.toMatchObject({
+      code: HOST_ERROR_CODES.UNSUPPORTED_ON_HOST,
+    });
+    await expect(rejection).rejects.toThrow(/remote machine/i);
+    expect(memory.connections.create).not.toHaveBeenCalled();
+    expect(memory.records.size).toBe(0);
+    expect(memory.vault.replaceConnectionApiKey).not.toHaveBeenCalled();
+    expect(memory.vault.deleteConnectionCredentials).not.toHaveBeenCalled();
+  });
+
+  it('rejects providers:update with the typed error and leaves the local connection untouched', async () => {
+    const memory = memoryServices();
+    const id = '00000000-0000-4000-8000-000000000031';
+    memory.records.set(id, {
+      id,
+      providerId: 'openai',
+      name: 'Existing OpenAI',
+      protocol: 'openai-compatible',
+      authMethod: 'api-key',
+      credential: { kind: 'stored', handle: 'fixture-openai-key' },
+      modelIds: ['gpt-5/test'],
+      health: 'ready',
+    });
+    providersIpc._setProviderIPCServicesForTests(memory.services);
+    registerProviderIpc();
+
+    await expect(handler(IPC_CHANNELS.PROVIDERS_UPDATE)(REMOTE_WINDOW, {
+      connectionId: id,
+      name: 'Renamed from the wrong machine',
+    })).rejects.toMatchObject({
+      code: HOST_ERROR_CODES.UNSUPPORTED_ON_HOST,
+    });
+    expect(memory.connections.update).not.toHaveBeenCalled();
+    expect(memory.records.get(id)?.name).toBe('Existing OpenAI');
+  });
+
+  it('rejects providers:submit_api_key with the typed error and never writes the local vault', async () => {
+    const memory = memoryServices();
+    const id = '00000000-0000-4000-8000-000000000032';
+    memory.records.set(id, {
+      id,
+      providerId: 'openai',
+      name: 'Keyless OpenAI',
+      protocol: 'openai-compatible',
+      authMethod: 'api-key',
+      credential: { kind: 'none' },
+      modelIds: ['gpt-5/test'],
+      health: 'draft',
+    });
+    providersIpc._setProviderIPCServicesForTests(memory.services);
+    registerProviderIpc();
+
+    await expect(handler(IPC_CHANNELS.PROVIDERS_SUBMIT_API_KEY)(REMOTE_WINDOW, {
+      connectionId: id,
+      apiKey: 'sk-would-have-leaked-to-the-wrong-machine',
+    })).rejects.toMatchObject({
+      code: HOST_ERROR_CODES.UNSUPPORTED_ON_HOST,
+    });
+    expect(memory.vault.replaceConnectionApiKey).not.toHaveBeenCalled();
+    expect(memory.connections.update).not.toHaveBeenCalled();
+    expect(memory.records.get(id)?.credential).toEqual({ kind: 'none' });
+  });
+
+  it('rejects providers:discover_draft_models with the typed error before any local driver work', async () => {
+    const memory = memoryServices();
+    providersIpc._setProviderIPCServicesForTests(memory.services);
+    registerProviderIpc();
+
+    await expect(handler(IPC_CHANNELS.PROVIDERS_DISCOVER_DRAFT_MODELS)(REMOTE_WINDOW, {
+      providerId: 'openai',
+      protocol: 'openai-compatible',
+      authMethod: 'api-key',
+      apiKey: 'sk-draft-discovery-on-remote',
+    })).rejects.toMatchObject({
+      code: HOST_ERROR_CODES.UNSUPPORTED_ON_HOST,
+    });
+    expect(memory.connections.create).not.toHaveBeenCalled();
+    expect(memory.connections.update).not.toHaveBeenCalled();
+  });
+
+  it('resumes local vault writes once the window is switched back to the local machine', async () => {
+    clearActiveMachine('1');
+    const memory = memoryServices();
+    providersIpc._setProviderIPCServicesForTests(memory.services);
+    registerProviderIpc();
+
+    // Same shape as the local-window create tests: an api-key connection
+    // lands in the local store (draft health; validation is memory-backed).
+    const result = await handler(IPC_CHANNELS.PROVIDERS_CREATE)(REMOTE_WINDOW, {
+      providerId: 'openai',
+      name: 'Local again',
+      protocol: 'openai-compatible',
+      authMethod: 'api-key',
+      modelIds: ['gpt-5/test'],
+    });
+    expect(result.connection).toMatchObject({ name: 'Local again' });
+    expect(memory.connections.create).toHaveBeenCalledTimes(1);
   });
 });

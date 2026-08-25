@@ -31,12 +31,22 @@ import { deliverToMachineWindows } from './remote-clients';
 /** Live (non-terminal) subagent statuses — mirrors useSubagents' tick gate. */
 const LIVE_SUBAGENT_STATUSES = new Set(['running', 'pending', 'queued']);
 
-interface ChatSnapshotView {
-  readonly sessionId: string;
-  readonly live: {
-    readonly state: string;
-    readonly startedAt?: string | null;
-  } | null;
+/** The `host.pending_state` view resync consumes (#19). */
+interface PendingStateView {
+  readonly approvals?: PermissionApprovalRequestedEvent[];
+  readonly questions?: AskQuestionAskedEvent[];
+  /**
+   * Caller client's active session + live-turn presence. Absent on an older
+   * host — resync degrades to "no active session" rather than fetching a
+   * full chat.snapshot (whole-history serialization) to learn it.
+   */
+  readonly activeSession?: {
+    readonly sessionId: string | null;
+    readonly live: {
+      readonly state: string;
+      readonly startedAt: number | null;
+    } | null;
+  };
 }
 
 interface SubagentSnapshotView {
@@ -54,7 +64,7 @@ export interface RemoteResyncSnapshot {
   /** The host's active session for this machine client, if any. */
   readonly activeSessionId: string | null;
   /** Live (non-terminal) main-agent turn on the active session, if any. */
-  readonly liveTurn: { readonly state: string; readonly startedAt: string | null } | null;
+  readonly liveTurn: { readonly state: string; readonly startedAt: number | null } | null;
   /** Live (non-terminal) subagents on the active session. */
   readonly liveSubagentCount: number;
   /** The active session has background commands (running or exited). */
@@ -65,11 +75,16 @@ export interface RemoteResyncSnapshot {
   readonly questions: readonly AskQuestionAskedEvent[];
 }
 
-async function fetchPiece<T>(run: () => Promise<T>, fallback: T, label: string): Promise<T> {  try {
+/**
+ * One piece of the catch-up; a failure degrades to the fallback and NEVER
+ * aborts the remaining pieces or the approvals/questions re-broadcast (#22) —
+ * one unreachable datum (e.g. an older agent without `host.pending_state`)
+ * must not starve the rest of the resync.
+ */
+async function fetchPiece<T>(run: () => Promise<T>, fallback: T, label: string): Promise<T> {
+  try {
     return await run();
   } catch (error) {
-    // One missing piece (e.g. an older agent without host.pending_state)
-    // must not starve the rest of the catch-up.
     console.warn(`[machine-resync] '${label}' failed (non-fatal):`, error);
     return fallback;
   }
@@ -77,11 +92,12 @@ async function fetchPiece<T>(run: () => Promise<T>, fallback: T, label: string):
 
 /**
  * Fetch the reconnect catch-up from a remote host. Every piece degrades to
- * its empty value on failure; `session.list`/`chat.snapshot` resolve the
- * host's active session for the machine client, `subagents.snapshot` and
- * `bgcmd.list` scope to it, and `host.pending_state` returns every pending
- * approval/question (the owner-scoped snapshots cannot serve a reconnected
- * client whose connection id changed).
+ * its empty value on failure; `session.list` enumerates the host's sessions
+ * and `host.pending_state` returns every pending approval/question (the
+ * owner-scoped snapshots cannot serve a reconnected client whose connection
+ * id changed) PLUS the caller's active session and live-turn presence (#19)
+ * — the bounded facts the old full `chat.snapshot` round-trip was fetched
+ * for. `subagents.snapshot` and `bgcmd.list` scope to that active session.
  */
 export async function fetchRemoteResyncSnapshot(
   client: HostClient,
@@ -92,18 +108,16 @@ export async function fetchRemoteResyncSnapshot(
     'session.list',
   );
 
-  // No explicit sessionId: the host answers for the machine client's active
-  // session — the bounded view a fresh `session.open` would produce.
-  const chatView = await fetchPiece(
-    () => client.request<ChatSnapshotView | null>('chat.snapshot', {}),
-    null as ChatSnapshotView | null,
-    'chat.snapshot',
+  const pending = await fetchPiece(
+    () => client.request<PendingStateView>('host.pending_state', {}),
+    {} as PendingStateView,
+    'host.pending_state',
   );
-  const activeSessionId = chatView?.sessionId ?? null;
-  const liveTurn = chatView?.live
+  const activeSessionId = pending.activeSession?.sessionId ?? null;
+  const liveTurn = pending.activeSession?.live
     ? {
-      state: chatView.live.state,
-      startedAt: chatView.live.startedAt ?? null,
+      state: pending.activeSession.live.state,
+      startedAt: pending.activeSession.live.startedAt ?? null,
     }
     : null;
 
@@ -128,15 +142,6 @@ export async function fetchRemoteResyncSnapshot(
     );
     hasBackgroundCommands = background.length > 0;
   }
-
-  const pending = await fetchPiece(
-    () => client.request<{ approvals: PermissionApprovalRequestedEvent[]; questions: AskQuestionAskedEvent[] }>(
-      'host.pending_state',
-      {},
-    ),
-    { approvals: [], questions: [] },
-    'host.pending_state',
-  );
 
   return {
     sessionIds: sessions.map((session) => session.id),

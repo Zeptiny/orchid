@@ -1,18 +1,28 @@
 /**
  * Session family bindings — CRUD, activation (load/open), rename/model
- * changes, workspace binding, and the draft overrides. The load/open
- * activation fan-out is shared through host/session-ops.activateSessionForClient.
+ * changes, workspace binding, the draft overrides, and the reasoning/tier
+ * picker config reads (fix #4: reads resolve the same stores the paired
+ * setters write, so a remote window's pickers describe the machine that will
+ * actually run the turn). The load/open activation fan-out is shared through
+ * host/session-ops.activateSessionForClient.
  */
 import { IPC_CHANNELS } from '../../../shared/types/ipc';
+import type { ModelSelection } from '../../../shared/types/provider';
 import { sessionForRenderer } from '../../../shared/types/session';
 import { lastChainError } from '../../../shared/types/chain';
 import { getSessionManager, resolveWindowWorkspace } from '../../session/singleton';
-import { setDraftTierOverride } from '../../session/draft-tier';
-import { setDraftReasoningOverride, takeDraftReasoningOverride } from '../../session/draft-reasoning';
+import { getConfig } from '../../config/loader';
+import { setDraftTierOverride, getDraftTierOverride } from '../../session/draft-tier';
+import {
+  setDraftReasoningOverride,
+  getDraftReasoningOverride,
+  takeDraftReasoningOverride,
+} from '../../session/draft-reasoning';
 import { takeDraftPermissionOverride, sessionPermissionOverrides } from '../../permissions/session-overrides';
 import { approvalStore } from '../../permissions/approval-store';
 import { clearToolCallHistoryForSession } from '../../permissions/history';
 import { clearChatHistory } from '../chat/history';
+import { trimMessagesForFrame } from '../chat/snapshot-trim';
 import { clearFunctionHashesForSession } from '../../tools/ast/get-function';
 import {
   clearDraftCwd,
@@ -21,6 +31,14 @@ import {
 } from '../../project/workspace';
 import { getProjectTrustState } from '../../project/trust';
 import { getProjectRuntimeRegistry } from '../../project/runtime';
+import {
+  getProviderCatalogStore,
+  getProviderConnectionStore,
+  getProviderDriverRegistry,
+} from '../../providers/runtime-context';
+import { resolveModelSelection } from '../../providers/resolver';
+import { listConnectionModelRows } from '../../providers/facets/discovery';
+import { groupTierVariantRows } from '../../providers/facets/tiers';
 import {
   workingSetClearFocus,
   workingSetOpenOrFocus,
@@ -44,6 +62,23 @@ import type {
   HostRequestContext,
   HostServerSurface,
 } from './types';
+
+/**
+ * Model selection to reason about in draft mode (no active session):
+ * bound project default_model → user default_model → null.
+ */
+function resolveDraftModelSelection(clientId: string): ModelSelection | null {
+  try {
+    const info = resolveWindowWorkspace(clientId);
+    if (info.cwd) {
+      const projectDefault = getProjectRuntimeRegistry().get(info.cwd).config.default_model;
+      if (projectDefault) return projectDefault;
+    }
+  } catch {
+    // Workspace/runtime unresolvable — fall through to the user default.
+  }
+  return getConfig().default_model ?? null;
+}
 
 export function buildSessionBindings(surface: HostServerSurface): HostBindingEntries {
   const entries: Array<[string, HostBinding<never>]> = [];
@@ -77,12 +112,19 @@ export function buildSessionBindings(surface: HostServerSurface): HostBindingEnt
 
   bind('session.open', (ctx, params: { id: string }) => {
     const { id } = params;
-    const { session, messages, workspace } = activateSessionForClient(ctx.clientId, id);
+    const { session, messages: rawMessages, workspace } = activateSessionForClient(ctx.clientId, id);
     emitWorkspaceChanged(ctx, workspace);
     const live = getLiveChatSnapshot(id);
+    // Keep the one-frame result under the wire frame cap (review #25) —
+    // chat.snapshot's trim path; the continuation cursor satisfies
+    // session.history_page so the renderer can page in older history.
+    const { messages, trim } = session
+      ? trimMessagesForFrame(rawMessages, session.chains)
+      : { messages: rawMessages, trim: null };
     return {
       session: session ? sessionForRenderer(session) : null,
       messages,
+      trim,
       live,
       workspace,
       lastChainError: session && !live ? lastChainError(session.chains) : null,
@@ -281,6 +323,101 @@ export function buildSessionBindings(surface: HostServerSurface): HostBindingEnt
     }
     manager.setTierOverride(active.id, params.tier);
     return { status: 'ok' };
+  });
+
+  bind('session.get_reasoning_config', async (ctx, params: {
+    selection?: ModelSelection | null;
+  } | undefined) => {
+    const draftSelection = params?.selection ?? null;
+    const manager = getSessionManager();
+    const active = manager.getActive(ctx.clientId);
+    // Draft mode: prefer the renderer's current picker selection so switching
+    // models in a draft (no session yet) immediately updates reasoning options.
+    // Falls back to the project/default model for backward compat when no
+    // selection is supplied.
+    const selection = active?.selection ?? draftSelection ?? resolveDraftModelSelection(ctx.clientId);
+    const override = active
+      ? active.reasoningEffortOverride
+      : getDraftReasoningOverride(ctx.clientId);
+
+    if (!selection) {
+      return { levels: [], default: null, override, supportsReasoning: false };
+    }
+
+    const connections = await getProviderConnectionStore().list();
+    const definitions = getProviderCatalogStore().getProviderDefinitions();
+    const resolution = resolveModelSelection(selection, connections, definitions);
+
+    if (resolution.kind !== 'resolved') {
+      return { levels: [], default: null, override, supportsReasoning: false };
+    }
+
+    const { connection, model } = resolution;
+    const supportsReasoning = model.capabilities?.reasoning ?? false;
+    const modelConfig = connection.reasoningConfig?.[selection.modelId];
+
+    return {
+      levels: modelConfig?.levels ?? [],
+      default: modelConfig?.default ?? null,
+      override,
+      supportsReasoning,
+    };
+  });
+
+  bind('session.get_service_tier_config', async (ctx, params: {
+    selection?: ModelSelection | null;
+  } | undefined) => {
+    const draftSelection = params?.selection ?? null;
+    const empty = { mechanism: null, tiers: [], selected: null, override: null, effective: null };
+    const manager = getSessionManager();
+    const active = manager.getActive(ctx.clientId);
+    const selection = active?.selection ?? draftSelection ?? resolveDraftModelSelection(ctx.clientId);
+    const override = active ? active.tierOverride : getDraftTierOverride(ctx.clientId);
+
+    if (!selection) return { ...empty, override };
+
+    const connections = await getProviderConnectionStore().list();
+    const definitions = getProviderCatalogStore().getProviderDefinitions();
+    const resolution = resolveModelSelection(selection, connections, definitions);
+    if (resolution.kind !== 'resolved') return { ...empty, override };
+
+    const driver = getProviderDriverRegistry().get(resolution.provider.id);
+    const mechanism = driver?.tierMechanism;
+    if (!mechanism) return { ...empty, override };
+
+    const selected = resolution.connection.tierSelections?.[selection.modelId] ?? null;
+    // Variant-mechanism tiers are offered only when the variant model id is
+    // actually present for the active model; selecting an absent variant would
+    // rewrite the request to a model id the provider does not serve (R20).
+    const variantTierIds = mechanism.kind === 'model-name-variants'
+      ? groupTierVariantRows(
+          listConnectionModelRows(resolution.connection, resolution.provider),
+          mechanism,
+        ).variantTiersByBase.get(resolution.model.id)
+      : undefined;
+    if (mechanism.kind === 'model-name-variants' && variantTierIds === undefined) {
+      return { ...empty, override };
+    }
+    const tiers = mechanism.tiers
+      .filter((tier) => variantTierIds === undefined || variantTierIds.includes(tier.id))
+      .map((tier) => {
+        const requiresStreaming = mechanism.kind === 'model-name-variants'
+          && (tier as { requiresStreaming?: boolean }).requiresStreaming === true;
+        return {
+          id: tier.id,
+          displayName: tier.displayName ?? null,
+          description: tier.description ?? null,
+          ...(requiresStreaming ? { requiresStreaming: true } : {}),
+        };
+      });
+    const effective = override ?? selected ?? null;
+    return {
+      mechanism: mechanism.kind,
+      tiers,
+      selected,
+      override,
+      effective,
+    };
   });
 
   return entries;

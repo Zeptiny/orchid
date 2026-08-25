@@ -2,6 +2,17 @@
  * Permissions + ask_question family bindings. Every answer/cancel path is
  * owner-gated: the caller must be the pending entry's bound owner AND view
  * the entry's session; non-owners get `{ ok: false }`, never an error.
+ *
+ * Reconnect self-healing (#26): resync (`host.pending_state`) broadcasts
+ * orphaned pendings owner-stripped, but adoption there needs the caller's
+ * active session to already match — on a fresh `conn-<n>` it is still null
+ * until the renderer's forced `session.open` lands. The answer path therefore
+ * adopts too: when the entry's owner is gone (null, or a connection the
+ * server no longer has) and the answering client views the entry's session,
+ * the owner binding moves to that client BEFORE the ownership check, so the
+ * one client that can actually answer is never told `ok: false`. This mirrors
+ * the live-delivery promotion policy (server.ts) via the store's existing
+ * `rebindOwnerWindow` — a connected owner is never displaced.
  */
 import type { PermissionMode } from '../../../shared/types/permission';
 import { getSessionManager } from '../../session/singleton';
@@ -12,9 +23,29 @@ import {
 import { approvalStore } from '../../permissions/approval-store';
 import { questionStore } from '../../tools/ask-question/store';
 import { forceAbortMainTurn } from '../chat/abort';
-import type { HostBinding, HostBindingEntries } from './types';
+import type { HostBinding, HostBindingEntries, HostRequestContext, HostServerSurface } from './types';
 
-export function buildPermissionBindings(): HostBindingEntries {
+/**
+ * Re-bind one orphaned pending entry to the answering client when that client
+ * views the entry's session and the current owner cannot come back.
+ */
+function adoptOrphanedOwner(
+  surface: HostServerSurface,
+  ctx: HostRequestContext,
+  sessionId: string | null,
+  entry: { ownerWindowId: string | null; sessionId: string } | undefined,
+  rebind: (clientId: string) => boolean,
+): void {
+  if (!entry || sessionId == null) return;
+  if (entry.ownerWindowId === ctx.clientId) return;
+  if (entry.sessionId !== sessionId) return;
+  if (entry.ownerWindowId != null && surface.listConnections().includes(entry.ownerWindowId)) {
+    return;
+  }
+  rebind(ctx.clientId);
+}
+
+export function buildPermissionBindings(surface: HostServerSurface): HostBindingEntries {
   const entries: Array<[string, HostBinding<never>]> = [];
 
   const bind = <P>(method: string, binding: HostBinding<P>): void => {
@@ -37,6 +68,8 @@ export function buildPermissionBindings(): HostBindingEntries {
   }) => {
     const entry = questionStore.get(params.toolCallId);
     const sessionId = getSessionManager().getActive(ctx.clientId)?.id ?? null;
+    adoptOrphanedOwner(surface, ctx, sessionId, entry, (clientId) =>
+      questionStore.rebindOwnerWindow(params.toolCallId, clientId));
     const owns = entry != null
       && entry.ownerWindowId === ctx.clientId
       && entry.sessionId === sessionId;
@@ -47,6 +80,8 @@ export function buildPermissionBindings(): HostBindingEntries {
   bind('ask_question.cancel', (ctx, params: { toolCallId: string }) => {
     const entry = questionStore.get(params.toolCallId);
     const sessionId = getSessionManager().getActive(ctx.clientId)?.id ?? null;
+    adoptOrphanedOwner(surface, ctx, sessionId, entry, (clientId) =>
+      questionStore.rebindOwnerWindow(params.toolCallId, clientId));
     const owns = entry != null
       && entry.ownerWindowId === ctx.clientId
       && entry.sessionId === sessionId;
@@ -73,6 +108,8 @@ export function buildPermissionBindings(): HostBindingEntries {
   }) => {
     const entry = approvalStore.get(params.toolCallId);
     const sessionId = getSessionManager().getActive(ctx.clientId)?.id ?? null;
+    adoptOrphanedOwner(surface, ctx, sessionId, entry, (clientId) =>
+      approvalStore.rebindOwnerWindow(params.toolCallId, clientId));
     const owns = entry != null
       && entry.ownerWindowId === ctx.clientId
       && entry.sessionId === sessionId;

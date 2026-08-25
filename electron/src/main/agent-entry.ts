@@ -32,20 +32,11 @@ import { seedSharedPromptsDir } from './prompts/registry';
 import { registerBuiltinTools } from './tools';
 import { wireSubagentRuntime, flushSubagentPersistence, disposeSubagentPersistence } from './agents/wire-subagents';
 import { initToolWorkerPool, disposeToolWorkerPool } from './llm/tool-pool';
-import { ProviderCatalogStore } from './providers/catalog/store';
-import type { CatalogKeyring } from './providers/catalog/trust';
-import { CredentialVault } from './providers/credentials/vault';
 import { nodeSecureStorageAdapter } from './providers/credentials/node-storage-adapter';
-import { ConnectionStore } from './providers/connection-store';
-import { initializeProviderRuntime, resetProviderRuntime } from './providers';
-import {
-  resetProviderRuntimeContext,
-  setProviderCatalogStore,
-  setProviderConnectionStore,
-  setProviderCredentialVault,
-  setProviderStatusService,
-} from './providers/runtime-context';
-import { ProviderStatusScheduler, ProviderStatusService } from './providers/status/service';
+import { composeProviderRuntime } from './providers/compose-runtime';
+import { resetProviderRuntime } from './providers';
+import { resetProviderRuntimeContext } from './providers/runtime-context';
+import { ProviderStatusScheduler } from './providers/status/service';
 import { createLilacStatusSource } from './providers/drivers/lilac';
 import {
   initializeProviderAccountingStore,
@@ -100,18 +91,6 @@ Usage:
                                        (default ~/.orchid/daemon.sock)
 `;
 
-/**
- * Release engineering replaces this empty development keyring with public
- * Ed25519 verification keys (same policy as the Electron shell).
- */
-const RELEASE_CATALOG_KEYRING: CatalogKeyring = Object.freeze({});
-
-function resolveBundledCatalogPath(): string {
-  // The bundle lives at dist/agent (or dist/main under tsc) — both two levels
-  // below the package root, where assets/ sits.
-  return path.join(__dirname, '..', '..', 'assets', 'providers', 'catalog.json');
-}
-
 let providerStatusScheduler: ProviderStatusScheduler | null = null;
 let bgIdleOwnershipTimer: ReturnType<typeof setInterval> | null = null;
 let hostServer: HostServer | null = null;
@@ -139,29 +118,17 @@ async function initializeDaemonRuntime(): Promise<HostServer> {
   initFileLogging();
   ensureHomeConfig();
 
-  // settings_providers stage
-  const catalog = new ProviderCatalogStore({
-    bundledCatalogPath: resolveBundledCatalogPath(),
+  // settings_providers stage — the shared composition (fix #15): catalog +
+  // release keyring, plain-Node vault adapter (stored API keys are
+  // unavailable with a clean typed error; environment credential references
+  // keep resolving since they bypass the vault), status service + scheduler,
+  // connection store, and the ProviderRuntime itself.
+  const composed = composeProviderRuntime({
     appVersion: __AGENT_VERSION__,
-    keyring: RELEASE_CATALOG_KEYRING,
+    vaultAdapter: nodeSecureStorageAdapter,
+    statusSources: [createLilacStatusSource()],
   });
-  catalog.load();
-  setProviderCatalogStore(catalog);
-
-  // Plain-Node vault: stored API keys are unavailable (clean typed error);
-  // environment credential references keep resolving (they bypass the vault).
-  const vault = new CredentialVault({ safeStorage: nodeSecureStorageAdapter });
-  setProviderCredentialVault(vault);
-
-  const status = new ProviderStatusService();
-  const scheduler = new ProviderStatusScheduler(status);
-  scheduler.start([createLilacStatusSource()]);
-  setProviderStatusService(status);
-  providerStatusScheduler = scheduler;
-
-  const connections = new ConnectionStore();
-  setProviderConnectionStore(connections);
-  initializeProviderRuntime({ catalog, vault, connections, status });
+  providerStatusScheduler = composed.statusScheduler;
 
   initializeProviderAccountingStore();
   initializeToolAttemptStore();

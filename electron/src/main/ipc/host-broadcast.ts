@@ -15,6 +15,8 @@
  */
 import { BrowserWindow, webContents as electronWebContents, type WebContents } from 'electron';
 import { HOST_EVENTS, type HostEventName } from '../../shared/host/protocol';
+import { MACHINE_ID_LOCAL } from '../../shared/types/machine';
+import { activeMachineFor } from '../host/routing';
 import { getLocalHostClient, setLocalClientListener, setLocalClientSweep } from '../host/local-host';
 import type { HostClient } from '../host/client';
 import { canSend } from './chat/events';
@@ -68,6 +70,14 @@ function enumerateWebContents(): WebContents[] {
 function attachWindowBroadcast(client: HostClient, clientId: string): void {
   for (const ev of Object.keys(HOST_EVENTS) as HostEventName[]) {
     client.subscribe(ev, (params) => {
+      // A window switched to a remote machine must not receive LOCAL host
+      // events (working-set/activity/deleted pushes would bleed cross-machine
+      // state into its renderer): mirror the remote twin's gate in
+      // machines/remote-clients.ts deliverToMachineWindows. The renderer
+      // re-scopes itself on machine switches (ChatView's machine-scope effect
+      // re-fetches sessions/workspace/providers), so no extra refresh signal
+      // is needed here — only the suspension.
+      if (activeMachineFor(clientId) !== MACHINE_ID_LOCAL) return;
       const target = webContentsForClientId(clientId);
       if (!target) return;
       try {

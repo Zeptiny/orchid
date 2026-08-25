@@ -246,8 +246,10 @@ describe('permission IPC ownership', () => {
     );
     mocks.projectDirByWebContents.set(10, projectDir);
 
+    // Fix #6: both surfaces serve through the host binding, which resolves the
+    // caller's workspace server-side — same stores, same authorization seam.
     const snapshot = mocks.handlers.get(IPC_CHANNELS.CONFIG_PERMISSION_SCOPES)!;
-    expect(snapshot(eventFrom(10))).toEqual({
+    await expect(snapshot(eventFrom(10))).resolves.toEqual({
       global: { grep: 'ask' },
       project: { edit: 'ask' },
       projectDir,
@@ -280,11 +282,11 @@ describe('permission IPC ownership', () => {
     mocks.projectDirByWebContents.set(10, projectDirA);
     const save = mocks.handlers.get(IPC_CHANNELS.CONFIG_SAVE_PERMISSION_SCOPE)!;
 
-    expect(() => save(eventFrom(10), {
+    await expect(save(eventFrom(10), {
       scope: 'project',
       expectedProjectDir: projectDirB,
       updates: { edit: 'allow' },
-    })).toThrow('does not match the selected workspace');
+    })).rejects.toThrow('does not match the selected workspace');
 
     let release!: () => void;
     const blocker = withConfigSaveLock(() => new Promise<void>((resolve) => {
@@ -296,6 +298,12 @@ describe('permission IPC ownership', () => {
       expectedProjectDir: projectDirA,
       updates: { edit: 'allow' },
     });
+    // The handler now forwards through the host client (one microtask for the
+    // settled handshake) before the binding authorizes the target; let that
+    // dispatch land so the capture happens while the workspace still selects
+    // project A — mirroring the handler-time capture the old synchronous
+    // handler performed.
+    await new Promise((resolve) => setImmediate(resolve));
     mocks.projectDirByWebContents.set(10, projectDirB);
     release();
     await blocker;
@@ -353,42 +361,47 @@ describe('permission IPC ownership', () => {
       .toEqual({ permissions: { write: 'ask' } });
   });
 
-  it('treats a missing project layer as empty but wraps malformed layer errors', () => {
+  it('treats a missing project layer as empty but wraps malformed layer errors', async () => {
     const projectDir = path.join(TEST_CONFIG_ROOT, 'project-without-config');
     fs.mkdirSync(projectDir, { recursive: true });
     mocks.projectDirByWebContents.set(10, projectDir);
     const snapshot = mocks.handlers.get(IPC_CHANNELS.CONFIG_PERMISSION_SCOPES)!;
 
-    expect(snapshot(eventFrom(10))).toEqual({
+    await expect(snapshot(eventFrom(10))).resolves.toEqual({
       global: { grep: 'ask' },
       project: {},
       projectDir,
     });
 
     fs.writeFileSync(path.join(projectDir, '.orchid.json'), '{ malformed');
-    expect(() => snapshot(eventFrom(10))).toThrow(
+    await expect(snapshot(eventFrom(10))).rejects.toThrow(
       `Cannot read configuration layer ${path.join(projectDir, '.orchid.json')}`,
     );
   });
 
   it('rejects renderer paths and project writes without a bound workspace', async () => {
     const save = mocks.handlers.get(IPC_CHANNELS.CONFIG_SAVE_PERMISSION_SCOPE)!;
+    // Unknown keys and never-typed branches fail zod validation synchronously
+    // in the handler, before the request is forwarded to the host.
     expect(() => save(eventFrom(10), {
       scope: 'project',
       projectDir: '/tmp/attacker-selected',
       updates: { edit: 'allow' },
     })).toThrow();
     expect(() => save(eventFrom(10), {
-      scope: 'project',
-      expectedProjectDir: '/tmp/attacker-selected',
-      updates: { edit: 'allow' },
-    })).toThrow('not a valid project directory');
-
-    expect(() => save(eventFrom(10), {
       scope: 'global',
       expectedProjectDir: '/tmp/attacker-selected',
       updates: { edit: 'allow' },
     })).toThrow();
+
+    // A well-formed project payload for an unauthorized directory is
+    // rejected by the host binding's authorization step (#6 keeps it
+    // server-side).
+    await expect(save(eventFrom(10), {
+      scope: 'project',
+      expectedProjectDir: '/tmp/attacker-selected',
+      updates: { edit: 'allow' },
+    })).rejects.toThrow('not a valid project directory');
   });
 
   it('patches the user permission map without replacing unrelated home settings', async () => {
@@ -433,6 +446,15 @@ describe('permission IPC ownership', () => {
     const pending = createApproval(TOOL_A, SESSION_A, '10');
     const answer = mocks.handlers.get(IPC_CHANNELS.PERMISSION_APPROVAL_ANSWER)!;
 
+    // Establish both windows' host connections (in the real app every live
+    // window has one) so the ownership check — and the adoption path below —
+    // reasons about genuine connectivity, not test-fixture ordering.
+    const snapshot = mocks.handlers.get(IPC_CHANNELS.PERMISSION_SNAPSHOT)!;
+    await snapshot(eventFrom(10));
+    await snapshot(eventFrom(20));
+
+    // Both windows are connected: the non-owner must be refused (no adoption
+    // while a live owner exists).
     await expect(answer(eventFrom(20), {
       toolCallId: TOOL_A,
       decision: 'approved',
@@ -452,6 +474,40 @@ describe('permission IPC ownership', () => {
       decision: 'approved',
     })).resolves.toEqual({ ok: true });
     await expect(pending).resolves.toEqual({ decision: 'approved' });
+  });
+
+  it('self-heals an approval orphaned by reconnect: the answering client adopts it (#26)', async () => {
+    addWindow(30);
+    mocks.selectedByWebContents.set(30, SESSION_A);
+    // The approval's owner is a daemon-side connection that no longer exists
+    // (reconnect assigned a fresh conn-<n>) — exactly what a resync broadcast
+    // re-surfaces before the renderer's session.open could re-bind it.
+    const pending = createApproval(TOOL_A, SESSION_A, 'conn-1');
+    expect(approvalStore.get(TOOL_A)?.ownerWindowId).toBe('conn-1');
+    const answer = mocks.handlers.get(IPC_CHANNELS.PERMISSION_APPROVAL_ANSWER)!;
+
+    await expect(answer(eventFrom(30), {
+      toolCallId: TOOL_A,
+      decision: 'approved',
+    })).resolves.toEqual({ ok: true });
+    await expect(pending).resolves.toEqual({ decision: 'approved' });
+  });
+
+  it('does not adopt an orphaned approval for a client viewing another session (#26)', async () => {
+    addWindow(31);
+    mocks.selectedByWebContents.set(31, SESSION_B);
+    const pending = createApproval(TOOL_B, SESSION_A, 'conn-2');
+    const answer = mocks.handlers.get(IPC_CHANNELS.PERMISSION_APPROVAL_ANSWER)!;
+
+    await expect(answer(eventFrom(31), {
+      toolCallId: TOOL_B,
+      decision: 'denied',
+    })).resolves.toEqual({ ok: false });
+    // Still owned by the dead connection: only a client that views SESSION_A
+    // may take it.
+    expect(approvalStore.get(TOOL_B)?.ownerWindowId).toBe('conn-2');
+    await approvalStore.cancel(TOOL_B);
+    void pending;
   });
 
   it('settles undeliverable approvals fail-closed at the timeout instead of aborting immediately', async () => {

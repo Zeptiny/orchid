@@ -15,21 +15,12 @@
  * the renderer window fan-out lives client-side in `ipc/host-broadcast.ts` and
  * is attached through {@link setLocalClientListener}.
  */
-import * as fs from 'node:fs';
-import * as path from 'node:path';
-import type { CatalogKeyring } from '../providers/catalog/trust';
 import { createHostServer, type HostServer } from './server';
 import { createHostClient, type HostClient } from './client';
 import { createInProcessTransport } from './transport-inprocess';
 
 /** Embedded host version reported in the `host.hello` handshake. */
 const EMBEDDED_HOST_VERSION = '0.0.0-embedded';
-
-/**
- * Same policy as the daemon/agent entry: release engineering replaces this
- * empty keyring with public verification keys. Code-owned, never renderer data.
- */
-const RELEASE_CATALOG_KEYRING: CatalogKeyring = Object.freeze({});
 
 /**
  * Called once per window/client (and by tests) so a newly created local client
@@ -49,31 +40,14 @@ let localClientSweep: LocalClientSweep | null = null;
 let sweeping = false;
 const clientsByWindowId = new Map<string, HostClient>();
 
-function resolveBundledCatalogPath(): string | null {
-  // Matches agent-entry.ts (dist/agent, dist/main → package root/assets) and
-  // adds the src/ layout used by the test runner.
-  const candidates = [
-    path.join(__dirname, '..', '..', 'assets'),
-    path.join(__dirname, '..', '..', '..', 'assets'),
-  ];
-  for (const root of candidates) {
-    const catalogPath = path.join(root, 'providers', 'catalog.json');
-    try {
-      if (fs.existsSync(catalogPath)) return catalogPath;
-    } catch {
-      // fall through to the next candidate
-    }
-  }
-  return null;
-}
-
 /**
  * Best-effort lazy composition of the provider runtime, used only when the
  * shell has not already initialized it (unit tests, degraded startup).
  *
- * Every provider module is loaded dynamically: a caller that replaces the
- * config/provider layers with partial mocks must still get a working host, so
- * a module-level import that dereferences those mocks would be fatal here.
+ * The shared composition helper is loaded dynamically (like the config loader
+ * below it): a caller that replaces the config/provider layers with partial
+ * mocks must still get a working host, so a module-level import that
+ * dereferences those mocks would be fatal here.
  */
 let providerRuntimeEnsure: Promise<void> | null = null;
 
@@ -83,20 +57,12 @@ let composeProviderRuntime: () => Promise<void> = defaultComposeProviderRuntime;
 async function defaultComposeProviderRuntime(): Promise<void> {
   const [
     { ensureHomeConfig },
-    { ProviderCatalogStore },
-    { CredentialVault },
-    { ConnectionStore },
-    { ProviderStatusService },
-    { initializeProviderRuntime },
-    { isProviderRuntimeContextInitialized, ...runtimeContext },
+    { isProviderRuntimeContextInitialized },
+    providerComposition,
   ] = await Promise.all([
     import('../config/loader'),
-    import('../providers/catalog/store'),
-    import('../providers/credentials/vault'),
-    import('../providers/connection-store'),
-    import('../providers/status/service'),
-    import('../providers'),
     import('../providers/runtime-context'),
+    import('../providers/compose-runtime'),
   ]);
   try {
     ensureHomeConfig();
@@ -104,27 +70,13 @@ async function defaultComposeProviderRuntime(): Promise<void> {
     console.warn('[local-host] home config unavailable (non-fatal):', error);
   }
   if (isProviderRuntimeContextInitialized()) return;
-  const catalogPath = resolveBundledCatalogPath();
-  if (catalogPath == null) {
+  if (providerComposition.resolveBundledCatalogRoot() == null) {
     console.warn('[local-host] bundled provider catalog not found; provider methods are unavailable');
     return;
   }
-  const catalog = new ProviderCatalogStore({
-    bundledCatalogPath: catalogPath,
-    appVersion: EMBEDDED_HOST_VERSION,
-    keyring: RELEASE_CATALOG_KEYRING,
-  });
-  catalog.load();
-  runtimeContext.setProviderCatalogStore(catalog);
-  // Electron vault adapter (safeStorage); the headless daemon swaps in the
-  // plain-Node adapter instead.
-  const vault = new CredentialVault();
-  runtimeContext.setProviderCredentialVault(vault);
-  const status = new ProviderStatusService();
-  runtimeContext.setProviderStatusService(status);
-  const connections = new ConnectionStore();
-  runtimeContext.setProviderConnectionStore(connections);
-  initializeProviderRuntime({ catalog, vault, connections, status });
+  // Same shared composition as the shell and the daemon (fix #15): Electron
+  // vault adapter, no status scheduler (the shell owns the live one).
+  providerComposition.composeProviderRuntime({ appVersion: EMBEDDED_HOST_VERSION });
 }
 
 function ensureProviderRuntime(): Promise<void> {

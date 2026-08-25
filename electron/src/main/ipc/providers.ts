@@ -16,6 +16,9 @@ import { z } from 'zod';
 import { IPC_CHANNELS } from '../../shared/types/ipc';
 import type { ProviderConnection } from '../../shared/types/provider';
 import type { ProviderMutationResult } from '../../shared/types/ipc';
+import { HOST_ERROR_CODES, HostProtocolError } from '../../shared/host/protocol';
+import { MACHINE_ID_LOCAL } from '../../shared/types/machine';
+import { activeMachineFor } from '../host/routing';
 import { hostRequest } from './host-request';
 import { createEnvironmentCredentialReference } from '../providers/credentials/vault';
 import {
@@ -161,14 +164,34 @@ const submitApiKeySchema = z.object({
 
 // ── Registration ────────────────────────────────────────────────────────────
 
+/**
+ * Vault writes stay local-only in v1 (plan routing matrix): a window driving a
+ * remote machine must never mutate THIS machine's connection store or vault —
+ * the connection would land on the wrong machine and never appear in the
+ * visible list. The rejection is the same typed UNSUPPORTED_ON_HOST error a
+ * remote host answers capability-gated methods with, so the renderer shows one
+ * consistent message wherever the request came from.
+ */
+export function assertLocalMachineForVaultWrite(windowId: string, intent: string): void {
+  if (activeMachineFor(windowId) !== MACHINE_ID_LOCAL) {
+    throw new HostProtocolError(
+      HOST_ERROR_CODES.UNSUPPORTED_ON_HOST,
+      `providers:${intent} is not supported while this window drives a remote machine — ` +
+        'provider connections and credentials are stored on the machine you add them from. ' +
+        'Switch back to the local machine to manage them.',
+    );
+  }
+}
+
 export function registerProviderIPC(): void {
   ipcMain.handle(IPC_CHANNELS.PROVIDERS_LIST, async (event) => {
     return hostRequest(String(event.sender.id), IPC_CHANNELS.PROVIDERS_LIST);
   });
 
-  ipcMain.handle(IPC_CHANNELS.PROVIDERS_CREATE, async (_event, payload: unknown) => {
+  ipcMain.handle(IPC_CHANNELS.PROVIDERS_CREATE, async (event, payload: unknown) => {
     const parsed = createConnectionSchema.safeParse(payload);
     if (!parsed.success) throw new Error('Invalid providers:create payload');
+    assertLocalMachineForVaultWrite(String(event.sender.id), 'create');
     const current = services();
     const credential = parsed.data.authMethod === 'environment'
       ? createEnvironmentCredentialReference(parsed.data.environmentVariable!)
@@ -208,9 +231,10 @@ export function registerProviderIPC(): void {
     });
   });
 
-  ipcMain.handle(IPC_CHANNELS.PROVIDERS_UPDATE, async (_event, payload: unknown) => {
+  ipcMain.handle(IPC_CHANNELS.PROVIDERS_UPDATE, async (event, payload: unknown) => {
     const parsed = updateConnectionSchema.safeParse(payload);
     if (!parsed.success) throw new Error('Invalid providers:update payload');
+    assertLocalMachineForVaultWrite(String(event.sender.id), 'update');
     return withConnectionMutationLock(parsed.data.connectionId, async () => {
       const current = services();
       const existing = await requireConnection(parsed.data.connectionId);
@@ -279,9 +303,10 @@ export function registerProviderIPC(): void {
     });
   });
 
-  ipcMain.handle(IPC_CHANNELS.PROVIDERS_SUBMIT_API_KEY, async (_event, payload: unknown) => {
+  ipcMain.handle(IPC_CHANNELS.PROVIDERS_SUBMIT_API_KEY, async (event, payload: unknown) => {
     const parsed = submitApiKeySchema.safeParse(payload);
     if (!parsed.success) throw new Error('Invalid providers:submit_api_key payload');
+    assertLocalMachineForVaultWrite(String(event.sender.id), 'submit_api_key');
     return withConnectionMutationLock(parsed.data.connectionId, async () => {
       const current = services();
       const connection = await requireConnection(parsed.data.connectionId);

@@ -34,6 +34,7 @@ import {
   requireStaticConnectionSupport,
   services,
 } from '../providers/views';
+import { assertLocalMachineForVaultWrite } from './providers';
 
 const draftDiscoverySchema = z.object({
   providerId: z.string().trim().min(1),
@@ -164,6 +165,10 @@ export function registerProviderModelsIPC(): void {
   ipcMain.handle(IPC_CHANNELS.PROVIDERS_DISCOVER_DRAFT_MODELS, async (_event, payload: unknown) => {
     const parsed = draftDiscoverySchema.safeParse(payload);
     if (!parsed.success) throw new Error('Invalid providers:discover_draft_models payload');
+    // Draft discovery is a vault-write-class intent (local-only in v1): the
+    // credential it validates and any connection it previews must never be
+    // resolved against this machine's drivers/store from a remote-active window.
+    assertLocalMachineForVaultWrite(String(_event.sender.id), 'discover_draft_models');
     return discoverDraftModels(parsed.data);
   });
 

@@ -564,7 +564,10 @@ describe('Provider architecture invariants (U9)', () => {
   }
 
   it('has no shipping default provider or alias-derived adapter fallback', () => {
-    const config = read('main', 'config', 'schema.ts');
+    // The zod literals moved to the shared config schema when the host
+    // protocol began validating config payloads against it (waves 1-2);
+    // main/config/schema.ts is a re-export facade.
+    const config = read('shared', 'types', 'config-schema.ts');
     const runtime = read('main', 'providers', 'index.ts');
     const toolSources = [
       read('main', 'tools', 'index.ts'),

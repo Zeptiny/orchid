@@ -2,15 +2,14 @@
  * AST IPC handlers — ast:status, ast:index, ast:index_state, ast:progress.
  *
  * Full indexes run in a worker thread; progress is broadcast to all windows so
- * late UI subscribers (tab switches / remounts) keep seeing updates.
+ * late UI subscribers (tab switches / remounts) keep seeing updates. Every
+ * read is host-routed (#14): the binding resolves the caller client's bound
+ * project host-side, so remote-active windows see the remote machine's index
+ * state instead of the local store.
  */
 import { ipcMain } from 'electron';
 import { IPC_CHANNELS } from '../../shared/types/ipc';
 import { hostRequest } from './host-request';
-import {
-  getIndexState,
-} from '../ast/indexer';
-import { resolveBoundProjectPath } from './session';
 import { astIndexSchema } from './payload-schemas';
 
 // ── IPC registration ─────────────────────────────────────────────────────────
@@ -23,8 +22,7 @@ export function registerASTIPC(): void {
 
   // ast:index_state — in-flight run snapshot for remounting UIs
   ipcMain.handle(IPC_CHANNELS.AST_INDEX_STATE, async (event) => {
-    const projectPath = resolveBoundProjectPath(String(event.sender.id));
-    return getIndexState(projectPath ?? undefined);
+    return hostRequest(String(event.sender.id), IPC_CHANNELS.AST_INDEX_STATE);
   });
 
   // ast:index — trigger AST indexing in a worker; stream progress to all windows

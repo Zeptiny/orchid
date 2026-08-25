@@ -420,3 +420,36 @@ export const configSaveProjectSchema = z.object({
 
 /** Project-scoped config:read payload — a bare non-empty `projectDir`. */
 export const configReadProjectSchema = z.string().min(1);
+
+/**
+ * `config:save_permission_scope` payload (hoisted for the host protocol —
+ * fix #6). The permission-rule update map, keyed by tool name; a `null` value
+ * deletes the rule. The host re-resolves `expectedProjectDir` against its own
+ * session/workspace state — the Electron-side local-resolution step never
+ * crosses the wire.
+ */
+const permissionUpdatesSchema = z.record(z.string(), permissionRuleSchema.nullable())
+  .superRefine((updates, ctx) => {
+    for (const key of Object.keys(updates)) {
+      if (key === '__proto__' || key === 'constructor' || key === 'prototype') {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `Unsafe permission key: ${key}`,
+          path: [key],
+        });
+      }
+    }
+  });
+
+export const permissionConfigScopeSaveSchema = z.discriminatedUnion('scope', [
+  z.object({
+    scope: z.literal('global'),
+    updates: permissionUpdatesSchema,
+    expectedProjectDir: z.never().optional(),
+  }).strict(),
+  z.object({
+    scope: z.literal('project'),
+    updates: permissionUpdatesSchema,
+    expectedProjectDir: z.string().min(1),
+  }).strict(),
+]);

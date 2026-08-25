@@ -179,7 +179,16 @@ const METHOD_FIXTURES: Record<string, { params: unknown; result: unknown }> = {
   },
   'host.pending_state': {
     params: { sessionId: SESSION_ID },
-    result: { approvals: [approvalRequested], questions: [askedEvent] },
+    result: {
+      approvals: [approvalRequested],
+      questions: [askedEvent],
+      // #19: the reconnect catch-up's session scoping rides along so resync
+      // never needs a full chat.snapshot round-trip.
+      activeSession: {
+        sessionId: SESSION_ID,
+        live: { state: 'streaming', startedAt: 1721875200000 },
+      },
+    },
   },
   'chat.send': {
     params: { message: 'hello' },
@@ -267,6 +276,28 @@ const METHOD_FIXTURES: Record<string, { params: unknown; result: unknown }> = {
   'session.set_service_tier': {
     params: { tier: 'priority' },
     result: { status: 'ok' },
+  },
+  'session.get_reasoning_config': {
+    params: { selection: { connectionId: CONNECTION_ID, modelId: 'o3' } },
+    result: {
+      levels: ['low', 'medium', 'high'],
+      default: 'medium',
+      override: 'high',
+      supportsReasoning: true,
+    },
+  },
+  'session.get_service_tier_config': {
+    params: {},
+    result: {
+      mechanism: 'request-parameter',
+      tiers: [
+        { id: 'flex', displayName: 'Flex', description: null },
+        { id: 'fast', displayName: null, description: null },
+      ],
+      selected: 'fast',
+      override: null,
+      effective: 'fast',
+    },
   },
   'session.working_set_get': { params: undefined, result: workingSet },
   'session.working_set_open_or_focus': {
@@ -442,6 +473,10 @@ const METHOD_FIXTURES: Record<string, { params: unknown; result: unknown }> = {
     },
   },
   'rag.clear': { params: undefined, result: { status: 'cleared' } },
+  'rag.index_state': {
+    params: undefined,
+    result: { indexing: true, progress: { phase: 'indexing', done: 1, total: 4 } },
+  },
   'ast.status': {
     params: undefined,
     result: {
@@ -464,6 +499,10 @@ const METHOD_FIXTURES: Record<string, { params: unknown; result: unknown }> = {
       durationSeconds: 0.1,
     },
   },
+  'ast.index_state': {
+    params: undefined,
+    result: { indexing: false, progress: null },
+  },
   'tool.execute': {
     params: { name: 'read', args: { path: '/tmp/orchid-host-protocol-project/README.md' } },
     result: toolResult,
@@ -478,6 +517,14 @@ const METHOD_FIXTURES: Record<string, { params: unknown; result: unknown }> = {
   'config.save_project': {
     params: { projectDir: PROJECT_DIR, updates: {} },
     result: null,
+  },
+  'config.permission_scopes': {
+    params: undefined,
+    result: { global: { grep: 'ask' }, project: {}, projectDir: null },
+  },
+  'config.save_permission_scope': {
+    params: { scope: 'global', updates: { grep: 'allow' } },
+    result: { status: 'saved' },
   },
   'providers.list': { params: undefined, result: providerOverview },
   'providers.validate': {
@@ -649,7 +696,7 @@ const EVENT_FIXTURES: Record<string, unknown> = {
 
 describe('HOST_METHODS registry', () => {
   it('registers the full host-routed method surface', () => {
-    expect(Object.keys(HOST_METHODS)).toHaveLength(79);
+    expect(Object.keys(HOST_METHODS)).toHaveLength(85);
     expect(HOST_METHODS[HOST_HELLO_METHOD]).toBeDefined();
     expect(HOST_METHODS['host.pending_state']).toBeDefined();
     for (const method of Object.keys(HOST_METHODS)) {

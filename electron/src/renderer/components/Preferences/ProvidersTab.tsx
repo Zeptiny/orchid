@@ -2,6 +2,7 @@
 import { useState } from 'react';
 import type { ProviderConnectionView } from '../../../shared/types/ipc';
 import { useProviders } from '../../hooks/useProviders';
+import { useMachines } from '../../hooks/useMachines';
 import { emitOrchidEvent } from '../../utils/events';
 import type { Notify } from '../../utils/notify';
 import {
@@ -15,6 +16,7 @@ import { StateMessage } from '../ui/StateMessage';
 
 export function ProvidersTab({ onNotify }: { readonly onNotify: Notify }) {
   const providers = useProviders();
+  const machines = useMachines();
   const [wizardOpen, setWizardOpen] = useState(false);
   const [connectionToEdit, setConnectionToEdit] = useState<ProviderConnectionView | null>(null);
   const completeConnection = async (result: ProviderConnectionCompletion) => {
@@ -64,18 +66,25 @@ export function ProvidersTab({ onNotify }: { readonly onNotify: Notify }) {
         </Alert>
       )}
 
+      {!machines.isActiveMachineLocal && (
+        <Alert tone="info" icon="globe">
+          Provider connections and credentials live on the machine they were added to.
+          Switch back to the local machine to add or edit them here.
+        </Alert>
+      )}
+
       <ConnectionList
         connections={overview.connections}
         definitions={overview.definitions}
         statuses={overview.statuses}
-        onAddConnection={() => {
+        onAddConnection={machines.isActiveMachineLocal ? () => {
           setConnectionToEdit(null);
           setWizardOpen(true);
-        }}
-        onEditConnection={(connection) => {
+        } : undefined}
+        onEditConnection={machines.isActiveMachineLocal ? (connection) => {
           setConnectionToEdit(connection);
           setWizardOpen(true);
-        }}
+        } : undefined}
         onValidate={providers.validateConnection}
         onDisable={providers.disableConnection}
         onEnable={providers.enableConnection}

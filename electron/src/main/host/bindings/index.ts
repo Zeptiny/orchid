@@ -33,7 +33,7 @@ export function buildHostBindings(surface: HostServerSurface): ReadonlyMap<strin
     ...buildSessionBindings(surface),
     ...buildWorkingSetBindings(surface),
     ...buildBgCommandBindings(),
-    ...buildPermissionBindings(),
+    ...buildPermissionBindings(surface),
     ...buildProjectBindings(surface),
     ...buildDefinitionBindings(surface),
     ...buildIndexBindings(surface),

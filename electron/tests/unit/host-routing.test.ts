@@ -102,18 +102,25 @@ describe('routing table invariants', () => {
     }
   });
 
-  it('keeps config-scope and index-state reads that have no host method local', () => {
+  it('keeps config-scope reads that have no host method local', () => {
     const localByDesign = [
-      IPC_CHANNELS.CONFIG_PERMISSION_SCOPES,
-      IPC_CHANNELS.CONFIG_SAVE_PERMISSION_SCOPE,
       IPC_CHANNELS.CONFIG_LIST_PERSONALITIES,
-      IPC_CHANNELS.SESSION_GET_REASONING_CONFIG,
-      IPC_CHANNELS.SESSION_GET_SERVICE_TIER_CONFIG,
-      IPC_CHANNELS.RAG_INDEX_STATE,
-      IPC_CHANNELS.AST_INDEX_STATE,
     ];
     for (const channel of localByDesign) {
       expect(isHostRoutedChannel(channel)).toBe(false);
+    }
+  });
+
+  it('routes the reasoning/tier picker and permission-scope config channels through the host (#4/#6)', () => {
+    const routed = [
+      IPC_CHANNELS.SESSION_GET_REASONING_CONFIG,
+      IPC_CHANNELS.SESSION_GET_SERVICE_TIER_CONFIG,
+      IPC_CHANNELS.SESSION_SET_SERVICE_TIER,
+      IPC_CHANNELS.CONFIG_PERMISSION_SCOPES,
+      IPC_CHANNELS.CONFIG_SAVE_PERMISSION_SCOPE,
+    ];
+    for (const channel of routed) {
+      expect(isHostRoutedChannel(channel)).toBe(true);
     }
   });
 
@@ -126,14 +133,19 @@ describe('routing table invariants', () => {
       IPC_CHANNELS.SESSION_OPEN,
       IPC_CHANNELS.SESSION_WORKING_SET_GET,
       IPC_CHANNELS.SESSION_ACTIVITY_LIST,
+      IPC_CHANNELS.SESSION_GET_REASONING_CONFIG,
+      IPC_CHANNELS.SESSION_GET_SERVICE_TIER_CONFIG,
       IPC_CHANNELS.PROJECT_TRUST_SET,
       IPC_CHANNELS.PERMISSION_SNAPSHOT,
       IPC_CHANNELS.ASK_QUESTION_ANSWER,
       IPC_CHANNELS.TOOL_EXECUTE,
       IPC_CHANNELS.MCP_STATUS,
       IPC_CHANNELS.RAG_INDEX,
+      IPC_CHANNELS.RAG_INDEX_STATE,
       IPC_CHANNELS.AST_STATUS,
+      IPC_CHANNELS.AST_INDEX_STATE,
       IPC_CHANNELS.CONFIG_GET,
+      IPC_CHANNELS.CONFIG_PERMISSION_SCOPES,
       IPC_CHANNELS.PROVIDERS_LIST,
       IPC_CHANNELS.PROVIDERS_MODEL_LIST,
     ];

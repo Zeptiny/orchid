@@ -168,6 +168,8 @@ const mocks = vi.hoisted(() => {
     teardownOrder: [] as string[],
     makeFakeTransport,
     MachineConnectionError,
+    localClientListener: null as ((client: unknown, clientId: string) => void) | null,
+    localClientSweep: null as (() => void) | null,
     manager: () => {
       manager ??= new FakeMachineConnectionManager();
       return manager;
@@ -208,10 +210,18 @@ vi.mock('../../src/main/config/loader', async (importOriginal) => {
   };
 });
 
-// Routing's local-machine branch must not start the embedded host here.
+// Routing's local-machine branch must not start the embedded host here. The
+// listener/sweep seams are captured so the window-broadcast wiring (#13) can
+// be exercised without a real HostClient over the embedded host.
 vi.mock('../../src/main/host/local-host', () => ({
   getLocalHostClient: (windowId: string) => ({ clientId: windowId, local: true }),
   closeLocalHostClient: vi.fn(),
+  setLocalClientListener: (listener: unknown) => {
+    mocks.localClientListener = listener as ((client: unknown, clientId: string) => void) | null;
+  },
+  setLocalClientSweep: (sweep: unknown) => {
+    mocks.localClientSweep = sweep as (() => void) | null;
+  },
 }));
 
 // The resync seam is spied, not faked away from its contract: the connect flow
@@ -270,7 +280,10 @@ import {
   activeMachineFor,
   clearActiveMachine,
   registeredMachines,
+  setActiveMachine,
 } from '../../src/main/host/routing';
+import { wireLocalHostWindowBroadcast, unwireLocalHostWindowBroadcast } from '../../src/main/ipc/host-broadcast';
+import { MACHINE_ID_LOCAL } from '../../src/shared/types/machine';
 import { _resetConfigSaveChainForTests } from '../../src/main/config/write-lock';
 
 const T0 = '2026-08-23T00:00:00.000Z';
@@ -690,5 +703,73 @@ describe('unregisterMachinesIPC (quit teardown)', () => {
     expect(mocks.teardownOrder).toEqual(['disconnectAll', 'detachAll']);
     expect(manager().getStatus('build-1').state).toBe('offline');
     expect(registeredMachines()).not.toContain('build-1');
+  });
+});
+
+// ── Local host event broadcast gating (#13) ──────────────────────────────────
+
+describe('local host window broadcast gating (#13)', () => {
+  /** Minimal HostClient stub whose subscriptions the test can fire by name. */
+  function stubHostClient(): {
+    client: { subscribe: (ev: string, handler: (params: unknown) => void) => () => void };
+    handlers: Map<string, (params: unknown) => void>;
+  } {
+    const handlers = new Map<string, (params: unknown) => void>();
+    return {
+      handlers,
+      client: {
+        subscribe: (ev, handler) => {
+          handlers.set(ev, handler);
+          return () => handlers.delete(ev);
+        },
+      },
+    };
+  }
+
+  beforeEach(() => {
+    addWindow(8);
+    wireLocalHostWindowBroadcast();
+  });
+
+  afterEach(() => {
+    unwireLocalHostWindowBroadcast();
+    clearActiveMachine('7');
+    clearActiveMachine('8');
+  });
+
+  it('delivers local host events only to local-active windows — never to one switched to a remote', () => {
+    expect(mocks.localClientListener).toBeTypeOf('function');
+    const attach = mocks.localClientListener!;
+    const local = stubHostClient();
+    const switched = stubHostClient();
+    attach(local.client as never, '8');
+    attach(switched.client as never, '7');
+    expect(local.handlers.size).toBeGreaterThan(0);
+    expect(switched.handlers.size).toBe(local.handlers.size);
+
+    setActiveMachine('7', 'build-1');
+    const payload = { activity: { sessionId: '11111111-1111-4111-8111-111111111111', state: 'working' } };
+    const window8 = mocks.windows.find((win) => win.webContents.id === 8)!;
+    const window7 = mocks.windows.find((win) => win.webContents.id === 7)!;
+
+    // The remote-active window's per-window local client keeps its
+    // subscription, but the broadcast must not cross machines.
+    switched.handlers.get(IPC_CHANNELS.SESSION_ACTIVITY_CHANGED)!(payload);
+    expect(window7.webContents.send).not.toHaveBeenCalled();
+
+    // A local-active window still receives the same event.
+    local.handlers.get(IPC_CHANNELS.SESSION_ACTIVITY_CHANGED)!(payload);
+    expect(window8.webContents.send).toHaveBeenCalledWith(
+      IPC_CHANNELS.SESSION_ACTIVITY_CHANGED,
+      payload,
+    );
+
+    // Switching back resumes delivery for that window (suspension, not teardown).
+    setActiveMachine('7', MACHINE_ID_LOCAL);
+    switched.handlers.get(IPC_CHANNELS.SESSION_WORKING_SET_CHANGED)!(payload);
+    expect(window7.webContents.send).toHaveBeenCalledWith(
+      IPC_CHANNELS.SESSION_WORKING_SET_CHANGED,
+      payload,
+    );
   });
 });

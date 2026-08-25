@@ -3,14 +3,14 @@
  * session:delete, session:rename, workspace binding (get/pick/set/change_cwd).
  *
  * U5: machine-scoped handlers forward over the host protocol (`host/routing.ts`)
- * so the local machine speaks the same surface as a remote host. The native
- * folder dialog and the reasoning/tier config reads stay local, as do the
- * re-exports other IPC modules use.
+ * so the local machine speaks the same surface as a remote host. Fix #4 moved
+ * the reasoning/tier config reads and writes onto that surface too (a window
+ * driving a remote machine must read and write the remote's state). The
+ * native folder dialog stays local, as do the re-exports other IPC modules use.
  */
 import { BrowserWindow, dialog, ipcMain } from 'electron';
 import { IPC_CHANNELS, type SessionOpenResult } from '../../shared/types/ipc';
 import { flattenSessionMessages, sessionForRenderer } from '../../shared/types/session';
-import type { ModelSelection } from '../../shared/types/provider';
 import {
   getSessionManager,
   resolveBoundProjectPath,
@@ -18,14 +18,10 @@ import {
 } from '../session/singleton';
 import {
   clearDraftReasoningOverrides,
-  getDraftReasoningOverride,
 } from '../session/draft-reasoning';
 import {
   clearDraftTierOverrides,
-  getDraftTierOverride,
-  setDraftTierOverride,
 } from '../session/draft-tier';
-import { getConfig } from '../config/loader';
 import { hostRequest } from './host-request';
 import {
   bindProjectDirectory,
@@ -36,9 +32,6 @@ import {
   setDraftCwd,
   type WorkspaceInfo,
 } from '../project/workspace';
-import { getProjectRuntimeRegistry } from '../project/runtime';
-import { listConnectionModelRows } from '../providers/facets/discovery';
-import { groupTierVariantRows } from '../providers/facets/tiers';
 import {
   sessionChangeCwdSchema,
   sessionChangeModelSchema,
@@ -71,23 +64,6 @@ export {
   reconcileClientWatcher as reconcileWindowWatcher,
   revokeProjectTrustForDir,
 } from '../host/session-ops';
-
-/**
- * Model selection to reason about in draft mode (no active session):
- * bound project default_model → user default_model → null.
- */
-function resolveDraftModelSelection(windowId: string): ModelSelection | null {
-  try {
-    const info = resolveWindowWorkspace(windowId);
-    if (info.cwd) {
-      const projectDefault = getProjectRuntimeRegistry().get(info.cwd).config.default_model;
-      if (projectDefault) return projectDefault;
-    }
-  } catch {
-    // Workspace/runtime unresolvable — fall through to the user default.
-  }
-  return getConfig().default_model ?? null;
-}
 
 // ── IPC registration ─────────────────────────────────────────────────────────
 
@@ -251,44 +227,9 @@ export function registerSessionIPC(): void {
     if (!parsed.success) {
       throw new Error(`Invalid session:get_reasoning_config payload: ${parsed.error.message}`);
     }
-    const draftSelection = parsed.data?.selection ?? null;
-    const windowId = String(event.sender.id);
-    const manager = getSessionManager();
-    const active = manager.getActive(windowId);
-    // Draft mode: prefer the renderer's current picker selection so switching
-    // models in a draft (no session yet) immediately updates reasoning options.
-    // Falls back to the project/default model for backward compat when no
-    // selection is supplied.
-    const selection = active?.selection ?? draftSelection ?? resolveDraftModelSelection(windowId);
-    const override = active
-      ? active.reasoningEffortOverride
-      : getDraftReasoningOverride(windowId);
-
-    if (!selection) {
-      return { levels: [], default: null, override, supportsReasoning: false };
-    }
-
-    const { getProviderConnectionStore, getProviderCatalogStore } = await import('../providers/runtime-context.js');
-    const { resolveModelSelection } = await import('../providers/resolver.js');
-
-    const connections = await getProviderConnectionStore().list();
-    const definitions = getProviderCatalogStore().getProviderDefinitions();
-    const resolution = resolveModelSelection(selection, connections, definitions);
-
-    if (resolution.kind !== 'resolved') {
-      return { levels: [], default: null, override, supportsReasoning: false };
-    }
-
-    const { connection, model } = resolution;
-    const supportsReasoning = model.capabilities?.reasoning ?? false;
-    const modelConfig = connection.reasoningConfig?.[selection.modelId];
-
-    return {
-      levels: modelConfig?.levels ?? [],
-      default: modelConfig?.default ?? null,
-      override,
-      supportsReasoning,
-    };
+    // Fix #4: the active machine's host resolves its own session + provider
+    // stores, so a remote-active window's picker never reads local state.
+    return hostRequest(String(event.sender.id), IPC_CHANNELS.SESSION_GET_REASONING_CONFIG, parsed.data);
   });
 
   ipcMain.handle(IPC_CHANNELS.SESSION_SET_SERVICE_TIER, async (event, payload: unknown) => {
@@ -297,17 +238,7 @@ export function registerSessionIPC(): void {
       throw new Error(`Invalid session:set_service_tier payload: ${parsed.error.message}`);
     }
 
-    const windowId = String(event.sender.id);
-    const manager = getSessionManager();
-    const active = manager.getActive(windowId);
-    if (!active) {
-      // Draft mode: park the override until a session exists.
-      setDraftTierOverride(windowId, parsed.data.tier);
-      return { status: 'ok' };
-    }
-
-    manager.setTierOverride(active.id, parsed.data.tier);
-    return { status: 'ok' };
+    return hostRequest(String(event.sender.id), IPC_CHANNELS.SESSION_SET_SERVICE_TIER, parsed.data);
   });
 
   ipcMain.handle(IPC_CHANNELS.SESSION_GET_SERVICE_TIER_CONFIG, async (event, payload: unknown) => {
@@ -315,62 +246,12 @@ export function registerSessionIPC(): void {
     if (!parsed.success) {
       throw new Error(`Invalid session:get_service_tier_config payload: ${parsed.error.message}`);
     }
-    const draftSelection = parsed.data?.selection ?? null;
-    const empty = { mechanism: null, tiers: [], selected: null, override: null, effective: null };
-    const windowId = String(event.sender.id);
-    const manager = getSessionManager();
-    const active = manager.getActive(windowId);
-    const selection = active?.selection ?? draftSelection ?? resolveDraftModelSelection(windowId);
-    const override = active ? active.tierOverride : getDraftTierOverride(windowId);
 
-    if (!selection) return { ...empty, override };
-
-    const { getProviderConnectionStore, getProviderCatalogStore } = await import('../providers/runtime-context.js');
-    const { resolveModelSelection } = await import('../providers/resolver.js');
-    const { getProviderDriverRegistry } = await import('../providers/runtime-context.js');
-
-    const connections = await getProviderConnectionStore().list();
-    const definitions = getProviderCatalogStore().getProviderDefinitions();
-    const resolution = resolveModelSelection(selection, connections, definitions);
-    if (resolution.kind !== 'resolved') return { ...empty, override };
-
-    const driver = getProviderDriverRegistry().get(resolution.provider.id);
-    const mechanism = driver?.tierMechanism;
-    if (!mechanism) return { ...empty, override };
-
-    const selected = resolution.connection.tierSelections?.[selection.modelId] ?? null;
-    // Variant-mechanism tiers are offered only when the variant model id is
-    // actually present for the active model; selecting an absent variant would
-    // rewrite the request to a model id the provider does not serve (R20).
-    const variantTierIds = mechanism.kind === 'model-name-variants'
-      ? groupTierVariantRows(
-          listConnectionModelRows(resolution.connection, resolution.provider),
-          mechanism,
-        ).variantTiersByBase.get(resolution.model.id)
-      : undefined;
-    if (mechanism.kind === 'model-name-variants' && variantTierIds === undefined) {
-      return { ...empty, override };
-    }
-    const tiers = mechanism.tiers
-      .filter((tier) => variantTierIds === undefined || variantTierIds.includes(tier.id))
-      .map((tier) => {
-        const requiresStreaming = mechanism.kind === 'model-name-variants'
-          && (tier as { requiresStreaming?: boolean }).requiresStreaming === true;
-        return {
-          id: tier.id,
-          displayName: tier.displayName ?? null,
-          description: tier.description ?? null,
-          ...(requiresStreaming ? { requiresStreaming: true } : {}),
-        };
-      });
-    const effective = override ?? selected ?? null;
-    return {
-      mechanism: mechanism.kind,
-      tiers,
-      selected,
-      override,
-      effective,
-    };
+    return hostRequest(
+      String(event.sender.id),
+      IPC_CHANNELS.SESSION_GET_SERVICE_TIER_CONFIG,
+      parsed.data,
+    );
   });
 }
 

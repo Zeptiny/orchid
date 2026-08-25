@@ -9,13 +9,11 @@
  * tool allow-list now lives in shared/types/tool.ts.
  */
 import { z } from 'zod';
-import { modelSelectionSchema } from '../../shared/types/provider';
 import {
   machineCreateSchema,
   machineIdSchema,
   machineUpdateSchema,
 } from '../../shared/types/machine';
-import { permissionRuleSchema } from '../../shared/types/config-schema';
 
 // ── Chat / subagents / ask-question (hoisted to shared/types/ipc-schemas) ────
 
@@ -35,6 +33,8 @@ export {
   sessionChangeCwdSchema,
   sessionChangeModelSchema,
   sessionDeleteSchema,
+  sessionGetReasoningConfigSchema,
+  sessionGetServiceTierConfigSchema,
   sessionHistoryPageSchema,
   sessionLoadSchema,
   sessionOpenSchema,
@@ -56,35 +56,8 @@ export {
   configReadProjectSchema,
   configSaveProjectSchema,
   configSaveSchema,
+  permissionConfigScopeSaveSchema,
 } from '../../shared/types/config-schema';
-
-// ── Permissions ──────────────────────────────────────────────────────────────
-
-const permissionUpdatesSchema = z.record(z.string(), permissionRuleSchema.nullable())
-  .superRefine((updates, ctx) => {
-    for (const key of Object.keys(updates)) {
-      if (key === '__proto__' || key === 'constructor' || key === 'prototype') {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          message: `Unsafe permission key: ${key}`,
-          path: [key],
-        });
-      }
-    }
-  });
-
-export const permissionConfigScopeSaveSchema = z.discriminatedUnion('scope', [
-  z.object({
-    scope: z.literal('global'),
-    updates: permissionUpdatesSchema,
-    expectedProjectDir: z.never().optional(),
-  }).strict(),
-  z.object({
-    scope: z.literal('project'),
-    updates: permissionUpdatesSchema,
-    expectedProjectDir: z.string().min(1),
-  }).strict(),
-]);
 
 // ── Machines (local-only family; never host-routed) ──────────────────────────
 
@@ -113,13 +86,3 @@ export const machinesMachineIdSchema = z
     machineId: z.string().trim().min(1).max(64),
   })
   .strict();
-
-// ── Local-only session config reads ──────────────────────────────────────────
-
-export const sessionGetReasoningConfigSchema = z.object({
-  selection: modelSelectionSchema.nullable().optional(),
-}).strict().optional();
-
-export const sessionGetServiceTierConfigSchema = z.object({
-  selection: modelSelectionSchema.nullable().optional(),
-}).strict().optional();

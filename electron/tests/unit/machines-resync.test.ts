@@ -304,7 +304,7 @@ import {
   attachRemoteMachineClient,
   detachAllRemoteMachineClients,
 } from '../../src/main/machines/remote-clients';
-import { resyncRemoteMachine } from '../../src/main/machines/resync';
+import { resyncRemoteMachine, fetchRemoteResyncSnapshot } from '../../src/main/machines/resync';
 import { clearActiveMachine, setActiveMachine } from '../../src/main/host/routing';
 import type { HostClient } from '../../src/main/host/client';
 
@@ -583,5 +583,160 @@ describe('remote reconnect resync (U10)', () => {
     expect(sentToWindow).toEqual([]);
     clearActiveMachine(String(WINDOW_ID));
     setActiveMachine(String(WINDOW_ID), MACHINE.id);
+  });
+});
+
+// ── Stubbed-host catch-up: fetch shape + per-piece degradation (#19/#22) ─────
+
+describe('remote resync fetch (stubbed host client)', () => {
+  const S1 = '11111111-1111-4111-8111-111111111111';
+  const S2 = '22222222-2222-4222-8222-222222222222';
+
+  interface StubPiece {
+    readonly result?: unknown;
+    readonly reject?: Error;
+  }
+
+  /** HostClient stub answering a scripted method table; records every call. */
+  function stubClient(pieces: Record<string, StubPiece>) {
+    const request = vi.fn(async (method: string) => {
+      const piece = pieces[method];
+      if (piece?.reject) throw piece.reject;
+      if (piece && 'result' in piece) return piece.result;
+      throw new Error(`stub has no answer for '${method}'`);
+    });
+    return { request } as unknown as HostClient;
+  }
+
+  const approval = {
+    toolCallId: 'abcdefab-cdef-4cde-8cde-abcdefabcdef',
+    sessionId: S1,
+    toolName: 'write',
+    riskClass: 'mutation',
+    args: {},
+    cwd: '/tmp/project',
+  };
+  const question = {
+    sessionId: S1,
+    toolCallId: '01234567-89ab-4cde-8cde-0123456789ab',
+    questions: [{ type: 'single', title: 'Continue?', options: [{ label: 'Yes' }] }],
+  };
+
+  beforeEach(() => {
+    sentToWindow = [];
+    setActiveMachine(String(WINDOW_ID), MACHINE.id);
+  });
+
+  afterEach(() => {
+    clearActiveMachine(String(WINDOW_ID));
+  });
+
+  it('builds the catch-up from session.list + host.pending_state without any chat.snapshot (#19)', async () => {
+    const client = stubClient({
+      'session.list': { result: [{ id: S1 }, { id: S2 }] },
+      'host.pending_state': {
+        result: {
+          approvals: [approval],
+          questions: [question],
+          activeSession: { sessionId: S1, live: { state: 'streaming', startedAt: 1234 } },
+        },
+      },
+      'subagents.snapshot': { result: { records: [{ status: 'running' }, { status: 'completed' }] } },
+      'bgcmd.list': { result: [{ running: true }] },
+    });
+
+    const snapshot = await resyncRemoteMachine(MACHINE.id, client);
+
+    // The catch-up answers from the lightweight pieces only — no whole-history
+    // serialization over SSH.
+    const methods = (client.request as ReturnType<typeof vi.fn>).mock.calls.map(([m]) => m as string);
+    expect(methods).toEqual(
+      expect.arrayContaining(['session.list', 'host.pending_state', 'subagents.snapshot', 'bgcmd.list']),
+    );
+    expect(methods).not.toContain('chat.snapshot');
+
+    expect(snapshot.sessionIds).toEqual([S1, S2]);
+    expect(snapshot.activeSessionId).toBe(S1);
+    expect(snapshot.liveTurn).toEqual({ state: 'streaming', startedAt: 1234 });
+    expect(snapshot.liveSubagentCount).toBe(1);
+    expect(snapshot.hasBackgroundCommands).toBe(true);
+    expect(snapshot.approvals).toEqual([approval]);
+    expect(snapshot.questions).toEqual([question]);
+
+    // The broadcast still reaches the machine's window with the same payloads.
+    expect(sentToWindow).toEqual(
+      expect.arrayContaining([
+        { channel: IPC_CHANNELS.PERMISSION_APPROVAL_REQUESTED, payload: approval },
+        { channel: IPC_CHANNELS.ASK_QUESTION_ASKED, payload: question },
+        { channel: IPC_CHANNELS.BG_CMD_CHANGED, payload: { sessionId: S1 } },
+        { channel: IPC_CHANNELS.SESSION_SUBAGENTS_CHANGED, payload: undefined },
+      ]),
+    );
+  });
+
+  it('degrades to "no active session" when the host omits the pending-state activeSession slice (#19)', async () => {
+    const client = stubClient({
+      'session.list': { result: [{ id: S1 }] },
+      'host.pending_state': { result: { approvals: [], questions: [] } },
+    });
+
+    const snapshot = await fetchRemoteResyncSnapshot(client);
+    expect(snapshot.sessionIds).toEqual([S1]);
+    expect(snapshot.activeSessionId).toBeNull();
+    expect(snapshot.liveTurn).toBeNull();
+    expect(snapshot.liveSubagentCount).toBe(0);
+    expect(snapshot.hasBackgroundCommands).toBe(false);
+    // The session-scoped pieces are never requested without an active session.
+    const methods = (client.request as ReturnType<typeof vi.fn>).mock.calls.map(([m]) => m as string);
+    expect(methods).not.toContain('subagents.snapshot');
+    expect(methods).not.toContain('bgcmd.list');
+  });
+
+  it('one failing piece never kills the catch-up or the approvals re-broadcast (#22)', async () => {
+    const client = stubClient({
+      'session.list': { result: [{ id: S1 }] },
+      'host.pending_state': {
+        result: {
+          approvals: [approval],
+          questions: [],
+          activeSession: { sessionId: S1, live: null },
+        },
+      },
+      'subagents.snapshot': { reject: new Error('subagent store wedged') },
+      'bgcmd.list': { result: [{ running: true }] },
+    });
+
+    const snapshot = await resyncRemoteMachine(MACHINE.id, client);
+
+    // The failing piece degraded to its empty value…
+    expect(snapshot.liveSubagentCount).toBe(0);
+    // …while every other piece still populated…
+    expect(snapshot.sessionIds).toEqual([S1]);
+    expect(snapshot.activeSessionId).toBe(S1);
+    expect(snapshot.hasBackgroundCommands).toBe(true);
+    // …and the approvals re-broadcast still fired.
+    expect(sentToWindow).toContainEqual({
+      channel: IPC_CHANNELS.PERMISSION_APPROVAL_REQUESTED,
+      payload: approval,
+    });
+  });
+
+  it('a failing host.pending_state still resolves the catch-up with the session list (#22)', async () => {
+    const client = stubClient({
+      'session.list': { result: [{ id: S1 }, { id: S2 }] },
+      'host.pending_state': { reject: new Error('older agent without pending_state') },
+    });
+
+    const snapshot = await resyncRemoteMachine(MACHINE.id, client);
+    expect(snapshot.sessionIds).toEqual([S1, S2]);
+    expect(snapshot.activeSessionId).toBeNull();
+    expect(snapshot.approvals).toEqual([]);
+    expect(snapshot.questions).toEqual([]);
+    // No approval/question was broadcast — none could be fetched — and the
+    // resync still resolved instead of rejecting.
+    expect(sentToWindow.filter((entry) =>
+      entry.channel === IPC_CHANNELS.PERMISSION_APPROVAL_REQUESTED
+      || entry.channel === IPC_CHANNELS.ASK_QUESTION_ASKED,
+    )).toEqual([]);
   });
 });

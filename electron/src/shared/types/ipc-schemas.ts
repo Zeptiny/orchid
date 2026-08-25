@@ -675,6 +675,20 @@ export const sessionServiceTierConfigResultSchema = z.object({
   effective: z.string().nullable(),
 });
 
+/**
+ * Trim marker on a budgeted snapshot (#25): the server dropped the leading
+ * `trimFromIndex` durable messages to stay under the wire frame budget;
+ * `historyBefore` is the continuation cursor for `session.history_page`
+ * (null when the boundary cannot be located in a durable chain).
+ */
+export const snapshotTrimSchema = z.object({
+  trimFromIndex: z.number().int().nonnegative(),
+  historyBefore: z.object({
+    chainId: z.string().min(1),
+    beforeIndex: z.number().int().nonnegative(),
+  }).strict().nullable(),
+}).strict();
+
 /** Loose session snapshot: identity + array containers, not full Message graph. */
 export const chatSessionSnapshotSchema = z
   .object({
@@ -689,6 +703,8 @@ export const chatSessionSnapshotSchema = z
       })
       .passthrough()
       .nullable(),
+    /** Present only when the history was trimmed to fit the frame budget (#25). */
+    trim: snapshotTrimSchema.optional(),
   })
   .nullable();
 
@@ -963,6 +979,20 @@ export const sessionSetReasoningEffortSchema = z.object({
 export const sessionSetServiceTierSchema = z.object({
   tier: z.string().trim().min(1).max(128).nullable(),
 });
+
+/**
+ * `session:get_reasoning_config` request (hoisted for the host protocol —
+ * fix #4). The renderer sends `{}` or the picker's current draft selection;
+ * no sessionId — the host resolves the caller's active session itself.
+ */
+export const sessionGetReasoningConfigSchema = z.object({
+  selection: modelSelectionSchema.nullable().optional(),
+}).strict().optional();
+
+/** `session:get_service_tier_config` request — same shape as the reasoning read. */
+export const sessionGetServiceTierConfigSchema = z.object({
+  selection: modelSelectionSchema.nullable().optional(),
+}).strict().optional();
 
 // ── Project trust requests ───────────────────────────────────────────────────
 

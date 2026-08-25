@@ -9,10 +9,10 @@ import { resolveBoundProjectPath } from '../../session/singleton';
 import { getProjectTrustState } from '../../project/trust';
 import { getProjectRuntimeRegistry } from '../../project/runtime';
 import { getProjectMCPManager } from '../../mcp/project-registry';
-import { getStatus as getRagStatus, clearIndex, cancelIndex, indexProject, isIndexing as isRagIndexing } from '../../rag/indexer';
+import { getStatus as getRagStatus, clearIndex, cancelIndex, indexProject, isIndexing as isRagIndexing, getIndexState as getRagIndexState } from '../../rag/indexer';
 import { cancelProjectRefreshAsync } from '../../indexing/refresh-coordinator';
 import { getWorkspaceWatcherState } from '../../indexing/watcher';
-import { indexProject as indexAstProject, isIndexing as isAstIndexing } from '../../ast/indexer';
+import { indexProject as indexAstProject, isIndexing as isAstIndexing, getIndexState as getAstIndexState } from '../../ast/indexer';
 import { ASTStore } from '../../ast/store';
 import { withDisposable } from '../../utils/with-disposable';
 import type { HostBinding, HostBindingEntries, HostServerSurface } from './types';
@@ -94,6 +94,14 @@ export function buildIndexBindings(surface: HostServerSurface): HostBindingEntri
     return { status: 'cleared' };
   });
 
+  // In-flight run snapshot for remounting UIs (#14): host-side project
+  // resolution (the same source rag.status uses), so a remote-active window
+  // reads the remote machine's run state, never the local one.
+  bind('rag.index_state', (ctx) => {
+    const projectPath = resolveBoundProjectPath(ctx.clientId);
+    return getRagIndexState(projectPath ?? undefined);
+  });
+
   bind('ast.status', (ctx) => {
     const projectPath = resolveBoundProjectPath(ctx.clientId);
     if (projectPath == null || getProjectTrustState(projectPath) !== 'trusted') {
@@ -142,6 +150,12 @@ export function buildIndexBindings(surface: HostServerSurface): HostBindingEntri
       progressCallback: (progress) =>
         surface.emitToProject(projectPath, IPC_CHANNELS.AST_PROGRESS, progress),
     });
+  });
+
+  // `ast.index_state` — see the rag.index_state comment above (#14).
+  bind('ast.index_state', (ctx) => {
+    const projectPath = resolveBoundProjectPath(ctx.clientId);
+    return getAstIndexState(projectPath ?? undefined);
   });
 
   return entries;

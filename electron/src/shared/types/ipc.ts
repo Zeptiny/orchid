@@ -312,6 +312,21 @@ export interface ChatSnapshot {
   interrupted: boolean;
 }
 
+/**
+ * Trim marker on a snapshot whose history exceeded the wire frame budget
+ * (#25): leading durable messages were dropped and `historyBefore` feeds
+ * `session.history_page` for the next older page.
+ */
+export interface SnapshotTrim {
+  /** Number of leading durable messages dropped to fit the budget. */
+  trimFromIndex: number;
+  /**
+   * Continuation cursor satisfying `session.history_page` params; null when
+   * the boundary message is not part of a durable chain (live-only message).
+   */
+  historyBefore: { chainId: string; beforeIndex: number } | null;
+}
+
 /** Coherent persisted history plus the optional in-flight tail for one session. */
 export interface ChatSessionSnapshot {
   sessionId: string;
@@ -319,6 +334,8 @@ export interface ChatSessionSnapshot {
   live: ChatSnapshot | null;
   /** Error detail from the last FAILED chain, if any (for hydration restore). */
   lastChainError?: { detail: string; title?: string | null } | null;
+  /** Present only when the history was trimmed to fit the frame budget (#25). */
+  trim?: SnapshotTrim;
 }
 
 /**
@@ -338,6 +355,8 @@ export interface SessionOpenResult {
   workspace: WorkspaceInfo;
   /** Error detail from the last FAILED chain, if any (for hydration restore). */
   lastChainError?: { detail: string; title?: string | null } | null;
+  /** Present only when the history was trimmed to fit the frame budget (#25). */
+  trim?: SnapshotTrim;
 }
 
 export interface SubagentSnapshotRequest { sessionId: string; }

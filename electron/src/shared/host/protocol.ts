@@ -92,12 +92,16 @@ import {
   sessionDeleteResultSchema,
   sessionDeleteSchema,
   sessionDeletedEventSchema,
+  sessionGetReasoningConfigSchema,
+  sessionGetServiceTierConfigSchema,
   sessionHistoryPageResultSchema,
   sessionHistoryPageSchema,
   sessionLoadSchema,
   sessionOpenSchema,
+  sessionReasoningConfigResultSchema,
   sessionRenameSchema,
   sessionRenamedEventSchema,
+  sessionServiceTierConfigResultSchema,
   sessionSetReasoningEffortSchema,
   sessionSetServiceTierSchema,
   sessionSetWorkspaceSchema,
@@ -107,6 +111,7 @@ import {
   sharedPromptDeleteSchema,
   sharedPromptSaveSchema,
   skillSaveSchema,
+  snapshotTrimSchema,
   subagentDetailRequestSchema,
   subagentDetailResultSchema,
   subagentEventSchema,
@@ -124,6 +129,8 @@ import {
   configSaveProjectSchema,
   configSaveSchema,
   configSchema,
+  permissionConfigScopeSaveSchema,
+  permissionsConfigSchema,
 } from '../types/config-schema';
 
 /** Protocol revision. Peers must agree exactly (equal-version handshake). */
@@ -445,10 +452,23 @@ export const hostPendingStateParamsSchema = z.object({
  * scope (owner fields stripped) as the byte-identical event payloads a live
  * delivery produces, so a reconnecting client can re-broadcast them through
  * the same renderer paths without inventing new messages.
+ *
+ * `activeSession` is the reconnect catch-up's session scoping (#19): the
+ * caller client's active session plus live-turn presence, replacing the full
+ * `chat.snapshot` round-trip resync used to make (it serialized the entire
+ * message history just to read sessionId + a live flag). Optional — an older
+ * host omits it and resync degrades to "no active session".
  */
 export const hostPendingStateResultSchema = z.object({
   approvals: z.array(permissionApprovalRequestedEventSchema),
   questions: z.array(askQuestionAskedEventSchema),
+  activeSession: z.object({
+    sessionId: z.string().uuid().nullable(),
+    live: z.object({
+      state: z.enum(['idle', 'streaming', 'error']),
+      startedAt: z.number().nullable(),
+    }).strict().nullable(),
+  }).strict().optional(),
 }).strict();
 
 export type HostPendingStateParams = z.infer<typeof hostPendingStateParamsSchema>;
@@ -522,6 +542,9 @@ const chatSnapshotResultSchema = z.object({
  * `SessionOpenResult` (shared/types/ipc.ts). `messages` is loose
  * (`Message[]` has no exported schema; chatSessionSnapshotSchema treats the
  * same array as unknown) and `live` reuses the loose ChatSnapshot envelope.
+ * `trim` is the #25 frame-budget marker: optional so the binding can adopt
+ * host/chat/snapshot-trim.ts (same helper chat.snapshot uses) without a
+ * protocol revision — absent means "nothing was dropped".
  */
 const sessionOpenResultSchema = z.object({
   session: sessionResultSchema.nullable(),
@@ -532,6 +555,7 @@ const sessionOpenResultSchema = z.object({
     detail: z.string(),
     title: z.string().nullable().optional(),
   }).nullable().optional(),
+  trim: snapshotTrimSchema.nullish(),
 }).strict();
 
 /** `SessionActivity` (shared/types/ipc-boundary.ts). */
@@ -684,10 +708,38 @@ const astIndexResultSchema = z.object({
   durationSeconds: z.number().nonnegative(),
 }).strict();
 
+/**
+ * In-flight index-run snapshot (`getIndexState()` in rag/ast indexer): the
+ * busy/progress view a remounting Workspace Index panel polls. The host
+ * resolves the caller client's bound project itself, so a remote-active window
+ * reads the remote machine's run state instead of the local one (#14).
+ */
+const ragIndexStateResultSchema = z.object({
+  indexing: z.boolean(),
+  progress: ragIndexProgressSchema.nullable(),
+}).strict();
+
+/** `ast.index_state` twin of {@link ragIndexStateResultSchema}. */
+const astIndexStateResultSchema = z.object({
+  indexing: z.boolean(),
+  progress: astIndexProgressSchema.nullable(),
+}).strict();
+
 /** `ProjectConfigReadResult` (shared/types/ipc.ts). */
 const projectConfigReadResultSchema = z.object({
   projectDir: z.string().min(1),
   overrides: z.record(z.unknown()),
+}).strict();
+
+/**
+ * `PermissionConfigScopes` (shared/types/ipc.ts) — config:permission_scopes
+ * result. The host resolves the caller's selected project dir itself (fix #6)
+ * and serves its OWN home/project permission layers.
+ */
+const configPermissionScopesResultSchema = z.object({
+  global: permissionsConfigSchema,
+  project: permissionsConfigSchema,
+  projectDir: z.string().nullable(),
 }).strict();
 
 /** `ProviderModelPricingView` (shared/types/ipc.ts), composing facet schemas. */
@@ -935,6 +987,20 @@ export const HOST_METHODS = {
   'session.change_cwd': { params: sessionChangeCwdSchema, result: sessionResultSchema.nullable() },
   'session.set_reasoning_effort': { params: sessionSetReasoningEffortSchema, result: statusOkResultSchema },
   'session.set_service_tier': { params: sessionSetServiceTierSchema, result: statusOkResultSchema },
+  /**
+   * Reasoning/tier picker reads (fix #4): the host resolves the caller's
+   * active session + draft override and its OWN provider stores — the
+   * Electron shell must never answer these from local state while a window
+   * drives a remote machine. Results reuse the IPC boundary result schemas.
+   */
+  'session.get_reasoning_config': {
+    params: sessionGetReasoningConfigSchema,
+    result: sessionReasoningConfigResultSchema,
+  },
+  'session.get_service_tier_config': {
+    params: sessionGetServiceTierConfigSchema,
+    result: sessionServiceTierConfigResultSchema,
+  },
 
   'session.working_set_get': { params: noParams, result: workingSetSnapshotSchema },
   'session.working_set_open_or_focus': { params: workingSetIdParamsSchema, result: workingSetSnapshotSchema },
@@ -987,9 +1053,12 @@ export const HOST_METHODS = {
   'rag.status': { params: noParams, result: ragStatusResultSchema },
   'rag.index': { params: ragIndexSchema, result: ragIndexResultSchema },
   'rag.clear': { params: noParams, result: statusClearedResultSchema },
+  /** Host-resolved in-flight run snapshot (#14); no params — the host scopes by the caller's bound project. */
+  'rag.index_state': { params: noParams, result: ragIndexStateResultSchema },
 
   'ast.status': { params: noParams, result: astStatusResultSchema },
   'ast.index': { params: astIndexSchema, result: astIndexResultSchema },
+  'ast.index_state': { params: noParams, result: astIndexStateResultSchema },
 
   'tool.execute': { params: toolExecuteSchema, result: toolExecuteResultSchema },
 
@@ -998,6 +1067,20 @@ export const HOST_METHODS = {
   'config.get_home': { params: noParams, result: configSchema },
   'config.read_project': { params: configReadProjectSchema, result: projectConfigReadResultSchema },
   'config.save_project': { params: configSaveProjectSchema, result: voidResult },
+  /**
+   * Permission-scope read/write (fix #6): the host serves its OWN
+   * ~/.orchid + project .orchid.json permission layers, resolving the caller's
+   * selected project dir and authorizing `expectedProjectDir` server-side
+   * (the host is the machine whose enforcement reads these values).
+   */
+  'config.permission_scopes': {
+    params: noParams,
+    result: configPermissionScopesResultSchema,
+  },
+  'config.save_permission_scope': {
+    params: permissionConfigScopeSaveSchema,
+    result: statusSavedResultSchema,
+  },
 
   'providers.list': { params: noParams, result: providerOverviewResultSchema },
   'providers.validate': { params: providerConnectionIdRequestSchema, result: providerMutationResultSchema },

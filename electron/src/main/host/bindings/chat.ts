@@ -10,6 +10,7 @@ import { getProjectTrustState } from '../../project/trust';
 import { getProjectRuntimeRegistry } from '../../project/runtime';
 import { activeAgents } from '../chat/state';
 import { snapshotForAgent } from '../chat/snapshot';
+import { trimMessagesForFrame } from '../chat/snapshot-trim';
 import { startChatTurn } from '../chat/send';
 import { requestChatCancel } from '../chat/cancel';
 import { compactSessionNow } from '../chat/compaction';
@@ -43,11 +44,19 @@ export function buildChatBindings(): HostBindingEntries {
     if (!session) return null;
     const liveAgent = activeAgents.get(sessionId);
     const live = liveAgent && !liveAgent.finalized ? snapshotForAgent(liveAgent) : null;
+    // #25: cap the serialized history at a safe frame budget; a trimmed
+    // snapshot carries a continuation cursor the renderer feeds into
+    // session.history_page (same mechanism as the per-chain lazy views).
+    // session.open should apply the same trim to its messages — see
+    // host/chat/snapshot-trim.ts.
+    const rawMessages = liveAgent && live ? [...liveAgent.messages] : flattenSessionMessages(session);
+    const { messages, trim } = trimMessagesForFrame(rawMessages, session.chains);
     return {
       sessionId,
-      messages: liveAgent && live ? [...liveAgent.messages] : flattenSessionMessages(session),
+      messages,
       live,
       lastChainError: live ? null : lastChainError(session.chains),
+      ...(trim ? { trim } : {}),
     };
   });
   bind('chat.compact', (ctx, params: { sessionId?: string | null }) => {

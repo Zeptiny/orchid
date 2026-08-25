@@ -2,15 +2,14 @@
  * RAG IPC handlers — rag:status, rag:index, rag:clear, rag:index_state, rag:progress.
  *
  * Full indexes run in a worker thread; progress is broadcast to all windows so
- * late UI subscribers (tab switches / remounts) keep seeing updates.
+ * late UI subscribers (tab switches / remounts) keep seeing updates. Every
+ * read is host-routed (#14): the binding resolves the caller client's bound
+ * project host-side, so remote-active windows see the remote machine's index
+ * state instead of the local store.
  */
 import { ipcMain } from 'electron';
 import { IPC_CHANNELS } from '../../shared/types/ipc';
 import { hostRequest } from './host-request';
-import {
-  getIndexState,
-} from '../rag/indexer';
-import { resolveBoundProjectPath } from './session';
 import { ragIndexSchema } from './payload-schemas';
 
 // ── IPC registration ─────────────────────────────────────────────────────────
@@ -23,8 +22,7 @@ export function registerRAGIPC(): void {
 
   // rag:index_state — in-flight run snapshot for remounting UIs
   ipcMain.handle(IPC_CHANNELS.RAG_INDEX_STATE, async (event) => {
-    const projectPath = resolveBoundProjectPath(String(event.sender.id));
-    return getIndexState(projectPath ?? undefined);
+    return hostRequest(String(event.sender.id), IPC_CHANNELS.RAG_INDEX_STATE);
   });
 
   // rag:index — trigger RAG indexing in a worker; stream progress to all windows
