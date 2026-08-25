@@ -57,7 +57,9 @@ electron/
 │   │   │   ├── subagent-live-projection.ts # Live renderer projection of subagent streams
 │   │   │   ├── subagent-persistence.ts    # Persist subagent chains (terminal wave batching)
 │   │   │   ├── subagent-persistence-recovery.ts # Recover chains after crash/restart
+│   │   │   ├── subagent-lifecycle.ts      # Pending-waiter resolution (state-change vs flush)
 │   │   │   ├── persist-subagent-chains.ts # Persist subagent chain messages
+│   │   │   ├── next-request-stop.ts       # Per-session early-stop flags (next-request queue + compaction pauses)
 │   │   │   ├── wire-subagents.ts          # Wire subagent lifecycle into manager
 │   │   │   └── xstate/          # XState machines
 │   │   │       ├── agent-machine.ts      # Core agent loop (idle→streaming→toolExec→idle)
@@ -95,6 +97,7 @@ electron/
 │   │   │   ├── message-factories.ts    # Build AI SDK message objects
 │   │   │   ├── response-unwrap.ts      # Unwrap provider response shapes
 │   │   │   ├── reasoning-effort.ts     # Resolve per-turn reasoning effort (session/tier/connection)
+│   │   │   ├── reasoning-tokens.ts     # Shared reasoning-token estimation (apportioned when unreported)
 │   │   │   ├── tool-dispatch.ts # executeToolCall() — permission gate + timeout + output offloading
 │   │   │   ├── eager-tool-executor.ts # EagerToolExecutor — start tools as their input streams
 │   │   │   ├── tool-pool.ts     # Tool worker pool singleton (offloadable read-only tools)
@@ -118,16 +121,21 @@ electron/
 │   │   │       └── error-classification.ts  # Error types and classification
 │   │   ├── providers/           # Typed provider connections, drivers, and accounting
 │   │   │   ├── index.ts         # ProviderRuntime — resolve typed selection + freeze request snapshot
+│   │   │   ├── compose-runtime.ts # Shared runtime composition (catalog + vault + status + stores; app/daemon/local-host)
+│   │   │   ├── views.ts         # Redacted renderer views + connection mutation cores (electron-free, host-shared)
 │   │   │   ├── resolver.ts      # Resolve {connectionId, modelId} against connections/catalog
 │   │   │   ├── connection-store.ts # Non-secret connection metadata
 │   │   │   ├── runtime-context.ts  # Per-request provider runtime context
+│   │   │   ├── facets/          # Provider capability facets (discovery, pricing, tiers, cache, quota, thinking)
 │   │   │   ├── drivers/         # Code-owned origins, auth, protocols, adapters, status parsing
 │   │   │   │   ├── registry.ts  # Driver registry (origin → driver)
 │   │   │   │   ├── native.ts    # Specialized provider drivers (owned origins)
 │   │   │   │   ├── compatible.ts # OpenAI-/Anthropic-compatible custom endpoints
 │   │   │   │   ├── lilac.ts / neuralwatt.ts / opencode-go.ts # Third-party drivers
 │   │   │   │   └── types.ts     # Driver interfaces
-│   │   │   ├── credentials/     # Encrypted vault for API-key secrets (vault.ts)
+│   │   │   ├── credentials/     # Encrypted vault for API-key secrets
+│   │   │   │   ├── vault.ts     # CredentialVault — binding-checked, atomically written secrets
+│   │   │   │   └── node-storage-adapter.ts # Plain-Node adapter (daemon) — encryption unavailable, typed fail-closed
 │   │   │   ├── catalog/         # Signed bundled/cached catalog, trust pinning, updater
 │   │   │   ├── status/          # Provider status cache/service
 │   │   │   └── accounting/      # SQLite attempt ledger + cost + analytics queries
@@ -138,6 +146,7 @@ electron/
 │   │   │       ├── tool-attempt-store.ts # Tool invocation telemetry
 │   │   │       ├── subagent-attribution-store.ts # Subagent chain attribution
 │   │   │       ├── context-snapshot-store.ts # Per-turn context window snapshots
+│   │   │       ├── capture-store.ts # Debug request/response capture store (debug:* views)
 │   │   │       ├── analytics-queries.ts # Aggregate read-model queries + detail-query re-exports
 │   │   │       ├── analytics-detail-queries.ts # Model/subagent/context drill-down queries
 │   │   │       ├── analytics-query-shared.ts # Shared plumbing: filters, Decimal/cost, latency, name resolution
@@ -186,6 +195,7 @@ electron/
 │   │   │   │   ├── events.ts   # Sink wrappers — sequenced turn/session event delivery
 │   │   │   │   ├── state.ts    # ActiveAgent registry (messages, tool calls, generations)
 │   │   │   │   ├── snapshot.ts # Live chat snapshot builder
+│   │   │   │   ├── snapshot-trim.ts # Oversized-snapshot trimming + session.history_page continuation (frame cap)
 │   │   │   │   ├── persist.ts  # Debounced checkpoints + turn persistence
 │   │   │   │   ├── abort.ts    # Force-abort / dispose paths
 │   │   │   │   ├── cancel.ts   # Cancel/interrupt core behind the chat:cancel boundary
@@ -195,7 +205,8 @@ electron/
 │   │   │   │   └── title.ts    # Auto-naming via internal session-namer
 │   │   ├── machines/           # Remote machines subsystem (SSH remotes running orchid-agent, issue #112)
 │   │   │   ├── registry.ts     # Machine registry — implicit local machine + persisted SSH remotes (config `machines`)
-│   │   │   ├── ssh-transport.ts # SSH transport (BatchMode ssh) + typed exit classification
+│   │   │   ├── machine-secrets.ts # Encrypted SSH password store for password-auth machines (~/.orchid/machine-passwords.json)
+│   │   │   ├── ssh-transport.ts # SSH transport (BatchMode key auth / askpass-fed password auth) + typed exit classification
 │   │   │   ├── host-key.ts     # TOFU host-key trust — ssh-keyscan + per-machine known_hosts pinning
 │   │   │   ├── host-key-flow.ts # Scan → confirm → pin flow behind the add-machine wizard
 │   │   │   ├── connection-manager.ts # Per-machine connection lifecycle, backoff reconnect, daemon ensure
@@ -225,7 +236,7 @@ electron/
 │   │   │   ├── index-refresh.ts # index:auto_refresh push-event wiring
 │   │   │   ├── provider-models.ts # provider model listing / live discovery / quota views
 │   │   │   ├── subagents.ts     # subagent listing / detail IPC
-│   │   │   ├── providers.ts     # provider connection CRUD / models / status
+│   │   │   ├── providers.ts     # provider connection CRUD routing (parse + host-routed intents)
 │   │   │   ├── mcp.ts           # mcp:status
 │   │   │   ├── rag.ts           # rag:status, rag:index, rag:clear
 │   │   │   └── ast.ts           # ast:status, ast:index
@@ -666,9 +677,10 @@ Applied via `wrapLanguageModel()`:
 ### Remote Machines
 Every machine the app can drive runs the same headless agent host. The local machine's host is embedded in the main process (`host/local-host.ts`, started during startup); every other machine is an SSH remote running the `orchid-agent` daemon (`main/agent-entry.ts`, bundled by `scripts/build-agent.js`), which owns its own `~/.orchid` — sessions, indexes, trust, provider config never replicate between machines.
 - **Unified client protocol** (`shared/host/protocol.ts` + `framing.ts`): one typed wire contract over stdio or a 0600 UNIX socket; the app is just a client, so work keeps running while disconnected and any reconnecting client resumes the full view. `host/routing.ts` is the authoritative table of which IPC channels route to a machine's `HostClient` and which stay local.
-- **Machine registry** (`machines/registry.ts`): the implicit local machine is synthesized on read; SSH remotes persist as metadata-only records in the home config `machines` key (never secrets — auth rides the user's existing SSH key/agent).
-- **SSH transport + TOFU** (`machines/ssh-transport.ts`, `host-key.ts`, `host-key-flow.ts`): `ssh` runs with `BatchMode=yes`; `ssh-keyscan` fingerprints must be explicitly confirmed before they are pinned into `~/.orchid/machines/<id>/known_hosts` (every connection passes `StrictHostKeyChecking=yes` against that file). Failures classify into typed kinds (`host-key-mismatch`, `auth-failed`, `unreachable`, `agent-missing`, `unknown`).
+- **Machine registry** (`machines/registry.ts`): the implicit local machine is synthesized on read; SSH remotes persist as metadata-only records in the home config `machines` key (password-auth machines store the secret separately, encrypted, in `machines/machine-secrets.ts`).
+- **SSH transport + TOFU** (`machines/ssh-transport.ts`, `host-key.ts`, `host-key-flow.ts`): key-auth machines run `ssh` with `BatchMode=yes`; password-auth machines serve the one prompt through a forced `SSH_ASKPASS` helper fed from the encrypted machine password store. `ssh-keyscan` fingerprints must be explicitly confirmed before they are pinned into `~/.orchid/machines/<id>/known_hosts` (every connection passes `StrictHostKeyChecking=yes` against that file). Failures classify into typed kinds (`host-key-mismatch`, `auth-failed`, `unreachable`, `agent-missing`, `unknown`).
 - **Connections & resync** (`machines/connection-manager.ts`, `remote-clients.ts`, `resync.ts`): per-machine lifecycle with exponential-backoff reconnect; `unreachable`/`agent-missing` arm a one-shot `serve --socket … --detached` daemon ensure over SSH; reconnect triggers a sequence-keyed resync so the session list, open snapshots, subagents, background commands, and pending approvals/questions restore without duplicates or gaps.
+- **Provider configuration per machine**: connection create/update/submit intents are host-routed, so they land on the driven machine's own connection store. The embedded local host declares the `providers.vault-writes` capability (Electron safeStorage); the headless daemon does not — its answers to `submit_api_key` and api-key-auth intents are typed `UNSUPPORTED_ON_HOST` errors steering toward environment-variable credentials (the daemon resolves those from its own environment at request time; its vault adapter fails closed, see `providers/credentials/node-storage-adapter.ts`).
 
 ### Renderer Shell
 - **Layout** (`ChatView.tsx`): top `SessionTabBar`, left `LeftSidebar` (workspace chip + project-grouped sessions), center chat (`ChatStream` + `MessageQueue` + `InputArea` + `Footer`), right inspector `Sidebar` (collapsible Todos/Subagents/Commands/Context/Usage/Index/MCP blocks). Topology is frozen by the styling contract — restyle in place only (`styles/README.md`).
@@ -883,7 +895,7 @@ Motion is a shared interaction contract, not local decoration. Use it to explain
 | MCP integration | `src/main/mcp/manager.ts`, `src/main/mcp/project-registry.ts`, `src/main/mcp/transport.ts` |
 | Machines / SSH remotes | `src/main/machines/*`, `src/main/host/{daemon,local-host,routing}.ts`, `src/main/agent-entry.ts`, `src/renderer/components/Machines/*`, `src/renderer/hooks/useMachines.ts`, `src/shared/host/protocol.ts`, `src/shared/types/machine.ts` |
 | Provider resolution / drivers | `src/main/providers/index.ts`, `src/main/providers/resolver.ts`, `src/main/providers/drivers/` |
-| Provider IPC / shared contracts | `src/main/ipc/providers.ts`, `src/shared/types/provider.ts`, `src/shared/types/ipc.ts` |
+| Provider IPC / shared contracts | `src/main/ipc/providers.ts`, `src/main/providers/views.ts` (electron-free mutation/view cores), `src/shared/types/provider.ts`, `src/shared/types/ipc.ts`, `src/shared/types/ipc-schemas.ts` |
 | Middleware | `src/main/llm/middleware/` |
 | Shortcuts | `src/renderer/keyboard/registry.ts` (definitions), `useGlobalShortcuts.ts` (dispatch) |
 
