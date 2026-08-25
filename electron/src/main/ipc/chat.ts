@@ -7,16 +7,20 @@
  * exercises exactly the same protocol a remote `orchid-agent` daemon serves.
  */
 import { BrowserWindow, ipcMain } from 'electron';
-import { z } from 'zod';
 import {
   subscribeBackgroundProcessChanges,
 } from '../tools/process/background-store';
-import { SEND_INPUT_MAX_TEXT_LENGTH } from '../tools/process/send-input';
 import { getSessionManager } from '../session/singleton';
 import { IPC_CHANNELS, type ChatSessionSnapshot, type ChatCompactResult } from '../../shared/types/ipc';
+import {
+  bgCommandControlRequestSchema,
+  bgCommandListRequestSchema,
+  bgCommandSendInputRequestSchema,
+  bgCommandSnapshotRequestSchema,
+} from '../../shared/types/ipc-schemas';
 import { isEmbeddedLocalHostRunning } from '../host/local-host';
 import { hostRequest } from './host-request';
-import { clearAllChatHistory } from './chat-history';
+import { clearAllChatHistory } from '../host/chat/history';
 import { chatCancelSchema, chatCompactSchema, chatQueueNextSchema, chatSendSchema, chatSnapshotSchema, chatStopSchema } from './payload-schemas';
 import {
   activeAgents,
@@ -27,54 +31,6 @@ import {
 import {
   disposeActiveAgent,
 } from '../host/chat/abort';
-
-export { getActiveMainTurnWindowId, getLiveChatSnapshot } from '../host/chat/snapshot';
-export {
-  activeSessionsForProviderConnection,
-  forceAbortMainTurn,
-  stopActiveProviderConnectionTurns,
-} from '../host/chat/abort';
-export type { ForceAbortMainTurnOptions } from '../host/chat/abort';
-export { ensureActiveSession } from '../host/chat/session';
-export {
-  discardDeletedSessionRuntime,
-  forceAbortSession,
-  forceStopSession,
-} from '../host/chat/abort';
-
-const BG_CMD_SNAPSHOT_MAX_LAST_N = 1000;
-
-/**
- * Discriminated snapshot target: exactly one of `commandId` (background store)
- * or `toolCallId` (foreground live registry). Zero or both targets reject.
- */
-const bgCommandSnapshotSchema = z.object({
-  commandId: z.number().int().positive().optional(),
-  toolCallId: z.string().min(1).optional(),
-  lastN: z.number().int().positive().max(BG_CMD_SNAPSHOT_MAX_LAST_N).optional(),
-  sessionId: z.string().uuid().optional(),
-  includeTail: z.boolean().optional(),
-}).refine(
-  (data) => (data.commandId !== undefined) !== (data.toolCallId !== undefined),
-  { message: 'Provide exactly one of commandId or toolCallId' },
-);
-
-const bgCommandListSchema = z.object({
-  sessionId: z.string().uuid().optional(),
-});
-
-const bgCommandSendInputSchema = z.object({
-  commandId: z.number().int().positive(),
-  // Cap stdin writes at the boundary; parity with the agent send_input tool.
-  text: z.string().max(SEND_INPUT_MAX_TEXT_LENGTH),
-  sessionId: z.string().uuid().optional(),
-});
-
-/** Shared shape for bgcmd:terminate and bgcmd:release_input. */
-const bgCommandControlSchema = z.object({
-  commandId: z.number().int().positive(),
-  sessionId: z.string().uuid().optional(),
-});
 
 function broadcastBgCommandChanged(sessionId: string): void {
   for (const win of BrowserWindow.getAllWindows()) {
@@ -149,7 +105,7 @@ export function registerChatIPC(): void {
   });
 
   ipcMain.handle(IPC_CHANNELS.BG_CMD_SNAPSHOT, async (event, payload: unknown) => {
-    const parsed = bgCommandSnapshotSchema.safeParse(payload);
+    const parsed = bgCommandSnapshotRequestSchema.safeParse(payload);
     if (!parsed.success) {
       throw new Error(`Invalid bgcmd:snapshot payload: ${parsed.error.message}`);
     }
@@ -157,7 +113,7 @@ export function registerChatIPC(): void {
   });
 
   ipcMain.handle(IPC_CHANNELS.BG_CMD_LIST, async (event, payload: unknown) => {
-    const parsed = bgCommandListSchema.safeParse(payload ?? {});
+    const parsed = bgCommandListRequestSchema.safeParse(payload ?? {});
     if (!parsed.success) {
       throw new Error(`Invalid bgcmd:list payload: ${parsed.error.message}`);
     }
@@ -165,7 +121,7 @@ export function registerChatIPC(): void {
   });
 
   ipcMain.handle(IPC_CHANNELS.BG_CMD_SEND_INPUT, async (event, payload: unknown) => {
-    const parsed = bgCommandSendInputSchema.safeParse(payload);
+    const parsed = bgCommandSendInputRequestSchema.safeParse(payload);
     if (!parsed.success) {
       throw new Error(`Invalid bgcmd:send_input payload: ${parsed.error.message}`);
     }
@@ -173,7 +129,7 @@ export function registerChatIPC(): void {
   });
 
   ipcMain.handle(IPC_CHANNELS.BG_CMD_TERMINATE, async (event, payload: unknown) => {
-    const parsed = bgCommandControlSchema.safeParse(payload);
+    const parsed = bgCommandControlRequestSchema.safeParse(payload);
     if (!parsed.success) {
       throw new Error(`Invalid bgcmd:terminate payload: ${parsed.error.message}`);
     }
@@ -181,7 +137,7 @@ export function registerChatIPC(): void {
   });
 
   ipcMain.handle(IPC_CHANNELS.BG_CMD_RELEASE_INPUT, async (event, payload: unknown) => {
-    const parsed = bgCommandControlSchema.safeParse(payload);
+    const parsed = bgCommandControlRequestSchema.safeParse(payload);
     if (!parsed.success) {
       throw new Error(`Invalid bgcmd:release_input payload: ${parsed.error.message}`);
     }

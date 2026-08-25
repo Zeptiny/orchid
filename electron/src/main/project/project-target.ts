@@ -7,9 +7,12 @@
  * directory is either the window's resolved workspace (draft → active
  * session → sticky default) or the cwd of any saved session. Everything
  * else fails closed.
+ *
+ * Electron-free domain policy (relocated from ipc/project-target.ts so the
+ * host core no longer reaches into the IPC shell layer).
  */
 import { getSessionManager, resolveWindowWorkspace } from '../session/singleton';
-import { canonicalizeProjectDirectory } from '../project/path';
+import { canonicalizeProjectDirectory } from './path';
 
 /**
  * Resolve a renderer-supplied project directory to its canonical path when

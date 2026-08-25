@@ -4,6 +4,11 @@ import { IPC_CHANNELS } from '../../src/shared/types/ipc';
 import type { Agent } from '../../src/shared/types/agent';
 import { MessageRole, MessageType } from '../../src/shared/types/message';
 import { createCanonicalToolResult } from '../../src/shared/types/tool-result';
+import { ensureActiveSession } from '../../src/main/host/chat/session';
+import {
+  discardDeletedSessionRuntime,
+  forceAbortMainTurn,
+} from '../../src/main/host/chat/abort';
 import {
   clearNextRequestStop,
   requestNextRequestStop,
@@ -837,7 +842,7 @@ describe('chat session selection gate', () => {
       modelLabel: previous.modelId,
     });
 
-    const result = chatIpc.ensureActiveSession(
+    const result = ensureActiveSession(
       { id: 906, send: vi.fn() } as never,
       preferred,
     );
@@ -868,7 +873,7 @@ describe('chat session selection gate', () => {
     mocks.sessionManager._setActive(viewing);
     mocks.sessionManager._putSession(background);
 
-    const result = chatIpc.ensureActiveSession(
+    const result = ensureActiveSession(
       { id: 907, send: vi.fn() } as never,
       null,
       background.id,
@@ -887,7 +892,7 @@ describe('chat session selection gate', () => {
       modelId: 'vendor/path/model',
     };
 
-    const result = chatIpc.ensureActiveSession(
+    const result = ensureActiveSession(
       { id: 908, send: vi.fn() } as never,
       preferred,
     );
@@ -986,7 +991,7 @@ describe('chat IPC driver streaming', () => {
   });
 
   it('main-turn-only abort leaves subagents and background commands running', () => {
-    chatIpc.forceAbortMainTurn('11111111-1111-4111-8111-111111111111');
+    forceAbortMainTurn('11111111-1111-4111-8111-111111111111');
 
     expect(mocks.subagentManager.cancelRunning).not.toHaveBeenCalled();
     expect(mocks.backgroundStore.terminateSession).not.toHaveBeenCalled();
@@ -1113,8 +1118,7 @@ describe('chat IPC driver streaming', () => {
     );
     await waitForChannelCount(send, IPC_CHANNELS.CHAT_CHUNK, 1);
 
-    chatIpc.forceAbortMainTurn(sessionId, { emitTerminalEvents: true });
-
+    forceAbortMainTurn(sessionId, { emitTerminalEvents: true });
     expect(doneEvents(send).at(-1)?.[1]).toMatchObject({
       type: 'done',
       response: 'Waiting for your choice',
@@ -2236,7 +2240,7 @@ describe('chat IPC provider gates', () => {
     mocks.aiGenerateText.mockClear();
     send.mockClear();
 
-    expect(chatIpc.discardDeletedSessionRuntime(sessionId)).toBe(true);
+    expect(discardDeletedSessionRuntime(sessionId)).toBe(true);
     releaseStream();
     await new Promise((resolve) => setTimeout(resolve, 20));
 

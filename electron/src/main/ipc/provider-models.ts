@@ -15,6 +15,10 @@ import { hostRequest } from './host-request';
 import type { ProviderDraftDiscoveryResult } from '../../shared/types/ipc';
 import type { ProviderConnection } from '../../shared/types/provider';
 import {
+  providerConnectionIdRequestSchema,
+  providerModelListRequestSchema,
+} from '../../shared/types/ipc-schemas';
+import {
   providerAuthMethodSchema,
   providerEndpointSchema,
   providerProtocolSchema,
@@ -26,15 +30,10 @@ import {
 } from '../providers/facets/discovery';
 import type { DriverCredential } from '../providers/drivers/types';
 import {
-  connectionIdSchema,
   modelView,
   requireStaticConnectionSupport,
   services,
 } from '../providers/views';
-
-const modelListSchema = connectionIdSchema.extend({
-  includeDisabled: z.boolean().optional(),
-}).strict();
 
 const draftDiscoverySchema = z.object({
   providerId: z.string().trim().min(1),
@@ -143,7 +142,7 @@ export function registerProviderModelsIPC(): void {
       // List every enabled option across connections (no connection selected).
       return hostRequest(String(event.sender.id), IPC_CHANNELS.PROVIDERS_MODEL_LIST);
     }
-    const parsed = modelListSchema.safeParse(payload);
+    const parsed = providerModelListRequestSchema.safeParse(payload);
     if (!parsed.success) throw new Error('Invalid providers:model_list payload');
     return hostRequest(
       String(event.sender.id),
@@ -153,7 +152,7 @@ export function registerProviderModelsIPC(): void {
   });
 
   ipcMain.handle(IPC_CHANNELS.PROVIDERS_DISCOVER_MODELS, async (_event, payload: unknown) => {
-    const parsed = connectionIdSchema.safeParse(payload);
+    const parsed = providerConnectionIdRequestSchema.safeParse(payload);
     if (!parsed.success) throw new Error('Invalid providers:discover_models payload');
     return hostRequest(
       String(_event.sender.id),
@@ -169,7 +168,7 @@ export function registerProviderModelsIPC(): void {
   });
 
   ipcMain.handle(IPC_CHANNELS.PROVIDERS_QUOTA_REFRESH, async (_event, payload: unknown) => {
-    const parsed = connectionIdSchema.safeParse(payload);
+    const parsed = providerConnectionIdRequestSchema.safeParse(payload);
     if (!parsed.success) throw new Error('Invalid providers:quota_refresh payload');
     return hostRequest(
       String(_event.sender.id),

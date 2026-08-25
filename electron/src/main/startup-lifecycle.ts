@@ -97,7 +97,7 @@ export async function runStartupLifecycle(
 
     if (!await runStage('preparing_interface', dependencies.prepareInterface)) return 'aborted';
     if (workerResult.status === 'unavailable' || localHostDegraded) {
-      state.degraded();
+      state.degraded(localHostDegraded && workerResult.status !== 'unavailable' ? 'local-host' : 'tool-workers');
       return 'degraded';
     }
     state.ready();

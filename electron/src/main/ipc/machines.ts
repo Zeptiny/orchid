@@ -51,11 +51,11 @@ import { resyncRemoteMachine } from '../machines/resync';
 import {
   activeMachineFor,
   getHostClient,
-  LOCAL_MACHINE_ID,
   registeredMachines,
   resetWindowsForMachine,
   setActiveMachine,
 } from '../host/routing';
+import { MACHINE_ID_LOCAL } from '../../shared/types/machine';
 import {
   machinesCreateSchema,
   machinesDeleteSchema,
@@ -221,7 +221,17 @@ export function registerMachinesIPC(): void {
       throw new Error(`Invalid machines:update payload: ${parsed.error.message}`);
     }
     const { id, patch } = parsed.data;
+    const before = await findMachine(id);
     const machine = await registry.update(id, patch);
+    if (
+      before?.kind === 'ssh' &&
+      (before.host !== machine.host || before.user !== machine.user || before.port !== machine.port)
+    ) {
+      // The destination changed: the pinned known-hosts attests the OLD
+      // host/port. Drop the pin and any cached scan so the TOFU
+      // scan/confirm gate re-arms before the next connect.
+      hostKeyFlow.unpin(id);
+    }
     broadcastMachinesChanged(await registry.list());
     return machine;
   });
@@ -259,7 +269,7 @@ export function registerMachinesIPC(): void {
     }
     const { machineId } = parsed.data;
     const windowId = String(event.sender.id);
-    if (machineId !== LOCAL_MACHINE_ID) {
+    if (machineId !== MACHINE_ID_LOCAL) {
       const machine = await findMachine(machineId);
       if (!machine) {
         return {
@@ -359,7 +369,7 @@ export function registerMachinesIPC(): void {
 
   ipcMain.handle(IPC_CHANNELS.MACHINES_RESYNC, async (event) => {
     const machineId = activeMachineFor(String(event.sender.id));
-    if (machineId === LOCAL_MACHINE_ID || !registeredMachines().includes(machineId)) {
+    if (machineId === MACHINE_ID_LOCAL || !registeredMachines().includes(machineId)) {
       // The local machine rehydrates through its own paths; nothing to push.
       return { status: 'ok', machineId, resynced: false } satisfies MachineResyncResult;
     }
@@ -385,7 +395,7 @@ export function registerMachinesIPC(): void {
       throw new Error(`Invalid machines:disconnect payload: ${parsed.error.message}`);
     }
     const { machineId } = parsed.data;
-    if (machineId === LOCAL_MACHINE_ID) {
+    if (machineId === MACHINE_ID_LOCAL) {
       return {
         status: 'error',
         error: {
@@ -483,11 +493,19 @@ function unregisterMachinesIPCHandlers(): void {
 
 /**
  * Unregister machines IPC handlers (for cleanup/testing): drop the handlers,
- * the manager subscription, and every attached remote client.
+ * the manager subscription, every machine connection, and every attached
+ * remote client.
+ *
+ * `disconnectAll()` MUST run before the client teardown: it takes every
+ * machine offline from the manager side (transports closed with the entry
+ * already `offline`), so the unexpected-loss watcher cannot classify the
+ * teardown as a lost connection — otherwise the backoff loop wakes during
+ * the multi-second quit drain and spawns fresh ssh processes.
  */
 export function unregisterMachinesIPC(): void {
   unsubscribeManagerStatus?.();
   unsubscribeManagerStatus = null;
   unregisterMachinesIPCHandlers();
+  getMachineConnectionManager().disconnectAll();
   detachAllRemoteMachineClients();
 }

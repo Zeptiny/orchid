@@ -8,10 +8,12 @@
  * `host/server.ts` binds them to protocol methods.
  */
 import { flattenSessionMessages, type Session } from '../../shared/types/session';
+import type { Message } from '../../shared/types/message';
 import { getSessionManager, resolveWindowWorkspace } from '../session/singleton';
-import { seedChatHistory } from '../ipc/chat-history';
+import { seedChatHistory, clearChatHistory } from './chat/history';
 import {
   clearDraftCwd,
+  getDraftCwd,
   isWorkspaceBound,
   requireValidProjectDirectory,
   setDraftCwd,
@@ -28,7 +30,13 @@ import {
   attachWorkspaceWatcher,
   detachWorkspaceWatcher,
 } from '../indexing/watcher';
-import { workingSetClearFocus } from '../session/working-set-live';
+import {
+  workingSetClearFocus,
+  workingSetOpenOrFocus,
+  workingSetRemove,
+} from '../session/working-set-live';
+import { hydrateSessionPermissionOverride } from '../permissions/session-overrides';
+import { clearFunctionHashesForWorkspace } from '../tools/ast/get-function';
 import { forceStopSession } from './chat/abort';
 
 /** Seed the in-memory chat history only when the full graph is already loaded. */
@@ -39,6 +47,66 @@ export function seedCompleteChatHistory(
   if (session.chains.every((chain) => chain.messagesLoaded !== false)) {
     seedChatHistory(session.id, messages);
   }
+}
+
+/** One client's session activation: the shared core of session.load/open. */
+export interface ActivatedSession {
+  readonly session: Session | null;
+  /** Flattened messages of the activated session ([] when it no longer exists). */
+  readonly messages: Message[];
+  /** Workspace as resolved after the switch (drives the workspace-changed push). */
+  readonly workspace: WorkspaceInfo;
+}
+
+/**
+ * Switch a client's active session and run the full activation fan-out —
+ * the duplicated block the `session.load` and `session.open` host bindings
+ * previously each carried:
+ *
+ * switchTo → working-set open/focus (or removal for a vanished session) →
+ * permission-mode hydration → subagent hydration kick-off → draft-cwd
+ * release → history seed/clear → workspace resolve + watcher retarget.
+ *
+ * `clearReleasedDraftCaches` additionally clears the AST function-hash cache
+ * of the draft workspace a `session.load` just released (`session.open`
+ * never did this, so it stays opt-in to keep both bindings byte-compatible).
+ *
+ * Emits nothing: the caller pushes `SESSION_WORKSPACE_CHANGED` with the
+ * returned workspace through its own event surface.
+ */
+export function activateSessionForClient(
+  clientId: string,
+  sessionId: string,
+  options: { clearReleasedDraftCaches?: boolean } = {},
+): ActivatedSession {
+  const manager = getSessionManager();
+  const releasedDraftCwd = getDraftCwd(clientId);
+  const session = manager.switchTo(sessionId, clientId);
+  if (session) {
+    workingSetOpenOrFocus(session.id, clientId);
+    hydrateSessionPermissionOverride(session.id, session.permissionMode);
+    startOpenedSessionSubagentHydration(session.id, clientId);
+  } else {
+    workingSetRemove(sessionId, clientId);
+  }
+  clearDraftCwd(clientId);
+  if (releasedDraftCwd && options.clearReleasedDraftCaches) {
+    // Best-effort hash cache cleanup for the released draft workspace.
+    try {
+      clearFunctionHashesForWorkspace(releasedDraftCwd);
+    } catch {
+      // non-fatal
+    }
+  }
+  const messages = session ? flattenSessionMessages(session) : [];
+  if (session) {
+    seedCompleteChatHistory(session, messages);
+  } else {
+    clearChatHistory(sessionId);
+  }
+  const workspace = resolveWindowWorkspace(clientId);
+  retargetWorkspaceWatcher(clientId, workspace.cwd);
+  return { session, messages, workspace };
 }
 
 /**

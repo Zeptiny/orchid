@@ -30,7 +30,7 @@ vi.mock('../../src/main/session/singleton', () => ({
   }),
 }));
 
-import { resolveAuthorizedProjectDir } from '../../src/main/ipc/project-target';
+import { resolveAuthorizedProjectDir } from '../../src/main/project/project-target';
 
 describe('resolveAuthorizedProjectDir', () => {
   beforeEach(() => {

@@ -47,8 +47,8 @@ import { acquireProjectMCPManager, releaseProjectMCPManager } from '../../mcp/pr
 import { IPC_CHANNELS } from '../../../shared/types/ipc';
 import { ChainStatus } from '../../../shared/types/chain';
 import { MessageType, type Message, type Usage } from '../../../shared/types/message';
-import { getChatHistory, setChatHistory } from '../../ipc/chat-history';
-import { chatSendSchema } from '../../ipc/payload-schemas';
+import { getChatHistory, setChatHistory } from './history';
+import { chatSendSchema } from '../../../shared/types/ipc-schemas';
 import { clearNextRequestStop, clearCompactionPause, shouldPauseForCompaction } from '../../agents/next-request-stop';
 import { MAIN_AGENT_SCOPE_ID } from '../../../shared/types/agent-scope';
 import { completeSessionActivity, publishSessionActivity } from '../../session/activity-live';

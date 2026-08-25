@@ -4,9 +4,11 @@
  *
  * Frames are newline-delimited JSON (see ./framing.ts) carrying one of three
  * envelope kinds: request, response, or event. Method params/results and
- * event payloads REUSE the existing IPC zod schemas wherever the shapes are
- * identical so the IPC surface and the protocol cannot drift; schemas defined
- * here exist only where the IPC boundary has none yet.
+ * event payloads REUSE the shared IPC zod schemas (shared/types/ipc-schemas,
+ * shared/types/config-schema) wherever the shapes are identical — the same
+ * schema objects the Electron IPC handlers validate with — so the IPC surface
+ * and the protocol cannot drift; schemas defined here exist only where no
+ * shared IPC boundary schema exists yet.
  *
  * Local-only channel families (machines, analytics, updater, startup) never
  * route to a host and are therefore absent from these registries.
@@ -30,82 +32,99 @@ import {
   providerQuotaSchema,
 } from '../types/provider-facets';
 import {
+  agentSaveSchema,
+  askQuestionAnswerSchema,
+  askQuestionCancelSchema,
   astIndexProgressSchema,
+  astIndexSchema,
   bgCommandChangedEventSchema,
+  bgCommandControlRequestSchema,
+  bgCommandListRequestSchema,
   bgCommandListResultSchema,
   bgCommandReleaseInputResultSchema,
+  bgCommandSendInputRequestSchema,
   bgCommandSendInputResultSchema,
   bgCommandSnapshotRequestSchema,
   bgCommandSnapshotResultSchema,
   bgCommandTerminateResultSchema,
+  chatCancelSchema,
   chatChunkEventSchema,
+  chatCompactSchema,
   chatDoneEventSchema,
   chatErrorEventSchema,
+  chatQueueNextSchema,
   chatSendResultSchema,
+  chatSendSchema,
   chatSessionSnapshotSchema,
+  chatSnapshotSchema,
   chatStateEventSchema,
+  chatStopSchema,
   chatThinkingEventSchema,
   chatToolCallDeltaEventSchema,
   chatToolCallStartEventSchema,
   chatToolCallUpdateEventSchema,
   chatUsageEventSchema,
   compactionProgressEventSchema,
-  configSaveResultSchema,
+  definitionDeleteSchema,
+  definitionRevealSchema,
+  definitionScopeSchema,
   indexAutoRefreshEventSchema,
+  personalitySaveSchema,
+  permissionApprovalAnswerSchema,
+  permissionGetSessionModeSchema,
+  permissionSetSessionModeSchema,
   projectTrustChangedEventSchema,
+  projectTrustGetSchema,
   projectTrustInfoSchema,
+  projectTrustSetSchema,
+  providerConnectionIdRequestSchema,
+  providerDisconnectRequestSchema,
+  providerModelListRequestSchema,
+  providerStatusRefreshRequestSchema,
   ragIndexProgressSchema,
+  ragIndexSchema,
   serviceTierOptionViewSchema,
   sessionActivityChangedEventSchema,
+  sessionChangeCwdSchema,
+  sessionChangeModelSchema,
   sessionCompactionEventSchema,
   sessionCreatedEventSchema,
   sessionDeleteResultSchema,
+  sessionDeleteSchema,
   sessionDeletedEventSchema,
   sessionHistoryPageResultSchema,
+  sessionHistoryPageSchema,
+  sessionLoadSchema,
+  sessionOpenSchema,
+  sessionRenameSchema,
   sessionRenamedEventSchema,
+  sessionSetReasoningEffortSchema,
+  sessionSetServiceTierSchema,
+  sessionSetWorkspaceSchema,
   sessionTodosChangedEventSchema,
   sessionUpdatedEventSchema,
   sessionWorkspaceChangedEventSchema,
+  sharedPromptDeleteSchema,
+  sharedPromptSaveSchema,
+  skillSaveSchema,
+  subagentDetailRequestSchema,
   subagentDetailResultSchema,
   subagentEventSchema,
+  subagentSnapshotRequestSchema,
   subagentSnapshotSchema as subagentSnapshotResultSchema,
   toolExecuteResultSchema,
+  toolExecuteSchema,
   trustedProjectEntrySchema,
   workingSetChangedEventSchema,
   workingSetSnapshotSchema,
   workspaceInfoSchema,
 } from '../types/ipc-schemas';
 import {
-  askQuestionAnswerSchema,
-  askQuestionCancelSchema,
-  astIndexSchema,
-  chatCancelSchema,
-  chatCompactSchema,
-  chatQueueNextSchema,
-  chatSendSchema,
-  chatSnapshotSchema,
-  chatStopSchema,
   configReadProjectSchema,
   configSaveProjectSchema,
   configSaveSchema,
-  projectTrustGetSchema,
-  projectTrustSetSchema,
-  ragIndexSchema,
-  sessionChangeCwdSchema,
-  sessionChangeModelSchema,
-  sessionDeleteSchema,
-  sessionHistoryPageSchema,
-  sessionLoadSchema,
-  sessionOpenSchema,
-  sessionRenameSchema,
-  sessionSetReasoningEffortSchema,
-  sessionSetServiceTierSchema,
-  sessionSetWorkspaceSchema,
-  subagentDetailSchema as subagentDetailParamsSchema,
-  subagentSnapshotSchema as subagentSnapshotParamsSchema,
-  toolExecuteSchema,
-} from '../../main/ipc/payload-schemas';
-import { configSchema } from '../../main/config/schema';
+  configSchema,
+} from '../types/config-schema';
 
 /** Protocol revision. Peers must agree exactly (equal-version handshake). */
 export const PROTOCOL_VERSION = 1;
@@ -170,7 +189,12 @@ export type HostResponse<TResult = unknown> =
 export interface HostEvent<TParams = unknown> {
   readonly ev: string;
   readonly params: TParams;
-  /** Per-connection monotonic sequence; gaps drive reconnect resync. */
+  /**
+   * Per-connection monotonic sequence; resets on reconnect. Currently
+   * advisory — reserved for future gap detection; no consumer detects gaps
+   * yet, and reconnect resync is an unconditional `host.pending_state`
+   * snapshot rather than gap-driven.
+   */
   readonly seq: number;
 }
 
@@ -353,26 +377,6 @@ const workingSetSetFocusParamsSchema = z.object({ id: z.string().uuid().nullable
 
 const sessionMarkSeenParamsSchema = z.object({ id: z.string().uuid() });
 
-const bgCommandListParamsSchema = z.object({
-  sessionId: z.string().uuid().optional(),
-});
-
-/**
- * Mirrors the bgcmd:send_input handler schema (main/ipc/chat.ts), including
- * the SEND_INPUT_MAX_TEXT_LENGTH stdin cap (8192) it enforces.
- */
-const bgCommandSendInputParamsSchema = z.object({
-  commandId: z.number().int().positive(),
-  text: z.string().max(8192),
-  sessionId: z.string().uuid().optional(),
-});
-
-/** Shared shape for bgcmd:terminate and bgcmd:release_input. */
-const bgCommandControlParamsSchema = z.object({
-  commandId: z.number().int().positive(),
-  sessionId: z.string().uuid().optional(),
-});
-
 const permissionModeWireSchema = z.enum(PERMISSION_MODE_VALUES);
 
 const riskClassWireSchema = z.enum(Object.values(RiskClass) as [RiskClass, ...RiskClass[]]);
@@ -450,132 +454,33 @@ export const hostPendingStateResultSchema = z.object({
 export type HostPendingStateParams = z.infer<typeof hostPendingStateParamsSchema>;
 export type HostPendingStateResult = z.infer<typeof hostPendingStateResultSchema>;
 
-/** Mirrors the permission:approval_answer handler schema (main/ipc/permission.ts). */
-const permissionApprovalAnswerParamsSchema = z.object({
-  toolCallId: z.string().min(1),
-  decision: z.enum(['approved', 'denied']),
-  reason: z.string().optional(),
-});
-
-/** Mirrors the permission:set_session_mode handler schema. */
-const permissionSetSessionModeParamsSchema = z.object({
-  mode: permissionModeWireSchema.nullable(),
-  expectedSessionId: z.string().min(1).nullable(),
-});
-
-/** Mirrors the permission:get_session_mode handler schema. */
-const permissionGetSessionModeParamsSchema = z.object({
-  expectedSessionId: z.string().min(1).nullable(),
-});
-
-/** `DefinitionScope` (shared/types/definitions.ts). */
-const definitionScopeSchema = z.enum(['global', 'project']);
-
-const definitionNameSchema = z.string().min(1).max(128);
-
-/** Mirrors the skill:save handler schema (main/ipc/definitions.ts). */
-const skillSaveParamsSchema = z.object({
-  scope: definitionScopeSchema,
-  name: definitionNameSchema,
-  description: z.string().min(1),
-  requires: z.array(z.string()).optional(),
-  content: z.string(),
-  previousName: z.string().optional(),
-});
-
-/** Mirrors the agent:save handler schema. */
-const agentSaveParamsSchema = z.object({
-  scope: definitionScopeSchema,
-  name: definitionNameSchema,
-  type: z.enum([AgentType.INTERNAL, AgentType.SUBAGENT]),
-  tier: z.enum([
-    AgentTier.SEED,
-    AgentTier.SPROUT,
-    AgentTier.BLOOM,
-    AgentTier.CROWN,
-  ]),
-  description: z.string().min(1),
-  system_prompt: z.string(),
-  allowed_tools: z.array(z.string()).min(1),
-  allowed_skills: z.array(z.string()),
-  previousName: z.string().optional(),
-});
-
-/** Mirrors the personality:save handler schema. */
-const personalitySaveParamsSchema = z.object({
-  scope: definitionScopeSchema,
-  name: definitionNameSchema,
-  content: z.string().min(1),
-  previousName: z.string().optional(),
-});
-
-/** Mirrors the shared_prompt:save handler schema. */
-const sharedPromptSaveParamsSchema = z.object({
-  scope: definitionScopeSchema,
-  slot: z.enum(['all-agents', 'subagents']),
-  content: z.string(),
-});
-
-/** Mirrors the shared_prompt:delete handler schema. */
-const sharedPromptDeleteParamsSchema = z.object({
-  scope: definitionScopeSchema,
-  slot: z.enum(['all-agents', 'subagents']),
-});
-
-/** Mirrors the agent/skill/personality:delete handler schema. */
-const definitionDeleteParamsSchema = z.object({
-  scope: definitionScopeSchema,
-  name: definitionNameSchema,
-});
-
-/** Mirrors the definition:reveal handler schema. */
-const definitionRevealParamsSchema = z.object({
-  path: z.string().min(1),
-});
-
-/** Mirrors the providers connection-id handler schema (main/ipc/providers.ts). */
-const providerConnectionIdParamsSchema = z.object({
-  connectionId: z.string().uuid(),
-}).strict();
-
-/** Mirrors the providers:disconnect/delete confirmation shape. */
-const providerDisconnectParamsSchema = providerConnectionIdParamsSchema
-  .extend({ confirm: z.literal(true) })
-  .strict();
-
-/**
- * Mirrors the providers:model_list handler schema (main/ipc/provider-models.ts):
- * `connectionId` is optional — an absent id lists options across connections.
- * (U5 additive fix: the original draft required it, which would have rejected
- * the renderer's "no connection selected" listing.)
- */
-const providerModelListParamsSchema = z.object({
-  connectionId: z.string().uuid().optional(),
-  includeDisabled: z.boolean().optional(),
-}).strict().optional();
-
-/** Mirrors the providers:status_refresh handler schema. */
-const providerStatusRefreshParamsSchema = z.object({
-  providerId: z.string().trim().min(1),
-  connectionId: z.string().uuid().optional(),
-}).strict();
+// (permission / definitions / provider / bgcmd request schemas are the shared
+// IPC boundary schemas imported above — the same objects main/ipc handlers
+// validate with; no mirrors are kept here.)
 
 // ── Locally defined result schemas (no IPC boundary schema exists yet) ────────
 
 const okResultSchema = z.object({ ok: z.boolean() }).strict();
 
-const voidResult = z.void();
+/**
+ * Result for methods whose handlers produce nothing observable. The response
+ * envelope normalizes `undefined` results to `null` (server handleRequest),
+ * so the schema accepts both the in-process `undefined` and the wire `null`.
+ */
+const voidResult = z.void().nullable();
 
 /**
  * `ChatCompactResult` (shared/types/ipc.ts) — result of a user-initiated
- * /compact on an idle session.
+ * /compact on an idle session. `nothing_to_compact` may carry an EMPTY
+ * `sessionId`: the server binding answers `sessionId: ''` when no session
+ * was active at all.
  */
 const chatCompactResultSchema = z.discriminatedUnion('status', [
   z.object({ status: z.literal('compacted'), sessionId: z.string().min(1) }).strict(),
   z.object({ status: z.literal('busy'), sessionId: z.string().min(1) }).strict(),
   z.object({
     status: z.literal('nothing_to_compact'),
-    sessionId: z.string().min(1),
+    sessionId: z.string(),
     detail: z.string().optional(),
   }).strict(),
   z.object({ status: z.literal('error'), error: z.string() }).strict(),
@@ -930,6 +835,50 @@ const providerDeleteConnectionResultSchema = z.object({
   }).strict(),
 }).strict();
 
+// ── Accurate mutation results (server bindings, host/server.ts) ───────────────
+
+/**
+ * `requestChatCancel` (host/chat/cancel.ts): the two-phase Esc interrupt
+ * ladder's answers.
+ */
+const chatCancelResultSchema = z.object({
+  status: z.enum(['cancelled', 'confirming', 'confirming_subagents', 'no_active_stream']),
+}).strict();
+
+/** `forceStopSession` outcome for chat.stop. */
+const chatStopResultSchema = z.object({
+  status: z.enum(['stopped', 'no_active_stream']),
+}).strict();
+
+const statusOkResultSchema = z.object({ status: z.literal('ok') }).strict();
+const statusDeletedResultSchema = z.object({ status: z.literal('deleted') }).strict();
+const statusClearedResultSchema = z.object({ status: z.literal('cleared') }).strict();
+const statusSavedResultSchema = z.object({ status: z.literal('saved') }).strict();
+
+/** session.rename binding: name echoes only on the unchanged path. */
+const sessionRenameResultSchema = z.discriminatedUnion('status', [
+  z.object({ status: z.literal('renamed') }).strict(),
+  z.object({ status: z.literal('unchanged'), name: z.string() }).strict(),
+  z.object({ status: z.literal('not_found') }).strict(),
+  z.object({ status: z.literal('not_active') }).strict(),
+]);
+
+/** session.change_model binding: selection/modelLabel echo on the changed paths. */
+const sessionChangeModelResultSchema = z.discriminatedUnion('status', [
+  z.object({
+    status: z.literal('unchanged'),
+    selection: modelSelectionSchema.nullable(),
+    modelLabel: z.string().nullable(),
+  }).strict(),
+  z.object({
+    status: z.literal('changed'),
+    selection: modelSelectionSchema.nullable(),
+    modelLabel: z.string().nullable(),
+  }).strict(),
+  z.object({ status: z.literal('not_found') }).strict(),
+  z.object({ status: z.literal('not_active') }).strict(),
+]);
+
 // ── Method registry ───────────────────────────────────────────────────────────
 
 /** One method registry entry: the params and result schemas for a method. */
@@ -956,31 +905,36 @@ export const HOST_METHODS = {
   },
 
   'chat.send': { params: chatSendSchema, result: chatSendResultSchema },
-  'chat.cancel': { params: chatCancelSchema, result: configSaveResultSchema },
+  'chat.cancel': { params: chatCancelSchema, result: chatCancelResultSchema },
   'chat.queue_next': { params: chatQueueNextSchema, result: voidResult },
-  'chat.stop': { params: chatStopSchema, result: configSaveResultSchema },
+  'chat.stop': { params: chatStopSchema, result: chatStopResultSchema },
+  /**
+   * `null` when no session is active for the client (the binding answers
+   * null before touching the session store); the schema is the shared
+   * chatSessionSnapshotSchema, already nullable.
+   */
   'chat.snapshot': { params: chatSnapshotSchema, result: chatSessionSnapshotSchema },
   'chat.compact': { params: chatCompactSchema, result: chatCompactResultSchema },
 
-  'subagents.snapshot': { params: subagentSnapshotParamsSchema, result: subagentSnapshotResultSchema },
-  'subagents.detail': { params: subagentDetailParamsSchema, result: subagentDetailResultSchema },
+  'subagents.snapshot': { params: subagentSnapshotRequestSchema, result: subagentSnapshotResultSchema },
+  'subagents.detail': { params: subagentDetailRequestSchema, result: subagentDetailResultSchema },
 
   'session.list': { params: noParams, result: z.array(sessionSummaryResultSchema) },
   'session.load': { params: sessionLoadSchema, result: sessionResultSchema.nullable() },
   'session.open': { params: sessionOpenSchema, result: sessionOpenResultSchema },
   'session.history_page': { params: sessionHistoryPageSchema, result: sessionHistoryPageResultSchema },
   'session.create': { params: noParams, result: sessionResultSchema },
-  'session.clear_active': { params: noParams, result: configSaveResultSchema },
+  'session.clear_active': { params: noParams, result: statusClearedResultSchema },
   'session.delete': { params: sessionDeleteSchema, result: sessionDeleteResultSchema },
-  'session.rename': { params: sessionRenameSchema, result: configSaveResultSchema },
-  'session.change_model': { params: sessionChangeModelSchema, result: configSaveResultSchema },
+  'session.rename': { params: sessionRenameSchema, result: sessionRenameResultSchema },
+  'session.change_model': { params: sessionChangeModelSchema, result: sessionChangeModelResultSchema },
   'session.get_workspace': { params: noParams, result: workspaceInfoSchema },
   'session.set_workspace': { params: sessionSetWorkspaceSchema, result: workspaceInfoSchema },
   /** Native host dialog; gated by the 'session.pick_project_dir' capability. */
   'session.pick_project_dir': { params: noParams, result: workspaceInfoSchema },
   'session.change_cwd': { params: sessionChangeCwdSchema, result: sessionResultSchema.nullable() },
-  'session.set_reasoning_effort': { params: sessionSetReasoningEffortSchema, result: configSaveResultSchema },
-  'session.set_service_tier': { params: sessionSetServiceTierSchema, result: configSaveResultSchema },
+  'session.set_reasoning_effort': { params: sessionSetReasoningEffortSchema, result: statusOkResultSchema },
+  'session.set_service_tier': { params: sessionSetServiceTierSchema, result: statusOkResultSchema },
 
   'session.working_set_get': { params: noParams, result: workingSetSnapshotSchema },
   'session.working_set_open_or_focus': { params: workingSetIdParamsSchema, result: workingSetSnapshotSchema },
@@ -992,23 +946,23 @@ export const HOST_METHODS = {
   'session.activity_mark_seen': { params: sessionMarkSeenParamsSchema, result: sessionActivityResultSchema.nullable() },
 
   'bgcmd.snapshot': { params: bgCommandSnapshotRequestSchema, result: bgCommandSnapshotResultSchema },
-  'bgcmd.list': { params: bgCommandListParamsSchema, result: bgCommandListResultSchema },
-  'bgcmd.send_input': { params: bgCommandSendInputParamsSchema, result: bgCommandSendInputResultSchema },
-  'bgcmd.terminate': { params: bgCommandControlParamsSchema, result: bgCommandTerminateResultSchema },
-  'bgcmd.release_input': { params: bgCommandControlParamsSchema, result: bgCommandReleaseInputResultSchema },
+  'bgcmd.list': { params: bgCommandListRequestSchema, result: bgCommandListResultSchema },
+  'bgcmd.send_input': { params: bgCommandSendInputRequestSchema, result: bgCommandSendInputResultSchema },
+  'bgcmd.terminate': { params: bgCommandControlRequestSchema, result: bgCommandTerminateResultSchema },
+  'bgcmd.release_input': { params: bgCommandControlRequestSchema, result: bgCommandReleaseInputResultSchema },
 
   'ask_question.snapshot': { params: noParams, result: askQuestionSnapshotResultSchema },
   'ask_question.answer': { params: askQuestionAnswerSchema, result: okResultSchema },
   'ask_question.cancel': { params: askQuestionCancelSchema, result: okResultSchema },
 
   'permission.snapshot': { params: noParams, result: permissionSnapshotResultSchema },
-  'permission.approval_answer': { params: permissionApprovalAnswerParamsSchema, result: okResultSchema },
+  'permission.approval_answer': { params: permissionApprovalAnswerSchema, result: okResultSchema },
   'permission.set_session_mode': {
-    params: permissionSetSessionModeParamsSchema,
+    params: permissionSetSessionModeSchema,
     result: permissionSessionModeMutationResultSchema,
   },
   'permission.get_session_mode': {
-    params: permissionGetSessionModeParamsSchema,
+    params: permissionGetSessionModeSchema,
     result: permissionSessionModeResultSchema,
   },
 
@@ -1017,22 +971,22 @@ export const HOST_METHODS = {
   'project.trust_list': { params: noParams, result: z.array(trustedProjectEntrySchema) },
 
   'definitions.list': { params: noParams, result: definitionsListResultSchema },
-  'agent.save': { params: agentSaveParamsSchema, result: managedAgentResultSchema },
-  'agent.delete': { params: definitionDeleteParamsSchema, result: configSaveResultSchema },
-  'skill.save': { params: skillSaveParamsSchema, result: managedSkillResultSchema },
-  'skill.delete': { params: definitionDeleteParamsSchema, result: configSaveResultSchema },
-  'personality.save': { params: personalitySaveParamsSchema, result: managedPersonalityResultSchema },
-  'personality.delete': { params: definitionDeleteParamsSchema, result: configSaveResultSchema },
-  'shared_prompt.save': { params: sharedPromptSaveParamsSchema, result: managedSharedPromptResultSchema },
-  'shared_prompt.delete': { params: sharedPromptDeleteParamsSchema, result: configSaveResultSchema },
+  'agent.save': { params: agentSaveSchema, result: managedAgentResultSchema },
+  'agent.delete': { params: definitionDeleteSchema, result: statusDeletedResultSchema },
+  'skill.save': { params: skillSaveSchema, result: managedSkillResultSchema },
+  'skill.delete': { params: definitionDeleteSchema, result: statusDeletedResultSchema },
+  'personality.save': { params: personalitySaveSchema, result: managedPersonalityResultSchema },
+  'personality.delete': { params: definitionDeleteSchema, result: statusDeletedResultSchema },
+  'shared_prompt.save': { params: sharedPromptSaveSchema, result: managedSharedPromptResultSchema },
+  'shared_prompt.delete': { params: sharedPromptDeleteSchema, result: statusDeletedResultSchema },
   /** Host-local file reveal; gated by the 'definitions.reveal' capability. */
-  'definition.reveal': { params: definitionRevealParamsSchema, result: configSaveResultSchema },
+  'definition.reveal': { params: definitionRevealSchema, result: statusOkResultSchema },
 
   'mcp.status': { params: noParams, result: z.array(mcpServerStatusResultSchema) },
 
   'rag.status': { params: noParams, result: ragStatusResultSchema },
   'rag.index': { params: ragIndexSchema, result: ragIndexResultSchema },
-  'rag.clear': { params: noParams, result: configSaveResultSchema },
+  'rag.clear': { params: noParams, result: statusClearedResultSchema },
 
   'ast.status': { params: noParams, result: astStatusResultSchema },
   'ast.index': { params: astIndexSchema, result: astIndexResultSchema },
@@ -1040,27 +994,27 @@ export const HOST_METHODS = {
   'tool.execute': { params: toolExecuteSchema, result: toolExecuteResultSchema },
 
   'config.get': { params: noParams, result: configSchema },
-  'config.save': { params: configSaveSchema, result: configSaveResultSchema },
+  'config.save': { params: configSaveSchema, result: statusSavedResultSchema },
   'config.get_home': { params: noParams, result: configSchema },
   'config.read_project': { params: configReadProjectSchema, result: projectConfigReadResultSchema },
   'config.save_project': { params: configSaveProjectSchema, result: voidResult },
 
   'providers.list': { params: noParams, result: providerOverviewResultSchema },
-  'providers.validate': { params: providerConnectionIdParamsSchema, result: providerMutationResultSchema },
-  'providers.disable': { params: providerConnectionIdParamsSchema, result: providerMutationResultSchema },
-  'providers.enable': { params: providerConnectionIdParamsSchema, result: providerMutationResultSchema },
-  'providers.disconnect': { params: providerDisconnectParamsSchema, result: providerMutationResultSchema },
-  'providers.delete': { params: providerDisconnectParamsSchema, result: providerDeleteConnectionResultSchema },
+  'providers.validate': { params: providerConnectionIdRequestSchema, result: providerMutationResultSchema },
+  'providers.disable': { params: providerConnectionIdRequestSchema, result: providerMutationResultSchema },
+  'providers.enable': { params: providerConnectionIdRequestSchema, result: providerMutationResultSchema },
+  'providers.disconnect': { params: providerDisconnectRequestSchema, result: providerMutationResultSchema },
+  'providers.delete': { params: providerDisconnectRequestSchema, result: providerDeleteConnectionResultSchema },
   'providers.model_list': {
-    params: providerModelListParamsSchema,
+    params: providerModelListRequestSchema.optional(),
     result: z.array(providerModelOptionResultSchema),
   },
   'providers.discover_models': {
-    params: providerConnectionIdParamsSchema,
+    params: providerConnectionIdRequestSchema,
     result: providerDiscoverModelsResultSchema,
   },
-  'providers.status_refresh': { params: providerStatusRefreshParamsSchema, result: providerStatusViewSchema.nullable() },
-  'providers.quota_refresh': { params: providerConnectionIdParamsSchema, result: providerStatusViewSchema.nullable() },
+  'providers.status_refresh': { params: providerStatusRefreshRequestSchema, result: providerStatusViewSchema.nullable() },
+  'providers.quota_refresh': { params: providerConnectionIdRequestSchema, result: providerStatusViewSchema.nullable() },
 } as const satisfies Record<string, HostMethodSpec>;
 
 export type HostMethodName = keyof typeof HOST_METHODS;

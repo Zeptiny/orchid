@@ -8,6 +8,15 @@ The machine the app runs on is an implicit host: it is embedded in the app proce
 
 Because the daemon — not the app — runs turns, **work keeps running while you are disconnected**. Closing the app, losing Wi-Fi, or putting the laptop to sleep does not stop a turn a remote host has accepted. Any client (this app on this machine, the same app on another machine) reconnecting to that host resumes the complete view: sessions, in-flight turns, pending approvals, and pending questions.
 
+## Requirements on the machine running the app
+
+Adding and connecting to a machine shells out to the system `ssh` and `ssh-keyscan` binaries, so both must be on the app's PATH:
+
+- **macOS / Linux:** `ssh` and `ssh-keyscan` ship with the OS (part of OpenSSH) and are normally already on PATH.
+- **Windows:** enable the **OpenSSH Client** optional feature (Settings → Apps → Optional features, or `Add-WindowsCapability -Online -Name OpenSSH.Client~~~~0.0.1.0` in an elevated PowerShell), which provides both binaries.
+
+A missing `ssh-keyscan` fails the wizard's keyscan step; a missing `ssh` fails every connect attempt.
+
 ## Install the agent on a remote
 
 Install `orchid-agent` on the remote so the `orchid-agent` binary is on the remote's non-interactive PATH (`ssh <host> orchid-agent --version` must succeed without a TTY). How the binary is distributed — npm package, bundled archive, or copying the bundle out of an app install — is still an open packaging question; today the supported path is building the agent from this repository on the remote (or for it):
@@ -68,6 +77,7 @@ Closing the app entirely is just a very long disconnect from the remote's perspe
 | `host-key-mismatch` | The remote's host key no longer matches the pinned entry — legitimately (host rebuilt, key rotated) or not (this is what the pin exists to catch). | Verify out-of-band that the host's key really changed, then delete `~/.orchid/machines/<machine-id>/known_hosts` and re-add the machine to scan, confirm, and re-pin. Do not resolve this by weakening `StrictHostKeyChecking`. |
 | `auth-failed` | Key/agent authentication failed (passwords are disabled by `BatchMode`). | Ensure the key is authorized on the remote, loaded into `ssh-agent` (`ssh-add`), and the machine's user is correct. `ssh <user>@<host> true` must succeed without a prompt. |
 | `unreachable` | SSH could not reach the host (name resolution, refused, timeout, VPN). | Check the host and port, that sshd runs on the remote, and network/VPN connectivity. |
+| `unknown` | SSH failed in a way the classifier could not categorize — an unexpected exit code with stderr no known pattern matches. The daemon-ensure cycle does **not** arm on this classification (only `unreachable` and `agent-missing` do). | Run `ssh <user>@<host> true` manually and compare; the machine status error carries the ssh exit code and a stderr excerpt in its hint. |
 | `agent-missing` | SSH worked but `orchid-agent` did not answer — not installed, not on the non-interactive PATH, or the daemon is not running. | Install the agent (see above), verify `ssh <host> orchid-agent --version`, or start the daemon manually. The app also attempts one automatic `serve --socket … --detached` per connect cycle. |
 | `not-connected` | A machine action (e.g. switching the active machine) targeted a host whose connection is not `connected`. | Connect the machine first, or wait for the automatic reconnect. |
 | `protocol-mismatch` | The remote agent's protocol version differs from the app's. | Update `orchid-agent` on the remote (or the app) so both speak the same `PROTOCOL_VERSION`. |

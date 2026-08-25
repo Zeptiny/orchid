@@ -13,6 +13,12 @@
  * (METHOD_NOT_FOUND, INVALID_PARAMS, PROTOCOL_MISMATCH, …) and — over an
  * in-process transport — the *original* value the binding threw, rethrown
  * verbatim (identity preserved; see `attachHostOriginalError`).
+ *
+ * Inbound validation (`validateInbound`) and request deadlines
+ * (`requestTimeoutMs` / `methodTimeoutMs`) are opt-in: the embedded local
+ * host keeps its default 0-deadline, unvalidated behavior (same-process,
+ * trusted), while remote machine clients enable both — see
+ * machines/remote-clients.ts.
  */
 import {
   HOST_ERROR_CODES,
@@ -22,10 +28,15 @@ import {
   HostProtocolError,
   PROTOCOL_VERSION,
   assertProtocolVersionMatches,
+  lookupHostEvent,
+  lookupHostMethod,
   takeHostOriginalError,
   type HostEventName,
   type HostEventParams,
   type HostErrorCode,
+  type HostMethodName,
+  type HostMethodParams,
+  type HostMethodResult,
   type HostRequestId,
 } from '../../shared/host/protocol';
 import {
@@ -44,6 +55,26 @@ export interface HostClientOptions {
    * methods (indexing, discovery) must not be cut short by a client timer.
    */
   readonly requestTimeoutMs?: number;
+  /**
+   * Per-method deadline resolver (ms), consulted before
+   * {@link HostClientOptions.requestTimeoutMs}: return a number to set — or,
+   * with 0, disable — one method's deadline, or undefined to fall back to the
+   * default. Remote machine clients use this to exempt long-running methods
+   * (indexing, model discovery, compaction) from the interactive deadline
+   * while every other method still gets one.
+   */
+  readonly methodTimeoutMs?: (method: string) => number | undefined;
+  /**
+   * Validate inbound event payloads and ok-response results against the
+   * protocol registries (`HOST_EVENTS` / `HOST_METHODS`). Off by default: the
+   * embedded local host is same-process and trusted, so validation there is
+   * pure per-event overhead. Remote machine clients enable it — a buggy or
+   * hostile daemon must not push arbitrarily-shaped payloads into renderer
+   * reducers. Malformed events are dropped with a warning (they are
+   * fire-and-forget); malformed results reject the pending request with a
+   * typed error instead of being delivered.
+   */
+  readonly validateInbound?: boolean;
   /** Diagnostic label used in error messages. */
   readonly label?: string;
 }
@@ -62,6 +93,8 @@ export class HostClient {
   private readonly label: string;
   private readonly protocolVersion: number;
   private readonly requestTimeoutMs: number;
+  private readonly methodTimeoutMs: ((method: string) => number | undefined) | undefined;
+  private readonly validateInbound: boolean;
   private readonly transport: HostTransport;
   private readonly structured: StructuredHostTransport | null;
   private readonly pending = new Map<HostRequestId, PendingRequest>();
@@ -78,6 +111,8 @@ export class HostClient {
     this.label = options.label ?? `host:${options.clientId}`;
     this.protocolVersion = options.protocolVersion ?? PROTOCOL_VERSION;
     this.requestTimeoutMs = options.requestTimeoutMs ?? 0;
+    this.methodTimeoutMs = options.methodTimeoutMs;
+    this.validateInbound = options.validateInbound ?? false;
     this.structured = supportsStructuredFrames(transport) ? transport : null;
 
     if (this.structured) {
@@ -104,10 +139,17 @@ export class HostClient {
   /**
    * Invoke a host method. Rejects with the preserved original error when the
    * transport carried one, otherwise with a typed {@link HostProtocolError}.
+   *
+   * Two overloads: the registry-typed call pins params and result to the
+   * `HOST_METHODS` entry at compile time (`HostMethodParams[M]` /
+   * `HostMethodResult[M]`), while the generic string form keeps dynamic call
+   * sites (routing, resync) that resolve the method at runtime working.
    */
-  async request<T = unknown>(method: string, params?: unknown): Promise<T> {
+  request<M extends HostMethodName>(method: M, params: HostMethodParams<M>): Promise<HostMethodResult<M>>;
+  request<T = unknown>(method: string, params?: unknown): Promise<T>;
+  async request(method: string, params?: unknown): Promise<unknown> {
     await this.handshake;
-    return (await this.send(method, params)) as T;
+    return (await this.send(method, params)) as unknown;
   }
 
   private async performHandshake(): Promise<void> {
@@ -121,6 +163,16 @@ export class HostClient {
     }
   }
 
+  /**
+   * Effective deadline for one method: the per-method resolver (when it
+   * returns a number, including 0 = disabled) wins over the default
+   * {@link HostClientOptions.requestTimeoutMs}.
+   */
+  private resolveTimeoutMs(method: string): number {
+    const perMethod = this.methodTimeoutMs?.(method);
+    return perMethod !== undefined ? perMethod : this.requestTimeoutMs;
+  }
+
   private send(method: string, params?: unknown): Promise<unknown> {
     if (!this.alive) {
       return Promise.reject(new HostProtocolError(
@@ -130,16 +182,20 @@ export class HostClient {
     }
     this.nextRequestId += 1;
     const id = this.nextRequestId;
+    const timeoutMs = this.resolveTimeoutMs(method);
     return new Promise<unknown>((resolve, reject) => {
       let timer: ReturnType<typeof setTimeout> | null = null;
-      if (this.requestTimeoutMs > 0) {
+      if (timeoutMs > 0) {
         timer = setTimeout(() => {
+          // A wedged-but-alive host rejects this one request with a typed
+          // TIMEOUT; the transport itself is deliberately left open (a later
+          // response for the abandoned id is ignored, later requests proceed).
           this.pending.delete(id);
           reject(new HostProtocolError(
             HOST_ERROR_CODES.TIMEOUT,
-            `${this.label}: '${method}' timed out after ${this.requestTimeoutMs}ms`,
+            `${this.label}: '${method}' timed out after ${timeoutMs}ms`,
           ));
-        }, this.requestTimeoutMs);
+        }, timeoutMs);
         timer.unref?.();
       }
       this.pending.set(id, { resolve, reject, method, timer });
@@ -185,10 +241,53 @@ export class HostClient {
     if (pending.timer) clearTimeout(pending.timer);
 
     if (record.ok === true) {
-      pending.resolve(record.result ?? null);
+      const result = record.result ?? null;
+      if (this.validateInbound) {
+        const failure = this.validateResult(pending.method, result);
+        if (failure) {
+          pending.reject(failure);
+          return;
+        }
+      }
+      pending.resolve(result);
       return;
     }
     pending.reject(this.toError(record.error, pending.method));
+  }
+
+  /**
+   * Gate one ok-response result against the pending method's registered
+   * result schema; returns the typed error to reject with, or null when the
+   * result may be delivered. Coded against the registry API
+   * (`lookupHostMethod`), never a hardcoded shape, so schema corrections land
+   * without touching this gate.
+   *
+   * Two deliberate laxities, both documented:
+   * - Wire servers serialize an absent (void) result as `null` while the
+   *   registry models those results as `z.void()` (which accepts only
+   *   `undefined`), so the null encoding is accepted for schemas that accept
+   *   undefined — the gate must not fail legitimate void responses while the
+   *   registries are being aligned.
+   * - The ORIGINAL result is delivered after validation, never the parsed
+   *   copy: validation is a gate, not a transform, so in-process results keep
+   *   their object identity (see the zero-copy transport contract).
+   */
+  private validateResult(method: string, result: unknown): HostProtocolError | null {
+    const spec = lookupHostMethod(method);
+    if (!spec) return null;
+    const parsed = spec.result.safeParse(result);
+    if (parsed.success) return null;
+    if ((result === null || result === undefined) && spec.result.safeParse(undefined).success) {
+      return null;
+    }
+    const issues = parsed.error.issues
+      .map((issue) => `${issue.path.length > 0 ? issue.path.join('.') : '(root)'}: ${issue.message}`)
+      .join('; ');
+    return new HostProtocolError(
+      HOST_ERROR_CODES.INTERNAL,
+      `${this.label}: '${method}' returned a malformed result: ${issues}`,
+      parsed.error,
+    );
   }
 
   private toError(payload: unknown, method: string): unknown {
@@ -248,8 +347,26 @@ export class HostClient {
 
   private dispatchEvent(ev: string, params: unknown, seq: number): void {
     if (seq > this.highestSeq) this.highestSeq = seq;
+    const schema = lookupHostEvent(ev);
+    if (!schema) {
+      // Not a registry event (typo or a peer inventing channels): dropped.
+      console.warn(`[${this.label}] dropping frame for unknown host event '${ev}'`);
+      return;
+    }
     const set = this.handlers.get(ev);
     if (!set) return;
+    if (this.validateInbound) {
+      const parsed = schema.safeParse(params);
+      if (!parsed.success) {
+        // Events are fire-and-forget: a malformed payload is dropped with a
+        // warning and never thrown, so one bad frame cannot disturb the
+        // connection. The seq above still advances (resync gap detection).
+        console.warn(`[${this.label}] dropping malformed '${ev}' payload:`, parsed.error);
+        return;
+      }
+    }
+    // The ORIGINAL params object is delivered (validated, not transformed)
+    // so the in-process path keeps object identity.
     for (const handler of [...set]) {
       try {
         handler(params, seq);

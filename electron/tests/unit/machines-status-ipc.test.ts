@@ -106,6 +106,11 @@ const mocks = vi.hoisted(() => {
       this.transports.delete(machineId);
       if (this.statuses.has(machineId)) this.setStateForTest(machineId, 'offline');
     }
+
+    disconnectAll(): void {
+      mocks.teardownOrder.push('disconnectAll');
+      for (const machineId of [...this.statuses.keys()]) this.disconnect(machineId);
+    }
   }
 
   /** Minimal HostTransport answering the HostClient's host.hello handshake. */
@@ -159,6 +164,8 @@ const mocks = vi.hoisted(() => {
     windows: [] as FakeWindow[],
     homeConfigPath: '',
     configState: {} as Record<string, unknown>,
+    /** Ordered teardown events (unregisterMachinesIPC ordering assertions). */
+    teardownOrder: [] as string[],
     makeFakeTransport,
     MachineConnectionError,
     manager: () => {
@@ -232,6 +239,19 @@ vi.mock('../../src/main/machines/host-key', async (importOriginal) => {
   return {
     ...actual,
     scanHostKeys: vi.fn(),
+  };
+});
+
+// Teardown ordering (quit path): the client teardown must be observable
+// relative to the manager's disconnect-all while still running for real.
+vi.mock('../../src/main/machines/remote-clients', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../src/main/machines/remote-clients')>();
+  return {
+    ...actual,
+    detachAllRemoteMachineClients: vi.fn(() => {
+      mocks.teardownOrder.push('detachAll');
+      actual.detachAllRemoteMachineClients();
+    }),
   };
 });
 
@@ -321,6 +341,7 @@ function statusBroadcasts(): unknown[] {
 beforeEach(() => {
   mocks.handlers.clear();
   mocks.windows.length = 0;
+  mocks.teardownOrder.length = 0;
   homeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'orchid-machines-status-'));
   mocks.homeConfigPath = path.join(homeDir, 'config.json');
   mocks.configState = defaults() as unknown as Record<string, unknown>;
@@ -645,5 +666,29 @@ describe('machines:delete with a connected machine', () => {
       machineId: 'build-1',
     })) as { status: string };
     expect(reconfirm.status).toBe('error');
+  });
+});
+
+// ── Quit teardown ordering ───────────────────────────────────────────────────
+
+describe('unregisterMachinesIPC (quit teardown)', () => {
+  it('disconnects every machine before detaching clients', async () => {
+    const machine = remoteMachine('build-1', 'Build server');
+    writeHomeConfig({ machines: [machine] });
+    await handler(IPC_CHANNELS.MACHINES_SCAN_HOST_KEY)(null, { machineId: 'build-1' });
+    await handler(IPC_CHANNELS.MACHINES_CONFIRM_HOST_KEY)(null, { machineId: 'build-1' });
+    await handler(IPC_CHANNELS.MACHINES_CONNECT)(null, { machineId: 'build-1' });
+    expect(registeredMachines()).toContain('build-1');
+    expect(manager().getStatus('build-1').state).toBe('connected');
+
+    mocks.teardownOrder.length = 0;
+    unregisterMachinesIPC();
+
+    // Offline FIRST (closing transports from the manager side suppresses the
+    // unexpected-loss reconnect loop that would spawn ssh during the quit
+    // drain), then the client teardown.
+    expect(mocks.teardownOrder).toEqual(['disconnectAll', 'detachAll']);
+    expect(manager().getStatus('build-1').state).toBe('offline');
+    expect(registeredMachines()).not.toContain('build-1');
   });
 });

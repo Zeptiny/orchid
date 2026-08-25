@@ -20,6 +20,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MachineConnectionManager } from '../../src/main/machines/connection-manager';
 import { spawnSshTransport } from '../../src/main/machines/ssh-transport';
 import {
+  BRIDGE_DAEMON_SOCKET_EXIT_CODE,
   buildSshServeCommand,
   spawnDaemonEnsure,
   REMOTE_DAEMON_SOCKET_PATH,
@@ -28,6 +29,21 @@ import { writeKnownHosts } from '../../src/main/machines/host-key';
 import type { RemoteMachineRecord } from '../../src/shared/types/machine';
 
 const FIXTURE = new URL('../fixtures/machines/hello-bridge.cjs', import.meta.url).pathname;
+
+/**
+ * The exact `orchid-agent bridge` failure the app sees when the remote daemon
+ * is down: the real refusal text plus the bridge's distinct exit code (set by
+ * `bridgeStdioToSocket` in host/daemon.ts). Spawned as a node one-liner so
+ * the classification path runs through the real transport close handling.
+ */
+const BRIDGE_REFUSAL_SCRIPT =
+  'process.stderr.write(' +
+  JSON.stringify(
+    `Cannot connect to the orchid-agent daemon socket at ${REMOTE_DAEMON_SOCKET_PATH} ` +
+      `(connect ECONNREFUSED /home/deploy/.orchid/daemon.sock). ` +
+      `Is \`orchid-agent serve --socket ${REMOTE_DAEMON_SOCKET_PATH}\` running?\n`,
+  ) +
+  `);process.exit(${BRIDGE_DAEMON_SOCKET_EXIT_CODE});`;
 
 const T0 = '2026-08-23T00:00:00.000Z';
 
@@ -124,7 +140,8 @@ describe('buildSshServeCommand (one-shot argv)', () => {
       'ssh',
       '-o', 'BatchMode=yes',
       '-o', 'StrictHostKeyChecking=yes',
-      '-o', `UserKnownHostsFile=${hostsPath}`,
+      // Quoted for ssh's own option parser (paths may contain spaces).
+      '-o', `UserKnownHostsFile="${hostsPath}"`,
       '-o', 'GlobalKnownHostsFile=none',
       '-o', 'ConnectTimeout=10',
       '-o', 'ServerAliveInterval=15',
@@ -208,6 +225,54 @@ describe('MachineConnectionManager daemon ensure', () => {
       '--detached',
     ]);
     // The timed-out transport was killed and replaced by the retry transport.
+    expect(spawns.created).toBe(2);
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    expect(spawns.closed).toBe(1);
+  });
+
+  it('runs the ensure cycle when the bridge refuses the daemon socket (daemon down, exit 3)', async () => {
+    pinMachine();
+    const recorder = recordingSpawn(0);
+    const ensure = vi.fn(
+      (machine: RemoteMachineRecord, hostsPath: string) =>
+        spawnDaemonEnsure(machine, { spawnFn: recorder.spawnFn, knownHostsPath: hostsPath }),
+    );
+    // First bridge: the real refusal a down daemon produces (stderr text +
+    // BRIDGE_DAEMON_SOCKET_EXIT_CODE). Retry bridge: the freshly started
+    // daemon answers.
+    const spawns = { created: 0, closed: 0 };
+    let bridgeCall = 0;
+    const manager = new MachineConnectionManager({
+      homeDir,
+      handshakeTimeoutMs: 150,
+      ensureSettleMs: 0,
+      ensureDaemon: ensure,
+      transportFactory: (machine) => {
+        spawns.created += 1;
+        bridgeCall += 1;
+        const argv =
+          bridgeCall === 1
+            ? [process.execPath, '-e', BRIDGE_REFUSAL_SCRIPT]
+            : [process.execPath, FIXTURE, 'stable'];
+        const transport = spawnSshTransport(machine, {
+          spawnFn: spawn,
+          commandFactory: () => argv,
+        });
+        transport.onClose(() => {
+          spawns.closed += 1;
+        });
+        return transport;
+      },
+    });
+    managers.push(manager);
+
+    const status = await manager.connect(sshMachine());
+
+    // The refusal classified as agent-missing, so the one-shot serve command
+    // ran and the retried bridge connected — the daemon-down auto-ensure path.
+    expect(status.state).toBe('connected');
+    expect(manager.getStatus('build-1').state).toBe('connected');
+    expect(ensure).toHaveBeenCalledTimes(1);
     expect(spawns.created).toBe(2);
     await new Promise((resolve) => setTimeout(resolve, 60));
     expect(spawns.closed).toBe(1);

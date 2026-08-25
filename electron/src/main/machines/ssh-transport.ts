@@ -14,6 +14,7 @@ import { spawn } from 'node:child_process';
 import type { ChildProcess, SpawnOptions } from 'node:child_process';
 import { parse as shellParse } from 'shell-quote';
 import { createFrameDecoder } from '../../shared/host/framing';
+import type { StructuredHostTransport } from '../host/transport';
 import { knownHostsPath as defaultKnownHostsPath } from './host-key';
 import type { MachineRecord } from '../../shared/types/machine';
 
@@ -38,11 +39,31 @@ export interface HostTransport {
   close(): void;
 }
 
-/** HostTransport plus the stderr excerpt the connection manager classifies. */
+/**
+ * HostTransport plus the structured frame seam (review fix #18): decoded
+ * frames cross to the host client as objects — no stringify/parse round-trip
+ * on the per-event hot path — while the line path stays available for legacy
+ * line consumers (the connection manager's handshake sniffer).
+ *
+ * Formally extends only the local HostTransport (whose onClose carries the
+ * child's exit code, so multi-inheriting StructuredHostTransport would
+ * conflict); the underscored assertion below keeps the structured members
+ * pinned to that interface at compile time instead.
+ */
 export interface SshTransport extends HostTransport {
+  /** Send one already-decoded frame (request) to the daemon. */
+  writeFrame(frame: unknown): void;
+  /** Register a receiver for already-decoded frames from the daemon. */
+  onFrame(cb: (frame: unknown) => void): void;
   /** Last ~50 stderr lines (plus `[framing] …` notes), oldest first. */
   recentStderr(): string[];
 }
+
+/** Interface-only assertion helper: `U` must extend `T` or tsc fails here. */
+type _RequireExtends<T, _U extends T> = true;
+
+/** SshTransport must satisfy StructuredHostTransport (host/transport.ts). */
+type _SshTransportSatisfiesStructured = _RequireExtends<StructuredHostTransport, SshTransport>;
 
 // ---------------------------------------------------------------------------
 // Command construction
@@ -135,9 +156,60 @@ export function splitAgentCommand(command: string): string[] {
 export const REMOTE_DAEMON_SOCKET_PATH = '~/.orchid/daemon.sock';
 
 /**
+ * Typed rejection for a machine `host`/`user` pair whose assembled `[user@]host`
+ * destination token OpenSSH would not read as a destination. This is the
+ * enforcement point for destination injection: ssh parses any argument
+ * starting with `-` as an option — e.g. `-oProxyCommand=cmd` executes `cmd`
+ * locally during connection setup, BEFORE host-key checking — so the token
+ * must be fail-closed even though the shared record schema (and the registry
+ * behind it) rejects these earlier.
+ */
+export class MachineDestinationError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'MachineDestinationError';
+  }
+}
+
+/**
+ * Quote one `-o` option value for OpenSSH's own config-line parser: ssh
+ * tokenizes each `-o` argument itself and strips matching double quotes
+ * (ssh_config quoting rules), so a value containing spaces — e.g. a home
+ * directory like `/Users/my name/` — must be embedded as `Keyword="value"`
+ * inside the single argv element. spawn never re-splits argv (there is no
+ * shell); an unquoted space would either truncate the value or make older
+ * ssh builds reject the option outright. A value containing a literal `"`
+ * cannot be expressed — ssh then fails closed on the malformed option.
+ */
+function sshOptionValue(value: string): string {
+  return `"${value}"`;
+}
+
+/**
+ * Fail closed on a destination OpenSSH would parse as anything but
+ * `[user@]host`: a leading `-` turns the token into an option (see
+ * {@link MachineDestinationError}), a host segment starting with `-` mangles
+ * the same way once the user prefix is absent, and a second `@`, `#`, or
+ * whitespace re-splits or mangles the user/host boundary.
+ */
+function assertSafeDestination(machine: MachineRecord, destination: string): void {
+  const atCount = (destination.match(/@/g) ?? []).length;
+  const host = destination.includes('@')
+    ? destination.slice(destination.indexOf('@') + 1)
+    : destination;
+  if (destination.startsWith('-') || host.startsWith('-') || atCount > 1 || /[\s#]/.test(destination)) {
+    throw new MachineDestinationError(
+      `Machine '${machine.id}' has an unsafe ssh destination '${destination}': neither the token ` +
+        'nor its host segment may start with "-", and it must not contain whitespace, "#", or more ' +
+        'than one "@" — ssh would parse the token as options instead of a host.',
+    );
+  }
+}
+
+/**
  * Shared ssh hardening + destination argv (everything before `--`):
  *
- * `ssh -o BatchMode=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=<path>
+ * `ssh -o BatchMode=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile="<path>"
  * -o GlobalKnownHostsFile=none -o ConnectTimeout=10 -o ServerAliveInterval=15
  * -o ServerAliveCountMax=3 [-p port] [user@]host`
  *
@@ -147,6 +219,11 @@ function buildSshBaseArgv(machine: MachineRecord, knownHostsPath: string): strin
   if (machine.kind !== 'ssh') {
     throw new Error(`Machine '${machine.id}' is not an SSH remote`);
   }
+  const destination = machine.user === '' ? machine.host : `${machine.user}@${machine.host}`;
+  // Defense in depth: the record schema rejects these first, but a record
+  // that bypassed validation (hand-edited state, future call sites) must
+  // never reach spawn.
+  assertSafeDestination(machine, destination);
   const argv = [
     'ssh',
     '-o',
@@ -154,7 +231,8 @@ function buildSshBaseArgv(machine: MachineRecord, knownHostsPath: string): strin
     '-o',
     'StrictHostKeyChecking=yes',
     '-o',
-    `UserKnownHostsFile=${knownHostsPath}`,
+    // One argv element; ssh strips the quotes when parsing the option value.
+    `UserKnownHostsFile=${sshOptionValue(knownHostsPath)}`,
     // The per-machine pin file must be the only trust source: a system-wide
     // (/etc/ssh/ssh_known_hosts) key must never satisfy host-key checking.
     '-o',
@@ -171,7 +249,7 @@ function buildSshBaseArgv(machine: MachineRecord, knownHostsPath: string): strin
   if (machine.port !== 22) {
     argv.push('-p', String(machine.port));
   }
-  argv.push(machine.user === '' ? machine.host : `${machine.user}@${machine.host}`);
+  argv.push(destination);
   return argv;
 }
 
@@ -244,7 +322,24 @@ interface SshExitPattern {
   readonly pattern: RegExp;
   readonly message: string;
   readonly hint: string;
+  /**
+   * Exit code that maps to this classification even without matching stderr.
+   * ssh forwards the remote command's exit status, so app-owned remote
+   * commands can report dedicated codes.
+   */
+  readonly exitCode?: number;
 }
+
+/**
+ * Exit code the remote `orchid-agent bridge` reports when it cannot connect
+ * to the daemon socket — the daemon is down (set by `bridgeStdioToSocket` in
+ * `host/daemon.ts`). Classifies the failure as agent-missing so the
+ * connection manager's daemon-ensure cycle arms and spawns
+ * `serve --detached`. Mirrored literal, twin of daemon.ts
+ * `BRIDGE_DAEMON_SOCKET_EXIT_CODE`: the daemon graph must never import this
+ * module (see `DEFAULT_DAEMON_SOCKET_PATH` there).
+ */
+export const BRIDGE_DAEMON_SOCKET_EXIT_CODE = 3;
 
 /** Ordered by precedence: the first matching stderr pattern wins. */
 const SSH_EXIT_PATTERNS: readonly SshExitPattern[] = [
@@ -270,8 +365,20 @@ const SSH_EXIT_PATTERNS: readonly SshExitPattern[] = [
   {
     kind: 'agent-missing',
     pattern: /command not found/i,
+    exitCode: 127,
     message: 'The remote bridge command was not found on the host.',
     hint: 'Install orchid-agent on the remote (it must be on the non-interactive PATH) and check the machine agent command.',
+  },
+  {
+    // The `orchid-agent bridge` refusal when the daemon socket is down:
+    // ECONNREFUSED for a dead daemon, ENOENT when none was ever started.
+    // ssh itself connected fine, so this is a missing agent, not an
+    // unreachable host — the daemon-ensure cycle arms on this classification.
+    kind: 'agent-missing',
+    pattern: /Cannot connect to the orchid-agent daemon socket[^\n]*(?:ECONNREFUSED|ENOENT)/i,
+    exitCode: BRIDGE_DAEMON_SOCKET_EXIT_CODE,
+    message: 'The remote orchid-agent daemon is not running.',
+    hint: 'The app will start it with `orchid-agent serve --socket ~/.orchid/daemon.sock --detached` and retry; if it keeps failing, run that command on the remote and check its ~/.orchid/logs.',
   },
 ];
 
@@ -280,7 +387,9 @@ const UNKNOWN_HINT_EXCERPT_CHARS = 300;
 
 /**
  * Classify an ssh exit from its code and a stderr excerpt. Text patterns take
- * precedence; exit 127 (remote command not found) is the code-level fallback.
+ * precedence; the dedicated exit codes (127 = remote command not found, the
+ * bridge's socket-refusal code = daemon down) are the code-level fallback
+ * when the stderr text was lost.
  */
 export function parseSshExit(code: number | null, stderrExcerpt: string): SshExitClassification {
   for (const entry of SSH_EXIT_PATTERNS) {
@@ -288,9 +397,10 @@ export function parseSshExit(code: number | null, stderrExcerpt: string): SshExi
       return { kind: entry.kind, message: entry.message, hint: entry.hint };
     }
   }
-  const agentMissing = SSH_EXIT_PATTERNS[3];
-  if (code === 127 && agentMissing !== undefined) {
-    return { kind: agentMissing.kind, message: agentMissing.message, hint: agentMissing.hint };
+  const byExitCode =
+    code === null ? undefined : SSH_EXIT_PATTERNS.find((entry) => entry.exitCode === code);
+  if (byExitCode !== undefined) {
+    return { kind: byExitCode.kind, message: byExitCode.message, hint: byExitCode.hint };
   }
   const excerpt = stderrExcerpt.trim().slice(-UNKNOWN_HINT_EXCERPT_CHARS);
   return {
@@ -320,9 +430,11 @@ export interface SpawnSshTransportOptions {
 }
 
 /**
- * Spawn the ssh transport for one machine. Stdout frames are decoded and
- * re-emitted as one JSON line per frame; framing violations fail closed by
- * killing the child (a hostile peer cannot grow the buffer).
+ * Spawn the ssh transport for one machine. Stdout frames are decoded once and
+ * delivered as objects through the structured seam (`onFrame`), falling back
+ * to one JSON line per frame for legacy `onData` consumers; framing
+ * violations fail closed by killing the child (a hostile peer cannot grow the
+ * buffer).
  */
 export function spawnSshTransport(
   machine: MachineRecord,
@@ -340,6 +452,7 @@ export function spawnSshTransport(
 
   const decoder = createFrameDecoder({ maxFrameBytes: options.maxFrameBytes });
   const dataCallbacks: Array<(line: string) => void> = [];
+  const frameCallbacks: Array<(frame: unknown) => void> = [];
   const closeCallbacks: Array<(code: number | null) => void> = [];
   const stderrLines: string[] = [];
   let stderrTail = '';
@@ -372,6 +485,23 @@ export function spawnSshTransport(
     for (const cb of closeCallbacks) cb(code);
   };
 
+  /**
+   * One decoded frame reaches its consumer without a JSON round-trip (review
+   * fix #18): a structured `onFrame` consumer (the host client) receives the
+   * decoded object directly; only when no structured consumer is installed
+   * is the frame re-encoded as one JSON line for legacy `onData` consumers
+   * (the connection manager's handshake sniffer, which settles before a
+   * client ever attaches).
+   */
+  const deliverFrame = (frame: unknown): void => {
+    if (frameCallbacks.length > 0) {
+      for (const cb of frameCallbacks) cb(frame);
+      return;
+    }
+    const line = JSON.stringify(frame);
+    for (const cb of dataCallbacks) cb(line);
+  };
+
   child.stdout?.setEncoding('utf8');
   child.stdout?.on('data', (chunk: string) => {
     let frames: unknown[];
@@ -383,7 +513,7 @@ export function spawnSshTransport(
       return;
     }
     for (const frame of frames) {
-      for (const cb of dataCallbacks) cb(JSON.stringify(frame));
+      deliverFrame(frame);
     }
   });
   child.stdout?.on('end', () => {
@@ -415,6 +545,14 @@ export function spawnSshTransport(
     },
     onData(cb: (line: string) => void): void {
       dataCallbacks.push(cb);
+    },
+    // ── Structured seam: decoded objects cross without a JSON round-trip ─────
+    writeFrame(frame: unknown): void {
+      if (closed || child.stdin === null) return;
+      child.stdin.write(`${JSON.stringify(frame)}\n`);
+    },
+    onFrame(cb: (frame: unknown) => void): void {
+      frameCallbacks.push(cb);
     },
     onClose(cb: (code: number | null) => void): void {
       closeCallbacks.push(cb);

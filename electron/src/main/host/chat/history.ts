@@ -1,10 +1,13 @@
 /**
- * Per-session chat message history — shared by chat and session IPC.
+ * Per-session chat message history — shared by the chat turn pipeline
+ * (host/chat/*), the session-open path (host/session-ops.ts), and the host
+ * protocol bindings (host/bindings/*), plus the Electron IPC facade.
  *
- * Kept separate from chat.ts / session.ts to avoid circular imports.
- * Keys are session IDs (not window IDs).
+ * Electron-free domain state (relocated from ipc/chat-history.ts so the host
+ * core no longer reaches into the IPC shell layer). Keys are session IDs
+ * (not window/client IDs).
  */
-import type { Message } from '../../shared/types/message';
+import type { Message } from '../../../shared/types/message';
 
 const messageHistory = new Map<string, Message[]>();
 

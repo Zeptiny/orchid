@@ -12,6 +12,7 @@
  *   orchid-agent serve --socket <path>
  *   orchid-agent bridge <socketPath>
  */
+import * as os from 'node:os';
 import * as path from 'node:path';
 import { initFileLogging, closeFileLogging } from './logging';
 import {
@@ -319,9 +320,13 @@ async function main(): Promise<void> {
     let socketPath = args[1];
     if (!socketPath) {
       // Defense in depth: the app always passes the socket path explicitly,
-      // but defaulting keeps a hand-run `orchid-agent bridge` working.
-      socketPath = DEFAULT_DAEMON_SOCKET_PATH;
-      process.stderr.write(`bridge: no socket path given; defaulting to ${DEFAULT_DAEMON_SOCKET_PATH}\n`);
+      // but defaulting keeps a hand-run `orchid-agent bridge` working. The
+      // constant carries a literal '~/' (display form); net.connect needs it
+      // expanded, since it never resolves tilde itself.
+      socketPath = DEFAULT_DAEMON_SOCKET_PATH.startsWith('~/')
+        ? path.join(os.homedir(), DEFAULT_DAEMON_SOCKET_PATH.slice(2))
+        : DEFAULT_DAEMON_SOCKET_PATH;
+      process.stderr.write(`bridge: no socket path given; defaulting to ${socketPath}\n`);
     }
     await bridgeStdioToSocket(socketPath);
     return;

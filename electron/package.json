@@ -38,6 +38,8 @@
     "test": "npm run check:host-boundary && vitest run",
     "pretest:providers:live": "npm run native:ensure:node",
     "test:providers:live": "node --experimental-strip-types tests/smoke/provider-live.ts",
+    "pretest:agent": "npm run native:ensure:node",
+    "test:agent": "npm run build:agent && node --experimental-strip-types tests/smoke/agent-entry.ts --force",
     "test:agent:smoke": "node --experimental-strip-types tests/smoke/agent-entry.ts",
     "native:ensure:electron": "node scripts/ensure-native-runtime.mjs electron",
     "native:ensure:node": "node scripts/ensure-native-runtime.mjs node",

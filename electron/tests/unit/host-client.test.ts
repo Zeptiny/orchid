@@ -11,7 +11,7 @@
  * A scripted fake transport covers the wire-shaped (JSON line) transport path
  * and close/timeout semantics without a server.
  */
-import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
+import { describe, expect, expectTypeOf, it, vi, beforeEach, afterEach } from 'vitest';
 
 vi.mock('../../src/main/session/singleton', () => ({
   getSessionManager: () => ({
@@ -38,6 +38,7 @@ import {
   HOST_ORIGINAL_ERROR_KEY,
   HostProtocolError,
   attachHostOriginalError,
+  type HostHelloResult,
 } from '../../src/shared/host/protocol';
 import { createHostServer, type HostServer } from '../../src/main/host/server';
 import { createInProcessTransport } from '../../src/main/host/transport-inprocess';
@@ -108,12 +109,12 @@ describe('HostClient over the in-process transport', () => {
   it('keeps an in-process result object identical (no JSON round-trip)', async () => {
     const client = makeClient();
     const payload = { nested: { live: true } };
-    server.emitToPublic(CLIENT_ID, 'session:renamed', payload);
+    server.emitTo(CLIENT_ID, 'session:renamed', payload);
     client.close();
     const second = makeClient();
     const received: unknown[] = [];
     second.subscribe('session:renamed', (params) => received.push(params));
-    server.emitToPublic(CLIENT_ID, 'session:renamed', payload);
+    server.emitTo(CLIENT_ID, 'session:renamed', payload);
     await Promise.resolve();
     expect(received[0]).toBe(payload);
     second.close();
@@ -124,9 +125,9 @@ describe('HostClient over the in-process transport', () => {
     const seen: Array<{ params: unknown; seq: number }> = [];
     client.subscribe('session:renamed', (params, seq) => seen.push({ params, seq }));
     expect(client.lastSeq()).toBe(-1);
-    server.emitToPublic(CLIENT_ID, 'session:renamed', { id: 's1', name: 'One' });
-    server.emitToPublic(CLIENT_ID, 'session:renamed', { id: 's1', name: 'Two' });
-    server.emitToPublic(CLIENT_ID, 'session:renamed', { id: 's1', name: 'Three' });
+    server.emitTo(CLIENT_ID, 'session:renamed', { id: 's1', name: 'One' });
+    server.emitTo(CLIENT_ID, 'session:renamed', { id: 's1', name: 'Two' });
+    server.emitTo(CLIENT_ID, 'session:renamed', { id: 's1', name: 'Three' });
     expect(seen.map((entry) => entry.seq)).toEqual([1, 2, 3]);
     expect(client.lastSeq()).toBe(3);
     client.close();
@@ -153,7 +154,7 @@ describe('HostClient over the in-process transport', () => {
     const seenByB: unknown[] = [];
     a.subscribe('session:renamed', (params) => seenByA.push(params));
     b.subscribe('session:renamed', (params) => seenByB.push(params));
-    server.emitToPublic('1111', 'session:renamed', { id: 's1', name: 'Only A' });
+    server.emitTo('1111', 'session:renamed', { id: 's1', name: 'Only A' });
     expect(seenByA).toHaveLength(1);
     expect(seenByB).toHaveLength(0);
     a.close();
@@ -171,7 +172,7 @@ describe('HostClient over the in-process transport', () => {
     client.close();
     expect(closed).toBe(true);
     expect(client.isAlive()).toBe(false);
-    server.emitToPublic(CLIENT_ID, 'session:renamed', { id: 's1', name: 'After' });
+    server.emitTo(CLIENT_ID, 'session:renamed', { id: 's1', name: 'After' });
     expect(seen).toHaveLength(0);
   });
 });
@@ -381,6 +382,218 @@ describe('HostClient over a JSON-line transport', () => {
     transport.push({ ev: 'session:todos_changed', params: { sessionId: 's' }, seq: 9 });
     expect(seen).toEqual([4, 9]);
     expect(client.lastSeq()).toBe(9);
+    client.close();
+  });
+});
+
+// ── Per-method request deadlines (#24) ───────────────────────────────────────
+
+describe('HostClient per-method request deadlines', () => {
+  it('rejects a wedged request with TIMEOUT while the transport stays open', async () => {
+    const transport = new ScriptedTransport();
+    transport.respondWith(() => undefined); // wedged: never answers
+    const client = createHostClient(transport, { clientId: 't1', requestTimeoutMs: 5 });
+    const error = await client.request('config.get').catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(HostProtocolError);
+    expect((error as HostProtocolError).code).toBe(HOST_ERROR_CODES.TIMEOUT);
+    expect((error as HostProtocolError).message).toContain('config.get');
+    // The deadline rejects the request; it never kills the transport.
+    expect(client.isAlive()).toBe(true);
+    expect(transport.closed).toBe(false);
+    client.close();
+  });
+
+  it('keeps serving requests on the same open transport after a timeout', async () => {
+    const transport = new ScriptedTransport();
+    let calls = 0;
+    transport.respondWith((frame) => {
+      calls += 1;
+      // First request wedges; the second is answered.
+      return calls === 1 ? undefined : { id: frame.id, ok: true, result: { ok: true } };
+    });
+    const client = createHostClient(transport, { clientId: 't2', requestTimeoutMs: 5 });
+    const first = await client.request('config.get').catch((e: unknown) => e);
+    expect((first as HostProtocolError).code).toBe(HOST_ERROR_CODES.TIMEOUT);
+    await expect(client.request('config.save', { updates: {} })).resolves.toEqual({ ok: true });
+    expect(client.isAlive()).toBe(true);
+    client.close();
+  });
+
+  it('exempts a long-running method from the deadline via the resolver', async () => {
+    vi.useFakeTimers();
+    try {
+      const transport = new ScriptedTransport();
+      transport.respondWith(() => undefined); // never answers
+      const client = createHostClient(transport, {
+        clientId: 't3',
+        requestTimeoutMs: 5,
+        methodTimeoutMs: (method) => (method === 'rag.index' ? 0 : undefined),
+      });
+      const pending = client.request('rag.index', { force: true });
+      const outcome = await Promise.race([
+        pending.then(
+          () => 'settled',
+          (error: unknown) => `rejected:${(error as HostProtocolError).code}`,
+        ),
+        vi.advanceTimersByTimeAsync(50).then(() => 'still-pending'),
+      ]);
+      expect(outcome).toBe('still-pending');
+      // Cleanup settles the exempt request through the close path instead.
+      transport.close();
+      await expect(pending).rejects.toMatchObject({ code: HOST_ERROR_CODES.HOST_UNAVAILABLE });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('lets the per-method resolver shorten the default deadline', async () => {
+    const transport = new ScriptedTransport();
+    transport.respondWith(() => undefined);
+    const client = createHostClient(transport, {
+      clientId: 't4',
+      requestTimeoutMs: 60_000,
+      methodTimeoutMs: (method) => (method === 'config.get' ? 5 : undefined),
+    });
+    const error = await client.request('config.get').catch((e: unknown) => e);
+    expect((error as HostProtocolError).code).toBe(HOST_ERROR_CODES.TIMEOUT);
+    expect((error as HostProtocolError).message).toContain('5ms');
+    client.close();
+  });
+
+  it('keeps the disabled (0) default deadline for the local in-process client', async () => {
+    // local-host.ts creates its client without deadline options; a method that
+    // never answers must stay pending (fake timers prove no timer is armed).
+    vi.useFakeTimers();
+    try {
+      const transport = new ScriptedTransport();
+      transport.respondWith(() => undefined);
+      const client = createHostClient(transport, { clientId: 't5' });
+      const pending = client.request('config.get');
+      const outcome = await Promise.race([
+        pending.then(
+          () => 'settled',
+          (error: unknown) => `rejected:${(error as HostProtocolError).code}`,
+        ),
+        vi.advanceTimersByTimeAsync(120_000).then(() => 'still-pending'),
+      ]);
+      expect(outcome).toBe('still-pending');
+      client.close();
+      await expect(pending).rejects.toMatchObject({ code: HOST_ERROR_CODES.HOST_UNAVAILABLE });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+// ── Inbound registry validation (#16) ────────────────────────────────────────
+
+describe('HostClient inbound validation', () => {
+  const VALID_SUMMARY = {
+    id: 's1',
+    name: 'One',
+    modelLabel: null,
+    cwd: null,
+    chainCount: 0,
+    updatedAt: 123,
+  };
+
+  it('drops a malformed event payload with a warning and never throws', () => {
+    const transport = new ScriptedTransport();
+    const client = createHostClient(transport, { clientId: 'v1', validateInbound: true });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const seen: unknown[] = [];
+      client.subscribe('session:renamed', (params) => seen.push(params));
+      expect(() => {
+        transport.push({ ev: 'session:renamed', params: { nope: true }, seq: 7 });
+      }).not.toThrow();
+      expect(seen).toHaveLength(0);
+      // The seq still advances so reconnect resync keeps its gap detection.
+      expect(client.lastSeq()).toBe(7);
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(String(warn.mock.calls[0])).toContain('session:renamed');
+    } finally {
+      warn.mockRestore();
+      client.close();
+    }
+  });
+
+  it('drops frames for event names outside the registry with a warning', () => {
+    const transport = new ScriptedTransport();
+    const client = createHostClient(transport, { clientId: 'v2', validateInbound: true });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      expect(() => {
+        transport.push({ ev: 'made:up:event', params: { evil: true }, seq: 1 });
+      }).not.toThrow();
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(String(warn.mock.calls[0])).toContain('made:up:event');
+    } finally {
+      warn.mockRestore();
+      client.close();
+    }
+  });
+
+  it('rejects a malformed ok-result with a typed protocol error', async () => {
+    const transport = new ScriptedTransport();
+    transport.respondWith((frame) => ({ id: frame.id, ok: true, result: [{ missing: 'fields' }] }));
+    const client = createHostClient(transport, { clientId: 'v3', validateInbound: true });
+    const error = await client.request('session.list').catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(HostProtocolError);
+    expect((error as HostProtocolError).code).toBe(HOST_ERROR_CODES.INTERNAL);
+    expect((error as HostProtocolError).message).toContain('session.list');
+    expect((error as HostProtocolError).message).toContain('malformed result');
+    client.close();
+  });
+
+  it('accepts the null wire encoding of a void result', async () => {
+    const transport = new ScriptedTransport();
+    transport.respondWith((frame) => ({ id: frame.id, ok: true, result: null }));
+    const client = createHostClient(transport, { clientId: 'v4', validateInbound: true });
+    await expect(client.request('chat.queue_next', { sessionId: 'abc' })).resolves.toBeNull();
+    client.close();
+  });
+
+  it('passes well-formed events and results through unchanged', async () => {
+    const transport = new ScriptedTransport();
+    transport.respondWith((frame) => ({ id: frame.id, ok: true, result: [VALID_SUMMARY] }));
+    const client = createHostClient(transport, { clientId: 'v5', validateInbound: true });
+    await expect(client.request('session.list')).resolves.toEqual([VALID_SUMMARY]);
+    const events: unknown[] = [];
+    client.subscribe('session:renamed', (params) => events.push(params));
+    const payload = { id: 's1', name: 'Renamed' };
+    transport.push({ ev: 'session:renamed', params: payload, seq: 2 });
+    expect(events).toEqual([payload]);
+    client.close();
+  });
+
+  it('does not validate inbound frames when the option is off (local default)', async () => {
+    const transport = new ScriptedTransport();
+    transport.respondWith((frame) => ({ id: frame.id, ok: true, result: { echoed: frame.method } }));
+    const client = createHostClient(transport, { clientId: 'v6' });
+    await expect(client.request('config.get')).resolves.toEqual({ echoed: 'config.get' });
+    client.close();
+  });
+});
+
+// ── Registry-typed request overloads (#10) ────────────────────────────────────
+
+describe('HostClient registry-typed request', () => {
+  it('pins the result type to the HOST_METHODS registry entry', async () => {
+    const client = makeClient();
+    // No caller-side generic: the registry-typed overload resolves
+    // HostMethodResult<'host.hello'> from the method literal alone. (Under
+    // the old single generic signature this resolved to Promise<unknown> and
+    // the assertion below would not compile.)
+    const hello = client.request('host.hello', { protocolVersion: 1, clientId: 'typed' });
+    expectTypeOf(hello).resolves.toEqualTypeOf<HostHelloResult>();
+    // The generic string overload stays available for dynamic call sites
+    // (routing.ts, resync.ts) with caller-asserted results. Type-only probe:
+    // the closure is never invoked, so no request is sent.
+    const _dynamicOverload: (method: string) => Promise<Array<{ id: string }>> = (method) =>
+      client.request<Array<{ id: string }>>(method);
+    void _dynamicOverload;
+    await hello; // settle against the real in-process server
     client.close();
   });
 });

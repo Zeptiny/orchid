@@ -186,7 +186,7 @@ const METHOD_FIXTURES: Record<string, { params: unknown; result: unknown }> = {
     result: { status: 'started', sessionId: SESSION_ID, turnId: TURN_ID },
   },
   'chat.cancel': { params: {}, result: { status: 'cancelled' } },
-  'chat.queue_next': { params: { sessionId: SESSION_ID }, result: undefined },
+  'chat.queue_next': { params: { sessionId: SESSION_ID }, result: null },
   'chat.stop': { params: { sessionId: SESSION_ID }, result: { status: 'stopped' } },
   'chat.snapshot': {
     params: {},
@@ -240,18 +240,18 @@ const METHOD_FIXTURES: Record<string, { params: unknown; result: unknown }> = {
     },
   },
   'session.create': { params: undefined, result: sessionEnvelope },
-  'session.clear_active': { params: undefined, result: { status: 'ok' } },
+  'session.clear_active': { params: undefined, result: { status: 'cleared' } },
   'session.delete': {
     params: { id: SESSION_ID },
     result: { status: 'deleted', workingSet },
   },
   'session.rename': {
     params: { id: SESSION_ID, name: 'Renamed' },
-    result: { status: 'ok' },
+    result: { status: 'renamed' },
   },
   'session.change_model': {
     params: { id: SESSION_ID, selection: null, modelLabel: null },
-    result: { status: 'ok' },
+    result: { status: 'changed', selection: null, modelLabel: null },
   },
   'session.get_workspace': { params: undefined, result: workspace },
   'session.set_workspace': { params: { cwd: PROJECT_DIR }, result: workspace },
@@ -372,7 +372,7 @@ const METHOD_FIXTURES: Record<string, { params: unknown; result: unknown }> = {
     },
     result: managedAgent,
   },
-  'agent.delete': { params: { scope: 'global', name: 'reviewer' }, result: { status: 'ok' } },
+  'agent.delete': { params: { scope: 'global', name: 'reviewer' }, result: { status: 'deleted' } },
   'skill.save': {
     params: {
       scope: 'global',
@@ -383,7 +383,7 @@ const METHOD_FIXTURES: Record<string, { params: unknown; result: unknown }> = {
     },
     result: managedSkill,
   },
-  'skill.delete': { params: { scope: 'global', name: 'code-review' }, result: { status: 'ok' } },
+  'skill.delete': { params: { scope: 'global', name: 'code-review' }, result: { status: 'deleted' } },
   'personality.save': {
     params: { scope: 'global', name: 'pirate', content: 'Arr.' },
     result: {
@@ -394,7 +394,7 @@ const METHOD_FIXTURES: Record<string, { params: unknown; result: unknown }> = {
       overriddenByProject: false,
     },
   },
-  'personality.delete': { params: { scope: 'global', name: 'pirate' }, result: { status: 'ok' } },
+  'personality.delete': { params: { scope: 'global', name: 'pirate' }, result: { status: 'deleted' } },
   'shared_prompt.save': {
     params: { scope: 'global', slot: 'all-agents', content: 'Be brief.' },
     result: {
@@ -407,7 +407,7 @@ const METHOD_FIXTURES: Record<string, { params: unknown; result: unknown }> = {
   },
   'shared_prompt.delete': {
     params: { scope: 'global', slot: 'all-agents' },
-    result: { status: 'ok' },
+    result: { status: 'deleted' },
   },
   'definition.reveal': {
     params: { path: '/home/u/.orchid/skills/code-review/SKILL.md' },
@@ -441,7 +441,7 @@ const METHOD_FIXTURES: Record<string, { params: unknown; result: unknown }> = {
       durationSeconds: 0.1,
     },
   },
-  'rag.clear': { params: undefined, result: { status: 'ok' } },
+  'rag.clear': { params: undefined, result: { status: 'cleared' } },
   'ast.status': {
     params: undefined,
     result: {
@@ -469,7 +469,7 @@ const METHOD_FIXTURES: Record<string, { params: unknown; result: unknown }> = {
     result: toolResult,
   },
   'config.get': { params: undefined, result: {} },
-  'config.save': { params: { updates: {} }, result: { status: 'ok' } },
+  'config.save': { params: { updates: {} }, result: { status: 'saved' } },
   'config.get_home': { params: undefined, result: {} },
   'config.read_project': {
     params: PROJECT_DIR,
@@ -477,7 +477,7 @@ const METHOD_FIXTURES: Record<string, { params: unknown; result: unknown }> = {
   },
   'config.save_project': {
     params: { projectDir: PROJECT_DIR, updates: {} },
-    result: undefined,
+    result: null,
   },
   'providers.list': { params: undefined, result: providerOverview },
   'providers.validate': {
@@ -687,6 +687,51 @@ describe('HOST_METHODS registry', () => {
 
   it('has a fixture for exactly the registered methods', () => {
     expect(Object.keys(METHOD_FIXTURES).sort()).toEqual(Object.keys(HOST_METHODS).sort());
+  });
+
+  it('accepts the post-normalization wire values the server actually emits', () => {
+    // The response envelope normalizes `undefined` results to `null`
+    // (server handleRequest), so every void-result method must validate the
+    // wire's `null` — not just the in-process `undefined`.
+    const voidResultMethods = ['chat.queue_next', 'config.save_project'];
+    for (const method of voidResultMethods) {
+      expect(
+        HOST_METHODS[method as keyof typeof HOST_METHODS].result.safeParse(null).success,
+        `${method} result must accept the wire-normalized null`,
+      ).toBe(true);
+      expect(
+        HOST_METHODS[method as keyof typeof HOST_METHODS].result.safeParse(undefined).success,
+        `${method} result must accept the in-process undefined`,
+      ).toBe(true);
+    }
+
+    // chat.snapshot legitimately answers `null` for "no session" (the server
+    // binding returns null before touching the session store; the IPC handler
+    // is typed ChatSessionSnapshot | null).
+    expect(HOST_METHODS['chat.snapshot'].result.safeParse(null).success).toBe(true);
+  });
+
+  it('accepts the binding-emitted shapes for chat.compact and session.change_model', () => {
+    // The chat.compact binding answers `sessionId: ''` when no session was
+    // active at all — the registry must not demand a non-empty id there.
+    expect(
+      HOST_METHODS['chat.compact'].result.safeParse({
+        status: 'nothing_to_compact',
+        sessionId: '',
+        detail: 'No active session to compact.',
+      }).success,
+    ).toBe(true);
+
+    // session.change_model echoes selection + modelLabel only on the
+    // changed/unchanged paths; not_found/not_active carry status alone.
+    for (const result of [
+      { status: 'unchanged', selection: null, modelLabel: null },
+      { status: 'changed', selection: { connectionId: CONNECTION_ID, modelId: 'gpt-4o' }, modelLabel: 'GPT-4o' },
+      { status: 'not_found' },
+      { status: 'not_active' },
+    ]) {
+      expect(HOST_METHODS['session.change_model'].result.safeParse(result).success).toBe(true);
+    }
   });
 
   it('maps every method back to a real IPC invoke channel', () => {

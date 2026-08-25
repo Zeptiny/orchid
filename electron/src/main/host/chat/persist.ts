@@ -7,7 +7,7 @@ import { ChainStatus, type Chain } from '../../../shared/types/chain';
 import type { Session } from '../../../shared/types/session';
 import { IPC_CHANNELS } from '../../../shared/types/ipc';
 import { getSessionManager } from '../../session/singleton';
-import { setChatHistory } from '../../ipc/chat-history';
+import { setChatHistory } from './history';
 import {
   makeAssistantMessage,
   makeThinkingMessage,

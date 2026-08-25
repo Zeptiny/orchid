@@ -36,6 +36,9 @@ jobs:
       - name: Test
         run: npm test
 
+      - name: Agent CLI smoke (build orchid-agent and exercise it)
+        run: npm run test:agent
+
   build:
     needs: lint-and-test
     strategy:

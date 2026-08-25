@@ -17,11 +17,14 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { ipcMain } from 'electron';
-import { z } from 'zod';
 import { IPC_CHANNELS } from '../../shared/types/ipc';
 import type { PermissionRule } from '../../shared/types/ipc-boundary';
 import { hostRequest } from './host-request';
-import { PERMISSION_MODE_VALUES } from '../../shared/types/permission';
+import {
+  permissionApprovalAnswerSchema,
+  permissionGetSessionModeSchema,
+  permissionSetSessionModeSchema,
+} from '../../shared/types/ipc-schemas';
 import {
   atomicWriteJson,
   ConfigManager,
@@ -38,7 +41,7 @@ import {
   approvalStore,
 } from '../permissions/approval-store';
 import { permissionConfigScopeSaveSchema } from './payload-schemas';
-import { resolveAuthorizedProjectDir } from './project-target';
+import { resolveAuthorizedProjectDir } from '../project/project-target';
 import { resolveWindowWorkspace } from '../session/singleton';
 import {
   sessionPermissionOverrides,
@@ -46,21 +49,6 @@ import {
 } from '../permissions/session-overrides';
 
 export { sessionPermissionOverrides };
-
-const approvalAnswerSchema = z.object({
-  toolCallId: z.string().min(1),
-  decision: z.enum(['approved', 'denied']),
-  reason: z.string().optional(),
-}).strict();
-
-const setSessionModeSchema = z.object({
-  mode: z.enum(PERMISSION_MODE_VALUES).nullable(),
-  expectedSessionId: z.string().min(1).nullable(),
-}).strict();
-
-const getSessionModeSchema = z.object({
-  expectedSessionId: z.string().min(1).nullable(),
-}).strict();
 
 function readConfigLayer(filePath: string): Record<string, unknown> {
   let parsed: unknown;
@@ -105,7 +93,7 @@ export function registerPermissionIPC(): void {
   ipcMain.handle(
     IPC_CHANNELS.PERMISSION_APPROVAL_ANSWER,
     (event, payload: unknown) => {
-      const parsed = approvalAnswerSchema.parse(payload);
+      const parsed = permissionApprovalAnswerSchema.parse(payload);
       return hostRequest(
         String(event.sender.id),
         IPC_CHANNELS.PERMISSION_APPROVAL_ANSWER,
@@ -120,7 +108,7 @@ export function registerPermissionIPC(): void {
       return hostRequest(
         String(event.sender.id),
         IPC_CHANNELS.PERMISSION_SET_SESSION_MODE,
-        setSessionModeSchema.parse(payload),
+        permissionSetSessionModeSchema.parse(payload),
       );
     },
   );
@@ -129,7 +117,7 @@ export function registerPermissionIPC(): void {
     return hostRequest(
       String(event.sender.id),
       IPC_CHANNELS.PERMISSION_GET_SESSION_MODE,
-      getSessionModeSchema.parse(payload),
+      permissionGetSessionModeSchema.parse(payload),
     );
   });
 

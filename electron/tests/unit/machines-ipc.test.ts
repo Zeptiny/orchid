@@ -73,6 +73,11 @@ import {
   sortRemoteMachines,
 } from '../../src/main/machines/registry';
 import { _resetConfigSaveChainForTests } from '../../src/main/config/write-lock';
+import { knownHostsPath } from '../../src/main/machines/host-key';
+import {
+  _resetMachineHostKeyFlowForTests,
+  getMachineHostKeyFlow,
+} from '../../src/main/machines/host-key-flow';
 import {
   machinesCreateSchema,
   machinesDeleteSchema,
@@ -83,6 +88,10 @@ import type { RemoteMachineRecord } from '../../src/shared/types/machine';
 
 const T0 = '2026-08-23T00:00:00.000Z';
 const T1 = '2026-08-23T01:00:00.000Z';
+
+/** Real throwaway ed25519 key line (twin of machines-host-key.test.ts). */
+const ED25519_LINE =
+  'build.example.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIPHhT8R1+f81M2hvSEhe/iCDDHV3m79vicl5uXQ0IZRM test-ed25519';
 
 function remoteMachine(
   id: string,
@@ -145,6 +154,7 @@ beforeEach(() => {
   mocks.configState = defaults() as unknown as Record<string, unknown>;
   _resetConfigSaveChainForTests();
   _resetMachineRegistryForTests();
+  _resetMachineHostKeyFlowForTests();
 });
 
 afterEach(() => {
@@ -322,6 +332,39 @@ describe('MachineRegistry', () => {
     }
 
     expect(readHomeConfig()).toEqual({});
+  });
+
+  it('rejects ssh option injection through host and user without writing', async () => {
+    writeHomeConfig({});
+    const registry = makeRegistry();
+
+    // OpenSSH parses a leading-dash destination token as an option
+    // (-oProxyCommand executes locally before host-key checking); a second
+    // '@' re-splits the user/host boundary.
+    for (const injected of [
+      { host: '-oProxyCommand=evil' },
+      { host: '-oProxyCommand=evil', user: 'deploy' },
+      { host: 'h', user: '-oX=Y' },
+      { host: 'h', user: 'a@b' },
+      { host: 'h', user: 'a b' },
+      { host: 'h', user: 'a#b' },
+    ]) {
+      await expect(
+        registry.create({ label: 'x', host: 'h', ...injected }),
+        `create ${JSON.stringify(injected)} must be rejected`,
+      ).rejects.toThrow();
+    }
+
+    expect(readHomeConfig()).toEqual({});
+
+    writeHomeConfig({ machines: [remoteMachine('build-1', 'Build server')] });
+    await expect(registry.update('build-1', { host: '-oProxyCommand=evil' })).rejects.toThrow();
+    await expect(registry.update('build-1', { user: 'a@b' })).rejects.toThrow();
+
+    // Legit destinations keep working.
+    await expect(
+      registry.create({ label: 'ok', host: '2001:db8::1', user: 'deploy-user' }),
+    ).resolves.toBeTruthy();
   });
 
   it('rejects a duplicate machine id', async () => {
@@ -526,6 +569,37 @@ describe('machines IPC', () => {
     });
   });
 
+  it('invalidates the pinned known-hosts when host, user, or port changes', async () => {
+    writeHomeConfig({ machines: [remoteMachine('build-1', 'Build server')] });
+    const hostsPath = knownHostsPath('build-1');
+    fs.mkdirSync(path.dirname(hostsPath), { recursive: true });
+    const rePin = (): void => {
+      fs.writeFileSync(hostsPath, `${ED25519_LINE}\n`);
+    };
+    rePin();
+    expect(getMachineHostKeyFlow().pinned('build-1')).toBe(true);
+
+    // Every destination change re-arms the TOFU scan/confirm gate.
+    for (const patch of [{ host: 'v2.example.com' }, { port: 2222 }, { user: 'deploy' }]) {
+      rePin();
+      await handler(IPC_CHANNELS.MACHINES_UPDATE)(null, { id: 'build-1', patch });
+      expect(fs.existsSync(hostsPath), `update ${JSON.stringify(patch)} must unpin`).toBe(false);
+      expect(
+        getMachineHostKeyFlow().pinned('build-1'),
+        `update ${JSON.stringify(patch)} must re-arm TOFU`,
+      ).toBe(false);
+    }
+
+    // A destination-neutral edit keeps the pin.
+    rePin();
+    await handler(IPC_CHANNELS.MACHINES_UPDATE)(null, {
+      id: 'build-1',
+      patch: { label: 'Build server 2' },
+    });
+    expect(fs.existsSync(hostsPath)).toBe(true);
+    expect(getMachineHostKeyFlow().pinned('build-1')).toBe(true);
+  });
+
   it('rejects updating and deleting the local machine', async () => {
     await expect(
       handler(IPC_CHANNELS.MACHINES_UPDATE)(null, { id: 'local', patch: { label: 'x' } }),
@@ -668,6 +742,35 @@ describe('machines payload schemas', () => {
         `agentCommand '${agentCommand}' must be rejected`,
       ).toBe(false);
     }
+  });
+
+  it('rejects ssh option injection through host and user at the payload boundary', () => {
+    const injected = [
+      { host: '-oProxyCommand=evil' },
+      { host: '-oProxyCommand=evil', user: 'deploy' },
+      { host: 'h', user: '-oX=Y' },
+      { host: 'h', user: 'a@b' },
+      { host: 'h', user: 'a b' },
+      { host: 'h', user: 'a#b' },
+    ];
+    for (const payload of injected) {
+      expect(
+        machinesCreateSchema.safeParse({ label: 'x', host: 'h', ...payload }).success,
+        `create ${JSON.stringify(payload)} must be rejected`,
+      ).toBe(false);
+      expect(
+        machinesUpdateSchema.safeParse({ id: 'a', patch: payload }).success,
+        `update ${JSON.stringify(payload)} must be rejected`,
+      ).toBe(false);
+    }
+
+    // Legit destinations keep working.
+    expect(machinesCreateSchema.safeParse({ label: 'x', host: '2001:db8::1', user: 'deploy' }).success).toBe(
+      true,
+    );
+    expect(machinesUpdateSchema.safeParse({ id: 'a', patch: { host: 'new.example.com' } }).success).toBe(
+      true,
+    );
   });
 
   it('accepts a partial update payload and rejects id or kind edits', () => {

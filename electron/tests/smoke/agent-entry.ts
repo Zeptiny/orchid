@@ -1,25 +1,31 @@
 /**
- * Opt-in smoke for the bundled `orchid-agent` daemon (U4).
+ * Smoke for the bundled `orchid-agent` daemon (U4).
  *
  * Runs the real CLI artifact, not the test mocks:
  *   1. `orchid-agent --version` prints the package version.
  *   2. `orchid-agent serve --stdio` completes a `host.hello` handshake and
- *      answers a real `session.list` against this machine's ~/.orchid.
+ *      answers a real `session.list` against an isolated temp HOME — the
+ *      developer's real ~/.orchid is never read or created by this smoke.
  *
  * Gating: the bundle is a build artifact (`npm run build:agent`), so the
- * smoke skips gracefully when it is absent unless ORCHID_AGENT_SMOKE=1 is
- * set — then a missing bundle is a failure.
+ * smoke skips gracefully when it is absent unless it is forced — via
+ * ORCHID_AGENT_SMOKE=1 or --force — and then a missing bundle is a failure.
+ * `npm run test:agent` chains the build with a forced run so the daemon CLI
+ * surface cannot silently go untested:
  *
+ *   npm run test:agent
+ *   # equivalent manual form:
  *   npm run build:agent && ORCHID_AGENT_SMOKE=1 npm run test:agent:smoke
  */
 /* eslint-disable @typescript-eslint/no-require-imports -- Node runs this standalone smoke script as CommonJS. */
 const { spawn } = require('node:child_process');
 const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
 
 const AGENT_BIN = path.resolve(__dirname, '..', '..', 'dist', 'agent', 'orchid-agent.js');
 const REQUEST_TIMEOUT_MS = 30_000;
-const FORCED = process.env.ORCHID_AGENT_SMOKE === '1';
+const FORCED = process.env.ORCHID_AGENT_SMOKE === '1' || process.argv.includes('--force');
 
 class SmokeFailure extends Error {}
 
@@ -73,10 +79,24 @@ function serveStdioRoundTrip(): Promise<Array<{ id: number; ok: boolean; result?
     const frames: Array<{ id: number; ok: boolean }> = [];
     let buffer = '';
     let stderr = '';
+    let settled = false;
+    let answered = false;
+    let exited = false;
     const timer = setTimeout(() => {
       child.kill('SIGKILL');
       reject(new SmokeFailure(`serve --stdio did not answer within ${REQUEST_TIMEOUT_MS}ms; stderr: ${stderr}`));
     }, REQUEST_TIMEOUT_MS);
+    /**
+     * Resolve only once the daemon answered AND finished exiting, so its
+     * shutdown-time writes (provider status flush) land before the isolated
+     * HOME is removed instead of recreating it after cleanup.
+     */
+    const settle = (): void => {
+      if (settled || !answered || !exited) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(frames);
+    };
     child.stdout.setEncoding('utf8');
     child.stderr.setEncoding('utf8');
     child.stdout.on('data', (chunk: string) => {
@@ -88,9 +108,9 @@ function serveStdioRoundTrip(): Promise<Array<{ id: number; ok: boolean; result?
         if (line.length > 0) {
           frames.push(JSON.parse(line));
           if (frames.length === 2) {
-            clearTimeout(timer);
+            answered = true;
             child.stdin.end();
-            resolve(frames);
+            settle();
           }
         }
         index = buffer.indexOf('\n');
@@ -103,14 +123,43 @@ function serveStdioRoundTrip(): Promise<Array<{ id: number; ok: boolean; result?
       clearTimeout(timer);
       reject(error);
     });
+    child.on('exit', () => {
+      exited = true;
+      settle();
+    });
+    // The daemon exits on stdin end; a child that dies first must not EPIPE us.
+    child.stdin.on('error', () => {});
     child.stdin.write(`${JSON.stringify({ id: 1, method: 'host.hello', params: { protocolVersion: 1 } })}\n`);
     child.stdin.write(`${JSON.stringify({ id: 2, method: 'session.list', params: {} })}\n`);
   });
 }
 
-async function main(): Promise<void> {
-  requireBundle();
+/**
+ * Point the spawned daemon at a throwaway HOME. The daemon resolves its
+ * `~/.orchid` through os.homedir() (env HOME on POSIX, USERPROFILE on
+ * Windows), so overriding both isolates every read and write — no developer
+ * sessions, config, or logs are touched.
+ */
+function withIsolatedHome<T>(run: (homeDir: string) => Promise<T>): Promise<T> {
+  const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'orchid-agent-smoke-'));
+  const previousHome = process.env.HOME;
+  const previousUserProfile = process.env.USERPROFILE;
+  process.env.HOME = homeDir;
+  process.env.USERPROFILE = homeDir;
+  return run(homeDir).finally(() => {
+    if (previousHome === undefined) delete process.env.HOME;
+    else process.env.HOME = previousHome;
+    if (previousUserProfile === undefined) delete process.env.USERPROFILE;
+    else process.env.USERPROFILE = previousUserProfile;
+    try {
+      fs.rmSync(homeDir, { recursive: true, force: true });
+    } catch {
+      // Best-effort cleanup; the temp dir is in os.tmpdir().
+    }
+  });
+}
 
+async function runSmoke(): Promise<void> {
   const pkg = JSON.parse(
     fs.readFileSync(path.resolve(__dirname, '..', '..', 'package.json'), 'utf8'),
   );
@@ -141,8 +190,13 @@ async function main(): Promise<void> {
 
   console.log(
     `[agent-smoke] ok — version ${pkg.version}, handshake capabilities [${result.capabilities.join(', ')}], ` +
-      `${(list.result as unknown[]).length} session(s) visible`,
+      `${(list.result as unknown[]).length} session(s) visible in the isolated HOME`,
   );
+}
+
+async function main(): Promise<void> {
+  requireBundle();
+  await withIsolatedHome(runSmoke);
 }
 
 main().catch((error) => {

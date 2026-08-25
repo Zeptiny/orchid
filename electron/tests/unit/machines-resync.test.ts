@@ -81,7 +81,7 @@ vi.mock('../../src/main/project/workspace', () => ({
   updateStickyDefaultProjectDir: vi.fn(async () => {}),
   resolveWorkspace: (owner: string, opts: { sessionCwd: string | null; stickyDefault: string | null }) => ({
     cwd: opts.sessionCwd ?? opts.stickyDefault,
-    source: opts.sessionCwd ? 'session' : 'sticky',
+    source: opts.sessionCwd ? 'session' : 'default',
     status: opts.sessionCwd ?? opts.stickyDefault ? 'valid' : 'unbound',
   }),
 }));
@@ -397,7 +397,7 @@ beforeEach(async () => {
   mocks.sessionManager = new SessionManager({ storage: { dbPath: path.join(tmpRoot, 'sessions.db') } });
   mocks.workspace.cwd = fs.mkdtempSync(path.join(tmpRoot, 'project-'));
   mocks.workspace.status = 'valid';
-  mocks.workspace.source = 'sticky';
+  mocks.workspace.source = 'default';
   mocks.trustState.current = 'trusted';
   mocks.configState = defaults as unknown;
   approvalStore.cleanupAll();
@@ -460,7 +460,9 @@ describe('remote reconnect resync (U10)', () => {
 
       // Pending approval + question raised while the window is connected: the
       // owner is the machine client's connection (conn-1).
-      void approvalStore.create(APPROVAL_ID, sessionId, 'write', 'destructive', {}, mocks.workspace.cwd as string);
+      // riskClass must be a wire RiskClass: the machine client validates
+      // inbound event payloads against the protocol registries (#16).
+      void approvalStore.create(APPROVAL_ID, sessionId, 'write', 'mutation', {}, mocks.workspace.cwd as string);
       void questionStore.create(QUESTION_ID, sessionId, [
         { type: 'single', title: 'Continue?', options: [{ label: 'Yes' }] },
       ]);
@@ -472,7 +474,7 @@ describe('remote reconnect resync (U10)', () => {
       const preDisconnectEvents: Array<{ params: unknown; seq: number }> = [];
       client1.subscribe('session:renamed', (params, seq) => preDisconnectEvents.push({ params, seq }));
       const stalePayload = { id: sessionId, name: 'renamed-before-drop' };
-      server.emitToPublic(conn1, 'session:renamed', stalePayload);
+      server.emitTo(conn1, 'session:renamed', stalePayload);
       await vi.waitFor(() => expect(preDisconnectEvents).toHaveLength(1));
       const preDisconnectSeq = preDisconnectEvents[0]?.seq ?? 0;
       expect(preDisconnectSeq).toBeGreaterThanOrEqual(1);
@@ -540,8 +542,8 @@ describe('remote reconnect resync (U10)', () => {
       // The fresh client's per-connection counter starts over: everything it
       // observes is a dense 1..N sequence, not a continuation of the
       // pre-disconnect connection's numbering (which was strictly higher).
-      server.emitToPublic(conn2, 'session:renamed', { id: sessionId, name: 'after-reconnect' });
-      server.emitToPublic(conn2, 'session:renamed', { id: sessionId, name: 'after-reconnect-2' });
+      server.emitTo(conn2, 'session:renamed', { id: sessionId, name: 'after-reconnect' });
+      server.emitTo(conn2, 'session:renamed', { id: sessionId, name: 'after-reconnect-2' });
       await vi.waitFor(() => expect(postReconnectEvents).toHaveLength(2));
       const expectedSeqs = Array.from(
         { length: client2.lastSeq() },

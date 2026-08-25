@@ -22,11 +22,9 @@ import {
   methodToChannel,
 } from '../../shared/host/protocol';
 import { ALLOWED_INVOKE_CHANNELS, IPC_CHANNELS } from '../../shared/types/ipc';
+import { MACHINE_ID_LOCAL } from '../../shared/types/machine';
 import { closeLocalHostClient, getLocalHostClient } from './local-host';
 import type { HostClient } from './client';
-
-/** The machine this app runs on; implicitly connected, never registered. */
-export const LOCAL_MACHINE_ID = 'local';
 
 export type MachineId = string;
 
@@ -106,13 +104,13 @@ const clientsByMachine = new Map<MachineId, HostClient>();
 
 /** The machine a window currently drives (defaults to the local machine). */
 export function activeMachineFor(windowId: string): MachineId {
-  return machineByWindow.get(windowId) ?? LOCAL_MACHINE_ID;
+  return machineByWindow.get(windowId) ?? MACHINE_ID_LOCAL;
 }
 
 /** Point a window at another machine's host (U8); returns the previous id. */
 export function setActiveMachine(windowId: string, machineId: MachineId): MachineId {
   const previous = activeMachineFor(windowId);
-  if (machineId === LOCAL_MACHINE_ID) {
+  if (machineId === MACHINE_ID_LOCAL) {
     machineByWindow.delete(windowId);
   } else {
     machineByWindow.set(windowId, machineId);
@@ -190,7 +188,7 @@ export function registeredMachines(): MachineId[] {
  */
 export function clientForWindow(windowId: string): HostClient {
   const machineId = activeMachineFor(windowId);
-  if (machineId === LOCAL_MACHINE_ID) {
+  if (machineId === MACHINE_ID_LOCAL) {
     return getLocalHostClient(windowId);
   }
   return getHostClient(machineId);

@@ -199,7 +199,7 @@ vi.mock('../../src/main/project/trust', () => ({
   revokeProjectTrustRaw: vi.fn(),
 }));
 
-vi.mock('../../src/main/ipc/chat-history', () => ({
+vi.mock('../../src/main/host/chat/history', () => ({
   clearChatHistory: mocks.clearChatHistory,
   seedChatHistory: vi.fn(),
 }));

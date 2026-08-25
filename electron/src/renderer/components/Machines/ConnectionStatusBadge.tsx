@@ -1,15 +1,16 @@
 import type { MachineConnectionStateView } from '../../../shared/types/ipc';
+import { StatusBadge, type StatusBadgeTone } from '../ui/StatusBadge';
 
 interface ConnectionStatusTone {
-  readonly dot: string;
+  readonly tone: StatusBadgeTone;
   readonly label: string;
 }
 
 const STATE_TONE: Record<MachineConnectionStateView, ConnectionStatusTone> = {
-  connected: { dot: 'status-success', label: 'Connected' },
-  connecting: { dot: 'status-warning', label: 'Connecting' },
-  lost: { dot: 'status-error', label: 'Connection lost' },
-  offline: { dot: 'status-neutral', label: 'Offline' },
+  connected: { tone: 'success', label: 'Connected' },
+  connecting: { tone: 'warning', label: 'Connecting' },
+  lost: { tone: 'error', label: 'Connection lost' },
+  offline: { tone: 'neutral', label: 'Offline' },
 };
 
 export function connectionStatusTone(state: MachineConnectionStateView): ConnectionStatusTone {
@@ -25,7 +26,9 @@ export interface ConnectionStatusBadgeProps {
 
 /**
  * Status dot + label for one machine's connection state; shared by the machine
- * switcher, the add-machine wizard, and the Machines settings tab.
+ * switcher, the add-machine wizard, and the Machines settings tab. Built on
+ * the ui/ StatusBadge primitive (dot-only mode keeps the label for screen
+ * readers).
  */
 export function ConnectionStatusBadge({
   state,
@@ -34,12 +37,14 @@ export function ConnectionStatusBadge({
 }: ConnectionStatusBadgeProps) {
   const tone = connectionStatusTone(state);
   return (
-    <span
-      className={`machine-status-badge inline-flex shrink-0 items-center gap-1.5 ${className}`.trim()}
+    <StatusBadge
+      tone={tone.tone}
+      size="xs"
+      withDot
       title={tone.label}
+      className={`machine-status-badge ${className}`.trim()}
     >
-      <span className={`status status-xs ${tone.dot}`} aria-hidden />
-      {withLabel && <span className="text-xs text-base-content/70">{tone.label}</span>}
-    </span>
+      {withLabel ? tone.label : <span className="sr-only">{tone.label}</span>}
+    </StatusBadge>
   );
 }

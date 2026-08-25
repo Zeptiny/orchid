@@ -27,6 +27,17 @@ const SOCKET_MODE = 0o600;
  */
 export const DEFAULT_DAEMON_SOCKET_PATH = '~/.orchid/daemon.sock';
 
+/**
+ * Exit code `bridge` reports when it cannot connect to the daemon socket (the
+ * daemon is down). Distinct from a generic failure so the app-side ssh
+ * transport (`machines/ssh-transport.ts` parseSshExit) can classify it as
+ * agent-missing and auto-ensure `serve --detached`; ssh forwards the remote
+ * command's exit status. Mirrored literal, twin of ssh-transport.ts
+ * `BRIDGE_DAEMON_SOCKET_EXIT_CODE`: the daemon graph must never import the
+ * ssh-transport graph.
+ */
+export const BRIDGE_DAEMON_SOCKET_EXIT_CODE = 3;
+
 /** Deadline for the stale-socket ownership probe before listening (ms). */
 const SOCKET_PROBE_TIMEOUT_MS = 2_000;
 
@@ -322,7 +333,10 @@ export async function bridgeStdioToSocket(socketPath: string): Promise<void> {
         `Cannot connect to the orchid-agent daemon socket at ${socketPath} (${message}). ` +
           `Is \`orchid-agent serve --socket ${socketPath}\` running?`,
       );
-      process.exitCode = 1;
+      // Distinct exit code: the daemon is down, not the bridge broken — the
+      // app's ssh-transport classifies it as agent-missing and starts the
+      // daemon via `serve --detached`.
+      process.exitCode = BRIDGE_DAEMON_SOCKET_EXIT_CODE;
       reject(error);
     };
 

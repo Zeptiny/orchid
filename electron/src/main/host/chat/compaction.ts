@@ -34,7 +34,7 @@ import { getProviderRuntime } from '../../providers';
 import { getProviderAccountingStore } from '../../providers/accounting/store';
 import { getSessionManager } from '../../session/singleton';
 import { onSessionDeleted } from '../../session/manager';
-import { getChatHistory, setChatHistory } from '../../ipc/chat-history';
+import { getChatHistory, setChatHistory } from './history';
 import {
   clearCompactionPause,
   clearCompactionPausesForSession,

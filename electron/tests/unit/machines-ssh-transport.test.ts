@@ -8,9 +8,12 @@
 import { spawn } from 'node:child_process';
 import { describe, expect, it } from 'vitest';
 import {
+  BRIDGE_DAEMON_SOCKET_EXIT_CODE,
   MachineAgentCommandError,
+  MachineDestinationError,
   REMOTE_DAEMON_SOCKET_PATH,
   buildSshCommand,
+  buildSshServeCommand,
   parseSshExit,
   spawnSshTransport,
   splitAgentCommand,
@@ -71,7 +74,8 @@ describe('buildSshCommand', () => {
       '-o',
       'StrictHostKeyChecking=yes',
       '-o',
-      'UserKnownHostsFile=/home/u/.orchid/machines/build-1/known_hosts',
+      // One argv element; ssh strips the quotes when parsing the value.
+      'UserKnownHostsFile="/home/u/.orchid/machines/build-1/known_hosts"',
       // The per-machine pin file is the only trust source.
       '-o',
       'GlobalKnownHostsFile=none',
@@ -89,6 +93,18 @@ describe('buildSshCommand', () => {
       REMOTE_DAEMON_SOCKET_PATH,
     ]);
     expect(REMOTE_DAEMON_SOCKET_PATH).toBe('~/.orchid/daemon.sock');
+  });
+
+  it('keeps a known-hosts path containing spaces inside one quoted -o token', () => {
+    const hostsPath = '/home/my user/.orchid/machines/build-1/known_hosts';
+    const argv = buildSshCommand(sshMachine(), hostsPath);
+    // OpenSSH parses the -o argument as one config line and strips matching
+    // double quotes itself, so the quoted value survives as a single path.
+    const option = argv.find((token) => token.startsWith('UserKnownHostsFile='));
+    expect(option).toBe(`UserKnownHostsFile="${hostsPath}"`);
+    // Exactly one argv element carries the path — the space can never split
+    // it into a second token.
+    expect(argv.filter((token) => token.includes(hostsPath))).toHaveLength(1);
   });
 
   it('adds the port flag and user prefix for non-default values', () => {
@@ -120,6 +136,44 @@ describe('buildSshCommand', () => {
     expect(() => buildSshCommand(sshMachine({ agentCommand: '   ' }), '/kh')).toThrow(
       /produced no shell tokens/,
     );
+  });
+});
+
+// ── Destination injection guard ──────────────────────────────────────────────
+
+describe('destination injection guard', () => {
+  /**
+   * OpenSSH parses any argument starting with `-` as an option — e.g.
+   * `-oProxyCommand=cmd` executes `cmd` locally during connection setup,
+   * BEFORE host-key checking — and a second `@` re-splits the user/host
+   * boundary. None of these may reach spawn as a destination token.
+   */
+  const injected: Array<[host: string, user: string]> = [
+    ['-oProxyCommand=evil', ''],
+    ['-oProxyCommand=evil', 'deploy'],
+    ['-oProxyCommand="evil"', ''],
+    ['-b', ''],
+    ['build.example.com', '-oX=Y'],
+    ['build.example.com', '-oX=Y@host2'],
+    ['build.example.com', 'a@b'],
+    ['build.example.com', 'a b'],
+    ['build.example.com', 'a#b'],
+  ];
+
+  for (const [host, user] of injected) {
+    it(`rejects host=${JSON.stringify(host)} user=${JSON.stringify(user)} with a typed error`, () => {
+      const machine = sshMachine({ host, user });
+      expect(() => buildSshCommand(machine, '/kh')).toThrow(MachineDestinationError);
+      expect(() => buildSshCommand(machine, '/kh')).toThrow(/unsafe ssh destination/);
+      // The serve command shares buildSshBaseArgv and must fail the same way.
+      expect(() => buildSshServeCommand(machine, '/kh')).toThrow(MachineDestinationError);
+    });
+  }
+
+  it('accepts user-prefixed destinations, IPv6 literals, and dashed aliases', () => {
+    expect(() => buildSshCommand(sshMachine({ user: 'deploy' }), '/kh')).not.toThrow();
+    expect(() => buildSshCommand(sshMachine({ host: '2001:db8::1' }), '/kh')).not.toThrow();
+    expect(() => buildSshCommand(sshMachine({ host: 'my-alias_01.example.com' }), '/kh')).not.toThrow();
   });
 });
 
@@ -225,6 +279,37 @@ describe('parseSshExit', () => {
       parseSshExit(127, 'bash: line 1: orchid-agent: command not found').kind,
     ).toBe('agent-missing');
     expect(parseSshExit(127, '').kind).toBe('agent-missing');
+  });
+
+  it('classifies the bridge daemon-socket refusal (daemon down) as agent-missing', () => {
+    // The exact `orchid-agent bridge` output when the remote daemon is down:
+    // stderr text plus the bridge's distinct exit code (host/daemon.ts).
+    const refusal =
+      `Cannot connect to the orchid-agent daemon socket at ${REMOTE_DAEMON_SOCKET_PATH} ` +
+      `(connect ECONNREFUSED /home/deploy/.orchid/daemon.sock). ` +
+      `Is \`orchid-agent serve --socket ${REMOTE_DAEMON_SOCKET_PATH}\` running?`;
+    // Text pattern matches regardless of the exit code…
+    expect(parseSshExit(BRIDGE_DAEMON_SOCKET_EXIT_CODE, refusal).kind).toBe('agent-missing');
+    expect(parseSshExit(1, refusal).kind).toBe('agent-missing');
+    expect(
+      parseSshExit(BRIDGE_DAEMON_SOCKET_EXIT_CODE, refusal.replace('ECONNREFUSED', 'ENOENT')).kind,
+    ).toBe('agent-missing');
+    // …and the distinct exit code classifies even when stderr was lost.
+    expect(parseSshExit(BRIDGE_DAEMON_SOCKET_EXIT_CODE, '').kind).toBe('agent-missing');
+  });
+
+  it('keeps real ssh-level failures classified after the bridge pattern', () => {
+    // ssh's own network refusal text is unreachable, never agent-missing.
+    expect(
+      parseSshExit(255, 'ssh: connect to host build.example.com port 22: Connection refused').kind,
+    ).toBe('unreachable');
+    expect(
+      parseSshExit(255, 'ssh: connect to host build.example.com port 22: Connection timed out').kind,
+    ).toBe('unreachable');
+    // A real remote command-not-found keeps its classification.
+    expect(parseSshExit(127, 'bash: line 1: orchid-agent: command not found').kind).toBe(
+      'agent-missing',
+    );
   });
 
   it('falls back to unknown with the stderr tail as the hint', () => {

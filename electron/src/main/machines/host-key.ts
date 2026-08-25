@@ -195,6 +195,19 @@ export function writeKnownHosts(
   return filePath;
 }
 
+/**
+ * Remove a machine's pinned known-hosts file (best-effort). Used when a
+ * machine's destination (host/user/port) changes so the TOFU scan/confirm
+ * gate re-arms instead of trusting the old host's pin.
+ */
+export function removeKnownHosts(machineId: string, homeDir: string = HOME_CONFIG_DIR): void {
+  try {
+    fs.rmSync(knownHostsPath(machineId, homeDir), { force: true });
+  } catch {
+    // best-effort: the connect-time existsSync gate stays authoritative
+  }
+}
+
 /** Read the pinned fingerprints back; a missing file reads as empty. */
 export function readPinnedKeys(machineId: string, homeDir?: string): HostKeyFingerprint[] {
   let raw: string;

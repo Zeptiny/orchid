@@ -10,6 +10,7 @@
 import {
   fingerprintsFromScan,
   readPinnedKeys,
+  removeKnownHosts,
   scanHostKeys,
   writeKnownHosts,
   type HostKeyFingerprint,
@@ -82,6 +83,18 @@ export class MachineHostKeyFlow {
   /** Drop cached state for a machine (registry delete). */
   forget(machineId: string): void {
     this.scans.delete(machineId);
+  }
+
+  /**
+   * Drop the machine's pinned known-hosts file AND its cached scan so the
+   * TOFU scan/confirm gate re-arms. Used when a registry update changes the
+   * machine's destination (host/user/port): the old pin attests a host the
+   * machine no longer points at, and a stale cached scan must never be
+   * confirmable into a pin for the new destination.
+   */
+  unpin(machineId: string): void {
+    this.scans.delete(machineId);
+    removeKnownHosts(machineId, this.homeDir);
   }
 }
 

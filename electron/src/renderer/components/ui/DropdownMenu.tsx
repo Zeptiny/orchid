@@ -11,6 +11,11 @@ export interface DropdownMenuProps {
   readonly children: ReactNode;
   /** Accessible label for the menu. */
   readonly label: string;
+  /**
+   * Accessible name for the trigger button when it should describe the
+   * current selection rather than the menu itself (defaults to `label`).
+   */
+  readonly triggerLabel?: string;
   readonly placement?: DropdownMenuPlacement;
   readonly align?: DropdownMenuAlign;
   readonly className?: string;
@@ -35,6 +40,7 @@ export function DropdownMenu({
   trigger,
   children,
   label,
+  triggerLabel,
   placement = 'bottom-start',
   align = 'start',
   className = '',
@@ -89,7 +95,7 @@ export function DropdownMenu({
         aria-haspopup="menu"
         aria-expanded={isOpen}
         aria-controls={isOpen ? menuId : undefined}
-        aria-label={label}
+        aria-label={triggerLabel ?? label}
         disabled={disabled}
         onClick={handleToggle}
       >

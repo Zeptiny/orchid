@@ -241,7 +241,7 @@ vi.mock('../../src/main/project/trust', () => ({
   getProjectTrustState: () => 'trusted',
 }));
 
-vi.mock('../../src/main/ipc/chat-history', () => ({
+vi.mock('../../src/main/host/chat/history', () => ({
   clearChatHistory: vi.fn(),
   seedChatHistory: vi.fn(),
 }));

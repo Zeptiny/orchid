@@ -26,6 +26,35 @@ interface AttachedClient {
 const attached = new Map<string, AttachedClient>();
 
 /**
+ * Interactive deadline for one host request on a remote machine (review fix
+ * #24). Generous on purpose — it exists to reject renderer invokes that a
+ * wedged-but-alive remote daemon (stuck sqlite lock, hung MCP call) would
+ * otherwise leave pending forever; ssh keepalives only catch network death.
+ */
+const REMOTE_REQUEST_TIMEOUT_MS = 120_000;
+
+/**
+ * Methods that legitimately outlive any interactive deadline (verified
+ * against the server bindings in host/server.ts): full-project indexing
+ * (`rag.index`, `ast.index`), provider model discovery (network round trips
+ * to the provider), and user-initiated compaction (a synchronous LLM
+ * summarization call). They run with NO client timer — a deadline would
+ * cancel real work on a healthy remote. `chat.send` is deliberately absent:
+ * the turn runs detached on the host and the request itself returns promptly,
+ * so it takes the interactive default.
+ */
+const REMOTE_UNTIMED_METHODS: ReadonlySet<string> = new Set([
+  'rag.index',
+  'ast.index',
+  'providers.discover_models',
+  'chat.compact',
+]);
+
+/** Deadline resolver handed to the remote client (0 disables, undefined = default). */
+const remoteMethodTimeoutMs = (method: string): number | undefined =>
+  REMOTE_UNTIMED_METHODS.has(method) ? 0 : undefined;
+
+/**
  * Push one protocol event to every live window driving this machine. Unlike
  * the local path (clientId === window id) the recipients are resolved through
  * the per-window active-machine map, so several windows can share one remote
@@ -68,6 +97,16 @@ export function attachRemoteMachineClient(
   const client = createHostClient(transport, {
     clientId: `machine:${machine.id}`,
     label: `machine:${machine.label}`,
+    // A wedged remote daemon must not leave renderer invokes pending forever
+    // (#24): interactive methods get a generous deadline, the long-running
+    // set above gets none. A timeout rejects that one request (typed TIMEOUT)
+    // without killing the transport.
+    requestTimeoutMs: REMOTE_REQUEST_TIMEOUT_MS,
+    methodTimeoutMs: remoteMethodTimeoutMs,
+    // The remote daemon is an untrusted peer (#16): event payloads and
+    // response results are validated against the protocol registries before
+    // they can reach renderer reducers.
+    validateInbound: true,
   });
   const unsubscribers: Array<() => void> = [];
   for (const ev of Object.keys(HOST_EVENTS) as HostEventName[]) {

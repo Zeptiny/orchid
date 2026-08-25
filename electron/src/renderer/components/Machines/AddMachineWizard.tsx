@@ -305,7 +305,7 @@ export function AddMachineWizard({ open, onClose, actions, onComplete }: AddMach
         </Alert>
       )}
 
-      <div className="modal-action">
+      <div className="flex items-center justify-end gap-2 border-t border-base-300 pt-3">
         {step === 'form' && (
           <>
             <Button variant="ghost" onClick={onClose}>Cancel</Button>

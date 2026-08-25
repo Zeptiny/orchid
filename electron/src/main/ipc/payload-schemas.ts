@@ -1,8 +1,12 @@
 /**
  * IPC payload Zod schemas — shared by main-process handlers and tests.
  *
- * Keep these pure (zod + shared types only) so boundary tests can import
- * production schemas without loading Electron IPC modules.
+ * The schemas live in shared/types/ipc-schemas.ts (and the config-boundary
+ * family in shared/types/config-schema.ts) as the single source the host
+ * protocol registry (shared/host/protocol.ts) also validates against; this
+ * module re-exports them so existing main-side import sites stay stable.
+ * Only the local-only families (machines) remain defined here; the renderer
+ * tool allow-list now lives in shared/types/tool.ts.
  */
 import { z } from 'zod';
 import { modelSelectionSchema } from '../../shared/types/provider';
@@ -11,123 +15,50 @@ import {
   machineIdSchema,
   machineUpdateSchema,
 } from '../../shared/types/machine';
-import { configSchema, permissionRuleSchema, compactionScopeSchema, compactionSubagentsScopeSchema } from '../config/schema';
+import { permissionRuleSchema } from '../../shared/types/config-schema';
 
-// ── Chat ─────────────────────────────────────────────────────────────────────
+// ── Chat / subagents / ask-question (hoisted to shared/types/ipc-schemas) ────
 
-export const chatSendSchema = z.object({
-  message: z.string().min(1, 'Message must be non-empty'),
-  sessionId: z.string().uuid().optional(),
-  /** Preferred model when lazy-creating a session from draft mode. */
-  model: modelSelectionSchema.nullable().optional(),
-  draftGeneration: z.number().int().nonnegative().optional(),
-});
+export {
+  askQuestionAnswerSchema,
+  askQuestionCancelSchema,
+  astIndexSchema,
+  chatCancelSchema,
+  chatCompactSchema,
+  chatQueueNextSchema,
+  chatSendSchema,
+  chatSnapshotSchema,
+  chatStopSchema,
+  projectTrustGetSchema,
+  projectTrustSetSchema,
+  ragIndexSchema,
+  sessionChangeCwdSchema,
+  sessionChangeModelSchema,
+  sessionDeleteSchema,
+  sessionHistoryPageSchema,
+  sessionLoadSchema,
+  sessionOpenSchema,
+  sessionRenameSchema,
+  sessionSetReasoningEffortSchema,
+  sessionSetServiceTierSchema,
+  sessionSetWorkspaceSchema,
+  toolExecuteSchema,
+} from '../../shared/types/ipc-schemas';
+export {
+  subagentSnapshotRequestSchema as subagentSnapshotSchema,
+  subagentDetailRequestSchema as subagentDetailSchema,
+} from '../../shared/types/ipc-schemas';
 
-export const chatCancelSchema = z.object({
-  sessionId: z.string().uuid().optional(),
-});
+// ── Config (hoisted to shared/types/config-schema, beside the zod config
+//    schemas they structurally validate against) ──────────────────────────────
 
-export const chatQueueNextSchema = z.object({
-  sessionId: z.string().uuid(),
-});
+export {
+  configReadProjectSchema,
+  configSaveProjectSchema,
+  configSaveSchema,
+} from '../../shared/types/config-schema';
 
-export const chatSnapshotSchema = z.object({
-  sessionId: z.string().uuid().optional(),
-});
-
-export const chatStopSchema = z.object({
-  sessionId: z.string().uuid(),
-});
-
-export const chatCompactSchema = z.object({
-  sessionId: z.string().uuid().optional(),
-});
-
-export const subagentSnapshotSchema = z.object({
-  sessionId: z.string().uuid(),
-}).strict();
-
-export const subagentDetailSchema = z.object({
-  sessionId: z.string().uuid(),
-  subagentId: z.string().min(1),
-}).strict();
-
-// ── Ask Question ────────────────────────────────────────────────────────────
-
-export const askQuestionAnswerSchema = z.object({
-  toolCallId: z.string().uuid(),
-  answers: z.array(z.object({
-    selected: z.array(z.string()),
-    text: z.string().nullable(),
-    skipped: z.boolean(),
-  }).strict()),
-}).strict();
-
-export const askQuestionCancelSchema = z.object({
-  toolCallId: z.string().uuid(),
-}).strict();
-
-// ── Config ───────────────────────────────────────────────────────────────────
-
-/**
- * Known top-level config keys — extracted from configSchema so the IPC
- * boundary rejects typos like `{ providres: ... }` that would silently no-op.
- */
-const KNOWN_CONFIG_KEYS = new Set(Object.keys(configSchema.shape));
-
-const compactionPartialSchema = z.object({
-  main: compactionScopeSchema.partial().strict().optional(),
-  subagents: compactionSubagentsScopeSchema.partial().strict().optional(),
-}).partial().strict();
-
-/**
- * Accept partial config updates, including `null` tombstones for deleting
- * nested map entries.
- *
- * Top-level keys are validated against known config schema keys so typos
- * are rejected at the boundary rather than silently ignored.
- *
- * Structure is validated after deep-merge via `configSchema.parse`.
- */
-export const configSaveSchema = z.object({
-  updates: z.record(z.string(), z.unknown()),
-}).strict().superRefine((data, ctx) => {
-  for (const key of Object.keys(data.updates)) {
-    if (!KNOWN_CONFIG_KEYS.has(key)) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message: `Unknown config key: "${key}". Known keys: ${[...KNOWN_CONFIG_KEYS].sort().join(', ')}`,
-        path: ['updates', key],
-      });
-    }
-  }
-  const compactionUpdate = (data.updates as Record<string, unknown>)['compaction'];
-  if (compactionUpdate !== undefined) {
-    const parsed = compactionPartialSchema.safeParse(compactionUpdate);
-    if (!parsed.success) {
-      for (const issue of parsed.error.issues) {
-        ctx.addIssue({
-          ...issue,
-          path: ['updates', 'compaction', ...issue.path],
-        });
-      }
-    }
-  }
-});
-
-/**
- * Project-scoped config:save payload — a verified `projectDir` plus a
- * free-form updates map. Allow-list rejection (fail-loud, no filtering) and
- * merged-structure validation happen in the handler after the workspace is
- * verified.
- */
-export const configSaveProjectSchema = z.object({
-  projectDir: z.string().min(1),
-  updates: z.record(z.unknown()),
-});
-
-/** Project-scoped config:read payload — a bare non-empty `projectDir`. */
-export const configReadProjectSchema = z.string().min(1);
+// ── Permissions ──────────────────────────────────────────────────────────────
 
 const permissionUpdatesSchema = z.record(z.string(), permissionRuleSchema.nullable())
   .superRefine((updates, ctx) => {
@@ -155,61 +86,7 @@ export const permissionConfigScopeSaveSchema = z.discriminatedUnion('scope', [
   }).strict(),
 ]);
 
-// ── Session ──────────────────────────────────────────────────────────────────
-
-export const sessionLoadSchema = z.object({
-  id: z.string().uuid(),
-  /** When false, peek from disk without activating or seeding chat history. */
-  activate: z.boolean().optional().default(true),
-});
-
-export const sessionOpenSchema = z.object({
-  id: z.string().uuid(),
-});
-
-/** Validate a bounded history-page request and its optional exclusive cursor. */
-export const sessionHistoryPageSchema = z.object({
-  sessionId: z.string().uuid(),
-  chainId: z.string().min(1),
-  beforeIndex: z.number().int().nonnegative().optional(),
-}).strict();
-
-export const sessionDeleteSchema = z.object({
-  id: z.string().uuid(),
-});
-
-export const sessionRenameSchema = z.object({
-  id: z.string().uuid(),
-  name: z.string().min(1),
-});
-
-export const sessionChangeModelSchema = z.object({
-  id: z.string().uuid(),
-  selection: modelSelectionSchema.nullable(),
-  modelLabel: z.string().nullable().optional(),
-});
-
-export const sessionChangeCwdSchema = z.object({
-  id: z.string().uuid(),
-  cwd: z.string().min(1),
-});
-
-export const sessionSetWorkspaceSchema = z.object({
-  cwd: z.string().min(1),
-});
-
-// ── Project trust ────────────────────────────────────────────────────────────
-
-export const projectTrustGetSchema = z.object({
-  cwd: z.string().min(1),
-});
-
-export const projectTrustSetSchema = z.object({
-  cwd: z.string().min(1),
-  trusted: z.boolean(),
-});
-
-// ── Machines ─────────────────────────────────────────────────────────────────
+// ── Machines (local-only family; never host-routed) ──────────────────────────
 
 export const machinesCreateSchema = machineCreateSchema;
 
@@ -237,16 +114,7 @@ export const machinesMachineIdSchema = z
   })
   .strict();
 
-export const sessionSetReasoningEffortSchema = z.object({
-  effort: z.union([
-    z.string().trim().min(1).max(256),
-    z.number().int().min(1).max(1_000_000),
-  ]).nullable(),
-});
-
-export const sessionSetServiceTierSchema = z.object({
-  tier: z.string().trim().min(1).max(128).nullable(),
-});
+// ── Local-only session config reads ──────────────────────────────────────────
 
 export const sessionGetReasoningConfigSchema = z.object({
   selection: modelSelectionSchema.nullable().optional(),
@@ -255,33 +123,3 @@ export const sessionGetReasoningConfigSchema = z.object({
 export const sessionGetServiceTierConfigSchema = z.object({
   selection: modelSelectionSchema.nullable().optional(),
 }).strict().optional();
-
-// ── Tool ─────────────────────────────────────────────────────────────────────
-
-export const toolExecuteSchema = z.object({
-  name: z.string().min(1),
-  args: z.unknown(),
-});
-
-/**
- * Tools that the renderer may invoke directly via tool:execute.
- * Only read-only, non-destructive tools are permitted.
- */
-export const RENDERER_ALLOWED_TOOLS = new Set([
-  'read',
-  'read_directory',
-  'glob',
-  'grep',
-  'todo_list',
-  'rag_search',
-]);
-
-// ── RAG / AST ────────────────────────────────────────────────────────────────
-
-export const ragIndexSchema = z.object({
-  force: z.boolean().optional().default(false),
-});
-
-export const astIndexSchema = z.object({
-  force: z.boolean().optional().default(false),
-});

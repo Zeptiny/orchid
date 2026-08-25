@@ -6,70 +6,20 @@
  *   project: <workspace>/.orchid/{skills,agents,personalities}/
  */
 import { ipcMain, shell } from 'electron';
-import { z } from 'zod';
+import type { z } from 'zod';
 import { IPC_CHANNELS } from '../../shared/types/ipc';
-import { AgentTier, AgentType } from '../../shared/types/agent';
 import { hostRequest } from './host-request';
+import {
+  agentSaveSchema,
+  definitionDeleteSchema,
+  definitionRevealSchema,
+  personalitySaveSchema,
+  sharedPromptDeleteSchema,
+  sharedPromptSaveSchema,
+  skillSaveSchema,
+} from '../../shared/types/ipc-schemas';
 import { assertPathUnderOrchidRoots } from '../defs/paths';
 import { resolveBoundProjectPath } from './session';
-
-// ── Schemas ──────────────────────────────────────────────────────────────────
-
-const scopeSchema = z.enum(['global', 'project']);
-const nameSchema = z.string().min(1).max(128);
-
-const skillSaveSchema = z.object({
-  scope: scopeSchema,
-  name: nameSchema,
-  description: z.string().min(1),
-  requires: z.array(z.string()).optional(),
-  content: z.string(),
-  previousName: z.string().optional(),
-});
-
-const agentSaveSchema = z.object({
-  scope: scopeSchema,
-  name: nameSchema,
-  type: z.enum([AgentType.INTERNAL, AgentType.SUBAGENT]),
-  tier: z.enum([
-    AgentTier.SEED,
-    AgentTier.SPROUT,
-    AgentTier.BLOOM,
-    AgentTier.CROWN,
-  ]),
-  description: z.string().min(1),
-  system_prompt: z.string(),
-  allowed_tools: z.array(z.string()).min(1),
-  allowed_skills: z.array(z.string()),
-  previousName: z.string().optional(),
-});
-
-const personalitySaveSchema = z.object({
-  scope: scopeSchema,
-  name: nameSchema,
-  content: z.string().min(1),
-  previousName: z.string().optional(),
-});
-
-const sharedPromptSaveSchema = z.object({
-  scope: scopeSchema,
-  slot: z.enum(['all-agents', 'subagents']),
-  content: z.string(),
-});
-
-const sharedPromptDeleteSchema = z.object({
-  scope: scopeSchema,
-  slot: z.enum(['all-agents', 'subagents']),
-});
-
-const deleteSchema = z.object({
-  scope: scopeSchema,
-  name: nameSchema,
-});
-
-const revealSchema = z.object({
-  path: z.string().min(1),
-});
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -110,7 +60,7 @@ export function registerDefinitionsIPC(): void {
 
   ipcMain.handle(
     IPC_CHANNELS.SKILL_DELETE,
-    withDefinitionMutation(deleteSchema, IPC_CHANNELS.SKILL_DELETE, 'skill:delete'),
+    withDefinitionMutation(definitionDeleteSchema, IPC_CHANNELS.SKILL_DELETE, 'skill:delete'),
   );
 
   ipcMain.handle(
@@ -120,7 +70,7 @@ export function registerDefinitionsIPC(): void {
 
   ipcMain.handle(
     IPC_CHANNELS.AGENT_DELETE,
-    withDefinitionMutation(deleteSchema, IPC_CHANNELS.AGENT_DELETE, 'agent:delete'),
+    withDefinitionMutation(definitionDeleteSchema, IPC_CHANNELS.AGENT_DELETE, 'agent:delete'),
   );
 
   ipcMain.handle(
@@ -130,7 +80,7 @@ export function registerDefinitionsIPC(): void {
 
   ipcMain.handle(
     IPC_CHANNELS.PERSONALITY_DELETE,
-    withDefinitionMutation(deleteSchema, IPC_CHANNELS.PERSONALITY_DELETE, 'personality:delete'),
+    withDefinitionMutation(definitionDeleteSchema, IPC_CHANNELS.PERSONALITY_DELETE, 'personality:delete'),
   );
 
   ipcMain.handle(
@@ -144,7 +94,7 @@ export function registerDefinitionsIPC(): void {
   );
 
   ipcMain.handle(IPC_CHANNELS.DEFINITION_REVEAL, async (event, payload: unknown) => {
-    const parsed = revealSchema.safeParse(payload);
+    const parsed = definitionRevealSchema.safeParse(payload);
     if (!parsed.success) {
       throw new Error(`Invalid definition:reveal payload: ${parsed.error.message}`);
     }

@@ -3,7 +3,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { IPC_CHANNELS } from '../../src/shared/types/ipc';
-import { RENDERER_ALLOWED_TOOLS } from '../../src/main/ipc/payload-schemas';
+import { RENDERER_ALLOWED_TOOLS } from '../../src/shared/types/tool';
 import type { ToolExecutionResult } from '../../src/shared/types/tool-result';
 import { genericToolResultDataSchema } from '../../src/shared/types/tool-result';
 import { executeToolCall } from '../../src/main/llm/tool-dispatch';

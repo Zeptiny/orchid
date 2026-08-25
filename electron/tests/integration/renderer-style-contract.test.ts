@@ -580,10 +580,6 @@ const BASELINE_COMPONENT_ROOT_HITS: ReadonlySet<string> = new Set([
   'components/InputArea.tsx::alert',
   'components/InputArea.tsx::btn',
   'components/LeftSidebar.tsx::status',
-  'components/Machines/AddMachineWizard.tsx::modal',
-  'components/Machines/ConnectionStatusBadge.tsx::status',
-  'components/Machines/MachineSwitcher.tsx::btn',
-  'components/Machines/MachineSwitcher.tsx::dropdown',
 
   'components/ModelPicker.tsx::dropdown',
   'components/ModelPicker.tsx::input',
@@ -613,7 +609,7 @@ const BASELINE_COMPONENT_ROOT_HITS: ReadonlySet<string> = new Set([
 ]);
 
 /** Total component-root token occurrences captured at baseline time (count guard). */
-const BASELINE_COMPONENT_ROOT_TOTAL_TOKENS = 71;
+const BASELINE_COMPONENT_ROOT_TOTAL_TOKENS = 66;
 
 const BASELINE_NON_TOKEN_COLORS: ReadonlyMap<string, number> = new Map([
 ]);

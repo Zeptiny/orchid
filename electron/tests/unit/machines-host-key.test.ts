@@ -15,13 +15,20 @@ import {
   HostKeyScanError,
   fingerprintsFromScan,
   knownHostsPath,
+  removeKnownHosts,
   scanHostKeys,
   verifyPinnedKeys,
   writeKnownHosts,
   type KeyScanExecFn,
 } from '../../src/main/machines/host-key';
+import {
+  MachineHostKeyFlow,
+  MachineHostKeyFlowError,
+} from '../../src/main/machines/host-key-flow';
+import type { RemoteMachineRecord } from '../../src/shared/types/machine';
 
 const HOST = 'build.example.com';
+const T0 = '2026-08-23T00:00:00.000Z';
 
 // Real throwaway key pairs (public lines only; no private material).
 const ED25519_LINE =
@@ -160,6 +167,54 @@ describe('writeKnownHosts', () => {
       /empty host-key set/,
     );
     expect(fs.existsSync(knownHostsPath('build-1', homeDir))).toBe(false);
+  });
+});
+
+// ── removeKnownHosts / MachineHostKeyFlow.unpin ──────────────────────────────
+
+describe('removeKnownHosts', () => {
+  it('deletes the pin file and is a no-op when absent', () => {
+    writeKnownHosts('build-1', [ED25519_LINE], { homeDir });
+    const filePath = knownHostsPath('build-1', homeDir);
+    expect(fs.existsSync(filePath)).toBe(true);
+
+    removeKnownHosts('build-1', homeDir);
+    expect(fs.existsSync(filePath)).toBe(false);
+
+    // Idempotent: an unpinned machine must never fail the update path.
+    expect(() => removeKnownHosts('build-1', homeDir)).not.toThrow();
+  });
+});
+
+describe('MachineHostKeyFlow.unpin', () => {
+  const machine: RemoteMachineRecord = {
+    id: 'build-1',
+    label: 'Build server',
+    kind: 'ssh',
+    host: HOST,
+    port: 22,
+    user: '',
+    agentCommand: 'orchid-agent',
+    created_at: T0,
+    updated_at: T0,
+  };
+
+  it('drops the pin AND the cached scan so the TOFU gate re-arms', async () => {
+    writeKnownHosts('build-1', [ED25519_LINE], { homeDir });
+    const flow = new MachineHostKeyFlow({
+      homeDir,
+      execFn: async () => ({ stdout: `${ED25519_LINE}\n`, stderr: '' }),
+    });
+    expect(await flow.scan(machine)).toHaveLength(1);
+    expect(flow.pinned('build-1')).toBe(true);
+
+    flow.unpin('build-1');
+
+    // The pin file is gone and no cached scan can be confirmed into a new
+    // pin for the changed destination without a fresh user-reviewed scan.
+    expect(flow.pinned('build-1')).toBe(false);
+    expect(fs.existsSync(knownHostsPath('build-1', homeDir))).toBe(false);
+    expect(() => flow.confirm('build-1')).toThrow(MachineHostKeyFlowError);
   });
 });
 

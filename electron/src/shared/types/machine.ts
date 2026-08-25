@@ -27,8 +27,34 @@ export const machineIdSchema = z
     message: `machine id '${MACHINE_ID_LOCAL}' is reserved`,
   });
 
-/** Remote host address: hostname, IP, or an ssh-config alias. */
-const machineHostSchema = z.string().trim().min(1).max(255);
+/**
+ * Remote host address: hostname, IP, or an ssh-config alias. A leading `-` is
+ * rejected: the ssh transport emits `[user@]host` before ssh's `--`, so
+ * OpenSSH would parse such a token as an option (e.g. `-oProxyCommand=…`)
+ * and execute it locally during connection setup — before host-key checking.
+ * (The transport's `assertSafeDestination` mirrors this fail-closed.)
+ */
+const machineHostSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .max(255)
+  .refine((host) => !host.startsWith('-'), {
+    message: 'host must not start with "-" (ssh would parse it as an option)',
+  });
+
+/**
+ * Remote login user (optional; empty means the ssh-config default). Same
+ * injection posture as the host: a leading `-` turns `[user@]host` into an
+ * ssh option, and `@`, `#`, or whitespace would smuggle a second destination
+ * token past the user prefix.
+ */
+const machineUserSchema = z
+  .string()
+  .max(64)
+  .refine((user) => !user.startsWith('-') && !/[@#\s]/.test(user), {
+    message: 'user must not start with "-" or contain "@", "#", or whitespace',
+  });
 
 /**
  * Characters allowed in one `agentCommand` token, twin of the transport-layer
@@ -65,7 +91,7 @@ export const remoteMachineRecordSchema = z
     kind: z.literal('ssh'),
     host: machineHostSchema,
     port: z.number().int().min(1).max(65535).default(22),
-    user: z.string().max(64).default(''),
+    user: machineUserSchema.default(''),
     agentCommand: agentCommandSchema,
     created_at: isoTimestampSchema,
     updated_at: isoTimestampSchema,

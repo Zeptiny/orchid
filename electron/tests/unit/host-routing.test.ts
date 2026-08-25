@@ -18,8 +18,8 @@ import {
   ALLOWED_INVOKE_CHANNELS,
   IPC_CHANNELS,
 } from '../../src/shared/types/ipc';
+import { MACHINE_ID_LOCAL } from '../../src/shared/types/machine';
 import {
-  LOCAL_MACHINE_ID,
   LOCAL_ONLY_HOST_CAPABILITY_CHANNELS,
   HOST_ROUTED_CHANNELS,
   activeMachineFor,
@@ -166,7 +166,7 @@ describe('per-window active machine', () => {
   });
 
   it('defaults every window to the local machine', () => {
-    expect(activeMachineFor('7')).toBe(LOCAL_MACHINE_ID);
+    expect(activeMachineFor('7')).toBe(MACHINE_ID_LOCAL);
   });
 
   it('resolves the local machine to its per-window client', () => {
@@ -178,11 +178,11 @@ describe('per-window active machine', () => {
   it('switches a window to a registered machine and back', () => {
     const remote = { clientId: 'remote-a' };
     registerHostClient('remote-a', remote as never);
-    expect(setActiveMachine('8', 'remote-a')).toBe(LOCAL_MACHINE_ID);
+    expect(setActiveMachine('8', 'remote-a')).toBe(MACHINE_ID_LOCAL);
     expect(activeMachineFor('8')).toBe('remote-a');
     expect(clientForWindow('8')).toBe(remote);
-    expect(setActiveMachine('8', LOCAL_MACHINE_ID)).toBe('remote-a');
-    expect(activeMachineFor('8')).toBe(LOCAL_MACHINE_ID);
+    expect(setActiveMachine('8', MACHINE_ID_LOCAL)).toBe('remote-a');
+    expect(activeMachineFor('8')).toBe(MACHINE_ID_LOCAL);
   });
 
   it('errors on an unknown machine id', () => {
@@ -210,7 +210,7 @@ describe('per-window active machine', () => {
     releaseWindowHostState('9');
 
     // The active-machine override is gone (no leaked machineByWindow entry)…
-    expect(activeMachineFor('9')).toBe(LOCAL_MACHINE_ID);
+    expect(activeMachineFor('9')).toBe(MACHINE_ID_LOCAL);
     // …and the window's local client connection was closed alongside it.
     expect(closeLocalHostClient).toHaveBeenCalledWith('9');
   });

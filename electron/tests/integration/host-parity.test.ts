@@ -32,11 +32,12 @@ import * as path from 'node:path';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { defaults } from '../../src/main/config/schema';
-import { PROTOCOL_VERSION } from '../../src/shared/host/protocol';
+import { HOST_METHODS, PROTOCOL_VERSION, type HostMethodName } from '../../src/shared/host/protocol';
 
-const APPROVAL_TOOL_BASE = 'aaaaaaaa-0000-4ccc-8ddd-';
-const QUESTION_TOOL_BASE = 'ffffffff-0000-4aaa-8bbb-';
-
+// Real-shaped tool-call uuids (8-hex base final group + 4-hex per-run suffix)
+// so pending approvals and questions validate against the registry's schemas.
+const APPROVAL_TOOL_BASE = 'aaaaaaaa-0000-4ccc-8ddd-00000000';
+const QUESTION_TOOL_BASE = 'ffffffff-0000-4aaa-8bbb-00000000';
 const mocks = vi.hoisted(() => {
   return {
     sessionManager: null as unknown,
@@ -70,7 +71,7 @@ vi.mock('../../src/main/project/workspace', () => ({
   updateStickyDefaultProjectDir: vi.fn(async () => {}),
   resolveWorkspace: (owner: string, opts: { sessionCwd: string | null; stickyDefault: string | null }) => ({
     cwd: opts.sessionCwd ?? opts.stickyDefault,
-    source: opts.sessionCwd ? 'session' : 'sticky',
+    source: opts.sessionCwd ? 'session' : 'default',
     status: opts.sessionCwd ?? opts.stickyDefault ? 'valid' : 'unbound',
   }),
 }));
@@ -190,7 +191,7 @@ vi.mock('../../src/main/tools', () => ({
     isSummary: () => true,
     toDomainRecord: () => null,
     getSessionRevision: () => 0,
-    getLiveProjections: () => ({}),
+    getLiveProjections: () => [],
     getRecord: () => null,
     addOnChangeListener: vi.fn(() => () => {}),
     setOnDelta: vi.fn(),
@@ -247,20 +248,31 @@ vi.mock('../../src/main/agents/subagent-events', () => ({
   flushSubagentDeltas: vi.fn(),
 }));
 
-vi.mock('../../src/main/llm/tool-dispatch', () => ({
-  executeToolCall: vi.fn(async () => ({ ok: true })),
-  genericTerminalExecution: vi.fn(
-    (_id: string, name: string, status: string, _content: string, reason: string) => ({
-      execution: {
-        canonical: {
-          status,
-          data: { reason },
-          origin: { kind: 'built-in', name },
-        },
-      },
-    }),
-  ),
-}));
+vi.mock('../../src/main/llm/tool-dispatch', async () => {
+  // Mirror the real genericTerminalExecution (llm/terminal-result.ts): a
+  // FLAT ToolExecutionResult {canonical, agentProjection} built through the
+  // real canonical builder, so the registry-schema validation below sees the
+  // exact wire shape production emits.
+  const { createCanonicalToolResult } = await import('../../src/shared/types/tool-result');
+  return {
+    executeToolCall: vi.fn(async () => ({ ok: true })),
+    genericTerminalExecution: vi.fn(
+      (_id: string, name: string, status: 'error' | 'cancelled', message: string, code: string) => ({
+        canonical: status === 'error'
+          ? createCanonicalToolResult('generic', {
+              status,
+              data: { value: message, origin: { kind: 'built-in', name } },
+              error: { code, message },
+            })
+          : createCanonicalToolResult('generic', {
+              status,
+              data: { value: message, origin: { kind: 'built-in', name } },
+            }),
+        agentProjection: { content: message, completeness: 'complete' as const },
+      }),
+    ),
+  };
+});
 
 // The fake provider fixture shared with host-turn-survival.test.ts: a scripted
 // two-chunk turn that finishes cleanly (the gate stays null here — no
@@ -341,6 +353,22 @@ interface ScenarioFingerprint {
   pendingApprovalMatchesLiveDelivery: boolean;
   pendingQuestionMatchesLiveDelivery: boolean;
   pendingOwnerStripped: boolean;
+  /** HOST_METHODS result-schema violations for every exercised method. */
+  schemaValidationErrors: string[];
+}
+
+// ── Registry-schema validation ───────────────────────────────────────────────
+
+/**
+ * Validate one response's post-normalization result (the client returns the
+ * envelope's `result` verbatim; the server already normalized undefined →
+ * null) against the method's HOST_METHODS result schema. Returns a failure
+ * description, or null when the wire value conforms — so binding-vs-registry
+ * drift fails the harness instead of silently widening.
+ */
+function validateResult(method: HostMethodName, result: unknown): string | null {
+  const parsed = HOST_METHODS[method].result.safeParse(result);
+  return parsed.success ? null : `${method} result failed its registry schema: ${parsed.error.message}`;
 }
 
 // ── Fingerprint masking (generated ids differ between runs) ──────────────────
@@ -491,6 +519,11 @@ async function runParityScenario(label: string, client: HostClient): Promise<Sce
   const questionToolCallId = `${QUESTION_TOOL_BASE}${label === 'in-process' ? '0001' : '0002'}`;
   let liveApprovalPayload: unknown = null;
   let liveQuestionPayload: unknown = null;
+  const schemaValidationErrors: string[] = [];
+  const checkResult = (method: HostMethodName, result: unknown): void => {
+    const failure = validateResult(method, result);
+    if (failure) schemaValidationErrors.push(failure);
+  };
 
   const doneSeen = new Promise<void>((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error(`${label}: chat:done never arrived`)), 20_000);
@@ -521,8 +554,10 @@ async function runParityScenario(label: string, client: HostClient): Promise<Sce
   try {
     // Session create + open (the client becomes the session's active owner).
     const session = await client.request<{ id: string }>('session.create');
+    checkResult('session.create', session);
     expect(session.id).toMatch(/^[0-9a-f-]{36}$/);
     const opened = await client.request<{ session: unknown }>('session.open', { id: session.id });
+    checkResult('session.open', opened);
     expect(opened).toBeTruthy();
 
     // Chat send + stream the scripted (fake provider) turn.
@@ -530,6 +565,7 @@ async function runParityScenario(label: string, client: HostClient): Promise<Sce
       message: 'parity scripted turn',
       sessionId: session.id,
     });
+    checkResult('chat.send', chatSend);
     expect(chatSend).toMatchObject({ status: 'started' });
     await doneSeen;
     // Belt and braces: the turn is fully settled host-side.
@@ -542,12 +578,14 @@ async function runParityScenario(label: string, client: HostClient): Promise<Sce
     // Tool result round-trip: renderer-allowed name, absent from the
     // (mocked) registry — a deterministic canonical envelope.
     const toolExecute = await client.request('tool.execute', { name: 'read', args: { path: '/x' } });
-    expect((toolExecute as { execution?: { canonical?: { status?: string; data?: { reason?: string } } } })
-      .execution?.canonical).toMatchObject({ status: 'error', data: { reason: 'unknown_tool' } });
+    checkResult('tool.execute', toolExecute);
+    expect((toolExecute as { canonical?: { status?: string; error?: { code?: string } } })
+      .canonical).toMatchObject({ status: 'error', error: { code: 'unknown_tool' } });
 
-    // Subagent snapshot for the fresh session (no subagents ran; `live` is the
-    // keyed live-projection map, empty for a fresh session).
+    // Subagent snapshot for the fresh session (no subagents ran; the live
+    // projection array is empty for a fresh session).
     const subagentSnapshot = await client.request<{ live?: unknown }>('subagents.snapshot', { sessionId: session.id });
+    checkResult('subagents.snapshot', subagentSnapshot);
     expect(subagentSnapshot).toMatchObject({ sessionId: session.id, records: [] });
     expect(Object.keys(subagentSnapshot.live ?? {}).length).toBe(0);
 
@@ -557,7 +595,7 @@ async function runParityScenario(label: string, client: HostClient): Promise<Sce
       approvalToolCallId,
       session.id,
       'write',
-      'destructive',
+      'mutation',
       { path: 'parity' },
       mocks.workspace.cwd as string,
     );
@@ -568,6 +606,7 @@ async function runParityScenario(label: string, client: HostClient): Promise<Sce
       'host.pending_state',
       { sessionId: session.id },
     );
+    checkResult('host.pending_state', pending);
     expect(pending.approvals).toHaveLength(1);
     expect(pending.questions).toHaveLength(1);
     const pendingApproval = pending.approvals[0] as Record<string, unknown>;
@@ -586,6 +625,7 @@ async function runParityScenario(label: string, client: HostClient): Promise<Sce
       messages: Array<{ role: string; content: string }>;
       session: { chains: Array<{ status: string }> };
     }>('session.open', { id: session.id });
+    checkResult('session.open', reopened);
     const content = reopened.messages.map((message) => message.content).join('');
 
     return {
@@ -605,6 +645,7 @@ async function runParityScenario(label: string, client: HostClient): Promise<Sce
       pendingQuestionMatchesLiveDelivery:
         JSON.stringify(pendingQuestion) === JSON.stringify(liveQuestionPayload),
       pendingOwnerStripped: ownerStripped,
+      schemaValidationErrors,
     };
   } finally {
     offChunk();
@@ -663,7 +704,7 @@ describe('host protocol parity (U11)', () => {
     const projectDir = fs.mkdtempSync(path.join(tmpRoot, 'project-'));
     mocks.workspace.cwd = projectDir;
     mocks.workspace.status = 'valid';
-    mocks.workspace.source = 'sticky';
+    mocks.workspace.source = 'default';
     mocks.trustState.current = 'trusted';
     mocks.draftCwdByClient.clear();
     mocks.runtimeConfig = {
@@ -730,6 +771,14 @@ describe('host protocol parity (U11)', () => {
   it('captured a fingerprint from both transports', () => {
     expect(inprocFingerprint).not.toBeNull();
     expect(daemonFingerprint).not.toBeNull();
+  });
+
+  it('every exercised method result validates against its HOST_METHODS registry schema', () => {
+    // Binding-vs-registry drift guard (finding #7/#10): the actual
+    // post-normalization wire values must satisfy the declared result
+    // schemas on both transports.
+    expect(inprocFingerprint?.schemaValidationErrors ?? ['in-process fingerprint missing']).toEqual([]);
+    expect(daemonFingerprint?.schemaValidationErrors ?? ['daemon fingerprint missing']).toEqual([]);
   });
 
   it('handshakes identically over both transports', () => {
