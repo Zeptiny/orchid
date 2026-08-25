@@ -136,11 +136,23 @@ export type {
 
 // ── Machines API ─────────────────────────────────────────────────────────────
 
-export type MachineCreateMessage = MachineCreateInput;
+/**
+ * Create input plus the write-only SSH password for `password`-auth machines.
+ * The secret is stored encrypted (machine-secrets store) and never echoed
+ * back in any result or record.
+ */
+export type MachineCreateMessage = MachineCreateInput & {
+  password?: string;
+};
 
 export interface MachineUpdateMessage {
   id: string;
-  patch: MachineUpdateInput;
+  /**
+   * Record patch plus the write-only SSH password: a non-empty string stores
+   * (replacing any prior password), an empty string clears it. Only honored
+   * while the machine's authMethod is `password`.
+   */
+  patch: MachineUpdateInput & { password?: string };
 }
 
 export interface MachineDeleteMessage {
@@ -208,6 +220,17 @@ export type MachineScanHostKeyResult =
 export type MachineConfirmHostKeyResult =
   | ({ status: 'pinned'; fingerprints: MachineHostKeyFingerprint[] })
   | ({ status: 'error'; error: MachineActionError });
+
+/** Stored-password presence per machine (the secret never crosses IPC). */
+export interface MachineAuthStatusEntry {
+  machineId: string;
+  authMethod: 'key' | 'password';
+  hasStoredPassword: boolean;
+}
+
+export interface MachineAuthStatusResult {
+  machines: MachineAuthStatusEntry[];
+}
 
 /**
  * Re-broadcast the reconnect catch-up for the sending window's active machine
@@ -1683,6 +1706,8 @@ export interface OrchidAPI {
     scanHostKey: (message: MachineIdMessage) => Promise<MachineScanHostKeyResult>;
     /** Pin the machine's most recent scan (TOFU) into its known-hosts file. */
     confirmHostKey: (message: MachineIdMessage) => Promise<MachineConfirmHostKeyResult>;
+    /** Stored-password presence per machine (booleans only, never secrets). */
+    authStatus: () => Promise<MachineAuthStatusResult>;
   };
 
   subagents: {
@@ -1962,6 +1987,8 @@ export const IPC_CHANNELS = {
   MACHINES_SCAN_HOST_KEY: 'machines:scan_host_key',
   /** Pin the machine's most recent scan (TOFU). */
   MACHINES_CONFIRM_HOST_KEY: 'machines:confirm_host_key',
+  /** Which machines have a stored SSH password (booleans only, never secrets). */
+  MACHINES_AUTH_STATUS: 'machines:auth_status',
 
   // Tool
   TOOL_EXECUTE: 'tool:execute',
@@ -2125,6 +2152,7 @@ export const ALLOWED_INVOKE_CHANNELS = [
   IPC_CHANNELS.MACHINES_RESYNC,
   IPC_CHANNELS.MACHINES_SCAN_HOST_KEY,
   IPC_CHANNELS.MACHINES_CONFIRM_HOST_KEY,
+  IPC_CHANNELS.MACHINES_AUTH_STATUS,
   IPC_CHANNELS.TOOL_EXECUTE,
   IPC_CHANNELS.AGENT_SAVE,
   IPC_CHANNELS.AGENT_DELETE,

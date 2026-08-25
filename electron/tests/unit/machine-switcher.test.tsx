@@ -24,6 +24,7 @@ const BUILD: RemoteMachineRecord = {
   port: 22,
   user: '',
   agentCommand: 'orchid-agent',
+  authMethod: 'key',
   created_at: T0,
   updated_at: T0,
 };
@@ -35,6 +36,7 @@ const ZETA: RemoteMachineRecord = {
   port: 2222,
   user: 'deploy',
   agentCommand: 'orchid-agent',
+  authMethod: 'key',
   created_at: T0,
   updated_at: T0,
 };

@@ -32,6 +32,7 @@ const MACHINE: RemoteMachineRecord = {
   port: 22,
   user: '',
   agentCommand: 'orchid-agent',
+  authMethod: 'key',
   created_at: '2026-08-24T00:00:00.000Z',
   updated_at: '2026-08-24T00:00:00.000Z',
 };

@@ -39,6 +39,7 @@ function remote(id: string, label: string): RemoteMachineRecord {
     port: 22,
     user: '',
     agentCommand: 'orchid-agent',
+    authMethod: 'key',
     created_at: T0,
     updated_at: T0,
   };
@@ -122,6 +123,15 @@ function fakeMachinesApi(): { api: MachinesApi; calls: string[] } {
       return {
         status: 'pinned' as const,
         fingerprints: [{ algorithm: 'ssh-ed25519', fingerprintSha256: 'SHA256:test' }],
+      };
+    }),
+    authStatus: vi.fn(async () => {
+      calls.push('authStatus');
+      return {
+        machines: [
+          { machineId: 'local', authMethod: 'key' as const, hasStoredPassword: false },
+          { machineId: 'build-1', authMethod: 'key' as const, hasStoredPassword: false },
+        ],
       };
     }),
     onChanged: vi.fn((callback: (event: MachineListResult) => void) => {

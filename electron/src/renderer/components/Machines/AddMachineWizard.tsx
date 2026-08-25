@@ -18,6 +18,7 @@ import { Alert } from '../ui/Alert';
 import { Button } from '../ui/Button';
 import { DialogSurface } from '../ui/DialogSurface';
 import { FormField } from '../ui/FormField';
+import { Select } from '../ui/Select';
 import { Spinner } from '../ui/Spinner';
 import { TextInput } from '../ui/TextInput';
 import { ConnectionStatusBadge } from './ConnectionStatusBadge';
@@ -38,7 +39,15 @@ export interface AddMachineWizardProps {
   readonly onComplete?: (machineId: string) => void;
 }
 
-const EMPTY_FORM = { label: '', host: '', port: '22', user: '', agentCommand: 'orchid-agent' };
+const EMPTY_FORM = {
+  label: '',
+  host: '',
+  port: '22',
+  user: '',
+  agentCommand: 'orchid-agent',
+  authMethod: 'key' as 'key' | 'password',
+  password: '',
+};
 
 /**
  * Modal that walks one SSH remote from record creation to a connected host.
@@ -141,6 +150,8 @@ export function AddMachineWizard({ open, onClose, actions, onComplete }: AddMach
         port: Number.parseInt(form.port, 10) || 22,
         user: form.user.trim(),
         agentCommand: form.agentCommand.trim() || 'orchid-agent',
+        authMethod: form.authMethod,
+        ...(form.authMethod === 'password' ? { password: form.password } : {}),
       });
       setMachine(created);
       setStep('scan');
@@ -184,7 +195,10 @@ export function AddMachineWizard({ open, onClose, actions, onComplete }: AddMach
     if (machine) void runConnect(machine);
   }, [machine, runConnect]);
 
-  const formValid = form.label.trim() !== '' && form.host.trim() !== '';
+  const formValid =
+    form.label.trim() !== ''
+    && form.host.trim() !== ''
+    && (form.authMethod === 'key' || form.password !== '');
 
   return (
     <DialogSurface
@@ -199,7 +213,7 @@ export function AddMachineWizard({ open, onClose, actions, onComplete }: AddMach
         Add remote machine
       </h2>
       <p id="add-machine-desc" className="pt-1 text-sm text-base-content/70">
-        {step === 'form' && 'Connect to an SSH host running orchid-agent. Keys and agent authentication only.'}
+        {step === 'form' && 'Connect to an SSH host running orchid-agent. Authenticate with your ssh key/agent or a stored password.'}
         {step === 'scan' && 'Fingerprints come from ssh-keyscan; confirming pins them for every future connection.'}
         {step === 'connect' && 'Attaching to the remote agent daemon over SSH.'}
       </p>
@@ -248,6 +262,39 @@ export function AddMachineWizard({ open, onClose, actions, onComplete }: AddMach
               onChange={(event) => setForm((prev) => ({ ...prev, agentCommand: event.target.value }))}
             />
           </FormField>
+          <div className="grid grid-cols-2 gap-3">
+            <FormField label="Authentication" htmlFor="add-machine-auth" hint="How ssh logs into the host">
+              <Select
+                id="add-machine-auth"
+                value={form.authMethod}
+                onChange={(event) =>
+                  setForm((prev) => ({
+                    ...prev,
+                    authMethod: event.target.value === 'password' ? 'password' : 'key',
+                  }))
+                }
+              >
+                <option value="key">SSH key / agent</option>
+                <option value="password">Password</option>
+              </Select>
+            </FormField>
+            {form.authMethod === 'password' && (
+              <FormField
+                label="Password"
+                htmlFor="add-machine-password"
+                hint="Stored encrypted on this device"
+                required
+              >
+                <TextInput
+                  id="add-machine-password"
+                  type="password"
+                  autoComplete="new-password"
+                  value={form.password}
+                  onChange={(event) => setForm((prev) => ({ ...prev, password: event.target.value }))}
+                />
+              </FormField>
+            )}
+          </div>
         </div>
       )}
 

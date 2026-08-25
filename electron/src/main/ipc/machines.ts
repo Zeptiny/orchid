@@ -18,6 +18,7 @@ import { BrowserWindow, ipcMain } from 'electron';
 import { IPC_CHANNELS } from '../../shared/types/ipc';
 import type {
   MachineActionError,
+  MachineAuthStatusResult,
   MachineConnectResult,
   MachineDisconnectResult,
   MachineErrorView,
@@ -31,6 +32,10 @@ import type {
   RemoteMachineRecord,
 } from '../../shared/types/ipc';
 import { getMachineRegistry } from '../machines/registry';
+import {
+  getMachineSecretsStore,
+  MachinePasswordUnavailableError,
+} from '../machines/machine-secrets';
 import {
   getMachineConnectionManager,
   MachineConnectionError,
@@ -95,6 +100,13 @@ function toErrorView(
       hint: detail !== '' ? `ssh-keyscan: ${detail}` : 'Check the host, port, and network reachability.',
     };
   }
+  if (error instanceof MachinePasswordUnavailableError) {
+    return {
+      kind: 'password-unreadable',
+      message: error.message,
+      hint: 'Secure storage is unavailable, so the stored SSH password cannot be decrypted. Re-enter it once storage is available.',
+    };
+  }
   if (error instanceof MachineHostKeyFlowError) {
     return { kind: error.kind, message: error.message, hint: 'Scan the host keys and review them before confirming.' };
   }
@@ -138,6 +150,19 @@ async function statusResult(
 async function findMachine(machineId: string): Promise<MachineRecord | null> {
   const machines = await getMachineRegistry().list();
   return machines.find((machine) => machine.id === machineId) ?? null;
+}
+
+/** Stored-password presence per machine; never reads the secret itself. */
+async function authStatusResult(): Promise<MachineAuthStatusResult> {
+  const machines = await getMachineRegistry().list();
+  const stored = new Set(getMachineSecretsStore().storedMachineIds());
+  return {
+    machines: machines.map((machine) => ({
+      machineId: machine.id,
+      authMethod: machine.kind === 'ssh' ? machine.authMethod : 'key',
+      hasStoredPassword: machine.kind === 'ssh' && stored.has(machine.id),
+    })),
+  };
 }
 
 function requireRemote(
@@ -210,7 +235,17 @@ export function registerMachinesIPC(): void {
     if (!parsed.success) {
       throw new Error(`Invalid machines:create payload: ${parsed.error.message}`);
     }
-    const machine = await registry.create(parsed.data);
+    const { password, ...input } = parsed.data;
+    const machine = await registry.create(input);
+    if (password !== undefined && machine.authMethod === 'password') {
+      try {
+        await getMachineSecretsStore().setPassword(machine.id, password);
+      } catch (error) {
+        // Never leave a password-auth machine behind without its secret.
+        await registry.remove(machine.id).catch(() => undefined);
+        throw error;
+      }
+    }
     broadcastMachinesChanged(await registry.list());
     return machine;
   });
@@ -221,8 +256,9 @@ export function registerMachinesIPC(): void {
       throw new Error(`Invalid machines:update payload: ${parsed.error.message}`);
     }
     const { id, patch } = parsed.data;
+    const { password, ...recordPatch } = patch;
     const before = await findMachine(id);
-    const machine = await registry.update(id, patch);
+    const machine = await registry.update(id, recordPatch);
     if (
       before?.kind === 'ssh' &&
       (before.host !== machine.host || before.user !== machine.user || before.port !== machine.port)
@@ -231,6 +267,16 @@ export function registerMachinesIPC(): void {
       // host/port. Drop the pin and any cached scan so the TOFU
       // scan/confirm gate re-arms before the next connect.
       hostKeyFlow.unpin(id);
+    }
+    if (machine.authMethod === 'password' && password !== undefined) {
+      if (password === '') {
+        await getMachineSecretsStore().clearPassword(id);
+      } else {
+        await getMachineSecretsStore().setPassword(id, password);
+      }
+    } else if (machine.authMethod === 'key' && before?.kind === 'ssh' && before.authMethod === 'password') {
+      // Key auth keeps no secrets: drop the stored password on the switch.
+      await getMachineSecretsStore().clearPassword(id).catch(() => undefined);
     }
     broadcastMachinesChanged(await registry.list());
     return machine;
@@ -245,6 +291,7 @@ export function registerMachinesIPC(): void {
     if (result.status === 'deleted') {
       // The machine cannot be driven anymore: drop its connection + client and
       // reset every window still pointing at it back to the local machine.
+      await getMachineSecretsStore().clearPassword(parsed.data.id).catch(() => undefined);
       detachRemoteMachineClient(parsed.data.id);
       manager.disconnect(parsed.data.id);
       hostKeyFlow.forget(parsed.data.id);
@@ -252,6 +299,10 @@ export function registerMachinesIPC(): void {
       broadcastMachinesChanged(await registry.list());
     }
     return result;
+  });
+
+  ipcMain.handle(IPC_CHANNELS.MACHINES_AUTH_STATUS, async () => {
+    return authStatusResult();
   });
 
   ipcMain.handle(IPC_CHANNELS.MACHINES_GET_STATUS, async () => {
@@ -489,6 +540,7 @@ function unregisterMachinesIPCHandlers(): void {
   ipcMain.removeHandler(IPC_CHANNELS.MACHINES_RESYNC);
   ipcMain.removeHandler(IPC_CHANNELS.MACHINES_SCAN_HOST_KEY);
   ipcMain.removeHandler(IPC_CHANNELS.MACHINES_CONFIRM_HOST_KEY);
+  ipcMain.removeHandler(IPC_CHANNELS.MACHINES_AUTH_STATUS);
 }
 
 /**

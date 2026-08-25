@@ -61,12 +61,21 @@ export {
 
 // ── Machines (local-only family; never host-routed) ──────────────────────────
 
-export const machinesCreateSchema = machineCreateSchema;
+/**
+ * Create input plus the write-only SSH password (stored encrypted, never part
+ * of the persisted record). Only honored for `authMethod: 'password'`.
+ */
+export const machinesCreateSchema = machineCreateSchema.extend({
+  password: z.string().min(1).max(1024).optional(),
+});
 
 export const machinesUpdateSchema = z
   .object({
     id: machineIdSchema,
-    patch: machineUpdateSchema,
+    patch: machineUpdateSchema.extend({
+      /** Non-empty stores (replacing any prior password); empty clears. */
+      password: z.string().max(1024).optional(),
+    }),
   })
   .strict();
 

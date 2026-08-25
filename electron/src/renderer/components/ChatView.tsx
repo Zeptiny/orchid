@@ -69,7 +69,6 @@ import { TrustProjectDialog } from './TrustProjectDialog';
 import { Button } from './ui/Button';
 import { StateMessage } from './ui/StateMessage';
 import { Alert } from './ui/Alert';
-import { MachineSwitcher } from './Machines/MachineSwitcher';
 import { MachineLiveTurnIndicator } from './Machines/MachineLiveTurnIndicator';
 import type { SubagentOpenRequest } from './SubagentView';
 
@@ -1413,7 +1412,6 @@ export function ChatView({ isVisible = true, bootstrapConfig = null, onNotify, a
         <SessionHeader
           session={session.activeSession}
           workspace={session.workspace}
-          actions={<MachineSwitcher />}
         />
         {closeConfirmId ? (
           <div

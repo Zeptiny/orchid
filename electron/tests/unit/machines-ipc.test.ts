@@ -37,12 +37,19 @@ const mocks = vi.hoisted(() => {
     BrowserWindow: {
       getAllWindows: vi.fn(() => mocks.windows),
     },
+    safeStorage: {
+      isEncryptionAvailable: vi.fn(() => true),
+      getSelectedStorageBackend: vi.fn(() => 'test_libsecret'),
+      encryptString: vi.fn((value: string) => Buffer.from(`encrypted:${value}`, 'utf8')),
+      decryptString: vi.fn((value: Buffer) => value.toString('utf8').replace(/^encrypted:/, '')),
+    },
   };
 });
 
 vi.mock('electron', () => ({
   ipcMain: mocks.ipcMain,
   BrowserWindow: mocks.BrowserWindow,
+  safeStorage: mocks.safeStorage,
 }));
 
 vi.mock('../../src/main/config/loader', async (importOriginal) => {
@@ -75,6 +82,10 @@ import {
 import { _resetConfigSaveChainForTests } from '../../src/main/config/write-lock';
 import { knownHostsPath } from '../../src/main/machines/host-key';
 import {
+  _clearMachinePasswordWriteChains,
+  _resetMachineSecretsStoreForTests,
+} from '../../src/main/machines/machine-secrets';
+import {
   _resetMachineHostKeyFlowForTests,
   getMachineHostKeyFlow,
 } from '../../src/main/machines/host-key-flow';
@@ -106,6 +117,7 @@ function remoteMachine(
     port: 22,
     user: '',
     agentCommand: 'orchid-agent',
+    authMethod: 'key',
     created_at: T0,
     updated_at: T0,
     ...overrides,
@@ -152,9 +164,12 @@ beforeEach(() => {
   homeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'orchid-machines-ipc-'));
   mocks.homeConfigPath = path.join(homeDir, 'config.json');
   mocks.configState = defaults() as unknown as Record<string, unknown>;
+  mocks.safeStorage.isEncryptionAvailable.mockReturnValue(true);
   _resetConfigSaveChainForTests();
   _resetMachineRegistryForTests();
   _resetMachineHostKeyFlowForTests();
+  _resetMachineSecretsStoreForTests();
+  _clearMachinePasswordWriteChains();
 });
 
 afterEach(() => {
@@ -493,6 +508,7 @@ describe('machines IPC', () => {
       port: 2222,
       user: 'deploy',
       agentCommand: 'orchid-agent',
+    authMethod: 'key',
     });
     expect(created.created_at).toEqual(created.updated_at);
     const home = readHomeConfig();
@@ -693,6 +709,116 @@ describe('machines IPC', () => {
       machines: Array<{ id: string }>;
     };
     expect(payload.machines.map((machine) => machine.id)).toEqual(['local', 'beta', 'zeta']);
+  });
+});
+
+// ── Password auth (machine-secrets wiring) ──────────────────────────────────
+
+describe('machines password auth', () => {
+  beforeEach(() => {
+    addWindow();
+    registerMachinesIPC();
+  });
+
+  function passwordsPath(): string {
+    return path.join(homeDir, 'machine-passwords.json');
+  }
+
+  it('stores the create password encrypted and never echoes it back', async () => {
+    writeHomeConfig({});
+
+    const created = (await handler(IPC_CHANNELS.MACHINES_CREATE)(null, {
+      label: 'Build server',
+      host: 'build.example.com',
+      authMethod: 'password',
+      password: 'hunter2!',
+    })) as RemoteMachineRecord;
+
+    expect(created.authMethod).toBe('password');
+    expect(JSON.stringify(created)).not.toContain('hunter2!');
+    const stored = fs.readFileSync(passwordsPath(), 'utf8');
+    expect(stored).not.toContain('hunter2!');
+    expect(stored).toContain(created.id);
+
+    const auth = (await handler(IPC_CHANNELS.MACHINES_AUTH_STATUS)(null)) as {
+      machines: Array<{ machineId: string; hasStoredPassword: boolean }>;
+    };
+    expect(auth.machines.find((entry) => entry.machineId === created.id)).toMatchObject({
+      authMethod: 'password',
+      hasStoredPassword: true,
+    });
+    // The local machine never carries a secret.
+    expect(auth.machines.find((entry) => entry.machineId === 'local')).toMatchObject({
+      authMethod: 'key',
+      hasStoredPassword: false,
+    });
+  });
+
+  it('rolls back the created record when the password cannot be stored', async () => {
+    writeHomeConfig({});
+    mocks.safeStorage.isEncryptionAvailable.mockReturnValue(false);
+
+    await expect(
+      handler(IPC_CHANNELS.MACHINES_CREATE)(null, {
+        label: 'Build server',
+        host: 'build.example.com',
+        authMethod: 'password',
+        password: 'hunter2!',
+      }),
+    ).rejects.toThrow(/unavailable/i);
+
+    // The record was rolled back — only an empty machines section remains.
+    expect(readHomeConfig()['machines']).toEqual([]);
+    expect(fs.existsSync(passwordsPath())).toBe(false);
+  });
+
+  it('stores, replaces, and clears the password through machines:update', async () => {
+    writeHomeConfig({ machines: [remoteMachine('build-1', 'Build server', { authMethod: 'password' })] });
+
+    await handler(IPC_CHANNELS.MACHINES_UPDATE)(null, {
+      id: 'build-1',
+      patch: { password: 'first' },
+    });
+    expect(fs.readFileSync(passwordsPath(), 'utf8')).not.toContain('first');
+
+    await handler(IPC_CHANNELS.MACHINES_UPDATE)(null, {
+      id: 'build-1',
+      patch: { password: 'second' },
+    });
+    const auth = (await handler(IPC_CHANNELS.MACHINES_AUTH_STATUS)(null)) as {
+      machines: Array<{ machineId: string; hasStoredPassword: boolean }>;
+    };
+    expect(auth.machines.find((entry) => entry.machineId === 'build-1')?.hasStoredPassword).toBe(true);
+
+    await handler(IPC_CHANNELS.MACHINES_UPDATE)(null, {
+      id: 'build-1',
+      patch: { password: '' },
+    });
+    const cleared = (await handler(IPC_CHANNELS.MACHINES_AUTH_STATUS)(null)) as {
+      machines: Array<{ machineId: string; hasStoredPassword: boolean }>;
+    };
+    expect(cleared.machines.find((entry) => entry.machineId === 'build-1')?.hasStoredPassword).toBe(
+      false,
+    );
+  });
+
+  it('drops the stored password when auth switches to key and on delete', async () => {
+    writeHomeConfig({ machines: [remoteMachine('build-1', 'Build server', { authMethod: 'password' })] });
+    await handler(IPC_CHANNELS.MACHINES_UPDATE)(null, { id: 'build-1', patch: { password: 'pw' } });
+
+    await handler(IPC_CHANNELS.MACHINES_UPDATE)(null, { id: 'build-1', patch: { authMethod: 'key' } });
+    let auth = (await handler(IPC_CHANNELS.MACHINES_AUTH_STATUS)(null)) as {
+      machines: Array<{ machineId: string; hasStoredPassword: boolean }>;
+    };
+    expect(auth.machines.find((entry) => entry.machineId === 'build-1')?.hasStoredPassword).toBe(false);
+
+    await handler(IPC_CHANNELS.MACHINES_UPDATE)(null, { id: 'build-1', patch: { authMethod: 'password' } });
+    await handler(IPC_CHANNELS.MACHINES_UPDATE)(null, { id: 'build-1', patch: { password: 'pw' } });
+    await handler(IPC_CHANNELS.MACHINES_DELETE)(null, { id: 'build-1' });
+    auth = (await handler(IPC_CHANNELS.MACHINES_AUTH_STATUS)(null)) as {
+      machines: Array<{ machineId: string; hasStoredPassword: boolean }>;
+    };
+    expect(auth.machines.find((entry) => entry.machineId === 'build-1')).toBeUndefined();
   });
 });
 

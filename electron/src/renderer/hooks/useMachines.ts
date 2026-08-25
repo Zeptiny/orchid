@@ -14,6 +14,7 @@ import type { MachineRecord } from '../../shared/types/machine';
 import type {
   MachineActionError,
   MachineActiveResult,
+  MachineAuthStatusEntry,
   MachineConfirmHostKeyResult,
   MachineConnectResult,
   MachineCreateMessage,
@@ -34,6 +35,8 @@ export interface MachinesState {
   readonly status: MachinesLoadStatus;
   readonly machines: readonly MachineRecord[];
   readonly statuses: ReadonlyMap<string, MachineStatusEntry>;
+  /** Stored-password presence per machine (booleans only, never secrets). */
+  readonly authStatuses: ReadonlyMap<string, MachineAuthStatusEntry>;
   readonly activeMachineId: string;
   /** Registry/list load failure. */
   readonly error: string | null;
@@ -47,6 +50,8 @@ export interface UseMachinesReturn {
   readonly statuses: ReadonlyMap<string, MachineStatusEntry>;
   /** Status entry with a safe default (local: connected; unknown: offline). */
   readonly statusOf: (machineId: string) => MachineStatusEntry;
+  /** Auth-status entry with a safe default (key auth, no stored password). */
+  readonly authStatusOf: (machineId: string) => MachineAuthStatusEntry;
   readonly activeMachineId: string;
   readonly activeMachine: MachineRecord | null;
   readonly activeMachineLabel: string;
@@ -81,10 +86,23 @@ const OFFLINE_DEFAULT = (machineId: string): MachineStatusEntry => ({
   reconnectAttempts: 0,
 });
 
+const LOCAL_AUTH: MachineAuthStatusEntry = {
+  machineId: MACHINE_ID_LOCAL,
+  authMethod: 'key',
+  hasStoredPassword: false,
+};
+
+const KEY_AUTH_DEFAULT = (machineId: string): MachineAuthStatusEntry => ({
+  machineId,
+  authMethod: 'key',
+  hasStoredPassword: false,
+});
+
 const INITIAL_STATE: MachinesState = {
   status: 'loading',
   machines: [],
   statuses: new Map([[MACHINE_ID_LOCAL, LOCAL_CONNECTED]]),
+  authStatuses: new Map([[MACHINE_ID_LOCAL, LOCAL_AUTH]]),
   activeMachineId: MACHINE_ID_LOCAL,
   error: null,
   actionError: null,
@@ -123,6 +141,7 @@ function setState(next: Partial<MachinesState>): void {
     merged.status === sharedState.status
     && merged.machines === sharedState.machines
     && merged.statuses === sharedState.statuses
+    && merged.authStatuses === sharedState.authStatuses
     && merged.activeMachineId === sharedState.activeMachineId
     && merged.error === sharedState.error
     && merged.actionError === sharedState.actionError
@@ -146,6 +165,7 @@ function getSnapshot(): MachinesState {
 }
 
 async function refreshShared(): Promise<void> {
+  if (typeof window === 'undefined') return;
   if (!window.orchid?.machines?.list || !window.orchid?.machines?.getStatus) {
     setState({
       status: sharedState.machines.length > 0 ? 'ready' : 'error',
@@ -154,14 +174,18 @@ async function refreshShared(): Promise<void> {
     return;
   }
   try {
-    const [list, status] = await Promise.all([
+    const [list, status, authStatus] = await Promise.all([
       window.orchid.machines.list(),
       window.orchid.machines.getStatus(),
+      window.orchid.machines.authStatus().catch(() => null),
     ]);
     setState({
       status: 'ready',
       machines: list.machines,
       statuses: new Map(status.machines.map((entry) => [entry.machineId, entry])),
+      authStatuses: new Map(
+        (authStatus?.machines ?? []).map((entry) => [entry.machineId, entry]),
+      ),
       error: null,
     });
   } catch (error) {
@@ -173,6 +197,7 @@ async function refreshShared(): Promise<void> {
 }
 
 async function refreshActiveShared(): Promise<void> {
+  if (typeof window === 'undefined') return;
   if (!window.orchid?.machines?.getActive) return;
   try {
     const result: MachineActiveResult = await window.orchid.machines.getActive();
@@ -190,6 +215,8 @@ function recordActionError(error: MachineActionError): void {
 function installSubscriptions(): void {
   if (subscriptionsInstalled) return;
   subscriptionsInstalled = true;
+  // SSR/node renders (no window) bootstrap with the inert initial state.
+  if (typeof window === 'undefined') return;
   window.orchid?.machines?.onChanged?.((event: MachinesChangedEvent) => {
     setState({ machines: event.machines });
     // Registry changes can remove the active machine (delete resets windows to
@@ -341,6 +368,10 @@ export function useMachines(): UseMachinesReturn {
     return state.statuses.get(machineId) ?? OFFLINE_DEFAULT(machineId);
   }, [state.statuses]);
 
+  const authStatusOf = useCallback((machineId: string): MachineAuthStatusEntry => {
+    return state.authStatuses.get(machineId) ?? KEY_AUTH_DEFAULT(machineId);
+  }, [state.authStatuses]);
+
   const activeMachine = state.machines.find((machine) => machine.id === state.activeMachineId) ?? null;
   const isActiveMachineLocal = state.activeMachineId === MACHINE_ID_LOCAL;
 
@@ -349,6 +380,7 @@ export function useMachines(): UseMachinesReturn {
     machines: state.machines,
     statuses: state.statuses,
     statusOf,
+    authStatusOf,
     activeMachineId: state.activeMachineId,
     activeMachine,
     activeMachineLabel: activeMachine?.label ?? 'This machine',

@@ -30,6 +30,7 @@ const BUILD: RemoteMachineRecord = {
   port: 22,
   user: '',
   agentCommand: 'orchid-agent',
+  authMethod: 'key',
   created_at: T0,
   updated_at: T0,
 };
@@ -84,6 +85,7 @@ function installWindowOrchid(): void {
       delete: vi.fn(async () => ({ status: 'deleted', machine: BUILD })),
       scanHostKey: vi.fn(async () => ({ status: 'scanned', fingerprints: FINGERPRINTS })),
       confirmHostKey: vi.fn(async () => ({ status: 'pinned', fingerprints: FINGERPRINTS })),
+      authStatus: vi.fn(async () => ({ machines: [] })),
       onChanged: vi.fn(() => () => {}),
       onStatusChanged: vi.fn(() => () => {}),
     },
@@ -126,6 +128,7 @@ describe('AddMachineWizard', () => {
       port: 22,
       user: '',
       agentCommand: 'orchid-agent',
+      authMethod: 'key',
     });
 
     // The scan step runs the keyscan on entry and lists what it returned.
@@ -141,6 +144,32 @@ describe('AddMachineWizard', () => {
     await waitFor(() => expect(actions.connect).toHaveBeenCalledWith('build-1'));
     await waitFor(() => expect(onComplete).toHaveBeenCalledWith('build-1'));
     expect(onClose).toHaveBeenCalled();
+  });
+
+  it('requires and forwards the password for password auth', async () => {
+    const actions = fakeActions();
+    render(<AddMachineWizard open onClose={vi.fn()} actions={actions} />);
+
+    fireEvent.change(screen.getByLabelText(/Label/), { target: { value: 'Build server' } });
+    fireEvent.change(screen.getByLabelText(/Host/), { target: { value: 'build.example.com' } });
+    fireEvent.change(screen.getByLabelText(/Authentication/), { target: { value: 'password' } });
+
+    // The password field appears and gates Continue until filled.
+    const password = screen.getByLabelText(/Password/) as HTMLInputElement;
+    expect((screen.getByRole('button', { name: 'Continue' }) as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.change(password, { target: { value: 'hunter2!' } });
+    expect((screen.getByRole('button', { name: 'Continue' }) as HTMLButtonElement).disabled).toBe(false);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
+    await waitFor(() => expect(actions.createMachine).toHaveBeenCalledWith({
+      label: 'Build server',
+      host: 'build.example.com',
+      port: 22,
+      user: '',
+      agentCommand: 'orchid-agent',
+      authMethod: 'password',
+      password: 'hunter2!',
+    }));
   });
 
   it('renders the scan failure with its hint, retry enabled, and trust disabled', async () => {

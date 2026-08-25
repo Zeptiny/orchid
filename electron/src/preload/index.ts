@@ -131,6 +131,7 @@ import type {
   MachineResyncResult,
   MachineScanHostKeyResult,
   MachineConfirmHostKeyResult,
+  MachineAuthStatusResult,
   RemoteMachineRecord,
   StartupSnapshot,
   StartupContinueDegradedResult,
@@ -672,6 +673,9 @@ const orchidAPI: OrchidAPI = {
 
     confirmHostKey: (message: MachineIdMessage) =>
       invoke<MachineConfirmHostKeyResult>(IPC_CHANNELS.MACHINES_CONFIRM_HOST_KEY, message),
+
+    authStatus: () =>
+      invoke<MachineAuthStatusResult>(IPC_CHANNELS.MACHINES_AUTH_STATUS),
   },
 
   subagents: {

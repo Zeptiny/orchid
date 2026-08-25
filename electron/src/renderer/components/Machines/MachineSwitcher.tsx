@@ -1,9 +1,9 @@
 /**
- * MachineSwitcher — the compact connection-list control in the chat header
- * (issue #112, plan unit U8).
+ * MachineSwitcher — the machine connection-list control (issue #112, U8).
  *
- * A chip like the workspace chip: current machine label + connection dot, a
- * dropdown with every machine (local pinned first), per-row connect for
+ * Lives in the left sidebar: `sidebar` renders the full footer row (active
+ * machine + status dot), `collapsed` the icon-only rail trigger. The dropdown
+ * lists every machine (local pinned first), offers per-row connect for
  * disconnected remotes, and the add-machine entry point.
  */
 import { memo, useCallback, useEffect, useState, type ReactNode } from 'react';
@@ -13,10 +13,16 @@ import { useMachines } from '../../hooks/useMachines';
 import { Icon } from '../Icon';
 import { Button } from '../ui/Button';
 import { DropdownMenu } from '../ui/DropdownMenu';
+import type { DropdownMenuPlacement } from '../ui/DropdownMenu';
 import { AddMachineWizard } from './AddMachineWizard';
 import { ConnectionStatusBadge } from './ConnectionStatusBadge';
 
+/** Where the switcher mounts; drives trigger shape and menu placement. */
+export type MachineSwitcherVariant = 'sidebar' | 'collapsed';
+
 export interface MachineSwitcherProps {
+  /** Rendered shape; `sidebar` is the full footer row, `collapsed` the rail icon. */
+  readonly variant?: MachineSwitcherVariant;
   /** Machines state; defaults to the shared useMachines store. */
   readonly machines?: UseMachinesReturn;
   /** Called after this window switched to another machine. */
@@ -31,6 +37,7 @@ function machineHostLabel(machine: MachineRecord): ReactNode {
 }
 
 export const MachineSwitcher = memo(function MachineSwitcher({
+  variant = 'sidebar',
   machines: machinesProp,
   onMachineSwitched,
 }: MachineSwitcherProps) {
@@ -81,34 +88,49 @@ export const MachineSwitcher = memo(function MachineSwitcher({
     });
   }, [machines, onMachineSwitched]);
 
+  const placement: DropdownMenuPlacement = 'top-start';
+
+  const trigger =
+    variant === 'collapsed' ? (
+      <span
+        className="inline-flex min-w-0 items-center gap-1.5"
+        title={`${machines.activeMachineLabel} — ${activeStatus.state}`}
+      >
+        <Icon name="cpu" size={18} className="shrink-0 opacity-70" />
+        <ConnectionStatusBadge state={activeStatus.state} withLabel={false} />
+      </span>
+    ) : (
+      <span
+        className="inline-flex min-w-0 w-full items-center gap-2.5"
+        title={`${machines.activeMachineLabel} — ${activeStatus.state}`}
+      >
+        <Icon name="cpu" size={18} className="shrink-0 opacity-70" />
+        <span className="session-machine-btn-label truncate">{machines.activeMachineLabel}</span>
+        <ConnectionStatusBadge state={activeStatus.state} withLabel={false} />
+        <Icon
+          name="chevronDown"
+          size={14}
+          className={`shrink-0 opacity-60 transition-transform ${open ? 'rotate-180' : ''}`}
+        />
+      </span>
+    );
+
   return (
     <>
       <DropdownMenu
         label="Machines"
         triggerLabel={`Machine: ${machines.activeMachineLabel} (${activeStatus.state})`}
-        placement="bottom-end"
-        align="end"
+        placement={placement}
+        align="start"
         open={open}
         onOpenChange={setOpen}
-        triggerClassName="btn btn-ghost btn-xs orchid-machine-switcher-trigger min-w-0 gap-1.5 px-1.5"
-        menuClassName="mt-1 w-72"
-        trigger={
-          <span
-            className="inline-flex min-w-0 items-center gap-1.5"
-            title={`${machines.activeMachineLabel} — ${activeStatus.state}`}
-          >
-            <Icon name="cpu" size={12} className="shrink-0 opacity-60" />
-            <span className="max-w-xs truncate text-xs font-medium">
-              {machines.activeMachineLabel}
-            </span>
-            <ConnectionStatusBadge state={activeStatus.state} withLabel={false} />
-            <Icon
-              name="chevronDown"
-              size={12}
-              className={`shrink-0 opacity-60 transition-transform ${open ? 'rotate-180' : ''}`}
-            />
-          </span>
+        triggerClassName={
+          variant === 'collapsed'
+            ? 'btn btn-ghost btn-sm orchid-machine-switcher-trigger'
+            : 'btn btn-ghost session-machine-btn orchid-machine-switcher-trigger'
         }
+        menuClassName="mb-1 w-72"
+        trigger={trigger}
       >
         <ul className="m-0 flex flex-col gap-0.5 p-1" role="presentation">
           {machines.machines.map((machine) => {

@@ -36,6 +36,7 @@ import { IconButton } from './ui/IconButton';
 import { SectionHeader } from './ui/SectionHeader';
 import { StateMessage } from './ui/StateMessage';
 import { StatusBadge } from './ui/StatusBadge';
+import { MachineSwitcher } from './Machines/MachineSwitcher';
 import { SessionActivitySection } from './session-activity-section';
 import { SessionNameEditor } from './SessionNameEditor';
 
@@ -197,6 +198,7 @@ export const LeftSidebar = memo(function LeftSidebar({
           </Button>
         )}
         <div className="left-panel-collapsed-spacer" />
+        <MachineSwitcher variant="collapsed" />
         {onOpenAnalytics && (
           <IconButton
             label="Analytics"
@@ -299,6 +301,7 @@ export const LeftSidebar = memo(function LeftSidebar({
       </div>
 
       <div className="panel-footer">
+        <MachineSwitcher />
         {onOpenAnalytics && (
           <Button
             variant="ghost"

@@ -188,12 +188,19 @@ const mocks = vi.hoisted(() => {
     BrowserWindow: {
       getAllWindows: vi.fn((): FakeWindow[] => mocks.windows),
     },
+    safeStorage: {
+      isEncryptionAvailable: vi.fn(() => true),
+      getSelectedStorageBackend: vi.fn(() => 'test_libsecret'),
+      encryptString: vi.fn((value: string) => Buffer.from(`encrypted:${value}`, 'utf8')),
+      decryptString: vi.fn((value: Buffer) => value.toString('utf8').replace(/^encrypted:/, '')),
+    },
   };
 });
 
 vi.mock('electron', () => ({
   ipcMain: mocks.ipcMain,
   BrowserWindow: mocks.BrowserWindow,
+  safeStorage: mocks.safeStorage,
 }));
 
 vi.mock('../../src/main/config/loader', async (importOriginal) => {
@@ -307,6 +314,7 @@ function remoteMachine(
     port: 22,
     user: '',
     agentCommand: 'orchid-agent',
+    authMethod: 'key',
     created_at: T0,
     updated_at: T0,
     ...overrides,

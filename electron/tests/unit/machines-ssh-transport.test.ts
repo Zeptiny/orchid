@@ -17,6 +17,8 @@ import {
   parseSshExit,
   spawnSshTransport,
   splitAgentCommand,
+  sshAskpassHelperPath,
+  sshPasswordSpawnEnv,
   type SshCommandFactory,
 } from '../../src/main/machines/ssh-transport';
 import type { LocalMachineRecord, RemoteMachineRecord } from '../../src/shared/types/machine';
@@ -34,6 +36,7 @@ function sshMachine(overrides: Partial<RemoteMachineRecord> = {}): RemoteMachine
     port: 22,
     user: '',
     agentCommand: 'orchid-agent',
+    authMethod: 'key',
     created_at: T0,
     updated_at: T0,
     ...overrides,
@@ -136,6 +139,80 @@ describe('buildSshCommand', () => {
     expect(() => buildSshCommand(sshMachine({ agentCommand: '   ' }), '/kh')).toThrow(
       /produced no shell tokens/,
     );
+  });
+});
+
+// ── Password auth argv + askpass environment ─────────────────────────────────
+
+describe('password auth ssh argv', () => {
+  it('drops BatchMode and offers a single password prompt for password machines', () => {
+    const argv = buildSshCommand(sshMachine({ authMethod: 'password' }), '/kh');
+    expect(argv).not.toContain('BatchMode=yes');
+    expect(argv).toContain('NumberOfPasswordPrompts=1');
+    expect(argv).toContain('PreferredAuthentications=password,keyboard-interactive');
+    // Host-key pinning stays identical for both auth methods.
+    expect(argv).toContain('StrictHostKeyChecking=yes');
+    expect(argv).toContain('GlobalKnownHostsFile=none');
+    // The serve command shares the same hardening base.
+    const serve = buildSshServeCommand(sshMachine({ authMethod: 'password' }), '/kh');
+    expect(serve).not.toContain('BatchMode=yes');
+    expect(serve).toContain('NumberOfPasswordPrompts=1');
+  });
+
+  it('keeps BatchMode for key machines', () => {
+    expect(buildSshCommand(sshMachine(), '/kh')).toContain('BatchMode=yes');
+  });
+
+  it('spawns password machines with the askpass env and never the password in argv', () => {
+    const spawned: Array<{ command: string; args: string[]; env?: NodeJS.ProcessEnv }> = [];
+    const transport = spawnSshTransport(sshMachine({ authMethod: 'password' }), {
+      spawnFn: (command, args, options) => {
+        spawned.push({ command, args, env: options.env });
+        return spawn(command, args, options);
+      },
+      commandFactory: () => [process.execPath, FIXTURE_ECHO, 'echo'],
+      password: 'hunter2!',
+      askpassHelperPath: '/tmp/test-askpass.sh',
+    });
+    transport.close();
+
+    expect(spawned).toHaveLength(1);
+    const { args, env } = spawned[0]!;
+    expect(args.join(' ')).not.toContain('hunter2!');
+    expect(env?.SSH_ASKPASS).toBe('/tmp/test-askpass.sh');
+    expect(env?.SSH_ASKPASS_REQUIRE).toBe('force');
+    expect(env?.ORCHID_SSH_PASSWORD).toBe('hunter2!');
+    // The inherited environment survives (ssh needs PATH etc.).
+    expect(env?.PATH).toBe(process.env.PATH);
+  });
+
+  it('spawns key machines with the inherited environment only', () => {
+    const spawned: Array<{ env?: NodeJS.ProcessEnv }> = [];
+    const transport = spawnSshTransport(sshMachine(), {
+      spawnFn: (command, args, options) => {
+        spawned.push({ env: options.env });
+        return spawn(command, args, options);
+      },
+      commandFactory: () => [process.execPath, FIXTURE_ECHO, 'echo'],
+      password: 'hunter2!',
+      askpassHelperPath: '/tmp/test-askpass.sh',
+    });
+    transport.close();
+
+    expect(spawned[0]?.env).toBeUndefined();
+  });
+
+  it('builds the askpass env with a forced helper and display fallback', () => {
+    const env = sshPasswordSpawnEnv('pw', '/helper.sh');
+    expect(env.SSH_ASKPASS).toBe('/helper.sh');
+    expect(env.SSH_ASKPASS_REQUIRE).toBe('force');
+    expect(env.ORCHID_SSH_PASSWORD).toBe('pw');
+    expect(env.DISPLAY).toBe(process.env.DISPLAY ?? ':0');
+  });
+
+  it('resolves the askpass helper inside ~/.orchid', () => {
+    const helperPath = sshAskpassHelperPath();
+    expect(helperPath).toMatch(/[/\\]\.orchid[/\\]ssh-askpass\.(sh|cmd)$/);
   });
 });
 
@@ -255,10 +332,12 @@ describe('parseSshExit', () => {
     expect(result.hint.length).toBeGreaterThan(0);
   });
 
-  it('classifies key/agent auth failure', () => {
+  it('classifies auth failure for both key and password machines', () => {
     const result = parseSshExit(255, 'deploy@build.example.com: Permission denied (publickey).');
     expect(result.kind).toBe('auth-failed');
-    expect(result.message).toMatch(/key\/agent authentication/i);
+    expect(result.message).toMatch(/ssh authentication failed/i);
+    expect(result.hint).toMatch(/key/i);
+    expect(result.hint).toMatch(/password/i);
   });
 
   it('classifies unreachable hosts (timeout and refused)', () => {

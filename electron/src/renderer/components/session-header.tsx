@@ -6,7 +6,7 @@ import { Icon } from './Icon';
 interface SessionHeaderProps {
   session: Session | null;
   workspace: WorkspaceInfo | null;
-  /** Right-aligned chrome (machine switcher) rendered beside the identity. */
+  /** Right-aligned chrome rendered beside the identity. */
   actions?: ReactNode;
 }
 

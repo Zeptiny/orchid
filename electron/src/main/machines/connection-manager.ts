@@ -75,7 +75,9 @@ export type MachineConnectionErrorKind =
   | 'host-key-not-pinned'
   | 'protocol-mismatch'
   | 'handshake-failed'
-  | 'transport-closed';
+  | 'transport-closed'
+  | 'password-missing'
+  | 'password-unreadable';
 
 /** Typed connect failure carrying an actionable hint for the UI. */
 export class MachineConnectionError extends Error {
@@ -103,7 +105,27 @@ export type MachineStatusListener = (status: MachineConnectionStatus) => void;
 /** HostTransport plus the optional stderr excerpt used for classification. */
 export type MachineTransport = HostTransport & { recentStderr?(): string[] };
 
-export type MachineTransportFactory = (machine: RemoteMachineRecord) => MachineTransport;
+/**
+ * Build one machine transport. `password` is the decrypted SSH password for
+ * `authMethod: 'password'` machines (undefined for key auth); factories that
+ * spawn real ssh forward it into the SSH_ASKPASS spawn environment.
+ */
+export type MachineTransportFactory = (
+  machine: RemoteMachineRecord,
+  password?: string,
+) => MachineTransport;
+
+/**
+ * Resolve the stored SSH password for a `password`-auth machine. Returns null
+ * when no password is stored. Default: the encrypted machine-secrets store
+ * (lazy-imported so key-auth flows never touch Electron safeStorage).
+ */
+export type MachinePasswordResolver = (machine: RemoteMachineRecord) => Promise<string | null>;
+
+const defaultResolvePassword: MachinePasswordResolver = async (machine) => {
+  const { getMachineSecretsStore } = await import('./machine-secrets');
+  return getMachineSecretsStore().getPassword(machine.id);
+};
 
 export interface MachineConnectionBackoff {
   readonly initialMs: number;
@@ -121,6 +143,7 @@ export interface MachineConnectionBackoff {
 export type DaemonEnsureFn = (
   machine: RemoteMachineRecord,
   knownHostsPath: string,
+  password?: string,
 ) => Promise<boolean>;
 
 export interface MachineConnectionManagerOptions {
@@ -135,6 +158,8 @@ export interface MachineConnectionManagerOptions {
   readonly ensureDaemon?: DaemonEnsureFn;
   /** Settle delay after the ensure command before retrying the handshake. */
   readonly ensureSettleMs?: number;
+  /** Injectable password store read (tests); defaults to machine-secrets. */
+  readonly resolvePassword?: MachinePasswordResolver;
 }
 
 interface MachineEntry {
@@ -173,21 +198,24 @@ export class MachineConnectionManager {
   private readonly ensureDaemon: DaemonEnsureFn;
   private readonly ensureSettleMs: number;
   private readonly homeDir: string | undefined;
+  private readonly resolvePassword: MachinePasswordResolver;
   private requestSeq = 0;
 
   constructor(options: MachineConnectionManagerOptions = {}) {
     this.homeDir = options.homeDir;
     this.transportFactory =
       options.transportFactory ??
-      ((machine) =>
+      ((machine, password) =>
         spawnSshTransport(machine, {
           knownHostsPath: knownHostsPath(machine.id, this.homeDir),
+          password,
         }));
     this.sleep = options.sleep ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
     this.handshakeTimeoutMs = options.handshakeTimeoutMs ?? HANDSHAKE_TIMEOUT_MS;
     this.ensureDaemon =
-      options.ensureDaemon ?? ((machine, hostsPath) => spawnDaemonEnsure(machine, { knownHostsPath: hostsPath }));
+      options.ensureDaemon ?? ((machine, hostsPath, password) => spawnDaemonEnsure(machine, { knownHostsPath: hostsPath, password }));
     this.ensureSettleMs = options.ensureSettleMs ?? DAEMON_ENSURE_SETTLE_MS;
+    this.resolvePassword = options.resolvePassword ?? defaultResolvePassword;
     this.backoff = {
       initialMs: options.backoff?.initialMs ?? RECONNECT_INITIAL_DELAY_MS,
       maxMs: options.backoff?.maxMs ?? RECONNECT_MAX_DELAY_MS,
@@ -410,9 +438,39 @@ export class MachineConnectionManager {
       throw error;
     }
 
+    // Password-auth machines need their secret before any ssh spawn (both the
+    // bridge transport and the daemon-ensure command consume it). A missing or
+    // unreadable password fails fast with its own classification instead of an
+    // ssh auth failure.
+    let password: string | undefined;
+    if (entry.machine.authMethod === 'password') {
+      try {
+        const stored = await this.resolvePassword(entry.machine);
+        if (stored === null || stored === '') {
+          throw new MachineConnectionError(
+            'password-missing',
+            `No stored password for machine '${entry.machine.label}'.`,
+            'Open Settings → Machines and save the SSH password for this machine.',
+          );
+        }
+        password = stored;
+      } catch (error) {
+        const typed =
+          error instanceof MachineConnectionError
+            ? error
+            : new MachineConnectionError(
+                'password-unreadable',
+                `Could not read the stored password for machine '${entry.machine.label}'.`,
+                'Secure storage may be unavailable on this device; re-enter the password in Settings → Machines.',
+              );
+        this.transition(entry, 'lost', typed);
+        throw typed;
+      }
+    }
+
     let transport: MachineTransport;
     try {
-      transport = this.transportFactory(entry.machine);
+      transport = this.transportFactory(entry.machine, password);
     } catch (error) {
       // The factory builds the ssh argv: an unsafe agentCommand (or a broken
       // spawn) rejects here before any handshake. Record the failure instead
@@ -434,7 +492,7 @@ export class MachineConnectionManager {
       if (entry.transport === transport) entry.transport = null;
       if (entry.state !== 'connecting') throw error;
 
-      const outcome = await this.ensureDaemonAndRetry(entry, generation, error, hostsPath);
+      const outcome = await this.ensureDaemonAndRetry(entry, generation, error, hostsPath, password);
       if (outcome.kind === 'no-retry') {
         // No ensure cycle ran — classify exactly as before. But a disconnect
         // or supersede that landed during the ensure window (or between the
@@ -506,6 +564,7 @@ export class MachineConnectionManager {
     generation: number,
     original: unknown,
     hostsPath: string,
+    password?: string,
   ): Promise<EnsureOutcome> {
     if (!(original instanceof MachineConnectionError) || original.kind !== 'agent-missing') {
       return { kind: 'no-retry' };
@@ -515,7 +574,7 @@ export class MachineConnectionManager {
 
     let ensured: boolean;
     try {
-      ensured = await this.ensureDaemon(entry.machine, hostsPath);
+      ensured = await this.ensureDaemon(entry.machine, hostsPath, password);
     } catch (error) {
       console.warn(`[machine-ensure] serve command threw for '${entry.machine.id}':`, error);
       ensured = false;
@@ -533,7 +592,7 @@ export class MachineConnectionManager {
     await this.sleep(this.ensureSettleMs);
     if (entry.generation !== generation || entry.state !== 'connecting') return { kind: 'no-retry' };
 
-    const retryTransport = this.transportFactory(entry.machine);
+    const retryTransport = this.transportFactory(entry.machine, password);
     entry.transport = retryTransport;
     this.watchTransport(entry, retryTransport, generation);
     try {

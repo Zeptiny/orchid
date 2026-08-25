@@ -35,6 +35,7 @@ function sshMachine(id = 'build-1'): RemoteMachineRecord {
     port: 22,
     user: '',
     agentCommand: 'orchid-agent',
+    authMethod: 'key',
     created_at: T0,
     updated_at: T0,
   };
@@ -221,6 +222,123 @@ describe('MachineConnectionManager connect', () => {
       harness.manager.connect({ id: 'local', label: 'This PC', kind: 'local' }),
     ).rejects.toThrow(/local and connects in-process/);
     expect(harness.spawns.created).toBe(0);
+  });
+});
+
+// ── Password auth ────────────────────────────────────────────────────────────
+
+describe('MachineConnectionManager password auth', () => {
+  const passwordMachine = (): RemoteMachineRecord => ({ ...sshMachine(), authMethod: 'password' });
+
+  it('resolves the stored password and hands it to the transport factory', async () => {
+    pinMachine();
+    const passwords: Array<string | undefined> = [];
+    const resolved: string[] = [];
+    const factory: MachineTransportFactory = (machine, password) => {
+      passwords.push(password);
+      return spawnSshTransport(machine, {
+        spawnFn: spawn,
+        commandFactory: () => [process.execPath, FIXTURE, 'stable'],
+      });
+    };
+    const manager = new MachineConnectionManager({
+      homeDir,
+      transportFactory: factory,
+      sleep: async () => {},
+      handshakeTimeoutMs: 4000,
+      ensureDaemon: async () => false,
+      ensureSettleMs: 0,
+      resolvePassword: async (machine) => {
+        resolved.push(machine.id);
+        return 'hunter2!';
+      },
+    });
+    harnesses.push({ manager, spawns: { created: 0, closed: 0 }, setMode: () => {} });
+
+    const status = await manager.connect(passwordMachine());
+
+    expect(status.state).toBe('connected');
+    expect(resolved).toEqual(['build-1']);
+    expect(passwords).toEqual(['hunter2!']);
+  });
+
+  it('fails with password-missing (no ssh spawn) when no password is stored', async () => {
+    pinMachine();
+    let spawned = 0;
+    const manager = new MachineConnectionManager({
+      homeDir,
+      transportFactory: (machine) => {
+        spawned += 1;
+        return spawnSshTransport(machine, {
+          spawnFn: spawn,
+          commandFactory: () => [process.execPath, FIXTURE, 'stable'],
+        });
+      },
+      sleep: async () => {},
+      handshakeTimeoutMs: 4000,
+      ensureDaemon: async () => false,
+      ensureSettleMs: 0,
+      resolvePassword: async () => null,
+    });
+    harnesses.push({ manager, spawns: { created: 0, closed: 0 }, setMode: () => {} });
+
+    await expect(manager.connect(passwordMachine())).rejects.toThrow(
+      MachineConnectionError,
+    );
+    const status = manager.getStatus('build-1');
+    expect(status.state).toBe('lost');
+    expect(status.error?.kind).toBe('password-missing');
+    expect(spawned).toBe(0);
+  });
+
+  it('classifies an unreadable password store as password-unreadable', async () => {
+    pinMachine();
+    const manager = new MachineConnectionManager({
+      homeDir,
+      transportFactory: (machine) =>
+        spawnSshTransport(machine, {
+          spawnFn: spawn,
+          commandFactory: () => [process.execPath, FIXTURE, 'stable'],
+        }),
+      sleep: async () => {},
+      handshakeTimeoutMs: 4000,
+      ensureDaemon: async () => false,
+      ensureSettleMs: 0,
+      resolvePassword: async () => {
+        throw new Error('safe storage locked');
+      },
+    });
+    harnesses.push({ manager, spawns: { created: 0, closed: 0 }, setMode: () => {} });
+
+    await expect(manager.connect(passwordMachine())).rejects.toThrow(
+      /stored password/i,
+    );
+    expect(manager.getStatus('build-1').error?.kind).toBe('password-unreadable');
+  });
+
+  it('never resolves a password for key-auth machines', async () => {
+    pinMachine();
+    let resolved = 0;
+    const manager = new MachineConnectionManager({
+      homeDir,
+      transportFactory: (machine) =>
+        spawnSshTransport(machine, {
+          spawnFn: spawn,
+          commandFactory: () => [process.execPath, FIXTURE, 'stable'],
+        }),
+      sleep: async () => {},
+      handshakeTimeoutMs: 4000,
+      ensureDaemon: async () => false,
+      ensureSettleMs: 0,
+      resolvePassword: async () => {
+        resolved += 1;
+        return 'hunter2!';
+      },
+    });
+    harnesses.push({ manager, spawns: { created: 0, closed: 0 }, setMode: () => {} });
+
+    await expect(manager.connect(sshMachine())).resolves.toMatchObject({ state: 'connected' });
+    expect(resolved).toBe(0);
   });
 });
 

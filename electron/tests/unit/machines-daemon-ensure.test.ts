@@ -56,6 +56,7 @@ function sshMachine(): RemoteMachineRecord {
     port: 2222,
     user: 'deploy',
     agentCommand: 'orchid-agent',
+    authMethod: 'key',
     created_at: T0,
     updated_at: T0,
   };

@@ -1,10 +1,11 @@
 /**
  * Machine types — the implicit local machine plus user-added SSH remotes.
  *
- * Machine records are metadata only: SSH auth rides the user's existing
- * key/agent, so no secrets are stored. The local machine is implicit and never
- * persisted; only remote records are written to the home config `machines`
- * section.
+ * Machine records are metadata only: key/agent auth rides the user's existing
+ * ssh setup, and `password` auth keeps its secret in the encrypted
+ * machine-secrets store (never in the record). The local machine is implicit
+ * and never persisted; only remote records are written to the home config
+ * `machines` section.
  */
 import { z } from 'zod';
 
@@ -83,6 +84,16 @@ const agentCommandSchema = z
   )
   .default('orchid-agent');
 
+/**
+ * How the SSH transport authenticates the user. `key` rides the user's
+ * existing ssh key/agent (BatchMode, no prompts); `password` decrypts a
+ * stored secret (machine-secrets store) and feeds it to ssh through a
+ * forced SSH_ASKPASS helper.
+ */
+export const machineAuthMethodSchema = z.enum(['key', 'password']);
+
+export type MachineAuthMethod = z.infer<typeof machineAuthMethodSchema>;
+
 /** Persisted SSH remote machine record (home config `machines` section). */
 export const remoteMachineRecordSchema = z
   .object({
@@ -93,6 +104,7 @@ export const remoteMachineRecordSchema = z
     port: z.number().int().min(1).max(65535).default(22),
     user: machineUserSchema.default(''),
     agentCommand: agentCommandSchema,
+    authMethod: machineAuthMethodSchema.default('key'),
     created_at: isoTimestampSchema,
     updated_at: isoTimestampSchema,
   })

@@ -2,8 +2,10 @@
  * SSH transport for remote machines (issue #112, plan unit U7).
  *
  * Spawns the system `ssh` binary with an app-managed per-machine known-hosts
- * file (`StrictHostKeyChecking=yes`, `BatchMode=yes` — key/agent auth only, no
- * passwords) and runs `<agentCommand> bridge ~/.orchid/daemon.sock` on the
+ * file (`StrictHostKeyChecking=yes`; key/agent auth runs under `BatchMode`,
+ * password auth runs through a forced SSH_ASKPASS helper fed from the
+ * encrypted machine password store) and runs
+ * `<agentCommand> bridge ~/.orchid/daemon.sock` on the
  * remote. Stdio carries newline-delimited JSON frames decoded by
  * `shared/host/framing`.
  *
@@ -12,6 +14,9 @@
  */
 import { spawn } from 'node:child_process';
 import type { ChildProcess, SpawnOptions } from 'node:child_process';
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
 import { parse as shellParse } from 'shell-quote';
 import { createFrameDecoder } from '../../shared/host/framing';
 import type { StructuredHostTransport } from '../host/transport';
@@ -207,11 +212,18 @@ function assertSafeDestination(machine: MachineRecord, destination: string): voi
 }
 
 /**
- * Shared ssh hardening + destination argv (everything before `--`):
+ * Shared ssh hardening + destination argv (everything before `--`).
  *
+ * Key/agent auth (the default):
  * `ssh -o BatchMode=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile="<path>"
  * -o GlobalKnownHostsFile=none -o ConnectTimeout=10 -o ServerAliveInterval=15
  * -o ServerAliveCountMax=3 [-p port] [user@]host`
+ *
+ * Password auth (machine `authMethod: 'password'`): BatchMode (which disables
+ * every interactive method) is replaced by a single password prompt served
+ * through the forced SSH_ASKPASS helper (see {@link sshPasswordSpawnEnv}), with
+ * password/keyboard-interactive the only offered methods. Host-key checking
+ * and the pinned known-hosts file stay identical.
  *
  * The port flag and user prefix are emitted only for non-default values.
  */
@@ -226,8 +238,25 @@ function buildSshBaseArgv(machine: MachineRecord, knownHostsPath: string): strin
   assertSafeDestination(machine, destination);
   const argv = [
     'ssh',
-    '-o',
-    'BatchMode=yes',
+  ];
+  if (machine.authMethod === 'password') {
+    argv.push(
+      '-o',
+      // One prompt: a wrong password must fail fast (and re-classify) instead
+      // of three askpass invocations.
+      'NumberOfPasswordPrompts=1',
+      '-o',
+      // Offer only password-style methods; keys were never configured for
+      // this machine, and trying them first would stall the askpass flow.
+      'PreferredAuthentications=password,keyboard-interactive',
+    );
+  } else {
+    argv.push(
+      '-o',
+      'BatchMode=yes',
+    );
+  }
+  argv.push(
     '-o',
     'StrictHostKeyChecking=yes',
     '-o',
@@ -245,7 +274,7 @@ function buildSshBaseArgv(machine: MachineRecord, knownHostsPath: string): strin
     'ServerAliveInterval=15',
     '-o',
     'ServerAliveCountMax=3',
-  ];
+  );
   if (machine.port !== 22) {
     argv.push('-p', String(machine.port));
   }
@@ -352,8 +381,8 @@ const SSH_EXIT_PATTERNS: readonly SshExitPattern[] = [
   {
     kind: 'auth-failed',
     pattern: /Permission denied|No supported authentication methods/i,
-    message: 'SSH key/agent authentication failed (passwords are disabled by BatchMode).',
-    hint: 'Ensure your key is authorized on the remote, is loaded into ssh-agent (ssh-add), and the machine user is correct.',
+    message: 'SSH authentication failed.',
+    hint: 'For key auth, ensure your key is authorized on the remote, loaded into ssh-agent (ssh-add), and the machine user is correct. For password auth, re-enter the password (Settings → Machines).',
   },
   {
     kind: 'unreachable',
@@ -411,6 +440,73 @@ export function parseSshExit(code: number | null, stderrExcerpt: string): SshExi
 }
 
 // ---------------------------------------------------------------------------
+// Password auth (SSH_ASKPASS)
+// ---------------------------------------------------------------------------
+
+/**
+ * Environment variable the askpass helper reads. The password never appears in
+ * argv (visible to every user via `ps`) — it rides the ssh process
+ * environment, readable only by the same user (same exposure as `sshpass -e`).
+ */
+export const SSH_PASSWORD_ENV_VAR = 'ORCHID_SSH_PASSWORD';
+
+const ASKPASS_SH = '#!/bin/sh\nprintf \'%s\\n\' "$ORCHID_SSH_PASSWORD"\n';
+const ASKPASS_CMD = '@echo off\r\necho %ORCHID_SSH_PASSWORD%\r\n';
+
+/**
+ * Absolute path of the generated askpass helper (`~/.orchid/ssh-askpass.sh`,
+ * `.cmd` on Windows). The helper itself contains no secret — it only prints
+ * the environment variable the ssh process was spawned with.
+ */
+export function sshAskpassHelperPath(): string {
+  const name = os.platform() === 'win32' ? 'ssh-askpass.cmd' : 'ssh-askpass.sh';
+  return path.join(os.homedir(), '.orchid', name);
+}
+
+/**
+ * Ensure the askpass helper exists (idempotent; rewrites on drift) and return
+ * its path. Mode 0o700 on POSIX — the helper is user-specific by design.
+ */
+export function ensureSshAskpassHelper(): string {
+  const helperPath = sshAskpassHelperPath();
+  const content = os.platform() === 'win32' ? ASKPASS_CMD : ASKPASS_SH;
+  let existing: string | null = null;
+  try {
+    existing = fs.readFileSync(helperPath, 'utf8');
+  } catch {
+    // Missing — write below.
+  }
+  if (existing !== content) {
+    fs.mkdirSync(path.dirname(helperPath), { recursive: true });
+    fs.writeFileSync(helperPath, content, { encoding: 'utf8', mode: 0o700 });
+    if (os.platform() !== 'win32') {
+      try {
+        fs.chmodSync(helperPath, 0o700);
+      } catch {
+        // Best effort: ssh fails closed on a non-executable helper anyway.
+      }
+    }
+  }
+  return helperPath;
+}
+
+/**
+ * Extra spawn environment for one password-auth ssh process: the askpass
+ * helper plus the password itself. `SSH_ASKPASS_REQUIRE=force` makes OpenSSH
+ * ≥ 8.4 use the helper with no tty; `DISPLAY` covers older builds, which only
+ * consult SSH_ASKPASS when a display is set. `helperPath` overrides the
+ * generated helper location (tests).
+ */
+export function sshPasswordSpawnEnv(password: string, helperPath?: string): NodeJS.ProcessEnv {
+  return {
+    SSH_ASKPASS: helperPath ?? ensureSshAskpassHelper(),
+    SSH_ASKPASS_REQUIRE: 'force',
+    DISPLAY: process.env.DISPLAY ?? ':0',
+    [SSH_PASSWORD_ENV_VAR]: password,
+  };
+}
+
+// ---------------------------------------------------------------------------
 // Transport
 // ---------------------------------------------------------------------------
 
@@ -420,6 +516,21 @@ export type SshSpawnFn = (command: string, args: string[], options: SpawnOptions
 /** Injectable argv builder (tests replace ssh with `node <fixture>`). */
 export type SshCommandFactory = (machine: MachineRecord, knownHostsPath: string) => string[];
 
+/**
+ * Full spawn environment for a password-auth machine (`undefined` otherwise).
+ * Merges the askpass variables over the inherited process environment — ssh
+ * needs PATH etc. to run both itself and the helper.
+ */
+function buildSpawnEnv(
+  machine: MachineRecord,
+  password: string | undefined,
+  helperPath?: string,
+): NodeJS.ProcessEnv | undefined {
+  if (machine.kind !== 'ssh' || machine.authMethod !== 'password') return undefined;
+  if (password === undefined || password === '') return undefined;
+  return { ...process.env, ...sshPasswordSpawnEnv(password, helperPath) };
+}
+
 export interface SpawnSshTransportOptions {
   readonly spawnFn?: SshSpawnFn;
   readonly commandFactory?: SshCommandFactory;
@@ -427,6 +538,14 @@ export interface SpawnSshTransportOptions {
   readonly knownHostsPath?: string;
   /** Frame cap forwarded to the decoder (default MAX_FRAME_BYTES). */
   readonly maxFrameBytes?: number;
+  /**
+   * SSH password for `authMethod: 'password'` machines; passed to the ssh
+   * process through the forced SSH_ASKPASS helper environment. Ignored for
+   * key-auth machines.
+   */
+  readonly password?: string;
+  /** Askpass helper path override (tests); defaults to ~/.orchid/ssh-askpass.* */
+  readonly askpassHelperPath?: string;
 }
 
 /**
@@ -445,9 +564,11 @@ export function spawnSshTransport(
   const hostsPath = options.knownHostsPath ?? defaultKnownHostsPath(machine.id);
   const argv = commandFactory(machine, hostsPath);
 
+  const env = buildSpawnEnv(machine, options.password, options.askpassHelperPath);
   const child = spawnFn(argv[0] as string, argv.slice(1), {
     stdio: ['pipe', 'pipe', 'pipe'],
     windowsHide: true,
+    ...(env !== undefined ? { env } : {}),
   });
 
   const decoder = createFrameDecoder({ maxFrameBytes: options.maxFrameBytes });
@@ -581,6 +702,10 @@ export interface SpawnDaemonEnsureOptions {
   readonly knownHostsPath?: string;
   /** Deadline for the one-shot ssh command (default DAEMON_ENSURE_TIMEOUT_MS). */
   readonly timeoutMs?: number;
+  /** SSH password for `authMethod: 'password'` machines (askpass env). */
+  readonly password?: string;
+  /** Askpass helper path override (tests); defaults to ~/.orchid/ssh-askpass.* */
+  readonly askpassHelperPath?: string;
 }
 
 /**
@@ -624,11 +749,13 @@ export function spawnDaemonEnsure(
       resolve(ok);
     };
 
+    const env = buildSpawnEnv(machine, options.password, options.askpassHelperPath);
     let child: ChildProcess;
     try {
       child = (options.spawnFn ?? spawn)(argv[0] as string, argv.slice(1), {
         stdio: ['ignore', 'ignore', 'ignore'],
         windowsHide: true,
+        ...(env !== undefined ? { env } : {}),
       });
     } catch (error) {
       console.warn(`[machine-ensure] failed to spawn the serve command:`, error);

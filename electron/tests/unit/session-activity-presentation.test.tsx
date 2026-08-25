@@ -128,7 +128,11 @@ describe('session activity presentation', () => {
     expect(tabHtml).toContain('status-success');
     expect(activityHtml).toContain('status-success');
     expect(activityHtml).toContain('Completed · unread');
-    expect(sidebarHtml.match(/status-success/g)).toHaveLength(2);
+    // Activity section + session row dots — the machine switcher in the
+    // footer renders its own connection dot, so scope to above the footer.
+    const footerStart = sidebarHtml.indexOf('panel-footer');
+    const aboveFooter = footerStart >= 0 ? sidebarHtml.slice(0, footerStart) : sidebarHtml;
+    expect(aboveFooter.match(/status-success/g)).toHaveLength(2);
   });
 });
 
