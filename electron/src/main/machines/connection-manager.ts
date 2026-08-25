@@ -123,7 +123,7 @@ export type MachineTransportFactory = (
 export type MachinePasswordResolver = (machine: RemoteMachineRecord) => Promise<string | null>;
 
 const defaultResolvePassword: MachinePasswordResolver = async (machine) => {
-  const { getMachineSecretsStore } = await import('./machine-secrets');
+  const { getMachineSecretsStore } = await import('./machine-secrets.js');
   return getMachineSecretsStore().getPassword(machine.id);
 };
 
