@@ -60,9 +60,9 @@ async function defaultComposeProviderRuntime(): Promise<void> {
     { isProviderRuntimeContextInitialized },
     providerComposition,
   ] = await Promise.all([
-    import('../config/loader'),
-    import('../providers/runtime-context'),
-    import('../providers/compose-runtime'),
+    import('../config/loader.js'),
+    import('../providers/runtime-context.js'),
+    import('../providers/compose-runtime.js'),
   ]);
   try {
     ensureHomeConfig();
