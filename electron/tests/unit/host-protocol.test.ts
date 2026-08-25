@@ -527,6 +527,25 @@ const METHOD_FIXTURES: Record<string, { params: unknown; result: unknown }> = {
     result: { status: 'saved' },
   },
   'providers.list': { params: undefined, result: providerOverview },
+  'providers.create': {
+    params: {
+      providerId: 'openai',
+      name: 'Work account',
+      protocol: 'openai-compatible',
+      authMethod: 'environment',
+      modelIds: ['gpt-4o'],
+      environmentVariable: 'OPENAI_API_KEY',
+    },
+    result: providerMutation,
+  },
+  'providers.update': {
+    params: { connectionId: CONNECTION_ID, name: 'Renamed account' },
+    result: providerMutation,
+  },
+  'providers.submit_api_key': {
+    params: { connectionId: CONNECTION_ID, apiKey: 'sk-test-key' },
+    result: providerMutation,
+  },
   'providers.validate': {
     params: { connectionId: CONNECTION_ID },
     result: providerMutation,
@@ -696,7 +715,7 @@ const EVENT_FIXTURES: Record<string, unknown> = {
 
 describe('HOST_METHODS registry', () => {
   it('registers the full host-routed method surface', () => {
-    expect(Object.keys(HOST_METHODS)).toHaveLength(85);
+    expect(Object.keys(HOST_METHODS)).toHaveLength(88);
     expect(HOST_METHODS[HOST_HELLO_METHOD]).toBeDefined();
     expect(HOST_METHODS['host.pending_state']).toBeDefined();
     for (const method of Object.keys(HOST_METHODS)) {
@@ -797,21 +816,15 @@ describe('HOST_METHODS registry', () => {
     expect(lookupHostMethod('chat.nope')).toBeUndefined();
     expect(lookupHostMethod('machines.list')).toBeUndefined();
     expect(lookupHostMethod('analytics.overview')).toBeUndefined();
-    expect(lookupHostMethod('providers.submit_api_key')).toBeUndefined();
+    expect(lookupHostMethod('providers.discover_draft_models')).toBeUndefined();
     expect(lookupHostMethod('__proto__')).toBeUndefined();
     expect(lookupHostMethod('chat.send')).toBe(HOST_METHODS['chat.send']);
+    expect(lookupHostMethod('providers.submit_api_key')).toBe(HOST_METHODS['providers.submit_api_key']);
     expect(lookupHostMethod('host.pending_state')).toBe(HOST_METHODS['host.pending_state']);
   });
 
-  it('excludes provider vault writes from the routed surface', () => {
-    for (const vaultWrite of [
-      'providers.create',
-      'providers.update',
-      'providers.submit_api_key',
-      'providers.discover_draft_models',
-    ]) {
-      expect(HOST_METHODS).not.toHaveProperty(vaultWrite);
-    }
+  it('excludes credential-carrying draft discovery from the routed surface', () => {
+    expect(HOST_METHODS).not.toHaveProperty('providers.discover_draft_models');
   });
 });
 

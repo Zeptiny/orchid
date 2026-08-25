@@ -267,6 +267,10 @@ vi.mock('../../src/main/host/chat/abort', () => ({
 }));
 vi.mock('../../src/main/providers/views', () => ({
   overview: vi.fn(async () => ({ definitions: [], connections: [], statuses: [], secureStorage: { available: false, backend: null, reason: 'unavailable' } })),
+  createConnectionIntent: vi.fn(async () => ({ connection: { id: '00000000-0000-4000-8000-000000000061' }, message: null })),
+  updateConnectionIntent: vi.fn(async () => ({ connection: { id: '00000000-0000-4000-8000-000000000062' }, message: null })),
+  submitConnectionApiKey: vi.fn(async () => ({ connection: { id: '00000000-0000-4000-8000-000000000063' }, message: null })),
+  requireConnection: vi.fn(async (id: string) => ({ id, authMethod: 'environment' })),
   validateConnection: vi.fn(async () => ({})),
   disableConnection: vi.fn(async () => ({})),
   enableConnection: vi.fn(async () => ({})),
@@ -282,7 +286,7 @@ vi.mock('../../src/main/providers/views', () => ({
 
 // ── Imports after mocks ──────────────────────────────────────────────────────
 
-import { createHostServer, type HostServer } from '../../src/main/host/server';
+import { createHostServer, LOCAL_HOST_CAPABILITIES, type HostServer } from '../../src/main/host/server';
 import type { HostResponse } from '../../src/shared/host/protocol';
 import { SessionManager } from '../../src/main/session/manager';
 import { _clearDbCache } from '../../src/main/session/storage';
@@ -389,13 +393,11 @@ describe('HostServer dispatch', () => {
     }
   });
 
-  it('answers vault-write provider methods with METHOD_NOT_FOUND (absent from the registry)', async () => {
-    for (const method of ['providers.create', 'providers.update', 'providers.submit_api_key', 'providers.discover_draft_models']) {
-      const response = await call(server, method, {});
-      expect(response.ok, method).toBe(false);
-      if (!response.ok) {
-        expect(response.error.code, method).toBe('METHOD_NOT_FOUND');
-      }
+  it('answers the credential-carrying draft discovery with METHOD_NOT_FOUND (absent from the registry)', async () => {
+    const response = await call(server, 'providers.discover_draft_models', {});
+    expect(response.ok).toBe(false);
+    if (!response.ok) {
+      expect(response.error.code).toBe('METHOD_NOT_FOUND');
     }
   });
 
@@ -424,6 +426,114 @@ describe('HostServer dispatch', () => {
       if (!response.ok) {
         expect(response.error.code, method).toBe('UNSUPPORTED_ON_HOST');
       }
+    }
+  });
+
+  it('answers host.hello with the daemon capabilities by default and the local set when asked', async () => {
+    await expect(hello(server)).resolves.toMatchObject({
+      ok: true,
+      result: { capabilities: ['config.write', 'providers.read'] },
+    });
+    const localHost = createHostServer({ serverVersion: 'test', capabilities: LOCAL_HOST_CAPABILITIES });
+    try {
+      await expect(hello(localHost)).resolves.toMatchObject({
+        ok: true,
+        result: { capabilities: ['config.write', 'providers.read', 'providers.vault-writes'] },
+      });
+    } finally {
+      localHost.dispose();
+    }
+  });
+});
+
+describe('HostServer provider credential-write gates', () => {
+  const CONNECTION = '00000000-0000-4000-8000-000000000051';
+
+  beforeEach(async () => {
+    await hello(server);
+  });
+
+  it('a daemon-default server rejects submit_api_key and api-key intents with UNSUPPORTED_ON_HOST', async () => {
+    const { createConnectionIntent, updateConnectionIntent, submitConnectionApiKey }
+      = await import('../../src/main/providers/views');
+    for (const [method, params] of [
+      ['providers.submit_api_key', { connectionId: CONNECTION, apiKey: 'sk-x' }],
+      ['providers.create', {
+        providerId: 'openai', name: 'X', protocol: 'openai-compatible',
+        authMethod: 'api-key', modelIds: ['gpt-5/test'],
+      }],
+      ['providers.update', { connectionId: CONNECTION, authMethod: 'api-key' }],
+    ] as const) {
+      const response = await call(server, method, params);
+      expect(response.ok, method).toBe(false);
+      if (!response.ok) {
+        expect(response.error.code, method).toBe('UNSUPPORTED_ON_HOST');
+        expect(response.error.message, method).toMatch(/environment-variable/i);
+      }
+    }
+    // The gate fires BEFORE any mutation core runs — nothing is persisted or
+    // validated on a host that cannot store credentials.
+    expect(submitConnectionApiKey).not.toHaveBeenCalled();
+    expect(createConnectionIntent).not.toHaveBeenCalled();
+    expect(updateConnectionIntent).not.toHaveBeenCalled();
+  });
+
+  it('a daemon-default server lets an already-api-key connection take metadata-only updates', async () => {
+    const { requireConnection } = await import('../../src/main/providers/views');
+    vi.mocked(requireConnection).mockResolvedValueOnce({
+      id: CONNECTION,
+      authMethod: 'api-key',
+    } as never);
+    // No transition to api-key auth (the connection already is one): the
+    // rename passes the daemon gate and reaches the update core.
+    const updated = await call(server, 'providers.update', {
+      connectionId: CONNECTION,
+      authMethod: 'api-key',
+      name: 'Renamed remote draft',
+    });
+    expect(updated).toMatchObject({ ok: true, result: { connection: { id: '00000000-0000-4000-8000-000000000062' } } });
+  });
+
+  it('a daemon-default server serves environment-auth create and plain updates', async () => {
+    const created = await call(server, 'providers.create', {
+      providerId: 'openai',
+      name: 'Env on daemon',
+      protocol: 'openai-compatible',
+      authMethod: 'environment',
+      modelIds: ['gpt-5/test'],
+      environmentVariable: 'OPENAI_API_KEY',
+    });
+    expect(created).toMatchObject({ ok: true, result: { connection: { id: '00000000-0000-4000-8000-000000000061' } } });
+
+    const updated = await call(server, 'providers.update', { connectionId: CONNECTION, name: 'Renamed' });
+    expect(updated).toMatchObject({ ok: true, result: { connection: { id: '00000000-0000-4000-8000-000000000062' } } });
+  });
+
+  it('a vault-writes host dispatches submit_api_key and api-key create to the cores', async () => {
+    const localHost = createHostServer({ serverVersion: 'test', capabilities: LOCAL_HOST_CAPABILITIES });
+    try {
+      await hello(localHost);
+      const submitted = await localHost.handleRequest(
+        { id: 1, method: 'providers.submit_api_key', params: { connectionId: CONNECTION, apiKey: 'sk-x' } },
+        CLIENT_ID,
+      );
+      expect(submitted).toMatchObject({
+        ok: true,
+        result: { connection: { id: '00000000-0000-4000-8000-000000000063' } },
+      });
+      const created = await localHost.handleRequest(
+        { id: 2, method: 'providers.create', params: {
+          providerId: 'openai', name: 'Keyed', protocol: 'openai-compatible',
+          authMethod: 'api-key', modelIds: ['gpt-5/test'],
+        } },
+        CLIENT_ID,
+      );
+      expect(created).toMatchObject({
+        ok: true,
+        result: { connection: { id: '00000000-0000-4000-8000-000000000061' } },
+      });
+    } finally {
+      localHost.dispose();
     }
   });
 });

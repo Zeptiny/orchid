@@ -6,8 +6,8 @@
  * Classification is mechanical: a channel is host-routed exactly when its
  * name maps to a `HOST_METHODS` entry (':' → '.') *and* it is an invocable
  * channel (`ALLOWED_INVOKE_CHANNELS`). Everything else — machines, analytics,
- * updater, startup, provider vault writes, the config-scope surfaces with no
- * host method, and push-event channels — is local.
+ * updater, startup, the credential-carrying draft discovery, the config-scope
+ * surfaces with no host method, and push-event channels — is local.
  *
  * Two channels that satisfy the mechanical rule are nevertheless pinned local:
  * `session:pick_project_dir` and `definition:reveal` need a host-native
@@ -90,8 +90,8 @@ export function verifyRoutingTable(): void {
 
 /**
  * The invocable channels that stay local (machines, analytics, updater,
- * startup, provider vault writes, config-scope surfaces with no host method,
- * the two local-only capability channels, …).
+ * startup, credential-carrying draft discovery, config-scope surfaces with no
+ * host method, the two local-only capability channels, …).
  */
 export function localInvokeChannels(): string[] {
   return ALLOWED_INVOKE_CHANNELS.filter((channel) => !HOST_ROUTED_CHANNELS.has(channel));

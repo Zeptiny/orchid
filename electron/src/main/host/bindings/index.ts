@@ -39,7 +39,7 @@ export function buildHostBindings(surface: HostServerSurface): ReadonlyMap<strin
     ...buildIndexBindings(surface),
     ...buildToolBindings(),
     ...buildConfigBindings(),
-    ...buildProviderBindings(),
+    ...buildProviderBindings(surface),
   ];
 
   // Completeness guard: every registry method must be bound (or intentionally

@@ -6,17 +6,23 @@
  * discovered + custom rows with tier/cache TTL view data), manual
  * live-discovery, and typed quota refresh lives in `providers/views.ts`
  * (electron-free, shared with the headless host). This module owns only the
- * Electron handler registration plus draft discovery (never host-routed).
+ * Electron handler registration plus draft discovery (local-only: it resolves
+ * a possibly-secret credential against this machine's drivers before any
+ * connection exists, so it never routes to a driven remote host).
  */
 import { ipcMain } from 'electron';
 import { z } from 'zod';
 import { IPC_CHANNELS } from '../../shared/types/ipc';
+import { HOST_ERROR_CODES, HostProtocolError } from '../../shared/host/protocol';
+import { MACHINE_ID_LOCAL } from '../../shared/types/machine';
+import { activeMachineFor } from '../host/routing';
 import { hostRequest } from './host-request';
 import type { ProviderDraftDiscoveryResult } from '../../shared/types/ipc';
 import type { ProviderConnection } from '../../shared/types/provider';
 import {
   providerConnectionIdRequestSchema,
   providerModelListRequestSchema,
+  refineEnvironmentAuth,
 } from '../../shared/types/ipc-schemas';
 import {
   providerAuthMethodSchema,
@@ -34,7 +40,6 @@ import {
   requireStaticConnectionSupport,
   services,
 } from '../providers/views';
-import { assertLocalMachineForVaultWrite } from './providers';
 
 const draftDiscoverySchema = z.object({
   providerId: z.string().trim().min(1),
@@ -46,22 +51,7 @@ const draftDiscoverySchema = z.object({
   // The value exists only for this validated IPC request. Do not log this
   // schema error or payload because it may include a usable credential.
   apiKey: z.string().trim().min(1).max(32_768).optional(),
-}).strict().superRefine((value, ctx) => {
-  if (value.authMethod === 'environment' && !value.environmentVariable) {
-    ctx.addIssue({
-      code: z.ZodIssueCode.custom,
-      path: ['environmentVariable'],
-      message: 'Environment authentication requires an environment variable name',
-    });
-  }
-  if (value.authMethod !== 'environment' && value.environmentVariable !== undefined) {
-    ctx.addIssue({
-      code: z.ZodIssueCode.custom,
-      path: ['environmentVariable'],
-      message: 'An environment variable is valid only for environment authentication',
-    });
-  }
-});
+}).strict().superRefine((value, ctx) => refineEnvironmentAuth(value, ctx));
 
 /** Non-persisted live discovery for a connection that does not exist yet (#138). */
 async function discoverDraftModels(
@@ -137,6 +127,25 @@ function draftDiscoveryMessage(outcome: ConnectionDiscoveryOutcome): string {
 
 // ── Registration ────────────────────────────────────────────────────────────
 
+/**
+ * Draft discovery (providers:discover_draft_models) is a credential-carrying
+ * local-only intent: the key/env value it validates resolves against THIS
+ * machine's drivers before any connection exists, so a window driving a
+ * remote machine must never run it here. Connection create/update/submit are
+ * host-routed instead — they land on the driven machine's own store.
+ */
+function assertLocalMachineForDraftDiscovery(windowId: string): void {
+  if (activeMachineFor(windowId) !== MACHINE_ID_LOCAL) {
+    throw new HostProtocolError(
+      HOST_ERROR_CODES.UNSUPPORTED_ON_HOST,
+      'providers:discover_draft_models runs only while this window drives the local machine — ' +
+        'it resolves a credential against this machine before any connection exists. ' +
+        'Switch back to the local machine to preview a draft connection, or create the ' +
+        'connection on the remote machine first and use its live discovery.',
+    );
+  }
+}
+
 export function registerProviderModelsIPC(): void {
   ipcMain.handle(IPC_CHANNELS.PROVIDERS_MODEL_LIST, async (event, payload: unknown) => {
     if (payload === undefined) {
@@ -165,10 +174,10 @@ export function registerProviderModelsIPC(): void {
   ipcMain.handle(IPC_CHANNELS.PROVIDERS_DISCOVER_DRAFT_MODELS, async (_event, payload: unknown) => {
     const parsed = draftDiscoverySchema.safeParse(payload);
     if (!parsed.success) throw new Error('Invalid providers:discover_draft_models payload');
-    // Draft discovery is a vault-write-class intent (local-only in v1): the
+    // Draft discovery is a credential-carrying local-only intent: the
     // credential it validates and any connection it previews must never be
     // resolved against this machine's drivers/store from a remote-active window.
-    assertLocalMachineForVaultWrite(String(_event.sender.id), 'discover_draft_models');
+    assertLocalMachineForDraftDiscovery(String(_event.sender.id));
     return discoverDraftModels(parsed.data);
   });
 

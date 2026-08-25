@@ -68,8 +68,7 @@ export function ProvidersTab({ onNotify }: { readonly onNotify: Notify }) {
 
       {!machines.isActiveMachineLocal && (
         <Alert tone="info" icon="globe">
-          Provider connections and credentials live on the machine they were added to.
-          Switch back to the local machine to add or edit them here.
+          {`Connections you add or edit here are created on ${machines.activeMachineLabel} — each machine owns its own provider configuration.`}
         </Alert>
       )}
 
@@ -77,14 +76,14 @@ export function ProvidersTab({ onNotify }: { readonly onNotify: Notify }) {
         connections={overview.connections}
         definitions={overview.definitions}
         statuses={overview.statuses}
-        onAddConnection={machines.isActiveMachineLocal ? () => {
+        onAddConnection={() => {
           setConnectionToEdit(null);
           setWizardOpen(true);
-        } : undefined}
-        onEditConnection={machines.isActiveMachineLocal ? (connection) => {
+        }}
+        onEditConnection={(connection) => {
           setConnectionToEdit(connection);
           setWizardOpen(true);
-        } : undefined}
+        }}
         onValidate={providers.validateConnection}
         onDisable={providers.disableConnection}
         onEnable={providers.enableConnection}

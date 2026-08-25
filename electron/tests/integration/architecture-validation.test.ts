@@ -614,6 +614,7 @@ describe('Provider architecture invariants (U9)', () => {
   it('keeps renderer provider operations intent-only and credential-safe', () => {
     const ipc = read('shared', 'types', 'ipc.ts');
     const providerIpc = read('main', 'ipc', 'providers.ts');
+    const providerViews = read('main', 'providers', 'views.ts');
     const preload = read('preload', 'index.ts');
 
     expect(ipc).toContain('ProviderSubmitApiKeyMessage');
@@ -625,17 +626,19 @@ describe('Provider architecture invariants (U9)', () => {
     expect(connectionView).not.toContain('encrypted');
     expect(connectionView).not.toContain('apiKey');
     expect(providerIpc).toContain('Invalid providers:submit_api_key payload');
-    expect(providerIpc).toContain('replaceConnectionApiKey');
+    // The vault-write core lives in the electron-free views module shared by
+    // the IPC boundary and the host protocol (never in the renderer boundary).
+    expect(providerViews).toContain('replaceConnectionApiKey');
     expect(preload).toContain('submitApiKey');
     expect(preload).not.toContain('readCredential');
   });
 
   it('binds generic credentials to an origin and invalidates them before rebinding', () => {
-    const providerIpc = read('main', 'ipc', 'providers.ts');
+    const providerViews = read('main', 'providers', 'views.ts');
     const vault = read('main', 'providers', 'credentials', 'vault.ts');
 
-    expect(providerIpc).toContain('genericOrigin(existing, current) !== genericOrigin(candidate, current)');
-    expect(providerIpc).toContain('deleteConnectionCredentials(existing.id)');
+    expect(providerViews).toContain('genericOrigin(existing, current) !== genericOrigin(candidate, current)');
+    expect(providerViews).toContain('deleteConnectionCredentials(existing.id)');
     expect(vault).toContain('replaceConnectionApiKey');
     expect(vault).toContain('normalizeCredentialBinding');
   });

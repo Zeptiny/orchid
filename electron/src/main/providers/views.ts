@@ -5,9 +5,10 @@
  *
  * Everything here is redacted-by-construction: the renderer/protocol boundary
  * never receives a credential handle, API key, driver origin, or executable
- * driver configuration. Connection CRUD intent (create/update/submit_api_key)
- * stays in the IPC layer because it is Electron-only by policy (vault writes
- * are not host-routed in v1).
+ * driver configuration. Connection CRUD intent cores (create/update/
+ * submit_api_key) live here too — shared by the Electron IPC boundary and the
+ * headless host protocol, whose credential-carrying paths are capability-gated
+ * at the host binding (see host/bindings/providers.ts).
  */
 import * as fs from 'node:fs';
 import { z } from 'zod';
@@ -21,6 +22,11 @@ import type {
   ProviderOverview,
   ProviderStatusView,
 } from '../../shared/types/ipc';
+import {
+  providerCreateConnectionRequestSchema,
+  providerSubmitApiKeyRequestSchema,
+  providerUpdateConnectionRequestSchema,
+} from '../../shared/types/ipc-schemas';
 import { pricingRateFieldsSchema, providerQuotaSchema } from '../../shared/types/provider-facets';
 import type { CatalogPricing } from './catalog/schema';
 import {
@@ -55,6 +61,7 @@ import type { ConnectionStore } from './connection-store';
 import type { ProviderCatalogStore } from './catalog/store';
 import {
   CredentialVault,
+  createEnvironmentCredentialReference,
   normalizeCredentialBinding,
   type CredentialSecret,
   type SecureStorageAvailability,
@@ -730,6 +737,189 @@ export async function deleteConnection(connectionId: string): Promise<ProviderDe
     config: configResult.config,
     clearedConfigReferences: configResult.clearedConfigReferences,
   } satisfies ProviderDeleteConnectionResult;
+}
+
+// ── Connection CRUD intents (create/update/submit_api_key) ──────────────────
+
+/** Parsed providers.create intent (the shared boundary schema's inferred type). */
+export type ProviderCreateConnectionIntent = z.infer<typeof providerCreateConnectionRequestSchema>;
+
+/** Parsed providers.update intent. */
+export type ProviderUpdateConnectionIntent = z.infer<typeof providerUpdateConnectionRequestSchema>;
+
+/** Parsed providers.submit_api_key intent. */
+export type ProviderSubmitApiKeyIntent = z.infer<typeof providerSubmitApiKeyRequestSchema>;
+
+/**
+ * providers.create — persist a new connection on THIS host. Intent-only: an
+ * api-key connection lands with a `none` credential and draft health; the key
+ * follows separately via {@link submitConnectionApiKey}.
+ */
+export async function createConnectionIntent(
+  input: ProviderCreateConnectionIntent,
+): Promise<ProviderMutationResult> {
+  const current = services();
+  const credential = input.authMethod === 'environment'
+    ? createEnvironmentCredentialReference(input.environmentVariable!)
+    : { kind: 'none' as const };
+  const draftConnection = {
+    id: '00000000-0000-4000-8000-000000000001',
+    providerId: input.providerId,
+    name: input.name,
+    protocol: input.protocol,
+    authMethod: input.authMethod,
+    credential,
+    modelIds: input.modelIds,
+    ...(input.customModels ? { customModels: input.customModels } : {}),
+    ...(input.reasoningConfig ? { reasoningConfig: input.reasoningConfig } : {}),
+    ...(input.pricingOverrides ? { pricingOverrides: input.pricingOverrides } : {}),
+    ...(input.tierSelections ? { tierSelections: input.tierSelections } : {}),
+    ...(input.cacheTtl != null ? { cacheTtl: input.cacheTtl } : {}),
+    ...(input.endpoint !== undefined ? { endpoint: input.endpoint } : {}),
+    ...(input.allowInsecureHttp !== undefined ? { allowInsecureHttp: input.allowInsecureHttp } : {}),
+    health: input.authMethod === 'none' ? 'ready' : 'draft',
+  } satisfies ProviderConnection;
+  // Reject malformed, disabled, or unsupported connections before anything
+  // is persisted. This is also the boundary that prevents renderer data from
+  // selecting a driver/origin outside trusted code.
+  requireStaticConnectionSupport(draftConnection, current);
+  const { id: _draftId, ...createInput } = draftConnection;
+  const catalogModels = current.catalog.load().catalog.providers
+    .find((provider) => provider.id === input.providerId)
+    ?.models;
+  const connection = await current.connections.create(createInput, catalogModels);
+  return withConnectionMutationLock(connection.id, async () => {
+    const result = await validateConnection(connection.id);
+    if (result.connection.health !== 'ready') return result;
+    return withDiscoveryOutcome(connection.id, result, current);
+  });
+}
+
+/**
+ * providers.update — edit safe connection fields. Generic credentials are
+ * destination-bound: an origin change erases a stored secret or requires the
+ * renderer to explicitly reconfirm the environment reference in the same
+ * intent before the endpoint is usable.
+ */
+export async function updateConnectionIntent(
+  input: ProviderUpdateConnectionIntent,
+): Promise<ProviderMutationResult> {
+  return withConnectionMutationLock(input.connectionId, async () => {
+    const current = services();
+    const existing = await requireConnection(input.connectionId);
+    const nextAuthMethod = input.authMethod ?? existing.authMethod;
+    const authMethodChanged = nextAuthMethod !== existing.authMethod;
+    const patch = {
+      ...(input.name === undefined ? {} : { name: input.name }),
+      ...(input.authMethod === undefined ? {} : { authMethod: input.authMethod }),
+      ...(input.modelIds === undefined ? {} : { modelIds: input.modelIds }),
+      ...(input.customModels === undefined ? {} : { customModels: input.customModels }),
+      ...(input.reasoningConfig === undefined ? {} : { reasoningConfig: input.reasoningConfig }),
+      ...(input.pricingOverrides === undefined
+        ? {}
+        : { pricingOverrides: input.pricingOverrides }),
+      ...(input.tierSelections === undefined ? {} : { tierSelections: input.tierSelections }),
+      ...(input.cacheTtl === undefined
+        ? {}
+        : input.cacheTtl === null
+          ? { cacheTtl: undefined }
+          : { cacheTtl: input.cacheTtl }),
+      ...(input.endpoint === undefined ? {} : { endpoint: input.endpoint }),
+      ...(input.allowInsecureHttp === undefined
+        ? {}
+        : { allowInsecureHttp: input.allowInsecureHttp }),
+    };
+    if (input.environmentVariable !== undefined) {
+      if (nextAuthMethod !== 'environment') {
+        throw new Error('Only environment-authenticated connections can change an environment reference');
+      }
+      Object.assign(patch, {
+        credential: createEnvironmentCredentialReference(input.environmentVariable),
+        health: 'draft' as const,
+      });
+    } else if (authMethodChanged) {
+      Object.assign(patch, {
+        credential: { kind: 'none' as const },
+        health: nextAuthMethod === 'none' ? 'ready' as const : 'draft' as const,
+      });
+    }
+    const candidate = { ...existing, ...patch } as ProviderConnection;
+    requireStaticConnectionSupport(candidate, current);
+
+    const endpointChanged = input.endpoint !== undefined
+      && genericOrigin(existing, current) !== genericOrigin(candidate, current);
+    if (existing.credential.kind === 'stored' && (authMethodChanged || endpointChanged)) {
+      await current.vault.deleteConnectionCredentials(existing.id);
+    }
+    if (endpointChanged && nextAuthMethod === 'api-key') {
+      Object.assign(patch, { credential: { kind: 'none' as const }, health: 'draft' });
+    } else if (
+      endpointChanged
+      && nextAuthMethod === 'environment'
+      && input.environmentVariable === undefined
+    ) {
+      Object.assign(patch, { credential: { kind: 'none' as const }, health: 'draft' });
+    }
+    const updated = await current.connections.update(existing.id, patch);
+    if (!sameCredentialIdentity(existing, updated)) {
+      current.status.invalidate(existing.providerId, existing.id);
+      current.pricing?.invalidate(existing.providerId, existing.id);
+    }
+    return validateConnection(existing.id);
+  });
+}
+
+/**
+ * providers.submit_api_key — one-shot secret submission. Requires the host's
+ * encrypted vault (capability-gated at the binding); never returns key or
+ * handle material.
+ */
+export async function submitConnectionApiKey(
+  input: ProviderSubmitApiKeyIntent,
+): Promise<ProviderMutationResult> {
+  return withConnectionMutationLock(input.connectionId, async () => {
+    const current = services();
+    const connection = await requireConnection(input.connectionId);
+    if (connection.health === 'disabled') {
+      throw new Error(
+        `Connection '${connection.name}' is disabled. Enable it before submitting a credential.`,
+      );
+    }
+    // disconnected is allowed: submit is the re-auth path after disconnect.
+    if (connection.authMethod !== 'api-key') {
+      throw new Error(`Connection '${connection.name}' does not accept an API key`);
+    }
+    requireStaticConnectionSupport(connection, current);
+    const handle = await current.vault.replaceConnectionApiKey(
+      credentialBinding(connection, current),
+      input.apiKey,
+    );
+    const updated = await current.connections.update(connection.id, {
+      credential: { kind: 'stored', handle },
+      health: 'draft',
+    });
+    if (!sameCredentialIdentity(connection, updated)) {
+      current.status.invalidate(connection.providerId, connection.id);
+      current.pricing?.invalidate(connection.providerId, connection.id);
+    }
+    // CAS cleanup: if health became disconnected after the connection write
+    // (should not happen under this lock, but re-check and erase the key).
+    const afterWrite = await requireConnection(connection.id);
+    if (afterWrite.health === 'disconnected') {
+      await current.vault.deleteConnectionCredentials(connection.id);
+      return {
+        connection: connectionView(afterWrite, current.catalog.getProviderDefinitions()),
+        message: terminalHealthMessage('disconnected'),
+      } satisfies ProviderMutationResult;
+    }
+    const result = await validateConnection(connection.id);
+    // Run discovery once, the first time a credential validates (R26).
+    const latest = await requireConnection(connection.id);
+    if (result.connection.health === 'ready' && latest.discoveredModels === undefined) {
+      return withDiscoveryOutcome(connection.id, result, current);
+    }
+    return result;
+  });
 }
 
 // ── Live model discovery ────────────────────────────────────────────────────

@@ -89,17 +89,19 @@ describe('routing table invariants', () => {
     }
   });
 
-  it('keeps provider vault writes and draft discovery local', () => {
-    const vaultWrites = [
+  it('routes provider connection CRUD intents through the host, keeps draft discovery local', () => {
+    const routed = [
       IPC_CHANNELS.PROVIDERS_CREATE,
       IPC_CHANNELS.PROVIDERS_UPDATE,
       IPC_CHANNELS.PROVIDERS_SUBMIT_API_KEY,
-      IPC_CHANNELS.PROVIDERS_DISCOVER_DRAFT_MODELS,
     ];
-    for (const channel of vaultWrites) {
-      expect(isHostRoutedChannel(channel)).toBe(false);
-      expect(localInvokeChannels()).toContain(channel);
+    for (const channel of routed) {
+      expect(isHostRoutedChannel(channel)).toBe(true);
     }
+    // Draft discovery carries a possibly-secret credential that resolves
+    // against THIS machine's drivers before any connection exists.
+    expect(isHostRoutedChannel(IPC_CHANNELS.PROVIDERS_DISCOVER_DRAFT_MODELS)).toBe(false);
+    expect(localInvokeChannels()).toContain(IPC_CHANNELS.PROVIDERS_DISCOVER_DRAFT_MODELS);
   });
 
   it('keeps config-scope reads that have no host method local', () => {
@@ -147,6 +149,9 @@ describe('routing table invariants', () => {
       IPC_CHANNELS.CONFIG_GET,
       IPC_CHANNELS.CONFIG_PERMISSION_SCOPES,
       IPC_CHANNELS.PROVIDERS_LIST,
+      IPC_CHANNELS.PROVIDERS_CREATE,
+      IPC_CHANNELS.PROVIDERS_UPDATE,
+      IPC_CHANNELS.PROVIDERS_SUBMIT_API_KEY,
       IPC_CHANNELS.PROVIDERS_MODEL_LIST,
     ];
     for (const channel of routed) {

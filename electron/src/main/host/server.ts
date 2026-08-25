@@ -109,6 +109,17 @@ export const DAEMON_CAPABILITIES: readonly HostCapability[] = [
   HOST_CAPABILITIES.PROVIDERS_READ,
 ];
 
+/**
+ * Capabilities the Electron-embedded local host declares: everything the
+ * daemon can do plus the credential vault (Electron safeStorage is available
+ * in-process), which unlocks providers.submit_api_key and api-key-auth
+ * connection intents.
+ */
+export const LOCAL_HOST_CAPABILITIES: readonly HostCapability[] = [
+  ...DAEMON_CAPABILITIES,
+  HOST_CAPABILITIES.PROVIDERS_VAULT_WRITES,
+];
+
 export class HostServer {
   private readonly capabilities: ReadonlySet<string>;
   private readonly serverVersion: string;
@@ -280,8 +291,9 @@ export class HostServer {
       }
       const binding = this.bindings.get(method);
       if (binding === undefined) {
-        // Registry entries without a runtime binding are unreachable today
-        // (vault writes are absent from HOST_METHODS by construction).
+        // Registry entries without a runtime binding are unreachable: the
+        // composition guard in bindings/index.ts throws at construction for
+        // any HOST_METHODS entry left unbound.
         throw new HostProtocolError(
           HOST_ERROR_CODES.METHOD_NOT_FOUND,
           `Method '${method}' has no host binding`,

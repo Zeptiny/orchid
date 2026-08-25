@@ -15,7 +15,7 @@
  * the renderer window fan-out lives client-side in `ipc/host-broadcast.ts` and
  * is attached through {@link setLocalClientListener}.
  */
-import { createHostServer, type HostServer } from './server';
+import { createHostServer, LOCAL_HOST_CAPABILITIES, type HostServer } from './server';
 import { createHostClient, type HostClient } from './client';
 import { createInProcessTransport } from './transport-inprocess';
 
@@ -121,7 +121,10 @@ export function _ensureProviderRuntimeForTests(): Promise<void> {
 export function startEmbeddedLocalHost(): HostServer {
   if (server) return server;
   void ensureProviderRuntime();
-  server = createHostServer({ serverVersion: EMBEDDED_HOST_VERSION });
+  server = createHostServer({
+    serverVersion: EMBEDDED_HOST_VERSION,
+    capabilities: LOCAL_HOST_CAPABILITIES,
+  });
   return server;
 }
 

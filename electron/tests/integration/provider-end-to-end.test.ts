@@ -75,6 +75,8 @@ import {
   registerProviderModelsIPC,
   unregisterProviderModelsIPC,
 } from '../../src/main/ipc/provider-models';
+import { _setProviderIPCServicesForTests as setProviderViewsServicesForTests }
+  from '../../src/main/providers/views';
 import { ProviderRuntime } from '../../src/main/providers';
 import { calculateAttemptCost } from '../../src/main/providers/accounting/cost';
 import { ProviderAccountingStore } from '../../src/main/providers/accounting/store';
@@ -282,7 +284,7 @@ function createLilacFixtureFetch(): {
 afterEach(() => {
   providerIpc.unregisterProviderIPC();
   unregisterProviderModelsIPC();
-  providerIpc._setProviderIPCServicesForTests(null);
+  setProviderViewsServicesForTests(null);
   electron.handlers.clear();
   for (const ledger of ledgers) ledger.close();
   ledgers = [];
@@ -297,7 +299,7 @@ describe('provider end-to-end public contracts', () => {
   it('AE1/AE2 moves a local-only persisted home through redacted setup, restart, typed execution, and immutable attribution', async () => {
     const root = makeTempDirectory();
     const fixture = createServices(root);
-    providerIpc._setProviderIPCServicesForTests(fixture.services);
+    setProviderViewsServicesForTests(fixture.services);
     providerIpc.registerProviderIPC();
     registerProviderModelsIPC();
 
@@ -445,7 +447,7 @@ describe('provider end-to-end public contracts', () => {
   it('AE9 passes Lilac supply-discount data through a local fixture status contract without affecting typed send eligibility', async () => {
     const root = makeTempDirectory();
     const fixture = createServices(root);
-    providerIpc._setProviderIPCServicesForTests(fixture.services);
+    setProviderViewsServicesForTests(fixture.services);
     providerIpc.registerProviderIPC();
     registerProviderModelsIPC();
     const ready = await createReadyConnection('Status Lilac');

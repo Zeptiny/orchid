@@ -37,16 +37,19 @@ const REMOTE_REQUEST_TIMEOUT_MS = 120_000;
  * Methods that legitimately outlive any interactive deadline (verified
  * against the server bindings in host/server.ts): full-project indexing
  * (`rag.index`, `ast.index`), provider model discovery (network round trips
- * to the provider), and user-initiated compaction (a synchronous LLM
- * summarization call). They run with NO client timer — a deadline would
- * cancel real work on a healthy remote. `chat.send` is deliberately absent:
- * the turn runs detached on the host and the request itself returns promptly,
- * so it takes the interactive default.
+ * to the provider — including the first-credential discovery that
+ * `providers.create` embeds after persisting the connection), and
+ * user-initiated compaction (a synchronous LLM summarization call). They run
+ * with NO client timer — a deadline would cancel real work on a healthy
+ * remote. `chat.send` is deliberately absent: the turn runs detached on the
+ * host and the request itself returns promptly, so it takes the interactive
+ * default.
  */
 const REMOTE_UNTIMED_METHODS: ReadonlySet<string> = new Set([
   'rag.index',
   'ast.index',
   'providers.discover_models',
+  'providers.create',
   'chat.compact',
 ]);
 

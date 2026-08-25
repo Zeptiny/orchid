@@ -78,9 +78,12 @@ import {
   projectTrustInfoSchema,
   projectTrustSetSchema,
   providerConnectionIdRequestSchema,
+  providerCreateConnectionRequestSchema,
   providerDisconnectRequestSchema,
   providerModelListRequestSchema,
   providerStatusRefreshRequestSchema,
+  providerSubmitApiKeyRequestSchema,
+  providerUpdateConnectionRequestSchema,
   ragIndexProgressSchema,
   ragIndexSchema,
   serviceTierOptionViewSchema,
@@ -345,7 +348,11 @@ export const HOST_CAPABILITIES = {
   CONFIG_WRITE: 'config.write',
   /** Provider connections/models/status are readable (providers.* reads). */
   PROVIDERS_READ: 'providers.read',
-  /** Credential writes work (providers create/update/submit_api_key/disconnect/delete). */
+  /**
+   * Credential writes work (providers.submit_api_key, plus create/update
+   * intents that authenticate with a stored API key). Declared by the
+   * Electron-embedded host; the headless daemon never declares it.
+   */
   PROVIDERS_VAULT_WRITES: 'providers.vault-writes',
   /** definition.reveal resolves host-local file paths. */
   DEFINITIONS_REVEAL: 'definitions.reveal',
@@ -942,8 +949,10 @@ export interface HostMethodSpec {
 /**
  * Every host-routed method, keyed by its stable wire name (IPC channel with
  * ':' replaced by '.'). Local-only families (machines/analytics/updater/
- * startup) and v1-local provider vault writes (create/update/submit_api_key/
- * discover_draft_models) are absent by construction.
+ * startup) and the credential-carrying draft discovery
+ * (providers.discover_draft_models — resolves a possibly-secret credential
+ * against this machine's drivers before any connection exists) are absent by
+ * construction.
  */
 export const HOST_METHODS = {
   'host.hello': { params: hostHelloParamsSchema, result: hostHelloResultSchema },
@@ -1083,6 +1092,27 @@ export const HOST_METHODS = {
   },
 
   'providers.list': { params: noParams, result: providerOverviewResultSchema },
+  /**
+   * Connection CRUD intents (no credential material): they land on the
+   * driven machine's own connection store. An intent that would produce an
+   * api-key-authenticated connection is gated on the 'providers.vault-writes'
+   * capability server-side — a headless daemon cannot complete it, so it
+   * answers the typed UNSUPPORTED_ON_HOST error instead of accepting a
+   * dead-end draft (environment/none-auth intents work on every host).
+   */
+  'providers.create': {
+    params: providerCreateConnectionRequestSchema,
+    result: providerMutationResultSchema,
+  },
+  'providers.update': {
+    params: providerUpdateConnectionRequestSchema,
+    result: providerMutationResultSchema,
+  },
+  /** Secret-carrying; gated on the 'providers.vault-writes' capability. */
+  'providers.submit_api_key': {
+    params: providerSubmitApiKeyRequestSchema,
+    result: providerMutationResultSchema,
+  },
   'providers.validate': { params: providerConnectionIdRequestSchema, result: providerMutationResultSchema },
   'providers.disable': { params: providerConnectionIdRequestSchema, result: providerMutationResultSchema },
   'providers.enable': { params: providerConnectionIdRequestSchema, result: providerMutationResultSchema },

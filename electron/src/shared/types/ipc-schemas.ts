@@ -25,7 +25,16 @@ import {
   toolExecutionResultSchema,
 } from './tool-result';
 import type { ChatErrorKind } from './ipc';
-import { modelSelectionSchema } from './provider';
+import {
+  customConnectionModelSchema,
+  environmentVariableSchema,
+  modelSelectionSchema,
+  providerAuthMethodSchema,
+  providerEndpointSchema,
+  providerProtocolSchema,
+  reasoningModelConfigSchema,
+} from './provider';
+import { pricingRateFieldsSchema } from './provider-facets';
 import { PERMISSION_MODE_VALUES } from './permission';
 import { AgentTier, AgentType } from './agent';
 
@@ -1125,7 +1134,8 @@ export const definitionRevealSchema = z.object({
   path: z.string().min(1),
 });
 
-// ── Provider requests (host-routed reads; vault writes stay local) ───────────
+// ── Provider requests (host-routed reads; credential-carrying writes are
+// capability-gated on the host) ─────────────────────────────────────────────
 
 /** `{ connectionId }` for the connection-scoped provider methods. */
 export const providerConnectionIdRequestSchema = z.object({
@@ -1151,4 +1161,76 @@ export const providerModelListRequestSchema = z.object({
 export const providerStatusRefreshRequestSchema = z.object({
   providerId: z.string().trim().min(1),
   connectionId: z.string().uuid().optional(),
+}).strict();
+
+/**
+ * Shared environment-auth refinement: env references only pair with
+ * `environment` (used by the provider create/update/draft-discovery request
+ * schemas so the pairing rule exists exactly once).
+ */
+export function refineEnvironmentAuth(
+  value: { authMethod?: string; environmentVariable?: string },
+  ctx: z.RefinementCtx,
+): void {
+  if (value.authMethod === 'environment' && !value.environmentVariable) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['environmentVariable'],
+      message: 'Environment authentication requires an environment variable name',
+    });
+  }
+  if (value.authMethod !== undefined
+    && value.authMethod !== 'environment'
+    && value.environmentVariable !== undefined) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['environmentVariable'],
+      message: 'An environment variable is valid only for environment authentication',
+    });
+  }
+}
+
+/**
+ * providers:create — intent-only creation payload; no credential material
+ * crosses the boundary (an API key follows separately via submit_api_key).
+ */
+export const providerCreateConnectionRequestSchema = z.object({
+  providerId: z.string().trim().min(1),
+  name: z.string().trim().min(1).max(120),
+  protocol: providerProtocolSchema,
+  authMethod: providerAuthMethodSchema,
+  modelIds: z.array(z.string().trim().min(1)).max(500).default([]),
+  customModels: z.array(customConnectionModelSchema).max(500).optional(),
+  reasoningConfig: z.record(z.string(), reasoningModelConfigSchema).optional(),
+  pricingOverrides: z.record(z.string(), pricingRateFieldsSchema).optional(),
+  tierSelections: z.record(z.string().trim().min(1), z.string().trim().min(1).max(128)).optional(),
+  cacheTtl: z.string().trim().min(1).max(24).nullable().optional(),
+  endpoint: providerEndpointSchema.nullable().optional(),
+  allowInsecureHttp: z.boolean().optional(),
+  environmentVariable: environmentVariableSchema.optional(),
+}).strict().superRefine((value, ctx) => refineEnvironmentAuth(value, ctx));
+
+/** providers:update — safe connection fields that may be edited after creation. */
+export const providerUpdateConnectionRequestSchema = z.object({
+  connectionId: z.string().uuid(),
+  name: z.string().trim().min(1).max(120).optional(),
+  authMethod: providerAuthMethodSchema.optional(),
+  modelIds: z.array(z.string().trim().min(1)).max(500).optional(),
+  customModels: z.array(customConnectionModelSchema).max(500).optional(),
+  reasoningConfig: z.record(z.string(), reasoningModelConfigSchema).optional(),
+  pricingOverrides: z.record(z.string(), pricingRateFieldsSchema).optional(),
+  tierSelections: z.record(z.string().trim().min(1), z.string().trim().min(1).max(128)).optional(),
+  cacheTtl: z.string().trim().min(1).max(24).nullable().optional(),
+  endpoint: providerEndpointSchema.nullable().optional(),
+  allowInsecureHttp: z.boolean().optional(),
+  environmentVariable: environmentVariableSchema.optional(),
+}).strict().superRefine((value, ctx) => refineEnvironmentAuth(value, ctx))
+  .refine((value) => Object.keys(value).some((key) => key !== 'connectionId'), {
+    message: 'Provide at least one connection field to update',
+  });
+
+/** providers:submit_api_key — one-shot, write-only API key submission. */
+export const providerSubmitApiKeyRequestSchema = z.object({
+  connectionId: z.string().uuid(),
+  apiKey: z.string().trim().min(1).max(32_768),
 }).strict();
