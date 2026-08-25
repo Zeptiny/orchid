@@ -22,6 +22,7 @@ import type {
   MachineConnectResult,
   MachineDisconnectResult,
   MachineErrorView,
+  MachineHostKeyFingerprint,
   MachineRecord,
   MachineResyncResult,
   MachineScanHostKeyResult,
@@ -46,7 +47,7 @@ import {
   getMachineHostKeyFlow,
   MachineHostKeyFlowError,
 } from '../machines/host-key-flow';
-import { HostKeyScanError } from '../machines/host-key';
+import { HostKeyScanError, type HostKeyFingerprint } from '../machines/host-key';
 import {
   attachRemoteMachineClient,
   detachAllRemoteMachineClients,
@@ -67,6 +68,17 @@ import {
   machinesMachineIdSchema,
   machinesUpdateSchema,
 } from './payload-schemas';
+
+/**
+ * Renderer-safe fingerprint projection: the raw key line (`rawLine`) stays in
+ * main — `machineHostKeyFingerprintSchema` is strict, so leaking it fails the
+ * preload's response validation.
+ */
+function rendererFingerprints(
+  fingerprints: readonly HostKeyFingerprint[],
+): MachineHostKeyFingerprint[] {
+  return fingerprints.map(({ algorithm, fingerprintSha256 }) => ({ algorithm, fingerprintSha256 }));
+}
 
 function broadcastToAllWindows(channel: string, payload: unknown): void {
   for (const win of BrowserWindow.getAllWindows()) {
@@ -382,7 +394,7 @@ export function registerMachinesIPC(): void {
             kind: 'host-key-not-pinned',
             message: `No pinned host keys for '${remote.machine.label}' (${remote.machine.host}).`,
             hint: 'Review the scanned fingerprints and confirm them to pin before connecting.',
-            fingerprints,
+            fingerprints: rendererFingerprints(fingerprints),
           },
         } satisfies MachineConnectResult;
       } catch (error) {
@@ -491,7 +503,10 @@ export function registerMachinesIPC(): void {
           },
         } satisfies MachineScanHostKeyResult;
       }
-      return { status: 'scanned', fingerprints } satisfies MachineScanHostKeyResult;
+      return {
+        status: 'scanned',
+        fingerprints: rendererFingerprints(fingerprints),
+      } satisfies MachineScanHostKeyResult;
     } catch (error) {
       return { status: 'error', error: actionError(error) } satisfies MachineScanHostKeyResult;
     }
@@ -518,7 +533,7 @@ export function registerMachinesIPC(): void {
     try {
       return {
         status: 'pinned',
-        fingerprints: hostKeyFlow.confirm(remote.machine.id),
+        fingerprints: rendererFingerprints(hostKeyFlow.confirm(remote.machine.id)),
       } satisfies MachineConfirmHostKeyResult;
     } catch (error) {
       return { status: 'error', error: actionError(error) } satisfies MachineConfirmHostKeyResult;

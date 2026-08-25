@@ -282,6 +282,11 @@ import {
   MachineConnectionError,
 } from '../../src/main/machines/connection-manager';
 import { scanHostKeys, HostKeyScanError } from '../../src/main/machines/host-key';
+import {
+  machineConnectResultSchema,
+  machineConfirmHostKeyResultSchema,
+  machineScanHostKeyResultSchema,
+} from '../../src/shared/types/ipc-schemas';
 import { _resetMachineHostKeyFlowForTests } from '../../src/main/machines/host-key-flow';
 import {
   activeMachineFor,
@@ -550,6 +555,9 @@ describe('machines:connect', () => {
       expect.objectContaining({ algorithm: 'ssh-rsa' }),
     ]);
     expect(result.error.fingerprints?.[0]?.fingerprintSha256).toMatch(/^SHA256:/);
+    // The renderer-safe shape only: raw key material must never cross IPC
+    // (machineConnectResultSchema is strict, like the preload's validation).
+    expect(machineConnectResultSchema.safeParse(result).success).toBe(true);
     expect(registeredMachines()).not.toContain('build-1');
     // Nothing connected while unpinned.
     expect(manager().connectCalls).toEqual([]);
@@ -626,12 +634,18 @@ describe('machines:scan_host_key / confirm_host_key', () => {
       'ssh-ed25519',
       'ssh-rsa',
     ]);
+    // Renderer-safe projection: strict schema + no rawLine key.
+    expect(machineScanHostKeyResultSchema.safeParse(scanned).success).toBe(true);
+    for (const fingerprint of scanned.fingerprints) {
+      expect(fingerprint).not.toHaveProperty('rawLine');
+    }
 
     const confirmed = (await handler(IPC_CHANNELS.MACHINES_CONFIRM_HOST_KEY)(null, {
       machineId: 'build-1',
     })) as { status: string; fingerprints: Array<{ algorithm: string }> };
     expect(confirmed.status).toBe('pinned');
     expect(confirmed.fingerprints).toEqual(scanned.fingerprints);
+    expect(machineConfirmHostKeyResultSchema.safeParse(confirmed).success).toBe(true);
 
     // The pin exists on disk under the app-managed known-hosts dir.
     const knownHosts = fs.readFileSync(
