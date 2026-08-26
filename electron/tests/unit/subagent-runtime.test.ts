@@ -939,9 +939,10 @@ describe('SubagentManager admission control (U7)', () => {
     expect(manager.getRunPromise(third.id)).toBeNull();
     expect(third.queuedAt).not.toBeNull();
     expect(third.startedAt).toBeNull();
-    // Queued records stay out of durable tracking until admission.
+    // Queued records own a durable row from spawn (issue #121): a close while
+    // parked in admission must still leave a record to hydrate after restart.
     expect(manager.checkpointCandidates('sess-admit').map((candidate) => candidate.record.id))
-      .not.toContain(third.id);
+      .toContain(third.id);
     expect(manager.getQueuePosition(third.id)).toBe(1);
     expect(gates).toHaveLength(2);
 
@@ -1399,7 +1400,7 @@ describe('SubagentManager terminal eviction and session purge (U9)', () => {
     expect(manager.getRecord(record.id)).toBeUndefined();
   });
 
-  it('cancelling a queued record evicts it to a retention-capped summary (review #15)', () => {
+  it('cancelling a queued record persists it as INTERRUPTED and evicts on row confirmation (#121)', () => {
     setConfig({ terminal_retention: 2, max_active_per_session: 1 });
     const sid = 'sess-queued-evict';
     // One admitted record holds the only run slot; later spawns park in queue.
@@ -1412,14 +1413,18 @@ describe('SubagentManager terminal eviction and session purge (U9)', () => {
       expect(record.state).toBe(SubagentState.QUEUED);
       expect(manager.cancelOne(record.id)).toBe(true);
       queuedIds.push(record.id);
-      // Cancelled while queued → evicted to a lean summary, not a full record.
-      expect(manager.isSummary(record.id)).toBe(true);
+      // Cancelled while queued → stays a full dirty INTERRUPTED record so the
+      // terminal wave can persist the row (no undurable eviction anymore).
+      expect(manager.isSummary(record.id)).toBe(false);
       expect(record.state).toBe(SubagentState.INTERRUPTED);
-      expect(record.chain?.messages).toEqual([]);
     }
 
-    // The retention FIFO caps them: oldest removed entirely, newest two kept.
+    // Confirming the written rows evicts them to lean summaries; the retention
+    // FIFO caps them: oldest removed entirely, newest two kept.
+    manager.confirmRecordsPersisted(sid, queuedIds);
     expect(manager.getRecord(queuedIds[0])).toBeUndefined();
+    expect(manager.isSummary(queuedIds[1])).toBe(true);
+    expect(manager.isSummary(queuedIds[2])).toBe(true);
     expect(manager.allRecords().filter((r) => r.sessionId === sid)
       .map((r) => r.id)).toEqual([active.id, queuedIds[1], queuedIds[2]]);
 
@@ -1977,7 +1982,7 @@ describe('SubagentManager follow-up resume (U4)', () => {
     expect(manager.getQueuePosition(target.id)).toBeNull();
   });
 
-  it('persistence eligibility: a resume-queued record keeps its durable row; a spawn-queued record is still skipped', async () => {
+  it('persistence eligibility: spawn-queued and resume-queued records both own a durable row (#121)', async () => {
     setLimits({ max_active_per_session: 1 });
     const gates: Array<() => void> = [];
     manager.setRunner(gateRunner(gates));
@@ -1995,7 +2000,7 @@ describe('SubagentManager follow-up resume (U4)', () => {
     const spawnQueued = manager.spawn('spawn-queued', 'x', testAgent, { sessionId: 'sess-elig' });
     expect(spawnQueued.state).toBe(SubagentState.QUEUED);
     expect(manager.checkpointCandidates('sess-elig').map((candidate) => candidate.record.id))
-      .not.toContain(spawnQueued.id);
+      .toContain(spawnQueued.id);
 
     manager.followUp(target.id, 'again');
     expect(target.state).toBe(SubagentState.QUEUED);

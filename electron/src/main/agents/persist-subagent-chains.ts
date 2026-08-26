@@ -34,6 +34,17 @@ export interface SubagentPersistenceSchedulerOptions {
   maxRetries?: number;
 }
 
+interface SubagentPersistenceFlushOptions {
+  /**
+   * Orderly-shutdown flush. Bypasses the degraded breaker — this is the last
+   * chance to persist terminal records, and a failure here is final (the
+   * process is exiting), so the retry-storm protection the breaker provides
+   * does not apply (issue #121 path b). Forced failures are logged but never
+   * counted against the budget and never rescheduled.
+   */
+  force?: boolean;
+}
+
 const CHECKPOINT_DELAY_MS = 2000;
 const RETRY_BASE_DELAY_MS = 100;
 const RETRY_MAX_DELAY_MS = 2000;
@@ -68,11 +79,14 @@ export function createSubagentPersistenceScheduler(
     }
   };
 
-  const flush = (sessionId: string): void => {
+  const flush = (sessionId: string, options: SubagentPersistenceFlushOptions = {}): void => {
+    const force = options.force === true;
     clearScheduled(sessionId);
     // A persistent failure is kept dirty for a later recovery trigger, but it
     // must not keep scheduling work by itself once its retry budget is spent.
-    if (degraded.has(sessionId)) return;
+    // A forced (shutdown) flush ignores the breaker: dropping it would strand
+    // terminal statuses held only in memory (#121).
+    if (degraded.has(sessionId) && !force) return;
     if (writing.has(sessionId)) {
       dirty.add(sessionId);
       return;
@@ -83,23 +97,31 @@ export function createSubagentPersistenceScheduler(
     try {
       write(sessionId, { recovery });
       failures.delete(sessionId);
+      if (force) degraded.delete(sessionId);
       recoveryPending.delete(sessionId);
     } catch (error) {
       dirty.add(sessionId);
-      const attempt = (failures.get(sessionId) ?? 0) + 1;
-      failures.set(sessionId, attempt);
-      if (attempt > maxRetries) {
-        degraded.add(sessionId);
+      if (force) {
         console.warn(
-          `Subagent persistence degraded for session ${sessionId}; automatic retries paused:`,
+          `Subagent persistence shutdown flush failed for session ${sessionId}:`,
           error,
         );
       } else {
-        console.debug('Subagent persistence retry scheduled:', error);
+        const attempt = (failures.get(sessionId) ?? 0) + 1;
+        failures.set(sessionId, attempt);
+        if (attempt > maxRetries) {
+          degraded.add(sessionId);
+          console.warn(
+            `Subagent persistence degraded for session ${sessionId}; automatic retries paused:`,
+            error,
+          );
+        } else {
+          console.debug('Subagent persistence retry scheduled:', error);
+        }
       }
     } finally {
       writing.delete(sessionId);
-      if (dirty.has(sessionId) && !degraded.has(sessionId)) {
+      if (dirty.has(sessionId) && !degraded.has(sessionId) && !force) {
         const attempt = failures.get(sessionId) ?? 0;
         const delay = attempt > 0
           ? Math.min(RETRY_MAX_DELAY_MS, RETRY_BASE_DELAY_MS * 2 ** (attempt - 1))
@@ -176,8 +198,10 @@ export function createSubagentPersistenceScheduler(
       }
     },
     flushAll(): void {
-      for (const sessionId of new Set([...dirty, ...scheduled.keys(), ...waves.keys()])) {
-        flush(sessionId);
+      for (const sessionId of new Set([
+        ...degraded, ...dirty, ...scheduled.keys(), ...waves.keys(),
+      ])) {
+        flush(sessionId, { force: true });
       }
     },
     /** Remove all state for a deleted session so no late timer can recreate it. */

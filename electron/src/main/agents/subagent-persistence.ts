@@ -53,8 +53,6 @@ interface PersistenceState {
   timeline: SubagentPersistenceTimeline;
   dirtyRevision: number;
   confirmedRevision: number;
-  /** A spawn parked in admission has no durable row; resumed queues do. */
-  durableEligible: boolean;
   summary: boolean;
   /** Last revision at which compaction was applied (separate from summary eviction). */
   lastCompactionRevision: number | null;
@@ -79,13 +77,18 @@ export class SubagentPersistence {
     this.compactionSink = compactionSink;
   }
 
-  register(id: string, sessionId: string | null, options: { admitted: boolean }): void {
+  /**
+   * Every record starts durable: a spawn parked in the admission queue must
+   * still own a durable row, or an app close while queued leaves no record to
+   * hydrate after restart (issue #121 path a) while the frozen transcript
+   * still claims status "queued".
+   */
+  register(id: string, sessionId: string | null): void {
     this.records.set(id, {
       sessionId,
       timeline: this.nextTimeline(),
       dirtyRevision: 0,
       confirmedRevision: -1,
-      durableEligible: options.admitted,
       summary: false,
       lastCompactionRevision: null,
     });
@@ -163,15 +166,9 @@ export class SubagentPersistence {
     return state.lastCompactionRevision > state.confirmedRevision;
   }
 
-  /** Admission makes a fresh spawn durable and ends resume-queue state. */
-  markAdmitted(id: string): void {
-    this.require(id).durableEligible = true;
-  }
-
   /** A follow-up always owns an already durable record, even while queued. */
   beginFollowUp(id: string): void {
     const state = this.require(id);
-    state.durableEligible = true;
     state.summary = false;
     // The follow-up keeps the prior compaction revision: the resumed chain already carries compacted flags, so checkpoint must not treat compaction as new work.
     this.untrackSummary(state.sessionId, id);
@@ -187,7 +184,6 @@ export class SubagentPersistence {
       timeline: this.nextTimeline(),
       dirtyRevision: 0,
       confirmedRevision: -1,
-      durableEligible: true,
       summary: false,
       lastCompactionRevision: null,
     });
@@ -199,11 +195,6 @@ export class SubagentPersistence {
 
   needsHydration(id: string): boolean {
     return !this.records.has(id) || this.isSummary(id);
-  }
-
-  /** Whether the record owns a durable row (including a queued follow-up). */
-  hasDurableEligibility(id: string): boolean {
-    return this.records.get(id)?.durableEligible === true;
   }
 
   /**
@@ -218,7 +209,7 @@ export class SubagentPersistence {
     recovery = false,
   ): SubagentPersistenceCandidate | null {
     const state = this.records.get(id);
-    if (!state || state.summary || !state.durableEligible) return null;
+    if (!state || state.summary) return null;
     if (state.sessionId && state.sessionId !== sessionId) return null;
     if (!recovery && state.dirtyRevision <= state.confirmedRevision) return null;
     return {
@@ -254,21 +245,6 @@ export class SubagentPersistence {
     state.summary = true;
     const removeIds = this.trackSummary(candidate.sessionId, candidate.id);
     return { evict: true, removeIds };
-  }
-
-  /**
-   * Spawn-queued cancellation has no durable row, but retains the historic
-   * bounded summary behavior. Unlike `confirmCheckpoint`, this is intentionally
-   * not persist-first because a fresh queued record is never serializable.
-   */
-  summarizeUndurable(id: string): SubagentPersistenceConfirmation {
-    const state = this.records.get(id);
-    if (!state || state.summary) return { evict: false, removeIds: [] };
-    state.summary = true;
-    return {
-      evict: true,
-      removeIds: this.trackSummary(state.sessionId ?? '', id),
-    };
   }
 
   clearSession(sessionId: string): void {
