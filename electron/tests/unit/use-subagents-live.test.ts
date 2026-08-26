@@ -204,6 +204,75 @@ describe('subagent delta application', () => {
     expect(next.live.get('one')?.segments).toEqual([{ kind: 'text', id: 'seg-text', content: 'admitted', startedAt: SEG_OPENED_AT, endedAt: null }]);
   });
 
+  it('self-heals a dropped status_changed: the first content delta promotes the record row out of queued', () => {
+    // Spawn seeded queued; the status_changed(pending→running) delta was lost
+    // to an ineligible flush. The live draft promotes on the first content
+    // delta, and the record row must follow so list placement converges.
+    let state = seeded(sessionA, 0);
+    state = applyDeltaBatch(state, batch([spawned('one', 'run-1', record('one', 'queued'))]));
+    expect(state.records[0].status).toBe('queued');
+
+    state = applyDeltaBatch(state, batch([textDelta(1, 'working')]));
+    expect(state.live.get('one')?.state).toBe('running');
+    expect(state.records[0].status).toBe('running');
+    const groups = groupSubagents(state.records);
+    expect(groups.queued).toHaveLength(0);
+    expect(groups.running.map((item) => item.id)).toEqual(['one']);
+
+    // Snapshot-seeded variant: queued row + queued projection, no spawned.
+    let snapState = seeded(
+      sessionA,
+      1,
+      [record('one', 'queued')],
+      [projection({ subagentId: 'one', state: 'queued' })],
+    );
+    snapState = applyDeltaBatch(snapState, batch([textDelta(1, 'admitted')]));
+    expect(snapState.records[0].status).toBe('running');
+    expect(groupSubagents(snapState.records).queued).toHaveLength(0);
+  });
+
+  it('applies a status_changed for an unknown run when the record row already exists', () => {
+    // Snapshot seeded the row but not its live projection (and the spawned
+    // delta was dropped), so the renderer never learned the runId.
+    const state = seeded(sessionA, 1, [record('one', 'queued')]);
+    const event = {
+      ...deltaBase(), sequence: 2, type: 'status_changed', status: 'running',
+    } as SubagentDeltaEvent;
+
+    const next = applyDeltaBatch(state, batch([event]));
+    expect(next.records[0].status).toBe('running');
+    expect(groupSubagents(next.records).running.map((item) => item.id)).toEqual(['one']);
+    // The status transition must not open the run's live stream.
+    expect(next.runs.has('one')).toBe(false);
+    expect(next.live.has('one')).toBe(false);
+
+    // Without a known row there is nothing to converge: still dropped.
+    const empty = seeded(sessionA, 0);
+    expect(applyDeltaBatch(empty, batch([event]))).toBe(empty);
+  });
+
+  it('applies a terminal for an unknown run so a dropped-seed record still settles', () => {
+    // The spawned seed was never delivered (ineligible flush); every content
+    // delta is dropped as today, but the authoritative terminal must still
+    // replace the row instead of leaving it running forever.
+    let state = seeded(sessionA, 1, [record('one', 'running')]);
+    state = applyDeltaBatch(state, batch([textDelta(5, 'dropped-content')]));
+    expect(state.records[0].status).toBe('running');
+
+    const done = { ...record('one', 'completed'), end_time: '2026-01-01T00:00:09.000Z' };
+    state = applyDeltaBatch(state, batch([terminal('one', 'run-1', done, 6)]));
+    expect(state.records[0]).toBe(done);
+    expect(state.records[0].status).toBe('completed');
+    expect(state.live.has('one')).toBe(false);
+    expect(groupSubagents(state.records).ended.map((item) => item.id)).toEqual(['one']);
+
+    // A terminal for a fully unknown record still lands the row (append).
+    const fresh = seeded(sessionA, 0);
+    const appended = applyDeltaBatch(fresh, batch([terminal('two', 'run-2', record('two', 'failed'), 1)]));
+    expect(appended.records.map((item) => item.id)).toEqual(['two']);
+    expect(appended.records[0].status).toBe('failed');
+  });
+
   it('ignores record-carrying deltas whose record id does not match the subagent', () => {
     const empty = seeded(sessionA, 0);
     const mismatchedSpawn = { ...spawned('one', 'run-1', record('other', 'pending')), subagentId: 'one' };
@@ -806,6 +875,34 @@ describe('run rotation for resumed subagents', () => {
     expect(state.live.has('one')).toBe(false);
     expect(state.records).toHaveLength(1);
     expect(state.records[0]).toBe(doneB);
+  });
+
+  it('keeps the rotation-spawned live stream when a terminal and its resume share one envelope', () => {
+    let state = seeded(sessionA, 0);
+    state = applyDeltaBatch(state, batch([
+      spawned('one', 'run-A', record('one', 'pending'), 0, 1),
+    ]));
+
+    // The carried terminal of run A and the rotation spawn of run B land in
+    // one envelope (eligibility returned between them): the resume's fresh
+    // draft must survive the terminal's live-entry removal.
+    const doneA = { ...record('one', 'completed'), end_time: '2026-01-01T00:00:05.000Z' };
+    const resumed = { ...record('one', 'running'), start_time: '2026-01-01T00:01:00.000Z' };
+    state = applyDeltaBatch(state, batch([
+      terminal('one', 'run-A', doneA, 1, null, 2),
+      spawned('one', 'run-B', resumed, 0, 3),
+    ]));
+    expect(state.records[0]).toBe(resumed);
+    expect(state.live.get('one')?.runId).toBe('run-B');
+    expect(state.live.get('one')?.state).toBe('running');
+
+    // Subsequent run-B content still lands (the draft was not discarded).
+    state = applyDeltaBatch(state, batch([
+      textDelta(1, 'run B work', { runId: 'run-B', sessionRevision: 4 }),
+    ]));
+    expect(state.live.get('one')?.segments).toEqual([
+      { kind: 'text', id: 'seg-text', content: 'run B work', startedAt: SEG_OPENED_AT, endedAt: null },
+    ]);
   });
 
   it('drops late deltas from the old run after rotation', () => {
