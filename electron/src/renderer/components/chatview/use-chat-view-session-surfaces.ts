@@ -156,7 +156,13 @@ export function useChatViewSessionSurfaces({
     const gen = ++sessionSwitchGen.current;
     chat.beginSessionSwitch(null);
     messageQueue.clearQueue();
-    await session.enterDraft();
+    try {
+      await session.enterDraft();
+    } catch (err) {
+      // The switch already began — still land on the draft surface so the
+      // pane cannot hang mid-switch when clearing the active session fails.
+      console.error('Failed to enter draft mode:', err);
+    }
     if (gen !== sessionSwitchGen.current) return;
     applySessionMessages(null);
     setDraftTabVisible(true);

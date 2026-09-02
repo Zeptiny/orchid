@@ -21,6 +21,10 @@ export function useSeenMessages({ sessionId, markSeen }: UseSeenMessagesOptions)
     };
     reportSeen();
     window.addEventListener('focus', reportSeen);
-    return () => window.removeEventListener('focus', reportSeen);
+    document.addEventListener('visibilitychange', reportSeen);
+    return () => {
+      window.removeEventListener('focus', reportSeen);
+      document.removeEventListener('visibilitychange', reportSeen);
+    };
   }, [sessionId, markSeen]);
 }

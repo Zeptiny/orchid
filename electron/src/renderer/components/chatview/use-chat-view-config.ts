@@ -40,12 +40,19 @@ export function useChatViewConfig({
   const [defaultSelection, setDefaultSelection] = useState<ModelSelection | null>(null);
   const [alwaysExpandToolGroups, setAlwaysExpandToolGroups] = useState(false);
 
-  useEffect(() => {
+  const loadPersonalityNames = useCallback(async (isCancelled: () => boolean) => {
     if (!window.orchid?.config?.listPersonalities) return;
-    window.orchid.config.listPersonalities()
-      .then(setPersonalityNames)
-      .catch(() => { /* Non-fatal */ });
+    try {
+      const names = await window.orchid.config.listPersonalities();
+      if (!isCancelled()) setPersonalityNames(names);
+    } catch { /* Non-fatal */ }
   }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    void loadPersonalityNames(() => cancelled);
+    return () => { cancelled = true; };
+  }, [loadPersonalityNames]);
 
   useEffect(() => {
     return onOrchidEvent('orchid:config-updated', (detail) => {
@@ -62,13 +69,9 @@ export function useChatViewConfig({
   useEffect(() => {
     if (!paletteOpen) return;
     let cancelled = false;
-    if (window.orchid?.config?.listPersonalities) {
-      window.orchid.config.listPersonalities().then((names) => {
-        if (!cancelled) setPersonalityNames(names);
-      }).catch(() => { /* non-fatal */ });
-    }
+    void loadPersonalityNames(() => cancelled);
     return () => { cancelled = true; };
-  }, [paletteOpen]);
+  }, [paletteOpen, loadPersonalityNames]);
 
   const applyTheme = useCallback(async (name: string) => {
     setCurrentTheme(name);

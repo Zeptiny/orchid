@@ -33,15 +33,17 @@ export function useSlashResults(options: SlashResultsOptions): PaletteResult[] {
     sessions,
   } = options;
 
-  const availableModels = commandContext?.getAvailableModels() ?? [];
+  // getAvailableModels() returns a fresh array each render; key the memo on a
+  // stable derived value so label resolution is not recomputed per render.
+  const modelKey = (commandContext?.getAvailableModels() ?? []).join('\u0000');
   const modelNotifyLabels = useMemo(
     () => Object.fromEntries(
-      availableModels.map((key) => [
+      (modelKey === '' ? [] : modelKey.split('\u0000')).map((key) => [
         key,
         resolveModelNotifyLabel(key, modelDetails, modelLabels),
       ]),
     ),
-    [availableModels, modelDetails, modelLabels],
+    [modelKey, modelDetails, modelLabels],
   );
 
   return useMemo<PaletteResult[]>(() => {
