@@ -67,14 +67,13 @@ async function run(): Promise<void> {
       config: data.config,
     });
   } else {
-    result = await runIndexProjectImpl(
+    result = await runIndexProjectImpl({
       projectPath,
-      data.paths,
-      data.force === true,
-      undefined,
-      report,
-      data.config,
-    );
+      paths: data.paths,
+      force: data.force === true,
+      progressCallback: report,
+      config: data.config,
+    });
   }
 
   post({

@@ -274,7 +274,11 @@ electron/
 │   │   ├── rag/                 # Retrieval-Augmented Generation
 │   │   │   ├── chunker.ts       # Text chunking with overlap
 │   │   │   ├── embedder.ts      # ONNX-based local embedding (fastembed) or API embedder
-│   │   │   ├── indexer.ts       # File indexing pipeline (full scans + incremental upsert/delete worker ops)
+│   │   │   ├── indexer.ts       # Index facade — public entry points, single-flight runs, progress, cancel, status
+│   │   │   ├── discovery.ts     # File discovery — extension filter, workspace walk, scope math, read + hash
+│   │   │   ├── index-pipeline.ts # Index-run stages (discover → chunk → embed → store → prune), any thread
+│   │   │   ├── index-progress.ts # Progress callback contract, zeroed snapshots, run-clock emitter
+│   │   │   ├── index-worker-runner.ts # Parent-side worker dispatch — spawn, progress mirror, idle watchdog, settle-once
 │   │   │   ├── index-worker.ts  # Worker-thread indexing (index/upsert/delete ops)
 │   │   │   └── store.ts         # SQLite-backed vector store
 │   │   ├── ast/                 # Abstract Syntax Tree indexing

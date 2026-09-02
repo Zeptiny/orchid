@@ -40,16 +40,21 @@ describe('lazy renderer boundaries', () => {
   it('loads each settings tab behind the persistent ConfigView draft owner', () => {
     const configView = source('components/ConfigView.tsx');
     const tabModules = [
+      'AgentsMdTab',
       'AgentsTab',
+      'CompactionTab',
       'GeneralTab',
+      'MachinesTab',
       'MCPServersTab',
       'PermissionsTab',
       'PersonalitiesTab',
       'ProvidersTab',
       'RAGTab',
+      'SharedPromptsTab',
       'SkillsTab',
       'SubagentsTab',
       'TierModelsTab',
+      'TrustedProjectsTab',
     ];
 
     for (const tabModule of tabModules) {
@@ -65,5 +70,26 @@ describe('lazy renderer boundaries', () => {
     expect(configView).toContain('renderTab(');
     expect(configView).toContain('TAB_COMPONENTS[tab].preload()');
     expect(configView).toContain('await Promise.allSettled([');
+
+    // ConfigView's split modules take already-lazy tab components as props. A
+    // static `import { SomeTab } from './Preferences/...'` in any of them would
+    // pull every settings tab back into the main renderer bundle, so every
+    // Preferences specifier must stay behind the lazy()/preload mechanism.
+    const configViewModules = [
+      'components/ConfigTabPanes.tsx',
+      'components/ConfigMainPane.tsx',
+      'components/ConfigSidebar.tsx',
+      'hooks/useConfigDraft.ts',
+    ];
+
+    for (const modulePath of configViewModules) {
+      const splitModule = source(modulePath);
+      const withoutLazyImports = splitModule.replace(
+        /lazy(?:WithPreload)?\(\s*\(\)\s*=>\s*import\(\s*['"][^'"]+['"]\s*\)/g,
+        '',
+      );
+
+      expect(withoutLazyImports).not.toMatch(/['"]\.\.?\/Preferences\//);
+    }
   });
 });
