@@ -287,7 +287,10 @@ export async function startChatTurn(
       }
       messages = updated;
     }
-    const syncResult = await tryCompactSynchronously(sessionId, messages, runtime, turnSelection, contextTokens, accountingStore!, chainId, turnId);
+    const syncResult = await tryCompactSynchronously({
+      sessionId, messages, runtime, selection: turnSelection, contextTokens,
+      accountingStore: accountingStore!, chainId, turnId,
+    });
     if (syncResult.didApply && syncResult.updatedMessages) {
       messages = syncResult.updatedMessages;
     }
@@ -789,7 +792,10 @@ export async function startChatTurn(
               if (retryTrigger.state.tokensPerChar == null) {
                 retryTrigger.state.lastObservedInputTokens = contextTokens;
               }
-              const retryResult = await tryCompactSynchronously(sessionId, historyForRetry, runtime, turnSelection, contextTokens, accountingStore!, chainId, turnId);
+              const retryResult = await tryCompactSynchronously({
+                sessionId, messages: historyForRetry, runtime, selection: turnSelection, contextTokens,
+                accountingStore: accountingStore!, chainId, turnId,
+              });
               if (retryResult.didApply && retryResult.updatedMessages) {
                 // The compacted retry base anchors the durable turn slice at
                 // the user message so a later finalize REPLACES the active
