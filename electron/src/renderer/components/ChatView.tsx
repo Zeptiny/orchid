@@ -21,52 +21,46 @@ import { useSubagents } from '../hooks/useSubagents';
 import { useTodos } from '../hooks/useTodos';
 import type { UseSessionActivityReturn } from '../hooks/useSessionActivity';
 import { useSessionTabs } from '../hooks/useSessionTabs';
-import { useSessionDeletionReconciliation } from '../hooks/useSessionDeletionReconciliation';
+import { useMachines } from '../hooks/useMachines';
 import { useProviders } from '../hooks/useProviders';
 import { useMessageQueue } from '../hooks/useMessageQueue';
-import { useQueueAutoFire } from '../hooks/useQueueAutoFire';
 import { useResponsiveShell } from '../hooks/use-responsive-shell';
 import { useTrustPrompt } from '../hooks/useTrustPrompt';
 import { useTrustSendReplay, type UseTrustSendReplayReturn } from '../hooks/useTrustSendReplay';
-import {
-  providerModelOptionDisplayName,
-  providerModelOptionKey,
-  providerModelOptionLabel,
-  selectionMatchesOption,
-} from '../utils/provider-selection';
-import { isTextGenerationModel } from '../utils/models';
-import { emitOrchidEvent, onOrchidEvent } from '../utils/events';
+import { providerModelOptionKey, providerModelOptionLabel } from '../utils/provider-selection';
+import { onOrchidEvent } from '../utils/events';
 import { resolveOrchidNavigate } from '../utils/navigate-shell';
-import { shouldRefreshSubagentsAfterTurn } from '../utils/subagent-refresh';
-import { useFocusTrap, useGlobalShortcuts } from '../keyboard';
-import type { ModelSelection } from '../../shared/types/provider';
 import { sumChainUsage } from '../../shared/types/chain';
-import { flattenSessionMessages, type Session } from '../../shared/types/session';
 import { sumUsages } from '../../shared/usage';
-import type {
-  ASTStoreStatus,
-  CommandContext,
-  Config,
-  MCPServerStatus,
-  RAGStoreStatus,
-} from '../../shared/types/ipc-boundary';
-import type { ProviderModelOption, SessionOpenResult } from '../../shared/types/ipc';
+import type { ModelSelection } from '../../shared/types/provider';
+import type { Config, SessionSummary } from '../../shared/types/ipc-boundary';
 import type { Notify } from '../utils/notify';
 import { ChatStream } from './ChatStream';
 import { DeferredSurface } from './deferred-surface';
-import { InputArea } from './InputArea';
-import { MessageQueue } from './MessageQueue';
-import { Footer } from './Footer';
-import { Sidebar } from './Sidebar';
 import { LeftSidebar } from './LeftSidebar';
-import { CommandPalette } from './CommandPalette';
-import { ShortcutsHelp } from './ShortcutsHelp';
-import { SessionHeader } from './session-header';
-import { SessionTabBar } from './SessionTabBar';
-import { TrustProjectDialog } from './TrustProjectDialog';
-import { Button } from './ui/Button';
+import { Sidebar } from './Sidebar';
 import { StateMessage } from './ui/StateMessage';
-import type { SubagentOpenRequest } from './SubagentView';
+import { buildChatStreamProps, buildInspectorProps, buildSessionsRailProps } from './chatview/chat-view-surface-props';
+import { ChatViewComposer } from './chatview/chat-view-composer';
+import { ChatViewOverlayStack } from './chatview/chat-view-overlay-stack';
+import { ChatViewTabStrip } from './chatview/chat-view-tab-strip';
+import { MachineConnectionBanner } from './chatview/machine-connection-banner';
+import { SessionCloseConfirmDialog } from './chatview/session-close-confirm-dialog';
+import { visibleSessionSummaries } from './chatview/chat-view-selectors';
+import { useChatViewCommandContext } from './chatview/use-chat-view-command-context';
+import { useChatViewComposer } from './chatview/use-chat-view-composer';
+import { useChatViewConfig } from './chatview/use-chat-view-config';
+import { useChatViewIndexStatus } from './chatview/use-chat-view-index-status';
+import { useChatViewModels } from './chatview/use-chat-view-models';
+import { useChatViewMachineScope } from './chatview/use-chat-view-machine-scope';
+import { useChatViewSessionActions } from './chatview/use-chat-view-session-actions';
+import { useChatViewSessionSurfaces } from './chatview/use-chat-view-session-surfaces';
+import { useChatViewShortcuts } from './chatview/use-chat-view-shortcuts';
+import { useChatViewSurfaces } from './chatview/use-chat-view-surfaces';
+import { useChatViewTabRestore } from './chatview/use-chat-view-tab-restore';
+import { useMCPStartingPolling } from './chatview/use-mcp-starting-polling';
+import { useSeenMessages } from './chatview/use-seen-messages';
+import { useSubagentTurnRefresh } from './chatview/use-subagent-turn-refresh';
 
 const ProjectConfigView = lazy(() => import('./ProjectConfigView').then((module) => ({
   default: module.ProjectConfigView,
@@ -89,8 +83,6 @@ interface ChatViewProps {
 export function ChatView({ isVisible = true, bootstrapConfig = null, onNotify, activity }: ChatViewProps) {
   const session = useSession();
   const workspaceCwd = session.workspace?.cwd ?? session.activeSession?.cwd ?? null;
-  const workspaceCwdRef = useRef(workspaceCwd);
-  workspaceCwdRef.current = workspaceCwd;
   const subagents = useSubagents(session.activeSession?.id ?? null);
   /**
    * Esc keeps the third interrupt layer reachable while the session owns
@@ -107,11 +99,14 @@ export function ChatView({ isVisible = true, bootstrapConfig = null, onNotify, a
   );
   const tabs = useSessionTabs();
   const providers = useProviders();
+  const machines = useMachines();
+  // The native folder picker is a local-machine capability: a remote host's
+  // workspace binds through typed paths, never through a local dialog.
+  const canPickProjectDir = machines.isActiveMachineLocal;
   // Queue ownership follows the visible session: teardown paths (delete /
   // workspace rebind / switch) change this key and drop stale queued messages
   // instead of firing them into another session.
   const messageQueue = useMessageQueue(session.activeSession?.id ?? null);
-
   const {
     rightOpen: sidebarOpen,
     leftCollapsed: leftSidebarCollapsed,
@@ -128,99 +123,39 @@ export function ChatView({ isVisible = true, bootstrapConfig = null, onNotify, a
     session.activeSession?.id ?? null,
     sidebarOpen,
   );
-  const [paletteOpen, setPaletteOpen] = useState(false);
-  /** One-shot inspector section focus from command-palette navigation. */
-  const [inspectorFocusSection, setInspectorFocusSection] = useState<string | null>(null);
-  const [closeConfirmId, setCloseConfirmId] = useState<string | null>(null);
-  const closeConfirmRef = useRef<HTMLDivElement>(null);
-  const closeConfirmCancelRef = useRef<HTMLButtonElement>(null);
-  const [draftTabVisible, setDraftTabVisible] = useState(false);
-  const [composerDraftKey, setComposerDraftKey] = useState(0);
-  const [mcpServers, setMcpServers] = useState<MCPServerStatus[]>([]);
-  const [ragStatus, setRagStatus] = useState<RAGStoreStatus | null>(null);
-  const [astStatus, setAstStatus] = useState<ASTStoreStatus | null>(null);
-  const [currentTheme, setCurrentTheme] = useState('default');
-  const [currentPersonality, setCurrentPersonality] = useState('default');
-  const [personalityNames, setPersonalityNames] = useState<string[]>([]);
-  const [currentSelection, setCurrentSelection] = useState<ModelSelection | null>(null);
-  /** Configured default model for new chats / draft mode. */
-  const [defaultSelection, setDefaultSelection] = useState<ModelSelection | null>(null);
-  const [providerModelOptions, setProviderModelOptions] = useState<readonly ProviderModelOption[]>([]);
-  const [maxContext, setMaxContext] = useState<number | null>(null);
-  const [alwaysExpandToolGroups, setAlwaysExpandToolGroups] = useState(false);
-  const [helpOpen, setHelpOpen] = useState(false);
-  const [contentMode, setContentMode] = useState<'chat' | 'subagents'>('chat');
-  const [projectConfigDir, setProjectConfigDir] = useState<string | null>(null);
-  const [subagentOpenRequest, setSubagentOpenRequest] = useState<SubagentOpenRequest>({ generation: 0, id: null });
-  const chatContentRef = useRef<HTMLDivElement>(null);
-  const mcpRefreshGeneration = useRef(0);
-  const indexRefreshGeneration = useRef(0);
+  const surfaces = useChatViewSurfaces();
+  const {
+    paletteOpen,
+    setPaletteOpen,
+    closeConfirmId,
+    draftTabVisible,
+    setDraftTabVisible,
+    composerDraftKey,
+    contentMode,
+    setContentMode,
+    projectConfigDir,
+    setProjectConfigDir,
+    inspectorFocusSection,
+    setInspectorFocusSection,
+    subagentOpenRequest,
+    openSubagentView,
+    closeConfirmRef,
+    closeConfirmCancelRef,
+    togglePalette,
+    toggleHelp,
+    closePalette,
+    declineCloseConfirm,
+    clearInspectorFocusSection,
+    openSettings,
+    openAnalytics,
+    openProviderSettings,
+  } = surfaces;
   const notify = onNotify;
 
   // Workspace-scoped status refreshes (declared early so the trust grant
   // callback can re-run them once a project becomes trusted).
-  const refreshMCP = useCallback(async (expectedWorkspaceKey?: string | null) => {
-    const generation = ++mcpRefreshGeneration.current;
-    try {
-      if (window.orchid?.mcp?.status) {
-        const status = await window.orchid.mcp.status();
-        if (
-          generation !== mcpRefreshGeneration.current
-          || (expectedWorkspaceKey !== undefined
-            && workspaceCwdRef.current !== expectedWorkspaceKey)
-        ) return;
-        setMcpServers(status);
-      }
-    } catch {
-      // Non-fatal
-    }
-  }, []);
-
-  const refreshIndex = useCallback(async (expectedWorkspaceKey?: string | null) => {
-    const generation = ++indexRefreshGeneration.current;
-    try {
-      if (window.orchid?.rag?.status && window.orchid?.ast?.status) {
-        const [rag, ast] = await Promise.all([
-          window.orchid.rag.status(),
-          window.orchid.ast.status(),
-        ]);
-        if (
-          generation !== indexRefreshGeneration.current
-          || (expectedWorkspaceKey !== undefined
-            && workspaceCwdRef.current !== expectedWorkspaceKey)
-        ) return;
-        setRagStatus(rag);
-        setAstStatus(ast);
-      }
-    } catch {
-      // Non-fatal
-    }
-  }, []);
-
-  // Background auto-refreshes (index refresh coordinator) push a lifecycle
-  // stream so the Workspace Index panel shows live busy state and fresh store
-  // statuses without polling. `started` marks the indexes a flush is running
-  // for, `landed` carries fresh statuses, `settled` clears the busy state on
-  // every outcome (failures included). The broadcast is routed per-window to
-  // the flushed project, mirroring the index progress events.
-  const [autoRefreshing, setAutoRefreshing] = useState<{ rag: boolean; ast: boolean }>({
-    rag: false,
-    ast: false,
-  });
-  useEffect(() => {
-    const unsubscribe = window.orchid?.index?.onAutoRefresh?.((event) => {
-      if (event.phase === 'started') {
-        setAutoRefreshing({ rag: event.rag, ast: event.ast });
-      } else if (event.phase === 'landed') {
-        if (event.rag) setRagStatus(event.rag);
-        if (event.ast) setAstStatus(event.ast);
-        setAutoRefreshing({ rag: false, ast: false });
-      } else {
-        setAutoRefreshing({ rag: false, ast: false });
-      }
-    });
-    return () => unsubscribe?.();
-  }, []);
+  const index = useChatViewIndexStatus({ workspaceCwd });
+  const { refreshMCP, refreshIndex } = index;
 
   // Trusted-projects prompt: explicit interactions (bind result, send failure,
   // badge click) call openFor; granting re-resolves workspace + gated services.
@@ -267,6 +202,7 @@ export function ChatView({ isVisible = true, bootstrapConfig = null, onNotify, a
     latestPersistedUsage: sessionUsage.latest,
     onUntrustedProject: trustSend.onUntrustedProject,
   });
+  const { setMessages, beginSessionSwitch, hydrateSnapshot } = chat;
 
   // Debug request captures (inspector Requests section). Polls only while the
   // inspector is open; paces at the subagents tick while a turn is streaming.
@@ -276,6 +212,7 @@ export function ChatView({ isVisible = true, bootstrapConfig = null, onNotify, a
     chat.status === 'streaming',
   );
 
+  const chatContentRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     const element = chatContentRef.current;
     if (!element) return;
@@ -283,67 +220,24 @@ export function ChatView({ isVisible = true, bootstrapConfig = null, onNotify, a
     else element.removeAttribute('inert');
   }, [contentMode, projectConfigDir]);
 
-  const openSubagentView = useCallback((id?: string) => {
-    setSubagentOpenRequest((previous) => ({ generation: previous.generation + 1, id: id ?? null }));
-    setContentMode('subagents');
-  }, []);
+  // The composer paints the session's selection, or the configured default in
+  // draft mode; this is the one selection the shell owns outright.
+  const [currentSelection, setCurrentSelection] = useState<ModelSelection | null>(null);
+  const models = useChatViewModels({
+    providers,
+    activeSessionId: session.activeSession?.id ?? null,
+    activeSessionSelection: session.activeSession?.selection ?? null,
+    changeModel: session.changeModel,
+    currentSelection,
+    setCurrentSelection,
+    isSwitchingSession: chat.isSwitchingSession,
+  });
+  const { availableProviderModels, chatProviderModels, providerModelDetails } = models;
 
-  // Guards against out-of-order session:load responses overwriting a newer pick.
-  const sessionSwitchGen = useRef(0);
-  const didBootstrapTabs = useRef(false);
-
-  const connectionStateSignature = useMemo(
-    () => providers.overview?.connections
-      .map((connection) => `${connection.id}:${connection.health}:${connection.modelIds.join(',')}`)
-      .sort()
-      .join('|') ?? '',
-    [providers.overview?.connections],
-  );
-
-  // Shared catalog — never blank mid-switch; only update when a full list arrives.
-  useEffect(() => {
-    if (providers.modelOptions != null) {
-      setProviderModelOptions(providers.modelOptions);
-    }
-  }, [providers.modelOptions]);
-
-  useEffect(() => {
-    void providers.ensureModelList();
-  }, [connectionStateSignature, providers.ensureModelList]);
-
-  useEffect(() => {
-    return onOrchidEvent('orchid:providers-updated', () => {
-      void providers.refresh().then(() => providers.ensureModelList());
-    });
-  }, [providers.refresh, providers.ensureModelList]);
-
-  useEffect(() => {
-    return onOrchidEvent('orchid:provider-selection-created', (detail) => {
-      const selection = detail.selection;
-      if (!selection) return;
-      setCurrentSelection({
-        connectionId: selection.connectionId,
-        modelId: selection.modelId,
-      });
-      if (session.activeSession?.id) {
-        void session.changeModel(session.activeSession.id, selection, selection.modelId);
-      }
-      void providers.refresh();
-    });
-  }, [providers.refresh, session.activeSession?.id, session.changeModel]);
-
-  useEffect(() => {
-    const sessionId = session.activeSession?.id;
-    if (!sessionId) return undefined;
-    const markSeen = () => {
-      if (document.visibilityState === 'visible') {
-        void activity.markSeen(sessionId);
-      }
-    };
-    markSeen();
-    window.addEventListener('focus', markSeen);
-    return () => window.removeEventListener('focus', markSeen);
-  }, [session.activeSession?.id, activity.markSeen]);
+  useSeenMessages({
+    sessionId: session.activeSession?.id,
+    markSeen: activity.markSeen,
+  });
 
   useEffect(() => {
     return onOrchidEvent('orchid:navigate', (detail) => {
@@ -356,25 +250,16 @@ export function ChatView({ isVisible = true, bootstrapConfig = null, onNotify, a
       openSidebar();
       setInspectorFocusSection(action.section);
     });
-  }, [openLeftSidebar, openSidebar]);
+  }, [openLeftSidebar, openSidebar, setInspectorFocusSection]);
 
-  const togglePalette = useCallback(() => {
-    setHelpOpen(false);
-    setPaletteOpen((prev) => !prev);
-  }, []);
-
-  const toggleHelp = useCallback(() => {
-    setPaletteOpen(false);
-    setHelpOpen((prev) => !prev);
-  }, []);
-
-  const openSettings = useCallback(() => {
-    emitOrchidEvent('orchid:open-settings');
-  }, []);
-
-  const openAnalytics = useCallback(() => {
-    emitOrchidEvent('orchid:open-analytics');
-  }, []);
+  const config = useChatViewConfig({ paletteOpen });
+  const {
+    defaultSelection,
+    setDefaultSelection,
+    setCurrentTheme,
+    setCurrentPersonality,
+    setAlwaysExpandToolGroups,
+  } = config;
 
   useEffect(() => {
     if (!bootstrapConfig) return;
@@ -382,25 +267,13 @@ export function ChatView({ isVisible = true, bootstrapConfig = null, onNotify, a
     if (bootstrapConfig.personality) setCurrentPersonality(bootstrapConfig.personality);
     setDefaultSelection(bootstrapConfig.default_model ?? null);
     setAlwaysExpandToolGroups(Boolean(bootstrapConfig.always_expand_tool_groups));
-  }, [bootstrapConfig]);
-
-  useEffect(() => {
-    if (!window.orchid?.config?.listPersonalities) return;
-    window.orchid.config.listPersonalities()
-      .then(setPersonalityNames)
-      .catch(() => { /* Non-fatal */ });
-  }, []);
-
-  useEffect(() => {
-    return onOrchidEvent('orchid:config-updated', (detail) => {
-      if (detail && typeof detail.always_expand_tool_groups === 'boolean') {
-        setAlwaysExpandToolGroups(detail.always_expand_tool_groups);
-      }
-      if (detail && 'default_model' in detail) {
-        setDefaultSelection(detail.default_model as ModelSelection | null);
-      }
-    });
-  }, []);
+  }, [
+    bootstrapConfig,
+    setCurrentTheme,
+    setCurrentPersonality,
+    setDefaultSelection,
+    setAlwaysExpandToolGroups,
+  ]);
 
   // Keep composer model in sync with the active session. In draft mode (no
   // active session), restore the configured default so new chats are ready.
@@ -416,18 +289,6 @@ export function ChatView({ isVisible = true, bootstrapConfig = null, onNotify, a
     session.activeSession?.modelLabel,
     defaultSelection,
   ]);
-
-  // Refresh personality list when the palette opens.
-  useEffect(() => {
-    if (!paletteOpen) return;
-    let cancelled = false;
-    if (window.orchid?.config?.listPersonalities) {
-      window.orchid.config.listPersonalities().then((names) => {
-        if (!cancelled) setPersonalityNames(names);
-      }).catch(() => { /* non-fatal */ });
-    }
-    return () => { cancelled = true; };
-  }, [paletteOpen]);
 
   // Compaction rewrites the durable chains while the live tail still holds
   // every pre-compaction segment/tool. Without a reset those re-render below
@@ -446,72 +307,16 @@ export function ChatView({ isVisible = true, bootstrapConfig = null, onNotify, a
     return () => unsubscribe?.();
   }, [chat.resetLiveTail]);
 
-  const applySessionMessages = useCallback(
-    (loadedSession: Session | null) => {
-      if (!loadedSession) {
-        chat.setMessages([]);
-        todos.applyFromSession([]);
-        return;
-      }
-      chat.setMessages(flattenSessionMessages(loadedSession));
-      todos.applyFromSession(loadedSession.todoStore.tasks);
-    },
-    [chat.setMessages, todos.applyFromSession],
-  );
-
-  const handleSessionSelect = useCallback(
-    async (id: string) => {
-      setProjectConfigDir(null);
-      // Already focused this session (not draft) — skip full reload to avoid flicker.
-      if (session.activeSession?.id === id && !draftTabVisible) {
-        return;
-      }
-
-      const gen = ++sessionSwitchGen.current;
-
-      // Rebind stream affinity immediately so previous-session events cannot
-      // repopulate the pane — but keep painting the previous session until
-      // the full target payload is ready (no intermediate empty/zero state).
-      chat.beginSessionSwitch(id);
-
-      // Single round-trip: activate the session and fetch its bounded renderer
-      // view (session + loaded messages + live snapshot + workspace) at once.
-      // Replaces the prior peek + chat:snapshot + activate sequence.
-      let result: SessionOpenResult | null = null;
-      try {
-        result = await session.open(id);
-      } catch {
-        // result stays null on failure — handled by the !result guard below.
-      }
-      if (gen !== sessionSwitchGen.current) return;
-
-      if (!result || !result.session) {
-        // Could not load (missing/corrupt) — keep the previous paint and release
-        // the switch hold without blanking the pane.
-        chat.hydrateSnapshot(null);
-        return;
-      }
-
-      setDraftTabVisible(false);
-      messageQueue.clearQueue();
-      // Commit once: subagent summaries hydrate independently; chat messages
-      // and live state hydrate here without a duplicate message replace.
-      todos.applyFromSession(result.session.todoStore.tasks);
-      chat.hydrateSnapshot({
-        sessionId: result.session.id,
-        messages: result.messages,
-        live: result.live,
-        lastChainError: result.lastChainError,
-      });
-    },
-    [session, chat.beginSessionSwitch, chat.hydrateSnapshot, todos.applyFromSession, draftTabVisible, messageQueue.clearQueue],
-  );
-
-  const handleLoadHistoryPage = useCallback(async (chainIndex: number) => {
-    const chain = session.activeSession?.chains[chainIndex];
-    if (!chain) return;
-    await session.loadHistoryPage(chain.id);
-  }, [session]);
+  const switchActions = useChatViewSessionSurfaces({
+    session,
+    chat: { setMessages, beginSessionSwitch, hydrateSnapshot },
+    todos,
+    messageQueue,
+    surfaces,
+    notify,
+    openTrustPrompt: trustPrompt.openFor,
+  });
+  const { handleSessionSelect, handleLoadHistoryPage } = switchActions;
 
   useEffect(() => {
     return onOrchidEvent('orchid:select-session', (detail) => {
@@ -520,310 +325,51 @@ export function ChatView({ isVisible = true, bootstrapConfig = null, onNotify, a
     });
   }, [handleSessionSelect]);
 
-  const enterDraftMode = useCallback(async (opts?: { clearComposer?: boolean }) => {
-    setProjectConfigDir(null);
-    const gen = ++sessionSwitchGen.current;
-    chat.beginSessionSwitch(null);
-    messageQueue.clearQueue();
-    await session.enterDraft();
-    if (gen !== sessionSwitchGen.current) return;
-    applySessionMessages(null);
-    setDraftTabVisible(true);
-    if (opts?.clearComposer) {
-      setComposerDraftKey((k) => k + 1);
-    }
-  }, [session, chat.beginSessionSwitch, applySessionMessages, messageQueue.clearQueue]);
+  useChatViewTabRestore({
+    session,
+    tabs,
+    sessionSwitchGeneration: switchActions.sessionSwitchGeneration,
+    selectSession: handleSessionSelect,
+    enterDraftMode: switchActions.enterDraftMode,
+    setDraftTabVisible,
+  });
 
-  // New chat: draft in the currently selected project. Never open a folder
-  // picker here — inherit session.cwd → workspace.cwd → sticky default.
-  // Without a bound project, stay draft-unbound until the user picks a folder.
-  const handleSessionCreate = useCallback(async () => {
-    const gen = ++sessionSwitchGen.current;
-    const inheritCwd =
-      session.activeSession?.cwd?.trim() ||
-      (session.workspace?.status === 'valid' ? session.workspace.cwd : null);
-    if (inheritCwd) {
-      const workspace = await session.setWorkspace(inheritCwd);
-      if (gen !== sessionSwitchGen.current) return;
-      if (!workspace?.cwd) {
-        applySessionMessages(null);
-        return;
-      }
-      if (workspace.trust !== 'trusted') {
-        trustPrompt.openFor(workspace.cwd);
-      }
-    }
-    await enterDraftMode({ clearComposer: true });
-  }, [session, enterDraftMode, applySessionMessages, trustPrompt.openFor]);
+  const machineScope = useChatViewMachineScope({
+    session,
+    providers,
+    machines,
+    canPickProjectDir,
+    chatStatus: chat.status,
+    streamStartTime: chat.streamStartTime,
+    enterDraftMode: switchActions.enterDraftMode,
+    selectSession: handleSessionSelect,
+  });
 
-  // Project-row New Chat: make that project the window's draft workspace, then
-  // clear selection. The first message creates a new session there while any
-  // previous conversation keeps running in its own project.
-  const handleProjectSessionCreate = useCallback(async (projectDir: string) => {
-    const gen = ++sessionSwitchGen.current;
-    const workspace = await session.setWorkspace(projectDir);
-    if (!workspace?.cwd || gen !== sessionSwitchGen.current) return;
-    if (workspace.trust !== 'trusted') {
-      trustPrompt.openFor(workspace.cwd);
-    }
-    await enterDraftMode({ clearComposer: true });
-    notify(`New chat in project: ${workspace.cwd}`, 'info');
-  }, [session, enterDraftMode, notify, trustPrompt.openFor]);
+  const sessionActions = useChatViewSessionActions({
+    session,
+    chat,
+    tabs,
+    activity,
+    messageQueue,
+    surfaces,
+    notify,
+    selectSession: handleSessionSelect,
+    enterDraftMode: switchActions.enterDraftMode,
+  });
 
-  const handleProjectSelect = useCallback((projectDir: string) => {
-    setProjectConfigDir(projectDir);
-  }, []);
-
-  // Restore durable open tabs (or empty draft) instead of auto-picking library[0].
-  useEffect(() => {
-    if (didBootstrapTabs.current) return;
-    if (!tabs.ready) return;
-    if (
-      session.listState.status !== 'ready' &&
-      session.listState.status !== 'partial' &&
-      session.listState.status !== 'empty'
-    ) {
-      return;
-    }
-    // User already navigated before restore finished — do not clobber.
-    if (sessionSwitchGen.current > 0 || session.activeSession) {
-      didBootstrapTabs.current = true;
-      return;
-    }
-
-    didBootstrapTabs.current = true;
-    const openIds = tabs.snapshot.openSessionIds;
-    const focusId =
-      tabs.snapshot.focusedSessionId && openIds.includes(tabs.snapshot.focusedSessionId)
-        ? tabs.snapshot.focusedSessionId
-        : tabs.snapshot.mruSessionIds.find((id) => openIds.includes(id)) ?? openIds[0] ?? null;
-    if (focusId) {
-      void handleSessionSelect(focusId);
-      setDraftTabVisible(false);
-      return;
-    }
-    void enterDraftMode();
-  }, [tabs.ready, tabs.snapshot, session.listState, session.activeSession, handleSessionSelect, enterDraftMode]);
-
-  useEffect(() => {
-    if (session.activeSession?.id) {
-      setDraftTabVisible(false);
-    }
-  }, [session.activeSession?.id]);
-
-  const isLiveSession = useCallback(
-    (id: string) => {
-      // Prefer activity store; also treat focused streaming chat as live so
-      // confirm still fires if the activity broadcast has not arrived yet.
-      const a = activity.activities.find((row) => row.sessionId === id);
-      if (a && (a.state === 'working' || a.state === 'waiting' || a.state === 'needs_attention')) {
-        return true;
-      }
-      if (a?.canCancel) return true;
-      // Focused session currently streaming — cover activity broadcast lag.
-      if (session.activeSession?.id === id && chat.status === 'streaming') {
-        return true;
-      }
-      return false;
-    },
-    [activity.activities, session.activeSession?.id, chat.status],
-  );
-
-  const focusAfterWorkingSet = useCallback(
-    async (snapshot: { focusedSessionId: string | null; openSessionIds: readonly string[] }) => {
-      const nextId = snapshot.focusedSessionId;
-      if (nextId) {
-        setDraftTabVisible(false);
-        await handleSessionSelect(nextId);
-        return;
-      }
-      await enterDraftMode();
-    },
-    [handleSessionSelect, enterDraftMode],
-  );
-
-  const handleSessionDeleteError = useCallback((error: unknown) => {
-    const message = error instanceof Error ? error.message : String(error);
-    notify(`Delete failed: ${message}`, 'error');
-  }, [notify]);
-
-  const deletionReconciliation = useMemo(() => ({
-    applySnapshot: tabs.applySnapshot,
-    clearQueue: messageQueue.clearQueue,
-    clearMessages: () => chat.setMessages([]),
-    focusAfterWorkingSet,
-    onError: handleSessionDeleteError,
-  }), [
-    tabs.applySnapshot,
-    messageQueue.clearQueue,
-    chat.setMessages,
-    focusAfterWorkingSet,
-    handleSessionDeleteError,
-  ]);
-  useSessionDeletionReconciliation(
-    session.deletionNotice,
-    deletionReconciliation,
-  );
-
-  const performCloseTab = useCallback(
-    async (id: string) => {
-      const wasFocused = session.activeSession?.id === id;
-      const snapshot = await tabs.closeTab(id);
-      if (wasFocused) {
-        await focusAfterWorkingSet(snapshot);
-      }
-    },
-    [tabs, session.activeSession?.id, focusAfterWorkingSet],
-  );
-
-  const requestCloseTab = useCallback(
-    (id: string) => {
-      if (isLiveSession(id)) {
-        setCloseConfirmId(id);
-        return;
-      }
-      void performCloseTab(id);
-    },
-    [isLiveSession, performCloseTab],
-  );
-
-  // The deletion event/result reconciliation follows MRU for every window.
-  const handleSessionDelete = useCallback(
-    async (id: string) => {
-      const wasActive = session.activeSession?.id === id;
-      // Clear before the invoke so queued work can never target a session whose
-      // durable row is about to disappear.
-      if (wasActive) messageQueue.clearQueue();
-      await session.deleteSession(id);
-    },
-    [session, messageQueue.clearQueue],
-  );
-
-  // Project delete removes every session in the group. Sequential so each
-  // delete's working-set snapshot reflects the previous one; one failure must
-  // not abort the rest.
-  const handleProjectDelete = useCallback(
-    async (project: { label: string; sessionIds: readonly string[] }) => {
-      if (project.sessionIds.includes(session.activeSession?.id ?? '')) {
-        messageQueue.clearQueue();
-      }
-      let failures = 0;
-      let lastError: unknown = null;
-      for (const id of project.sessionIds) {
-        try {
-          await session.deleteSession(id);
-        } catch (err) {
-          failures += 1;
-          lastError = err;
-          console.error(`Project delete failed for session ${id}:`, err);
-        }
-      }
-      if (failures > 0) {
-        const reason = lastError instanceof Error ? ` (${lastError.message})` : '';
-        notify(
-          `Deleted ${project.sessionIds.length - failures} of ${project.sessionIds.length} sessions in ${project.label}; ${failures} failed${reason}.`,
-          'error',
-        );
-      }
-    },
-    [session, messageQueue.clearQueue, notify],
-  );
-
-  const handleSessionRename = useCallback(
-    async (id: string, name: string) => {
-      try {
-        await session.rename(id, name);
-      } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        notify(`Rename failed: ${message}`, 'error');
-      }
-    },
-    [session, notify],
-  );
-
-  // null workspace = still loading; allow send (main process still gates).
-  // unbound/missing = block in UI (R3).
-  const workspaceBound =
-    session.workspace == null || session.workspace.status === 'valid';
-
-  const availableProviderModels = useMemo(
-    () => providerModelOptions.filter((option) => option.available && isTextGenerationModel(option.model)),
-    [providerModelOptions],
-  );
-  const chatProviderModels = useMemo(
-    () => providerModelOptions.filter((option) => isTextGenerationModel(option.model)),
-    [providerModelOptions],
-  );
   const providerModelByKey = useMemo(
     () => new Map(chatProviderModels.map((option) => [providerModelOptionKey(option), option])),
     [chatProviderModels],
   );
-  const providerModelLabels = useMemo(
-    () => Object.fromEntries(chatProviderModels.map((option) => [
-      providerModelOptionKey(option),
-      providerModelOptionDisplayName(option),
-    ])),
-    [chatProviderModels],
+  const availableModelKeys = useMemo(
+    () => availableProviderModels.map(providerModelOptionKey),
+    [availableProviderModels],
   );
-  const providerModelDetails = useMemo(
-    () => Object.fromEntries(chatProviderModels.map((option) => [providerModelOptionKey(option), option])),
-    [chatProviderModels],
-  );
-  const preferredSelection = session.activeSession?.selection ?? currentSelection;
-  const selectedProviderModel = preferredSelection
-    ? chatProviderModels.find((option) => selectionMatchesOption(preferredSelection, option)) ?? null
-    : null;
-  const providerAvailable = providers.hasUsableConnection;
-  const modelSelected = selectedProviderModel?.available === true;
-  const providerPickerValue = selectedProviderModel ? providerModelOptionKey(selectedProviderModel) : '';
-
-  const handlePickProjectDir = useCallback(async () => {
-    const startsDraft = Boolean(session.activeSession?.chains.length);
-    const info = await session.pickProjectDir();
-    if (info?.status === 'valid' && info.cwd) {
-      if (info.trust !== 'trusted') {
-        trustPrompt.openFor(info.cwd);
-      }
-      if (startsDraft) {
-        ++sessionSwitchGen.current;
-        chat.beginSessionSwitch(null);
-        // Forced rebind: the queued messages belong to the session being left.
-        messageQueue.clearQueue();
-        applySessionMessages(null);
-        setDraftTabVisible(true);
-        setComposerDraftKey((k) => k + 1);
-        notify(`New chat in project: ${info.cwd}`, 'info');
-      } else {
-        notify(`Project folder: ${info.cwd}`, 'info');
-      }
-    }
-  }, [session, chat.beginSessionSwitch, applySessionMessages, notify, messageQueue.clearQueue, trustPrompt.openFor]);
-
-  // Workspace trust badge (LeftSidebar) opens the dialog for the bound cwd.
-  const handleTrustBadgeClick = useCallback(() => {
-    const cwd = session.workspace?.cwd;
-    if (cwd) trustPrompt.openFor(cwd);
-  }, [session.workspace?.cwd, trustPrompt.openFor]);
-
-  // Stable prop wrappers for the memoized LeftSidebar. Inline arrows here would
-  // give the rail a fresh identity every render and defeat React.memo, so the
-  // whole sidebar re-rendered on each streamed token / activity broadcast.
-  const handleSessionCreateClick = useCallback(() => {
-    void handleSessionCreate();
-  }, [handleSessionCreate]);
-  const handleProjectSessionCreateClick = useCallback((projectDir: string) => {
-    void handleProjectSessionCreate(projectDir);
-  }, [handleProjectSessionCreate]);
-  const handlePickProjectDirClick = useCallback(() => {
-    void handlePickProjectDir();
-  }, [handlePickProjectDir]);
-  const handleStopSession = useCallback((sessionId: string) => {
-    void chat.stop(sessionId);
-  }, [chat.stop]);
 
   const handleSelectProviderModel = useCallback(async (key: string) => {
     const option = providerModelByKey.get(key);
-    if (!option || !option.available) {
+    const modelUnavailable = !option || !option.available;
+    if (modelUnavailable) {
       notify('That connection and model are not available. Reconnect it or choose another model.', 'warning');
       return;
     }
@@ -832,274 +378,80 @@ export function ChatView({ isVisible = true, bootstrapConfig = null, onNotify, a
       modelId: option.selection.modelId,
     };
     setCurrentSelection(selection);
-    if (session.activeSession?.id) {
-      await session.changeModel(
-        session.activeSession.id,
-        selection,
-        providerModelOptionLabel(option),
-      );
-    } else {
-      try {
-        await window.orchid?.session?.setReasoningEffort({ effort: null });
-      } catch {
-        // Non-fatal — draft override remains
-      }
-      try {
-        await window.orchid?.session?.setServiceTier({ tier: null });
-      } catch {
-        // Non-fatal — draft tier remains
-      }
+    const activeSessionId = session.activeSession?.id;
+    if (activeSessionId) {
+      await session.changeModel(activeSessionId, selection, providerModelOptionLabel(option));
+      return;
+    }
+    // Draft mode: the pick clears the overrides the previous draft carried.
+    try {
+      await window.orchid?.session?.setReasoningEffort({ effort: null });
+    } catch {
+      // Non-fatal — draft override remains
+    }
+    try {
+      await window.orchid?.session?.setServiceTier({ tier: null });
+    } catch {
+      // Non-fatal — draft tier remains
     }
   }, [notify, providerModelByKey, session]);
 
-  // Resolves `true` only when a turn actually started. Queue autofire relies
-  // on the distinction: gate failures restore the consumed batch instead of
-  // silently dropping it (and never reject — rejection is not the signal).
-  const handleSend = useCallback(
-    async (message: string): Promise<boolean> => {
-      // UI gate (R3): reinforce main-process unbound_workspace rejection.
-      if (chat.isSwitchingSession) return false;
-      if (!workspaceBound) {
-        notify(
-          'Choose a project folder before sending a message.',
-          'warning',
-        );
-        void handlePickProjectDir();
-        return false;
-      }
-      if (!providerAvailable) {
-        notify('Connect a provider in Settings before sending a message.', 'warning');
-        emitOrchidEvent('orchid:open-settings', { tab: 'providers' });
-        return false;
-      }
-      if (!preferredSelection || !modelSelected) {
-        notify('Select a ready connection and model before sending a message.', 'warning');
-        return false;
-      }
-      return chat.send(message, {
-        ...(preferredSelection ? { model: preferredSelection } : {}),
-        ...(session.activeSession?.id
-          ? { sessionId: session.activeSession.id }
-          : { draftGeneration: session.draftGeneration }),
-      });
-    },
-    [
-      chat.send,
-      chat.isSwitchingSession,
-      session.activeSession?.id,
-      session.activeSession?.selection,
-      session.draftGeneration,
-      currentSelection,
-      workspaceBound,
-      providerAvailable,
-      modelSelected,
-      preferredSelection,
-      notify,
-      handlePickProjectDir,
-    ],
-  );
+  // null workspace = still loading; allow send (main process still gates).
+  // unbound/missing = block in UI (R3).
+  const workspaceBound =
+    session.workspace == null || session.workspace.status === 'valid';
 
-  // Late-bind handleSend for the trust-grant replay (declared above via ref).
-  trustSend.sendRef.current = handleSend;
-
-  const handleRetry = useCallback(async () => {
-    // Re-send the last user message after an error
-    const lastUser = [...chat.messages]
-      .reverse()
-      .find((m) => m.role === 'user' && !m.hidden && Boolean(m.content?.trim()));
-    if (!lastUser?.content) return;
-    chat.clearError();
-    await handleSend(lastUser.content);
-  }, [chat, handleSend]);
-
-  const handleQueue = useCallback(
-    (text: string) => {
-      const trigger = messageQueue.addToQueue(text);
-      const sessionId = session.activeSession?.id;
-      // Only next-request messages stop the chain early; chain-end messages
-      // queue without signaling so the current run continues to its natural end.
-      if (trigger === 'next-request' && chat.status === 'streaming' && sessionId) {
-        void window.orchid?.chat?.queueNext({ sessionId })?.catch(() => {});
-      }
-    },
-    [messageQueue.addToQueue, chat.status, session.activeSession?.id],
-  );
-
-  useQueueAutoFire(
-    chat.status,
-    messageQueue.consumeNext,
-    trustSend.restoreQueueBatch,
-    messageQueue.editingId,
-    handleSend,
-  );
-
-  const sessionSwitchHandlers = useMemo(() => {
-    const handlers: Record<string, (event: KeyboardEvent) => void> = {};
-    for (let n = 1; n <= 9; n++) {
-      handlers[`session.switch.${n}`] = () => {
-        const targetId = tabs.snapshot.openSessionIds[n - 1];
-        if (targetId) {
-          setDraftTabVisible(false);
-          void handleSessionSelect(targetId);
-        }
-      };
-    }
-    return handlers;
-  }, [tabs.snapshot.openSessionIds, handleSessionSelect]);
-
-  const leaveDraftToOpenTab = useCallback(async () => {
-    const openIds = tabs.snapshot.openSessionIds;
-    if (openIds.length === 0) {
-      // Empty working set: draft is the only surface — keep it visible.
-      setDraftTabVisible(true);
-      return;
-    }
-    const mru = tabs.snapshot.mruSessionIds.find((id) => openIds.includes(id));
-    const nextId = mru ?? openIds[openIds.length - 1] ?? openIds[0];
-    setDraftTabVisible(false);
-    setComposerDraftKey((k) => k + 1);
-    await handleSessionSelect(nextId);
-  }, [tabs.snapshot, handleSessionSelect]);
-
-  // Stable prop wrappers for the memoized tab bar / composer / inspector.
-  // Inline arrows would hand those components a fresh identity every render and
-  // defeat React.memo, re-rendering them on each streamed token.
-  const handleTabSelect = useCallback((id: string) => {
-    setDraftTabVisible(false);
-    void handleSessionSelect(id);
-  }, [handleSessionSelect]);
-  const handleSelectDraftTab = useCallback(() => {
-    void enterDraftMode();
-  }, [enterDraftMode]);
-  const handleCloseDraftTab = useCallback(() => {
-    void leaveDraftToOpenTab();
-  }, [leaveDraftToOpenTab]);
-  const handleOpenProviders = useCallback(() => {
-    emitOrchidEvent('orchid:open-settings', { tab: 'providers' });
-  }, []);
-  const handleFocusSectionConsumed = useCallback(() => {
-    setInspectorFocusSection(null);
-  }, []);
-
-  const handleCloseFocusedTab = useCallback(() => {
-    if (draftTabVisible && !session.activeSession) {
-      void leaveDraftToOpenTab();
-      return;
-    }
-    const id = session.activeSession?.id ?? tabs.snapshot.focusedSessionId;
-    if (id) requestCloseTab(id);
-  }, [
-    draftTabVisible,
-    session.activeSession,
-    tabs.snapshot.focusedSessionId,
-    requestCloseTab,
-    leaveDraftToOpenTab,
-  ]);
-
-  const shortcutHandlers = useMemo(
-    () => ({
-      'palette.toggle': () => togglePalette(),
-      'shortcuts.help': () => toggleHelp(),
-      'settings.open': () => openSettings(),
-      'session.new': () => {
-        void handleSessionCreate();
-      },
-      'session.tab.close': () => {
-        handleCloseFocusedTab();
-      },
-      'inspector.toggle': () => toggleSidebar(),
-      'sessionsRail.toggle': () => toggleLeftSidebar(),
-      ...sessionSwitchHandlers,
-    }),
-    [
-      togglePalette,
-      toggleHelp,
-      openSettings,
-      handleSessionCreate,
-      handleCloseFocusedTab,
-      toggleSidebar,
-      toggleLeftSidebar,
-      sessionSwitchHandlers,
-    ],
-  );
-
-  const shortcutGate = useCallback(
-    (id: string) => {
-      if (!isVisible) return false;
-      // Always allow palette / help toggles (they close themselves).
-      if (id === 'palette.toggle' || id === 'shortcuts.help') return true;
-      // Suppress other globals while overlays own the keyboard.
-      if (paletteOpen || helpOpen || closeConfirmId) return false;
-      return true;
-    },
-    [isVisible, paletteOpen, helpOpen, closeConfirmId],
-  );
-
-  useGlobalShortcuts({
-    handlers: shortcutHandlers,
-    isEnabled: shortcutGate,
+  const composer = useChatViewComposer({
+    chat,
+    session,
+    messageQueue,
+    trustSend,
+    notify,
+    canPickProjectDir,
+    activeMachineLabel: machines.activeMachineLabel,
+    workspaceBound,
+    providerAvailable: models.providerAvailable,
+    modelSelected: models.modelSelected,
+    preferredSelection: models.preferredSelection,
+    onPickProjectDir: switchActions.handlePickProjectDir,
   });
 
-  useFocusTrap({
-    enabled: closeConfirmId != null,
-    containerRef: closeConfirmRef,
-    initialFocusRef: closeConfirmCancelRef,
+  useChatViewShortcuts({
+    isVisible,
+    openSessionIds: tabs.snapshot.openSessionIds,
+    overlayOwnsKeyboard: surfaces.overlayOwnsKeyboard,
+    closeConfirmActive: closeConfirmId != null,
+    closeConfirmRef,
+    closeConfirmCancelRef,
+    dismissCloseConfirm: declineCloseConfirm,
+    togglePalette,
+    toggleHelp,
+    openSettings,
+    createSession: switchActions.handleSessionCreateClick,
+    closeFocusedTab: sessionActions.handleCloseFocusedTab,
+    toggleInspector: toggleSidebar,
+    toggleSessionsRail: toggleLeftSidebar,
+    selectSessionTab: sessionActions.handleTabSelect,
   });
 
-  useEffect(() => {
-    if (!closeConfirmId) return;
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
-        event.preventDefault();
-        event.stopPropagation();
-        setCloseConfirmId(null);
-      }
-    };
-    document.addEventListener('keydown', onKeyDown, true);
-    return () => document.removeEventListener('keydown', onKeyDown, true);
-  }, [closeConfirmId]);
-
-  const handleIndexRAG = useCallback(async () => {
-    if (!window.orchid?.rag?.index) {
-      throw new Error('RAG IPC is not available');
-    }
-    const result = await window.orchid.rag.index();
-    await refreshIndex();
-    // Surface indexer-reported failures (still a resolved IPC result)
-    if (result?.errors && result.errors.length > 0) {
-      throw new Error(result.errors[0] ?? 'RAG indexing reported errors');
-    }
-  }, [refreshIndex]);
-
-  const handleIndexAST = useCallback(async () => {
-    if (!window.orchid?.ast?.index) {
-      throw new Error('AST IPC is not available');
-    }
-    const result = await window.orchid.ast.index();
-    await refreshIndex();
-    if (result?.errors && result.errors.length > 0) {
-      throw new Error(result.errors[0] ?? 'AST indexing reported errors');
-    }
-  }, [refreshIndex]);
-
-  // /compact — user-initiated compaction of the active session. Main refuses
-  // while a turn is streaming; the status maps to a toast and the renderer
-  // reloads the session on SESSION_COMPACTION like an automatic compaction.
-  const handleCompact = useCallback(async () => {
-    if (!window.orchid?.chat?.compact) {
-      throw new Error('Compaction IPC is not available');
-    }
-    const result = await window.orchid.chat.compact();
-    if (result.status === 'compacted') {
-      notify('Context compacted.', 'info');
-    } else if (result.status === 'busy') {
-      notify('Session is busy — compact after the current turn finishes.', 'warning');
-    } else if (result.status === 'nothing_to_compact') {
-      notify(result.detail ? `Nothing to compact (${result.detail}).` : 'Nothing to compact.', 'info');
-    } else if (result.status === 'error') {
-      throw new Error(result.error);
-    }
-  }, [notify]);
+  const commandContext = useChatViewCommandContext({
+    session,
+    notify,
+    onCreateSession: switchActions.handleSessionCreate,
+    onLoadSession: handleSessionSelect,
+    onDeleteSession: sessionActions.handleSessionDelete,
+    onSelectModel: handleSelectProviderModel,
+    onPickProjectDir: switchActions.handlePickProjectDir,
+    onIndexRAG: index.onIndexRAG,
+    onIndexAST: index.onIndexAST,
+    onOpenSettings: openSettings,
+    onClosePalette: closePalette,
+    applyTheme: config.applyTheme,
+    applyPersonality: config.applyPersonality,
+    availableModelKeys,
+    currentModelKey: models.providerPickerValue,
+    refreshIndex,
+  });
 
   useInspectorHydration({
     enabled: sidebarOpen,
@@ -1108,111 +460,61 @@ export function ChatView({ isVisible = true, bootstrapConfig = null, onNotify, a
     refreshIndex,
   });
 
-  // MCP starts in the background after the window opens, so the first status
-  // snapshot often lands on "starting". Poll until every server leaves that
-  // state (connected / failed / unavailable) so the right sidebar updates.
-  useEffect(() => {
-    if (!sidebarOpen) return;
-    const stillStarting = mcpServers.some((s) => s.status === 'starting');
-    if (!stillStarting) return;
-    const id = setInterval(() => {
-      void refreshMCP(workspaceCwd);
-    }, 1500);
-    return () => clearInterval(id);
-  }, [mcpServers, refreshMCP, sidebarOpen, workspaceCwd]);
+  useMCPStartingPolling({
+    enabled: sidebarOpen,
+    servers: index.mcpServers,
+    workspaceKey: workspaceCwd,
+    refresh: refreshMCP,
+  });
 
-  // After a turn completes in the same session, refresh subagents so chain
-  // footers pick up token usage written into subagent_chains. Initial idle
-  // mounts and idle session switches already hydrate in useSubagents.
-  const subagentRefreshState = {
+  useSubagentTurnRefresh({
     sessionId: session.activeSession?.id ?? null,
     status: chat.status,
-  } as const;
-  const previousSubagentRefreshState = useRef(subagentRefreshState);
-  useEffect(() => {
-    const previous = previousSubagentRefreshState.current;
-    previousSubagentRefreshState.current = subagentRefreshState;
-    if (shouldRefreshSubagentsAfterTurn(previous, subagentRefreshState)) {
-      void subagents.refresh();
-    }
-  }, [subagentRefreshState.sessionId, subagentRefreshState.status, subagents.refresh]);
+    refresh: subagents.refresh,
+  });
 
-  // Memoized so the composer, footer, and command palette (all memoized) are
-  // not invalidated on every render — previously a fresh object each render
-  // forced those subtrees to re-render on every streamed token.
-  const commandContext: CommandContext = useMemo(() => ({
-    onCreateSession: handleSessionCreate,
-    onLoadSession: handleSessionSelect,
-    onDeleteSession: handleSessionDelete,
-    onRenameSession: session.rename,
-    getActiveSessionId: () => session.activeSession?.id ?? null,
-    getActiveSessionName: () => session.activeSession?.name ?? null,
-    onSetTheme: async (name: string) => {
-      setCurrentTheme(name);
-      emitOrchidEvent('orchid:set-theme', { theme: name });
-    },
-    onSetPersonality: async (name: string) => {
-      setCurrentPersonality(name);
-      try {
-        if (window.orchid?.config?.save) {
-          await window.orchid.config.save({ updates: { personality: name } });
-        }
-      } catch {
-        // Non-fatal
-      }
-    },
-    onSetModel: handleSelectProviderModel,
-    getAvailableModels: () => availableProviderModels.map(providerModelOptionKey),
-    getCurrentModel: () => providerPickerValue,
-    onOpenSettings: () => {
-      openSettings();
-    },
-    onPickProjectDir: handlePickProjectDir,
-    onIndexRAG: handleIndexRAG,
-    onIndexAST: handleIndexAST,
-    onCompact: handleCompact,
-    onClearRAG: async () => {
-      try {
-        if (window.orchid?.rag?.clear) {
-          await window.orchid.rag.clear();
-          await refreshIndex();
-        }
-      } catch (err) {
-        console.error('RAG clear failed:', err);
-        throw err;
-      }
-    },
-    onNotify: notify,
-    onClose: () => setPaletteOpen(false),
-  }), [
-    handleSessionCreate,
-    handleSessionSelect,
-    handleSessionDelete,
+  const sessions: SessionSummary[] = visibleSessionSummaries(session.listState);
+  const railProps = buildSessionsRailProps({
     session,
-    handleSelectProviderModel,
-    availableProviderModels,
-    providerPickerValue,
+    activities: activity.activities,
+    collapsed: leftSidebarCollapsed,
+    overlay: leftOverlay,
+    canPickProjectDir,
+    machine: machines.activeMachine,
+    switchActions,
+    sessionActions,
     openSettings,
-    handlePickProjectDir,
-    handleIndexRAG,
-    handleIndexAST,
-    handleCompact,
-    refreshIndex,
-    notify,
-  ]);
-
-  useEffect(() => {
-    if (selectedProviderModel) {
-      setMaxContext(selectedProviderModel.model.limits?.contextTokens ?? null);
-      return;
-    }
-    if (!chat.isSwitchingSession) setMaxContext(null);
-  }, [selectedProviderModel, chat.isSwitchingSession]);
-
-  const sessions =
-    session.listState.status === 'ready' || session.listState.status === 'partial'
-      ? session.listState.sessions
-      : [];
+    openAnalytics,
+    onToggle: toggleLeftSidebar,
+  });
+  const streamProps = buildChatStreamProps({
+    chat,
+    subagents,
+    session,
+    alwaysExpandToolGroups: config.alwaysExpandToolGroups,
+    workspaceBound,
+    canPickProjectDir,
+    onPickProjectDir: switchActions.handlePickProjectDirClick,
+    onOpenSettings: openSettings,
+    onRetry: composer.handleRetry,
+    onLoadHistoryPage: handleLoadHistoryPage,
+  });
+  const inspectorProps = buildInspectorProps({
+    open: sidebarOpen,
+    overlay: rightOverlay,
+    onToggle: toggleSidebar,
+    subagents,
+    todos,
+    commands,
+    debugRequests,
+    index,
+    chat,
+    sessionId: session.activeSession?.id ?? null,
+    maxContext: models.maxContext,
+    focusSection: inspectorFocusSection,
+    onFocusSectionConsumed: clearInspectorFocusSection,
+    onOpenSubagentView: openSubagentView,
+  });
 
   // Runtime shell tracks — CSS custom properties (exceptions.css .app-frame).
   const shellStyle = {
@@ -1227,35 +529,7 @@ export function ChatView({ isVisible = true, bootstrapConfig = null, onNotify, a
       style={shellStyle}
     >
       <DeferredSurface isVisible={isVisible}>
-        <LeftSidebar
-        activeSessionId={session.activeSession?.id ?? null}
-        selectedProjectPath={
-          session.activeSession?.cwd ??
-          (session.workspace?.status === 'valid' ? session.workspace.cwd : null)
-        }
-        isCollapsed={leftSidebarCollapsed}
-        isOverlay={leftOverlay}
-        onOpenSettings={openSettings}
-        onOpenAnalytics={openAnalytics}
-        onPickProjectDir={handlePickProjectDirClick}
-        projectPickerCreatesDraft={Boolean(session.activeSession?.chains.length)}
-        onRefreshSessions={session.refresh}
-        onSessionCreate={handleSessionCreateClick}
-        onProjectSessionCreate={handleProjectSessionCreateClick}
-        onProjectSelect={handleProjectSelect}
-        onProjectDelete={handleProjectDelete}
-        onSessionDelete={handleSessionDelete}
-        onSessionDeleteError={handleSessionDeleteError}
-        deletingSessionIds={session.pendingDeleteIds}
-        onSessionSelect={handleSessionSelect}
-        onSessionRename={handleSessionRename}
-        activities={activity.activities}
-        onStopSession={handleStopSession}
-        onToggle={toggleLeftSidebar}
-        sessionListState={session.listState}
-        workspace={session.workspace}
-        onTrustBadgeClick={handleTrustBadgeClick}
-        />
+        <LeftSidebar {...railProps} />
       </DeferredSurface>
 
       <main className="main-pane min-h-0 min-w-0 overflow-hidden">
@@ -1275,256 +549,116 @@ export function ChatView({ isVisible = true, bootstrapConfig = null, onNotify, a
               projectDir={projectConfigDir}
               onNewChat={(dir) => {
                 setProjectConfigDir(null);
-                void handleProjectSessionCreate(dir);
+                void switchActions.handleProjectSessionCreate(dir);
               }}
               onClose={() => setProjectConfigDir(null)}
             />
           </Suspense>
         ) : (
           <>
-        <SessionTabBar
-          openSessionIds={tabs.snapshot.openSessionIds}
-          focusedSessionId={tabs.snapshot.focusedSessionId}
-          sessions={
-            session.listState.status === 'ready' || session.listState.status === 'partial'
-              ? session.listState.sessions
-              : []
-          }
-          activities={activity.activities}
-          showDraft={draftTabVisible && !session.activeSession}
-          draftLabel="New chat"
-          draftProjectName={
-            session.workspace?.cwd
-              ? session.workspace.cwd.replace(/\\/g, '/').split('/').filter(Boolean).at(-1) ?? null
-              : null
-          }
-          onSelect={handleTabSelect}
-          onSelectDraft={handleSelectDraftTab}
-          onClose={requestCloseTab}
-          onCloseDraft={handleCloseDraftTab}
-          onRename={handleSessionRename}
-        />
-        <SessionHeader
-          session={session.activeSession}
-          workspace={session.workspace}
-        />
-        {closeConfirmId ? (
-          <div
-            ref={closeConfirmRef}
-            className="session-tab-confirm orchid-overlay-enter"
-            role="alertdialog"
-            aria-modal="true"
-            aria-labelledby="session-tab-confirm-title"
-            aria-describedby="session-tab-confirm-desc"
-          >
-            <div className="session-tab-confirm-card orchid-dialog-enter border border-base-300 bg-base-100 shadow-lg">
-              <p id="session-tab-confirm-title" className="session-tab-confirm-text font-semibold">
-                Close running session tab?
-              </p>
-              <p id="session-tab-confirm-desc" className="session-tab-confirm-text session-tab-confirm-desc text-base-content/80">
-                This session is still running. Close the tab and keep the agent working in the background?
-              </p>
-              <div className="session-tab-confirm-actions">
-                <Button
-                  ref={closeConfirmCancelRef}
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => setCloseConfirmId(null)}
-                >
-                  Cancel
-                </Button>
-                <Button
-                  variant="primary"
-                  size="sm"
-                  onClick={() => {
-                    const id = closeConfirmId;
-                    setCloseConfirmId(null);
-                    if (id) void performCloseTab(id);
-                  }}
-                >
-                  Close tab
-                </Button>
-              </div>
-            </div>
-          </div>
-        ) : null}
-        <div
-          ref={chatContentRef}
-          className={contentMode === 'subagents' ? 'orchid-chat-content-preserved orchid-chat-content-hidden' : 'orchid-chat-content-preserved orchid-view-enter'}
-          aria-hidden={contentMode === 'subagents' ? true : undefined}
-        >
-        <DeferredSurface isVisible={chatSurfaceVisible}>
-          <ChatStream
-            isVisible={chatSurfaceVisible}
-            key={session.activeSession?.id ?? 'draft'}
-            messages={chat.messages}
-            streamingContent={chat.streamingContent}
-            toolBlocks={chat.toolBlocks}
-            streamSegments={chat.streamSegments}
-            streamRevision={chat.streamRevision}
-            status={chat.status}
-            error={chat.error}
-            usage={chat.usage}
-            currentTurnUsage={chat.currentTurnUsage}
-            subagentUsage={subagents.usageSummary}
-            subagents={subagents.subagents}
-            sessionChains={session.activeSession?.chains ?? []}
-            sessionId={session.activeSession?.id ?? null}
-            onClearError={chat.clearError}
-            onOpenSettings={openSettings}
-            onPickProjectDir={workspaceBound ? undefined : handlePickProjectDirClick}
-            workspaceUnbound={!workspaceBound}
-            onRetry={handleRetry}
-            streamStartTime={chat.streamStartTime}
-            interrupted={chat.interrupted}
-            alwaysExpandToolGroups={alwaysExpandToolGroups}
-            onLoadHistoryPage={handleLoadHistoryPage}
-            compactionProgress={chat.compactionProgress}
-          />
-        </DeferredSurface>
-        <MessageQueue
-          queue={messageQueue.queue}
-          editingId={messageQueue.editingId}
-          onRemove={messageQueue.removeFromQueue}
-          onReorder={messageQueue.reorderQueue}
-          onStartEditing={messageQueue.startEditing}
-          onUpdateEditingText={messageQueue.updateEditingText}
-          onFinishEditing={messageQueue.finishEditing}
-          onCancelEditing={messageQueue.cancelEditing}
-          onChangeTrigger={messageQueue.changeTrigger}
-        />
-        <InputArea
-          key={composerDraftKey}
-          sessionId={session.activeSession?.id ?? null}
-          status={chat.status}
-          model={providerPickerValue}
-          modelLabels={providerModelLabels}
-          modelDetails={providerModelDetails}
-          interruptState={chat.interruptState}
-          onSend={handleSend}
-          onCancel={chat.cancel}
-          onQueue={handleQueue}
-          commandContext={commandContext}
-          sessions={sessions}
-          currentTheme={currentTheme}
-          currentPersonality={currentPersonality}
-          personalityNames={personalityNames}
-          workspaceBound={workspaceBound}
-          providerAvailable={providerAvailable}
-          modelSelected={modelSelected}
-          onOpenProviders={handleOpenProviders}
-          onPickProjectDir={handlePickProjectDirClick}
-          isViewActive={!isVisible || contentMode === 'subagents'}
-          hasRunningSubagents={hasRunningSubagents}
-          draftRestore={trustSend.draftRestore}
-        />
-        <DeferredSurface isVisible={isVisible}>
-          <Footer
-            isVisible={isVisible}
-            streamStartTime={chat.streamStartTime}
-            isStreaming={chat.status === 'streaming'}
-            interruptState={chat.interruptState}
-            usage={chat.usage}
-            maxContext={maxContext}
-            messages={chat.messages}
-            streamingThinkingChars={Math.floor(chat.streamingUnaccountedThinkingChars / 500) * 500 || undefined}
-            model={providerPickerValue}
-            modelLabels={providerModelLabels}
-            modelDetails={providerModelDetails}
-            commandContext={commandContext}
-            sessionId={session.activeSession?.id ?? null}
-            reasoningEffortOverride={session.activeSession?.reasoningEffortOverride ?? null}
-            serviceTierOverride={session.activeSession?.tierOverride ?? null}
-            permissionMode={session.activeSession?.permissionMode ?? null}
-          />
-        </DeferredSurface>
-        </div>
-        {contentMode === 'subagents' ? (
-          <div className="orchid-view-enter flex min-h-0 flex-1 flex-col">
-            <Suspense
-              fallback={(
-                <StateMessage
-                  kind="loading"
-                  title="Loading subagent view…"
-                  className="min-h-0 flex-1"
-                  role="status"
-                  aria-live="polite"
-                />
-              )}
+            <ChatViewTabStrip
+              tabs={tabs.snapshot}
+              sessions={sessions}
+              activities={activity.activities}
+              showDraft={draftTabVisible && !session.activeSession}
+              session={session.activeSession}
+              workspace={session.workspace}
+              onSelect={sessionActions.handleTabSelect}
+              onSelectDraft={sessionActions.handleSelectDraftTab}
+              onClose={sessionActions.requestCloseTab}
+              onCloseDraft={sessionActions.handleCloseDraftTab}
+              onRename={sessionActions.handleSessionRename}
+            />
+            {closeConfirmId ? (
+              <SessionCloseConfirmDialog
+                containerRef={closeConfirmRef}
+                initialFocusRef={closeConfirmCancelRef}
+                onCancel={declineCloseConfirm}
+                onConfirm={() => {
+                  const id = closeConfirmId;
+                  declineCloseConfirm();
+                  void sessionActions.performCloseTab(id);
+                }}
+              />
+            ) : null}
+            <div
+              ref={chatContentRef}
+              className={contentMode === 'subagents' ? 'orchid-chat-content-preserved orchid-chat-content-hidden' : 'orchid-chat-content-preserved orchid-view-enter'}
+              aria-hidden={contentMode === 'subagents' ? true : undefined}
             >
-            <DeferredSurface isVisible={isVisible}>
-              <SubagentView subagents={subagents} openRequest={subagentOpenRequest} modelDetails={providerModelDetails} onBackToChat={() => setContentMode('chat')} />
-            </DeferredSurface>
-            </Suspense>
-          </div>
-        ) : null}
+              <MachineConnectionBanner
+                machineLabel={machines.activeMachineLabel}
+                status={machineScope.activeMachineStatus}
+                disconnected={machineScope.remoteDisconnected}
+                liveTurnStartedAt={machineScope.resumedLiveTurnStartedAt}
+                reconnecting={machineScope.reconnectingMachine}
+                onReconnect={() => void machineScope.handleMachineReconnect()}
+              />
+              <DeferredSurface isVisible={chatSurfaceVisible}>
+                <ChatStream
+                  isVisible={chatSurfaceVisible}
+                  key={session.activeSession?.id ?? 'draft'}
+                  {...streamProps}
+                />
+              </DeferredSurface>
+              <ChatViewComposer
+                isVisible={isVisible}
+                composerDraftKey={composerDraftKey}
+                chat={chat}
+                session={session}
+                models={models}
+                config={config}
+                messageQueue={messageQueue}
+                composer={composer}
+                trustSend={trustSend}
+                commandContext={commandContext}
+                sessions={sessions}
+                workspaceBound={workspaceBound}
+                canPickProjectDir={canPickProjectDir}
+                onPickProjectDir={switchActions.handlePickProjectDirClick}
+                onOpenProviders={openProviderSettings}
+                hasRunningSubagents={hasRunningSubagents}
+                isViewActive={!isVisible || contentMode === 'subagents'}
+              />
+            </div>
+            {contentMode === 'subagents' ? (
+              <div className="orchid-view-enter flex min-h-0 flex-1 flex-col">
+                <Suspense
+                  fallback={(
+                    <StateMessage
+                      kind="loading"
+                      title="Loading subagent view…"
+                      className="min-h-0 flex-1"
+                      role="status"
+                      aria-live="polite"
+                    />
+                  )}
+                >
+                <DeferredSurface isVisible={isVisible}>
+                  <SubagentView subagents={subagents} openRequest={subagentOpenRequest} modelDetails={providerModelDetails} onBackToChat={() => setContentMode('chat')} />
+                </DeferredSurface>
+                </Suspense>
+              </div>
+            ) : null}
           </>
         )}
       </main>
 
       <DeferredSurface isVisible={isVisible}>
-        <Sidebar
-          isOpen={sidebarOpen}
-          isOverlay={rightOverlay}
-          onToggle={toggleSidebar}
-          subagentState={subagents.state}
-          onRefreshSubagents={subagents.refresh}
-          selectedSubagentId={subagents.selectedId}
-          onSelectSubagent={subagents.select}
-          getSubagentDetail={subagents.getDetail}
-          onOpenSubagentView={openSubagentView}
-          todoState={todos.state}
-          onRefreshTodos={todos.refresh}
-          commandsState={commands.state}
-          onRefreshCommands={commands.refresh}
-          requestsState={debugRequests.state}
-          onRefreshRequests={debugRequests.refresh}
-          onShowMoreRequests={debugRequests.showMore}
-          selectedRequestId={debugRequests.selectedId}
-          onSelectRequest={debugRequests.select}
-          requestCapture={debugRequests.capture}
-          onRetryRequestCapture={debugRequests.retryCapture}
-          sessionId={session.activeSession?.id ?? null}
-          mcpServers={mcpServers}
-          ragStatus={ragStatus}
-          astStatus={astStatus}
-          autoRefreshing={autoRefreshing}
-          onIndexRAG={handleIndexRAG}
-          onIndexAST={handleIndexAST}
-          onRefreshIndex={refreshIndex}
-          usage={chat.usage}
-          cumulativeUsage={chat.cumulativeUsage}
-          maxContext={maxContext}
-          messages={chat.messages}
-          streamingThinkingChars={Math.floor(chat.streamingUnaccountedThinkingChars / 500) * 500 || undefined}
-          focusSection={inspectorFocusSection}
-          onFocusSectionConsumed={handleFocusSectionConsumed}
-        />
+        <Sidebar {...inspectorProps} />
       </DeferredSurface>
 
-      <CommandPalette
-        isOpen={paletteOpen}
-        onClose={() => setPaletteOpen(false)}
-        context={commandContext}
+      <ChatViewOverlayStack
+        paletteOpen={paletteOpen}
+        setPaletteOpen={setPaletteOpen}
+        helpOpen={surfaces.helpOpen}
+        setHelpOpen={surfaces.setHelpOpen}
+        commandContext={commandContext}
         sessions={sessions}
-        currentTheme={currentTheme}
-        currentPersonality={currentPersonality}
-        personalityNames={personalityNames}
-        modelLabels={providerModelLabels}
-        modelDetails={providerModelDetails}
-      />
-
-      <ShortcutsHelp isOpen={helpOpen} onClose={() => setHelpOpen(false)} />
-
-      <TrustProjectDialog
-        open={trustPrompt.pending != null}
-        cwd={trustPrompt.pending?.cwd ?? ''}
-        trustState={trustPrompt.pending?.info.state === 'changed' ? 'changed' : 'untrusted'}
-        report={trustPrompt.pending?.info.report ?? null}
-        busy={trustPrompt.busy}
-        error={trustPrompt.error}
-        onGrant={() => void trustPrompt.grant()}
-        onDecline={trustSend.onDecline}
+        config={config}
+        models={models}
+        trustPrompt={trustPrompt}
+        onDeclineTrust={trustSend.onDecline}
       />
     </div>
   );

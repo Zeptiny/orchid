@@ -90,7 +90,7 @@ Fix:
 - `ActiveAgent.transcriptBase` (ipc/chat/state.ts): the transcript-complete turn slice; `turnMessagesFromAgent` prefers it over the model-view slice. `resetTurnForCompactionResume(next, transcriptOverride?)` maintains it; `persistSelectiveCompaction` now returns the transcript view (settled flags + new summary rows spliced at the same anchor storage used) and every selective apply/retry path threads it through.
 - Renderer (`stream-building.ts`): kept thinking between flagged spans is absorbed into the open compacted run (lookahead rule: the run continues only if the next non-thinking visible message is itself excluded); the stub count reports only messages actually hidden from the model; the expanded view still shows the absorbed thinking at full fidelity.
 
-Regression tests: `chat-ipc.test.ts` "mid-turn selective apply keeps flagged originals + inline head in the durable turn row" (fails on the pre-fix code), plus the stream-building absorption tests.
+Regression tests: `chat-ipc-compaction.test.ts` "mid-turn selective apply keeps flagged originals + inline head in the durable turn row" (fails on the pre-fix code), plus the stream-building absorption tests.
 
 ## Follow-up 2: stray Thought widgets + the stale-checkpoint race (review #55)
 

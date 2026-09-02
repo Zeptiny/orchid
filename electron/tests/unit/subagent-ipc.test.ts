@@ -578,6 +578,7 @@ describe('subagent delta event protocol (U1)', () => {
   function summarizeDelta(event: SubagentDeltaEvent): string {
     switch (event.type) {
       case SubagentDeltaEventType.SPAWNED: return `spawned:${event.record.id}`;
+      case SubagentDeltaEventType.STATUS_CHANGED: return `status:${event.status}`;
       case SubagentDeltaEventType.TEXT_DELTA: return `text:${event.segmentId}+${event.append}`;
       case SubagentDeltaEventType.THINKING_DELTA: return `thinking:${event.segmentId}+${event.append}`;
       case SubagentDeltaEventType.TOOL_START: return `tool_start:${event.toolCallId}:${event.status}`;
@@ -609,7 +610,8 @@ describe('subagent delta event protocol (U1)', () => {
     },
     { ...base, type: 'usage', usage, sequence: 7 },
     { ...base, type: 'compaction_progress', phase: 'preparing', detail: 'Summarizing history', mode: 'simple', sequence: 8 },
-    { ...base, type: 'terminal', record: summary('subagent-1', 'completed'), state: 'completed', usage, sequence: 9 },
+    { ...base, type: 'status_changed', status: 'running', sequence: 9 },
+    { ...base, type: 'terminal', record: summary('subagent-1', 'completed'), state: 'completed', usage, sequence: 10 },
   ];
 
   it('covers every delta variant in an exhaustive switch and validates each against the wire schema', () => {
@@ -622,6 +624,7 @@ describe('subagent delta event protocol (U1)', () => {
       'tool_result:call-1:complete',
       'usage:3',
       'compaction:preparing',
+      'status:running',
       'terminal:completed',
     ]);
     for (const delta of deltas) {
@@ -943,7 +946,7 @@ describe('subagent delta batcher (U3)', () => {
     expect(sequences(delivered)).toEqual([[1, 2, 3, 4, 5], [6]]);
   });
 
-  it('skips sessions with no eligible recipient without delivering or deferring their deltas', () => {
+  it('drops content deltas for a session with no eligible recipient', () => {
     const delivered: SubagentEvent[] = [];
     const batcher = createSubagentDeltaBatcher((envelope) => { delivered.push(envelope); }, {
       isEligible: (sessionId) => sessionId === session,
@@ -958,6 +961,51 @@ describe('subagent delta batcher (U3)', () => {
 
     vi.advanceTimersByTime(100);
     expect(delivered).toHaveLength(1);
+  });
+
+  it('carries ineligible lifecycle deltas in order and delivers them when eligibility returns', () => {
+    const delivered: SubagentEvent[] = [];
+    let eligible = false;
+    const batcher = createSubagentDeltaBatcher((envelope) => { delivered.push(envelope); }, {
+      isEligible: (sessionId) => eligible && sessionId === session,
+    });
+    batcher.queue({ ...baseFields, sequence: 1, type: 'status_changed', status: 'running' });
+    batcher.queue({ ...usageDelta(2), sessionId: 'ineligible-session' });
+    batcher.queue({ ...baseFields, sequence: 3, type: 'terminal', record: summary('subagent-1', 'completed'), state: 'completed', usage: null });
+
+    // Ineligible flush: nothing delivered, but the lifecycle handoffs ride the
+    // deferred queue so a transiently missed recipient still gets them.
+    vi.advanceTimersByTime(16);
+    expect(delivered).toHaveLength(0);
+
+    eligible = true;
+    vi.advanceTimersByTime(16);
+    expect(delivered).toHaveLength(1);
+    expect(delivered[0].sessionId).toBe(session);
+    // Carried in original order; the ineligible content delta was dropped.
+    expect(delivered[0].events.map((event) => event.type)).toEqual(['status_changed', 'terminal']);
+    expect(delivered[0].events[0]).toMatchObject({ type: 'status_changed', status: 'running', sequence: 1 });
+
+    vi.advanceTimersByTime(100);
+    expect(delivered).toHaveLength(1);
+  });
+
+  it('stops retrying a carry that never regains eligibility instead of flushing forever', () => {
+    const delivered: SubagentEvent[] = [];
+    const isEligible = vi.fn(() => false);
+    const batcher = createSubagentDeltaBatcher((envelope) => { delivered.push(envelope); }, { isEligible });
+    batcher.queue({ ...baseFields, sequence: 1, type: 'status_changed', status: 'running' });
+    batcher.queue({ ...baseFields, sequence: 2, type: 'terminal', record: summary('subagent-1', 'completed'), state: 'completed', usage: null });
+
+    // Well past the stall budget: retries happened, then the carry was dropped.
+    vi.advanceTimersByTime(16 * 80);
+    expect(delivered).toHaveLength(0);
+    const callsAtRest = isEligible.mock.calls.length;
+    expect(callsAtRest).toBeLessThan(80);
+
+    // No pending timer remains, so time keeps passing without further flushes.
+    vi.advanceTimersByTime(16 * 20);
+    expect(isEligible.mock.calls.length).toBe(callsAtRest);
   });
 
   it('checks window eligibility once per distinct session per flush, not per event', () => {
@@ -1008,10 +1056,10 @@ describe('persistSubagentChains dirty tracking (U6)', () => {
 
   const confirmSpy = vi.fn();
   const managerOf = (...rawRecords: unknown[]) => {
-    const records = rawRecords as Array<{ id: string; sessionId: string | null; state: string; admitted?: boolean }>;
+    const records = rawRecords as Array<{ id: string; sessionId: string | null; state: string }>;
     const persistence = new SubagentPersistence(() => 25);
     for (const record of records) {
-      persistence.register(record.id, record.sessionId, { admitted: record.admitted !== false });
+      persistence.register(record.id, record.sessionId);
     }
     return {
       allRecords: () => records,
@@ -1066,26 +1114,28 @@ describe('persistSubagentChains dirty tracking (U6)', () => {
       .toEqual(['sub-b']);
   });
 
-  it('never upserts queued or pre-admission records (queued is runtime-only)', () => {
+  it('upserts queued and cancelled-while-queued records too (queued spawns own a durable row, #121)', () => {
     const admitted = runtimeRecord('sub-admitted', sid, { queuedAt: 5, startedAt: 9 });
     const queued = runtimeRecord('sub-queued', sid, {
-      state: 'queued', queuedAt: 5, startedAt: null, admitted: false,
+      state: 'queued', queuedAt: 5, startedAt: null,
     });
     const cancelledWhileQueued = runtimeRecord('sub-cancelled', sid, {
-      state: 'interrupted', queuedAt: 5, startedAt: null, admitted: false,
+      state: 'interrupted', queuedAt: 5, startedAt: null,
     });
     const manager = managerOf(admitted, queued, cancelledWhileQueued);
 
     persistSubagentChains(manager, sid);
     expect(sessionManagerStub.syncSubagentRecords).toHaveBeenCalledTimes(1);
     expect(sessionManagerStub.syncSubagentRecords.mock.calls[0][1].map((r: { id: string }) => r.id))
-      .toEqual(['sub-admitted']);
+      .toEqual(['sub-admitted', 'sub-queued', 'sub-cancelled']);
 
-    // Even a recovery flush must not write records that never reached admission.
+    // The successful checkpoint confirmed the terminal record (evicted to a
+    // summary), so a recovery flush rewrites only the non-summary rows —
+    // the confirmed durable row is never clobbered with the summary shape.
     persistSubagentChains(manager, sid, { recovery: true });
     expect(sessionManagerStub.syncSubagentRecords).toHaveBeenCalledTimes(2);
     expect(sessionManagerStub.syncSubagentRecords.mock.calls[1][1].map((r: { id: string }) => r.id))
-      .toEqual(['sub-admitted']);
+      .toEqual(['sub-admitted', 'sub-queued']);
   });
 
   it('treats recovery flushes as all records dirty', () => {

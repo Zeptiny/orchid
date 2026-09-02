@@ -19,7 +19,7 @@
  * Approach:
  * - Pure build: buildCompactionApply() produces flagged replay state + summary head
  *   with compacted marker {rangeStart, rangeEnd, mode, summarizedCount}.
- * - Persistence is owned by the caller (ipc/chat/persist.ts): it takes the
+ * - Persistence is owned by the caller (host/chat/persist.ts): it takes the
  *   ApplyResult and writes flagged chains + the inline summary head as one
  *   crash-safe transaction (crash before → old history, crash after → compacted).
  *

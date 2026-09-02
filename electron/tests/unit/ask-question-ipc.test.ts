@@ -17,6 +17,7 @@ const mocks = vi.hoisted(() => {
     selectedByWebContents,
     activeTurnOwnerBySession,
     webContentsById,
+    configState: { approval_timeout: 5 } as unknown,
     forceAbortMainTurn: vi.fn(),
     ipcMain: {
       handle: vi.fn((channel: string, handler: (...args: unknown[]) => unknown) => {
@@ -39,18 +40,37 @@ vi.mock('electron', () => ({
   ipcMain: mocks.ipcMain,
 }));
 
+vi.mock('../../src/main/config/loader', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../src/main/config/loader')>();
+  return {
+    ...actual,
+    getConfig: () => mocks.configState,
+  };
+});
+
 vi.mock('../../src/main/ipc/chat', () => ({
   forceAbortMainTurn: mocks.forceAbortMainTurn,
   getActiveMainTurnWindowId: (sessionId: string) =>
     mocks.activeTurnOwnerBySession.get(sessionId) ?? null,
-  webContentsForWindowId: (windowId: string) => {
-    const webContents = mocks.webContentsById.get(windowId);
-    return webContents && !webContents.isDestroyed() ? webContents : null;
-  },
+}));
+
+// U5: ask_question:cancel now aborts through the host pipeline binding, which
+// sources forceAbortMainTurn from host/chat/abort instead of the IPC facade.
+vi.mock('../../src/main/host/chat/abort', async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  forceAbortMainTurn: mocks.forceAbortMainTurn,
 }));
 
 vi.mock('../../src/main/ipc/session', () => ({
   getSessionManager: () => mocks.sessionManager,
+}));
+
+// U5: the host-routed handlers resolve the caller's active session through the
+// session singleton (the server binding), not the IPC re-export.
+vi.mock('../../src/main/session/singleton', () => ({
+  getSessionManager: () => mocks.sessionManager,
+  resolveWindowWorkspace: () => ({ cwd: null, source: 'unbound', status: 'unbound' }),
+  resolveBoundProjectPath: () => null,
 }));
 
 import {
@@ -91,103 +111,79 @@ describe('ask_question IPC', () => {
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     unregisterAskQuestionIPC();
   });
 
-  it('sends and replays questions only to windows viewing the owning session', () => {
+  it('replays pending questions only to windows viewing the owning session', async () => {
     const owner = addWindow(10);
     const other = addWindow(20);
     mocks.selectedByWebContents.set(10, SESSION_A);
     mocks.selectedByWebContents.set(20, SESSION_B);
-    mocks.activeTurnOwnerBySession.set(SESSION_A, '10');
 
     void questionStore.create(TOOL_A, SESSION_A, QUESTIONS);
+    // Owner binding the turn's window would establish (the host binds the
+    // active main-turn window, or promotes the first connected viewer).
+    expect(questionStore.bindOwnerWindow(TOOL_A, '10')).toBe(true);
 
-    expect(owner.webContents.send).toHaveBeenCalledWith(
-      IPC_CHANNELS.ASK_QUESTION_ASKED,
-      { sessionId: SESSION_A, toolCallId: TOOL_A, questions: QUESTIONS },
-    );
+    // Delivery is protocol-owned now (host server + window broadcast); this
+    // module only exposes the replay + answer surface.
+    expect(owner.webContents.send).not.toHaveBeenCalled();
     expect(other.webContents.send).not.toHaveBeenCalled();
 
     const snapshot = mocks.handlers.get(IPC_CHANNELS.ASK_QUESTION_SNAPSHOT)!;
-    expect(snapshot(eventFrom(10))).toEqual({
+    await expect(snapshot(eventFrom(10))).resolves.toEqual({
       questions: [{ sessionId: SESSION_A, toolCallId: TOOL_A, questions: QUESTIONS }],
     });
-    expect(snapshot(eventFrom(20))).toEqual({ questions: [] });
+    await expect(snapshot(eventFrom(20))).resolves.toEqual({ questions: [] });
   });
 
-  it('forwards settlement only to the exact owning window', async () => {
-    const owner = addWindow(10);
-    const other = addWindow(20);
+  it('settles a pending question exactly once when answered', async () => {
+    addWindow(10);
     mocks.selectedByWebContents.set(10, SESSION_A);
-    mocks.selectedByWebContents.set(20, SESSION_A);
-    mocks.activeTurnOwnerBySession.set(SESSION_A, '10');
     const pending = questionStore.create(TOOL_A, SESSION_A, QUESTIONS);
+    expect(questionStore.bindOwnerWindow(TOOL_A, '10')).toBe(true);
 
     expect(questionStore.answer(TOOL_A, [])).toBe(true);
+    expect(questionStore.answer(TOOL_A, [])).toBe(false);
     await expect(pending).resolves.toMatchObject({ type: 'answered' });
-
-    expect(owner.webContents.send).toHaveBeenCalledWith(
-      IPC_CHANNELS.ASK_QUESTION_SETTLED,
-      { sessionId: SESSION_A, toolCallId: TOOL_A, result: 'answered' },
-    );
-    expect(other.webContents.send).not.toHaveBeenCalled();
+    expect(questionStore.get(TOOL_A)).toBeUndefined();
   });
 
-  it('settles and aborts when the owning WebContents is unavailable', async () => {
+  it('keeps a question pending with no owner renderer and settles it cancelled at the timeout (fail-closed)', async () => {
+    vi.useFakeTimers();
+    // No window is connected and no renderer exists for the owner — the
+    // question must stay pending (never auto-answered, never aborted) and
+    // settle CANCELLED at the approval timeout boundary (R7).
     mocks.activeTurnOwnerBySession.set(SESSION_A, '10');
 
     const pending = questionStore.create(TOOL_A, SESSION_A, QUESTIONS);
 
+    expect(questionStore.get(TOOL_A)).toBeDefined();
+    expect(mocks.forceAbortMainTurn).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(5_000);
     await expect(pending).resolves.toEqual({ type: 'cancelled' });
     expect(questionStore.get(TOOL_A)).toBeUndefined();
-    expect(mocks.forceAbortMainTurn).toHaveBeenCalledWith(SESSION_A);
-  });
-
-  it('settles and aborts when the owning WebContents is destroyed', async () => {
-    addWindow(10, true);
-    mocks.activeTurnOwnerBySession.set(SESSION_A, '10');
-
-    const pending = questionStore.create(TOOL_A, SESSION_A, QUESTIONS);
-
-    await expect(pending).resolves.toEqual({ type: 'cancelled' });
-    expect(questionStore.get(TOOL_A)).toBeUndefined();
-    expect(mocks.forceAbortMainTurn).toHaveBeenCalledWith(SESSION_A);
-  });
-
-  it('settles and aborts when synchronous question delivery throws', async () => {
-    const owner = addWindow(10);
-    owner.webContents.send.mockImplementation(() => {
-      throw new Error('renderer closed during send');
-    });
-    mocks.activeTurnOwnerBySession.set(SESSION_A, '10');
-
-    const pending = questionStore.create(TOOL_A, SESSION_A, QUESTIONS);
-
-    await expect(pending).resolves.toEqual({ type: 'cancelled' });
-    expect(questionStore.get(TOOL_A)).toBeUndefined();
-    expect(mocks.forceAbortMainTurn).toHaveBeenCalledWith(SESSION_A);
+    expect(mocks.forceAbortMainTurn).not.toHaveBeenCalled();
   });
 
   it('does not expose or settle a question from another window on the same session', async () => {
-    const owner = addWindow(10);
-    const sameSessionOtherWindow = addWindow(20);
+    addWindow(10);
+    addWindow(20);
     mocks.selectedByWebContents.set(10, SESSION_A);
     mocks.selectedByWebContents.set(20, SESSION_A);
-    mocks.activeTurnOwnerBySession.set(SESSION_A, '10');
     const pending = questionStore.create(TOOL_A, SESSION_A, QUESTIONS);
-
-    expect(owner.webContents.send).toHaveBeenCalledOnce();
-    expect(sameSessionOtherWindow.webContents.send).not.toHaveBeenCalled();
+    expect(questionStore.bindOwnerWindow(TOOL_A, '10')).toBe(true);
 
     const snapshot = mocks.handlers.get(IPC_CHANNELS.ASK_QUESTION_SNAPSHOT)!;
-    expect(snapshot(eventFrom(20))).toEqual({ questions: [] });
+    await expect(snapshot(eventFrom(20))).resolves.toEqual({ questions: [] });
 
     const answer = mocks.handlers.get(IPC_CHANNELS.ASK_QUESTION_ANSWER)!;
-    expect(answer(eventFrom(20), { toolCallId: TOOL_A, answers: [] })).toEqual({ ok: false });
+    await expect(answer(eventFrom(20), { toolCallId: TOOL_A, answers: [] })).resolves.toEqual({ ok: false });
     expect(questionStore.get(TOOL_A)).toBeDefined();
 
-    expect(answer(eventFrom(10), { toolCallId: TOOL_A, answers: [] })).toEqual({ ok: true });
+    await expect(answer(eventFrom(10), { toolCallId: TOOL_A, answers: [] })).resolves.toEqual({ ok: true });
     await expect(pending).resolves.toEqual({ type: 'answered', answers: [] });
   });
 
@@ -198,17 +194,18 @@ describe('ask_question IPC', () => {
     mocks.selectedByWebContents.set(20, SESSION_B);
     mocks.activeTurnOwnerBySession.set(SESSION_A, '10');
     const pending = questionStore.create(TOOL_A, SESSION_A, QUESTIONS);
+    expect(questionStore.bindOwnerWindow(TOOL_A, '10')).toBe(true);
     const answer = mocks.handlers.get(IPC_CHANNELS.ASK_QUESTION_ANSWER)!;
 
-    expect(answer(eventFrom(20), { toolCallId: TOOL_A, answers: [] })).toEqual({ ok: false });
+    await expect(answer(eventFrom(20), { toolCallId: TOOL_A, answers: [] })).resolves.toEqual({ ok: false });
     expect(() => answer(eventFrom(10), {
       toolCallId: TOOL_A,
       answers: [{ selected: 'A', text: null, skipped: false }],
     })).toThrow();
-    expect(answer(eventFrom(10), {
+    await expect(answer(eventFrom(10), {
       toolCallId: TOOL_A,
       answers: [{ selected: ['A'], text: null, skipped: false }],
-    })).toEqual({ ok: true });
+    })).resolves.toEqual({ ok: true });
     await expect(pending).resolves.toMatchObject({ type: 'answered' });
   });
 
@@ -217,10 +214,11 @@ describe('ask_question IPC', () => {
     mocks.selectedByWebContents.set(10, SESSION_A);
     mocks.activeTurnOwnerBySession.set(SESSION_A, '10');
     const pending = questionStore.create(TOOL_B, SESSION_A, QUESTIONS);
+    expect(questionStore.bindOwnerWindow(TOOL_B, '10')).toBe(true);
     const cancel = mocks.handlers.get(IPC_CHANNELS.ASK_QUESTION_CANCEL)!;
 
     expect(() => cancel(eventFrom(10), { toolCallId: 'not-a-uuid' })).toThrow();
-    expect(cancel(eventFrom(10), { toolCallId: TOOL_B })).toEqual({ ok: true });
+    await expect(cancel(eventFrom(10), { toolCallId: TOOL_B })).resolves.toEqual({ ok: true });
     await expect(pending).resolves.toEqual({ type: 'cancelled' });
     await new Promise<void>((resolve) => setImmediate(resolve));
     expect(mocks.forceAbortMainTurn).toHaveBeenCalledWith(

@@ -114,10 +114,10 @@ export class StartupState {
     return this.publish();
   }
 
-  degraded(): StartupSnapshot {
+  degraded(cause: 'tool-workers' | 'local-host' = 'tool-workers'): StartupSnapshot {
     this.assertStarting();
     this.assertAllStepsSettled();
-    if (this.step('tool_workers').state !== 'warning') {
+    if (cause === 'tool-workers' && this.step('tool_workers').state !== 'warning') {
       throw new Error('Startup can become degraded only after a tool worker warning');
     }
     this.phase = 'degraded';

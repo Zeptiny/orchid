@@ -36,6 +36,7 @@ import { IconButton } from './ui/IconButton';
 import { SectionHeader } from './ui/SectionHeader';
 import { StateMessage } from './ui/StateMessage';
 import { StatusBadge } from './ui/StatusBadge';
+import { MachineSwitcher } from './Machines/MachineSwitcher';
 import { SessionActivitySection } from './session-activity-section';
 import { SessionNameEditor } from './SessionNameEditor';
 
@@ -63,6 +64,11 @@ interface LeftSidebarProps {
   activeView?: 'analytics' | 'settings' | null;
   /** Current workspace (draft → session → sticky → unbound). */
   workspace?: WorkspaceInfo | null;
+  /**
+   * Host machine label shown on the workspace chip when this window drives a
+   * remote machine (null/undefined = local machine, no extra chrome).
+   */
+  machineLabel?: string | null;
   /**
    * Project path selected when no conversation is open (draft / project focus).
    * When set and activeSessionId is null, the matching project group is highlighted
@@ -116,6 +122,7 @@ export const LeftSidebar = memo(function LeftSidebar({
   onOpenAnalytics,
   activeView = null,
   workspace = null,
+  machineLabel = null,
   selectedProjectPath = null,
   onProjectSelect,
   onPickProjectDir,
@@ -191,6 +198,7 @@ export const LeftSidebar = memo(function LeftSidebar({
           </Button>
         )}
         <div className="left-panel-collapsed-spacer" />
+        <MachineSwitcher variant="collapsed" />
         {onOpenAnalytics && (
           <IconButton
             label="Analytics"
@@ -252,6 +260,7 @@ export const LeftSidebar = memo(function LeftSidebar({
           onNewChatInProject={onSessionCreate}
           projectPickerCreatesDraft={projectPickerCreatesDraft}
           onTrustBadgeClick={onTrustBadgeClick}
+          machineLabel={machineLabel}
         />
 
         <div className="session-search">
@@ -292,6 +301,7 @@ export const LeftSidebar = memo(function LeftSidebar({
       </div>
 
       <div className="panel-footer">
+        <MachineSwitcher />
         {onOpenAnalytics && (
           <Button
             variant="ghost"
@@ -328,6 +338,7 @@ function WorkspaceChip({
   onNewChatInProject,
   projectPickerCreatesDraft,
   onTrustBadgeClick,
+  machineLabel,
 }: {
   workspace: WorkspaceInfo | null;
   isUnbound: boolean;
@@ -337,6 +348,8 @@ function WorkspaceChip({
   projectPickerCreatesDraft: boolean;
   /** Open the trust dialog for this workspace. */
   onTrustBadgeClick?: () => void;
+  /** Host machine label when the window drives a remote machine. */
+  machineLabel?: string | null;
 }) {
   const cwd = workspace?.cwd ?? null;
   const trust = workspace?.trust ?? 'trusted';
@@ -375,6 +388,14 @@ function WorkspaceChip({
             {trust === 'changed' ? 'Changed' : 'Not trusted'}
           </StatusBadge>
         </button>
+      )}
+      {machineLabel && (
+        <span
+          className="mono shrink-0 text-xs text-base-content/60"
+          title={`Host machine: ${machineLabel}`}
+        >
+          {machineLabel}
+        </span>
       )}
       {showNewChat && (
         <Button

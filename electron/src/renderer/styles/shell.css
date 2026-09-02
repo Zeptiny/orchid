@@ -862,7 +862,8 @@
   }
 
   .session-settings-btn,
-  .session-analytics-btn {
+  .session-analytics-btn,
+  .session-machine-btn {
     width: 100%;
     min-height: 36px !important;
     height: auto !important;
@@ -875,10 +876,20 @@
   }
 
   .session-settings-btn svg,
-  .session-analytics-btn svg {
+  .session-analytics-btn svg,
+  .session-machine-btn svg {
     width: 18px;
     height: 18px;
     flex-shrink: 0;
+  }
+
+  .session-machine-btn .session-machine-btn-label {
+    min-width: 0;
+    flex: 1 1 auto;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    text-align: left;
   }
 
   /* Inspector rows (context / usage / MCP). */

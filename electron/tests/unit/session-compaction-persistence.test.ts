@@ -35,7 +35,7 @@ import {
 import { openSqliteDb } from '../../src/main/utils/sqlite';
 import { SessionManager } from '../../src/main/session/manager';
 import { buildCompactionApply } from '../../src/main/llm/compaction/apply';
-import { persistCompactionBetweenTurns, attachUsageToLatestAssistant } from '../../src/main/ipc/chat/persist';
+import { persistCompactionBetweenTurns, attachUsageToLatestAssistant } from '../../src/main/host/chat/persist';
 
 const holders = vi.hoisted(() => ({
   sessionManager: null as unknown,
@@ -630,11 +630,25 @@ describe('applySubagentCompactionPersistence (targeted subagent durable write)',
         ['sm-0003', false],
       ]);
 
-    // Unknown cleared ids abort the whole write (integrity throw).
-    expect(() => applySubagentCompactionPersistence(sessionId, 'sub-1', {
+    // A cleared id with no durable owner is idempotent (matching the main
+    // session scope): the settle computes the clear set over the live history,
+    // and there is no durable row that could resurrect a stale flag — the
+    // write succeeds and leaves the record unchanged.
+    const recordBeforeWrite = readSubagentRows(sessionId)[0]![1];
+    applySubagentCompactionPersistence(sessionId, 'sub-1', {
       updatedAt: T0,
       flaggedMessageIds: [],
       clearedMessageIds: ['not-a-durable-message'],
+      summaryMessage: null,
+      insertBeforeMessageId: null,
+    }, storageOpts);
+    const recordAfterWrite = readSubagentRows(sessionId)[0]![1];
+    expect(recordAfterWrite).toBe(recordBeforeWrite);
+
+    // Flagged ids stay fail-closed: an unknown flagged id aborts the write.
+    expect(() => applySubagentCompactionPersistence(sessionId, 'sub-1', {
+      updatedAt: T0,
+      flaggedMessageIds: ['not-a-durable-message'],
       summaryMessage: null,
       insertBeforeMessageId: null,
     }, storageOpts)).toThrow(/not-a-durable-message/);

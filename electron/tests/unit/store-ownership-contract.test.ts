@@ -5,7 +5,9 @@ import { describe, expect, it } from 'vitest';
 const mainRoot = resolve(import.meta.dirname, '../../src/main');
 
 const managedStoreFiles = [
-  'ipc/ast.ts',
+  // U5: the one-shot AST status read moved from ipc/ast.ts into the host
+  // binding that the handler now routes to.
+  'host/server.ts',
   'rag/indexer.ts',
   'ast/indexer.ts',
   'tools/rag/search.ts',

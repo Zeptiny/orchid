@@ -14,17 +14,7 @@ import type { ProviderModelOption } from '../../shared/types/ipc';
 import type { ChatStatus, InterruptState } from '../hooks/useChat';
 import { useAskQuestion } from '../hooks/useAskQuestion';
 import { usePermissionApproval } from '../hooks/usePermissionApproval';
-import {
-  COMMANDS,
-  trackRecentCommand,
-  buildThemeResults,
-  buildPersonalityResults,
-  buildModelResults,
-  buildSessionResults,
-  fuzzyMatch,
-  type PaletteResult,
-} from '../commands/registry';
-import { resolveModelNotifyLabel } from '../utils/provider-selection';
+import type { PaletteResult } from '../commands/registry';
 import {
   evaluateComposerSend,
   shouldReleaseComposerSendLock,
@@ -33,6 +23,23 @@ import { AskQuestionOverlay } from './AskQuestionOverlay';
 import { PermissionApprovalPanel } from './PermissionApprovalPanel';
 import { SlashCommandMenu } from './SlashCommandMenu';
 import { IconButton } from './ui/IconButton';
+import {
+  TEXTAREA_MIN_HEIGHT_PX,
+  resizeComposerTextarea,
+} from './input-area/composer-autosize';
+import {
+  resolveCancelTitle,
+  resolveComposerActionKey,
+} from './input-area/composer-action-controls';
+import {
+  consumeExactSlashCommand,
+  consumeSlashMenuKey,
+  isComposerSendKey,
+} from './input-area/slash-menu-keys';
+import { applySlashSelection } from './input-area/slash-selection';
+import { useComposerAutoResize } from './input-area/useComposerAutoResize';
+import { useSlashResults } from './input-area/useSlashResults';
+import type { SlashSubPicker } from './input-area/slash-results';
 
 interface InputAreaProps {
   /** Session whose pending ask_question calls may own this composer. */
@@ -78,12 +85,6 @@ interface InputAreaProps {
   draftRestore?: { text: string; consumed: () => void } | null;
 }
 
-type SubPicker = '/theme' | '/personality' | '/model' | '/sessions' | null;
-
-/** Single-line composer height — keep in sync with `.orchid-composer-textarea` CSS. */
-const TEXTAREA_MIN_HEIGHT_PX = 36;
-const TEXTAREA_MAX_HEIGHT_PX = 160;
-
 export type InputEscapeAction = 'cancel-question' | 'cancel-chat' | 'none';
 
 /** Resolve global Escape ownership without allowing chat cancellation to race a question. */
@@ -100,6 +101,40 @@ export function resolveInputEscapeAction(options: {
   if (options.hasActiveQuestion) return 'cancel-question';
   if ((!options.canInterrupt && !options.hasRunningSubagents) || options.isSlashMode) return 'none';
   return 'cancel-chat';
+}
+
+interface ComposerPlaceholderState {
+  isStreaming: boolean;
+  interruptState: InterruptState;
+  workspaceBound: boolean;
+  providerAvailable: boolean;
+  modelSelected: boolean;
+  hasCommandContext: boolean;
+}
+
+function resolveComposerPlaceholder(state: ComposerPlaceholderState): string {
+  if (state.isStreaming) {
+    return 'Type to queue a message or run /command… (Esc to interrupt)';
+  }
+  if (state.interruptState === 'confirmAgent') {
+    return 'Streaming… (Esc or ■ to interrupt)';
+  }
+  if (state.interruptState === 'confirmSubagents') {
+    return 'Type a follow-up, or Esc / ■ to cancel subagents…';
+  }
+  if (!state.workspaceBound) {
+    return 'Choose a project folder first… (or /cd)';
+  }
+  if (!state.providerAvailable) {
+    return 'Set up a provider before chatting…';
+  }
+  if (!state.modelSelected) {
+    return 'Select a connection and model first…';
+  }
+  if (state.hasCommandContext) {
+    return 'Type a message or /command… (Enter to send)';
+  }
+  return 'Type a message… (Enter to send, Shift+Enter for newline)';
 }
 
 export const InputArea = memo(function InputArea({
@@ -126,14 +161,16 @@ export const InputArea = memo(function InputArea({
   hasRunningSubagents = false,
   draftRestore = null,
 }: InputAreaProps) {
-  const textareaRef = useRef<HTMLTextAreaElement>(null);
   /** Blocks rapid double-Enter before parent status re-renders to streaming. */
   const isSendingRef = useRef(false);
-  /** Tracks pending requestAnimationFrame so we can cancel on unmount. */
-  const rafRef = useRef<number | null>(null);
   const [input, setInput] = useState('');
   const [selectedIndex, setSelectedIndex] = useState(0);
-  const [subPicker, setSubPicker] = useState<SubPicker>(null);
+  const [subPicker, setSubPicker] = useState<SlashSubPicker>(null);
+  const {
+    textareaRef,
+    resetComposerHeight,
+    resetComposerHeightAndFocus,
+  } = useComposerAutoResize(TEXTAREA_MIN_HEIGHT_PX);
   /** Pending ask_question stepper; while active it owns the composer area. */
   const askQuestion = useAskQuestion(sessionId);
   const hasActiveQuestion = askQuestion.active !== null;
@@ -162,87 +199,18 @@ export const InputArea = memo(function InputArea({
     Boolean(commandContext) &&
     (subPicker !== null || (input.startsWith('/') && !input.includes('\n')));
 
-  const availableModels = commandContext?.getAvailableModels() ?? [];
-
-  const modelNotifyLabels = useMemo(
-    () => Object.fromEntries(
-      availableModels.map((key) => [
-        key,
-        resolveModelNotifyLabel(key, modelDetails, modelLabels),
-      ]),
-    ),
-    [availableModels, modelDetails, modelLabels],
-  );
-
-  const slashResults = useMemo<PaletteResult[]>(() => {
-    if (!isSlashMode || !commandContext) return [];
-
-    if (subPicker === '/theme') {
-      return filterResults(buildThemeResults(currentTheme), input);
-    }
-    if (subPicker === '/personality') {
-      return filterResults(
-        buildPersonalityResults(currentPersonality, personalityNames),
-        input,
-      );
-    }
-    if (subPicker === '/model') {
-      return filterResults(
-        buildModelResults(
-          commandContext.getCurrentModel(),
-          commandContext.getAvailableModels(),
-          modelNotifyLabels,
-        ),
-        input,
-      );
-    }
-    if (subPicker === '/sessions') {
-      return filterResults(buildSessionResults(sessions), input);
-    }
-
-    // Command list — query is the full `/…` text
-    const query = input.trim();
-    const scored: Array<{ item: PaletteResult; score: number }> = [];
-
-    for (const cmd of COMMANDS) {
-      const score = Math.max(
-        fuzzyMatch(query, cmd.name),
-        // Also match without requiring the leading slash in the description path
-        fuzzyMatch(query.replace(/^\//, ''), cmd.name.replace(/^\//, '')),
-        fuzzyMatch(query, cmd.description),
-      );
-      if (score > 0 || query === '/' || query === '') {
-        scored.push({
-          item: {
-            id: `cmd:${cmd.name}`,
-            label: cmd.name,
-            description: cmd.description,
-            category: 'commands',
-            icon: 'command',
-            commandName: cmd.name,
-          },
-          score: query === '/' || query === '' ? 1 : score,
-        });
-      }
-    }
-
-    if (query === '/' || query === '') {
-      return scored.map((s) => s.item);
-    }
-
-    scored.sort((a, b) => b.score - a.score);
-    return scored.filter((s) => s.score > 0).map((s) => s.item);
-  }, [
-    isSlashMode,
+  const slashResults = useSlashResults({
     commandContext,
-    subPicker,
     input,
+    isSlashMode,
+    subPicker,
     currentTheme,
     currentPersonality,
     personalityNames,
     sessions,
-    modelNotifyLabels,
-  ]);
+    modelDetails,
+    modelLabels,
+  });
 
   // Keep selection in range when results change
   useEffect(() => {
@@ -261,19 +229,27 @@ export const InputArea = memo(function InputArea({
     setSelectedIndex(0);
   }, []);
 
+  const openSubPicker = useCallback((picker: NonNullable<SlashSubPicker>) => {
+    setSubPicker(picker);
+    setInput('');
+    setSelectedIndex(0);
+  }, []);
+
+  const leaveSubPicker = useCallback(
+    (picker: NonNullable<SlashSubPicker>, resetSelection: boolean) => {
+      setSubPicker(null);
+      setInput(picker);
+      if (resetSelection) setSelectedIndex(0);
+    },
+    [],
+  );
+
   const clearAndClose = useCallback(() => {
     setInput('');
     setSubPicker(null);
     setSelectedIndex(0);
-    if (rafRef.current !== null) cancelAnimationFrame(rafRef.current);
-    rafRef.current = requestAnimationFrame(() => {
-      rafRef.current = null;
-      if (textareaRef.current) {
-        textareaRef.current.style.height = `${TEXTAREA_MIN_HEIGHT_PX}px`;
-      }
-      textareaRef.current?.focus();
-    });
-  }, []);
+    resetComposerHeightAndFocus();
+  }, [resetComposerHeightAndFocus]);
 
   const slashContext = useMemo<CommandContext | null>(() => {
     if (!commandContext) return null;
@@ -289,101 +265,22 @@ export const InputArea = memo(function InputArea({
   const handleSelectResult = useCallback(
     async (result: PaletteResult) => {
       if (!slashContext) return;
-
-      trackRecentCommand(result.commandName ?? result.label);
-
-      if (result.action === 'theme' && result.value) {
-        await slashContext.onSetTheme(result.value);
-        slashContext.onNotify(`Theme changed to ${result.label}`, 'info');
-        clearAndClose();
-        return;
-      }
-
-      if (result.action === 'personality' && result.value) {
-        await slashContext.onSetPersonality(result.value);
-        slashContext.onNotify(`Personality changed to ${result.label}`, 'info');
-        clearAndClose();
-        return;
-      }
-
-      if (result.action === 'model' && result.value) {
-        await slashContext.onSetModel(result.value);
-        slashContext.onNotify(
-          `Model changed to ${resolveModelNotifyLabel(result.value, modelDetails, modelLabels)}`,
-          'info',
-        );
-        clearAndClose();
-        return;
-      }
-
-      if (result.action === 'session' && result.value) {
-        await slashContext.onLoadSession(result.value);
-        slashContext.onNotify(`Loaded session: ${result.label}`, 'info');
-        clearAndClose();
-        return;
-      }
-
-      if (result.commandName) {
-        const command = COMMANDS.find((c) => c.name === result.commandName);
-        if (!command) return;
-
-        if (command.name === '/theme') {
-          setSubPicker('/theme');
-          setInput('');
-          setSelectedIndex(0);
-          return;
-        }
-        if (command.name === '/personality') {
-          setSubPicker('/personality');
-          setInput('');
-          setSelectedIndex(0);
-          return;
-        }
-        if (command.name === '/model') {
-          setSubPicker('/model');
-          setInput('');
-          setSelectedIndex(0);
-          return;
-        }
-        if (command.name === '/sessions') {
-          setSubPicker('/sessions');
-          setInput('');
-          setSelectedIndex(0);
-          return;
-        }
-
-        await command.execute(slashContext);
-        // Ensure composer is cleared even if execute did not call onClose
-        clearAndClose();
-      }
+      await applySlashSelection(result, {
+        commandContext: slashContext,
+        modelDetails,
+        modelLabels,
+        clearAndClose,
+        openSubPicker,
+      });
     },
-    [slashContext, clearAndClose, modelDetails, modelLabels],
+    [slashContext, clearAndClose, openSubPicker, modelDetails, modelLabels],
   );
 
   const resizeTextarea = useCallback(() => {
     const el = textareaRef.current;
     if (!el) return;
-    // Empty: fixed single-line height with centered text (line-height = height).
-    // Multi-line: normal leading + vertical padding; overflow only at max height.
-    if (!el.value) {
-      el.style.height = `${TEXTAREA_MIN_HEIGHT_PX}px`;
-      el.style.lineHeight = `${TEXTAREA_MIN_HEIGHT_PX}px`;
-      el.style.paddingTop = '0';
-      el.style.paddingBottom = '0';
-      el.style.overflowY = 'hidden';
-      return;
-    }
-    el.style.lineHeight = '1.4';
-    el.style.paddingTop = '8px';
-    el.style.paddingBottom = '8px';
-    el.style.height = 'auto';
-    const next = Math.min(
-      Math.max(el.scrollHeight, TEXTAREA_MIN_HEIGHT_PX),
-      TEXTAREA_MAX_HEIGHT_PX,
-    );
-    el.style.height = `${next}px`;
-    el.style.overflowY = next >= TEXTAREA_MAX_HEIGHT_PX ? 'auto' : 'hidden';
-  }, []);
+    resizeComposerTextarea(el, () => el.scrollHeight);
+  }, [textareaRef]);
 
   useEffect(() => {
     // Release send lock when not streaming: idle success path and error/gate
@@ -407,15 +304,6 @@ export const InputArea = memo(function InputArea({
     setInput(draftRestore.text);
     draftRestore.consumed();
   }, [draftRestore]);
-
-  // Cancel pending rAF on unmount
-  useEffect(() => {
-    return () => {
-      if (rafRef.current !== null) {
-        cancelAnimationFrame(rafRef.current);
-      }
-    };
-  }, []);
 
   // Multi-stage Esc — same path as the cancel button (agent → subagents).
   // Model dropup closes first; slash menu owns Esc while open.
@@ -445,16 +333,6 @@ export const InputArea = memo(function InputArea({
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [askQuestion.cancelAll, canInterrupt, hasActiveQuestion, hasRunningSubagents, isSlashMode, isViewActive, onCancel]);
-
-  const resetComposerHeight = useCallback(() => {
-    if (rafRef.current !== null) cancelAnimationFrame(rafRef.current);
-    rafRef.current = requestAnimationFrame(() => {
-      rafRef.current = null;
-      if (textareaRef.current) {
-        textareaRef.current.style.height = `${TEXTAREA_MIN_HEIGHT_PX}px`;
-      }
-    });
-  }, []);
 
   const handleSend = useCallback(async () => {
     const trimmed = input.trim();
@@ -510,54 +388,32 @@ export const InputArea = memo(function InputArea({
     workspaceBound,
   ]);
 
+  const selectNextSlashResult = useCallback(() => {
+    setSelectedIndex((prev) => Math.min(prev + 1, slashResults.length - 1));
+  }, [slashResults.length]);
+
+  const selectPreviousSlashResult = useCallback(() => {
+    setSelectedIndex((prev) => Math.max(prev - 1, 0));
+  }, []);
+
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
       // Slash menu navigation
-      if (isSlashMode && slashResults.length > 0) {
-        if (e.key === 'ArrowDown') {
-          e.preventDefault();
-          setSelectedIndex((prev) => Math.min(prev + 1, slashResults.length - 1));
-          return;
-        }
-        if (e.key === 'ArrowUp') {
-          e.preventDefault();
-          setSelectedIndex((prev) => Math.max(prev - 1, 0));
-          return;
-        }
-        if (e.key === 'Enter' && !e.shiftKey) {
-          e.preventDefault();
-          const item = slashResults[selectedIndex];
-          if (item) void handleSelectResult(item);
-          return;
-        }
-        if (e.key === 'Tab') {
-          e.preventDefault();
-          const item = slashResults[selectedIndex];
-          if (item) void handleSelectResult(item);
-          return;
-        }
-        if (e.key === 'Escape') {
-          e.preventDefault();
-          if (subPicker) {
-            setSubPicker(null);
-            setInput(subPicker);
-            setSelectedIndex(0);
-          } else {
-            closeSlashMenu();
-            // Leave text so user can keep editing, or clear if only `/`
-            if (input === '/') setInput('');
-          }
-          return;
-        }
-      } else if (isSlashMode && e.key === 'Escape') {
-        e.preventDefault();
-        if (subPicker) {
-          setSubPicker(null);
-          setInput(subPicker);
-        } else {
-          closeSlashMenu();
-          if (input === '/') setInput('');
-        }
+      if (
+        isSlashMode &&
+        consumeSlashMenuKey(e, {
+          results: slashResults,
+          selectedIndex,
+          subPicker,
+          input,
+          selectNext: selectNextSlashResult,
+          selectPrevious: selectPreviousSlashResult,
+          selectResult: (result) => void handleSelectResult(result),
+          leaveSubPicker,
+          closeMenu: closeSlashMenu,
+          setInputValue: setInput,
+        })
+      ) {
         return;
       }
 
@@ -568,20 +424,17 @@ export const InputArea = memo(function InputArea({
       }
 
       // Exact slash command with no fuzzy matches: try exact match, else send as chat
-      if ((e.key === 'Enter' && !e.shiftKey) || (e.key === 's' && (e.ctrlKey || e.metaKey))) {
-        if (isSlashMode && slashResults.length === 0 && input.trim().startsWith('/')) {
-          const exact = COMMANDS.find((c) => c.name === input.trim());
-          if (exact && slashContext) {
-            e.preventDefault();
-            void handleSelectResult({
-              id: `cmd:${exact.name}`,
-              label: exact.name,
-              description: exact.description,
-              category: 'commands',
-              commandName: exact.name,
-            });
-            return;
-          }
+      if (isComposerSendKey(e)) {
+        if (
+          consumeExactSlashCommand(e, {
+            isSlashMode,
+            hasResults: slashResults.length > 0,
+            input,
+            commandContext: slashContext,
+            selectResult: (result) => void handleSelectResult(result),
+          })
+        ) {
+          return;
         }
 
         e.preventDefault();
@@ -599,8 +452,11 @@ export const InputArea = memo(function InputArea({
       isSlashMode,
       slashResults,
       selectedIndex,
+      selectNextSlashResult,
+      selectPreviousSlashResult,
       handleSelectResult,
       subPicker,
+      leaveSubPicker,
       closeSlashMenu,
       input,
       slashContext,
@@ -622,13 +478,6 @@ export const InputArea = memo(function InputArea({
   );
 
   const showMenu = isSlashMode && (slashResults.length > 0 || subPicker !== null || input === '/');
-
-  const cancelTitle =
-    interruptState === 'confirmSubagents'
-      ? 'Cancel subagents'
-      : interruptState === 'confirmAgent'
-        ? 'Cancel agent'
-        : 'Interrupt';
 
   const cancelVariant = interruptState === 'confirmSubagents' ? 'warning' : 'error';
 
@@ -741,23 +590,14 @@ export const InputArea = memo(function InputArea({
             value={input}
             onChange={handleChange}
             onKeyDown={handleKeyDown}
-            placeholder={
-              isStreaming
-                ? 'Type to queue a message or run /command… (Esc to interrupt)'
-                : interruptState === 'confirmAgent'
-                  ? 'Streaming… (Esc or ■ to interrupt)'
-                  : interruptState === 'confirmSubagents'
-                    ? 'Type a follow-up, or Esc / ■ to cancel subagents…'
-                    : !workspaceBound
-                      ? 'Choose a project folder first… (or /cd)'
-                      : !providerAvailable
-                        ? 'Set up a provider before chatting…'
-                        : !modelSelected
-                          ? 'Select a connection and model first…'
-                          : commandContext
-                            ? 'Type a message or /command… (Enter to send)'
-                            : 'Type a message… (Enter to send, Shift+Enter for newline)'
-            }
+            placeholder={resolveComposerPlaceholder({
+              isStreaming,
+              interruptState,
+              workspaceBound,
+              providerAvailable,
+              modelSelected,
+              hasCommandContext: Boolean(commandContext),
+            })}
             disabled={inputDisabled}
             rows={1}
             aria-autocomplete={commandContext ? 'list' : undefined}
@@ -767,12 +607,12 @@ export const InputArea = memo(function InputArea({
 
           <div className="orchid-composer-controls">
             <span
-              key={showCancel ? 'cancel' : showMenu ? 'command' : isStreaming && hasInput ? 'queue' : 'send'}
+              key={resolveComposerActionKey({ showCancel, showMenu, isStreaming, hasInput })}
               className="orchid-composer-action-swap"
             >
             {showCancel ? (
               <IconButton
-                label={cancelTitle}
+                label={resolveCancelTitle(interruptState)}
                 icon="square"
                 size="sm"
                 variant={cancelVariant}
@@ -816,21 +656,3 @@ export const InputArea = memo(function InputArea({
     </div>
   );
 });
-
-function filterResults(items: PaletteResult[], query: string): PaletteResult[] {
-  const q = query.trim();
-  if (!q) return items;
-  const scored = items
-    .map((item) => ({
-      item,
-      score: Math.max(
-        fuzzyMatch(q, item.label),
-        item.description ? fuzzyMatch(q, item.description) : -1,
-      ),
-    }))
-    .filter((s) => s.score > 0);
-  scored.sort((a, b) => b.score - a.score);
-  return scored.map((s) => s.item);
-}
-
-/** Prefer the model id after provider/ for the compact chip. */

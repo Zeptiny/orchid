@@ -3,6 +3,8 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { IPC_CHANNELS } from '../../src/shared/types/ipc';
+import { HOST_ERROR_CODES } from '../../src/shared/host/protocol';
+import { clearActiveMachine, setActiveMachine } from '../../src/main/host/routing';
 
 const PROJECT_DIR = '/tmp/orchid-definitions-ipc-project';
 
@@ -50,6 +52,14 @@ vi.mock('../../src/main/ipc/session', () => ({
   resolveBoundProjectPath: mocks.resolveBoundProjectPath,
 }));
 
+// U5: the host-routed handler resolves the caller's project through the
+// session singleton (the server binding), not the IPC re-export.
+vi.mock('../../src/main/session/singleton', () => ({
+  resolveBoundProjectPath: mocks.resolveBoundProjectPath,
+  resolveWindowWorkspace: () => ({ cwd: null, source: 'unbound', status: 'unbound' }),
+  getSessionManager: () => ({ getActive: () => null, listSaved: () => [] }),
+}));
+
 vi.mock('../../src/main/defs/manage', () => ({
   listManagedSkills: mocks.listManagedSkills,
   listManagedAgents: mocks.listManagedAgents,
@@ -87,6 +97,9 @@ vi.mock('../../src/main/mcp/project-registry', () => ({
 
 vi.mock('../../src/main/tools', () => ({
   toolRegistry: { listAll: mocks.listAll },
+  // U5: the embedded local host's HostServer installs its own notifier.
+  setTodosChangedNotifier: vi.fn(),
+  getSubagentManager: () => ({ addOnChangeListener: vi.fn(() => vi.fn()) }),
 }));
 
 let definitionsIpc: typeof import('../../src/main/ipc/definitions');
@@ -156,5 +169,37 @@ describe('definitions:list availableTools', () => {
     expect(result.availableTools).toEqual(['read', 'write']);
     expect(warn).toHaveBeenCalledOnce();
     warn.mockRestore();
+  });
+});
+
+describe('definition:reveal', () => {
+  it('reveals a local definition path through the shell', async () => {
+    const reveal = mocks.handlers.get(IPC_CHANNELS.DEFINITION_REVEAL);
+    if (!reveal) throw new Error('definition:reveal handler not registered');
+
+    await expect(reveal({ sender: { id: 6 } }, { path: '/home/u/.orchid/skills/x/SKILL.md' }))
+      .resolves.toEqual({ status: 'ok' });
+    expect(mocks.shell.showItemInFolder).toHaveBeenCalledWith('/home/u/.orchid/skills/x/SKILL.md');
+  });
+
+  it('rejects with the typed UNSUPPORTED_ON_HOST error on a remote-active window (#30)', async () => {
+    setActiveMachine('6', 'ssh-remote-1');
+    try {
+      const reveal = mocks.handlers.get(IPC_CHANNELS.DEFINITION_REVEAL)!;
+      mocks.shell.showItemInFolder.mockClear();
+
+      // The path came from definitions:list on the REMOTE machine; the local
+      // shell must degrade with the same typed capability error the daemon
+      // would answer, not a misleading local-path failure.
+      await expect(
+        reveal({ sender: { id: 6 } }, { path: '/remote/home/.orchid/skills/x/SKILL.md' }),
+      ).rejects.toMatchObject({
+        code: HOST_ERROR_CODES.UNSUPPORTED_ON_HOST,
+        message: expect.stringContaining("'definitions.reveal' capability"),
+      });
+      expect(mocks.shell.showItemInFolder).not.toHaveBeenCalled();
+    } finally {
+      clearActiveMachine('6');
+    }
   });
 });

@@ -1,11 +1,14 @@
 /**
- * Live subagent delta batching and window delivery.
+ * Live subagent delta batching and delivery.
  *
  * This is intentionally owned by the agent runtime rather than IPC
  * registration: the runtime wires and flushes these process-wide helpers,
  * while the IPC module only owns snapshot handler registration.
+ *
+ * Delivery is injected via {@link setSubagentDeltaDelivery} so the runtime
+ * stays Electron-free; the Electron shell installs the window broadcast and
+ * plain-Node hosts keep the no-op default.
  */
-import { BrowserWindow, type WebContents } from 'electron';
 import { IPC_CHANNELS, type SubagentEvent } from '../../shared/types/ipc';
 import type {
   SubagentDeltaEvent,
@@ -17,7 +20,20 @@ import { getConfig } from '../config/loader';
 import { subagentsConfigSchema } from '../config/schema';
 import { getSessionManager } from '../session/singleton';
 
-export function isEligibleSubagentRecipient(contents: WebContents, sessionId: string): boolean {
+/** Structural delivery target (a window's web contents). */
+export interface SubagentDeliveryContents {
+  id: number | string;
+  isDestroyed(): boolean;
+  send(channel: string, ...args: unknown[]): void;
+}
+
+/** Structural window shape targeted by the delivery helpers. */
+export interface SubagentDeliveryWindow {
+  isDestroyed(): boolean;
+  webContents?: SubagentDeliveryContents | null;
+}
+
+export function isEligibleSubagentRecipient(contents: SubagentDeliveryContents, sessionId: string): boolean {
   if (contents.isDestroyed()) return false;
   return getSessionManager().getActive(String(contents.id))?.id === sessionId;
 }
@@ -31,10 +47,26 @@ export interface EventTimerApi {
 const FLUSH_FRAME_MS = 16;
 const FLUSH_MAX_MS = 50;
 
+/**
+ * Flush cycles an undeliverable carry may keep the flush loop alive for
+ * (~0.7s at frame cadence, ~2s on the max-latency backstop). Beyond it the
+ * carried lifecycle events are dropped so a session that never regains an
+ * eligible recipient cannot poll `isEligible` forever.
+ */
+const MAX_STALLED_CARRY_FLUSHES = 40;
+
 function isAppendDelta(
   event: SubagentDeltaEvent,
 ): event is SubagentTextDeltaEvent | SubagentThinkingDeltaEvent {
   return event.type === 'text_delta' || event.type === 'thinking_delta';
+}
+
+/**
+ * One-shot lifecycle handoffs: budget-exempt while eligible, carried (deferred
+ * in order) while their session has no eligible recipient.
+ */
+function isLifecycleDelta(event: SubagentDeltaEvent): boolean {
+  return event.type === 'spawned' || event.type === 'terminal' || event.type === 'status_changed';
 }
 
 /**
@@ -106,7 +138,13 @@ export interface SubagentDeltaBatcherOptions {
  * Budgeted batcher over typed subagent deltas. Merges same-segment text and
  * thinking appends per flush, caps each flush at a global event count and byte
  * budget, and defers (never drops) overflowing non-terminal deltas to the next
- * flush in order. `spawned`/`terminal` are budget-exempt and always flush.
+ * flush in order. `spawned`/`terminal`/`status_changed` are budget-exempt and
+ * always flush for an eligible session; while a session has no eligible
+ * recipient they are CARRIED to a later flush (bounded by a stall budget) so a
+ * transiently missed window still receives the one-shot queued→running→
+ * terminal transitions — dropping those stranded a subagent in the wrong list
+ * until the next snapshot. Content deltas for an ineligible session are
+ * dropped as before; snapshots re-establish them.
  * Delivers one `SubagentEvent` envelope per eligible session per flush;
  * lightweight summaries ride only the `spawned`/`terminal` deltas.
  */
@@ -120,6 +158,7 @@ export function createSubagentDeltaBatcher(
   let queue: SubagentDeltaEvent[] = [];
   let frameTimer: ReturnType<typeof setTimeout> | null = null;
   let maxTimer: ReturnType<typeof setTimeout> | null = null;
+  let stalledFlushes = 0;
 
   const scheduleFlush = (): void => {
     if (!frameTimer) frameTimer = timers.setTimeout(flush, FLUSH_FRAME_MS);
@@ -135,14 +174,34 @@ export function createSubagentDeltaBatcher(
     const { maxPerFlush, byteBudgetKb } = budgets();
     const byteBudget = byteBudgetKb * 1024;
     const merged = mergeAppendDeltas(queue);
-    const batch: SubagentDeltaEvent[] = [];
+    const envelopes = new Map<string, SubagentDeltaEvent[]>();
     const deferred: SubagentDeltaEvent[] = [];
+    // Eligibility enumerates windows and reads the active session, so gate
+    // once per distinct session per flush rather than once per event.
+    const eligibility = new Map<string, boolean>();
+    const envelopeFor = (sessionId: string): SubagentDeltaEvent[] => {
+      let events = envelopes.get(sessionId);
+      if (!events) {
+        events = [];
+        envelopes.set(sessionId, events);
+      }
+      return events;
+    };
     let normalCount = 0;
     let bytes = 0;
     for (const event of merged) {
-      const exempt = event.type === 'spawned' || event.type === 'terminal' || event.type === 'status_changed';
-      if (exempt) {
-        batch.push(event);
+      let eligible = eligibility.get(event.sessionId);
+      if (eligible === undefined) {
+        eligible = isEligible(event.sessionId);
+        eligibility.set(event.sessionId, eligible);
+      }
+      if (!eligible) {
+        // Carry lifecycle handoffs in order for a later flush; drop content.
+        if (isLifecycleDelta(event)) deferred.push(event);
+        continue;
+      }
+      if (isLifecycleDelta(event)) {
+        envelopeFor(event.sessionId).push(event);
         continue;
       }
       const size = estimateDeltaBytes(event);
@@ -152,35 +211,37 @@ export function createSubagentDeltaBatcher(
         deferred.push(event);
         continue;
       }
-      batch.push(event);
+      envelopeFor(event.sessionId).push(event);
       normalCount += 1;
       bytes += size;
     }
     queue = deferred;
 
-    const envelopes = new Map<string, SubagentDeltaEvent[]>();
-    // Eligibility enumerates windows and reads the active session, so gate
-    // once per distinct session per flush rather than once per event.
-    const eligibility = new Map<string, boolean>();
-    for (const event of batch) {
-      let eligible = eligibility.get(event.sessionId);
-      if (eligible === undefined) {
-        eligible = isEligible(event.sessionId);
-        eligibility.set(event.sessionId, eligible);
-      }
-      if (!eligible) continue;
-      let events = envelopes.get(event.sessionId);
-      if (!events) {
-        events = [];
-        envelopes.set(event.sessionId, events);
-      }
-      events.push(event);
-    }
     for (const [sessionId, events] of envelopes) {
       deliver({ sessionId, events });
     }
 
-    if (queue.length > 0) scheduleFlush();
+    // Any delivery proves liveness: restart the stall budget for the next
+    // carry episode, whether or not carries remain queued (a drained flush
+    // must not leak its stall count into a later episode's retry window).
+    if (envelopes.size > 0) stalledFlushes = 0;
+
+    if (queue.length > 0) {
+      if (envelopes.size > 0) {
+        scheduleFlush();
+      } else {
+        // Nothing was deliverable, so the queue is entirely carried lifecycle
+        // events for currently-ineligible sessions: retry within the stall
+        // budget, then drop the carry so the loop cannot run forever.
+        stalledFlushes += 1;
+        if (stalledFlushes > MAX_STALLED_CARRY_FLUSHES) {
+          queue = [];
+          stalledFlushes = 0;
+        } else {
+          scheduleFlush();
+        }
+      }
+    }
   };
 
   return {
@@ -195,26 +256,53 @@ export function createSubagentDeltaBatcher(
 /** Deliver one batched delta envelope to the windows owning its session. */
 export function deliverSubagentDeltaEvent(
   envelope: SubagentEvent,
-  windows: readonly BrowserWindow[] = BrowserWindow.getAllWindows(),
+  windows: readonly SubagentDeliveryWindow[] = [],
 ): void {
   for (const win of windows) {
     try {
-      if (!win.isDestroyed() && isEligibleSubagentRecipient(win.webContents, envelope.sessionId)) {
+      if (!win.isDestroyed() && win.webContents && isEligibleSubagentRecipient(win.webContents, envelope.sessionId)) {
         win.webContents.send(IPC_CHANNELS.SUBAGENTS_EVENT, envelope);
       }
     } catch { /* window closed between targeting and send */ }
   }
 }
 
-function hasEligibleSubagentRecipient(sessionId: string): boolean {
-  return BrowserWindow.getAllWindows().some(
-    (win) => !win.isDestroyed() && isEligibleSubagentRecipient(win.webContents, sessionId),
+/** Whether any live window in the set owns the session. */
+export function hasEligibleSubagentRecipientWindow(
+  sessionId: string,
+  windows: readonly SubagentDeliveryWindow[] = [],
+): boolean {
+  return windows.some(
+    (win) => !win.isDestroyed() && win.webContents != null && isEligibleSubagentRecipient(win.webContents, sessionId),
   );
 }
 
+/** Injected delivery for the process-wide delta batcher. */
+export interface SubagentDeltaDelivery {
+  /** Deliver one batched envelope to its live recipients. */
+  deliver(envelope: SubagentEvent): void;
+  /** Whether any live recipient currently owns the session. */
+  hasEligibleRecipient(sessionId: string): boolean;
+}
+
+const noopDeltaDelivery: SubagentDeltaDelivery = {
+  deliver: () => {},
+  hasEligibleRecipient: () => false,
+};
+
+let deltaDelivery: SubagentDeltaDelivery = noopDeltaDelivery;
+
+/**
+ * Install delta delivery for the process-wide batcher (the Electron shell
+ * installs the window broadcast). Passing null restores the no-op default.
+ */
+export function setSubagentDeltaDelivery(delivery: SubagentDeltaDelivery | null): void {
+  deltaDelivery = delivery ?? noopDeltaDelivery;
+}
+
 const deltaBatcher = createSubagentDeltaBatcher(
-  (envelope) => deliverSubagentDeltaEvent(envelope),
-  { isEligible: hasEligibleSubagentRecipient },
+  (envelope) => deltaDelivery.deliver(envelope),
+  { isEligible: (sessionId) => deltaDelivery.hasEligibleRecipient(sessionId) },
 );
 
 export function queueSubagentDelta(event: SubagentDeltaEvent): void { deltaBatcher.queue(event); }

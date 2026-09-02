@@ -31,6 +31,15 @@ import type {
   ProviderProtocol,
 } from './provider';
 import type {
+  MachineCreateInput,
+  MachineHostKeyFingerprint,
+  MachineActionError,
+  MachineRecord,
+  MachineStatusEntry,
+  MachineUpdateInput,
+  RemoteMachineRecord,
+} from './machine';
+import type {
   AgentSaveMessage,
   DefinitionDeleteMessage,
   DefinitionRevealMessage,
@@ -112,6 +121,125 @@ export type {
 } from './ipc-boundary';
 
 export type { CompactionProgressEvent, CompactionProgressPhase } from './compaction-progress';
+
+export type {
+  LocalMachineRecord,
+  MachineActionError,
+  MachineConnectionStateView,
+  MachineErrorView,
+  MachineHostKeyFingerprint,
+  MachineKind,
+  MachineRecord,
+  MachineStatusEntry,
+  RemoteMachineRecord,
+} from './machine';
+
+// ── Machines API ─────────────────────────────────────────────────────────────
+
+/**
+ * Create input plus the write-only SSH password for `password`-auth machines.
+ * The secret is stored encrypted (machine-secrets store) and never echoed
+ * back in any result or record.
+ */
+export type MachineCreateMessage = MachineCreateInput & {
+  password?: string;
+};
+
+export interface MachineUpdateMessage {
+  id: string;
+  /**
+   * Record patch plus the write-only SSH password: a non-empty string stores
+   * (replacing any prior password), an empty string clears it. Only honored
+   * while the machine's authMethod is `password`.
+   */
+  patch: MachineUpdateInput & { password?: string };
+}
+
+export interface MachineDeleteMessage {
+  id: string;
+}
+
+/** Local machine first, then remote machines sorted by label. */
+export interface MachineListResult {
+  machines: MachineRecord[];
+}
+
+export type MachineDeleteResult =
+  | { status: 'deleted'; machine: RemoteMachineRecord }
+  | { status: 'not_found' };
+
+/** Push event: the machine registry changed (any create/update/delete). */
+export interface MachinesChangedEvent {
+  machines: MachineRecord[];
+}
+
+/** Per-machine connection status; the local machine is always `connected`. */
+export interface MachineStatusResult {
+  machines: MachineStatusEntry[];
+}
+
+/** Push event: any machine's connection state changed (carries every entry). */
+export interface MachinesStatusChangedEvent {
+  machines: MachineStatusEntry[];
+}
+
+/** The machine a window currently drives. */
+export interface MachineActiveResult {
+  machineId: string;
+}
+
+export interface MachineSetActiveMessage {
+  machineId: string;
+}
+
+/** Point a window at a machine; remotes must be connected first. */
+export type MachineSetActiveResult =
+  | ({ status: 'ok'; machineId: string })
+  | ({ status: 'error'; error: MachineActionError });
+
+export interface MachineIdMessage {
+  machineId: string;
+}
+
+/** Connect one SSH machine (TOFU gate + handshake + client registration). */
+export type MachineConnectResult =
+  | ({ status: 'ok'; machine: MachineStatusEntry })
+  | ({ status: 'error'; error: MachineActionError });
+
+/** Disconnect one machine; idempotent for unknown machines. */
+export type MachineDisconnectResult =
+  | ({ status: 'ok' })
+  | ({ status: 'error'; error: MachineActionError });
+
+/** Out-of-band `ssh-keyscan` for an existing machine record. */
+export type MachineScanHostKeyResult =
+  | ({ status: 'scanned'; fingerprints: MachineHostKeyFingerprint[] })
+  | ({ status: 'error'; error: MachineActionError });
+
+/** Pin the machine's most recent scan into its known-hosts file (TOFU). */
+export type MachineConfirmHostKeyResult =
+  | ({ status: 'pinned'; fingerprints: MachineHostKeyFingerprint[] })
+  | ({ status: 'error'; error: MachineActionError });
+
+/** Stored-password presence per machine (the secret never crosses IPC). */
+export interface MachineAuthStatusEntry {
+  machineId: string;
+  authMethod: 'key' | 'password';
+  hasStoredPassword: boolean;
+}
+
+export interface MachineAuthStatusResult {
+  machines: MachineAuthStatusEntry[];
+}
+
+/**
+ * Re-broadcast the reconnect catch-up for the sending window's active machine
+ * (U10). `resynced` is false when there was nothing to push (local machine,
+ * unregistered remote).
+ */
+export type MachineResyncResult =
+  | ({ status: 'ok'; machineId: string; resynced: boolean })
+  | ({ status: 'error'; machineId: string; error: MachineActionError });
 
 // ── Chat API ─────────────────────────────────────────────────────────────────
 
@@ -207,6 +335,21 @@ export interface ChatSnapshot {
   interrupted: boolean;
 }
 
+/**
+ * Trim marker on a snapshot whose history exceeded the wire frame budget
+ * (#25): leading durable messages were dropped and `historyBefore` feeds
+ * `session.history_page` for the next older page.
+ */
+export interface SnapshotTrim {
+  /** Number of leading durable messages dropped to fit the budget. */
+  trimFromIndex: number;
+  /**
+   * Continuation cursor satisfying `session.history_page` params; null when
+   * the boundary message is not part of a durable chain (live-only message).
+   */
+  historyBefore: { chainId: string; beforeIndex: number } | null;
+}
+
 /** Coherent persisted history plus the optional in-flight tail for one session. */
 export interface ChatSessionSnapshot {
   sessionId: string;
@@ -214,6 +357,8 @@ export interface ChatSessionSnapshot {
   live: ChatSnapshot | null;
   /** Error detail from the last FAILED chain, if any (for hydration restore). */
   lastChainError?: { detail: string; title?: string | null } | null;
+  /** Present only when the history was trimmed to fit the frame budget (#25). */
+  trim?: SnapshotTrim;
 }
 
 /**
@@ -233,6 +378,8 @@ export interface SessionOpenResult {
   workspace: WorkspaceInfo;
   /** Error detail from the last FAILED chain, if any (for hydration restore). */
   lastChainError?: { detail: string; title?: string | null } | null;
+  /** Present only when the history was trimmed to fit the frame budget (#25). */
+  trim?: SnapshotTrim;
 }
 
 export interface SubagentSnapshotRequest { sessionId: string; }
@@ -551,6 +698,8 @@ export type ConfigPatch = {
   read_output_long_poll_max?: number;
   llm_retry_backoff_base?: number;
   llm_retry_max_delay?: number;
+  /** Whole-array replacement; the machine registry owns per-record edits. */
+  machines?: RemoteMachineRecord[];
 };
 
 export interface ConfigSaveMessage {
@@ -1524,6 +1673,43 @@ export interface OrchidAPI {
     onChanged: (callback: (event: ProjectTrustChangedEvent) => void) => () => void;
   };
 
+  machines: {
+    /** Local machine first, then remote machines sorted by label. */
+    list: () => Promise<MachineListResult>;
+    /** Add an SSH remote machine; broadcasts machines:changed. */
+    create: (message: MachineCreateMessage) => Promise<RemoteMachineRecord>;
+    /** Patch editable fields of one remote machine; broadcasts machines:changed. */
+    update: (message: MachineUpdateMessage) => Promise<RemoteMachineRecord>;
+    /** Remove one remote machine; broadcasts machines:changed. */
+    delete: (message: MachineDeleteMessage) => Promise<MachineDeleteResult>;
+    /** The machine registry changed; carries the fresh ordered list. */
+    onChanged: (callback: (event: MachinesChangedEvent) => void) => () => void;
+    /** Connection status of every machine (local is always connected). */
+    getStatus: () => Promise<MachineStatusResult>;
+    /** Any machine's connection state changed; carries every entry. */
+    onStatusChanged: (callback: (event: MachinesStatusChangedEvent) => void) => () => void;
+    /** The machine this window currently drives. */
+    getActive: () => Promise<MachineActiveResult>;
+    /** Point this window at another machine; remotes must be connected. */
+    setActive: (message: MachineSetActiveMessage) => Promise<MachineSetActiveResult>;
+    /** Connect one SSH machine (TOFU gate + handshake + client registration). */
+    connect: (message: MachineIdMessage) => Promise<MachineConnectResult>;
+    /** Disconnect one machine and drop its host client. */
+    disconnect: (message: MachineIdMessage) => Promise<MachineDisconnectResult>;
+    /**
+     * Re-broadcast the reconnect catch-up for this window's active machine
+     * (pending approvals/questions + reload signals). Call after the
+     * machine-scoped refresh so session-scoped state is re-opened first.
+     */
+    resync: () => Promise<MachineResyncResult>;
+    /** `ssh-keyscan` an existing machine record; the UI confirms before pinning. */
+    scanHostKey: (message: MachineIdMessage) => Promise<MachineScanHostKeyResult>;
+    /** Pin the machine's most recent scan (TOFU) into its known-hosts file. */
+    confirmHostKey: (message: MachineIdMessage) => Promise<MachineConfirmHostKeyResult>;
+    /** Stored-password presence per machine (booleans only, never secrets). */
+    authStatus: () => Promise<MachineAuthStatusResult>;
+  };
+
   subagents: {
     snapshot: (request: SubagentSnapshotRequest) => Promise<SubagentSnapshot>;
     /** Fetch the full durable transcript for the currently selected row. */
@@ -1770,6 +1956,40 @@ export const IPC_CHANNELS = {
   /** Push event: trust state changed for one project dir. */
   PROJECT_TRUST_CHANGED: 'project:trust_changed',
 
+  // Machines
+  /** List machines: implicit local machine first, then remotes by label. */
+  MACHINES_LIST: 'machines:list',
+  MACHINES_CREATE: 'machines:create',
+  MACHINES_UPDATE: 'machines:update',
+  MACHINES_DELETE: 'machines:delete',
+  /** Push event: the machine registry changed (any create/update/delete). */
+  MACHINES_CHANGED: 'machines:changed',
+  /** Connection status of every machine (local is always connected). */
+  MACHINES_GET_STATUS: 'machines:get_status',
+  /** Push event: any machine's connection state changed. */
+  MACHINES_STATUS_CHANGED: 'machines:status_changed',
+  /** The machine this window currently drives. */
+  MACHINES_GET_ACTIVE: 'machines:get_active',
+  /** Point the sending window at another machine. */
+  MACHINES_SET_ACTIVE: 'machines:set_active',
+  /** Connect one SSH machine. */
+  MACHINES_CONNECT: 'machines:connect',
+  /** Disconnect one machine. */
+  MACHINES_DISCONNECT: 'machines:disconnect',
+  /**
+   * Re-broadcast the reconnect catch-up (pending approvals/questions + reload
+   * signals) for the SENDING WINDOW's active machine (U10). Called by the
+   * renderer after its machine-scoped refresh so session-scoped pieces (live
+   * turn, background fleet) resolve against the re-opened session.
+   */
+  MACHINES_RESYNC: 'machines:resync',
+  /** `ssh-keyscan` an existing machine record. */
+  MACHINES_SCAN_HOST_KEY: 'machines:scan_host_key',
+  /** Pin the machine's most recent scan (TOFU). */
+  MACHINES_CONFIRM_HOST_KEY: 'machines:confirm_host_key',
+  /** Which machines have a stored SSH password (booleans only, never secrets). */
+  MACHINES_AUTH_STATUS: 'machines:auth_status',
+
   // Tool
   TOOL_EXECUTE: 'tool:execute',
 
@@ -1920,6 +2140,19 @@ export const ALLOWED_INVOKE_CHANNELS = [
   IPC_CHANNELS.PROJECT_TRUST_GET,
   IPC_CHANNELS.PROJECT_TRUST_SET,
   IPC_CHANNELS.PROJECT_TRUST_LIST,
+  IPC_CHANNELS.MACHINES_LIST,
+  IPC_CHANNELS.MACHINES_CREATE,
+  IPC_CHANNELS.MACHINES_UPDATE,
+  IPC_CHANNELS.MACHINES_DELETE,
+  IPC_CHANNELS.MACHINES_GET_STATUS,
+  IPC_CHANNELS.MACHINES_GET_ACTIVE,
+  IPC_CHANNELS.MACHINES_SET_ACTIVE,
+  IPC_CHANNELS.MACHINES_CONNECT,
+  IPC_CHANNELS.MACHINES_DISCONNECT,
+  IPC_CHANNELS.MACHINES_RESYNC,
+  IPC_CHANNELS.MACHINES_SCAN_HOST_KEY,
+  IPC_CHANNELS.MACHINES_CONFIRM_HOST_KEY,
+  IPC_CHANNELS.MACHINES_AUTH_STATUS,
   IPC_CHANNELS.TOOL_EXECUTE,
   IPC_CHANNELS.AGENT_SAVE,
   IPC_CHANNELS.AGENT_DELETE,
@@ -1991,6 +2224,8 @@ export const ALLOWED_EVENT_CHANNELS = [
   IPC_CHANNELS.SESSION_ACTIVITY_CHANGED,
   IPC_CHANNELS.SESSION_WORKING_SET_CHANGED,
   IPC_CHANNELS.PROJECT_TRUST_CHANGED,
+  IPC_CHANNELS.MACHINES_CHANGED,
+  IPC_CHANNELS.MACHINES_STATUS_CHANGED,
   IPC_CHANNELS.RAG_PROGRESS,
   IPC_CHANNELS.AST_PROGRESS,
   IPC_CHANNELS.INDEX_AUTO_REFRESH,

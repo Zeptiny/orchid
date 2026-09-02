@@ -26,7 +26,7 @@ import {
   getCompactionPending,
   setCompactionPending,
 } from '../../src/main/llm/compaction/pending-store';
-import { clearCompactionPause, shouldPauseForCompaction } from '../../src/main/ipc/next-request-stop';
+import { clearCompactionPause, shouldPauseForCompaction } from '../../src/main/agents/next-request-stop';
 import type { CompactionTrigger } from '../../src/main/llm/compaction/trigger';
 
 vi.mock('electron', () => ({
@@ -166,7 +166,7 @@ afterEach(() => {
 describe('SubagentPersistence', () => {
   it('confirms only the captured terminal revision, preserving a resumed generation', () => {
     const persistence = new SubagentPersistence(() => 2);
-    persistence.register('sub-1', 'session-1', { admitted: true });
+    persistence.register('sub-1', 'session-1');
     persistence.markDirty('sub-1');
     const terminal = persistence.checkpointCandidate('sub-1', 'session-1', true)!;
 
@@ -180,8 +180,8 @@ describe('SubagentPersistence', () => {
 
   it('retains summaries FIFO and resets checkpoint eligibility when rehydrated', () => {
     const persistence = new SubagentPersistence(() => 1);
-    persistence.register('old', 'session-1', { admitted: true });
-    persistence.register('new', 'session-1', { admitted: true });
+    persistence.register('old', 'session-1');
+    persistence.register('new', 'session-1');
 
     const old = persistence.checkpointCandidate('old', 'session-1', true)!;
     expect(persistence.confirmCheckpoint(old)).toEqual({ evict: true, removeIds: [] });
@@ -196,7 +196,7 @@ describe('SubagentPersistence', () => {
 
   it('tracks confirmed sessions for recovery and clears every owned policy fact', () => {
     const persistence = new SubagentPersistence(() => 2);
-    persistence.register('sub-1', 'session-1', { admitted: true });
+    persistence.register('sub-1', 'session-1');
     persistence.confirmCheckpoint(persistence.checkpointCandidate('sub-1', 'session-1', false)!);
 
     expect(persistence.trackedSessions()).toEqual(['session-1']);
@@ -207,7 +207,7 @@ describe('SubagentPersistence', () => {
 
   it('rejects a terminal confirmation captured before the same id is rehydrated', () => {
     const persistence = new SubagentPersistence(() => 2);
-    persistence.register('sub-1', 'session-1', { admitted: true });
+    persistence.register('sub-1', 'session-1');
     persistence.markDirty('sub-1');
     const stale = persistence.checkpointCandidate('sub-1', 'session-1', true)!;
     expect(persistence.confirmCheckpoint(stale).evict).toBe(true);
@@ -223,24 +223,14 @@ describe('SubagentPersistence', () => {
       .toBe(current.revision);
   });
 
-  it('admits a fresh record to checkpoint eligibility only after admission', () => {
+  it('registers a fresh record as immediately checkpoint-eligible (queued spawns own a durable row)', () => {
     const persistence = new SubagentPersistence(() => 2);
-    persistence.register('sub-1', 'session-1', { admitted: false });
+    persistence.register('sub-1', 'session-1');
 
-    expect(persistence.checkpointCandidate('sub-1', 'session-1', false)).toBeNull();
-
-    persistence.markAdmitted('sub-1');
-
+    // A spawn parked in the admission queue must produce a durable row from
+    // its first checkpoint, or an app close while queued loses the record
+    // entirely (issue #121 path a).
     expect(persistence.checkpointCandidate('sub-1', 'session-1', false)).not.toBeNull();
-  });
-
-  it('uses the legacy empty-session FIFO for undurable queued cancellations', () => {
-    const persistence = new SubagentPersistence(() => 1);
-    persistence.register('old', null, { admitted: false });
-    expect(persistence.summarizeUndurable('old')).toEqual({ evict: true, removeIds: [] });
-
-    persistence.register('new', null, { admitted: false });
-    expect(persistence.summarizeUndurable('new')).toEqual({ evict: true, removeIds: ['old'] });
   });
 });
 
@@ -751,7 +741,7 @@ describe('SubagentCompactionController durable-write integration (R36)', () => {
       emptyChain: () => makeChain(SESSION_ID, `chain-${SUB_ID}`, []),
       onPrepareEvaluated: () => undefined,
     });
-    persistence.register(SUB_ID, SESSION_ID, { admitted: true });
+    persistence.register(SUB_ID, SESSION_ID);
     return { controller, record, historyBox, assembler, persistence, progress, dirtyCount: () => dirty };
   }
 

@@ -24,6 +24,17 @@ export function setProviderCatalogStore(store: ProviderCatalogStore | null): voi
   providerCatalogStore = store;
 }
 
+/**
+ * Whether the provider runtime handles have been installed (startup finished
+ * or a test initialized them). Lets the embedded local host (host/local-host.ts)
+ * compose only what is missing instead of re-initializing live singletons.
+ */
+export function isProviderRuntimeContextInitialized(): boolean {
+  return providerCatalogStore != null
+    && providerCredentialVault != null
+    && providerConnectionStore != null;
+}
+
 /** Main-process access for provider IPC and driver registry work. */
 export function getProviderCatalogStore(): ProviderCatalogStore {
   if (!providerCatalogStore) {

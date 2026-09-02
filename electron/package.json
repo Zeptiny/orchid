@@ -10,6 +10,9 @@
   "homepage": "https://github.com/Zeptiny/orchid",
   "main": "dist/main/index.js",
   "desktopName": "com.orchid.app",
+  "bin": {
+    "orchid-agent": "./dist/agent/orchid-agent.js"
+  },
   "engines": {
     "node": ">=24.15.0 <25"
   },
@@ -21,6 +24,7 @@
     "build:main": "tsc -p tsconfig.node.json && npm run copy:defaults",
     "copy:defaults": "node scripts/copy-defaults.js",
     "build:preload": "node scripts/build-preload.js",
+    "build:agent": "node scripts/build-agent.js",
     "build:renderer": "vite build",
     "catalog:seed": "node --experimental-strip-types scripts/provider-catalog/seed-models-dev.ts",
     "catalog:validate": "node --experimental-strip-types scripts/provider-catalog/validate.ts",
@@ -29,10 +33,14 @@
     "typecheck:migration": "tsc --noEmit -p tsconfig.migration.json",
     "lint": "eslint src/",
     "check:runtime-cycles": "node scripts/check-runtime-cycles.mjs",
+    "check:host-boundary": "node scripts/check-host-boundary.mjs",
     "pretest": "npm run native:ensure:node",
-    "test": "vitest run",
+    "test": "npm run check:host-boundary && vitest run",
     "pretest:providers:live": "npm run native:ensure:node",
     "test:providers:live": "node --experimental-strip-types tests/smoke/provider-live.ts",
+    "pretest:agent": "npm run native:ensure:node",
+    "test:agent": "npm run build:agent && node --experimental-strip-types tests/smoke/agent-entry.ts --force",
+    "test:agent:smoke": "node --experimental-strip-types tests/smoke/agent-entry.ts",
     "native:ensure:electron": "node scripts/ensure-native-runtime.mjs electron",
     "native:ensure:node": "node scripts/ensure-native-runtime.mjs node",
     "rebuild:native": "node scripts/ensure-native-runtime.mjs electron --force",

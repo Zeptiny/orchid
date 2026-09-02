@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { classifyErrorKind } from '../../src/main/ipc/chat/stream';
+import { classifyErrorKind } from '../../src/main/host/chat/stream';
 import {
   isContextLengthExceededError,
   isContextLengthExceededMessage,

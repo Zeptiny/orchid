@@ -40,6 +40,7 @@ electron/
 │   │   ├── index.ts             # App entry — window creation, lifecycle, shutdown
 │   │   ├── startup.ts           # Startup snapshot store (phases: starting|ready|degraded|failed)
 │   │   ├── startup-lifecycle.ts # runStartupLifecycle() — sequential startup steps
+│   │   ├── agent-entry.ts       # `orchid-agent` CLI — plain-Node daemon entry (serve --stdio/--socket, bridge)
 │   │   ├── agents/              # Agent definitions and subagent orchestration
 │   │   │   ├── registry.ts      # Load agent definitions (~/.orchid/agents/ + seeded built-ins)
 │   │   │   ├── defaults/        # Built-in agent definitions (subdirs with marker files)
@@ -56,7 +57,9 @@ electron/
 │   │   │   ├── subagent-live-projection.ts # Live renderer projection of subagent streams
 │   │   │   ├── subagent-persistence.ts    # Persist subagent chains (terminal wave batching)
 │   │   │   ├── subagent-persistence-recovery.ts # Recover chains after crash/restart
+│   │   │   ├── subagent-lifecycle.ts      # Pending-waiter resolution (state-change vs flush)
 │   │   │   ├── persist-subagent-chains.ts # Persist subagent chain messages
+│   │   │   ├── next-request-stop.ts       # Per-session early-stop flags (next-request queue + compaction pauses)
 │   │   │   ├── wire-subagents.ts          # Wire subagent lifecycle into manager
 │   │   │   └── xstate/          # XState machines
 │   │   │       ├── agent-machine.ts      # Core agent loop (idle→streaming→toolExec→idle)
@@ -94,6 +97,7 @@ electron/
 │   │   │   ├── message-factories.ts    # Build AI SDK message objects
 │   │   │   ├── response-unwrap.ts      # Unwrap provider response shapes
 │   │   │   ├── reasoning-effort.ts     # Resolve per-turn reasoning effort (session/tier/connection)
+│   │   │   ├── reasoning-tokens.ts     # Shared reasoning-token estimation (apportioned when unreported)
 │   │   │   ├── tool-dispatch.ts # executeToolCall() — permission gate + timeout + output offloading
 │   │   │   ├── eager-tool-executor.ts # EagerToolExecutor — start tools as their input streams
 │   │   │   ├── tool-pool.ts     # Tool worker pool singleton (offloadable read-only tools)
@@ -117,16 +121,21 @@ electron/
 │   │   │       └── error-classification.ts  # Error types and classification
 │   │   ├── providers/           # Typed provider connections, drivers, and accounting
 │   │   │   ├── index.ts         # ProviderRuntime — resolve typed selection + freeze request snapshot
+│   │   │   ├── compose-runtime.ts # Shared runtime composition (catalog + vault + status + stores; app/daemon/local-host)
+│   │   │   ├── views.ts         # Redacted renderer views + connection mutation cores (electron-free, host-shared)
 │   │   │   ├── resolver.ts      # Resolve {connectionId, modelId} against connections/catalog
 │   │   │   ├── connection-store.ts # Non-secret connection metadata
 │   │   │   ├── runtime-context.ts  # Per-request provider runtime context
+│   │   │   ├── facets/          # Provider capability facets (discovery, pricing, tiers, cache, quota, thinking)
 │   │   │   ├── drivers/         # Code-owned origins, auth, protocols, adapters, status parsing
 │   │   │   │   ├── registry.ts  # Driver registry (origin → driver)
 │   │   │   │   ├── native.ts    # Specialized provider drivers (owned origins)
 │   │   │   │   ├── compatible.ts # OpenAI-/Anthropic-compatible custom endpoints
 │   │   │   │   ├── lilac.ts / neuralwatt.ts / opencode-go.ts # Third-party drivers
 │   │   │   │   └── types.ts     # Driver interfaces
-│   │   │   ├── credentials/     # Encrypted vault for API-key secrets (vault.ts)
+│   │   │   ├── credentials/     # Encrypted vault for API-key secrets
+│   │   │   │   ├── vault.ts     # CredentialVault — binding-checked, atomically written secrets
+│   │   │   │   └── node-storage-adapter.ts # Plain-Node adapter (daemon) — encryption unavailable, typed fail-closed
 │   │   │   ├── catalog/         # Signed bundled/cached catalog, trust pinning, updater
 │   │   │   ├── status/          # Provider status cache/service
 │   │   │   └── accounting/      # SQLite attempt ledger + cost + analytics queries
@@ -137,6 +146,7 @@ electron/
 │   │   │       ├── tool-attempt-store.ts # Tool invocation telemetry
 │   │   │       ├── subagent-attribution-store.ts # Subagent chain attribution
 │   │   │       ├── context-snapshot-store.ts # Per-turn context window snapshots
+│   │   │       ├── capture-store.ts # Debug request/response capture store (debug:* views)
 │   │   │       ├── analytics-queries.ts # Aggregate read-model queries + detail-query re-exports
 │   │   │       ├── analytics-detail-queries.ts # Model/subagent/context drill-down queries
 │   │   │       ├── analytics-query-shared.ts # Shared plumbing: filters, Decimal/cost, latency, name resolution
@@ -164,23 +174,50 @@ electron/
 │   │   │   ├── mcp/             # MCP resource reader + resource listing
 │   │   │   ├── ask-question/    # ask_question tool + QuestionStore (agent→user questions)
 │   │   │   └── subagent/        # delegate, wait, interrupt, answer, close, follow-up, hydrate
-│   │   ├── ipc/                 # IPC handlers (main process side)
+│   │   ├── host/               # Headless agent host (Electron-free; shared by app + orchid-agent daemon)
+│   │   │   ├── events.ts       # HostEventSink interface + setHostEventSink() (no-op default)
+│   │   │   ├── server.ts       # HostServer — the unified host protocol server core
+│   │   │   ├── client.ts       # HostClient — one machine's connection handle
+│   │   │   ├── routing.ts      # Machine routing — which IPC channels are host-routed vs local
+│   │   │   ├── daemon.ts       # orchid-agent transports — stdio/socket serve, detached ensure, bridge
+│   │   │   ├── local-host.ts   # Embedded local host — the app's own machine served in-process
+│   │   │   ├── transport.ts    # Transport-agnostic host connection interface
+│   │   │   ├── transport-inprocess.ts # Zero-copy in-process transport (local machine)
+│   │   │   ├── session-ops.ts / subagents.ts / bgcmd.ts # Electron-free cores behind the session/subagent/bgcmd surfaces
+│   │   │   ├── bindings/       # Host protocol method bindings (electron-free request cores)
+│   │   │   │   ├── index.ts    # Compose the binding set onto a HostServer
+│   │   │   │   ├── chat.ts / sessions.ts / subagents.ts / bgcmd.ts # Turn, session, subagent, background-command surfaces
+│   │   │   │   ├── config.ts / project.ts / providers.ts / permissions.ts / tool.ts # Config + execution surfaces
+│   │   │   │   └── definitions.ts / indexes.ts / working-set.ts / host.ts / pending-events.ts / types.ts # Remaining surfaces + binding contracts
+│   │   │   ├── chat/           # Agentic turn pipeline (client ids, not WebContents)
+│   │   │   │   ├── send.ts     # startChatTurn — session single-flight, actors, event flush
+│   │   │   │   ├── stream.ts   # createProviderStreamFn — freezes runtime snapshot per turn
+│   │   │   │   ├── events.ts   # Sink wrappers — sequenced turn/session event delivery
+│   │   │   │   ├── state.ts    # ActiveAgent registry (messages, tool calls, generations)
+│   │   │   │   ├── snapshot.ts # Live chat snapshot builder
+│   │   │   │   ├── snapshot-trim.ts # Oversized-snapshot trimming + session.history_page continuation (frame cap)
+│   │   │   │   ├── persist.ts  # Debounced checkpoints + turn persistence
+│   │   │   │   ├── abort.ts    # Force-abort / dispose paths
+│   │   │   │   ├── cancel.ts   # Cancel/interrupt core behind the chat:cancel boundary
+│   │   │   │   ├── compaction.ts # Main-session compaction engine — trigger/pending/retry state
+│   │   │   │   ├── session.ts  # ensureActiveSession (workspace resolve + trust gate)
+│   │   │   │   ├── history.ts  # Per-session chat message history (shared by IPC + host)
+│   │   │   │   └── title.ts    # Auto-naming via internal session-namer
+│   │   ├── machines/           # Remote machines subsystem (SSH remotes running orchid-agent, issue #112)
+│   │   │   ├── registry.ts     # Machine registry — implicit local machine + persisted SSH remotes (config `machines`)
+│   │   │   ├── machine-secrets.ts # Encrypted SSH password store for password-auth machines (~/.orchid/machine-passwords.json)
+│   │   │   ├── ssh-transport.ts # SSH transport (BatchMode key auth / askpass-fed password auth) + typed exit classification
+│   │   │   ├── host-key.ts     # TOFU host-key trust — ssh-keyscan + per-machine known_hosts pinning
+│   │   │   ├── host-key-flow.ts # Scan → confirm → pin flow behind the add-machine wizard
+│   │   │   ├── connection-manager.ts # Per-machine connection lifecycle, backoff reconnect, daemon ensure
+│   │   │   ├── remote-clients.ts # HostClients per remote — connect/disconnect half of machine routing
+│   │   │   └── resync.ts       # Reconnect resync — catch-up broadcast after a dropped connection
+│   │   ├── ipc/                 # IPC handlers (main process side; thin registration layer)
 │   │   │   ├── index.ts         # registerAllIPC() / unregisterAllIPC()
 │   │   │   ├── payload-schemas.ts # Zod schemas for IPC payloads
-│   │   │   ├── chat.ts          # Facade: chat:send/snapshot/stop/cancel/queue_next + bgcmd:*
-│   │   │   ├── chat/            # Agentic loop internals
-│   │   │   │   ├── send.ts      # startChatTurn — session single-flight, actors, event flush
-│   │   │   │   ├── stream.ts    # createProviderStreamFn — freezes runtime snapshot per turn
-│   │   │   │   ├── events.ts    # Sequenced turn/session event broadcast
-│   │   │   │   ├── state.ts     # ActiveAgent registry (messages, tool calls, generations)
-│   │   │   │   ├── snapshot.ts  # Live chat snapshot builder
-│   │   │   │   ├── persist.ts   # Debounced checkpoints + turn persistence
-│   │   │   │   ├── abort.ts     # Force-abort / dispose paths
-│   │   │   │   ├── compaction.ts # Main-session compaction engine — trigger/pending/retry state, send-time + mid-turn compaction seams
-│   │   │   │   ├── session.ts   # ensureActiveSession (workspace resolve + trust gate)
-│   │   │   │   └── title.ts     # Auto-naming via internal session-namer
-│   │   │   ├── next-request-stop.ts # Stop the next request at the next step boundary
-│   │   │   ├── chat-history.ts  # chat history helpers
+│   │   │   ├── chat.ts          # Facade: chat:send/snapshot/stop/cancel/queue_next + bgcmd:*; installs the Electron HostEventSink
+│   │   │   ├── chat/
+│   │   │   │   └── events.ts    # Electron HostEventSink — window fan-out + webContentsForWindowId
 │   │   │   ├── config.ts        # config:get, config:save
 │   │   │   ├── permission.ts    # Approval IPC + session permission mode
 │   │   │   ├── ask-question.ts  # ask_question IPC (asked/answered/settled)
@@ -192,8 +229,14 @@ electron/
 │   │   │   ├── session-working-set.ts # working-set IPC
 │   │   │   ├── tool.ts          # tool:execute
 │   │   │   ├── definitions.ts   # agents/skills/personalities listing
+│   │   │   ├── machines.ts      # machines:* — registry CRUD, connect/disconnect, host-key scan/confirm, active machine
+│   │   │   ├── host-request.ts  # host:* request routing onto machine-routed HostClients
+│   │   │   ├── host-broadcast.ts # Host event fan-out to renderer windows
+│   │   │   ├── debug.ts         # debug:* — per-session raw provider request/response captures
+│   │   │   ├── index-refresh.ts # index:auto_refresh push-event wiring
+│   │   │   ├── provider-models.ts # provider model listing / live discovery / quota views
 │   │   │   ├── subagents.ts     # subagent listing / detail IPC
-│   │   │   ├── providers.ts     # provider connection CRUD / models / status
+│   │   │   ├── providers.ts     # provider connection CRUD routing (parse + host-routed intents)
 │   │   │   ├── mcp.ts           # mcp:status
 │   │   │   ├── rag.ts           # rag:status, rag:index, rag:clear
 │   │   │   └── ast.ts           # ast:status, ast:index
@@ -219,6 +262,8 @@ electron/
 │   │   │   ├── workspace.ts     # draft cwd, sticky default_project_dir, resolveWorkspace*
 │   │   │   ├── runtime.ts       # ProjectRuntime — config + agents/skills/personalities overlays
 │   │   │   ├── agents-md.ts     # Root AGENTS.md injection + subagent root seeding
+│   │   │   ├── project-target.ts # Resolve the project dir a request targets (window/session → workspace)
+│   │   │   ├── shared-prompts.ts # Shared prompt injection into static system instructions
 │   │   │   ├── personality.ts   # project personality helpers
 │   │   │   └── trust.ts         # Trusted-project store + fingerprint drift detection
 │   │   ├── mcp/                 # Model Context Protocol client
@@ -250,6 +295,9 @@ electron/
 │   │   ├── personality/         # Personality system
 │   │   │   ├── registry.ts      # loadPersonalities()
 │   │   │   └── defaults/        # Built-in personalities
+│   │   ├── prompts/             # Shared prompt fragments (fixed slots injected into every agent's prompt)
+│   │   │   ├── registry.ts      # loadSharedPrompts() + seedSharedPromptsDir() (~/.orchid/prompts/)
+│   │   │   └── defaults/        # Built-in shared prompt files
 │   │   ├── skills/              # Skill system
 │   │   │   ├── registry.ts      # loadSkills() from ~/.orchid/skills/ (built-ins seeded)
 │   │   │   └── defaults/        # Built-in skills (subdirs with SKILL.md markers)
@@ -297,6 +345,9 @@ electron/
 │   │   │   ├── AskQuestionOverlay.tsx # Agent ask_question UI
 │   │   │   ├── TrustProjectDialog.tsx # Trust grant surface-diff report
 │   │   │   ├── SubagentView.tsx / SubagentTranscript.tsx # Subagent detail views
+│   │   │   ├── Machines/       # Machine switcher, add-machine wizard (TOFU), connection badge, live-turn banner
+│   │   │   ├── analytics/      # AnalyticsView tab panels + TimeRangeSelector
+│   │   │   ├── Sidebar/        # Inspector sections (CommandsSection — background command fleet)
 │   │   │   ├── ToolResults/     # Tool result widgets by family (+ registry)
 │   │   │   ├── ToolWidgets/     # Tool call activity widgets (live command output)
 │   │   │   ├── ui/              # Typed primitives (Button, TextInput, Select, Tabs, …)
@@ -309,6 +360,8 @@ electron/
 │   │   │   ├── useSessionTabs.ts # Working-set backed session tabs
 │   │   │   ├── useSessionActivity.ts # Session activity state
 │   │   │   ├── useSubagents.ts  # Subagent list/detail polling
+│   │   │   ├── useMachines.ts  # Machine registry/status + per-window active machine (shared store)
+│   │   │   ├── useMachineResync.ts # Reconnect resync driver (lost → connected catch-up)
 │   │   │   ├── useTodos.ts      # Todo list state
 │   │   │   ├── useProviders.ts  # Provider connections/models state
 │   │   │   ├── useAnalytics.ts  # Analytics query state + time range
@@ -372,7 +425,13 @@ electron/
 │       │   ├── accounting.ts    # Attempt ledger types
 │       │   ├── analytics.ts     # Analytics read-model types
 │       │   ├── compaction-progress.ts # Compaction widget progress event types
+│       │   ├── machine.ts      # Machine records, connection status views, action errors
+│       │   ├── config-schema.ts # Zod config schemas — shared source of truth (main + renderer)
+│       │   ├── debug.ts / provider-facets.ts # Request debug views + provider facet schemas
 │       │   └── definitions.ts   # Definition (agent/skill/personality) types
+│       ├── host/
+│       │   ├── protocol.ts     # Host wire contract — version, methods, capabilities (app ↔ orchid-agent)
+│       │   └── framing.ts      # Newline-delimited JSON framing for stdio/socket transports
 │       ├── chat/
 │       │   └── turn-projection.ts # Pure reducer: IPC turn events → renderer projection
 │       ├── mcp/
@@ -413,6 +472,9 @@ npm run build:main
 # Build renderer (Vite bundle)
 npm run build:renderer
 
+# Build the orchid-agent daemon CLI (esbuild bundle -> dist/agent/orchid-agent.js)
+npm run build:agent
+
 # Full build (main + defaults + preload + renderer)
 npm run build
 
@@ -426,8 +488,17 @@ npm run lint
 # Runtime dependency cycle check
 npm run check:runtime-cycles
 
-# Run tests
+# Host boundary check (host/machines import graph must stay Electron-free)
+npm run check:host-boundary
+
+# Run tests (runs the host boundary check first, then vitest)
 npm run test
+
+# Build + smoke the orchid-agent daemon CLI (isolated temp HOME; cannot silently skip)
+npm run test:agent
+
+# Agent smoke alone (skips when dist/agent is absent unless ORCHID_AGENT_SMOKE=1 or --force)
+npm run test:agent:smoke
 
 # Live provider smoke test (requires credentials)
 npm run test:providers:live
@@ -458,11 +529,13 @@ npm run package:all    # mac + win + linux
 
 Packaging additionally runs `scripts/ensure-native-runtime.mjs` to rebuild native modules against Electron's Node ABI before `electron-builder`.
 
+The plain-Node `orchid-agent` daemon CLI is built separately by `npm run build:agent` (esbuild → `dist/agent/orchid-agent.js`, natives kept external); the `bin` entry in `package.json` (`orchid-agent`) points at that bundle.
+
 ## Key Architecture Patterns
 
 ### Startup lifecycle
 - `main/startup.ts` holds a revisioned `StartupSnapshot` with phases `starting|ready|degraded|failed` and steps `opening_window`, `settings_providers`, `agents_tools`, `tool_workers`, `preparing_interface` (each `pending|active|complete|skipped|warning|failed`).
-- `main/startup-lifecycle.ts` runs steps sequentially (`activate → yieldForPresentation → work → complete`); tool-worker pool unavailability degrades to `warning`, never blocks startup.
+- `main/startup-lifecycle.ts` runs steps sequentially (`activate → yieldForPresentation → work → complete`); tool-worker pool unavailability degrades to `warning`, never blocks startup; after workers and before `preparing_interface` it starts the embedded local host (`startLocalHost`), whose failure likewise degrades (the lazy path retries on the first machine-scoped request).
 - IPC: `startup:snapshot`, `startup:continueDegraded`, event `startup:changed`. The renderer shows `StartupScreen` until phase `ready`, then mounts `AppReady` (config load, theme, onboarding gate).
 
 ### IPC Security Model
@@ -486,7 +559,7 @@ idle → [USER_INPUT] → streaming → [TOOL_CALL] → toolExecuting → [TOOL_
 - `stream/eager-tool-bridge.ts` accumulates streamed `tool-input-*` deltas and launches eager execution exactly once per tool call.
 - `stream/normalized-stream.ts` prefers `fullStream`, falls back to `textStream` + `onStepFinish` when `fullStream` errors without user abort/idle.
 - `stream/sdk-event-adapter.ts` normalizes AI SDK parts into the `StreamEvent` union (`stream/events.ts`) and builds provider-safe MCP tool aliases.
-- `ipc/next-request-stop.ts`: `chat:queue_next` arms a per-session stop that ends the current `maxSteps` loop at the next step boundary (`shouldStopNextRequest` feeds `stopWhen`).
+- `agents/next-request-stop.ts`: `chat:queue_next` arms a per-session stop that ends the current `maxSteps` loop at the next step boundary (`shouldStopNextRequest` feeds `stopWhen`).
 
 ### Tool System
 - Tools are Zod-validated definitions + async handlers
@@ -532,7 +605,7 @@ Every tool dispatch passes `permissions/gate.ts:checkPermission()` before the ha
 ### AGENTS.md Context Handling
 Instruction files (`AGENTS.md` and the configured `agents_md.filenames` aliases) are discovered and surfaced automatically — the agent never loads them manually.
 - **Discovery** (`agents-md/resolver.ts`): for any touched path, walk up from its directory to the workspace root, taking the first matching alias per directory. Symlinks that escape the workspace are ignored and filenames match case-insensitively. The workspace-root file is the `root` tier; the rest are `nested`.
-- **Root injection** (`project/agents-md.ts`, wired in `ipc/chat/send.ts` and `agents/subagent-runner.ts`): the root file is appended once to the static system instructions (after personality) and seeded into the per-session tracker, so it is never re-injected. Subagents get the root the same way.
+- **Root injection** (`project/agents-md.ts`, wired in `host/chat/send.ts` and `agents/subagent-runner.ts`): the root file is appended once to the static system instructions (after personality) and seeded into the per-session tracker, so it is never re-injected. Subagents get the root the same way.
 - **Read-path injection** (`agents-md/inject.ts`, in `llm/tool-dispatch.ts`): single-path read tools (`read`, `read_directory`, `get_file_skeleton`, `get_function`, `find_symbol_references`) append the byte-capped content of every not-yet-seen governing file to their result as an `<agents_md>` block, then mark it seen. `grep`/`glob`/`rag_search` fan-out is deliberately skipped.
 - **Write-path enforcement** (`agents-md/enforce.ts`, in `llm/tool-dispatch.ts`): the five file mutators (`edit`, `write`, `apply_patch`, `rename_symbol`, `replace_symbol`) are gated by `agents_md.enforce_on_write` — `block` denies the mutation until the governing files are read, `warn` appends a warning, `inject` appends the content and marks it seen, `off` disables. `apply_patch` reports every unseen file at once; editing an instruction file is exempt and refreshes its tracker entry.
 - **Tracker** (`session/agents-md-context.ts`): an ephemeral, in-memory, per-session set of seen canonical paths, keyed by `sessionId::agentScope` so each subagent starts fresh (root only) rather than inheriting the parent's seen-set. With no session there is no injection/enforcement and never a block; the renderer `tool:execute` path opts out via `agentsMdDisabled`.
@@ -599,7 +672,15 @@ Applied via `wrapLanguageModel()`:
 - SQLite database `~/.orchid/sessions.db` (WAL mode, foreign keys, `busy_timeout=5000`, corruption-recovery rebuild — `utils/sqlite.ts`)
 - Schema v2 (`session/schema.ts`): `sessions`, `chains` (messages JSON per chain, FK CASCADE), `subagent_chains`, `schema_meta`; sessions also persist `reasoning_effort_override` and `permission_mode`
 - `session/manager.ts` does CRUD + auto-naming; `session/singleton.ts` owns the lazy `getSessionManager()`
-- Auto-naming: internal `session-namer` agent generates titles from first exchange (`ipc/chat/title.ts`, deadline `session_title_max_wait_seconds`)
+- Auto-naming: internal `session-namer` agent generates titles from first exchange (`host/chat/title.ts`, deadline `session_title_max_wait_seconds`)
+
+### Remote Machines
+Every machine the app can drive runs the same headless agent host. The local machine's host is embedded in the main process (`host/local-host.ts`, started during startup); every other machine is an SSH remote running the `orchid-agent` daemon (`main/agent-entry.ts`, bundled by `scripts/build-agent.js`), which owns its own `~/.orchid` — sessions, indexes, trust, provider config never replicate between machines.
+- **Unified client protocol** (`shared/host/protocol.ts` + `framing.ts`): one typed wire contract over stdio or a 0600 UNIX socket; the app is just a client, so work keeps running while disconnected and any reconnecting client resumes the full view. `host/routing.ts` is the authoritative table of which IPC channels route to a machine's `HostClient` and which stay local.
+- **Machine registry** (`machines/registry.ts`): the implicit local machine is synthesized on read; SSH remotes persist as metadata-only records in the home config `machines` key (password-auth machines store the secret separately, encrypted, in `machines/machine-secrets.ts`).
+- **SSH transport + TOFU** (`machines/ssh-transport.ts`, `host-key.ts`, `host-key-flow.ts`): key-auth machines run `ssh` with `BatchMode=yes`; password-auth machines serve the one prompt through a forced `SSH_ASKPASS` helper fed from the encrypted machine password store. `ssh-keyscan` fingerprints must be explicitly confirmed before they are pinned into `~/.orchid/machines/<id>/known_hosts` (every connection passes `StrictHostKeyChecking=yes` against that file). Failures classify into typed kinds (`host-key-mismatch`, `auth-failed`, `unreachable`, `agent-missing`, `unknown`).
+- **Connections & resync** (`machines/connection-manager.ts`, `remote-clients.ts`, `resync.ts`): per-machine lifecycle with exponential-backoff reconnect; `unreachable`/`agent-missing` arm a one-shot `serve --socket … --detached` daemon ensure over SSH; reconnect triggers a sequence-keyed resync so the session list, open snapshots, subagents, background commands, and pending approvals/questions restore without duplicates or gaps.
+- **Provider configuration per machine**: connection create/update/submit intents are host-routed, so they land on the driven machine's own connection store. The embedded local host declares the `providers.vault-writes` capability (Electron safeStorage); the headless daemon does not — its answers to `submit_api_key` and api-key-auth intents are typed `UNSUPPORTED_ON_HOST` errors steering toward environment-variable credentials (the daemon resolves those from its own environment at request time; its vault adapter fails closed, see `providers/credentials/node-storage-adapter.ts`).
 
 ### Renderer Shell
 - **Layout** (`ChatView.tsx`): top `SessionTabBar`, left `LeftSidebar` (workspace chip + project-grouped sessions), center chat (`ChatStream` + `MessageQueue` + `InputArea` + `Footer`), right inspector `Sidebar` (collapsible Todos/Subagents/Commands/Context/Usage/Index/MCP blocks). Topology is frozen by the styling contract — restyle in place only (`styles/README.md`).
@@ -628,6 +709,7 @@ Defined in `src/main/config/schema.ts` — single source of truth (strict schema
 | `tool_worker_pool_main_agent_reserved` | 1 | Worker slots reserved for main-agent tools so background subagents cannot starve the visible agent; configured 0 floors to 1, pool clamps to `[0, tool_worker_pool_size - 1]` |
 | `theme` | `default` | UI theme name |
 | `personality` | `default` | Agent personality preset |
+| `machines` | `[]` | User-added SSH remote machines (metadata only, never secrets; the implicit local machine is synthesized by the registry and never stored) |
 | `compaction.main.keep_last_user_messages` | `10` | Last K user messages kept in the model view across compaction |
 | `compaction.subagents.keep_last_user_messages` | `null` | Subagent variant; `null` = ALL user messages stay pinned in the model view |
 | `compaction.main.pin_first_user_message` / `compaction.subagents.pin_first_user_message` | `true` | The first user message is always pinned through compaction |
@@ -703,6 +785,8 @@ Defined in `src/main/config/schema.ts` — single source of truth (strict schema
 - Trusted projects: `~/.orchid/trusted_projects.json` (canonical path → grant + fingerprint)
 - Sessions: `~/.orchid/sessions.db` (SQLite, WAL)
 - Accounting ledger: `~/.orchid/accounting.db` (SQLite)
+- Per-machine pinned host keys (app side): `~/.orchid/machines/<machine-id>/known_hosts`
+- Daemon socket (on each machine running `orchid-agent`): `~/.orchid/daemon.sock` (mode 0600)
 - Merged: defaults → home → project → env overrides (deep-merged)
 
 ## Coding Conventions
@@ -778,7 +862,7 @@ Motion is a shared interaction contract, not local decoration. Use it to explain
 - Unit tests: `tests/unit/` — individual modules
 - Integration tests: `tests/integration/` — component/UI flows + architecture contracts (style, motion, app-shell, provider, trust, accounting)
 - Contract tests: `tests/parity/` — protect the migrated tool, agent, skill, command, session, and configuration inventories
-- Smoke tests: `tests/smoke/` — live provider smoke (`npm run test:providers:live`)
+- Smoke tests: `tests/smoke/` — live provider smoke (`npm run test:providers:live`); real `orchid-agent` CLI smoke (`npm run test:agent` — builds the bundle, then runs `--version`/handshake/`session.list` against an isolated temp HOME)
 - Fixtures: `tests/fixtures/` — shared test data
 - Mock `window.orchid` for renderer tests
 - Use `vi.mock()` for module mocking
@@ -797,7 +881,7 @@ Motion is a shared interaction contract, not local decoration. Use it to explain
 |------|-------|
 | Add a new tool | `src/main/tools/registry.ts`, `src/main/tools/index.ts`, new file in `src/main/tools/<category>/`; risk class + permission defaults in `src/shared/types/permission.ts` |
 | Add IPC channel | `src/shared/types/ipc.ts` (channels + types), `src/main/ipc/<module>.ts`, `src/preload/index.ts` |
-| Modify chat flow | `src/main/ipc/chat/send.ts`, `src/main/ipc/chat/stream.ts`, `src/main/agents/xstate/agent-machine.ts`, `src/renderer/hooks/useChat.ts` |
+| Modify chat flow | `src/main/host/chat/send.ts`, `src/main/host/chat/stream.ts`, `src/main/agents/xstate/agent-machine.ts`, `src/renderer/hooks/useChat.ts` |
 | Change config | `src/main/config/schema.ts`, `src/main/config/loader.ts`, `src/shared/types/ipc-boundary.ts` |
 | Permission modes / approval UI | `src/main/permissions/` (gate/resolver/evaluator/detection), `src/main/ipc/permission.ts`, `src/renderer/components/PermissionApprovalPanel.tsx`, `src/shared/types/permission.ts` |
 | Analytics | `src/main/ipc/analytics.ts`, `src/main/providers/accounting/analytics-queries.ts`, `src/renderer/components/AnalyticsView.tsx`, `src/shared/types/analytics.ts` |
@@ -809,8 +893,9 @@ Motion is a shared interaction contract, not local decoration. Use it to explain
 | Modify themes | `src/renderer/themes/`, CSS files + `index.ts` |
 | Agent definitions | `src/main/agents/defaults/` (built-in subdirs), `src/main/agents/registry.ts`, seeded into `~/.orchid/agents/` |
 | MCP integration | `src/main/mcp/manager.ts`, `src/main/mcp/project-registry.ts`, `src/main/mcp/transport.ts` |
+| Machines / SSH remotes | `src/main/machines/*`, `src/main/host/{daemon,local-host,routing}.ts`, `src/main/agent-entry.ts`, `src/renderer/components/Machines/*`, `src/renderer/hooks/useMachines.ts`, `src/shared/host/protocol.ts`, `src/shared/types/machine.ts` |
 | Provider resolution / drivers | `src/main/providers/index.ts`, `src/main/providers/resolver.ts`, `src/main/providers/drivers/` |
-| Provider IPC / shared contracts | `src/main/ipc/providers.ts`, `src/shared/types/provider.ts`, `src/shared/types/ipc.ts` |
+| Provider IPC / shared contracts | `src/main/ipc/providers.ts`, `src/main/providers/views.ts` (electron-free mutation/view cores), `src/shared/types/provider.ts`, `src/shared/types/ipc.ts`, `src/shared/types/ipc-schemas.ts` |
 | Middleware | `src/main/llm/middleware/` |
 | Shortcuts | `src/renderer/keyboard/registry.ts` (definitions), `useGlobalShortcuts.ts` (dispatch) |
 

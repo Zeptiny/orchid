@@ -38,14 +38,19 @@ import { registerSubagentIPC, unregisterSubagentIPC } from './subagents';
 import { registerAskQuestionIPC, unregisterAskQuestionIPC } from './ask-question';
 import { registerPermissionIPC, unregisterPermissionIPC } from './permission';
 import { registerTrustIPC, unregisterTrustIPC } from './trust';
+import { registerMachinesIPC, unregisterMachinesIPC } from './machines';
 import { registerAnalyticsIPC, unregisterAnalyticsIPC } from './analytics';
 import { registerDebugIPC, unregisterDebugIPC } from './debug';
+import { wireLocalHostWindowBroadcast } from './host-broadcast';
 
 /**
  * Register all IPC handlers.
  * Must finish before startup publishes ready and normal renderer consumers mount.
  */
 export function registerAllIPC(): void {
+  // Idempotent: the embedded local host may already be running (app startup)
+  // or start lazily on the first machine-scoped request.
+  wireLocalHostWindowBroadcast();
   registerChatIPC();
   registerConfigIPC();
   registerProviderIPC();
@@ -63,6 +68,7 @@ export function registerAllIPC(): void {
   registerAskQuestionIPC();
   registerPermissionIPC();
   registerTrustIPC();
+  registerMachinesIPC();
   registerAnalyticsIPC();
   registerDebugIPC();
 }
@@ -89,6 +95,7 @@ export function unregisterAllIPC(): void {
   unregisterAskQuestionIPC();
   unregisterPermissionIPC();
   unregisterTrustIPC();
+  unregisterMachinesIPC();
   unregisterAnalyticsIPC();
   unregisterDebugIPC();
 }

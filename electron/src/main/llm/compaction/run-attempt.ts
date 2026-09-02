@@ -2,7 +2,7 @@
  * Shared selective-compaction attempt runner (#11).
  *
  * One orchestration for the three near-copies that previously lived in
- * ipc/chat/send.ts (send-time synchronous prepare + mid-turn usage prepare)
+ * host/chat/send.ts (send-time synchronous prepare + mid-turn usage prepare)
  * and agents/subagent-runner.ts: slice the compactable range, build the
  * manifest, wire the scope-owned selective LLM caller + simple fallback
  * (model selection and ledger accounting arrive via `deps`), and run the

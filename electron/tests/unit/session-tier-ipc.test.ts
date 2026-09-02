@@ -12,7 +12,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { IPC_CHANNELS } from '../../src/shared/types/ipc';
-import { ensureActiveSession } from '../../src/main/ipc/chat/session';
+import { ensureActiveSession } from '../../src/main/host/chat/session';
 import {
   clearDraftTierOverrides,
   getDraftTierOverride,
@@ -145,7 +145,6 @@ const mocks = vi.hoisted(() => {
     windows,
     discardDeletedSessionRuntime: vi.fn(),
     clearChatHistory: vi.fn(),
-    clearPermissionSessionState: vi.fn(),
     clearToolCallHistoryForSession: vi.fn(),
     clearFunctionHashesForSession: vi.fn(),
     clearNextRequestStop: vi.fn(),
@@ -200,24 +199,37 @@ vi.mock('../../src/main/project/trust', () => ({
   revokeProjectTrustRaw: vi.fn(),
 }));
 
-vi.mock('../../src/main/ipc/chat-history', () => ({
+vi.mock('../../src/main/host/chat/history', () => ({
   clearChatHistory: mocks.clearChatHistory,
   seedChatHistory: vi.fn(),
 }));
 
-vi.mock('../../src/main/ipc/session-working-set', () => ({
+vi.mock('../../src/main/session/working-set-live', () => ({
   workingSetClearFocus: vi.fn(),
   workingSetOpenOrFocus: mocks.workingSetOpenOrFocus,
   workingSetRemove: mocks.workingSetRemove,
   getWorkingSetSnapshot: mocks.getWorkingSetSnapshot,
+  // U5: the embedded local host's HostServer installs its own broadcast and
+  // bootstraps the store.
+  setWorkingSetBroadcast: vi.fn(),
+  bootstrapWorkingSet: vi.fn(),
+  filterIfCatalogOk: vi.fn(() => ({
+    snapshot: mocks.getWorkingSetSnapshot(),
+    membershipChanged: false,
+  })),
+  tryListSessionCatalog: vi.fn(() => ({ status: 'ok', ids: new Set() })),
+  mutateAndPersist: vi.fn((_owner: string, run: () => unknown) => run()),
 }));
 
 vi.mock('../../src/main/ipc/chat', () => ({
   discardDeletedSessionRuntime: mocks.discardDeletedSessionRuntime,
 }));
 
-vi.mock('../../src/main/ipc/permission', () => ({
-  clearPermissionSessionState: mocks.clearPermissionSessionState,
+// U5: session:delete now runs in the host binding, which sources the runtime
+// teardown from host/chat/abort instead of the IPC facade.
+vi.mock('../../src/main/host/chat/abort', async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  discardDeletedSessionRuntime: mocks.discardDeletedSessionRuntime,
 }));
 
 vi.mock('../../src/main/permissions/history', () => ({
@@ -228,12 +240,14 @@ vi.mock('../../src/main/tools/ast/get-function', () => ({
   clearFunctionHashesForSession: mocks.clearFunctionHashesForSession,
 }));
 
-vi.mock('../../src/main/ipc/next-request-stop', () => ({
+vi.mock('../../src/main/agents/next-request-stop', () => ({
   clearNextRequestStop: mocks.clearNextRequestStop,
 }));
 
-vi.mock('../../src/main/ipc/session-activity', () => ({
+vi.mock('../../src/main/session/activity-live', () => ({
   removeSessionActivity: mocks.removeSessionActivity,
+  // U5: the embedded local host's HostServer installs its own broadcast.
+  setSessionActivityBroadcast: vi.fn(),
 }));
 
 vi.mock('../../src/main/providers/runtime-context', () => ({
@@ -544,10 +558,7 @@ describe('session:set_service_tier', () => {
       });
       const preferred = { connectionId: CONNECTION_UUID, modelId: 'glm-5.2' };
 
-      const result = ensureActiveSession(
-        { id: 9, send: vi.fn(), isDestroyed: () => false } as never,
-        preferred,
-      );
+      const result = ensureActiveSession('9', preferred);
 
       expect(result).toMatchObject({ ok: true });
       expect(mocks.sessionManager.create).toHaveBeenCalledWith(

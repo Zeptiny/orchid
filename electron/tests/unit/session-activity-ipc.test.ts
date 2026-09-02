@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { IPC_CHANNELS } from '../../src/shared/types/ipc';
-import { activeAgents, type ActiveAgent } from '../../src/main/ipc/chat/state';
+import { activeAgents, type ActiveAgent } from '../../src/main/host/chat/state';
 
 const mocks = vi.hoisted(() => {
   const handlers = new Map<string, (...args: unknown[]) => unknown>();
@@ -40,6 +40,8 @@ vi.mock('../../src/main/tools/process/background-store', () => ({
 }));
 
 vi.mock('../../src/main/tools', () => ({
+  // U5: the embedded local host's HostServer installs its own notifier.
+  setTodosChangedNotifier: vi.fn(),
   getSubagentManager: () => ({
     allRecords: () => mocks.subagentRecords,
     getStates: (sessionId: string) => mocks.subagentRecords.filter(
@@ -80,10 +82,10 @@ describe('session activity IPC', () => {
     const list = mocks.handlers.get(IPC_CHANNELS.SESSION_ACTIVITY_LIST)!;
     const markSeen = mocks.handlers.get(IPC_CHANNELS.SESSION_ACTIVITY_MARK_SEEN)!;
 
-    expect(await list()).toEqual([
+    expect(await list({ sender: { id: 1 } })).toEqual([
       expect.objectContaining({ sessionId: SESSION_ID, unread: true }),
     ]);
-    expect(await markSeen({}, { id: SESSION_ID })).toMatchObject({
+    expect(await markSeen({ sender: { id: 1 } }, { id: SESSION_ID })).toMatchObject({
       sessionId: SESSION_ID,
       unread: false,
     });

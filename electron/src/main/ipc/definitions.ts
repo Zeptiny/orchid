@@ -6,88 +6,27 @@
  *   project: <workspace>/.orchid/{skills,agents,personalities}/
  */
 import { ipcMain, shell } from 'electron';
-import { z } from 'zod';
+import type { z } from 'zod';
 import { IPC_CHANNELS } from '../../shared/types/ipc';
-import { AgentTier, AgentType } from '../../shared/types/agent';
+import { MACHINE_ID_LOCAL } from '../../shared/types/machine';
 import {
-  deleteAgent,
-  deletePersonality,
-  deleteSharedPrompt,
-  deleteSkill,
-  listManagedAgents,
-  listManagedPersonalities,
-  listManagedSharedPrompts,
-  listManagedSkills,
-  saveAgent,
-  savePersonality,
-  saveSharedPrompt,
-  saveSkill,
-} from '../defs/manage';
+  HOST_CAPABILITIES,
+  HOST_ERROR_CODES,
+  HostProtocolError,
+} from '../../shared/host/protocol';
+import { hostRequest } from './host-request';
+import { activeMachineFor } from '../host/routing';
+import {
+  agentSaveSchema,
+  definitionDeleteSchema,
+  definitionRevealSchema,
+  personalitySaveSchema,
+  sharedPromptDeleteSchema,
+  sharedPromptSaveSchema,
+  skillSaveSchema,
+} from '../../shared/types/ipc-schemas';
 import { assertPathUnderOrchidRoots } from '../defs/paths';
-import { reloadDefinitionRegistries } from '../defs/reload';
-import { getProjectMCPManager } from '../mcp/project-registry';
-import { getProjectRuntimeRegistry } from '../project/runtime';
-import { getProjectTrustState } from '../project/trust';
-import { toolRegistry } from '../tools';
 import { resolveBoundProjectPath } from './session';
-
-// ── Schemas ──────────────────────────────────────────────────────────────────
-
-const scopeSchema = z.enum(['global', 'project']);
-const nameSchema = z.string().min(1).max(128);
-
-const skillSaveSchema = z.object({
-  scope: scopeSchema,
-  name: nameSchema,
-  description: z.string().min(1),
-  requires: z.array(z.string()).optional(),
-  content: z.string(),
-  previousName: z.string().optional(),
-});
-
-const agentSaveSchema = z.object({
-  scope: scopeSchema,
-  name: nameSchema,
-  type: z.enum([AgentType.INTERNAL, AgentType.SUBAGENT]),
-  tier: z.enum([
-    AgentTier.SEED,
-    AgentTier.SPROUT,
-    AgentTier.BLOOM,
-    AgentTier.CROWN,
-  ]),
-  description: z.string().min(1),
-  system_prompt: z.string(),
-  allowed_tools: z.array(z.string()).min(1),
-  allowed_skills: z.array(z.string()),
-  previousName: z.string().optional(),
-});
-
-const personalitySaveSchema = z.object({
-  scope: scopeSchema,
-  name: nameSchema,
-  content: z.string().min(1),
-  previousName: z.string().optional(),
-});
-
-const sharedPromptSaveSchema = z.object({
-  scope: scopeSchema,
-  slot: z.enum(['all-agents', 'subagents']),
-  content: z.string(),
-});
-
-const sharedPromptDeleteSchema = z.object({
-  scope: scopeSchema,
-  slot: z.enum(['all-agents', 'subagents']),
-});
-
-const deleteSchema = z.object({
-  scope: scopeSchema,
-  name: nameSchema,
-});
-
-const revealSchema = z.object({
-  path: z.string().min(1),
-});
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -96,48 +35,21 @@ function projectDirFromEvent(event: Electron.IpcMainInvokeEvent): string | null 
 }
 
 /**
- * Namespaced MCP tool names (`mcp::server::tool`) for one bound project.
- *
- * The builtin-tool singleton never carries MCP tools (they are merged into
- * per-turn registries), so the allowed-tools picker must source them from the
- * window's project MCP manager. Untrusted projects hold a dormant manager
- * with no tools, so this stays trust-safe without an explicit gate. Any
- * runtime/manager failure must not break definitions listing.
+ * Validate the payload and forward to the host method with the same name; the
+ * server binding resolves the caller's project dir, performs the mutation and
+ * reloads the registries.
  */
-function mcpToolNamesForProject(projectDir: string | null): string[] {
-  if (projectDir == null) return [];
-  try {
-    const runtime = getProjectRuntimeRegistry().get(projectDir);
-    return getProjectMCPManager(runtime)
-      .getTools()
-      .map(({ definition }) => definition.name);
-  } catch (error) {
-    console.warn(
-      `Failed to enumerate MCP tools for '${projectDir}' (non-fatal):`,
-      error,
-    );
-    return [];
-  }
-}
-
-/**
- * Validate payload, resolve project dir, run mutation, reload registries.
- * Shared by skill/agent/personality save and delete handlers.
- */
-function withDefinitionMutation<TSchema extends z.ZodTypeAny, TResult>(
+function withDefinitionMutation<TSchema extends z.ZodTypeAny>(
   schema: TSchema,
+  channel: string,
   channelLabel: string,
-  mutate: (data: z.infer<TSchema>, projectDir: string | null) => TResult,
-): (event: Electron.IpcMainInvokeEvent, payload: unknown) => TResult {
+): (event: Electron.IpcMainInvokeEvent, payload: unknown) => Promise<unknown> {
   return (event, payload) => {
     const parsed = schema.safeParse(payload);
     if (!parsed.success) {
       throw new Error(`Invalid ${channelLabel} payload: ${parsed.error.message}`);
     }
-    const projectDir = projectDirFromEvent(event);
-    const result = mutate(parsed.data, projectDir);
-    reloadDefinitionRegistries(projectDir);
-    return result;
+    return hostRequest(String(event.sender.id), channel, parsed.data);
   };
 }
 
@@ -145,107 +57,65 @@ function withDefinitionMutation<TSchema extends z.ZodTypeAny, TResult>(
 
 export function registerDefinitionsIPC(): void {
   ipcMain.handle(IPC_CHANNELS.DEFINITIONS_LIST, async (event) => {
-    const projectDir = projectDirFromEvent(event);
-    // Untrusted projects list home-only definitions (no project overlay).
-    const listProjectDir =
-      projectDir != null && getProjectTrustState(projectDir) === 'trusted'
-        ? projectDir
-        : null;
-    const skills = listManagedSkills(listProjectDir);
-    const availableTools = toolRegistry
-      .listAll()
-      .map((t) => t.definition.name)
-      .concat(mcpToolNamesForProject(projectDir))
-      .sort((a, b) => a.localeCompare(b));
-    // Unique skill names across scopes (prefer name as listed)
-    const skillNames = new Set(skills.map((s) => s.name));
-    return {
-      projectDir,
-      skills,
-      agents: listManagedAgents(listProjectDir),
-      personalities: listManagedPersonalities(listProjectDir),
-      sharedPrompts: listManagedSharedPrompts(listProjectDir),
-      availableTools,
-      availableSkills: Array.from(skillNames).sort((a, b) => a.localeCompare(b)),
-    };
+    return hostRequest(String(event.sender.id), IPC_CHANNELS.DEFINITIONS_LIST);
   });
 
   ipcMain.handle(
     IPC_CHANNELS.SKILL_SAVE,
-    withDefinitionMutation(skillSaveSchema, 'skill:save', (data, projectDir) =>
-      saveSkill(data, projectDir),
-    ),
+    withDefinitionMutation(skillSaveSchema, IPC_CHANNELS.SKILL_SAVE, 'skill:save'),
   );
 
   ipcMain.handle(
     IPC_CHANNELS.SKILL_DELETE,
-    withDefinitionMutation(deleteSchema, 'skill:delete', (data, projectDir) => {
-      deleteSkill(data.scope, data.name, projectDir);
-      return { status: 'deleted' as const };
-    }),
+    withDefinitionMutation(definitionDeleteSchema, IPC_CHANNELS.SKILL_DELETE, 'skill:delete'),
   );
 
   ipcMain.handle(
     IPC_CHANNELS.AGENT_SAVE,
-    withDefinitionMutation(agentSaveSchema, 'agent:save', (data, projectDir) =>
-      saveAgent(data, projectDir),
-    ),
+    withDefinitionMutation(agentSaveSchema, IPC_CHANNELS.AGENT_SAVE, 'agent:save'),
   );
 
   ipcMain.handle(
     IPC_CHANNELS.AGENT_DELETE,
-    withDefinitionMutation(deleteSchema, 'agent:delete', (data, projectDir) => {
-      deleteAgent(data.scope, data.name, projectDir);
-      return { status: 'deleted' as const };
-    }),
+    withDefinitionMutation(definitionDeleteSchema, IPC_CHANNELS.AGENT_DELETE, 'agent:delete'),
   );
 
   ipcMain.handle(
     IPC_CHANNELS.PERSONALITY_SAVE,
-    withDefinitionMutation(
-      personalitySaveSchema,
-      'personality:save',
-      (data, projectDir) => savePersonality(data, projectDir),
-    ),
+    withDefinitionMutation(personalitySaveSchema, IPC_CHANNELS.PERSONALITY_SAVE, 'personality:save'),
   );
 
   ipcMain.handle(
     IPC_CHANNELS.PERSONALITY_DELETE,
-    withDefinitionMutation(
-      deleteSchema,
-      'personality:delete',
-      (data, projectDir) => {
-        deletePersonality(data.scope, data.name, projectDir);
-        return { status: 'deleted' as const };
-      },
-    ),
+    withDefinitionMutation(definitionDeleteSchema, IPC_CHANNELS.PERSONALITY_DELETE, 'personality:delete'),
   );
 
   ipcMain.handle(
     IPC_CHANNELS.SHARED_PROMPT_SAVE,
-    withDefinitionMutation(
-      sharedPromptSaveSchema,
-      'shared-prompt:save',
-      (data, projectDir) => saveSharedPrompt(data, projectDir),
-    ),
+    withDefinitionMutation(sharedPromptSaveSchema, IPC_CHANNELS.SHARED_PROMPT_SAVE, 'shared-prompt:save'),
   );
 
   ipcMain.handle(
     IPC_CHANNELS.SHARED_PROMPT_DELETE,
-    withDefinitionMutation(
-      sharedPromptDeleteSchema,
-      'shared-prompt:delete',
-      (data, projectDir) => {
-        deleteSharedPrompt(data.scope, data.slot, projectDir);
-        return { status: 'deleted' as const };
-      },
-    ),
+    withDefinitionMutation(sharedPromptDeleteSchema, IPC_CHANNELS.SHARED_PROMPT_DELETE, 'shared-prompt:delete'),
   );
 
   ipcMain.handle(IPC_CHANNELS.DEFINITION_REVEAL, async (event, payload: unknown) => {
-    const parsed = revealSchema.safeParse(payload);
+    const parsed = definitionRevealSchema.safeParse(payload);
     if (!parsed.success) {
       throw new Error(`Invalid definition:reveal payload: ${parsed.error.message}`);
+    }
+    // Fix #30: on a remote-active window the listed definition paths live on
+    // another machine's filesystem; a local shell reveal would fail with a
+    // misleading "path is outside Orchid definition directories" error.
+    // Degrade with the same typed UNSUPPORTED_ON_HOST error the protocol's
+    // capability gate produces for a host that never declares
+    // 'definitions.reveal' (the daemon never does).
+    if (activeMachineFor(String(event.sender.id)) !== MACHINE_ID_LOCAL) {
+      throw new HostProtocolError(
+        HOST_ERROR_CODES.UNSUPPORTED_ON_HOST,
+        `Method 'definition.reveal' requires the '${HOST_CAPABILITIES.DEFINITIONS_REVEAL}' capability, which this host does not declare`,
+      );
     }
     const projectDir = projectDirFromEvent(event);
     const safePath = assertPathUnderOrchidRoots(parsed.data.path, projectDir);

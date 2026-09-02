@@ -2,6 +2,7 @@
 import { useState } from 'react';
 import type { ProviderConnectionView } from '../../../shared/types/ipc';
 import { useProviders } from '../../hooks/useProviders';
+import { useMachines } from '../../hooks/useMachines';
 import { emitOrchidEvent } from '../../utils/events';
 import type { Notify } from '../../utils/notify';
 import {
@@ -15,6 +16,7 @@ import { StateMessage } from '../ui/StateMessage';
 
 export function ProvidersTab({ onNotify }: { readonly onNotify: Notify }) {
   const providers = useProviders();
+  const machines = useMachines();
   const [wizardOpen, setWizardOpen] = useState(false);
   const [connectionToEdit, setConnectionToEdit] = useState<ProviderConnectionView | null>(null);
   const completeConnection = async (result: ProviderConnectionCompletion) => {
@@ -61,6 +63,12 @@ export function ProvidersTab({ onNotify }: { readonly onNotify: Notify }) {
           <Button variant="ghost" size="sm" type="button" onClick={providers.clearError}>Dismiss</Button>
         }>
           {providers.error}
+        </Alert>
+      )}
+
+      {!machines.isActiveMachineLocal && (
+        <Alert tone="info" icon="globe">
+          {`Connections you add or edit here are created on ${machines.activeMachineLabel} — each machine owns its own provider configuration.`}
         </Alert>
       )}
 

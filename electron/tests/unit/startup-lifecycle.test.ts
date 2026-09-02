@@ -70,6 +70,47 @@ describe('startup lifecycle', () => {
     expect(state.snapshot().steps[3]).toMatchObject({ state: 'skipped' });
   });
 
+  it('starts the local host after workers settle and before the interface is prepared', async () => {
+    const { lifecycle, events, state } = createLifecycle({
+      startLocalHost: vi.fn(() => { events.push('local-host'); }),
+    });
+
+    await expect(runStartupLifecycle(lifecycle)).resolves.toBe('ready');
+
+    expect(events.indexOf('workers')).toBeLessThan(events.indexOf('local-host'));
+    expect(events.indexOf('local-host')).toBeLessThan(events.indexOf('normal-ipc'));
+    // The local host is not a visible startup step: the step sequence is
+    // unchanged, it merely runs between tool_workers and preparing_interface.
+    expect(events).toEqual([
+      'state:opening_window:active', 'window', 'state:starting', 'yield',
+      'state:settings_providers:active', 'yield', 'settings', 'state:starting',
+      'state:agents_tools:active', 'yield', 'agents', 'state:starting',
+      'state:tool_workers:active', 'yield', 'workers', 'state:starting',
+      'local-host',
+      'state:preparing_interface:active', 'yield', 'normal-ipc', 'state:starting',
+      'state:ready',
+    ]);
+    expect(state.snapshot().phase).toBe('ready');
+  });
+
+  // The local-host degrade branch calls state.degraded('local-host') — the
+  // embedded host is retryable lazily, so a failure settles as degraded
+  // (not failed) exactly like the worker-pool case. Requires the
+  // cause-parameterized degraded() in src/main/startup.ts.
+  it('settles a failing local host as degraded after normal IPC preparation', async () => {
+    const error = new Error('local host unavailable');
+    const { lifecycle, events, state } = createLifecycle({
+      startLocalHost: vi.fn(() => { throw error; }),
+    });
+
+    await expect(runStartupLifecycle(lifecycle)).resolves.toBe('degraded');
+
+    expect(state.snapshot().phase).toBe('degraded');
+    expect(lifecycle.logFailure).toHaveBeenCalledWith('preparing_interface', error);
+    expect(events.indexOf('normal-ipc')).toBeLessThan(events.indexOf('state:degraded'));
+    expect(lifecycle.prepareInterface).toHaveBeenCalled();
+  });
+
   it('stops before workers when shutdown aborts a pending earlier stage', async () => {
     const abortController = new AbortController();
     let releaseAgents: (() => void) | undefined;

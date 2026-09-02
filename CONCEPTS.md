@@ -12,7 +12,7 @@ Shared domain vocabulary for the orchid project. This file defines terms used ac
 
 ## Subagent Live Protocol
 
-- **Live Delta Event** — A typed incremental update from a subagent run (`SubagentDeltaEvent`: `spawned`, `text_delta`, `thinking_delta`, `tool_start`, `tool_args_delta`, `tool_result`, `usage`, `terminal`), replacing full-projection broadcasts. Every delta carries `sessionId`, `subagentId`, `runId`, `sequence`, and `sessionRevision`; deltas are batched into one `SubagentEvent` envelope per IPC flush.
+- **Live Delta Event** — A typed incremental update from a subagent run (`SubagentDeltaEvent`: `spawned`, `status_changed`, `text_delta`, `thinking_delta`, `tool_start`, `tool_args_delta`, `tool_result`, `usage`, `terminal`), replacing full-projection broadcasts. Every delta carries `sessionId`, `subagentId`, `runId`, `sequence`, and `sessionRevision`; deltas are batched into one `SubagentEvent` envelope per IPC flush. Lifecycle deltas (`spawned`, `status_changed`, `terminal`) are budget-exempt one-shot handoffs: while a session has no eligible recipient they are carried in order for a later flush (bounded by a stall budget, content deltas are dropped for snapshots to re-establish), and the renderer converges record state from later evidence (content-delta promotion, authoritative terminal application) so a lost transition cannot strand a subagent in the wrong status list.
 - **Session Revision** — A per-session monotonic counter stamped on every subagent live event and snapshot. The renderer uses it to reject stale snapshots and as the floor when reseeding after hydration-buffer overflow.
 - **Durable Handoff** — The transfer of subagent output from ephemeral live state to the persisted `SubagentRecord`. On the live-event path the renderer receives a lightweight `SubagentSummary` at spawn and terminal settlement, never a historical transcript per delta. Summary snapshots and reseeding keep list state current; the full durable record crosses IPC only when its row is selected for transcript detail.
 - **Subagent Summary** — The bounded list-row representation of a subagent: identity, role, task, lifecycle timestamps/status, parent-chain attribution, and pre-aggregated usage. It deliberately excludes the durable chain, result, and error transcript payloads.
@@ -102,6 +102,16 @@ Shared domain vocabulary for the orchid project. This file defines terms used ac
 ### Retired: Chain Split
 
 The earlier design where a compaction cut inside a chain divided it into a flagged prefix row, a summary-head row, and a continuing row. Removed after it corrupted live transcripts: multi-row turns starved the bounded renderer view and compounded into duplicate "ladder" rows under mid-turn resume. "Chain split" now refers only to legacy sessions carrying that layout.
+
+## Remote Machines
+
+- **Host** — The machine-owning side of the unified client protocol: it owns sessions, chains, todos, indexes, trust grants, MCP servers, and provider configuration under its own `~/.orchid`, and runs the agentic turn pipeline host-side. The local machine is an embedded in-process host; a remote is a daemon reached over SSH.
+- **orchid-agent daemon** — The plain-Node, Electron-free host process (`orchid-agent serve --stdio` / `serve --socket <path>`) that owns a machine's `~/.orchid` state. Detached socket mode survives the SSH session, which is what makes turns keep running with no client connected.
+- **Machine** — One entry in the machine connection list: the implicit local machine (never persisted) or a user-added SSH remote (host/user/port/agent command, metadata only, no secrets). Machine records live in the home config `machines` section.
+- **TOFU host-key pin** — Trust-on-first-use host-key verification: adding a machine captures `ssh-keyscan` output out-of-band, requires explicit fingerprint confirmation, and pins that scan into a per-machine app-managed known-hosts file (`~/.orchid/machines/<id>/known_hosts`) enforced with `StrictHostKeyChecking=yes` on every connection. A mismatch is a hard fail.
+- **ClientId** — The opaque per-connection identity the host attributes requests, events, and ownership (approvals, questions, active sessions) to. Locally it is the renderer window id; on a remote it is the daemon-assigned connection id. Ownership keyed on ClientIds generalizes window routing without redesign.
+- **Resync** — The reconnect reconciliation driven by the per-connection event `seq`: after a drop, the client refetches session list, open-session snapshots, subagent snapshot, background commands, and pending approvals/questions, so the restored view has neither duplicates nor gaps. Sequence gaps trigger a full snapshot fallback.
+- **Daemon-ensure** — The idempotent startup of a remote's daemon: when the bridge reaches the remote but no daemon answers, one one-shot `orchid-agent serve --socket ~/.orchid/daemon.sock --detached` runs over SSH (at most once per connect cycle) and the bridge handshake retries against the freshly detached daemon.
 
 ## Trusted Projects
 

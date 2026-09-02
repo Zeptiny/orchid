@@ -1,112 +1,36 @@
-/** Chat IPC registration and small boundary handlers. */
-import { BrowserWindow, ipcMain, type IpcMainInvokeEvent, type WebContents } from 'electron';
-import { z } from 'zod';
-import { getSubagentManager } from '../tools';
+/**
+ * Chat IPC registration — the Electron boundary for the chat turn pipeline.
+ *
+ * U5: every handler here is a thin forwarder over the unified host protocol.
+ * The turn lifecycle itself lives in `host/chat/*` and is reached through the
+ * embedded local host's `HostClient` (`host/routing.ts`), so the local machine
+ * exercises exactly the same protocol a remote `orchid-agent` daemon serves.
+ */
+import { BrowserWindow, ipcMain } from 'electron';
 import {
-  getBackgroundStore,
   subscribeBackgroundProcessChanges,
 } from '../tools/process/background-store';
-import { getForegroundLiveRegistry } from '../tools/process/foreground-live';
-import { SEND_INPUT_MAX_TEXT_LENGTH } from '../tools/process/send-input';
 import { getSessionManager } from '../session/singleton';
 import { IPC_CHANNELS, type ChatSessionSnapshot, type ChatCompactResult } from '../../shared/types/ipc';
-import { ChainStatus, lastChainError } from '../../shared/types/chain';
-import { flattenSessionMessages } from '../../shared/types/session';
-import { MAIN_AGENT_SCOPE_ID } from '../../shared/types/agent-scope';
-import { isTerminalSubagentState } from '../agents/types';
-import { getProjectTrustState } from '../project/trust';
-import { getProjectRuntimeRegistry } from '../project/runtime';
-import { clearAllChatHistory } from './chat-history';
+import {
+  bgCommandControlRequestSchema,
+  bgCommandListRequestSchema,
+  bgCommandSendInputRequestSchema,
+  bgCommandSnapshotRequestSchema,
+} from '../../shared/types/ipc-schemas';
+import { isEmbeddedLocalHostRunning } from '../host/local-host';
+import { hostRequest } from './host-request';
+import { clearAllChatHistory } from '../host/chat/history';
 import { chatCancelSchema, chatCompactSchema, chatQueueNextSchema, chatSendSchema, chatSnapshotSchema, chatStopSchema } from './payload-schemas';
-import { requestNextRequestStop } from './next-request-stop';
-import { completeSessionActivity } from './session-activity';
 import {
   activeAgents,
   agentGenerations,
-  clearSubagentCancelConfirm,
-  consumeSubagentCancelConfirm,
   draftEnsureByWindow,
   sessionsStarting,
-  stageSubagentCancelConfirm,
-} from './chat/state';
-import { sendChatState, sendTurnEvent, webContentsForWindowId } from './chat/events';
-import { snapshotForAgent } from './chat/snapshot';
-import { appendLiveTailMessages, persistTurnConversation, turnMessagesFromAgent } from './chat/persist';
+} from '../host/chat/state';
 import {
-  discardDeletedSessionRuntime,
   disposeActiveAgent,
-  forceAbortSession,
-  forceStopSession,
-} from './chat/abort';
-import { startChatTurn } from './chat/send';
-import { compactSessionNow } from './chat/compaction';
-import { triggerInterruptedTurnAutoName } from './chat/title';
-import type { AgentContext } from '../agents/xstate/agent-machine';
-
-export { getActiveMainTurnWindowId, getLiveChatSnapshot } from './chat/snapshot';
-export {
-  activeSessionsForProviderConnection,
-  forceAbortChat,
-  forceAbortMainTurn,
-  stopActiveProviderConnectionTurns,
-} from './chat/abort';
-export type { ForceAbortMainTurnOptions } from './chat/abort';
-export { ensureActiveSession } from './chat/session';
-export {
-  discardDeletedSessionRuntime,
-  forceAbortSession,
-  forceStopSession,
-  webContentsForWindowId,
-};
-
-const BG_CMD_SNAPSHOT_MAX_LAST_N = 1000;
-
-/**
- * Discriminated snapshot target: exactly one of `commandId` (background store)
- * or `toolCallId` (foreground live registry). Zero or both targets reject.
- */
-const bgCommandSnapshotSchema = z
-  .object({
-    commandId: z.number().int().positive().optional(),
-    toolCallId: z.string().min(1).optional(),
-    lastN: z.number().int().positive().max(BG_CMD_SNAPSHOT_MAX_LAST_N).optional(),
-    sessionId: z.string().uuid().optional(),
-    includeTail: z.boolean().optional(),
-  })
-  .refine(
-    (data) => (data.commandId !== undefined) !== (data.toolCallId !== undefined),
-    { message: 'Provide exactly one of commandId or toolCallId' },
-  );
-
-const bgCommandListSchema = z.object({
-  sessionId: z.string().uuid().optional(),
-});
-
-const bgCommandSendInputSchema = z.object({
-  commandId: z.number().int().positive(),
-  // Cap stdin writes at the boundary; parity with the agent send_input tool.
-  text: z.string().max(SEND_INPUT_MAX_TEXT_LENGTH),
-  sessionId: z.string().uuid().optional(),
-});
-
-/** Shared shape for bgcmd:terminate and bgcmd:release_input. */
-const bgCommandControlSchema = z.object({
-  commandId: z.number().int().positive(),
-  sessionId: z.string().uuid().optional(),
-});
-
-/**
- * Payload-then-active-session convention shared by every bgcmd handler: an
- * explicit sessionId wins, else the calling window's active session.
- */
-function resolveBgCommandSessionId(
-  requestedSessionId: string | undefined,
-  event: IpcMainInvokeEvent,
-): string | null {
-  return requestedSessionId
-    ?? getSessionManager().getActive(String(event.sender.id))?.id
-    ?? null;
-}
+} from '../host/chat/abort';
 
 function broadcastBgCommandChanged(sessionId: string): void {
   for (const win of BrowserWindow.getAllWindows()) {
@@ -127,14 +51,14 @@ function broadcastBgCommandChanged(sessionId: string): void {
 
 let removeBgCommandChangeListener: (() => void) | null = null;
 
-/** Register chat IPC boundaries; the turn lifecycle lives in `chat/send.ts`. */
+/** Register chat IPC boundaries; the turn lifecycle lives in `host/chat/send.ts`. */
 export function registerChatIPC(): void {
   ipcMain.handle(IPC_CHANNELS.CHAT_SEND, async (event, payload: unknown) => {
     const parsed = chatSendSchema.safeParse(payload);
     if (!parsed.success) {
       throw new Error(`Invalid chat:send payload: ${parsed.error.message}`);
     }
-    return startChatTurn(event.sender, parsed.data);
+    return hostRequest(String(event.sender.id), IPC_CHANNELS.CHAT_SEND, parsed.data);
   });
 
   ipcMain.handle(
@@ -144,314 +68,89 @@ export function registerChatIPC(): void {
       if (!parsed.success) {
         throw new Error(`Invalid chat:snapshot payload: ${parsed.error.message}`);
       }
-      const windowId = String(event.sender.id);
-      const sessionId = parsed.data.sessionId ?? getSessionManager().getActive(windowId)?.id;
-      if (!sessionId) return null;
-      const session = getSessionManager().getSession(sessionId);
-      if (!session) return null;
-      const liveAgent = activeAgents.get(sessionId);
-      const live = liveAgent && !liveAgent.finalized ? snapshotForAgent(liveAgent) : null;
-      return {
-        sessionId,
-        messages: liveAgent && live ? [...liveAgent.messages] : flattenSessionMessages(session),
-        live,
-        lastChainError: live ? null : lastChainError(session.chains),
-      };
+      return hostRequest<ChatSessionSnapshot | null>(
+        String(event.sender.id),
+        IPC_CHANNELS.CHAT_SNAPSHOT,
+        parsed.data,
+      );
     },
   );
 
-  ipcMain.handle(IPC_CHANNELS.CHAT_STOP, async (_event, payload: unknown) => {
+  ipcMain.handle(IPC_CHANNELS.CHAT_STOP, async (event, payload: unknown) => {
     const parsed = chatStopSchema.safeParse(payload);
     if (!parsed.success) throw new Error(`Invalid chat:stop payload: ${parsed.error.message}`);
-    return { status: forceStopSession(parsed.data.sessionId) ? 'stopped' : 'no_active_stream' };
+    return hostRequest(String(event.sender.id), IPC_CHANNELS.CHAT_STOP, parsed.data);
   });
 
-  ipcMain.handle(IPC_CHANNELS.CHAT_QUEUE_NEXT, async (_event, payload: unknown) => {
+  ipcMain.handle(IPC_CHANNELS.CHAT_QUEUE_NEXT, async (event, payload: unknown) => {
     const parsed = chatQueueNextSchema.safeParse(payload ?? {});
     if (!parsed.success) throw new Error(`Invalid chat:queue_next payload: ${parsed.error.message}`);
-    requestNextRequestStop(parsed.data.sessionId);
+    await hostRequest(String(event.sender.id), IPC_CHANNELS.CHAT_QUEUE_NEXT, parsed.data);
   });
 
   ipcMain.handle(IPC_CHANNELS.CHAT_COMPACT, async (event, payload: unknown): Promise<ChatCompactResult> => {
     const parsed = chatCompactSchema.safeParse(payload ?? {});
     if (!parsed.success) throw new Error(`Invalid chat:compact payload: ${parsed.error.message}`);
-    const windowId = String(event.sender.id);
-    const sessionId = parsed.data.sessionId ?? getSessionManager().getActive(windowId)?.id;
-    if (!sessionId) {
-      return { status: 'nothing_to_compact', sessionId: '', detail: 'No active session to compact.' };
-    }
-    const session = getSessionManager().getSession(sessionId);
-    if (!session) {
-      return { status: 'nothing_to_compact', sessionId, detail: 'Session not found.' };
-    }
-    const boundCwd = session.cwd?.trim();
-    if (!boundCwd || getProjectTrustState(boundCwd) !== 'trusted') {
-      return { status: 'nothing_to_compact', sessionId, detail: 'The project folder for this session is not trusted.' };
-    }
-    const runtime = getProjectRuntimeRegistry().get(boundCwd);
-    const selection = session.selection ?? runtime.config.default_model;
-    if (!selection) {
-      return { status: 'nothing_to_compact', sessionId, detail: 'A provider connection and model are required before compacting.' };
-    }
-    return compactSessionNow(sessionId, runtime, selection);
+    return hostRequest<ChatCompactResult>(
+      String(event.sender.id),
+      IPC_CHANNELS.CHAT_COMPACT,
+      parsed.data,
+    );
   });
 
-  function sessionHasActiveSubagents(sessionId: string): boolean {
-    try {
-      return getSubagentManager()
-        .getStates(sessionId)
-        .some((record) => !isTerminalSubagentState(record.state));
-    } catch {
-      return false;
-    }
-  }
-
-  /**
-   * Third interrupt layer with no live main-agent turn: the main agent was
-   * cancelled (its ActiveAgent disposed after the interrupt reset window), but
-   * session-owned subagents still run. The first Esc stages the confirmation;
-   * the next Esc within the window cancels the subagents and their
-   * session-owned processes. After the window the next Esc re-stages,
-   * mirroring the interrupt machine's auto-reset. Keeps layer 3 reachable for
-   * as long as subagents run (issue #145).
-   */
-  function handleSubagentOnlyCancel(
-    sessionId: string,
-    windowId: string,
-  ): { status: string } {
-    if (!sessionHasActiveSubagents(sessionId)) {
-      clearSubagentCancelConfirm(sessionId);
-      return { status: 'no_active_stream' };
-    }
-    if (!consumeSubagentCancelConfirm(sessionId)) {
-      stageSubagentCancelConfirm(sessionId);
-      return { status: 'confirming_subagents' };
-    }
-    getBackgroundStore().terminateSession(sessionId);
-    getForegroundLiveRegistry().dropSession(sessionId);
-    const cancelled = getSubagentManager().cancelRunning(sessionId);
-    if (cancelled.length > 0) {
-      completeSessionActivity(
-        sessionId,
-        getSessionManager().getActive(windowId)?.id !== sessionId,
-      );
-    }
-    return { status: 'cancelled' };
-  }
-
   ipcMain.handle(IPC_CHANNELS.CHAT_CANCEL, async (event, payload: unknown) => {
-    const webContents: WebContents = event.sender;
-    const windowId = String(webContents.id);
     const parsed = chatCancelSchema.safeParse(payload ?? {});
     if (!parsed.success) throw new Error(`Invalid chat:cancel payload: ${parsed.error.message}`);
-    const sessionId = parsed.data.sessionId ?? getSessionManager().getActive(windowId)?.id;
-    if (!sessionId) return { status: 'no_active_stream' };
-    const existing = activeAgents.get(sessionId);
-    if (!existing) return handleSubagentOnlyCancel(sessionId, windowId);
-    const streamWebContents = webContentsForWindowId(existing.windowId) ?? webContents;
-    const interruptState = existing.interruptActor.getSnapshot().value as
-      | 'idle'
-      | 'confirmAgent'
-      | 'confirmSubagents';
-    if (interruptState === 'idle') {
-      existing.interruptActor.send({ type: 'INTERRUPT' });
-      return { status: 'confirming' };
-    }
-    if (interruptState === 'confirmAgent') {
-      // Second Esc cancels only the main agent. Scope the process cleanup to
-      // the main agent's own commands: subagent-owned commands live under the
-      // same session id with their own scope ids and must survive until the
-      // third Esc confirms subagent cancellation (issue #145).
-      getBackgroundStore().terminateScope(sessionId, MAIN_AGENT_SCOPE_ID);
-      getForegroundLiveRegistry().dropScope(sessionId, MAIN_AGENT_SCOPE_ID);
-      existing.agentCancelled = true;
-      const context = existing.actor.getSnapshot().context as AgentContext;
-      existing.actor.send({ type: 'CANCEL' });
-      if (!existing.finalized) {
-        existing.finalized = true;
-        const partial = context.response ?? '';
-        const thinking = context.thinking ?? '';
-        const usage = context.usage ?? null;
-        appendLiveTailMessages(existing.turnMessages, existing, context, { placeholderWhenEmpty: true });
-        if (thinking.length > existing.thinkingCommittedLength) existing.thinkingCommittedLength = thinking.length;
-        if (partial.length > existing.responseCommittedLength) existing.responseCommittedLength = partial.length;
-        const terminalMessages = turnMessagesFromAgent(existing);
-        const fullHistory = [...existing.messages, ...existing.turnMessages];
-        persistTurnConversation(
-          sessionId, fullHistory, terminalMessages, ChainStatus.INTERRUPTED,
-          existing.agent, existing.selection, streamWebContents,
-        );
-        existing.messages = fullHistory;
-        // Interrupted turns still name the session from what was exchanged so far.
-        triggerInterruptedTurnAutoName(existing, fullHistory);
-        completeSessionActivity(
-          sessionId,
-          getSessionManager().getActive(existing.windowId)?.id !== sessionId,
-        );
-        sendTurnEvent(streamWebContents, existing, IPC_CHANNELS.CHAT_DONE, {
-          type: 'done', response: partial, messages: terminalMessages, interrupted: true, usage,
-        });
-        sendChatState(streamWebContents, existing, {
-          state: 'idle', error: null, interruptState: 'confirmSubagents', cwd: existing.cwd,
-        });
-      }
-      existing.interruptActor.send({ type: 'INTERRUPT' });
-      return { status: 'confirming_subagents' };
-    }
-    if (interruptState === 'confirmSubagents') {
-      clearSubagentCancelConfirm(sessionId);
-      getBackgroundStore().terminateSession(sessionId);
-      getForegroundLiveRegistry().dropSession(sessionId);
-      getSubagentManager().cancelRunning(sessionId);
-      disposeActiveAgent(sessionId, existing);
-      sendChatState(streamWebContents, existing, {
-        state: 'idle', error: null, interruptState: 'idle', cwd: existing.cwd,
-      });
-      return { status: 'cancelled' };
-    }
-    return { status: 'no_active_stream' };
+    return hostRequest(String(event.sender.id), IPC_CHANNELS.CHAT_CANCEL, parsed.data);
   });
 
   ipcMain.handle(IPC_CHANNELS.BG_CMD_SNAPSHOT, async (event, payload: unknown) => {
-    const parsed = bgCommandSnapshotSchema.safeParse(payload);
-    if (!parsed.success) throw new Error(`Invalid bgcmd:snapshot payload: ${parsed.error.message}`);
-    const { commandId, toolCallId, lastN, sessionId: requestedSessionId, includeTail } = parsed.data;
-    const sessionId = resolveBgCommandSessionId(requestedSessionId, event);
-    if (!sessionId) return { found: false };
-    const includeTailEffective = includeTail !== false;
-    const lines = lastN ?? 50;
-    if (commandId !== undefined) {
-      // Session-privileged visibility: any agent scope within the session.
-      const entry = getBackgroundStore().get(commandId);
-      if (!entry || entry.sessionId !== sessionId) return { found: false };
-      return {
-        found: true,
-        tail: includeTailEffective ? entry.buffer.getTail(lines) : '',
-        exitCode: entry.exitCode,
-        running: entry.exitCode === null,
-        interactive: entry.interactive,
-        owner: entry.owner,
-        command: entry.command,
-        description: entry.description || undefined,
-        agentScopeId: entry.agentScopeId,
-        createdAt: entry.createdAt,
-      };
+    const parsed = bgCommandSnapshotRequestSchema.safeParse(payload);
+    if (!parsed.success) {
+      throw new Error(`Invalid bgcmd:snapshot payload: ${parsed.error.message}`);
     }
-    const liveEntry = getForegroundLiveRegistry().get(toolCallId!);
-    if (!liveEntry || liveEntry.sessionId !== sessionId) return { found: false };
-    const tail = includeTailEffective
-      ? getForegroundLiveRegistry().snapshotForSession(toolCallId!, lines, sessionId)?.tail ?? ''
-      : '';
-    return {
-      found: true,
-      tail,
-      exitCode: liveEntry.exitCode,
-      running: liveEntry.exitCode === null,
-      interactive: false,
-      owner: 'AGENT',
-      command: liveEntry.command,
-      description: liveEntry.command,
-      agentScopeId: liveEntry.agentScopeId,
-      createdAt: liveEntry.startedAt,
-    };
+    return hostRequest(String(event.sender.id), IPC_CHANNELS.BG_CMD_SNAPSHOT, parsed.data);
   });
 
   ipcMain.handle(IPC_CHANNELS.BG_CMD_LIST, async (event, payload: unknown) => {
-    const parsed = bgCommandListSchema.safeParse(payload ?? {});
-    if (!parsed.success) throw new Error(`Invalid bgcmd:list payload: ${parsed.error.message}`);
-    const sessionId = resolveBgCommandSessionId(parsed.data.sessionId, event);
-    if (!sessionId) return [];
-    const scopeNames = new Map<string, string>();
-    for (const state of getSubagentManager().getStates(sessionId)) {
-      scopeNames.set(state.id, state.name);
+    const parsed = bgCommandListRequestSchema.safeParse(payload ?? {});
+    if (!parsed.success) {
+      throw new Error(`Invalid bgcmd:list payload: ${parsed.error.message}`);
     }
-    const items = getBackgroundStore()
-      .list()
-      .filter((entry) => entry.sessionId === sessionId)
-      .map((entry) => ({
-        id: entry.id,
-        command: entry.command,
-        description: entry.description,
-        interactive: entry.interactive,
-        owner: entry.owner,
-        agentScopeId: entry.agentScopeId,
-        scopeName: entry.agentScopeId === 'main'
-          ? 'main'
-          : scopeNames.get(entry.agentScopeId) ?? entry.agentScopeId,
-        running: entry.exitCode === null,
-        exitCode: entry.exitCode,
-        createdAt: entry.createdAt,
-        lastOutputAt: entry.lastOutputAt,
-      }));
-    // Running commands first, newest first within each group.
-    items.sort((a, b) => {
-      if (a.running !== b.running) return a.running ? -1 : 1;
-      return b.createdAt - a.createdAt;
-    });
-    return items;
+    return hostRequest(String(event.sender.id), IPC_CHANNELS.BG_CMD_LIST, parsed.data);
   });
 
   ipcMain.handle(IPC_CHANNELS.BG_CMD_SEND_INPUT, async (event, payload: unknown) => {
-    const parsed = bgCommandSendInputSchema.safeParse(payload);
-    if (!parsed.success) throw new Error(`Invalid bgcmd:send_input payload: ${parsed.error.message}`);
-    const { commandId, text, sessionId: requestedSessionId } = parsed.data;
-    const sessionId = resolveBgCommandSessionId(requestedSessionId, event);
-    if (!sessionId) return { ok: false, reason: 'not_found' };
-    const store = getBackgroundStore();
-    // Session-privileged: any agent scope within the session is reachable.
-    const entry = store.get(commandId);
-    if (!entry || entry.sessionId !== sessionId) return { ok: false, reason: 'not_found' };
-    if (!entry.interactive) return { ok: false, reason: 'not_interactive' };
-    if (entry.exitCode !== null) return { ok: false, reason: 'exited' };
-    // TOCTOU fix: take ownership before the async write so an agent send_input
-    // cannot interleave between the write and the flip. Roll back on failure.
-    const prevOwner = entry.owner;
-    const prevLastUserInputAt = entry.lastUserInputAt;
-    const took = store.takeOwnership(commandId);
-    if (!took) return { ok: false, reason: 'not_found' };
-    let sent: boolean;
-    try {
-      sent = await store.send(commandId, text);
-    } catch {
-      sent = false;
+    const parsed = bgCommandSendInputRequestSchema.safeParse(payload);
+    if (!parsed.success) {
+      throw new Error(`Invalid bgcmd:send_input payload: ${parsed.error.message}`);
     }
-    if (!sent) {
-      const current = store.get(commandId);
-      if (current) {
-        current.owner = prevOwner;
-        current.lastUserInputAt = prevLastUserInputAt;
-      }
-      return { ok: false, reason: 'write_failed' };
-    }
-    return { ok: true };
+    return hostRequest(String(event.sender.id), IPC_CHANNELS.BG_CMD_SEND_INPUT, parsed.data);
   });
 
   ipcMain.handle(IPC_CHANNELS.BG_CMD_TERMINATE, async (event, payload: unknown) => {
-    const parsed = bgCommandControlSchema.safeParse(payload);
-    if (!parsed.success) throw new Error(`Invalid bgcmd:terminate payload: ${parsed.error.message}`);
-    const { commandId, sessionId: requestedSessionId } = parsed.data;
-    const sessionId = resolveBgCommandSessionId(requestedSessionId, event);
-    if (!sessionId) return { ok: false, reason: 'not_found' };
-    const entry = getBackgroundStore().get(commandId);
-    if (!entry || entry.sessionId !== sessionId) return { ok: false, reason: 'not_found' };
-    getBackgroundStore().terminate(commandId);
-    return { ok: true };
+    const parsed = bgCommandControlRequestSchema.safeParse(payload);
+    if (!parsed.success) {
+      throw new Error(`Invalid bgcmd:terminate payload: ${parsed.error.message}`);
+    }
+    return hostRequest(String(event.sender.id), IPC_CHANNELS.BG_CMD_TERMINATE, parsed.data);
   });
 
   ipcMain.handle(IPC_CHANNELS.BG_CMD_RELEASE_INPUT, async (event, payload: unknown) => {
-    const parsed = bgCommandControlSchema.safeParse(payload);
-    if (!parsed.success) throw new Error(`Invalid bgcmd:release_input payload: ${parsed.error.message}`);
-    const { commandId, sessionId: requestedSessionId } = parsed.data;
-    const sessionId = resolveBgCommandSessionId(requestedSessionId, event);
-    if (!sessionId) return { ok: false };
-    const entry = getBackgroundStore().get(commandId);
-    if (!entry || entry.sessionId !== sessionId) return { ok: false };
-    return { ok: getBackgroundStore().releaseOwnership(commandId) };
+    const parsed = bgCommandControlRequestSchema.safeParse(payload);
+    if (!parsed.success) {
+      throw new Error(`Invalid bgcmd:release_input payload: ${parsed.error.message}`);
+    }
+    return hostRequest(String(event.sender.id), IPC_CHANNELS.BG_CMD_RELEASE_INPUT, parsed.data);
   });
 
-  removeBgCommandChangeListener ??= subscribeBackgroundProcessChanges((sessionId) => {
-    if (sessionId) broadcastBgCommandChanged(sessionId);
-  });
+  // Fallback only: once the embedded local host is running, its HostServer
+  // owns bgcmd:changed delivery (per-connection, through the client broadcast).
+  if (!isEmbeddedLocalHostRunning()) {
+    removeBgCommandChangeListener ??= subscribeBackgroundProcessChanges((sessionId) => {
+      if (sessionId) broadcastBgCommandChanged(sessionId);
+    });
+  }
 }
 
 /** Unregister chat IPC handlers (for cleanup/testing). */
@@ -467,8 +166,10 @@ export function unregisterChatIPC(): void {
   ipcMain.removeHandler(IPC_CHANNELS.BG_CMD_SEND_INPUT);
   ipcMain.removeHandler(IPC_CHANNELS.BG_CMD_TERMINATE);
   ipcMain.removeHandler(IPC_CHANNELS.BG_CMD_RELEASE_INPUT);
-  removeBgCommandChangeListener?.();
-  removeBgCommandChangeListener = null;
+  if (!isEmbeddedLocalHostRunning()) {
+    removeBgCommandChangeListener?.();
+    removeBgCommandChangeListener = null;
+  }
   for (const [sessionId, agent] of [...activeAgents.entries()]) {
     agent.agentCancelled = true;
     agent.finalized = true;

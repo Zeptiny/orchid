@@ -3,7 +3,7 @@ import {
   clearNextRequestStop,
   requestNextRequestStop,
   shouldStopNextRequest,
-} from '../../src/main/ipc/next-request-stop';
+} from '../../src/main/agents/next-request-stop';
 
 // The module holds a module-private Set, so state persists across tests in this
 // file. Clear the id we use before each case to keep them independent.

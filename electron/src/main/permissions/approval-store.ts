@@ -19,6 +19,7 @@ export interface ApprovalEntry {
   cwd: string;
   scope?: ToolScope;
   ownerWindowId: string | null;
+  createdAt: string;
   resolve: (result: ApprovalResult) => void;
   abortSignal?: AbortSignal;
   onAbort?: () => void;
@@ -31,6 +32,12 @@ export type PendingApproval = Pick<
   'toolCallId' | 'sessionId' | 'toolName' | 'riskClass' | 'args' | 'cwd' | 'scope'
 >;
 
+/** Pending approval tagged with its owner client and creation time (reconnect resync). */
+export type PendingApprovalWithOwner = PendingApproval & {
+  ownerClientId: string | null;
+  createdAt: string;
+};
+
 /** Payload emitted on the 'approval-settled' event. */
 export interface ApprovalSettledEvent {
   toolCallId: string;
@@ -39,7 +46,15 @@ export interface ApprovalSettledEvent {
   result: ApprovalResult;
 }
 
-/** Tracks in-flight tool-call approvals and settles them exactly once. */
+/**
+ * Tracks in-flight tool-call approvals and settles them exactly once.
+ *
+ * The per-request timeout is the fail-closed boundary for approvals whose
+ * owner client is not connected (R7): an approval pending on a host with zero
+ * clients is NEVER auto-approved — the timer settles it DENIED with reason
+ * `approval-timeout` (or waits forever when the timeout is 0), and the
+ * `approval-settled` event lets reconnecting clients observe the outcome.
+ */
 export class ApprovalStore extends EventEmitter {
   private pending = new Map<string, ApprovalEntry>();
 
@@ -77,6 +92,7 @@ export class ApprovalStore extends EventEmitter {
         cwd,
         scope,
         ownerWindowId: ownerWindowId ?? null,
+        createdAt: new Date().toISOString(),
         resolve,
         abortSignal,
         onAbort,
@@ -146,18 +162,6 @@ export class ApprovalStore extends EventEmitter {
     }
   }
 
-  /** Cancel every pending approval owned by a window, returning affected session ids. */
-  cancelAllForOwnerWindow(ownerWindowId: string): string[] {
-    const sessionIds = new Set<string>();
-    for (const [toolCallId, entry] of this.pending) {
-      if (entry.ownerWindowId === ownerWindowId) {
-        sessionIds.add(entry.sessionId);
-        this.settle(toolCallId, { decision: 'denied', reason: 'cancelled' });
-      }
-    }
-    return [...sessionIds];
-  }
-
   /** Look up a pending approval by its tool call id. */
   get(toolCallId: string): ApprovalEntry | undefined {
     return this.pending.get(toolCallId);
@@ -170,6 +174,19 @@ export class ApprovalStore extends EventEmitter {
     if (entry.ownerWindowId != null) {
       return entry.ownerWindowId === ownerWindowId;
     }
+    entry.ownerWindowId = ownerWindowId;
+    return true;
+  }
+
+  /**
+   * Replace an existing owner binding. Used by reconnect resync (U10): a
+   * remote host assigns a fresh connection id per attach, so a pending
+   * entry's owner can never return — the orphaned binding moves to the
+   * reconnecting client or the prompt stays visible-but-unanswerable.
+   */
+  rebindOwnerWindow(toolCallId: string, ownerWindowId: string): boolean {
+    const entry = this.pending.get(toolCallId);
+    if (!entry) return false;
     entry.ownerWindowId = ownerWindowId;
     return true;
   }
@@ -192,6 +209,26 @@ export class ApprovalStore extends EventEmitter {
           scope,
         }),
       );
+  }
+
+  /** List pending approvals (all sessions, or one) tagged with owner client + createdAt. */
+  listPending(sessionId?: string): PendingApprovalWithOwner[] {
+    return [...this.pending.values()]
+      .filter((entry) => sessionId === undefined || entry.sessionId === sessionId)
+      .map(({
+        toolCallId, sessionId: ownerSessionId, toolName, riskClass, args, cwd, scope,
+        ownerWindowId, createdAt,
+      }) => ({
+        toolCallId,
+        sessionId: ownerSessionId,
+        toolName,
+        riskClass,
+        args,
+        cwd,
+        ...(scope !== undefined ? { scope } : {}),
+        ownerClientId: ownerWindowId,
+        createdAt,
+      }));
   }
 
   /** Cancel every pending approval and clear their timers. */

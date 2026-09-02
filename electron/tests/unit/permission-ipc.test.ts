@@ -24,6 +24,7 @@ const mocks = vi.hoisted(() => {
     sessionCwds: [] as string[],
     activeTurnOwnerBySession,
     webContentsById,
+    configState: { approval_timeout: 5 } as unknown,
     forceAbortMainTurn: vi.fn(),
     ipcMain: {
       handle: vi.fn((channel: string, handler: (...args: unknown[]) => unknown) => {
@@ -64,6 +65,7 @@ vi.mock('../../src/main/config/loader', async (importOriginal) => {
     ...actual,
     HOME_CONFIG_DIR: '/tmp/orchid-permission-ipc-config/home',
     HOME_CONFIG_PATH: '/tmp/orchid-permission-ipc-config/home/config.json',
+    getConfig: () => mocks.configState,
     ConfigManager: {
       reset: vi.fn(),
       load: vi.fn(),
@@ -77,10 +79,6 @@ vi.mock('../../src/main/ipc/chat', () => ({
   forceAbortMainTurn: mocks.forceAbortMainTurn,
   getActiveMainTurnWindowId: (sessionId: string) =>
     mocks.activeTurnOwnerBySession.get(sessionId) ?? null,
-  webContentsForWindowId: (windowId: string) => {
-    const webContents = mocks.webContentsById.get(windowId);
-    return webContents && !webContents.isDestroyed() ? webContents : null;
-  },
 }));
 
 vi.mock('../../src/main/session/singleton', () => ({
@@ -158,73 +156,74 @@ describe('permission IPC ownership', () => {
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     permissionIpc.unregisterPermissionIPC();
     permissionIpc.sessionPermissionOverrides.clear();
     fs.rmSync(TEST_CONFIG_ROOT, { recursive: true, force: true });
   });
 
-  it('derives the session-mode target from the sender and rejects no-session writes', () => {
+  it('derives the session-mode target from the sender and rejects no-session writes', async () => {
     mocks.selectedByWebContents.set(10, SESSION_A);
     const setMode = mocks.handlers.get(IPC_CHANNELS.PERMISSION_SET_SESSION_MODE)!;
 
     expect(() => setMode(eventFrom(10), { sessionId: SESSION_B, mode: 'allow' })).toThrow();
-    expect(setMode(eventFrom(10), {
+    await expect(setMode(eventFrom(10), {
       expectedSessionId: SESSION_B,
       mode: 'allow',
-    })).toEqual({ ok: false, sessionId: SESSION_A });
-    expect(setMode(eventFrom(10), {
+    })).resolves.toEqual({ ok: false, sessionId: SESSION_A });
+    await expect(setMode(eventFrom(10), {
       expectedSessionId: SESSION_A,
       mode: 'allow',
-    })).toEqual({ ok: true, sessionId: SESSION_A });
+    })).resolves.toEqual({ ok: true, sessionId: SESSION_A });
     expect(permissionIpc.sessionPermissionOverrides.get(SESSION_A)).toBe('allow');
     expect(permissionIpc.sessionPermissionOverrides.has(SESSION_B)).toBe(false);
 
     mocks.selectedByWebContents.delete(10);
     // Draft mode (no active session): the override is stashed per-window,
     // not in the session map. It returns ok: true so the coordinator commits.
-    expect(setMode(eventFrom(10), {
+    await expect(setMode(eventFrom(10), {
       expectedSessionId: null,
       mode: 'ask',
-    })).toEqual({ ok: true, sessionId: null });
+    })).resolves.toEqual({ ok: true, sessionId: null });
     expect(permissionIpc.sessionPermissionOverrides.get(SESSION_A)).toBe('allow');
   });
 
-  it('deletes the selected session override when mode is null', () => {
+  it('deletes the selected session override when mode is null', async () => {
     mocks.selectedByWebContents.set(10, SESSION_A);
     permissionIpc.sessionPermissionOverrides.set(SESSION_A, 'allow');
     const setMode = mocks.handlers.get(IPC_CHANNELS.PERMISSION_SET_SESSION_MODE)!;
 
-    expect(setMode(eventFrom(10), {
+    await expect(setMode(eventFrom(10), {
       expectedSessionId: SESSION_A,
       mode: null,
-    })).toEqual({ ok: true, sessionId: SESSION_A });
+    })).resolves.toEqual({ ok: true, sessionId: SESSION_A });
     expect(permissionIpc.sessionPermissionOverrides.has(SESSION_A)).toBe(false);
   });
 
-  it('reads distinct modes for the session selected by each sender', () => {
+  it('reads distinct modes for the session selected by each sender', async () => {
     mocks.selectedByWebContents.set(10, SESSION_A);
     mocks.selectedByWebContents.set(20, SESSION_B);
     mocks.sessionPermissionModeById.set(SESSION_A, 'allow');
     mocks.sessionPermissionModeById.set(SESSION_B, 'ask');
     const getMode = mocks.handlers.get(IPC_CHANNELS.PERMISSION_GET_SESSION_MODE)!;
 
-    expect(getMode(eventFrom(10), { expectedSessionId: SESSION_A })).toEqual({
+    await expect(getMode(eventFrom(10), { expectedSessionId: SESSION_A })).resolves.toEqual({
       ok: true,
       sessionId: SESSION_A,
       mode: 'allow',
     });
-    expect(getMode(eventFrom(20), { expectedSessionId: SESSION_B })).toEqual({
+    await expect(getMode(eventFrom(20), { expectedSessionId: SESSION_B })).resolves.toEqual({
       ok: true,
       sessionId: SESSION_B,
       mode: 'ask',
     });
-    expect(getMode(eventFrom(20), { expectedSessionId: SESSION_A })).toEqual({
+    await expect(getMode(eventFrom(20), { expectedSessionId: SESSION_A })).resolves.toEqual({
       ok: false,
       sessionId: SESSION_B,
       mode: null,
     });
     mocks.selectedByWebContents.delete(20);
-    expect(getMode(eventFrom(20), { expectedSessionId: null })).toEqual({
+    await expect(getMode(eventFrom(20), { expectedSessionId: null })).resolves.toEqual({
       ok: true,
       sessionId: null,
       mode: null,
@@ -247,8 +246,10 @@ describe('permission IPC ownership', () => {
     );
     mocks.projectDirByWebContents.set(10, projectDir);
 
+    // Fix #6: both surfaces serve through the host binding, which resolves the
+    // caller's workspace server-side — same stores, same authorization seam.
     const snapshot = mocks.handlers.get(IPC_CHANNELS.CONFIG_PERMISSION_SCOPES)!;
-    expect(snapshot(eventFrom(10))).toEqual({
+    await expect(snapshot(eventFrom(10))).resolves.toEqual({
       global: { grep: 'ask' },
       project: { edit: 'ask' },
       projectDir,
@@ -281,11 +282,11 @@ describe('permission IPC ownership', () => {
     mocks.projectDirByWebContents.set(10, projectDirA);
     const save = mocks.handlers.get(IPC_CHANNELS.CONFIG_SAVE_PERMISSION_SCOPE)!;
 
-    expect(() => save(eventFrom(10), {
+    await expect(save(eventFrom(10), {
       scope: 'project',
       expectedProjectDir: projectDirB,
       updates: { edit: 'allow' },
-    })).toThrow('does not match the selected workspace');
+    })).rejects.toThrow('does not match the selected workspace');
 
     let release!: () => void;
     const blocker = withConfigSaveLock(() => new Promise<void>((resolve) => {
@@ -297,6 +298,12 @@ describe('permission IPC ownership', () => {
       expectedProjectDir: projectDirA,
       updates: { edit: 'allow' },
     });
+    // The handler now forwards through the host client (one microtask for the
+    // settled handshake) before the binding authorizes the target; let that
+    // dispatch land so the capture happens while the workspace still selects
+    // project A — mirroring the handler-time capture the old synchronous
+    // handler performed.
+    await new Promise((resolve) => setImmediate(resolve));
     mocks.projectDirByWebContents.set(10, projectDirB);
     release();
     await blocker;
@@ -354,42 +361,47 @@ describe('permission IPC ownership', () => {
       .toEqual({ permissions: { write: 'ask' } });
   });
 
-  it('treats a missing project layer as empty but wraps malformed layer errors', () => {
+  it('treats a missing project layer as empty but wraps malformed layer errors', async () => {
     const projectDir = path.join(TEST_CONFIG_ROOT, 'project-without-config');
     fs.mkdirSync(projectDir, { recursive: true });
     mocks.projectDirByWebContents.set(10, projectDir);
     const snapshot = mocks.handlers.get(IPC_CHANNELS.CONFIG_PERMISSION_SCOPES)!;
 
-    expect(snapshot(eventFrom(10))).toEqual({
+    await expect(snapshot(eventFrom(10))).resolves.toEqual({
       global: { grep: 'ask' },
       project: {},
       projectDir,
     });
 
     fs.writeFileSync(path.join(projectDir, '.orchid.json'), '{ malformed');
-    expect(() => snapshot(eventFrom(10))).toThrow(
+    await expect(snapshot(eventFrom(10))).rejects.toThrow(
       `Cannot read configuration layer ${path.join(projectDir, '.orchid.json')}`,
     );
   });
 
   it('rejects renderer paths and project writes without a bound workspace', async () => {
     const save = mocks.handlers.get(IPC_CHANNELS.CONFIG_SAVE_PERMISSION_SCOPE)!;
+    // Unknown keys and never-typed branches fail zod validation synchronously
+    // in the handler, before the request is forwarded to the host.
     expect(() => save(eventFrom(10), {
       scope: 'project',
       projectDir: '/tmp/attacker-selected',
       updates: { edit: 'allow' },
     })).toThrow();
     expect(() => save(eventFrom(10), {
-      scope: 'project',
-      expectedProjectDir: '/tmp/attacker-selected',
-      updates: { edit: 'allow' },
-    })).toThrow('not a valid project directory');
-
-    expect(() => save(eventFrom(10), {
       scope: 'global',
       expectedProjectDir: '/tmp/attacker-selected',
       updates: { edit: 'allow' },
     })).toThrow();
+
+    // A well-formed project payload for an unauthorized directory is
+    // rejected by the host binding's authorization step (#6 keeps it
+    // server-side).
+    await expect(save(eventFrom(10), {
+      scope: 'project',
+      expectedProjectDir: '/tmp/attacker-selected',
+      updates: { edit: 'allow' },
+    })).rejects.toThrow('not a valid project directory');
   });
 
   it('patches the user permission map without replacing unrelated home settings', async () => {
@@ -407,19 +419,7 @@ describe('permission IPC ownership', () => {
     expect(fs.statSync(TEST_HOME_CONFIG).mode & 0o777).toBe(0o600);
   });
 
-  it('cleans pending approvals and overrides when a session is deleted', async () => {
-    addWindow(10);
-    permissionIpc.sessionPermissionOverrides.set(SESSION_A, 'allow');
-    const pending = createApproval(TOOL_A, SESSION_A, '10');
-
-    permissionIpc.clearPermissionSessionState(SESSION_A);
-
-    expect(permissionIpc.sessionPermissionOverrides.has(SESSION_A)).toBe(false);
-    expect(approvalStore.get(TOOL_A)).toBeUndefined();
-    await expect(pending).resolves.toEqual({ decision: 'denied', reason: 'cancelled' });
-  });
-
-  it('returns approvals only for the sender selected session and exact owner window', () => {
+  it('returns approvals only for the sender selected session and exact owner window', async () => {
     addWindow(10);
     addWindow(20);
     mocks.selectedByWebContents.set(10, SESSION_A);
@@ -430,10 +430,10 @@ describe('permission IPC ownership', () => {
     void createApproval(TOOL_B, SESSION_A, '20');
 
     const snapshot = mocks.handlers.get(IPC_CHANNELS.PERMISSION_SNAPSHOT)!;
-    expect(snapshot(eventFrom(10))).toEqual({
+    await expect(snapshot(eventFrom(10))).resolves.toEqual({
       approvals: [expect.objectContaining({ toolCallId: TOOL_A, sessionId: SESSION_A })],
     });
-    expect(snapshot(eventFrom(20))).toEqual({
+    await expect(snapshot(eventFrom(20))).resolves.toEqual({
       approvals: [expect.objectContaining({ toolCallId: TOOL_B, sessionId: SESSION_A })],
     });
   });
@@ -446,64 +446,99 @@ describe('permission IPC ownership', () => {
     const pending = createApproval(TOOL_A, SESSION_A, '10');
     const answer = mocks.handlers.get(IPC_CHANNELS.PERMISSION_APPROVAL_ANSWER)!;
 
-    expect(answer(eventFrom(20), {
+    // Establish both windows' host connections (in the real app every live
+    // window has one) so the ownership check — and the adoption path below —
+    // reasons about genuine connectivity, not test-fixture ordering.
+    const snapshot = mocks.handlers.get(IPC_CHANNELS.PERMISSION_SNAPSHOT)!;
+    await snapshot(eventFrom(10));
+    await snapshot(eventFrom(20));
+
+    // Both windows are connected: the non-owner must be refused (no adoption
+    // while a live owner exists).
+    await expect(answer(eventFrom(20), {
       toolCallId: TOOL_A,
       decision: 'approved',
-    })).toEqual({ ok: false });
+    })).resolves.toEqual({ ok: false });
     expect(approvalStore.get(TOOL_A)).toBeDefined();
 
     mocks.selectedByWebContents.set(10, SESSION_B);
-    expect(answer(eventFrom(10), {
+    await expect(answer(eventFrom(10), {
       toolCallId: TOOL_A,
       decision: 'approved',
-    })).toEqual({ ok: false });
+    })).resolves.toEqual({ ok: false });
     expect(approvalStore.get(TOOL_A)).toBeDefined();
 
     mocks.selectedByWebContents.set(10, SESSION_A);
-    expect(answer(eventFrom(10), {
+    await expect(answer(eventFrom(10), {
       toolCallId: TOOL_A,
       decision: 'approved',
-    })).toEqual({ ok: true });
+    })).resolves.toEqual({ ok: true });
     await expect(pending).resolves.toEqual({ decision: 'approved' });
   });
 
-  it('settles owner-bound approvals and aborts only that owner main turn on close', async () => {
-    addWindow(10);
-    addWindow(20);
-    mocks.activeTurnOwnerBySession.set(SESSION_A, '10');
-    mocks.activeTurnOwnerBySession.set(SESSION_B, '20');
-    const pendingA = createApproval(TOOL_A, SESSION_A, '10');
-    const pendingB = createApproval(TOOL_B, SESSION_B, '20');
+  it('self-heals an approval orphaned by reconnect: the answering client adopts it (#26)', async () => {
+    addWindow(30);
+    mocks.selectedByWebContents.set(30, SESSION_A);
+    // The approval's owner is a daemon-side connection that no longer exists
+    // (reconnect assigned a fresh conn-<n>) — exactly what a resync broadcast
+    // re-surfaces before the renderer's session.open could re-bind it.
+    const pending = createApproval(TOOL_A, SESSION_A, 'conn-1');
+    expect(approvalStore.get(TOOL_A)?.ownerWindowId).toBe('conn-1');
+    const answer = mocks.handlers.get(IPC_CHANNELS.PERMISSION_APPROVAL_ANSWER)!;
 
-    const lifecycle = permissionIpc as typeof permissionIpc & {
-      handlePermissionOwnerDestroyed: (ownerWindowId: string) => void;
-    };
-    lifecycle.handlePermissionOwnerDestroyed('10');
-
-    await expect(pendingA).resolves.toEqual({ decision: 'denied', reason: 'cancelled' });
-    expect(approvalStore.get(TOOL_A)).toBeUndefined();
-    expect(approvalStore.get(TOOL_B)).toBeDefined();
-    expect(mocks.forceAbortMainTurn).toHaveBeenCalledOnce();
-    expect(mocks.forceAbortMainTurn).toHaveBeenCalledWith(SESSION_A);
-
-    approvalStore.cancel(TOOL_B);
-    await expect(pendingB).resolves.toEqual({ decision: 'denied', reason: 'cancelled' });
+    await expect(answer(eventFrom(30), {
+      toolCallId: TOOL_A,
+      decision: 'approved',
+    })).resolves.toEqual({ ok: true });
+    await expect(pending).resolves.toEqual({ decision: 'approved' });
   });
 
-  it('delivers a background-subagent approval using captured window affinity', async () => {
-    const owner = addWindow(10);
+  it('does not adopt an orphaned approval for a client viewing another session (#26)', async () => {
+    addWindow(31);
+    mocks.selectedByWebContents.set(31, SESSION_B);
+    const pending = createApproval(TOOL_B, SESSION_A, 'conn-2');
+    const answer = mocks.handlers.get(IPC_CHANNELS.PERMISSION_APPROVAL_ANSWER)!;
+
+    await expect(answer(eventFrom(31), {
+      toolCallId: TOOL_B,
+      decision: 'denied',
+    })).resolves.toEqual({ ok: false });
+    // Still owned by the dead connection: only a client that views SESSION_A
+    // may take it.
+    expect(approvalStore.get(TOOL_B)?.ownerWindowId).toBe('conn-2');
+    await approvalStore.cancel(TOOL_B);
+    void pending;
+  });
+
+  it('settles undeliverable approvals fail-closed at the timeout instead of aborting immediately', async () => {
+    vi.useFakeTimers();
+    // Owner window 10 has no client connection and no renderer — the approval
+    // must stay pending (a brief disconnect must not kill it) and settle
+    // DENIED at the approval timeout (fail-closed preserved, R7).
+    const pending = createApproval(TOOL_A, SESSION_A, '10');
+    expect(approvalStore.get(TOOL_A)).toBeDefined();
+    expect(mocks.forceAbortMainTurn).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(5_000);
+    await expect(pending).resolves.toEqual({ decision: 'denied', reason: 'approval-timeout' });
+    expect(approvalStore.get(TOOL_A)).toBeUndefined();
+    expect(mocks.forceAbortMainTurn).not.toHaveBeenCalled();
+  });
+
+  it('keeps a background-subagent approval answerable through the host path (delivery is protocol-owned)', async () => {
+    addWindow(10);
     mocks.selectedByWebContents.set(10, SESSION_A);
 
     const pending = createApproval(TOOL_A, SESSION_A, '10');
 
-    expect(owner.webContents.send).toHaveBeenCalledWith(
-      IPC_CHANNELS.PERMISSION_APPROVAL_REQUESTED,
-      expect.objectContaining({ toolCallId: TOOL_A, sessionId: SESSION_A }),
-    );
     expect(approvalStore.get(TOOL_A)?.ownerWindowId).toBe('10');
     expect(mocks.forceAbortMainTurn).not.toHaveBeenCalled();
 
-    approvalStore.answer(TOOL_A, 'approved');
+    const answer = mocks.handlers.get(IPC_CHANNELS.PERMISSION_APPROVAL_ANSWER)!;
+    await expect(answer(eventFrom(10), {
+      toolCallId: TOOL_A,
+      decision: 'approved',
+    })).resolves.toEqual({ ok: true });
     await expect(pending).resolves.toEqual({ decision: 'approved' });
   });
 });

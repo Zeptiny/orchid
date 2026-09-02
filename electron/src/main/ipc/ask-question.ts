@@ -1,116 +1,40 @@
 /**
  * ask_question IPC — bridge pending questions between tool handler and renderer.
  *
- * Subscribes to QuestionStore events and forwards them only to renderer
- * windows currently viewing the owning session. Handles answer/cancel invoke
- * channels from a renderer that still owns that selected session.
+ * Question delivery is fully unified (U9): asked/settled events flow as host
+ * protocol events — `host/server.ts` forwards them to connected clients and
+ * `ipc/host-broadcast.ts` pushes them to windows. A question whose owner
+ * client is not connected stays PENDING on the host; the store's timeout
+ * (the same `approval_timeout` boundary approvals use) settles it CANCELLED —
+ * fail-closed, never auto-answered — and a 0 timeout waits forever.
+ *
+ * This module only registers the answer/cancel invoke channels, which a
+ * renderer that still owns the selected session may call.
  */
 import { ipcMain } from 'electron';
 import { IPC_CHANNELS } from '../../shared/types/ipc';
-import {
-  questionStore,
-  type QuestionSettledEvent,
-} from '../tools/ask-question/store';
-import {
-  forceAbortMainTurn,
-  getActiveMainTurnWindowId,
-  webContentsForWindowId,
-} from './chat';
-import { getSessionManager } from './session';
+import { hostRequest } from './host-request';
+import { questionStore } from '../tools/ask-question/store';
 import {
   askQuestionAnswerSchema,
   askQuestionCancelSchema,
 } from './payload-schemas';
 
-interface QuestionAskedPayload {
-  sessionId: string;
-  toolCallId: string;
-  questions: unknown[];
-}
-
-function abortUndeliverableQuestion(sessionId: string, toolCallId: string): void {
-  questionStore.cancel(toolCallId);
-  forceAbortMainTurn(sessionId);
-}
-
-function onQuestionAsked({ sessionId, toolCallId, questions }: QuestionAskedPayload): void {
-  const ownerWindowId = getActiveMainTurnWindowId(sessionId);
-  if (ownerWindowId == null || !questionStore.bindOwnerWindow(toolCallId, ownerWindowId)) {
-    abortUndeliverableQuestion(sessionId, toolCallId);
-    return;
-  }
-
-  const ownerWebContents = webContentsForWindowId(ownerWindowId);
-  if (!ownerWebContents) {
-    abortUndeliverableQuestion(sessionId, toolCallId);
-    return;
-  }
-
-  try {
-    ownerWebContents.send(
-      IPC_CHANNELS.ASK_QUESTION_ASKED,
-      { sessionId, toolCallId, questions },
-    );
-  } catch {
-    abortUndeliverableQuestion(sessionId, toolCallId);
-  }
-}
-
-function onQuestionSettled({
-  sessionId,
-  toolCallId,
-  ownerWindowId,
-  result,
-}: QuestionSettledEvent): void {
-  if (ownerWindowId == null) return;
-  const ownerWebContents = webContentsForWindowId(ownerWindowId);
-  if (!ownerWebContents) return;
-  try {
-    ownerWebContents.send(
-      IPC_CHANNELS.ASK_QUESTION_SETTLED,
-      { sessionId, toolCallId, result },
-    );
-  } catch {
-    // The store is already settled; a dead renderer must not reopen the wait.
-  }
-}
-
-function selectedSessionId(senderId: number): string | null {
-  return getSessionManager().getActive(String(senderId))?.id ?? null;
-}
-
-function senderOwnsQuestion(senderId: number, toolCallId: string): boolean {
-  const entry = questionStore.get(toolCallId);
-  return (
-    entry != null &&
-    entry.ownerWindowId === String(senderId) &&
-    entry.sessionId === selectedSessionId(senderId)
-  );
-}
-
-/** Register ask_question IPC handlers and store event forwarding. */
+/** Register ask_question IPC handlers. */
 export function registerAskQuestionIPC(): void {
-  questionStore.on('question-asked', onQuestionAsked);
-  questionStore.on('question-settled', onQuestionSettled);
-
   ipcMain.handle(IPC_CHANNELS.ASK_QUESTION_SNAPSHOT, (event) => {
-    const sessionId = selectedSessionId(event.sender.id);
-    return {
-      questions: sessionId == null
-        ? []
-        : questionStore.listForOwner(sessionId, String(event.sender.id)),
-    };
+    return hostRequest(String(event.sender.id), IPC_CHANNELS.ASK_QUESTION_SNAPSHOT);
   });
 
   ipcMain.handle(
     IPC_CHANNELS.ASK_QUESTION_ANSWER,
     (event, payload: unknown) => {
       const parsed = askQuestionAnswerSchema.parse(payload);
-      if (!senderOwnsQuestion(event.sender.id, parsed.toolCallId)) {
-        return { ok: false };
-      }
-      const ok = questionStore.answer(parsed.toolCallId, parsed.answers);
-      return { ok };
+      return hostRequest(
+        String(event.sender.id),
+        IPC_CHANNELS.ASK_QUESTION_ANSWER,
+        parsed,
+      );
     },
   );
 
@@ -118,24 +42,18 @@ export function registerAskQuestionIPC(): void {
     IPC_CHANNELS.ASK_QUESTION_CANCEL,
     (event, payload: unknown) => {
       const parsed = askQuestionCancelSchema.parse(payload);
-      if (!senderOwnsQuestion(event.sender.id, parsed.toolCallId)) {
-        return { ok: false };
-      }
-      const entry = questionStore.get(parsed.toolCallId);
-      const ok = questionStore.cancel(parsed.toolCallId);
-      if (ok && entry) {
-        setImmediate(() => forceAbortMainTurn(entry.sessionId, { emitTerminalEvents: true }));
-      }
-      return { ok };
+      return hostRequest(
+        String(event.sender.id),
+        IPC_CHANNELS.ASK_QUESTION_CANCEL,
+        parsed,
+      );
     },
   );
 }
 
-/** Unregister ask_question IPC handlers and store event forwarding. */
+/** Unregister ask_question IPC handlers and settle pending questions (shutdown). */
 export function unregisterAskQuestionIPC(): void {
   questionStore.cleanupAll();
-  questionStore.off('question-asked', onQuestionAsked);
-  questionStore.off('question-settled', onQuestionSettled);
   ipcMain.removeHandler(IPC_CHANNELS.ASK_QUESTION_SNAPSHOT);
   ipcMain.removeHandler(IPC_CHANNELS.ASK_QUESTION_ANSWER);
   ipcMain.removeHandler(IPC_CHANNELS.ASK_QUESTION_CANCEL);

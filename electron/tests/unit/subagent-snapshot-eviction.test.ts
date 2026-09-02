@@ -557,8 +557,8 @@ describe('exact-revision checkpoint confirmation', () => {
   });
 });
 
-describe('records cancelled while queued never persist (P3 #15)', () => {
-  it('cancel-queued → FIFO-capped evicted summary; no durable row is written, even on recovery', () => {
+describe('records cancelled while queued persist an interrupted row (#121)', () => {
+  it('cancel-queued → durable INTERRUPTED row, then FIFO-capped summary after confirmation', () => {
     const sid = makeSession();
     configOverride.current = {
       ...defaults(),
@@ -580,25 +580,32 @@ describe('records cancelled while queued never persist (P3 #15)', () => {
       expect(record.state).toBe(SubagentState.QUEUED);
       expect(manager.cancelOne(record.id)).toBe(true);
       queuedIds.push(record.id);
-      // Cancelled while queued → evicted to a lean summary (chain emptied).
-      expect(manager.isSummary(record.id)).toBe(true);
-      expect(record.chain?.messages).toEqual([]);
+      // Cancelled while queued → stays a full dirty INTERRUPTED record so the
+      // terminal wave can write its durable row (issue #121 path a).
+      expect(manager.isSummary(record.id)).toBe(false);
+      expect(record.state).toBe(SubagentState.INTERRUPTED);
     }
 
-    // The retention FIFO capped the summaries: the oldest left allRecords.
+    // An app close right here would run the shutdown flush; the ordinary
+    // checkpoint writes every interrupted row — a restart can then hydrate
+    // accurate terminal statuses instead of dropping the records entirely.
+    persistSubagentChains(manager, sid);
+    for (const id of queuedIds) {
+      const raw = readRawRecordJson(sid, id);
+      expect(raw).toBeDefined();
+      expect(JSON.parse(raw!).status).toBe('interrupted');
+    }
+
+    // The successful checkpoint confirmed + evicted them to lean summaries,
+    // and the retention FIFO capped those: the oldest left allRecords.
     expect(manager.getRecord(queuedIds[0])).toBeUndefined();
     expect(manager.allRecords().filter((r) => r.sessionId === sid)).toHaveLength(3);
 
-    // Never-admitted records want no durable row — not from an ordinary
-    // checkpoint and not from a recovery flush (which treats every record as
-    // dirty but must still skip evicted summaries).
-    persistSubagentChains(manager, sid);
-    for (const id of queuedIds) {
-      expect(readRawRecordJson(sid, id)).toBeUndefined();
-    }
+    // A recovery flush re-serializes nothing for evicted summaries — the
+    // confirmed durable rows stay intact.
     persistSubagentChains(manager, sid, { recovery: true });
     for (const id of queuedIds) {
-      expect(readRawRecordJson(sid, id)).toBeUndefined();
+      expect(readRawRecordJson(sid, id)).toBeDefined();
     }
   });
 });

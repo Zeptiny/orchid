@@ -45,6 +45,10 @@ export interface SubagentDeltaBatchOptions {
 const isRunning = (status: SubagentStatus): boolean =>
   status === 'pending' || status === 'running';
 
+/** Terminal row statuses: a stale lifecycle delta must never un-settle these. */
+const isSettled = (status: SubagentStatus): boolean =>
+  status === 'completed' || status === 'failed' || status === 'interrupted';
+
 // Timestamp-descending only: sort is stable, so equal timestamps keep input
 // order (spawn/insertion order) — the ordering callers like the Sidebar
 // partition expect when delegating their bucketing to groupSubagents.
@@ -288,8 +292,10 @@ function applyDeltaToDraft(draft: LiveDraft, event: ContentDelta): void {
 /**
  * Apply one flush of deltas in order. `records` identity changes on
  * `spawned` (append, or replace on run rotation), `status_changed` (status
- * field update), and `terminal` (replace); projection-only deltas rebuild
- * one live projection per touched subagent and leave records untouched.
+ * field update), `terminal` (replace), and the first content delta that
+ * promotes a queued run (self-heal for a dropped status_changed);
+ * projection-only deltas rebuild one live projection per touched subagent
+ * and leave records untouched.
  */
 function applyDeltaEvents(
   state: SubagentStreamState,
@@ -318,6 +324,11 @@ function applyDeltaEvents(
       if ((event.type === 'spawned' || event.type === 'terminal') && event.record.id !== subagentId) {
         continue;
       }
+      // A status transition never settles a run — the terminal record is the
+      // authoritative handoff — so a malformed terminal-valued status is dropped.
+      if (event.type === 'status_changed' && isSettled(event.status)) {
+        continue;
+      }
       if (runId !== undefined) {
         // Run rotation: a resumed subagent re-emits spawned under a fresh
         // runId. Let the seed through without the stale-run sequence filter;
@@ -327,12 +338,20 @@ function applyDeltaEvents(
         if (!isRotation && (event.runId !== runId || event.sequence <= (high ?? -1))) {
           continue;
         }
-      } else if (event.type !== 'spawned') {
-        // Only a spawned seed can open an unknown run.
+      } else if (event.type === 'status_changed') {
+        // A status transition converges a row the renderer already holds even
+        // when the run was never seeded (its spawned delta was dropped); it
+        // never opens the run's live stream and never un-settles a terminal
+        // row (a carried status can land after a snapshot already settled it).
+        if (!state.records.some((item) => item.id === subagentId && !isSettled(item.status))) continue;
+      } else if (event.type !== 'spawned' && event.type !== 'terminal') {
+        // Only a spawned seed can open an unknown run. A terminal is the
+        // authoritative record handoff, so it applies regardless: replacing
+        // the row settles a dropped-seed record instead of leaving it running.
         continue;
       }
       applicable.push(event);
-      runId = event.runId;
+      if (event.type === 'spawned') runId = event.runId;
       high = event.sequence;
     }
     if (applicable.length === 0) continue;
@@ -357,6 +376,9 @@ function applyDeltaEvents(
           ? records.map((item) => (item.id === event.record.id ? event.record : item))
           : [...records, event.record];
         draft = draftFromSpawn(event);
+        // A trailing terminal of an earlier run in the same envelope must not
+        // discard the fresh draft at commit (settled is sticky otherwise).
+        settled = false;
       } else if (event.type === 'status_changed') {
         records = records.map((item) => (
           item.id === subagentId ? { ...item, status: event.status } : item
@@ -370,7 +392,20 @@ function applyDeltaEvents(
         settled = true;
       } else if (draft) {
         draft.sequence = event.sequence;
+        const wasQueued = draft.state === 'queued';
         applyDeltaToDraft(draft, event);
+        // The first content delta proves an admitted run started even when
+        // its status_changed delta was dropped: converge the record row so
+        // list placement matches the live state the badge already shows.
+        if (
+          wasQueued && draft.state !== 'queued'
+          && records.some((item) => item.id === subagentId && !isSettled(item.status))
+        ) {
+          const promotedState = draft.state;
+          records = records.map((item) => (
+            item.id === subagentId ? { ...item, status: promotedState } : item
+          ));
+        }
       }
     }
 

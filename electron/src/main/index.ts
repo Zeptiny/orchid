@@ -13,7 +13,12 @@ import { spawnSync } from 'node:child_process';
 import * as path from 'path';
 import { setImmediate as setImmediatePromise } from 'node:timers/promises';
 import { registerAllIPC, unregisterAllIPC } from './ipc';
-import { handlePermissionOwnerDestroyed } from './ipc/permission';
+import { unwireLocalHostWindowBroadcast, wireLocalHostWindowBroadcast } from './ipc/host-broadcast';
+import {
+  disposeEmbeddedLocalHost,
+  startEmbeddedLocalHost,
+} from './host/local-host';
+import { releaseWindowHostState, verifyRoutingTable } from './host/routing';
 import { registerStartupIPC, unregisterStartupIPC } from './ipc/startup';
 import {
   ensureHomeConfig,
@@ -31,32 +36,35 @@ import { seedSharedPromptsDir } from './prompts/registry';
 import { shutdownProjectMCPManagers } from './mcp/project-registry';
 import { initUpdater, destroyUpdater, checkForUpdates } from './updater';
 import { initFileLogging, closeFileLogging } from './logging';
-import { registerBuiltinTools } from './tools';
+import { registerBuiltinTools, setTodosChangedNotifier } from './tools';
 import { getBackgroundStore } from './tools/process/background-store';
+import { IPC_CHANNELS } from '../shared/types/ipc';
 import {
   wireSubagentRuntime,
   flushSubagentPersistence,
   disposeSubagentPersistence,
+  broadcastSubagentsChanged,
+  setSubagentsChangedBroadcast,
 } from './agents/wire-subagents';
+import {
+  deliverSubagentDeltaEvent,
+  hasEligibleSubagentRecipientWindow,
+  setSubagentDeltaDelivery,
+} from './agents/subagent-events';
 import { initToolWorkerPool, disposeToolWorkerPool } from './llm/tool-pool';
 import { disposeAnalyticsWorkerPool } from './providers/accounting/analytics-query-runner';
 import { runStartupLifecycle, type StartupLifecycleResult } from './startup-lifecycle';
 import { startupState } from './startup';
 import { getConfig } from './config/loader';
-import { ProviderCatalogStore } from './providers/catalog/store';
 import { ProviderCatalogUpdater, createHttpCatalogTransport } from './providers/catalog/updater';
-import type { CatalogKeyring } from './providers/catalog/trust';
-import { CredentialVault } from './providers/credentials/vault';
-import { ConnectionStore } from './providers/connection-store';
-import { initializeProviderRuntime, resetProviderRuntime } from './providers';
 import {
-  resetProviderRuntimeContext,
-  setProviderCatalogStore,
-  setProviderConnectionStore,
-  setProviderCredentialVault,
-  setProviderStatusService,
-} from './providers/runtime-context';
-import { ProviderStatusScheduler, ProviderStatusService } from './providers/status/service';
+  composeProviderRuntime,
+  RELEASE_CATALOG_KEYRING,
+  type ComposedProviderRuntime,
+} from './providers/compose-runtime';
+import { resetProviderRuntime } from './providers';
+import { resetProviderRuntimeContext } from './providers/runtime-context';
+import { ProviderStatusScheduler } from './providers/status/service';
 import { createLilacStatusSource } from './providers/drivers/lilac';
 import {
   initializeProviderAccountingStore,
@@ -128,70 +136,31 @@ function detectReleaseSigned(): boolean {
 }
 
 /**
- * Release engineering replaces this empty development keyring with public
- * Ed25519 verification keys before enabling the Orchid-controlled catalog
- * origin. It is intentionally code-owned: renderer input and remote data may
- * never add a trusted signing key.
+ * Shared provider-runtime composition (fix #15) — the same helper the embedded
+ * local host and the `orchid-agent` daemon use. The shell parameterizes it
+ * with its app version and the packaged resources dir, then layers the
+ * best-effort catalog refresh on top of the composed store.
  */
-const RELEASE_CATALOG_KEYRING: CatalogKeyring = Object.freeze({});
-
-function resolveBundledCatalogPath(): string {
-  if (app.isPackaged) {
-    return path.join(process.resourcesPath, 'providers', 'catalog.json');
-  }
-  // At runtime __dirname is electron/dist/main, not electron/src/main.
-  return path.join(__dirname, '../../assets/providers/catalog.json');
-}
-
-function initializeProviderCatalog(): ProviderCatalogStore {
-  const store = new ProviderCatalogStore({
-    bundledCatalogPath: resolveBundledCatalogPath(),
+function initializeProviderRuntimeServices(): ComposedProviderRuntime {
+  const composed = composeProviderRuntime({
     appVersion: app.getVersion(),
-    keyring: RELEASE_CATALOG_KEYRING,
+    extraCatalogRoots: app.isPackaged ? [process.resourcesPath] : [],
+    statusSources: [createLilacStatusSource()],
   });
-  const snapshot = store.load();
-  setProviderCatalogStore(store);
+  providerStatusScheduler = composed.statusScheduler;
 
   // Refresh is best-effort and entirely independent from provider execution.
   // Until a release embeds a public key, staying offline is the secure default.
   if (app.isPackaged && Object.keys(RELEASE_CATALOG_KEYRING).length > 0) {
-    const updater = new ProviderCatalogUpdater(store, createHttpCatalogTransport());
+    const updater = new ProviderCatalogUpdater(composed.catalog, createHttpCatalogTransport());
     void updater.refresh().catch((error: unknown) => {
       const message = error instanceof Error ? error.message : String(error);
-      console.warn(`Provider catalog refresh failed; using ${snapshot.source} catalog: ${message}`);
+      console.warn(
+        `Provider catalog refresh failed; using ${composed.snapshot.source} catalog: ${message}`,
+      );
     });
   }
-  return store;
-}
-
-function initializeProviderCredentialVault(): CredentialVault {
-  const vault = new CredentialVault();
-  setProviderCredentialVault(vault);
-  return vault;
-}
-
-function initializeProviderRuntimeServices(
-  catalog: ProviderCatalogStore,
-  vault: CredentialVault,
-  status?: ProviderStatusService,
-): void {
-  const connections = new ConnectionStore();
-  setProviderConnectionStore(connections);
-  initializeProviderRuntime({
-    catalog,
-    vault,
-    connections,
-    status,
-  });
-}
-
-function initializeProviderStatusServices(): ProviderStatusService {
-  const service = new ProviderStatusService();
-  const scheduler = new ProviderStatusScheduler(service);
-  scheduler.start([createLilacStatusSource()]);
-  setProviderStatusService(service);
-  providerStatusScheduler = scheduler;
-  return service;
+  return composed;
 }
 
 function initializeProviderAccounting(): void {
@@ -229,6 +198,29 @@ function initializeProviderAccounting(): void {
 
 // ── Window creation ──────────────────────────────────────────────────────────
 
+/**
+ * Install the Electron window broadcasts behind the agent runtime's
+ * injectable delivery seams: todos changes, live subagent deltas, and
+ * durable subagent snapshot changes.
+ */
+function installWindowBroadcasts(): void {
+  setTodosChangedNotifier((sessionId) => {
+    for (const win of BrowserWindow.getAllWindows()) {
+      if (!win.isDestroyed()) {
+        win.webContents.send(IPC_CHANNELS.SESSION_TODOS_CHANGED, { sessionId });
+      }
+    }
+  });
+  setSubagentDeltaDelivery({
+    deliver: (envelope) => deliverSubagentDeltaEvent(envelope, BrowserWindow.getAllWindows()),
+    hasEligibleRecipient: (sessionId) =>
+      hasEligibleSubagentRecipientWindow(sessionId, BrowserWindow.getAllWindows()),
+  });
+  setSubagentsChangedBroadcast((sessionId) =>
+    broadcastSubagentsChanged(sessionId, BrowserWindow.getAllWindows()),
+  );
+}
+
 function resolveAppIcon(): string | undefined {
   // Packaged builds: electron-builder places icon under resources via extraResources.
   // Dev: use build/icon.png next to the electron package root.
@@ -258,7 +250,11 @@ function createWindow(): void {
   mainWindow = window;
   const ownerWindowId = String(window.webContents.id);
   window.webContents.once('destroyed', () => {
-    handlePermissionOwnerDestroyed(ownerWindowId);
+    // The client connection goes with the renderer; its pending approvals
+    // stay on the host and settle fail-closed at their timeouts (U9). The
+    // active-machine override must go too, or the routing table leaks an
+    // entry for a window id that can never return.
+    releaseWindowHostState(ownerWindowId);
   });
 
   if (!app.isPackaged) {
@@ -271,7 +267,7 @@ function createWindow(): void {
   }
 
   window.on('closed', () => {
-    handlePermissionOwnerDestroyed(ownerWindowId);
+    releaseWindowHostState(ownerWindowId);
     if (mainWindow === window) mainWindow = null;
   });
 }
@@ -310,11 +306,7 @@ app.whenReady().then(async () => {
       yieldForPresentation: yieldForStartupPresentation,
       loadSettingsAndProviders: () => {
         ensureHomeConfig();
-        const catalog = initializeProviderCatalog();
-        // Credential persistence must never prevent local-only startup.
-        const vault = initializeProviderCredentialVault();
-        const status = initializeProviderStatusServices();
-        initializeProviderRuntimeServices(catalog, vault, status);
+        initializeProviderRuntimeServices();
         initializeProviderAccounting();
       },
       loadAgentsAndTools: () => {
@@ -329,10 +321,18 @@ app.whenReady().then(async () => {
         ConfigManager.load({ projectDir: HOME_CONFIG_DIR });
         const agents = loadAgents();
         const skills = loadSkills();
+        installWindowBroadcasts();
         registerBuiltinTools({ agents, skills, mcpManager: null });
         wireSubagentRuntime();
       },
       startToolWorkers: () => initToolWorkerPool(getConfig()),
+      startLocalHost: () => {
+         // Eagerly start the embedded local host so every machine-scoped IPC
+         // handler speaks the unified host protocol from the first request.
+         wireLocalHostWindowBroadcast();
+         verifyRoutingTable();
+         startEmbeddedLocalHost();
+      },
       prepareInterface: () => {
         // Normal renderer consumers remain unavailable until this final stage.
         registerAllIPC();
@@ -436,6 +436,8 @@ app.on('before-quit', async (event) => {
     // 3. Unregister IPC handlers
     unregisterAllIPC();
     unregisterStartupIPC();
+    unwireLocalHostWindowBroadcast();
+    disposeEmbeddedLocalHost();
 
     // 4. Shut down MCP transports
     await shutdownProjectMCPManagers();

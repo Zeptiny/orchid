@@ -29,7 +29,12 @@ const mocks = vi.hoisted(() => {
 
   let activeSession: SessionShape | null = null;
   const activeSessionsByWindow = new Map<string, SessionShape | null>();
+  // Real Electron resolves webContents.fromId(id) for the webContents serving
+  // an IPC request; emulate that registry so the embedded local host's client
+  // broadcast can address the sender objects by window id (U5).
+  const sendersById = new Map<number, unknown>();
   const electronWebContents = {
+    fromId: vi.fn((id: number) => sendersById.get(id) ?? null),
     getAllWebContents: vi.fn(() => []),
   };
 
@@ -189,6 +194,7 @@ const mocks = vi.hoisted(() => {
       fromWebContents: vi.fn(() => ({ id: 1 })),
     },
     electronWebContents,
+    sendersById,
   };
 });
 
@@ -235,7 +241,7 @@ vi.mock('../../src/main/project/trust', () => ({
   getProjectTrustState: () => 'trusted',
 }));
 
-vi.mock('../../src/main/ipc/chat-history', () => ({
+vi.mock('../../src/main/host/chat/history', () => ({
   clearChatHistory: vi.fn(),
   seedChatHistory: vi.fn(),
 }));
@@ -265,6 +271,8 @@ vi.mock('../../src/main/ipc/chat', () => ({
 
 let sessionIpc: typeof import('../../src/main/ipc/session');
 let workspace: typeof import('../../src/main/project/workspace');
+let hostEvents: typeof import('../../src/main/host/events');
+let electronSink: typeof import('../../src/main/ipc/chat/events');
 let tmpProject: string;
 let otherProject: string;
 let homeDir: string;
@@ -288,6 +296,13 @@ beforeEach(async () => {
   // Avoid resetModules so electron/chat mocks stay applied for require('./chat')
   sessionIpc = await import('../../src/main/ipc/session');
   workspace = await import('../../src/main/project/workspace');
+  hostEvents = await import('../../src/main/host/events');
+  electronSink = await import('../../src/main/ipc/chat/events');
+  // U5: session events ride the embedded local host's own sink (installed by
+  // its HostServer) and reach windows through the client window broadcast, so
+  // this suite installs no Electron sink of its own.
+  void hostEvents;
+  void electronSink;
 
   // Ensure singleton methods are our mocks (first import constructs real manager)
   const mgr = sessionIpc.getSessionManager();
@@ -314,6 +329,7 @@ beforeEach(async () => {
 
 afterEach(() => {
   sessionIpc.unregisterSessionIPC();
+  mocks.sendersById.clear();
   workspace.clearAllDraftCwds();
   mocks.handlers.clear();
   mocks.sessionManager._reset();
@@ -323,11 +339,14 @@ afterEach(() => {
 });
 
 function sender(id = 1) {
-  return {
+  const webContents = {
     id,
     send: vi.fn(),
     isDestroyed: () => false,
   };
+  // Register the sender so the client window broadcast can address it by id.
+  mocks.sendersById.set(id, webContents);
+  return webContents;
 }
 
 describe('session workspace IPC', () => {

@@ -26,7 +26,7 @@ import type { SubagentRecord as DomainSubagentRecord } from '../../shared/types/
 import { getConfig } from '../config/loader';
 import type { SubagentCompactionPayload, SubagentCompactionResult } from '../session/storage';
 import { clearCompactionPendingsForSession } from '../llm/compaction/pending-store';
-import { clearCompactionPausesForSession } from '../ipc/next-request-stop';
+import { clearCompactionPausesForSession } from './next-request-stop';
 import {
   SubagentDeltaEventType,
   SubagentStatus,
@@ -511,7 +511,10 @@ export class SubagentManager {
     };
 
     this._storeRecord(record);
-    this._persistence.register(id, sessionId, { admitted });
+    // Queued spawns register durably too: a spawn parked in admission when the
+    // app closes must leave a row, or post-restart hydration has nothing to
+    // materialize and the prompt's subagent block omits it entirely (#121).
+    this._persistence.register(id, sessionId);
     this._liveProjection.start({
       subagentId: id,
       sessionId,
@@ -874,21 +877,12 @@ export class SubagentManager {
       this._finishLive(record, SubagentState.INTERRUPTED);
     }
     if (transition.resolveWaiters) this._lifecycle.resolveWaiters(record.id);
-    if (wasQueued && !this._persistence.hasDurableEligibility(record.id)) {
-      // A record cancelled while QUEUED was never admitted, so it never gets a
-      // durable row (persistence eligibility begins at admission) — but it must
-      // not linger as a full record either. Evict it to a lean terminal summary
-      // under the same retention FIFO as persisted records; the terminal delta
-      // above already carried the full record to the renderer. Eviction runs
-      // after resolving waiters because eviction clears runtime lifecycle state.
-      this._applySummaryConfirmation(record, this._persistence.summarizeUndurable(record.id));
-    }
-    // A resume-queued record owns a durable row (persist-subagent-chains
-    // eligibility carve-out), so evicting it here would strand the row with a
-    // stale pre-interrupt status and drop the follow-up message — every later
-    // checkpoint skips summaries. Leave it as a full dirty INTERRUPTED
-    // record: the terminal wave persists it, then confirmRecordsPersisted
-    // evicts it through the normal row-confirmed path.
+    // A cancelled-while-queued record owns a durable row (both fresh spawns
+    // and resume-queued follow-ups register durably), so evicting it here
+    // would strand the row with a stale pre-interrupt status and drop the
+    // follow-up message — every later checkpoint skips summaries. Leave it as
+    // a full dirty INTERRUPTED record: the terminal wave persists it, then
+    // confirmRecordsPersisted evicts it through the normal row-confirmed path.
     if (transition.notify) this._notify();
     if (!wasQueued && transition.admitNext) this._admitFromQueue();
     return true;
@@ -1393,7 +1387,6 @@ export class SubagentManager {
   private _admit(record: SubagentRecord): void {
     const transition = this._lifecycle.transition(record, { type: 'admit' });
     if (!transition) return;
-    this._persistence.markAdmitted(record.id);
     this._admission.markAdmitted(record.sessionId);
     if (transition.persist) this._markRecordDirty(record);
     this._updateLive(record, { state: SubagentState.PENDING });
@@ -1442,15 +1435,6 @@ export class SubagentManager {
       record.chain = { ...record.chain, messages: [] };
     }
     this._liveProjection.clearLiveTail(record.id);
-  }
-
-  /** Apply one summary declaration and any FIFO removals chosen by persistence. */
-  private _applySummaryConfirmation(
-    record: SubagentRecord,
-    effect: { evict: boolean; removeIds: readonly string[] },
-  ): void {
-    if (effect.evict) this._evictToSummary(record);
-    for (const id of effect.removeIds) this._removeRuntimeState(id);
   }
 
   private _removeRuntimeState(subagentId: string): void {

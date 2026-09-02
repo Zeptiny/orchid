@@ -12,6 +12,12 @@ import {
 } from './message';
 import { subagentStatusSchema } from './subagent';
 import { STARTUP_STEP_DEFINITIONS, type StartupStepId } from './ipc-boundary';
+import { machineRecordSchema } from './machine';
+import {
+  machineActionErrorSchema,
+  machineHostKeyFingerprintSchema,
+  machineStatusEntrySchema,
+} from './machine';
 import { toolCallSchema } from './tool';
 import {
   canonicalToolResultSchema,
@@ -19,6 +25,18 @@ import {
   toolExecutionResultSchema,
 } from './tool-result';
 import type { ChatErrorKind } from './ipc';
+import {
+  customConnectionModelSchema,
+  environmentVariableSchema,
+  modelSelectionSchema,
+  providerAuthMethodSchema,
+  providerEndpointSchema,
+  providerProtocolSchema,
+  reasoningModelConfigSchema,
+} from './provider';
+import { pricingRateFieldsSchema } from './provider-facets';
+import { PERMISSION_MODE_VALUES } from './permission';
+import { AgentTier, AgentType } from './agent';
 
 // ── Startup ─────────────────────────────────────────────────────────────────
 
@@ -385,6 +403,63 @@ export const trustedProjectEntrySchema = z.object({
   state: trustStateSchema,
 });
 
+// ── Machines ─────────────────────────────────────────────────────────────────
+
+/** The local machine is always present, so a machine list is never empty. */
+export const machineListResultSchema = z.object({
+  machines: z.array(machineRecordSchema).min(1),
+});
+
+export const machinesChangedEventSchema = z.object({
+  machines: z.array(machineRecordSchema).min(1),
+});
+
+export const machineStatusResultSchema = z.object({
+  machines: z.array(machineStatusEntrySchema).min(1),
+});
+
+export const machinesStatusChangedEventSchema = machineStatusResultSchema;
+
+export const machineActiveResultSchema = z.object({
+  machineId: z.string().min(1),
+});
+
+export const machineActionErrorResultSchema = z.object({
+  status: z.literal('error'),
+  error: machineActionErrorSchema,
+});
+
+export const machineSetActiveResultSchema = z.discriminatedUnion('status', [
+  z.object({ status: z.literal('ok'), machineId: z.string().min(1) }),
+  machineActionErrorResultSchema,
+]);
+
+export const machineConnectResultSchema = z.discriminatedUnion('status', [
+  z.object({ status: z.literal('ok'), machine: machineStatusEntrySchema }),
+  machineActionErrorResultSchema,
+]);
+
+export const machineDisconnectResultSchema = z.discriminatedUnion('status', [
+  z.object({ status: z.literal('ok') }),
+  machineActionErrorResultSchema,
+]);
+
+/** `MachineResyncResult` (shared/types/ipc.ts) — reconnect catch-up ack (U10). */
+export const machineResyncResultSchema = z.discriminatedUnion('status', [
+  z.object({ status: z.literal('ok'), machineId: z.string().min(1), resynced: z.boolean() }),
+  z.object({ status: z.literal('error'), machineId: z.string().min(1), error: machineActionErrorSchema }),
+]);
+
+export const machineScanHostKeyResultSchema = z.discriminatedUnion('status', [
+  z.object({ status: z.literal('scanned'), fingerprints: z.array(machineHostKeyFingerprintSchema).min(1) }),
+  machineActionErrorResultSchema,
+]);
+
+export const machineConfirmHostKeyResultSchema = z.discriminatedUnion('status', [
+  z.object({ status: z.literal('pinned'), fingerprints: z.array(machineHostKeyFingerprintSchema).min(1) }),
+  machineActionErrorResultSchema,
+]);
+
 export const sessionTodosChangedEventSchema = z.object({
   sessionId: z.string().nullable(),
 });
@@ -609,6 +684,20 @@ export const sessionServiceTierConfigResultSchema = z.object({
   effective: z.string().nullable(),
 });
 
+/**
+ * Trim marker on a budgeted snapshot (#25): the server dropped the leading
+ * `trimFromIndex` durable messages to stay under the wire frame budget;
+ * `historyBefore` is the continuation cursor for `session.history_page`
+ * (null when the boundary cannot be located in a durable chain).
+ */
+export const snapshotTrimSchema = z.object({
+  trimFromIndex: z.number().int().nonnegative(),
+  historyBefore: z.object({
+    chainId: z.string().min(1),
+    beforeIndex: z.number().int().nonnegative(),
+  }).strict().nullable(),
+}).strict();
+
 /** Loose session snapshot: identity + array containers, not full Message graph. */
 export const chatSessionSnapshotSchema = z
   .object({
@@ -623,6 +712,8 @@ export const chatSessionSnapshotSchema = z
       })
       .passthrough()
       .nullable(),
+    /** Present only when the history was trimmed to fit the frame budget (#25). */
+    trim: snapshotTrimSchema.optional(),
   })
   .nullable();
 
@@ -776,3 +867,370 @@ export const subagentEventSchema = z.object({
   sessionId: z.string().uuid(),
   events: z.array(subagentDeltaEventSchema),
 });
+
+// ── IPC request payload schemas (shared with the host protocol) ─────────────
+//
+// Hoisted from main/ipc/payload-schemas.ts and the inline handler schemas in
+// main/ipc/{chat,permission,definitions,provider-models}.ts so the method
+// registry in shared/host/protocol.ts and the Electron IPC handlers validate
+// against the SAME schema objects (no hand-mirrored copies can drift).
+// main/ipc/payload-schemas.ts re-exports these under their historical names.
+//
+// Keep this section free of config-schema imports: this module is bundled
+// into the sandboxed preload, which cannot require node modules beyond its
+// small allow-list (config-schema uses node:path — see
+// ./config-schema.ts for the config-boundary payloads).
+
+// ── Chat / subagent / ask-question requests ──────────────────────────────────
+
+export const chatSendSchema = z.object({
+  message: z.string().min(1, 'Message must be non-empty'),
+  sessionId: z.string().uuid().optional(),
+  /** Preferred model when lazy-creating a session from draft mode. */
+  model: modelSelectionSchema.nullable().optional(),
+  draftGeneration: z.number().int().nonnegative().optional(),
+});
+
+export const chatCancelSchema = z.object({
+  sessionId: z.string().uuid().optional(),
+});
+
+export const chatQueueNextSchema = z.object({
+  sessionId: z.string().uuid(),
+});
+
+export const chatSnapshotSchema = z.object({
+  sessionId: z.string().uuid().optional(),
+});
+
+export const chatStopSchema = z.object({
+  sessionId: z.string().uuid(),
+});
+
+export const chatCompactSchema = z.object({
+  sessionId: z.string().uuid().optional(),
+});
+
+/** Params for `subagents.snapshot` (distinct from the result schema above). */
+export const subagentSnapshotRequestSchema = z.object({
+  sessionId: z.string().uuid(),
+}).strict();
+
+/** Params for `subagents.detail` (distinct from the result schema above). */
+export const subagentDetailRequestSchema = z.object({
+  sessionId: z.string().uuid(),
+  subagentId: z.string().min(1),
+}).strict();
+
+export const askQuestionAnswerSchema = z.object({
+  toolCallId: z.string().uuid(),
+  answers: z.array(z.object({
+    selected: z.array(z.string()),
+    text: z.string().nullable(),
+    skipped: z.boolean(),
+  }).strict()),
+}).strict();
+
+export const askQuestionCancelSchema = z.object({
+  toolCallId: z.string().uuid(),
+}).strict();
+
+// ── Session requests ─────────────────────────────────────────────────────────
+
+export const sessionLoadSchema = z.object({
+  id: z.string().uuid(),
+  /** When false, peek from disk without activating or seeding chat history. */
+  activate: z.boolean().optional().default(true),
+});
+
+export const sessionOpenSchema = z.object({
+  id: z.string().uuid(),
+});
+
+/** Validate a bounded history-page request and its optional exclusive cursor. */
+export const sessionHistoryPageSchema = z.object({
+  sessionId: z.string().uuid(),
+  chainId: z.string().min(1),
+  beforeIndex: z.number().int().nonnegative().optional(),
+}).strict();
+
+export const sessionDeleteSchema = z.object({
+  id: z.string().uuid(),
+});
+
+export const sessionRenameSchema = z.object({
+  id: z.string().uuid(),
+  name: z.string().min(1),
+});
+
+export const sessionChangeModelSchema = z.object({
+  id: z.string().uuid(),
+  selection: modelSelectionSchema.nullable(),
+  modelLabel: z.string().nullable().optional(),
+});
+
+export const sessionChangeCwdSchema = z.object({
+  id: z.string().uuid(),
+  cwd: z.string().min(1),
+});
+
+export const sessionSetWorkspaceSchema = z.object({
+  cwd: z.string().min(1),
+});
+
+export const sessionSetReasoningEffortSchema = z.object({
+  effort: z.union([
+    z.string().trim().min(1).max(256),
+    z.number().int().min(1).max(1_000_000),
+  ]).nullable(),
+});
+
+export const sessionSetServiceTierSchema = z.object({
+  tier: z.string().trim().min(1).max(128).nullable(),
+});
+
+/**
+ * `session:get_reasoning_config` request (hoisted for the host protocol —
+ * fix #4). The renderer sends `{}` or the picker's current draft selection;
+ * no sessionId — the host resolves the caller's active session itself.
+ */
+export const sessionGetReasoningConfigSchema = z.object({
+  selection: modelSelectionSchema.nullable().optional(),
+}).strict().optional();
+
+/** `session:get_service_tier_config` request — same shape as the reasoning read. */
+export const sessionGetServiceTierConfigSchema = z.object({
+  selection: modelSelectionSchema.nullable().optional(),
+}).strict().optional();
+
+// ── Project trust requests ───────────────────────────────────────────────────
+
+export const projectTrustGetSchema = z.object({
+  cwd: z.string().min(1),
+});
+
+export const projectTrustSetSchema = z.object({
+  cwd: z.string().min(1),
+  trusted: z.boolean(),
+});
+
+// ── Tool / RAG / AST requests ────────────────────────────────────────────────
+
+export const toolExecuteSchema = z.object({
+  name: z.string().min(1),
+  args: z.unknown(),
+});
+
+export const ragIndexSchema = z.object({
+  force: z.boolean().optional().default(false),
+});
+
+export const astIndexSchema = z.object({
+  force: z.boolean().optional().default(false),
+});
+
+// ── Background command requests (bgcmd:*) ────────────────────────────────────
+
+export const bgCommandListRequestSchema = z.object({
+  sessionId: z.string().uuid().optional(),
+});
+
+/**
+ * Matches SEND_INPUT_MAX_TEXT_LENGTH (main/tools/process/send-input.ts), the
+ * stdin write cap the agent send_input tool also enforces.
+ */
+export const BG_COMMAND_SEND_INPUT_MAX_TEXT_LENGTH = 8192;
+
+export const bgCommandSendInputRequestSchema = z.object({
+  commandId: z.number().int().positive(),
+  text: z.string().max(BG_COMMAND_SEND_INPUT_MAX_TEXT_LENGTH),
+  sessionId: z.string().uuid().optional(),
+});
+
+/** Shared shape for bgcmd:terminate and bgcmd:release_input. */
+export const bgCommandControlRequestSchema = z.object({
+  commandId: z.number().int().positive(),
+  sessionId: z.string().uuid().optional(),
+});
+
+// ── Permission requests ──────────────────────────────────────────────────────
+//
+// Unified on the strict form the Electron handlers (main/ipc/permission.ts)
+// already enforced; the host protocol validates with the same objects.
+
+export const permissionApprovalAnswerSchema = z.object({
+  toolCallId: z.string().min(1),
+  decision: z.enum(['approved', 'denied']),
+  reason: z.string().optional(),
+}).strict();
+
+export const permissionSetSessionModeSchema = z.object({
+  mode: z.enum(PERMISSION_MODE_VALUES).nullable(),
+  expectedSessionId: z.string().min(1).nullable(),
+}).strict();
+
+export const permissionGetSessionModeSchema = z.object({
+  expectedSessionId: z.string().min(1).nullable(),
+}).strict();
+
+// ── Definitions requests (skill/agent/personality/shared-prompt) ─────────────
+
+/** `DefinitionScope` (shared/types/definitions.ts). */
+export const definitionScopeSchema = z.enum(['global', 'project']);
+
+export const definitionNameSchema = z.string().min(1).max(128);
+
+export const skillSaveSchema = z.object({
+  scope: definitionScopeSchema,
+  name: definitionNameSchema,
+  description: z.string().min(1),
+  requires: z.array(z.string()).optional(),
+  content: z.string(),
+  previousName: z.string().optional(),
+});
+
+export const agentSaveSchema = z.object({
+  scope: definitionScopeSchema,
+  name: definitionNameSchema,
+  type: z.enum([AgentType.INTERNAL, AgentType.SUBAGENT]),
+  tier: z.enum([
+    AgentTier.SEED,
+    AgentTier.SPROUT,
+    AgentTier.BLOOM,
+    AgentTier.CROWN,
+  ]),
+  description: z.string().min(1),
+  system_prompt: z.string(),
+  allowed_tools: z.array(z.string()).min(1),
+  allowed_skills: z.array(z.string()),
+  previousName: z.string().optional(),
+});
+
+export const personalitySaveSchema = z.object({
+  scope: definitionScopeSchema,
+  name: definitionNameSchema,
+  content: z.string().min(1),
+  previousName: z.string().optional(),
+});
+
+export const sharedPromptSaveSchema = z.object({
+  scope: definitionScopeSchema,
+  slot: z.enum(['all-agents', 'subagents']),
+  content: z.string(),
+});
+
+export const sharedPromptDeleteSchema = z.object({
+  scope: definitionScopeSchema,
+  slot: z.enum(['all-agents', 'subagents']),
+});
+
+/** Shared shape for agent/skill/personality deletes. */
+export const definitionDeleteSchema = z.object({
+  scope: definitionScopeSchema,
+  name: definitionNameSchema,
+});
+
+export const definitionRevealSchema = z.object({
+  path: z.string().min(1),
+});
+
+// ── Provider requests (host-routed reads; credential-carrying writes are
+// capability-gated on the host) ─────────────────────────────────────────────
+
+/** `{ connectionId }` for the connection-scoped provider methods. */
+export const providerConnectionIdRequestSchema = z.object({
+  connectionId: z.string().uuid(),
+}).strict();
+
+/** providers:disconnect / providers:delete confirmation shape. */
+export const providerDisconnectRequestSchema = providerConnectionIdRequestSchema
+  .extend({ confirm: z.literal(true) })
+  .strict();
+
+/**
+ * providers:model_list: `connectionId` is optional — an absent id lists
+ * options across connections (U5 additive fix: requiring it would have
+ * rejected the renderer's "no connection selected" listing).
+ */
+export const providerModelListRequestSchema = z.object({
+  connectionId: z.string().uuid().optional(),
+  includeDisabled: z.boolean().optional(),
+}).strict();
+
+/** providers:status_refresh. */
+export const providerStatusRefreshRequestSchema = z.object({
+  providerId: z.string().trim().min(1),
+  connectionId: z.string().uuid().optional(),
+}).strict();
+
+/**
+ * Shared environment-auth refinement: env references only pair with
+ * `environment` (used by the provider create/update/draft-discovery request
+ * schemas so the pairing rule exists exactly once).
+ */
+export function refineEnvironmentAuth(
+  value: { authMethod?: string; environmentVariable?: string },
+  ctx: z.RefinementCtx,
+): void {
+  if (value.authMethod === 'environment' && !value.environmentVariable) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['environmentVariable'],
+      message: 'Environment authentication requires an environment variable name',
+    });
+  }
+  if (value.authMethod !== undefined
+    && value.authMethod !== 'environment'
+    && value.environmentVariable !== undefined) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['environmentVariable'],
+      message: 'An environment variable is valid only for environment authentication',
+    });
+  }
+}
+
+/**
+ * providers:create — intent-only creation payload; no credential material
+ * crosses the boundary (an API key follows separately via submit_api_key).
+ */
+export const providerCreateConnectionRequestSchema = z.object({
+  providerId: z.string().trim().min(1),
+  name: z.string().trim().min(1).max(120),
+  protocol: providerProtocolSchema,
+  authMethod: providerAuthMethodSchema,
+  modelIds: z.array(z.string().trim().min(1)).max(500).default([]),
+  customModels: z.array(customConnectionModelSchema).max(500).optional(),
+  reasoningConfig: z.record(z.string(), reasoningModelConfigSchema).optional(),
+  pricingOverrides: z.record(z.string(), pricingRateFieldsSchema).optional(),
+  tierSelections: z.record(z.string().trim().min(1), z.string().trim().min(1).max(128)).optional(),
+  cacheTtl: z.string().trim().min(1).max(24).nullable().optional(),
+  endpoint: providerEndpointSchema.nullable().optional(),
+  allowInsecureHttp: z.boolean().optional(),
+  environmentVariable: environmentVariableSchema.optional(),
+}).strict().superRefine((value, ctx) => refineEnvironmentAuth(value, ctx));
+
+/** providers:update — safe connection fields that may be edited after creation. */
+export const providerUpdateConnectionRequestSchema = z.object({
+  connectionId: z.string().uuid(),
+  name: z.string().trim().min(1).max(120).optional(),
+  authMethod: providerAuthMethodSchema.optional(),
+  modelIds: z.array(z.string().trim().min(1)).max(500).optional(),
+  customModels: z.array(customConnectionModelSchema).max(500).optional(),
+  reasoningConfig: z.record(z.string(), reasoningModelConfigSchema).optional(),
+  pricingOverrides: z.record(z.string(), pricingRateFieldsSchema).optional(),
+  tierSelections: z.record(z.string().trim().min(1), z.string().trim().min(1).max(128)).optional(),
+  cacheTtl: z.string().trim().min(1).max(24).nullable().optional(),
+  endpoint: providerEndpointSchema.nullable().optional(),
+  allowInsecureHttp: z.boolean().optional(),
+  environmentVariable: environmentVariableSchema.optional(),
+}).strict().superRefine((value, ctx) => refineEnvironmentAuth(value, ctx))
+  .refine((value) => Object.keys(value).some((key) => key !== 'connectionId'), {
+    message: 'Provide at least one connection field to update',
+  });
+
+/** providers:submit_api_key — one-shot, write-only API key submission. */
+export const providerSubmitApiKeyRequestSchema = z.object({
+  connectionId: z.string().uuid(),
+  apiKey: z.string().trim().min(1).max(32_768),
+}).strict();

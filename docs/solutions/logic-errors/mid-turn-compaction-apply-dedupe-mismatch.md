@@ -80,5 +80,5 @@ permanently silencing the trigger for the session.
   rejected + turn restart.
 - `sessions.db` chains with 0 `compacted` markers while compactor attempts
   exist = compaction ran but never applied.
-- Regression tests: `tests/unit/chat-ipc.test.ts`
+- Regression tests: `tests/unit/chat-ipc-compaction.test.ts`
   `describe('chat compaction mid-turn pause')` — both fail on the pre-fix code.
