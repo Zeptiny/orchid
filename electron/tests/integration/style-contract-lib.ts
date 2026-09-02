@@ -610,7 +610,9 @@ export function scanComponentRootDrift(rendererRoot = RENDERER_ROOT): { findings
 
 // ─── Non-token color scanner ─────────────────────────────────────────────────
 
-export const COLOR_RE = /\b(?:oklch|rgba?|hsla?)\s*\(|#[0-9a-fA-F]{3,8}\b/g;
+function makeColorRe(): RegExp {
+  return /\b(?:oklch|rgba?|hsla?)\s*\(|#[0-9a-fA-F]{3,8}\b/g;
+}
 
 export function scanNonTokenColors(stylesRoot = STYLES_ROOT): { key: string; count: number }[] {
   const counts = new Map<string, number>();
@@ -619,9 +621,9 @@ export function scanNonTokenColors(stylesRoot = STYLES_ROOT): { key: string; cou
     const rel = relRenderer(file);
     if (isStylesEntryPath(rel)) continue;
     const css = stripCssComments(fs.readFileSync(file, 'utf8'));
+    const colorRe = makeColorRe();
     let match: RegExpExecArray | null;
-    COLOR_RE.lastIndex = 0;
-    while ((match = COLOR_RE.exec(css))) {
+    while ((match = colorRe.exec(css))) {
       const key = `${rel}:${match[0]}`;
       counts.set(key, (counts.get(key) ?? 0) + 1);
     }

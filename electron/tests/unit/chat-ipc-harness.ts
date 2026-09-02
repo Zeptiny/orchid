@@ -845,6 +845,29 @@ function makeSession(id: string, cwd = mocks.workspace._testProjectDir) {
   };
 }
 
+/**
+ * Single beforeEach reset for consumer suites. Clears handler registrations,
+ * stream queues, and the session/background-store/runtime fixtures, and resets
+ * the mocks whose queued once-implementations can leak across tests —
+ * `vi.clearAllMocks()` clears calls but NOT implementations, so an
+ * unconsumed `mockImplementationOnce` would otherwise shadow the defaults the
+ * next test relies on. `mockReset()` also restores each mock's original
+ * `vi.fn(impl)` (default stream generator, summarizer, execution resolver).
+ */
+export function resetHarness(): void {
+  vi.clearAllMocks();
+  mocks.handlers.clear();
+  mocks.streamResponses.length = 0;
+  mocks.streamEventSequences.length = 0;
+  mocks.sessionManager._reset();
+  mocks.backgroundStore._reset();
+  mocks.runtimeRegistry._reset();
+  mocks.streamChat.mockReset();
+  mocks.summarizeCompactableRange.mockReset();
+  mocks.aiGenerateText.mockReset();
+  mocks.providerRuntime.resolveExecution.mockReset();
+}
+
 export function setupChatIpcTest() {
   // ensureActiveSession inspects the real fixture directory before the trust
   // gate (a deleted session folder must surface unbound_workspace), so the

@@ -1,4 +1,4 @@
-import { setupChatIpcTest } from './chat-ipc-harness';
+import { resetHarness, setupChatIpcTest } from './chat-ipc-harness';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { IPC_CHANNELS } from '../../src/shared/types/ipc';
 import type { Agent } from '../../src/shared/types/agent';
@@ -16,19 +16,45 @@ const {
 
 let chatIpc: typeof import('../../src/main/ipc/chat');
 
-describe('chat compaction mid-turn pause', () => {
-  const selection = {
-    connectionId: '11111111-1111-4111-8111-111111111111',
-    modelId: 'vendor/path/model',
-  };
+const selection = {
+  connectionId: '11111111-1111-4111-8111-111111111111',
+  modelId: 'vendor/path/model',
+};
 
+interface CompactionSuiteOptions {
+  readonly mainMode?: 'simple' | 'selective';
+  readonly agents?: Map<string, Agent>;
+  readonly keepLastUserMessages?: number;
+  readonly pinFirstUserMessage?: boolean;
+  /** Queue the contextTokens=2000 execution resolution (default true). */
+  readonly overrideExecution?: boolean;
+}
+
+/**
+ * Shared suite setup: common runtime config (compaction knobs, session-title
+ * wait, max tool steps) plus the once-execution override and handler
+ * (re)registration every compaction suite needs. Suites pass only their
+ * differences.
+ */
+function registerCompactionSuite(options: CompactionSuiteOptions = {}): void {
   beforeEach(async () => {
-    vi.clearAllMocks();
-    mocks.handlers.clear();
-    mocks.streamResponses.length = 0;
-    mocks.streamEventSequences.length = 0;
-    mocks.runtimeRegistry._reset();
-    mocks.sessionManager._reset();
+    resetHarness();
+    const mainCompaction: Record<string, unknown> = {
+      mode: options.mainMode ?? 'simple',
+      threshold: 0.5,
+      model: null,
+      agent_name: 'compactor',
+      preserve_percent: 0.25,
+      min_compactable_tokens: 0,
+      mechanical_reclaim: true,
+      hysteresis_delta: 0.1,
+    };
+    if (options.keepLastUserMessages !== undefined) {
+      mainCompaction.keep_last_user_messages = options.keepLastUserMessages;
+    }
+    if (options.pinFirstUserMessage !== undefined) {
+      mainCompaction.pin_first_user_message = options.pinFirstUserMessage;
+    }
     mocks.runtimeRegistry._set(mocks.workspace._testProjectDir, {
       config: {
         default_model: null,
@@ -39,16 +65,7 @@ describe('chat compaction mid-turn pause', () => {
         session_title_max_wait_seconds: 0,
         max_tool_steps: 100,
         compaction: {
-          main: {
-            mode: 'simple',
-            threshold: 0.5,
-            model: null,
-            agent_name: 'compactor',
-            preserve_percent: 0.25,
-            min_compactable_tokens: 0,
-            mechanical_reclaim: true,
-            hysteresis_delta: 0.1,
-          },
+          main: mainCompaction,
           subagents: {
             mode: 'simple',
             threshold: 0.85,
@@ -61,31 +78,34 @@ describe('chat compaction mid-turn pause', () => {
           },
         },
       },
+      ...(options.agents ? { agents: options.agents } : {}),
     });
-    mocks.providerRuntime.resolveExecution.mockImplementationOnce(async () => ({
-      modelInstance: mocks.modelInstance,
-      connection: {},
-      model: {
-        id: 'vendor/path/model',
-        capabilities: { reasoning: false },
-        limits: { contextTokens: 2000 },
-      },
-      snapshot: {
-        providerId: 'openai',
-        providerDisplayName: 'OpenAI',
-        connectionId: selection.connectionId,
-        connectionName: 'Work',
-        modelId: selection.modelId,
-        protocol: 'openai-compatible',
-        modelSource: 'catalog',
-        catalogVersion: 1,
-        catalogSource: 'bundled',
-        catalogObservedAt: null,
-        pricing: null,
-        fieldProvenance: {},
-        statusObservation: null,
-      },
-    }));
+    if (options.overrideExecution !== false) {
+      mocks.providerRuntime.resolveExecution.mockImplementationOnce(async () => ({
+        modelInstance: mocks.modelInstance,
+        connection: {},
+        model: {
+          id: 'vendor/path/model',
+          capabilities: { reasoning: false },
+          limits: { contextTokens: 2000 },
+        },
+        snapshot: {
+          providerId: 'openai',
+          providerDisplayName: 'OpenAI',
+          connectionId: selection.connectionId,
+          connectionName: 'Work',
+          modelId: selection.modelId,
+          protocol: 'openai-compatible',
+          modelSource: 'catalog',
+          catalogVersion: 1,
+          catalogSource: 'bundled',
+          catalogObservedAt: null,
+          pricing: null,
+          fieldProvenance: {},
+          statusObservation: null,
+        },
+      }));
+    }
     chatIpc = await import('../../src/main/ipc/chat');
     chatIpc.registerChatIPC();
   });
@@ -95,6 +115,17 @@ describe('chat compaction mid-turn pause', () => {
     mocks.handlers.clear();
     mocks.sessionManager._reset();
   });
+}
+
+function textOnlyStream() {
+  return async function* () {
+    yield { type: 'text', data: 'ok' };
+    yield { type: 'finish', finishReason: 'stop' };
+  };
+}
+
+describe('chat compaction mid-turn pause', () => {
+  registerCompactionSuite();
 
   function compactionStream() {
     return async function* () {
@@ -335,10 +366,6 @@ describe('chat compaction mid-turn pause', () => {
 });
 
 describe('chat compaction selective pending (P1 #5)', () => {
-  const selection = {
-    connectionId: '11111111-1111-4111-8111-111111111111',
-    modelId: 'vendor/path/model',
-  };
   // Substantive handoff texts (>= MIN_HANDOFF_SUMMARY_CHARS with real words) —
   // the selective validator rejects degenerate activity-log texts for spans
   // covering >= 1000 chars of source content.
@@ -356,87 +383,13 @@ describe('chat compaction selective pending (P1 #5)', () => {
     allowed_skills: [],
   } satisfies Agent;
 
-  beforeEach(async () => {
-    vi.clearAllMocks();
-    mocks.handlers.clear();
-    mocks.streamResponses.length = 0;
-    mocks.streamEventSequences.length = 0;
-    mocks.runtimeRegistry._reset();
-    mocks.sessionManager._reset();
-    // Clear any once-implementations leaked from earlier suites so the
-    // selective caller mock below is the only override in play.
-    mocks.aiGenerateText.mockReset();
-    mocks.aiGenerateText.mockImplementation(async () => ({ text: 'Investigate Session Naming' }));
-    mocks.runtimeRegistry._set(mocks.workspace._testProjectDir, {
-      config: {
-        default_model: null,
-        tier_models: { bloom: null },
-        command_timeout: 30,
-        llm_stream_idle_timeout: 60,
-        llm_stream_retries: 0,
-        session_title_max_wait_seconds: 0,
-        max_tool_steps: 100,
-        compaction: {
-          main: {
-            mode: 'selective',
-            threshold: 0.5,
-            model: null,
-            agent_name: 'compactor',
-            preserve_percent: 0.25,
-            min_compactable_tokens: 0,
-            mechanical_reclaim: true,
-            hysteresis_delta: 0.1,
-          },
-          subagents: {
-            mode: 'simple',
-            threshold: 0.85,
-            model: null,
-            agent_name: 'compactor-subagent',
-            preserve_percent: 0.25,
-            min_compactable_tokens: 4000,
-            mechanical_reclaim: true,
-            hysteresis_delta: 0.1,
-          },
-        },
-      },
-      agents: new Map<string, Agent>([
-        ['general', mocks.generalAgent],
-        ['session-namer', mocks.sessionNamerAgent],
-        ['compactor-selective', compactorSelectiveAgent],
-      ]),
-    });
-    mocks.providerRuntime.resolveExecution.mockImplementationOnce(async () => ({
-      modelInstance: mocks.modelInstance,
-      connection: {},
-      model: {
-        id: 'vendor/path/model',
-        capabilities: { reasoning: false },
-        limits: { contextTokens: 2000 },
-      },
-      snapshot: {
-        providerId: 'openai',
-        providerDisplayName: 'OpenAI',
-        connectionId: selection.connectionId,
-        connectionName: 'Work',
-        modelId: selection.modelId,
-        protocol: 'openai-compatible',
-        modelSource: 'catalog',
-        catalogVersion: 1,
-        catalogSource: 'bundled',
-        catalogObservedAt: null,
-        pricing: null,
-        fieldProvenance: {},
-        statusObservation: null,
-      },
-    }));
-    chatIpc = await import('../../src/main/ipc/chat');
-    chatIpc.registerChatIPC();
-  });
-
-  afterEach(() => {
-    chatIpc.unregisterChatIPC();
-    mocks.handlers.clear();
-    mocks.sessionManager._reset();
+  registerCompactionSuite({
+    mainMode: 'selective',
+    agents: new Map<string, Agent>([
+      ['general', mocks.generalAgent],
+      ['session-namer', mocks.sessionNamerAgent],
+      ['compactor-selective', compactorSelectiveAgent],
+    ]),
   });
 
   it('re-anchors the prepare-time selective replay so the next turn reaches the model intact', async () => {
@@ -679,61 +632,9 @@ describe('chat compaction selective pending (P1 #5)', () => {
 });
 
 describe('chat compaction disabled without a model context limit', () => {
-  const selection = {
-    connectionId: '11111111-1111-4111-8111-111111111111',
-    modelId: 'vendor/path/model',
-  };
-
-  beforeEach(async () => {
-    vi.clearAllMocks();
-    mocks.handlers.clear();
-    mocks.streamResponses.length = 0;
-    mocks.streamEventSequences.length = 0;
-    mocks.runtimeRegistry._reset();
-    mocks.sessionManager._reset();
-    mocks.runtimeRegistry._set(mocks.workspace._testProjectDir, {
-      config: {
-        default_model: null,
-        tier_models: { bloom: null },
-        command_timeout: 30,
-        llm_stream_idle_timeout: 60,
-        llm_stream_retries: 0,
-        session_title_max_wait_seconds: 0,
-        max_tool_steps: 100,
-        compaction: {
-          main: {
-            mode: 'simple',
-            threshold: 0.5,
-            model: null,
-            agent_name: 'compactor',
-            preserve_percent: 0.25,
-            min_compactable_tokens: 0,
-            mechanical_reclaim: true,
-            hysteresis_delta: 0.1,
-          },
-          subagents: {
-            mode: 'simple',
-            threshold: 0.85,
-            model: null,
-            agent_name: 'compactor-subagent',
-            preserve_percent: 0.25,
-            min_compactable_tokens: 4000,
-            mechanical_reclaim: true,
-            hysteresis_delta: 0.1,
-          },
-        },
-      },
-    });
-    // Default resolveExecution mock returns no model.limits → contextTokens null.
-    chatIpc = await import('../../src/main/ipc/chat');
-    chatIpc.registerChatIPC();
-  });
-
-  afterEach(() => {
-    chatIpc.unregisterChatIPC();
-    mocks.handlers.clear();
-    mocks.sessionManager._reset();
-  });
+  // The default resolveExecution mock returns no model.limits → contextTokens
+  // null, so no execution override is queued for this suite.
+  registerCompactionSuite({ overrideExecution: false });
 
   function hugeHistoryStream() {
     return async function* () {
@@ -792,91 +693,7 @@ describe('chat compaction disabled without a model context limit', () => {
 });
 
 describe('chat compaction send-time calibration', () => {
-  const selection = {
-    connectionId: '11111111-1111-4111-8111-111111111111',
-    modelId: 'vendor/path/model',
-  };
-
-  beforeEach(async () => {
-    vi.clearAllMocks();
-    mocks.handlers.clear();
-    mocks.streamResponses.length = 0;
-    mocks.streamEventSequences.length = 0;
-    mocks.runtimeRegistry._reset();
-    mocks.sessionManager._reset();
-    mocks.runtimeRegistry._set(mocks.workspace._testProjectDir, {
-      config: {
-        default_model: null,
-        tier_models: { bloom: null },
-        command_timeout: 30,
-        llm_stream_idle_timeout: 60,
-        llm_stream_retries: 0,
-        session_title_max_wait_seconds: 0,
-        max_tool_steps: 100,
-        compaction: {
-          main: {
-            mode: 'simple',
-            threshold: 0.5,
-            model: null,
-            agent_name: 'compactor',
-            preserve_percent: 0.25,
-            min_compactable_tokens: 0,
-            mechanical_reclaim: true,
-            hysteresis_delta: 0.1,
-          },
-          subagents: {
-            mode: 'simple',
-            threshold: 0.85,
-            model: null,
-            agent_name: 'compactor-subagent',
-            preserve_percent: 0.25,
-            min_compactable_tokens: 4000,
-            mechanical_reclaim: true,
-            hysteresis_delta: 0.1,
-          },
-        },
-      },
-    });
-    mocks.providerRuntime.resolveExecution.mockImplementationOnce(async () => ({
-      modelInstance: mocks.modelInstance,
-      connection: {},
-      model: {
-        id: 'vendor/path/model',
-        capabilities: { reasoning: false },
-        limits: { contextTokens: 2000 },
-      },
-      snapshot: {
-        providerId: 'openai',
-        providerDisplayName: 'OpenAI',
-        connectionId: selection.connectionId,
-        connectionName: 'Work',
-        modelId: selection.modelId,
-        protocol: 'openai-compatible',
-        modelSource: 'catalog',
-        catalogVersion: 1,
-        catalogSource: 'bundled',
-        catalogObservedAt: null,
-        pricing: null,
-        fieldProvenance: {},
-        statusObservation: null,
-      },
-    }));
-    chatIpc = await import('../../src/main/ipc/chat');
-    chatIpc.registerChatIPC();
-  });
-
-  afterEach(() => {
-    chatIpc.unregisterChatIPC();
-    mocks.handlers.clear();
-    mocks.sessionManager._reset();
-  });
-
-  function textOnlyStream() {
-    return async function* () {
-      yield { type: 'text', data: 'ok' };
-      yield { type: 'finish', finishReason: 'stop' };
-    };
-  }
+  registerCompactionSuite();
 
   it('skips send-time compaction when uncalibrated, even over threshold (hard rule: no chars/4)', async () => {
     const sessionId = 'e3e3e3e3-e3e3-4e3e-8e3e-e3e3e3e3e3e3';
@@ -974,93 +791,10 @@ describe('chat compaction send-time calibration', () => {
 });
 
 describe('chat compaction scoped user settle (keep_last_user_messages)', () => {
-  const selection = {
-    connectionId: '11111111-1111-4111-8111-111111111111',
-    modelId: 'vendor/path/model',
-  };
-
-  beforeEach(async () => {
-    vi.clearAllMocks();
-    mocks.handlers.clear();
-    mocks.streamResponses.length = 0;
-    mocks.streamEventSequences.length = 0;
-    mocks.runtimeRegistry._reset();
-    mocks.sessionManager._reset();
-    mocks.runtimeRegistry._set(mocks.workspace._testProjectDir, {
-      config: {
-        default_model: null,
-        tier_models: { bloom: null },
-        command_timeout: 30,
-        llm_stream_idle_timeout: 60,
-        llm_stream_retries: 0,
-        session_title_max_wait_seconds: 0,
-        max_tool_steps: 100,
-        compaction: {
-          main: {
-            mode: 'simple',
-            threshold: 0.5,
-            model: null,
-            agent_name: 'compactor',
-            preserve_percent: 0.25,
-            min_compactable_tokens: 0,
-            mechanical_reclaim: true,
-            hysteresis_delta: 0.1,
-            keep_last_user_messages: 10,
-            pin_first_user_message: false,
-          },
-          subagents: {
-            mode: 'simple',
-            threshold: 0.85,
-            model: null,
-            agent_name: 'compactor-subagent',
-            preserve_percent: 0.25,
-            min_compactable_tokens: 4000,
-            mechanical_reclaim: true,
-            hysteresis_delta: 0.1,
-          },
-        },
-      },
-    });
-    mocks.providerRuntime.resolveExecution.mockImplementationOnce(async () => ({
-      modelInstance: mocks.modelInstance,
-      connection: {},
-      model: {
-        id: 'vendor/path/model',
-        capabilities: { reasoning: false },
-        limits: { contextTokens: 2000 },
-      },
-      snapshot: {
-        providerId: 'openai',
-        providerDisplayName: 'OpenAI',
-        connectionId: selection.connectionId,
-        connectionName: 'Work',
-        modelId: selection.modelId,
-        protocol: 'openai-compatible',
-        modelSource: 'catalog',
-        catalogVersion: 1,
-        catalogSource: 'bundled',
-        catalogObservedAt: null,
-        pricing: null,
-        fieldProvenance: {},
-        statusObservation: null,
-      },
-    }));
-    chatIpc = await import('../../src/main/ipc/chat');
-    chatIpc.registerChatIPC();
+  registerCompactionSuite({
+    keepLastUserMessages: 10,
+    pinFirstUserMessage: false,
   });
-
-  afterEach(() => {
-    chatIpc.unregisterChatIPC();
-    mocks.handlers.clear();
-    mocks.sessionManager._reset();
-  });
-
-  function textOnlyStream() {
-    return async function* () {
-      yield { type: 'text', data: 'ok' };
-      yield { type: 'finish', finishReason: 'stop' };
-    };
-  }
 
   it('flags the 11th-oldest user message (keep_last=10): out of the model view, carried only by the summary', async () => {
     const sessionId = 'e5e5e5e5-e5e5-4e5e-8e5e-e5e5e5e5e5e5';

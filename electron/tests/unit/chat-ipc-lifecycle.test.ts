@@ -1,4 +1,4 @@
-import { setupChatIpcTest } from './chat-ipc-harness';
+import { resetHarness, setupChatIpcTest } from './chat-ipc-harness';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { IPC_CHANNELS } from '../../src/shared/types/ipc';
 import {
@@ -18,12 +18,7 @@ let chatIpc: typeof import('../../src/main/ipc/chat');
 
 describe('chat IPC teardown and bgcmd bounds', () => {
   beforeEach(async () => {
-    vi.clearAllMocks();
-    mocks.handlers.clear();
-    mocks.streamResponses.length = 0;
-    mocks.streamEventSequences.length = 0;
-    mocks.runtimeRegistry._reset();
-    mocks.sessionManager._reset();
+    resetHarness();
     chatIpc = await import('../../src/main/ipc/chat');
     chatIpc.registerChatIPC();
   });
@@ -76,6 +71,7 @@ describe('chat IPC teardown and bgcmd bounds', () => {
 
     expect(projectRegistry.releaseProjectMCPManager).toHaveBeenCalled();
     releaseStream?.();
+    await new Promise((resolve) => setTimeout(resolve, 20));
   });
 
   it('bgcmd:snapshot rejects lastN above the upper bound', async () => {
@@ -174,22 +170,15 @@ describe('chat IPC teardown and bgcmd bounds', () => {
 
 describe('chat:cancel interrupt layers (issue #145)', () => {
   beforeEach(async () => {
-    vi.clearAllMocks();
-    mocks.handlers.clear();
-    mocks.streamResponses.length = 0;
-    mocks.streamEventSequences.length = 0;
-    mocks.subagentManager.cancelRunning.mockClear();
-    mocks.subagentManager.getStates.mockClear();
+    resetHarness();
     mocks.subagentManager.getStates.mockReturnValue([]);
-    mocks.runtimeRegistry._reset();
-    mocks.electronWebContents.fromId.mockReset();
     mocks.sendersById.clear();
+    mocks.electronWebContents.fromId.mockReset();
     mocks.electronWebContents.fromId.mockImplementation(
       (id: number) => mocks.sendersById.get(id) ?? null,
     );
     mocks.electronWebContents.getAllWebContents.mockReset();
     mocks.electronWebContents.getAllWebContents.mockReturnValue([]);
-    mocks.sessionManager._reset();
 
     chatIpc = await import('../../src/main/ipc/chat');
     chatIpc.registerChatIPC();
@@ -293,12 +282,7 @@ describe('chat:cancel interrupt layers (issue #145)', () => {
 
 describe('chat:send draft single-flight (M-P1-013)', () => {
   beforeEach(async () => {
-    vi.clearAllMocks();
-    mocks.handlers.clear();
-    mocks.streamResponses.length = 0;
-    mocks.streamEventSequences.length = 0;
-    mocks.runtimeRegistry._reset();
-    mocks.sessionManager._reset();
+    resetHarness();
     chatIpc = await import('../../src/main/ipc/chat');
     chatIpc.registerChatIPC();
   });
@@ -351,10 +335,7 @@ describe('chat:queue_next early-stop signaling', () => {
   const sessionId = 'ffffffff-ffff-4fff-8fff-ffffffffffff';
 
   beforeEach(async () => {
-    vi.clearAllMocks();
-    mocks.handlers.clear();
-    mocks.runtimeRegistry._reset();
-    mocks.sessionManager._reset();
+    resetHarness();
     clearNextRequestStop(sessionId);
     chatIpc = await import('../../src/main/ipc/chat');
     chatIpc.registerChatIPC();

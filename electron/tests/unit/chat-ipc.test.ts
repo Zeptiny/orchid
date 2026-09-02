@@ -1,4 +1,7 @@
-import { setupChatIpcTest } from './chat-ipc-harness';
+// Keep this import above the static chat session and abort imports below:
+// the harness owns this suite's hoisted vi.mock registrations, which must be
+// in place before those modules resolve.
+import { resetHarness, setupChatIpcTest } from './chat-ipc-harness';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { IPC_CHANNELS } from '../../src/shared/types/ipc';
 import { MessageRole, MessageType } from '../../src/shared/types/message';
@@ -24,10 +27,7 @@ let chatIpc: typeof import('../../src/main/ipc/chat');
 
 describe('chat session selection gate', () => {
   beforeEach(async () => {
-    vi.clearAllMocks();
-    mocks.runtimeRegistry._reset();
-    mocks.sessionManager._reset();
-    mocks.backgroundStore._reset();
+    resetHarness();
     chatIpc = await import('../../src/main/ipc/chat');
   });
 
@@ -115,20 +115,14 @@ describe('chat session selection gate', () => {
 
 describe('chat IPC driver streaming', () => {
   beforeEach(async () => {
-    vi.clearAllMocks();
-    mocks.handlers.clear();
-    mocks.streamResponses.length = 0;
-    mocks.streamEventSequences.length = 0;
-    mocks.subagentManager.cancelRunning.mockClear();
-    mocks.runtimeRegistry._reset();
-    mocks.electronWebContents.fromId.mockReset();
+    resetHarness();
     mocks.sendersById.clear();
+    mocks.electronWebContents.fromId.mockReset();
     mocks.electronWebContents.fromId.mockImplementation(
       (id: number) => mocks.sendersById.get(id) ?? null,
     );
     mocks.electronWebContents.getAllWebContents.mockReset();
     mocks.electronWebContents.getAllWebContents.mockReturnValue([]);
-    mocks.sessionManager._reset();
 
     chatIpc = await import('../../src/main/ipc/chat');
     chatIpc.registerChatIPC();
@@ -649,12 +643,7 @@ describe('chat IPC driver streaming', () => {
 
 describe('chat session snapshot hydration', () => {
   beforeEach(async () => {
-    vi.clearAllMocks();
-    mocks.handlers.clear();
-    mocks.streamResponses.length = 0;
-    mocks.streamEventSequences.length = 0;
-    mocks.runtimeRegistry._reset();
-    mocks.sessionManager._reset();
+    resetHarness();
     chatIpc = await import('../../src/main/ipc/chat');
     chatIpc.registerChatIPC();
   });
@@ -800,18 +789,9 @@ describe('chat session snapshot hydration', () => {
 
 describe('chat IPC provider gates', () => {
   beforeEach(async () => {
-    vi.clearAllMocks();
-    mocks.handlers.clear();
-    mocks.streamResponses.length = 0;
-    mocks.streamEventSequences.length = 0;
-    mocks.runtimeRegistry._reset();
-    mocks.sessionManager._reset();
+    resetHarness();
     mocks.electronWebContents.getAllWebContents.mockReset();
     mocks.electronWebContents.getAllWebContents.mockReturnValue([]);
-    mocks.aiGenerateText.mockReset();
-    mocks.aiGenerateText.mockResolvedValue({ text: 'Investigate Session Naming' });
-    mocks.aiWrapLanguageModel.mockClear();
-    mocks.createMiddlewareStack.mockClear();
     chatIpc = await import('../../src/main/ipc/chat');
     chatIpc.registerChatIPC();
   });
