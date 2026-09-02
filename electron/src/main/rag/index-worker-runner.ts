@@ -121,26 +121,6 @@ function awaitWorkerRun(
       ((config as Partial<Config> | undefined)?.background_command_idle_timeout ?? 900) * 1000,
     );
     let completion: Promise<void> | undefined;
-    const finish = (
-      result: RAGIndexResult | undefined,
-      error: Error | undefined,
-      cleanupTempFiles: boolean,
-    ): Promise<void> => {
-      if (completion) return completion;
-      settled = true;
-      if (watchdog) clearTimeout(watchdog);
-      completion = (async () => {
-        try {
-          await worker.terminate();
-        } catch {
-          // The worker may have already exited after posting its result.
-        }
-        if (cleanupTempFiles) await removeInterruptedDownloadTemps(config);
-        if (error) reject(error);
-        else resolve(result!);
-      })();
-      return completion;
-    };
     const armWatchdog = () => {
       if (settled) return;
       if (watchdog) clearTimeout(watchdog);
@@ -159,11 +139,9 @@ function awaitWorkerRun(
         // ignore
       }
     };
-    registerCancel?.((reason) => finish(undefined, reason, true));
-    armWatchdog();
 
-    worker.on('message', (msg: unknown) => {
-      if (!isWorkerMessage(msg)) return;
+    const onMessage = (msg: unknown): void => {
+      if (!isWorkerMessage(msg) || settled) return;
       armWatchdog();
       if (msg.type === 'progress') {
         handleProgress(msg.progress);
@@ -176,20 +154,58 @@ function awaitWorkerRun(
       if (msg.type === 'error') {
         void finish(undefined, new Error(msg.error), true);
       }
-    });
+    };
 
-    worker.on('error', (err) => {
+    const onError = (err: unknown): void => {
       void finish(undefined, err instanceof Error ? err : new Error(String(err)), true);
-    });
+    };
 
-    worker.on('exit', (code) => {
+    const onExit = (code: number): void => {
       if (settled) return;
       void finish(
         undefined,
         new Error(`RAG index worker exited unexpectedly with code ${code}`),
         true,
       );
-    });
+    };
+
+    // Detach every worker listener once settled so a late 'message' frame can
+    // never flow into handleProgress and re-open the single-flight slot the
+    // caller's finally block has already released.
+    const detachListeners = (): void => {
+      worker.removeListener('message', onMessage);
+      worker.removeListener('error', onError);
+      worker.removeListener('exit', onExit);
+    };
+
+    const finish = (
+      result: RAGIndexResult | undefined,
+      error: Error | undefined,
+      cleanupTempFiles: boolean,
+    ): Promise<void> => {
+      if (completion) return completion;
+      settled = true;
+      if (watchdog) clearTimeout(watchdog);
+      detachListeners();
+      completion = (async () => {
+        try {
+          await worker.terminate();
+        } catch {
+          // The worker may have already exited after posting its result.
+        }
+        if (cleanupTempFiles) await removeInterruptedDownloadTemps(config);
+        if (error) reject(error);
+        else resolve(result!);
+      })();
+      return completion;
+    };
+
+    registerCancel?.((reason) => finish(undefined, reason, true));
+    armWatchdog();
+
+    worker.on('message', onMessage);
+    worker.on('error', onError);
+    worker.on('exit', onExit);
   });
 }
 

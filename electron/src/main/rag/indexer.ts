@@ -69,7 +69,12 @@ export function getIndexState(projectPath?: string): {
 }
 
 function noteProgress(projectPath: string, progress: RAGIndexProgress): void {
-  activeIndexes.set(projectKey(projectPath), progress);
+  const key = projectKey(projectPath);
+  // Only refresh an already-claimed slot. A worker frame that lands after the
+  // run's finally block released the slot must never resurrect it and wedge
+  // every future index for this project on the in-progress sentinel.
+  if (!activeIndexes.has(key)) return;
+  activeIndexes.set(key, progress);
 }
 
 /** Cancel a worker-backed index so a replacement run can start immediately. */
