@@ -38,9 +38,11 @@ import {
 import { makeUserMessage } from '../llm/message-factories';
 import { subagentsConfigSchema } from '../config/schema';
 import { AdmissionController, type AdmissionCounters, type SubagentAdmissionLimits } from './admission';
-import { SubagentRunRegistry, type SubagentRun } from './subagent-run';
+import { SubagentRunRegistry, type SubagentExecutionSeed, type SubagentRun } from './subagent-run';
 import {
   SubagentLifecycle,
+  type SubagentLifecycleEffects,
+  type SubagentLifecycleEvent,
   type SubagentQuestion,
   type SubagentQuestionResult,
   type SubagentWaiterReason,
@@ -375,6 +377,24 @@ export interface SubagentCheckpointCandidate {
   readonly checkpoint: SubagentPersistenceCandidate;
 }
 
+/**
+ * Everything one run generation assembles before its stream starts and needs
+ * until it settles: the execution identity (record, generation, abort boundary,
+ * frozen affinity) plus the transcript assembler, the mutable history handoff,
+ * the per-run compaction controller, and the usage the terminal finalization
+ * must carry forward.
+ */
+interface SubagentRunScope {
+  readonly record: SubagentRecord;
+  readonly run: SubagentRun;
+  readonly seed: SubagentExecutionSeed | undefined;
+  readonly abort: AbortController;
+  readonly priorUsage: Usage | null;
+  readonly assembler: SubagentRunAssembler;
+  readonly historyBox: SubagentHistoryBox;
+  readonly compaction: SubagentCompactionController;
+}
+
 // ── SubagentManager ─────────────────────────────────────────────────────────
 
 /**
@@ -524,11 +544,7 @@ export class SubagentManager {
     if (!admitted) this._admission.enqueue(id);
     else this._admission.markAdmitted(sessionId);
     this._notify();
-    this._emitDelta(record, {
-      type: SubagentDeltaEventType.SPAWNED,
-      record: summarizeSubagentRecord(this.toDomainRecord(record, { includeLiveTail: false })),
-      usage: record.usage,
-    });
+    this._emitSpawnedDelta(record);
 
     if (admitted && this._runner) {
       this._startRecordRun(record);
@@ -563,31 +579,71 @@ export class SubagentManager {
   followUp(subagentId: string, input: string): SubagentRecord {
     const record = this._subagents.get(subagentId);
     if (!record) throw new Error(`Subagent '${subagentId}' not found`);
-    if (this.isSummary(subagentId)) throw new SubagentEvictedError(subagentId);
+    this._assertFollowUpEligible(record);
+    const admitted = this._resolveFollowUpAdmission(record);
+
+    const now = Date.now();
+    this._reopenFollowUpChain(record, input);
+
+    // Per-run lifecycle reset and fresh projection make the resume a new run.
+    const transition = this._lifecycle.transition(record, { type: 'follow-up', admitted, now });
+    if (!transition) throw new SubagentNotTerminalError(subagentId, record.state);
+    this._beginFollowUpRun(record, admitted);
+    if (transition.clearQuestion) this._lifecycle.cancelQuestion(record.id);
+    // Reopened chain + follow-up message must persist via the next checkpoint
+    // (spawn sets a fresh row; followUp reopens a terminal durable row).
+    this._persistence.beginFollowUp(record.id);
+    // Persistence owns its dirty revision; the projection clock separately
+    // orders this durable lifecycle mutation against snapshots and deltas.
+    if (transition.persist) this._bumpSessionRevision(record);
+
+    this._admitFollowUpRun(record, admitted);
+    return record;
+  }
+
+  /**
+   * Follow-up guards: the record must exist (checked by the caller), be a
+   * materialized record rather than a terminal summary, be terminal, and not
+   * be closed.
+   */
+  private _assertFollowUpEligible(record: SubagentRecord): void {
+    const id = record.id;
+    if (this.isSummary(id)) throw new SubagentEvictedError(id);
     if (!isTerminalSubagentState(record.state)) {
-      throw new SubagentNotTerminalError(subagentId, record.state);
+      throw new SubagentNotTerminalError(id, record.state);
     }
-    if (record.closed) throw new SubagentClosedError(subagentId);
+    if (record.closed) throw new SubagentClosedError(id);
     // A cancelled RUNNING record is already terminal while its run loop still
     // owns the interruption boundary (a settling run). Resuming now would
     // hand the record to a second run while the zombie loop's partial flush
     // and finally block still write to it.
-    if (this._runs.isSettling(record.id)) {
-      throw new SubagentStillSettlingError(subagentId);
+    if (this._runs.isSettling(id)) {
+      throw new SubagentStillSettlingError(id);
     }
+  }
 
+  /**
+   * Admission decision for a resume, mirroring `spawn`: throws when the record
+   * cannot be admitted and the queue is already full, leaving the terminal
+   * record completely unmutated.
+   */
+  private _resolveFollowUpAdmission(record: SubagentRecord): boolean {
     const limits = getAdmissionLimits();
     const admitted = this._admission.canAdmit(record.sessionId, limits, this._admissionCounters());
     if (!admitted && this._admission.queueLength >= limits.maxQueued) {
       throw new SubagentQueueFullError(limits);
     }
+    return admitted;
+  }
 
-    const now = Date.now();
-    // Append the follow-up user message and REOPEN the chain. The reopen is
-    // built directly (same object-spread style as `_finalizeChain`) BEFORE any
-    // `_setChainMessages` call: that helper's `keepTerminal` logic preserves a
-    // terminal chain status, so the chain must already be ACTIVE by the time
-    // the run loop writes its first message.
+  /**
+   * Append the follow-up input as a user message and REOPEN the chain. The
+   * reopen is built directly (same object-spread style as `_finalizeChain`)
+   * BEFORE any `_setChainMessages` call: that helper's `keepTerminal` logic
+   * preserves a terminal chain status, so the chain must already be ACTIVE by
+   * the time the run loop writes its first message.
+   */
+  private _reopenFollowUpChain(record: SubagentRecord, input: string): void {
     const userMessage = makeUserMessage(input);
     record.chain = record.chain
       ? {
@@ -600,10 +656,10 @@ export class SubagentManager {
           ...makeEmptyChain(record.sessionId ?? '', record.selection, record.agent),
           messages: [userMessage],
         };
+  }
 
-    // Per-run lifecycle reset and fresh projection make the resume a new run.
-    const transition = this._lifecycle.transition(record, { type: 'follow-up', admitted, now });
-    if (!transition) throw new SubagentNotTerminalError(subagentId, record.state);
+  /** Allocate the next run generation and a fresh live projection for the resume. */
+  private _beginFollowUpRun(record: SubagentRecord, admitted: boolean): void {
     const run = this._runs.beginNext(record.id);
     this._liveProjection.start({
       subagentId: record.id,
@@ -611,36 +667,27 @@ export class SubagentManager {
       state: admitted ? SubagentStatus.PENDING : SubagentStatus.QUEUED,
       runId: run.runId,
     });
-    if (transition.clearQuestion) this._lifecycle.cancelQuestion(record.id);
-    // Reopened chain + follow-up message must persist via the next checkpoint
-    // (spawn sets a fresh row; followUp reopens a terminal durable row).
-    this._persistence.beginFollowUp(record.id);
-    // Persistence owns its dirty revision; the projection clock separately
-    // orders this durable lifecycle mutation against snapshots and deltas.
-    if (transition.persist) this._bumpSessionRevision(record);
+  }
 
-    if (admitted) {
-      this._admission.markAdmitted(record.sessionId);
-      this._notify();
-      this._emitDelta(record, {
-        type: SubagentDeltaEventType.SPAWNED,
-        record: summarizeSubagentRecord(this.toDomainRecord(record, { includeLiveTail: false })),
-        usage: record.usage,
-      });
-      if (this._runner) {
-        this._startRecordRun(record);
-      }
-    } else {
+  /**
+   * Apply the resume's admission outcome. An admitted resume takes its slot,
+   * notifies, and starts the runner; a queued one parks in the bounded FIFO
+   * and starts when a terminal transition frees a slot. Both notify and emit
+   * their SPAWNED delta in the same order.
+   */
+  private _admitFollowUpRun(record: SubagentRecord, admitted: boolean): void {
+    if (!admitted) {
       this._admission.enqueue(record.id);
       this._notify();
-      this._emitDelta(record, {
-        type: SubagentDeltaEventType.SPAWNED,
-        record: summarizeSubagentRecord(this.toDomainRecord(record, { includeLiveTail: false })),
-        usage: record.usage,
-      });
+      this._emitSpawnedDelta(record);
+      return;
     }
-
-    return record;
+    this._admission.markAdmitted(record.sessionId);
+    this._notify();
+    this._emitSpawnedDelta(record);
+    if (this._runner) {
+      this._startRecordRun(record);
+    }
   }
 
   /**
@@ -667,18 +714,12 @@ export class SubagentManager {
    * Resolves any pending `wait()` promises.
    */
   markCompleted(subagentId: string, result: string): void {
-    const record = this._subagents.get(subagentId);
-    if (!record) return;
-    const transition = this._lifecycle.transition(record, { type: 'complete', result, now: Date.now() });
-    if (!transition) return;
-
-    if (transition.removeFromAdmissionQueue) this._admission.removeFromQueue(subagentId);
-    this._finalizeChain(record, ChainStatus.COMPLETED);
-    if (transition.persist) this._markRecordDirty(record);
-    if (transition.finishProjection) this._finishLive(record, SubagentState.COMPLETED);
-    if (transition.resolveWaiters) this._lifecycle.resolveWaiters(record.id);
-    if (transition.notify) this._notify();
-    if (transition.admitNext) this._admitFromQueue();
+    this._markTerminal(
+      subagentId,
+      { type: 'complete', result, now: Date.now() },
+      ChainStatus.COMPLETED,
+      SubagentState.COMPLETED,
+    );
   }
 
   /**
@@ -686,15 +727,42 @@ export class SubagentManager {
    * Resolves any pending `wait()` promises.
    */
   markFailed(subagentId: string, error: string): void {
+    this._markTerminal(
+      subagentId,
+      { type: 'fail', error, now: Date.now() },
+      ChainStatus.FAILED,
+      SubagentState.FAILED,
+    );
+  }
+
+  /**
+   * Apply one terminal transition and coordinate the effects the lifecycle
+   * declares: admission release, chain finalization, persistence, the terminal
+   * live projection, waiter resolution, notification, and queue admission.
+   */
+  private _markTerminal(
+    subagentId: string,
+    event: SubagentLifecycleEvent,
+    chainStatus: ChainStatus,
+    terminalState: SubagentTerminalState,
+  ): void {
     const record = this._subagents.get(subagentId);
     if (!record) return;
-    const transition = this._lifecycle.transition(record, { type: 'fail', error, now: Date.now() });
+    const transition = this._lifecycle.transition(record, event);
     if (!transition) return;
 
     if (transition.removeFromAdmissionQueue) this._admission.removeFromQueue(subagentId);
-    this._finalizeChain(record, ChainStatus.FAILED);
+    this._finalizeChain(record, chainStatus);
     if (transition.persist) this._markRecordDirty(record);
-    if (transition.finishProjection) this._finishLive(record, SubagentState.FAILED);
+    if (transition.finishProjection) this._finishLive(record, terminalState);
+    this._announceTerminal(record, transition);
+  }
+
+  /** Unblock waiters, notify listeners, and hand the freed run slot to the queue. */
+  private _announceTerminal(
+    record: SubagentRecord,
+    transition: SubagentLifecycleEffects,
+  ): void {
     if (transition.resolveWaiters) this._lifecycle.resolveWaiters(record.id);
     if (transition.notify) this._notify();
     if (transition.admitNext) this._admitFromQueue();
@@ -862,10 +930,22 @@ export class SubagentManager {
     });
     if (!transition) return false;
 
-    // A queued record is cancelled in place: removed from the queue, marked
-    // INTERRUPTED, terminal delta emitted — no run slot was ever consumed, so
-    // no admission follows.
-    if (transition.removeFromAdmissionQueue) this._admission.removeFromQueue(subagentId);
+    this._interruptRunState(record, transition);
+    this._settleInterruptedWaiters(record, transition, wasQueued);
+    return true;
+  }
+
+  /**
+   * Interrupt a record's execution boundary. A queued record is cancelled in
+   * place: removed from the queue, marked INTERRUPTED, terminal delta emitted —
+   * no run slot was ever consumed, so no admission follows (see
+   * `_settleInterruptedWaiters`).
+   */
+  private _interruptRunState(
+    record: SubagentRecord,
+    transition: SubagentLifecycleEffects,
+  ): void {
+    if (transition.removeFromAdmissionQueue) this._admission.removeFromQueue(record.id);
     this._runs.abortCurrent(record.id);
     if (transition.clearQuestion) this._lifecycle.cancelQuestion(record.id);
     if (transition.persist) this._markRecordDirty(record);
@@ -876,6 +956,14 @@ export class SubagentManager {
       this._finalizeChain(record, ChainStatus.INTERRUPTED);
       this._finishLive(record, SubagentState.INTERRUPTED);
     }
+  }
+
+  /** Unblock waiters, notify, and hand the freed run slot to the queue. */
+  private _settleInterruptedWaiters(
+    record: SubagentRecord,
+    transition: SubagentLifecycleEffects,
+    wasQueued: boolean,
+  ): void {
     if (transition.resolveWaiters) this._lifecycle.resolveWaiters(record.id);
     // A cancelled-while-queued record owns a durable row (both fresh spawns
     // and resume-queued follow-ups register durably), so evicting it here
@@ -884,8 +972,7 @@ export class SubagentManager {
     // a full dirty INTERRUPTED record: the terminal wave persists it, then
     // confirmRecordsPersisted evicts it through the normal row-confirmed path.
     if (transition.notify) this._notify();
-    if (!wasQueued && transition.admitNext) this._admitFromQueue();
-    return true;
+    if (transition.admitNext && !wasQueued) this._admitFromQueue();
   }
 
   cancelAll(): string[] {
@@ -907,13 +994,10 @@ export class SubagentManager {
   cancelRunning(sessionId?: string | null): string[] {
     const cancelled: string[] = [];
     for (const [id, record] of this._subagents) {
-      if (sessionId !== undefined && sessionId !== null && record.sessionId !== sessionId) {
-        continue;
-      }
-      if (!isTerminalSubagentState(record.state)) {
-        if (this.cancelOne(id)) {
-          cancelled.push(id);
-        }
+      if (!isRecordInSessionScope(record, sessionId)) continue;
+      if (isTerminalSubagentState(record.state)) continue;
+      if (this.cancelOne(id)) {
+        cancelled.push(id);
       }
     }
     return cancelled;
@@ -1176,21 +1260,9 @@ export class SubagentManager {
    * all records including summaries.
    */
   purgeSession(sessionId: string): void {
+    this._cancelSessionRecords(sessionId);
     for (const record of this.recordsForSession(sessionId)) {
-      const id = record.id;
-      if (!isTerminalSubagentState(record.state)) this.cancelOne(id);
-    }
-    for (const record of this.recordsForSession(sessionId)) {
-      const id = record.id;
-      this._subagents.delete(id);
-      this._unindexRecord(record);
-      this._lifecycle.clear(id);
-      // Let an already-started run unwind through its guarded terminal
-      // projection. Its finally block drops the detached registry entry.
-      if (!this._runs.isSettling(id)) {
-        this._runs.remove(id);
-        this._liveProjection.remove(id);
-      }
+      this._purgeSessionRecord(record);
     }
     this._admission.filterQueue(
       (id) => this._subagents.get(id)?.sessionId !== sessionId,
@@ -1201,6 +1273,29 @@ export class SubagentManager {
     clearCompactionPendingsForSession(sessionId);
     clearCompactionPausesForSession(sessionId);
     this._notify();
+  }
+
+  /** Cancel one session's non-terminal records so renderers settle on terminal deltas. */
+  private _cancelSessionRecords(sessionId: string): void {
+    for (const record of this.recordsForSession(sessionId)) {
+      if (!isTerminalSubagentState(record.state)) this.cancelOne(record.id);
+    }
+  }
+
+  /**
+   * Drop one record's runtime state. A settling run is left alone: it unwinds
+   * through its guarded terminal projection and its finally block drops the
+   * detached registry entry.
+   */
+  private _purgeSessionRecord(record: SubagentRecord): void {
+    const id = record.id;
+    this._subagents.delete(id);
+    this._unindexRecord(record);
+    this._lifecycle.clear(id);
+    if (!this._runs.isSettling(id)) {
+      this._runs.remove(id);
+      this._liveProjection.remove(id);
+    }
   }
 
   /**
@@ -1289,55 +1384,26 @@ export class SubagentManager {
       const state = HYDRATABLE_STATUS_TO_STATE[spec.domain.status];
       if (!state) continue;
 
-      const { domain } = spec;
-      // Guard against NaN from an unparseable stored timestamp (the `|| 0`
-      // fallback mirrors session storage hydration) so hydration stays total
-      // and runtimeToDomain never receives an invalid Date.
-      const startTime = Date.parse(domain.start_time) || 0;
-      const endTime = domain.end_time ? (Date.parse(domain.end_time) || 0) : null;
-      const run = this._runs.reset(spec.id, 1, {
-        windowId: spec.windowId,
-        cwd: spec.cwd,
-        projectRuntime: spec.projectRuntime,
-      });
-
-      const record: SubagentRecord = {
-        id: spec.id,
-        agent: spec.agent,
-        state,
-        label: domain.agent_name,
-        task: domain.task,
-        result: domain.result,
-        error: domain.error,
-        startTime,
-        queuedAt: null,
-        // Durable eligibility is keyed on `startedAt`; a restored terminal
-        // record was admitted, so it replays from its original start time.
-        startedAt: startTime,
-        endTime,
-        chain: domain.chain,
-        usage: domain.usage !== undefined
-          ? domain.usage
-          : sumMessageUsages(domain.chain.messages),
-        selection: domain.chain.selection,
-        parentChainIndex: domain.parentChainIndex,
-        sessionId: spec.sessionId,
-        closed: domain.closed,
-      };
-      if (domain.reasoning_effort !== undefined) {
-        record.reasoningEffort = domain.reasoning_effort;
-      }
-
-      this._storeRecord(record);
-      this._persistence.rehydrate(spec.id, spec.sessionId);
-      this._liveProjection.start({
-        subagentId: spec.id,
-        sessionId: spec.sessionId,
-        state: domain.status,
-        runId: run.runId,
-        terminalEmitted: true,
-      });
+      this._hydrateRecord(spec, state);
     }
+  }
+
+  /** Materialize one durable record: fresh run generation, runtime record, terminal projection. */
+  private _hydrateRecord(spec: HydrateSpec, state: SubagentState): void {
+    const run = this._runs.reset(spec.id, 1, {
+      windowId: spec.windowId,
+      cwd: spec.cwd,
+      projectRuntime: spec.projectRuntime,
+    });
+    this._storeRecord(hydratedRuntimeRecord(spec, state));
+    this._persistence.rehydrate(spec.id, spec.sessionId);
+    this._liveProjection.start({
+      subagentId: spec.id,
+      sessionId: spec.sessionId,
+      state: spec.domain.status,
+      runId: run.runId,
+      terminalEmitted: true,
+    });
   }
 
   // ── Private: admission control ────────────────────────────────────────────
@@ -1475,38 +1541,57 @@ export class SubagentManager {
     this._runs.attachPromise(run, promise);
   }
 
+  /** A fire-and-forget run starts only while it is current and the record still runs. */
+  private _isRunStartable(record: SubagentRecord, run: SubagentRun): boolean {
+    return this._runs.isCurrent(run) && !isTerminalSubagentState(record.state);
+  }
+
   private async _startRun(
     record: SubagentRecord,
     run: SubagentRun,
   ): Promise<void> {
     const runner = this._runner;
-    if (!runner) {
-      this._runs.settle(run);
-      return;
-    }
-
-    if (!this._runs.isCurrent(run) || isTerminalSubagentState(record.state)) {
-      this._runs.settle(run);
-      return;
-    }
-
     const abort = run.abortController;
-    if (!abort) {
+    if (!runner || !abort || !this._isRunStartable(record, run)) {
       this._runs.settle(run);
       return;
     }
+
     const seed = this._runs.getSeed(record.id);
     this.markRunning(record.id);
+    const scope = this._openRunScope(record, run, seed, abort);
+    try {
+      const superseded = await this._drainRunStream(runner(this._streamRunnerParams(scope)), scope);
+      if (superseded) return;
+      this._finalizeRunStream(scope);
+    } catch (err) {
+      this._finalizeRunFailure(scope, err);
+    } finally {
+      this._closeRunScope(scope);
+    }
+  }
 
-    const priorUsage = record.usage ?? sumMessageUsages(record.chain?.messages ?? []);
-    const assembler = new SubagentRunAssembler(record.chain?.messages ?? []);
+  /**
+   * Assemble everything one generation needs before its stream starts: the
+   * carried-over usage, the transcript assembler, the mutable history handoff,
+   * and the per-run compaction controller.
+   */
+  private _openRunScope(
+    record: SubagentRecord,
+    run: SubagentRun,
+    seed: SubagentExecutionSeed | undefined,
+    abort: AbortController,
+  ): SubagentRunScope {
+    const initialMessages = record.chain?.messages ?? [];
+    const priorUsage = record.usage ?? sumMessageUsages(initialMessages);
+    const assembler = new SubagentRunAssembler(initialMessages);
 
     // U5/U7: the runner's history is a mutable handoff the compaction
     // controller swaps at pause boundaries; every compaction concern for this
     // run (per-run trigger with the subagent's own model limits, the three
     // fire points, the pause gate, the overflow retry) lives on the per-run
-    // SubagentCompactionController — the run loop below only wires its hooks.
-    const historyBox: SubagentHistoryBox = { messages: [...(record.chain?.messages ?? [])] };
+    // SubagentCompactionController — the run loop only wires its hooks.
+    const historyBox: SubagentHistoryBox = { messages: [...initialMessages] };
     const compaction = new SubagentCompactionController({
       record,
       runGeneration: run.generation,
@@ -1528,95 +1613,130 @@ export class SubagentManager {
       },
     });
     compaction.startSpawnTimeGate();
+    return { record, run, seed, abort, priorUsage, assembler, historyBox, compaction };
+  }
 
-    try {
-      const stream = runner({
-        task: record.task,
-        // Mutable history handoff (U5): the runner replays the box's messages
-        // for every stream segment; a compaction apply at a pause boundary
-        // swaps its contents so the restarted stream reads the compacted
-        // history.
-        historyBox,
-        agent: record.agent,
-        selection: record.selection,
-        abortSignal: abort.signal,
-        sessionId: record.sessionId ?? undefined,
-        windowId: seed?.windowId ?? undefined,
-        cwd: seed?.cwd ?? undefined,
-        agentScopeId: record.id,
-        chainId: record.chain?.id,
-        // Per-run turn id keeps provider accounting attribution unique across
-        // resumes (spawn path generation=1 reproduces a stable unique id).
-        turnId: `${record.id}#${run.generation}`,
-        projectRuntime: seed?.projectRuntime,
-        onReasoningEffort: (effort) => {
-          if (!this._runs.isCurrent(run)) return;
-          record.reasoningEffort = effort;
-        },
-        compaction: compaction.pauseController,
-      });
-
-      for await (const event of stream) {
+  /** Freeze the run's inputs for the stream runner (record identity + frozen affinity). */
+  private _streamRunnerParams(scope: SubagentRunScope): Parameters<SubagentStreamRunner>[0] {
+    const { record, run, seed, abort, historyBox, compaction } = scope;
+    return {
+      task: record.task,
+      // Mutable history handoff (U5): the runner replays the box's messages
+      // for every stream segment; a compaction apply at a pause boundary
+      // swaps its contents so the restarted stream reads the compacted
+      // history.
+      historyBox,
+      agent: record.agent,
+      selection: record.selection,
+      abortSignal: abort.signal,
+      sessionId: record.sessionId ?? undefined,
+      ...seedRunnerAffinity(seed),
+      agentScopeId: record.id,
+      chainId: record.chain?.id,
+      // Per-run turn id keeps provider accounting attribution unique across
+      // resumes (spawn path generation=1 reproduces a stable unique id).
+      turnId: `${record.id}#${run.generation}`,
+      projectRuntime: seed?.projectRuntime,
+      onReasoningEffort: (effort) => {
         if (!this._runs.isCurrent(run)) return;
-        if (abort.signal.aborted || record.state === SubagentState.INTERRUPTED) {
-          break;
-        }
-        if (!this._applyAssemblerEffects(record, run, assembler.accept(event))) return;
-        // U9/U5: subagent mid-run compaction — proactive prepare after usage
-        // (R29 fire point 2) arms the scoped pause; the runner consumes it at
-        // the next step boundary (R28) via the pause controller.
-        if (event.type === 'usage') {
-          await compaction.onUsageEvent(event.usage.prompt_tokens ?? event.usage.total_tokens ?? 0);
-        }
-        if (event.type === 'step_finish') {
-          compaction.onStepFinish(event.stepIndex);
-        }
-      }
+        record.reasoningEffort = effort;
+      },
+      compaction: compaction.pauseController,
+    };
+  }
 
-      if (!this._runs.isCurrent(run)) return;
-      if (abort.signal.aborted || record.state === SubagentState.INTERRUPTED) {
-        this._applyAssemblerFinalization(record, run, assembler.interrupt(), priorUsage);
-        return;
+  /**
+   * Fold the stream into the record's transcript, firing the compaction hooks
+   * at their documented points. Returns true when the generation was superseded
+   * (the caller must not finalize), false when the stream reached an end or an
+   * interruption boundary.
+   */
+  private async _drainRunStream(
+    stream: AsyncGenerator<StreamEvent>,
+    scope: SubagentRunScope,
+  ): Promise<boolean> {
+    const { record, run, abort, assembler, compaction } = scope;
+    for await (const event of stream) {
+      if (!this._runs.isCurrent(run)) return true;
+      if (this._isRunInterrupted(record, abort.signal)) return false;
+      if (!this._applyAssemblerEffects(record, run, assembler.accept(event))) return true;
+      // U9/U5: subagent mid-run compaction — proactive prepare after usage
+      // (R29 fire point 2) arms the scoped pause; the runner consumes it at
+      // the next step boundary (R28) via the pause controller.
+      if (event.type === 'usage') {
+        await compaction.onUsageEvent(compactionTriggerTokens(event.usage));
       }
-      // If partial report was set via compaction degradation, complete with it as normal result
-      if (record.result?.includes('[Subagent partial report')) {
-        const partial = record.result;
-        const finalization = assembler.complete();
-        this._applyAssemblerFinalization(record, run, { ...finalization, result: partial }, priorUsage);
-        return;
+      if (event.type === 'step_finish') {
+        compaction.onStepFinish(event.stepIndex);
       }
-      this._applyAssemblerFinalization(record, run, assembler.complete(), priorUsage);
-    } catch (err) {
-      if (!this._runs.isCurrent(run)) return;
-      if (abort.signal.aborted || record.state === SubagentState.INTERRUPTED) {
-        this._applyAssemblerFinalization(record, run, assembler.interrupt(), priorUsage);
-        return;
-      }
-      const message = err instanceof Error ? err.message : String(err);
-      this._applyAssemblerFinalization(record, run, assembler.fail(message), priorUsage);
-    } finally {
-      if (this._runs.isCurrent(run)) {
-        // Interrupt or natural end: clear this run's scoped compaction gate
-        // and drop any pending it never consumed — the per-run trigger dies
-        // with the run, and the next run re-prepares via its own gates. A
-        // superseded generation (!isCurrent) keeps its replacement's state.
-        compaction.discard();
-        if (record.state === SubagentState.INTERRUPTED) {
-          this._finishLive(record, SubagentState.INTERRUPTED);
-        }
-        this._runs.settle(run);
-        if (this._subagents.get(record.id) !== record) {
-          this._runs.remove(record.id);
-          this._liveProjection.remove(record.id);
-        }
-      } else {
-        // Superseded run: the scoped pause/pending state belongs to the
-        // replacement generation (discard above explains why it must NOT run
-        // here), but this generation's controller can still own a scheduled
-        // compaction progress timer — stop it and advance the terminal epoch
-        // so no stale throttled emission fires after the run was replaced.
-        compaction.silenceProgress();
-      }
+    }
+    return false;
+  }
+
+  /** The run's interruption boundary: an aborted signal or an already-interrupted record. */
+  private _isRunInterrupted(record: SubagentRecord, abortSignal: AbortSignal): boolean {
+    return abortSignal.aborted || record.state === SubagentState.INTERRUPTED;
+  }
+
+  /** Finalize a stream that drained to completion or broke at an interruption boundary. */
+  private _finalizeRunStream(scope: SubagentRunScope): void {
+    const { record, run, abort, assembler, priorUsage } = scope;
+    if (!this._runs.isCurrent(run)) return;
+    if (this._isRunInterrupted(record, abort.signal)) {
+      this._applyAssemblerFinalization(record, run, assembler.interrupt(), priorUsage);
+      return;
+    }
+    // If partial report was set via compaction degradation, complete with it as normal result
+    if (hasPartialSubagentReport(record)) {
+      const partial = record.result;
+      const finalization = assembler.complete();
+      this._applyAssemblerFinalization(
+        record,
+        run,
+        { ...finalization, result: partial },
+        priorUsage,
+      );
+      return;
+    }
+    this._applyAssemblerFinalization(record, run, assembler.complete(), priorUsage);
+  }
+
+  /** Route a thrown stream error to the assembler's matching terminal outcome. */
+  private _finalizeRunFailure(scope: SubagentRunScope, err: unknown): void {
+    const { record, run, abort, assembler, priorUsage } = scope;
+    if (!this._runs.isCurrent(run)) return;
+    if (this._isRunInterrupted(record, abort.signal)) {
+      this._applyAssemblerFinalization(record, run, assembler.interrupt(), priorUsage);
+      return;
+    }
+    const message = err instanceof Error ? err.message : String(err);
+    this._applyAssemblerFinalization(record, run, assembler.fail(message), priorUsage);
+  }
+
+  /** Release the generation's run-loop ownership once its stream is done. */
+  private _closeRunScope(scope: SubagentRunScope): void {
+    const { record, run, compaction } = scope;
+    if (!this._runs.isCurrent(run)) {
+      // Superseded run: the scoped pause/pending state belongs to the
+      // replacement generation (a superseded generation keeps its replacement's
+      // state, so `discard` below must NOT run here), but this generation's
+      // controller can still own a scheduled compaction progress timer — stop
+      // it and advance the terminal epoch so no stale throttled emission fires
+      // after the run was replaced.
+      compaction.silenceProgress();
+      return;
+    }
+    // Interrupt or natural end: clear this run's scoped compaction gate
+    // and drop any pending it never consumed — the per-run trigger dies
+    // with the run, and the next run re-prepares via its own gates.
+    compaction.discard();
+    if (record.state === SubagentState.INTERRUPTED) {
+      this._finishLive(record, SubagentState.INTERRUPTED);
+    }
+    this._runs.settle(run);
+    if (this._subagents.get(record.id) !== record) {
+      this._runs.remove(record.id);
+      this._liveProjection.remove(record.id);
     }
   }
 
@@ -1656,6 +1776,16 @@ export class SubagentManager {
       finalization.messages,
     );
 
+    this._applyFinalizationState(record, finalization);
+    finalizeSubagentAttribution(record.id, finalization.state);
+    return this._runs.isCurrent(run);
+  }
+
+  /** Drive the record's terminal transition for the assembler's outcome. */
+  private _applyFinalizationState(
+    record: SubagentRecord,
+    finalization: SubagentRunFinalization,
+  ): void {
     switch (finalization.state) {
       case 'completed':
         this.markCompleted(record.id, record.result ?? '');
@@ -1670,14 +1800,6 @@ export class SubagentManager {
         }
         break;
     }
-    try {
-      getSubagentAttributionStore().finalize(record.id, {
-        status: finalization.state,
-      });
-    } catch (error) {
-      console.warn('[subagent-manager] Attribution finalize failed', { subagentId: record.id, error });
-    }
-    return this._runs.isCurrent(run);
   }
 
   /** The projection store owns the cursor; the manager persists only the transcript. */
@@ -1767,6 +1889,15 @@ export class SubagentManager {
     this._liveProjection.emit(record.id, delta);
   }
 
+  /** Emit the SPAWNED delta a fresh spawn or an admitted/queued resume carries. */
+  private _emitSpawnedDelta(record: SubagentRecord): void {
+    this._emitDelta(record, {
+      type: SubagentDeltaEventType.SPAWNED,
+      record: summarizeSubagentRecord(this.toDomainRecord(record, { includeLiveTail: false })),
+      usage: record.usage,
+    });
+  }
+
   /** Advance the per-session revision counter used to order events and snapshots. */
   private _bumpSessionRevision(record: SubagentRecord): void {
     this._liveProjection.bumpSessionRevision(record.sessionId);
@@ -1789,6 +1920,103 @@ export class SubagentManager {
       console.debug('Subagent onChange listener failed (non-fatal):', err);
     }
   }
+}
+
+// ── Run-loop helpers ────────────────────────────────────────────────────────
+
+/** Marker the compaction degradation partial report carries in `record.result`. */
+const SUBAGENT_PARTIAL_REPORT_MARKER = '[Subagent partial report';
+
+/** Whether a run ended on the structured partial report set by compaction degradation. */
+function hasPartialSubagentReport(record: SubagentRecord): boolean {
+  return record.result?.includes(SUBAGENT_PARTIAL_REPORT_MARKER) ?? false;
+}
+
+/** Prompt-token count a usage event reports for the compaction gate. */
+function compactionTriggerTokens(usage: Usage): number {
+  return usage.prompt_tokens ?? usage.total_tokens ?? 0;
+}
+
+/** Frozen parent-turn window/cwd mapped onto the runner's optional inputs. */
+function seedRunnerAffinity(seed: SubagentExecutionSeed | undefined): {
+  windowId: string | undefined;
+  cwd: string | undefined;
+} {
+  return {
+    windowId: seed?.windowId ?? undefined,
+    cwd: seed?.cwd ?? undefined,
+  };
+}
+
+/**
+ * Close the durable attribution row for a finished run. Non-fatal by contract:
+ * an accounting-store failure must never change how the run terminated.
+ */
+function finalizeSubagentAttribution(
+  subagentId: string,
+  status: SubagentRunFinalization['state'],
+): void {
+  try {
+    getSubagentAttributionStore().finalize(subagentId, { status });
+  } catch (error) {
+    console.warn('[subagent-manager] Attribution finalize failed', { subagentId, error });
+  }
+}
+
+// ── Record scope and hydration helpers ──────────────────────────────────────
+
+/**
+ * Session scope for bulk cancellation: an absent (undefined or null) filter
+ * matches every record regardless of owner; a concrete id matches only that
+ * session's records.
+ */
+function isRecordInSessionScope(
+  record: SubagentRecord,
+  sessionId?: string | null,
+): boolean {
+  if (sessionId === undefined || sessionId === null) return true;
+  return record.sessionId === sessionId;
+}
+
+/**
+ * Rebuild a runtime record from its durable terminal form. Hydration is
+ * deliberately total: an unparseable stored timestamp degrades to epoch 0
+ * rather than throwing, so `runtimeToDomain` never receives an invalid Date.
+ */
+function hydratedRuntimeRecord(spec: HydrateSpec, state: SubagentState): SubagentRecord {
+  const { domain } = spec;
+  // Guard against NaN from an unparseable stored timestamp (the `|| 0`
+  // fallback mirrors session storage hydration) so hydration stays total
+  // and runtimeToDomain never receives an invalid Date.
+  const startTime = Date.parse(domain.start_time) || 0;
+  const endTime = domain.end_time ? (Date.parse(domain.end_time) || 0) : null;
+  const record: SubagentRecord = {
+    id: spec.id,
+    agent: spec.agent,
+    state,
+    label: domain.agent_name,
+    task: domain.task,
+    result: domain.result,
+    error: domain.error,
+    startTime,
+    queuedAt: null,
+    // Durable eligibility is keyed on `startedAt`; a restored terminal
+    // record was admitted, so it replays from its original start time.
+    startedAt: startTime,
+    endTime,
+    chain: domain.chain,
+    usage: domain.usage !== undefined
+      ? domain.usage
+      : sumMessageUsages(domain.chain.messages),
+    selection: domain.chain.selection,
+    parentChainIndex: domain.parentChainIndex,
+    sessionId: spec.sessionId,
+    closed: domain.closed,
+  };
+  if (domain.reasoning_effort !== undefined) {
+    record.reasoningEffort = domain.reasoning_effort;
+  }
+  return record;
 }
 
 // ── Persistence helpers ─────────────────────────────────────────────────────
