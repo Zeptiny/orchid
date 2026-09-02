@@ -32,6 +32,7 @@ import {
   emptyChainSummary,
   ensureChainMessageOffsets,
   parseChainViewSummary,
+  restoreSubagentSummary,
   serializeChainMessages,
   sessionFromRow,
   tryDeserializeMessages,
@@ -753,8 +754,13 @@ export function loadSubagentSummaries(
         if (!recordJson) continue;
         try {
           const record = subagentRecordFromStorageDict(JSON.parse(recordJson));
-          summary = summarizeSubagentRecord(record);
-          backfill.run(JSON.stringify(summary), sessionId, row.subagent_id);
+          // Restore before persisting: a legacy row still marked QUEUED /
+          // PENDING / RUNNING must backfill the same restart-normalized
+          // summary a fresh read of summary_json would produce.
+          const restored = restoreSubagentSummary(summarizeSubagentRecord(record));
+          if (!restored) continue;
+          summary = restored;
+          backfill.run(JSON.stringify(restored), sessionId, row.subagent_id);
         } catch (err) {
           console.error(
             `[session] skipping corrupt subagent record ${row.subagent_id} while loading summaries (session ${sessionId})`,

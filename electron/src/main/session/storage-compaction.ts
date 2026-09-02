@@ -415,9 +415,12 @@ export interface SubagentCompactionPayload {
   readonly flaggedMessageIds: readonly string[];
   /**
    * Message ids whose `excludeFromModel` flag the settle CLEARED (scoped
-   * exempt users, selective covered-kept resets). Resolved exactly like the
-   * flagged ids and cleared in the SAME transaction, mirroring the
-   * `applyCompactionPersistence` behavior over `subagent_chains`.
+   * exempt users, selective covered-kept resets). Cleared in the SAME
+   * transaction as the flag writes, mirroring `applyCompactionPersistence`:
+   * a cleared id with no durable owner is IDEMPOTENT (skipped) — the settle
+   * computes the clear set over the LIVE history, which can lead the
+   * debounced checkpoint flush, and there is no durable row that could
+   * resurrect a stale true flag.
    */
   readonly clearedMessageIds?: readonly string[];
   /**
@@ -438,8 +441,9 @@ export interface SubagentCompactionPayload {
    * durable `record_json` can lag the debounced checkpoint flush. Messages the
    * durable row lacks (the un-flushed live tail) are appended inside the
    * transaction BEFORE flag/anchor resolution, so a lagging row cannot make
-   * the write throw spuriously. Ids unknown to BOTH views still abort the
-   * write — the integrity throws stay intact for genuinely corrupt payloads.
+   * the write throw spuriously. Flagged ids and the summary anchor unknown to
+   * BOTH views still abort the write — the integrity throws stay intact for
+   * genuinely corrupt payloads.
    */
   readonly liveMessages?: readonly Message[];
 }
@@ -498,7 +502,7 @@ function withLiveMessageTail(
 function assertSubagentMessageIdsDurable(
   messageIds: ReadonlySet<string>,
   durableIds: ReadonlySet<string>,
-  label: 'flagged' | 'cleared',
+  label: 'flagged',
   sessionId: string,
   subagentId: string,
 ): void {
@@ -604,8 +608,13 @@ export function applySubagentCompactionPersistence(
       const durableMessageIds = new Set(messages.map((m) => m.id));
       const flaggedSet = new Set(payload.flaggedMessageIds);
       assertSubagentMessageIdsDurable(flaggedSet, durableMessageIds, 'flagged', sessionId, subagentId);
-      const clearedSet = new Set(payload.clearedMessageIds ?? []);
-      assertSubagentMessageIdsDurable(clearedSet, durableMessageIds, 'cleared', sessionId, subagentId);
+      // Idempotent clears (mirroring resolveClearedIdsByChain): a cleared id
+      // with no durable owner is skipped — there is no durable message that
+      // could resurrect a stale true flag, so a benign clear must never abort
+      // the write and lose the flags and summary head.
+      const clearedSet = new Set(
+        (payload.clearedMessageIds ?? []).filter((id) => durableMessageIds.has(id)),
+      );
       const anchorIndex = resolveSubagentAnchorIndex(messages, payload, sessionId, subagentId);
 
       // In-place flag writes: only flags change, originals preserved (R3).

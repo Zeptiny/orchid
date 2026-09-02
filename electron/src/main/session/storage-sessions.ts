@@ -186,7 +186,6 @@ function sessionColumnAssignments(update: SessionFieldsUpdate): ColumnAssignment
 }
 
 function applySessionColumnAssignments(
-  sessionId: string,
   assignments: readonly ColumnAssignment[],
 ): string {
   const columns = assignments.map((assignment) => `${assignment.column} = ?`).join(', ');
@@ -208,7 +207,7 @@ export function updateSessionFields(
   const { dbPath } = resolveOptions(opts);
   return withCorruptionRecovery(dbPath, (db) => {
     const result = db
-      .prepare(applySessionColumnAssignments(sessionId, assignments))
+      .prepare(applySessionColumnAssignments(assignments))
       .run(...assignments.map((assignment) => assignment.value), sessionId);
     return result.changes > 0;
   });
