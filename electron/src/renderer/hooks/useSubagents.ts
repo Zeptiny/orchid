@@ -184,6 +184,18 @@ export function useSubagents(activeSessionId: string | null): UseSubagentsReturn
         sessionId, requestedId: requestedRef.current ?? previous, existingId: previous, existingSessionId: selectedSessionRef.current,
       }));
       setSelectedSessionId(sessionId);
+      // A seed that still leaves seed hints — a wrong-run delta replayed from
+      // the hydration buffer, or a stale snapshot omitting the run — was never
+      // observed by the onEvent growth check, so drive the bounded reseed
+      // here. At the limit, drop the hints: leaving them set would permanently
+      // block a fresh hint (and another heal) for a later run of the subagent.
+      if (next.seedHints.size > 0) {
+        if (reseedAttempts < RESEED_RETRY_LIMIT) {
+          void hydrate(sessionId, false, reseedAttempts + 1);
+        } else {
+          commit({ ...streamRef.current, seedHints: new Set() });
+        }
+      }
     } catch (error) {
       if (request === requestRef.current && activeRef.current === sessionId && streamRef.current.generation === generation) {
         commit(failSubagentSnapshot(streamRef.current, error instanceof Error ? error.message : String(error)));

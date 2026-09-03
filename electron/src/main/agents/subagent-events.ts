@@ -57,11 +57,20 @@ const MAX_STALLED_CARRY_FLUSHES = 40;
 
 const lastDropWarnAt = new Map<string, number>();
 
+/**
+ * Upper bound on throttle bookkeeping keys (`ineligible:${sessionId}` /
+ * `stall-drop:${sessionId}`). Sessions are long-lived UUIDs and the store is
+ * never pruned by session lifecycle, so cap it: at capacity the whole map is
+ * cleared (worst case a hot key re-warns once, then throttles again).
+ */
+const MAX_DROP_WARN_KEYS = 128;
+
 /** Throttled drop warning: at most one per key per five seconds. */
 function warnDrop(key: string, message: string): void {
   const now = Date.now();
   const last = lastDropWarnAt.get(key) ?? 0;
   if (now - last < 5_000) return;
+  if (lastDropWarnAt.size >= MAX_DROP_WARN_KEYS) lastDropWarnAt.clear();
   lastDropWarnAt.set(key, now);
   console.warn(`[subagent-events] ${message}`);
 }

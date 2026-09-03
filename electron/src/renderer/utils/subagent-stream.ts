@@ -377,18 +377,22 @@ function applyDeltaEvents(
       high = event.sequence;
     }
     warnDroppedDeltas(subagentId, dropped, runId, knownRun);
+    const seedDrop = dropped.has('unseeded-run') || dropped.has('run-mismatch');
     // A run whose deltas were dropped for a missing/stale seed can only be
     // re-opened by a fresh `spawned` or a snapshot seed. Surface that need so
-    // the hook can refresh once instead of freezing the stream.
-    if (
-      (dropped.has('unseeded-run') || dropped.has('run-mismatch'))
-      && !state.seedHints.has(subagentId)
-      && state.records.some((item) => item.id === subagentId && !isSettled(item.status))
-    ) {
+    // the hook can refresh once instead of freezing the stream. Evaluated
+    // against the FINAL records: a terminal settling the row later in this
+    // same batch must not leave a stale hint behind.
+    const raiseSeedHint = (): void => {
+      if (!seedDrop || state.seedHints.has(subagentId)) return;
+      if (!records.some((item) => item.id === subagentId && !isSettled(item.status))) return;
       seedHints ??= new Set(state.seedHints);
       seedHints.add(subagentId);
+    };
+    if (applicable.length === 0) {
+      raiseSeedHint();
+      continue;
     }
-    if (applicable.length === 0) continue;
 
     if (runId !== undefined && runId !== knownRun) {
       runs ??= new Map(state.runs);
@@ -458,6 +462,7 @@ function applyDeltaEvents(
       live ??= new Map(state.live);
       live.set(subagentId, draft);
     }
+    raiseSeedHint();
   }
 
   if (records === state.records && live === null && highWater === null && runs === null && seedHints === null) {
