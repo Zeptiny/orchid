@@ -55,6 +55,26 @@ const FLUSH_MAX_MS = 50;
  */
 const MAX_STALLED_CARRY_FLUSHES = 40;
 
+const lastDropWarnAt = new Map<string, number>();
+
+/**
+ * Upper bound on throttle bookkeeping keys (`ineligible:${sessionId}` /
+ * `stall-drop:${sessionId}`). Sessions are long-lived UUIDs and the store is
+ * never pruned by session lifecycle, so cap it: at capacity the whole map is
+ * cleared (worst case a hot key re-warns once, then throttles again).
+ */
+const MAX_DROP_WARN_KEYS = 128;
+
+/** Throttled drop warning: at most one per key per five seconds. */
+function warnDrop(key: string, message: string): void {
+  const now = Date.now();
+  const last = lastDropWarnAt.get(key) ?? 0;
+  if (now - last < 5_000) return;
+  if (lastDropWarnAt.size >= MAX_DROP_WARN_KEYS) lastDropWarnAt.clear();
+  lastDropWarnAt.set(key, now);
+  console.warn(`[subagent-events] ${message}`);
+}
+
 function isAppendDelta(
   event: SubagentDeltaEvent,
 ): event is SubagentTextDeltaEvent | SubagentThinkingDeltaEvent {
@@ -189,6 +209,7 @@ export function createSubagentDeltaBatcher(
     };
     let normalCount = 0;
     let bytes = 0;
+    const droppedForSession = new Map<string, { count: number; types: Set<string> }>();
     for (const event of merged) {
       let eligible = eligibility.get(event.sessionId);
       if (eligible === undefined) {
@@ -197,7 +218,14 @@ export function createSubagentDeltaBatcher(
       }
       if (!eligible) {
         // Carry lifecycle handoffs in order for a later flush; drop content.
-        if (isLifecycleDelta(event)) deferred.push(event);
+        if (isLifecycleDelta(event)) {
+          deferred.push(event);
+        } else {
+          const entry = droppedForSession.get(event.sessionId) ?? { count: 0, types: new Set<string>() };
+          entry.count += 1;
+          entry.types.add(event.type);
+          droppedForSession.set(event.sessionId, entry);
+        }
         continue;
       }
       if (isLifecycleDelta(event)) {
@@ -217,6 +245,13 @@ export function createSubagentDeltaBatcher(
     }
     queue = deferred;
 
+    for (const [sessionId, { count, types }] of droppedForSession) {
+      warnDrop(`ineligible:${sessionId}`,
+        `dropped ${count} content delta(s) for session ${sessionId} with no eligible recipient ` +
+        `(types: ${[...types].join(', ')}); snapshots re-establish state but live streaming stays off ` +
+        `until the session regains a viewing client`);
+    }
+
     for (const [sessionId, events] of envelopes) {
       deliver({ sessionId, events });
     }
@@ -235,6 +270,11 @@ export function createSubagentDeltaBatcher(
         // budget, then drop the carry so the loop cannot run forever.
         stalledFlushes += 1;
         if (stalledFlushes > MAX_STALLED_CARRY_FLUSHES) {
+          for (const event of queue) {
+            warnDrop(`stall-drop:${event.sessionId}`,
+              `dropped carried ${event.type} delta for ${event.subagentId} ` +
+              `(session ${event.sessionId} stayed ineligible past the carry budget)`);
+          }
           queue = [];
           stalledFlushes = 0;
         } else {

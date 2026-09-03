@@ -336,11 +336,20 @@ describe('subagent delta application', () => {
     expect(state.live.has('one')).toBe(false);
   });
 
-  it('drops sequence regressions, wrong runs, unknown runs, and mismatched seeds without state change', () => {
+  it('drops sequence regressions without state change; wrong-run drops raise a seed hint for a held row', () => {
     const state = seeded(sessionA, 3, [record('one', 'running')], [projection({ subagentId: 'one', sequence: 3 })]);
     expect(applyDeltaBatch(state, batch([textDelta(3, 'dup')]))).toBe(state);
     expect(applyDeltaBatch(state, batch([textDelta(2, 'old')]))).toBe(state);
-    expect(applyDeltaBatch(state, batch([textDelta(4, 'wrong-run', { runId: 'run-2' })]))).toBe(state);
+    // A run the renderer never seeded (missed rotation spawned) freezes the
+    // live stream; the drop now raises a seed hint so the hook can refresh.
+    const mismatched = applyDeltaBatch(state, batch([textDelta(4, 'wrong-run', { runId: 'run-2' })]));
+    expect(mismatched).not.toBe(state);
+    expect(mismatched.records).toBe(state.records);
+    expect(mismatched.live).toBe(state.live);
+    expect([...mismatched.seedHints]).toEqual(['one']);
+    // The hint is raised once per subagent: further wrong-run drops stay put.
+    expect(applyDeltaBatch(mismatched, batch([textDelta(5, 'still-wrong', { runId: 'run-2' })]))).toBe(mismatched);
+    // A subagent with no held row cannot be converged by a snapshot.
     expect(applyDeltaBatch(state, batch([textDelta(1, 'unknown', { subagentId: 'other' })]))).toBe(state);
 
     const mixed = applyDeltaBatch(state, batch([textDelta(2, 'stale'), textDelta(4, 'fresh')]));
@@ -921,12 +930,16 @@ describe('run rotation for resumed subagents', () => {
       textDelta(1, 'B', { runId: 'run-B', sessionRevision: 5 }),
     ]));
 
-    // A late text_delta carrying run A's runId is dropped without state change.
+    // A late text_delta carrying run A's runId is dropped without content
+    // change; the row is still running, so the drop raises a seed hint (the
+    // renderer cannot tell a superseded generation from a missed rotation).
     const before = state;
     state = applyDeltaBatch(state, batch([
       textDelta(3, 'stale A', { runId: 'run-A', sessionRevision: 6 }),
     ]));
-    expect(state).toBe(before);
+    expect(state.records).toBe(before.records);
+    expect(state.live).toBe(before.live);
+    expect([...state.seedHints]).toEqual(['one']);
     expect(state.live.get('one')?.segments).toEqual([{ kind: 'text', id: 'seg-text', content: 'B', startedAt: SEG_OPENED_AT, endedAt: null }]);
   });
 
@@ -993,5 +1006,92 @@ describe('run rotation for resumed subagents', () => {
     groups = groupSubagents(state.records);
     expect(groups.queued.map((item) => item.id)).toEqual(['one']);
     expect(groups.ended).toHaveLength(0);
+  });
+});
+
+describe('seed hints: self-healing a missed run seed', () => {
+  it('raises a hint for an unseeded run with a held row, then converges via snapshot seed', () => {
+    // The renderer holds a running row but never saw this run's spawned.
+    let state = seeded(sessionA, 3, [record('one', 'running')]);
+    state = applyDeltaBatch(state, batch([textDelta(1, 'work', { runId: 'run-9' })]));
+    expect(state.live.size).toBe(0);
+    expect([...state.seedHints]).toEqual(['one']);
+
+    // The hint directs one snapshot refresh; the fresh snapshot carries the
+    // live projection for the missed run and clears the hint.
+    state = seedSubagentSnapshot(
+      beginSubagentSnapshotRefresh(state, sessionA),
+      snapshot(sessionA, 4, [record('one', 'running')], [
+        projection({ subagentId: 'one', runId: 'run-9', sequence: 1, segments: [
+          { kind: 'text', id: 'seg-text', content: 'work', startedAt: SEG_OPENED_AT, endedAt: null },
+        ] }),
+      ]),
+    );
+    expect(state.seedHints.size).toBe(0);
+    expect(state.runs.get('one')).toBe('run-9');
+
+    // Post-seed content streams normally again.
+    state = applyDeltaBatch(state, batch([textDelta(2, ' more', { runId: 'run-9' })]));
+    expect(state.live.get('one')?.segments.at(-1)).toMatchObject({ content: 'work more' });
+  });
+
+  it('does not hint for a settled row or a subagent with no row', () => {
+    const settled = seeded(sessionA, 3, [{ ...record('one', 'completed'), end_time: '2026-01-01T00:00:09.000Z' }]);
+    expect(applyDeltaBatch(settled, batch([textDelta(4, 'late', { runId: 'run-2' })]))).toBe(settled);
+
+    const empty = seeded(sessionA, 3);
+    expect(applyDeltaBatch(empty, batch([textDelta(4, 'unknown', { subagentId: 'ghost' })]))).toBe(empty);
+  });
+
+  it('keeps buffered batches hint-free: hints are evaluated when the batch replays after the seed', () => {
+    let state = seeded(sessionA, 3, [record('one', 'running')]);
+    state = beginSubagentSnapshotRefresh(state, sessionA);
+    // While loading, the batch is buffered — no hint yet.
+    state = applyDeltaBatch(state, batch([textDelta(1, 'work', { runId: 'run-9' })]));
+    expect(state.seedHints.size).toBe(0);
+    expect(state.buffered).toHaveLength(1);
+    // The snapshot that lands carries the run: the buffered replay applies.
+    state = seedSubagentSnapshot(state, snapshot(sessionA, 4, [record('one', 'running')], [
+      projection({ subagentId: 'one', runId: 'run-9', sequence: 1 }),
+    ]));
+    expect(state.seedHints.size).toBe(0);
+    expect(state.runs.get('one')).toBe('run-9');
+  });
+
+  it('keeps the hint when a stale snapshot omits the run: the buffered replay re-raises it for the retry', () => {
+    let state = seeded(sessionA, 3, [record('one', 'running')]);
+    state = beginSubagentSnapshotRefresh(state, sessionA);
+    state = applyDeltaBatch(state, batch([textDelta(1, 'work', { runId: 'run-9' })]));
+    expect(state.buffered).toHaveLength(1);
+    // The landing snapshot omits the run's live projection (stale, or the run
+    // is not yet exported): the seed clears the hint set, but the buffered
+    // wrong-run delta replays against the unseeded run and re-raises it, so
+    // hydrate's post-seed check retries instead of wedging.
+    state = seedSubagentSnapshot(state, snapshot(sessionA, 4, [record('one', 'running')]));
+    expect(state.runs.has('one')).toBe(false);
+    expect([...state.seedHints]).toEqual(['one']);
+    // A fresh wrong-run delta for the same subagent does not grow the set
+    // (once per subagent): the retry path, not repeated hints, owns recovery.
+    const after = applyDeltaBatch(state, batch([textDelta(2, 'still', { runId: 'run-9' })]));
+    expect(after.seedHints.size).toBe(1);
+  });
+
+  it('leaves no stale hint when a terminal settles the row later in the same batch', () => {
+    let state = seeded(sessionA, 3, [record('one', 'running')], [projection({ subagentId: 'one', runId: 'run-1', sequence: 3 })]);
+    // The wrong-run content delta alone would raise a hint, but the terminal
+    // for the KNOWN run in the same envelope settles the row: the hint must
+    // not survive. (A terminal from the wrong run itself is dropped as a
+    // run-mismatch, so it can never be the settling event here.)
+    const done = { ...record('one', 'completed'), end_time: '2026-01-01T00:00:09.000Z' };
+    state = applyDeltaBatch(state, batch([
+      textDelta(4, 'wrong-run', { runId: 'run-2' }),
+      terminal('one', 'run-1', done, 5),
+    ]));
+    expect(state.records[0]).toBe(done);
+    expect(state.seedHints.size).toBe(0);
+    // The pure wedge (no terminal) still raises the hint.
+    let wedge = seeded(sessionA, 3, [record('one', 'running')], [projection({ subagentId: 'one', runId: 'run-1', sequence: 3 })]);
+    wedge = applyDeltaBatch(wedge, batch([textDelta(4, 'wrong-run', { runId: 'run-2' })]));
+    expect([...wedge.seedHints]).toEqual(['one']);
   });
 });

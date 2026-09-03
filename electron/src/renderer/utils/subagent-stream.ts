@@ -30,6 +30,14 @@ export interface SubagentStreamState {
    * overflow. Set (and only ever raised) on overflow; cleared on seed.
    */
   readonly reseedFloor: number | null;
+  /**
+   * Subagent ids whose latest deltas were dropped because the renderer holds
+   * no (or a stale) run seed. Grows only when a new id diverges; cleared by a
+   * snapshot seed. The hook reacts to growth with one snapshot refresh so a
+   * missed `spawned` self-heals instead of freezing the live stream until the
+   * user re-enters the view.
+   */
+  readonly seedHints: ReadonlySet<string>;
   readonly error: string | null;
   readonly generation: number;
 }
@@ -67,6 +75,7 @@ export function createSubagentStreamState(): SubagentStreamState {
     buffered: [],
     bufferedBytes: 0,
     reseedFloor: null,
+    seedHints: new Set(),
     error: null,
     generation: 0,
   };
@@ -88,6 +97,7 @@ export function bindSubagentSession(
     buffered: [],
     bufferedBytes: 0,
     reseedFloor: null,
+    seedHints: new Set(),
     error: null,
     generation: state.generation + 1,
   };
@@ -313,20 +323,27 @@ function applyDeltaEvents(
   let live: Map<string, SubagentLiveProjection> | null = null;
   let highWater: Map<string, number> | null = null;
   let runs: Map<string, string> | null = null;
+  let seedHints: Set<string> | null = null;
 
   for (const [subagentId, deltas] of bySubagent) {
     const knownRun = (runs ?? state.runs).get(subagentId);
     let high = (highWater ?? state.highWater).get(subagentId);
 
     const applicable: SubagentDeltaEvent[] = [];
+    const dropped = new Map<string, number>();
+    const drop = (reason: string): void => {
+      dropped.set(reason, (dropped.get(reason) ?? 0) + 1);
+    };
     let runId = knownRun;
     for (const event of deltas) {
       if ((event.type === 'spawned' || event.type === 'terminal') && event.record.id !== subagentId) {
+        drop('record-id-mismatch');
         continue;
       }
       // A status transition never settles a run — the terminal record is the
       // authoritative handoff — so a malformed terminal-valued status is dropped.
       if (event.type === 'status_changed' && isSettled(event.status)) {
+        drop('settled-status-changed');
         continue;
       }
       if (runId !== undefined) {
@@ -336,6 +353,7 @@ function applyDeltaEvents(
         // run's low sequence numbers are not dropped on later events.
         const isRotation = event.type === 'spawned' && event.runId !== runId;
         if (!isRotation && (event.runId !== runId || event.sequence <= (high ?? -1))) {
+          drop(event.runId !== runId ? 'run-mismatch' : 'sequence-regression');
           continue;
         }
       } else if (event.type === 'status_changed') {
@@ -343,18 +361,38 @@ function applyDeltaEvents(
         // when the run was never seeded (its spawned delta was dropped); it
         // never opens the run's live stream and never un-settles a terminal
         // row (a carried status can land after a snapshot already settled it).
-        if (!state.records.some((item) => item.id === subagentId && !isSettled(item.status))) continue;
+        if (!state.records.some((item) => item.id === subagentId && !isSettled(item.status))) {
+          drop('status-without-row');
+          continue;
+        }
       } else if (event.type !== 'spawned' && event.type !== 'terminal') {
         // Only a spawned seed can open an unknown run. A terminal is the
         // authoritative record handoff, so it applies regardless: replacing
         // the row settles a dropped-seed record instead of leaving it running.
+        drop('unseeded-run');
         continue;
       }
       applicable.push(event);
       if (event.type === 'spawned') runId = event.runId;
       high = event.sequence;
     }
-    if (applicable.length === 0) continue;
+    warnDroppedDeltas(subagentId, dropped, runId, knownRun);
+    const seedDrop = dropped.has('unseeded-run') || dropped.has('run-mismatch');
+    // A run whose deltas were dropped for a missing/stale seed can only be
+    // re-opened by a fresh `spawned` or a snapshot seed. Surface that need so
+    // the hook can refresh once instead of freezing the stream. Evaluated
+    // against the FINAL records: a terminal settling the row later in this
+    // same batch must not leave a stale hint behind.
+    const raiseSeedHint = (): void => {
+      if (!seedDrop || state.seedHints.has(subagentId)) return;
+      if (!records.some((item) => item.id === subagentId && !isSettled(item.status))) return;
+      seedHints ??= new Set(state.seedHints);
+      seedHints.add(subagentId);
+    };
+    if (applicable.length === 0) {
+      raiseSeedHint();
+      continue;
+    }
 
     if (runId !== undefined && runId !== knownRun) {
       runs ??= new Map(state.runs);
@@ -367,6 +405,7 @@ function applyDeltaEvents(
     let draft: LiveDraft | null =
       existing && existing.runId === runId ? draftFromProjection(existing) : null;
     let settled = false;
+    let skippedWithoutDraft = 0;
     for (const event of applicable) {
       if (event.type === 'spawned') {
         // Upsert: append on first spawn, replace on run rotation (the
@@ -406,7 +445,14 @@ function applyDeltaEvents(
             item.id === subagentId ? { ...item, status: promotedState } : item
           ));
         }
+      } else {
+        skippedWithoutDraft += 1;
       }
+    }
+    if (skippedWithoutDraft > 0) {
+      warnOncePerSecond(`subagent-stream:${subagentId}:no-draft`,
+        `[subagent-stream] dropped ${skippedWithoutDraft} content delta(s) for ${subagentId}: ` +
+        `no live projection for run ${String(runId)} (a snapshot seed or rotation spawned is needed to resume)`);
     }
 
     if (settled) {
@@ -416,9 +462,10 @@ function applyDeltaEvents(
       live ??= new Map(state.live);
       live.set(subagentId, draft);
     }
+    raiseSeedHint();
   }
 
-  if (records === state.records && live === null && highWater === null && runs === null) {
+  if (records === state.records && live === null && highWater === null && runs === null && seedHints === null) {
     return state;
   }
   return {
@@ -427,6 +474,7 @@ function applyDeltaEvents(
     live: live ?? state.live,
     highWater: highWater ?? state.highWater,
     runs: runs ?? state.runs,
+    seedHints: seedHints ?? state.seedHints,
   };
 }
 
@@ -472,7 +520,14 @@ export function applyDeltaBatch(
   batch: SubagentEvent,
   options: SubagentDeltaBatchOptions = {},
 ): SubagentStreamState {
-  if (state.sessionId !== batch.sessionId) return state;
+  if (state.sessionId !== batch.sessionId) {
+    warnOncePerSecond(
+      `subagent-stream:session-mismatch:${batch.sessionId}`,
+      `[subagent-stream] dropped a delta batch for session ${batch.sessionId} ` +
+      `while bound to ${String(state.sessionId)}`,
+    );
+    return state;
+  }
   if (state.hydration === 'loading') {
     return bufferDeltaEvents(
       state,
@@ -506,6 +561,7 @@ function seedSnapshotNow(state: SubagentStreamState, snapshot: SubagentSnapshot)
     buffered: [],
     bufferedBytes: 0,
     reseedFloor: null,
+    seedHints: new Set(),
     error: null,
   };
 }
@@ -527,4 +583,38 @@ export function seedSubagentSnapshot(
 
 export function failSubagentSnapshot(state: SubagentStreamState, error: string): SubagentStreamState {
   return { ...state, hydration: 'error', error, buffered: [], bufferedBytes: 0 };
+}
+
+// ── Drop observability ─────────────────────────────────────────────────────
+
+const lastWarnAt = new Map<string, number>();
+
+/** Throttle repeat warnings per key so a wedged stream logs at most once a second. */
+function warnOncePerSecond(key: string, message: string): void {
+  const now = Date.now();
+  const last = lastWarnAt.get(key) ?? 0;
+  if (now - last < 1000) return;
+  lastWarnAt.set(key, now);
+  console.warn(message);
+}
+
+/**
+ * Log (throttled, per subagent) why a flush's deltas were dropped. A single
+ * dropped `spawned` seed wedges that run's whole live stream — the renderer
+ * stays frozen until the next snapshot reseed (view re-entry, turn end) — so
+ * these otherwise-silent drops must be visible while debugging stalls.
+ */
+function warnDroppedDeltas(
+  subagentId: string,
+  dropped: ReadonlyMap<string, number>,
+  runId: string | undefined,
+  knownRun: string | undefined,
+): void {
+  if (dropped.size === 0) return;
+  const reasons = [...dropped.entries()].map(([reason, count]) => `${reason}×${count}`).join(', ');
+  warnOncePerSecond(
+    `subagent-stream:${subagentId}:${reasons}`,
+    `[subagent-stream] dropped deltas for ${subagentId} (${reasons}); ` +
+    `event runId=${String(runId)} renderer runId=${String(knownRun)}`,
+  );
 }
