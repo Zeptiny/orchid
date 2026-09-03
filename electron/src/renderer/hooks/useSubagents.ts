@@ -222,6 +222,12 @@ export function useSubagents(activeSessionId: string | null): UseSubagentsReturn
         hydrationBufferBytes: hydrationBufferBytesRef.current,
       });
       if (next !== before) commit(next);
+      // Deltas dropped for a missing/stale run seed mean the live stream is
+      // wedged: only a snapshot reseed can re-open it. One refresh per new
+      // hint keeps the view streaming without user action (view re-entry).
+      if (next.seedHints.size > before.seedHints.size && activeRef.current) {
+        void hydrate(activeRef.current);
+      }
       // A newly raised floor means buffered intermediates were discarded:
       // reseed from a snapshot whose revision meets the floor.
       if (next.reseedFloor !== null && next.reseedFloor !== before.reseedFloor && activeRef.current) {
